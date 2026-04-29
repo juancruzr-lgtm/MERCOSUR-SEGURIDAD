@@ -123,3 +123,4 @@ export function calcDistancia(lat1: number, lng1: number, lat2: number, lng2: nu
   const a = Math.sin(dLat/2)**2 + Math.cos(lat1*r) * Math.cos(lat2*r) * Math.sin(dLon/2)**2
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
 }
+
