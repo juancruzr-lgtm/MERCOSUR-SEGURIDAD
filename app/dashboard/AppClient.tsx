@@ -644,7 +644,12 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
 }
 
 // ── APP PRINCIPAL ─────────────────────────────────────────────────────────────
-const NAV = [
+const NAV = user.rol === 'guardia' ? [
+  { section:'Mi turno', items:[
+    { id:'asistencia', icon:'✅', label:'Mi Asistencia' },
+    { id:'novedades', icon:'📋', label:'Mis Novedades' },
+  ]}
+] : [
   { section:'General', items:[{ id:'dashboard', icon:'📊', label:'Panel Principal' }] },
   { section:'Operaciones', items:[
     { id:'guardias', icon:'👮', label:'Guardias' },
