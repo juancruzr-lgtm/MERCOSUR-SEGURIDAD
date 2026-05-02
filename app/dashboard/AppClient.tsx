@@ -235,11 +235,20 @@ function Guardias({ guardias, setGuardias, registros }: any) {
           <tbody>
             {guardias.map((g: Usuario) => (
               <tr key={g.id}>
+                <th style={S.th}></th>
                 <td style={S.td}><span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>{g.legajo}</span></td>
                 <td style={S.td}><strong>{g.apellido}, {g.nombre}</strong></td>
                 <td style={S.td}>{g.dni}</td>
                 <td style={S.td}>{g.telefono}</td>
-                <td style={S.td}><Badge type={g.estado}>{g.estado}</Badge></td>
+                <td style={S.td}><Badge type={t.estado}>{t.estado}</Badge></td>
+<td style={S.td}>
+  <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} 
+    onClick={() => { 
+      setForm({ guardia_id:t.guardia_id||'', objetivo_id:t.objetivo_id, fecha:t.fecha, hora_inicio:t.hora_inicio, hora_fin:t.hora_fin }); 
+      setEditId(t.id); 
+      setModal(true) 
+    }}>✏ Editar</button>
+</td>
                 <td style={S.td}>{formatHoras(horasTotal(g.id))}</td>
                 <td style={S.td}><button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => { setForm({ nombre:g.nombre, apellido:g.apellido, dni:g.dni||'', telefono:g.telefono||'', legajo:g.legajo, estado:g.estado, rol:g.rol }); setEditId(g.id); setModal(true) }}>✏ Editar</button></td>
               </tr>
@@ -271,16 +280,17 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
   const [loading, setLoading] = useState(false)
   const hoy = new Date().toISOString().split('T')[0]
 
-  const guardar = async () => {
+const guardar = async () => {
     setLoading(true)
+    const payload = { ...form, guardia_id: form.guardia_id || null, estado: form.guardia_id ? 'cubierto' : 'descubierto' }
     if (editId) {
-      const { data } = await supabase.from('objetivos').update(form).eq('id', editId).select().single()
-      if (data) setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? data : o))
+      const { data } = await supabase.from('turnos').update(payload).eq('id', editId).select().single()
+      if (data) setTurnos((prev: any[]) => prev.map(t => t.id === editId ? data : t))
     } else {
-      const { data } = await supabase.from('objetivos').insert(form).select().single()
-      if (data) setObjetivos((prev: any[]) => [...prev, data])
+      const { data } = await supabase.from('turnos').insert(payload).select().single()
+      if (data) setTurnos((prev: any[]) => [...prev, data])
     }
-    setModal(false); setLoading(false)
+    setModal(false); setLoading(false); setEditId(null)
   }
 
   return (
