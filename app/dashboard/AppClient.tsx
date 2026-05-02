@@ -692,6 +692,7 @@ export default function AppPage() {
   const novedadesUrgentes = novedades.filter(n => n.prioridad === 'urgente' && n.estado !== 'resuelta').length
   const misNovedades = novedades.filter(n => n.guardia_id === user.id)
   const misTurnos = turnos.filter(t => t.guardia_id === user.id)
+  const misRegistros = registros.filter(r => r.guardia_id === user.id)
 
   return (
     <div style={S.app}>
@@ -724,7 +725,7 @@ export default function AppPage() {
         {loading ? <div style={{ color:'#64748b', padding:48, textAlign:'center' }}>Cargando datos...</div> : (
           esGuardia ? (
             <>
-              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={misTurnos} guardias={guardias} objetivos={objetivos} />}
+              {page === 'asistencia' && <Asistencia registros={misRegistros} setRegistros={setRegistros} turnos={misTurnos} guardias={guardias} objetivos={objetivos} />}
               {page === 'novedades' && <Novedades novedades={misNovedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
             </>
           ) : (
