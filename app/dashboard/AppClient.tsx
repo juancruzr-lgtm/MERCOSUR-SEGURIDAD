@@ -3,7 +3,6 @@ import { useEffect, useState, useCallback } from 'react'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcDistancia } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 
-// ── ESTILOS INLINE (misma estética del prototipo) ─────────────────────────────
 const S: Record<string, React.CSSProperties> = {
   app: { display:'flex', minHeight:'100vh', background:'#0a0e1a' },
   sidebar: { width:240, background:'#111827', borderRight:'1px solid #1e2d42', display:'flex', flexDirection:'column', position:'fixed', top:0, left:0, height:'100vh', zIndex:100 },
@@ -82,7 +81,6 @@ function Modal({ title, onClose, children, footer }: any) {
   )
 }
 
-// ── LOGIN ─────────────────────────────────────────────────────────────────────
 function Login({ onLogin }: { onLogin: (u: any) => void }) {
   const [email, setEmail] = useState('')
   const [pass, setPass] = useState('')
@@ -91,7 +89,7 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 
   const login = async () => {
     setLoading(true); setError('')
-  if (email === 'admin@mercosur.com' && pass === 'Admin1234') {
+    if (email === 'admin@mercosur.com' && pass === 'Admin1234') {
       onLogin({ nombre:'Juan Cruz', apellido:'Rodriguez', rol:'admin', legajo:'ADMIN-001' })
       setLoading(false); return
     }
@@ -134,7 +132,6 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   )
 }
 
-// ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
   const hoy = new Date().toISOString().split('T')[0]
   const turnosHoy = turnos.filter((t: Turno) => t.fecha === hoy)
@@ -147,7 +144,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
     <div>
       <div style={S.title}>Panel Operativo</div>
       <div style={S.sub2}>{new Date().toLocaleDateString('es-AR', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</div>
-
       {novedadesUrgentes.map((n: Novedad) => {
         const g = guardias.find((x: Usuario) => x.id === n.guardia_id)
         const o = objetivos.find((x: Objetivo) => x.id === n.objetivo_id)
@@ -157,7 +153,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
           </div>
         )
       })}
-
       <div style={S.statGrid}>
         <StatCard label="Guardias Activos" value={guardias.filter((g: Usuario) => g.estado === 'activo').length} sub={`de ${guardias.length} en total`} color="#10b981" icon="👮" />
         <StatCard label="Objetivos" value={objetivos.filter((o: Objetivo) => o.estado === 'activo').length} sub="activos" color="#3b82f6" icon="🏢" />
@@ -166,7 +161,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
         <StatCard label="Llegadas Tarde" value={alertasTarde} sub="hoy" color="#f59e0b" icon="⏰" />
         <StatCard label="Novedades Pendientes" value={novedades.filter((n: Novedad) => n.estado === 'pendiente').length} sub="sin revisar" color="#8b5cf6" icon="📋" />
       </div>
-
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
         <div style={S.card}>
           <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:16 }}>📍 Objetivos — Hoy</div>
@@ -186,7 +180,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
             </tbody>
           </table>
         </div>
-
         <div style={S.card}>
           <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:16 }}>👮 Asistencia Reciente</div>
           <table style={S.table}>
@@ -210,7 +203,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
   )
 }
 
-// ── GUARDIAS ──────────────────────────────────────────────────────────────────
 function Guardias({ guardias, setGuardias, registros }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', estado:'activo', rol:'guardia' })
@@ -272,7 +264,6 @@ function Guardias({ guardias, setGuardias, registros }: any) {
   )
 }
 
-// ── OBJETIVOS ─────────────────────────────────────────────────────────────────
 function Objetivos({ objetivos, setObjetivos, turnos }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ nombre:'', cliente:'', direccion:'', estado:'activo', radio_metros:300 })
@@ -335,7 +326,6 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
   )
 }
 
-// ── TURNOS ────────────────────────────────────────────────────────────────────
 function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', fecha:new Date().toISOString().split('T')[0], hora_inicio:'06:00', hora_fin:'14:00' })
@@ -396,7 +386,6 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
   )
 }
 
-// ── ASISTENCIA ────────────────────────────────────────────────────────────────
 function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
@@ -413,7 +402,6 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: an
     const { data } = await supabase.from('registros_asistencia').insert(payload).select().single()
     if (data) {
       setRegistros((prev: any[]) => [...prev, data])
-      // Actualizar estado del turno
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
     }
     setModal(false); setLoading(false)
@@ -478,7 +466,6 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: an
   )
 }
 
-// ── NOVEDADES ─────────────────────────────────────────────────────────────────
 function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', tipo:'Rutina', descripcion:'', prioridad:'normal' })
@@ -540,7 +527,6 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
   )
 }
 
-// ── REPORTES ──────────────────────────────────────────────────────────────────
 function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
   const [tab, setTab] = useState('guardias')
 
@@ -643,26 +629,6 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
   )
 }
 
-// ── APP PRINCIPAL ─────────────────────────────────────────────────────────────
-const NAV = user.rol === 'guardia' ? [
-  { section:'Mi turno', items:[
-    { id:'asistencia', icon:'✅', label:'Mi Asistencia' },
-    { id:'novedades', icon:'📋', label:'Mis Novedades' },
-  ]}
-] : [
-  { section:'General', items:[{ id:'dashboard', icon:'📊', label:'Panel Principal' }] },
-  { section:'Operaciones', items:[
-    { id:'guardias', icon:'👮', label:'Guardias' },
-    { id:'objetivos', icon:'🏢', label:'Objetivos' },
-    { id:'turnos', icon:'📅', label:'Turnos' },
-    { id:'asistencia', icon:'✅', label:'Asistencia' },
-  ]},
-  { section:'Administración', items:[
-    { id:'novedades', icon:'📋', label:'Novedades' },
-    { id:'reportes', icon:'📈', label:'Reportes' },
-  ]},
-]
-
 export default function AppPage() {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
@@ -700,9 +666,32 @@ export default function AppPage() {
   }, [cargarDatos])
 
   if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>Cargando...</div>
-  if (!user) return <Login onLogin={u => { setUser(u); cargarDatos() }} />
+  if (!user) return <Login onLogin={u => { setUser(u); setPage(u.rol === 'guardia' ? 'asistencia' : 'dashboard'); cargarDatos() }} />
+
+  const esGuardia = user.rol === 'guardia'
+
+  const NAV = esGuardia ? [
+    { section:'Mi turno', items:[
+      { id:'asistencia', icon:'✅', label:'Mi Asistencia' },
+      { id:'novedades', icon:'📋', label:'Mis Novedades' },
+    ]}
+  ] : [
+    { section:'General', items:[{ id:'dashboard', icon:'📊', label:'Panel Principal' }] },
+    { section:'Operaciones', items:[
+      { id:'guardias', icon:'👮', label:'Guardias' },
+      { id:'objetivos', icon:'🏢', label:'Objetivos' },
+      { id:'turnos', icon:'📅', label:'Turnos' },
+      { id:'asistencia', icon:'✅', label:'Asistencia' },
+    ]},
+    { section:'Administración', items:[
+      { id:'novedades', icon:'📋', label:'Novedades' },
+      { id:'reportes', icon:'📈', label:'Reportes' },
+    ]},
+  ]
 
   const novedadesUrgentes = novedades.filter(n => n.prioridad === 'urgente' && n.estado !== 'resuelta').length
+  const misNovedades = novedades.filter(n => n.guardia_id === user.id)
+  const misTurnos = turnos.filter(t => t.guardia_id === user.id)
 
   return (
     <div style={S.app}>
@@ -733,24 +722,22 @@ export default function AppPage() {
       </div>
       <main style={S.main}>
         {loading ? <div style={{ color:'#64748b', padding:48, textAlign:'center' }}>Cargando datos...</div> : (
-          <>
-           {user.rol === 'guardia' ? (
-  <>
-    {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos.filter(t => t.guardia_id === user.id)} guardias={guardias} objetivos={objetivos} currentUser={user} />}
-    {page === 'novedades' && <Novedades novedades={novedades.filter(n => n.guardia_id === user.id)} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
-  </>
-) : (
-  <>
-    {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} />}
-    {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} registros={registros} />}
-    {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} />}
-    {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} />}
-    {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} currentUser={user} />}
-    {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
-    {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
-  </>
-)}
-          </>
+          esGuardia ? (
+            <>
+              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={misTurnos} guardias={guardias} objetivos={objetivos} />}
+              {page === 'novedades' && <Novedades novedades={misNovedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
+            </>
+          ) : (
+            <>
+              {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} />}
+              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} registros={registros} />}
+              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} />}
+              {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} />}
+              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} />}
+              {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
+              {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
+            </>
+          )
         )}
       </main>
     </div>
