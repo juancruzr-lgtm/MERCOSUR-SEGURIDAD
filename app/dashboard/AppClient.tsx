@@ -729,13 +729,22 @@ export default function AppPage() {
       <main style={S.main}>
         {loading ? <div style={{ color:'#64748b', padding:48, textAlign:'center' }}>Cargando datos...</div> : (
           <>
-            {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} />}
-            {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} registros={registros} />}
-            {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} />}
-            {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} />}
-            {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} />}
-            {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
-            {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
+           {user.rol === 'guardia' ? (
+  <>
+    {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos.filter(t => t.guardia_id === user.id)} guardias={guardias} objetivos={objetivos} currentUser={user} />}
+    {page === 'novedades' && <Novedades novedades={novedades.filter(n => n.guardia_id === user.id)} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
+  </>
+) : (
+  <>
+    {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} />}
+    {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} registros={registros} />}
+    {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} />}
+    {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} />}
+    {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} currentUser={user} />}
+    {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
+    {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
+  </>
+)}
           </>
         )}
       </main>
