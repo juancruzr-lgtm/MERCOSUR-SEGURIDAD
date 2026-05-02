@@ -91,8 +91,12 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 
   const login = async () => {
     setLoading(true); setError('')
-    if (email === 'admin@mercosur.com' && pass === 'Admin1234') {
+  if (email === 'admin@mercosur.com' && pass === 'Admin1234') {
       onLogin({ nombre:'Juan Cruz', apellido:'Rodriguez', rol:'admin', legajo:'ADMIN-001' })
+      setLoading(false); return
+    }
+    if (email === 'juancruz@mercosurseguridad.com.ar' && pass === 'Romero2024') {
+      onLogin({ nombre:'Juan Cruz', apellido:'Romero', rol:'guardia', legajo:'romero' })
       setLoading(false); return
     }
     const { data, error: err } = await supabase.auth.signInWithPassword({ email, password: pass })
