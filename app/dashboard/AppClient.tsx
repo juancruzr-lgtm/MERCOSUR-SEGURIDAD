@@ -87,13 +87,44 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const login = async () => {
+    const login = async () => {
+  setLoading(true)
+  setError('')
+
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password: pass
+  })
+
+  if (error) {
+    setError('Email o contraseña incorrectos')
+    setLoading(false)
+    return
+  }
+
+  const { data: perfil } = await supabase
+    .from('usuarios')
+    .select('*')
+    .eq('auth_user_id', data.user.id)
+    .single()
+
+  if (!perfil) {
+    setError('Usuario sin perfil asignado')
+    await supabase.auth.signOut()
+    setLoading(false)
+    return
+  }
+
+  onLogin(perfil)
+
+  setLoading(false)
+}
     setLoading(true); setError('')
-    if (email === 'admin@mercosur.com' && pass === 'Admin1234') {
+   {
       onLogin({ nombre:'Juan Cruz', apellido:'Rodriguez', rol:'admin', legajo:'ADMIN-001' })
       setLoading(false); return
     }
-    if (email === 'juancruz@mercosurseguridad.com.ar' && pass === 'Romero2024') {
+    {
       onLogin({ nombre:'Juan Cruz', apellido:'Romero', rol:'guardia', legajo:'romero' })
       setLoading(false); return
     }
