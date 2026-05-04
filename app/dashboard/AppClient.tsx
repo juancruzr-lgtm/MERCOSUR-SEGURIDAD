@@ -1117,7 +1117,182 @@ function NovedadesGuardia({ user, misNovedades, setNovedades, guardias, objetivo
     </div>
   )
 }
+// ── REVISIÓN COBERTURAS ───────────────────────────────────────
+function RevisionCoberturas({ guardias, objetivos, turnos, setTurnos }: any) {
+  const [pendientes, setPendientes] = useState<any[]>([])
+  const [loadingData, setLoadingData] = useState(true)
+  const [modalId, setModalId] = useState<string | null>(null)
+  const [obsSupervisor, setObsSupervisor] = useState('')
+  const [loading, setLoading] = useState(false)
 
+  const cargar = async () => {
+    setLoadingData(true)
+    const { data } = await supabase
+      .from('turnos')
+      .select('*')
+      .eq('tipo_evento', 'cobertura_urgente')
+      .eq('estado_revision', 'pendiente_supervisor')
+      .order('fecha', { ascending: false })
+    if (data) setPendientes(data)
+    setLoadingData(false)
+  }
+
+  useEffect(() => { cargar() }, [])
+
+  const resolver = async (id: string, decision: 'aprobado' | 'rechazado') => {
+    setLoading(true)
+    const payload = {
+      estado_revision: decision,
+      estado: decision === 'aprobado' ? 'cubierto' : 'descubierto',
+      observacion_supervisor: obsSupervisor || null,
+      updated_at: new Date().toISOString(),
+    }
+    const { data } = await supabase.from('turnos').update(payload).eq('id', id).select().single()
+    if (data) {
+      setPendientes(prev => prev.filter(t => t.id !== id))
+      setTurnos((prev: any[]) => prev.map(t => t.id === id ? { ...t, ...payload } : t))
+    }
+    setModalId(null); setObsSupervisor(''); setLoading(false)
+  }
+
+  const turnoActual = pendientes.find(t => t.id === modalId)
+
+  const getNombre = (id: string | null) => {
+    if (!id) return <span style={{ color:'#64748b' }}>Sin asignar</span>
+    const g = guardias.find((x: any) => x.id === id)
+    return g ? `${g.apellido}, ${g.nombre}` : '—'
+  }
+
+  const getObjetivo = (id: string) => {
+    const o = objetivos.find((x: any) => x.id === id)
+    return o?.nombre || '—'
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom:24 }}>
+        <div style={S.title}>Revisión de Coberturas</div>
+        <div style={S.sub2}>
+          {loadingData ? 'Cargando...' : `${pendientes.length} cobertura(s) pendientes de revisión`}
+        </div>
+      </div>
+
+      {!loadingData && pendientes.length === 0 && (
+        <div style={{ ...S.card, textAlign:'center', padding:48, color:'#64748b' }}>
+          <div style={{ fontSize:40, marginBottom:12 }}>✅</div>
+          <div>No hay coberturas pendientes de revisión</div>
+        </div>
+      )}
+
+      {pendientes.map((t: any) => (
+        <div key={t.id} style={{ background:'#111827', border:'1px solid rgba(245,158,11,.3)', borderRadius:12, padding:20, marginBottom:16 }}>
+
+          {/* Header */}
+          <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:16 }}>
+            <div>
+              <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>
+                {getObjetivo(t.objetivo_id)}
+              </div>
+              <div style={{ fontSize:13, color:'#64748b', marginTop:4 }}>
+                {t.fecha} · {t.hora_inicio} → {t.hora_fin}
+              </div>
+            </div>
+            <Badge type="pendiente">⏳ Pendiente</Badge>
+          </div>
+
+          {/* Guardias */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+            <div style={{ background:'#1a2235', borderRadius:8, padding:'10px 14px' }}>
+              <div style={{ fontSize:11, color:'#64748b', marginBottom:4, textTransform:'uppercase' as const, letterSpacing:1 }}>Guardia Original</div>
+              <div style={{ fontSize:13, color:'#e2e8f0', fontWeight:500 }}>{getNombre(t.guardia_original_id)}</div>
+            </div>
+            <div style={{ background:'#1a2235', borderRadius:8, padding:'10px 14px', border:'1px solid rgba(245,158,11,.2)' }}>
+              <div style={{ fontSize:11, color:'#f59e0b', marginBottom:4, textTransform:'uppercase' as const, letterSpacing:1 }}>Guardia Real</div>
+              <div style={{ fontSize:13, color:'#e2e8f0', fontWeight:500 }}>{getNombre(t.guardia_real_id)}</div>
+            </div>
+          </div>
+
+          {/* Observación del guardia */}
+          {t.observacion_guardia && (
+            <div style={{ background:'rgba(59,130,246,.08)', border:'1px solid rgba(59,130,246,.2)', borderRadius:8, padding:'10px 14px', marginBottom:16 }}>
+              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:4, fontWeight:600 }}>OBSERVACIÓN DEL GUARDIA</div>
+              <div style={{ fontSize:13, color:'#cbd5e1' }}>{t.observacion_guardia}</div>
+            </div>
+          )}
+
+          {/* Acciones */}
+          <div style={{ display:'flex', gap:10 }}>
+            <button
+              style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(16,185,129,.15)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }}
+              onClick={() => { setModalId(t.id); setObsSupervisor('') }}>
+              ✓ Revisar y resolver
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {/* Modal resolución */}
+      {modalId && turnoActual && (
+        <Modal
+          title="Resolver cobertura"
+          onClose={() => { setModalId(null); setObsSupervisor('') }}
+          footer={
+            <div style={{ display:'flex', gap:10, width:'100%' }}>
+              <button
+                style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(239,68,68,.15)', color:'#ef4444', border:'1px solid rgba(239,68,68,.3)' }}
+                onClick={() => resolver(modalId, 'rechazado')}
+                disabled={loading}>
+                {loading ? '...' : '✕ Rechazar'}
+              </button>
+              <button
+                style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(16,185,129,.15)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }}
+                onClick={() => resolver(modalId, 'aprobado')}
+                disabled={loading}>
+                {loading ? '...' : '✓ Aprobar'}
+              </button>
+            </div>
+          }>
+
+          <div style={{ marginBottom:16, padding:12, background:'#1a2235', borderRadius:8 }}>
+            <div style={{ fontSize:13, color:'#94a3b8', marginBottom:2 }}>Cobertura</div>
+            <div style={{ fontSize:15, fontWeight:600, color:'#e2e8f0' }}>{getObjetivo(turnoActual.objetivo_id)}</div>
+            <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>
+              {turnoActual.fecha} · {turnoActual.hora_inicio} → {turnoActual.hora_fin}
+            </div>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:16 }}>
+            <div style={{ background:'#1a2235', borderRadius:8, padding:'10px 14px' }}>
+              <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>ORIGINAL</div>
+              <div style={{ fontSize:13, color:'#e2e8f0' }}>{getNombre(turnoActual.guardia_original_id)}</div>
+            </div>
+            <div style={{ background:'#1a2235', borderRadius:8, padding:'10px 14px' }}>
+              <div style={{ fontSize:11, color:'#f59e0b', marginBottom:4 }}>REEMPLAZÓ</div>
+              <div style={{ fontSize:13, color:'#e2e8f0' }}>{getNombre(turnoActual.guardia_real_id)}</div>
+            </div>
+          </div>
+
+          {turnoActual.observacion_guardia && (
+            <div style={{ background:'rgba(59,130,246,.08)', border:'1px solid rgba(59,130,246,.2)', borderRadius:8, padding:'10px 14px', marginBottom:16 }}>
+              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:4, fontWeight:600 }}>OBSERVACIÓN DEL GUARDIA</div>
+              <div style={{ fontSize:13, color:'#cbd5e1' }}>{turnoActual.observacion_guardia}</div>
+            </div>
+          )}
+
+          <div>
+            <label style={S.label}>Observación del supervisor (opcional)</label>
+            <textarea
+              style={{ ...S.input, resize:'vertical' as const, minHeight:80 }}
+              value={obsSupervisor}
+              onChange={e => setObsSupervisor(e.target.value)}
+              placeholder="Motivo de aprobación o rechazo..." />
+          </div>
+
+        </Modal>
+      )}
+    </div>
+  )
+}
 
 export default function AppPage() {
   const [user, setUser] = useState<any>(null)
@@ -1194,6 +1369,7 @@ export default function AppPage() {
     ]},
     { section:'Administración', items:[
       { id:'servicios_objetivo', icon:'🏢', label:'Servicios Objetivo' },
+      { id:'revision_coberturas', icon:'🛂', label:'Revisión Coberturas' },
     { id:'novedades', icon:'📋', label:'Novedades' },
       { id:'reportes', icon:'📈', label:'Reportes' },
     ]},
@@ -1235,6 +1411,7 @@ export default function AppPage() {
           esGuardia ? (
             <>
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={misTurnos} guardias={guardias} objetivos={objetivos} />}
+              {page === 'revision_coberturas' && <RevisionCoberturas guardias={guardias} objetivos={objetivos} turnos={turnos} setTurnos={setTurnos} />}
               {page === 'novedades' && <Novedades novedades={misNovedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
             </>
           ) : (
