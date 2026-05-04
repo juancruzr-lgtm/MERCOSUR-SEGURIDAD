@@ -674,7 +674,332 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
     </div>
   )
 }
+function Planificacion() {
+  const [objetivos, setObjetivos] = useState<any[]>([])
+  const [guardias, setGuardias] = useState<any[]>([])
+  const [horarios, setHorarios] = useState<any[]>([])
+  const [asignaciones, setAsignaciones] = useState<any[]>([])
+  const [reemplazos, setReemplazos] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
 
+  const [horarioForm, setHorarioForm] = useState({
+    objetivo_id: '',
+    hora_inicio: '06:00',
+    hora_fin: '14:00',
+  })
+
+  const [asignacionForm, setAsignacionForm] = useState({
+    horario_id: '',
+    guardia_id: '',
+    fecha: new Date().toISOString().split('T')[0],
+  })
+
+  const [reemplazoForm, setReemplazoForm] = useState({
+    asignacion_id: '',
+    guardia_reemplazo_id: '',
+    motivo: '',
+  })
+
+  const cargar = useCallback(async () => {
+    setLoading(true)
+
+    const [o, g, h, a, r] = await Promise.all([
+      supabase.from('objetivos').select('*').order('nombre'),
+      supabase.from('usuarios').select('*').eq('estado', 'activo').order('apellido'),
+      supabase.from('horarios_objetivo').select('*').eq('activo', true).order('hora_inicio'),
+      supabase.from('asignaciones').select('*').order('fecha', { ascending: false }),
+      supabase.from('reemplazos').select('*').order('created_at', { ascending: false }),
+    ])
+
+    if (o.data) setObjetivos(o.data)
+    if (g.data) setGuardias(g.data)
+    if (h.data) setHorarios(h.data)
+    if (a.data) setAsignaciones(a.data)
+    if (r.data) setReemplazos(r.data)
+
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    cargar()
+  }, [cargar])
+
+  const crearHorario = async () => {
+    if (!horarioForm.objetivo_id) return alert('Seleccioná un objetivo')
+
+    const { error } = await supabase.from('horarios_objetivo').insert({
+      objetivo_id: horarioForm.objetivo_id,
+      hora_inicio: horarioForm.hora_inicio,
+      hora_fin: horarioForm.hora_fin,
+      activo: true,
+    })
+
+    if (error) return alert(error.message)
+
+    setHorarioForm({ objetivo_id: '', hora_inicio: '06:00', hora_fin: '14:00' })
+    cargar()
+  }
+
+  const crearAsignacion = async () => {
+    if (!asignacionForm.horario_id || !asignacionForm.guardia_id) {
+      return alert('Seleccioná horario y guardia')
+    }
+
+    const { error } = await supabase.from('asignaciones').insert({
+      horario_id: asignacionForm.horario_id,
+      guardia_id: asignacionForm.guardia_id,
+      fecha: asignacionForm.fecha,
+    })
+
+    if (error) return alert(error.message)
+
+    setAsignacionForm({
+      horario_id: '',
+      guardia_id: '',
+      fecha: new Date().toISOString().split('T')[0],
+    })
+
+    cargar()
+  }
+
+  const crearReemplazo = async () => {
+    const asignacion = asignaciones.find(a => a.id === reemplazoForm.asignacion_id)
+
+    if (!asignacion || !reemplazoForm.guardia_reemplazo_id) {
+      return alert('Seleccioná asignación y guardia reemplazo')
+    }
+
+    const { error } = await supabase.from('reemplazos').insert({
+      asignacion_id: asignacion.id,
+      guardia_original_id: asignacion.guardia_id,
+      guardia_reemplazo_id: reemplazoForm.guardia_reemplazo_id,
+      motivo: reemplazoForm.motivo,
+    })
+
+    if (error) return alert(error.message)
+
+    setReemplazoForm({
+      asignacion_id: '',
+      guardia_reemplazo_id: '',
+      motivo: '',
+    })
+
+    cargar()
+  }
+
+  const nombreObjetivo = (id: string) => objetivos.find(o => o.id === id)?.nombre || '—'
+  const nombreGuardia = (id: string) => {
+    const g = guardias.find(x => x.id === id)
+    return g ? `${g.apellido}, ${g.nombre}` : '—'
+  }
+
+  const horarioTexto = (h: any) => {
+    const obj = nombreObjetivo(h.objetivo_id)
+    return `${obj} | ${h.hora_inicio} - ${h.hora_fin}`
+  }
+
+  const asignacionTexto = (a: any) => {
+    const h = horarios.find(x => x.id === a.horario_id)
+    return `${a.fecha} | ${h ? horarioTexto(h) : 'Horario'} | ${nombreGuardia(a.guardia_id)}`
+  }
+
+  return (
+    <div>
+      <div style={S.title}>Planificación</div>
+      <div style={S.sub2}>Horarios por objetivo, asignaciones y reemplazos</div>
+
+      {loading && <div style={{ color:'#64748b', marginBottom:16 }}>Cargando...</div>}
+
+      <div style={S.card}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, marginBottom:16 }}>
+          1. Cargar horario de objetivo
+        </div>
+
+        <div style={S.grid2}>
+          <div>
+            <label style={S.label}>Objetivo</label>
+            <select
+              style={S.select}
+              value={horarioForm.objetivo_id}
+              onChange={e => setHorarioForm({ ...horarioForm, objetivo_id: e.target.value })}
+            >
+              <option value="">Seleccionar...</option>
+              {objetivos.map(o => (
+                <option key={o.id} value={o.id}>{o.nombre}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={S.label}>Horario</label>
+            <div style={{ display:'flex', gap:8 }}>
+              <input
+                type="time"
+                style={S.input}
+                value={horarioForm.hora_inicio}
+                onChange={e => setHorarioForm({ ...horarioForm, hora_inicio: e.target.value })}
+              />
+              <input
+                type="time"
+                style={S.input}
+                value={horarioForm.hora_fin}
+                onChange={e => setHorarioForm({ ...horarioForm, hora_fin: e.target.value })}
+              />
+            </div>
+          </div>
+        </div>
+
+        <button style={{ ...S.btn, ...S.btnPrimary, marginTop:16 }} onClick={crearHorario}>
+          + Guardar horario
+        </button>
+      </div>
+
+      <div style={S.card}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, marginBottom:16 }}>
+          2. Asignar guardia a horario
+        </div>
+
+        <div style={S.grid2}>
+          <div>
+            <label style={S.label}>Horario</label>
+            <select
+              style={S.select}
+              value={asignacionForm.horario_id}
+              onChange={e => setAsignacionForm({ ...asignacionForm, horario_id: e.target.value })}
+            >
+              <option value="">Seleccionar...</option>
+              {horarios.map(h => (
+                <option key={h.id} value={h.id}>{horarioTexto(h)}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={S.label}>Guardia</label>
+            <select
+              style={S.select}
+              value={asignacionForm.guardia_id}
+              onChange={e => setAsignacionForm({ ...asignacionForm, guardia_id: e.target.value })}
+            >
+              <option value="">Seleccionar...</option>
+              {guardias.map(g => (
+                <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={S.label}>Fecha de ingreso</label>
+            <input
+              type="date"
+              style={S.input}
+              value={asignacionForm.fecha}
+              onChange={e => setAsignacionForm({ ...asignacionForm, fecha: e.target.value })}
+            />
+          </div>
+        </div>
+
+        <button style={{ ...S.btn, ...S.btnPrimary, marginTop:16 }} onClick={crearAsignacion}>
+          + Asignar guardia
+        </button>
+      </div>
+
+      <div style={S.card}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, marginBottom:16 }}>
+          3. Registrar reemplazo
+        </div>
+
+        <div style={S.grid2}>
+          <div>
+            <label style={S.label}>Servicio asignado</label>
+            <select
+              style={S.select}
+              value={reemplazoForm.asignacion_id}
+              onChange={e => setReemplazoForm({ ...reemplazoForm, asignacion_id: e.target.value })}
+            >
+              <option value="">Seleccionar...</option>
+              {asignaciones.map(a => (
+                <option key={a.id} value={a.id}>{asignacionTexto(a)}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={S.label}>Guardia reemplazo</label>
+            <select
+              style={S.select}
+              value={reemplazoForm.guardia_reemplazo_id}
+              onChange={e => setReemplazoForm({ ...reemplazoForm, guardia_reemplazo_id: e.target.value })}
+            >
+              <option value="">Seleccionar...</option>
+              {guardias.map(g => (
+                <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ marginTop:16 }}>
+          <label style={S.label}>Motivo del reemplazo</label>
+          <textarea
+            style={{ ...S.input, resize:'vertical', minHeight:80 }}
+            value={reemplazoForm.motivo}
+            onChange={e => setReemplazoForm({ ...reemplazoForm, motivo: e.target.value })}
+          />
+        </div>
+
+        <button style={{ ...S.btn, ...S.btnPrimary, marginTop:16 }} onClick={crearReemplazo}>
+          + Guardar reemplazo
+        </button>
+      </div>
+
+      <div style={S.card}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, marginBottom:16 }}>
+          Servicios cargados
+        </div>
+
+        <table style={S.table}>
+          <thead>
+            <tr>
+              <th style={S.th}>Fecha ingreso</th>
+              <th style={S.th}>Objetivo</th>
+              <th style={S.th}>Horario</th>
+              <th style={S.th}>Guardia asignado</th>
+              <th style={S.th}>Reemplazo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {asignaciones.map(a => {
+              const h = horarios.find(x => x.id === a.horario_id)
+              const reemplazo = reemplazos.find(r => r.asignacion_id === a.id)
+
+              return (
+                <tr key={a.id}>
+                  <td style={S.td}>{a.fecha}</td>
+                  <td style={S.td}>{h ? nombreObjetivo(h.objetivo_id) : '—'}</td>
+                  <td style={S.td}>{h ? `${h.hora_inicio} - ${h.hora_fin}` : '—'}</td>
+                  <td style={S.td}>{nombreGuardia(a.guardia_id)}</td>
+                  <td style={S.td}>
+                    {reemplazo ? (
+                      <div>
+                        <Badge type="advertencia">{nombreGuardia(reemplazo.guardia_reemplazo_id)}</Badge>
+                        <div style={{ fontSize:11, color:'#64748b', marginTop:4 }}>
+                          {reemplazo.motivo}
+                        </div>
+                      </div>
+                    ) : (
+                      <span style={{ color:'#64748b' }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
 export default function AppPage() {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
@@ -727,6 +1052,7 @@ export default function AppPage() {
       { id:'guardias', icon:'👮', label:'Guardias' },
       { id:'objetivos', icon:'🏢', label:'Objetivos' },
       { id:'turnos', icon:'📅', label:'Turnos' },
+      { id:'planificacion', icon:'🗓️', label:'Planificación' },
       { id:'asistencia', icon:'✅', label:'Asistencia' },
     ]},
     { section:'Administración', items:[
@@ -783,6 +1109,7 @@ export default function AppPage() {
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
+              {page === 'planificacion' && <Planificacion />}
             </>
           )
         )}
