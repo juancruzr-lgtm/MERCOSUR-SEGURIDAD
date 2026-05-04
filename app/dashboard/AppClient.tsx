@@ -87,7 +87,7 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-    const login = async () => {
+   const login = async () => {
   setLoading(true)
   setError('')
 
@@ -118,7 +118,7 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   onLogin(perfil)
 
   setLoading(false)
-}
+} 
     setLoading(true); setError('')
    {
       onLogin({ nombre:'Juan Cruz', apellido:'Rodriguez', rol:'admin', legajo:'ADMIN-001' })
