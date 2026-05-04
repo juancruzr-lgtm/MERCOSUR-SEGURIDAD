@@ -235,20 +235,11 @@ function Guardias({ guardias, setGuardias, registros }: any) {
           <tbody>
             {guardias.map((g: Usuario) => (
               <tr key={g.id}>
-                <th style={S.th}></th>
                 <td style={S.td}><span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>{g.legajo}</span></td>
                 <td style={S.td}><strong>{g.apellido}, {g.nombre}</strong></td>
                 <td style={S.td}>{g.dni}</td>
                 <td style={S.td}>{g.telefono}</td>
-                <td style={S.td}><Badge type={t.estado}>{t.estado}</Badge></td>
-<td style={S.td}>
-  <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} 
-    onClick={() => { 
-      setForm({ guardia_id:t.guardia_id||'', objetivo_id:t.objetivo_id, fecha:t.fecha, hora_inicio:t.hora_inicio, hora_fin:t.hora_fin }); 
-      setEditId(t.id); 
-      setModal(true) 
-    }}>✏ Editar</button>
-</td>
+                <td style={S.td}><Badge type={g.estado}>{g.estado}</Badge></td>
                 <td style={S.td}>{formatHoras(horasTotal(g.id))}</td>
                 <td style={S.td}><button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => { setForm({ nombre:g.nombre, apellido:g.apellido, dni:g.dni||'', telefono:g.telefono||'', legajo:g.legajo, estado:g.estado, rol:g.rol }); setEditId(g.id); setModal(true) }}>✏ Editar</button></td>
               </tr>
@@ -280,17 +271,16 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
   const [loading, setLoading] = useState(false)
   const hoy = new Date().toISOString().split('T')[0]
 
-const guardar = async () => {
+  const guardar = async () => {
     setLoading(true)
-    const payload = { ...form, guardia_id: form.guardia_id || null, estado: form.guardia_id ? 'cubierto' : 'descubierto' }
     if (editId) {
-      const { data } = await supabase.from('turnos').update(payload).eq('id', editId).select().single()
-      if (data) setTurnos((prev: any[]) => prev.map(t => t.id === editId ? data : t))
+      const { data } = await supabase.from('objetivos').update(form).eq('id', editId).select().single()
+      if (data) setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? data : o))
     } else {
-      const { data } = await supabase.from('turnos').insert(payload).select().single()
-      if (data) setTurnos((prev: any[]) => [...prev, data])
+      const { data } = await supabase.from('objetivos').insert(form).select().single()
+      if (data) setObjetivos((prev: any[]) => [...prev, data])
     }
-    setModal(false); setLoading(false); setEditId(null)
+    setModal(false); setLoading(false)
   }
 
   return (
@@ -337,6 +327,7 @@ const guardar = async () => {
 }
 
 function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
+  const [editId, setEditId] = useState<string | null>(null)
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', fecha:new Date().toISOString().split('T')[0], hora_inicio:'06:00', hora_fin:'14:00' })
   const [filtFecha, setFiltFecha] = useState(new Date().toISOString().split('T')[0])
@@ -345,9 +336,14 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
   const guardar = async () => {
     setLoading(true)
     const payload = { ...form, guardia_id: form.guardia_id || null, estado: form.guardia_id ? 'cubierto' : 'descubierto' }
-    const { data } = await supabase.from('turnos').insert(payload).select().single()
-    if (data) setTurnos((prev: any[]) => [...prev, data])
-    setModal(false); setLoading(false)
+    if (editId) {
+      const { data } = await supabase.from('turnos').update(payload).eq('id', editId).select().single()
+      if (data) setTurnos((prev: any[]) => prev.map(t => t.id === editId ? data : t))
+    } else {
+      const { data } = await supabase.from('turnos').insert(payload).select().single()
+      if (data) setTurnos((prev: any[]) => [...prev, data])
+    }
+    setModal(false); setLoading(false); setEditId(null)
   }
 
   const filtrados = turnos.filter((t: Turno) => !filtFecha || t.fecha === filtFecha)
@@ -361,7 +357,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
       </div>
       <div style={S.card}>
         <table style={S.table}>
-          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Objetivo</th><th style={S.th}>Horario</th><th style={S.th}>Guardia</th><th style={S.th}>Estado</th></tr></thead>
+          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Objetivo</th><th style={S.th}>Horario</th><th style={S.th}>Guardia</th><th style={S.th}>Estado</th><th style={S.th}></th></tr></thead>
           <tbody>
             {filtrados.map((t: Turno) => {
               const g = guardias.find((x: Usuario) => x.id === t.guardia_id)
@@ -373,6 +369,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
                   <td style={S.td}><span style={{ fontFamily:'Syne,sans-serif', fontWeight:600 }}>{t.hora_inicio} → {t.hora_fin}</span></td>
                   <td style={S.td}>{g ? `${g.apellido}, ${g.nombre}` : <span style={{ color:'#ef4444' }}>Sin asignar</span>}</td>
                   <td style={S.td}><Badge type={t.estado}>{t.estado}</Badge></td>
+                  <td style={S.td}><button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => { setForm({ guardia_id:t.guardia_id||'', objetivo_id:t.objetivo_id, fecha:t.fecha, hora_inicio:t.hora_inicio, hora_fin:t.hora_fin }); setEditId(t.id); setModal(true) }}>✏ Editar</button></td>
                 </tr>
               )
             })}
@@ -381,7 +378,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
         {filtrados.length === 0 && <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>📅 No hay turnos para esta fecha</div>}
       </div>
       {modal && (
-        <Modal title="Nuevo Turno" onClose={() => setModal(false)}
+        <Modal title={editId ? 'Editar Turno' : 'Nuevo Turno'} onClose={() => { setModal(false); setEditId(null) }}
           footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setModal(false)}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
           <div style={{ marginBottom:16 }}><label style={S.label}>Objetivo</label><select style={S.select} value={form.objetivo_id} onChange={e => setForm({...form, objetivo_id:e.target.value})}><option value="">Seleccionar...</option>{objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}</select></div>
           <div style={{ marginBottom:16 }}><label style={S.label}>Guardia (opcional)</label><select style={S.select} value={form.guardia_id} onChange={e => setForm({...form, guardia_id:e.target.value})}><option value="">Sin asignar</option>{guardias.filter((g: Usuario) => g.estado === 'activo').map((g: Usuario) => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>)}</select></div>
