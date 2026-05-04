@@ -87,51 +87,35 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-   const login = async () => {
-  setLoading(true)
-  setError('')
+  const login = async () => {
+    setLoading(true)
+    setError('')
 
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password: pass
-  })
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password: pass
+    })
 
-  if (error) {
-    setError('Email o contraseña incorrectos')
-    setLoading(false)
-    return
-  }
-
-  const { data: perfil } = await supabase
-    .from('usuarios')
-    .select('*')
-    .eq('auth_user_id', data.user.id)
-    .single()
-
-  if (!perfil) {
-    setError('Usuario sin perfil asignado')
-    await supabase.auth.signOut()
-    setLoading(false)
-    return
-  }
-
-  onLogin(perfil)
-
-  setLoading(false)
-} 
-    setLoading(true); setError('')
-   {
-      onLogin({ nombre:'Juan Cruz', apellido:'Rodriguez', rol:'admin', legajo:'ADMIN-001' })
-      setLoading(false); return
+    if (error) {
+      setError('Email o contraseña incorrectos')
+      setLoading(false)
+      return
     }
-    {
-      onLogin({ nombre:'Juan Cruz', apellido:'Romero', rol:'guardia', legajo:'romero' })
-      setLoading(false); return
+
+    const { data: perfil, error: perfilError } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('auth_user_id', data.user.id)
+      .single()
+
+    if (perfilError || !perfil) {
+      setError('Usuario sin perfil asignado')
+      await supabase.auth.signOut()
+      setLoading(false)
+      return
     }
-    const { data, error: err } = await supabase.auth.signInWithPassword({ email, password: pass })
-    if (err) { setError('Email o contraseña incorrectos'); setLoading(false); return }
-    const { data: perfil } = await supabase.from('usuarios').select('*').eq('auth_user_id', data.user.id).single()
-    onLogin(perfil || { email, rol: 'admin', nombre: 'Admin', apellido: '' })
+
+    onLogin(perfil)
     setLoading(false)
   }
 
@@ -143,18 +127,43 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
           <div style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, color:'#f59e0b', marginTop:12 }}>MERCOSUR SEGURIDAD</div>
           <div style={{ color:'#64748b', fontSize:13, marginTop:4 }}>Sistema de Control Operativo</div>
         </div>
+
         <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:16, padding:32 }}>
           <div style={{ fontFamily:'Syne,sans-serif', fontSize:20, fontWeight:700, marginBottom:24 }}>Iniciar sesión</div>
+
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Email</label>
-            <input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="usuario@mercosur.com" />
+            <input
+              style={S.input}
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="usuario@mercosur.com"
+            />
           </div>
+
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Contraseña</label>
-            <input style={S.input} type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === 'Enter' && login()} />
+            <input
+              style={S.input}
+              type="password"
+              value={pass}
+              onChange={e => setPass(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && login()}
+            />
           </div>
-          {error && <div style={{ color:'#ef4444', fontSize:13, marginBottom:12 }}>{error}</div>}
-          <button style={{ ...S.btn, ...S.btnPrimary, width:'100%', justifyContent:'center' }} onClick={login} disabled={loading}>
+
+          {error && (
+            <div style={{ color:'#ef4444', fontSize:13, marginBottom:12 }}>
+              {error}
+            </div>
+          )}
+
+          <button
+            style={{ ...S.btn, ...S.btnPrimary, width:'100%', justifyContent:'center' }}
+            onClick={login}
+            disabled={loading}
+          >
             {loading ? 'Ingresando...' : 'Ingresar'}
           </button>
         </div>
@@ -162,7 +171,6 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
     </div>
   )
 }
-
 function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
   const hoy = new Date().toISOString().split('T')[0]
   const turnosHoy = turnos.filter((t: Turno) => t.fecha === hoy)
