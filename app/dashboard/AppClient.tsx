@@ -920,7 +920,512 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     </div>
   )
 }
+// ── LAYOUT GUARDIA (mobile-first) ─────────────────────────────
+function LayoutGuardia({ user, turnos, registros, novedades, setRegistros, setNovedades, guardias, objetivos }: any) {
+  const [page, setPage] = useState('asistencia')
 
+  const misTurnos = turnos.filter((t: any) => t.guardia_id === user.id)
+  const misRegistros = registros.filter((r: any) => r.guardia_id === user.id)
+  const misNovedades = novedades.filter((n: any) => n.guardia_id === user.id)
+
+  const NAV_ITEMS = [
+    { id:'asistencia', icon:'✅', label:'Asistencia' },
+    { id:'novedades',  icon:'📋', label:'Novedades' },
+  ]
+
+  const estiloNav: React.CSSProperties = {
+    position:'fixed', bottom:0, left:0, right:0,
+    background:'#111827', borderTop:'1px solid #1e2d42',
+    display:'flex', zIndex:100,
+  }
+  const estiloNavBtn = (active: boolean): React.CSSProperties => ({
+    flex:1, padding:'12px 8px', background:'none', border:'none',
+    cursor:'pointer', display:'flex', flexDirection:'column',
+    alignItems:'center', gap:4,
+    color: active ? '#f59e0b' : '#64748b',
+    borderTop: active ? '2px solid #f59e0b' : '2px solid transparent',
+  })
+
+  return (
+    <div style={{ background:'#0a0e1a', minHeight:'100vh', paddingBottom:80 }}>
+
+      {/* Header */}
+      <div style={{ background:'#111827', borderBottom:'1px solid #1e2d42', padding:'16px 20px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <span style={{ fontSize:22 }}>🛡️</span>
+          <div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:14, fontWeight:800, color:'#f59e0b' }}>MERCOSUR</div>
+            <div style={{ fontSize:11, color:'#64748b' }}>Control Operativo</div>
+          </div>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ textAlign:'right' }}>
+            <div style={{ fontSize:13, fontWeight:500, color:'#e2e8f0' }}>{user.nombre} {user.apellido}</div>
+            <div style={{ fontSize:11, color:'#64748b' }}>Guardia · {user.legajo}</div>
+          </div>
+          <button
+            onClick={async () => { await supabase.auth.signOut(); window.location.reload() }}
+            style={{ background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.3)', color:'#ef4444', borderRadius:8, padding:'6px 12px', cursor:'pointer', fontSize:12 }}>
+            Salir
+          </button>
+        </div>
+      </div>
+
+      {/* Contenido */}
+      <div style={{ padding:'20px 16px' }}>
+        {page === 'asistencia' && (
+          <AsistenciaGuardia
+            user={user}
+            misTurnos={misTurnos}
+            misRegistros={misRegistros}
+            registros={registros}
+            setRegistros={setRegistros}
+            guardias={guardias}
+            objetivos={objetivos}
+            turnos={turnos}
+          />
+        )}
+        {page === 'novedades' && (
+          <NovedadesGuardia
+            user={user}
+            misNovedades={misNovedades}
+            setNovedades={setNovedades}
+            guardias={guardias}
+            objetivos={objetivos}
+          />
+        )}
+      </div>
+
+      {/* Nav inferior */}
+      <nav style={estiloNav}>
+        {NAV_ITEMS.map(item => (
+          <button key={item.id} style={estiloNavBtn(page === item.id)} onClick={() => setPage(item.id)}>
+            <span style={{ fontSize:20 }}>{item.icon}</span>
+            <span style={{ fontSize:11, fontWeight:600 }}>{item.label}</span>
+          </button>
+        ))}
+      </nav>
+    </div>
+  )
+}
+
+// ── ASISTENCIA GUARDIA (cards mobile) ─────────────────────────
+function AsistenciaGuardia({ user, misTurnos, misRegistros, registros, setRegistros, guardias, objetivos, turnos }: any) {
+  const [modalPresente, setModalPresente] = useState(false)
+  const [modalUrgente, setModalUrgente] = useState(false)
+  const [turnoSeleccionado, setTurnoSeleccionado] = useState<any>(null)
+  const [horaEntrada, setHoraEntrada] = useState('')
+  const [horaSalida, setHoraSalida] = useState('')
+  const [observacion, setObservacion] = useState('')
+  const [obsUrgente, setObsUrgente] = useState('')
+  const [turnoUrgenteId, setTurnoUrgenteId] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const hoy = new Date().toISOString().split('T')[0]
+  const turnosHoy = misTurnos.filter((t: any) => t.fecha === hoy)
+  const registroHoy = (turnoId: string) => misRegistros.find((r: any) => r.turno_id === turnoId)
+
+  const darPresente = async () => {
+    if (!turnoSeleccionado || !horaEntrada) return
+    setLoading(true)
+    const alertaE = calcAlertaEntrada(turnoSeleccionado.hora_inicio, horaEntrada)
+    const alertaS = horaSalida ? calcAlertaSalida(turnoSeleccionado.hora_fin, horaSalida) : null
+    const horas = horaSalida ? calcHorasTrabajadas(horaEntrada, horaSalida) : 0
+    const { data } = await supabase.from('registros_asistencia').insert({
+      turno_id: turnoSeleccionado.id,
+      guardia_id: user.id,
+      hora_entrada_real: horaEntrada,
+      hora_salida_real: horaSalida || null,
+      horas_trabajadas: horas,
+      alerta_entrada: alertaE,
+      alerta_salida: alertaS,
+      observacion,
+    }).select().single()
+    if (data) {
+      setRegistros((prev: any[]) => [data, ...prev])
+      await supabase.from('turnos').update({ estado:'cubierto' }).eq('id', turnoSeleccionado.id)
+    }
+    setModalPresente(false); setHoraEntrada(''); setHoraSalida(''); setObservacion(''); setLoading(false)
+  }
+
+  const darPresenteUrgente = async () => {
+    if (!turnoUrgenteId || !horaEntrada) return
+    setLoading(true)
+    const turno = turnos.find((t: any) => t.id === turnoUrgenteId)
+    if (!turno) { setLoading(false); return }
+    const { data } = await supabase.from('registros_asistencia').insert({
+      turno_id: turno.id,
+      guardia_id: user.id,
+      hora_entrada_real: horaEntrada,
+      hora_salida_real: horaSalida || null,
+      horas_trabajadas: horaSalida ? calcHorasTrabajadas(horaEntrada, horaSalida) : 0,
+      observacion: obsUrgente,
+    }).select().single()
+    if (data) {
+      setRegistros((prev: any[]) => [data, ...prev])
+      await supabase.from('turnos').update({
+        guardia_real_id: user.id,
+        tipo_evento: 'cobertura_urgente',
+        estado_revision: 'pendiente_supervisor',
+        observacion_guardia: obsUrgente,
+        estado: 'cubierto',
+      }).eq('id', turno.id)
+    }
+    setModalUrgente(false); setHoraEntrada(''); setHoraSalida(''); setObsUrgente(''); setTurnoUrgenteId(''); setLoading(false)
+  }
+
+  const colorAlerta = (alerta: string | null) => {
+    if (alerta === 'tarde') return { bg:'rgba(239,68,68,.1)', color:'#ef4444', texto:'⏰ Llegada tarde' }
+    if (alerta === 'anticipada') return { bg:'rgba(245,158,11,.1)', color:'#f59e0b', texto:'⬇ Salida anticipada' }
+    if (alerta === 'posterior') return { bg:'rgba(59,130,246,.1)', color:'#60a5fa', texto:'⏱ Salida posterior' }
+    return null
+  }
+
+  // Turnos descubiertos de hoy (para cobertura urgente)
+  const turnosDescubiertos = turnos.filter((t: any) =>
+    t.fecha === hoy && t.estado !== 'cubierto' && t.guardia_id !== user.id
+  )
+
+  return (
+    <div>
+      <div style={{ marginBottom:20 }}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, marginBottom:4 }}>Mi Asistencia</div>
+        <div style={{ color:'#64748b', fontSize:13 }}>
+          {new Date().toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'long' })}
+        </div>
+      </div>
+
+      {/* Turnos de hoy */}
+      <div style={{ marginBottom:24 }}>
+        <div style={{ fontSize:12, color:'#64748b', textTransform:'uppercase', letterSpacing:1, fontWeight:600, marginBottom:12 }}>
+          MIS TURNOS HOY
+        </div>
+
+        {turnosHoy.length === 0 ? (
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:24, textAlign:'center', color:'#64748b' }}>
+            <div style={{ fontSize:32, marginBottom:8 }}>📅</div>
+            <div>No tenés turnos asignados para hoy</div>
+          </div>
+        ) : turnosHoy.map((t: any) => {
+          const reg = registroHoy(t.id)
+          const obj = objetivos.find((o: any) => o.id === t.objetivo_id)
+          const alertaE = reg ? colorAlerta(reg.alerta_entrada) : null
+          const alertaS = reg ? colorAlerta(reg.alerta_salida) : null
+          return (
+            <div key={t.id} style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, marginBottom:12 }}>
+              <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:12 }}>
+                <div>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>
+                    {obj?.nombre || 'Objetivo'}
+                  </div>
+                  <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>{obj?.direccion || ''}</div>
+                </div>
+                <Badge type={t.estado}>{t.estado}</Badge>
+              </div>
+
+              <div style={{ display:'flex', gap:16, marginBottom:16 }}>
+                <div style={{ background:'#1a2235', borderRadius:8, padding:'8px 14px', flex:1, textAlign:'center' }}>
+                  <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>ENTRADA</div>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, color:'#f59e0b' }}>{t.hora_inicio}</div>
+                </div>
+                <div style={{ background:'#1a2235', borderRadius:8, padding:'8px 14px', flex:1, textAlign:'center' }}>
+                  <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>SALIDA</div>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, color:'#f59e0b' }}>{t.hora_fin}</div>
+                </div>
+              </div>
+
+              {reg ? (
+                <div>
+                  <div style={{ background:'rgba(16,185,129,.08)', border:'1px solid rgba(16,185,129,.2)', borderRadius:8, padding:12, marginBottom:8 }}>
+                    <div style={{ fontSize:12, color:'#10b981', fontWeight:600, marginBottom:6 }}>✓ Presente registrado</div>
+                    <div style={{ display:'flex', gap:12 }}>
+                      <div style={{ fontSize:13, color:'#94a3b8' }}>
+                        Entrada: <span style={{ color:'#e2e8f0', fontWeight:600 }}>{reg.hora_entrada_real}</span>
+                      </div>
+                      {reg.hora_salida_real && (
+                        <div style={{ fontSize:13, color:'#94a3b8' }}>
+                          Salida: <span style={{ color:'#e2e8f0', fontWeight:600 }}>{reg.hora_salida_real}</span>
+                        </div>
+                      )}
+                      {reg.horas_trabajadas > 0 && (
+                        <div style={{ fontSize:13, color:'#94a3b8' }}>
+                          Horas: <span style={{ color:'#e2e8f0', fontWeight:600 }}>{formatHoras(reg.horas_trabajadas)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {alertaE && (
+                    <div style={{ background:alertaE.bg, border:`1px solid ${alertaE.color}40`, borderRadius:8, padding:'8px 12px', marginBottom:6, fontSize:12, color:alertaE.color, fontWeight:600 }}>
+                      {alertaE.texto}
+                    </div>
+                  )}
+                  {alertaS && (
+                    <div style={{ background:alertaS.bg, border:`1px solid ${alertaS.color}40`, borderRadius:8, padding:'8px 12px', fontSize:12, color:alertaS.color, fontWeight:600 }}>
+                      {alertaS.texto}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  style={{ ...S.btn, ...S.btnPrimary, width:'100%', justifyContent:'center', fontSize:15, padding:'12px' }}
+                  onClick={() => { setTurnoSeleccionado(t); setHoraEntrada(new Date().toTimeString().slice(0,5)); setModalPresente(true) }}>
+                  ✅ Dar presente
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Cobertura urgente */}
+      {turnosDescubiertos.length > 0 && (
+        <div style={{ marginBottom:24 }}>
+          <div style={{ fontSize:12, color:'#64748b', textTransform:'uppercase', letterSpacing:1, fontWeight:600, marginBottom:12 }}>
+            COBERTURA URGENTE
+          </div>
+          <div style={{ background:'rgba(245,158,11,.05)', border:'1px solid rgba(245,158,11,.2)', borderRadius:12, padding:16, marginBottom:12 }}>
+            <div style={{ fontSize:13, color:'#f59e0b', marginBottom:12 }}>
+              ⚠ Hay {turnosDescubiertos.length} turno(s) sin cubrir. ¿Podés cubrir uno?
+            </div>
+            <button
+              style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center' }}
+              onClick={() => { setHoraEntrada(new Date().toTimeString().slice(0,5)); setModalUrgente(true) }}>
+              🆘 Cubrir turno urgente
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Historial reciente */}
+      {misRegistros.length > 0 && (
+        <div>
+          <div style={{ fontSize:12, color:'#64748b', textTransform:'uppercase', letterSpacing:1, fontWeight:600, marginBottom:12 }}>
+            HISTORIAL RECIENTE
+          </div>
+          {misRegistros.slice(0, 5).map((r: any) => {
+            const t = turnos.find((x: any) => x.id === r.turno_id)
+            const obj = objetivos.find((o: any) => o.id === t?.objetivo_id)
+            return (
+              <div key={r.id} style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:14, marginBottom:8, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:600, color:'#e2e8f0' }}>{obj?.nombre || '—'}</div>
+                  <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{t?.fecha} · {r.hora_entrada_real} – {r.hora_salida_real || '…'}</div>
+                </div>
+                <div style={{ textAlign:'right' }}>
+                  {r.horas_trabajadas > 0 && (
+                    <div style={{ fontFamily:'Syne,sans-serif', fontSize:14, fontWeight:700, color:'#f59e0b' }}>{formatHoras(r.horas_trabajadas)}</div>
+                  )}
+                  {r.alerta_entrada ? <Badge type={r.alerta_entrada}>⏰ Tarde</Badge> : <Badge type="cubierto">✓ Ok</Badge>}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Modal dar presente */}
+      {modalPresente && turnoSeleccionado && (
+        <Modal
+          title="Registrar presencia"
+          onClose={() => { setModalPresente(false); setHoraEntrada(''); setHoraSalida(''); setObservacion('') }}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setModalPresente(false)}>Cancelar</button>
+              <button style={{ ...S.btn, ...S.btnPrimary }} onClick={darPresente} disabled={loading || !horaEntrada}>
+                {loading ? 'Registrando...' : 'Confirmar'}
+              </button>
+            </>
+          }>
+          <div style={{ marginBottom:12, padding:12, background:'#1a2235', borderRadius:8 }}>
+            <div style={{ fontSize:13, color:'#94a3b8' }}>Turno</div>
+            <div style={{ fontSize:15, fontWeight:600, color:'#e2e8f0', marginTop:2 }}>
+              {objetivos.find((o: any) => o.id === turnoSeleccionado.objetivo_id)?.nombre}
+            </div>
+            <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>
+              {turnoSeleccionado.hora_inicio} → {turnoSeleccionado.hora_fin}
+            </div>
+          </div>
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora entrada *</label>
+              <input type="time" style={S.input} value={horaEntrada} onChange={e => setHoraEntrada(e.target.value)} />
+            </div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora salida</label>
+              <input type="time" style={S.input} value={horaSalida} onChange={e => setHoraSalida(e.target.value)} />
+            </div>
+          </div>
+          <div style={{ marginBottom:8 }}>
+            <label style={S.label}>Observación (opcional)</label>
+            <textarea style={{ ...S.input, resize:'vertical' as const, minHeight:60 }} value={observacion} onChange={e => setObservacion(e.target.value)} placeholder="Novedades del turno..." />
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal cobertura urgente */}
+      {modalUrgente && (
+        <Modal
+          title="🆘 Cobertura urgente"
+          onClose={() => { setModalUrgente(false); setHoraEntrada(''); setHoraSalida(''); setObsUrgente(''); setTurnoUrgenteId('') }}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setModalUrgente(false)}>Cancelar</button>
+              <button style={{ ...S.btn, ...S.btnPrimary }} onClick={darPresenteUrgente} disabled={loading || !turnoUrgenteId || !horaEntrada}>
+                {loading ? 'Registrando...' : 'Confirmar cobertura'}
+              </button>
+            </>
+          }>
+          <div style={{ marginBottom:12, padding:10, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.2)', borderRadius:8, fontSize:12, color:'#f59e0b' }}>
+            Esta cobertura quedará pendiente de revisión del supervisor.
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Turno a cubrir *</label>
+            <select style={S.select} value={turnoUrgenteId} onChange={e => setTurnoUrgenteId(e.target.value)}>
+              <option value="">Seleccionar turno...</option>
+              {turnosDescubiertos.map((t: any) => {
+                const obj = objetivos.find((o: any) => o.id === t.objetivo_id)
+                return <option key={t.id} value={t.id}>{obj?.nombre} — {t.hora_inicio} a {t.hora_fin}</option>
+              })}
+            </select>
+          </div>
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora entrada *</label>
+              <input type="time" style={S.input} value={horaEntrada} onChange={e => setHoraEntrada(e.target.value)} />
+            </div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora salida</label>
+              <input type="time" style={S.input} value={horaSalida} onChange={e => setHoraSalida(e.target.value)} />
+            </div>
+          </div>
+          <div style={{ marginBottom:8 }}>
+            <label style={S.label}>Motivo / Observación *</label>
+            <textarea style={{ ...S.input, resize:'vertical' as const, minHeight:60 }} value={obsUrgente} onChange={e => setObsUrgente(e.target.value)} placeholder="Explicá brevemente por qué cubrís este turno..." />
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ── NOVEDADES GUARDIA (cards mobile) ──────────────────────────
+function NovedadesGuardia({ user, misNovedades, setNovedades, guardias, objetivos }: any) {
+  const [modal, setModal] = useState(false)
+  const [form, setForm] = useState({ objetivo_id:'', tipo:'Rutina', descripcion:'', prioridad:'normal' })
+  const [loading, setLoading] = useState(false)
+
+  const guardar = async () => {
+    if (!form.descripcion) return
+    setLoading(true)
+    const { data } = await supabase.from('novedades').insert({
+      guardia_id: user.id,
+      objetivo_id: form.objetivo_id || null,
+      tipo: form.tipo,
+      descripcion: form.descripcion,
+      prioridad: form.prioridad,
+      estado: 'pendiente',
+    }).select().single()
+    if (data) setNovedades((prev: any[]) => [data, ...prev])
+    setModal(false); setForm({ objetivo_id:'', tipo:'Rutina', descripcion:'', prioridad:'normal' }); setLoading(false)
+  }
+
+  const colorPrioridad = (p: string) => {
+    if (p === 'urgente') return { border:'rgba(239,68,68,.3)', bg:'rgba(239,68,68,.05)', dot:'#ef4444' }
+    if (p === 'importante') return { border:'rgba(245,158,11,.3)', bg:'rgba(245,158,11,.05)', dot:'#f59e0b' }
+    return { border:'#1e2d42', bg:'#111827', dot:'#3b82f6' }
+  }
+
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', marginBottom:20 }}>
+        <div style={{ flex:1 }}>
+          <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, marginBottom:4 }}>Mis Novedades</div>
+          <div style={{ color:'#64748b', fontSize:13 }}>
+            {misNovedades.filter((n: any) => n.estado === 'pendiente').length} pendientes
+          </div>
+        </div>
+        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => setModal(true)}>+ Nueva</button>
+      </div>
+
+      {misNovedades.length === 0 ? (
+        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:32, textAlign:'center', color:'#64748b' }}>
+          <div style={{ fontSize:32, marginBottom:8 }}>📋</div>
+          <div>No tenés novedades registradas</div>
+        </div>
+      ) : misNovedades.map((n: any) => {
+        const obj = objetivos.find((o: any) => o.id === n.objetivo_id)
+        const c = colorPrioridad(n.prioridad)
+        return (
+          <div key={n.id} style={{ background:c.bg, border:`1px solid ${c.border}`, borderRadius:12, padding:16, marginBottom:12 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <div style={{ width:8, height:8, borderRadius:'50%', background:c.dot, flexShrink:0 }} />
+                <span style={{ fontSize:13, fontWeight:600, color:'#e2e8f0' }}>{n.tipo}</span>
+                <Badge type={n.prioridad}>{n.prioridad}</Badge>
+              </div>
+              <Badge type={n.estado}>{n.estado}</Badge>
+            </div>
+            <div style={{ fontSize:13, color:'#cbd5e1', lineHeight:1.5, marginBottom:8 }}>{n.descripcion}</div>
+            <div style={{ fontSize:11, color:'#64748b' }}>
+              {obj && `📍 ${obj.nombre} · `}
+              {new Date(n.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}
+            </div>
+          </div>
+        )
+      })}
+
+      {modal && (
+        <Modal
+          title="Nueva novedad"
+          onClose={() => setModal(false)}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setModal(false)}>Cancelar</button>
+              <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading || !form.descripcion}>
+                {loading ? 'Guardando...' : 'Guardar'}
+              </button>
+            </>
+          }>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Objetivo (opcional)</label>
+            <select style={S.select} value={form.objetivo_id} onChange={e => setForm({...form, objetivo_id:e.target.value})}>
+              <option value="">Sin objetivo específico</option>
+              {objetivos.filter((o: any) => o.estado === 'activo').map((o: any) => (
+                <option key={o.id} value={o.id}>{o.nombre}</option>
+              ))}
+            </select>
+          </div>
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Tipo</label>
+              <select style={S.select} value={form.tipo} onChange={e => setForm({...form, tipo:e.target.value})}>
+                {['Rutina','Incidente','Mantenimiento','Administrativo','Urgencia'].map(t => (
+                  <option key={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Prioridad</label>
+              <select style={S.select} value={form.prioridad} onChange={e => setForm({...form, prioridad:e.target.value})}>
+                <option value="normal">Normal</option>
+                <option value="importante">Importante</option>
+                <option value="urgente">Urgente</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ marginBottom:8 }}>
+            <label style={S.label}>Descripción *</label>
+            <textarea
+              style={{ ...S.input, resize:'vertical' as const, minHeight:80 }}
+              value={form.descripcion}
+              onChange={e => setForm({...form, descripcion:e.target.value})}
+              placeholder="Describí la novedad..." />
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
 export default function AppPage() {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
@@ -958,7 +1463,20 @@ export default function AppPage() {
   }, [cargarDatos])
 
   if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>Cargando...</div>
-  if (!user) return <Login onLogin={u => { setUser(u); setPage(u.rol === 'guardia' ? 'asistencia' : 'dashboard'); cargarDatos() }} />
+  if (!user) return <Login onLogin={u => { setUser(u); cargarDatos() }} />
+
+if (user.rol === 'guardia') return (
+  <LayoutGuardia
+    user={user}
+    turnos={turnos}
+    registros={registros}
+    novedades={novedades}
+    setRegistros={setRegistros}
+    setNovedades={setNovedades}
+    guardias={guardias}
+    objetivos={objetivos}
+  />
+)
 
   const esGuardia = user.rol === 'guardia'
 
