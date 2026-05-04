@@ -1000,6 +1000,265 @@ function Planificacion() {
     </div>
   )
 }
+function ServiciosBase({ guardias, objetivos }: any) {
+  const [servicios, setServicios] = useState<any[]>([])
+  const [modal, setModal] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadingData, setLoadingData] = useState(true)
+
+  const [form, setForm] = useState({
+    objetivo_id: '',
+    nombre: '',
+    hora_inicio: '06:00',
+    hora_fin: '14:00',
+    dias_semana: [1, 2, 3, 4, 5] as number[],
+    guardia_habitual_id: '',
+    activo: true,
+  })
+
+  const DIAS = [
+    { num: 1, label: 'Lun' },
+    { num: 2, label: 'Mar' },
+    { num: 3, label: 'Mié' },
+    { num: 4, label: 'Jue' },
+    { num: 5, label: 'Vie' },
+    { num: 6, label: 'Sáb' },
+    { num: 7, label: 'Dom' },
+  ]
+
+  const cargar = async () => {
+    setLoadingData(true)
+
+    const { data } = await supabase
+      .from('servicios_base')
+      .select(`
+        *,
+        objetivo:objetivos(nombre),
+        guardia:usuarios(nombre, apellido)
+      `)
+      .order('created_at', { ascending: false })
+
+    if (data) setServicios(data)
+    setLoadingData(false)
+  }
+
+  useEffect(() => { cargar() }, [])
+
+  const abrirNuevo = () => {
+    setForm({
+      objetivo_id:'',
+      nombre:'',
+      hora_inicio:'06:00',
+      hora_fin:'14:00',
+      dias_semana:[1,2,3,4,5],
+      guardia_habitual_id:'',
+      activo:true
+    })
+    setEditId(null)
+    setModal(true)
+  }
+
+  const abrirEditar = (s: any) => {
+    setForm({
+      objetivo_id: s.objetivo_id,
+      nombre: s.nombre,
+      hora_inicio: s.hora_inicio,
+      hora_fin: s.hora_fin,
+      dias_semana: s.dias_semana || [],
+      guardia_habitual_id: s.guardia_habitual_id || '',
+      activo: s.activo,
+    })
+    setEditId(s.id)
+    setModal(true)
+  }
+
+  const toggleDia = (num: number) => {
+    setForm(prev => ({
+      ...prev,
+      dias_semana: prev.dias_semana.includes(num)
+        ? prev.dias_semana.filter(d => d !== num)
+        : [...prev.dias_semana, num].sort((a,b)=>a-b)
+    }))
+  }
+
+  const guardar = async () => {
+    if (!form.objetivo_id || !form.nombre || form.dias_semana.length === 0) return
+
+    setLoading(true)
+
+    const payload = {
+      ...form,
+      guardia_habitual_id: form.guardia_habitual_id || null,
+    }
+
+    if (editId) {
+      const { data } = await supabase
+        .from('servicios_base')
+        .update(payload)
+        .eq('id', editId)
+        .select(`
+          *,
+          objetivo:objetivos(nombre),
+          guardia:usuarios(nombre, apellido)
+        `)
+        .single()
+
+      if (data) setServicios(prev => prev.map(s => s.id === editId ? data : s))
+
+    } else {
+      const { data } = await supabase
+        .from('servicios_base')
+        .insert(payload)
+        .select(`
+          *,
+          objetivo:objetivos(nombre),
+          guardia:usuarios(nombre, apellido)
+        `)
+        .single()
+
+      if (data) setServicios(prev => [data, ...prev])
+    }
+
+    setModal(false)
+    setLoading(false)
+    setEditId(null)
+  }
+
+  const toggleActivo = async (id: string, activo: boolean) => {
+    await supabase.from('servicios_base').update({ activo: !activo }).eq('id', id)
+    setServicios(prev => prev.map(s => s.id === id ? { ...s, activo: !activo } : s))
+  }
+
+  const diasLabel = (dias: number[]) => {
+    if (!dias || dias.length === 0) return '—'
+
+    const ordenados = [...dias].sort((a, b) => a - b)
+
+    if (JSON.stringify(ordenados) === JSON.stringify([1,2,3,4,5])) return 'Lun–Vie'
+    if (JSON.stringify(ordenados) === JSON.stringify([1,2,3,4,5,6,7])) return 'Todos'
+    if (JSON.stringify(ordenados) === JSON.stringify([6,7])) return 'Fin de semana'
+
+    return ordenados.map(d => ['','Lun','Mar','Mié','Jue','Vie','Sáb','Dom'][d]).join(', ')
+  }
+
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
+        <div style={{ flex:1 }}>
+          <div style={S.title}>Servicios Base</div>
+          <div style={S.sub2}>Plantillas recurrentes por objetivo</div>
+        </div>
+        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>
+          + Nuevo Servicio
+        </button>
+      </div>
+
+      <div style={S.card}>
+        {loadingData ? (
+          <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>Cargando...</div>
+        ) : servicios.length === 0 ? (
+          <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>
+            <div style={{ fontSize:40, marginBottom:12 }}>🧩</div>
+            <div>No hay servicios base. Creá el primero.</div>
+          </div>
+        ) : (
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Objetivo</th>
+                <th style={S.th}>Servicio</th>
+                <th style={S.th}>Horario</th>
+                <th style={S.th}>Días</th>
+                <th style={S.th}>Guardia</th>
+                <th style={S.th}>Estado</th>
+                <th style={S.th}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {servicios.map((s: any) => (
+                <tr key={s.id}>
+                  <td style={S.td}><strong>{s.objetivo?.nombre || '—'}</strong></td>
+                  <td style={S.td}>{s.nombre}</td>
+                  <td style={{ ...S.td, fontWeight:600 }}>
+                    {s.hora_inicio} → {s.hora_fin}
+                  </td>
+                  <td style={S.td}>{diasLabel(s.dias_semana)}</td>
+                  <td style={S.td}>
+                    {s.guardia
+                      ? `${s.guardia.apellido}, ${s.guardia.nombre}`
+                      : <span style={{ color:'#64748b' }}>Sin asignar</span>}
+                  </td>
+                  <td style={S.td}>
+                    <Badge type={s.activo ? 'activo' : 'inactivo'}>
+                      {s.activo ? 'Activo' : 'Inactivo'}
+                    </Badge>
+                  </td>
+                  <td style={S.td}>
+                    <button style={S.btn} onClick={() => abrirEditar(s)}>✏</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {modal && (
+        <Modal
+          title={editId ? 'Editar Servicio Base' : 'Nuevo Servicio Base'}
+          onClose={() => setModal(false)}
+        >
+          <div style={{ marginBottom:12 }}>
+            <select style={S.select}
+              value={form.objetivo_id}
+              onChange={e => setForm({...form, objetivo_id:e.target.value})}>
+              <option value="">Objetivo</option>
+              {objetivos.map((o:any)=>(
+                <option key={o.id} value={o.id}>{o.nombre}</option>
+              ))}
+            </select>
+          </div>
+
+          <input style={S.input}
+            placeholder="Nombre del servicio"
+            value={form.nombre}
+            onChange={e => setForm({...form, nombre:e.target.value})}
+          />
+
+          <div style={{ display:'flex', gap:8 }}>
+            <input type="time" style={S.input}
+              value={form.hora_inicio}
+              onChange={e => setForm({...form, hora_inicio:e.target.value})}/>
+            <input type="time" style={S.input}
+              value={form.hora_fin}
+              onChange={e => setForm({...form, hora_fin:e.target.value})}/>
+          </div>
+
+          <div style={{ marginTop:12 }}>
+            {DIAS.map(d => (
+              <button key={d.num}
+                onClick={() => toggleDia(d.num)}
+                style={{
+                  margin:4,
+                  padding:'6px 10px',
+                  borderRadius:6,
+                  background: form.dias_semana.includes(d.num) ? '#f59e0b' : '#1e2d42'
+                }}>
+                {d.label}
+              </button>
+            ))}
+          </div>
+
+          <button style={{ ...S.btn, ...S.btnPrimary, marginTop:12 }}
+            onClick={guardar}>
+            Guardar
+          </button>
+        </Modal>
+      )}
+    </div>
+  )
+}
 export default function AppPage() {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
