@@ -1316,6 +1316,7 @@ export default function AppPage() {
     ]},
     { section:'Administración', items:[
       { id:'novedades', icon:'📋', label:'Novedades' },
+      { id:'servicios_base', icon:'🧩', label:'Servicios Base' },
       { id:'reportes', icon:'📈', label:'Reportes' },
     ]},
   ]
@@ -1369,6 +1370,7 @@ export default function AppPage() {
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
               {page === 'planificacion' && <Planificacion />}
+              {page === 'servicios_base' && <ServiciosBase guardias={guardias} objetivos={objetivos} />}
             </>
           )
         )}
