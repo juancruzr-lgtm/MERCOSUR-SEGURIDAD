@@ -1117,7 +1117,8 @@ function NovedadesGuardia({ user, misNovedades, setNovedades, guardias, objetivo
     </div>
   )
 }
-// ── REVISIÓN COBERTURAS ───────────────────────────────────────
+
+
 // ── REVISIÓN OPERATIVA ────────────────────────────────────────
 function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
   const [coberturas, setCoberturas] = useState<any[]>([])
@@ -1151,7 +1152,6 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
 
     if (cob) setCoberturas(cob)
     if (alt) setAlertas(alt)
-
     setLoadingData(false)
   }
 
@@ -1176,7 +1176,6 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
 
   const resolver = async (decision: 'aprobado' | 'rechazado') => {
     if (!modalItem || !modalTipo) return
-
     setLoading(true)
 
     if (modalTipo === 'cobertura') {
@@ -1195,9 +1194,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
 
       if (data) {
         setCoberturas(prev => prev.filter(t => t.id !== modalItem.id))
-        setTurnos((prev: any[]) =>
-          prev.map(t => t.id === modalItem.id ? { ...t, ...payload } : t)
-        )
+        setTurnos((prev: any[]) => prev.map(t => t.id === modalItem.id ? { ...t, ...payload } : t))
       }
     } else {
       const payload = {
@@ -1237,20 +1234,12 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
     return 'tarde'
   }
 
-  const pendientesAlertas = alertas.filter(
-    a => a.estado_revision === 'pendiente_supervisor'
-  )
+  const pendientesAlertas = alertas.filter(a => a.estado_revision === 'pendiente_supervisor')
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
-    padding:'8px 20px',
-    borderRadius:8,
-    cursor:'pointer',
-    fontSize:13,
-    border:'none',
-    fontFamily:'DM Sans,sans-serif',
-    fontWeight: active ? 600 : 400,
-    color: active ? '#f59e0b' : '#64748b',
-    background: active ? '#111827' : 'transparent',
+    padding:'8px 20px', borderRadius:8, cursor:'pointer', fontSize:13, border:'none',
+    fontFamily:'DM Sans,sans-serif', fontWeight: active ? 600 : 400,
+    color: active ? '#f59e0b' : '#64748b', background: active ? '#111827' : 'transparent',
   })
 
   return (
@@ -1263,28 +1252,15 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
       <div style={{ display:'flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:24, width:'fit-content' }}>
         <button style={tabStyle(tab === 'coberturas')} onClick={() => setTab('coberturas')}>
           🆘 Coberturas urgentes
-          {coberturas.length > 0 && (
-            <span style={{ marginLeft:6, background:'rgba(167,139,250,.2)', color:'#a78bfa', borderRadius:10, padding:'1px 7px', fontSize:11 }}>
-              {coberturas.length}
-            </span>
-          )}
+          {coberturas.length > 0 && <span style={{ marginLeft:6, background:'rgba(167,139,250,.2)', color:'#a78bfa', borderRadius:10, padding:'1px 7px', fontSize:11 }}>{coberturas.length}</span>}
         </button>
-
         <button style={tabStyle(tab === 'alertas')} onClick={() => setTab('alertas')}>
           ⚠ Alertas asistencia
-          {pendientesAlertas.length > 0 && (
-            <span style={{ marginLeft:6, background:'rgba(239,68,68,.15)', color:'#ef4444', borderRadius:10, padding:'1px 7px', fontSize:11 }}>
-              {pendientesAlertas.length}
-            </span>
-          )}
+          {pendientesAlertas.length > 0 && <span style={{ marginLeft:6, background:'rgba(239,68,68,.15)', color:'#ef4444', borderRadius:10, padding:'1px 7px', fontSize:11 }}>{pendientesAlertas.length}</span>}
         </button>
       </div>
 
-      {loadingData && (
-        <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>
-          Cargando...
-        </div>
-      )}
+      {loadingData && <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>Cargando...</div>}
 
       {!loadingData && tab === 'coberturas' && (
         coberturas.length === 0 ? (
@@ -1294,67 +1270,39 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
           </div>
         ) : coberturas.map((t: any) => {
           const cfg = CONFIG_ALERTA.cobertura
-
           return (
             <div key={t.id} style={{ background:cfg.bg, border:`1px solid ${cfg.border}`, borderRadius:12, padding:20, marginBottom:14 }}>
               <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:14 }}>
                 <div>
                   <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
                     <span style={{ fontSize:16 }}>{cfg.icon}</span>
-                    <span style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, color: cfg.color }}>
-                      {cfg.label}
-                    </span>
+                    <span style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, color: cfg.color }}>{cfg.label}</span>
                   </div>
-
-                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>
-                    {getObjetivo(t.objetivo_id)}
-                  </div>
-
-                  <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>
-                    {t.fecha} · {t.hora_inicio} → {t.hora_fin}
-                  </div>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>{getObjetivo(t.objetivo_id)}</div>
+                  <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>{t.fecha} · {t.hora_inicio} → {t.hora_fin}</div>
                 </div>
-
                 <Badge type="pendiente">Pendiente</Badge>
               </div>
 
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
                 <div style={{ background:'#111827', borderRadius:8, padding:'10px 14px' }}>
-                  <div style={{ fontSize:11, color:'#64748b', marginBottom:3, textTransform:'uppercase' as const, letterSpacing:1 }}>
-                    Original
-                  </div>
-                  <div style={{ fontSize:13, color:'#e2e8f0' }}>
-                    {getNombre(t.guardia_original_id)}
-                  </div>
+                  <div style={{ fontSize:11, color:'#64748b', marginBottom:3, textTransform:'uppercase' as const, letterSpacing:1 }}>Original</div>
+                  <div style={{ fontSize:13, color:'#e2e8f0' }}>{getNombre(t.guardia_original_id)}</div>
                 </div>
-
                 <div style={{ background:'#111827', borderRadius:8, padding:'10px 14px', border:`1px solid ${cfg.border}` }}>
-                  <div style={{ fontSize:11, color:cfg.color, marginBottom:3, textTransform:'uppercase' as const, letterSpacing:1 }}>
-                    Cubrió
-                  </div>
-                  <div style={{ fontSize:13, color:'#e2e8f0' }}>
-                    {getNombre(t.guardia_real_id)}
-                  </div>
+                  <div style={{ fontSize:11, color:cfg.color, marginBottom:3, textTransform:'uppercase' as const, letterSpacing:1 }}>Cubrió</div>
+                  <div style={{ fontSize:13, color:'#e2e8f0' }}>{getNombre(t.guardia_real_id)}</div>
                 </div>
               </div>
 
               {t.observacion_guardia && (
                 <div style={{ background:'rgba(59,130,246,.08)', border:'1px solid rgba(59,130,246,.2)', borderRadius:8, padding:'10px 14px', marginBottom:14 }}>
-                  <div style={{ fontSize:11, color:'#60a5fa', marginBottom:3, fontWeight:600 }}>
-                    OBSERVACIÓN DEL GUARDIA
-                  </div>
-                  <div style={{ fontSize:13, color:'#cbd5e1' }}>
-                    {t.observacion_guardia}
-                  </div>
+                  <div style={{ fontSize:11, color:'#60a5fa', marginBottom:3, fontWeight:600 }}>OBSERVACIÓN DEL GUARDIA</div>
+                  <div style={{ fontSize:13, color:'#cbd5e1' }}>{t.observacion_guardia}</div>
                 </div>
               )}
 
-              <button
-                style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center' }}
-                onClick={() => abrirModal(t, 'cobertura')}
-              >
-                Revisar y resolver
-              </button>
+              <button style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center' }} onClick={() => abrirModal(t, 'cobertura')}>Revisar y resolver</button>
             </div>
           )
         })
@@ -1370,86 +1318,38 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
           const tipo = tipoAlerta(r)
           const cfg = CONFIG_ALERTA[tipo]
           const obj = r.turno?.objetivo_id ? getObjetivo(r.turno.objetivo_id) : '—'
-
           return (
             <div key={r.id} style={{ background:cfg.bg, border:`1px solid ${cfg.border}`, borderRadius:12, padding:20, marginBottom:14 }}>
               <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:14 }}>
                 <div>
                   <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
                     <span style={{ fontSize:16 }}>{cfg.icon}</span>
-                    <span style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, color:cfg.color }}>
-                      {cfg.label}
-                    </span>
+                    <span style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, color:cfg.color }}>{cfg.label}</span>
                   </div>
-
-                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>
-                    {obj}
-                  </div>
-
-                  <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>
-                    {r.turno?.fecha} · {r.turno?.hora_inicio} → {r.turno?.hora_fin}
-                  </div>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>{obj}</div>
+                  <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>{r.turno?.fecha} · {r.turno?.hora_inicio} → {r.turno?.hora_fin}</div>
                 </div>
-
                 <Badge type="pendiente">Pendiente</Badge>
               </div>
 
               <div style={{ background:'#111827', borderRadius:8, padding:'10px 14px', marginBottom:14 }}>
-                <div style={{ fontSize:11, color:'#64748b', marginBottom:3, textTransform:'uppercase' as const, letterSpacing:1 }}>
-                  Guardia
-                </div>
-
-                <div style={{ fontSize:13, color:'#e2e8f0' }}>
-                  {getNombre(r.guardia_id)}
-                </div>
-
+                <div style={{ fontSize:11, color:'#64748b', marginBottom:3, textTransform:'uppercase' as const, letterSpacing:1 }}>Guardia</div>
+                <div style={{ fontSize:13, color:'#e2e8f0' }}>{getNombre(r.guardia_id)}</div>
                 <div style={{ display:'flex', gap:20, marginTop:8, flexWrap:'wrap' }}>
-                  {r.hora_entrada_real && (
-                    <div style={{ fontSize:12, color:'#94a3b8' }}>
-                      Entrada:{' '}
-                      <span style={{ color: r.alerta_entrada === 'tarde' ? '#ef4444' : '#e2e8f0', fontWeight:600 }}>
-                        {r.hora_entrada_real}
-                      </span>
-                    </div>
-                  )}
-
-                  {r.hora_salida_real && (
-                    <div style={{ fontSize:12, color:'#94a3b8' }}>
-                      Salida:{' '}
-                      <span style={{ color: r.alerta_salida ? cfg.color : '#e2e8f0', fontWeight:600 }}>
-                        {r.hora_salida_real}
-                      </span>
-                    </div>
-                  )}
-
-                  {r.horas_trabajadas > 0 && (
-                    <div style={{ fontSize:12, color:'#94a3b8' }}>
-                      Horas:{' '}
-                      <span style={{ color:'#e2e8f0', fontWeight:600 }}>
-                        {formatHoras(r.horas_trabajadas)}
-                      </span>
-                    </div>
-                  )}
+                  {r.hora_entrada_real && <div style={{ fontSize:12, color:'#94a3b8' }}>Entrada: <span style={{ color: r.alerta_entrada === 'tarde' ? '#ef4444' : '#e2e8f0', fontWeight:600 }}>{r.hora_entrada_real}</span></div>}
+                  {r.hora_salida_real && <div style={{ fontSize:12, color:'#94a3b8' }}>Salida: <span style={{ color: r.alerta_salida ? cfg.color : '#e2e8f0', fontWeight:600 }}>{r.hora_salida_real}</span></div>}
+                  {r.horas_trabajadas > 0 && <div style={{ fontSize:12, color:'#94a3b8' }}>Horas: <span style={{ color:'#e2e8f0', fontWeight:600 }}>{formatHoras(r.horas_trabajadas)}</span></div>}
                 </div>
               </div>
 
               {r.observacion && (
                 <div style={{ background:'rgba(59,130,246,.08)', border:'1px solid rgba(59,130,246,.2)', borderRadius:8, padding:'10px 14px', marginBottom:14 }}>
-                  <div style={{ fontSize:11, color:'#60a5fa', marginBottom:3, fontWeight:600 }}>
-                    OBSERVACIÓN DEL GUARDIA
-                  </div>
-                  <div style={{ fontSize:13, color:'#cbd5e1' }}>
-                    {r.observacion}
-                  </div>
+                  <div style={{ fontSize:11, color:'#60a5fa', marginBottom:3, fontWeight:600 }}>OBSERVACIÓN DEL GUARDIA</div>
+                  <div style={{ fontSize:13, color:'#cbd5e1' }}>{r.observacion}</div>
                 </div>
               )}
 
-              <button
-                style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center' }}
-                onClick={() => abrirModal(r, 'alerta')}
-              >
-                Revisar y resolver
-              </button>
+              <button style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center' }} onClick={() => abrirModal(r, 'alerta')}>Revisar y resolver</button>
             </div>
           )
         })
@@ -1458,235 +1358,37 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
       {modalItem && modalTipo && (
         <Modal
           title={modalTipo === 'cobertura' ? 'Resolver cobertura urgente' : 'Resolver alerta de asistencia'}
-          onClose={() => {
-            setModalItem(null)
-            setModalTipo(null)
-            setObsSupervisor('')
-          }}
+          onClose={() => { setModalItem(null); setModalTipo(null); setObsSupervisor('') }}
           footer={
             <div style={{ display:'flex', gap:10, width:'100%' }}>
-              <button
-                style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(239,68,68,.15)', color:'#ef4444', border:'1px solid rgba(239,68,68,.3)' }}
-                onClick={() => resolver('rechazado')}
-                disabled={loading}
-              >
-                {loading ? '...' : '✕ Rechazar'}
-              </button>
-
-              <button
-                style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(16,185,129,.15)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }}
-                onClick={() => resolver('aprobado')}
-                disabled={loading}
-              >
-                {loading ? '...' : '✓ Aprobar'}
-              </button>
+              <button style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(239,68,68,.15)', color:'#ef4444', border:'1px solid rgba(239,68,68,.3)' }} onClick={() => resolver('rechazado')} disabled={loading}>{loading ? '...' : '✕ Rechazar'}</button>
+              <button style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(16,185,129,.15)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }} onClick={() => resolver('aprobado')} disabled={loading}>{loading ? '...' : '✓ Aprobar'}</button>
             </div>
-          }
-        >
+          }>
           <div style={{ marginBottom:16, padding:12, background:'#1a2235', borderRadius:8 }}>
             {modalTipo === 'cobertura' ? (
               <>
                 <div style={{ fontSize:13, color:'#94a3b8' }}>Cobertura en</div>
-
-                <div style={{ fontSize:15, fontWeight:600, color:'#e2e8f0', marginTop:2 }}>
-                  {getObjetivo(modalItem.objetivo_id)}
-                </div>
-
-                <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>
-                  {modalItem.fecha} · {modalItem.hora_inicio} → {modalItem.hora_fin}
-                </div>
-
+                <div style={{ fontSize:15, fontWeight:600, color:'#e2e8f0', marginTop:2 }}>{getObjetivo(modalItem.objetivo_id)}</div>
+                <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>{modalItem.fecha} · {modalItem.hora_inicio} → {modalItem.hora_fin}</div>
                 <div style={{ display:'flex', gap:16, marginTop:10, flexWrap:'wrap' }}>
-                  <div style={{ fontSize:12, color:'#94a3b8' }}>
-                    Original: <span style={{ color:'#e2e8f0' }}>{getNombre(modalItem.guardia_original_id)}</span>
-                  </div>
-
-                  <div style={{ fontSize:12, color:'#94a3b8' }}>
-                    Cubrió: <span style={{ color:'#f59e0b' }}>{getNombre(modalItem.guardia_real_id)}</span>
-                  </div>
+                  <div style={{ fontSize:12, color:'#94a3b8' }}>Original: <span style={{ color:'#e2e8f0' }}>{getNombre(modalItem.guardia_original_id)}</span></div>
+                  <div style={{ fontSize:12, color:'#94a3b8' }}>Cubrió: <span style={{ color:'#f59e0b' }}>{getNombre(modalItem.guardia_real_id)}</span></div>
                 </div>
               </>
             ) : (
               <>
                 <div style={{ fontSize:13, color:'#94a3b8' }}>Alerta de</div>
-
-                <div style={{ fontSize:15, fontWeight:600, color:'#e2e8f0', marginTop:2 }}>
-                  {getNombre(modalItem.guardia_id)}
-                </div>
-
-                <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>
-                  {modalItem.turno?.fecha} · Entrada: {modalItem.hora_entrada_real} · Salida: {modalItem.hora_salida_real || '—'}
-                </div>
+                <div style={{ fontSize:15, fontWeight:600, color:'#e2e8f0', marginTop:2 }}>{getNombre(modalItem.guardia_id)}</div>
+                <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>{modalItem.turno?.fecha} · Entrada: {modalItem.hora_entrada_real} · Salida: {modalItem.hora_salida_real || '—'}</div>
               </>
             )}
           </div>
 
           <div>
             <label style={S.label}>Observación del supervisor (opcional)</label>
-            <textarea
-              style={{ ...S.input, resize:'vertical' as const, minHeight:80 }}
-              value={obsSupervisor}
-              onChange={e => setObsSupervisor(e.target.value)}
-              placeholder="Motivo de aprobación o rechazo..."
-            />
+            <textarea style={{ ...S.input, resize:'vertical' as const, minHeight:80 }} value={obsSupervisor} onChange={e => setObsSupervisor(e.target.value)} placeholder="Motivo de aprobación o rechazo..." />
           </div>
-        </Modal>
-      )}
-    </div>
-  )
-}
-
-  useEffect(() => { cargar() }, [])
-
-  const resolver = async (id: string, decision: 'aprobado' | 'rechazado') => {
-    setLoading(true)
-    const payload = {
-      estado_revision: decision,
-      estado: decision === 'aprobado' ? 'cubierto' : 'descubierto',
-      observacion_supervisor: obsSupervisor || null,
-      updated_at: new Date().toISOString(),
-    }
-    const { data } = await supabase.from('turnos').update(payload).eq('id', id).select().single()
-    if (data) {
-      setPendientes(prev => prev.filter(t => t.id !== id))
-      setTurnos((prev: any[]) => prev.map(t => t.id === id ? { ...t, ...payload } : t))
-    }
-    setModalId(null); setObsSupervisor(''); setLoading(false)
-  }
-
-  const turnoActual = pendientes.find(t => t.id === modalId)
-
-  const getNombre = (id: string | null) => {
-    if (!id) return <span style={{ color:'#64748b' }}>Sin asignar</span>
-    const g = guardias.find((x: any) => x.id === id)
-    return g ? `${g.apellido}, ${g.nombre}` : '—'
-  }
-
-  const getObjetivo = (id: string) => {
-    const o = objetivos.find((x: any) => x.id === id)
-    return o?.nombre || '—'
-  }
-
-  return (
-    <div>
-      <div style={{ marginBottom:24 }}>
-        <div style={S.title}>Revisión de Coberturas</div>
-        <div style={S.sub2}>
-          {loadingData ? 'Cargando...' : `${pendientes.length} cobertura(s) pendientes de revisión`}
-        </div>
-      </div>
-
-      {!loadingData && pendientes.length === 0 && (
-        <div style={{ ...S.card, textAlign:'center', padding:48, color:'#64748b' }}>
-          <div style={{ fontSize:40, marginBottom:12 }}>✅</div>
-          <div>No hay coberturas pendientes de revisión</div>
-        </div>
-      )}
-
-      {pendientes.map((t: any) => (
-        <div key={t.id} style={{ background:'#111827', border:'1px solid rgba(245,158,11,.3)', borderRadius:12, padding:20, marginBottom:16 }}>
-
-          {/* Header */}
-          <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:16 }}>
-            <div>
-              <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>
-                {getObjetivo(t.objetivo_id)}
-              </div>
-              <div style={{ fontSize:13, color:'#64748b', marginTop:4 }}>
-                {t.fecha} · {t.hora_inicio} → {t.hora_fin}
-              </div>
-            </div>
-            <Badge type="pendiente">⏳ Pendiente</Badge>
-          </div>
-
-          {/* Guardias */}
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
-            <div style={{ background:'#1a2235', borderRadius:8, padding:'10px 14px' }}>
-              <div style={{ fontSize:11, color:'#64748b', marginBottom:4, textTransform:'uppercase' as const, letterSpacing:1 }}>Guardia Original</div>
-              <div style={{ fontSize:13, color:'#e2e8f0', fontWeight:500 }}>{getNombre(t.guardia_original_id)}</div>
-            </div>
-            <div style={{ background:'#1a2235', borderRadius:8, padding:'10px 14px', border:'1px solid rgba(245,158,11,.2)' }}>
-              <div style={{ fontSize:11, color:'#f59e0b', marginBottom:4, textTransform:'uppercase' as const, letterSpacing:1 }}>Guardia Real</div>
-              <div style={{ fontSize:13, color:'#e2e8f0', fontWeight:500 }}>{getNombre(t.guardia_real_id)}</div>
-            </div>
-          </div>
-
-          {/* Observación del guardia */}
-          {t.observacion_guardia && (
-            <div style={{ background:'rgba(59,130,246,.08)', border:'1px solid rgba(59,130,246,.2)', borderRadius:8, padding:'10px 14px', marginBottom:16 }}>
-              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:4, fontWeight:600 }}>OBSERVACIÓN DEL GUARDIA</div>
-              <div style={{ fontSize:13, color:'#cbd5e1' }}>{t.observacion_guardia}</div>
-            </div>
-          )}
-
-          {/* Acciones */}
-          <div style={{ display:'flex', gap:10 }}>
-            <button
-              style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(16,185,129,.15)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }}
-              onClick={() => { setModalId(t.id); setObsSupervisor('') }}>
-              ✓ Revisar y resolver
-            </button>
-          </div>
-        </div>
-      ))}
-
-      {/* Modal resolución */}
-      {modalId && turnoActual && (
-        <Modal
-          title="Resolver cobertura"
-          onClose={() => { setModalId(null); setObsSupervisor('') }}
-          footer={
-            <div style={{ display:'flex', gap:10, width:'100%' }}>
-              <button
-                style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(239,68,68,.15)', color:'#ef4444', border:'1px solid rgba(239,68,68,.3)' }}
-                onClick={() => resolver(modalId, 'rechazado')}
-                disabled={loading}>
-                {loading ? '...' : '✕ Rechazar'}
-              </button>
-              <button
-                style={{ ...S.btn, flex:1, justifyContent:'center', background:'rgba(16,185,129,.15)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }}
-                onClick={() => resolver(modalId, 'aprobado')}
-                disabled={loading}>
-                {loading ? '...' : '✓ Aprobar'}
-              </button>
-            </div>
-          }>
-
-          <div style={{ marginBottom:16, padding:12, background:'#1a2235', borderRadius:8 }}>
-            <div style={{ fontSize:13, color:'#94a3b8', marginBottom:2 }}>Cobertura</div>
-            <div style={{ fontSize:15, fontWeight:600, color:'#e2e8f0' }}>{getObjetivo(turnoActual.objetivo_id)}</div>
-            <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>
-              {turnoActual.fecha} · {turnoActual.hora_inicio} → {turnoActual.hora_fin}
-            </div>
-          </div>
-
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:16 }}>
-            <div style={{ background:'#1a2235', borderRadius:8, padding:'10px 14px' }}>
-              <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>ORIGINAL</div>
-              <div style={{ fontSize:13, color:'#e2e8f0' }}>{getNombre(turnoActual.guardia_original_id)}</div>
-            </div>
-            <div style={{ background:'#1a2235', borderRadius:8, padding:'10px 14px' }}>
-              <div style={{ fontSize:11, color:'#f59e0b', marginBottom:4 }}>REEMPLAZÓ</div>
-              <div style={{ fontSize:13, color:'#e2e8f0' }}>{getNombre(turnoActual.guardia_real_id)}</div>
-            </div>
-          </div>
-
-          {turnoActual.observacion_guardia && (
-            <div style={{ background:'rgba(59,130,246,.08)', border:'1px solid rgba(59,130,246,.2)', borderRadius:8, padding:'10px 14px', marginBottom:16 }}>
-              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:4, fontWeight:600 }}>OBSERVACIÓN DEL GUARDIA</div>
-              <div style={{ fontSize:13, color:'#cbd5e1' }}>{turnoActual.observacion_guardia}</div>
-            </div>
-          )}
-
-          <div>
-            <label style={S.label}>Observación del supervisor (opcional)</label>
-            <textarea
-              style={{ ...S.input, resize:'vertical' as const, minHeight:80 }}
-              value={obsSupervisor}
-              onChange={e => setObsSupervisor(e.target.value)}
-              placeholder="Motivo de aprobación o rechazo..." />
-          </div>
-
         </Modal>
       )}
     </div>
@@ -1768,7 +1470,7 @@ export default function AppPage() {
     ]},
     { section:'Administración', items:[
       { id:'servicios_objetivo', icon:'🏢', label:'Servicios Objetivo' },
-     { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
+      { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
     { id:'novedades', icon:'📋', label:'Novedades' },
       { id:'reportes', icon:'📈', label:'Reportes' },
     ]},
@@ -1810,7 +1512,6 @@ export default function AppPage() {
           esGuardia ? (
             <>
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={misTurnos} guardias={guardias} objetivos={objetivos} />}
-              {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} setTurnos={setTurnos} />}
               {page === 'novedades' && <Novedades novedades={misNovedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
             </>
           ) : (
@@ -1821,6 +1522,7 @@ export default function AppPage() {
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
+              {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} setTurnos={setTurnos} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
             </>
