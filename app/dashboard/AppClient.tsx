@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcDistancia } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
+import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 
 const S: Record<string, React.CSSProperties> = {
   app: { display:'flex', minHeight:'100vh', background:'#0a0e1a' },
