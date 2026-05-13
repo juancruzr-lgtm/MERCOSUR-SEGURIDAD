@@ -236,6 +236,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
 
 function Guardias({ guardias, setGuardias, registros }: any) {
   const [modal, setModal] = useState(false)
+  const [showCreateEmpleado, setShowCreateEmpleado] = useState(false)
   const [form, setForm] = useState({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', estado:'activo', rol:'guardia' })
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -249,114 +250,161 @@ function Guardias({ guardias, setGuardias, registros }: any) {
       const { data } = await supabase.from('usuarios').insert(form).select().single()
       if (data) setGuardias((prev: any[]) => [...prev, data])
     }
-    setModal(false); setLoading(false)
+    setModal(false)
+    setLoading(false)
   }
 
-  const horasTotal = (gid: string) => registros.filter((r: RegistroAsistencia) => r.guardia_id === gid).reduce((s: number, r: RegistroAsistencia) => s + (r.horas_trabajadas || 0), 0)
+  const horasTotal = (gid: string) =>
+    registros
+      .filter((r: RegistroAsistencia) => r.guardia_id === gid)
+      .reduce((s: number, r: RegistroAsistencia) => s + (r.horas_trabajadas || 0), 0)
 
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
-        <div style={{ flex:1 }}><div style={S.title}>Guardias</div><div style={S.sub2}>{guardias.length} guardias registrados</div></div>
-        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => { setForm({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', estado:'activo', rol:'guardia' }); setEditId(null); setModal(true) }}><button
-  style={{ ...S.btn, ...S.btnPrimary }}
-  onClick={() => setShowCreateEmpleado(true)}
->
-  + Nuevo empleado
-</button>
+        <div style={{ flex:1 }}>
+          <div style={S.title}>Guardias</div>
+          <div style={S.sub2}>{guardias.length} guardias registrados</div>
+        </div>
+
+        <button
+          style={{ ...S.btn, ...S.btnPrimary }}
+          onClick={() => setShowCreateEmpleado(true)}
+        >
+          + Nuevo empleado
+        </button>
       </div>
+
       <div style={S.card}>
         <table style={S.table}>
-          <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Nombre</th><th style={S.th}>DNI</th><th style={S.th}>Teléfono</th><th style={S.th}>Estado</th><th style={S.th}>Hs. Totales</th><th style={S.th}></th></tr></thead>
+          <thead>
+            <tr>
+              <th style={S.th}>Legajo</th>
+              <th style={S.th}>Nombre</th>
+              <th style={S.th}>DNI</th>
+              <th style={S.th}>Teléfono</th>
+              <th style={S.th}>Estado</th>
+              <th style={S.th}>Hs. Totales</th>
+              <th style={S.th}></th>
+            </tr>
+          </thead>
+
           <tbody>
             {guardias.map((g: Usuario) => (
               <tr key={g.id}>
-                <td style={S.td}><span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>{g.legajo}</span></td>
-                <td style={S.td}><strong>{g.apellido}, {g.nombre}</strong></td>
+                <td style={S.td}>
+                  <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>
+                    {g.legajo}
+                  </span>
+                </td>
+
+                <td style={S.td}>
+                  <strong>{g.apellido}, {g.nombre}</strong>
+                </td>
+
                 <td style={S.td}>{g.dni}</td>
                 <td style={S.td}>{g.telefono}</td>
-                <td style={S.td}><Badge type={g.estado}>{g.estado}</Badge></td>
+
+                <td style={S.td}>
+                  <Badge type={g.estado}>{g.estado}</Badge>
+                </td>
+
                 <td style={S.td}>{formatHoras(horasTotal(g.id))}</td>
-                <td style={S.td}><button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => { setForm({ nombre:g.nombre, apellido:g.apellido, dni:g.dni||'', telefono:g.telefono||'', legajo:g.legajo, estado:g.estado, rol:g.rol }); setEditId(g.id); setModal(true) }}>✏ Editar</button></td>
+
+                <td style={S.td}>
+                  <button
+                    style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }}
+                    onClick={() => {
+                      setForm({
+                        nombre:g.nombre,
+                        apellido:g.apellido,
+                        dni:g.dni || '',
+                        telefono:g.telefono || '',
+                        legajo:g.legajo,
+                        estado:g.estado,
+                        rol:g.rol,
+                      })
+                      setEditId(g.id)
+                      setModal(true)
+                    }}
+                  >
+                    ✏ Editar
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
       {modal && (
-        <Modal title={editId ? 'Editar Guardia' : 'Nuevo Guardia'} onClose={() => setModal(false)}
-          footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setModal(false)}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
+        <Modal
+          title={editId ? 'Editar Guardia' : 'Nuevo Guardia'}
+          onClose={() => setModal(false)}
+          footer={
+            <>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary }}
+                onClick={() => setModal(false)}
+              >
+                Cancelar
+              </button>
+
+              <button
+                style={{ ...S.btn, ...S.btnPrimary }}
+                onClick={guardar}
+                disabled={loading}
+              >
+                {loading ? 'Guardando...' : 'Guardar'}
+              </button>
+            </>
+          }
+        >
           <div style={S.grid2}>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Nombre</label><input style={S.input} value={form.nombre} onChange={e => setForm({...form, nombre:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Apellido</label><input style={S.input} value={form.apellido} onChange={e => setForm({...form, apellido:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>DNI</label><input style={S.input} value={form.dni} onChange={e => setForm({...form, dni:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Teléfono</label><input style={S.input} value={form.telefono} onChange={e => setForm({...form, telefono:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Legajo</label><input style={S.input} value={form.legajo} onChange={e => setForm({...form, legajo:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Estado</label><select style={S.select} value={form.estado} onChange={e => setForm({...form, estado:e.target.value})}><option value="activo">Activo</option><option value="inactivo">Inactivo</option></select></div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Nombre</label>
+              <input style={S.input} value={form.nombre} onChange={e => setForm({...form, nombre:e.target.value})} />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Apellido</label>
+              <input style={S.input} value={form.apellido} onChange={e => setForm({...form, apellido:e.target.value})} />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>DNI</label>
+              <input style={S.input} value={form.dni} onChange={e => setForm({...form, dni:e.target.value})} />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Teléfono</label>
+              <input style={S.input} value={form.telefono} onChange={e => setForm({...form, telefono:e.target.value})} />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Legajo</label>
+              <input style={S.input} value={form.legajo} onChange={e => setForm({...form, legajo:e.target.value})} />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Estado</label>
+              <select style={S.select} value={form.estado} onChange={e => setForm({...form, estado:e.target.value})}>
+                <option value="activo">Activo</option>
+                <option value="inactivo">Inactivo</option>
+              </select>
+            </div>
           </div>
         </Modal>
       )}
-    </div>
-  )
-}
 
-function Objetivos({ objetivos, setObjetivos, turnos }: any) {
-  const [modal, setModal] = useState(false)
-  const [form, setForm] = useState({ nombre:'', cliente:'', direccion:'', estado:'activo', radio_metros:300 })
-  const [editId, setEditId] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const hoy = new Date().toISOString().split('T')[0]
-
-  const guardar = async () => {
-    setLoading(true)
-    if (editId) {
-      const { data } = await supabase.from('objetivos').update(form).eq('id', editId).select().single()
-      if (data) setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? data : o))
-    } else {
-      const { data } = await supabase.from('objetivos').insert(form).select().single()
-      if (data) setObjetivos((prev: any[]) => [...prev, data])
-    }
-    setModal(false); setLoading(false)
-  }
-
-  return (
-    <div>
-      <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
-        <div style={{ flex:1 }}><div style={S.title}>Objetivos</div><div style={S.sub2}>{objetivos.length} objetivos registrados</div></div>
-        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => { setForm({ nombre:'', cliente:'', direccion:'', estado:'activo', radio_metros:300 }); setEditId(null); setModal(true) }}>+ Nuevo Objetivo</button>
-      </div>
-      <div style={S.card}>
-        <table style={S.table}>
-          <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Cliente</th><th style={S.th}>Dirección</th><th style={S.th}>Estado</th><th style={S.th}>Hoy</th><th style={S.th}></th></tr></thead>
-          <tbody>
-            {objetivos.map((o: Objetivo) => {
-              const ts = turnos.filter((t: Turno) => t.objetivo_id === o.id && t.fecha === hoy)
-              const desc = ts.filter((t: Turno) => t.estado === 'descubierto').length
-              return (
-                <tr key={o.id}>
-                  <td style={S.td}><strong>{o.nombre}</strong></td>
-                  <td style={S.td}>{o.cliente}</td>
-                  <td style={{ ...S.td, fontSize:12, color:'#64748b' }}>{o.direccion}</td>
-                  <td style={S.td}><Badge type={o.estado}>{o.estado}</Badge></td>
-                  <td style={S.td}>{ts.length > 0 ? desc > 0 ? <Badge type="descubierto">{desc} sin cubrir</Badge> : <Badge type="cubierto">Cubierto</Badge> : <span style={{ color:'#64748b', fontSize:12 }}>Sin turnos</span>}</td>
-                  <td style={S.td}><button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => { setForm({ nombre:o.nombre, cliente:o.cliente, direccion:o.direccion||'', estado:o.estado, radio_metros:o.radio_metros }); setEditId(o.id); setModal(true) }}>✏ Editar</button></td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      {modal && (
-        <Modal title={editId ? 'Editar Objetivo' : 'Nuevo Objetivo'} onClose={() => setModal(false)}
-          footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setModal(false)}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
-          <div style={{ marginBottom:16 }}><label style={S.label}>Nombre del Objetivo</label><input style={S.input} value={form.nombre} onChange={e => setForm({...form, nombre:e.target.value})} /></div>
-          <div style={{ marginBottom:16 }}><label style={S.label}>Cliente</label><input style={S.input} value={form.cliente} onChange={e => setForm({...form, cliente:e.target.value})} /></div>
-          <div style={{ marginBottom:16 }}><label style={S.label}>Dirección</label><input style={S.input} value={form.direccion} onChange={e => setForm({...form, direccion:e.target.value})} /></div>
-          <div style={S.grid2}>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Estado</label><select style={S.select} value={form.estado} onChange={e => setForm({...form, estado:e.target.value})}><option value="activo">Activo</option><option value="inactivo">Inactivo</option></select></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Radio GPS (metros)</label><input style={S.input} type="number" value={form.radio_metros} onChange={e => setForm({...form, radio_metros:Number(e.target.value)})} /></div>
-          </div>
-        </Modal>
+      {showCreateEmpleado && (
+        <CreateEmpleado
+          onClose={() => setShowCreateEmpleado(false)}
+          onSuccess={(nuevoUsuario) => {
+            setGuardias((prev: any[]) => [...prev, nuevoUsuario])
+            setShowCreateEmpleado(false)
+          }}
+        />
       )}
     </div>
   )
