@@ -2267,7 +2267,7 @@ export default function AppPage() {
   if (user.rol === 'guardia') return (
     <LayoutGuardia user={user} turnos={turnos} registros={registros} novedades={novedades} setRegistros={setRegistros} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />
   )
-
+  if (user.rol === 'supervisor') return <SupervisorMobile user={user} />
   const esGuardia = user.rol === 'guardia'
 
   const NAV = esGuardia ? [
