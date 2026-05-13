@@ -2007,6 +2007,155 @@ function TurnosBase() {
     </div>
   )
 }
+function CreateEmpleado({
+  onClose,
+  onSuccess,
+}: {
+  onClose: () => void
+  onSuccess: (usuario: any) => void
+}) {
+  const formVacio = {
+    nombre: '',
+    apellido: '',
+    email: '',
+    password: '',
+    rol: 'guardia',
+    dni: '',
+    legajo: '',
+  }
+
+  const [form, setForm] = useState(formVacio)
+  const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState('')
+  const [exito, setExito] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+
+  const guardar = async () => {
+    setError('')
+    setExito('')
+
+    if (!form.nombre.trim()) { setError('El nombre es obligatorio'); return }
+    if (!form.apellido.trim()) { setError('El apellido es obligatorio'); return }
+    if (!form.email.trim()) { setError('El email es obligatorio'); return }
+    if (!form.password || form.password.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return }
+
+    setGuardando(true)
+
+    try {
+      const res = await fetch('/api/create-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        setError(data.error || 'Error al crear el empleado')
+      } else {
+        setExito('Empleado creado correctamente')
+        setTimeout(() => onSuccess(data.user), 800)
+      }
+    } catch {
+      setError('Error de conexión')
+    }
+
+    setGuardando(false)
+  }
+
+  return (
+    <Modal
+      title="Nuevo empleado"
+      onClose={onClose}
+      footer={
+        <>
+          <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose} disabled={guardando}>
+            Cancelar
+          </button>
+          <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={guardando}>
+            {guardando ? 'Creando...' : 'Crear empleado'}
+          </button>
+        </>
+      }
+    >
+      <div style={S.grid2}>
+        <div style={{ marginBottom:16 }}>
+          <label style={S.label}>Nombre *</label>
+          <input style={S.input} value={form.nombre} onChange={e => setForm({ ...form, nombre:e.target.value })} />
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={S.label}>Apellido *</label>
+          <input style={S.input} value={form.apellido} onChange={e => setForm({ ...form, apellido:e.target.value })} />
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={S.label}>DNI</label>
+          <input style={S.input} value={form.dni} onChange={e => setForm({ ...form, dni:e.target.value })} />
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={S.label}>Legajo</label>
+          <input style={S.input} value={form.legajo} onChange={e => setForm({ ...form, legajo:e.target.value })} />
+        </div>
+      </div>
+
+      <div style={{ marginBottom:16 }}>
+        <label style={S.label}>Email *</label>
+        <input
+          style={S.input}
+          type="email"
+          value={form.email}
+          onChange={e => setForm({ ...form, email:e.target.value })}
+        />
+      </div>
+
+      <div style={{ marginBottom:16 }}>
+        <label style={S.label}>Contraseña inicial *</label>
+        <div style={{ display:'flex', gap:8 }}>
+          <input
+            style={S.input}
+            type={showPassword ? 'text' : 'password'}
+            value={form.password}
+            onChange={e => setForm({ ...form, password:e.target.value })}
+          />
+          <button
+            type="button"
+            style={{ ...S.btn, ...S.btnSecondary }}
+            onClick={() => setShowPassword(!showPassword)}
+          >
+            {showPassword ? 'Ocultar' : 'Ver'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginBottom:16 }}>
+        <label style={S.label}>Rol *</label>
+        <select
+          style={S.select}
+          value={form.rol}
+          onChange={e => setForm({ ...form, rol:e.target.value })}
+        >
+          <option value="guardia">Guardia</option>
+          <option value="supervisor">Supervisor</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+
+      {error && (
+        <div style={{ color:'#ef4444', fontSize:13, marginBottom:12 }}>
+          {error}
+        </div>
+      )}
+
+      {exito && (
+        <div style={{ color:'#10b981', fontSize:13, marginBottom:12 }}>
+          {exito}
+        </div>
+      )}
+    </Modal>
+  )
+}
 export default function AppPage() {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
