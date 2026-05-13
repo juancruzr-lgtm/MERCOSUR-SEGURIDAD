@@ -757,29 +757,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', fecha:new Date().toISOString().split('T')[0], hora_inicio:'06:00', hora_fin:'14:00' })
   const [filtFecha, setFiltFecha] = useState(new Date().toISOString().split('T')[0])
 
-      {/* Modal crear/editar */}
-      {modal && (
-        <Modal
-          title={editId ? 'Editar Objetivo' : 'Nuevo Objetivo'}
-          onClose={() => { setModal(false); setEditId(null); setForm(formVacio) }}
-          footer={
-            <>
-              <button
-                style={{ ...S.btn, ...S.btnSecondary }}
-                onClick={() => { setModal(false); setEditId(null); setForm(formVacio) }}
-              >
-                Cancelar
-              </button>
-              <button
-                style={{ ...S.btn, ...S.btnPrimary }}
-                onClick={guardar}
-                disabled={loading || !form.nombre.trim()}
-              >
-                {loading ? 'Guardando...' : editId ? 'Guardar cambios' : 'Crear objetivo'}
-              </button>
-            </>
-          }
-        >
+             >
           {/* Nombre */}
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Nombre *</label>
