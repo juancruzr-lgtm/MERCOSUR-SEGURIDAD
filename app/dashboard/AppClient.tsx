@@ -1394,7 +1394,619 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
     </div>
   )
 }
+// ============================================================
+// COMPONENTE: TurnosBase
+// UBICACIÓN: Pegarlo en AppClient.tsx ANTES de la función AppPage
+//
+// PASO 1: Agregar al menú admin:
+//   { id: 'turnos_base', icon: '🧱', label: 'Turnos Base' }
+//
+// PASO 2: Agregar al render admin:
+//   {page === 'turnos_base' && <TurnosBase />}
+//
+// ============================================================
 
+function TurnosBase() {
+  const [turnos, setTurnos] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showForm, setShowForm] = useState(false)
+  const [editando, setEditando] = useState<any>(null)
+  const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState('')
+
+  const formVacio = {
+    nombre: '',
+    hora_inicio: '',
+    hora_fin: '',
+    descripcion: '',
+    activo: true,
+  }
+
+  const [form, setForm] = useState(formVacio)
+
+  const cargar = async () => {
+    setLoading(true)
+
+    const { data, error } = await supabase
+      .from('turnos_base')
+      .select('*')
+      .order('created_at', { ascending: true })
+
+    if (!error) setTurnos(data || [])
+
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    cargar()
+  }, [])
+
+  const abrirNuevo = () => {
+    setEditando(null)
+    setForm(formVacio)
+    setError('')
+    setShowForm(true)
+  }
+
+  const abrirEditar = (t: any) => {
+    setEditando(t)
+
+    setForm({
+      nombre: t.nombre,
+      hora_inicio: t.hora_inicio?.slice(0, 5) ?? '',
+      hora_fin: t.hora_fin?.slice(0, 5) ?? '',
+      descripcion: t.descripcion ?? '',
+      activo: t.activo,
+    })
+
+    setError('')
+    setShowForm(true)
+  }
+
+  const cancelar = () => {
+    setShowForm(false)
+    setEditando(null)
+    setForm(formVacio)
+    setError('')
+  }
+
+  const guardar = async () => {
+    if (!form.nombre.trim()) {
+      setError('El nombre es obligatorio.')
+      return
+    }
+
+    if (!form.hora_inicio) {
+      setError('La hora de inicio es obligatoria.')
+      return
+    }
+
+    if (!form.hora_fin) {
+      setError('La hora de fin es obligatoria.')
+      return
+    }
+
+    if (form.hora_inicio === form.hora_fin) {
+      setError('La hora inicio y fin no pueden ser iguales.')
+      return
+    }
+
+    setGuardando(true)
+    setError('')
+
+    const payload = {
+      nombre: form.nombre.trim(),
+      hora_inicio: form.hora_inicio + ':00',
+      hora_fin: form.hora_fin + ':00',
+      descripcion: form.descripcion.trim() || null,
+      activo: form.activo,
+    }
+
+    let err
+
+    if (editando) {
+      ;({ error: err } = await supabase
+        .from('turnos_base')
+        .update(payload)
+        .eq('id', editando.id))
+    } else {
+      ;({ error: err } = await supabase
+        .from('turnos_base')
+        .insert(payload))
+    }
+
+    if (err) {
+      setError('Error al guardar: ' + err.message)
+    } else {
+      await cargar()
+      cancelar()
+    }
+
+    setGuardando(false)
+  }
+
+  const toggleActivo = async (t: any) => {
+    await supabase
+      .from('turnos_base')
+      .update({ activo: !t.activo })
+      .eq('id', t.id)
+
+    await cargar()
+  }
+
+  // ── estilos ────────────────────────────────────────────────
+
+  const s = {
+    container: {
+      padding: '24px',
+      color: '#f5f5f5',
+    } as React.CSSProperties,
+
+    header: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '24px',
+    } as React.CSSProperties,
+
+    title: {
+      fontSize: '22px',
+      fontWeight: 700,
+      color: '#f97316',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+    } as React.CSSProperties,
+
+    btnPrimary: {
+      background: '#f97316',
+      color: '#fff',
+      border: 'none',
+      borderRadius: '8px',
+      padding: '8px 18px',
+      fontWeight: 600,
+      fontSize: '14px',
+      cursor: 'pointer',
+    } as React.CSSProperties,
+
+    btnSecondary: {
+      background: 'transparent',
+      color: '#9ca3af',
+      border: '1px solid #374151',
+      borderRadius: '8px',
+      padding: '8px 18px',
+      fontWeight: 600,
+      fontSize: '14px',
+      cursor: 'pointer',
+    } as React.CSSProperties,
+
+    btnToggleOn: {
+      background: '#16a34a22',
+      color: '#4ade80',
+      border: '1px solid #16a34a55',
+      borderRadius: '6px',
+      padding: '4px 12px',
+      fontSize: '12px',
+      cursor: 'pointer',
+      fontWeight: 600,
+    } as React.CSSProperties,
+
+    btnToggleOff: {
+      background: '#6b728022',
+      color: '#9ca3af',
+      border: '1px solid #37415155',
+      borderRadius: '6px',
+      padding: '4px 12px',
+      fontSize: '12px',
+      cursor: 'pointer',
+      fontWeight: 600,
+    } as React.CSSProperties,
+
+    btnEdit: {
+      background: 'transparent',
+      color: '#f97316',
+      border: '1px solid #f9731644',
+      borderRadius: '6px',
+      padding: '4px 12px',
+      fontSize: '12px',
+      cursor: 'pointer',
+      fontWeight: 600,
+    } as React.CSSProperties,
+
+    table: {
+      width: '100%',
+      borderCollapse: 'collapse' as const,
+    },
+
+    th: {
+      textAlign: 'left' as const,
+      padding: '10px 14px',
+      fontSize: '12px',
+      fontWeight: 600,
+      color: '#6b7280',
+      textTransform: 'uppercase' as const,
+      letterSpacing: '0.05em',
+      borderBottom: '1px solid #1f2937',
+    },
+
+    td: {
+      padding: '12px 14px',
+      fontSize: '14px',
+      borderBottom: '1px solid #1f293766',
+      verticalAlign: 'middle' as const,
+    },
+
+    card: {
+      background: '#111827',
+      borderRadius: '12px',
+      border: '1px solid #1f2937',
+      overflow: 'hidden',
+    } as React.CSSProperties,
+
+    overlay: {
+      position: 'fixed' as const,
+      inset: 0,
+      background: '#000000aa',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 50,
+    },
+
+    modal: {
+      background: '#1f2937',
+      borderRadius: '16px',
+      padding: '28px',
+      width: '100%',
+      maxWidth: '480px',
+      border: '1px solid #374151',
+    } as React.CSSProperties,
+
+    label: {
+      display: 'block',
+      fontSize: '12px',
+      fontWeight: 600,
+      color: '#9ca3af',
+      marginBottom: '6px',
+      textTransform: 'uppercase' as const,
+      letterSpacing: '0.05em',
+    },
+
+    input: {
+      width: '100%',
+      background: '#111827',
+      border: '1px solid #374151',
+      borderRadius: '8px',
+      padding: '10px 12px',
+      color: '#f5f5f5',
+      fontSize: '14px',
+      boxSizing: 'border-box' as const,
+      marginBottom: '16px',
+    },
+
+    horaBadge: {
+      background: '#f9731620',
+      color: '#f97316',
+      borderRadius: '6px',
+      padding: '3px 10px',
+      fontSize: '13px',
+      fontWeight: 600,
+      display: 'inline-block',
+    },
+  }
+
+  return (
+    <div style={s.container}>
+
+      {/* Header */}
+
+      <div style={s.header}>
+        <div style={s.title}>
+          🧱 Turnos Base
+        </div>
+
+        <button
+          style={s.btnPrimary}
+          onClick={abrirNuevo}
+        >
+          + Nuevo turno base
+        </button>
+      </div>
+
+      {/* Tabla */}
+
+      <div style={s.card}>
+
+        {loading ? (
+
+          <div style={{
+            padding: '32px',
+            textAlign: 'center',
+            color: '#6b7280'
+          }}>
+            Cargando...
+          </div>
+
+        ) : turnos.length === 0 ? (
+
+          <div style={{
+            padding: '32px',
+            textAlign: 'center',
+            color: '#6b7280'
+          }}>
+            No hay turnos base creados todavía.
+          </div>
+
+        ) : (
+
+          <table style={s.table}>
+            <thead>
+              <tr>
+                <th style={s.th}>Nombre</th>
+                <th style={s.th}>Horario</th>
+                <th style={s.th}>Descripción</th>
+                <th style={s.th}>Estado</th>
+                <th style={s.th}>Acciones</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {turnos.map((t) => (
+
+                <tr
+                  key={t.id}
+                  style={{
+                    opacity: t.activo ? 1 : 0.5
+                  }}
+                >
+
+                  <td style={{
+                    ...s.td,
+                    fontWeight: 600,
+                    color: '#f5f5f5'
+                  }}>
+                    {t.nombre}
+                  </td>
+
+                  <td style={s.td}>
+                    <span style={s.horaBadge}>
+                      {t.hora_inicio
+                        ? t.hora_inicio.slice(0,5)
+                        : '--:--'}
+                      {' → '}
+                      {t.hora_fin
+                        ? t.hora_fin.slice(0,5)
+                        : '--:--'}
+                    </span>
+                  </td>
+
+                  <td style={{
+                    ...s.td,
+                    color: '#9ca3af',
+                    fontSize: '13px'
+                  }}>
+                    {t.descripcion || '—'}
+                  </td>
+
+                  <td style={s.td}>
+                    <button
+                      style={
+                        t.activo
+                          ? s.btnToggleOn
+                          : s.btnToggleOff
+                      }
+                      onClick={() => toggleActivo(t)}
+                    >
+                      {t.activo
+                        ? '✓ Activo'
+                        : '✗ Inactivo'}
+                    </button>
+                  </td>
+
+                  <td style={s.td}>
+                    <button
+                      style={s.btnEdit}
+                      onClick={() => abrirEditar(t)}
+                    >
+                      ✏️ Editar
+                    </button>
+                  </td>
+
+                </tr>
+
+              ))}
+            </tbody>
+          </table>
+
+        )}
+
+      </div>
+
+      {/* Modal */}
+
+      {showForm && (
+
+        <div style={s.overlay}>
+
+          <div style={s.modal}>
+
+            <h3 style={{
+              margin: '0 0 20px',
+              color: '#f97316',
+              fontWeight: 700,
+              fontSize: '18px'
+            }}>
+              {editando
+                ? '✏️ Editar turno base'
+                : '🧱 Nuevo turno base'}
+            </h3>
+
+            <label style={s.label}>
+              Nombre *
+            </label>
+
+            <input
+              style={s.input}
+              placeholder="Ej: Diurno 08-20"
+              value={form.nombre}
+              onChange={e =>
+                setForm({
+                  ...form,
+                  nombre: e.target.value
+                })
+              }
+            />
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '12px'
+            }}>
+
+              <div>
+                <label style={s.label}>
+                  Hora inicio *
+                </label>
+
+                <input
+                  type="time"
+                  style={s.input}
+                  value={form.hora_inicio}
+                  onChange={e =>
+                    setForm({
+                      ...form,
+                      hora_inicio: e.target.value
+                    })
+                  }
+                />
+              </div>
+
+              <div>
+                <label style={s.label}>
+                  Hora fin *
+                </label>
+
+                <input
+                  type="time"
+                  style={s.input}
+                  value={form.hora_fin}
+                  onChange={e =>
+                    setForm({
+                      ...form,
+                      hora_fin: e.target.value
+                    })
+                  }
+                />
+              </div>
+
+            </div>
+
+            <label style={s.label}>
+              Descripción
+            </label>
+
+            <input
+              style={s.input}
+              placeholder="Ej: Turno nocturno de 12 horas"
+              value={form.descripcion}
+              onChange={e =>
+                setForm({
+                  ...form,
+                  descripcion: e.target.value
+                })
+              }
+            />
+
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              marginBottom: '20px'
+            }}>
+
+              <input
+                type="checkbox"
+                id="activo"
+                checked={form.activo}
+                onChange={e =>
+                  setForm({
+                    ...form,
+                    activo: e.target.checked
+                  })
+                }
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  accentColor: '#f97316'
+                }}
+              />
+
+              <label
+                htmlFor="activo"
+                style={{
+                  color: '#d1d5db',
+                  fontSize: '14px',
+                  cursor: 'pointer'
+                }}
+              >
+                Activo
+              </label>
+
+            </div>
+
+            {error && (
+
+              <div style={{
+                background: '#7f1d1d33',
+                border: '1px solid #ef444455',
+                color: '#fca5a5',
+                borderRadius: '8px',
+                padding: '10px 14px',
+                fontSize: '13px',
+                marginBottom: '16px',
+              }}>
+                {error}
+              </div>
+
+            )}
+
+            <div style={{
+              display: 'flex',
+              gap: '10px',
+              justifyContent: 'flex-end'
+            }}>
+
+              <button
+                style={s.btnSecondary}
+                onClick={cancelar}
+                disabled={guardando}
+              >
+                Cancelar
+              </button>
+
+              <button
+                style={s.btnPrimary}
+                onClick={guardar}
+                disabled={guardando}
+              >
+                {guardando
+                  ? 'Guardando...'
+                  : editando
+                    ? 'Guardar cambios'
+                    : 'Crear turno base'}
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      )}
+
+    </div>
+  )
+}
 export default function AppPage() {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
@@ -1467,6 +2079,7 @@ export default function AppPage() {
       { id:'objetivos', icon:'🏢', label:'Objetivos' },
       { id:'turnos', icon:'📅', label:'Turnos' },
       { id:'asistencia', icon:'✅', label:'Asistencia' },
+      { id:'turnos_base', icon:'🧱', label:'Turnos Base' },
     ]},
     { section:'Administración', items:[
       { id:'servicios_objetivo', icon:'🏢', label:'Servicios Objetivo' },
@@ -1525,6 +2138,7 @@ export default function AppPage() {
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} setTurnos={setTurnos} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
+              {page === 'turnos_base' && <TurnosBase />}
             </>
           )
         )}
