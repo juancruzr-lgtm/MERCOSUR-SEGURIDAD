@@ -258,7 +258,12 @@ function Guardias({ guardias, setGuardias, registros }: any) {
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
         <div style={{ flex:1 }}><div style={S.title}>Guardias</div><div style={S.sub2}>{guardias.length} guardias registrados</div></div>
-        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => { setForm({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', estado:'activo', rol:'guardia' }); setEditId(null); setModal(true) }}>+ Nuevo Guardia</button>
+        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => { setForm({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', estado:'activo', rol:'guardia' }); setEditId(null); setModal(true) }}><button
+  style={{ ...S.btn, ...S.btnPrimary }}
+  onClick={() => setShowCreateEmpleado(true)}
+>
+  + Nuevo empleado
+</button>
       </div>
       <div style={S.card}>
         <table style={S.table}>
