@@ -415,7 +415,354 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', fecha:new Date().toISOString().split('T')[0], hora_inicio:'06:00', hora_fin:'14:00' })
   const [filtFecha, setFiltFecha] = useState(new Date().toISOString().split('T')[0])
+  c// ============================================================
+// COMPONENTE: Objetivos
+// UBICACIÓN: Pegarlo en AppClient.tsx entre el componente
+//            Guardias y el componente Turnos
+//            (buscar "function Turnos" y pegarlo justo antes)
+// ============================================================
+
+function Objetivos({ objetivos, setObjetivos, turnos }: any) {
+  const [modal, setModal] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [busqueda, setBusqueda] = useState('')
+
+  const formVacio = {
+    nombre: '',
+    cliente: '',
+    direccion: '',
+    estado: 'activo',
+    radio_metros: 200,
+  }
+  const [form, setForm] = useState(formVacio)
+
+  const hoy = new Date().toISOString().split('T')[0]
+
+  const turnosHoyPorObjetivo = (objetivoId: string) => {
+    return turnos.filter((t: any) => t.objetivo_id === objetivoId && t.fecha === hoy)
+  }
+
+  const estadoOperativo = (objetivoId: string) => {
+    const ts = turnosHoyPorObjetivo(objetivoId)
+    if (ts.length === 0) return null
+    const sinCubrir = ts.filter((t: any) => t.estado === 'descubierto' || t.estado === 'programado').length
+    const cubiertos = ts.filter((t: any) => t.estado === 'cubierto').length
+    return { total: ts.length, cubiertos, sinCubrir }
+  }
+
+  const abrirNuevo = () => {
+    setForm(formVacio)
+    setEditId(null)
+    setModal(true)
+  }
+
+  const abrirEditar = (o: any) => {
+    setForm({
+      nombre: o.nombre || '',
+      cliente: o.cliente || '',
+      direccion: o.direccion || '',
+      estado: o.estado || 'activo',
+      radio_metros: o.radio_metros || 200,
+    })
+    setEditId(o.id)
+    setModal(true)
+  }
+
+  const guardar = async () => {
+    if (!form.nombre.trim()) return
+    setLoading(true)
+
+    const payload = {
+      nombre: form.nombre.trim(),
+      cliente: form.cliente.trim() || null,
+      direccion: form.direccion.trim() || null,
+      estado: form.estado,
+      radio_metros: Number(form.radio_metros) || 200,
+    }
+
+    if (editId) {
+      const { data } = await supabase
+        .from('objetivos')
+        .update(payload)
+        .eq('id', editId)
+        .select()
+        .single()
+      if (data) setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? data : o))
+    } else {
+      const { data } = await supabase
+        .from('objetivos')
+        .insert(payload)
+        .select()
+        .single()
+      if (data) setObjetivos((prev: any[]) => [...prev, data])
+    }
+
+    setModal(false)
+    setEditId(null)
+    setForm(formVacio)
+    setLoading(false)
+  }
+
+  const toggleEstado = async (o: any) => {
+    const nuevoEstado = o.estado === 'activo' ? 'inactivo' : 'activo'
+    const { data } = await supabase
+      .from('objetivos')
+      .update({ estado: nuevoEstado })
+      .eq('id', o.id)
+      .select()
+      .single()
+    if (data) setObjetivos((prev: any[]) => prev.map(x => x.id === o.id ? data : x))
+  }
+
+  const filtrados = objetivos.filter((o: any) => {
+    if (!busqueda.trim()) return true
+    const q = busqueda.toLowerCase()
+    return (
+      o.nombre?.toLowerCase().includes(q) ||
+      o.cliente?.toLowerCase().includes(q) ||
+      o.direccion?.toLowerCase().includes(q)
+    )
+  })
+
+  const activos = objetivos.filter((o: any) => o.estado === 'activo').length
+  const inactivos = objetivos.filter((o: any) => o.estado !== 'activo').length
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
+        <div style={{ flex:1 }}>
+          <div style={S.title}>Objetivos</div>
+          <div style={S.sub2}>
+            {activos} activos · {inactivos} inactivos
+          </div>
+        </div>
+        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>
+          + Nuevo Objetivo
+        </button>
+      </div>
+
+      {/* Stats rápidas */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:12, marginBottom:20 }}>
+        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px' }}>
+          <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Total</div>
+          <div style={{ fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800 }}>{objetivos.length}</div>
+        </div>
+        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #10b981' }}>
+          <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Activos</div>
+          <div style={{ fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800, color:'#10b981' }}>{activos}</div>
+        </div>
+        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #f59e0b' }}>
+          <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Con turnos hoy</div>
+          <div style={{ fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800, color:'#f59e0b' }}>
+            {objetivos.filter((o: any) => turnosHoyPorObjetivo(o.id).length > 0).length}
+          </div>
+        </div>
+        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #ef4444' }}>
+          <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Sin cubrir hoy</div>
+          <div style={{ fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800, color:'#ef4444' }}>
+            {objetivos.filter((o: any) => {
+              const ts = turnosHoyPorObjetivo(o.id)
+              return ts.some((t: any) => t.estado === 'descubierto' || t.estado === 'programado')
+            }).length}
+          </div>
+        </div>
+      </div>
+
+      {/* Buscador */}
+      <div style={{ marginBottom:16 }}>
+        <input
+          style={{ ...S.input, maxWidth:360 }}
+          placeholder="🔍  Buscar por nombre, cliente o dirección..."
+          value={busqueda}
+          onChange={e => setBusqueda(e.target.value)}
+        />
+      </div>
+
+      {/* Tabla */}
+      <div style={S.card}>
+        {filtrados.length === 0 ? (
+          <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>
+            <div style={{ fontSize:36, marginBottom:12 }}>🏢</div>
+            <div>{busqueda ? 'Sin resultados para esa búsqueda.' : 'No hay objetivos cargados.'}</div>
+          </div>
+        ) : (
+          <div style={{ overflowX:'auto' }}>
+            <table style={S.table}>
+              <thead>
+                <tr>
+                  <th style={S.th}>Objetivo</th>
+                  <th style={S.th}>Cliente</th>
+                  <th style={S.th}>Dirección</th>
+                  <th style={S.th}>Estado</th>
+                  <th style={S.th}>Hoy</th>
+                  <th style={S.th}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((o: any) => {
+                  const op = estadoOperativo(o.id)
+                  return (
+                    <tr key={o.id} style={{ opacity: o.estado === 'inactivo' ? 0.5 : 1 }}>
+
+                      {/* Nombre */}
+                      <td style={S.td}>
+                        <strong style={{ fontSize:14 }}>{o.nombre}</strong>
+                        {o.radio_metros && (
+                          <div style={{ fontSize:11, color:'#64748b', marginTop:2 }}>
+                            📍 radio {o.radio_metros}m
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Cliente */}
+                      <td style={{ ...S.td, color:'#94a3b8', fontSize:13 }}>
+                        {o.cliente || <span style={{ color:'#374151' }}>—</span>}
+                      </td>
+
+                      {/* Dirección */}
+                      <td style={{ ...S.td, color:'#94a3b8', fontSize:13, maxWidth:200 }}>
+                        {o.direccion || <span style={{ color:'#374151' }}>—</span>}
+                      </td>
+
+                      {/* Estado */}
+                      <td style={S.td}>
+                        <Badge type={o.estado}>{o.estado}</Badge>
+                      </td>
+
+                      {/* Turnos hoy */}
+                      <td style={S.td}>
+                        {op === null ? (
+                          <span style={{ fontSize:12, color:'#374151' }}>Sin turnos</span>
+                        ) : op.sinCubrir > 0 ? (
+                          <Badge type="descubierto">⚠ {op.sinCubrir} sin cubrir</Badge>
+                        ) : (
+                          <Badge type="cubierto">✓ {op.cubiertos} cubierto{op.cubiertos !== 1 ? 's' : ''}</Badge>
+                        )}
+                      </td>
+
+                      {/* Acciones */}
+                      <td style={S.td}>
+                        <div style={{ display:'flex', gap:6 }}>
+                          <button
+                            style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }}
+                            onClick={() => abrirEditar(o)}
+                          >
+                            ✏ Editar
+                          </button>
+                          <button
+                            style={{
+                              ...S.btn,
+                              padding:'6px 12px',
+                              fontSize:12,
+                              background: o.estado === 'activo' ? 'rgba(239,68,68,.1)' : 'rgba(16,185,129,.1)',
+                              color: o.estado === 'activo' ? '#ef4444' : '#10b981',
+                              border: `1px solid ${o.estado === 'activo' ? 'rgba(239,68,68,.3)' : 'rgba(16,185,129,.3)'}`,
+                            }}
+                            onClick={() => toggleEstado(o)}
+                          >
+                            {o.estado === 'activo' ? '⏸' : '▶'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Modal crear/editar */}
+      {modal && (
+        <Modal
+          title={editId ? 'Editar Objetivo' : 'Nuevo Objetivo'}
+          onClose={() => { setModal(false); setEditId(null); setForm(formVacio) }}
+          footer={
+            <>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary }}
+                onClick={() => { setModal(false); setEditId(null); setForm(formVacio) }}
+              >
+                Cancelar
+              </button>
+              <button
+                style={{ ...S.btn, ...S.btnPrimary }}
+                onClick={guardar}
+                disabled={loading || !form.nombre.trim()}
+              >
+                {loading ? 'Guardando...' : editId ? 'Guardar cambios' : 'Crear objetivo'}
+              </button>
+            </>
+          }
+        >
+          {/* Nombre */}
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Nombre *</label>
+            <input
+              style={S.input}
+              placeholder="Ej: Banco Nación Rosario"
+              value={form.nombre}
+              onChange={e => setForm({ ...form, nombre:e.target.value })}
+            />
+          </div>
+
+          {/* Cliente */}
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Cliente</label>
+            <input
+              style={S.input}
+              placeholder="Ej: Banco de la Nación Argentina"
+              value={form.cliente}
+              onChange={e => setForm({ ...form, cliente:e.target.value })}
+            />
+          </div>
+
+          {/* Dirección */}
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Dirección</label>
+            <input
+              style={S.input}
+              placeholder="Ej: Córdoba 1234, Rosario"
+              value={form.direccion}
+              onChange={e => setForm({ ...form, direccion:e.target.value })}
+            />
+          </div>
+
+          {/* Radio y estado en grid */}
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Radio GPS (metros)</label>
+              <input
+                style={S.input}
+                type="number"
+                min={50}
+                max={2000}
+                placeholder="200"
+                value={form.radio_metros}
+                onChange={e => setForm({ ...form, radio_metros: Number(e.target.value) })}
+              />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Estado</label>
+              <select
+                style={S.select}
+                value={form.estado}
+                onChange={e => setForm({ ...form, estado:e.target.value })}
+              >
+                <option value="activo">Activo</option>
+                <option value="inactivo">Inactivo</option>
+              </select>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}onst [loading, setLoading] = useState(false)
 
   const guardar = async () => {
     setLoading(true)
