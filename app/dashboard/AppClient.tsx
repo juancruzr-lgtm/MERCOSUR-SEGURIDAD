@@ -754,82 +754,48 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
 }
 function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
   const [modal, setModal] = useState(false)
-  const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', fecha:new Date().toISOString().split('T')[0], hora_inicio:'06:00', hora_fin:'14:00' })
+  const [form, setForm] = useState({
+    guardia_id: '',
+    objetivo_id: '',
+    fecha: new Date().toISOString().split('T')[0],
+    hora_inicio: '06:00',
+    hora_fin: '14:00',
+  })
   const [filtFecha, setFiltFecha] = useState(new Date().toISOString().split('T')[0])
-
-             >
-          {/* Nombre */}
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Nombre *</label>
-            <input
-              style={S.input}
-              placeholder="Ej: Banco Nación Rosario"
-              value={form.nombre}
-              onChange={e => setForm({ ...form, nombre:e.target.value })}
-            />
-          </div>
-
-          {/* Cliente */}
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Cliente</label>
-            <input
-              style={S.input}
-              placeholder="Ej: Banco de la Nación Argentina"
-              value={form.cliente}
-              onChange={e => setForm({ ...form, cliente:e.target.value })}
-            />
-          </div>
-
-          {/* Dirección */}
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Dirección</label>
-            <input
-              style={S.input}
-              placeholder="Ej: Córdoba 1234, Rosario"
-              value={form.direccion}
-              onChange={e => setForm({ ...form, direccion:e.target.value })}
-            />
-          </div>
-
-          {/* Radio y estado en grid */}
-          <div style={S.grid2}>
-            <div style={{ marginBottom:16 }}>
-              <label style={S.label}>Radio GPS (metros)</label>
-              <input
-                style={S.input}
-                type="number"
-                min={50}
-                max={2000}
-                placeholder="200"
-                value={form.radio_metros}
-                onChange={e => setForm({ ...form, radio_metros: Number(e.target.value) })}
-              />
-            </div>
-
-            <div style={{ marginBottom:16 }}>
-              <label style={S.label}>Estado</label>
-              <select
-                style={S.select}
-                value={form.estado}
-                onChange={e => setForm({ ...form, estado:e.target.value })}
-              >
-                <option value="activo">Activo</option>
-                <option value="inactivo">Inactivo</option>
-              </select>
-            </div>
-          </div>
-        </Modal>
-      )}
-    </div>
-  )
-}onst [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(false)
 
   const guardar = async () => {
+    if (!form.objetivo_id || !form.fecha || !form.hora_inicio || !form.hora_fin) return
+
     setLoading(true)
-    const payload = { ...form, guardia_id: form.guardia_id || null, estado: form.guardia_id ? 'cubierto' : 'descubierto' }
-    const { data } = await supabase.from('turnos').insert(payload).select().single()
-    if (data) setTurnos((prev: any[]) => [...prev, data])
-    setModal(false); setLoading(false)
+
+    const payload = {
+      ...form,
+      guardia_id: form.guardia_id || null,
+      estado: form.guardia_id ? 'cubierto' : 'descubierto',
+      tipo_evento: 'normal',
+      estado_revision: 'aprobado',
+    }
+
+    const { data, error } = await supabase
+      .from('turnos')
+      .insert(payload)
+      .select()
+      .single()
+
+    if (!error && data) {
+      setTurnos((prev: any[]) => [...prev, data])
+      setModal(false)
+      setForm({
+        guardia_id: '',
+        objetivo_id: '',
+        fecha: new Date().toISOString().split('T')[0],
+        hora_inicio: '06:00',
+        hora_fin: '14:00',
+      })
+    }
+
+    setLoading(false)
   }
 
   const filtrados = turnos.filter((t: Turno) => !filtFecha || t.fecha === filtFecha)
@@ -837,47 +803,176 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:24 }}>
-        <div style={{ flex:1 }}><div style={S.title}>Turnos</div><div style={S.sub2}>Asignación de guardias a objetivos</div></div>
-        <input type="date" style={{ ...S.input, width:'auto' }} value={filtFecha} onChange={e => setFiltFecha(e.target.value)} />
-        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => setModal(true)}>+ Nuevo Turno</button>
+        <div style={{ flex:1 }}>
+          <div style={S.title}>Turnos</div>
+          <div style={S.sub2}>Asignación de guardias a objetivos</div>
+        </div>
+
+        <input
+          type="date"
+          style={{ ...S.input, width:'auto' }}
+          value={filtFecha}
+          onChange={e => setFiltFecha(e.target.value)}
+        />
+
+        <button
+          style={{ ...S.btn, ...S.btnPrimary }}
+          onClick={() => setModal(true)}
+        >
+          + Nuevo Turno
+        </button>
       </div>
+
       <div style={S.card}>
         <table style={S.table}>
-          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Objetivo</th><th style={S.th}>Horario</th><th style={S.th}>Guardia</th><th style={S.th}>Estado</th></tr></thead>
+          <thead>
+            <tr>
+              <th style={S.th}>Fecha</th>
+              <th style={S.th}>Objetivo</th>
+              <th style={S.th}>Horario</th>
+              <th style={S.th}>Guardia</th>
+              <th style={S.th}>Estado</th>
+            </tr>
+          </thead>
+
           <tbody>
             {filtrados.map((t: Turno) => {
               const g = guardias.find((x: Usuario) => x.id === t.guardia_id)
               const o = objetivos.find((x: Objetivo) => x.id === t.objetivo_id)
+
               return (
                 <tr key={t.id}>
                   <td style={S.td}>{t.fecha}</td>
-                  <td style={S.td}><strong>{o?.nombre}</strong><br /><span style={{ fontSize:11, color:'#64748b' }}>{o?.cliente}</span></td>
-                  <td style={S.td}><span style={{ fontFamily:'Syne,sans-serif', fontWeight:600 }}>{t.hora_inicio} → {t.hora_fin}</span></td>
-                  <td style={S.td}>{g ? `${g.apellido}, ${g.nombre}` : <span style={{ color:'#ef4444' }}>Sin asignar</span>}</td>
-                  <td style={S.td}><Badge type={t.estado}>{t.estado}</Badge></td>
+
+                  <td style={S.td}>
+                    <strong>{o?.nombre}</strong>
+                    <br />
+                    <span style={{ fontSize:11, color:'#64748b' }}>
+                      {o?.cliente}
+                    </span>
+                  </td>
+
+                  <td style={S.td}>
+                    <span style={{ fontFamily:'Syne,sans-serif', fontWeight:600 }}>
+                      {t.hora_inicio} → {t.hora_fin}
+                    </span>
+                  </td>
+
+                  <td style={S.td}>
+                    {g ? `${g.apellido}, ${g.nombre}` : (
+                      <span style={{ color:'#ef4444' }}>Sin asignar</span>
+                    )}
+                  </td>
+
+                  <td style={S.td}>
+                    <Badge type={t.estado}>{t.estado}</Badge>
+                  </td>
                 </tr>
               )
             })}
           </tbody>
         </table>
-        {filtrados.length === 0 && <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>📅 No hay turnos para esta fecha</div>}
+
+        {filtrados.length === 0 && (
+          <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>
+            📅 No hay turnos para esta fecha
+          </div>
+        )}
       </div>
+
       {modal && (
-        <Modal title="Nuevo Turno" onClose={() => setModal(false)}
-          footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setModal(false)}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
-          <div style={{ marginBottom:16 }}><label style={S.label}>Objetivo</label><select style={S.select} value={form.objetivo_id} onChange={e => setForm({...form, objetivo_id:e.target.value})}><option value="">Seleccionar...</option>{objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}</select></div>
-          <div style={{ marginBottom:16 }}><label style={S.label}>Guardia (opcional)</label><select style={S.select} value={form.guardia_id} onChange={e => setForm({...form, guardia_id:e.target.value})}><option value="">Sin asignar</option>{guardias.filter((g: Usuario) => g.estado === 'activo').map((g: Usuario) => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>)}</select></div>
+        <Modal
+          title="Nuevo Turno"
+          onClose={() => setModal(false)}
+          footer={
+            <>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary }}
+                onClick={() => setModal(false)}
+              >
+                Cancelar
+              </button>
+
+              <button
+                style={{ ...S.btn, ...S.btnPrimary }}
+                onClick={guardar}
+                disabled={loading}
+              >
+                {loading ? 'Guardando...' : 'Guardar'}
+              </button>
+            </>
+          }
+        >
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Objetivo</label>
+            <select
+              style={S.select}
+              value={form.objetivo_id}
+              onChange={e => setForm({ ...form, objetivo_id:e.target.value })}
+            >
+              <option value="">Seleccionar...</option>
+              {objetivos.map((o: Objetivo) => (
+                <option key={o.id} value={o.id}>
+                  {o.nombre}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Guardia</label>
+            <select
+              style={S.select}
+              value={form.guardia_id}
+              onChange={e => setForm({ ...form, guardia_id:e.target.value })}
+            >
+              <option value="">Sin asignar</option>
+              {guardias
+                .filter((g: Usuario) => g.estado === 'activo')
+                .map((g: Usuario) => (
+                  <option key={g.id} value={g.id}>
+                    {g.apellido}, {g.nombre}
+                  </option>
+                ))}
+            </select>
+          </div>
+
           <div style={S.grid2}>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Fecha</label><input type="date" style={S.input} value={form.fecha} onChange={e => setForm({...form, fecha:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Hora inicio</label><input type="time" style={S.input} value={form.hora_inicio} onChange={e => setForm({...form, hora_inicio:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Hora fin</label><input type="time" style={S.input} value={form.hora_fin} onChange={e => setForm({...form, hora_fin:e.target.value})} /></div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Fecha</label>
+              <input
+                type="date"
+                style={S.input}
+                value={form.fecha}
+                onChange={e => setForm({ ...form, fecha:e.target.value })}
+              />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora inicio</label>
+              <input
+                type="time"
+                style={S.input}
+                value={form.hora_inicio}
+                onChange={e => setForm({ ...form, hora_inicio:e.target.value })}
+              />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora fin</label>
+              <input
+                type="time"
+                style={S.input}
+                value={form.hora_fin}
+                onChange={e => setForm({ ...form, hora_fin:e.target.value })}
+              />
+            </div>
           </div>
         </Modal>
       )}
     </div>
   )
 }
-
 function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
