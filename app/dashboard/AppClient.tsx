@@ -411,17 +411,6 @@ function Guardias({ guardias, setGuardias, registros }: any) {
   )
 }
 
-function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
-  const [modal, setModal] = useState(false)
-  const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', fecha:new Date().toISOString().split('T')[0], hora_inicio:'06:00', hora_fin:'14:00' })
-  const [filtFecha, setFiltFecha] = useState(new Date().toISOString().split('T')[0])
-  c// ============================================================
-// COMPONENTE: Objetivos
-// UBICACIÓN: Pegarlo en AppClient.tsx entre el componente
-//            Guardias y el componente Turnos
-//            (buscar "function Turnos" y pegarlo justo antes)
-// ============================================================
-
 function Objetivos({ objetivos, setObjetivos, turnos }: any) {
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -674,6 +663,99 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
           </div>
         )}
       </div>
+
+      {/* Modal crear/editar */}
+      {modal && (
+        <Modal
+          title={editId ? 'Editar Objetivo' : 'Nuevo Objetivo'}
+          onClose={() => { setModal(false); setEditId(null); setForm(formVacio) }}
+          footer={
+            <>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary }}
+                onClick={() => { setModal(false); setEditId(null); setForm(formVacio) }}
+              >
+                Cancelar
+              </button>
+              <button
+                style={{ ...S.btn, ...S.btnPrimary }}
+                onClick={guardar}
+                disabled={loading || !form.nombre.trim()}
+              >
+                {loading ? 'Guardando...' : editId ? 'Guardar cambios' : 'Crear objetivo'}
+              </button>
+            </>
+          }
+        >
+          {/* Nombre */}
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Nombre *</label>
+            <input
+              style={S.input}
+              placeholder="Ej: Banco Nación Rosario"
+              value={form.nombre}
+              onChange={e => setForm({ ...form, nombre:e.target.value })}
+            />
+          </div>
+
+          {/* Cliente */}
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Cliente</label>
+            <input
+              style={S.input}
+              placeholder="Ej: Banco de la Nación Argentina"
+              value={form.cliente}
+              onChange={e => setForm({ ...form, cliente:e.target.value })}
+            />
+          </div>
+
+          {/* Dirección */}
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Dirección</label>
+            <input
+              style={S.input}
+              placeholder="Ej: Córdoba 1234, Rosario"
+              value={form.direccion}
+              onChange={e => setForm({ ...form, direccion:e.target.value })}
+            />
+          </div>
+
+          {/* Radio y estado en grid */}
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Radio GPS (metros)</label>
+              <input
+                style={S.input}
+                type="number"
+                min={50}
+                max={2000}
+                placeholder="200"
+                value={form.radio_metros}
+                onChange={e => setForm({ ...form, radio_metros: Number(e.target.value) })}
+              />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Estado</label>
+              <select
+                style={S.select}
+                value={form.estado}
+                onChange={e => setForm({ ...form, estado:e.target.value })}
+              >
+                <option value="activo">Activo</option>
+                <option value="inactivo">Inactivo</option>
+              </select>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
+  const [modal, setModal] = useState(false)
+  const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', fecha:new Date().toISOString().split('T')[0], hora_inicio:'06:00', hora_fin:'14:00' })
+  const [filtFecha, setFiltFecha] = useState(new Date().toISOString().split('T')[0])
 
       {/* Modal crear/editar */}
       {modal && (
