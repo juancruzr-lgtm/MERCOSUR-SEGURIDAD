@@ -35,11 +35,23 @@ export default function SupervisorMobile({ user }: any) {
           background: '#111827',
         }}
       >
-        <div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b' }}>
+        <div
+          style={{
+            fontSize: 20,
+            fontWeight: 800,
+            color: '#f59e0b',
+          }}
+        >
           Supervisor Mobile
         </div>
 
-        <div style={{ fontSize: 14, color: '#94a3b8', marginTop: 4 }}>
+        <div
+          style={{
+            fontSize: 14,
+            color: '#94a3b8',
+            marginTop: 4,
+          }}
+        >
           {user?.nombre} {user?.apellido}
         </div>
 
@@ -63,29 +75,54 @@ export default function SupervisorMobile({ user }: any) {
         {tab === 'inicio' && (
           <section>
             <h2>Inicio</h2>
-            <div style={card}>Panel operativo del supervisor.</div>
-            <div style={card}>Próximo paso: ver turnos del objetivo piloto.</div>
+
+            <div style={card}>
+              Panel operativo del supervisor.
+            </div>
+
+            <div style={card}>
+              Objetivo piloto:
+              <br />
+              Nación Servicios Entre Ríos
+            </div>
           </section>
         )}
 
         {tab === 'turnos' && (
           <section>
             <h2>Turnos</h2>
-            <div style={card}>Acá vamos a mostrar los turnos del día.</div>
+
+            <div style={card}>
+              DIURNO A — 07:00 a 19:00
+            </div>
+
+            <div style={card}>
+              DIURNO B — 07:00 a 19:00
+            </div>
+
+            <div style={card}>
+              NOCTURNO — 19:00 a 07:00
+            </div>
           </section>
         )}
 
         {tab === 'guardias' && (
           <section>
             <h2>Guardias</h2>
-            <div style={card}>Acá vamos a mostrar guardias activos.</div>
+
+            <div style={card}>
+              Acá vamos a mostrar guardias activos.
+            </div>
           </section>
         )}
 
         {tab === 'alertas' && (
           <section>
             <h2>Alertas</h2>
-            <div style={card}>Acá van alertas de asistencia, GPS y cobertura.</div>
+
+            <div style={card}>
+              Acá van alertas de asistencia y GPS.
+            </div>
           </section>
         )}
       </main>
@@ -108,15 +145,26 @@ export default function SupervisorMobile({ user }: any) {
             style={{
               flex: 1,
               padding: '10px 4px',
-              background: tab === t.id ? 'rgba(245,158,11,.12)' : 'transparent',
-              color: tab === t.id ? '#f59e0b' : '#94a3b8',
+              background:
+                tab === t.id
+                  ? 'rgba(245,158,11,.12)'
+                  : 'transparent',
+              color:
+                tab === t.id
+                  ? '#f59e0b'
+                  : '#94a3b8',
               border: 'none',
               fontSize: 12,
               cursor: 'pointer',
             }}
           >
-            <div style={{ fontSize: 20 }}>{t.icon}</div>
-            <div>{t.label}</div>
+            <div style={{ fontSize: 20 }}>
+              {t.icon}
+            </div>
+
+            <div>
+              {t.label}
+            </div>
           </button>
         ))}
       </nav>
