@@ -1,17 +1,33 @@
 'use client'
-
+import { supabase } from '@/lib/supabase'
 import { useState } from 'react'
 
 export default function SupervisorMobile({ user }: any) {
   const [tab, setTab] = useState('inicio')
-
+const cerrarSesion = async () => {
+  await supabase.auth.signOut()
+  window.location.href = '/dashboard'
+}
   const tabs = [
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
     { id: 'turnos', label: 'Turnos', icon: '📅' },
     { id: 'guardias', label: 'Guardias', icon: '👮' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
   ]
-
+<button
+  onClick={cerrarSesion}
+  style={{
+    marginTop: 10,
+    background: '#dc2626',
+    color: 'white',
+    border: 'none',
+    padding: '8px 12px',
+    borderRadius: 8,
+    cursor: 'pointer'
+  }}
+>
+  Cerrar sesión
+</button>
   return (
     <div style={{
       minHeight: '100vh',
