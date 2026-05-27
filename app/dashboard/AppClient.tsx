@@ -2764,15 +2764,19 @@ export default function AppPage() {
     })
   }, [cargarDatos])
 
-  if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>Cargando...</div>
-  if (!user) return <Login onLogin={u => { setUser(u); cargarDatos() }} />
-  if (user.rol === 'guif (user.rol === 'guardia') {
+if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>Cargando...</div>
+
+if (!user) return <Login onLogin={u => { setUser(u); cargarDatos() }} />
+
+if (user.rol === 'guardia') {
   return <GuardiaMobile user={user} />
-}ardia') return (
-    <LayoutGuardia user={user} turnos={turnos} registros={registros} novedades={novedades} setRegistros={setRegistros} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />
-  )
-  if (user.rol === 'supervisor') return <SupervisorMobile user={user} />
-  const esGuardia = user.rol === 'guardia'
+}
+
+if (user.rol === 'supervisor') {
+  return <SupervisorMobile user={user} />
+}
+
+const esGuardia = user.rol === 'guardia'
 
   const NAV = esGuardia ? [
     { section:'Mi turno', items:[
