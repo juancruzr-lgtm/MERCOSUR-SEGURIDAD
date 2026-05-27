@@ -25,11 +25,9 @@ interface Registro {
   id: string
   turno_id: string
   guardia_id: string
-  fecha: string
   hora_entrada_real: string
   hora_salida_real?: string
   horas_trabajadas?: number
-  estado: string
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
@@ -221,9 +219,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
           .select('id, nombre, direccion, latitud, longitud, radio_metros'),
         supabase
           .from('registros_asistencia')
-          .select('*')
+          .select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, horas_trabajadas')
           .eq('guardia_id', user.id)
-          .eq('fecha', hoy),
+          .in('turno_id', (await supabase.from('turnos').select('id').eq('guardia_id', user.id).eq('fecha', hoy)).data?.map((t: any) => t.id) || []),
       ])
 
       if (t) setTurnos(t)
@@ -248,11 +246,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
     const { data, error } = await supabase
       .from('registros_asistencia')
       .insert({
-        guardia_id:       user.id,
-        turno_id:         turno.id,
-        fecha:            hoy,
+        guardia_id:        user.id,
+        turno_id:          turno.id,
         hora_entrada_real: hora,
-        estado:           'presente',
       })
       .select()
       .single()
@@ -261,7 +257,6 @@ export default function GuardiaMobile({ user }: { user: any }) {
       setMensaje({ texto: 'Error al registrar entrada. Intentá de nuevo.', tipo: 'error' })
     } else {
       setRegistros(prev => [...prev, data])
-      // Marcar turno como cubierto
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
       setMensaje({ texto: `✓ Entrada registrada a las ${hora}`, tipo: 'ok' })
@@ -284,7 +279,6 @@ export default function GuardiaMobile({ user }: { user: any }) {
       .update({
         hora_salida_real: hora,
         horas_trabajadas: horas,
-        estado: 'completado',
       })
       .eq('id', registro.id)
 
@@ -293,7 +287,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
     } else {
       setRegistros(prev =>
         prev.map(r => r.id === registro.id
-          ? { ...r, hora_salida_real: hora, horas_trabajadas: horas, estado: 'completado' }
+          ? { ...r, hora_salida_real: hora, horas_trabajadas: horas }
           : r
         )
       )
@@ -410,9 +404,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
 
               {/* Badge estado */}
               <div style={{ marginBottom: 14 }}>
-                <span style={S.badge(reg?.estado || turno.estado)}>
-                  {reg?.estado === 'completado' ? '✓ Turno completado'
-                    : reg?.estado === 'presente' ? '● En turno'
+                <span style={S.badge(reg?.hora_salida_real ? 'completado' : reg ? 'presente' : turno.estado)}>
+                  {reg?.hora_salida_real ? '✓ Turno completado'
+                    : reg ? '● En turno'
                     : turno.estado === 'cubierto' ? '✓ Cubierto'
                     : '○ Pendiente'}
                 </span>
@@ -460,4 +454,3 @@ export default function GuardiaMobile({ user }: { user: any }) {
     </div>
   )
 }
-
