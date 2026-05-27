@@ -39,10 +39,6 @@ function calcHorasTrabajadas(entrada: string, salida: string): number {
   return Math.round((minutos / 60) * 100) / 100
 }
 
-function horaActual(): string {
-  return new Date().toTimeString().slice(0, 5)
-}
-
 function fechaHoy(): string {
   return new Date().toLocaleDateString('sv-SE')
 }
