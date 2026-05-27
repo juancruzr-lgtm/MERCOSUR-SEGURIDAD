@@ -85,12 +85,26 @@ export interface Novedad {
 }
 
 // Helpers de cálculo
-export function calcHorasTrabajadas(entrada: string, salida: string): number {
-  const [eh, em] = entrada.split(':').map(Number)
-  const [sh, sm] = salida.split(':').map(Number)
-  let mins = (sh * 60 + sm) - (eh * 60 + em)
-  if (mins < 0) mins += 24 * 60
-  return Math.round(mins / 60 * 100) / 100
+export function calcHorasTrabajadas(
+  horaEntrada: string,
+  horaSalida: string
+): number {
+  if (!horaEntrada || !horaSalida) return 0
+
+  const [hEntrada, mEntrada] = horaEntrada.split(':').map(Number)
+  const [hSalida, mSalida] = horaSalida.split(':').map(Number)
+
+  const entradaMinutos = hEntrada * 60 + mEntrada
+  let salidaMinutos = hSalida * 60 + mSalida
+
+  // Si la salida es menor que la entrada, cruzó medianoche
+  if (salidaMinutos < entradaMinutos) {
+    salidaMinutos += 24 * 60
+  }
+
+  const diferenciaMinutos = salidaMinutos - entradaMinutos
+
+  return Number((diferenciaMinutos / 60).toFixed(2))
 }
 
 export function calcAlertaEntrada(asignada: string, real: string): 'tarde' | 'anticipada' | null {
@@ -102,15 +116,29 @@ export function calcAlertaEntrada(asignada: string, real: string): 'tarde' | 'an
   return null
 }
 
-export function calcAlertaSalida(asignada: string, real: string): 'anticipada' | 'posterior' | null {
-  const [ah, am] = asignada.split(':').map(Number)
-  const [rh, rm] = real.split(':').map(Number)
-  const diff = (rh * 60 + rm) - (ah * 60 + am)
-  if (diff < -5) return 'anticipada'
-  if (diff > 15) return 'posterior'
+export function calcAlertaSalida(
+  horaFinProgramada: string,
+  horaSalidaReal: string
+): 'anticipada' | 'posterior' | null {
+  if (!horaFinProgramada || !horaSalidaReal) return null
+
+  const [hProg, mProg] = horaFinProgramada.split(':').map(Number)
+  const [hReal, mReal] = horaSalidaReal.split(':').map(Number)
+
+  let progMin = hProg * 60 + mProg
+  let realMin = hReal * 60 + mReal
+
+  // Manejo simple para turnos nocturnos
+  if (realMin < 720 && progMin < 720) {
+    realMin += 24 * 60
+    progMin += 24 * 60
+  }
+
+  if (realMin < progMin) return 'anticipada'
+  if (realMin > progMin + 15) return 'posterior'
+
   return null
 }
-
 export function formatHoras(h: number): string {
   const hrs = Math.floor(h)
   const mins = Math.round((h - hrs) * 60)
