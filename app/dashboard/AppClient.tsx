@@ -1316,7 +1316,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
         const fechaStr = `${anio}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`
         const key = `${srv.objetivo_id}|${guardiaId}|${fechaStr}|${srv.turno_base.hora_inicio}|${srv.turno_base.hora_fin}`
         if (existentes.has(key)) continue
-        nuevos.push({ objetivo_id:srv.objetivo_id, guardia_id:guardiaId, guardia_original_id:guardiaId, guardia_real_id:null, fecha:fechaStr, hora_inicio:srv.turno_base.hora_inicio, hora_fin:srv.turno_base.hora_fin, estado:'programado', tipo_evento:'normal', estado_revision:'aprobado', servicio_base_id:null })
+        nuevos.push({ objetivo_id:srv.objetivo_id, guardia_id:guardiaId, guardia_original_id:guardiaId, guardia_real_id:null, fecha:fechaStr, hora_inicio:srv.turno_base.hora_inicio, hora_fin:srv.turno_base.hora_fin, estado:'programado', tipo_evento:'normal', estado_revision:'aprobado', servicio_base_id:srv.id })
       }
     }
     if (nuevos.length === 0) { setResultadoGeneracion('No hay turnos nuevos para generar. Todos ya existen o no tienen guardia asignado.'); setGenerando(false); return }
