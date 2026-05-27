@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcDistancia } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
-
+import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 const S: Record<string, React.CSSProperties> = {
   app: { display:'flex', minHeight:'100vh', background:'#0a0e1a' },
   sidebar: { width:240, background:'#111827', borderRight:'1px solid #1e2d42', display:'flex', flexDirection:'column', position:'fixed', top:0, left:0, height:'100vh', zIndex:100 },
@@ -2766,7 +2766,9 @@ export default function AppPage() {
 
   if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>Cargando...</div>
   if (!user) return <Login onLogin={u => { setUser(u); cargarDatos() }} />
-  if (user.rol === 'guardia') return (
+  if (user.rol === 'guif (user.rol === 'guardia') {
+  return <GuardiaMobile user={user} />
+}ardia') return (
     <LayoutGuardia user={user} turnos={turnos} registros={registros} novedades={novedades} setRegistros={setRegistros} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />
   )
   if (user.rol === 'supervisor') return <SupervisorMobile user={user} />
