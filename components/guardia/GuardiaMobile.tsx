@@ -213,10 +213,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
           .from('objetivos')
           .select('id, nombre, direccion, latitud, longitud, radio_metros'),
         supabase
-          .from('registros_asistencia')
-          .select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, horas_trabajadas')
-          .eq('guardia_id', user.id)
-          .in('turno_id', (await supabase.from('turnos').select('id').eq('guardia_id', user.id).eq('fecha', hoy)).data?.map((t: any) => t.id) || []),
+          supabase
+  .from('registros_asistencia')
+  .select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, horas_trabajadas')
+  .eq('guardia_id', user.id)
       ])
 
       if (t) setTurnos(t)
