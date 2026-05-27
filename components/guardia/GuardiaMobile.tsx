@@ -202,22 +202,25 @@ export default function GuardiaMobile({ user }: { user: any }) {
     const cargar = async () => {
       setLoading(true)
 
-      const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
-        supabase
-          .from('turnos')
-          .select('*')
-          .eq('guardia_id', user.id)
-          .eq('fecha', hoy)
-          .order('hora_inicio'),
-        supabase
-          .from('objetivos')
-          .select('id, nombre, direccion, latitud, longitud, radio_metros'),
-        supabase
-          supabase
-  .from('registros_asistencia')
-  .select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, horas_trabajadas')
-  .eq('guardia_id', user.id)
-      ])
+const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
+
+  supabase
+    .from('turnos')
+    .select('*')
+    .eq('guardia_id', user.id)
+    .eq('fecha', hoy)
+    .order('hora_inicio'),
+
+  supabase
+    .from('objetivos')
+    .select('id, nombre, direccion, latitud, longitud, radio_metros'),
+
+  supabase
+    .from('registros_asistencia')
+    .select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, horas_trabajadas')
+    .eq('guardia_id', user.id),
+
+])
 
       if (t) setTurnos(t)
       if (o) setObjetivos(o)
