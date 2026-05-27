@@ -251,9 +251,16 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       .select()
       .single()
 
-    if (error || !data) {
-      setMensaje({ texto: 'Error al registrar entrada. Intentá de nuevo.', tipo: 'error' })
-    } else {
+   if (error || !data) {
+
+  console.error(error)
+
+  setMensaje({
+    texto: error?.message || 'Error al registrar entrada.',
+    tipo: 'error'
+  })
+
+} else {
       setRegistros(prev => [...prev, data])
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
