@@ -44,9 +44,8 @@ function horaActual(): string {
 }
 
 function fechaHoy(): string {
-  return new Date().toISOString().split('T')[0]
+  return new Date().toLocaleDateString('sv-SE')
 }
-
 // ── ESTILOS ───────────────────────────────────────────────────
 const S: Record<string, React.CSSProperties> = {
   container: {
