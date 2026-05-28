@@ -240,14 +240,15 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     setMensaje(null)
 
     const hora = horaActual()
+    const payload = {
+      guardia_id: user.id,
+      turno_id: turno.id,
+      hora_entrada_real: hora,
+    }
 
     const { data, error } = await supabase
       .from('registros_asistencia')
-      .insert({
-        guardia_id:        user.id,
-        turno_id:          turno.id,
-        hora_entrada_real: hora,
-      })
+      .insert(payload)
       .select()
       .single()
 
