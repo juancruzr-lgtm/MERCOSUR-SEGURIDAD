@@ -239,37 +239,48 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     setFichando(turno.id)
     setMensaje(null)
 
-    const hora = horaActual()
-    const payload = {
-      guardia_id: user.id,
-      turno_id: turno.id,
-      hora_entrada_real: hora,
-    }
+    try {
+      const hora = horaActual()
+      const payload = {
+        guardia_id: user.id,
+        turno_id: turno.id,
+        hora_entrada_real: hora,
+      }
 
-    const { data, error } = await supabase
-      .from('registros_asistencia')
-      .insert(payload)
-      .select()
-      .single()
+      const { data, error } = await supabase
+        .from('registros_asistencia')
+        .insert(payload)
+        .select()
+        .single()
 
-   if (error || !data) {
+      if (error || !data) {
+        throw error || new Error('No se recibió el registro creado.')
+      }
 
-  console.error(error)
-
-  setMensaje({
-    texto: error?.message || 'Error al registrar entrada.',
-    tipo: 'error'
-  })
-
-} else {
       setRegistros(prev => [...prev, data])
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
       setMensaje({ texto: `✓ Entrada registrada a las ${hora}`, tipo: 'ok' })
-    }
+      setTimeout(() => setMensaje(null), 4000)
+    } catch (error) {
+      console.error(error)
 
-    setFichando(null)
-    setTimeout(() => setMensaje(null), 4000)
+      const mensajeError =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'object' && error && 'message' in error
+            ? String((error as { message: unknown }).message)
+            : String(error)
+
+      setMensaje({
+        texto: mensajeError,
+        tipo: 'error'
+      })
+
+      setTimeout(() => setMensaje(null), 4000)
+    } finally {
+      setFichando(null)
+    }
   }
 
   // Marcar salida
