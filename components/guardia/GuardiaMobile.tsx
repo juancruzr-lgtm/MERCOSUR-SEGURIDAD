@@ -234,6 +234,15 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
   const registroDelTurno = (turnoId: string) =>
     registros.find(r => r.turno_id === turnoId)
 
+  function horaActual(): string {
+    return new Date().toLocaleTimeString('es-AR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+  }
+
   // Dar presente
   const darPresente = async (turno: Turno) => {
     setFichando(turno.id)
