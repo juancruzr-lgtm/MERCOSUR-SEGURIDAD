@@ -28,6 +28,18 @@ interface Registro {
   hora_entrada_real: string
   hora_salida_real?: string
   horas_trabajadas?: number
+  latitud_ingreso?: number
+  longitud_ingreso?: number
+  precision_ingreso?: number
+  latitud_egreso?: number
+  longitud_egreso?: number
+  precision_egreso?: number
+}
+
+interface GpsData {
+  latitude: number
+  longitude: number
+  accuracy: number
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
@@ -41,6 +53,39 @@ function calcHorasTrabajadas(entrada: string, salida: string): number {
 
 function fechaHoy(): string {
   return new Date().toLocaleDateString('sv-SE')
+}
+
+function obtenerGps(): Promise<GpsData | null> {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return Promise.resolve(null)
+
+  return new Promise(resolve => {
+    navigator.geolocation.getCurrentPosition(
+      position => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        })
+      },
+      () => resolve(null),
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    )
+  })
+}
+
+function esErrorColumnaGps(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+
+  const message = 'message' in error ? String((error as { message: unknown }).message) : ''
+  const details = 'details' in error ? String((error as { details: unknown }).details) : ''
+  const hint = 'hint' in error ? String((error as { hint: unknown }).hint) : ''
+
+  return /latitud_ingreso|longitud_ingreso|precision_ingreso|latitud_egreso|longitud_egreso|precision_egreso/i
+    .test(`${message} ${details} ${hint}`)
 }
 // ── ESTILOS ───────────────────────────────────────────────────
 const S: Record<string, React.CSSProperties> = {
@@ -250,17 +295,40 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
     try {
       const hora = horaActual()
+      const gps = await obtenerGps()
       const payload = {
         guardia_id: user.id,
         turno_id: turno.id,
         hora_entrada_real: hora,
       }
+      const payloadConGps = gps
+        ? {
+          ...payload,
+          latitud_ingreso: gps.latitude,
+          longitud_ingreso: gps.longitude,
+          precision_ingreso: gps.accuracy,
+        }
+        : payload
 
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('registros_asistencia')
-        .insert(payload)
+        .insert(payloadConGps)
         .select()
         .single()
+
+      let gpsDisponible = Boolean(gps)
+
+      if (error && gps && esErrorColumnaGps(error)) {
+        const retry = await supabase
+          .from('registros_asistencia')
+          .insert(payload)
+          .select()
+          .single()
+
+        data = retry.data
+        error = retry.error
+        gpsDisponible = false
+      }
 
       if (error || !data) {
         throw error || new Error('No se recibió el registro creado.')
@@ -269,7 +337,10 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       setRegistros(prev => [...prev, data])
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
-      setMensaje({ texto: `✓ Entrada registrada a las ${hora}`, tipo: 'ok' })
+      setMensaje({
+        texto: gpsDisponible ? `✓ Entrada registrada a las ${hora}` : `GPS no disponible. Entrada registrada a las ${hora}`,
+        tipo: gpsDisponible ? 'ok' : 'warn',
+      })
       setTimeout(() => setMensaje(null), 4000)
     } catch (error) {
       console.error(error)
@@ -299,14 +370,36 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
     const hora = horaActual()
     const horas = calcHorasTrabajadas(registro.hora_entrada_real, hora)
+    const gps = await obtenerGps()
+    const payload = {
+      hora_salida_real: hora,
+      horas_trabajadas: horas,
+    }
+    const payloadConGps = gps
+      ? {
+        ...payload,
+        latitud_egreso: gps.latitude,
+        longitud_egreso: gps.longitude,
+        precision_egreso: gps.accuracy,
+      }
+      : payload
 
-    const { error } = await supabase
+    let { error } = await supabase
       .from('registros_asistencia')
-      .update({
-        hora_salida_real: hora,
-        horas_trabajadas: horas,
-      })
+      .update(payloadConGps)
       .eq('id', registro.id)
+
+    let gpsDisponible = Boolean(gps)
+
+    if (error && gps && esErrorColumnaGps(error)) {
+      const retry = await supabase
+        .from('registros_asistencia')
+        .update(payload)
+        .eq('id', registro.id)
+
+      error = retry.error
+      gpsDisponible = false
+    }
 
     if (error) {
       setMensaje({ texto: 'Error al registrar salida. Intentá de nuevo.', tipo: 'error' })
@@ -317,7 +410,10 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           : r
         )
       )
-      setMensaje({ texto: `✓ Salida registrada a las ${hora} — ${horas}h trabajadas`, tipo: 'ok' })
+      setMensaje({
+        texto: gpsDisponible ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas` : `GPS no disponible. Salida registrada a las ${hora} — ${horas}h trabajadas`,
+        tipo: gpsDisponible ? 'ok' : 'warn',
+      })
     }
 
     setFichando(null)
