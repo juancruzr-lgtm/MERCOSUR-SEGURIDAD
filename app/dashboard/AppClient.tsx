@@ -64,6 +64,33 @@ function formatFecha(fecha?: string | null): string {
   return year && month && day ? `${day}/${month}/${year}` : '—'
 }
 
+function formatHoraTurno(hora?: string | null): string {
+  if (!hora) return '—'
+
+  return hora.slice(0, 5)
+}
+
+function minutosTurno(hora?: string | null): number | null {
+  if (!hora) return null
+
+  const [horas, minutos] = hora.slice(0, 5).split(':').map(Number)
+  if (Number.isNaN(horas) || Number.isNaN(minutos)) return null
+
+  return horas * 60 + minutos
+}
+
+function formatHorarioAsignado(turno?: Turno | null): string {
+  if (!turno) return '—'
+
+  const inicio = formatHoraTurno(turno.hora_inicio)
+  const fin = formatHoraTurno(turno.hora_fin)
+  const minutosInicio = minutosTurno(turno.hora_inicio)
+  const minutosFin = minutosTurno(turno.hora_fin)
+  const cruzaMedianoche = minutosInicio !== null && minutosFin !== null && minutosFin < minutosInicio
+
+  return `${inicio} – ${fin}${cruzaMedianoche ? ' (+1 día)' : ''}`
+}
+
 function fechaRegistroAsistencia(registro: RegistroAsistencia | any, turno?: Turno | any): string {
   return turno?.fecha || registro.created_at?.slice(0, 10) || ''
 }
@@ -1121,7 +1148,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: an
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatFecha(fechaRegistroAsistencia(r, t))}</td>
                   <td style={S.td}><strong>{g?.apellido}, {g?.nombre}</strong></td>
                   <td style={{ ...S.td, fontSize:12 }}>{o?.nombre || '—'}</td>
-                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{t?.hora_inicio} – {t?.hora_fin}</td>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatHorarioAsignado(t)}</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_entrada_real}</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_salida_real || '—'}</td>
                   <td style={S.td}>{r.horas_trabajadas ? formatHoras(r.horas_trabajadas) : '—'}</td>
@@ -1147,7 +1174,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: an
               {turnos.map((t: Turno) => {
                 const g = guardias.find((x: Usuario) => x.id === t.guardia_id)
                 const o = objetivos.find((x: Objetivo) => x.id === t.objetivo_id)
-                return <option key={t.id} value={t.id}>{t.fecha} | {o?.nombre} | {t.hora_inicio}-{t.hora_fin} | {g ? g.apellido : 'Sin guardia'}</option>
+                return <option key={t.id} value={t.id}>{formatFecha(t.fecha)} | {o?.nombre} | {formatHorarioAsignado(t)} | {g ? g.apellido : 'Sin guardia'}</option>
               })}
             </select>
           </div>
