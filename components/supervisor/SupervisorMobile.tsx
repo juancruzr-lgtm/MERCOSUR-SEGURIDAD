@@ -56,15 +56,11 @@ function horasCortas(horas?: number | null): string {
   return `${Number(horas).toLocaleString('es-AR', { maximumFractionDigits: 2 })} h`
 }
 
-function fechaRegistro(fecha?: string | null): string {
-  if (!fecha) return ''
+function fechaDDMMYYYY(fecha?: string | null): string {
+  if (!fecha) return '—'
 
-  return new Date(fecha).toLocaleString('es-AR', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  const [year, month, day] = fecha.slice(0, 10).split('-')
+  return year && month && day ? `${day}/${month}/${year}` : '—'
 }
 
 export default function SupervisorMobile({ user }: any) {
@@ -252,6 +248,7 @@ export default function SupervisorMobile({ user }: any) {
   ]
 
   const renderTurno = (turno: Turno) => {
+    const objetivo = getObjetivo(turno.objetivo_id)
     const guardia = getGuardia(turno.guardia_id)
     const registrosTurno = getRegistrosTurno(turno.id)
     const registro = getRegistro(turno.id)
@@ -286,6 +283,10 @@ export default function SupervisorMobile({ user }: any) {
         </select>
 
         <div style={registroBox}>
+          <div>
+            <div style={label}>Fecha</div>
+            <div style={registroValue}>{fechaDDMMYYYY(turno.fecha)}</div>
+          </div>
           <div>
             <div style={label}>Entrada real</div>
             <div style={registroValue}>{horaCorta(registro?.hora_entrada_real)}</div>
@@ -338,8 +339,9 @@ export default function SupervisorMobile({ user }: any) {
                 <div key={r.id} style={registroItem}>
                   <div style={registroItemTop}>
                     <strong>Registro {registrosTurno.length - index}</strong>
-                    {r.created_at && <span style={muted}>{fechaRegistro(r.created_at)}</span>}
+                    <span style={muted}>{fechaDDMMYYYY(turno.fecha)}</span>
                   </div>
+                  <div style={muted}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
                   <div style={muted}>
                     {registroGuardia ? `${registroGuardia.apellido}, ${registroGuardia.nombre}` : 'Guardia no encontrado'}
                   </div>

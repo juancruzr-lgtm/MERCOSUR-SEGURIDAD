@@ -57,6 +57,25 @@ function StatCard({ label, value, sub, color, icon }: any) {
   )
 }
 
+function formatFecha(fecha?: string | null): string {
+  if (!fecha) return '—'
+
+  const [year, month, day] = fecha.slice(0, 10).split('-')
+  return year && month && day ? `${day}/${month}/${year}` : '—'
+}
+
+function fechaRegistroAsistencia(registro: RegistroAsistencia | any, turno?: Turno | any): string {
+  return turno?.fecha || registro.created_at?.slice(0, 10) || ''
+}
+
+function ordenRegistroAsistencia(registro: RegistroAsistencia | any, turno?: Turno | any): number {
+  const fecha = fechaRegistroAsistencia(registro, turno)
+  const hora = registro.hora_entrada_real || '00:00:00'
+  const timestamp = fecha ? new Date(`${fecha}T${hora}`).getTime() : new Date(registro.created_at || 0).getTime()
+
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
 function NavItem({ id, icon, label, active, badge, onClick }: any) {
   return (
     <div onClick={() => onClick(id)} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 20px', cursor:'pointer', color:active?'#f59e0b':'#64748b', fontSize:14, transition:'all 0.15s', background:active?'rgba(245,158,11,0.08)':'transparent', borderLeft:`3px solid ${active?'#f59e0b':'transparent'}` }}>
@@ -1060,6 +1079,12 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: an
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
   const [loading, setLoading] = useState(false)
+  const registrosOrdenados = [...registros].sort((a: RegistroAsistencia, b: RegistroAsistencia) => {
+    const turnoA = turnos.find((t: Turno) => t.id === a.turno_id)
+    const turnoB = turnos.find((t: Turno) => t.id === b.turno_id)
+
+    return ordenRegistroAsistencia(b, turnoB) - ordenRegistroAsistencia(a, turnoA)
+  })
 
   const registrar = async () => {
     const turno = turnos.find((t: Turno) => t.id === form.turno_id)
@@ -1085,16 +1110,17 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: an
       </div>
       <div style={S.card}>
         <table style={S.table}>
-          <thead><tr><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>Alertas</th></tr></thead>
+          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>Alertas</th></tr></thead>
           <tbody>
-            {registros.map((r: RegistroAsistencia) => {
+            {registrosOrdenados.map((r: RegistroAsistencia) => {
               const g = guardias.find((x: Usuario) => x.id === r.guardia_id)
               const t = turnos.find((x: Turno) => x.id === r.turno_id)
               const o = objetivos.find((x: Objetivo) => x.id === t?.objetivo_id)
               return (
                 <tr key={r.id}>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatFecha(fechaRegistroAsistencia(r, t))}</td>
                   <td style={S.td}><strong>{g?.apellido}, {g?.nombre}</strong></td>
-                  <td style={{ ...S.td, fontSize:12 }}>{o?.nombre}</td>
+                  <td style={{ ...S.td, fontSize:12 }}>{o?.nombre || '—'}</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{t?.hora_inicio} – {t?.hora_fin}</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_entrada_real}</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_salida_real || '—'}</td>
@@ -1547,6 +1573,12 @@ function AsistenciaGuardia({ user, misTurnos, misRegistros, registros, setRegist
   const hoy = new Date().toISOString().split('T')[0]
   const turnosHoy = misTurnos.filter((t: any) => t.fecha === hoy)
   const registroHoy = (turnoId: string) => misRegistros.find((r: any) => r.turno_id === turnoId)
+  const misRegistrosOrdenados = [...misRegistros].sort((a: any, b: any) => {
+    const turnoA = turnos.find((t: any) => t.id === a.turno_id)
+    const turnoB = turnos.find((t: any) => t.id === b.turno_id)
+
+    return ordenRegistroAsistencia(b, turnoB) - ordenRegistroAsistencia(a, turnoA)
+  })
   const darPresente = async () => {
     if (!turnoSeleccionado || !horaEntrada) return
     setLoading(true)
@@ -1642,14 +1674,14 @@ function AsistenciaGuardia({ user, misTurnos, misRegistros, registros, setRegist
       {misRegistros.length > 0 && (
         <div>
           <div style={{ fontSize:12, color:'#64748b', textTransform:'uppercase', letterSpacing:1, fontWeight:600, marginBottom:12 }}>HISTORIAL RECIENTE</div>
-          {misRegistros.slice(0, 5).map((r: any) => {
+          {misRegistrosOrdenados.slice(0, 5).map((r: any) => {
             const t = turnos.find((x: any) => x.id === r.turno_id)
             const obj = objetivos.find((o: any) => o.id === t?.objetivo_id)
             return (
               <div key={r.id} style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:14, marginBottom:8, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
                 <div>
                   <div style={{ fontSize:13, fontWeight:600, color:'#e2e8f0' }}>{obj?.nombre || '—'}</div>
-                  <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{t?.fecha} · {r.hora_entrada_real} – {r.hora_salida_real || '…'}</div>
+                  <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{formatFecha(fechaRegistroAsistencia(r, t))} · Entrada {r.hora_entrada_real} · Salida {r.hora_salida_real || '…'}</div>
                 </div>
                 <div style={{ textAlign:'right' }}>
                   {r.horas_trabajadas > 0 && <div style={{ fontFamily:'Syne,sans-serif', fontSize:14, fontWeight:700, color:'#f59e0b' }}>{formatHoras(r.horas_trabajadas)}</div>}
@@ -1873,7 +1905,9 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
     return 'tarde'
   }
 
-  const pendientesAlertas = alertas.filter(a => a.estado_revision === 'pendiente_supervisor')
+  const pendientesAlertas = alertas
+    .filter(a => a.estado_revision === 'pendiente_supervisor')
+    .sort((a, b) => ordenRegistroAsistencia(b, b.turno) - ordenRegistroAsistencia(a, a.turno))
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     padding:'8px 20px', borderRadius:8, cursor:'pointer', fontSize:13, border:'none',
@@ -1966,7 +2000,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
                     <span style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, color:cfg.color }}>{cfg.label}</span>
                   </div>
                   <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>{obj}</div>
-                  <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>{r.turno?.fecha} · {r.turno?.hora_inicio} → {r.turno?.hora_fin}</div>
+                  <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>{formatFecha(fechaRegistroAsistencia(r, r.turno))} · {r.turno?.hora_inicio} → {r.turno?.hora_fin}</div>
                 </div>
                 <Badge type="pendiente">Pendiente</Badge>
               </div>
@@ -2019,7 +2053,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
               <>
                 <div style={{ fontSize:13, color:'#94a3b8' }}>Alerta de</div>
                 <div style={{ fontSize:15, fontWeight:600, color:'#e2e8f0', marginTop:2 }}>{getNombre(modalItem.guardia_id)}</div>
-                <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>{modalItem.turno?.fecha} · Entrada: {modalItem.hora_entrada_real} · Salida: {modalItem.hora_salida_real || '—'}</div>
+                <div style={{ fontSize:13, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600, marginTop:4 }}>{formatFecha(fechaRegistroAsistencia(modalItem, modalItem.turno))} · Entrada: {modalItem.hora_entrada_real} · Salida: {modalItem.hora_salida_real || '—'}</div>
               </>
             )}
           </div>

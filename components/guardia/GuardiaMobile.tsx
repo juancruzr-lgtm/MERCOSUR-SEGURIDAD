@@ -55,6 +55,13 @@ function fechaHoy(): string {
   return new Date().toLocaleDateString('sv-SE')
 }
 
+function fechaDDMMYYYY(fecha?: string | null): string {
+  if (!fecha) return '—'
+
+  const [year, month, day] = fecha.slice(0, 10).split('-')
+  return year && month && day ? `${day}/${month}/${year}` : '—'
+}
+
 function obtenerGps(): Promise<GpsData | null> {
   if (typeof navigator === 'undefined' || !navigator.geolocation) return Promise.resolve(null)
 
@@ -487,6 +494,11 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
               <div style={S.objetivo}>{obj?.nombre || '—'}</div>
               {obj?.direccion && (
                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>{obj.direccion}</div>
+              )}
+              {reg && (
+                <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+                  Fecha del turno: <strong style={{ color: '#e2e8f0' }}>{fechaDDMMYYYY(turno.fecha)}</strong>
+                </div>
               )}
 
               {/* Horario */}
