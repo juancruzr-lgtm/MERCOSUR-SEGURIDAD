@@ -165,17 +165,111 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 }
 
 function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
-  const hoy = new Date().toISOString().split('T')[0]
+  const hoy = new Date().toLocaleDateString('sv-SE')
+  const mesActual = hoy.slice(0, 7)
+  const usuarios = guardias as Usuario[]
+  const objetivosActivos = objetivos.filter((o: Objetivo) => o.estado === 'activo')
+  const guardiasActivos = usuarios.filter((g: Usuario) => g.rol === 'guardia' && g.estado === 'activo')
   const turnosHoy = turnos.filter((t: Turno) => t.fecha === hoy)
-  const cubiertos = turnosHoy.filter((t: Turno) => t.estado === 'cubierto').length
-  const descubiertos = turnosHoy.filter((t: Turno) => t.estado === 'descubierto').length
-  const alertasTarde = registros.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length
+  const turnoPorId = new Map<string, Turno>(turnos.map((t: Turno) => [t.id, t]))
+  const registrosHoy = registros.filter((r: RegistroAsistencia) => {
+    const turno = turnoPorId.get(r.turno_id)
+    return turno?.fecha === hoy || r.created_at?.slice(0, 10) === hoy
+  })
+  const registrosMes = registros.filter((r: RegistroAsistencia) => {
+    const turno = turnoPorId.get(r.turno_id)
+    return turno?.fecha?.slice(0, 7) === mesActual || r.created_at?.slice(0, 7) === mesActual
+  })
+  const tieneEntrada = (turno: Turno) =>
+    registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_entrada_real)
+  const tieneSalida = (turno: Turno) =>
+    registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
+  const registroActivo = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real)
+  const guardiasEnTurno = new Set(registroActivo.map((r: RegistroAsistencia) => r.guardia_id)).size
+  const turnosCubiertos = turnosHoy.filter((t: Turno) => t.estado === 'cubierto').length
+  const turnosDescubiertos = turnosHoy.filter((t: Turno) => t.estado === 'descubierto' || !t.guardia_id)
+  const turnosSinFichar = turnosHoy.filter((t: Turno) => t.guardia_id && t.estado !== 'descubierto' && !tieneEntrada(t))
+  const turnosAsistenciaPendiente = turnosHoy.filter((t: Turno) => {
+    if (t.estado === 'descubierto' || !t.guardia_id) return false
+    return !tieneEntrada(t) || (tieneEntrada(t) && !tieneSalida(t))
+  })
+  const llegadasTarde = registrosHoy.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length
+  const horasHoy = registrosHoy.reduce((sum: number, r: RegistroAsistencia) => sum + (Number(r.horas_trabajadas) || 0), 0)
+  const horasMes = registrosMes.reduce((sum: number, r: RegistroAsistencia) => sum + (Number(r.horas_trabajadas) || 0), 0)
   const novedadesUrgentes = novedades.filter((n: Novedad) => n.prioridad === 'urgente' && n.estado !== 'resuelta')
+
+  const getGuardia = (id?: string) => usuarios.find((g: Usuario) => g.id === id)
+  const getObjetivo = (id: string) => objetivos.find((o: Objetivo) => o.id === id)
+  const hora = (value?: string) => value ? value.slice(0, 5) : '--:--'
+  const nombreGuardia = (id?: string) => {
+    const guardia = getGuardia(id)
+    return guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Sin guardia'
+  }
+  const nombreObjetivo = (id: string) => getObjetivo(id)?.nombre || 'Objetivo sin nombre'
+  const formatoHoras = (value: number) =>
+    `${value.toLocaleString('es-AR', { maximumFractionDigits: 2 })} h`
+
+  const metricas = [
+    { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: '#3b82f6' },
+    { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => g.rol === 'guardia').length} guardias cargados`, color: '#10b981' },
+    { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: '#f59e0b' },
+    { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: '#10b981' },
+    { label: 'Turnos descubiertos', value: turnosDescubiertos.length, sub: 'sin cobertura operativa', color: '#ef4444' },
+    { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: '#22c55e' },
+    { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'registros del día', color: '#38bdf8' },
+    { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: mesActual, color: '#8b5cf6' },
+    { label: 'Llegadas tarde', value: llegadasTarde, sub: 'alertas de entrada hoy', color: '#f97316' },
+    { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'asignados sin entrada', color: '#ef4444' },
+  ]
+
+  const alertBox: React.CSSProperties = {
+    background:'#111827',
+    border:'1px solid #1e2d42',
+    borderRadius:12,
+    padding:16,
+  }
+
+  const alertTitle: React.CSSProperties = {
+    fontFamily:'Syne,sans-serif',
+    fontSize:15,
+    fontWeight:800,
+    marginBottom:12,
+  }
+
+  const alertItem: React.CSSProperties = {
+    padding:'12px 0',
+    borderTop:'1px solid #1e2d42',
+    fontSize:13,
+    color:'#cbd5e1',
+  }
+
+  const emptyAlert: React.CSSProperties = {
+    padding:'12px 0',
+    borderTop:'1px solid #1e2d42',
+    fontSize:13,
+    color:'#64748b',
+  }
+
+  const renderTurnoAlert = (turno: Turno, detalle: string) => (
+    <div key={turno.id} style={alertItem}>
+      <strong style={{ color:'#f8fafc' }}>{nombreObjetivo(turno.objetivo_id)}</strong>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>
+        {hora(turno.hora_inicio)} a {hora(turno.hora_fin)} - {nombreGuardia(turno.guardia_id)}
+      </div>
+      <div style={{ color:'#f59e0b', marginTop:4 }}>{detalle}</div>
+    </div>
+  )
 
   return (
     <div>
-      <div style={S.title}>Panel Operativo</div>
-      <div style={S.sub2}>{new Date().toLocaleDateString('es-AR', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</div>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12, alignItems:'flex-end', justifyContent:'space-between', marginBottom:24 }}>
+        <div>
+          <div style={S.title}>Dashboard Gerencial</div>
+          <div style={S.sub2}>Actualizado al cargar pantalla - {new Date().toLocaleDateString('es-AR', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</div>
+        </div>
+        <Badge type="activo">Solo lectura</Badge>
+      </div>
+
       {novedadesUrgentes.map((n: Novedad) => {
         const g = guardias.find((x: Usuario) => x.id === n.guardia_id)
         const o = objetivos.find((x: Objetivo) => x.id === n.objetivo_id)
@@ -185,50 +279,39 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
           </div>
         )
       })}
-      <div style={S.statGrid}>
-        <StatCard label="Guardias Activos" value={guardias.filter((g: Usuario) => g.estado === 'activo').length} sub={`de ${guardias.length} en total`} color="#10b981" icon="👮" />
-        <StatCard label="Objetivos" value={objetivos.filter((o: Objetivo) => o.estado === 'activo').length} sub="activos" color="#3b82f6" icon="🏢" />
-        <StatCard label="Turnos Cubiertos" value={cubiertos} sub={`hoy ${hoy}`} color="#10b981" icon="✅" />
-        <StatCard label="Sin Cubrir" value={descubiertos} sub="requieren atención" color="#ef4444" icon="⚠️" />
-        <StatCard label="Llegadas Tarde" value={alertasTarde} sub="hoy" color="#f59e0b" icon="⏰" />
-        <StatCard label="Novedades Pendientes" value={novedades.filter((n: Novedad) => n.estado === 'pendiente').length} sub="sin revisar" color="#8b5cf6" icon="📋" />
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:12, marginBottom:24 }}>
+        {metricas.map((m) => (
+          <StatCard key={m.label} label={m.label} value={m.value} sub={m.sub} color={m.color} />
+        ))}
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
-        <div style={S.card}>
-          <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:16 }}>📍 Objetivos — Hoy</div>
-          <table style={S.table}>
-            <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Estado</th></tr></thead>
-            <tbody>
-              {objetivos.map((o: Objetivo) => {
-                const ts = turnosHoy.filter((t: Turno) => t.objetivo_id === o.id)
-                const sinCubrir = ts.filter((t: Turno) => t.estado === 'descubierto').length
-                return (
-                  <tr key={o.id}>
-                    <td style={S.td}><strong>{o.nombre}</strong><br /><span style={{ fontSize:11, color:'#64748b' }}>{o.cliente}</span></td>
-                    <td style={S.td}>{sinCubrir > 0 ? <Badge type="descubierto">⚠ {sinCubrir} sin cubrir</Badge> : ts.length > 0 ? <Badge type="cubierto">✓ Cubierto</Badge> : <span style={{ color:'#64748b', fontSize:12 }}>Sin turnos</span>}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16 }}>
+        <div style={alertBox}>
+          <div style={alertTitle}>Turnos descubiertos</div>
+          {turnosDescubiertos.length === 0 ? (
+            <div style={emptyAlert}>No hay turnos descubiertos hoy.</div>
+          ) : turnosDescubiertos.map((turno: Turno) =>
+            renderTurnoAlert(turno, turno.guardia_id ? 'Estado descubierto' : 'Sin guardia asignado')
+          )}
         </div>
-        <div style={S.card}>
-          <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:16 }}>👮 Asistencia Reciente</div>
-          <table style={S.table}>
-            <thead><tr><th style={S.th}>Guardia</th><th style={S.th}>Entrada</th><th style={S.th}>Alerta</th></tr></thead>
-            <tbody>
-              {registros.slice(-5).reverse().map((r: RegistroAsistencia) => {
-                const g = guardias.find((x: Usuario) => x.id === r.guardia_id)
-                return (
-                  <tr key={r.id}>
-                    <td style={S.td}>{g?.nombre} {g?.apellido}</td>
-                    <td style={S.td}>{r.hora_entrada_real}</td>
-                    <td style={S.td}>{r.alerta_entrada ? <Badge type={r.alerta_entrada}>{r.alerta_entrada === 'tarde' ? '⏰ Tarde' : '⬆ Anticipada'}</Badge> : <Badge type="cubierto">✓ Ok</Badge>}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+
+        <div style={alertBox}>
+          <div style={alertTitle}>Guardias sin ingreso registrado</div>
+          {turnosSinFichar.length === 0 ? (
+            <div style={emptyAlert}>Todos los turnos asignados registran ingreso.</div>
+          ) : turnosSinFichar.map((turno: Turno) =>
+            renderTurnoAlert(turno, 'Sin entrada real registrada')
+          )}
+        </div>
+
+        <div style={alertBox}>
+          <div style={alertTitle}>Turnos con asistencia pendiente</div>
+          {turnosAsistenciaPendiente.length === 0 ? (
+            <div style={emptyAlert}>No hay asistencias pendientes hoy.</div>
+          ) : turnosAsistenciaPendiente.map((turno: Turno) =>
+            renderTurnoAlert(turno, tieneEntrada(turno) ? 'Entrada registrada, salida pendiente' : 'Entrada pendiente')
+          )}
         </div>
       </div>
     </div>
