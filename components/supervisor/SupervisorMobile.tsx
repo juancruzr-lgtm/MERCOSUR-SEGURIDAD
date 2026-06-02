@@ -21,6 +21,8 @@ interface Usuario {
   nombre: string
   apellido: string
   legajo?: string
+  email?: string
+  foto_url?: string
   rol: string
   estado: string
 }
@@ -73,6 +75,10 @@ export default function SupervisorMobile({ user }: any) {
   const [error, setError] = useState('')
   const [asignando, setAsignando] = useState<string | null>(null)
   const [turnoRegistrosAbierto, setTurnoRegistrosAbierto] = useState<string | null>(null)
+  const [nuevaPassword, setNuevaPassword] = useState('')
+  const [confirmarPassword, setConfirmarPassword] = useState('')
+  const [perfilMensaje, setPerfilMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null)
+  const [guardandoPassword, setGuardandoPassword] = useState(false)
 
   const hoy = fechaHoy()
 
@@ -98,7 +104,7 @@ export default function SupervisorMobile({ user }: any) {
       supabase
         .from('usuarios')
         .select('id, nombre, apellido, legajo, rol, estado')
-        .eq('rol', 'guardia')
+        .in('rol', ['guardia', 'vigilador'])
         .order('apellido'),
     ])
 
@@ -132,6 +138,33 @@ export default function SupervisorMobile({ user }: any) {
     }
 
     setLoading(false)
+  }
+
+  const cambiarPassword = async () => {
+    setPerfilMensaje(null)
+
+    if (nuevaPassword.length < 6) {
+      setPerfilMensaje({ texto: 'La contraseña debe tener al menos 6 caracteres.', tipo: 'error' })
+      return
+    }
+
+    if (nuevaPassword !== confirmarPassword) {
+      setPerfilMensaje({ texto: 'Las contraseñas no coinciden.', tipo: 'error' })
+      return
+    }
+
+    setGuardandoPassword(true)
+    const { error } = await supabase.auth.updateUser({ password: nuevaPassword })
+
+    if (error) {
+      setPerfilMensaje({ texto: error.message, tipo: 'error' })
+    } else {
+      setNuevaPassword('')
+      setConfirmarPassword('')
+      setPerfilMensaje({ texto: 'Contraseña actualizada correctamente.', tipo: 'ok' })
+    }
+
+    setGuardandoPassword(false)
   }
 
   useEffect(() => {
@@ -245,6 +278,7 @@ export default function SupervisorMobile({ user }: any) {
     { id: 'turnos', label: 'Turnos', icon: '📅' },
     { id: 'guardias', label: 'Guardias', icon: '👮' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
+    { id: 'perfil', label: 'Perfil', icon: '👤' },
   ]
 
   const renderTurno = (turno: Turno) => {
@@ -451,6 +485,59 @@ export default function SupervisorMobile({ user }: any) {
                 })}
               </section>
             )}
+
+            {tab === 'perfil' && (
+              <section>
+                <div style={screenTitle}>Perfil</div>
+                <div style={dateText}>Datos de usuario y seguridad</div>
+
+                <div style={card}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+                    {user?.foto_url && <img src={user.foto_url} alt="" style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover' }} />}
+                    <div>
+                      <div style={objetivoName}>{user?.nombre} {user?.apellido}</div>
+                      <div style={muted}>{user?.rol} · Legajo {user?.legajo || '—'}</div>
+                      <div style={muted}>{user?.email || 'Sin email cargado'}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ ...errorBox, color: '#f59e0b', borderColor: 'rgba(245,158,11,.35)', background: 'rgba(245,158,11,.12)' }}>
+                    Por seguridad, cambie su contraseña inicial si todavía usa su DNI.
+                  </div>
+
+                  <label style={label}>Nueva contraseña</label>
+                  <input
+                    type="password"
+                    value={nuevaPassword}
+                    onChange={e => setNuevaPassword(e.target.value)}
+                    style={input}
+                  />
+
+                  <label style={label}>Confirmar contraseña</label>
+                  <input
+                    type="password"
+                    value={confirmarPassword}
+                    onChange={e => setConfirmarPassword(e.target.value)}
+                    style={input}
+                  />
+
+                  {perfilMensaje && (
+                    <div style={{ ...errorBox, color: perfilMensaje.tipo === 'ok' ? '#10b981' : '#fca5a5', borderColor: perfilMensaje.tipo === 'ok' ? 'rgba(16,185,129,.35)' : 'rgba(239,68,68,.35)', background: perfilMensaje.tipo === 'ok' ? 'rgba(16,185,129,.12)' : 'rgba(239,68,68,.12)' }}>
+                      {perfilMensaje.texto}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={cambiarPassword}
+                    disabled={guardandoPassword}
+                    style={{ ...refreshButton, opacity: guardandoPassword ? 0.65 : 1 }}
+                  >
+                    {guardandoPassword ? 'Guardando...' : 'Cambiar contraseña'}
+                  </button>
+                </div>
+              </section>
+            )}
           </>
         )}
       </main>
@@ -554,6 +641,16 @@ const label: React.CSSProperties = {
 }
 
 const select: React.CSSProperties = {
+  width: '100%',
+  background: '#111827',
+  color: '#e2e8f0',
+  border: '1px solid #374151',
+  borderRadius: 8,
+  padding: '10px 12px',
+  marginBottom: 12,
+}
+
+const input: React.CSSProperties = {
   width: '100%',
   background: '#111827',
   color: '#e2e8f0',

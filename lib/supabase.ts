@@ -8,7 +8,7 @@ export const supabase = typeof window !== 'undefined'
   : createClient('https://placeholder.supabase.co', 'placeholder-key')
 
 // Tipos principales
-export type Rol = 'admin' | 'supervisor' | 'guardia'
+export type Rol = 'admin' | 'supervisor' | 'guardia' | 'vigilador'
 export type Estado = 'activo' | 'inactivo'
 
 export interface Usuario {
@@ -16,6 +16,7 @@ export interface Usuario {
   nombre: string
   apellido: string
   dni?: string
+  email?: string
   telefono?: string
   legajo: string
   rol: Rol

@@ -79,6 +79,10 @@ function formatHorarioAsignado(turno?: Turno | null): string {
   return `${inicio} – ${fin}`
 }
 
+function esRolGuardia(rol?: string | null): boolean {
+  return rol === 'guardia' || rol === 'vigilador'
+}
+
 function fechaRegistroAsistencia(registro: RegistroAsistencia | any, turno?: Turno | any): string {
   return turno?.fecha || registro.created_at?.slice(0, 10) || ''
 }
@@ -120,11 +124,14 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   const [email, setEmail] = useState('')
   const [pass, setPass] = useState('')
   const [error, setError] = useState('')
+  const [resetMsg, setResetMsg] = useState('')
   const [loading, setLoading] = useState(false)
+  const [resetLoading, setResetLoading] = useState(false)
 
   const login = async () => {
     setLoading(true)
     setError('')
+    setResetMsg('')
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -152,6 +159,29 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 
     onLogin(perfil)
     setLoading(false)
+  }
+
+  const recuperarPassword = async () => {
+    setError('')
+    setResetMsg('')
+
+    if (!email.trim()) {
+      setError('Ingresá tu email para recuperar la contraseña')
+      return
+    }
+
+    setResetLoading(true)
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
+    })
+
+    if (error) {
+      setError(error.message)
+    } else {
+      setResetMsg('Si el email existe, se enviará un enlace de recuperación')
+    }
+
+    setResetLoading(false)
   }
 
   return (
@@ -185,12 +215,20 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
             />
           </div>
           {error && <div style={{ color:'#ef4444', fontSize:13, marginBottom:12 }}>{error}</div>}
+          {resetMsg && <div style={{ color:'#10b981', fontSize:13, marginBottom:12 }}>{resetMsg}</div>}
           <button
             style={{ ...S.btn, ...S.btnPrimary, width:'100%', justifyContent:'center' }}
             onClick={login}
             disabled={loading}
           >
             {loading ? 'Ingresando...' : 'Ingresar'}
+          </button>
+          <button
+            style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center', marginTop:10 }}
+            onClick={recuperarPassword}
+            disabled={resetLoading}
+          >
+            {resetLoading ? 'Enviando...' : 'Olvidé mi contraseña'}
           </button>
         </div>
       </div>
@@ -203,7 +241,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
   const mesActual = hoy.slice(0, 7)
   const usuarios = guardias as Usuario[]
   const objetivosActivos = objetivos.filter((o: Objetivo) => o.estado === 'activo')
-  const guardiasActivos = usuarios.filter((g: Usuario) => g.rol === 'guardia' && g.estado === 'activo')
+  const guardiasActivos = usuarios.filter((g: Usuario) => esRolGuardia(g.rol) && g.estado === 'activo')
   const turnosHoy = turnos.filter((t: Turno) => t.fecha === hoy)
   const turnoPorId = new Map<string, Turno>(turnos.map((t: Turno) => [t.id, t]))
   const registrosHoy = registros.filter((r: RegistroAsistencia) => {
@@ -245,7 +283,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
 
   const metricas = [
     { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: '#3b82f6' },
-    { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => g.rol === 'guardia').length} guardias cargados`, color: '#10b981' },
+    { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => esRolGuardia(g.rol)).length} guardias cargados`, color: '#10b981' },
     { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: '#f59e0b' },
     { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: '#10b981' },
     { label: 'Turnos descubiertos', value: turnosDescubiertos.length, sub: 'sin cobertura operativa', color: '#ef4444' },
@@ -352,58 +390,198 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
   )
 }
 
-function Guardias({ guardias, setGuardias, registros }: any) {
+function Guardias({ guardias, setGuardias }: any) {
   const [modal, setModal] = useState(false)
-  const [showCreateEmpleado, setShowCreateEmpleado] = useState(false)
-  const [form, setForm] = useState({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', estado:'activo', rol:'guardia' })
+  const formVacio = { nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
+  const [form, setForm] = useState(formVacio)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [accionLoading, setAccionLoading] = useState<string | null>(null)
+  const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error', texto: string } | null>(null)
+
+  const abrirNuevo = () => {
+    setForm(formVacio)
+    setEditId(null)
+    setMensaje(null)
+    setModal(true)
+  }
+
+  const abrirEdicion = (g: Usuario) => {
+    setForm({
+      nombre: g.nombre || '',
+      apellido: g.apellido || '',
+      dni: g.dni || '',
+      telefono: g.telefono || '',
+      legajo: g.legajo || '',
+      email: g.email || '',
+      estado: g.estado || 'activo',
+      rol: g.rol || 'guardia',
+      foto_url: g.foto_url || '',
+    })
+    setEditId(g.id)
+    setMensaje(null)
+    setModal(true)
+  }
+
+  const headersAdmin = async () => {
+    const { data } = await supabase.auth.getSession()
+    const token = data.session?.access_token
+
+    if (!token) throw new Error('Sesión de administrador requerida')
+
+    return {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    }
+  }
 
   const guardar = async () => {
+    setMensaje(null)
+
+    if (!form.nombre.trim()) { setMensaje({ tipo:'error', texto:'El nombre es obligatorio' }); return }
+    if (!form.apellido.trim()) { setMensaje({ tipo:'error', texto:'El apellido es obligatorio' }); return }
+    if (!form.legajo.trim()) { setMensaje({ tipo:'error', texto:'El legajo es obligatorio' }); return }
+
     setLoading(true)
-    if (editId) {
-      const { data } = await supabase.from('usuarios').update(form).eq('id', editId).select().single()
-      if (data) setGuardias((prev: any[]) => prev.map(g => g.id === editId ? data : g))
-    } else {
-      const { data } = await supabase.from('usuarios').insert(form).select().single()
-      if (data) setGuardias((prev: any[]) => [...prev, data])
+    const payload = {
+      nombre: form.nombre.trim(),
+      apellido: form.apellido.trim(),
+      dni: form.dni.trim() || null,
+      telefono: form.telefono.trim() || null,
+      legajo: form.legajo.trim(),
+      email: form.email.trim().toLowerCase() || null,
+      estado: form.estado,
+      rol: form.rol,
+      foto_url: form.foto_url.trim() || null,
     }
-    setModal(false)
+
+    if (editId) {
+      const { data, error } = await supabase.from('usuarios').update(payload).eq('id', editId).select().single()
+      if (error) {
+        setMensaje({ tipo:'error', texto:error.message })
+      } else if (data) {
+        setGuardias((prev: any[]) => prev.map(g => g.id === editId ? data : g))
+        setModal(false)
+      }
+    } else {
+      const { data, error } = await supabase.from('usuarios').insert(payload).select().single()
+      if (error) {
+        setMensaje({ tipo:'error', texto:error.message })
+      } else if (data) {
+        setGuardias((prev: any[]) => [...prev, data])
+        setModal(false)
+      }
+    }
     setLoading(false)
   }
 
-  const horasTotal = (gid: string) =>
-    registros
-      .filter((r: RegistroAsistencia) => r.guardia_id === gid)
-      .reduce((s: number, r: RegistroAsistencia) => s + (r.horas_trabajadas || 0), 0)
+  const activarInactivar = async (g: Usuario) => {
+    const nuevoEstado = g.estado === 'activo' ? 'inactivo' : 'activo'
+    setAccionLoading(`estado-${g.id}`)
+    setMensaje(null)
+
+    const { data, error } = await supabase
+      .from('usuarios')
+      .update({ estado: nuevoEstado })
+      .eq('id', g.id)
+      .select()
+      .single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+    } else if (data) {
+      setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? data : x))
+      setMensaje({ tipo:'ok', texto:`Empleado ${nuevoEstado === 'activo' ? 'activado' : 'inactivado'} correctamente` })
+    }
+
+    setAccionLoading(null)
+  }
+
+  const crearAuth = async (g: Usuario) => {
+    setAccionLoading(`auth-${g.id}`)
+    setMensaje(null)
+
+    try {
+      const res = await fetch('/api/create-user', {
+        method: 'POST',
+        headers: await headersAdmin(),
+        body: JSON.stringify({ usuario_id: g.id }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setMensaje({ tipo:'error', texto:data.error || 'No se pudo crear el usuario Auth' })
+      } else {
+        setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? data.user : x))
+        setMensaje({ tipo:'ok', texto:data.message || 'Usuario Auth creado correctamente' })
+      }
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
+    }
+
+    setAccionLoading(null)
+  }
+
+  const resetPassword = async (g: Usuario) => {
+    setAccionLoading(`reset-${g.id}`)
+    setMensaje(null)
+
+    try {
+      const res = await fetch('/api/reset-user-password', {
+        method: 'POST',
+        headers: await headersAdmin(),
+        body: JSON.stringify({ usuario_id: g.id }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setMensaje({ tipo:'error', texto:data.error || 'No se pudo resetear la contraseña' })
+      } else {
+        setMensaje({ tipo:'ok', texto:data.message || 'Contraseña reseteada al DNI' })
+      }
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
+    }
+
+    setAccionLoading(null)
+  }
 
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
         <div style={{ flex:1 }}>
-          <div style={S.title}>Guardias</div>
-          <div style={S.sub2}>{guardias.length} guardias registrados</div>
+          <div style={S.title}>Guardias / Empleados</div>
+          <div style={S.sub2}>{guardias.length} empleados registrados</div>
         </div>
 
         <button
           style={{ ...S.btn, ...S.btnPrimary }}
-          onClick={() => setShowCreateEmpleado(true)}
+          onClick={abrirNuevo}
         >
           + Nuevo empleado
         </button>
       </div>
 
+      {mensaje && (
+        <div style={{ ...S.card, color: mensaje.tipo === 'ok' ? '#10b981' : '#ef4444', padding:14 }}>
+          {mensaje.texto}
+        </div>
+      )}
+
       <div style={S.card}>
         <table style={S.table}>
           <thead>
             <tr>
-              <th style={S.th}>Legajo</th>
               <th style={S.th}>Nombre</th>
+              <th style={S.th}>Apellido</th>
               <th style={S.th}>DNI</th>
-              <th style={S.th}>Teléfono</th>
+              <th style={S.th}>Legajo</th>
+              <th style={S.th}>Email</th>
+              <th style={S.th}>Rol</th>
               <th style={S.th}>Estado</th>
-              <th style={S.th}>Hs. Totales</th>
-              <th style={S.th}></th>
+              <th style={S.th}>Auth</th>
+              <th style={S.th}>auth_user_id</th>
+              <th style={S.th}>Acciones</th>
             </tr>
           </thead>
 
@@ -411,43 +589,58 @@ function Guardias({ guardias, setGuardias, registros }: any) {
             {guardias.map((g: Usuario) => (
               <tr key={g.id}>
                 <td style={S.td}>
+                  <strong>{g.nombre}</strong>
+                </td>
+
+                <td style={S.td}>{g.apellido}</td>
+                <td style={S.td}>{g.dni || '—'}</td>
+                <td style={S.td}>
                   <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>
-                    {g.legajo}
+                    {g.legajo || '—'}
                   </span>
                 </td>
-
-                <td style={S.td}>
-                  <strong>{g.apellido}, {g.nombre}</strong>
-                </td>
-
-                <td style={S.td}>{g.dni}</td>
-                <td style={S.td}>{g.telefono}</td>
+                <td style={{ ...S.td, maxWidth:180, wordBreak:'break-word' }}>{g.email || '—'}</td>
+                <td style={S.td}>{g.rol}</td>
 
                 <td style={S.td}>
                   <Badge type={g.estado}>{g.estado}</Badge>
                 </td>
 
-                <td style={S.td}>{formatHoras(horasTotal(g.id))}</td>
+                <td style={S.td}>{g.auth_user_id ? 'Sí' : 'No'}</td>
+                <td style={{ ...S.td, maxWidth:180, wordBreak:'break-all', fontSize:11 }}>{g.auth_user_id || '—'}</td>
 
                 <td style={S.td}>
-                  <button
-                    style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }}
-                    onClick={() => {
-                      setForm({
-                        nombre:g.nombre,
-                        apellido:g.apellido,
-                        dni:g.dni || '',
-                        telefono:g.telefono || '',
-                        legajo:g.legajo,
-                        estado:g.estado,
-                        rol:g.rol,
-                      })
-                      setEditId(g.id)
-                      setModal(true)
-                    }}
-                  >
-                    ✏ Editar
-                  </button>
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                    <button
+                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                      onClick={() => abrirEdicion(g)}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                      onClick={() => activarInactivar(g)}
+                      disabled={accionLoading === `estado-${g.id}`}
+                    >
+                      {g.estado === 'activo' ? 'Inactivar' : 'Activar'}
+                    </button>
+                    {!g.auth_user_id && (
+                      <button
+                        style={{ ...S.btn, ...S.btnPrimary, padding:'6px 10px', fontSize:12 }}
+                        onClick={() => crearAuth(g)}
+                        disabled={accionLoading === `auth-${g.id}`}
+                      >
+                        Crear Auth
+                      </button>
+                    )}
+                    <button
+                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                      onClick={() => resetPassword(g)}
+                      disabled={!g.auth_user_id || accionLoading === `reset-${g.id}`}
+                    >
+                      Reset DNI
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -457,7 +650,7 @@ function Guardias({ guardias, setGuardias, registros }: any) {
 
       {modal && (
         <Modal
-          title={editId ? 'Editar Guardia' : 'Nuevo Guardia'}
+          title={editId ? 'Editar empleado' : 'Nuevo empleado'}
           onClose={() => setModal(false)}
           footer={
             <>
@@ -495,6 +688,11 @@ function Guardias({ guardias, setGuardias, registros }: any) {
             </div>
 
             <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Email</label>
+              <input style={S.input} type="email" value={form.email} onChange={e => setForm({...form, email:e.target.value})} />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
               <label style={S.label}>Teléfono</label>
               <input style={S.input} value={form.telefono} onChange={e => setForm({...form, telefono:e.target.value})} />
             </div>
@@ -505,24 +703,29 @@ function Guardias({ guardias, setGuardias, registros }: any) {
             </div>
 
             <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Rol</label>
+              <select style={S.select} value={form.rol} onChange={e => setForm({...form, rol:e.target.value})}>
+                <option value="guardia">Guardia</option>
+                <option value="vigilador">Vigilador</option>
+                <option value="supervisor">Supervisor</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+
+            <div style={{ marginBottom:16 }}>
               <label style={S.label}>Estado</label>
               <select style={S.select} value={form.estado} onChange={e => setForm({...form, estado:e.target.value})}>
                 <option value="activo">Activo</option>
                 <option value="inactivo">Inactivo</option>
               </select>
             </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Foto URL</label>
+              <input style={S.input} value={form.foto_url} onChange={e => setForm({...form, foto_url:e.target.value})} />
+            </div>
           </div>
         </Modal>
-      )}
-
-      {showCreateEmpleado && (
-        <CreateEmpleado
-          onClose={() => setShowCreateEmpleado(false)}
-          onSuccess={(nuevoUsuario) => {
-            setGuardias((prev: any[]) => [...prev, nuevoUsuario])
-            setShowCreateEmpleado(false)
-          }}
-        />
       )}
     </div>
   )
@@ -2695,155 +2898,6 @@ function TurnosBase() {
     </div>
   )
 }
-function CreateEmpleado({
-  onClose,
-  onSuccess,
-}: {
-  onClose: () => void
-  onSuccess: (usuario: any) => void
-}) {
-  const formVacio = {
-    nombre: '',
-    apellido: '',
-    email: '',
-    password: '',
-    rol: 'guardia',
-    dni: '',
-    legajo: '',
-  }
-
-  const [form, setForm] = useState(formVacio)
-  const [guardando, setGuardando] = useState(false)
-  const [error, setError] = useState('')
-  const [exito, setExito] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-
-  const guardar = async () => {
-    setError('')
-    setExito('')
-
-    if (!form.nombre.trim()) { setError('El nombre es obligatorio'); return }
-    if (!form.apellido.trim()) { setError('El apellido es obligatorio'); return }
-    if (!form.email.trim()) { setError('El email es obligatorio'); return }
-    if (!form.password || form.password.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return }
-
-    setGuardando(true)
-
-    try {
-      const res = await fetch('/api/create-user', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      })
-
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error || 'Error al crear el empleado')
-      } else {
-        setExito('Empleado creado correctamente')
-        setTimeout(() => onSuccess(data.user), 800)
-      }
-    } catch {
-      setError('Error de conexión')
-    }
-
-    setGuardando(false)
-  }
-
-  return (
-    <Modal
-      title="Nuevo empleado"
-      onClose={onClose}
-      footer={
-        <>
-          <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose} disabled={guardando}>
-            Cancelar
-          </button>
-          <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={guardando}>
-            {guardando ? 'Creando...' : 'Crear empleado'}
-          </button>
-        </>
-      }
-    >
-      <div style={S.grid2}>
-        <div style={{ marginBottom:16 }}>
-          <label style={S.label}>Nombre *</label>
-          <input style={S.input} value={form.nombre} onChange={e => setForm({ ...form, nombre:e.target.value })} />
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={S.label}>Apellido *</label>
-          <input style={S.input} value={form.apellido} onChange={e => setForm({ ...form, apellido:e.target.value })} />
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={S.label}>DNI</label>
-          <input style={S.input} value={form.dni} onChange={e => setForm({ ...form, dni:e.target.value })} />
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={S.label}>Legajo</label>
-          <input style={S.input} value={form.legajo} onChange={e => setForm({ ...form, legajo:e.target.value })} />
-        </div>
-      </div>
-
-      <div style={{ marginBottom:16 }}>
-        <label style={S.label}>Email *</label>
-        <input
-          style={S.input}
-          type="email"
-          value={form.email}
-          onChange={e => setForm({ ...form, email:e.target.value })}
-        />
-      </div>
-
-      <div style={{ marginBottom:16 }}>
-        <label style={S.label}>Contraseña inicial *</label>
-        <div style={{ display:'flex', gap:8 }}>
-          <input
-            style={S.input}
-            type={showPassword ? 'text' : 'password'}
-            value={form.password}
-            onChange={e => setForm({ ...form, password:e.target.value })}
-          />
-          <button
-            type="button"
-            style={{ ...S.btn, ...S.btnSecondary }}
-            onClick={() => setShowPassword(!showPassword)}
-          >
-            {showPassword ? 'Ocultar' : 'Ver'}
-          </button>
-        </div>
-      </div>
-
-      <div style={{ marginBottom:16 }}>
-        <label style={S.label}>Rol *</label>
-        <select
-          style={S.select}
-          value={form.rol}
-          onChange={e => setForm({ ...form, rol:e.target.value })}
-        >
-          <option value="guardia">Guardia</option>
-          <option value="supervisor">Supervisor</option>
-          <option value="admin">Admin</option>
-        </select>
-      </div>
-
-      {error && (
-        <div style={{ color:'#ef4444', fontSize:13, marginBottom:12 }}>
-          {error}
-        </div>
-      )}
-
-      {exito && (
-        <div style={{ color:'#10b981', fontSize:13, marginBottom:12 }}>
-          {exito}
-        </div>
-      )}
-    </Modal>
-  )
-}
 export default function AppPage() {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
@@ -2900,7 +2954,7 @@ if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', al
 
 if (!user) return <Login onLogin={u => { setUser(u); cargarDatos() }} />
 
-if (user.rol === 'guardia') {
+if (esRolGuardia(user.rol)) {
   return <GuardiaMobile user={user} />
 }
 
@@ -2908,7 +2962,7 @@ if (user.rol === 'supervisor') {
   return <SupervisorMobile user={user} />
 }
 
-const esGuardia = user.rol === 'guardia'
+const esGuardia = esRolGuardia(user.rol)
 
   const NAV = esGuardia ? [
     { section:'Mi turno', items:[

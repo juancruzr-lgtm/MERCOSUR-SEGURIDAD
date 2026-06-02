@@ -9,14 +9,37 @@ create table if not exists usuarios (
   nombre text not null,
   apellido text not null,
   dni text,
+  email text,
   telefono text,
   legajo text unique not null,
-  rol text not null check (rol in ('admin','supervisor','guardia')),
+  rol text not null check (rol in ('admin','supervisor','guardia','vigilador')),
   estado text not null default 'activo' check (estado in ('activo','inactivo')),
   foto_url text,
   auth_user_id uuid references auth.users(id),
   created_at timestamptz default now()
 );
+
+alter table usuarios add column if not exists email text;
+alter table usuarios add column if not exists foto_url text;
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.table_constraints
+    where table_schema = 'public'
+      and table_name = 'usuarios'
+      and constraint_name = 'usuarios_rol_check'
+  ) then
+    alter table usuarios drop constraint usuarios_rol_check;
+  end if;
+
+  alter table usuarios
+    add constraint usuarios_rol_check
+    check (rol in ('admin','supervisor','guardia','vigilador'));
+exception
+  when duplicate_object then null;
+end $$;
 
 -- 2. OBJETIVOS
 create table if not exists objetivos (

@@ -175,6 +175,16 @@ const S: Record<string, React.CSSProperties> = {
     color: '#64748b',
     cursor: 'not-allowed',
   },
+  input: {
+    width: '100%',
+    background: '#1a2235',
+    border: '1px solid #1e2d42',
+    borderRadius: 10,
+    padding: '12px 14px',
+    color: '#e2e8f0',
+    fontSize: 14,
+    outline: 'none',
+  },
   badge: (tipo: string): React.CSSProperties => {
     const map: Record<string, { bg: string, color: string }> = {
       presente:   { bg: 'rgba(16,185,129,.15)',  color: '#10b981' },
@@ -246,8 +256,40 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [loading, setLoading]     = useState(true)
   const [fichando, setFichando]   = useState<string | null>(null)
   const [mensaje, setMensaje]     = useState<{ texto: string, tipo: 'ok' | 'warn' | 'error' } | null>(null)
+  const [perfilAbierto, setPerfilAbierto] = useState(false)
+  const [nuevaPassword, setNuevaPassword] = useState('')
+  const [confirmarPassword, setConfirmarPassword] = useState('')
+  const [perfilMensaje, setPerfilMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null)
+  const [guardandoPassword, setGuardandoPassword] = useState(false)
 
   const hoy = fechaHoy()
+
+  const cambiarPassword = async () => {
+    setPerfilMensaje(null)
+
+    if (nuevaPassword.length < 6) {
+      setPerfilMensaje({ texto: 'La contraseña debe tener al menos 6 caracteres.', tipo: 'error' })
+      return
+    }
+
+    if (nuevaPassword !== confirmarPassword) {
+      setPerfilMensaje({ texto: 'Las contraseñas no coinciden.', tipo: 'error' })
+      return
+    }
+
+    setGuardandoPassword(true)
+    const { error } = await supabase.auth.updateUser({ password: nuevaPassword })
+
+    if (error) {
+      setPerfilMensaje({ texto: error.message, tipo: 'error' })
+    } else {
+      setNuevaPassword('')
+      setConfirmarPassword('')
+      setPerfilMensaje({ texto: 'Contraseña actualizada correctamente.', tipo: 'ok' })
+    }
+
+    setGuardandoPassword(false)
+  }
 
   // Cargar datos
   useEffect(() => {
@@ -442,6 +484,13 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{user.nombre} {user.apellido}</div>
           <div style={{ fontSize: 11, color: '#64748b' }}>Guardia · {user.legajo}</div>
+          <button
+            type="button"
+            onClick={() => setPerfilAbierto(!perfilAbierto)}
+            style={{ marginTop: 8, background: 'transparent', border: '1px solid #1e2d42', color: '#94a3b8', borderRadius: 8, padding: '5px 10px', fontSize: 12 }}
+          >
+            Perfil
+          </button>
         </div>
       </div>
 
@@ -456,6 +505,40 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
             {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
           </div>
         </div>
+
+        {perfilAbierto && (
+          <div style={S.card}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+              {user.foto_url && <img src={user.foto_url} alt="" style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover' }} />}
+              <div>
+                <div style={S.objetivo}>{user.nombre} {user.apellido}</div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>{user.rol} · Legajo {user.legajo || '—'}</div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>{user.email || 'Sin email cargado'}</div>
+              </div>
+            </div>
+
+            <div style={S.alert('warn')}>
+              Por seguridad, cambie su contraseña inicial si todavía usa su DNI.
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={S.colLabel}>Nueva contraseña</div>
+              <input type="password" style={S.input} value={nuevaPassword} onChange={e => setNuevaPassword(e.target.value)} />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <div style={S.colLabel}>Confirmar contraseña</div>
+              <input type="password" style={S.input} value={confirmarPassword} onChange={e => setConfirmarPassword(e.target.value)} />
+            </div>
+            {perfilMensaje && <div style={S.alert(perfilMensaje.tipo)}>{perfilMensaje.texto}</div>}
+            <button
+              style={{ ...S.btn, ...S.btnSalida, opacity: guardandoPassword ? 0.6 : 1 }}
+              onClick={cambiarPassword}
+              disabled={guardandoPassword}
+            >
+              {guardandoPassword ? 'Guardando...' : 'Cambiar contraseña'}
+            </button>
+          </div>
+        )}
 
         {/* Mensaje */}
         {mensaje && (
