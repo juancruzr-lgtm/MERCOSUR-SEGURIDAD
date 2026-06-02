@@ -70,25 +70,13 @@ function formatHoraTurno(hora?: string | null): string {
   return hora.slice(0, 5)
 }
 
-function minutosTurno(hora?: string | null): number | null {
-  if (!hora) return null
-
-  const [horas, minutos] = hora.slice(0, 5).split(':').map(Number)
-  if (Number.isNaN(horas) || Number.isNaN(minutos)) return null
-
-  return horas * 60 + minutos
-}
-
 function formatHorarioAsignado(turno?: Turno | null): string {
   if (!turno) return '—'
 
   const inicio = formatHoraTurno(turno.hora_inicio)
   const fin = formatHoraTurno(turno.hora_fin)
-  const minutosInicio = minutosTurno(turno.hora_inicio)
-  const minutosFin = minutosTurno(turno.hora_fin)
-  const cruzaMedianoche = minutosInicio !== null && minutosFin !== null && minutosFin < minutosInicio
 
-  return `${inicio} – ${fin}${cruzaMedianoche ? ' (+1 día)' : ''}`
+  return `${inicio} – ${fin}`
 }
 
 function fechaRegistroAsistencia(registro: RegistroAsistencia | any, turno?: Turno | any): string {
