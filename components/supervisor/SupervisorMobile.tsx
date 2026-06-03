@@ -103,7 +103,7 @@ export default function SupervisorMobile({ user }: any) {
     setLoading(true)
     setError('')
 
-    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, { data: guardiasData, error: guardiasError }] = await Promise.all([
+    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult] = await Promise.all([
       supabase
         .from('turnos')
         .select('*')
@@ -119,6 +119,20 @@ export default function SupervisorMobile({ user }: any) {
         .in('rol', ['guardia', 'vigilador'])
         .order('apellido'),
     ])
+
+    let guardiasData = guardiasResult.data
+    let guardiasError = guardiasResult.error
+
+    if (guardiasError?.message?.includes('usuarios.email') || guardiasError?.message?.includes('usuarios.telefono') || guardiasError?.message?.includes('usuarios.foto_url')) {
+      const retry = await supabase
+        .from('usuarios')
+        .select('id, nombre, apellido, legajo, rol, estado')
+        .in('rol', ['guardia', 'vigilador'])
+        .order('apellido')
+
+      guardiasData = retry.data
+      guardiasError = retry.error
+    }
 
     if (turnosError || objetivosError || guardiasError) {
       setError(turnosError?.message || objetivosError?.message || guardiasError?.message || 'Error al cargar datos.')
