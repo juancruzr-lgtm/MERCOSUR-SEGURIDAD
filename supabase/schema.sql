@@ -100,6 +100,13 @@ create table if not exists registros_asistencia (
   created_at timestamptz default now()
 );
 
+alter table registros_asistencia add column if not exists latitud_ingreso numeric;
+alter table registros_asistencia add column if not exists longitud_ingreso numeric;
+alter table registros_asistencia add column if not exists precision_ingreso numeric;
+alter table registros_asistencia add column if not exists latitud_egreso numeric;
+alter table registros_asistencia add column if not exists longitud_egreso numeric;
+alter table registros_asistencia add column if not exists precision_egreso numeric;
+
 -- 6. NOVEDADES
 create table if not exists novedades (
   id uuid primary key default gen_random_uuid(),

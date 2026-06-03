@@ -62,19 +62,47 @@ function fechaDDMMYYYY(fecha?: string | null): string {
   return year && month && day ? `${day}/${month}/${year}` : '—'
 }
 
-function obtenerGps(): Promise<GpsData | null> {
-  if (typeof navigator === 'undefined' || !navigator.geolocation) return Promise.resolve(null)
+function fechaHoraTurno(fecha: string, hora: string): Date | null {
+  const [year, month, day] = fecha.slice(0, 10).split('-').map(Number)
+  const [hours, minutes, seconds = 0] = hora.split(':').map(Number)
+
+  if (![year, month, day, hours, minutes, seconds].every(Number.isFinite)) return null
+
+  return new Date(year, month - 1, day, hours, minutes, seconds)
+}
+
+function estaEnVentanaFichaje(turno: Turno, ahora: Date): boolean {
+  const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
+  if (!inicioTurno) return false
+
+  const desde = new Date(inicioTurno.getTime() - 30 * 60 * 1000)
+  const hasta = new Date(inicioTurno.getTime() + 60 * 60 * 1000)
+
+  return ahora >= desde && ahora <= hasta
+}
+
+function obtenerGps(tipo: 'ingreso' | 'egreso'): Promise<GpsData | null> {
+  if (tipo === 'ingreso') console.log('Solicitando GPS ingreso')
+
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    if (tipo === 'ingreso') console.log('GPS ingreso error')
+    return Promise.resolve(null)
+  }
 
   return new Promise(resolve => {
     navigator.geolocation.getCurrentPosition(
       position => {
+        if (tipo === 'ingreso') console.log('GPS ingreso OK')
         resolve({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
           accuracy: position.coords.accuracy,
         })
       },
-      () => resolve(null),
+      () => {
+        if (tipo === 'ingreso') console.log('GPS ingreso error')
+        resolve(null)
+      },
       {
         enableHighAccuracy: true,
         timeout: 10000,
@@ -261,6 +289,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [confirmarPassword, setConfirmarPassword] = useState('')
   const [perfilMensaje, setPerfilMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null)
   const [guardandoPassword, setGuardandoPassword] = useState(false)
+  const [ahora, setAhora] = useState(() => new Date())
 
   const hoy = fechaHoy()
 
@@ -324,6 +353,11 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     cargar()
   }, [user.id, hoy])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setAhora(new Date()), 30000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   // Registro de este turno
   const registroDelTurno = (turnoId: string) =>
     registros.find(r => r.turno_id === turnoId)
@@ -339,12 +373,18 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
   // Dar presente
   const darPresente = async (turno: Turno) => {
+    if (!estaEnVentanaFichaje(turno, new Date())) {
+      setMensaje({ texto: 'Fuera de horario de fichaje. Contacte al supervisor.', tipo: 'error' })
+      setTimeout(() => setMensaje(null), 4000)
+      return
+    }
+
     setFichando(turno.id)
     setMensaje(null)
 
     try {
       const hora = horaActual()
-      const gps = await obtenerGps()
+      const gps = await obtenerGps('ingreso')
       const payload = {
         guardia_id: user.id,
         turno_id: turno.id,
@@ -387,7 +427,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
       setMensaje({
-        texto: gpsDisponible ? `✓ Entrada registrada a las ${hora}` : `GPS no disponible. Entrada registrada a las ${hora}`,
+        texto: gpsDisponible ? `✓ Entrada registrada a las ${hora}` : 'GPS no disponible, asistencia registrada sin ubicación.',
         tipo: gpsDisponible ? 'ok' : 'warn',
       })
       setTimeout(() => setMensaje(null), 4000)
@@ -419,7 +459,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
     const hora = horaActual()
     const horas = calcHorasTrabajadas(registro.hora_entrada_real, hora)
-    const gps = await obtenerGps()
+    const gps = await obtenerGps('egreso')
     const payload = {
       hora_salida_real: hora,
       horas_trabajadas: horas,
@@ -460,7 +500,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         )
       )
       setMensaje({
-        texto: gpsDisponible ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas` : `GPS no disponible. Salida registrada a las ${hora} — ${horas}h trabajadas`,
+        texto: gpsDisponible ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas` : 'GPS no disponible, asistencia registrada sin ubicación.',
         tipo: gpsDisponible ? 'ok' : 'warn',
       })
     }
@@ -568,6 +608,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           const obj     = getObjetivo(turno.objetivo_id)
           const reg     = registroDelTurno(turno.id)
           const cargando = fichando === turno.id
+          const puedeDarPresente = estaEnVentanaFichaje(turno, ahora)
 
           return (
             <div key={turno.id} style={S.card}>
@@ -631,12 +672,19 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
               {/* Botón acción */}
               {!reg && (
-                <button
-                  style={{ ...S.btn, ...S.btnPresente, opacity: cargando ? 0.6 : 1 }}
-                  onClick={() => darPresente(turno)}
-                  disabled={cargando}>
-                  {cargando ? 'Registrando...' : '✅ Dar presente'}
-                </button>
+                <>
+                  {!puedeDarPresente && (
+                    <div style={S.alert('error')}>
+                      Fuera de horario de fichaje. Contacte al supervisor.
+                    </div>
+                  )}
+                  <button
+                    style={{ ...S.btn, ...(puedeDarPresente ? S.btnPresente : S.btnDisabled), opacity: cargando ? 0.6 : 1 }}
+                    onClick={() => darPresente(turno)}
+                    disabled={cargando || !puedeDarPresente}>
+                    {cargando ? 'Registrando...' : '✅ Dar presente'}
+                  </button>
+                </>
               )}
 
               {reg && !reg.hora_salida_real && (
