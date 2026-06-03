@@ -42,6 +42,8 @@ interface GpsData {
   accuracy: number
 }
 
+type GpsPermissionState = 'checking' | 'granted' | 'prompt' | 'denied' | 'unsupported'
+
 // ── HELPERS ───────────────────────────────────────────────────
 function calcHorasTrabajadas(entrada: string, salida: string): number {
   const [h1, m1] = entrada.split(':').map(Number)
@@ -79,6 +81,19 @@ function estaEnVentanaFichaje(turno: Turno, ahora: Date): boolean {
   const hasta = new Date(inicioTurno.getTime() + 60 * 60 * 1000)
 
   return ahora >= desde && ahora <= hasta
+}
+
+async function consultarPermisoGps(): Promise<GpsPermissionState> {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return 'unsupported'
+
+  try {
+    if (!navigator.permissions?.query) return 'prompt'
+
+    const status = await navigator.permissions.query({ name: 'geolocation' as PermissionName })
+    return status.state as GpsPermissionState
+  } catch {
+    return 'prompt'
+  }
 }
 
 function obtenerGps(tipo: 'ingreso' | 'egreso'): Promise<GpsData | null> {
@@ -290,6 +305,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [perfilMensaje, setPerfilMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null)
   const [guardandoPassword, setGuardandoPassword] = useState(false)
   const [ahora, setAhora] = useState(() => new Date())
+  const [permisoGps, setPermisoGps] = useState<GpsPermissionState>('checking')
 
   const hoy = fechaHoy()
 
@@ -358,6 +374,37 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     return () => window.clearInterval(timer)
   }, [])
 
+  useEffect(() => {
+    let activo = true
+    let permissionStatus: PermissionStatus | null = null
+
+    const verificarPermiso = async () => {
+      const estado = await consultarPermisoGps()
+      if (activo) setPermisoGps(estado)
+    }
+
+    verificarPermiso()
+
+    if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+      navigator.permissions.query({ name: 'geolocation' as PermissionName })
+        .then(status => {
+          permissionStatus = status
+          if (activo) setPermisoGps(status.state as GpsPermissionState)
+          status.onchange = () => {
+            if (activo) setPermisoGps(status.state as GpsPermissionState)
+          }
+        })
+        .catch(() => {
+          if (activo) setPermisoGps('prompt')
+        })
+    }
+
+    return () => {
+      activo = false
+      if (permissionStatus) permissionStatus.onchange = null
+    }
+  }, [])
+
   // Registro de este turno
   const registroDelTurno = (turnoId: string) =>
     registros.find(r => r.turno_id === turnoId)
@@ -379,25 +426,42 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       return
     }
 
+    if (permisoGps === 'denied' || permisoGps === 'unsupported') {
+      setMensaje({ texto: 'Para registrar asistencia debe permitir ubicación', tipo: 'error' })
+      setTimeout(() => setMensaje(null), 4000)
+      return
+    }
+
     setFichando(turno.id)
     setMensaje(null)
 
     try {
       const hora = horaActual()
       const gps = await obtenerGps('ingreso')
+
+      if (!gps) {
+        setPermisoGps(await consultarPermisoGps())
+        setMensaje({ texto: 'Para registrar asistencia debe permitir ubicación', tipo: 'error' })
+        setTimeout(() => setMensaje(null), 4000)
+        return
+      }
+
       const payload = {
         guardia_id: user.id,
         turno_id: turno.id,
         hora_entrada_real: hora,
       }
-      const payloadConGps = gps
-        ? {
+      const payloadConGps = {
           ...payload,
           latitud_ingreso: gps.latitude,
           longitud_ingreso: gps.longitude,
           precision_ingreso: gps.accuracy,
         }
-        : payload
+      const payloadConGpsLegacy = {
+        ...payload,
+        lat_entrada: gps.latitude,
+        lng_entrada: gps.longitude,
+      }
 
       let { data, error } = await supabase
         .from('registros_asistencia')
@@ -405,18 +469,15 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         .select()
         .single()
 
-      let gpsDisponible = Boolean(gps)
-
-      if (error && gps && esErrorColumnaGps(error)) {
+      if (error && esErrorColumnaGps(error)) {
         const retry = await supabase
           .from('registros_asistencia')
-          .insert(payload)
+          .insert(payloadConGpsLegacy)
           .select()
           .single()
 
         data = retry.data
         error = retry.error
-        gpsDisponible = false
       }
 
       if (error || !data) {
@@ -427,8 +488,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
       setMensaje({
-        texto: gpsDisponible ? `✓ Entrada registrada a las ${hora}` : 'GPS no disponible, asistencia registrada sin ubicación.',
-        tipo: gpsDisponible ? 'ok' : 'warn',
+        texto: `✓ Entrada registrada a las ${hora}`,
+        tipo: 'ok',
       })
       setTimeout(() => setMensaje(null), 4000)
     } catch (error) {
@@ -472,6 +533,13 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         precision_egreso: gps.accuracy,
       }
       : payload
+    const payloadConGpsLegacy = gps
+      ? {
+        ...payload,
+        lat_salida: gps.latitude,
+        lng_salida: gps.longitude,
+      }
+      : payload
 
     let { error } = await supabase
       .from('registros_asistencia')
@@ -483,11 +551,10 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     if (error && gps && esErrorColumnaGps(error)) {
       const retry = await supabase
         .from('registros_asistencia')
-        .update(payload)
+        .update(payloadConGpsLegacy)
         .eq('id', registro.id)
 
       error = retry.error
-      gpsDisponible = false
     }
 
     if (error) {
@@ -585,6 +652,18 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           <div style={S.alert(mensaje.tipo)}>{mensaje.texto}</div>
         )}
 
+        {permisoGps === 'checking' && (
+          <div style={S.alert('warn')}>Verificando permiso de ubicación...</div>
+        )}
+
+        {permisoGps === 'prompt' && (
+          <div style={S.alert('warn')}>Para fichar, permití la ubicación cuando el teléfono lo solicite.</div>
+        )}
+
+        {(permisoGps === 'denied' || permisoGps === 'unsupported') && (
+          <div style={S.alert('error')}>Para registrar asistencia debe permitir ubicación</div>
+        )}
+
         {/* Loading */}
         {loading && (
           <div style={S.empty}>
@@ -609,6 +688,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           const reg     = registroDelTurno(turno.id)
           const cargando = fichando === turno.id
           const puedeDarPresente = estaEnVentanaFichaje(turno, ahora)
+          const gpsBloqueaPresente = permisoGps === 'checking' || permisoGps === 'denied' || permisoGps === 'unsupported'
 
           return (
             <div key={turno.id} style={S.card}>
@@ -679,9 +759,9 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                     </div>
                   )}
                   <button
-                    style={{ ...S.btn, ...(puedeDarPresente ? S.btnPresente : S.btnDisabled), opacity: cargando ? 0.6 : 1 }}
+                    style={{ ...S.btn, ...(puedeDarPresente && !gpsBloqueaPresente ? S.btnPresente : S.btnDisabled), opacity: cargando ? 0.6 : 1 }}
                     onClick={() => darPresente(turno)}
-                    disabled={cargando || !puedeDarPresente}>
+                    disabled={cargando || !puedeDarPresente || gpsBloqueaPresente}>
                     {cargando ? 'Registrando...' : '✅ Dar presente'}
                   </button>
                 </>
