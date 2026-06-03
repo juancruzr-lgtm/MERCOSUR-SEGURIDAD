@@ -45,9 +45,13 @@ function Badge({ type, children }: { type: string, children: React.ReactNode }) 
   return <span style={{ display:'inline-flex', alignItems:'center', padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:600, background:bg, color }}>{children}</span>
 }
 
-function StatCard({ label, value, sub, color, icon }: any) {
+function StatCard({ label, value, sub, color, icon, onClick }: any) {
   return (
-    <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, position:'relative', overflow:'hidden' }}>
+    <div
+      onClick={onClick}
+      style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, position:'relative', overflow:'hidden', cursor:onClick?'pointer':'default' }}
+      title={onClick ? 'Aplicar filtro' : undefined}
+    >
       <div style={{ position:'absolute', top:0, left:0, right:0, height:3, background:color }} />
       <div style={{ position:'absolute', top:16, right:16, fontSize:28, opacity:0.15 }}>{icon}</div>
       <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, fontWeight:600 }}>{label}</div>
@@ -236,7 +240,7 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   )
 }
 
-function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
+function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNavigate }: any) {
   const hoy = new Date().toLocaleDateString('sv-SE')
   const mesActual = hoy.slice(0, 7)
   const usuarios = guardias as Usuario[]
@@ -244,14 +248,8 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
   const guardiasActivos = usuarios.filter((g: Usuario) => esRolGuardia(g.rol) && g.estado === 'activo')
   const turnosHoy = turnos.filter((t: Turno) => t.fecha === hoy)
   const turnoPorId = new Map<string, Turno>(turnos.map((t: Turno) => [t.id, t]))
-  const registrosHoy = registros.filter((r: RegistroAsistencia) => {
-    const turno = turnoPorId.get(r.turno_id)
-    return turno?.fecha === hoy || r.created_at?.slice(0, 10) === hoy
-  })
-  const registrosMes = registros.filter((r: RegistroAsistencia) => {
-    const turno = turnoPorId.get(r.turno_id)
-    return turno?.fecha?.slice(0, 7) === mesActual || r.created_at?.slice(0, 7) === mesActual
-  })
+  const registrosHoy = registros.filter((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha === hoy)
+  const registrosMes = registros.filter((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha?.slice(0, 7) === mesActual)
   const tieneEntrada = (turno: Turno) =>
     registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_entrada_real)
   const tieneSalida = (turno: Turno) =>
@@ -266,8 +264,11 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
     return !tieneEntrada(t) || (tieneEntrada(t) && !tieneSalida(t))
   })
   const llegadasTarde = registrosHoy.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length
-  const horasHoy = registrosHoy.reduce((sum: number, r: RegistroAsistencia) => sum + (Number(r.horas_trabajadas) || 0), 0)
-  const horasMes = registrosMes.reduce((sum: number, r: RegistroAsistencia) => sum + (Number(r.horas_trabajadas) || 0), 0)
+  const horasHoy = registrosHoy.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+  const horasMes = registrosMes.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+  const guardiasConAsistenciaMes = new Set(registrosMes.filter((r: RegistroAsistencia) => r.hora_entrada_real).map((r: RegistroAsistencia) => r.guardia_id)).size
+  const turnosFinalizadosHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && r.hora_salida_real).length
+  const turnosEnCursoHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
   const novedadesUrgentes = novedades.filter((n: Novedad) => n.prioridad === 'urgente' && n.estado !== 'resuelta')
 
   const getGuardia = (id?: string) => usuarios.find((g: Usuario) => g.id === id)
@@ -282,16 +283,16 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
     `${value.toLocaleString('es-AR', { maximumFractionDigits: 2 })} h`
 
   const metricas = [
-    { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: '#3b82f6' },
-    { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => esRolGuardia(g.rol)).length} guardias cargados`, color: '#10b981' },
-    { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: '#f59e0b' },
-    { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: '#10b981' },
-    { label: 'Turnos descubiertos', value: turnosDescubiertos.length, sub: 'sin cobertura operativa', color: '#ef4444' },
-    { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: '#22c55e' },
-    { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'registros del día', color: '#38bdf8' },
-    { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: mesActual, color: '#8b5cf6' },
-    { label: 'Llegadas tarde', value: llegadasTarde, sub: 'alertas de entrada hoy', color: '#f97316' },
-    { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'asignados sin entrada', color: '#ef4444' },
+    { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: '#3b82f6', page:'objetivos', filtro:{ tipo:'activos', label:'Objetivos activos' } },
+    { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => esRolGuardia(g.rol)).length} guardias cargados`, color: '#10b981', page:'guardias', filtro:{ tipo:'activos', label:'Guardias activos' } },
+    { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: '#f59e0b', page:'turnos', filtro:{ tipo:'hoy', label:'Turnos de hoy' } },
+    { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: '#10b981', page:'turnos', filtro:{ tipo:'cubiertos', label:'Turnos cubiertos hoy' } },
+    { label: 'Turnos descubiertos', value: turnosDescubiertos.length, sub: 'sin cobertura operativa', color: '#ef4444', page:'turnos', filtro:{ tipo:'descubiertos', label:'Turnos descubiertos hoy' } },
+    { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: '#22c55e', page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
+    { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'registros del día', color: '#38bdf8', page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
+    { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: mesActual, color: '#8b5cf6', page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
+    { label: 'Llegadas tarde', value: llegadasTarde, sub: 'alertas de entrada hoy', color: '#f97316', page:'asistencia', filtro:{ tipo:'tarde', label:'Llegadas tarde hoy' } },
+    { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'asignados sin entrada', color: '#ef4444', page:'turnos', filtro:{ tipo:'sin_fichar', label:'Turnos sin fichar hoy' } },
   ]
 
   const alertBox: React.CSSProperties = {
@@ -322,8 +323,8 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
     color:'#64748b',
   }
 
-  const renderTurnoAlert = (turno: Turno, detalle: string) => (
-    <div key={turno.id} style={alertItem}>
+  const renderTurnoAlert = (turno: Turno, detalle: string, filtro: any) => (
+    <div key={turno.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('turnos', filtro)}>
       <strong style={{ color:'#f8fafc' }}>{nombreObjetivo(turno.objetivo_id)}</strong>
       <div style={{ color:'#94a3b8', marginTop:4 }}>
         {hora(turno.hora_inicio)} a {hora(turno.hora_fin)} - {nombreGuardia(turno.guardia_id)}
@@ -354,8 +355,17 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:12, marginBottom:24 }}>
         {metricas.map((m) => (
-          <StatCard key={m.label} label={m.label} value={m.value} sub={m.sub} color={m.color} />
+          <StatCard key={m.label} label={m.label} value={m.value} sub={m.sub} color={m.color} onClick={() => onNavigate?.(m.page, m.filtro)} />
         ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12, marginBottom:24 }}>
+        <div style={S.card}><div style={S.label}>Mes actual</div><strong>{mesActual}</strong></div>
+        <div style={S.card}><div style={S.label}>Total horas reales</div><strong>{formatoHoras(horasMes)}</strong></div>
+        <div style={S.card}><div style={S.label}>Guardias con asistencia</div><strong>{guardiasConAsistenciaMes}</strong></div>
+        <div style={S.card}><div style={S.label}>Turnos finalizados hoy</div><strong>{turnosFinalizadosHoy}</strong></div>
+        <div style={S.card}><div style={S.label}>Turnos en curso hoy</div><strong>{turnosEnCursoHoy}</strong></div>
+        <div style={S.card}><div style={S.label}>Turnos sin fichar hoy</div><strong>{turnosSinFichar.length}</strong></div>
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16 }}>
@@ -364,7 +374,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
           {turnosDescubiertos.length === 0 ? (
             <div style={emptyAlert}>No hay turnos descubiertos hoy.</div>
           ) : turnosDescubiertos.map((turno: Turno) =>
-            renderTurnoAlert(turno, turno.guardia_id ? 'Estado descubierto' : 'Sin guardia asignado')
+            renderTurnoAlert(turno, turno.guardia_id ? 'Estado descubierto' : 'Sin guardia asignado', { tipo:'descubiertos', label:'Turnos descubiertos hoy' })
           )}
         </div>
 
@@ -373,7 +383,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
           {turnosSinFichar.length === 0 ? (
             <div style={emptyAlert}>Todos los turnos asignados registran ingreso.</div>
           ) : turnosSinFichar.map((turno: Turno) =>
-            renderTurnoAlert(turno, 'Sin entrada real registrada')
+            renderTurnoAlert(turno, 'Sin entrada real registrada', { tipo:'sin_fichar', label:'Turnos sin fichar hoy' })
           )}
         </div>
 
@@ -382,7 +392,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
           {turnosAsistenciaPendiente.length === 0 ? (
             <div style={emptyAlert}>No hay asistencias pendientes hoy.</div>
           ) : turnosAsistenciaPendiente.map((turno: Turno) =>
-            renderTurnoAlert(turno, tieneEntrada(turno) ? 'Entrada registrada, salida pendiente' : 'Entrada pendiente')
+            renderTurnoAlert(turno, tieneEntrada(turno) ? 'Entrada registrada, salida pendiente' : 'Entrada pendiente', { tipo:'pendientes_asistencia', label:'Turnos con asistencia pendiente' })
           )}
         </div>
       </div>
@@ -390,7 +400,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades }: any) {
   )
 }
 
-function Guardias({ guardias, setGuardias }: any) {
+function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const formVacio = { nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
   const [form, setForm] = useState(formVacio)
@@ -435,6 +445,33 @@ function Guardias({ guardias, setGuardias }: any) {
     }
   }
 
+  useEffect(() => {
+    let activo = true
+
+    const sincronizarEmailsAuth = async () => {
+      try {
+        const res = await fetch('/api/sync-auth-emails', {
+          method: 'POST',
+          headers: await headersAdmin(),
+        })
+        const data = await res.json()
+
+        if (res.ok && activo && Array.isArray(data.users)) {
+          const actualizados = new Map(data.users.map((u: Usuario) => [u.id, u]))
+          setGuardias((prev: Usuario[]) => prev.map(g => actualizados.get(g.id) || g))
+        }
+      } catch {
+        // La grilla sigue operativa aunque la sincronización técnica no responda.
+      }
+    }
+
+    sincronizarEmailsAuth()
+
+    return () => {
+      activo = false
+    }
+  }, [])
+
   const guardar = async () => {
     setMensaje(null)
 
@@ -456,6 +493,28 @@ function Guardias({ guardias, setGuardias }: any) {
     }
 
     if (editId) {
+      const original = guardias.find((g: Usuario) => g.id === editId)
+
+      if (original?.auth_user_id && !payload.email) {
+        setMensaje({ tipo:'error', texto:'Un empleado con acceso Auth requiere email.' })
+        setLoading(false)
+        return
+      }
+
+      if (original?.auth_user_id && payload.email && payload.email !== (original.email || '').toLowerCase()) {
+        const res = await fetch('/api/update-user-email', {
+          method: 'POST',
+          headers: await headersAdmin(),
+          body: JSON.stringify({ usuario_id: editId, email: payload.email }),
+        })
+        const sync = await res.json()
+        if (!res.ok) {
+          setMensaje({ tipo:'error', texto:sync.error || 'No se pudo sincronizar el email con Auth' })
+          setLoading(false)
+          return
+        }
+      }
+
       const { data, error } = await supabase.from('usuarios').update(payload).eq('id', editId).select().single()
       if (error) {
         setMensaje({ tipo:'error', texto:error.message })
@@ -546,6 +605,10 @@ function Guardias({ guardias, setGuardias }: any) {
     setAccionLoading(null)
   }
 
+  const guardiasFiltrados = filtroActivo?.tipo === 'activos'
+    ? guardias.filter((g: Usuario) => g.estado === 'activo')
+    : guardias
+
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
@@ -568,6 +631,13 @@ function Guardias({ guardias, setGuardias }: any) {
         </div>
       )}
 
+      {filtroActivo && (
+        <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
+          <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
+        </div>
+      )}
+
       <div style={S.card}>
         <table style={S.table}>
           <thead>
@@ -579,14 +649,13 @@ function Guardias({ guardias, setGuardias }: any) {
               <th style={S.th}>Email</th>
               <th style={S.th}>Rol</th>
               <th style={S.th}>Estado</th>
-              <th style={S.th}>Auth</th>
-              <th style={S.th}>auth_user_id</th>
+              <th style={S.th}>Acceso</th>
               <th style={S.th}>Acciones</th>
             </tr>
           </thead>
 
           <tbody>
-            {guardias.map((g: Usuario) => (
+            {guardiasFiltrados.map((g: Usuario) => (
               <tr key={g.id}>
                 <td style={S.td}>
                   <strong>{g.nombre}</strong>
@@ -607,7 +676,6 @@ function Guardias({ guardias, setGuardias }: any) {
                 </td>
 
                 <td style={S.td}>{g.auth_user_id ? 'Sí' : 'No'}</td>
-                <td style={{ ...S.td, maxWidth:180, wordBreak:'break-all', fontSize:11 }}>{g.auth_user_id || '—'}</td>
 
                 <td style={S.td}>
                   <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
@@ -633,13 +701,15 @@ function Guardias({ guardias, setGuardias }: any) {
                         Crear Auth
                       </button>
                     )}
-                    <button
-                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
-                      onClick={() => resetPassword(g)}
-                      disabled={!g.auth_user_id || accionLoading === `reset-${g.id}`}
-                    >
-                      Reset DNI
-                    </button>
+                    {g.auth_user_id && (
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                        onClick={() => resetPassword(g)}
+                        disabled={accionLoading === `reset-${g.id}`}
+                      >
+                        Reset DNI
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -731,11 +801,12 @@ function Guardias({ guardias, setGuardias }: any) {
   )
 }
 
-function Objetivos({ objetivos, setObjetivos, turnos }: any) {
+function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [busqueda, setBusqueda] = useState('')
+  const [filtroKpi, setFiltroKpi] = useState('')
 
   const formVacio = {
     nombre: '',
@@ -755,7 +826,7 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
   const estadoOperativo = (objetivoId: string) => {
     const ts = turnosHoyPorObjetivo(objetivoId)
     if (ts.length === 0) return null
-    const sinCubrir = ts.filter((t: any) => t.estado === 'descubierto' || t.estado === 'programado').length
+    const sinCubrir = ts.filter((t: any) => t.estado === 'descubierto' || !t.guardia_id).length
     const cubiertos = ts.filter((t: any) => t.estado === 'cubierto').length
     return { total: ts.length, cubiertos, sinCubrir }
   }
@@ -824,7 +895,22 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
     if (data) setObjetivos((prev: any[]) => prev.map(x => x.id === o.id ? data : x))
   }
 
+  const filtroTipo = filtroActivo?.tipo || filtroKpi
+  const limpiarFiltroObjetivos = () => {
+    setFiltroKpi('')
+    limpiarFiltro?.()
+  }
+
+  const objetivosConTurnosHoy = objetivos.filter((o: any) => turnosHoyPorObjetivo(o.id).length > 0)
+  const objetivosSinCubrirHoy = objetivos.filter((o: any) => {
+    const ts = turnosHoyPorObjetivo(o.id)
+    return ts.some((t: any) => t.estado === 'descubierto' || !t.guardia_id)
+  })
+
   const filtrados = objetivos.filter((o: any) => {
+    if (filtroTipo === 'activos' && o.estado !== 'activo') return false
+    if (filtroTipo === 'con_turnos_hoy' && !objetivosConTurnosHoy.some((x: any) => x.id === o.id)) return false
+    if (filtroTipo === 'sin_cubrir_hoy' && !objetivosSinCubrirHoy.some((x: any) => x.id === o.id)) return false
     if (!busqueda.trim()) return true
     const q = busqueda.toLowerCase()
     return (
@@ -854,30 +940,34 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
 
       {/* Stats rápidas */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:12, marginBottom:20 }}>
-        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px' }}>
+        <div onClick={() => setFiltroKpi('')} style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', cursor:'pointer' }}>
           <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Total</div>
           <div style={{ fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800 }}>{objetivos.length}</div>
         </div>
-        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #10b981' }}>
+        <div onClick={() => setFiltroKpi('activos')} style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #10b981', cursor:'pointer' }}>
           <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Activos</div>
           <div style={{ fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800, color:'#10b981' }}>{activos}</div>
         </div>
-        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #f59e0b' }}>
+        <div onClick={() => setFiltroKpi('con_turnos_hoy')} style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #f59e0b', cursor:'pointer' }}>
           <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Con turnos hoy</div>
           <div style={{ fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800, color:'#f59e0b' }}>
-            {objetivos.filter((o: any) => turnosHoyPorObjetivo(o.id).length > 0).length}
+            {objetivosConTurnosHoy.length}
           </div>
         </div>
-        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #ef4444' }}>
+        <div onClick={() => setFiltroKpi('sin_cubrir_hoy')} style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:'14px 16px', borderTop:'3px solid #ef4444', cursor:'pointer' }}>
           <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>Sin cubrir hoy</div>
           <div style={{ fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800, color:'#ef4444' }}>
-            {objetivos.filter((o: any) => {
-              const ts = turnosHoyPorObjetivo(o.id)
-              return ts.some((t: any) => t.estado === 'descubierto' || t.estado === 'programado')
-            }).length}
+            {objetivosSinCubrirHoy.length}
           </div>
         </div>
       </div>
+
+      {filtroTipo && (
+        <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo?.label || filtroTipo}</span>
+          <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltroObjetivos}>Limpiar filtro</button>
+        </div>
+      )}
 
       {/* Buscador */}
       <div style={{ marginBottom:16 }}>
@@ -894,7 +984,7 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
         {filtrados.length === 0 ? (
           <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>
             <div style={{ fontSize:36, marginBottom:12 }}>🏢</div>
-            <div>{busqueda ? 'Sin resultados para esa búsqueda.' : 'No hay objetivos cargados.'}</div>
+                          <div>{busqueda || filtroTipo ? 'Sin resultados para el filtro aplicado.' : 'No hay objetivos cargados.'}</div>
           </div>
         ) : (
           <div style={{ overflowX:'auto' }}>
@@ -944,10 +1034,12 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
                       <td style={S.td}>
                         {op === null ? (
                           <span style={{ fontSize:12, color:'#374151' }}>Sin turnos</span>
-                        ) : op.sinCubrir > 0 ? (
-                          <Badge type="descubierto">⚠ {op.sinCubrir} sin cubrir</Badge>
                         ) : (
-                          <Badge type="cubierto">✓ {op.cubiertos} cubierto{op.cubiertos !== 1 ? 's' : ''}</Badge>
+                          <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                            <Badge type="programado">{op.total} turnos</Badge>
+                            <Badge type="cubierto">{op.cubiertos} cubiertos</Badge>
+                            {op.sinCubrir > 0 && <Badge type="descubierto">{op.sinCubrir} sin cubrir</Badge>}
+                          </div>
                         )}
                       </td>
 
@@ -1072,7 +1164,7 @@ function Objetivos({ objetivos, setObjetivos, turnos }: any) {
     </div>
   )
 }
-function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
+function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({
     guardia_id: '',
@@ -1118,7 +1210,18 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
     setLoading(false)
   }
 
-  const filtrados = turnos.filter((t: Turno) => !filtFecha || t.fecha === filtFecha)
+  const hoy = new Date().toLocaleDateString('sv-SE')
+  const fechaFiltro = filtroActivo ? hoy : filtFecha
+  const tieneEntrada = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_entrada_real)
+  const tieneSalida = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
+  const filtrados = turnos.filter((t: Turno) => {
+    if (fechaFiltro && t.fecha !== fechaFiltro) return false
+    if (filtroActivo?.tipo === 'cubiertos' && t.estado !== 'cubierto') return false
+    if (filtroActivo?.tipo === 'descubiertos' && t.estado !== 'descubierto' && t.guardia_id) return false
+    if (filtroActivo?.tipo === 'sin_fichar' && (!t.guardia_id || tieneEntrada(t))) return false
+    if (filtroActivo?.tipo === 'pendientes_asistencia' && (!t.guardia_id || (tieneEntrada(t) && tieneSalida(t)))) return false
+    return true
+  })
 
   return (
     <div>
@@ -1131,8 +1234,9 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
         <input
           type="date"
           style={{ ...S.input, width:'auto' }}
-          value={filtFecha}
+          value={fechaFiltro}
           onChange={e => setFiltFecha(e.target.value)}
+          disabled={Boolean(filtroActivo)}
         />
 
         <button
@@ -1142,6 +1246,13 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
           + Nuevo Turno
         </button>
       </div>
+
+      {filtroActivo && (
+        <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
+          <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
+        </div>
+      )}
 
       <div style={S.card}>
         <table style={S.table}>
@@ -1162,7 +1273,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
 
               return (
                 <tr key={t.id}>
-                  <td style={S.td}>{t.fecha}</td>
+                  <td style={S.td}>{formatFecha(t.fecha)}</td>
 
                   <td style={S.td}>
                     <strong>{o?.nombre}</strong>
@@ -1174,7 +1285,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
 
                   <td style={S.td}>
                     <span style={{ fontFamily:'Syne,sans-serif', fontWeight:600 }}>
-                      {t.hora_inicio} → {t.hora_fin}
+                      {formatHorarioAsignado(t)}
                     </span>
                   </td>
 
@@ -1293,11 +1404,19 @@ function Turnos({ turnos, setTurnos, guardias, objetivos }: any) {
     </div>
   )
 }
-function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: any) {
+function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
   const [loading, setLoading] = useState(false)
-  const registrosOrdenados = [...registros].sort((a: RegistroAsistencia, b: RegistroAsistencia) => {
+  const hoy = new Date().toLocaleDateString('sv-SE')
+  const registrosFiltrados = registros.filter((r: RegistroAsistencia) => {
+    const turno = turnos.find((t: Turno) => t.id === r.turno_id)
+    if (filtroActivo?.tipo === 'hoy' && turno?.fecha !== hoy) return false
+    if (filtroActivo?.tipo === 'en_turno' && (!r.hora_entrada_real || r.hora_salida_real)) return false
+    if (filtroActivo?.tipo === 'tarde' && (turno?.fecha !== hoy || r.alerta_entrada !== 'tarde')) return false
+    return true
+  })
+  const registrosOrdenados = [...registrosFiltrados].sort((a: RegistroAsistencia, b: RegistroAsistencia) => {
     const turnoA = turnos.find((t: Turno) => t.id === a.turno_id)
     const turnoB = turnos.find((t: Turno) => t.id === b.turno_id)
 
@@ -1326,6 +1445,12 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos }: an
         <div style={{ flex:1 }}><div style={S.title}>Asistencia</div><div style={S.sub2}>Registro de entradas y salidas</div></div>
         <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => setModal(true)}>+ Registrar</button>
       </div>
+      {filtroActivo && (
+        <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
+          <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
+        </div>
+      )}
       <div style={S.card}>
         <table style={S.table}>
           <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>Alertas</th></tr></thead>
@@ -1441,10 +1566,17 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
   )
 }
 
-function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
+function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroActivo, limpiarFiltro }: any) {
   const [tab, setTab] = useState('guardias')
+  const [mes, setMes] = useState(new Date().toLocaleDateString('sv-SE').slice(0, 7))
+  const [verTodos, setVerTodos] = useState(false)
+
+  useEffect(() => {
+    if (filtroActivo?.mes) setMes(filtroActivo.mes)
+  }, [filtroActivo?.mes])
 
   const exportCSV = (data: any[], filename: string) => {
+    if (data.length === 0) return
     const keys = Object.keys(data[0])
     const rows = [keys.join(','), ...data.map(row => keys.map(k => `"${row[k]}"`).join(','))]
     const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' })
@@ -1452,22 +1584,87 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
     const a = document.createElement('a'); a.href = url; a.download = filename + '.csv'; a.click()
   }
 
-  const reporteGuardias = guardias.map((g: Usuario) => {
-    const regs = registros.filter((r: RegistroAsistencia) => r.guardia_id === g.id)
-    return { Legajo: g.legajo, Apellido: g.apellido, Nombre: g.nombre, 'Días Trabajados': regs.length, 'Horas Totales': regs.reduce((s: number, r: RegistroAsistencia) => s + (r.horas_trabajadas || 0), 0).toFixed(2), Tardanzas: regs.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length, 'Salidas Anticipadas': regs.filter((r: RegistroAsistencia) => r.alerta_salida === 'anticipada').length }
+  const desde = `${mes}-01`
+  const hasta = (() => {
+    const [year, month] = mes.split('-').map(Number)
+    const next = new Date(year, month, 1)
+    return next.toLocaleDateString('sv-SE')
+  })()
+  const turnosMes = turnos.filter((t: Turno) => t.fecha >= desde && t.fecha < hasta)
+  const turnoPorId = new Map<string, Turno>(turnosMes.map((t: Turno) => [t.id, t]))
+  const registrosMes = registros.filter((r: RegistroAsistencia) => {
+    const turno = turnoPorId.get(r.turno_id)
+    return Boolean(turno && r.hora_entrada_real)
   })
 
-  const reporteObjetivos = objetivos.map((o: Objetivo) => {
-    const ts = turnos.filter((t: Turno) => t.objetivo_id === o.id)
-    return { Objetivo: o.nombre, Cliente: o.cliente, 'Turnos Cubiertos': ts.filter((t: Turno) => t.estado === 'cubierto').length, 'Turnos Descubiertos': ts.filter((t: Turno) => t.estado === 'descubierto').length, 'Horas Cubiertas': ts.filter((t: Turno) => t.estado === 'cubierto').reduce((s: number, t: Turno) => { const [h1,m1] = t.hora_inicio.split(':').map(Number); const [h2,m2] = t.hora_fin.split(':').map(Number); let d=(h2*60+m2)-(h1*60+m1); if(d<0)d+=1440; return s+d/60 }, 0).toFixed(1) }
-  })
+  const reporteGuardias = guardias
+    .map((g: Usuario) => {
+      const regs = registrosMes.filter((r: RegistroAsistencia) => r.guardia_id === g.id)
+      const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_real)
+      const dias = new Set(regs.map((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha).filter(Boolean)).size
+      const horas = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+
+      return {
+        Legajo: g.legajo,
+        Apellido: g.apellido,
+        Nombre: g.nombre,
+        'Días Trabajados': dias,
+        'Horas Totales': horas.toFixed(2),
+        'En Curso': regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length,
+        Tardanzas: regs.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length,
+        'Salidas Anticipadas': regs.filter((r: RegistroAsistencia) => r.alerta_salida === 'anticipada').length,
+        _registros: regs.length,
+      }
+    })
+    .filter((g: any) => verTodos || g._registros > 0)
+
+  const reporteObjetivos = objetivos
+    .map((o: Objetivo) => {
+      const ts = turnosMes.filter((t: Turno) => t.objetivo_id === o.id)
+      const regs = registrosMes.filter((r: RegistroAsistencia) => {
+        const turno = turnoPorId.get(r.turno_id)
+        return turno?.objetivo_id === o.id
+      })
+      const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_real)
+      const turnosConAsistencia = new Set(regs.map((r: RegistroAsistencia) => r.turno_id)).size
+      const horas = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+      const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
+      const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length
+      const turnosDescubiertos = ts.filter((t: Turno) => t.estado === 'descubierto' || !t.guardia_id).length
+
+      return {
+        Objetivo: o.nombre,
+        Cliente: o.cliente,
+        'Turnos con Asistencia': turnosConAsistencia,
+        'Horas Reales Cubiertas': horas.toFixed(2),
+        'Turnos en Curso': turnosEnCurso,
+        'Turnos sin Fichar': turnosSinFichar,
+        'Turnos Descubiertos': turnosDescubiertos,
+        _actividad: ts.length + regs.length,
+      }
+    })
+    .filter((o: any) => verTodos || o._actividad > 0)
 
   const tabs = [{ id:'guardias', label:'Por Guardia' }, { id:'objetivos', label:'Por Objetivo' }, { id:'novedades', label:'Novedades' }]
 
   return (
     <div>
       <div style={S.title}>Reportes</div>
-      <div style={S.sub2}>Resúmenes y exportaciones</div>
+      <div style={S.sub2}>Resúmenes y exportaciones · Mes seleccionado: {mes}</div>
+      {filtroActivo && (
+        <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
+          <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
+        </div>
+      )}
+      <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap', marginBottom:16 }}>
+        <label style={S.label}>Mes operativo</label>
+        <input type="month" style={{ ...S.input, width:'auto' }} value={mes} onChange={e => setMes(e.target.value)} />
+        <label style={{ display:'flex', gap:8, alignItems:'center', color:'#94a3b8', fontSize:13 }}>
+          <input type="checkbox" checked={verTodos} onChange={e => setVerTodos(e.target.checked)} />
+          Ver todos
+        </label>
+      </div>
       <div style={{ display:'flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:24, width:'fit-content' }}>
         {tabs.map(t => <button key={t.id} style={{ padding:'8px 18px', borderRadius:8, cursor:'pointer', fontSize:13, color:tab===t.id?'#f59e0b':'#64748b', background:tab===t.id?'#111827':'transparent', border:'none', fontFamily:'DM Sans,sans-serif', fontWeight:tab===t.id?600:400 }} onClick={() => setTab(t.id)}>{t.label}</button>)}
       </div>
@@ -1475,10 +1672,10 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
         <div style={S.card}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:16 }}>
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Guardia</strong>
-            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(reporteGuardias, 'reporte-guardias')}>⬇ Exportar CSV</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(reporteGuardias.map(({ _registros, ...row }: any) => row), 'reporte-guardias')}>⬇ Exportar CSV</button>
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Totales</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th></tr></thead>
+            <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Reales</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th></tr></thead>
             <tbody>
               {reporteGuardias.map((g: any) => (
                 <tr key={g.Legajo}>
@@ -1486,6 +1683,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
                   <td style={S.td}><strong>{g.Apellido}, {g.Nombre}</strong></td>
                   <td style={S.td}>{g['Días Trabajados']}</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{g['Horas Totales']}h</td>
+                  <td style={S.td}>{g['En Curso'] > 0 ? <Badge type="pendiente">{g['En Curso']}</Badge> : '—'}</td>
                   <td style={S.td}>{g.Tardanzas > 0 ? <Badge type="tarde">{g.Tardanzas}</Badge> : '—'}</td>
                   <td style={S.td}>{g['Salidas Anticipadas'] > 0 ? <Badge type="anticipada">{g['Salidas Anticipadas']}</Badge> : '—'}</td>
                 </tr>
@@ -1498,18 +1696,20 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades }: any) {
         <div style={S.card}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:16 }}>
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Objetivo</strong>
-            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(reporteObjetivos, 'reporte-objetivos')}>⬇ Exportar CSV</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(reporteObjetivos.map(({ _actividad, ...row }: any) => row), 'reporte-objetivos')}>⬇ Exportar CSV</button>
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Cliente</th><th style={S.th}>Cubiertos</th><th style={S.th}>Descubiertos</th><th style={S.th}>Hs. Cubiertas</th></tr></thead>
+            <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Cliente</th><th style={S.th}>Con Asistencia</th><th style={S.th}>Horas Reales</th><th style={S.th}>En Curso</th><th style={S.th}>Sin Fichar</th><th style={S.th}>Descubiertos</th></tr></thead>
             <tbody>
               {reporteObjetivos.map((o: any) => (
                 <tr key={o.Objetivo}>
                   <td style={S.td}><strong>{o.Objetivo}</strong></td>
                   <td style={S.td}>{o.Cliente}</td>
-                  <td style={S.td}><Badge type="cubierto">{o['Turnos Cubiertos']}</Badge></td>
+                  <td style={S.td}><Badge type="cubierto">{o['Turnos con Asistencia']}</Badge></td>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{o['Horas Reales Cubiertas']}h</td>
+                  <td style={S.td}>{o['Turnos en Curso'] > 0 ? <Badge type="pendiente">{o['Turnos en Curso']}</Badge> : '—'}</td>
+                  <td style={S.td}>{o['Turnos sin Fichar'] > 0 ? <Badge type="pendiente">{o['Turnos sin Fichar']}</Badge> : '—'}</td>
                   <td style={S.td}>{o['Turnos Descubiertos'] > 0 ? <Badge type="descubierto">{o['Turnos Descubiertos']}</Badge> : '—'}</td>
-                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{o['Horas Cubiertas']}h</td>
                 </tr>
               ))}
             </tbody>
@@ -2907,6 +3107,7 @@ export default function AppPage() {
   const [registros, setRegistros] = useState<RegistroAsistencia[]>([])
   const [novedades, setNovedades] = useState<Novedad[]>([])
   const [loading, setLoading] = useState(true)
+  const [filtros, setFiltros] = useState<Record<string, any>>({})
 
   const cargarDatos = useCallback(async () => {
     setLoading(true)
@@ -2949,6 +3150,19 @@ export default function AppPage() {
       cargarDatos()
     })
   }, [cargarDatos])
+
+  const navegarConFiltro = (destino: string, filtro: any) => {
+    setFiltros(prev => ({ ...prev, [destino]: filtro }))
+    setPage(destino)
+  }
+
+  const limpiarFiltro = (destino: string) => {
+    setFiltros(prev => {
+      const next = { ...prev }
+      delete next[destino]
+      return next
+    })
+  }
 
 if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>Cargando...</div>
 
@@ -3026,15 +3240,15 @@ const esGuardia = esRolGuardia(user.rol)
             </>
           ) : (
             <>
-              {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} />}
-              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} registros={registros} />}
-              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} />}
-              {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} />}
-              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} />}
+              {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
+              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} />}
+              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} />}
+              {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} />}
+              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} setTurnos={setTurnos} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
-              {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} />}
+              {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} />}
               {page === 'turnos_base' && <TurnosBase />}
             </>
           )

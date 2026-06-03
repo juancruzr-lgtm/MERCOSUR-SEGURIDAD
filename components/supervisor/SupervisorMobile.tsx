@@ -14,6 +14,7 @@ interface Turno {
   hora_inicio: string
   hora_fin: string
   estado: 'programado' | 'cubierto' | 'descubierto'
+  tipo_evento?: string
 }
 
 interface Usuario {
@@ -23,6 +24,7 @@ interface Usuario {
   legajo?: string
   email?: string
   foto_url?: string
+  telefono?: string
   rol: string
   estado: string
 }
@@ -32,6 +34,9 @@ interface Objetivo {
   nombre: string
   cliente?: string
   direccion?: string
+  lat?: number | null
+  lng?: number | null
+  radio_metros?: number | null
   estado?: string
 }
 
@@ -79,6 +84,13 @@ export default function SupervisorMobile({ user }: any) {
   const [confirmarPassword, setConfirmarPassword] = useState('')
   const [perfilMensaje, setPerfilMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null)
   const [guardandoPassword, setGuardandoPassword] = useState(false)
+  const [filtroTurnos, setFiltroTurnos] = useState<EstadoTurno | 'todos'>('todos')
+  const [modalTurno, setModalTurno] = useState(false)
+  const [formTurno, setFormTurno] = useState({ objetivo_id:'', guardia_id:'', fecha: fechaHoy(), hora_inicio:'18:00', hora_fin:'06:00', tipo_evento:'normal' })
+  const [guardiaEditando, setGuardiaEditando] = useState<Usuario | null>(null)
+  const [objetivoEditando, setObjetivoEditando] = useState<Objetivo | null>(null)
+  const [formGuardia, setFormGuardia] = useState({ email:'', telefono:'', estado:'activo', foto_url:'' })
+  const [formObjetivo, setFormObjetivo] = useState({ direccion:'', lat:'', lng:'', radio_metros:'200', estado:'activo' })
 
   const hoy = fechaHoy()
 
@@ -94,16 +106,16 @@ export default function SupervisorMobile({ user }: any) {
     const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, { data: guardiasData, error: guardiasError }] = await Promise.all([
       supabase
         .from('turnos')
-        .select('id, guardia_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
+        .select('*')
         .eq('fecha', hoy)
         .order('hora_inicio'),
       supabase
         .from('objetivos')
-        .select('id, nombre, cliente, direccion, estado')
+        .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado')
         .order('nombre'),
       supabase
         .from('usuarios')
-        .select('id, nombre, apellido, legajo, rol, estado')
+        .select('id, nombre, apellido, legajo, rol, estado, email, telefono, foto_url')
         .in('rol', ['guardia', 'vigilador'])
         .order('apellido'),
     ])
@@ -200,10 +212,15 @@ export default function SupervisorMobile({ user }: any) {
     return 'sin entrada'
   }
 
+  const turnosVisibles = useMemo(() => {
+    if (filtroTurnos === 'todos') return turnos
+    return turnos.filter(t => estadoOperativo(t) === filtroTurnos)
+  }, [turnos, registros, filtroTurnos])
+
   const turnosPorObjetivo = useMemo(() => {
     const grupos = new Map<string, { objetivo: Objetivo, turnos: Turno[] }>()
 
-    turnos.forEach(turno => {
+    turnosVisibles.forEach(turno => {
       const objetivo = getObjetivo(turno.objetivo_id) || {
         id: turno.objetivo_id,
         nombre: 'Objetivo sin nombre',
@@ -217,7 +234,7 @@ export default function SupervisorMobile({ user }: any) {
     })
 
     return Array.from(grupos.values()).sort((a, b) => a.objetivo.nombre.localeCompare(b.objetivo.nombre))
-  }, [turnos, objetivos, registros])
+  }, [turnosVisibles, objetivos, registros])
 
   const resumen = useMemo(() => ({
     total: turnos.length,
@@ -225,6 +242,164 @@ export default function SupervisorMobile({ user }: any) {
     finalizados: turnos.filter(t => estadoOperativo(t) === 'finalizado').length,
     descubiertos: turnos.filter(t => estadoOperativo(t) === 'descubierto').length,
   }), [turnos, registros])
+
+  const crearTurno = async () => {
+    if (!formTurno.objetivo_id || !formTurno.fecha || !formTurno.hora_inicio || !formTurno.hora_fin) {
+      setError('Completá objetivo, fecha y horarios.')
+      return
+    }
+
+    setAsignando('crear-turno')
+    setError('')
+
+    const payload = {
+      objetivo_id: formTurno.objetivo_id,
+      guardia_id: formTurno.guardia_id || null,
+      fecha: formTurno.fecha,
+      hora_inicio: formTurno.hora_inicio,
+      hora_fin: formTurno.hora_fin,
+      estado: 'programado',
+      tipo_evento: formTurno.tipo_evento,
+    }
+
+    const { data, error: insertError } = await supabase.from('turnos').insert(payload).select().single()
+
+    if (insertError) {
+      setError(insertError.message)
+    } else if (data) {
+      setTurnos(prev => [...prev, data as Turno])
+      setModalTurno(false)
+      setFormTurno({ objetivo_id:'', guardia_id:'', fecha:hoy, hora_inicio:'18:00', hora_fin:'06:00', tipo_evento:'normal' })
+    }
+
+    setAsignando(null)
+  }
+
+  const actualizarUbicacionObjetivo = async (objetivo: Objetivo) => {
+    if (!navigator.geolocation) {
+      setError('GPS no disponible en este navegador.')
+      return
+    }
+
+    setAsignando(`gps-${objetivo.id}`)
+    setError('')
+
+    navigator.geolocation.getCurrentPosition(async position => {
+      const payload = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        radio_metros: objetivo.radio_metros || 200,
+      }
+
+      const { data, error: updateError } = await supabase.from('objetivos').update(payload).eq('id', objetivo.id).select().single()
+
+      if (updateError) {
+        setError(updateError.message)
+      } else if (data) {
+        setObjetivos(prev => prev.map(o => o.id === objetivo.id ? { ...o, ...data } : o))
+      }
+
+      setAsignando(null)
+    }, () => {
+      setError('GPS no disponible.')
+      setAsignando(null)
+    }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 })
+  }
+
+  const abrirEditarGuardia = (guardia: Usuario) => {
+    setError('')
+    setGuardiaEditando(guardia)
+    setFormGuardia({
+      email: guardia.email || '',
+      telefono: guardia.telefono || '',
+      estado: guardia.estado || 'activo',
+      foto_url: guardia.foto_url || '',
+    })
+  }
+
+  const guardarGuardia = async () => {
+    if (!guardiaEditando) return
+
+    setAsignando(`guardia-${guardiaEditando.id}`)
+    setError('')
+
+    const payload = {
+      email: formGuardia.email.trim().toLowerCase() || null,
+      telefono: formGuardia.telefono.trim() || null,
+      estado: formGuardia.estado,
+      foto_url: formGuardia.foto_url.trim() || null,
+    }
+
+    const { data, error: updateError } = await supabase
+      .from('usuarios')
+      .update(payload)
+      .eq('id', guardiaEditando.id)
+      .in('rol', ['guardia', 'vigilador'])
+      .select('id, nombre, apellido, legajo, rol, estado, email, telefono, foto_url')
+      .single()
+
+    if (updateError) {
+      setError(updateError.message)
+    } else if (data) {
+      setGuardias(prev => prev.map(g => g.id === guardiaEditando.id ? data as Usuario : g))
+      setGuardiaEditando(null)
+    }
+
+    setAsignando(null)
+  }
+
+  const abrirEditarObjetivo = (objetivo: Objetivo) => {
+    setError('')
+    setObjetivoEditando(objetivo)
+    setFormObjetivo({
+      direccion: objetivo.direccion || '',
+      lat: objetivo.lat === null || objetivo.lat === undefined ? '' : String(objetivo.lat),
+      lng: objetivo.lng === null || objetivo.lng === undefined ? '' : String(objetivo.lng),
+      radio_metros: String(objetivo.radio_metros || 200),
+      estado: objetivo.estado || 'activo',
+    })
+  }
+
+  const guardarObjetivo = async () => {
+    if (!objetivoEditando) return
+
+    setAsignando(`objetivo-${objetivoEditando.id}`)
+    setError('')
+
+    const lat = formObjetivo.lat.trim() ? Number(formObjetivo.lat) : null
+    const lng = formObjetivo.lng.trim() ? Number(formObjetivo.lng) : null
+    const radio = Number(formObjetivo.radio_metros) || 200
+
+    if ((lat !== null && !Number.isFinite(lat)) || (lng !== null && !Number.isFinite(lng))) {
+      setError('Latitud y longitud deben ser números válidos.')
+      setAsignando(null)
+      return
+    }
+
+    const payload = {
+      direccion: formObjetivo.direccion.trim() || null,
+      lat,
+      lng,
+      radio_metros: radio,
+      estado: formObjetivo.estado,
+    }
+
+    const { data, error: updateError } = await supabase
+      .from('objetivos')
+      .update(payload)
+      .eq('id', objetivoEditando.id)
+      .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado')
+      .single()
+
+    if (updateError) {
+      setError(updateError.message)
+    } else if (data) {
+      setObjetivos(prev => prev.map(o => o.id === objetivoEditando.id ? data as Objetivo : o))
+      setObjetivoEditando(null)
+    }
+
+    setAsignando(null)
+  }
 
   const cambiarGuardia = async (turno: Turno, guardiaId: string) => {
     const nuevoGuardiaId = guardiaId || null
@@ -277,6 +452,7 @@ export default function SupervisorMobile({ user }: any) {
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
     { id: 'turnos', label: 'Turnos', icon: '📅' },
     { id: 'guardias', label: 'Guardias', icon: '👮' },
+    { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
     { id: 'perfil', label: 'Perfil', icon: '👤' },
   ]
@@ -419,19 +595,28 @@ export default function SupervisorMobile({ user }: any) {
                 <div style={dateText}>{new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
 
                 <div style={statsGrid}>
-                  <div style={statCard}><strong>{resumen.total}</strong><span>Turnos</span></div>
-                  <div style={statCard}><strong>{resumen.enTurno}</strong><span>En turno</span></div>
-                  <div style={statCard}><strong>{resumen.finalizados}</strong><span>Finalizados</span></div>
-                  <div style={statCard}><strong>{resumen.descubiertos}</strong><span>Descubiertos</span></div>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('todos'); setTab('turnos') }}><strong>{resumen.total}</strong><span>Turnos</span></div>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('en turno'); setTab('turnos') }}><strong>{resumen.enTurno}</strong><span>En turno</span></div>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('finalizado'); setTab('turnos') }}><strong>{resumen.finalizados}</strong><span>Finalizados</span></div>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('descubierto'); setTab('turnos') }}><strong>{resumen.descubiertos}</strong><span>Descubiertos</span></div>
                 </div>
 
-                <button style={refreshButton} onClick={cargarDatos}>Actualizar</button>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                  <button style={refreshButton} onClick={cargarDatos}>Actualizar</button>
+                  <button style={secondaryButton} onClick={() => setModalTurno(true)}>Crear turno</button>
+                </div>
               </section>
             )}
 
             {tab === 'turnos' && (
               <section>
                 <div style={screenTitle}>Turnos por objetivo</div>
+                {filtroTurnos !== 'todos' && (
+                  <div style={{ ...errorBox, color:'#f59e0b', borderColor:'rgba(245,158,11,.35)', background:'rgba(245,158,11,.12)' }}>
+                    Filtro activo: {filtroTurnos}
+                    <button style={{ ...secondaryButton, marginTop:10 }} onClick={() => setFiltroTurnos('todos')}>Limpiar filtro</button>
+                  </div>
+                )}
 
                 {turnosPorObjetivo.length === 0 ? (
                   <div style={empty}>No hay turnos cargados para hoy.</div>
@@ -455,6 +640,36 @@ export default function SupervisorMobile({ user }: any) {
                   <div key={g.id} style={card}>
                     <div style={objetivoName}>{g.apellido}, {g.nombre}</div>
                     <div style={muted}>{g.legajo || 'Sin legajo'}</div>
+                    <div style={muted}>{g.email || 'Sin email'}{g.telefono ? ` · ${g.telefono}` : ''}</div>
+                    <button style={{ ...secondaryButton, marginTop:12 }} onClick={() => abrirEditarGuardia(g)}>
+                      Editar datos
+                    </button>
+                  </div>
+                ))}
+              </section>
+            )}
+
+            {tab === 'objetivos' && (
+              <section>
+                <div style={screenTitle}>Objetivos</div>
+                {objetivos.map(objetivo => (
+                  <div key={objetivo.id} style={card}>
+                    <div style={objetivoName}>{objetivo.nombre}</div>
+                    <div style={muted}>{objetivo.direccion || 'Sin dirección'}</div>
+                    <div style={muted}>Radio {objetivo.radio_metros || 200}m · Estado {objetivo.estado || 'activo'}</div>
+                    <div style={muted}>GPS {objetivo.lat ?? '—'}, {objetivo.lng ?? '—'}</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:12 }}>
+                      <button style={secondaryButton} onClick={() => abrirEditarObjetivo(objetivo)}>
+                        Editar
+                      </button>
+                      <button
+                        style={secondaryButton}
+                        onClick={() => actualizarUbicacionObjetivo(objetivo)}
+                        disabled={asignando === `gps-${objetivo.id}`}
+                      >
+                        {asignando === `gps-${objetivo.id}` ? 'Actualizando...' : 'Actualizar ubicación'}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </section>
@@ -541,6 +756,93 @@ export default function SupervisorMobile({ user }: any) {
           </>
         )}
       </main>
+
+      {modalTurno && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>Crear turno</div>
+            <label style={label}>Objetivo</label>
+            <select style={select} value={formTurno.objetivo_id} onChange={e => setFormTurno({ ...formTurno, objetivo_id:e.target.value })}>
+              <option value="">Seleccionar</option>
+              {objetivos.map(o => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+            </select>
+            <label style={label}>Guardia</label>
+            <select style={select} value={formTurno.guardia_id} onChange={e => setFormTurno({ ...formTurno, guardia_id:e.target.value })}>
+              <option value="">Sin asignar</option>
+              {guardias.filter(g => g.estado === 'activo').map(g => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>)}
+            </select>
+            <label style={label}>Fecha</label>
+            <input type="date" style={input} value={formTurno.fecha} onChange={e => setFormTurno({ ...formTurno, fecha:e.target.value })} />
+            <label style={label}>Hora inicio</label>
+            <input type="time" style={input} value={formTurno.hora_inicio} onChange={e => setFormTurno({ ...formTurno, hora_inicio:e.target.value })} />
+            <label style={label}>Hora fin</label>
+            <input type="time" style={input} value={formTurno.hora_fin} onChange={e => setFormTurno({ ...formTurno, hora_fin:e.target.value })} />
+            <label style={label}>Tipo</label>
+            <select style={select} value={formTurno.tipo_evento} onChange={e => setFormTurno({ ...formTurno, tipo_evento:e.target.value })}>
+              <option value="normal">Normal</option>
+              <option value="cobertura">Cobertura</option>
+            </select>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <button style={secondaryButton} onClick={() => setModalTurno(false)}>Cancelar</button>
+              <button style={refreshButton} onClick={crearTurno} disabled={asignando === 'crear-turno'}>{asignando === 'crear-turno' ? 'Guardando...' : 'Crear'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {guardiaEditando && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>Editar guardia</div>
+            <div style={muted}>{guardiaEditando.apellido}, {guardiaEditando.nombre}</div>
+            <label style={label}>Email</label>
+            <input style={input} type="email" value={formGuardia.email} onChange={e => setFormGuardia({ ...formGuardia, email:e.target.value })} />
+            <label style={label}>Teléfono</label>
+            <input style={input} value={formGuardia.telefono} onChange={e => setFormGuardia({ ...formGuardia, telefono:e.target.value })} />
+            <label style={label}>Estado</label>
+            <select style={select} value={formGuardia.estado} onChange={e => setFormGuardia({ ...formGuardia, estado:e.target.value })}>
+              <option value="activo">Activo</option>
+              <option value="inactivo">Inactivo</option>
+            </select>
+            <label style={label}>Foto URL</label>
+            <input style={input} value={formGuardia.foto_url} onChange={e => setFormGuardia({ ...formGuardia, foto_url:e.target.value })} />
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <button style={secondaryButton} onClick={() => setGuardiaEditando(null)}>Cancelar</button>
+              <button style={refreshButton} onClick={guardarGuardia} disabled={asignando === `guardia-${guardiaEditando.id}`}>
+                {asignando === `guardia-${guardiaEditando.id}` ? 'Guardando...' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {objetivoEditando && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>Editar objetivo</div>
+            <div style={muted}>{objetivoEditando.nombre}</div>
+            <label style={label}>Dirección</label>
+            <input style={input} value={formObjetivo.direccion} onChange={e => setFormObjetivo({ ...formObjetivo, direccion:e.target.value })} />
+            <label style={label}>Latitud</label>
+            <input style={input} inputMode="decimal" value={formObjetivo.lat} onChange={e => setFormObjetivo({ ...formObjetivo, lat:e.target.value })} />
+            <label style={label}>Longitud</label>
+            <input style={input} inputMode="decimal" value={formObjetivo.lng} onChange={e => setFormObjetivo({ ...formObjetivo, lng:e.target.value })} />
+            <label style={label}>Radio metros</label>
+            <input style={input} type="number" min={50} value={formObjetivo.radio_metros} onChange={e => setFormObjetivo({ ...formObjetivo, radio_metros:e.target.value })} />
+            <label style={label}>Estado</label>
+            <select style={select} value={formObjetivo.estado} onChange={e => setFormObjetivo({ ...formObjetivo, estado:e.target.value })}>
+              <option value="activo">Activo</option>
+              <option value="inactivo">Inactivo</option>
+            </select>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <button style={secondaryButton} onClick={() => setObjetivoEditando(null)}>Cancelar</button>
+              <button style={refreshButton} onClick={guardarObjetivo} disabled={asignando === `objetivo-${objetivoEditando.id}`}>
+                {asignando === `objetivo-${objetivoEditando.id}` ? 'Guardando...' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <nav style={nav}>
         {tabs.map((t) => (
@@ -658,6 +960,21 @@ const input: React.CSSProperties = {
   borderRadius: 8,
   padding: '10px 12px',
   marginBottom: 12,
+}
+
+const modalOverlay: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0,0,0,.72)',
+  zIndex: 50,
+  padding: 18,
+  overflowY: 'auto',
+}
+
+const modalCard: React.CSSProperties = {
+  ...card,
+  maxWidth: 480,
+  margin: '24px auto 96px',
 }
 
 const registroBox: React.CSSProperties = {
