@@ -83,6 +83,56 @@ function formatHorarioAsignado(turno?: Turno | null): string {
   return `${inicio} – ${fin}`
 }
 
+function numeroGps(value: unknown): number | null {
+  const numero = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(numero) ? numero : null
+}
+
+function gpsRegistroAsistencia(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso') {
+  const lat = tipo === 'ingreso'
+    ? numeroGps(registro?.latitud_ingreso ?? registro?.lat_entrada)
+    : numeroGps(registro?.latitud_egreso ?? registro?.lat_salida)
+  const lng = tipo === 'ingreso'
+    ? numeroGps(registro?.longitud_ingreso ?? registro?.lng_entrada)
+    : numeroGps(registro?.longitud_egreso ?? registro?.lng_salida)
+  const precision = tipo === 'ingreso'
+    ? numeroGps(registro?.precision_ingreso)
+    : numeroGps(registro?.precision_egreso)
+
+  return lat !== null && lng !== null ? { lat, lng, precision } : null
+}
+
+function textoAuditoriaGps(registro: RegistroAsistencia | any, objetivo: Objetivo | any, tipo: 'ingreso' | 'egreso'): string {
+  const gps = gpsRegistroAsistencia(registro, tipo)
+  if (!gps) return '—'
+
+  const objetivoLat = numeroGps(objetivo?.lat)
+  const objetivoLng = numeroGps(objetivo?.lng)
+  const radio = numeroGps(objetivo?.radio_metros) || 0
+
+  if (objetivoLat === null || objetivoLng === null || radio <= 0) return 'Objetivo sin GPS'
+
+  const distancia = Math.round(calcDistancia(gps.lat, gps.lng, objetivoLat, objetivoLng))
+  const estadoRadio = distancia <= radio ? 'Dentro del radio' : 'Fuera del radio'
+
+  return `${estadoRadio} · Distancia ${distancia}m`
+}
+
+function textoPrecisionGps(registro: RegistroAsistencia | any): string {
+  const ingreso = gpsRegistroAsistencia(registro, 'ingreso')?.precision
+  const egreso = gpsRegistroAsistencia(registro, 'egreso')?.precision
+  const partes = []
+
+  if (ingreso !== null && ingreso !== undefined) partes.push(`Ingreso ${Math.round(ingreso)}m`)
+  if (egreso !== null && egreso !== undefined) partes.push(`Egreso ${Math.round(egreso)}m`)
+
+  return partes.length ? partes.join(' · ') : '—'
+}
+
+function objetivoTieneGps(objetivo: Objetivo | any): boolean {
+  return numeroGps(objetivo?.lat) !== null && numeroGps(objetivo?.lng) !== null && (numeroGps(objetivo?.radio_metros) || 0) > 0
+}
+
 function esRolGuardia(rol?: string | null): boolean {
   return rol === 'guardia' || rol === 'vigilador'
 }
@@ -1013,6 +1063,9 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
                             📍 radio {o.radio_metros}m
                           </div>
                         )}
+                        <div style={{ fontSize:11, color: objetivoTieneGps(o) ? '#10b981' : '#f59e0b', marginTop:2 }}>
+                          {objetivoTieneGps(o) ? 'GPS completo' : 'Falta GPS'}
+                        </div>
                       </td>
 
                       {/* Cliente */}
@@ -1451,14 +1504,16 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
           <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
         </div>
       )}
-      <div style={S.card}>
+      <div style={{ ...S.card, overflowX:'auto' }}>
         <table style={S.table}>
-          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>Alertas</th></tr></thead>
+          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>GPS egreso</th><th style={S.th}>Precisión</th><th style={S.th}>Alertas</th></tr></thead>
           <tbody>
             {registrosOrdenados.map((r: RegistroAsistencia) => {
               const g = guardias.find((x: Usuario) => x.id === r.guardia_id)
               const t = turnos.find((x: Turno) => x.id === r.turno_id)
               const o = objetivos.find((x: Objetivo) => x.id === t?.objetivo_id)
+              const gpsIngreso = gpsRegistroAsistencia(r, 'ingreso')
+              const gpsEgreso = gpsRegistroAsistencia(r, 'egreso')
               return (
                 <tr key={r.id}>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatFecha(fechaRegistroAsistencia(r, t))}</td>
@@ -1468,6 +1523,15 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_entrada_real}</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_salida_real || '—'}</td>
                   <td style={S.td}>{r.horas_trabajadas ? formatHoras(r.horas_trabajadas) : '—'}</td>
+                  <td style={{ ...S.td, fontSize:12 }}>
+                    <Badge type={gpsIngreso ? 'ok' : 'pendiente'}>{gpsIngreso ? 'GPS ingreso OK' : 'Sin GPS'}</Badge>
+                    <div style={{ fontSize:11, color:'#64748b', marginTop:4 }}>{textoAuditoriaGps(r, o, 'ingreso')}</div>
+                  </td>
+                  <td style={{ ...S.td, fontSize:12 }}>
+                    <Badge type={gpsEgreso ? 'ok' : 'pendiente'}>{gpsEgreso ? 'GPS egreso OK' : 'Sin GPS'}</Badge>
+                    <div style={{ fontSize:11, color:'#64748b', marginTop:4 }}>{textoAuditoriaGps(r, o, 'egreso')}</div>
+                  </td>
+                  <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{textoPrecisionGps(r)}</td>
                   <td style={S.td}>
                     <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
                       {r.alerta_entrada && <Badge type={r.alerta_entrada}>{r.alerta_entrada === 'tarde' ? '⏰ Tarde' : '⬆ Anticipada'}</Badge>}

@@ -16,8 +16,8 @@ interface Objetivo {
   id: string
   nombre: string
   direccion?: string
-  latitud?: number
-  longitud?: number
+  lat?: number
+  lng?: number
   radio_metros?: number
 }
 
@@ -34,6 +34,10 @@ interface Registro {
   latitud_egreso?: number
   longitud_egreso?: number
   precision_egreso?: number
+  lat_entrada?: number
+  lng_entrada?: number
+  lat_salida?: number
+  lng_salida?: number
 }
 
 interface GpsData {
@@ -136,6 +140,58 @@ function esErrorColumnaGps(error: unknown): boolean {
 
   return /latitud_ingreso|longitud_ingreso|precision_ingreso|latitud_egreso|longitud_egreso|precision_egreso/i
     .test(`${message} ${details} ${hint}`)
+}
+
+function numeroGps(value: unknown): number | null {
+  const numero = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(numero) ? numero : null
+}
+
+function gpsRegistro(registro: Registro | undefined, tipo: 'ingreso' | 'egreso') {
+  if (!registro) return null
+
+  const lat = tipo === 'ingreso'
+    ? numeroGps(registro.latitud_ingreso ?? registro.lat_entrada)
+    : numeroGps(registro.latitud_egreso ?? registro.lat_salida)
+  const lng = tipo === 'ingreso'
+    ? numeroGps(registro.longitud_ingreso ?? registro.lng_entrada)
+    : numeroGps(registro.longitud_egreso ?? registro.lng_salida)
+  const precision = tipo === 'ingreso'
+    ? numeroGps(registro.precision_ingreso)
+    : numeroGps(registro.precision_egreso)
+
+  return lat !== null && lng !== null ? { lat, lng, precision } : null
+}
+
+function calcDistanciaMetros(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const radioTierra = 6371000
+  const rad = Math.PI / 180
+  const dLat = (lat2 - lat1) * rad
+  const dLng = (lng2 - lng1) * rad
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2
+
+  return radioTierra * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function auditoriaGps(registro: Registro | undefined, objetivo: Objetivo | undefined, tipo: 'ingreso' | 'egreso'): string {
+  const gps = gpsRegistro(registro, tipo)
+  if (!gps) return 'Sin GPS'
+
+  const objetivoLat = numeroGps(objetivo?.lat)
+  const objetivoLng = numeroGps(objetivo?.lng)
+  const radio = numeroGps(objetivo?.radio_metros) || 0
+  const precision = gps.precision !== null ? ` · Precisión ${Math.round(gps.precision)}m` : ''
+
+  if (objetivoLat === null || objetivoLng === null || radio <= 0) {
+    return `GPS capturado OK${precision} · Objetivo sin GPS`
+  }
+
+  const distancia = Math.round(calcDistanciaMetros(gps.lat, gps.lng, objetivoLat, objetivoLng))
+  const estadoRadio = distancia <= radio ? 'Dentro del radio' : 'Fuera del radio'
+
+  return `GPS capturado OK${precision} · ${estadoRadio} · Distancia ${distancia}m`
 }
 // ── ESTILOS ───────────────────────────────────────────────────
 const S: Record<string, React.CSSProperties> = {
@@ -352,11 +408,11 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
   supabase
     .from('objetivos')
-    .select('id, nombre, direccion, latitud, longitud, radio_metros'),
+    .select('id, nombre, direccion, lat, lng, radio_metros'),
 
   supabase
     .from('registros_asistencia')
-    .select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, horas_trabajadas')
+    .select('*')
     .eq('guardia_id', user.id),
 
 ])
@@ -488,7 +544,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
       setMensaje({
-        texto: `✓ Entrada registrada a las ${hora}`,
+        texto: `✓ Entrada registrada a las ${hora} · GPS capturado OK · Precisión ${Math.round(gps.accuracy)}m`,
         tipo: 'ok',
       })
       setTimeout(() => setMensaje(null), 4000)
@@ -562,12 +618,12 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     } else {
       setRegistros(prev =>
         prev.map(r => r.id === registro.id
-          ? { ...r, hora_salida_real: hora, horas_trabajadas: horas }
+          ? { ...r, ...payloadConGps, hora_salida_real: hora, horas_trabajadas: horas }
           : r
         )
       )
       setMensaje({
-        texto: gpsDisponible ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas` : 'GPS no disponible, asistencia registrada sin ubicación.',
+        texto: gpsDisponible && gps ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas · GPS capturado OK · Precisión ${Math.round(gps.accuracy)}m` : 'GPS no disponible, asistencia registrada sin ubicación.',
         tipo: gpsDisponible ? 'ok' : 'warn',
       })
     }
@@ -689,6 +745,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           const cargando = fichando === turno.id
           const puedeDarPresente = estaEnVentanaFichaje(turno, ahora)
           const gpsBloqueaPresente = permisoGps === 'checking' || permisoGps === 'denied' || permisoGps === 'unsupported'
+          const gpsIngreso = auditoriaGps(reg, obj, 'ingreso')
+          const gpsEgreso = auditoriaGps(reg, obj, 'egreso')
 
           return (
             <div key={turno.id} style={S.card}>
@@ -737,6 +795,12 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                       Total: <strong style={{ color: '#f59e0b' }}>{reg.horas_trabajadas}h trabajadas</strong>
                     </div>
                   )}
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                    <div>GPS ingreso: <strong style={{ color: gpsIngreso === 'Sin GPS' ? '#f59e0b' : '#10b981' }}>{gpsIngreso}</strong></div>
+                    {reg.hora_salida_real && (
+                      <div>GPS egreso: <strong style={{ color: gpsEgreso === 'Sin GPS' ? '#f59e0b' : '#10b981' }}>{gpsEgreso}</strong></div>
+                    )}
+                  </div>
                 </div>
               )}
 

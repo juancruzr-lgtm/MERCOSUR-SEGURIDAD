@@ -47,6 +47,16 @@ interface RegistroAsistencia {
   hora_entrada_real?: string | null
   hora_salida_real?: string | null
   horas_trabajadas?: number | null
+  latitud_ingreso?: number | string | null
+  longitud_ingreso?: number | string | null
+  precision_ingreso?: number | string | null
+  latitud_egreso?: number | string | null
+  longitud_egreso?: number | string | null
+  precision_egreso?: number | string | null
+  lat_entrada?: number | string | null
+  lng_entrada?: number | string | null
+  lat_salida?: number | string | null
+  lng_salida?: number | string | null
   created_at?: string
 }
 
@@ -68,6 +78,63 @@ function fechaDDMMYYYY(fecha?: string | null): string {
 
   const [year, month, day] = fecha.slice(0, 10).split('-')
   return year && month && day ? `${day}/${month}/${year}` : '—'
+}
+
+function numeroGps(value: unknown): number | null {
+  const numero = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(numero) ? numero : null
+}
+
+function gpsRegistro(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 'egreso') {
+  if (!registro) return null
+
+  const lat = tipo === 'ingreso'
+    ? numeroGps(registro.latitud_ingreso ?? registro.lat_entrada)
+    : numeroGps(registro.latitud_egreso ?? registro.lat_salida)
+  const lng = tipo === 'ingreso'
+    ? numeroGps(registro.longitud_ingreso ?? registro.lng_entrada)
+    : numeroGps(registro.longitud_egreso ?? registro.lng_salida)
+  const precision = tipo === 'ingreso'
+    ? numeroGps(registro.precision_ingreso)
+    : numeroGps(registro.precision_egreso)
+
+  return lat !== null && lng !== null ? { lat, lng, precision } : null
+}
+
+function calcDistanciaMetros(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const radioTierra = 6371000
+  const rad = Math.PI / 180
+  const dLat = (lat2 - lat1) * rad
+  const dLng = (lng2 - lng1) * rad
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2
+
+  return radioTierra * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function ubicacionObjetivoCompleta(objetivo?: Objetivo | null): boolean {
+  return numeroGps(objetivo?.lat) !== null && numeroGps(objetivo?.lng) !== null && (numeroGps(objetivo?.radio_metros) || 0) > 0
+}
+
+function resumenGps(registro: RegistroAsistencia | undefined, objetivo: Objetivo | undefined, tipo: 'ingreso' | 'egreso'): string {
+  const gps = gpsRegistro(registro, tipo)
+  const etiqueta = tipo === 'ingreso' ? 'GPS ingreso' : 'GPS egreso'
+  if (!gps) return `${etiqueta}: Sin GPS`
+
+  const objetivoLat = numeroGps(objetivo?.lat)
+  const objetivoLng = numeroGps(objetivo?.lng)
+  const radio = numeroGps(objetivo?.radio_metros) || 0
+  const precision = gps.precision !== null ? ` · Precisión ${Math.round(gps.precision)}m` : ''
+
+  if (objetivoLat === null || objetivoLng === null || radio <= 0) {
+    return `${etiqueta} OK${precision} · Objetivo sin GPS`
+  }
+
+  const distancia = Math.round(calcDistanciaMetros(gps.lat, gps.lng, objetivoLat, objetivoLng))
+  const estadoRadio = distancia <= radio ? 'Dentro del radio' : 'Fuera del radio'
+
+  return `${etiqueta} OK${precision} · ${estadoRadio} · Distancia ${distancia}m`
 }
 
 export default function SupervisorMobile({ user }: any) {
@@ -153,7 +220,7 @@ export default function SupervisorMobile({ user }: any) {
 
     const { data: registrosData, error: registrosError } = await supabase
       .from('registros_asistencia')
-      .select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, horas_trabajadas, created_at')
+      .select('*')
       .in('turno_id', turnosHoy.map(t => t.id))
 
     if (registrosError) {
@@ -480,6 +547,8 @@ export default function SupervisorMobile({ user }: any) {
     const alerta = alertaTurno(turno)
     const puedeMarcarDescubierto = !registro?.hora_entrada_real && estado !== 'descubierto'
     const registrosAbiertos = turnoRegistrosAbierto === turno.id
+    const gpsIngreso = resumenGps(registro, objetivo, 'ingreso')
+    const gpsEgreso = resumenGps(registro, objetivo, 'egreso')
 
     return (
       <div key={turno.id} style={turnoCard}>
@@ -526,6 +595,14 @@ export default function SupervisorMobile({ user }: any) {
           <div>
             <div style={label}>Asistencia</div>
             <div style={{ ...registroValue, color: alerta === 'sin entrada' ? '#f59e0b' : '#10b981' }}>{alerta}</div>
+          </div>
+          <div>
+            <div style={label}>GPS ingreso</div>
+            <div style={{ ...registroValue, color: gpsIngreso.includes('Sin GPS') ? '#f59e0b' : '#10b981' }}>{gpsIngreso}</div>
+          </div>
+          <div>
+            <div style={label}>GPS egreso</div>
+            <div style={{ ...registroValue, color: gpsEgreso.includes('Sin GPS') ? '#f59e0b' : '#10b981' }}>{gpsEgreso}</div>
           </div>
         </div>
 
@@ -574,6 +651,8 @@ export default function SupervisorMobile({ user }: any) {
                     <span>Salida {horaCorta(r.hora_salida_real)}</span>
                     <span>{horasCortas(r.horas_trabajadas)}</span>
                   </div>
+                  <div style={muted}>{resumenGps(r, objetivo, 'ingreso')}</div>
+                  <div style={muted}>{resumenGps(r, objetivo, 'egreso')}</div>
                 </div>
               )
             })}
@@ -671,7 +750,7 @@ export default function SupervisorMobile({ user }: any) {
                     <div style={objetivoName}>{objetivo.nombre}</div>
                     <div style={muted}>{objetivo.direccion || 'Sin dirección'}</div>
                     <div style={muted}>Radio {objetivo.radio_metros || 200}m · Estado {objetivo.estado || 'activo'}</div>
-                    <div style={muted}>GPS {objetivo.lat ?? '—'}, {objetivo.lng ?? '—'}</div>
+                    <div style={muted}>GPS {objetivo.lat ?? '—'}, {objetivo.lng ?? '—'} · {ubicacionObjetivoCompleta(objetivo) ? 'Ubicación completa' : 'Falta GPS'}</div>
                     <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:12 }}>
                       <button style={secondaryButton} onClick={() => abrirEditarObjetivo(objetivo)}>
                         Editar
