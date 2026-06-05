@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto } from '@/lib/turnos'
 
 type EstadoTurno = 'programado' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto'
 type TipoAlerta = 'sin entrada' | 'entrada registrada' | 'salida registrada'
@@ -324,6 +325,26 @@ export default function SupervisorMobile({ user }: any) {
     descubiertos: turnos.filter(t => estadoOperativo(t) === 'descubierto').length,
   }), [turnos, registros])
 
+  const guardiaTieneTurnoSuperpuesto = async (
+    candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>,
+    excluirTurnoId?: string,
+  ): Promise<boolean | null> => {
+    if (!candidato.guardia_id) return false
+
+    const { data, error: turnosError } = await supabase
+      .from('turnos')
+      .select('id, guardia_id, fecha, hora_inicio, hora_fin')
+      .eq('guardia_id', candidato.guardia_id)
+      .in('fecha', fechasVecinasTurno(candidato.fecha))
+
+    if (turnosError) {
+      setError(turnosError.message)
+      return null
+    }
+
+    return tieneTurnoSuperpuesto(data || [], candidato, excluirTurnoId)
+  }
+
   const crearTurno = async () => {
     if (!formTurno.objetivo_id || !formTurno.fecha || !formTurno.hora_inicio || !formTurno.hora_fin) {
       setError('Completá objetivo, fecha y horarios.')
@@ -341,6 +362,17 @@ export default function SupervisorMobile({ user }: any) {
       hora_fin: formTurno.hora_fin,
       estado: 'programado',
       tipo_evento: formTurno.tipo_evento,
+    }
+
+    const conflicto = payload.guardia_id ? await guardiaTieneTurnoSuperpuesto(payload) : false
+    if (conflicto === null) {
+      setAsignando(null)
+      return
+    }
+    if (conflicto) {
+      setError(MENSAJE_TURNO_SUPERPUESTO)
+      setAsignando(null)
+      return
     }
 
     const { data, error: insertError } = await supabase.from('turnos').insert(payload).select().single()
@@ -490,6 +522,22 @@ export default function SupervisorMobile({ user }: any) {
     const payload: { guardia_id: string | null, estado: Turno['estado'] } = {
       guardia_id: nuevoGuardiaId,
       estado: nuevoGuardiaId ? (turno.estado === 'descubierto' ? 'programado' : turno.estado) : 'descubierto',
+    }
+
+    const conflicto = nuevoGuardiaId ? await guardiaTieneTurnoSuperpuesto({
+      guardia_id: nuevoGuardiaId,
+      fecha: turno.fecha,
+      hora_inicio: turno.hora_inicio,
+      hora_fin: turno.hora_fin,
+    }, turno.id) : false
+    if (conflicto === null) {
+      setAsignando(null)
+      return
+    }
+    if (conflicto) {
+      setError(MENSAJE_TURNO_SUPERPUESTO)
+      setAsignando(null)
+      return
     }
 
     const { error: updateError } = await supabase

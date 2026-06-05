@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcDistancia } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
+import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto } from '@/lib/turnos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 const S: Record<string, React.CSSProperties> = {
@@ -1266,11 +1267,29 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   })
   const [filtFecha, setFiltFecha] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const guardiaTieneTurnoSuperpuesto = async (candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>): Promise<boolean | null> => {
+    if (!candidato.guardia_id) return false
+
+    const { data, error: turnosError } = await supabase
+      .from('turnos')
+      .select('id, guardia_id, fecha, hora_inicio, hora_fin')
+      .eq('guardia_id', candidato.guardia_id)
+      .in('fecha', fechasVecinasTurno(candidato.fecha))
+
+    if (turnosError) {
+      setError(turnosError.message)
+      return null
+    }
+
+    return tieneTurnoSuperpuesto(data || [], candidato)
+  }
 
   const guardar = async () => {
     if (!form.objetivo_id || !form.fecha || !form.hora_inicio || !form.hora_fin) return
 
-    setLoading(true)
+    setError('')
 
     const payload = {
       ...form,
@@ -1279,6 +1298,15 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       tipo_evento: 'normal',
       estado_revision: 'aprobado',
     }
+
+    const conflicto = payload.guardia_id ? await guardiaTieneTurnoSuperpuesto(payload) : false
+    if (conflicto === null) return
+    if (conflicto) {
+      setError(MENSAJE_TURNO_SUPERPUESTO)
+      return
+    }
+
+    setLoading(true)
 
     const { data, error } = await supabase
       .from('turnos')
@@ -1296,6 +1324,8 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
         hora_inicio: '06:00',
         hora_fin: '14:00',
       })
+    } else if (error) {
+      setError(error.message)
     }
 
     setLoading(false)
@@ -1332,7 +1362,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
         <button
           style={{ ...S.btn, ...S.btnPrimary }}
-          onClick={() => setModal(true)}
+          onClick={() => { setError(''); setModal(true) }}
         >
           + Nuevo Turno
         </button>
@@ -1342,6 +1372,12 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
         <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
           <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
           <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ ...S.card, padding:12, color:'#f59e0b', borderColor:'rgba(245,158,11,.35)' }}>
+          {error}
         </div>
       )}
 
@@ -1425,6 +1461,12 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
             </>
           }
         >
+          {error && (
+            <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
+              {error}
+            </div>
+          )}
+
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Objetivo</label>
             <select
@@ -1932,7 +1974,14 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     const fechaDesde = `${anio}-${String(mes).padStart(2,'0')}-01`
     const ultimoDia = new Date(anio, mes, 0).getDate()
     const fechaHasta = `${anio}-${String(mes).padStart(2,'0')}-${ultimoDia}`
-    const { data: turnosExistentes } = await supabase.from('turnos').select('objetivo_id, guardia_id, fecha, hora_inicio, hora_fin').gte('fecha', fechaDesde).lte('fecha', fechaHasta).eq('tipo_evento', 'normal')
+    const fechaConsultaDesde = fechasVecinasTurno(fechaDesde)[0]
+    const fechaConsultaHasta = fechasVecinasTurno(fechaHasta)[2]
+    const { data: turnosExistentes } = await supabase
+      .from('turnos')
+      .select('id, objetivo_id, guardia_id, fecha, hora_inicio, hora_fin')
+      .gte('fecha', fechaConsultaDesde)
+      .lte('fecha', fechaConsultaHasta)
+      .eq('tipo_evento', 'normal')
     const existentes = new Set((turnosExistentes || []).map((t: any) => `${t.objetivo_id}|${t.guardia_id}|${t.fecha}|${t.hora_inicio}|${t.hora_fin}`))
     const nuevos: any[] = []
     for (const srv of serviciosActivos) {
@@ -1945,7 +1994,13 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
         const fechaStr = `${anio}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`
         const key = `${srv.objetivo_id}|${guardiaId}|${fechaStr}|${srv.turno_base.hora_inicio}|${srv.turno_base.hora_fin}`
         if (existentes.has(key)) continue
-        nuevos.push({ objetivo_id:srv.objetivo_id, guardia_id:guardiaId, guardia_original_id:guardiaId, guardia_real_id:null, fecha:fechaStr, hora_inicio:srv.turno_base.hora_inicio, hora_fin:srv.turno_base.hora_fin, estado:'programado', tipo_evento:'normal', estado_revision:'aprobado', servicio_base_id:srv.id })
+        const candidato = { objetivo_id:srv.objetivo_id, guardia_id:guardiaId, guardia_original_id:guardiaId, guardia_real_id:null, fecha:fechaStr, hora_inicio:srv.turno_base.hora_inicio, hora_fin:srv.turno_base.hora_fin, estado:'programado', tipo_evento:'normal', estado_revision:'aprobado', servicio_base_id:srv.id }
+        if (tieneTurnoSuperpuesto([...(turnosExistentes || []), ...nuevos], candidato)) {
+          setResultadoGeneracion(MENSAJE_TURNO_SUPERPUESTO)
+          setGenerando(false)
+          return
+        }
+        nuevos.push(candidato)
       }
     }
     if (nuevos.length === 0) { setResultadoGeneracion('No hay turnos nuevos para generar. Todos ya existen o no tienen guardia asignado.'); setGenerando(false); return }
