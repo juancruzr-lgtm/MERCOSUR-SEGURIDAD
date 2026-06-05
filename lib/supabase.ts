@@ -40,7 +40,9 @@ export interface Objetivo {
 
 export interface Turno {
   id: string
-  guardia_id?: string
+  guardia_id?: string | null
+  guardia_original_id?: string | null
+  guardia_real_id?: string | null
   objetivo_id: string
   fecha: string
   hora_inicio: string

@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcDistancia } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
-import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto } from '@/lib/turnos'
+import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 const S: Record<string, React.CSSProperties> = {
@@ -301,6 +301,8 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   const turnoPorId = new Map<string, Turno>(turnos.map((t: Turno) => [t.id, t]))
   const registrosHoy = registros.filter((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha === hoy)
   const registrosMes = registros.filter((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha?.slice(0, 7) === mesActual)
+  const existeAsistencia = (turno: Turno) =>
+    registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id)
   const tieneEntrada = (turno: Turno) =>
     registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_entrada_real)
   const tieneSalida = (turno: Turno) =>
@@ -308,7 +310,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   const registroActivo = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real)
   const guardiasEnTurno = new Set(registroActivo.map((r: RegistroAsistencia) => r.guardia_id)).size
   const turnosCubiertos = turnosHoy.filter((t: Turno) => t.estado === 'cubierto').length
-  const turnosDescubiertos = turnosHoy.filter((t: Turno) => t.estado === 'descubierto' || !t.guardia_id)
+  const turnosDescubiertos = turnosHoy.filter((t: Turno) => turnoSinCoberturaOperativa(t, existeAsistencia(t)))
   const turnosSinFichar = turnosHoy.filter((t: Turno) => t.guardia_id && t.estado !== 'descubierto' && !tieneEntrada(t))
   const turnosAsistenciaPendiente = turnosHoy.filter((t: Turno) => {
     if (t.estado === 'descubierto' || !t.guardia_id) return false
@@ -322,16 +324,26 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   const turnosEnCursoHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
   const novedadesUrgentes = novedades.filter((n: Novedad) => n.prioridad === 'urgente' && n.estado !== 'resuelta')
 
-  const getGuardia = (id?: string) => usuarios.find((g: Usuario) => g.id === id)
+  const getGuardia = (id?: string | null) => usuarios.find((g: Usuario) => g.id === id)
   const getObjetivo = (id: string) => objetivos.find((o: Objetivo) => o.id === id)
   const hora = (value?: string) => value ? value.slice(0, 5) : '--:--'
-  const nombreGuardia = (id?: string) => {
+  const nombreGuardia = (id?: string | null) => {
     const guardia = getGuardia(id)
     return guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Sin guardia'
+  }
+  const guardiaEsperadoId = (turno: Turno) => (turno as any).guardia_original_id || turno.guardia_id || null
+  const nombreGuardiaEsperado = (turno: Turno) => {
+    const guardiaId = guardiaEsperadoId(turno)
+    return guardiaId ? nombreGuardia(guardiaId) : 'Sin guardia esperado'
   }
   const nombreObjetivo = (id: string) => getObjetivo(id)?.nombre || 'Objetivo sin nombre'
   const formatoHoras = (value: number) =>
     `${value.toLocaleString('es-AR', { maximumFractionDigits: 2 })} h`
+  const detalleTurnoDescubierto = (turno: Turno) => {
+    if (!turno.guardia_id) return 'Sin guardia asignado'
+    if (turno.estado === 'descubierto') return 'Estado descubierto'
+    return 'Pasó ventana de fichaje sin asistencia'
+  }
 
   const metricas = [
     { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: '#3b82f6', page:'objetivos', filtro:{ tipo:'activos', label:'Objetivos activos' } },
@@ -378,7 +390,13 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     <div key={turno.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('turnos', filtro)}>
       <strong style={{ color:'#f8fafc' }}>{nombreObjetivo(turno.objetivo_id)}</strong>
       <div style={{ color:'#94a3b8', marginTop:4 }}>
-        {hora(turno.hora_inicio)} a {hora(turno.hora_fin)} - {nombreGuardia(turno.guardia_id)}
+        Horario: {hora(turno.hora_inicio)} a {hora(turno.hora_fin)}
+      </div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>
+        Estado: {turno.estado || 'programado'}
+      </div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>
+        Guardia esperado: {nombreGuardiaEsperado(turno)}
       </div>
       <div style={{ color:'#f59e0b', marginTop:4 }}>{detalle}</div>
     </div>
@@ -425,7 +443,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
           {turnosDescubiertos.length === 0 ? (
             <div style={emptyAlert}>No hay turnos descubiertos hoy.</div>
           ) : turnosDescubiertos.map((turno: Turno) =>
-            renderTurnoAlert(turno, turno.guardia_id ? 'Estado descubierto' : 'Sin guardia asignado', { tipo:'descubiertos', label:'Turnos descubiertos hoy' })
+            renderTurnoAlert(turno, detalleTurnoDescubierto(turno), { tipo:'descubiertos', label:'Turnos descubiertos hoy' })
           )}
         </div>
 
@@ -1333,12 +1351,13 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
   const hoy = new Date().toLocaleDateString('sv-SE')
   const fechaFiltro = filtroActivo ? hoy : filtFecha
+  const existeAsistencia = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id)
   const tieneEntrada = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_entrada_real)
   const tieneSalida = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
   const filtrados = turnos.filter((t: Turno) => {
     if (fechaFiltro && t.fecha !== fechaFiltro) return false
     if (filtroActivo?.tipo === 'cubiertos' && t.estado !== 'cubierto') return false
-    if (filtroActivo?.tipo === 'descubiertos' && t.estado !== 'descubierto' && t.guardia_id) return false
+    if (filtroActivo?.tipo === 'descubiertos' && !turnoSinCoberturaOperativa(t, existeAsistencia(t))) return false
     if (filtroActivo?.tipo === 'sin_fichar' && (!t.guardia_id || tieneEntrada(t))) return false
     if (filtroActivo?.tipo === 'pendientes_asistencia' && (!t.guardia_id || (tieneEntrada(t) && tieneSalida(t)))) return false
     return true
@@ -2366,7 +2385,7 @@ function NovedadesGuardia({ user, misNovedades, setNovedades, guardias, objetivo
 
 
 // ── REVISIÓN OPERATIVA ────────────────────────────────────────
-function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
+function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos }: any) {
   const [coberturas, setCoberturas] = useState<any[]>([])
   const [alertas, setAlertas] = useState<any[]>([])
   const [loadingData, setLoadingData] = useState(true)
@@ -2412,6 +2431,16 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
   const getObjetivo = (id: string) => {
     const o = objetivos.find((x: any) => x.id === id)
     return o?.nombre || '—'
+  }
+
+  const hoy = new Date().toLocaleDateString('sv-SE')
+  const hora = (value?: string | null) => value ? value.slice(0, 5) : '--:--'
+  const existeAsistencia = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id)
+  const guardiaEsperadoId = (turno: Turno) => (turno as any).guardia_original_id || turno.guardia_id || null
+  const detalleTurnoDescubierto = (turno: Turno) => {
+    if (!turno.guardia_id) return 'Sin guardia asignado'
+    if (turno.estado === 'descubierto') return 'Estado descubierto'
+    return 'Pasó ventana de fichaje sin asistencia'
   }
 
   const abrirModal = (item: any, tipo: 'cobertura' | 'alerta') => {
@@ -2484,6 +2513,12 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
     .filter(a => a.estado_revision === 'pendiente_supervisor')
     .sort((a, b) => ordenRegistroAsistencia(b, b.turno) - ordenRegistroAsistencia(a, a.turno))
 
+  const turnosDescubiertosOperativos = turnos
+    .filter((t: Turno) => t.fecha === hoy && turnoSinCoberturaOperativa(t, existeAsistencia(t)))
+    .sort((a: Turno, b: Turno) => a.hora_inicio.localeCompare(b.hora_inicio))
+
+  const totalAlertasOperativas = pendientesAlertas.length + turnosDescubiertosOperativos.length
+
   const tabStyle = (active: boolean): React.CSSProperties => ({
     padding:'8px 20px', borderRadius:8, cursor:'pointer', fontSize:13, border:'none',
     fontFamily:'DM Sans,sans-serif', fontWeight: active ? 600 : 400,
@@ -2504,7 +2539,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
         </button>
         <button style={tabStyle(tab === 'alertas')} onClick={() => setTab('alertas')}>
           ⚠ Alertas asistencia
-          {pendientesAlertas.length > 0 && <span style={{ marginLeft:6, background:'rgba(239,68,68,.15)', color:'#ef4444', borderRadius:10, padding:'1px 7px', fontSize:11 }}>{pendientesAlertas.length}</span>}
+          {totalAlertasOperativas > 0 && <span style={{ marginLeft:6, background:'rgba(239,68,68,.15)', color:'#ef4444', borderRadius:10, padding:'1px 7px', fontSize:11 }}>{totalAlertasOperativas}</span>}
         </button>
       </div>
 
@@ -2557,12 +2592,43 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
       )}
 
       {!loadingData && tab === 'alertas' && (
-        pendientesAlertas.length === 0 ? (
+        totalAlertasOperativas === 0 ? (
           <div style={{ ...S.card, textAlign:'center', padding:48, color:'#64748b' }}>
             <div style={{ fontSize:36, marginBottom:12 }}>✅</div>
             <div>No hay alertas de asistencia pendientes</div>
           </div>
-        ) : pendientesAlertas.map((r: any) => {
+        ) : (
+          <>
+            {turnosDescubiertosOperativos.map((t: Turno) => {
+              const guardiaEsperado = guardiaEsperadoId(t)
+
+              return (
+                <div key={`turno-descubierto-${t.id}`} style={{ background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.3)', borderRadius:12, padding:20, marginBottom:14 }}>
+                  <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:14 }}>
+                    <div>
+                      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                        <span style={{ fontSize:16 }}>⚠</span>
+                        <span style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, color:'#ef4444' }}>Turno descubierto</span>
+                      </div>
+                      <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:'#e2e8f0' }}>{getObjetivo(t.objetivo_id)}</div>
+                      <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>{formatFecha(t.fecha)} · {hora(t.hora_inicio)} → {hora(t.hora_fin)}</div>
+                    </div>
+                    <Badge type="descubierto">Descubierto</Badge>
+                  </div>
+
+                  <div style={{ background:'#111827', borderRadius:8, padding:'10px 14px', marginBottom:14 }}>
+                    <div style={{ fontSize:11, color:'#64748b', marginBottom:3, textTransform:'uppercase' as const, letterSpacing:1 }}>Guardia esperado</div>
+                    <div style={{ fontSize:13, color:'#e2e8f0' }}>{guardiaEsperado ? getNombre(guardiaEsperado) : 'Sin guardia esperado'}</div>
+                    <div style={{ display:'flex', gap:20, marginTop:8, flexWrap:'wrap' }}>
+                      <div style={{ fontSize:12, color:'#94a3b8' }}>Estado: <span style={{ color:'#e2e8f0', fontWeight:600 }}>{t.estado || 'programado'}</span></div>
+                      <div style={{ fontSize:12, color:'#f59e0b', fontWeight:600 }}>{detalleTurnoDescubierto(t)}</div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+
+            {pendientesAlertas.map((r: any) => {
           const tipo = tipoAlerta(r)
           const cfg = CONFIG_ALERTA[tipo]
           const obj = r.turno?.objetivo_id ? getObjetivo(r.turno.objetivo_id) : '—'
@@ -2600,7 +2666,9 @@ function RevisionOperativa({ guardias, objetivos, turnos, setTurnos }: any) {
               <button style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center' }} onClick={() => abrirModal(r, 'alerta')}>Revisar y resolver</button>
             </div>
           )
-        })
+            })}
+          </>
+        )
       )}
 
       {modalItem && modalTipo && (
@@ -3403,7 +3471,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
-              {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} setTurnos={setTurnos} />}
+              {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} />}
               {page === 'turnos_base' && <TurnosBase />}

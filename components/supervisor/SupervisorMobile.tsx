@@ -2,14 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto } from '@/lib/turnos'
+import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
 
 type EstadoTurno = 'programado' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto'
-type TipoAlerta = 'sin entrada' | 'entrada registrada' | 'salida registrada'
+type TipoAlerta = 'sin entrada' | 'entrada registrada' | 'salida registrada' | 'turno descubierto'
 
 interface Turno {
   id: string
   guardia_id: string | null
+  guardia_original_id?: string | null
   objetivo_id: string
   fecha: string
   hora_inicio: string
@@ -275,13 +276,26 @@ export default function SupervisorMobile({ user }: any) {
       return fechaB - fechaA
     })
   const getRegistro = (turnoId: string) => getRegistrosTurno(turnoId)[0]
+  const existeAsistencia = (turno: Turno) => getRegistrosTurno(turno.id).length > 0
+  const esDescubiertoOperativo = (turno: Turno) => turnoSinCoberturaOperativa(turno, existeAsistencia(turno))
+  const guardiaEsperadoId = (turno: Turno) => turno.guardia_original_id || turno.guardia_id || null
+  const nombreGuardiaEsperado = (turno: Turno) => {
+    const guardiaId = guardiaEsperadoId(turno)
+    const guardia = getGuardia(guardiaId)
+    return guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Sin guardia esperado'
+  }
+  const detalleTurnoDescubierto = (turno: Turno) => {
+    if (!turno.guardia_id) return 'Sin guardia asignado'
+    if (turno.estado === 'descubierto') return 'Estado descubierto'
+    return 'Pasó ventana de fichaje sin asistencia'
+  }
 
   const estadoOperativo = (turno: Turno): EstadoTurno => {
     const registro = getRegistro(turno.id)
 
     if (registro?.hora_salida_real) return 'finalizado'
     if (registro?.hora_entrada_real) return 'en turno'
-    if (!turno.guardia_id || turno.estado === 'descubierto') return 'descubierto'
+    if (esDescubiertoOperativo(turno)) return 'descubierto'
     if (turno.estado === 'cubierto') return 'cubierto'
     return 'programado'
   }
@@ -291,6 +305,7 @@ export default function SupervisorMobile({ user }: any) {
 
     if (registro?.hora_salida_real) return 'salida registrada'
     if (registro?.hora_entrada_real) return 'entrada registrada'
+    if (esDescubiertoOperativo(turno)) return 'turno descubierto'
     return 'sin entrada'
   }
 
@@ -324,6 +339,11 @@ export default function SupervisorMobile({ user }: any) {
     finalizados: turnos.filter(t => estadoOperativo(t) === 'finalizado').length,
     descubiertos: turnos.filter(t => estadoOperativo(t) === 'descubierto').length,
   }), [turnos, registros])
+
+  const turnosDescubiertosOperativos = useMemo(
+    () => turnos.filter(t => esDescubiertoOperativo(t)),
+    [turnos, registros],
+  )
 
   const guardiaTieneTurnoSuperpuesto = async (
     candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>,
@@ -820,11 +840,38 @@ export default function SupervisorMobile({ user }: any) {
               <section>
                 <div style={screenTitle}>Alertas básicas</div>
 
+                {turnosDescubiertosOperativos.length > 0 && (
+                  <div style={{ ...card, borderColor: 'rgba(239,68,68,.35)', background: 'rgba(239,68,68,.08)' }}>
+                    <div style={{ ...objetivoName, color: '#fca5a5' }}>Puestos sin cobertura</div>
+                    <div style={muted}>{turnosDescubiertosOperativos.length} turno(s) requieren acción.</div>
+
+                    <div style={{ marginTop: 12 }}>
+                      {turnosDescubiertosOperativos.map(turno => {
+                        const objetivo = getObjetivo(turno.objetivo_id)
+
+                        return (
+                          <div key={`alerta-descubierto-${turno.id}`} style={{ ...turnoCard, background: '#111827' }}>
+                            <div style={turnoTop}>
+                              <div>
+                                <div style={objetivoName}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
+                                <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+                                <div style={muted}>Estado: {turno.estado || 'programado'}</div>
+                                <div style={muted}>Guardia esperado: {nombreGuardiaEsperado(turno)}</div>
+                                <div style={{ ...muted, color: '#f59e0b' }}>{detalleTurnoDescubierto(turno)}</div>
+                              </div>
+                              <span style={badge('descubierto')}>descubierto</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {turnos.length === 0 ? (
                   <div style={empty}>No hay turnos para auditar.</div>
                 ) : turnos.map(turno => {
                   const objetivo = getObjetivo(turno.objetivo_id)
-                  const guardia = getGuardia(turno.guardia_id)
                   const alerta = alertaTurno(turno)
 
                   return (
@@ -832,7 +879,9 @@ export default function SupervisorMobile({ user }: any) {
                       <div style={turnoTop}>
                         <div>
                           <div style={objetivoName}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
-                          <div style={muted}>{horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)} - {guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Sin guardia'}</div>
+                          <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+                          <div style={muted}>Estado: {turno.estado || 'programado'}</div>
+                          <div style={muted}>Guardia esperado: {nombreGuardiaEsperado(turno)}</div>
                         </div>
                         <span style={alertBadge(alerta)}>{alerta}</span>
                       </div>
@@ -1295,7 +1344,11 @@ function badge(estado: EstadoTurno): React.CSSProperties {
 }
 
 function alertBadge(alerta: TipoAlerta): React.CSSProperties {
-  const color = alerta === 'sin entrada' ? '#f59e0b' : '#10b981'
+  const color = alerta === 'turno descubierto'
+    ? '#ef4444'
+    : alerta === 'sin entrada'
+      ? '#f59e0b'
+      : '#10b981'
 
   return {
     display: 'inline-flex',

@@ -4,11 +4,14 @@ export type TurnoHorario = {
   fecha: string
   hora_inicio: string
   hora_fin: string
+  estado?: string | null
 }
 
 export const MENSAJE_TURNO_SUPERPUESTO = 'El guardia ya tiene un turno asignado en ese horario.'
 
 const MS_DIA = 24 * 60 * 60 * 1000
+const MS_MINUTO = 60 * 1000
+const MINUTOS_POSTERIORES_FICHAJE = 60
 
 const fechaLocal = (fecha: string) => {
   const [anio, mes, dia] = fecha.split('-').map(Number)
@@ -64,6 +67,23 @@ export const tieneTurnoSuperpuesto = (
     if (excluirTurnoId && turno.id === excluirTurnoId) return false
     return horariosSuperpuestos(turno, candidato)
   })
+}
+
+export const pasoVentanaFichaje = (turno: TurnoHorario, ahora = new Date()) => {
+  const inicio = fechaHoraLocal(turno.fecha, turno.hora_inicio)
+  if (inicio === null) return false
+
+  return ahora.getTime() > inicio + MINUTOS_POSTERIORES_FICHAJE * MS_MINUTO
+}
+
+export const turnoSinCoberturaOperativa = (
+  turno: TurnoHorario,
+  tieneAsistencia: boolean,
+  ahora = new Date(),
+) => {
+  if (!turno.guardia_id) return true
+  if (turno.estado === 'descubierto') return true
+  return pasoVentanaFichaje(turno, ahora) && !tieneAsistencia
 }
 
 export const fechasVecinasTurno = (fecha: string) => {
