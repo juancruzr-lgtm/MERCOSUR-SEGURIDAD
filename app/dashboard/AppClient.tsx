@@ -646,7 +646,37 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
       if (!res.ok) {
         setMensaje({ tipo:'error', texto:data.error || 'No se pudo resetear la contraseña' })
       } else {
+        if (data.user) setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? data.user : x))
         setMensaje({ tipo:'ok', texto:data.message || 'Contraseña reseteada al DNI' })
+      }
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
+    }
+
+    setAccionLoading(null)
+  }
+
+  const sincronizarAccesos = async () => {
+    setAccionLoading('sync-auth')
+    setMensaje(null)
+
+    try {
+      const res = await fetch('/api/sync-employee-auth', {
+        method: 'POST',
+        headers: await headersAdmin(),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setMensaje({ tipo:'error', texto:data.error || 'No se pudieron sincronizar los accesos empleados' })
+      } else {
+        if (Array.isArray(data.users)) setGuardias(data.users)
+
+        const errores = data.summary?.errores?.length
+          ? ` Errores: ${data.summary.errores.map((e: any) => `${e.empleado}: ${e.error}`).slice(0, 3).join(' | ')}`
+          : ''
+
+        setMensaje({ tipo:'ok', texto:`${data.message || 'Accesos empleados sincronizados.'}${errores}` })
       }
     } catch (error) {
       setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
@@ -667,12 +697,22 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
           <div style={S.sub2}>{guardias.length} empleados registrados</div>
         </div>
 
-        <button
-          style={{ ...S.btn, ...S.btnPrimary }}
-          onClick={abrirNuevo}
-        >
-          + Nuevo empleado
-        </button>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'flex-end' }}>
+          <button
+            style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'sync-auth' ? 0.65 : 1 }}
+            onClick={sincronizarAccesos}
+            disabled={accionLoading === 'sync-auth'}
+          >
+            {accionLoading === 'sync-auth' ? 'Sincronizando...' : 'Sincronizar accesos empleados'}
+          </button>
+
+          <button
+            style={{ ...S.btn, ...S.btnPrimary }}
+            onClick={abrirNuevo}
+          >
+            + Nuevo empleado
+          </button>
+        </div>
       </div>
 
       {mensaje && (
@@ -751,15 +791,13 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
                         Crear Auth
                       </button>
                     )}
-                    {g.auth_user_id && (
-                      <button
-                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
-                        onClick={() => resetPassword(g)}
-                        disabled={accionLoading === `reset-${g.id}`}
-                      >
-                        Reset DNI
-                      </button>
-                    )}
+                    <button
+                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12, opacity: accionLoading === `reset-${g.id}` ? 0.65 : 1 }}
+                      onClick={() => resetPassword(g)}
+                      disabled={accionLoading === `reset-${g.id}`}
+                    >
+                      {accionLoading === `reset-${g.id}` ? 'Reseteando...' : 'Reset DNI'}
+                    </button>
                   </div>
                 </td>
               </tr>
