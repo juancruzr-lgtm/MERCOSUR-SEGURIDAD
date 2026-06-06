@@ -260,7 +260,13 @@ async function deleteInvalidAuthUsers(
     }
 
     const { error } = await supabaseAdmin.auth.admin.deleteUser(authUser.id)
-    if (error) errors.push(error.message)
+    if (!error) {
+      deleted += 1
+      continue
+    }
+
+    const { error: softDeleteError } = await supabaseAdmin.auth.admin.deleteUser(authUser.id, true)
+    if (softDeleteError) errors.push(`${error.message}; soft delete: ${softDeleteError.message}`)
     else deleted += 1
   }
 
