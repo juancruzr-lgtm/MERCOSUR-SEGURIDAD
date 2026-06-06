@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
+import type { FiltroFechaTurnos } from '@/lib/turnos'
 
 type EstadoTurno = 'programado' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto'
 type TipoAlerta = 'sin entrada' | 'entrada registrada' | 'salida registrada' | 'turno descubierto'
@@ -63,7 +64,7 @@ interface RegistroAsistencia {
 }
 
 function fechaHoy(): string {
-  return new Date().toLocaleDateString('sv-SE')
+  return fechaActualTurno()
 }
 
 function horaCorta(hora?: string | null): string {
@@ -154,30 +155,36 @@ export default function SupervisorMobile({ user }: any) {
   const [perfilMensaje, setPerfilMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null)
   const [guardandoPassword, setGuardandoPassword] = useState(false)
   const [filtroTurnos, setFiltroTurnos] = useState<EstadoTurno | 'todos'>('todos')
+  const [filtroFecha, setFiltroFecha] = useState<FiltroFechaTurnos>('hoy')
   const [modalTurno, setModalTurno] = useState(false)
   const [formTurno, setFormTurno] = useState({ objetivo_id:'', guardia_id:'', fecha: fechaHoy(), hora_inicio:'18:00', hora_fin:'06:00', tipo_evento:'normal' })
   const [guardiaEditando, setGuardiaEditando] = useState<Usuario | null>(null)
   const [objetivoEditando, setObjetivoEditando] = useState<Objetivo | null>(null)
   const [formGuardia, setFormGuardia] = useState({ email:'', telefono:'', estado:'activo', foto_url:'' })
   const [formObjetivo, setFormObjetivo] = useState({ direccion:'', lat:'', lng:'', radio_metros:'200', estado:'activo' })
+  const [mensaje, setMensaje] = useState('')
 
   const hoy = fechaHoy()
+  const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
 
   const cerrarSesion = async () => {
     await supabase.auth.signOut()
     window.location.href = '/dashboard'
   }
 
-  const cargarDatos = async () => {
+  const cargarDatos = async (filtro: FiltroFechaTurnos = filtroFecha) => {
     setLoading(true)
     setError('')
+    const rango = rangoFiltroFechaTurnos(filtro, hoy)
 
     const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult] = await Promise.all([
       supabase
         .from('turnos')
         .select('*')
-        .eq('fecha', hoy)
-        .order('hora_inicio'),
+        .gte('fecha', rango.desde)
+        .lte('fecha', rango.hasta)
+        .order('fecha', { ascending: true })
+        .order('hora_inicio', { ascending: true }),
       supabase
         .from('objetivos')
         .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado')
@@ -209,12 +216,12 @@ export default function SupervisorMobile({ user }: any) {
       return
     }
 
-    const turnosHoy = (turnosData || []) as Turno[]
-    setTurnos(turnosHoy)
+    const turnosRango = (turnosData || []) as Turno[]
+    setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
     setGuardias((guardiasData || []) as Usuario[])
 
-    if (turnosHoy.length === 0) {
+    if (turnosRango.length === 0) {
       setRegistros([])
       setLoading(false)
       return
@@ -223,7 +230,7 @@ export default function SupervisorMobile({ user }: any) {
     const { data: registrosData, error: registrosError } = await supabase
       .from('registros_asistencia')
       .select('*')
-      .in('turno_id', turnosHoy.map(t => t.id))
+      .in('turno_id', turnosRango.map(t => t.id))
 
     if (registrosError) {
       setError(registrosError.message)
@@ -263,8 +270,8 @@ export default function SupervisorMobile({ user }: any) {
   }
 
   useEffect(() => {
-    cargarDatos()
-  }, [])
+    cargarDatos(filtroFecha)
+  }, [filtroFecha])
 
   const getObjetivo = (id: string) => objetivos.find(o => o.id === id)
   const getGuardia = (id?: string | null) => guardias.find(g => g.id === id)
@@ -373,6 +380,7 @@ export default function SupervisorMobile({ user }: any) {
 
     setAsignando('crear-turno')
     setError('')
+    setMensaje('')
 
     const payload = {
       objetivo_id: formTurno.objetivo_id,
@@ -400,7 +408,13 @@ export default function SupervisorMobile({ user }: any) {
     if (insertError) {
       setError(insertError.message)
     } else if (data) {
-      setTurnos(prev => [...prev, data as Turno])
+      const filtroDestino = filtroFechaTurnosIncluye(filtroFecha, payload.fecha)
+        ? filtroFecha
+        : filtroFechaTurnosParaFecha(payload.fecha)
+
+      setFiltroFecha(filtroDestino)
+      await cargarDatos(filtroDestino)
+      setMensaje('✓ Turno creado correctamente')
       setModalTurno(false)
       setFormTurno({ objetivo_id:'', guardia_id:'', fecha:hoy, hora_inicio:'18:00', hora_fin:'06:00', tipo_evento:'normal' })
     }
@@ -606,6 +620,33 @@ export default function SupervisorMobile({ user }: any) {
     { id: 'perfil', label: 'Perfil', icon: '👤' },
   ]
 
+  const renderFiltrosFecha = () => (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, margin:'12px 0 16px' }}>
+      {FILTROS_FECHA_TURNOS.map(filtro => {
+        const activo = filtroFecha === filtro.id
+
+        return (
+          <button
+            key={filtro.id}
+            type="button"
+            onClick={() => {
+              setFiltroFecha(filtro.id)
+              setMensaje('')
+            }}
+            style={{
+              ...secondaryButton,
+              background: activo ? '#f59e0b' : secondaryButton.background,
+              color: activo ? '#111827' : secondaryButton.color,
+              borderColor: activo ? '#f59e0b' : '#374151',
+            }}
+          >
+            {filtro.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+
   const renderTurno = (turno: Turno) => {
     const objetivo = getObjetivo(turno.objetivo_id)
     const guardia = getGuardia(turno.guardia_id)
@@ -745,6 +786,11 @@ export default function SupervisorMobile({ user }: any) {
 
       <main style={main}>
         {error && <div style={errorBox}>{error}</div>}
+        {mensaje && (
+          <div style={{ ...errorBox, color:'#10b981', borderColor:'rgba(16,185,129,.35)', background:'rgba(16,185,129,.12)' }}>
+            {mensaje}
+          </div>
+        )}
 
         {loading ? (
           <div style={empty}>Cargando operación...</div>
@@ -752,8 +798,9 @@ export default function SupervisorMobile({ user }: any) {
           <>
             {tab === 'inicio' && (
               <section>
-                <div style={screenTitle}>Operación de hoy</div>
-                <div style={dateText}>{new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
+                <div style={screenTitle}>Operación</div>
+                <div style={dateText}>{rangoFecha.label} · {fechaDDMMYYYY(rangoFecha.desde)}{rangoFecha.desde !== rangoFecha.hasta ? ` a ${fechaDDMMYYYY(rangoFecha.hasta)}` : ''}</div>
+                {renderFiltrosFecha()}
 
                 <div style={statsGrid}>
                   <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('todos'); setTab('turnos') }}><strong>{resumen.total}</strong><span>Turnos</span></div>
@@ -763,8 +810,8 @@ export default function SupervisorMobile({ user }: any) {
                 </div>
 
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                  <button style={refreshButton} onClick={cargarDatos}>Actualizar</button>
-                  <button style={secondaryButton} onClick={() => setModalTurno(true)}>Crear turno</button>
+                  <button style={refreshButton} onClick={() => cargarDatos(filtroFecha)}>Actualizar</button>
+                  <button style={secondaryButton} onClick={() => { setError(''); setMensaje(''); setModalTurno(true) }}>Crear turno</button>
                 </div>
               </section>
             )}
@@ -772,6 +819,8 @@ export default function SupervisorMobile({ user }: any) {
             {tab === 'turnos' && (
               <section>
                 <div style={screenTitle}>Turnos por objetivo</div>
+                <div style={dateText}>{rangoFecha.label} · {fechaDDMMYYYY(rangoFecha.desde)}{rangoFecha.desde !== rangoFecha.hasta ? ` a ${fechaDDMMYYYY(rangoFecha.hasta)}` : ''}</div>
+                {renderFiltrosFecha()}
                 {filtroTurnos !== 'todos' && (
                   <div style={{ ...errorBox, color:'#f59e0b', borderColor:'rgba(245,158,11,.35)', background:'rgba(245,158,11,.12)' }}>
                     Filtro activo: {filtroTurnos}
@@ -780,7 +829,7 @@ export default function SupervisorMobile({ user }: any) {
                 )}
 
                 {turnosPorObjetivo.length === 0 ? (
-                  <div style={empty}>No hay turnos cargados para hoy.</div>
+                  <div style={empty}>No hay turnos cargados para este filtro.</div>
                 ) : turnosPorObjetivo.map(grupo => (
                   <div key={grupo.objetivo.id} style={card}>
                     <div style={objetivoName}>{grupo.objetivo.nombre}</div>
@@ -951,6 +1000,7 @@ export default function SupervisorMobile({ user }: any) {
         <div style={modalOverlay}>
           <div style={modalCard}>
             <div style={screenTitle}>Crear turno</div>
+            {error && <div style={errorBox}>{error}</div>}
             <label style={label}>Objetivo</label>
             <select style={select} value={formTurno.objetivo_id} onChange={e => setFormTurno({ ...formTurno, objetivo_id:e.target.value })}>
               <option value="">Seleccionar</option>
@@ -974,7 +1024,7 @@ export default function SupervisorMobile({ user }: any) {
             </select>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
               <button style={secondaryButton} onClick={() => setModalTurno(false)}>Cancelar</button>
-              <button style={refreshButton} onClick={crearTurno} disabled={asignando === 'crear-turno'}>{asignando === 'crear-turno' ? 'Guardando...' : 'Crear'}</button>
+              <button style={refreshButton} onClick={crearTurno} disabled={asignando === 'crear-turno'}>{asignando === 'crear-turno' ? 'Creando...' : 'Crear turno'}</button>
             </div>
           </div>
         </div>

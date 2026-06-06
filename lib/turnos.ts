@@ -9,6 +9,15 @@ export type TurnoHorario = {
 
 export const MENSAJE_TURNO_SUPERPUESTO = 'El guardia ya tiene un turno asignado en ese horario.'
 
+export const FILTROS_FECHA_TURNOS = [
+  { id: 'hoy', label: 'Hoy' },
+  { id: 'manana', label: 'Mañana' },
+  { id: 'proximos7', label: 'Próximos 7 días' },
+  { id: 'mes', label: 'Mes actual' },
+] as const
+
+export type FiltroFechaTurnos = typeof FILTROS_FECHA_TURNOS[number]['id']
+
 const MS_DIA = 24 * 60 * 60 * 1000
 const MS_MINUTO = 60 * 1000
 const MINUTOS_POSTERIORES_FICHAJE = 60
@@ -24,6 +33,59 @@ const formatearFechaLocal = (fecha: Date) => {
   const mes = String(fecha.getMonth() + 1).padStart(2, '0')
   const dia = String(fecha.getDate()).padStart(2, '0')
   return `${anio}-${mes}-${dia}`
+}
+
+export const fechaActualTurno = () => formatearFechaLocal(new Date())
+
+export const sumarDiasFecha = (fecha: string, dias: number) => {
+  const base = fechaLocal(fecha)
+  if (!base) return fecha
+
+  const resultado = new Date(base)
+  resultado.setDate(base.getDate() + dias)
+  return formatearFechaLocal(resultado)
+}
+
+export const rangoFiltroFechaTurnos = (filtro: FiltroFechaTurnos, baseFecha = fechaActualTurno()) => {
+  const base = fechaLocal(baseFecha) || new Date()
+
+  if (filtro === 'manana') {
+    const manana = sumarDiasFecha(formatearFechaLocal(base), 1)
+    return { desde: manana, hasta: manana, label: 'Mañana' }
+  }
+
+  if (filtro === 'proximos7') {
+    const desde = formatearFechaLocal(base)
+    return { desde, hasta: sumarDiasFecha(desde, 6), label: 'Próximos 7 días' }
+  }
+
+  if (filtro === 'mes') {
+    const desde = formatearFechaLocal(new Date(base.getFullYear(), base.getMonth(), 1))
+    const hasta = formatearFechaLocal(new Date(base.getFullYear(), base.getMonth() + 1, 0))
+    return { desde, hasta, label: 'Mes actual' }
+  }
+
+  const hoy = formatearFechaLocal(base)
+  return { desde: hoy, hasta: hoy, label: 'Hoy' }
+}
+
+export const filtroFechaTurnosIncluye = (
+  filtro: FiltroFechaTurnos,
+  fecha: string,
+  baseFecha = fechaActualTurno(),
+) => {
+  const rango = rangoFiltroFechaTurnos(filtro, baseFecha)
+  return fecha >= rango.desde && fecha <= rango.hasta
+}
+
+export const filtroFechaTurnosParaFecha = (
+  fecha: string,
+  baseFecha = fechaActualTurno(),
+): FiltroFechaTurnos => {
+  if (filtroFechaTurnosIncluye('hoy', fecha, baseFecha)) return 'hoy'
+  if (filtroFechaTurnosIncluye('manana', fecha, baseFecha)) return 'manana'
+  if (filtroFechaTurnosIncluye('proximos7', fecha, baseFecha)) return 'proximos7'
+  return 'mes'
 }
 
 const fechaHoraLocal = (fecha: string, hora: string) => {

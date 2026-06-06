@@ -2,7 +2,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcHorasLiquidables, calcDistancia } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
-import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
+import type { FiltroFechaTurnos } from '@/lib/turnos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 const S: Record<string, React.CSSProperties> = {
@@ -1279,13 +1280,14 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   const [form, setForm] = useState({
     guardia_id: '',
     objetivo_id: '',
-    fecha: new Date().toISOString().split('T')[0],
+    fecha: fechaActualTurno(),
     hora_inicio: '06:00',
     hora_fin: '14:00',
   })
-  const [filtFecha, setFiltFecha] = useState(new Date().toISOString().split('T')[0])
+  const [filtroFecha, setFiltroFecha] = useState<FiltroFechaTurnos>('hoy')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [mensaje, setMensaje] = useState('')
 
   const guardiaTieneTurnoSuperpuesto = async (candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>): Promise<boolean | null> => {
     if (!candidato.guardia_id) return false
@@ -1308,6 +1310,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     if (!form.objetivo_id || !form.fecha || !form.hora_inicio || !form.hora_fin) return
 
     setError('')
+    setMensaje('')
 
     const payload = {
       ...form,
@@ -1333,12 +1336,25 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       .single()
 
     if (!error && data) {
-      setTurnos((prev: any[]) => [...prev, data])
+      const filtroDestino = filtroFechaTurnosIncluye(filtroFecha, payload.fecha)
+        ? filtroFecha
+        : filtroFechaTurnosParaFecha(payload.fecha)
+      const { data: turnosActualizados, error: refreshError } = await supabase
+        .from('turnos')
+        .select('*')
+        .order('fecha', { ascending: false })
+        .order('hora_inicio', { ascending: true })
+
+      if (turnosActualizados) setTurnos(turnosActualizados)
+      if (refreshError) setError(`Turno creado, pero no se pudo refrescar la lista: ${refreshError.message}`)
+
+      setFiltroFecha(filtroDestino)
+      setMensaje('✓ Turno creado correctamente')
       setModal(false)
       setForm({
         guardia_id: '',
         objetivo_id: '',
-        fecha: new Date().toISOString().split('T')[0],
+        fecha: fechaActualTurno(),
         hora_inicio: '06:00',
         hora_fin: '14:00',
       })
@@ -1349,13 +1365,13 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     setLoading(false)
   }
 
-  const hoy = new Date().toLocaleDateString('sv-SE')
-  const fechaFiltro = filtroActivo ? hoy : filtFecha
+  const hoy = fechaActualTurno()
+  const rangoFecha = filtroActivo ? { desde: hoy, hasta: hoy, label: filtroActivo.label } : rangoFiltroFechaTurnos(filtroFecha, hoy)
   const existeAsistencia = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id)
   const tieneEntrada = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_entrada_real)
   const tieneSalida = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
   const filtrados = turnos.filter((t: Turno) => {
-    if (fechaFiltro && t.fecha !== fechaFiltro) return false
+    if (t.fecha < rangoFecha.desde || t.fecha > rangoFecha.hasta) return false
     if (filtroActivo?.tipo === 'cubiertos' && t.estado !== 'cubierto') return false
     if (filtroActivo?.tipo === 'descubiertos' && !turnoSinCoberturaOperativa(t, existeAsistencia(t))) return false
     if (filtroActivo?.tipo === 'sin_fichar' && (!t.guardia_id || tieneEntrada(t))) return false
@@ -1371,17 +1387,35 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
           <div style={S.sub2}>Asignación de guardias a objetivos</div>
         </div>
 
-        <input
-          type="date"
-          style={{ ...S.input, width:'auto' }}
-          value={fechaFiltro}
-          onChange={e => setFiltFecha(e.target.value)}
-          disabled={Boolean(filtroActivo)}
-        />
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+          {FILTROS_FECHA_TURNOS.map(filtro => {
+            const activo = !filtroActivo && filtroFecha === filtro.id
+
+            return (
+              <button
+                key={filtro.id}
+                type="button"
+                disabled={Boolean(filtroActivo)}
+                onClick={() => {
+                  setFiltroFecha(filtro.id)
+                  setMensaje('')
+                }}
+                style={{
+                  ...S.btn,
+                  ...(activo ? S.btnPrimary : S.btnSecondary),
+                  padding:'8px 12px',
+                  opacity: filtroActivo ? 0.55 : 1,
+                }}
+              >
+                {filtro.label}
+              </button>
+            )
+          })}
+        </div>
 
         <button
           style={{ ...S.btn, ...S.btnPrimary }}
-          onClick={() => { setError(''); setModal(true) }}
+          onClick={() => { setError(''); setMensaje(''); setModal(true) }}
         >
           + Nuevo Turno
         </button>
@@ -1391,6 +1425,12 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
         <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
           <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
           <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
+        </div>
+      )}
+
+      {mensaje && (
+        <div style={{ ...S.card, padding:12, color:'#10b981', borderColor:'rgba(16,185,129,.35)' }}>
+          {mensaje}
         </div>
       )}
 
@@ -1452,7 +1492,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
         {filtrados.length === 0 && (
           <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>
-            📅 No hay turnos para esta fecha
+            📅 No hay turnos para este filtro
           </div>
         )}
       </div>
@@ -1475,7 +1515,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
                 onClick={guardar}
                 disabled={loading}
               >
-                {loading ? 'Guardando...' : 'Guardar'}
+                {loading ? 'Creando...' : 'Crear turno'}
               </button>
             </>
           }
