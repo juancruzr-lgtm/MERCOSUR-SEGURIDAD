@@ -1,11 +1,20 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key'
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const missingSupabaseEnv = [
+  !supabaseUrl ? 'NEXT_PUBLIC_SUPABASE_URL' : null,
+  !supabaseAnonKey ? 'NEXT_PUBLIC_SUPABASE_ANON_KEY' : null,
+].filter(Boolean)
 
-export const supabase = typeof window !== 'undefined' 
-  ? createClient(supabaseUrl, supabaseAnonKey)
-  : createClient('https://placeholder.supabase.co', 'placeholder-key')
+if (missingSupabaseEnv.length > 0 && process.env.NODE_ENV === 'production' && typeof window !== 'undefined') {
+  throw new Error(`Faltan variables Supabase: ${missingSupabaseEnv.join(', ')}`)
+}
+
+export const supabase = createClient(
+  supabaseUrl || 'http://127.0.0.1:54321',
+  supabaseAnonKey || 'missing-anon-key',
+)
 
 // Tipos principales
 export type Rol = 'admin' | 'supervisor' | 'guardia' | 'vigilador'

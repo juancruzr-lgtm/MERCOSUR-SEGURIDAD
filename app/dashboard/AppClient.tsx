@@ -173,31 +173,55 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   const [resetMsg, setResetMsg] = useState('')
   const [loading, setLoading] = useState(false)
   const [resetLoading, setResetLoading] = useState(false)
+  const [magicLoading, setMagicLoading] = useState(false)
 
   const login = async () => {
+    const emailLogin = email.trim().toLowerCase()
+    const passwordLogin = pass.trim()
+
     setLoading(true)
     setError('')
     setResetMsg('')
+    console.log('LOGIN EMAIL', emailLogin)
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password: pass,
+    const { data, error: err } = await supabase.auth.signInWithPassword({
+      email: emailLogin,
+      password: passwordLogin,
     })
+    console.log('LOGIN ERROR', err)
+    console.log('LOGIN DATA', data)
 
-    if (error) {
-      setError('Email o contraseña incorrectos')
+    if (err) {
+      setError(err.message)
       setLoading(false)
       return
     }
 
-    const { data: perfil, error: perfilError } = await supabase
+    let { data: perfil, error: perfilError } = await supabase
       .from('usuarios')
       .select('*')
       .eq('auth_user_id', data.user.id)
-      .single()
+      .maybeSingle()
+
+    if ((!perfil || perfilError) && data.user.email) {
+      const fallback = await supabase
+        .from('usuarios')
+        .select('*')
+        .eq('email', data.user.email.trim().toLowerCase())
+        .maybeSingle()
+
+      if (fallback.data) {
+        perfil = fallback.data
+        perfilError = null
+        await supabase
+          .from('usuarios')
+          .update({ auth_user_id: data.user.id })
+          .eq('id', fallback.data.id)
+      }
+    }
 
     if (perfilError || !perfil) {
-      setError('Usuario sin perfil asignado')
+      setError(perfilError?.message || 'Usuario sin perfil asignado')
       await supabase.auth.signOut()
       setLoading(false)
       return
@@ -210,24 +234,52 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   const recuperarPassword = async () => {
     setError('')
     setResetMsg('')
+    const emailNormalizado = email.trim().toLowerCase()
 
-    if (!email.trim()) {
+    if (!emailNormalizado) {
       setError('Ingresá tu email para recuperar la contraseña')
       return
     }
 
     setResetLoading(true)
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+    const { error } = await supabase.auth.resetPasswordForEmail(emailNormalizado, {
       redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
     })
 
     if (error) {
       setError(error.message)
     } else {
-      setResetMsg('Si el email existe, se enviará un enlace de recuperación')
+      setResetMsg('Si el email existe, se enviará un enlace de recuperación.')
     }
 
     setResetLoading(false)
+  }
+
+  const enviarMagicLink = async () => {
+    setError('')
+    setResetMsg('')
+    const emailNormalizado = email.trim().toLowerCase()
+
+    if (!emailNormalizado) {
+      setError('Ingresá tu email para enviar el enlace de ingreso')
+      return
+    }
+
+    setMagicLoading(true)
+    const { error } = await supabase.auth.signInWithOtp({
+      email: emailNormalizado,
+      options: {
+        emailRedirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
+      },
+    })
+
+    if (error) {
+      setError(error.message)
+    } else {
+      setResetMsg('Si el email existe, se enviará un enlace de ingreso.')
+    }
+
+    setMagicLoading(false)
   }
 
   return (
@@ -275,6 +327,13 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
             disabled={resetLoading}
           >
             {resetLoading ? 'Enviando...' : 'Olvidé mi contraseña'}
+          </button>
+          <button
+            style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center', marginTop:10 }}
+            onClick={enviarMagicLink}
+            disabled={magicLoading}
+          >
+            {magicLoading ? 'Enviando...' : 'Magic Link'}
           </button>
         </div>
       </div>
@@ -632,7 +691,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
         setMensaje({ tipo:'error', texto:data.error || 'No se pudo crear el usuario Auth' })
       } else {
         setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? data.user : x))
-        setMensaje({ tipo:'ok', texto:data.message || 'Usuario Auth creado correctamente' })
+        setMensaje({ tipo:'ok', texto:`✓ ${data.message || 'Usuario Auth creado correctamente'}` })
       }
     } catch (error) {
       setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
@@ -657,7 +716,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
         setMensaje({ tipo:'error', texto:data.error || 'No se pudo resetear la contraseña' })
       } else {
         if (data.user) setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? data.user : x))
-        setMensaje({ tipo:'ok', texto:data.message || 'Contraseña reseteada al DNI' })
+        setMensaje({ tipo:'ok', texto:`✓ ${data.message || 'Contraseña reseteada al DNI'}` })
       }
     } catch (error) {
       setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
@@ -682,11 +741,14 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
       } else {
         if (Array.isArray(data.users)) setGuardias(data.users)
 
-        const errores = data.summary?.errores?.length
-          ? ` Errores: ${data.summary.errores.map((e: any) => `${e.empleado}: ${e.error}`).slice(0, 3).join(' | ')}`
+        const errores = data.errores?.length
+          ? ` Errores: ${data.errores.map((e: any) => `${e.empleado}: ${e.error}`).slice(0, 3).join(' | ')}`
+          : ''
+        const omitidos = data.omitidos?.length
+          ? ` Omitidos: ${data.omitidos.slice(0, 3).map((o: any) => `${o.empleado}: ${o.motivo}`).join(' | ')}`
           : ''
 
-        setMensaje({ tipo:'ok', texto:`${data.message || 'Accesos empleados sincronizados.'}${errores}` })
+        setMensaje({ tipo:'ok', texto:`${data.message || 'Accesos empleados sincronizados.'}${omitidos}${errores}` })
       }
     } catch (error) {
       setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
@@ -798,16 +860,18 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
                         onClick={() => crearAuth(g)}
                         disabled={accionLoading === `auth-${g.id}`}
                       >
-                        Crear Auth
+                        {accionLoading === `auth-${g.id}` ? 'Creando acceso...' : 'Crear acceso'}
                       </button>
                     )}
-                    <button
-                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12, opacity: accionLoading === `reset-${g.id}` ? 0.65 : 1 }}
-                      onClick={() => resetPassword(g)}
-                      disabled={accionLoading === `reset-${g.id}`}
-                    >
-                      {accionLoading === `reset-${g.id}` ? 'Reseteando...' : 'Reset DNI'}
-                    </button>
+                    {g.auth_user_id && (
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12, opacity: accionLoading === `reset-${g.id}` ? 0.65 : 1 }}
+                        onClick={() => resetPassword(g)}
+                        disabled={accionLoading === `reset-${g.id}`}
+                      >
+                        {accionLoading === `reset-${g.id}` ? 'Reseteando...' : 'Reset DNI'}
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
