@@ -277,6 +277,7 @@ export async function repairEmployeeAuthUser(
   supabaseAdmin: SupabaseClient,
   usuario: UsuarioEmpleado,
   authIndex?: AuthIndex,
+  options: { invalidAuthUserIds?: string[] } = {},
 ): Promise<RepairResult> {
   const email = normalizeEmail(usuario.email)
   const dni = normalizeDni(usuario.dni)
@@ -307,6 +308,23 @@ export async function repairEmployeeAuthUser(
 
   const validCandidates = candidates.filter(authHasIdentity)
   const invalidCandidates = candidates.filter(user => !authHasIdentity(user))
+  const explicitInvalidCandidates: AuthUser[] = []
+  for (const explicitId of options.invalidAuthUserIds || []) {
+    if (!explicitId) continue
+    const { data, error } = await supabaseAdmin.auth.admin.getUserById(explicitId)
+    const explicitUser = data?.user as AuthUser | undefined
+
+    if (explicitUser && isProtectedEmail(explicitUser.email)) {
+      return { ...base, action: 'error', error: `Auth protegido no eliminado: ${explicitUser.email}` }
+    }
+
+    if (explicitUser && authHasIdentity(explicitUser)) {
+      return { ...base, action: 'error', error: `El Auth ${explicitId} tiene identity valida; requiere revision manual` }
+    }
+
+    explicitInvalidCandidates.push(explicitUser || ({ id: explicitId, email: null, identities: [] } as AuthUser))
+    if (error) console.error('AUTH explicit invalid lookup error', { usuario_id: usuario.id, auth_user_id: explicitId, error: error.message })
+  }
   const linkedHasIdentity = authHasIdentity(linkedAuth)
 
   if (validCandidates.length > 1 && !validCandidates.some(user => user.id === usuario.auth_user_id)) {
@@ -348,7 +366,7 @@ export async function repairEmployeeAuthUser(
   }
 
   const invalidLinked = linkedAuth && !linkedHasIdentity ? [linkedAuth] : []
-  const invalidsToDelete = [...invalidCandidates, ...invalidLinked].filter((authUser, index, all) =>
+  const invalidsToDelete = [...invalidCandidates, ...invalidLinked, ...explicitInvalidCandidates].filter((authUser, index, all) =>
     authUser?.id && all.findIndex(item => item?.id === authUser.id) === index
   )
 

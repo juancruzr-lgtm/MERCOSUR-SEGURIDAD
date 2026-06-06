@@ -15,6 +15,11 @@ export async function POST(req: NextRequest) {
     const email = body?.email || null
     const confirm = body?.confirm === true
     const repairAll = body?.repair_all === true
+    const invalidAuthUserIds = Array.isArray(body?.invalid_auth_user_ids)
+      ? body.invalid_auth_user_ids.filter(Boolean)
+      : body?.invalid_auth_user_id
+        ? [body.invalid_auth_user_id]
+        : []
 
     if (!usuarioId && !email && !repairAll) {
       const { report } = await auditAuthUsers(admin.client)
@@ -49,7 +54,9 @@ export async function POST(req: NextRequest) {
 
     const results = []
     for (const usuario of users) {
-      results.push(await repairEmployeeAuthUser(admin.client, usuario, authIndex))
+      results.push(await repairEmployeeAuthUser(admin.client, usuario, authIndex, {
+        invalidAuthUserIds: repairAll ? [] : invalidAuthUserIds,
+      }))
     }
 
     const summary = summarizeRepairs(results)
