@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcDistancia } from '@/lib/supabase'
+import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcHorasLiquidables, calcDistancia } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
@@ -1765,14 +1765,28 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       const regs = registrosMes.filter((r: RegistroAsistencia) => r.guardia_id === g.id)
       const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_real)
       const dias = new Set(regs.map((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha).filter(Boolean)).size
-      const horas = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+      const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+      const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
+        const turno = turnoPorId.get(r.turno_id)
+        if (!turno) return s
+
+        return s + calcHorasLiquidables(
+          turno.fecha,
+          turno.hora_inicio,
+          turno.hora_fin,
+          r.hora_entrada_real,
+          r.hora_salida_real,
+        )
+      }, 0)
 
       return {
         Legajo: g.legajo,
         Apellido: g.apellido,
         Nombre: g.nombre,
         'Días Trabajados': dias,
-        'Horas Totales': horas.toFixed(2),
+        'Horas Totales': horasReales.toFixed(2),
+        'Horas Reales': horasReales.toFixed(2),
+        'Horas Liquidables': horasLiquidables.toFixed(2),
         'En Curso': regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length,
         Tardanzas: regs.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length,
         'Salidas Anticipadas': regs.filter((r: RegistroAsistencia) => r.alerta_salida === 'anticipada').length,
@@ -1790,7 +1804,19 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       })
       const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_real)
       const turnosConAsistencia = new Set(regs.map((r: RegistroAsistencia) => r.turno_id)).size
-      const horas = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+      const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+      const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
+        const turno = turnoPorId.get(r.turno_id)
+        if (!turno) return s
+
+        return s + calcHorasLiquidables(
+          turno.fecha,
+          turno.hora_inicio,
+          turno.hora_fin,
+          r.hora_entrada_real,
+          r.hora_salida_real,
+        )
+      }, 0)
       const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
       const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length
       const turnosDescubiertos = ts.filter((t: Turno) => t.estado === 'descubierto' || !t.guardia_id).length
@@ -1799,7 +1825,8 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
         Objetivo: o.nombre,
         Cliente: o.cliente,
         'Turnos con Asistencia': turnosConAsistencia,
-        'Horas Reales Cubiertas': horas.toFixed(2),
+        'Horas Reales Cubiertas': horasReales.toFixed(2),
+        'Horas Liquidables': horasLiquidables.toFixed(2),
         'Turnos en Curso': turnosEnCurso,
         'Turnos sin Fichar': turnosSinFichar,
         'Turnos Descubiertos': turnosDescubiertos,
@@ -1838,14 +1865,15 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
             <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(reporteGuardias.map(({ _registros, ...row }: any) => row), 'reporte-guardias')}>⬇ Exportar CSV</button>
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Reales</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th></tr></thead>
+            <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th></tr></thead>
             <tbody>
               {reporteGuardias.map((g: any) => (
                 <tr key={g.Legajo}>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>{g.Legajo}</td>
                   <td style={S.td}><strong>{g.Apellido}, {g.Nombre}</strong></td>
                   <td style={S.td}>{g['Días Trabajados']}</td>
-                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{g['Horas Totales']}h</td>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{g['Horas Reales']}h</td>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700, color:'#10b981' }}>{g['Horas Liquidables']}h</td>
                   <td style={S.td}>{g['En Curso'] > 0 ? <Badge type="pendiente">{g['En Curso']}</Badge> : '—'}</td>
                   <td style={S.td}>{g.Tardanzas > 0 ? <Badge type="tarde">{g.Tardanzas}</Badge> : '—'}</td>
                   <td style={S.td}>{g['Salidas Anticipadas'] > 0 ? <Badge type="anticipada">{g['Salidas Anticipadas']}</Badge> : '—'}</td>
@@ -1862,7 +1890,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
             <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(reporteObjetivos.map(({ _actividad, ...row }: any) => row), 'reporte-objetivos')}>⬇ Exportar CSV</button>
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Cliente</th><th style={S.th}>Con Asistencia</th><th style={S.th}>Horas Reales</th><th style={S.th}>En Curso</th><th style={S.th}>Sin Fichar</th><th style={S.th}>Descubiertos</th></tr></thead>
+            <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Cliente</th><th style={S.th}>Con Asistencia</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Sin Fichar</th><th style={S.th}>Descubiertos</th></tr></thead>
             <tbody>
               {reporteObjetivos.map((o: any) => (
                 <tr key={o.Objetivo}>
@@ -1870,6 +1898,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
                   <td style={S.td}>{o.Cliente}</td>
                   <td style={S.td}><Badge type="cubierto">{o['Turnos con Asistencia']}</Badge></td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{o['Horas Reales Cubiertas']}h</td>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700, color:'#10b981' }}>{o['Horas Liquidables']}h</td>
                   <td style={S.td}>{o['Turnos en Curso'] > 0 ? <Badge type="pendiente">{o['Turnos en Curso']}</Badge> : '—'}</td>
                   <td style={S.td}>{o['Turnos sin Fichar'] > 0 ? <Badge type="pendiente">{o['Turnos sin Fichar']}</Badge> : '—'}</td>
                   <td style={S.td}>{o['Turnos Descubiertos'] > 0 ? <Badge type="descubierto">{o['Turnos Descubiertos']}</Badge> : '—'}</td>

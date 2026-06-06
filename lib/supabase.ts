@@ -110,6 +110,71 @@ export function calcHorasTrabajadas(
   return Number((diferenciaMinutos / 60).toFixed(2))
 }
 
+function minutosHora(hora?: string | null): number | null {
+  if (!hora) return null
+
+  const [horas, minutos] = hora.split(':').map(Number)
+  if (!Number.isFinite(horas) || !Number.isFinite(minutos)) return null
+
+  return horas * 60 + minutos
+}
+
+function minutosFecha(fecha?: string | null): number | null {
+  if (!fecha) return null
+
+  const [anio, mes, dia] = fecha.slice(0, 10).split('-').map(Number)
+  if (!anio || !mes || !dia) return null
+
+  return new Date(anio, mes - 1, dia).getTime() / 60000
+}
+
+export function calcHorasLiquidables(
+  fechaTurno: string,
+  horaInicioTurno: string,
+  horaFinTurno: string,
+  horaEntradaReal?: string | null,
+  horaSalidaReal?: string | null
+): number {
+  const baseFecha = minutosFecha(fechaTurno)
+  const inicioTurno = minutosHora(horaInicioTurno)
+  const finTurno = minutosHora(horaFinTurno)
+  const entradaReal = minutosHora(horaEntradaReal)
+  const salidaReal = minutosHora(horaSalidaReal)
+
+  if (
+    baseFecha === null ||
+    inicioTurno === null ||
+    finTurno === null ||
+    entradaReal === null ||
+    salidaReal === null
+  ) {
+    return 0
+  }
+
+  const turnoNocturno = finTurno <= inicioTurno
+  const inicioProgramado = baseFecha + inicioTurno
+  const finProgramado = baseFecha + (turnoNocturno ? finTurno + 1440 : finTurno)
+
+  let entradaAbsoluta = baseFecha + entradaReal
+  if (turnoNocturno && entradaReal <= finTurno) {
+    entradaAbsoluta += 1440
+  }
+
+  let salidaAbsoluta = baseFecha + salidaReal
+  if (turnoNocturno && salidaReal <= inicioTurno) {
+    salidaAbsoluta += 1440
+  }
+
+  const entradaEfectiva = Math.max(inicioProgramado, entradaAbsoluta)
+  const salidaLiquidable = salidaAbsoluta > finProgramado
+    ? finProgramado
+    : Math.floor(salidaAbsoluta / 30) * 30
+  const salidaEfectiva = Math.min(Math.max(salidaLiquidable, inicioProgramado), finProgramado)
+  const minutosLiquidables = Math.max(0, salidaEfectiva - entradaEfectiva)
+
+  return Number((minutosLiquidables / 60).toFixed(2))
+}
+
 export function calcAlertaEntrada(asignada: string, real: string): 'tarde' | 'anticipada' | null {
   const [ah, am] = asignada.split(':').map(Number)
   const [rh, rm] = real.split(':').map(Number)
