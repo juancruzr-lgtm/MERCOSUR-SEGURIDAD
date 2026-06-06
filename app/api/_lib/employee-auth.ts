@@ -84,7 +84,7 @@ export async function requireRole(
 
 export async function findAuthUserByEmail(supabaseAdmin: SupabaseClient, email: string) {
   const emailNormalizado = normalizeEmail(email)
-  const perPage = 1000
+  const perPage = 100
 
   for (let page = 1; page <= 100; page += 1) {
     const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage })
@@ -115,6 +115,34 @@ export async function authUserDisponible(
   return { error: null }
 }
 
+async function guardarVinculoEmpleado(
+  supabaseAdmin: SupabaseClient,
+  usuario: UsuarioEmpleado,
+  authUserId: string,
+  email: string,
+) {
+  return supabaseAdmin
+    .from('usuarios')
+    .update({ auth_user_id: authUserId, email })
+    .eq('id', usuario.id)
+    .select('id, nombre, apellido, dni, email, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at')
+    .single()
+}
+
+function authPayload(usuario: UsuarioEmpleado, email: string, dni: string) {
+  return {
+    email,
+    password: dni,
+    email_confirm: true,
+    user_metadata: {
+      usuario_id: usuario.id,
+      nombre: usuario.nombre,
+      apellido: usuario.apellido,
+      rol: usuario.rol,
+    },
+  }
+}
+
 export async function ensureEmployeeAuth(
   supabaseAdmin: SupabaseClient,
   usuario: UsuarioEmpleado,
@@ -132,85 +160,76 @@ export async function ensureEmployeeAuth(
   if (dni.length < 6) return { action: 'omitido', reason: 'omitido: DNI con menos de 6 caracteres' }
 
   let authUserId = usuario.auth_user_id || null
-  let action: 'creado' | 'actualizado' | 'vinculado' = authUserId ? 'actualizado' : 'vinculado'
 
   if (authUserId) {
-    const { data, error } = await supabaseAdmin.auth.admin.getUserById(authUserId)
+    const { error: updateAuthError } = await supabaseAdmin.auth.admin.updateUserById(
+      authUserId,
+      authPayload(usuario, email, dni),
+    )
 
-    if (error || !data.user) {
-      console.error('AUTH getUserById error', { usuario_id: usuario.id, auth_user_id: authUserId, error: error?.message })
-      authUserId = null
-    }
-  }
+    if (!updateAuthError) {
+      const { data: actualizado, error: updateUsuarioError } = await guardarVinculoEmpleado(
+        supabaseAdmin,
+        usuario,
+        authUserId,
+        email,
+      )
 
-  if (!authUserId) {
-    const { user, error } = await findAuthUserByEmail(supabaseAdmin, email)
-    if (error) return { action: 'error', error: error.message }
-
-    if (user) {
-      const disponible = await authUserDisponible(supabaseAdmin, usuario, user.id)
-      if (disponible.error) return { action: 'error', error: disponible.error }
-
-      authUserId = user.id
-      action = 'vinculado'
-    }
-  }
-
-  if (!authUserId) {
-    const { data, error } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password: dni,
-      email_confirm: true,
-      user_metadata: {
-        usuario_id: usuario.id,
-        nombre: usuario.nombre,
-        apellido: usuario.apellido,
-        rol: usuario.rol,
-      },
-    })
-
-    if (error || !data.user) {
-      console.error('AUTH createUser error', { usuario_id: usuario.id, email, error: error?.message })
-      return { action: 'error', error: error?.message || 'No se pudo crear el usuario Auth' }
+      if (updateUsuarioError) return { action: 'error', error: updateUsuarioError.message }
+      return { action: 'actualizado', user: actualizado }
     }
 
-    authUserId = data.user.id
-    action = 'creado'
-  }
-
-  const { data: currentAuth, error: currentAuthError } = await supabaseAdmin.auth.admin.getUserById(authUserId)
-  if (currentAuthError || !currentAuth.user) {
-    console.error('AUTH getUserById before update error', { usuario_id: usuario.id, auth_user_id: authUserId, error: currentAuthError?.message })
-    return { action: 'error', error: currentAuthError?.message || 'No se pudo cargar el usuario Auth' }
-  }
-
-  const authEmail = normalizeEmail(currentAuth.user.email)
-  const payload: Record<string, unknown> = {
-    password: dni,
-    email_confirm: true,
-    user_metadata: {
+    console.error('AUTH updateUserById existing error', {
       usuario_id: usuario.id,
-      nombre: usuario.nombre,
-      apellido: usuario.apellido,
-      rol: usuario.rol,
-    },
+      auth_user_id: authUserId,
+      email,
+      error: updateAuthError.message,
+    })
+    authUserId = null
   }
 
-  if (authEmail !== email) payload.email = email
+  const { user, error: findError } = await findAuthUserByEmail(supabaseAdmin, email)
+  if (findError) return { action: 'error', error: findError.message }
 
-  const { error: updateAuthError } = await supabaseAdmin.auth.admin.updateUserById(authUserId, payload)
-  if (updateAuthError) {
-    console.error('AUTH updateUserById error', { usuario_id: usuario.id, auth_user_id: authUserId, email, error: updateAuthError.message })
-    return { action: 'error', error: updateAuthError.message }
+  if (user) {
+    const disponible = await authUserDisponible(supabaseAdmin, usuario, user.id)
+    if (disponible.error) return { action: 'error', error: disponible.error }
+
+    const { error: updateAuthError } = await supabaseAdmin.auth.admin.updateUserById(
+      user.id,
+      authPayload(usuario, email, dni),
+    )
+
+    if (updateAuthError) {
+      console.error('AUTH updateUserById linked error', { usuario_id: usuario.id, auth_user_id: user.id, email, error: updateAuthError.message })
+      return { action: 'error', error: updateAuthError.message }
+    }
+
+    const { data: actualizado, error: updateUsuarioError } = await guardarVinculoEmpleado(
+      supabaseAdmin,
+      usuario,
+      user.id,
+      email,
+    )
+
+    if (updateUsuarioError) return { action: 'error', error: updateUsuarioError.message }
+    return { action: 'vinculado', user: actualizado }
   }
 
-  const { data: actualizado, error: updateUsuarioError } = await supabaseAdmin
-    .from('usuarios')
-    .update({ auth_user_id: authUserId, email })
-    .eq('id', usuario.id)
-    .select('id, nombre, apellido, dni, email, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at')
-    .single()
+  const { data, error } = await supabaseAdmin.auth.admin.createUser(authPayload(usuario, email, dni))
+
+  if (error || !data.user) {
+    console.error('AUTH createUser error', { usuario_id: usuario.id, email, error: error?.message })
+    return { action: 'error', error: error?.message || 'No se pudo crear el usuario Auth' }
+  }
+
+  const { data: actualizado, error: updateUsuarioError } = await guardarVinculoEmpleado(
+    supabaseAdmin,
+    usuario,
+    data.user.id,
+    email,
+  )
 
   if (updateUsuarioError) return { action: 'error', error: updateUsuarioError.message }
-  return { action, user: actualizado }
+  return { action: 'creado', user: actualizado }
 }
