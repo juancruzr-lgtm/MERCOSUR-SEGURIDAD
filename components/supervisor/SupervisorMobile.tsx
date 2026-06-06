@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 
 type EstadoTurno = 'programado' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto'
@@ -403,11 +403,11 @@ export default function SupervisorMobile({ user }: any) {
       return
     }
 
-    const { data, error: insertError } = await supabase.from('turnos').insert(payload).select().single()
+    const { error: insertError } = await supabase.from('turnos').insert(payload)
 
     if (insertError) {
       setError(insertError.message)
-    } else if (data) {
+    } else {
       const filtroDestino = filtroFechaTurnosIncluye(filtroFecha, payload.fecha)
         ? filtroFecha
         : filtroFechaTurnosParaFecha(payload.fecha)
@@ -419,6 +419,79 @@ export default function SupervisorMobile({ user }: any) {
       setFormTurno({ objetivo_id:'', guardia_id:'', fecha:hoy, hora_inicio:'18:00', hora_fin:'06:00', tipo_evento:'normal' })
     }
 
+    setAsignando(null)
+  }
+
+  const repetirAyer = async () => {
+    const fechaDestino = filtroFecha === 'manana' ? sumarDiasFecha(hoy, 1) : hoy
+    const fechaOrigen = sumarDiasFecha(fechaDestino, -1)
+
+    setAsignando('repetir-ayer')
+    setError('')
+    setMensaje('')
+
+    const [{ data: turnosOrigen, error: origenError }, { data: turnosComparacionData, error: comparacionError }] = await Promise.all([
+      supabase
+        .from('turnos')
+        .select('objetivo_id, guardia_id, hora_inicio, hora_fin, tipo_evento')
+        .eq('fecha', fechaOrigen)
+        .order('hora_inicio', { ascending: true }),
+      supabase
+        .from('turnos')
+        .select('id, objetivo_id, guardia_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
+        .in('fecha', fechasVecinasTurno(fechaDestino)),
+    ])
+
+    if (origenError || comparacionError) {
+      setError(origenError?.message || comparacionError?.message || 'Error al repetir turnos.')
+      setAsignando(null)
+      return
+    }
+
+    const comparacion = ((turnosComparacionData || []) as Turno[]).map(turno => ({ ...turno }))
+    const candidatos = (turnosOrigen || []).reduce<{ objetivo_id: string, guardia_id: string | null, fecha: string, hora_inicio: string, hora_fin: string, estado: Turno['estado'], tipo_evento: string }[]>((acumulados, turno: any) => {
+      const candidato = {
+        objetivo_id: turno.objetivo_id,
+        guardia_id: turno.guardia_id || null,
+        fecha: fechaDestino,
+        hora_inicio: turno.hora_inicio,
+        hora_fin: turno.hora_fin,
+        estado: (turno.guardia_id ? 'programado' : 'descubierto') as Turno['estado'],
+        tipo_evento: turno.tipo_evento || 'normal',
+      }
+
+      const duplicado = comparacion.some(existente =>
+        existente.fecha === fechaDestino &&
+        existente.objetivo_id === candidato.objetivo_id &&
+        existente.hora_inicio === candidato.hora_inicio &&
+        existente.hora_fin === candidato.hora_fin
+      )
+      const superpuesto = candidato.guardia_id
+        ? tieneTurnoSuperpuesto(comparacion, candidato)
+        : false
+
+      if (duplicado || superpuesto) return acumulados
+
+      acumulados.push(candidato)
+      comparacion.push({ id: `nuevo-${acumulados.length}`, ...candidato })
+      return acumulados
+    }, [])
+    const omitidos = (turnosOrigen || []).length - candidatos.length
+
+    if (candidatos.length > 0) {
+      const { error: insertError } = await supabase.from('turnos').insert(candidatos)
+
+      if (insertError) {
+        setError(insertError.message)
+        setAsignando(null)
+        return
+      }
+    }
+
+    await cargarDatos(filtroFecha)
+    setFiltroTurnos('todos')
+    setTab('turnos')
+    setMensaje(`✓ Repetir ayer\nSe crearon ${candidatos.length}\nSe omitieron ${omitidos}`)
     setAsignando(null)
   }
 
@@ -787,7 +860,7 @@ export default function SupervisorMobile({ user }: any) {
       <main style={main}>
         {error && <div style={errorBox}>{error}</div>}
         {mensaje && (
-          <div style={{ ...errorBox, color:'#10b981', borderColor:'rgba(16,185,129,.35)', background:'rgba(16,185,129,.12)' }}>
+          <div style={{ ...errorBox, color:'#10b981', borderColor:'rgba(16,185,129,.35)', background:'rgba(16,185,129,.12)', whiteSpace:'pre-line' }}>
             {mensaje}
           </div>
         )}
@@ -812,6 +885,13 @@ export default function SupervisorMobile({ user }: any) {
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
                   <button style={refreshButton} onClick={() => cargarDatos(filtroFecha)}>Actualizar</button>
                   <button style={secondaryButton} onClick={() => { setError(''); setMensaje(''); setModalTurno(true) }}>Crear turno</button>
+                  <button
+                    style={{ ...secondaryButton, gridColumn:'1 / -1', opacity: asignando === 'repetir-ayer' ? 0.65 : 1 }}
+                    onClick={repetirAyer}
+                    disabled={asignando === 'repetir-ayer'}
+                  >
+                    {asignando === 'repetir-ayer' ? 'Repitiendo...' : 'Repetir ayer'}
+                  </button>
                 </div>
               </section>
             )}
@@ -821,6 +901,16 @@ export default function SupervisorMobile({ user }: any) {
                 <div style={screenTitle}>Turnos por objetivo</div>
                 <div style={dateText}>{rangoFecha.label} · {fechaDDMMYYYY(rangoFecha.desde)}{rangoFecha.desde !== rangoFecha.hasta ? ` a ${fechaDDMMYYYY(rangoFecha.hasta)}` : ''}</div>
                 {renderFiltrosFecha()}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
+                  <button style={refreshButton} onClick={() => cargarDatos(filtroFecha)}>Actualizar</button>
+                  <button
+                    style={{ ...secondaryButton, opacity: asignando === 'repetir-ayer' ? 0.65 : 1 }}
+                    onClick={repetirAyer}
+                    disabled={asignando === 'repetir-ayer'}
+                  >
+                    {asignando === 'repetir-ayer' ? 'Repitiendo...' : 'Repetir ayer'}
+                  </button>
+                </div>
                 {filtroTurnos !== 'todos' && (
                   <div style={{ ...errorBox, color:'#f59e0b', borderColor:'rgba(245,158,11,.35)', background:'rgba(245,158,11,.12)' }}>
                     Filtro activo: {filtroTurnos}
