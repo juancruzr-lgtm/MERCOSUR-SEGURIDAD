@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureEmployeeAuth, getSupabaseAdmin, normalizeDni, normalizeEmail, requireRole } from '../_lib/employee-auth'
+import { repairEmployeeAuthUser } from '../_lib/auth-repair'
+import { getSupabaseAdmin, normalizeDni, normalizeEmail, requireRole } from '../_lib/employee-auth'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -32,9 +33,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No se puede resetear: falta email real del empleado' }, { status: 400 })
     }
 
-    const resultado = await ensureEmployeeAuth(admin.client, usuario)
+    const resultado = await repairEmployeeAuthUser(admin.client, usuario)
 
-    if (resultado.action === 'omitido') return NextResponse.json({ error: resultado.reason }, { status: 400 })
+    if (resultado.action === 'omitido') return NextResponse.json({ error: resultado.motivo }, { status: 400 })
     if (resultado.action === 'error') {
       console.error('RESET DNI error', { usuario_id: usuarioId, error: resultado.error })
       return NextResponse.json({ error: resultado.error }, { status: 400 })

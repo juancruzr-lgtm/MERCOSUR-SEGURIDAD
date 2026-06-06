@@ -757,6 +757,67 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
     setAccionLoading(null)
   }
 
+  const repararAccesosAuth = async () => {
+    setAccionLoading('repair-auth')
+    setMensaje(null)
+
+    try {
+      const auditRes = await fetch('/api/admin/repair-auth-users', {
+        method: 'POST',
+        headers: await headersAdmin(),
+        body: JSON.stringify({ repair_all: true }),
+      })
+      const auditData = await auditRes.json()
+
+      if (!auditRes.ok && !auditData.report) {
+        setMensaje({ tipo:'error', texto:auditData.error || 'No se pudo auditar Auth' })
+        setAccionLoading(null)
+        return
+      }
+
+      const report = auditData.report || {}
+      const confirmado = window.confirm(
+        `Auditoria Auth: ${report.auditados || 0} empleados activos. Sin Auth: ${report.usuarios_sin_auth_user_id?.length || 0}. Sin identity: ${report.auth_users_sin_identity?.length || 0}. Duplicados: ${report.emails_duplicados?.length || 0}. La reparacion puede eliminar Auth users invalidos y recrearlos con password DNI. Continuar?`
+      )
+
+      if (!confirmado) {
+        setMensaje({ tipo:'ok', texto:'Auditoria Auth completada. No se ejecuto reparacion.' })
+        setAccionLoading(null)
+        return
+      }
+
+      const res = await fetch('/api/admin/repair-auth-users', {
+        method: 'POST',
+        headers: await headersAdmin(),
+        body: JSON.stringify({ repair_all: true, confirm: true }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setMensaje({ tipo:'error', texto:data.error || 'No se pudieron reparar los accesos Auth' })
+      } else {
+        if (Array.isArray(data.users)) setGuardias(data.users)
+        const s = data.summary || {}
+        const errores = Array.isArray(data.results)
+          ? data.results
+              .filter((r: any) => r.action === 'error')
+              .slice(0, 3)
+              .map((r: any) => `${r.empleado}: ${r.error}`)
+              .join(' | ')
+          : ''
+
+        setMensaje({
+          tipo: s.errores ? 'error' : 'ok',
+          texto: `Reparacion Auth: auditados ${s.auditados || 0}, reparados ${s.reparados || 0}, recreados ${s.recreados || 0}, vinculados ${s.vinculados || 0}, omitidos ${s.omitidos || 0}, errores ${s.errores || 0}.${errores ? ` ${errores}` : ''}`,
+        })
+      }
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
+    }
+
+    setAccionLoading(null)
+  }
+
   const guardiasFiltrados = filtroActivo?.tipo === 'activos'
     ? guardias.filter((g: Usuario) => g.estado === 'activo')
     : guardias
@@ -776,6 +837,14 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
             disabled={accionLoading === 'sync-auth'}
           >
             {accionLoading === 'sync-auth' ? 'Sincronizando...' : 'Sincronizar accesos empleados'}
+          </button>
+
+          <button
+            style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'repair-auth' ? 0.65 : 1 }}
+            onClick={repararAccesosAuth}
+            disabled={accionLoading === 'repair-auth'}
+          >
+            {accionLoading === 'repair-auth' ? 'Reparando...' : 'Reparar accesos Auth'}
           </button>
 
           <button

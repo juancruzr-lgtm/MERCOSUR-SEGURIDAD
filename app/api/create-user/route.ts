@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureEmployeeAuth, getSupabaseAdmin, requireRole } from '../_lib/employee-auth'
+import { repairEmployeeAuthUser } from '../_lib/auth-repair'
+import { getSupabaseAdmin, requireRole } from '../_lib/employee-auth'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -23,17 +24,19 @@ export async function POST(req: NextRequest) {
     if (usuarioError) return NextResponse.json({ error: usuarioError.message }, { status: 500 })
     if (!usuario) return NextResponse.json({ error: 'Empleado no encontrado' }, { status: 404 })
 
-    const resultado = await ensureEmployeeAuth(admin.client, usuario)
+    const resultado = await repairEmployeeAuthUser(admin.client, usuario)
 
-    if (resultado.action === 'omitido') return NextResponse.json({ error: resultado.reason }, { status: 400 })
+    if (resultado.action === 'omitido') return NextResponse.json({ error: resultado.motivo }, { status: 400 })
     if (resultado.action === 'error') return NextResponse.json({ error: resultado.error }, { status: 400 })
 
     const message =
       resultado.action === 'creado'
         ? 'Usuario Auth creado correctamente'
-        : resultado.action === 'vinculado'
-          ? 'Usuario Auth vinculado correctamente'
-          : 'El empleado ya tenia usuario Auth; acceso reparado correctamente'
+      : resultado.action === 'vinculado'
+        ? 'Usuario Auth vinculado correctamente'
+        : resultado.action === 'recreado'
+          ? 'Usuario Auth recreado correctamente'
+        : 'El empleado ya tenia usuario Auth; acceso reparado correctamente'
 
     return NextResponse.json({
       ok: true,
