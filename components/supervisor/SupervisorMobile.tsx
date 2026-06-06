@@ -104,40 +104,14 @@ function gpsRegistro(registro: RegistroAsistencia | undefined, tipo: 'ingreso' |
   return lat !== null && lng !== null ? { lat, lng, precision } : null
 }
 
-function calcDistanciaMetros(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const radioTierra = 6371000
-  const rad = Math.PI / 180
-  const dLat = (lat2 - lat1) * rad
-  const dLng = (lng2 - lng1) * rad
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2
-
-  return radioTierra * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
-
 function ubicacionObjetivoCompleta(objetivo?: Objetivo | null): boolean {
   return numeroGps(objetivo?.lat) !== null && numeroGps(objetivo?.lng) !== null && (numeroGps(objetivo?.radio_metros) || 0) > 0
 }
 
-function resumenGps(registro: RegistroAsistencia | undefined, objetivo: Objetivo | undefined, tipo: 'ingreso' | 'egreso'): string {
+function resumenGps(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 'egreso'): string {
   const gps = gpsRegistro(registro, tipo)
-  const etiqueta = tipo === 'ingreso' ? 'GPS ingreso' : 'GPS egreso'
-  if (!gps) return `${etiqueta}: Sin GPS`
-
-  const objetivoLat = numeroGps(objetivo?.lat)
-  const objetivoLng = numeroGps(objetivo?.lng)
-  const radio = numeroGps(objetivo?.radio_metros) || 0
-  const precision = gps.precision !== null ? ` · Precisión ${Math.round(gps.precision)}m` : ''
-
-  if (objetivoLat === null || objetivoLng === null || radio <= 0) {
-    return `${etiqueta} OK${precision} · Objetivo sin GPS`
-  }
-
-  const distancia = Math.round(calcDistanciaMetros(gps.lat, gps.lng, objetivoLat, objetivoLng))
-  const estadoRadio = distancia <= radio ? 'Dentro del radio' : 'Fuera del radio'
-
-  return `${etiqueta} OK${precision} · ${estadoRadio} · Distancia ${distancia}m`
+  if (!gps) return '⚠ Sin GPS'
+  return tipo === 'ingreso' ? 'Ingreso GPS ✓' : 'Egreso GPS ✓'
 }
 
 export default function SupervisorMobile({ user }: any) {
@@ -729,8 +703,8 @@ export default function SupervisorMobile({ user }: any) {
     const alerta = alertaTurno(turno)
     const puedeMarcarDescubierto = !registro?.hora_entrada_real && estado !== 'descubierto'
     const registrosAbiertos = turnoRegistrosAbierto === turno.id
-    const gpsIngreso = resumenGps(registro, objetivo, 'ingreso')
-    const gpsEgreso = resumenGps(registro, objetivo, 'egreso')
+    const gpsIngreso = resumenGps(registro, 'ingreso')
+    const gpsEgreso = resumenGps(registro, 'egreso')
 
     return (
       <div key={turno.id} style={turnoCard}>
@@ -833,8 +807,8 @@ export default function SupervisorMobile({ user }: any) {
                     <span>Salida {horaCorta(r.hora_salida_real)}</span>
                     <span>{horasCortas(r.horas_trabajadas)}</span>
                   </div>
-                  <div style={muted}>{resumenGps(r, objetivo, 'ingreso')}</div>
-                  <div style={muted}>{resumenGps(r, objetivo, 'egreso')}</div>
+                  <div style={muted}>{resumenGps(r, 'ingreso')}</div>
+                  <div style={muted}>{resumenGps(r, 'egreso')}</div>
                 </div>
               )
             })}

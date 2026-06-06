@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcHorasLiquidables, calcDistancia } from '@/lib/supabase'
+import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcHorasLiquidables } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -104,20 +104,10 @@ function gpsRegistroAsistencia(registro: RegistroAsistencia | any, tipo: 'ingres
   return lat !== null && lng !== null ? { lat, lng, precision } : null
 }
 
-function textoAuditoriaGps(registro: RegistroAsistencia | any, objetivo: Objetivo | any, tipo: 'ingreso' | 'egreso'): string {
+function textoAuditoriaGps(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string {
   const gps = gpsRegistroAsistencia(registro, tipo)
-  if (!gps) return '—'
-
-  const objetivoLat = numeroGps(objetivo?.lat)
-  const objetivoLng = numeroGps(objetivo?.lng)
-  const radio = numeroGps(objetivo?.radio_metros) || 0
-
-  if (objetivoLat === null || objetivoLng === null || radio <= 0) return 'Objetivo sin GPS'
-
-  const distancia = Math.round(calcDistancia(gps.lat, gps.lng, objetivoLat, objetivoLng))
-  const estadoRadio = distancia <= radio ? 'Dentro del radio' : 'Fuera del radio'
-
-  return `${estadoRadio} · Distancia ${distancia}m`
+  if (!gps) return '⚠ Sin GPS'
+  return tipo === 'ingreso' ? 'GPS Ingreso ✓' : 'GPS Egreso ✓'
 }
 
 function textoPrecisionGps(registro: RegistroAsistencia | any): string {
@@ -125,10 +115,10 @@ function textoPrecisionGps(registro: RegistroAsistencia | any): string {
   const egreso = gpsRegistroAsistencia(registro, 'egreso')?.precision
   const partes = []
 
-  if (ingreso !== null && ingreso !== undefined) partes.push(`Ingreso ${Math.round(ingreso)}m`)
-  if (egreso !== null && egreso !== undefined) partes.push(`Egreso ${Math.round(egreso)}m`)
+  if (ingreso !== null && ingreso !== undefined) partes.push(`Ingreso ${Math.round(ingreso)} m`)
+  if (egreso !== null && egreso !== undefined) partes.push(`Egreso ${Math.round(egreso)} m`)
 
-  return partes.length ? partes.join(' · ') : '—'
+  return partes.length ? partes.join(' · ') : '⚠ Sin GPS'
 }
 
 function objetivoTieneGps(objetivo: Objetivo | any): boolean {
@@ -1645,7 +1635,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
       )}
       <div style={{ ...S.card, overflowX:'auto' }}>
         <table style={S.table}>
-          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>GPS egreso</th><th style={S.th}>Precisión</th><th style={S.th}>Alertas</th></tr></thead>
+          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>GPS Ingreso</th><th style={S.th}>GPS Egreso</th><th style={S.th}>Precisión</th><th style={S.th}>Alertas</th></tr></thead>
           <tbody>
             {registrosOrdenados.map((r: RegistroAsistencia) => {
               const g = guardias.find((x: Usuario) => x.id === r.guardia_id)
@@ -1653,6 +1643,8 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
               const o = objetivos.find((x: Objetivo) => x.id === t?.objetivo_id)
               const gpsIngreso = gpsRegistroAsistencia(r, 'ingreso')
               const gpsEgreso = gpsRegistroAsistencia(r, 'egreso')
+              const textoGpsIngreso = textoAuditoriaGps(r, 'ingreso')
+              const textoGpsEgreso = textoAuditoriaGps(r, 'egreso')
               return (
                 <tr key={r.id}>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatFecha(fechaRegistroAsistencia(r, t))}</td>
@@ -1663,12 +1655,10 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_salida_real || '—'}</td>
                   <td style={S.td}>{r.horas_trabajadas ? formatHoras(r.horas_trabajadas) : '—'}</td>
                   <td style={{ ...S.td, fontSize:12 }}>
-                    <Badge type={gpsIngreso ? 'ok' : 'pendiente'}>{gpsIngreso ? 'GPS ingreso OK' : 'Sin GPS'}</Badge>
-                    <div style={{ fontSize:11, color:'#64748b', marginTop:4 }}>{textoAuditoriaGps(r, o, 'ingreso')}</div>
+                    <Badge type={gpsIngreso ? 'ok' : 'pendiente'}>{textoGpsIngreso}</Badge>
                   </td>
                   <td style={{ ...S.td, fontSize:12 }}>
-                    <Badge type={gpsEgreso ? 'ok' : 'pendiente'}>{gpsEgreso ? 'GPS egreso OK' : 'Sin GPS'}</Badge>
-                    <div style={{ fontSize:11, color:'#64748b', marginTop:4 }}>{textoAuditoriaGps(r, o, 'egreso')}</div>
+                    <Badge type={gpsEgreso ? 'ok' : 'pendiente'}>{textoGpsEgreso}</Badge>
                   </td>
                   <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{textoPrecisionGps(r)}</td>
                   <td style={S.td}>

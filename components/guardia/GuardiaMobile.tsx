@@ -163,35 +163,12 @@ function gpsRegistro(registro: Registro | undefined, tipo: 'ingreso' | 'egreso')
   return lat !== null && lng !== null ? { lat, lng, precision } : null
 }
 
-function calcDistanciaMetros(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const radioTierra = 6371000
-  const rad = Math.PI / 180
-  const dLat = (lat2 - lat1) * rad
-  const dLng = (lng2 - lng1) * rad
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2
-
-  return radioTierra * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
-
-function auditoriaGps(registro: Registro | undefined, objetivo: Objetivo | undefined, tipo: 'ingreso' | 'egreso'): string {
+function auditoriaGps(registro: Registro | undefined, tipo: 'ingreso' | 'egreso'): string {
   const gps = gpsRegistro(registro, tipo)
-  if (!gps) return 'Sin GPS'
+  if (!gps) return '⚠ Sin GPS'
 
-  const objetivoLat = numeroGps(objetivo?.lat)
-  const objetivoLng = numeroGps(objetivo?.lng)
-  const radio = numeroGps(objetivo?.radio_metros) || 0
-  const precision = gps.precision !== null ? ` · Precisión ${Math.round(gps.precision)}m` : ''
-
-  if (objetivoLat === null || objetivoLng === null || radio <= 0) {
-    return `GPS capturado OK${precision} · Objetivo sin GPS`
-  }
-
-  const distancia = Math.round(calcDistanciaMetros(gps.lat, gps.lng, objetivoLat, objetivoLng))
-  const estadoRadio = distancia <= radio ? 'Dentro del radio' : 'Fuera del radio'
-
-  return `GPS capturado OK${precision} · ${estadoRadio} · Distancia ${distancia}m`
+  const precision = gps.precision !== null ? ` · Precisión ${Math.round(gps.precision)} m` : ''
+  return `📍 GPS OK${precision}`
 }
 // ── ESTILOS ───────────────────────────────────────────────────
 const S: Record<string, React.CSSProperties> = {
@@ -544,7 +521,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
       setMensaje({
-        texto: `✓ Entrada registrada a las ${hora} · GPS capturado OK · Precisión ${Math.round(gps.accuracy)}m`,
+        texto: `✓ Entrada registrada a las ${hora} · 📍 GPS OK · Precisión ${Math.round(gps.accuracy)} m`,
         tipo: 'ok',
       })
       setTimeout(() => setMensaje(null), 4000)
@@ -623,7 +600,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         )
       )
       setMensaje({
-        texto: gpsDisponible && gps ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas · GPS capturado OK · Precisión ${Math.round(gps.accuracy)}m` : 'GPS no disponible, asistencia registrada sin ubicación.',
+        texto: gpsDisponible && gps ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas · 📍 GPS OK · Precisión ${Math.round(gps.accuracy)} m` : 'GPS no disponible, asistencia registrada sin ubicación.',
         tipo: gpsDisponible ? 'ok' : 'warn',
       })
     }
@@ -745,8 +722,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           const cargando = fichando === turno.id
           const puedeDarPresente = estaEnVentanaFichaje(turno, ahora)
           const gpsBloqueaPresente = permisoGps === 'checking' || permisoGps === 'denied' || permisoGps === 'unsupported'
-          const gpsIngreso = auditoriaGps(reg, obj, 'ingreso')
-          const gpsEgreso = auditoriaGps(reg, obj, 'egreso')
+          const gpsIngreso = auditoriaGps(reg, 'ingreso')
+          const gpsEgreso = auditoriaGps(reg, 'egreso')
 
           return (
             <div key={turno.id} style={S.card}>
@@ -796,9 +773,9 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                     </div>
                   )}
                   <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
-                    <div>GPS ingreso: <strong style={{ color: gpsIngreso === 'Sin GPS' ? '#f59e0b' : '#10b981' }}>{gpsIngreso}</strong></div>
+                    <div>GPS ingreso: <strong style={{ color: gpsIngreso.includes('Sin GPS') ? '#f59e0b' : '#10b981' }}>{gpsIngreso}</strong></div>
                     {reg.hora_salida_real && (
-                      <div>GPS egreso: <strong style={{ color: gpsEgreso === 'Sin GPS' ? '#f59e0b' : '#10b981' }}>{gpsEgreso}</strong></div>
+                      <div>GPS egreso: <strong style={{ color: gpsEgreso.includes('Sin GPS') ? '#f59e0b' : '#10b981' }}>{gpsEgreso}</strong></div>
                     )}
                   </div>
                 </div>
