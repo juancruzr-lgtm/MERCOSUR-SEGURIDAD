@@ -1,10 +1,12 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
+import { calcAlertaEntrada, supabase } from '@/lib/supabase'
 
 // ── TIPOS ─────────────────────────────────────────────────────
 interface Turno {
   id: string
+  guardia_id?: string | null
+  guardia_original_id?: string | null
   fecha: string
   hora_inicio: string
   hora_fin: string
@@ -77,14 +79,41 @@ function fechaHoraTurno(fecha: string, hora: string): Date | null {
   return new Date(year, month - 1, day, hours, minutes, seconds)
 }
 
-function estaEnVentanaFichaje(turno: Turno, ahora: Date): boolean {
+function fechaFinTurno(turno: Turno): Date | null {
   const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
-  if (!inicioTurno) return false
+  const finTurno = fechaHoraTurno(turno.fecha, turno.hora_fin)
+  if (!inicioTurno || !finTurno) return null
+
+  if (finTurno <= inicioTurno) {
+    finTurno.setDate(finTurno.getDate() + 1)
+  }
+
+  return finTurno
+}
+
+function turnoFueReasignado(turno: Turno, guardiaId: string): boolean {
+  return Boolean(
+    turno.guardia_original_id &&
+    turno.guardia_original_id === guardiaId &&
+    turno.guardia_id &&
+    turno.guardia_id !== guardiaId
+  )
+}
+
+function mensajeBloqueoFichaje(turno: Turno, guardiaId: string, ahora: Date): string | null {
+  if (turnoFueReasignado(turno, guardiaId)) {
+    return 'Su turno fue reasignado por supervisión.'
+  }
+
+  const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
+  const finTurno = fechaFinTurno(turno)
+  if (!inicioTurno || !finTurno) return 'No se pudo validar el horario del turno.'
 
   const desde = new Date(inicioTurno.getTime() - 30 * 60 * 1000)
-  const hasta = new Date(inicioTurno.getTime() + 60 * 60 * 1000)
+  if (ahora < desde) return 'Fuera de horario de fichaje. Contacte al supervisor.'
+  if (ahora > finTurno) return 'El turno ya finalizó. Contacte al supervisor.'
 
-  return ahora >= desde && ahora <= hasta
+  return null
 }
 
 async function consultarPermisoGps(): Promise<GpsPermissionState> {
@@ -379,7 +408,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
   supabase
     .from('turnos')
     .select('*')
-    .eq('guardia_id', user.id)
+    .or(`guardia_id.eq.${user.id},guardia_original_id.eq.${user.id}`)
     .eq('fecha', hoy)
     .order('hora_inicio'),
 
@@ -453,8 +482,9 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
   // Dar presente
   const darPresente = async (turno: Turno) => {
-    if (!estaEnVentanaFichaje(turno, new Date())) {
-      setMensaje({ texto: 'Fuera de horario de fichaje. Contacte al supervisor.', tipo: 'error' })
+    const bloqueo = mensajeBloqueoFichaje(turno, user.id, new Date())
+    if (bloqueo) {
+      setMensaje({ texto: bloqueo, tipo: 'error' })
       setTimeout(() => setMensaje(null), 4000)
       return
     }
@@ -483,6 +513,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         guardia_id: user.id,
         turno_id: turno.id,
         hora_entrada_real: hora,
+        alerta_entrada: calcAlertaEntrada(turno.hora_inicio, hora),
       }
       const payloadConGps = {
           ...payload,
@@ -720,7 +751,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           const obj     = getObjetivo(turno.objetivo_id)
           const reg     = registroDelTurno(turno.id)
           const cargando = fichando === turno.id
-          const puedeDarPresente = estaEnVentanaFichaje(turno, ahora)
+          const bloqueoFichaje = mensajeBloqueoFichaje(turno, user.id, ahora)
+          const puedeDarPresente = !bloqueoFichaje
           const gpsBloqueaPresente = permisoGps === 'checking' || permisoGps === 'denied' || permisoGps === 'unsupported'
           const gpsIngreso = auditoriaGps(reg, 'ingreso')
           const gpsEgreso = auditoriaGps(reg, 'egreso')
@@ -796,7 +828,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                 <>
                   {!puedeDarPresente && (
                     <div style={S.alert('error')}>
-                      Fuera de horario de fichaje. Contacte al supervisor.
+                      {bloqueoFichaje}
                     </div>
                   )}
                   <button

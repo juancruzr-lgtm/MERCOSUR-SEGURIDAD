@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, pasoVentanaFichaje, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 
-type EstadoTurno = 'programado' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto'
-type TipoAlerta = 'sin entrada' | 'entrada registrada' | 'salida registrada' | 'turno descubierto'
+type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
+type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
+type TipoAlerta = 'sin entrada' | 'entrada registrada' | 'salida registrada' | 'turno descubierto' | 'asistencia demorada' | 'reasignado'
 
 interface Turno {
   id: string
@@ -16,7 +17,7 @@ interface Turno {
   fecha: string
   hora_inicio: string
   hora_fin: string
-  estado: 'programado' | 'cubierto' | 'descubierto'
+  estado: EstadoTurnoPersistido
   tipo_evento?: string
 }
 
@@ -60,6 +61,7 @@ interface RegistroAsistencia {
   lng_entrada?: number | string | null
   lat_salida?: number | string | null
   lng_salida?: number | string | null
+  alerta_entrada?: string | null
   created_at?: string
 }
 
@@ -81,6 +83,22 @@ function fechaDDMMYYYY(fecha?: string | null): string {
 
   const [year, month, day] = fecha.slice(0, 10).split('-')
   return year && month && day ? `${day}/${month}/${year}` : '—'
+}
+
+function fechaHoraTurno(fecha: string, hora: string): Date | null {
+  const [year, month, day] = fecha.slice(0, 10).split('-').map(Number)
+  const [hours, minutes, seconds = 0] = hora.split(':').map(Number)
+
+  if (![year, month, day, hours, minutes, seconds].every(Number.isFinite)) return null
+
+  return new Date(year, month - 1, day, hours, minutes, seconds)
+}
+
+function minutosAtrasoTurno(turno: Turno, ahora = new Date()): number {
+  const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
+  if (!inicioTurno) return 0
+
+  return Math.max(0, Math.floor((ahora.getTime() - inicioTurno.getTime()) / 60000))
 }
 
 function numeroGps(value: unknown): number | null {
@@ -258,7 +276,18 @@ export default function SupervisorMobile({ user }: any) {
     })
   const getRegistro = (turnoId: string) => getRegistrosTurno(turnoId)[0]
   const existeAsistencia = (turno: Turno) => getRegistrosTurno(turno.id).length > 0
-  const esDescubiertoOperativo = (turno: Turno) => turnoSinCoberturaOperativa(turno, existeAsistencia(turno))
+  const esDescubiertoOperativo = (turno: Turno) => !turno.guardia_id || turno.estado === 'descubierto'
+  const esTurnoReasignado = (turno: Turno) => Boolean(
+    turno.guardia_original_id &&
+    turno.guardia_id &&
+    turno.guardia_original_id !== turno.guardia_id
+  )
+  const esPendienteIngreso = (turno: Turno) => Boolean(
+    turno.guardia_id &&
+    !getRegistro(turno.id)?.hora_entrada_real &&
+    turno.estado !== 'descubierto' &&
+    pasoVentanaFichaje(turno)
+  )
   const guardiaEsperadoId = (turno: Turno) => turno.guardia_original_id || turno.guardia_id || null
   const nombreGuardiaEsperado = (turno: Turno) => {
     const guardiaId = guardiaEsperadoId(turno)
@@ -275,8 +304,10 @@ export default function SupervisorMobile({ user }: any) {
     const registro = getRegistro(turno.id)
 
     if (registro?.hora_salida_real) return 'finalizado'
-    if (registro?.hora_entrada_real) return 'en turno'
+    if (registro?.hora_entrada_real) return registro.alerta_entrada === 'tarde' ? 'tardanza' : 'en turno'
     if (esDescubiertoOperativo(turno)) return 'descubierto'
+    if (esTurnoReasignado(turno)) return 'reasignado'
+    if (esPendienteIngreso(turno)) return 'pendiente de ingreso'
     if (turno.estado === 'cubierto') return 'cubierto'
     return 'programado'
   }
@@ -285,8 +316,10 @@ export default function SupervisorMobile({ user }: any) {
     const registro = getRegistro(turno.id)
 
     if (registro?.hora_salida_real) return 'salida registrada'
-    if (registro?.hora_entrada_real) return 'entrada registrada'
+    if (registro?.hora_entrada_real) return registro.alerta_entrada === 'tarde' ? 'asistencia demorada' : 'entrada registrada'
     if (esDescubiertoOperativo(turno)) return 'turno descubierto'
+    if (esPendienteIngreso(turno)) return 'asistencia demorada'
+    if (esTurnoReasignado(turno)) return 'reasignado'
     return 'sin entrada'
   }
 
@@ -326,6 +359,11 @@ export default function SupervisorMobile({ user }: any) {
     [turnos, registros],
   )
 
+  const turnosConAsistenciaDemorada = useMemo(
+    () => turnos.filter(t => esPendienteIngreso(t)),
+    [turnos, registros],
+  )
+
   const guardiaTieneTurnoSuperpuesto = async (
     candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>,
     excluirTurnoId?: string,
@@ -359,6 +397,7 @@ export default function SupervisorMobile({ user }: any) {
     const payload = {
       objetivo_id: formTurno.objetivo_id,
       guardia_id: formTurno.guardia_id || null,
+      guardia_original_id: formTurno.guardia_id || null,
       fecha: formTurno.fecha,
       hora_inicio: formTurno.hora_inicio,
       hora_fin: formTurno.hora_fin,
@@ -423,10 +462,11 @@ export default function SupervisorMobile({ user }: any) {
     }
 
     const comparacion = ((turnosComparacionData || []) as Turno[]).map(turno => ({ ...turno }))
-    const candidatos = (turnosOrigen || []).reduce<{ objetivo_id: string, guardia_id: string | null, fecha: string, hora_inicio: string, hora_fin: string, estado: Turno['estado'], tipo_evento: string }[]>((acumulados, turno: any) => {
+    const candidatos = (turnosOrigen || []).reduce<{ objetivo_id: string, guardia_id: string | null, guardia_original_id: string | null, fecha: string, hora_inicio: string, hora_fin: string, estado: Turno['estado'], tipo_evento: string }[]>((acumulados, turno: any) => {
       const candidato = {
         objetivo_id: turno.objetivo_id,
         guardia_id: turno.guardia_id || null,
+        guardia_original_id: turno.guardia_id || null,
         fecha: fechaDestino,
         hora_inicio: turno.hora_inicio,
         hora_fin: turno.hora_fin,
@@ -600,9 +640,13 @@ export default function SupervisorMobile({ user }: any) {
     setAsignando(turno.id)
     setError('')
 
-    const payload: { guardia_id: string | null, estado: Turno['estado'] } = {
+    const payload: { guardia_id: string | null, guardia_original_id?: string | null, estado: EstadoTurnoPersistido } = {
       guardia_id: nuevoGuardiaId,
       estado: nuevoGuardiaId ? (turno.estado === 'descubierto' ? 'programado' : turno.estado) : 'descubierto',
+    }
+
+    if (nuevoGuardiaId) {
+      payload.guardia_original_id = turno.guardia_original_id || turno.guardia_id || nuevoGuardiaId
     }
 
     const conflicto = nuevoGuardiaId ? await guardiaTieneTurnoSuperpuesto({
@@ -639,9 +683,13 @@ export default function SupervisorMobile({ user }: any) {
     setAsignando(turno.id)
     setError('')
 
-    const payload: { guardia_id: null, estado: Turno['estado'] } = {
+    const payload: { guardia_id: null, guardia_original_id?: string | null, estado: EstadoTurnoPersistido } = {
       guardia_id: null,
       estado: 'descubierto',
+    }
+
+    if (!turno.guardia_original_id && turno.guardia_id) {
+      payload.guardia_original_id = turno.guardia_id
     }
 
     const { error: updateError } = await supabase
@@ -973,6 +1021,34 @@ export default function SupervisorMobile({ user }: any) {
                                 <div style={{ ...muted, color: '#f59e0b' }}>{detalleTurnoDescubierto(turno)}</div>
                               </div>
                               <span style={badge('descubierto')}>descubierto</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {turnosConAsistenciaDemorada.length > 0 && (
+                  <div style={{ ...card, borderColor: 'rgba(245,158,11,.35)', background: 'rgba(245,158,11,.08)' }}>
+                    <div style={{ ...objetivoName, color: '#fbbf24' }}>Asistencias demoradas</div>
+                    <div style={muted}>{turnosConAsistenciaDemorada.length} turno(s) sin ingreso registrado después de la ventana inicial.</div>
+
+                    <div style={{ marginTop: 12 }}>
+                      {turnosConAsistenciaDemorada.map(turno => {
+                        const objetivo = getObjetivo(turno.objetivo_id)
+                        const guardia = getGuardia(turno.guardia_id)
+
+                        return (
+                          <div key={`alerta-demora-${turno.id}`} style={{ ...turnoCard, background: '#111827' }}>
+                            <div style={turnoTop}>
+                              <div>
+                                <div style={objetivoName}>{guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
+                                <div style={muted}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
+                                <div style={muted}>Horario programado: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+                                <div style={{ ...muted, color: '#f59e0b' }}>{minutosAtrasoTurno(turno)} minutos tarde</div>
+                              </div>
+                              <span style={alertBadge('asistencia demorada')}>asistencia demorada</span>
                             </div>
                           </div>
                         )
@@ -1438,10 +1514,13 @@ const navButton: React.CSSProperties = {
 function badge(estado: EstadoTurno): React.CSSProperties {
   const colores: Record<EstadoTurno, { bg: string, color: string }> = {
     programado: { bg: 'rgba(100,116,139,.18)', color: '#cbd5e1' },
+    'pendiente de ingreso': { bg: 'rgba(245,158,11,.18)', color: '#fbbf24' },
+    tardanza: { bg: 'rgba(245,158,11,.18)', color: '#f59e0b' },
     cubierto: { bg: 'rgba(59,130,246,.18)', color: '#60a5fa' },
     'en turno': { bg: 'rgba(16,185,129,.18)', color: '#10b981' },
     finalizado: { bg: 'rgba(16,185,129,.18)', color: '#10b981' },
     descubierto: { bg: 'rgba(239,68,68,.18)', color: '#f87171' },
+    reasignado: { bg: 'rgba(59,130,246,.18)', color: '#93c5fd' },
   }
   const c = colores[estado]
 
@@ -1460,9 +1539,11 @@ function badge(estado: EstadoTurno): React.CSSProperties {
 function alertBadge(alerta: TipoAlerta): React.CSSProperties {
   const color = alerta === 'turno descubierto'
     ? '#ef4444'
-    : alerta === 'sin entrada'
+    : alerta === 'sin entrada' || alerta === 'asistencia demorada'
       ? '#f59e0b'
-      : '#10b981'
+      : alerta === 'reasignado'
+        ? '#60a5fa'
+        : '#10b981'
 
   return {
     display: 'inline-flex',
