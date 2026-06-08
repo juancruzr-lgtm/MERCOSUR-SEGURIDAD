@@ -1893,22 +1893,42 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
 }
 
 function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroActivo, limpiarFiltro }: any) {
-  const [tab, setTab] = useState('guardias')
+  const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
+  const [tab, setTab] = useState('planilla_empleado')
   const [mes, setMes] = useState(new Date().toLocaleDateString('sv-SE').slice(0, 7))
   const [verTodos, setVerTodos] = useState(false)
+  const [empleadoId, setEmpleadoId] = useState('')
+  const [objetivoId, setObjetivoId] = useState('')
 
   useEffect(() => {
     if (filtroActivo?.mes) setMes(filtroActivo.mes)
   }, [filtroActivo?.mes])
 
+  useEffect(() => {
+    if (!empleadoId && empleados.length > 0) setEmpleadoId(empleados[0].id)
+  }, [empleadoId, empleados])
+
+  useEffect(() => {
+    if (!objetivoId && objetivos.length > 0) setObjetivoId(objetivos[0].id)
+  }, [objetivoId, objetivos])
+
+  const csvValue = (value: any) => `"${String(value ?? '').replace(/"/g, '""')}"`
+  const limpiarCsv = (data: any[]) => data.map(row => Object.fromEntries(Object.entries(row).filter(([key]) => !key.startsWith('_'))))
   const exportCSV = (data: any[], filename: string) => {
     if (data.length === 0) return
     const keys = Object.keys(data[0])
-    const rows = [keys.join(','), ...data.map(row => keys.map(k => `"${row[k]}"`).join(','))]
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const rows = [keys.map(csvValue).join(','), ...data.map(row => keys.map(k => csvValue(row[k])).join(','))]
+    const blob = new Blob([`\ufeff${rows.join('\n')}`], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = filename + '.csv'; a.click()
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename.endsWith('.csv') ? filename : `${filename}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
   }
+
+  const slug = (value?: string | null) =>
+    (value || 'sin-dato').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'sin-dato'
 
   const desde = `${mes}-01`
   const hasta = (() => {
@@ -1916,12 +1936,164 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     const next = new Date(year, month, 1)
     return next.toLocaleDateString('sv-SE')
   })()
-  const turnosMes = turnos.filter((t: Turno) => t.fecha >= desde && t.fecha < hasta)
+  const mesLabel = (() => {
+    const [year, month] = mes.split('-').map(Number)
+    return new Date(year, month - 1, 1).toLocaleDateString('es-AR', { month:'long', year:'numeric' })
+  })()
+  const turnosMes = turnos
+    .filter((t: Turno) => t.fecha >= desde && t.fecha < hasta)
+    .sort((a: Turno, b: Turno) => `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`))
   const turnoPorId = new Map<string, Turno>(turnosMes.map((t: Turno) => [t.id, t]))
-  const registrosMes = registros.filter((r: RegistroAsistencia) => {
-    const turno = turnoPorId.get(r.turno_id)
-    return Boolean(turno && r.hora_entrada_real)
+  const registrosMes = registros.filter((r: RegistroAsistencia) => Boolean(turnoPorId.get(r.turno_id)))
+  const registrosPorTurno = new Map<string, RegistroAsistencia[]>()
+  registrosMes.forEach((r: RegistroAsistencia) => {
+    registrosPorTurno.set(r.turno_id, [...(registrosPorTurno.get(r.turno_id) || []), r])
   })
+
+  const empleadoSeleccionado = empleados.find((g: Usuario) => g.id === empleadoId)
+  const objetivoSeleccionado = objetivos.find((o: Objetivo) => o.id === objetivoId)
+  const nombreGuardia = (id?: string | null) => {
+    const guardia = guardias.find((g: Usuario) => g.id === id)
+    return guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Sin guardia'
+  }
+  const nombreObjetivo = (id?: string | null) => objetivos.find((o: Objetivo) => o.id === id)?.nombre || 'Sin objetivo'
+  const diaSemana = (fecha?: string | null) => {
+    if (!fecha) return '—'
+    const [year, month, day] = fecha.slice(0, 10).split('-').map(Number)
+    const dia = new Date(year, month - 1, day).toLocaleDateString('es-AR', { weekday:'long' })
+    return dia.charAt(0).toUpperCase() + dia.slice(1)
+  }
+  const fechaHoraMs = (fecha?: string | null, hora?: string | null) => {
+    if (!fecha || !hora) return null
+    const [year, month, day] = fecha.slice(0, 10).split('-').map(Number)
+    const [hours, minutes] = hora.split(':').map(Number)
+    if (!year || !month || !day || !Number.isFinite(hours) || !Number.isFinite(minutes)) return null
+    return new Date(year, month - 1, day, hours, minutes).getTime()
+  }
+  const pasoVentanaFichaje = (turno: Turno) => {
+    const inicio = fechaHoraMs(turno.fecha, turno.hora_inicio)
+    return inicio === null ? false : Date.now() > inicio + 60 * 60000
+  }
+  const scoreRegistro = (r: RegistroAsistencia) =>
+    (r.hora_entrada_real ? 10 : 0) + (r.hora_salida_real ? 5 : 0) + (Number(r.horas_trabajadas) || 0)
+  const registroPrincipal = (turno: Turno, guardiaId?: string | null) => {
+    const regs = (registrosPorTurno.get(turno.id) || []).filter((r: RegistroAsistencia) => !guardiaId || r.guardia_id === guardiaId)
+    return [...regs].sort((a: RegistroAsistencia, b: RegistroAsistencia) =>
+      scoreRegistro(b) - scoreRegistro(a) || (a.hora_entrada_real || '').localeCompare(b.hora_entrada_real || '')
+    )[0]
+  }
+  const horasRealesRegistro = (registro?: RegistroAsistencia) =>
+    registro?.hora_entrada_real && registro?.hora_salida_real ? Math.max(0, Number(registro.horas_trabajadas) || 0) : 0
+  const horasLiquidablesRegistro = (turno: Turno, registro?: RegistroAsistencia) =>
+    registro?.hora_entrada_real && registro?.hora_salida_real
+      ? calcHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, registro.hora_entrada_real, registro.hora_salida_real)
+      : 0
+  const estadoPlanilla = (turno: Turno, registro?: RegistroAsistencia) => {
+    if (turno.estado === 'descubierto' || !turno.guardia_id) return 'Descubierto'
+    if (registro?.hora_entrada_real && !registro.hora_salida_real) return 'En curso'
+    if (registro?.hora_entrada_real && registro.hora_salida_real) return 'Cubierto'
+    return pasoVentanaFichaje(turno) ? 'Sin fichar' : 'Programado'
+  }
+  const observacionesPlanilla = (turno: Turno, registro?: RegistroAsistencia, extra?: string | null) => {
+    const obs: string[] = []
+    if (turno.estado === 'descubierto' || !turno.guardia_id) obs.push('Descubierto')
+    if (!registro?.hora_entrada_real && turno.guardia_id && pasoVentanaFichaje(turno)) obs.push('Sin fichar')
+    if (registro?.hora_entrada_real && !registro.hora_salida_real) obs.push('En curso')
+    if (registro?.alerta_entrada === 'tarde') obs.push('Llegada tarde')
+    if (registro?.alerta_entrada === 'anticipada') obs.push('Entrada anticipada')
+    if (registro?.alerta_salida === 'anticipada') obs.push('Salida anticipada')
+    if (registro?.alerta_salida === 'posterior') obs.push('Salida posterior')
+    if (registro?.observacion) obs.push(registro.observacion)
+    if (extra) obs.push(extra)
+    return obs.length ? obs.join(' | ') : '—'
+  }
+  const mostrarHoras = (value: number) => value > 0 ? value.toFixed(2) : '—'
+
+  const turnosEmpleado = empleadoSeleccionado ? turnosMes.filter((t: Turno) => {
+    const guardiaOriginal = (t as any).guardia_original_id
+    const guardiaReal = (t as any).guardia_real_id
+    const tieneRegistro = (registrosPorTurno.get(t.id) || []).some((r: RegistroAsistencia) => r.guardia_id === empleadoSeleccionado.id)
+    return t.guardia_id === empleadoSeleccionado.id || guardiaOriginal === empleadoSeleccionado.id || guardiaReal === empleadoSeleccionado.id || tieneRegistro
+  }) : []
+
+  const planillaEmpleado = turnosEmpleado.map((turno: Turno) => {
+    const registro = empleadoSeleccionado ? registroPrincipal(turno, empleadoSeleccionado.id) : undefined
+    const registroOtroGuardia = !registro ? registroPrincipal(turno) : undefined
+    const objetivo = objetivos.find((o: Objetivo) => o.id === turno.objetivo_id)
+    const horasReales = horasRealesRegistro(registro)
+    const horasLiquidables = horasLiquidablesRegistro(turno, registro)
+    const extra = registroOtroGuardia?.guardia_id && registroOtroGuardia.guardia_id !== empleadoSeleccionado?.id
+      ? `Ficho otro guardia: ${nombreGuardia(registroOtroGuardia.guardia_id)}`
+      : null
+
+    return {
+      Fecha: formatFecha(turno.fecha),
+      Día: diaSemana(turno.fecha),
+      Objetivo: objetivo?.nombre || '—',
+      'Horario programado': formatHorarioAsignado(turno),
+      'Entrada real': registro?.hora_entrada_real ? formatHoraTurno(registro.hora_entrada_real) : '—',
+      'Salida real': registro?.hora_salida_real ? formatHoraTurno(registro.hora_salida_real) : '—',
+      'Horas reales': mostrarHoras(horasReales),
+      'Horas liquidables': mostrarHoras(horasLiquidables),
+      Estado: estadoPlanilla(turno, registro),
+      'Observaciones / alertas': observacionesPlanilla(turno, registro, extra),
+      _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
+      _fecha: turno.fecha,
+      _horasReales: horasReales,
+      _horasLiquidables: horasLiquidables,
+      _tieneEntrada: Boolean(registro?.hora_entrada_real),
+      _sinFichar: estadoPlanilla(turno, registro) === 'Sin fichar',
+      _enCurso: estadoPlanilla(turno, registro) === 'En curso',
+      _tarde: registro?.alerta_entrada === 'tarde',
+    }
+  })
+
+  const totalesEmpleado = {
+    dias: new Set(planillaEmpleado.filter((row: any) => row._tieneEntrada).map((row: any) => row._fecha)).size,
+    horasReales: planillaEmpleado.reduce((sum: number, row: any) => sum + row._horasReales, 0),
+    horasLiquidables: planillaEmpleado.reduce((sum: number, row: any) => sum + row._horasLiquidables, 0),
+    sinFichar: planillaEmpleado.filter((row: any) => row._sinFichar).length,
+    enCurso: planillaEmpleado.filter((row: any) => row._enCurso).length,
+    tardanzas: planillaEmpleado.filter((row: any) => row._tarde).length,
+  }
+
+  const turnosObjetivo = objetivoId ? turnosMes.filter((t: Turno) => t.objetivo_id === objetivoId) : []
+  const planillaObjetivo = turnosObjetivo.map((turno: Turno) => {
+    const registro = registroPrincipal(turno)
+    const horasReales = horasRealesRegistro(registro)
+    const horasLiquidables = horasLiquidablesRegistro(turno, registro)
+
+    return {
+      Fecha: formatFecha(turno.fecha),
+      Día: diaSemana(turno.fecha),
+      'Horario programado': formatHorarioAsignado(turno),
+      'Guardia asignado': turno.guardia_id ? nombreGuardia(turno.guardia_id) : 'Sin asignar',
+      'Guardia que fichó': registro?.guardia_id ? nombreGuardia(registro.guardia_id) : '—',
+      'Entrada real': registro?.hora_entrada_real ? formatHoraTurno(registro.hora_entrada_real) : '—',
+      'Salida real': registro?.hora_salida_real ? formatHoraTurno(registro.hora_salida_real) : '—',
+      'Horas reales': mostrarHoras(horasReales),
+      'Horas liquidables': mostrarHoras(horasLiquidables),
+      Estado: estadoPlanilla(turno, registro),
+      'Observaciones / alertas': observacionesPlanilla(turno, registro),
+      _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
+      _horasReales: horasReales,
+      _horasLiquidables: horasLiquidables,
+      _cubierto: estadoPlanilla(turno, registro) === 'Cubierto',
+      _sinFichar: estadoPlanilla(turno, registro) === 'Sin fichar',
+      _descubierto: estadoPlanilla(turno, registro) === 'Descubierto',
+      _enCurso: estadoPlanilla(turno, registro) === 'En curso',
+    }
+  })
+
+  const totalesObjetivo = {
+    total: planillaObjetivo.length,
+    cubiertos: planillaObjetivo.filter((row: any) => row._cubierto).length,
+    sinFichar: planillaObjetivo.filter((row: any) => row._sinFichar).length,
+    descubiertos: planillaObjetivo.filter((row: any) => row._descubierto).length,
+    enCurso: planillaObjetivo.filter((row: any) => row._enCurso).length,
+    horasReales: planillaObjetivo.reduce((sum: number, row: any) => sum + row._horasReales, 0),
+    horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => sum + row._horasLiquidables, 0),
+  }
 
   const reporteGuardias = guardias
     .map((g: Usuario) => {
@@ -1931,15 +2103,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
       const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
-        if (!turno) return s
-
-        return s + calcHorasLiquidables(
-          turno.fecha,
-          turno.hora_inicio,
-          turno.hora_fin,
-          r.hora_entrada_real,
-          r.hora_salida_real,
-        )
+        return turno ? s + calcHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, r.hora_entrada_real, r.hora_salida_real) : s
       }, 0)
 
       return {
@@ -1961,24 +2125,13 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
   const reporteObjetivos = objetivos
     .map((o: Objetivo) => {
       const ts = turnosMes.filter((t: Turno) => t.objetivo_id === o.id)
-      const regs = registrosMes.filter((r: RegistroAsistencia) => {
-        const turno = turnoPorId.get(r.turno_id)
-        return turno?.objetivo_id === o.id
-      })
+      const regs = registrosMes.filter((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.objetivo_id === o.id)
       const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_real)
       const turnosConAsistencia = new Set(regs.map((r: RegistroAsistencia) => r.turno_id)).size
       const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
       const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
-        if (!turno) return s
-
-        return s + calcHorasLiquidables(
-          turno.fecha,
-          turno.hora_inicio,
-          turno.hora_fin,
-          r.hora_entrada_real,
-          r.hora_salida_real,
-        )
+        return turno ? s + calcHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, r.hora_entrada_real, r.hora_salida_real) : s
       }, 0)
       const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
       const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length
@@ -1998,12 +2151,25 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     })
     .filter((o: any) => verTodos || o._actividad > 0)
 
-  const tabs = [{ id:'guardias', label:'Por Guardia' }, { id:'objetivos', label:'Por Objetivo' }, { id:'novedades', label:'Novedades' }]
+  const tabs = [
+    { id:'planilla_empleado', label:'Planilla empleado' },
+    { id:'planilla_objetivo', label:'Planilla objetivo' },
+    { id:'guardias', label:'Resumen guardias' },
+    { id:'objetivos', label:'Resumen objetivos' },
+    { id:'novedades', label:'Novedades' },
+  ]
+  const totalBox = (label: string, value: string | number) => (
+    <div style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 12px' }}>
+      <div style={{ fontSize:10, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>{label}</div>
+      <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, color:'#e2e8f0' }}>{value}</div>
+    </div>
+  )
+  const renderEmpty = (text: string) => <div style={{ padding:24, color:'#64748b', textAlign:'center' as const }}>{text}</div>
 
   return (
     <div>
       <div style={S.title}>Reportes</div>
-      <div style={S.sub2}>Resúmenes y exportaciones · Mes seleccionado: {mes}</div>
+      <div style={S.sub2}>Planillas mensuales y exportaciones · Mes seleccionado: {mesLabel}</div>
       {filtroActivo && (
         <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
           <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
@@ -2013,19 +2179,116 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap', marginBottom:16 }}>
         <label style={S.label}>Mes operativo</label>
         <input type="month" style={{ ...S.input, width:'auto' }} value={mes} onChange={e => setMes(e.target.value)} />
-        <label style={{ display:'flex', gap:8, alignItems:'center', color:'#94a3b8', fontSize:13 }}>
-          <input type="checkbox" checked={verTodos} onChange={e => setVerTodos(e.target.checked)} />
-          Ver todos
-        </label>
+        {(tab === 'guardias' || tab === 'objetivos') && (
+          <label style={{ display:'flex', gap:8, alignItems:'center', color:'#94a3b8', fontSize:13 }}>
+            <input type="checkbox" checked={verTodos} onChange={e => setVerTodos(e.target.checked)} />
+            Ver todos
+          </label>
+        )}
       </div>
-      <div style={{ display:'flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:24, width:'fit-content' }}>
+      <div style={{ display:'flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:24, width:'fit-content', flexWrap:'wrap' }}>
         {tabs.map(t => <button key={t.id} style={{ padding:'8px 18px', borderRadius:8, cursor:'pointer', fontSize:13, color:tab===t.id?'#f59e0b':'#64748b', background:tab===t.id?'#111827':'transparent', border:'none', fontFamily:'DM Sans,sans-serif', fontWeight:tab===t.id?600:400 }} onClick={() => setTab(t.id)}>{t.label}</button>)}
       </div>
+
+      {tab === 'planilla_empleado' && (
+        <div style={{ ...S.card, overflowX:'auto', background:'#0f172a' }}>
+          <div style={{ display:'flex', gap:12, flexWrap:'wrap', alignItems:'flex-end', marginBottom:18 }}>
+            <div style={{ minWidth:260 }}>
+              <label style={S.label}>Empleado</label>
+              <select style={S.select} value={empleadoId} onChange={e => setEmpleadoId(e.target.value)}>
+                {empleados.map((g: Usuario) => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre} · {g.legajo || 'sin legajo'}</option>)}
+              </select>
+            </div>
+            <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:'auto' }} onClick={() => exportCSV(limpiarCsv(planillaEmpleado), `planilla-empleado-${slug(empleadoSeleccionado?.apellido)}-${mes}`)}>Exportar CSV</button>
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800 }}>Planilla individual por empleado</div>
+            <div style={{ color:'#94a3b8', fontSize:13 }}>Empleado: <strong style={{ color:'#e2e8f0' }}>{empleadoSeleccionado ? `${empleadoSeleccionado.nombre} ${empleadoSeleccionado.apellido}` : '—'}</strong> · Legajo: <strong style={{ color:'#e2e8f0' }}>{empleadoSeleccionado?.legajo || '—'}</strong> · Mes: <strong style={{ color:'#e2e8f0' }}>{mesLabel}</strong></div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px, 1fr))', gap:8, marginBottom:16 }}>
+            {totalBox('Días trabajados', totalesEmpleado.dias)}
+            {totalBox('Horas reales', totalesEmpleado.horasReales.toFixed(2))}
+            {totalBox('Horas liquidables', totalesEmpleado.horasLiquidables.toFixed(2))}
+            {totalBox('Sin fichar', totalesEmpleado.sinFichar)}
+            {totalBox('En curso', totalesEmpleado.enCurso)}
+            {totalBox('Tardanzas', totalesEmpleado.tardanzas)}
+          </div>
+          <table style={S.table}>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th></tr></thead>
+            <tbody>
+              {planillaEmpleado.map((row: any) => (
+                <tr key={row._id}>
+                  <td style={S.td}>{row.Fecha}</td>
+                  <td style={S.td}>{row.Día}</td>
+                  <td style={S.td}><strong>{row.Objetivo}</strong></td>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{row['Horario programado']}</td>
+                  <td style={S.td}>{row['Entrada real']}</td>
+                  <td style={S.td}>{row['Salida real']}</td>
+                  <td style={S.td}>{row['Horas reales']}</td>
+                  <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
+                  <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
+                  <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {planillaEmpleado.length === 0 && renderEmpty('No hay turnos asignados o trabajados para este empleado en el mes seleccionado.')}
+        </div>
+      )}
+
+      {tab === 'planilla_objetivo' && (
+        <div style={{ ...S.card, overflowX:'auto', background:'#0f172a' }}>
+          <div style={{ display:'flex', gap:12, flexWrap:'wrap', alignItems:'flex-end', marginBottom:18 }}>
+            <div style={{ minWidth:280 }}>
+              <label style={S.label}>Objetivo</label>
+              <select style={S.select} value={objetivoId} onChange={e => setObjetivoId(e.target.value)}>
+                {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+              </select>
+            </div>
+            <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:'auto' }} onClick={() => exportCSV(limpiarCsv(planillaObjetivo), `planilla-objetivo-${slug(objetivoSeleccionado?.nombre)}-${mes}`)}>Exportar CSV</button>
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800 }}>Planilla mensual por objetivo</div>
+            <div style={{ color:'#94a3b8', fontSize:13 }}>Objetivo: <strong style={{ color:'#e2e8f0' }}>{objetivoSeleccionado?.nombre || '—'}</strong> · Mes: <strong style={{ color:'#e2e8f0' }}>{mesLabel}</strong></div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px, 1fr))', gap:8, marginBottom:16 }}>
+            {totalBox('Turnos del mes', totalesObjetivo.total)}
+            {totalBox('Cubiertos', totalesObjetivo.cubiertos)}
+            {totalBox('Sin fichar', totalesObjetivo.sinFichar)}
+            {totalBox('Descubiertos', totalesObjetivo.descubiertos)}
+            {totalBox('En curso', totalesObjetivo.enCurso)}
+            {totalBox('Horas reales', totalesObjetivo.horasReales.toFixed(2))}
+            {totalBox('Horas liquidables', totalesObjetivo.horasLiquidables.toFixed(2))}
+          </div>
+          <table style={S.table}>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th></tr></thead>
+            <tbody>
+              {planillaObjetivo.map((row: any) => (
+                <tr key={row._id}>
+                  <td style={S.td}>{row.Fecha}</td>
+                  <td style={S.td}>{row.Día}</td>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{row['Horario programado']}</td>
+                  <td style={S.td}>{row['Guardia asignado']}</td>
+                  <td style={S.td}>{row['Guardia que fichó']}</td>
+                  <td style={S.td}>{row['Entrada real']}</td>
+                  <td style={S.td}>{row['Salida real']}</td>
+                  <td style={S.td}>{row['Horas reales']}</td>
+                  <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
+                  <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
+                  <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {planillaObjetivo.length === 0 && renderEmpty('No hay turnos para este objetivo en el mes seleccionado.')}
+        </div>
+      )}
+
       {tab === 'guardias' && (
         <div style={S.card}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:16 }}>
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Guardia</strong>
-            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(reporteGuardias.map(({ _registros, ...row }: any) => row), 'reporte-guardias')}>⬇ Exportar CSV</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(limpiarCsv(reporteGuardias), 'reporte-guardias')}>Exportar CSV</button>
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th></tr></thead>
@@ -2050,7 +2313,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
         <div style={S.card}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:16 }}>
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Objetivo</strong>
-            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(reporteObjetivos.map(({ _actividad, ...row }: any) => row), 'reporte-objetivos')}>⬇ Exportar CSV</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(limpiarCsv(reporteObjetivos), 'reporte-objetivos')}>Exportar CSV</button>
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Cliente</th><th style={S.th}>Con Asistencia</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Sin Fichar</th><th style={S.th}>Descubiertos</th></tr></thead>
