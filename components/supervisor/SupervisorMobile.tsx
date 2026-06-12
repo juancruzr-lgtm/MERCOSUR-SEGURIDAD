@@ -1065,7 +1065,7 @@ export default function SupervisorMobile({ user }: any) {
 
                 {turnosSinIngreso.length > 0 && (
                   <div style={{ ...card, borderColor: 'rgba(245,158,11,.35)', background: 'rgba(245,158,11,.08)' }}>
-                    <div style={{ ...objetivoName, color: '#fbbf24' }}>Sin ingreso</div>
+                    <div style={{ ...objetivoName, color: '#fbbf24' }}>Guardias sin fichar</div>
                     <div style={muted}>{turnosSinIngreso.length} turno(s) iniciados hace más de 15 minutos sin entrada registrada.</div>
 
                     <div style={{ marginTop: 12 }}>
@@ -1080,7 +1080,8 @@ export default function SupervisorMobile({ user }: any) {
                                 <div style={objetivoName}>{guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
                                 <div style={muted}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
                                 <div style={muted}>Horario programado: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
-                                <div style={{ ...muted, color: '#f59e0b' }}>{minutosAtrasoTurno(turno)} minutos sin ingreso</div>
+                                <div style={{ ...muted, color: '#f59e0b' }}>Minutos de demora: {minutosAtrasoTurno(turno)}</div>
+                                <div style={{ ...muted, color: '#f59e0b' }}>Estado: Sin ingreso</div>
                               </div>
                               <span style={alertBadge('sin ingreso')}>sin ingreso</span>
                             </div>
@@ -1093,7 +1094,7 @@ export default function SupervisorMobile({ user }: any) {
 
                 {turnosConTardanzaRegistrada.length > 0 && (
                   <div style={{ ...card, borderColor: 'rgba(245,158,11,.35)', background: 'rgba(245,158,11,.08)' }}>
-                    <div style={{ ...objetivoName, color: '#fbbf24' }}>Ingresaron tarde</div>
+                    <div style={{ ...objetivoName, color: '#fbbf24' }}>Tardanzas registradas</div>
                     <div style={muted}>{turnosConTardanzaRegistrada.length} turno(s) con entrada posterior al inicio programado.</div>
 
                     <div style={{ marginTop: 12 }}>
@@ -1110,9 +1111,10 @@ export default function SupervisorMobile({ user }: any) {
                                 <div style={muted}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
                                 <div style={muted}>Horario programado: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
                                 <div style={muted}>Entrada real: {horaCorta(registro?.hora_entrada_real)}</div>
-                                <div style={{ ...muted, color: '#f59e0b' }}>{minutosTardeRegistro(turno, registro)} minutos tarde</div>
+                                <div style={{ ...muted, color: '#f59e0b' }}>Minutos tarde: {minutosTardeRegistro(turno, registro)}</div>
+                                <div style={{ ...muted, color: '#ef4444' }}>Estado: Tarde</div>
                               </div>
-                              <span style={alertBadge('ingreso tarde')}>ingreso tarde</span>
+                              <span style={alertBadge('ingreso tarde')}>Tarde</span>
                             </div>
                           </div>
                         )

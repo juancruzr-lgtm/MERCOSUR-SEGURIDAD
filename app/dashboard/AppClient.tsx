@@ -85,6 +85,46 @@ function formatHorarioAsignado(turno?: Turno | null): string {
   return `${inicio} – ${fin}`
 }
 
+function fechaHoraTurnoLocal(fecha?: string | null, hora?: string | null): Date | null {
+  if (!fecha || !hora) return null
+
+  const [year, month, day] = fecha.slice(0, 10).split('-').map(Number)
+  const [hours, minutes, seconds = 0] = hora.split(':').map(Number)
+  if (![year, month, day, hours, minutes, seconds].every(Number.isFinite)) return null
+
+  return new Date(year, month - 1, day, hours, minutes, seconds)
+}
+
+function fechaEntradaRealTurno(turno: Turno, horaEntrada?: string | null): Date | null {
+  if (!horaEntrada) return null
+
+  const inicioTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_inicio)
+  const finTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_fin)
+  const entradaReal = fechaHoraTurnoLocal(turno.fecha, horaEntrada)
+  if (!inicioTurno || !finTurno || !entradaReal) return null
+
+  if (finTurno <= inicioTurno && entradaReal < inicioTurno) {
+    entradaReal.setDate(entradaReal.getDate() + 1)
+  }
+
+  return entradaReal
+}
+
+function minutosDesdeInicioTurno(turno: Turno, ahora = new Date()): number {
+  const inicioTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_inicio)
+  if (!inicioTurno) return 0
+
+  return Math.max(0, Math.floor((ahora.getTime() - inicioTurno.getTime()) / 60000))
+}
+
+function minutosTardeAsistencia(turno: Turno, registro?: RegistroAsistencia | null): number {
+  const inicioTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_inicio)
+  const entradaReal = fechaEntradaRealTurno(turno, registro?.hora_entrada_real)
+  if (!inicioTurno || !entradaReal) return 0
+
+  return Math.max(0, Math.floor((entradaReal.getTime() - inicioTurno.getTime()) / 60000))
+}
+
 function numeroGps(value: unknown): number | null {
   const numero = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
   return Number.isFinite(numero) ? numero : null
@@ -361,12 +401,23 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   const guardiasEnTurno = new Set(registroActivo.map((r: RegistroAsistencia) => r.guardia_id)).size
   const turnosCubiertos = turnosHoy.filter((t: Turno) => t.estado === 'cubierto').length
   const turnosDescubiertos = turnosHoy.filter((t: Turno) => turnoSinCoberturaOperativa(t, existeAsistencia(t)))
-  const turnosSinFichar = turnosHoy.filter((t: Turno) => t.guardia_id && t.estado !== 'descubierto' && !tieneEntrada(t))
+  const turnosSinFichar = turnosHoy.filter((t: Turno) =>
+    t.guardia_id &&
+    t.estado !== 'descubierto' &&
+    !tieneEntrada(t) &&
+    minutosDesdeInicioTurno(t) >= 15
+  )
+  const tardanzasRegistradas = registrosHoy.filter((r: RegistroAsistencia) => {
+    const turno = turnoPorId.get(r.turno_id)
+    if (!turno || !r.hora_entrada_real) return false
+
+    return r.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, r) > 0
+  })
   const turnosAsistenciaPendiente = turnosHoy.filter((t: Turno) => {
     if (t.estado === 'descubierto' || !t.guardia_id) return false
     return !tieneEntrada(t) || (tieneEntrada(t) && !tieneSalida(t))
   })
-  const llegadasTarde = registrosHoy.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length
+  const llegadasTarde = tardanzasRegistradas.length
   const horasHoy = registrosHoy.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
   const horasMes = registrosMes.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
   const guardiasConAsistenciaMes = new Set(registrosMes.filter((r: RegistroAsistencia) => r.hora_entrada_real).map((r: RegistroAsistencia) => r.guardia_id)).size
@@ -404,8 +455,8 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: '#22c55e', page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
     { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'registros del día', color: '#38bdf8', page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
     { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: mesActual, color: '#8b5cf6', page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
-    { label: 'Llegadas tarde', value: llegadasTarde, sub: 'alertas de entrada hoy', color: '#f97316', page:'asistencia', filtro:{ tipo:'tarde', label:'Llegadas tarde hoy' } },
-    { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'asignados sin entrada', color: '#ef4444', page:'turnos', filtro:{ tipo:'sin_fichar', label:'Turnos sin fichar hoy' } },
+    { label: 'Llegadas tarde', value: llegadasTarde, sub: 'tardanzas registradas hoy', color: '#f97316', page:'asistencia', filtro:{ tipo:'tarde', label:'Llegadas tarde hoy' } },
+    { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'sin entrada +15 min', color: '#ef4444', page:'turnos', filtro:{ tipo:'sin_fichar', label:'Turnos sin fichar hoy' } },
   ]
 
   const alertBox: React.CSSProperties = {
@@ -452,6 +503,32 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     </div>
   )
 
+  const renderSinIngresoAlert = (turno: Turno) => (
+    <div key={turno.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('turnos', { tipo:'sin_fichar', label:'Turnos sin fichar hoy' })}>
+      <strong style={{ color:'#f8fafc' }}>{nombreGuardia(turno.guardia_id)}</strong>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {nombreObjetivo(turno.objetivo_id)}</div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>Horario programado: {hora(turno.hora_inicio)} a {hora(turno.hora_fin)}</div>
+      <div style={{ color:'#f59e0b', marginTop:4 }}>Minutos de demora: {minutosDesdeInicioTurno(turno)}</div>
+      <div style={{ color:'#f59e0b', marginTop:4 }}>Estado: Sin ingreso</div>
+    </div>
+  )
+
+  const renderTardanzaAlert = (registro: RegistroAsistencia) => {
+    const turno = turnoPorId.get(registro.turno_id)
+    if (!turno) return null
+
+    return (
+      <div key={registro.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('asistencia', { tipo:'tarde', label:'Llegadas tarde hoy' })}>
+        <strong style={{ color:'#f8fafc' }}>{nombreGuardia(registro.guardia_id || turno.guardia_id)}</strong>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {nombreObjetivo(turno.objetivo_id)}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>Horario programado: {hora(turno.hora_inicio)} a {hora(turno.hora_fin)}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>Entrada real: {hora(registro.hora_entrada_real)}</div>
+        <div style={{ color:'#f59e0b', marginTop:4 }}>Minutos tarde: {minutosTardeAsistencia(turno, registro)}</div>
+        <div style={{ color:'#ef4444', marginTop:4 }}>Estado: Tarde</div>
+      </div>
+    )
+  }
+
   return (
     <div>
       <div style={{ display:'flex', flexWrap:'wrap', gap:12, alignItems:'flex-end', justifyContent:'space-between', marginBottom:24 }}>
@@ -485,6 +562,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         <div style={S.card}><div style={S.label}>Turnos finalizados hoy</div><strong>{turnosFinalizadosHoy}</strong></div>
         <div style={S.card}><div style={S.label}>Turnos en curso hoy</div><strong>{turnosEnCursoHoy}</strong></div>
         <div style={S.card}><div style={S.label}>Turnos sin fichar hoy</div><strong>{turnosSinFichar.length}</strong></div>
+        <div style={S.card}><div style={S.label}>Tardanzas registradas hoy</div><strong>{tardanzasRegistradas.length}</strong></div>
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16 }}>
@@ -498,11 +576,20 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         </div>
 
         <div style={alertBox}>
-          <div style={alertTitle}>Guardias sin ingreso registrado</div>
+          <div style={alertTitle}>Guardias sin fichar</div>
           {turnosSinFichar.length === 0 ? (
-            <div style={emptyAlert}>Todos los turnos asignados registran ingreso.</div>
+            <div style={emptyAlert}>No hay guardias demorados sin ingreso.</div>
           ) : turnosSinFichar.map((turno: Turno) =>
-            renderTurnoAlert(turno, 'Sin entrada real registrada', { tipo:'sin_fichar', label:'Turnos sin fichar hoy' })
+            renderSinIngresoAlert(turno)
+          )}
+        </div>
+
+        <div style={alertBox}>
+          <div style={alertTitle}>Tardanzas registradas</div>
+          {tardanzasRegistradas.length === 0 ? (
+            <div style={emptyAlert}>No hay ingresos tarde registrados hoy.</div>
+          ) : tardanzasRegistradas.map((registro: RegistroAsistencia) =>
+            renderTardanzaAlert(registro)
           )}
         </div>
 
@@ -2050,6 +2137,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       : 0
   const estadoPlanilla = (turno: Turno, registro?: RegistroAsistencia) => {
     if (turno.estado === 'descubierto' || !turno.guardia_id) return 'Descubierto'
+    if (registro?.hora_entrada_real && (registro.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, registro) > 0)) return 'Tarde'
     if (registro?.hora_entrada_real && !registro.hora_salida_real) return 'En curso'
     if (registro?.hora_entrada_real && registro.hora_salida_real) return 'Cubierto'
     return pasoVentanaFichaje(turno) ? 'Sin fichar' : 'Programado'
@@ -2085,6 +2173,8 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     const extra = registroOtroGuardia?.guardia_id && registroOtroGuardia.guardia_id !== empleadoSeleccionado?.id
       ? `Ficho otro guardia: ${nombreGuardia(registroOtroGuardia.guardia_id)}`
       : null
+    const estado = estadoPlanilla(turno, registro)
+    const tieneEntrada = Boolean(registro?.hora_entrada_real)
 
     return {
       Fecha: formatFecha(turno.fecha),
@@ -2095,16 +2185,16 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       'Salida real': registro?.hora_salida_real ? formatHoraTurno(registro.hora_salida_real) : '—',
       'Horas reales': mostrarHoras(horasReales),
       'Horas liquidables': mostrarHoras(horasLiquidables),
-      Estado: estadoPlanilla(turno, registro),
+      Estado: estado,
       'Observaciones / alertas': observacionesPlanilla(turno, registro, extra),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
       _fecha: turno.fecha,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
-      _tieneEntrada: Boolean(registro?.hora_entrada_real),
-      _sinFichar: estadoPlanilla(turno, registro) === 'Sin fichar',
-      _enCurso: estadoPlanilla(turno, registro) === 'En curso',
-      _tarde: registro?.alerta_entrada === 'tarde',
+      _tieneEntrada: tieneEntrada,
+      _sinFichar: !tieneEntrada && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
+      _enCurso: Boolean(registro?.hora_entrada_real && !registro?.hora_salida_real),
+      _tarde: tieneEntrada && (registro?.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, registro) > 0),
     }
   })
 
@@ -2122,6 +2212,8 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     const registro = registroPrincipal(turno)
     const horasReales = horasRealesRegistro(registro)
     const horasLiquidables = horasLiquidablesRegistro(turno, registro)
+    const estado = estadoPlanilla(turno, registro)
+    const tieneEntrada = Boolean(registro?.hora_entrada_real)
 
     return {
       Fecha: formatFecha(turno.fecha),
@@ -2133,15 +2225,15 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       'Salida real': registro?.hora_salida_real ? formatHoraTurno(registro.hora_salida_real) : '—',
       'Horas reales': mostrarHoras(horasReales),
       'Horas liquidables': mostrarHoras(horasLiquidables),
-      Estado: estadoPlanilla(turno, registro),
+      Estado: estado,
       'Observaciones / alertas': observacionesPlanilla(turno, registro),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
-      _cubierto: estadoPlanilla(turno, registro) === 'Cubierto',
-      _sinFichar: estadoPlanilla(turno, registro) === 'Sin fichar',
-      _descubierto: estadoPlanilla(turno, registro) === 'Descubierto',
-      _enCurso: estadoPlanilla(turno, registro) === 'En curso',
+      _cubierto: Boolean(registro?.hora_entrada_real && registro?.hora_salida_real),
+      _sinFichar: !tieneEntrada && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
+      _descubierto: turno.estado === 'descubierto' || !turno.guardia_id,
+      _enCurso: Boolean(registro?.hora_entrada_real && !registro?.hora_salida_real),
     }
   })
 
