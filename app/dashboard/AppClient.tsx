@@ -1912,21 +1912,6 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     if (!objetivoId && objetivos.length > 0) setObjetivoId(objetivos[0].id)
   }, [objetivoId, objetivos])
 
-  const csvValue = (value: any) => `"${String(value ?? '').replace(/"/g, '""')}"`
-  const limpiarCsv = (data: any[]) => data.map(row => Object.fromEntries(Object.entries(row).filter(([key]) => !key.startsWith('_'))))
-  const exportCSV = (data: any[], filename: string) => {
-    if (data.length === 0) return
-    const keys = Object.keys(data[0])
-    const rows = [keys.map(csvValue).join(','), ...data.map(row => keys.map(k => csvValue(row[k])).join(','))]
-    const blob = new Blob([`\ufeff${rows.join('\n')}`], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename.endsWith('.csv') ? filename : `${filename}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   const descargarXLSX = async (nombreArchivo: string, filas: any[][], headerRowIndex: number, dataRows: number, horasCols: number[]) => {
     const XLSX = await import('xlsx')
     const workbook = XLSX.utils.book_new()
@@ -1997,6 +1982,12 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     const [year, month] = mes.split('-').map(Number)
     const nombreMes = new Date(year, month - 1, 1).toLocaleDateString('es-AR', { month:'long' })
     return `${archivoParte(nombreMes)}_${year}`
+  }
+  const filtrosReporte = () => {
+    const filtros = [`Mes operativo: ${mesLabel}`]
+    if (tab === 'guardias' || tab === 'objetivos') filtros.push(verTodos ? 'Incluye registros sin actividad' : 'Solo registros con actividad')
+    if (filtroActivo?.label) filtros.push(`Filtro activo: ${filtroActivo.label}`)
+    return `Filtros: ${filtros.join(' · ')}`
   }
 
   const desde = `${mes}-01`
@@ -2287,6 +2278,92 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     })
     .filter((o: any) => verTodos || o._actividad > 0)
 
+  const exportarResumenGuardiasXLSX = async () => {
+    if (reporteGuardias.length === 0) return
+
+    const filasGuardias = reporteGuardias.map((row: any) => [
+      row.Legajo || '—',
+      `${row.Apellido || ''}, ${row.Nombre || ''}`.trim(),
+      Number(row['Días Trabajados']) || 0,
+      Number(row['Horas Reales']) || 0,
+      Number(row['Horas Liquidables']) || 0,
+      Number(row['En Curso']) || 0,
+      Number(row.Tardanzas) || 0,
+      Number(row['Salidas Anticipadas']) || 0,
+    ])
+    const totales = {
+      guardias: filasGuardias.length,
+      dias: filasGuardias.reduce((sum: number, row: any[]) => sum + row[2], 0),
+      horasReales: filasGuardias.reduce((sum: number, row: any[]) => sum + row[3], 0),
+      horasLiquidables: filasGuardias.reduce((sum: number, row: any[]) => sum + row[4], 0),
+      enCurso: filasGuardias.reduce((sum: number, row: any[]) => sum + row[5], 0),
+      tardanzas: filasGuardias.reduce((sum: number, row: any[]) => sum + row[6], 0),
+      salidasAnticipadas: filasGuardias.reduce((sum: number, row: any[]) => sum + row[7], 0),
+    }
+    const filas = [
+      ['Resumen guardias'],
+      [`Generado: ${new Date().toLocaleString('es-AR')}`],
+      [filtrosReporte()],
+      [],
+      ['Legajo', 'Guardia', 'Días trabajados', 'Horas reales', 'Horas liquidables', 'En curso', 'Tardanzas', 'Salidas anticipadas'],
+      ...filasGuardias,
+      [],
+      ['Totales'],
+      ['Guardias', totales.guardias],
+      ['Días trabajados', totales.dias],
+      ['Horas reales totales', Number(totales.horasReales.toFixed(2))],
+      ['Horas liquidables totales', Number(totales.horasLiquidables.toFixed(2))],
+      ['Turnos en curso', totales.enCurso],
+      ['Tardanzas', totales.tardanzas],
+      ['Salidas anticipadas', totales.salidasAnticipadas],
+    ]
+
+    await descargarXLSX(`resumen_guardias_${mesArchivo()}.xlsx`, filas, 4, filasGuardias.length, [3, 4, 1])
+  }
+
+  const exportarResumenObjetivosXLSX = async () => {
+    if (reporteObjetivos.length === 0) return
+
+    const filasObjetivos = reporteObjetivos.map((row: any) => [
+      row.Objetivo || '—',
+      row.Cliente || '—',
+      Number(row['Turnos con Asistencia']) || 0,
+      Number(row['Horas Reales Cubiertas']) || 0,
+      Number(row['Horas Liquidables']) || 0,
+      Number(row['Turnos en Curso']) || 0,
+      Number(row['Turnos sin Fichar']) || 0,
+      Number(row['Turnos Descubiertos']) || 0,
+    ])
+    const totales = {
+      objetivos: filasObjetivos.length,
+      conAsistencia: filasObjetivos.reduce((sum: number, row: any[]) => sum + row[2], 0),
+      horasReales: filasObjetivos.reduce((sum: number, row: any[]) => sum + row[3], 0),
+      horasLiquidables: filasObjetivos.reduce((sum: number, row: any[]) => sum + row[4], 0),
+      enCurso: filasObjetivos.reduce((sum: number, row: any[]) => sum + row[5], 0),
+      sinFichar: filasObjetivos.reduce((sum: number, row: any[]) => sum + row[6], 0),
+      descubiertos: filasObjetivos.reduce((sum: number, row: any[]) => sum + row[7], 0),
+    }
+    const filas = [
+      ['Resumen objetivos'],
+      [`Generado: ${new Date().toLocaleString('es-AR')}`],
+      [filtrosReporte()],
+      [],
+      ['Objetivo', 'Cliente', 'Turnos con asistencia', 'Horas reales', 'Horas liquidables', 'Turnos en curso', 'Turnos sin fichar', 'Turnos descubiertos'],
+      ...filasObjetivos,
+      [],
+      ['Totales'],
+      ['Objetivos', totales.objetivos],
+      ['Turnos con asistencia', totales.conAsistencia],
+      ['Horas reales totales', Number(totales.horasReales.toFixed(2))],
+      ['Horas liquidables totales', Number(totales.horasLiquidables.toFixed(2))],
+      ['Turnos en curso', totales.enCurso],
+      ['Turnos sin fichar', totales.sinFichar],
+      ['Turnos descubiertos', totales.descubiertos],
+    ]
+
+    await descargarXLSX(`resumen_objetivos_${mesArchivo()}.xlsx`, filas, 4, filasObjetivos.length, [3, 4, 1])
+  }
+
   const tabs = [
     { id:'planilla_empleado', label:'Planilla empleado' },
     { id:'planilla_objetivo', label:'Planilla objetivo' },
@@ -2424,7 +2501,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
         <div style={S.card}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:16 }}>
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Guardia</strong>
-            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(limpiarCsv(reporteGuardias), 'reporte-guardias')}>Exportar CSV</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={exportarResumenGuardiasXLSX}>Exportar XLSX</button>
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th></tr></thead>
@@ -2449,7 +2526,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
         <div style={S.card}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:16 }}>
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Objetivo</strong>
-            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => exportCSV(limpiarCsv(reporteObjetivos), 'reporte-objetivos')}>Exportar CSV</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={exportarResumenObjetivosXLSX}>Exportar XLSX</button>
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Cliente</th><th style={S.th}>Con Asistencia</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Sin Fichar</th><th style={S.th}>Descubiertos</th></tr></thead>
