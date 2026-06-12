@@ -1927,8 +1927,77 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     URL.revokeObjectURL(url)
   }
 
+  const descargarXLSX = async (nombreArchivo: string, filas: any[][], headerRowIndex: number, dataRows: number, horasCols: number[]) => {
+    const XLSX = await import('xlsx')
+    const workbook = XLSX.utils.book_new()
+    const worksheet = XLSX.utils.aoa_to_sheet(filas)
+    const colCount = Math.max(...filas.map(row => row.length))
+    const lastRow = filas.length - 1
+
+    worksheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, colCount - 1) } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: Math.max(0, colCount - 1) } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: Math.max(0, colCount - 1) } },
+    ]
+    worksheet['!autofilter'] = {
+      ref: XLSX.utils.encode_range({
+        s: { r: headerRowIndex, c: 0 },
+        e: { r: Math.max(headerRowIndex, headerRowIndex + dataRows), c: Math.max(0, colCount - 1) },
+      }),
+    }
+    ;(worksheet as any)['!freeze'] = { xSplit: 0, ySplit: headerRowIndex + 1 }
+    worksheet['!cols'] = Array.from({ length: colCount }, (_, colIndex) => {
+      const width = filas.reduce((max, row) => Math.max(max, String(row[colIndex] ?? '').length), 10)
+      return { wch: Math.min(Math.max(width + 2, 12), 42) }
+    })
+
+    for (let colIndex = 0; colIndex < colCount; colIndex++) {
+      const headerRef = XLSX.utils.encode_cell({ r: headerRowIndex, c: colIndex })
+      if (worksheet[headerRef]) {
+        worksheet[headerRef].s = {
+          font: { bold: true, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '1F2937' } },
+          alignment: { horizontal: 'center' },
+        }
+      }
+    }
+
+    for (let rowIndex = headerRowIndex + 1; rowIndex <= lastRow; rowIndex++) {
+      horasCols.forEach(colIndex => {
+        const ref = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex })
+        if (worksheet[ref] && typeof worksheet[ref].v === 'number') worksheet[ref].z = '0.00'
+      })
+    }
+
+    ;[0, 1, 2].forEach(rowIndex => {
+      const ref = XLSX.utils.encode_cell({ r: rowIndex, c: 0 })
+      if (worksheet[ref]) {
+        worksheet[ref].s = {
+          font: { bold: rowIndex === 0, sz: rowIndex === 0 ? 16 : 12 },
+          alignment: { horizontal: 'left' },
+        }
+      }
+    })
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Planilla')
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array', cellStyles: true })
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = nombreArchivo.endsWith('.xlsx') ? nombreArchivo : `${nombreArchivo}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const slug = (value?: string | null) =>
     (value || 'sin-dato').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'sin-dato'
+  const archivoParte = (value?: string | null) => slug(value).replace(/-/g, '_')
+  const mesArchivo = () => {
+    const [year, month] = mes.split('-').map(Number)
+    const nombreMes = new Date(year, month - 1, 1).toLocaleDateString('es-AR', { month:'long' })
+    return `${archivoParte(nombreMes)}_${year}`
+  }
 
   const desde = `${mes}-01`
   const hasta = (() => {
@@ -2095,6 +2164,73 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => sum + row._horasLiquidables, 0),
   }
 
+  const exportarPlanillaEmpleadoXLSX = async () => {
+    if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
+
+    const columnas = ['Fecha', 'Día', 'Objetivo', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado']
+    const filas = [
+      ['Planilla individual por empleado'],
+      [`Mes/Año: ${mesLabel}`],
+      [`Empleado: ${empleadoSeleccionado.apellido}, ${empleadoSeleccionado.nombre} · Legajo: ${empleadoSeleccionado.legajo || '—'}`],
+      [],
+      columnas,
+      ...planillaEmpleado.map((row: any) => [
+        row.Fecha,
+        row.Día,
+        row.Objetivo,
+        row['Horario programado'],
+        row['Entrada real'],
+        row['Salida real'],
+        Number(row._horasReales.toFixed(2)),
+        Number(row._horasLiquidables.toFixed(2)),
+        row.Estado,
+      ]),
+      [],
+      ['Totales'],
+      ['Días trabajados', totalesEmpleado.dias],
+      ['Horas reales totales', Number(totalesEmpleado.horasReales.toFixed(2))],
+      ['Horas liquidables totales', Number(totalesEmpleado.horasLiquidables.toFixed(2))],
+      ['Tardanzas', totalesEmpleado.tardanzas],
+      ['Turnos sin fichar', totalesEmpleado.sinFichar],
+    ]
+    const nombre = `empleado_${archivoParte(`${empleadoSeleccionado.apellido}_${empleadoSeleccionado.nombre}`)}_${mesArchivo()}.xlsx`
+
+    await descargarXLSX(nombre, filas, 4, planillaEmpleado.length, [6, 7, 1])
+  }
+
+  const exportarPlanillaObjetivoXLSX = async () => {
+    if (!objetivoSeleccionado || planillaObjetivo.length === 0) return
+
+    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado']
+    const filas = [
+      ['Planilla mensual por objetivo'],
+      [`Mes/Año: ${mesLabel}`],
+      [`Objetivo: ${objetivoSeleccionado.nombre}`],
+      [],
+      columnas,
+      ...planillaObjetivo.map((row: any) => [
+        row.Fecha,
+        row['Guardia que fichó'] !== '—' ? row['Guardia que fichó'] : row['Guardia asignado'],
+        row['Horario programado'],
+        row['Entrada real'],
+        row['Salida real'],
+        Number(row._horasReales.toFixed(2)),
+        Number(row._horasLiquidables.toFixed(2)),
+        row.Estado,
+      ]),
+      [],
+      ['Totales'],
+      ['Turnos totales', totalesObjetivo.total],
+      ['Turnos cubiertos', totalesObjetivo.cubiertos],
+      ['Turnos descubiertos', totalesObjetivo.descubiertos],
+      ['Horas reales totales', Number(totalesObjetivo.horasReales.toFixed(2))],
+      ['Horas liquidables totales', Number(totalesObjetivo.horasLiquidables.toFixed(2))],
+    ]
+    const nombre = `objetivo_${archivoParte(objetivoSeleccionado.nombre)}_${mesArchivo()}.xlsx`
+
+    await descargarXLSX(nombre, filas, 4, planillaObjetivo.length, [5, 6, 1])
+  }
+
   const reporteGuardias = guardias
     .map((g: Usuario) => {
       const regs = registrosMes.filter((r: RegistroAsistencia) => r.guardia_id === g.id)
@@ -2199,7 +2335,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
                 {empleados.map((g: Usuario) => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre} · {g.legajo || 'sin legajo'}</option>)}
               </select>
             </div>
-            <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:'auto' }} onClick={() => exportCSV(limpiarCsv(planillaEmpleado), `planilla-empleado-${slug(empleadoSeleccionado?.apellido)}-${mes}`)}>Exportar CSV</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:'auto' }} onClick={exportarPlanillaEmpleadoXLSX}>Exportar XLSX</button>
           </div>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800 }}>Planilla individual por empleado</div>
@@ -2245,7 +2381,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
                 {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
               </select>
             </div>
-            <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:'auto' }} onClick={() => exportCSV(limpiarCsv(planillaObjetivo), `planilla-objetivo-${slug(objetivoSeleccionado?.nombre)}-${mes}`)}>Exportar CSV</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:'auto' }} onClick={exportarPlanillaObjetivoXLSX}>Exportar XLSX</button>
           </div>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800 }}>Planilla mensual por objetivo</div>
