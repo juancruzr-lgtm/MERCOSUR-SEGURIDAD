@@ -70,6 +70,16 @@ export interface RegistroAsistencia {
   hora_salida_real?: string
   lat_entrada?: number
   lng_entrada?: number
+  latitud_ingreso?: number
+  longitud_ingreso?: number
+  precision_ingreso?: number
+  latitud_egreso?: number
+  longitud_egreso?: number
+  precision_egreso?: number
+  distancia_ingreso_metros?: number
+  gps_ingreso_estado?: 'dentro_radio' | 'fuera_radio' | 'objetivo_sin_gps' | 'gps_no_disponible' | string
+  distancia_egreso_metros?: number
+  gps_egreso_estado?: 'dentro_radio' | 'fuera_radio' | 'objetivo_sin_gps' | 'gps_no_disponible' | string
   horas_trabajadas?: number
   alerta_entrada?: 'tarde' | 'anticipada'
   alerta_salida?: 'anticipada' | 'posterior'

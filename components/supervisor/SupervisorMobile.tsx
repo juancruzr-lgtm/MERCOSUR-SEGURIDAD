@@ -61,6 +61,10 @@ interface RegistroAsistencia {
   lng_entrada?: number | string | null
   lat_salida?: number | string | null
   lng_salida?: number | string | null
+  distancia_ingreso_metros?: number | string | null
+  gps_ingreso_estado?: string | null
+  distancia_egreso_metros?: number | string | null
+  gps_egreso_estado?: string | null
   alerta_entrada?: string | null
   created_at?: string
 }
@@ -149,10 +153,34 @@ function ubicacionObjetivoCompleta(objetivo?: Objetivo | null): boolean {
   return numeroGps(objetivo?.lat) !== null && numeroGps(objetivo?.lng) !== null && (numeroGps(objetivo?.radio_metros) || 0) > 0
 }
 
+function metrosTexto(valor?: unknown): string {
+  const metros = numeroGps(valor)
+  return metros !== null ? `${Math.round(metros).toLocaleString('es-AR')} m` : '—'
+}
+
+function estadoGpsRegistro(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 'egreso'): string | null | undefined {
+  return tipo === 'ingreso' ? registro?.gps_ingreso_estado : registro?.gps_egreso_estado
+}
+
+function distanciaGpsRegistro(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 'egreso'): number | null {
+  return numeroGps(tipo === 'ingreso' ? registro?.distancia_ingreso_metros : registro?.distancia_egreso_metros)
+}
+
 function resumenGps(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 'egreso'): string {
   const gps = gpsRegistro(registro, tipo)
   if (!gps) return '⚠ Sin GPS'
-  return tipo === 'ingreso' ? 'Ingreso GPS ✓' : 'Egreso GPS ✓'
+
+  const prefijo = tipo === 'ingreso' ? 'Ingreso' : 'Egreso'
+  const estado = estadoGpsRegistro(registro, tipo)
+  const distancia = distanciaGpsRegistro(registro, tipo)
+  const precision = gps.precision !== null ? ` · Precisión ${metrosTexto(gps.precision)}` : ''
+
+  if (estado === 'dentro_radio') return `${prefijo} GPS ✓ · Dentro del radio · ${metrosTexto(distancia)}${precision}`
+  if (estado === 'fuera_radio') return `${prefijo} GPS ⚠ Fuera del radio · ${metrosTexto(distancia)}${precision}`
+  if (estado === 'objetivo_sin_gps') return `${prefijo} GPS registrado · Objetivo sin ubicación`
+  if (estado === 'gps_no_disponible') return '⚠ Sin GPS'
+
+  return `${prefijo} GPS registrado${precision}`
 }
 
 export default function SupervisorMobile({ user }: any) {
@@ -395,6 +423,11 @@ export default function SupervisorMobile({ user }: any) {
 
   const turnosConTardanzaRegistrada = useMemo(
     () => turnos.filter(t => esTardanzaRegistrada(t)),
+    [turnos, registros],
+  )
+
+  const turnosConGpsFueraRadio = useMemo(
+    () => turnos.filter(t => getRegistro(t.id)?.gps_ingreso_estado === 'fuera_radio'),
     [turnos, registros],
   )
 
@@ -1115,6 +1148,39 @@ export default function SupervisorMobile({ user }: any) {
                                 <div style={{ ...muted, color: '#ef4444' }}>Estado: Tarde</div>
                               </div>
                               <span style={alertBadge('ingreso tarde')}>Tarde</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {turnosConGpsFueraRadio.length > 0 && (
+                  <div style={{ ...card, borderColor: 'rgba(239,68,68,.35)', background: 'rgba(239,68,68,.08)' }}>
+                    <div style={{ ...objetivoName, color: '#fca5a5' }}>Fichajes fuera de radio</div>
+                    <div style={muted}>{turnosConGpsFueraRadio.length} ingreso(s) registrados fuera del radio del objetivo.</div>
+
+                    <div style={{ marginTop: 12 }}>
+                      {turnosConGpsFueraRadio.map(turno => {
+                        const objetivo = getObjetivo(turno.objetivo_id)
+                        const registro = getRegistro(turno.id)
+                        const guardia = getGuardia(registro?.guardia_id || turno.guardia_id)
+                        const gps = gpsRegistro(registro, 'ingreso')
+
+                        return (
+                          <div key={`alerta-gps-radio-${turno.id}`} style={{ ...turnoCard, background: '#111827' }}>
+                            <div style={turnoTop}>
+                              <div>
+                                <div style={objetivoName}>{guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
+                                <div style={muted}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
+                                <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+                                <div style={muted}>Entrada real: {horaCorta(registro?.hora_entrada_real)}</div>
+                                <div style={{ ...muted, color: '#ef4444' }}>Distancia: {metrosTexto(registro?.distancia_ingreso_metros)}</div>
+                                <div style={muted}>Radio permitido: {metrosTexto(objetivo?.radio_metros)}</div>
+                                <div style={muted}>Precisión GPS: {metrosTexto(gps?.precision)}</div>
+                              </div>
+                              <span style={badge('descubierto')}>Fuera del radio</span>
                             </div>
                           </div>
                         )

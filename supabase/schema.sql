@@ -108,6 +108,10 @@ alter table registros_asistencia add column if not exists precision_ingreso nume
 alter table registros_asistencia add column if not exists latitud_egreso numeric;
 alter table registros_asistencia add column if not exists longitud_egreso numeric;
 alter table registros_asistencia add column if not exists precision_egreso numeric;
+alter table registros_asistencia add column if not exists distancia_ingreso_metros numeric;
+alter table registros_asistencia add column if not exists gps_ingreso_estado text;
+alter table registros_asistencia add column if not exists distancia_egreso_metros numeric;
+alter table registros_asistencia add column if not exists gps_egreso_estado text;
 
 -- 6. NOVEDADES
 create table if not exists novedades (

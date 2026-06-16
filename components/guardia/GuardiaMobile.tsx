@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { calcAlertaEntrada, supabase } from '@/lib/supabase'
+import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 
 // ── TIPOS ─────────────────────────────────────────────────────
 interface Turno {
@@ -40,6 +40,10 @@ interface Registro {
   lng_entrada?: number
   lat_salida?: number
   lng_salida?: number
+  distancia_ingreso_metros?: number | null
+  gps_ingreso_estado?: GpsEstadoRadio | string | null
+  distancia_egreso_metros?: number | null
+  gps_egreso_estado?: GpsEstadoRadio | string | null
 }
 
 interface GpsData {
@@ -49,6 +53,13 @@ interface GpsData {
 }
 
 type GpsPermissionState = 'checking' | 'granted' | 'prompt' | 'denied' | 'unsupported'
+type GpsEstadoRadio = 'dentro_radio' | 'fuera_radio' | 'objetivo_sin_gps' | 'gps_no_disponible'
+
+interface AuditoriaRadioGps {
+  estado: GpsEstadoRadio
+  distancia: number | null
+  radio: number | null
+}
 
 // ── HELPERS ───────────────────────────────────────────────────
 function calcHorasTrabajadas(entrada: string, salida: string): number {
@@ -167,7 +178,7 @@ function esErrorColumnaGps(error: unknown): boolean {
   const details = 'details' in error ? String((error as { details: unknown }).details) : ''
   const hint = 'hint' in error ? String((error as { hint: unknown }).hint) : ''
 
-  return /latitud_ingreso|longitud_ingreso|precision_ingreso|latitud_egreso|longitud_egreso|precision_egreso/i
+  return /latitud_ingreso|longitud_ingreso|precision_ingreso|latitud_egreso|longitud_egreso|precision_egreso|distancia_ingreso_metros|gps_ingreso_estado|distancia_egreso_metros|gps_egreso_estado/i
     .test(`${message} ${details} ${hint}`)
 }
 
@@ -192,12 +203,91 @@ function gpsRegistro(registro: Registro | undefined, tipo: 'ingreso' | 'egreso')
   return lat !== null && lng !== null ? { lat, lng, precision } : null
 }
 
-function auditoriaGps(registro: Registro | undefined, tipo: 'ingreso' | 'egreso'): string {
+function objetivoGps(objetivo?: Objetivo | null) {
+  const lat = numeroGps(objetivo?.lat)
+  const lng = numeroGps(objetivo?.lng)
+  const radio = numeroGps(objetivo?.radio_metros)
+
+  return lat !== null && lng !== null && radio !== null && radio > 0
+    ? { lat, lng, radio }
+    : null
+}
+
+function calcularAuditoriaRadioGps(gps: GpsData | null, objetivo?: Objetivo | null): AuditoriaRadioGps {
+  if (!gps) return { estado: 'gps_no_disponible', distancia: null, radio: null }
+
+  const destino = objetivoGps(objetivo)
+  if (!destino) return { estado: 'objetivo_sin_gps', distancia: null, radio: null }
+
+  const distancia = calcDistancia(gps.latitude, gps.longitude, destino.lat, destino.lng)
+
+  return {
+    estado: distancia <= destino.radio ? 'dentro_radio' : 'fuera_radio',
+    distancia: Math.round(distancia),
+    radio: destino.radio,
+  }
+}
+
+function distanciaTexto(distancia?: number | null): string {
+  const valor = numeroGps(distancia)
+  return valor !== null ? `${Math.round(valor).toLocaleString('es-AR')} m` : '—'
+}
+
+function precisionTexto(precision?: number | null): string {
+  const valor = numeroGps(precision)
+  return valor !== null ? ` · Precisión ${Math.round(valor)} m` : ''
+}
+
+function mensajeAuditoriaRadio(auditoria: AuditoriaRadioGps, gps?: GpsData | null): string {
+  const precision = precisionTexto(gps?.accuracy)
+
+  if (auditoria.estado === 'dentro_radio') {
+    return `GPS OK · Dentro del radio · Distancia ${distanciaTexto(auditoria.distancia)}${precision}`
+  }
+
+  if (auditoria.estado === 'fuera_radio') {
+    return `GPS FUERA DEL OBJETIVO · Distancia ${distanciaTexto(auditoria.distancia)} · Radio permitido ${distanciaTexto(auditoria.radio)}${precision}`
+  }
+
+  if (auditoria.estado === 'objetivo_sin_gps') {
+    return 'GPS registrado · Objetivo sin ubicación configurada'
+  }
+
+  return 'GPS no disponible, asistencia registrada sin ubicación.'
+}
+
+function estadoAuditoriaRegistro(registro: Registro | undefined, tipo: 'ingreso' | 'egreso'): GpsEstadoRadio | string | null | undefined {
+  return tipo === 'ingreso' ? registro?.gps_ingreso_estado : registro?.gps_egreso_estado
+}
+
+function distanciaAuditoriaRegistro(registro: Registro | undefined, tipo: 'ingreso' | 'egreso'): number | null {
+  return numeroGps(tipo === 'ingreso' ? registro?.distancia_ingreso_metros : registro?.distancia_egreso_metros)
+}
+
+function auditoriaGps(registro: Registro | undefined, tipo: 'ingreso' | 'egreso', objetivo?: Objetivo | null): string {
   const gps = gpsRegistro(registro, tipo)
   if (!gps) return '⚠ Sin GPS'
 
-  const precision = gps.precision !== null ? ` · Precisión ${Math.round(gps.precision)} m` : ''
-  return `📍 GPS OK${precision}`
+  const estado = estadoAuditoriaRegistro(registro, tipo)
+  const distancia = distanciaAuditoriaRegistro(registro, tipo)
+  const destino = objetivoGps(objetivo)
+  const precision = precisionTexto(gps.precision)
+
+  if (estado === 'dentro_radio') {
+    return `📍 Dentro del radio · Distancia ${distanciaTexto(distancia)}${precision}`
+  }
+
+  if (estado === 'fuera_radio') {
+    return `⚠ GPS fuera del objetivo · Distancia ${distanciaTexto(distancia)} · Radio ${distanciaTexto(destino?.radio)}${precision}`
+  }
+
+  if (estado === 'objetivo_sin_gps') {
+    return '📍 GPS registrado · Objetivo sin ubicación configurada'
+  }
+
+  if (estado === 'gps_no_disponible') return '⚠ Sin GPS'
+
+  return `📍 GPS registrado · Sin validación de radio${precision}`
 }
 // ── ESTILOS ───────────────────────────────────────────────────
 const S: Record<string, React.CSSProperties> = {
@@ -509,11 +599,18 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         return
       }
 
-      const payload = {
+      const objetivo = getObjetivo(turno.objetivo_id)
+      const auditoriaIngreso = calcularAuditoriaRadioGps(gps, objetivo)
+      const payloadBase = {
         guardia_id: user.id,
         turno_id: turno.id,
         hora_entrada_real: hora,
         alerta_entrada: calcAlertaEntrada(turno.hora_inicio, hora),
+      }
+      const payload = {
+        ...payloadBase,
+        distancia_ingreso_metros: auditoriaIngreso.distancia,
+        gps_ingreso_estado: auditoriaIngreso.estado,
       }
       const payloadConGps = {
           ...payload,
@@ -522,7 +619,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           precision_ingreso: gps.accuracy,
         }
       const payloadConGpsLegacy = {
-        ...payload,
+        ...payloadBase,
         lat_entrada: gps.latitude,
         lng_entrada: gps.longitude,
       }
@@ -552,8 +649,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
       setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
       setMensaje({
-        texto: `✓ Entrada registrada a las ${hora} · 📍 GPS OK · Precisión ${Math.round(gps.accuracy)} m`,
-        tipo: 'ok',
+        texto: `✓ Entrada registrada a las ${hora} · ${mensajeAuditoriaRadio(auditoriaIngreso, gps)}`,
+        tipo: auditoriaIngreso.estado === 'fuera_radio' ? 'warn' : 'ok',
       })
       setTimeout(() => setMensaje(null), 4000)
     } catch (error) {
@@ -585,9 +682,16 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     const hora = horaActual()
     const horas = calcHorasTrabajadas(registro.hora_entrada_real, hora)
     const gps = await obtenerGps('egreso')
-    const payload = {
+    const objetivo = getObjetivo(turno.objetivo_id)
+    const auditoriaEgreso = calcularAuditoriaRadioGps(gps, objetivo)
+    const payloadBase = {
       hora_salida_real: hora,
       horas_trabajadas: horas,
+    }
+    const payload = {
+      ...payloadBase,
+      distancia_egreso_metros: auditoriaEgreso.distancia,
+      gps_egreso_estado: auditoriaEgreso.estado,
     }
     const payloadConGps = gps
       ? {
@@ -599,11 +703,11 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       : payload
     const payloadConGpsLegacy = gps
       ? {
-        ...payload,
+        ...payloadBase,
         lat_salida: gps.latitude,
         lng_salida: gps.longitude,
       }
-      : payload
+      : payloadBase
 
     let { error } = await supabase
       .from('registros_asistencia')
@@ -612,7 +716,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
     let gpsDisponible = Boolean(gps)
 
-    if (error && gps && esErrorColumnaGps(error)) {
+    if (error && esErrorColumnaGps(error)) {
       const retry = await supabase
         .from('registros_asistencia')
         .update(payloadConGpsLegacy)
@@ -631,8 +735,10 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         )
       )
       setMensaje({
-        texto: gpsDisponible && gps ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas · 📍 GPS OK · Precisión ${Math.round(gps.accuracy)} m` : 'GPS no disponible, asistencia registrada sin ubicación.',
-        tipo: gpsDisponible ? 'ok' : 'warn',
+        texto: gpsDisponible && gps
+          ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas · ${mensajeAuditoriaRadio(auditoriaEgreso, gps)}`
+          : mensajeAuditoriaRadio(auditoriaEgreso, gps),
+        tipo: auditoriaEgreso.estado === 'fuera_radio' || !gpsDisponible ? 'warn' : 'ok',
       })
     }
 
@@ -754,8 +860,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           const bloqueoFichaje = mensajeBloqueoFichaje(turno, user.id, ahora)
           const puedeDarPresente = !bloqueoFichaje
           const gpsBloqueaPresente = permisoGps === 'checking' || permisoGps === 'denied' || permisoGps === 'unsupported'
-          const gpsIngreso = auditoriaGps(reg, 'ingreso')
-          const gpsEgreso = auditoriaGps(reg, 'egreso')
+          const gpsIngreso = auditoriaGps(reg, 'ingreso', obj)
+          const gpsEgreso = auditoriaGps(reg, 'egreso', obj)
 
           return (
             <div key={turno.id} style={S.card}>

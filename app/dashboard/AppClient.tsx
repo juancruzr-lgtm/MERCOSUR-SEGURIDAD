@@ -144,10 +144,48 @@ function gpsRegistroAsistencia(registro: RegistroAsistencia | any, tipo: 'ingres
   return lat !== null && lng !== null ? { lat, lng, precision } : null
 }
 
+function metrosGpsTexto(valor?: unknown): string {
+  const metros = numeroGps(valor)
+  return metros !== null ? `${Math.round(metros).toLocaleString('es-AR')} m` : '—'
+}
+
+function estadoGpsRegistro(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string | null | undefined {
+  return tipo === 'ingreso' ? registro?.gps_ingreso_estado : registro?.gps_egreso_estado
+}
+
+function distanciaGpsRegistro(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): number | null {
+  return numeroGps(tipo === 'ingreso' ? registro?.distancia_ingreso_metros : registro?.distancia_egreso_metros)
+}
+
+function coordenadasGpsTexto(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string {
+  const gps = gpsRegistroAsistencia(registro, tipo)
+  if (!gps) return '—'
+  return `${gps.lat.toFixed(6)}, ${gps.lng.toFixed(6)}`
+}
+
+function estadoGpsTexto(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string {
+  const estado = estadoGpsRegistro(registro, tipo)
+  if (estado === 'dentro_radio') return 'Dentro del radio'
+  if (estado === 'fuera_radio') return 'Fuera del radio'
+  if (estado === 'objetivo_sin_gps') return 'Objetivo sin GPS'
+  if (estado === 'gps_no_disponible') return 'GPS no disponible'
+  return gpsRegistroAsistencia(registro, tipo) ? 'GPS registrado' : 'Sin GPS'
+}
+
 function textoAuditoriaGps(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string {
   const gps = gpsRegistroAsistencia(registro, tipo)
   if (!gps) return '⚠ Sin GPS'
-  return tipo === 'ingreso' ? 'GPS Ingreso ✓' : 'GPS Egreso ✓'
+
+  const prefijo = tipo === 'ingreso' ? 'GPS Ingreso' : 'GPS Egreso'
+  const estado = estadoGpsRegistro(registro, tipo)
+  const distancia = distanciaGpsRegistro(registro, tipo)
+
+  if (estado === 'dentro_radio') return `${prefijo} ✓ · Dentro · ${metrosGpsTexto(distancia)}`
+  if (estado === 'fuera_radio') return `${prefijo} ⚠ Fuera · ${metrosGpsTexto(distancia)}`
+  if (estado === 'objetivo_sin_gps') return `${prefijo} registrado · Objetivo sin GPS`
+  if (estado === 'gps_no_disponible') return '⚠ Sin GPS'
+
+  return `${prefijo} registrado`
 }
 
 function textoPrecisionGps(registro: RegistroAsistencia | any): string {
@@ -413,6 +451,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
 
     return r.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, r) > 0
   })
+  const fichajesFueraRadio = registrosHoy.filter((r: RegistroAsistencia) => r.gps_ingreso_estado === 'fuera_radio')
   const turnosAsistenciaPendiente = turnosHoy.filter((t: Turno) => {
     if (t.estado === 'descubierto' || !t.guardia_id) return false
     return !tieneEntrada(t) || (tieneEntrada(t) && !tieneSalida(t))
@@ -529,6 +568,26 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     )
   }
 
+  const renderFichajeFueraRadioAlert = (registro: RegistroAsistencia) => {
+    const turno = turnoPorId.get(registro.turno_id)
+    if (!turno) return null
+
+    const objetivo = getObjetivo(turno.objetivo_id)
+    const gps = gpsRegistroAsistencia(registro, 'ingreso')
+
+    return (
+      <div key={registro.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('asistencia', { tipo:'gps_fuera_radio', label:'Fichajes fuera de radio' })}>
+        <strong style={{ color:'#f8fafc' }}>{nombreGuardia(registro.guardia_id || turno.guardia_id)}</strong>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {objetivo?.nombre || 'Objetivo sin nombre'}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>Hora ingreso: {hora(registro.hora_entrada_real)}</div>
+        <div style={{ color:'#ef4444', marginTop:4 }}>Distancia: {metrosGpsTexto(registro.distancia_ingreso_metros)}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>Radio permitido: {metrosGpsTexto(objetivo?.radio_metros)}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>Precisión GPS: {metrosGpsTexto(gps?.precision)}</div>
+        <div style={{ color:'#ef4444', marginTop:4 }}>Estado: Fuera del radio</div>
+      </div>
+    )
+  }
+
   return (
     <div>
       <div style={{ display:'flex', flexWrap:'wrap', gap:12, alignItems:'flex-end', justifyContent:'space-between', marginBottom:24 }}>
@@ -563,6 +622,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         <div style={S.card}><div style={S.label}>Turnos en curso hoy</div><strong>{turnosEnCursoHoy}</strong></div>
         <div style={S.card}><div style={S.label}>Turnos sin fichar hoy</div><strong>{turnosSinFichar.length}</strong></div>
         <div style={S.card}><div style={S.label}>Tardanzas registradas hoy</div><strong>{tardanzasRegistradas.length}</strong></div>
+        <div style={S.card}><div style={S.label}>Fichajes fuera de radio</div><strong>{fichajesFueraRadio.length}</strong></div>
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16 }}>
@@ -590,6 +650,15 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
             <div style={emptyAlert}>No hay ingresos tarde registrados hoy.</div>
           ) : tardanzasRegistradas.map((registro: RegistroAsistencia) =>
             renderTardanzaAlert(registro)
+          )}
+        </div>
+
+        <div style={alertBox}>
+          <div style={alertTitle}>Fichajes fuera de radio</div>
+          {fichajesFueraRadio.length === 0 ? (
+            <div style={emptyAlert}>No hay ingresos fuera del radio del objetivo.</div>
+          ) : fichajesFueraRadio.map((registro: RegistroAsistencia) =>
+            renderFichajeFueraRadioAlert(registro)
           )}
         </div>
 
@@ -1816,6 +1885,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     if (filtroActivo?.tipo === 'hoy' && turno?.fecha !== hoy) return false
     if (filtroActivo?.tipo === 'en_turno' && (!r.hora_entrada_real || r.hora_salida_real)) return false
     if (filtroActivo?.tipo === 'tarde' && (turno?.fecha !== hoy || r.alerta_entrada !== 'tarde')) return false
+    if (filtroActivo?.tipo === 'gps_fuera_radio' && (turno?.fecha !== hoy || r.gps_ingreso_estado !== 'fuera_radio')) return false
     return true
   })
   const registrosOrdenados = [...registrosFiltrados].sort((a: RegistroAsistencia, b: RegistroAsistencia) => {
@@ -1875,17 +1945,18 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_salida_real || '—'}</td>
                   <td style={S.td}>{r.horas_trabajadas ? formatHoras(r.horas_trabajadas) : '—'}</td>
                   <td style={{ ...S.td, fontSize:12 }}>
-                    <Badge type={gpsIngreso ? 'ok' : 'pendiente'}>{textoGpsIngreso}</Badge>
+                    <Badge type={r.gps_ingreso_estado === 'fuera_radio' ? 'alerta' : gpsIngreso ? 'ok' : 'pendiente'}>{textoGpsIngreso}</Badge>
                   </td>
                   <td style={{ ...S.td, fontSize:12 }}>
-                    <Badge type={gpsEgreso ? 'ok' : 'pendiente'}>{textoGpsEgreso}</Badge>
+                    <Badge type={r.gps_egreso_estado === 'fuera_radio' ? 'alerta' : gpsEgreso ? 'ok' : 'pendiente'}>{textoGpsEgreso}</Badge>
                   </td>
                   <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{textoPrecisionGps(r)}</td>
                   <td style={S.td}>
                     <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
                       {r.alerta_entrada && <Badge type={r.alerta_entrada}>{r.alerta_entrada === 'tarde' ? '⏰ Tarde' : '⬆ Anticipada'}</Badge>}
                       {r.alerta_salida && <Badge type={r.alerta_salida}>{r.alerta_salida === 'anticipada' ? '⬇ Salida ant.' : '⏱ Posterior'}</Badge>}
-                      {!r.alerta_entrada && !r.alerta_salida && <Badge type="cubierto">✓ Ok</Badge>}
+                      {r.gps_ingreso_estado === 'fuera_radio' && <Badge type="alerta">GPS fuera radio</Badge>}
+                      {!r.alerta_entrada && !r.alerta_salida && r.gps_ingreso_estado !== 'fuera_radio' && <Badge type="cubierto">✓ Ok</Badge>}
                     </div>
                   </td>
                 </tr>
@@ -2151,6 +2222,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     if (registro?.alerta_entrada === 'anticipada') obs.push('Entrada anticipada')
     if (registro?.alerta_salida === 'anticipada') obs.push('Salida anticipada')
     if (registro?.alerta_salida === 'posterior') obs.push('Salida posterior')
+    if (registro?.gps_ingreso_estado === 'fuera_radio') obs.push('GPS fuera del radio')
     if (registro?.observacion) obs.push(registro.observacion)
     if (extra) obs.push(extra)
     return obs.length ? obs.join(' | ') : '—'
@@ -2187,6 +2259,9 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       'Horas liquidables': mostrarHoras(horasLiquidables),
       Estado: estado,
       'Observaciones / alertas': observacionesPlanilla(turno, registro, extra),
+      'GPS ingreso': coordenadasGpsTexto(registro, 'ingreso'),
+      'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
+      'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
       _fecha: turno.fecha,
       _horasReales: horasReales,
@@ -2227,6 +2302,9 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       'Horas liquidables': mostrarHoras(horasLiquidables),
       Estado: estado,
       'Observaciones / alertas': observacionesPlanilla(turno, registro),
+      'GPS ingreso': coordenadasGpsTexto(registro, 'ingreso'),
+      'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
+      'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
@@ -2250,7 +2328,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
   const exportarPlanillaEmpleadoXLSX = async () => {
     if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
 
-    const columnas = ['Fecha', 'Día', 'Objetivo', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado']
+    const columnas = ['Fecha', 'Día', 'Objetivo', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
     const filas = [
       ['Planilla individual por empleado'],
       [`Mes/Año: ${mesLabel}`],
@@ -2267,6 +2345,9 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
         Number(row._horasReales.toFixed(2)),
         Number(row._horasLiquidables.toFixed(2)),
         row.Estado,
+        row['GPS ingreso'],
+        row['Distancia ingreso'],
+        row['Estado GPS ingreso'],
       ]),
       [],
       ['Totales'],
@@ -2284,7 +2365,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
   const exportarPlanillaObjetivoXLSX = async () => {
     if (!objetivoSeleccionado || planillaObjetivo.length === 0) return
 
-    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado']
+    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
     const filas = [
       ['Planilla mensual por objetivo'],
       [`Mes/Año: ${mesLabel}`],
@@ -2300,6 +2381,9 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
         Number(row._horasReales.toFixed(2)),
         Number(row._horasLiquidables.toFixed(2)),
         row.Estado,
+        row['GPS ingreso'],
+        row['Distancia ingreso'],
+        row['Estado GPS ingreso'],
       ]),
       [],
       ['Totales'],
@@ -2519,7 +2603,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
             {totalBox('Tardanzas', totalesEmpleado.tardanzas)}
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th></tr></thead>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th></tr></thead>
             <tbody>
               {planillaEmpleado.map((row: any) => (
                 <tr key={row._id}>
@@ -2533,6 +2617,9 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
                   <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
+                  <td style={S.td}>{row['GPS ingreso']}</td>
+                  <td style={S.td}>{row['Distancia ingreso']}</td>
+                  <td style={S.td}><Badge type={row['Estado GPS ingreso'] === 'Fuera del radio' ? 'alerta' : row['Estado GPS ingreso'] === 'Dentro del radio' ? 'ok' : 'pendiente'}>{row['Estado GPS ingreso']}</Badge></td>
                 </tr>
               ))}
             </tbody>
@@ -2566,7 +2653,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
             {totalBox('Horas liquidables', totalesObjetivo.horasLiquidables.toFixed(2))}
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th></tr></thead>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th></tr></thead>
             <tbody>
               {planillaObjetivo.map((row: any) => (
                 <tr key={row._id}>
@@ -2581,6 +2668,9 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
                   <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
+                  <td style={S.td}>{row['GPS ingreso']}</td>
+                  <td style={S.td}>{row['Distancia ingreso']}</td>
+                  <td style={S.td}><Badge type={row['Estado GPS ingreso'] === 'Fuera del radio' ? 'alerta' : row['Estado GPS ingreso'] === 'Dentro del radio' ? 'ok' : 'pendiente'}>{row['Estado GPS ingreso']}</Badge></td>
                 </tr>
               ))}
             </tbody>
