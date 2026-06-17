@@ -11,6 +11,10 @@ type TipoAlerta = 'sin entrada' | 'sin ingreso' | 'entrada registrada' | 'salida
 type TipoAlertaOperativa = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'descubierto'
 type AccionIntervencion = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
 
+const ZONA_OPERATIVA = 'Rosario / General'
+const JEFE_OPERATIVO = 'Aldo Monzón'
+const DIRECTOR_TECNICO = 'Rodolfo Romero'
+
 interface Turno {
   id: string
   guardia_id: string | null
@@ -76,6 +80,12 @@ interface SupervisorIntervencion {
   turno_id: string
   registro_asistencia_id?: string | null
   supervisor_id: string
+  supervisor_asignado_id?: string | null
+  supervisor_intervino_id?: string | null
+  supervisor_guardia_id?: string | null
+  jefe_operativo?: string | null
+  director_tecnico?: string | null
+  zona?: string | null
   tipo_alerta: TipoAlertaOperativa | string
   accion: AccionIntervencion | string
   comentario?: string | null
@@ -85,6 +95,20 @@ interface SupervisorIntervencion {
   estado_anterior?: string | null
   estado_nuevo?: string | null
   created_at: string
+}
+
+interface SupervisorGuardia {
+  id: string
+  supervisor_id: string | null
+  fecha: string
+  hora_inicio: string
+  hora_fin: string
+  zona: string
+  rol_operativo: string
+  estado: string
+  observacion?: string | null
+  creado_por?: string | null
+  created_at?: string
 }
 
 interface AccionAlertaActiva {
@@ -100,6 +124,17 @@ function fechaHoy(): string {
 
 function horaCorta(hora?: string | null): string {
   return hora ? hora.slice(0, 5) : '--:--'
+}
+
+function fechaHoraEnRango(fecha: string, hora: string, fechaInicio: string, horaInicio: string, horaFin: string): boolean {
+  const valor = fechaHoraTurno(fecha, hora)
+  const inicio = fechaHoraTurno(fechaInicio, horaInicio)
+  const fin = fechaHoraTurno(fechaInicio, horaFin)
+
+  if (!valor || !inicio || !fin) return false
+  if (fin <= inicio) fin.setDate(fin.getDate() + 1)
+
+  return valor >= inicio && valor < fin
 }
 
 function horasCortas(horas?: number | null): string {
@@ -228,6 +263,7 @@ export default function SupervisorMobile({ user }: any) {
   const [objetivos, setObjetivos] = useState<Objetivo[]>([])
   const [registros, setRegistros] = useState<RegistroAsistencia[]>([])
   const [intervenciones, setIntervenciones] = useState<SupervisorIntervencion[]>([])
+  const [supervisoresGuardia, setSupervisoresGuardia] = useState<SupervisorGuardia[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [asignando, setAsignando] = useState<string | null>(null)
@@ -261,7 +297,7 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
     const rango = rangoFiltroFechaTurnos(filtro, hoy)
 
-    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult, supervisoresResult] = await Promise.all([
+    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult, supervisoresResult, supervisoresGuardiaResult] = await Promise.all([
       supabase
         .from('turnos')
         .select('*')
@@ -283,12 +319,21 @@ export default function SupervisorMobile({ user }: any) {
         .select('id, nombre, apellido, legajo, rol, estado')
         .in('rol', ['supervisor', 'admin'])
         .order('apellido'),
+      supabase
+        .from('supervisores_guardia')
+        .select('id, supervisor_id, fecha, hora_inicio, hora_fin, zona, rol_operativo, estado, observacion, creado_por, created_at')
+        .gte('fecha', sumarDiasFecha(rango.desde, -1))
+        .lte('fecha', rango.hasta)
+        .order('fecha', { ascending: true })
+        .order('hora_inicio', { ascending: true }),
     ])
 
     let guardiasData = guardiasResult.data
     let guardiasError = guardiasResult.error
     const supervisoresData = supervisoresResult.data
     const supervisoresError = supervisoresResult.error
+    const supervisoresGuardiaData = supervisoresGuardiaResult.data
+    const supervisoresGuardiaError = supervisoresGuardiaResult.error
 
     if (guardiasError?.message?.includes('usuarios.email') || guardiasError?.message?.includes('usuarios.telefono') || guardiasError?.message?.includes('usuarios.foto_url')) {
       const retry = await supabase
@@ -307,11 +352,16 @@ export default function SupervisorMobile({ user }: any) {
       return
     }
 
+    if (supervisoresGuardiaError && !/supervisores_guardia|schema cache|does not exist/i.test(supervisoresGuardiaError.message)) {
+      setError(supervisoresGuardiaError.message)
+    }
+
     const turnosRango = (turnosData || []) as Turno[]
     setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
     setGuardias((guardiasData || []) as Usuario[])
     setSupervisores((supervisoresData || []) as Usuario[])
+    setSupervisoresGuardia(supervisoresGuardiaError ? [] : (supervisoresGuardiaData || []) as SupervisorGuardia[])
 
     if (turnosRango.length === 0) {
       setRegistros([])
@@ -402,6 +452,23 @@ export default function SupervisorMobile({ user }: any) {
   const nombreSupervisor = (id?: string | null) => {
     const supervisor = getSupervisor(id)
     return supervisor ? nombrePersona(supervisor) : 'Supervisor no encontrado'
+  }
+  const supervisorGuardiaAsignado = (turno: Turno) =>
+    supervisoresGuardia.find(asignacion =>
+      asignacion.estado !== 'inactivo' &&
+      asignacion.rol_operativo === 'supervisor' &&
+      asignacion.zona === ZONA_OPERATIVA &&
+      fechaHoraEnRango(
+        turno.fecha,
+        turno.hora_inicio,
+        asignacion.fecha.slice(0, 10),
+        asignacion.hora_inicio,
+        asignacion.hora_fin,
+      )
+    ) || null
+  const nombreSupervisorGuardia = (turno: Turno) => {
+    const asignacion = supervisorGuardiaAsignado(turno)
+    return asignacion?.supervisor_id ? nombreSupervisor(asignacion.supervisor_id) : 'Sin supervisor asignado'
   }
   const intervencionesAlerta = (turnoId: string, tipoAlerta?: TipoAlertaOperativa) =>
     intervenciones
@@ -880,11 +947,19 @@ export default function SupervisorMobile({ user }: any) {
   }
 
   const registrarIntervencion = async (payload: Omit<SupervisorIntervencion, 'id' | 'created_at' | 'supervisor_id'>) => {
+    const turno = turnos.find(t => t.id === payload.turno_id)
+    const asignacionSupervisor = turno ? supervisorGuardiaAsignado(turno) : null
     const { data, error: insertError } = await supabase
       .from('supervisor_intervenciones')
       .insert({
         ...payload,
         supervisor_id: user.id,
+        supervisor_intervino_id: user.id,
+        supervisor_asignado_id: asignacionSupervisor?.supervisor_id || null,
+        supervisor_guardia_id: asignacionSupervisor?.id || null,
+        jefe_operativo: JEFE_OPERATIVO,
+        director_tecnico: DIRECTOR_TECNICO,
+        zona: ZONA_OPERATIVA,
       })
       .select()
       .single()
@@ -1057,6 +1132,45 @@ export default function SupervisorMobile({ user }: any) {
     return labels[accion] || accion
   }
 
+  const renderContextoAlerta = (turno: Turno, tipoAlerta?: TipoAlertaOperativa) => {
+    const asignacion = supervisorGuardiaAsignado(turno)
+    const ultima = tipoAlerta ? ultimaIntervencionAlerta(turno.id, tipoAlerta) : intervencionesAlerta(turno.id)[0]
+    const supervisorIntervinoId = ultima?.supervisor_intervino_id || ultima?.supervisor_id
+
+    return (
+      <div style={contextoAlertaBox}>
+        <div>
+          <div style={label}>Supervisor asignado</div>
+          <div style={registroValue}>{nombreSupervisorGuardia(turno)}</div>
+        </div>
+        <div>
+          <div style={label}>Jefe operativo</div>
+          <div style={registroValue}>{ultima?.jefe_operativo || JEFE_OPERATIVO}</div>
+        </div>
+        <div>
+          <div style={label}>Director técnico</div>
+          <div style={registroValue}>{ultima?.director_tecnico || DIRECTOR_TECNICO}</div>
+        </div>
+        <div>
+          <div style={label}>Supervisor que intervino</div>
+          <div style={registroValue}>{supervisorIntervinoId ? nombreSupervisor(supervisorIntervinoId) : 'Sin intervención'}</div>
+        </div>
+        <div>
+          <div style={label}>Acción realizada</div>
+          <div style={registroValue}>{ultima ? accionLabel(ultima.accion) : 'Pendiente'}</div>
+        </div>
+        <div>
+          <div style={label}>Fecha/hora intervención</div>
+          <div style={registroValue}>{ultima ? fechaHoraDDMMYYYY(ultima.created_at) : '—'}</div>
+        </div>
+        <div style={{ gridColumn:'1 / -1' }}>
+          <div style={label}>Comentario</div>
+          <div style={registroValue}>{ultima?.comentario || asignacion?.observacion || '—'}</div>
+        </div>
+      </div>
+    )
+  }
+
   const renderHistorialAlerta = (turno: Turno, tipoAlerta: TipoAlertaOperativa) => {
     const items = intervencionesAlerta(turno.id, tipoAlerta)
     const ultima = items[0]
@@ -1065,19 +1179,22 @@ export default function SupervisorMobile({ user }: any) {
       <div style={intervencionesBox}>
         {ultima ? (
           <div style={{ ...muted, color: '#cbd5e1' }}>
-            Intervenido por {nombreSupervisor(ultima.supervisor_id)} — {fechaHoraDDMMYYYY(ultima.created_at)}
+            Intervenido por {nombreSupervisor(ultima.supervisor_intervino_id || ultima.supervisor_id)} — {fechaHoraDDMMYYYY(ultima.created_at)}
           </div>
         ) : (
-          <div style={{ ...muted, color: '#f59e0b' }}>Sin supervisor asignado / pendiente</div>
+          <div style={{ ...muted, color: '#f59e0b' }}>Sin intervención registrada / pendiente</div>
         )}
         {items.slice(0, 3).map(item => (
           <div key={item.id} style={intervencionItem}>
+            <div>Supervisor asignado: {item.supervisor_asignado_id ? nombreSupervisor(item.supervisor_asignado_id) : nombreSupervisorGuardia(turno)}</div>
+            <div>Supervisor que intervino: {nombreSupervisor(item.supervisor_intervino_id || item.supervisor_id)}</div>
             <div>Acción: {accionLabel(item.accion)}</div>
             {item.guardia_nuevo_id && item.guardia_nuevo_id !== item.guardia_anterior_id && (
               <div>Guardia nuevo: {nombrePersona(getGuardia(item.guardia_nuevo_id))}</div>
             )}
             {item.motivo && <div>Motivo: {item.motivo}</div>}
             {item.comentario && <div>Comentario: {item.comentario}</div>}
+            <div>Fecha/hora: {fechaHoraDDMMYYYY(item.created_at)}</div>
           </div>
         ))}
       </div>
@@ -1150,6 +1267,7 @@ export default function SupervisorMobile({ user }: any) {
 
     return (
       <div style={alertaAccionesBox}>
+        {renderContextoAlerta(turno, tipoAlerta)}
         <div style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'center', marginBottom:8 }}>
           <div style={label}>Acciones</div>
           {revisada && <span style={badge('finalizado')}>Revisada</span>}
@@ -1583,6 +1701,7 @@ export default function SupervisorMobile({ user }: any) {
                         </div>
                         <span style={alertBadge(alerta)}>{alerta}</span>
                       </div>
+                      {renderContextoAlerta(turno)}
                     </div>
                   )
                 })}
@@ -1895,6 +2014,17 @@ const alertaAccionesBox: React.CSSProperties = {
   marginTop: 12,
   borderTop: '1px solid #263449',
   paddingTop: 12,
+}
+
+const contextoAlertaBox: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+  background: '#0f172a',
+  border: '1px solid #263449',
+  borderRadius: 10,
+  padding: 12,
+  marginBottom: 12,
 }
 
 const alertaActionGrid: React.CSSProperties = {

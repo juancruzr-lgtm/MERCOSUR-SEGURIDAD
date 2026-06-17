@@ -34,6 +34,10 @@ const S: Record<string, React.CSSProperties> = {
   statGrid: { display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:16, marginBottom:28 },
 }
 
+const ZONA_SUPERVISORES_GUARDIA = 'Rosario / General'
+const JEFE_OPERATIVO_GUARDIA = 'Aldo Monzón'
+const DIRECTOR_TECNICO_GUARDIA = 'Rodolfo Romero'
+
 function Badge({ type, children }: { type: string, children: React.ReactNode }) {
   const colors: Record<string, string> = {
     activo:'rgba(16,185,129,.15)|#10b981', cubierto:'rgba(16,185,129,.15)|#10b981', resuelta:'rgba(16,185,129,.15)|#10b981',
@@ -2960,6 +2964,292 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
 }
 
 
+// ── SUPERVISORES DE GUARDIA ──────────────────────────────────
+function SupervisoresGuardia({ guardias, user }: any) {
+  const hoy = new Date().toLocaleDateString('sv-SE')
+  const rolesOperativos = [
+    { value: 'supervisor', label: 'Supervisor' },
+    { value: 'jefe_operativo', label: 'Jefe operativo' },
+    { value: 'director_tecnico', label: 'Director técnico' },
+  ]
+  const formInicial = () => ({
+    supervisor_id: '',
+    fecha: hoy,
+    hora_inicio: '18:00',
+    hora_fin: '06:00',
+    zona: ZONA_SUPERVISORES_GUARDIA,
+    rol_operativo: 'supervisor',
+    estado: 'activo',
+    observacion: '',
+  })
+
+  const [guardiasSupervisor, setGuardiasSupervisor] = useState<any[]>([])
+  const [loadingData, setLoadingData] = useState(true)
+  const [loading, setLoading] = useState(false)
+  const [modal, setModal] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [historialSeleccionado, setHistorialSeleccionado] = useState<any | null>(null)
+  const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error', texto: string } | null>(null)
+  const [form, setForm] = useState(formInicial)
+
+  const supervisoresDisponibles = guardias
+    .filter((g: any) => ['supervisor', 'admin'].includes(g.rol))
+    .sort((a: any, b: any) => `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`))
+
+  const cargar = async () => {
+    setLoadingData(true)
+    const { data, error } = await supabase
+      .from('supervisores_guardia')
+      .select('*')
+      .order('fecha', { ascending: false })
+      .order('hora_inicio', { ascending: true })
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+    } else {
+      setGuardiasSupervisor(data || [])
+    }
+
+    setLoadingData(false)
+  }
+
+  useEffect(() => { cargar() }, [])
+
+  const nombreUsuario = (id?: string | null) => {
+    const usuario = guardias.find((g: any) => g.id === id)
+    return usuario ? `${usuario.apellido}, ${usuario.nombre}` : 'Sin supervisor'
+  }
+
+  const rolLabel = (rol?: string | null) => rolesOperativos.find(r => r.value === rol)?.label || rol || '—'
+  const horario = (item: any) => `${formatHoraTurno(item.hora_inicio)} a ${formatHoraTurno(item.hora_fin)}`
+
+  const abrirNuevo = () => {
+    setForm(formInicial())
+    setEditId(null)
+    setMensaje(null)
+    setModal(true)
+  }
+
+  const abrirEditar = (item: any) => {
+    setForm({
+      supervisor_id: item.supervisor_id || '',
+      fecha: item.fecha || hoy,
+      hora_inicio: formatHoraTurno(item.hora_inicio) === '—' ? '18:00' : formatHoraTurno(item.hora_inicio),
+      hora_fin: formatHoraTurno(item.hora_fin) === '—' ? '06:00' : formatHoraTurno(item.hora_fin),
+      zona: item.zona || ZONA_SUPERVISORES_GUARDIA,
+      rol_operativo: item.rol_operativo || 'supervisor',
+      estado: item.estado || 'activo',
+      observacion: item.observacion || '',
+    })
+    setEditId(item.id)
+    setMensaje(null)
+    setModal(true)
+  }
+
+  const guardar = async () => {
+    if (!form.fecha || !form.hora_inicio || !form.hora_fin || !form.supervisor_id) {
+      setMensaje({ tipo:'error', texto:'Completá fecha, horario y supervisor asignado.' })
+      return
+    }
+
+    setLoading(true)
+    setMensaje(null)
+
+    const payload: any = {
+      supervisor_id: form.supervisor_id,
+      fecha: form.fecha,
+      hora_inicio: form.hora_inicio,
+      hora_fin: form.hora_fin,
+      zona: form.zona || ZONA_SUPERVISORES_GUARDIA,
+      rol_operativo: form.rol_operativo,
+      estado: form.estado,
+      observacion: form.observacion.trim() || null,
+    }
+
+    if (!editId) payload.creado_por = user?.id || null
+
+    const query = editId
+      ? supabase.from('supervisores_guardia').update(payload).eq('id', editId)
+      : supabase.from('supervisores_guardia').insert(payload)
+
+    const { data, error } = await query.select('*').single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+    } else if (data) {
+      setGuardiasSupervisor(prev => editId ? prev.map(item => item.id === editId ? data : item) : [data, ...prev])
+      setMensaje({ tipo:'ok', texto: editId ? 'Guardia actualizada.' : 'Guardia de supervisor creada.' })
+      setModal(false)
+      setEditId(null)
+      setForm(formInicial())
+    }
+
+    setLoading(false)
+  }
+
+  const cambiarEstado = async (item: any) => {
+    const nuevoEstado = item.estado === 'inactivo' ? 'activo' : 'inactivo'
+    const { data, error } = await supabase
+      .from('supervisores_guardia')
+      .update({ estado: nuevoEstado })
+      .eq('id', item.id)
+      .select('*')
+      .single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      return
+    }
+
+    if (data) {
+      setGuardiasSupervisor(prev => prev.map(row => row.id === item.id ? data : row))
+      setMensaje({ tipo:'ok', texto: nuevoEstado === 'inactivo' ? 'Guardia inactivada.' : 'Guardia reactivada.' })
+    }
+  }
+
+  const historial = historialSeleccionado
+    ? guardiasSupervisor
+      .filter(item => item.supervisor_id === historialSeleccionado.supervisor_id)
+      .sort((a, b) => `${b.fecha} ${b.hora_inicio}`.localeCompare(`${a.fecha} ${a.hora_inicio}`))
+    : []
+
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
+        <div style={{ flex:1 }}>
+          <div style={S.title}>Supervisores de guardia</div>
+          <div style={S.sub2}>Zona {ZONA_SUPERVISORES_GUARDIA} · Jefe operativo {JEFE_OPERATIVO_GUARDIA} · Director técnico {DIRECTOR_TECNICO_GUARDIA}</div>
+        </div>
+        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>+ Nueva guardia</button>
+      </div>
+
+      <div style={{ ...S.card, display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:12 }}>
+        <div><div style={S.label}>Supervisores operativos</div><strong>Fulla · Aranda · Martínez</strong></div>
+        <div><div style={S.label}>Zona actual</div><strong>{ZONA_SUPERVISORES_GUARDIA}</strong></div>
+        <div><div style={S.label}>Regla de intervención</div><strong>Cualquier supervisor logueado puede intervenir</strong></div>
+      </div>
+
+      {mensaje && (
+        <div style={{ ...S.card, borderColor: mensaje.tipo === 'ok' ? 'rgba(16,185,129,.35)' : 'rgba(239,68,68,.35)', color: mensaje.tipo === 'ok' ? '#10b981' : '#ef4444', padding:14 }}>
+          {mensaje.texto}
+        </div>
+      )}
+
+      <div style={S.card}>
+        {loadingData ? (
+          <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>Cargando...</div>
+        ) : guardiasSupervisor.length === 0 ? (
+          <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>No hay guardias de supervisor creadas.</div>
+        ) : (
+          <div style={{ overflowX:'auto' }}>
+            <table style={S.table}>
+              <thead>
+                <tr>
+                  <th style={S.th}>Fecha</th>
+                  <th style={S.th}>Horario</th>
+                  <th style={S.th}>Supervisor asignado</th>
+                  <th style={S.th}>Rol operativo</th>
+                  <th style={S.th}>Zona</th>
+                  <th style={S.th}>Estado</th>
+                  <th style={S.th}>Observación</th>
+                  <th style={S.th}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {guardiasSupervisor.map(item => (
+                  <tr key={item.id}>
+                    <td style={S.td}>{formatFecha(item.fecha)}</td>
+                    <td style={S.td}>{horario(item)}</td>
+                    <td style={S.td}>{nombreUsuario(item.supervisor_id)}</td>
+                    <td style={S.td}>{rolLabel(item.rol_operativo)}</td>
+                    <td style={S.td}>{item.zona || ZONA_SUPERVISORES_GUARDIA}</td>
+                    <td style={S.td}><Badge type={item.estado || 'activo'}>{item.estado || 'activo'}</Badge></td>
+                    <td style={{ ...S.td, color:'#94a3b8', minWidth:180 }}>{item.observacion || '—'}</td>
+                    <td style={S.td}>
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                        <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={() => abrirEditar(item)}>Editar</button>
+                        <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={() => setHistorialSeleccionado(item)}>Historial</button>
+                        <button
+                          style={{ ...S.btn, padding:'6px 10px', fontSize:12, background: item.estado === 'inactivo' ? 'rgba(16,185,129,.1)' : 'rgba(239,68,68,.1)', color: item.estado === 'inactivo' ? '#10b981' : '#ef4444', border:`1px solid ${item.estado === 'inactivo' ? 'rgba(16,185,129,.3)' : 'rgba(239,68,68,.3)'}` }}
+                          onClick={() => cambiarEstado(item)}
+                        >
+                          {item.estado === 'inactivo' ? 'Reactivar' : 'Inactivar'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {historialSeleccionado && (
+        <div style={S.card}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+            <div>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700 }}>Historial de {nombreUsuario(historialSeleccionado.supervisor_id)}</div>
+              <div style={{ fontSize:13, color:'#64748b' }}>{historial.length} guardia(s) registradas</div>
+            </div>
+            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setHistorialSeleccionado(null)}>Cerrar</button>
+          </div>
+          {historial.map(item => (
+            <div key={`historial-${item.id}`} style={{ display:'grid', gridTemplateColumns:'140px 140px 1fr 120px', gap:12, padding:'10px 0', borderTop:'1px solid #1e2d42', fontSize:13 }}>
+              <span>{formatFecha(item.fecha)}</span>
+              <span>{horario(item)}</span>
+              <span>{item.observacion || 'Sin observación'}</span>
+              <Badge type={item.estado || 'activo'}>{item.estado || 'activo'}</Badge>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {modal && (
+        <Modal title={editId ? 'Editar guardia de supervisor' : 'Nueva guardia de supervisor'} onClose={() => { setModal(false); setEditId(null); setForm(formInicial()) }}
+          footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => { setModal(false); setEditId(null); setForm(formInicial()) }}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Fecha *</label><input type="date" style={S.input} value={form.fecha} onChange={e => setForm({...form, fecha:e.target.value})} /></div>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Zona</label><input style={S.input} value={form.zona} onChange={e => setForm({...form, zona:e.target.value})} /></div>
+          </div>
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hora inicio *</label><input type="time" style={S.input} value={form.hora_inicio} onChange={e => setForm({...form, hora_inicio:e.target.value})} /></div>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hora fin *</label><input type="time" style={S.input} value={form.hora_fin} onChange={e => setForm({...form, hora_fin:e.target.value})} /></div>
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Supervisor asignado *</label>
+            <select style={S.select} value={form.supervisor_id} onChange={e => setForm({...form, supervisor_id:e.target.value})}>
+              <option value="">Seleccionar supervisor...</option>
+              {supervisoresDisponibles.filter((s: any) => s.estado === 'activo' || s.id === form.supervisor_id).map((s: any) => (
+                <option key={s.id} value={s.id}>{s.apellido}, {s.nombre}</option>
+              ))}
+            </select>
+          </div>
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Rol operativo</label>
+              <select style={S.select} value={form.rol_operativo} onChange={e => setForm({...form, rol_operativo:e.target.value})}>
+                {rolesOperativos.map(rol => <option key={rol.value} value={rol.value}>{rol.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Estado</label>
+              <select style={S.select} value={form.estado} onChange={e => setForm({...form, estado:e.target.value})}>
+                <option value="activo">Activo</option>
+                <option value="inactivo">Inactivo</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ marginBottom:8 }}>
+            <label style={S.label}>Observación</label>
+            <textarea style={{ ...S.input, minHeight:90, resize:'vertical' }} value={form.observacion} onChange={e => setForm({...form, observacion:e.target.value})} placeholder="Comentario operativo opcional" />
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
 // ── LAYOUT GUARDIA (mobile-first) ─────────────────────────────
 function LayoutGuardia({ user, turnos, registros, novedades, setRegistros, setNovedades, guardias, objetivos }: any) {
   const [page, setPage] = useState('asistencia')
@@ -4269,6 +4559,7 @@ const esGuardia = esRolGuardia(user.rol)
     ]},
     { section:'Administración', items:[
       { id:'servicios_objetivo', icon:'🏢', label:'Servicios Objetivo' },
+      { id:'supervisores_guardia', icon:'🧭', label:'Supervisores de Guardia' },
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
     { id:'novedades', icon:'📋', label:'Novedades' },
       { id:'reportes', icon:'📈', label:'Reportes' },
@@ -4321,6 +4612,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
+              {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} />}
