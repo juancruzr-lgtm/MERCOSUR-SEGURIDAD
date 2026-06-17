@@ -8,6 +8,8 @@ import type { FiltroFechaTurnos } from '@/lib/turnos'
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
 type TipoAlerta = 'sin entrada' | 'sin ingreso' | 'entrada registrada' | 'salida registrada' | 'turno descubierto' | 'ingreso tarde' | 'reasignado'
+type TipoAlertaOperativa = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'descubierto'
+type AccionIntervencion = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
 
 interface Turno {
   id: string
@@ -69,6 +71,29 @@ interface RegistroAsistencia {
   created_at?: string
 }
 
+interface SupervisorIntervencion {
+  id: string
+  turno_id: string
+  registro_asistencia_id?: string | null
+  supervisor_id: string
+  tipo_alerta: TipoAlertaOperativa | string
+  accion: AccionIntervencion | string
+  comentario?: string | null
+  motivo?: string | null
+  guardia_anterior_id?: string | null
+  guardia_nuevo_id?: string | null
+  estado_anterior?: string | null
+  estado_nuevo?: string | null
+  created_at: string
+}
+
+interface AccionAlertaActiva {
+  turnoId: string
+  tipoAlerta: TipoAlertaOperativa
+  accion: AccionIntervencion
+  registroId?: string | null
+}
+
 function fechaHoy(): string {
   return fechaActualTurno()
 }
@@ -87,6 +112,18 @@ function fechaDDMMYYYY(fecha?: string | null): string {
 
   const [year, month, day] = fecha.slice(0, 10).split('-')
   return year && month && day ? `${day}/${month}/${year}` : '—'
+}
+
+function fechaHoraDDMMYYYY(fecha?: string | null): string {
+  if (!fecha) return '—'
+
+  return new Date(fecha).toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function fechaHoraTurno(fecha: string, hora: string): Date | null {
@@ -187,8 +224,10 @@ export default function SupervisorMobile({ user }: any) {
   const [tab, setTab] = useState('inicio')
   const [turnos, setTurnos] = useState<Turno[]>([])
   const [guardias, setGuardias] = useState<Usuario[]>([])
+  const [supervisores, setSupervisores] = useState<Usuario[]>([])
   const [objetivos, setObjetivos] = useState<Objetivo[]>([])
   const [registros, setRegistros] = useState<RegistroAsistencia[]>([])
+  const [intervenciones, setIntervenciones] = useState<SupervisorIntervencion[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [asignando, setAsignando] = useState<string | null>(null)
@@ -205,6 +244,8 @@ export default function SupervisorMobile({ user }: any) {
   const [objetivoEditando, setObjetivoEditando] = useState<Objetivo | null>(null)
   const [formGuardia, setFormGuardia] = useState({ email:'', telefono:'', estado:'activo', foto_url:'' })
   const [formObjetivo, setFormObjetivo] = useState({ direccion:'', lat:'', lng:'', radio_metros:'200', estado:'activo' })
+  const [accionAlerta, setAccionAlerta] = useState<AccionAlertaActiva | null>(null)
+  const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const [mensaje, setMensaje] = useState('')
 
   const hoy = fechaHoy()
@@ -220,7 +261,7 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
     const rango = rangoFiltroFechaTurnos(filtro, hoy)
 
-    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult] = await Promise.all([
+    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult, supervisoresResult] = await Promise.all([
       supabase
         .from('turnos')
         .select('*')
@@ -237,10 +278,17 @@ export default function SupervisorMobile({ user }: any) {
         .select('id, nombre, apellido, legajo, rol, estado, email, telefono, foto_url')
         .in('rol', ['guardia', 'vigilador'])
         .order('apellido'),
+      supabase
+        .from('usuarios')
+        .select('id, nombre, apellido, legajo, rol, estado')
+        .in('rol', ['supervisor', 'admin'])
+        .order('apellido'),
     ])
 
     let guardiasData = guardiasResult.data
     let guardiasError = guardiasResult.error
+    const supervisoresData = supervisoresResult.data
+    const supervisoresError = supervisoresResult.error
 
     if (guardiasError?.message?.includes('usuarios.email') || guardiasError?.message?.includes('usuarios.telefono') || guardiasError?.message?.includes('usuarios.foto_url')) {
       const retry = await supabase
@@ -253,8 +301,8 @@ export default function SupervisorMobile({ user }: any) {
       guardiasError = retry.error
     }
 
-    if (turnosError || objetivosError || guardiasError) {
-      setError(turnosError?.message || objetivosError?.message || guardiasError?.message || 'Error al cargar datos.')
+    if (turnosError || objetivosError || guardiasError || supervisoresError) {
+      setError(turnosError?.message || objetivosError?.message || guardiasError?.message || supervisoresError?.message || 'Error al cargar datos.')
       setLoading(false)
       return
     }
@@ -263,23 +311,42 @@ export default function SupervisorMobile({ user }: any) {
     setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
     setGuardias((guardiasData || []) as Usuario[])
+    setSupervisores((supervisoresData || []) as Usuario[])
 
     if (turnosRango.length === 0) {
       setRegistros([])
+      setIntervenciones([])
       setLoading(false)
       return
     }
 
-    const { data: registrosData, error: registrosError } = await supabase
-      .from('registros_asistencia')
-      .select('*')
-      .in('turno_id', turnosRango.map(t => t.id))
+    const turnoIds = turnosRango.map(t => t.id)
+    const [{ data: registrosData, error: registrosError }, { data: intervencionesData, error: intervencionesError }] = await Promise.all([
+      supabase
+        .from('registros_asistencia')
+        .select('*')
+        .in('turno_id', turnoIds),
+      supabase
+        .from('supervisor_intervenciones')
+        .select('*')
+        .in('turno_id', turnoIds)
+        .order('created_at', { ascending: false }),
+    ])
 
     if (registrosError) {
       setError(registrosError.message)
       setRegistros([])
     } else {
       setRegistros((registrosData || []) as RegistroAsistencia[])
+    }
+
+    if (intervencionesError) {
+      setIntervenciones([])
+      if (!/supervisor_intervenciones|schema cache|does not exist/i.test(intervencionesError.message)) {
+        setError(intervencionesError.message)
+      }
+    } else {
+      setIntervenciones((intervencionesData || []) as SupervisorIntervencion[])
     }
 
     setLoading(false)
@@ -318,6 +385,10 @@ export default function SupervisorMobile({ user }: any) {
 
   const getObjetivo = (id: string) => objetivos.find(o => o.id === id)
   const getGuardia = (id?: string | null) => guardias.find(g => g.id === id)
+  const getSupervisor = (id?: string | null) => {
+    if (!id) return null
+    return supervisores.find(s => s.id === id) || (user?.id === id ? user : null)
+  }
   const getRegistrosTurno = (turnoId: string) => registros
     .filter(r => r.turno_id === turnoId)
     .sort((a, b) => {
@@ -326,6 +397,20 @@ export default function SupervisorMobile({ user }: any) {
       return fechaB - fechaA
     })
   const getRegistro = (turnoId: string) => getRegistrosTurno(turnoId)[0]
+  const nombrePersona = (persona?: Pick<Usuario, 'nombre' | 'apellido'> | null) =>
+    persona ? `${persona.apellido}, ${persona.nombre}` : '—'
+  const nombreSupervisor = (id?: string | null) => {
+    const supervisor = getSupervisor(id)
+    return supervisor ? nombrePersona(supervisor) : 'Supervisor no encontrado'
+  }
+  const intervencionesAlerta = (turnoId: string, tipoAlerta?: TipoAlertaOperativa) =>
+    intervenciones
+      .filter(i => i.turno_id === turnoId && (!tipoAlerta || i.tipo_alerta === tipoAlerta))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const ultimaIntervencionAlerta = (turnoId: string, tipoAlerta: TipoAlertaOperativa) =>
+    intervencionesAlerta(turnoId, tipoAlerta)[0]
+  const alertaRevisada = (turnoId: string, tipoAlerta: TipoAlertaOperativa) =>
+    intervencionesAlerta(turnoId, tipoAlerta).some(i => i.accion === 'alerta_revisada')
   const existeAsistencia = (turno: Turno) => getRegistrosTurno(turno.id).length > 0
   const esDescubiertoOperativo = (turno: Turno) => !turno.guardia_id || turno.estado === 'descubierto'
   const esTurnoReasignado = (turno: Turno) => Boolean(
@@ -773,6 +858,157 @@ export default function SupervisorMobile({ user }: any) {
     setAsignando(null)
   }
 
+  const abrirAccionAlerta = (
+    turno: Turno,
+    tipoAlerta: TipoAlertaOperativa,
+    accion: AccionIntervencion,
+    registro?: RegistroAsistencia,
+  ) => {
+    setError('')
+    setMensaje('')
+    setAccionAlerta({ turnoId: turno.id, tipoAlerta, accion, registroId: registro?.id || null })
+    setFormIntervencion({
+      guardia_id: turno.guardia_id || '',
+      comentario: '',
+      motivo: accion === 'marcado_cubierto_manual' ? 'Entrada confirmada por supervisor' : '',
+    })
+  }
+
+  const cerrarAccionAlerta = () => {
+    setAccionAlerta(null)
+    setFormIntervencion({ guardia_id:'', comentario:'', motivo:'' })
+  }
+
+  const registrarIntervencion = async (payload: Omit<SupervisorIntervencion, 'id' | 'created_at' | 'supervisor_id'>) => {
+    const { data, error: insertError } = await supabase
+      .from('supervisor_intervenciones')
+      .insert({
+        ...payload,
+        supervisor_id: user.id,
+      })
+      .select()
+      .single()
+
+    if (insertError) throw insertError
+    if (data) setIntervenciones(prev => [data as SupervisorIntervencion, ...prev])
+  }
+
+  const ejecutarAccionAlerta = async () => {
+    if (!accionAlerta) return
+
+    const turno = turnos.find(t => t.id === accionAlerta.turnoId)
+    if (!turno) return
+
+    const comentario = formIntervencion.comentario.trim()
+    const motivo = formIntervencion.motivo.trim()
+    const requiereComentario = accionAlerta.accion !== 'alerta_revisada'
+
+    if (requiereComentario && !comentario) {
+      setError('Agregá un comentario para dejar constancia de la intervención.')
+      return
+    }
+
+    if (accionAlerta.accion === 'reasignacion' && !formIntervencion.guardia_id) {
+      setError('Seleccioná el nuevo guardia.')
+      return
+    }
+
+    if (accionAlerta.accion === 'reasignacion' && formIntervencion.guardia_id === turno.guardia_id) {
+      setError('Seleccioná un guardia distinto al actual.')
+      return
+    }
+
+    const loadingKey = `alerta-${turno.id}-${accionAlerta.accion}`
+    setAsignando(loadingKey)
+    setError('')
+
+    try {
+      const estadoAnterior = turno.estado
+      let estadoNuevo: EstadoTurnoPersistido | string | null = turno.estado
+      let guardiaAnteriorId: string | null = turno.guardia_id || null
+      let guardiaNuevoId: string | null = turno.guardia_id || null
+
+      if (accionAlerta.accion === 'reasignacion') {
+        guardiaNuevoId = formIntervencion.guardia_id
+        const conflicto = await guardiaTieneTurnoSuperpuesto({
+          guardia_id: guardiaNuevoId,
+          fecha: turno.fecha,
+          hora_inicio: turno.hora_inicio,
+          hora_fin: turno.hora_fin,
+        }, turno.id)
+
+        if (conflicto === null) {
+          setAsignando(null)
+          return
+        }
+
+        if (conflicto) {
+          setError(MENSAJE_TURNO_SUPERPUESTO)
+          setAsignando(null)
+          return
+        }
+
+        estadoNuevo = turno.estado === 'descubierto' ? 'programado' : turno.estado
+        const payload = {
+          guardia_id: guardiaNuevoId,
+          guardia_original_id: turno.guardia_original_id || turno.guardia_id || guardiaNuevoId,
+          estado: estadoNuevo as EstadoTurnoPersistido,
+        }
+        const { error: updateError } = await supabase.from('turnos').update(payload).eq('id', turno.id)
+        if (updateError) throw updateError
+        setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, ...payload } : t))
+      }
+
+      if (accionAlerta.accion === 'marcado_descubierto') {
+        guardiaNuevoId = null
+        estadoNuevo = 'descubierto'
+        const payload: { guardia_id: null, guardia_original_id?: string | null, estado: EstadoTurnoPersistido } = {
+          guardia_id: null,
+          estado: 'descubierto',
+        }
+
+        if (!turno.guardia_original_id && turno.guardia_id) payload.guardia_original_id = turno.guardia_id
+
+        const { error: updateError } = await supabase.from('turnos').update(payload).eq('id', turno.id)
+        if (updateError) throw updateError
+        setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, ...payload } : t))
+      }
+
+      if (accionAlerta.accion === 'marcado_cubierto_manual') {
+        estadoNuevo = 'cubierto'
+        const payload = { estado: 'cubierto' as EstadoTurnoPersistido }
+        const { error: updateError } = await supabase.from('turnos').update(payload).eq('id', turno.id)
+        if (updateError) throw updateError
+        setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, ...payload } : t))
+      }
+
+      await registrarIntervencion({
+        turno_id: turno.id,
+        registro_asistencia_id: accionAlerta.registroId || null,
+        tipo_alerta: accionAlerta.tipoAlerta,
+        accion: accionAlerta.accion,
+        comentario: comentario || (accionAlerta.accion === 'alerta_revisada' ? 'Alerta revisada' : null),
+        motivo: motivo || null,
+        guardia_anterior_id: guardiaAnteriorId,
+        guardia_nuevo_id: guardiaNuevoId,
+        estado_anterior: estadoAnterior,
+        estado_nuevo: estadoNuevo,
+      })
+
+      setMensaje('✓ Intervención registrada')
+      cerrarAccionAlerta()
+    } catch (actionError) {
+      const message = actionError instanceof Error
+        ? actionError.message
+        : typeof actionError === 'object' && actionError && 'message' in actionError
+          ? String((actionError as { message: unknown }).message)
+          : 'Error al registrar intervención.'
+      setError(message)
+    }
+
+    setAsignando(null)
+  }
+
   const tabs = [
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
     { id: 'turnos', label: 'Turnos', icon: '📅' },
@@ -808,6 +1044,143 @@ export default function SupervisorMobile({ user }: any) {
       })}
     </div>
   )
+
+  const accionLabel = (accion: string) => {
+    const labels: Record<string, string> = {
+      comentario: 'Comentario',
+      reasignacion: 'Reasignación',
+      marcado_descubierto: 'Marcado descubierto',
+      marcado_cubierto_manual: 'Cubierto manual',
+      alerta_revisada: 'Alerta revisada',
+    }
+
+    return labels[accion] || accion
+  }
+
+  const renderHistorialAlerta = (turno: Turno, tipoAlerta: TipoAlertaOperativa) => {
+    const items = intervencionesAlerta(turno.id, tipoAlerta)
+    const ultima = items[0]
+
+    return (
+      <div style={intervencionesBox}>
+        {ultima ? (
+          <div style={{ ...muted, color: '#cbd5e1' }}>
+            Intervenido por {nombreSupervisor(ultima.supervisor_id)} — {fechaHoraDDMMYYYY(ultima.created_at)}
+          </div>
+        ) : (
+          <div style={{ ...muted, color: '#f59e0b' }}>Sin supervisor asignado / pendiente</div>
+        )}
+        {items.slice(0, 3).map(item => (
+          <div key={item.id} style={intervencionItem}>
+            <div>Acción: {accionLabel(item.accion)}</div>
+            {item.guardia_nuevo_id && item.guardia_nuevo_id !== item.guardia_anterior_id && (
+              <div>Guardia nuevo: {nombrePersona(getGuardia(item.guardia_nuevo_id))}</div>
+            )}
+            {item.motivo && <div>Motivo: {item.motivo}</div>}
+            {item.comentario && <div>Comentario: {item.comentario}</div>}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  const renderPanelAccion = (turno: Turno, tipoAlerta: TipoAlertaOperativa) => {
+    if (!accionAlerta || accionAlerta.turnoId !== turno.id || accionAlerta.tipoAlerta !== tipoAlerta) return null
+
+    const requiereGuardia = accionAlerta.accion === 'reasignacion'
+    const requiereMotivo = accionAlerta.accion === 'marcado_cubierto_manual'
+    const comentarioLabel = accionAlerta.accion === 'alerta_revisada' ? 'Comentario opcional' : 'Comentario'
+    const loadingKey = `alerta-${turno.id}-${accionAlerta.accion}`
+
+    return (
+      <div style={accionPanel}>
+        <div style={{ ...label, marginTop: 0 }}>Acción: {accionLabel(accionAlerta.accion)}</div>
+
+        {requiereGuardia && (
+          <>
+            <label style={label}>Nuevo guardia</label>
+            <select
+              value={formIntervencion.guardia_id}
+              onChange={e => setFormIntervencion(prev => ({ ...prev, guardia_id: e.target.value }))}
+              style={select}
+            >
+              <option value="">Seleccionar guardia</option>
+              {guardias.filter(g => g.estado === 'activo').map(g => (
+                <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}{g.legajo ? ` - ${g.legajo}` : ''}</option>
+              ))}
+            </select>
+          </>
+        )}
+
+        {requiereMotivo && (
+          <>
+            <label style={label}>Motivo</label>
+            <input
+              style={input}
+              value={formIntervencion.motivo}
+              onChange={e => setFormIntervencion(prev => ({ ...prev, motivo: e.target.value }))}
+              placeholder="Entrada confirmada por supervisor"
+            />
+          </>
+        )}
+
+        <label style={label}>{comentarioLabel}</label>
+        <textarea
+          style={textarea}
+          value={formIntervencion.comentario}
+          onChange={e => setFormIntervencion(prev => ({ ...prev, comentario: e.target.value }))}
+          placeholder="Ej.: Se llamó al guardia. Informa que llega en 10 minutos."
+        />
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+          <button type="button" style={secondaryButton} onClick={cerrarAccionAlerta}>
+            Cancelar
+          </button>
+          <button type="button" style={refreshButton} onClick={ejecutarAccionAlerta} disabled={asignando === loadingKey}>
+            {asignando === loadingKey ? 'Guardando...' : 'Guardar'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const renderAccionesAlerta = (turno: Turno, tipoAlerta: TipoAlertaOperativa, registro?: RegistroAsistencia) => {
+    const revisada = alertaRevisada(turno.id, tipoAlerta)
+    const puedeMarcarDescubierto = turno.estado !== 'descubierto'
+
+    return (
+      <div style={alertaAccionesBox}>
+        <div style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'center', marginBottom:8 }}>
+          <div style={label}>Acciones</div>
+          {revisada && <span style={badge('finalizado')}>Revisada</span>}
+        </div>
+        <div style={alertaActionGrid}>
+          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'reasignacion', registro)}>
+            Reasignar
+          </button>
+          <button
+            type="button"
+            style={{ ...dangerButton, opacity: puedeMarcarDescubierto ? 1 : 0.55 }}
+            disabled={!puedeMarcarDescubierto}
+            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'marcado_descubierto', registro)}
+          >
+            Marcar descubierto
+          </button>
+          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'marcado_cubierto_manual', registro)}>
+            Confirmar cubierto
+          </button>
+          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'comentario', registro)}>
+            Comentar
+          </button>
+          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'alerta_revisada', registro)}>
+            Revisar
+          </button>
+        </div>
+        {renderPanelAccion(turno, tipoAlerta)}
+        {renderHistorialAlerta(turno, tipoAlerta)}
+      </div>
+    )
+  }
 
   const renderTurno = (turno: Turno) => {
     const objetivo = getObjetivo(turno.objetivo_id)
@@ -1089,6 +1462,7 @@ export default function SupervisorMobile({ user }: any) {
                               </div>
                               <span style={badge('descubierto')}>descubierto</span>
                             </div>
+                            {renderAccionesAlerta(turno, 'descubierto')}
                           </div>
                         )
                       })}
@@ -1118,6 +1492,7 @@ export default function SupervisorMobile({ user }: any) {
                               </div>
                               <span style={alertBadge('sin ingreso')}>sin ingreso</span>
                             </div>
+                            {renderAccionesAlerta(turno, 'sin_fichar')}
                           </div>
                         )
                       })}
@@ -1149,6 +1524,7 @@ export default function SupervisorMobile({ user }: any) {
                               </div>
                               <span style={alertBadge('ingreso tarde')}>Tarde</span>
                             </div>
+                            {renderAccionesAlerta(turno, 'tardanza', registro)}
                           </div>
                         )
                       })}
@@ -1182,6 +1558,7 @@ export default function SupervisorMobile({ user }: any) {
                               </div>
                               <span style={badge('descubierto')}>Fuera del radio</span>
                             </div>
+                            {renderAccionesAlerta(turno, 'fuera_radio', registro)}
                           </div>
                         )
                       })}
@@ -1474,6 +1851,12 @@ const input: React.CSSProperties = {
   marginBottom: 12,
 }
 
+const textarea: React.CSSProperties = {
+  ...input,
+  minHeight: 82,
+  resize: 'vertical',
+}
+
 const modalOverlay: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -1506,6 +1889,43 @@ const turnoActions: React.CSSProperties = {
   gridTemplateColumns: '1fr 1fr',
   gap: 8,
   marginTop: 12,
+}
+
+const alertaAccionesBox: React.CSSProperties = {
+  marginTop: 12,
+  borderTop: '1px solid #263449',
+  paddingTop: 12,
+}
+
+const alertaActionGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 8,
+}
+
+const accionPanel: React.CSSProperties = {
+  marginTop: 12,
+  background: '#0f172a',
+  border: '1px solid #263449',
+  borderRadius: 10,
+  padding: 12,
+}
+
+const intervencionesBox: React.CSSProperties = {
+  marginTop: 12,
+  background: 'rgba(15,23,42,.72)',
+  border: '1px solid #263449',
+  borderRadius: 10,
+  padding: 10,
+}
+
+const intervencionItem: React.CSSProperties = {
+  marginTop: 8,
+  paddingTop: 8,
+  borderTop: '1px solid rgba(148,163,184,.18)',
+  color: '#94a3b8',
+  fontSize: 12,
+  lineHeight: 1.45,
 }
 
 const dangerButton: React.CSSProperties = {

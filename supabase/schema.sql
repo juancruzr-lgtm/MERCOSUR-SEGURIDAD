@@ -138,6 +138,23 @@ create table if not exists alertas (
   created_at timestamptz default now()
 );
 
+-- 8. INTERVENCIONES DE SUPERVISOR
+create table if not exists supervisor_intervenciones (
+  id uuid primary key default gen_random_uuid(),
+  turno_id uuid references turnos(id) on delete cascade,
+  registro_asistencia_id uuid references registros_asistencia(id),
+  supervisor_id uuid references usuarios(id),
+  tipo_alerta text not null,
+  accion text not null,
+  comentario text,
+  motivo text,
+  guardia_anterior_id uuid references usuarios(id),
+  guardia_nuevo_id uuid references usuarios(id),
+  estado_anterior text,
+  estado_nuevo text,
+  created_at timestamptz default now()
+);
+
 -- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
@@ -148,6 +165,7 @@ alter table registros_asistencia enable row level security;
 alter table novedades enable row level security;
 alter table alertas enable row level security;
 alter table camaras enable row level security;
+alter table supervisor_intervenciones enable row level security;
 
 -- Políticas: admin ve todo, guardia ve solo lo suyo
 create policy "Admin acceso total usuarios" on usuarios for all using (true);
@@ -157,6 +175,7 @@ create policy "Admin acceso total registros" on registros_asistencia for all usi
 create policy "Admin acceso total novedades" on novedades for all using (true);
 create policy "Admin acceso total alertas" on alertas for all using (true);
 create policy "Admin acceso total camaras" on camaras for all using (true);
+create policy "Admin acceso total supervisor intervenciones" on supervisor_intervenciones for all using (true);
 
 -- ============================================================
 -- DATOS DE EJEMPLO
