@@ -1017,25 +1017,35 @@ export default function SupervisorMobile({ user }: any) {
   }
 
   const registrarIntervencion = async (payload: Omit<SupervisorIntervencion, 'id' | 'created_at' | 'supervisor_id'>) => {
+    if (!user?.id) throw new Error('Sesión de supervisor no disponible.')
+
     const turno = turnos.find(t => t.id === payload.turno_id)
     const asignacionSupervisor = turno ? supervisorGuardiaAsignado(turno) : null
+    const insertPayload = {
+      ...payload,
+      supervisor_id: user.id,
+      supervisor_intervino_id: user.id,
+      supervisor_asignado_id: asignacionSupervisor?.supervisor_id || null,
+      supervisor_guardia_id: asignacionSupervisor?.id || null,
+      jefe_operativo: JEFE_OPERATIVO,
+      director_tecnico: DIRECTOR_TECNICO,
+      zona: ZONA_OPERATIVA,
+    }
     const { data, error: insertError } = await supabase
       .from('supervisor_intervenciones')
-      .insert({
-        ...payload,
-        supervisor_id: user.id,
-        supervisor_intervino_id: user.id,
-        supervisor_asignado_id: asignacionSupervisor?.supervisor_id || null,
-        supervisor_guardia_id: asignacionSupervisor?.id || null,
-        jefe_operativo: JEFE_OPERATIVO,
-        director_tecnico: DIRECTOR_TECNICO,
-        zona: ZONA_OPERATIVA,
-      })
+      .insert(insertPayload)
       .select()
-      .single()
+      .maybeSingle()
 
     if (insertError) throw insertError
-    if (data) setIntervenciones(prev => [data as SupervisorIntervencion, ...prev])
+
+    const intervencion = data || {
+      ...insertPayload,
+      id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `local-${Date.now()}`,
+      created_at: new Date().toISOString(),
+    }
+
+    setIntervenciones(prev => [intervencion as SupervisorIntervencion, ...prev])
   }
 
   const ejecutarAccionAlerta = async () => {
@@ -1066,6 +1076,7 @@ export default function SupervisorMobile({ user }: any) {
     const loadingKey = `alerta-${turno.id}-${accionAlerta.accion}`
     setAsignando(loadingKey)
     setError('')
+    setMensaje('')
 
     try {
       const estadoAnterior = turno.estado
@@ -1149,9 +1160,9 @@ export default function SupervisorMobile({ user }: any) {
           ? String((actionError as { message: unknown }).message)
           : 'Error al registrar intervención.'
       setError(`No se pudo guardar la intervención: ${message}`)
+    } finally {
+      setAsignando(null)
     }
-
-    setAsignando(null)
   }
 
   const tabs = [
@@ -1283,6 +1294,7 @@ export default function SupervisorMobile({ user }: any) {
     return (
       <div style={accionPanel}>
         <div style={{ ...label, marginTop: 0 }}>Acción: {accionLabel(accionAlerta.accion)}</div>
+        {error && <div style={{ ...errorBox, marginTop: 10 }}>{error}</div>}
 
         {requiereGuardia && (
           <>
