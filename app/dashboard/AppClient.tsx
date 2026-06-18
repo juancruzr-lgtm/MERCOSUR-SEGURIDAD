@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcHorasLiquidables } from '@/lib/supabase'
+import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcularHorasLiquidables } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -2216,7 +2216,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     registro?.hora_entrada_real && registro?.hora_salida_real ? Math.max(0, Number(registro.horas_trabajadas) || 0) : 0
   const horasLiquidablesRegistro = (turno: Turno, registro?: RegistroAsistencia) =>
     registro?.hora_entrada_real && registro?.hora_salida_real
-      ? calcHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, registro.hora_entrada_real, registro.hora_salida_real)
+      ? calcularHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, registro.hora_entrada_real, registro.hora_salida_real)
       : 0
   const estadoPlanilla = (turno: Turno, registro?: RegistroAsistencia) => {
     if (turno.estado === 'descubierto' || !turno.guardia_id) return 'Descubierto'
@@ -2418,7 +2418,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
       const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
-        return turno ? s + calcHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, r.hora_entrada_real, r.hora_salida_real) : s
+        return turno ? s + calcularHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, r.hora_entrada_real, r.hora_salida_real) : s
       }, 0)
 
       return {
@@ -2446,7 +2446,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
       const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
-        return turno ? s + calcHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, r.hora_entrada_real, r.hora_salida_real) : s
+        return turno ? s + calcularHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, r.hora_entrada_real, r.hora_salida_real) : s
       }, 0)
       const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
       const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length

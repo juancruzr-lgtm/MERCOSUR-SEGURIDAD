@@ -147,12 +147,13 @@ function minutosFecha(fecha?: string | null): number | null {
   return new Date(anio, mes - 1, dia).getTime() / 60000
 }
 
-export function calcHorasLiquidables(
+export function calcularHorasLiquidables(
   fechaTurno: string,
   horaInicioTurno: string,
   horaFinTurno: string,
   horaEntradaReal?: string | null,
-  horaSalidaReal?: string | null
+  horaSalidaReal?: string | null,
+  toleranciaMinutos = 15
 ): number {
   const baseFecha = minutosFecha(fechaTurno)
   const inicioTurno = minutosHora(horaInicioTurno)
@@ -173,6 +174,7 @@ export function calcHorasLiquidables(
   const turnoNocturno = finTurno <= inicioTurno
   const inicioProgramado = baseFecha + inicioTurno
   const finProgramado = baseFecha + (turnoNocturno ? finTurno + 1440 : finTurno)
+  const minutosProgramados = Math.max(0, finProgramado - inicioProgramado)
 
   let entradaAbsoluta = baseFecha + entradaReal
   if (turnoNocturno && entradaReal <= finTurno) {
@@ -183,15 +185,27 @@ export function calcHorasLiquidables(
   if (turnoNocturno && salidaReal <= inicioTurno) {
     salidaAbsoluta += 1440
   }
+  if (salidaAbsoluta < entradaAbsoluta) {
+    salidaAbsoluta += 1440
+  }
 
-  const entradaEfectiva = Math.max(inicioProgramado, entradaAbsoluta)
-  const salidaLiquidable = salidaAbsoluta > finProgramado
-    ? finProgramado
-    : Math.floor(salidaAbsoluta / 30) * 30
-  const salidaEfectiva = Math.min(Math.max(salidaLiquidable, inicioProgramado), finProgramado)
-  const minutosLiquidables = Math.max(0, salidaEfectiva - entradaEfectiva)
+  const minutosReales = Math.max(0, salidaAbsoluta - entradaAbsoluta)
+  const diferencia = Math.abs(minutosProgramados - minutosReales)
+  const minutosLiquidables = diferencia <= toleranciaMinutos
+    ? minutosProgramados
+    : minutosReales
 
   return Number((minutosLiquidables / 60).toFixed(2))
+}
+
+export function calcHorasLiquidables(
+  fechaTurno: string,
+  horaInicioTurno: string,
+  horaFinTurno: string,
+  horaEntradaReal?: string | null,
+  horaSalidaReal?: string | null
+): number {
+  return calcularHorasLiquidables(fechaTurno, horaInicioTurno, horaFinTurno, horaEntradaReal, horaSalidaReal)
 }
 
 export function calcAlertaEntrada(asignada: string, real: string): 'tarde' | 'anticipada' | null {
