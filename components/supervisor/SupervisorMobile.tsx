@@ -9,7 +9,7 @@ type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubiert
 type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
 type TipoAlerta = 'sin entrada' | 'sin ingreso' | 'entrada registrada' | 'salida registrada' | 'turno descubierto' | 'ingreso tarde' | 'reasignado'
 type TipoAlertaOperativa = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'descubierto'
-type AccionIntervencion = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
+type AccionIntervencion = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'confirmar_cubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
 
 const ZONA_OPERATIVA = 'Rosario / General'
 const JEFE_OPERATIVO = 'Aldo Monzón'
@@ -118,6 +118,12 @@ interface AccionAlertaActiva {
   registroId?: string | null
 }
 
+interface AlertaIntervenida {
+  turno: Turno
+  tipoAlerta: TipoAlertaOperativa
+  intervencion: SupervisorIntervencion
+}
+
 function fechaHoy(): string {
   return fechaActualTurno()
 }
@@ -135,6 +141,18 @@ function fechaHoraEnRango(fecha: string, hora: string, fechaInicio: string, hora
   if (fin <= inicio) fin.setDate(fin.getDate() + 1)
 
   return valor >= inicio && valor < fin
+}
+
+function esTipoAlertaOperativa(value?: string | null): value is TipoAlertaOperativa {
+  return value === 'sin_fichar' || value === 'tardanza' || value === 'fuera_radio' || value === 'descubierto'
+}
+
+function accionNormalizada(accion?: string | null): string {
+  return accion === 'marcado_cubierto_manual' ? 'confirmar_cubierto' : accion || ''
+}
+
+function accionResuelveAlerta(accion?: string | null): boolean {
+  return ['confirmar_cubierto', 'reasignacion', 'marcado_descubierto', 'alerta_revisada'].includes(accionNormalizada(accion))
 }
 
 function horasCortas(horas?: number | null): string {
@@ -476,8 +494,14 @@ export default function SupervisorMobile({ user }: any) {
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   const ultimaIntervencionAlerta = (turnoId: string, tipoAlerta: TipoAlertaOperativa) =>
     intervencionesAlerta(turnoId, tipoAlerta)[0]
-  const alertaRevisada = (turnoId: string, tipoAlerta: TipoAlertaOperativa) =>
-    intervencionesAlerta(turnoId, tipoAlerta).some(i => i.accion === 'alerta_revisada')
+  const alertaIntervenida = (turnoId: string, tipoAlerta: TipoAlertaOperativa) =>
+    intervencionesAlerta(turnoId, tipoAlerta).some(i => accionResuelveAlerta(i.accion))
+  const turnoTieneIntervencionResolutiva = (turnoId: string) =>
+    intervencionesAlerta(turnoId).some(i => accionResuelveAlerta(i.accion))
+  const alertaPendiente = (turno: Turno, tipoAlerta: TipoAlertaOperativa) =>
+    tipoAlerta === 'descubierto'
+      ? !turnoTieneIntervencionResolutiva(turno.id)
+      : !alertaIntervenida(turno.id, tipoAlerta)
   const existeAsistencia = (turno: Turno) => getRegistrosTurno(turno.id).length > 0
   const esDescubiertoOperativo = (turno: Turno) => !turno.guardia_id || turno.estado === 'descubierto'
   const esTurnoReasignado = (turno: Turno) => Boolean(
@@ -582,6 +606,52 @@ export default function SupervisorMobile({ user }: any) {
     () => turnos.filter(t => getRegistro(t.id)?.gps_ingreso_estado === 'fuera_radio'),
     [turnos, registros],
   )
+
+  const turnosDescubiertosPendientes = useMemo(
+    () => turnosDescubiertosOperativos.filter(t => alertaPendiente(t, 'descubierto')),
+    [turnosDescubiertosOperativos, intervenciones],
+  )
+
+  const turnosSinIngresoPendientes = useMemo(
+    () => turnosSinIngreso.filter(t => alertaPendiente(t, 'sin_fichar')),
+    [turnosSinIngreso, intervenciones],
+  )
+
+  const turnosConTardanzaPendientes = useMemo(
+    () => turnosConTardanzaRegistrada.filter(t => alertaPendiente(t, 'tardanza')),
+    [turnosConTardanzaRegistrada, intervenciones],
+  )
+
+  const turnosConGpsFueraRadioPendientes = useMemo(
+    () => turnosConGpsFueraRadio.filter(t => alertaPendiente(t, 'fuera_radio')),
+    [turnosConGpsFueraRadio, intervenciones],
+  )
+
+  const totalAlertasPendientes =
+    turnosDescubiertosPendientes.length +
+    turnosSinIngresoPendientes.length +
+    turnosConTardanzaPendientes.length +
+    turnosConGpsFueraRadioPendientes.length
+
+  const alertasIntervenidas = useMemo<AlertaIntervenida[]>(() => {
+    const porAlerta = new Map<string, AlertaIntervenida>()
+
+    intervenciones.forEach(intervencion => {
+      if (!accionResuelveAlerta(intervencion.accion) || !esTipoAlertaOperativa(intervencion.tipo_alerta)) return
+
+      const turno = turnos.find(t => t.id === intervencion.turno_id)
+      if (!turno) return
+
+      const key = `${intervencion.turno_id}-${intervencion.tipo_alerta}`
+      const actual = porAlerta.get(key)
+      if (!actual || new Date(intervencion.created_at).getTime() > new Date(actual.intervencion.created_at).getTime()) {
+        porAlerta.set(key, { turno, tipoAlerta: intervencion.tipo_alerta, intervencion })
+      }
+    })
+
+    return Array.from(porAlerta.values())
+      .sort((a, b) => new Date(b.intervencion.created_at).getTime() - new Date(a.intervencion.created_at).getTime())
+  }, [intervenciones, turnos])
 
   const guardiaTieneTurnoSuperpuesto = async (
     candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>,
@@ -937,7 +1007,7 @@ export default function SupervisorMobile({ user }: any) {
     setFormIntervencion({
       guardia_id: turno.guardia_id || '',
       comentario: '',
-      motivo: accion === 'marcado_cubierto_manual' ? 'Entrada confirmada por supervisor' : '',
+      motivo: accion === 'confirmar_cubierto' ? 'Entrada confirmada por supervisor' : '',
     })
   }
 
@@ -976,10 +1046,10 @@ export default function SupervisorMobile({ user }: any) {
 
     const comentario = formIntervencion.comentario.trim()
     const motivo = formIntervencion.motivo.trim()
-    const requiereComentario = accionAlerta.accion !== 'alerta_revisada'
+    const requiereComentario = accionAlerta.accion === 'comentario'
 
     if (requiereComentario && !comentario) {
-      setError('Agregá un comentario para dejar constancia de la intervención.')
+      setError('Agregá un comentario para guardar la intervención.')
       return
     }
 
@@ -1049,7 +1119,7 @@ export default function SupervisorMobile({ user }: any) {
         setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, ...payload } : t))
       }
 
-      if (accionAlerta.accion === 'marcado_cubierto_manual') {
+      if (accionAlerta.accion === 'confirmar_cubierto') {
         estadoNuevo = 'cubierto'
         const payload = { estado: 'cubierto' as EstadoTurnoPersistido }
         const { error: updateError } = await supabase.from('turnos').update(payload).eq('id', turno.id)
@@ -1062,8 +1132,8 @@ export default function SupervisorMobile({ user }: any) {
         registro_asistencia_id: accionAlerta.registroId || null,
         tipo_alerta: accionAlerta.tipoAlerta,
         accion: accionAlerta.accion,
-        comentario: comentario || (accionAlerta.accion === 'alerta_revisada' ? 'Alerta revisada' : null),
-        motivo: motivo || null,
+        comentario: comentario || null,
+        motivo: motivo || (accionAlerta.accion === 'confirmar_cubierto' ? 'Entrada confirmada por supervisor' : null),
         guardia_anterior_id: guardiaAnteriorId,
         guardia_nuevo_id: guardiaNuevoId,
         estado_anterior: estadoAnterior,
@@ -1078,7 +1148,7 @@ export default function SupervisorMobile({ user }: any) {
         : typeof actionError === 'object' && actionError && 'message' in actionError
           ? String((actionError as { message: unknown }).message)
           : 'Error al registrar intervención.'
-      setError(message)
+      setError(`No se pudo guardar la intervención: ${message}`)
     }
 
     setAsignando(null)
@@ -1125,7 +1195,8 @@ export default function SupervisorMobile({ user }: any) {
       comentario: 'Comentario',
       reasignacion: 'Reasignación',
       marcado_descubierto: 'Marcado descubierto',
-      marcado_cubierto_manual: 'Cubierto manual',
+      confirmar_cubierto: 'Confirmar cubierto',
+      marcado_cubierto_manual: 'Confirmar cubierto',
       alerta_revisada: 'Alerta revisada',
     }
 
@@ -1182,7 +1253,7 @@ export default function SupervisorMobile({ user }: any) {
             Intervenido por {nombreSupervisor(ultima.supervisor_intervino_id || ultima.supervisor_id)} — {fechaHoraDDMMYYYY(ultima.created_at)}
           </div>
         ) : (
-          <div style={{ ...muted, color: '#f59e0b' }}>Sin intervención registrada / pendiente</div>
+          <div style={{ ...muted, color: '#f59e0b' }}>Aún no hay intervenciones guardadas.</div>
         )}
         {items.slice(0, 3).map(item => (
           <div key={item.id} style={intervencionItem}>
@@ -1205,8 +1276,8 @@ export default function SupervisorMobile({ user }: any) {
     if (!accionAlerta || accionAlerta.turnoId !== turno.id || accionAlerta.tipoAlerta !== tipoAlerta) return null
 
     const requiereGuardia = accionAlerta.accion === 'reasignacion'
-    const requiereMotivo = accionAlerta.accion === 'marcado_cubierto_manual'
-    const comentarioLabel = accionAlerta.accion === 'alerta_revisada' ? 'Comentario opcional' : 'Comentario'
+    const requiereMotivo = accionAlerta.accion === 'confirmar_cubierto'
+    const comentarioLabel = accionAlerta.accion === 'comentario' ? 'Comentario *' : 'Comentario'
     const loadingKey = `alerta-${turno.id}-${accionAlerta.accion}`
 
     return (
@@ -1246,7 +1317,7 @@ export default function SupervisorMobile({ user }: any) {
           style={textarea}
           value={formIntervencion.comentario}
           onChange={e => setFormIntervencion(prev => ({ ...prev, comentario: e.target.value }))}
-          placeholder="Ej.: Se llamó al guardia. Informa que llega en 10 minutos."
+          placeholder={accionAlerta.accion === 'confirmar_cubierto' ? 'Ej.: llegó' : 'Ej.: Se llamó al guardia. Informa que llega en 10 minutos.'}
         />
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
@@ -1262,7 +1333,7 @@ export default function SupervisorMobile({ user }: any) {
   }
 
   const renderAccionesAlerta = (turno: Turno, tipoAlerta: TipoAlertaOperativa, registro?: RegistroAsistencia) => {
-    const revisada = alertaRevisada(turno.id, tipoAlerta)
+    const intervenida = alertaIntervenida(turno.id, tipoAlerta)
     const puedeMarcarDescubierto = turno.estado !== 'descubierto'
 
     return (
@@ -1270,9 +1341,12 @@ export default function SupervisorMobile({ user }: any) {
         {renderContextoAlerta(turno, tipoAlerta)}
         <div style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'center', marginBottom:8 }}>
           <div style={label}>Acciones</div>
-          {revisada && <span style={badge('finalizado')}>Revisada</span>}
+          {intervenida && <span style={badge('finalizado')}>Intervenida</span>}
         </div>
         <div style={alertaActionGrid}>
+          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'confirmar_cubierto', registro)}>
+            Confirmar cubierto
+          </button>
           <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'reasignacion', registro)}>
             Reasignar
           </button>
@@ -1284,17 +1358,60 @@ export default function SupervisorMobile({ user }: any) {
           >
             Marcar descubierto
           </button>
-          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'marcado_cubierto_manual', registro)}>
-            Confirmar cubierto
-          </button>
           <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'comentario', registro)}>
             Comentar
           </button>
-          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'alerta_revisada', registro)}>
-            Revisar
-          </button>
         </div>
         {renderPanelAccion(turno, tipoAlerta)}
+        {renderHistorialAlerta(turno, tipoAlerta)}
+      </div>
+    )
+  }
+
+  const renderAlertaIntervenida = ({ turno, tipoAlerta, intervencion }: AlertaIntervenida) => {
+    const objetivo = getObjetivo(turno.objetivo_id)
+    const registro = getRegistro(turno.id)
+    const guardia = getGuardia(registro?.guardia_id || turno.guardia_id)
+
+    return (
+      <div key={`intervenida-${turno.id}-${tipoAlerta}`} style={{ ...turnoCard, background: '#111827' }}>
+        <div style={turnoTop}>
+          <div>
+            <div style={objetivoName}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
+            <div style={muted}>{guardia ? `${guardia.apellido}, ${guardia.nombre}` : nombreGuardiaEsperado(turno)}</div>
+            <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+            <div style={muted}>Tipo de alerta: {tipoAlerta}</div>
+          </div>
+          <span style={badge('finalizado')}>Intervenida</span>
+        </div>
+
+        <div style={contextoAlertaBox}>
+          <div>
+            <div style={label}>Acción realizada</div>
+            <div style={registroValue}>{accionLabel(intervencion.accion)}</div>
+          </div>
+          <div>
+            <div style={label}>Supervisor que intervino</div>
+            <div style={registroValue}>{nombreSupervisor(intervencion.supervisor_intervino_id || intervencion.supervisor_id)}</div>
+          </div>
+          <div>
+            <div style={label}>Supervisor asignado</div>
+            <div style={registroValue}>{intervencion.supervisor_asignado_id ? nombreSupervisor(intervencion.supervisor_asignado_id) : nombreSupervisorGuardia(turno)}</div>
+          </div>
+          <div>
+            <div style={label}>Fecha/hora</div>
+            <div style={registroValue}>{fechaHoraDDMMYYYY(intervencion.created_at)}</div>
+          </div>
+          <div>
+            <div style={label}>Estado</div>
+            <div style={registroValue}>Intervenida</div>
+          </div>
+          <div style={{ gridColumn:'1 / -1' }}>
+            <div style={label}>Comentario</div>
+            <div style={registroValue}>{intervencion.comentario || '—'}</div>
+          </div>
+        </div>
+
         {renderHistorialAlerta(turno, tipoAlerta)}
       </div>
     )
@@ -1558,14 +1675,19 @@ export default function SupervisorMobile({ user }: any) {
             {tab === 'alertas' && (
               <section>
                 <div style={screenTitle}>Alertas de asistencia</div>
+                <div style={{ ...objetivoName, marginBottom: 8 }}>Alertas pendientes</div>
 
-                {turnosDescubiertosOperativos.length > 0 && (
+                {totalAlertasPendientes === 0 && (
+                  <div style={empty}>No hay alertas pendientes.</div>
+                )}
+
+                {turnosDescubiertosPendientes.length > 0 && (
                   <div style={{ ...card, borderColor: 'rgba(239,68,68,.35)', background: 'rgba(239,68,68,.08)' }}>
                     <div style={{ ...objetivoName, color: '#fca5a5' }}>Puestos sin cobertura</div>
-                    <div style={muted}>{turnosDescubiertosOperativos.length} turno(s) requieren acción.</div>
+                    <div style={muted}>{turnosDescubiertosPendientes.length} turno(s) requieren acción.</div>
 
                     <div style={{ marginTop: 12 }}>
-                      {turnosDescubiertosOperativos.map(turno => {
+                      {turnosDescubiertosPendientes.map(turno => {
                         const objetivo = getObjetivo(turno.objetivo_id)
 
                         return (
@@ -1588,13 +1710,13 @@ export default function SupervisorMobile({ user }: any) {
                   </div>
                 )}
 
-                {turnosSinIngreso.length > 0 && (
+                {turnosSinIngresoPendientes.length > 0 && (
                   <div style={{ ...card, borderColor: 'rgba(245,158,11,.35)', background: 'rgba(245,158,11,.08)' }}>
                     <div style={{ ...objetivoName, color: '#fbbf24' }}>Guardias sin fichar</div>
-                    <div style={muted}>{turnosSinIngreso.length} turno(s) iniciados hace más de 15 minutos sin entrada registrada.</div>
+                    <div style={muted}>{turnosSinIngresoPendientes.length} turno(s) iniciados hace más de 15 minutos sin entrada registrada.</div>
 
                     <div style={{ marginTop: 12 }}>
-                      {turnosSinIngreso.map(turno => {
+                      {turnosSinIngresoPendientes.map(turno => {
                         const objetivo = getObjetivo(turno.objetivo_id)
                         const guardia = getGuardia(turno.guardia_id)
 
@@ -1618,13 +1740,13 @@ export default function SupervisorMobile({ user }: any) {
                   </div>
                 )}
 
-                {turnosConTardanzaRegistrada.length > 0 && (
+                {turnosConTardanzaPendientes.length > 0 && (
                   <div style={{ ...card, borderColor: 'rgba(245,158,11,.35)', background: 'rgba(245,158,11,.08)' }}>
                     <div style={{ ...objetivoName, color: '#fbbf24' }}>Tardanzas registradas</div>
-                    <div style={muted}>{turnosConTardanzaRegistrada.length} turno(s) con entrada posterior al inicio programado.</div>
+                    <div style={muted}>{turnosConTardanzaPendientes.length} turno(s) con entrada posterior al inicio programado.</div>
 
                     <div style={{ marginTop: 12 }}>
-                      {turnosConTardanzaRegistrada.map(turno => {
+                      {turnosConTardanzaPendientes.map(turno => {
                         const objetivo = getObjetivo(turno.objetivo_id)
                         const registro = getRegistro(turno.id)
                         const guardia = getGuardia(registro?.guardia_id || turno.guardia_id)
@@ -1650,13 +1772,13 @@ export default function SupervisorMobile({ user }: any) {
                   </div>
                 )}
 
-                {turnosConGpsFueraRadio.length > 0 && (
+                {turnosConGpsFueraRadioPendientes.length > 0 && (
                   <div style={{ ...card, borderColor: 'rgba(239,68,68,.35)', background: 'rgba(239,68,68,.08)' }}>
                     <div style={{ ...objetivoName, color: '#fca5a5' }}>Fichajes fuera de radio</div>
-                    <div style={muted}>{turnosConGpsFueraRadio.length} ingreso(s) registrados fuera del radio del objetivo.</div>
+                    <div style={muted}>{turnosConGpsFueraRadioPendientes.length} ingreso(s) registrados fuera del radio del objetivo.</div>
 
                     <div style={{ marginTop: 12 }}>
-                      {turnosConGpsFueraRadio.map(turno => {
+                      {turnosConGpsFueraRadioPendientes.map(turno => {
                         const objetivo = getObjetivo(turno.objetivo_id)
                         const registro = getRegistro(turno.id)
                         const guardia = getGuardia(registro?.guardia_id || turno.guardia_id)
@@ -1684,27 +1806,17 @@ export default function SupervisorMobile({ user }: any) {
                   </div>
                 )}
 
-                {turnos.length === 0 ? (
-                  <div style={empty}>No hay turnos para auditar.</div>
-                ) : turnos.map(turno => {
-                  const objetivo = getObjetivo(turno.objetivo_id)
-                  const alerta = alertaTurno(turno)
-
-                  return (
-                    <div key={turno.id} style={card}>
-                      <div style={turnoTop}>
-                        <div>
-                          <div style={objetivoName}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
-                          <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
-                          <div style={muted}>Estado: {turno.estado || 'programado'}</div>
-                          <div style={muted}>Guardia esperado: {nombreGuardiaEsperado(turno)}</div>
-                        </div>
-                        <span style={alertBadge(alerta)}>{alerta}</span>
-                      </div>
-                      {renderContextoAlerta(turno)}
+                <div style={{ ...objetivoName, margin:'20px 0 8px' }}>Alertas intervenidas</div>
+                {alertasIntervenidas.length === 0 ? (
+                  <div style={empty}>No hay alertas intervenidas.</div>
+                ) : (
+                  <div style={{ ...card, borderColor:'rgba(16,185,129,.25)', background:'rgba(16,185,129,.07)' }}>
+                    <div style={muted}>{alertasIntervenidas.length} alerta(s) resueltas por intervención.</div>
+                    <div style={{ marginTop: 12 }}>
+                      {alertasIntervenidas.map(renderAlertaIntervenida)}
                     </div>
-                  )
-                })}
+                  </div>
+                )}
               </section>
             )}
 
