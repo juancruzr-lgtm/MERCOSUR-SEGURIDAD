@@ -277,6 +277,22 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   const [resetLoading, setResetLoading] = useState(false)
   const [magicLoading, setMagicLoading] = useState(false)
 
+  const mensajeErrorAuth = (authError: unknown, accion: string) => {
+    const raw = authError instanceof Error
+      ? authError.message
+      : typeof authError === 'object' && authError && 'message' in authError
+        ? String((authError as { message: unknown }).message)
+        : String(authError || '')
+
+    if (/invalid login credentials/i.test(raw)) return 'Email o contraseña/DNI incorrectos.'
+    if (/email not confirmed/i.test(raw)) return 'El email todavía no fue confirmado. Usá Magic Link o pedí un nuevo enlace.'
+    if (/rate limit|too many requests|too many/i.test(raw)) return `Supabase limitó temporalmente los envíos de email. Esperá unos minutos y volvé a intentar. Detalle: ${raw}`
+    if (/smtp|email|mail|send|provider/i.test(raw)) return `No se pudo enviar el email de ${accion}. Revisá la configuración SMTP en Supabase. Detalle: ${raw}`
+    if (/redirect/i.test(raw)) return `No se pudo generar el enlace de ${accion}. Revisá las URLs permitidas en Supabase Auth. Detalle: ${raw}`
+
+    return raw || `No se pudo completar ${accion}.`
+  }
+
   const login = async () => {
     const emailLogin = email.trim().toLowerCase()
     const passwordLogin = pass.trim()
@@ -294,7 +310,7 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
     console.log('LOGIN DATA', data)
 
     if (err) {
-      setError(err.message)
+      setError(mensajeErrorAuth(err, 'inicio de sesión'))
       setLoading(false)
       return
     }
@@ -349,9 +365,9 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
     })
 
     if (error) {
-      setError(error.message)
+      setError(mensajeErrorAuth(error, 'recuperación de contraseña'))
     } else {
-      setResetMsg('Si el email existe, se enviará un enlace de recuperación.')
+      setResetMsg('Si el email existe y SMTP está configurado en Supabase, se enviará un enlace de recuperación.')
     }
 
     setResetLoading(false)
@@ -376,9 +392,9 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
     })
 
     if (error) {
-      setError(error.message)
+      setError(mensajeErrorAuth(error, 'Magic Link'))
     } else {
-      setResetMsg('Si el email existe, se enviará un enlace de ingreso.')
+      setResetMsg('Si el email existe y SMTP está configurado en Supabase, se enviará un enlace de ingreso.')
     }
 
     setMagicLoading(false)
