@@ -13,13 +13,15 @@ type BrowserPushSubscription = {
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
-  if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
+  if (admin.error) return NextResponse.json({ error: `Error API subscribe: ${admin.error}` }, { status: 500 })
 
   const token = getBearerToken(req)
-  if (!token) return NextResponse.json({ error: 'Sesión requerida' }, { status: 401 })
+  if (!token) return NextResponse.json({ error: 'Sesión requerida para guardar la suscripción push.' }, { status: 401 })
 
   const { data: authData, error: authError } = await admin.client.auth.getUser(token)
-  if (authError || !authData.user) return NextResponse.json({ error: 'Sesión inválida' }, { status: 401 })
+  if (authError || !authData.user) {
+    return NextResponse.json({ error: authError?.message || 'Sesión inválida para guardar la suscripción push.' }, { status: 401 })
+  }
 
   const { data: perfil, error: perfilError } = await admin.client
     .from('usuarios')
@@ -28,18 +30,22 @@ export async function POST(req: NextRequest) {
     .maybeSingle()
 
   if (perfilError) return NextResponse.json({ error: perfilError.message }, { status: 500 })
-  if (!perfil) return NextResponse.json({ error: 'Usuario sin perfil operativo' }, { status: 404 })
-  if (perfil.estado !== 'activo') return NextResponse.json({ error: 'Usuario inactivo' }, { status: 403 })
+  if (!perfil) return NextResponse.json({ error: 'Usuario sin perfil operativo asociado al login actual.' }, { status: 404 })
+  if (perfil.estado !== 'activo') return NextResponse.json({ error: 'Usuario inactivo: no puede registrar notificaciones.' }, { status: 403 })
 
   const body = await req.json().catch(() => null)
+  if (!body) {
+    return NextResponse.json({ error: 'Body JSON inválido para registrar la suscripción push.' }, { status: 400 })
+  }
+
   const subscription = body?.subscription as BrowserPushSubscription | undefined
   const endpoint = subscription?.endpoint
   const p256dh = subscription?.keys?.p256dh
   const auth = subscription?.keys?.auth
 
-  if (!endpoint || !p256dh || !auth) {
-    return NextResponse.json({ error: 'Suscripción push inválida' }, { status: 400 })
-  }
+  if (!endpoint) return NextResponse.json({ error: 'Suscripción push inválida: falta endpoint.' }, { status: 400 })
+  if (!p256dh) return NextResponse.json({ error: 'Suscripción push inválida: falta clave p256dh.' }, { status: 400 })
+  if (!auth) return NextResponse.json({ error: 'Suscripción push inválida: falta clave auth.' }, { status: 400 })
 
   const { error } = await admin.client
     .from('push_subscriptions')
@@ -53,7 +59,7 @@ export async function POST(req: NextRequest) {
       updated_at: new Date().toISOString(),
     }, { onConflict: 'endpoint' })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ error: `No se pudo guardar en push_subscriptions: ${error.message}` }, { status: 500 })
 
   return NextResponse.json({ ok: true, message: 'Notificaciones activadas.' })
 }

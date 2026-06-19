@@ -465,10 +465,18 @@ export default function GuardiaMobile({ user }: { user: any }) {
 
   const activarPush = async () => {
     setActivandoPush(true)
-    const resultado = await activarNotificacionesPush()
-    setMensaje({ texto: resultado.message, tipo: resultado.ok ? 'ok' : 'error' })
-    setActivandoPush(false)
-    setTimeout(() => setMensaje(null), 4000)
+    try {
+      const resultado = await activarNotificacionesPush()
+      setMensaje({ texto: resultado.message, tipo: resultado.ok ? 'ok' : 'error' })
+      setTimeout(() => setMensaje(null), 7000)
+    } catch (error) {
+      setMensaje({
+        texto: error instanceof Error ? error.message : 'No se pudo activar notificaciones. Error desconocido.',
+        tipo: 'error',
+      })
+    } finally {
+      setActivandoPush(false)
+    }
   }
 
   const cambiarPassword = async () => {

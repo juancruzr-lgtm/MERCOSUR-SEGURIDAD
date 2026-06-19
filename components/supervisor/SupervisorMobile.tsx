@@ -334,14 +334,19 @@ export default function SupervisorMobile({ user }: any) {
 
   const activarPush = async () => {
     setActivandoPush(true)
-    const resultado = await activarNotificacionesPush()
-    if (resultado.ok) {
-      setMensaje(resultado.message)
-      setError('')
-    } else {
-      setError(resultado.message)
+    try {
+      const resultado = await activarNotificacionesPush()
+      if (resultado.ok) {
+        setMensaje(resultado.message)
+        setError('')
+      } else {
+        setError(resultado.message)
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'No se pudo activar notificaciones. Error desconocido.')
+    } finally {
+      setActivandoPush(false)
     }
-    setActivandoPush(false)
   }
 
   const cargarDatos = async (filtro: FiltroFechaTurnos = filtroFecha) => {
