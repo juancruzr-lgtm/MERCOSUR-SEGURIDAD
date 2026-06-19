@@ -2017,6 +2017,10 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', tipo:'Rutina', descripcion:'', prioridad:'normal' })
   const [loading, setLoading] = useState(false)
+  const mesActual = new Date().toLocaleDateString('sv-SE').slice(0, 7)
+  const [mesSeleccionado, setMesSeleccionado] = useState(mesActual)
+  const [estadoFiltro, setEstadoFiltro] = useState('todos')
+  const [prioridadFiltro, setPrioridadFiltro] = useState('todas')
 
   const guardar = async () => {
     setLoading(true)
@@ -2030,34 +2034,138 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
     setNovedades((prev: any[]) => prev.map((n: Novedad) => n.id === id ? { ...n, estado } : n))
   }
 
+  const mesNovedad = (novedad: Novedad) => {
+    const fecha = new Date(novedad.created_at)
+    if (Number.isNaN(fecha.getTime())) return novedad.created_at?.slice(0, 7) || mesActual
+
+    return fecha.toLocaleDateString('sv-SE').slice(0, 7)
+  }
+
+  const labelMes = (mes: string) => {
+    const [anio, numeroMes] = mes.split('-').map(Number)
+    if (!anio || !numeroMes) return mes
+
+    const texto = new Date(anio, numeroMes - 1, 1).toLocaleDateString('es-AR', { month:'long', year:'numeric' })
+    return texto.charAt(0).toUpperCase() + texto.slice(1)
+  }
+
+  const ordenarNovedades = (items: Novedad[]) =>
+    [...items].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+
+  const filtrarNovedades = (items: Novedad[]) =>
+    ordenarNovedades(items.filter((n: Novedad) =>
+      (estadoFiltro === 'todos' || n.estado === estadoFiltro) &&
+      (prioridadFiltro === 'todas' || n.prioridad === prioridadFiltro)
+    ))
+
+  const novedadesDelMes = novedades.filter((n: Novedad) => mesNovedad(n) === mesSeleccionado)
+  const novedadesVisibles = filtrarNovedades(novedadesDelMes)
+  const pendientesMesActual = novedades
+    .filter((n: Novedad) => mesNovedad(n) === mesActual && n.estado === 'pendiente')
+    .length
+  const mesesHistoricos = Array.from(new Set(novedades.map((n: Novedad) => mesNovedad(n))))
+    .filter((mes: string) => mes < mesActual)
+    .sort((a: string, b: string) => b.localeCompare(a))
+  const cantidadMes = (mes: string) => novedades.filter((n: Novedad) => mesNovedad(n) === mes).length
+
+  const renderNovedad = (n: Novedad) => {
+    const g = guardias.find((x: Usuario) => x.id === n.guardia_id)
+    const o = objetivos.find((x: Objetivo) => x.id === n.objetivo_id)
+
+    return (
+      <div key={n.id} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:10, padding:16, marginBottom:12 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:8 }}>
+          <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+            <Badge type={n.prioridad}>{n.prioridad.toUpperCase()}</Badge>
+            <Badge type={n.estado}>{n.estado}</Badge>
+            <strong style={{ fontSize:14 }}>{n.tipo}</strong>
+          </div>
+          <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', justifyContent:'flex-end' }}>
+            {n.estado === 'pendiente' && <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }} onClick={() => cambiarEstado(n.id, 'revisada')}>Revisada</button>}
+            {n.estado === 'revisada' && <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }} onClick={() => cambiarEstado(n.id, 'resuelta')}>Resuelta</button>}
+            <span style={{ fontSize:11, color:'#64748b' }}>{new Date(n.created_at).toLocaleString('es-AR')}</span>
+          </div>
+        </div>
+        <div style={{ fontSize:13, color:'#cbd5e1' }}>{n.descripcion}</div>
+        <div style={{ fontSize:11, color:'#64748b', marginTop:8 }}>📍 {o?.nombre || '—'} · 👮 {g?.nombre} {g?.apellido}</div>
+      </div>
+    )
+  }
+
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
-        <div style={{ flex:1 }}><div style={S.title}>Novedades</div><div style={S.sub2}>{novedades.filter((n: Novedad) => n.estado === 'pendiente').length} pendientes</div></div>
+        <div style={{ flex:1 }}><div style={S.title}>Novedades</div><div style={S.sub2}>{pendientesMesActual} pendientes en {labelMes(mesActual)}</div></div>
         <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => setModal(true)}>+ Nueva Novedad</button>
       </div>
-      {novedades.map((n: Novedad) => {
-        const g = guardias.find((x: Usuario) => x.id === n.guardia_id)
-        const o = objetivos.find((x: Objetivo) => x.id === n.objetivo_id)
-        return (
-          <div key={n.id} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:10, padding:16, marginBottom:12 }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-              <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-                <Badge type={n.prioridad}>{n.prioridad.toUpperCase()}</Badge>
-                <Badge type={n.estado}>{n.estado}</Badge>
-                <strong style={{ fontSize:14 }}>{n.tipo}</strong>
-              </div>
-              <div style={{ display:'flex', gap:6, alignItems:'center' }}>
-                {n.estado === 'pendiente' && <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }} onClick={() => cambiarEstado(n.id, 'revisada')}>Revisada</button>}
-                {n.estado === 'revisada' && <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }} onClick={() => cambiarEstado(n.id, 'resuelta')}>Resuelta</button>}
-                <span style={{ fontSize:11, color:'#64748b' }}>{new Date(n.created_at).toLocaleString('es-AR')}</span>
-              </div>
+
+      <div style={{ ...S.card, display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12 }}>
+        <div>
+          <label style={S.label}>Mes</label>
+          <input type="month" style={S.input} value={mesSeleccionado} onChange={e => setMesSeleccionado(e.target.value || mesActual)} />
+        </div>
+        <div>
+          <label style={S.label}>Estado</label>
+          <select style={S.select} value={estadoFiltro} onChange={e => setEstadoFiltro(e.target.value)}>
+            <option value="todos">Todos</option>
+            <option value="pendiente">Pendientes</option>
+            <option value="revisada">Revisadas</option>
+            <option value="resuelta">Resueltas</option>
+          </select>
+        </div>
+        <div>
+          <label style={S.label}>Prioridad</label>
+          <select style={S.select} value={prioridadFiltro} onChange={e => setPrioridadFiltro(e.target.value)}>
+            <option value="todas">Todas</option>
+            <option value="normal">Normal</option>
+            <option value="importante">Importante</option>
+            <option value="urgente">Urgente</option>
+          </select>
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginBottom:16 }}>
+          <div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800 }}>{labelMes(mesSeleccionado)}</div>
+            <div style={{ fontSize:13, color:'#64748b' }}>
+              {novedadesVisibles.length} de {novedadesDelMes.length} novedades
             </div>
-            <div style={{ fontSize:13, color:'#cbd5e1' }}>{n.descripcion}</div>
-            <div style={{ fontSize:11, color:'#64748b', marginTop:8 }}>📍 {o?.nombre || '—'} · 👮 {g?.nombre} {g?.apellido}</div>
           </div>
-        )
-      })}
+          {mesSeleccionado === mesActual ? <Badge type="activo">Mes actual</Badge> : <Badge type="revisada">Histórico abierto</Badge>}
+        </div>
+
+        {novedadesVisibles.length === 0 ? (
+          <div style={{ textAlign:'center', padding:32, color:'#64748b' }}>No hay novedades para los filtros seleccionados.</div>
+        ) : novedadesVisibles.map(renderNovedad)}
+      </div>
+
+      <div style={S.card}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800, marginBottom:12 }}>Meses anteriores</div>
+        {mesesHistoricos.length === 0 ? (
+          <div style={{ color:'#64748b', fontSize:13 }}>No hay novedades históricas cargadas.</div>
+        ) : (
+          <div style={{ display:'grid', gap:8 }}>
+            {mesesHistoricos.map((mes: string) => (
+              <button
+                key={mes}
+                type="button"
+                onClick={() => setMesSeleccionado(mes)}
+                style={{
+                  ...S.btn,
+                  ...S.btnSecondary,
+                  justifyContent:'space-between',
+                  width:'100%',
+                  borderColor: mesSeleccionado === mes ? '#f59e0b' : '#1e2d42',
+                }}
+              >
+                <span>{labelMes(mes)} — {cantidadMes(mes)} novedades</span>
+                <span style={{ color: mesSeleccionado === mes ? '#f59e0b' : '#64748b' }}>{mesSeleccionado === mes ? 'Abierto' : 'Abrir'}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       {modal && (
         <Modal title="Nueva Novedad" onClose={() => setModal(false)}
           footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setModal(false)}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
