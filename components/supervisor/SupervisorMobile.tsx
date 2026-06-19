@@ -1427,6 +1427,48 @@ export default function SupervisorMobile({ user }: any) {
     return labels[accion] || accion
   }
 
+  const accionEstaSeleccionada = (turno: Turno, tipoAlerta: TipoAlertaOperativa, accion: AccionIntervencion) => (
+    accionAlerta?.turnoId === turno.id &&
+    accionAlerta?.tipoAlerta === tipoAlerta &&
+    accionAlerta?.accion === accion
+  )
+
+  const estiloBotonAccion = (accion: AccionIntervencion, activo: boolean, base: React.CSSProperties = secondaryButton): React.CSSProperties => {
+    if (!activo) return base
+
+    const estilosActivos: Partial<Record<AccionIntervencion, React.CSSProperties>> = {
+      confirmar_cubierto: {
+        background: 'rgba(16,185,129,.2)',
+        color: '#6ee7b7',
+        border: '1px solid rgba(16,185,129,.75)',
+        boxShadow: '0 0 0 1px rgba(16,185,129,.3), 0 0 18px rgba(16,185,129,.22)',
+      },
+      reasignacion: {
+        background: 'rgba(59,130,246,.2)',
+        color: '#93c5fd',
+        border: '1px solid rgba(59,130,246,.75)',
+        boxShadow: '0 0 0 1px rgba(59,130,246,.3), 0 0 18px rgba(59,130,246,.22)',
+      },
+      marcado_descubierto: {
+        background: 'rgba(249,115,22,.24)',
+        color: '#fdba74',
+        border: '1px solid rgba(249,115,22,.8)',
+        boxShadow: '0 0 0 1px rgba(249,115,22,.3), 0 0 18px rgba(249,115,22,.24)',
+      },
+      comentario: {
+        background: 'rgba(245,158,11,.18)',
+        color: '#fcd34d',
+        border: '1px solid rgba(245,158,11,.72)',
+        boxShadow: '0 0 0 1px rgba(245,158,11,.25), 0 0 16px rgba(245,158,11,.18)',
+      },
+    }
+
+    return {
+      ...base,
+      ...(estilosActivos[accion] || {}),
+    }
+  }
+
   const renderContextoAlerta = (turno: Turno, tipoAlerta?: TipoAlertaOperativa) => {
     const asignacion = supervisorGuardiaAsignado(turno)
     const ultima = tipoAlerta ? ultimaIntervencionAlerta(turno.id, tipoAlerta) : intervencionesAlerta(turno.id)[0]
@@ -1506,7 +1548,7 @@ export default function SupervisorMobile({ user }: any) {
 
     return (
       <div style={accionPanel}>
-        <div style={{ ...label, marginTop: 0 }}>Acción: {accionLabel(accionAlerta.accion)}</div>
+        <div style={{ ...label, marginTop: 0 }}>Acción seleccionada: {accionLabel(accionAlerta.accion)}</div>
         {error && <div style={{ ...errorBox, marginTop: 10 }}>{error}</div>}
 
         {requiereGuardia && (
@@ -1569,21 +1611,36 @@ export default function SupervisorMobile({ user }: any) {
           {intervenida && <span style={badge('finalizado')}>Intervenida</span>}
         </div>
         <div style={alertaActionGrid}>
-          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'confirmar_cubierto', registro)}>
+          <button
+            type="button"
+            style={estiloBotonAccion('confirmar_cubierto', accionEstaSeleccionada(turno, tipoAlerta, 'confirmar_cubierto'))}
+            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'confirmar_cubierto', registro)}
+          >
             Confirmar cubierto
           </button>
-          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'reasignacion', registro)}>
+          <button
+            type="button"
+            style={estiloBotonAccion('reasignacion', accionEstaSeleccionada(turno, tipoAlerta, 'reasignacion'))}
+            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'reasignacion', registro)}
+          >
             Reasignar
           </button>
           <button
             type="button"
-            style={{ ...dangerButton, opacity: puedeMarcarDescubierto ? 1 : 0.55 }}
+            style={{
+              ...estiloBotonAccion('marcado_descubierto', accionEstaSeleccionada(turno, tipoAlerta, 'marcado_descubierto'), dangerButton),
+              opacity: puedeMarcarDescubierto ? 1 : 0.55,
+            }}
             disabled={!puedeMarcarDescubierto}
             onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'marcado_descubierto', registro)}
           >
             Marcar descubierto
           </button>
-          <button type="button" style={secondaryButton} onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'comentario', registro)}>
+          <button
+            type="button"
+            style={estiloBotonAccion('comentario', accionEstaSeleccionada(turno, tipoAlerta, 'comentario'))}
+            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'comentario', registro)}
+          >
             Comentar
           </button>
         </div>

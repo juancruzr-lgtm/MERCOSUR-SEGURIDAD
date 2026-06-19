@@ -4447,6 +4447,48 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     return labels[accion] || accion
   }
 
+  const accionEstaSeleccionada = (alerta: AlertaOperativaAdmin, accion: AccionIntervencionAdmin) => (
+    accionActiva?.alerta.key === alerta.key &&
+    accionActiva?.accion === accion
+  )
+
+  const estiloBotonAccion = (accion: AccionIntervencionAdmin, activo: boolean, base?: React.CSSProperties): React.CSSProperties => {
+    const baseStyle = base || { ...S.btn, ...S.btnSecondary, justifyContent:'center' }
+    if (!activo) return baseStyle
+
+    const estilosActivos: Partial<Record<AccionIntervencionAdmin, React.CSSProperties>> = {
+      confirmar_cubierto: {
+        background: 'rgba(16,185,129,.2)',
+        color: '#6ee7b7',
+        border: '1px solid rgba(16,185,129,.75)',
+        boxShadow: '0 0 0 1px rgba(16,185,129,.3), 0 0 18px rgba(16,185,129,.22)',
+      },
+      reasignacion: {
+        background: 'rgba(59,130,246,.2)',
+        color: '#93c5fd',
+        border: '1px solid rgba(59,130,246,.75)',
+        boxShadow: '0 0 0 1px rgba(59,130,246,.3), 0 0 18px rgba(59,130,246,.22)',
+      },
+      marcado_descubierto: {
+        background: 'rgba(249,115,22,.24)',
+        color: '#fdba74',
+        border: '1px solid rgba(249,115,22,.8)',
+        boxShadow: '0 0 0 1px rgba(249,115,22,.3), 0 0 18px rgba(249,115,22,.24)',
+      },
+      comentario: {
+        background: 'rgba(245,158,11,.18)',
+        color: '#fcd34d',
+        border: '1px solid rgba(245,158,11,.72)',
+        boxShadow: '0 0 0 1px rgba(245,158,11,.25), 0 0 16px rgba(245,158,11,.18)',
+      },
+    }
+
+    return {
+      ...baseStyle,
+      ...(estilosActivos[accion] || {}),
+    }
+  }
+
   const cargarIntervenciones = async () => {
     setLoadingData(true)
     setError('')
@@ -4775,7 +4817,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
     return (
       <div style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:8, padding:14, marginTop:12 }}>
-        <div style={{ ...S.label, marginBottom:8 }}>Acción: {accionLabel(accionActiva.accion)}</div>
+        <div style={{ ...S.label, marginBottom:8 }}>Acción seleccionada: {accionLabel(accionActiva.accion)}</div>
         {error && <div style={{ background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.35)', color:'#fca5a5', borderRadius:8, padding:10, fontSize:13, marginBottom:12 }}>{error}</div>}
 
         {requiereGuardia && (
@@ -4844,10 +4886,38 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
         {renderContexto(alerta)}
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(160px, 1fr))', gap:8, marginTop:12 }}>
-          <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'confirmar_cubierto')}>Confirmar cubierto</button>
-          <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'reasignacion')}>Reasignar</button>
-          <button type="button" style={{ ...S.btn, justifyContent:'center', background:'rgba(239,68,68,.15)', color:'#ef4444', border:'1px solid rgba(239,68,68,.35)' }} onClick={() => abrirAccion(alerta, 'marcado_descubierto')}>Marcar descubierto</button>
-          <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'comentario')}>Comentar</button>
+          <button
+            type="button"
+            style={estiloBotonAccion('confirmar_cubierto', accionEstaSeleccionada(alerta, 'confirmar_cubierto'))}
+            onClick={() => abrirAccion(alerta, 'confirmar_cubierto')}
+          >
+            Confirmar cubierto
+          </button>
+          <button
+            type="button"
+            style={estiloBotonAccion('reasignacion', accionEstaSeleccionada(alerta, 'reasignacion'))}
+            onClick={() => abrirAccion(alerta, 'reasignacion')}
+          >
+            Reasignar
+          </button>
+          <button
+            type="button"
+            style={estiloBotonAccion(
+              'marcado_descubierto',
+              accionEstaSeleccionada(alerta, 'marcado_descubierto'),
+              { ...S.btn, justifyContent:'center', background:'rgba(239,68,68,.15)', color:'#ef4444', border:'1px solid rgba(239,68,68,.35)' },
+            )}
+            onClick={() => abrirAccion(alerta, 'marcado_descubierto')}
+          >
+            Marcar descubierto
+          </button>
+          <button
+            type="button"
+            style={estiloBotonAccion('comentario', accionEstaSeleccionada(alerta, 'comentario'))}
+            onClick={() => abrirAccion(alerta, 'comentario')}
+          >
+            Comentar
+          </button>
         </div>
 
         {renderPanelAccion(alerta)}
