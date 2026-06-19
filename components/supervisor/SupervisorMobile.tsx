@@ -1863,13 +1863,14 @@ export default function SupervisorMobile({ user }: any) {
 
             {tab === 'guardias' && (
               <section>
-                <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginBottom:12 }}>
-                  <div>
-                    <div style={screenTitle}>Guardias activos</div>
-                    <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
-                  </div>
-                  <button style={{ ...secondaryButton, width:'auto', padding:'10px 12px' }} onClick={() => { setError(''); resetFormNuevoGuardia(); setModalNuevoGuardia(true) }}>
-                    Solicitar nuevo
+                <div style={screenTitle}>Guardias / Vigiladores</div>
+                <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
+
+                <div style={{ ...card, borderColor:'rgba(59,130,246,.35)', background:'rgba(59,130,246,.08)' }}>
+                  <div style={objetivoName}>Solicitudes de vigiladores</div>
+                  <div style={{ ...muted, marginBottom:12 }}>Crear una solicitud pendiente para que administración apruebe el alta.</div>
+                  <button style={refreshButton} onClick={() => { setError(''); resetFormNuevoGuardia(); setModalNuevoGuardia(true) }}>
+                    Solicitar alta de vigilador
                   </button>
                 </div>
 
@@ -1887,7 +1888,7 @@ export default function SupervisorMobile({ user }: any) {
                         onClick={() => solicitarBajaGuardia(g)}
                         disabled={asignando === `baja-guardia-${g.id}`}
                       >
-                        {asignando === `baja-guardia-${g.id}` ? 'Enviando...' : 'Solicitar baja'}
+                        {asignando === `baja-guardia-${g.id}` ? 'Enviando...' : 'Solicitar baja de vigilador'}
                       </button>
                     </div>
                   </div>
@@ -1897,15 +1898,17 @@ export default function SupervisorMobile({ user }: any) {
 
             {tab === 'objetivos' && (
               <section>
-                <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginBottom:12 }}>
-                  <div>
-                    <div style={screenTitle}>Objetivos</div>
-                    <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
-                  </div>
-                  <button style={{ ...secondaryButton, width:'auto', padding:'10px 12px' }} onClick={() => { setError(''); resetFormNuevoObjetivo(); setModalNuevoObjetivo(true) }}>
-                    Solicitar objetivo
+                <div style={screenTitle}>Objetivos</div>
+                <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
+
+                <div style={{ ...card, borderColor:'rgba(59,130,246,.35)', background:'rgba(59,130,246,.08)' }}>
+                  <div style={objetivoName}>Solicitudes de objetivos</div>
+                  <div style={{ ...muted, marginBottom:12 }}>Crear una solicitud pendiente para que administración apruebe el alta.</div>
+                  <button style={refreshButton} onClick={() => { setError(''); resetFormNuevoObjetivo(); setModalNuevoObjetivo(true) }}>
+                    Solicitar alta de objetivo
                   </button>
                 </div>
+
                 {objetivos.map(objetivo => (
                   <div key={objetivo.id} style={card}>
                     <div style={objetivoName}>{objetivo.nombre}</div>
@@ -1928,7 +1931,7 @@ export default function SupervisorMobile({ user }: any) {
                         onClick={() => solicitarBajaObjetivo(objetivo)}
                         disabled={asignando === `baja-objetivo-${objetivo.id}` || objetivo.estado === 'inactivo'}
                       >
-                        {asignando === `baja-objetivo-${objetivo.id}` ? 'Enviando...' : objetivo.estado === 'inactivo' ? 'Objetivo inactivo' : 'Solicitar baja'}
+                        {asignando === `baja-objetivo-${objetivo.id}` ? 'Enviando...' : objetivo.estado === 'inactivo' ? 'Objetivo inactivo' : 'Solicitar baja de objetivo'}
                       </button>
                     </div>
                   </div>
