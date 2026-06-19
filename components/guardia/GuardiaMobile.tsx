@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
+import { activarNotificacionesPush } from '@/lib/push-client'
 
 // ── TIPOS ─────────────────────────────────────────────────────
 interface Turno {
@@ -458,8 +459,17 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [guardandoPassword, setGuardandoPassword] = useState(false)
   const [ahora, setAhora] = useState(() => new Date())
   const [permisoGps, setPermisoGps] = useState<GpsPermissionState>('checking')
+  const [activandoPush, setActivandoPush] = useState(false)
 
   const hoy = fechaHoy()
+
+  const activarPush = async () => {
+    setActivandoPush(true)
+    const resultado = await activarNotificacionesPush()
+    setMensaje({ texto: resultado.message, tipo: resultado.ok ? 'ok' : 'error' })
+    setActivandoPush(false)
+    setTimeout(() => setMensaje(null), 4000)
+  }
 
   const cambiarPassword = async () => {
     setPerfilMensaje(null)
@@ -782,6 +792,15 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
             {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
           </div>
         </div>
+
+        <button
+          type="button"
+          onClick={activarPush}
+          disabled={activandoPush}
+          style={{ ...S.btn, ...S.btnSalida, marginBottom: 14, opacity: activandoPush ? 0.65 : 1 }}
+        >
+          {activandoPush ? 'Activando...' : 'Activar notificaciones'}
+        </button>
 
         {perfilAbierto && (
           <div style={S.card}>

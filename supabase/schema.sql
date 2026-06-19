@@ -177,6 +177,30 @@ alter table supervisor_intervenciones add column if not exists jefe_operativo te
 alter table supervisor_intervenciones add column if not exists director_tecnico text;
 alter table supervisor_intervenciones add column if not exists zona text;
 
+-- 10. PUSH PWA
+create table if not exists push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references usuarios(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  activo boolean not null default true,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists notificaciones_enviadas (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references usuarios(id) on delete cascade,
+  turno_id uuid not null references turnos(id) on delete cascade,
+  tipo text not null,
+  titulo text,
+  mensaje text,
+  created_at timestamptz default now(),
+  constraint notificaciones_enviadas_usuario_turno_tipo_key unique (usuario_id, turno_id, tipo)
+);
+
 create index if not exists idx_supervisores_guardia_fecha_horario
   on supervisores_guardia (fecha, hora_inicio, hora_fin);
 create index if not exists idx_supervisores_guardia_supervisor
@@ -185,6 +209,14 @@ create index if not exists idx_supervisores_guardia_estado
   on supervisores_guardia (estado);
 create index if not exists idx_supervisor_intervenciones_supervisor_guardia
   on supervisor_intervenciones (supervisor_guardia_id);
+create index if not exists idx_push_subscriptions_usuario
+  on push_subscriptions (usuario_id);
+create index if not exists idx_push_subscriptions_activo
+  on push_subscriptions (activo);
+create index if not exists idx_notificaciones_enviadas_turno
+  on notificaciones_enviadas (turno_id);
+create index if not exists idx_notificaciones_enviadas_tipo
+  on notificaciones_enviadas (tipo);
 
 -- ============================================================
 -- ROW LEVEL SECURITY
@@ -198,6 +230,8 @@ alter table alertas enable row level security;
 alter table camaras enable row level security;
 alter table supervisor_intervenciones enable row level security;
 alter table supervisores_guardia enable row level security;
+alter table push_subscriptions enable row level security;
+alter table notificaciones_enviadas enable row level security;
 
 -- Políticas: admin ve todo, guardia ve solo lo suyo
 create policy "Admin acceso total usuarios" on usuarios for all using (true);
@@ -209,6 +243,8 @@ create policy "Admin acceso total alertas" on alertas for all using (true);
 create policy "Admin acceso total camaras" on camaras for all using (true);
 create policy "Admin acceso total supervisor intervenciones" on supervisor_intervenciones for all using (true);
 create policy "Admin acceso total supervisores guardia" on supervisores_guardia for all using (true);
+create policy "Admin acceso total push subscriptions" on push_subscriptions for all using (true);
+create policy "Admin acceso total notificaciones enviadas" on notificaciones_enviadas for all using (true);
 
 -- ============================================================
 -- DATOS DE EJEMPLO

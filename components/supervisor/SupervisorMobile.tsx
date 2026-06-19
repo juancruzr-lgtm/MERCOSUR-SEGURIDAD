@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { activarNotificacionesPush } from '@/lib/push-client'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 
@@ -301,6 +302,7 @@ export default function SupervisorMobile({ user }: any) {
   const [accionAlerta, setAccionAlerta] = useState<AccionAlertaActiva | null>(null)
   const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const [mensaje, setMensaje] = useState('')
+  const [activandoPush, setActivandoPush] = useState(false)
 
   const hoy = fechaHoy()
   const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
@@ -308,6 +310,18 @@ export default function SupervisorMobile({ user }: any) {
   const cerrarSesion = async () => {
     await supabase.auth.signOut()
     window.location.href = '/dashboard'
+  }
+
+  const activarPush = async () => {
+    setActivandoPush(true)
+    const resultado = await activarNotificacionesPush()
+    if (resultado.ok) {
+      setMensaje(resultado.message)
+      setError('')
+    } else {
+      setError(resultado.message)
+    }
+    setActivandoPush(false)
   }
 
   const cargarDatos = async (filtro: FiltroFechaTurnos = filtroFecha) => {
@@ -1593,6 +1607,13 @@ export default function SupervisorMobile({ user }: any) {
 
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
                   <button style={refreshButton} onClick={() => cargarDatos(filtroFecha)}>Actualizar</button>
+                  <button
+                    style={{ ...secondaryButton, opacity: activandoPush ? 0.65 : 1 }}
+                    onClick={activarPush}
+                    disabled={activandoPush}
+                  >
+                    {activandoPush ? 'Activando...' : 'Activar notificaciones'}
+                  </button>
                   <button style={secondaryButton} onClick={() => { setError(''); setMensaje(''); setModalTurno(true) }}>Crear turno</button>
                   <button
                     style={{ ...secondaryButton, gridColumn:'1 / -1', opacity: asignando === 'repetir-ayer' ? 0.65 : 1 }}
