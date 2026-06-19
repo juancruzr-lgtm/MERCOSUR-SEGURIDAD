@@ -9,6 +9,21 @@ import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 
 type TipoAlertaOperativaAdmin = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'descubierto' | 'salida_pendiente'
 type AccionIntervencionAdmin = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'confirmar_cubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
+type TipoSolicitudAdmin = 'crear_objetivo' | 'baja_objetivo' | 'crear_vigilador' | 'baja_vigilador'
+type EstadoSolicitudAdmin = 'pendiente' | 'aprobado' | 'rechazado'
+type SolicitudAdmin = {
+  id: string
+  solicitante_id: string
+  tipo: TipoSolicitudAdmin
+  entidad: string
+  entidad_id?: string | null
+  datos_json: Record<string, any> | null
+  estado: EstadoSolicitudAdmin
+  aprobado_por?: string | null
+  fecha_aprobacion?: string | null
+  comentario_admin?: string | null
+  created_at: string
+}
 
 const ZONA_OPERATIVA_ADMIN = 'Rosario / General'
 const JEFE_OPERATIVO_ADMIN = 'Aldo Monzón'
@@ -3108,6 +3123,298 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
 }
 
 
+// ── SOLICITUDES ADMINISTRATIVAS ───────────────────────────────
+function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos }: any) {
+  const [solicitudes, setSolicitudes] = useState<SolicitudAdmin[]>([])
+  const [loading, setLoading] = useState(true)
+  const [accionLoading, setAccionLoading] = useState<string | null>(null)
+  const [comentarios, setComentarios] = useState<Record<string, string>>({})
+  const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error', texto: string } | null>(null)
+
+  const cargar = async () => {
+    setLoading(true)
+    const { data, error } = await supabase
+      .from('solicitudes_admin')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      setSolicitudes([])
+    } else {
+      setSolicitudes((data || []) as SolicitudAdmin[])
+    }
+
+    setLoading(false)
+  }
+
+  useEffect(() => { cargar() }, [])
+
+  const tipoLabel = (tipo: TipoSolicitudAdmin) => {
+    const labels: Record<TipoSolicitudAdmin, string> = {
+      crear_objetivo: 'Crear objetivo',
+      baja_objetivo: 'Baja de objetivo',
+      crear_vigilador: 'Crear vigilador',
+      baja_vigilador: 'Baja de vigilador',
+    }
+
+    return labels[tipo]
+  }
+
+  const nombreUsuario = (id?: string | null) => {
+    if (!id) return '—'
+    const usuario = guardias.find((g: Usuario) => g.id === id)
+    return usuario ? `${usuario.apellido}, ${usuario.nombre}` : 'Usuario no encontrado'
+  }
+
+  const valorDetalle = (value: unknown) => {
+    if (value === null || value === undefined || value === '') return '—'
+    if (typeof value === 'object') return JSON.stringify(value)
+    return String(value)
+  }
+
+  const crearObjetivoDesdeSolicitud = async (datos: Record<string, any>) => {
+    const lat = datos.lat === null || datos.lat === undefined || datos.lat === '' ? null : Number(datos.lat)
+    const lng = datos.lng === null || datos.lng === undefined || datos.lng === '' ? null : Number(datos.lng)
+
+    if (!String(datos.nombre || '').trim()) throw new Error('La solicitud no tiene nombre de objetivo.')
+    if ((lat !== null && !Number.isFinite(lat)) || (lng !== null && !Number.isFinite(lng))) throw new Error('La solicitud tiene GPS inválido.')
+
+    const payload = {
+      nombre: String(datos.nombre).trim(),
+      cliente: String(datos.cliente || '').trim() || null,
+      direccion: String(datos.direccion || '').trim() || null,
+      lat,
+      lng,
+      radio_metros: Number(datos.radio_metros) || 200,
+      estado: 'activo',
+    }
+
+    const { data, error } = await supabase.from('objetivos').insert(payload).select().single()
+    if (error) throw error
+    if (data) setObjetivos((prev: Objetivo[]) => [...prev, data])
+    return data?.id || null
+  }
+
+  const crearGuardiaDesdeSolicitud = async (datos: Record<string, any>) => {
+    const rol = datos.rol === 'vigilador' ? 'vigilador' : 'guardia'
+
+    if (!String(datos.nombre || '').trim()) throw new Error('La solicitud no tiene nombre.')
+    if (!String(datos.apellido || '').trim()) throw new Error('La solicitud no tiene apellido.')
+    if (!String(datos.legajo || '').trim()) throw new Error('La solicitud no tiene legajo.')
+
+    const payload = {
+      nombre: String(datos.nombre).trim(),
+      apellido: String(datos.apellido).trim(),
+      dni: String(datos.dni || '').trim() || null,
+      telefono: String(datos.telefono || '').trim() || null,
+      legajo: String(datos.legajo).trim(),
+      email: String(datos.email || '').trim().toLowerCase() || null,
+      estado: 'activo',
+      rol,
+      foto_url: String(datos.foto_url || '').trim() || null,
+    }
+
+    const { data, error } = await supabase.from('usuarios').insert(payload).select().single()
+    if (error) throw error
+    if (data) setGuardias((prev: Usuario[]) => [...prev, data])
+    return data?.id || null
+  }
+
+  const inactivarObjetivo = async (id?: string | null) => {
+    if (!id) throw new Error('La solicitud no tiene objetivo asociado.')
+
+    const { data, error } = await supabase
+      .from('objetivos')
+      .update({ estado:'inactivo' })
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) throw error
+    if (data) setObjetivos((prev: Objetivo[]) => prev.map(o => o.id === id ? data : o))
+  }
+
+  const inactivarGuardia = async (id?: string | null) => {
+    if (!id) throw new Error('La solicitud no tiene vigilador asociado.')
+
+    const { data, error } = await supabase
+      .from('usuarios')
+      .update({ estado:'inactivo' })
+      .eq('id', id)
+      .in('rol', ['guardia', 'vigilador'])
+      .select()
+      .single()
+
+    if (error) throw error
+    if (data) setGuardias((prev: Usuario[]) => prev.map(g => g.id === id ? data : g))
+  }
+
+  const cerrarSolicitud = async (solicitud: SolicitudAdmin, estado: EstadoSolicitudAdmin, entidadId?: string | null) => {
+    const cierre: any = {
+      estado,
+      aprobado_por: user.id,
+      fecha_aprobacion: new Date().toISOString(),
+      comentario_admin: comentarios[solicitud.id]?.trim() || null,
+    }
+
+    if (entidadId) cierre.entidad_id = entidadId
+
+    const { data, error } = await supabase
+      .from('solicitudes_admin')
+      .update(cierre)
+      .eq('id', solicitud.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    if (data) setSolicitudes(prev => prev.map(item => item.id === solicitud.id ? data as SolicitudAdmin : item))
+  }
+
+  const aprobar = async (solicitud: SolicitudAdmin) => {
+    const datos = solicitud.datos_json || {}
+    setAccionLoading(`aprobar-${solicitud.id}`)
+    setMensaje(null)
+
+    try {
+      let entidadId = solicitud.entidad_id || null
+
+      if (solicitud.tipo === 'crear_objetivo') entidadId = await crearObjetivoDesdeSolicitud(datos)
+      if (solicitud.tipo === 'baja_objetivo') await inactivarObjetivo(solicitud.entidad_id)
+      if (solicitud.tipo === 'crear_vigilador') entidadId = await crearGuardiaDesdeSolicitud(datos)
+      if (solicitud.tipo === 'baja_vigilador') await inactivarGuardia(solicitud.entidad_id)
+
+      await cerrarSolicitud(solicitud, 'aprobado', entidadId)
+      setMensaje({ tipo:'ok', texto:'Solicitud aprobada correctamente.' })
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'No se pudo aprobar la solicitud.' })
+    } finally {
+      setAccionLoading(null)
+    }
+  }
+
+  const rechazar = async (solicitud: SolicitudAdmin) => {
+    setAccionLoading(`rechazar-${solicitud.id}`)
+    setMensaje(null)
+
+    try {
+      await cerrarSolicitud(solicitud, 'rechazado')
+      setMensaje({ tipo:'ok', texto:'Solicitud rechazada.' })
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'No se pudo rechazar la solicitud.' })
+    } finally {
+      setAccionLoading(null)
+    }
+  }
+
+  const renderSolicitud = (solicitud: SolicitudAdmin, resoluble: boolean) => {
+    const datos = solicitud.datos_json || {}
+    const detalles = Object.entries(datos).slice(0, 8)
+
+    return (
+      <div key={solicitud.id} style={S.card}>
+        <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start', marginBottom:14 }}>
+          <div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, color:'#e2e8f0' }}>{tipoLabel(solicitud.tipo)}</div>
+            <div style={{ color:'#64748b', fontSize:13, marginTop:4 }}>Solicitante: {nombreUsuario(solicitud.solicitante_id)}</div>
+            <div style={{ color:'#64748b', fontSize:13 }}>{formatFecha(solicitud.created_at)}</div>
+          </div>
+          <Badge type={solicitud.estado}>{solicitud.estado}</Badge>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:10, marginBottom:14 }}>
+          {detalles.map(([key, value]) => (
+            <div key={key} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:10 }}>
+              <div style={{ ...S.label, marginBottom:4 }}>{key.replace(/_/g, ' ')}</div>
+              <div style={{ color:'#e2e8f0', fontSize:13 }}>{valorDetalle(value)}</div>
+            </div>
+          ))}
+        </div>
+
+        {solicitud.comentario_admin && (
+          <div style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, padding:10, color:'#cbd5e1', fontSize:13, marginBottom:12 }}>
+            Comentario admin: {solicitud.comentario_admin}
+          </div>
+        )}
+
+        {resoluble && (
+          <>
+            <label style={S.label}>Comentario administrativo</label>
+            <textarea
+              style={{ ...S.input, resize:'vertical', minHeight:68, marginBottom:12 }}
+              value={comentarios[solicitud.id] || ''}
+              onChange={e => setComentarios(prev => ({ ...prev, [solicitud.id]: e.target.value }))}
+              placeholder="Motivo o aclaración para el historial..."
+            />
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+              <button
+                style={{ ...S.btn, background:'rgba(239,68,68,.14)', color:'#fca5a5', border:'1px solid rgba(239,68,68,.35)' }}
+                onClick={() => rechazar(solicitud)}
+                disabled={accionLoading === `rechazar-${solicitud.id}` || accionLoading === `aprobar-${solicitud.id}`}
+              >
+                {accionLoading === `rechazar-${solicitud.id}` ? 'Rechazando...' : 'Rechazar'}
+              </button>
+              <button
+                style={{ ...S.btn, background:'rgba(16,185,129,.16)', color:'#86efac', border:'1px solid rgba(16,185,129,.35)' }}
+                onClick={() => aprobar(solicitud)}
+                disabled={accionLoading === `rechazar-${solicitud.id}` || accionLoading === `aprobar-${solicitud.id}`}
+              >
+                {accionLoading === `aprobar-${solicitud.id}` ? 'Aprobando...' : 'Aprobar'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  const pendientes = solicitudes.filter(s => s.estado === 'pendiente')
+  const historial = solicitudes.filter(s => s.estado !== 'pendiente')
+
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', gap:16, alignItems:'flex-end', marginBottom:24 }}>
+        <div>
+          <div style={S.title}>Solicitudes Admin</div>
+          <div style={S.sub2}>Altas y bajas solicitadas por supervisores.</div>
+        </div>
+        <button style={{ ...S.btn, ...S.btnSecondary }} onClick={cargar} disabled={loading}>
+          {loading ? 'Actualizando...' : 'Actualizar'}
+        </button>
+      </div>
+
+      {mensaje && (
+        <div style={{ background: mensaje.tipo === 'ok' ? 'rgba(16,185,129,.12)' : 'rgba(239,68,68,.12)', border:`1px solid ${mensaje.tipo === 'ok' ? 'rgba(16,185,129,.35)' : 'rgba(239,68,68,.35)'}`, color: mensaje.tipo === 'ok' ? '#86efac' : '#fca5a5', borderRadius:8, padding:12, marginBottom:16 }}>
+          {mensaje.texto}
+        </div>
+      )}
+
+      <div style={S.statGrid}>
+        <div style={S.card}><div style={S.label}>Pendientes</div><strong>{pendientes.length}</strong></div>
+        <div style={S.card}><div style={S.label}>Aprobadas</div><strong>{solicitudes.filter(s => s.estado === 'aprobado').length}</strong></div>
+        <div style={S.card}><div style={S.label}>Rechazadas</div><strong>{solicitudes.filter(s => s.estado === 'rechazado').length}</strong></div>
+      </div>
+
+      <section style={{ marginBottom:28 }}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Pendientes</div>
+        {loading ? (
+          <div style={{ ...S.card, color:'#64748b', textAlign:'center' }}>Cargando solicitudes...</div>
+        ) : pendientes.length === 0 ? (
+          <div style={{ ...S.card, color:'#64748b', textAlign:'center' }}>No hay solicitudes pendientes.</div>
+        ) : pendientes.map(s => renderSolicitud(s, true))}
+      </section>
+
+      <section>
+        <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Historial</div>
+        {historial.length === 0 ? (
+          <div style={{ ...S.card, color:'#64748b', textAlign:'center' }}>No hay historial de solicitudes.</div>
+        ) : historial.map(s => renderSolicitud(s, false))}
+      </section>
+    </div>
+  )
+}
+
+
 // ── SUPERVISORES DE GUARDIA ──────────────────────────────────
 function SupervisoresGuardia({ guardias, user }: any) {
   const hoy = new Date().toLocaleDateString('sv-SE')
@@ -5344,6 +5651,7 @@ const esGuardia = esRolGuardia(user.rol)
     { section:'Administración', items:[
       { id:'servicios_objetivo', icon:'🏢', label:'Servicios Objetivo' },
       { id:'supervisores_guardia', icon:'🧭', label:'Supervisores de Guardia' },
+      { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
     { id:'novedades', icon:'📋', label:'Novedades' },
       { id:'reportes', icon:'📈', label:'Reportes' },
@@ -5397,6 +5705,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
+              {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} user={user} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} />}

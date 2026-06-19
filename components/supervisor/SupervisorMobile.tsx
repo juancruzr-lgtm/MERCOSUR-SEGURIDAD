@@ -11,6 +11,7 @@ type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
 type TipoAlerta = 'sin entrada' | 'sin ingreso' | 'entrada registrada' | 'salida registrada' | 'turno descubierto' | 'ingreso tarde' | 'reasignado'
 type TipoAlertaOperativa = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'descubierto'
 type AccionIntervencion = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'confirmar_cubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
+type TipoSolicitudAdmin = 'crear_objetivo' | 'baja_objetivo' | 'crear_vigilador' | 'baja_vigilador'
 
 const ZONA_OPERATIVA = 'Rosario / General'
 const JEFE_OPERATIVO = 'Aldo Monzón'
@@ -110,6 +111,20 @@ interface SupervisorGuardia {
   observacion?: string | null
   creado_por?: string | null
   created_at?: string
+}
+
+interface SolicitudAdmin {
+  id: string
+  solicitante_id: string
+  tipo: TipoSolicitudAdmin
+  entidad: string
+  entidad_id?: string | null
+  datos_json: Record<string, any> | null
+  estado: 'pendiente' | 'aprobado' | 'rechazado'
+  aprobado_por?: string | null
+  fecha_aprobacion?: string | null
+  comentario_admin?: string | null
+  created_at: string
 }
 
 interface AccionAlertaActiva {
@@ -283,6 +298,7 @@ export default function SupervisorMobile({ user }: any) {
   const [registros, setRegistros] = useState<RegistroAsistencia[]>([])
   const [intervenciones, setIntervenciones] = useState<SupervisorIntervencion[]>([])
   const [supervisoresGuardia, setSupervisoresGuardia] = useState<SupervisorGuardia[]>([])
+  const [solicitudesAdmin, setSolicitudesAdmin] = useState<SolicitudAdmin[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [asignando, setAsignando] = useState<string | null>(null)
@@ -299,6 +315,10 @@ export default function SupervisorMobile({ user }: any) {
   const [objetivoEditando, setObjetivoEditando] = useState<Objetivo | null>(null)
   const [formGuardia, setFormGuardia] = useState({ email:'', telefono:'', estado:'activo', foto_url:'' })
   const [formObjetivo, setFormObjetivo] = useState({ direccion:'', lat:'', lng:'', radio_metros:'200', estado:'activo' })
+  const [modalNuevoGuardia, setModalNuevoGuardia] = useState(false)
+  const [modalNuevoObjetivo, setModalNuevoObjetivo] = useState(false)
+  const [formNuevoGuardia, setFormNuevoGuardia] = useState({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', rol:'guardia', foto_url:'' })
+  const [formNuevoObjetivo, setFormNuevoObjetivo] = useState({ nombre:'', cliente:'', direccion:'', lat:'', lng:'', radio_metros:'200' })
   const [accionAlerta, setAccionAlerta] = useState<AccionAlertaActiva | null>(null)
   const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const [mensaje, setMensaje] = useState('')
@@ -329,7 +349,7 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
     const rango = rangoFiltroFechaTurnos(filtro, hoy)
 
-    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult, supervisoresResult, supervisoresGuardiaResult] = await Promise.all([
+    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult, supervisoresResult, supervisoresGuardiaResult, solicitudesResult] = await Promise.all([
       supabase
         .from('turnos')
         .select('*')
@@ -358,6 +378,11 @@ export default function SupervisorMobile({ user }: any) {
         .lte('fecha', rango.hasta)
         .order('fecha', { ascending: true })
         .order('hora_inicio', { ascending: true }),
+      supabase
+        .from('solicitudes_admin')
+        .select('*')
+        .eq('solicitante_id', user.id)
+        .order('created_at', { ascending: false }),
     ])
 
     let guardiasData = guardiasResult.data
@@ -366,6 +391,8 @@ export default function SupervisorMobile({ user }: any) {
     const supervisoresError = supervisoresResult.error
     const supervisoresGuardiaData = supervisoresGuardiaResult.data
     const supervisoresGuardiaError = supervisoresGuardiaResult.error
+    const solicitudesData = solicitudesResult.data
+    const solicitudesError = solicitudesResult.error
 
     if (guardiasError?.message?.includes('usuarios.email') || guardiasError?.message?.includes('usuarios.telefono') || guardiasError?.message?.includes('usuarios.foto_url')) {
       const retry = await supabase
@@ -388,12 +415,17 @@ export default function SupervisorMobile({ user }: any) {
       setError(supervisoresGuardiaError.message)
     }
 
+    if (solicitudesError && !/solicitudes_admin|schema cache|does not exist/i.test(solicitudesError.message)) {
+      setError(solicitudesError.message)
+    }
+
     const turnosRango = (turnosData || []) as Turno[]
     setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
     setGuardias((guardiasData || []) as Usuario[])
     setSupervisores((supervisoresData || []) as Usuario[])
     setSupervisoresGuardia(supervisoresGuardiaError ? [] : (supervisoresGuardiaData || []) as SupervisorGuardia[])
+    setSolicitudesAdmin(solicitudesError ? [] : (solicitudesData || []) as SolicitudAdmin[])
 
     if (turnosRango.length === 0) {
       setRegistros([])
@@ -843,6 +875,162 @@ export default function SupervisorMobile({ user }: any) {
     }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 })
   }
 
+  const resetFormNuevoGuardia = () => {
+    setFormNuevoGuardia({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', rol:'guardia', foto_url:'' })
+  }
+
+  const resetFormNuevoObjetivo = () => {
+    setFormNuevoObjetivo({ nombre:'', cliente:'', direccion:'', lat:'', lng:'', radio_metros:'200' })
+  }
+
+  const tipoSolicitudLabel = (tipo: TipoSolicitudAdmin) => {
+    const labels: Record<TipoSolicitudAdmin, string> = {
+      crear_objetivo: 'Crear objetivo',
+      baja_objetivo: 'Baja de objetivo',
+      crear_vigilador: 'Crear vigilador',
+      baja_vigilador: 'Baja de vigilador',
+    }
+
+    return labels[tipo]
+  }
+
+  const crearSolicitudAdmin = async (tipo: TipoSolicitudAdmin, entidad: string, entidadId: string | null, datos: Record<string, any>) => {
+    if (!user?.id) throw new Error('Sesión de supervisor no disponible.')
+
+    const payload = {
+      solicitante_id: user.id,
+      tipo,
+      entidad,
+      entidad_id: entidadId,
+      datos_json: datos,
+      estado: 'pendiente',
+    }
+
+    const { data, error: insertError } = await supabase
+      .from('solicitudes_admin')
+      .insert(payload)
+      .select()
+      .single()
+
+    if (insertError) throw insertError
+
+    setSolicitudesAdmin(prev => [data as SolicitudAdmin, ...prev])
+    return data as SolicitudAdmin
+  }
+
+  const solicitarCrearGuardia = async () => {
+    if (!formNuevoGuardia.nombre.trim() || !formNuevoGuardia.apellido.trim() || !formNuevoGuardia.legajo.trim()) {
+      setError('Nombre, apellido y legajo son obligatorios.')
+      return
+    }
+
+    setAsignando('solicitud-crear-guardia')
+    setError('')
+
+    try {
+      await crearSolicitudAdmin('crear_vigilador', 'usuarios', null, {
+        nombre: formNuevoGuardia.nombre.trim(),
+        apellido: formNuevoGuardia.apellido.trim(),
+        dni: formNuevoGuardia.dni.trim() || null,
+        telefono: formNuevoGuardia.telefono.trim() || null,
+        legajo: formNuevoGuardia.legajo.trim(),
+        email: formNuevoGuardia.email.trim().toLowerCase() || null,
+        rol: formNuevoGuardia.rol === 'vigilador' ? 'vigilador' : 'guardia',
+        foto_url: formNuevoGuardia.foto_url.trim() || null,
+      })
+      setMensaje('Solicitud enviada: crear vigilador.')
+      resetFormNuevoGuardia()
+      setModalNuevoGuardia(false)
+      setTab('solicitudes')
+    } catch (solicitudError) {
+      setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
+    } finally {
+      setAsignando(null)
+    }
+  }
+
+  const solicitarCrearObjetivo = async () => {
+    if (!formNuevoObjetivo.nombre.trim()) {
+      setError('El nombre del objetivo es obligatorio.')
+      return
+    }
+
+    const lat = formNuevoObjetivo.lat.trim() ? Number(formNuevoObjetivo.lat) : null
+    const lng = formNuevoObjetivo.lng.trim() ? Number(formNuevoObjetivo.lng) : null
+    const radio = Number(formNuevoObjetivo.radio_metros) || 200
+
+    if ((lat !== null && !Number.isFinite(lat)) || (lng !== null && !Number.isFinite(lng))) {
+      setError('Latitud y longitud deben ser números válidos.')
+      return
+    }
+
+    setAsignando('solicitud-crear-objetivo')
+    setError('')
+
+    try {
+      await crearSolicitudAdmin('crear_objetivo', 'objetivos', null, {
+        nombre: formNuevoObjetivo.nombre.trim(),
+        cliente: formNuevoObjetivo.cliente.trim() || null,
+        direccion: formNuevoObjetivo.direccion.trim() || null,
+        lat,
+        lng,
+        radio_metros: radio,
+        estado: 'activo',
+      })
+      setMensaje('Solicitud enviada: crear objetivo.')
+      resetFormNuevoObjetivo()
+      setModalNuevoObjetivo(false)
+      setTab('solicitudes')
+    } catch (solicitudError) {
+      setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
+    } finally {
+      setAsignando(null)
+    }
+  }
+
+  const solicitarBajaGuardia = async (guardia: Usuario) => {
+    setAsignando(`baja-guardia-${guardia.id}`)
+    setError('')
+
+    try {
+      await crearSolicitudAdmin('baja_vigilador', 'usuarios', guardia.id, {
+        nombre: guardia.nombre,
+        apellido: guardia.apellido,
+        legajo: guardia.legajo || null,
+        email: guardia.email || null,
+        estado_actual: guardia.estado,
+      })
+      setMensaje(`Solicitud enviada: baja de ${guardia.apellido}, ${guardia.nombre}.`)
+      setGuardiaEditando(null)
+      setTab('solicitudes')
+    } catch (solicitudError) {
+      setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
+    } finally {
+      setAsignando(null)
+    }
+  }
+
+  const solicitarBajaObjetivo = async (objetivo: Objetivo) => {
+    setAsignando(`baja-objetivo-${objetivo.id}`)
+    setError('')
+
+    try {
+      await crearSolicitudAdmin('baja_objetivo', 'objetivos', objetivo.id, {
+        nombre: objetivo.nombre,
+        cliente: objetivo.cliente || null,
+        direccion: objetivo.direccion || null,
+        estado_actual: objetivo.estado || 'activo',
+      })
+      setMensaje(`Solicitud enviada: baja de ${objetivo.nombre}.`)
+      setObjetivoEditando(null)
+      setTab('solicitudes')
+    } catch (solicitudError) {
+      setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
+    } finally {
+      setAsignando(null)
+    }
+  }
+
   const abrirEditarGuardia = (guardia: Usuario) => {
     setError('')
     setGuardiaEditando(guardia)
@@ -856,6 +1044,11 @@ export default function SupervisorMobile({ user }: any) {
 
   const guardarGuardia = async () => {
     if (!guardiaEditando) return
+
+    if (formGuardia.estado === 'inactivo' && guardiaEditando.estado !== 'inactivo') {
+      await solicitarBajaGuardia(guardiaEditando)
+      return
+    }
 
     setAsignando(`guardia-${guardiaEditando.id}`)
     setError('')
@@ -899,6 +1092,11 @@ export default function SupervisorMobile({ user }: any) {
 
   const guardarObjetivo = async () => {
     if (!objetivoEditando) return
+
+    if (formObjetivo.estado === 'inactivo' && objetivoEditando.estado !== 'inactivo') {
+      await solicitarBajaObjetivo(objetivoEditando)
+      return
+    }
 
     setAsignando(`objetivo-${objetivoEditando.id}`)
     setError('')
@@ -1184,6 +1382,7 @@ export default function SupervisorMobile({ user }: any) {
     { id: 'turnos', label: 'Turnos', icon: '📅' },
     { id: 'guardias', label: 'Guardias', icon: '👮' },
     { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
+    { id: 'solicitudes', label: 'Solicitudes', icon: '📝' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
     { id: 'perfil', label: 'Perfil', icon: '👤' },
   ]
@@ -1664,16 +1863,33 @@ export default function SupervisorMobile({ user }: any) {
 
             {tab === 'guardias' && (
               <section>
-                <div style={screenTitle}>Guardias activos</div>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginBottom:12 }}>
+                  <div>
+                    <div style={screenTitle}>Guardias activos</div>
+                    <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
+                  </div>
+                  <button style={{ ...secondaryButton, width:'auto', padding:'10px 12px' }} onClick={() => { setError(''); resetFormNuevoGuardia(); setModalNuevoGuardia(true) }}>
+                    Solicitar nuevo
+                  </button>
+                </div>
 
                 {guardias.filter(g => g.estado === 'activo').map(g => (
                   <div key={g.id} style={card}>
                     <div style={objetivoName}>{g.apellido}, {g.nombre}</div>
                     <div style={muted}>{g.legajo || 'Sin legajo'}</div>
                     <div style={muted}>{g.email || 'Sin email'}{g.telefono ? ` · ${g.telefono}` : ''}</div>
-                    <button style={{ ...secondaryButton, marginTop:12 }} onClick={() => abrirEditarGuardia(g)}>
-                      Editar datos
-                    </button>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:12 }}>
+                      <button style={secondaryButton} onClick={() => abrirEditarGuardia(g)}>
+                        Editar datos
+                      </button>
+                      <button
+                        style={{ ...dangerButton, opacity: asignando === `baja-guardia-${g.id}` ? 0.65 : 1 }}
+                        onClick={() => solicitarBajaGuardia(g)}
+                        disabled={asignando === `baja-guardia-${g.id}`}
+                      >
+                        {asignando === `baja-guardia-${g.id}` ? 'Enviando...' : 'Solicitar baja'}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </section>
@@ -1681,7 +1897,15 @@ export default function SupervisorMobile({ user }: any) {
 
             {tab === 'objetivos' && (
               <section>
-                <div style={screenTitle}>Objetivos</div>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginBottom:12 }}>
+                  <div>
+                    <div style={screenTitle}>Objetivos</div>
+                    <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
+                  </div>
+                  <button style={{ ...secondaryButton, width:'auto', padding:'10px 12px' }} onClick={() => { setError(''); resetFormNuevoObjetivo(); setModalNuevoObjetivo(true) }}>
+                    Solicitar objetivo
+                  </button>
+                </div>
                 {objetivos.map(objetivo => (
                   <div key={objetivo.id} style={card}>
                     <div style={objetivoName}>{objetivo.nombre}</div>
@@ -1699,9 +1923,61 @@ export default function SupervisorMobile({ user }: any) {
                       >
                         {asignando === `gps-${objetivo.id}` ? 'Actualizando...' : 'Actualizar ubicación'}
                       </button>
+                      <button
+                        style={{ ...dangerButton, gridColumn:'1 / -1', opacity: asignando === `baja-objetivo-${objetivo.id}` ? 0.65 : 1 }}
+                        onClick={() => solicitarBajaObjetivo(objetivo)}
+                        disabled={asignando === `baja-objetivo-${objetivo.id}` || objetivo.estado === 'inactivo'}
+                      >
+                        {asignando === `baja-objetivo-${objetivo.id}` ? 'Enviando...' : objetivo.estado === 'inactivo' ? 'Objetivo inactivo' : 'Solicitar baja'}
+                      </button>
                     </div>
                   </div>
                 ))}
+              </section>
+            )}
+
+            {tab === 'solicitudes' && (
+              <section>
+                <div style={screenTitle}>Mis solicitudes</div>
+                <div style={dateText}>Seguimiento de altas y bajas enviadas a administración.</div>
+
+                {solicitudesAdmin.length === 0 ? (
+                  <div style={empty}>No tenés solicitudes registradas.</div>
+                ) : solicitudesAdmin.map(solicitud => {
+                  const datos = solicitud.datos_json || {}
+                  const colorEstado: EstadoTurno = solicitud.estado === 'aprobado'
+                    ? 'finalizado'
+                    : solicitud.estado === 'rechazado'
+                      ? 'descubierto'
+                      : 'pendiente de ingreso'
+
+                  return (
+                    <div key={solicitud.id} style={card}>
+                      <div style={turnoTop}>
+                        <div>
+                          <div style={objetivoName}>{tipoSolicitudLabel(solicitud.tipo)}</div>
+                          <div style={muted}>{datos.nombre ? `${datos.apellido ? `${datos.apellido}, ` : ''}${datos.nombre}` : solicitud.entidad}</div>
+                          <div style={muted}>{fechaDDMMYYYY(solicitud.created_at)}</div>
+                        </div>
+                        <span style={badge(colorEstado)}>{solicitud.estado}</span>
+                      </div>
+                      <div style={registrosDetalle}>
+                        {Object.entries(datos).slice(0, 6).map(([key, value]) => (
+                          <div key={key} style={registroItem}>
+                            <strong>{key.replace(/_/g, ' ')}</strong>
+                            <div style={muted}>{value === null || value === undefined || value === '' ? '—' : String(value)}</div>
+                          </div>
+                        ))}
+                        {solicitud.comentario_admin && (
+                          <div style={registroItem}>
+                            <strong>Comentario admin</strong>
+                            <div style={muted}>{solicitud.comentario_admin}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </section>
             )}
 
@@ -1938,6 +2214,69 @@ export default function SupervisorMobile({ user }: any) {
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
               <button style={secondaryButton} onClick={() => setModalTurno(false)}>Cancelar</button>
               <button style={refreshButton} onClick={crearTurno} disabled={asignando === 'crear-turno'}>{asignando === 'crear-turno' ? 'Creando...' : 'Crear turno'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalNuevoGuardia && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>Solicitar nuevo vigilador</div>
+            <div style={muted}>La creación queda pendiente de aprobación administrativa.</div>
+            {error && <div style={{ ...errorBox, marginTop:12 }}>{error}</div>}
+            <label style={label}>Nombre *</label>
+            <input style={input} value={formNuevoGuardia.nombre} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, nombre:e.target.value })} />
+            <label style={label}>Apellido *</label>
+            <input style={input} value={formNuevoGuardia.apellido} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, apellido:e.target.value })} />
+            <label style={label}>Legajo *</label>
+            <input style={input} value={formNuevoGuardia.legajo} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, legajo:e.target.value })} />
+            <label style={label}>DNI</label>
+            <input style={input} value={formNuevoGuardia.dni} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, dni:e.target.value })} />
+            <label style={label}>Email</label>
+            <input style={input} type="email" value={formNuevoGuardia.email} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, email:e.target.value })} />
+            <label style={label}>Teléfono</label>
+            <input style={input} value={formNuevoGuardia.telefono} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, telefono:e.target.value })} />
+            <label style={label}>Rol operativo</label>
+            <select style={select} value={formNuevoGuardia.rol} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, rol:e.target.value })}>
+              <option value="guardia">Guardia</option>
+              <option value="vigilador">Vigilador</option>
+            </select>
+            <label style={label}>Foto URL</label>
+            <input style={input} value={formNuevoGuardia.foto_url} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, foto_url:e.target.value })} />
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <button style={secondaryButton} onClick={() => { setModalNuevoGuardia(false); resetFormNuevoGuardia() }}>Cancelar</button>
+              <button style={refreshButton} onClick={solicitarCrearGuardia} disabled={asignando === 'solicitud-crear-guardia'}>
+                {asignando === 'solicitud-crear-guardia' ? 'Enviando...' : 'Enviar solicitud'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalNuevoObjetivo && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>Solicitar nuevo objetivo</div>
+            <div style={muted}>La creación queda pendiente de aprobación administrativa.</div>
+            {error && <div style={{ ...errorBox, marginTop:12 }}>{error}</div>}
+            <label style={label}>Nombre *</label>
+            <input style={input} value={formNuevoObjetivo.nombre} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, nombre:e.target.value })} />
+            <label style={label}>Cliente</label>
+            <input style={input} value={formNuevoObjetivo.cliente} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, cliente:e.target.value })} />
+            <label style={label}>Dirección</label>
+            <input style={input} value={formNuevoObjetivo.direccion} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, direccion:e.target.value })} />
+            <label style={label}>Latitud</label>
+            <input style={input} inputMode="decimal" value={formNuevoObjetivo.lat} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, lat:e.target.value })} />
+            <label style={label}>Longitud</label>
+            <input style={input} inputMode="decimal" value={formNuevoObjetivo.lng} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, lng:e.target.value })} />
+            <label style={label}>Radio metros</label>
+            <input style={input} type="number" min={50} value={formNuevoObjetivo.radio_metros} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, radio_metros:e.target.value })} />
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <button style={secondaryButton} onClick={() => { setModalNuevoObjetivo(false); resetFormNuevoObjetivo() }}>Cancelar</button>
+              <button style={refreshButton} onClick={solicitarCrearObjetivo} disabled={asignando === 'solicitud-crear-objetivo'}>
+                {asignando === 'solicitud-crear-objetivo' ? 'Enviando...' : 'Enviar solicitud'}
+              </button>
             </div>
           </div>
         </div>

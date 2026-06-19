@@ -201,6 +201,21 @@ create table if not exists notificaciones_enviadas (
   constraint notificaciones_enviadas_usuario_turno_tipo_key unique (usuario_id, turno_id, tipo)
 );
 
+-- 11. SOLICITUDES ADMINISTRATIVAS
+create table if not exists solicitudes_admin (
+  id uuid primary key default gen_random_uuid(),
+  solicitante_id uuid not null references usuarios(id),
+  tipo text not null check (tipo in ('crear_objetivo', 'baja_objetivo', 'crear_vigilador', 'baja_vigilador')),
+  entidad text not null,
+  entidad_id uuid,
+  datos_json jsonb not null default '{}'::jsonb,
+  estado text not null default 'pendiente' check (estado in ('pendiente', 'aprobado', 'rechazado')),
+  aprobado_por uuid references usuarios(id),
+  fecha_aprobacion timestamptz,
+  comentario_admin text,
+  created_at timestamptz default now()
+);
+
 create index if not exists idx_supervisores_guardia_fecha_horario
   on supervisores_guardia (fecha, hora_inicio, hora_fin);
 create index if not exists idx_supervisores_guardia_supervisor
@@ -217,6 +232,12 @@ create index if not exists idx_notificaciones_enviadas_turno
   on notificaciones_enviadas (turno_id);
 create index if not exists idx_notificaciones_enviadas_tipo
   on notificaciones_enviadas (tipo);
+create index if not exists idx_solicitudes_admin_estado
+  on solicitudes_admin (estado, created_at desc);
+create index if not exists idx_solicitudes_admin_solicitante
+  on solicitudes_admin (solicitante_id, created_at desc);
+create index if not exists idx_solicitudes_admin_entidad
+  on solicitudes_admin (entidad, entidad_id);
 
 -- ============================================================
 -- ROW LEVEL SECURITY
@@ -232,6 +253,7 @@ alter table supervisor_intervenciones enable row level security;
 alter table supervisores_guardia enable row level security;
 alter table push_subscriptions enable row level security;
 alter table notificaciones_enviadas enable row level security;
+alter table solicitudes_admin enable row level security;
 
 -- Políticas: admin ve todo, guardia ve solo lo suyo
 create policy "Admin acceso total usuarios" on usuarios for all using (true);
@@ -245,6 +267,7 @@ create policy "Admin acceso total supervisor intervenciones" on supervisor_inter
 create policy "Admin acceso total supervisores guardia" on supervisores_guardia for all using (true);
 create policy "Admin acceso total push subscriptions" on push_subscriptions for all using (true);
 create policy "Admin acceso total notificaciones enviadas" on notificaciones_enviadas for all using (true);
+create policy "Admin acceso total solicitudes admin" on solicitudes_admin for all using (true);
 
 -- ============================================================
 -- DATOS DE EJEMPLO
