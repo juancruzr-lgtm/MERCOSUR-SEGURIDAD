@@ -88,6 +88,18 @@ function formatHoraTurno(hora?: string | null): string {
   return hora.slice(0, 5)
 }
 
+function formatSupabaseError(error: unknown, contexto: string): string {
+  const err = error as { message?: unknown, details?: unknown, hint?: unknown, code?: unknown }
+  const partes = [
+    typeof err?.message === 'string' ? err.message : String(error),
+    err?.details ? `Detalles: ${String(err.details)}` : '',
+    err?.hint ? `Sugerencia: ${String(err.hint)}` : '',
+    err?.code ? `Código: ${String(err.code)}` : '',
+  ].filter(Boolean)
+
+  return `${contexto}: ${partes.join(' · ')}`
+}
+
 function formatHorarioAsignado(turno?: Turno | null): string {
   if (!turno) return '—'
 
@@ -3929,15 +3941,42 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     return valor >= inicio && valor < fin
   }
 
+  const normalizarOperativo = (value?: string | null) =>
+    (value || '').trim().toLowerCase()
+
+  const fechaConOffset = (fecha?: string | null, dias = 0) => {
+    const base = fechaHoraTurnoLocal(fecha, '00:00:00')
+    if (!base) return ''
+    base.setDate(base.getDate() + dias)
+    return base.toLocaleDateString('sv-SE')
+  }
+
+  const fechasSupervisoresGuardia = Array.from(new Set(
+    turnosHoy
+      .flatMap((t: Turno) => [t.fecha?.slice(0, 10), fechaConOffset(t.fecha, -1)])
+      .filter((fecha): fecha is string => Boolean(fecha))
+  ))
+
+  const tipoAlertaLabel = (tipo: TipoAlertaOperativaAdmin) => {
+    const labels: Record<TipoAlertaOperativaAdmin, string> = {
+      descubierto: 'Puesto sin cobertura',
+      sin_fichar: 'Guardia sin fichar',
+      tardanza: 'Tardanza registrada',
+      fuera_radio: 'Fichaje fuera de radio',
+      salida_pendiente: 'Salida pendiente',
+    }
+    return labels[tipo]
+  }
+
   const supervisorGuardiaAsignado = (turno: Turno) =>
     supervisoresGuardia.find((asignacion: any) =>
-      asignacion.estado !== 'inactivo' &&
-      asignacion.rol_operativo === 'supervisor' &&
-      (asignacion.zona || ZONA_OPERATIVA_ADMIN) === ZONA_OPERATIVA_ADMIN &&
+      normalizarOperativo(asignacion.estado || 'activo') !== 'inactivo' &&
+      normalizarOperativo(asignacion.rol_operativo || 'supervisor') === 'supervisor' &&
+      normalizarOperativo(asignacion.zona || ZONA_OPERATIVA_ADMIN) === normalizarOperativo(ZONA_OPERATIVA_ADMIN) &&
       fechaHoraEnRangoAdmin(
         turno.fecha,
         turno.hora_inicio,
-        asignacion.fecha?.slice(0, 10),
+        String(asignacion.fecha || '').slice(0, 10),
         asignacion.hora_inicio,
         asignacion.hora_fin,
       )
@@ -3981,7 +4020,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     setLoadingData(true)
     setError('')
 
-    const turnoIds = (turnos as Turno[]).map((t: Turno) => t.id)
+    const turnoIds = turnosHoy.map((t: Turno) => t.id)
     const intervencionesQuery = turnoIds.length > 0
       ? supabase
         .from('supervisor_intervenciones')
@@ -3989,25 +4028,37 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
         .in('turno_id', turnoIds)
         .order('created_at', { ascending: false })
       : Promise.resolve({ data: [], error: null } as any)
+    const supervisoresGuardiaQuery = fechasSupervisoresGuardia.length > 0
+      ? supabase
+        .from('supervisores_guardia')
+        .select('*')
+        .in('fecha', fechasSupervisoresGuardia)
+        .order('fecha', { ascending: false })
+        .order('hora_inicio', { ascending: true })
+      : Promise.resolve({ data: [], error: null } as any)
 
     const [{ data: intervencionesData, error: intervencionesError }, { data: guardiasSupervisorData, error: guardiasSupervisorError }] = await Promise.all([
       intervencionesQuery,
-      supabase
-        .from('supervisores_guardia')
-        .select('*')
-        .order('fecha', { ascending: false })
-        .order('hora_inicio', { ascending: true }),
+      supervisoresGuardiaQuery,
     ])
 
-    if (intervencionesError) setError(intervencionesError.message)
-    else setIntervenciones(intervencionesData || [])
+    const erroresCarga: string[] = []
+
+    if (intervencionesError) {
+      erroresCarga.push(formatSupabaseError(intervencionesError, 'Consulta supervisor_intervenciones para turnos de hoy'))
+      setIntervenciones([])
+    } else {
+      setIntervenciones(intervencionesData || [])
+    }
 
     if (guardiasSupervisorError && !/supervisores_guardia|schema cache|does not exist/i.test(guardiasSupervisorError.message)) {
-      setError(guardiasSupervisorError.message)
+      erroresCarga.push(formatSupabaseError(guardiasSupervisorError, 'Consulta supervisores_guardia por fecha y horario'))
+      setSupervisoresGuardia([])
     } else {
       setSupervisoresGuardia(guardiasSupervisorData || [])
     }
 
+    if (erroresCarga.length > 0) setError(erroresCarga.join(' | '))
     setLoadingData(false)
   }
 
@@ -4233,12 +4284,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       cerrarAccion()
       setTab(accion === 'comentario' ? 'pendientes' : 'intervenidas')
     } catch (actionError) {
-      const message = actionError instanceof Error
-        ? actionError.message
-        : typeof actionError === 'object' && actionError && 'message' in actionError
-          ? String((actionError as { message: unknown }).message)
-          : 'Error al registrar intervención.'
-      setError(`No se pudo guardar la intervención: ${message}`)
+      setError(`No se pudo guardar la intervención. ${formatSupabaseError(actionError, 'Operación de intervención')}`)
     } finally {
       setLoadingAccion('')
     }
@@ -4266,17 +4312,20 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const renderContexto = (alerta: AlertaOperativaAdmin) => {
     const asignacion = supervisorGuardiaAsignado(alerta.turno)
     const ultima = intervencionesAlerta(alerta.turno.id, alerta.tipo)[0]
-    const guardiaEsperadoId = (alerta.turno as any).guardia_original_id || alerta.turno.guardia_id
-    const guardiaRealId = alerta.registro?.guardia_id || alerta.turno.guardia_id
+    const estadoAlerta = alertaPendiente(alerta) ? 'Pendiente' : 'Intervenida'
 
     return (
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(190px, 1fr))', gap:10, background:'#111827', border:'1px solid #1e2d42', borderRadius:8, padding:12, marginTop:12 }}>
-        <div><div style={S.label}>Guardia esperado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(guardiaEsperadoId)}</div></div>
-        <div><div style={S.label}>Guardia registrado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(guardiaRealId)}</div></div>
+        <div><div style={S.label}>Objetivo</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreObjetivo(alerta.turno.objetivo_id)}</div></div>
+        <div><div style={S.label}>Horario</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{hora(alerta.turno.hora_inicio)} a {hora(alerta.turno.hora_fin)}</div></div>
+        <div><div style={S.label}>Tipo de alerta</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{tipoAlertaLabel(alerta.tipo)}</div></div>
+        <div><div style={S.label}>Guardia asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(alerta.turno.guardia_id)}</div></div>
         <div><div style={S.label}>Supervisor asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{asignacion?.supervisor_id ? nombreUsuario(asignacion.supervisor_id) : 'Sin supervisor asignado'}</div></div>
+        <div><div style={S.label}>Estado</div><div style={{ fontSize:13, color: estadoAlerta === 'Intervenida' ? '#10b981' : '#f59e0b' }}>{estadoAlerta}</div></div>
         <div><div style={S.label}>Jefe operativo</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{ultima?.jefe_operativo || JEFE_OPERATIVO_ADMIN}</div></div>
         <div><div style={S.label}>Director técnico</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{ultima?.director_tecnico || DIRECTOR_TECNICO_ADMIN}</div></div>
         <div><div style={S.label}>Última acción</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{ultima ? accionLabel(ultima.accion) : 'Pendiente'}</div></div>
+        <div><div style={S.label}>Fecha última acción</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{ultima ? fechaHoraTexto(ultima.created_at) : '—'}</div></div>
         <div style={{ gridColumn:'1 / -1' }}><div style={S.label}>Comentario</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{ultima?.comentario || asignacion?.observacion || '—'}</div></div>
       </div>
     )
@@ -4383,6 +4432,8 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
         </div>
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(190px, 1fr))', gap:10, background:'#111827', border:'1px solid #1e2d42', borderRadius:8, padding:12, marginTop:12 }}>
+          <div><div style={S.label}>Tipo de alerta</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{tipoAlertaLabel(item.tipo)}</div></div>
+          <div><div style={S.label}>Guardia asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(turno.guardia_id)}</div></div>
           <div><div style={S.label}>Acción realizada</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{accionLabel(intervencion.accion)}</div></div>
           <div><div style={S.label}>Supervisor/admin que intervino</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(intervencion.supervisor_intervino_id || intervencion.supervisor_id)}</div></div>
           <div><div style={S.label}>Supervisor asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{intervencion.supervisor_asignado_id ? nombreUsuario(intervencion.supervisor_asignado_id) : asignacion?.supervisor_id ? nombreUsuario(asignacion.supervisor_id) : 'Sin supervisor asignado'}</div></div>
@@ -4420,12 +4471,10 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
       <div style={{ display:'flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:24, width:'fit-content' }}>
         <button style={tabStyle(tab === 'pendientes')} onClick={() => setTab('pendientes')}>
-          Alertas pendientes
-          {alertasPendientes.length > 0 && <span style={{ marginLeft:6, background:'rgba(239,68,68,.15)', color:'#ef4444', borderRadius:10, padding:'1px 7px', fontSize:11 }}>{alertasPendientes.length}</span>}
+          Alertas pendientes ({alertasPendientes.length})
         </button>
         <button style={tabStyle(tab === 'intervenidas')} onClick={() => setTab('intervenidas')}>
-          Alertas intervenidas
-          {intervenidasOrdenadas.length > 0 && <span style={{ marginLeft:6, background:'rgba(16,185,129,.18)', color:'#10b981', borderRadius:10, padding:'1px 7px', fontSize:11 }}>{intervenidasOrdenadas.length}</span>}
+          Alertas intervenidas ({intervenidasOrdenadas.length})
         </button>
       </div>
 
