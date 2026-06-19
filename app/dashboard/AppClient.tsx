@@ -4391,7 +4391,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const tipoAlertaLabel = (tipo: TipoAlertaOperativaAdmin) => {
     const labels: Record<TipoAlertaOperativaAdmin, string> = {
       descubierto: 'Puesto sin cobertura',
-      sin_fichar: 'Guardia sin fichar',
+      sin_fichar: 'Guardia sin fichar / Objetivo en riesgo',
       tardanza: 'Tardanza registrada',
       fuera_radio: 'Fichaje fuera de radio',
       salida_pendiente: 'Salida pendiente',
@@ -4509,11 +4509,11 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
   const alertasPendientes = [
     ...turnosHoy
-      .filter((t: Turno) => turnoSinCoberturaOperativa(t, existeAsistencia(t)))
+      .filter((t: Turno) => !t.guardia_id || t.estado === 'descubierto')
       .map((t: Turno) => alertaBase(t, 'descubierto', 'Puesto sin cobertura', !t.guardia_id ? 'Sin guardia asignado' : 'Pasó la ventana de fichaje sin asistencia', 'danger')),
     ...turnosHoy
       .filter((t: Turno) => t.guardia_id && t.estado !== 'descubierto' && !tieneEntrada(t) && minutosDesdeInicioTurno(t) >= 15)
-      .map((t: Turno) => alertaBase(t, 'sin_fichar', 'Guardia sin fichar', `Demora: ${minutosDesdeInicioTurno(t)} minutos desde el inicio`, 'warn')),
+      .map((t: Turno) => alertaBase(t, 'sin_fichar', 'Guardia sin fichar / Objetivo en riesgo', `Cobertura en riesgo: ${minutosDesdeInicioTurno(t)} minutos desde el inicio sin entrada registrada`, 'warn')),
     ...registros
       .filter((r: RegistroAsistencia) => {
         const turno = turnosHoy.find((t: Turno) => t.id === r.turno_id)
@@ -4744,13 +4744,17 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     const asignacion = supervisorGuardiaAsignado(alerta.turno)
     const ultima = intervencionesAlerta(alerta.turno.id, alerta.tipo)[0]
     const estadoAlerta = alertaPendiente(alerta) ? 'Pendiente' : 'Intervenida'
+    const objetivo = objetivos.find((o: Objetivo) => o.id === alerta.turno.objetivo_id)
+    const minutosDemora = alerta.tipo === 'sin_fichar' ? minutosDesdeInicioTurno(alerta.turno) : null
 
     return (
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(190px, 1fr))', gap:10, background:'#111827', border:'1px solid #1e2d42', borderRadius:8, padding:12, marginTop:12 }}>
         <div><div style={S.label}>Objetivo</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreObjetivo(alerta.turno.objetivo_id)}</div></div>
+        <div><div style={S.label}>Dirección</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{objetivo?.direccion || 'Sin dirección registrada'}</div></div>
         <div><div style={S.label}>Horario</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{hora(alerta.turno.hora_inicio)} a {hora(alerta.turno.hora_fin)}</div></div>
         <div><div style={S.label}>Tipo de alerta</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{tipoAlertaLabel(alerta.tipo)}</div></div>
         <div><div style={S.label}>Guardia asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(alerta.turno.guardia_id)}</div></div>
+        {minutosDemora !== null && <div><div style={S.label}>Minutos de demora</div><div style={{ fontSize:13, color:'#f59e0b' }}>{minutosDemora}</div></div>}
         <div><div style={S.label}>Supervisor asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{asignacion?.supervisor_id ? nombreUsuario(asignacion.supervisor_id) : 'Sin supervisor asignado'}</div></div>
         <div><div style={S.label}>Estado</div><div style={{ fontSize:13, color: estadoAlerta === 'Intervenida' ? '#10b981' : '#f59e0b' }}>{estadoAlerta}</div></div>
         <div><div style={S.label}>Jefe operativo</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{ultima?.jefe_operativo || JEFE_OPERATIVO_ADMIN}</div></div>
@@ -4821,31 +4825,36 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     return { background:cfg.bg, border:`1px solid ${cfg.border}`, borderRadius:12, padding:18, marginBottom:14 }
   }
 
-  const renderAlertaPendiente = (alerta: AlertaOperativaAdmin) => (
-    <div key={alerta.key} style={alertaStyle(alerta.tono)}>
-      <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start' }}>
-        <div>
-          <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:800, color:'#e2e8f0' }}>{alerta.titulo}</div>
-          <div style={{ fontSize:13, color:'#94a3b8', marginTop:4 }}>{nombreObjetivo(alerta.turno.objetivo_id)} · {formatFecha(alerta.turno.fecha)} · {hora(alerta.turno.hora_inicio)} a {hora(alerta.turno.hora_fin)}</div>
-          <div style={{ fontSize:13, color:'#f59e0b', marginTop:4 }}>{alerta.detalle}</div>
-          {alerta.registro?.hora_entrada_real && <div style={{ fontSize:12, color:'#cbd5e1', marginTop:4 }}>Entrada real: {hora(alerta.registro.hora_entrada_real)}</div>}
+  const renderAlertaPendiente = (alerta: AlertaOperativaAdmin) => {
+    const objetivo = objetivos.find((o: Objetivo) => o.id === alerta.turno.objetivo_id)
+
+    return (
+      <div key={alerta.key} style={alertaStyle(alerta.tono)}>
+        <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start' }}>
+          <div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:800, color:'#e2e8f0' }}>{alerta.titulo}</div>
+            <div style={{ fontSize:13, color:'#94a3b8', marginTop:4 }}>{nombreObjetivo(alerta.turno.objetivo_id)} · {formatFecha(alerta.turno.fecha)} · {hora(alerta.turno.hora_inicio)} a {hora(alerta.turno.hora_fin)}</div>
+            <div style={{ fontSize:13, color:'#94a3b8', marginTop:4 }}>Dirección: {objetivo?.direccion || 'Sin dirección registrada'}</div>
+            <div style={{ fontSize:13, color:'#f59e0b', marginTop:4 }}>{alerta.detalle}</div>
+            {alerta.registro?.hora_entrada_real && <div style={{ fontSize:12, color:'#cbd5e1', marginTop:4 }}>Entrada real: {hora(alerta.registro.hora_entrada_real)}</div>}
+          </div>
+          <Badge type="pendiente">Pendiente</Badge>
         </div>
-        <Badge type="pendiente">Pendiente</Badge>
+
+        {renderContexto(alerta)}
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(160px, 1fr))', gap:8, marginTop:12 }}>
+          <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'confirmar_cubierto')}>Confirmar cubierto</button>
+          <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'reasignacion')}>Reasignar</button>
+          <button type="button" style={{ ...S.btn, justifyContent:'center', background:'rgba(239,68,68,.15)', color:'#ef4444', border:'1px solid rgba(239,68,68,.35)' }} onClick={() => abrirAccion(alerta, 'marcado_descubierto')}>Marcar descubierto</button>
+          <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'comentario')}>Comentar</button>
+        </div>
+
+        {renderPanelAccion(alerta)}
+        {renderHistorial(alerta)}
       </div>
-
-      {renderContexto(alerta)}
-
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(160px, 1fr))', gap:8, marginTop:12 }}>
-        <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'confirmar_cubierto')}>Confirmar cubierto</button>
-        <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'reasignacion')}>Reasignar</button>
-        <button type="button" style={{ ...S.btn, justifyContent:'center', background:'rgba(239,68,68,.15)', color:'#ef4444', border:'1px solid rgba(239,68,68,.35)' }} onClick={() => abrirAccion(alerta, 'marcado_descubierto')}>Marcar descubierto</button>
-        <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={() => abrirAccion(alerta, 'comentario')}>Comentar</button>
-      </div>
-
-      {renderPanelAccion(alerta)}
-      {renderHistorial(alerta)}
-    </div>
-  )
+    )
+  }
 
   const renderIntervenida = (item: any) => {
     const turno = item.turno as Turno
@@ -4878,7 +4887,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
   const gruposPendientes = [
     { tipo:'descubierto', titulo:'Puestos sin cobertura' },
-    { tipo:'sin_fichar', titulo:'Guardias sin fichar' },
+    { tipo:'sin_fichar', titulo:'Guardias sin fichar / objetivos en riesgo' },
     { tipo:'tardanza', titulo:'Tardanzas registradas' },
     { tipo:'fuera_radio', titulo:'Fichajes fuera de radio' },
     { tipo:'salida_pendiente', titulo:'Salidas pendientes' },

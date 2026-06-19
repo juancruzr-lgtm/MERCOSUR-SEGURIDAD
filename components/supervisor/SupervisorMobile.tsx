@@ -2024,7 +2024,7 @@ export default function SupervisorMobile({ user }: any) {
 
                 {turnosSinIngresoPendientes.length > 0 && (
                   <div style={{ ...card, borderColor: 'rgba(245,158,11,.35)', background: 'rgba(245,158,11,.08)' }}>
-                    <div style={{ ...objetivoName, color: '#fbbf24' }}>Guardias sin fichar</div>
+                    <div style={{ ...objetivoName, color: '#fbbf24' }}>Guardias sin fichar / Objetivos en riesgo</div>
                     <div style={muted}>{turnosSinIngresoPendientes.length} turno(s) iniciados hace más de 15 minutos sin entrada registrada.</div>
 
                     <div style={{ marginTop: 12 }}>
@@ -2036,13 +2036,15 @@ export default function SupervisorMobile({ user }: any) {
                           <div key={`alerta-sin-ingreso-${turno.id}`} style={{ ...turnoCard, background: '#111827' }}>
                             <div style={turnoTop}>
                               <div>
-                                <div style={objetivoName}>{guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
-                                <div style={muted}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
-                                <div style={muted}>Horario programado: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+                                <div style={objetivoName}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
+                                <div style={muted}>{objetivo?.direccion || 'Sin dirección registrada'}</div>
+                                <div style={muted}>Tipo: Guardia sin fichar / Objetivo en riesgo</div>
+                                <div style={muted}>Guardia asignado: {guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
+                                <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
                                 <div style={{ ...muted, color: '#f59e0b' }}>Minutos de demora: {minutosAtrasoTurno(turno)}</div>
-                                <div style={{ ...muted, color: '#f59e0b' }}>Estado: Sin ingreso</div>
+                                <div style={{ ...muted, color: '#f59e0b' }}>Estado: Cobertura en riesgo</div>
                               </div>
-                              <span style={alertBadge('sin ingreso')}>sin ingreso</span>
+                              <span style={alertBadge('objetivo en riesgo')}>objetivo en riesgo</span>
                             </div>
                             {renderAccionesAlerta(turno, 'sin_fichar')}
                           </div>
