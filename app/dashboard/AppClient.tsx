@@ -93,14 +93,14 @@ function StatCard({ label, value, sub, color, icon, onClick }: any) {
   return (
     <div
       onClick={onClick}
-      style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, position:'relative', overflow:'hidden', cursor:onClick?'pointer':'default' }}
+      style={{ background:`linear-gradient(180deg, ${alpha(brandColors.surface2, 0.96)} 0%, ${alpha(brandColors.surface, 0.98)} 100%)`, border:`1px solid ${alpha(color || brandColors.yellow, 0.34)}`, borderRadius:8, padding:20, position:'relative', overflow:'hidden', cursor:onClick?'pointer':'default', boxShadow:`0 14px 34px ${alpha(brandColors.black, 0.22)}` }}
       title={onClick ? 'Aplicar filtro' : undefined}
     >
       <div style={{ position:'absolute', top:0, left:0, right:0, height:3, background:color }} />
       <div style={{ position:'absolute', top:16, right:16, fontSize:28, opacity:0.15 }}>{icon}</div>
-      <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, fontWeight:600 }}>{label}</div>
-      <div style={{ fontFamily:'Syne,sans-serif', fontSize:36, fontWeight:800, margin:'8px 0 4px' }}>{value}</div>
-      <div style={{ fontSize:12, color:'#64748b' }}>{sub}</div>
+      <div style={{ fontSize:11, color:brandColors.muted, textTransform:'uppercase', letterSpacing:1, fontWeight:800, fontFamily:FONT_BRAND }}>{label}</div>
+      <div style={{ fontFamily:FONT_BRAND, fontSize:36, fontWeight:900, margin:'8px 0 4px', color:brandColors.textStrong }}>{value}</div>
+      <div style={{ fontSize:12, color:brandColors.text }}>{sub}</div>
     </div>
   )
 }
@@ -578,44 +578,54 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   }
 
   const metricas = [
-    { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: '#3b82f6', page:'objetivos', filtro:{ tipo:'activos', label:'Objetivos activos' } },
-    { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => esRolGuardia(g.rol)).length} guardias cargados`, color: '#10b981', page:'guardias', filtro:{ tipo:'activos', label:'Guardias activos' } },
-    { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: '#f59e0b', page:'turnos', filtro:{ tipo:'hoy', label:'Turnos de hoy' } },
-    { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: '#10b981', page:'turnos', filtro:{ tipo:'cubiertos', label:'Turnos cubiertos hoy' } },
-    { label: 'Turnos descubiertos', value: turnosDescubiertos.length, sub: 'sin cobertura operativa', color: '#ef4444', page:'turnos', filtro:{ tipo:'descubiertos', label:'Turnos descubiertos hoy' } },
-    { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: '#22c55e', page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
-    { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'registros del día', color: '#38bdf8', page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
-    { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: mesActual, color: '#8b5cf6', page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
-    { label: 'Llegadas tarde', value: llegadasTarde, sub: 'tardanzas registradas hoy', color: '#f97316', page:'asistencia', filtro:{ tipo:'tarde', label:'Llegadas tarde hoy' } },
-    { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'sin entrada +15 min', color: '#ef4444', page:'turnos', filtro:{ tipo:'sin_fichar', label:'Turnos sin fichar hoy' } },
+    { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: semanticColors.info, page:'objetivos', filtro:{ tipo:'activos', label:'Objetivos activos' } },
+    { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => esRolGuardia(g.rol)).length} guardias cargados`, color: semanticColors.success, page:'guardias', filtro:{ tipo:'activos', label:'Guardias activos' } },
+    { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: brandColors.yellow, page:'turnos', filtro:{ tipo:'hoy', label:'Turnos de hoy' } },
+    { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: semanticColors.success, page:'turnos', filtro:{ tipo:'cubiertos', label:'Turnos cubiertos hoy' } },
+    { label: 'Turnos descubiertos', value: turnosDescubiertos.length, sub: 'sin cobertura operativa', color: semanticColors.error, page:'turnos', filtro:{ tipo:'descubiertos', label:'Turnos descubiertos hoy' } },
+    { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: semanticColors.success, page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
+    { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'registros del día', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
+    { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: mesActual, color: brandColors.orange, page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
+    { label: 'Llegadas tarde', value: llegadasTarde, sub: 'tardanzas registradas hoy', color: semanticColors.warning, page:'asistencia', filtro:{ tipo:'tarde', label:'Llegadas tarde hoy' } },
+    { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'sin entrada +15 min', color: semanticColors.error, page:'turnos', filtro:{ tipo:'sin_fichar', label:'Turnos sin fichar hoy' } },
   ]
 
   const alertBox: React.CSSProperties = {
-    background:'#111827',
-    border:'1px solid #1e2d42',
-    borderRadius:12,
+    background:alpha(brandColors.surface, 0.92),
+    border:`1px solid ${alpha(brandColors.yellow, 0.16)}`,
+    borderRadius:8,
     padding:16,
+    boxShadow:`0 14px 34px ${alpha(brandColors.black, 0.16)}`,
   }
 
   const alertTitle: React.CSSProperties = {
-    fontFamily:'Syne,sans-serif',
+    fontFamily:FONT_BRAND,
     fontSize:15,
-    fontWeight:800,
+    fontWeight:900,
     marginBottom:12,
+    color:brandColors.textStrong,
   }
 
   const alertItem: React.CSSProperties = {
     padding:'12px 0',
-    borderTop:'1px solid #1e2d42',
+    borderTop:`1px solid ${brandColors.border}`,
     fontSize:13,
-    color:'#cbd5e1',
+    color:brandColors.text,
   }
 
   const emptyAlert: React.CSSProperties = {
     padding:'12px 0',
-    borderTop:'1px solid #1e2d42',
+    borderTop:`1px solid ${brandColors.border}`,
     fontSize:13,
-    color:'#64748b',
+    color:brandColors.muted,
+  }
+
+  const dashboardSummaryCard: React.CSSProperties = {
+    background:alpha(brandColors.surface, 0.86),
+    border:`1px solid ${brandColors.border}`,
+    borderRadius:8,
+    padding:18,
+    marginBottom:0,
   }
 
   const renderTurnoAlert = (turno: Turno, detalle: string, filtro: any) => (
@@ -694,7 +704,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         const g = guardias.find((x: Usuario) => x.id === n.guardia_id)
         const o = objetivos.find((x: Objetivo) => x.id === n.objetivo_id)
         return (
-          <div key={n.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', borderRadius:10, background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.3)', color:'#fca5a5', marginBottom:12, fontSize:13 }}>
+          <div key={n.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', borderRadius:8, background:alpha(semanticColors.error, 0.12), border:`1px solid ${alpha(semanticColors.error, 0.34)}`, color:brandColors.textStrong, marginBottom:12, fontSize:13 }}>
             🚨 <strong>NOVEDAD URGENTE</strong> — {o?.nombre}: {n.descripcion} ({g?.nombre} {g?.apellido})
           </div>
         )
@@ -707,14 +717,14 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12, marginBottom:24 }}>
-        <div style={S.card}><div style={S.label}>Mes actual</div><strong>{mesActual}</strong></div>
-        <div style={S.card}><div style={S.label}>Total horas reales</div><strong>{formatoHoras(horasMes)}</strong></div>
-        <div style={S.card}><div style={S.label}>Guardias con asistencia</div><strong>{guardiasConAsistenciaMes}</strong></div>
-        <div style={S.card}><div style={S.label}>Turnos finalizados hoy</div><strong>{turnosFinalizadosHoy}</strong></div>
-        <div style={S.card}><div style={S.label}>Turnos en curso hoy</div><strong>{turnosEnCursoHoy}</strong></div>
-        <div style={S.card}><div style={S.label}>Turnos sin fichar hoy</div><strong>{turnosSinFichar.length}</strong></div>
-        <div style={S.card}><div style={S.label}>Tardanzas registradas hoy</div><strong>{tardanzasRegistradas.length}</strong></div>
-        <div style={S.card}><div style={S.label}>Fichajes fuera de radio</div><strong>{fichajesFueraRadio.length}</strong></div>
+        <div style={dashboardSummaryCard}><div style={S.label}>Mes actual</div><strong>{mesActual}</strong></div>
+        <div style={dashboardSummaryCard}><div style={S.label}>Total horas reales</div><strong>{formatoHoras(horasMes)}</strong></div>
+        <div style={dashboardSummaryCard}><div style={S.label}>Guardias con asistencia</div><strong>{guardiasConAsistenciaMes}</strong></div>
+        <div style={dashboardSummaryCard}><div style={S.label}>Turnos finalizados hoy</div><strong>{turnosFinalizadosHoy}</strong></div>
+        <div style={dashboardSummaryCard}><div style={S.label}>Turnos en curso hoy</div><strong>{turnosEnCursoHoy}</strong></div>
+        <div style={dashboardSummaryCard}><div style={S.label}>Turnos sin fichar hoy</div><strong>{turnosSinFichar.length}</strong></div>
+        <div style={dashboardSummaryCard}><div style={S.label}>Tardanzas registradas hoy</div><strong>{tardanzasRegistradas.length}</strong></div>
+        <div style={dashboardSummaryCard}><div style={S.label}>Fichajes fuera de radio</div><strong>{fichajesFueraRadio.length}</strong></div>
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16 }}>
