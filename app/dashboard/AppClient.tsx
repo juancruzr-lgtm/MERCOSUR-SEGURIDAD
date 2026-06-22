@@ -5719,21 +5719,23 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'novedades', icon:'📋', label:'Mis Novedades' },
     ]}
   ] : [
-    { section:'General', items:[{ id:'dashboard', icon:'📊', label:'Panel Principal' }] },
-    { section:'Operaciones', items:[
+    { section:'GENERAL', items:[{ id:'dashboard', icon:'📊', label:'Panel Principal' }] },
+    { section:'OPERACIONES', items:[
       { id:'guardias', icon:'👮', label:'Guardias' },
       { id:'objetivos', icon:'🏢', label:'Objetivos' },
       { id:'turnos', icon:'📅', label:'Turnos' },
       { id:'asistencia', icon:'✅', label:'Asistencia' },
-      { id:'turnos_base', icon:'🧱', label:'Turnos Base' },
     ]},
-    { section:'Administración', items:[
-      { id:'servicios_objetivo', icon:'🏢', label:'Servicios Objetivo' },
-      { id:'supervisores_guardia', icon:'🧭', label:'Supervisores de Guardia' },
-      { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
+    { section:'ADMINISTRACIÓN', items:[
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
-    { id:'novedades', icon:'📋', label:'Novedades' },
+      { id:'novedades', icon:'📋', label:'Novedades' },
       { id:'reportes', icon:'📈', label:'Reportes' },
+      { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
+      { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
+    ]},
+    { section:'CONFIGURACIÓN', items:[
+      { id:'servicios_objetivo', icon:'📅', label:'Programación' },
+      { id:'turnos_base', icon:'⏰', label:'Turnos Base' },
     ]},
   ]
 
