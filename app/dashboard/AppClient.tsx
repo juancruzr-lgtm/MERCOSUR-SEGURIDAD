@@ -45,13 +45,13 @@ const FONT_BODY = `${brandTypography.currentBody}, sans-serif`
 const FONT_DISPLAY = `${brandTypography.currentDisplay}, sans-serif`
 
 const S: Record<string, React.CSSProperties> = {
-  app: { display:'flex', minHeight:'100vh', background:'#0a0e1a' },
-  sidebar: { width:240, background:'#111827', borderRight:'1px solid #1e2d42', display:'flex', flexDirection:'column', position:'fixed', top:0, left:0, height:'100vh', zIndex:100 },
-  sidebarLogo: { padding:'24px 20px', borderBottom:'1px solid #1e2d42' },
-  brand: { fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:800, color:'#f59e0b', letterSpacing:0.5 },
-  sub: { fontSize:10, color:'#64748b', marginTop:2, letterSpacing:1, textTransform:'uppercase' as const },
-  navSection: { padding:'8px 20px 4px', fontSize:10, color:'#64748b', letterSpacing:1.5, textTransform:'uppercase' as const, fontWeight:600 },
-  main: { marginLeft:240, flex:1, padding:32, minHeight:'100vh' },
+  app: { display:'flex', minHeight:'100vh', background:brandColors.appBg, color:brandColors.text, fontFamily:FONT_BODY },
+  sidebar: { width:240, background:`linear-gradient(180deg, ${brandColors.black} 0%, ${brandColors.surface} 100%)`, borderRight:`1px solid ${alpha(brandColors.yellow, 0.18)}`, boxShadow:`18px 0 48px ${alpha(brandColors.black, 0.26)}`, display:'flex', flexDirection:'column', position:'fixed', top:0, left:0, height:'100vh', zIndex:100 },
+  sidebarLogo: { padding:'20px', borderBottom:`1px solid ${alpha(brandColors.yellow, 0.16)}`, background:alpha(brandColors.yellow, 0.04) },
+  brand: { fontFamily:FONT_BRAND, fontSize:15, fontWeight:900, color:brandColors.yellow, letterSpacing:0.5 },
+  sub: { fontSize:10, color:brandColors.text, marginTop:2, letterSpacing:1, textTransform:'uppercase' as const },
+  navSection: { padding:'10px 20px 5px', fontSize:10, color:brandColors.muted, letterSpacing:1.5, textTransform:'uppercase' as const, fontWeight:800 },
+  main: { marginLeft:240, flex:1, padding:32, minHeight:'100vh', background:`linear-gradient(180deg, ${alpha(brandColors.surface2, 0.42)} 0%, ${brandColors.appBg} 260px)` },
   card: { background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, marginBottom:20 },
   title: { fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800, marginBottom:4 },
   sub2: { color:'#64748b', fontSize:14, marginBottom:24 },
@@ -275,10 +275,10 @@ function ordenRegistroAsistencia(registro: RegistroAsistencia | any, turno?: Tur
 
 function NavItem({ id, icon, label, active, badge, onClick }: any) {
   return (
-    <div onClick={() => onClick(id)} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 20px', cursor:'pointer', color:active?'#f59e0b':'#64748b', fontSize:14, transition:'all 0.15s', background:active?'rgba(245,158,11,0.08)':'transparent', borderLeft:`3px solid ${active?'#f59e0b':'transparent'}` }}>
+    <div onClick={() => onClick(id)} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 20px', cursor:'pointer', color:active?brandColors.textStrong:brandColors.muted, fontSize:14, fontFamily:FONT_BRAND, fontWeight:active?800:700, transition:'all 0.15s', background:active?alpha(brandColors.yellow, 0.12):'transparent', borderLeft:`3px solid ${active?brandColors.yellow:'transparent'}` }}>
       <span style={{ fontSize:16, width:20, textAlign:'center' }}>{icon}</span>
       {label}
-      {badge > 0 && <span style={{ marginLeft:'auto', background:'#ef4444', color:'#fff', fontSize:10, fontWeight:700, borderRadius:10, padding:'1px 7px' }}>{badge}</span>}
+      {badge > 0 && <span style={{ marginLeft:'auto', background:semanticColors.error, color:brandColors.white, fontSize:10, fontWeight:800, borderRadius:10, padding:'1px 7px' }}>{badge}</span>}
     </div>
   )
 }
@@ -5793,12 +5793,16 @@ const esGuardia = esRolGuardia(user.rol)
   const misTurnos = turnos.filter(t => t.guardia_id === user.id)
 
   return (
-    <div style={S.app}>
+      <div style={S.app}>
       <div style={S.sidebar}>
         <div style={S.sidebarLogo}>
-          <div style={{ fontSize:24, marginBottom:6 }}>🛡️</div>
-          <div style={S.brand}>MERCOSUR</div>
-          <div style={S.sub}>Control Operativo</div>
+          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+            <img src={brandAssets.isotipo} alt="" style={{ width:38, height:38, objectFit:'contain' }} />
+            <div>
+              <div style={S.brand}>MERCOSUR</div>
+              <div style={S.sub}>Control Operativo</div>
+            </div>
+          </div>
         </div>
         <nav style={{ flex:1, padding:'16px 0', overflowY:'auto' }}>
           {NAV.map(sec => (
@@ -5808,14 +5812,14 @@ const esGuardia = esRolGuardia(user.rol)
             </div>
           ))}
         </nav>
-        <div style={{ padding:'16px 20px', borderTop:'1px solid #1e2d42' }}>
+        <div style={{ padding:'16px 20px', borderTop:`1px solid ${alpha(brandColors.yellow, 0.16)}`, background:alpha(brandColors.black, 0.22) }}>
           <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-            <div style={{ width:32, height:32, borderRadius:'50%', background:'#f59e0b', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, color:'#000' }}>{user.nombre?.[0]}</div>
+            <div style={{ width:32, height:32, borderRadius:'50%', background:brandColors.yellow, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:FONT_BRAND, fontWeight:900, fontSize:13, color:brandColors.black }}>{user.nombre?.[0]}</div>
             <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, fontWeight:500 }}>{user.nombre}</div>
-              <div style={{ fontSize:11, color:'#64748b' }}>{user.rol}</div>
+              <div style={{ fontSize:13, fontWeight:800, fontFamily:FONT_BRAND }}>{user.nombre}</div>
+              <div style={{ fontSize:11, color:brandColors.muted }}>{user.rol}</div>
             </div>
-            <button style={{ background:'none', border:'none', color:'#64748b', cursor:'pointer', fontSize:16 }} onClick={async () => { await supabase.auth.signOut(); setUser(null) }} title="Cerrar sesión">⏏</button>
+            <button style={{ background:'none', border:'none', color:brandColors.muted, cursor:'pointer', fontSize:16 }} onClick={async () => { await supabase.auth.signOut(); setUser(null) }} title="Cerrar sesión">⏏</button>
           </div>
         </div>
       </div>
