@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mercosur Seguridad - Brand Preview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;600;700;800;900&family=DM+Sans:wght@400;500;700&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --ms-yellow: #fdba12;
+        --ms-black: #05070d;
+        --ms-carbon: #151518;
+        --ms-red: #f4143e;
+        --ms-orange: #f3833f;
+        --ms-surface: #111827;
+        --ms-surface-2: #1a2235;
+        --ms-border: #1e2d42;
+        --ms-muted: #64748b;
+        --ms-text: #e2e8f0;
+        --ms-success: #10b981;
+        --ms-warning: #f59e0b;
+        --ms-error: #dc2626;
+        --ms-info: #2563eb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #f8fafc;
+        color: var(--ms-carbon);
+        font-family: "Mulish", Arial, sans-serif;
+      }
+
+      main {
+        display: grid;
+        gap: 28px;
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 36px;
+      }
+
+      section {
+        display: grid;
+        gap: 18px;
+      }
+
+      .hero {
+        background: var(--ms-black);
+        color: var(--ms-text);
+        min-height: 300px;
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 28px;
+        align-items: center;
+        padding: 36px;
+        border-radius: 8px;
+      }
+
+      .hero img {
+        max-width: 100%;
+        height: auto;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 44px;
+        line-height: 1.05;
+        font-weight: 900;
+      }
+
+      h2 {
+        font-size: 22px;
+        font-weight: 900;
+      }
+
+      .eyebrow {
+        color: var(--ms-yellow);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .swatch,
+      .panel {
+        border: 1px solid #d8dee8;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #fff;
+      }
+
+      .swatch-color {
+        height: 78px;
+      }
+
+      .swatch-body,
+      .panel {
+        padding: 14px;
+      }
+
+      .name {
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .hex {
+        margin-top: 4px;
+        color: #64748b;
+        font-size: 12px;
+      }
+
+      .logos {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      .logo-box {
+        border-radius: 8px;
+        padding: 20px;
+        border: 1px solid #d8dee8;
+        min-height: 160px;
+        display: grid;
+        place-items: center;
+      }
+
+      .light {
+        background: #fff;
+      }
+
+      .dark {
+        background: var(--ms-black);
+      }
+
+      .logo-box img {
+        max-width: 100%;
+        max-height: 120px;
+      }
+
+      .type-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .sample-title {
+        font-size: 12px;
+        font-weight: 900;
+        color: var(--ms-muted);
+        text-transform: uppercase;
+      }
+
+      .sample {
+        margin-top: 10px;
+        font-size: 28px;
+        font-weight: 900;
+        line-height: 1.1;
+      }
+
+      .mulish {
+        font-family: "Mulish", Arial, sans-serif;
+      }
+
+      .dm {
+        font-family: "DM Sans", Arial, sans-serif;
+      }
+
+      .syne {
+        font-family: "Syne", Arial, sans-serif;
+      }
+
+      .semantic-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .semantic {
+        border-radius: 8px;
+        padding: 14px;
+        color: #fff;
+        font-weight: 900;
+      }
+
+      @media (max-width: 860px) {
+        main {
+          padding: 20px;
+        }
+
+        .hero,
+        .grid,
+        .logos,
+        .type-grid,
+        .semantic-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Fase 1 de branding</p>
+          <h1>Mercosur Seguridad</h1>
+          <p style="margin-top: 14px; color: #cbd5e1; font-size: 18px; max-width: 560px;">
+            Infraestructura visual preparada para sitio institucional, administracion,
+            supervisor mobile y PWA.
+          </p>
+        </div>
+        <img src="./logo-fondo-oscuro.png" alt="Mercosur Seguridad" />
+      </section>
+
+      <section>
+        <h2>Logos oficiales</h2>
+        <div class="logos">
+          <div class="logo-box light">
+            <img src="./logo-fondo-claro.png" alt="Logo para fondo claro" />
+          </div>
+          <div class="logo-box dark">
+            <img src="./logo-fondo-oscuro.png" alt="Logo para fondo oscuro" />
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Paleta</h2>
+        <div class="grid">
+          <div class="swatch"><div class="swatch-color" style="background:#FDBA12"></div><div class="swatch-body"><div class="name">Mercosur yellow</div><div class="hex">#FDBA12</div></div></div>
+          <div class="swatch"><div class="swatch-color" style="background:#05070D"></div><div class="swatch-body"><div class="name">Brand black</div><div class="hex">#05070D</div></div></div>
+          <div class="swatch"><div class="swatch-color" style="background:#F4143E"></div><div class="swatch-body"><div class="name">Triangle red</div><div class="hex">#F4143E</div></div></div>
+          <div class="swatch"><div class="swatch-color" style="background:#F3833F"></div><div class="swatch-body"><div class="name">Site orange</div><div class="hex">#F3833F</div></div></div>
+          <div class="swatch"><div class="swatch-color" style="background:#111827"></div><div class="swatch-body"><div class="name">Surface</div><div class="hex">#111827</div></div></div>
+          <div class="swatch"><div class="swatch-color" style="background:#1A2235"></div><div class="swatch-body"><div class="name">Surface 2</div><div class="hex">#1A2235</div></div></div>
+          <div class="swatch"><div class="swatch-color" style="background:#1E2D42"></div><div class="swatch-body"><div class="name">Border</div><div class="hex">#1E2D42</div></div></div>
+          <div class="swatch"><div class="swatch-color" style="background:#64748B"></div><div class="swatch-body"><div class="name">Muted</div><div class="hex">#64748B</div></div></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Semanticos</h2>
+        <div class="semantic-row">
+          <div class="semantic" style="background:#10B981">Success #10B981</div>
+          <div class="semantic" style="background:#F59E0B; color:#111827">Warning #F59E0B</div>
+          <div class="semantic" style="background:#DC2626">Error #DC2626</div>
+          <div class="semantic" style="background:#2563EB">Info #2563EB</div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Comparativa tipografica</h2>
+        <div class="type-grid">
+          <div class="panel">
+            <div class="sample-title">Preparada</div>
+            <div class="sample mulish">Mulish 900<br />Control Operativo</div>
+          </div>
+          <div class="panel">
+            <div class="sample-title">Body actual</div>
+            <div class="sample dm">DM Sans 700<br />Control Operativo</div>
+          </div>
+          <div class="panel">
+            <div class="sample-title">Display actual</div>
+            <div class="sample syne">Syne 800<br />Control Operativo</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
