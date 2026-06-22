@@ -55,12 +55,12 @@ const S: Record<string, React.CSSProperties> = {
   card: { background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, marginBottom:20 },
   title: { fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:800, marginBottom:4 },
   sub2: { color:'#64748b', fontSize:14, marginBottom:24 },
-  btn: { display:'inline-flex', alignItems:'center', gap:6, padding:'9px 18px', borderRadius:8, fontSize:13, fontWeight:500, cursor:'pointer', border:'none', fontFamily:'DM Sans,sans-serif' },
-  btnPrimary: { background:'#f59e0b', color:'#000' },
-  btnSecondary: { background:'#1a2235', color:'#e2e8f0', border:'1px solid #1e2d42' },
-  input: { width:'100%', background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px', color:'#e2e8f0', fontSize:14, fontFamily:'DM Sans,sans-serif', outline:'none' },
-  select: { width:'100%', background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px', color:'#e2e8f0', fontSize:14, fontFamily:'DM Sans,sans-serif', outline:'none' },
-  label: { display:'block', fontSize:12, color:'#64748b', marginBottom:6, fontWeight:500, textTransform:'uppercase' as const, letterSpacing:0.5 },
+  btn: { display:'inline-flex', alignItems:'center', gap:6, padding:'9px 18px', borderRadius:8, fontSize:13, fontWeight:800, cursor:'pointer', border:'none', fontFamily:FONT_BRAND, transition:'background .15s ease, border-color .15s ease, color .15s ease' },
+  btnPrimary: { background:brandColors.yellow, color:brandColors.black, border:`1px solid ${brandColors.yellow}` },
+  btnSecondary: { background:alpha(brandColors.surface2, 0.88), color:brandColors.text, border:`1px solid ${brandColors.border}` },
+  input: { width:'100%', background:alpha(brandColors.surface2, 0.9), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:'10px 14px', color:brandColors.text, fontSize:14, fontFamily:FONT_BODY, outline:'none' },
+  select: { width:'100%', background:alpha(brandColors.surface2, 0.9), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:'10px 14px', color:brandColors.text, fontSize:14, fontFamily:FONT_BODY, outline:'none' },
+  label: { display:'block', fontSize:12, color:brandColors.muted, marginBottom:6, fontWeight:800, textTransform:'uppercase' as const, letterSpacing:0.5, fontFamily:FONT_BRAND },
   table: { width:'100%', borderCollapse:'collapse' as const, fontSize:13 },
   th: { textAlign:'left' as const, padding:'10px 14px', color:'#64748b', fontSize:11, letterSpacing:1, textTransform:'uppercase' as const, fontWeight:600, borderBottom:'1px solid #1e2d42' },
   td: { padding:'12px 14px', borderBottom:'1px solid #1e2d42' },
@@ -77,16 +77,27 @@ const JEFE_OPERATIVO_GUARDIA = 'Aldo Monzón'
 const DIRECTOR_TECNICO_GUARDIA = 'Rodolfo Romero'
 
 function Badge({ type, children }: { type: string, children: React.ReactNode }) {
-  const colors: Record<string, string> = {
-    activo:'rgba(16,185,129,.15)|#10b981', cubierto:'rgba(16,185,129,.15)|#10b981', resuelta:'rgba(16,185,129,.15)|#10b981',
-    ok:'rgba(16,185,129,.15)|#10b981', inactivo:'rgba(100,116,139,.15)|#94a3b8', descubierto:'rgba(239,68,68,.15)|#ef4444',
-    pendiente:'rgba(245,158,11,.15)|#f59e0b', tarde:'rgba(239,68,68,.15)|#ef4444', anticipada:'rgba(245,158,11,.15)|#f59e0b',
-    posterior:'rgba(59,130,246,.15)|#60a5fa', revisada:'rgba(59,130,246,.15)|#60a5fa', urgente:'rgba(239,68,68,.15)|#ef4444',
-    importante:'rgba(245,158,11,.15)|#f59e0b', normal:'rgba(59,130,246,.15)|#60a5fa', programado:'rgba(100,116,139,.15)|#94a3b8',
-    advertencia:'rgba(245,158,11,.15)|#f59e0b', alerta:'rgba(239,68,68,.15)|#ef4444',
+  const colors: Record<string, [string, string]> = {
+    activo:[alpha(semanticColors.success, 0.15), semanticColors.success],
+    cubierto:[alpha(semanticColors.success, 0.15), semanticColors.success],
+    resuelta:[alpha(semanticColors.success, 0.15), semanticColors.success],
+    ok:[alpha(semanticColors.success, 0.15), semanticColors.success],
+    inactivo:[alpha(brandColors.muted, 0.15), brandColors.text],
+    descubierto:[alpha(semanticColors.error, 0.15), semanticColors.error],
+    pendiente:[alpha(semanticColors.warning, 0.16), semanticColors.warning],
+    tarde:[alpha(semanticColors.error, 0.15), semanticColors.error],
+    anticipada:[alpha(semanticColors.warning, 0.16), semanticColors.warning],
+    posterior:[alpha(semanticColors.info, 0.15), semanticColors.info],
+    revisada:[alpha(semanticColors.info, 0.15), semanticColors.info],
+    urgente:[alpha(semanticColors.error, 0.15), semanticColors.error],
+    importante:[alpha(semanticColors.warning, 0.16), semanticColors.warning],
+    normal:[alpha(semanticColors.info, 0.15), semanticColors.info],
+    programado:[alpha(brandColors.muted, 0.15), brandColors.text],
+    advertencia:[alpha(semanticColors.warning, 0.16), semanticColors.warning],
+    alerta:[alpha(semanticColors.error, 0.15), semanticColors.error],
   }
-  const [bg, color] = (colors[type] || 'rgba(100,116,139,.15)|#94a3b8').split('|')
-  return <span style={{ display:'inline-flex', alignItems:'center', padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:600, background:bg, color }}>{children}</span>
+  const [bg, color] = colors[type] || [alpha(brandColors.muted, 0.15), brandColors.text]
+  return <span style={{ display:'inline-flex', alignItems:'center', padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:800, fontFamily:FONT_BRAND, background:bg, color }}>{children}</span>
 }
 
 function StatCard({ label, value, sub, color, icon, onClick }: any) {
