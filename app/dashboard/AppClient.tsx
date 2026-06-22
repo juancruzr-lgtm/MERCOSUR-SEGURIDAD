@@ -1248,6 +1248,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [busqueda, setBusqueda] = useState('')
+  const [estadoFiltro, setEstadoFiltro] = useState('activo')
   const [filtroKpi, setFiltroKpi] = useState('')
 
   const formVacio = {
@@ -1353,6 +1354,8 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
     if (filtroTipo === 'activos' && o.estado !== 'activo') return false
     if (filtroTipo === 'con_turnos_hoy' && !objetivosConTurnosHoy.some((x: any) => x.id === o.id)) return false
     if (filtroTipo === 'sin_cubrir_hoy' && !objetivosSinCubrirHoy.some((x: any) => x.id === o.id)) return false
+    if (estadoFiltro === 'activo' && o.estado !== 'activo') return false
+    if (estadoFiltro === 'inactivo' && o.estado === 'activo') return false
     if (!busqueda.trim()) return true
     const q = busqueda.toLowerCase()
     return (
@@ -1412,13 +1415,22 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
       )}
 
       {/* Buscador */}
-      <div style={{ marginBottom:16 }}>
+      <div style={{ display:'flex', gap:12, flexWrap:'wrap', alignItems:'center', marginBottom:16 }}>
         <input
-          style={{ ...S.input, maxWidth:360 }}
+          style={{ ...S.input, maxWidth:360, marginBottom:0 }}
           placeholder="🔍  Buscar por nombre, cliente o dirección..."
           value={busqueda}
           onChange={e => setBusqueda(e.target.value)}
         />
+        <select
+          style={{ ...S.select, maxWidth:180, marginBottom:0 }}
+          value={estadoFiltro}
+          onChange={e => setEstadoFiltro(e.target.value)}
+        >
+          <option value="todos">Todos</option>
+          <option value="activo">Activos</option>
+          <option value="inactivo">Inactivos</option>
+        </select>
       </div>
 
       {/* Tabla */}
