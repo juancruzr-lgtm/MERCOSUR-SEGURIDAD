@@ -6,6 +6,7 @@ import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fe
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
+import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
 type TipoAlertaOperativaAdmin = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'descubierto' | 'salida_pendiente'
 type AccionIntervencionAdmin = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'confirmar_cubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
@@ -28,6 +29,20 @@ type SolicitudAdmin = {
 const ZONA_OPERATIVA_ADMIN = 'Rosario / General'
 const JEFE_OPERATIVO_ADMIN = 'Aldo Monzón'
 const DIRECTOR_TECNICO_ADMIN = 'Rodolfo Romero'
+
+const alpha = (hex: string, opacity: number) => {
+  const clean = hex.replace('#', '')
+  const value = parseInt(clean, 16)
+  const r = (value >> 16) & 255
+  const g = (value >> 8) & 255
+  const b = value & 255
+
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`
+}
+
+const FONT_BRAND = `${brandTypography.preparedBrand}, sans-serif`
+const FONT_BODY = `${brandTypography.currentBody}, sans-serif`
+const FONT_DISPLAY = `${brandTypography.currentDisplay}, sans-serif`
 
 const S: Record<string, React.CSSProperties> = {
   app: { display:'flex', minHeight:'100vh', background:'#0a0e1a' },
@@ -416,15 +431,37 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
   }
 
   return (
-    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#0a0e1a' }}>
-      <div style={{ width:'100%', maxWidth:400 }}>
-        <div style={{ textAlign:'center', marginBottom:40 }}>
-          <div style={{ fontSize:48 }}>🛡️</div>
-          <div style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, color:'#f59e0b', marginTop:12 }}>MERCOSUR SEGURIDAD</div>
-          <div style={{ color:'#64748b', fontSize:13, marginTop:4 }}>Sistema de Control Operativo</div>
+    <div style={{
+      minHeight:'100vh',
+      display:'flex',
+      alignItems:'center',
+      justifyContent:'center',
+      padding:24,
+      background:`
+        radial-gradient(circle at 18% 18%, ${alpha(brandColors.yellow, 0.18)}, transparent 30%),
+        radial-gradient(circle at 82% 8%, ${alpha(brandColors.red, 0.16)}, transparent 26%),
+        linear-gradient(135deg, ${brandColors.black} 0%, ${brandColors.appBg} 54%, ${brandColors.carbon} 100%)
+      `,
+      fontFamily:FONT_BRAND,
+    }}>
+      <div style={{ width:'100%', maxWidth:420 }}>
+        <div style={{ textAlign:'center', marginBottom:30 }}>
+          <img
+            src={brandAssets.logoFondoOscuro}
+            alt="Mercosur Seguridad"
+            style={{ width:'min(280px, 78vw)', height:'auto', objectFit:'contain', filter:`drop-shadow(0 18px 34px ${alpha(brandColors.black, 0.5)})` }}
+          />
+          <div style={{ color:brandColors.text, fontSize:13, marginTop:12, letterSpacing:0.6 }}>Sistema de Control Operativo</div>
         </div>
-        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:16, padding:32 }}>
-          <div style={{ fontFamily:'Syne,sans-serif', fontSize:20, fontWeight:700, marginBottom:24 }}>Iniciar sesión</div>
+        <div style={{
+          background:alpha(brandColors.surface, 0.94),
+          border:`1px solid ${alpha(brandColors.yellow, 0.26)}`,
+          borderRadius:16,
+          padding:32,
+          boxShadow:`0 24px 80px ${alpha(brandColors.black, 0.45)}`,
+          backdropFilter:'blur(12px)',
+        }}>
+          <div style={{ fontFamily:FONT_BRAND, fontSize:20, fontWeight:800, marginBottom:24, color:brandColors.textStrong }}>Iniciar sesión</div>
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Email</label>
             <input
@@ -445,10 +482,10 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
               onKeyDown={e => e.key === 'Enter' && login()}
             />
           </div>
-          {error && <div style={{ color:'#ef4444', fontSize:13, marginBottom:12 }}>{error}</div>}
-          {resetMsg && <div style={{ color:'#10b981', fontSize:13, marginBottom:12 }}>{resetMsg}</div>}
+          {error && <div style={{ color:semanticColors.error, fontSize:13, marginBottom:12 }}>{error}</div>}
+          {resetMsg && <div style={{ color:semanticColors.success, fontSize:13, marginBottom:12 }}>{resetMsg}</div>}
           <button
-            style={{ ...S.btn, ...S.btnPrimary, width:'100%', justifyContent:'center' }}
+            style={{ ...S.btn, background:brandColors.yellow, color:brandColors.black, width:'100%', justifyContent:'center', fontFamily:FONT_BRAND, fontWeight:800 }}
             onClick={login}
             disabled={loading}
           >
