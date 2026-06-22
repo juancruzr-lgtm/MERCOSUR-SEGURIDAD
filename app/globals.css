@@ -2,17 +2,38 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Mulish:wght@400;500;600;700;800;900&family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
 
 :root {
-  --bg: #0a0e1a;
-  --surface: #111827;
-  --surface2: #1a2235;
-  --border: #1e2d42;
-  --accent: #f59e0b;
-  --danger: #ef4444;
-  --success: #10b981;
-  --warn: #f59e0b;
+  --ms-color-yellow: #fdba12;
+  --ms-color-black: #05070d;
+  --ms-color-carbon: #151518;
+  --ms-color-red: #f4143e;
+  --ms-color-orange: #f3833f;
+  --ms-color-white: #ffffff;
+  --ms-color-surface: #111827;
+  --ms-color-surface-2: #1a2235;
+  --ms-color-border: #1e2d42;
+  --ms-color-muted: #64748b;
+  --ms-color-text: #e2e8f0;
+  --ms-color-text-strong: #f8fafc;
+  --ms-color-app-bg: #0a0e1a;
+  --ms-color-success: #10b981;
+  --ms-color-warning: #f59e0b;
+  --ms-color-error: #dc2626;
+  --ms-color-info: #2563eb;
+  --ms-font-brand: 'Mulish', sans-serif;
+  --ms-font-body-current: 'DM Sans', sans-serif;
+  --ms-font-display-current: 'Syne', sans-serif;
+
+  --bg: var(--ms-color-app-bg);
+  --surface: var(--ms-color-surface);
+  --surface2: var(--ms-color-surface-2);
+  --border: var(--ms-color-border);
+  --accent: var(--ms-color-yellow);
+  --danger: var(--ms-color-error);
+  --success: var(--ms-color-success);
+  --warn: var(--ms-color-warning);
 }
 
 * { box-sizing: border-box; }
@@ -24,3 +45,4 @@ body {
 }
 
 .font-head { font-family: 'Syne', sans-serif; }
+.font-brand { font-family: var(--ms-font-brand); }
