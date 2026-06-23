@@ -5714,7 +5714,7 @@ export default function AppPage() {
   const [loading, setLoading] = useState(true)
   const [filtros, setFiltros] = useState<Record<string, any>>({})
 
-  const cargarDatos = useCallback(async () => {
+  const cargarDatosAdmin = useCallback(async () => {
     setLoading(true)
     const [g, o, t, r, n] = await Promise.all([
       supabase.from('usuarios').select('*').order('apellido'),
@@ -5730,6 +5730,17 @@ export default function AppPage() {
     if (n.data) setNovedades(n.data)
     setLoading(false)
   }, [])
+
+  const cargarSesionPorRol = useCallback(async (perfil: Usuario) => {
+    setUser(perfil)
+
+    if (perfil.rol === 'admin') {
+      await cargarDatosAdmin()
+      return
+    }
+
+    setLoading(false)
+  }, [cargarDatosAdmin])
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
@@ -5751,10 +5762,9 @@ export default function AppPage() {
         return
       }
 
-      setUser(perfil)
-      cargarDatos()
+      await cargarSesionPorRol(perfil)
     })
-  }, [cargarDatos])
+  }, [cargarSesionPorRol])
 
   const navegarConFiltro = (destino: string, filtro: any) => {
     setFiltros(prev => ({ ...prev, [destino]: filtro }))
@@ -5771,7 +5781,7 @@ export default function AppPage() {
 
 if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>Cargando...</div>
 
-if (!user) return <Login onLogin={u => { setUser(u); cargarDatos() }} />
+if (!user) return <Login onLogin={u => { void cargarSesionPorRol(u) }} />
 
 if (esRolGuardia(user.rol)) {
   return <GuardiaMobile user={user} />
