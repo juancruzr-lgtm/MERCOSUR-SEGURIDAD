@@ -201,7 +201,7 @@ export async function GET(req: NextRequest) {
   const turnoIds = turnos.map(turno => turno.id)
 
   if (turnoIds.length === 0) {
-    return NextResponse.json({ ok: true, sent: 0, skipped: 0 })
+    return NextResponse.json({ ok: true, turnosProcesados: 0, candidatos30: 0, candidatos15: 0, sent: 0, skipped: 0 })
   }
 
   const [{ data: registrosData, error: registrosError }, { data: subscriptionsData, error: subscriptionsError }] = await Promise.all([
@@ -222,6 +222,9 @@ export async function GET(req: NextRequest) {
   const registros = (registrosData || []) as RegistroPush[]
   const subscriptions = (subscriptionsData || []) as PushSubscriptionRow[]
   const supervisores = usuarios.filter(usuario => SUPERVISOR_ROLES.includes(usuario.rol)).map(usuario => usuario.id)
+  const turnosProcesados = turnos.length
+  let candidatos30 = 0
+  let candidatos15 = 0
   let sent = 0
   let skipped = 0
 
@@ -239,7 +242,8 @@ export async function GET(req: NextRequest) {
     const registroEntrada = registros.find(registro => registro.turno_id === turno.id && registro.hora_entrada_real)
     const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
 
-    if (turno.guardia_id && minutosHastaInicio >= 25 && minutosHastaInicio <= 30) {
+    if (turno.guardia_id && minutosHastaInicio >= 20 && minutosHastaInicio <= 35) {
+      candidatos30 += 1
       sumarResultado(await sendToUsers(admin.client, subscriptions, [turno.guardia_id], turno.id, 'guardia_turno_30', {
         title: 'Turno próximo',
         body: `Tiene turno en ${objetivoNombre} a las ${turno.hora_inicio.slice(0, 5)}`,
@@ -248,7 +252,8 @@ export async function GET(req: NextRequest) {
       }))
     }
 
-    if (turno.guardia_id && minutosHastaInicio >= 10 && minutosHastaInicio <= 15) {
+    if (turno.guardia_id && minutosHastaInicio >= 5 && minutosHastaInicio <= 20) {
+      candidatos15 += 1
       sumarResultado(await sendToUsers(admin.client, subscriptions, [turno.guardia_id], turno.id, 'guardia_turno_15', {
         title: 'Preparar ingreso',
         body: `Recuerde preparar el ingreso y fichar en ${objetivoNombre}`,
@@ -296,5 +301,5 @@ export async function GET(req: NextRequest) {
     }))
   }
 
-  return NextResponse.json({ ok: true, sent, skipped })
+  return NextResponse.json({ ok: true, turnosProcesados, candidatos30, candidatos15, sent, skipped })
 }
