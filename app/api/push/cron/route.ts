@@ -32,12 +32,27 @@ type RegistroPush = {
   turno_id: string
   guardia_id: string
   hora_entrada_real?: string | null
+  alerta_entrada?: string | null
+  distancia_ingreso_metros?: number | string | null
   gps_ingreso_estado?: string | null
   created_at?: string | null
 }
 
 const TZ = 'America/Argentina/Buenos_Aires'
 const SUPERVISOR_ROLES = ['supervisor', 'admin']
+const SUPERVISORES_DIURNOS = [
+  { nombre: 'Sabino', apellido: 'Aranda' },
+  { nombre: 'Sergio', apellido: 'Martínez' },
+]
+const SUPERVISORES_NOCTURNOS = [
+  { nombre: 'Walter', apellido: 'Fulla' },
+]
+const SUPERVISOR_ALERT_TYPES = {
+  tardanza: 'supervisor_tardanza',
+  sinFichaje: 'supervisor_sin_fichaje',
+  fueraRadio: 'supervisor_fuera_radio',
+  puestoDescubierto: 'supervisor_puesto_descubierto',
+} as const
 
 function localParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -84,6 +99,85 @@ function ahoraMinutosLocal() {
 
 function nombreUsuario(usuario?: UsuarioPush | null) {
   return usuario ? `${usuario.apellido}, ${usuario.nombre}` : 'Guardia sin asignar'
+}
+
+function horaCorta(hora?: string | null) {
+  if (!hora) return '--:--'
+  return /^\d{1,2}:\d{2}/.test(hora) ? hora.slice(0, 5) : hora
+}
+
+function minutosHora(hora?: string | null) {
+  if (!hora) return null
+  const [hours, minutes] = hora.split(':').map(Number)
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null
+  return hours * 60 + minutes
+}
+
+function turnoEsDiurno(turno: TurnoPush) {
+  const inicio = minutosHora(turno.hora_inicio)
+  if (inicio === null) return false
+  return inicio >= 6 * 60 && inicio < 18 * 60
+}
+
+function normalizarTexto(value?: string | null) {
+  return (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+}
+
+function coincideSupervisor(usuario: UsuarioPush, esperado: { nombre: string, apellido: string }) {
+  const nombre = normalizarTexto(usuario.nombre)
+  const apellido = normalizarTexto(usuario.apellido)
+  const esperadoNombre = normalizarTexto(esperado.nombre)
+  const esperadoApellido = normalizarTexto(esperado.apellido)
+  const nombreCompleto = normalizarTexto(`${usuario.nombre} ${usuario.apellido}`)
+  const apellidoNombre = normalizarTexto(`${usuario.apellido} ${usuario.nombre}`)
+  const esperadoCompleto = normalizarTexto(`${esperado.nombre} ${esperado.apellido}`)
+  const esperadoInvertido = normalizarTexto(`${esperado.apellido} ${esperado.nombre}`)
+
+  return (
+    nombre === esperadoNombre && apellido === esperadoApellido
+  ) || nombreCompleto.includes(esperadoCompleto) || nombreCompleto.includes(esperadoInvertido) || apellidoNombre.includes(esperadoCompleto) || apellidoNombre.includes(esperadoInvertido)
+}
+
+function supervisoresAsignados(turno: TurnoPush, usuarios: UsuarioPush[]) {
+  const esperados = turnoEsDiurno(turno) ? SUPERVISORES_DIURNOS : SUPERVISORES_NOCTURNOS
+  return usuarios
+    .filter(usuario => SUPERVISOR_ROLES.includes(usuario.rol))
+    .filter(usuario => esperados.some(esperado => coincideSupervisor(usuario, esperado)))
+    .map(usuario => usuario.id)
+}
+
+function minutosTarde(turno: TurnoPush, registro?: RegistroPush | null) {
+  const inicio = minutosHora(turno.hora_inicio)
+  let entrada = minutosHora(registro?.hora_entrada_real)
+  if (inicio === null || entrada === null) return 0
+
+  if (entrada < inicio && inicio >= 18 * 60) entrada += 24 * 60
+  return Math.max(0, entrada - inicio)
+}
+
+function esTardanza(turno: TurnoPush, registro?: RegistroPush | null) {
+  return Boolean(registro?.hora_entrada_real && (registro.alerta_entrada === 'tarde' || minutosTarde(turno, registro) > 5))
+}
+
+function distanciaTexto(value?: number | string | null) {
+  const distancia = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(distancia) ? `${Math.round(distancia).toLocaleString('es-AR')} m` : 'sin distancia'
+}
+
+function supervisorBody(turno: TurnoPush, guardia: UsuarioPush | undefined | null, objetivoNombre: string, real?: string | null, extra?: string) {
+  const partes = [
+    `Guardia: ${nombreUsuario(guardia)}`,
+    `Objetivo: ${objetivoNombre}`,
+    `Programado: ${horaCorta(turno.hora_inicio)}`,
+    `Real: ${horaCorta(real)}`,
+  ]
+
+  if (extra) partes.push(extra)
+  return partes.join(' · ')
 }
 
 function minutosDesdeISO(value?: string | null) {
@@ -201,13 +295,21 @@ export async function GET(req: NextRequest) {
   const turnoIds = turnos.map(turno => turno.id)
 
   if (turnoIds.length === 0) {
-    return NextResponse.json({ ok: true, turnosProcesados: 0, candidatos30: 0, candidatos15: 0, sent: 0, skipped: 0 })
+    return NextResponse.json({
+      ok: true,
+      turnosProcesados: 0,
+      candidatos30: 0,
+      candidatos15: 0,
+      alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
+      sent: 0,
+      skipped: 0,
+    })
   }
 
   const [{ data: registrosData, error: registrosError }, { data: subscriptionsData, error: subscriptionsError }] = await Promise.all([
     admin.client
       .from('registros_asistencia')
-      .select('id, turno_id, guardia_id, hora_entrada_real, gps_ingreso_estado, created_at')
+      .select('id, turno_id, guardia_id, hora_entrada_real, alerta_entrada, distancia_ingreso_metros, gps_ingreso_estado, created_at')
       .in('turno_id', turnoIds),
     admin.client
       .from('push_subscriptions')
@@ -221,10 +323,13 @@ export async function GET(req: NextRequest) {
 
   const registros = (registrosData || []) as RegistroPush[]
   const subscriptions = (subscriptionsData || []) as PushSubscriptionRow[]
-  const supervisores = usuarios.filter(usuario => SUPERVISOR_ROLES.includes(usuario.rol)).map(usuario => usuario.id)
   const turnosProcesados = turnos.length
   let candidatos30 = 0
   let candidatos15 = 0
+  let candidatosSupervisorTardanza = 0
+  let candidatosSupervisorSinFichaje = 0
+  let candidatosSupervisorFueraRadio = 0
+  let candidatosSupervisorPuestoDescubierto = 0
   let sent = 0
   let skipped = 0
 
@@ -241,6 +346,7 @@ export async function GET(req: NextRequest) {
     const minutosDesdeInicio = Math.floor(ahora - inicio)
     const registroEntrada = registros.find(registro => registro.turno_id === turno.id && registro.hora_entrada_real)
     const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
+    const supervisoresTurno = supervisoresAsignados(turno, usuarios)
 
     if (turno.guardia_id && minutosHastaInicio >= 20 && minutosHastaInicio <= 35) {
       candidatos30 += 1
@@ -263,22 +369,47 @@ export async function GET(req: NextRequest) {
     }
 
     if (turno.guardia_id && !registroEntrada && minutosDesdeInicio >= 15 && minutosDesdeInicio <= 20) {
-      sumarResultado(await sendToUsers(admin.client, subscriptions, supervisores, turno.id, 'supervisor_sin_fichar_15', {
-        title: 'Guardia sin ingreso',
-        body: `${nombreUsuario(guardia)} no registró ingreso en ${objetivoNombre}`,
+      candidatosSupervisorSinFichaje += 1
+      sumarResultado(await sendToUsers(admin.client, subscriptions, supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.sinFichaje, {
+        title: 'Guardia sin fichaje',
+        body: supervisorBody(turno, guardia, objetivoNombre, 'sin fichaje'),
         url: '/dashboard',
-        tag: `turno-${turno.id}-sin-fichar`,
+        tag: `turno-${turno.id}-sin-fichaje`,
       }))
     }
 
     if (turno.estado === 'descubierto' && minutosDesdeInicio >= -5 && minutosDesdeInicio <= 120) {
-      sumarResultado(await sendToUsers(admin.client, subscriptions, supervisores, turno.id, 'supervisor_puesto_descubierto', {
+      candidatosSupervisorPuestoDescubierto += 1
+      sumarResultado(await sendToUsers(admin.client, subscriptions, supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.puestoDescubierto, {
         title: 'Puesto descubierto',
-        body: `Puesto descubierto en ${objetivoNombre}`,
+        body: supervisorBody(turno, guardia, objetivoNombre, registroEntrada?.hora_entrada_real || 'sin registro'),
         url: '/dashboard',
         tag: `turno-${turno.id}-descubierto`,
       }))
     }
+  }
+
+  const registrosTardanza = registros.filter(registro => {
+    const turno = turnos.find(item => item.id === registro.turno_id)
+    return turno && esTardanza(turno, registro) && minutosDesdeISO(registro.created_at) <= 15
+  })
+
+  for (const registro of registrosTardanza) {
+    const turno = turnos.find(item => item.id === registro.turno_id)
+    if (!turno) continue
+
+    const objetivo = objetivos.find(item => item.id === turno.objetivo_id)
+    const guardia = usuarios.find(item => item.id === registro.guardia_id || item.id === turno.guardia_id)
+    const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
+    const supervisoresTurno = supervisoresAsignados(turno, usuarios)
+
+    candidatosSupervisorTardanza += 1
+    sumarResultado(await sendToUsers(admin.client, subscriptions, supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.tardanza, {
+      title: 'Tardanza registrada',
+      body: supervisorBody(turno, guardia, objetivoNombre, registro.hora_entrada_real),
+      url: '/dashboard',
+      tag: `turno-${turno.id}-tardanza`,
+    }))
   }
 
   const registrosFueraRadio = registros.filter(registro =>
@@ -292,14 +423,30 @@ export async function GET(req: NextRequest) {
 
     const objetivo = objetivos.find(item => item.id === turno.objetivo_id)
     const guardia = usuarios.find(item => item.id === registro.guardia_id || item.id === turno.guardia_id)
+    const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
+    const supervisoresTurno = supervisoresAsignados(turno, usuarios)
 
-    sumarResultado(await sendToUsers(admin.client, subscriptions, supervisores, turno.id, 'supervisor_fuera_radio', {
+    candidatosSupervisorFueraRadio += 1
+    sumarResultado(await sendToUsers(admin.client, subscriptions, supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.fueraRadio, {
       title: 'Fichaje fuera de radio',
-      body: `${nombreUsuario(guardia)} fichó fuera del radio en ${objetivo?.nombre || 'Objetivo sin nombre'}`,
+      body: supervisorBody(turno, guardia, objetivoNombre, registro.hora_entrada_real, `Distancia GPS: ${distanciaTexto(registro.distancia_ingreso_metros)}`),
       url: '/dashboard',
       tag: `turno-${turno.id}-fuera-radio`,
     }))
   }
 
-  return NextResponse.json({ ok: true, turnosProcesados, candidatos30, candidatos15, sent, skipped })
+  return NextResponse.json({
+    ok: true,
+    turnosProcesados,
+    candidatos30,
+    candidatos15,
+    alertasSupervisor: {
+      tardanza: candidatosSupervisorTardanza,
+      sinFichaje: candidatosSupervisorSinFichaje,
+      fueraRadio: candidatosSupervisorFueraRadio,
+      puestoDescubierto: candidatosSupervisorPuestoDescubierto,
+    },
+    sent,
+    skipped,
+  })
 }
