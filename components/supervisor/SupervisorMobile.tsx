@@ -87,12 +87,32 @@ interface Supervision {
   observaciones?: string | null
   created_at: string
   objetivo?: Pick<Objetivo, 'nombre'> | null
+  respuestas?: Pick<SupervisionRespuesta, 'resultado'>[]
+  fotos?: Pick<SupervisionFoto, 'id' | 'storage_path'>[]
 }
 
 interface SupervisionGps {
   lat: number
   lng: number
   precision: number
+}
+
+interface SupervisionRespuesta {
+  id: string
+  supervision_id: string
+  item_id: string
+  resultado: ResultadoChecklist
+  observacion?: string | null
+  item?: ChecklistItem | null
+}
+
+interface SupervisionFoto {
+  id: string
+  supervision_id: string
+  storage_path: string
+  created_at?: string
+  signedUrl?: string | null
+  error?: string | null
 }
 
 interface RegistroAsistencia {
@@ -399,6 +419,11 @@ export default function SupervisorMobile({ user }: any) {
   const [supervisionRespuestas, setSupervisionRespuestas] = useState<Record<string, { resultado: ResultadoChecklist, observacion: string }>>({})
   const [supervisionFotos, setSupervisionFotos] = useState<File[]>([])
   const [capturandoGps, setCapturandoGps] = useState(false)
+  const [detalleSupervision, setDetalleSupervision] = useState<Supervision | null>(null)
+  const [detalleRespuestas, setDetalleRespuestas] = useState<SupervisionRespuesta[]>([])
+  const [detalleFotos, setDetalleFotos] = useState<SupervisionFoto[]>([])
+  const [detalleLoading, setDetalleLoading] = useState(false)
+  const [detalleError, setDetalleError] = useState('')
 
   const hoy = fechaHoy()
   const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
@@ -487,14 +512,14 @@ export default function SupervisorMobile({ user }: any) {
         .order('orden', { ascending: true }),
       supabase
         .from('supervisiones')
-        .select('*, objetivo:objetivos(nombre)')
+        .select('*, objetivo:objetivos(nombre), respuestas:supervision_respuestas(resultado), fotos:supervision_fotos(id, storage_path)')
         .eq('supervisor_id', user.id)
         .gte('created_at', inicioDiaLocalISO(hoy))
         .lt('created_at', finDiaLocalISO(hoy))
         .order('created_at', { ascending: false }),
       supabase
         .from('supervisiones')
-        .select('*, objetivo:objetivos(nombre)')
+        .select('*, objetivo:objetivos(nombre), respuestas:supervision_respuestas(resultado), fotos:supervision_fotos(id, storage_path)')
         .eq('supervisor_id', user.id)
         .order('created_at', { ascending: false })
         .limit(30),
@@ -806,6 +831,28 @@ export default function SupervisorMobile({ user }: any) {
     observadas: supervisionesHoy.filter(s => s.estado === 'con_observacion').length,
     criticas: supervisionesHoy.filter(s => s.estado === 'critico').length,
   }), [supervisionesHoy])
+  const observadosSupervision = (supervision: Supervision) => supervision.respuestas?.filter(r => r.resultado === 'observado').length || 0
+  const fotosSupervisionCount = (supervision: Supervision) => supervision.fotos?.length || 0
+  const mapsUrlSupervision = (supervision: Supervision) => `https://www.google.com/maps?q=${supervision.lat},${supervision.lng}`
+  const respuestasDetallePorItem = useMemo(
+    () => new Map(detalleRespuestas.map(respuesta => [respuesta.item_id, respuesta])),
+    [detalleRespuestas],
+  )
+  const itemsDetalleSupervision = useMemo(() => {
+    const itemsMap = new Map<string, ChecklistItem>()
+
+    if (detalleSupervision?.plantilla_id) {
+      checklistItems
+        .filter(item => item.plantilla_id === detalleSupervision.plantilla_id)
+        .forEach(item => itemsMap.set(item.id, item))
+    }
+
+    detalleRespuestas.forEach(respuesta => {
+      if (respuesta.item) itemsMap.set(respuesta.item.id, respuesta.item)
+    })
+
+    return Array.from(itemsMap.values()).sort((a, b) => (a.orden || 0) - (b.orden || 0))
+  }, [checklistItems, detalleSupervision, detalleRespuestas])
 
   const turnosDescubiertosOperativos = useMemo(
     () => turnos.filter(t => esDescubiertoOperativo(t)),
@@ -1692,8 +1739,14 @@ export default function SupervisorMobile({ user }: any) {
         if (fotosInsertError) avisoFotos = ` Fotos subidas, pero no registradas: ${fotosInsertError.message}`
       }
 
+      const supervisionParaListado = {
+        ...supervisionNueva,
+        respuestas: respuestasCompletas.map(({ respuesta }) => ({ resultado: respuesta?.resultado })),
+        fotos: fotosGuardadas.map(storage_path => ({ id: storage_path, storage_path })),
+      } as Supervision
+
       setSupervisiones(prev => [
-        supervisionNueva as Supervision,
+        supervisionParaListado,
         ...prev.filter(s => s.id !== supervisionNueva.id),
       ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
       resetFormularioSupervision()
@@ -1703,6 +1756,50 @@ export default function SupervisorMobile({ user }: any) {
       setError(message)
     } finally {
       setAsignando(null)
+    }
+  }
+
+  const abrirDetalleSupervision = async (supervision: Supervision) => {
+    setDetalleSupervision(supervision)
+    setDetalleRespuestas([])
+    setDetalleFotos([])
+    setDetalleError('')
+    setDetalleLoading(true)
+
+    try {
+      const [respuestasResult, fotosResult] = await Promise.all([
+        supabase
+          .from('supervision_respuestas')
+          .select('id, supervision_id, item_id, resultado, observacion, item:checklist_items(id, plantilla_id, texto, orden, obligatorio, criticidad, foto_obligatoria, activo)')
+          .eq('supervision_id', supervision.id),
+        supabase
+          .from('supervision_fotos')
+          .select('id, supervision_id, storage_path, created_at')
+          .eq('supervision_id', supervision.id)
+          .order('created_at', { ascending: true }),
+      ])
+
+      if (respuestasResult.error) throw respuestasResult.error
+      if (fotosResult.error) throw fotosResult.error
+
+      const fotosConUrl = await Promise.all((fotosResult.data || []).map(async (foto: SupervisionFoto) => {
+        const { data, error } = await supabase.storage
+          .from('supervision-fotos')
+          .createSignedUrl(foto.storage_path, 60 * 60)
+
+        return {
+          ...foto,
+          signedUrl: data?.signedUrl || null,
+          error: error?.message || null,
+        }
+      }))
+
+      setDetalleRespuestas((respuestasResult.data || []) as SupervisionRespuesta[])
+      setDetalleFotos(fotosConUrl)
+    } catch (detailError) {
+      setDetalleError(detailError instanceof Error ? detailError.message : 'No se pudo cargar el detalle de la supervisión.')
+    } finally {
+      setDetalleLoading(false)
     }
   }
 
@@ -2685,10 +2782,14 @@ export default function SupervisorMobile({ user }: any) {
                         <div style={objetivoName}>{supervision.objetivo?.nombre || getObjetivo(supervision.objetivo_id)?.nombre || 'Objetivo sin nombre'}</div>
                         <div style={muted}>{fechaHoraDDMMYYYY(supervision.created_at)}</div>
                         <div style={muted}>GPS {Number(supervision.lat).toFixed(5)}, {Number(supervision.lng).toFixed(5)} · Precisión {metrosTexto(supervision.precision_gps)}</div>
+                        <div style={muted}>{observadosSupervision(supervision)} ítem(s) observados · {fotosSupervisionCount(supervision)} foto(s)</div>
                         {supervision.observaciones && <div style={muted}>{supervision.observaciones}</div>}
                       </div>
                       <span style={supervisionBadge(supervision.estado)}>{supervision.estado}</span>
                     </div>
+                    <button type="button" style={secondaryButton} onClick={() => abrirDetalleSupervision(supervision)}>
+                      Ver detalle
+                    </button>
                   </div>
                 ))}
               </section>
@@ -2749,6 +2850,106 @@ export default function SupervisorMobile({ user }: any) {
           </>
         )}
       </main>
+
+      {detalleSupervision && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>Detalle de supervisión</div>
+            <div style={muted}>{detalleSupervision.objetivo?.nombre || getObjetivo(detalleSupervision.objetivo_id)?.nombre || 'Objetivo sin nombre'}</div>
+
+            <div style={{ ...registroBox, margin:'16px 0' }}>
+              <div>
+                <div style={label}>Fecha/hora</div>
+                <div style={registroValue}>{fechaHoraDDMMYYYY(detalleSupervision.created_at)}</div>
+              </div>
+              <div>
+                <div style={label}>Estado</div>
+                <span style={supervisionBadge(detalleSupervision.estado)}>{detalleSupervision.estado}</span>
+              </div>
+              <div>
+                <div style={label}>Latitud</div>
+                <div style={registroValue}>{detalleSupervision.lat}</div>
+              </div>
+              <div>
+                <div style={label}>Longitud</div>
+                <div style={registroValue}>{detalleSupervision.lng}</div>
+              </div>
+              <div>
+                <div style={label}>Precisión GPS</div>
+                <div style={registroValue}>{metrosTexto(detalleSupervision.precision_gps)}</div>
+              </div>
+            </div>
+
+            <a
+              href={mapsUrlSupervision(detalleSupervision)}
+              target="_blank"
+              rel="noreferrer"
+              style={{ ...refreshButton, display:'block', textAlign:'center', textDecoration:'none', marginBottom:12 }}
+            >
+              Ver en Google Maps
+            </a>
+
+            <div style={{ marginBottom:16 }}>
+              <div style={label}>Observaciones generales</div>
+              <div style={{ ...muted, color:'#cbd5e1' }}>{detalleSupervision.observaciones || '—'}</div>
+            </div>
+
+            {detalleError && <div style={errorBox}>{detalleError}</div>}
+            {detalleLoading ? (
+              <div style={empty}>Cargando detalle...</div>
+            ) : (
+              <>
+                <div style={{ ...objetivoName, marginBottom:8 }}>Checklist completo</div>
+                {itemsDetalleSupervision.length === 0 ? (
+                  <div style={empty}>Sin checklist asociado.</div>
+                ) : itemsDetalleSupervision.map(item => {
+                  const respuesta = respuestasDetallePorItem.get(item.id)
+
+                  return (
+                    <div key={item.id} style={{ ...turnoCard, background:'#0f172a' }}>
+                      <div style={turnoTop}>
+                        <div>
+                          <div style={objetivoName}>{item.texto}</div>
+                          <div style={muted}>
+                            {item.obligatorio ? 'Obligatorio' : 'Opcional'} · Criticidad {item.criticidad}{item.foto_obligatoria ? ' · Foto obligatoria' : ''}
+                          </div>
+                        </div>
+                        <span style={resultadoSupervisionBadge(respuesta?.resultado)}>
+                          {respuesta?.resultado || 'sin respuesta'}
+                        </span>
+                      </div>
+                      {respuesta?.observacion && <div style={{ ...muted, color:'#cbd5e1' }}>{respuesta.observacion}</div>}
+                    </div>
+                  )
+                })}
+
+                <div style={{ ...objetivoName, margin:'18px 0 8px' }}>Fotos adjuntas</div>
+                {detalleFotos.length === 0 ? (
+                  <div style={empty}>Sin fotos adjuntas.</div>
+                ) : detalleFotos.map(foto => (
+                  <div key={foto.id} style={registroItem}>
+                    {foto.signedUrl ? (
+                      <>
+                        <img src={foto.signedUrl} alt="" style={{ width:'100%', maxHeight:220, objectFit:'cover', borderRadius:8, marginBottom:8 }} />
+                        <a href={foto.signedUrl} target="_blank" rel="noreferrer" style={{ color:'#f59e0b', fontSize:13 }}>Abrir foto</a>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ ...muted, wordBreak:'break-all' }}>{foto.storage_path}</div>
+                        {foto.error && <div style={{ ...muted, color:'#f59e0b' }}>{foto.error}</div>}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
+
+            <button type="button" style={{ ...secondaryButton, marginTop:12 }} onClick={() => setDetalleSupervision(null)}>
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
 
       {modalTurno && (
         <div style={modalOverlay}>
@@ -3304,6 +3505,25 @@ function supervisionBadge(estado: EstadoSupervision): React.CSSProperties {
     fontWeight: 800,
     background: c.bg,
     color: c.color,
+    whiteSpace: 'nowrap',
+  }
+}
+
+function resultadoSupervisionBadge(resultado?: ResultadoChecklist): React.CSSProperties {
+  const color = resultado === 'observado'
+    ? '#f59e0b'
+    : resultado === 'correcto'
+      ? '#10b981'
+      : '#94a3b8'
+
+  return {
+    display: 'inline-flex',
+    padding: '4px 9px',
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 800,
+    background: `${color}22`,
+    color,
     whiteSpace: 'nowrap',
   }
 }
