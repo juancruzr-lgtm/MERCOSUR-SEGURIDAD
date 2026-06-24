@@ -80,6 +80,7 @@ type SupervisionFotoAdmin = {
   storage_path: string
   created_at?: string
   signedUrl?: string | null
+  publicUrl?: string | null
   error?: string | null
 }
 
@@ -1463,10 +1464,14 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
         const { data, error } = await supabase.storage
           .from('supervision-fotos')
           .createSignedUrl(foto.storage_path, 60 * 60)
+        const publicUrl = supabase.storage
+          .from('supervision-fotos')
+          .getPublicUrl(foto.storage_path).data.publicUrl
 
         return {
           ...foto,
           signedUrl: data?.signedUrl || null,
+          publicUrl,
           error: error?.message || null,
         }
       }))
@@ -1649,21 +1654,26 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
                 <div style={{ color:'#64748b', fontSize:13 }}>Sin fotos adjuntas.</div>
               ) : (
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))', gap:12 }}>
-                  {detalleFotos.map(foto => (
-                    <div key={foto.id} style={{ border:'1px solid #1e2d42', borderRadius:8, padding:8, background:'#0f172a' }}>
-                      {foto.signedUrl ? (
-                        <>
-                          <img src={foto.signedUrl} alt="" style={{ width:'100%', aspectRatio:'1', objectFit:'cover', borderRadius:6, marginBottom:8 }} />
-                          <a href={foto.signedUrl} target="_blank" rel="noreferrer" style={{ color:'#f59e0b', fontSize:12 }}>Abrir foto</a>
-                        </>
-                      ) : (
-                        <>
-                          <div style={{ color:'#94a3b8', fontSize:12, wordBreak:'break-all' }}>{foto.storage_path}</div>
-                          {foto.error && <div style={{ color:'#f59e0b', fontSize:12, marginTop:6 }}>{foto.error}</div>}
-                        </>
-                      )}
-                    </div>
-                  ))}
+                  {detalleFotos.map(foto => {
+                    const fotoUrl = foto.signedUrl || foto.publicUrl
+
+                    return (
+                      <div key={foto.id} style={{ border:'1px solid #1e2d42', borderRadius:8, padding:8, background:'#0f172a' }}>
+                        {fotoUrl ? (
+                          <>
+                            <img src={fotoUrl} alt="" style={{ width:'100%', aspectRatio:'1', objectFit:'cover', borderRadius:6, marginBottom:8 }} />
+                            <a href={fotoUrl} target="_blank" rel="noreferrer" style={{ color:'#f59e0b', fontSize:12 }}>Abrir foto</a>
+                            {foto.error && <div style={{ color:'#f59e0b', fontSize:12, marginTop:6 }}>{foto.error}</div>}
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ color:'#94a3b8', fontSize:12, wordBreak:'break-all' }}>{foto.storage_path}</div>
+                            {foto.error && <div style={{ color:'#f59e0b', fontSize:12, marginTop:6 }}>{foto.error}</div>}
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </>

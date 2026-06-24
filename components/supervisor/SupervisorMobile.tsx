@@ -112,6 +112,7 @@ interface SupervisionFoto {
   storage_path: string
   created_at?: string
   signedUrl?: string | null
+  publicUrl?: string | null
   error?: string | null
 }
 
@@ -1712,7 +1713,7 @@ export default function SupervisorMobile({ user }: any) {
       }
 
       let avisoFotos = ''
-      const fotosGuardadas: string[] = []
+      const fotosRegistradas: SupervisionFoto[] = []
 
       for (const [index, foto] of supervisionFotos.entries()) {
         const path = `${supervisionNueva.id}/${Date.now()}-${index}-${storageFileName(foto.name)}`
@@ -1721,28 +1722,31 @@ export default function SupervisorMobile({ user }: any) {
           .upload(path, foto, { upsert: false })
 
         if (fotoError) {
-          avisoFotos = ` Fotos no cargadas en Storage: ${fotoError.message}`
+          avisoFotos = ` Fotos no cargadas en Storage bucket "supervision-fotos": ${fotoError.message}`
           break
         }
 
-        fotosGuardadas.push(path)
-      }
-
-      if (fotosGuardadas.length > 0) {
-        const { error: fotosInsertError } = await supabase
+        const { data: fotoRegistrada, error: fotosInsertError } = await supabase
           .from('supervision_fotos')
-          .insert(fotosGuardadas.map(storage_path => ({
+          .insert({
             supervision_id: supervisionNueva.id,
-            storage_path,
-          })))
+            storage_path: path,
+          })
+          .select('id, supervision_id, storage_path, created_at')
+          .single()
 
-        if (fotosInsertError) avisoFotos = ` Fotos subidas, pero no registradas: ${fotosInsertError.message}`
+        if (fotosInsertError) {
+          avisoFotos = ` Foto subida a Storage, pero no registrada en supervision_fotos: ${fotosInsertError.message}`
+          break
+        }
+
+        if (fotoRegistrada) fotosRegistradas.push(fotoRegistrada as SupervisionFoto)
       }
 
       const supervisionParaListado = {
         ...supervisionNueva,
         respuestas: respuestasCompletas.map(({ respuesta }) => ({ resultado: respuesta?.resultado })),
-        fotos: fotosGuardadas.map(storage_path => ({ id: storage_path, storage_path })),
+        fotos: fotosRegistradas.map(foto => ({ id: foto.id, storage_path: foto.storage_path })),
       } as Supervision
 
       setSupervisiones(prev => [
@@ -1786,10 +1790,14 @@ export default function SupervisorMobile({ user }: any) {
         const { data, error } = await supabase.storage
           .from('supervision-fotos')
           .createSignedUrl(foto.storage_path, 60 * 60)
+        const publicUrl = supabase.storage
+          .from('supervision-fotos')
+          .getPublicUrl(foto.storage_path).data.publicUrl
 
         return {
           ...foto,
           signedUrl: data?.signedUrl || null,
+          publicUrl,
           error: error?.message || null,
         }
       }))
@@ -2926,21 +2934,26 @@ export default function SupervisorMobile({ user }: any) {
                 <div style={{ ...objetivoName, margin:'18px 0 8px' }}>Fotos adjuntas</div>
                 {detalleFotos.length === 0 ? (
                   <div style={empty}>Sin fotos adjuntas.</div>
-                ) : detalleFotos.map(foto => (
-                  <div key={foto.id} style={registroItem}>
-                    {foto.signedUrl ? (
-                      <>
-                        <img src={foto.signedUrl} alt="" style={{ width:'100%', maxHeight:220, objectFit:'cover', borderRadius:8, marginBottom:8 }} />
-                        <a href={foto.signedUrl} target="_blank" rel="noreferrer" style={{ color:'#f59e0b', fontSize:13 }}>Abrir foto</a>
-                      </>
-                    ) : (
-                      <>
-                        <div style={{ ...muted, wordBreak:'break-all' }}>{foto.storage_path}</div>
-                        {foto.error && <div style={{ ...muted, color:'#f59e0b' }}>{foto.error}</div>}
-                      </>
-                    )}
-                  </div>
-                ))}
+                ) : detalleFotos.map(foto => {
+                  const fotoUrl = foto.signedUrl || foto.publicUrl
+
+                  return (
+                    <div key={foto.id} style={registroItem}>
+                      {fotoUrl ? (
+                        <>
+                          <img src={fotoUrl} alt="" style={{ width:'100%', maxHeight:220, objectFit:'cover', borderRadius:8, marginBottom:8 }} />
+                          <a href={fotoUrl} target="_blank" rel="noreferrer" style={{ color:'#f59e0b', fontSize:13 }}>Abrir foto</a>
+                          {foto.error && <div style={{ ...muted, color:'#f59e0b' }}>{foto.error}</div>}
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ ...muted, wordBreak:'break-all' }}>{foto.storage_path}</div>
+                          {foto.error && <div style={{ ...muted, color:'#f59e0b' }}>{foto.error}</div>}
+                        </>
+                      )}
+                    </div>
+                  )
+                })}
               </>
             )}
 
