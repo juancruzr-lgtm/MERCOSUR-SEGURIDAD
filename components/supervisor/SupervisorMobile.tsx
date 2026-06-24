@@ -50,6 +50,49 @@ interface Objetivo {
   lng?: number | null
   radio_metros?: number | null
   estado?: string
+  checklist_plantilla_id?: string | null
+  frecuencia_supervision_horas?: number | null
+}
+
+type EstadoSupervision = 'ok' | 'con_observacion' | 'critico'
+type ResultadoChecklist = 'correcto' | 'observado' | 'no_aplica'
+
+interface ChecklistPlantilla {
+  id: string
+  nombre: string
+  descripcion?: string | null
+  activo: boolean
+}
+
+interface ChecklistItem {
+  id: string
+  plantilla_id: string
+  texto: string
+  orden: number
+  obligatorio: boolean
+  criticidad: 'normal' | 'alta'
+  foto_obligatoria: boolean
+  activo: boolean
+}
+
+interface Supervision {
+  id: string
+  objetivo_id: string
+  supervisor_id: string
+  plantilla_id?: string | null
+  lat: number | string
+  lng: number | string
+  precision_gps: number | string
+  estado: EstadoSupervision
+  observaciones?: string | null
+  created_at: string
+  objetivo?: Pick<Objetivo, 'nombre'> | null
+}
+
+interface SupervisionGps {
+  lat: number
+  lng: number
+  precision: number
 }
 
 interface RegistroAsistencia {
@@ -195,6 +238,30 @@ function fechaHoraDDMMYYYY(fecha?: string | null): string {
   })
 }
 
+function fechaLocalISO(fecha: Date | string = new Date()): string {
+  return new Date(fecha).toLocaleDateString('sv-SE')
+}
+
+function inicioDiaLocalISO(fecha: string): string {
+  const [year, month, day] = fecha.split('-').map(Number)
+  return new Date(year, month - 1, day, 0, 0, 0).toISOString()
+}
+
+function finDiaLocalISO(fecha: string): string {
+  const [year, month, day] = fecha.split('-').map(Number)
+  return new Date(year, month - 1, day + 1, 0, 0, 0).toISOString()
+}
+
+function storageFileName(nombre: string): string {
+  return nombre
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'foto.jpg'
+}
+
 function fechaHoraTurno(fecha: string, hora: string): Date | null {
   const [year, month, day] = fecha.slice(0, 10).split('-').map(Number)
   const [hours, minutes, seconds = 0] = hora.split(':').map(Number)
@@ -323,6 +390,15 @@ export default function SupervisorMobile({ user }: any) {
   const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const [mensaje, setMensaje] = useState('')
   const [activandoPush, setActivandoPush] = useState(false)
+  const [checklistPlantillas, setChecklistPlantillas] = useState<ChecklistPlantilla[]>([])
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
+  const [supervisiones, setSupervisiones] = useState<Supervision[]>([])
+  const [supervisionObjetivoId, setSupervisionObjetivoId] = useState('')
+  const [supervisionGps, setSupervisionGps] = useState<SupervisionGps | null>(null)
+  const [supervisionObservaciones, setSupervisionObservaciones] = useState('')
+  const [supervisionRespuestas, setSupervisionRespuestas] = useState<Record<string, { resultado: ResultadoChecklist, observacion: string }>>({})
+  const [supervisionFotos, setSupervisionFotos] = useState<File[]>([])
+  const [capturandoGps, setCapturandoGps] = useState(false)
 
   const hoy = fechaHoy()
   const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
@@ -354,7 +430,18 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
     const rango = rangoFiltroFechaTurnos(filtro, hoy)
 
-    const [{ data: turnosData, error: turnosError }, { data: objetivosData, error: objetivosError }, guardiasResult, supervisoresResult, supervisoresGuardiaResult, solicitudesResult] = await Promise.all([
+    const [
+      { data: turnosData, error: turnosError },
+      { data: objetivosData, error: objetivosError },
+      guardiasResult,
+      supervisoresResult,
+      supervisoresGuardiaResult,
+      solicitudesResult,
+      plantillasResult,
+      itemsResult,
+      supervisionesHoyResult,
+      supervisionesRecientesResult,
+    ] = await Promise.all([
       supabase
         .from('turnos')
         .select('*')
@@ -364,7 +451,7 @@ export default function SupervisorMobile({ user }: any) {
         .order('hora_inicio', { ascending: true }),
       supabase
         .from('objetivos')
-        .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado')
+        .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado, checklist_plantilla_id, frecuencia_supervision_horas')
         .order('nombre'),
       supabase
         .from('usuarios')
@@ -388,6 +475,29 @@ export default function SupervisorMobile({ user }: any) {
         .select('*')
         .eq('solicitante_id', user.id)
         .order('created_at', { ascending: false }),
+      supabase
+        .from('checklist_plantillas')
+        .select('id, nombre, descripcion, activo')
+        .eq('activo', true)
+        .order('nombre'),
+      supabase
+        .from('checklist_items')
+        .select('id, plantilla_id, texto, orden, obligatorio, criticidad, foto_obligatoria, activo')
+        .eq('activo', true)
+        .order('orden', { ascending: true }),
+      supabase
+        .from('supervisiones')
+        .select('*, objetivo:objetivos(nombre)')
+        .eq('supervisor_id', user.id)
+        .gte('created_at', inicioDiaLocalISO(hoy))
+        .lt('created_at', finDiaLocalISO(hoy))
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('supervisiones')
+        .select('*, objetivo:objetivos(nombre)')
+        .eq('supervisor_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(30),
     ])
 
     let guardiasData = guardiasResult.data
@@ -398,6 +508,10 @@ export default function SupervisorMobile({ user }: any) {
     const supervisoresGuardiaError = supervisoresGuardiaResult.error
     const solicitudesData = solicitudesResult.data
     const solicitudesError = solicitudesResult.error
+    const plantillasError = plantillasResult.error
+    const itemsError = itemsResult.error
+    const supervisionesHoyError = supervisionesHoyResult.error
+    const supervisionesRecientesError = supervisionesRecientesResult.error
 
     if (guardiasError?.message?.includes('usuarios.email') || guardiasError?.message?.includes('usuarios.telefono') || guardiasError?.message?.includes('usuarios.foto_url')) {
       const retry = await supabase
@@ -424,13 +538,41 @@ export default function SupervisorMobile({ user }: any) {
       setError(solicitudesError.message)
     }
 
+    if (plantillasError && !/checklist_plantillas|schema cache|does not exist/i.test(plantillasError.message)) {
+      setError(plantillasError.message)
+    }
+
+    if (itemsError && !/checklist_items|schema cache|does not exist/i.test(itemsError.message)) {
+      setError(itemsError.message)
+    }
+
+    if (supervisionesHoyError && !/supervisiones|schema cache|does not exist/i.test(supervisionesHoyError.message)) {
+      setError(supervisionesHoyError.message)
+    }
+
+    if (supervisionesRecientesError && !/supervisiones|schema cache|does not exist/i.test(supervisionesRecientesError.message)) {
+      setError(supervisionesRecientesError.message)
+    }
+
     const turnosRango = (turnosData || []) as Turno[]
+    const supervisionesMap = new Map<string, Supervision>()
+    ;[...(supervisionesHoyResult.data || []), ...(supervisionesRecientesResult.data || [])].forEach((supervision: any) => {
+      supervisionesMap.set(supervision.id, supervision as Supervision)
+    })
+
     setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
     setGuardias((guardiasData || []) as Usuario[])
     setSupervisores((supervisoresData || []) as Usuario[])
     setSupervisoresGuardia(supervisoresGuardiaError ? [] : (supervisoresGuardiaData || []) as SupervisorGuardia[])
     setSolicitudesAdmin(solicitudesError ? [] : (solicitudesData || []) as SolicitudAdmin[])
+    setChecklistPlantillas(plantillasError ? [] : (plantillasResult.data || []) as ChecklistPlantilla[])
+    setChecklistItems(itemsError ? [] : (itemsResult.data || []) as ChecklistItem[])
+    setSupervisiones(
+      (supervisionesHoyError && supervisionesRecientesError)
+        ? []
+        : Array.from(supervisionesMap.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    )
 
     if (turnosRango.length === 0) {
       setRegistros([])
@@ -637,6 +779,33 @@ export default function SupervisorMobile({ user }: any) {
     finalizados: turnos.filter(t => estadoOperativo(t) === 'finalizado').length,
     descubiertos: turnos.filter(t => estadoOperativo(t) === 'descubierto').length,
   }), [turnos, registros])
+
+  const objetivosActivos = useMemo(() => objetivos.filter(o => (o.estado || 'activo') === 'activo'), [objetivos])
+  const objetivoSupervision = useMemo(
+    () => objetivos.find(o => o.id === supervisionObjetivoId) || null,
+    [objetivos, supervisionObjetivoId],
+  )
+  const plantillaSupervision = useMemo(
+    () => checklistPlantillas.find(p => p.id === objetivoSupervision?.checklist_plantilla_id) || null,
+    [checklistPlantillas, objetivoSupervision],
+  )
+  const itemsSupervision = useMemo(
+    () => objetivoSupervision?.checklist_plantilla_id
+      ? checklistItems
+          .filter(item => item.plantilla_id === objetivoSupervision.checklist_plantilla_id && item.activo)
+          .sort((a, b) => (a.orden || 0) - (b.orden || 0))
+      : [],
+    [checklistItems, objetivoSupervision],
+  )
+  const supervisionesHoy = useMemo(
+    () => supervisiones.filter(supervision => fechaLocalISO(supervision.created_at) === hoy),
+    [supervisiones, hoy],
+  )
+  const resumenSupervisiones = useMemo(() => ({
+    total: supervisionesHoy.length,
+    observadas: supervisionesHoy.filter(s => s.estado === 'con_observacion').length,
+    criticas: supervisionesHoy.filter(s => s.estado === 'critico').length,
+  }), [supervisionesHoy])
 
   const turnosDescubiertosOperativos = useMemo(
     () => turnos.filter(t => esDescubiertoOperativo(t)),
@@ -1382,6 +1551,161 @@ export default function SupervisorMobile({ user }: any) {
     }
   }
 
+  const resetFormularioSupervision = () => {
+    setSupervisionObjetivoId('')
+    setSupervisionGps(null)
+    setSupervisionObservaciones('')
+    setSupervisionRespuestas({})
+    setSupervisionFotos([])
+  }
+
+  const actualizarRespuestaSupervision = (itemId: string, patch: Partial<{ resultado: ResultadoChecklist, observacion: string }>) => {
+    setSupervisionRespuestas(prev => ({
+      ...prev,
+      [itemId]: {
+        resultado: prev[itemId]?.resultado || 'correcto',
+        observacion: prev[itemId]?.observacion || '',
+        ...patch,
+      },
+    }))
+  }
+
+  const capturarGpsSupervision = async () => {
+    setError('')
+    setMensaje('')
+
+    if (!navigator.geolocation) {
+      setError('GPS no disponible en este dispositivo.')
+      return
+    }
+
+    setCapturandoGps(true)
+    navigator.geolocation.getCurrentPosition(
+      position => {
+        setSupervisionGps({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          precision: position.coords.accuracy,
+        })
+        setCapturandoGps(false)
+      },
+      gpsError => {
+        setError(gpsError.message || 'No se pudo capturar la ubicación GPS.')
+        setCapturandoGps(false)
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    )
+  }
+
+  const guardarSupervision = async () => {
+    setError('')
+    setMensaje('')
+
+    if (!objetivoSupervision) {
+      setError('Seleccioná un objetivo para registrar la supervisión.')
+      return
+    }
+
+    if (!supervisionGps) {
+      setError('GPS obligatorio: capturá la ubicación antes de guardar.')
+      return
+    }
+
+    const obligatoriosSinRespuesta = itemsSupervision.filter(item => item.obligatorio && !supervisionRespuestas[item.id]?.resultado)
+    if (obligatoriosSinRespuesta.length > 0) {
+      setError(`Faltan responder ítems obligatorios: ${obligatoriosSinRespuesta.map(item => item.texto).join(', ')}`)
+      return
+    }
+
+    const respuestasCompletas = itemsSupervision
+      .map(item => ({ item, respuesta: supervisionRespuestas[item.id] }))
+      .filter(({ respuesta }) => Boolean(respuesta?.resultado))
+
+    const hayObservado = respuestasCompletas.some(({ respuesta }) => respuesta?.resultado === 'observado')
+    const hayCritico = respuestasCompletas.some(({ item, respuesta }) => respuesta?.resultado === 'observado' && item.criticidad === 'alta')
+    const faltaFotoObligatoria = itemsSupervision.some(item => item.foto_obligatoria) && supervisionFotos.length === 0
+    const estado: EstadoSupervision = hayCritico || faltaFotoObligatoria
+      ? 'critico'
+      : hayObservado
+        ? 'con_observacion'
+        : 'ok'
+
+    setAsignando('guardar-supervision')
+
+    try {
+      const { data: supervisionNueva, error: supervisionError } = await supabase
+        .from('supervisiones')
+        .insert({
+          objetivo_id: objetivoSupervision.id,
+          supervisor_id: user.id,
+          plantilla_id: objetivoSupervision.checklist_plantilla_id || null,
+          lat: supervisionGps.lat,
+          lng: supervisionGps.lng,
+          precision_gps: supervisionGps.precision,
+          estado,
+          observaciones: supervisionObservaciones.trim() || null,
+        })
+        .select('*, objetivo:objetivos(nombre)')
+        .single()
+
+      if (supervisionError) throw supervisionError
+      if (!supervisionNueva) throw new Error('No se pudo crear la supervisión.')
+
+      if (respuestasCompletas.length > 0) {
+        const { error: respuestasError } = await supabase
+          .from('supervision_respuestas')
+          .insert(respuestasCompletas.map(({ item, respuesta }) => ({
+            supervision_id: supervisionNueva.id,
+            item_id: item.id,
+            resultado: respuesta?.resultado,
+            observacion: respuesta?.observacion?.trim() || null,
+          })))
+
+        if (respuestasError) throw respuestasError
+      }
+
+      let avisoFotos = ''
+      const fotosGuardadas: string[] = []
+
+      for (const [index, foto] of supervisionFotos.entries()) {
+        const path = `${supervisionNueva.id}/${Date.now()}-${index}-${storageFileName(foto.name)}`
+        const { error: fotoError } = await supabase.storage
+          .from('supervision-fotos')
+          .upload(path, foto, { upsert: false })
+
+        if (fotoError) {
+          avisoFotos = ` Fotos no cargadas en Storage: ${fotoError.message}`
+          break
+        }
+
+        fotosGuardadas.push(path)
+      }
+
+      if (fotosGuardadas.length > 0) {
+        const { error: fotosInsertError } = await supabase
+          .from('supervision_fotos')
+          .insert(fotosGuardadas.map(storage_path => ({
+            supervision_id: supervisionNueva.id,
+            storage_path,
+          })))
+
+        if (fotosInsertError) avisoFotos = ` Fotos subidas, pero no registradas: ${fotosInsertError.message}`
+      }
+
+      setSupervisiones(prev => [
+        supervisionNueva as Supervision,
+        ...prev.filter(s => s.id !== supervisionNueva.id),
+      ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
+      resetFormularioSupervision()
+      setMensaje(`✓ Supervisión guardada con estado ${estado}.${avisoFotos}`)
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : 'Error al guardar la supervisión.'
+      setError(message)
+    } finally {
+      setAsignando(null)
+    }
+  }
+
   const tabs = [
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
     { id: 'turnos', label: 'Turnos', icon: '📅' },
@@ -1389,6 +1713,7 @@ export default function SupervisorMobile({ user }: any) {
     { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
     { id: 'solicitudes', label: 'Solicitudes', icon: '📝' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
+    { id: 'supervisiones', label: 'Supervisiones', icon: '☑️' },
     { id: 'perfil', label: 'Perfil', icon: '👤' },
   ]
 
@@ -2196,6 +2521,179 @@ export default function SupervisorMobile({ user }: any) {
               </section>
             )}
 
+            {tab === 'supervisiones' && (
+              <section>
+                <div style={screenTitle}>Supervisiones</div>
+                <div style={dateText}>Control de objetivos con checklist, GPS y fotos.</div>
+
+                <div style={statsGrid}>
+                  <div style={statCard}><strong>{resumenSupervisiones.total}</strong><span>Hoy</span></div>
+                  <div style={statCard}><strong>{resumenSupervisiones.observadas}</strong><span>Con observaciones</span></div>
+                  <div style={statCard}><strong>{resumenSupervisiones.criticas}</strong><span>Críticas</span></div>
+                  <div style={statCard}><strong>{objetivosActivos.length}</strong><span>Objetivos activos</span></div>
+                </div>
+
+                <div style={card}>
+                  <div style={objetivoName}>Nueva supervisión</div>
+                  <div style={muted}>Seleccioná el objetivo, capturá GPS y completá el checklist asignado.</div>
+
+                  <label style={{ ...label, marginTop:16 }}>Objetivo activo</label>
+                  <select
+                    style={select}
+                    value={supervisionObjetivoId}
+                    onChange={e => {
+                      setSupervisionObjetivoId(e.target.value)
+                      setSupervisionRespuestas({})
+                      setSupervisionFotos([])
+                      setSupervisionObservaciones('')
+                    }}
+                  >
+                    <option value="">Seleccionar objetivo...</option>
+                    {objetivosActivos.map(objetivo => (
+                      <option key={objetivo.id} value={objetivo.id}>{objetivo.nombre}</option>
+                    ))}
+                  </select>
+
+                  {objetivoSupervision && (
+                    <div style={{ ...registroBox, marginBottom:12 }}>
+                      <div>
+                        <div style={label}>Checklist</div>
+                        <div style={registroValue}>{plantillaSupervision?.nombre || (objetivoSupervision.checklist_plantilla_id ? 'Plantilla no disponible' : 'Sin checklist asignado')}</div>
+                      </div>
+                      <div>
+                        <div style={label}>Frecuencia</div>
+                        <div style={registroValue}>{objetivoSupervision.frecuencia_supervision_horas || 24} h</div>
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    style={{ ...refreshButton, opacity: capturandoGps ? 0.65 : 1, marginBottom:12 }}
+                    onClick={capturarGpsSupervision}
+                    disabled={capturandoGps}
+                  >
+                    {capturandoGps ? 'Capturando GPS...' : supervisionGps ? 'Actualizar GPS' : 'Capturar GPS'}
+                  </button>
+
+                  {supervisionGps && (
+                    <div style={{ ...errorBox, color:'#10b981', borderColor:'rgba(16,185,129,.35)', background:'rgba(16,185,129,.12)' }}>
+                      GPS capturado · Precisión {metrosTexto(supervisionGps.precision)}
+                    </div>
+                  )}
+
+                  {objetivoSupervision && itemsSupervision.length === 0 && (
+                    <div style={{ ...empty, padding:12 }}>
+                      Este objetivo no tiene ítems activos de checklist.
+                    </div>
+                  )}
+
+                  {itemsSupervision.map(item => {
+                    const respuesta = supervisionRespuestas[item.id]
+
+                    return (
+                      <div key={item.id} style={{ ...turnoCard, background:'#0f172a' }}>
+                        <div style={turnoTop}>
+                          <div>
+                            <div style={objetivoName}>{item.texto}</div>
+                            <div style={muted}>
+                              {item.obligatorio ? 'Obligatorio' : 'Opcional'} · Criticidad {item.criticidad}{item.foto_obligatoria ? ' · Foto obligatoria' : ''}
+                            </div>
+                          </div>
+                          <span style={supervisionBadge(item.criticidad === 'alta' ? 'critico' : 'ok')}>{item.criticidad}</span>
+                        </div>
+
+                        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
+                          {(['correcto', 'observado', 'no_aplica'] as ResultadoChecklist[]).map(resultado => {
+                            const activo = respuesta?.resultado === resultado
+                            return (
+                              <button
+                                key={resultado}
+                                type="button"
+                                onClick={() => actualizarRespuestaSupervision(item.id, { resultado })}
+                                style={{
+                                  ...secondaryButton,
+                                  background: activo ? '#f59e0b' : secondaryButton.background,
+                                  color: activo ? '#111827' : secondaryButton.color,
+                                  borderColor: activo ? '#f59e0b' : '#374151',
+                                }}
+                              >
+                                {resultado === 'correcto' ? 'Correcto' : resultado === 'observado' ? 'Observado' : 'N/A'}
+                              </button>
+                            )
+                          })}
+                        </div>
+
+                        {respuesta?.resultado === 'observado' && (
+                          <>
+                            <label style={{ ...label, marginTop:12 }}>Observación del ítem</label>
+                            <textarea
+                              style={textarea}
+                              value={respuesta.observacion}
+                              onChange={e => actualizarRespuestaSupervision(item.id, { observacion: e.target.value })}
+                            />
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+
+                  <label style={label}>Observaciones generales</label>
+                  <textarea
+                    style={textarea}
+                    value={supervisionObservaciones}
+                    onChange={e => setSupervisionObservaciones(e.target.value)}
+                  />
+
+                  <label style={label}>Fotos</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    capture="environment"
+                    style={input}
+                    onChange={e => setSupervisionFotos(Array.from(e.target.files || []))}
+                  />
+                  {supervisionFotos.length > 0 && (
+                    <div style={{ ...muted, marginBottom:12 }}>
+                      {supervisionFotos.length} foto(s): {supervisionFotos.map(foto => foto.name).join(', ')}
+                    </div>
+                  )}
+
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                    <button type="button" style={secondaryButton} onClick={resetFormularioSupervision}>
+                      Limpiar
+                    </button>
+                    <button
+                      type="button"
+                      style={{ ...refreshButton, opacity: asignando === 'guardar-supervision' ? 0.65 : 1 }}
+                      onClick={guardarSupervision}
+                      disabled={asignando === 'guardar-supervision'}
+                    >
+                      {asignando === 'guardar-supervision' ? 'Guardando...' : 'Guardar supervisión'}
+                    </button>
+                  </div>
+                </div>
+
+                <div style={objetivoName}>Historial reciente</div>
+                {supervisiones.length === 0 ? (
+                  <div style={empty}>Todavía no hay supervisiones registradas.</div>
+                ) : supervisiones.slice(0, 12).map(supervision => (
+                  <div key={supervision.id} style={card}>
+                    <div style={turnoTop}>
+                      <div>
+                        <div style={objetivoName}>{supervision.objetivo?.nombre || getObjetivo(supervision.objetivo_id)?.nombre || 'Objetivo sin nombre'}</div>
+                        <div style={muted}>{fechaHoraDDMMYYYY(supervision.created_at)}</div>
+                        <div style={muted}>GPS {Number(supervision.lat).toFixed(5)}, {Number(supervision.lng).toFixed(5)} · Precisión {metrosTexto(supervision.precision_gps)}</div>
+                        {supervision.observaciones && <div style={muted}>{supervision.observaciones}</div>}
+                      </div>
+                      <span style={supervisionBadge(supervision.estado)}>{supervision.estado}</span>
+                    </div>
+                  </div>
+                ))}
+              </section>
+            )}
+
             {tab === 'perfil' && (
               <section>
                 <div style={screenTitle}>Perfil</div>
@@ -2786,6 +3284,26 @@ function alertBadge(alerta: TipoAlerta): React.CSSProperties {
     fontWeight: 800,
     background: `${color}22`,
     color,
+    whiteSpace: 'nowrap',
+  }
+}
+
+function supervisionBadge(estado: EstadoSupervision): React.CSSProperties {
+  const colores: Record<EstadoSupervision, { bg: string, color: string }> = {
+    ok: { bg: 'rgba(16,185,129,.18)', color: '#10b981' },
+    con_observacion: { bg: 'rgba(245,158,11,.18)', color: '#f59e0b' },
+    critico: { bg: 'rgba(239,68,68,.18)', color: '#f87171' },
+  }
+  const c = colores[estado]
+
+  return {
+    display: 'inline-flex',
+    padding: '4px 9px',
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 800,
+    background: c.bg,
+    color: c.color,
     whiteSpace: 'nowrap',
   }
 }
