@@ -44,6 +44,8 @@ export interface Objetivo {
   lng?: number
   radio_metros: number
   estado: Estado
+  checklist_plantilla_id?: string | null
+  frecuencia_supervision_horas?: number | null
   created_at: string
 }
 

@@ -12,6 +12,7 @@ type TipoAlertaOperativaAdmin = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'des
 type AccionIntervencionAdmin = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'confirmar_cubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
 type TipoSolicitudAdmin = 'crear_objetivo' | 'baja_objetivo' | 'crear_vigilador' | 'baja_vigilador'
 type EstadoSolicitudAdmin = 'pendiente' | 'aprobado' | 'rechazado'
+type EstadoSupervisionAdmin = 'ok' | 'con_observacion' | 'critico'
 type SolicitudAdmin = {
   id: string
   solicitante_id: string
@@ -24,6 +25,37 @@ type SolicitudAdmin = {
   fecha_aprobacion?: string | null
   comentario_admin?: string | null
   created_at: string
+}
+
+type ChecklistPlantillaAdmin = {
+  id: string
+  nombre: string
+  descripcion?: string | null
+  activo: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+type ChecklistItemAdmin = {
+  id: string
+  plantilla_id: string
+  texto: string
+  orden: number
+  obligatorio: boolean
+  criticidad: 'normal' | 'alta'
+  foto_obligatoria: boolean
+  activo: boolean
+  created_at?: string
+}
+
+type SupervisionAdmin = {
+  id: string
+  objetivo_id: string
+  supervisor_id: string
+  plantilla_id?: string | null
+  estado: EstadoSupervisionAdmin
+  created_at: string
+  observaciones?: string | null
 }
 
 const ZONA_OPERATIVA_ADMIN = 'Rosario / General'
@@ -1301,7 +1333,259 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
   )
 }
 
-function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltro }: any) {
+function ChecklistsAdmin({ plantillas, setPlantillas, items, setItems }: any) {
+  const [plantillaSeleccionadaId, setPlantillaSeleccionadaId] = useState('')
+  const [plantillaForm, setPlantillaForm] = useState({ nombre:'', descripcion:'' })
+  const [itemForm, setItemForm] = useState({ texto:'', obligatorio:true, criticidad:'normal', foto_obligatoria:false })
+  const [loading, setLoading] = useState('')
+  const [mensaje, setMensaje] = useState<{ tipo:'ok' | 'error', texto:string } | null>(null)
+
+  useEffect(() => {
+    if (!plantillaSeleccionadaId && plantillas.length > 0) {
+      setPlantillaSeleccionadaId(plantillas[0].id)
+      return
+    }
+
+    if (plantillaSeleccionadaId && !plantillas.some((p: ChecklistPlantillaAdmin) => p.id === plantillaSeleccionadaId)) {
+      setPlantillaSeleccionadaId(plantillas[0]?.id || '')
+    }
+  }, [plantillas, plantillaSeleccionadaId])
+
+  const plantillaSeleccionada = plantillas.find((p: ChecklistPlantillaAdmin) => p.id === plantillaSeleccionadaId)
+  const itemsPlantilla = items
+    .filter((item: ChecklistItemAdmin) => item.plantilla_id === plantillaSeleccionadaId)
+    .sort((a: ChecklistItemAdmin, b: ChecklistItemAdmin) => (a.orden || 0) - (b.orden || 0))
+
+  const guardarPlantilla = async () => {
+    if (!plantillaForm.nombre.trim()) return
+    setLoading('plantilla')
+    setMensaje(null)
+
+    const { data, error } = await supabase
+      .from('checklist_plantillas')
+      .insert({
+        nombre: plantillaForm.nombre.trim(),
+        descripcion: plantillaForm.descripcion.trim() || null,
+        activo: true,
+      })
+      .select()
+      .single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+    } else if (data) {
+      setPlantillas((prev: ChecklistPlantillaAdmin[]) => [...prev, data])
+      setPlantillaSeleccionadaId(data.id)
+      setPlantillaForm({ nombre:'', descripcion:'' })
+      setMensaje({ tipo:'ok', texto:'Plantilla creada.' })
+    }
+
+    setLoading('')
+  }
+
+  const actualizarPlantilla = async (plantilla: ChecklistPlantillaAdmin, patch: Partial<ChecklistPlantillaAdmin>) => {
+    setLoading(`plantilla-${plantilla.id}`)
+    setMensaje(null)
+
+    const { data, error } = await supabase
+      .from('checklist_plantillas')
+      .update(patch)
+      .eq('id', plantilla.id)
+      .select()
+      .single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+    } else if (data) {
+      setPlantillas((prev: ChecklistPlantillaAdmin[]) => prev.map(p => p.id === plantilla.id ? data : p))
+    }
+
+    setLoading('')
+  }
+
+  const guardarItem = async () => {
+    if (!plantillaSeleccionadaId || !itemForm.texto.trim()) return
+    setLoading('item')
+    setMensaje(null)
+
+    const ordenSiguiente = itemsPlantilla.reduce((max: number, item: ChecklistItemAdmin) => Math.max(max, item.orden || 0), 0) + 10
+    const { data, error } = await supabase
+      .from('checklist_items')
+      .insert({
+        plantilla_id: plantillaSeleccionadaId,
+        texto: itemForm.texto.trim(),
+        orden: ordenSiguiente,
+        obligatorio: itemForm.obligatorio,
+        criticidad: itemForm.criticidad,
+        foto_obligatoria: itemForm.foto_obligatoria,
+        activo: true,
+      })
+      .select()
+      .single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+    } else if (data) {
+      setItems((prev: ChecklistItemAdmin[]) => [...prev, data])
+      setItemForm({ texto:'', obligatorio:true, criticidad:'normal', foto_obligatoria:false })
+      setMensaje({ tipo:'ok', texto:'Ítem agregado.' })
+    }
+
+    setLoading('')
+  }
+
+  const actualizarItem = async (item: ChecklistItemAdmin, patch: Partial<ChecklistItemAdmin>) => {
+    setLoading(`item-${item.id}`)
+    setMensaje(null)
+
+    const { data, error } = await supabase
+      .from('checklist_items')
+      .update(patch)
+      .eq('id', item.id)
+      .select()
+      .single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+    } else if (data) {
+      setItems((prev: ChecklistItemAdmin[]) => prev.map(i => i.id === item.id ? data : i))
+    }
+
+    setLoading('')
+  }
+
+  const editarTextoItem = async (item: ChecklistItemAdmin) => {
+    const texto = window.prompt('Texto del ítem', item.texto)
+    if (!texto || !texto.trim() || texto.trim() === item.texto) return
+    await actualizarItem(item, { texto:texto.trim() })
+  }
+
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', gap:16, alignItems:'flex-start', marginBottom:24 }}>
+        <div>
+          <div style={S.title}>Checklists de supervisión</div>
+          <div style={S.sub2}>Plantillas, ítems y reglas de fotos para objetivos.</div>
+        </div>
+      </div>
+
+      {mensaje && (
+        <div style={{ ...S.card, padding:12, color:mensaje.tipo === 'ok' ? '#86efac' : '#fca5a5', borderColor:mensaje.tipo === 'ok' ? 'rgba(16,185,129,.35)' : 'rgba(239,68,68,.35)' }}>
+          {mensaje.texto}
+        </div>
+      )}
+
+      <div style={{ ...S.card, marginBottom:20 }}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Nueva plantilla</div>
+        <div style={S.grid2}>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Nombre</label>
+            <input style={S.input} value={plantillaForm.nombre} onChange={e => setPlantillaForm({ ...plantillaForm, nombre:e.target.value })} />
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Descripción</label>
+            <input style={S.input} value={plantillaForm.descripcion} onChange={e => setPlantillaForm({ ...plantillaForm, descripcion:e.target.value })} />
+          </div>
+        </div>
+        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardarPlantilla} disabled={loading === 'plantilla' || !plantillaForm.nombre.trim()}>
+          {loading === 'plantilla' ? 'Creando...' : 'Crear plantilla'}
+        </button>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'minmax(260px, .75fr) minmax(360px, 1.25fr)', gap:20 }}>
+        <div style={S.card}>
+          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Plantillas</div>
+          {plantillas.length === 0 ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>No hay plantillas creadas.</div>
+          ) : plantillas.map((plantilla: ChecklistPlantillaAdmin) => (
+            <div key={plantilla.id} style={{ border:'1px solid #1e2d42', borderRadius:8, padding:12, marginBottom:10, background:plantilla.id === plantillaSeleccionadaId ? 'rgba(245,158,11,.08)' : '#0f172a' }}>
+              <button
+                type="button"
+                onClick={() => setPlantillaSeleccionadaId(plantilla.id)}
+                style={{ background:'transparent', border:'none', color:'#e2e8f0', fontWeight:800, cursor:'pointer', padding:0, textAlign:'left' }}
+              >
+                {plantilla.nombre}
+              </button>
+              {plantilla.descripcion && <div style={{ color:'#94a3b8', fontSize:12, marginTop:4 }}>{plantilla.descripcion}</div>}
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:10 }}>
+                <Badge type={plantilla.activo ? 'activo' : 'inactivo'}>{plantilla.activo ? 'activo' : 'inactivo'}</Badge>
+                <button
+                  style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:12 }}
+                  onClick={() => actualizarPlantilla(plantilla, { activo:!plantilla.activo })}
+                  disabled={loading === `plantilla-${plantilla.id}`}
+                >
+                  {plantilla.activo ? 'Desactivar' : 'Activar'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={S.card}>
+          <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginBottom:12 }}>
+            <div>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800 }}>{plantillaSeleccionada?.nombre || 'Seleccioná una plantilla'}</div>
+              <div style={{ color:'#64748b', fontSize:13 }}>{itemsPlantilla.length} ítem(s)</div>
+            </div>
+          </div>
+
+          {plantillaSeleccionada && (
+            <>
+              <div style={{ border:'1px solid #1e2d42', borderRadius:8, padding:12, marginBottom:16, background:'#0f172a' }}>
+                <label style={S.label}>Nuevo ítem</label>
+                <input style={S.input} value={itemForm.texto} onChange={e => setItemForm({ ...itemForm, texto:e.target.value })} />
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, alignItems:'center' }}>
+                  <label style={{ display:'flex', gap:8, alignItems:'center', fontSize:13, color:'#cbd5e1' }}>
+                    <input type="checkbox" checked={itemForm.obligatorio} onChange={e => setItemForm({ ...itemForm, obligatorio:e.target.checked })} />
+                    Obligatorio
+                  </label>
+                  <label style={{ display:'flex', gap:8, alignItems:'center', fontSize:13, color:'#cbd5e1' }}>
+                    <input type="checkbox" checked={itemForm.foto_obligatoria} onChange={e => setItemForm({ ...itemForm, foto_obligatoria:e.target.checked })} />
+                    Foto obligatoria
+                  </label>
+                  <select style={{ ...S.select, marginBottom:0 }} value={itemForm.criticidad} onChange={e => setItemForm({ ...itemForm, criticidad:e.target.value })}>
+                    <option value="normal">Normal</option>
+                    <option value="alta">Alta</option>
+                  </select>
+                </div>
+                <button style={{ ...S.btn, ...S.btnPrimary, marginTop:12 }} onClick={guardarItem} disabled={loading === 'item' || !itemForm.texto.trim()}>
+                  {loading === 'item' ? 'Agregando...' : 'Agregar ítem'}
+                </button>
+              </div>
+
+              {itemsPlantilla.length === 0 ? (
+                <div style={{ color:'#64748b', fontSize:13 }}>Esta plantilla todavía no tiene ítems.</div>
+              ) : itemsPlantilla.map((item: ChecklistItemAdmin) => (
+                <div key={item.id} style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:12, borderTop:'1px solid #1e2d42', padding:'12px 0', opacity:item.activo ? 1 : 0.55 }}>
+                  <div>
+                    <div style={{ fontWeight:800, color:'#e2e8f0' }}>{item.texto}</div>
+                    <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:6 }}>
+                      <Badge type={item.criticidad === 'alta' ? 'urgente' : 'normal'}>{item.criticidad}</Badge>
+                      <Badge type={item.obligatorio ? 'activo' : 'programado'}>{item.obligatorio ? 'obligatorio' : 'opcional'}</Badge>
+                      {item.foto_obligatoria && <Badge type="advertencia">foto obligatoria</Badge>}
+                      {!item.activo && <Badge type="inactivo">inactivo</Badge>}
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap', justifyContent:'flex-end' }}>
+                    <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 9px', fontSize:12 }} onClick={() => actualizarItem(item, { orden:(item.orden || 0) - 15 })}>↑</button>
+                    <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 9px', fontSize:12 }} onClick={() => actualizarItem(item, { orden:(item.orden || 0) + 15 })}>↓</button>
+                    <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 9px', fontSize:12 }} onClick={() => editarTextoItem(item)}>Texto</button>
+                    <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 9px', fontSize:12 }} onClick={() => actualizarItem(item, { obligatorio:!item.obligatorio })}>{item.obligatorio ? 'Opcional' : 'Obligatorio'}</button>
+                    <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 9px', fontSize:12 }} onClick={() => actualizarItem(item, { criticidad:item.criticidad === 'alta' ? 'normal' : 'alta' })}>{item.criticidad === 'alta' ? 'Normal' : 'Alta'}</button>
+                    <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 9px', fontSize:12 }} onClick={() => actualizarItem(item, { foto_obligatoria:!item.foto_obligatoria })}>{item.foto_obligatoria ? 'Sin foto' : 'Foto req.'}</button>
+                    <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 9px', fontSize:12 }} onClick={() => actualizarItem(item, { activo:!item.activo })}>{item.activo ? 'Desactivar' : 'Activar'}</button>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -1315,6 +1599,8 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
     direccion: '',
     estado: 'activo',
     radio_metros: 200,
+    checklist_plantilla_id: '',
+    frecuencia_supervision_horas: 24,
   }
   const [form, setForm] = useState(formVacio)
 
@@ -1345,6 +1631,8 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
       direccion: o.direccion || '',
       estado: o.estado || 'activo',
       radio_metros: o.radio_metros || 200,
+      checklist_plantilla_id: o.checklist_plantilla_id || '',
+      frecuencia_supervision_horas: o.frecuencia_supervision_horas || 24,
     })
     setEditId(o.id)
     setModal(true)
@@ -1360,6 +1648,8 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
       direccion: form.direccion.trim() || null,
       estado: form.estado,
       radio_metros: Number(form.radio_metros) || 200,
+      checklist_plantilla_id: form.checklist_plantilla_id || null,
+      frecuencia_supervision_horas: Math.max(1, Number(form.frecuencia_supervision_horas) || 24),
     }
 
     if (editId) {
@@ -1528,6 +1818,11 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
                         <div style={{ fontSize:11, color: objetivoTieneGps(o) ? '#10b981' : '#f59e0b', marginTop:2 }}>
                           {objetivoTieneGps(o) ? 'GPS completo' : 'Falta GPS'}
                         </div>
+                        <div style={{ fontSize:11, color:o.checklist_plantilla_id ? '#60a5fa' : '#64748b', marginTop:2 }}>
+                          {o.checklist_plantilla_id
+                            ? `Checklist · cada ${o.frecuencia_supervision_horas || 24} h`
+                            : 'Sin checklist asignado'}
+                        </div>
                       </td>
 
                       {/* Cliente */}
@@ -1672,6 +1967,34 @@ function Objetivos({ objetivos, setObjetivos, turnos, filtroActivo, limpiarFiltr
                 <option value="activo">Activo</option>
                 <option value="inactivo">Inactivo</option>
               </select>
+            </div>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Checklist de supervisión</label>
+              <select
+                style={S.select}
+                value={form.checklist_plantilla_id}
+                onChange={e => setForm({ ...form, checklist_plantilla_id:e.target.value })}
+              >
+                <option value="">Sin checklist</option>
+                {checklistPlantillas.map((plantilla: ChecklistPlantillaAdmin) => (
+                  <option key={plantilla.id} value={plantilla.id}>{plantilla.nombre}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Frecuencia supervisión (horas)</label>
+              <input
+                style={S.input}
+                type="number"
+                min={1}
+                max={720}
+                value={form.frecuencia_supervision_horas}
+                onChange={e => setForm({ ...form, frecuencia_supervision_horas:Number(e.target.value) })}
+              />
             </div>
           </div>
         </Modal>
@@ -5711,23 +6034,29 @@ export default function AppPage() {
   const [turnos, setTurnos] = useState<Turno[]>([])
   const [registros, setRegistros] = useState<RegistroAsistencia[]>([])
   const [novedades, setNovedades] = useState<Novedad[]>([])
+  const [checklistPlantillas, setChecklistPlantillas] = useState<ChecklistPlantillaAdmin[]>([])
+  const [checklistItems, setChecklistItems] = useState<ChecklistItemAdmin[]>([])
   const [loading, setLoading] = useState(true)
   const [filtros, setFiltros] = useState<Record<string, any>>({})
 
   const cargarDatosAdmin = useCallback(async () => {
     setLoading(true)
-    const [g, o, t, r, n] = await Promise.all([
+    const [g, o, t, r, n, cp, ci] = await Promise.all([
       supabase.from('usuarios').select('*').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
       supabase.from('turnos').select('*').order('fecha', { ascending: false }),
       supabase.from('registros_asistencia').select('*').order('created_at', { ascending: false }),
       supabase.from('novedades').select('*').order('created_at', { ascending: false }),
+      supabase.from('checklist_plantillas').select('*').order('nombre'),
+      supabase.from('checklist_items').select('*').order('orden', { ascending: true }),
     ])
     if (g.data) setGuardias(g.data)
     if (o.data) setObjetivos(o.data)
     if (t.data) setTurnos(t.data)
     if (r.data) setRegistros(r.data)
     if (n.data) setNovedades(n.data)
+    if (cp.data) setChecklistPlantillas(cp.data)
+    if (ci.data) setChecklistItems(ci.data)
     setLoading(false)
   }, [])
 
@@ -5815,6 +6144,7 @@ const esGuardia = esRolGuardia(user.rol)
     ]},
     { section:'CONFIGURACIÓN', items:[
       { id:'servicios_objetivo', icon:'📅', label:'Programación' },
+      { id:'checklists', icon:'☑️', label:'Checklists' },
       { id:'turnos_base', icon:'⏰', label:'Turnos Base' },
     ]},
   ]
@@ -5865,7 +6195,7 @@ const esGuardia = esRolGuardia(user.rol)
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} />}
-              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} />}
+              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
@@ -5874,6 +6204,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} user={user} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} />}
+              {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
             </>
           )
