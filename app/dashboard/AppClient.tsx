@@ -1360,12 +1360,21 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
 }
 
 function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems = [] }: any) {
+  const hoy = new Date().toLocaleDateString('sv-SE')
   const [detalleSupervision, setDetalleSupervision] = useState<SupervisionAdmin | null>(null)
   const [detalleRespuestas, setDetalleRespuestas] = useState<SupervisionRespuestaAdmin[]>([])
   const [detalleFotos, setDetalleFotos] = useState<SupervisionFotoAdmin[]>([])
   const [detalleLoading, setDetalleLoading] = useState(false)
   const [detalleError, setDetalleError] = useState('')
-  const hoy = new Date().toLocaleDateString('sv-SE')
+  const [vistaSupervisiones, setVistaSupervisiones] = useState<'resumen' | 'mapa'>('resumen')
+  const [mapaFiltros, setMapaFiltros] = useState({
+    desde: hoy,
+    hasta: hoy,
+    supervisor_id: 'todos',
+    objetivo_id: 'todos',
+    estado: 'todos',
+  })
+  const [mapaSeleccionada, setMapaSeleccionada] = useState<SupervisionAdmin | null>(null)
   const ahora = new Date()
   const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
   const fechaHora = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'
@@ -1422,6 +1431,61 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
   const ultimasSupervisiones = [...supervisiones]
     .sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 30)
+  const supervisoresMapa = Array.from(guardias.reduce((map: Map<string, Usuario>, usuario: Usuario) => {
+    if (usuario.rol === 'supervisor' && usuario.estado === 'activo') map.set(usuario.id, usuario)
+    return map
+  }, new Map()))
+  const objetivosActivosMapa = objetivos.filter((objetivo: Objetivo) => objetivo.estado === 'activo')
+  const supervisionesFiltradasMapa = supervisiones
+    .filter((supervision: SupervisionAdmin) => {
+      const fecha = fechaLocal(supervision.created_at)
+      if (mapaFiltros.desde && fecha < mapaFiltros.desde) return false
+      if (mapaFiltros.hasta && fecha > mapaFiltros.hasta) return false
+      if (mapaFiltros.supervisor_id !== 'todos' && supervision.supervisor_id !== mapaFiltros.supervisor_id) return false
+      if (mapaFiltros.objetivo_id !== 'todos' && supervision.objetivo_id !== mapaFiltros.objetivo_id) return false
+      if (mapaFiltros.estado !== 'todos' && supervision.estado !== mapaFiltros.estado) return false
+      return Number.isFinite(Number(supervision.lat)) && Number.isFinite(Number(supervision.lng))
+    })
+    .sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  const latitudesMapa = supervisionesFiltradasMapa.map((s: SupervisionAdmin) => Number(s.lat))
+  const longitudesMapa = supervisionesFiltradasMapa.map((s: SupervisionAdmin) => Number(s.lng))
+  const minLatMapa = latitudesMapa.length ? Math.min(...latitudesMapa) : 0
+  const maxLatMapa = latitudesMapa.length ? Math.max(...latitudesMapa) : 0
+  const minLngMapa = longitudesMapa.length ? Math.min(...longitudesMapa) : 0
+  const maxLngMapa = longitudesMapa.length ? Math.max(...longitudesMapa) : 0
+  const rangoLatMapa = Math.max(maxLatMapa - minLatMapa, 0.002)
+  const rangoLngMapa = Math.max(maxLngMapa - minLngMapa, 0.002)
+  const posicionMapa = (supervision: SupervisionAdmin) => ({
+    left: 8 + ((Number(supervision.lng) - minLngMapa) / rangoLngMapa) * 84,
+    top: 92 - ((Number(supervision.lat) - minLatMapa) / rangoLatMapa) * 84,
+  })
+  const colorSupervisorMapa = (supervisorId?: string | null) => {
+    const nombre = nombreSupervisor(supervisorId).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    if (nombre.includes('aranda')) return '#f59e0b'
+    if (nombre.includes('martinez')) return '#60a5fa'
+    if (nombre.includes('fulla')) return '#10b981'
+    return '#a78bfa'
+  }
+  const inicialSupervisorMapa = (supervisorId?: string | null) => {
+    const nombre = nombreSupervisor(supervisorId).replace(',', '').trim()
+    const partes = nombre.split(/\s+/).filter(Boolean)
+    return partes.slice(0, 2).map(parte => parte[0]).join('').toUpperCase() || 'S'
+  }
+  const estadoMapaCounts = {
+    ok: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => s.estado === 'ok').length,
+    con_observacion: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length,
+    critico: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => s.estado === 'critico').length,
+  }
+  const resumenMapaSupervisor = Array.from(supervisionesFiltradasMapa.reduce((map: Map<string, number>, supervision: SupervisionAdmin) => {
+    map.set(supervision.supervisor_id, (map.get(supervision.supervisor_id) || 0) + 1)
+    return map
+  }, new Map()).entries())
+  const resumenMapaObjetivo = Array.from(supervisionesFiltradasMapa.reduce((map: Map<string, number>, supervision: SupervisionAdmin) => {
+    map.set(supervision.objetivo_id, (map.get(supervision.objetivo_id) || 0) + 1)
+    return map
+  }, new Map()).entries()).sort((a, b) => b[1] - a[1]).slice(0, 8)
+  const primerPuntoMapa = supervisionesFiltradasMapa[0]
+  const ultimoPuntoMapa = supervisionesFiltradasMapa[supervisionesFiltradasMapa.length - 1]
   const respuestasPorItem = new Map(detalleRespuestas.map(respuesta => [respuesta.item_id, respuesta]))
   const itemsDetalleMap = new Map<string, ChecklistItemAdmin>()
 
@@ -1492,6 +1556,226 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
         <div style={S.sub2}>Contadores diarios y vencimientos por frecuencia configurada.</div>
       </div>
 
+      <div style={{ display:'inline-flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:20 }}>
+        {(['resumen', 'mapa'] as const).map(vista => (
+          <button
+            key={vista}
+            type="button"
+            onClick={() => setVistaSupervisiones(vista)}
+            style={{
+              ...S.btn,
+              padding:'8px 18px',
+              background:vistaSupervisiones === vista ? brandColors.yellow : 'transparent',
+              color:vistaSupervisiones === vista ? brandColors.black : brandColors.text,
+              border:'none',
+            }}
+          >
+            {vista === 'resumen' ? 'Resumen' : 'Mapa'}
+          </button>
+        ))}
+      </div>
+
+      {vistaSupervisiones === 'mapa' ? (
+        <div>
+          <div style={{ ...S.card, marginBottom:20 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))', gap:12 }}>
+              <div>
+                <label style={S.label}>Fecha desde</label>
+                <input type="date" style={S.input} value={mapaFiltros.desde} onChange={e => setMapaFiltros({ ...mapaFiltros, desde:e.target.value })} />
+              </div>
+              <div>
+                <label style={S.label}>Fecha hasta</label>
+                <input type="date" style={S.input} value={mapaFiltros.hasta} onChange={e => setMapaFiltros({ ...mapaFiltros, hasta:e.target.value })} />
+              </div>
+              <div>
+                <label style={S.label}>Supervisor</label>
+                <select style={S.select} value={mapaFiltros.supervisor_id} onChange={e => setMapaFiltros({ ...mapaFiltros, supervisor_id:e.target.value })}>
+                  <option value="todos">Todos</option>
+                  {supervisoresMapa.map(([id, supervisor]: [string, Usuario]) => (
+                    <option key={id} value={id}>{supervisor.apellido}, {supervisor.nombre}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={S.label}>Objetivo</label>
+                <select style={S.select} value={mapaFiltros.objetivo_id} onChange={e => setMapaFiltros({ ...mapaFiltros, objetivo_id:e.target.value })}>
+                  <option value="todos">Todos</option>
+                  {objetivosActivosMapa.map((objetivo: Objetivo) => (
+                    <option key={objetivo.id} value={objetivo.id}>{objetivo.nombre}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={S.label}>Estado</label>
+                <select style={S.select} value={mapaFiltros.estado} onChange={e => setMapaFiltros({ ...mapaFiltros, estado:e.target.value })}>
+                  <option value="todos">Todos</option>
+                  <option value="ok">ok</option>
+                  <option value="con_observacion">con_observacion</option>
+                  <option value="critico">critico</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...S.card, padding:0, overflow:'hidden' }}>
+            <div style={{ minHeight:430, position:'relative', background:'linear-gradient(135deg, #0f172a 0%, #111827 55%, #1f2937 100%)', borderBottom:'1px solid #1e2d42' }}>
+              <div style={{ position:'absolute', inset:0, opacity:.16, backgroundImage:'linear-gradient(#64748b 1px, transparent 1px), linear-gradient(90deg, #64748b 1px, transparent 1px)', backgroundSize:'42px 42px' }} />
+              <div style={{ position:'absolute', top:14, left:16, right:16, display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start' }}>
+                <div>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, color:'#e2e8f0' }}>Mapa de recorridas</div>
+                  <div style={{ color:'#94a3b8', fontSize:12 }}>Vista GPS sin API key · {supervisionesFiltradasMapa.length} punto(s)</div>
+                </div>
+                <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+                  {[
+                    ['Aranda', '#f59e0b'],
+                    ['Martínez', '#60a5fa'],
+                    ['Fulla', '#10b981'],
+                    ['Otros', '#a78bfa'],
+                  ].map(([label, color]) => (
+                    <span key={label} style={{ display:'inline-flex', alignItems:'center', gap:6, color:'#cbd5e1', fontSize:12 }}>
+                      <span style={{ width:10, height:10, borderRadius:'50%', background:color }} />
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {supervisionesFiltradasMapa.length === 0 ? (
+                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>
+                  Sin puntos GPS para los filtros aplicados.
+                </div>
+              ) : (
+                <>
+                  {mapaFiltros.supervisor_id !== 'todos' && supervisionesFiltradasMapa.length > 1 && (
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none' }}>
+                      <polyline
+                        fill="none"
+                        stroke={colorSupervisorMapa(mapaFiltros.supervisor_id)}
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        points={supervisionesFiltradasMapa.map((supervision: SupervisionAdmin) => {
+                          const pos = posicionMapa(supervision)
+                          return `${pos.left},${pos.top}`
+                        }).join(' ')}
+                        vectorEffect="non-scaling-stroke"
+                        transform="scale(1)"
+                      />
+                    </svg>
+                  )}
+
+                  {supervisionesFiltradasMapa.map((supervision: SupervisionAdmin, index: number) => {
+                    const pos = posicionMapa(supervision)
+                    const color = colorSupervisorMapa(supervision.supervisor_id)
+                    const mostrarOrden = mapaFiltros.supervisor_id !== 'todos'
+
+                    return (
+                      <button
+                        key={supervision.id}
+                        type="button"
+                        title={`${nombreSupervisor(supervision.supervisor_id)} · ${nombreObjetivo(supervision.objetivo_id)}`}
+                        onClick={() => setMapaSeleccionada(supervision)}
+                        style={{
+                          position:'absolute',
+                          left:`${pos.left}%`,
+                          top:`${pos.top}%`,
+                          transform:'translate(-50%, -50%)',
+                          width:34,
+                          height:34,
+                          borderRadius:'50%',
+                          border:'2px solid rgba(255,255,255,.85)',
+                          background:color,
+                          color:'#111827',
+                          fontWeight:900,
+                          cursor:'pointer',
+                          boxShadow:'0 8px 20px rgba(0,0,0,.35)',
+                        }}
+                      >
+                        {mostrarOrden ? index + 1 : inicialSupervisorMapa(supervision.supervisor_id)}
+                      </button>
+                    )
+                  })}
+
+                  {mapaSeleccionada && (
+                    <div style={{ position:'absolute', left:16, bottom:16, width:'min(420px, calc(100% - 32px))', background:'#111827', border:'1px solid #334155', borderRadius:10, padding:14, boxShadow:'0 16px 42px rgba(0,0,0,.35)' }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'flex-start' }}>
+                        <div>
+                          <div style={{ fontWeight:900, color:'#e2e8f0' }}>{nombreObjetivo(mapaSeleccionada.objetivo_id)}</div>
+                          <div style={{ color:'#94a3b8', fontSize:12, marginTop:3 }}>{nombreSupervisor(mapaSeleccionada.supervisor_id)}</div>
+                        </div>
+                        <Badge type={mapaSeleccionada.estado === 'critico' ? 'urgente' : mapaSeleccionada.estado === 'con_observacion' ? 'advertencia' : 'ok'}>{mapaSeleccionada.estado}</Badge>
+                      </div>
+                      <div style={{ color:'#94a3b8', fontSize:12, marginTop:8 }}>Fecha/hora: {fechaHora(mapaSeleccionada.created_at)}</div>
+                      <div style={{ color:'#94a3b8', fontSize:12 }}>Precisión: {metrosGpsTexto(mapaSeleccionada.precision_gps)}</div>
+                      <div style={{ color:'#cbd5e1', fontSize:12, marginTop:6 }}>{mapaSeleccionada.observaciones || 'Sin observaciones'}</div>
+                      <div style={{ display:'flex', gap:8, marginTop:12, flexWrap:'wrap' }}>
+                        <button style={{ ...S.btn, ...S.btnPrimary, padding:'7px 12px', fontSize:12 }} onClick={() => abrirDetalle(mapaSeleccionada)}>
+                          Ver detalle
+                        </button>
+                        <a href={mapasUrl(mapaSeleccionada)} target="_blank" rel="noreferrer" style={{ ...S.btn, ...S.btnSecondary, padding:'7px 12px', fontSize:12, textDecoration:'none' }}>
+                          Abrir en Google Maps
+                        </a>
+                        <button style={{ ...S.btn, ...S.btnSecondary, padding:'7px 12px', fontSize:12 }} onClick={() => setMapaSeleccionada(null)}>
+                          Cerrar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          <div style={S.statGrid}>
+            <StatCard label="Filtradas" value={supervisionesFiltradasMapa.length} sub="Supervisiones con GPS" color={semanticColors.info} />
+            <StatCard label="ok" value={estadoMapaCounts.ok} sub="Sin observación crítica" color={semanticColors.success} />
+            <StatCard label="Observación" value={estadoMapaCounts.con_observacion} sub="Con observación" color={semanticColors.warning} />
+            <StatCard label="Críticas" value={estadoMapaCounts.critico} sub="Estado crítico" color={semanticColors.error} />
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:20 }}>
+            <div style={S.card}>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Supervisiones por supervisor</div>
+              {resumenMapaSupervisor.length === 0 ? <div style={{ color:'#64748b', fontSize:13 }}>Sin datos.</div> : resumenMapaSupervisor.map(([supervisorId, total]) => (
+                <div key={supervisorId} style={{ display:'flex', justifyContent:'space-between', gap:10, borderTop:'1px solid #1e2d42', padding:'10px 0' }}>
+                  <span>{nombreSupervisor(supervisorId)}</span>
+                  <Badge type="ok">{total}</Badge>
+                </div>
+              ))}
+            </div>
+
+            <div style={S.card}>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Supervisiones por objetivo</div>
+              {resumenMapaObjetivo.length === 0 ? <div style={{ color:'#64748b', fontSize:13 }}>Sin datos.</div> : resumenMapaObjetivo.map(([objetivoId, total]) => (
+                <div key={objetivoId} style={{ display:'flex', justifyContent:'space-between', gap:10, borderTop:'1px solid #1e2d42', padding:'10px 0' }}>
+                  <span>{nombreObjetivo(objetivoId)}</span>
+                  <Badge type="ok">{total}</Badge>
+                </div>
+              ))}
+            </div>
+
+            <div style={S.card}>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Recorrido cronológico</div>
+              <div style={{ color:'#94a3b8', fontSize:13, marginBottom:10 }}>
+                Primer punto: {primerPuntoMapa ? fechaHora(primerPuntoMapa.created_at) : '—'} · Último punto: {ultimoPuntoMapa ? fechaHora(ultimoPuntoMapa.created_at) : '—'}
+              </div>
+              {supervisionesFiltradasMapa.length === 0 ? <div style={{ color:'#64748b', fontSize:13 }}>Sin puntos en el rango.</div> : supervisionesFiltradasMapa.map((supervision: SupervisionAdmin, index: number) => (
+                <div key={supervision.id} style={{ display:'grid', gridTemplateColumns:'34px 1fr auto', gap:10, alignItems:'center', borderTop:'1px solid #1e2d42', padding:'10px 0' }}>
+                  <span style={{ width:26, height:26, borderRadius:'50%', display:'inline-flex', alignItems:'center', justifyContent:'center', background:colorSupervisorMapa(supervision.supervisor_id), color:'#111827', fontWeight:900 }}>{index + 1}</span>
+                  <div>
+                    <div style={{ fontWeight:800 }}>{nombreObjetivo(supervision.objetivo_id)}</div>
+                    <div style={{ color:'#94a3b8', fontSize:12 }}>{fechaHora(supervision.created_at)} · {nombreSupervisor(supervision.supervisor_id)}</div>
+                  </div>
+                  <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={() => abrirDetalle(supervision)}>
+                    Detalle
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
       <div style={S.statGrid}>
         <StatCard label="Supervisiones hoy" value={supervisionesHoy.length} sub="Registros propios de la fecha local" color={semanticColors.info} />
         <StatCard label="Con observación" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length} sub="Observadas hoy" color={semanticColors.warning} />
@@ -1600,6 +1884,8 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
           </div>
         )}
       </div>
+        </>
+      )}
 
       {detalleSupervision && (
         <Modal title="Detalle de supervisión" onClose={() => setDetalleSupervision(null)}>
