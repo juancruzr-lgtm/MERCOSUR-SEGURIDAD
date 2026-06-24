@@ -56,6 +56,8 @@ type SupervisionAdmin = {
   estado: EstadoSupervisionAdmin
   created_at: string
   observaciones?: string | null
+  objetivo?: Pick<Objetivo, 'nombre'> | null
+  supervisor?: Pick<Usuario, 'nombre' | 'apellido'> | null
 }
 
 const ZONA_OPERATIVA_ADMIN = 'Rosario / General'
@@ -1329,6 +1331,130 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
           </div>
         </Modal>
       )}
+    </div>
+  )
+}
+
+function SupervisionesAdmin({ supervisiones, objetivos, guardias }: any) {
+  const hoy = new Date().toLocaleDateString('sv-SE')
+  const ahora = new Date()
+  const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
+  const fechaHora = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'
+  const nombreObjetivo = (id?: string | null) =>
+    supervisiones.find((s: SupervisionAdmin) => s.objetivo_id === id)?.objetivo?.nombre ||
+    objetivos.find((o: Objetivo) => o.id === id)?.nombre ||
+    'Objetivo sin nombre'
+  const nombreSupervisor = (id?: string | null) => {
+    const desdeSupervision = supervisiones.find((s: SupervisionAdmin) => s.supervisor_id === id)?.supervisor
+    const desdeUsuarios = guardias.find((g: Usuario) => g.id === id)
+    const usuario = desdeSupervision || desdeUsuarios
+    return usuario ? `${usuario.apellido}, ${usuario.nombre}` : 'Supervisor sin nombre'
+  }
+
+  const supervisionesHoy = supervisiones.filter((s: SupervisionAdmin) => fechaLocal(s.created_at) === hoy)
+  const porSupervisor = Array.from(supervisionesHoy.reduce((map: Map<string, any>, supervision: SupervisionAdmin) => {
+    const item = map.get(supervision.supervisor_id) || { supervisor_id:supervision.supervisor_id, total:0, observadas:0, criticas:0 }
+    item.total += 1
+    if (supervision.estado === 'con_observacion') item.observadas += 1
+    if (supervision.estado === 'critico') item.criticas += 1
+    map.set(supervision.supervisor_id, item)
+    return map
+  }, new Map()).values()).sort((a: any, b: any) => b.total - a.total)
+
+  const porObjetivo = Array.from(supervisiones.reduce((map: Map<string, any>, supervision: SupervisionAdmin) => {
+    const item = map.get(supervision.objetivo_id) || { objetivo_id:supervision.objetivo_id, total:0, observadas:0, criticas:0, ultima:null as SupervisionAdmin | null }
+    item.total += 1
+    if (supervision.estado === 'con_observacion') item.observadas += 1
+    if (supervision.estado === 'critico') item.criticas += 1
+    if (!item.ultima || new Date(supervision.created_at).getTime() > new Date(item.ultima.created_at).getTime()) item.ultima = supervision
+    map.set(supervision.objetivo_id, item)
+    return map
+  }, new Map()).values()).sort((a: any, b: any) => b.total - a.total)
+
+  const ultimaPorObjetivo = new Map<string, SupervisionAdmin>()
+  supervisiones.forEach((supervision: SupervisionAdmin) => {
+    const actual = ultimaPorObjetivo.get(supervision.objetivo_id)
+    if (!actual || new Date(supervision.created_at).getTime() > new Date(actual.created_at).getTime()) {
+      ultimaPorObjetivo.set(supervision.objetivo_id, supervision)
+    }
+  })
+
+  const objetivosSinSupervision = objetivos
+    .filter((objetivo: Objetivo) => objetivo.estado === 'activo')
+    .filter((objetivo: Objetivo) => {
+      const ultima = ultimaPorObjetivo.get(objetivo.id)
+      if (!ultima) return true
+      const frecuenciaMs = (objetivo.frecuencia_supervision_horas || 24) * 60 * 60 * 1000
+      return ahora.getTime() - new Date(ultima.created_at).getTime() > frecuenciaMs
+    })
+
+  return (
+    <div>
+      <div style={{ marginBottom:24 }}>
+        <div style={S.title}>Supervisiones</div>
+        <div style={S.sub2}>Contadores diarios y vencimientos por frecuencia configurada.</div>
+      </div>
+
+      <div style={S.statGrid}>
+        <StatCard label="Supervisiones hoy" value={supervisionesHoy.length} sub="Registros propios de la fecha local" color={semanticColors.info} />
+        <StatCard label="Con observación" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length} sub="Observadas hoy" color={semanticColors.warning} />
+        <StatCard label="Críticas" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'critico').length} sub="Críticas hoy" color={semanticColors.error} />
+        <StatCard label="Objetivos vencidos" value={objetivosSinSupervision.length} sub="Sin supervisión según frecuencia" color={brandColors.yellow} />
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))', gap:20 }}>
+        <div style={S.card}>
+          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Por supervisor hoy</div>
+          {porSupervisor.length === 0 ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>Sin supervisiones registradas hoy.</div>
+          ) : porSupervisor.map((item: any) => (
+            <div key={item.supervisor_id} style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:12, padding:'10px 0', borderTop:'1px solid #1e2d42' }}>
+              <div>
+                <div style={{ fontWeight:800 }}>{nombreSupervisor(item.supervisor_id)}</div>
+                <div style={{ color:'#94a3b8', fontSize:12 }}>{item.observadas} observadas · {item.criticas} críticas</div>
+              </div>
+              <Badge type={item.criticas > 0 ? 'urgente' : item.observadas > 0 ? 'advertencia' : 'ok'}>{item.total}</Badge>
+            </div>
+          ))}
+        </div>
+
+        <div style={S.card}>
+          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Por objetivo</div>
+          {porObjetivo.length === 0 ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>Sin historial de supervisiones.</div>
+          ) : porObjetivo.slice(0, 12).map((item: any) => (
+            <div key={item.objetivo_id} style={{ padding:'10px 0', borderTop:'1px solid #1e2d42' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', gap:10 }}>
+                <div style={{ fontWeight:800 }}>{nombreObjetivo(item.objetivo_id)}</div>
+                <Badge type={item.criticas > 0 ? 'urgente' : item.observadas > 0 ? 'advertencia' : 'ok'}>{item.total}</Badge>
+              </div>
+              <div style={{ color:'#94a3b8', fontSize:12, marginTop:4 }}>
+                Última {fechaHora(item.ultima?.created_at)} · {item.observadas} observadas · {item.criticas} críticas
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={S.card}>
+          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Objetivos sin supervisión vigente</div>
+          {objetivosSinSupervision.length === 0 ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>Todos los objetivos activos están dentro de frecuencia.</div>
+          ) : objetivosSinSupervision.map((objetivo: Objetivo) => {
+            const ultima = ultimaPorObjetivo.get(objetivo.id)
+            return (
+              <div key={objetivo.id} style={{ padding:'10px 0', borderTop:'1px solid #1e2d42' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:10 }}>
+                  <div style={{ fontWeight:800 }}>{objetivo.nombre}</div>
+                  <Badge type="advertencia">{objetivo.frecuencia_supervision_horas || 24} h</Badge>
+                </div>
+                <div style={{ color:'#94a3b8', fontSize:12, marginTop:4 }}>
+                  Última supervisión: {ultima ? fechaHora(ultima.created_at) : 'sin registros'}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
@@ -6036,12 +6162,13 @@ export default function AppPage() {
   const [novedades, setNovedades] = useState<Novedad[]>([])
   const [checklistPlantillas, setChecklistPlantillas] = useState<ChecklistPlantillaAdmin[]>([])
   const [checklistItems, setChecklistItems] = useState<ChecklistItemAdmin[]>([])
+  const [supervisionesAdmin, setSupervisionesAdmin] = useState<SupervisionAdmin[]>([])
   const [loading, setLoading] = useState(true)
   const [filtros, setFiltros] = useState<Record<string, any>>({})
 
   const cargarDatosAdmin = useCallback(async () => {
     setLoading(true)
-    const [g, o, t, r, n, cp, ci] = await Promise.all([
+    const [g, o, t, r, n, cp, ci, s] = await Promise.all([
       supabase.from('usuarios').select('*').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
       supabase.from('turnos').select('*').order('fecha', { ascending: false }),
@@ -6049,6 +6176,7 @@ export default function AppPage() {
       supabase.from('novedades').select('*').order('created_at', { ascending: false }),
       supabase.from('checklist_plantillas').select('*').order('nombre'),
       supabase.from('checklist_items').select('*').order('orden', { ascending: true }),
+      supabase.from('supervisiones').select('*, objetivo:objetivos(nombre), supervisor:usuarios(nombre, apellido)').order('created_at', { ascending: false }).limit(500),
     ])
     if (g.data) setGuardias(g.data)
     if (o.data) setObjetivos(o.data)
@@ -6057,6 +6185,7 @@ export default function AppPage() {
     if (n.data) setNovedades(n.data)
     if (cp.data) setChecklistPlantillas(cp.data)
     if (ci.data) setChecklistItems(ci.data)
+    if (s.data) setSupervisionesAdmin(s.data)
     setLoading(false)
   }, [])
 
@@ -6137,6 +6266,7 @@ const esGuardia = esRolGuardia(user.rol)
     ]},
     { section:'ADMINISTRACIÓN', items:[
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
+      { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
       { id:'novedades', icon:'📋', label:'Novedades' },
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
@@ -6202,6 +6332,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} user={user} />}
+              {page === 'supervisiones' && <SupervisionesAdmin supervisiones={supervisionesAdmin} objetivos={objetivos} guardias={guardias} />}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
