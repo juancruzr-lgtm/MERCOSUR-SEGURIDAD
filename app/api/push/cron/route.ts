@@ -7,6 +7,7 @@ export const runtime = 'nodejs'
 type TurnoPush = {
   id: string
   guardia_id: string | null
+  guardia_original_id: string | null
   objetivo_id: string
   fecha: string
   hora_inicio: string
@@ -35,6 +36,15 @@ type RegistroPush = {
   alerta_entrada?: string | null
   distancia_ingreso_metros?: number | string | null
   gps_ingreso_estado?: string | null
+  created_at?: string | null
+}
+
+type SupervisorIntervencionPush = {
+  id: string
+  turno_id: string
+  registro_asistencia_id?: string | null
+  tipo_alerta?: string | null
+  accion?: string | null
   created_at?: string | null
 }
 
@@ -185,6 +195,42 @@ function minutosDesdeISO(value?: string | null) {
   return Math.floor((Date.now() - new Date(value).getTime()) / 60000)
 }
 
+function accionNormalizada(accion?: string | null) {
+  return accion === 'marcado_cubierto_manual' ? 'confirmar_cubierto' : accion || ''
+}
+
+function accionResuelveAlerta(accion?: string | null) {
+  return ['confirmar_cubierto', 'reasignacion', 'marcado_descubierto', 'alerta_revisada'].includes(accionNormalizada(accion))
+}
+
+function tipoIntervencionDesdePush(tipo: string) {
+  if (tipo === SUPERVISOR_ALERT_TYPES.sinFichaje) return 'sin_fichar'
+  if (tipo === SUPERVISOR_ALERT_TYPES.tardanza) return 'tardanza'
+  if (tipo === SUPERVISOR_ALERT_TYPES.fueraRadio) return 'fuera_radio'
+  if (tipo === SUPERVISOR_ALERT_TYPES.puestoDescubierto) return 'descubierto'
+  return tipo
+}
+
+function alertaResueltaPorIntervencion(
+  intervenciones: SupervisorIntervencionPush[],
+  turnoId: string,
+  tipoPush: string,
+  registroId?: string | null,
+) {
+  const tipoAlerta = tipoIntervencionDesdePush(tipoPush)
+
+  return intervenciones.some(intervencion =>
+    intervencion.turno_id === turnoId &&
+    intervencion.tipo_alerta === tipoAlerta &&
+    accionResuelveAlerta(intervencion.accion) &&
+    (!registroId || !intervencion.registro_asistencia_id || intervencion.registro_asistencia_id === registroId)
+  )
+}
+
+function turnoFueReasignado(turno: TurnoPush) {
+  return Boolean(turno.guardia_original_id && turno.guardia_id && turno.guardia_original_id !== turno.guardia_id)
+}
+
 function authOk(req: NextRequest) {
   const expected = process.env.CRON_SECRET
   if (!expected) return { ok: false, error: 'Falta CRON_SECRET' }
@@ -274,7 +320,7 @@ export async function GET(req: NextRequest) {
   const [{ data: turnosData, error: turnosError }, { data: usuariosData, error: usuariosError }, { data: objetivosData, error: objetivosError }] = await Promise.all([
     admin.client
       .from('turnos')
-      .select('id, guardia_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
+      .select('id, guardia_id, guardia_original_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
       .in('fecha', [hoy, manana]),
     admin.client
       .from('usuarios')
@@ -301,12 +347,19 @@ export async function GET(req: NextRequest) {
       candidatos30: 0,
       candidatos15: 0,
       alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
+      alertasEvaluadas: 0,
+      alertasOmitidasPorResueltas: 0,
+      alertasEnviadas: 0,
       sent: 0,
       skipped: 0,
     })
   }
 
-  const [{ data: registrosData, error: registrosError }, { data: subscriptionsData, error: subscriptionsError }] = await Promise.all([
+  const [
+    { data: registrosData, error: registrosError },
+    { data: subscriptionsData, error: subscriptionsError },
+    { data: intervencionesData, error: intervencionesError },
+  ] = await Promise.all([
     admin.client
       .from('registros_asistencia')
       .select('id, turno_id, guardia_id, hora_entrada_real, alerta_entrada, distancia_ingreso_metros, gps_ingreso_estado, created_at')
@@ -315,14 +368,20 @@ export async function GET(req: NextRequest) {
       .from('push_subscriptions')
       .select('id, usuario_id, endpoint, p256dh, auth')
       .eq('activo', true),
+    admin.client
+      .from('supervisor_intervenciones')
+      .select('id, turno_id, registro_asistencia_id, tipo_alerta, accion, created_at')
+      .in('turno_id', turnoIds),
   ])
 
-  if (registrosError || subscriptionsError) {
-    return NextResponse.json({ error: registrosError?.message || subscriptionsError?.message }, { status: 500 })
+  const intervencionesErrorIgnorable = intervencionesError && /supervisor_intervenciones|schema cache|does not exist/i.test(intervencionesError.message)
+  if (registrosError || subscriptionsError || (intervencionesError && !intervencionesErrorIgnorable)) {
+    return NextResponse.json({ error: registrosError?.message || subscriptionsError?.message || intervencionesError?.message }, { status: 500 })
   }
 
   const registros = (registrosData || []) as RegistroPush[]
   const subscriptions = (subscriptionsData || []) as PushSubscriptionRow[]
+  const intervenciones = (intervencionesErrorIgnorable ? [] : (intervencionesData || [])) as SupervisorIntervencionPush[]
   const turnosProcesados = turnos.length
   let candidatos30 = 0
   let candidatos15 = 0
@@ -330,12 +389,26 @@ export async function GET(req: NextRequest) {
   let candidatosSupervisorSinFichaje = 0
   let candidatosSupervisorFueraRadio = 0
   let candidatosSupervisorPuestoDescubierto = 0
+  let alertasEvaluadas = 0
+  let alertasOmitidasPorResueltas = 0
+  let alertasEnviadas = 0
   let sent = 0
   let skipped = 0
 
   const sumarResultado = (resultado: { sent: number, skipped: number }) => {
     sent += resultado.sent
     skipped += resultado.skipped
+  }
+
+  const enviarAlertaSupervisor = async (
+    usuarioIds: string[],
+    turnoId: string,
+    tipo: string,
+    payload: PushPayload,
+  ) => {
+    const resultado = await sendToUsers(admin.client, subscriptions, usuarioIds, turnoId, tipo, payload)
+    sumarResultado(resultado)
+    alertasEnviadas += resultado.sent
   }
 
   for (const turno of turnos) {
@@ -368,24 +441,34 @@ export async function GET(req: NextRequest) {
       }))
     }
 
-    if (turno.guardia_id && !registroEntrada && minutosDesdeInicio >= 15 && minutosDesdeInicio <= 20) {
-      candidatosSupervisorSinFichaje += 1
-      sumarResultado(await sendToUsers(admin.client, subscriptions, supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.sinFichaje, {
-        title: 'Guardia sin fichaje',
-        body: supervisorBody(turno, guardia, objetivoNombre, 'sin fichaje'),
-        url: '/dashboard',
-        tag: `turno-${turno.id}-sin-fichaje`,
-      }))
+    if (turno.guardia_id && minutosDesdeInicio >= 15 && minutosDesdeInicio <= 20) {
+      alertasEvaluadas += 1
+      if (registroEntrada || alertaResueltaPorIntervencion(intervenciones, turno.id, SUPERVISOR_ALERT_TYPES.sinFichaje)) {
+        alertasOmitidasPorResueltas += 1
+      } else {
+        candidatosSupervisorSinFichaje += 1
+        await enviarAlertaSupervisor(supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.sinFichaje, {
+          title: 'Guardia sin fichaje',
+          body: supervisorBody(turno, guardia, objetivoNombre, 'sin fichaje'),
+          url: '/dashboard',
+          tag: `turno-${turno.id}-sin-fichaje`,
+        })
+      }
     }
 
-    if (turno.estado === 'descubierto' && minutosDesdeInicio >= -5 && minutosDesdeInicio <= 120) {
-      candidatosSupervisorPuestoDescubierto += 1
-      sumarResultado(await sendToUsers(admin.client, subscriptions, supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.puestoDescubierto, {
-        title: 'Puesto descubierto',
-        body: supervisorBody(turno, guardia, objetivoNombre, registroEntrada?.hora_entrada_real || 'sin registro'),
-        url: '/dashboard',
-        tag: `turno-${turno.id}-descubierto`,
-      }))
+    if ((turno.estado === 'descubierto' || !turno.guardia_id) && minutosDesdeInicio >= -5 && minutosDesdeInicio <= 120) {
+      alertasEvaluadas += 1
+      if (registroEntrada || turno.estado === 'cubierto' || turnoFueReasignado(turno) || alertaResueltaPorIntervencion(intervenciones, turno.id, SUPERVISOR_ALERT_TYPES.puestoDescubierto)) {
+        alertasOmitidasPorResueltas += 1
+      } else {
+        candidatosSupervisorPuestoDescubierto += 1
+        await enviarAlertaSupervisor(supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.puestoDescubierto, {
+          title: 'Puesto descubierto',
+          body: supervisorBody(turno, guardia, objetivoNombre, registroEntrada?.hora_entrada_real || 'sin registro'),
+          url: '/dashboard',
+          tag: `turno-${turno.id}-descubierto`,
+        })
+      }
     }
   }
 
@@ -403,13 +486,19 @@ export async function GET(req: NextRequest) {
     const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
     const supervisoresTurno = supervisoresAsignados(turno, usuarios)
 
+    alertasEvaluadas += 1
+    if (alertaResueltaPorIntervencion(intervenciones, turno.id, SUPERVISOR_ALERT_TYPES.tardanza, registro.id)) {
+      alertasOmitidasPorResueltas += 1
+      continue
+    }
+
     candidatosSupervisorTardanza += 1
-    sumarResultado(await sendToUsers(admin.client, subscriptions, supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.tardanza, {
+    await enviarAlertaSupervisor(supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.tardanza, {
       title: 'Tardanza registrada',
       body: supervisorBody(turno, guardia, objetivoNombre, registro.hora_entrada_real),
       url: '/dashboard',
       tag: `turno-${turno.id}-tardanza`,
-    }))
+    })
   }
 
   const registrosFueraRadio = registros.filter(registro =>
@@ -426,13 +515,19 @@ export async function GET(req: NextRequest) {
     const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
     const supervisoresTurno = supervisoresAsignados(turno, usuarios)
 
+    alertasEvaluadas += 1
+    if (alertaResueltaPorIntervencion(intervenciones, turno.id, SUPERVISOR_ALERT_TYPES.fueraRadio, registro.id)) {
+      alertasOmitidasPorResueltas += 1
+      continue
+    }
+
     candidatosSupervisorFueraRadio += 1
-    sumarResultado(await sendToUsers(admin.client, subscriptions, supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.fueraRadio, {
+    await enviarAlertaSupervisor(supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.fueraRadio, {
       title: 'Fichaje fuera de radio',
       body: supervisorBody(turno, guardia, objetivoNombre, registro.hora_entrada_real, `Distancia GPS: ${distanciaTexto(registro.distancia_ingreso_metros)}`),
       url: '/dashboard',
       tag: `turno-${turno.id}-fuera-radio`,
-    }))
+    })
   }
 
   return NextResponse.json({
@@ -446,6 +541,9 @@ export async function GET(req: NextRequest) {
       fueraRadio: candidatosSupervisorFueraRadio,
       puestoDescubierto: candidatosSupervisorPuestoDescubierto,
     },
+    alertasEvaluadas,
+    alertasOmitidasPorResueltas,
+    alertasEnviadas,
     sent,
     skipped,
   })
