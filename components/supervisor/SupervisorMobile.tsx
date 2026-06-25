@@ -16,6 +16,7 @@ type TipoSolicitudAdmin = 'crear_objetivo' | 'baja_objetivo' | 'crear_vigilador'
 const ZONA_OPERATIVA = 'Rosario / General'
 const JEFE_OPERATIVO = 'Aldo Monzón'
 const DIRECTOR_TECNICO = 'Rodolfo Romero'
+const GPS_PRECISION_MAX_METROS = 100
 
 interface Turno {
   id: string
@@ -327,6 +328,51 @@ function numeroGps(value: unknown): number | null {
   return Number.isFinite(numero) ? numero : null
 }
 
+function distanciaMetrosCoordenadas(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const radioTierra = 6371000
+  const rad = Math.PI / 180
+  const dLat = (lat2 - lat1) * rad
+  const dLng = (lng2 - lng1) * rad
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
+    Math.sin(dLng / 2) ** 2
+
+  return 2 * radioTierra * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function auditoriaSupervisionGps(latValue: unknown, lngValue: unknown, precisionValue: unknown, objetivo?: Objetivo | null) {
+  const lat = numeroGps(latValue)
+  const lng = numeroGps(lngValue)
+  const precision = numeroGps(precisionValue)
+  const objetivoLat = numeroGps(objetivo?.lat)
+  const objetivoLng = numeroGps(objetivo?.lng)
+  const radio = numeroGps(objetivo?.radio_metros)
+  const distancia = lat !== null && lng !== null && objetivoLat !== null && objetivoLng !== null
+    ? distanciaMetrosCoordenadas(lat, lng, objetivoLat, objetivoLng)
+    : null
+  const dentroRadio = distancia !== null && radio !== null && radio > 0
+    ? distancia <= radio
+    : null
+
+  return {
+    lat,
+    lng,
+    precision,
+    gpsImpreciso: precision !== null && precision > GPS_PRECISION_MAX_METROS,
+    objetivoLat,
+    objetivoLng,
+    radio,
+    distancia_objetivo_metros: distancia,
+    dentro_radio: dentroRadio,
+  }
+}
+
+function estadoRadioSupervisionTexto(auditoria: ReturnType<typeof auditoriaSupervisionGps> | null) {
+  if (!auditoria || auditoria.distancia_objetivo_metros === null) return 'Objetivo sin GPS'
+  if (auditoria.dentro_radio === null) return 'Radio no configurado'
+  return auditoria.dentro_radio ? 'Dentro del radio permitido' : 'Fuera del radio permitido'
+}
+
 function gpsRegistro(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 'egreso') {
   if (!registro) return null
 
@@ -419,6 +465,7 @@ export default function SupervisorMobile({ user }: any) {
   const [supervisionObservaciones, setSupervisionObservaciones] = useState('')
   const [supervisionRespuestas, setSupervisionRespuestas] = useState<Record<string, { resultado: ResultadoChecklist, observacion: string }>>({})
   const [supervisionFotos, setSupervisionFotos] = useState<File[]>([])
+  const [confirmarGpsImpreciso, setConfirmarGpsImpreciso] = useState(false)
   const [capturandoGps, setCapturandoGps] = useState(false)
   const [detalleSupervision, setDetalleSupervision] = useState<Supervision | null>(null)
   const [detalleRespuestas, setDetalleRespuestas] = useState<SupervisionRespuesta[]>([])
@@ -835,6 +882,12 @@ export default function SupervisorMobile({ user }: any) {
   const observadosSupervision = (supervision: Supervision) => supervision.respuestas?.filter(r => r.resultado === 'observado').length || 0
   const fotosSupervisionCount = (supervision: Supervision) => supervision.fotos?.length || 0
   const mapsUrlSupervision = (supervision: Supervision) => `https://www.google.com/maps?q=${supervision.lat},${supervision.lng}`
+  const auditoriaSupervisionActual = supervisionGps
+    ? auditoriaSupervisionGps(supervisionGps.lat, supervisionGps.lng, supervisionGps.precision, objetivoSupervision)
+    : null
+  const auditoriaDetalleSupervision = detalleSupervision
+    ? auditoriaSupervisionGps(detalleSupervision.lat, detalleSupervision.lng, detalleSupervision.precision_gps, getObjetivo(detalleSupervision.objetivo_id))
+    : null
   const respuestasDetallePorItem = useMemo(
     () => new Map(detalleRespuestas.map(respuesta => [respuesta.item_id, respuesta])),
     [detalleRespuestas],
@@ -1605,6 +1658,7 @@ export default function SupervisorMobile({ user }: any) {
     setSupervisionObservaciones('')
     setSupervisionRespuestas({})
     setSupervisionFotos([])
+    setConfirmarGpsImpreciso(false)
   }
 
   const agregarFotosSupervision = (files: FileList | null) => {
@@ -1641,6 +1695,7 @@ export default function SupervisorMobile({ user }: any) {
           lng: position.coords.longitude,
           precision: position.coords.accuracy,
         })
+        setConfirmarGpsImpreciso(false)
         setCapturandoGps(false)
       },
       gpsError => {
@@ -1662,6 +1717,11 @@ export default function SupervisorMobile({ user }: any) {
 
     if (!supervisionGps) {
       setError('GPS obligatorio: capturá la ubicación antes de guardar.')
+      return
+    }
+
+    if (supervisionGps.precision > GPS_PRECISION_MAX_METROS && !confirmarGpsImpreciso) {
+      setError('GPS impreciso, espere unos segundos y vuelva a intentar')
       return
     }
 
@@ -2658,6 +2718,8 @@ export default function SupervisorMobile({ user }: any) {
                     value={supervisionObjetivoId}
                     onChange={e => {
                       setSupervisionObjetivoId(e.target.value)
+                      setSupervisionGps(null)
+                      setConfirmarGpsImpreciso(false)
                       setSupervisionRespuestas({})
                       setSupervisionFotos([])
                       setSupervisionObservaciones('')
@@ -2693,7 +2755,28 @@ export default function SupervisorMobile({ user }: any) {
 
                   {supervisionGps && (
                     <div style={{ ...errorBox, color:'#10b981', borderColor:'rgba(16,185,129,.35)', background:'rgba(16,185,129,.12)' }}>
-                      GPS capturado · Precisión {metrosTexto(supervisionGps.precision)}
+                      <div>GPS capturado · Precisión {metrosTexto(supervisionGps.precision)}</div>
+                      <div style={{ marginTop:4 }}>Coordenadas {supervisionGps.lat.toFixed(6)}, {supervisionGps.lng.toFixed(6)}</div>
+                      {auditoriaSupervisionActual && (
+                        <>
+                          <div style={{ marginTop:4 }}>Distancia al objetivo: {metrosTexto(auditoriaSupervisionActual.distancia_objetivo_metros)}</div>
+                          <div style={{ marginTop:4 }}>{estadoRadioSupervisionTexto(auditoriaSupervisionActual)}</div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {auditoriaSupervisionActual?.gpsImpreciso && (
+                    <div style={{ ...errorBox, color:'#f59e0b', borderColor:'rgba(245,158,11,.45)', background:'rgba(245,158,11,.12)' }}>
+                      <div>GPS impreciso, espere unos segundos y vuelva a intentar</div>
+                      <label style={{ display:'flex', gap:8, alignItems:'center', marginTop:10, color:'#f8fafc', fontWeight:700 }}>
+                        <input
+                          type="checkbox"
+                          checked={confirmarGpsImpreciso}
+                          onChange={e => setConfirmarGpsImpreciso(e.target.checked)}
+                        />
+                        Confirmar guardar igualmente con precisión mayor a {GPS_PRECISION_MAX_METROS} m
+                      </label>
                     </div>
                   )}
 
@@ -2824,6 +2907,14 @@ export default function SupervisorMobile({ user }: any) {
                         <div style={objetivoName}>{supervision.objetivo?.nombre || getObjetivo(supervision.objetivo_id)?.nombre || 'Objetivo sin nombre'}</div>
                         <div style={muted}>{fechaHoraDDMMYYYY(supervision.created_at)}</div>
                         <div style={muted}>GPS {Number(supervision.lat).toFixed(5)}, {Number(supervision.lng).toFixed(5)} · Precisión {metrosTexto(supervision.precision_gps)}</div>
+                        {(() => {
+                          const auditoria = auditoriaSupervisionGps(supervision.lat, supervision.lng, supervision.precision_gps, getObjetivo(supervision.objetivo_id))
+                          return (
+                            <div style={{ ...muted, color: auditoria.dentro_radio === false || auditoria.gpsImpreciso ? '#f59e0b' : muted.color }}>
+                              Objetivo: {metrosTexto(auditoria.distancia_objetivo_metros)} · {estadoRadioSupervisionTexto(auditoria)}
+                            </div>
+                          )
+                        })()}
                         <div style={muted}>{observadosSupervision(supervision)} ítem(s) observados · {fotosSupervisionCount(supervision)} foto(s)</div>
                         {supervision.observaciones && <div style={muted}>{supervision.observaciones}</div>}
                       </div>
@@ -2919,6 +3010,22 @@ export default function SupervisorMobile({ user }: any) {
               <div>
                 <div style={label}>Precisión GPS</div>
                 <div style={registroValue}>{metrosTexto(detalleSupervision.precision_gps)}</div>
+              </div>
+              <div>
+                <div style={label}>Distancia al objetivo</div>
+                <div style={registroValue}>{metrosTexto(auditoriaDetalleSupervision?.distancia_objetivo_metros)}</div>
+              </div>
+              <div>
+                <div style={label}>Dentro del radio</div>
+                <div style={registroValue}>{auditoriaDetalleSupervision?.dentro_radio === null || auditoriaDetalleSupervision?.dentro_radio === undefined ? '—' : auditoriaDetalleSupervision.dentro_radio ? 'Sí' : 'No'}</div>
+              </div>
+              <div>
+                <div style={label}>Radio permitido</div>
+                <div style={registroValue}>{metrosTexto(auditoriaDetalleSupervision?.radio)}</div>
+              </div>
+              <div>
+                <div style={label}>GPS impreciso</div>
+                <div style={registroValue}>{auditoriaDetalleSupervision ? auditoriaDetalleSupervision.gpsImpreciso ? 'Sí' : 'No' : '—'}</div>
               </div>
             </div>
 

@@ -102,6 +102,7 @@ const OSM_TILE_SIZE = 256
 const MAPA_OSM_WIDTH = 1000
 const MAPA_OSM_HEIGHT = 430
 const MAPA_OSM_FALLBACK = { lat: -32.9442, lng: -60.6505 }
+const GPS_PRECISION_MAX_METROS = 100
 
 function osmTileX(lng: number, zoom: number) {
   return ((lng + 180) / 360) * (2 ** zoom)
@@ -125,7 +126,12 @@ function zoomMapaSupervisiones(rango: number) {
   if (rango < 0.04) return 14
   if (rango < 0.09) return 13
   if (rango < 0.18) return 12
-  return 11
+  if (rango < 0.5) return 11
+  if (rango < 1) return 10
+  if (rango < 2) return 9
+  if (rango < 4) return 8
+  if (rango < 8) return 7
+  return 6
 }
 
 const FONT_BRAND = `${brandTypography.preparedBrand}, sans-serif`
@@ -354,6 +360,45 @@ function textoPrecisionGps(registro: RegistroAsistencia | any): string {
 
 function objetivoTieneGps(objetivo: Objetivo | any): boolean {
   return numeroGps(objetivo?.lat) !== null && numeroGps(objetivo?.lng) !== null && (numeroGps(objetivo?.radio_metros) || 0) > 0
+}
+
+function distanciaMetrosCoordenadas(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const radioTierra = 6371000
+  const rad = Math.PI / 180
+  const dLat = (lat2 - lat1) * rad
+  const dLng = (lng2 - lng1) * rad
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
+    Math.sin(dLng / 2) ** 2
+
+  return 2 * radioTierra * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function auditoriaSupervisionGps(supervision: Pick<SupervisionAdmin, 'lat' | 'lng' | 'precision_gps'>, objetivo?: Objetivo | null) {
+  const lat = numeroGps(supervision.lat)
+  const lng = numeroGps(supervision.lng)
+  const precision = numeroGps(supervision.precision_gps)
+  const objetivoLat = numeroGps(objetivo?.lat)
+  const objetivoLng = numeroGps(objetivo?.lng)
+  const radio = numeroGps(objetivo?.radio_metros)
+  const distancia = lat !== null && lng !== null && objetivoLat !== null && objetivoLng !== null
+    ? distanciaMetrosCoordenadas(lat, lng, objetivoLat, objetivoLng)
+    : null
+  const dentroRadio = distancia !== null && radio !== null && radio > 0
+    ? distancia <= radio
+    : null
+
+  return {
+    lat,
+    lng,
+    precision,
+    gpsImpreciso: precision !== null && precision > GPS_PRECISION_MAX_METROS,
+    objetivoLat,
+    objetivoLng,
+    radio,
+    distancia_objetivo_metros: distancia,
+    dentro_radio: dentroRadio,
+  }
 }
 
 function esRolGuardia(rol?: string | null): boolean {
@@ -1403,6 +1448,8 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
     supervisor_id: 'todos',
     objetivo_id: 'todos',
     estado: 'todos',
+    ocultarImpreciso: false,
+    soloFueraRadio: false,
   })
   const [mapaSeleccionada, setMapaSeleccionada] = useState<SupervisionAdmin | null>(null)
   const ahora = new Date()
@@ -1421,6 +1468,10 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
     const usuario = desdeSupervision || desdeUsuarios
     return usuario ? `${usuario.apellido}, ${usuario.nombre}` : 'Supervisor sin nombre'
   }
+  const objetivoDeSupervision = (supervision: SupervisionAdmin) =>
+    objetivos.find((objetivo: Objetivo) => objetivo.id === supervision.objetivo_id) || null
+  const auditoriaMapa = (supervision: SupervisionAdmin) =>
+    auditoriaSupervisionGps(supervision, objetivoDeSupervision(supervision))
 
   const supervisionesHoy = supervisiones.filter((s: SupervisionAdmin) => fechaLocal(s.created_at) === hoy)
   const porSupervisor = Array.from(supervisionesHoy.reduce((map: Map<string, any>, supervision: SupervisionAdmin) => {
@@ -1474,11 +1525,23 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
       if (mapaFiltros.supervisor_id !== 'todos' && supervision.supervisor_id !== mapaFiltros.supervisor_id) return false
       if (mapaFiltros.objetivo_id !== 'todos' && supervision.objetivo_id !== mapaFiltros.objetivo_id) return false
       if (mapaFiltros.estado !== 'todos' && supervision.estado !== mapaFiltros.estado) return false
+      const auditoria = auditoriaMapa(supervision)
+      if (mapaFiltros.ocultarImpreciso && auditoria.gpsImpreciso) return false
+      if (mapaFiltros.soloFueraRadio && auditoria.dentro_radio !== false) return false
       return Number.isFinite(Number(supervision.lat)) && Number.isFinite(Number(supervision.lng))
     })
     .sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-  const latitudesMapa = supervisionesFiltradasMapa.map((s: SupervisionAdmin) => Number(s.lat))
-  const longitudesMapa = supervisionesFiltradasMapa.map((s: SupervisionAdmin) => Number(s.lng))
+  const objetivosMapa = Array.from(supervisionesFiltradasMapa.reduce((map: Map<string, Objetivo>, supervision: SupervisionAdmin) => {
+    const objetivo = objetivoDeSupervision(supervision)
+    if (objetivo && numeroGps(objetivo.lat) !== null && numeroGps(objetivo.lng) !== null) map.set(objetivo.id, objetivo)
+    return map
+  }, new Map()).values())
+  const puntosBoundsMapa = [
+    ...supervisionesFiltradasMapa.map((supervision: SupervisionAdmin) => ({ lat: Number(supervision.lat), lng: Number(supervision.lng) })),
+    ...objetivosMapa.map((objetivo: Objetivo) => ({ lat: Number(objetivo.lat), lng: Number(objetivo.lng) })),
+  ].filter(punto => Number.isFinite(punto.lat) && Number.isFinite(punto.lng))
+  const latitudesMapa = puntosBoundsMapa.map(punto => punto.lat)
+  const longitudesMapa = puntosBoundsMapa.map(punto => punto.lng)
   const minLatMapa = latitudesMapa.length ? Math.min(...latitudesMapa) : MAPA_OSM_FALLBACK.lat
   const maxLatMapa = latitudesMapa.length ? Math.max(...latitudesMapa) : MAPA_OSM_FALLBACK.lat
   const minLngMapa = longitudesMapa.length ? Math.min(...longitudesMapa) : MAPA_OSM_FALLBACK.lng
@@ -1509,12 +1572,23 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
     x: (MAPA_OSM_WIDTH / 2) + (osmTileX(Number(supervision.lng), zoomMapa) - centroTileXMapa) * OSM_TILE_SIZE,
     y: (MAPA_OSM_HEIGHT / 2) + (osmTileY(Number(supervision.lat), zoomMapa) - centroTileYMapa) * OSM_TILE_SIZE,
   })
+  const posicionObjetivoMapa = (objetivo: Objetivo) => ({
+    x: (MAPA_OSM_WIDTH / 2) + (osmTileX(Number(objetivo.lng), zoomMapa) - centroTileXMapa) * OSM_TILE_SIZE,
+    y: (MAPA_OSM_HEIGHT / 2) + (osmTileY(Number(objetivo.lat), zoomMapa) - centroTileYMapa) * OSM_TILE_SIZE,
+  })
   const colorSupervisorMapa = (supervisorId?: string | null) => {
     const nombre = nombreSupervisor(supervisorId).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
     if (nombre.includes('aranda')) return '#f59e0b'
     if (nombre.includes('martinez')) return '#60a5fa'
     if (nombre.includes('fulla')) return '#10b981'
     return '#a78bfa'
+  }
+  const colorSupervisionMapa = (supervision: SupervisionAdmin) => {
+    const auditoria = auditoriaMapa(supervision)
+    if (auditoria.gpsImpreciso) return '#f97316'
+    if (auditoria.dentro_radio === false) return '#ef4444'
+    if (auditoria.dentro_radio === true) return '#10b981'
+    return colorSupervisorMapa(supervision.supervisor_id)
   }
   const inicialSupervisorMapa = (supervisorId?: string | null) => {
     const nombre = nombreSupervisor(supervisorId).replace(',', '').trim()
@@ -1526,6 +1600,16 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
     con_observacion: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length,
     critico: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => s.estado === 'critico').length,
   }
+  const auditoriaMapaCounts = {
+    dentro: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => auditoriaMapa(s).dentro_radio === true).length,
+    fuera: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => auditoriaMapa(s).dentro_radio === false).length,
+    impreciso: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => auditoriaMapa(s).gpsImpreciso).length,
+  }
+  const supervisionesMuyAlejadas = supervisionesFiltradasMapa.filter((supervision: SupervisionAdmin) => {
+    const auditoria = auditoriaMapa(supervision)
+    const umbral = Math.max((auditoria.radio || 0) * 5, 1000)
+    return auditoria.distancia_objetivo_metros !== null && auditoria.distancia_objetivo_metros > umbral
+  })
   const resumenMapaSupervisor = Array.from(supervisionesFiltradasMapa.reduce((map: Map<string, number>, supervision: SupervisionAdmin) => {
     map.set(supervision.supervisor_id, (map.get(supervision.supervisor_id) || 0) + 1)
     return map
@@ -1550,6 +1634,7 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
   })
 
   const itemsDetalle = Array.from(itemsDetalleMap.values()).sort((a, b) => (a.orden || 0) - (b.orden || 0))
+  const auditoriaDetalleAdmin = detalleSupervision ? auditoriaMapa(detalleSupervision) : null
 
   const abrirDetalle = async (supervision: SupervisionAdmin) => {
     setDetalleSupervision(supervision)
@@ -1664,8 +1749,30 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
                   <option value="critico">critico</option>
                 </select>
               </div>
+              <label style={{ display:'flex', gap:8, alignItems:'center', color:'#cbd5e1', fontSize:13, fontWeight:800, paddingTop:24 }}>
+                <input
+                  type="checkbox"
+                  checked={mapaFiltros.ocultarImpreciso}
+                  onChange={e => setMapaFiltros({ ...mapaFiltros, ocultarImpreciso:e.target.checked })}
+                />
+                Ocultar GPS impreciso
+              </label>
+              <label style={{ display:'flex', gap:8, alignItems:'center', color:'#cbd5e1', fontSize:13, fontWeight:800, paddingTop:24 }}>
+                <input
+                  type="checkbox"
+                  checked={mapaFiltros.soloFueraRadio}
+                  onChange={e => setMapaFiltros({ ...mapaFiltros, soloFueraRadio:e.target.checked })}
+                />
+                Mostrar solo fuera de radio
+              </label>
             </div>
           </div>
+
+          {supervisionesMuyAlejadas.length > 0 && (
+            <div style={{ ...S.card, borderColor:'rgba(245,158,11,.42)', background:'rgba(245,158,11,.10)', color:'#fbbf24' }}>
+              Hay {supervisionesMuyAlejadas.length} supervisión(es) muy alejadas del objetivo. Revisá precisión GPS, coordenadas guardadas del objetivo y el link de Google Maps del detalle.
+            </div>
+          )}
 
           <div style={{ ...S.card, padding:0, overflow:'hidden' }}>
             <div style={{ height:MAPA_OSM_HEIGHT, position:'relative', background:'#dbe3d3', borderBottom:'1px solid #1e2d42', overflow:'hidden' }}>
@@ -1695,10 +1802,10 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
                 </div>
                 <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end', background:'rgba(17,24,39,.78)', border:'1px solid rgba(51,65,85,.75)', borderRadius:8, padding:'8px 10px' }}>
                   {[
-                    ['Aranda', '#f59e0b'],
-                    ['Martínez', '#60a5fa'],
-                    ['Fulla', '#10b981'],
-                    ['Otros', '#a78bfa'],
+                    ['Dentro radio', '#10b981'],
+                    ['Fuera radio', '#ef4444'],
+                    ['GPS impreciso', '#f97316'],
+                    ['Objetivo', '#2563eb'],
                   ].map(([label, color]) => (
                     <span key={label} style={{ display:'inline-flex', alignItems:'center', gap:6, color:'#cbd5e1', fontSize:12 }}>
                       <span style={{ width:10, height:10, borderRadius:'50%', background:color }} />
@@ -1731,9 +1838,41 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
                     </svg>
                   )}
 
+                  {objetivosMapa.map((objetivo: Objetivo) => {
+                    const pos = posicionObjetivoMapa(objetivo)
+
+                    return (
+                      <div
+                        key={`objetivo-${objetivo.id}`}
+                        title={`Objetivo · ${objetivo.nombre}`}
+                        style={{
+                          position:'absolute',
+                          left:`${(pos.x / MAPA_OSM_WIDTH) * 100}%`,
+                          top:`${(pos.y / MAPA_OSM_HEIGHT) * 100}%`,
+                          transform:'translate(-50%, -50%)',
+                          width:24,
+                          height:24,
+                          borderRadius:6,
+                          border:'2px solid rgba(255,255,255,.95)',
+                          background:'#2563eb',
+                          color:'#fff',
+                          fontWeight:900,
+                          fontSize:12,
+                          display:'flex',
+                          alignItems:'center',
+                          justifyContent:'center',
+                          boxShadow:'0 8px 20px rgba(0,0,0,.35)',
+                          zIndex:3,
+                        }}
+                      >
+                        O
+                      </div>
+                    )
+                  })}
+
                   {supervisionesFiltradasMapa.map((supervision: SupervisionAdmin, index: number) => {
                     const pos = posicionMapa(supervision)
-                    const color = colorSupervisorMapa(supervision.supervisor_id)
+                    const color = colorSupervisionMapa(supervision)
                     const mostrarOrden = mapaFiltros.supervisor_id !== 'todos'
 
                     return (
@@ -1775,6 +1914,16 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
                       </div>
                       <div style={{ color:'#94a3b8', fontSize:12, marginTop:8 }}>Fecha/hora: {fechaHora(mapaSeleccionada.created_at)}</div>
                       <div style={{ color:'#94a3b8', fontSize:12 }}>Precisión: {metrosGpsTexto(mapaSeleccionada.precision_gps)}</div>
+                      {(() => {
+                        const auditoria = auditoriaMapa(mapaSeleccionada)
+                        return (
+                          <>
+                            <div style={{ color:auditoria.gpsImpreciso ? '#f97316' : '#94a3b8', fontSize:12 }}>GPS impreciso: {auditoria.gpsImpreciso ? 'Sí' : 'No'}</div>
+                            <div style={{ color:auditoria.dentro_radio === false ? '#f87171' : '#94a3b8', fontSize:12 }}>Distancia al objetivo: {metrosGpsTexto(auditoria.distancia_objetivo_metros)}</div>
+                            <div style={{ color:auditoria.dentro_radio === false ? '#f87171' : '#94a3b8', fontSize:12 }}>Dentro del radio: {auditoria.dentro_radio === null ? '—' : auditoria.dentro_radio ? 'Sí' : 'No'}</div>
+                          </>
+                        )
+                      })()}
                       <div style={{ color:'#cbd5e1', fontSize:12, marginTop:6 }}>{mapaSeleccionada.observaciones || 'Sin observaciones'}</div>
                       <div style={{ display:'flex', gap:8, marginTop:12, flexWrap:'wrap' }}>
                         <button style={{ ...S.btn, ...S.btnPrimary, padding:'7px 12px', fontSize:12 }} onClick={() => abrirDetalle(mapaSeleccionada)}>
@@ -1804,6 +1953,9 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
 
           <div style={S.statGrid}>
             <StatCard label="Filtradas" value={supervisionesFiltradasMapa.length} sub="Supervisiones con GPS" color={semanticColors.info} />
+            <StatCard label="Dentro radio" value={auditoriaMapaCounts.dentro} sub="Según objetivo" color={semanticColors.success} />
+            <StatCard label="Fuera radio" value={auditoriaMapaCounts.fuera} sub="Revisar ubicación" color={semanticColors.error} />
+            <StatCard label="GPS impreciso" value={auditoriaMapaCounts.impreciso} sub={`Más de ${GPS_PRECISION_MAX_METROS} m`} color={semanticColors.warning} />
             <StatCard label="ok" value={estadoMapaCounts.ok} sub="Sin observación crítica" color={semanticColors.success} />
             <StatCard label="Observación" value={estadoMapaCounts.con_observacion} sub="Con observación" color={semanticColors.warning} />
             <StatCard label="Críticas" value={estadoMapaCounts.critico} sub="Estado crítico" color={semanticColors.error} />
@@ -1981,6 +2133,10 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
             <div><label style={S.label}>Latitud</label><div>{detalleSupervision.lat}</div></div>
             <div><label style={S.label}>Longitud</label><div>{detalleSupervision.lng}</div></div>
             <div><label style={S.label}>Precisión GPS</label><div>{metrosGpsTexto(detalleSupervision.precision_gps)}</div></div>
+            <div><label style={S.label}>Distancia al objetivo</label><div>{metrosGpsTexto(auditoriaDetalleAdmin?.distancia_objetivo_metros)}</div></div>
+            <div><label style={S.label}>Dentro del radio</label><div>{auditoriaDetalleAdmin?.dentro_radio === null || auditoriaDetalleAdmin?.dentro_radio === undefined ? '—' : auditoriaDetalleAdmin.dentro_radio ? 'Sí' : 'No'}</div></div>
+            <div><label style={S.label}>Radio permitido</label><div>{metrosGpsTexto(auditoriaDetalleAdmin?.radio)}</div></div>
+            <div><label style={S.label}>GPS impreciso</label><div>{auditoriaDetalleAdmin ? auditoriaDetalleAdmin.gpsImpreciso ? 'Sí' : 'No' : '—'}</div></div>
           </div>
 
           <a href={mapasUrl(detalleSupervision)} target="_blank" rel="noreferrer" style={{ ...S.btn, ...S.btnPrimary, textDecoration:'none', marginBottom:16 }}>
