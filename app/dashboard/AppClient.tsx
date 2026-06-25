@@ -1456,6 +1456,11 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
   const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
   const fechaHora = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'
   const mapasUrl = (supervision: SupervisionAdmin) => `https://www.google.com/maps?q=${supervision.lat},${supervision.lng}`
+  const recorridoSupervisionesObjetivo = (objetivoId?: string | null) => supervisiones
+    .filter((s: SupervisionAdmin) => s.objetivo_id === objetivoId)
+    .sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  const recorridoUrl = (puntos: SupervisionAdmin[]) =>
+    `https://www.google.com/maps/dir/${puntos.map(p => `${p.lat},${p.lng}`).join('/')}`
   const observados = (supervision: SupervisionAdmin) => supervision.respuestas?.filter(r => r.resultado === 'observado').length || 0
   const fotosCount = (supervision: SupervisionAdmin) => supervision.fotos?.length || 0
   const nombreObjetivo = (id?: string | null) =>
@@ -1768,14 +1773,27 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
             </div>
           </div>
 
+          {supervisionesFiltradasMapa.length > 1 && (
+            <div style={{ marginBottom:12 }}>
+              <a
+                href={recorridoUrl(supervisionesFiltradasMapa)}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...S.btn, ...S.btnSecondary, textDecoration:'none', display:'inline-block' }}
+              >
+                Abrir recorrido completo en Google Maps ({supervisionesFiltradasMapa.length} puntos)
+              </a>
+            </div>
+          )}
+
           {supervisionesMuyAlejadas.length > 0 && (
             <div style={{ ...S.card, borderColor:'rgba(245,158,11,.42)', background:'rgba(245,158,11,.10)', color:'#fbbf24' }}>
               Hay {supervisionesMuyAlejadas.length} supervisión(es) muy alejadas del objetivo. Revisá precisión GPS, coordenadas guardadas del objetivo y el link de Google Maps del detalle.
             </div>
           )}
 
-          <div style={{ ...S.card, padding:0, overflow:'hidden' }}>
-            <div style={{ height:MAPA_OSM_HEIGHT, position:'relative', background:'#dbe3d3', borderBottom:'1px solid #1e2d42', overflow:'hidden' }}>
+          <div style={{ ...S.card, padding:0, overflow:'auto' }}>
+            <div style={{ width:MAPA_OSM_WIDTH, minWidth:MAPA_OSM_WIDTH, height:MAPA_OSM_HEIGHT, position:'relative', background:'#dbe3d3', borderBottom:'1px solid #1e2d42', overflow:'hidden' }}>
               {tilesMapa.map(tile => (
                 <img
                   key={tile.key}
@@ -1847,8 +1865,8 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
                         title={`Objetivo · ${objetivo.nombre}`}
                         style={{
                           position:'absolute',
-                          left:`${(pos.x / MAPA_OSM_WIDTH) * 100}%`,
-                          top:`${(pos.y / MAPA_OSM_HEIGHT) * 100}%`,
+                          left:pos.x,
+                          top:pos.y,
                           transform:'translate(-50%, -50%)',
                           width:24,
                           height:24,
@@ -1883,8 +1901,8 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
                         onClick={() => setMapaSeleccionada(supervision)}
                         style={{
                           position:'absolute',
-                          left:`${(pos.x / MAPA_OSM_WIDTH) * 100}%`,
-                          top:`${(pos.y / MAPA_OSM_HEIGHT) * 100}%`,
+                          left:pos.x,
+                          top:pos.y,
                           transform:'translate(-50%, -50%)',
                           width:34,
                           height:34,
@@ -1930,8 +1948,18 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
                           Ver detalle
                         </button>
                         <a href={mapasUrl(mapaSeleccionada)} target="_blank" rel="noreferrer" style={{ ...S.btn, ...S.btnSecondary, padding:'7px 12px', fontSize:12, textDecoration:'none' }}>
-                          Abrir en Google Maps
+                          Abrir punto en Google Maps
                         </a>
+                        {recorridoSupervisionesObjetivo(mapaSeleccionada.objetivo_id).length > 1 && (
+                          <a
+                            href={recorridoUrl(recorridoSupervisionesObjetivo(mapaSeleccionada.objetivo_id))}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ ...S.btn, ...S.btnSecondary, padding:'7px 12px', fontSize:12, textDecoration:'none' }}
+                          >
+                            Abrir recorrido completo en Google Maps
+                          </a>
+                        )}
                         <button style={{ ...S.btn, ...S.btnSecondary, padding:'7px 12px', fontSize:12 }} onClick={() => setMapaSeleccionada(null)}>
                           Cerrar
                         </button>
@@ -2139,9 +2167,21 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
             <div><label style={S.label}>GPS impreciso</label><div>{auditoriaDetalleAdmin ? auditoriaDetalleAdmin.gpsImpreciso ? 'Sí' : 'No' : '—'}</div></div>
           </div>
 
-          <a href={mapasUrl(detalleSupervision)} target="_blank" rel="noreferrer" style={{ ...S.btn, ...S.btnPrimary, textDecoration:'none', marginBottom:16 }}>
-            Ver en Google Maps
-          </a>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:16 }}>
+            <a href={mapasUrl(detalleSupervision)} target="_blank" rel="noreferrer" style={{ ...S.btn, ...S.btnPrimary, textDecoration:'none' }}>
+              Abrir punto en Google Maps
+            </a>
+            {recorridoSupervisionesObjetivo(detalleSupervision.objetivo_id).length > 1 && (
+              <a
+                href={recorridoUrl(recorridoSupervisionesObjetivo(detalleSupervision.objetivo_id))}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...S.btn, ...S.btnSecondary, textDecoration:'none' }}
+              >
+                Abrir recorrido completo en Google Maps
+              </a>
+            )}
+          </div>
 
           {detalleError && <div style={{ ...S.card, padding:12, color:'#fca5a5', borderColor:'rgba(239,68,68,.35)' }}>{detalleError}</div>}
           {detalleLoading && <div style={{ color:'#64748b', padding:'12px 0' }}>Cargando detalle...</div>}
