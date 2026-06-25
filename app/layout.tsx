@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import PwaRegister from './PwaRegister'
+import 'leaflet/dist/leaflet.css'
 import './globals.css'
 
 export const metadata: Metadata = {

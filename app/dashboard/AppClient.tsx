@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcularHorasLiquidables } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
@@ -7,6 +8,11 @@ import type { FiltroFechaTurnos } from '@/lib/turnos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
+
+const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
+  ssr: false,
+  loading: () => <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', background:'#111827', border:'1px solid #1e2d42', borderRadius:8, color:'#94a3b8', marginBottom:20 }}>Cargando mapa...</div>,
+})
 
 type TipoAlertaOperativaAdmin = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'descubierto' | 'salida_pendiente'
 type AccionIntervencionAdmin = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'confirmar_cubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
@@ -98,41 +104,7 @@ const alpha = (hex: string, opacity: number) => {
   return `rgba(${r}, ${g}, ${b}, ${opacity})`
 }
 
-const OSM_TILE_SIZE = 256
-const MAPA_OSM_WIDTH = 1000
-const MAPA_OSM_HEIGHT = 430
-const MAPA_OSM_FALLBACK = { lat: -32.9442, lng: -60.6505 }
 const GPS_PRECISION_MAX_METROS = 100
-
-function osmTileX(lng: number, zoom: number) {
-  return ((lng + 180) / 360) * (2 ** zoom)
-}
-
-function osmTileY(lat: number, zoom: number) {
-  const safeLat = Math.max(Math.min(lat, 85.05112878), -85.05112878)
-  const rad = safeLat * Math.PI / 180
-  return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * (2 ** zoom)
-}
-
-function osmWrappedTileX(tileX: number, zoom: number) {
-  const total = 2 ** zoom
-  return ((tileX % total) + total) % total
-}
-
-function zoomMapaSupervisiones(rango: number) {
-  if (!Number.isFinite(rango) || rango <= 0) return 15
-  if (rango < 0.008) return 16
-  if (rango < 0.018) return 15
-  if (rango < 0.04) return 14
-  if (rango < 0.09) return 13
-  if (rango < 0.18) return 12
-  if (rango < 0.5) return 11
-  if (rango < 1) return 10
-  if (rango < 2) return 9
-  if (rango < 4) return 8
-  if (rango < 8) return 7
-  return 6
-}
 
 const FONT_BRAND = `${brandTypography.preparedBrand}, sans-serif`
 const FONT_BODY = `${brandTypography.currentBody}, sans-serif`
@@ -1451,7 +1423,6 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
     ocultarImpreciso: false,
     soloFueraRadio: false,
   })
-  const [mapaSeleccionada, setMapaSeleccionada] = useState<SupervisionAdmin | null>(null)
   const ahora = new Date()
   const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
   const fechaHora = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'
@@ -1536,64 +1507,38 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
     if (objetivo && numeroGps(objetivo.lat) !== null && numeroGps(objetivo.lng) !== null) map.set(objetivo.id, objetivo)
     return map
   }, new Map()).values())
-  const puntosBoundsMapa = [
-    ...supervisionesFiltradasMapa.map((supervision: SupervisionAdmin) => ({ lat: Number(supervision.lat), lng: Number(supervision.lng) })),
-    ...objetivosMapa.map((objetivo: Objetivo) => ({ lat: Number(objetivo.lat), lng: Number(objetivo.lng) })),
-  ].filter(punto => Number.isFinite(punto.lat) && Number.isFinite(punto.lng))
-  const latitudesMapa = puntosBoundsMapa.map(punto => punto.lat)
-  const longitudesMapa = puntosBoundsMapa.map(punto => punto.lng)
-  const minLatMapa = latitudesMapa.length ? Math.min(...latitudesMapa) : MAPA_OSM_FALLBACK.lat
-  const maxLatMapa = latitudesMapa.length ? Math.max(...latitudesMapa) : MAPA_OSM_FALLBACK.lat
-  const minLngMapa = longitudesMapa.length ? Math.min(...longitudesMapa) : MAPA_OSM_FALLBACK.lng
-  const maxLngMapa = longitudesMapa.length ? Math.max(...longitudesMapa) : MAPA_OSM_FALLBACK.lng
-  const centroLatMapa = latitudesMapa.length ? (minLatMapa + maxLatMapa) / 2 : MAPA_OSM_FALLBACK.lat
-  const centroLngMapa = longitudesMapa.length ? (minLngMapa + maxLngMapa) / 2 : MAPA_OSM_FALLBACK.lng
-  const zoomMapa = zoomMapaSupervisiones(Math.max(maxLatMapa - minLatMapa, maxLngMapa - minLngMapa))
-  const centroTileXMapa = osmTileX(centroLngMapa, zoomMapa)
-  const centroTileYMapa = osmTileY(centroLatMapa, zoomMapa)
-  const tileBaseXMapa = Math.floor(centroTileXMapa)
-  const tileBaseYMapa = Math.floor(centroTileYMapa)
-  const totalTilesMapa = 2 ** zoomMapa
-  const tilesMapa = [-3, -2, -1, 0, 1, 2, 3].flatMap(dx =>
-    [-2, -1, 0, 1, 2].map(dy => {
-      const tileX = tileBaseXMapa + dx
-      const tileY = tileBaseYMapa + dy
-      if (tileY < 0 || tileY >= totalTilesMapa) return null
-
-      return {
-        key: `${zoomMapa}-${tileX}-${tileY}`,
-        url: `https://tile.openstreetmap.org/${zoomMapa}/${osmWrappedTileX(tileX, zoomMapa)}/${tileY}.png`,
-        left: (MAPA_OSM_WIDTH / 2) + (tileX - centroTileXMapa) * OSM_TILE_SIZE,
-        top: (MAPA_OSM_HEIGHT / 2) + (tileY - centroTileYMapa) * OSM_TILE_SIZE,
-      }
-    }).filter(Boolean)
-  ) as { key: string, url: string, left: number, top: number }[]
-  const posicionMapa = (supervision: SupervisionAdmin) => ({
-    x: (MAPA_OSM_WIDTH / 2) + (osmTileX(Number(supervision.lng), zoomMapa) - centroTileXMapa) * OSM_TILE_SIZE,
-    y: (MAPA_OSM_HEIGHT / 2) + (osmTileY(Number(supervision.lat), zoomMapa) - centroTileYMapa) * OSM_TILE_SIZE,
-  })
-  const posicionObjetivoMapa = (objetivo: Objetivo) => ({
-    x: (MAPA_OSM_WIDTH / 2) + (osmTileX(Number(objetivo.lng), zoomMapa) - centroTileXMapa) * OSM_TILE_SIZE,
-    y: (MAPA_OSM_HEIGHT / 2) + (osmTileY(Number(objetivo.lat), zoomMapa) - centroTileYMapa) * OSM_TILE_SIZE,
-  })
+  const supervisionesMapaLeaflet = supervisionesFiltradasMapa.map((supervision: SupervisionAdmin) => ({
+    id: supervision.id,
+    lat: Number(supervision.lat),
+    lng: Number(supervision.lng),
+    created_at: supervision.created_at,
+    estado: supervision.estado,
+    precision_gps: supervision.precision_gps,
+    objetivoNombre: supervision.objetivo?.nombre || nombreObjetivo(supervision.objetivo_id),
+    supervisorNombre: supervision.supervisor ? `${supervision.supervisor.apellido}, ${supervision.supervisor.nombre}` : nombreSupervisor(supervision.supervisor_id),
+    googleMapsUrl: mapasUrl(supervision),
+    auditoria: auditoriaMapa(supervision),
+  }))
+  const objetivosMapaLeaflet = objetivosMapa.map((objetivo: Objetivo) => ({
+    id: objetivo.id,
+    nombre: objetivo.nombre,
+    lat: Number(objetivo.lat),
+    lng: Number(objetivo.lng),
+    radio_metros: numeroGps(objetivo.radio_metros),
+  }))
+  const mostrarRecorridoMapa = mapaFiltros.supervisor_id !== 'todos'
+  const recorridoGoogleMapsUrl = mostrarRecorridoMapa && supervisionesMapaLeaflet.length > 1
+    ? `https://www.google.com/maps/dir/${[...supervisionesMapaLeaflet]
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        .map(supervision => `${supervision.lat},${supervision.lng}`)
+        .join('/')}`
+    : null
   const colorSupervisorMapa = (supervisorId?: string | null) => {
     const nombre = nombreSupervisor(supervisorId).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
     if (nombre.includes('aranda')) return '#f59e0b'
     if (nombre.includes('martinez')) return '#60a5fa'
     if (nombre.includes('fulla')) return '#10b981'
     return '#a78bfa'
-  }
-  const colorSupervisionMapa = (supervision: SupervisionAdmin) => {
-    const auditoria = auditoriaMapa(supervision)
-    if (auditoria.gpsImpreciso) return '#f97316'
-    if (auditoria.dentro_radio === false) return '#ef4444'
-    if (auditoria.dentro_radio === true) return '#10b981'
-    return colorSupervisorMapa(supervision.supervisor_id)
-  }
-  const inicialSupervisorMapa = (supervisorId?: string | null) => {
-    const nombre = nombreSupervisor(supervisorId).replace(',', '').trim()
-    const partes = nombre.split(/\s+/).filter(Boolean)
-    return partes.slice(0, 2).map(parte => parte[0]).join('').toUpperCase() || 'S'
   }
   const estadoMapaCounts = {
     ok: supervisionesFiltradasMapa.filter((s: SupervisionAdmin) => s.estado === 'ok').length,
@@ -1774,182 +1719,16 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
             </div>
           )}
 
-          <div style={{ ...S.card, padding:0, overflow:'hidden' }}>
-            <div style={{ height:MAPA_OSM_HEIGHT, position:'relative', background:'#dbe3d3', borderBottom:'1px solid #1e2d42', overflow:'hidden' }}>
-              {tilesMapa.map(tile => (
-                <img
-                  key={tile.key}
-                  src={tile.url}
-                  alt=""
-                  loading="lazy"
-                  draggable={false}
-                  style={{
-                    position:'absolute',
-                    left:tile.left,
-                    top:tile.top,
-                    width:OSM_TILE_SIZE,
-                    height:OSM_TILE_SIZE,
-                    userSelect:'none',
-                    pointerEvents:'none',
-                  }}
-                />
-              ))}
-              <div style={{ position:'absolute', inset:0, background:'rgba(15,23,42,.08)', pointerEvents:'none' }} />
-              <div style={{ position:'absolute', top:14, left:16, right:16, display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start', zIndex:4 }}>
-                <div>
-                  <div style={{ display:'inline-block', fontFamily:'Syne,sans-serif', fontWeight:800, color:'#e2e8f0', background:'rgba(17,24,39,.86)', border:'1px solid rgba(51,65,85,.75)', borderRadius:8, padding:'8px 10px' }}>Mapa OpenStreetMap de supervisiones</div>
-                  <div style={{ color:'#e2e8f0', fontSize:12, marginTop:6, background:'rgba(17,24,39,.78)', borderRadius:8, padding:'5px 8px', display:'inline-block' }}>Zoom {zoomMapa} · {supervisionesFiltradasMapa.length} punto(s)</div>
-                </div>
-                <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end', background:'rgba(17,24,39,.78)', border:'1px solid rgba(51,65,85,.75)', borderRadius:8, padding:'8px 10px' }}>
-                  {[
-                    ['Dentro radio', '#10b981'],
-                    ['Fuera radio', '#ef4444'],
-                    ['GPS impreciso', '#f97316'],
-                    ['Objetivo', '#2563eb'],
-                  ].map(([label, color]) => (
-                    <span key={label} style={{ display:'inline-flex', alignItems:'center', gap:6, color:'#cbd5e1', fontSize:12 }}>
-                      <span style={{ width:10, height:10, borderRadius:'50%', background:color }} />
-                      {label}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {supervisionesFiltradasMapa.length === 0 ? (
-                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', color:'#111827', fontWeight:800, zIndex:2 }}>
-                  Sin puntos GPS para los filtros aplicados.
-                </div>
-              ) : (
-                <>
-                  {mapaFiltros.supervisor_id !== 'todos' && supervisionesFiltradasMapa.length > 1 && (
-                    <svg viewBox={`0 0 ${MAPA_OSM_WIDTH} ${MAPA_OSM_HEIGHT}`} preserveAspectRatio="none" style={{ position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none', zIndex:2 }}>
-                      <polyline
-                        fill="none"
-                        stroke={colorSupervisorMapa(mapaFiltros.supervisor_id)}
-                        strokeWidth="3"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        points={supervisionesFiltradasMapa.map((supervision: SupervisionAdmin) => {
-                          const pos = posicionMapa(supervision)
-                          return `${pos.x},${pos.y}`
-                        }).join(' ')}
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    </svg>
-                  )}
-
-                  {objetivosMapa.map((objetivo: Objetivo) => {
-                    const pos = posicionObjetivoMapa(objetivo)
-
-                    return (
-                      <div
-                        key={`objetivo-${objetivo.id}`}
-                        title={`Objetivo · ${objetivo.nombre}`}
-                        style={{
-                          position:'absolute',
-                          left:`${(pos.x / MAPA_OSM_WIDTH) * 100}%`,
-                          top:`${(pos.y / MAPA_OSM_HEIGHT) * 100}%`,
-                          transform:'translate(-50%, -50%)',
-                          width:24,
-                          height:24,
-                          borderRadius:6,
-                          border:'2px solid rgba(255,255,255,.95)',
-                          background:'#2563eb',
-                          color:'#fff',
-                          fontWeight:900,
-                          fontSize:12,
-                          display:'flex',
-                          alignItems:'center',
-                          justifyContent:'center',
-                          boxShadow:'0 8px 20px rgba(0,0,0,.35)',
-                          zIndex:3,
-                        }}
-                      >
-                        O
-                      </div>
-                    )
-                  })}
-
-                  {supervisionesFiltradasMapa.map((supervision: SupervisionAdmin, index: number) => {
-                    const pos = posicionMapa(supervision)
-                    const color = colorSupervisionMapa(supervision)
-                    const mostrarOrden = mapaFiltros.supervisor_id !== 'todos'
-
-                    return (
-                      <button
-                        key={supervision.id}
-                        type="button"
-                        title={`${nombreSupervisor(supervision.supervisor_id)} · ${nombreObjetivo(supervision.objetivo_id)}`}
-                        onClick={() => setMapaSeleccionada(supervision)}
-                        style={{
-                          position:'absolute',
-                          left:`${(pos.x / MAPA_OSM_WIDTH) * 100}%`,
-                          top:`${(pos.y / MAPA_OSM_HEIGHT) * 100}%`,
-                          transform:'translate(-50%, -50%)',
-                          width:34,
-                          height:34,
-                          borderRadius:'50%',
-                          border:'2px solid rgba(255,255,255,.85)',
-                          background:color,
-                          color:'#111827',
-                          fontWeight:900,
-                          cursor:'pointer',
-                          boxShadow:'0 8px 20px rgba(0,0,0,.35)',
-                          zIndex:3,
-                        }}
-                      >
-                        {mostrarOrden ? index + 1 : inicialSupervisorMapa(supervision.supervisor_id)}
-                      </button>
-                    )
-                  })}
-
-                  {mapaSeleccionada && (
-                    <div style={{ position:'absolute', left:16, bottom:16, width:'min(420px, calc(100% - 32px))', background:'#111827', border:'1px solid #334155', borderRadius:10, padding:14, boxShadow:'0 16px 42px rgba(0,0,0,.35)', zIndex:5 }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'flex-start' }}>
-                        <div>
-                          <div style={{ fontWeight:900, color:'#e2e8f0' }}>{nombreObjetivo(mapaSeleccionada.objetivo_id)}</div>
-                          <div style={{ color:'#94a3b8', fontSize:12, marginTop:3 }}>{nombreSupervisor(mapaSeleccionada.supervisor_id)}</div>
-                        </div>
-                        <Badge type={mapaSeleccionada.estado === 'critico' ? 'urgente' : mapaSeleccionada.estado === 'con_observacion' ? 'advertencia' : 'ok'}>{mapaSeleccionada.estado}</Badge>
-                      </div>
-                      <div style={{ color:'#94a3b8', fontSize:12, marginTop:8 }}>Fecha/hora: {fechaHora(mapaSeleccionada.created_at)}</div>
-                      <div style={{ color:'#94a3b8', fontSize:12 }}>Precisión: {metrosGpsTexto(mapaSeleccionada.precision_gps)}</div>
-                      {(() => {
-                        const auditoria = auditoriaMapa(mapaSeleccionada)
-                        return (
-                          <>
-                            <div style={{ color:auditoria.gpsImpreciso ? '#f97316' : '#94a3b8', fontSize:12 }}>GPS impreciso: {auditoria.gpsImpreciso ? 'Sí' : 'No'}</div>
-                            <div style={{ color:auditoria.dentro_radio === false ? '#f87171' : '#94a3b8', fontSize:12 }}>Distancia al objetivo: {metrosGpsTexto(auditoria.distancia_objetivo_metros)}</div>
-                            <div style={{ color:auditoria.dentro_radio === false ? '#f87171' : '#94a3b8', fontSize:12 }}>Dentro del radio: {auditoria.dentro_radio === null ? '—' : auditoria.dentro_radio ? 'Sí' : 'No'}</div>
-                          </>
-                        )
-                      })()}
-                      <div style={{ color:'#cbd5e1', fontSize:12, marginTop:6 }}>{mapaSeleccionada.observaciones || 'Sin observaciones'}</div>
-                      <div style={{ display:'flex', gap:8, marginTop:12, flexWrap:'wrap' }}>
-                        <button style={{ ...S.btn, ...S.btnPrimary, padding:'7px 12px', fontSize:12 }} onClick={() => abrirDetalle(mapaSeleccionada)}>
-                          Ver detalle
-                        </button>
-                        <a href={mapasUrl(mapaSeleccionada)} target="_blank" rel="noreferrer" style={{ ...S.btn, ...S.btnSecondary, padding:'7px 12px', fontSize:12, textDecoration:'none' }}>
-                          Abrir en Google Maps
-                        </a>
-                        <button style={{ ...S.btn, ...S.btnSecondary, padding:'7px 12px', fontSize:12 }} onClick={() => setMapaSeleccionada(null)}>
-                          Cerrar
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-              <a
-                href="https://www.openstreetmap.org/copyright"
-                target="_blank"
-                rel="noreferrer"
-                style={{ position:'absolute', right:8, bottom:8, zIndex:4, fontSize:11, color:'#111827', background:'rgba(255,255,255,.78)', borderRadius:4, padding:'2px 6px', textDecoration:'none' }}
-              >
-                © OpenStreetMap
-              </a>
-            </div>
-          </div>
+          <SupervisionMap
+            supervisiones={supervisionesMapaLeaflet}
+            objetivos={objetivosMapaLeaflet}
+            mostrarRecorrido={mostrarRecorridoMapa}
+            recorridoGoogleMapsUrl={recorridoGoogleMapsUrl}
+            abrirDetalle={(supervisionId: string) => {
+              const supervision = supervisionesFiltradasMapa.find((item: SupervisionAdmin) => item.id === supervisionId)
+              if (supervision) abrirDetalle(supervision)
+            }}
+          />
 
           <div style={S.statGrid}>
             <StatCard label="Filtradas" value={supervisionesFiltradasMapa.length} sub="Supervisiones con GPS" color={semanticColors.info} />
