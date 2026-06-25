@@ -1607,6 +1607,12 @@ export default function SupervisorMobile({ user }: any) {
     setSupervisionFotos([])
   }
 
+  const agregarFotosSupervision = (files: FileList | null) => {
+    const nuevasFotos = Array.from(files || [])
+    if (nuevasFotos.length === 0) return
+    setSupervisionFotos(prev => [...prev, ...nuevasFotos])
+  }
+
   const actualizarRespuestaSupervision = (itemId: string, patch: Partial<{ resultado: ResultadoChecklist, observacion: string }>) => {
     setSupervisionRespuestas(prev => ({
       ...prev,
@@ -1722,7 +1728,7 @@ export default function SupervisorMobile({ user }: any) {
           .upload(path, foto, { upsert: false })
 
         if (fotoError) {
-          avisoFotos = ` Fotos no cargadas en Storage bucket "supervision-fotos": ${fotoError.message}`
+          avisoFotos = `No se pudo subir "${foto.name}" al bucket "supervision-fotos": ${fotoError.message}`
           break
         }
 
@@ -1736,7 +1742,7 @@ export default function SupervisorMobile({ user }: any) {
           .single()
 
         if (fotosInsertError) {
-          avisoFotos = ` Foto subida a Storage, pero no registrada en supervision_fotos: ${fotosInsertError.message}`
+          avisoFotos = `La foto "${foto.name}" se subió a Storage, pero no quedó registrada en supervision_fotos: ${fotosInsertError.message}`
           break
         }
 
@@ -1754,7 +1760,11 @@ export default function SupervisorMobile({ user }: any) {
         ...prev.filter(s => s.id !== supervisionNueva.id),
       ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
       resetFormularioSupervision()
-      setMensaje(`✓ Supervisión guardada con estado ${estado}.${avisoFotos}`)
+      if (avisoFotos) {
+        setError(`La supervisión se creó, pero las fotos no quedaron completas. ${avisoFotos}`)
+      } else {
+        setMensaje(`✓ Supervisión guardada con estado ${estado}.`)
+      }
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : 'Error al guardar la supervisión.'
       setError(message)
@@ -2751,17 +2761,41 @@ export default function SupervisorMobile({ user }: any) {
                   />
 
                   <label style={label}>Fotos</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    capture="environment"
-                    style={input}
-                    onChange={e => setSupervisionFotos(Array.from(e.target.files || []))}
-                  />
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8 }}>
+                    <label style={{ ...secondaryButton, margin:0, textAlign:'center' }}>
+                      Tomar foto
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        capture="environment"
+                        style={{ display:'none' }}
+                        onChange={e => {
+                          agregarFotosSupervision(e.target.files)
+                          e.currentTarget.value = ''
+                        }}
+                      />
+                    </label>
+                    <label style={{ ...secondaryButton, margin:0, textAlign:'center' }}>
+                      Elegir de galería
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        style={{ display:'none' }}
+                        onChange={e => {
+                          agregarFotosSupervision(e.target.files)
+                          e.currentTarget.value = ''
+                        }}
+                      />
+                    </label>
+                  </div>
                   {supervisionFotos.length > 0 && (
                     <div style={{ ...muted, marginBottom:12 }}>
                       {supervisionFotos.length} foto(s): {supervisionFotos.map(foto => foto.name).join(', ')}
+                      <button type="button" style={{ ...secondaryButton, marginTop:8, width:'100%' }} onClick={() => setSupervisionFotos([])}>
+                        Quitar fotos seleccionadas
+                      </button>
                     </div>
                   )}
 
