@@ -1731,20 +1731,27 @@ export default function SupervisorMobile({ user }: any) {
       return
     }
 
+    const requiereFotoObligatoria = itemsSupervision.some(item => item.foto_obligatoria)
+    if (requiereFotoObligatoria && supervisionFotos.length === 0) {
+      setError('Hay ítems del checklist con foto obligatoria. Agregá al menos una foto antes de guardar.')
+      return
+    }
+
     const respuestasCompletas = itemsSupervision
       .map(item => ({ item, respuesta: supervisionRespuestas[item.id] }))
       .filter(({ respuesta }) => Boolean(respuesta?.resultado))
 
     const hayObservado = respuestasCompletas.some(({ respuesta }) => respuesta?.resultado === 'observado')
     const hayCritico = respuestasCompletas.some(({ item, respuesta }) => respuesta?.resultado === 'observado' && item.criticidad === 'alta')
-    const faltaFotoObligatoria = itemsSupervision.some(item => item.foto_obligatoria) && supervisionFotos.length === 0
-    const estado: EstadoSupervision = hayCritico || faltaFotoObligatoria
+    const estado: EstadoSupervision = hayCritico
       ? 'critico'
       : hayObservado
         ? 'con_observacion'
         : 'ok'
 
     setAsignando('guardar-supervision')
+
+    let supervisionCreadaId: string | null = null
 
     try {
       const { data: supervisionNueva, error: supervisionError } = await supabase
@@ -1765,6 +1772,8 @@ export default function SupervisorMobile({ user }: any) {
       if (supervisionError) throw supervisionError
       if (!supervisionNueva) throw new Error('No se pudo crear la supervisión.')
 
+      supervisionCreadaId = supervisionNueva.id
+
       if (respuestasCompletas.length > 0) {
         const { error: respuestasError } = await supabase
           .from('supervision_respuestas')
@@ -1778,7 +1787,6 @@ export default function SupervisorMobile({ user }: any) {
         if (respuestasError) throw respuestasError
       }
 
-      let avisoFotos = ''
       const fotosRegistradas: SupervisionFoto[] = []
 
       for (const [index, foto] of supervisionFotos.entries()) {
@@ -1788,8 +1796,7 @@ export default function SupervisorMobile({ user }: any) {
           .upload(path, foto, { upsert: false })
 
         if (fotoError) {
-          avisoFotos = `No se pudo subir "${foto.name}" al bucket "supervision-fotos": ${fotoError.message}`
-          break
+          throw new Error(`No se pudo subir "${foto.name}" al bucket "supervision-fotos": ${fotoError.message}`)
         }
 
         const { data: fotoRegistrada, error: fotosInsertError } = await supabase
@@ -1802,11 +1809,14 @@ export default function SupervisorMobile({ user }: any) {
           .single()
 
         if (fotosInsertError) {
-          avisoFotos = `La foto "${foto.name}" se subió a Storage, pero no quedó registrada en supervision_fotos: ${fotosInsertError.message}`
-          break
+          throw new Error(`La foto "${foto.name}" se subió a Storage, pero no quedó registrada en supervision_fotos: ${fotosInsertError.message}`)
         }
 
         if (fotoRegistrada) fotosRegistradas.push(fotoRegistrada as SupervisionFoto)
+      }
+
+      if (requiereFotoObligatoria && fotosRegistradas.length === 0) {
+        throw new Error('No quedó registrada ninguna foto obligatoria en supervision_fotos.')
       }
 
       const supervisionParaListado = {
@@ -1820,14 +1830,13 @@ export default function SupervisorMobile({ user }: any) {
         ...prev.filter(s => s.id !== supervisionNueva.id),
       ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
       resetFormularioSupervision()
-      if (avisoFotos) {
-        setError(`La supervisión se creó, pero las fotos no quedaron completas. ${avisoFotos}`)
-      } else {
-        setMensaje(`✓ Supervisión guardada con estado ${estado}.`)
-      }
+      setMensaje(`✓ Supervisión guardada con estado ${estado}.`)
     } catch (saveError) {
+      if (supervisionCreadaId) {
+        await supabase.from('supervisiones').delete().eq('id', supervisionCreadaId)
+      }
       const message = saveError instanceof Error ? saveError.message : 'Error al guardar la supervisión.'
-      setError(message)
+      setError(`No se pudo guardar la supervisión. ${message}`)
     } finally {
       setAsignando(null)
     }
