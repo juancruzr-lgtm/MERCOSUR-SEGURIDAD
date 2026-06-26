@@ -1871,6 +1871,10 @@ export default function SupervisorMobile({ user }: any) {
     }
 
     const requiereFotoObligatoria = itemsSupervision.some(item => item.foto_obligatoria)
+    if (requiereFotoObligatoria && supervisionFotos.length === 0) {
+      setError('Hay ítems del checklist con foto obligatoria. Agregá al menos una foto antes de guardar.')
+      return
+    }
 
     const respuestasCompletas = itemsSupervision
       .map(item => ({ item, respuesta: supervisionRespuestas[item.id] }))
@@ -1886,6 +1890,8 @@ export default function SupervisorMobile({ user }: any) {
         : 'ok'
 
     setAsignando('guardar-supervision')
+
+    let supervisionCreadaId: string | null = null
 
     try {
       const { data: supervisionNueva, error: supervisionError } = await supabase
@@ -1905,6 +1911,8 @@ export default function SupervisorMobile({ user }: any) {
 
       if (supervisionError) throw supervisionError
       if (!supervisionNueva) throw new Error('No se pudo crear la supervisión.')
+
+      supervisionCreadaId = supervisionNueva.id
 
       if (respuestasCompletas.length > 0) {
         const { error: respuestasError } = await supabase
@@ -1963,6 +1971,10 @@ export default function SupervisorMobile({ user }: any) {
         await supabase.from('supervisiones').update({ estado: estadoFinal }).eq('id', supervisionNueva.id)
       }
 
+      if (requiereFotoObligatoria && fotosRegistradas.length === 0) {
+        throw new Error('No quedó registrada ninguna foto obligatoria en supervision_fotos.')
+      }
+
       const supervisionParaListado = {
         ...supervisionNueva,
         estado: estadoFinal,
@@ -1986,6 +1998,9 @@ export default function SupervisorMobile({ user }: any) {
         setMensaje(`✓ Supervisión guardada con estado ${estadoFinal}.`)
       }
     } catch (saveError) {
+      if (supervisionCreadaId) {
+        await supabase.from('supervisiones').delete().eq('id', supervisionCreadaId)
+      }
       const message = saveError instanceof Error ? saveError.message : 'Error al guardar la supervisión.'
       setError(`No se pudo guardar la supervisión. ${message}`)
     } finally {
