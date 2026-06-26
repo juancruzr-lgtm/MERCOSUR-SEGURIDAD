@@ -2262,7 +2262,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     const ts = turnosHoyPorObjetivo(objetivoId)
     if (ts.length === 0) return null
     const sinCubrir = ts.filter((t: any) => t.estado === 'descubierto' || !t.guardia_id).length
-    const cubiertos = ts.filter((t: any) => t.estado === 'cubierto').length
+    const cubiertos = ts.filter((t: any) => t.estado === 'cubierto' && t.guardia_id).length
     return { total: ts.length, cubiertos, sinCubrir }
   }
 
@@ -5777,6 +5777,9 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       }
 
       if (accion === 'confirmar_cubierto') {
+        if (!turno.guardia_id) {
+          throw new Error('No se puede confirmar cubierto sin un guardia asignado. Usá "Reasignar" primero.')
+        }
         estadoNuevo = 'cubierto'
         const payload = { estado: 'cubierto' }
         const { error: updateError } = await supabase.from('turnos').update(payload).eq('id', turno.id)
@@ -5929,7 +5932,12 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(160px, 1fr))', gap:8, marginTop:12 }}>
           <button
             type="button"
-            style={estiloBotonAccion('confirmar_cubierto', accionEstaSeleccionada(alerta, 'confirmar_cubierto'))}
+            style={{
+              ...estiloBotonAccion('confirmar_cubierto', accionEstaSeleccionada(alerta, 'confirmar_cubierto')),
+              opacity: alerta.turno.guardia_id ? 1 : 0.55,
+            }}
+            disabled={!alerta.turno.guardia_id}
+            title={alerta.turno.guardia_id ? undefined : 'Sin guardia asignado: reasigná primero'}
             onClick={() => abrirAccion(alerta, 'confirmar_cubierto')}
           >
             Confirmar cubierto

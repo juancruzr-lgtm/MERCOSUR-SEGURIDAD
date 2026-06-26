@@ -1618,6 +1618,9 @@ export default function SupervisorMobile({ user }: any) {
       }
 
       if (accionAlerta.accion === 'confirmar_cubierto') {
+        if (!turno.guardia_id) {
+          throw new Error('No se puede confirmar cubierto sin un guardia asignado. Usá "Reasignar" primero.')
+        }
         estadoNuevo = 'cubierto'
         const payload = { estado: 'cubierto' as EstadoTurnoPersistido }
         const { error: updateError } = await supabase.from('turnos').update(payload).eq('id', turno.id)
@@ -2116,6 +2119,7 @@ export default function SupervisorMobile({ user }: any) {
   const renderAccionesAlerta = (turno: Turno, tipoAlerta: TipoAlertaOperativa, registro?: RegistroAsistencia) => {
     const intervenida = alertaIntervenida(turno.id, tipoAlerta)
     const puedeMarcarDescubierto = turno.estado !== 'descubierto'
+    const puedeConfirmarCubierto = Boolean(turno.guardia_id)
 
     return (
       <div style={alertaAccionesBox}>
@@ -2127,7 +2131,12 @@ export default function SupervisorMobile({ user }: any) {
         <div style={alertaActionGrid}>
           <button
             type="button"
-            style={estiloBotonAccion('confirmar_cubierto', accionEstaSeleccionada(turno, tipoAlerta, 'confirmar_cubierto'))}
+            style={{
+              ...estiloBotonAccion('confirmar_cubierto', accionEstaSeleccionada(turno, tipoAlerta, 'confirmar_cubierto')),
+              opacity: puedeConfirmarCubierto ? 1 : 0.55,
+            }}
+            disabled={!puedeConfirmarCubierto}
+            title={puedeConfirmarCubierto ? undefined : 'Sin guardia asignado: reasigná primero'}
             onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'confirmar_cubierto', registro)}
           >
             Confirmar cubierto
