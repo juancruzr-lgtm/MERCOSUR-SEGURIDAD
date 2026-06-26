@@ -2233,12 +2233,13 @@ function ChecklistsAdmin({ plantillas, setPlantillas, items, setItems }: any) {
   )
 }
 
-function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], filtroActivo, limpiarFiltro }: any) {
+function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], zonasOperativas = [], filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [busqueda, setBusqueda] = useState('')
   const [estadoFiltro, setEstadoFiltro] = useState('activo')
+  const [zonaFiltro, setZonaFiltro] = useState('todas')
   const [filtroKpi, setFiltroKpi] = useState('')
   const [confirmarBorrado, setConfirmarBorrado] = useState<any>(null)
   const [verificandoBorrado, setVerificandoBorrado] = useState(false)
@@ -2253,6 +2254,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     radio_metros: 200,
     checklist_plantilla_id: '',
     frecuencia_supervision_horas: 24,
+    zona_id: '',
   }
   const [form, setForm] = useState(formVacio)
 
@@ -2285,6 +2287,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       radio_metros: o.radio_metros || 200,
       checklist_plantilla_id: o.checklist_plantilla_id || '',
       frecuencia_supervision_horas: o.frecuencia_supervision_horas || 24,
+      zona_id: o.zona_id || '',
     })
     setEditId(o.id)
     setModal(true)
@@ -2302,6 +2305,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       radio_metros: Number(form.radio_metros) || 200,
       checklist_plantilla_id: form.checklist_plantilla_id || null,
       frecuencia_supervision_horas: Math.max(1, Number(form.frecuencia_supervision_horas) || 24),
+      zona_id: form.zona_id || null,
     }
 
     if (editId) {
@@ -2396,6 +2400,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     if (filtroTipo === 'sin_cubrir_hoy' && !objetivosSinCubrirHoy.some((x: any) => x.id === o.id)) return false
     if (estadoFiltro === 'activo' && o.estado !== 'activo') return false
     if (estadoFiltro === 'inactivo' && o.estado === 'activo') return false
+    if (zonaFiltro !== 'todas' && (o.zona_id || '') !== zonaFiltro) return false
     if (!busqueda.trim()) return true
     const q = busqueda.toLowerCase()
     return (
@@ -2471,6 +2476,16 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
           <option value="activo">Activos</option>
           <option value="inactivo">Inactivos</option>
         </select>
+        <select
+          style={{ ...S.select, maxWidth:200, marginBottom:0 }}
+          value={zonaFiltro}
+          onChange={e => setZonaFiltro(e.target.value)}
+        >
+          <option value="todas">Todas las zonas</option>
+          {zonasOperativas.map((z: any) => (
+            <option key={z.id} value={z.id}>{z.nombre}</option>
+          ))}
+        </select>
       </div>
 
       {/* Tabla */}
@@ -2514,6 +2529,9 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
                           {o.checklist_plantilla_id
                             ? `Checklist · cada ${o.frecuencia_supervision_horas || 24} h`
                             : 'Sin checklist asignado'}
+                        </div>
+                        <div style={{ fontSize:11, color: o.zona_id ? '#a78bfa' : '#64748b', marginTop:2 }}>
+                          🗺️ {zonasOperativas.find((z: any) => z.id === o.zona_id)?.nombre || 'Sin zona'}
                         </div>
                       </td>
 
@@ -2693,6 +2711,20 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
                 value={form.frecuencia_supervision_horas}
                 onChange={e => setForm({ ...form, frecuencia_supervision_horas:Number(e.target.value) })}
               />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Zona operativa</label>
+              <select
+                style={S.select}
+                value={form.zona_id}
+                onChange={e => setForm({ ...form, zona_id:e.target.value })}
+              >
+                <option value="">Sin zona</option>
+                {zonasOperativas.map((z: any) => (
+                  <option key={z.id} value={z.id}>{z.nombre}</option>
+                ))}
+              </select>
             </div>
           </div>
         </Modal>
@@ -4041,6 +4073,184 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
   )
 }
 
+
+// ── ZONAS OPERATIVAS ─────────────────────────────────────────
+function ZonasOperativas({ guardias, objetivos, zonas, setZonas, supervisorZonas, setSupervisorZonas }: any) {
+  const [form, setForm] = useState({ nombre: '', descripcion: '' })
+  const [editId, setEditId] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error', texto: string } | null>(null)
+  const [zonaSeleccionadaId, setZonaSeleccionadaId] = useState<string>('')
+  const [supervisorParaAsignar, setSupervisorParaAsignar] = useState('')
+
+  useEffect(() => {
+    if (!zonaSeleccionadaId && zonas.length > 0) setZonaSeleccionadaId(zonas[0].id)
+    if (zonaSeleccionadaId && !zonas.some((z: any) => z.id === zonaSeleccionadaId)) {
+      setZonaSeleccionadaId(zonas[0]?.id || '')
+    }
+  }, [zonas, zonaSeleccionadaId])
+
+  const supervisores = guardias.filter((g: Usuario) => g.rol === 'supervisor' && g.estado === 'activo')
+
+  const resetForm = () => { setForm({ nombre: '', descripcion: '' }); setEditId(null) }
+
+  const guardarZona = async () => {
+    if (!form.nombre.trim()) return
+    setLoading(true)
+    setMensaje(null)
+
+    const payload = { nombre: form.nombre.trim(), descripcion: form.descripcion.trim() || null }
+    const query = editId
+      ? supabase.from('zonas_operativas').update(payload).eq('id', editId)
+      : supabase.from('zonas_operativas').insert(payload)
+    const { data, error } = await query.select().single()
+
+    if (error) {
+      setMensaje({ tipo: 'error', texto: error.message })
+    } else if (data) {
+      setZonas((prev: any[]) => editId ? prev.map(z => z.id === editId ? data : z) : [...prev, data].sort((a, b) => a.nombre.localeCompare(b.nombre)))
+      if (!editId) setZonaSeleccionadaId(data.id)
+      resetForm()
+    }
+    setLoading(false)
+  }
+
+  const editarZona = (z: any) => {
+    setForm({ nombre: z.nombre, descripcion: z.descripcion || '' })
+    setEditId(z.id)
+  }
+
+  const toggleEstadoZona = async (z: any) => {
+    const nuevoEstado = z.estado === 'activo' ? 'inactivo' : 'activo'
+    const { data } = await supabase.from('zonas_operativas').update({ estado: nuevoEstado }).eq('id', z.id).select().single()
+    if (data) setZonas((prev: any[]) => prev.map(x => x.id === z.id ? data : x))
+  }
+
+  const asignarSupervisor = async () => {
+    if (!zonaSeleccionadaId || !supervisorParaAsignar) return
+    const yaAsignado = supervisorZonas.some((sz: any) => sz.zona_id === zonaSeleccionadaId && sz.supervisor_id === supervisorParaAsignar)
+    if (yaAsignado) return
+
+    const { data, error } = await supabase
+      .from('supervisor_zonas')
+      .insert({ zona_id: zonaSeleccionadaId, supervisor_id: supervisorParaAsignar })
+      .select()
+      .single()
+
+    if (error) {
+      setMensaje({ tipo: 'error', texto: error.message })
+      return
+    }
+    if (data) {
+      setSupervisorZonas((prev: any[]) => [...prev, data])
+      setSupervisorParaAsignar('')
+    }
+  }
+
+  const quitarSupervisor = async (id: string) => {
+    const { error } = await supabase.from('supervisor_zonas').delete().eq('id', id)
+    if (!error) setSupervisorZonas((prev: any[]) => prev.filter((sz: any) => sz.id !== id))
+  }
+
+  const zonaSeleccionada = zonas.find((z: any) => z.id === zonaSeleccionadaId)
+  const supervisoresDeZona = supervisorZonas.filter((sz: any) => sz.zona_id === zonaSeleccionadaId)
+  const objetivosDeZona = objetivos.filter((o: any) => o.zona_id === zonaSeleccionadaId)
+  const nombreUsuario = (id: string) => {
+    const u = guardias.find((g: Usuario) => g.id === id)
+    return u ? `${u.apellido}, ${u.nombre}` : 'Usuario no encontrado'
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <div style={S.title}>Zonas operativas</div>
+        <div style={S.sub2}>{zonas.length} zona(s) configurada(s). La asignación de objetivos a una zona se hace desde Objetivos.</div>
+      </div>
+
+      {mensaje && (
+        <div style={{ ...S.card, padding: 12, marginBottom: 16, color: mensaje.tipo === 'ok' ? '#10b981' : '#f87171', borderColor: mensaje.tipo === 'ok' ? 'rgba(16,185,129,.35)' : 'rgba(239,68,68,.35)' }}>
+          {mensaje.texto}
+        </div>
+      )}
+
+      <div style={S.grid2}>
+        <div style={S.card}>
+          <div style={{ fontFamily: 'Syne,sans-serif', fontWeight: 800, marginBottom: 12 }}>{editId ? 'Editar zona' : 'Nueva zona'}</div>
+          <label style={S.label}>Nombre</label>
+          <input style={S.input} value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })} placeholder="Ej.: Zona Rosario" />
+          <label style={S.label}>Descripción (opcional)</label>
+          <input style={S.input} value={form.descripcion} onChange={e => setForm({ ...form, descripcion: e.target.value })} placeholder="Notas internas" />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardarZona} disabled={loading || !form.nombre.trim()}>
+              {editId ? 'Guardar cambios' : '+ Crear zona'}
+            </button>
+            {editId && <button style={{ ...S.btn, ...S.btnSecondary }} onClick={resetForm}>Cancelar</button>}
+          </div>
+
+          <div style={{ marginTop: 20, borderTop: '1px solid #1e2d42', paddingTop: 16 }}>
+            {zonas.length === 0 ? (
+              <div style={{ color: '#64748b', fontSize: 13 }}>No hay zonas creadas todavía.</div>
+            ) : zonas.map((z: any) => (
+              <div key={z.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid #1e2d42' }}>
+                <div style={{ cursor: 'pointer', flex: 1 }} onClick={() => setZonaSeleccionadaId(z.id)}>
+                  <span style={{ fontWeight: zonaSeleccionadaId === z.id ? 800 : 400, color: zonaSeleccionadaId === z.id ? brandColors.yellow : undefined }}>{z.nombre}</span>
+                  {z.estado !== 'activo' && <Badge type="inactivo">inactivo</Badge>}
+                </div>
+                <button style={{ ...S.btn, ...S.btnSecondary, padding: '4px 8px', fontSize: 11 }} onClick={() => editarZona(z)}>✏</button>
+                <button style={{ ...S.btn, ...S.btnSecondary, padding: '4px 8px', fontSize: 11 }} onClick={() => toggleEstadoZona(z)}>
+                  {z.estado === 'activo' ? '⏸' : '▶'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={S.card}>
+          {!zonaSeleccionada ? (
+            <div style={{ color: '#64748b' }}>Seleccioná o creá una zona para administrar supervisores y ver sus objetivos.</div>
+          ) : (
+            <>
+              <div style={{ fontFamily: 'Syne,sans-serif', fontWeight: 800, marginBottom: 4 }}>{zonaSeleccionada.nombre}</div>
+              <div style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>{zonaSeleccionada.descripcion || 'Sin descripción'}</div>
+
+              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>Supervisores asignados</div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <select style={S.select} value={supervisorParaAsignar} onChange={e => setSupervisorParaAsignar(e.target.value)}>
+                  <option value="">Seleccionar supervisor...</option>
+                  {supervisores.map((s: Usuario) => (
+                    <option key={s.id} value={s.id}>{s.apellido}, {s.nombre}</option>
+                  ))}
+                </select>
+                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={asignarSupervisor} disabled={!supervisorParaAsignar}>Asignar</button>
+              </div>
+              {supervisoresDeZona.length === 0 ? (
+                <div style={{ color: '#64748b', fontSize: 13, marginBottom: 20 }}>Sin supervisores asignados a esta zona.</div>
+              ) : (
+                <div style={{ marginBottom: 20 }}>
+                  {supervisoresDeZona.map((sz: any) => (
+                    <div key={sz.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1e2d42' }}>
+                      <span>{nombreUsuario(sz.supervisor_id)}</span>
+                      <button style={{ ...S.btn, ...S.btnSecondary, padding: '4px 10px', fontSize: 11 }} onClick={() => quitarSupervisor(sz.id)}>Quitar</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>Objetivos en esta zona</div>
+              {objetivosDeZona.length === 0 ? (
+                <div style={{ color: '#64748b', fontSize: 13 }}>Sin objetivos asignados. Asignalos desde la pantalla Objetivos.</div>
+              ) : (
+                objetivosDeZona.map((o: any) => (
+                  <div key={o.id} style={{ padding: '8px 0', borderBottom: '1px solid #1e2d42' }}>{o.nombre}</div>
+                ))
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // ── SERVICIOS OBJETIVO ────────────────────────────────────────
 function ServiciosObjetivo({ guardias, objetivos }: any) {
@@ -6774,12 +6984,14 @@ export default function AppPage() {
   const [checklistPlantillas, setChecklistPlantillas] = useState<ChecklistPlantillaAdmin[]>([])
   const [checklistItems, setChecklistItems] = useState<ChecklistItemAdmin[]>([])
   const [supervisionesAdmin, setSupervisionesAdmin] = useState<SupervisionAdmin[]>([])
+  const [zonasOperativas, setZonasOperativas] = useState<any[]>([])
+  const [supervisorZonas, setSupervisorZonas] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [filtros, setFiltros] = useState<Record<string, any>>({})
 
   const cargarDatosAdmin = useCallback(async () => {
     setLoading(true)
-    const [g, o, t, r, n, cp, ci, s] = await Promise.all([
+    const [g, o, t, r, n, cp, ci, s, z, sz] = await Promise.all([
       supabase.from('usuarios').select('*').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
       supabase.from('turnos').select('*').order('fecha', { ascending: false }),
@@ -6792,6 +7004,8 @@ export default function AppPage() {
         .select('*, objetivo:objetivos(nombre), supervisor:usuarios(nombre, apellido), respuestas:supervision_respuestas(resultado), fotos:supervision_fotos(id, storage_path)')
         .order('created_at', { ascending: false })
         .limit(500),
+      supabase.from('zonas_operativas').select('*').order('nombre'),
+      supabase.from('supervisor_zonas').select('*'),
     ])
     if (g.data) setGuardias(g.data)
     if (o.data) setObjetivos(o.data)
@@ -6801,6 +7015,8 @@ export default function AppPage() {
     if (cp.data) setChecklistPlantillas(cp.data)
     if (ci.data) setChecklistItems(ci.data)
     if (s.data) setSupervisionesAdmin(s.data)
+    if (z.data) setZonasOperativas(z.data)
+    if (sz.data) setSupervisorZonas(sz.data)
     setLoading(false)
   }, [])
 
@@ -6891,6 +7107,7 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'servicios_objetivo', icon:'📅', label:'Programación' },
       { id:'checklists', icon:'☑️', label:'Checklists' },
       { id:'turnos_base', icon:'⏰', label:'Turnos Base' },
+      { id:'zonas_operativas', icon:'🗺️', label:'Zonas operativas' },
     ]},
   ]
 
@@ -6940,10 +7157,11 @@ const esGuardia = esRolGuardia(user.rol)
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} />}
-              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} />}
+              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
+              {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} user={user} />}

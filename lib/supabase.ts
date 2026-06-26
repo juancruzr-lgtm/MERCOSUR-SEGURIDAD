@@ -46,6 +46,7 @@ export interface Objetivo {
   estado: Estado
   checklist_plantilla_id?: string | null
   frecuencia_supervision_horas?: number | null
+  zona_id?: string | null
   created_at: string
 }
 
