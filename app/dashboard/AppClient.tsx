@@ -2240,6 +2240,10 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   const [busqueda, setBusqueda] = useState('')
   const [estadoFiltro, setEstadoFiltro] = useState('activo')
   const [filtroKpi, setFiltroKpi] = useState('')
+  const [confirmarBorrado, setConfirmarBorrado] = useState<any>(null)
+  const [verificandoBorrado, setVerificandoBorrado] = useState(false)
+  const [borrando, setBorrando] = useState(false)
+  const [bloqueoBorrado, setBloqueoBorrado] = useState<string | null>(null)
 
   const formVacio = {
     nombre: '',
@@ -2332,6 +2336,46 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       .select()
       .single()
     if (data) setObjetivos((prev: any[]) => prev.map(x => x.id === o.id ? data : x))
+  }
+
+  const abrirConfirmarBorrado = async (o: any) => {
+    setBloqueoBorrado(null)
+    setConfirmarBorrado(o)
+    setVerificandoBorrado(true)
+
+    const [turnosRel, supervisionesRel, novedadesRel, serviciosRel] = await Promise.all([
+      supabase.from('turnos').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
+      supabase.from('supervisiones').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
+      supabase.from('novedades').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
+      supabase.from('servicios_objetivo').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
+    ])
+
+    const motivos: string[] = []
+    if ((turnosRel.count || 0) > 0) motivos.push(`${turnosRel.count} turno(s)`)
+    if ((supervisionesRel.count || 0) > 0) motivos.push(`${supervisionesRel.count} supervisión(es)`)
+    if ((novedadesRel.count || 0) > 0) motivos.push(`${novedadesRel.count} novedad(es)`)
+    if ((serviciosRel.count || 0) > 0) motivos.push(`${serviciosRel.count} servicio(s) programado(s)`)
+
+    if (motivos.length > 0) {
+      setBloqueoBorrado(`Este objetivo tiene historial (${motivos.join(', ')}) y no se puede borrar definitivamente. Solo se permite la baja lógica.`)
+    }
+
+    setVerificandoBorrado(false)
+  }
+
+  const confirmarBorradoFisico = async () => {
+    if (!confirmarBorrado || bloqueoBorrado) return
+    setBorrando(true)
+    const { error } = await supabase.from('objetivos').delete().eq('id', confirmarBorrado.id)
+    setBorrando(false)
+
+    if (error) {
+      setBloqueoBorrado(`No se pudo borrar: ${error.message}`)
+      return
+    }
+
+    setObjetivos((prev: any[]) => prev.filter(x => x.id !== confirmarBorrado.id))
+    setConfirmarBorrado(null)
   }
 
   const filtroTipo = filtroActivo?.tipo || filtroKpi
@@ -2521,7 +2565,13 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
                             }}
                             onClick={() => toggleEstado(o)}
                           >
-                            {o.estado === 'activo' ? '⏸' : '▶'}
+                            {o.estado === 'activo' ? '⏸ Dar de baja' : '▶ Reactivar'}
+                          </button>
+                          <button
+                            style={{ ...S.btn, padding:'6px 12px', fontSize:12, background:'rgba(239,68,68,.1)', color:'#ef4444', border:'1px solid rgba(239,68,68,.3)' }}
+                            onClick={() => abrirConfirmarBorrado(o)}
+                          >
+                            🗑 Borrar definitivamente
                           </button>
                         </div>
                       </td>
@@ -2644,6 +2694,37 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
                 onChange={e => setForm({ ...form, frecuencia_supervision_horas:Number(e.target.value) })}
               />
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {confirmarBorrado && (
+        <Modal title="Borrar objetivo definitivamente" onClose={() => { setConfirmarBorrado(null); setBloqueoBorrado(null) }}>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontWeight:800, marginBottom:8 }}>{confirmarBorrado.nombre}</div>
+            {verificandoBorrado ? (
+              <div style={{ color:'#64748b' }}>Verificando historial relacionado...</div>
+            ) : bloqueoBorrado ? (
+              <div style={{ color:'#f87171', background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, padding:12 }}>
+                {bloqueoBorrado}
+              </div>
+            ) : (
+              <div style={{ color:'#10b981' }}>
+                Este objetivo no tiene historial registrado (sin turnos, supervisiones, novedades ni servicios programados). Se puede borrar definitivamente. Esta acción no se puede deshacer.
+              </div>
+            )}
+          </div>
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => { setConfirmarBorrado(null); setBloqueoBorrado(null) }}>
+              Cancelar
+            </button>
+            <button
+              style={{ ...S.btn, background:'#ef4444', color:'#fff' }}
+              onClick={confirmarBorradoFisico}
+              disabled={verificandoBorrado || Boolean(bloqueoBorrado) || borrando}
+            >
+              {borrando ? 'Borrando...' : 'Borrar definitivamente'}
+            </button>
           </div>
         </Modal>
       )}
