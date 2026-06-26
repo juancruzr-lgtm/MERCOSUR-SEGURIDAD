@@ -3530,6 +3530,37 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
           </div>
         </Modal>
       )}
+
+      {confirmarBorrado && (
+        <Modal title="Borrar objetivo definitivamente" onClose={() => { setConfirmarBorrado(null); setBloqueoBorrado(null) }}>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontWeight:800, marginBottom:8 }}>{confirmarBorrado.nombre}</div>
+            {verificandoBorrado ? (
+              <div style={{ color:'#64748b' }}>Verificando historial relacionado...</div>
+            ) : bloqueoBorrado ? (
+              <div style={{ color:'#f87171', background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, padding:12 }}>
+                {bloqueoBorrado}
+              </div>
+            ) : (
+              <div style={{ color:'#10b981' }}>
+                Este objetivo no tiene historial registrado (sin turnos, supervisiones, novedades ni servicios programados). Se puede borrar definitivamente. Esta acción no se puede deshacer.
+              </div>
+            )}
+          </div>
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => { setConfirmarBorrado(null); setBloqueoBorrado(null) }}>
+              Cancelar
+            </button>
+            <button
+              style={{ ...S.btn, background:'#ef4444', color:'#fff' }}
+              onClick={confirmarBorradoFisico}
+              disabled={verificandoBorrado || Boolean(bloqueoBorrado) || borrando}
+            >
+              {borrando ? 'Borrando...' : 'Borrar definitivamente'}
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
