@@ -5,6 +5,7 @@ import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTr
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
+import { formatFechaHora } from '@/lib/formato'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
@@ -1425,7 +1426,7 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
   })
   const ahora = new Date()
   const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
-  const fechaHora = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'
+  const fechaHora = (fecha?: string | null) => fecha ? formatFechaHora(fecha) : '—'
   const mapasUrl = (supervision: SupervisionAdmin) => `https://www.google.com/maps?q=${supervision.lat},${supervision.lng}`
   const observados = (supervision: SupervisionAdmin) => supervision.respuestas?.filter(r => r.resultado === 'observado').length || 0
   const fotosCount = (supervision: SupervisionAdmin) => supervision.fotos?.length || 0
@@ -3268,7 +3269,7 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
           <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', justifyContent:'flex-end' }}>
             {n.estado === 'pendiente' && <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }} onClick={() => cambiarEstado(n.id, 'revisada')}>Revisada</button>}
             {n.estado === 'revisada' && <button style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }} onClick={() => cambiarEstado(n.id, 'resuelta')}>Resuelta</button>}
-            <span style={{ fontSize:11, color:'#64748b' }}>{new Date(n.created_at).toLocaleString('es-AR')}</span>
+            <span style={{ fontSize:11, color:'#64748b' }}>{formatFechaHora(n.created_at)}</span>
           </div>
         </div>
         <div style={{ fontSize:13, color:'#cbd5e1' }}>{n.descripcion}</div>
@@ -3795,7 +3796,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     }
     const filas = [
       ['Resumen guardias'],
-      [`Generado: ${new Date().toLocaleString('es-AR')}`],
+      [`Generado: ${formatFechaHora(new Date())}`],
       [filtrosReporte()],
       [],
       ['Legajo', 'Guardia', 'Días trabajados', 'Horas reales', 'Horas liquidables', 'En curso', 'Tardanzas', 'Salidas anticipadas'],
@@ -3838,7 +3839,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     }
     const filas = [
       ['Resumen objetivos'],
-      [`Generado: ${new Date().toLocaleString('es-AR')}`],
+      [`Generado: ${formatFechaHora(new Date())}`],
       [filtrosReporte()],
       [],
       ['Objetivo', 'Cliente', 'Turnos con asistencia', 'Horas reales', 'Horas liquidables', 'Turnos en curso', 'Turnos sin fichar', 'Turnos descubiertos'],
@@ -5074,7 +5075,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const hora = (value?: string | null) => value ? value.slice(0, 5) : '--:--'
 
   const fechaHoraTexto = (value?: string | null) => value
-    ? new Date(value).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })
+    ? formatFechaHora(value)
     : '—'
 
   const getRegistrosTurno = (turnoId: string) => registros

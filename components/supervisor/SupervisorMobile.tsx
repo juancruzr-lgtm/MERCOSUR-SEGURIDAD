@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
+import { formatFechaHora } from '@/lib/formato'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
@@ -251,13 +252,7 @@ function fechaDDMMYYYY(fecha?: string | null): string {
 function fechaHoraDDMMYYYY(fecha?: string | null): string {
   if (!fecha) return '—'
 
-  return new Date(fecha).toLocaleString('es-AR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatFechaHora(fecha)
 }
 
 function fechaLocalISO(fecha: Date | string = new Date()): string {
@@ -1735,10 +1730,6 @@ export default function SupervisorMobile({ user }: any) {
     }
 
     const requiereFotoObligatoria = itemsSupervision.some(item => item.foto_obligatoria)
-    if (requiereFotoObligatoria && supervisionFotos.length === 0) {
-      setError('Hay ítems del checklist con foto obligatoria. Agregá al menos una foto antes de guardar.')
-      return
-    }
 
     const respuestasCompletas = itemsSupervision
       .map(item => ({ item, respuesta: supervisionRespuestas[item.id] }))
@@ -1746,15 +1737,14 @@ export default function SupervisorMobile({ user }: any) {
 
     const hayObservado = respuestasCompletas.some(({ respuesta }) => respuesta?.resultado === 'observado')
     const hayCritico = respuestasCompletas.some(({ item, respuesta }) => respuesta?.resultado === 'observado' && item.criticidad === 'alta')
-    const estado: EstadoSupervision = hayCritico
+
+    const estadoPreliminar: EstadoSupervision = hayCritico
       ? 'critico'
       : hayObservado
         ? 'con_observacion'
         : 'ok'
 
     setAsignando('guardar-supervision')
-
-    let supervisionCreadaId: string | null = null
 
     try {
       const { data: supervisionNueva, error: supervisionError } = await supabase
@@ -1766,7 +1756,7 @@ export default function SupervisorMobile({ user }: any) {
           lat: supervisionGps.lat,
           lng: supervisionGps.lng,
           precision_gps: supervisionGps.precision,
-          estado,
+          estado: estadoPreliminar,
           observaciones: supervisionObservaciones.trim() || null,
         })
         .select('*, objetivo:objetivos(nombre)')
@@ -1774,8 +1764,6 @@ export default function SupervisorMobile({ user }: any) {
 
       if (supervisionError) throw supervisionError
       if (!supervisionNueva) throw new Error('No se pudo crear la supervisión.')
-
-      supervisionCreadaId = supervisionNueva.id
 
       if (respuestasCompletas.length > 0) {
         const { error: respuestasError } = await supabase
@@ -1790,40 +1778,53 @@ export default function SupervisorMobile({ user }: any) {
         if (respuestasError) throw respuestasError
       }
 
+      // Las fotos se intentan subir sin bloquear ni revertir la supervisión:
+      // si fallan (por ejemplo, error de RLS/Storage), la supervisión queda
+      // guardada igual y se informa el problema de forma clara.
       const fotosRegistradas: SupervisionFoto[] = []
+      let avisoFotos = ''
 
       for (const [index, foto] of supervisionFotos.entries()) {
-        const path = `${supervisionNueva.id}/${Date.now()}-${index}-${storageFileName(foto.name)}`
-        const { error: fotoError } = await supabase.storage
-          .from('supervision-fotos')
-          .upload(path, foto, { upsert: false })
+        try {
+          const path = `${supervisionNueva.id}/${Date.now()}-${index}-${storageFileName(foto.name)}`
+          const { error: fotoError } = await supabase.storage
+            .from('supervision-fotos')
+            .upload(path, foto, { upsert: false })
 
-        if (fotoError) {
-          throw new Error(`No se pudo subir "${foto.name}" al bucket "supervision-fotos": ${fotoError.message}`)
+          if (fotoError) throw fotoError
+
+          const { data: fotoRegistrada, error: fotosInsertError } = await supabase
+            .from('supervision_fotos')
+            .insert({
+              supervision_id: supervisionNueva.id,
+              storage_path: path,
+            })
+            .select('id, supervision_id, storage_path, created_at')
+            .single()
+
+          if (fotosInsertError) throw fotosInsertError
+
+          if (fotoRegistrada) fotosRegistradas.push(fotoRegistrada as SupervisionFoto)
+        } catch (fotoCatchError) {
+          const fotoMessage = fotoCatchError instanceof Error ? fotoCatchError.message : 'Error desconocido al subir la foto.'
+          avisoFotos = `Supervisión guardada, pero no se pudo subir la foto "${foto.name}". ${fotoMessage}`
         }
-
-        const { data: fotoRegistrada, error: fotosInsertError } = await supabase
-          .from('supervision_fotos')
-          .insert({
-            supervision_id: supervisionNueva.id,
-            storage_path: path,
-          })
-          .select('id, supervision_id, storage_path, created_at')
-          .single()
-
-        if (fotosInsertError) {
-          throw new Error(`La foto "${foto.name}" se subió a Storage, pero no quedó registrada en supervision_fotos: ${fotosInsertError.message}`)
-        }
-
-        if (fotoRegistrada) fotosRegistradas.push(fotoRegistrada as SupervisionFoto)
       }
 
-      if (requiereFotoObligatoria && fotosRegistradas.length === 0) {
-        throw new Error('No quedó registrada ninguna foto obligatoria en supervision_fotos.')
+      const faltaFotoObligatoria = requiereFotoObligatoria && fotosRegistradas.length === 0
+      const estadoFinal: EstadoSupervision = (hayCritico || faltaFotoObligatoria)
+        ? 'critico'
+        : hayObservado
+          ? 'con_observacion'
+          : 'ok'
+
+      if (estadoFinal !== estadoPreliminar) {
+        await supabase.from('supervisiones').update({ estado: estadoFinal }).eq('id', supervisionNueva.id)
       }
 
       const supervisionParaListado = {
         ...supervisionNueva,
+        estado: estadoFinal,
         respuestas: respuestasCompletas.map(({ respuesta }) => ({ resultado: respuesta?.resultado })),
         fotos: fotosRegistradas.map(foto => ({ id: foto.id, storage_path: foto.storage_path })),
       } as Supervision
@@ -1833,11 +1834,17 @@ export default function SupervisorMobile({ user }: any) {
         ...prev.filter(s => s.id !== supervisionNueva.id),
       ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
       resetFormularioSupervision()
-      setMensaje(`✓ Supervisión guardada con estado ${estado}.`)
-    } catch (saveError) {
-      if (supervisionCreadaId) {
-        await supabase.from('supervisiones').delete().eq('id', supervisionCreadaId)
+
+      const avisos: string[] = []
+      if (avisoFotos) avisos.push(avisoFotos)
+      if (faltaFotoObligatoria) avisos.push('Foto obligatoria no adjuntada.')
+
+      if (avisos.length > 0) {
+        setError(avisos.join(' '))
+      } else {
+        setMensaje(`✓ Supervisión guardada con estado ${estadoFinal}.`)
       }
+    } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : 'Error al guardar la supervisión.'
       setError(`No se pudo guardar la supervisión. ${message}`)
     } finally {

@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from 'react'
 import L from 'leaflet'
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet'
+import { formatFechaHora } from '@/lib/formato'
 
 type AuditoriaGps = {
   gpsImpreciso: boolean
@@ -48,7 +49,7 @@ function metrosTexto(valor?: number | string | null) {
 }
 
 function fechaHora(fecha?: string | null) {
-  return fecha ? new Date(fecha).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '-'
+  return fecha ? formatFechaHora(fecha) : '-'
 }
 
 function iniciales(nombre: string) {
