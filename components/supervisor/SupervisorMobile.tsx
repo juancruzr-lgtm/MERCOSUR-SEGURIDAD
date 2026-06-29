@@ -2471,14 +2471,6 @@ export default function SupervisorMobile({ user }: any) {
     )
   }
 
-  const esAdminEnVistaSupervisor = String(user?.rol || '').trim().toLowerCase() === 'admin'
-
-  const volverAAdministracion = () => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('mercosur_admin_mobile_view', 'admin')
-    window.location.reload()
-  }
-
   return (
     <div style={container}>
       <header style={header}>
@@ -2487,16 +2479,9 @@ export default function SupervisorMobile({ user }: any) {
           <div style={muted}>{user?.nombre} {user?.apellido}</div>
         </div>
 
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-          {esAdminEnVistaSupervisor && (
-            <button onClick={volverAAdministracion} style={logoutButton}>
-              ← Volver a Administración
-            </button>
-          )}
-          <button onClick={cerrarSesion} style={logoutButton}>
-            Cerrar sesión
-          </button>
-        </div>
+        <button onClick={cerrarSesion} style={logoutButton}>
+          Cerrar sesión
+        </button>
       </header>
 
       <main style={main}>
@@ -2518,13 +2503,20 @@ export default function SupervisorMobile({ user }: any) {
                 {renderFiltrosFecha()}
 
                 <div style={statsGrid}>
-                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('todos'); setTab('turnos') }}><strong>{resumen.total}</strong><span>Turnos</span></div>
-                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('en turno'); setTab('turnos') }}><strong>{resumen.enTurno}</strong><span>En turno</span></div>
-                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('finalizado'); setTab('turnos') }}><strong>{resumen.finalizados}</strong><span>Finalizados</span></div>
-                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('descubierto'); setTab('turnos') }}><strong>{resumen.descubiertos}</strong><span>Descubiertos</span></div>
+                  <div style={{ ...statCard, borderTop:'3px solid #ef4444' }}><strong style={{ color:'#ef4444' }}>{agendaResumen.vencidas}</strong><span>🔴 Supervisiones vencidas</span></div>
+                  <div style={{ ...statCard, borderTop:'3px solid #f59e0b' }}><strong style={{ color:'#f59e0b' }}>{agendaResumen.proximas}</strong><span>🟠 Próximas a vencer</span></div>
+                  <div style={{ ...statCard, cursor:'pointer', borderTop:'3px solid #f59e0b' }} onClick={() => setTab('alertas')}><strong style={{ color:'#f59e0b' }}>{totalAlertasPendientes}</strong><span>🚨 Alertas pendientes</span></div>
                 </div>
 
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                <div style={{ ...objetivoName, margin:'20px 0 8px' }}>Operación</div>
+                <div style={statsGrid}>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('todos'); setTab('turnos') }}><strong>{resumen.total}</strong><span>Turnos hoy</span></div>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('en turno'); setTab('turnos') }}><strong>{resumen.enTurno}</strong><span>En turno</span></div>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('descubierto'); setTab('turnos') }}><strong>{resumen.descubiertos}</strong><span>Descubiertos</span></div>
+                  <div style={{ ...statCard, borderTop:'3px solid #10b981' }}><strong style={{ color:'#10b981' }}>{agendaResumen.realizadasHoy}</strong><span>Supervisiones realizadas hoy</span></div>
+                </div>
+
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:8 }}>
                   <button style={refreshButton} onClick={() => cargarDatos(filtroFecha)}>Actualizar</button>
                   <button
                     style={{ ...secondaryButton, opacity: activandoPush ? 0.65 : 1 }}
@@ -2544,11 +2536,6 @@ export default function SupervisorMobile({ user }: any) {
                 </div>
 
                 <div style={{ ...objetivoName, margin:'24px 0 8px' }}>Agenda de supervisiones</div>
-                <div style={statsGrid}>
-                  <div style={{ ...statCard, borderTop:'3px solid #ef4444' }}><strong style={{ color:'#ef4444' }}>{agendaResumen.vencidas}</strong><span>Vencidas</span></div>
-                  <div style={{ ...statCard, borderTop:'3px solid #f59e0b' }}><strong style={{ color:'#f59e0b' }}>{agendaResumen.proximas}</strong><span>Próximas a vencer</span></div>
-                  <div style={{ ...statCard, borderTop:'3px solid #10b981' }}><strong style={{ color:'#10b981' }}>{agendaResumen.realizadasHoy}</strong><span>Realizadas hoy</span></div>
-                </div>
 
                 {zonasOperativas.length > 0 && (
                   <select

@@ -464,12 +464,23 @@ function NavItem({ id, icon, label, active, badge, onClick }: any) {
 
 function AdminViewSwitcher({ currentView, onChange, compact = false }: { currentView: AdminMobileView, onChange: (view: AdminMobileView) => void, compact?: boolean }) {
   const opciones: { id: AdminMobileView, label: string }[] = [
-    { id: 'admin', label: 'Vista Admin' },
-    { id: 'supervisor', label: 'Vista Supervisor' },
+    { id: 'admin', label: '🖥 Vista Administración' },
+    { id: 'supervisor', label: '📱 Vista Supervisor' },
   ]
 
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, width:'100%' }}>
+    <div
+      style={{
+        display:'grid',
+        gridTemplateColumns:'1fr 1fr',
+        gap:4,
+        width:'100%',
+        background:alpha(brandColors.surface2, 0.7),
+        border:`1px solid ${brandColors.border}`,
+        borderRadius:10,
+        padding:4,
+      }}
+    >
       {opciones.map(opcion => {
         const activo = currentView === opcion.id
 
@@ -481,11 +492,12 @@ function AdminViewSwitcher({ currentView, onChange, compact = false }: { current
             style={{
               ...S.btn,
               justifyContent:'center',
-              padding: compact ? '7px 8px' : '9px 12px',
+              padding: compact ? '7px 8px' : '8px 12px',
               fontSize: compact ? 11 : 12,
-              background: activo ? brandColors.yellow : alpha(brandColors.surface2, 0.92),
-              color: activo ? brandColors.black : brandColors.text,
-              border:`1px solid ${activo ? brandColors.yellow : brandColors.border}`,
+              fontWeight: activo ? 800 : 600,
+              background: activo ? alpha(brandColors.yellow, 0.16) : 'transparent',
+              color: activo ? brandColors.yellow : brandColors.muted,
+              border: activo ? `1px solid ${alpha(brandColors.yellow, 0.5)}` : '1px solid transparent',
               whiteSpace:'nowrap',
             }}
           >
