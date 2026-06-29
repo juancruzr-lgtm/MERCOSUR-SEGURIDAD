@@ -3595,11 +3595,126 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     </div>
   )
 }
-function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filtroActivo, limpiarFiltro }: any) {
+function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filtroActivo, limpiarFiltro, user, esAdmin }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
   const [loading, setLoading] = useState(false)
   const hoy = new Date().toLocaleDateString('sv-SE')
+
+  const [registroEditando, setRegistroEditando] = useState<RegistroAsistencia | null>(null)
+  const [formEdicion, setFormEdicion] = useState({
+    hora_entrada_real: '',
+    hora_salida_real: '',
+    tipo_registro: 'fichaje_gps' as RegistroAsistencia['tipo_registro'],
+    observacion: '',
+    comentario: '',
+  })
+  const [errorEdicion, setErrorEdicion] = useState('')
+  const [loadingEdicion, setLoadingEdicion] = useState(false)
+
+  const abrirEdicion = (registro: RegistroAsistencia) => {
+    setRegistroEditando(registro)
+    setFormEdicion({
+      hora_entrada_real: registro.hora_entrada_real || '',
+      hora_salida_real: registro.hora_salida_real || '',
+      tipo_registro: registro.tipo_registro || 'fichaje_gps',
+      observacion: registro.observacion || '',
+      comentario: '',
+    })
+    setErrorEdicion('')
+  }
+
+  const cerrarEdicion = () => {
+    setRegistroEditando(null)
+    setErrorEdicion('')
+  }
+
+  const guardarEdicion = async () => {
+    if (!registroEditando) return
+    if (!user?.id) {
+      setErrorEdicion('Sesión de administrador no disponible.')
+      return
+    }
+
+    setErrorEdicion('')
+
+    const horaEntradaNueva = formEdicion.hora_entrada_real || null
+    const horaSalidaNueva = formEdicion.hora_salida_real || null
+    const alertaEntradaNueva = horaEntradaNueva
+      ? calcAlertaEntrada(turnos.find((t: Turno) => t.id === registroEditando.turno_id)?.hora_inicio || '', horaEntradaNueva)
+      : null
+    const alertaSalidaNueva = horaSalidaNueva
+      ? calcAlertaSalida(turnos.find((t: Turno) => t.id === registroEditando.turno_id)?.hora_fin || '', horaSalidaNueva)
+      : null
+    const horasNuevas = horaEntradaNueva && horaSalidaNueva
+      ? calcHorasTrabajadas(horaEntradaNueva, horaSalidaNueva)
+      : 0
+
+    const cambios: { campo: string; valor_anterior: string | null; valor_nuevo: string | null }[] = []
+    if ((registroEditando.hora_entrada_real || null) !== horaEntradaNueva) {
+      cambios.push({ campo: 'hora_entrada_real', valor_anterior: registroEditando.hora_entrada_real || null, valor_nuevo: horaEntradaNueva })
+    }
+    if ((registroEditando.hora_salida_real || null) !== horaSalidaNueva) {
+      cambios.push({ campo: 'hora_salida_real', valor_anterior: registroEditando.hora_salida_real || null, valor_nuevo: horaSalidaNueva })
+    }
+    if ((registroEditando.tipo_registro || 'fichaje_gps') !== formEdicion.tipo_registro) {
+      cambios.push({ campo: 'tipo_registro', valor_anterior: registroEditando.tipo_registro || 'fichaje_gps', valor_nuevo: formEdicion.tipo_registro || null })
+    }
+    if ((registroEditando.observacion || '') !== formEdicion.observacion) {
+      cambios.push({ campo: 'observacion', valor_anterior: registroEditando.observacion || null, valor_nuevo: formEdicion.observacion || null })
+    }
+
+    if (cambios.length === 0) {
+      cerrarEdicion()
+      return
+    }
+
+    setLoadingEdicion(true)
+
+    const payload = {
+      hora_entrada_real: horaEntradaNueva,
+      hora_salida_real: horaSalidaNueva,
+      tipo_registro: formEdicion.tipo_registro,
+      observacion: formEdicion.observacion,
+      horas_trabajadas: horasNuevas,
+      alerta_entrada: alertaEntradaNueva,
+      alerta_salida: alertaSalidaNueva,
+    }
+
+    const { error: updateError } = await supabase
+      .from('registros_asistencia')
+      .update(payload)
+      .eq('id', registroEditando.id)
+
+    if (updateError) {
+      setErrorEdicion(updateError.message)
+      setLoadingEdicion(false)
+      return
+    }
+
+    const comentario = formEdicion.comentario.trim() || null
+    const { error: auditoriaError } = await supabase
+      .from('registros_asistencia_auditoria')
+      .insert(cambios.map(cambio => ({
+        registro_id: registroEditando.id,
+        turno_id: registroEditando.turno_id,
+        modificado_por: user.id,
+        campo: cambio.campo,
+        valor_anterior: cambio.valor_anterior,
+        valor_nuevo: cambio.valor_nuevo,
+        comentario,
+      })))
+
+    if (auditoriaError) {
+      setErrorEdicion(`Asistencia actualizada, pero no se pudo guardar la auditoría: ${auditoriaError.message}`)
+      setLoadingEdicion(false)
+      return
+    }
+
+    setRegistros((prev: RegistroAsistencia[]) => prev.map(r => r.id === registroEditando.id ? { ...r, ...payload } as RegistroAsistencia : r))
+    setLoadingEdicion(false)
+    cerrarEdicion()
+  }
   const registrosFiltrados = registros.filter((r: RegistroAsistencia) => {
     const turno = turnos.find((t: Turno) => t.id === r.turno_id)
     if (filtroActivo?.tipo === 'hoy' && turno?.fecha !== hoy) return false
@@ -3645,7 +3760,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
       )}
       <div style={{ ...S.card, overflowX:'auto' }}>
         <table style={S.table}>
-          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>GPS Ingreso</th><th style={S.th}>GPS Egreso</th><th style={S.th}>Precisión</th><th style={S.th}>Alertas</th></tr></thead>
+          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>GPS Ingreso</th><th style={S.th}>GPS Egreso</th><th style={S.th}>Precisión</th><th style={S.th}>Alertas</th>{esAdmin && <th style={S.th}></th>}</tr></thead>
           <tbody>
             {registrosOrdenados.map((r: RegistroAsistencia) => {
               const g = guardias.find((x: Usuario) => x.id === r.guardia_id)
@@ -3679,6 +3794,16 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
                       {!r.alerta_entrada && !r.alerta_salida && r.gps_ingreso_estado !== 'fuera_radio' && <Badge type="cubierto">✓ Ok</Badge>}
                     </div>
                   </td>
+                  {esAdmin && (
+                    <td style={S.td}>
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                        onClick={() => abrirEdicion(r)}
+                      >
+                        Editar
+                      </button>
+                    </td>
+                  )}
                 </tr>
               )
             })}
@@ -3703,6 +3828,91 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
             <div style={{ marginBottom:16 }}><label style={S.label}>Hora de salida</label><input type="time" style={S.input} value={form.hora_salida_real} onChange={e => setForm({...form, hora_salida_real:e.target.value})} /></div>
           </div>
           <div style={{ marginBottom:16 }}><label style={S.label}>Observación</label><textarea style={{ ...S.input, resize:'vertical', minHeight:80 }} value={form.observacion} onChange={e => setForm({...form, observacion:e.target.value})} /></div>
+        </Modal>
+      )}
+
+      {registroEditando && (
+        <Modal
+          title="Editar Asistencia"
+          onClose={cerrarEdicion}
+          footer={
+            <>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary }}
+                onClick={cerrarEdicion}
+              >
+                Cancelar
+              </button>
+
+              <button
+                style={{ ...S.btn, ...S.btnPrimary }}
+                onClick={guardarEdicion}
+                disabled={loadingEdicion}
+              >
+                {loadingEdicion ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+            </>
+          }
+        >
+          {errorEdicion && (
+            <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
+              {errorEdicion}
+            </div>
+          )}
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora de entrada</label>
+              <input
+                type="time"
+                style={S.input}
+                value={formEdicion.hora_entrada_real}
+                onChange={e => setFormEdicion({ ...formEdicion, hora_entrada_real:e.target.value })}
+              />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora de salida</label>
+              <input
+                type="time"
+                style={S.input}
+                value={formEdicion.hora_salida_real}
+                onChange={e => setFormEdicion({ ...formEdicion, hora_salida_real:e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Tipo de registro</label>
+            <select
+              style={S.select}
+              value={formEdicion.tipo_registro}
+              onChange={e => setFormEdicion({ ...formEdicion, tipo_registro:e.target.value as RegistroAsistencia['tipo_registro'] })}
+            >
+              <option value="fichaje_gps">Fichaje GPS</option>
+              <option value="presente_manual">Presente manual</option>
+              <option value="ausencia">Ausencia</option>
+              <option value="reemplazo">Reemplazo</option>
+            </select>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Observación</label>
+            <textarea
+              style={{ ...S.input, minHeight:80, resize:'vertical' }}
+              value={formEdicion.observacion}
+              onChange={e => setFormEdicion({ ...formEdicion, observacion:e.target.value })}
+            />
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Comentario (opcional)</label>
+            <textarea
+              style={{ ...S.input, minHeight:80, resize:'vertical' }}
+              value={formEdicion.comentario}
+              onChange={e => setFormEdicion({ ...formEdicion, comentario:e.target.value })}
+            />
+          </div>
         </Modal>
       )}
     </div>
@@ -7145,7 +7355,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
-              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} />}
+              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}

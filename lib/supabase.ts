@@ -89,6 +89,7 @@ export interface RegistroAsistencia {
   uniforme_estado?: 'ok' | 'advertencia' | 'alerta'
   uniforme_puntaje?: number
   observacion?: string
+  tipo_registro?: 'fichaje_gps' | 'presente_manual' | 'ausencia' | 'reemplazo'
   created_at: string
   // joins
   turno?: Turno
