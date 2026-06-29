@@ -411,6 +411,8 @@ function esRolGuardia(rol?: string | null): boolean {
   return rol === 'guardia' || rol === 'vigilador'
 }
 
+const esRolAdmin = (rol?: string | null) => String(rol || '').trim().toLowerCase() === 'admin'
+
 function fechaRegistroAsistencia(registro: RegistroAsistencia | any, turno?: Turno | any): string {
   return turno?.fecha || registro.created_at?.slice(0, 10) || ''
 }
@@ -1707,7 +1709,7 @@ function SupervisionesAdmin({
   const supervisoresRanking = (guardias || [])
     .filter((usuario: Usuario) =>
       usuario.estado === 'activo' &&
-      (usuario.rol === 'supervisor' || (usuario.rol === 'admin' && supervisoresAsignadosIds.has(usuario.id)))
+      (usuario.rol === 'supervisor' || (esRolAdmin(usuario.rol) && supervisoresAsignadosIds.has(usuario.id)))
     )
     .sort((a: Usuario, b: Usuario) => `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`))
   const objetivosActivosRanking = (objetivos || []).filter((objetivo: Objetivo) => objetivo.estado === 'activo')
@@ -6710,7 +6712,7 @@ export default function AppPage() {
   }, [])
 
   const cargarSesionPorRol = useCallback(async (perfil: Usuario) => {
-    if (perfil.rol === 'admin') {
+    if (esRolAdmin(perfil.rol)) {
       const pantallaChica = detectarPantallaChicaAdmin()
       const preferencia = leerPreferenciaVistaAdmin()
       const vistaInicial: AdminMobileView = preferencia === 'supervisor'
@@ -6736,7 +6738,7 @@ export default function AppPage() {
   }, [cargarDatosAdmin])
 
   const seleccionarVistaAdmin = useCallback((vista: AdminMobileView) => {
-    if (user?.rol !== 'admin') return
+    if (!esRolAdmin(user?.rol)) return
 
     guardarPreferenciaVistaAdmin(vista)
     setAdminMobileView(vista)
@@ -6812,7 +6814,7 @@ if (user.rol === 'supervisor') {
 
 const adminShellPaddingTop = esPantallaChicaAdmin ? 106 : 76
 
-if (user.rol === 'admin' && adminMobileView === 'supervisor') {
+if (esRolAdmin(user.rol) && adminMobileView === 'supervisor') {
   return (
     <div style={{ minHeight:'100vh', background:'#0a0e1a', paddingTop:adminShellPaddingTop }}>
       <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />
@@ -6858,8 +6860,8 @@ const esGuardia = esRolGuardia(user.rol)
 
   return (
     <>
-      {user.rol === 'admin' && <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />}
-      <div style={{ ...S.app, paddingTop:user.rol === 'admin' ? adminShellPaddingTop : 0 }}>
+      {esRolAdmin(user.rol) && <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />}
+      <div style={{ ...S.app, paddingTop:esRolAdmin(user.rol) ? adminShellPaddingTop : 0 }}>
       <div style={S.sidebar}>
         <div style={S.sidebarLogo}>
           <div style={{ display:'flex', alignItems:'center', gap:12 }}>
