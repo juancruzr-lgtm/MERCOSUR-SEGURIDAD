@@ -73,6 +73,13 @@ type SupervisionAdmin = {
   fotos?: Pick<SupervisionFotoAdmin, 'id' | 'storage_path'>[]
 }
 
+type SupervisionRankingAdmin = Pick<SupervisionAdmin, 'id' | 'objetivo_id' | 'supervisor_id' | 'estado' | 'created_at'>
+
+type UltimaSupervisionObjetivoAdmin = {
+  objetivo_id: string
+  created_at: string
+}
+
 type SupervisionRespuestaAdmin = {
   id: string
   supervision_id: string
@@ -409,6 +416,33 @@ function ordenRegistroAsistencia(registro: RegistroAsistencia | any, turno?: Tur
   const timestamp = fecha ? new Date(`${fecha}T${hora}`).getTime() : new Date(registro.created_at || 0).getTime()
 
   return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function minutosDesdeHora(hora?: string | null): number | null {
+  if (!hora) return null
+
+  const [hh, mm] = hora.slice(0, 5).split(':').map(Number)
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null
+
+  return hh * 60 + mm
+}
+
+function horasProgramadasTurno(turno: Pick<Turno, 'hora_inicio' | 'hora_fin'>): number {
+  const inicio = minutosDesdeHora(turno.hora_inicio)
+  let fin = minutosDesdeHora(turno.hora_fin)
+
+  if (inicio === null || fin === null) return 0
+  if (fin <= inicio) fin += 24 * 60
+
+  return Math.max(0, fin - inicio) / 60
+}
+
+function inicioMesLocalISO(fecha = new Date()): string {
+  return new Date(fecha.getFullYear(), fecha.getMonth(), 1).toISOString()
+}
+
+function inicioMesSiguienteLocalISO(fecha = new Date()): string {
+  return new Date(fecha.getFullYear(), fecha.getMonth() + 1, 1).toISOString()
 }
 
 function NavItem({ id, icon, label, active, badge, onClick }: any) {
@@ -1463,8 +1497,20 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
   )
 }
 
-function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems = [] }: any) {
+function SupervisionesAdmin({
+  supervisiones,
+  objetivos,
+  guardias,
+  checklistItems = [],
+  turnos = [],
+  zonasOperativas = [],
+  supervisorZonas = [],
+  novedades = [],
+  supervisionesMesOperativas = [],
+  ultimasSupervisionesObjetivos = [],
+}: any) {
   const hoy = new Date().toLocaleDateString('sv-SE')
+  const mesActual = hoy.slice(0, 7)
   const [detalleSupervision, setDetalleSupervision] = useState<SupervisionAdmin | null>(null)
   const [detalleRespuestas, setDetalleRespuestas] = useState<SupervisionRespuestaAdmin[]>([])
   const [detalleFotos, setDetalleFotos] = useState<SupervisionFotoAdmin[]>([])
@@ -1637,6 +1683,85 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
 
   const itemsDetalle = Array.from(itemsDetalleMap.values()).sort((a, b) => (a.orden || 0) - (b.orden || 0))
   const auditoriaDetalleAdmin = detalleSupervision ? auditoriaMapa(detalleSupervision) : null
+  const zonasPorId = new Map((zonasOperativas || []).map((zona: any) => [zona.id, zona]))
+  const supervisoresAsignadosIds = new Set((supervisorZonas || []).map((asignacion: any) => asignacion.supervisor_id).filter(Boolean))
+  const supervisoresRanking = (guardias || [])
+    .filter((usuario: Usuario) =>
+      usuario.estado === 'activo' &&
+      (usuario.rol === 'supervisor' || (usuario.rol === 'admin' && supervisoresAsignadosIds.has(usuario.id)))
+    )
+    .sort((a: Usuario, b: Usuario) => `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`))
+  const objetivosActivosRanking = (objetivos || []).filter((objetivo: Objetivo) => objetivo.estado === 'activo')
+  const objetivosActivosSinZona = objetivosActivosRanking.filter((objetivo: Objetivo) => !objetivo.zona_id)
+  const turnosMesRanking = (turnos || []).filter((turno: Turno) => turno.fecha?.slice(0, 7) === mesActual)
+  const novedadesMesRanking = (novedades || []).filter((novedad: Novedad) => novedad.created_at?.slice(0, 7) === mesActual)
+  const supervisionesMesRanking = ((supervisionesMesOperativas || []).length > 0 ? supervisionesMesOperativas : supervisiones)
+    .filter((supervision: SupervisionRankingAdmin) => supervision.created_at?.slice(0, 7) === mesActual)
+  const fuenteUltimasRanking = (ultimasSupervisionesObjetivos || []).length > 0 ? ultimasSupervisionesObjetivos : supervisiones
+  const ultimaSupervisionRankingPorObjetivo = new Map<string, UltimaSupervisionObjetivoAdmin>()
+
+  ;[...fuenteUltimasRanking]
+    .sort((a: UltimaSupervisionObjetivoAdmin, b: UltimaSupervisionObjetivoAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .forEach((supervision: UltimaSupervisionObjetivoAdmin) => {
+      if (supervision.objetivo_id && !ultimaSupervisionRankingPorObjetivo.has(supervision.objetivo_id)) {
+        ultimaSupervisionRankingPorObjetivo.set(supervision.objetivo_id, supervision)
+      }
+    })
+
+  const objetivoVencidoRanking = (objetivo: Objetivo) => {
+    const ultima = ultimaSupervisionRankingPorObjetivo.get(objetivo.id)
+    if (!ultima) return true
+
+    const frecuenciaMs = (objetivo.frecuencia_supervision_horas || 24) * 60 * 60 * 1000
+    return ahora.getTime() - new Date(ultima.created_at).getTime() > frecuenciaMs
+  }
+
+  const usuarioActivoGuardia = (id?: string | null) => {
+    if (!id) return null
+    const usuario = (guardias || []).find((guardia: Usuario) => guardia.id === id)
+    return usuario && usuario.estado === 'activo' && esRolGuardia(usuario.rol) ? usuario : null
+  }
+
+  const rankingSupervisores = supervisoresRanking.map((supervisor: Usuario) => {
+    const asignaciones = (supervisorZonas || []).filter((asignacion: any) => asignacion.supervisor_id === supervisor.id)
+    const zonaIds = new Set(asignaciones.map((asignacion: any) => asignacion.zona_id).filter(Boolean))
+    const zonas = Array.from(zonaIds).map((zonaId: any) => zonasPorId.get(zonaId)).filter(Boolean)
+    const objetivosAsignados = objetivosActivosRanking.filter((objetivo: Objetivo) => objetivo.zona_id && zonaIds.has(objetivo.zona_id))
+    const objetivoIds = new Set(objetivosAsignados.map((objetivo: Objetivo) => objetivo.id))
+    const turnosObjetivosMes = turnosMesRanking.filter((turno: Turno) => objetivoIds.has(turno.objetivo_id))
+    const vigiladoresIds = new Set<string>()
+
+    turnosObjetivosMes.forEach((turno: Turno) => {
+      ;[turno.guardia_id, (turno as any).guardia_real_id, (turno as any).guardia_original_id].forEach(id => {
+        const usuario = usuarioActivoGuardia(id)
+        if (usuario) vigiladoresIds.add(usuario.id)
+      })
+    })
+
+    const novedadesObjetivosMes = novedadesMesRanking.filter((novedad: Novedad) => objetivoIds.has(novedad.objetivo_id))
+
+    return {
+      supervisor,
+      zonas,
+      zonasSinResolver: asignaciones.length - zonas.length,
+      objetivos: objetivosAsignados.length,
+      vigiladores: vigiladoresIds.size,
+      horasMes: turnosObjetivosMes.reduce((total: number, turno: Turno) => total + horasProgramadasTurno(turno), 0),
+      turnosMes: turnosObjetivosMes.length,
+      supervisionesMes: supervisionesMesRanking.filter((supervision: SupervisionRankingAdmin) =>
+        supervision.supervisor_id === supervisor.id && objetivoIds.has(supervision.objetivo_id)
+      ).length,
+      vencidas: objetivosAsignados.filter(objetivoVencidoRanking).length,
+      alertas: novedadesObjetivosMes.filter((novedad: Novedad) => novedad.prioridad === 'urgente' || novedad.estado !== 'resuelta').length,
+      resueltas: novedadesObjetivosMes.filter((novedad: Novedad) => novedad.estado === 'resuelta').length,
+    }
+  }).sort((a: any, b: any) =>
+    b.objetivos - a.objetivos ||
+    b.horasMes - a.horasMes ||
+    b.turnosMes - a.turnosMes ||
+    nombreSupervisor(a.supervisor.id).localeCompare(nombreSupervisor(b.supervisor.id))
+  )
+  const horasRankingTexto = (horas: number) => `${horas.toLocaleString('es-AR', { maximumFractionDigits: 1 })} h`
 
   const abrirDetalle = async (supervision: SupervisionAdmin) => {
     setDetalleSupervision(supervision)
@@ -1840,6 +1965,73 @@ function SupervisionesAdmin({ supervisiones, objetivos, guardias, checklistItems
         </div>
       ) : (
         <>
+      <div style={S.card}>
+        <div style={{ display:'flex', flexWrap:'wrap', justifyContent:'space-between', gap:12, alignItems:'flex-start', marginBottom:14 }}>
+          <div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800 }}>Ranking operativo de supervisores</div>
+            <div style={{ color:'#64748b', fontSize:13 }}>Mes actual {mesActual}. Horas programadas, sin costos ni facturación.</div>
+          </div>
+          <Badge type="activo">{rankingSupervisores.length} supervisor(es)</Badge>
+        </div>
+
+        {objetivosActivosSinZona.length > 0 && (
+          <div style={{ background:'rgba(245,158,11,.1)', border:'1px solid rgba(245,158,11,.25)', color:'#fbbf24', borderRadius:8, padding:10, fontSize:12, marginBottom:12 }}>
+            {objetivosActivosSinZona.length} objetivo(s) activo(s) sin zona quedan excluidos del ranking.
+          </div>
+        )}
+
+        {rankingSupervisores.length === 0 ? (
+          <div style={{ color:'#64748b', fontSize:13 }}>No hay supervisores activos con zonas asignadas.</div>
+        ) : (
+          <div style={{ overflowX:'auto' }}>
+            <table style={S.table}>
+              <thead>
+                <tr>
+                  <th style={S.th}>Supervisor</th>
+                  <th style={S.th}>Zonas</th>
+                  <th style={S.th}>Objetivos</th>
+                  <th style={S.th}>Vigiladores</th>
+                  <th style={S.th}>Horas mes</th>
+                  <th style={S.th}>Turnos mes</th>
+                  <th style={S.th}>Supervisiones mes</th>
+                  <th style={S.th}>Vencidas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rankingSupervisores.map((item: any) => (
+                  <tr key={item.supervisor.id}>
+                    <td style={S.td}>
+                      <strong>{nombreSupervisor(item.supervisor.id)}</strong>
+                      {(item.alertas > 0 || item.resueltas > 0) && (
+                        <div style={{ color:'#94a3b8', fontSize:12, marginTop:3 }}>
+                          Alertas {item.alertas} · resueltas {item.resueltas}
+                        </div>
+                      )}
+                    </td>
+                    <td style={S.td}>
+                      <div style={{ fontWeight:800 }}>{item.zonas.length}</div>
+                      <div style={{ color:'#94a3b8', fontSize:12, maxWidth:220 }}>
+                        {item.zonas.length > 0
+                          ? item.zonas.map((zona: any) => zona.nombre).join(', ')
+                          : item.zonasSinResolver > 0 ? 'Zona no encontrada' : 'Sin zonas'}
+                      </div>
+                    </td>
+                    <td style={S.td}>{item.objetivos}</td>
+                    <td style={S.td}>{item.vigiladores}</td>
+                    <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:800 }}>{horasRankingTexto(item.horasMes)}</td>
+                    <td style={S.td}>{item.turnosMes}</td>
+                    <td style={S.td}>{item.supervisionesMes}</td>
+                    <td style={S.td}>
+                      <Badge type={item.vencidas > 0 ? 'advertencia' : 'ok'}>{item.vencidas}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <div style={S.statGrid}>
         <StatCard label="Supervisiones hoy" value={supervisionesHoy.length} sub="Registros propios de la fecha local" color={semanticColors.info} />
         <StatCard label="Con observación" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length} sub="Observadas hoy" color={semanticColors.warning} />
@@ -6440,6 +6632,8 @@ export default function AppPage() {
   const [checklistPlantillas, setChecklistPlantillas] = useState<ChecklistPlantillaAdmin[]>([])
   const [checklistItems, setChecklistItems] = useState<ChecklistItemAdmin[]>([])
   const [supervisionesAdmin, setSupervisionesAdmin] = useState<SupervisionAdmin[]>([])
+  const [supervisionesMesAdmin, setSupervisionesMesAdmin] = useState<SupervisionRankingAdmin[]>([])
+  const [ultimasSupervisionesObjetivosAdmin, setUltimasSupervisionesObjetivosAdmin] = useState<UltimaSupervisionObjetivoAdmin[]>([])
   const [zonasOperativas, setZonasOperativas] = useState<any[]>([])
   const [supervisorZonas, setSupervisorZonas] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -6450,7 +6644,10 @@ export default function AppPage() {
 
   const cargarDatosAdmin = useCallback(async () => {
     setLoading(true)
-    const [g, o, t, r, n, cp, ci, s, z, sz] = await Promise.all([
+    const ahora = new Date()
+    const inicioMes = inicioMesLocalISO(ahora)
+    const inicioMesSiguiente = inicioMesSiguienteLocalISO(ahora)
+    const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
       supabase.from('usuarios').select('*').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
       supabase.from('turnos').select('*').order('fecha', { ascending: false }),
@@ -6463,6 +6660,17 @@ export default function AppPage() {
         .select('*, objetivo:objetivos(nombre), supervisor:usuarios(nombre, apellido), respuestas:supervision_respuestas(resultado), fotos:supervision_fotos(id, storage_path)')
         .order('created_at', { ascending: false })
         .limit(500),
+      supabase
+        .from('supervisiones')
+        .select('id, objetivo_id, supervisor_id, estado, created_at')
+        .gte('created_at', inicioMes)
+        .lt('created_at', inicioMesSiguiente)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('supervisiones')
+        .select('objetivo_id, created_at')
+        .order('created_at', { ascending: false })
+        .limit(5000),
       supabase.from('zonas_operativas').select('*').order('nombre'),
       supabase.from('supervisor_zonas').select('*'),
     ])
@@ -6474,6 +6682,8 @@ export default function AppPage() {
     if (cp.data) setChecklistPlantillas(cp.data)
     if (ci.data) setChecklistItems(ci.data)
     if (s.data) setSupervisionesAdmin(s.data)
+    if (sm.data) setSupervisionesMesAdmin(sm.data as SupervisionRankingAdmin[])
+    if (su.data) setUltimasSupervisionesObjetivosAdmin(su.data as UltimaSupervisionObjetivoAdmin[])
     if (z.data) setZonasOperativas(z.data)
     if (sz.data) setSupervisorZonas(sz.data)
     setAdminDataLoaded(true)
@@ -6686,7 +6896,20 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} user={user} />}
-              {page === 'supervisiones' && <SupervisionesAdmin supervisiones={supervisionesAdmin} objetivos={objetivos} guardias={guardias} checklistItems={checklistItems} />}
+              {page === 'supervisiones' && (
+                <SupervisionesAdmin
+                  supervisiones={supervisionesAdmin}
+                  objetivos={objetivos}
+                  guardias={guardias}
+                  checklistItems={checklistItems}
+                  turnos={turnos}
+                  zonasOperativas={zonasOperativas}
+                  supervisorZonas={supervisorZonas}
+                  novedades={novedades}
+                  supervisionesMesOperativas={supervisionesMesAdmin}
+                  ultimasSupervisionesObjetivos={ultimasSupervisionesObjetivosAdmin}
+                />
+              )}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
               {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
