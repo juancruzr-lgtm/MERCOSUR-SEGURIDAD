@@ -119,7 +119,12 @@ const GPS_PRECISION_MAX_METROS = 100
 function detectarPantallaChicaAdmin(): boolean {
   if (typeof window === 'undefined') return false
 
-  return window.matchMedia('(max-width: 768px), (pointer: coarse) and (max-width: 1024px)').matches
+  const mediaChica = window.matchMedia('(max-width: 900px), (pointer: coarse) and (max-width: 1100px)').matches
+  const viewportChico = window.innerWidth <= 900
+  const pantallaChica = window.screen?.width ? window.screen.width <= 900 : false
+  const mobileUserAgent = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+
+  return mediaChica || viewportChico || pantallaChica || mobileUserAgent
 }
 
 function leerPreferenciaVistaAdmin(): AdminMobileView | null {
@@ -486,6 +491,20 @@ function AdminViewSwitcher({ currentView, onChange, compact = false }: { current
           </button>
         )
       })}
+    </div>
+  )
+}
+
+function AdminViewHeader({ currentView, onChange, compact = false }: { currentView: AdminMobileView, onChange: (view: AdminMobileView) => void, compact?: boolean }) {
+  return (
+    <div style={{ position:'fixed', top:0, left:0, right:0, zIndex:1000, background:'#111827', borderBottom:`1px solid ${alpha(brandColors.yellow, 0.24)}`, padding:compact ? '10px 12px' : '12px 20px', boxShadow:`0 12px 30px ${alpha(brandColors.black, 0.32)}` }}>
+      <div style={{ maxWidth:1180, margin:'0 auto', display:'grid', gridTemplateColumns:compact ? '1fr' : 'minmax(220px, 1fr) 360px', gap:10, alignItems:'center' }}>
+        <div>
+          <div style={{ fontFamily:FONT_BRAND, fontWeight:900, color:brandColors.textStrong, fontSize:13 }}>Modo administrador</div>
+          <div style={{ color:brandColors.muted, fontSize:11 }}>La vista cambia solo en este dispositivo.</div>
+        </div>
+        <AdminViewSwitcher currentView={currentView} onChange={onChange} compact={compact} />
+      </div>
     </div>
   )
 }
@@ -6691,17 +6710,18 @@ export default function AppPage() {
   }, [])
 
   const cargarSesionPorRol = useCallback(async (perfil: Usuario) => {
-    setUser(perfil)
-
     if (perfil.rol === 'admin') {
       const pantallaChica = detectarPantallaChicaAdmin()
       const preferencia = leerPreferenciaVistaAdmin()
-      const vistaInicial: AdminMobileView = pantallaChica
-        ? (preferencia || 'supervisor')
-        : 'admin'
+      const vistaInicial: AdminMobileView = preferencia === 'supervisor'
+        ? 'supervisor'
+        : pantallaChica
+          ? (preferencia || 'supervisor')
+          : 'admin'
 
       setEsPantallaChicaAdmin(pantallaChica)
       setAdminMobileView(vistaInicial)
+      setUser(perfil)
 
       if (vistaInicial === 'admin') {
         await cargarDatosAdmin()
@@ -6711,6 +6731,7 @@ export default function AppPage() {
       return
     }
 
+    setUser(perfil)
     setLoading(false)
   }, [cargarDatosAdmin])
 
@@ -6789,18 +6810,12 @@ if (user.rol === 'supervisor') {
   return <SupervisorMobile user={user} />
 }
 
+const adminShellPaddingTop = esPantallaChicaAdmin ? 106 : 76
+
 if (user.rol === 'admin' && adminMobileView === 'supervisor') {
   return (
-    <div style={{ minHeight:'100vh', background:'#0a0e1a' }}>
-      <div style={{ position:'sticky', top:0, zIndex:500, background:'#111827', borderBottom:`1px solid ${alpha(brandColors.yellow, 0.24)}`, padding:esPantallaChicaAdmin ? 10 : 14, boxShadow:`0 12px 30px ${alpha(brandColors.black, 0.28)}` }}>
-        <div style={{ maxWidth:900, margin:'0 auto', display:'grid', gridTemplateColumns:esPantallaChicaAdmin ? '1fr' : 'minmax(220px, 1fr) 360px', gap:10, alignItems:'center' }}>
-          <div>
-            <div style={{ fontFamily:FONT_BRAND, fontWeight:900, color:brandColors.textStrong, fontSize:13 }}>Administrador en operación móvil</div>
-            <div style={{ color:brandColors.muted, fontSize:11 }}>El rol real sigue siendo admin.</div>
-          </div>
-          <AdminViewSwitcher currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />
-        </div>
-      </div>
+    <div style={{ minHeight:'100vh', background:'#0a0e1a', paddingTop:adminShellPaddingTop }}>
+      <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />
       <SupervisorMobile user={user} />
     </div>
   )
@@ -6842,7 +6857,9 @@ const esGuardia = esRolGuardia(user.rol)
   const misTurnos = turnos.filter(t => t.guardia_id === user.id)
 
   return (
-      <div style={S.app}>
+    <>
+      {user.rol === 'admin' && <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />}
+      <div style={{ ...S.app, paddingTop:user.rol === 'admin' ? adminShellPaddingTop : 0 }}>
       <div style={S.sidebar}>
         <div style={S.sidebarLogo}>
           <div style={{ display:'flex', alignItems:'center', gap:12 }}>
@@ -6870,11 +6887,6 @@ const esGuardia = esRolGuardia(user.rol)
             </div>
             <button style={{ background:'none', border:'none', color:brandColors.muted, cursor:'pointer', fontSize:16 }} onClick={async () => { await supabase.auth.signOut(); setUser(null) }} title="Cerrar sesión">⏏</button>
           </div>
-          {user.rol === 'admin' && (
-            <div style={{ marginTop:12, paddingTop:12, borderTop:`1px solid ${alpha(brandColors.yellow, 0.14)}` }}>
-              <AdminViewSwitcher currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact />
-            </div>
-          )}
         </div>
       </div>
       <main style={S.main}>
@@ -6919,5 +6931,6 @@ const esGuardia = esRolGuardia(user.rol)
         )}
       </main>
     </div>
+    </>
   )
 }
