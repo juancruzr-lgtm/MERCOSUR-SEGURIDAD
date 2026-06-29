@@ -48,6 +48,29 @@ type SupervisorIntervencionPush = {
   created_at?: string | null
 }
 
+type ObjetivoSupervisionPush = {
+  id: string
+  nombre: string
+  estado?: string | null
+  zona_id?: string | null
+  frecuencia_supervision_horas?: number | null
+}
+
+type ZonaOperativaPush = {
+  id: string
+  nombre: string
+}
+
+type SupervisorZonaPush = {
+  supervisor_id: string
+  zona_id: string
+}
+
+type SupervisionUltimaPush = {
+  objetivo_id: string
+  created_at: string
+}
+
 const TZ = 'America/Argentina/Buenos_Aires'
 const SUPERVISOR_ROLES = ['supervisor', 'admin']
 const SUPERVISORES_DIURNOS = [
@@ -63,6 +86,17 @@ const SUPERVISOR_ALERT_TYPES = {
   fueraRadio: 'supervisor_fuera_radio',
   puestoDescubierto: 'supervisor_puesto_descubierto',
 } as const
+
+// Alertas de supervisiones (vencida / proxima a vencer) por objetivo,
+// ruteadas por zona via objetivos.zona_id -> supervisor_zonas. No usan
+// turno_id: se deduplican por objetivo_id + tipo (ver migracion
+// 20260629_notificaciones_objetivo.sql).
+const SUPERVISION_ALERT_TYPES = {
+  vencida: 'supervisor_supervision_vencida',
+  proxima: 'supervisor_supervision_proxima',
+} as const
+const SUPERVISION_PROXIMA_PORCENTAJE = 0.25
+const FRECUENCIA_SUPERVISION_DEFECTO_HORAS = 24
 
 function localParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -305,6 +339,83 @@ async function sendToUsers(
   return { sent, skipped }
 }
 
+async function notificationAlreadySentObjetivo(client: any, usuarioId: string, objetivoId: string, tipo: string) {
+  const { data, error } = await client
+    .from('notificaciones_enviadas')
+    .select('id')
+    .eq('usuario_id', usuarioId)
+    .eq('objetivo_id', objetivoId)
+    .eq('tipo', tipo)
+    .maybeSingle()
+
+  if (error) throw error
+  return Boolean(data)
+}
+
+async function markNotificationSentObjetivo(client: any, usuarioId: string, objetivoId: string, tipo: string, payload: PushPayload) {
+  const { error } = await client
+    .from('notificaciones_enviadas')
+    .insert({
+      usuario_id: usuarioId,
+      objetivo_id: objetivoId,
+      turno_id: null,
+      tipo,
+      titulo: payload.title,
+      mensaje: payload.body,
+    })
+
+  if (error && !/duplicate key|notificaciones_enviadas_usuario_objetivo_tipo_key/i.test(error.message)) throw error
+}
+
+async function sendToUsersObjetivo(
+  client: any,
+  subscriptions: PushSubscriptionRow[],
+  usuarioIds: string[],
+  objetivoId: string,
+  tipo: string,
+  payload: PushPayload,
+) {
+  let sent = 0
+  let skipped = 0
+  const usuariosUnicos = Array.from(new Set(usuarioIds.filter(Boolean)))
+
+  for (const usuarioId of usuariosUnicos) {
+    if (await notificationAlreadySentObjetivo(client, usuarioId, objetivoId, tipo)) {
+      skipped += 1
+      continue
+    }
+
+    const userSubscriptions = subscriptions.filter(subscription => subscription.usuario_id === usuarioId)
+    if (userSubscriptions.length === 0) {
+      skipped += 1
+      continue
+    }
+
+    for (const subscription of userSubscriptions) {
+      const response = await sendWebPush(subscription, payload)
+      if (response.status === 404 || response.status === 410) {
+        await client.from('push_subscriptions').update({ activo: false }).eq('id', subscription.id)
+      }
+    }
+
+    await markNotificationSentObjetivo(client, usuarioId, objetivoId, tipo, payload)
+    sent += 1
+  }
+
+  return { sent, skipped }
+}
+
+function supervisoresDeZona(zonaId: string | null | undefined, supervisorZonas: SupervisorZonaPush[], usuarios: UsuarioPush[]) {
+  if (!zonaId) return []
+  const supervisorIds = new Set(
+    supervisorZonas.filter(sz => sz.zona_id === zonaId).map(sz => sz.supervisor_id),
+  )
+
+  return usuarios
+    .filter(usuario => usuario.rol === 'supervisor' && supervisorIds.has(usuario.id))
+    .map(usuario => usuario.id)
+}
+
 export async function GET(req: NextRequest) {
   const auth = authOk(req)
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.error === 'Falta CRON_SECRET' ? 500 : 401 })
@@ -317,7 +428,15 @@ export async function GET(req: NextRequest) {
   const ahora = ahoraMinutosLocal()
   const desdeReciente = new Date(Date.now() - 15 * 60000).toISOString()
 
-  const [{ data: turnosData, error: turnosError }, { data: usuariosData, error: usuariosError }, { data: objetivosData, error: objetivosError }] = await Promise.all([
+  const [
+    { data: turnosData, error: turnosError },
+    { data: usuariosData, error: usuariosError },
+    { data: objetivosData, error: objetivosError },
+    { data: subscriptionsData, error: subscriptionsError },
+    zonasResult,
+    supervisorZonasResult,
+    ultimasSupervisionesResult,
+  ] = await Promise.all([
     admin.client
       .from('turnos')
       .select('id, guardia_id, guardia_original_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
@@ -328,60 +447,45 @@ export async function GET(req: NextRequest) {
       .eq('estado', 'activo'),
     admin.client
       .from('objetivos')
-      .select('id, nombre'),
-  ])
-
-  if (turnosError || usuariosError || objetivosError) {
-    return NextResponse.json({ error: turnosError?.message || usuariosError?.message || objetivosError?.message }, { status: 500 })
-  }
-
-  const turnos = (turnosData || []) as TurnoPush[]
-  const usuarios = (usuariosData || []) as UsuarioPush[]
-  const objetivos = (objetivosData || []) as ObjetivoPush[]
-  const turnoIds = turnos.map(turno => turno.id)
-
-  if (turnoIds.length === 0) {
-    return NextResponse.json({
-      ok: true,
-      turnosProcesados: 0,
-      candidatos30: 0,
-      candidatos15: 0,
-      alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
-      alertasEvaluadas: 0,
-      alertasOmitidasPorResueltas: 0,
-      alertasEnviadas: 0,
-      sent: 0,
-      skipped: 0,
-    })
-  }
-
-  const [
-    { data: registrosData, error: registrosError },
-    { data: subscriptionsData, error: subscriptionsError },
-    { data: intervencionesData, error: intervencionesError },
-  ] = await Promise.all([
-    admin.client
-      .from('registros_asistencia')
-      .select('id, turno_id, guardia_id, hora_entrada_real, alerta_entrada, distancia_ingreso_metros, gps_ingreso_estado, created_at')
-      .in('turno_id', turnoIds),
+      .select('id, nombre, estado, zona_id, frecuencia_supervision_horas'),
     admin.client
       .from('push_subscriptions')
       .select('id, usuario_id, endpoint, p256dh, auth')
       .eq('activo', true),
     admin.client
-      .from('supervisor_intervenciones')
-      .select('id, turno_id, registro_asistencia_id, tipo_alerta, accion, created_at')
-      .in('turno_id', turnoIds),
+      .from('zonas_operativas')
+      .select('id, nombre'),
+    admin.client
+      .from('supervisor_zonas')
+      .select('supervisor_id, zona_id'),
+    admin.client
+      .from('supervisiones')
+      .select('objetivo_id, created_at')
+      .order('created_at', { ascending: false }),
   ])
 
-  const intervencionesErrorIgnorable = intervencionesError && /supervisor_intervenciones|schema cache|does not exist/i.test(intervencionesError.message)
-  if (registrosError || subscriptionsError || (intervencionesError && !intervencionesErrorIgnorable)) {
-    return NextResponse.json({ error: registrosError?.message || subscriptionsError?.message || intervencionesError?.message }, { status: 500 })
+  if (turnosError || usuariosError || objetivosError || subscriptionsError) {
+    return NextResponse.json({ error: turnosError?.message || usuariosError?.message || objetivosError?.message || subscriptionsError?.message }, { status: 500 })
   }
 
-  const registros = (registrosData || []) as RegistroPush[]
+  const zonasErrorIgnorable = zonasResult.error && /zonas_operativas|schema cache|does not exist/i.test(zonasResult.error.message)
+  const supervisorZonasErrorIgnorable = supervisorZonasResult.error && /supervisor_zonas|schema cache|does not exist/i.test(supervisorZonasResult.error.message)
+  const ultimasSupervisionesErrorIgnorable = ultimasSupervisionesResult.error && /supervisiones|schema cache|does not exist/i.test(ultimasSupervisionesResult.error.message)
+
+  if ((zonasResult.error && !zonasErrorIgnorable) || (supervisorZonasResult.error && !supervisorZonasErrorIgnorable) || (ultimasSupervisionesResult.error && !ultimasSupervisionesErrorIgnorable)) {
+    return NextResponse.json({ error: zonasResult.error?.message || supervisorZonasResult.error?.message || ultimasSupervisionesResult.error?.message }, { status: 500 })
+  }
+
+  const turnos = (turnosData || []) as TurnoPush[]
+  const usuarios = (usuariosData || []) as UsuarioPush[]
+  const objetivos = (objetivosData || []) as ObjetivoPush[]
+  const objetivosSupervision = (objetivosData || []) as ObjetivoSupervisionPush[]
   const subscriptions = (subscriptionsData || []) as PushSubscriptionRow[]
-  const intervenciones = (intervencionesErrorIgnorable ? [] : (intervencionesData || [])) as SupervisorIntervencionPush[]
+  const zonasOperativas = (zonasErrorIgnorable ? [] : (zonasResult.data || [])) as ZonaOperativaPush[]
+  const supervisorZonas = (supervisorZonasErrorIgnorable ? [] : (supervisorZonasResult.data || [])) as SupervisorZonaPush[]
+  const ultimasSupervisiones = (ultimasSupervisionesErrorIgnorable ? [] : (ultimasSupervisionesResult.data || [])) as SupervisionUltimaPush[]
+  const turnoIds = turnos.map(turno => turno.id)
+
   const turnosProcesados = turnos.length
   let candidatos30 = 0
   let candidatos15 = 0
@@ -394,11 +498,133 @@ export async function GET(req: NextRequest) {
   let alertasEnviadas = 0
   let sent = 0
   let skipped = 0
+  let candidatosSupervisionVencida = 0
+  let candidatosSupervisionProxima = 0
+  let objetivosSinZonaOSinSupervisores = 0
 
   const sumarResultado = (resultado: { sent: number, skipped: number }) => {
     sent += resultado.sent
     skipped += resultado.skipped
   }
+
+  // ── Alertas de supervisiones por zona (vencida / proxima a vencer) ──
+  // Independiente de si hay turnos hoy/manana: se evalua siempre.
+  const ultimaPorObjetivo = new Map<string, string>()
+  ultimasSupervisiones.forEach(s => {
+    if (!ultimaPorObjetivo.has(s.objetivo_id)) ultimaPorObjetivo.set(s.objetivo_id, s.created_at)
+  })
+
+  for (const objetivo of objetivosSupervision) {
+    if ((objetivo.estado || 'activo') !== 'activo') continue
+
+    const frecuenciaHoras = objetivo.frecuencia_supervision_horas || FRECUENCIA_SUPERVISION_DEFECTO_HORAS
+    const ultimaIso = ultimaPorObjetivo.get(objetivo.id) || null
+    const horasDesdeUltima = ultimaIso ? (Date.now() - new Date(ultimaIso).getTime()) / 3600000 : null
+    const horasFaltantes = horasDesdeUltima === null ? -Infinity : frecuenciaHoras - horasDesdeUltima
+    const estadoAgenda: 'vencido' | 'proximo' | 'al_dia' = !ultimaIso || horasFaltantes < 0
+      ? 'vencido'
+      : horasFaltantes <= frecuenciaHoras * SUPERVISION_PROXIMA_PORCENTAJE
+        ? 'proximo'
+        : 'al_dia'
+
+    if (estadoAgenda === 'al_dia') continue
+
+    if (!objetivo.zona_id) {
+      console.warn(`[cron-push] Objetivo "${objetivo.nombre}" (${objetivo.id}) esta ${estadoAgenda} pero no tiene zona_id asignado. No se puede enrutar la alerta.`)
+      objetivosSinZonaOSinSupervisores += 1
+      continue
+    }
+
+    const supervisorIds = supervisoresDeZona(objetivo.zona_id, supervisorZonas, usuarios)
+    if (supervisorIds.length === 0) {
+      const zonaNombre = zonasOperativas.find(z => z.id === objetivo.zona_id)?.nombre || objetivo.zona_id
+      console.warn(`[cron-push] Objetivo "${objetivo.nombre}" (${objetivo.id}) esta ${estadoAgenda} pero la zona "${zonaNombre}" no tiene supervisores asignados en supervisor_zonas.`)
+      objetivosSinZonaOSinSupervisores += 1
+      continue
+    }
+
+    // Cicla la clave de dedup con la ultima supervision conocida: cuando se
+    // registre una supervision nueva, el ciclo cambia y se vuelve a poder
+    // alertar para el proximo vencimiento. Mientras no haya supervision
+    // nueva, no se reenvia la misma alerta (deduplicacion mantenida).
+    const ciclo = ultimaIso || 'nunca'
+    const zonaNombre = zonasOperativas.find(z => z.id === objetivo.zona_id)?.nombre || 'Zona sin nombre'
+
+    if (estadoAgenda === 'vencido') {
+      candidatosSupervisionVencida += 1
+      const detalle = ultimaIso ? `Vencida desde hace ${Math.round(horasDesdeUltima as number)} h` : 'Sin supervision registrada'
+      const resultado = await sendToUsersObjetivo(
+        admin.client,
+        subscriptions,
+        supervisorIds,
+        objetivo.id,
+        `${SUPERVISION_ALERT_TYPES.vencida}:${ciclo}`,
+        {
+          title: 'Supervisión vencida',
+          body: `Objetivo: ${objetivo.nombre} · Zona: ${zonaNombre} · ${detalle}`,
+          url: '/dashboard',
+          tag: `objetivo-${objetivo.id}-supervision-vencida`,
+        },
+      )
+      sumarResultado(resultado)
+      alertasEnviadas += resultado.sent
+    } else {
+      candidatosSupervisionProxima += 1
+      const resultado = await sendToUsersObjetivo(
+        admin.client,
+        subscriptions,
+        supervisorIds,
+        objetivo.id,
+        `${SUPERVISION_ALERT_TYPES.proxima}:${ciclo}`,
+        {
+          title: 'Supervisión próxima a vencer',
+          body: `Objetivo: ${objetivo.nombre} · Zona: ${zonaNombre} · Quedan ${Math.max(0, Math.round(horasFaltantes))} h`,
+          url: '/dashboard',
+          tag: `objetivo-${objetivo.id}-supervision-proxima`,
+        },
+      )
+      sumarResultado(resultado)
+      alertasEnviadas += resultado.sent
+    }
+  }
+
+  if (turnoIds.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      turnosProcesados: 0,
+      candidatos30: 0,
+      candidatos15: 0,
+      alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
+      alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores },
+      alertasEvaluadas,
+      alertasOmitidasPorResueltas,
+      alertasEnviadas,
+      sent,
+      skipped,
+    })
+  }
+
+  const [
+    { data: registrosData, error: registrosError },
+    { data: intervencionesData, error: intervencionesError },
+  ] = await Promise.all([
+    admin.client
+      .from('registros_asistencia')
+      .select('id, turno_id, guardia_id, hora_entrada_real, alerta_entrada, distancia_ingreso_metros, gps_ingreso_estado, created_at')
+      .in('turno_id', turnoIds),
+    admin.client
+      .from('supervisor_intervenciones')
+      .select('id, turno_id, registro_asistencia_id, tipo_alerta, accion, created_at')
+      .in('turno_id', turnoIds),
+  ])
+
+  const intervencionesErrorIgnorable = intervencionesError && /supervisor_intervenciones|schema cache|does not exist/i.test(intervencionesError.message)
+  if (registrosError || (intervencionesError && !intervencionesErrorIgnorable)) {
+    return NextResponse.json({ error: registrosError?.message || intervencionesError?.message }, { status: 500 })
+  }
+
+  const registros = (registrosData || []) as RegistroPush[]
+  const intervenciones = (intervencionesErrorIgnorable ? [] : (intervencionesData || [])) as SupervisorIntervencionPush[]
 
   const enviarAlertaSupervisor = async (
     usuarioIds: string[],
@@ -540,6 +766,11 @@ export async function GET(req: NextRequest) {
       sinFichaje: candidatosSupervisorSinFichaje,
       fueraRadio: candidatosSupervisorFueraRadio,
       puestoDescubierto: candidatosSupervisorPuestoDescubierto,
+    },
+    alertasSupervision: {
+      vencida: candidatosSupervisionVencida,
+      proxima: candidatosSupervisionProxima,
+      sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores,
     },
     alertasEvaluadas,
     alertasOmitidasPorResueltas,
