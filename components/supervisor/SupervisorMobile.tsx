@@ -54,6 +54,19 @@ interface Objetivo {
   estado?: string
   checklist_plantilla_id?: string | null
   frecuencia_supervision_horas?: number | null
+  zona_id?: string | null
+}
+
+interface ZonaOperativa {
+  id: string
+  nombre: string
+  estado?: string
+}
+
+interface SupervisorZona {
+  id: string
+  supervisor_id: string
+  zona_id: string
 }
 
 type EstadoSupervision = 'ok' | 'con_observacion' | 'critico'
@@ -455,6 +468,10 @@ export default function SupervisorMobile({ user }: any) {
   const [checklistPlantillas, setChecklistPlantillas] = useState<ChecklistPlantilla[]>([])
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
   const [supervisiones, setSupervisiones] = useState<Supervision[]>([])
+  const [zonasOperativas, setZonasOperativas] = useState<ZonaOperativa[]>([])
+  const [supervisorZonas, setSupervisorZonas] = useState<SupervisorZona[]>([])
+  const [ultimaSupervisionPorObjetivo, setUltimaSupervisionPorObjetivo] = useState<Record<string, string>>({})
+  const [agendaZonaFiltro, setAgendaZonaFiltro] = useState('todas')
   const [supervisionObjetivoId, setSupervisionObjetivoId] = useState('')
   const [supervisionGps, setSupervisionGps] = useState<SupervisionGps | null>(null)
   const [supervisionObservaciones, setSupervisionObservaciones] = useState('')
@@ -509,6 +526,9 @@ export default function SupervisorMobile({ user }: any) {
       itemsResult,
       supervisionesHoyResult,
       supervisionesRecientesResult,
+      zonasResult,
+      supervisorZonasResult,
+      ultimasSupervisionesResult,
     ] = await Promise.all([
       supabase
         .from('turnos')
@@ -519,7 +539,7 @@ export default function SupervisorMobile({ user }: any) {
         .order('hora_inicio', { ascending: true }),
       supabase
         .from('objetivos')
-        .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado, checklist_plantilla_id, frecuencia_supervision_horas')
+        .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado, checklist_plantilla_id, frecuencia_supervision_horas, zona_id')
         .order('nombre'),
       supabase
         .from('usuarios')
@@ -566,6 +586,18 @@ export default function SupervisorMobile({ user }: any) {
         .eq('supervisor_id', user.id)
         .order('created_at', { ascending: false })
         .limit(30),
+      supabase
+        .from('zonas_operativas')
+        .select('id, nombre, estado')
+        .order('nombre'),
+      supabase
+        .from('supervisor_zonas')
+        .select('id, supervisor_id, zona_id')
+        .eq('supervisor_id', user.id),
+      supabase
+        .from('supervisiones')
+        .select('objetivo_id, created_at')
+        .order('created_at', { ascending: false }),
     ])
 
     let guardiasData = guardiasResult.data
@@ -580,6 +612,9 @@ export default function SupervisorMobile({ user }: any) {
     const itemsError = itemsResult.error
     const supervisionesHoyError = supervisionesHoyResult.error
     const supervisionesRecientesError = supervisionesRecientesResult.error
+    const zonasError = zonasResult.error
+    const supervisorZonasError = supervisorZonasResult.error
+    const ultimasSupervisionesError = ultimasSupervisionesResult.error
 
     if (guardiasError?.message?.includes('usuarios.email') || guardiasError?.message?.includes('usuarios.telefono') || guardiasError?.message?.includes('usuarios.foto_url')) {
       const retry = await supabase
@@ -622,14 +657,36 @@ export default function SupervisorMobile({ user }: any) {
       setError(supervisionesRecientesError.message)
     }
 
+    if (zonasError && !/zonas_operativas|schema cache|does not exist/i.test(zonasError.message)) {
+      setError(zonasError.message)
+    }
+
+    if (supervisorZonasError && !/supervisor_zonas|schema cache|does not exist/i.test(supervisorZonasError.message)) {
+      setError(supervisorZonasError.message)
+    }
+
+    if (ultimasSupervisionesError && !/supervisiones|schema cache|does not exist/i.test(ultimasSupervisionesError.message)) {
+      setError(ultimasSupervisionesError.message)
+    }
+
     const turnosRango = (turnosData || []) as Turno[]
     const supervisionesMap = new Map<string, Supervision>()
     ;[...(supervisionesHoyResult.data || []), ...(supervisionesRecientesResult.data || [])].forEach((supervision: any) => {
       supervisionesMap.set(supervision.id, supervision as Supervision)
     })
 
+    const ultimaPorObjetivo: Record<string, string> = {}
+    if (!ultimasSupervisionesError) {
+      ;(ultimasSupervisionesResult.data || []).forEach((s: any) => {
+        if (!ultimaPorObjetivo[s.objetivo_id]) ultimaPorObjetivo[s.objetivo_id] = s.created_at
+      })
+    }
+
     setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
+    setZonasOperativas(zonasError ? [] : (zonasResult.data || []) as ZonaOperativa[])
+    setSupervisorZonas(supervisorZonasError ? [] : (supervisorZonasResult.data || []) as SupervisorZona[])
+    setUltimaSupervisionPorObjetivo(ultimaPorObjetivo)
     setGuardias((guardiasData || []) as Usuario[])
     setSupervisores((supervisoresData || []) as Usuario[])
     setSupervisoresGuardia(supervisoresGuardiaError ? [] : (supervisoresGuardiaData || []) as SupervisorGuardia[])
@@ -874,6 +931,67 @@ export default function SupervisorMobile({ user }: any) {
     observadas: supervisionesHoy.filter(s => s.estado === 'con_observacion').length,
     criticas: supervisionesHoy.filter(s => s.estado === 'critico').length,
   }), [supervisionesHoy])
+
+  const zonasIdsAsignadas = useMemo(
+    () => new Set(supervisorZonas.map(sz => sz.zona_id)),
+    [supervisorZonas],
+  )
+  const nombreZona = (zonaId?: string | null) => zonasOperativas.find(z => z.id === zonaId)?.nombre || 'Sin zona'
+
+  const objetivosDeMiZona = useMemo(
+    () => zonasIdsAsignadas.size > 0
+      ? objetivosActivos.filter(o => o.zona_id && zonasIdsAsignadas.has(o.zona_id))
+      : objetivosActivos,
+    [objetivosActivos, zonasIdsAsignadas],
+  )
+
+  const agendaSupervisiones = useMemo(() => {
+    const ahoraMs = Date.now()
+    const base = agendaZonaFiltro === 'todas'
+      ? objetivosDeMiZona
+      : objetivosDeMiZona.filter(o => o.zona_id === agendaZonaFiltro)
+
+    return base.map(objetivo => {
+      const frecuenciaHoras = objetivo.frecuencia_supervision_horas || 24
+      const ultimaIso = ultimaSupervisionPorObjetivo[objetivo.id] || null
+      const horasDesdeUltima = ultimaIso ? (ahoraMs - new Date(ultimaIso).getTime()) / 3600000 : null
+      const horasFaltantes = horasDesdeUltima === null ? -Infinity : frecuenciaHoras - horasDesdeUltima
+      const estadoAgenda: 'vencido' | 'proximo' | 'al_dia' = !ultimaIso || horasFaltantes < 0
+        ? 'vencido'
+        : horasFaltantes <= frecuenciaHoras * 0.25
+          ? 'proximo'
+          : 'al_dia'
+
+      return {
+        objetivo,
+        zona: nombreZona(objetivo.zona_id),
+        ultimaIso,
+        horasDesdeUltima,
+        frecuenciaHoras,
+        estadoAgenda,
+      }
+    }).sort((a, b) => {
+      const ordenA = a.horasDesdeUltima === null ? Infinity : a.horasDesdeUltima - a.frecuenciaHoras
+      const ordenB = b.horasDesdeUltima === null ? Infinity : b.horasDesdeUltima - b.frecuenciaHoras
+      return ordenB - ordenA
+    })
+  }, [objetivosDeMiZona, agendaZonaFiltro, ultimaSupervisionPorObjetivo])
+
+  const agendaResumen = useMemo(() => ({
+    vencidas: agendaSupervisiones.filter(a => a.estadoAgenda === 'vencido').length,
+    proximas: agendaSupervisiones.filter(a => a.estadoAgenda === 'proximo').length,
+    realizadasHoy: supervisionesHoy.length,
+  }), [agendaSupervisiones, supervisionesHoy])
+
+  const irASupervisar = (objetivoId: string) => {
+    setSupervisionObjetivoId(objetivoId)
+    setSupervisionGps(null)
+    setConfirmarGpsImpreciso(false)
+    setSupervisionRespuestas({})
+    setSupervisionFotos([])
+    setSupervisionObservaciones('')
+    setTab('supervisiones')
+  }
   const observadosSupervision = (supervision: Supervision) => supervision.respuestas?.filter(r => r.resultado === 'observado').length || 0
   const fotosSupervisionCount = (supervision: Supervision) => supervision.fotos?.length || 0
   const mapsUrlSupervision = (supervision: Supervision) => `https://www.google.com/maps?q=${supervision.lat},${supervision.lng}`
@@ -2409,6 +2527,62 @@ export default function SupervisorMobile({ user }: any) {
                     {asignando === 'repetir-ayer' ? 'Repitiendo...' : 'Repetir ayer'}
                   </button>
                 </div>
+
+                <div style={{ ...objetivoName, margin:'24px 0 8px' }}>Agenda de supervisiones</div>
+                <div style={statsGrid}>
+                  <div style={{ ...statCard, borderTop:'3px solid #ef4444' }}><strong style={{ color:'#ef4444' }}>{agendaResumen.vencidas}</strong><span>Vencidas</span></div>
+                  <div style={{ ...statCard, borderTop:'3px solid #f59e0b' }}><strong style={{ color:'#f59e0b' }}>{agendaResumen.proximas}</strong><span>Próximas a vencer</span></div>
+                  <div style={{ ...statCard, borderTop:'3px solid #10b981' }}><strong style={{ color:'#10b981' }}>{agendaResumen.realizadasHoy}</strong><span>Realizadas hoy</span></div>
+                </div>
+
+                {zonasOperativas.length > 0 && (
+                  <select
+                    style={{ ...select, marginBottom:12 }}
+                    value={agendaZonaFiltro}
+                    onChange={e => setAgendaZonaFiltro(e.target.value)}
+                  >
+                    <option value="todas">{zonasIdsAsignadas.size > 0 ? 'Mis zonas' : 'Todas las zonas'}</option>
+                    {zonasOperativas.map(z => (
+                      <option key={z.id} value={z.id}>{z.nombre}</option>
+                    ))}
+                  </select>
+                )}
+
+                {agendaSupervisiones.length === 0 ? (
+                  <div style={empty}>No hay objetivos para mostrar en la agenda.</div>
+                ) : agendaSupervisiones.map(({ objetivo, zona, ultimaIso, horasDesdeUltima, frecuenciaHoras, estadoAgenda }) => {
+                  const colorEstado = estadoAgenda === 'vencido' ? '#ef4444' : estadoAgenda === 'proximo' ? '#f59e0b' : '#10b981'
+                  const etiquetaEstado = estadoAgenda === 'vencido' ? '🔴 Vencido' : estadoAgenda === 'proximo' ? '🟠 Próximo a vencer' : '🟢 Al día'
+
+                  return (
+                    <div key={objetivo.id} style={{ ...turnoCard, background:'#0f172a', borderLeft:`3px solid ${colorEstado}` }}>
+                      <div style={turnoTop}>
+                        <div>
+                          <div style={objetivoName}>{objetivo.nombre}</div>
+                          <div style={muted}>Zona: {zona}</div>
+                        </div>
+                        <span style={{ color:colorEstado, fontSize:12, fontWeight:700 }}>{etiquetaEstado}</span>
+                      </div>
+                      <div style={registroBox}>
+                        <div>
+                          <div style={label}>Última supervisión</div>
+                          <div style={registroValue}>{ultimaIso ? fechaHoraDDMMYYYY(ultimaIso) : 'Nunca'}</div>
+                        </div>
+                        <div>
+                          <div style={label}>Hace</div>
+                          <div style={registroValue}>{horasDesdeUltima === null ? '—' : `${Math.round(horasDesdeUltima)} h`}</div>
+                        </div>
+                        <div>
+                          <div style={label}>Frecuencia</div>
+                          <div style={registroValue}>{frecuenciaHoras} h</div>
+                        </div>
+                      </div>
+                      <button style={{ ...refreshButton, marginTop:10 }} onClick={() => irASupervisar(objetivo.id)}>
+                        Supervisar
+                      </button>
+                    </div>
+                  )
+                })}
               </section>
             )}
 
