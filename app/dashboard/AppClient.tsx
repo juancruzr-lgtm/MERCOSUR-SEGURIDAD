@@ -20,6 +20,7 @@ type AccionIntervencionAdmin = 'comentario' | 'reasignacion' | 'marcado_descubie
 type TipoSolicitudAdmin = 'crear_objetivo' | 'baja_objetivo' | 'crear_vigilador' | 'baja_vigilador'
 type EstadoSolicitudAdmin = 'pendiente' | 'aprobado' | 'rechazado'
 type EstadoSupervisionAdmin = 'ok' | 'con_observacion' | 'critico'
+type AdminMobileView = 'admin' | 'supervisor'
 type SolicitudAdmin = {
   id: string
   solicitante_id: string
@@ -94,6 +95,7 @@ type SupervisionFotoAdmin = {
 const ZONA_OPERATIVA_ADMIN = 'Rosario / General'
 const JEFE_OPERATIVO_ADMIN = 'Aldo Monzón'
 const DIRECTOR_TECNICO_ADMIN = 'Rodolfo Romero'
+const ADMIN_MOBILE_VIEW_KEY = 'mercosur_admin_mobile_view'
 
 const alpha = (hex: string, opacity: number) => {
   const clean = hex.replace('#', '')
@@ -106,6 +108,25 @@ const alpha = (hex: string, opacity: number) => {
 }
 
 const GPS_PRECISION_MAX_METROS = 100
+
+function detectarPantallaChicaAdmin(): boolean {
+  if (typeof window === 'undefined') return false
+
+  return window.matchMedia('(max-width: 768px), (pointer: coarse) and (max-width: 1024px)').matches
+}
+
+function leerPreferenciaVistaAdmin(): AdminMobileView | null {
+  if (typeof window === 'undefined') return null
+
+  const valor = window.localStorage.getItem(ADMIN_MOBILE_VIEW_KEY)
+  return valor === 'admin' || valor === 'supervisor' ? valor : null
+}
+
+function guardarPreferenciaVistaAdmin(vista: AdminMobileView) {
+  if (typeof window === 'undefined') return
+
+  window.localStorage.setItem(ADMIN_MOBILE_VIEW_KEY, vista)
+}
 
 const FONT_BRAND = `${brandTypography.preparedBrand}, sans-serif`
 const FONT_BODY = `${brandTypography.currentBody}, sans-serif`
@@ -396,6 +417,41 @@ function NavItem({ id, icon, label, active, badge, onClick }: any) {
       <span style={{ fontSize:16, width:20, textAlign:'center' }}>{icon}</span>
       {label}
       {badge > 0 && <span style={{ marginLeft:'auto', background:semanticColors.error, color:brandColors.white, fontSize:10, fontWeight:800, borderRadius:10, padding:'1px 7px' }}>{badge}</span>}
+    </div>
+  )
+}
+
+function AdminViewSwitcher({ currentView, onChange, compact = false }: { currentView: AdminMobileView, onChange: (view: AdminMobileView) => void, compact?: boolean }) {
+  const opciones: { id: AdminMobileView, label: string }[] = [
+    { id: 'admin', label: 'Vista Admin' },
+    { id: 'supervisor', label: 'Vista Supervisor' },
+  ]
+
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, width:'100%' }}>
+      {opciones.map(opcion => {
+        const activo = currentView === opcion.id
+
+        return (
+          <button
+            key={opcion.id}
+            type="button"
+            onClick={() => onChange(opcion.id)}
+            style={{
+              ...S.btn,
+              justifyContent:'center',
+              padding: compact ? '7px 8px' : '9px 12px',
+              fontSize: compact ? 11 : 12,
+              background: activo ? brandColors.yellow : alpha(brandColors.surface2, 0.92),
+              color: activo ? brandColors.black : brandColors.text,
+              border:`1px solid ${activo ? brandColors.yellow : brandColors.border}`,
+              whiteSpace:'nowrap',
+            }}
+          >
+            {opcion.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -6388,6 +6444,9 @@ export default function AppPage() {
   const [supervisorZonas, setSupervisorZonas] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [filtros, setFiltros] = useState<Record<string, any>>({})
+  const [adminMobileView, setAdminMobileView] = useState<AdminMobileView>('admin')
+  const [esPantallaChicaAdmin, setEsPantallaChicaAdmin] = useState(false)
+  const [adminDataLoaded, setAdminDataLoaded] = useState(false)
 
   const cargarDatosAdmin = useCallback(async () => {
     setLoading(true)
@@ -6417,6 +6476,7 @@ export default function AppPage() {
     if (s.data) setSupervisionesAdmin(s.data)
     if (z.data) setZonasOperativas(z.data)
     if (sz.data) setSupervisorZonas(sz.data)
+    setAdminDataLoaded(true)
     setLoading(false)
   }, [])
 
@@ -6424,12 +6484,51 @@ export default function AppPage() {
     setUser(perfil)
 
     if (perfil.rol === 'admin') {
-      await cargarDatosAdmin()
+      const pantallaChica = detectarPantallaChicaAdmin()
+      const preferencia = leerPreferenciaVistaAdmin()
+      const vistaInicial: AdminMobileView = pantallaChica
+        ? (preferencia || 'supervisor')
+        : 'admin'
+
+      setEsPantallaChicaAdmin(pantallaChica)
+      setAdminMobileView(vistaInicial)
+
+      if (vistaInicial === 'admin') {
+        await cargarDatosAdmin()
+      } else {
+        setLoading(false)
+      }
       return
     }
 
     setLoading(false)
   }, [cargarDatosAdmin])
+
+  const seleccionarVistaAdmin = useCallback((vista: AdminMobileView) => {
+    if (user?.rol !== 'admin') return
+
+    guardarPreferenciaVistaAdmin(vista)
+    setAdminMobileView(vista)
+
+    if (vista === 'admin') {
+      if (!adminDataLoaded) {
+        void cargarDatosAdmin()
+      } else {
+        setLoading(false)
+      }
+      return
+    }
+
+    setLoading(false)
+  }, [adminDataLoaded, cargarDatosAdmin, user?.rol])
+
+  useEffect(() => {
+    const actualizarPantalla = () => setEsPantallaChicaAdmin(detectarPantallaChicaAdmin())
+
+    actualizarPantalla()
+    window.addEventListener('resize', actualizarPantalla)
+    return () => window.removeEventListener('resize', actualizarPantalla)
+  }, [])
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
@@ -6478,6 +6577,23 @@ if (esRolGuardia(user.rol)) {
 
 if (user.rol === 'supervisor') {
   return <SupervisorMobile user={user} />
+}
+
+if (user.rol === 'admin' && adminMobileView === 'supervisor') {
+  return (
+    <div style={{ minHeight:'100vh', background:'#0a0e1a' }}>
+      <div style={{ position:'sticky', top:0, zIndex:500, background:'#111827', borderBottom:`1px solid ${alpha(brandColors.yellow, 0.24)}`, padding:esPantallaChicaAdmin ? 10 : 14, boxShadow:`0 12px 30px ${alpha(brandColors.black, 0.28)}` }}>
+        <div style={{ maxWidth:900, margin:'0 auto', display:'grid', gridTemplateColumns:esPantallaChicaAdmin ? '1fr' : 'minmax(220px, 1fr) 360px', gap:10, alignItems:'center' }}>
+          <div>
+            <div style={{ fontFamily:FONT_BRAND, fontWeight:900, color:brandColors.textStrong, fontSize:13 }}>Administrador en operación móvil</div>
+            <div style={{ color:brandColors.muted, fontSize:11 }}>El rol real sigue siendo admin.</div>
+          </div>
+          <AdminViewSwitcher currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />
+        </div>
+      </div>
+      <SupervisorMobile user={user} />
+    </div>
+  )
 }
 
 const esGuardia = esRolGuardia(user.rol)
@@ -6544,6 +6660,11 @@ const esGuardia = esRolGuardia(user.rol)
             </div>
             <button style={{ background:'none', border:'none', color:brandColors.muted, cursor:'pointer', fontSize:16 }} onClick={async () => { await supabase.auth.signOut(); setUser(null) }} title="Cerrar sesión">⏏</button>
           </div>
+          {user.rol === 'admin' && (
+            <div style={{ marginTop:12, paddingTop:12, borderTop:`1px solid ${alpha(brandColors.yellow, 0.14)}` }}>
+              <AdminViewSwitcher currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact />
+            </div>
+          )}
         </div>
       </div>
       <main style={S.main}>
