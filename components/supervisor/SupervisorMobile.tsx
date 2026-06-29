@@ -2471,6 +2471,14 @@ export default function SupervisorMobile({ user }: any) {
     )
   }
 
+  const esAdminEnVistaSupervisor = String(user?.rol || '').trim().toLowerCase() === 'admin'
+
+  const volverAAdministracion = () => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('mercosur_admin_mobile_view', 'admin')
+    window.location.reload()
+  }
+
   return (
     <div style={container}>
       <header style={header}>
@@ -2479,9 +2487,16 @@ export default function SupervisorMobile({ user }: any) {
           <div style={muted}>{user?.nombre} {user?.apellido}</div>
         </div>
 
-        <button onClick={cerrarSesion} style={logoutButton}>
-          Cerrar sesión
-        </button>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          {esAdminEnVistaSupervisor && (
+            <button onClick={volverAAdministracion} style={logoutButton}>
+              ← Volver a Administración
+            </button>
+          )}
+          <button onClick={cerrarSesion} style={logoutButton}>
+            Cerrar sesión
+          </button>
+        </div>
       </header>
 
       <main style={main}>
