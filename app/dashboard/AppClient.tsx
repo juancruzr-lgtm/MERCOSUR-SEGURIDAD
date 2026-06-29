@@ -3045,7 +3045,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     </div>
   )
 }
-function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActivo, limpiarFiltro }: any) {
+function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActivo, limpiarFiltro, user }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({
     guardia_id: '',
@@ -3058,6 +3058,132 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [mensaje, setMensaje] = useState('')
+
+  const [turnoEditando, setTurnoEditando] = useState<Turno | null>(null)
+  const [formEdicion, setFormEdicion] = useState({
+    guardia_id: '',
+    hora_inicio: '',
+    hora_fin: '',
+    estado: 'programado' as Turno['estado'],
+    comentario: '',
+  })
+  const [errorEdicion, setErrorEdicion] = useState('')
+  const [loadingEdicion, setLoadingEdicion] = useState(false)
+
+  const abrirEdicion = (turno: Turno) => {
+    setTurnoEditando(turno)
+    setFormEdicion({
+      guardia_id: turno.guardia_id || '',
+      hora_inicio: turno.hora_inicio,
+      hora_fin: turno.hora_fin,
+      estado: turno.estado,
+      comentario: '',
+    })
+    setErrorEdicion('')
+  }
+
+  const cerrarEdicion = () => {
+    setTurnoEditando(null)
+    setErrorEdicion('')
+  }
+
+  const guardarEdicion = async () => {
+    if (!turnoEditando) return
+    if (!user?.id) {
+      setErrorEdicion('Sesión de administrador no disponible.')
+      return
+    }
+
+    setErrorEdicion('')
+
+    const guardiaNuevoId = formEdicion.guardia_id || null
+    const candidato = {
+      guardia_id: guardiaNuevoId,
+      fecha: turnoEditando.fecha,
+      hora_inicio: formEdicion.hora_inicio,
+      hora_fin: formEdicion.hora_fin,
+    }
+
+    if (guardiaNuevoId) {
+      const { data, error: turnosError } = await supabase
+        .from('turnos')
+        .select('id, guardia_id, fecha, hora_inicio, hora_fin')
+        .eq('guardia_id', guardiaNuevoId)
+        .in('fecha', fechasVecinasTurno(turnoEditando.fecha))
+
+      if (turnosError) {
+        setErrorEdicion(turnosError.message)
+        return
+      }
+
+      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditando.id)) {
+        setErrorEdicion(MENSAJE_TURNO_SUPERPUESTO)
+        return
+      }
+    }
+
+    const cambios: { campo: string; valor_anterior: string | null; valor_nuevo: string | null }[] = []
+    if ((turnoEditando.guardia_id || null) !== guardiaNuevoId) {
+      cambios.push({ campo: 'guardia_id', valor_anterior: turnoEditando.guardia_id || null, valor_nuevo: guardiaNuevoId })
+    }
+    if (turnoEditando.hora_inicio !== formEdicion.hora_inicio) {
+      cambios.push({ campo: 'hora_inicio', valor_anterior: turnoEditando.hora_inicio, valor_nuevo: formEdicion.hora_inicio })
+    }
+    if (turnoEditando.hora_fin !== formEdicion.hora_fin) {
+      cambios.push({ campo: 'hora_fin', valor_anterior: turnoEditando.hora_fin, valor_nuevo: formEdicion.hora_fin })
+    }
+    if (turnoEditando.estado !== formEdicion.estado) {
+      cambios.push({ campo: 'estado', valor_anterior: turnoEditando.estado, valor_nuevo: formEdicion.estado })
+    }
+
+    if (cambios.length === 0) {
+      cerrarEdicion()
+      return
+    }
+
+    setLoadingEdicion(true)
+
+    const payload = {
+      guardia_id: guardiaNuevoId,
+      hora_inicio: formEdicion.hora_inicio,
+      hora_fin: formEdicion.hora_fin,
+      estado: formEdicion.estado,
+    }
+
+    const { error: updateError } = await supabase
+      .from('turnos')
+      .update(payload)
+      .eq('id', turnoEditando.id)
+
+    if (updateError) {
+      setErrorEdicion(updateError.message)
+      setLoadingEdicion(false)
+      return
+    }
+
+    const comentario = formEdicion.comentario.trim() || null
+    const { error: auditoriaError } = await supabase
+      .from('turnos_auditoria')
+      .insert(cambios.map(cambio => ({
+        turno_id: turnoEditando.id,
+        modificado_por: user.id,
+        campo: cambio.campo,
+        valor_anterior: cambio.valor_anterior,
+        valor_nuevo: cambio.valor_nuevo,
+        comentario,
+      })))
+
+    if (auditoriaError) {
+      setErrorEdicion(`Turno actualizado, pero no se pudo guardar la auditoría: ${auditoriaError.message}`)
+      setLoadingEdicion(false)
+      return
+    }
+
+    setTurnos((prev: Turno[]) => prev.map(t => t.id === turnoEditando.id ? { ...t, ...payload } as Turno : t))
+    setMensaje('✓ Turno actualizado correctamente')
+    setLoadingEdicion(false)
+    cerrarEdicion()
+  }
 
   const guardiaTieneTurnoSuperpuesto = async (candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>): Promise<boolean | null> => {
     if (!candidato.guardia_id) return false
@@ -3219,6 +3345,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
               <th style={S.th}>Horario</th>
               <th style={S.th}>Guardia</th>
               <th style={S.th}>Estado</th>
+              <th style={S.th}></th>
             </tr>
           </thead>
 
@@ -3253,6 +3380,15 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
                   <td style={S.td}>
                     <Badge type={t.estado}>{t.estado}</Badge>
+                  </td>
+
+                  <td style={S.td}>
+                    <button
+                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                      onClick={() => abrirEdicion(t)}
+                    >
+                      Editar
+                    </button>
                   </td>
                 </tr>
               )
@@ -3360,6 +3496,99 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
                 onChange={e => setForm({ ...form, hora_fin:e.target.value })}
               />
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {turnoEditando && (
+        <Modal
+          title="Editar Turno"
+          onClose={cerrarEdicion}
+          footer={
+            <>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary }}
+                onClick={cerrarEdicion}
+              >
+                Cancelar
+              </button>
+
+              <button
+                style={{ ...S.btn, ...S.btnPrimary }}
+                onClick={guardarEdicion}
+                disabled={loadingEdicion}
+              >
+                {loadingEdicion ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+            </>
+          }
+        >
+          {errorEdicion && (
+            <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
+              {errorEdicion}
+            </div>
+          )}
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Guardia</label>
+            <select
+              style={S.select}
+              value={formEdicion.guardia_id}
+              onChange={e => setFormEdicion({ ...formEdicion, guardia_id:e.target.value })}
+            >
+              <option value="">Sin asignar</option>
+              {guardias
+                .filter((g: Usuario) => g.estado === 'activo')
+                .map((g: Usuario) => (
+                  <option key={g.id} value={g.id}>
+                    {g.apellido}, {g.nombre}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora inicio</label>
+              <input
+                type="time"
+                style={S.input}
+                value={formEdicion.hora_inicio}
+                onChange={e => setFormEdicion({ ...formEdicion, hora_inicio:e.target.value })}
+              />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Hora fin</label>
+              <input
+                type="time"
+                style={S.input}
+                value={formEdicion.hora_fin}
+                onChange={e => setFormEdicion({ ...formEdicion, hora_fin:e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Estado</label>
+            <select
+              style={S.select}
+              value={formEdicion.estado}
+              onChange={e => setFormEdicion({ ...formEdicion, estado:e.target.value as Turno['estado'] })}
+            >
+              <option value="programado">Programado</option>
+              <option value="cubierto">Cubierto</option>
+              <option value="descubierto">Descubierto</option>
+            </select>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Comentario (opcional)</label>
+            <textarea
+              style={{ ...S.input, minHeight:80, resize:'vertical' }}
+              value={formEdicion.comentario}
+              onChange={e => setFormEdicion({ ...formEdicion, comentario:e.target.value })}
+            />
           </div>
         </Modal>
       )}
@@ -6915,7 +7144,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} />}
-              {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} />}
+              {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
