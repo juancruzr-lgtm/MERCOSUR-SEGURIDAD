@@ -3602,24 +3602,25 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
   const hoy = new Date().toLocaleDateString('sv-SE')
 
   const [registroEditando, setRegistroEditando] = useState<RegistroAsistencia | null>(null)
-  const [formEdicion, setFormEdicion] = useState({
-    hora_entrada_real: '',
-    hora_salida_real: '',
-    tipo_registro: 'fichaje_gps' as RegistroAsistencia['tipo_registro'],
-    observacion: '',
-    comentario: '',
+  const [formCorreccion, setFormCorreccion] = useState({
+    guardia_final_id: '',
+    objetivo_final_id: '',
+    hora_entrada_final: '',
+    hora_salida_final: '',
+    comentario_final: '',
   })
   const [errorEdicion, setErrorEdicion] = useState('')
   const [loadingEdicion, setLoadingEdicion] = useState(false)
 
-  const abrirEdicion = (registro: RegistroAsistencia) => {
+  const abrirCorreccion = (registro: RegistroAsistencia) => {
+    const turno = turnos.find((t: Turno) => t.id === registro.turno_id)
     setRegistroEditando(registro)
-    setFormEdicion({
-      hora_entrada_real: registro.hora_entrada_real || '',
-      hora_salida_real: registro.hora_salida_real || '',
-      tipo_registro: registro.tipo_registro || 'fichaje_gps',
-      observacion: registro.observacion || '',
-      comentario: '',
+    setFormCorreccion({
+      guardia_final_id: registro.guardia_final_id || registro.guardia_id || '',
+      objetivo_final_id: registro.objetivo_final_id || turno?.objetivo_id || '',
+      hora_entrada_final: registro.hora_entrada_final || registro.hora_entrada_real || '',
+      hora_salida_final: registro.hora_salida_final || registro.hora_salida_real || '',
+      comentario_final: registro.comentario_final || '',
     })
     setErrorEdicion('')
   }
@@ -3629,7 +3630,13 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     setErrorEdicion('')
   }
 
-  const guardarEdicion = async () => {
+  const compararYGuardar = async (payload: {
+    guardia_final_id: string | null
+    objetivo_final_id: string | null
+    hora_entrada_final: string | null
+    hora_salida_final: string | null
+    comentario_final: string | null
+  }, comentarioAuditoria: string | null) => {
     if (!registroEditando) return
     if (!user?.id) {
       setErrorEdicion('Sesión de administrador no disponible.')
@@ -3638,31 +3645,15 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
 
     setErrorEdicion('')
 
-    const horaEntradaNueva = formEdicion.hora_entrada_real || null
-    const horaSalidaNueva = formEdicion.hora_salida_real || null
-    const alertaEntradaNueva = horaEntradaNueva
-      ? calcAlertaEntrada(turnos.find((t: Turno) => t.id === registroEditando.turno_id)?.hora_inicio || '', horaEntradaNueva)
-      : null
-    const alertaSalidaNueva = horaSalidaNueva
-      ? calcAlertaSalida(turnos.find((t: Turno) => t.id === registroEditando.turno_id)?.hora_fin || '', horaSalidaNueva)
-      : null
-    const horasNuevas = horaEntradaNueva && horaSalidaNueva
-      ? calcHorasTrabajadas(horaEntradaNueva, horaSalidaNueva)
-      : 0
-
     const cambios: { campo: string; valor_anterior: string | null; valor_nuevo: string | null }[] = []
-    if ((registroEditando.hora_entrada_real || null) !== horaEntradaNueva) {
-      cambios.push({ campo: 'hora_entrada_real', valor_anterior: registroEditando.hora_entrada_real || null, valor_nuevo: horaEntradaNueva })
-    }
-    if ((registroEditando.hora_salida_real || null) !== horaSalidaNueva) {
-      cambios.push({ campo: 'hora_salida_real', valor_anterior: registroEditando.hora_salida_real || null, valor_nuevo: horaSalidaNueva })
-    }
-    if ((registroEditando.tipo_registro || 'fichaje_gps') !== formEdicion.tipo_registro) {
-      cambios.push({ campo: 'tipo_registro', valor_anterior: registroEditando.tipo_registro || 'fichaje_gps', valor_nuevo: formEdicion.tipo_registro || null })
-    }
-    if ((registroEditando.observacion || '') !== formEdicion.observacion) {
-      cambios.push({ campo: 'observacion', valor_anterior: registroEditando.observacion || null, valor_nuevo: formEdicion.observacion || null })
-    }
+    const campos: (keyof typeof payload)[] = ['guardia_final_id', 'objetivo_final_id', 'hora_entrada_final', 'hora_salida_final', 'comentario_final']
+    campos.forEach(campo => {
+      const anterior = (registroEditando[campo] ?? null) as string | null
+      const nuevo = payload[campo]
+      if (anterior !== nuevo) {
+        cambios.push({ campo, valor_anterior: anterior, valor_nuevo: nuevo })
+      }
+    })
 
     if (cambios.length === 0) {
       cerrarEdicion()
@@ -3670,16 +3661,6 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     }
 
     setLoadingEdicion(true)
-
-    const payload = {
-      hora_entrada_real: horaEntradaNueva,
-      hora_salida_real: horaSalidaNueva,
-      tipo_registro: formEdicion.tipo_registro,
-      observacion: formEdicion.observacion,
-      horas_trabajadas: horasNuevas,
-      alerta_entrada: alertaEntradaNueva,
-      alerta_salida: alertaSalidaNueva,
-    }
 
     const { error: updateError } = await supabase
       .from('registros_asistencia')
@@ -3692,7 +3673,6 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
       return
     }
 
-    const comentario = formEdicion.comentario.trim() || null
     const { error: auditoriaError } = await supabase
       .from('registros_asistencia_auditoria')
       .insert(cambios.map(cambio => ({
@@ -3702,11 +3682,11 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
         campo: cambio.campo,
         valor_anterior: cambio.valor_anterior,
         valor_nuevo: cambio.valor_nuevo,
-        comentario,
+        comentario: comentarioAuditoria,
       })))
 
     if (auditoriaError) {
-      setErrorEdicion(`Asistencia actualizada, pero no se pudo guardar la auditoría: ${auditoriaError.message}`)
+      setErrorEdicion(`Registro actualizado, pero no se pudo guardar la auditoría: ${auditoriaError.message}`)
       setLoadingEdicion(false)
       return
     }
@@ -3714,6 +3694,30 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     setRegistros((prev: RegistroAsistencia[]) => prev.map(r => r.id === registroEditando.id ? { ...r, ...payload } as RegistroAsistencia : r))
     setLoadingEdicion(false)
     cerrarEdicion()
+  }
+
+  const guardarCorreccion = async () => {
+    if (!registroEditando) return
+    const payload = {
+      guardia_final_id: formCorreccion.guardia_final_id || null,
+      objetivo_final_id: formCorreccion.objetivo_final_id || null,
+      hora_entrada_final: formCorreccion.hora_entrada_final || null,
+      hora_salida_final: formCorreccion.hora_salida_final || null,
+      comentario_final: formCorreccion.comentario_final.trim() || null,
+    }
+    await compararYGuardar(payload, formCorreccion.comentario_final.trim() || null)
+  }
+
+  const restablecerDatosFinales = async () => {
+    if (!registroEditando) return
+    if (!window.confirm('¿Restablecer los datos originales? Se eliminará la corrección actual.')) return
+    await compararYGuardar({
+      guardia_final_id: null,
+      objetivo_final_id: null,
+      hora_entrada_final: null,
+      hora_salida_final: null,
+      comentario_final: null,
+    }, null)
   }
   const registrosFiltrados = registros.filter((r: RegistroAsistencia) => {
     const turno = turnos.find((t: Turno) => t.id === r.turno_id)
@@ -3798,9 +3802,9 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
                     <td style={S.td}>
                       <button
                         style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
-                        onClick={() => abrirEdicion(r)}
+                        onClick={() => abrirCorreccion(r)}
                       >
-                        Editar
+                        Corregir
                       </button>
                     </td>
                   )}
@@ -3831,90 +3835,142 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
         </Modal>
       )}
 
-      {registroEditando && (
-        <Modal
-          title="Editar Asistencia"
-          onClose={cerrarEdicion}
-          footer={
-            <>
-              <button
-                style={{ ...S.btn, ...S.btnSecondary }}
-                onClick={cerrarEdicion}
-              >
-                Cancelar
-              </button>
+      {registroEditando && (() => {
+        const turnoOriginal = turnos.find((t: Turno) => t.id === registroEditando.turno_id)
+        const guardiaOriginal = guardias.find((x: Usuario) => x.id === registroEditando.guardia_id)
+        const objetivoOriginal = objetivos.find((x: Objetivo) => x.id === turnoOriginal?.objetivo_id)
+        const guardiaFinalPreview = guardias.find((x: Usuario) => x.id === formCorreccion.guardia_final_id)
+        const objetivoFinalPreview = objetivos.find((x: Objetivo) => x.id === formCorreccion.objetivo_final_id)
+        const horasFinales = formCorreccion.hora_entrada_final && formCorreccion.hora_salida_final
+          ? calcHorasTrabajadas(formCorreccion.hora_entrada_final, formCorreccion.hora_salida_final)
+          : 0
 
-              <button
-                style={{ ...S.btn, ...S.btnPrimary }}
-                onClick={guardarEdicion}
-                disabled={loadingEdicion}
-              >
-                {loadingEdicion ? 'Guardando...' : 'Guardar cambios'}
-              </button>
-            </>
-          }
-        >
-          {errorEdicion && (
-            <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
-              {errorEdicion}
+        return (
+          <Modal
+            title={
+              <div>
+                <div>Corregir registro</div>
+                <div style={{ fontSize:12, fontWeight:400, color:'#94a3b8', marginTop:4 }}>
+                  Los datos originales son la evidencia. Los datos corregidos son los que utilizará Mercosur para reportes y liquidación.
+                </div>
+              </div>
+            }
+            onClose={cerrarEdicion}
+            footer={
+              <>
+                <button
+                  style={{ ...S.btn, ...S.btnSecondary }}
+                  onClick={restablecerDatosFinales}
+                  disabled={loadingEdicion}
+                >
+                  ↺ Restablecer datos originales
+                </button>
+                <button
+                  style={{ ...S.btn, ...S.btnSecondary }}
+                  onClick={cerrarEdicion}
+                >
+                  Cancelar
+                </button>
+                <button
+                  style={{ ...S.btn, ...S.btnPrimary }}
+                  onClick={guardarCorreccion}
+                  disabled={loadingEdicion}
+                >
+                  {loadingEdicion ? 'Guardando...' : 'Guardar cambios'}
+                </button>
+              </>
+            }
+          >
+            {errorEdicion && (
+              <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
+                {errorEdicion}
+              </div>
+            )}
+
+            <div style={{ marginBottom:16, padding:16, borderRadius:8, background:'rgba(148,163,184,.06)', border:'1px solid rgba(148,163,184,.2)' }}>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#94a3b8' }}>REGISTRO ORIGINAL</div>
+              <div style={S.grid2}>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Vigilador original</div><div style={{ fontSize:14 }}>{guardiaOriginal ? `${guardiaOriginal.apellido}, ${guardiaOriginal.nombre}` : '—'}</div></div>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Objetivo original</div><div style={{ fontSize:14 }}>{objetivoOriginal?.nombre || '—'}</div></div>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Hora ingreso GPS</div><div style={{ fontSize:14 }}>{registroEditando.hora_entrada_real || '—'}</div></div>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Hora egreso GPS</div><div style={{ fontSize:14 }}>{registroEditando.hora_salida_real || '—'}</div></div>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Tipo de registro</div><div style={{ fontSize:14 }}>{registroEditando.tipo_registro || '—'}</div></div>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Estado GPS</div><div style={{ fontSize:14 }}>{textoAuditoriaGps(registroEditando, 'ingreso')}</div></div>
+              </div>
             </div>
-          )}
 
-          <div style={S.grid2}>
-            <div style={{ marginBottom:16 }}>
-              <label style={S.label}>Hora de entrada</label>
-              <input
-                type="time"
-                style={S.input}
-                value={formEdicion.hora_entrada_real}
-                onChange={e => setFormEdicion({ ...formEdicion, hora_entrada_real:e.target.value })}
-              />
+            <div style={{ marginBottom:16, padding:16, borderRadius:8, background:'rgba(99,102,241,.06)', border:'1px solid rgba(99,102,241,.2)' }}>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#a5b4fc' }}>DATOS CORREGIDOS</div>
+
+              <div style={{ marginBottom:16 }}>
+                <label style={S.label}>Vigilador</label>
+                <select
+                  style={S.select}
+                  value={formCorreccion.guardia_final_id}
+                  onChange={e => setFormCorreccion({ ...formCorreccion, guardia_final_id:e.target.value })}
+                >
+                  {guardias.map((g: Usuario) => (
+                    <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ marginBottom:16 }}>
+                <label style={S.label}>Objetivo</label>
+                <select
+                  style={S.select}
+                  value={formCorreccion.objetivo_final_id}
+                  onChange={e => setFormCorreccion({ ...formCorreccion, objetivo_final_id:e.target.value })}
+                >
+                  {objetivos.map((o: Objetivo) => (
+                    <option key={o.id} value={o.id}>{o.nombre}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={S.grid2}>
+                <div style={{ marginBottom:16 }}>
+                  <label style={S.label}>Hora ingreso</label>
+                  <input
+                    type="time"
+                    style={S.input}
+                    value={formCorreccion.hora_entrada_final}
+                    onChange={e => setFormCorreccion({ ...formCorreccion, hora_entrada_final:e.target.value })}
+                  />
+                </div>
+                <div style={{ marginBottom:16 }}>
+                  <label style={S.label}>Hora egreso</label>
+                  <input
+                    type="time"
+                    style={S.input}
+                    value={formCorreccion.hora_salida_final}
+                    onChange={e => setFormCorreccion({ ...formCorreccion, hora_salida_final:e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom:0 }}>
+                <label style={S.label}>Comentario</label>
+                <textarea
+                  style={{ ...S.input, minHeight:80, resize:'vertical' }}
+                  value={formCorreccion.comentario_final}
+                  onChange={e => setFormCorreccion({ ...formCorreccion, comentario_final:e.target.value })}
+                />
+              </div>
             </div>
 
-            <div style={{ marginBottom:16 }}>
-              <label style={S.label}>Hora de salida</label>
-              <input
-                type="time"
-                style={S.input}
-                value={formEdicion.hora_salida_real}
-                onChange={e => setFormEdicion({ ...formEdicion, hora_salida_real:e.target.value })}
-              />
+            <div style={{ padding:16, borderRadius:8, background:'rgba(34,197,94,.06)', border:'1px solid rgba(34,197,94,.2)' }}>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#86efac' }}>RESULTADO FINAL</div>
+              <div style={S.grid2}>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Vigilador</div><div style={{ fontSize:14 }}>{guardiaFinalPreview ? `${guardiaFinalPreview.apellido}, ${guardiaFinalPreview.nombre}` : '—'}</div></div>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Objetivo</div><div style={{ fontSize:14 }}>{objetivoFinalPreview?.nombre || '—'}</div></div>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Horario</div><div style={{ fontSize:14 }}>{formCorreccion.hora_entrada_final || '—'} a {formCorreccion.hora_salida_final || '—'}</div></div>
+                <div><div style={{ ...S.label, marginBottom:2 }}>Horas calculadas</div><div style={{ fontSize:14 }}>{horasFinales ? formatHoras(horasFinales) : '—'}</div></div>
+              </div>
             </div>
-          </div>
-
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Tipo de registro</label>
-            <select
-              style={S.select}
-              value={formEdicion.tipo_registro}
-              onChange={e => setFormEdicion({ ...formEdicion, tipo_registro:e.target.value as RegistroAsistencia['tipo_registro'] })}
-            >
-              <option value="fichaje_gps">Fichaje GPS</option>
-              <option value="presente_manual">Presente manual</option>
-              <option value="ausencia">Ausencia</option>
-              <option value="reemplazo">Reemplazo</option>
-            </select>
-          </div>
-
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Observación</label>
-            <textarea
-              style={{ ...S.input, minHeight:80, resize:'vertical' }}
-              value={formEdicion.observacion}
-              onChange={e => setFormEdicion({ ...formEdicion, observacion:e.target.value })}
-            />
-          </div>
-
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Comentario (opcional)</label>
-            <textarea
-              style={{ ...S.input, minHeight:80, resize:'vertical' }}
-              value={formEdicion.comentario}
-              onChange={e => setFormEdicion({ ...formEdicion, comentario:e.target.value })}
-            />
-          </div>
-        </Modal>
-      )}
+          </Modal>
+        )
+      })()}
     </div>
   )
 }
