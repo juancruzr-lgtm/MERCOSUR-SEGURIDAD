@@ -90,6 +90,11 @@ export interface RegistroAsistencia {
   uniforme_puntaje?: number
   observacion?: string
   tipo_registro?: 'fichaje_gps' | 'presente_manual' | 'ausencia' | 'reemplazo'
+  guardia_final_id?: string | null
+  objetivo_final_id?: string | null
+  hora_entrada_final?: string | null
+  hora_salida_final?: string | null
+  comentario_final?: string | null
   created_at: string
   // joins
   turno?: Turno
