@@ -3595,13 +3595,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     </div>
   )
 }
-function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filtroActivo, limpiarFiltro, user, esAdmin }: any) {
-  const [modal, setModal] = useState(false)
-  const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
-  const [loading, setLoading] = useState(false)
-  const hoy = new Date().toLocaleDateString('sv-SE')
-
-  const [registroEditando, setRegistroEditando] = useState<RegistroAsistencia | null>(null)
+function CorregirRegistroModal({ registro, onClose, turnos, guardias, objetivos, user, setRegistros }: any) {
   const [formCorreccion, setFormCorreccion] = useState({
     guardia_final_id: '',
     objetivo_final_id: '',
@@ -3612,9 +3606,9 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
   const [errorEdicion, setErrorEdicion] = useState('')
   const [loadingEdicion, setLoadingEdicion] = useState(false)
 
-  const abrirCorreccion = (registro: RegistroAsistencia) => {
+  useEffect(() => {
+    if (!registro) return
     const turno = turnos.find((t: Turno) => t.id === registro.turno_id)
-    setRegistroEditando(registro)
     setFormCorreccion({
       guardia_final_id: registro.guardia_final_id || registro.guardia_id || '',
       objetivo_final_id: registro.objetivo_final_id || turno?.objetivo_id || '',
@@ -3623,12 +3617,9 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
       comentario_final: registro.comentario_final || '',
     })
     setErrorEdicion('')
-  }
+  }, [registro])
 
-  const cerrarEdicion = () => {
-    setRegistroEditando(null)
-    setErrorEdicion('')
-  }
+  if (!registro) return null
 
   const compararYGuardar = async (payload: {
     guardia_final_id: string | null
@@ -3637,7 +3628,6 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     hora_salida_final: string | null
     comentario_final: string | null
   }, comentarioAuditoria: string | null) => {
-    if (!registroEditando) return
     if (!user?.id) {
       setErrorEdicion('Sesión de administrador no disponible.')
       return
@@ -3648,7 +3638,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     const cambios: { campo: string; valor_anterior: string | null; valor_nuevo: string | null }[] = []
     const campos: (keyof typeof payload)[] = ['guardia_final_id', 'objetivo_final_id', 'hora_entrada_final', 'hora_salida_final', 'comentario_final']
     campos.forEach(campo => {
-      const anterior = (registroEditando[campo] ?? null) as string | null
+      const anterior = (registro[campo] ?? null) as string | null
       const nuevo = payload[campo]
       if (anterior !== nuevo) {
         cambios.push({ campo, valor_anterior: anterior, valor_nuevo: nuevo })
@@ -3656,7 +3646,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     })
 
     if (cambios.length === 0) {
-      cerrarEdicion()
+      onClose()
       return
     }
 
@@ -3665,7 +3655,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     const { error: updateError } = await supabase
       .from('registros_asistencia')
       .update(payload)
-      .eq('id', registroEditando.id)
+      .eq('id', registro.id)
 
     if (updateError) {
       setErrorEdicion(updateError.message)
@@ -3676,8 +3666,8 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     const { error: auditoriaError } = await supabase
       .from('registros_asistencia_auditoria')
       .insert(cambios.map(cambio => ({
-        registro_id: registroEditando.id,
-        turno_id: registroEditando.turno_id,
+        registro_id: registro.id,
+        turno_id: registro.turno_id,
         modificado_por: user.id,
         campo: cambio.campo,
         valor_anterior: cambio.valor_anterior,
@@ -3691,13 +3681,12 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
       return
     }
 
-    setRegistros((prev: RegistroAsistencia[]) => prev.map(r => r.id === registroEditando.id ? { ...r, ...payload } as RegistroAsistencia : r))
+    setRegistros((prev: RegistroAsistencia[]) => prev.map(r => r.id === registro.id ? { ...r, ...payload } as RegistroAsistencia : r))
     setLoadingEdicion(false)
-    cerrarEdicion()
+    onClose()
   }
 
   const guardarCorreccion = async () => {
-    if (!registroEditando) return
     const payload = {
       guardia_final_id: formCorreccion.guardia_final_id || null,
       objetivo_final_id: formCorreccion.objetivo_final_id || null,
@@ -3709,7 +3698,6 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
   }
 
   const restablecerDatosFinales = async () => {
-    if (!registroEditando) return
     if (!window.confirm('¿Restablecer los datos originales? Se eliminará la corrección actual.')) return
     await compararYGuardar({
       guardia_final_id: null,
@@ -3719,6 +3707,159 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
       comentario_final: null,
     }, null)
   }
+
+  const turnoOriginal = turnos.find((t: Turno) => t.id === registro.turno_id)
+  const guardiaOriginal = guardias.find((x: Usuario) => x.id === registro.guardia_id)
+  const objetivoOriginal = objetivos.find((x: Objetivo) => x.id === turnoOriginal?.objetivo_id)
+  const guardiaFinalPreview = guardias.find((x: Usuario) => x.id === formCorreccion.guardia_final_id)
+  const objetivoFinalPreview = objetivos.find((x: Objetivo) => x.id === formCorreccion.objetivo_final_id)
+  const horasFinales = formCorreccion.hora_entrada_final && formCorreccion.hora_salida_final
+    ? calcHorasTrabajadas(formCorreccion.hora_entrada_final, formCorreccion.hora_salida_final)
+    : 0
+
+  return (
+    <Modal
+      title={
+        <div>
+          <div>Corregir registro</div>
+          <div style={{ fontSize:12, fontWeight:400, color:'#94a3b8', marginTop:4 }}>
+            Los datos originales son la evidencia. Los datos corregidos son los que utilizará Mercosur para reportes y liquidación.
+          </div>
+        </div>
+      }
+      onClose={onClose}
+      footer={
+        <>
+          <button
+            style={{ ...S.btn, ...S.btnSecondary }}
+            onClick={restablecerDatosFinales}
+            disabled={loadingEdicion}
+          >
+            ↺ Restablecer datos originales
+          </button>
+          <button
+            style={{ ...S.btn, ...S.btnSecondary }}
+            onClick={onClose}
+          >
+            Cancelar
+          </button>
+          <button
+            style={{ ...S.btn, ...S.btnPrimary }}
+            onClick={guardarCorreccion}
+            disabled={loadingEdicion}
+          >
+            {loadingEdicion ? 'Guardando...' : 'Guardar cambios'}
+          </button>
+        </>
+      }
+    >
+      {errorEdicion && (
+        <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
+          {errorEdicion}
+        </div>
+      )}
+
+      <div style={{ marginBottom:16, padding:16, borderRadius:8, background:'rgba(148,163,184,.06)', border:'1px solid rgba(148,163,184,.2)' }}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#94a3b8' }}>REGISTRO ORIGINAL</div>
+        <div style={S.grid2}>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Vigilador original</div><div style={{ fontSize:14 }}>{guardiaOriginal ? `${guardiaOriginal.apellido}, ${guardiaOriginal.nombre}` : '—'}</div></div>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Objetivo original</div><div style={{ fontSize:14 }}>{objetivoOriginal?.nombre || '—'}</div></div>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Hora ingreso GPS</div><div style={{ fontSize:14 }}>{registro.hora_entrada_real || '—'}</div></div>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Hora egreso GPS</div><div style={{ fontSize:14 }}>{registro.hora_salida_real || '—'}</div></div>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Tipo de registro</div><div style={{ fontSize:14 }}>{registro.tipo_registro || '—'}</div></div>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Estado GPS</div><div style={{ fontSize:14 }}>{textoAuditoriaGps(registro, 'ingreso')}</div></div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom:16, padding:16, borderRadius:8, background:'rgba(99,102,241,.06)', border:'1px solid rgba(99,102,241,.2)' }}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#a5b4fc' }}>DATOS CORREGIDOS</div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={S.label}>Vigilador</label>
+          <select
+            style={S.select}
+            value={formCorreccion.guardia_final_id}
+            onChange={e => setFormCorreccion({ ...formCorreccion, guardia_final_id:e.target.value })}
+          >
+            {guardias.map((g: Usuario) => (
+              <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={S.label}>Objetivo</label>
+          <select
+            style={S.select}
+            value={formCorreccion.objetivo_final_id}
+            onChange={e => setFormCorreccion({ ...formCorreccion, objetivo_final_id:e.target.value })}
+          >
+            {objetivos.map((o: Objetivo) => (
+              <option key={o.id} value={o.id}>{o.nombre}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={S.grid2}>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Hora ingreso</label>
+            <input
+              type="time"
+              style={S.input}
+              value={formCorreccion.hora_entrada_final}
+              onChange={e => setFormCorreccion({ ...formCorreccion, hora_entrada_final:e.target.value })}
+            />
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Hora egreso</label>
+            <input
+              type="time"
+              style={S.input}
+              value={formCorreccion.hora_salida_final}
+              onChange={e => setFormCorreccion({ ...formCorreccion, hora_salida_final:e.target.value })}
+            />
+          </div>
+        </div>
+
+        <div style={{ marginBottom:0 }}>
+          <label style={S.label}>Comentario</label>
+          <textarea
+            style={{ ...S.input, minHeight:80, resize:'vertical' }}
+            value={formCorreccion.comentario_final}
+            onChange={e => setFormCorreccion({ ...formCorreccion, comentario_final:e.target.value })}
+          />
+        </div>
+      </div>
+
+      <div style={{ padding:16, borderRadius:8, background:'rgba(34,197,94,.06)', border:'1px solid rgba(34,197,94,.2)' }}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#86efac' }}>RESULTADO FINAL</div>
+        <div style={S.grid2}>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Vigilador</div><div style={{ fontSize:14 }}>{guardiaFinalPreview ? `${guardiaFinalPreview.apellido}, ${guardiaFinalPreview.nombre}` : '—'}</div></div>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Objetivo</div><div style={{ fontSize:14 }}>{objetivoFinalPreview?.nombre || '—'}</div></div>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Horario</div><div style={{ fontSize:14 }}>{formCorreccion.hora_entrada_final || '—'} a {formCorreccion.hora_salida_final || '—'}</div></div>
+          <div><div style={{ ...S.label, marginBottom:2 }}>Horas calculadas</div><div style={{ fontSize:14 }}>{horasFinales ? formatHoras(horasFinales) : '—'}</div></div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filtroActivo, limpiarFiltro, user, esAdmin }: any) {
+  const [modal, setModal] = useState(false)
+  const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
+  const [loading, setLoading] = useState(false)
+  const hoy = new Date().toLocaleDateString('sv-SE')
+
+  const [registroEditando, setRegistroEditando] = useState<RegistroAsistencia | null>(null)
+
+  const abrirCorreccion = (registro: RegistroAsistencia) => {
+    setRegistroEditando(registro)
+  }
+
+  const cerrarEdicion = () => {
+    setRegistroEditando(null)
+  }
+
   const registrosFiltrados = registros.filter((r: RegistroAsistencia) => {
     const turno = turnos.find((t: Turno) => t.id === r.turno_id)
     if (filtroActivo?.tipo === 'hoy' && turno?.fecha !== hoy) return false
@@ -3835,142 +3976,17 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
         </Modal>
       )}
 
-      {registroEditando && (() => {
-        const turnoOriginal = turnos.find((t: Turno) => t.id === registroEditando.turno_id)
-        const guardiaOriginal = guardias.find((x: Usuario) => x.id === registroEditando.guardia_id)
-        const objetivoOriginal = objetivos.find((x: Objetivo) => x.id === turnoOriginal?.objetivo_id)
-        const guardiaFinalPreview = guardias.find((x: Usuario) => x.id === formCorreccion.guardia_final_id)
-        const objetivoFinalPreview = objetivos.find((x: Objetivo) => x.id === formCorreccion.objetivo_final_id)
-        const horasFinales = formCorreccion.hora_entrada_final && formCorreccion.hora_salida_final
-          ? calcHorasTrabajadas(formCorreccion.hora_entrada_final, formCorreccion.hora_salida_final)
-          : 0
-
-        return (
-          <Modal
-            title={
-              <div>
-                <div>Corregir registro</div>
-                <div style={{ fontSize:12, fontWeight:400, color:'#94a3b8', marginTop:4 }}>
-                  Los datos originales son la evidencia. Los datos corregidos son los que utilizará Mercosur para reportes y liquidación.
-                </div>
-              </div>
-            }
-            onClose={cerrarEdicion}
-            footer={
-              <>
-                <button
-                  style={{ ...S.btn, ...S.btnSecondary }}
-                  onClick={restablecerDatosFinales}
-                  disabled={loadingEdicion}
-                >
-                  ↺ Restablecer datos originales
-                </button>
-                <button
-                  style={{ ...S.btn, ...S.btnSecondary }}
-                  onClick={cerrarEdicion}
-                >
-                  Cancelar
-                </button>
-                <button
-                  style={{ ...S.btn, ...S.btnPrimary }}
-                  onClick={guardarCorreccion}
-                  disabled={loadingEdicion}
-                >
-                  {loadingEdicion ? 'Guardando...' : 'Guardar cambios'}
-                </button>
-              </>
-            }
-          >
-            {errorEdicion && (
-              <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
-                {errorEdicion}
-              </div>
-            )}
-
-            <div style={{ marginBottom:16, padding:16, borderRadius:8, background:'rgba(148,163,184,.06)', border:'1px solid rgba(148,163,184,.2)' }}>
-              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#94a3b8' }}>REGISTRO ORIGINAL</div>
-              <div style={S.grid2}>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Vigilador original</div><div style={{ fontSize:14 }}>{guardiaOriginal ? `${guardiaOriginal.apellido}, ${guardiaOriginal.nombre}` : '—'}</div></div>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Objetivo original</div><div style={{ fontSize:14 }}>{objetivoOriginal?.nombre || '—'}</div></div>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Hora ingreso GPS</div><div style={{ fontSize:14 }}>{registroEditando.hora_entrada_real || '—'}</div></div>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Hora egreso GPS</div><div style={{ fontSize:14 }}>{registroEditando.hora_salida_real || '—'}</div></div>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Tipo de registro</div><div style={{ fontSize:14 }}>{registroEditando.tipo_registro || '—'}</div></div>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Estado GPS</div><div style={{ fontSize:14 }}>{textoAuditoriaGps(registroEditando, 'ingreso')}</div></div>
-              </div>
-            </div>
-
-            <div style={{ marginBottom:16, padding:16, borderRadius:8, background:'rgba(99,102,241,.06)', border:'1px solid rgba(99,102,241,.2)' }}>
-              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#a5b4fc' }}>DATOS CORREGIDOS</div>
-
-              <div style={{ marginBottom:16 }}>
-                <label style={S.label}>Vigilador</label>
-                <select
-                  style={S.select}
-                  value={formCorreccion.guardia_final_id}
-                  onChange={e => setFormCorreccion({ ...formCorreccion, guardia_final_id:e.target.value })}
-                >
-                  {guardias.map((g: Usuario) => (
-                    <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ marginBottom:16 }}>
-                <label style={S.label}>Objetivo</label>
-                <select
-                  style={S.select}
-                  value={formCorreccion.objetivo_final_id}
-                  onChange={e => setFormCorreccion({ ...formCorreccion, objetivo_final_id:e.target.value })}
-                >
-                  {objetivos.map((o: Objetivo) => (
-                    <option key={o.id} value={o.id}>{o.nombre}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={S.grid2}>
-                <div style={{ marginBottom:16 }}>
-                  <label style={S.label}>Hora ingreso</label>
-                  <input
-                    type="time"
-                    style={S.input}
-                    value={formCorreccion.hora_entrada_final}
-                    onChange={e => setFormCorreccion({ ...formCorreccion, hora_entrada_final:e.target.value })}
-                  />
-                </div>
-                <div style={{ marginBottom:16 }}>
-                  <label style={S.label}>Hora egreso</label>
-                  <input
-                    type="time"
-                    style={S.input}
-                    value={formCorreccion.hora_salida_final}
-                    onChange={e => setFormCorreccion({ ...formCorreccion, hora_salida_final:e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div style={{ marginBottom:0 }}>
-                <label style={S.label}>Comentario</label>
-                <textarea
-                  style={{ ...S.input, minHeight:80, resize:'vertical' }}
-                  value={formCorreccion.comentario_final}
-                  onChange={e => setFormCorreccion({ ...formCorreccion, comentario_final:e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div style={{ padding:16, borderRadius:8, background:'rgba(34,197,94,.06)', border:'1px solid rgba(34,197,94,.2)' }}>
-              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, marginBottom:12, color:'#86efac' }}>RESULTADO FINAL</div>
-              <div style={S.grid2}>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Vigilador</div><div style={{ fontSize:14 }}>{guardiaFinalPreview ? `${guardiaFinalPreview.apellido}, ${guardiaFinalPreview.nombre}` : '—'}</div></div>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Objetivo</div><div style={{ fontSize:14 }}>{objetivoFinalPreview?.nombre || '—'}</div></div>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Horario</div><div style={{ fontSize:14 }}>{formCorreccion.hora_entrada_final || '—'} a {formCorreccion.hora_salida_final || '—'}</div></div>
-                <div><div style={{ ...S.label, marginBottom:2 }}>Horas calculadas</div><div style={{ fontSize:14 }}>{horasFinales ? formatHoras(horasFinales) : '—'}</div></div>
-              </div>
-            </div>
-          </Modal>
-        )
-      })()}
+      {registroEditando && (
+        <CorregirRegistroModal
+          registro={registroEditando}
+          onClose={cerrarEdicion}
+          turnos={turnos}
+          guardias={guardias}
+          objetivos={objetivos}
+          user={user}
+          setRegistros={setRegistros}
+        />
+      )}
     </div>
   )
 }
@@ -4144,7 +4160,8 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
   )
 }
 
-function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroActivo, limpiarFiltro }: any) {
+function Reportes({ registros, setRegistros, turnos, guardias, objetivos, novedades, filtroActivo, limpiarFiltro, user }: any) {
+  const [registroCorrigiendo, setRegistroCorrigiendo] = useState<RegistroAsistencia | null>(null)
   const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
   const [tab, setTab] = useState('planilla_empleado')
   const [mes, setMes] = useState(new Date().toLocaleDateString('sv-SE').slice(0, 7))
@@ -4363,6 +4380,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
       'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
+      _registro: registro || null,
       _fecha: turno.fecha,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
@@ -4413,6 +4431,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
       'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
       'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
+      _registro: registro || null,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
       _cubierto: Boolean(registro?.hora_entrada_real && registro?.hora_salida_real),
@@ -4710,7 +4729,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
             {totalBox('Tardanzas', totalesEmpleado.tardanzas)}
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th></tr></thead>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
             <tbody>
               {planillaEmpleado.map((row: any) => (
                 <tr key={row._id}>
@@ -4727,6 +4746,16 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
                   <td style={S.td}>{row['GPS ingreso']}</td>
                   <td style={S.td}>{row['Distancia ingreso']}</td>
                   <td style={S.td}><Badge type={row['Estado GPS ingreso'] === 'Fuera del radio' ? 'alerta' : row['Estado GPS ingreso'] === 'Dentro del radio' ? 'ok' : 'pendiente'}>{row['Estado GPS ingreso']}</Badge></td>
+                  <td style={S.td}>
+                    {row._registro && (
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                        onClick={() => setRegistroCorrigiendo(row._registro)}
+                      >
+                        Corregir
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -4760,7 +4789,7 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
             {totalBox('Horas liquidables', totalesObjetivo.horasLiquidables.toFixed(2))}
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th></tr></thead>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
             <tbody>
               {planillaObjetivo.map((row: any) => (
                 <tr key={row._id}>
@@ -4778,6 +4807,16 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
                   <td style={S.td}>{row['GPS ingreso']}</td>
                   <td style={S.td}>{row['Distancia ingreso']}</td>
                   <td style={S.td}><Badge type={row['Estado GPS ingreso'] === 'Fuera del radio' ? 'alerta' : row['Estado GPS ingreso'] === 'Dentro del radio' ? 'ok' : 'pendiente'}>{row['Estado GPS ingreso']}</Badge></td>
+                  <td style={S.td}>
+                    {row._registro && (
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                        onClick={() => setRegistroCorrigiendo(row._registro)}
+                      >
+                        Corregir
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -4858,6 +4897,18 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
             </tbody>
           </table>
         </div>
+      )}
+
+      {registroCorrigiendo && (
+        <CorregirRegistroModal
+          registro={registroCorrigiendo}
+          onClose={() => setRegistroCorrigiendo(null)}
+          turnos={turnos}
+          guardias={guardias}
+          objetivos={objetivos}
+          user={user}
+          setRegistros={setRegistros}
+        />
       )}
     </div>
   )
@@ -7445,7 +7496,7 @@ const esGuardia = esRolGuardia(user.rol)
                 />
               )}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
-              {page === 'reportes' && <Reportes registros={registros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} />}
+              {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
             </>
