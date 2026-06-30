@@ -4382,7 +4382,11 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     tardanzas: planillaEmpleado.filter((row: any) => row._tarde).length,
   }
 
-  const turnosObjetivo = objetivoId ? turnosMes.filter((t: Turno) => t.objetivo_id === objetivoId) : []
+  const turnosObjetivo = objetivoId ? turnosMes.filter((t: Turno) => {
+    const registro = registroPrincipal(t)
+    const objetivoEfectivo = registro?.objetivo_final_id ?? t.objetivo_id
+    return objetivoEfectivo === objetivoId
+  }) : []
   const planillaObjetivo = turnosObjetivo.map((turno: Turno) => {
     const registro = registroPrincipal(turno)
     const horasReales = horasRealesRegistro(registro)
