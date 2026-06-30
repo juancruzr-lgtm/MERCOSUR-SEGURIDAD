@@ -3595,6 +3595,148 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     </div>
   )
 }
+const MOTIVOS_CARGA_MANUAL = [
+  'Sin internet',
+  'Celular roto',
+  'Olvido de fichaje',
+  'Cambio de guardia',
+  'Error operativo',
+  'Otro',
+]
+
+function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegistros }: any) {
+  const [form, setForm] = useState({
+    guardia_id: turno?.guardia_id || '',
+    hora_entrada: '',
+    hora_salida: '',
+    motivo: '',
+    observacion: '',
+  })
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  if (!turno) return null
+
+  const empleados = (guardias || []).filter((g: Usuario) => g.rol !== 'admin')
+
+  const guardar = async () => {
+    if (!form.guardia_id) { setError('Seleccioná un guardia.'); return }
+    if (!form.hora_entrada) { setError('La hora de entrada es obligatoria.'); return }
+    if (!form.hora_salida) { setError('La hora de salida es obligatoria.'); return }
+    if (!form.motivo) { setError('El motivo es obligatorio.'); return }
+    setError(null)
+    setLoading(true)
+    try {
+      const horas = calcHorasTrabajadas(form.hora_entrada, form.hora_salida)
+      const payload = {
+        turno_id: turno.id,
+        guardia_id: form.guardia_id,
+        hora_entrada_real: form.hora_entrada,
+        hora_salida_real: form.hora_salida,
+        horas_trabajadas: horas,
+        tipo_registro: 'carga_manual',
+        observacion: [form.motivo, form.observacion].filter(Boolean).join(' — ') || null,
+        // GPS y alertas deliberadamente ausentes: no es un fichaje real
+      }
+      const { data: registro, error: insertErr } = await supabase
+        .from('registros_asistencia')
+        .insert(payload)
+        .select()
+        .single()
+      if (insertErr || !registro) {
+        setError(insertErr?.message || 'Error al guardar.')
+        setLoading(false)
+        return
+      }
+      // Auditoría
+      const usuarioActual = user?.id
+        ? user
+        : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
+      if (usuarioActual?.id) {
+        await supabase.from('registros_asistencia_auditoria').insert({
+          registro_id: registro.id,
+          turno_id: turno.id,
+          modificado_por: usuarioActual.id,
+          campo: 'carga_inicial',
+          valor_anterior: null,
+          valor_nuevo: 'carga_manual',
+          motivo: form.motivo,
+        })
+      }
+      await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
+      setRegistros((prev: RegistroAsistencia[]) => [...prev, registro])
+      onClose()
+    } catch (e: any) {
+      setError(e?.message || 'Error inesperado.')
+    }
+    setLoading(false)
+  }
+
+  return (
+    <Modal title="Cargar asistencia manual" onClose={onClose}>
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ background:'#1e2d42', border:'1px solid #f59e0b44', borderRadius:8, padding:'10px 14px', fontSize:12, color:'#f59e0b' }}>
+          Este registro se marcará como <strong>carga manual</strong>. No simula un fichaje GPS. Quedará auditado con motivo y responsable.
+        </div>
+
+        <div>
+          <label style={S.label}>Guardia <span style={{ color:'#ef4444' }}>*</span></label>
+          <select style={S.select} value={form.guardia_id} onChange={e => setForm(f => ({ ...f, guardia_id: e.target.value }))}>
+            <option value="">— Seleccioná guardia —</option>
+            {empleados.map((g: Usuario) => (
+              <option key={g.id} value={g.id}>{g.apellido}, {g.nombre} · {g.legajo || 'sin legajo'}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <div>
+            <label style={S.label}>Hora entrada <span style={{ color:'#ef4444' }}>*</span></label>
+            <input type="time" style={S.input} value={form.hora_entrada} onChange={e => setForm(f => ({ ...f, hora_entrada: e.target.value }))} />
+          </div>
+          <div>
+            <label style={S.label}>Hora salida <span style={{ color:'#ef4444' }}>*</span></label>
+            <input type="time" style={S.input} value={form.hora_salida} onChange={e => setForm(f => ({ ...f, hora_salida: e.target.value }))} />
+          </div>
+        </div>
+
+        {form.hora_entrada && form.hora_salida && (
+          <div style={{ fontSize:13, color:'#94a3b8' }}>
+            Horas a liquidar: <strong style={{ color:'#10b981' }}>{calcHorasTrabajadas(form.hora_entrada, form.hora_salida).toFixed(2)} hs</strong>
+          </div>
+        )}
+
+        <div>
+          <label style={S.label}>Motivo <span style={{ color:'#ef4444' }}>*</span></label>
+          <select style={S.select} value={form.motivo} onChange={e => setForm(f => ({ ...f, motivo: e.target.value }))}>
+            <option value="">— Seleccioná motivo —</option>
+            {MOTIVOS_CARGA_MANUAL.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label style={S.label}>Observación</label>
+          <textarea
+            style={{ ...S.input, minHeight:64, resize:'vertical' as const }}
+            value={form.observacion}
+            onChange={e => setForm(f => ({ ...f, observacion: e.target.value }))}
+            placeholder="Detalles adicionales (opcional)"
+          />
+        </div>
+
+        {error && <div style={{ color:'#ef4444', fontSize:13 }}>{error}</div>}
+
+        <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+          <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose} disabled={loading}>Cancelar</button>
+          <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>
+            {loading ? 'Guardando...' : 'Guardar carga manual'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function CorregirRegistroModal({ registro, onClose, turnos, guardias, objetivos, user, setRegistros }: any) {
   const [formCorreccion, setFormCorreccion] = useState({
     guardia_final_id: '',
@@ -3933,10 +4075,11 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
                   <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{textoPrecisionGps(r)}</td>
                   <td style={S.td}>
                     <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                      {r.alerta_entrada && <Badge type={r.alerta_entrada}>{r.alerta_entrada === 'tarde' ? '⏰ Tarde' : '⬆ Anticipada'}</Badge>}
-                      {r.alerta_salida && <Badge type={r.alerta_salida}>{r.alerta_salida === 'anticipada' ? '⬇ Salida ant.' : '⏱ Posterior'}</Badge>}
-                      {r.gps_ingreso_estado === 'fuera_radio' && <Badge type="alerta">GPS fuera radio</Badge>}
-                      {!r.alerta_entrada && !r.alerta_salida && r.gps_ingreso_estado !== 'fuera_radio' && <Badge type="cubierto">✓ Ok</Badge>}
+                      {r.tipo_registro === 'carga_manual' && <Badge type="pendiente">Carga manual</Badge>}
+                      {r.tipo_registro !== 'carga_manual' && r.alerta_entrada && <Badge type={r.alerta_entrada}>{r.alerta_entrada === 'tarde' ? '⏰ Tarde' : '⬆ Anticipada'}</Badge>}
+                      {r.tipo_registro !== 'carga_manual' && r.alerta_salida && <Badge type={r.alerta_salida}>{r.alerta_salida === 'anticipada' ? '⬇ Salida ant.' : '⏱ Posterior'}</Badge>}
+                      {r.tipo_registro !== 'carga_manual' && r.gps_ingreso_estado === 'fuera_radio' && <Badge type="alerta">GPS fuera radio</Badge>}
+                      {r.tipo_registro !== 'carga_manual' && !r.alerta_entrada && !r.alerta_salida && r.gps_ingreso_estado !== 'fuera_radio' && <Badge type="cubierto">✓ Ok</Badge>}
                     </div>
                   </td>
                   {esAdmin && (
@@ -4162,6 +4305,7 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
 
 function Reportes({ registros, setRegistros, turnos, guardias, objetivos, novedades, filtroActivo, limpiarFiltro, user }: any) {
   const [registroCorrigiendo, setRegistroCorrigiendo] = useState<RegistroAsistencia | null>(null)
+  const [turnoParaCargaManual, setTurnoParaCargaManual] = useState<Turno | null>(null)
   const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
   const [tab, setTab] = useState('planilla_empleado')
   const [mes, setMes] = useState(new Date().toLocaleDateString('sv-SE').slice(0, 7))
@@ -4322,6 +4466,7 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
   }
   const estadoPlanilla = (turno: Turno, registro?: RegistroAsistencia) => {
     if (turno.estado === 'descubierto' || !turno.guardia_id) return 'Descubierto'
+    if (registro?.tipo_registro === 'carga_manual') return 'Manual'
     if (registro?.hora_entrada_real && (registro.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, registro) > 0)) return 'Tarde'
     if (registro?.hora_entrada_real && !registro.hora_salida_real) return 'En curso'
     if (registro?.hora_entrada_real && registro.hora_salida_real) return 'Cubierto'
@@ -4330,6 +4475,7 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
   const observacionesPlanilla = (turno: Turno, registro?: RegistroAsistencia, extra?: string | null) => {
     const obs: string[] = []
     if (turno.estado === 'descubierto' || !turno.guardia_id) obs.push('Descubierto')
+    if (registro?.tipo_registro === 'carga_manual') obs.push('Carga manual')
     if (!registro?.hora_entrada_real && turno.guardia_id && pasoVentanaFichaje(turno)) obs.push('Sin fichar')
     if (registro?.hora_entrada_real && !registro.hora_salida_real) obs.push('En curso')
     if (registro?.alerta_entrada === 'tarde') obs.push('Llegada tarde')
@@ -4380,6 +4526,7 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
       'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
       'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
+      _turno_id: turno.id,
       _registro: registro || null,
       _fecha: turno.fecha,
       _horasReales: horasReales,
@@ -4431,6 +4578,7 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
       'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
       'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
+      _turno_id: turno.id,
       _registro: registro || null,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
@@ -4450,6 +4598,19 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
     horasReales: planillaObjetivo.reduce((sum: number, row: any) => sum + row._horasReales, 0),
     horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => sum + row._horasLiquidables, 0),
   }
+
+  // Totales globales del mes — misma lógica que planillas, aplicada sobre todo el mes
+  const totalHsLiquidablesMes = registrosMes
+    .filter((r: RegistroAsistencia) => Boolean(r.hora_salida_final ?? r.hora_salida_real))
+    .reduce((s: number, r: RegistroAsistencia) => {
+      const t = turnoPorId.get(r.turno_id)
+      return t ? s + horasLiquidablesRegistro(t, r) : s
+    }, 0)
+  const totalHsProgramadasMes = turnosMes
+    .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+  const pctCubierto = totalHsProgramadasMes > 0
+    ? (totalHsLiquidablesMes / totalHsProgramadasMes * 100).toFixed(1)
+    : null
 
   const exportarPlanillaEmpleadoXLSX = async () => {
     if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
@@ -4701,6 +4862,32 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
           </label>
         )}
       </div>
+      {/* Bloque de totales del mes */}
+      <div style={{ ...S.card, marginBottom:16, background:'#0f172a', border:'1px solid #1e2d42' }}>
+        <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:10 }}>Resumen del mes — {mesLabel}</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:12 }}>
+          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #10b981' }}>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas liquidables hasta ahora</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#10b981' }}>{totalHsLiquidablesMes.toFixed(2)} hs</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Registros cerrados · incluye correcciones y cargas manuales</div>
+          </div>
+          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #3b82f6' }}>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas programadas del mes completo</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#3b82f6' }}>{totalHsProgramadasMes.toFixed(2)} hs</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Incluye turnos futuros del mes</div>
+          </div>
+          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #f59e0b' }}>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color: (totalHsLiquidablesMes - totalHsProgramadasMes) < 0 ? '#ef4444' : '#10b981' }}>
+              {(totalHsLiquidablesMes - totalHsProgramadasMes) >= 0 ? '+' : ''}{(totalHsLiquidablesMes - totalHsProgramadasMes).toFixed(2)} hs
+            </div>
+            {pctCubierto !== null && (
+              <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>{pctCubierto}% del mes cubierto</div>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div style={{ display:'flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:24, width:'fit-content', flexWrap:'wrap' }}>
         {tabs.map(t => <button key={t.id} style={{ padding:'8px 18px', borderRadius:8, cursor:'pointer', fontSize:13, color:tab===t.id?'#f59e0b':'#64748b', background:tab===t.id?'#111827':'transparent', border:'none', fontFamily:'DM Sans,sans-serif', fontWeight:tab===t.id?600:400 }} onClick={() => setTab(t.id)}>{t.label}</button>)}
       </div>
@@ -4741,7 +4928,7 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
                   <td style={S.td}>{row['Salida real']}</td>
                   <td style={S.td}>{row['Horas reales']}</td>
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
-                  <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
+                  <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Manual' ? 'ok' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
                   <td style={S.td}>{row['GPS ingreso']}</td>
                   <td style={S.td}>{row['Distancia ingreso']}</td>
@@ -4753,6 +4940,14 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
                         onClick={() => setRegistroCorrigiendo(row._registro)}
                       >
                         Corregir
+                      </button>
+                    )}
+                    {!row._registro && row._sinFichar && (
+                      <button
+                        style={{ ...S.btn, background:'#78350f', color:'#fbbf24', border:'1px solid #92400e', padding:'6px 10px', fontSize:12 }}
+                        onClick={() => setTurnoParaCargaManual(turnosMes.find((t: Turno) => t.id === row._turno_id) || null)}
+                      >
+                        Cargar manual
                       </button>
                     )}
                   </td>
@@ -4802,7 +4997,7 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
                   <td style={S.td}>{row['Salida real']}</td>
                   <td style={S.td}>{row['Horas reales']}</td>
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
-                  <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
+                  <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Manual' ? 'ok' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
                   <td style={S.td}>{row['GPS ingreso']}</td>
                   <td style={S.td}>{row['Distancia ingreso']}</td>
@@ -4814,6 +5009,14 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
                         onClick={() => setRegistroCorrigiendo(row._registro)}
                       >
                         Corregir
+                      </button>
+                    )}
+                    {!row._registro && row._sinFichar && (
+                      <button
+                        style={{ ...S.btn, background:'#78350f', color:'#fbbf24', border:'1px solid #92400e', padding:'6px 10px', fontSize:12 }}
+                        onClick={() => setTurnoParaCargaManual(turnosMes.find((t: Turno) => t.id === row._turno_id) || null)}
+                      >
+                        Cargar manual
                       </button>
                     )}
                   </td>
@@ -4906,6 +5109,16 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
           turnos={turnos}
           guardias={guardias}
           objetivos={objetivos}
+          user={user}
+          setRegistros={setRegistros}
+        />
+      )}
+
+      {turnoParaCargaManual && (
+        <CargarAsistenciaManualModal
+          turno={turnoParaCargaManual}
+          onClose={() => setTurnoParaCargaManual(null)}
+          guardias={guardias}
           user={user}
           setRegistros={setRegistros}
         />
