@@ -4289,17 +4289,20 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
   const scoreRegistro = (r: RegistroAsistencia) =>
     (r.hora_entrada_real ? 10 : 0) + (r.hora_salida_real ? 5 : 0) + (Number(r.horas_trabajadas) || 0)
   const registroPrincipal = (turno: Turno, guardiaId?: string | null) => {
-    const regs = (registrosPorTurno.get(turno.id) || []).filter((r: RegistroAsistencia) => !guardiaId || r.guardia_id === guardiaId)
+    const regs = (registrosPorTurno.get(turno.id) || []).filter((r: RegistroAsistencia) => !guardiaId || (r.guardia_final_id ?? r.guardia_id) === guardiaId)
     return [...regs].sort((a: RegistroAsistencia, b: RegistroAsistencia) =>
       scoreRegistro(b) - scoreRegistro(a) || (a.hora_entrada_real || '').localeCompare(b.hora_entrada_real || '')
     )[0]
   }
   const horasRealesRegistro = (registro?: RegistroAsistencia) =>
     registro?.hora_entrada_real && registro?.hora_salida_real ? Math.max(0, Number(registro.horas_trabajadas) || 0) : 0
-  const horasLiquidablesRegistro = (turno: Turno, registro?: RegistroAsistencia) =>
-    registro?.hora_entrada_real && registro?.hora_salida_real
-      ? calcularHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, registro.hora_entrada_real, registro.hora_salida_real)
+  const horasLiquidablesRegistro = (turno: Turno, registro?: RegistroAsistencia) => {
+    const horaEntrada = registro?.hora_entrada_final ?? registro?.hora_entrada_real
+    const horaSalida = registro?.hora_salida_final ?? registro?.hora_salida_real
+    return horaEntrada && horaSalida
+      ? calcularHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, horaEntrada, horaSalida)
       : 0
+  }
   const estadoPlanilla = (turno: Turno, registro?: RegistroAsistencia) => {
     if (turno.estado === 'descubierto' || !turno.guardia_id) return 'Descubierto'
     if (registro?.hora_entrada_real && (registro.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, registro) > 0)) return 'Tarde'
@@ -4326,29 +4329,32 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
   const turnosEmpleado = empleadoSeleccionado ? turnosMes.filter((t: Turno) => {
     const guardiaOriginal = (t as any).guardia_original_id
     const guardiaReal = (t as any).guardia_real_id
-    const tieneRegistro = (registrosPorTurno.get(t.id) || []).some((r: RegistroAsistencia) => r.guardia_id === empleadoSeleccionado.id)
+    const tieneRegistro = (registrosPorTurno.get(t.id) || []).some((r: RegistroAsistencia) => (r.guardia_final_id ?? r.guardia_id) === empleadoSeleccionado.id)
     return t.guardia_id === empleadoSeleccionado.id || guardiaOriginal === empleadoSeleccionado.id || guardiaReal === empleadoSeleccionado.id || tieneRegistro
   }) : []
 
   const planillaEmpleado = turnosEmpleado.map((turno: Turno) => {
     const registro = empleadoSeleccionado ? registroPrincipal(turno, empleadoSeleccionado.id) : undefined
     const registroOtroGuardia = !registro ? registroPrincipal(turno) : undefined
-    const objetivo = objetivos.find((o: Objetivo) => o.id === turno.objetivo_id)
+    const objetivo = objetivos.find((o: Objetivo) => o.id === (registro?.objetivo_final_id ?? turno.objetivo_id))
     const horasReales = horasRealesRegistro(registro)
     const horasLiquidables = horasLiquidablesRegistro(turno, registro)
-    const extra = registroOtroGuardia?.guardia_id && registroOtroGuardia.guardia_id !== empleadoSeleccionado?.id
-      ? `Ficho otro guardia: ${nombreGuardia(registroOtroGuardia.guardia_id)}`
+    const guardiaOtro = registroOtroGuardia ? (registroOtroGuardia.guardia_final_id ?? registroOtroGuardia.guardia_id) : null
+    const extra = guardiaOtro && guardiaOtro !== empleadoSeleccionado?.id
+      ? `Ficho otro guardia: ${nombreGuardia(guardiaOtro)}`
       : null
     const estado = estadoPlanilla(turno, registro)
     const tieneEntrada = Boolean(registro?.hora_entrada_real)
+    const horaEntradaMostrar = registro?.hora_entrada_final ?? registro?.hora_entrada_real
+    const horaSalidaMostrar = registro?.hora_salida_final ?? registro?.hora_salida_real
 
     return {
       Fecha: formatFecha(turno.fecha),
       Día: diaSemana(turno.fecha),
       Objetivo: objetivo?.nombre || '—',
       'Horario programado': formatHorarioAsignado(turno),
-      'Entrada real': registro?.hora_entrada_real ? formatHoraTurno(registro.hora_entrada_real) : '—',
-      'Salida real': registro?.hora_salida_real ? formatHoraTurno(registro.hora_salida_real) : '—',
+      'Entrada real': horaEntradaMostrar ? formatHoraTurno(horaEntradaMostrar) : '—',
+      'Salida real': horaSalidaMostrar ? formatHoraTurno(horaSalidaMostrar) : '—',
       'Horas reales': mostrarHoras(horasReales),
       'Horas liquidables': mostrarHoras(horasLiquidables),
       Estado: estado,
@@ -4383,15 +4389,18 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
     const horasLiquidables = horasLiquidablesRegistro(turno, registro)
     const estado = estadoPlanilla(turno, registro)
     const tieneEntrada = Boolean(registro?.hora_entrada_real)
+    const guardiaQueFicho = registro ? (registro.guardia_final_id ?? registro.guardia_id) : null
+    const horaEntradaMostrar = registro?.hora_entrada_final ?? registro?.hora_entrada_real
+    const horaSalidaMostrar = registro?.hora_salida_final ?? registro?.hora_salida_real
 
     return {
       Fecha: formatFecha(turno.fecha),
       Día: diaSemana(turno.fecha),
       'Horario programado': formatHorarioAsignado(turno),
       'Guardia asignado': turno.guardia_id ? nombreGuardia(turno.guardia_id) : 'Sin asignar',
-      'Guardia que fichó': registro?.guardia_id ? nombreGuardia(registro.guardia_id) : '—',
-      'Entrada real': registro?.hora_entrada_real ? formatHoraTurno(registro.hora_entrada_real) : '—',
-      'Salida real': registro?.hora_salida_real ? formatHoraTurno(registro.hora_salida_real) : '—',
+      'Guardia que fichó': guardiaQueFicho ? nombreGuardia(guardiaQueFicho) : '—',
+      'Entrada real': horaEntradaMostrar ? formatHoraTurno(horaEntradaMostrar) : '—',
+      'Salida real': horaSalidaMostrar ? formatHoraTurno(horaSalidaMostrar) : '—',
       'Horas reales': mostrarHoras(horasReales),
       'Horas liquidables': mostrarHoras(horasLiquidables),
       Estado: estado,
@@ -4494,13 +4503,13 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
 
   const reporteGuardias = guardias
     .map((g: Usuario) => {
-      const regs = registrosMes.filter((r: RegistroAsistencia) => r.guardia_id === g.id)
-      const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_real)
+      const regs = registrosMes.filter((r: RegistroAsistencia) => (r.guardia_final_id ?? r.guardia_id) === g.id)
+      const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_final ?? r.hora_salida_real)
       const dias = new Set(regs.map((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha).filter(Boolean)).size
       const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
       const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
-        return turno ? s + calcularHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, r.hora_entrada_real, r.hora_salida_real) : s
+        return turno ? s + horasLiquidablesRegistro(turno, r) : s
       }, 0)
 
       return {
@@ -4522,13 +4531,13 @@ function Reportes({ registros, turnos, guardias, objetivos, novedades, filtroAct
   const reporteObjetivos = objetivos
     .map((o: Objetivo) => {
       const ts = turnosMes.filter((t: Turno) => t.objetivo_id === o.id)
-      const regs = registrosMes.filter((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.objetivo_id === o.id)
-      const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_real)
+      const regs = registrosMes.filter((r: RegistroAsistencia) => (r.objetivo_final_id ?? turnoPorId.get(r.turno_id)?.objetivo_id) === o.id)
+      const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_final ?? r.hora_salida_real)
       const turnosConAsistencia = new Set(regs.map((r: RegistroAsistencia) => r.turno_id)).size
       const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
       const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
-        return turno ? s + calcularHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, r.hora_entrada_real, r.hora_salida_real) : s
+        return turno ? s + horasLiquidablesRegistro(turno, r) : s
       }, 0)
       const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
       const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length
