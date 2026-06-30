@@ -164,7 +164,7 @@ const S: Record<string, React.CSSProperties> = {
   table: { width:'100%', borderCollapse:'collapse' as const, fontSize:13 },
   th: { textAlign:'left' as const, padding:'10px 14px', color:'#64748b', fontSize:11, letterSpacing:1, textTransform:'uppercase' as const, fontWeight:600, borderBottom:'1px solid #1e2d42' },
   td: { padding:'12px 14px', borderBottom:'1px solid #1e2d42' },
-  modalOverlay: { position:'fixed' as const, inset:0, background:'rgba(0,0,0,0.7)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center', padding:20 },
+  modalOverlay: { position:'fixed' as const, inset:0, background:'rgba(0,0,0,0.7)', zIndex:1500, display:'flex', alignItems:'center', justifyContent:'center', padding:20 },
   modal: { background:'#111827', border:'1px solid #1e2d42', borderRadius:16, width:'100%', maxWidth:520, maxHeight:'90vh', overflowY:'auto' as const },
   modalHeader: { display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:'1px solid #1e2d42' },
   modalTitle: { fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700 },
