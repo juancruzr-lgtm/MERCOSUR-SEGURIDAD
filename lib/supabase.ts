@@ -50,12 +50,23 @@ export interface Objetivo {
   created_at: string
 }
 
+export interface Puesto {
+  id: string
+  objetivo_id: string
+  nombre: string
+  activo: boolean
+  orden?: number | null
+  created_at: string
+  updated_at: string
+}
+
 export interface Turno {
   id: string
   guardia_id?: string | null
   guardia_original_id?: string | null
   guardia_real_id?: string | null
   objetivo_id: string
+  puesto_id?: string | null
   fecha: string
   hora_inicio: string
   hora_fin: string
@@ -63,6 +74,7 @@ export interface Turno {
   // joins
   guardia?: Usuario
   objetivo?: Objetivo
+  puesto?: Puesto
 }
 
 export interface RegistroAsistencia {
