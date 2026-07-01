@@ -3814,7 +3814,7 @@ function CorregirRegistroModal({ registro, onClose, turnos, guardias, objetivos,
         campo: cambio.campo,
         valor_anterior: cambio.valor_anterior,
         valor_nuevo: cambio.valor_nuevo,
-        comentario: comentarioAuditoria,
+        motivo: comentarioAuditoria,
       })))
 
     if (auditoriaError) {
