@@ -2525,8 +2525,14 @@ const JWM_RONDAS_URL: Record<string, string> = {
 }
 
 // ── CENTRO OPERATIVO DEL OBJETIVO ────────────────────────────────────
-function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, novedades, guardias, onVolver, onNavigate, esAdmin }: any) {
+function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, novedades, guardias, onVolver, onNavigate, esAdmin, user }: any) {
   const [puestos, setPuestos] = useState<any[]>([])
+  const [rondasJwm, setRondasJwm] = useState<any[]>([])
+  const [syncState, setSyncState] = useState<'idle'|'loading'|'ok'|'error_token'|'error'>('idle')
+  const [syncMsg, setSyncMsg] = useState<string>('')
+  const [ultimaSync, setUltimaSync] = useState<string | null>(null)
+  const [tokenInput, setTokenInput] = useState('')
+  const [guardandoToken, setGuardandoToken] = useState(false)
   const hoy = new Date().toLocaleDateString('sv-SE')
 
   useEffect(() => {
@@ -2534,6 +2540,97 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
       if (data) setPuestos(data)
     })
   }, [objetivo.id])
+
+  // Carga rondas JWM del día
+  const cargarRondasJwm = async () => {
+    const { data } = await supabase
+      .from('rondas_jwm')
+      .select('*')
+      .eq('objetivo_id', objetivo.id)
+      .gte('fecha_hora', `${hoy}T00:00:00`)
+      .order('fecha_hora', { ascending: false })
+    if (data) setRondasJwm(data)
+    // Última sync exitosa
+    const { data: logData } = await supabase
+      .from('jwm_sync_log')
+      .select('fin, estado')
+      .eq('estado', 'ok')
+      .order('fin', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (logData?.fin) setUltimaSync(logData.fin)
+  }
+
+  useEffect(() => { cargarRondasJwm() }, [objetivo.id, hoy])
+
+  const sincronizarAhora = async () => {
+    setSyncState('loading')
+    setSyncMsg('')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch('/api/jwm/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token ?? ''}`,
+        },
+        body: JSON.stringify({}),
+      })
+      const json = await resp.json()
+      if (!resp.ok) {
+        if (json?.error === 'TOKEN_REQUERIDO') {
+          setSyncState('error_token')
+          setSyncMsg(json.message)
+        } else {
+          setSyncState('error')
+          setSyncMsg(json?.error ?? 'Error desconocido')
+        }
+        return
+      }
+      setSyncState('ok')
+      const total = json.resultados?.reduce((acc: number, r: any) => acc + (r.filas_nuevas ?? 0), 0) ?? 0
+      setSyncMsg(`Sync OK — ${total} controles nuevos importados`)
+      await cargarRondasJwm()
+    } catch (e: any) {
+      setSyncState('error')
+      setSyncMsg(e?.message ?? 'Error de red')
+    }
+  }
+
+  const guardarToken = async () => {
+    if (!tokenInput.trim()) return
+    setGuardandoToken(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch('/api/jwm/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token ?? ''}`,
+        },
+        body: JSON.stringify({ token: tokenInput.trim() }),
+      })
+      const json = await resp.json()
+      if (resp.ok) {
+        setTokenInput('')
+        setSyncState('idle')
+        setSyncMsg(`Token guardado. Vence: ${new Date(json.expires_at).toLocaleString('es-AR')}`)
+      } else {
+        setSyncMsg(json?.error ?? 'Error al guardar token')
+      }
+    } finally {
+      setGuardandoToken(false)
+    }
+  }
+
+  const horaCorta = (iso: string) => {
+    try { return new Date(iso).toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit', second:'2-digit' }) }
+    catch { return iso }
+  }
+  const fechaHora = (iso: string) => {
+    try { return new Date(iso).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) }
+    catch { return iso }
+  }
 
   const turnosObjetivo = turnos.filter((t: Turno) => t.objetivo_id === objetivo.id)
   const turnosHoy = turnosObjetivo.filter((t: Turno) => t.fecha === hoy)
@@ -2708,6 +2805,84 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
           </div>
         </div>
       )}
+
+      {/* ── Rondas JWM ─────────────────────────────────────────── */}
+      <div style={card}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+          <div style={secTitle}>Rondas JWM</div>
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            {ultimaSync && <span style={{ fontSize:11, color:'#475569' }}>Sync: {fechaHora(ultimaSync)}</span>}
+            <button
+              style={{ ...S.btn, ...S.btnSecondary, fontSize:12, padding:'5px 10px', opacity: syncState==='loading'?0.6:1 }}
+              onClick={sincronizarAhora}
+              disabled={syncState === 'loading'}
+            >
+              {syncState === 'loading' ? '⏳ Sincronizando…' : '🔄 Sincronizar ahora'}
+            </button>
+          </div>
+        </div>
+
+        {/* Mensaje de estado */}
+        {syncMsg && (
+          <div style={{
+            background: syncState==='error_token'?'#451a03' : syncState==='error'?'#1c1917' : syncState==='ok'?'#052e16':'#1e2d42',
+            border:`1px solid ${syncState==='error_token'?'#92400e':syncState==='error'?'#44403c':syncState==='ok'?'#166534':'#1e40af'}`,
+            borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:12,
+            color: syncState==='error_token'?'#fbbf24':syncState==='error'?'#a8a29e':syncState==='ok'?'#4ade80':'#93c5fd'
+          }}>
+            {syncMsg}
+          </div>
+        )}
+
+        {/* Panel de token manual — visible solo cuando hay error de token y es admin */}
+        {syncState === 'error_token' && esAdmin && (
+          <div style={{ background:'#1c1917', border:'1px solid #78350f', borderRadius:8, padding:12, marginBottom:12 }}>
+            <div style={{ fontSize:12, color:'#fbbf24', marginBottom:8, fontWeight:600 }}>
+              ¿Cómo renovar el token?
+            </div>
+            <div style={{ fontSize:11, color:'#a8a29e', marginBottom:8, lineHeight:1.5 }}>
+              1. Entrá a <strong style={{color:'#e2e8f0'}}>overseas.jwmyun.com</strong> con tu usuario.<br/>
+              2. Abrí DevTools → Application → Local Storage → <strong style={{color:'#e2e8f0'}}>token</strong>.<br/>
+              3. Copiá el valor completo (empieza con eyJ) y pegalo acá.
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <input
+                type="password"
+                placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+                value={tokenInput}
+                onChange={e => setTokenInput(e.target.value)}
+                style={{ flex:1, background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'6px 10px', color:'#e2e8f0', fontSize:12 }}
+              />
+              <button
+                style={{ ...S.btn, ...S.btnPrimary, fontSize:12, padding:'6px 12px', opacity: guardandoToken?0.6:1 }}
+                onClick={guardarToken}
+                disabled={guardandoToken || !tokenInput.trim()}
+              >
+                {guardandoToken ? 'Guardando…' : 'Guardar token'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Controles del día */}
+        {rondasJwm.length === 0 ? (
+          <div style={{ color:'#475569', fontSize:13 }}>Sin controles registrados hoy. Usá "Sincronizar ahora" para importar desde JWM.</div>
+        ) : (
+          <div>
+            <div style={{ fontSize:11, color:'#64748b', marginBottom:8 }}>{rondasJwm.length} controles hoy</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+              {rondasJwm.map((r: any) => (
+                <div key={r.id} style={{ display:'flex', gap:10, alignItems:'center', padding:'6px 10px', background:'#0f172a', borderRadius:6, fontSize:12 }}>
+                  <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#60a5fa', minWidth:70 }}>{horaCorta(r.fecha_hora)}</span>
+                  <span style={{ flex:1, color:'#e2e8f0' }}>{r.checkpoint}</span>
+                  {r.dispositivo_id && <span style={{ color:'#475569', fontSize:11 }}>{r.dispositivo_id}</span>}
+                  <span style={{ background:'#052e1688', color:'#4ade80', border:'1px solid #166534', borderRadius:4, padding:'1px 6px', fontSize:10 }}>✓ OK</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Accesos rápidos — Rondas y Cámaras (visibles para todos) */}
       {(() => {
