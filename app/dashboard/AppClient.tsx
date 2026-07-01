@@ -2515,6 +2515,15 @@ function ChecklistsAdmin({ plantillas, setPlantillas, items, setItems }: any) {
   )
 }
 
+// Mapeo temporal objetivo → URL rondas JWM.
+// Indexado por nombre exacto del objetivo (case-sensitive).
+// Reemplazar con tabla objetivo_integraciones cuando escale.
+const JWM_RONDAS_URL: Record<string, string> = {
+  'ACA':                'https://overseas.jwmyun.com/setup/dept',
+  'Club Universitario': 'https://overseas.jwmyun.com/setup/dept',
+  'PNC Remolques':      'https://overseas.jwmyun.com/setup/dept',
+}
+
 // ── CENTRO OPERATIVO DEL OBJETIVO ────────────────────────────────────
 function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, novedades, guardias, onVolver, onNavigate, esAdmin }: any) {
   const [puestos, setPuestos] = useState<any[]>([])
@@ -2699,6 +2708,35 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
           </div>
         </div>
       )}
+
+      {/* Accesos rápidos — Rondas y Cámaras (visibles para todos) */}
+      {(() => {
+        const jwmUrl = JWM_RONDAS_URL[objetivo.nombre]
+        return (jwmUrl || true) ? (
+          <div style={card}>
+            <div style={secTitle}>Integraciones</div>
+            <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+              {jwmUrl ? (
+                <a
+                  href={jwmUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ ...S.btn, ...S.btnSecondary, fontSize:13, textDecoration:'none', display:'inline-flex', alignItems:'center', gap:6 }}
+                >
+                  🔄 Rondas JWM
+                </a>
+              ) : (
+                <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
+                  🔄 Rondas JWM <span style={{ fontSize:10, color:'#475569' }}>(no configurado)</span>
+                </button>
+              )}
+              <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
+                📷 Cámaras <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
+              </button>
+            </div>
+          </div>
+        ) : null
+      })()}
 
       {/* Admin: accesos rápidos */}
       {esAdmin && (
