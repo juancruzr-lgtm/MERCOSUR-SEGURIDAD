@@ -2661,15 +2661,23 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
       {/* Estado general */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:10, marginBottom:16 }}>
         {[
-          { label:'Turnos hoy', value:turnosHoy.length, color:'#3b82f6' },
-          { label:'Activos ahora', value:turnosActivos.length, color:'#10b981' },
-          { label:'Sin fichar', value:turnosHoy.filter((t: Turno) => !tieneEntrada(t) && t.hora_inicio <= horaActual).length, color:'#f59e0b' },
-          { label:'Alertas', value:alertas.length, color: alertas.length > 0 ? '#ef4444' : '#64748b' },
-          { label:'Novedades', value:novedadesObj.length, color: novedadesObj.length > 0 ? '#f59e0b' : '#64748b' },
-        ].map(({ label, value, color }) => (
-          <div key={label} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px' }}>
+          { label:'Turnos hoy',   value:turnosHoy.length,   color:'#3b82f6', anchor:'sec-turnos' },
+          { label:'Activos ahora',value:turnosActivos.length,color:'#10b981', anchor:'sec-turnos' },
+          { label:'Sin fichar',   value:turnosHoy.filter((t: Turno) => !tieneEntrada(t) && t.hora_inicio <= horaActual).length, color:'#f59e0b', anchor:'sec-turnos' },
+          { label:'Alertas',      value:alertas.length,     color: alertas.length > 0 ? '#ef4444' : '#64748b', anchor:'sec-alertas' },
+          { label:'Novedades',    value:novedadesObj.length, color: novedadesObj.length > 0 ? '#f59e0b' : '#64748b', anchor:'sec-alertas' },
+          { label:'Rondas hoy',   value:historial.length,   color:'#a78bfa', anchor:'sec-historial' },
+        ].map(({ label, value, color, anchor }) => (
+          <div
+            key={label}
+            onClick={() => document.getElementById(anchor)?.scrollIntoView({ behavior:'smooth', block:'start' })}
+            style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px', cursor:'pointer', transition:'border-color 0.15s' }}
+            onMouseEnter={e => (e.currentTarget.style.borderColor = '#334155')}
+            onMouseLeave={e => (e.currentTarget.style.borderColor = '#1e2d42')}
+          >
             <div style={{ fontSize:10, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>{label}</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color }}>{value}</div>
+            <div style={{ fontSize:10, color:'#334155', marginTop:4 }}>Ver detalle ↓</div>
           </div>
         ))}
       </div>
@@ -2690,7 +2698,7 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
       )}
 
       {/* Turnos del día */}
-      <div style={card}>
+      <div id="sec-turnos" style={card}>
         <div style={secTitle}>Turnos hoy</div>
         {turnosHoy.length === 0 ? (
           <div style={{ color:'#64748b', fontSize:13 }}>Sin turnos programados para hoy.</div>
@@ -2755,7 +2763,7 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
 
       {/* Alertas y novedades */}
       {(alertas.length > 0 || novedadesObj.length > 0) && (
-        <div style={card}>
+        <div id="sec-alertas" style={card}>
           <div style={secTitle}>Alertas y novedades activas</div>
           <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
             {novedadesObj.slice(0, 5).map((n: any) => (
@@ -2801,7 +2809,7 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
 
       {/* Historial de rondas JWM */}
       {JWM_RONDAS_URL[objetivo.nombre] && (
-        <div style={card}>
+        <div id="sec-historial" style={card}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, marginBottom:12 }}>
             <div style={secTitle}>Historial de rondas</div>
             <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
