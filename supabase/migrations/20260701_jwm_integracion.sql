@@ -154,20 +154,22 @@ end $$;
 insert into objetivo_jwm_map (objetivo_id, empresa_jwm, reader_codes)
 select o.id, 'ACA ROSARIO', array['1407-24470514']
 from objetivos o
-where o.nombre ilike '%ACA%'
+where (o.nombre ilike '%ACA%')
   and not exists (select 1 from objetivo_jwm_map where empresa_jwm = 'ACA ROSARIO')
 limit 1;
 
-insert into objetivo_jwm_map (objetivo_id, empresa_jwm, reader_codes)
-select o.id, 'CLUB UNI 2', array[]::text[]
+-- CLUB UNI 2: reader_code no confirmado — se inserta inactivo.
+-- Activar y completar reader_codes solo cuando se confirme el readercode real.
+insert into objetivo_jwm_map (objetivo_id, empresa_jwm, reader_codes, activo)
+select o.id, 'CLUB UNI 2', array[]::text[], false
 from objetivos o
-where o.nombre ilike '%club%univer%' or o.nombre ilike '%CLUB UNI%'
+where (o.nombre ilike '%club%univer%' or o.nombre ilike '%CLUB UNI%')
   and not exists (select 1 from objetivo_jwm_map where empresa_jwm = 'CLUB UNI 2')
 limit 1;
 
 insert into objetivo_jwm_map (objetivo_id, empresa_jwm, reader_codes)
 select o.id, 'PNC Remolques', array['1407-24470515']
 from objetivos o
-where o.nombre ilike '%PNC%' or o.nombre ilike '%remolque%'
+where (o.nombre ilike '%PNC%' or o.nombre ilike '%remolque%')
   and not exists (select 1 from objetivo_jwm_map where empresa_jwm = 'PNC Remolques')
 limit 1;
