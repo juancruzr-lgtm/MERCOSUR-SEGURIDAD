@@ -2529,6 +2529,27 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
   const [puestos, setPuestos] = useState<any[]>([])
   const hoy = new Date().toLocaleDateString('sv-SE')
 
+  // ── Historial de rondas JWM ──
+  const [historial, setHistorial] = useState<any[]>([])
+  const [histDesde, setHistDesde] = useState(hoy)
+  const [histHasta, setHistHasta] = useState(hoy)
+  const [histLoading, setHistLoading] = useState(false)
+
+  const cargarHistorial = async (desde: string, hasta: string) => {
+    setHistLoading(true)
+    const { data } = await supabase
+      .from('rondas_jwm')
+      .select('*')
+      .eq('objetivo_id', objetivo.id)
+      .gte('fecha_hora', `${desde}T00:00:00`)
+      .lte('fecha_hora', `${hasta}T23:59:59`)
+      .order('fecha_hora', { ascending: false })
+    setHistorial(data ?? [])
+    setHistLoading(false)
+  }
+
+  useEffect(() => { cargarHistorial(histDesde, histHasta) }, [objetivo.id])
+
   // ── Modal importación de rondas JWM ──
   const [showModal, setShowModal] = useState(false)
   const [modalStep, setModalStep] = useState<'form'|'loading'|'done'|'error'>('form')
@@ -2775,6 +2796,68 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
               📷 Cámaras <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Historial de rondas JWM */}
+      {JWM_RONDAS_URL[objetivo.nombre] && (
+        <div style={card}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, marginBottom:12 }}>
+            <div style={secTitle}>Historial de rondas</div>
+            <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+              <input type="date" value={histDesde} onChange={e => setHistDesde(e.target.value)}
+                style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'5px 8px', color:'#e2e8f0', fontSize:12 }} />
+              <span style={{ color:'#475569', fontSize:12 }}>→</span>
+              <input type="date" value={histHasta} onChange={e => setHistHasta(e.target.value)}
+                style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'5px 8px', color:'#e2e8f0', fontSize:12 }} />
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, fontSize:12, padding:'5px 10px' }}
+                onClick={() => cargarHistorial(histDesde, histHasta)}
+              >
+                Buscar
+              </button>
+            </div>
+          </div>
+
+          {histLoading ? (
+            <div style={{ color:'#475569', fontSize:13 }}>Cargando…</div>
+          ) : historial.length === 0 ? (
+            <div style={{ color:'#475569', fontSize:13 }}>Sin controles importados para el período seleccionado.</div>
+          ) : (
+            <div>
+              <div style={{ fontSize:11, color:'#64748b', marginBottom:8 }}>{historial.length} controles</div>
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                  <thead>
+                    <tr style={{ borderBottom:'1px solid #1e2d42' }}>
+                      {['Fecha y hora','Checkpoint','Dispositivo','Estado','Observación'].map(h => (
+                        <th key={h} style={{ padding:'6px 10px', textAlign:'left', color:'#64748b', fontWeight:600, fontSize:11, textTransform:'uppercase', letterSpacing:0.5, whiteSpace:'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historial.map((r: any) => (
+                      <tr key={r.id} style={{ borderBottom:'1px solid #0f172a' }}>
+                        <td style={{ padding:'7px 10px', color:'#93c5fd', whiteSpace:'nowrap', fontFamily:'Syne,sans-serif', fontWeight:600 }}>
+                          {new Date(r.fecha_hora).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}
+                        </td>
+                        <td style={{ padding:'7px 10px', color:'#e2e8f0' }}>{r.checkpoint || '—'}</td>
+                        <td style={{ padding:'7px 10px', color:'#94a3b8', whiteSpace:'nowrap' }}>{r.dispositivo_id || '—'}</td>
+                        <td style={{ padding:'7px 10px' }}>
+                          <span style={{ background:'#052e1688', color:'#4ade80', border:'1px solid #166534', borderRadius:4, padding:'2px 7px', fontSize:11 }}>
+                            {r.estado || 'ok'}
+                          </span>
+                        </td>
+                        <td style={{ padding:'7px 10px', color:'#64748b', fontSize:11 }}>
+                          {r.raw_data?.observacion || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
