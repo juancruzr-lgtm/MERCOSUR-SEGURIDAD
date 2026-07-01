@@ -2,11 +2,5 @@
   "framework": "nextjs",
   "buildCommand": "next build",
   "devCommand": "next dev",
-  "installCommand": "npm install",
-  "crons": [
-    {
-      "path": "/api/jwm/sync",
-      "schedule": "0 6 * * *"
-    }
-  ]
+  "installCommand": "npm install"
 }

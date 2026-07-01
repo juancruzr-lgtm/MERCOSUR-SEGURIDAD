@@ -1,15 +1,14 @@
-// Cliente para la API interna de JWM.
-// Solo se ejecuta server-side. Nunca importar desde componentes cliente.
-// Endpoint descubierto por auditoría de red el 01/07/2026.
+// Cliente HTTP para la API de JWM. Solo se ejecuta server-side.
+// El token JWT lo aporta el usuario — no se obtiene ni guarda aquí.
 
 const JWM_BASE = 'https://overseas.jwmyun.com'
 const JWM_PAGE_SIZE = 200
 
 export interface JwmRawRecord {
   rawdatasPK: { dataid: number; happentime: string }
-  eminfo: string       // checkpoint name: "ACA Ros 1"
-  emcode: string       // checkpoint code: "02002EE124"
-  readercode: string   // device: "1407-24470514"
+  eminfo: string
+  emcode: string
+  readercode: string
   emtype: number
   longitude: number
   latitude: number
@@ -35,7 +34,7 @@ export async function fetchRondasJwm(
   token: string,
   readercode: string,
   beginTime: string,  // "2026-07-01 00:00:00"
-  endTime: string,    // "2026-07-02 00:00:00"
+  endTime: string,    // "2026-07-02 23:59:59"
 ): Promise<JwmRawRecord[]> {
   const allRows: JwmRawRecord[] = []
   let current = 1
@@ -71,46 +70,4 @@ export async function fetchRondasJwm(
   }
 
   return allRows
-}
-
-// Intenta obtener un nuevo JWT haciendo POST directo a JWM.
-// ADVERTENCIA: JWM usa Alibaba Cloud nocaptcha en el browser.
-// Este endpoint puede funcionar desde servidor (sin slider) o no,
-// dependiendo de la versión de JWM. Si falla, el admin debe renovar
-// el token manualmente desde la UI.
-export async function tryJwmLogin(
-  companyCode: string,
-  username: string,
-  password: string,
-): Promise<string | null> {
-  // Endpoints conocidos (probados durante auditoría):
-  // /api/user/login → 404 en esta instancia
-  // /api/login      → 405 con POST (requiere formato distinto)
-  // /api/sys/login  → 503
-  // Intentamos el que devolvió 405 con GET y ver si hay formato alternativo.
-  const candidates = [
-    { url: `${JWM_BASE}/api/login`, body: { companyCode, username, password } },
-    { url: `${JWM_BASE}/api/user/loginByPwd`, body: { companyCode, username, password } },
-    { url: `${JWM_BASE}/api/user/login`, body: { companyCode, loginName: username, loginPwd: password } },
-  ]
-
-  for (const { url, body } of candidates) {
-    try {
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(8000),
-      })
-      if (!resp.ok) continue
-      const json = await resp.json()
-      // Token puede estar en data.token o directamente en token
-      const token = json?.data?.token ?? json?.token
-      if (token && typeof token === 'string' && token.startsWith('eyJ')) return token
-    } catch {
-      // Ignorar y probar siguiente candidato
-    }
-  }
-
-  return null
 }
