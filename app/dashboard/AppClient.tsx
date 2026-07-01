@@ -2515,7 +2515,217 @@ function ChecklistsAdmin({ plantillas, setPlantillas, items, setItems }: any) {
   )
 }
 
-function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], zonasOperativas = [], filtroActivo, limpiarFiltro }: any) {
+// ── CENTRO OPERATIVO DEL OBJETIVO ────────────────────────────────────
+function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, novedades, guardias, onVolver, onNavigate, esAdmin }: any) {
+  const [puestos, setPuestos] = useState<any[]>([])
+  const hoy = new Date().toLocaleDateString('sv-SE')
+
+  useEffect(() => {
+    supabase.from('puestos').select('*').eq('objetivo_id', objetivo.id).eq('activo', true).order('orden').then(({ data }) => {
+      if (data) setPuestos(data)
+    })
+  }, [objetivo.id])
+
+  const turnosObjetivo = turnos.filter((t: Turno) => t.objetivo_id === objetivo.id)
+  const turnosHoy = turnosObjetivo.filter((t: Turno) => t.fecha === hoy)
+    .sort((a: Turno, b: Turno) => a.hora_inicio.localeCompare(b.hora_inicio))
+
+  const ahora = new Date()
+  const horaActual = `${String(ahora.getHours()).padStart(2,'0')}:${String(ahora.getMinutes()).padStart(2,'0')}`
+  const turnosActivos = turnosHoy.filter((t: Turno) => t.hora_inicio <= horaActual && t.hora_fin >= horaActual || (t.hora_fin < t.hora_inicio && t.hora_inicio <= horaActual))
+  const turnosProximos = turnosHoy.filter((t: Turno) => t.hora_inicio > horaActual).slice(0, 3)
+
+  const registrosPorTurno = new Map<string, any[]>()
+  registros.forEach((r: any) => { registrosPorTurno.set(r.turno_id, [...(registrosPorTurno.get(r.turno_id) || []), r]) })
+
+  const tieneEntrada = (t: Turno) => (registrosPorTurno.get(t.id) || []).some((r: any) => r.hora_entrada_real)
+
+  const supervisionesObj = supervisiones.filter((s: any) => s.objetivo_id === objetivo.id)
+  const ultimaSupervision = supervisionesObj[0] || null
+
+  const novedadesObj = novedades.filter((n: any) => n.objetivo_id === objetivo.id && n.estado !== 'resuelta')
+  const alertas = novedadesObj.filter((n: any) => n.prioridad === 'urgente')
+
+  // Semáforo
+  const turnoDescubierto = turnosHoy.some((t: Turno) => !t.guardia_id || t.estado === 'descubierto')
+  const hayAlertaUrgente = alertas.length > 0
+  const semaforo = turnoDescubierto || hayAlertaUrgente ? 'critico'
+    : turnosHoy.some((t: Turno) => !tieneEntrada(t) && t.hora_inicio <= horaActual) ? 'atencion'
+    : turnosHoy.length === 0 ? 'sin_turnos'
+    : 'operativo'
+  const semaforoColor = semaforo === 'critico' ? '#ef4444' : semaforo === 'atencion' ? '#f59e0b' : semaforo === 'operativo' ? '#10b981' : '#64748b'
+  const semaforoLabel = semaforo === 'critico' ? 'Crítico' : semaforo === 'atencion' ? 'Atención' : semaforo === 'operativo' ? 'Operativo' : 'Sin turnos hoy'
+
+  const nombreGuardia = (id?: string | null) => {
+    const g = guardias.find((x: Usuario) => x.id === id)
+    return g ? `${g.apellido}, ${g.nombre}` : '—'
+  }
+  const hora = (h: string) => h?.slice(0, 5) || '—'
+  const fechaCorta = (iso: string) => {
+    if (!iso) return '—'
+    return new Date(iso).toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })
+  }
+
+  const card: React.CSSProperties = { background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:16, marginBottom:16 }
+  const secTitle: React.CSSProperties = { fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:14, color:'#e2e8f0', marginBottom:10, textTransform:'uppercase', letterSpacing:1 }
+  const pill = (color: string, text: string) => (
+    <span style={{ background: color + '22', color, border:`1px solid ${color}44`, borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:600 }}>{text}</span>
+  )
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
+        <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={onVolver}>← Volver</button>
+        <div style={{ flex:1 }}>
+          <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#f8fafc' }}>{objetivo.nombre}</div>
+          <div style={{ color:'#94a3b8', fontSize:13 }}>{objetivo.cliente || '—'} {objetivo.direccion ? `· ${objetivo.direccion}` : ''}</div>
+        </div>
+        <div style={{ textAlign:'right' }}>
+          <div style={{ width:14, height:14, borderRadius:'50%', background:semaforoColor, display:'inline-block', marginRight:6, boxShadow:`0 0 8px ${semaforoColor}` }} />
+          <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:semaforoColor, fontSize:15 }}>{semaforoLabel}</span>
+        </div>
+      </div>
+
+      {/* Estado general */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:10, marginBottom:16 }}>
+        {[
+          { label:'Turnos hoy', value:turnosHoy.length, color:'#3b82f6' },
+          { label:'Activos ahora', value:turnosActivos.length, color:'#10b981' },
+          { label:'Sin fichar', value:turnosHoy.filter((t: Turno) => !tieneEntrada(t) && t.hora_inicio <= horaActual).length, color:'#f59e0b' },
+          { label:'Alertas', value:alertas.length, color: alertas.length > 0 ? '#ef4444' : '#64748b' },
+          { label:'Novedades', value:novedadesObj.length, color: novedadesObj.length > 0 ? '#f59e0b' : '#64748b' },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px' }}>
+            <div style={{ fontSize:10, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>{label}</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Puestos */}
+      {puestos.length > 0 && (
+        <div style={card}>
+          <div style={secTitle}>Puestos</div>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            {puestos.map((p: any) => (
+              <div key={p.id} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 14px', fontSize:13 }}>
+                <span style={{ color:'#e2e8f0', fontWeight:600 }}>{p.nombre}</span>
+                {p.orden && <span style={{ color:'#475569', fontSize:11, marginLeft:6 }}>#{p.orden}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Turnos del día */}
+      <div style={card}>
+        <div style={secTitle}>Turnos hoy</div>
+        {turnosHoy.length === 0 ? (
+          <div style={{ color:'#64748b', fontSize:13 }}>Sin turnos programados para hoy.</div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {turnosHoy.map((t: Turno) => {
+              const regs = registrosPorTurno.get(t.id) || []
+              const reg = regs.find((r: any) => r.hora_entrada_real) || regs[0]
+              const activo = turnosActivos.some((x: Turno) => x.id === t.id)
+              const sinFichar = !tieneEntrada(t) && t.hora_inicio <= horaActual
+              const estadoColor = t.estado === 'descubierto' || !t.guardia_id ? '#ef4444' : activo && !reg?.hora_salida_real ? '#10b981' : sinFichar ? '#f59e0b' : '#64748b'
+              return (
+                <div key={t.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 12px', background:'#0f172a', borderRadius:8, borderLeft:`3px solid ${estadoColor}` }}>
+                  <div style={{ minWidth:90, fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:13, color:'#e2e8f0' }}>{hora(t.hora_inicio)} – {hora(t.hora_fin)}</div>
+                  <div style={{ flex:1, fontSize:13, color:'#94a3b8' }}>{nombreGuardia(t.guardia_id)}</div>
+                  <div style={{ fontSize:11 }}>
+                    {!t.guardia_id ? pill('#ef4444','Sin guardia')
+                      : t.estado === 'descubierto' ? pill('#ef4444','Descubierto')
+                      : reg?.hora_entrada_real && !reg?.hora_salida_real ? pill('#10b981','En turno')
+                      : reg?.hora_entrada_real && reg?.hora_salida_real ? pill('#64748b','Completado')
+                      : sinFichar ? pill('#f59e0b','Sin fichar')
+                      : pill('#3b82f6','Programado')}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {turnosProximos.length > 0 && (
+          <div style={{ marginTop:12, paddingTop:12, borderTop:'1px solid #1e2d42' }}>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:8 }}>Próximos</div>
+            {turnosProximos.map((t: Turno) => (
+              <div key={t.id} style={{ display:'flex', gap:12, padding:'6px 0', borderBottom:'1px solid #0f172a', fontSize:13, color:'#94a3b8' }}>
+                <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#e2e8f0', minWidth:90 }}>{hora(t.hora_inicio)} – {hora(t.hora_fin)}</span>
+                <span>{nombreGuardia(t.guardia_id)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Última supervisión */}
+      <div style={card}>
+        <div style={secTitle}>Última supervisión</div>
+        {!ultimaSupervision ? (
+          <div style={{ color:'#64748b', fontSize:13 }}>Sin supervisiones registradas.</div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            <div style={{ display:'flex', gap:12, alignItems:'center' }}>
+              <div style={{ fontSize:13, color:'#94a3b8' }}>{fechaCorta(ultimaSupervision.created_at)}</div>
+              <Badge type={ultimaSupervision.estado}>{ultimaSupervision.estado?.replace('_',' ') || '—'}</Badge>
+            </div>
+            <div style={{ fontSize:13, color:'#64748b' }}>
+              Supervisor: <span style={{ color:'#e2e8f0' }}>{ultimaSupervision.supervisor?.apellido}, {ultimaSupervision.supervisor?.nombre}</span>
+            </div>
+            {ultimaSupervision.observaciones && (
+              <div style={{ fontSize:12, color:'#94a3b8', background:'#0f172a', borderRadius:6, padding:'6px 10px', marginTop:4 }}>{ultimaSupervision.observaciones}</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Alertas y novedades */}
+      {(alertas.length > 0 || novedadesObj.length > 0) && (
+        <div style={card}>
+          <div style={secTitle}>Alertas y novedades activas</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {novedadesObj.slice(0, 5).map((n: any) => (
+              <div key={n.id} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'8px 10px', background:'#0f172a', borderRadius:8, borderLeft:`3px solid ${n.prioridad==='urgente'?'#ef4444':n.prioridad==='importante'?'#f59e0b':'#3b82f6'}` }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13, color:'#e2e8f0' }}>{n.descripcion}</div>
+                  <div style={{ fontSize:11, color:'#64748b', marginTop:2 }}>{n.tipo} · {fechaCorta(n.created_at)}</div>
+                </div>
+                <Badge type={n.prioridad}>{n.prioridad}</Badge>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Admin: accesos rápidos */}
+      {esAdmin && (
+        <div style={card}>
+          <div style={secTitle}>Accesos rápidos</div>
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+            <button
+              style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
+              onClick={() => onNavigate?.('reportes', { tipo:'objetivo', objetivoId: objetivo.id })}
+            >
+              📊 Reportes
+            </button>
+            <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
+              📋 Protocolos <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
+            </button>
+            <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
+              📁 Documentación <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], zonasOperativas = [], filtroActivo, limpiarFiltro, guardias = [], registros = [], supervisiones = [], novedades = [], user, onNavigate }: any) {
+  const [objetivoSeleccionadoId, setObjetivoSeleccionadoId] = useState<string | null>(null)
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -2695,6 +2905,23 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   const activos = objetivos.filter((o: any) => o.estado === 'activo').length
   const inactivos = objetivos.filter((o: any) => o.estado !== 'activo').length
 
+  const objetivoSeleccionado = objetivoSeleccionadoId ? objetivos.find((o: any) => o.id === objetivoSeleccionadoId) : null
+  if (objetivoSeleccionado) {
+    return (
+      <CentroOperativoObjetivo
+        objetivo={objetivoSeleccionado}
+        turnos={turnos}
+        registros={registros}
+        supervisiones={supervisiones}
+        novedades={novedades}
+        guardias={guardias}
+        onVolver={() => setObjetivoSeleccionadoId(null)}
+        onNavigate={onNavigate}
+        esAdmin={user?.rol === 'admin'}
+      />
+    )
+  }
+
   return (
     <div>
       {/* Header */}
@@ -2798,7 +3025,11 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
 
                       {/* Nombre */}
                       <td style={S.td}>
-                        <strong style={{ fontSize:14 }}>{o.nombre}</strong>
+                        <strong
+                          style={{ fontSize:14, cursor:'pointer', color:'#60a5fa', textDecoration:'underline' }}
+                          onClick={() => setObjetivoSeleccionadoId(o.id)}
+                          title="Ver Centro Operativo"
+                        >{o.nombre}</strong>
                         {o.radio_metros && (
                           <div style={{ fontSize:11, color:'#64748b', marginTop:2 }}>
                             📍 radio {o.radio_metros}m
@@ -7686,7 +7917,7 @@ const esGuardia = esRolGuardia(user.rol)
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} />}
-              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} />}
+              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={setPage} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
