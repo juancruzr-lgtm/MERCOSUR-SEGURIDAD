@@ -1,44 +1,57 @@
 // POST /api/jwm/sync
-// Sincroniza rondas JWM → rondas_jwm para todos los objetivos activos
-// (o uno específico si se pasa objetivo_jwm_id en el body).
+// Sincroniza rondas JWM → rondas_jwm.
 //
-// Puede ser llamado:
-// - manualmente desde el Centro Operativo (con Supabase session del usuario)
-// - por el cron de Vercel (con CRON_SECRET en Authorization)
-//
-// El token JWM se obtiene de:
-// 1. Tabla jwm_tokens (si existe uno vigente)
-// 2. Variable JWM_BASE_TOKEN (fallback para bootstrap inicial)
-// 3. Login automático con JWM_USERNAME / JWM_PASSWORD (si el token venció)
+// Modos de uso:
+// 1. Cron Vercel: GET con Authorization: Bearer <CRON_SECRET>
+//    → usa token almacenado en DB o auto-login con env vars
+// 2. Manual desde UI (admin): POST con session token de Supabase
+//    → puede incluir { username, password, company_code } para login fresco
+//    → puede incluir { token } para usar un JWT directo
+//    → puede incluir { fecha_desde, fecha_hasta } para rango personalizado
+//    → puede incluir { objetivo_id } para filtrar un solo objetivo
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin, requireRole } from '../../_lib/employee-auth'
 import { fetchRondasJwm, tryJwmLogin, type JwmRawRecord } from '../_lib/jwm-client'
 
-// Verifica que el request viene del cron de Vercel o de un admin autenticado.
 async function authorize(req: NextRequest, admin: ReturnType<typeof getSupabaseAdmin>) {
-  // Cron de Vercel incluye el header Authorization: Bearer <CRON_SECRET>
   const cronSecret = process.env.CRON_SECRET
   if (cronSecret) {
     const authHeader = req.headers.get('authorization')
-    if (authHeader === `Bearer ${cronSecret}`) return null  // autorizado
+    if (authHeader === `Bearer ${cronSecret}`) return null
   }
-  // Fallback: usuario admin autenticado
   if ('client' in admin) {
     return requireRole(req, admin.client, ['admin'], 'Se requiere admin o cron secret')
   }
   return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
 }
 
-async function getActiveToken(adminClient: ReturnType<typeof getSupabaseAdmin>): Promise<{
-  token: string | null
-  source: string
-  expired: boolean
-}> {
+async function getActiveToken(
+  adminClient: ReturnType<typeof getSupabaseAdmin>,
+  overrideToken?: string,
+  credentials?: { username: string; password: string; companyCode: string },
+): Promise<{ token: string | null; source: string; expired: boolean }> {
   if (!('client' in adminClient)) return { token: null, source: 'none', expired: true }
   const sb = adminClient.client
 
-  // 1. Buscar token vigente en jwm_tokens
+  // 1. Token explícito enviado por el usuario desde la UI
+  if (overrideToken) {
+    return { token: overrideToken, source: 'ui_token', expired: false }
+  }
+
+  // 2. Login con credenciales enviadas desde la UI
+  if (credentials?.username && credentials?.password) {
+    const newToken = await tryJwmLogin(credentials.companyCode, credentials.username, credentials.password)
+    if (newToken) {
+      const expiresAt = new Date(Date.now() + 23.5 * 60 * 60 * 1000).toISOString()
+      await sb.from('jwm_tokens').insert({ token_value: newToken, expires_at: expiresAt, obtenido_por: 'auto' })
+      return { token: newToken, source: 'login_ui', expired: false }
+    }
+    // Login falló (probablemente CAPTCHA)
+    return { token: null, source: 'login_failed', expired: true }
+  }
+
+  // 3. Token vigente en DB
   const { data: tokenRow } = await sb
     .from('jwm_tokens')
     .select('token_value, expires_at')
@@ -51,26 +64,20 @@ async function getActiveToken(adminClient: ReturnType<typeof getSupabaseAdmin>):
     if (!expired) return { token: tokenRow.token_value, source: 'db', expired: false }
   }
 
-  // 2. Intentar login automático con credenciales de env vars
+  // 4. Auto-login con env vars
   const username = process.env.JWM_USERNAME
   const password = process.env.JWM_PASSWORD
   const companyCode = process.env.JWM_COMPANY_CODE ?? 'mercosur'
-
   if (username && password) {
     const newToken = await tryJwmLogin(companyCode, username, password)
     if (newToken) {
-      // Guardar token nuevo (expira en 24h)
       const expiresAt = new Date(Date.now() + 23.5 * 60 * 60 * 1000).toISOString()
-      await sb.from('jwm_tokens').insert({
-        token_value: newToken,
-        expires_at: expiresAt,
-        obtenido_por: 'auto',
-      })
+      await sb.from('jwm_tokens').insert({ token_value: newToken, expires_at: expiresAt, obtenido_por: 'auto' })
       return { token: newToken, source: 'auto_login', expired: false }
     }
   }
 
-  // 3. Fallback: token de variable de entorno (para bootstrap inicial)
+  // 5. Fallback: token de env var
   const envToken = process.env.JWM_BASE_TOKEN
   if (envToken) return { token: envToken, source: 'env', expired: false }
 
@@ -85,39 +92,61 @@ export async function POST(req: NextRequest) {
   if (authError) return authError
 
   const body = await req.json().catch(() => ({}))
-  const objetivoJwmId: string | undefined = body?.objetivo_jwm_id
-  // Rango de fechas: por defecto hoy + ayer (para no perder datos de tarde/noche)
-  const horasAtras = Number(body?.horas_atras ?? 26)
-  const beginTime = new Date(Date.now() - horasAtras * 60 * 60 * 1000)
-    .toISOString().replace('T', ' ').slice(0, 19)
-  const endTime = new Date().toISOString().replace('T', ' ').slice(0, 19)
 
-  const { token, source, expired } = await getActiveToken(admin)
+  // Credenciales opcionales desde UI
+  const uiToken: string | undefined = body?.token
+  const uiUsername: string | undefined = body?.username
+  const uiPassword: string | undefined = body?.password
+  const uiCompany: string = body?.company_code ?? process.env.JWM_COMPANY_CODE ?? 'mercosur'
+
+  // Rango de fechas: personalizado o por defecto últimas 26h
+  let beginTime: string
+  let endTime: string
+  if (body?.fecha_desde && body?.fecha_hasta) {
+    beginTime = `${body.fecha_desde} 00:00:00`
+    endTime   = `${body.fecha_hasta} 23:59:59`
+  } else {
+    const horasAtras = Number(body?.horas_atras ?? 26)
+    beginTime = new Date(Date.now() - horasAtras * 60 * 60 * 1000)
+      .toISOString().replace('T', ' ').slice(0, 19)
+    endTime = new Date().toISOString().replace('T', ' ').slice(0, 19)
+  }
+
+  const credentials = uiUsername && uiPassword
+    ? { username: uiUsername, password: uiPassword, companyCode: uiCompany }
+    : undefined
+
+  const { token, source, expired } = await getActiveToken(admin, uiToken, credentials)
 
   if (!token || expired) {
+    // Login intentado pero falló → CAPTCHA probable
+    if (source === 'login_failed') {
+      return NextResponse.json({
+        error: 'LOGIN_FAILED',
+        message: 'No se pudo iniciar sesión en JWM (posible CAPTCHA). Ingresá el token manualmente.',
+      }, { status: 401 })
+    }
     return NextResponse.json({
       error: 'TOKEN_REQUERIDO',
-      message: 'El token JWM venció y no se pudo renovar automáticamente. Ingresá un token nuevo desde el Centro Operativo.',
-      source,
+      message: 'No hay token JWM activo. Usá el botón "Recopilar datos" e ingresá tus credenciales.',
     }, { status: 401 })
   }
 
-  // Obtener mapeos activos
+  // Filtrar por objetivo_id si se especificó
+  const objetivoId: string | undefined = body?.objetivo_id
   let query = admin.client.from('objetivo_jwm_map').select('*').eq('activo', true)
-  if (objetivoJwmId) query = query.eq('id', objetivoJwmId)
+  if (objetivoId) query = query.eq('objetivo_id', objetivoId)
   const { data: mapeos, error: mapError } = await query
   if (mapError) return NextResponse.json({ error: mapError.message }, { status: 500 })
-  if (!mapeos?.length) return NextResponse.json({ message: 'Sin mapeos activos', filas: 0 })
+  if (!mapeos?.length) return NextResponse.json({ message: 'Sin mapeos activos para este objetivo', filas: 0 })
 
   const resultados = []
 
   for (const mapeo of mapeos) {
-    // Insertar log de inicio
     const { data: logRow } = await admin.client
       .from('jwm_sync_log')
       .insert({ objetivo_jwm_id: mapeo.id, inicio: new Date().toISOString(), estado: 'en_progreso' })
-      .select('id')
-      .single()
+      .select('id').single()
 
     const logId = logRow?.id
     let filasNuevas = 0
@@ -126,7 +155,6 @@ export async function POST(req: NextRequest) {
 
     try {
       const readercodes: string[] = mapeo.reader_codes ?? []
-      // Si no hay reader_codes configurados, igual intentamos sin filtro
       const targets = readercodes.length > 0 ? readercodes : ['']
 
       const allRecords: JwmRawRecord[] = []
@@ -159,7 +187,6 @@ export async function POST(req: NextRequest) {
       errorDetalle = err?.message ?? 'Error desconocido'
     }
 
-    // Actualizar log con resultado
     if (logId) {
       await admin.client.from('jwm_sync_log').update({
         fin: new Date().toISOString(),
@@ -180,8 +207,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, token_source: source, resultados })
 }
 
-// GET: usado por el cron de Vercel (Vercel crons llaman por GET con
-// Authorization: Bearer <CRON_SECRET>).
+// GET: cron de Vercel
 export async function GET(req: NextRequest) {
   return POST(req)
 }

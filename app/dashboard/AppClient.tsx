@@ -2527,110 +2527,87 @@ const JWM_RONDAS_URL: Record<string, string> = {
 // ── CENTRO OPERATIVO DEL OBJETIVO ────────────────────────────────────
 function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, novedades, guardias, onVolver, onNavigate, esAdmin, user }: any) {
   const [puestos, setPuestos] = useState<any[]>([])
-  const [rondasJwm, setRondasJwm] = useState<any[]>([])
-  const [syncState, setSyncState] = useState<'idle'|'loading'|'ok'|'error_token'|'error'>('idle')
-  const [syncMsg, setSyncMsg] = useState<string>('')
-  const [ultimaSync, setUltimaSync] = useState<string | null>(null)
-  const [tokenInput, setTokenInput] = useState('')
-  const [guardandoToken, setGuardandoToken] = useState(false)
   const hoy = new Date().toLocaleDateString('sv-SE')
+
+  // ── Modal recopilación de rondas JWM ──
+  const [showModal, setShowModal] = useState(false)
+  const [modalStep, setModalStep] = useState<'form'|'token'|'loading'|'done'|'error'>('form')
+  const [fechaDesde, setFechaDesde] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - 7); return d.toLocaleDateString('sv-SE')
+  })
+  const [fechaHasta, setFechaHasta] = useState(hoy)
+  const [jwmUser, setJwmUser] = useState('')
+  const [jwmPass, setJwmPass] = useState('')
+  const [jwmToken, setJwmToken] = useState('')
+  const [modalMsg, setModalMsg] = useState('')
+  const [modalCount, setModalCount] = useState(0)
+
+  const recopilarConCredenciales = async () => {
+    setModalStep('loading')
+    setModalMsg('')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch('/api/jwm/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token ?? ''}` },
+        body: JSON.stringify({ username: jwmUser, password: jwmPass, fecha_desde: fechaDesde, fecha_hasta: fechaHasta, objetivo_id: objetivo.id }),
+      })
+      const json = await resp.json()
+      if (!resp.ok) {
+        if (json?.error === 'LOGIN_FAILED') {
+          setModalStep('token')
+          setModalMsg('El login automático falló (CAPTCHA). Pegá el token de JWM manualmente.')
+          return
+        }
+        setModalStep('error')
+        setModalMsg(json?.message ?? json?.error ?? 'Error desconocido')
+        return
+      }
+      const total = json.resultados?.reduce((a: number, r: any) => a + (r.filas_nuevas ?? 0), 0) ?? 0
+      setModalCount(total)
+      setModalStep('done')
+    } catch (e: any) {
+      setModalStep('error')
+      setModalMsg(e?.message ?? 'Error de red')
+    }
+  }
+
+  const recopilarConToken = async () => {
+    setModalStep('loading')
+    setModalMsg('')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch('/api/jwm/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token ?? ''}` },
+        body: JSON.stringify({ token: jwmToken, fecha_desde: fechaDesde, fecha_hasta: fechaHasta, objetivo_id: objetivo.id }),
+      })
+      const json = await resp.json()
+      if (!resp.ok) {
+        setModalStep('error')
+        setModalMsg(json?.message ?? json?.error ?? 'Error desconocido')
+        return
+      }
+      const total = json.resultados?.reduce((a: number, r: any) => a + (r.filas_nuevas ?? 0), 0) ?? 0
+      setModalCount(total)
+      setModalStep('done')
+    } catch (e: any) {
+      setModalStep('error')
+      setModalMsg(e?.message ?? 'Error de red')
+    }
+  }
+
+  const cerrarModal = () => {
+    setShowModal(false)
+    setModalStep('form')
+    setJwmUser(''); setJwmPass(''); setJwmToken(''); setModalMsg('')
+  }
 
   useEffect(() => {
     supabase.from('puestos').select('*').eq('objetivo_id', objetivo.id).eq('activo', true).order('orden').then(({ data }) => {
       if (data) setPuestos(data)
     })
   }, [objetivo.id])
-
-  // Carga rondas JWM del día
-  const cargarRondasJwm = async () => {
-    const { data } = await supabase
-      .from('rondas_jwm')
-      .select('*')
-      .eq('objetivo_id', objetivo.id)
-      .gte('fecha_hora', `${hoy}T00:00:00`)
-      .order('fecha_hora', { ascending: false })
-    if (data) setRondasJwm(data)
-    // Última sync exitosa
-    const { data: logData } = await supabase
-      .from('jwm_sync_log')
-      .select('fin, estado')
-      .eq('estado', 'ok')
-      .order('fin', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (logData?.fin) setUltimaSync(logData.fin)
-  }
-
-  useEffect(() => { cargarRondasJwm() }, [objetivo.id, hoy])
-
-  const sincronizarAhora = async () => {
-    setSyncState('loading')
-    setSyncMsg('')
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const resp = await fetch('/api/jwm/sync', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token ?? ''}`,
-        },
-        body: JSON.stringify({}),
-      })
-      const json = await resp.json()
-      if (!resp.ok) {
-        if (json?.error === 'TOKEN_REQUERIDO') {
-          setSyncState('error_token')
-          setSyncMsg(json.message)
-        } else {
-          setSyncState('error')
-          setSyncMsg(json?.error ?? 'Error desconocido')
-        }
-        return
-      }
-      setSyncState('ok')
-      const total = json.resultados?.reduce((acc: number, r: any) => acc + (r.filas_nuevas ?? 0), 0) ?? 0
-      setSyncMsg(`Sync OK — ${total} controles nuevos importados`)
-      await cargarRondasJwm()
-    } catch (e: any) {
-      setSyncState('error')
-      setSyncMsg(e?.message ?? 'Error de red')
-    }
-  }
-
-  const guardarToken = async () => {
-    if (!tokenInput.trim()) return
-    setGuardandoToken(true)
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const resp = await fetch('/api/jwm/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token ?? ''}`,
-        },
-        body: JSON.stringify({ token: tokenInput.trim() }),
-      })
-      const json = await resp.json()
-      if (resp.ok) {
-        setTokenInput('')
-        setSyncState('idle')
-        setSyncMsg(`Token guardado. Vence: ${new Date(json.expires_at).toLocaleString('es-AR')}`)
-      } else {
-        setSyncMsg(json?.error ?? 'Error al guardar token')
-      }
-    } finally {
-      setGuardandoToken(false)
-    }
-  }
-
-  const horaCorta = (iso: string) => {
-    try { return new Date(iso).toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit', second:'2-digit' }) }
-    catch { return iso }
-  }
-  const fechaHora = (iso: string) => {
-    try { return new Date(iso).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) }
-    catch { return iso }
-  }
 
   const turnosObjetivo = turnos.filter((t: Turno) => t.objetivo_id === objetivo.id)
   const turnosHoy = turnosObjetivo.filter((t: Turno) => t.fecha === hoy)
@@ -2806,112 +2783,151 @@ function CentroOperativoObjetivo({ objetivo, turnos, registros, supervisiones, n
         </div>
       )}
 
-      {/* ── Rondas JWM ─────────────────────────────────────────── */}
-      <div style={card}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-          <div style={secTitle}>Rondas JWM</div>
-          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-            {ultimaSync && <span style={{ fontSize:11, color:'#475569' }}>Sync: {fechaHora(ultimaSync)}</span>}
-            <button
-              style={{ ...S.btn, ...S.btnSecondary, fontSize:12, padding:'5px 10px', opacity: syncState==='loading'?0.6:1 }}
-              onClick={sincronizarAhora}
-              disabled={syncState === 'loading'}
+      {/* Integraciones — Rondas y Cámaras */}
+      {JWM_RONDAS_URL[objetivo.nombre] && (
+        <div style={card}>
+          <div style={secTitle}>Integraciones</div>
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+            <a
+              href={JWM_RONDAS_URL[objetivo.nombre]}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ ...S.btn, ...S.btnSecondary, fontSize:13, textDecoration:'none', display:'inline-flex', alignItems:'center', gap:6 }}
             >
-              {syncState === 'loading' ? '⏳ Sincronizando…' : '🔄 Sincronizar ahora'}
+              🔄 Rondas JWM
+            </a>
+            {esAdmin && (
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
+                onClick={() => { setShowModal(true); setModalStep('form') }}
+              >
+                📥 Recopilar datos de rondas
+              </button>
+            )}
+            <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
+              📷 Cámaras <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
             </button>
           </div>
         </div>
+      )}
 
-        {/* Mensaje de estado */}
-        {syncMsg && (
-          <div style={{
-            background: syncState==='error_token'?'#451a03' : syncState==='error'?'#1c1917' : syncState==='ok'?'#052e16':'#1e2d42',
-            border:`1px solid ${syncState==='error_token'?'#92400e':syncState==='error'?'#44403c':syncState==='ok'?'#166534':'#1e40af'}`,
-            borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:12,
-            color: syncState==='error_token'?'#fbbf24':syncState==='error'?'#a8a29e':syncState==='ok'?'#4ade80':'#93c5fd'
-          }}>
-            {syncMsg}
-          </div>
-        )}
+      {/* Modal recopilación de rondas */}
+      {showModal && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:14, padding:24, width:'100%', maxWidth:420 }}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, fontSize:16, color:'#f8fafc', marginBottom:16 }}>
+              Recopilar datos de rondas JWM
+            </div>
 
-        {/* Panel de token manual — visible solo cuando hay error de token y es admin */}
-        {syncState === 'error_token' && esAdmin && (
-          <div style={{ background:'#1c1917', border:'1px solid #78350f', borderRadius:8, padding:12, marginBottom:12 }}>
-            <div style={{ fontSize:12, color:'#fbbf24', marginBottom:8, fontWeight:600 }}>
-              ¿Cómo renovar el token?
-            </div>
-            <div style={{ fontSize:11, color:'#a8a29e', marginBottom:8, lineHeight:1.5 }}>
-              1. Entrá a <strong style={{color:'#e2e8f0'}}>overseas.jwmyun.com</strong> con tu usuario.<br/>
-              2. Abrí DevTools → Application → Local Storage → <strong style={{color:'#e2e8f0'}}>token</strong>.<br/>
-              3. Copiá el valor completo (empieza con eyJ) y pegalo acá.
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <input
-                type="password"
-                placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
-                value={tokenInput}
-                onChange={e => setTokenInput(e.target.value)}
-                style={{ flex:1, background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'6px 10px', color:'#e2e8f0', fontSize:12 }}
-              />
-              <button
-                style={{ ...S.btn, ...S.btnPrimary, fontSize:12, padding:'6px 12px', opacity: guardandoToken?0.6:1 }}
-                onClick={guardarToken}
-                disabled={guardandoToken || !tokenInput.trim()}
-              >
-                {guardandoToken ? 'Guardando…' : 'Guardar token'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Controles del día */}
-        {rondasJwm.length === 0 ? (
-          <div style={{ color:'#475569', fontSize:13 }}>Sin controles registrados hoy. Usá "Sincronizar ahora" para importar desde JWM.</div>
-        ) : (
-          <div>
-            <div style={{ fontSize:11, color:'#64748b', marginBottom:8 }}>{rondasJwm.length} controles hoy</div>
-            <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              {rondasJwm.map((r: any) => (
-                <div key={r.id} style={{ display:'flex', gap:10, alignItems:'center', padding:'6px 10px', background:'#0f172a', borderRadius:6, fontSize:12 }}>
-                  <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#60a5fa', minWidth:70 }}>{horaCorta(r.fecha_hora)}</span>
-                  <span style={{ flex:1, color:'#e2e8f0' }}>{r.checkpoint}</span>
-                  {r.dispositivo_id && <span style={{ color:'#475569', fontSize:11 }}>{r.dispositivo_id}</span>}
-                  <span style={{ background:'#052e1688', color:'#4ade80', border:'1px solid #166534', borderRadius:4, padding:'1px 6px', fontSize:10 }}>✓ OK</span>
+            {/* Rango de fechas — siempre visible */}
+            {(modalStep === 'form' || modalStep === 'token') && (
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:16 }}>
+                <div>
+                  <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Desde</div>
+                  <input type="date" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)}
+                    style={{ width:'100%', background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'7px 10px', color:'#e2e8f0', fontSize:13 }} />
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+                <div>
+                  <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Hasta</div>
+                  <input type="date" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
+                    style={{ width:'100%', background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'7px 10px', color:'#e2e8f0', fontSize:13 }} />
+                </div>
+              </div>
+            )}
 
-      {/* Accesos rápidos — Rondas y Cámaras (visibles para todos) */}
-      {(() => {
-        const jwmUrl = JWM_RONDAS_URL[objetivo.nombre]
-        return (jwmUrl || true) ? (
-          <div style={card}>
-            <div style={secTitle}>Integraciones</div>
-            <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-              {jwmUrl ? (
-                <a
-                  href={jwmUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ ...S.btn, ...S.btnSecondary, fontSize:13, textDecoration:'none', display:'inline-flex', alignItems:'center', gap:6 }}
-                >
-                  🔄 Rondas JWM
-                </a>
-              ) : (
-                <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
-                  🔄 Rondas JWM <span style={{ fontSize:10, color:'#475569' }}>(no configurado)</span>
-                </button>
-              )}
-              <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
-                📷 Cámaras <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
-              </button>
-            </div>
+            {/* Paso 1: credenciales */}
+            {modalStep === 'form' && (
+              <>
+                <div style={{ fontSize:12, color:'#94a3b8', marginBottom:12 }}>
+                  Ingresá tus credenciales de JWM para buscar automáticamente.
+                </div>
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Usuario JWM</div>
+                  <input type="text" value={jwmUser} onChange={e => setJwmUser(e.target.value)}
+                    placeholder="usuario@empresa"
+                    style={{ width:'100%', background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'7px 10px', color:'#e2e8f0', fontSize:13 }} />
+                </div>
+                <div style={{ marginBottom:16 }}>
+                  <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Contraseña JWM</div>
+                  <input type="password" value={jwmPass} onChange={e => setJwmPass(e.target.value)}
+                    placeholder="••••••••"
+                    style={{ width:'100%', background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'7px 10px', color:'#e2e8f0', fontSize:13 }} />
+                </div>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                  <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }} onClick={cerrarModal}>Cancelar</button>
+                  <button style={{ ...S.btn, ...S.btnPrimary, fontSize:13 }} onClick={recopilarConCredenciales} disabled={!jwmUser || !jwmPass}>
+                    Buscar datos
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Paso 2: fallback token manual */}
+            {modalStep === 'token' && (
+              <>
+                <div style={{ background:'#1c1917', border:'1px solid #78350f', borderRadius:8, padding:10, marginBottom:12, fontSize:12, color:'#fbbf24' }}>
+                  {modalMsg}
+                </div>
+                <div style={{ fontSize:11, color:'#94a3b8', marginBottom:8, lineHeight:1.6 }}>
+                  1. Abrí <strong style={{color:'#e2e8f0'}}>overseas.jwmyun.com</strong> en otra pestaña.<br/>
+                  2. Abrí DevTools (F12) → Application → Local Storage.<br/>
+                  3. Copiá el valor de la clave <strong style={{color:'#e2e8f0'}}>token</strong> (empieza con eyJ).
+                </div>
+                <div style={{ marginBottom:16 }}>
+                  <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Token JWM</div>
+                  <input type="password" value={jwmToken} onChange={e => setJwmToken(e.target.value)}
+                    placeholder="eyJ0eXAiOiJKV1Qi..."
+                    style={{ width:'100%', background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'7px 10px', color:'#e2e8f0', fontSize:13 }} />
+                </div>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                  <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }} onClick={cerrarModal}>Cancelar</button>
+                  <button style={{ ...S.btn, ...S.btnPrimary, fontSize:13 }} onClick={recopilarConToken} disabled={!jwmToken}>
+                    Buscar con token
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Loading */}
+            {modalStep === 'loading' && (
+              <div style={{ textAlign:'center', padding:'24px 0', color:'#94a3b8', fontSize:14 }}>
+                ⏳ Buscando rondas en JWM…
+              </div>
+            )}
+
+            {/* Éxito */}
+            {modalStep === 'done' && (
+              <>
+                <div style={{ background:'#052e16', border:'1px solid #166534', borderRadius:8, padding:14, marginBottom:16, textAlign:'center' }}>
+                  <div style={{ fontSize:22, marginBottom:4 }}>✅</div>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:15, color:'#4ade80' }}>
+                    {modalCount} {modalCount === 1 ? 'control nuevo importado' : 'controles nuevos importados'}
+                  </div>
+                  <div style={{ fontSize:12, color:'#64748b', marginTop:4 }}>
+                    Del {fechaDesde} al {fechaHasta}
+                  </div>
+                </div>
+                <div style={{ display:'flex', justifyContent:'flex-end' }}>
+                  <button style={{ ...S.btn, ...S.btnPrimary, fontSize:13 }} onClick={cerrarModal}>Cerrar</button>
+                </div>
+              </>
+            )}
+
+            {/* Error */}
+            {modalStep === 'error' && (
+              <>
+                <div style={{ background:'#1c1917', border:'1px solid #44403c', borderRadius:8, padding:12, marginBottom:16, fontSize:13, color:'#f87171' }}>
+                  {modalMsg || 'Error al recopilar datos.'}
+                </div>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                  <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }} onClick={() => setModalStep('form')}>Reintentar</button>
+                  <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }} onClick={cerrarModal}>Cerrar</button>
+                </div>
+              </>
+            )}
           </div>
-        ) : null
-      })()}
+        </div>
+      )}
 
       {/* Admin: accesos rápidos */}
       {esAdmin && (
