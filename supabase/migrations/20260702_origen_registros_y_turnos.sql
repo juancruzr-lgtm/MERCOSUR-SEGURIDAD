@@ -2,7 +2,7 @@
 -- Permite distinguir de dónde proviene cada registro sin modificar tipo_registro.
 --
 -- registros_asistencia.origen: 'operacion' | 'reporte' | 'importacion' | 'migracion' | 'api'
--- turnos.origen:               'planificado' | 'generado_desde_reporte'
+-- turnos.origen:               'planificado' | 'reporte'
 --
 -- También corrige el CHECK de tipo_registro para incluir 'carga_manual',
 -- que ya se usaba en código pero no estaba en la restricción.

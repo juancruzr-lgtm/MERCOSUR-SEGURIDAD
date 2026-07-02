@@ -4225,57 +4225,27 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
     hora_fin: '',
     hora_entrada: '',
     hora_salida: '',
-    motivo: '',
-    observacion: '',
+    comentario: '',
   })
   const [advertencia, setAdvertencia] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [verificado, setVerificado] = useState(false)
 
   const set = (k: string, v: string) => {
     setForm(f => ({ ...f, [k]: v }))
-    setVerificado(false)
     setAdvertencia(null)
   }
 
-  const verificarDuplicado = async () => {
-    if (!form.fecha || !form.objetivo_id || !form.guardia_id || !form.hora_inicio || !form.hora_fin) {
-      setError('Completá fecha, objetivo, guardia y horario antes de continuar.')
-      return false
-    }
-    setError(null)
-    // Buscar turno existente con los mismos datos
-    const { data: turnosExistentes } = await supabase
-      .from('turnos')
-      .select('id')
-      .eq('fecha', form.fecha)
-      .eq('objetivo_id', form.objetivo_id)
-      .eq('guardia_id', form.guardia_id)
-      .eq('hora_inicio', form.hora_inicio)
-      .eq('hora_fin', form.hora_fin)
-    if (turnosExistentes && turnosExistentes.length > 0) {
-      setAdvertencia('Ya existe un turno con esta combinación de fecha, objetivo, guardia y horario. Si guardás, se creará un registro adicional sobre ese turno.')
-    } else {
-      setAdvertencia(null)
-    }
-    setVerificado(true)
-    return true
-  }
-
   const guardar = async () => {
-    if (!verificado) {
-      const ok = await verificarDuplicado()
-      if (!ok) return
+    if (!form.fecha || !form.objetivo_id || !form.guardia_id || !form.hora_inicio || !form.hora_fin) {
+      setError('Completá fecha, objetivo, guardia y horario.'); return
     }
     if (!form.hora_entrada) { setError('La hora de entrada es obligatoria.'); return }
     if (!form.hora_salida) { setError('La hora de salida es obligatoria.'); return }
-    if (!form.motivo) { setError('El motivo es obligatorio.'); return }
     setError(null)
     setLoading(true)
     try {
-      // 1. Obtener o crear turno
-      let turnoId: string
+      // 1. Verificar duplicado (solo aviso)
       const { data: turnosExistentes } = await supabase
         .from('turnos')
         .select('id')
@@ -4284,10 +4254,13 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
         .eq('guardia_id', form.guardia_id)
         .eq('hora_inicio', form.hora_inicio)
         .eq('hora_fin', form.hora_fin)
+
+      // 2. Obtener o crear turno
+      let turnoId: string
       if (turnosExistentes && turnosExistentes.length > 0) {
         turnoId = turnosExistentes[0].id
+        setAdvertencia('Ya existía un turno con esta combinación. Se agregó el registro sobre ese turno.')
       } else {
-        // Crear nuevo turno
         const { data: nuevoTurno, error: turnoErr } = await supabase
           .from('turnos')
           .insert({
@@ -4297,7 +4270,7 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
             hora_inicio: form.hora_inicio,
             hora_fin: form.hora_fin,
             estado: 'cubierto',
-            origen: 'generado_desde_reporte',
+            origen: 'reporte',
           })
           .select()
           .single()
@@ -4305,7 +4278,6 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
         turnoId = nuevoTurno.id
         setTurnos((prev: Turno[]) => [...prev, nuevoTurno])
 
-        // Auditoría del turno
         const usuarioActual = user?.id
           ? user
           : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
@@ -4315,13 +4287,13 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
             modificado_por: usuarioActual.id,
             campo: 'creacion',
             valor_anterior: null,
-            valor_nuevo: 'generado_desde_reporte',
-            motivo: `Creado desde Reportes — ${form.motivo}`,
+            valor_nuevo: 'reporte',
+            motivo: `Creado desde Reportes — ${form.comentario || 'sin comentario'}`,
           })
         }
       }
 
-      // 2. Crear registro de asistencia
+      // 3. Crear registro de asistencia
       const horas = calcHorasTrabajadas(form.hora_entrada, form.hora_salida)
       const { data: registro, error: regErr } = await supabase
         .from('registros_asistencia')
@@ -4333,13 +4305,12 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           horas_trabajadas: horas,
           tipo_registro: 'carga_manual',
           origen: 'reporte',
-          observacion: [form.motivo, form.observacion].filter(Boolean).join(' — ') || null,
+          observacion: form.comentario || null,
         })
         .select()
         .single()
       if (regErr || !registro) { setError(regErr?.message || 'Error al crear registro.'); setLoading(false); return }
 
-      // Auditoría del registro
       const usuarioActual = user?.id
         ? user
         : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
@@ -4351,11 +4322,10 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           campo: 'carga_inicial',
           valor_anterior: null,
           valor_nuevo: 'carga_manual/reporte',
-          motivo: form.motivo,
+          motivo: form.comentario || 'Registro desde reporte',
         })
       }
 
-      // 3. Actualizar turno a cubierto si existía antes
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turnoId)
       setRegistros((prev: RegistroAsistencia[]) => [...prev, registro])
       onClose()
@@ -4379,19 +4349,29 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           </div>
           <div>
             <label style={S.label}>Objetivo <span style={{ color:'#ef4444' }}>*</span></label>
-            <select style={S.select} value={form.objetivo_id} onChange={e => set('objetivo_id', e.target.value)} disabled={!!contextoObjetivoId}>
-              <option value="">— Seleccioná —</option>
-              {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
-            </select>
+            {contextoObjetivoId ? (
+              <div style={{ ...S.input, color:'#94a3b8', cursor:'default' }}>{objetivos.find((o: Objetivo) => o.id === form.objetivo_id)?.nombre || '—'}</div>
+            ) : (
+              <select style={S.select} value={form.objetivo_id} onChange={e => set('objetivo_id', e.target.value)}>
+                <option value="">— Seleccioná —</option>
+                {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+              </select>
+            )}
           </div>
         </div>
 
         <div>
           <label style={S.label}>Guardia <span style={{ color:'#ef4444' }}>*</span></label>
-          <select style={S.select} value={form.guardia_id} onChange={e => set('guardia_id', e.target.value)} disabled={!!contextoEmpleadoId}>
-            <option value="">— Seleccioná guardia —</option>
-            {empleados.map((g: Usuario) => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre} · {g.legajo || 'sin legajo'}</option>)}
-          </select>
+          {contextoEmpleadoId ? (
+            <div style={{ ...S.input, color:'#94a3b8', cursor:'default' }}>
+              {(() => { const g = empleados.find((e: Usuario) => e.id === form.guardia_id); return g ? `${g.apellido}, ${g.nombre} · ${g.legajo || 'sin legajo'}` : '—' })()}
+            </div>
+          ) : (
+            <select style={S.select} value={form.guardia_id} onChange={e => set('guardia_id', e.target.value)}>
+              <option value="">— Seleccioná guardia —</option>
+              {empleados.map((g: Usuario) => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre} · {g.legajo || 'sin legajo'}</option>)}
+            </select>
+          )}
         </div>
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
@@ -4405,15 +4385,32 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           </div>
         </div>
 
-        {!verificado && (
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, alignSelf:'flex-start' }}
-            onClick={verificarDuplicado}
-            disabled={loading}
-          >
-            Verificar turno existente
-          </button>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <div>
+            <label style={S.label}>Hora entrada real <span style={{ color:'#ef4444' }}>*</span></label>
+            <input type="time" style={S.input} value={form.hora_entrada} onChange={e => set('hora_entrada', e.target.value)} />
+          </div>
+          <div>
+            <label style={S.label}>Hora salida real <span style={{ color:'#ef4444' }}>*</span></label>
+            <input type="time" style={S.input} value={form.hora_salida} onChange={e => set('hora_salida', e.target.value)} />
+          </div>
+        </div>
+
+        {form.hora_entrada && form.hora_salida && (
+          <div style={{ fontSize:13, color:'#94a3b8' }}>
+            Horas a liquidar: <strong style={{ color:'#10b981' }}>{calcHorasTrabajadas(form.hora_entrada, form.hora_salida).toFixed(2)} hs</strong>
+          </div>
         )}
+
+        <div>
+          <label style={S.label}>Comentario</label>
+          <textarea
+            style={{ ...S.input, minHeight:64, resize:'vertical' as const }}
+            value={form.comentario}
+            onChange={e => set('comentario', e.target.value)}
+            placeholder="Motivo u observación (opcional)"
+          />
+        </div>
 
         {advertencia && (
           <div style={{ background:'#451a03', border:'1px solid #f59e0b66', borderRadius:8, padding:'10px 14px', fontSize:12, color:'#fbbf24' }}>
@@ -4421,54 +4418,13 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           </div>
         )}
 
-        {verificado && (
-          <>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-              <div>
-                <label style={S.label}>Hora entrada real <span style={{ color:'#ef4444' }}>*</span></label>
-                <input type="time" style={S.input} value={form.hora_entrada} onChange={e => set('hora_entrada', e.target.value)} />
-              </div>
-              <div>
-                <label style={S.label}>Hora salida real <span style={{ color:'#ef4444' }}>*</span></label>
-                <input type="time" style={S.input} value={form.hora_salida} onChange={e => set('hora_salida', e.target.value)} />
-              </div>
-            </div>
-
-            {form.hora_entrada && form.hora_salida && (
-              <div style={{ fontSize:13, color:'#94a3b8' }}>
-                Horas a liquidar: <strong style={{ color:'#10b981' }}>{calcHorasTrabajadas(form.hora_entrada, form.hora_salida).toFixed(2)} hs</strong>
-              </div>
-            )}
-
-            <div>
-              <label style={S.label}>Motivo <span style={{ color:'#ef4444' }}>*</span></label>
-              <select style={S.select} value={form.motivo} onChange={e => set('motivo', e.target.value)}>
-                <option value="">— Seleccioná motivo —</option>
-                {MOTIVOS_CARGA_MANUAL.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label style={S.label}>Observación</label>
-              <textarea
-                style={{ ...S.input, minHeight:64, resize:'vertical' as const }}
-                value={form.observacion}
-                onChange={e => set('observacion', e.target.value)}
-                placeholder="Detalles adicionales (opcional)"
-              />
-            </div>
-          </>
-        )}
-
         {error && <div style={{ color:'#ef4444', fontSize:13 }}>{error}</div>}
 
         <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
           <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose} disabled={loading}>Cancelar</button>
-          {verificado && (
-            <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>
-              {loading ? 'Guardando...' : 'Guardar registro'}
-            </button>
-          )}
+          <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>
+            {loading ? 'Guardando...' : 'Agregar registro'}
+          </button>
         </div>
       </div>
     </Modal>
