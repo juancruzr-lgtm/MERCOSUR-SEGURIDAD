@@ -4213,6 +4213,268 @@ function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegist
   )
 }
 
+function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, user, setRegistros, setTurnos, contextoEmpleadoId, contextoObjetivoId }: any) {
+  const empleados = (guardias || []).filter((g: Usuario) => g.rol !== 'admin')
+  const hoy = new Date().toLocaleDateString('sv-SE')
+
+  const [form, setForm] = useState({
+    fecha: hoy,
+    objetivo_id: contextoObjetivoId || (objetivos[0]?.id || ''),
+    guardia_id: contextoEmpleadoId || (empleados[0]?.id || ''),
+    hora_inicio: '',
+    hora_fin: '',
+    hora_entrada: '',
+    hora_salida: '',
+    motivo: '',
+    observacion: '',
+  })
+  const [advertencia, setAdvertencia] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [verificado, setVerificado] = useState(false)
+
+  const set = (k: string, v: string) => {
+    setForm(f => ({ ...f, [k]: v }))
+    setVerificado(false)
+    setAdvertencia(null)
+  }
+
+  const verificarDuplicado = async () => {
+    if (!form.fecha || !form.objetivo_id || !form.guardia_id || !form.hora_inicio || !form.hora_fin) {
+      setError('Completá fecha, objetivo, guardia y horario antes de continuar.')
+      return false
+    }
+    setError(null)
+    // Buscar turno existente con los mismos datos
+    const { data: turnosExistentes } = await supabase
+      .from('turnos')
+      .select('id')
+      .eq('fecha', form.fecha)
+      .eq('objetivo_id', form.objetivo_id)
+      .eq('guardia_id', form.guardia_id)
+      .eq('hora_inicio', form.hora_inicio)
+      .eq('hora_fin', form.hora_fin)
+    if (turnosExistentes && turnosExistentes.length > 0) {
+      setAdvertencia('Ya existe un turno con esta combinación de fecha, objetivo, guardia y horario. Si guardás, se creará un registro adicional sobre ese turno.')
+    } else {
+      setAdvertencia(null)
+    }
+    setVerificado(true)
+    return true
+  }
+
+  const guardar = async () => {
+    if (!verificado) {
+      const ok = await verificarDuplicado()
+      if (!ok) return
+    }
+    if (!form.hora_entrada) { setError('La hora de entrada es obligatoria.'); return }
+    if (!form.hora_salida) { setError('La hora de salida es obligatoria.'); return }
+    if (!form.motivo) { setError('El motivo es obligatorio.'); return }
+    setError(null)
+    setLoading(true)
+    try {
+      // 1. Obtener o crear turno
+      let turnoId: string
+      const { data: turnosExistentes } = await supabase
+        .from('turnos')
+        .select('id')
+        .eq('fecha', form.fecha)
+        .eq('objetivo_id', form.objetivo_id)
+        .eq('guardia_id', form.guardia_id)
+        .eq('hora_inicio', form.hora_inicio)
+        .eq('hora_fin', form.hora_fin)
+      if (turnosExistentes && turnosExistentes.length > 0) {
+        turnoId = turnosExistentes[0].id
+      } else {
+        // Crear nuevo turno
+        const { data: nuevoTurno, error: turnoErr } = await supabase
+          .from('turnos')
+          .insert({
+            fecha: form.fecha,
+            objetivo_id: form.objetivo_id,
+            guardia_id: form.guardia_id,
+            hora_inicio: form.hora_inicio,
+            hora_fin: form.hora_fin,
+            estado: 'cubierto',
+            origen: 'generado_desde_reporte',
+          })
+          .select()
+          .single()
+        if (turnoErr || !nuevoTurno) { setError(turnoErr?.message || 'Error al crear turno.'); setLoading(false); return }
+        turnoId = nuevoTurno.id
+        setTurnos((prev: Turno[]) => [...prev, nuevoTurno])
+
+        // Auditoría del turno
+        const usuarioActual = user?.id
+          ? user
+          : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
+        if (usuarioActual?.id) {
+          await supabase.from('turnos_auditoria').insert({
+            turno_id: turnoId,
+            modificado_por: usuarioActual.id,
+            campo: 'creacion',
+            valor_anterior: null,
+            valor_nuevo: 'generado_desde_reporte',
+            motivo: `Creado desde Reportes — ${form.motivo}`,
+          })
+        }
+      }
+
+      // 2. Crear registro de asistencia
+      const horas = calcHorasTrabajadas(form.hora_entrada, form.hora_salida)
+      const { data: registro, error: regErr } = await supabase
+        .from('registros_asistencia')
+        .insert({
+          turno_id: turnoId,
+          guardia_id: form.guardia_id,
+          hora_entrada_real: form.hora_entrada,
+          hora_salida_real: form.hora_salida,
+          horas_trabajadas: horas,
+          tipo_registro: 'carga_manual',
+          origen: 'reporte',
+          observacion: [form.motivo, form.observacion].filter(Boolean).join(' — ') || null,
+        })
+        .select()
+        .single()
+      if (regErr || !registro) { setError(regErr?.message || 'Error al crear registro.'); setLoading(false); return }
+
+      // Auditoría del registro
+      const usuarioActual = user?.id
+        ? user
+        : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
+      if (usuarioActual?.id) {
+        await supabase.from('registros_asistencia_auditoria').insert({
+          registro_id: registro.id,
+          turno_id: turnoId,
+          modificado_por: usuarioActual.id,
+          campo: 'carga_inicial',
+          valor_anterior: null,
+          valor_nuevo: 'carga_manual/reporte',
+          motivo: form.motivo,
+        })
+      }
+
+      // 3. Actualizar turno a cubierto si existía antes
+      await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turnoId)
+      setRegistros((prev: RegistroAsistencia[]) => [...prev, registro])
+      onClose()
+    } catch (e: any) {
+      setError(e?.message || 'Error inesperado.')
+    }
+    setLoading(false)
+  }
+
+  return (
+    <Modal title="Agregar registro desde Reporte" onClose={onClose}>
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ background:'#1e2d42', border:'1px solid #3b82f644', borderRadius:8, padding:'10px 14px', fontSize:12, color:'#93c5fd' }}>
+          Registrá un turno histórico no fichado. Se creará un turno si no existe, y un registro marcado como <strong>carga manual desde reporte</strong>. Queda auditado.
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <div>
+            <label style={S.label}>Fecha <span style={{ color:'#ef4444' }}>*</span></label>
+            <input type="date" style={S.input} value={form.fecha} onChange={e => set('fecha', e.target.value)} />
+          </div>
+          <div>
+            <label style={S.label}>Objetivo <span style={{ color:'#ef4444' }}>*</span></label>
+            <select style={S.select} value={form.objetivo_id} onChange={e => set('objetivo_id', e.target.value)} disabled={!!contextoObjetivoId}>
+              <option value="">— Seleccioná —</option>
+              {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label style={S.label}>Guardia <span style={{ color:'#ef4444' }}>*</span></label>
+          <select style={S.select} value={form.guardia_id} onChange={e => set('guardia_id', e.target.value)} disabled={!!contextoEmpleadoId}>
+            <option value="">— Seleccioná guardia —</option>
+            {empleados.map((g: Usuario) => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre} · {g.legajo || 'sin legajo'}</option>)}
+          </select>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <div>
+            <label style={S.label}>Inicio turno programado <span style={{ color:'#ef4444' }}>*</span></label>
+            <input type="time" style={S.input} value={form.hora_inicio} onChange={e => set('hora_inicio', e.target.value)} />
+          </div>
+          <div>
+            <label style={S.label}>Fin turno programado <span style={{ color:'#ef4444' }}>*</span></label>
+            <input type="time" style={S.input} value={form.hora_fin} onChange={e => set('hora_fin', e.target.value)} />
+          </div>
+        </div>
+
+        {!verificado && (
+          <button
+            style={{ ...S.btn, ...S.btnSecondary, alignSelf:'flex-start' }}
+            onClick={verificarDuplicado}
+            disabled={loading}
+          >
+            Verificar turno existente
+          </button>
+        )}
+
+        {advertencia && (
+          <div style={{ background:'#451a03', border:'1px solid #f59e0b66', borderRadius:8, padding:'10px 14px', fontSize:12, color:'#fbbf24' }}>
+            ⚠️ {advertencia}
+          </div>
+        )}
+
+        {verificado && (
+          <>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div>
+                <label style={S.label}>Hora entrada real <span style={{ color:'#ef4444' }}>*</span></label>
+                <input type="time" style={S.input} value={form.hora_entrada} onChange={e => set('hora_entrada', e.target.value)} />
+              </div>
+              <div>
+                <label style={S.label}>Hora salida real <span style={{ color:'#ef4444' }}>*</span></label>
+                <input type="time" style={S.input} value={form.hora_salida} onChange={e => set('hora_salida', e.target.value)} />
+              </div>
+            </div>
+
+            {form.hora_entrada && form.hora_salida && (
+              <div style={{ fontSize:13, color:'#94a3b8' }}>
+                Horas a liquidar: <strong style={{ color:'#10b981' }}>{calcHorasTrabajadas(form.hora_entrada, form.hora_salida).toFixed(2)} hs</strong>
+              </div>
+            )}
+
+            <div>
+              <label style={S.label}>Motivo <span style={{ color:'#ef4444' }}>*</span></label>
+              <select style={S.select} value={form.motivo} onChange={e => set('motivo', e.target.value)}>
+                <option value="">— Seleccioná motivo —</option>
+                {MOTIVOS_CARGA_MANUAL.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label style={S.label}>Observación</label>
+              <textarea
+                style={{ ...S.input, minHeight:64, resize:'vertical' as const }}
+                value={form.observacion}
+                onChange={e => set('observacion', e.target.value)}
+                placeholder="Detalles adicionales (opcional)"
+              />
+            </div>
+          </>
+        )}
+
+        {error && <div style={{ color:'#ef4444', fontSize:13 }}>{error}</div>}
+
+        <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+          <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose} disabled={loading}>Cancelar</button>
+          {verificado && (
+            <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>
+              {loading ? 'Guardando...' : 'Guardar registro'}
+            </button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function CorregirRegistroModal({ registro, onClose, turnos, guardias, objetivos, user, setRegistros }: any) {
   const [formCorreccion, setFormCorreccion] = useState({
     guardia_final_id: '',
@@ -4779,9 +5041,10 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
   )
 }
 
-function Reportes({ registros, setRegistros, turnos, guardias, objetivos, novedades, filtroActivo, limpiarFiltro, user }: any) {
+function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objetivos, novedades, filtroActivo, limpiarFiltro, user }: any) {
   const [registroCorrigiendo, setRegistroCorrigiendo] = useState<RegistroAsistencia | null>(null)
   const [turnoParaCargaManual, setTurnoParaCargaManual] = useState<Turno | null>(null)
+  const [agregarRegistroContexto, setAgregarRegistroContexto] = useState<{ empleadoId?: string; objetivoId?: string } | null>(null)
   const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
   const [tab, setTab] = useState('planilla_empleado')
   const [mes, setMes] = useState(new Date().toLocaleDateString('sv-SE').slice(0, 7))
@@ -4951,7 +5214,7 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
   const observacionesPlanilla = (turno: Turno, registro?: RegistroAsistencia, extra?: string | null) => {
     const obs: string[] = []
     if (turno.estado === 'descubierto' || !turno.guardia_id) obs.push('Descubierto')
-    if (registro?.tipo_registro === 'carga_manual') obs.push('Carga manual')
+    if (registro?.tipo_registro === 'carga_manual') obs.push((registro as any)?.origen === 'reporte' ? 'Carga manual (desde reporte)' : 'Carga manual')
     if (!registro?.hora_entrada_real && turno.guardia_id && pasoVentanaFichaje(turno)) obs.push('Sin fichar')
     if (registro?.hora_entrada_real && !registro.hora_salida_real) obs.push('En curso')
     if (registro?.alerta_entrada === 'tarde') obs.push('Llegada tarde')
@@ -5320,6 +5583,19 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
 
   return (
     <div>
+      {agregarRegistroContexto !== null && (
+        <AgregarRegistroReporteModal
+          onClose={() => setAgregarRegistroContexto(null)}
+          guardias={guardias}
+          objetivos={objetivos}
+          turnos={turnos}
+          user={user}
+          setRegistros={setRegistros}
+          setTurnos={setTurnos}
+          contextoEmpleadoId={agregarRegistroContexto.empleadoId}
+          contextoObjetivoId={agregarRegistroContexto.objetivoId}
+        />
+      )}
       <div style={S.title}>Reportes</div>
       <div style={S.sub2}>Planillas mensuales y exportaciones · Mes seleccionado: {mesLabel}</div>
       {filtroActivo && (
@@ -5377,7 +5653,10 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
                 {empleados.map((g: Usuario) => <option key={g.id} value={g.id}>{g.apellido}, {g.nombre} · {g.legajo || 'sin legajo'}</option>)}
               </select>
             </div>
-            <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:'auto' }} onClick={exportarPlanillaEmpleadoXLSX}>Exportar XLSX</button>
+            <div style={{ display:'flex', gap:8, marginLeft:'auto' }}>
+              <button style={{ ...S.btn, background:'#14532d', color:'#4ade80', border:'1px solid #166534' }} onClick={() => setAgregarRegistroContexto({ empleadoId: empleadoId })}>➕ Agregar registro</button>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={exportarPlanillaEmpleadoXLSX}>Exportar XLSX</button>
+            </div>
           </div>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800 }}>Planilla individual por empleado</div>
@@ -5444,7 +5723,10 @@ function Reportes({ registros, setRegistros, turnos, guardias, objetivos, noveda
                 {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
               </select>
             </div>
-            <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:'auto' }} onClick={exportarPlanillaObjetivoXLSX}>Exportar XLSX</button>
+            <div style={{ display:'flex', gap:8, marginLeft:'auto' }}>
+              <button style={{ ...S.btn, background:'#14532d', color:'#4ade80', border:'1px solid #166534' }} onClick={() => setAgregarRegistroContexto({ objetivoId: objetivoId })}>➕ Agregar registro</button>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={exportarPlanillaObjetivoXLSX}>Exportar XLSX</button>
+            </div>
           </div>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800 }}>Planilla mensual por objetivo</div>
@@ -8185,7 +8467,7 @@ const esGuardia = esRolGuardia(user.rol)
                 />
               )}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
-              {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
+              {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
             </>
