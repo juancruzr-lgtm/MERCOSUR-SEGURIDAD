@@ -4216,6 +4216,8 @@ function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegist
 function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, user, setRegistros, setTurnos, contextoEmpleadoId, contextoObjetivoId }: any) {
   const empleados = (guardias || []).filter((g: Usuario) => g.rol !== 'admin')
   const hoy = new Date().toLocaleDateString('sv-SE')
+  // Origen de auditoría según el contexto desde el que se abrió el modal
+  const origenAuditoria = contextoEmpleadoId ? 'reporte_empleado' : 'reporte_objetivo'
 
   const [form, setForm] = useState({
     fecha: hoy,
@@ -4227,25 +4229,20 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
     hora_salida: '',
     comentario: '',
   })
-  const [advertencia, setAdvertencia] = useState<string | null>(null)
+  const [advertenciaDuplicado, setAdvertenciaDuplicado] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   const set = (k: string, v: string) => {
     setForm(f => ({ ...f, [k]: v }))
-    setAdvertencia(null)
+    setAdvertenciaDuplicado(false)
   }
 
-  const guardar = async () => {
-    if (!form.fecha || !form.objetivo_id || !form.guardia_id || !form.hora_inicio || !form.hora_fin) {
-      setError('Completá fecha, objetivo, guardia y horario.'); return
-    }
-    if (!form.hora_entrada) { setError('La hora de entrada es obligatoria.'); return }
-    if (!form.hora_salida) { setError('La hora de salida es obligatoria.'); return }
+  const ejecutarGuardado = async () => {
     setError(null)
     setLoading(true)
     try {
-      // 1. Verificar duplicado (solo aviso)
+      // 1. Buscar turno existente
       const { data: turnosExistentes } = await supabase
         .from('turnos')
         .select('id')
@@ -4259,7 +4256,6 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
       let turnoId: string
       if (turnosExistentes && turnosExistentes.length > 0) {
         turnoId = turnosExistentes[0].id
-        setAdvertencia('Ya existía un turno con esta combinación. Se agregó el registro sobre ese turno.')
       } else {
         const { data: nuevoTurno, error: turnoErr } = await supabase
           .from('turnos')
@@ -4287,8 +4283,8 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
             modificado_por: usuarioActual.id,
             campo: 'creacion',
             valor_anterior: null,
-            valor_nuevo: 'reporte',
-            motivo: `Creado desde Reportes — ${form.comentario || 'sin comentario'}`,
+            valor_nuevo: `reporte/${origenAuditoria}`,
+            motivo: `Creado desde Reportes (${origenAuditoria}) — ${form.comentario || 'sin comentario'}`,
           })
         }
       }
@@ -4321,8 +4317,8 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           modificado_por: usuarioActual.id,
           campo: 'carga_inicial',
           valor_anterior: null,
-          valor_nuevo: 'carga_manual/reporte',
-          motivo: form.comentario || 'Registro desde reporte',
+          valor_nuevo: `carga_manual/reporte/${origenAuditoria}`,
+          motivo: form.comentario || `Registro desde ${origenAuditoria}`,
         })
       }
 
@@ -4333,6 +4329,36 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
       setError(e?.message || 'Error inesperado.')
     }
     setLoading(false)
+  }
+
+  const guardar = async () => {
+    if (!form.fecha || !form.objetivo_id || !form.guardia_id || !form.hora_inicio || !form.hora_fin) {
+      setError('Completá fecha, objetivo, guardia y horario.'); return
+    }
+    if (!form.hora_entrada) { setError('La hora de entrada es obligatoria.'); return }
+    if (!form.hora_salida) { setError('La hora de salida es obligatoria.'); return }
+    setError(null)
+    setLoading(true)
+
+    // Verificar duplicado antes de guardar
+    const { data: turnosExistentes } = await supabase
+      .from('turnos')
+      .select('id')
+      .eq('fecha', form.fecha)
+      .eq('objetivo_id', form.objetivo_id)
+      .eq('guardia_id', form.guardia_id)
+      .eq('hora_inicio', form.hora_inicio)
+      .eq('hora_fin', form.hora_fin)
+    setLoading(false)
+
+    if (turnosExistentes && turnosExistentes.length > 0) {
+      // Mostrar aviso y esperar confirmación explícita del usuario
+      setAdvertenciaDuplicado(true)
+      return
+    }
+
+    // Sin duplicado: guardar directo
+    await ejecutarGuardado()
   }
 
   return (
@@ -4412,20 +4438,30 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           />
         </div>
 
-        {advertencia && (
-          <div style={{ background:'#451a03', border:'1px solid #f59e0b66', borderRadius:8, padding:'10px 14px', fontSize:12, color:'#fbbf24' }}>
-            ⚠️ {advertencia}
+        {advertenciaDuplicado && (
+          <div style={{ background:'#451a03', border:'1px solid #f59e0b', borderRadius:8, padding:'14px' }}>
+            <div style={{ color:'#fbbf24', fontSize:13, fontWeight:600, marginBottom:10 }}>
+              ⚠️ Ya existe un registro muy similar para ese guardia, objetivo, fecha y horario.
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button style={{ ...S.btn, ...S.btnSecondary, flex:1 }} onClick={onClose} disabled={loading}>Cancelar</button>
+              <button style={{ ...S.btn, background:'#f59e0b', color:'#000', flex:1 }} onClick={ejecutarGuardado} disabled={loading}>
+                {loading ? 'Guardando...' : 'Agregar igualmente'}
+              </button>
+            </div>
           </div>
         )}
 
         {error && <div style={{ color:'#ef4444', fontSize:13 }}>{error}</div>}
 
-        <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
-          <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose} disabled={loading}>Cancelar</button>
-          <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>
-            {loading ? 'Guardando...' : 'Agregar registro'}
-          </button>
-        </div>
+        {!advertenciaDuplicado && (
+          <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose} disabled={loading}>Cancelar</button>
+            <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>
+              {loading ? 'Verificando...' : 'Agregar registro'}
+            </button>
+          </div>
+        )}
       </div>
     </Modal>
   )
