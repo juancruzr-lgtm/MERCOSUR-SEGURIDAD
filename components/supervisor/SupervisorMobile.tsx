@@ -472,6 +472,7 @@ export default function SupervisorMobile({ user }: any) {
   const [supervisorZonas, setSupervisorZonas] = useState<SupervisorZona[]>([])
   const [ultimaSupervisionPorObjetivo, setUltimaSupervisionPorObjetivo] = useState<Record<string, string>>({})
   const [agendaZonaFiltro, setAgendaZonaFiltro] = useState('todas')
+  const [agendaEstadoFiltro, setAgendaEstadoFiltro] = useState<'todos'|'vencido'|'proximo'>('todos')
   const [supervisionObjetivoId, setSupervisionObjetivoId] = useState('')
   const [supervisionGps, setSupervisionGps] = useState<SupervisionGps | null>(null)
   const [supervisionObservaciones, setSupervisionObservaciones] = useState('')
@@ -2503,8 +2504,8 @@ export default function SupervisorMobile({ user }: any) {
                 {renderFiltrosFecha()}
 
                 <div style={statsGrid}>
-                  <div style={{ ...statCard, borderTop:'3px solid #ef4444' }}><strong style={{ color:'#ef4444' }}>{agendaResumen.vencidas}</strong><span>🔴 Supervisiones vencidas</span></div>
-                  <div style={{ ...statCard, borderTop:'3px solid #f59e0b' }}><strong style={{ color:'#f59e0b' }}>{agendaResumen.proximas}</strong><span>🟠 Próximas a vencer</span></div>
+                  <div style={{ ...statCard, borderTop:'3px solid #ef4444', cursor:'pointer' }} onClick={() => { setAgendaEstadoFiltro('vencido'); setTimeout(() => document.getElementById('sec-agenda')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50) }}><strong style={{ color:'#ef4444' }}>{agendaResumen.vencidas}</strong><span>🔴 Supervisiones vencidas</span></div>
+                  <div style={{ ...statCard, borderTop:'3px solid #f59e0b', cursor:'pointer' }} onClick={() => { setAgendaEstadoFiltro('proximo'); setTimeout(() => document.getElementById('sec-agenda')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50) }}><strong style={{ color:'#f59e0b' }}>{agendaResumen.proximas}</strong><span>🟠 Próximas a vencer</span></div>
                   <div style={{ ...statCard, cursor:'pointer', borderTop:'3px solid #f59e0b' }} onClick={() => setTab('alertas')}><strong style={{ color:'#f59e0b' }}>{totalAlertasPendientes}</strong><span>🚨 Alertas pendientes</span></div>
                 </div>
 
@@ -2535,7 +2536,20 @@ export default function SupervisorMobile({ user }: any) {
                   </button>
                 </div>
 
-                <div style={{ ...objetivoName, margin:'24px 0 8px' }}>Agenda de supervisiones</div>
+                <div id="sec-agenda" style={{ ...objetivoName, margin:'24px 0 8px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                  Agenda de supervisiones
+                  {agendaEstadoFiltro !== 'todos' && (
+                    <span
+                      onClick={() => setAgendaEstadoFiltro('todos')}
+                      style={{ fontSize:11, fontWeight:600, padding:'2px 8px', borderRadius:6, cursor:'pointer',
+                        background: agendaEstadoFiltro === 'vencido' ? '#ef444422' : '#f59e0b22',
+                        color:      agendaEstadoFiltro === 'vencido' ? '#ef4444'   : '#f59e0b',
+                        border:    `1px solid ${agendaEstadoFiltro === 'vencido' ? '#ef4444' : '#f59e0b'}44` }}
+                    >
+                      {agendaEstadoFiltro === 'vencido' ? 'Vencidas' : 'Próximas'} · ✕ limpiar
+                    </span>
+                  )}
+                </div>
 
                 {zonasOperativas.length > 0 && (
                   <select
@@ -2550,9 +2564,12 @@ export default function SupervisorMobile({ user }: any) {
                   </select>
                 )}
 
-                {agendaSupervisiones.length === 0 ? (
-                  <div style={empty}>No hay objetivos para mostrar en la agenda.</div>
-                ) : agendaSupervisiones.map(({ objetivo, zona, ultimaIso, horasDesdeUltima, frecuenciaHoras, estadoAgenda }) => {
+                {(() => {
+                  const agendaFiltrada = agendaEstadoFiltro === 'todos'
+                    ? agendaSupervisiones
+                    : agendaSupervisiones.filter(a => a.estadoAgenda === agendaEstadoFiltro)
+                  if (agendaFiltrada.length === 0) return <div style={empty}>No hay objetivos para mostrar en la agenda.</div>
+                  return agendaFiltrada.map(({ objetivo, zona, ultimaIso, horasDesdeUltima, frecuenciaHoras, estadoAgenda }) => {
                   const colorEstado = estadoAgenda === 'vencido' ? '#ef4444' : estadoAgenda === 'proximo' ? '#f59e0b' : '#10b981'
                   const etiquetaEstado = estadoAgenda === 'vencido' ? '🔴 Vencido' : estadoAgenda === 'proximo' ? '🟠 Próximo a vencer' : '🟢 Al día'
 
@@ -2584,7 +2601,8 @@ export default function SupervisorMobile({ user }: any) {
                       </button>
                     </div>
                   )
-                })}
+                })
+                })()}
               </section>
             )}
 
