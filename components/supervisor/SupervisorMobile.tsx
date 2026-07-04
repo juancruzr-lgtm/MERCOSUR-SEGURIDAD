@@ -672,7 +672,16 @@ export default function SupervisorMobile({ user }: any) {
       setError(ultimasSupervisionesError.message)
     }
 
-    const turnosRango = (turnosData || []) as Turno[]
+    const turnosRango = ((turnosData || []) as Turno[]).filter(t => {
+      // Al consultar con desdeConNocturno, filtrar en memoria para que
+      // solo entren turnos de ayer si son nocturnos (cruzan medianoche)
+      if (filtro === 'hoy' && t.fecha === desdeConNocturno) {
+        const [hI, mI] = t.hora_inicio.split(':').map(Number)
+        const [hF, mF] = t.hora_fin.split(':').map(Number)
+        return (hF * 60 + mF) <= (hI * 60 + mI)
+      }
+      return true
+    })
     const supervisionesMap = new Map<string, Supervision>()
     ;[...(supervisionesHoyResult.data || []), ...(supervisionesRecientesResult.data || [])].forEach((supervision: any) => {
       supervisionesMap.set(supervision.id, supervision as Supervision)
