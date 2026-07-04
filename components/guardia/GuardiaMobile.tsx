@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
 
@@ -55,6 +55,7 @@ interface GpsData {
 
 type GpsPermissionState = 'checking' | 'granted' | 'prompt' | 'denied' | 'unsupported'
 type GpsEstadoRadio = 'dentro_radio' | 'fuera_radio' | 'objetivo_sin_gps' | 'gps_no_disponible'
+type IngresoFase = 'idle' | 'gps' | 'foto_libro' | 'foto_uniforme' | 'preview' | 'confirmando'
 
 interface AuditoriaRadioGps {
   estado: GpsEstadoRadio
@@ -442,6 +443,39 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 36,
     marginBottom: 12,
   },
+  overlay: {
+    position: 'fixed' as const,
+    inset: 0,
+    background: 'rgba(10,14,26,0.97)',
+    zIndex: 1000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  overlayCard: {
+    background: '#111827',
+    border: '1px solid #1e2d42',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 420,
+  },
+  overlayTitle: {
+    fontFamily: 'Syne, sans-serif',
+    fontSize: 20,
+    fontWeight: 800,
+    color: '#e2e8f0',
+    marginBottom: 12,
+  } as React.CSSProperties,
+  overlayStep: {
+    fontSize: 11,
+    color: '#64748b',
+    textTransform: 'uppercase' as const,
+    letterSpacing: 1,
+    fontWeight: 600,
+    marginBottom: 6,
+  },
 }
 
 // ── COMPONENTE PRINCIPAL ──────────────────────────────────────
@@ -460,6 +494,13 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [ahora, setAhora] = useState(() => new Date())
   const [permisoGps, setPermisoGps] = useState<GpsPermissionState>('checking')
   const [activandoPush, setActivandoPush] = useState(false)
+  const [ingresoFase, setIngresoFase] = useState<IngresoFase>('idle')
+  const [ingresoTurno, setIngresoTurno] = useState<Turno | null>(null)
+  const [ingresoGps, setIngresoGps] = useState<GpsData | null>(null)
+  const [fotoLibro, setFotoLibro] = useState<{ file: File; url: string } | null>(null)
+  const [fotoUniforme, setFotoUniforme] = useState<{ file: File; url: string } | null>(null)
+  const inputLibroRef = useRef<HTMLInputElement>(null)
+  const inputUniformeRef = useRef<HTMLInputElement>(null)
 
   const hoy = ahora.toLocaleDateString('sv-SE')
   const ayer = new Date(ahora.getTime() - 86400000).toLocaleDateString('sv-SE')
@@ -598,8 +639,16 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     })
   }
 
-  // Dar presente
-  const darPresente = async (turno: Turno) => {
+  const resetIngresoFlow = () => {
+    setIngresoFase('idle')
+    setIngresoTurno(null)
+    setIngresoGps(null)
+    setFotoLibro(prev => { if (prev) URL.revokeObjectURL(prev.url); return null })
+    setFotoUniforme(prev => { if (prev) URL.revokeObjectURL(prev.url); return null })
+  }
+
+  // Iniciar ingreso: valida, obtiene GPS, luego abre flujo de fotos
+  const iniciarIngreso = async (turno: Turno) => {
     const bloqueo = mensajeBloqueoFichaje(turno, user.id, new Date())
     if (bloqueo) {
       setMensaje({ texto: bloqueo, tipo: 'error' })
@@ -613,92 +662,163 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       return
     }
 
-    setFichando(turno.id)
+    setIngresoTurno(turno)
+    setIngresoFase('gps')
     setMensaje(null)
 
     try {
-      const hora = horaActual()
       const gps = await obtenerGps('ingreso')
 
       if (!gps) {
         setPermisoGps(await consultarPermisoGps())
         setMensaje({ texto: 'Para registrar asistencia debe permitir ubicación', tipo: 'error' })
         setTimeout(() => setMensaje(null), 4000)
+        setIngresoFase('idle')
+        setIngresoTurno(null)
         return
       }
 
-      const objetivo = getObjetivo(turno.objetivo_id)
-      const auditoriaIngreso = calcularAuditoriaRadioGps(gps, objetivo)
-      const payloadBase = {
-        guardia_id: user.id,
-        turno_id: turno.id,
-        hora_entrada_real: hora,
-        alerta_entrada: calcAlertaEntrada(turno.hora_inicio, hora, turno.hora_fin),
-      }
-      const payload = {
-        ...payloadBase,
-        distancia_ingreso_metros: auditoriaIngreso.distancia,
-        gps_ingreso_estado: auditoriaIngreso.estado,
-      }
-      const payloadConGps = {
-          ...payload,
-          latitud_ingreso: gps.latitude,
-          longitud_ingreso: gps.longitude,
-          precision_ingreso: gps.accuracy,
-        }
-      const payloadConGpsLegacy = {
-        ...payloadBase,
-        lat_entrada: gps.latitude,
-        lng_entrada: gps.longitude,
-      }
+      setIngresoGps(gps)
+      setIngresoFase('foto_libro')
+    } catch {
+      setMensaje({ texto: 'Error al obtener ubicación. Intentá de nuevo.', tipo: 'error' })
+      setTimeout(() => setMensaje(null), 4000)
+      setIngresoFase('idle')
+      setIngresoTurno(null)
+    }
+  }
 
-      let { data, error } = await supabase
+  // Confirmar ingreso: INSERT registro → upload fotos → INSERT evidencias
+  const confirmarIngreso = async () => {
+    if (!ingresoTurno || !ingresoGps || !fotoLibro || !fotoUniforme) return
+
+    setIngresoFase('confirmando')
+
+    try {
+      const hora = horaActual()
+      const objetivo = getObjetivo(ingresoTurno.objetivo_id)
+      const auditoriaIngreso = calcularAuditoriaRadioGps(ingresoGps, objetivo)
+
+      // 1. Idempotente: si ya existe el registro, reutilizar su id
+      let registroId: string
+
+      const { data: existente } = await supabase
         .from('registros_asistencia')
-        .insert(payloadConGps)
-        .select()
-        .single()
+        .select('id')
+        .eq('turno_id', ingresoTurno.id)
+        .eq('guardia_id', user.id)
+        .maybeSingle()
 
-      if (error && esErrorColumnaGps(error)) {
-        const retry = await supabase
+      if (existente) {
+        registroId = existente.id
+      } else {
+        const payloadBase = {
+          guardia_id: user.id,
+          turno_id: ingresoTurno.id,
+          hora_entrada_real: hora,
+          alerta_entrada: calcAlertaEntrada(ingresoTurno.hora_inicio, hora, ingresoTurno.hora_fin),
+        }
+
+        let { data, error } = await supabase
           .from('registros_asistencia')
-          .insert(payloadConGpsLegacy)
-          .select()
+          .insert({
+            ...payloadBase,
+            distancia_ingreso_metros: auditoriaIngreso.distancia,
+            gps_ingreso_estado: auditoriaIngreso.estado,
+            latitud_ingreso: ingresoGps.latitude,
+            longitud_ingreso: ingresoGps.longitude,
+            precision_ingreso: ingresoGps.accuracy,
+          })
+          .select('id')
           .single()
 
-        data = retry.data
-        error = retry.error
+        if (error && esErrorColumnaGps(error)) {
+          const retry = await supabase
+            .from('registros_asistencia')
+            .insert({
+              ...payloadBase,
+              lat_entrada: ingresoGps.latitude,
+              lng_entrada: ingresoGps.longitude,
+            })
+            .select('id')
+            .single()
+          data = retry.data
+          error = retry.error
+        }
+
+        if (error || !data) throw error || new Error('No se pudo crear el registro.')
+        registroId = data.id
       }
 
-      if (error || !data) {
-        throw error || new Error('No se recibió el registro creado.')
-      }
+      // 2. Upload fotos en paralelo
+      const ts = Date.now()
+      const pathLibro = `${registroId}/libro_guardia-${ts}.jpg`
+      const pathUniforme = `${registroId}/uniforme-${ts}.jpg`
 
-      setRegistros(prev => [...prev, data])
-      await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
-      setTurnos(prev => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } : t))
+      const [uploadLibro, uploadUniforme] = await Promise.all([
+        supabase.storage.from('ingreso-evidencias').upload(pathLibro, fotoLibro.file, { upsert: true, contentType: 'image/jpeg' }),
+        supabase.storage.from('ingreso-evidencias').upload(pathUniforme, fotoUniforme.file, { upsert: true, contentType: 'image/jpeg' }),
+      ])
+
+      if (uploadLibro.error) throw uploadLibro.error
+      if (uploadUniforme.error) throw uploadUniforme.error
+
+      // 3. INSERT evidencias — upsert por UNIQUE (proceso_tipo, proceso_id, tipo_evidencia)
+      const { error: evidError } = await supabase
+        .from('evidencias')
+        .upsert([
+          {
+            proceso_tipo: 'ingreso',
+            proceso_id: registroId,
+            turno_id: ingresoTurno.id,
+            guardia_id: user.id,
+            objetivo_id: ingresoTurno.objetivo_id,
+            tipo_evidencia: 'libro_guardia',
+            bucket: 'ingreso-evidencias',
+            storage_path: pathLibro,
+          },
+          {
+            proceso_tipo: 'ingreso',
+            proceso_id: registroId,
+            turno_id: ingresoTurno.id,
+            guardia_id: user.id,
+            objetivo_id: ingresoTurno.objetivo_id,
+            tipo_evidencia: 'uniforme',
+            bucket: 'ingreso-evidencias',
+            storage_path: pathUniforme,
+          },
+        ], { onConflict: 'proceso_tipo,proceso_id,tipo_evidencia' })
+
+      if (evidError) throw evidError
+
+      // 4. Actualizar estado del turno y state local
+      await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', ingresoTurno.id)
+
+      const { data: registroCompleto } = await supabase
+        .from('registros_asistencia')
+        .select('*')
+        .eq('id', registroId)
+        .single()
+
+      if (registroCompleto) {
+        setRegistros(prev => [...prev.filter(r => r.turno_id !== ingresoTurno!.id), registroCompleto])
+      }
+      setTurnos(prev => prev.map(t => t.id === ingresoTurno!.id ? { ...t, estado: 'cubierto' } : t))
+
       setMensaje({
-        texto: `✓ Entrada registrada a las ${hora} · ${mensajeAuditoriaRadio(auditoriaIngreso, gps)}`,
+        texto: `✓ Entrada registrada a las ${hora} · ${mensajeAuditoriaRadio(auditoriaIngreso, ingresoGps)}`,
         tipo: auditoriaIngreso.estado === 'fuera_radio' ? 'warn' : 'ok',
       })
-      setTimeout(() => setMensaje(null), 4000)
-    } catch (error) {
-      console.error(error)
+      setTimeout(() => setMensaje(null), 5000)
+      resetIngresoFlow()
 
-      const mensajeError =
-        error instanceof Error
-          ? error.message
-          : typeof error === 'object' && error && 'message' in error
-            ? String((error as { message: unknown }).message)
-            : String(error)
-
-      setMensaje({
-        texto: mensajeError,
-        tipo: 'error'
-      })
-
-      setTimeout(() => setMensaje(null), 4000)
-    } finally {
-      setFichando(null)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message
+        : typeof err === 'object' && err && 'message' in err ? String((err as { message: unknown }).message)
+        : String(err)
+      setMensaje({ texto: msg, tipo: 'error' })
+      setTimeout(() => setMensaje(null), 5000)
+      setIngresoFase('preview')
     }
   }
 
@@ -779,6 +899,148 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
   // ── RENDER ────────────────────────────────────────────────
   return (
     <div style={S.container}>
+
+      {/* Overlay flujo de ingreso con evidencias */}
+      {ingresoFase !== 'idle' && (
+        <div style={S.overlay}>
+          <div style={S.overlayCard}>
+
+            {ingresoFase === 'gps' && (
+              <>
+                <div style={S.overlayTitle}>Obteniendo ubicación...</div>
+                <div style={{ color: '#64748b', fontSize: 14 }}>Por favor aguardá un momento.</div>
+              </>
+            )}
+
+            {(ingresoFase === 'foto_libro' || ingresoFase === 'foto_uniforme') && (
+              <>
+                <div style={S.overlayStep}>
+                  {ingresoFase === 'foto_libro' ? 'Paso 1 de 2' : 'Paso 2 de 2'}
+                </div>
+                <div style={S.overlayTitle}>
+                  {ingresoFase === 'foto_libro' ? 'Libro de guardia' : 'Uniforme'}
+                </div>
+                <div style={{ color: '#94a3b8', fontSize: 13, marginBottom: 24 }}>
+                  {ingresoFase === 'foto_libro'
+                    ? 'Tomá una foto del libro de guardia abierto en la página de hoy.'
+                    : 'Tomá una foto de tu uniforme completo.'}
+                </div>
+                <button
+                  style={{ ...S.btn, ...S.btnPresente, marginBottom: 10 }}
+                  onClick={() => ingresoFase === 'foto_libro'
+                    ? inputLibroRef.current?.click()
+                    : inputUniformeRef.current?.click()
+                  }
+                >
+                  📷 Tomar foto
+                </button>
+                <button
+                  style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#94a3b8' }}
+                  onClick={resetIngresoFlow}
+                >
+                  Cancelar
+                </button>
+              </>
+            )}
+
+            {ingresoFase === 'preview' && fotoLibro && fotoUniforme && (
+              <>
+                <div style={S.overlayTitle}>Revisá las fotos</div>
+                <div style={{ display: 'flex', gap: 10, marginBottom: 18 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ ...S.colLabel, marginBottom: 6 }}>Libro de guardia</div>
+                    <img
+                      src={fotoLibro.url}
+                      alt="Libro"
+                      style={{ width: '100%', borderRadius: 8, objectFit: 'cover', aspectRatio: '1' }}
+                    />
+                    <button
+                      style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#94a3b8', marginTop: 6, padding: '8px', fontSize: 12 }}
+                      onClick={() => {
+                        URL.revokeObjectURL(fotoLibro.url)
+                        setFotoLibro(null)
+                        setIngresoFase('foto_libro')
+                      }}
+                    >
+                      Retomar
+                    </button>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ ...S.colLabel, marginBottom: 6 }}>Uniforme</div>
+                    <img
+                      src={fotoUniforme.url}
+                      alt="Uniforme"
+                      style={{ width: '100%', borderRadius: 8, objectFit: 'cover', aspectRatio: '1' }}
+                    />
+                    <button
+                      style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#94a3b8', marginTop: 6, padding: '8px', fontSize: 12 }}
+                      onClick={() => {
+                        URL.revokeObjectURL(fotoUniforme.url)
+                        setFotoUniforme(null)
+                        setIngresoFase('foto_uniforme')
+                      }}
+                    >
+                      Retomar
+                    </button>
+                  </div>
+                </div>
+                <button
+                  style={{ ...S.btn, ...S.btnPresente, marginBottom: 10 }}
+                  onClick={confirmarIngreso}
+                >
+                  ✓ Confirmar ingreso
+                </button>
+                <button
+                  style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#94a3b8' }}
+                  onClick={resetIngresoFlow}
+                >
+                  Cancelar
+                </button>
+              </>
+            )}
+
+            {ingresoFase === 'confirmando' && (
+              <>
+                <div style={S.overlayTitle}>Confirmando ingreso...</div>
+                <div style={{ color: '#64748b', fontSize: 14 }}>Subiendo fotos y registrando asistencia.</div>
+              </>
+            )}
+
+          </div>
+
+          {/* File inputs ocultos para captura de cámara */}
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            style={{ display: 'none' }}
+            ref={inputLibroRef}
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (!file) return
+              if (fotoLibro) URL.revokeObjectURL(fotoLibro.url)
+              setFotoLibro({ file, url: URL.createObjectURL(file) })
+              setIngresoFase('foto_uniforme')
+              e.target.value = ''
+            }}
+          />
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            style={{ display: 'none' }}
+            ref={inputUniformeRef}
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (!file) return
+              if (fotoUniforme) URL.revokeObjectURL(fotoUniforme.url)
+              setFotoUniforme({ file, url: URL.createObjectURL(file) })
+              setIngresoFase('preview')
+              e.target.value = ''
+            }}
+          />
+        </div>
+      )}
 
       {/* Header */}
       <div style={S.header}>
@@ -975,10 +1237,10 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                     </div>
                   )}
                   <button
-                    style={{ ...S.btn, ...(puedeDarPresente && !gpsBloqueaPresente ? S.btnPresente : S.btnDisabled), opacity: cargando ? 0.6 : 1 }}
-                    onClick={() => darPresente(turno)}
-                    disabled={cargando || !puedeDarPresente || gpsBloqueaPresente}>
-                    {cargando ? 'Registrando...' : '✅ Dar presente'}
+                    style={{ ...S.btn, ...(puedeDarPresente && !gpsBloqueaPresente ? S.btnPresente : S.btnDisabled), opacity: ingresoFase !== 'idle' ? 0.6 : 1 }}
+                    onClick={() => iniciarIngreso(turno)}
+                    disabled={ingresoFase !== 'idle' || !puedeDarPresente || gpsBloqueaPresente}>
+                    {ingresoFase !== 'idle' && ingresoTurno?.id === turno.id ? 'Procesando...' : '✅ Dar presente'}
                   </button>
                 </>
               )}
