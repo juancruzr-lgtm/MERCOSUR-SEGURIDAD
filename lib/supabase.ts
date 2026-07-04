@@ -229,10 +229,17 @@ export function calcHorasLiquidables(
   return calcularHorasLiquidables(fechaTurno, horaInicioTurno, horaFinTurno, horaEntradaReal, horaSalidaReal)
 }
 
-export function calcAlertaEntrada(asignada: string, real: string): 'tarde' | 'anticipada' | null {
+export function calcAlertaEntrada(asignada: string, real: string, horaFinTurno?: string): 'tarde' | 'anticipada' | null {
   const [ah, am] = asignada.split(':').map(Number)
   const [rh, rm] = real.split(':').map(Number)
-  const diff = (rh * 60 + rm) - (ah * 60 + am)
+  const inicioMin = ah * 60 + am
+  let diff = (rh * 60 + rm) - inicioMin
+  if (horaFinTurno) {
+    const [fh, fm] = horaFinTurno.split(':').map(Number)
+    const esNocturno = (fh * 60 + fm) <= inicioMin
+    // guardia entra de madrugada en turno nocturno: diff muy negativo → sumar 24h
+    if (esNocturno && diff < -720) diff += 1440
+  }
   if (diff > 5) return 'tarde'
   if (diff < -5) return 'anticipada'
   return null
@@ -240,20 +247,30 @@ export function calcAlertaEntrada(asignada: string, real: string): 'tarde' | 'an
 
 export function calcAlertaSalida(
   horaFinProgramada: string,
-  horaSalidaReal: string
+  horaSalidaReal: string,
+  horaInicioTurno?: string
 ): 'anticipada' | 'posterior' | null {
   if (!horaFinProgramada || !horaSalidaReal) return null
 
   const [hProg, mProg] = horaFinProgramada.split(':').map(Number)
   const [hReal, mReal] = horaSalidaReal.split(':').map(Number)
-
   let progMin = hProg * 60 + mProg
   let realMin = hReal * 60 + mReal
 
-  // Manejo simple para turnos nocturnos
-  if (realMin < 720 && progMin < 720) {
-    realMin += 24 * 60
-    progMin += 24 * 60
+  if (horaInicioTurno) {
+    const [hInicio, mInicio] = horaInicioTurno.split(':').map(Number)
+    const inicioMin = hInicio * 60 + mInicio
+    if (progMin <= inicioMin) {
+      // turno nocturno: fin programado y salida real son al día siguiente
+      progMin += 1440
+      if (realMin < inicioMin) realMin += 1440
+    }
+  } else {
+    // Fallback sin contexto de turno
+    if (realMin < 720 && progMin < 720) {
+      realMin += 1440
+      progMin += 1440
+    }
   }
 
   if (realMin < progMin) return 'anticipada'

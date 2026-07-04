@@ -461,7 +461,8 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [permisoGps, setPermisoGps] = useState<GpsPermissionState>('checking')
   const [activandoPush, setActivandoPush] = useState(false)
 
-  const hoy = fechaHoy()
+  const hoy = ahora.toLocaleDateString('sv-SE')
+  const ayer = new Date(ahora.getTime() - 86400000).toLocaleDateString('sv-SE')
 
   const activarPush = async () => {
     setActivandoPush(true)
@@ -517,7 +518,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     .from('turnos')
     .select('*')
     .or(`guardia_id.eq.${user.id},guardia_original_id.eq.${user.id}`)
-    .eq('fecha', hoy)
+    .in('fecha', [ayer, hoy])
     .order('hora_inicio'),
 
   supabase
@@ -531,7 +532,16 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
 ])
 
-      if (t) setTurnos(t)
+      if (t) {
+        // Sólo mostrar turnos de ayer si son nocturnos (cruzan medianoche)
+        const filtrados = t.filter((turno: Turno) => {
+          if (turno.fecha !== ayer) return true
+          const [hI, mI] = turno.hora_inicio.split(':').map(Number)
+          const [hF, mF] = turno.hora_fin.split(':').map(Number)
+          return (hF * 60 + mF) <= (hI * 60 + mI)
+        })
+        setTurnos(filtrados)
+      }
       if (o) setObjetivos(o)
       if (r) setRegistros(r)
       setLoading(false)
@@ -623,7 +633,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         guardia_id: user.id,
         turno_id: turno.id,
         hora_entrada_real: hora,
-        alerta_entrada: calcAlertaEntrada(turno.hora_inicio, hora),
+        alerta_entrada: calcAlertaEntrada(turno.hora_inicio, hora, turno.hora_fin),
       }
       const payload = {
         ...payloadBase,

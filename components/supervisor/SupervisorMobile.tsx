@@ -515,6 +515,8 @@ export default function SupervisorMobile({ user }: any) {
     setLoading(true)
     setError('')
     const rango = rangoFiltroFechaTurnos(filtro, hoy)
+    // Para "hoy", incluir también el día anterior para capturar turnos nocturnos activos
+    const desdeConNocturno = filtro === 'hoy' ? sumarDiasFecha(rango.desde, -1) : rango.desde
 
     const [
       { data: turnosData, error: turnosError },
@@ -534,7 +536,7 @@ export default function SupervisorMobile({ user }: any) {
       supabase
         .from('turnos')
         .select('*')
-        .gte('fecha', rango.desde)
+        .gte('fecha', desdeConNocturno)
         .lte('fecha', rango.hasta)
         .order('fecha', { ascending: true })
         .order('hora_inicio', { ascending: true }),

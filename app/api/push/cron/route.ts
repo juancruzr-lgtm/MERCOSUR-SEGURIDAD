@@ -424,6 +424,7 @@ export async function GET(req: NextRequest) {
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
   const hoy = fechaLocal()
+  const ayer = sumarDias(hoy, -1)
   const manana = sumarDias(hoy, 1)
   const ahora = ahoraMinutosLocal()
   const desdeReciente = new Date(Date.now() - 15 * 60000).toISOString()
@@ -440,7 +441,7 @@ export async function GET(req: NextRequest) {
     admin.client
       .from('turnos')
       .select('id, guardia_id, guardia_original_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
-      .in('fecha', [hoy, manana]),
+      .in('fecha', [ayer, hoy, manana]),
     admin.client
       .from('usuarios')
       .select('id, nombre, apellido, rol, estado')

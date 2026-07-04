@@ -4751,8 +4751,8 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     const turno = turnos.find((t: Turno) => t.id === form.turno_id)
     if (!turno || !form.hora_entrada_real) return
     setLoading(true)
-    const alertaE = calcAlertaEntrada(turno.hora_inicio, form.hora_entrada_real)
-    const alertaS = form.hora_salida_real ? calcAlertaSalida(turno.hora_fin, form.hora_salida_real) : null
+    const alertaE = calcAlertaEntrada(turno.hora_inicio, form.hora_entrada_real, turno.hora_fin)
+    const alertaS = form.hora_salida_real ? calcAlertaSalida(turno.hora_fin, form.hora_salida_real, turno.hora_inicio) : null
     const horas = form.hora_salida_real ? calcHorasTrabajadas(form.hora_entrada_real, form.hora_salida_real) : 0
     const payload = { turno_id: turno.id, guardia_id: turno.guardia_id, hora_entrada_real: form.hora_entrada_real, hora_salida_real: form.hora_salida_real || null, horas_trabajadas: horas, alerta_entrada: alertaE, alerta_salida: alertaS, observacion: form.observacion }
     const { data } = await supabase.from('registros_asistencia').insert(payload).select().single()
