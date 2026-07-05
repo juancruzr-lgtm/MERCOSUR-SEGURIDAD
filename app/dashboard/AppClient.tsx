@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Fragment } from 'react'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcularHorasLiquidables } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
@@ -14,6 +14,15 @@ const SupervisionMap = dynamic(() => import('@/components/supervisiones/Supervis
   ssr: false,
   loading: () => <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', background:'#111827', border:'1px solid #1e2d42', borderRadius:8, color:'#94a3b8', marginBottom:20 }}>Cargando mapa...</div>,
 })
+
+interface EvidenciaAdmin {
+  id: string
+  proceso_id: string
+  tipo_evidencia: string
+  storage_path: string
+  bucket: string
+  signedUrl?: string | null
+}
 
 type TipoAlertaOperativaAdmin = 'sin_fichar' | 'tardanza' | 'fuera_radio' | 'descubierto' | 'salida_pendiente'
 type AccionIntervencionAdmin = 'comentario' | 'reasignacion' | 'marcado_descubierto' | 'confirmar_cubierto' | 'marcado_cubierto_manual' | 'alerta_revisada'
@@ -4732,6 +4741,40 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     setRegistroEditando(null)
   }
 
+  const [verEvidencias, setVerEvidencias] = useState<string | null>(null)
+  const [evidenciasPorRegistro, setEvidenciasPorRegistro] = useState<Record<string, EvidenciaAdmin[]>>({})
+  const [cargandoEvidencias, setCargandoEvidencias] = useState<string | null>(null)
+
+  const verFotosRegistro = async (registroId: string) => {
+    if (verEvidencias === registroId) { setVerEvidencias(null); return }
+    setVerEvidencias(registroId)
+    if (registroId in evidenciasPorRegistro) return
+
+    setCargandoEvidencias(registroId)
+    try {
+      const { data, error: evError } = await supabase
+        .from('evidencias')
+        .select('id, proceso_id, tipo_evidencia, storage_path, bucket')
+        .eq('proceso_tipo', 'ingreso')
+        .eq('proceso_id', registroId)
+
+      if (evError) throw evError
+
+      const evs = (data || []) as EvidenciaAdmin[]
+      const conUrls = await Promise.all(
+        evs.map(ev =>
+          supabase.storage.from(ev.bucket).createSignedUrl(ev.storage_path, 3600)
+            .then(({ data: sd }) => ({ ...ev, signedUrl: sd?.signedUrl || null }))
+        )
+      )
+      setEvidenciasPorRegistro(prev => ({ ...prev, [registroId]: conUrls }))
+    } catch {
+      setEvidenciasPorRegistro(prev => ({ ...prev, [registroId]: [] }))
+    } finally {
+      setCargandoEvidencias(null)
+    }
+  }
+
   const registrosFiltrados = registros.filter((r: RegistroAsistencia) => {
     const turno = turnos.find((t: Turno) => t.id === r.turno_id)
     if (filtroActivo?.tipo === 'hoy' && turno?.fecha !== hoy) return false
@@ -4777,7 +4820,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
       )}
       <div style={{ ...S.card, overflowX:'auto' }}>
         <table style={S.table}>
-          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>GPS Ingreso</th><th style={S.th}>GPS Egreso</th><th style={S.th}>Precisión</th><th style={S.th}>Alertas</th>{esAdmin && <th style={S.th}></th>}</tr></thead>
+          <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>GPS Ingreso</th><th style={S.th}>GPS Egreso</th><th style={S.th}>Precisión</th><th style={S.th}>Alertas</th><th style={S.th}>Fotos</th>{esAdmin && <th style={S.th}></th>}</tr></thead>
           <tbody>
             {registrosOrdenados.map((r: RegistroAsistencia) => {
               const g = guardias.find((x: Usuario) => x.id === r.guardia_id)
@@ -4787,42 +4830,87 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
               const gpsEgreso = gpsRegistroAsistencia(r, 'egreso')
               const textoGpsIngreso = textoAuditoriaGps(r, 'ingreso')
               const textoGpsEgreso = textoAuditoriaGps(r, 'egreso')
+              const expandido = verEvidencias === r.id
+              const evs = evidenciasPorRegistro[r.id]
               return (
-                <tr key={r.id}>
-                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatFecha(fechaRegistroAsistencia(r, t))}</td>
-                  <td style={S.td}><strong>{g?.apellido}, {g?.nombre}</strong></td>
-                  <td style={{ ...S.td, fontSize:12 }}>{o?.nombre || '—'}</td>
-                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatHorarioAsignado(t)}</td>
-                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_entrada_real}</td>
-                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_salida_real || '—'}</td>
-                  <td style={S.td}>{r.horas_trabajadas ? formatHoras(r.horas_trabajadas) : '—'}</td>
-                  <td style={{ ...S.td, fontSize:12 }}>
-                    <Badge type={r.gps_ingreso_estado === 'fuera_radio' ? 'alerta' : gpsIngreso ? 'ok' : 'pendiente'}>{textoGpsIngreso}</Badge>
-                  </td>
-                  <td style={{ ...S.td, fontSize:12 }}>
-                    <Badge type={r.gps_egreso_estado === 'fuera_radio' ? 'alerta' : gpsEgreso ? 'ok' : 'pendiente'}>{textoGpsEgreso}</Badge>
-                  </td>
-                  <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{textoPrecisionGps(r)}</td>
-                  <td style={S.td}>
-                    <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                      {r.tipo_registro === 'carga_manual' && <Badge type="pendiente">Carga manual</Badge>}
-                      {r.tipo_registro !== 'carga_manual' && r.alerta_entrada && <Badge type={r.alerta_entrada}>{r.alerta_entrada === 'tarde' ? '⏰ Tarde' : '⬆ Anticipada'}</Badge>}
-                      {r.tipo_registro !== 'carga_manual' && r.alerta_salida && <Badge type={r.alerta_salida}>{r.alerta_salida === 'anticipada' ? '⬇ Salida ant.' : '⏱ Posterior'}</Badge>}
-                      {r.tipo_registro !== 'carga_manual' && r.gps_ingreso_estado === 'fuera_radio' && <Badge type="alerta">GPS fuera radio</Badge>}
-                      {r.tipo_registro !== 'carga_manual' && !r.alerta_entrada && !r.alerta_salida && r.gps_ingreso_estado !== 'fuera_radio' && <Badge type="cubierto">✓ Ok</Badge>}
-                    </div>
-                  </td>
-                  {esAdmin && (
+                <Fragment key={r.id}>
+                  <tr>
+                    <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatFecha(fechaRegistroAsistencia(r, t))}</td>
+                    <td style={S.td}><strong>{g?.apellido}, {g?.nombre}</strong></td>
+                    <td style={{ ...S.td, fontSize:12 }}>{o?.nombre || '—'}</td>
+                    <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatHorarioAsignado(t)}</td>
+                    <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_entrada_real}</td>
+                    <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{r.hora_salida_real || '—'}</td>
+                    <td style={S.td}>{r.horas_trabajadas ? formatHoras(r.horas_trabajadas) : '—'}</td>
+                    <td style={{ ...S.td, fontSize:12 }}>
+                      <Badge type={r.gps_ingreso_estado === 'fuera_radio' ? 'alerta' : gpsIngreso ? 'ok' : 'pendiente'}>{textoGpsIngreso}</Badge>
+                    </td>
+                    <td style={{ ...S.td, fontSize:12 }}>
+                      <Badge type={r.gps_egreso_estado === 'fuera_radio' ? 'alerta' : gpsEgreso ? 'ok' : 'pendiente'}>{textoGpsEgreso}</Badge>
+                    </td>
+                    <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{textoPrecisionGps(r)}</td>
+                    <td style={S.td}>
+                      <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                        {r.tipo_registro === 'carga_manual' && <Badge type="pendiente">Carga manual</Badge>}
+                        {r.tipo_registro !== 'carga_manual' && r.alerta_entrada && <Badge type={r.alerta_entrada}>{r.alerta_entrada === 'tarde' ? '⏰ Tarde' : '⬆ Anticipada'}</Badge>}
+                        {r.tipo_registro !== 'carga_manual' && r.alerta_salida && <Badge type={r.alerta_salida}>{r.alerta_salida === 'anticipada' ? '⬇ Salida ant.' : '⏱ Posterior'}</Badge>}
+                        {r.tipo_registro !== 'carga_manual' && r.gps_ingreso_estado === 'fuera_radio' && <Badge type="alerta">GPS fuera radio</Badge>}
+                        {r.tipo_registro !== 'carga_manual' && !r.alerta_entrada && !r.alerta_salida && r.gps_ingreso_estado !== 'fuera_radio' && <Badge type="cubierto">✓ Ok</Badge>}
+                      </div>
+                    </td>
                     <td style={S.td}>
                       <button
-                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
-                        onClick={() => abrirCorreccion(r)}
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'4px 8px', fontSize:11 }}
+                        onClick={() => verFotosRegistro(r.id)}
                       >
-                        Corregir
+                        {cargandoEvidencias === r.id ? '...' : expandido ? 'Ocultar' : 'Ver fotos'}
                       </button>
                     </td>
+                    {esAdmin && (
+                      <td style={S.td}>
+                        <button
+                          style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                          onClick={() => abrirCorreccion(r)}
+                        >
+                          Corregir
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                  {expandido && (
+                    <tr>
+                      <td colSpan={esAdmin ? 13 : 12} style={{ padding:'12px 20px', background:'#0d1424', borderBottom:'1px solid #1e2d42' }}>
+                        {cargandoEvidencias === r.id ? (
+                          <span style={{ color:'#64748b', fontSize:12 }}>Cargando fotos...</span>
+                        ) : !evs || evs.length === 0 ? (
+                          <span style={{ color:'#64748b', fontSize:12 }}>Sin evidencias de ingreso</span>
+                        ) : (
+                          <div style={{ display:'flex', gap:12, flexWrap:'wrap' }}>
+                            {evs.map(ev => (
+                              <div key={ev.id} style={{ textAlign:'center' as const }}>
+                                <div style={{ fontSize:10, color:'#64748b', marginBottom:4, textTransform:'uppercase' as const, letterSpacing:1 }}>
+                                  {ev.tipo_evidencia.replace('_', ' ')}
+                                </div>
+                                {ev.signedUrl ? (
+                                  <img
+                                    src={ev.signedUrl}
+                                    alt={ev.tipo_evidencia}
+                                    style={{ width:80, height:80, objectFit:'cover' as const, borderRadius:6, cursor:'pointer', border:'1px solid #1e2d42' }}
+                                    onClick={() => window.open(ev.signedUrl!, '_blank')}
+                                  />
+                                ) : (
+                                  <div style={{ width:80, height:80, background:'#1a2235', borderRadius:6, border:'1px solid #1e2d42', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, color:'#64748b' }}>
+                                    Sin URL
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
                   )}
-                </tr>
+                </Fragment>
               )
             })}
           </tbody>
