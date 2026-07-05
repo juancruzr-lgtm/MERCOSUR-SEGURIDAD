@@ -277,7 +277,10 @@ function fechaEntradaRealTurno(turno: Turno, horaEntrada?: string | null): Date 
   const entradaReal = fechaHoraTurnoLocal(turno.fecha, horaEntrada)
   if (!inicioTurno || !finTurno || !entradaReal) return null
 
-  if (finTurno <= inicioTurno && entradaReal < inicioTurno) {
+  // Nocturno: si la entrada cae en la ventana post-medianoche (antes del fin),
+  // es del día siguiente. Si cae antes del inicio (guardia llegó temprano),
+  // no sumar día.
+  if (finTurno <= inicioTurno && entradaReal < finTurno) {
     entradaReal.setDate(entradaReal.getDate() + 1)
   }
 
