@@ -131,6 +131,15 @@ interface SupervisionFoto {
   error?: string | null
 }
 
+interface Evidencia {
+  id: string
+  proceso_id: string
+  tipo_evidencia: string
+  storage_path: string
+  bucket: string
+  signedUrl?: string | null
+}
+
 interface RegistroAsistencia {
   id: string
   turno_id: string
@@ -485,6 +494,8 @@ export default function SupervisorMobile({ user }: any) {
   const [detalleFotos, setDetalleFotos] = useState<SupervisionFoto[]>([])
   const [detalleLoading, setDetalleLoading] = useState(false)
   const [detalleError, setDetalleError] = useState('')
+  const [evidenciasPorRegistro, setEvidenciasPorRegistro] = useState<Record<string, Evidencia[]>>({})
+  const [cargandoEvidencias, setCargandoEvidencias] = useState<string | null>(null)
 
   const hoy = fechaHoy()
   const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
@@ -2359,6 +2370,58 @@ export default function SupervisorMobile({ user }: any) {
     )
   }
 
+  const abrirRegistros = async (turnoId: string) => {
+    const abriendo = turnoRegistrosAbierto !== turnoId
+    setTurnoRegistrosAbierto(abriendo ? turnoId : null)
+    if (!abriendo) return
+
+    const registrosDelTurno = getRegistrosTurno(turnoId)
+    if (registrosDelTurno.length === 0) return
+
+    const registroIds = registrosDelTurno.map(r => r.id)
+    const yaLoaded = registroIds.every(id => id in evidenciasPorRegistro)
+    if (yaLoaded) return
+
+    setCargandoEvidencias(turnoId)
+    try {
+      const { data, error: evError } = await supabase
+        .from('evidencias')
+        .select('id, proceso_id, tipo_evidencia, storage_path, bucket')
+        .eq('proceso_tipo', 'ingreso')
+        .in('proceso_id', registroIds)
+
+      if (evError) throw evError
+
+      const byRegistro: Record<string, Evidencia[]> = {}
+      registroIds.forEach(id => { byRegistro[id] = [] })
+      for (const ev of (data || [])) {
+        if (!byRegistro[ev.proceso_id]) byRegistro[ev.proceso_id] = []
+        byRegistro[ev.proceso_id].push(ev as Evidencia)
+      }
+
+      const todasEvidencias = Object.values(byRegistro).flat()
+      const conUrls = await Promise.all(
+        todasEvidencias.map(ev =>
+          supabase.storage.from(ev.bucket).createSignedUrl(ev.storage_path, 3600)
+            .then(({ data: sd }) => ({ ...ev, signedUrl: sd?.signedUrl || null }))
+        )
+      )
+
+      const resultado: Record<string, Evidencia[]> = {}
+      registroIds.forEach(id => { resultado[id] = [] })
+      conUrls.forEach(ev => { resultado[ev.proceso_id].push(ev) })
+
+      setEvidenciasPorRegistro(prev => ({ ...prev, ...resultado }))
+    } catch (err) {
+      console.error('Error cargando evidencias de ingreso:', err)
+      const vacios: Record<string, Evidencia[]> = {}
+      registroIds.forEach(id => { vacios[id] = [] })
+      setEvidenciasPorRegistro(prev => ({ ...prev, ...vacios }))
+    } finally {
+      setCargandoEvidencias(null)
+    }
+  }
+
   const renderTurno = (turno: Turno) => {
     const objetivo = getObjetivo(turno.objetivo_id)
     const guardia = getGuardia(turno.guardia_id)
@@ -2443,7 +2506,7 @@ export default function SupervisorMobile({ user }: any) {
 
           <button
             type="button"
-            onClick={() => setTurnoRegistrosAbierto(registrosAbiertos ? null : turno.id)}
+            onClick={() => abrirRegistros(turno.id)}
             style={secondaryButton}
           >
             {registrosAbiertos ? 'Ocultar registros' : `Ver registros (${registrosTurno.length})`}
@@ -2474,6 +2537,38 @@ export default function SupervisorMobile({ user }: any) {
                   </div>
                   <div style={muted}>{resumenGps(r, 'ingreso')}</div>
                   <div style={muted}>{resumenGps(r, 'egreso')}</div>
+                  {/* Evidencias de ingreso */}
+                  {cargandoEvidencias === turno.id ? (
+                    <div style={{ ...muted, marginTop: 6 }}>Cargando evidencias...</div>
+                  ) : (() => {
+                    const evs = evidenciasPorRegistro[r.id]
+                    if (!evs || evs.length === 0) {
+                      return <div style={{ ...muted, marginTop: 6 }}>Sin evidencias de ingreso</div>
+                    }
+                    return (
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' as const }}>
+                        {evs.map(ev => (
+                          <div key={ev.id} style={{ textAlign: 'center' as const }}>
+                            <div style={{ fontSize: 10, color: '#64748b', marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: 1 }}>
+                              {ev.tipo_evidencia.replace('_', ' ')}
+                            </div>
+                            {ev.signedUrl ? (
+                              <img
+                                src={ev.signedUrl}
+                                alt={ev.tipo_evidencia}
+                                style={{ width: 72, height: 72, objectFit: 'cover' as const, borderRadius: 6, cursor: 'pointer', border: '1px solid #1e2d42' }}
+                                onClick={() => window.open(ev.signedUrl!, '_blank')}
+                              />
+                            ) : (
+                              <div style={{ width: 72, height: 72, background: '#1a2235', borderRadius: 6, border: '1px solid #1e2d42', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#64748b' }}>
+                                Sin URL
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })()}
                 </div>
               )
             })}
