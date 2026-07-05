@@ -95,6 +95,34 @@ do $$ begin
   end if;
 end $$;
 
+-- Guardia: UPDATE de sus propias evidencias (requerido para upsert)
+do $$ begin
+  if not exists (
+    select 1 from pg_policies
+    where tablename = 'evidencias'
+      and policyname = 'Guardia actualiza sus evidencias'
+  ) then
+    create policy "Guardia actualiza sus evidencias"
+    on evidencias for update to authenticated
+    using (
+      exists (
+        select 1 from usuarios
+        where usuarios.auth_user_id = auth.uid()
+          and usuarios.id = guardia_id
+          and usuarios.rol in ('guardia', 'vigilador')
+      )
+    )
+    with check (
+      exists (
+        select 1 from usuarios
+        where usuarios.auth_user_id = auth.uid()
+          and usuarios.id = guardia_id
+          and usuarios.rol in ('guardia', 'vigilador')
+      )
+    );
+  end if;
+end $$;
+
 -- Guardia: SELECT solo de sus propias evidencias
 do $$ begin
   if not exists (
