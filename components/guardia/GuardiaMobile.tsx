@@ -449,9 +449,10 @@ const S: Record<string, React.CSSProperties> = {
     background: 'rgba(10,14,26,0.97)',
     zIndex: 1000,
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'center',
     padding: 20,
+    overflowY: 'auto' as const,
   },
   overlayCard: {
     background: '#111827',
@@ -460,6 +461,8 @@ const S: Record<string, React.CSSProperties> = {
     padding: 24,
     width: '100%',
     maxWidth: 420,
+    marginTop: 'auto' as const,
+    marginBottom: 'auto' as const,
   },
   overlayTitle: {
     fontFamily: 'Syne, sans-serif',
@@ -905,6 +908,10 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         <div style={S.overlay}>
           <div style={S.overlayCard}>
 
+            {mensaje && (
+              <div style={{ ...S.alert(mensaje.tipo), marginBottom: 16 }}>{mensaje.texto}</div>
+            )}
+
             {ingresoFase === 'gps' && (
               <>
                 <div style={S.overlayTitle}>Obteniendo ubicación...</div>
@@ -1002,7 +1009,13 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
             {ingresoFase === 'confirmando' && (
               <>
                 <div style={S.overlayTitle}>Confirmando ingreso...</div>
-                <div style={{ color: '#64748b', fontSize: 14 }}>Subiendo fotos y registrando asistencia.</div>
+                <div style={{ color: '#64748b', fontSize: 14, marginBottom: 20 }}>Subiendo fotos y registrando asistencia.</div>
+                <button
+                  style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#64748b', fontSize: 13 }}
+                  onClick={resetIngresoFlow}
+                >
+                  Cancelar
+                </button>
               </>
             )}
 
@@ -1116,8 +1129,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           </div>
         )}
 
-        {/* Mensaje */}
-        {mensaje && (
+        {/* Mensaje (solo fuera del overlay) */}
+        {mensaje && ingresoFase === 'idle' && (
           <div style={S.alert(mensaje.tipo)}>{mensaje.texto}</div>
         )}
 
