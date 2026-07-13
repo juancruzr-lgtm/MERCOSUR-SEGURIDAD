@@ -1927,11 +1927,11 @@ export default function SupervisorMobile({ user }: any) {
         if (respuestasError) throw respuestasError
       }
 
-      // Las fotos se intentan subir sin bloquear ni revertir la supervisión:
-      // si fallan (por ejemplo, error de RLS/Storage), la supervisión queda
-      // guardada igual y se informa el problema de forma clara.
       const fotosRegistradas: SupervisionFoto[] = []
       let avisoFotos = ''
+      // Si la foto es obligatoria y falla el upload, guardamos el error real
+      // para propagarlo al outer catch con el mensaje exacto de Supabase.
+      let errorFotoObligatoria: Error | null = null
 
       for (const [index, foto] of supervisionFotos.entries()) {
         try {
@@ -1957,6 +1957,11 @@ export default function SupervisorMobile({ user }: any) {
         } catch (fotoCatchError) {
           const fotoMessage = fotoCatchError instanceof Error ? fotoCatchError.message : 'Error desconocido al subir la foto.'
           avisoFotos = `Supervisión guardada, pero no se pudo subir la foto "${foto.name}". ${fotoMessage}`
+          if (!errorFotoObligatoria) {
+            errorFotoObligatoria = fotoCatchError instanceof Error
+              ? fotoCatchError
+              : new Error(fotoMessage)
+          }
         }
       }
 
@@ -1972,7 +1977,10 @@ export default function SupervisorMobile({ user }: any) {
       }
 
       if (requiereFotoObligatoria && fotosRegistradas.length === 0) {
-        throw new Error('No quedó registrada ninguna foto obligatoria en supervision_fotos.')
+        throw new Error(
+          'No se pudo subir la foto obligatoria: ' +
+          (errorFotoObligatoria?.message ?? 'error desconocido en Storage.')
+        )
       }
 
       const supervisionParaListado = {
