@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useCallback, Fragment } from 'react'
+import { useEffect, useState, useCallback, useRef, Fragment } from 'react'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcularHorasLiquidables } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
@@ -1571,6 +1571,8 @@ function SupervisionesAdmin({
     ocultarImpreciso: false,
     soloFueraRadio: false,
   })
+  const [filtroTabla, setFiltroTabla] = useState<{ tipo: string; label: string; supervisor_id?: string; objetivo_id?: string } | null>(null)
+  const tablaRef = useRef<HTMLDivElement>(null)
   const ahora = new Date()
   const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
   const fechaHora = (fecha?: string | null) => fecha ? formatFechaHora(fecha) : '—'
@@ -1806,6 +1808,33 @@ function SupervisionesAdmin({
     b.turnosMes - a.turnosMes ||
     nombreSupervisor(a.supervisor.id).localeCompare(nombreSupervisor(b.supervisor.id))
   )
+  const aplicarFiltro = (filtro: { tipo: string; label: string; supervisor_id?: string; objetivo_id?: string }) => {
+    setFiltroTabla(filtro)
+    setTimeout(() => tablaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80)
+  }
+
+  const supervisionesTabla: SupervisionAdmin[] = (() => {
+    const base = [...supervisiones].sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    if (!filtroTabla) return base.slice(0, 30)
+    if (filtroTabla.tipo === 'hoy') return base.filter((s: SupervisionAdmin) => fechaLocal(s.created_at) === hoy)
+    if (filtroTabla.tipo === 'con_observacion') return base.filter((s: SupervisionAdmin) => s.estado === 'con_observacion')
+    if (filtroTabla.tipo === 'critico') return base.filter((s: SupervisionAdmin) => s.estado === 'critico')
+    if (filtroTabla.tipo === 'supervisor') return base.filter((s: SupervisionAdmin) => s.supervisor_id === filtroTabla.supervisor_id)
+    if (filtroTabla.tipo === 'supervisor_hoy') return base.filter((s: SupervisionAdmin) => s.supervisor_id === filtroTabla.supervisor_id && fechaLocal(s.created_at) === hoy)
+    if (filtroTabla.tipo === 'objetivo') return base.filter((s: SupervisionAdmin) => s.objetivo_id === filtroTabla.objetivo_id)
+    if (filtroTabla.tipo === 'objetivos_vencidos') {
+      const idsVencidos = new Set(objetivosSinSupervision.map((o: Objetivo) => o.id))
+      return base.filter((s: SupervisionAdmin) => idsVencidos.has(s.objetivo_id))
+    }
+    if (filtroTabla.tipo === 'vencidas_supervisor') {
+      const asignaciones = (supervisorZonas || []).filter((a: any) => a.supervisor_id === filtroTabla.supervisor_id)
+      const zonaIds = new Set(asignaciones.map((a: any) => a.zona_id).filter(Boolean))
+      const idsVencidas = new Set(objetivosActivosRanking.filter((o: Objetivo) => o.zona_id && zonaIds.has(o.zona_id) && objetivoVencidoRanking(o)).map((o: Objetivo) => o.id))
+      return base.filter((s: SupervisionAdmin) => idsVencidas.has(s.objetivo_id))
+    }
+    return base.slice(0, 30)
+  })()
+
   const horasRankingTexto = (horas: number) => `${horas.toLocaleString('es-AR', { maximumFractionDigits: 1 })} h`
 
   const abrirDetalle = async (supervision: SupervisionAdmin) => {
@@ -2044,7 +2073,12 @@ function SupervisionesAdmin({
               </thead>
               <tbody>
                 {rankingSupervisores.map((item: any) => (
-                  <tr key={item.supervisor.id}>
+                  <tr
+                    key={item.supervisor.id}
+                    style={{ cursor:'pointer' }}
+                    title="Ver supervisiones de este supervisor"
+                    onClick={() => aplicarFiltro({ tipo: 'supervisor', label: nombreSupervisor(item.supervisor.id), supervisor_id: item.supervisor.id })}
+                  >
                     <td style={S.td}>
                       <strong>{nombreSupervisor(item.supervisor.id)}</strong>
                       {(item.alertas > 0 || item.resueltas > 0) && (
@@ -2066,7 +2100,7 @@ function SupervisionesAdmin({
                     <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:800 }}>{horasRankingTexto(item.horasMes)}</td>
                     <td style={S.td}>{item.turnosMes}</td>
                     <td style={S.td}>{item.supervisionesMes}</td>
-                    <td style={S.td}>
+                    <td style={S.td} onClick={e => { e.stopPropagation(); aplicarFiltro({ tipo: 'vencidas_supervisor', label: `Vencidas · ${nombreSupervisor(item.supervisor.id)}`, supervisor_id: item.supervisor.id }) }} title="Ver supervisiones vencidas de este supervisor">
                       <Badge type={item.vencidas > 0 ? 'advertencia' : 'ok'}>{item.vencidas}</Badge>
                     </td>
                   </tr>
@@ -2078,10 +2112,10 @@ function SupervisionesAdmin({
       </div>
 
       <div style={S.statGrid}>
-        <StatCard label="Supervisiones hoy" value={supervisionesHoy.length} sub="Registros propios de la fecha local" color={semanticColors.info} />
-        <StatCard label="Con observación" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length} sub="Observadas hoy" color={semanticColors.warning} />
-        <StatCard label="Críticas" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'critico').length} sub="Críticas hoy" color={semanticColors.error} />
-        <StatCard label="Objetivos vencidos" value={objetivosSinSupervision.length} sub="Sin supervisión según frecuencia" color={brandColors.yellow} />
+        <StatCard label="Supervisiones hoy" value={supervisionesHoy.length} sub="Registros propios de la fecha local" color={semanticColors.info} onClick={() => aplicarFiltro({ tipo: 'hoy', label: 'Supervisiones hoy' })} />
+        <StatCard label="Con observación" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length} sub="Observadas hoy" color={semanticColors.warning} onClick={() => aplicarFiltro({ tipo: 'con_observacion', label: 'Con observación' })} />
+        <StatCard label="Críticas" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'critico').length} sub="Críticas hoy" color={semanticColors.error} onClick={() => aplicarFiltro({ tipo: 'critico', label: 'Críticas' })} />
+        <StatCard label="Objetivos vencidos" value={objetivosSinSupervision.length} sub="Sin supervisión según frecuencia" color={brandColors.yellow} onClick={() => aplicarFiltro({ tipo: 'objetivos_vencidos', label: 'Objetivos vencidos' })} />
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))', gap:20 }}>
@@ -2090,7 +2124,12 @@ function SupervisionesAdmin({
           {porSupervisor.length === 0 ? (
             <div style={{ color:'#64748b', fontSize:13 }}>Sin supervisiones registradas hoy.</div>
           ) : porSupervisor.map((item: any) => (
-            <div key={item.supervisor_id} style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:12, padding:'10px 0', borderTop:'1px solid #1e2d42' }}>
+            <div
+              key={item.supervisor_id}
+              style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:12, padding:'10px 0', borderTop:'1px solid #1e2d42', cursor:'pointer' }}
+              title="Ver supervisiones de hoy de este supervisor"
+              onClick={() => aplicarFiltro({ tipo: 'supervisor_hoy', label: `Hoy · ${nombreSupervisor(item.supervisor_id)}`, supervisor_id: item.supervisor_id })}
+            >
               <div>
                 <div style={{ fontWeight:800 }}>{nombreSupervisor(item.supervisor_id)}</div>
                 <div style={{ color:'#94a3b8', fontSize:12 }}>{item.observadas} observadas · {item.criticas} críticas</div>
@@ -2105,7 +2144,12 @@ function SupervisionesAdmin({
           {porObjetivo.length === 0 ? (
             <div style={{ color:'#64748b', fontSize:13 }}>Sin historial de supervisiones.</div>
           ) : porObjetivo.slice(0, 12).map((item: any) => (
-            <div key={item.objetivo_id} style={{ padding:'10px 0', borderTop:'1px solid #1e2d42' }}>
+            <div
+              key={item.objetivo_id}
+              style={{ padding:'10px 0', borderTop:'1px solid #1e2d42', cursor:'pointer' }}
+              title="Ver supervisiones de este objetivo"
+              onClick={() => aplicarFiltro({ tipo: 'objetivo', label: nombreObjetivo(item.objetivo_id), objetivo_id: item.objetivo_id })}
+            >
               <div style={{ display:'flex', justifyContent:'space-between', gap:10 }}>
                 <div style={{ fontWeight:800 }}>{nombreObjetivo(item.objetivo_id)}</div>
                 <Badge type={item.criticas > 0 ? 'urgente' : item.observadas > 0 ? 'advertencia' : 'ok'}>{item.total}</Badge>
@@ -2124,7 +2168,12 @@ function SupervisionesAdmin({
           ) : objetivosSinSupervision.map((objetivo: Objetivo) => {
             const ultima = ultimaPorObjetivo.get(objetivo.id)
             return (
-              <div key={objetivo.id} style={{ padding:'10px 0', borderTop:'1px solid #1e2d42' }}>
+              <div
+                key={objetivo.id}
+                style={{ padding:'10px 0', borderTop:'1px solid #1e2d42', cursor:'pointer' }}
+                title="Ver historial de supervisiones de este objetivo"
+                onClick={() => aplicarFiltro({ tipo: 'objetivo', label: `Historial: ${objetivo.nombre}`, objetivo_id: objetivo.id })}
+              >
                 <div style={{ display:'flex', justifyContent:'space-between', gap:10 }}>
                   <div style={{ fontWeight:800 }}>{objetivo.nombre}</div>
                   <Badge type="advertencia">{objetivo.frecuencia_supervision_horas || 24} h</Badge>
@@ -2138,16 +2187,30 @@ function SupervisionesAdmin({
         </div>
       </div>
 
-      <div style={S.card}>
+      <div ref={tablaRef} style={S.card}>
         <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginBottom:12 }}>
           <div>
-            <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800 }}>Últimas supervisiones</div>
-            <div style={{ color:'#64748b', fontSize:13 }}>{ultimasSupervisiones.length} registro(s) recientes</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800 }}>
+              {filtroTabla ? `Filtro: ${filtroTabla.label}` : 'Últimas supervisiones'}
+            </div>
+            <div style={{ color:'#64748b', fontSize:13 }}>
+              {filtroTabla
+                ? `${supervisionesTabla.length} resultado(s) para este filtro`
+                : `${supervisionesTabla.length} registro(s) recientes`}
+            </div>
           </div>
+          {filtroTabla && (
+            <button
+              style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }}
+              onClick={() => setFiltroTabla(null)}
+            >
+              Quitar filtro
+            </button>
+          )}
         </div>
 
-        {ultimasSupervisiones.length === 0 ? (
-          <div style={{ color:'#64748b', fontSize:13 }}>Sin supervisiones registradas.</div>
+        {supervisionesTabla.length === 0 ? (
+          <div style={{ color:'#64748b', fontSize:13 }}>Sin supervisiones para este filtro.</div>
         ) : (
           <div style={{ overflowX:'auto' }}>
             <table style={S.table}>
@@ -2164,7 +2227,7 @@ function SupervisionesAdmin({
                 </tr>
               </thead>
               <tbody>
-                {ultimasSupervisiones.map((supervision: SupervisionAdmin) => (
+                {supervisionesTabla.map((supervision: SupervisionAdmin) => (
                   <tr key={supervision.id}>
                     <td style={S.td}>{fechaHora(supervision.created_at)}</td>
                     <td style={S.td}>{supervision.objetivo?.nombre || nombreObjetivo(supervision.objetivo_id)}</td>
