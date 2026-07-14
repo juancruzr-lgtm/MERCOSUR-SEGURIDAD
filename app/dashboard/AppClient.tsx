@@ -4820,6 +4820,14 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
   const [mostrarMapa, setMostrarMapa] = useState(false)
   const [capasActivas, setCapasActivas] = useState<Set<string>>(new Set(['ingresos', 'objetivos']))
   const [registroSeleccionado, setRegistroSeleccionado] = useState<string | null>(null)
+  const [cgoModo, setCgoModo] = useState<'dia' | 'vigilador' | 'objetivo'>('dia')
+  const [cgoFechaDia, setCgoFechaDia] = useState<string>(hoy)
+  const [cgoVigiladorId, setCgoVigiladorId] = useState<string>('')
+  const [cgoObjetivoId, setCgoObjetivoId] = useState<string>('')
+  const [cgoFechaDesde, setCgoFechaDesde] = useState<string>(() => {
+    const d = new Date(); d.setDate(d.getDate() - 6); return d.toLocaleDateString('sv-SE')
+  })
+  const [cgoFechaHasta, setCgoFechaHasta] = useState<string>(hoy)
 
   const toggleCapa = (capa: string) =>
     setCapasActivas(prev => {
@@ -4874,8 +4882,57 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
   })
 
   const CGO_LIMIT = 150
-  const registrosParaMapa = registrosOrdenados.slice(0, CGO_LIMIT)
-  const mapaTrunco = registrosOrdenados.length > CGO_LIMIT
+
+  // Registros filtrados por modo CGO (desde el universo completo)
+  const registrosCGO = useMemo<RegistroAsistencia[]>(() => {
+    if (!mostrarMapa) return []
+    const todos = registros as RegistroAsistencia[]
+    if (cgoModo === 'dia') {
+      return todos.filter(r => {
+        const t = turnos.find((x: Turno) => x.id === r.turno_id)
+        return t?.fecha === cgoFechaDia
+      })
+    }
+    if (cgoModo === 'vigilador') {
+      if (!cgoVigiladorId) return []
+      return todos.filter(r => {
+        const t = turnos.find((x: Turno) => x.id === r.turno_id)
+        return r.guardia_id === cgoVigiladorId && t?.fecha && t.fecha >= cgoFechaDesde && t.fecha <= cgoFechaHasta
+      })
+    }
+    if (cgoModo === 'objetivo') {
+      if (!cgoObjetivoId) return []
+      return todos.filter(r => {
+        const t = turnos.find((x: Turno) => x.id === r.turno_id)
+        return t?.objetivo_id === cgoObjetivoId && t?.fecha && t.fecha >= cgoFechaDesde && t.fecha <= cgoFechaHasta
+      })
+    }
+    return []
+  }, [mostrarMapa, cgoModo, cgoFechaDia, cgoVigiladorId, cgoObjetivoId, cgoFechaDesde, cgoFechaHasta, registros, turnos])
+
+  const registrosCGOOrdenados = useMemo(() =>
+    [...registrosCGO].sort((a: RegistroAsistencia, b: RegistroAsistencia) => {
+      const tA = turnos.find((x: Turno) => x.id === a.turno_id)
+      const tB = turnos.find((x: Turno) => x.id === b.turno_id)
+      return ordenRegistroAsistencia(b, tB) - ordenRegistroAsistencia(a, tA)
+    })
+  , [registrosCGO, turnos])
+
+  // Límite solo en modo día (sin entidad específica); vigilador/objetivo usan todos
+  const registrosParaMapa = cgoModo === 'dia'
+    ? registrosCGOOrdenados.slice(0, CGO_LIMIT)
+    : registrosCGOOrdenados
+  const mapaTrunco = cgoModo === 'dia' && registrosCGOOrdenados.length > CGO_LIMIT
+
+  // La tabla muestra el mismo conjunto que el mapa cuando está visible
+  const registrosParaTabla = mostrarMapa ? registrosCGOOrdenados : registrosOrdenados
+
+  // Validar rango de fechas (máx 30 días para vigilador/objetivo)
+  const diasRango = useMemo(() => {
+    if (!cgoFechaDesde || !cgoFechaHasta) return 0
+    return Math.round((new Date(cgoFechaHasta).getTime() - new Date(cgoFechaDesde).getTime()) / 86400000)
+  }, [cgoFechaDesde, cgoFechaHasta])
+  const rangoExcesivo = diasRango > 30
 
   const markersAsistencia = useMemo(() => {
     const result: any[] = []
@@ -4886,7 +4943,6 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
       const empleado = g ? `${g.apellido}, ${g.nombre}` : '—'
       const objNombre = o?.nombre || '—'
       const fecha = formatFecha(fechaRegistroAsistencia(r, t))
-
       const tipoRegistroTexto = r.tipo_registro === 'fichaje_gps' ? 'Fichaje GPS'
         : r.tipo_registro === 'presente_manual' ? 'Presente manual'
         : r.tipo_registro === 'ausencia' ? 'Ausencia'
@@ -4898,99 +4954,65 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
         const prec = typeof r.precision_ingreso === 'number' ? r.precision_ingreso : null
         const esManual = r.tipo_registro === 'presente_manual' || r.tipo_registro === 'ausencia' || r.tipo_registro === 'reemplazo'
         const esImpreciso = prec !== null && prec > GPS_PRECISION_MAX_METROS
-        const color = esManual ? '#eab308'
-          : esImpreciso ? '#f97316'
+        const color = esManual ? '#eab308' : esImpreciso ? '#f97316'
           : r.gps_ingreso_estado === 'fuera_radio' ? '#ef4444'
-          : r.gps_ingreso_estado === 'dentro_radio' ? '#22c55e'
-          : '#94a3b8'
-        const label = (empleado.charAt(0) + (empleado.split(' ')[1]?.[0] || '')).toUpperCase()
-        result.push({
-          id: `${r.id}-ing`,
-          tipo: 'ingreso',
-          lat: gpsIng.lat,
-          lng: gpsIng.lng,
-          color,
-          label,
-          empleado,
-          objetivo: objNombre,
-          fecha,
-          hora: r.hora_entrada_real || '—',
-          distancia: metrosGpsTexto(r.distancia_ingreso_metros),
-          precision: prec !== null ? `${Math.round(prec)} m` : '—',
-          estado: estadoGpsTexto(r, 'ingreso'),
-          tipoRegistro: tipoRegistroTexto,
-          registroId: r.id,
-          googleMapsUrl: `https://maps.google.com/?q=${gpsIng.lat},${gpsIng.lng}`,
-        })
+          : r.gps_ingreso_estado === 'dentro_radio' ? '#22c55e' : '#94a3b8'
+        result.push({ id:`${r.id}-ing`, tipo:'ingreso', lat:gpsIng.lat, lng:gpsIng.lng, color, label:(empleado.charAt(0)+(empleado.split(' ')[1]?.[0]||'')).toUpperCase(), empleado, objetivo:objNombre, fecha, hora:r.hora_entrada_real||'—', distancia:metrosGpsTexto(r.distancia_ingreso_metros), precision:prec!==null?`${Math.round(prec)} m`:'—', estado:estadoGpsTexto(r,'ingreso'), tipoRegistro:tipoRegistroTexto, registroId:r.id, googleMapsUrl:`https://maps.google.com/?q=${gpsIng.lat},${gpsIng.lng}` })
       }
-
       const gpsEgr = gpsRegistroAsistencia(r, 'egreso')
       if (gpsEgr) {
         const prec = typeof r.precision_egreso === 'number' ? r.precision_egreso : null
         const esManual = r.tipo_registro === 'presente_manual' || r.tipo_registro === 'ausencia' || r.tipo_registro === 'reemplazo'
         const esImpreciso = prec !== null && prec > GPS_PRECISION_MAX_METROS
-        const color = esManual ? '#eab308'
-          : esImpreciso ? '#f97316'
+        const color = esManual ? '#eab308' : esImpreciso ? '#f97316'
           : r.gps_egreso_estado === 'fuera_radio' ? '#ef4444'
-          : r.gps_egreso_estado === 'dentro_radio' ? '#22c55e'
-          : '#94a3b8'
-        const label = (empleado.charAt(0) + (empleado.split(' ')[1]?.[0] || '')).toUpperCase()
-        result.push({
-          id: `${r.id}-egr`,
-          tipo: 'egreso',
-          lat: gpsEgr.lat,
-          lng: gpsEgr.lng,
-          color,
-          label,
-          empleado,
-          objetivo: objNombre,
-          fecha,
-          hora: r.hora_salida_real || '—',
-          distancia: metrosGpsTexto(r.distancia_egreso_metros),
-          precision: prec !== null ? `${Math.round(prec)} m` : '—',
-          estado: estadoGpsTexto(r, 'egreso'),
-          tipoRegistro: tipoRegistroTexto,
-          registroId: r.id,
-          googleMapsUrl: `https://maps.google.com/?q=${gpsEgr.lat},${gpsEgr.lng}`,
-        })
+          : r.gps_egreso_estado === 'dentro_radio' ? '#22c55e' : '#94a3b8'
+        result.push({ id:`${r.id}-egr`, tipo:'egreso', lat:gpsEgr.lat, lng:gpsEgr.lng, color, label:(empleado.charAt(0)+(empleado.split(' ')[1]?.[0]||'')).toUpperCase(), empleado, objetivo:objNombre, fecha, hora:r.hora_salida_real||'—', distancia:metrosGpsTexto(r.distancia_egreso_metros), precision:prec!==null?`${Math.round(prec)} m`:'—', estado:estadoGpsTexto(r,'egreso'), tipoRegistro:tipoRegistroTexto, registroId:r.id, googleMapsUrl:`https://maps.google.com/?q=${gpsEgr.lat},${gpsEgr.lng}` })
       }
     }
     return result
   }, [registrosParaMapa, guardias, turnos, objetivos])
 
-  const objetivosCGO = useMemo(() =>
-    (objetivos as Objetivo[])
+  const objetivosCGO = useMemo(() => {
+    const todos = (objetivos as Objetivo[])
       .filter(o => typeof o.lat === 'number' && typeof o.lng === 'number')
-      .map(o => ({ id: o.id, nombre: o.nombre, lat: o.lat as number, lng: o.lng as number, radio_metros: o.radio_metros }))
-  , [objetivos])
+      .map(o => ({ id:o.id, nombre:o.nombre, lat:o.lat as number, lng:o.lng as number, radio_metros:o.radio_metros }))
+    if (!mostrarMapa) return todos
+    if (cgoModo === 'objetivo' && cgoObjetivoId) return todos.filter(o => o.id === cgoObjetivoId)
+    const objIds = new Set(registrosParaMapa.map((r: RegistroAsistencia) => {
+      const t = turnos.find((x: Turno) => x.id === r.turno_id)
+      return t?.objetivo_id
+    }).filter(Boolean))
+    return objIds.size > 0 ? todos.filter(o => objIds.has(o.id)) : todos
+  }, [objetivos, mostrarMapa, cgoModo, cgoObjetivoId, registrosParaMapa, turnos])
 
   const supervisionesCGO = useMemo(() => {
     if (!supervisiones?.length) return []
-    return (supervisiones as any[]).map(s => {
+    let filtradas = supervisiones as any[]
+    if (mostrarMapa) {
+      if (cgoModo === 'dia') {
+        filtradas = filtradas.filter((s: any) => s.created_at?.slice(0, 10) === cgoFechaDia)
+      } else if (cgoModo === 'vigilador') {
+        const objIds = new Set(registrosCGOOrdenados.map((r: RegistroAsistencia) => {
+          const t = turnos.find((x: Turno) => x.id === r.turno_id)
+          return t?.objetivo_id
+        }).filter(Boolean))
+        filtradas = filtradas.filter((s: any) => objIds.has(s.objetivo_id) && s.created_at?.slice(0,10) >= cgoFechaDesde && s.created_at?.slice(0,10) <= cgoFechaHasta)
+      } else if (cgoModo === 'objetivo') {
+        filtradas = filtradas.filter((s: any) => s.objetivo_id === cgoObjetivoId && s.created_at?.slice(0,10) >= cgoFechaDesde && s.created_at?.slice(0,10) <= cgoFechaHasta)
+      }
+    }
+    return filtradas.map((s: any) => {
       const lat = typeof s.lat === 'number' ? s.lat : parseFloat(s.lat)
       const lng = typeof s.lng === 'number' ? s.lng : parseFloat(s.lng)
       const prec = typeof s.precision_gps === 'number' ? s.precision_gps : parseFloat(s.precision_gps)
       if (!isFinite(lat) || !isFinite(lng)) return null
       const objMatching = (objetivos as Objetivo[]).find(o => o.id === s.objetivo_id)
       const auditoria = objMatching ? auditoriaSupervisionGps(s, objMatching) : null
-      const supervisor = s.supervisor ? `${s.supervisor.apellido || ''}, ${s.supervisor.nombre || ''}`.trim().replace(/^,\s*/, '') : '—'
-      const objNombre = s.objetivo?.nombre || objMatching?.nombre || '—'
-      return {
-        id: s.id,
-        lat,
-        lng,
-        supervisor,
-        objetivo: objNombre,
-        fecha: formatFechaHora(s.created_at),
-        estado: s.estado || '—',
-        distancia: auditoria ? metrosGpsTexto(auditoria.distancia_objetivo_metros) : '—',
-        precision: isFinite(prec) ? `${Math.round(prec)} m` : '—',
-        dentroRadio: auditoria ? auditoria.dentro_radio : null,
-        gpsImpreciso: auditoria ? auditoria.gpsImpreciso : (isFinite(prec) && prec > GPS_PRECISION_MAX_METROS),
-        googleMapsUrl: `https://maps.google.com/?q=${lat},${lng}`,
-      }
+      const supervisor = s.supervisor ? `${s.supervisor.apellido||''}, ${s.supervisor.nombre||''}`.trim().replace(/^,\s*/,'') : '—'
+      return { id:s.id, lat, lng, supervisor, objetivo:s.objetivo?.nombre||objMatching?.nombre||'—', fecha:formatFechaHora(s.created_at), estado:s.estado||'—', distancia:auditoria?metrosGpsTexto(auditoria.distancia_objetivo_metros):'—', precision:isFinite(prec)?`${Math.round(prec)} m`:'—', dentroRadio:auditoria?auditoria.dentro_radio:null, gpsImpreciso:auditoria?auditoria.gpsImpreciso:(isFinite(prec)&&prec>GPS_PRECISION_MAX_METROS), googleMapsUrl:`https://maps.google.com/?q=${lat},${lng}` }
     }).filter(Boolean)
-  }, [supervisiones, objetivos])
+  }, [supervisiones, objetivos, mostrarMapa, cgoModo, cgoFechaDia, cgoVigiladorId, cgoObjetivoId, cgoFechaDesde, cgoFechaHasta, registrosCGOOrdenados, turnos])
 
   const onMarkerClick = (registroId: string) => {
     setRegistroSeleccionado(registroId)
@@ -5033,15 +5055,86 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
       )}
       {mostrarMapa && (
         <div style={{ marginBottom:20 }}>
-          {mapaTrunco && (
-            <div style={{ marginBottom:8, padding:'8px 14px', background:'#1a2235', border:'1px solid #f59e0b', borderRadius:6, color:'#f59e0b', fontSize:12 }}>
-              Mostrando los primeros {CGO_LIMIT} de {registrosOrdenados.length} registros en el mapa.
+          {/* Selector de modo */}
+          <div style={{ display:'flex', gap:0, marginBottom:14, border:'1px solid #1e2d42', borderRadius:8, overflow:'hidden', width:'fit-content' }}>
+            {(['dia','vigilador','objetivo'] as const).map((m, i) => (
+              <button key={m}
+                style={{ ...S.btn, ...(cgoModo===m ? S.btnPrimary : {}), borderRadius:0, border:'none', borderRight:i<2?'1px solid #1e2d42':'none', padding:'7px 18px', fontSize:12, background:cgoModo===m?undefined:'#0d1424' }}
+                onClick={() => { setCgoModo(m); setRegistroSeleccionado(null) }}
+              >
+                {m==='dia'?'Por día':m==='vigilador'?'Por vigilador':'Por objetivo'}
+              </button>
+            ))}
+          </div>
+
+          {/* Controles por modo */}
+          <div style={{ display:'flex', gap:12, flexWrap:'wrap' as const, alignItems:'center', marginBottom:12 }}>
+            {cgoModo === 'dia' && (
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <label style={{ ...S.label, marginBottom:0, fontSize:12 }}>Fecha</label>
+                <input type="date" style={{ ...S.input, padding:'5px 10px', fontSize:12, width:'auto' }} value={cgoFechaDia} max={hoy} onChange={e => { setCgoFechaDia(e.target.value); setRegistroSeleccionado(null) }} />
+              </div>
+            )}
+            {(cgoModo === 'vigilador' || cgoModo === 'objetivo') && (<>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <label style={{ ...S.label, marginBottom:0, fontSize:12 }}>Desde</label>
+                <input type="date" style={{ ...S.input, padding:'5px 10px', fontSize:12, width:'auto' }} value={cgoFechaDesde} max={hoy} onChange={e => { setCgoFechaDesde(e.target.value); setRegistroSeleccionado(null) }} />
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <label style={{ ...S.label, marginBottom:0, fontSize:12 }}>Hasta</label>
+                <input type="date" style={{ ...S.input, padding:'5px 10px', fontSize:12, width:'auto' }} value={cgoFechaHasta} max={hoy} onChange={e => { setCgoFechaHasta(e.target.value); setRegistroSeleccionado(null) }} />
+              </div>
+            </>)}
+            {cgoModo === 'vigilador' && (
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <label style={{ ...S.label, marginBottom:0, fontSize:12 }}>Vigilador</label>
+                <select style={{ ...S.select, padding:'5px 10px', fontSize:12 }} value={cgoVigiladorId} onChange={e => { setCgoVigiladorId(e.target.value); setRegistroSeleccionado(null) }}>
+                  <option value="">Seleccionar...</option>
+                  {([...guardias] as Usuario[]).sort((a, b) => a.apellido.localeCompare(b.apellido)).map((g: Usuario) => (
+                    <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {cgoModo === 'objetivo' && (
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <label style={{ ...S.label, marginBottom:0, fontSize:12 }}>Objetivo</label>
+                <select style={{ ...S.select, padding:'5px 10px', fontSize:12 }} value={cgoObjetivoId} onChange={e => { setCgoObjetivoId(e.target.value); setRegistroSeleccionado(null) }}>
+                  <option value="">Seleccionar...</option>
+                  {([...objetivos] as Objetivo[]).sort((a, b) => a.nombre.localeCompare(b.nombre)).map((o: Objetivo) => (
+                    <option key={o.id} value={o.id}>{o.nombre}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Advertencia rango excesivo */}
+          {rangoExcesivo && cgoModo !== 'dia' && (
+            <div style={{ marginBottom:8, padding:'6px 12px', background:'#1a2235', border:'1px solid #ef4444', borderRadius:6, color:'#ef4444', fontSize:12 }}>
+              El rango supera 30 días ({diasRango} días). Reducí el período para mayor rendimiento.
             </div>
           )}
+
+          {/* Info: cantidad + período + filtro */}
+          <div style={{ marginBottom:10, padding:'6px 12px', background:'#0f1c2e', border:'1px solid #1e3a5f', borderRadius:6, fontSize:12, color:'#94a3b8' }}>
+            {registrosCGOOrdenados.length === 0
+              ? (cgoModo==='dia' ? `Sin registros para el ${formatFecha(cgoFechaDia)}.` : !cgoVigiladorId && cgoModo==='vigilador' ? 'Seleccioná un vigilador.' : !cgoObjetivoId && cgoModo==='objetivo' ? 'Seleccioná un objetivo.' : 'Sin registros para el filtro seleccionado.')
+              : <>
+                  <strong style={{ color:'#e2e8f0' }}>{registrosCGOOrdenados.length} registro{registrosCGOOrdenados.length!==1?'s':''}</strong>
+                  {' · '}
+                  {cgoModo==='dia' ? `Día: ${formatFecha(cgoFechaDia)}` : `Período: ${formatFecha(cgoFechaDesde)} – ${formatFecha(cgoFechaHasta)}`}
+                  {cgoModo==='vigilador' && cgoVigiladorId && (() => { const g=(guardias as Usuario[]).find(x=>x.id===cgoVigiladorId); return g?` · Vigilador: ${g.apellido}, ${g.nombre}`:''; })()}
+                  {cgoModo==='objetivo' && cgoObjetivoId && (() => { const o=(objetivos as Objetivo[]).find(x=>x.id===cgoObjetivoId); return o?` · Objetivo: ${o.nombre}`:''; })()}
+                  {mapaTrunco && <span style={{ color:'#f59e0b' }}>{` · Mapa: primeros ${CGO_LIMIT}`}</span>}
+                </>
+            }
+          </div>
+
+          {/* Capas */}
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' as const, marginBottom:12 }}>
             {(['ingresos','egresos','objetivos','supervisiones'] as const).map(capa => (
-              <button
-                key={capa}
+              <button key={capa}
                 style={{ ...S.btn, ...(capasActivas.has(capa) ? S.btnPrimary : S.btnSecondary), padding:'5px 12px', fontSize:12 }}
                 onClick={() => toggleCapa(capa)}
               >
@@ -5049,6 +5142,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
               </button>
             ))}
           </div>
+
           <AsistenciaMap
             markers={markersAsistencia}
             objetivos={objetivosCGO}
@@ -5057,6 +5151,8 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
             registroSeleccionado={registroSeleccionado}
             onMarkerClick={onMarkerClick}
           />
+
+          {/* Leyenda */}
           <div style={{ display:'flex', flexWrap:'wrap' as const, gap:12, marginTop:10, fontSize:11, color:'#64748b' }}>
             <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', background:'#22c55e', marginRight:4 }}/>Ingreso dentro radio</span>
             <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', background:'#ef4444', marginRight:4 }}/>Fuera de radio</span>
@@ -5072,7 +5168,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
         <table style={S.table}>
           <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Guardia</th><th style={S.th}>Objetivo</th><th style={S.th}>Asignado</th><th style={S.th}>Entrada Real</th><th style={S.th}>Salida Real</th><th style={S.th}>Horas</th><th style={S.th}>GPS Ingreso</th><th style={S.th}>GPS Egreso</th><th style={S.th}>Precisión</th><th style={S.th}>Alertas</th><th style={S.th}>Fotos</th>{esAdmin && <th style={S.th}></th>}</tr></thead>
           <tbody>
-            {registrosOrdenados.map((r: RegistroAsistencia) => {
+            {registrosParaTabla.map((r: RegistroAsistencia) => {
               const g = guardias.find((x: Usuario) => x.id === r.guardia_id)
               const t = turnos.find((x: Turno) => x.id === r.turno_id)
               const o = objetivos.find((x: Objetivo) => x.id === t?.objetivo_id)
