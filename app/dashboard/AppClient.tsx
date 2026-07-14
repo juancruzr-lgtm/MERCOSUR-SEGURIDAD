@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useCallback, useRef, Fragment } from 'react'
+import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcularHorasLiquidables } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
@@ -11,6 +11,11 @@ import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
+  ssr: false,
+  loading: () => <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', background:'#111827', border:'1px solid #1e2d42', borderRadius:8, color:'#94a3b8', marginBottom:20 }}>Cargando mapa...</div>,
+})
+
+const AsistenciaMap = dynamic(() => import('@/components/asistencia/AsistenciaMap'), {
   ssr: false,
   loading: () => <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', background:'#111827', border:'1px solid #1e2d42', borderRadius:8, color:'#94a3b8', marginBottom:20 }}>Cargando mapa...</div>,
 })
@@ -4791,7 +4796,7 @@ function CorregirRegistroModal({ registro, onClose, turnos, guardias, objetivos,
   )
 }
 
-function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filtroActivo, limpiarFiltro, user, esAdmin }: any) {
+function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supervisiones, filtroActivo, limpiarFiltro, user, esAdmin }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
   const [loading, setLoading] = useState(false)
@@ -4810,6 +4815,18 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
   const [verEvidencias, setVerEvidencias] = useState<string | null>(null)
   const [evidenciasPorRegistro, setEvidenciasPorRegistro] = useState<Record<string, EvidenciaAdmin[]>>({})
   const [cargandoEvidencias, setCargandoEvidencias] = useState<string | null>(null)
+
+  // CGO – Centro Geográfico Operativo
+  const [mostrarMapa, setMostrarMapa] = useState(false)
+  const [capasActivas, setCapasActivas] = useState<Set<string>>(new Set(['ingresos', 'objetivos']))
+  const [registroSeleccionado, setRegistroSeleccionado] = useState<string | null>(null)
+
+  const toggleCapa = (capa: string) =>
+    setCapasActivas(prev => {
+      const next = new Set(prev)
+      next.has(capa) ? next.delete(capa) : next.add(capa)
+      return next
+    })
 
   const verFotosRegistro = async (registroId: string) => {
     if (verEvidencias === registroId) { setVerEvidencias(null); return }
@@ -4856,6 +4873,133 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
     return ordenRegistroAsistencia(b, turnoB) - ordenRegistroAsistencia(a, turnoA)
   })
 
+  const CGO_LIMIT = 150
+  const registrosParaMapa = registrosOrdenados.slice(0, CGO_LIMIT)
+  const mapaTrunco = registrosOrdenados.length > CGO_LIMIT
+
+  const markersAsistencia = useMemo(() => {
+    const result: any[] = []
+    for (const r of registrosParaMapa) {
+      const g = guardias.find((x: Usuario) => x.id === r.guardia_id)
+      const t = turnos.find((x: Turno) => x.id === r.turno_id)
+      const o = objetivos.find((x: Objetivo) => x.id === t?.objetivo_id)
+      const empleado = g ? `${g.apellido}, ${g.nombre}` : '—'
+      const objNombre = o?.nombre || '—'
+      const fecha = formatFecha(fechaRegistroAsistencia(r, t))
+
+      const tipoRegistroTexto = r.tipo_registro === 'fichaje_gps' ? 'Fichaje GPS'
+        : r.tipo_registro === 'presente_manual' ? 'Presente manual'
+        : r.tipo_registro === 'ausencia' ? 'Ausencia'
+        : r.tipo_registro === 'reemplazo' ? 'Reemplazo'
+        : r.tipo_registro || '—'
+
+      const gpsIng = gpsRegistroAsistencia(r, 'ingreso')
+      if (gpsIng) {
+        const prec = typeof r.precision_ingreso === 'number' ? r.precision_ingreso : null
+        const esManual = r.tipo_registro === 'presente_manual' || r.tipo_registro === 'ausencia' || r.tipo_registro === 'reemplazo'
+        const esImpreciso = prec !== null && prec > GPS_PRECISION_MAX_METROS
+        const color = esManual ? '#eab308'
+          : esImpreciso ? '#f97316'
+          : r.gps_ingreso_estado === 'fuera_radio' ? '#ef4444'
+          : r.gps_ingreso_estado === 'dentro_radio' ? '#22c55e'
+          : '#94a3b8'
+        const label = (empleado.charAt(0) + (empleado.split(' ')[1]?.[0] || '')).toUpperCase()
+        result.push({
+          id: `${r.id}-ing`,
+          tipo: 'ingreso',
+          lat: gpsIng.lat,
+          lng: gpsIng.lng,
+          color,
+          label,
+          empleado,
+          objetivo: objNombre,
+          fecha,
+          hora: r.hora_entrada_real || '—',
+          distancia: metrosGpsTexto(r.distancia_ingreso_metros),
+          precision: prec !== null ? `${Math.round(prec)} m` : '—',
+          estado: estadoGpsTexto(r, 'ingreso'),
+          tipoRegistro: tipoRegistroTexto,
+          registroId: r.id,
+          googleMapsUrl: `https://maps.google.com/?q=${gpsIng.lat},${gpsIng.lng}`,
+        })
+      }
+
+      const gpsEgr = gpsRegistroAsistencia(r, 'egreso')
+      if (gpsEgr) {
+        const prec = typeof r.precision_egreso === 'number' ? r.precision_egreso : null
+        const esManual = r.tipo_registro === 'presente_manual' || r.tipo_registro === 'ausencia' || r.tipo_registro === 'reemplazo'
+        const esImpreciso = prec !== null && prec > GPS_PRECISION_MAX_METROS
+        const color = esManual ? '#eab308'
+          : esImpreciso ? '#f97316'
+          : r.gps_egreso_estado === 'fuera_radio' ? '#ef4444'
+          : r.gps_egreso_estado === 'dentro_radio' ? '#22c55e'
+          : '#94a3b8'
+        const label = (empleado.charAt(0) + (empleado.split(' ')[1]?.[0] || '')).toUpperCase()
+        result.push({
+          id: `${r.id}-egr`,
+          tipo: 'egreso',
+          lat: gpsEgr.lat,
+          lng: gpsEgr.lng,
+          color,
+          label,
+          empleado,
+          objetivo: objNombre,
+          fecha,
+          hora: r.hora_salida_real || '—',
+          distancia: metrosGpsTexto(r.distancia_egreso_metros),
+          precision: prec !== null ? `${Math.round(prec)} m` : '—',
+          estado: estadoGpsTexto(r, 'egreso'),
+          tipoRegistro: tipoRegistroTexto,
+          registroId: r.id,
+          googleMapsUrl: `https://maps.google.com/?q=${gpsEgr.lat},${gpsEgr.lng}`,
+        })
+      }
+    }
+    return result
+  }, [registrosParaMapa, guardias, turnos, objetivos])
+
+  const objetivosCGO = useMemo(() =>
+    (objetivos as Objetivo[])
+      .filter(o => typeof o.lat === 'number' && typeof o.lng === 'number')
+      .map(o => ({ id: o.id, nombre: o.nombre, lat: o.lat as number, lng: o.lng as number, radio_metros: o.radio_metros }))
+  , [objetivos])
+
+  const supervisionesCGO = useMemo(() => {
+    if (!supervisiones?.length) return []
+    return (supervisiones as any[]).map(s => {
+      const lat = typeof s.lat === 'number' ? s.lat : parseFloat(s.lat)
+      const lng = typeof s.lng === 'number' ? s.lng : parseFloat(s.lng)
+      const prec = typeof s.precision_gps === 'number' ? s.precision_gps : parseFloat(s.precision_gps)
+      if (!isFinite(lat) || !isFinite(lng)) return null
+      const objMatching = (objetivos as Objetivo[]).find(o => o.id === s.objetivo_id)
+      const auditoria = objMatching ? auditoriaSupervisionGps(s, objMatching) : null
+      const supervisor = s.supervisor ? `${s.supervisor.apellido || ''}, ${s.supervisor.nombre || ''}`.trim().replace(/^,\s*/, '') : '—'
+      const objNombre = s.objetivo?.nombre || objMatching?.nombre || '—'
+      return {
+        id: s.id,
+        lat,
+        lng,
+        supervisor,
+        objetivo: objNombre,
+        fecha: formatFechaHora(s.created_at),
+        estado: s.estado || '—',
+        distancia: auditoria ? metrosGpsTexto(auditoria.distancia_objetivo_metros) : '—',
+        precision: isFinite(prec) ? `${Math.round(prec)} m` : '—',
+        dentroRadio: auditoria ? auditoria.dentro_radio : null,
+        gpsImpreciso: auditoria ? auditoria.gpsImpreciso : (isFinite(prec) && prec > GPS_PRECISION_MAX_METROS),
+        googleMapsUrl: `https://maps.google.com/?q=${lat},${lng}`,
+      }
+    }).filter(Boolean)
+  }, [supervisiones, objetivos])
+
+  const onMarkerClick = (registroId: string) => {
+    setRegistroSeleccionado(registroId)
+    setTimeout(() => {
+      const el = document.getElementById(`cgo-row-${registroId}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 100)
+  }
+
   const registrar = async () => {
     const turno = turnos.find((t: Turno) => t.id === form.turno_id)
     if (!turno || !form.hora_entrada_real) return
@@ -4877,11 +5021,51 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
         <div style={{ flex:1 }}><div style={S.title}>Asistencia</div><div style={S.sub2}>Registro de entradas y salidas</div></div>
         <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => setModal(true)}>+ Registrar</button>
+        <button style={{ ...S.btn, ...S.btnSecondary, marginLeft:8 }} onClick={() => setMostrarMapa(v => !v)}>
+          {mostrarMapa ? 'Ocultar mapa' : '🗺 Mapa CGO'}
+        </button>
       </div>
       {filtroActivo && (
         <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
           <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
           <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
+        </div>
+      )}
+      {mostrarMapa && (
+        <div style={{ marginBottom:20 }}>
+          {mapaTrunco && (
+            <div style={{ marginBottom:8, padding:'8px 14px', background:'#1a2235', border:'1px solid #f59e0b', borderRadius:6, color:'#f59e0b', fontSize:12 }}>
+              Mostrando los primeros {CGO_LIMIT} de {registrosOrdenados.length} registros en el mapa.
+            </div>
+          )}
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' as const, marginBottom:12 }}>
+            {(['ingresos','egresos','objetivos','supervisiones'] as const).map(capa => (
+              <button
+                key={capa}
+                style={{ ...S.btn, ...(capasActivas.has(capa) ? S.btnPrimary : S.btnSecondary), padding:'5px 12px', fontSize:12 }}
+                onClick={() => toggleCapa(capa)}
+              >
+                {capa.charAt(0).toUpperCase() + capa.slice(1)}
+              </button>
+            ))}
+          </div>
+          <AsistenciaMap
+            markers={markersAsistencia}
+            objetivos={objetivosCGO}
+            supervisiones={supervisionesCGO}
+            capasActivas={capasActivas}
+            registroSeleccionado={registroSeleccionado}
+            onMarkerClick={onMarkerClick}
+          />
+          <div style={{ display:'flex', flexWrap:'wrap' as const, gap:12, marginTop:10, fontSize:11, color:'#64748b' }}>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', background:'#22c55e', marginRight:4 }}/>Ingreso dentro radio</span>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', background:'#ef4444', marginRight:4 }}/>Fuera de radio</span>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', background:'#f97316', marginRight:4 }}/>GPS impreciso</span>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', background:'#eab308', marginRight:4 }}/>Manual</span>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', background:'#94a3b8', marginRight:4 }}/>Sin estado</span>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:2, background:'#2563eb', marginRight:4 }}/>Objetivo</span>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', background:'#38bdf8', marginRight:4 }}/>Supervisión dentro</span>
+          </div>
         </div>
       )}
       <div style={{ ...S.card, overflowX:'auto' }}>
@@ -4898,9 +5082,14 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, filt
               const textoGpsEgreso = textoAuditoriaGps(r, 'egreso')
               const expandido = verEvidencias === r.id
               const evs = evidenciasPorRegistro[r.id]
+              const estaSeleccionado = registroSeleccionado === r.id
               return (
                 <Fragment key={r.id}>
-                  <tr>
+                  <tr
+                    id={`cgo-row-${r.id}`}
+                    style={estaSeleccionado ? { background:'rgba(56,189,248,.08)', outline:'2px solid #38bdf8', outlineOffset:'-2px' } : undefined}
+                    onClick={() => { if (mostrarMapa) { setRegistroSeleccionado(r.id); window.scrollTo({ top:0, behavior:'smooth' }) } }}
+                  >
                     <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600, fontSize:13 }}>{formatFecha(fechaRegistroAsistencia(r, t))}</td>
                     <td style={S.td}><strong>{g?.apellido}, {g?.nombre}</strong></td>
                     <td style={{ ...S.td, fontSize:12 }}>{o?.nombre || '—'}</td>
@@ -8592,7 +8781,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={setPage} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
-              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
+              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
