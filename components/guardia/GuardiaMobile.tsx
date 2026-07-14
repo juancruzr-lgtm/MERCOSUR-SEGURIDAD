@@ -753,18 +753,28 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         registroId = data.id
       }
 
-      // 2. Upload fotos en paralelo
-      const ts = Date.now()
-      const pathLibro = `${registroId}/libro_guardia-${ts}.jpg`
-      const pathUniforme = `${registroId}/uniforme-${ts}.jpg`
+      // 2. Upload fotos via API route (service role evita RLS de storage)
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData?.session?.access_token
+      if (!token) throw new Error('Sesión expirada. Volvé a iniciar sesión.')
 
-      const [uploadLibro, uploadUniforme] = await Promise.all([
-        supabase.storage.from('ingreso-evidencias').upload(pathLibro, fotoLibro.file, { upsert: true, contentType: 'image/jpeg' }),
-        supabase.storage.from('ingreso-evidencias').upload(pathUniforme, fotoUniforme.file, { upsert: true, contentType: 'image/jpeg' }),
-      ])
+      const formData = new FormData()
+      formData.append('libro', fotoLibro.file, 'libro.jpg')
+      formData.append('uniforme', fotoUniforme.file, 'uniforme.jpg')
+      formData.append('registroId', registroId)
 
-      if (uploadLibro.error) throw uploadLibro.error
-      if (uploadUniforme.error) throw uploadUniforme.error
+      const uploadRes = await fetch('/api/upload-evidence', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+
+      if (!uploadRes.ok) {
+        const err = await uploadRes.json().catch(() => ({ error: 'Error subiendo fotos' }))
+        throw new Error(err.error || 'Error subiendo fotos')
+      }
+
+      const { pathLibro, pathUniforme } = await uploadRes.json()
 
       // 3. INSERT evidencias — upsert por UNIQUE (proceso_tipo, proceso_id, tipo_evidencia)
       const { error: evidError } = await supabase
@@ -895,6 +905,48 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
     setFichando(null)
     setTimeout(() => setMensaje(null), 4000)
+  }
+
+  const puedeAnularEgreso = (reg: Registro): boolean => {
+    if (!reg.hora_salida_real) return false
+    const [h, m, s] = reg.hora_salida_real.split(':').map(Number)
+    const now = new Date()
+    const egreso = new Date()
+    egreso.setHours(h, m, s, 0)
+    const diffMs = now.getTime() - egreso.getTime()
+    return diffMs >= 0 && diffMs <= 30 * 60 * 1000
+  }
+
+  const anularEgreso = async (turno: Turno, registro: Registro) => {
+    setFichando(turno.id)
+    setMensaje(null)
+    const { error } = await supabase
+      .from('registros_asistencia')
+      .update({
+        hora_salida_real: null,
+        hora_salida_final: null,
+        horas_trabajadas: null,
+        alerta_salida: null,
+        latitud_egreso: null,
+        longitud_egreso: null,
+        precision_egreso: null,
+        distancia_egreso_metros: null,
+        gps_egreso_estado: null,
+      })
+      .eq('id', registro.id)
+    if (error) {
+      setMensaje({ texto: 'Error al anular el egreso.', tipo: 'error' })
+    } else {
+      setRegistros(prev =>
+        prev.map(r => r.id === registro.id
+          ? { ...r, hora_salida_real: undefined, hora_salida_final: undefined, horas_trabajadas: undefined, alerta_salida: undefined, gps_egreso_estado: undefined }
+          : r
+        )
+      )
+      setMensaje({ texto: 'Egreso anulado. Podés registrar la salida cuando corresponda.', tipo: 'ok' })
+    }
+    setFichando(null)
+    setTimeout(() => setMensaje(null), 5000)
   }
 
   const getObjetivo = (id: string) => objetivos.find(o => o.id === id)
@@ -1268,9 +1320,20 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
               )}
 
               {reg?.hora_salida_real && (
-                <button style={{ ...S.btn, ...S.btnDisabled }} disabled>
-                  ✓ Turno finalizado
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button style={{ ...S.btn, ...S.btnDisabled }} disabled>
+                    ✓ Turno finalizado
+                  </button>
+                  {puedeAnularEgreso(reg) && (
+                    <button
+                      style={{ ...S.btn, background: '#dc2626', color: '#fff', opacity: fichando === turno.id ? 0.6 : 1 }}
+                      onClick={() => anularEgreso(turno, reg)}
+                      disabled={fichando === turno.id}
+                    >
+                      Anular egreso
+                    </button>
+                  )}
+                </div>
               )}
 
             </div>
