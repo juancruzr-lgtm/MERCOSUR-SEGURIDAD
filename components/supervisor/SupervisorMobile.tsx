@@ -6,6 +6,8 @@ import { activarNotificacionesPush } from '@/lib/push-client'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
+import { initTelemetry, endSession } from '@/lib/telemetry'
+import { useSupervisorGps } from '@/lib/supervisor-gps'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
@@ -500,7 +502,14 @@ export default function SupervisorMobile({ user }: any) {
   const hoy = fechaHoy()
   const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
 
+  const { notificarSupervision } = useSupervisorGps(
+    user?.id ?? '',
+    supervisoresGuardia,
+    objetivos
+  )
+
   const cerrarSesion = async () => {
+    await endSession()
     await supabase.auth.signOut()
     window.location.href = '/dashboard'
   }
@@ -791,6 +800,10 @@ export default function SupervisorMobile({ user }: any) {
   useEffect(() => {
     cargarDatos(filtroFecha)
   }, [filtroFecha])
+
+  useEffect(() => {
+    if (user?.id && user?.rol) void initTelemetry(user.id, user.rol)
+  }, [])
 
   const getObjetivo = (id: string) => objetivos.find(o => o.id === id)
   const getGuardia = (id?: string | null) => guardias.find(g => g.id === id)
@@ -1994,6 +2007,11 @@ export default function SupervisorMobile({ user }: any) {
         supervisionParaListado,
         ...prev.filter(s => s.id !== supervisionNueva.id),
       ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
+
+      if (supervisionGps) {
+        void notificarSupervision(supervisionNueva.id, supervisionGps.lat, supervisionGps.lng)
+      }
+
       resetFormularioSupervision()
 
       const avisos: string[] = []
