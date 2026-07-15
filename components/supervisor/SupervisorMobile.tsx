@@ -1907,9 +1907,14 @@ export default function SupervisorMobile({ user }: any) {
     let supervisionCreadaId: string | null = null
 
     try {
-      const { data: supervisionNueva, error: supervisionError } = await supabase
-        .from('supervisiones')
-        .insert({
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData?.session?.access_token
+      if (!token) throw new Error('Sesión expirada. Volvé a iniciar sesión.')
+
+      const saveRes = await fetch('/api/save-supervision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
           objetivo_id: objetivoSupervision.id,
           supervisor_id: user.id,
           plantilla_id: objetivoSupervision.checklist_plantilla_id || null,
@@ -1918,27 +1923,23 @@ export default function SupervisorMobile({ user }: any) {
           precision_gps: supervisionGps.precision,
           estado: estadoPreliminar,
           observaciones: supervisionObservaciones.trim() || null,
-        })
-        .select('*, objetivo:objetivos(nombre)')
-        .single()
-
-      if (supervisionError) throw supervisionError
-      if (!supervisionNueva) throw new Error('No se pudo crear la supervisión.')
-
-      supervisionCreadaId = supervisionNueva.id
-
-      if (respuestasCompletas.length > 0) {
-        const { error: respuestasError } = await supabase
-          .from('supervision_respuestas')
-          .insert(respuestasCompletas.map(({ item, respuesta }) => ({
-            supervision_id: supervisionNueva.id,
+          respuestas: respuestasCompletas.map(({ item, respuesta }) => ({
             item_id: item.id,
             resultado: respuesta?.resultado,
             observacion: respuesta?.observacion?.trim() || null,
-          })))
+          })),
+        }),
+      })
 
-        if (respuestasError) throw respuestasError
+      if (!saveRes.ok) {
+        const err = await saveRes.json().catch(() => ({ error: 'Error al guardar la supervisión' }))
+        throw new Error(err.error || 'Error al guardar la supervisión')
       }
+
+      const { supervision: supervisionNueva } = await saveRes.json()
+      if (!supervisionNueva) throw new Error('No se pudo crear la supervisión.')
+
+      supervisionCreadaId = supervisionNueva.id
 
       const fotosRegistradas: SupervisionFoto[] = []
       let avisoFotos = ''
