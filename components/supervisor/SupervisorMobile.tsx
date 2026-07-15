@@ -2009,7 +2009,9 @@ export default function SupervisorMobile({ user }: any) {
       if (supervisionCreadaId) {
         await supabase.from('supervisiones').delete().eq('id', supervisionCreadaId)
       }
-      const message = saveError instanceof Error ? saveError.message : 'Error al guardar la supervisión.'
+      const message = saveError instanceof Error
+        ? saveError.message
+        : (saveError as any)?.message || (saveError as any)?.details || JSON.stringify(saveError) || 'Error al guardar la supervisión.'
       setError(`No se pudo guardar la supervisión. ${message}`)
     } finally {
       setAsignando(null)
@@ -3266,7 +3268,11 @@ export default function SupervisorMobile({ user }: any) {
                         <div style={muted}>{observadosSupervision(supervision)} ítem(s) observados · {fotosSupervisionCount(supervision)} foto(s)</div>
                         {supervision.observaciones && <div style={muted}>{supervision.observaciones}</div>}
                       </div>
-                      <span style={supervisionBadge(supervision.estado)}>{supervision.estado}</span>
+                      <span
+                        style={{ ...supervisionBadge(supervision.estado), cursor: 'pointer' }}
+                        title="Ver detalle"
+                        onClick={() => abrirDetalleSupervision(supervision)}
+                      >{supervision.estado}</span>
                     </div>
                     <button type="button" style={secondaryButton} onClick={() => abrirDetalleSupervision(supervision)}>
                       Ver detalle
