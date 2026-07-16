@@ -498,6 +498,11 @@ export default function SupervisorMobile({ user }: any) {
   const [detalleError, setDetalleError] = useState('')
   const [evidenciasPorRegistro, setEvidenciasPorRegistro] = useState<Record<string, Evidencia[]>>({})
   const [cargandoEvidencias, setCargandoEvidencias] = useState<string | null>(null)
+  const [turnoEditandoSup, setTurnoEditandoSup] = useState<Turno | null>(null)
+  const [formEdicionSup, setFormEdicionSup] = useState({ guardia_id: '', hora_inicio: '', hora_fin: '', estado: 'programado' as EstadoTurnoPersistido, comentario: '' })
+  const [estadoOpEdicionSup, setEstadoOpEdicionSup] = useState<'FUTURO' | 'EN_CURSO' | 'FINALIZADO' | null>(null)
+  const [loadingEdicionSup, setLoadingEdicionSup] = useState(false)
+  const [errorEdicionSup, setErrorEdicionSup] = useState('')
 
   const hoy = fechaHoy()
   const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
@@ -2414,6 +2419,120 @@ export default function SupervisorMobile({ user }: any) {
     )
   }
 
+  const abrirEdicionTurno = (turno: Turno) => {
+    const registrosTurno = getRegistrosTurno(turno.id)
+    const tieneEntrada = registrosTurno.some(r => r.hora_entrada_real != null)
+    const tieneSalida  = registrosTurno.some(r => r.hora_salida_real  != null)
+    setEstadoOpEdicionSup(tieneSalida ? 'FINALIZADO' : tieneEntrada ? 'EN_CURSO' : 'FUTURO')
+    setTurnoEditandoSup(turno)
+    setFormEdicionSup({
+      guardia_id: turno.guardia_id || '',
+      hora_inicio: turno.hora_inicio,
+      hora_fin: turno.hora_fin,
+      estado: turno.estado,
+      comentario: '',
+    })
+    setErrorEdicionSup('')
+  }
+
+  const cerrarEdicionTurno = () => {
+    setTurnoEditandoSup(null)
+    setErrorEdicionSup('')
+    setEstadoOpEdicionSup(null)
+  }
+
+  const guardarEdicionTurno = async () => {
+    if (!turnoEditandoSup || !estadoOpEdicionSup) return
+    if (estadoOpEdicionSup === 'FINALIZADO') {
+      setErrorEdicionSup('No se pueden modificar los horarios de un turno finalizado.')
+      return
+    }
+
+    setErrorEdicionSup('')
+
+    if (estadoOpEdicionSup === 'FUTURO' && formEdicionSup.guardia_id) {
+      const { data, error: turnosError } = await supabase
+        .from('turnos')
+        .select('id, guardia_id, fecha, hora_inicio, hora_fin')
+        .eq('guardia_id', formEdicionSup.guardia_id)
+        .in('fecha', fechasVecinasTurno(turnoEditandoSup.fecha))
+
+      if (turnosError) { setErrorEdicionSup(turnosError.message); return }
+
+      const candidato = {
+        guardia_id: formEdicionSup.guardia_id,
+        fecha: turnoEditandoSup.fecha,
+        hora_inicio: formEdicionSup.hora_inicio,
+        hora_fin: formEdicionSup.hora_fin,
+      }
+      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditandoSup.id)) {
+        setErrorEdicionSup(MENSAJE_TURNO_SUPERPUESTO)
+        return
+      }
+    }
+
+    const cambios: Record<string, string | null> = {}
+    const snapshot: Record<string, string | null> = {}
+
+    if (estadoOpEdicionSup === 'FUTURO') {
+      snapshot.guardia_id  = turnoEditandoSup.guardia_id  || null
+      snapshot.objetivo_id = (turnoEditandoSup as any).objetivo_id || null
+      snapshot.puesto_id   = (turnoEditandoSup as any).puesto_id   || null
+      snapshot.fecha       = turnoEditandoSup.fecha
+      snapshot.hora_inicio = turnoEditandoSup.hora_inicio
+      snapshot.hora_fin    = turnoEditandoSup.hora_fin
+      snapshot.estado      = turnoEditandoSup.estado
+
+      const guardiaNuevo = formEdicionSup.guardia_id || null
+      if ((turnoEditandoSup.guardia_id || null) !== guardiaNuevo) cambios.guardia_id = guardiaNuevo
+      if (turnoEditandoSup.hora_inicio !== formEdicionSup.hora_inicio) cambios.hora_inicio = formEdicionSup.hora_inicio
+      if (turnoEditandoSup.hora_fin    !== formEdicionSup.hora_fin)    cambios.hora_fin    = formEdicionSup.hora_fin
+      if (turnoEditandoSup.estado      !== formEdicionSup.estado)      cambios.estado      = formEdicionSup.estado
+    } else {
+      snapshot.hora_fin = turnoEditandoSup.hora_fin
+      snapshot.estado   = turnoEditandoSup.estado
+      if (turnoEditandoSup.hora_fin !== formEdicionSup.hora_fin) cambios.hora_fin = formEdicionSup.hora_fin
+      if (turnoEditandoSup.estado   !== formEdicionSup.estado)   cambios.estado   = formEdicionSup.estado
+    }
+
+    if (Object.keys(cambios).length === 0) {
+      cerrarEdicionTurno()
+      return
+    }
+
+    setLoadingEdicionSup(true)
+
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData?.session?.access_token
+    if (!token) {
+      setErrorEdicionSup('Sesión expirada. Volvé a iniciar sesión.')
+      setLoadingEdicionSup(false)
+      return
+    }
+
+    try {
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ turno_id: turnoEditandoSup.id, cambios, comentario: formEdicionSup.comentario, snapshot }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        setErrorEdicionSup(json?.error || 'Error al guardar el turno.')
+        setLoadingEdicionSup(false)
+        return
+      }
+      const turnoActualizado = json.turno ?? {}
+      setTurnos(prev => prev.map(t => t.id === turnoEditandoSup.id ? { ...t, ...turnoActualizado } : t))
+      setMensaje('✓ Turno actualizado correctamente')
+      setLoadingEdicionSup(false)
+      cerrarEdicionTurno()
+    } catch {
+      setErrorEdicionSup('Error de red. Verificá tu conexión y volvé a intentar.')
+      setLoadingEdicionSup(false)
+    }
+  }
+
   const abrirRegistros = async (turnoId: string) => {
     const abriendo = turnoRegistrosAbierto !== turnoId
     setTurnoRegistrosAbierto(abriendo ? turnoId : null)
@@ -2556,6 +2675,18 @@ export default function SupervisorMobile({ user }: any) {
             {registrosAbiertos ? 'Ocultar registros' : `Ver registros (${registrosTurno.length})`}
           </button>
         </div>
+
+        {!registro?.hora_salida_real && (
+          <div style={{ marginTop: 8 }}>
+            <button
+              type="button"
+              onClick={() => abrirEdicionTurno(turno)}
+              style={{ ...secondaryButton, color: '#f59e0b', borderColor: 'rgba(245,158,11,.35)' }}
+            >
+              Editar turno
+            </button>
+          </div>
+        )}
 
         {registrosAbiertos && (
           <div style={registrosDetalle}>
@@ -3569,6 +3700,92 @@ export default function SupervisorMobile({ user }: any) {
               <button style={secondaryButton} onClick={() => { setModalNuevoObjetivo(false); resetFormNuevoObjetivo() }}>Cancelar</button>
               <button style={refreshButton} onClick={solicitarCrearObjetivo} disabled={asignando === 'solicitud-crear-objetivo'}>
                 {asignando === 'solicitud-crear-objetivo' ? 'Enviando...' : 'Enviar solicitud'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {turnoEditandoSup && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>Editar turno</div>
+            <div style={muted}>
+              {(() => {
+                const obj = objetivos.find(o => o.id === turnoEditandoSup.objetivo_id)
+                return obj?.nombre || 'Objetivo sin nombre'
+              })()} · {turnoEditandoSup.fecha}
+            </div>
+
+            {estadoOpEdicionSup === 'EN_CURSO' && (
+              <div style={{ margin: '12px 0', padding: 10, borderRadius: 8, background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.3)', color: '#f59e0b', fontSize: 13 }}>
+                Este turno ya comenzó. Solo se modificará el horario programado; la asistencia real no será alterada.
+              </div>
+            )}
+
+            {errorEdicionSup ? (
+              <div style={{ margin: '12px 0', padding: 10, borderRadius: 8, background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.3)', color: '#fca5a5', fontSize: 13 }}>
+                {errorEdicionSup}
+              </div>
+            ) : null}
+
+            {estadoOpEdicionSup === 'FUTURO' && (
+              <div>
+                <label style={label}>Guardia</label>
+                <select
+                  style={select}
+                  value={formEdicionSup.guardia_id}
+                  onChange={e => setFormEdicionSup({ ...formEdicionSup, guardia_id: e.target.value })}
+                >
+                  <option value="">Sin asignar</option>
+                  {guardias.filter(g => g.estado === 'activo').map(g => (
+                    <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>
+                  ))}
+                </select>
+
+                <label style={label}>Hora inicio</label>
+                <input
+                  type="time"
+                  style={input}
+                  value={formEdicionSup.hora_inicio}
+                  onChange={e => setFormEdicionSup({ ...formEdicionSup, hora_inicio: e.target.value })}
+                />
+              </div>
+            )}
+
+            <label style={label}>Hora fin programada</label>
+            <input
+              type="time"
+              style={input}
+              value={formEdicionSup.hora_fin}
+              onChange={e => setFormEdicionSup({ ...formEdicionSup, hora_fin: e.target.value })}
+            />
+
+            <label style={label}>Estado</label>
+            <select
+              style={select}
+              value={formEdicionSup.estado}
+              onChange={e => setFormEdicionSup({ ...formEdicionSup, estado: e.target.value as EstadoTurnoPersistido })}
+            >
+              <option value="programado">Programado</option>
+              <option value="cubierto">Cubierto</option>
+              <option value="descubierto">Descubierto</option>
+            </select>
+
+            <label style={label}>Comentario (opcional)</label>
+            <input
+              style={input}
+              placeholder="Razón del cambio..."
+              value={formEdicionSup.comentario}
+              onChange={e => setFormEdicionSup({ ...formEdicionSup, comentario: e.target.value })}
+            />
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
+              <button style={secondaryButton} onClick={cerrarEdicionTurno} disabled={loadingEdicionSup}>
+                Cancelar
+              </button>
+              <button style={refreshButton} onClick={guardarEdicionTurno} disabled={loadingEdicionSup}>
+                {loadingEdicionSup ? 'Guardando...' : 'Guardar cambios'}
               </button>
             </div>
           </div>
