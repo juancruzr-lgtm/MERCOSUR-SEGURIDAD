@@ -3625,8 +3625,10 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   })
   const [errorEdicion, setErrorEdicion] = useState('')
   const [loadingEdicion, setLoadingEdicion] = useState(false)
+  const [estadoOperativoEdicion, setEstadoOperativoEdicion] = useState<'FUTURO' | 'EN_CURSO' | 'FINALIZADO' | null>(null)
+  const [cargandoEstadoEdicion, setCargandoEstadoEdicion] = useState(false)
 
-  const abrirEdicion = (turno: Turno) => {
+  const abrirEdicion = async (turno: Turno) => {
     setTurnoEditando(turno)
     setFormEdicion({
       guardia_id: turno.guardia_id || '',
@@ -3636,31 +3638,50 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       comentario: '',
     })
     setErrorEdicion('')
+    setEstadoOperativoEdicion(null)
+    setCargandoEstadoEdicion(true)
+    try {
+      const { data: registros } = await supabase
+        .from('registros_asistencia')
+        .select('id, hora_entrada_real, hora_salida_real')
+        .eq('turno_id', turno.id)
+      const tieneEntrada = (registros ?? []).some((r: any) => r.hora_entrada_real != null)
+      const tieneSalida  = (registros ?? []).some((r: any) => r.hora_salida_real  != null)
+      setEstadoOperativoEdicion(tieneSalida ? 'FINALIZADO' : tieneEntrada ? 'EN_CURSO' : 'FUTURO')
+    } catch {
+      setEstadoOperativoEdicion('FUTURO')
+    } finally {
+      setCargandoEstadoEdicion(false)
+    }
   }
 
   const cerrarEdicion = () => {
     setTurnoEditando(null)
     setErrorEdicion('')
+    setEstadoOperativoEdicion(null)
   }
 
   const guardarEdicion = async () => {
     if (!turnoEditando) return
     if (!user?.id) {
-      setErrorEdicion('Sesión de administrador no disponible.')
+      setErrorEdicion('Sesión no disponible.')
+      return
+    }
+    if (cargandoEstadoEdicion || estadoOperativoEdicion === null) {
+      setErrorEdicion('Verificando estado del turno, esperá un momento.')
+      return
+    }
+    if (estadoOperativoEdicion === 'FINALIZADO') {
+      setErrorEdicion('No se pueden modificar los horarios de un turno finalizado.')
       return
     }
 
     setErrorEdicion('')
 
     const guardiaNuevoId = formEdicion.guardia_id || null
-    const candidato = {
-      guardia_id: guardiaNuevoId,
-      fecha: turnoEditando.fecha,
-      hora_inicio: formEdicion.hora_inicio,
-      hora_fin: formEdicion.hora_fin,
-    }
 
-    if (guardiaNuevoId) {
+    // Verificar solapamiento solo cuando el turno es FUTURO y se cambia el guardia o los horarios
+    if (estadoOperativoEdicion === 'FUTURO' && guardiaNuevoId) {
       const { data, error: turnosError } = await supabase
         .from('turnos')
         .select('id, guardia_id, fecha, hora_inicio, hora_fin')
@@ -3672,70 +3693,88 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
         return
       }
 
+      const candidato = {
+        guardia_id: guardiaNuevoId,
+        fecha: turnoEditando.fecha,
+        hora_inicio: formEdicion.hora_inicio,
+        hora_fin: formEdicion.hora_fin,
+      }
       if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditando.id)) {
         setErrorEdicion(MENSAJE_TURNO_SUPERPUESTO)
         return
       }
     }
 
-    const cambios: { campo: string; valor_anterior: string | null; valor_nuevo: string | null }[] = []
-    if ((turnoEditando.guardia_id || null) !== guardiaNuevoId) {
-      cambios.push({ campo: 'guardia_id', valor_anterior: turnoEditando.guardia_id || null, valor_nuevo: guardiaNuevoId })
-    }
-    if (turnoEditando.hora_inicio !== formEdicion.hora_inicio) {
-      cambios.push({ campo: 'hora_inicio', valor_anterior: turnoEditando.hora_inicio, valor_nuevo: formEdicion.hora_inicio })
-    }
-    if (turnoEditando.hora_fin !== formEdicion.hora_fin) {
-      cambios.push({ campo: 'hora_fin', valor_anterior: turnoEditando.hora_fin, valor_nuevo: formEdicion.hora_fin })
-    }
-    if (turnoEditando.estado !== formEdicion.estado) {
-      cambios.push({ campo: 'estado', valor_anterior: turnoEditando.estado, valor_nuevo: formEdicion.estado })
+    // Construir cambios según estado operativo
+    const cambios: Record<string, string | null> = {}
+    const snapshot: Record<string, string | null> = {}
+
+    if (estadoOperativoEdicion === 'FUTURO') {
+      const guardiaNuevoIdN = guardiaNuevoId
+      if ((turnoEditando.guardia_id || null) !== guardiaNuevoIdN) {
+        cambios.guardia_id = guardiaNuevoIdN
+        snapshot.guardia_id = turnoEditando.guardia_id || null
+      }
+      if (turnoEditando.hora_inicio !== formEdicion.hora_inicio) {
+        cambios.hora_inicio = formEdicion.hora_inicio
+        snapshot.hora_inicio = turnoEditando.hora_inicio
+      }
+      if (turnoEditando.hora_fin !== formEdicion.hora_fin) {
+        cambios.hora_fin = formEdicion.hora_fin
+        snapshot.hora_fin = turnoEditando.hora_fin
+      }
+      if (turnoEditando.estado !== formEdicion.estado) {
+        cambios.estado = formEdicion.estado
+        snapshot.estado = turnoEditando.estado
+      }
+    } else {
+      // EN_CURSO: solo hora_fin y estado
+      if (turnoEditando.hora_fin !== formEdicion.hora_fin) {
+        cambios.hora_fin = formEdicion.hora_fin
+        snapshot.hora_fin = turnoEditando.hora_fin
+      }
+      if (turnoEditando.estado !== formEdicion.estado) {
+        cambios.estado = formEdicion.estado
+        snapshot.estado = turnoEditando.estado
+      }
     }
 
-    if (cambios.length === 0) {
+    if (Object.keys(cambios).length === 0) {
       cerrarEdicion()
       return
     }
 
     setLoadingEdicion(true)
 
-    const payload = {
-      guardia_id: guardiaNuevoId,
-      hora_inicio: formEdicion.hora_inicio,
-      hora_fin: formEdicion.hora_fin,
-      estado: formEdicion.estado,
-    }
-
-    const { error: updateError } = await supabase
-      .from('turnos')
-      .update(payload)
-      .eq('id', turnoEditando.id)
-
-    if (updateError) {
-      setErrorEdicion(updateError.message)
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData?.session?.access_token
+    if (!token) {
+      setErrorEdicion('Sesión expirada. Volvé a iniciar sesión.')
       setLoadingEdicion(false)
       return
     }
 
-    const comentario = formEdicion.comentario.trim() || null
-    const { error: auditoriaError } = await supabase
-      .from('turnos_auditoria')
-      .insert(cambios.map(cambio => ({
-        turno_id: turnoEditando.id,
-        modificado_por: user.id,
-        campo: cambio.campo,
-        valor_anterior: cambio.valor_anterior,
-        valor_nuevo: cambio.valor_nuevo,
-        comentario,
-      })))
-
-    if (auditoriaError) {
-      setErrorEdicion(`Turno actualizado, pero no se pudo guardar la auditoría: ${auditoriaError.message}`)
+    let json: any
+    try {
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ turno_id: turnoEditando.id, cambios, comentario: formEdicion.comentario, snapshot }),
+      })
+      json = await res.json()
+      if (!res.ok) {
+        setErrorEdicion(json?.error || 'Error al guardar el turno.')
+        setLoadingEdicion(false)
+        return
+      }
+    } catch (err) {
+      setErrorEdicion('Error de red. Verificá tu conexión y volvé a intentar.')
       setLoadingEdicion(false)
       return
     }
 
-    setTurnos((prev: Turno[]) => prev.map(t => t.id === turnoEditando.id ? { ...t, ...payload } as Turno : t))
+    const turnoActualizado = json.turno ?? {}
+    setTurnos((prev: Turno[]) => prev.map(t => t.id === turnoEditando.id ? { ...t, ...turnoActualizado } as Turno : t))
     setMensaje('✓ Turno actualizado correctamente')
     setLoadingEdicion(false)
     cerrarEdicion()
@@ -4072,13 +4111,30 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
               <button
                 style={{ ...S.btn, ...S.btnPrimary }}
                 onClick={guardarEdicion}
-                disabled={loadingEdicion}
+                disabled={loadingEdicion || cargandoEstadoEdicion || estadoOperativoEdicion === 'FINALIZADO'}
               >
                 {loadingEdicion ? 'Guardando...' : 'Guardar cambios'}
               </button>
             </>
           }
         >
+          {/* Banner de estado operativo */}
+          {cargandoEstadoEdicion && (
+            <div style={{ marginBottom:12, padding:10, borderRadius:8, background:'rgba(100,116,139,.08)', border:'1px solid rgba(100,116,139,.2)', color:'#64748b', fontSize:13 }}>
+              Verificando estado del turno…
+            </div>
+          )}
+          {!cargandoEstadoEdicion && estadoOperativoEdicion === 'EN_CURSO' && (
+            <div style={{ marginBottom:12, padding:10, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#b45309', fontSize:13 }}>
+              <strong>Turno en curso</strong> — La guardia ya fichó su ingreso. Solo se puede modificar la hora de fin y el estado. El registro de asistencia no se altera.
+            </div>
+          )}
+          {!cargandoEstadoEdicion && estadoOperativoEdicion === 'FINALIZADO' && (
+            <div style={{ marginBottom:12, padding:10, borderRadius:8, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.3)', color:'#b91c1c', fontSize:13 }}>
+              <strong>Turno finalizado</strong> — No se pueden modificar los horarios. Para corregir datos reales usá "Corregir registro".
+            </div>
+          )}
+
           {errorEdicion && (
             <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
               {errorEdicion}
@@ -4088,9 +4144,10 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Guardia</label>
             <select
-              style={S.select}
+              style={{ ...S.select, ...(estadoOperativoEdicion !== 'FUTURO' ? { opacity:0.5, pointerEvents:'none' } : {}) }}
               value={formEdicion.guardia_id}
               onChange={e => setFormEdicion({ ...formEdicion, guardia_id:e.target.value })}
+              disabled={estadoOperativoEdicion !== 'FUTURO'}
             >
               <option value="">Sin asignar</option>
               {guardias
@@ -4108,9 +4165,10 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
               <label style={S.label}>Hora inicio</label>
               <input
                 type="time"
-                style={S.input}
+                style={{ ...S.input, ...(estadoOperativoEdicion !== 'FUTURO' ? { opacity:0.5, pointerEvents:'none' } : {}) }}
                 value={formEdicion.hora_inicio}
                 onChange={e => setFormEdicion({ ...formEdicion, hora_inicio:e.target.value })}
+                disabled={estadoOperativoEdicion !== 'FUTURO'}
               />
             </div>
 
@@ -4118,9 +4176,10 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
               <label style={S.label}>Hora fin</label>
               <input
                 type="time"
-                style={S.input}
+                style={{ ...S.input, ...(estadoOperativoEdicion === 'FINALIZADO' ? { opacity:0.5, pointerEvents:'none' } : {}) }}
                 value={formEdicion.hora_fin}
                 onChange={e => setFormEdicion({ ...formEdicion, hora_fin:e.target.value })}
+                disabled={estadoOperativoEdicion === 'FINALIZADO'}
               />
             </div>
           </div>
@@ -4128,9 +4187,10 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Estado</label>
             <select
-              style={S.select}
+              style={{ ...S.select, ...(estadoOperativoEdicion === 'FINALIZADO' ? { opacity:0.5, pointerEvents:'none' } : {}) }}
               value={formEdicion.estado}
               onChange={e => setFormEdicion({ ...formEdicion, estado:e.target.value as Turno['estado'] })}
+              disabled={estadoOperativoEdicion === 'FINALIZADO'}
             >
               <option value="programado">Programado</option>
               <option value="cubierto">Cubierto</option>
