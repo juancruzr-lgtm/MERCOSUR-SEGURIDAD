@@ -3,6 +3,10 @@ import { useState, useEffect, useRef } from 'react'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
 
+// ── CONSTANTES ────────────────────────────────────────────────
+const INGRESO_PENDIENTE_KEY = 'mercosur_ingreso_pendiente'
+const INGRESO_EXPIRACION_MS = 30 * 60 * 1000
+
 // ── TIPOS ─────────────────────────────────────────────────────
 interface Turno {
   id: string
@@ -504,6 +508,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [fotoUniforme, setFotoUniforme] = useState<{ file: File; url: string } | null>(null)
   const inputLibroRef = useRef<HTMLInputElement>(null)
   const inputUniformeRef = useRef<HTMLInputElement>(null)
+  const [ingresoRestaurado, setIngresoRestaurado] = useState(false)
+  const ingresoIntentoId = useRef<string | null>(null)
+  const restorationAttempted = useRef(false)
 
   const hoy = ahora.toLocaleDateString('sv-SE')
   const ayer = new Date(ahora.getTime() - 86400000).toLocaleDateString('sv-SE')
@@ -598,6 +605,66 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     return () => window.clearInterval(timer)
   }, [])
 
+  // Persiste el intento de ingreso en sessionStorage mientras el supervisor
+  // está en la fase de captura de fotos. No persiste File/Blob.
+  useEffect(() => {
+    if (!ingresoTurno || !ingresoGps) return
+    if (ingresoFase === 'idle' || ingresoFase === 'gps' || ingresoFase === 'confirmando') return
+
+    sessionStorage.setItem(INGRESO_PENDIENTE_KEY, JSON.stringify({
+      turno_id: ingresoTurno.id,
+      gps: ingresoGps,
+      timestamp: Date.now(),
+      intento_id: ingresoIntentoId.current,
+    }))
+  }, [ingresoFase, ingresoTurno, ingresoGps])
+
+  // Restaura un intento de ingreso pendiente después de que los datos carguen.
+  // Solo corre una vez. Verifica que no exista ya un registro para evitar duplicados.
+  useEffect(() => {
+    if (loading || restorationAttempted.current) return
+    restorationAttempted.current = true
+
+    const stored = sessionStorage.getItem(INGRESO_PENDIENTE_KEY)
+    if (!stored) return
+
+    let parsed: { turno_id: string; gps: GpsData; timestamp: number; intento_id: string | null }
+    try {
+      parsed = JSON.parse(stored)
+    } catch {
+      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      return
+    }
+
+    if (!parsed.turno_id || !parsed.gps || !parsed.timestamp) {
+      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      return
+    }
+
+    if (Date.now() - parsed.timestamp > INGRESO_EXPIRACION_MS) {
+      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      return
+    }
+
+    const turno = turnos.find(t => t.id === parsed.turno_id)
+    if (!turno) {
+      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      return
+    }
+
+    const registroExistente = registros.find(r => r.turno_id === parsed.turno_id && r.hora_entrada_real)
+    if (registroExistente) {
+      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      return
+    }
+
+    ingresoIntentoId.current = parsed.intento_id
+    setIngresoTurno(turno)
+    setIngresoGps(parsed.gps)
+    setIngresoFase('foto_libro')
+    setIngresoRestaurado(true)
+  }, [loading, turnos, registros])
+
   useEffect(() => {
     let activo = true
     let permissionStatus: PermissionStatus | null = null
@@ -648,6 +715,9 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     setIngresoGps(null)
     setFotoLibro(prev => { if (prev) URL.revokeObjectURL(prev.url); return null })
     setFotoUniforme(prev => { if (prev) URL.revokeObjectURL(prev.url); return null })
+    setIngresoRestaurado(false)
+    ingresoIntentoId.current = null
+    sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
   }
 
   // Iniciar ingreso: valida, obtiene GPS, luego abre flujo de fotos
@@ -682,6 +752,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       }
 
       setIngresoGps(gps)
+      ingresoIntentoId.current = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
       setIngresoFase('foto_libro')
     } catch {
       setMensaje({ texto: 'Error al obtener ubicación. Intentá de nuevo.', tipo: 'error' })
@@ -989,6 +1060,12 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
             {mensaje && (
               <div style={{ ...S.alert(mensaje.tipo), marginBottom: 16 }}>{mensaje.texto}</div>
+            )}
+
+            {ingresoRestaurado && ingresoFase === 'foto_libro' && (
+              <div style={{ ...S.alert('warn'), marginBottom: 12, fontSize: 13 }}>
+                Tu ingreso quedó pendiente. Sacá las fotos nuevamente para confirmar.
+              </div>
             )}
 
             {ingresoFase === 'gps' && (
