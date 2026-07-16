@@ -11,7 +11,7 @@
     Resultado: -14h programadas, valores imposibles en todo turno nocturno.
 
   SOLUCIÓN: usar extract(epoch from time) que devuelve segundos desde medianoche
-  como entero, operar aritméticamente y sumar 86400 para cruce de medianoche.
+  como entero, operar aritméticamente y sumar 1440 min para cruce de medianoche.
 
   FUNCIÓN: calcular_horas_liquidables() implementa exactamente el mismo
   algoritmo que calcularHorasLiquidables() en lib/supabase.ts:
@@ -19,26 +19,28 @@
     - entrada/salida absolutas con ajuste de 1440 min según posición nocturna
     - tolerancia 15 min: si |real - prog| <= 15 → liquida programado
     - resultado en horas, dos decimales
+    - devuelve NULL si algún parámetro es NULL
 
-  ÚNICO ALGORITMO: toda consulta futura (trigger, reportes, correcciones)
-  debe llamar a esta función en lugar de replicar la lógica.
+  ÚNICO ALGORITMO: trigger, correcciones, reportes y exportaciones deben
+  llamar a esta función. No replicar la lógica en ningún otro lugar.
 
-  RECÁLCULO: resetea las 515 filas ya calculadas (con valores erróneos)
-  y las recalcula usando la función.
+  RECÁLCULO TOTAL: recalcula TODAS las filas con datos completos, tengan
+  o no horas_liquidables previas. Deja en NULL solo los registros
+  incompletos (sin entrada, sin salida o sin turno asociado).
 
-  Idempotente: create or replace para la función; el reset+recálculo es
-  seguro de repetir (deja los valores correctos sin importar el estado previo).
+  IDEMPOTENTE: create or replace para la función. Los dos UPDATE producen
+  el mismo resultado sin importar el estado previo de la tabla.
 */
 
 -- ── Función unificada ─────────────────────────────────────────────────────
 --
--- Parámetros (todos time, sin fecha — baseFecha cancela en las restas):
---   p_hora_inicio  hora_inicio del turno (turnos.hora_inicio)
---   p_hora_fin     hora_fin del turno    (turnos.hora_fin)
+-- Parámetros (todos time — baseFecha cancela en las restas, no se necesita):
+--   p_hora_inicio  turnos.hora_inicio
+--   p_hora_fin     turnos.hora_fin
 --   p_entrada      hora_entrada_final ?? hora_entrada_real
 --   p_salida       hora_salida_final  ?? hora_salida_real
 --
--- Devuelve NULL si algún parámetro es NULL (no lanza error).
+-- Devuelve NULL si algún parámetro es NULL.
 
 create or replace function calcular_horas_liquidables(
   p_hora_inicio time,
@@ -74,7 +76,7 @@ begin
   v_entrada_min := (extract(epoch from p_entrada)::int)     / 60;
   v_salida_min  := (extract(epoch from p_salida)::int)      / 60;
 
-  -- Nocturno: fin <= inicio (cruce de medianoche en el turno programado)
+  -- Nocturno: fin <= inicio (el turno cruza medianoche)
   v_turno_nocturno := v_fin_min <= v_inicio_min;
 
   -- Minutos programados (siempre positivo)
@@ -83,27 +85,29 @@ begin
                   else v_fin_min - v_inicio_min
                 end;
 
-  -- Entrada absoluta: si el guardia fichó en la parte AM de un turno nocturno
-  -- (hora <= fin del turno), su entrada pertenece al día siguiente
+  -- Entrada absoluta:
+  -- Si es turno nocturno y el guardia entró en la parte AM (hora <= fin del turno),
+  -- esa entrada corresponde al día siguiente → sumar 1440.
   v_entrada_abs := v_entrada_min;
   if v_turno_nocturno and v_entrada_min <= v_fin_min then
     v_entrada_abs := v_entrada_abs + 1440;
   end if;
 
-  -- Salida absoluta: si el guardia salió antes del inicio del turno nocturno
-  -- (hora <= inicio), su salida es del día siguiente
+  -- Salida absoluta:
+  -- Si es turno nocturno y el guardia salió con hora <= inicio del turno,
+  -- esa salida es del día siguiente → sumar 1440.
   v_salida_abs := v_salida_min;
   if v_turno_nocturno and v_salida_min <= v_inicio_min then
     v_salida_abs := v_salida_abs + 1440;
   end if;
-  -- Catch-all: si salida aún es menor que entrada, cruza medianoche
+  -- Catch-all: si salida absoluta sigue siendo menor que entrada, cruza medianoche.
   if v_salida_abs < v_entrada_abs then
     v_salida_abs := v_salida_abs + 1440;
   end if;
 
-  v_min_reales      := greatest(0, v_salida_abs - v_entrada_abs);
+  v_min_reales := greatest(0, v_salida_abs - v_entrada_abs);
 
-  -- Tolerancia 15 min: diferencia <= 15 → liquidar programado; si no → real
+  -- Tolerancia 15 min: diferencia <= 15 → liquida programado; si no → liquida real
   v_min_liquidables := case when abs(v_min_prog - v_min_reales) <= 15
                          then v_min_prog
                          else v_min_reales
@@ -113,22 +117,17 @@ begin
 end;
 $$;
 
--- ── Reset de filas procesadas con valores erróneos ────────────────────────
+-- ── Recálculo total de filas completas ───────────────────────────────────
 --
--- Las 515 filas calculadas por C2 tienen valores negativos en turnos
--- nocturnos. Se ponen a NULL para que el backfill las recalcule.
--- Filas sin horas_liquidables (nunca procesadas) no se tocan.
-
-update registros_asistencia
-set horas_liquidables = null
-where horas_liquidables is not null;
-
--- ── Recálculo con la función corregida ────────────────────────────────────
+-- Recalcula horas_liquidables para TODA fila que tenga:
+--   - turno asociado
+--   - entrada definida (final o real)
+--   - salida definida (final o real)
 --
--- Solo filas con entrada y salida definidas.
--- Solo filas con horas_liquidables IS NULL (idempotente).
+-- No usa WHERE horas_liquidables IS NULL: sobreescribe valores previos.
 -- No modifica hora_entrada_real, hora_salida_real, hora_entrada_final,
 -- hora_salida_final ni horas_trabajadas.
+-- Idempotente: mismos inputs → mismo output en cualquier ejecución.
 
 update registros_asistencia r
 set horas_liquidables = calcular_horas_liquidables(
@@ -140,20 +139,51 @@ set horas_liquidables = calcular_horas_liquidables(
 from turnos t
 where t.id = r.turno_id
   and coalesce(r.hora_entrada_final, r.hora_entrada_real) is not null
-  and coalesce(r.hora_salida_final,  r.hora_salida_real)  is not null
-  and r.horas_liquidables is null;
+  and coalesce(r.hora_salida_final,  r.hora_salida_real)  is not null;
 
--- ── Verificación post-ejecución ───────────────────────────────────────────
+-- ── Limpiar registros incompletos ─────────────────────────────────────────
 --
--- Ejecutar en SQL Editor después de aplicar esta migración:
+-- Deja en NULL los registros sin entrada, sin salida o sin turno asociado.
+-- Cubre el caso de filas que tenían un valor previo pero perdieron datos.
+
+update registros_asistencia
+set horas_liquidables = null
+where (
+      coalesce(hora_entrada_final, hora_entrada_real) is null
+   or coalesce(hora_salida_final,  hora_salida_real)  is null
+   or turno_id is null
+);
+
+-- ── Verificaciones post-ejecución (ejecutar en SQL Editor) ────────────────
+--
+-- 1. Conteo general — imposibles debe ser 0:
 --
 -- select
---   count(*)                                             as total,
---   count(horas_liquidables)                             as con_valor,
---   count(*) filter (where horas_liquidables < 0)        as negativos,
---   count(*) filter (where horas_liquidables > 24)       as imposibles_altos
--- from registros_asistencia
--- where hora_entrada_real is not null
---   and hora_salida_real  is not null;
+--   count(*)                                               as total,
+--   count(horas_liquidables)                               as calculadas,
+--   count(*) filter (
+--     where horas_liquidables < 0
+--        or horas_liquidables > 24
+--   )                                                      as imposibles
+-- from registros_asistencia;
 --
--- Resultado esperado: negativos = 0, imposibles_altos = 0.
+-- 2. Muestra de turnos nocturnos — horas_liquidables debe ser positiva
+--    y consistente con horas_trabajadas:
+--
+-- select
+--   ra.id,
+--   t.fecha,
+--   t.hora_inicio,
+--   t.hora_fin,
+--   ra.hora_entrada_real,
+--   ra.hora_salida_real,
+--   ra.hora_entrada_final,
+--   ra.hora_salida_final,
+--   ra.horas_trabajadas,
+--   ra.horas_liquidables
+-- from registros_asistencia ra
+-- join turnos t on t.id = ra.turno_id
+-- where t.hora_fin <= t.hora_inicio
+--   and ra.horas_liquidables is not null
+-- order by t.fecha desc
+-- limit 30;
