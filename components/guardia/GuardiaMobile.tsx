@@ -860,6 +860,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       formData.append('libro', libroComprimido, 'libro.jpg')
       formData.append('uniforme', uniformeComprimido, 'uniforme.jpg')
       formData.append('registroId', registroId)
+      formData.append('turnoId', ingresoTurno.id)
+      formData.append('objetivoId', ingresoTurno.objetivo_id)
 
       const uploadRes = await fetch('/api/upload-evidence', {
         method: 'POST',
@@ -872,37 +874,11 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         throw new Error(err.error || 'Error subiendo fotos')
       }
 
-      const { pathLibro, pathUniforme } = await uploadRes.json()
+      // La API registra las evidencias server-side con service_role.
+      // Si incluye 'advertencia' las fotos se subieron pero el registro de
+      // evidencias falló — el ingreso sigue siendo válido.
 
-      // 3. INSERT evidencias — upsert por UNIQUE (proceso_tipo, proceso_id, tipo_evidencia)
-      const { error: evidError } = await supabase
-        .from('evidencias')
-        .upsert([
-          {
-            proceso_tipo: 'ingreso',
-            proceso_id: registroId,
-            turno_id: ingresoTurno.id,
-            guardia_id: user.id,
-            objetivo_id: ingresoTurno.objetivo_id,
-            tipo_evidencia: 'libro_guardia',
-            bucket: 'ingreso-evidencias',
-            storage_path: pathLibro,
-          },
-          {
-            proceso_tipo: 'ingreso',
-            proceso_id: registroId,
-            turno_id: ingresoTurno.id,
-            guardia_id: user.id,
-            objetivo_id: ingresoTurno.objetivo_id,
-            tipo_evidencia: 'uniforme',
-            bucket: 'ingreso-evidencias',
-            storage_path: pathUniforme,
-          },
-        ], { onConflict: 'proceso_tipo,proceso_id,tipo_evidencia' })
-
-      if (evidError) throw evidError
-
-      // 4. Actualizar estado del turno y state local
+      // 3. Actualizar estado del turno y state local
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', ingresoTurno.id)
 
       const { data: registroCompleto } = await supabase
