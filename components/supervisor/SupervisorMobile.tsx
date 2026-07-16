@@ -71,7 +71,7 @@ interface SupervisorZona {
   zona_id: string
 }
 
-type EstadoSupervision = 'ok' | 'con_observacion' | 'critico'
+type EstadoSupervision = 'ok' | 'con_observacion' | 'critico' | 'incompleta'
 type ResultadoChecklist = 'correcto' | 'observado' | 'no_aplica'
 
 interface ChecklistPlantilla {
@@ -1874,16 +1874,9 @@ export default function SupervisorMobile({ user }: any) {
     }
 
     const obligatoriosSinRespuesta = itemsSupervision.filter(item => item.obligatorio && !supervisionRespuestas[item.id]?.resultado)
-    if (obligatoriosSinRespuesta.length > 0) {
-      setError(`Faltan responder ítems obligatorios: ${obligatoriosSinRespuesta.map(item => item.texto).join(', ')}`)
-      return
-    }
-
     const requiereFotoObligatoria = itemsSupervision.some(item => item.foto_obligatoria)
-    if (requiereFotoObligatoria && supervisionFotos.length === 0) {
-      setError('Hay ítems del checklist con foto obligatoria. Agregá al menos una foto antes de guardar.')
-      return
-    }
+    const fotosPendientes = requiereFotoObligatoria && supervisionFotos.length === 0
+    const esIncompleta = obligatoriosSinRespuesta.length > 0 || fotosPendientes
 
     const respuestasCompletas = itemsSupervision
       .map(item => ({ item, respuesta: supervisionRespuestas[item.id] }))
@@ -1892,11 +1885,13 @@ export default function SupervisorMobile({ user }: any) {
     const hayObservado = respuestasCompletas.some(({ respuesta }) => respuesta?.resultado === 'observado')
     const hayCritico = respuestasCompletas.some(({ item, respuesta }) => respuesta?.resultado === 'observado' && item.criticidad === 'alta')
 
-    const estadoPreliminar: EstadoSupervision = hayCritico
-      ? 'critico'
-      : hayObservado
-        ? 'con_observacion'
-        : 'ok'
+    const estadoPreliminar: EstadoSupervision = esIncompleta
+      ? 'incompleta'
+      : hayCritico
+        ? 'critico'
+        : hayObservado
+          ? 'con_observacion'
+          : 'ok'
 
     setAsignando('guardar-supervision')
 
@@ -1973,21 +1968,16 @@ export default function SupervisorMobile({ user }: any) {
       }
 
       const faltaFotoObligatoria = requiereFotoObligatoria && fotosRegistradas.length === 0
-      const estadoFinal: EstadoSupervision = (hayCritico || faltaFotoObligatoria)
-        ? 'critico'
-        : hayObservado
-          ? 'con_observacion'
-          : 'ok'
+      const estadoFinal: EstadoSupervision = (esIncompleta || faltaFotoObligatoria)
+        ? 'incompleta'
+        : hayCritico
+          ? 'critico'
+          : hayObservado
+            ? 'con_observacion'
+            : 'ok'
 
       if (estadoFinal !== estadoPreliminar) {
         await supabase.from('supervisiones').update({ estado: estadoFinal }).eq('id', supervisionNueva.id)
-      }
-
-      if (requiereFotoObligatoria && fotosRegistradas.length === 0) {
-        throw new Error(
-          'No se pudo subir la foto obligatoria: ' +
-          (errorFotoObligatoria?.message ?? 'error desconocido en Storage.')
-        )
       }
 
       const supervisionParaListado = {
@@ -2009,14 +1999,17 @@ export default function SupervisorMobile({ user }: any) {
       resetFormularioSupervision()
 
       const avisos: string[] = []
-      if (avisoFotos) avisos.push(avisoFotos)
-      if (faltaFotoObligatoria) avisos.push('Foto obligatoria no adjuntada.')
-
-      if (avisos.length > 0) {
-        setError(avisos.join(' '))
-      } else {
-        setMensaje(`✓ Supervisión guardada con estado ${estadoFinal}.`)
+      if (obligatoriosSinRespuesta.length > 0) {
+        avisos.push(`Ítems pendientes: ${obligatoriosSinRespuesta.map(i => i.texto).join(', ')}.`)
       }
+      if (faltaFotoObligatoria) avisos.push('Foto obligatoria no adjuntada.')
+      if (avisoFotos) avisos.push(avisoFotos)
+
+      setMensaje(
+        avisos.length > 0
+          ? `⚠ Supervisión guardada como incompleta. ${avisos.join(' ')}`
+          : `✓ Supervisión guardada con estado ${estadoFinal}.`
+      )
     } catch (saveError) {
       if (supervisionCreadaId) {
         await supabase.from('supervisiones').delete().eq('id', supervisionCreadaId)
@@ -4226,6 +4219,7 @@ function supervisionBadge(estado: EstadoSupervision): React.CSSProperties {
     ok: { bg: 'rgba(16,185,129,.18)', color: '#10b981' },
     con_observacion: { bg: 'rgba(245,158,11,.18)', color: '#f59e0b' },
     critico: { bg: 'rgba(239,68,68,.18)', color: '#f87171' },
+    incompleta: { bg: 'rgba(148,163,184,.18)', color: '#94a3b8' },
   }
   const c = colores[estado]
 
