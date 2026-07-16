@@ -149,8 +149,15 @@ create index if not exists idx_novedades_laborales_empleado
 create index if not exists idx_novedades_laborales_tipo_estado
   on novedades_laborales (tipo, estado);
 
-create index if not exists idx_novedades_laborales_rango
-  on novedades_laborales using gist (empleado_id, daterange(fecha_desde, fecha_hasta, '[]'));
+-- El índice GiST sobre (uuid, daterange) requiere la extensión btree_gist,
+-- que no está disponible en Supabase estándar. uuid no tiene operador class
+-- GiST registrado por defecto (error 42704). Se reemplaza por un índice
+-- B-tree sobre fecha_hasta que, combinado con idx_novedades_laborales_empleado
+-- (empleado_id, fecha_desde desc), cubre las consultas de rango típicas:
+--   WHERE empleado_id = $1 AND fecha_desde <= $2 AND fecha_hasta >= $2
+-- PostgreSQL puede usar ambos índices en un bitmap index scan.
+create index if not exists idx_novedades_laborales_fecha_hasta
+  on novedades_laborales (empleado_id, fecha_hasta);
 
 -- ── RLS ───────────────────────────────────────────────────────────────────
 
