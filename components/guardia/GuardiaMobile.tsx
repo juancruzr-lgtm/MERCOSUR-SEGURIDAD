@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
+import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 
 // ── CONSTANTES ────────────────────────────────────────────────
 const INGRESO_PENDIENTE_KEY = 'mercosur_ingreso_pendiente'
@@ -511,6 +512,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [ingresoRestaurado, setIngresoRestaurado] = useState(false)
   const ingresoIntentoId = useRef<string | null>(null)
   const restorationAttempted = useRef(false)
+  const ingresoStartTime = useRef<number | null>(null)
 
   const hoy = ahora.toLocaleDateString('sv-SE')
   const ayer = new Date(ahora.getTime() - 86400000).toLocaleDateString('sv-SE')
@@ -596,6 +598,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       if (o) setObjetivos(o)
       if (r) setRegistros(r)
       setLoading(false)
+      void initTelemetry(user.id, user.rol ?? 'guardia')
     }
     cargar()
   }, [user.id, hoy])
@@ -663,6 +666,33 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     setIngresoGps(parsed.gps)
     setIngresoFase('foto_libro')
     setIngresoRestaurado(true)
+    ingresoStartTime.current = Date.now()
+
+    const ctx = getDeviceContext()
+    track('pagina_restaurada', {
+      screen: 'ingreso_flow',
+      turno_id: turno.id,
+      gps_lat: parsed.gps.latitude,
+      gps_lng: parsed.gps.longitude,
+      gps_accuracy_m: parsed.gps.accuracy,
+      value_json: {
+        fase: 'foto_libro',
+        intento_id: parsed.intento_id,
+        age_ms: Date.now() - parsed.timestamp,
+        browser: ctx.browser_name,
+        os: ctx.os_name,
+        memory_gb: typeof navigator !== 'undefined' ? (navigator as any).deviceMemory ?? null : null,
+      },
+    })
+    track('intento_ingreso_recuperado', {
+      screen: 'ingreso_flow',
+      turno_id: turno.id,
+      value_json: {
+        intento_id: parsed.intento_id,
+        timestamp_original: parsed.timestamp,
+        age_ms: Date.now() - parsed.timestamp,
+      },
+    })
   }, [loading, turnos, registros])
 
   useEffect(() => {
@@ -717,7 +747,19 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     setFotoUniforme(prev => { if (prev) URL.revokeObjectURL(prev.url); return null })
     setIngresoRestaurado(false)
     ingresoIntentoId.current = null
+    ingresoStartTime.current = null
     sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+  }
+
+  const cancelarIngreso = () => {
+    track('ingreso_cancelado', {
+      screen: 'ingreso_flow',
+      turno_id: ingresoTurno?.id,
+      duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+      value_json: { fase: ingresoFase },
+      result: 'cancelado',
+    })
+    resetIngresoFlow()
   }
 
   // Iniciar ingreso: valida, obtiene GPS, luego abre flujo de fotos
@@ -753,6 +795,23 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
       setIngresoGps(gps)
       ingresoIntentoId.current = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+      ingresoStartTime.current = Date.now()
+
+      const ctx = getDeviceContext()
+      track('ingreso_flujo_iniciado', {
+        screen: 'ingreso_flow',
+        turno_id: turno.id,
+        gps_lat: gps.latitude,
+        gps_lng: gps.longitude,
+        gps_accuracy_m: gps.accuracy,
+        value_json: {
+          intento_id: ingresoIntentoId.current,
+          browser: ctx.browser_name,
+          os: ctx.os_name,
+          memory_gb: typeof navigator !== 'undefined' ? (navigator as any).deviceMemory ?? null : null,
+        },
+      })
+
       setIngresoFase('foto_libro')
     } catch {
       setMensaje({ texto: 'Error al obtener ubicación. Intentá de nuevo.', tipo: 'error' })
@@ -863,6 +922,16 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       formData.append('turnoId', ingresoTurno.id)
       formData.append('objetivoId', ingresoTurno.objetivo_id)
 
+      track('upload_evidencia_iniciado', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno.id,
+        registro_id: registroId,
+        value_json: {
+          libro_size: libroComprimido.size,
+          uniforme_size: uniformeComprimido.size,
+        },
+      })
+      const uploadStart = Date.now()
       const uploadRes = await fetch('/api/upload-evidence', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -892,6 +961,17 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       }
       setTurnos(prev => prev.map(t => t.id === ingresoTurno!.id ? { ...t, estado: 'cubierto' } : t))
 
+      track('ingreso_confirmado', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno.id,
+        registro_id: registroId,
+        duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+        gps_lat: ingresoGps.latitude,
+        gps_lng: ingresoGps.longitude,
+        gps_accuracy_m: ingresoGps.accuracy,
+        gps_status: auditoriaIngreso.estado,
+        result: 'exito',
+      })
       setMensaje({
         texto: `✓ Entrada registrada a las ${hora} · ${mensajeAuditoriaRadio(auditoriaIngreso, ingresoGps)}`,
         tipo: auditoriaIngreso.estado === 'fuera_radio' ? 'warn' : 'ok',
@@ -903,6 +983,14 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       const msg = err instanceof Error ? err.message
         : typeof err === 'object' && err && 'message' in err ? String((err as { message: unknown }).message)
         : String(err)
+      track('upload_evidencia_error', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno?.id,
+        duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+        err_message: msg,
+        err_function: 'confirmarIngreso',
+        result: 'error',
+      })
       setMensaje({ texto: msg, tipo: 'error' })
       setTimeout(() => setMensaje(null), 5000)
       setIngresoFase('preview')
@@ -1066,16 +1154,21 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                 </div>
                 <button
                   style={{ ...S.btn, ...S.btnPresente, marginBottom: 10 }}
-                  onClick={() => ingresoFase === 'foto_libro'
-                    ? inputLibroRef.current?.click()
-                    : inputUniformeRef.current?.click()
-                  }
+                  onClick={() => {
+                    if (ingresoFase === 'foto_libro') {
+                      track('camara_libro_abierta', { screen: 'ingreso_flow', turno_id: ingresoTurno?.id })
+                      inputLibroRef.current?.click()
+                    } else {
+                      track('camara_uniforme_abierta', { screen: 'ingreso_flow', turno_id: ingresoTurno?.id })
+                      inputUniformeRef.current?.click()
+                    }
+                  }}
                 >
                   📷 Tomar foto
                 </button>
                 <button
                   style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#94a3b8' }}
-                  onClick={resetIngresoFlow}
+                  onClick={cancelarIngreso}
                 >
                   Cancelar
                 </button>
@@ -1131,7 +1224,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                 </button>
                 <button
                   style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#94a3b8' }}
-                  onClick={resetIngresoFlow}
+                  onClick={cancelarIngreso}
                 >
                   Cancelar
                 </button>
@@ -1144,7 +1237,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                 <div style={{ color: '#64748b', fontSize: 14, marginBottom: 20 }}>Subiendo fotos y registrando asistencia.</div>
                 <button
                   style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#64748b', fontSize: 13 }}
-                  onClick={resetIngresoFlow}
+                  onClick={cancelarIngreso}
                 >
                   Cancelar
                 </button>
@@ -1163,6 +1256,13 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
             onChange={e => {
               const file = e.target.files?.[0]
               if (!file) return
+              track('foto_libro_recibida', {
+                screen: 'ingreso_flow',
+                turno_id: ingresoTurno?.id,
+                value_num: file.size,
+                value_text: file.type || 'image/jpeg',
+                value_json: { fase: 'foto_libro' },
+              })
               if (fotoLibro) URL.revokeObjectURL(fotoLibro.url)
               setFotoLibro({ file, url: URL.createObjectURL(file) })
               setIngresoFase('foto_uniforme')
@@ -1178,6 +1278,13 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
             onChange={e => {
               const file = e.target.files?.[0]
               if (!file) return
+              track('foto_uniforme_recibida', {
+                screen: 'ingreso_flow',
+                turno_id: ingresoTurno?.id,
+                value_num: file.size,
+                value_text: file.type || 'image/jpeg',
+                value_json: { fase: 'foto_uniforme' },
+              })
               if (fotoUniforme) URL.revokeObjectURL(fotoUniforme.url)
               setFotoUniforme({ file, url: URL.createObjectURL(file) })
               setIngresoFase('preview')
