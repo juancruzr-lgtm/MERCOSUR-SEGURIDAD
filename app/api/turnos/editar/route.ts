@@ -6,7 +6,7 @@ export const runtime = 'nodejs'
 type EstadoOperativo = 'FUTURO' | 'EN_CURSO' | 'FINALIZADO'
 
 // Campos permitidos por estado operativo del turno
-const CAMPOS_FUTURO    = new Set(['guardia_id', 'hora_inicio', 'hora_fin', 'estado', 'objetivo_id', 'puesto_id'])
+const CAMPOS_FUTURO    = new Set(['guardia_id', 'fecha', 'hora_inicio', 'hora_fin', 'estado', 'objetivo_id', 'puesto_id'])
 const CAMPOS_EN_CURSO  = new Set(['hora_fin', 'estado'])
 // FINALIZADO: ningún campo de horario puede cambiar
 

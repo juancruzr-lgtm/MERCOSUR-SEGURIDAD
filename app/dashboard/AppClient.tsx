@@ -3707,35 +3707,42 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
     // Construir cambios según estado operativo
     const cambios: Record<string, string | null> = {}
+    // Snapshot: siempre incluye todos los campos editables para detectar
+    // modificaciones concurrentes aunque el usuario no haya tocado ese campo.
     const snapshot: Record<string, string | null> = {}
 
     if (estadoOperativoEdicion === 'FUTURO') {
-      const guardiaNuevoIdN = guardiaNuevoId
-      if ((turnoEditando.guardia_id || null) !== guardiaNuevoIdN) {
-        cambios.guardia_id = guardiaNuevoIdN
-        snapshot.guardia_id = turnoEditando.guardia_id || null
+      // Snapshot completo de todos los campos editables en FUTURO
+      snapshot.guardia_id  = (turnoEditando as any).guardia_id   || null
+      snapshot.objetivo_id = (turnoEditando as any).objetivo_id  || null
+      snapshot.puesto_id   = (turnoEditando as any).puesto_id    || null
+      snapshot.fecha       = (turnoEditando as any).fecha        || null
+      snapshot.hora_inicio = turnoEditando.hora_inicio
+      snapshot.hora_fin    = turnoEditando.hora_fin
+      snapshot.estado      = turnoEditando.estado
+
+      if ((turnoEditando.guardia_id || null) !== guardiaNuevoId) {
+        cambios.guardia_id = guardiaNuevoId
       }
       if (turnoEditando.hora_inicio !== formEdicion.hora_inicio) {
         cambios.hora_inicio = formEdicion.hora_inicio
-        snapshot.hora_inicio = turnoEditando.hora_inicio
       }
       if (turnoEditando.hora_fin !== formEdicion.hora_fin) {
         cambios.hora_fin = formEdicion.hora_fin
-        snapshot.hora_fin = turnoEditando.hora_fin
       }
       if (turnoEditando.estado !== formEdicion.estado) {
         cambios.estado = formEdicion.estado
-        snapshot.estado = turnoEditando.estado
       }
     } else {
-      // EN_CURSO: solo hora_fin y estado
+      // EN_CURSO: solo hora_fin y estado; snapshot solo de esos dos
+      snapshot.hora_fin = turnoEditando.hora_fin
+      snapshot.estado   = turnoEditando.estado
+
       if (turnoEditando.hora_fin !== formEdicion.hora_fin) {
         cambios.hora_fin = formEdicion.hora_fin
-        snapshot.hora_fin = turnoEditando.hora_fin
       }
       if (turnoEditando.estado !== formEdicion.estado) {
         cambios.estado = formEdicion.estado
-        snapshot.estado = turnoEditando.estado
       }
     }
 
