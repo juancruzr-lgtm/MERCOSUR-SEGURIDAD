@@ -293,15 +293,6 @@ function finDiaLocalISO(fecha: string): string {
   return new Date(year, month - 1, day + 1, 0, 0, 0).toISOString()
 }
 
-function storageFileName(nombre: string): string {
-  return nombre
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    || 'foto.jpg'
-}
 
 function fechaHoraTurno(fecha: string, hora: string): Date | null {
   const [year, month, day] = fecha.slice(0, 10).split('-').map(Number)
@@ -1948,30 +1939,27 @@ export default function SupervisorMobile({ user }: any) {
 
       const fotosRegistradas: SupervisionFoto[] = []
       let avisoFotos = ''
-      // Si la foto es obligatoria y falla el upload, guardamos el error real
-      // para propagarlo al outer catch con el mensaje exacto de Supabase.
       let errorFotoObligatoria: Error | null = null
 
       for (const [index, foto] of supervisionFotos.entries()) {
         try {
-          const path = `${supervisionNueva.id}/${Date.now()}-${index}-${storageFileName(foto.name)}`
-          const { error: fotoError } = await supabase.storage
-            .from('supervision-fotos')
-            .upload(path, foto, { upsert: false })
+          const fd = new FormData()
+          fd.append('supervision_id', supervisionNueva.id)
+          fd.append('index', String(index))
+          fd.append('foto', foto, foto.name)
 
-          if (fotoError) throw fotoError
+          const fotoRes = await fetch('/api/upload-supervision-photo', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: fd,
+          })
 
-          const { data: fotoRegistrada, error: fotosInsertError } = await supabase
-            .from('supervision_fotos')
-            .insert({
-              supervision_id: supervisionNueva.id,
-              storage_path: path,
-            })
-            .select('id, supervision_id, storage_path, created_at')
-            .single()
+          if (!fotoRes.ok) {
+            const errJson = await fotoRes.json().catch(() => ({ error: 'Error al subir la foto' }))
+            throw new Error(errJson.error || 'Error al subir la foto')
+          }
 
-          if (fotosInsertError) throw fotosInsertError
-
+          const { foto: fotoRegistrada } = await fotoRes.json()
           if (fotoRegistrada) fotosRegistradas.push(fotoRegistrada as SupervisionFoto)
         } catch (fotoCatchError) {
           const fotoMessage = fotoCatchError instanceof Error ? fotoCatchError.message : 'Error desconocido al subir la foto.'
