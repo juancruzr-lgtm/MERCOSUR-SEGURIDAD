@@ -34,10 +34,9 @@ export function puedeVerLegajo(
   // el endpoint también debe validar alcance de zona en esa etapa.
   // if (solicitante.rol === 'supervisor') return supervisorTieneAccesoAlEmpleado(...)
 
-  // Etapa futura: "Mi Legajo" — el empleado ve su propio legajo.
-  // if (solicitante.rol === 'guardia' || solicitante.rol === 'vigilador') {
-  //   return solicitante.id === empleadoId
-  // }
+  if (solicitante.rol === 'guardia' || solicitante.rol === 'vigilador') {
+    return solicitante.id === empleadoId
+  }
 
   return false
 }

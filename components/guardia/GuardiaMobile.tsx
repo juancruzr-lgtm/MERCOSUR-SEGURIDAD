@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
@@ -488,6 +489,7 @@ const S: Record<string, React.CSSProperties> = {
 
 // ── COMPONENTE PRINCIPAL ──────────────────────────────────────
 export default function GuardiaMobile({ user }: { user: any }) {
+  const router = useRouter()
   const [turnos, setTurnos]       = useState<Turno[]>([])
   const [objetivos, setObjetivos] = useState<Objetivo[]>([])
   const [registros, setRegistros] = useState<Registro[]>([])
@@ -1329,9 +1331,17 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           type="button"
           onClick={activarPush}
           disabled={activandoPush}
-          style={{ ...S.btn, ...S.btnSalida, marginBottom: 14, opacity: activandoPush ? 0.65 : 1 }}
+          style={{ ...S.btn, ...S.btnSalida, marginBottom: 10, opacity: activandoPush ? 0.65 : 1 }}
         >
           {activandoPush ? 'Activando...' : 'Activar notificaciones'}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => router.push(`/guardias/${user.id}`)}
+          style={{ ...S.btn, background: 'none', border: '1px solid #334155', color: '#94a3b8', marginBottom: 14, fontSize: 14 }}
+        >
+          Mi Legajo
         </button>
 
         {perfilAbierto && (

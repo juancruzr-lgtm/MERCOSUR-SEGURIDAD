@@ -220,7 +220,7 @@ export default function LegajoPage() {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [seccion, setSeccion] = useState<SeccionId>('situacion')
-  const [rolUsuario, setRolUsuario] = useState<string>('admin')
+  const [rolUsuario, setRolUsuario] = useState<string | null>(null)
 
   // Protección contra doble disparo (StrictMode / re-render)
   const telemetriaIniciada = useRef(false)
@@ -246,12 +246,13 @@ export default function LegajoPage() {
         .then(({ data: perfil }) => {
           if (!perfil) { router.push('/dashboard'); return }
 
-          setRolUsuario(perfil.rol ?? 'admin')
-          void initTelemetry(perfil.id, (perfil.rol ?? 'admin') as any)
+          const rol = perfil.rol ?? 'admin'
+          setRolUsuario(rol)
+          void initTelemetry(perfil.id, rol as any)
           track('legajo_abierto', {
             screen: 'legajo_empleado',
-            category: 'admin',
-            value_json: { empleado_id: empleadoId },
+            category: rol === 'admin' ? 'admin' : 'guardia',
+            value_json: { empleado_id: empleadoId, rol_solicitante: rol },
           })
         })
     })
@@ -298,7 +299,7 @@ export default function LegajoPage() {
             cargaRegistrada.current = true
             track('legajo_carga_exitosa', {
               screen: 'legajo_empleado',
-              category: 'admin',
+              category: rolUsuario === 'admin' ? 'admin' : 'guardia',
               duration_ms: Date.now() - t0,
               value_json: { empleado_id: empleadoId },
             })
@@ -332,7 +333,7 @@ export default function LegajoPage() {
     track('legajo_seccion_abierta', {
       screen: 'legajo_empleado',
       screen_section: id,
-      category: 'admin',
+      category: rolUsuario === 'admin' ? 'admin' : 'guardia',
       value_json: { empleado_id: empleadoId },
     })
   }
@@ -373,7 +374,7 @@ export default function LegajoPage() {
       {/* Header */}
       <div style={S.header}>
         <button style={S.backBtn} onClick={() => router.push('/dashboard')}>
-          ← Guardias
+          {esAdmin ? '← Guardias' : '← Volver'}
         </button>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>
