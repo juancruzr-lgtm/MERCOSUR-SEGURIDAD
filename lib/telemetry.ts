@@ -69,6 +69,8 @@ export type OsScreen =
   | 'admin_turnos_base'
   | 'admin_zonas_operativas'
   | 'admin_cgo'
+  // Legajo Digital
+  | 'legajo_empleado'
   // Sistema
   | 'login'
   | (string & {}) // permite pantallas futuras sin romper el tipo
@@ -116,10 +118,21 @@ export type OsEventName =
   | 'supervision_photo_added'
   | 'supervision_saved'
   | 'supervision_abandoned'
+  | 'supervision_error'
   // Turno
   | 'turno_guardia_asignado'
   | 'turno_descubierto_marcado'
   | 'turno_repetir_ayer'
+  | 'turno_editado'
+  | 'turno_edicion_error'
+  // Objetivo
+  | 'objetivo_abierto'
+  // Admin
+  // Legajo Digital
+  | 'legajo_abierto'
+  | 'legajo_carga_exitosa'
+  | 'legajo_carga_error'
+  | 'legajo_seccion_abierta'
   // Admin
   | 'admin_nav_section'
   | 'admin_export'
@@ -128,6 +141,8 @@ export type OsEventName =
   | 'admin_intervencion'
   | 'admin_filter_applied'
   | 'admin_mapa_interaction'
+  | 'admin_supervision_detalle'
+  | 'admin_error'
   // Extensible
   | (string & {})
 
@@ -501,6 +516,7 @@ function inferCategory(eventName: string): OsEventCategory {
   if (eventName.startsWith('supervision_') ||
       eventName.startsWith('agenda_'))                                return 'supervision'
   if (eventName.startsWith('turno_'))                                 return 'turno'
+  if (eventName.startsWith('legajo_'))                                return 'admin'
   if (eventName.startsWith('admin_nav_') ||
       eventName.startsWith('admin_filter_') ||
       eventName === 'admin_mapa_interaction')                         return 'nav'

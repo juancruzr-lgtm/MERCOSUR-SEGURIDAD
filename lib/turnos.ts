@@ -99,7 +99,7 @@ const fechaHoraLocal = (fecha: string, hora: string) => {
   return base.getTime()
 }
 
-const rangoTurno = (turno: TurnoHorario) => {
+export const rangoTurno = (turno: TurnoHorario) => {
   const inicio = fechaHoraLocal(turno.fecha, turno.hora_inicio)
   let fin = fechaHoraLocal(turno.fecha, turno.hora_fin)
 
@@ -129,6 +129,15 @@ export const tieneTurnoSuperpuesto = (
     if (excluirTurnoId && turno.id === excluirTurnoId) return false
     return horariosSuperpuestos(turno, candidato)
   })
+}
+
+// Devuelve true si el turno está activo en el instante dado.
+// Maneja turnos nocturnos (hora_fin <= hora_inicio → cruza medianoche).
+export const turnoEsActivo = (turno: TurnoHorario, ahora = new Date()): boolean => {
+  const rango = rangoTurno(turno)
+  if (!rango) return false
+  const ts = ahora.getTime()
+  return ts >= rango.inicio && ts <= rango.fin
 }
 
 export const pasoVentanaFichaje = (turno: TurnoHorario, ahora = new Date()) => {

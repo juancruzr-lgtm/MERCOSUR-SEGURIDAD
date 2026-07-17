@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas, calcularHorasLiquidables } from '@/lib/supabase'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
@@ -1032,7 +1033,8 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   )
 }
 
-function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
+function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin }: any) {
+  const router = useRouter()
   const [modal, setModal] = useState(false)
   const formVacio = { nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
   const [form, setForm] = useState(formVacio)
@@ -1423,6 +1425,14 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro }: any) {
 
                 <td style={S.td}>
                   <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                    {esAdmin && (
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                        onClick={() => router.push(`/guardias/${g.id}`)}
+                      >
+                        Ver legajo
+                      </button>
+                    )}
                     <button
                       style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
                       onClick={() => abrirEdicion(g)}
@@ -8939,7 +8949,7 @@ const esGuardia = esRolGuardia(user.rol)
           ) : (
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
-              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} />}
+              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={esRolAdmin(user?.rol)} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={setPage} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
