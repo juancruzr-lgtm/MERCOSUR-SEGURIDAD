@@ -852,19 +852,20 @@ export default function SupervisorMobile({ user }: any) {
     tipoAlerta === 'descubierto'
       ? !turnoTieneIntervencionResolutiva(turno.id)
       : !alertaIntervenida(turno.id, tipoAlerta)
-  const existeAsistencia = (turno: Turno) => getRegistrosTurno(turno.id).length > 0
-  const esDescubiertoOperativo = (turno: Turno) => !turno.guardia_id || turno.estado === 'descubierto'
+  const esDescubiertoOperativo = (turno: Turno) => !turno.guardia_id
   const esTurnoReasignado = (turno: Turno) => Boolean(
     turno.guardia_original_id &&
     turno.guardia_id &&
     turno.guardia_original_id !== turno.guardia_id
   )
-  const esSinIngreso = (turno: Turno) => Boolean(
-    turno.guardia_id &&
-    !getRegistro(turno.id)?.hora_entrada_real &&
-    turno.estado !== 'descubierto' &&
-    minutosAtrasoTurno(turno) >= 15
-  )
+  const esSinIngreso = (turno: Turno) => {
+    const registro = getRegistro(turno.id)
+    return Boolean(
+      turno.guardia_id &&
+      !(registro?.hora_entrada_final || (registro?.tipo_registro !== 'ausencia' && registro?.hora_entrada_real)) &&
+      minutosAtrasoTurno(turno) >= 15
+    )
+  }
   const esTardanzaRegistrada = (turno: Turno) => {
     const registro = getRegistro(turno.id)
     if (!registro?.hora_entrada_real) return false
@@ -2402,7 +2403,7 @@ export default function SupervisorMobile({ user }: any) {
 
   const abrirEdicionTurno = (turno: Turno) => {
     const registrosTurno = getRegistrosTurno(turno.id)
-    const tieneEntrada = registrosTurno.some(r => r.hora_entrada_real != null)
+    const tieneEntrada = registrosTurno.some(r => r.tipo_registro !== 'ausencia' && (r.hora_entrada_final || r.hora_entrada_real))
     const tieneSalida  = registrosTurno.some(r => r.hora_salida_real  != null)
     setEstadoOpEdicionSup(tieneSalida ? 'FINALIZADO' : tieneEntrada ? 'EN_CURSO' : 'FUTURO')
     setTurnoEditandoSup(turno)

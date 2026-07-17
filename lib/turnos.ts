@@ -138,15 +138,24 @@ export const pasoVentanaFichaje = (turno: TurnoHorario, ahora = new Date()) => {
   return ahora.getTime() > inicio + MINUTOS_POSTERIORES_FICHAJE * MS_MINUTO
 }
 
-export const turnoSinCoberturaOperativa = (
-  turno: TurnoHorario,
-  tieneAsistencia: boolean,
-  ahora = new Date(),
-) => {
-  if (!turno.guardia_id) return true
-  if (turno.estado === 'descubierto') return true
-  return pasoVentanaFichaje(turno, ahora) && !tieneAsistencia
+// Tipo mínimo que representa un registro de asistencia con los campos necesarios
+// para determinar si hay una entrada confirmada (fichaje original o corrección final).
+export type RegistroEntrada = {
+  tipo_registro?: string | null
+  hora_entrada_real?: string | null
+  hora_entrada_final?: string | null
 }
+
+// Devuelve true si el registro representa una entrada efectivamente confirmada.
+// Excluye ausencias. Considera tanto fichaje original como corrección del supervisor.
+export const registroTieneEntradaConfirmada = (r: RegistroEntrada): boolean =>
+  r.tipo_registro !== 'ausencia' && !!(r.hora_entrada_final || r.hora_entrada_real)
+
+// Un turno está sin cobertura operativa únicamente cuando no tiene guardia asignado.
+// La falta de fichaje no equivale a descubierto: un guardia asignado que no fichó
+// sigue siendo cobertura asignada y debe aparecer en "Sin fichar", no en "Descubiertos".
+export const turnoSinCoberturaOperativa = (turno: TurnoHorario): boolean =>
+  !turno.guardia_id
 
 export const fechasVecinasTurno = (fecha: string) => {
   const base = fechaLocal(fecha)

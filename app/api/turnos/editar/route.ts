@@ -87,10 +87,12 @@ export async function POST(req: NextRequest) {
   // ── Estado operativo ────────────────────────────────────────────────────────
   const { data: registros } = await admin.client
     .from('registros_asistencia')
-    .select('id, hora_entrada_real, hora_salida_real')
+    .select('id, hora_entrada_real, hora_salida_real, hora_entrada_final, tipo_registro')
     .eq('turno_id', turno_id)
 
-  const tieneEntrada = (registros ?? []).some(r => r.hora_entrada_real != null)
+  const tieneEntrada = (registros ?? []).some(r =>
+    r.tipo_registro !== 'ausencia' && (r.hora_entrada_final || r.hora_entrada_real)
+  )
   const tieneSalida  = (registros ?? []).some(r => r.hora_salida_real  != null)
 
   const estadoOperativo: EstadoOperativo = tieneSalida
