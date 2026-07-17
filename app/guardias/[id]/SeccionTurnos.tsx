@@ -6,6 +6,8 @@ import { track } from '@/lib/telemetry'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
+type TipoCobertura = 'programado' | 'reasignado' | 'reemplazo'
+
 interface TurnoLegajo {
   id: string
   fecha: string
@@ -16,6 +18,7 @@ interface TurnoLegajo {
   objetivo_nombre: string | null
   puesto_id: string | null
   puesto_nombre: string | null
+  tipo_cobertura: TipoCobertura
 }
 
 interface RespuestaTurnos {
@@ -171,6 +174,26 @@ const S = {
     color: '#818cf8',
     border: '1px solid #6366f140',
   } as React.CSSProperties,
+  badgeReasignado: {
+    display: 'inline-block',
+    padding: '1px 6px',
+    borderRadius: 4,
+    fontSize: 10,
+    fontWeight: 600,
+    background: '#78716c20',
+    color: '#a8a29e',
+    border: '1px solid #78716c40',
+  } as React.CSSProperties,
+  badgeReemplazo: {
+    display: 'inline-block',
+    padding: '1px 6px',
+    borderRadius: 4,
+    fontSize: 10,
+    fontWeight: 600,
+    background: '#0ea5e920',
+    color: '#38bdf8',
+    border: '1px solid #0ea5e940',
+  } as React.CSSProperties,
   empty: {
     textAlign: 'center' as const,
     color: '#475569',
@@ -216,7 +239,11 @@ function TarjetaTurno({ turno }: { turno: TurnoLegajo }) {
   const color = colorEstado(turno.estado)
 
   return (
-    <div style={S.card}>
+    <div style={{
+      ...S.card,
+      // Tonalidad distinta para reasignados (opacidad reducida)
+      opacity: turno.tipo_cobertura === 'reasignado' ? 0.75 : 1,
+    }}>
       {/* Columna fecha */}
       <div style={S.fecha}>
         <span style={S.fechaDia}>{diaSemana(turno.fecha)}</span>
@@ -237,6 +264,12 @@ function TarjetaTurno({ turno }: { turno: TurnoLegajo }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
         <span style={S.badge(color)}>{turno.estado}</span>
         {nocturno && <span style={S.badgeNocturno}>nocturno</span>}
+        {turno.tipo_cobertura === 'reasignado' && (
+          <span style={S.badgeReasignado}>reasignado</span>
+        )}
+        {turno.tipo_cobertura === 'reemplazo' && (
+          <span style={S.badgeReemplazo}>reemplazo</span>
+        )}
       </div>
     </div>
   )
