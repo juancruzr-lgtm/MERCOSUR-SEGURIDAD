@@ -1,28 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { puedeVerLegajo } from '@/lib/legajo'
-import { rangoTurno } from '@/lib/turnos'
+import { rangoTurno, esTurnoNocturno } from '@/lib/turnos'
 
 export const runtime = 'nodejs'
 
-// Determina hoy y ayer en hora local del servidor (UTC-3 Argentina).
-// Usar sv-SE para obtener YYYY-MM-DD sin depender de zona del sistema.
-function fechasConsulta(): { hoy: string; ayer: string } {
+// Determina hoy, ayer y el instante actual en hora local Argentina (UTC-3).
+// rangoTurno() en el servidor (Vercel UTC) interpreta hora_inicio/hora_fin como horas
+// locales del proceso. Para que la comparación sea consistente, ahora también se
+// desplaza al mismo marco: Argentina local "como si fuera" hora del proceso.
+function fechasConsulta(): { hoy: string; ayer: string; ahora: Date } {
   const ARG_OFFSET_MS = -3 * 60 * 60 * 1000
-  const ahora = new Date(Date.now() + ARG_OFFSET_MS)
-  const hoy = ahora.toISOString().slice(0, 10)
-  const ayerDate = new Date(ahora.getTime() - 86_400_000)
+  const ahoraMs = Date.now() + ARG_OFFSET_MS
+  const ahoraArg = new Date(ahoraMs)
+  const hoy = ahoraArg.toISOString().slice(0, 10)
+  const ayerDate = new Date(ahoraMs - 86_400_000)
   const ayer = ayerDate.toISOString().slice(0, 10)
-  return { hoy, ayer }
+  return { hoy, ayer, ahora: ahoraArg }
 }
 
-// Filtra turnos de ayer que NO son nocturnos (no cruzan medianoche).
-// Idéntica lógica al filtro de GuardiaMobile y SupervisorMobile.
-function esTurnoNocturno(turno: { hora_inicio: string; hora_fin: string }): boolean {
-  const [hI, mI] = turno.hora_inicio.split(':').map(Number)
-  const [hF, mF] = turno.hora_fin.split(':').map(Number)
-  return (hF * 60 + mF) <= (hI * 60 + mI)
-}
 
 export async function GET(
   req: NextRequest,
@@ -65,8 +61,7 @@ export async function GET(
     return NextResponse.json({ error: 'Empleado no encontrado' }, { status: 404 })
   }
 
-  const { hoy, ayer } = fechasConsulta()
-  const ahora = new Date()
+  const { hoy, ayer, ahora } = fechasConsulta()
 
   // ── Turno actual (incluye nocturno del día anterior) ──────────────────────
   const { data: turnosHoyAyer } = await admin.client

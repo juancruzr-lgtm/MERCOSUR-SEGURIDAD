@@ -140,6 +140,14 @@ export const turnoEsActivo = (turno: TurnoHorario, ahora = new Date()): boolean 
   return ts >= rango.inicio && ts <= rango.fin
 }
 
+// Devuelve true si el turno es nocturno (hora_fin <= hora_inicio → cruza medianoche).
+// Misma regla que el filtro inline de GuardiaMobile y SupervisorMobile.
+export const esTurnoNocturno = (turno: { hora_inicio: string; hora_fin: string }): boolean => {
+  const [hI, mI] = turno.hora_inicio.split(':').map(Number)
+  const [hF, mF] = turno.hora_fin.split(':').map(Number)
+  return (hF * 60 + mF) <= (hI * 60 + mI)
+}
+
 export const pasoVentanaFichaje = (turno: TurnoHorario, ahora = new Date()) => {
   const inicio = fechaHoraLocal(turno.fecha, turno.hora_inicio)
   if (inicio === null) return false

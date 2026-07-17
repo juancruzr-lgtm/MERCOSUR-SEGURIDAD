@@ -326,6 +326,7 @@ export default function LegajoPage() {
   }, [empleadoId, router])
 
   const cambiarSeccion = (id: SeccionId) => {
+    if (id === seccion) return
     setSeccion(id)
     track('legajo_seccion_abierta', {
       screen: 'legajo_empleado',
