@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../../_lib/employee-auth'
 import { puedeVerLegajo } from '@/lib/legajo'
-import { calcularHorasLiquidables } from '@/lib/supabase'
+import { effectiveGuardia, effectiveEntrada, selectRegistroPrincipal, resolverLineaLiquidacion } from '@/lib/liquidacion'
 
 export const runtime = 'nodejs'
 
@@ -25,12 +25,6 @@ function rangoMes(mes: string): { desde: string; hasta: string } {
   return { desde: `${mes}-01`, hasta: `${mes}-${String(ultimo).padStart(2, '0')}` }
 }
 
-// ── Guardia efectivo — misma regla que AppClient y endpoint de turnos ─────────
-
-function effectiveGuardia(r: any): string | null {
-  return r.guardia_final_id ?? r.guardia_id ?? null
-}
-
 // ── Día de la semana en español ───────────────────────────────────────────────
 
 const DIAS_ES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
@@ -38,13 +32,6 @@ const DIAS_ES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
 function diaSemana(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number)
   return DIAS_ES[new Date(y, m - 1, d).getDay()]
-}
-
-// ── Score para deduplicar múltiples registros del mismo turno ─────────────────
-// Misma lógica que AppClient.registroPrincipal.
-
-function scoreRegistro(r: any): number {
-  return (r.hora_entrada_real ? 10 : 0) + (r.hora_salida_real ? 5 : 0) + (Number(r.horas_trabajadas) || 0)
 }
 
 // ── Tipos de respuesta ────────────────────────────────────────────────────────
@@ -141,7 +128,7 @@ export async function GET(
   const conEntrada = (registros ?? []).filter((r: any) => {
     if (effectiveGuardia(r) !== empleadoId) return false
     if (r.tipo_registro === 'ausencia') return false
-    if (!(r.hora_entrada_final ?? r.hora_entrada_real)) return false
+    if (!effectiveEntrada(r)) return false
     const t = r.turno
     if (!t) return false
     if ((t.objetivo as any)?.es_prueba) return false
@@ -167,27 +154,23 @@ export async function GET(
   }
 
   // ── Deduplicar: un registro por turno (máximo score) ─────────────────────
-  // Consistente con AppClient.registroPrincipal.
-  const porTurno = new Map<string, any>()
+  const porTurnoAgrupar = new Map<string, any[]>()
   for (const r of conEntrada) {
-    const existing = porTurno.get(r.turno_id)
-    if (!existing || scoreRegistro(r) > scoreRegistro(existing)) {
-      porTurno.set(r.turno_id, r)
-    }
+    const arr = porTurnoAgrupar.get(r.turno_id) ?? []
+    arr.push(r)
+    porTurnoAgrupar.set(r.turno_id, arr)
   }
+  const seleccionados = [...porTurnoAgrupar.values()]
+    .map(regs => selectRegistroPrincipal(regs, empleadoId))
+    .filter(Boolean) as any[]
 
   // ── Construir filas ───────────────────────────────────────────────────────
   const filas: FilaPlanilla[] = []
 
-  for (const r of porTurno.values()) {
+  for (const r of seleccionados) {
     const t = r.turno
+    const linea = resolverLineaLiquidacion(t, r)
 
-    // Horas efectivas: final tiene prioridad sobre original (misma regla que AppClient)
-    const horaEntrada = r.hora_entrada_final ?? r.hora_entrada_real
-    const horaSalida  = r.hora_salida_final  ?? r.hora_salida_real  ?? null
-
-    // Objetivo efectivo: final tiene prioridad (si admin reasignó el objetivo)
-    const objetivoEfectivoId = r.objetivo_final_id ?? t.objetivo_id ?? null
     let objetivoNombre: string | null = null
     if (r.objetivo_final_id && objetivoFinalMap.has(r.objetivo_final_id)) {
       objetivoNombre = objetivoFinalMap.get(r.objetivo_final_id) ?? null
@@ -195,18 +178,13 @@ export async function GET(
       objetivoNombre = (t.objetivo as any)?.nombre ?? null
     }
 
-    // Horas liquidables: misma fórmula que AppClient.horasLiquidablesRegistro
-    const horas = horaSalida
-      ? calcularHorasLiquidables(t.fecha, t.hora_inicio, t.hora_fin, horaEntrada, horaSalida)
-      : 0
-
     filas.push({
       fecha:           t.fecha,
       dia_semana:      diaSemana(t.fecha),
-      hora_entrada:    horaEntrada.slice(0, 5),
-      hora_salida:     horaSalida ? horaSalida.slice(0, 5) : null,
-      horas,
-      objetivo_id:     objetivoEfectivoId,
+      hora_entrada:    (linea.horaEntrada ?? '').slice(0, 5),
+      hora_salida:     linea.horaSalida ? linea.horaSalida.slice(0, 5) : null,
+      horas:           linea.horasLiquidables,
+      objetivo_id:     linea.objetivoEfectivoId,
       objetivo_nombre: objetivoNombre,
     })
   }
