@@ -133,6 +133,9 @@ export type OsEventName =
   | 'legajo_carga_exitosa'
   | 'legajo_carga_error'
   | 'legajo_seccion_abierta'
+  | 'legajo_turnos_cargados'
+  | 'legajo_turnos_error'
+  | 'legajo_turnos_filtro_aplicado'
   // Admin
   | 'admin_nav_section'
   | 'admin_export'

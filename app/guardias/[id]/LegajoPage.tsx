@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { registroTieneEntradaConfirmada } from '@/lib/turnos'
 import { track, initTelemetry } from '@/lib/telemetry'
+import SeccionTurnos from './SeccionTurnos'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -420,7 +421,11 @@ export default function LegajoPage() {
           />
         )}
 
-        {seccion !== 'situacion' && (
+        {seccion === 'turnos' && (
+          <SeccionTurnos empleadoId={empleadoId} />
+        )}
+
+        {seccion !== 'situacion' && seccion !== 'turnos' && (
           <div style={S.placeholder}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
             <div>Esta sección está disponible en una próxima etapa.</div>
