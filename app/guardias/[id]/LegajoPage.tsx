@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { registroTieneEntradaConfirmada } from '@/lib/turnos'
 import { track, initTelemetry } from '@/lib/telemetry'
 import SeccionTurnos from './SeccionTurnos'
+import SeccionPlanilla from './SeccionPlanilla'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,7 @@ interface DatosLegajo {
 const SECCIONES = [
   { id: 'situacion', label: 'Situación actual' },
   { id: 'turnos', label: 'Turnos' },
+  { id: 'planilla', label: 'Mi Planilla' },
   { id: 'asistencias', label: 'Asistencias' },
   { id: 'supervisiones', label: 'Supervisiones' },
   { id: 'novedades', label: 'Novedades laborales' },
@@ -426,7 +428,11 @@ export default function LegajoPage() {
           <SeccionTurnos empleadoId={empleadoId} />
         )}
 
-        {seccion !== 'situacion' && seccion !== 'turnos' && (
+        {seccion === 'planilla' && (
+          <SeccionPlanilla empleadoId={empleadoId} />
+        )}
+
+        {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla' && (
           <div style={S.placeholder}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
             <div>Esta sección está disponible en una próxima etapa.</div>

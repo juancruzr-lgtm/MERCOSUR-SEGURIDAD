@@ -136,6 +136,10 @@ export type OsEventName =
   | 'legajo_turnos_cargados'
   | 'legajo_turnos_error'
   | 'legajo_turnos_filtro_aplicado'
+  | 'legajo_planilla_abierta'
+  | 'legajo_planilla_cargada'
+  | 'legajo_planilla_error'
+  | 'legajo_planilla_mes_cambiado'
   // Admin
   | 'admin_nav_section'
   | 'admin_export'
