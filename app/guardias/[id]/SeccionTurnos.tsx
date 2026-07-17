@@ -6,7 +6,13 @@ import { track } from '@/lib/telemetry'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
-type TipoCobertura = 'programado' | 'reasignado' | 'reemplazo'
+type TipoCobertura =
+  | 'programado'
+  | 'programado_y_cubierto'
+  | 'programado_sin_asistencia'
+  | 'programado_pero_reemplazado'
+  | 'reasignado'
+  | 'reemplazo'
 
 interface TurnoLegajo {
   id: string
@@ -174,26 +180,16 @@ const S = {
     color: '#818cf8',
     border: '1px solid #6366f140',
   } as React.CSSProperties,
-  badgeReasignado: {
+  badgeCobertura: (color: string): React.CSSProperties => ({
     display: 'inline-block',
     padding: '1px 6px',
     borderRadius: 4,
     fontSize: 10,
     fontWeight: 600,
-    background: '#78716c20',
-    color: '#a8a29e',
-    border: '1px solid #78716c40',
-  } as React.CSSProperties,
-  badgeReemplazo: {
-    display: 'inline-block',
-    padding: '1px 6px',
-    borderRadius: 4,
-    fontSize: 10,
-    fontWeight: 600,
-    background: '#0ea5e920',
-    color: '#38bdf8',
-    border: '1px solid #0ea5e940',
-  } as React.CSSProperties,
+    background: color + '20',
+    color,
+    border: `1px solid ${color}40`,
+  }),
   empty: {
     textAlign: 'center' as const,
     color: '#475569',
@@ -233,17 +229,28 @@ const S = {
 
 // ── Tarjeta de turno ──────────────────────────────────────────────────────────
 
+// Etiqueta y color para cada tipo de cobertura en historial
+const COBERTURA_BADGE: Partial<Record<TipoCobertura, { label: string; color: string }>> = {
+  programado_y_cubierto:       { label: 'cubierto',    color: '#22c55e' },
+  programado_sin_asistencia:   { label: 'sin fichar',  color: '#f59e0b' },
+  programado_pero_reemplazado: { label: 'reemplazado', color: '#f97316' },
+  reasignado:                  { label: 'reasignado',  color: '#78716c' },
+  reemplazo:                   { label: 'reemplazo',   color: '#38bdf8' },
+}
+
 function TarjetaTurno({ turno }: { turno: TurnoLegajo }) {
   const [dd, mm, yy] = formatearFecha(turno.fecha).split('/')
   const nocturno = esTurnoNocturno(turno)
-  const color = colorEstado(turno.estado)
+  const colorE = colorEstado(turno.estado)
+  const cobertura = COBERTURA_BADGE[turno.tipo_cobertura]
+
+  // Reasignados y reemplazados se muestran con menor prominencia
+  const atenuado =
+    turno.tipo_cobertura === 'reasignado' ||
+    turno.tipo_cobertura === 'programado_pero_reemplazado'
 
   return (
-    <div style={{
-      ...S.card,
-      // Tonalidad distinta para reasignados (opacidad reducida)
-      opacity: turno.tipo_cobertura === 'reasignado' ? 0.75 : 1,
-    }}>
+    <div style={{ ...S.card, opacity: atenuado ? 0.72 : 1 }}>
       {/* Columna fecha */}
       <div style={S.fecha}>
         <span style={S.fechaDia}>{diaSemana(turno.fecha)}</span>
@@ -262,13 +269,10 @@ function TarjetaTurno({ turno }: { turno: TurnoLegajo }) {
 
       {/* Columna badges */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-        <span style={S.badge(color)}>{turno.estado}</span>
+        <span style={S.badge(colorE)}>{turno.estado}</span>
         {nocturno && <span style={S.badgeNocturno}>nocturno</span>}
-        {turno.tipo_cobertura === 'reasignado' && (
-          <span style={S.badgeReasignado}>reasignado</span>
-        )}
-        {turno.tipo_cobertura === 'reemplazo' && (
-          <span style={S.badgeReemplazo}>reemplazo</span>
+        {cobertura && (
+          <span style={S.badgeCobertura(cobertura.color)}>{cobertura.label}</span>
         )}
       </div>
     </div>
