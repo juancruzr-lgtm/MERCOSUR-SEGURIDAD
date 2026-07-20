@@ -92,21 +92,32 @@ export type OsEventName =
   | 'offline_detected'
   | 'offline_recovered'
   // Fichaje — Guardia / Vigilador
-  | 'ingreso_started'
-  | 'gps_requested'
-  | 'gps_success'
-  | 'gps_denied'
-  | 'gps_timeout'
-  | 'gps_imprecise'
-  | 'photo_taken'
-  | 'photo_retaken'
-  | 'ingreso_confirmed'
-  | 'ingreso_error'
-  | 'ingreso_cancelled'
-  | 'egreso_started'
-  | 'egreso_confirmed'
-  | 'egreso_error'
-  | 'egreso_anulado'
+  | 'ingreso_started'          // guardia toca "Dar presente"
+  | 'gps_requested'            // se inicia la adquisición GPS
+  | 'gps_success'              // GPS obtenido (incluye gps_acq_ms)
+  | 'gps_denied'               // permiso denegado
+  | 'gps_timeout'              // timeout de 10s
+  | 'gps_unavailable'          // posición no disponible (hardware / señal)
+  | 'gps_imprecise'            // GPS obtenido pero accuracy > umbral
+  | 'gps_legacy_fallback'      // se usó lat_entrada/lng_entrada en lugar de latitud_ingreso
+  | 'photo_taken'              // foto capturada (libro o uniforme)
+  | 'photo_retaken'            // usuario retomó una foto desde el preview
+  | 'compresion_iniciada'      // inicio de compresión canvas
+  | 'compresion_completada'    // compresión exitosa (tamaños antes/después)
+  | 'compresion_error'         // timeout u otro fallo de compresión
+  | 'upload_iniciado'          // fetch a /api/upload-evidence iniciado
+  | 'upload_completado'        // respuesta HTTP 2xx recibida
+  | 'registro_bd_creado'       // INSERT en registros_asistencia exitoso
+  | 'registro_bd_existente'    // idempotencia: se reutilizó registro previo
+  | 'turno_actualizado'        // UPDATE turnos.estado = 'cubierto' exitoso
+  | 'turno_actualizacion_error'// UPDATE turnos falló (no bloquea el ingreso)
+  | 'ingreso_confirmed'        // flujo completo exitoso
+  | 'ingreso_error'            // fallo en cualquier paso (err_code indica origen)
+  | 'ingreso_cancelled'        // usuario canceló
+  | 'egreso_started'           // guardia toca "Marcar salida"
+  | 'egreso_confirmed'         // egreso registrado exitosamente
+  | 'egreso_error'             // fallo al registrar egreso
+  | 'egreso_anulado'           // egreso anulado por el guardia
   // Supervisión
   | 'nav_tab_changed'
   | 'agenda_objetivo_opened'
