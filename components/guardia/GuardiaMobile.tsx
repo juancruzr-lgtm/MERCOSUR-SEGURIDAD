@@ -148,33 +148,28 @@ async function consultarPermisoGps(): Promise<GpsPermissionState> {
   }
 }
 
-function obtenerGps(tipo: 'ingreso' | 'egreso'): Promise<GpsData | null> {
-  if (tipo === 'ingreso') console.log('Solicitando GPS ingreso')
+// Resultado enriquecido de adquisición GPS: incluye causa del fallo y tiempo de adquisición.
+type GpsAcquireResult =
+  | { ok: true;  data: GpsData; acq_ms: number }
+  | { ok: false; reason: 'denied' | 'timeout' | 'unavailable' | 'unsupported'; acq_ms: number }
 
-  if (typeof navigator === 'undefined' || !navigator.geolocation) {
-    if (tipo === 'ingreso') console.log('GPS ingreso error')
-    return Promise.resolve(null)
-  }
+function adquirirGps(): Promise<GpsAcquireResult> {
+  const t0 = Date.now()
+  if (typeof navigator === 'undefined' || !navigator.geolocation)
+    return Promise.resolve({ ok: false, reason: 'unsupported', acq_ms: 0 })
 
   return new Promise(resolve => {
     navigator.geolocation.getCurrentPosition(
-      position => {
-        if (tipo === 'ingreso') console.log('GPS ingreso OK')
-        resolve({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-        })
+      pos => resolve({
+        ok: true,
+        data: { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy },
+        acq_ms: Date.now() - t0,
+      }),
+      err => {
+        const reason = err.code === 1 ? 'denied' : err.code === 3 ? 'timeout' : 'unavailable'
+        resolve({ ok: false, reason, acq_ms: Date.now() - t0 })
       },
-      () => {
-        if (tipo === 'ingreso') console.log('GPS ingreso error')
-        resolve(null)
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
-      }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     )
   })
 }
@@ -779,52 +774,110 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       return
     }
 
+    // Asignar intento_id antes del GPS para vincular todos los eventos al mismo intento
+    const intentoId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    ingresoIntentoId.current = intentoId
+    ingresoStartTime.current = Date.now()
+
     setIngresoTurno(turno)
     setIngresoFase('gps')
     setMensaje(null)
 
-    try {
-      const gps = await obtenerGps('ingreso')
+    track('ingreso_started', {
+      screen: 'ingreso_flow',
+      turno_id: turno.id,
+      value_json: { intento_id: intentoId, permiso_gps: permisoGps },
+    })
 
-      if (!gps) {
-        setPermisoGps(await consultarPermisoGps())
-        setMensaje({ texto: 'Para registrar asistencia debe permitir ubicación', tipo: 'error' })
-        setTimeout(() => setMensaje(null), 4000)
-        setIngresoFase('idle')
-        setIngresoTurno(null)
-        return
-      }
+    track('gps_requested', {
+      screen: 'ingreso_flow',
+      turno_id: turno.id,
+      value_json: { intento_id: intentoId, tipo: 'ingreso' },
+    })
 
-      setIngresoGps(gps)
-      ingresoIntentoId.current = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-      ingresoStartTime.current = Date.now()
+    const gpsResult = await adquirirGps()
 
-      const ctx = getDeviceContext()
-      track('ingreso_flujo_iniciado', {
+    if (!gpsResult.ok) {
+      // gps_denied = permiso denegado, gps_timeout = 10s sin respuesta,
+      // gps_unavailable = hardware/señal, gps_denied también cubre 'unsupported'
+      const eventName = gpsResult.reason === 'denied' || gpsResult.reason === 'unsupported'
+        ? 'gps_denied' : gpsResult.reason === 'timeout' ? 'gps_timeout' : 'gps_unavailable'
+      track(eventName, {
+        screen: 'ingreso_flow',
+        turno_id: turno.id,
+        duration_ms: gpsResult.acq_ms,
+        err_code: gpsResult.reason,
+        err_function: 'adquirirGps',
+        value_json: { intento_id: intentoId, tipo: 'ingreso' },
+      })
+      track('ingreso_error', {
+        screen: 'ingreso_flow',
+        turno_id: turno.id,
+        err_code: `gps_${gpsResult.reason}`,
+        err_function: 'iniciarIngreso',
+        duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+        value_json: { intento_id: intentoId },
+      })
+      setPermisoGps(await consultarPermisoGps())
+      setMensaje({ texto: 'Para registrar asistencia debe permitir ubicación', tipo: 'error' })
+      setTimeout(() => setMensaje(null), 4000)
+      setIngresoFase('idle')
+      setIngresoTurno(null)
+      ingresoIntentoId.current = null
+      ingresoStartTime.current = null
+      return
+    }
+
+    const { data: gps, acq_ms } = gpsResult
+
+    track('gps_success', {
+      screen: 'ingreso_flow',
+      turno_id: turno.id,
+      gps_lat: gps.latitude,
+      gps_lng: gps.longitude,
+      gps_accuracy_m: gps.accuracy,
+      gps_acq_ms: acq_ms,
+      value_json: { intento_id: intentoId, tipo: 'ingreso' },
+    })
+
+    // Precisión baja: emitir evento pero no bloquear (negocio lo permite)
+    if (gps.accuracy > 150) {
+      track('gps_imprecise', {
         screen: 'ingreso_flow',
         turno_id: turno.id,
         gps_lat: gps.latitude,
         gps_lng: gps.longitude,
         gps_accuracy_m: gps.accuracy,
-        value_json: {
-          intento_id: ingresoIntentoId.current,
-          browser: ctx.browser_name,
-          os: ctx.os_name,
-          memory_gb: typeof navigator !== 'undefined' ? (navigator as any).deviceMemory ?? null : null,
-        },
+        value_json: { intento_id: intentoId, tipo: 'ingreso', umbral_m: 150 },
       })
-
-      setIngresoFase('foto_libro')
-    } catch {
-      setMensaje({ texto: 'Error al obtener ubicación. Intentá de nuevo.', tipo: 'error' })
-      setTimeout(() => setMensaje(null), 4000)
-      setIngresoFase('idle')
-      setIngresoTurno(null)
     }
+
+    setIngresoGps(gps)
+
+    const ctx = getDeviceContext()
+    track('ingreso_flujo_iniciado', {
+      screen: 'ingreso_flow',
+      turno_id: turno.id,
+      gps_lat: gps.latitude,
+      gps_lng: gps.longitude,
+      gps_accuracy_m: gps.accuracy,
+      gps_acq_ms: acq_ms,
+      value_json: {
+        intento_id: intentoId,
+        browser: ctx.browser_name,
+        os: ctx.os_name,
+        memory_gb: typeof navigator !== 'undefined' ? (navigator as any).deviceMemory ?? null : null,
+      },
+    })
+
+    setIngresoFase('foto_libro')
   }
 
   const comprimirFoto = (file: File, maxWidth = 1280, quality = 0.75): Promise<File> =>
     new Promise((resolve, reject) => {
+      const TIMEOUT_MS = 8000
+      const timer = setTimeout(() => reject(new Error('compresion_timeout')), TIMEOUT_MS)
+
       const img = new Image()
       const url = URL.createObjectURL(file)
       img.onload = () => {
@@ -834,107 +887,226 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         canvas.width = Math.round(img.width * scale)
         canvas.height = Math.round(img.height * scale)
         const ctx = canvas.getContext('2d')
-        if (!ctx) return reject(new Error('Canvas no disponible'))
+        if (!ctx) { clearTimeout(timer); return reject(new Error('canvas_no_disponible')) }
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
         canvas.toBlob(blob => {
-          if (!blob) return reject(new Error('Error comprimiendo imagen'))
+          clearTimeout(timer)
+          if (!blob) return reject(new Error('compresion_blob_fallo'))
           resolve(new File([blob], file.name, { type: 'image/jpeg' }))
         }, 'image/jpeg', quality)
       }
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Error cargando imagen')) }
+      img.onerror = () => { clearTimeout(timer); URL.revokeObjectURL(url); reject(new Error('imagen_carga_fallo')) }
       img.src = url
     })
 
-  // Confirmar ingreso: INSERT registro → upload fotos → INSERT evidencias
+  // Confirmar ingreso: INSERT registro → compresión → upload → UPDATE turno
+  // Cada paso emite su propio evento con err_code específico para diagnóstico.
   const confirmarIngreso = async () => {
     if (!ingresoTurno || !ingresoGps || !fotoLibro || !fotoUniforme) return
 
     setIngresoFase('confirmando')
 
-    try {
-      const hora = horaActual()
-      const objetivo = getObjetivo(ingresoTurno.objetivo_id)
-      const auditoriaIngreso = calcularAuditoriaRadioGps(ingresoGps, objetivo)
+    const intentoId  = ingresoIntentoId.current
+    const hora       = horaActual()
+    const objetivo   = getObjetivo(ingresoTurno.objetivo_id)
+    const auditoria  = calcularAuditoriaRadioGps(ingresoGps, objetivo)
 
-      // 1. Idempotente: si ya existe el registro, reutilizar su id
-      let registroId: string
+    // ── PASO 1: Crear o reutilizar registro de asistencia ─────────────────────
+    let registroId: string
 
-      const { data: existente } = await supabase
-        .from('registros_asistencia')
-        .select('id')
-        .eq('turno_id', ingresoTurno.id)
-        .eq('guardia_id', user.id)
-        .maybeSingle()
+    const { data: existente } = await supabase
+      .from('registros_asistencia')
+      .select('id')
+      .eq('turno_id', ingresoTurno.id)
+      .eq('guardia_id', user.id)
+      .maybeSingle()
 
-      if (existente) {
-        registroId = existente.id
-      } else {
-        const payloadBase = {
-          guardia_id: user.id,
-          turno_id: ingresoTurno.id,
-          hora_entrada_real: hora,
-          alerta_entrada: calcAlertaEntrada(ingresoTurno.hora_inicio, hora, ingresoTurno.hora_fin),
-        }
-
-        let { data, error } = await supabase
-          .from('registros_asistencia')
-          .insert({
-            ...payloadBase,
-            distancia_ingreso_metros: auditoriaIngreso.distancia,
-            gps_ingreso_estado: auditoriaIngreso.estado,
-            latitud_ingreso: ingresoGps.latitude,
-            longitud_ingreso: ingresoGps.longitude,
-            precision_ingreso: ingresoGps.accuracy,
-          })
-          .select('id')
-          .single()
-
-        if (error && esErrorColumnaGps(error)) {
-          const retry = await supabase
-            .from('registros_asistencia')
-            .insert({
-              ...payloadBase,
-              lat_entrada: ingresoGps.latitude,
-              lng_entrada: ingresoGps.longitude,
-            })
-            .select('id')
-            .single()
-          data = retry.data
-          error = retry.error
-        }
-
-        if (error || !data) throw error || new Error('No se pudo crear el registro.')
-        registroId = data.id
-      }
-
-      // 2. Upload fotos via API route (service role evita RLS de storage)
-      const { data: sessionData } = await supabase.auth.getSession()
-      const token = sessionData?.session?.access_token
-      if (!token) throw new Error('Sesión expirada. Volvé a iniciar sesión.')
-
-      const [libroComprimido, uniformeComprimido] = await Promise.all([
-        comprimirFoto(fotoLibro.file),
-        comprimirFoto(fotoUniforme.file),
-      ])
-
-      const formData = new FormData()
-      formData.append('libro', libroComprimido, 'libro.jpg')
-      formData.append('uniforme', uniformeComprimido, 'uniforme.jpg')
-      formData.append('registroId', registroId)
-      formData.append('turnoId', ingresoTurno.id)
-      formData.append('objetivoId', ingresoTurno.objetivo_id)
-
-      track('upload_evidencia_iniciado', {
+    if (existente) {
+      registroId = existente.id
+      track('registro_bd_existente', {
         screen: 'ingreso_flow',
         turno_id: ingresoTurno.id,
         registro_id: registroId,
-        value_json: {
-          libro_size: libroComprimido.size,
-          uniforme_size: uniformeComprimido.size,
-        },
+        value_json: { intento_id: intentoId },
       })
-      const uploadStart = Date.now()
-      const uploadRes = await fetch('/api/upload-evidence', {
+    } else {
+      const payloadBase = {
+        guardia_id: user.id,
+        turno_id: ingresoTurno.id,
+        hora_entrada_real: hora,
+        alerta_entrada: calcAlertaEntrada(ingresoTurno.hora_inicio, hora, ingresoTurno.hora_fin),
+      }
+
+      let { data, error } = await supabase
+        .from('registros_asistencia')
+        .insert({
+          ...payloadBase,
+          distancia_ingreso_metros: auditoria.distancia,
+          gps_ingreso_estado: auditoria.estado,
+          latitud_ingreso: ingresoGps.latitude,
+          longitud_ingreso: ingresoGps.longitude,
+          precision_ingreso: ingresoGps.accuracy,
+        })
+        .select('id')
+        .single()
+
+      let usedLegacyGps = false
+      if (error && esErrorColumnaGps(error)) {
+        const retry = await supabase
+          .from('registros_asistencia')
+          .insert({ ...payloadBase, lat_entrada: ingresoGps.latitude, lng_entrada: ingresoGps.longitude })
+          .select('id')
+          .single()
+        data  = retry.data
+        error = retry.error
+        usedLegacyGps = true
+      }
+
+      if (error || !data) {
+        track('ingreso_error', {
+          screen: 'ingreso_flow',
+          turno_id: ingresoTurno.id,
+          err_code: 'bd_fallo',
+          err_message: error?.message ?? 'Sin datos',
+          err_function: 'crear_registro_asistencia',
+          duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+          value_json: { intento_id: intentoId },
+        })
+        setMensaje({ texto: 'Error al crear el registro. Intentá de nuevo.', tipo: 'error' })
+        setTimeout(() => setMensaje(null), 5000)
+        setIngresoFase('preview')
+        return
+      }
+
+      registroId = data.id
+
+      track('registro_bd_creado', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno.id,
+        registro_id: registroId,
+        gps_lat: ingresoGps.latitude,
+        gps_lng: ingresoGps.longitude,
+        gps_accuracy_m: ingresoGps.accuracy,
+        gps_status: auditoria.estado,
+        gps_distance_m: auditoria.distancia ?? undefined,
+        value_json: { intento_id: intentoId, legacy_gps: usedLegacyGps },
+      })
+
+      if (usedLegacyGps) {
+        track('gps_legacy_fallback', {
+          screen: 'ingreso_flow',
+          turno_id: ingresoTurno.id,
+          registro_id: registroId,
+          value_json: { intento_id: intentoId, tipo: 'ingreso' },
+        })
+      }
+    }
+
+    // ── PASO 2: Verificar sesión (token puede haber expirado durante el flujo) ─
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData?.session?.access_token
+    if (!token) {
+      track('ingreso_error', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno.id,
+        registro_id: registroId,
+        err_code: 'token_expirado',
+        err_function: 'get_session',
+        duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+        value_json: { intento_id: intentoId },
+      })
+      setMensaje({ texto: 'Sesión expirada. Cerrá e iniciá sesión nuevamente.', tipo: 'error' })
+      setTimeout(() => setMensaje(null), 6000)
+      setIngresoFase('preview')
+      return
+    }
+
+    // ── PASO 3: Compresión de fotos ────────────────────────────────────────────
+    let libroComprimido: File
+    let uniformeComprimido: File
+
+    const compresionStart = Date.now()
+    track('compresion_iniciada', {
+      screen: 'ingreso_flow',
+      turno_id: ingresoTurno.id,
+      registro_id: registroId,
+      value_json: {
+        intento_id: intentoId,
+        libro_original: fotoLibro.file.size,
+        uniforme_original: fotoUniforme.file.size,
+      },
+    })
+
+    try {
+      ;[libroComprimido, uniformeComprimido] = await Promise.all([
+        comprimirFoto(fotoLibro.file),
+        comprimirFoto(fotoUniforme.file),
+      ])
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'compresion_desconocido'
+      track('compresion_error', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno.id,
+        registro_id: registroId,
+        err_code: errMsg,
+        err_function: 'comprimirFoto',
+        duration_ms: Date.now() - compresionStart,
+        value_json: { intento_id: intentoId },
+      })
+      track('ingreso_error', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno.id,
+        registro_id: registroId,
+        err_code: 'compresion_fallo',
+        err_message: errMsg,
+        err_function: 'comprimirFoto',
+        duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+        value_json: { intento_id: intentoId },
+      })
+      setMensaje({ texto: 'Error al procesar las fotos. Intentá de nuevo.', tipo: 'error' })
+      setTimeout(() => setMensaje(null), 5000)
+      setIngresoFase('preview')
+      return
+    }
+
+    track('compresion_completada', {
+      screen: 'ingreso_flow',
+      turno_id: ingresoTurno.id,
+      registro_id: registroId,
+      duration_ms: Date.now() - compresionStart,
+      value_json: {
+        intento_id: intentoId,
+        libro_original: fotoLibro.file.size,
+        libro_comprimido: libroComprimido.size,
+        uniforme_original: fotoUniforme.file.size,
+        uniforme_comprimido: uniformeComprimido.size,
+      },
+    })
+
+    // ── PASO 4: Upload de fotos y registro de evidencias ───────────────────────
+    const formData = new FormData()
+    formData.append('libro',      libroComprimido,    'libro.jpg')
+    formData.append('uniforme',   uniformeComprimido, 'uniforme.jpg')
+    formData.append('registroId', registroId)
+    formData.append('turnoId',    ingresoTurno.id)
+    formData.append('objetivoId', ingresoTurno.objetivo_id)
+
+    const uploadStart = Date.now()
+    track('upload_iniciado', {
+      screen: 'ingreso_flow',
+      turno_id: ingresoTurno.id,
+      registro_id: registroId,
+      value_json: {
+        intento_id: intentoId,
+        libro_size: libroComprimido.size,
+        uniforme_size: uniformeComprimido.size,
+      },
+    })
+
+    let uploadErrorTracked = false
+    let uploadRes: Response
+    try {
+      uploadRes = await fetch('/api/upload-evidence', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
@@ -942,117 +1114,238 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
 
       if (!uploadRes.ok) {
         const err = await uploadRes.json().catch(() => ({ error: 'Error subiendo fotos' }))
-        throw new Error(err.error || 'Error subiendo fotos')
+        track('ingreso_error', {
+          screen: 'ingreso_flow',
+          turno_id: ingresoTurno.id,
+          registro_id: registroId,
+          err_code: 'upload_fallo',
+          err_message: err.error ?? 'HTTP error',
+          err_function: 'upload_evidence',
+          duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+          value_json: { intento_id: intentoId, http_status: uploadRes.status, upload_ms: Date.now() - uploadStart },
+        })
+        uploadErrorTracked = true
+        setMensaje({ texto: err.error || 'Error subiendo fotos. Intentá de nuevo.', tipo: 'error' })
+        setTimeout(() => setMensaje(null), 5000)
+        setIngresoFase('preview')
+        return
       }
-
-      // La API registra las evidencias server-side con service_role.
-      // Si incluye 'advertencia' las fotos se subieron pero el registro de
-      // evidencias falló — el ingreso sigue siendo válido.
-
-      // 3. Actualizar estado del turno y state local
-      await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', ingresoTurno.id)
-
-      const { data: registroCompleto } = await supabase
-        .from('registros_asistencia')
-        .select('*')
-        .eq('id', registroId)
-        .single()
-
-      if (registroCompleto) {
-        setRegistros(prev => [...prev.filter(r => r.turno_id !== ingresoTurno!.id), registroCompleto])
+    } catch (err) {
+      if (!uploadErrorTracked) {
+        track('ingreso_error', {
+          screen: 'ingreso_flow',
+          turno_id: ingresoTurno.id,
+          registro_id: registroId,
+          err_code: 'red_fallo',
+          err_message: err instanceof Error ? err.message : 'fetch error',
+          err_function: 'upload_evidence',
+          duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+          value_json: { intento_id: intentoId, upload_ms: Date.now() - uploadStart },
+        })
       }
-      setTurnos(prev => prev.map(t => t.id === ingresoTurno!.id ? { ...t, estado: 'cubierto' } : t))
+      setMensaje({ texto: 'Error de red al subir fotos. Intentá de nuevo.', tipo: 'error' })
+      setTimeout(() => setMensaje(null), 5000)
+      setIngresoFase('preview')
+      return
+    }
 
-      track('ingreso_confirmado', {
+    track('upload_completado', {
+      screen: 'ingreso_flow',
+      turno_id: ingresoTurno.id,
+      registro_id: registroId,
+      duration_ms: Date.now() - uploadStart,
+      value_json: {
+        intento_id: intentoId,
+        libro_size: libroComprimido.size,
+        uniforme_size: uniformeComprimido.size,
+      },
+    })
+
+    // ── PASO 5: Actualizar estado del turno ────────────────────────────────────
+    // No bloqueante: si falla, el ingreso ya está registrado igual.
+    const { error: turnoError } = await supabase
+      .from('turnos')
+      .update({ estado: 'cubierto' })
+      .eq('id', ingresoTurno.id)
+
+    if (turnoError) {
+      track('turno_actualizacion_error', {
         screen: 'ingreso_flow',
         turno_id: ingresoTurno.id,
         registro_id: registroId,
-        duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
-        gps_lat: ingresoGps.latitude,
-        gps_lng: ingresoGps.longitude,
-        gps_accuracy_m: ingresoGps.accuracy,
-        gps_status: auditoriaIngreso.estado,
-        result: 'exito',
+        err_message: turnoError.message,
+        err_function: 'update_turno_cubierto',
+        value_json: { intento_id: intentoId },
       })
-      setMensaje({
-        texto: `✓ Entrada registrada a las ${hora} · ${mensajeAuditoriaRadio(auditoriaIngreso, ingresoGps)}`,
-        tipo: auditoriaIngreso.estado === 'fuera_radio' ? 'warn' : 'ok',
-      })
-      setTimeout(() => setMensaje(null), 5000)
-      resetIngresoFlow()
-
-    } catch (err) {
-      const msg = err instanceof Error ? err.message
-        : typeof err === 'object' && err && 'message' in err ? String((err as { message: unknown }).message)
-        : String(err)
-      track('upload_evidencia_error', {
+    } else {
+      track('turno_actualizado', {
         screen: 'ingreso_flow',
-        turno_id: ingresoTurno?.id,
-        duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
-        err_message: msg,
-        err_function: 'confirmarIngreso',
-        result: 'error',
+        turno_id: ingresoTurno.id,
+        registro_id: registroId,
+        value_json: { intento_id: intentoId },
       })
-      setMensaje({ texto: msg, tipo: 'error' })
-      setTimeout(() => setMensaje(null), 5000)
-      setIngresoFase('preview')
     }
+
+    // ── PASO 6: Refrescar state local ─────────────────────────────────────────
+    const { data: registroCompleto } = await supabase
+      .from('registros_asistencia')
+      .select('*')
+      .eq('id', registroId)
+      .single()
+
+    if (registroCompleto) {
+      setRegistros(prev => [...prev.filter(r => r.turno_id !== ingresoTurno!.id), registroCompleto])
+    }
+    setTurnos(prev => prev.map(t => t.id === ingresoTurno!.id ? { ...t, estado: 'cubierto' } : t))
+
+    track('ingreso_confirmed', {
+      screen: 'ingreso_flow',
+      turno_id: ingresoTurno.id,
+      registro_id: registroId,
+      duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
+      gps_lat: ingresoGps.latitude,
+      gps_lng: ingresoGps.longitude,
+      gps_accuracy_m: ingresoGps.accuracy,
+      gps_status: auditoria.estado,
+      gps_distance_m: auditoria.distancia ?? undefined,
+      result: 'exito',
+      value_json: { intento_id: intentoId },
+    })
+
+    setMensaje({
+      texto: `✓ Entrada registrada a las ${hora} · ${mensajeAuditoriaRadio(auditoria, ingresoGps)}`,
+      tipo: auditoria.estado === 'fuera_radio' ? 'warn' : 'ok',
+    })
+    setTimeout(() => setMensaje(null), 5000)
+    resetIngresoFlow()
   }
 
-  // Marcar salida
+  // Marcar salida — instrumentado con el mismo nivel que el ingreso
   const marcarSalida = async (turno: Turno, registro: Registro) => {
     setFichando(turno.id)
     setMensaje(null)
 
-    const hora = horaActual()
-    const horas = calcHorasTrabajadas(registro.hora_entrada_real, hora)
-    const gps = await obtenerGps('egreso')
-    const objetivo = getObjetivo(turno.objetivo_id)
-    const auditoriaEgreso = calcularAuditoriaRadioGps(gps, objetivo)
-    const payloadBase = {
-      hora_salida_real: hora,
-      horas_trabajadas: horas,
+    const egresoIntentoId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    const egresoStart     = Date.now()
+
+    track('egreso_started', {
+      screen: 'egreso_flow',
+      turno_id: turno.id,
+      registro_id: registro.id,
+      value_json: { intento_id: egresoIntentoId },
+    })
+
+    // GPS del egreso
+    track('gps_requested', {
+      screen: 'egreso_flow',
+      turno_id: turno.id,
+      value_json: { intento_id: egresoIntentoId, tipo: 'egreso' },
+    })
+
+    const hora      = horaActual()
+    const horas     = calcHorasTrabajadas(registro.hora_entrada_real, hora)
+    const gpsResult = await adquirirGps()
+
+    let gps: GpsData | null = null
+
+    if (gpsResult.ok) {
+      gps = gpsResult.data
+      track('gps_success', {
+        screen: 'egreso_flow',
+        turno_id: turno.id,
+        gps_lat: gps.latitude,
+        gps_lng: gps.longitude,
+        gps_accuracy_m: gps.accuracy,
+        gps_acq_ms: gpsResult.acq_ms,
+        value_json: { intento_id: egresoIntentoId, tipo: 'egreso' },
+      })
+      if (gps.accuracy > 150) {
+        track('gps_imprecise', {
+          screen: 'egreso_flow',
+          turno_id: turno.id,
+          gps_accuracy_m: gps.accuracy,
+          value_json: { intento_id: egresoIntentoId, tipo: 'egreso', umbral_m: 150 },
+        })
+      }
+    } else {
+      const eventName = gpsResult.reason === 'denied' || gpsResult.reason === 'unsupported'
+        ? 'gps_denied' : gpsResult.reason === 'timeout' ? 'gps_timeout' : 'gps_unavailable'
+      track(eventName, {
+        screen: 'egreso_flow',
+        turno_id: turno.id,
+        duration_ms: gpsResult.acq_ms,
+        err_code: gpsResult.reason,
+        err_function: 'adquirirGps',
+        value_json: { intento_id: egresoIntentoId, tipo: 'egreso' },
+      })
+      // El egreso continúa sin GPS — se registra con gps_egreso_estado: 'gps_no_disponible'
     }
-    const payload = {
+
+    const objetivo      = getObjetivo(turno.objetivo_id)
+    const auditoriaEgreso = calcularAuditoriaRadioGps(gps, objetivo)
+
+    const payloadBase = { hora_salida_real: hora, horas_trabajadas: horas }
+    const payload     = {
       ...payloadBase,
       distancia_egreso_metros: auditoriaEgreso.distancia,
       gps_egreso_estado: auditoriaEgreso.estado,
     }
     const payloadConGps = gps
-      ? {
-        ...payload,
-        latitud_egreso: gps.latitude,
-        longitud_egreso: gps.longitude,
-        precision_egreso: gps.accuracy,
-      }
+      ? { ...payload, latitud_egreso: gps.latitude, longitud_egreso: gps.longitude, precision_egreso: gps.accuracy }
       : payload
     const payloadConGpsLegacy = gps
-      ? {
-        ...payloadBase,
-        lat_salida: gps.latitude,
-        lng_salida: gps.longitude,
-      }
+      ? { ...payloadBase, lat_salida: gps.latitude, lng_salida: gps.longitude }
       : payloadBase
 
-    let { error } = await supabase
+    let { error: egresoError } = await supabase
       .from('registros_asistencia')
       .update(payloadConGps)
       .eq('id', registro.id)
 
-    let gpsDisponible = Boolean(gps)
-
-    if (error && esErrorColumnaGps(error)) {
+    let usedLegacyGps = false
+    if (egresoError && esErrorColumnaGps(egresoError)) {
       const retry = await supabase
         .from('registros_asistencia')
         .update(payloadConGpsLegacy)
         .eq('id', registro.id)
-
-      error = retry.error
+      egresoError  = retry.error
+      usedLegacyGps = true
     }
 
-    if (error) {
+    if (egresoError) {
+      track('egreso_error', {
+        screen: 'egreso_flow',
+        turno_id: turno.id,
+        registro_id: registro.id,
+        err_code: 'bd_fallo',
+        err_message: egresoError.message,
+        err_function: 'update_registros_asistencia_egreso',
+        duration_ms: Date.now() - egresoStart,
+        value_json: { intento_id: egresoIntentoId },
+      })
       setMensaje({ texto: 'Error al registrar salida. Intentá de nuevo.', tipo: 'error' })
     } else {
+      if (usedLegacyGps) {
+        track('gps_legacy_fallback', {
+          screen: 'egreso_flow',
+          turno_id: turno.id,
+          registro_id: registro.id,
+          value_json: { intento_id: egresoIntentoId, tipo: 'egreso' },
+        })
+      }
+      track('egreso_confirmed', {
+        screen: 'egreso_flow',
+        turno_id: turno.id,
+        registro_id: registro.id,
+        duration_ms: Date.now() - egresoStart,
+        gps_lat: gps?.latitude,
+        gps_lng: gps?.longitude,
+        gps_accuracy_m: gps?.accuracy,
+        gps_status: auditoriaEgreso.estado,
+        gps_distance_m: auditoriaEgreso.distancia ?? undefined,
+        result: 'exito',
+        value_json: { intento_id: egresoIntentoId },
+      })
       setRegistros(prev =>
         prev.map(r => r.id === registro.id
           ? { ...r, ...payloadConGps, hora_salida_real: hora, horas_trabajadas: horas }
@@ -1060,10 +1353,10 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         )
       )
       setMensaje({
-        texto: gpsDisponible && gps
+        texto: gps
           ? `✓ Salida registrada a las ${hora} — ${horas}h trabajadas · ${mensajeAuditoriaRadio(auditoriaEgreso, gps)}`
           : mensajeAuditoriaRadio(auditoriaEgreso, gps),
-        tipo: auditoriaEgreso.estado === 'fuera_radio' || !gpsDisponible ? 'warn' : 'ok',
+        tipo: auditoriaEgreso.estado === 'fuera_radio' || !gps ? 'warn' : 'ok',
       })
     }
 
@@ -1101,6 +1394,12 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     if (error) {
       setMensaje({ texto: 'Error al anular el egreso.', tipo: 'error' })
     } else {
+      track('egreso_anulado', {
+        screen: 'egreso_flow',
+        turno_id: turno.id,
+        registro_id: registro.id,
+        value_json: { hora_salida_anulada: registro.hora_salida_real },
+      })
       setRegistros(prev =>
         prev.map(r => r.id === registro.id
           ? { ...r, hora_salida_real: undefined, hora_salida_final: undefined, horas_trabajadas: undefined, alerta_salida: undefined, gps_egreso_estado: undefined }
@@ -1191,6 +1490,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                     <button
                       style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#94a3b8', marginTop: 6, padding: '8px', fontSize: 12 }}
                       onClick={() => {
+                        track('photo_retaken', { screen: 'ingreso_flow', turno_id: ingresoTurno?.id, value_json: { intento_id: ingresoIntentoId.current, tipo: 'libro' } })
                         URL.revokeObjectURL(fotoLibro.url)
                         setFotoLibro(null)
                         setIngresoFase('foto_libro')
@@ -1209,6 +1509,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                     <button
                       style={{ ...S.btn, background: 'none', border: '1px solid #1e2d42', color: '#94a3b8', marginTop: 6, padding: '8px', fontSize: 12 }}
                       onClick={() => {
+                        track('photo_retaken', { screen: 'ingreso_flow', turno_id: ingresoTurno?.id, value_json: { intento_id: ingresoIntentoId.current, tipo: 'uniforme' } })
                         URL.revokeObjectURL(fotoUniforme.url)
                         setFotoUniforme(null)
                         setIngresoFase('foto_uniforme')
@@ -1258,12 +1559,11 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
             onChange={e => {
               const file = e.target.files?.[0]
               if (!file) return
-              track('foto_libro_recibida', {
+              track('photo_taken', {
                 screen: 'ingreso_flow',
                 turno_id: ingresoTurno?.id,
                 value_num: file.size,
-                value_text: file.type || 'image/jpeg',
-                value_json: { fase: 'foto_libro' },
+                value_json: { intento_id: ingresoIntentoId.current, tipo: 'libro', mime: file.type || 'image/jpeg' },
               })
               if (fotoLibro) URL.revokeObjectURL(fotoLibro.url)
               setFotoLibro({ file, url: URL.createObjectURL(file) })
@@ -1280,12 +1580,11 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
             onChange={e => {
               const file = e.target.files?.[0]
               if (!file) return
-              track('foto_uniforme_recibida', {
+              track('photo_taken', {
                 screen: 'ingreso_flow',
                 turno_id: ingresoTurno?.id,
                 value_num: file.size,
-                value_text: file.type || 'image/jpeg',
-                value_json: { fase: 'foto_uniforme' },
+                value_json: { intento_id: ingresoIntentoId.current, tipo: 'uniforme', mime: file.type || 'image/jpeg' },
               })
               if (fotoUniforme) URL.revokeObjectURL(fotoUniforme.url)
               setFotoUniforme({ file, url: URL.createObjectURL(file) })
