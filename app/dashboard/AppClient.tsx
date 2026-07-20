@@ -10,6 +10,7 @@ import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
+import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
@@ -8880,6 +8881,9 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'turnos_base', icon:'⏰', label:'Turnos Base' },
       { id:'zonas_operativas', icon:'🗺️', label:'Zonas operativas' },
     ]},
+    { section:'SISTEMA', items:[
+      { id:'observacion', icon:'🔭', label:'Observación del Sistema' },
+    ]},
   ]
 
   const novedadesUrgentes = novedades.filter(n => n.prioridad === 'urgente' && n.estado !== 'resuelta').length
@@ -8956,6 +8960,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
+              {page === 'observacion' && <ObservacionSistema />}
             </>
           )
         )}
