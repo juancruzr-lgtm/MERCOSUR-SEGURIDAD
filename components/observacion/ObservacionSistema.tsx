@@ -231,6 +231,7 @@ function TabResumen() {
           <KpiCard label="Tasa de error" value={ev.tasa_error_pct != null ? ev.tasa_error_pct.toFixed(1) + '%' : '—'} color={ev.tasa_error_pct > 10 ? C.red : C.green} />
           <KpiCard label="GPS éxito (7d)" value={op.gps?.tasa_exito_pct != null ? op.gps.tasa_exito_pct + '%' : '—'} color={op.gps?.tasa_exito_pct < 80 ? C.red : op.gps?.tasa_exito_pct < 90 ? C.orange : C.green} sub={`${op.gps?.exitosos_7d ?? 0} / ${op.gps?.solicitados_7d ?? 0} solicitudes`} />
           <KpiCard label="Ingreso éxito (7d)" value={op.ingresos?.tasa_exito_pct != null ? op.ingresos.tasa_exito_pct + '%' : '—'} color={op.ingresos?.tasa_exito_pct < 90 ? C.red : C.green} sub={`P50: ${ms(op.ingresos?.p50_ms)} · P95: ${ms(op.ingresos?.p95_ms)}`} />
+          <KpiCard label="Egreso éxito (7d)" value={op.egresos?.tasa_exito_pct != null ? op.egresos.tasa_exito_pct + '%' : '—'} color={op.egresos?.tasa_exito_pct != null && op.egresos.tasa_exito_pct < 90 ? C.red : C.green} sub={`P50: ${ms(op.egresos?.p50_ms)} · ${op.egresos?.anulados_7d ?? 0} anulados`} />
           <KpiCard label="Supervisiones (7d)" value={op.supervisiones?.exitosas_7d ?? 0} sub={`${op.supervisiones?.abandonadas_7d ?? 0} abandonadas`} color={(op.supervisiones?.abandonadas_7d ?? 0) > 2 ? C.orange : C.green} />
         </div>
       </div>
