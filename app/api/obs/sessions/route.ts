@@ -1,17 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
-
-async function requireAdmin(req: NextRequest) {
-  const admin = getSupabaseAdmin()
-  if (admin.error) return { error: admin.error, status: 500 }
-  const token = getBearerToken(req)
-  if (!token) return { error: 'Sesion requerida', status: 401 }
-  const { data: authData, error: authError } = await admin.client.auth.getUser(token)
-  if (authError || !authData.user) return { error: 'Sesion invalida', status: 401 }
-  const { data: usuario } = await admin.client.from('usuarios').select('id, rol').eq('auth_user_id', authData.user.id).eq('rol', 'admin').single()
-  if (!usuario) return { error: 'No autorizado', status: 403 }
-  return { client: admin.client }
-}
+import { requireAdmin, isObsAuthErr } from '../../_lib/obs-auth'
 
 function diasAtrasISO(dias: number) {
   const d = new Date()
@@ -25,56 +13,49 @@ function diasAtrasISO(dias: number) {
 // Query params: days (default 7), page, limit
 export async function GET(req: NextRequest) {
   const auth = await requireAdmin(req)
-  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
+  if (isObsAuthErr(auth)) return NextResponse.json({ error: auth.error }, { status: auth.status })
   const { client } = auth
 
-  const p    = req.nextUrl.searchParams
-  const days = Math.min(90, Math.max(1, parseInt(p.get('days') || '7', 10)))
-  const page = Math.max(0, parseInt(p.get('page') || '0', 10))
+  const p     = req.nextUrl.searchParams
+  const days  = Math.min(90, Math.max(1, parseInt(p.get('days') || '7', 10)))
+  const page  = Math.max(0, parseInt(p.get('page') || '0', 10))
   const limit = Math.min(200, Math.max(10, parseInt(p.get('limit') || '100', 10)))
   const desde = diasAtrasISO(days)
 
-  const [sesionesRes, usuariosRes] = await Promise.all([
+  // Una sola query con todas las columnas necesarias para lista Y breakdowns.
+  // Eliminada la segunda query duplicada que descargaba todo el período sin paginar.
+  const [todasRes, usuariosRes] = await Promise.all([
     client
       .from('os_sessions')
       .select('id, user_id, user_rol, started_at, ended_at, duration_s, event_count, device_type, device_model, os_name, os_version, browser_name, browser_version, app_version, battery_start_pct, battery_end_pct, network_start, network_end')
       .gte('started_at', desde)
-      .order('started_at', { ascending: false })
-      .range(page * limit, page * limit + limit - 1),
+      .order('started_at', { ascending: false }),
     client.from('usuarios').select('id, nombre, apellido, rol, estado'),
   ])
 
-  const sesiones  = sesionesRes.data ?? []
-  const usuarios  = usuariosRes.data ?? []
-  const usuMap    = new Map(usuarios.map((u: any) => [u.id, u]))
+  const todasSesiones = todasRes.data ?? []
+  const usuarios      = usuariosRes.data ?? []
+  const usuMap        = new Map(usuarios.map((u: any) => [u.id, u]))
 
-  // Agregar nombre de usuario a cada sesión
-  const sesionesConUsuario = sesiones.map((s: any) => ({
-    ...s,
-    usuario: usuMap.get(s.user_id) ?? null,
-  }))
+  // Página solicitada sobre los datos ya en memoria
+  const sesionesConUsuario = todasSesiones
+    .slice(page * limit, page * limit + limit)
+    .map((s: any) => ({ ...s, usuario: usuMap.get(s.user_id) ?? null }))
 
-  // ── Métricas agregadas ──────────────────────────────────────────────────────
-
-  // Para los breakdowns descargamos todos los registros del período (sin paginar)
-  const { data: todas } = await client
-    .from('os_sessions')
-    .select('user_id, user_rol, device_type, os_name, browser_name, app_version, duration_s, ended_at, battery_start_pct')
-    .gte('started_at', desde)
-
-  const todasSesiones = todas ?? []
-
-  const byRol      = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.user_rol || 'desconocido'] = (acc[s.user_rol || 'desconocido'] || 0) + 1; return acc }, {})
+  const byRol       = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.user_rol || 'desconocido'] = (acc[s.user_rol || 'desconocido'] || 0) + 1; return acc }, {})
   const byDispositivo = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.device_type || 'desconocido'] = (acc[s.device_type || 'desconocido'] || 0) + 1; return acc }, {})
-  const byOS       = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.os_name || 'desconocido'] = (acc[s.os_name || 'desconocido'] || 0) + 1; return acc }, {})
-  const byBrowser  = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.browser_name || 'desconocido'] = (acc[s.browser_name || 'desconocido'] || 0) + 1; return acc }, {})
-  const byVersion  = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.app_version || 'desconocido'] = (acc[s.app_version || 'desconocido'] || 0) + 1; return acc }, {})
+  const byOS        = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.os_name || 'desconocido'] = (acc[s.os_name || 'desconocido'] || 0) + 1; return acc }, {})
+  const byBrowser   = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.browser_name || 'desconocido'] = (acc[s.browser_name || 'desconocido'] || 0) + 1; return acc }, {})
+  const byVersion   = todasSesiones.reduce((acc: Record<string, number>, s: any) => { acc[s.app_version || 'desconocido'] = (acc[s.app_version || 'desconocido'] || 0) + 1; return acc }, {})
 
-  const duraciones = todasSesiones.filter((s: any) => s.duration_s != null && s.duration_s > 0).map((s: any) => s.duration_s).sort((a: number, b: number) => a - b)
+  const duraciones = todasSesiones
+    .filter((s: any) => s.duration_s != null && s.duration_s > 0)
+    .map((s: any) => s.duration_s)
+    .sort((a: number, b: number) => a - b)
   const p50Dur = duraciones.length > 0 ? duraciones[Math.floor(duraciones.length / 2)] : null
   const p95Dur = duraciones.length > 0 ? duraciones[Math.floor(duraciones.length * 0.95)] : null
 
-  const activas = todasSesiones.filter((s: any) => !s.ended_at).length
+  const activas        = todasSesiones.filter((s: any) => !s.ended_at).length
   const usuariosUnicos = new Set(todasSesiones.map((s: any) => s.user_id)).size
 
   return NextResponse.json({
@@ -89,5 +70,6 @@ export async function GET(req: NextRequest) {
     sesiones: sesionesConUsuario,
     page,
     limit,
+    total: todasSesiones.length,
   })
 }

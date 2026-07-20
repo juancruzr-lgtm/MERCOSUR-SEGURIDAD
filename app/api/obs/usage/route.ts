@@ -1,17 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
+import { requireAdmin, isObsAuthErr } from '../../_lib/obs-auth'
 
-async function requireAdmin(req: NextRequest) {
-  const admin = getSupabaseAdmin()
-  if (admin.error) return { error: admin.error, status: 500 }
-  const token = getBearerToken(req)
-  if (!token) return { error: 'Sesion requerida', status: 401 }
-  const { data: authData, error: authError } = await admin.client.auth.getUser(token)
-  if (authError || !authData.user) return { error: 'Sesion invalida', status: 401 }
-  const { data: usuario } = await admin.client.from('usuarios').select('id, rol').eq('auth_user_id', authData.user.id).eq('rol', 'admin').single()
-  if (!usuario) return { error: 'No autorizado', status: 403 }
-  return { client: admin.client }
-}
+const MAX_EVENTS = 10_000
 
 function diasAtrasISO(dias: number) {
   const d = new Date()
@@ -25,7 +15,7 @@ function diasAtrasISO(dias: number) {
 // Query params: days (default 30)
 export async function GET(req: NextRequest) {
   const auth = await requireAdmin(req)
-  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
+  if (isObsAuthErr(auth)) return NextResponse.json({ error: auth.error }, { status: auth.status })
   const { client } = auth
 
   const p    = req.nextUrl.searchParams
@@ -41,13 +31,15 @@ export async function GET(req: NextRequest) {
     supervisionesRes,
     novedadesRes,
   ] = await Promise.all([
-    client.from('os_events').select('user_id, user_rol, event_name, event_category, screen, objetivo_id, duration_ms, value_text, err_code, app_version, device_type, client_ts').gte('created_at', desde),
+    // Límite explícito: evita descargar cientos de miles de filas en sistemas maduros.
+    // Si se alcanza el límite, la respuesta incluye truncado: true.
+    client.from('os_events').select('user_id, user_rol, event_name, event_category, screen, objetivo_id, duration_ms, value_text, err_code, app_version, device_type, client_ts').gte('created_at', desde).limit(MAX_EVENTS),
     client.from('usuarios').select('id, nombre, apellido, rol, estado'),
     client.from('objetivos').select('id, nombre, cliente, estado'),
-    client.from('supervisor_intervenciones').select('id, supervisor_id, tipo_alerta, accion, created_at').gte('created_at', desde),
-    client.from('registros_asistencia_auditoria').select('id, modificado_por, campo, motivo, created_at').gte('created_at', desde),
-    client.from('supervisiones').select('id, supervisor_id, objetivo_id, estado, created_at').gte('created_at', desde),
-    client.from('novedades').select('id, guardia_id, objetivo_id, prioridad, estado, tipo, created_at').gte('created_at', desde),
+    client.from('supervisor_intervenciones').select('id, supervisor_id, tipo_alerta, accion, created_at').gte('created_at', desde).limit(5000),
+    client.from('registros_asistencia_auditoria').select('id, modificado_por, campo, motivo, created_at').gte('created_at', desde).limit(5000),
+    client.from('supervisiones').select('id, supervisor_id, objetivo_id, estado, created_at').gte('created_at', desde).limit(5000),
+    client.from('novedades').select('id, guardia_id, objetivo_id, prioridad, estado, tipo, created_at').gte('created_at', desde).limit(2000),
   ])
 
   const eventos      = eventosRes.data ?? []
@@ -171,8 +163,11 @@ export async function GET(req: NextRequest) {
   const ingresoConfirmed = new Set(eventos.filter((e: any) => e.event_name === 'ingreso_confirmed').map((e: any) => e.user_id + e.client_ts?.slice(0, 10)))
   const posiblesAbandonos = [...ingresoStarted].filter(k => !ingresoConfirmed.has(k)).length
 
+  const eventosTruncados = eventos.length >= MAX_EVENTS
+
   return NextResponse.json({
     periodo_dias: days,
+    analisis_parcial: eventosTruncados,
     resumen: {
       total_eventos_analizados: eventos.length,
       usuarios_activos_periodo: actividadPorUsuario.length,

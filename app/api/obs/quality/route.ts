@@ -1,24 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
+import { requireAdmin, isObsAuthErr } from '../../_lib/obs-auth'
 
-async function requireAdmin(req: NextRequest) {
-  const admin = getSupabaseAdmin()
-  if (admin.error) return { error: admin.error, status: 500 }
-  const token = getBearerToken(req)
-  if (!token) return { error: 'Sesion requerida', status: 401 }
-  const { data: authData, error: authError } = await admin.client.auth.getUser(token)
-  if (authError || !authData.user) return { error: 'Sesion invalida', status: 401 }
-  const { data: usuario } = await admin.client.from('usuarios').select('id, rol').eq('auth_user_id', authData.user.id).eq('rol', 'admin').single()
-  if (!usuario) return { error: 'No autorizado', status: 403 }
-  return { client: admin.client }
-}
+const LIMIT_REGISTROS = 5000
+const LIMIT_EVIDENCIAS = 5000
 
 // ── GET /api/obs/quality ───────────────────────────────────────────────────────
 // Chequeos de calidad de datos sobre las tablas operativas existentes.
 // Se ejecuta on-demand desde el panel de Observación.
 export async function GET(req: NextRequest) {
   const auth = await requireAdmin(req)
-  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
+  if (isObsAuthErr(auth)) return NextResponse.json({ error: auth.error }, { status: auth.status })
   const { client } = auth
 
   const inicio = Date.now()
@@ -35,11 +26,13 @@ export async function GET(req: NextRequest) {
   ] = await Promise.all([
     client.from('usuarios').select('id, nombre, apellido, email, dni, legajo, rol, estado, auth_user_id, foto_url'),
     client.from('objetivos').select('id, nombre, cliente, direccion, lat, lng, radio_metros, checklist_plantilla_id, frecuencia_supervision_horas, zona_id, estado'),
-    client.from('turnos').select('id, guardia_id, objetivo_id, fecha, hora_inicio, hora_fin, estado'),
-    client.from('registros_asistencia').select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, lat_entrada, lng_entrada, foto_entrada_url, tipo_registro').order('created_at', { ascending: false }).limit(5000),
+    client.from('turnos').select('id, guardia_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
+      .gte('fecha', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+      .lte('fecha', new Date().toISOString().slice(0, 10)),
+    client.from('registros_asistencia').select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, lat_entrada, lng_entrada, foto_entrada_url, tipo_registro').order('created_at', { ascending: false }).limit(LIMIT_REGISTROS),
     client.from('supervisiones').select('id, objetivo_id, supervisor_id, lat, lng, precision_gps, estado').order('created_at', { ascending: false }).limit(2000),
     client.from('novedades').select('id, guardia_id, objetivo_id, tipo, descripcion, prioridad, estado, created_at'),
-    client.from('evidencias').select('id, proceso_tipo, proceso_id, guardia_id, objetivo_id, tipo_evidencia').limit(5000),
+    client.from('evidencias').select('id, proceso_tipo, proceso_id, guardia_id, objetivo_id, tipo_evidencia').limit(LIMIT_EVIDENCIAS),
     client.from('puestos').select('id, objetivo_id, nombre, activo'),
   ])
 
@@ -116,14 +109,9 @@ export async function GET(req: NextRequest) {
     1, 5)
 
   // ── Turnos ───────────────────────────────────────────────────────────────────
-  const turnosActivos = turnos.filter((t: any) => {
-    const hoy = new Date().toISOString().slice(0, 10)
-    const hace30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    return t.fecha >= hace30 && t.fecha <= hoy
-  })
-
+  // La query ya filtra los últimos 30 días en DB — no se necesita filtro JS.
   check('Turnos sin guardia asignado (últimos 30 días)', 'completeness', 'turnos',
-    turnosActivos.filter((t: any) => !t.guardia_id),
+    turnos.filter((t: any) => !t.guardia_id),
     'Turnos programados sin guardia — aparecerán como "Descubiertos".',
     1, 5)
 
@@ -191,9 +179,19 @@ export async function GET(req: NextRequest) {
   const advertencias = checks.filter(c => c.estado === 'advertencia').length
   const ok           = checks.filter(c => c.estado === 'ok').length
 
+  // Advertencia de análisis parcial cuando alguna tabla fue truncada
+  const analisisParcial = registros.length >= LIMIT_REGISTROS || evidencias.length >= LIMIT_EVIDENCIAS
+
   return NextResponse.json({
     ejecutado_en: new Date().toISOString(),
     duracion_ms: Date.now() - inicio,
+    analisis_parcial: analisisParcial,
+    analisis_parcial_detalle: analisisParcial
+      ? [
+          registros.length >= LIMIT_REGISTROS ? `registros_asistencia limitado a ${LIMIT_REGISTROS}` : null,
+          evidencias.length >= LIMIT_EVIDENCIAS ? `evidencias limitado a ${LIMIT_EVIDENCIAS}` : null,
+        ].filter(Boolean)
+      : [],
     resumen: { total_checks: checks.length, criticos, advertencias, ok },
     checks: checks.sort((a, b) => {
       const orden = { critico: 0, advertencia: 1, ok: 2 }
