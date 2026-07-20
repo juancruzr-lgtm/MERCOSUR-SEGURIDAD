@@ -111,9 +111,14 @@ export type OsEventName =
   | 'registro_bd_existente'    // idempotencia: se reutilizó registro previo
   | 'turno_actualizado'        // UPDATE turnos.estado = 'cubierto' exitoso
   | 'turno_actualizacion_error'// UPDATE turnos falló (no bloquea el ingreso)
+  | 'ingreso_flujo_iniciado'    // GPS OK, flujo de fotos habilitado
   | 'ingreso_confirmed'        // flujo completo exitoso
   | 'ingreso_error'            // fallo en cualquier paso (err_code indica origen)
   | 'ingreso_cancelled'        // usuario canceló
+  | 'pagina_restaurada'        // app recargada durante flujo, intento recuperado de sessionStorage
+  | 'intento_ingreso_recuperado' // confirmación de que el intento fue restaurado correctamente
+  | 'camara_libro_abierta'     // guardia toca "Tomar foto" del libro
+  | 'camara_uniforme_abierta'  // guardia toca "Tomar foto" del uniforme
   | 'egreso_started'           // guardia toca "Marcar salida"
   | 'egreso_confirmed'         // egreso registrado exitosamente
   | 'egreso_error'             // fallo al registrar egreso

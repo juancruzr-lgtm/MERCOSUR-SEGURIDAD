@@ -749,11 +749,11 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
   }
 
   const cancelarIngreso = () => {
-    track('ingreso_cancelado', {
+    track('ingreso_cancelled', {
       screen: 'ingreso_flow',
       turno_id: ingresoTurno?.id,
       duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
-      value_json: { fase: ingresoFase },
+      value_json: { intento_id: ingresoIntentoId.current, fase: ingresoFase },
       result: 'cancelado',
     })
     resetIngresoFlow()
@@ -876,12 +876,14 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
   const comprimirFoto = (file: File, maxWidth = 1280, quality = 0.75): Promise<File> =>
     new Promise((resolve, reject) => {
       const TIMEOUT_MS = 8000
-      const timer = setTimeout(() => reject(new Error('compresion_timeout')), TIMEOUT_MS)
+      let urlRevoked = false
+      const url = URL.createObjectURL(file)
+      const revokeUrl = () => { if (!urlRevoked) { urlRevoked = true; URL.revokeObjectURL(url) } }
+      const timer = setTimeout(() => { revokeUrl(); reject(new Error('compresion_timeout')) }, TIMEOUT_MS)
 
       const img = new Image()
-      const url = URL.createObjectURL(file)
       img.onload = () => {
-        URL.revokeObjectURL(url)
+        revokeUrl()
         const scale = Math.min(1, maxWidth / img.width)
         const canvas = document.createElement('canvas')
         canvas.width = Math.round(img.width * scale)
@@ -895,7 +897,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           resolve(new File([blob], file.name, { type: 'image/jpeg' }))
         }, 'image/jpeg', quality)
       }
-      img.onerror = () => { clearTimeout(timer); URL.revokeObjectURL(url); reject(new Error('imagen_carga_fallo')) }
+      img.onerror = () => { clearTimeout(timer); revokeUrl(); reject(new Error('imagen_carga_fallo')) }
       img.src = url
     })
 
@@ -1457,10 +1459,10 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
                   style={{ ...S.btn, ...S.btnPresente, marginBottom: 10 }}
                   onClick={() => {
                     if (ingresoFase === 'foto_libro') {
-                      track('camara_libro_abierta', { screen: 'ingreso_flow', turno_id: ingresoTurno?.id })
+                      track('camara_libro_abierta', { screen: 'ingreso_flow', turno_id: ingresoTurno?.id, value_json: { intento_id: ingresoIntentoId.current } })
                       inputLibroRef.current?.click()
                     } else {
-                      track('camara_uniforme_abierta', { screen: 'ingreso_flow', turno_id: ingresoTurno?.id })
+                      track('camara_uniforme_abierta', { screen: 'ingreso_flow', turno_id: ingresoTurno?.id, value_json: { intento_id: ingresoIntentoId.current } })
                       inputUniformeRef.current?.click()
                     }
                   }}
