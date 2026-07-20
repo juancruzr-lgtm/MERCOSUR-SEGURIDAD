@@ -768,12 +768,6 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       return
     }
 
-    if (permisoGps === 'denied' || permisoGps === 'unsupported') {
-      setMensaje({ texto: 'Para registrar asistencia debe permitir ubicación', tipo: 'error' })
-      setTimeout(() => setMensaje(null), 4000)
-      return
-    }
-
     // Asignar intento_id antes del GPS para vincular todos los eventos al mismo intento
     const intentoId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     ingresoIntentoId.current = intentoId
@@ -798,8 +792,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
     const gpsResult = await adquirirGps()
 
     if (!gpsResult.ok) {
-      // gps_denied = permiso denegado, gps_timeout = 10s sin respuesta,
-      // gps_unavailable = hardware/señal, gps_denied también cubre 'unsupported'
+      // GPS no disponible — modo degradado: advertencia, flujo continúa sin coordenadas.
+      // Se registra gps_ingreso_estado = 'gps_no_disponible' al confirmar.
       const eventName = gpsResult.reason === 'denied' || gpsResult.reason === 'unsupported'
         ? 'gps_denied' : gpsResult.reason === 'timeout' ? 'gps_timeout' : 'gps_unavailable'
       track(eventName, {
@@ -810,65 +804,64 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         err_function: 'adquirirGps',
         value_json: { intento_id: intentoId, tipo: 'ingreso' },
       })
-      track('ingreso_error', {
+      const ctx = getDeviceContext()
+      track('ingreso_flujo_iniciado', {
         screen: 'ingreso_flow',
         turno_id: turno.id,
-        err_code: `gps_${gpsResult.reason}`,
-        err_function: 'iniciarIngreso',
-        duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
-        value_json: { intento_id: intentoId },
+        value_json: {
+          intento_id: intentoId,
+          gps_disponible: false,
+          gps_razon: gpsResult.reason,
+          browser: ctx.browser_name,
+          os: ctx.os_name,
+        },
       })
-      setPermisoGps(await consultarPermisoGps())
-      setMensaje({ texto: 'Para registrar asistencia debe permitir ubicación', tipo: 'error' })
-      setTimeout(() => setMensaje(null), 4000)
-      setIngresoFase('idle')
-      setIngresoTurno(null)
-      ingresoIntentoId.current = null
-      ingresoStartTime.current = null
-      return
-    }
+      setMensaje({ texto: 'GPS no disponible — podés continuar. El ingreso se registrará sin ubicación.', tipo: 'warn' })
+      setTimeout(() => setMensaje(null), 5000)
+    } else {
+      const { data: gps, acq_ms } = gpsResult
 
-    const { data: gps, acq_ms } = gpsResult
-
-    track('gps_success', {
-      screen: 'ingreso_flow',
-      turno_id: turno.id,
-      gps_lat: gps.latitude,
-      gps_lng: gps.longitude,
-      gps_accuracy_m: gps.accuracy,
-      gps_acq_ms: acq_ms,
-      value_json: { intento_id: intentoId, tipo: 'ingreso' },
-    })
-
-    // Precisión baja: emitir evento pero no bloquear (negocio lo permite)
-    if (gps.accuracy > 150) {
-      track('gps_imprecise', {
+      track('gps_success', {
         screen: 'ingreso_flow',
         turno_id: turno.id,
         gps_lat: gps.latitude,
         gps_lng: gps.longitude,
         gps_accuracy_m: gps.accuracy,
-        value_json: { intento_id: intentoId, tipo: 'ingreso', umbral_m: 150 },
+        gps_acq_ms: acq_ms,
+        value_json: { intento_id: intentoId, tipo: 'ingreso' },
+      })
+
+      // Precisión baja: emitir evento pero no bloquear (negocio lo permite)
+      if (gps.accuracy > 150) {
+        track('gps_imprecise', {
+          screen: 'ingreso_flow',
+          turno_id: turno.id,
+          gps_lat: gps.latitude,
+          gps_lng: gps.longitude,
+          gps_accuracy_m: gps.accuracy,
+          value_json: { intento_id: intentoId, tipo: 'ingreso', umbral_m: 150 },
+        })
+      }
+
+      setIngresoGps(gps)
+
+      const ctx = getDeviceContext()
+      track('ingreso_flujo_iniciado', {
+        screen: 'ingreso_flow',
+        turno_id: turno.id,
+        gps_lat: gps.latitude,
+        gps_lng: gps.longitude,
+        gps_accuracy_m: gps.accuracy,
+        gps_acq_ms: acq_ms,
+        value_json: {
+          intento_id: intentoId,
+          gps_disponible: true,
+          browser: ctx.browser_name,
+          os: ctx.os_name,
+          memory_gb: typeof navigator !== 'undefined' ? (navigator as any).deviceMemory ?? null : null,
+        },
       })
     }
-
-    setIngresoGps(gps)
-
-    const ctx = getDeviceContext()
-    track('ingreso_flujo_iniciado', {
-      screen: 'ingreso_flow',
-      turno_id: turno.id,
-      gps_lat: gps.latitude,
-      gps_lng: gps.longitude,
-      gps_accuracy_m: gps.accuracy,
-      gps_acq_ms: acq_ms,
-      value_json: {
-        intento_id: intentoId,
-        browser: ctx.browser_name,
-        os: ctx.os_name,
-        memory_gb: typeof navigator !== 'undefined' ? (navigator as any).deviceMemory ?? null : null,
-      },
-    })
 
     setIngresoFase('foto_libro')
   }
@@ -904,7 +897,7 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
   // Confirmar ingreso: INSERT registro → compresión → upload → UPDATE turno
   // Cada paso emite su propio evento con err_code específico para diagnóstico.
   const confirmarIngreso = async () => {
-    if (!ingresoTurno || !ingresoGps || !fotoLibro || !fotoUniforme) return
+    if (!ingresoTurno || !fotoLibro || !fotoUniforme) return
 
     setIngresoFase('confirmando')
 
@@ -945,15 +938,15 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           ...payloadBase,
           distancia_ingreso_metros: auditoria.distancia,
           gps_ingreso_estado: auditoria.estado,
-          latitud_ingreso: ingresoGps.latitude,
-          longitud_ingreso: ingresoGps.longitude,
-          precision_ingreso: ingresoGps.accuracy,
+          latitud_ingreso: ingresoGps?.latitude,
+          longitud_ingreso: ingresoGps?.longitude,
+          precision_ingreso: ingresoGps?.accuracy,
         })
         .select('id')
         .single()
 
       let usedLegacyGps = false
-      if (error && esErrorColumnaGps(error)) {
+      if (error && esErrorColumnaGps(error) && ingresoGps) {
         const retry = await supabase
           .from('registros_asistencia')
           .insert({ ...payloadBase, lat_entrada: ingresoGps.latitude, lng_entrada: ingresoGps.longitude })
@@ -986,9 +979,9 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
         screen: 'ingreso_flow',
         turno_id: ingresoTurno.id,
         registro_id: registroId,
-        gps_lat: ingresoGps.latitude,
-        gps_lng: ingresoGps.longitude,
-        gps_accuracy_m: ingresoGps.accuracy,
+        gps_lat: ingresoGps?.latitude,
+        gps_lng: ingresoGps?.longitude,
+        gps_accuracy_m: ingresoGps?.accuracy,
         gps_status: auditoria.estado,
         gps_distance_m: auditoria.distancia ?? undefined,
         value_json: { intento_id: intentoId, legacy_gps: usedLegacyGps },
@@ -1205,9 +1198,9 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       turno_id: ingresoTurno.id,
       registro_id: registroId,
       duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
-      gps_lat: ingresoGps.latitude,
-      gps_lng: ingresoGps.longitude,
-      gps_accuracy_m: ingresoGps.accuracy,
+      gps_lat: ingresoGps?.latitude,
+      gps_lng: ingresoGps?.longitude,
+      gps_accuracy_m: ingresoGps?.accuracy,
       gps_status: auditoria.estado,
       gps_distance_m: auditoria.distancia ?? undefined,
       result: 'exito',
