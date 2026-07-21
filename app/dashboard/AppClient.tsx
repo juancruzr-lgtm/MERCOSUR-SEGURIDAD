@@ -4312,7 +4312,7 @@ function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegist
           campo: 'carga_inicial',
           valor_anterior: null,
           valor_nuevo: 'carga_manual',
-          motivo: form.motivo,
+          comentario: form.motivo,
         })
       }
       await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
@@ -4494,7 +4494,7 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           campo: 'carga_inicial',
           valor_anterior: null,
           valor_nuevo: `carga_manual/reporte/${origenAuditoria}`,
-          motivo: form.comentario || `Registro desde ${origenAuditoria}`,
+          comentario: form.comentario || `Registro desde ${origenAuditoria}`,
         })
       }
 
@@ -4676,55 +4676,36 @@ function CorregirRegistroModal({ registro, onClose, turnos, guardias, objetivos,
     hora_salida_final: string | null
     comentario_final: string | null
   }, comentarioAuditoria: string | null) => {
-    if (!user?.id) {
-      setErrorEdicion('Sesión de administrador no disponible.')
-      return
-    }
-
     setErrorEdicion('')
 
-    const cambios: { campo: string; valor_anterior: string | null; valor_nuevo: string | null }[] = []
-    const campos: (keyof typeof payload)[] = ['guardia_final_id', 'objetivo_final_id', 'hora_entrada_final', 'hora_salida_final', 'comentario_final']
-    campos.forEach(campo => {
-      const anterior = (registro[campo] ?? null) as string | null
-      const nuevo = payload[campo]
-      if (anterior !== nuevo) {
-        cambios.push({ campo, valor_anterior: anterior, valor_nuevo: nuevo })
-      }
-    })
-
-    if (cambios.length === 0) {
+    // Detectar si hay cambios reales antes de llamar a la RPC.
+    // La comparación definitiva (y la auditoría) ocurre dentro de PostgreSQL;
+    // este chequeo del lado del cliente solo evita llamadas innecesarias.
+    const campos: (keyof typeof payload)[] = [
+      'guardia_final_id', 'objetivo_final_id',
+      'hora_entrada_final', 'hora_salida_final', 'comentario_final',
+    ]
+    const hayCambios = campos.some(campo =>
+      (registro[campo] ?? null) !== payload[campo]
+    )
+    if (!hayCambios) {
       onClose()
       return
     }
 
     setLoadingEdicion(true)
 
-    const { error: updateError } = await supabase
-      .from('registros_asistencia')
-      .update(payload)
-      .eq('id', registro.id)
+    // La RPC obtiene auth.uid() internamente y construye la auditoría
+    // comparando valores reales de la DB. No se envían identidad ni
+    // auditoría fabricada desde React.
+    const { error: rpcError } = await supabase.rpc('corregir_registro_asistencia', {
+      p_registro_id: registro.id,
+      p_payload:     payload,
+      p_comentario:  comentarioAuditoria,
+    })
 
-    if (updateError) {
-      setErrorEdicion(updateError.message)
-      setLoadingEdicion(false)
-      return
-    }
-
-    const { error: auditoriaError } = await supabase
-      .from('registros_asistencia_auditoria')
-      .insert(cambios.map(cambio => ({
-        registro_id: registro.id,
-        turno_id: registro.turno_id,
-        modificado_por: user.id,
-        campo: cambio.campo,
-        valor_anterior: cambio.valor_anterior,
-        valor_nuevo: cambio.valor_nuevo,
-        motivo: comentarioAuditoria,
-      })))
-
-    if (auditoriaError) {
-      setErrorEdicion(`Registro actualizado, pero no se pudo guardar la auditoría: ${auditoriaError.message}`)
+    if (rpcError) {
+      setErrorEdicion(rpcError.message)
       setLoadingEdicion(false)
       return
     }
@@ -5809,26 +5790,32 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     tardanzas: planillaEmpleado.filter((row: any) => row._tarde).length,
   }
 
-  const turnosObjetivo = objetivoId ? turnosMes.filter((t: Turno) => {
-    const registro = registroPrincipal(t)
-    const objetivoEfectivo = effectiveObjetivo(registro, t)
-    return objetivoEfectivo === objetivoId
-  }) : []
-  const planillaObjetivo = turnosObjetivo.map((turno: Turno) => {
-    const registro = registroPrincipal(turno)
+  // Planilla por objetivo: una fila por registro (no por turno).
+  // Si dos guardias cubrieron el mismo turno, aparecen dos filas.
+  // Los turnos sin registro (descubiertos / sin fichar) agregan una fila vacía.
+  const registrosObjetivo = objetivoId
+    ? registrosMes.filter((r: RegistroAsistencia) =>
+        (r.objetivo_final_id ?? turnoPorId.get(r.turno_id)?.objetivo_id) === objetivoId)
+    : []
+  const turnosConRegistroObj = new Set(registrosObjetivo.map((r: RegistroAsistencia) => r.turno_id))
+  const turnosSinRegistroObj = objetivoId
+    ? turnosMes.filter((t: Turno) => t.objetivo_id === objetivoId && !turnosConRegistroObj.has(t.id))
+    : []
+
+  const filasConRegistro = registrosObjetivo.map((registro: RegistroAsistencia) => {
+    const turno = turnoPorId.get(registro.turno_id)
+    if (!turno) return null
     const { horasReales, horasLiquidables, horaEntrada: horaEntradaMostrar, horaSalida: horaSalidaMostrar } = resolverLineaLiquidacion(turno, registro)
     const estado = estadoPlanilla(turno, registro)
-    const tieneEntrada = registro ? registroTieneEntradaConfirmada(registro) : false
-    const guardiaQueFicho = effectiveGuardia(registro ?? null)
-
+    const guardiaQueFicho = effectiveGuardia(registro)
     return {
       Fecha: formatFecha(turno.fecha),
       Día: diaSemana(turno.fecha),
       'Horario programado': formatHorarioAsignado(turno),
       'Guardia asignado': turno.guardia_id ? nombreGuardia(turno.guardia_id) : 'Sin asignar',
       'Guardia que fichó': guardiaQueFicho ? nombreGuardia(guardiaQueFicho) : '—',
-      'Entrada real': horaEntradaMostrar ? formatHoraTurno(horaEntradaMostrar) : '—',
-      'Salida real': horaSalidaMostrar ? formatHoraTurno(horaSalidaMostrar) : '—',
+      'Entrada efectiva': horaEntradaMostrar ? formatHoraTurno(horaEntradaMostrar) : '—',
+      'Salida efectiva': horaSalidaMostrar ? formatHoraTurno(horaSalidaMostrar) : '—',
       'Horas reales': mostrarHoras(horasReales),
       'Horas liquidables': mostrarHoras(horasLiquidables),
       Estado: estado,
@@ -5836,20 +5823,57 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'GPS ingreso': coordenadasGpsTexto(registro, 'ingreso'),
       'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
       'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
-      _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
+      _id: `${turno.id}-${registro.id}`,
       _turno_id: turno.id,
-      _registro: registro || null,
+      _registro: registro,
+      _fecha: turno.fecha,
+      _horaInicio: turno.hora_inicio,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
-      _cubierto: Boolean(registro?.hora_entrada_real && registro?.hora_salida_real),
-      _sinFichar: !tieneEntrada && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
+      _cubierto: Boolean(registro.hora_entrada_real && (registro.hora_salida_final ?? registro.hora_salida_real)),
+      _sinFichar: false,
+      _descubierto: false,
+      _enCurso: Boolean(registro.hora_entrada_real && !(registro.hora_salida_final ?? registro.hora_salida_real)),
+    }
+  }).filter(Boolean) as any[]
+
+  const filasVacias = turnosSinRegistroObj.map((turno: Turno) => {
+    const estado = estadoPlanilla(turno, undefined)
+    return {
+      Fecha: formatFecha(turno.fecha),
+      Día: diaSemana(turno.fecha),
+      'Horario programado': formatHorarioAsignado(turno),
+      'Guardia asignado': turno.guardia_id ? nombreGuardia(turno.guardia_id) : 'Sin asignar',
+      'Guardia que fichó': '—',
+      'Entrada efectiva': '—',
+      'Salida efectiva': '—',
+      'Horas reales': '—',
+      'Horas liquidables': '—',
+      Estado: estado,
+      'Observaciones / alertas': observacionesPlanilla(turno, undefined),
+      'GPS ingreso': '—',
+      'Distancia ingreso': '—',
+      'Estado GPS ingreso': '—',
+      _id: `${turno.id}-sin-registro`,
+      _turno_id: turno.id,
+      _registro: null,
+      _fecha: turno.fecha,
+      _horaInicio: turno.hora_inicio,
+      _horasReales: 0,
+      _horasLiquidables: 0,
+      _cubierto: false,
+      _sinFichar: Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
       _descubierto: turno.estado === 'descubierto' || !turno.guardia_id,
-      _enCurso: Boolean(registro?.hora_entrada_real && !registro?.hora_salida_real),
+      _enCurso: false,
     }
   })
 
+  const planillaObjetivo = [...filasConRegistro, ...filasVacias]
+    .sort((a: any, b: any) =>
+      a._fecha.localeCompare(b._fecha) || a._horaInicio.localeCompare(b._horaInicio))
+
   const totalesObjetivo = {
-    total: planillaObjetivo.length,
+    total: new Set(planillaObjetivo.map((row: any) => row._turno_id)).size,
     cubiertos: planillaObjetivo.filter((row: any) => row._cubierto).length,
     sinFichar: planillaObjetivo.filter((row: any) => row._sinFichar).length,
     descubiertos: planillaObjetivo.filter((row: any) => row._descubierto).length,
@@ -5911,7 +5935,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const exportarPlanillaObjetivoXLSX = async () => {
     if (!objetivoSeleccionado || planillaObjetivo.length === 0) return
 
-    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
+    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada efectiva', 'Salida efectiva', 'Horas reales', 'Horas liquidables', 'Estado', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
     const filas = [
       ['Planilla mensual por objetivo'],
       [`Mes/Año: ${mesLabel}`],
@@ -5922,8 +5946,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         row.Fecha,
         row['Guardia que fichó'] !== '—' ? row['Guardia que fichó'] : row['Guardia asignado'],
         row['Horario programado'],
-        row['Entrada real'],
-        row['Salida real'],
+        row['Entrada efectiva'],
+        row['Salida efectiva'],
         Number(row._horasReales.toFixed(2)),
         Number(row._horasLiquidables.toFixed(2)),
         row.Estado,
