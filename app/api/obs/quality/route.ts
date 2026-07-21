@@ -50,13 +50,13 @@ export async function GET(req: NextRequest) {
   const turnoPorId = new Map(turnos.map((t: any) => [t.id, t]))
 
   const nombreUsuario = (usuario?: any) => {
-    if (!usuario) return 'Usuario sin nombre'
-    return [usuario.apellido, usuario.nombre].filter(Boolean).join(', ') || usuario.legajo || 'Usuario sin nombre'
+    if (!usuario) return 'Usuario desconocido'
+    return [usuario.apellido, usuario.nombre].filter(Boolean).join(', ') || usuario.legajo || 'Usuario desconocido'
   }
 
   const nombreObjetivo = (objetivo?: any) => {
-    if (!objetivo) return 'Objetivo sin nombre'
-    return [objetivo.nombre, objetivo.cliente].filter(Boolean).join(' · ') || 'Objetivo sin nombre'
+    if (!objetivo) return 'Objetivo eliminado'
+    return [objetivo.nombre, objetivo.cliente].filter(Boolean).join(' · ') || 'Objetivo eliminado'
   }
 
   const ejemploEntidad = (entidad: string, item: any): string => {
@@ -115,12 +115,12 @@ export async function GET(req: NextRequest) {
     'Usuarios sin DNI pueden tener inconvenientes con el legajo.',
     3, 10)
 
-  check('Usuarios sin auth vinculado', 'integrity', 'usuarios',
+  check('Usuarios sin acceso configurado', 'integrity', 'usuarios',
     usuarios.filter((u: any) => u.rol !== 'admin' && !u.auth_user_id),
-    'Usuarios activos que no pueden iniciar sesión porque no tienen cuenta auth.',
+    'Usuarios activos que no pueden iniciar sesión porque no tienen acceso configurado.',
     1, 5)
 
-  check('Usuarios inactivos con auth vinculado', 'consistency', 'usuarios',
+  check('Usuarios inactivos con acceso activo', 'consistency', 'usuarios',
     usuarios.filter((u: any) => u.estado === 'inactivo' && u.auth_user_id),
     'Usuarios dados de baja que aún conservan acceso activo a la aplicación.',
     1, 3)
@@ -212,9 +212,9 @@ export async function GET(req: NextRequest) {
     .filter((r: any) => r.hora_entrada_real && r.tipo_registro === 'fichaje_gps')
     .filter((r: any) => !evidenciasXProceso[r.id]?.includes('foto_entrada'))
     .slice(0, 100)
-  check('Ingresos GPS sin evidencia en tabla evidencias', 'integrity', 'evidencias',
+  check('Fichajes sin foto guardada', 'integrity', 'evidencias',
     ingresosSinEvidencia,
-    'Fichajes GPS recientes sin registro en la tabla de evidencias unificada.',
+    'Fichajes recientes sin foto guardada para revisión.',
     5, 20)
 
   // ── Resumen final ─────────────────────────────────────────────────────────────

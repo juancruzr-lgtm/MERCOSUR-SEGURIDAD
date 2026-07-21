@@ -39,6 +39,145 @@ const badge = (color: string): React.CSSProperties => ({
   fontFamily: FONT,
 })
 
+const SIN_REGISTROS = 'No existen registros.'
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function capitalizar(texto: string): string {
+  return texto.charAt(0).toUpperCase() + texto.slice(1)
+}
+
+function humanizarCodigo(valor: unknown, fallback = 'Sin dato'): string {
+  if (valor == null) return fallback
+  const raw = String(valor).trim()
+  if (!raw || raw === 'undefined' || raw === 'null' || UUID_RE.test(raw)) return fallback
+  return capitalizar(raw.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim())
+}
+
+function nombrePantalla(valor: unknown): string {
+  const raw = String(valor ?? '').trim()
+  const mapa: Record<string, string> = {
+    dashboard: 'Inicio',
+    guardias: 'Usuarios',
+    usuarios: 'Usuarios',
+    objetivos: 'Objetivos',
+    turnos: 'Turnos',
+    asistencia: 'Asistencia',
+    supervisiones: 'Supervisiones',
+    novedades: 'Novedades',
+    reportes: 'Reportes',
+    checklists: 'Checklists',
+    observacion: 'Observatorio',
+    servicios_objetivo: 'Servicios por objetivo',
+    turnos_base: 'Turnos base',
+    zonas_operativas: 'Zonas operativas',
+    revision_operativa: 'Revisión operativa',
+    solicitudes_admin: 'Solicitudes',
+  }
+  return mapa[raw] ?? humanizarCodigo(raw, 'Pantalla no identificada')
+}
+
+function nombreCategoria(valor: unknown): string {
+  const raw = String(valor ?? '').trim()
+  const mapa: Record<string, string> = {
+    sistema: 'Sistema',
+    fichaje: 'Fichajes',
+    supervision: 'Supervisiones',
+    turno: 'Turnos',
+    nav: 'Navegación',
+    admin: 'Administración',
+    error: 'Problemas',
+  }
+  return mapa[raw] ?? humanizarCodigo(raw, 'Sin categoría')
+}
+
+function nombreDispositivo(valor: unknown): string {
+  const raw = String(valor ?? '').trim().toLowerCase()
+  const mapa: Record<string, string> = {
+    mobile: 'Móvil',
+    desktop: 'Escritorio',
+    tablet: 'Tablet',
+  }
+  return mapa[raw] ?? humanizarCodigo(raw, 'Sin dato')
+}
+
+function nombreRol(valor: unknown): string {
+  const raw = String(valor ?? '').trim().toLowerCase()
+  const mapa: Record<string, string> = {
+    admin: 'Administración',
+    supervisor: 'Supervisor',
+    guardia: 'Guardia',
+  }
+  return mapa[raw] ?? humanizarCodigo(raw, 'Sin rol')
+}
+
+function nombreEvento(valor: unknown): string {
+  const raw = String(valor ?? '').trim()
+  const mapa: Record<string, string> = {
+    gps_denied: 'Permiso de ubicación rechazado',
+    gps_error: 'Problema con ubicación',
+    login_success: 'Ingreso correcto',
+    login_error: 'Problema al ingresar',
+    asistencia_ingreso: 'Fichaje de entrada',
+    asistencia_egreso: 'Fichaje de salida',
+    supervision_start: 'Inicio de supervisión',
+    supervision_save: 'Supervisión guardada',
+  }
+  return mapa[raw] ?? humanizarCodigo(raw, 'Actividad no identificada')
+}
+
+function textoProblema(item: any): string {
+  if (item?.err_message) return humanizarCodigo(item.err_message, 'Problema sin detalle')
+  if (item?.event_name) return nombreEvento(item.event_name)
+  return 'Problema sin detalle'
+}
+
+function campoLegible(valor: unknown): string {
+  const raw = String(valor ?? '').trim()
+  const mapa: Record<string, string> = {
+    guardia_id: 'Guardia',
+    objetivo_id: 'Objetivo',
+    turno_id: 'Turno',
+    hora_entrada_real: 'Hora de entrada',
+    hora_salida_real: 'Hora de salida',
+    lat_entrada: 'Ubicación de entrada',
+    lng_entrada: 'Ubicación de entrada',
+    lat_salida: 'Ubicación de salida',
+    lng_salida: 'Ubicación de salida',
+    foto_entrada_url: 'Foto de entrada',
+    foto_salida_url: 'Foto de salida',
+    estado: 'Estado',
+    motivo: 'Motivo',
+  }
+  return mapa[raw] ?? humanizarCodigo(raw, 'Dato corregido')
+}
+
+function valorLegible(valor: unknown): string {
+  if (valor == null || valor === '') return 'Sin dato'
+  if (typeof valor === 'boolean') return valor ? 'Sí' : 'No'
+  const raw = String(valor).trim()
+  if (UUID_RE.test(raw)) return 'Referencia interna'
+  if (/^https?:\/\//i.test(raw)) return 'Archivo adjunto'
+  return humanizarCodigo(raw, 'Sin dato')
+}
+
+function areaOperativa(entidad: string): string {
+  const mapa: Record<string, string> = {
+    usuarios: 'Usuarios',
+    objetivos: 'Objetivos',
+    turnos: 'Turnos',
+    registros_asistencia: 'Fichajes',
+    evidencias: 'Fichajes',
+    supervisiones: 'Supervisiones',
+    novedades: 'Novedades',
+  }
+  return mapa[entidad] ?? 'Registros'
+}
+
+function accionOperativa(entidad: string): string {
+  return `Ver ${areaOperativa(entidad).toLowerCase()}`
+}
+
+
 function pct(n: number | null | undefined, total: number | null | undefined): string {
   if (!total || total === 0 || n == null) return '—'
   return Math.round(n / total * 100) + '%'
@@ -339,8 +478,12 @@ function Spinner() {
   return <div style={{ color: C.muted, padding: 48, textAlign: 'center', fontFamily: FONT }}>Cargando...</div>
 }
 
-function Error({ mensaje }: { mensaje: string }) {
-  return <div style={{ color: C.red, padding: 24, background: C.red + '11', borderRadius: 8, fontFamily: FONT, fontSize: 13 }}>Error: {mensaje}</div>
+function Error({ mensaje: _mensaje }: { mensaje: string }) {
+  return <div style={{ color: C.red, padding: 24, background: C.red + '11', borderRadius: 8, fontFamily: FONT, fontSize: 13 }}>No se pudo cargar la información. Intentá nuevamente.</div>
+}
+
+function EmptyState({ mensaje = SIN_REGISTROS }: { mensaje?: string }) {
+  return <div style={card({ padding: 28, textAlign: 'center', color: C.muted, fontFamily: FONT, fontSize: 13 })}>{mensaje}</div>
 }
 
 function ReportActions({ targetRef, titulo }: { targetRef: React.RefObject<HTMLDivElement>; titulo: string }) {
@@ -381,21 +524,17 @@ function ReportActions({ targetRef, titulo }: { targetRef: React.RefObject<HTMLD
   const descargarExcel = async () => {
     const XLSX = await import('xlsx')
     const wb = XLSX.utils.book_new()
-    const tablas = tablasVisibles(targetRef.current)
+    const texto = textoVisible(targetRef.current)
+    const rows = texto.split('\n').filter(Boolean).map(linea => [linea])
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows.length ? rows : [[SIN_REGISTROS]]), 'Vista actual')
 
-    if (tablas.length === 0) {
-      const rows = textoVisible(targetRef.current).split('\n').filter(Boolean).map(linea => [linea])
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Informe')
-    } else {
-      tablas.forEach((rows, index) => {
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), `Tabla ${index + 1}`.slice(0, 31))
-      })
-    }
+    tablasVisibles(targetRef.current).forEach((rowsTabla, index) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rowsTabla), `Tabla ${index + 1}`.slice(0, 31))
+    })
 
     XLSX.writeFile(wb, `${slugArchivo(titulo)}.xlsx`)
     notify('Excel generado.')
   }
-
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <button type="button" onClick={descargarPdf} style={{ ...buttonStyle, background: C.yellow, color: '#000', borderColor: C.yellow, fontWeight: 700 }}>Descargar PDF</button>
@@ -465,11 +604,11 @@ function TabResumen() {
       <div>
         <SeccionTitulo titulo="Telemetría — hoy" />
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <KpiCard label="Eventos registrados" value={ev.total_hoy ?? 0} sub="en os_events" />
+          <KpiCard label="Acciones registradas" value={ev.total_hoy ?? 0} />
           <KpiCard label="Tasa de error" value={ev.tasa_error_pct != null ? ev.tasa_error_pct.toFixed(1) + '%' : '—'} color={ev.tasa_error_pct > 10 ? C.red : C.green} />
           <KpiCard label="GPS éxito (7d)" value={op.gps?.tasa_exito_pct != null ? op.gps.tasa_exito_pct + '%' : '—'} color={op.gps?.tasa_exito_pct < 80 ? C.red : op.gps?.tasa_exito_pct < 90 ? C.orange : C.green} sub={`${op.gps?.exitosos_7d ?? 0} / ${op.gps?.solicitados_7d ?? 0} solicitudes`} />
-          <KpiCard label="Ingreso éxito (7d)" value={op.ingresos?.tasa_exito_pct != null ? op.ingresos.tasa_exito_pct + '%' : '—'} color={op.ingresos?.tasa_exito_pct < 90 ? C.red : C.green} sub={`P50: ${ms(op.ingresos?.p50_ms)} · P95: ${ms(op.ingresos?.p95_ms)}`} />
-          <KpiCard label="Egreso éxito (7d)" value={op.egresos?.tasa_exito_pct != null ? op.egresos.tasa_exito_pct + '%' : '—'} color={op.egresos?.tasa_exito_pct != null && op.egresos.tasa_exito_pct < 90 ? C.red : C.green} sub={`P50: ${ms(op.egresos?.p50_ms)} · ${op.egresos?.anulados_7d ?? 0} anulados`} />
+          <KpiCard label="Ingreso éxito (7d)" value={op.ingresos?.tasa_exito_pct != null ? op.ingresos.tasa_exito_pct + '%' : '—'} color={op.ingresos?.tasa_exito_pct < 90 ? C.red : C.green} sub={`Habitual: ${ms(op.ingresos?.p50_ms)} · Alto: ${ms(op.ingresos?.p95_ms)}`} />
+          <KpiCard label="Egreso éxito (7d)" value={op.egresos?.tasa_exito_pct != null ? op.egresos.tasa_exito_pct + '%' : '—'} color={op.egresos?.tasa_exito_pct != null && op.egresos.tasa_exito_pct < 90 ? C.red : C.green} sub={`Habitual: ${ms(op.egresos?.p50_ms)} · ${op.egresos?.anulados_7d ?? 0} anulados`} />
           <KpiCard label="Supervisiones (7d)" value={op.supervisiones?.exitosas_7d ?? 0} sub={`${op.supervisiones?.abandonadas_7d ?? 0} abandonadas`} color={(op.supervisiones?.abandonadas_7d ?? 0) > 2 ? C.orange : C.green} />
         </div>
       </div>
@@ -494,7 +633,7 @@ function TabResumen() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {['Hora', 'Evento', 'Código', 'Mensaje', 'Pantalla', 'Dispositivo', 'Versión'].map(h => (
+                  {['Hora', 'Actividad', 'Problema', 'Pantalla', 'Dispositivo', 'Versión'].map(h => (
                     <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT }}>{h}</th>
                   ))}
                 </tr>
@@ -503,11 +642,10 @@ function TabResumen() {
                 {data.errores_recientes!.map((e: any, i: number) => (
                   <tr key={e.id ?? i} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff05' }}>
                     <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(e.client_ts)}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.text, fontFamily: FONT }}>{e.event_name}</td>
-                    <td style={{ padding: '8px 14px' }}><span style={badge(C.red)}>{e.err_code ?? '—'}</span></td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.err_message ?? '—'}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{e.screen ?? '—'}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{e.device_type ?? '—'}</td>
+                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.text, fontFamily: FONT }}>{nombreEvento(e.event_name)}</td>
+                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{textoProblema(e)}</td>
+                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{nombrePantalla(e.screen)}</td>
+                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{nombreDispositivo(e.device_type)}</td>
                     <td style={{ padding: '8px 14px' }}>{e.app_version ? <span style={badge(C.blue)}>{e.app_version}</span> : '—'}</td>
                   </tr>
                 ))}
@@ -529,7 +667,7 @@ function TabResumen() {
                   <div key={screen} style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 12 }}>
                     <div style={{ fontSize: 11, color: C.muted, width: 20, fontFamily: FONT }}>{i + 1}</div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 12, fontFamily: FONT, color: C.text, marginBottom: 3 }}>{screen}</div>
+                      <div style={{ fontSize: 12, fontFamily: FONT, color: C.text, marginBottom: 3 }}>{nombrePantalla(screen)}</div>
                       <div style={{ height: 4, borderRadius: 2, background: C.border, overflow: 'hidden' }}>
                         <div style={{ width: pct(cnt, max), height: '100%', background: C.yellow, borderRadius: 2 }} />
                       </div>
@@ -562,12 +700,12 @@ function TabResumen() {
       {/* Correcciones de datos */}
       {(data.auditorias_recientes?.length ?? 0) > 0 && (
         <div>
-          <SeccionTitulo titulo="Correcciones de datos recientes" sub="registros_asistencia_auditoria" />
+          <SeccionTitulo titulo="Correcciones de datos recientes" />
           <div style={{ ...card(), padding: 0, overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {['Fecha', 'Campo', 'Valor anterior', 'Valor nuevo', 'Motivo'].map(h => (
+                  {['Fecha', 'Dato corregido', 'Valor anterior', 'Valor nuevo', 'Motivo'].map(h => (
                     <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT }}>{h}</th>
                   ))}
                 </tr>
@@ -576,9 +714,9 @@ function TabResumen() {
                 {data.auditorias_recientes!.map((a: any, i: number) => (
                   <tr key={a.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff05' }}>
                     <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(a.created_at)}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.yellow, fontFamily: FONT }}>{a.campo}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{a.valor_anterior ?? '—'}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.text, fontFamily: FONT }}>{a.valor_nuevo ?? '—'}</td>
+                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.yellow, fontFamily: FONT }}>{campoLegible(a.campo)}</td>
+                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{valorLegible(a.valor_anterior)}</td>
+                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.text, fontFamily: FONT }}>{valorLegible(a.valor_nuevo)}</td>
                     <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT }}>{a.motivo}</td>
                   </tr>
                 ))}
@@ -628,10 +766,10 @@ function TabTelemetria() {
 
   const inputStyle: React.CSSProperties = { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '6px 10px', color: C.text, fontFamily: FONT, fontSize: 12, width: '100%' }
   const labelStyle: React.CSSProperties = { fontSize: 11, color: C.muted, fontFamily: FONT, marginBottom: 4, display: 'block' }
+  const eventos = data?.events ?? []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Filtros */}
       <div style={card()}>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ flex: 1, minWidth: 140 }}>
@@ -647,14 +785,14 @@ function TabTelemetria() {
             <div style={{ ...inputStyle, color: C.sub }}>Todos</div>
           </div>
           <div style={{ flex: 1, minWidth: 140 }}>
-            <label style={labelStyle}>Nombre de evento</label>
-            <input type="text" style={inputStyle} placeholder="ej: gps_denied" value={filtros.event_name} onChange={e => setCampo('event_name', e.target.value)} />
+            <label style={labelStyle}>Actividad</label>
+            <input type="text" style={inputStyle} placeholder="Todas" value={filtros.event_name} onChange={e => setCampo('event_name', e.target.value)} />
           </div>
           <div style={{ flex: 1, minWidth: 120 }}>
-            <label style={labelStyle}>Categoría</label>
+            <label style={labelStyle}>Área</label>
             <select style={inputStyle} value={filtros.category} onChange={e => setCampo('category', e.target.value)}>
               <option value="">Todas</option>
-              {['sistema','fichaje','supervision','turno','nav','admin','error'].map(c => <option key={c} value={c}>{c}</option>)}
+              {['sistema','fichaje','supervision','turno','nav','admin','error'].map(c => <option key={c} value={c}>{nombreCategoria(c)}</option>)}
             </select>
           </div>
           <div style={{ flex: 1, minWidth: 120 }}>
@@ -665,15 +803,15 @@ function TabTelemetria() {
             <label style={labelStyle}>Estado</label>
             <select style={inputStyle} value={filtros.status} onChange={e => setCampo('status', e.target.value)}>
               <option value="">Todos</option>
-              <option value="errores">Solo errores</option>
+              <option value="errores">Solo problemas</option>
             </select>
           </div>
           <div style={{ flex: 1, minWidth: 100 }}>
             <label style={labelStyle}>Dispositivo</label>
             <select style={inputStyle} value={filtros.device_type} onChange={e => setCampo('device_type', e.target.value)}>
               <option value="">Todos</option>
-              <option value="mobile">Mobile</option>
-              <option value="desktop">Desktop</option>
+              <option value="mobile">Móvil</option>
+              <option value="desktop">Escritorio</option>
             </select>
           </div>
           <button onClick={limpiarFiltros} style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 18px', fontWeight: 700, fontFamily: FONT, fontSize: 13, cursor: 'pointer' }}>Restablecer</button>
@@ -683,50 +821,54 @@ function TabTelemetria() {
         </div>
       </div>
 
-      {/* Tabla de eventos */}
       {loading && <Spinner />}
       {error && <Error mensaje={error} />}
       {!loading && !error && data && (
         <>
-          <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{data.events?.length ?? 0} eventos mostrados</div>
-          <div style={{ ...card(), padding: 0, overflow: 'hidden', overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
-              <thead>
-                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {['Fecha (cliente)', 'Evento', 'Cat.', 'Pantalla', 'Duración', 'Error', 'GPS', 'Red', 'Versión', 'Dispositivo'].map(h => (
-                    <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT, whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(data.events ?? []).map((e: any, i: number) => (
-                  <tr key={e.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff04' }}>
-                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(e.client_ts)}</td>
-                    <td style={{ padding: '7px 12px', fontSize: 12, color: e.err_code ? C.red : C.text, fontFamily: FONT, whiteSpace: 'nowrap' }}>{e.event_name}</td>
-                    <td style={{ padding: '7px 12px' }}><span style={badge(e.event_category === 'error' ? C.red : C.blue)}>{e.event_category}</span></td>
-                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{e.screen ?? '—'}</td>
-                    <td style={{ padding: '7px 12px', fontSize: 12, color: C.sub, fontFamily: FONT }}>{ms(e.duration_ms)}</td>
-                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.red, fontFamily: FONT, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.err_message ?? ''}>{e.err_code ?? ''}{e.err_message ? ` — ${e.err_message}` : ''}</td>
-                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT, whiteSpace: 'nowrap' }}>{e.gps_status ?? (e.gps_lat ? `${Number(e.gps_lat).toFixed(4)},${Number(e.gps_lng).toFixed(4)}` : '—')}</td>
-                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{e.network_type ?? '—'}</td>
-                    <td style={{ padding: '7px 12px' }}>{e.app_version ? <span style={badge(C.blue)}>{e.app_version}</span> : '—'}</td>
-                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{e.device_type ?? '—'}{e.os_name ? ` / ${e.os_name}` : ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-            <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={{ padding: '6px 16px', background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: FONT, fontSize: 12, cursor: page === 0 ? 'not-allowed' : 'pointer', opacity: page === 0 ? 0.4 : 1 }}>← Anterior</button>
-            <span style={{ padding: '6px 12px', fontSize: 12, color: C.muted, fontFamily: FONT }}>Página {page + 1}</span>
-            <button onClick={() => setPage(p => p + 1)} disabled={(data.events?.length ?? 0) < 100} style={{ padding: '6px 16px', background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: FONT, fontSize: 12, cursor: (data.events?.length ?? 0) < 100 ? 'not-allowed' : 'pointer', opacity: (data.events?.length ?? 0) < 100 ? 0.4 : 1 }}>Siguiente →</button>
-          </div>
+          <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{eventos.length} registros mostrados</div>
+          {eventos.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <>
+              <div style={{ ...card(), padding: 0, overflow: 'hidden', overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      {['Fecha', 'Actividad', 'Área', 'Pantalla', 'Duración', 'Problema', 'Ubicación', 'Conexión', 'Versión', 'Dispositivo'].map(h => (
+                        <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT, whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {eventos.map((e: any, i: number) => (
+                      <tr key={e.id ?? i} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff04' }}>
+                        <td style={{ padding: '7px 12px', fontSize: 11, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(e.client_ts)}</td>
+                        <td style={{ padding: '7px 12px', fontSize: 12, color: e.err_code ? C.red : C.text, fontFamily: FONT, whiteSpace: 'nowrap' }}>{nombreEvento(e.event_name)}</td>
+                        <td style={{ padding: '7px 12px' }}><span style={badge(e.event_category === 'error' ? C.red : C.blue)}>{nombreCategoria(e.event_category)}</span></td>
+                        <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{nombrePantalla(e.screen)}</td>
+                        <td style={{ padding: '7px 12px', fontSize: 12, color: C.sub, fontFamily: FONT }}>{ms(e.duration_ms)}</td>
+                        <td style={{ padding: '7px 12px', fontSize: 11, color: e.err_code || e.err_message ? C.red : C.green, fontFamily: FONT, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.err_code || e.err_message ? textoProblema(e) : 'Sin problemas'}</td>
+                        <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT, whiteSpace: 'nowrap' }}>{e.gps_status || e.gps_lat ? 'Disponible' : 'No informado'}</td>
+                        <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{humanizarCodigo(e.network_type, 'No informado')}</td>
+                        <td style={{ padding: '7px 12px' }}>{e.app_version ? <span style={badge(C.blue)}>{e.app_version}</span> : '—'}</td>
+                        <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{nombreDispositivo(e.device_type)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={{ padding: '6px 16px', background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: FONT, fontSize: 12, cursor: page === 0 ? 'not-allowed' : 'pointer', opacity: page === 0 ? 0.4 : 1 }}>← Anterior</button>
+                <span style={{ padding: '6px 12px', fontSize: 12, color: C.muted, fontFamily: FONT }}>Página {page + 1}</span>
+                <button onClick={() => setPage(p => p + 1)} disabled={eventos.length < 100} style={{ padding: '6px 16px', background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: FONT, fontSize: 12, cursor: eventos.length < 100 ? 'not-allowed' : 'pointer', opacity: eventos.length < 100 ? 0.4 : 1 }}>Siguiente →</button>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
   )
 }
-
 // ── Tab: USO DEL SISTEMA ──────────────────────────────────────────────────────
 
 function TabUso() {
@@ -745,13 +887,15 @@ function TabUso() {
 
   if (loading) return <Spinner />
   if (error)   return <Error mensaje={error} />
-  if (!data)   return null
+  if (!data)   return <EmptyState />
 
   const res = data.resumen ?? {}
+  const pantallas = data.pantallas_mas_usadas ?? []
+  const eventos = data.eventos_mas_frecuentes ?? []
+  const actividadUsuarios = data.actividad_por_usuario ?? []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* Selector de período */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <span style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>Período:</span>
         {[7, 14, 30, 60, 90].map(d => (
@@ -759,9 +903,8 @@ function TabUso() {
         ))}
       </div>
 
-      {/* Resumen del período */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <KpiCard label="Eventos analizados" value={(res.total_eventos_analizados ?? 0).toLocaleString()} />
+        <KpiCard label="Acciones analizadas" value={(res.total_eventos_analizados ?? 0).toLocaleString()} />
         <KpiCard label="Usuarios activos" value={res.usuarios_activos_periodo ?? 0} />
         <KpiCard label="Supervisiones" value={res.supervisiones_realizadas ?? 0} color={C.green} />
         <KpiCard label="Intervenciones" value={res.intervenciones_realizadas ?? 0} color={C.orange} />
@@ -769,18 +912,17 @@ function TabUso() {
         <KpiCard label="Posibles abandonos" value={res.posibles_abandonos_ingreso ?? 0} color={res.posibles_abandonos_ingreso > 5 ? C.red : C.green} sub="ingresos sin confirmar" />
       </div>
 
-      {/* Dos columnas: pantallas + eventos más frecuentes */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260 }}>
           <SeccionTitulo titulo="Pantallas más utilizadas" />
-          <div style={card({ padding: '12px 0' })}>
-            {(data.pantallas_mas_usadas ?? []).slice(0, 12).map(([screen, cnt]: [string, number], i: number) => {
-              const max = (data.pantallas_mas_usadas?.[0]?.[1] ?? 1) as number
+          <div style={card({ padding: pantallas.length ? '12px 0' : 20 })}>
+            {pantallas.length === 0 ? <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{SIN_REGISTROS}</div> : pantallas.slice(0, 12).map(([screen, cnt]: [string, number], i: number) => {
+              const max = (pantallas[0]?.[1] ?? 1) as number
               return (
                 <div key={screen} style={{ padding: '6px 18px', display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ fontSize: 11, color: C.muted, width: 16, fontFamily: FONT }}>{i + 1}</div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 12, fontFamily: FONT, color: C.text, marginBottom: 3 }}>{screen}</div>
+                    <div style={{ fontSize: 12, fontFamily: FONT, color: C.text, marginBottom: 3 }}>{nombrePantalla(screen)}</div>
                     <div style={{ height: 3, borderRadius: 2, background: C.border }}>
                       <div style={{ width: pct(cnt, max), height: '100%', background: C.yellow, borderRadius: 2 }} />
                     </div>
@@ -792,15 +934,15 @@ function TabUso() {
           </div>
         </div>
         <div style={{ flex: 1, minWidth: 260 }}>
-          <SeccionTitulo titulo="Eventos más frecuentes" />
-          <div style={card({ padding: '12px 0' })}>
-            {(data.eventos_mas_frecuentes ?? []).slice(0, 15).map(([ev, cnt]: [string, number], i: number) => {
-              const max = (data.eventos_mas_frecuentes?.[0]?.[1] ?? 1) as number
+          <SeccionTitulo titulo="Actividades más frecuentes" />
+          <div style={card({ padding: eventos.length ? '12px 0' : 20 })}>
+            {eventos.length === 0 ? <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{SIN_REGISTROS}</div> : eventos.slice(0, 15).map(([ev, cnt]: [string, number], i: number) => {
+              const max = (eventos[0]?.[1] ?? 1) as number
               return (
                 <div key={ev} style={{ padding: '5px 18px', display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ fontSize: 11, color: C.muted, width: 16, fontFamily: FONT }}>{i + 1}</div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, fontFamily: FONT, color: C.sub, marginBottom: 3 }}>{ev}</div>
+                    <div style={{ fontSize: 11, fontFamily: FONT, color: C.sub, marginBottom: 3 }}>{nombreEvento(ev)}</div>
                     <div style={{ height: 3, borderRadius: 2, background: C.border }}>
                       <div style={{ width: pct(cnt, max), height: '100%', background: C.blue + 'aa', borderRadius: 2 }} />
                     </div>
@@ -813,40 +955,40 @@ function TabUso() {
         </div>
       </div>
 
-      {/* Actividad por usuario */}
       <div>
-        <SeccionTitulo titulo="Actividad por usuario" sub="Ordenado por cantidad de eventos" />
-        <div style={{ ...card(), padding: 0, overflow: 'hidden', overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {['Usuario', 'Rol', 'Eventos', 'Errores', 'Tasa error', 'Pantallas distintas'].map(h => (
-                  <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(data.actividad_por_usuario ?? []).map((u: any, i: number) => (
-                <tr key={u.user_id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff04' }}>
-                  <td style={{ padding: '8px 14px', fontSize: 13, color: C.text, fontFamily: FONT }}>{u.usuario ? `${u.usuario.apellido}, ${u.usuario.nombre}` : 'Usuario sin nombre'}</td>
-                  <td style={{ padding: '8px 14px' }}><span style={badge(C.blue)}>{u.rol}</span></td>
-                  <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 700, color: C.text, fontFamily: FONT }}>{u.total_eventos}</td>
-                  <td style={{ padding: '8px 14px', fontSize: 13, color: u.errores > 0 ? C.red : C.green, fontFamily: FONT }}>{u.errores}</td>
-                  <td style={{ padding: '8px 14px' }}><span style={badge(u.tasa_error_pct > 10 ? C.red : u.tasa_error_pct > 5 ? C.orange : C.green)}>{u.tasa_error_pct}%</span></td>
-                  <td style={{ padding: '8px 14px', fontSize: 13, color: C.sub, fontFamily: FONT }}>{u.pantallas_distintas}</td>
+        <SeccionTitulo titulo="Actividad por usuario" sub="Ordenado por cantidad de acciones" />
+        {actividadUsuarios.length === 0 ? <EmptyState /> : (
+          <div style={{ ...card(), padding: 0, overflow: 'hidden', overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  {['Usuario', 'Rol', 'Acciones', 'Problemas', 'Tasa de problema', 'Pantallas usadas'].map(h => (
+                    <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT }}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {actividadUsuarios.map((u: any, i: number) => (
+                  <tr key={u.user_id ?? i} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff04' }}>
+                    <td style={{ padding: '8px 14px', fontSize: 13, color: C.text, fontFamily: FONT }}>{u.usuario ? `${u.usuario.apellido}, ${u.usuario.nombre}` : 'Usuario desconocido'}</td>
+                    <td style={{ padding: '8px 14px' }}><span style={badge(C.blue)}>{nombreRol(u.rol)}</span></td>
+                    <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 700, color: C.text, fontFamily: FONT }}>{u.total_eventos}</td>
+                    <td style={{ padding: '8px 14px', fontSize: 13, color: u.errores > 0 ? C.red : C.green, fontFamily: FONT }}>{u.errores}</td>
+                    <td style={{ padding: '8px 14px' }}><span style={badge(u.tasa_error_pct > 10 ? C.red : u.tasa_error_pct > 5 ? C.orange : C.green)}>{u.tasa_error_pct}%</span></td>
+                    <td style={{ padding: '8px 14px', fontSize: 13, color: C.sub, fontFamily: FONT }}>{u.pantallas_distintas}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Rankings de usuarios */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         {[
           { titulo: 'Supervisores más activos', data: data.supervisores_mas_activos, key: 'supervisiones', label: 'supervisiones' },
-          { titulo: 'Guardias con más errores GPS', data: data.guardias_mas_errores_gps, key: 'errores_gps', label: 'errores GPS' },
-          { titulo: 'Supervisores — más intervenciones', data: data.supervisores_mas_intervenciones, key: 'intervenciones', label: 'intervenciones' },
+          { titulo: 'Guardias con más problemas de ubicación', data: data.guardias_mas_errores_gps, key: 'errores_gps', label: 'problemas' },
+          { titulo: 'Supervisores con más intervenciones', data: data.supervisores_mas_intervenciones, key: 'intervenciones', label: 'intervenciones' },
         ].map(({ titulo, data: d, key, label }) => (
           <div key={titulo} style={{ flex: 1, minWidth: 220 }}>
             <SeccionTitulo titulo={titulo} />
@@ -855,18 +997,17 @@ function TabUso() {
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <div style={{ fontSize: 11, color: C.muted, width: 16 }}>{i + 1}</div>
                   <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>
-                    {item.usuario ? `${item.usuario.apellido ?? ''}, ${item.usuario.nombre ?? ''}` : 'Usuario sin nombre'}
+                    {item.usuario ? `${item.usuario.apellido ?? ''}, ${item.usuario.nombre ?? ''}` : 'Usuario desconocido'}
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: C.yellow, fontFamily: FONT }}>{item[key]} <span style={{ fontWeight: 400, color: C.muted }}>{label}</span></div>
                 </div>
               ))}
-              {(d?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>Sin datos en este período.</div>}
+              {(d?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{SIN_REGISTROS}</div>}
             </div>
           </div>
         ))}
       </div>
 
-      {/* Objetivos con más novedades */}
       {(data.objetivos_mas_novedades?.length ?? 0) > 0 && (
         <div>
           <SeccionTitulo titulo="Objetivos con más novedades" />
@@ -875,7 +1016,7 @@ function TabUso() {
               <div key={i} style={{ padding: '7px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div style={{ fontSize: 11, color: C.muted, width: 16 }}>{i + 1}</div>
                 <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>{item.objetivo?.nombre ?? 'Objetivo desconocido'}</div>
-                <div style={{ fontSize: 12, color: C.sub, fontFamily: FONT }}>{item.objetivo?.cliente}</div>
+                <div style={{ fontSize: 12, color: C.sub, fontFamily: FONT }}>{item.objetivo?.cliente ?? ''}</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: item.novedades > 5 ? C.red : C.orange, fontFamily: FONT }}>{item.novedades} novedades</div>
               </div>
             ))}
@@ -885,7 +1026,6 @@ function TabUso() {
     </div>
   )
 }
-
 // ── Tab: SESIONES ─────────────────────────────────────────────────────────────
 
 function TabSesiones() {
@@ -904,10 +1044,11 @@ function TabSesiones() {
 
   if (loading) return <Spinner />
   if (error)   return <Error mensaje={error} />
-  if (!data)   return null
+  if (!data)   return <EmptyState />
 
   const res = data.resumen ?? {}
   const bd  = data.breakdowns ?? {}
+  const sesiones = data.sesiones ?? []
 
   function Breakdown({ titulo, data: d }: { titulo: string; data: Record<string, number> }) {
     const total = Object.values(d).reduce((a, b) => a + b, 0)
@@ -915,9 +1056,9 @@ function TabSesiones() {
     return (
       <div style={{ flex: 1, minWidth: 200 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: C.sub, fontFamily: FONT, marginBottom: 10 }}>{titulo}</div>
-        {entries.map(([k, v]) => (
+        {entries.length === 0 ? <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{SIN_REGISTROS}</div> : entries.map(([k, v]) => (
           <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>{k}</div>
+            <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>{titulo === 'Por rol' ? nombreRol(k) : titulo === 'Por dispositivo' ? nombreDispositivo(k) : humanizarCodigo(k, 'Sin dato')}</div>
             <div style={{ height: 4, width: 80, borderRadius: 2, background: C.border }}>
               <div style={{ width: pct(v, total), height: '100%', background: C.blue, borderRadius: 2 }} />
             </div>
@@ -941,8 +1082,8 @@ function TabSesiones() {
         <KpiCard label="Total sesiones" value={res.total_sesiones ?? 0} />
         <KpiCard label="Sesiones activas" value={res.sesiones_activas ?? 0} color={C.green} />
         <KpiCard label="Usuarios únicos" value={res.usuarios_unicos ?? 0} />
-        <KpiCard label="Duración P50" value={res.p50_duracion_s != null ? Math.round(res.p50_duracion_s / 60) + 'min' : '—'} />
-        <KpiCard label="Duración P95" value={res.p95_duracion_s != null ? Math.round(res.p95_duracion_s / 60) + 'min' : '—'} />
+        <KpiCard label="Duración habitual" value={res.p50_duracion_s != null ? Math.round(res.p50_duracion_s / 60) + 'min' : '—'} />
+        <KpiCard label="Duración alta" value={res.p95_duracion_s != null ? Math.round(res.p95_duracion_s / 60) + 'min' : '—'} />
       </div>
 
       <div style={card()}>
@@ -950,57 +1091,58 @@ function TabSesiones() {
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           <Breakdown titulo="Por rol" data={bd.por_rol ?? {}} />
           <Breakdown titulo="Por dispositivo" data={bd.por_dispositivo ?? {}} />
-          <Breakdown titulo="Por OS" data={bd.por_os ?? {}} />
-          <Breakdown titulo="Por browser" data={bd.por_browser ?? {}} />
+          <Breakdown titulo="Por sistema" data={bd.por_os ?? {}} />
+          <Breakdown titulo="Por navegador" data={bd.por_browser ?? {}} />
           <Breakdown titulo="Por versión" data={bd.por_version ?? {}} />
         </div>
       </div>
 
       <div>
         <SeccionTitulo titulo="Sesiones recientes" />
-        <div style={{ ...card(), padding: 0, overflow: 'hidden', overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {['Inicio', 'Usuario', 'Rol', 'Dispositivo', 'OS', 'Browser', 'Versión', 'Duración', 'Estado'].map(h => (
-                  <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT, whiteSpace: 'nowrap' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(data.sesiones ?? []).map((s: any, i: number) => (
-                <tr key={s.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff04' }}>
-                  <td style={{ padding: '7px 12px', fontSize: 11, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(s.started_at)}</td>
-                  <td style={{ padding: '7px 12px', fontSize: 12, color: C.text, fontFamily: FONT }}>{s.usuario ? `${s.usuario.apellido}, ${s.usuario.nombre}` : 'Usuario sin nombre'}</td>
-                  <td style={{ padding: '7px 12px' }}><span style={badge(C.blue)}>{s.user_rol}</span></td>
-                  <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{s.device_type ?? '—'}</td>
-                  <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{s.os_name ?? '—'}</td>
-                  <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{s.browser_name ?? '—'}</td>
-                  <td style={{ padding: '7px 12px' }}>{s.app_version ? <span style={badge(C.blue)}>{s.app_version}</span> : '—'}</td>
-                  <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{s.duration_s != null ? Math.round(s.duration_s / 60) + 'min' : '—'}</td>
-                  <td style={{ padding: '7px 12px' }}><span style={badge(s.ended_at ? C.muted : C.green)}>{s.ended_at ? 'Cerrada' : 'Activa'}</span></td>
+        {sesiones.length === 0 ? <EmptyState /> : (
+          <div style={{ ...card(), padding: 0, overflow: 'hidden', overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  {['Inicio', 'Usuario', 'Rol', 'Dispositivo', 'Versión', 'Duración', 'Estado'].map(h => (
+                    <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT, whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {sesiones.map((s: any, i: number) => (
+                  <tr key={s.id ?? i} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff04' }}>
+                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(s.started_at)}</td>
+                    <td style={{ padding: '7px 12px', fontSize: 12, color: C.text, fontFamily: FONT }}>{s.usuario ? `${s.usuario.apellido}, ${s.usuario.nombre}` : 'Usuario desconocido'}</td>
+                    <td style={{ padding: '7px 12px' }}><span style={badge(C.blue)}>{nombreRol(s.user_rol)}</span></td>
+                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{nombreDispositivo(s.device_type)}</td>
+                    <td style={{ padding: '7px 12px' }}>{s.app_version ? <span style={badge(C.blue)}>{s.app_version}</span> : '—'}</td>
+                    <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{s.duration_s != null ? Math.round(s.duration_s / 60) + 'min' : '—'}</td>
+                    <td style={{ padding: '7px 12px' }}><span style={badge(s.ended_at ? C.muted : C.green)}>{s.ended_at ? 'Cerrada' : 'Activa'}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   )
 }
-
 // ── Tab: CALIDAD DE DATOS ─────────────────────────────────────────────────────
 
 function TabCalidad({ onNavigate }: { onNavigate?: ObservatorioNavigate }) {
   const [data, setData]       = useState<QualityData | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
 
-  const cargar = () => {
+  const cargar = useCallback(() => {
     setLoading(true)
     setError(null)
     fetchObs('quality').then(setData).catch(e => setError(e.message)).finally(() => setLoading(false))
-  }
+  }, [])
+
+  useEffect(() => { cargar() }, [cargar])
 
   const estadoColor: Record<string, string> = { ok: C.green, advertencia: C.orange, critico: C.red }
   const estadoIcon:  Record<string, string> = { ok: '✓', advertencia: '⚠', critico: '✗' }
@@ -1024,88 +1166,81 @@ function TabCalidad({ onNavigate }: { onNavigate?: ObservatorioNavigate }) {
     })
   }
 
+  const checks = data?.checks ?? []
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button onClick={cargar} disabled={loading} style={{ background: C.yellow, color: '#000', border: 'none', borderRadius: 6, padding: '8px 20px', fontWeight: 700, fontFamily: FONT, fontSize: 13, cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.7 : 1 }}>
-          {loading ? 'Ejecutando chequeos...' : 'Ejecutar chequeos de calidad'}
+          {loading ? 'Revisando datos...' : 'Actualizar revisión'}
         </button>
         {data?.ejecutado_en && (
           <span style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>
-            Último chequeo: {fechaCorta(data.ejecutado_en)} · {data.duracion_ms}ms
+            Actualizado: {fechaCorta(data.ejecutado_en)}
           </span>
         )}
       </div>
 
+      {loading && <Spinner />}
       {error && <Error mensaje={error} />}
 
-      {data && !loading && (
+      {data && !loading && !error && (
         <>
-          {/* Resumen */}
-          <div style={{ display: 'flex', gap: 12 }}>
-            <KpiCard label="Total checks" value={data.resumen?.total_checks ?? 0} />
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <KpiCard label="Controles realizados" value={data.resumen?.total_checks ?? 0} />
             <KpiCard label="Críticos" value={data.resumen?.criticos ?? 0} color={data.resumen?.criticos > 0 ? C.red : C.green} />
             <KpiCard label="Advertencias" value={data.resumen?.advertencias ?? 0} color={data.resumen?.advertencias > 0 ? C.orange : C.green} />
-            <KpiCard label="OK" value={data.resumen?.ok ?? 0} color={C.green} />
+            <KpiCard label="Sin problemas" value={data.resumen?.ok ?? 0} color={C.green} />
           </div>
 
-          {/* Lista de checks */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {(data.checks ?? []).map((c: any) => (
-              <div key={c.nombre} style={card({ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '14px 20px', borderLeft: `4px solid ${estadoColor[c.estado]}` })}>
-                <div style={{ fontSize: 18, color: estadoColor[c.estado], fontWeight: 900, minWidth: 20 }}>{estadoIcon[c.estado]}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: FONT }}>{c.nombre}</div>
-                  <div style={{ fontSize: 12, color: C.sub, fontFamily: FONT, marginTop: 2 }}>{c.descripcion}</div>
-                  {c.ejemplos?.length > 0 && (
-                    <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT, marginTop: 4 }}>
-                      Ejemplos: {c.ejemplos.join(' · ')}
-                    </div>
-                  )}
+          {checks.length === 0 ? <EmptyState /> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {checks.map((c: any) => (
+                <div key={c.nombre} style={card({ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '14px 20px', borderLeft: `4px solid ${estadoColor[c.estado]}` })}>
+                  <div style={{ fontSize: 18, color: estadoColor[c.estado], fontWeight: 900, minWidth: 20 }}>{estadoIcon[c.estado]}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: FONT }}>{c.nombre}</div>
+                    <div style={{ fontSize: 12, color: C.sub, fontFamily: FONT, marginTop: 2 }}>{c.descripcion}</div>
+                    {c.ejemplos?.length > 0 && (
+                      <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT, marginTop: 4 }}>
+                        Ejemplos: {c.ejemplos.join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: estadoColor[c.estado], fontFamily: FONT }}>{c.cantidad}</div>
+                    <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT }}>{areaOperativa(c.entidad)}</div>
+                    <button
+                      type="button"
+                      onClick={() => navegarCheck(c)}
+                      disabled={!onNavigate || c.cantidad === 0}
+                      style={{
+                        background: c.cantidad > 0 ? C.yellow : C.card,
+                        color: c.cantidad > 0 ? '#000' : C.muted,
+                        border: `1px solid ${c.cantidad > 0 ? C.yellow : C.border}`,
+                        borderRadius: 6,
+                        padding: '6px 12px',
+                        fontFamily: FONT,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: !onNavigate || c.cantidad === 0 ? 'not-allowed' : 'pointer',
+                        opacity: !onNavigate || c.cantidad === 0 ? 0.55 : 1,
+                      }}
+                    >
+                      {accionOperativa(c.entidad)}
+                    </button>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-                  <div style={{ fontSize: 22, fontWeight: 900, color: estadoColor[c.estado], fontFamily: FONT }}>{c.cantidad}</div>
-                  <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT }}>{c.entidad}</div>
-                  <button
-                    type="button"
-                    onClick={() => navegarCheck(c)}
-                    disabled={!onNavigate || c.cantidad === 0}
-                    style={{
-                      background: c.cantidad > 0 ? C.yellow : C.card,
-                      color: c.cantidad > 0 ? '#000' : C.muted,
-                      border: `1px solid ${c.cantidad > 0 ? C.yellow : C.border}`,
-                      borderRadius: 6,
-                      padding: '6px 12px',
-                      fontFamily: FONT,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: !onNavigate || c.cantidad === 0 ? 'not-allowed' : 'pointer',
-                      opacity: !onNavigate || c.cantidad === 0 ? 0.55 : 1,
-                    }}
-                  >
-                    Ver
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </>
       )}
 
-      {!data && !loading && !error && (
-        <div style={card({ padding: 48, textAlign: 'center' })}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>🔍</div>
-          <div style={{ fontSize: 14, color: C.sub, fontFamily: FONT, marginBottom: 8 }}>Análisis de calidad de datos</div>
-          <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>
-            Presioná el botón para ejecutar los chequeos sobre todas las tablas operativas.
-            El análisis tarda entre 2 y 10 segundos dependiendo del volumen de datos.
-          </div>
-        </div>
-      )}
+      {!data && !loading && !error && <EmptyState />}
     </div>
   )
 }
-
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function ObservacionSistema({ onNavigate }: { onNavigate?: ObservatorioNavigate }) {
@@ -1128,7 +1263,7 @@ export default function ObservacionSistema({ onNavigate }: { onNavigate?: Observ
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 900, color: C.text, fontFamily: FONT, margin: 0 }}>Observación del Sistema</h1>
           <p style={{ fontSize: 13, color: C.muted, margin: '6px 0 0', fontFamily: FONT }}>
-            Estado técnico · Uso operativo · Calidad de datos · Trazabilidad completa
+            Estado del sistema · Uso operativo · Calidad de datos · Trazabilidad
           </p>
         </div>
         <ReportActions targetRef={informeRef} titulo={`Observatorio - ${tabActiva?.label ?? 'Informe'}`} />
@@ -1162,7 +1297,8 @@ export default function ObservacionSistema({ onNavigate }: { onNavigate?: Observ
       </div>
 
       {/* Contenido */}
-      <div ref={informeRef}>
+      <style>{`@media print { body * { visibility: hidden !important; } [data-observatorio-print], [data-observatorio-print] * { visibility: visible !important; } [data-observatorio-print] { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; background: white !important; color: black !important; } }`}</style>
+      <div ref={informeRef} data-observatorio-print="true">
         {tab === 'resumen'    && <TabResumen />}
         {tab === 'telemetria' && <TabTelemetria />}
         {tab === 'uso'        && <TabUso />}
