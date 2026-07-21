@@ -1,0 +1,28 @@
+# Secretos — nunca en Git
+.env
+.env.local
+.env.*.local
+
+# Compilación
+dist/
+*.tsbuildinfo
+
+# Dependencias
+node_modules/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Carpeta de pruebas local (nunca en Git)
+test-docs/
+
+# Editores
+.vscode/
+.idea/
+*.swp
