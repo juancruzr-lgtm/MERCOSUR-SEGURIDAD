@@ -125,21 +125,60 @@ export function horasRealesRegistro(registro?: RegistroLiquidacion | null): numb
     : 0
 }
 
+// Normaliza horas autorizadas (correcciones manuales) a múltiplos de 0,5.
+// NO aplicar a la duración programada del turno ni a horas GPS crudas.
+export function normalizarHorasOficiales(horas: number): number {
+  return Math.round(horas * 2) / 2
+}
+
+// REGLA OFICIAL DE LIQUIDACIÓN DEL SISTEMA
+// ─────────────────────────────────────────
+// Las horas oficiales surgen del turno programado, no del fichaje GPS.
+// El GPS es evidencia de presencia, nunca determina automáticamente horas oficiales.
+//
+// Prioridad (mayor a menor):
+//   1. horas_liquidables guardado → valor definitivo (supervisor/admin/saneamiento/cron).
+//   2. Tiempos _final autorizados → calcular desde tiempos autorizados; normalizar a 0,5h.
+//   3. Fichaje GPS completo (entrada Y salida reales, sin corrección) → duración programada
+//      del turno. El GPS confirma presencia; la cantidad de horas la define el turno.
+//   4. Sin datos suficientes (en curso o sin fichaje) → 0.
 export function horasLiquidablesRegistro(
   turno: TurnoLiquidacion,
   registro?: RegistroLiquidacion | null,
 ): number {
+  // Path 1: valor almacenado explícito — máxima prioridad
   if (registro?.horas_liquidables != null) {
-    return Math.max(0, Number(registro.horas_liquidables) || 0)
+    return normalizarHorasOficiales(Math.max(0, Number(registro.horas_liquidables) || 0))
   }
-  const horaEntrada = effectiveEntrada(registro)
-  const horaSalida  = effectiveSalida(registro)
-  return horaEntrada && horaSalida
-    ? calcularHorasLiquidables(
-        turno.fecha, turno.hora_inicio, turno.hora_fin,
-        horaEntrada, horaSalida,
-      )
-    : 0
+
+  const horaEntradaFinal = registro?.hora_entrada_final ?? null
+  const horaSalidaFinal  = registro?.hora_salida_final  ?? null
+  const horaEntradaReal  = registro?.hora_entrada_real  ?? null
+  const horaSalidaReal   = registro?.hora_salida_real   ?? null
+
+  // Path 2: corrección/autorización explícita vía campos _final
+  // Si al menos uno está presente, se usan los tiempos efectivos autorizados.
+  if (horaEntradaFinal || horaSalidaFinal) {
+    const entrada = horaEntradaFinal ?? horaEntradaReal
+    const salida  = horaSalidaFinal  ?? horaSalidaReal
+    if (!entrada || !salida) return 0
+    return normalizarHorasOficiales(
+      calcularHorasLiquidables(turno.fecha, turno.hora_inicio, turno.hora_fin, entrada, salida),
+    )
+  }
+
+  // Path 3: fichaje GPS completo sin corrección → duración programada del turno
+  // Se pasan los tiempos del propio turno como "GPS" para obtener minutosProgramados
+  // (diferencia = 0 → rama dentro de tolerancia → devuelve minutosProgramados).
+  if (horaEntradaReal && horaSalidaReal) {
+    return calcularHorasLiquidables(
+      turno.fecha, turno.hora_inicio, turno.hora_fin,
+      turno.hora_inicio, turno.hora_fin,
+    )
+  }
+
+  // Path 4: en curso o sin datos suficientes
+  return 0
 }
 
 // ── Resolución de origen ──────────────────────────────────────────────────────

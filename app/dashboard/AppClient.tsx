@@ -5935,14 +5935,30 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     .sort((a: any, b: any) =>
       a._fecha.localeCompare(b._fecha) || a._horaInicio.localeCompare(b._horaInicio))
 
+  // Para totales de horas: deduplicar por turno antes de sumar
+  const registrosObjetivoDedup = (() => {
+    const porTurno = new Map<string, RegistroAsistencia[]>()
+    for (const r of registrosObjetivo) {
+      const arr = porTurno.get(r.turno_id) ?? []
+      arr.push(r)
+      porTurno.set(r.turno_id, arr)
+    }
+    return [...porTurno.values()]
+      .map(rs => selectRegistroPrincipal(rs))
+      .filter(Boolean) as RegistroAsistencia[]
+  })()
+
   const totalesObjetivo = {
     total: new Set(planillaObjetivo.map((row: any) => row._turno_id)).size,
     cubiertos: planillaObjetivo.filter((row: any) => row._cubierto).length,
     sinFichar: planillaObjetivo.filter((row: any) => row._sinFichar).length,
     descubiertos: planillaObjetivo.filter((row: any) => row._descubierto).length,
     enCurso: planillaObjetivo.filter((row: any) => row._enCurso).length,
-    horasReales: planillaObjetivo.reduce((sum: number, row: any) => sum + row._horasReales, 0),
-    horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => sum + row._horasLiquidables, 0),
+    horasReales: registrosObjetivoDedup.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0),
+    horasLiquidables: registrosObjetivoDedup.reduce((sum: number, r: RegistroAsistencia) => {
+      const t = turnoPorId.get(r.turno_id)
+      return t ? sum + horasLiquidablesRegistro(t, r) : sum
+    }, 0),
   }
 
   // Totales globales del mes:
@@ -6055,10 +6071,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const reporteGuardias = guardias
     .map((g: Usuario) => {
       const regs = registrosMes.filter((r: RegistroAsistencia) => effectiveGuardia(r) === g.id)
-      const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_final ?? r.hora_salida_real)
-      const dias = new Set(regs.map((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha).filter(Boolean)).size
-      const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
-      const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
+      // Dedup: un registro principal por turno para sumar horas sin duplicar
+      const porTurnoG = new Map<string, RegistroAsistencia[]>()
+      for (const r of regs) {
+        const arr = porTurnoG.get(r.turno_id) ?? []
+        arr.push(r)
+        porTurnoG.set(r.turno_id, arr)
+      }
+      const principalesG = [...porTurnoG.values()]
+        .map(rs => selectRegistroPrincipal(rs, g.id))
+        .filter(Boolean) as RegistroAsistencia[]
+      const dias = new Set(principalesG.map((r) => turnoPorId.get(r.turno_id)?.fecha).filter(Boolean)).size
+      const horasReales = principalesG.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+      const horasLiquidables = principalesG.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
         return turno ? s + horasLiquidablesRegistro(turno, r) : s
       }, 0)
@@ -6083,10 +6108,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     .map((o: Objetivo) => {
       const ts = turnosMes.filter((t: Turno) => t.objetivo_id === o.id)
       const regs = registrosMes.filter((r: RegistroAsistencia) => (r.objetivo_final_id ?? turnoPorId.get(r.turno_id)?.objetivo_id) === o.id)
-      const regsCerrados = regs.filter((r: RegistroAsistencia) => r.hora_salida_final ?? r.hora_salida_real)
-      const turnosConAsistencia = new Set(regs.map((r: RegistroAsistencia) => r.turno_id)).size
-      const horasReales = regsCerrados.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
-      const horasLiquidables = regsCerrados.reduce((s: number, r: RegistroAsistencia) => {
+      // Dedup: un registro principal por turno; incluye coberturas sin hora_salida
+      const porTurnoO = new Map<string, RegistroAsistencia[]>()
+      for (const r of regs) {
+        const arr = porTurnoO.get(r.turno_id) ?? []
+        arr.push(r)
+        porTurnoO.set(r.turno_id, arr)
+      }
+      const principalesO = [...porTurnoO.values()]
+        .map(rs => selectRegistroPrincipal(rs))
+        .filter(Boolean) as RegistroAsistencia[]
+      const turnosConAsistencia = principalesO.length
+      const horasReales = principalesO.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+      const horasLiquidables = principalesO.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
         return turno ? s + horasLiquidablesRegistro(turno, r) : s
       }, 0)
