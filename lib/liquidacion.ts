@@ -180,7 +180,7 @@ function resolverOrigen(registro?: RegistroLiquidacion | null): {
     registro?.guardia_final_id   != null ||
     registro?.objetivo_final_id  != null
   if (tieneCorreccion) {
-    return { origenRegistro: 'corregido', origenEtiqueta: 'Corregido por administración', cargadoPorEmpleado: false, cargadoPorSupervisor: false, cargadoPorAdministracion: true }
+    return { origenRegistro: 'corregido', origenEtiqueta: 'Registro corregido', cargadoPorEmpleado: false, cargadoPorSupervisor: false, cargadoPorAdministracion: false }
   }
   return { origenRegistro: 'empleado', origenEtiqueta: 'Fichado por el empleado', cargadoPorEmpleado: true, cargadoPorSupervisor: false, cargadoPorAdministracion: false }
 }
