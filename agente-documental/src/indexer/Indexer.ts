@@ -16,47 +16,24 @@ export class Indexer {
    */
   async processFile(info: FileInfo): Promise<'nuevo' | 'actualizado' | 'sin_cambios' | 'error'> {
     try {
-      const existing = await this.repo.findByRelativePath(
+      const result = await this.repo.saveIndexedDocument(
+        info,
+        crypto.randomUUID(),
         this.config.agenteId,
-        info.rutaRelativa,
+        this.config.origen,
+        this.config.empresa,
       )
 
-      if (!existing) {
-        await this.repo.upsert(this.buildNewRecord(info))
+      if (result.fueNuevo) {
         this.logger.nuevo(info.rutaRelativa)
         return 'nuevo'
       }
-
-      // Si estaba marcado como no disponible y reapareció → restaurar
-      const hashCambio = existing.hashSha256 !== info.hashSha256
-      const reapareció = !existing.disponible
-
-      if (!hashCambio && !reapareció) {
-        // Actualizar solo la fecha de última detección
-        await this.repo.upsert({
-          ...existing,
-          detectadoPorUltimaVezAt: new Date(),
-        })
-        this.logger.sinCambios(info.rutaRelativa)
-        return 'sin_cambios'
+      if (result.hashCambio) {
+        this.logger.actualizado(info.rutaRelativa)
+        return 'actualizado'
       }
-
-      const updated: DocumentRecord = {
-        ...existing,
-        hashSha256:              info.hashSha256,
-        tamanoBytes:             info.tamanoBytes,
-        fechaCreacionArchivo:    info.fechaCreacion,
-        fechaModificacionArchivo: info.fechaModificacion,
-        detectadoPorUltimaVezAt: new Date(),
-        disponible:              true,
-        estadoIndexacion:        'indexado',
-        ultimoError:             null,
-        versionActual:           hashCambio ? existing.versionActual + 1 : existing.versionActual,
-      }
-
-      await this.repo.upsert(updated)
-      this.logger.actualizado(info.rutaRelativa)
-      return 'actualizado'
+      this.logger.sinCambios(info.rutaRelativa)
+      return 'sin_cambios'
 
     } catch (err) {
       const msg = String(err)

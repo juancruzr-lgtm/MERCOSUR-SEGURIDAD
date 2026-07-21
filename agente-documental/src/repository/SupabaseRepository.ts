@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { DocumentRecord } from '../core/types'
-import { IRepository } from './IRepository'
+import { DocumentRecord, FileInfo } from '../core/types'
+import { IRepository, SaveDocumentResult } from './IRepository'
 
 const TABLE = 'repositorio_documental'
 
@@ -142,6 +142,38 @@ export class SupabaseRepository implements IRepository {
     }
 
     return paths
+  }
+
+  async saveIndexedDocument(
+    info: FileInfo,
+    documentoUid: string,
+    agenteId: string,
+    origen: string,
+    empresa: string,
+  ): Promise<SaveDocumentResult> {
+    const { data, error } = await this.client.rpc('repdoc_upsert_atomico', {
+      p_documento_uid:              documentoUid,
+      p_agente_id:                  agenteId,
+      p_ruta_relativa:              info.rutaRelativa,
+      p_hash_sha256:                info.hashSha256,
+      p_nombre_archivo:             info.nombreArchivo,
+      p_extension:                  info.extension,
+      p_mime_type:                  info.mimeType,
+      p_tamano_bytes:               info.tamanoBytes,
+      p_fecha_creacion_archivo:     info.fechaCreacion?.toISOString() ?? null,
+      p_fecha_modificacion_archivo: info.fechaModificacion.toISOString(),
+      p_origen:                     origen,
+      p_empresa:                    empresa,
+    })
+
+    if (error) throw new Error(`saveIndexedDocument: ${error.message}`)
+
+    const row = (data as Record<string, unknown>[])[0]
+    return {
+      fueNuevo:      row['out_fue_nuevo']       as boolean,
+      hashCambio:    row['out_hash_cambio']     as boolean,
+      versionActual: row['out_version_actual']  as number,
+    }
   }
 
   async healthCheck(): Promise<void> {

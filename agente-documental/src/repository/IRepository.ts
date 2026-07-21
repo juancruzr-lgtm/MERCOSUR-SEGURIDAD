@@ -1,4 +1,10 @@
-import { DocumentRecord } from '../core/types'
+import { DocumentRecord, FileInfo } from '../core/types'
+
+export interface SaveDocumentResult {
+  fueNuevo:      boolean
+  hashCambio:    boolean
+  versionActual: number
+}
 
 /**
  * Abstracción de persistencia del repositorio documental.
@@ -33,6 +39,20 @@ export interface IRepository {
    * Usado por el escaneo completo para detectar eliminados.
    */
   findAllRelativePathsByAgent(agenteId: string): Promise<string[]>
+
+  /**
+   * Indexa un documento de forma atómica mediante la función SQL repdoc_upsert_atomico.
+   * La decisión de versionar (incrementar version_actual) ocurre íntegramente en
+   * PostgreSQL comparando el hash recibido contra el valor almacenado en ese instante,
+   * nunca contra un valor pre-leído en Node. Seguro entre múltiples procesos concurrentes.
+   */
+  saveIndexedDocument(
+    info: FileInfo,
+    documentoUid: string,
+    agenteId: string,
+    origen: string,
+    empresa: string,
+  ): Promise<SaveDocumentResult>
 
   /**
    * Verifica que la tabla existe y es accesible.

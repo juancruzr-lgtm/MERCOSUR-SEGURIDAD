@@ -4,8 +4,8 @@
   "description": "Agente documental del Sistema Operativo Mercosur Seguridad",
   "private": true,
   "scripts": {
-    "scan":            "ts-node src/index.ts --mode scan",
-    "watch":           "ts-node src/index.ts --mode watch",
+    "scan": "ts-node src/index.ts --mode scan",
+    "watch": "ts-node src/index.ts --mode watch",
     "test-connection": "ts-node src/index.ts --mode test-connection"
   },
   "dependencies": {
@@ -15,6 +15,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/pg": "^8.20.0",
+    "pg": "^8.22.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   },
