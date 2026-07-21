@@ -3838,7 +3838,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     const payload = {
       ...form,
       guardia_id: form.guardia_id || null,
-      estado: form.guardia_id ? 'cubierto' : 'descubierto',
+      estado: form.guardia_id ? 'programado' : 'descubierto',
       tipo_evento: 'normal',
       estado_revision: 'aprobado',
     }
@@ -4279,44 +4279,27 @@ function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegist
     setError(null)
     setLoading(true)
     try {
-      const horas = calcHorasTrabajadas(form.hora_entrada, form.hora_salida)
-      const payload = {
-        turno_id: turno.id,
-        guardia_id: form.guardia_id,
-        hora_entrada_real: form.hora_entrada,
-        hora_salida_real: form.hora_salida,
-        horas_trabajadas: horas,
-        tipo_registro: 'carga_manual',
-        observacion: [form.motivo, form.observacion].filter(Boolean).join(' — ') || null,
-        // GPS y alertas deliberadamente ausentes: no es un fichaje real
-      }
-      const { data: registro, error: insertErr } = await supabase
+      const origenCobertura = user?.rol === 'admin' ? 'carga_admin' : 'carga_supervisor'
+      const comentario = [form.motivo, form.observacion].filter(Boolean).join(' — ') || null
+      const { data: registroId, error: rpcError } = await supabase.rpc('registrar_cobertura', {
+        p_turno_id:          turno.id,
+        p_guardia_id:        form.guardia_id,
+        p_origen:            origenCobertura,
+        p_hora_entrada:      form.hora_entrada || null,
+        p_hora_salida:       form.hora_salida  || null,
+        p_horas_liquidables: null,
+        p_comentario:        comentario,
+      })
+      if (rpcError) { setError(rpcError.message); setLoading(false); return }
+
+      // Fetch del registro completo para actualizar el estado local
+      const { data: registro } = await supabase
         .from('registros_asistencia')
-        .insert(payload)
-        .select()
+        .select('*')
+        .eq('id', registroId)
         .single()
-      if (insertErr || !registro) {
-        setError(insertErr?.message || 'Error al guardar.')
-        setLoading(false)
-        return
-      }
-      // Auditoría
-      const usuarioActual = user?.id
-        ? user
-        : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
-      if (usuarioActual?.id) {
-        await supabase.from('registros_asistencia_auditoria').insert({
-          registro_id: registro.id,
-          turno_id: turno.id,
-          modificado_por: usuarioActual.id,
-          campo: 'carga_inicial',
-          valor_anterior: null,
-          valor_nuevo: 'carga_manual',
-          comentario: form.motivo,
-        })
-      }
-      await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
-      setRegistros((prev: RegistroAsistencia[]) => [...prev, registro])
+      if (registro) setRegistros((prev: RegistroAsistencia[]) => [...prev, registro as RegistroAsistencia])
+      setTurnos((prev: Turno[]) => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } as Turno : t))
       onClose()
     } catch (e: any) {
       setError(e?.message || 'Error inesperado.')
@@ -4441,7 +4424,7 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
             guardia_id: form.guardia_id,
             hora_inicio: form.hora_inicio,
             hora_fin: form.hora_fin,
-            estado: 'cubierto',
+            estado: 'programado',
             origen: 'reporte',
           })
           .select()
@@ -4465,41 +4448,26 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
         }
       }
 
-      // 3. Crear registro de asistencia
-      const horas = calcHorasTrabajadas(form.hora_entrada, form.hora_salida)
-      const { data: registro, error: regErr } = await supabase
+      // 3. Crear registro de asistencia via RPC transaccional
+      const origenCobertura = user?.rol === 'admin' ? 'carga_admin' : 'carga_supervisor'
+      const { data: registroId, error: rpcError } = await supabase.rpc('registrar_cobertura', {
+        p_turno_id:          turnoId,
+        p_guardia_id:        form.guardia_id,
+        p_origen:            origenCobertura,
+        p_hora_entrada:      form.hora_entrada || null,
+        p_hora_salida:       form.hora_salida  || null,
+        p_horas_liquidables: null,
+        p_comentario:        form.comentario || `Registro desde ${origenAuditoria}`,
+      })
+      if (rpcError) { setError(rpcError.message); setLoading(false); return }
+
+      const { data: registro } = await supabase
         .from('registros_asistencia')
-        .insert({
-          turno_id: turnoId,
-          guardia_id: form.guardia_id,
-          hora_entrada_real: form.hora_entrada,
-          hora_salida_real: form.hora_salida,
-          horas_trabajadas: horas,
-          tipo_registro: 'carga_manual',
-          origen: 'reporte',
-          observacion: form.comentario || null,
-        })
-        .select()
+        .select('*')
+        .eq('id', registroId)
         .single()
-      if (regErr || !registro) { setError(regErr?.message || 'Error al crear registro.'); setLoading(false); return }
-
-      const usuarioActual = user?.id
-        ? user
-        : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
-      if (usuarioActual?.id) {
-        await supabase.from('registros_asistencia_auditoria').insert({
-          registro_id: registro.id,
-          turno_id: turnoId,
-          modificado_por: usuarioActual.id,
-          campo: 'carga_inicial',
-          valor_anterior: null,
-          valor_nuevo: `carga_manual/reporte/${origenAuditoria}`,
-          comentario: form.comentario || `Registro desde ${origenAuditoria}`,
-        })
-      }
-
-      await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turnoId)
-      setRegistros((prev: RegistroAsistencia[]) => [...prev, registro])
+      if (registro) setRegistros((prev: RegistroAsistencia[]) => [...prev, registro as RegistroAsistencia])
+      setTurnos((prev: Turno[]) => prev.map(t => t.id === turnoId ? { ...t, estado: 'cubierto' } as Turno : t))
       onClose()
     } catch (e: any) {
       setError(e?.message || 'Error inesperado.')
@@ -5105,14 +5073,24 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
     const turno = turnos.find((t: Turno) => t.id === form.turno_id)
     if (!turno || !form.hora_entrada_real) return
     setLoading(true)
-    const alertaE = calcAlertaEntrada(turno.hora_inicio, form.hora_entrada_real, turno.hora_fin)
-    const alertaS = form.hora_salida_real ? calcAlertaSalida(turno.hora_fin, form.hora_salida_real, turno.hora_inicio) : null
-    const horas = form.hora_salida_real ? calcHorasTrabajadas(form.hora_entrada_real, form.hora_salida_real) : 0
-    const payload = { turno_id: turno.id, guardia_id: turno.guardia_id, hora_entrada_real: form.hora_entrada_real, hora_salida_real: form.hora_salida_real || null, horas_trabajadas: horas, alerta_entrada: alertaE, alerta_salida: alertaS, observacion: form.observacion }
-    const { data } = await supabase.from('registros_asistencia').insert(payload).select().single()
-    if (data) {
-      setRegistros((prev: any[]) => [...prev, data])
-      await supabase.from('turnos').update({ estado: 'cubierto' }).eq('id', turno.id)
+    if (!turno.guardia_id) {
+      setLoading(false)
+      return
+    }
+    const origenCobertura = user?.rol === 'admin' ? 'carga_admin' : 'carga_supervisor'
+    const { data: registroId, error: rpcError } = await supabase.rpc('registrar_cobertura', {
+      p_turno_id:          turno.id,
+      p_guardia_id:        turno.guardia_id,
+      p_origen:            origenCobertura,
+      p_hora_entrada:      form.hora_entrada_real || null,
+      p_hora_salida:       form.hora_salida_real  || null,
+      p_horas_liquidables: null,
+      p_comentario:        form.observacion || null,
+    })
+    if (!rpcError && registroId) {
+      const { data } = await supabase.from('registros_asistencia').select('*').eq('id', registroId).single()
+      if (data) setRegistros((prev: any[]) => [...prev, data])
+      setTurnos((prev: Turno[]) => prev.map(t => t.id === turno.id ? { ...t, estado: 'cubierto' } as Turno : t))
     }
     setModal(false); setLoading(false)
   }
@@ -7826,10 +7804,20 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
           throw new Error('No se puede confirmar cubierto sin un guardia asignado. Usá "Reasignar" primero.')
         }
         estadoNuevo = 'cubierto'
-        const payload = { estado: 'cubierto' }
-        const { error: updateError } = await supabase.from('turnos').update(payload).eq('id', turno.id)
-        if (updateError) throw updateError
-        setTurnos((prev: Turno[]) => prev.map(t => t.id === turno.id ? { ...t, ...payload } as Turno : t))
+        const origenCobertura = user?.rol === 'admin' ? 'confirmacion_admin' : 'confirmacion_supervisor'
+        const { error: rpcError } = await supabase.rpc('registrar_cobertura', {
+          p_turno_id:          turno.id,
+          p_guardia_id:        turno.guardia_id,
+          p_origen:            origenCobertura,
+          p_hora_entrada:      null,
+          p_hora_salida:       null,
+          p_horas_liquidables: null,
+          p_comentario:        comentario || null,
+        })
+        if (rpcError) throw rpcError
+        setTurnos((prev: Turno[]) => prev.map(t =>
+          t.id === turno.id ? { ...t, estado: 'cubierto' } as Turno : t
+        ))
       }
 
       await registrarIntervencion(alerta, {

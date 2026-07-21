@@ -102,12 +102,14 @@ export interface RegistroAsistencia {
   uniforme_estado?: 'ok' | 'advertencia' | 'alerta'
   uniforme_puntaje?: number
   observacion?: string
-  tipo_registro?: 'fichaje_gps' | 'presente_manual' | 'ausencia' | 'reemplazo'
+  tipo_registro?: 'fichaje_gps' | 'presente_manual' | 'ausencia' | 'reemplazo' | 'carga_manual'
   guardia_final_id?: string | null
   objetivo_final_id?: string | null
   hora_entrada_final?: string | null
   hora_salida_final?: string | null
   comentario_final?: string | null
+  horas_liquidables?: number | null
+  origen_cobertura?: string | null
   created_at: string
   // joins
   turno?: Turno

@@ -21,6 +21,7 @@ export interface RegistroLiquidacion {
   hora_entrada_final?: string | null
   hora_salida_final?: string | null
   horas_trabajadas?: number | string | null
+  horas_liquidables?: number | string | null
 }
 
 export interface TurnoLiquidacion {
@@ -98,6 +99,12 @@ export function horasLiquidablesRegistro(
   turno: TurnoLiquidacion,
   registro?: RegistroLiquidacion | null,
 ): number {
+  // Registros de saneamiento/cobertura manual tienen horas_liquidables
+  // almacenadas y no tienen hora_entrada_real ni hora_salida_real.
+  // Usar el valor almacenado cuando está disponible.
+  if (registro?.horas_liquidables != null) {
+    return Math.max(0, Number(registro.horas_liquidables) || 0)
+  }
   const horaEntrada = effectiveEntrada(registro)
   const horaSalida  = effectiveSalida(registro)
   return horaEntrada && horaSalida
