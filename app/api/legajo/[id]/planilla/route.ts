@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../../_lib/employee-auth'
 import { puedeVerLegajo } from '@/lib/legajo'
-import { effectiveGuardia, effectiveEntrada, selectRegistroPrincipal, resolverLineaLiquidacion } from '@/lib/liquidacion'
+import { effectiveGuardia, selectRegistroPrincipal, resolverLineaLiquidacion } from '@/lib/liquidacion'
 
 export const runtime = 'nodejs'
 
@@ -39,11 +39,12 @@ function diaSemana(iso: string): string {
 export interface FilaPlanilla {
   fecha: string
   dia_semana: string
-  hora_entrada: string
+  hora_entrada: string | null
   hora_salida: string | null
   horas: number
   objetivo_id: string | null
   objetivo_nombre: string | null
+  origen_etiqueta: string
 }
 
 export interface RespuestaPlanilla {
@@ -111,6 +112,7 @@ export async function GET(
       hora_entrada_real, hora_salida_real, horas_trabajadas,
       hora_entrada_final, hora_salida_final,
       objetivo_final_id, tipo_registro,
+      horas_liquidables, origen_cobertura, cierre_automatico,
       turno:turnos!inner(
         id, fecha, hora_inicio, hora_fin, objetivo_id,
         objetivo:objetivos(nombre, es_prueba)
@@ -123,21 +125,25 @@ export async function GET(
   if (errReg) return NextResponse.json({ error: 'Error al consultar planilla' }, { status: 500 })
 
   // ── Filtro en memoria ─────────────────────────────────────────────────────
-  // Solo registros donde el guardia efectivo coincide, no son ausencias,
-  // tienen entrada confirmada y no corresponden a objetivos de prueba.
-  const conEntrada = (registros ?? []).filter((r: any) => {
+  // Incluye cualquier cobertura oficial válida:
+  //   - guardia efectivo coincide con el empleado
+  //   - no es ausencia
+  //   - no es objetivo de prueba
+  //   - tiene horas_liquidables > 0 O tiene hora de entrada efectiva
+  //     (incluye coberturas manuales y saneamiento sin GPS)
+  const conCobertura = (registros ?? []).filter((r: any) => {
     if (effectiveGuardia(r) !== empleadoId) return false
     if (r.tipo_registro === 'ausencia') return false
-    if (!effectiveEntrada(r)) return false
     const t = r.turno
     if (!t) return false
     if ((t.objetivo as any)?.es_prueba) return false
-    return true
+    const linea = resolverLineaLiquidacion(t, r)
+    return linea.horasTrabajadasOficiales > 0 || linea.horaEntrada != null
   })
 
   // ── Resolver nombres para objetivo_final_id distintos al del turno ────────
   const objetivoFinalIds = [...new Set(
-    conEntrada
+    conCobertura
       .filter((r: any) => r.objetivo_final_id)
       .map((r: any) => r.objetivo_final_id as string),
   )]
@@ -155,7 +161,7 @@ export async function GET(
 
   // ── Deduplicar: un registro por turno (máximo score) ─────────────────────
   const porTurnoAgrupar = new Map<string, any[]>()
-  for (const r of conEntrada) {
+  for (const r of conCobertura) {
     const arr = porTurnoAgrupar.get(r.turno_id) ?? []
     arr.push(r)
     porTurnoAgrupar.set(r.turno_id, arr)
@@ -181,11 +187,12 @@ export async function GET(
     filas.push({
       fecha:           t.fecha,
       dia_semana:      diaSemana(t.fecha),
-      hora_entrada:    (linea.horaEntrada ?? '').slice(0, 5),
-      hora_salida:     linea.horaSalida ? linea.horaSalida.slice(0, 5) : null,
+      hora_entrada:    linea.horaEntrada ? linea.horaEntrada.slice(0, 5) : null,
+      hora_salida:     linea.horaSalida  ? linea.horaSalida.slice(0, 5)  : null,
       horas:           linea.horasLiquidables,
       objetivo_id:     linea.objetivoEfectivoId,
       objetivo_nombre: objetivoNombre,
+      origen_etiqueta: linea.origenEtiqueta,
     })
   }
 

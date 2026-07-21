@@ -77,10 +77,10 @@ function mkIcon(color: string, label: string, selected: boolean): L.DivIcon {
     : 'box-shadow:0 4px 12px rgba(0,0,0,.4);'
   return L.divIcon({
     className: '',
-    html: `<span style="width:32px;height:32px;border-radius:999px;border:2px solid rgba(255,255,255,.95);background:${color};display:flex;align-items:center;justify-content:center;font-weight:900;font-size:11px;color:#111827;${ring}">${label}</span>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-    popupAnchor: [0, -20],
+    html: `<span style="width:30px;height:30px;border-radius:999px;border:2px solid rgba(255,255,255,.95);background:${color};display:flex;align-items:center;justify-content:center;font-weight:900;font-size:9px;color:#111827;${ring}">${label}</span>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -18],
   })
 }
 
@@ -90,20 +90,24 @@ function egresoIcon(color: string, label: string, selected: boolean): L.DivIcon 
     : 'box-shadow:0 4px 12px rgba(0,0,0,.4);'
   return L.divIcon({
     className: '',
-    html: `<span style="width:26px;height:26px;border-radius:999px;border:2px solid rgba(255,255,255,.9);background:${color};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:9px;color:#e2e8f0;${ring}">${label}</span>`,
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
-    popupAnchor: [0, -16],
-  })
-}
-
-function objetivoIcon(): L.DivIcon {
-  return L.divIcon({
-    className: '',
-    html: '<span style="width:22px;height:22px;border-radius:6px;border:2px solid rgba(255,255,255,.95);background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:11px;box-shadow:0 4px 12px rgba(0,0,0,.45);">O</span>',
+    html: `<span style="width:22px;height:22px;border-radius:999px;border:2px solid rgba(255,255,255,.9);background:${color};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:7px;color:#e2e8f0;${ring}">${label}</span>`,
     iconSize: [22, 22],
     iconAnchor: [11, 11],
     popupAnchor: [0, -14],
+  })
+}
+
+function objetivoIcon(nombre: string): L.DivIcon {
+  const label = nombre.length > 16 ? nombre.slice(0, 15) + '…' : nombre
+  return L.divIcon({
+    className: '',
+    html: `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+      <span style="width:22px;height:22px;border-radius:6px;border:2px solid rgba(255,255,255,.95);background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:10px;box-shadow:0 4px 12px rgba(0,0,0,.45);">O</span>
+      <span style="background:rgba(15,23,42,.82);color:#93c5fd;font-size:9px;font-weight:600;padding:1px 4px;border-radius:3px;white-space:nowrap;max-width:90px;overflow:hidden;text-overflow:ellipsis;line-height:1.3;">${label}</span>
+    </div>`,
+    iconSize: [100, 38],
+    iconAnchor: [50, 22],
+    popupAnchor: [0, -24],
   })
 }
 
@@ -275,7 +279,7 @@ export default function AsistenciaMap({
                 radius={obj.radio_metros}
                 pathOptions={{ color: COLOR_OBJETIVO, fillColor: COLOR_OBJETIVO, fillOpacity: 0.05, weight: 1.5, dashArray: '6 4' }}
               />
-              <Marker position={[obj.lat, obj.lng]} icon={objetivoIcon()}>
+              <Marker position={[obj.lat, obj.lng]} icon={objetivoIcon(obj.nombre)}>
                 <Popup>
                   <div style={{ minWidth: 160, fontSize: 13 }}>
                     <div style={{ fontWeight: 800, marginBottom: 4, color: '#0f172a' }}>{obj.nombre}</div>

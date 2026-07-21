@@ -227,7 +227,7 @@ function StatCard({ label, value, sub, color, icon, onClick }: any) {
       <div style={{ position:'absolute', top:0, left:0, right:0, height:3, background:color }} />
       <div style={{ position:'absolute', top:16, right:16, fontSize:28, opacity:0.15 }}>{icon}</div>
       <div style={{ fontSize:11, color:brandColors.muted, textTransform:'uppercase', letterSpacing:1, fontWeight:800, fontFamily:FONT_BRAND }}>{label}</div>
-      <div style={{ fontFamily:FONT_BRAND, fontSize:36, fontWeight:900, margin:'8px 0 4px', color:brandColors.textStrong }}>{value}</div>
+      <div style={{ fontFamily:FONT_BRAND, fontSize:26, fontWeight:900, margin:'8px 0 4px', color:brandColors.textStrong }}>{value}</div>
       <div style={{ fontSize:12, color:brandColors.text }}>{sub}</div>
     </div>
   )
@@ -5804,7 +5804,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const planillaEmpleado = turnosEmpleado.map((turno: Turno) => {
     const registro = empleadoSeleccionado ? registroPrincipal(turno, empleadoSeleccionado.id) : undefined
     const registroOtroGuardia = !registro ? registroPrincipal(turno) : undefined
-    const { horasReales, horasLiquidables, horaEntrada: horaEntradaMostrar, horaSalida: horaSalidaMostrar, objetivoEfectivoId } = resolverLineaLiquidacion(turno, registro)
+    const { horasReales, horasLiquidables, horaEntrada: horaEntradaMostrar, horaSalida: horaSalidaMostrar, objetivoEfectivoId, origenEtiqueta: origenEtiquetaEmpleado } = resolverLineaLiquidacion(turno, registro)
     const objetivo = objetivos.find((o: Objetivo) => o.id === objetivoEfectivoId)
     const guardiaOtro = registroOtroGuardia ? effectiveGuardia(registroOtroGuardia) : null
     const extra = guardiaOtro && guardiaOtro !== empleadoSeleccionado?.id
@@ -5827,6 +5827,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'GPS ingreso': coordenadasGpsTexto(registro, 'ingreso'),
       'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
       'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
+      Origen: origenEtiquetaEmpleado,
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
       _turno_id: turno.id,
       _registro: registro || null,
@@ -5834,14 +5835,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
       _tieneEntrada: tieneEntrada,
-      _sinFichar: !tieneEntrada && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
+      _tieneCobertura: tieneEntrada || horasLiquidables > 0,
+      _sinFichar: !tieneEntrada && horasLiquidables === 0 && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
       _enCurso: Boolean(registro?.hora_entrada_real && !registro?.hora_salida_real),
       _tarde: tieneEntrada && (registro?.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, registro) > 0),
     }
   })
 
   const totalesEmpleado = {
-    dias: new Set(planillaEmpleado.filter((row: any) => row._tieneEntrada).map((row: any) => row._fecha)).size,
+    dias: new Set(planillaEmpleado.filter((row: any) => row._tieneCobertura).map((row: any) => row._fecha)).size,
     horasReales: planillaEmpleado.reduce((sum: number, row: any) => sum + row._horasReales, 0),
     horasLiquidables: planillaEmpleado.reduce((sum: number, row: any) => sum + row._horasLiquidables, 0),
     sinFichar: planillaEmpleado.filter((row: any) => row._sinFichar).length,
@@ -5864,7 +5866,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const filasConRegistro = registrosObjetivo.map((registro: RegistroAsistencia) => {
     const turno = turnoPorId.get(registro.turno_id)
     if (!turno) return null
-    const { horasReales, horasLiquidables, horaEntrada: horaEntradaMostrar, horaSalida: horaSalidaMostrar } = resolverLineaLiquidacion(turno, registro)
+    const { horasReales, horasLiquidables, horaEntrada: horaEntradaMostrar, horaSalida: horaSalidaMostrar, origenEtiqueta: origenEtiquetaObj } = resolverLineaLiquidacion(turno, registro)
     const estado = estadoPlanilla(turno, registro)
     const guardiaQueFicho = effectiveGuardia(registro)
     return {
@@ -5877,6 +5879,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'Salida efectiva': horaSalidaMostrar ? formatHoraTurno(horaSalidaMostrar) : '—',
       'Horas reales': mostrarHoras(horasReales),
       'Horas liquidables': mostrarHoras(horasLiquidables),
+      Origen: origenEtiquetaObj,
       Estado: estado,
       'Observaciones / alertas': observacionesPlanilla(turno, registro),
       'GPS ingreso': coordenadasGpsTexto(registro, 'ingreso'),
@@ -5913,6 +5916,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'GPS ingreso': '—',
       'Distancia ingreso': '—',
       'Estado GPS ingreso': '—',
+      Origen: '—',
       _id: `${turno.id}-sin-registro`,
       _turno_id: turno.id,
       _registro: null,
@@ -5976,7 +5980,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const exportarPlanillaEmpleadoXLSX = async () => {
     if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
 
-    const columnas = ['Fecha', 'Día', 'Objetivo', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
+    const columnas = ['Fecha', 'Día', 'Objetivo', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado', 'Origen', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
     const filas = [
       ['Planilla individual por empleado'],
       [`Mes/Año: ${mesLabel}`],
@@ -5993,6 +5997,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         Number(row._horasReales.toFixed(2)),
         Number(row._horasLiquidables.toFixed(2)),
         row.Estado,
+        row.Origen,
         row['GPS ingreso'],
         row['Distancia ingreso'],
         row['Estado GPS ingreso'],
@@ -6007,13 +6012,13 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     ]
     const nombre = `empleado_${archivoParte(`${empleadoSeleccionado.apellido}_${empleadoSeleccionado.nombre}`)}_${mesArchivo()}.xlsx`
 
-    await descargarXLSX(nombre, filas, 4, planillaEmpleado.length, [6, 7, 1])
+    await descargarXLSX(nombre, filas, 4, planillaEmpleado.length, [6, 7, 1, 9])
   }
 
   const exportarPlanillaObjetivoXLSX = async () => {
     if (!objetivoSeleccionado || planillaObjetivo.length === 0) return
 
-    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada efectiva', 'Salida efectiva', 'Horas reales', 'Horas liquidables', 'Estado', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
+    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada efectiva', 'Salida efectiva', 'Horas reales', 'Horas liquidables', 'Estado', 'Origen', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
     const filas = [
       ['Planilla mensual por objetivo'],
       [`Mes/Año: ${mesLabel}`],
@@ -6029,6 +6034,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         Number(row._horasReales.toFixed(2)),
         Number(row._horasLiquidables.toFixed(2)),
         row.Estado,
+        row.Origen,
         row['GPS ingreso'],
         row['Distancia ingreso'],
         row['Estado GPS ingreso'],
@@ -6043,7 +6049,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     ]
     const nombre = `objetivo_${archivoParte(objetivoSeleccionado.nombre)}_${mesArchivo()}.xlsx`
 
-    await descargarXLSX(nombre, filas, 4, planillaObjetivo.length, [5, 6, 1])
+    await descargarXLSX(nombre, filas, 4, planillaObjetivo.length, [5, 6, 1, 8])
   }
 
   const reporteGuardias = guardias
@@ -6293,7 +6299,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             {totalBox('Tardanzas', totalesEmpleado.tardanzas)}
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
             <tbody>
               {planillaEmpleado.map((row: any) => (
                 <tr key={row._id}>
@@ -6306,6 +6312,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                   <td style={S.td}>{row['Horas reales']}</td>
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
                   <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Manual' ? 'ok' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
+                  <td style={{ ...S.td, fontSize:11, color:'#94a3b8', minWidth:140 }}>{row.Origen}</td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
                   <td style={S.td}>{row['GPS ingreso']}</td>
                   <td style={S.td}>{row['Distancia ingreso']}</td>
@@ -6364,7 +6371,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             {totalBox('Horas liquidables', totalesObjetivo.horasLiquidables.toFixed(2))}
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
             <tbody>
               {planillaObjetivo.map((row: any) => (
                 <tr key={row._id}>
@@ -6373,11 +6380,12 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{row['Horario programado']}</td>
                   <td style={S.td}>{row['Guardia asignado']}</td>
                   <td style={S.td}>{row['Guardia que fichó']}</td>
-                  <td style={S.td}>{row['Entrada real']}</td>
-                  <td style={S.td}>{row['Salida real']}</td>
+                  <td style={S.td}>{row['Entrada efectiva']}</td>
+                  <td style={S.td}>{row['Salida efectiva']}</td>
                   <td style={S.td}>{row['Horas reales']}</td>
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
                   <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Manual' ? 'ok' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
+                  <td style={{ ...S.td, fontSize:11, color:'#94a3b8', minWidth:140 }}>{row.Origen}</td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
                   <td style={S.td}>{row['GPS ingreso']}</td>
                   <td style={S.td}>{row['Distancia ingreso']}</td>
