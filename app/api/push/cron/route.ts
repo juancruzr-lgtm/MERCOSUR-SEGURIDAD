@@ -423,6 +423,22 @@ export async function GET(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
+  // Cerrar turnos que finalizaron sin salida registrada
+  let cierreAutomatico: { registros_cerrados: number; detalle: string } | null = null
+  try {
+    const { data: cierreData, error: cierreError } = await admin.client.rpc('cerrar_turnos_abiertos')
+    if (cierreError) {
+      console.error('[cron] cerrar_turnos_abiertos error:', cierreError.message)
+    } else if (cierreData && (cierreData as any[]).length > 0) {
+      cierreAutomatico = (cierreData as any[])[0]
+      if (cierreAutomatico && cierreAutomatico.registros_cerrados > 0) {
+        console.log('[cron] cierre automático:', cierreAutomatico.detalle)
+      }
+    }
+  } catch (e) {
+    console.error('[cron] cerrar_turnos_abiertos excepción:', e)
+  }
+
   const hoy = fechaLocal()
   const ayer = sumarDias(hoy, -1)
   const manana = sumarDias(hoy, 1)
@@ -602,6 +618,7 @@ export async function GET(req: NextRequest) {
       alertasEnviadas,
       sent,
       skipped,
+      cierreAutomatico,
     })
   }
 
@@ -778,5 +795,6 @@ export async function GET(req: NextRequest) {
     alertasEnviadas,
     sent,
     skipped,
+    cierreAutomatico,
   })
 }
