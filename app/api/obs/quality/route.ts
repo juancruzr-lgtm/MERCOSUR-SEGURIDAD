@@ -45,20 +45,63 @@ export async function GET(req: NextRequest) {
   const evidencias   = evidenciasRes.data ?? []
   const puestos      = puestosRes.data ?? []
 
+  const usuarioPorId = new Map(usuarios.map((u: any) => [u.id, u]))
+  const objetivoPorId = new Map(objetivos.map((o: any) => [o.id, o]))
+  const turnoPorId = new Map(turnos.map((t: any) => [t.id, t]))
+
+  const nombreUsuario = (usuario?: any) => {
+    if (!usuario) return 'Usuario sin nombre'
+    return [usuario.apellido, usuario.nombre].filter(Boolean).join(', ') || usuario.legajo || 'Usuario sin nombre'
+  }
+
+  const nombreObjetivo = (objetivo?: any) => {
+    if (!objetivo) return 'Objetivo sin nombre'
+    return [objetivo.nombre, objetivo.cliente].filter(Boolean).join(' · ') || 'Objetivo sin nombre'
+  }
+
+  const ejemploEntidad = (entidad: string, item: any): string => {
+    if (entidad === 'usuarios') return nombreUsuario(item)
+    if (entidad === 'objetivos') return nombreObjetivo(item)
+    if (entidad === 'turnos') {
+      const objetivo = objetivoPorId.get(item.objetivo_id)
+      return `${item.fecha ?? 'Sin fecha'} ${String(item.hora_inicio ?? '').slice(0, 5)} · ${nombreObjetivo(objetivo)}`
+    }
+    if (entidad === 'registros_asistencia' || entidad === 'evidencias') {
+      const guardia = usuarioPorId.get(item.guardia_id)
+      const turno = turnoPorId.get(item.turno_id)
+      const objetivo = objetivoPorId.get(item.objetivo_id ?? turno?.objetivo_id)
+      return `${nombreUsuario(guardia)} · ${turno?.fecha ?? 'Sin turno'} · ${nombreObjetivo(objetivo)}`
+    }
+    if (entidad === 'supervisiones') {
+      const objetivo = objetivoPorId.get(item.objetivo_id)
+      const supervisor = usuarioPorId.get(item.supervisor_id)
+      return `${nombreObjetivo(objetivo)} · ${nombreUsuario(supervisor)}`
+    }
+    if (entidad === 'novedades') {
+      const objetivo = objetivoPorId.get(item.objetivo_id)
+      const guardia = usuarioPorId.get(item.guardia_id)
+      return `${item.tipo ?? 'Novedad'} · ${nombreObjetivo(objetivo)} · ${nombreUsuario(guardia)}`
+    }
+    return item.nombre || item.descripcion || 'Registro sin nombre'
+  }
+
   const checks: Array<{
     nombre: string
     tipo: string
     entidad: string
     cantidad: number
+    ids_afectados: string[]
     ids_ejemplo: string[]
+    ejemplos: string[]
     descripcion: string
     estado: 'ok' | 'advertencia' | 'critico'
   }> = []
 
   const check = (nombre: string, tipo: string, entidad: string, items: any[], descripcion: string, umbralAdv = 1, umbralCrit = 10) => {
-    const ids = items.slice(0, 5).map((i: any) => i.id)
+    const ids = items.map((i: any) => i.id).filter(Boolean).map(String)
+    const ejemplos = items.slice(0, 5).map((i: any) => ejemploEntidad(entidad, i)).filter(Boolean)
     const estado = items.length === 0 ? 'ok' : items.length < umbralCrit ? 'advertencia' : 'critico'
-    checks.push({ nombre, tipo, entidad, cantidad: items.length, ids_ejemplo: ids, descripcion, estado })
+    checks.push({ nombre, tipo, entidad, cantidad: items.length, ids_afectados: ids, ids_ejemplo: ids.slice(0, 5), ejemplos, descripcion, estado })
   }
 
   // ── Usuarios ─────────────────────────────────────────────────────────────────

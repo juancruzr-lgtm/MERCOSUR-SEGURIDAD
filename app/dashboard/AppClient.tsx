@@ -1335,9 +1335,12 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin 
     setAccionLoading(null)
   }
 
-  const guardiasFiltrados = filtroActivo?.tipo === 'activos'
-    ? guardias.filter((g: Usuario) => g.estado === 'activo')
-    : guardias
+  const idsFiltroGuardias = new Set((filtroActivo?.ids ?? []) as string[])
+  const guardiasFiltrados = guardias.filter((g: Usuario) => {
+    if (idsFiltroGuardias.size > 0) return idsFiltroGuardias.has(g.id)
+    if (filtroActivo?.tipo === 'activos') return g.estado === 'activo'
+    return true
+  })
 
   return (
     <div>
@@ -1568,6 +1571,7 @@ function SupervisionesAdmin({
   novedades = [],
   supervisionesMesOperativas = [],
   ultimasSupervisionesObjetivos = [],
+  filtroInicial = null,
 }: any) {
   const hoy = new Date().toLocaleDateString('sv-SE')
   const mesActual = hoy.slice(0, 7)
@@ -1586,7 +1590,7 @@ function SupervisionesAdmin({
     ocultarImpreciso: false,
     soloFueraRadio: false,
   })
-  const [filtroTabla, setFiltroTabla] = useState<{ tipo: string; label: string; supervisor_id?: string; objetivo_id?: string } | null>(null)
+  const [filtroTabla, setFiltroTabla] = useState<{ tipo: string; label: string; supervisor_id?: string; objetivo_id?: string; ids?: string[] } | null>(null)
   const tablaRef = useRef<HTMLDivElement>(null)
   const ahora = new Date()
   const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
@@ -1823,13 +1827,22 @@ function SupervisionesAdmin({
     b.turnosMes - a.turnosMes ||
     nombreSupervisor(a.supervisor.id).localeCompare(nombreSupervisor(b.supervisor.id))
   )
-  const aplicarFiltro = (filtro: { tipo: string; label: string; supervisor_id?: string; objetivo_id?: string }) => {
+  const aplicarFiltro = (filtro: { tipo: string; label: string; supervisor_id?: string; objetivo_id?: string; ids?: string[] }) => {
     setFiltroTabla(filtro)
     setTimeout(() => tablaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80)
   }
 
+  useEffect(() => {
+    if (!filtroInicial) return
+    setVistaSupervisiones('resumen')
+    setFiltroTabla(filtroInicial)
+    setTimeout(() => tablaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80)
+  }, [filtroInicial])
+
   const supervisionesTabla: SupervisionAdmin[] = (() => {
     const base = [...supervisiones].sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    const idsFiltroSupervisiones = new Set((filtroTabla?.ids ?? []) as string[])
+    if (idsFiltroSupervisiones.size > 0) return base.filter((s: SupervisionAdmin) => idsFiltroSupervisiones.has(s.id))
     if (!filtroTabla) return base.slice(0, 30)
     if (filtroTabla.tipo === 'hoy') return base.filter((s: SupervisionAdmin) => fechaLocal(s.created_at) === hoy)
     if (filtroTabla.tipo === 'con_observacion') return base.filter((s: SupervisionAdmin) => s.estado === 'con_observacion')
@@ -3210,6 +3223,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   }
 
   const filtroTipo = filtroActivo?.tipo || filtroKpi
+  const idsFiltroObjetivos = new Set((filtroActivo?.ids ?? []) as string[])
   const limpiarFiltroObjetivos = () => {
     setFiltroKpi('')
     limpiarFiltro?.()
@@ -3222,6 +3236,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   })
 
   const filtrados = objetivos.filter((o: any) => {
+    if (idsFiltroObjetivos.size > 0 && !idsFiltroObjetivos.has(o.id)) return false
     if (filtroTipo === 'activos' && o.estado !== 'activo') return false
     if (filtroTipo === 'con_turnos_hoy' && !objetivosConTurnosHoy.some((x: any) => x.id === o.id)) return false
     if (filtroTipo === 'sin_cubrir_hoy' && !objetivosSinCubrirHoy.some((x: any) => x.id === o.id)) return false
@@ -3874,11 +3889,15 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   }
 
   const hoy = fechaActualTurno()
-  const rangoFecha = filtroActivo ? { desde: hoy, hasta: hoy, label: filtroActivo.label } : rangoFiltroFechaTurnos(filtroFecha, hoy)
+  const idsFiltroTurnos = new Set((filtroActivo?.ids ?? []) as string[])
+  const rangoFecha = filtroActivo
+    ? { desde: filtroActivo.desde || hoy, hasta: filtroActivo.hasta || hoy, label: filtroActivo.label }
+    : rangoFiltroFechaTurnos(filtroFecha, hoy)
   const tieneEntradaConfirmadaTurnos = (turno: Turno) =>
     registros.some((r: RegistroAsistencia) => r.turno_id === turno.id && registroTieneEntradaConfirmada(r))
   const tieneSalida = (turno: Turno) => registros.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
   const filtrados = turnos.filter((t: Turno) => {
+    if (idsFiltroTurnos.size > 0) return idsFiltroTurnos.has(t.id)
     if (t.fecha < rangoFecha.desde || t.fecha > rangoFecha.hasta) return false
     if (filtroActivo?.tipo === 'cubiertos' && t.estado !== 'cubierto') return false
     if (filtroActivo?.tipo === 'descubiertos' && !turnoSinCoberturaOperativa(t)) return false
@@ -4943,8 +4962,10 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
     }
   }
 
+  const idsFiltroAsistencia = new Set((filtroActivo?.ids ?? []) as string[])
   const registrosFiltrados = registros.filter((r: RegistroAsistencia) => {
     const turno = turnos.find((t: Turno) => t.id === r.turno_id)
+    if (idsFiltroAsistencia.size > 0) return idsFiltroAsistencia.has(r.id)
     if (filtroActivo?.tipo === 'hoy' && turno?.fecha !== hoy) return false
     if (filtroActivo?.tipo === 'en_turno' && (!r.hora_entrada_real || r.hora_salida_real)) return false
     if (filtroActivo?.tipo === 'tarde' && (turno?.fecha !== hoy || r.alerta_entrada !== 'tarde')) return false
@@ -5380,7 +5401,7 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
   )
 }
 
-function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
+function Novedades({ novedades, setNovedades, guardias, objetivos, filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', tipo:'Rutina', descripcion:'', prioridad:'normal' })
   const [loading, setLoading] = useState(false)
@@ -5425,8 +5446,12 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
       (prioridadFiltro === 'todas' || n.prioridad === prioridadFiltro)
     ))
 
+  const idsFiltroNovedades = new Set((filtroActivo?.ids ?? []) as string[])
   const novedadesDelMes = novedades.filter((n: Novedad) => mesNovedad(n) === mesSeleccionado)
-  const novedadesVisibles = filtrarNovedades(novedadesDelMes)
+  const novedadesBase = idsFiltroNovedades.size > 0
+    ? novedades.filter((n: Novedad) => idsFiltroNovedades.has(n.id))
+    : novedadesDelMes
+  const novedadesVisibles = filtrarNovedades(novedadesBase)
   const pendientesMesActual = novedades
     .filter((n: Novedad) => mesNovedad(n) === mesActual && n.estado === 'pendiente')
     .length
@@ -5465,6 +5490,13 @@ function Novedades({ novedades, setNovedades, guardias, objetivos }: any) {
         <div style={{ flex:1 }}><div style={S.title}>Novedades</div><div style={S.sub2}>{pendientesMesActual} pendientes en {labelMes(mesActual)}</div></div>
         <button style={{ ...S.btn, ...S.btnPrimary }} onClick={() => setModal(true)}>+ Nueva Novedad</button>
       </div>
+
+      {filtroActivo && (
+        <div style={{ ...S.card, padding:12, display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ color:'#f59e0b' }}>Filtro activo: {filtroActivo.label}</span>
+          <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
+        </div>
+      )}
 
       <div style={{ ...S.card, display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12 }}>
         <div>
@@ -8954,13 +8986,14 @@ const esGuardia = esRolGuardia(user.rol)
                   novedades={novedades}
                   supervisionesMesOperativas={supervisionesMesAdmin}
                   ultimasSupervisionesObjetivos={ultimasSupervisionesObjetivosAdmin}
+                  filtroInicial={filtros.supervisiones}
                 />
               )}
-              {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} />}
+              {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
-              {page === 'observacion' && <ObservacionSistema />}
+              {page === 'observacion' && <ObservacionSistema onNavigate={navegarConFiltro} />}
             </>
           )
         )}

@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
@@ -75,6 +75,17 @@ function haceQuanto(iso: string | null | undefined): string {
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
 type Tab = 'resumen' | 'telemetria' | 'uso' | 'sesiones' | 'calidad'
+type ObservatorioNavigate = (destino: string, filtro?: Record<string, any>) => void
+
+type TelemetriaFiltros = {
+  from: string
+  to: string
+  event_name: string
+  category: string
+  status: string
+  app_version: string
+  device_type: string
+}
 
 interface SummaryData {
   generado_en?: string
@@ -124,6 +135,169 @@ interface QualityData {
   checks?: any[]
 }
 
+function fechaInput(fecha: Date): string {
+  const yyyy = fecha.getFullYear()
+  const mm = String(fecha.getMonth() + 1).padStart(2, '0')
+  const dd = String(fecha.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+function fechaHaceDias(dias: number): string {
+  const fecha = new Date()
+  fecha.setDate(fecha.getDate() - dias)
+  return fechaInput(fecha)
+}
+
+function filtrosTelemetriaDefault(): TelemetriaFiltros {
+  return {
+    from: fechaHaceDias(7),
+    to: '',
+    event_name: '',
+    category: '',
+    status: '',
+    app_version: '',
+    device_type: '',
+  }
+}
+
+function slugArchivo(texto: string): string {
+  return texto
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function textoVisible(root: HTMLElement | null): string {
+  return (root?.innerText || '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function tablasVisibles(root: HTMLElement | null): string[][][] {
+  if (!root) return []
+  return Array.from(root.querySelectorAll('table')).map(table =>
+    Array.from(table.querySelectorAll('tr')).map(row =>
+      Array.from(row.querySelectorAll('th,td')).map(cell => (cell.textContent || '').trim())
+    ).filter(row => row.some(Boolean))
+  ).filter(rows => rows.length > 0)
+}
+
+function textoPdfSeguro(texto: string): string {
+  return texto
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '?')
+}
+
+function escaparPdf(texto: string): string {
+  return texto.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
+}
+
+function lineasPdf(texto: string, max = 92): string[] {
+  const salida: string[] = []
+  textoPdfSeguro(texto).split(/\r?\n/).forEach(parrafo => {
+    const palabras = parrafo.split(/\s+/).filter(Boolean)
+    if (palabras.length === 0) {
+      salida.push('')
+      return
+    }
+
+    let actual = ''
+    palabras.forEach(palabraOriginal => {
+      let palabra = palabraOriginal
+      while (palabra.length > max) {
+        if (actual) {
+          salida.push(actual)
+          actual = ''
+        }
+        salida.push(palabra.slice(0, max))
+        palabra = palabra.slice(max)
+      }
+      const candidata = actual ? `${actual} ${palabra}` : palabra
+      if (candidata.length > max && actual) {
+        salida.push(actual)
+        actual = palabra
+      } else {
+        actual = candidata
+      }
+    })
+    if (actual) salida.push(actual)
+  })
+  return salida
+}
+
+function crearPdfTexto(titulo: string, texto: string): Blob {
+  const pageWidth = 595
+  const pageHeight = 842
+  const margin = 40
+  const leading = 13
+  const lineas = lineasPdf(`${titulo}\n\n${texto}`)
+  const lineasPorPagina = Math.max(1, Math.floor((pageHeight - margin * 2) / leading))
+  const paginas: string[][] = []
+
+  for (let i = 0; i < lineas.length; i += lineasPorPagina) {
+    paginas.push(lineas.slice(i, i + lineasPorPagina))
+  }
+  if (paginas.length === 0) paginas.push([''])
+
+  const pageIds = paginas.map((_, i) => 3 + i * 2)
+  const contentIds = paginas.map((_, i) => 4 + i * 2)
+  const fontId = 3 + paginas.length * 2
+  const objetos: Array<{ id: number; body: string }> = [
+    { id: 1, body: '<< /Type /Catalog /Pages 2 0 R >>' },
+    { id: 2, body: `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(' ')}] /Count ${paginas.length} >>` },
+  ]
+
+  paginas.forEach((pagina, index) => {
+    const contenido = [
+      'BT',
+      '/F1 10 Tf',
+      `${margin} ${pageHeight - margin} Td`,
+      `${leading} TL`,
+      ...pagina.map(linea => `(${escaparPdf(linea)}) Tj T*`),
+      'ET',
+    ].join('\n')
+
+    objetos.push({
+      id: pageIds[index],
+      body: `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentIds[index]} 0 R >>`,
+    })
+    objetos.push({
+      id: contentIds[index],
+      body: `<< /Length ${contenido.length} >>\nstream\n${contenido}\nendstream`,
+    })
+  })
+
+  objetos.push({ id: fontId, body: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>' })
+  objetos.sort((a, b) => a.id - b.id)
+
+  let pdf = '%PDF-1.4\n'
+  const offsets: number[] = [0]
+  objetos.forEach(obj => {
+    offsets[obj.id] = pdf.length
+    pdf += `${obj.id} 0 obj\n${obj.body}\nendobj\n`
+  })
+
+  const xrefOffset = pdf.length
+  pdf += `xref\n0 ${fontId + 1}\n0000000000 65535 f \n`
+  for (let id = 1; id <= fontId; id += 1) {
+    pdf += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`
+  }
+  pdf += `trailer\n<< /Size ${fontId + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`
+
+  return new Blob([pdf], { type: 'application/pdf' })
+}
+
+function descargarBlob(nombre: string, blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = nombre
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
 async function fetchObs(path: string, params?: Record<string, string>): Promise<any> {
@@ -167,6 +341,70 @@ function Spinner() {
 
 function Error({ mensaje }: { mensaje: string }) {
   return <div style={{ color: C.red, padding: 24, background: C.red + '11', borderRadius: 8, fontFamily: FONT, fontSize: 13 }}>Error: {mensaje}</div>
+}
+
+function ReportActions({ targetRef, titulo }: { targetRef: React.RefObject<HTMLDivElement>; titulo: string }) {
+  const [msg, setMsg] = useState('')
+  const buttonStyle: React.CSSProperties = {
+    background: C.card,
+    color: C.text,
+    border: `1px solid ${C.border}`,
+    borderRadius: 6,
+    padding: '7px 12px',
+    fontFamily: FONT,
+    fontSize: 12,
+    cursor: 'pointer',
+  }
+
+  const notify = (texto: string) => {
+    setMsg(texto)
+    window.setTimeout(() => setMsg(''), 2500)
+  }
+
+  const copiar = async () => {
+    const texto = textoVisible(targetRef.current)
+    if (!texto) return notify('No hay contenido para copiar.')
+    await navigator.clipboard.writeText(texto)
+    notify('Informe copiado.')
+  }
+
+  const imprimir = () => {
+    window.print()
+  }
+
+  const descargarPdf = async () => {
+    const texto = textoVisible(targetRef.current)
+    if (!texto) return notify('No hay contenido para exportar.')
+    descargarBlob(`${slugArchivo(titulo)}.pdf`, crearPdfTexto(titulo, texto))
+    notify('PDF generado.')
+  }
+  const descargarExcel = async () => {
+    const XLSX = await import('xlsx')
+    const wb = XLSX.utils.book_new()
+    const tablas = tablasVisibles(targetRef.current)
+
+    if (tablas.length === 0) {
+      const rows = textoVisible(targetRef.current).split('\n').filter(Boolean).map(linea => [linea])
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Informe')
+    } else {
+      tablas.forEach((rows, index) => {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), `Tabla ${index + 1}`.slice(0, 31))
+      })
+    }
+
+    XLSX.writeFile(wb, `${slugArchivo(titulo)}.xlsx`)
+    notify('Excel generado.')
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <button type="button" onClick={descargarPdf} style={{ ...buttonStyle, background: C.yellow, color: '#000', borderColor: C.yellow, fontWeight: 700 }}>Descargar PDF</button>
+      <button type="button" onClick={descargarExcel} style={buttonStyle}>Descargar Excel</button>
+      <button type="button" onClick={copiar} style={buttonStyle}>Copiar</button>
+      <button type="button" onClick={imprimir} style={buttonStyle}>Imprimir</button>
+      {msg && <span style={{ fontSize: 12, color: C.green, fontFamily: FONT }}>{msg}</span>}
+    </div>
+  )
 }
 
 // ── Tab: RESUMEN ──────────────────────────────────────────────────────────────
@@ -357,10 +595,10 @@ function TabResumen() {
 
 function TabTelemetria() {
   const [data, setData]         = useState<EventsData | null>(null)
-  const [loading, setLoading]   = useState(false)
+  const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
   const [page, setPage]         = useState(0)
-  const [filtros, setFiltros]   = useState({ from: '', to: '', event_name: '', category: '', only_errors: false, app_version: '', device_type: '' })
+  const [filtros, setFiltros]   = useState<TelemetriaFiltros>(() => filtrosTelemetriaDefault())
 
   const cargar = useCallback(() => {
     setLoading(true)
@@ -370,7 +608,7 @@ function TabTelemetria() {
     if (filtros.to)          params.to           = filtros.to
     if (filtros.event_name)  params.event_name   = filtros.event_name
     if (filtros.category)    params.category     = filtros.category
-    if (filtros.only_errors) params.only_errors  = '1'
+    if (filtros.status === 'errores') params.only_errors = '1'
     if (filtros.app_version) params.app_version  = filtros.app_version
     if (filtros.device_type) params.device_type  = filtros.device_type
     fetchObs('events', params).then(setData).catch(e => setError(e.message)).finally(() => setLoading(false))
@@ -378,7 +616,15 @@ function TabTelemetria() {
 
   useEffect(() => { cargar() }, [cargar])
 
-  const setCampo = (k: keyof typeof filtros, v: any) => setFiltros(f => ({ ...f, [k]: v }))
+  const setCampo = (k: keyof TelemetriaFiltros, v: string) => {
+    setPage(0)
+    setFiltros(f => ({ ...f, [k]: v }))
+  }
+
+  const limpiarFiltros = () => {
+    setPage(0)
+    setFiltros(filtrosTelemetriaDefault())
+  }
 
   const inputStyle: React.CSSProperties = { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '6px 10px', color: C.text, fontFamily: FONT, fontSize: 12, width: '100%' }
   const labelStyle: React.CSSProperties = { fontSize: 11, color: C.muted, fontFamily: FONT, marginBottom: 4, display: 'block' }
@@ -390,11 +636,15 @@ function TabTelemetria() {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ flex: 1, minWidth: 140 }}>
             <label style={labelStyle}>Desde</label>
-            <input type="datetime-local" style={inputStyle} value={filtros.from} onChange={e => setCampo('from', e.target.value)} />
+            <input type="date" style={inputStyle} value={filtros.from} onChange={e => setCampo('from', e.target.value)} />
           </div>
           <div style={{ flex: 1, minWidth: 140 }}>
             <label style={labelStyle}>Hasta</label>
-            <input type="datetime-local" style={inputStyle} value={filtros.to} onChange={e => setCampo('to', e.target.value)} />
+            <input type="date" style={inputStyle} value={filtros.to} onChange={e => setCampo('to', e.target.value)} />
+          </div>
+          <div style={{ flex: 1, minWidth: 120 }}>
+            <label style={labelStyle}>Agentes</label>
+            <div style={{ ...inputStyle, color: C.sub }}>Todos</div>
           </div>
           <div style={{ flex: 1, minWidth: 140 }}>
             <label style={labelStyle}>Nombre de evento</label>
@@ -409,7 +659,14 @@ function TabTelemetria() {
           </div>
           <div style={{ flex: 1, minWidth: 120 }}>
             <label style={labelStyle}>Versión</label>
-            <input type="text" style={inputStyle} placeholder="ej: 0.3.1" value={filtros.app_version} onChange={e => setCampo('app_version', e.target.value)} />
+            <input type="text" style={inputStyle} placeholder="Todas" value={filtros.app_version} onChange={e => setCampo('app_version', e.target.value)} />
+          </div>
+          <div style={{ flex: 1, minWidth: 120 }}>
+            <label style={labelStyle}>Estado</label>
+            <select style={inputStyle} value={filtros.status} onChange={e => setCampo('status', e.target.value)}>
+              <option value="">Todos</option>
+              <option value="errores">Solo errores</option>
+            </select>
           </div>
           <div style={{ flex: 1, minWidth: 100 }}>
             <label style={labelStyle}>Dispositivo</label>
@@ -419,11 +676,10 @@ function TabTelemetria() {
               <option value="desktop">Desktop</option>
             </select>
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.text, fontFamily: FONT, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-            <input type="checkbox" checked={filtros.only_errors} onChange={e => setCampo('only_errors', e.target.checked)} />
-            Solo errores
-          </label>
-          <button onClick={() => { setPage(0); cargar() }} style={{ background: C.yellow, color: '#000', border: 'none', borderRadius: 6, padding: '8px 18px', fontWeight: 700, fontFamily: FONT, fontSize: 13, cursor: 'pointer' }}>Buscar</button>
+          <button onClick={limpiarFiltros} style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 18px', fontWeight: 700, fontFamily: FONT, fontSize: 13, cursor: 'pointer' }}>Restablecer</button>
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT, marginTop: 10 }}>
+          Filtro inicial: últimos 7 días · todos los agentes · todas las versiones · todos los estados.
         </div>
       </div>
 
@@ -572,7 +828,7 @@ function TabUso() {
             <tbody>
               {(data.actividad_por_usuario ?? []).map((u: any, i: number) => (
                 <tr key={u.user_id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff04' }}>
-                  <td style={{ padding: '8px 14px', fontSize: 13, color: C.text, fontFamily: FONT }}>{u.usuario ? `${u.usuario.apellido}, ${u.usuario.nombre}` : u.user_id.slice(0, 8)}</td>
+                  <td style={{ padding: '8px 14px', fontSize: 13, color: C.text, fontFamily: FONT }}>{u.usuario ? `${u.usuario.apellido}, ${u.usuario.nombre}` : 'Usuario sin nombre'}</td>
                   <td style={{ padding: '8px 14px' }}><span style={badge(C.blue)}>{u.rol}</span></td>
                   <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 700, color: C.text, fontFamily: FONT }}>{u.total_eventos}</td>
                   <td style={{ padding: '8px 14px', fontSize: 13, color: u.errores > 0 ? C.red : C.green, fontFamily: FONT }}>{u.errores}</td>
@@ -599,7 +855,7 @@ function TabUso() {
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <div style={{ fontSize: 11, color: C.muted, width: 16 }}>{i + 1}</div>
                   <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>
-                    {item.usuario ? `${item.usuario.apellido ?? ''}, ${item.usuario.nombre ?? ''}` : item.user_id?.slice(0, 8) ?? '—'}
+                    {item.usuario ? `${item.usuario.apellido ?? ''}, ${item.usuario.nombre ?? ''}` : 'Usuario sin nombre'}
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: C.yellow, fontFamily: FONT }}>{item[key]} <span style={{ fontWeight: 400, color: C.muted }}>{label}</span></div>
                 </div>
@@ -715,7 +971,7 @@ function TabSesiones() {
               {(data.sesiones ?? []).map((s: any, i: number) => (
                 <tr key={s.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff04' }}>
                   <td style={{ padding: '7px 12px', fontSize: 11, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(s.started_at)}</td>
-                  <td style={{ padding: '7px 12px', fontSize: 12, color: C.text, fontFamily: FONT }}>{s.usuario ? `${s.usuario.apellido}, ${s.usuario.nombre}` : s.user_id?.slice(0, 8)}</td>
+                  <td style={{ padding: '7px 12px', fontSize: 12, color: C.text, fontFamily: FONT }}>{s.usuario ? `${s.usuario.apellido}, ${s.usuario.nombre}` : 'Usuario sin nombre'}</td>
                   <td style={{ padding: '7px 12px' }}><span style={badge(C.blue)}>{s.user_rol}</span></td>
                   <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{s.device_type ?? '—'}</td>
                   <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{s.os_name ?? '—'}</td>
@@ -735,7 +991,7 @@ function TabSesiones() {
 
 // ── Tab: CALIDAD DE DATOS ─────────────────────────────────────────────────────
 
-function TabCalidad() {
+function TabCalidad({ onNavigate }: { onNavigate?: ObservatorioNavigate }) {
   const [data, setData]       = useState<QualityData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState<string | null>(null)
@@ -748,6 +1004,25 @@ function TabCalidad() {
 
   const estadoColor: Record<string, string> = { ok: C.green, advertencia: C.orange, critico: C.red }
   const estadoIcon:  Record<string, string> = { ok: '✓', advertencia: '⚠', critico: '✗' }
+  const destinoPorEntidad: Record<string, string> = {
+    usuarios: 'guardias',
+    objetivos: 'objetivos',
+    turnos: 'turnos',
+    registros_asistencia: 'asistencia',
+    evidencias: 'asistencia',
+    supervisiones: 'supervisiones',
+    novedades: 'novedades',
+  }
+
+  const navegarCheck = (check: any) => {
+    const destino = destinoPorEntidad[check.entidad]
+    if (!destino || !onNavigate || check.cantidad === 0) return
+    onNavigate(destino, {
+      tipo: 'calidad_datos',
+      label: check.nombre,
+      ids: check.ids_afectados ?? check.ids_ejemplo ?? [],
+    })
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -782,15 +1057,34 @@ function TabCalidad() {
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: FONT }}>{c.nombre}</div>
                   <div style={{ fontSize: 12, color: C.sub, fontFamily: FONT, marginTop: 2 }}>{c.descripcion}</div>
-                  {c.ids_ejemplo?.length > 0 && (
+                  {c.ejemplos?.length > 0 && (
                     <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT, marginTop: 4 }}>
-                      IDs de ejemplo: {c.ids_ejemplo.join(', ')}
+                      Ejemplos: {c.ejemplos.join(' · ')}
                     </div>
                   )}
                 </div>
-                <div style={{ textAlign: 'right' }}>
+                <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
                   <div style={{ fontSize: 22, fontWeight: 900, color: estadoColor[c.estado], fontFamily: FONT }}>{c.cantidad}</div>
                   <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT }}>{c.entidad}</div>
+                  <button
+                    type="button"
+                    onClick={() => navegarCheck(c)}
+                    disabled={!onNavigate || c.cantidad === 0}
+                    style={{
+                      background: c.cantidad > 0 ? C.yellow : C.card,
+                      color: c.cantidad > 0 ? '#000' : C.muted,
+                      border: `1px solid ${c.cantidad > 0 ? C.yellow : C.border}`,
+                      borderRadius: 6,
+                      padding: '6px 12px',
+                      fontFamily: FONT,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: !onNavigate || c.cantidad === 0 ? 'not-allowed' : 'pointer',
+                      opacity: !onNavigate || c.cantidad === 0 ? 0.55 : 1,
+                    }}
+                  >
+                    Ver
+                  </button>
                 </div>
               </div>
             ))}
@@ -814,8 +1108,9 @@ function TabCalidad() {
 
 // ── Componente principal ──────────────────────────────────────────────────────
 
-export default function ObservacionSistema() {
+export default function ObservacionSistema({ onNavigate }: { onNavigate?: ObservatorioNavigate }) {
   const [tab, setTab] = useState<Tab>('resumen')
+  const informeRef = useRef<HTMLDivElement>(null)
 
   const tabs: { id: Tab; label: string; icono: string }[] = [
     { id: 'resumen',    label: 'Resumen',         icono: '📊' },
@@ -824,15 +1119,19 @@ export default function ObservacionSistema() {
     { id: 'sesiones',   label: 'Sesiones',         icono: '💻' },
     { id: 'calidad',    label: 'Calidad de datos', icono: '✓' },
   ]
+  const tabActiva = tabs.find(t => t.id === tab)
 
   return (
     <div style={{ fontFamily: FONT }}>
       {/* Encabezado */}
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 900, color: C.text, fontFamily: FONT, margin: 0 }}>Observación del Sistema</h1>
-        <p style={{ fontSize: 13, color: C.muted, margin: '6px 0 0', fontFamily: FONT }}>
-          Estado técnico · Uso operativo · Calidad de datos · Trazabilidad completa
-        </p>
+      <div style={{ marginBottom: 24, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 900, color: C.text, fontFamily: FONT, margin: 0 }}>Observación del Sistema</h1>
+          <p style={{ fontSize: 13, color: C.muted, margin: '6px 0 0', fontFamily: FONT }}>
+            Estado técnico · Uso operativo · Calidad de datos · Trazabilidad completa
+          </p>
+        </div>
+        <ReportActions targetRef={informeRef} titulo={`Observatorio - ${tabActiva?.label ?? 'Informe'}`} />
       </div>
 
       {/* Tabs */}
@@ -863,11 +1162,13 @@ export default function ObservacionSistema() {
       </div>
 
       {/* Contenido */}
-      {tab === 'resumen'    && <TabResumen />}
-      {tab === 'telemetria' && <TabTelemetria />}
-      {tab === 'uso'        && <TabUso />}
-      {tab === 'sesiones'   && <TabSesiones />}
-      {tab === 'calidad'    && <TabCalidad />}
+      <div ref={informeRef}>
+        {tab === 'resumen'    && <TabResumen />}
+        {tab === 'telemetria' && <TabTelemetria />}
+        {tab === 'uso'        && <TabUso />}
+        {tab === 'sesiones'   && <TabSesiones />}
+        {tab === 'calidad'    && <TabCalidad onNavigate={onNavigate} />}
+      </div>
     </div>
   )
 }
