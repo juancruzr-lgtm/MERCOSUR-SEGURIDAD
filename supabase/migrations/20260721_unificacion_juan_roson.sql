@@ -67,6 +67,7 @@ DECLARE
   -- Contadores para el informe
   r_turnos_guardia             int := 0;
   r_turnos_guardia_original    int := 0;
+  r_turnos_guardia_real        int := 0;
   r_registros_guardia          int := 0;
   r_registros_guardia_final    int := 0;
   r_auditoria_modificado       int := 0;
@@ -168,6 +169,18 @@ BEGIN
     GET DIAGNOSTICS r_turnos_guardia_original = ROW_COUNT;
   END IF;
 
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'turnos'
+      AND column_name = 'guardia_real_id'
+  ) THEN
+    EXECUTE format(
+      'UPDATE public.turnos SET guardia_real_id = %L WHERE guardia_real_id = %L',
+      v_definitivo_id, v_duplicado_id
+    );
+    GET DIAGNOSTICS r_turnos_guardia_real = ROW_COUNT;
+  END IF;
+
   UPDATE public.registros_asistencia
     SET guardia_id = v_definitivo_id
     WHERE guardia_id = v_duplicado_id;
@@ -183,109 +196,144 @@ BEGIN
     WHERE modificado_por = v_duplicado_id;
   GET DIAGNOSTICS r_auditoria_modificado = ROW_COUNT;
 
-  UPDATE public.cambios_guardia
-    SET guardia_saliente_id = v_definitivo_id
-    WHERE guardia_saliente_id = v_duplicado_id;
-  GET DIAGNOSTICS r_cambios_saliente = ROW_COUNT;
-
-  UPDATE public.cambios_guardia
-    SET guardia_entrante_id = v_definitivo_id
-    WHERE guardia_entrante_id = v_duplicado_id;
-  GET DIAGNOSTICS r_cambios_entrante = ROW_COUNT;
-
-  UPDATE public.cambios_guardia
-    SET supervisor_id = v_definitivo_id
-    WHERE supervisor_id = v_duplicado_id;
-  GET DIAGNOSTICS r_cambios_supervisor = ROW_COUNT;
-
-  UPDATE public.reemplazos_guardia
-    SET guardia_titular_id = v_definitivo_id
-    WHERE guardia_titular_id = v_duplicado_id;
-  GET DIAGNOSTICS r_reemplazos_titular = ROW_COUNT;
-
-  UPDATE public.reemplazos_guardia
-    SET guardia_reemplazante_id = v_definitivo_id
-    WHERE guardia_reemplazante_id = v_duplicado_id;
-  GET DIAGNOSTICS r_reemplazos_reemplazante = ROW_COUNT;
-
-  UPDATE public.reemplazos_guardia
-    SET supervisor_id = v_definitivo_id
-    WHERE supervisor_id = v_duplicado_id;
-  GET DIAGNOSTICS r_reemplazos_supervisor = ROW_COUNT;
-
-  UPDATE public.supervisor_intervenciones
-    SET supervisor_id = v_definitivo_id
-    WHERE supervisor_id = v_duplicado_id;
-  GET DIAGNOSTICS r_intervenciones_supervisor = ROW_COUNT;
-
-  UPDATE public.supervisor_intervenciones
-    SET guardia_anterior_id = v_definitivo_id
-    WHERE guardia_anterior_id = v_duplicado_id;
-  GET DIAGNOSTICS r_intervenciones_ant = ROW_COUNT;
-
-  UPDATE public.supervisor_intervenciones
-    SET guardia_nuevo_id = v_definitivo_id
-    WHERE guardia_nuevo_id = v_duplicado_id;
-  GET DIAGNOSTICS r_intervenciones_nvo = ROW_COUNT;
-
   IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'supervisor_intervenciones'
-      AND column_name = 'supervisor_asignado_id'
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'cambios_guardia'
   ) THEN
-    EXECUTE format(
-      'UPDATE public.supervisor_intervenciones SET supervisor_asignado_id = %L WHERE supervisor_asignado_id = %L',
-      v_definitivo_id, v_duplicado_id
-    );
-    GET DIAGNOSTICS r_intervenciones_asignado = ROW_COUNT;
+    UPDATE public.cambios_guardia
+      SET guardia_saliente_id = v_definitivo_id
+      WHERE guardia_saliente_id = v_duplicado_id;
+    GET DIAGNOSTICS r_cambios_saliente = ROW_COUNT;
+
+    UPDATE public.cambios_guardia
+      SET guardia_entrante_id = v_definitivo_id
+      WHERE guardia_entrante_id = v_duplicado_id;
+    GET DIAGNOSTICS r_cambios_entrante = ROW_COUNT;
+
+    UPDATE public.cambios_guardia
+      SET supervisor_id = v_definitivo_id
+      WHERE supervisor_id = v_duplicado_id;
+    GET DIAGNOSTICS r_cambios_supervisor = ROW_COUNT;
   END IF;
 
   IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'supervisor_intervenciones'
-      AND column_name = 'supervisor_intervino_id'
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'reemplazos_guardia'
   ) THEN
-    EXECUTE format(
-      'UPDATE public.supervisor_intervenciones SET supervisor_intervino_id = %L WHERE supervisor_intervino_id = %L',
-      v_definitivo_id, v_duplicado_id
-    );
-    GET DIAGNOSTICS r_intervenciones_intervino = ROW_COUNT;
+    UPDATE public.reemplazos_guardia
+      SET guardia_titular_id = v_definitivo_id
+      WHERE guardia_titular_id = v_duplicado_id;
+    GET DIAGNOSTICS r_reemplazos_titular = ROW_COUNT;
+
+    UPDATE public.reemplazos_guardia
+      SET guardia_reemplazante_id = v_definitivo_id
+      WHERE guardia_reemplazante_id = v_duplicado_id;
+    GET DIAGNOSTICS r_reemplazos_reemplazante = ROW_COUNT;
+
+    UPDATE public.reemplazos_guardia
+      SET supervisor_id = v_definitivo_id
+      WHERE supervisor_id = v_duplicado_id;
+    GET DIAGNOSTICS r_reemplazos_supervisor = ROW_COUNT;
   END IF;
 
-  UPDATE public.supervisiones
-    SET supervisor_id = v_definitivo_id
-    WHERE supervisor_id = v_duplicado_id;
-  GET DIAGNOSTICS r_supervisiones = ROW_COUNT;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'supervisor_intervenciones'
+  ) THEN
+    UPDATE public.supervisor_intervenciones
+      SET supervisor_id = v_definitivo_id
+      WHERE supervisor_id = v_duplicado_id;
+    GET DIAGNOSTICS r_intervenciones_supervisor = ROW_COUNT;
 
-  UPDATE public.novedades_laborales
-    SET empleado_id = v_definitivo_id
-    WHERE empleado_id = v_duplicado_id;
-  GET DIAGNOSTICS r_novedades_empleado = ROW_COUNT;
+    UPDATE public.supervisor_intervenciones
+      SET guardia_anterior_id = v_definitivo_id
+      WHERE guardia_anterior_id = v_duplicado_id;
+    GET DIAGNOSTICS r_intervenciones_ant = ROW_COUNT;
 
-  UPDATE public.novedades_laborales
-    SET cargado_por = v_definitivo_id
-    WHERE cargado_por = v_duplicado_id;
-  GET DIAGNOSTICS r_novedades_cargado = ROW_COUNT;
+    UPDATE public.supervisor_intervenciones
+      SET guardia_nuevo_id = v_definitivo_id
+      WHERE guardia_nuevo_id = v_duplicado_id;
+    GET DIAGNOSTICS r_intervenciones_nvo = ROW_COUNT;
 
-  UPDATE public.novedades_laborales
-    SET aprobado_por = v_definitivo_id
-    WHERE aprobado_por = v_duplicado_id;
-  GET DIAGNOSTICS r_novedades_aprobado = ROW_COUNT;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'supervisor_intervenciones'
+        AND column_name = 'supervisor_asignado_id'
+    ) THEN
+      EXECUTE format(
+        'UPDATE public.supervisor_intervenciones SET supervisor_asignado_id = %L WHERE supervisor_asignado_id = %L',
+        v_definitivo_id, v_duplicado_id
+      );
+      GET DIAGNOSTICS r_intervenciones_asignado = ROW_COUNT;
+    END IF;
 
-  UPDATE public.turnos_auditoria
-    SET modificado_por = v_definitivo_id
-    WHERE modificado_por = v_duplicado_id;
-  GET DIAGNOSTICS r_turnos_auditoria = ROW_COUNT;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'supervisor_intervenciones'
+        AND column_name = 'supervisor_intervino_id'
+    ) THEN
+      EXECUTE format(
+        'UPDATE public.supervisor_intervenciones SET supervisor_intervino_id = %L WHERE supervisor_intervino_id = %L',
+        v_definitivo_id, v_duplicado_id
+      );
+      GET DIAGNOSTICS r_intervenciones_intervino = ROW_COUNT;
+    END IF;
+  END IF;
 
-  UPDATE public.supervisores_guardia
-    SET supervisor_id = v_definitivo_id
-    WHERE supervisor_id = v_duplicado_id;
-  GET DIAGNOSTICS r_supervisores_supervisor = ROW_COUNT;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'supervisiones'
+  ) THEN
+    UPDATE public.supervisiones
+      SET supervisor_id = v_definitivo_id
+      WHERE supervisor_id = v_duplicado_id;
+    GET DIAGNOSTICS r_supervisiones = ROW_COUNT;
+  END IF;
 
-  UPDATE public.supervisores_guardia
-    SET creado_por = v_definitivo_id
-    WHERE creado_por = v_duplicado_id;
-  GET DIAGNOSTICS r_supervisores_creado = ROW_COUNT;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'novedades_laborales'
+  ) THEN
+    UPDATE public.novedades_laborales
+      SET empleado_id = v_definitivo_id
+      WHERE empleado_id = v_duplicado_id;
+    GET DIAGNOSTICS r_novedades_empleado = ROW_COUNT;
+
+    UPDATE public.novedades_laborales
+      SET cargado_por = v_definitivo_id
+      WHERE cargado_por = v_duplicado_id;
+    GET DIAGNOSTICS r_novedades_cargado = ROW_COUNT;
+
+    UPDATE public.novedades_laborales
+      SET aprobado_por = v_definitivo_id
+      WHERE aprobado_por = v_duplicado_id;
+    GET DIAGNOSTICS r_novedades_aprobado = ROW_COUNT;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'turnos_auditoria'
+  ) THEN
+    UPDATE public.turnos_auditoria
+      SET modificado_por = v_definitivo_id
+      WHERE modificado_por = v_duplicado_id;
+    GET DIAGNOSTICS r_turnos_auditoria = ROW_COUNT;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'supervisores_guardia'
+  ) THEN
+    UPDATE public.supervisores_guardia
+      SET supervisor_id = v_definitivo_id
+      WHERE supervisor_id = v_duplicado_id;
+    GET DIAGNOSTICS r_supervisores_supervisor = ROW_COUNT;
+
+    UPDATE public.supervisores_guardia
+      SET creado_por = v_definitivo_id
+      WHERE creado_por = v_duplicado_id;
+    GET DIAGNOSTICS r_supervisores_creado = ROW_COUNT;
+  END IF;
 
   -- ── VERIFICAR QUE NO QUEDAN REFERENCIAS RESIDUALES ────────────────────────
   -- Recorre todas las FK reales de pg_catalog que apuntan a usuarios.id.
@@ -347,6 +395,7 @@ BEGIN
   RAISE NOTICE 'REFERENCIAS MIGRADAS:';
   RAISE NOTICE '  turnos.guardia_id              : %', r_turnos_guardia;
   RAISE NOTICE '  turnos.guardia_original_id     : %', r_turnos_guardia_original;
+  RAISE NOTICE '  turnos.guardia_real_id         : %', r_turnos_guardia_real;
   RAISE NOTICE '  registros_asistencia.guardia_id: %', r_registros_guardia;
   RAISE NOTICE '  registros_asistencia.guardia_final_id: %', r_registros_guardia_final;
   RAISE NOTICE '  registros_asistencia_auditoria.modificado_por: %', r_auditoria_modificado;

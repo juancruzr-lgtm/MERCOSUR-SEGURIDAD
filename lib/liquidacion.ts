@@ -22,6 +22,7 @@ export interface RegistroLiquidacion {
   hora_salida_final?: string | null
   horas_trabajadas?: number | string | null
   horas_liquidables?: number | string | null
+  created_at?: string | null
 }
 
 export interface TurnoLiquidacion {
@@ -64,13 +65,20 @@ export function effectiveSalida(r?: RegistroLiquidacion | null): string | null {
 }
 
 // ── Score y selección del registro principal ──────────────────────────────────
-// Score: prioriza registros más completos (entrada > salida > horas trabajadas).
-// selectRegistroPrincipal reemplaza el loop manual de deduplicación.
+// Prioridades (mayor a menor):
+//   1. horas_liquidables almacenadas (corrección admin, saneamiento, cobertura manual)
+//   2. campos _final presentes (corrección de guardia/objetivo/horario)
+//   3. hora_entrada_real (fichaje GPS o manual con entrada)
+//   4. hora_salida_real (fichaje completo)
+//   5. horas_trabajadas (desempate numérico, capped a 24)
+// Tie-break final: created_at más reciente gana.
 
 export function scoreRegistro(r: RegistroLiquidacion): number {
-  return (r.hora_entrada_real ? 10 : 0) +
-         (r.hora_salida_real  ?  5 : 0) +
-         (Number(r.horas_trabajadas) || 0)
+  return (r.horas_liquidables != null                                  ? 100 : 0) +
+         (r.hora_entrada_final != null || r.hora_salida_final != null  ?  40 : 0) +
+         (r.hora_entrada_real  != null                                 ?  10 : 0) +
+         (r.hora_salida_real   != null                                 ?   5 : 0) +
+         Math.min(Number(r.horas_trabajadas) || 0, 24)
 }
 
 export function selectRegistroPrincipal<R extends RegistroLiquidacion>(
@@ -83,7 +91,8 @@ export function selectRegistroPrincipal<R extends RegistroLiquidacion>(
   return [...filtrados].sort(
     (a, b) =>
       scoreRegistro(b) - scoreRegistro(a) ||
-      (a.hora_entrada_real || '').localeCompare(b.hora_entrada_real || ''),
+      // Si igual score, el más reciente gana
+      (b.created_at || '').localeCompare(a.created_at || ''),
   )[0]
 }
 

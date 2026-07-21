@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { effectiveGuardia, effectiveObjetivo, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion } from '@/lib/liquidacion'
+import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion } from '@/lib/liquidacion'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -464,12 +464,48 @@ function horasProgramadasTurno(turno: Pick<Turno, 'hora_inicio' | 'hora_fin'>): 
   return Math.max(0, fin - inicio) / 60
 }
 
-function inicioMesLocalISO(fecha = new Date()): string {
-  return new Date(fecha.getFullYear(), fecha.getMonth(), 1).toISOString()
+// ── Utilidades de fecha Argentina (UTC-3, sin DST) ───────────────────────────
+// Toda la lógica de "hoy", "este mes" y rangos de fecha usa este offset fijo.
+// No dependemos de la timezone del navegador ni de toISOString() para definir
+// fronteras de mes.
+
+function fechaHoyArgentina(): string {
+  return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
 
+/** ISO 8601 del primer instante del mes en Argentina (medianoche AR = 03:00 UTC). */
+function inicioMesArgISO(ref = new Date()): string {
+  const argDate = new Date(ref.getTime() - 3 * 60 * 60 * 1000).toISOString().slice(0, 7)
+  const [year, month] = argDate.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, 1, 3, 0, 0)).toISOString()
+}
+
+/** ISO 8601 del primer instante del mes SIGUIENTE en Argentina. */
+function inicioMesSiguienteArgISO(ref = new Date()): string {
+  const argDate = new Date(ref.getTime() - 3 * 60 * 60 * 1000).toISOString().slice(0, 7)
+  const [year, month] = argDate.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1 + 1, 1, 3, 0, 0)).toISOString()
+}
+
+/** Mes actual en Argentina como "YYYY-MM". */
+function mesActualArgentina(): string {
+  return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 7)
+}
+
+/** Fecha de inicio de la ventana histórica (3 meses antes del inicio del mes actual). */
+function inicioVentanaHistoricaArg(): string {
+  const [year, month] = mesActualArgentina().split('-').map(Number)
+  // Retroceder 3 meses
+  const d = new Date(Date.UTC(year, month - 1 - 3, 1, 3, 0, 0))
+  return d.toISOString().slice(0, 10)
+}
+
+// Alias para compatibilidad con código que aún use inicioMesLocalISO
+function inicioMesLocalISO(fecha = new Date()): string {
+  return inicioMesArgISO(fecha)
+}
 function inicioMesSiguienteLocalISO(fecha = new Date()): string {
-  return new Date(fecha.getFullYear(), fecha.getMonth() + 1, 1).toISOString()
+  return inicioMesSiguienteArgISO(fecha)
 }
 
 function NavItem({ id, icon, label, active, badge, onClick }: any) {
@@ -772,13 +808,14 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 }
 
 function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNavigate }: any) {
-  const hoy = new Date().toLocaleDateString('sv-SE')
+  const hoy = fechaHoyArgentina()
   const mesActual = hoy.slice(0, 7)
   const usuarios = guardias as Usuario[]
   const objetivosActivos = objetivos.filter((o: Objetivo) => o.estado === 'activo')
   const guardiasActivos = usuarios.filter((g: Usuario) => esRolGuardia(g.rol) && g.estado === 'activo')
   const turnosHoy = turnos.filter((t: Turno) => t.fecha === hoy)
   const turnoPorId = new Map<string, Turno>(turnos.map((t: Turno) => [t.id, t]))
+  const objetivoPorId = new Map<string, Objetivo>(objetivos.map((o: Objetivo) => [o.id, o]))
   const registrosHoy = registros.filter((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha === hoy)
   const registrosMes = registros.filter((r: RegistroAsistencia) => turnoPorId.get(r.turno_id)?.fecha?.slice(0, 7) === mesActual)
   const tieneEntradaConfirmada = (turno: Turno) =>
@@ -807,8 +844,45 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     return !tieneEntradaConfirmada(t) || (tieneEntradaConfirmada(t) && !tieneSalida(t))
   })
   const llegadasTarde = tardanzasRegistradas.length
-  const horasHoy = registrosHoy.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
-  const horasMes = registrosMes.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+
+  // ── Cálculo de horas: función auxiliar reutilizable ──────────────────────────
+  // Agrupa registros por turno, selecciona el principal, suma horas_liquidables.
+  // Excluye: tipo_registro='ausencia', objetivos es_prueba=true.
+  function sumarHorasLiquidablesPorTurnos(
+    regs: RegistroAsistencia[],
+    tPorId: Map<string, Turno>,
+  ): number {
+    const mejorPorTurno = new Map<string, RegistroAsistencia>()
+    for (const r of regs) {
+      if (r.tipo_registro === 'ausencia') continue
+      const turno = tPorId.get(r.turno_id)
+      if (!turno) continue
+      if (objetivoPorId.get(turno.objetivo_id)?.es_prueba) continue
+      const actual = mejorPorTurno.get(r.turno_id)
+      if (!actual || scoreRegistro(r) > scoreRegistro(actual)) {
+        mejorPorTurno.set(r.turno_id, r)
+      }
+    }
+    let total = 0
+    for (const [turnoId, r] of mejorPorTurno) {
+      const t = tPorId.get(turnoId)
+      if (t) total += horasLiquidablesRegistro(t, r)
+    }
+    return total
+  }
+
+  const horasHoy = sumarHorasLiquidablesPorTurnos(registrosHoy, turnoPorId)
+  const horasMes = sumarHorasLiquidablesPorTurnos(registrosMes, turnoPorId)
+
+  // Horas fichadas GPS: solo registros con entrada Y salida real (evidencia GPS/manual).
+  // Dato secundario — no se usa para liquidación.
+  const horasGPSMes = registrosMes
+    .filter((r: RegistroAsistencia) =>
+      r.tipo_registro !== 'ausencia' &&
+      r.hora_entrada_real != null &&
+      r.hora_salida_real != null,
+    )
+    .reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
   const guardiasConAsistenciaMes = new Set(registrosMes.filter((r: RegistroAsistencia) => r.hora_entrada_real).map((r: RegistroAsistencia) => r.guardia_id)).size
   const turnosFinalizadosHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && r.hora_salida_real).length
   const turnosEnCursoHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
@@ -842,8 +916,9 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: semanticColors.success, page:'turnos', filtro:{ tipo:'cubiertos', label:'Turnos cubiertos hoy' } },
     { label: 'Turnos descubiertos', value: turnosDescubiertos.length, sub: 'sin cobertura operativa', color: semanticColors.error, page:'turnos', filtro:{ tipo:'descubiertos', label:'Turnos descubiertos hoy' } },
     { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: semanticColors.success, page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
-    { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'registros del día', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
+    { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'liquidables del día', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
     { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: mesActual, color: brandColors.orange, page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
+    { label: 'Horas fichadas GPS', value: formatoHoras(horasGPSMes), sub: 'solo fichajes con entrada y salida', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'mes', label:'Horas fichadas GPS mes' } },
     { label: 'Llegadas tarde', value: llegadasTarde, sub: 'tardanzas registradas hoy', color: semanticColors.warning, page:'asistencia', filtro:{ tipo:'tarde', label:'Llegadas tarde hoy' } },
     { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'sin entrada +15 min', color: semanticColors.error, page:'turnos', filtro:{ tipo:'sin_fichar', label:'Turnos sin fichar hoy' } },
   ]
@@ -5860,13 +5935,32 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => sum + row._horasLiquidables, 0),
   }
 
-  // Totales globales del mes — misma lógica que planillas, aplicada sobre todo el mes
-  const totalHsLiquidablesMes = registrosMes
-    .filter((r: RegistroAsistencia) => Boolean(r.hora_salida_final ?? r.hora_salida_real))
-    .reduce((s: number, r: RegistroAsistencia) => {
-      const t = turnoPorId.get(r.turno_id)
+  // Totales globales del mes:
+  // - deduplicados por turno (selectRegistroPrincipal)
+  // - excluye ausencias y objetivos es_prueba
+  // - incluye coberturas manuales y saneamiento (tienen horas_liquidables sin GPS)
+  // - misma lógica que Dashboard "Horas trabajadas mes" para que coincidan
+  const _mejorRegistroPorTurnoReportes = (() => {
+    const map = new Map<string, RegistroAsistencia>()
+    for (const r of registrosMes) {
+      if (r.tipo_registro === 'ausencia') continue
+      const turno = turnoPorId.get(r.turno_id)
+      if (!turno) continue
+      if (objetivos.find((o: Objetivo) => o.id === turno.objetivo_id)?.es_prueba) continue
+      const actual = map.get(r.turno_id)
+      if (!actual || scoreRegistro(r) > scoreRegistro(actual)) {
+        map.set(r.turno_id, r)
+      }
+    }
+    return map
+  })()
+  const totalHsLiquidablesMes = Array.from(_mejorRegistroPorTurnoReportes.entries()).reduce(
+    (s, [turnoId, r]) => {
+      const t = turnoPorId.get(turnoId)
       return t ? s + horasLiquidablesRegistro(t, r) : s
-    }, 0)
+    },
+    0,
+  )
   const totalHsProgramadasMes = turnosMes
     .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
   const pctCubierto = totalHsProgramadasMes > 0
@@ -8739,13 +8833,19 @@ export default function AppPage() {
   const cargarDatosAdmin = useCallback(async () => {
     setLoading(true)
     const ahora = new Date()
-    const inicioMes = inicioMesLocalISO(ahora)
-    const inicioMesSiguiente = inicioMesSiguienteLocalISO(ahora)
+    const inicioMes = inicioMesArgISO(ahora)
+    const inicioMesSiguiente = inicioMesSiguienteArgISO(ahora)
+    // Ventana histórica: 3 meses hacia atrás desde el inicio del mes actual.
+    // Cubre el mes en curso + 2 meses anteriores, suficiente para reportes habituales.
+    const fechaDesde = inicioVentanaHistoricaArg()
+    const [fdY, fdM, fdD] = fechaDesde.split('-').map(Number)
+    // Argentina midnight = UTC 03:00 del mismo día
+    const fechaDesdeISO = new Date(Date.UTC(fdY, fdM - 1, fdD, 3, 0, 0)).toISOString()
     const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
       supabase.from('usuarios').select('*').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
-      supabase.from('turnos').select('*').order('fecha', { ascending: false }),
-      supabase.from('registros_asistencia').select('*').order('created_at', { ascending: false }),
+      supabase.from('turnos').select('*').gte('fecha', fechaDesde).order('fecha', { ascending: false }),
+      supabase.from('registros_asistencia').select('*').gte('created_at', fechaDesdeISO).order('created_at', { ascending: false }),
       supabase.from('novedades').select('*').order('created_at', { ascending: false }),
       supabase.from('checklist_plantillas').select('*').order('nombre'),
       supabase.from('checklist_items').select('*').order('orden', { ascending: true }),
