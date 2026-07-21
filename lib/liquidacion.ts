@@ -13,6 +13,7 @@ import { calcularHorasLiquidables } from '@/lib/supabase'
 // Son compatibles con RegistroAsistencia (AppClient) y los shapes de la API.
 
 export interface RegistroLiquidacion {
+  id?: string | null
   guardia_id?: string | null
   guardia_final_id?: string | null
   objetivo_final_id?: string | null
@@ -22,7 +23,6 @@ export interface RegistroLiquidacion {
   hora_salida_final?: string | null
   horas_trabajadas?: number | string | null
   horas_liquidables?: number | string | null
-  created_at?: string | null
 }
 
 export interface TurnoLiquidacion {
@@ -39,6 +39,9 @@ export interface LineaLiquidacion {
   horaSalida:         string | null  // final ?? real (null si en curso)
   horasReales:        number         // raw horas_trabajadas
   horasLiquidables:   number         // calculado con tolerancia 15 min
+  horasFichadasGPS:   number         // horas_trabajadas solo si hay entrada Y salida real (GPS evidence)
+  tieneEntrada:       boolean        // hora_entrada_real presente
+  tieneSalida:        boolean        // hora_salida_real presente
 }
 
 // ── Resolvedores de campo efectivo ────────────────────────────────────────────
@@ -65,13 +68,18 @@ export function effectiveSalida(r?: RegistroLiquidacion | null): string | null {
 }
 
 // ── Score y selección del registro principal ──────────────────────────────────
-// Prioridades (mayor a menor):
-//   1. horas_liquidables almacenadas (corrección admin, saneamiento, cobertura manual)
-//   2. campos _final presentes (corrección de guardia/objetivo/horario)
-//   3. hora_entrada_real (fichaje GPS o manual con entrada)
-//   4. hora_salida_real (fichaje completo)
-//   5. horas_trabajadas (desempate numérico, capped a 24)
-// Tie-break final: created_at más reciente gana.
+// Prioridades primarias (mayor a menor):
+//   1. horas_liquidables almacenadas   (+100) — corrección admin, saneamiento, cobertura manual
+//   2. campos _final presentes         (+40)  — corrección de guardia/objetivo/horario
+//   3. hora_entrada_real               (+10)  — fichaje GPS o manual con entrada
+//   4. hora_salida_real                (+5)   — fichaje completo
+//   5. horas_trabajadas (capped a 24)         — desempate numérico
+//
+// Tie-break por calidad cuando el score primario empata:
+//   1. tiene salida efectiva (_final ?? real) — registro más completo
+//   2. tiene entrada efectiva (_final ?? real)
+//   3. horas_liquidables numéricamente mayor  — más horas = más información
+//   4. id lexicográfico                       — determinístico y estable
 
 export function scoreRegistro(r: RegistroLiquidacion): number {
   return (r.horas_liquidables != null                                  ? 100 : 0) +
@@ -88,12 +96,24 @@ export function selectRegistroPrincipal<R extends RegistroLiquidacion>(
   const filtrados = guardiaId != null
     ? registros.filter(r => effectiveGuardia(r) === guardiaId)
     : registros
-  return [...filtrados].sort(
-    (a, b) =>
-      scoreRegistro(b) - scoreRegistro(a) ||
-      // Si igual score, el más reciente gana
-      (b.created_at || '').localeCompare(a.created_at || ''),
-  )[0]
+  return [...filtrados].sort((a, b) => {
+    const ds = scoreRegistro(b) - scoreRegistro(a)
+    if (ds !== 0) return ds
+    // Tie-break 1: tiene salida efectiva
+    const salidaA = effectiveSalida(a) != null ? 1 : 0
+    const salidaB = effectiveSalida(b) != null ? 1 : 0
+    if (salidaB !== salidaA) return salidaB - salidaA
+    // Tie-break 2: tiene entrada efectiva
+    const entradaA = effectiveEntrada(a) != null ? 1 : 0
+    const entradaB = effectiveEntrada(b) != null ? 1 : 0
+    if (entradaB !== entradaA) return entradaB - entradaA
+    // Tie-break 3: horas_liquidables mayor
+    const hlA = Number(a.horas_liquidables) || 0
+    const hlB = Number(b.horas_liquidables) || 0
+    if (hlB !== hlA) return hlB - hlA
+    // Tie-break 4: id lexicográfico (determinístico)
+    return (a.id || '').localeCompare(b.id || '')
+  })[0]
 }
 
 // ── Cálculos de horas ─────────────────────────────────────────────────────────
@@ -132,6 +152,8 @@ export function resolverLineaLiquidacion(
   turno: TurnoLiquidacion,
   registro?: RegistroLiquidacion | null,
 ): LineaLiquidacion {
+  const tieneEntrada = registro?.hora_entrada_real != null
+  const tieneSalida  = registro?.hora_salida_real  != null
   return {
     guardiaEfectivoId:  effectiveGuardia(registro),
     objetivoEfectivoId: effectiveObjetivo(registro, turno),
@@ -139,5 +161,8 @@ export function resolverLineaLiquidacion(
     horaSalida:         effectiveSalida(registro),
     horasReales:        horasRealesRegistro(registro),
     horasLiquidables:   horasLiquidablesRegistro(turno, registro),
+    horasFichadasGPS:   tieneEntrada && tieneSalida ? Math.max(0, Number(registro?.horas_trabajadas) || 0) : 0,
+    tieneEntrada,
+    tieneSalida,
   }
 }

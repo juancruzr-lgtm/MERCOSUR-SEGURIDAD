@@ -492,13 +492,6 @@ function mesActualArgentina(): string {
   return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 7)
 }
 
-/** Fecha de inicio de la ventana histórica (3 meses antes del inicio del mes actual). */
-function inicioVentanaHistoricaArg(): string {
-  const [year, month] = mesActualArgentina().split('-').map(Number)
-  // Retroceder 3 meses
-  const d = new Date(Date.UTC(year, month - 1 - 3, 1, 3, 0, 0))
-  return d.toISOString().slice(0, 10)
-}
 
 // Alias para compatibilidad con código que aún use inicioMesLocalISO
 function inicioMesLocalISO(fecha = new Date()): string {
@@ -848,10 +841,11 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   // ── Cálculo de horas: función auxiliar reutilizable ──────────────────────────
   // Agrupa registros por turno, selecciona el principal, suma horas_liquidables.
   // Excluye: tipo_registro='ausencia', objetivos es_prueba=true.
-  function sumarHorasLiquidablesPorTurnos(
+  // Retorna { horasLiquidables, horasGPS } ambos deduplicados por turno.
+  function sumarHorasPorTurnos(
     regs: RegistroAsistencia[],
     tPorId: Map<string, Turno>,
-  ): number {
+  ): { horasLiquidables: number; horasGPS: number } {
     const mejorPorTurno = new Map<string, RegistroAsistencia>()
     for (const r of regs) {
       if (r.tipo_registro === 'ausencia') continue
@@ -863,26 +857,21 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         mejorPorTurno.set(r.turno_id, r)
       }
     }
-    let total = 0
+    let horasLiquidables = 0
+    let horasGPS = 0
     for (const [turnoId, r] of mejorPorTurno) {
       const t = tPorId.get(turnoId)
-      if (t) total += horasLiquidablesRegistro(t, r)
+      if (t) {
+        const linea = resolverLineaLiquidacion(t, r)
+        horasLiquidables += linea.horasLiquidables
+        horasGPS += linea.horasFichadasGPS
+      }
     }
-    return total
+    return { horasLiquidables, horasGPS }
   }
 
-  const horasHoy = sumarHorasLiquidablesPorTurnos(registrosHoy, turnoPorId)
-  const horasMes = sumarHorasLiquidablesPorTurnos(registrosMes, turnoPorId)
-
-  // Horas fichadas GPS: solo registros con entrada Y salida real (evidencia GPS/manual).
-  // Dato secundario — no se usa para liquidación.
-  const horasGPSMes = registrosMes
-    .filter((r: RegistroAsistencia) =>
-      r.tipo_registro !== 'ausencia' &&
-      r.hora_entrada_real != null &&
-      r.hora_salida_real != null,
-    )
-    .reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+  const { horasLiquidables: horasHoy } = sumarHorasPorTurnos(registrosHoy, turnoPorId)
+  const { horasLiquidables: horasMes, horasGPS: horasGPSMes } = sumarHorasPorTurnos(registrosMes, turnoPorId)
   const guardiasConAsistenciaMes = new Set(registrosMes.filter((r: RegistroAsistencia) => r.hora_entrada_real).map((r: RegistroAsistencia) => r.guardia_id)).size
   const turnosFinalizadosHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && r.hora_salida_real).length
   const turnosEnCursoHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
@@ -5621,14 +5610,32 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [agregarRegistroContexto, setAgregarRegistroContexto] = useState<{ empleadoId?: string; objetivoId?: string } | null>(null)
   const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
   const [tab, setTab] = useState('planilla_empleado')
-  const [mes, setMes] = useState(new Date().toLocaleDateString('sv-SE').slice(0, 7))
+  const [mes, setMes] = useState(mesActualArgentina())
   const [verTodos, setVerTodos] = useState(false)
   const [empleadoId, setEmpleadoId] = useState('')
   const [objetivoId, setObjetivoId] = useState('')
 
+  const [turnosReportes, setTurnosReportes] = useState<Turno[]>([])
+  const [registrosReportes, setRegistrosReportes] = useState<RegistroAsistencia[]>([])
+
   useEffect(() => {
     if (filtroActivo?.mes) setMes(filtroActivo.mes)
   }, [filtroActivo?.mes])
+
+  useEffect(() => {
+    const [y, m] = mes.split('-').map(Number)
+    const desdeStr = `${mes}-01`
+    const desdeISO = new Date(Date.UTC(y, m - 1, 1, 3, 0, 0)).toISOString()
+    const hastaISO = new Date(Date.UTC(y, m, 1, 3, 0, 0)).toISOString()
+    const hastaStr = hastaISO.slice(0, 10)
+    Promise.all([
+      supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: true }),
+      supabase.from('registros_asistencia').select('*').gte('created_at', desdeISO).lt('created_at', hastaISO).order('created_at', { ascending: false }),
+    ]).then(([t, r]) => {
+      setTurnosReportes(t.data ?? [])
+      setRegistrosReportes(r.data ?? [])
+    })
+  }, [mes])
 
   useEffect(() => {
     if (!empleadoId && empleados.length > 0) setEmpleadoId(empleados[0].id)
@@ -5726,11 +5733,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     const [year, month] = mes.split('-').map(Number)
     return new Date(year, month - 1, 1).toLocaleDateString('es-AR', { month:'long', year:'numeric' })
   })()
-  const turnosMes = turnos
-    .filter((t: Turno) => t.fecha >= desde && t.fecha < hasta)
+  const turnosMes = [...turnosReportes]
     .sort((a: Turno, b: Turno) => `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`))
   const turnoPorId = new Map<string, Turno>(turnosMes.map((t: Turno) => [t.id, t]))
-  const registrosMes = registros.filter((r: RegistroAsistencia) => Boolean(turnoPorId.get(r.turno_id)))
+  const registrosMes = registrosReportes.filter((r: RegistroAsistencia) => Boolean(turnoPorId.get(r.turno_id)))
   const registrosPorTurno = new Map<string, RegistroAsistencia[]>()
   registrosMes.forEach((r: RegistroAsistencia) => {
     registrosPorTurno.set(r.turno_id, [...(registrosPorTurno.get(r.turno_id) || []), r])
@@ -5957,7 +5963,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const totalHsLiquidablesMes = Array.from(_mejorRegistroPorTurnoReportes.entries()).reduce(
     (s, [turnoId, r]) => {
       const t = turnoPorId.get(turnoId)
-      return t ? s + horasLiquidablesRegistro(t, r) : s
+      return t ? s + resolverLineaLiquidacion(t, r).horasLiquidables : s
     },
     0,
   )
@@ -6204,10 +6210,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           onClose={() => setAgregarRegistroContexto(null)}
           guardias={guardias}
           objetivos={objetivos}
-          turnos={turnos}
+          turnos={turnosReportes}
           user={user}
-          setRegistros={setRegistros}
-          setTurnos={setTurnos}
+          setRegistros={setRegistrosReportes}
+          setTurnos={setTurnosReportes}
           contextoEmpleadoId={agregarRegistroContexto.empleadoId}
           contextoObjetivoId={agregarRegistroContexto.objetivoId}
         />
@@ -6480,11 +6486,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         <CorregirRegistroModal
           registro={registroCorrigiendo}
           onClose={() => setRegistroCorrigiendo(null)}
-          turnos={turnos}
+          turnos={turnosReportes}
           guardias={guardias}
           objetivos={objetivos}
           user={user}
-          setRegistros={setRegistros}
+          setRegistros={setRegistrosReportes}
         />
       )}
 
@@ -6494,7 +6500,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           onClose={() => setTurnoParaCargaManual(null)}
           guardias={guardias}
           user={user}
-          setRegistros={setRegistros}
+          setRegistros={setRegistrosReportes}
         />
       )}
     </div>
@@ -8835,17 +8841,17 @@ export default function AppPage() {
     const ahora = new Date()
     const inicioMes = inicioMesArgISO(ahora)
     const inicioMesSiguiente = inicioMesSiguienteArgISO(ahora)
-    // Ventana histórica: 3 meses hacia atrás desde el inicio del mes actual.
-    // Cubre el mes en curso + 2 meses anteriores, suficiente para reportes habituales.
-    const fechaDesde = inicioVentanaHistoricaArg()
-    const [fdY, fdM, fdD] = fechaDesde.split('-').map(Number)
-    // Argentina midnight = UTC 03:00 del mismo día
-    const fechaDesdeISO = new Date(Date.UTC(fdY, fdM - 1, fdD, 3, 0, 0)).toISOString()
+    const mesActual = mesActualArgentina()
+    const [fdY, fdM] = mesActual.split('-').map(Number)
+    const desdeStr = `${mesActual}-01`
+    const desdeISO = new Date(Date.UTC(fdY, fdM - 1, 1, 3, 0, 0)).toISOString()
+    const hastaISO = new Date(Date.UTC(fdY, fdM, 1, 3, 0, 0)).toISOString()
+    const hastaStr = hastaISO.slice(0, 10)
     const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
       supabase.from('usuarios').select('*').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
-      supabase.from('turnos').select('*').gte('fecha', fechaDesde).order('fecha', { ascending: false }),
-      supabase.from('registros_asistencia').select('*').gte('created_at', fechaDesdeISO).order('created_at', { ascending: false }),
+      supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }),
+      supabase.from('registros_asistencia').select('*').gte('created_at', desdeISO).lt('created_at', hastaISO).order('created_at', { ascending: false }),
       supabase.from('novedades').select('*').order('created_at', { ascending: false }),
       supabase.from('checklist_plantillas').select('*').order('nombre'),
       supabase.from('checklist_items').select('*').order('orden', { ascending: true }),
