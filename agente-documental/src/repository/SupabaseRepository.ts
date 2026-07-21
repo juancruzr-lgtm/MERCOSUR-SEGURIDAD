@@ -113,14 +113,35 @@ export class SupabaseRepository implements IRepository {
   }
 
   async findAllRelativePathsByAgent(agenteId: string): Promise<string[]> {
-    const { data, error } = await this.client
-      .from(TABLE)
-      .select('ruta_relativa')
-      .eq('agente_id', agenteId)
-      .eq('disponible', true)
+    // PostgREST limita cada respuesta a 1.000 filas por defecto.
+    // Paginamos explícitamente hasta recuperar la página vacía que indica fin de datos.
+    // MAX_PAGES es un tope de seguridad: 500 páginas × 1.000 filas = 500.000 registros máx.
+    const PAGE_SIZE = 1000
+    const MAX_PAGES = 500
+    const paths: string[] = []
 
-    if (error) throw new Error(`findAllRelativePathsByAgent: ${error.message}`)
-    return (data ?? []).map((r: Record<string, unknown>) => r['ruta_relativa'] as string)
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const from = page * PAGE_SIZE
+      const to   = from + PAGE_SIZE - 1
+
+      const { data, error } = await this.client
+        .from(TABLE)
+        .select('ruta_relativa')
+        .eq('agente_id', agenteId)
+        .eq('disponible', true)
+        .range(from, to)
+
+      if (error) throw new Error(`findAllRelativePathsByAgent (página ${page}): ${error.message}`)
+
+      const rows = data ?? []
+      for (const r of rows) {
+        paths.push((r as Record<string, unknown>)['ruta_relativa'] as string)
+      }
+
+      if (rows.length < PAGE_SIZE) break
+    }
+
+    return paths
   }
 
   async healthCheck(): Promise<void> {

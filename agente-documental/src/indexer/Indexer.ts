@@ -92,6 +92,7 @@ export class Indexer {
     summary: Pick<ScanSummary, 'marcadosNoDisponibles'>,
   ): Promise<void> {
     const knownPaths = await this.repo.findAllRelativePathsByAgent(this.config.agenteId)
+    this.logger.debug(`reconcileDeleted: ${knownPaths.length} rutas conocidas recuperadas de la base`)
 
     for (const knownPath of knownPaths) {
       if (!foundPaths.has(knownPath)) {
