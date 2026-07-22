@@ -30,6 +30,7 @@ export interface TurnoLiquidacion {
   hora_inicio: string
   hora_fin: string
   objetivo_id?: string | null
+  estado?: string | null
 }
 
 export interface LineaLiquidacion {
@@ -131,6 +132,21 @@ export function normalizarHorasOficiales(horas: number): number {
   return Math.round(horas * 2) / 2
 }
 
+// ── Período de transición ──────────────────────────────────────────────────────
+// Junio y julio 2026: el estado "cubierto" es la autoridad para la liquidación.
+// La ausencia de fichaje GPS no invalida la cobertura en estos meses.
+export function esPeriodoTransicion(fecha: string): boolean {
+  return fecha >= '2026-06-01' && fecha <= '2026-07-31'
+}
+
+export function horasProgramadasTurno(turno: TurnoLiquidacion): number {
+  const [h1, m1] = turno.hora_inicio.split(':').map(Number)
+  const [h2, m2] = turno.hora_fin.split(':').map(Number)
+  let d = (h2 * 60 + m2) - (h1 * 60 + m1)
+  if (d < 0) d += 1440
+  return d / 60
+}
+
 // REGLA OFICIAL DE LIQUIDACIÓN DEL SISTEMA
 // ─────────────────────────────────────────
 // Las horas oficiales surgen del turno programado, no del fichaje GPS.
@@ -177,7 +193,12 @@ export function horasLiquidablesRegistro(
     )
   }
 
-  // Path 4: en curso o sin datos suficientes
+  // Path 4 (transición): turno cubierto en junio/julio 2026 sin registro → horas programadas
+  if (!registro && turno.estado === 'cubierto' && esPeriodoTransicion(turno.fecha)) {
+    return horasProgramadasTurno(turno)
+  }
+
+  // Path 5: en curso o sin datos suficientes
   return 0
 }
 
@@ -234,7 +255,9 @@ export function resolverLineaLiquidacion(
   const tieneEntrada = registro?.hora_entrada_real != null
   const tieneSalida  = registro?.hora_salida_real  != null
   const horasLiquidables = horasLiquidablesRegistro(turno, registro)
-  const origen = resolverOrigen(registro)
+  const origen = !registro && horasLiquidables > 0
+    ? { origenRegistro: 'transicion', origenEtiqueta: 'Turno cubierto (sin fichaje)', cargadoPorEmpleado: false, cargadoPorSupervisor: false, cargadoPorAdministracion: false }
+    : resolverOrigen(registro)
   return {
     guardiaEfectivoId:        effectiveGuardia(registro),
     objetivoEfectivoId:       effectiveObjetivo(registro, turno),

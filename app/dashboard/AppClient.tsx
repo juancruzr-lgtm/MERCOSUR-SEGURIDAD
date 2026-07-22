@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion } from '@/lib/liquidacion'
+import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion } from '@/lib/liquidacion'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -5900,7 +5900,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   }).filter(Boolean) as any[]
 
   const filasVacias = turnosSinRegistroObj.map((turno: Turno) => {
-    const estado = estadoPlanilla(turno, undefined)
+    const esTransicion = turno.estado === 'cubierto' && esPeriodoTransicion(turno.fecha)
+    const horasLiquidables = esTransicion ? horasProgramadasTurno(turno) : 0
+    const estado = esTransicion ? 'Cubierto' : estadoPlanilla(turno, undefined)
     return {
       Fecha: formatFecha(turno.fecha),
       Día: diaSemana(turno.fecha),
@@ -5910,23 +5912,23 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'Entrada efectiva': '—',
       'Salida efectiva': '—',
       'Horas reales': '—',
-      'Horas liquidables': '—',
+      'Horas liquidables': esTransicion ? mostrarHoras(horasLiquidables) : '—',
       Estado: estado,
-      'Observaciones / alertas': observacionesPlanilla(turno, undefined),
+      'Observaciones / alertas': esTransicion ? 'Turno cubierto (período de transición)' : observacionesPlanilla(turno, undefined),
       'GPS ingreso': '—',
       'Distancia ingreso': '—',
       'Estado GPS ingreso': '—',
-      Origen: '—',
+      Origen: esTransicion ? 'Turno cubierto (sin fichaje)' : '—',
       _id: `${turno.id}-sin-registro`,
       _turno_id: turno.id,
       _registro: null,
       _fecha: turno.fecha,
       _horaInicio: turno.hora_inicio,
       _horasReales: 0,
-      _horasLiquidables: 0,
-      _cubierto: false,
-      _sinFichar: Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
-      _descubierto: turno.estado === 'descubierto' || !turno.guardia_id,
+      _horasLiquidables: horasLiquidables,
+      _cubierto: esTransicion,
+      _sinFichar: !esTransicion && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
+      _descubierto: !esTransicion && (turno.estado === 'descubierto' || !turno.guardia_id),
       _enCurso: false,
     }
   })
@@ -5968,10 +5970,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     descubiertos: planillaObjetivo.filter((row: any) => row._descubierto).length,
     enCurso: planillaObjetivo.filter((row: any) => row._enCurso).length,
     horasReales: registrosObjetivoDedup.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0),
-    horasLiquidables: registrosObjetivoDedup.reduce((sum: number, r: RegistroAsistencia) => {
-      const t = turnoPorId.get(r.turno_id)
-      return t ? sum + horasLiquidablesRegistro(t, r) : sum
-    }, 0),
+    horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => sum + (row._horasLiquidables || 0), 0),
   }
 
   // Totales globales del mes:
@@ -6094,12 +6093,26 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       const principalesG = [...porTurnoG.values()]
         .map(rs => selectRegistroPrincipal(rs, g.id))
         .filter(Boolean) as RegistroAsistencia[]
-      const dias = new Set(principalesG.map((r) => turnoPorId.get(r.turno_id)?.fecha).filter(Boolean)).size
+
+      // Transición jun/jul 2026: turnos cubiertos del mes sin ningún registro propio
+      const turnosFallback = turnosMes.filter((t: Turno) =>
+        t.guardia_id === g.id &&
+        t.estado === 'cubierto' &&
+        esPeriodoTransicion(t.fecha) &&
+        !porTurnoG.has(t.id)
+      )
+
+      const diasConRegistro = new Set(principalesG.map((r) => turnoPorId.get(r.turno_id)?.fecha).filter(Boolean))
+      const dias = new Set([...diasConRegistro, ...turnosFallback.map((t: Turno) => t.fecha)]).size
+
       const horasReales = principalesG.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
-      const horasLiquidables = principalesG.reduce((s: number, r: RegistroAsistencia) => {
+
+      const horasLiquidablesConRegistro = principalesG.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
         return turno ? s + horasLiquidablesRegistro(turno, r) : s
       }, 0)
+      const horasLiquidablesFallback = turnosFallback.reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+      const horasLiquidables = horasLiquidablesConRegistro + horasLiquidablesFallback
 
       return {
         Legajo: g.legajo,
@@ -6113,9 +6126,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         Tardanzas: regs.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length,
         'Salidas Anticipadas': regs.filter((r: RegistroAsistencia) => r.alerta_salida === 'anticipada').length,
         _registros: regs.length,
+        _fallback: turnosFallback.length,
       }
     })
-    .filter((g: any) => verTodos || g._registros > 0)
+    .filter((g: any) => verTodos || g._registros > 0 || g._fallback > 0)
 
   const reporteObjetivos = objetivos
     .map((o: Objetivo) => {
