@@ -6080,6 +6080,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     await descargarXLSX(nombre, filas, 4, planillaObjetivo.length, [5, 6, 1, 8])
   }
 
+  // Turnos que tienen algún registro de asistencia (de cualquier guardia)
+  const turnosConCualquierRegistro = new Set(registrosMes.map((r: RegistroAsistencia) => r.turno_id))
+
   const reporteGuardias = guardias
     .map((g: Usuario) => {
       const regs = registrosMes.filter((r: RegistroAsistencia) => effectiveGuardia(r) === g.id)
@@ -6094,12 +6097,13 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         .map(rs => selectRegistroPrincipal(rs, g.id))
         .filter(Boolean) as RegistroAsistencia[]
 
-      // Transición jun/jul 2026: turnos cubiertos del mes sin ningún registro propio
+      // Transición jun/jul 2026: turnos cubiertos del mes sin ningún registro de asistencia
+      // (de cualquier guardia — si existe un registro, la jerarquía admin > supervisor > registro aplica)
       const turnosFallback = turnosMes.filter((t: Turno) =>
         t.guardia_id === g.id &&
         t.estado === 'cubierto' &&
         esPeriodoTransicion(t.fecha) &&
-        !porTurnoG.has(t.id)
+        !turnosConCualquierRegistro.has(t.id)
       )
 
       const diasConRegistro = new Set(principalesG.map((r) => turnoPorId.get(r.turno_id)?.fecha).filter(Boolean))
