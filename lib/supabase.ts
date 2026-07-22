@@ -72,6 +72,8 @@ export interface Turno {
   hora_inicio: string
   hora_fin: string
   estado: 'programado' | 'cubierto' | 'descubierto'
+  revisado_por?: string | null
+  revisado_at?: string | null
   // joins
   guardia?: Usuario
   objetivo?: Objetivo

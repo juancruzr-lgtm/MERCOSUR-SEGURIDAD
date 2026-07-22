@@ -5943,9 +5943,22 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       arr.push(r)
       porTurno.set(r.turno_id, arr)
     }
-    return [...porTurno.values()]
-      .map(rs => selectRegistroPrincipal(rs))
-      .filter(Boolean) as RegistroAsistencia[]
+    // Case 4: un turno puede tener varios guardias (A + B) → un principal por (turno, guardia)
+    const result: RegistroAsistencia[] = []
+    for (const rs of porTurno.values()) {
+      const porGuardia = new Map<string, RegistroAsistencia[]>()
+      for (const r of rs) {
+        const gId = effectiveGuardia(r) ?? '__'
+        const arr = porGuardia.get(gId) ?? []
+        arr.push(r)
+        porGuardia.set(gId, arr)
+      }
+      for (const gRegs of porGuardia.values()) {
+        const p = selectRegistroPrincipal(gRegs)
+        if (p) result.push(p)
+      }
+    }
+    return result
   })()
 
   const totalesObjetivo = {
@@ -6115,9 +6128,21 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         arr.push(r)
         porTurnoO.set(r.turno_id, arr)
       }
-      const principalesO = [...porTurnoO.values()]
-        .map(rs => selectRegistroPrincipal(rs))
-        .filter(Boolean) as RegistroAsistencia[]
+      // Case 4: un turno puede tener varios guardias (A + B) → un principal por (turno, guardia)
+      const principalesO: RegistroAsistencia[] = []
+      for (const rs of porTurnoO.values()) {
+        const porGuardiaO = new Map<string, RegistroAsistencia[]>()
+        for (const r of rs) {
+          const gId = effectiveGuardia(r) ?? '__'
+          const arr = porGuardiaO.get(gId) ?? []
+          arr.push(r)
+          porGuardiaO.set(gId, arr)
+        }
+        for (const gRegs of porGuardiaO.values()) {
+          const p = selectRegistroPrincipal(gRegs)
+          if (p) principalesO.push(p)
+        }
+      }
       const turnosConAsistencia = principalesO.length
       const horasReales = principalesO.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
       const horasLiquidables = principalesO.reduce((s: number, r: RegistroAsistencia) => {
@@ -7509,7 +7534,196 @@ function SupervisoresGuardia({ guardias, user }: any) {
   )
 }
 
-function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, user }: any) {
+function CerrarTurnoModal({ turno, registros, guardias, objetivos, onClose, onSuccess }: {
+  turno: Turno
+  registros: RegistroAsistencia[]
+  guardias: Usuario[]
+  objetivos: Objetivo[]
+  onClose: () => void
+  onSuccess: (turnoId: string, revisadoPor: string) => void
+}) {
+  type Tramo = { id: string; guardia_id: string; hora_inicio: string; hora_fin: string }
+
+  const turnoRegs = registros.filter(r => r.turno_id === turno.id && r.hora_entrada_real)
+  const guardiasActivos = guardias.filter((g: Usuario) => esRolGuardia(g.rol) && g.estado === 'activo')
+
+  const tramosIniciales = (): Tramo[] => {
+    if (turnoRegs.length > 0) {
+      return turnoRegs.map(r => ({
+        id: crypto.randomUUID(),
+        guardia_id: effectiveGuardia(r) ?? '',
+        hora_inicio: ((r.hora_entrada_final ?? r.hora_entrada_real) ?? '').slice(0, 5),
+        hora_fin:    ((r.hora_salida_final  ?? r.hora_salida_real)  ?? '').slice(0, 5),
+      }))
+    }
+    return [{
+      id: crypto.randomUUID(),
+      guardia_id: turno.guardia_id ?? '',
+      hora_inicio: turno.hora_inicio.slice(0, 5),
+      hora_fin:    turno.hora_fin.slice(0, 5),
+    }]
+  }
+
+  const [tramos, setTramos] = useState<Tramo[]>(tramosIniciales)
+  const [comentario, setComentario] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError]   = useState('')
+
+  const calcHorasTramo = (hi: string, hf: string): number => {
+    if (!hi || !hf) return 0
+    const [hh, mm]   = hi.split(':').map(Number)
+    const [hh2, mm2] = hf.split(':').map(Number)
+    let min = (hh2 * 60 + mm2) - (hh * 60 + mm)
+    if (min <= 0) min += 1440
+    return Number((min / 60).toFixed(2))
+  }
+
+  const totalHoras = tramos.reduce((s, t) => s + calcHorasTramo(t.hora_inicio, t.hora_fin), 0)
+
+  const agregarTramo = () =>
+    setTramos(prev => [...prev, { id: crypto.randomUUID(), guardia_id: '', hora_inicio: '', hora_fin: '' }])
+
+  const quitarTramo = (id: string) => setTramos(prev => prev.filter(t => t.id !== id))
+
+  const updateTramo = (id: string, field: string, value: string) =>
+    setTramos(prev => prev.map(t => t.id === id ? { ...t, [field]: value } : t))
+
+  const validar = (): string | null => {
+    for (const t of tramos) {
+      if (!t.guardia_id) return 'Seleccioná un guardia para cada tramo.'
+      if (!t.hora_inicio || !t.hora_fin) return 'Ingresá hora de inicio y fin en cada tramo.'
+      if (t.hora_inicio === t.hora_fin) return 'La hora de inicio y fin no pueden ser iguales.'
+    }
+    return null
+  }
+
+  const aprobar = async () => {
+    const err = validar()
+    if (err) { setError(err); return }
+    setLoading(true)
+    setError('')
+    try {
+      const { error: rpcError } = await supabase.rpc('cerrar_turno', {
+        p_turno_id:   turno.id,
+        p_tramos:     tramos.map(t => ({ guardia_id: t.guardia_id, hora_inicio: t.hora_inicio, hora_fin: t.hora_fin })),
+        p_comentario: comentario || null,
+      })
+      if (rpcError) throw rpcError
+      const { data: usuarioData } = await supabase.auth.getUser()
+      onSuccess(turno.id, usuarioData?.user?.id ?? '')
+    } catch (e: any) {
+      setError(e?.message || 'Error al cerrar el turno.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const nombreGuardia = (id?: string | null) => {
+    if (!id) return 'Sin asignar'
+    const g = guardias.find((u: Usuario) => u.id === id)
+    return g ? `${g.apellido}, ${g.nombre}` : 'Usuario no encontrado'
+  }
+
+  const objetivo = objetivos.find((o: Objetivo) => o.id === turno.objetivo_id)
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:16, padding:24, width:'100%', maxWidth:660, maxHeight:'90vh', overflowY:'auto' }}>
+
+        {/* Header */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+          <div style={{ fontFamily:'Syne,sans-serif', fontSize:20, fontWeight:800, color:'#e2e8f0' }}>Cierre de turno</div>
+          <button type="button" onClick={onClose} style={{ background:'none', border:'none', color:'#64748b', cursor:'pointer', fontSize:22, lineHeight:1 }}>✕</button>
+        </div>
+
+        {/* Info del turno */}
+        <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:10, padding:12, marginBottom:16,
+          display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px,1fr))', gap:8 }}>
+          <div><div style={S.label}>Objetivo</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{objetivo?.nombre ?? '—'}</div></div>
+          <div><div style={S.label}>Fecha</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{formatFecha(turno.fecha)}</div></div>
+          <div><div style={S.label}>Horario programado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{turno.hora_inicio.slice(0,5)} – {turno.hora_fin.slice(0,5)}</div></div>
+          <div><div style={S.label}>Guardia programado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreGuardia(turno.guardia_id)}</div></div>
+        </div>
+
+        {/* Fichajes GPS */}
+        {turnoRegs.length > 0 && (
+          <div style={{ marginBottom:16 }}>
+            <div style={{ ...S.label, marginBottom:6 }}>Fichajes GPS (solo lectura)</div>
+            {turnoRegs.map(r => (
+              <div key={r.id} style={{ background:'#0a1628', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 12px', marginBottom:6,
+                fontSize:12, color:'#94a3b8', display:'flex', gap:16, flexWrap:'wrap' as const }}>
+                <span><strong style={{ color:'#cbd5e1' }}>{nombreGuardia(effectiveGuardia(r))}</strong></span>
+                <span>Entrada: <strong>{r.hora_entrada_real?.slice(0,5) ?? '—'}</strong></span>
+                <span>Salida: <strong>{r.hora_salida_real?.slice(0,5) ?? 'en curso'}</strong></span>
+                {r.gps_ingreso_estado === 'fuera_radio' && <span style={{ color:'#f87171' }}>⚠ fuera de radio</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Tramos a aprobar */}
+        <div style={{ marginBottom:8 }}>
+          <div style={{ ...S.label, marginBottom:8 }}>Cobertura a aprobar</div>
+          {tramos.map((tramo) => {
+            const h = calcHorasTramo(tramo.hora_inicio, tramo.hora_fin)
+            return (
+              <div key={tramo.id} style={{ display:'grid', gridTemplateColumns:'1fr 110px 110px 52px auto', gap:6, marginBottom:8, alignItems:'center' }}>
+                <select style={{ ...S.select, fontSize:12 }} value={tramo.guardia_id}
+                  onChange={e => updateTramo(tramo.id, 'guardia_id', e.target.value)}>
+                  <option value="">Guardia…</option>
+                  {guardiasActivos.map((g: Usuario) => (
+                    <option key={g.id} value={g.id}>{g.apellido}, {g.nombre}</option>
+                  ))}
+                </select>
+                <input type="time" style={{ ...S.input, fontSize:12 }} value={tramo.hora_inicio}
+                  onChange={e => updateTramo(tramo.id, 'hora_inicio', e.target.value)} />
+                <input type="time" style={{ ...S.input, fontSize:12 }} value={tramo.hora_fin}
+                  onChange={e => updateTramo(tramo.id, 'hora_fin', e.target.value)} />
+                <div style={{ fontSize:12, color:'#94a3b8', textAlign:'right' as const }}>{h > 0 ? `${h}h` : '—'}</div>
+                {tramos.length > 1 ? (
+                  <button type="button" onClick={() => quitarTramo(tramo.id)}
+                    style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:16, padding:0 }}>✕</button>
+                ) : <div />}
+              </div>
+            )
+          })}
+          <button type="button" onClick={agregarTramo}
+            style={{ ...S.btn, ...S.btnSecondary, marginTop:4, fontSize:12, padding:'6px 14px' }}>
+            + Agregar tramo
+          </button>
+        </div>
+
+        {/* Total */}
+        <div style={{ textAlign:'right' as const, marginBottom:16, fontSize:14, color:'#e2e8f0', paddingRight:64 }}>
+          Total aprobado: <strong style={{ color:'#10b981' }}>{totalHoras.toFixed(2)} h</strong>
+        </div>
+
+        {/* Comentario */}
+        <div style={{ marginBottom:16 }}>
+          <label style={S.label}>Comentario (opcional)</label>
+          <textarea style={{ ...S.input, minHeight:56, resize:'vertical' as const }}
+            value={comentario} onChange={e => setComentario(e.target.value)}
+            placeholder="Ej.: Relevo parcial confirmado con cliente" />
+        </div>
+
+        {error && (
+          <div style={{ background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.35)', color:'#fca5a5',
+            borderRadius:8, padding:10, fontSize:13, marginBottom:12 }}>{error}</div>
+        )}
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={onClose}>Cancelar</button>
+          <button type="button" style={{ ...S.btn, ...S.btnPrimary, justifyContent:'center' }} onClick={aprobar} disabled={loading}>
+            {loading ? 'Aprobando...' : 'Aprobar turno'}
+          </button>
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
+function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, user, supervisorZonas = [], zonasOperativas = [] }: any) {
   type AlertaOperativaAdmin = {
     key: string
     tipo: TipoAlertaOperativaAdmin
@@ -7523,18 +7737,35 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const [intervenciones, setIntervenciones] = useState<any[]>([])
   const [supervisoresGuardia, setSupervisoresGuardia] = useState<any[]>([])
   const [loadingData, setLoadingData] = useState(true)
-  const [tab, setTab] = useState<'pendientes' | 'intervenidas'>('pendientes')
+  const [tab, setTab] = useState<'pendientes' | 'intervenidas' | 'cierre'>('pendientes')
   const [accionActiva, setAccionActiva] = useState<{ alerta: AlertaOperativaAdmin, accion: AccionIntervencionAdmin } | null>(null)
   const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const [loadingAccion, setLoadingAccion] = useState('')
   const [error, setError] = useState('')
   const [mensaje, setMensaje] = useState('')
+  const [turnoParaCerrar, setTurnoParaCerrar] = useState<Turno | null>(null)
 
   const hoy = fechaActualTurno()
   const ahora = new Date()
   const usuarios = guardias as Usuario[]
   const guardiasActivos = usuarios.filter((g: Usuario) => esRolGuardia(g.rol) && g.estado === 'activo')
-  const turnosHoy = (turnos as Turno[]).filter((t: Turno) => t.fecha === hoy)
+
+  // Etapa 5: filtrado por zona del supervisor
+  const esAdmin = esRolAdmin(user?.rol)
+  const misZonaIds = new Set<string>(
+    esAdmin
+      ? []
+      : (supervisorZonas as any[])
+          .filter((sz: any) => sz.supervisor_id === user?.id)
+          .map((sz: any) => sz.zona_id as string)
+  )
+  const turnosHoyAll = (turnos as Turno[]).filter((t: Turno) => t.fecha === hoy)
+  const turnosHoy = (esAdmin || misZonaIds.size === 0)
+    ? turnosHoyAll
+    : turnosHoyAll.filter((t: Turno) => {
+        const obj = (objetivos as Objetivo[]).find((o: Objetivo) => o.id === t.objetivo_id)
+        return obj?.zona_id ? misZonaIds.has(obj.zona_id) : false
+      })
 
   const nombreUsuario = (id?: string | null) => {
     if (!id) return 'Sin asignar'
@@ -7850,6 +8081,11 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     if (!user?.id) throw new Error('Sesión de administrador no disponible.')
 
     const asignacion = supervisorGuardiaAsignado(alerta.turno)
+    // Zona dinámica: si hay asignación de zona para el usuario, usarla; si no, fallback
+    const miZonaSz = (supervisorZonas as any[]).find((sz: any) => sz.supervisor_id === user?.id)
+    const miZonaNombre = miZonaSz
+      ? ((zonasOperativas as any[]).find((z: any) => z.id === miZonaSz.zona_id)?.nombre ?? ZONA_OPERATIVA_ADMIN)
+      : ZONA_OPERATIVA_ADMIN
     const insertPayload = {
       ...payload,
       turno_id: alerta.turno.id,
@@ -7861,7 +8097,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       supervisor_guardia_id: asignacion?.id || null,
       jefe_operativo: JEFE_OPERATIVO_ADMIN,
       director_tecnico: DIRECTOR_TECNICO_ADMIN,
-      zona: ZONA_OPERATIVA_ADMIN,
+      zona: miZonaNombre,
     }
 
     const { data, error: insertError } = await supabase
@@ -8203,14 +8439,46 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       {mensaje && <div style={{ background:'rgba(16,185,129,.12)', border:'1px solid rgba(16,185,129,.35)', color:'#86efac', borderRadius:8, padding:12, marginBottom:16 }}>{mensaje}</div>}
       {error && !accionActiva && <div style={{ background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.35)', color:'#fca5a5', borderRadius:8, padding:12, marginBottom:16 }}>{error}</div>}
 
-      <div style={{ display:'flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:24, width:'fit-content' }}>
-        <button style={tabStyle(tab === 'pendientes')} onClick={() => setTab('pendientes')}>
-          Alertas pendientes ({alertasPendientes.length})
-        </button>
-        <button style={tabStyle(tab === 'intervenidas')} onClick={() => setTab('intervenidas')}>
-          Alertas intervenidas ({intervenidasOrdenadas.length})
-        </button>
-      </div>
+      {/* Cierre de turno modal */}
+      {turnoParaCerrar && (
+        <CerrarTurnoModal
+          turno={turnoParaCerrar}
+          registros={registros}
+          guardias={guardias}
+          objetivos={objetivos}
+          onClose={() => setTurnoParaCerrar(null)}
+          onSuccess={(turnoId, _uid) => {
+            setTurnos((prev: Turno[]) => prev.map((t: Turno) =>
+              t.id === turnoId ? { ...t, revisado_at: new Date().toISOString(), estado: 'cubierto' as const } : t
+            ))
+            setTurnoParaCerrar(null)
+            setMensaje('Turno cerrado correctamente.')
+          }}
+        />
+      )}
+
+      {/* Turnos listos para cierre */}
+      {(() => {
+        const turnosCierre = turnosHoy.filter((t: Turno) => {
+          const ended = finTurnoMasToleranciaPaso(t)
+          const tieneRegs = registros.some((r: RegistroAsistencia) => r.turno_id === t.id)
+          return ended || tieneRegs
+        })
+
+        return (
+          <div style={{ display:'flex', gap:4, background:'#1a2235', borderRadius:10, padding:4, marginBottom:24, width:'fit-content', flexWrap:'wrap' as const }}>
+            <button style={tabStyle(tab === 'pendientes')} onClick={() => setTab('pendientes')}>
+              Alertas pendientes ({alertasPendientes.length})
+            </button>
+            <button style={tabStyle(tab === 'intervenidas')} onClick={() => setTab('intervenidas')}>
+              Alertas intervenidas ({intervenidasOrdenadas.length})
+            </button>
+            <button style={tabStyle(tab === 'cierre')} onClick={() => setTab('cierre')}>
+              Cierre de turnos ({turnosCierre.length})
+            </button>
+          </div>
+        )
+      })()}
 
       {loadingData && <div style={{ textAlign:'center', padding:48, color:'#64748b' }}>Cargando intervenciones...</div>}
 
@@ -8241,6 +8509,69 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
           </div>
         ) : intervenidasOrdenadas.map(renderIntervenida)
       )}
+
+      {tab === 'cierre' && (() => {
+        const turnosCierre = turnosHoy
+          .filter((t: Turno) => finTurnoMasToleranciaPaso(t) || registros.some((r: RegistroAsistencia) => r.turno_id === t.id))
+          .sort((a: Turno, b: Turno) => a.hora_inicio.localeCompare(b.hora_inicio))
+
+        if (turnosCierre.length === 0) {
+          return (
+            <div style={{ ...S.card, textAlign:'center', padding:48, color:'#64748b' }}>
+              <div style={{ fontSize:36, marginBottom:12 }}>✓</div>
+              <div>No hay turnos disponibles para cierre</div>
+            </div>
+          )
+        }
+
+        return (
+          <div>
+            {turnosCierre.map((t: Turno) => {
+              const regs = registros.filter((r: RegistroAsistencia) => r.turno_id === t.id)
+              const yaRevisado = !!(t as any).revisado_at
+              const objetivo = (objetivos as Objetivo[]).find((o: Objetivo) => o.id === t.objetivo_id)
+
+              return (
+                <div key={t.id} style={{
+                  background: yaRevisado ? 'rgba(16,185,129,.06)' : '#111827',
+                  border: `1px solid ${yaRevisado ? 'rgba(16,185,129,.28)' : '#1e2d42'}`,
+                  borderRadius:12, padding:16, marginBottom:12,
+                }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap' as const }}>
+                    <div>
+                      <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, color:'#e2e8f0', fontSize:15 }}>
+                        {objetivo?.nombre ?? 'Objetivo sin nombre'}
+                      </div>
+                      <div style={{ fontSize:13, color:'#94a3b8', marginTop:4 }}>
+                        {formatFecha(t.fecha)} · {t.hora_inicio.slice(0,5)} – {t.hora_fin.slice(0,5)}
+                        {t.guardia_id ? ` · ${nombreUsuario(t.guardia_id)}` : ' · Sin guardia asignado'}
+                      </div>
+                      {regs.length > 0 && (
+                        <div style={{ fontSize:12, color:'#64748b', marginTop:4 }}>
+                          {regs.filter((r: RegistroAsistencia) => r.hora_entrada_real).length} fichaje(s) GPS registrado(s)
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display:'flex', gap:8, alignItems:'center', flexShrink:0 }}>
+                      {yaRevisado
+                        ? <Badge type="resuelta">Revisado</Badge>
+                        : <Badge type="pendiente">Pendiente</Badge>
+                      }
+                      <button
+                        type="button"
+                        style={{ ...S.btn, ...S.btnPrimary, padding:'6px 16px', fontSize:13 }}
+                        onClick={() => setTurnoParaCerrar(t)}
+                      >
+                        {yaRevisado ? 'Re-cerrar' : 'Cerrar turno'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })()}
     </div>
   )
 }
@@ -9133,7 +9464,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
-              {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} user={user} />}
+              {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} user={user} supervisorZonas={supervisorZonas} zonasOperativas={zonasOperativas} />}
               {page === 'supervisiones' && (
                 <SupervisionesAdmin
                   supervisiones={supervisionesAdmin}
