@@ -8,6 +8,7 @@ import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 import { initTelemetry, endSession } from '@/lib/telemetry'
 import { useSupervisorGps } from '@/lib/supervisor-gps'
+import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
@@ -435,6 +436,7 @@ function resumenGps(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 
 
 export default function SupervisorMobile({ user }: any) {
   const [tab, setTab] = useState('inicio')
+  const [objetivoLegajoId, setObjetivoLegajoId] = useState<string | null>(null)
   const [turnos, setTurnos] = useState<Turno[]>([])
   const [guardias, setGuardias] = useState<Usuario[]>([])
   const [supervisores, setSupervisores] = useState<Usuario[]>([])
@@ -2940,7 +2942,16 @@ export default function SupervisorMobile({ user }: any) {
               </section>
             )}
 
-            {tab === 'objetivos' && (
+            {tab === 'objetivos' && objetivoLegajoId && (
+              <section style={{ minWidth: 0 }}>
+                <CentroOperativoObjetivo
+                  objetivoId={objetivoLegajoId}
+                  onVolver={() => setObjetivoLegajoId(null)}
+                />
+              </section>
+            )}
+
+            {tab === 'objetivos' && !objetivoLegajoId && (
               <section>
                 <div style={screenTitle}>Objetivos</div>
                 <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
@@ -2959,6 +2970,13 @@ export default function SupervisorMobile({ user }: any) {
                     <div style={muted}>{objetivo.direccion || 'Sin dirección'}</div>
                     <div style={muted}>Radio {objetivo.radio_metros || 200}m · Estado {objetivo.estado || 'activo'}</div>
                     <div style={muted}>GPS {objetivo.lat ?? '—'}, {objetivo.lng ?? '—'} · {ubicacionObjetivoCompleta(objetivo) ? 'Ubicación completa' : 'Falta GPS'}</div>
+                    <button
+                      type="button"
+                      style={{ ...refreshButton, width:'100%', marginTop:12 }}
+                      onClick={() => { setError(''); setObjetivoLegajoId(objetivo.id) }}
+                    >
+                      Ver legajo del objetivo
+                    </button>
                     <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:12 }}>
                       <button style={secondaryButton} onClick={() => abrirEditarObjetivo(objetivo)}>
                         Editar
@@ -3832,7 +3850,10 @@ export default function SupervisorMobile({ user }: any) {
         {tabs.map((t) => (
           <button
             key={t.id}
-            onClick={() => setTab(t.id)}
+            onClick={() => {
+              setTab(t.id)
+              if (t.id !== 'objetivos') setObjetivoLegajoId(null)
+            }}
             style={{
               ...navButton,
               background: tab === t.id ? 'rgba(245,158,11,.12)' : 'transparent',
