@@ -2846,6 +2846,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
         onVolver={() => setObjetivoSeleccionadoId(null)}
         onNavigate={onNavigate}
         esAdmin={user?.rol === 'admin'}
+        rolUsuario={user?.rol}
       />
     )
   }

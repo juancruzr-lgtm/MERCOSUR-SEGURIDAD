@@ -2947,6 +2947,7 @@ export default function SupervisorMobile({ user }: any) {
                 <CentroOperativoObjetivo
                   objetivoId={objetivoLegajoId}
                   onVolver={() => setObjetivoLegajoId(null)}
+                  rolUsuario={user?.rol}
                 />
               </section>
             )}

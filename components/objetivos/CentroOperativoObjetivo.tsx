@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Badge, btn, btnPrimary, btnSecondary } from '@/components/ui/base'
+import RondasNativasPanel from '@/components/rondas/RondasNativasPanel'
 import styles from './CentroOperativoObjetivo.module.css'
 import {
   cargarLegajoObjetivo, cargarRondasObjetivo, derivarEstadoObjetivo,
@@ -36,11 +37,12 @@ const JWM_RONDAS_URL: Record<string, string> = {
 }
 
 // ── CENTRO OPERATIVO DEL OBJETIVO ────────────────────────────────────
-function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin }: {
+function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, rolUsuario }: {
   objetivoId: string
   onVolver: () => void
   onNavigate?: (destino: string, filtro?: any) => void
   esAdmin?: boolean
+  rolUsuario?: 'admin' | 'supervisor' | 'guardia' | 'vigilador'
 }) {
   const hoy = fechaHoyLocal()
 
@@ -192,7 +194,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin }: 
           { label:'Sin fichar',   value:turnosSinFichar.length, color:'#f59e0b', anchor:'sec-turnos' },
           { label:'Alertas',      value:alertas.length,     color: alertas.length > 0 ? '#ef4444' : '#64748b', anchor:'sec-alertas' },
           { label:'Novedades',    value:novedadesObj.length, color: novedadesObj.length > 0 ? '#f59e0b' : '#64748b', anchor:'sec-alertas' },
-          { label:'Rondas hoy',   value:historial.length,   color:'#a78bfa', anchor:'sec-historial' },
+          { label:'Checkpoints JWM hoy', value:historial.length, color:'#a78bfa', anchor:'sec-historial' },
         ].map(({ label, value, color, anchor }) => (
           <div
             key={label}
@@ -305,6 +307,16 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin }: 
         </div>
       )}
 
+      {/* Configuración nativa, independiente del historial importado de JWM. */}
+      {(rolUsuario === 'admin' || rolUsuario === 'supervisor') && (
+        <div id="sec-rondas-nativas" style={card}>
+          <RondasNativasPanel
+            objetivoId={objetivoId}
+            puedeAdministrar={rolUsuario === 'admin' || rolUsuario === 'supervisor'}
+          />
+        </div>
+      )}
+
       {/* Integraciones — Rondas y Cámaras */}
       {JWM_RONDAS_URL[objetivo.nombre] && (
         <div style={card}>
@@ -333,11 +345,11 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin }: 
         </div>
       )}
 
-      {/* Historial de rondas JWM */}
+      {/* Historial legado de checkpoints JWM */}
       {JWM_RONDAS_URL[objetivo.nombre] && (
         <div id="sec-historial" style={card}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, marginBottom:12 }}>
-            <div style={secTitle}>Historial de rondas</div>
+            <div style={secTitle}>Historial JWM</div>
             <div className={styles.historyControls} style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
               <input className={styles.dateInput} type="date" value={histDesde} onChange={e => setHistDesde(e.target.value)}
                 style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'5px 8px', color:'#e2e8f0', fontSize:12 }} />
