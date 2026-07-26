@@ -3,6 +3,8 @@ import { supabase } from '@/lib/supabase'
 export const RONDA_INTERVALO_MINIMO = 15
 export const RONDA_INTERVALO_MAXIMO = 10080
 
+export type OrigenPosicion = 'gps' | 'manual' | null
+
 export interface RondaBase {
   id: string
   objetivo_id: string
@@ -33,6 +35,7 @@ export interface RondaPunto {
   longitud: number | null
   precision_metros: number | null
   radio_metros: number | null
+  origen_posicion: OrigenPosicion
   activo: boolean
   created_at: string
   updated_at: string
@@ -62,6 +65,7 @@ export interface NuevoRondaPunto {
   longitud?: number | null
   precision_metros?: number | null
   radio_metros?: number | null
+  origen_posicion?: OrigenPosicion
   activo?: boolean
 }
 
@@ -74,7 +78,7 @@ export type ResultadoRondas<T> =
 const COLS_RONDA_BASE =
   'id, objetivo_id, nombre, descripcion, intervalo_minutos, activo, version, creado_por, actualizado_por, created_at, updated_at'
 const COLS_RONDA_PUNTO =
-  'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, gps_requerido, latitud, longitud, precision_metros, radio_metros, activo, created_at, updated_at'
+  'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, activo, created_at, updated_at'
 
 function mensajeError(error: { message?: string } | null, fallback: string): string {
   if (!error?.message) return fallback
@@ -107,6 +111,29 @@ export function validarRondaPunto(datos: NuevoRondaPunto): string | null {
   const tieneLatitud = datos.latitud !== null && datos.latitud !== undefined
   const tieneLongitud = datos.longitud !== null && datos.longitud !== undefined
   if (tieneLatitud !== tieneLongitud) return 'La latitud y la longitud deben guardarse juntas.'
+  if (!tieneLatitud && datos.origen_posicion) return 'Un punto sin coordenadas no puede tener origen de posición.'
+  if (
+    !tieneLatitud &&
+    datos.precision_metros !== null &&
+    datos.precision_metros !== undefined
+  ) {
+    return 'Un punto sin coordenadas no puede conservar precisión GPS.'
+  }
+  if (
+    datos.origen_posicion !== undefined &&
+    datos.origen_posicion !== null &&
+    datos.origen_posicion !== 'gps' &&
+    datos.origen_posicion !== 'manual'
+  ) {
+    return 'El origen de la posición no es válido.'
+  }
+  if (
+    datos.origen_posicion === 'manual' &&
+    datos.precision_metros !== null &&
+    datos.precision_metros !== undefined
+  ) {
+    return 'Una posición corregida manualmente no conserva la precisión GPS.'
+  }
   if (tieneLatitud && (datos.latitud! < -90 || datos.latitud! > 90)) return 'La latitud no es válida.'
   if (tieneLongitud && (datos.longitud! < -180 || datos.longitud! > 180)) return 'La longitud no es válida.'
   if (
@@ -296,6 +323,7 @@ export async function agregarPunto(
       longitud: datos.longitud ?? null,
       precision_metros: datos.precision_metros ?? null,
       radio_metros: datos.radio_metros ?? null,
+      origen_posicion: datos.origen_posicion ?? null,
       activo: datos.activo ?? true,
     })
     .select(COLS_RONDA_PUNTO)
@@ -309,6 +337,17 @@ export async function actualizarPunto(
   puntoId: string,
   cambios: ActualizarRondaPunto,
 ): Promise<ResultadoRondas<RondaPunto>> {
+  const cambiaLatitud = Object.prototype.hasOwnProperty.call(cambios, 'latitud')
+  const cambiaLongitud = Object.prototype.hasOwnProperty.call(cambios, 'longitud')
+  if (cambiaLatitud !== cambiaLongitud) {
+    return { data: null, error: 'La latitud y la longitud deben actualizarse juntas.' }
+  }
+  if (
+    cambiaLatitud &&
+    ((cambios.latitud === null) !== (cambios.longitud === null))
+  ) {
+    return { data: null, error: 'La latitud y la longitud deben guardarse juntas.' }
+  }
   if (cambios.nombre !== undefined && !cambios.nombre.trim()) {
     return { data: null, error: 'El nombre del punto es obligatorio.' }
   }
@@ -324,10 +363,31 @@ export async function actualizarPunto(
   if (cambios.radio_metros !== undefined && cambios.radio_metros !== null && cambios.radio_metros <= 0) {
     return { data: null, error: 'El radio permitido debe ser mayor que cero.' }
   }
+  if (
+    cambios.origen_posicion !== undefined &&
+    cambios.origen_posicion !== null &&
+    cambios.origen_posicion !== 'gps' &&
+    cambios.origen_posicion !== 'manual'
+  ) {
+    return { data: null, error: 'El origen de la posición no es válido.' }
+  }
+  if (
+    cambios.origen_posicion === 'manual' &&
+    cambios.precision_metros !== undefined &&
+    cambios.precision_metros !== null
+  ) {
+    return { data: null, error: 'Una posición corregida manualmente no conserva la precisión GPS.' }
+  }
 
   const payload: ActualizarRondaPunto = { ...cambios }
   if (payload.nombre !== undefined) payload.nombre = payload.nombre.trim()
   if (payload.descripcion !== undefined) payload.descripcion = payload.descripcion?.trim() || null
+  if (cambiaLatitud && payload.latitud === null && payload.longitud === null) {
+    payload.origen_posicion = null
+    payload.precision_metros = null
+  } else if (payload.origen_posicion === 'manual') {
+    payload.precision_metros = null
+  }
 
   const { data, error } = await supabase
     .from('ronda_puntos')

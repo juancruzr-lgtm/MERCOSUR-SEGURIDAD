@@ -312,6 +312,11 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         <div id="sec-rondas-nativas" style={card}>
           <RondasNativasPanel
             objetivoId={objetivoId}
+            centroObjetivo={
+              objetivo.lat !== null && objetivo.lng !== null
+                ? [objetivo.lat, objetivo.lng]
+                : null
+            }
             puedeAdministrar={rolUsuario === 'admin' || rolUsuario === 'supervisor'}
           />
         </div>

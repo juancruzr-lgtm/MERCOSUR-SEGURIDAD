@@ -8,10 +8,15 @@ import styles from './Rondas.module.css'
 
 interface Props {
   objetivoId: string
+  centroObjetivo?: [number, number] | null
   puedeAdministrar: boolean
 }
 
-export default function RondasNativasPanel({ objetivoId, puedeAdministrar }: Props) {
+export default function RondasNativasPanel({
+  objetivoId,
+  centroObjetivo,
+  puedeAdministrar,
+}: Props) {
   const [rondas, setRondas] = useState<RondaBaseResumen[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
@@ -55,6 +60,7 @@ export default function RondasNativasPanel({ objetivoId, puedeAdministrar }: Pro
         <RondaBaseEditor
           key={editando?.id ?? 'nueva'}
           objetivoId={objetivoId}
+          centroObjetivo={centroObjetivo}
           rondaInicial={editando}
           onCerrar={() => {
             setEditando(undefined)

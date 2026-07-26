@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import dynamic from 'next/dynamic'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   agregarPunto,
   actualizarPunto,
@@ -8,11 +9,18 @@ import {
   obtenerRondaConPuntos,
   reordenarPuntos,
 } from '@/lib/rondas'
-import type { NuevoRondaPunto, RondaPunto } from '@/lib/rondas'
+import type { NuevoRondaPunto, OrigenPosicion, RondaPunto } from '@/lib/rondas'
+import type { PuntoRondaMapa } from './RondaPuntosMap'
 import styles from './Rondas.module.css'
+
+const RondaPuntosMap = dynamic(() => import('./RondaPuntosMap'), {
+  ssr: false,
+  loading: () => <div className={styles.mapEmpty}>Cargando mapa…</div>,
+})
 
 interface Props {
   rondaBaseId: string
+  centroObjetivo?: [number, number] | null
   onCambio: () => void
 }
 
@@ -25,19 +33,23 @@ interface PuntoForm {
   longitud: string
   precision_metros: string
   radio_metros: string
+  origen_posicion: OrigenPosicion
   activo: boolean
 }
 
-const FORM_VACIO: PuntoForm = {
-  nombre: '',
-  descripcion: '',
-  foto_requerida: true,
-  gps_requerido: true,
-  latitud: '',
-  longitud: '',
-  precision_metros: '',
-  radio_metros: '30',
-  activo: true,
+function crearFormVacio(): PuntoForm {
+  return {
+    nombre: '',
+    descripcion: '',
+    foto_requerida: true,
+    gps_requerido: true,
+    latitud: '',
+    longitud: '',
+    precision_metros: '',
+    radio_metros: '30',
+    origen_posicion: null,
+    activo: true,
+  }
 }
 
 function formDesdePunto(punto: RondaPunto): PuntoForm {
@@ -50,6 +62,7 @@ function formDesdePunto(punto: RondaPunto): PuntoForm {
     longitud: punto.longitud?.toString() ?? '',
     precision_metros: punto.precision_metros?.toString() ?? '',
     radio_metros: punto.radio_metros?.toString() ?? '',
+    origen_posicion: punto.origen_posicion,
     activo: punto.activo,
   }
 }
@@ -60,14 +73,56 @@ function numeroOpcional(valor: string): number | null {
   return Number.isFinite(numero) ? numero : null
 }
 
-export default function RondaPuntosEditor({ rondaBaseId, onCambio }: Props) {
+function coordenadasFormulario(form: Pick<PuntoForm, 'latitud' | 'longitud'>): [number, number] | null {
+  const latitud = numeroOpcional(form.latitud)
+  const longitud = numeroOpcional(form.longitud)
+  if (
+    latitud === null ||
+    longitud === null ||
+    latitud < -90 ||
+    latitud > 90 ||
+    longitud < -180 ||
+    longitud > 180
+  ) {
+    return null
+  }
+  return [latitud, longitud]
+}
+
+function estadoPosicion(
+  latitud: number | null,
+  longitud: number | null,
+  origen: OrigenPosicion,
+): { texto: string; clase: string } {
+  if (latitud === null || longitud === null) {
+    return { texto: 'Sin posicionar', clase: styles.statusUnpositioned }
+  }
+  if (origen === 'gps') return { texto: 'Posición GPS', clase: styles.statusGps }
+  if (origen === 'manual') return { texto: 'Posición manual', clase: styles.statusManual }
+  return { texto: 'Origen no registrado', clase: styles.statusUnknown }
+}
+
+function formulariosIguales(a: PuntoForm | null, b: PuntoForm): boolean {
+  return a !== null && JSON.stringify(a) === JSON.stringify(b)
+}
+
+export default function RondaPuntosEditor({
+  rondaBaseId,
+  centroObjetivo = null,
+  onCambio,
+}: Props) {
   const [puntos, setPuntos] = useState<RondaPunto[]>([])
   const [cargando, setCargando] = useState(true)
   const [guardando, setGuardando] = useState(false)
   const [editandoId, setEditandoId] = useState<string | 'nuevo' | null>(null)
-  const [form, setForm] = useState<PuntoForm>(FORM_VACIO)
+  const [form, setForm] = useState<PuntoForm>(crearFormVacio)
+  const [formInicial, setFormInicial] = useState<PuntoForm | null>(null)
+  const [ajusteMapa, setAjusteMapa] = useState(false)
   const [error, setError] = useState('')
   const [gpsEstado, setGpsEstado] = useState('')
+
+  const hayCambiosPendientes =
+    editandoId !== null && !formulariosIguales(formInicial, form)
 
   const cargar = useCallback(async () => {
     setCargando(true)
@@ -83,17 +138,56 @@ export default function RondaPuntosEditor({ rondaBaseId, onCambio }: Props) {
 
   useEffect(() => { void cargar() }, [cargar])
 
-  const abrirNuevo = () => {
-    setForm(FORM_VACIO)
-    setEditandoId('nuevo')
+  useEffect(() => {
+    if (!hayCambiosPendientes) return
+    const advertirSalida = (evento: BeforeUnloadEvent) => {
+      evento.preventDefault()
+      evento.returnValue = ''
+    }
+    window.addEventListener('beforeunload', advertirSalida)
+    return () => window.removeEventListener('beforeunload', advertirSalida)
+  }, [hayCambiosPendientes])
+
+  const confirmarDescarte = (): boolean =>
+    !hayCambiosPendientes ||
+    window.confirm('Hay cambios del punto sin guardar. ¿Querés descartarlos?')
+
+  const iniciarFormulario = (id: string | 'nuevo', siguiente: PuntoForm) => {
+    setForm(siguiente)
+    setFormInicial({ ...siguiente })
+    setEditandoId(id)
+    setAjusteMapa(false)
     setError('')
     setGpsEstado('')
   }
 
+  const abrirNuevo = () => {
+    if (!confirmarDescarte()) return
+    iniciarFormulario('nuevo', crearFormVacio())
+  }
+
   const abrirEdicion = (punto: RondaPunto) => {
-    setForm(formDesdePunto(punto))
-    setEditandoId(punto.id)
+    if (editandoId === punto.id) return
+    if (!confirmarDescarte()) return
+    iniciarFormulario(punto.id, formDesdePunto(punto))
+  }
+
+  const cancelarEdicion = () => {
+    if (!confirmarDescarte()) return
+    setEditandoId(null)
+    setFormInicial(null)
+    setAjusteMapa(false)
+    setGpsEstado('')
     setError('')
+  }
+
+  const cambiarCoordenada = (campo: 'latitud' | 'longitud', valor: string) => {
+    setForm(actual => {
+      const siguiente = { ...actual, [campo]: valor, precision_metros: '' }
+      const sinCoordenadas = !siguiente.latitud.trim() && !siguiente.longitud.trim()
+      siguiente.origen_posicion = sinCoordenadas ? null : 'manual'
+      return siguiente
+    })
     setGpsEstado('')
   }
 
@@ -111,6 +205,7 @@ export default function RondaPuntosEditor({ rondaBaseId, onCambio }: Props) {
           latitud: posicion.coords.latitude.toFixed(7),
           longitud: posicion.coords.longitude.toFixed(7),
           precision_metros: Math.round(posicion.coords.accuracy).toString(),
+          origen_posicion: 'gps',
         }))
         setGpsEstado(`Ubicación obtenida con precisión aproximada de ${Math.round(posicion.coords.accuracy)} m.`)
       },
@@ -122,6 +217,17 @@ export default function RondaPuntosEditor({ rondaBaseId, onCambio }: Props) {
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     )
+  }
+
+  const moverDesdeMapa = (latitud: number, longitud: number) => {
+    setForm(actual => ({
+      ...actual,
+      latitud: latitud.toFixed(7),
+      longitud: longitud.toFixed(7),
+      precision_metros: '',
+      origen_posicion: 'manual',
+    }))
+    setGpsEstado('Posición corregida en el mapa. La precisión GPS fue eliminada.')
   }
 
   const guardar = async () => {
@@ -142,15 +248,19 @@ export default function RondaPuntosEditor({ rondaBaseId, onCambio }: Props) {
       return
     }
 
+    const latitud = numeroOpcional(form.latitud)
+    const longitud = numeroOpcional(form.longitud)
+    const sinCoordenadas = latitud === null && longitud === null
     const datos: NuevoRondaPunto = {
       nombre: form.nombre,
       descripcion: form.descripcion,
       foto_requerida: form.foto_requerida,
       gps_requerido: form.gps_requerido,
-      latitud: numeroOpcional(form.latitud),
-      longitud: numeroOpcional(form.longitud),
-      precision_metros: numeroOpcional(form.precision_metros),
+      latitud,
+      longitud,
+      precision_metros: sinCoordenadas ? null : numeroOpcional(form.precision_metros),
       radio_metros: numeroOpcional(form.radio_metros),
+      origen_posicion: sinCoordenadas ? null : form.origen_posicion,
       activo: form.activo,
     }
 
@@ -162,6 +272,8 @@ export default function RondaPuntosEditor({ rondaBaseId, onCambio }: Props) {
       setError(resultado.error)
     } else {
       setEditandoId(null)
+      setFormInicial(null)
+      setAjusteMapa(false)
       await cargar()
       onCambio()
     }
@@ -199,9 +311,41 @@ export default function RondaPuntosEditor({ rondaBaseId, onCambio }: Props) {
     setGuardando(false)
   }
 
+  const puntosMapa = useMemo<PuntoRondaMapa[]>(() => {
+    const base = puntos.map(punto => ({
+      id: punto.id,
+      nombre: punto.nombre,
+      orden: punto.orden,
+      latitud: punto.latitud,
+      longitud: punto.longitud,
+      radio_metros: punto.radio_metros,
+      origen_posicion: punto.origen_posicion,
+    }))
+    if (!editandoId) return base
+
+    const coordenadas = coordenadasFormulario(form)
+    const borrador: PuntoRondaMapa = {
+      id: editandoId,
+      nombre: form.nombre.trim() || (editandoId === 'nuevo' ? 'Nuevo punto' : 'Punto sin nombre'),
+      orden: editandoId === 'nuevo'
+        ? puntos.length + 1
+        : puntos.find(punto => punto.id === editandoId)?.orden ?? puntos.length + 1,
+      latitud: coordenadas?.[0] ?? null,
+      longitud: coordenadas?.[1] ?? null,
+      radio_metros: numeroOpcional(form.radio_metros),
+      origen_posicion: coordenadas ? form.origen_posicion : null,
+    }
+
+    if (editandoId === 'nuevo') return [...base, borrador]
+    return base.map(punto => punto.id === editandoId ? borrador : punto)
+  }, [editandoId, form, puntos])
+
+  const coordenadasEditadasCompletas =
+    editandoId !== null && coordenadasFormulario(form) !== null
+
   return (
     <div className={styles.editor}>
-      <div className={styles.pointHeader} style={{ marginTop: 18, marginBottom: 10 }}>
+      <div className={styles.pointHeader}>
         <div>
           <div className={styles.name}>Puntos de control</div>
           <div className={styles.help}>El orden incluye puntos inactivos para preservar una secuencia estable.</div>
@@ -212,100 +356,155 @@ export default function RondaPuntosEditor({ rondaBaseId, onCambio }: Props) {
       </div>
 
       {error && <div className={styles.message}>{error}</div>}
-      {cargando ? (
-        <div className={styles.help}>Cargando puntos…</div>
-      ) : puntos.length === 0 ? (
-        <div className={styles.help}>La ronda todavía no tiene puntos configurados.</div>
-      ) : (
-        <div className={styles.list}>
-          {puntos.map((punto, indice) => (
-            <div key={punto.id} className={`${styles.point} ${punto.activo ? '' : styles.pointInactive}`}>
-              <div className={styles.row}>
-                <div className={styles.orderButtons}>
-                  <button className={styles.button} type="button" aria-label="Subir punto" onClick={() => void mover(indice, -1)} disabled={indice === 0 || guardando}>↑</button>
-                  <button className={styles.button} type="button" aria-label="Bajar punto" onClick={() => void mover(indice, 1)} disabled={indice === puntos.length - 1 || guardando}>↓</button>
-                </div>
-                <div className={styles.rowMain}>
-                  <div className={styles.name}>#{indice + 1} · {punto.nombre}</div>
-                  <div className={styles.meta}>
-                    {punto.foto_requerida ? 'Foto requerida' : 'Sin foto'} · {punto.gps_requerido ? 'GPS requerido' : 'GPS opcional'}
-                    {punto.latitud !== null ? ` · ${punto.latitud.toFixed(5)}, ${punto.longitud?.toFixed(5)}` : ' · Sin coordenadas'}
-                    {!punto.activo ? ' · Inactivo' : ''}
+
+      <div className={styles.pointsWorkspace}>
+        <div className={styles.pointsColumn}>
+          {cargando ? (
+            <div className={styles.help}>Cargando puntos…</div>
+          ) : puntos.length === 0 ? (
+            <div className={styles.help}>La ronda todavía no tiene puntos configurados.</div>
+          ) : (
+            <div className={styles.list}>
+              {puntos.map((punto, indice) => {
+                const estado = estadoPosicion(punto.latitud, punto.longitud, punto.origen_posicion)
+                const seleccionado = editandoId === punto.id
+                return (
+                  <div
+                    key={punto.id}
+                    className={`${styles.point} ${punto.activo ? '' : styles.pointInactive} ${seleccionado ? styles.pointSelected : ''}`}
+                  >
+                    <div className={styles.row}>
+                      <div className={styles.orderButtons}>
+                        <button className={styles.button} type="button" aria-label="Subir punto" onClick={() => void mover(indice, -1)} disabled={indice === 0 || guardando}>↑</button>
+                        <button className={styles.button} type="button" aria-label="Bajar punto" onClick={() => void mover(indice, 1)} disabled={indice === puntos.length - 1 || guardando}>↓</button>
+                      </div>
+                      <div className={styles.rowMain}>
+                        <div className={styles.name}>#{punto.orden} · {punto.nombre}</div>
+                        <div className={styles.statusRow}>
+                          <span className={`${styles.statusBadge} ${estado.clase}`}>{estado.texto}</span>
+                          {!punto.activo && <span className={`${styles.statusBadge} ${styles.statusUnknown}`}>Inactivo</span>}
+                        </div>
+                        <div className={styles.meta}>
+                          {punto.foto_requerida ? 'Foto requerida' : 'Sin foto'} · {punto.gps_requerido ? 'GPS requerido' : 'GPS opcional'}
+                          {punto.latitud !== null ? ` · ${punto.latitud.toFixed(5)}, ${punto.longitud?.toFixed(5)}` : ''}
+                        </div>
+                      </div>
+                      <div className={styles.actions}>
+                        <button className={styles.button} type="button" onClick={() => abrirEdicion(punto)} disabled={guardando}>Editar</button>
+                        {punto.activo && (
+                          <button className={`${styles.button} ${styles.buttonDanger}`} type="button" onClick={() => void desactivar(punto)} disabled={guardando}>
+                            Desactivar
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
+                )
+              })}
+            </div>
+          )}
+
+          {editandoId && (
+            <div className={`${styles.point} ${styles.editForm}`}>
+              <div className={styles.name}>
+                {editandoId === 'nuevo' ? 'Nuevo punto' : 'Editar punto'}
+              </div>
+              <div className={styles.formGrid}>
+                <div className={`${styles.field} ${styles.full}`}>
+                  <label htmlFor="ronda-punto-nombre">Nombre</label>
+                  <input id="ronda-punto-nombre" value={form.nombre} onChange={evento => setForm({ ...form, nombre: evento.target.value })} maxLength={120} />
                 </div>
-                <div className={styles.actions}>
-                  <button className={styles.button} type="button" onClick={() => abrirEdicion(punto)} disabled={guardando}>Editar</button>
-                  {punto.activo && (
-                    <button className={`${styles.button} ${styles.buttonDanger}`} type="button" onClick={() => void desactivar(punto)} disabled={guardando}>
-                      Desactivar
+                <div className={`${styles.field} ${styles.full}`}>
+                  <label htmlFor="ronda-punto-descripcion">Descripción opcional</label>
+                  <textarea id="ronda-punto-descripcion" value={form.descripcion} onChange={evento => setForm({ ...form, descripcion: evento.target.value })} maxLength={500} />
+                </div>
+                <label className={styles.check}>
+                  <input type="checkbox" checked={form.foto_requerida} onChange={evento => setForm({ ...form, foto_requerida: evento.target.checked })} />
+                  Fotografía requerida
+                </label>
+                <label className={styles.check}>
+                  <input type="checkbox" checked={form.gps_requerido} onChange={evento => setForm({ ...form, gps_requerido: evento.target.checked })} />
+                  GPS requerido
+                </label>
+                <div className={styles.gpsBox}>
+                  <div className={styles.gpsControls}>
+                    <button className={styles.button} type="button" onClick={obtenerGps} disabled={guardando}>Usar ubicación actual</button>
+                    <button
+                      className={`${styles.button} ${ajusteMapa ? styles.buttonActive : ''}`}
+                      type="button"
+                      onClick={() => setAjusteMapa(actual => !actual)}
+                      disabled={guardando || !coordenadasEditadasCompletas}
+                    >
+                      {ajusteMapa ? 'Finalizar ajuste' : 'Ajustar en mapa'}
                     </button>
+                  </div>
+                  {gpsEstado && <div className={styles.help}>{gpsEstado}</div>}
+                  {ajusteMapa && (
+                    <div className={styles.mapNotice}>
+                      La nueva posición se guardará al presionar Guardar punto.
+                    </div>
                   )}
                 </div>
+                <div className={styles.field}>
+                  <label htmlFor="ronda-punto-latitud">Latitud</label>
+                  <input id="ronda-punto-latitud" inputMode="decimal" value={form.latitud} onChange={evento => cambiarCoordenada('latitud', evento.target.value)} />
+                </div>
+                <div className={styles.field}>
+                  <label htmlFor="ronda-punto-longitud">Longitud</label>
+                  <input id="ronda-punto-longitud" inputMode="decimal" value={form.longitud} onChange={evento => cambiarCoordenada('longitud', evento.target.value)} />
+                </div>
+                <div className={styles.field}>
+                  <label htmlFor="ronda-punto-precision">Precisión GPS registrada (m)</label>
+                  <input id="ronda-punto-precision" type="number" value={form.precision_metros} readOnly />
+                </div>
+                <div className={styles.field}>
+                  <label htmlFor="ronda-punto-radio">Radio permitido (m)</label>
+                  <input id="ronda-punto-radio" type="number" min="1" step="1" value={form.radio_metros} onChange={evento => setForm({ ...form, radio_metros: evento.target.value })} />
+                </div>
+                {editandoId !== 'nuevo' && (
+                  <label className={styles.check}>
+                    <input type="checkbox" checked={form.activo} onChange={evento => setForm({ ...form, activo: evento.target.checked })} />
+                    Punto activo
+                  </label>
+                )}
+              </div>
+              <div className={styles.formActions}>
+                <button className={styles.button} type="button" onClick={cancelarEdicion} disabled={guardando}>Cancelar</button>
+                <button className={`${styles.button} ${styles.buttonPrimary}`} type="button" onClick={() => void guardar()} disabled={guardando}>
+                  {guardando ? 'Guardando…' : 'Guardar punto'}
+                </button>
               </div>
             </div>
-          ))}
+          )}
         </div>
-      )}
 
-      {editandoId && (
-        <div className={styles.point} style={{ marginTop: 12 }}>
-          <div className={styles.name} style={{ marginBottom: 12 }}>
-            {editandoId === 'nuevo' ? 'Nuevo punto' : 'Editar punto'}
+        <div className={styles.mapColumn}>
+          <div className={styles.mapHeader}>
+            <div>
+              <div className={styles.name}>Mapa de puntos</div>
+              <div className={styles.help}>Seleccioná un marcador para editar el punto.</div>
+            </div>
           </div>
-          <div className={styles.formGrid}>
-            <div className={`${styles.field} ${styles.full}`}>
-              <label htmlFor="ronda-punto-nombre">Nombre</label>
-              <input id="ronda-punto-nombre" value={form.nombre} onChange={evento => setForm({ ...form, nombre: evento.target.value })} maxLength={120} />
-            </div>
-            <div className={`${styles.field} ${styles.full}`}>
-              <label htmlFor="ronda-punto-descripcion">Descripción opcional</label>
-              <textarea id="ronda-punto-descripcion" value={form.descripcion} onChange={evento => setForm({ ...form, descripcion: evento.target.value })} maxLength={500} />
-            </div>
-            <label className={styles.check}>
-              <input type="checkbox" checked={form.foto_requerida} onChange={evento => setForm({ ...form, foto_requerida: evento.target.checked })} />
-              Fotografía requerida
-            </label>
-            <label className={styles.check}>
-              <input type="checkbox" checked={form.gps_requerido} onChange={evento => setForm({ ...form, gps_requerido: evento.target.checked })} />
-              GPS requerido
-            </label>
-            <div className={styles.gpsBox}>
-              <div className={styles.actions}>
-                <button className={styles.button} type="button" onClick={obtenerGps} disabled={guardando}>Usar ubicación actual</button>
-              </div>
-              {gpsEstado && <div className={styles.help} style={{ marginTop: 6 }}>{gpsEstado}</div>}
-            </div>
-            <div className={styles.field}>
-              <label htmlFor="ronda-punto-latitud">Latitud</label>
-              <input id="ronda-punto-latitud" inputMode="decimal" value={form.latitud} onChange={evento => setForm({ ...form, latitud: evento.target.value })} />
-            </div>
-            <div className={styles.field}>
-              <label htmlFor="ronda-punto-longitud">Longitud</label>
-              <input id="ronda-punto-longitud" inputMode="decimal" value={form.longitud} onChange={evento => setForm({ ...form, longitud: evento.target.value })} />
-            </div>
-            <div className={styles.field}>
-              <label htmlFor="ronda-punto-precision">Precisión registrada (m)</label>
-              <input id="ronda-punto-precision" type="number" min="0" step="0.1" value={form.precision_metros} onChange={evento => setForm({ ...form, precision_metros: evento.target.value })} />
-            </div>
-            <div className={styles.field}>
-              <label htmlFor="ronda-punto-radio">Radio permitido (m)</label>
-              <input id="ronda-punto-radio" type="number" min="1" step="1" value={form.radio_metros} onChange={evento => setForm({ ...form, radio_metros: evento.target.value })} />
-            </div>
-            {editandoId !== 'nuevo' && (
-              <label className={styles.check}>
-                <input type="checkbox" checked={form.activo} onChange={evento => setForm({ ...form, activo: evento.target.checked })} />
-                Punto activo
-              </label>
-            )}
-          </div>
-          <div className={styles.actions} style={{ justifyContent: 'flex-end', marginTop: 14 }}>
-            <button className={styles.button} type="button" onClick={() => setEditandoId(null)} disabled={guardando}>Cancelar</button>
-            <button className={`${styles.button} ${styles.buttonPrimary}`} type="button" onClick={() => void guardar()} disabled={guardando}>
-              {guardando ? 'Guardando…' : 'Guardar punto'}
-            </button>
+          <RondaPuntosMap
+            puntos={puntosMapa}
+            puntoSeleccionadoId={editandoId}
+            ajusteHabilitado={ajusteMapa}
+            centroObjetivo={centroObjetivo}
+            onSeleccionar={puntoId => {
+              if (puntoId === 'nuevo') return
+              const punto = puntos.find(actual => actual.id === puntoId)
+              if (punto) abrirEdicion(punto)
+            }}
+            onMover={moverDesdeMapa}
+          />
+          <div className={styles.mapLegend}>
+            <span><i className={styles.legendUnpositioned} />Sin posicionar</span>
+            <span><i className={styles.legendGps} />GPS</span>
+            <span><i className={styles.legendManual} />Manual</span>
+            <span><i className={styles.legendUnknown} />Origen no registrado</span>
           </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }

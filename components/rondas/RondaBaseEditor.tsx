@@ -12,6 +12,7 @@ import styles from './Rondas.module.css'
 
 interface Props {
   objetivoId: string
+  centroObjetivo?: [number, number] | null
   rondaInicial: RondaBaseResumen | null
   onCerrar: () => void
   onCambio: () => void
@@ -19,6 +20,7 @@ interface Props {
 
 export default function RondaBaseEditor({
   objetivoId,
+  centroObjetivo,
   rondaInicial,
   onCerrar,
   onCambio,
@@ -127,7 +129,13 @@ export default function RondaBaseEditor({
         </button>
       </div>
 
-      {ronda && <RondaPuntosEditor rondaBaseId={ronda.id} onCambio={onCambio} />}
+      {ronda && (
+        <RondaPuntosEditor
+          rondaBaseId={ronda.id}
+          centroObjetivo={centroObjetivo}
+          onCambio={onCambio}
+        />
+      )}
     </div>
   )
 }
