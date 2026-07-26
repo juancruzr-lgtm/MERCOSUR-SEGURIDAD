@@ -62,6 +62,13 @@ export default function RondaBaseEditor({
   useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
   useEffect(() => {
+    if (ronda || form.puesto_id || puestos.length !== 1) return
+    const puestoId = puestos[0].id
+    setForm(actual => ({ ...actual, puesto_id: puestoId }))
+    setBaseGuardada(actual => ({ ...actual, puesto_id: puestoId }))
+  }, [form.puesto_id, puestos, ronda])
+
+  useEffect(() => {
     if (!hayCambios) return
     const advertir = (evento: BeforeUnloadEvent) => {
       evento.preventDefault()
@@ -80,6 +87,10 @@ export default function RondaBaseEditor({
 
   const guardarBase = async () => {
     if (guardando) return
+    if (!ronda && !form.puesto_id) {
+      setError('Seleccioná el puesto al que pertenece la ronda.')
+      return
+    }
     setGuardando(true)
     setError('')
     setMensaje('')
@@ -152,11 +163,15 @@ export default function RondaBaseEditor({
             value={form.puesto_id}
             onChange={evento => setForm({ ...form, puesto_id: evento.target.value })}
             disabled={Boolean(ronda)}
+            required
           >
             <option value="">Seleccionar puesto</option>
+            {ronda && !puestos.some(puesto => puesto.id === ronda.puesto_id) && (
+              <option value={ronda.puesto_id}>Puesto asignado (inactivo o no disponible)</option>
+            )}
             {puestos.map(puesto => (
               <option key={puesto.id} value={puesto.id}>
-                {puesto.nombre}{puesto.activo ? '' : ' (inactivo)'}
+                {puesto.nombre}
               </option>
             ))}
           </select>
@@ -188,7 +203,12 @@ export default function RondaBaseEditor({
             {ronda.activo ? 'Desactivar ronda' : 'Activar ronda'}
           </button>
         )}
-        <button className={`${styles.button} ${styles.buttonPrimary}`} type="button" onClick={() => void guardarBase()} disabled={guardando}>
+        <button
+          className={`${styles.button} ${styles.buttonPrimary}`}
+          type="button"
+          onClick={() => void guardarBase()}
+          disabled={guardando || (!ronda && !form.puesto_id)}
+        >
           {guardando ? 'Guardando…' : ronda ? 'Guardar cambios' : 'Crear ronda'}
         </button>
       </div>

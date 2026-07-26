@@ -22,9 +22,13 @@ interface Props {
 }
 
 function mensajeAcceso(acceso: AccesoRondasObjetivo): string {
-  if (acceso.motivo === 'objetivo_sin_zona') return 'Objetivo sin zona operativa asignada.'
-  if (acceso.motivo === 'fuera_de_zona') return 'No tenés permisos de administración para este objetivo.'
-  return 'Tu usuario no tiene permisos para administrar rondas.'
+  if (acceso.motivo === 'objetivo_sin_zona') {
+    return 'Este objetivo no tiene una zona operativa asignada. No tenés permisos para consultar ni administrar sus rondas.'
+  }
+  if (acceso.motivo === 'fuera_de_zona') {
+    return 'Este objetivo está fuera de tu zona operativa. No tenés permisos para consultar ni administrar sus rondas.'
+  }
+  return 'No tenés permisos para consultar ni administrar las rondas de este objetivo.'
 }
 
 export default function RondasNativasPanel({
@@ -88,7 +92,12 @@ export default function RondasNativasPanel({
           <div className={styles.help}>Configuración por puesto, separada del historial JWM.</div>
         </div>
         {acceso?.puede_administrar && editando === undefined && (
-          <button className={`${styles.button} ${styles.buttonPrimary}`} type="button" onClick={() => setEditando(null)}>
+          <button
+            className={`${styles.button} ${styles.buttonPrimary}`}
+            type="button"
+            onClick={() => setEditando(null)}
+            disabled={puestos.length === 0}
+          >
             Nueva ronda
           </button>
         )}
@@ -101,11 +110,6 @@ export default function RondasNativasPanel({
       ) : acceso && !acceso.puede_administrar ? (
         <div className={styles.accessNotice}>
           <strong>{mensajeAcceso(acceso)}</strong>
-          <span>
-            {acceso.cantidad_rondas > 0
-              ? `Existen ${acceso.cantidad_rondas} ronda(s) configurada(s), disponibles en modo informativo sin controles de edición.`
-              : 'No hay rondas configuradas para este objetivo.'}
-          </span>
         </div>
       ) : editando !== undefined ? (
         <RondaBaseEditor
@@ -122,34 +126,41 @@ export default function RondasNativasPanel({
           onCambio={() => void cargar()}
           onDirtyChange={onDirtyChange}
         />
-      ) : rondas.length === 0 ? (
-        <div className={styles.help}>
-          {puestos.length === 0
-            ? 'Este objetivo no tiene puestos disponibles para configurar rondas.'
-            : 'Este objetivo todavía no tiene rondas nativas configuradas.'}
-        </div>
       ) : (
-        <div className={styles.list}>
-          {rondas.map(ronda => (
-            <div className={styles.row} key={ronda.id}>
-              <div className={styles.rowMain}>
-                <div className={styles.name}>{ronda.nombre}</div>
-                <div className={styles.meta}>
-                  Puesto: {nombresPuestos.get(ronda.puesto_id) ?? 'No disponible'} · {presentarIntervalo(ronda.intervalo_minutos)}
-                  {ronda.hora_inicio ? ` · Inicio ${ronda.hora_inicio.slice(0, 5)}` : ' · Sin hora de inicio'}
-                  {` · ${ronda.cantidad_puntos} ${ronda.cantidad_puntos === 1 ? 'punto activo' : 'puntos activos'} · Versión ${ronda.version}`}
-                </div>
-                {ronda.descripcion && <div className={styles.help}>{ronda.descripcion}</div>}
-              </div>
-              <span className={`${styles.statusBadge} ${ronda.activo ? styles.statusGps : styles.statusUnknown}`}>
-                {ronda.activo ? 'Activa' : 'Inactiva'}
-              </span>
-              <button className={styles.button} type="button" onClick={() => setEditando(ronda)}>
-                Administrar
-              </button>
+        <>
+          {puestos.length === 0 && (
+            <div className={styles.message}>
+              Este objetivo no tiene puestos configurados. Creá o asigná un puesto antes de configurar rondas.
             </div>
-          ))}
-        </div>
+          )}
+          {rondas.length === 0 ? (
+            puestos.length > 0 && (
+              <div className={styles.help}>Este objetivo todavía no tiene rondas nativas configuradas.</div>
+            )
+          ) : (
+            <div className={styles.list}>
+              {rondas.map(ronda => (
+                <div className={styles.row} key={ronda.id}>
+                  <div className={styles.rowMain}>
+                    <div className={styles.name}>{ronda.nombre}</div>
+                    <div className={styles.meta}>
+                      Puesto: {nombresPuestos.get(ronda.puesto_id) ?? 'No disponible'} · {presentarIntervalo(ronda.intervalo_minutos)}
+                      {ronda.hora_inicio ? ` · Inicio ${ronda.hora_inicio.slice(0, 5)}` : ' · Sin hora de inicio'}
+                      {` · ${ronda.cantidad_puntos} ${ronda.cantidad_puntos === 1 ? 'punto activo' : 'puntos activos'} · Versión ${ronda.version}`}
+                    </div>
+                    {ronda.descripcion && <div className={styles.help}>{ronda.descripcion}</div>}
+                  </div>
+                  <span className={`${styles.statusBadge} ${ronda.activo ? styles.statusGps : styles.statusUnknown}`}>
+                    {ronda.activo ? 'Activa' : 'Inactiva'}
+                  </span>
+                  <button className={styles.button} type="button" onClick={() => setEditando(ronda)}>
+                    Administrar
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

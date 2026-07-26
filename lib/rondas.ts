@@ -79,7 +79,7 @@ export type MotivoAccesoRondas =
 export interface AccesoRondasObjetivo {
   puede_administrar: boolean
   motivo: MotivoAccesoRondas
-  cantidad_rondas: number
+  cantidad_rondas: number | null
 }
 
 export interface NuevoRondaPunto {
@@ -108,6 +108,9 @@ const COLS_RONDA_PUNTO =
 
 function mensajeError(error: { message?: string } | null, fallback: string): string {
   if (!error?.message) return fallback
+  if (/null value in column ["']?puesto_id|rondas_base_puesto_id_not_null/i.test(error.message)) {
+    return 'Seleccioná el puesto al que pertenece la ronda.'
+  }
   if (/rondas_base_objetivo_nombre_activo_unique/i.test(error.message)) {
     return 'Ya existe una ronda activa con ese nombre en el objetivo.'
   }
@@ -141,14 +144,16 @@ function mensajeError(error: { message?: string } | null, fallback: string): str
   if (/row-level security|permission denied/i.test(error.message)) {
     return 'No tenés permiso para administrar rondas de este objetivo.'
   }
-  return error.message
+  return fallback
 }
 
 export function validarRondaBase(
   datos: Pick<NuevaRondaBase, 'nombre' | 'intervalo_minutos' | 'puesto_id'>,
 ): string | null {
   if (!datos.nombre.trim()) return 'El nombre de la ronda es obligatorio.'
-  if (!datos.puesto_id) return 'El puesto de la ronda es obligatorio.'
+  if (typeof datos.puesto_id !== 'string' || !datos.puesto_id.trim()) {
+    return 'El puesto de la ronda es obligatorio.'
+  }
   if (!Number.isInteger(datos.intervalo_minutos)) return 'El intervalo debe expresarse en minutos enteros.'
   if (
     datos.intervalo_minutos < RONDA_INTERVALO_MINIMO ||
@@ -263,6 +268,7 @@ export async function obtenerPuestosRonda(
     .from('puestos')
     .select('id, objetivo_id, nombre, activo, orden')
     .eq('objetivo_id', objetivoId)
+    .eq('activo', true)
     .order('activo', { ascending: false })
     .order('orden', { ascending: true, nullsFirst: false })
     .order('nombre', { ascending: true })
@@ -311,12 +317,13 @@ export async function crearRondaBase(
 ): Promise<ResultadoRondas<RondaBase>> {
   const errorValidacion = validarRondaBase(datos)
   if (errorValidacion) return { data: null, error: errorValidacion }
+  const puestoId = datos.puesto_id.trim()
 
   const { data, error } = await supabase
     .from('rondas_base')
     .insert({
       objetivo_id: datos.objetivo_id,
-      puesto_id: datos.puesto_id,
+      puesto_id: puestoId,
       nombre: datos.nombre.trim(),
       descripcion: datos.descripcion?.trim() || null,
       intervalo_minutos: datos.intervalo_minutos,
