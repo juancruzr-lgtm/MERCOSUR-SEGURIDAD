@@ -20,6 +20,7 @@ interface Props {
   puntos: PuntoRondaMapa[]
   puntoSeleccionadoId: string | null
   ajusteHabilitado: boolean
+  interaccionHabilitada: boolean
   centroObjetivo?: [number, number] | null
   onSeleccionar: (puntoId: string) => void
   onMover: (latitud: number, longitud: number) => void
@@ -55,20 +56,26 @@ function iconoPunto(punto: PuntoRondaMapa, seleccionado: boolean): L.DivIcon {
 function ControlVista({
   posiciones,
   seleccionado,
+  seleccionadoId,
+  estructuraKey,
 }: {
   posiciones: [number, number][]
   seleccionado: [number, number] | null
+  seleccionadoId: string | null
+  estructuraKey: string
 }) {
   const map = useMap()
-  const posicionesKey = posiciones.map(posicion => posicion.join(',')).join('|')
-  const seleccionadoKey = seleccionado?.join(',') ?? ''
 
   useEffect(() => {
     map.invalidateSize()
     if (seleccionado) {
       map.setView(seleccionado, Math.max(map.getZoom(), 17))
-      return
     }
+  }, [map, seleccionadoId])
+
+  useEffect(() => {
+    map.invalidateSize()
+    if (seleccionado) return
     if (posiciones.length === 1) {
       map.setView(posiciones[0], 17)
       return
@@ -76,7 +83,7 @@ function ControlVista({
     if (posiciones.length > 1) {
       map.fitBounds(L.latLngBounds(posiciones), { padding: [36, 36], maxZoom: 18 })
     }
-  }, [map, posicionesKey, seleccionadoKey])
+  }, [map, estructuraKey])
 
   return null
 }
@@ -85,6 +92,7 @@ export default function RondaPuntosMap({
   puntos,
   puntoSeleccionadoId,
   ajusteHabilitado,
+  interaccionHabilitada,
   centroObjetivo,
   onSeleccionar,
   onMover,
@@ -114,7 +122,17 @@ export default function RondaPuntosMap({
 
   return (
     <div className={styles.mapFrame}>
-      <MapContainer center={centro} zoom={17} className={styles.mapCanvas} scrollWheelZoom>
+      <MapContainer
+        center={centro}
+        zoom={17}
+        className={styles.mapCanvas}
+        dragging={interaccionHabilitada}
+        touchZoom={interaccionHabilitada}
+        doubleClickZoom={interaccionHabilitada}
+        scrollWheelZoom={interaccionHabilitada}
+        boxZoom={interaccionHabilitada}
+        keyboard={interaccionHabilitada}
+      >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -124,11 +142,13 @@ export default function RondaPuntosMap({
           seleccionado={seleccionado
             ? [seleccionado.latitud, seleccionado.longitud]
             : null}
+          seleccionadoId={puntoSeleccionadoId}
+          estructuraKey={puntos.map(punto => `${punto.id}:${punto.orden}`).join('|')}
         />
 
         {posicionados.map(punto => {
           const estaSeleccionado = punto.id === puntoSeleccionadoId
-          const puedeArrastrarse = estaSeleccionado && ajusteHabilitado
+          const puedeArrastrarse = estaSeleccionado && ajusteHabilitado && interaccionHabilitada
 
           return (
             <Fragment key={punto.id}>

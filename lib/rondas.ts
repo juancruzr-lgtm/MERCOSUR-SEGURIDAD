@@ -8,9 +8,11 @@ export type OrigenPosicion = 'gps' | 'manual' | null
 export interface RondaBase {
   id: string
   objetivo_id: string
+  puesto_id: string
   nombre: string
   descripcion: string | null
   intervalo_minutos: number
+  hora_inicio: string | null
   activo: boolean
   version: number
   creado_por: string | null
@@ -43,9 +45,11 @@ export interface RondaPunto {
 
 export interface NuevaRondaBase {
   objetivo_id: string
+  puesto_id: string
   nombre: string
   descripcion?: string | null
   intervalo_minutos: number
+  hora_inicio?: string | null
   activo?: boolean
 }
 
@@ -53,7 +57,29 @@ export interface ActualizarRondaBase {
   nombre?: string
   descripcion?: string | null
   intervalo_minutos?: number
+  hora_inicio?: string | null
   activo?: boolean
+}
+
+export interface PuestoRonda {
+  id: string
+  objetivo_id: string
+  nombre: string
+  activo: boolean
+  orden: number | null
+}
+
+export type MotivoAccesoRondas =
+  | 'administrador'
+  | 'supervisor_en_zona'
+  | 'objetivo_sin_zona'
+  | 'fuera_de_zona'
+  | 'sin_permiso'
+
+export interface AccesoRondasObjetivo {
+  puede_administrar: boolean
+  motivo: MotivoAccesoRondas
+  cantidad_rondas: number
 }
 
 export interface NuevoRondaPunto {
@@ -76,7 +102,7 @@ export type ResultadoRondas<T> =
   | { data: null; error: string }
 
 const COLS_RONDA_BASE =
-  'id, objetivo_id, nombre, descripcion, intervalo_minutos, activo, version, creado_por, actualizado_por, created_at, updated_at'
+  'id, objetivo_id, puesto_id, nombre, descripcion, intervalo_minutos, hora_inicio, activo, version, creado_por, actualizado_por, created_at, updated_at'
 const COLS_RONDA_PUNTO =
   'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, activo, created_at, updated_at'
 
@@ -85,6 +111,33 @@ function mensajeError(error: { message?: string } | null, fallback: string): str
   if (/rondas_base_objetivo_nombre_activo_unique/i.test(error.message)) {
     return 'Ya existe una ronda activa con ese nombre en el objetivo.'
   }
+  if (/rondas_base_puesto_nombre_activo_unique/i.test(error.message)) {
+    return 'Ya existe una ronda activa con ese nombre en el puesto.'
+  }
+  if (/rondas_base_puesto_objetivo_fkey/i.test(error.message)) {
+    return 'El puesto seleccionado no pertenece a este objetivo.'
+  }
+  if (/rondas_base_intervalo_valido/i.test(error.message)) {
+    return 'El intervalo debe estar entre 15 minutos y 7 días.'
+  }
+  if (/rondas_base_nombre_no_vacio|ronda_puntos_nombre_no_vacio/i.test(error.message)) {
+    return 'El nombre es obligatorio.'
+  }
+  if (/ronda_puntos_(latitud|longitud|coordenadas_completas)/i.test(error.message)) {
+    return 'Las coordenadas no son válidas o están incompletas.'
+  }
+  if (/ronda_puntos_(precision|radio)_valida/i.test(error.message)) {
+    return 'La precisión o el radio configurado no es válido.'
+  }
+  if (/foreign key|violates foreign key/i.test(error.message)) {
+    return 'La operación referencia un registro inexistente o que ya no está disponible.'
+  }
+  if (/ronda_puntos_ronda_orden_unique|duplicate key/i.test(error.message)) {
+    return 'La ronda cambió al mismo tiempo desde otro dispositivo. Recargá los puntos e intentá nuevamente.'
+  }
+  if (/La ronda cambio mientras se reordenaba/i.test(error.message)) {
+    return 'La ronda cambió mientras la reordenabas. Se recargaron los puntos; intentá nuevamente.'
+  }
   if (/row-level security|permission denied/i.test(error.message)) {
     return 'No tenés permiso para administrar rondas de este objetivo.'
   }
@@ -92,9 +145,10 @@ function mensajeError(error: { message?: string } | null, fallback: string): str
 }
 
 export function validarRondaBase(
-  datos: Pick<NuevaRondaBase, 'nombre' | 'intervalo_minutos'>,
+  datos: Pick<NuevaRondaBase, 'nombre' | 'intervalo_minutos' | 'puesto_id'>,
 ): string | null {
   if (!datos.nombre.trim()) return 'El nombre de la ronda es obligatorio.'
+  if (!datos.puesto_id) return 'El puesto de la ronda es obligatorio.'
   if (!Number.isInteger(datos.intervalo_minutos)) return 'El intervalo debe expresarse en minutos enteros.'
   if (
     datos.intervalo_minutos < RONDA_INTERVALO_MINIMO ||
@@ -202,6 +256,32 @@ export async function obtenerRondasPorObjetivo(
   }
 }
 
+export async function obtenerPuestosRonda(
+  objetivoId: string,
+): Promise<ResultadoRondas<PuestoRonda[]>> {
+  const { data, error } = await supabase
+    .from('puestos')
+    .select('id, objetivo_id, nombre, activo, orden')
+    .eq('objetivo_id', objetivoId)
+    .order('activo', { ascending: false })
+    .order('orden', { ascending: true, nullsFirst: false })
+    .order('nombre', { ascending: true })
+
+  if (error) return { data: null, error: mensajeError(error, 'No se pudieron cargar los puestos.') }
+  return { data: (data ?? []) as PuestoRonda[], error: null }
+}
+
+export async function obtenerAccesoRondasObjetivo(
+  objetivoId: string,
+): Promise<ResultadoRondas<AccesoRondasObjetivo>> {
+  const { data, error } = await supabase
+    .rpc('estado_acceso_rondas_objetivo', { p_objetivo_id: objetivoId })
+    .single()
+
+  if (error) return { data: null, error: mensajeError(error, 'No se pudo verificar el permiso de rondas.') }
+  return { data: data as AccesoRondasObjetivo, error: null }
+}
+
 export async function obtenerRondaConPuntos(
   rondaBaseId: string,
 ): Promise<ResultadoRondas<{ ronda: RondaBase; puntos: RondaPunto[] }>> {
@@ -236,9 +316,11 @@ export async function crearRondaBase(
     .from('rondas_base')
     .insert({
       objetivo_id: datos.objetivo_id,
+      puesto_id: datos.puesto_id,
       nombre: datos.nombre.trim(),
       descripcion: datos.descripcion?.trim() || null,
       intervalo_minutos: datos.intervalo_minutos,
+      hora_inicio: datos.hora_inicio || null,
       activo: datos.activo ?? true,
     })
     .select(COLS_RONDA_BASE)
@@ -295,38 +377,20 @@ export async function agregarPunto(
   const errorValidacion = validarRondaPunto(datos)
   if (errorValidacion) return { data: null, error: errorValidacion }
 
-  const ordenRes = await supabase
-    .from('ronda_puntos')
-    .select('orden')
-    .eq('ronda_base_id', rondaBaseId)
-    .order('orden', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (ordenRes.error) {
-    return { data: null, error: mensajeError(ordenRes.error, 'No se pudo calcular el orden del punto.') }
-  }
-
-  const proximoOrden = ((ordenRes.data as { orden: number } | null)?.orden ?? 0) + 1
-  if (proximoOrden > 10000) return { data: null, error: 'La ronda alcanzó el máximo de puntos permitido.' }
-
   const { data, error } = await supabase
-    .from('ronda_puntos')
-    .insert({
-      ronda_base_id: rondaBaseId,
-      nombre: datos.nombre.trim(),
-      descripcion: datos.descripcion?.trim() || null,
-      orden: proximoOrden,
-      foto_requerida: datos.foto_requerida,
-      gps_requerido: datos.gps_requerido,
-      latitud: datos.latitud ?? null,
-      longitud: datos.longitud ?? null,
-      precision_metros: datos.precision_metros ?? null,
-      radio_metros: datos.radio_metros ?? null,
-      origen_posicion: datos.origen_posicion ?? null,
-      activo: datos.activo ?? true,
+    .rpc('agregar_ronda_punto', {
+      p_ronda_base_id: rondaBaseId,
+      p_nombre: datos.nombre.trim(),
+      p_descripcion: datos.descripcion?.trim() || '',
+      p_foto_requerida: datos.foto_requerida,
+      p_gps_requerido: datos.gps_requerido,
+      p_latitud: datos.latitud ?? null,
+      p_longitud: datos.longitud ?? null,
+      p_precision_metros: datos.precision_metros ?? null,
+      p_radio_metros: datos.radio_metros ?? null,
+      p_origen_posicion: datos.origen_posicion ?? null,
+      p_activo: datos.activo ?? true,
     })
-    .select(COLS_RONDA_PUNTO)
     .single()
 
   if (error) return { data: null, error: mensajeError(error, 'No se pudo agregar el punto.') }

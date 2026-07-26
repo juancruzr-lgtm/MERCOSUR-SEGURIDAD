@@ -22,6 +22,7 @@ interface Props {
   rondaBaseId: string
   centroObjetivo?: [number, number] | null
   onCambio: () => void
+  onDirtyChange: (dirty: boolean) => void
 }
 
 interface PuntoForm {
@@ -69,7 +70,7 @@ function formDesdePunto(punto: RondaPunto): PuntoForm {
 
 function numeroOpcional(valor: string): number | null {
   if (!valor.trim()) return null
-  const numero = Number(valor)
+  const numero = Number(valor.trim().replace(',', '.'))
   return Number.isFinite(numero) ? numero : null
 }
 
@@ -110,6 +111,7 @@ export default function RondaPuntosEditor({
   rondaBaseId,
   centroObjetivo = null,
   onCambio,
+  onDirtyChange,
 }: Props) {
   const [puntos, setPuntos] = useState<RondaPunto[]>([])
   const [cargando, setCargando] = useState(true)
@@ -118,6 +120,8 @@ export default function RondaPuntosEditor({
   const [form, setForm] = useState<PuntoForm>(crearFormVacio)
   const [formInicial, setFormInicial] = useState<PuntoForm | null>(null)
   const [ajusteMapa, setAjusteMapa] = useState(false)
+  const [esMovil, setEsMovil] = useState(false)
+  const [interaccionMapa, setInteraccionMapa] = useState(false)
   const [error, setError] = useState('')
   const [gpsEstado, setGpsEstado] = useState('')
 
@@ -137,6 +141,21 @@ export default function RondaPuntosEditor({
   }, [rondaBaseId])
 
   useEffect(() => { void cargar() }, [cargar])
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 640px)')
+    const actualizar = () => {
+      setEsMovil(media.matches)
+      setInteraccionMapa(!media.matches)
+      if (media.matches) setAjusteMapa(false)
+    }
+    actualizar()
+    media.addEventListener('change', actualizar)
+    return () => media.removeEventListener('change', actualizar)
+  }, [])
+
+  useEffect(() => onDirtyChange(hayCambiosPendientes), [hayCambiosPendientes, onDirtyChange])
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
   useEffect(() => {
     if (!hayCambiosPendientes) return
@@ -241,7 +260,7 @@ export default function RondaPuntosEditor({
       ['precisión', form.precision_metros],
       ['radio', form.radio_metros],
     ] as const
-    const campoInvalido = camposNumericos.find(([, valor]) => valor.trim() && !Number.isFinite(Number(valor)))
+    const campoInvalido = camposNumericos.find(([, valor]) => valor.trim() && numeroOpcional(valor) === null)
     if (campoInvalido) {
       setError(`El valor de ${campoInvalido[0]} no es numérico.`)
       setGuardando(false)
@@ -432,7 +451,13 @@ export default function RondaPuntosEditor({
                     <button
                       className={`${styles.button} ${ajusteMapa ? styles.buttonActive : ''}`}
                       type="button"
-                      onClick={() => setAjusteMapa(actual => !actual)}
+                      onClick={() => {
+                        setAjusteMapa(actual => {
+                          const siguiente = !actual
+                          if (siguiente) setInteraccionMapa(true)
+                          return siguiente
+                        })
+                      }}
                       disabled={guardando || !coordenadasEditadasCompletas}
                     >
                       {ajusteMapa ? 'Finalizar ajuste' : 'Ajustar en mapa'}
@@ -484,11 +509,26 @@ export default function RondaPuntosEditor({
               <div className={styles.name}>Mapa de puntos</div>
               <div className={styles.help}>Seleccioná un marcador para editar el punto.</div>
             </div>
+            {esMovil && (
+              <button
+                className={`${styles.button} ${interaccionMapa ? styles.buttonActive : ''}`}
+                type="button"
+                onClick={() => {
+                  setInteraccionMapa(actual => {
+                    if (actual) setAjusteMapa(false)
+                    return !actual
+                  })
+                }}
+              >
+                {interaccionMapa ? 'Salir del mapa' : 'Interactuar con mapa'}
+              </button>
+            )}
           </div>
           <RondaPuntosMap
             puntos={puntosMapa}
             puntoSeleccionadoId={editandoId}
             ajusteHabilitado={ajusteMapa}
+            interaccionHabilitada={interaccionMapa}
             centroObjetivo={centroObjetivo}
             onSeleccionar={puntoId => {
               if (puntoId === 'nuevo') return

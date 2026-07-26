@@ -2769,11 +2769,12 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     setConfirmarBorrado(o)
     setVerificandoBorrado(true)
 
-    const [turnosRel, supervisionesRel, novedadesRel, serviciosRel] = await Promise.all([
+    const [turnosRel, supervisionesRel, novedadesRel, serviciosRel, rondasRel] = await Promise.all([
       supabase.from('turnos').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
       supabase.from('supervisiones').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
       supabase.from('novedades').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
       supabase.from('servicios_objetivo').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
+      supabase.from('rondas_base').select('id', { count: 'exact', head: true }).eq('objetivo_id', o.id),
     ])
 
     const motivos: string[] = []
@@ -2781,8 +2782,13 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     if ((supervisionesRel.count || 0) > 0) motivos.push(`${supervisionesRel.count} supervisión(es)`)
     if ((novedadesRel.count || 0) > 0) motivos.push(`${novedadesRel.count} novedad(es)`)
     if ((serviciosRel.count || 0) > 0) motivos.push(`${serviciosRel.count} servicio(s) programado(s)`)
+    if ((rondasRel.count || 0) > 0) motivos.push(`${rondasRel.count} ronda(s) configurada(s)`)
 
-    if (motivos.length > 0) {
+    if (rondasRel.error) {
+      setBloqueoBorrado('No se pudo verificar si el objetivo tiene rondas configuradas. Por seguridad, el borrado definitivo permanece bloqueado.')
+    } else if ((rondasRel.count || 0) > 0) {
+      setBloqueoBorrado('El objetivo no puede eliminarse porque tiene rondas configuradas. Desactive o reasigne primero esas rondas.')
+    } else if (motivos.length > 0) {
       setBloqueoBorrado(`Este objetivo tiene historial (${motivos.join(', ')}) y no se puede borrar definitivamente. Solo se permite la baja lógica.`)
     }
 
@@ -3184,7 +3190,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
               </div>
             ) : (
               <div style={{ color:'#10b981' }}>
-                Este objetivo no tiene historial registrado (sin turnos, supervisiones, novedades ni servicios programados). Se puede borrar definitivamente. Esta acción no se puede deshacer.
+                Este objetivo no tiene historial ni rondas configuradas. Se puede borrar definitivamente. Esta acción no se puede deshacer.
               </div>
             )}
           </div>

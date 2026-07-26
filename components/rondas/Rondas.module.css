@@ -248,7 +248,23 @@
 }
 
 .mapHeader {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
   margin-bottom: 8px;
+}
+
+.accessNotice {
+  background: #172033;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  color: #cbd5e1;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  gap: 5px;
+  padding: 12px;
 }
 
 .mapFrame,
@@ -414,5 +430,14 @@
   .mapCanvas {
     height: 52vh;
     min-height: 300px;
+  }
+
+  .mapHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mapHeader > button {
+    width: 100%;
   }
 }

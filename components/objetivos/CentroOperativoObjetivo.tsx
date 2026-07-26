@@ -49,6 +49,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // ── Datos del legajo ──
   const [datos, setDatos] = useState<LegajoObjetivo | null>(null)
   const [cargando, setCargando] = useState(true)
+  const [rondasDirty, setRondasDirty] = useState(false)
 
   const recargar = useCallback(async () => {
     setCargando(true)
@@ -133,6 +134,14 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const estaSinFichar = (t: TurnoLegajo) => turnosSinFichar.some(x => x.id === t.id)
 
   const nombreGuardia = (id?: string | null) => nombrePersona(id, personas)
+  const ejecutarConConfirmacionRondas = (accion: () => void) => {
+    if (
+      !rondasDirty ||
+      window.confirm('Hay cambios de rondas sin guardar. Si continuás podrían perderse. ¿Querés continuar?')
+    ) {
+      accion()
+    }
+  }
 
   if (cargando && !datos) {
     return (
@@ -152,7 +161,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   if (!objetivo) {
     return (
       <div className={styles.root} style={{ padding: 16 }}>
-        <button type="button" style={{ ...S.btn, ...S.btnSecondary, minHeight:44, padding:'6px 12px', fontSize:12 }} onClick={onVolver}>← Volver</button>
+        <button type="button" style={{ ...S.btn, ...S.btnSecondary, minHeight:44, padding:'6px 12px', fontSize:12 }} onClick={() => ejecutarConConfirmacionRondas(onVolver)}>← Volver</button>
         <div style={{ color: '#ef4444', marginTop: 16 }}>
           {datos?.error || 'No se pudo cargar el objetivo.'}
         </div>
@@ -198,7 +207,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         ].map(({ label, value, color, anchor }) => (
           <div
             key={label}
-            onClick={() => document.getElementById(anchor)?.scrollIntoView({ behavior:'smooth', block:'start' })}
+            onClick={() => ejecutarConConfirmacionRondas(() => document.getElementById(anchor)?.scrollIntoView({ behavior:'smooth', block:'start' }))}
             style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px', cursor:'pointer', transition:'border-color 0.15s' }}
             onMouseEnter={e => (e.currentTarget.style.borderColor = '#334155')}
             onMouseLeave={e => (e.currentTarget.style.borderColor = '#1e2d42')}
@@ -310,6 +319,11 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       {/* Configuración nativa, independiente del historial importado de JWM. */}
       {(rolUsuario === 'admin' || rolUsuario === 'supervisor') && (
         <div id="sec-rondas-nativas" style={card}>
+          {objetivo.zona_id === null && (
+            <div style={{ color:'#fbbf24', background:'rgba(245,158,11,.1)', border:'1px solid rgba(245,158,11,.35)', borderRadius:8, padding:10, marginBottom:12, fontSize:13 }}>
+              Objetivo sin zona operativa asignada.
+            </div>
+          )}
           <RondasNativasPanel
             objetivoId={objetivoId}
             centroObjetivo={
@@ -317,7 +331,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                 ? [objetivo.lat, objetivo.lng]
                 : null
             }
-            puedeAdministrar={rolUsuario === 'admin' || rolUsuario === 'supervisor'}
+            onDirtyChange={setRondasDirty}
           />
         </div>
       )}
@@ -495,7 +509,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
           <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
             <button
               style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
-              onClick={() => onNavigate?.('reportes', { tipo:'objetivo', objetivoId })}
+              onClick={() => ejecutarConConfirmacionRondas(() => onNavigate?.('reportes', { tipo:'objetivo', objetivoId }))}
             >
               📊 Reportes
             </button>
