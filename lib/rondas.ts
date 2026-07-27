@@ -101,13 +101,23 @@ export type ResultadoRondas<T> =
   | { data: T; error: null }
   | { data: null; error: string }
 
+interface ErrorSupabase {
+  message?: string
+  code?: string
+  details?: string
+  hint?: string
+}
+
 const COLS_RONDA_BASE =
   'id, objetivo_id, puesto_id, nombre, descripcion, intervalo_minutos, hora_inicio, activo, version, creado_por, actualizado_por, created_at, updated_at'
 const COLS_RONDA_PUNTO =
   'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, activo, created_at, updated_at'
 
-function mensajeError(error: { message?: string } | null, fallback: string): string {
+function mensajeError(error: ErrorSupabase | null, fallback: string): string {
   if (!error?.message) return fallback
+  if (error.code === '42703' && /origen_posicion/i.test(error.message)) {
+    return 'No se pueden administrar los puntos porque falta aplicar la actualización de origen de posición en la base de datos.'
+  }
   if (/null value in column ["']?puesto_id|rondas_base_puesto_id_not_null/i.test(error.message)) {
     return 'Seleccioná el puesto al que pertenece la ronda.'
   }
@@ -145,6 +155,15 @@ function mensajeError(error: { message?: string } | null, fallback: string): str
     return 'No tenés permiso para administrar rondas de este objetivo.'
   }
   return fallback
+}
+
+function registrarErrorSupabase(contexto: string, error: ErrorSupabase): void {
+  console.error(`[rondas] ${contexto}`, {
+    message: error.message,
+    code: error.code,
+    details: error.details,
+    hint: error.hint,
+  })
 }
 
 export function validarRondaBase(
@@ -300,6 +319,7 @@ export async function obtenerRondaConPuntos(
 
   const error = rondaRes.error ?? puntosRes.error
   if (error) {
+    registrarErrorSupabase('obtenerRondaConPuntos', error)
     return { data: null, error: mensajeError(error, 'No se pudo cargar la ronda.') }
   }
 
@@ -400,7 +420,10 @@ export async function agregarPunto(
     })
     .single()
 
-  if (error) return { data: null, error: mensajeError(error, 'No se pudo agregar el punto.') }
+  if (error) {
+    registrarErrorSupabase('agregar_ronda_punto', error)
+    return { data: null, error: mensajeError(error, 'No se pudo agregar el punto.') }
+  }
   return { data: data as RondaPunto, error: null }
 }
 
