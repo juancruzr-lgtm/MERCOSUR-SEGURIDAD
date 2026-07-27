@@ -1,5 +1,34 @@
-const CACHE_NAME = 'mercosur-seguridad-v1'
+// v2: deja de cachear las llamadas a la API. Cambiar el nombre del cache
+// tambien purga las respuestas de Supabase guardadas por la version anterior.
+const CACHE_NAME = 'mercosur-seguridad-v2'
 const APP_SHELL = ['/', '/dashboard', '/manifest.webmanifest']
+
+// Rutas que NUNCA deben cachearse: datos operativos, sesion y archivos privados.
+// Servir una respuesta vieja de estas rutas muestra informacion incorrecta
+// (por ejemplo, una lista de turnos vacia con HTTP 200 y sin error).
+const RUTAS_SIN_CACHE = [
+  '/rest/v1/',
+  '/auth/v1/',
+  '/storage/v1/',
+  '/realtime/v1/',
+  '/functions/v1/',
+  '/api/',
+]
+
+function esSolicitudDeDatos(request) {
+  let url
+
+  try {
+    url = new URL(request.url)
+  } catch {
+    return true
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return true
+  if (url.hostname.endsWith('.supabase.co')) return true
+
+  return RUTAS_SIN_CACHE.some(ruta => url.pathname.includes(ruta))
+}
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -19,6 +48,10 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return
+
+  // Datos, sesion y storage van siempre a la red, sin cache ni fallback.
+  // Sin respondWith(), el navegador maneja la request de forma nativa.
+  if (esSolicitudDeDatos(event.request)) return
 
   event.respondWith(
     fetch(event.request)

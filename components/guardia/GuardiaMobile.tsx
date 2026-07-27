@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
@@ -510,6 +510,15 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const ingresoIntentoId = useRef<string | null>(null)
   const restorationAttempted = useRef(false)
   const ingresoStartTime = useRef<number | null>(null)
+  const [refrescando, setRefrescando] = useState(false)
+  const [errorCarga, setErrorCarga] = useState<string | null>(null)
+  const [ultimaActualizacion, setUltimaActualizacion] = useState<Date | null>(null)
+  // Impide recargas superpuestas: intervalo, focus y online pueden dispararse juntos.
+  const cargaEnCursoRef = useRef(false)
+  // Un refresco de fondo no debe pisar el estado optimista durante un fichaje.
+  const operacionEnCursoRef = useRef(false)
+  // initTelemetry abre sesión y emite session_start: sólo una vez por montaje.
+  const telemetriaIniciadaRef = useRef(false)
 
   const hoy = ahora.toLocaleDateString('sv-SE')
   const ayer = new Date(ahora.getTime() - 86400000).toLocaleDateString('sv-SE')
@@ -557,48 +566,109 @@ export default function GuardiaMobile({ user }: { user: any }) {
     setGuardandoPassword(false)
   }
 
-  // Cargar datos
-  useEffect(() => {
-    const cargar = async () => {
-      setLoading(true)
+  // Cargar datos — reutilizable: montaje, intervalo, visibilidad, focus, online y botón manual.
+  // `silencioso` = disparo automático de fondo (no muestra el spinner del botón).
+  const recargarDatos = useCallback(async (opciones?: { silencioso?: boolean }) => {
+    const silencioso = opciones?.silencioso === true
 
-const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
+    // Una sola carga a la vez.
+    if (cargaEnCursoRef.current) return
+    // Un refresco de fondo nunca interrumpe un fichaje en curso.
+    if (silencioso && operacionEnCursoRef.current) return
 
-  supabase
-    .from('turnos')
-    .select('*')
-    .or(`guardia_id.eq.${user.id},guardia_original_id.eq.${user.id}`)
-    .in('fecha', [ayer, hoy])
-    .order('hora_inicio'),
+    cargaEnCursoRef.current = true
+    if (!silencioso) setRefrescando(true)
 
-  supabase
-    .from('objetivos')
-    .select('id, nombre, direccion, lat, lng, radio_metros'),
+    try {
+      const [turnosRes, objetivosRes, registrosRes] = await Promise.all([
 
-  supabase
-    .from('registros_asistencia')
-    .select('*')
-    .eq('guardia_id', user.id),
+        supabase
+          .from('turnos')
+          .select('*')
+          .or(`guardia_id.eq.${user.id},guardia_original_id.eq.${user.id}`)
+          .in('fecha', [ayer, hoy])
+          .order('hora_inicio'),
 
-])
+        supabase
+          .from('objetivos')
+          .select('id, nombre, direccion, lat, lng, radio_metros'),
 
-      if (t) {
-        // Sólo mostrar turnos de ayer si son nocturnos (cruzan medianoche)
-        const filtrados = t.filter((turno: Turno) => {
-          if (turno.fecha !== ayer) return true
-          const [hI, mI] = turno.hora_inicio.split(':').map(Number)
-          const [hF, mF] = turno.hora_fin.split(':').map(Number)
-          return (hF * 60 + mF) <= (hI * 60 + mI)
+        supabase
+          .from('registros_asistencia')
+          .select('*')
+          .eq('guardia_id', user.id),
+
+      ])
+
+      // Un error deja intactos los datos previos: la pantalla nunca se vacía.
+      if (turnosRes.error || objetivosRes.error || registrosRes.error) {
+        console.error('Error cargando datos del guardia', {
+          turnos: turnosRes.error,
+          objetivos: objetivosRes.error,
+          registros: registrosRes.error,
         })
-        setTurnos(filtrados)
+        setErrorCarga('No se pudieron actualizar los turnos')
+        return
       }
-      if (o) setObjetivos(o)
-      if (r) setRegistros(r)
+
+      // Sólo mostrar turnos de ayer si son nocturnos (cruzan medianoche)
+      const filtrados = (turnosRes.data || []).filter((turno: Turno) => {
+        if (turno.fecha !== ayer) return true
+        const [hI, mI] = turno.hora_inicio.split(':').map(Number)
+        const [hF, mF] = turno.hora_fin.split(':').map(Number)
+        return (hF * 60 + mF) <= (hI * 60 + mI)
+      })
+
+      setTurnos(filtrados)
+      setObjetivos(objetivosRes.data || [])
+      setRegistros(registrosRes.data || [])
+      setErrorCarga(null)
+      setUltimaActualizacion(new Date())
+    } catch (error) {
+      console.error('Error cargando datos del guardia', error)
+      setErrorCarga('No se pudieron actualizar los turnos')
+    } finally {
+      cargaEnCursoRef.current = false
+      setRefrescando(false)
       setLoading(false)
-      void initTelemetry(user.id, user.rol ?? 'guardia')
+
+      if (!telemetriaIniciadaRef.current) {
+        telemetriaIniciadaRef.current = true
+        void initTelemetry(user.id, user.rol ?? 'guardia')
+      }
     }
-    cargar()
-  }, [user.id, hoy])
+  }, [user.id, user.rol, hoy, ayer])
+
+  // Mantiene la bandera de "operación en curso" sin recrear recargarDatos.
+  useEffect(() => {
+    operacionEnCursoRef.current = ingresoFase !== 'idle' || fichando !== null
+  }, [ingresoFase, fichando])
+
+  // Carga inicial (y recarga automática al cambiar el día).
+  useEffect(() => {
+    void recargarDatos()
+  }, [recargarDatos])
+
+  // Refrescos automáticos: intervalo con pantalla visible, vuelta de segundo plano, focus y reconexión.
+  useEffect(() => {
+    const refrescarSiVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      void recargarDatos({ silencioso: true })
+    }
+
+    const intervalo = window.setInterval(refrescarSiVisible, 60000)
+
+    document.addEventListener('visibilitychange', refrescarSiVisible)
+    window.addEventListener('focus', refrescarSiVisible)
+    window.addEventListener('online', refrescarSiVisible)
+
+    return () => {
+      window.clearInterval(intervalo)
+      document.removeEventListener('visibilitychange', refrescarSiVisible)
+      window.removeEventListener('focus', refrescarSiVisible)
+      window.removeEventListener('online', refrescarSiVisible)
+    }
+  }, [recargarDatos])
 
   useEffect(() => {
     const timer = window.setInterval(() => setAhora(new Date()), 30000)
@@ -1612,13 +1682,38 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
       <div style={S.body}>
 
         {/* Fecha */}
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontFamily: 'Syne, sans-serif', fontSize: 22, fontWeight: 800, marginBottom: 2 }}>
-            Mis Turnos
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 20 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: 'Syne, sans-serif', fontSize: 22, fontWeight: 800, marginBottom: 2 }}>
+              Mis Turnos
+            </div>
+            <div style={{ fontSize: 13, color: '#64748b' }}>
+              {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+              {ultimaActualizacion
+                ? `Actualizado ${ultimaActualizacion.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false })}`
+                : 'Sin actualizar'}
+            </div>
           </div>
-          <div style={{ fontSize: 13, color: '#64748b' }}>
-            {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
-          </div>
+          <button
+            type="button"
+            onClick={() => { void recargarDatos() }}
+            disabled={refrescando}
+            style={{
+              background: 'transparent',
+              border: '1px solid #1e2d42',
+              color: '#94a3b8',
+              borderRadius: 8,
+              padding: '6px 12px',
+              fontSize: 12,
+              cursor: refrescando ? 'not-allowed' : 'pointer',
+              opacity: refrescando ? 0.6 : 1,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {refrescando ? 'Actualizando...' : '↻ Actualizar'}
+          </button>
         </div>
 
         <button
@@ -1689,6 +1784,31 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           <div style={S.alert('error')}>Para registrar asistencia debe permitir ubicación</div>
         )}
 
+        {/* Error de carga: conserva los datos anteriores y ofrece reintentar */}
+        {errorCarga && (
+          <div style={S.alert('error')}>
+            <div style={{ marginBottom: 10 }}>{errorCarga}</div>
+            <button
+              type="button"
+              onClick={() => { void recargarDatos() }}
+              disabled={refrescando}
+              style={{
+                background: 'transparent',
+                border: '1px solid rgba(239,68,68,.4)',
+                color: '#ef4444',
+                borderRadius: 8,
+                padding: '8px 16px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: refrescando ? 'not-allowed' : 'pointer',
+                opacity: refrescando ? 0.6 : 1,
+              }}
+            >
+              {refrescando ? 'Reintentando...' : 'Reintentar'}
+            </button>
+          </div>
+        )}
+
         {/* Loading */}
         {loading && (
           <div style={S.empty}>
@@ -1696,8 +1816,8 @@ const [{ data: t }, { data: o }, { data: r }] = await Promise.all([
           </div>
         )}
 
-        {/* Sin turnos */}
-        {!loading && turnos.length === 0 && (
+        {/* Sin turnos — nunca se muestra si la última carga falló */}
+        {!loading && !errorCarga && turnos.length === 0 && (
           <div style={S.card}>
             <div style={S.empty}>
               <div style={S.sinTurnos}>📅</div>
