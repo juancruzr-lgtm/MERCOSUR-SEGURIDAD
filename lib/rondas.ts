@@ -516,3 +516,135 @@ export async function reordenarPuntos(
   if (error) return { data: null, error: mensajeError(error, 'No se pudieron reordenar los puntos.') }
   return { data: true, error: null }
 }
+
+// ── Lectura del vigilador (Etapa 2, parte 1) ──────────────────────────────────
+// La ronda no se asigna manualmente: se resuelve desde el turno vigente en el
+// servidor (RPC obtener_rondas_guardia_actual). El cliente no envía guardia_id,
+// puesto_id, objetivo_id ni ronda_id; toda la identidad sale de auth.uid().
+
+export type ContextoRondasGuardia =
+  | 'ok'
+  | 'sin_usuario'
+  | 'sin_turno_vigente'
+  | 'turno_sin_puesto'
+  | 'puesto_sin_rondas'
+
+export interface RondaGuardiaPunto {
+  id: string
+  orden: number
+  nombre: string
+  latitud: number | null
+  longitud: number | null
+  radio_metros: number | null
+  origen_posicion: OrigenPosicion
+  requiere_foto: boolean
+  requiere_gps: boolean
+}
+
+// Estado de un punto dentro de una ejecución (Etapa 3). Forma prevista; hoy no
+// se produce ni se consume ninguna tabla: `ronda_punto_id` referencia la
+// definición en ronda_puntos, separada del progreso en ronda_ejecucion_puntos.
+export interface RondaEjecucionPuntoEstado {
+  ronda_punto_id: string
+  estado: string
+  completado_at: string | null
+}
+
+// Ejecución activa (o próxima pendiente) de una ronda. Placeholder de Etapa 3:
+// en la Etapa 2 la RPC siempre entrega `ejecucion_actual: null`. Se declara la
+// forma futura para que sumarla sea 100% aditivo (sin cambiar la firma del tipo).
+// El "estado" de ejecución (aquí) es distinto de estado_temporal (reloj/config).
+export interface RondaEjecucionActual {
+  id: string
+  estado: string
+  hora_inicio: string | null
+  hora_fin: string | null
+  porcentaje: number
+  puntos_completados: number
+  punto_actual_id: string | null
+  puntos: RondaEjecucionPuntoEstado[]
+}
+
+export interface RondaGuardia {
+  ronda_id: string
+  ronda_nombre: string
+  descripcion: string | null
+  hora_inicio: string | null
+  intervalo_minutos: number
+  activa: boolean
+  cantidad_puntos: number
+  puntos: RondaGuardiaPunto[]
+  // Placeholder de Etapa 3 (ejecución de rondas). Siempre `null` en Etapa 2.
+  ejecucion_actual: RondaEjecucionActual | null
+}
+
+export interface RondasGuardiaActual {
+  contexto: ContextoRondasGuardia
+  turno_id: string | null
+  objetivo_id: string | null
+  objetivo_nombre: string | null
+  puesto_id: string | null
+  puesto_nombre: string | null
+  rondas: RondaGuardia[]
+}
+
+export type EstadoTemporalRonda = 'disponible' | 'proxima' | 'fuera_horario' | 'sin_horario'
+
+// Estado temporal de una ronda para orientar al vigilador. Función pura y
+// testeable. LIMITACIÓN documentada: sin seguimiento de ejecuciones/repeticiones
+// no se calcula cada ventana del día; con hora_inicio configurada la ronda es
+// 'proxima' antes de esa hora y 'disponible' a partir de ella. 'fuera_horario'
+// solo se produce si se provee el fin real de la cobertura (turnoFin); la RPC ya
+// entrega rondas únicamente cuando el turno está vigente, por lo que en esta
+// fase el panel no fuerza ese estado. 'sin_horario' cuando la ronda no tiene
+// hora_inicio: se muestra igual, nunca se bloquea la visualización.
+export function calcularEstadoTemporalRonda(
+  horaInicio: string | null,
+  ahora: Date = new Date(),
+  turnoFin: Date | null = null,
+): EstadoTemporalRonda {
+  if (!horaInicio) return 'sin_horario'
+
+  const [h, m] = horaInicio.split(':').map(Number)
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return 'sin_horario'
+
+  if (turnoFin && ahora.getTime() > turnoFin.getTime()) return 'fuera_horario'
+
+  const inicioMinutos = h * 60 + m
+  const ahoraMinutos = ahora.getHours() * 60 + ahora.getMinutes()
+  return ahoraMinutos < inicioMinutos ? 'proxima' : 'disponible'
+}
+
+function normalizarRondasGuardia(bruto: Partial<RondasGuardiaActual> | null): RondasGuardiaActual {
+  const rondas = Array.isArray(bruto?.rondas) ? (bruto!.rondas as RondaGuardia[]) : []
+  return {
+    contexto: (bruto?.contexto ?? 'sin_turno_vigente') as ContextoRondasGuardia,
+    turno_id: bruto?.turno_id ?? null,
+    objetivo_id: bruto?.objetivo_id ?? null,
+    objetivo_nombre: bruto?.objetivo_nombre ?? null,
+    puesto_id: bruto?.puesto_id ?? null,
+    puesto_nombre: bruto?.puesto_nombre ?? null,
+    rondas: rondas.map(ronda => ({
+      ...ronda,
+      puntos: Array.isArray(ronda.puntos)
+        ? [...ronda.puntos].sort((a, b) => a.orden - b.orden)
+        : [],
+      // Etapa 2: siempre null. En Etapa 3 la RPC lo poblará y pasa tal cual.
+      ejecucion_actual: ronda.ejecucion_actual ?? null,
+    })),
+  }
+}
+
+export async function obtenerRondasGuardiaActual(): Promise<ResultadoRondas<RondasGuardiaActual>> {
+  const { data, error } = await supabase.rpc('obtener_rondas_guardia_actual')
+
+  if (error) {
+    registrarErrorSupabase('obtener_rondas_guardia_actual', error)
+    return {
+      data: null,
+      error: mensajeError(error, 'No se pudieron cargar las rondas del puesto.'),
+    }
+  }
+
+  return { data: normalizarRondasGuardia(data as Partial<RondasGuardiaActual> | null), error: null }
+}

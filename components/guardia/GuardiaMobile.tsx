@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
+import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 
 // ── CONSTANTES ────────────────────────────────────────────────
 const INGRESO_PENDIENTE_KEY = 'mercosur_ingreso_pendiente'
@@ -1950,6 +1951,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
             </div>
           )
         })}
+
+        {/* Rondas del puesto (Etapa 2 — solo lectura). Se resuelve por turno
+            vigente desde el servidor; no se asigna manualmente. */}
+        {!loading && <RondasGuardiaPanel objetivos={objetivos} ahora={ahora} />}
 
         {/* Cerrar sesión */}
         <div style={{ textAlign: 'center', marginTop: 24 }}>
