@@ -85,9 +85,14 @@ begin
 end;
 $$;
 
+-- SIN DEFAULT, a propósito. Un default llenaría la columna ANTES de que corra el
+-- trigger BEFORE, y entonces un escritor previo que sólo manda
+-- `foto_requerida = false` vería su valor pisado a true. Dejarla sin default hace
+-- que "no la mandaron" llegue como null, que es la señal que el trigger usa para
+-- derivarla del booleano. El NOT NULL se cumple igual: el trigger la completa
+-- antes de que se valide la restricción.
 alter table public.ronda_puntos
   alter column politica_foto set not null,
-  alter column politica_foto set default 'obligatoria',
   add constraint ronda_puntos_politica_foto_valida
     check (politica_foto in ('obligatoria', 'opcional', 'solo_novedad'));
 
