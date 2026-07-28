@@ -1,6 +1,6 @@
 /*
 ================================================================================
-ROLLBACK — Etapa 3, Fase 1: base transaccional de ejecución de rondas
+ROLLBACK — Etapa 3.1, Backend: base transaccional de ejecución de rondas
 ================================================================================
 
 Revierte: supabase/migrations/20260728200000_rondas_ejecucion_base.sql
@@ -73,9 +73,9 @@ select
   (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
     where n.nspname='public'
       and p.proname in ('iniciar_ronda','obtener_ejecucion_actual',
-                        'rondas_turno_vigente','rondas_ejecucion_json'))  as funciones_fase1,
+                        'rondas_turno_vigente','rondas_ejecucion_json'))  as funciones_etapa_3_1,
   (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-    where n.nspname='public' and p.proname='obtener_rondas_guardia_actual') as rpc_etapa2_intacta,
+    where n.nspname='public' and p.proname='obtener_rondas_guardia_actual') as rpc_lectura_rondas_intacta,
   (select count(*) from public.rondas_base)                               as rondas_configuradas;
 
 -- Esperado: 0 · 0 · 0 · 1 · sin cambios respecto de antes del rollback
