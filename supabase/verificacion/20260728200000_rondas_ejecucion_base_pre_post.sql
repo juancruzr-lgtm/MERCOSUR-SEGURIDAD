@@ -978,8 +978,26 @@ rollback;
 -- transacción, por eso van en bloques separados y de a uno.
 
 begin;
-  set local role anon;
-  select obtener_ejecucion_actual();          -- esperado: permission denied
+
+do $$
+begin
+  begin
+    set local role anon;
+    perform obtener_ejecucion_actual();
+
+    raise exception
+      'FALLO: anon pudo ejecutar obtener_ejecucion_actual()';
+
+  exception
+    when insufficient_privilege then
+      raise notice
+        'OK: anon bloqueado al ejecutar obtener_ejecucion_actual() (SQLSTATE 42501)';
+  end;
+
+  reset role;
+end;
+$$;
+
 rollback;
 
 begin;
