@@ -703,6 +703,46 @@ export interface RespuestaEjecucionActual {
   ejecucion: RondaEjecucionActual | null
 }
 
+export type ContextoRegistrarPunto =
+  | 'registrado'
+  | 'ya_registrado'
+  | 'sin_turno_vigente'
+  | 'punto_no_disponible'
+  | 'ejecucion_cerrada'
+  | 'fuera_de_secuencia'
+  | 'gps_invalido'
+  | 'foto_pendiente'
+
+export interface GpsPuntoRonda {
+  latitud: number
+  longitud: number
+  precision_metros: number | null
+}
+
+export interface VeredictoPuntoRonda {
+  ejecucion_punto_id: string
+  orden?: number
+  estado: EstadoEjecucionPunto
+  gps_ok?: boolean | null
+  dentro_radio?: boolean | null
+  foto_ok?: boolean | null
+  distancia_metros?: number | null
+}
+
+export interface RespuestaRegistrarPunto {
+  contexto: ContextoRegistrarPunto
+  punto: VeredictoPuntoRonda | null
+  ejecucion: RondaEjecucionActual | null
+}
+
+export interface EvidenciaPuntoRonda {
+  id: string
+  proceso_id: string
+  bucket: string
+  storage_path: string
+  created_at: string
+}
+
 function normalizarEjecucion(bruto: any): RondaEjecucionActual | null {
   if (!bruto) return null
   const puntos: RondaEjecucionPuntoEstado[] = Array.isArray(bruto.puntos) ? bruto.puntos : []
@@ -765,6 +805,99 @@ export async function obtenerEjecucionActual(): Promise<ResultadoRondas<Respuest
       ejecucion: normalizarEjecucion(bruto?.ejecucion),
     },
     error: null,
+  }
+}
+
+/**
+ * Sube la foto obligatoria del punto por la ruta autenticada de servidor.
+ *
+ * El servidor deriva guardia, turno, ejecución y objetivo desde la sesión y
+ * valida que el punto sea pendiente y pertenezca a la ejecución vigente.
+ */
+export async function subirFotoPuntoRonda(
+  ejecucionPuntoId: string,
+  foto: File,
+): Promise<ResultadoRondas<EvidenciaPuntoRonda>> {
+  const { data: sesionData, error: sesionError } = await supabase.auth.getSession()
+  const token = sesionData.session?.access_token
+
+  if (sesionError || !token) {
+    return { data: null, error: 'Tu sesión venció. Volvé a ingresar.' }
+  }
+
+  const form = new FormData()
+  form.append('ejecucionPuntoId', ejecucionPuntoId)
+  form.append('foto', foto, 'punto.jpg')
+
+  try {
+    const response = await fetch('/api/rondas/evidencia', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    })
+    const body = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      return {
+        data: null,
+        error: body?.error || 'No se pudo subir la foto del punto.',
+      }
+    }
+
+    return { data: body?.evidencia as EvidenciaPuntoRonda, error: null }
+  } catch {
+    return { data: null, error: 'No hay conexión para subir la foto.' }
+  }
+}
+
+/**
+ * Registra el punto actual. El servidor controla secuencia, GPS, evidencia,
+ * veredicto y finalización; el cliente sólo aporta el ID del snapshot y el GPS.
+ */
+export async function registrarPuntoRonda(
+  ejecucionPuntoId: string,
+  gps: GpsPuntoRonda | null,
+): Promise<ResultadoRondas<RespuestaRegistrarPunto>> {
+  const { data, error } = await supabase.rpc('registrar_punto_ronda', {
+    p_ejecucion_punto_id: ejecucionPuntoId,
+    p_latitud: gps?.latitud ?? null,
+    p_longitud: gps?.longitud ?? null,
+    p_precision_metros: gps?.precision_metros ?? null,
+  })
+
+  if (error) {
+    registrarErrorSupabase('registrar_punto_ronda', error)
+    return { data: null, error: mensajeError(error, 'No se pudo registrar el punto.') }
+  }
+
+  const bruto = data as any
+  return {
+    data: {
+      contexto: (bruto?.contexto ?? 'punto_no_disponible') as ContextoRegistrarPunto,
+      punto: bruto?.punto ?? null,
+      ejecucion: normalizarEjecucion(bruto?.ejecucion),
+    },
+    error: null,
+  }
+}
+
+export function mensajeContextoRegistrarPunto(contexto: ContextoRegistrarPunto): string | null {
+  switch (contexto) {
+    case 'registrado':
+    case 'ya_registrado':
+      return null
+    case 'sin_turno_vigente':
+      return 'Tu turno ya no está vigente.'
+    case 'punto_no_disponible':
+      return 'Ese punto no pertenece a tu ronda vigente.'
+    case 'ejecucion_cerrada':
+      return 'La ronda ya está cerrada.'
+    case 'fuera_de_secuencia':
+      return 'Tenés que completar primero el punto actual.'
+    case 'gps_invalido':
+      return 'La ubicación recibida no es válida.'
+    case 'foto_pendiente':
+      return 'Este punto requiere una foto antes de continuar.'
   }
 }
 
