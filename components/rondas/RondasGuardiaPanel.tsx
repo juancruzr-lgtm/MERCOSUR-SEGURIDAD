@@ -1,15 +1,20 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  obtenerRondasGuardiaActual,
   calcularEstadoTemporalRonda,
+  iniciarRonda,
+  mensajeContextoIniciar,
+  obtenerEjecucionActual,
+  obtenerRondasGuardiaActual,
   presentarIntervalo,
-  type RondasGuardiaActual,
-  type RondaGuardia,
   type EstadoTemporalRonda,
+  type RondaEjecucionActual,
+  type RondaGuardia,
+  type RondasGuardiaActual,
 } from '@/lib/rondas'
 import RondaGuardiaDetalle from './RondaGuardiaDetalle'
+import RondaGuardiaEjecucion from './RondaGuardiaEjecucion'
 
 interface ObjetivoGeo {
   id: string
@@ -41,26 +46,96 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<RondasGuardiaActual | null>(null)
   const [rondaAbierta, setRondaAbierta] = useState<RondaGuardia | null>(null)
+  const [ejecucionActual, setEjecucionActual] = useState<RondaEjecucionActual | null>(null)
+  const [iniciandoRondaId, setIniciandoRondaId] = useState<string | null>(null)
+  const [errorInicio, setErrorInicio] = useState<string | null>(null)
+  const operacionEnCursoRef = useRef(false)
 
-  const cargar = useCallback(async (silencioso = false) => {
+  const cargar = useCallback(async (silencioso = false, descartarFinalizada = false) => {
+    if (silencioso && operacionEnCursoRef.current) return
     if (!silencioso) setCargando(true)
-    const { data: resultado, error: errorRpc } = await obtenerRondasGuardiaActual()
-    if (errorRpc) {
-      setError(errorRpc)
-      setData(null)
-    } else {
-      setError(null)
-      setData(resultado)
+
+    const [rondas, ejecucion] = await Promise.all([
+      obtenerRondasGuardiaActual(),
+      obtenerEjecucionActual(),
+    ])
+
+    const ejecucionRecuperada = ejecucion.data?.ejecucion ?? null
+
+    if (!rondas.error) {
+      setData(rondas.data)
     }
+    if (!ejecucion.error) {
+      setEjecucionActual(anterior => {
+        if (!descartarFinalizada && anterior?.estado === 'finalizada') return anterior
+        return ejecucionRecuperada
+      })
+    }
+
+    // Si existe una ejecución recuperada, la pantalla puede continuar aunque
+    // la lista descriptiva de rondas falle. Sin ejecución, ambas lecturas son
+    // necesarias para permitir un inicio seguro.
+    setError(
+      ejecucion.error
+      || (!ejecucionRecuperada ? rondas.error : null),
+    )
     setCargando(false)
   }, [])
 
   useEffect(() => {
     let activo = true
     void cargar()
-    const timer = window.setInterval(() => { if (activo) void cargar(true) }, REFRESCO_MS)
-    return () => { activo = false; window.clearInterval(timer) }
+
+    const refrescarSiVisible = () => {
+      if (!activo || document.visibilityState !== 'visible') return
+      void cargar(true)
+    }
+
+    const timer = window.setInterval(refrescarSiVisible, REFRESCO_MS)
+    document.addEventListener('visibilitychange', refrescarSiVisible)
+    window.addEventListener('focus', refrescarSiVisible)
+    window.addEventListener('online', refrescarSiVisible)
+
+    return () => {
+      activo = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refrescarSiVisible)
+      window.removeEventListener('focus', refrescarSiVisible)
+      window.removeEventListener('online', refrescarSiVisible)
+    }
   }, [cargar])
+
+  const comenzarRonda = async (ronda: RondaGuardia) => {
+    if (iniciandoRondaId || operacionEnCursoRef.current) return
+
+    setIniciandoRondaId(ronda.ronda_id)
+    setErrorInicio(null)
+    operacionEnCursoRef.current = true
+
+    try {
+      const resultado = await iniciarRonda(ronda.ronda_id)
+      if (resultado.error || !resultado.data) {
+        setErrorInicio(resultado.error || 'No se pudo iniciar la ronda.')
+        return
+      }
+
+      const mensaje = mensajeContextoIniciar(resultado.data.contexto)
+      if (mensaje) {
+        setErrorInicio(mensaje)
+        return
+      }
+      if (!resultado.data.ejecucion) {
+        setErrorInicio('El servidor no devolvió la ejecución iniciada.')
+        return
+      }
+
+      setEjecucionActual(resultado.data.ejecucion)
+      setRondaAbierta(null)
+    } finally {
+      operacionEnCursoRef.current = false
+      setIniciandoRondaId(null)
+    }
+  }
 
   const centroObjetivo = (objetivoId: string | null): [number, number] | null => {
     if (!objetivoId) return null
@@ -98,7 +173,20 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
         </div>
       )}
 
-      {!cargando && !error && data && (
+      {!error && ejecucionActual && (
+        <RondaGuardiaEjecucion
+          ejecucion={ejecucionActual}
+          onEjecucionChange={setEjecucionActual}
+          onOperacionChange={enCurso => { operacionEnCursoRef.current = enCurso }}
+          onVolver={() => {
+            setEjecucionActual(null)
+            setErrorInicio(null)
+            void cargar(false, true)
+          }}
+        />
+      )}
+
+      {!cargando && !error && !ejecucionActual && data && (
         <>
           {data.contexto === 'sin_usuario' && (
             <div style={S.notaCard}><span style={S.notaMuted}>No se pudo identificar tu usuario operativo.</span></div>
@@ -164,7 +252,10 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
                       <button
                         type="button"
                         style={{ ...S.verBtn, ...(sinPuntos ? S.verBtnOff : null) }}
-                        onClick={() => setRondaAbierta(ronda)}
+                        onClick={() => {
+                          setErrorInicio(null)
+                          setRondaAbierta(ronda)
+                        }}
                         disabled={sinPuntos}
                       >
                         {sinPuntos ? 'Sin puntos para recorrer' : 'Ver recorrido'}
@@ -184,6 +275,9 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
           objetivoNombre={data.objetivo_nombre}
           puestoNombre={data.puesto_nombre}
           centroObjetivo={centroObjetivo(data.objetivo_id)}
+          iniciando={iniciandoRondaId === rondaAbierta.ronda_id}
+          errorInicio={errorInicio}
+          onIniciar={() => void comenzarRonda(rondaAbierta)}
           onCerrar={() => setRondaAbierta(null)}
         />
       )}

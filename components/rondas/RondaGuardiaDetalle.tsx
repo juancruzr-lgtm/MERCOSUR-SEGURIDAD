@@ -19,6 +19,9 @@ interface Props {
   objetivoNombre: string | null
   puestoNombre: string | null
   centroObjetivo: [number, number] | null
+  iniciando: boolean
+  errorInicio: string | null
+  onIniciar: () => void
   onCerrar: () => void
 }
 
@@ -27,6 +30,9 @@ export default function RondaGuardiaDetalle({
   objetivoNombre,
   puestoNombre,
   centroObjetivo,
+  iniciando,
+  errorInicio,
+  onIniciar,
   onCerrar,
 }: Props) {
   const [puntoSeleccionadoId, setPuntoSeleccionadoId] = useState<string | null>(null)
@@ -114,6 +120,17 @@ export default function RondaGuardiaDetalle({
                   </div>
                 )}
               </div>
+
+              {errorInicio && <div style={S.errorInicio} role="alert">{errorInicio}</div>}
+
+              <button
+                type="button"
+                style={{ ...S.iniciar, ...(iniciando ? S.iniciarOff : null) }}
+                onClick={onIniciar}
+                disabled={iniciando}
+              >
+                {iniciando ? 'Iniciando ronda…' : 'Iniciar ronda'}
+              </button>
             </>
           )}
         </div>
@@ -169,4 +186,13 @@ const S: Record<string, React.CSSProperties> = {
     padding: 20, fontSize: 13, color: '#94a3b8', textAlign: 'center',
     border: '1px dashed #1e2d42', borderRadius: 12, background: '#111827',
   },
+  errorInicio: {
+    border: '1px solid #991b1b', borderRadius: 10, background: '#3b1116',
+    color: '#fecaca', padding: 10, fontSize: 12, lineHeight: 1.45,
+  },
+  iniciar: {
+    width: '100%', border: 'none', borderRadius: 10, background: '#f59e0b',
+    color: '#111827', padding: '12px 14px', fontSize: 14, fontWeight: 900, cursor: 'pointer',
+  },
+  iniciarOff: { background: '#334155', color: '#64748b', cursor: 'not-allowed' },
 }
