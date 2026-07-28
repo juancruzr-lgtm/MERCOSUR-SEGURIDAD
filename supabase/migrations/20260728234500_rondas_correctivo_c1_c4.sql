@@ -111,8 +111,10 @@ begin
     return jsonb_build_object('contexto', 'turno_sin_puesto', 'ejecucion', null);
   end if;
 
-  -- Idempotencia por lectura. La respuesta siempre usa el serializador
-  -- contractual completo y esta rama no toma locks ni modifica la ejecución.
+  -- Idempotencia por lectura: si ya hay una ejecución abierta de ESTE guardia en
+  -- ESTE turno, se devuelve. Nunca se toca la de otro guardia (reemplazo).
+  -- La respuesta siempre usa el serializador contractual completo y esta rama
+  -- no toma locks ni modifica la ejecución.
   select e.id, e.ronda_base_id
     into v_ejecucion_id, v_ejecucion_ronda_base_id
     from public.ronda_ejecuciones e
@@ -133,7 +135,12 @@ begin
   end if;
 
   -- La ronda debe existir, estar activa y pertenecer al puesto del turno vigente.
-  -- El lock serializa el snapshot contra cambios concurrentes de configuración.
+  -- Es la única validación sobre un identificador recibido del cliente.
+  --
+  -- `for update` no es decorativo: todo alta, edición o reordenamiento de puntos
+  -- dispara touch_ronda_base_desde_punto(), que actualiza esta misma fila. Tomar
+  -- el lock serializa el inicio contra una edición concurrente de los puntos y
+  -- garantiza que el conteo y el snapshot vean el mismo conjunto.
   select rb.* into v_ronda
     from public.rondas_base rb
    where rb.id = p_ronda_base_id
@@ -154,6 +161,9 @@ begin
     return jsonb_build_object('contexto', 'ronda_sin_puntos', 'ejecucion', null);
   end if;
 
+  -- Marca de inicio fuera de horario, anclada al turno y no al reloj del día.
+  -- Un turno 22:00-06:00 con ronda a las 02:00: ese instante pertenece al día
+  -- siguiente de la fecha operativa, y así se calcula.
   if v_ronda.hora_inicio is not null then
     select t.hora_inicio into v_turno from public.turnos t where t.id = v_ctx.turno_id;
     v_inicio_previsto := v_ctx.fecha_operativa + v_ronda.hora_inicio;
@@ -175,6 +185,12 @@ begin
     )
     returning id into v_ejecucion_id;
   exception when unique_violation then
+    -- Dos toques concurrentes: el índice parcial rechaza el segundo. Se relee y
+    -- se devuelve la que ganó, en lugar de propagar el error.
+    --
+    -- Sólo se absorbe LA violación esperada. Cualquier otra restricción única
+    -- que exista hoy o se agregue mañana se vuelve a lanzar: un catch amplio
+    -- convertiría un defecto nuevo en un "recuperada" silencioso.
     get stacked diagnostics v_constraint = constraint_name;
 
     if v_constraint is distinct from 'ronda_ejecuciones_turno_guardia_en_curso_unique' then
@@ -183,6 +199,8 @@ begin
 
     -- La ejecución que ganó la carrera puede pertenecer a la misma ronda o a
     -- otra. Igual que en la lectura inicial, esta rama sólo observa y devuelve.
+    -- Esta relectura depende del aislamiento normal de PostgREST/Supabase:
+    -- READ COMMITTED permite ver la fila confirmada por la transacción ganadora.
     select e.id, e.ronda_base_id
       into v_ejecucion_id, v_ejecucion_ronda_base_id
       from public.ronda_ejecuciones e
@@ -191,6 +209,9 @@ begin
        and e.estado    = 'en_curso'
      limit 1;
 
+    -- Si la ejecución en conflicto se cerró entre la violación y esta relectura,
+    -- no hay nada que recuperar. Devolver un contexto con ejecución null sería
+    -- mentir; se propaga el error original y el cliente reintenta.
     if v_ejecucion_id is null then
       raise;
     end if;
@@ -205,6 +226,9 @@ begin
     );
   end;
 
+  -- Snapshot de los puntos ACTIVOS al momento de iniciar. Se pre-crean todos:
+  -- así 'pendiente' es un estado real, el registro posterior es siempre UPDATE
+  -- (idempotente) y la ejecución no cambia si después se edita la ronda.
   insert into public.ronda_ejecucion_puntos (
     ronda_ejecucion_id, ronda_punto_id, orden, snap_nombre,
     snap_latitud, snap_longitud, snap_radio_metros,
@@ -221,6 +245,10 @@ begin
 
   get diagnostics v_insertados = row_count;
 
+  -- Red de seguridad sobre el lock: si por cualquier motivo el conjunto de
+  -- puntos cambió entre el conteo y el snapshot, manda lo efectivamente
+  -- guardado. `puntos_total` es el denominador del porcentaje y no puede
+  -- discrepar de las filas existentes.
   if v_insertados <> v_total then
     update public.ronda_ejecuciones
        set puntos_total = v_insertados
@@ -293,6 +321,7 @@ begin
     );
   end if;
 
+  -- Bloquea ejecución y punto para serializar doble toque y llamadas paralelas.
   select
     e.id,
     e.estado,
@@ -328,6 +357,7 @@ begin
     );
   end if;
 
+  -- Reintento luego de una respuesta perdida: no vuelve a escribir.
   if v_punto_estado <> 'pendiente' then
     return jsonb_build_object(
       'contexto', 'ya_registrado',
@@ -363,6 +393,7 @@ begin
     );
   end if;
 
+  -- Coordenadas completas o ninguna.
   if (p_latitud is null) <> (p_longitud is null)
      or (p_latitud is not null and (p_latitud < -90 or p_latitud > 90))
      or (p_longitud is not null and (p_longitud < -180 or p_longitud > 180))
@@ -390,6 +421,8 @@ begin
     );
   end if;
 
+  -- La foto obligatoria es bloqueante. No alcanza una fila declarativa: debe
+  -- existir la evidencia y el objeto privado que la respalda.
   if v_foto_requerida then
     select exists (
       select 1
