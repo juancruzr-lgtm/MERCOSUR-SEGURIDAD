@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import {
+  etiquetaPoliticaFoto,
+  fotoEsObligatoria,
   mensajeContextoRegistrarPunto,
   registrarPuntoRonda,
   subirFotoPuntoRonda,
@@ -154,6 +156,7 @@ export default function RondaGuardiaEjecucion({
   const [registrando, setRegistrando] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ultimoResultado, setUltimoResultado] = useState<UltimoResultado | null>(null)
+  const [hayNovedad, setHayNovedad] = useState(false)
 
   const puntoActual = obtenerPuntoPendiente(ejecucion)
   const puntoActualId = puntoActual?.ejecucion_punto_id ?? null
@@ -163,7 +166,14 @@ export default function RondaGuardiaEjecucion({
     setFoto(null)
     setProcesandoFoto(false)
     setError(null)
+    setHayNovedad(false)
   }, [puntoActualId])
+
+  // Misma regla que aplica el servidor. Se recalcula al marcar la novedad:
+  // con política `solo_novedad` es esa marca la que vuelve obligatoria una foto
+  // que hasta recién no se pedía.
+  const politicaFoto = puntoActual?.politica_foto ?? 'obligatoria'
+  const fotoObligatoria = puntoActual != null && fotoEsObligatoria(politicaFoto, hayNovedad)
 
   useEffect(() => {
     return () => {
@@ -202,8 +212,10 @@ export default function RondaGuardiaEjecucion({
       setError('Primero intentá obtener la ubicación.')
       return
     }
-    if (puntoActual.requiere_foto && !foto) {
-      setError('Este punto requiere una foto antes de continuar.')
+    if (fotoObligatoria && !foto) {
+      setError(hayNovedad && politicaFoto === 'solo_novedad'
+        ? 'Marcaste que hay una novedad: la foto pasa a ser obligatoria.'
+        : 'Este punto requiere una foto antes de continuar.')
       return
     }
 
@@ -212,7 +224,7 @@ export default function RondaGuardiaEjecucion({
     onOperacionChange?.(true)
 
     try {
-      if (puntoActual.requiere_foto && foto) {
+      if (foto) {
         const subida = await subirFotoPuntoRonda(puntoActual.ejecucion_punto_id, foto.file)
         if (subida.error) {
           setError(subida.error)
@@ -221,7 +233,7 @@ export default function RondaGuardiaEjecucion({
       }
 
       const gps = estadoGps.tipo === 'disponible' ? estadoGps.gps : null
-      const registro = await registrarPuntoRonda(puntoActual.ejecucion_punto_id, gps)
+      const registro = await registrarPuntoRonda(puntoActual.ejecucion_punto_id, gps, hayNovedad)
       if (registro.error || !registro.data) {
         setError(registro.error || 'No se pudo registrar el punto.')
         return
@@ -288,7 +300,7 @@ export default function RondaGuardiaEjecucion({
   const precisionBaja = estadoGps.tipo === 'disponible'
     && precisionGpsInsuficiente(puntoActual, estadoGps.gps)
   const puedeRegistrar = gpsIntentado
-    && (!puntoActual.requiere_foto || foto !== null)
+    && (!fotoObligatoria || foto !== null)
     && !procesandoFoto
     && !registrando
   const porcentaje = Math.min(100, Math.max(0, ejecucion.porcentaje))
@@ -336,8 +348,8 @@ export default function RondaGuardiaEjecucion({
           <span style={{ ...S.regla, ...(puntoActual.requiere_gps ? S.reglaActiva : S.reglaOpcional) }}>
             {puntoActual.requiere_gps ? 'GPS requerido' : 'GPS opcional'}
           </span>
-          <span style={{ ...S.regla, ...(puntoActual.requiere_foto ? S.reglaActiva : S.reglaOpcional) }}>
-            {puntoActual.requiere_foto ? 'Foto requerida' : 'Sin foto obligatoria'}
+          <span style={{ ...S.regla, ...(fotoObligatoria ? S.reglaActiva : S.reglaOpcional) }}>
+            {etiquetaPoliticaFoto(politicaFoto)}
           </span>
           {puntoActual.radio_metros != null && (
             <span style={{ ...S.regla, ...S.reglaOpcional }}>Radio {puntoActual.radio_metros} m</span>
@@ -395,9 +407,30 @@ export default function RondaGuardiaEjecucion({
           </button>
         </div>
 
-        {puntoActual.requiere_foto && (
+        {politicaFoto === 'solo_novedad' && (
           <div style={S.bloque}>
-            <div style={S.bloqueTitulo}>2. Foto obligatoria</div>
+            <div style={S.bloqueTitulo}>2. ¿Hay novedad?</div>
+            <div style={S.ayuda}>
+              Si marcás que hay una novedad, la foto pasa a ser obligatoria para este punto.
+            </div>
+            <label style={S.novedadFila}>
+              <input
+                type="checkbox"
+                checked={hayNovedad}
+                onChange={evento => { setHayNovedad(evento.target.checked); setError(null) }}
+                disabled={registrando}
+              />
+              <span>Hay una novedad para reportar</span>
+            </label>
+          </div>
+        )}
+
+        {(
+          <div style={S.bloque}>
+            <div style={S.bloqueTitulo}>
+              {politicaFoto === 'solo_novedad' ? '3. Foto' : '2. Foto'}
+              {fotoObligatoria ? ' obligatoria' : ' opcional'}
+            </div>
             <input
               ref={fotoInputRef}
               type="file"
@@ -440,14 +473,14 @@ export default function RondaGuardiaEjecucion({
           disabled={!puedeRegistrar}
         >
           {registrando
-            ? (puntoActual.requiere_foto ? 'Subiendo y validando…' : 'Validando punto…')
+            ? (foto ? 'Subiendo y validando…' : 'Validando punto…')
             : 'Registrar punto'}
         </button>
 
         {!gpsIntentado && (
           <div style={S.pieAyuda}>Primero obtené la ubicación para habilitar el registro.</div>
         )}
-        {gpsIntentado && puntoActual.requiere_foto && !foto && (
+        {gpsIntentado && fotoObligatoria && !foto && (
           <div style={S.pieAyuda}>La foto obligatoria bloquea el avance.</div>
         )}
       </div>
@@ -485,6 +518,10 @@ const S: Record<string, CSSProperties> = {
   bloque: { marginTop: 14, paddingTop: 14, borderTop: '1px solid #1e2d42' },
   bloqueTitulo: { color: '#e2e8f0', fontSize: 13, fontWeight: 800, marginBottom: 8 },
   ayuda: { color: '#94a3b8', fontSize: 12, lineHeight: 1.5, marginBottom: 9 },
+  novedadFila: {
+    display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+    color: '#e2e8f0', fontSize: 14, padding: '8px 0',
+  },
   estadoInfo: {
     display: 'flex', flexDirection: 'column', gap: 3, padding: 10, borderRadius: 10,
     background: '#0f1729', color: '#cbd5e1', fontSize: 12, lineHeight: 1.4, marginBottom: 9,

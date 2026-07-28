@@ -5,6 +5,41 @@ export const RONDA_INTERVALO_MAXIMO = 10080
 
 export type OrigenPosicion = 'gps' | 'manual' | null
 
+/**
+ * Exigencia de foto por punto. Reemplaza al booleano `foto_requerida`, que
+ * sobrevive como columna derivada por compatibilidad.
+ *
+ *   obligatoria   sin foto no se registra el punto.
+ *   opcional      se puede registrar sin foto; si la saca, se guarda igual.
+ *   solo_novedad  se puede registrar sin foto, salvo que el vigilador declare
+ *                 una novedad: ahí la foto pasa a ser obligatoria.
+ */
+export type PoliticaFoto = 'obligatoria' | 'opcional' | 'solo_novedad'
+
+export const POLITICAS_FOTO: readonly PoliticaFoto[] =
+  ['obligatoria', 'opcional', 'solo_novedad'] as const
+
+export function etiquetaPoliticaFoto(politica: PoliticaFoto): string {
+  switch (politica) {
+    case 'obligatoria':  return 'Foto obligatoria'
+    case 'opcional':     return 'Foto opcional'
+    case 'solo_novedad': return 'Foto sólo si hay novedad'
+  }
+}
+
+export function ayudaPoliticaFoto(politica: PoliticaFoto): string {
+  switch (politica) {
+    case 'obligatoria':  return 'El vigilador no puede avanzar sin sacar la foto.'
+    case 'opcional':     return 'Puede avanzar sin foto. Si la saca, queda registrada igual.'
+    case 'solo_novedad': return 'Puede avanzar sin foto, salvo que marque que hay una novedad.'
+  }
+}
+
+/** Única regla de "la foto bloquea". El servidor aplica exactamente la misma. */
+export function fotoEsObligatoria(politica: PoliticaFoto, hayNovedad: boolean): boolean {
+  return politica === 'obligatoria' || (politica === 'solo_novedad' && hayNovedad)
+}
+
 export interface RondaBase {
   id: string
   objetivo_id: string
@@ -31,7 +66,9 @@ export interface RondaPunto {
   nombre: string
   descripcion: string | null
   orden: number
+  /** Derivada de `politica_foto` por trigger. Leer, no escribir. */
   foto_requerida: boolean
+  politica_foto: PoliticaFoto
   gps_requerido: boolean
   latitud: number | null
   longitud: number | null
@@ -85,7 +122,9 @@ export interface AccesoRondasObjetivo {
 export interface NuevoRondaPunto {
   nombre: string
   descripcion?: string | null
-  foto_requerida: boolean
+  politica_foto: PoliticaFoto
+  /** Compatibilidad: si se omite, el servidor lo deriva de `politica_foto`. */
+  foto_requerida?: boolean
   gps_requerido: boolean
   latitud?: number | null
   longitud?: number | null
@@ -111,7 +150,7 @@ interface ErrorSupabase {
 const COLS_RONDA_BASE =
   'id, objetivo_id, puesto_id, nombre, descripcion, intervalo_minutos, hora_inicio, activo, version, creado_por, actualizado_por, created_at, updated_at'
 const COLS_RONDA_PUNTO =
-  'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, activo, created_at, updated_at'
+  'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, politica_foto, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, activo, created_at, updated_at'
 const MENSAJE_CONFIGURACION_GPS_INCOMPLETA =
   'Si el GPS es obligatorio, marcá el punto en el mapa y definí un radio válido.'
 
@@ -154,6 +193,9 @@ function mensajeError(error: ErrorSupabase | null, fallback: string): string {
   }
   if (/rondas_base_nombre_no_vacio|ronda_puntos_nombre_no_vacio/i.test(error.message)) {
     return 'El nombre es obligatorio.'
+  }
+  if (/politica_foto_valida/i.test(error.message)) {
+    return 'La política de foto debe ser obligatoria, opcional o sólo si hay novedad.'
   }
   if (/ronda_puntos_gps_config_completa/i.test(error.message)) {
     return MENSAJE_CONFIGURACION_GPS_INCOMPLETA
@@ -435,7 +477,8 @@ export async function agregarPunto(
       p_ronda_base_id: rondaBaseId,
       p_nombre: datos.nombre.trim(),
       p_descripcion: datos.descripcion?.trim() || '',
-      p_foto_requerida: datos.foto_requerida,
+      p_foto_requerida: datos.foto_requerida ?? (datos.politica_foto === 'obligatoria'),
+      p_politica_foto: datos.politica_foto,
       p_gps_requerido: datos.gps_requerido,
       p_latitud: datos.latitud ?? null,
       p_longitud: datos.longitud ?? null,
@@ -588,7 +631,11 @@ export interface RondaEjecucionPuntoEstado {
   ejecucion_punto_id: string
   orden: number
   nombre: string
+  /** Derivado: `politica_foto === 'obligatoria'`. Se conserva por compatibilidad. */
   requiere_foto: boolean
+  // ── Añadidos por la política de foto ──
+  politica_foto: PoliticaFoto
+  hay_novedad: boolean
   requiere_gps: boolean
   latitud: number | null
   longitud: number | null
@@ -759,6 +806,8 @@ export interface VeredictoPuntoRonda {
   gps_ok?: boolean | null
   dentro_radio?: boolean | null
   foto_ok?: boolean | null
+  hay_novedad?: boolean
+  politica_foto?: PoliticaFoto
   distancia_metros?: number | null
 }
 
@@ -890,12 +939,14 @@ export async function subirFotoPuntoRonda(
 export async function registrarPuntoRonda(
   ejecucionPuntoId: string,
   gps: GpsPuntoRonda | null,
+  hayNovedad = false,
 ): Promise<ResultadoRondas<RespuestaRegistrarPunto>> {
   const { data, error } = await supabase.rpc('registrar_punto_ronda', {
     p_ejecucion_punto_id: ejecucionPuntoId,
     p_latitud: gps?.latitud ?? null,
     p_longitud: gps?.longitud ?? null,
     p_precision_metros: gps?.precision_metros ?? null,
+    p_hay_novedad: hayNovedad,
   })
 
   if (error) {
