@@ -541,28 +541,50 @@ export interface RondaGuardiaPunto {
   requiere_gps: boolean
 }
 
-// Estado de un punto dentro de una ejecución (Etapa 3). Forma prevista; hoy no
-// se produce ni se consume ninguna tabla: `ronda_punto_id` referencia la
-// definición en ronda_puntos, separada del progreso en ronda_ejecucion_puntos.
+export type EstadoEjecucionRonda = 'en_curso' | 'finalizada' | 'cancelada'
+export type ResultadoEjecucionRonda = 'completa' | 'incompleta'
+export type EstadoEjecucionPunto = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido'
+
+// Estado de un punto dentro de una ejecución. `ronda_punto_id` referencia la
+// definición en ronda_puntos; el resto son valores del snapshot tomado al
+// iniciar, no la configuración vigente: si el supervisor mueve o renombra un
+// punto después, la ejecución conserva las reglas que regían en su momento.
 export interface RondaEjecucionPuntoEstado {
   ronda_punto_id: string
-  estado: string
+  estado: EstadoEjecucionPunto
   completado_at: string | null
+  // ── Añadidos en Etapa 3, fase 1 ──
+  ejecucion_punto_id: string
+  orden: number
+  nombre: string
+  requiere_foto: boolean
+  requiere_gps: boolean
+  latitud: number | null
+  longitud: number | null
+  radio_metros: number | null
 }
 
-// Ejecución activa (o próxima pendiente) de una ronda. Placeholder de Etapa 3:
-// en la Etapa 2 la RPC siempre entrega `ejecucion_actual: null`. Se declara la
-// forma futura para que sumarla sea 100% aditivo (sin cambiar la firma del tipo).
-// El "estado" de ejecución (aquí) es distinto de estado_temporal (reloj/config).
+// La fase 1 de la Etapa 3 define este contrato y lo expone mediante
+// iniciarRonda() y obtenerEjecucionActual(). obtenerRondasGuardiaActual()
+// continúa entregando ejecucion_actual: null hasta la Fase 5.
+// El "estado" de ejecución (acá) es distinto de estado_temporal (reloj/config).
 export interface RondaEjecucionActual {
   id: string
-  estado: string
+  estado: EstadoEjecucionRonda
   hora_inicio: string | null
   hora_fin: string | null
   porcentaje: number
   puntos_completados: number
   punto_actual_id: string | null
   puntos: RondaEjecucionPuntoEstado[]
+  // ── Añadidos en Etapa 3, fase 1 ──
+  puntos_total: number
+  puede_continuar: boolean
+  resultado: ResultadoEjecucionRonda | null
+  ronda_base_id: string
+  ronda_nombre: string
+  fecha_operativa: string
+  fuera_horario: boolean
 }
 
 export interface RondaGuardia {
@@ -629,7 +651,7 @@ function normalizarRondasGuardia(bruto: Partial<RondasGuardiaActual> | null): Ro
       puntos: Array.isArray(ronda.puntos)
         ? [...ronda.puntos].sort((a, b) => a.orden - b.orden)
         : [],
-      // Etapa 2: siempre null. En Etapa 3 la RPC lo poblará y pasa tal cual.
+      // Etapa 2 y fases 1-4 de Etapa 3: null. La Fase 5 la poblará y pasa tal cual.
       ejecucion_actual: ronda.ejecucion_actual ?? null,
     })),
   }
@@ -647,4 +669,118 @@ export async function obtenerRondasGuardiaActual(): Promise<ResultadoRondas<Rond
   }
 
   return { data: normalizarRondasGuardia(data as Partial<RondasGuardiaActual> | null), error: null }
+}
+
+// ── Ejecución de rondas (Etapa 3, fase 1) ─────────────────────────────────────
+// Base transaccional: iniciar/recuperar una ejecución y consultar la actual.
+// Todavía no hay registro de puntos, finalización, cancelación ni fotos.
+//
+// El cliente sólo envía `ronda_base_id`, y el servidor valida que pertenezca al
+// puesto de su turno vigente. Guardia, turno, objetivo, puesto y fecha operativa
+// se derivan de auth.uid(); nunca viajan desde acá.
+
+export type ContextoIniciarRonda =
+  | 'iniciada'            // se creó una ejecución nueva
+  | 'recuperada'          // ya existía una en curso de este guardia y turno
+  | 'sin_turno_vigente'
+  | 'turno_sin_puesto'
+  | 'ronda_no_disponible' // no existe, está inactiva o es de otro puesto
+  | 'ronda_sin_puntos'
+
+export type ContextoEjecucionActual =
+  | 'ok'
+  | 'sin_usuario'
+  | 'sin_turno_vigente'
+  | 'sin_ejecucion'
+
+export interface RespuestaIniciarRonda {
+  contexto: ContextoIniciarRonda
+  ejecucion: RondaEjecucionActual | null
+}
+
+export interface RespuestaEjecucionActual {
+  contexto: ContextoEjecucionActual
+  ejecucion: RondaEjecucionActual | null
+}
+
+function normalizarEjecucion(bruto: any): RondaEjecucionActual | null {
+  if (!bruto) return null
+  const puntos: RondaEjecucionPuntoEstado[] = Array.isArray(bruto.puntos) ? bruto.puntos : []
+  return {
+    ...bruto,
+    puntos: [...puntos].sort((a, b) => a.orden - b.orden),
+  } as RondaEjecucionActual
+}
+
+/**
+ * Inicia una ronda o devuelve la que ya está en curso.
+ *
+ * Idempotente: dos toques seguidos no crean dos ejecuciones. Distinguir
+ * 'iniciada' de 'recuperada' sirve para el mensaje al usuario, no para el flujo.
+ */
+export async function iniciarRonda(
+  rondaBaseId: string,
+): Promise<ResultadoRondas<RespuestaIniciarRonda>> {
+  const { data, error } = await supabase.rpc('iniciar_ronda', {
+    p_ronda_base_id: rondaBaseId,
+  })
+
+  if (error) {
+    registrarErrorSupabase('iniciar_ronda', error)
+    return { data: null, error: mensajeError(error, 'No se pudo iniciar la ronda.') }
+  }
+
+  const bruto = data as any
+  return {
+    data: {
+      contexto: (bruto?.contexto ?? 'sin_turno_vigente') as ContextoIniciarRonda,
+      ejecucion: normalizarEjecucion(bruto?.ejecucion),
+    },
+    error: null,
+  }
+}
+
+/**
+ * Ejecución en curso del guardia autenticado, si existe.
+ *
+ * Es la fuente de verdad para recuperar el estado: la aplicación no guarda nada
+ * en localStorage. Conviene llamarla al montar, al volver del segundo plano y al
+ * recuperar conexión.
+ *
+ * Ante un reemplazo de guardia devuelve únicamente la ejecución propia: la del
+ * guardia anterior sobre el mismo turno nunca se expone ni se continúa.
+ */
+export async function obtenerEjecucionActual(): Promise<ResultadoRondas<RespuestaEjecucionActual>> {
+  const { data, error } = await supabase.rpc('obtener_ejecucion_actual')
+
+  if (error) {
+    registrarErrorSupabase('obtener_ejecucion_actual', error)
+    return { data: null, error: mensajeError(error, 'No se pudo consultar la ronda en curso.') }
+  }
+
+  const bruto = data as any
+  return {
+    data: {
+      contexto: (bruto?.contexto ?? 'sin_ejecucion') as ContextoEjecucionActual,
+      ejecucion: normalizarEjecucion(bruto?.ejecucion),
+    },
+    error: null,
+  }
+}
+
+/** Mensaje para el vigilador según por qué no se pudo iniciar. */
+export function mensajeContextoIniciar(contexto: ContextoIniciarRonda): string | null {
+  switch (contexto) {
+    case 'iniciada':
+    case 'recuperada':
+      return null
+    case 'sin_turno_vigente':
+      return 'No tenés un turno vigente en este momento.'
+    case 'turno_sin_puesto':
+      return 'Tu turno vigente no tiene un puesto asignado.'
+    case 'ronda_no_disponible':
+      return 'Esa ronda no está disponible para tu puesto.'
+    case 'ronda_sin_puntos':
+      return 'La ronda no tiene puntos de control configurados.'
+  }
 }
