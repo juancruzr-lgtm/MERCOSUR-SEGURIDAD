@@ -682,6 +682,7 @@ export async function obtenerRondasGuardiaActual(): Promise<ResultadoRondas<Rond
 export type ContextoIniciarRonda =
   | 'iniciada'            // se creó una ejecución nueva
   | 'recuperada'          // ya existía una en curso de este guardia y turno
+  | 'otra_ronda_en_curso' // existe otra ronda abierta; se devuelve sin mutarla
   | 'sin_turno_vigente'
   | 'turno_sin_puesto'
   | 'ronda_no_disponible' // no existe, está inactiva o es de otro puesto
@@ -711,6 +712,7 @@ export type ContextoRegistrarPunto =
   | 'ejecucion_cerrada'
   | 'fuera_de_secuencia'
   | 'gps_invalido'
+  | 'configuracion_gps_invalida'
   | 'foto_pendiente'
 
 export interface GpsPuntoRonda {
@@ -896,6 +898,8 @@ export function mensajeContextoRegistrarPunto(contexto: ContextoRegistrarPunto):
       return 'Tenés que completar primero el punto actual.'
     case 'gps_invalido':
       return 'La ubicación recibida no es válida.'
+    case 'configuracion_gps_invalida':
+      return 'Este punto tiene una configuración GPS inválida. Contactá al supervisor.'
     case 'foto_pendiente':
       return 'Este punto requiere una foto antes de continuar.'
   }
@@ -907,6 +911,8 @@ export function mensajeContextoIniciar(contexto: ContextoIniciarRonda): string |
     case 'iniciada':
     case 'recuperada':
       return null
+    case 'otra_ronda_en_curso':
+      return 'Ya tenés otra ronda en curso. Finalizala antes de iniciar esta.'
     case 'sin_turno_vigente':
       return 'No tenés un turno vigente en este momento.'
     case 'turno_sin_puesto':
