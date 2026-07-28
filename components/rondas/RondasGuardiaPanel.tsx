@@ -49,6 +49,7 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
   const [ejecucionActual, setEjecucionActual] = useState<RondaEjecucionActual | null>(null)
   const [iniciandoRondaId, setIniciandoRondaId] = useState<string | null>(null)
   const [errorInicio, setErrorInicio] = useState<string | null>(null)
+  const [avisoInicio, setAvisoInicio] = useState<string | null>(null)
   const operacionEnCursoRef = useRef(false)
 
   const cargar = useCallback(async (silencioso = false, descartarFinalizada = false) => {
@@ -110,6 +111,7 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
 
     setIniciandoRondaId(ronda.ronda_id)
     setErrorInicio(null)
+    setAvisoInicio(null)
     operacionEnCursoRef.current = true
 
     try {
@@ -119,17 +121,33 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
         return
       }
 
-      const mensaje = mensajeContextoIniciar(resultado.data.contexto)
+      const respuesta = resultado.data
+
+      // `otra_ronda_en_curso` no es un fallo: el servidor devuelve la ejecución
+      // que el guardia ya tenía abierta, completa y utilizable. Descartarla
+      // dejaría al vigilador sin acceso a su propia ronda hasta el refresco.
+      // Se adopta y se avisa cuál es, porque no es la que tocó.
+      if (respuesta.contexto === 'otra_ronda_en_curso' && respuesta.ejecucion) {
+        setEjecucionActual(respuesta.ejecucion)
+        setRondaAbierta(null)
+        setAvisoInicio(
+          `Ya tenías la ronda «${respuesta.ejecucion.ronda_nombre}» en curso. Se abrió esa; `
+          + `terminala antes de iniciar «${ronda.ronda_nombre}».`,
+        )
+        return
+      }
+
+      const mensaje = mensajeContextoIniciar(respuesta.contexto)
       if (mensaje) {
         setErrorInicio(mensaje)
         return
       }
-      if (!resultado.data.ejecucion) {
+      if (!respuesta.ejecucion) {
         setErrorInicio('El servidor no devolvió la ejecución iniciada.')
         return
       }
 
-      setEjecucionActual(resultado.data.ejecucion)
+      setEjecucionActual(respuesta.ejecucion)
       setRondaAbierta(null)
     } finally {
       operacionEnCursoRef.current = false
@@ -174,16 +192,24 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
       )}
 
       {!error && ejecucionActual && (
-        <RondaGuardiaEjecucion
-          ejecucion={ejecucionActual}
-          onEjecucionChange={setEjecucionActual}
-          onOperacionChange={enCurso => { operacionEnCursoRef.current = enCurso }}
-          onVolver={() => {
-            setEjecucionActual(null)
-            setErrorInicio(null)
-            void cargar(false, true)
-          }}
-        />
+        <>
+          {avisoInicio && (
+            <div style={{ ...S.notaCard, marginBottom: 8 }} role="status">
+              <span style={S.notaMuted}>{avisoInicio}</span>
+            </div>
+          )}
+          <RondaGuardiaEjecucion
+            ejecucion={ejecucionActual}
+            onEjecucionChange={setEjecucionActual}
+            onOperacionChange={enCurso => { operacionEnCursoRef.current = enCurso }}
+            onVolver={() => {
+              setEjecucionActual(null)
+              setErrorInicio(null)
+              setAvisoInicio(null)
+              void cargar(false, true)
+            }}
+          />
+        </>
       )}
 
       {!cargando && !error && !ejecucionActual && data && (
