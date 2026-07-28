@@ -1,4 +1,4 @@
--- Etapa 1 del Sistema de Rondas Nativo.
+-- Etapa 2 — Configuración de rondas.
 -- Crea exclusivamente la configuracion de rondas base y sus puntos.
 -- No crea ejecuciones, obligaciones, cron ni modifica la integracion JWM.
 

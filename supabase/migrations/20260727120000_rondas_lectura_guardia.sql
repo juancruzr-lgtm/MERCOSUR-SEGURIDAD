@@ -1,4 +1,4 @@
--- Etapa 2 (parte 1) del Sistema de Rondas Nativo: LECTURA para el vigilador.
+-- Etapa 2 — Configuración de rondas: lectura por puesto para el vigilador.
 --
 -- Objetivo: un vigilador con turno vigente debe ver automaticamente las rondas
 -- activas del puesto de ese turno. La ronda NO se asigna manualmente: se resuelve
@@ -91,10 +91,10 @@ begin
         'activa',            rb.activo,
         'cantidad_puntos',   coalesce(pts.cantidad, 0),
         'puntos',            coalesce(pts.puntos, jsonb_build_array()),
-        -- Placeholder de Etapa 3 (ejecucion de rondas). Siempre null en esta
-        -- etapa: no depende de ronda_ejecuciones ni de ninguna tabla nueva.
-        -- Cuando exista la ejecucion, este campo pasa a contener el objeto
-        -- ejecucion_actual sin romper el contrato del cliente (evolucion aditiva).
+        -- Placeholder para Etapa 3.2 — App Vigilador. Durante Etapa 3.1 —
+        -- Backend permanece null: esta RPC no depende de ronda_ejecuciones.
+        -- En 3.2 pasa a contener ejecucion_actual sin romper el contrato del
+        -- cliente (evolucion aditiva).
         'ejecucion_actual',  null
       )
       order by rb.nombre

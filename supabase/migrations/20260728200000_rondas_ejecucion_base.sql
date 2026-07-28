@@ -1,6 +1,6 @@
 /*
 ================================================================================
-ETAPA 3 — FASE 1: base transaccional de la ejecución de rondas
+ETAPA 3.1 — BACKEND: base transaccional de la ejecución de rondas
 ================================================================================
 
 ALCANCE
@@ -10,7 +10,7 @@ ALCANCE
   NO incluye: registro de puntos, omisión, finalización, cancelación, fotos,
   storage, interfaz, reportes, cron, alertas ni push. Tampoco modifica
   `obtener_rondas_guardia_actual()`, que sigue devolviendo `ejecucion_actual:
-  null` hasta la Fase 5.
+  null` hasta la Etapa 3.2 — App Vigilador.
 
 DECISIONES CERRADAS QUE IMPLEMENTA
 
@@ -193,8 +193,8 @@ create trigger trg_ronda_ejecuciones_updated_at
 -- ── Turno vigente: definición compartida ────────────────────────────────────
 -- Extrae la lógica que hoy vive dentro de obtener_rondas_guardia_actual() para
 -- que exista una sola definición de "turno vigente" en el sistema. Esa RPC no se
--- modifica en esta fase: se hará en la Fase 5, cuando haya que tocarla igual
--- para poblar ejecucion_actual.
+-- modifica en 3.1: se hará en la Etapa 3.2 — App Vigilador, al poblar
+-- ejecucion_actual.
 
 create or replace function public.rondas_turno_vigente()
 returns table (

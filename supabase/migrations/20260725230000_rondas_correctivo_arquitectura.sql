@@ -1,4 +1,4 @@
--- Parche correctivo aditivo para la Etapa 1 de rondas nativas.
+-- Parche correctivo aditivo para la Etapa 2 — Configuración de rondas.
 -- No crea ejecuciones, obligaciones ni modifica JWM.
 
 begin;

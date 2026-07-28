@@ -517,7 +517,7 @@ export async function reordenarPuntos(
   return { data: true, error: null }
 }
 
-// ── Lectura del vigilador (Etapa 2, parte 1) ──────────────────────────────────
+// ── Etapa 2 — Configuración de rondas: lectura por puesto ─────────────────────
 // La ronda no se asigna manualmente: se resuelve desde el turno vigente en el
 // servidor (RPC obtener_rondas_guardia_actual). El cliente no envía guardia_id,
 // puesto_id, objetivo_id ni ronda_id; toda la identidad sale de auth.uid().
@@ -553,7 +553,7 @@ export interface RondaEjecucionPuntoEstado {
   ronda_punto_id: string
   estado: EstadoEjecucionPunto
   completado_at: string | null
-  // ── Añadidos en Etapa 3, fase 1 ──
+  // ── Añadidos en Etapa 3.1 — Backend ──
   ejecucion_punto_id: string
   orden: number
   nombre: string
@@ -564,9 +564,9 @@ export interface RondaEjecucionPuntoEstado {
   radio_metros: number | null
 }
 
-// La fase 1 de la Etapa 3 define este contrato y lo expone mediante
+// La Etapa 3.1 — Backend define este contrato y lo expone mediante
 // iniciarRonda() y obtenerEjecucionActual(). obtenerRondasGuardiaActual()
-// continúa entregando ejecucion_actual: null hasta la Fase 5.
+// continúa entregando ejecucion_actual: null hasta la Etapa 3.2 — App Vigilador.
 // El "estado" de ejecución (acá) es distinto de estado_temporal (reloj/config).
 export interface RondaEjecucionActual {
   id: string
@@ -577,7 +577,7 @@ export interface RondaEjecucionActual {
   puntos_completados: number
   punto_actual_id: string | null
   puntos: RondaEjecucionPuntoEstado[]
-  // ── Añadidos en Etapa 3, fase 1 ──
+  // ── Añadidos en Etapa 3.1 — Backend ──
   puntos_total: number
   puede_continuar: boolean
   resultado: ResultadoEjecucionRonda | null
@@ -596,7 +596,7 @@ export interface RondaGuardia {
   activa: boolean
   cantidad_puntos: number
   puntos: RondaGuardiaPunto[]
-  // Placeholder de Etapa 3 (ejecución de rondas). Siempre `null` en Etapa 2.
+  // Placeholder para Etapa 3.2 — App Vigilador. Permanece `null` en Etapa 3.1.
   ejecucion_actual: RondaEjecucionActual | null
 }
 
@@ -651,7 +651,7 @@ function normalizarRondasGuardia(bruto: Partial<RondasGuardiaActual> | null): Ro
       puntos: Array.isArray(ronda.puntos)
         ? [...ronda.puntos].sort((a, b) => a.orden - b.orden)
         : [],
-      // Etapa 2 y fases 1-4 de Etapa 3: null. La Fase 5 la poblará y pasa tal cual.
+      // Etapa 3.1: null. La Etapa 3.2 la poblará y este cliente la propagará.
       ejecucion_actual: ronda.ejecucion_actual ?? null,
     })),
   }
@@ -671,7 +671,7 @@ export async function obtenerRondasGuardiaActual(): Promise<ResultadoRondas<Rond
   return { data: normalizarRondasGuardia(data as Partial<RondasGuardiaActual> | null), error: null }
 }
 
-// ── Ejecución de rondas (Etapa 3, fase 1) ─────────────────────────────────────
+// ── Etapa 3.1 — Ejecución de rondas: Backend ──────────────────────────────────
 // Base transaccional: iniciar/recuperar una ejecución y consultar la actual.
 // Todavía no hay registro de puntos, finalización, cancelación ni fotos.
 //

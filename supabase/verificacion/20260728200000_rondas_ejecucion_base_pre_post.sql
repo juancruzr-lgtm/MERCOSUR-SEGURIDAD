@@ -1,5 +1,5 @@
 -- ============================================================================
--- VERIFICACIÓN — Etapa 3, Fase 1: base transaccional de ejecución de rondas
+-- VERIFICACIÓN — Etapa 3.1, Backend: base transaccional de ejecución de rondas
 -- ============================================================================
 --
 -- Acompaña a supabase/migrations/20260728200000_rondas_ejecucion_base.sql
@@ -53,7 +53,7 @@ select
   (select p.prorettype = 'jsonb'::regtype
      from pg_proc p
     where p.oid = to_regprocedure('public.obtener_rondas_guardia_actual()'))
-    as rpc_etapa2_ok;
+    as rpc_lectura_rondas_ok;
 
 -- 1.3 Material disponible para probar: rondas activas con puntos activos.
 select rb.id as ronda_base_id, rb.nombre, o.nombre as objetivo, p.nombre as puesto,
@@ -129,7 +129,7 @@ select table_name, grantee, string_agg(privilege_type, ', ' order by privilege_t
  group by table_name, grantee
  order by table_name, grantee;
 
--- 2.6 La RPC de la Etapa 2 no fue modificada: sigue devolviendo el placeholder.
+-- 2.6 La RPC de lectura de rondas no fue modificada en 3.1: mantiene el placeholder.
 select count(*) as sigue_con_placeholder
   from pg_proc p join pg_namespace n on n.oid=p.pronamespace
  where n.nspname='public'
@@ -174,7 +174,7 @@ order by rondas_utilizables desc, t.fecha desc;
 --   * Al menos una fila con tiene_auth = true y rondas_utilizables >= 1
 --     -> las pruebas 4.1 y 4.2 corren completas.
 --   * Ninguna fila así -> 4.1 y 4.2 se omiten con un error explícito de falta de
---     material. No es un fallo de la migración: la Fase 1 se valida igual con la
+--     material. No es un fallo de la migración: la Etapa 3.1 se valida igual con la
 --     sección 2 y con 4.3, que no dependen de un turno en curso.
 
 
@@ -404,7 +404,7 @@ select '1_ronda_de_otro_puesto', to_jsonb(
 create temp table _vacia on commit drop as
 with nueva as (
   insert into rondas_base (objetivo_id, puesto_id, nombre, intervalo_minutos, activo)
-  select objetivo_id, puesto_id, 'ZZZ prueba fase1 sin puntos', 60, true from _ctx
+  select objetivo_id, puesto_id, 'ZZZ prueba backend 3.1 sin puntos', 60, true from _ctx
   returning id
 ) select id from nueva;
 

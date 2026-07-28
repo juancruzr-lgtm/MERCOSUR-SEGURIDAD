@@ -1,5 +1,10 @@
 # 🛡️ Mercosur Seguridad — Guía de Instalación
 
+## Roadmap del sistema de Rondas
+
+La nomenclatura vigente de etapas, alcance y estado está documentada en
+[`docs/RONDAS_ROADMAP.md`](docs/RONDAS_ROADMAP.md).
+
 ## Qué necesitás (todo gratis)
 - Cuenta en **GitHub** → github.com
 - Cuenta en **Supabase** → supabase.com  
