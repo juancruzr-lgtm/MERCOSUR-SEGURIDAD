@@ -8,6 +8,8 @@ import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/li
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
+import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, obtenerPuestosActivosDeObjetivos, resolverPuestoTurno } from '@/lib/puestos'
+import type { EstadoPuestos } from '@/lib/puestos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
@@ -2715,6 +2717,16 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     setModal(true)
   }
 
+  // TODO: al crear un objetivo nuevo debe crearse también su puesto inicial, o
+  // existir una pantalla explícita para hacerlo. Hoy la aplicación no garantiza
+  // esa creación y puede dejar objetivos sin puestos.
+  //
+  // Contexto: los puestos existentes se crearon una única vez por el backfill de
+  // 20260706_puestos.sql. Ninguna ruta de la aplicación inserta en `puestos`, así
+  // que todo objetivo dado de alta después nace sin ninguno. El 2026-07-28 eso
+  // había dejado 6 objetivos activos sin puesto y 153 turnos sin `puesto_id`, y
+  // hubo que resolverlo por SQL. Un objetivo sin puestos no admite turnos desde
+  // la interfaz (ver lib/puestos.ts) ni puede tener rondas.
   const guardar = async () => {
     if (!form.nombre.trim()) return
     setLoading(true)
@@ -3216,6 +3228,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   const [form, setForm] = useState({
     guardia_id: '',
     objetivo_id: '',
+    puesto_id: '',
     fecha: fechaActualTurno(),
     hora_inicio: '06:00',
     hora_fin: '14:00',
@@ -3224,6 +3237,24 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [mensaje, setMensaje] = useState('')
+  const [estadoPuestos, setEstadoPuestos] = useState<EstadoPuestos | null>(null)
+
+  // El objetivo elegido define si el puesto se asigna solo, hay que elegirlo o
+  // no se puede crear el turno. Regla única en lib/puestos.ts.
+  useEffect(() => {
+    let vigente = true
+    if (!form.objetivo_id) {
+      setEstadoPuestos(null)
+      return
+    }
+    void obtenerPuestosActivos(form.objetivo_id).then(({ data, error: errPuestos }) => {
+      if (!vigente) return
+      setEstadoPuestos(data)
+      setForm(actual => (actual.puesto_id ? { ...actual, puesto_id: '' } : actual))
+      if (errPuestos) setError(errPuestos)
+    })
+    return () => { vigente = false }
+  }, [form.objetivo_id])
 
   const [turnoEditando, setTurnoEditando] = useState<Turno | null>(null)
   const [formEdicion, setFormEdicion] = useState({
@@ -3420,8 +3451,16 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     setError('')
     setMensaje('')
 
+    const puesto = resolverPuestoTurno(estadoPuestos, form.puesto_id)
+    if (!puesto.ok) {
+      setError(puesto.error)
+      return
+    }
+
+    const { puesto_id: _descartado, ...camposForm } = form
     const payload = {
-      ...form,
+      ...camposForm,
+      puesto_id: puesto.puesto_id,
       guardia_id: form.guardia_id || null,
       estado: form.guardia_id ? 'programado' : 'descubierto',
       tipo_evento: 'normal',
@@ -3635,7 +3674,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
               <button
                 style={{ ...S.btn, ...S.btnPrimary }}
                 onClick={guardar}
-                disabled={loading}
+                disabled={loading || estadoPuestos?.caso === 'sin_puestos'}
               >
                 {loading ? 'Creando...' : 'Crear turno'}
               </button>
@@ -3663,6 +3702,30 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
               ))}
             </select>
           </div>
+
+          {/* Puesto: sólo se pide cuando hay más de uno. Con uno solo se asigna
+              automáticamente y con ninguno se bloquea el alta. */}
+          {estadoPuestos?.caso === 'multiple' && (
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Puesto</label>
+              <select
+                style={S.select}
+                value={form.puesto_id}
+                onChange={e => setForm({ ...form, puesto_id:e.target.value })}
+              >
+                <option value="">Seleccionar...</option>
+                {estadoPuestos.puestos.map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {estadoPuestos?.caso === 'sin_puestos' && (
+            <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.3)', color:'#fca5a5', fontSize:13 }}>
+              {MENSAJE_SIN_PUESTOS_ACTIVOS}
+            </div>
+          )}
 
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Guardia</label>
@@ -3986,6 +4049,15 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
     setError(null)
     setLoading(true)
     try {
+      // 0. Resolver el puesto antes de crear nada. Si el objetivo no tiene
+      //    puestos activos, el turno no puede crearse. Ver lib/puestos.ts.
+      const { data: puestosObjetivo, error: errPuestos } = await obtenerPuestosActivos(form.objetivo_id)
+      if (errPuestos) { setError(errPuestos); setLoading(false); return }
+      const puesto = resolverPuestoTurno(puestosObjetivo, null)
+      if (!puesto.ok && puestosObjetivo?.caso === 'sin_puestos') {
+        setError(puesto.error); setLoading(false); return
+      }
+
       // 1. Buscar turno existente
       const { data: turnosExistentes } = await supabase
         .from('turnos')
@@ -4006,6 +4078,7 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
           .insert({
             fecha: form.fecha,
             objetivo_id: form.objetivo_id,
+            puesto_id: puesto.ok ? puesto.puesto_id : null,
             guardia_id: form.guardia_id,
             hora_inicio: form.hora_inicio,
             hora_fin: form.hora_fin,
@@ -6387,9 +6460,30 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
       .lte('fecha', fechaConsultaHasta)
       .eq('tipo_evento', 'normal')
     const existentes = new Set((turnosExistentes || []).map((t: any) => `${t.objetivo_id}|${t.guardia_id}|${t.fecha}|${t.hora_inicio}|${t.hora_fin}`))
+
+    // Puestos de todos los objetivos involucrados, en una sola consulta.
+    // Los objetivos sin puestos activos, o con más de uno, se omiten y se
+    // informan: la generación masiva no puede elegir por el usuario.
+    const { data: puestosPorObjetivo, error: errPuestos } = await obtenerPuestosActivosDeObjetivos(
+      serviciosActivos.map((s: any) => s.objetivo_id),
+    )
+    if (errPuestos || !puestosPorObjetivo) {
+      setResultadoGeneracion(errPuestos || 'No se pudieron cargar los puestos.')
+      setGenerando(false)
+      return
+    }
+    const objetivosOmitidos = new Map<string, string>()
+
     const nuevos: any[] = []
     for (const srv of serviciosActivos) {
       if (!srv.turno_base || !srv.dias_semana?.length || !srv.guardia_habitual_id) continue
+      const estadoPuestosSrv = puestosPorObjetivo.get(srv.objetivo_id) ?? null
+      const puestoSrv = resolverPuestoTurno(estadoPuestosSrv, null)
+      if (!puestoSrv.ok) {
+        const nombreObjetivo = objetivos.find((o: Objetivo) => o.id === srv.objetivo_id)?.nombre || srv.objetivo_id
+        objetivosOmitidos.set(srv.objetivo_id, `${nombreObjetivo}: ${puestoSrv.error}`)
+        continue
+      }
       const guardiaId = srv.guardia_habitual_id
       for (let dia = 1; dia <= ultimoDia; dia++) {
         const fecha = new Date(anio, mes - 1, dia)
@@ -6398,7 +6492,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
         const fechaStr = `${anio}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`
         const key = `${srv.objetivo_id}|${guardiaId}|${fechaStr}|${srv.turno_base.hora_inicio}|${srv.turno_base.hora_fin}`
         if (existentes.has(key)) continue
-        const candidato = { objetivo_id:srv.objetivo_id, guardia_id:guardiaId, guardia_original_id:guardiaId, guardia_real_id:null, fecha:fechaStr, hora_inicio:srv.turno_base.hora_inicio, hora_fin:srv.turno_base.hora_fin, estado:'programado', tipo_evento:'normal', estado_revision:'aprobado', servicio_base_id:srv.id }
+        const candidato = { objetivo_id:srv.objetivo_id, puesto_id:puestoSrv.puesto_id, guardia_id:guardiaId, guardia_original_id:guardiaId, guardia_real_id:null, fecha:fechaStr, hora_inicio:srv.turno_base.hora_inicio, hora_fin:srv.turno_base.hora_fin, estado:'programado', tipo_evento:'normal', estado_revision:'aprobado', servicio_base_id:srv.id }
         if (tieneTurnoSuperpuesto([...(turnosExistentes || []), ...nuevos], candidato)) {
           setResultadoGeneracion(MENSAJE_TURNO_SUPERPUESTO)
           setGenerando(false)
@@ -6407,13 +6501,21 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
         nuevos.push(candidato)
       }
     }
-    if (nuevos.length === 0) { setResultadoGeneracion('No hay turnos nuevos para generar. Todos ya existen o no tienen guardia asignado.'); setGenerando(false); return }
+    const avisoOmitidos = objetivosOmitidos.size > 0
+      ? `\n⚠️ Omitidos por puesto no resuelto:\n· ${Array.from(objetivosOmitidos.values()).join('\n· ')}`
+      : ''
+
+    if (nuevos.length === 0) {
+      setResultadoGeneracion(`No hay turnos nuevos para generar. Todos ya existen o no tienen guardia asignado.${avisoOmitidos}`)
+      setGenerando(false)
+      return
+    }
     let insertados = 0
     for (let i = 0; i < nuevos.length; i += 100) {
       const { error: errInsert } = await supabase.from('turnos').insert(nuevos.slice(i, i + 100))
       if (!errInsert) insertados += Math.min(100, nuevos.length - i)
     }
-    setResultadoGeneracion(`✅ Generados ${insertados} turnos para ${mesGenerar}.`)
+    setResultadoGeneracion(`✅ Generados ${insertados} turnos para ${mesGenerar}.${avisoOmitidos}`)
     setGenerando(false)
   }
 

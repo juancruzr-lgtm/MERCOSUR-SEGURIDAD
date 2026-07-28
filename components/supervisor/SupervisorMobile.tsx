@@ -8,6 +8,8 @@ import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 import { initTelemetry, endSession } from '@/lib/telemetry'
 import { useSupervisorGps } from '@/lib/supervisor-gps'
+import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno } from '@/lib/puestos'
+import type { EstadoPuestos } from '@/lib/puestos'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
@@ -456,7 +458,8 @@ export default function SupervisorMobile({ user }: any) {
   const [filtroTurnos, setFiltroTurnos] = useState<EstadoTurno | 'todos'>('todos')
   const [filtroFecha, setFiltroFecha] = useState<FiltroFechaTurnos>('hoy')
   const [modalTurno, setModalTurno] = useState(false)
-  const [formTurno, setFormTurno] = useState({ objetivo_id:'', guardia_id:'', fecha: fechaHoy(), hora_inicio:'18:00', hora_fin:'06:00', tipo_evento:'normal' })
+  const [formTurno, setFormTurno] = useState({ objetivo_id:'', puesto_id:'', guardia_id:'', fecha: fechaHoy(), hora_inicio:'18:00', hora_fin:'06:00', tipo_evento:'normal' })
+  const [estadoPuestosTurno, setEstadoPuestosTurno] = useState<EstadoPuestos | null>(null)
   const [guardiaEditando, setGuardiaEditando] = useState<Usuario | null>(null)
   const [objetivoEditando, setObjetivoEditando] = useState<Objetivo | null>(null)
   const [formGuardia, setFormGuardia] = useState({ email:'', telefono:'', estado:'activo', foto_url:'' })
@@ -802,6 +805,22 @@ export default function SupervisorMobile({ user }: any) {
   useEffect(() => {
     if (user?.id && user?.rol) void initTelemetry(user.id, user.rol)
   }, [])
+
+  // Puestos activos del objetivo elegido en el alta de turno. Definen si el
+  // puesto se asigna solo, hay que elegirlo o el alta queda bloqueada.
+  useEffect(() => {
+    let vigente = true
+    if (!formTurno.objetivo_id) {
+      setEstadoPuestosTurno(null)
+      return
+    }
+    void obtenerPuestosActivos(formTurno.objetivo_id).then(({ data, error: errPuestos }) => {
+      if (!vigente) return
+      setEstadoPuestosTurno(data)
+      if (errPuestos) setError(errPuestos)
+    })
+    return () => { vigente = false }
+  }, [formTurno.objetivo_id])
 
   const getObjetivo = (id: string) => objetivos.find(o => o.id === id)
   const getGuardia = (id?: string | null) => guardias.find(g => g.id === id)
@@ -1152,8 +1171,16 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
     setMensaje('')
 
+    const puesto = resolverPuestoTurno(estadoPuestosTurno, formTurno.puesto_id)
+    if (!puesto.ok) {
+      setError(puesto.error)
+      setAsignando(null)
+      return
+    }
+
     const payload = {
       objetivo_id: formTurno.objetivo_id,
+      puesto_id: puesto.puesto_id,
       guardia_id: formTurno.guardia_id || null,
       guardia_original_id: formTurno.guardia_id || null,
       fecha: formTurno.fecha,
@@ -1204,7 +1231,7 @@ export default function SupervisorMobile({ user }: any) {
     const [{ data: turnosOrigen, error: origenError }, { data: turnosComparacionData, error: comparacionError }] = await Promise.all([
       supabase
         .from('turnos')
-        .select('objetivo_id, guardia_id, hora_inicio, hora_fin, tipo_evento')
+        .select('objetivo_id, puesto_id, guardia_id, hora_inicio, hora_fin, tipo_evento')
         .eq('fecha', fechaOrigen)
         .order('hora_inicio', { ascending: true }),
       supabase
@@ -1220,9 +1247,12 @@ export default function SupervisorMobile({ user }: any) {
     }
 
     const comparacion = ((turnosComparacionData || []) as Turno[]).map(turno => ({ ...turno }))
-    const candidatos = (turnosOrigen || []).reduce<{ objetivo_id: string, guardia_id: string | null, guardia_original_id: string | null, fecha: string, hora_inicio: string, hora_fin: string, estado: Turno['estado'], tipo_evento: string }[]>((acumulados, turno: any) => {
+    const candidatos = (turnosOrigen || []).reduce<{ objetivo_id: string, puesto_id: string | null, guardia_id: string | null, guardia_original_id: string | null, fecha: string, hora_inicio: string, hora_fin: string, estado: Turno['estado'], tipo_evento: string }[]>((acumulados, turno: any) => {
       const candidato = {
         objetivo_id: turno.objetivo_id,
+        // Se arrastra el puesto del turno de origen. Si viene null, el trigger
+        // turnos_completar_puesto lo resuelve cuando no hay ambigüedad.
+        puesto_id: turno.puesto_id ?? null,
         guardia_id: turno.guardia_id || null,
         guardia_original_id: turno.guardia_id || null,
         fecha: fechaDestino,
@@ -3616,10 +3646,26 @@ export default function SupervisorMobile({ user }: any) {
             <div style={screenTitle}>Crear turno</div>
             {error && <div style={errorBox}>{error}</div>}
             <label style={label}>Objetivo</label>
-            <select style={select} value={formTurno.objetivo_id} onChange={e => setFormTurno({ ...formTurno, objetivo_id:e.target.value })}>
+            <select style={select} value={formTurno.objetivo_id} onChange={e => setFormTurno({ ...formTurno, objetivo_id:e.target.value, puesto_id:'' })}>
               <option value="">Seleccionar</option>
               {objetivos.map(o => <option key={o.id} value={o.id}>{o.nombre}</option>)}
             </select>
+
+            {/* El puesto se pide sólo si hay más de uno. Con uno se asigna solo. */}
+            {estadoPuestosTurno?.caso === 'multiple' && (
+              <>
+                <label style={label}>Puesto</label>
+                <select style={select} value={formTurno.puesto_id} onChange={e => setFormTurno({ ...formTurno, puesto_id:e.target.value })}>
+                  <option value="">Seleccionar</option>
+                  {estadoPuestosTurno.puestos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                </select>
+              </>
+            )}
+
+            {estadoPuestosTurno?.caso === 'sin_puestos' && (
+              <div style={errorBox}>{MENSAJE_SIN_PUESTOS_ACTIVOS}</div>
+            )}
+
             <label style={label}>Guardia</label>
             <select style={select} value={formTurno.guardia_id} onChange={e => setFormTurno({ ...formTurno, guardia_id:e.target.value })}>
               <option value="">Sin asignar</option>
