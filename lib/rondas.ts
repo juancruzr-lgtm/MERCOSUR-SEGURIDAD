@@ -954,3 +954,143 @@ export function mensajeContextoIniciar(contexto: ContextoIniciarRonda): string |
       return 'La ronda no tiene puntos de control configurados.'
   }
 }
+
+// ── Cierre administrativo de una ronda bloqueada (C3 mínimo) ──────────────────
+// Superficie de supervisión, no del vigilador. Una ejecución cuyo punto actual
+// es inalcanzable queda `en_curso` para siempre y bloquea al guardia por el
+// resto del turno; esto es la única salida que no requiere SQL manual.
+//
+// El cierre deja la ejecución en `finalizada` + `incompleta`, igual que una
+// ronda que el vigilador terminó con incumplidos. Lo que las distingue es
+// `cerrada_por`: todo reporte de cumplimiento debe filtrar por esa columna.
+
+/** Mínimo de caracteres del motivo. Coincide con la constraint de base. */
+export const MOTIVO_CIERRE_MIN = 10
+
+export type ContextoCerrarRonda =
+  | 'cerrada'                 // se cerró ahora
+  | 'ya_cerrada'              // reintento: devuelve el cierre original sin tocarlo
+  | 'sin_usuario'
+  | 'sin_permiso'
+  | 'ejecucion_no_encontrada'
+  | 'ejecucion_no_bloqueada'  // la terminó el vigilador: no se reescribe
+  | 'motivo_invalido'
+
+export type ContextoEjecucionesEnCurso = 'ok' | 'sin_usuario' | 'sin_permiso'
+
+export interface EjecucionEnCurso {
+  id: string
+  ronda_nombre: string
+  guardia_nombre: string
+  puesto_nombre: string
+  fecha_operativa: string
+  iniciada_at: string
+  puntos_total: number
+  puntos_pendientes: number
+  /** La ventana del turno ya terminó: la ejecución está abandonada, no en progreso. */
+  turno_vencido: boolean
+}
+
+export interface RespuestaEjecucionesEnCurso {
+  contexto: ContextoEjecucionesEnCurso
+  ejecuciones: EjecucionEnCurso[]
+}
+
+export interface CierreRondaBloqueada {
+  id: string
+  estado?: EstadoEjecucionRonda
+  resultado?: ResultadoEjecucionRonda | null
+  puntos_omitidos?: number
+  puntos_conservados?: number
+  cerrada_at?: string | null
+  cerrada_motivo?: string | null
+}
+
+export interface RespuestaCerrarRonda {
+  contexto: ContextoCerrarRonda
+  ejecucion: CierreRondaBloqueada | null
+}
+
+/** Valida el motivo antes de salir a la red. Misma regla que la constraint. */
+export function validarMotivoCierre(motivo: string): string | null {
+  if (motivo.trim().length < MOTIVO_CIERRE_MIN) {
+    return `El motivo es obligatorio y debe tener al menos ${MOTIVO_CIERRE_MIN} caracteres.`
+  }
+  return null
+}
+
+/** Ejecuciones en curso de un objetivo. Sólo admin y supervisor de la zona. */
+export async function listarEjecucionesEnCursoObjetivo(
+  objetivoId: string,
+): Promise<ResultadoRondas<RespuestaEjecucionesEnCurso>> {
+  const { data, error } = await supabase.rpc('listar_ejecuciones_en_curso_objetivo', {
+    p_objetivo_id: objetivoId,
+  })
+
+  if (error) {
+    registrarErrorSupabase('listar_ejecuciones_en_curso_objetivo', error)
+    return { data: null, error: mensajeError(error, 'No se pudieron cargar las rondas en curso.') }
+  }
+
+  const bruto = data as any
+  return {
+    data: {
+      contexto: (bruto?.contexto ?? 'sin_permiso') as ContextoEjecucionesEnCurso,
+      ejecuciones: Array.isArray(bruto?.ejecuciones) ? bruto.ejecuciones : [],
+    },
+    error: null,
+  }
+}
+
+/**
+ * Cierra una ronda bloqueada dejando constancia de quién, cuándo y por qué.
+ *
+ * Idempotente: un reintento devuelve `ya_cerrada` con el cierre original, sin
+ * pisar autor, hora ni motivo. Los puntos ya registrados —foto, GPS, veredicto
+ * y snapshot— se conservan intactos; sólo los pendientes pasan a `omitido`.
+ */
+export async function cerrarRondaBloqueada(
+  ejecucionId: string,
+  motivo: string,
+): Promise<ResultadoRondas<RespuestaCerrarRonda>> {
+  const errorMotivo = validarMotivoCierre(motivo)
+  if (errorMotivo) return { data: null, error: errorMotivo }
+
+  const { data, error } = await supabase.rpc('cerrar_ronda_bloqueada', {
+    p_ejecucion_id: ejecucionId,
+    p_motivo: motivo.trim(),
+  })
+
+  if (error) {
+    registrarErrorSupabase('cerrar_ronda_bloqueada', error)
+    return { data: null, error: mensajeError(error, 'No se pudo cerrar la ronda.') }
+  }
+
+  const bruto = data as any
+  return {
+    data: {
+      contexto: (bruto?.contexto ?? 'sin_permiso') as ContextoCerrarRonda,
+      ejecucion: (bruto?.ejecucion ?? null) as CierreRondaBloqueada | null,
+    },
+    error: null,
+  }
+}
+
+/** Mensaje para el supervisor. `null` cuando el cierre quedó firme. */
+export function mensajeContextoCerrarRonda(contexto: ContextoCerrarRonda): string | null {
+  switch (contexto) {
+    case 'cerrada':
+    case 'ya_cerrada':
+      return null
+    case 'sin_usuario':
+      return 'No se pudo identificar tu usuario operativo.'
+    case 'sin_permiso':
+      return 'No tenés permiso para cerrar rondas de este objetivo.'
+    case 'ejecucion_no_encontrada':
+      return 'Esa ronda ya no existe.'
+    case 'ejecucion_no_bloqueada':
+      return 'Esa ronda no está en curso: la terminó el vigilador y su resultado no se modifica.'
+    case 'motivo_invalido':
+      return `El motivo es obligatorio y debe tener al menos ${MOTIVO_CIERRE_MIN} caracteres.`
+  }
+}
