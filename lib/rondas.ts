@@ -112,6 +112,25 @@ const COLS_RONDA_BASE =
   'id, objetivo_id, puesto_id, nombre, descripcion, intervalo_minutos, hora_inicio, activo, version, creado_por, actualizado_por, created_at, updated_at'
 const COLS_RONDA_PUNTO =
   'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, activo, created_at, updated_at'
+const MENSAJE_CONFIGURACION_GPS_INCOMPLETA =
+  'Si el GPS es obligatorio, marcá el punto en el mapa y definí un radio válido.'
+
+function validarConfiguracionGpsObligatoria(
+  datos: Partial<Pick<NuevoRondaPunto, 'gps_requerido' | 'latitud' | 'longitud' | 'radio_metros'>>,
+): string | null {
+  if (!datos.gps_requerido) return null
+
+  const tieneValor = (valor: unknown): boolean =>
+    valor !== null && valor !== undefined && valor !== ''
+  const radioValido =
+    typeof datos.radio_metros === 'number' &&
+    Number.isFinite(datos.radio_metros) &&
+    datos.radio_metros > 0
+
+  return tieneValor(datos.latitud) && tieneValor(datos.longitud) && radioValido
+    ? null
+    : MENSAJE_CONFIGURACION_GPS_INCOMPLETA
+}
 
 function mensajeError(error: ErrorSupabase | null, fallback: string): string {
   if (!error?.message) return fallback
@@ -135,6 +154,9 @@ function mensajeError(error: ErrorSupabase | null, fallback: string): string {
   }
   if (/rondas_base_nombre_no_vacio|ronda_puntos_nombre_no_vacio/i.test(error.message)) {
     return 'El nombre es obligatorio.'
+  }
+  if (/ronda_puntos_gps_config_completa/i.test(error.message)) {
+    return MENSAJE_CONFIGURACION_GPS_INCOMPLETA
   }
   if (/ronda_puntos_(latitud|longitud|coordenadas_completas)/i.test(error.message)) {
     return 'Las coordenadas no son válidas o están incompletas.'
@@ -186,8 +208,12 @@ export function validarRondaBase(
 export function validarRondaPunto(datos: NuevoRondaPunto): string | null {
   if (!datos.nombre.trim()) return 'El nombre del punto es obligatorio.'
 
-  const tieneLatitud = datos.latitud !== null && datos.latitud !== undefined
-  const tieneLongitud = datos.longitud !== null && datos.longitud !== undefined
+  const tieneValor = (valor: unknown): boolean =>
+    valor !== null && valor !== undefined && valor !== ''
+  const tieneLatitud = tieneValor(datos.latitud)
+  const tieneLongitud = tieneValor(datos.longitud)
+  const errorConfiguracionGps = validarConfiguracionGpsObligatoria(datos)
+  if (errorConfiguracionGps) return errorConfiguracionGps
   if (tieneLatitud !== tieneLongitud) return 'La latitud y la longitud deben guardarse juntas.'
   if (!tieneLatitud && datos.origen_posicion) return 'Un punto sin coordenadas no puede tener origen de posición.'
   if (
@@ -431,6 +457,11 @@ export async function actualizarPunto(
   puntoId: string,
   cambios: ActualizarRondaPunto,
 ): Promise<ResultadoRondas<RondaPunto>> {
+  if (cambios.gps_requerido === true) {
+    const errorConfiguracionGps = validarConfiguracionGpsObligatoria(cambios)
+    if (errorConfiguracionGps) return { data: null, error: errorConfiguracionGps }
+  }
+
   const cambiaLatitud = Object.prototype.hasOwnProperty.call(cambios, 'latitud')
   const cambiaLongitud = Object.prototype.hasOwnProperty.call(cambios, 'longitud')
   if (cambiaLatitud !== cambiaLongitud) {
@@ -682,6 +713,7 @@ export async function obtenerRondasGuardiaActual(): Promise<ResultadoRondas<Rond
 export type ContextoIniciarRonda =
   | 'iniciada'            // se creó una ejecución nueva
   | 'recuperada'          // ya existía una en curso de este guardia y turno
+  | 'otra_ronda_en_curso' // existe otra ronda abierta; se devuelve sin mutarla
   | 'sin_turno_vigente'
   | 'turno_sin_puesto'
   | 'ronda_no_disponible' // no existe, está inactiva o es de otro puesto
@@ -711,6 +743,7 @@ export type ContextoRegistrarPunto =
   | 'ejecucion_cerrada'
   | 'fuera_de_secuencia'
   | 'gps_invalido'
+  | 'configuracion_gps_invalida'
   | 'foto_pendiente'
 
 export interface GpsPuntoRonda {
@@ -896,6 +929,8 @@ export function mensajeContextoRegistrarPunto(contexto: ContextoRegistrarPunto):
       return 'Tenés que completar primero el punto actual.'
     case 'gps_invalido':
       return 'La ubicación recibida no es válida.'
+    case 'configuracion_gps_invalida':
+      return 'Este punto tiene una configuración GPS inválida. Contactá al supervisor.'
     case 'foto_pendiente':
       return 'Este punto requiere una foto antes de continuar.'
   }
@@ -907,6 +942,8 @@ export function mensajeContextoIniciar(contexto: ContextoIniciarRonda): string |
     case 'iniciada':
     case 'recuperada':
       return null
+    case 'otra_ronda_en_curso':
+      return 'Ya tenés otra ronda en curso. Finalizala antes de iniciar esta.'
     case 'sin_turno_vigente':
       return 'No tenés un turno vigente en este momento.'
     case 'turno_sin_puesto':
