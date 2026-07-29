@@ -29,6 +29,12 @@ interface Props {
   objetivos: ObjetivoGeo[]
   // Hora reactiva provista por GuardiaMobile (se actualiza periódicamente).
   ahora: Date
+  /**
+   * Contador que GuardiaMobile incrementa cuando pasa algo que puede cambiar el
+   * turno vigente —hoy, confirmar un ingreso—. Cada incremento dispara una única
+   * recarga; el valor inicial no dispara nada, porque el montaje ya carga solo.
+   */
+  recargaSolicitada?: number
 }
 
 // Refresco del turno vigente desde el servidor. El estado temporal por ronda se
@@ -42,7 +48,7 @@ const ESTADO_META: Record<EstadoTemporalRonda, { texto: string; fondo: string; t
   sin_horario:   { texto: 'Sin configuración horaria', fondo: '#334155', texto_color: '#e2e8f0' },
 }
 
-export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
+export default function RondasGuardiaPanel({ objetivos, ahora, recargaSolicitada = 0 }: Props) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<RondasGuardiaActual | null>(null)
@@ -114,6 +120,15 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
       window.removeEventListener('online', refrescarSiVisible)
     }
   }, [cargar])
+
+  // Recarga puntual pedida por el contenedor. Arranca ya atendido para que el
+  // montaje no dispare una segunda carga sobre la del efecto de arriba.
+  const recargaAtendidaRef = useRef(recargaSolicitada)
+  useEffect(() => {
+    if (recargaSolicitada === recargaAtendidaRef.current) return
+    recargaAtendidaRef.current = recargaSolicitada
+    void cargar(true)
+  }, [recargaSolicitada, cargar])
 
   const comenzarRonda = async (ronda: RondaGuardia) => {
     if (iniciandoRondaId || operacionEnCursoRef.current) return

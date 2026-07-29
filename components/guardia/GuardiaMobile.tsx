@@ -545,6 +545,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const inputLibroRef = useRef<HTMLInputElement>(null)
   const inputUniformeRef = useRef<HTMLInputElement>(null)
   const [ingresoRestaurado, setIngresoRestaurado] = useState(false)
+  // Se incrementa al confirmar un ingreso: le pide al panel de rondas una única
+  // recarga inmediata, sin agregar polling ni listeners.
+  const [rondasRecarga, setRondasRecarga] = useState(0)
   const ingresoIntentoId = useRef<string | null>(null)
   const restorationAttempted = useRef(false)
   const ingresoStartTime = useRef<number | null>(null)
@@ -1301,6 +1304,11 @@ export default function GuardiaMobile({ user }: { user: any }) {
     }
     setTurnos(prev => prev.map(t => t.id === ingresoTurno!.id ? { ...t, estado: 'cubierto' } : t))
 
+    // El panel de rondas resuelve el turno vigente en el servidor y por su cuenta
+    // sólo se enteraría en su próximo refresco. Se le pide una recarga acá, con el
+    // ingreso ya confirmado, para que las rondas aparezcan sin esperar un minuto.
+    setRondasRecarga(n => n + 1)
+
     track('ingreso_confirmed', {
       screen: 'ingreso_flow',
       turno_id: ingresoTurno.id,
@@ -1994,7 +2002,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
 
         {/* Rondas del puesto (Etapa 2 — solo lectura). Se resuelve por turno
             vigente desde el servidor; no se asigna manualmente. */}
-        {!loading && <RondasGuardiaPanel objetivos={objetivos} ahora={ahora} />}
+        {!loading && (
+          <RondasGuardiaPanel objetivos={objetivos} ahora={ahora} recargaSolicitada={rondasRecarga} />
+        )}
 
         {/* Cerrar sesión */}
         <div style={{ textAlign: 'center', marginTop: 24 }}>

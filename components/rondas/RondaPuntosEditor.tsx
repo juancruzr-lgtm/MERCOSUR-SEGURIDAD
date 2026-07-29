@@ -15,6 +15,7 @@ import {
 } from '@/lib/rondas'
 import { POLITICAS_FOTO, etiquetaPoliticaFoto, ayudaPoliticaFoto } from '@/lib/rondas'
 import type { NuevoRondaPunto, OrigenPosicion, PoliticaFoto, RondaPunto } from '@/lib/rondas'
+import { capturarGpsNuevo, type CapturaGpsEnCurso } from '@/lib/gps-captura'
 import type { PuntoRondaMapa } from './RondaPuntosMap'
 import styles from './Rondas.module.css'
 
@@ -23,14 +24,8 @@ const RondaPuntosMap = dynamic(() => import('./RondaPuntosMap'), {
   loading: () => <div className={styles.mapEmpty}>Cargando mapa…</div>,
 })
 
-// Captura de GPS con watchPosition (iPhone/Safari repiten la primera lectura si
-// se acepta getCurrentPosition sin más). Escuchamos varias lecturas y nos
-// quedamos con la mejor lectura NUEVA (posterior al inicio de captura).
-const GPS_CAPTURA_MAX_MS = 15000     // tope duro de captura
-const GPS_CAPTURA_MIN_MS = 3000      // no cerrar antes de ~3 s
-const GPS_PRECISION_OK_M = 30        // accuracy razonable para cerrar antes
-const GPS_TOLERANCIA_TS_MS = 2000    // lecturas hasta 2 s previas se toleran
-
+// La captura con watchPosition vive en lib/gps-captura.ts, compartida con el
+// registro de puntos del vigilador.
 const MENSAJE_IPHONE_POSICION_ANTERIOR =
   'El iPhone sigue informando la posición anterior. Esperá unos segundos o desplazate a un lugar con mejor señal y volvé a capturar.'
 
@@ -145,24 +140,15 @@ export default function RondaPuntosEditor({
   const [gpsEstado, setGpsEstado] = useState('')
   const [capturandoGps, setCapturandoGps] = useState(false)
 
-  // watchPosition en curso + lectura ganadora + referencias de la captura.
-  const watchIdRef = useRef<number | null>(null)
-  const timeoutCapturaRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const mejorLecturaRef = useRef<GeolocationPosition | null>(null)
-  const inicioCapturaRef = useRef<number>(0)
+  // Captura en curso + posición que tenía el formulario antes de capturar.
+  const capturaGpsRef = useRef<CapturaGpsEnCurso | null>(null)
   const posicionAnteriorRef = useRef<{ lat: number; lng: number } | null>(null)
 
-  // Corta cualquier watchPosition/temporizador activo (sin tocar estado React,
-  // para poder llamarse también en el desmontaje).
+  // Corta la captura activa (sin tocar estado React, para poder llamarse también
+  // en el desmontaje).
   const limpiarWatch = useCallback(() => {
-    if (watchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
-      navigator.geolocation.clearWatch(watchIdRef.current)
-    }
-    watchIdRef.current = null
-    if (timeoutCapturaRef.current !== null) {
-      clearTimeout(timeoutCapturaRef.current)
-      timeoutCapturaRef.current = null
-    }
+    capturaGpsRef.current?.cancelar()
+    capturaGpsRef.current = null
   }, [])
 
   const hayCambiosPendientes =
@@ -304,9 +290,6 @@ export default function RondaPuntosEditor({
     // Cortar cualquier captura previa y limpiar la posición: cada punto exige una
     // lectura GPS NUEVA; una lectura fallida no debe dejar coordenadas viejas.
     limpiarWatch()
-    const inicio = Date.now()
-    inicioCapturaRef.current = inicio
-    mejorLecturaRef.current = null
 
     setForm(actual => {
       const prevLat = numeroOpcional(actual.latitud)
@@ -325,66 +308,31 @@ export default function RondaPuntosEditor({
     setCapturandoGps(true)
     setGpsEstado('Buscando una ubicación GPS nueva…')
 
-    const finalizar = () => {
-      limpiarWatch()
+    const captura = capturarGpsNuevo({
+      onProgreso: precision => {
+        setGpsEstado(`Buscando una ubicación GPS nueva… (precisión ${Math.round(precision)} m)`)
+      },
+    })
+    capturaGpsRef.current = captura
+
+    void captura.promesa.then(resultado => {
+      // Otra captura la reemplazó, o el editor se desmontó.
+      if (capturaGpsRef.current !== captura) return
+      capturaGpsRef.current = null
       setCapturandoGps(false)
-      const mejor = mejorLecturaRef.current
-      if (!mejor) {
-        setGpsEstado('No se pudo obtener una ubicación nueva. Esperá unos segundos al aire libre y volvé a intentar.')
+
+      if (resultado.ok) {
+        aplicarLecturaGps(resultado.posicion)
         return
       }
-      aplicarLecturaGps(mejor)
-    }
-
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      posicion => {
-        // Descartar lecturas claramente anteriores al inicio de la captura.
-        if (posicion.timestamp < inicio - GPS_TOLERANCIA_TS_MS) return
-
-        const previa = mejorLecturaRef.current
-        const esPosterior = posicion.timestamp >= inicio
-        if (!previa) {
-          mejorLecturaRef.current = posicion
-        } else {
-          const previaPosterior = previa.timestamp >= inicio
-          // Preferir una lectura posterior al inicio; a igualdad, menor accuracy.
-          if (esPosterior && !previaPosterior) {
-            mejorLecturaRef.current = posicion
-          } else if (esPosterior === previaPosterior && posicion.coords.accuracy < previa.coords.accuracy) {
-            mejorLecturaRef.current = posicion
-          }
-        }
-
-        const mejor = mejorLecturaRef.current!
-        setGpsEstado(`Buscando una ubicación GPS nueva… (precisión ${Math.round(mejor.coords.accuracy)} m)`)
-
-        // Cierre anticipado: lectura nueva, precisión razonable y mínimo de tiempo.
-        const transcurrido = Date.now() - inicio
-        if (
-          mejor.timestamp >= inicio &&
-          mejor.coords.accuracy <= GPS_PRECISION_OK_M &&
-          transcurrido >= GPS_CAPTURA_MIN_MS
-        ) {
-          finalizar()
-        }
-      },
-      fallo => {
-        // Si ya hay una lectura útil, usarla; si no, informar el error.
-        if (mejorLecturaRef.current) {
-          finalizar()
-          return
-        }
-        limpiarWatch()
-        setCapturandoGps(false)
-        const mensaje = fallo.code === fallo.PERMISSION_DENIED
-          ? 'Permiso de ubicación denegado. Podés habilitarlo y volver a intentar.'
-          : 'No se pudo obtener una ubicación confiable. Volvé a intentar al aire libre.'
-        setGpsEstado(mensaje)
-      },
-      { enableHighAccuracy: true, timeout: GPS_CAPTURA_MAX_MS, maximumAge: 0 },
-    )
-
-    timeoutCapturaRef.current = setTimeout(finalizar, GPS_CAPTURA_MAX_MS)
+      setGpsEstado(
+        resultado.motivo === 'sin_soporte'
+          ? 'Este dispositivo no ofrece ubicación GPS.'
+          : resultado.motivo === 'permiso_denegado'
+            ? 'Permiso de ubicación denegado. Podés habilitarlo y volver a intentar.'
+            : 'No se pudo obtener una ubicación nueva. Esperá unos segundos al aire libre y volvé a intentar.',
+      )
+    })
   }, [limpiarWatch, aplicarLecturaGps])
 
   const moverDesdeMapa = (latitud: number, longitud: number) => {

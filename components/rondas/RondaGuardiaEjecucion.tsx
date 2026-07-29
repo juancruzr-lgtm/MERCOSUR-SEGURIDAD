@@ -12,6 +12,12 @@ import {
   type RondaEjecucionPuntoEstado,
   type VeredictoPuntoRonda,
 } from '@/lib/rondas'
+import {
+  capturarGpsNuevo,
+  type CapturaGpsEnCurso,
+  type MotivoFalloGps,
+  type ResultadoCapturaGps,
+} from '@/lib/gps-captura'
 
 type EstadoGps =
   | { tipo: 'sin_solicitar' }
@@ -36,7 +42,6 @@ interface Props {
   onVolver: () => void
 }
 
-const GPS_TIMEOUT_MS = 15_000
 const FOTO_MAX_WIDTH = 1280
 const FOTO_QUALITY = 0.76
 
@@ -55,44 +60,25 @@ export function precisionGpsInsuficiente(
   return gps.precision_metros > umbral
 }
 
-function motivoGps(error: GeolocationPositionError): string {
-  if (error.code === error.PERMISSION_DENIED) {
-    return 'El permiso de ubicación fue rechazado.'
-  }
-  if (error.code === error.TIMEOUT) {
-    return 'El GPS tardó demasiado en responder.'
-  }
-  return 'No fue posible obtener la ubicación actual.'
+function motivoFalloGps(motivo: MotivoFalloGps): string {
+  if (motivo === 'sin_soporte') return 'Este dispositivo no ofrece ubicación GPS.'
+  if (motivo === 'permiso_denegado') return 'El permiso de ubicación fue rechazado.'
+  return 'No fue posible obtener una ubicación nueva.'
 }
 
-function adquirirGps(): Promise<EstadoGps> {
-  if (typeof navigator === 'undefined' || !navigator.geolocation) {
-    return Promise.resolve({
-      tipo: 'no_disponible',
-      motivo: 'Este dispositivo no ofrece ubicación GPS.',
-    })
+function estadoDesdeCaptura(resultado: ResultadoCapturaGps): EstadoGps {
+  if (!resultado.ok) {
+    return { tipo: 'no_disponible', motivo: motivoFalloGps(resultado.motivo) }
   }
-
-  return new Promise(resolve => {
-    navigator.geolocation.getCurrentPosition(
-      posicion => resolve({
-        tipo: 'disponible',
-        gps: {
-          latitud: posicion.coords.latitude,
-          longitud: posicion.coords.longitude,
-          precision_metros: Number.isFinite(posicion.coords.accuracy)
-            ? posicion.coords.accuracy
-            : null,
-        },
-      }),
-      error => resolve({ tipo: 'no_disponible', motivo: motivoGps(error) }),
-      {
-        enableHighAccuracy: true,
-        timeout: GPS_TIMEOUT_MS,
-        maximumAge: 0,
-      },
-    )
-  })
+  const { coords } = resultado.posicion
+  return {
+    tipo: 'disponible',
+    gps: {
+      latitud: coords.latitude,
+      longitud: coords.longitude,
+      precision_metros: Number.isFinite(coords.accuracy) ? coords.accuracy : null,
+    },
+  }
 }
 
 function comprimirFoto(file: File): Promise<File> {
@@ -150,6 +136,7 @@ export default function RondaGuardiaEjecucion({
   onVolver,
 }: Props) {
   const fotoInputRef = useRef<HTMLInputElement>(null)
+  const capturaGpsRef = useRef<CapturaGpsEnCurso | null>(null)
   const [estadoGps, setEstadoGps] = useState<EstadoGps>({ tipo: 'sin_solicitar' })
   const [foto, setFoto] = useState<FotoPunto | null>(null)
   const [procesandoFoto, setProcesandoFoto] = useState(false)
@@ -181,11 +168,29 @@ export default function RondaGuardiaEjecucion({
     }
   }, [foto?.url])
 
+  // Corta la captura en curso al cambiar de punto o al desmontar: watchPosition
+  // sigue vivo hasta que se lo limpia.
+  useEffect(() => {
+    return () => {
+      capturaGpsRef.current?.cancelar()
+      capturaGpsRef.current = null
+    }
+  }, [puntoActualId])
+
   const solicitarGps = async () => {
     if (registrando) return
     setError(null)
     setEstadoGps({ tipo: 'obteniendo' })
-    setEstadoGps(await adquirirGps())
+
+    capturaGpsRef.current?.cancelar()
+    const captura = capturarGpsNuevo()
+    capturaGpsRef.current = captura
+
+    const resultado = await captura.promesa
+    // Otra captura la reemplazó, o el punto cambió mientras esperábamos.
+    if (capturaGpsRef.current !== captura) return
+    capturaGpsRef.current = null
+    setEstadoGps(estadoDesdeCaptura(resultado))
   }
 
   const seleccionarFoto = async (archivo: File | undefined) => {
