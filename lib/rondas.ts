@@ -1430,7 +1430,7 @@ export function mensajeContextoFirmaEvidencia(contexto: ContextoFirmaEvidencia):
 // Lectura y resolución de alertas persistentes. La detección y el push viven en
 // el evaluador SQL y el cron; acá solo se listan y se interviene.
 
-export type TipoRondaAlerta = 'no_iniciada' | 'no_finalizada'
+export type TipoRondaAlerta = 'no_iniciada' | 'no_finalizada' | 'suspendida'
 export type EstadoRondaAlerta = 'pendiente' | 'resuelta'
 export type AccionRondaAlerta =
   | 'llamada_vigilador'
@@ -1449,7 +1449,11 @@ export function accionRondaAlertaCierra(accion: AccionRondaAlerta): boolean {
 export const accionRondaAlertaRequiereComentario = accionRondaAlertaCierra
 
 export function etiquetaTipoRondaAlerta(tipo: TipoRondaAlerta): string {
-  return tipo === 'no_iniciada' ? 'No iniciada' : 'Sin finalizar'
+  switch (tipo) {
+    case 'no_iniciada':   return 'No iniciada'
+    case 'no_finalizada': return 'Sin finalizar'
+    case 'suspendida':    return 'Suspendida'
+  }
 }
 
 export function etiquetaAccionRondaAlerta(accion: AccionRondaAlerta): string {
@@ -1484,6 +1488,8 @@ export interface RondaAlerta {
   resuelta_at: string | null
   accion: AccionRondaAlerta | null
   comentario: string | null
+  /** Motivo declarado por el vigilador al suspender (solo tipo 'suspendida'). */
+  motivo_vigilador: string | null
   intervenciones: number
 }
 
@@ -1580,5 +1586,59 @@ export function mensajeContextoResolverAlerta(contexto: ContextoResolverAlerta):
     case 'motivo_invalido':      return 'El motivo del cierre debe tener al menos 10 caracteres.'
     case 'ejecucion_no_bloqueada': return 'La ronda no está en curso: la terminó el vigilador.'
     case 'ejecucion_no_encontrada': return 'La ejecución asociada ya no existe.'
+  }
+}
+
+// ── Suspender ronda (acción del vigilador) ────────────────────────────────────
+// El vigilador declara que no puede realizar una ronda por una tarea, con motivo.
+// Queda registrada como alerta 'suspendida' y el cron notifica al supervisor.
+
+export type ContextoSuspenderRonda =
+  | 'suspendida'
+  | 'sin_turno_vigente'
+  | 'motivo_invalido'
+  | 'ronda_no_disponible'
+
+export interface RespuestaSuspenderRonda {
+  contexto: ContextoSuspenderRonda
+  alerta_id: string | null
+  ronda_nombre?: string | null
+}
+
+export async function suspenderRonda(
+  rondaBaseId: string,
+  motivo: string,
+): Promise<ResultadoRondas<RespuestaSuspenderRonda>> {
+  if (motivo.trim().length < 3) {
+    return { data: null, error: 'Aclará brevemente la tarea que te impide hacer la ronda.' }
+  }
+
+  const { data, error } = await supabase.rpc('suspender_ronda', {
+    p_ronda_base_id: rondaBaseId,
+    p_motivo: motivo.trim(),
+  })
+
+  if (error) {
+    registrarErrorSupabase('suspender_ronda', error)
+    return { data: null, error: mensajeError(error, 'No se pudo suspender la ronda.') }
+  }
+
+  const bruto = (data ?? {}) as Partial<RespuestaSuspenderRonda>
+  return {
+    data: {
+      contexto: (bruto.contexto ?? 'sin_turno_vigente') as ContextoSuspenderRonda,
+      alerta_id: bruto.alerta_id ?? null,
+      ronda_nombre: bruto.ronda_nombre ?? null,
+    },
+    error: null,
+  }
+}
+
+export function mensajeContextoSuspenderRonda(contexto: ContextoSuspenderRonda): string | null {
+  switch (contexto) {
+    case 'suspendida':          return null
+    case 'sin_turno_vigente':   return 'No tenés un turno vigente en este momento.'
+    case 'motivo_invalido':     return 'Aclará brevemente la tarea que te impide hacer la ronda.'
+    case 'ronda_no_disponible': return 'Esa ronda no corresponde a tu puesto actual.'
   }
 }

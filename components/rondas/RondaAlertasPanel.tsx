@@ -94,7 +94,11 @@ export default function RondaAlertasPanel({ objetivoId }: Props) {
           {alertas.map(a => (
             <div key={a.id} style={S.card}>
               <div style={S.cardTop}>
-                <span style={{ ...S.tipo, ...(a.tipo === 'no_iniciada' ? S.tipoNoIniciada : S.tipoNoFinalizada) }}>
+                <span style={{ ...S.tipo, ...(
+                  a.tipo === 'no_iniciada' ? S.tipoNoIniciada
+                  : a.tipo === 'suspendida' ? S.tipoSuspendida
+                  : S.tipoNoFinalizada
+                ) }}>
                   {etiquetaTipoRondaAlerta(a.tipo)}
                 </span>
                 <span style={{ ...S.estado, ...(a.estado === 'pendiente' ? S.estadoPend : S.estadoResuelta) }}>
@@ -109,6 +113,9 @@ export default function RondaAlertasPanel({ objetivoId }: Props) {
               <div style={S.datosTenue}>
                 Ventana {hora(a.ventana_inicio)}–{hora(a.ventana_fin)} · venció {fechaHora(a.vencimiento_at)}
               </div>
+              {a.tipo === 'suspendida' && a.motivo_vigilador && (
+                <div style={S.motivoVig}>Motivo del vigilador: {a.motivo_vigilador}</div>
+              )}
 
               {a.estado === 'resuelta' ? (
                 <div style={S.resolucion}>
@@ -250,6 +257,8 @@ const S: Record<string, React.CSSProperties> = {
   tipo: { fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999 },
   tipoNoIniciada: { background: '#3b1116', color: '#fca5a5', border: '1px solid #991b1b' },
   tipoNoFinalizada: { background: '#3f2d10', color: '#fbbf24', border: '1px solid #b45309' },
+  tipoSuspendida: { background: '#1e293b', color: '#93c5fd', border: '1px solid #2563eb' },
+  motivoVig: { fontSize: 12, color: '#cbd5e1', marginTop: 6, lineHeight: 1.5 },
   estado: { fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999, marginLeft: 'auto' },
   estadoPend: { background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155' },
   estadoResuelta: { background: '#052e16', color: '#4ade80', border: '1px solid #166534' },

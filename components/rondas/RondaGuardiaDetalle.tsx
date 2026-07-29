@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import dynamic from 'next/dynamic'
 import type { RondaGuardia } from '@/lib/rondas'
-import { presentarIntervalo } from '@/lib/rondas'
+import { presentarIntervalo, suspenderRonda, mensajeContextoSuspenderRonda } from '@/lib/rondas'
 import type { PuntoRondaMapa } from './RondaPuntosMap'
 
 // El mapa depende de Leaflet (window), por eso se carga solo en cliente.
@@ -36,6 +36,28 @@ export default function RondaGuardiaDetalle({
   onCerrar,
 }: Props) {
   const [puntoSeleccionadoId, setPuntoSeleccionadoId] = useState<string | null>(null)
+
+  // Suspender: el vigilador declara que no puede hacer la ronda por una tarea.
+  const [mostrarSuspender, setMostrarSuspender] = useState(false)
+  const [motivoSuspender, setMotivoSuspender] = useState('')
+  const [suspendiendo, setSuspendiendo] = useState(false)
+  const [suspendMensaje, setSuspendMensaje] = useState<string | null>(null)
+  const [suspendida, setSuspendida] = useState(false)
+
+  const confirmarSuspension = async () => {
+    if (suspendiendo || motivoSuspender.trim().length < 3) return
+    setSuspendiendo(true)
+    setSuspendMensaje(null)
+    try {
+      const { data, error } = await suspenderRonda(ronda.ronda_id, motivoSuspender)
+      if (error) { setSuspendMensaje(error); return }
+      const msg = data ? mensajeContextoSuspenderRonda(data.contexto) : 'No se pudo suspender la ronda.'
+      if (msg) { setSuspendMensaje(msg); return }
+      setSuspendida(true)   // suspendida OK: se avisó al supervisor y quedó registrada
+    } finally {
+      setSuspendiendo(false)
+    }
+  }
 
   const puntosMapa: PuntoRondaMapa[] = ronda.puntos.map(punto => ({
     id: punto.id,
@@ -131,6 +153,50 @@ export default function RondaGuardiaDetalle({
               >
                 {iniciando ? 'Iniciando ronda…' : 'Iniciar ronda'}
               </button>
+
+              {suspendida ? (
+                <div style={S.suspendOk} role="status">
+                  Ronda suspendida. Se avisó al supervisor y quedó registrada.
+                </div>
+              ) : !mostrarSuspender ? (
+                <button
+                  type="button"
+                  style={S.suspenderLink}
+                  onClick={() => { setMostrarSuspender(true); setSuspendMensaje(null) }}
+                  disabled={iniciando}
+                >
+                  No puedo hacer la ronda ahora
+                </button>
+              ) : (
+                <div style={S.suspendBox}>
+                  <label style={S.suspendLabel} htmlFor="motivo-suspender">
+                    Aclará la tarea que te lo impide
+                  </label>
+                  <textarea
+                    id="motivo-suspender"
+                    style={S.suspendTextarea}
+                    value={motivoSuspender}
+                    onChange={e => { setMotivoSuspender(e.target.value); setSuspendMensaje(null) }}
+                    rows={2}
+                    placeholder="Ej.: atendiendo una emergencia en el ingreso"
+                    disabled={suspendiendo}
+                  />
+                  {suspendMensaje && <div style={S.errorInicio} role="alert">{suspendMensaje}</div>}
+                  <div style={S.suspendBotones}>
+                    <button type="button" style={S.suspendCancelar} onClick={() => setMostrarSuspender(false)} disabled={suspendiendo}>
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      style={{ ...S.suspendConfirmar, ...(suspendiendo || motivoSuspender.trim().length < 3 ? S.iniciarOff : null) }}
+                      onClick={() => void confirmarSuspension()}
+                      disabled={suspendiendo || motivoSuspender.trim().length < 3}
+                    >
+                      {suspendiendo ? 'Suspendiendo…' : 'Suspender ronda'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -195,4 +261,29 @@ const S: Record<string, React.CSSProperties> = {
     color: '#111827', padding: '12px 14px', fontSize: 14, fontWeight: 900, cursor: 'pointer',
   },
   iniciarOff: { background: '#334155', color: '#64748b', cursor: 'not-allowed' },
+  suspenderLink: {
+    marginTop: 10, width: '100%', background: 'none', border: '1px solid #1e2d42',
+    color: '#94a3b8', borderRadius: 10, padding: '10px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+  },
+  suspendBox: {
+    marginTop: 10, border: '1px solid #1e2d42', borderRadius: 10, background: '#0f172a', padding: 12,
+  },
+  suspendLabel: { display: 'block', fontSize: 12, color: '#94a3b8', fontWeight: 700, marginBottom: 6 },
+  suspendTextarea: {
+    width: '100%', background: '#0b1220', color: '#e2e8f0', border: '1px solid #1e2d42',
+    borderRadius: 8, padding: 10, fontSize: 13, fontFamily: 'inherit', resize: 'vertical',
+  },
+  suspendBotones: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 },
+  suspendCancelar: {
+    border: '1px solid #1e2d42', background: '#111827', color: '#e2e8f0',
+    borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+  },
+  suspendConfirmar: {
+    border: 'none', background: '#b45309', color: '#fffbeb',
+    borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 800, cursor: 'pointer',
+  },
+  suspendOk: {
+    marginTop: 10, fontSize: 13, color: '#fbbf24', background: '#3f2d10',
+    border: '1px solid #b45309', borderRadius: 10, padding: 12,
+  },
 }

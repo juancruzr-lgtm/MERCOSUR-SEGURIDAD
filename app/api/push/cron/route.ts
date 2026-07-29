@@ -425,6 +425,7 @@ type RondaAlertaPush = {
   tipo: string
   objetivo_id: string
   guardia_id: string
+  motivo_vigilador: string | null
   ronda: { nombre: string } | { nombre: string }[] | null
   puesto: { nombre: string } | { nombre: string }[] | null
 }
@@ -642,6 +643,7 @@ export async function GET(req: NextRequest) {
   let rondaAlertasPendientes = 0
   let candidatosRondaNoIniciada = 0
   let candidatosRondaNoFinalizada = 0
+  let candidatosRondaSuspendida = 0
   let rondaAlertasSinSupervisores = 0
 
   try {
@@ -655,7 +657,7 @@ export async function GET(req: NextRequest) {
 
   const { data: rondaAlertasData, error: rondaAlertasError } = await admin.client
     .from('ronda_alertas')
-    .select('id, tipo, objetivo_id, guardia_id, ronda:rondas_base(nombre), puesto:puestos(nombre)')
+    .select('id, tipo, objetivo_id, guardia_id, motivo_vigilador, ronda:rondas_base(nombre), puesto:puestos(nombre)')
     .eq('estado', 'pendiente')
 
   const rondaAlertasErrorIgnorable = rondaAlertasError && /ronda_alertas|schema cache|does not exist/i.test(rondaAlertasError.message)
@@ -679,14 +681,26 @@ export async function GET(req: NextRequest) {
       continue
     }
 
-    const esNoIniciada = alerta.tipo === 'no_iniciada'
-    if (esNoIniciada) candidatosRondaNoIniciada += 1
-    else candidatosRondaNoFinalizada += 1
-
     const guardia = usuarios.find(u => u.id === alerta.guardia_id)
     const rondaNombre = nombreEmbebido(alerta.ronda) || 'Ronda'
     const puestoNombre = nombreEmbebido(alerta.puesto) || 'Puesto'
     const objetivoNombre = nombrePorObjetivo.get(alerta.objetivo_id) || 'Objetivo'
+
+    let title: string
+    let body: string
+    if (alerta.tipo === 'suspendida') {
+      candidatosRondaSuspendida += 1
+      title = 'Ronda suspendida'
+      body = `${nombreUsuario(guardia)} suspendió la ronda ${rondaNombre} (${puestoNombre} · ${objetivoNombre}). Motivo: ${alerta.motivo_vigilador || 'sin detalle'}`
+    } else if (alerta.tipo === 'no_iniciada') {
+      candidatosRondaNoIniciada += 1
+      title = 'Ronda no iniciada'
+      body = `Ronda: ${rondaNombre} · Puesto: ${puestoNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}`
+    } else {
+      candidatosRondaNoFinalizada += 1
+      title = 'Ronda sin finalizar'
+      body = `Ronda: ${rondaNombre} · Puesto: ${puestoNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}`
+    }
 
     const resultado = await sendToUsersObjetivo(
       admin.client,
@@ -694,12 +708,7 @@ export async function GET(req: NextRequest) {
       supervisorIds,
       alerta.objetivo_id,
       `supervisor_ronda_${alerta.tipo}:${alerta.id}`,
-      {
-        title: esNoIniciada ? 'Ronda no iniciada' : 'Ronda sin finalizar',
-        body: `Ronda: ${rondaNombre} · Puesto: ${puestoNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}`,
-        url: '/dashboard',
-        tag: `ronda-alerta-${alerta.id}`,
-      },
+      { title, body, url: '/dashboard', tag: `ronda-alerta-${alerta.id}` },
     )
     sumarResultado(resultado)
     alertasEnviadas += resultado.sent
@@ -713,7 +722,7 @@ export async function GET(req: NextRequest) {
   {
     // Una ronda hecha unos minutos ANTES del inicio de la ventana cuenta como
     // realizada para esa ventana: evita seguir avisando algo ya cumplido.
-    const RONDA_AVISO_GRACIA_MIN = 20
+    const RONDA_AVISO_GRACIA_MIN = 15
     const turnosVigentes = turnos.filter(t => {
       if (!t.guardia_id || !t.puesto_id) return false
       const ini = fechaHoraMinutos(t.fecha, t.hora_inicio)
@@ -798,7 +807,7 @@ export async function GET(req: NextRequest) {
       candidatos15: 0,
       alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
       alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores },
-      alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores },
+      alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, suspendida: candidatosRondaSuspendida, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores },
       recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente },
       alertasEvaluadas,
       alertasOmitidasPorResueltas,
@@ -980,6 +989,7 @@ export async function GET(req: NextRequest) {
     alertasRonda: {
       noIniciada: candidatosRondaNoIniciada,
       noFinalizada: candidatosRondaNoFinalizada,
+      suspendida: candidatosRondaSuspendida,
       pendientes: rondaAlertasPendientes,
       sinSupervisores: rondaAlertasSinSupervisores,
     },
