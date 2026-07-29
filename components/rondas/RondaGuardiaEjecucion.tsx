@@ -299,7 +299,14 @@ export default function RondaGuardiaEjecucion({
   const gpsIntentado = estadoGps.tipo === 'disponible' || estadoGps.tipo === 'no_disponible'
   const precisionBaja = estadoGps.tipo === 'disponible'
     && precisionGpsInsuficiente(puntoActual, estadoGps.gps)
+  // Estar fuera del radio o con precisión mayor al radio NO bloquea: si hay una
+  // ubicación válida se puede registrar y el servidor decide el resultado
+  // (cumplido / fuera de radio). Solo se bloquea por GPS cuando el punto lo
+  // requiere y no se pudo obtener ninguna ubicación válida.
+  const ubicacionValida = estadoGps.tipo === 'disponible'
+  const bloqueoPorGps = puntoActual.requiere_gps && !ubicacionValida
   const puedeRegistrar = gpsIntentado
+    && !bloqueoPorGps
     && (!fotoObligatoria || foto !== null)
     && !procesandoFoto
     && !registrando
