@@ -17,6 +17,7 @@ import {
   type EstadoRondaAlerta,
   type AccionRondaAlerta,
 } from '@/lib/rondas'
+import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 interface Props {
   objetivoId: string
@@ -44,10 +45,15 @@ export default function RondaAlertasPanel({ objetivoId }: Props) {
   const [alertas, setAlertas] = useState<RondaAlerta[]>([])
   const [intervenir, setIntervenir] = useState<RondaAlerta | null>(null)
 
+  const iniciarCarga = useVigenciaCarga()
+
   const cargar = useCallback(async () => {
     setCargando(true)
+    const vigente = iniciarCarga()
     const estado: EstadoRondaAlerta | undefined = filtro === 'todas' ? undefined : filtro
     const { data, error: err } = await listarRondaAlertasObjetivo(objetivoId, estado)
+    // Cambiar de filtro rápido dispara varias cargas: solo escribe la última.
+    if (!vigente()) return
     if (err) { setError(err); setAlertas([]); setSinPermiso(false) }
     else {
       setError(null)
@@ -55,7 +61,7 @@ export default function RondaAlertasPanel({ objetivoId }: Props) {
       setAlertas(data?.alertas ?? [])
     }
     setCargando(false)
-  }, [objetivoId, filtro])
+  }, [objetivoId, filtro, iniciarCarga])
 
   useEffect(() => { void cargar() }, [cargar])
 

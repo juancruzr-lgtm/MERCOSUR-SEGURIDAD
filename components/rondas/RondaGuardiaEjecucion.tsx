@@ -432,44 +432,42 @@ export default function RondaGuardiaEjecucion({
           </div>
         )}
 
-        {(
-          <div style={S.bloque}>
-            <div style={S.bloqueTitulo}>
-              {politicaFoto === 'solo_novedad' ? '3. Foto' : '2. Foto'}
-              {fotoObligatoria ? ' obligatoria' : ' opcional'}
-            </div>
-            <input
-              ref={fotoInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              capture="environment"
-              style={{ display: 'none' }}
-              onChange={evento => {
-                const archivo = evento.target.files?.[0]
-                void seleccionarFoto(archivo)
-                evento.target.value = ''
-              }}
-            />
-
-            {procesandoFoto && <div style={S.estadoInfo}>Preparando foto…</div>}
-
-            {foto && (
-              <div style={S.fotoPreview}>
-                <img src={foto.url} alt="Vista previa del punto de ronda" style={S.fotoImagen} />
-                <div style={S.fotoPie}>Foto lista para subir</div>
-              </div>
-            )}
-
-            <button
-              type="button"
-              style={S.secundario}
-              onClick={() => fotoInputRef.current?.click()}
-              disabled={procesandoFoto || registrando}
-            >
-              {foto ? 'Repetir foto' : 'Tomar foto'}
-            </button>
+        <div style={S.bloque}>
+          <div style={S.bloqueTitulo}>
+            {politicaFoto === 'solo_novedad' ? '3. Foto' : '2. Foto'}
+            {fotoObligatoria ? ' obligatoria' : ' opcional'}
           </div>
-        )}
+          <input
+            ref={fotoInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            capture="environment"
+            style={{ display: 'none' }}
+            onChange={evento => {
+              const archivo = evento.target.files?.[0]
+              void seleccionarFoto(archivo)
+              evento.target.value = ''
+            }}
+          />
+
+          {procesandoFoto && <div style={S.estadoInfo}>Preparando foto…</div>}
+
+          {foto && (
+            <div style={S.fotoPreview}>
+              <img src={foto.url} alt="Vista previa del punto de ronda" style={S.fotoImagen} />
+              <div style={S.fotoPie}>Foto lista para subir</div>
+            </div>
+          )}
+
+          <button
+            type="button"
+            style={S.secundario}
+            onClick={() => fotoInputRef.current?.click()}
+            disabled={procesandoFoto || registrando}
+          >
+            {foto ? 'Repetir foto' : 'Tomar foto'}
+          </button>
+        </div>
 
         {error && <div style={S.errorBox} role="alert">{error}</div>}
 

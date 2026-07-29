@@ -13,6 +13,7 @@ import {
   type RondaGuardia,
   type RondasGuardiaActual,
 } from '@/lib/rondas'
+import { useVigenciaCarga } from '@/lib/vigencia-carga'
 import RondaGuardiaDetalle from './RondaGuardiaDetalle'
 import RondaGuardiaEjecucion from './RondaGuardiaEjecucion'
 
@@ -51,15 +52,23 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
   const [errorInicio, setErrorInicio] = useState<string | null>(null)
   const [avisoInicio, setAvisoInicio] = useState<string | null>(null)
   const operacionEnCursoRef = useRef(false)
+  const iniciarCarga = useVigenciaCarga()
 
   const cargar = useCallback(async (silencioso = false, descartarFinalizada = false) => {
-    if (silencioso && operacionEnCursoRef.current) return
+    // Una operación en curso (iniciar ronda, registrar punto) no debe ser pisada
+    // por un refresco, venga del intervalo o del botón.
+    if (operacionEnCursoRef.current) return
     if (!silencioso) setCargando(true)
+
+    const vigente = iniciarCarga()
 
     const [rondas, ejecucion] = await Promise.all([
       obtenerRondasGuardiaActual(),
       obtenerEjecucionActual(),
     ])
+
+    // Llegó tarde: otra carga ya la reemplazó, o el panel se desmontó.
+    if (!vigente()) return
 
     const ejecucionRecuperada = ejecucion.data?.ejecucion ?? null
 
@@ -81,7 +90,7 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
       || (!ejecucionRecuperada ? rondas.error : null),
     )
     setCargando(false)
-  }, [])
+  }, [iniciarCarga])
 
   useEffect(() => {
     let activo = true
@@ -305,6 +314,9 @@ export default function RondasGuardiaPanel({ objetivos, ahora }: Props) {
           errorInicio={errorInicio}
           onIniciar={() => void comenzarRonda(rondaAbierta)}
           onCerrar={() => setRondaAbierta(null)}
+          // Silencioso: el detalle sigue abierto mostrando la confirmación, y la
+          // lista de atrás ya queda actualizada para cuando el vigilador cierre.
+          onSuspendida={() => void cargar(true)}
         />
       )}
     </section>

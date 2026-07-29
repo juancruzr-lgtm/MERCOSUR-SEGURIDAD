@@ -16,6 +16,7 @@ import {
   validarMotivoCierre,
   type EjecucionEnCurso,
 } from '@/lib/rondas'
+import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 interface Props {
   objetivoId: string
@@ -44,9 +45,14 @@ export default function RondasEnCursoPanel({ objetivoId, onCierre, onVerDetalle 
   const [enviando, setEnviando] = useState(false)
   const [aviso, setAviso] = useState('')
 
+  const iniciarCarga = useVigenciaCarga()
+
   const cargar = useCallback(async () => {
     setCargando(true)
+    const vigente = iniciarCarga()
     const { data, error: err } = await listarEjecucionesEnCursoObjetivo(objetivoId)
+    // Al cambiar de objetivo pueden quedar cargas en vuelo: solo escribe la última.
+    if (!vigente()) return
     if (err) {
       setError(err)
       setEjecuciones([])
@@ -56,7 +62,7 @@ export default function RondasEnCursoPanel({ objetivoId, onCierre, onVerDetalle 
       setEjecuciones(data?.ejecuciones ?? [])
     }
     setCargando(false)
-  }, [objetivoId])
+  }, [objetivoId, iniciarCarga])
 
   useEffect(() => { void cargar() }, [cargar])
 

@@ -23,6 +23,12 @@ interface Props {
   errorInicio: string | null
   onIniciar: () => void
   onCerrar: () => void
+  /**
+   * Avisa que la ronda quedó suspendida en el servidor. El contenedor refresca
+   * su lista: sin esto seguía ofreciendo la ronda como disponible hasta el
+   * refresco periódico.
+   */
+  onSuspendida?: () => void
 }
 
 export default function RondaGuardiaDetalle({
@@ -34,6 +40,7 @@ export default function RondaGuardiaDetalle({
   errorInicio,
   onIniciar,
   onCerrar,
+  onSuspendida,
 }: Props) {
   const [puntoSeleccionadoId, setPuntoSeleccionadoId] = useState<string | null>(null)
 
@@ -54,6 +61,7 @@ export default function RondaGuardiaDetalle({
       const msg = data ? mensajeContextoSuspenderRonda(data.contexto) : 'No se pudo suspender la ronda.'
       if (msg) { setSuspendMensaje(msg); return }
       setSuspendida(true)   // suspendida OK: se avisó al supervisor y quedó registrada
+      onSuspendida?.()
     } finally {
       setSuspendiendo(false)
     }
@@ -145,11 +153,15 @@ export default function RondaGuardiaDetalle({
 
               {errorInicio && <div style={S.errorInicio} role="alert">{errorInicio}</div>}
 
+              {/* Tras suspender queda deshabilitado: ofrecer "Iniciar ronda"
+                  debajo del aviso de suspensión se contradice con lo que el
+                  vigilador acaba de declarar. Cerrar y reabrir el detalle lo
+                  vuelve a habilitar. */}
               <button
                 type="button"
-                style={{ ...S.iniciar, ...(iniciando ? S.iniciarOff : null) }}
+                style={{ ...S.iniciar, ...(iniciando || suspendida ? S.iniciarOff : null) }}
                 onClick={onIniciar}
-                disabled={iniciando}
+                disabled={iniciando || suspendida}
               >
                 {iniciando ? 'Iniciando ronda…' : 'Iniciar ronda'}
               </button>

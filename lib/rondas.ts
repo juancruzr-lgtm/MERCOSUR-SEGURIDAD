@@ -269,6 +269,17 @@ function registrarErrorSupabase(contexto: string, error: ErrorSupabase): void {
   })
 }
 
+/**
+ * Cierre estándar de una llamada fallida: detalle técnico a la consola y mensaje
+ * legible al usuario. Las dos mitades tienen que ir siempre juntas —un log sin
+ * mensaje deja al vigilador sin saber qué pasó, y un mensaje sin log deja al
+ * diagnóstico sin nada— así que se resuelven en un solo lugar.
+ */
+function fallaRpc<T>(contexto: string, error: ErrorSupabase, fallback: string): ResultadoRondas<T> {
+  registrarErrorSupabase(contexto, error)
+  return { data: null, error: mensajeError(error, fallback) }
+}
+
 export function validarRondaBase(
   datos: Pick<NuevaRondaBase, 'nombre' | 'intervalo_minutos' | 'puesto_id'>,
 ): string | null {
@@ -426,8 +437,7 @@ export async function obtenerRondaConPuntos(
 
   const error = rondaRes.error ?? puntosRes.error
   if (error) {
-    registrarErrorSupabase('obtenerRondaConPuntos', error)
-    return { data: null, error: mensajeError(error, 'No se pudo cargar la ronda.') }
+    return fallaRpc('obtenerRondaConPuntos', error, 'No se pudo cargar la ronda.')
   }
 
   return {
@@ -530,8 +540,7 @@ export async function agregarPunto(
     .single()
 
   if (error) {
-    registrarErrorSupabase('agregar_ronda_punto', error)
-    return { data: null, error: mensajeError(error, 'No se pudo agregar el punto.') }
+    return fallaRpc('agregar_ronda_punto', error, 'No se pudo agregar el punto.')
   }
   return { data: data as RondaPunto, error: null }
 }
@@ -779,11 +788,7 @@ export async function obtenerRondasGuardiaActual(): Promise<ResultadoRondas<Rond
   const { data, error } = await supabase.rpc('obtener_rondas_guardia_actual')
 
   if (error) {
-    registrarErrorSupabase('obtener_rondas_guardia_actual', error)
-    return {
-      data: null,
-      error: mensajeError(error, 'No se pudieron cargar las rondas del puesto.'),
-    }
+    return fallaRpc('obtener_rondas_guardia_actual', error, 'No se pudieron cargar las rondas del puesto.')
   }
 
   return { data: normalizarRondasGuardia(data as Partial<RondasGuardiaActual> | null), error: null }
@@ -888,8 +893,7 @@ export async function iniciarRonda(
   })
 
   if (error) {
-    registrarErrorSupabase('iniciar_ronda', error)
-    return { data: null, error: mensajeError(error, 'No se pudo iniciar la ronda.') }
+    return fallaRpc('iniciar_ronda', error, 'No se pudo iniciar la ronda.')
   }
 
   const bruto = data as any
@@ -916,8 +920,7 @@ export async function obtenerEjecucionActual(): Promise<ResultadoRondas<Respuest
   const { data, error } = await supabase.rpc('obtener_ejecucion_actual')
 
   if (error) {
-    registrarErrorSupabase('obtener_ejecucion_actual', error)
-    return { data: null, error: mensajeError(error, 'No se pudo consultar la ronda en curso.') }
+    return fallaRpc('obtener_ejecucion_actual', error, 'No se pudo consultar la ronda en curso.')
   }
 
   const bruto = data as any
@@ -990,8 +993,7 @@ export async function registrarPuntoRonda(
   })
 
   if (error) {
-    registrarErrorSupabase('registrar_punto_ronda', error)
-    return { data: null, error: mensajeError(error, 'No se pudo registrar el punto.') }
+    return fallaRpc('registrar_punto_ronda', error, 'No se pudo registrar el punto.')
   }
 
   const bruto = data as any
@@ -1120,8 +1122,7 @@ export async function listarEjecucionesEnCursoObjetivo(
   })
 
   if (error) {
-    registrarErrorSupabase('listar_ejecuciones_en_curso_objetivo', error)
-    return { data: null, error: mensajeError(error, 'No se pudieron cargar las rondas en curso.') }
+    return fallaRpc('listar_ejecuciones_en_curso_objetivo', error, 'No se pudieron cargar las rondas en curso.')
   }
 
   const bruto = data as any
@@ -1154,8 +1155,7 @@ export async function cerrarRondaBloqueada(
   })
 
   if (error) {
-    registrarErrorSupabase('cerrar_ronda_bloqueada', error)
-    return { data: null, error: mensajeError(error, 'No se pudo cerrar la ronda.') }
+    return fallaRpc('cerrar_ronda_bloqueada', error, 'No se pudo cerrar la ronda.')
   }
 
   const bruto = data as any
@@ -1280,8 +1280,7 @@ export async function obtenerDetalleEjecucionSupervisor(
   })
 
   if (error) {
-    registrarErrorSupabase('rondas_ejecucion_detalle_supervisor', error)
-    return { data: null, error: mensajeError(error, 'No se pudo cargar el detalle de la ronda.') }
+    return fallaRpc('rondas_ejecucion_detalle_supervisor', error, 'No se pudo cargar el detalle de la ronda.')
   }
 
   const bruto = (data ?? {}) as Partial<DetalleEjecucionSupervisor>
@@ -1349,8 +1348,7 @@ export async function listarEjecucionesObjetivo(
   })
 
   if (error) {
-    registrarErrorSupabase('listar_ejecuciones_objetivo', error)
-    return { data: null, error: mensajeError(error, 'No se pudo cargar el historial de rondas.') }
+    return fallaRpc('listar_ejecuciones_objetivo', error, 'No se pudo cargar el historial de rondas.')
   }
 
   const bruto = (data ?? {}) as Partial<RespuestaEjecucionesObjetivo>
@@ -1550,8 +1548,7 @@ export async function listarRondaAlertasObjetivo(
   })
 
   if (error) {
-    registrarErrorSupabase('listar_ronda_alertas_objetivo', error)
-    return { data: null, error: mensajeError(error, 'No se pudieron cargar las alertas de rondas.') }
+    return fallaRpc('listar_ronda_alertas_objetivo', error, 'No se pudieron cargar las alertas de rondas.')
   }
 
   const bruto = (data ?? {}) as Partial<RespuestaRondaAlertas>
@@ -1596,8 +1593,7 @@ export async function resolverRondaAlerta(
   })
 
   if (error) {
-    registrarErrorSupabase('resolver_ronda_alerta', error)
-    return { data: null, error: mensajeError(error, 'No se pudo registrar la intervención.') }
+    return fallaRpc('resolver_ronda_alerta', error, 'No se pudo registrar la intervención.')
   }
 
   const bruto = (data ?? {}) as Partial<RespuestaResolverAlerta>
@@ -1659,8 +1655,7 @@ export async function suspenderRonda(
   })
 
   if (error) {
-    registrarErrorSupabase('suspender_ronda', error)
-    return { data: null, error: mensajeError(error, 'No se pudo suspender la ronda.') }
+    return fallaRpc('suspender_ronda', error, 'No se pudo suspender la ronda.')
   }
 
   const bruto = (data ?? {}) as Partial<RespuestaSuspenderRonda>
