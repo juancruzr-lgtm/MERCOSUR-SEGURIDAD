@@ -7,6 +7,7 @@ export const runtime = 'nodejs'
 const BUCKET = 'ronda-evidencias'
 const MAX_FOTO_BYTES = 5 * 1024 * 1024
 const MIME_PERMITIDOS = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const POLITICAS_FOTO_VALIDAS = new Set(['obligatoria', 'opcional', 'solo_novedad'])
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function firmaImagenValida(buffer: Buffer, mime: string): boolean {
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
 
   const { data: punto, error: puntoError } = await admin.client
     .from('ronda_ejecucion_puntos')
-    .select('id, ronda_ejecucion_id, estado, snap_foto_requerida')
+    .select('id, ronda_ejecucion_id, estado, snap_politica_foto')
     .eq('id', ejecucionPuntoId)
     .maybeSingle()
 
@@ -123,8 +124,12 @@ export async function POST(req: NextRequest) {
   if (ejecucion.estado !== 'en_curso' || punto.estado !== 'pendiente') {
     return NextResponse.json({ error: 'El punto ya no está pendiente' }, { status: 409 })
   }
-  if (!punto.snap_foto_requerida) {
-    return NextResponse.json({ error: 'Este punto no requiere foto' }, { status: 409 })
+  // Con la política de foto por punto ya no hay un caso donde la foto esté
+  // prohibida: `opcional` y `solo_novedad` la aceptan igual, y esa evidencia se
+  // registra. Quien decide si además BLOQUEA el avance es registrar_punto_ronda,
+  // que evalúa la política del snapshot junto con la novedad declarada.
+  if (!POLITICAS_FOTO_VALIDAS.has(punto.snap_politica_foto as string)) {
+    return NextResponse.json({ error: 'La política de foto del punto no es válida' }, { status: 409 })
   }
 
   const { data: primerPendiente, error: secuenciaError } = await admin.client

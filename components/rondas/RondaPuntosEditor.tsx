@@ -9,7 +9,8 @@ import {
   obtenerRondaConPuntos,
   reordenarPuntos,
 } from '@/lib/rondas'
-import type { NuevoRondaPunto, OrigenPosicion, RondaPunto } from '@/lib/rondas'
+import { POLITICAS_FOTO, etiquetaPoliticaFoto, ayudaPoliticaFoto } from '@/lib/rondas'
+import type { NuevoRondaPunto, OrigenPosicion, PoliticaFoto, RondaPunto } from '@/lib/rondas'
 import type { PuntoRondaMapa } from './RondaPuntosMap'
 import styles from './Rondas.module.css'
 
@@ -28,7 +29,7 @@ interface Props {
 interface PuntoForm {
   nombre: string
   descripcion: string
-  foto_requerida: boolean
+  politica_foto: PoliticaFoto
   gps_requerido: boolean
   latitud: string
   longitud: string
@@ -42,7 +43,7 @@ function crearFormVacio(): PuntoForm {
   return {
     nombre: '',
     descripcion: '',
-    foto_requerida: true,
+    politica_foto: 'obligatoria',
     gps_requerido: true,
     latitud: '',
     longitud: '',
@@ -57,7 +58,7 @@ function formDesdePunto(punto: RondaPunto): PuntoForm {
   return {
     nombre: punto.nombre,
     descripcion: punto.descripcion ?? '',
-    foto_requerida: punto.foto_requerida,
+    politica_foto: punto.politica_foto,
     gps_requerido: punto.gps_requerido,
     latitud: punto.latitud?.toString() ?? '',
     longitud: punto.longitud?.toString() ?? '',
@@ -273,7 +274,7 @@ export default function RondaPuntosEditor({
     const datos: NuevoRondaPunto = {
       nombre: form.nombre,
       descripcion: form.descripcion,
-      foto_requerida: form.foto_requerida,
+      politica_foto: form.politica_foto,
       gps_requerido: form.gps_requerido,
       latitud,
       longitud,
@@ -404,7 +405,7 @@ export default function RondaPuntosEditor({
                           {!punto.activo && <span className={`${styles.statusBadge} ${styles.statusUnknown}`}>Inactivo</span>}
                         </div>
                         <div className={styles.meta}>
-                          {punto.foto_requerida ? 'Foto requerida' : 'Sin foto'} · {punto.gps_requerido ? 'GPS requerido' : 'GPS opcional'}
+                          {etiquetaPoliticaFoto(punto.politica_foto)} · {punto.gps_requerido ? 'GPS requerido' : 'GPS opcional'}
                           {punto.latitud !== null ? ` · ${punto.latitud.toFixed(5)}, ${punto.longitud?.toFixed(5)}` : ''}
                         </div>
                       </div>
@@ -437,10 +438,19 @@ export default function RondaPuntosEditor({
                   <label htmlFor="ronda-punto-descripcion">Descripción opcional</label>
                   <textarea id="ronda-punto-descripcion" value={form.descripcion} onChange={evento => setForm({ ...form, descripcion: evento.target.value })} maxLength={500} />
                 </div>
-                <label className={styles.check}>
-                  <input type="checkbox" checked={form.foto_requerida} onChange={evento => setForm({ ...form, foto_requerida: evento.target.checked })} />
-                  Fotografía requerida
-                </label>
+                <div className={`${styles.field} ${styles.full}`}>
+                  <label htmlFor="ronda-punto-politica-foto">Fotografía</label>
+                  <select
+                    id="ronda-punto-politica-foto"
+                    value={form.politica_foto}
+                    onChange={evento => setForm({ ...form, politica_foto: evento.target.value as PoliticaFoto })}
+                  >
+                    {POLITICAS_FOTO.map(politica => (
+                      <option key={politica} value={politica}>{etiquetaPoliticaFoto(politica)}</option>
+                    ))}
+                  </select>
+                  <small>{ayudaPoliticaFoto(form.politica_foto)}</small>
+                </div>
                 <label className={styles.check}>
                   <input type="checkbox" checked={form.gps_requerido} onChange={evento => setForm({ ...form, gps_requerido: evento.target.checked })} />
                   GPS requerido
