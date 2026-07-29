@@ -441,6 +441,12 @@ function isoALocalMin(iso: string): number {
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) / 60000
 }
 
+// HH:MM de un valor en "minutos locales" (base Date.UTC de componentes locales).
+function horaDeMin(min: number): string {
+  const d = new Date(min * 60000)
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+}
+
 export async function GET(req: NextRequest) {
   const auth = authOk(req)
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.error === 'Falta CRON_SECRET' ? 500 : 401 })
@@ -705,6 +711,9 @@ export async function GET(req: NextRequest) {
   let avisos15m = 0
   let avisosPendiente = 0
   {
+    // Una ronda hecha unos minutos ANTES del inicio de la ventana cuenta como
+    // realizada para esa ventana: evita seguir avisando algo ya cumplido.
+    const RONDA_AVISO_GRACIA_MIN = 20
     const turnosVigentes = turnos.filter(t => {
       if (!t.guardia_id || !t.puesto_id) return false
       const ini = fechaHoraMinutos(t.fecha, t.hora_inicio)
@@ -748,17 +757,19 @@ export async function GET(req: NextRequest) {
             const vf = Math.min(vi + interv, tFin)
 
             const yaIniciada = ejecMin.some(e =>
-              e.ronda_base_id === rb.id && e.turno_id === t.id && e.ini_min >= vi && e.ini_min < vi + interv)
+              e.ronda_base_id === rb.id && e.turno_id === t.id
+              && e.ini_min >= vi - RONDA_AVISO_GRACIA_MIN && e.ini_min < vi + interv)
             if (yaIniciada) continue
 
             const clave = `${rb.id}:${vi}`
+            const horaVentana = horaDeMin(vi)
             const url = `/dashboard?ronda=${rb.id}&turno=${t.id}&objetivo=${t.objetivo_id}&ventana=${vi}`
 
             if (ahora >= vi - 15 && ahora < vi) {
               const r = await sendToUsers(admin.client, subscriptions, [t.guardia_id as string], t.id,
                 `ronda_recordatorio_15m:${clave}`, {
                   title: 'Próxima ronda',
-                  body: `En 15 minutos tenés que realizar la ronda ${rb.nombre}.`,
+                  body: `La ronda ${rb.nombre} está programada para las ${horaVentana}.`,
                   url,
                   tag: `ronda-aviso-15m-${clave}`,
                 })
@@ -767,7 +778,7 @@ export async function GET(req: NextRequest) {
               const r = await sendToUsers(admin.client, subscriptions, [t.guardia_id as string], t.id,
                 `ronda_pendiente:${clave}`, {
                   title: 'Ronda pendiente',
-                  body: `Ya corresponde realizar la ronda ${rb.nombre}.`,
+                  body: `Ya corresponde realizar la ronda ${rb.nombre} de las ${horaVentana}.`,
                   url,
                   tag: `ronda-aviso-pend-${clave}`,
                 })
