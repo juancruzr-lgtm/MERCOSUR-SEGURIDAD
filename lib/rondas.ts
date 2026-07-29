@@ -660,7 +660,9 @@ export interface RondaGuardiaPunto {
   longitud: number | null
   radio_metros: number | null
   origen_posicion: OrigenPosicion
+  /** Derivado: `politica_foto === 'obligatoria'`. Se conserva por compatibilidad. */
   requiere_foto: boolean
+  politica_foto: PoliticaFoto
   requiere_gps: boolean
 }
 
@@ -764,6 +766,19 @@ export function calcularEstadoTemporalRonda(
   return ahoraMinutos < inicioMinutos ? 'proxima' : 'disponible'
 }
 
+/**
+ * Completa `politica_foto` cuando el servidor todavía no la manda.
+ *
+ * La RPC la incluye desde 20260729200000. Mientras la migración no esté aplicada
+ * —o si se revierte— se deriva del booleano `requiere_foto`, que reproduce
+ * exactamente lo que se mostraba antes: obligatoria u opcional, sin distinguir
+ * `solo_novedad`. Así el cliente nunca queda con la política en `undefined`.
+ */
+function normalizarPuntoGuardia(punto: RondaGuardiaPunto): RondaGuardiaPunto {
+  if (punto.politica_foto) return punto
+  return { ...punto, politica_foto: punto.requiere_foto ? 'obligatoria' : 'opcional' }
+}
+
 function normalizarRondasGuardia(bruto: Partial<RondasGuardiaActual> | null): RondasGuardiaActual {
   const rondas = Array.isArray(bruto?.rondas) ? (bruto!.rondas as RondaGuardia[]) : []
   return {
@@ -776,7 +791,7 @@ function normalizarRondasGuardia(bruto: Partial<RondasGuardiaActual> | null): Ro
     rondas: rondas.map(ronda => ({
       ...ronda,
       puntos: Array.isArray(ronda.puntos)
-        ? [...ronda.puntos].sort((a, b) => a.orden - b.orden)
+        ? [...ronda.puntos].sort((a, b) => a.orden - b.orden).map(normalizarPuntoGuardia)
         : [],
       // Etapa 3.1: null. La Etapa 3.2 la poblará y este cliente la propagará.
       ejecucion_actual: ronda.ejecucion_actual ?? null,

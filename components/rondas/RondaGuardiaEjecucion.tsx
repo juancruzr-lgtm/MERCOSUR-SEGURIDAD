@@ -144,6 +144,10 @@ export default function RondaGuardiaEjecucion({
   const [error, setError] = useState<string | null>(null)
   const [ultimoResultado, setUltimoResultado] = useState<UltimoResultado | null>(null)
   const [hayNovedad, setHayNovedad] = useState(false)
+  // Punto cuya foto ya se subió con éxito. Si `registrar_punto_ronda` falla, el
+  // reintento reutiliza esa evidencia en lugar de volver a subir la imagen: en un
+  // celular con mala señal la subida es la parte lenta del registro.
+  const [evidenciaSubidaId, setEvidenciaSubidaId] = useState<string | null>(null)
 
   const puntoActual = obtenerPuntoPendiente(ejecucion)
   const puntoActualId = puntoActual?.ejecucion_punto_id ?? null
@@ -154,6 +158,9 @@ export default function RondaGuardiaEjecucion({
     setProcesandoFoto(false)
     setError(null)
     setHayNovedad(false)
+    // Cambió el punto (o se registró el anterior): la evidencia subida ya no
+    // aplica. También cubre volver de la ronda, porque desmonta esta pantalla.
+    setEvidenciaSubidaId(null)
   }, [puntoActualId])
 
   // Misma regla que aplica el servidor. Se recalcula al marcar la novedad:
@@ -204,6 +211,8 @@ export default function RondaGuardiaEjecucion({
         file: comprimida,
         url: URL.createObjectURL(comprimida),
       })
+      // Imagen nueva elegida a mano: hay que subir esta, no reutilizar la anterior.
+      setEvidenciaSubidaId(null)
     } catch (errorFoto) {
       setError(errorFoto instanceof Error ? errorFoto.message : 'No se pudo preparar la foto.')
     } finally {
@@ -229,12 +238,15 @@ export default function RondaGuardiaEjecucion({
     onOperacionChange?.(true)
 
     try {
-      if (foto) {
+      // Se sube sólo si esta imagen todavía no llegó al servidor para este punto.
+      // El reintento tras un fallo de registro reutiliza la evidencia ya subida.
+      if (foto && evidenciaSubidaId !== puntoActual.ejecucion_punto_id) {
         const subida = await subirFotoPuntoRonda(puntoActual.ejecucion_punto_id, foto.file)
         if (subida.error) {
           setError(subida.error)
           return
         }
+        setEvidenciaSubidaId(puntoActual.ejecucion_punto_id)
       }
 
       const gps = estadoGps.tipo === 'disponible' ? estadoGps.gps : null

@@ -3,7 +3,12 @@
 import { useState } from 'react'
 import dynamic from 'next/dynamic'
 import type { RondaGuardia } from '@/lib/rondas'
-import { presentarIntervalo, suspenderRonda, mensajeContextoSuspenderRonda } from '@/lib/rondas'
+import {
+  etiquetaPoliticaFoto,
+  mensajeContextoSuspenderRonda,
+  presentarIntervalo,
+  suspenderRonda,
+} from '@/lib/rondas'
 import type { PuntoRondaMapa } from './RondaPuntosMap'
 
 // El mapa depende de Leaflet (window), por eso se carga solo en cliente.
@@ -117,8 +122,15 @@ export default function RondaGuardiaDetalle({
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={S.itemNombre}>{punto.nombre}</div>
                         <div style={S.itemFlags}>
-                          <span style={{ ...S.flag, ...(punto.requiere_foto ? S.flagOn : S.flagOff) }}>
-                            {punto.requiere_foto ? '📷 Foto requerida' : '📷 Foto opcional'}
+                          {/* Se muestra la política real, no el booleano derivado:
+                              'solo_novedad' se anunciaba como "Foto opcional" y
+                              después bloqueaba al marcar la novedad. */}
+                          <span style={{ ...S.flag, ...(
+                            punto.politica_foto === 'obligatoria' ? S.flagOn
+                            : punto.politica_foto === 'solo_novedad' ? S.flagWarn
+                            : S.flagOff
+                          ) }}>
+                            📷 {etiquetaPoliticaFoto(punto.politica_foto)}
                           </span>
                           <span style={{ ...S.flag, ...(punto.requiere_gps ? S.flagOn : S.flagOff) }}>
                             {punto.requiere_gps ? '📍 GPS requerido' : '📍 GPS opcional'}
