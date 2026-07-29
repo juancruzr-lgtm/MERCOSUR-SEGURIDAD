@@ -765,9 +765,13 @@ export async function GET(req: NextRequest) {
             if (vi >= tFin) break
             const vf = Math.min(vi + interv, tFin)
 
+            // Cada ejecución satisface UNA sola ventana: [vi - gracia, vi + interv - gracia).
+            // Los rangos de ventanas contiguas no se solapan, así una ejecución no se
+            // reutiliza para dos ventanas; una hecha hasta 15' antes cuenta para esta.
             const yaIniciada = ejecMin.some(e =>
               e.ronda_base_id === rb.id && e.turno_id === t.id
-              && e.ini_min >= vi - RONDA_AVISO_GRACIA_MIN && e.ini_min < vi + interv)
+              && e.ini_min >= vi - RONDA_AVISO_GRACIA_MIN
+              && e.ini_min < vi + interv - RONDA_AVISO_GRACIA_MIN)
             if (yaIniciada) continue
 
             const clave = `${rb.id}:${vi}`

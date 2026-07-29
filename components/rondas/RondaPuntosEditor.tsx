@@ -8,6 +8,8 @@ import {
   desactivarPunto,
   obtenerRondaConPuntos,
   reordenarPuntos,
+  puntoDuplicadoCercano,
+  MENSAJE_RONDA_PUNTO_DUPLICADO,
 } from '@/lib/rondas'
 import { POLITICAS_FOTO, etiquetaPoliticaFoto, ayudaPoliticaFoto } from '@/lib/rondas'
 import type { NuevoRondaPunto, OrigenPosicion, PoliticaFoto, RondaPunto } from '@/lib/rondas'
@@ -36,6 +38,7 @@ interface PuntoForm {
   precision_metros: string
   radio_metros: string
   origen_posicion: OrigenPosicion
+  posicion_capturada_at: string | null
   activo: boolean
 }
 
@@ -50,6 +53,7 @@ function crearFormVacio(): PuntoForm {
     precision_metros: '',
     radio_metros: '30',
     origen_posicion: null,
+    posicion_capturada_at: null,
     activo: true,
   }
 }
@@ -65,6 +69,7 @@ function formDesdePunto(punto: RondaPunto): PuntoForm {
     precision_metros: punto.precision_metros?.toString() ?? '',
     radio_metros: punto.radio_metros?.toString() ?? '',
     origen_posicion: punto.origen_posicion,
+    posicion_capturada_at: punto.posicion_capturada_at ?? null,
     activo: punto.activo,
   }
 }
@@ -206,6 +211,7 @@ export default function RondaPuntosEditor({
       const siguiente = { ...actual, [campo]: valor, precision_metros: '' }
       const sinCoordenadas = !siguiente.latitud.trim() && !siguiente.longitud.trim()
       siguiente.origen_posicion = sinCoordenadas ? null : 'manual'
+      siguiente.posicion_capturada_at = sinCoordenadas ? null : new Date().toISOString()
       return siguiente
     })
     setGpsEstado('')
@@ -217,6 +223,16 @@ export default function RondaPuntosEditor({
       return
     }
 
+    // Limpiar posición actual ANTES de capturar: una lectura fallida no debe
+    // dejar coordenadas viejas, y cada punto exige una lectura GPS nueva.
+    setForm(actual => ({
+      ...actual,
+      latitud: '',
+      longitud: '',
+      precision_metros: '',
+      origen_posicion: null,
+      posicion_capturada_at: null,
+    }))
     setGpsEstado('Obteniendo ubicación…')
     navigator.geolocation.getCurrentPosition(
       posicion => {
@@ -226,6 +242,7 @@ export default function RondaPuntosEditor({
           longitud: posicion.coords.longitude.toFixed(7),
           precision_metros: Math.round(posicion.coords.accuracy).toString(),
           origen_posicion: 'gps',
+          posicion_capturada_at: new Date(posicion.timestamp).toISOString(),
         }))
         setGpsEstado(`Ubicación obtenida con precisión aproximada de ${Math.round(posicion.coords.accuracy)} m.`)
       },
@@ -246,8 +263,9 @@ export default function RondaPuntosEditor({
       longitud: longitud.toFixed(7),
       precision_metros: '',
       origen_posicion: 'manual',
+      posicion_capturada_at: new Date().toISOString(),
     }))
-    setGpsEstado('Posición corregida en el mapa. La precisión GPS fue eliminada.')
+    setGpsEstado('Posición definida MANUALMENTE en el mapa (sin GPS). La precisión GPS fue eliminada.')
   }
 
   const guardar = async () => {
@@ -271,6 +289,20 @@ export default function RondaPuntosEditor({
     const latitud = numeroOpcional(form.latitud)
     const longitud = numeroOpcional(form.longitud)
     const sinCoordenadas = latitud === null && longitud === null
+
+    // Anti-duplicado inmediato (el servidor lo valida igual, no se puede omitir).
+    if (!sinCoordenadas && form.activo && latitud !== null && longitud !== null) {
+      const conflicto = puntoDuplicadoCercano(
+        latitud, longitud, puntos,
+        editandoId === 'nuevo' ? undefined : editandoId ?? undefined,
+      )
+      if (conflicto) {
+        setError(MENSAJE_RONDA_PUNTO_DUPLICADO)
+        setGuardando(false)
+        return
+      }
+    }
+
     const datos: NuevoRondaPunto = {
       nombre: form.nombre,
       descripcion: form.descripcion,
@@ -281,6 +313,7 @@ export default function RondaPuntosEditor({
       precision_metros: sinCoordenadas ? null : numeroOpcional(form.precision_metros),
       radio_metros: numeroOpcional(form.radio_metros),
       origen_posicion: sinCoordenadas ? null : form.origen_posicion,
+      posicion_capturada_at: sinCoordenadas ? null : form.posicion_capturada_at,
       activo: form.activo,
     }
 

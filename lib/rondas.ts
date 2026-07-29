@@ -75,6 +75,7 @@ export interface RondaPunto {
   precision_metros: number | null
   radio_metros: number | null
   origen_posicion: OrigenPosicion
+  posicion_capturada_at: string | null
   activo: boolean
   created_at: string
   updated_at: string
@@ -131,10 +132,45 @@ export interface NuevoRondaPunto {
   precision_metros?: number | null
   radio_metros?: number | null
   origen_posicion?: OrigenPosicion
+  /** Fecha/hora real de captura de la posición (ISO). null si no hay posición. */
+  posicion_capturada_at?: string | null
   activo?: boolean
 }
 
 export type ActualizarRondaPunto = Partial<NuevoRondaPunto>
+
+/** Distancia mínima permitida entre dos puntos activos de una misma ronda (m). */
+export const RONDA_PUNTO_DISTANCIA_MINIMA = 3
+
+/** Haversine en metros (misma fórmula que rondas_distancia_metros en el server). */
+export function distanciaMetros(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000
+  const r = Math.PI / 180
+  const dLat = (lat2 - lat1) * r
+  const dLng = (lng2 - lng1) * r
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLng / 2) ** 2
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+/** Devuelve el punto activo cuya posición está a < RONDA_PUNTO_DISTANCIA_MINIMA, o null. */
+export function puntoDuplicadoCercano(
+  latitud: number,
+  longitud: number,
+  puntos: RondaPunto[],
+  exceptoId?: string,
+): RondaPunto | null {
+  for (const p of puntos) {
+    if (!p.activo || p.id === exceptoId) continue
+    if (p.latitud === null || p.longitud === null) continue
+    if (distanciaMetros(latitud, longitud, p.latitud, p.longitud) < RONDA_PUNTO_DISTANCIA_MINIMA) {
+      return p
+    }
+  }
+  return null
+}
+
+export const MENSAJE_RONDA_PUNTO_DUPLICADO =
+  'Esta ubicación coincide con otro punto de la ronda. Debés trasladarte hasta el nuevo punto y volver a obtener el GPS.'
 
 export type ResultadoRondas<T> =
   | { data: T; error: null }
@@ -150,7 +186,7 @@ interface ErrorSupabase {
 const COLS_RONDA_BASE =
   'id, objetivo_id, puesto_id, nombre, descripcion, intervalo_minutos, hora_inicio, activo, version, creado_por, actualizado_por, created_at, updated_at'
 const COLS_RONDA_PUNTO =
-  'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, politica_foto, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, activo, created_at, updated_at'
+  'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, politica_foto, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, posicion_capturada_at, activo, created_at, updated_at'
 const MENSAJE_CONFIGURACION_GPS_INCOMPLETA =
   'Si el GPS es obligatorio, marcá el punto en el mapa y definí un radio válido.'
 
@@ -173,6 +209,9 @@ function validarConfiguracionGpsObligatoria(
 
 function mensajeError(error: ErrorSupabase | null, fallback: string): string {
   if (!error?.message) return fallback
+  if (/ronda_punto_duplicado/i.test(error.message)) {
+    return MENSAJE_RONDA_PUNTO_DUPLICADO
+  }
   if (error.code === '42703' && /origen_posicion/i.test(error.message)) {
     return 'No se pueden administrar los puntos porque falta aplicar la actualización de origen de posición en la base de datos.'
   }
@@ -486,6 +525,7 @@ export async function agregarPunto(
       p_radio_metros: datos.radio_metros ?? null,
       p_origen_posicion: datos.origen_posicion ?? null,
       p_activo: datos.activo ?? true,
+      p_posicion_capturada_at: datos.posicion_capturada_at ?? null,
     })
     .single()
 
