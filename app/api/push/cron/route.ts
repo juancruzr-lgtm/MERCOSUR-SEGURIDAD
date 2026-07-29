@@ -9,6 +9,7 @@ type TurnoPush = {
   guardia_id: string | null
   guardia_original_id: string | null
   objetivo_id: string
+  puesto_id: string | null
   fecha: string
   hora_inicio: string
   hora_fin: string
@@ -434,6 +435,12 @@ function nombreEmbebido(v: { nombre: string } | { nombre: string }[] | null | un
   return v.nombre ?? ''
 }
 
+// Minutos locales (misma base que fechaHoraMinutos) del inicio de una ejecución.
+function isoALocalMin(iso: string): number {
+  const p = localParts(new Date(iso))
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) / 60000
+}
+
 export async function GET(req: NextRequest) {
   const auth = authOk(req)
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.error === 'Falta CRON_SECRET' ? 500 : 401 })
@@ -474,7 +481,7 @@ export async function GET(req: NextRequest) {
   ] = await Promise.all([
     admin.client
       .from('turnos')
-      .select('id, guardia_id, guardia_original_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
+      .select('id, guardia_id, guardia_original_id, objetivo_id, puesto_id, fecha, hora_inicio, hora_fin, estado')
       .in('fecha', [ayer, hoy, manana]),
     admin.client
       .from('usuarios')
@@ -692,6 +699,86 @@ export async function GET(req: NextRequest) {
     alertasEnviadas += resultado.sent
   }
 
+  // ── Recordatorios de ronda al VIGILADOR (15' antes / pendiente) ──────────────
+  // Solo al vigilador del turno vigente, con suscripción activa. NO crea
+  // ronda_alertas. Dedup por (usuario, turno, tipo) con tipo = aviso:ronda:ventana.
+  let avisos15m = 0
+  let avisosPendiente = 0
+  {
+    const turnosVigentes = turnos.filter(t => {
+      if (!t.guardia_id || !t.puesto_id) return false
+      const ini = fechaHoraMinutos(t.fecha, t.hora_inicio)
+      const nocturno = (minutosHora(t.hora_fin) ?? 0) <= (minutosHora(t.hora_inicio) ?? 0)
+      const fin = fechaHoraMinutos(t.fecha, t.hora_fin) + (nocturno ? 1440 : 0)
+      return ahora >= ini && ahora <= fin
+    })
+
+    if (turnosVigentes.length > 0) {
+      const puestoIds = Array.from(new Set(turnosVigentes.map(t => t.puesto_id).filter(Boolean)))
+      const turnoIdsVig = turnosVigentes.map(t => t.id)
+
+      const [rondasVigRes, ejecVigRes] = await Promise.all([
+        admin.client.from('rondas_base')
+          .select('id, puesto_id, nombre, hora_inicio, intervalo_minutos')
+          .in('puesto_id', puestoIds as string[]).eq('activo', true),
+        admin.client.from('ronda_ejecuciones')
+          .select('ronda_base_id, turno_id, iniciada_at, estado')
+          .in('turno_id', turnoIdsVig).in('estado', ['en_curso', 'finalizada']),
+      ])
+
+      const rondasVig = (rondasVigRes.data || []) as Array<{ id: string; puesto_id: string; nombre: string; hora_inicio: string | null; intervalo_minutos: number }>
+      const ejecMin = ((ejecVigRes.data || []) as Array<{ ronda_base_id: string; turno_id: string; iniciada_at: string }>)
+        .map(e => ({ ...e, ini_min: isoALocalMin(e.iniciada_at) }))
+
+      for (const t of turnosVigentes) {
+        const tIni = fechaHoraMinutos(t.fecha, t.hora_inicio)
+        const nocturno = (minutosHora(t.hora_fin) ?? 0) <= (minutosHora(t.hora_inicio) ?? 0)
+        const tFin = fechaHoraMinutos(t.fecha, t.hora_fin) + (nocturno ? 1440 : 0)
+
+        for (const rb of rondasVig.filter(r => r.puesto_id === t.puesto_id)) {
+          const interv = rb.intervalo_minutos
+          if (!interv || interv <= 0) continue
+
+          let base = rb.hora_inicio ? fechaHoraMinutos(t.fecha, rb.hora_inicio) : tIni
+          while (base < tIni) base += 1440
+
+          for (let n = 0; n <= 10000; n++) {
+            const vi = base + n * interv
+            if (vi >= tFin) break
+            const vf = Math.min(vi + interv, tFin)
+
+            const yaIniciada = ejecMin.some(e =>
+              e.ronda_base_id === rb.id && e.turno_id === t.id && e.ini_min >= vi && e.ini_min < vi + interv)
+            if (yaIniciada) continue
+
+            const clave = `${rb.id}:${vi}`
+            const url = `/dashboard?ronda=${rb.id}&turno=${t.id}&objetivo=${t.objetivo_id}&ventana=${vi}`
+
+            if (ahora >= vi - 15 && ahora < vi) {
+              const r = await sendToUsers(admin.client, subscriptions, [t.guardia_id as string], t.id,
+                `ronda_recordatorio_15m:${clave}`, {
+                  title: 'Próxima ronda',
+                  body: `En 15 minutos tenés que realizar la ronda ${rb.nombre}.`,
+                  url,
+                  tag: `ronda-aviso-15m-${clave}`,
+                })
+              sumarResultado(r); avisos15m += r.sent
+            } else if (ahora >= vi && ahora < vf) {
+              const r = await sendToUsers(admin.client, subscriptions, [t.guardia_id as string], t.id,
+                `ronda_pendiente:${clave}`, {
+                  title: 'Ronda pendiente',
+                  body: `Ya corresponde realizar la ronda ${rb.nombre}.`,
+                  url,
+                  tag: `ronda-aviso-pend-${clave}`,
+                })
+              sumarResultado(r); avisosPendiente += r.sent
+            }
+          }
+        }
+      }
+    }
+  }
+
   if (turnoIds.length === 0) {
     return NextResponse.json({
       ok: true,
@@ -701,6 +788,7 @@ export async function GET(req: NextRequest) {
       alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
       alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores },
       alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores },
+      recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente },
       alertasEvaluadas,
       alertasOmitidasPorResueltas,
       alertasEnviadas,
@@ -884,6 +972,7 @@ export async function GET(req: NextRequest) {
       pendientes: rondaAlertasPendientes,
       sinSupervisores: rondaAlertasSinSupervisores,
     },
+    recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente },
     alertasEvaluadas,
     alertasOmitidasPorResueltas,
     alertasEnviadas,
