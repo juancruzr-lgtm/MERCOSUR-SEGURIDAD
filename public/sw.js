@@ -1,6 +1,8 @@
-// v2: deja de cachear las llamadas a la API. Cambiar el nombre del cache
-// tambien purga las respuestas de Supabase guardadas por la version anterior.
-const CACHE_NAME = 'mercosur-seguridad-v2'
+// v3: al desplegar una version nueva se cambia el nombre del cache para purgar
+// el app-shell (/, /dashboard) y las respuestas guardadas por la version previa.
+// El cliente (PwaRegister) detecta el worker nuevo y recarga para tomar el codigo
+// actualizado, evitando que queden chunks JS servidos indefinidamente.
+const CACHE_NAME = 'mercosur-seguridad-v3'
 const APP_SHELL = ['/', '/dashboard', '/manifest.webmanifest']
 
 // Rutas que NUNCA deben cachearse: datos operativos, sesion y archivos privados.
@@ -36,6 +38,12 @@ self.addEventListener('install', event => {
       .then(cache => Promise.allSettled(APP_SHELL.map(url => cache.add(url))))
       .then(() => self.skipWaiting())
   )
+})
+
+// Permite que el cliente fuerce la activacion del worker nuevo sin esperar a
+// que se cierren todas las pestañas.
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting()
 })
 
 self.addEventListener('activate', event => {

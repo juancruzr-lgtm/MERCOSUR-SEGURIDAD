@@ -1,7 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   agregarPunto,
   actualizarPunto,
@@ -9,6 +9,8 @@ import {
   obtenerRondaConPuntos,
   reordenarPuntos,
   puntoDuplicadoCercano,
+  distanciaMetros,
+  RONDA_PUNTO_DISTANCIA_MINIMA,
   MENSAJE_RONDA_PUNTO_DUPLICADO,
 } from '@/lib/rondas'
 import { POLITICAS_FOTO, etiquetaPoliticaFoto, ayudaPoliticaFoto } from '@/lib/rondas'
@@ -20,6 +22,17 @@ const RondaPuntosMap = dynamic(() => import('./RondaPuntosMap'), {
   ssr: false,
   loading: () => <div className={styles.mapEmpty}>Cargando mapa…</div>,
 })
+
+// Captura de GPS con watchPosition (iPhone/Safari repiten la primera lectura si
+// se acepta getCurrentPosition sin más). Escuchamos varias lecturas y nos
+// quedamos con la mejor lectura NUEVA (posterior al inicio de captura).
+const GPS_CAPTURA_MAX_MS = 15000     // tope duro de captura
+const GPS_CAPTURA_MIN_MS = 3000      // no cerrar antes de ~3 s
+const GPS_PRECISION_OK_M = 30        // accuracy razonable para cerrar antes
+const GPS_TOLERANCIA_TS_MS = 2000    // lecturas hasta 2 s previas se toleran
+
+const MENSAJE_IPHONE_POSICION_ANTERIOR =
+  'El iPhone sigue informando la posición anterior. Esperá unos segundos o desplazate a un lugar con mejor señal y volvé a capturar.'
 
 interface Props {
   rondaBaseId: string
@@ -130,6 +143,27 @@ export default function RondaPuntosEditor({
   const [interaccionMapa, setInteraccionMapa] = useState(false)
   const [error, setError] = useState('')
   const [gpsEstado, setGpsEstado] = useState('')
+  const [capturandoGps, setCapturandoGps] = useState(false)
+
+  // watchPosition en curso + lectura ganadora + referencias de la captura.
+  const watchIdRef = useRef<number | null>(null)
+  const timeoutCapturaRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mejorLecturaRef = useRef<GeolocationPosition | null>(null)
+  const inicioCapturaRef = useRef<number>(0)
+  const posicionAnteriorRef = useRef<{ lat: number; lng: number } | null>(null)
+
+  // Corta cualquier watchPosition/temporizador activo (sin tocar estado React,
+  // para poder llamarse también en el desmontaje).
+  const limpiarWatch = useCallback(() => {
+    if (watchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchIdRef.current)
+    }
+    watchIdRef.current = null
+    if (timeoutCapturaRef.current !== null) {
+      clearTimeout(timeoutCapturaRef.current)
+      timeoutCapturaRef.current = null
+    }
+  }, [])
 
   const hayCambiosPendientes =
     editandoId !== null && !formulariosIguales(formInicial, form)
@@ -163,6 +197,9 @@ export default function RondaPuntosEditor({
   useEffect(() => onDirtyChange(hayCambiosPendientes), [hayCambiosPendientes, onDirtyChange])
   useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
+  // Cortar cualquier watchPosition activo al desmontar el componente.
+  useEffect(() => limpiarWatch, [limpiarWatch])
+
   useEffect(() => {
     if (!hayCambiosPendientes) return
     const advertirSalida = (evento: BeforeUnloadEvent) => {
@@ -178,6 +215,9 @@ export default function RondaPuntosEditor({
     window.confirm('Hay cambios del punto sin guardar. ¿Querés descartarlos?')
 
   const iniciarFormulario = (id: string | 'nuevo', siguiente: PuntoForm) => {
+    limpiarWatch()
+    setCapturandoGps(false)
+    posicionAnteriorRef.current = null
     setForm(siguiente)
     setFormInicial({ ...siguiente })
     setEditandoId(id)
@@ -199,6 +239,8 @@ export default function RondaPuntosEditor({
 
   const cancelarEdicion = () => {
     if (!confirmarDescarte()) return
+    limpiarWatch()
+    setCapturandoGps(false)
     setEditandoId(null)
     setFormInicial(null)
     setAjusteMapa(false)
@@ -207,6 +249,8 @@ export default function RondaPuntosEditor({
   }
 
   const cambiarCoordenada = (campo: 'latitud' | 'longitud', valor: string) => {
+    limpiarWatch()
+    setCapturandoGps(false)
     setForm(actual => {
       const siguiente = { ...actual, [campo]: valor, precision_metros: '' }
       const sinCoordenadas = !siguiente.latitud.trim() && !siguiente.longitud.trim()
@@ -217,46 +261,135 @@ export default function RondaPuntosEditor({
     setGpsEstado('')
   }
 
-  const obtenerGps = () => {
-    if (!navigator.geolocation) {
+  // Aplica la mejor lectura al formulario y avisa si el iPhone repitió una
+  // posición anterior (misma del formulario o coincidente con otro punto).
+  const aplicarLecturaGps = useCallback((posicion: GeolocationPosition) => {
+    const latitud = posicion.coords.latitude
+    const longitud = posicion.coords.longitude
+    const accuracy = Math.round(posicion.coords.accuracy)
+    const capturadaAt = new Date(posicion.timestamp)
+
+    setForm(actual => ({
+      ...actual,
+      latitud: latitud.toFixed(7),
+      longitud: longitud.toFixed(7),
+      precision_metros: accuracy.toString(),
+      origen_posicion: 'gps',
+      posicion_capturada_at: capturadaAt.toISOString(),
+    }))
+
+    const anterior = posicionAnteriorRef.current
+    const coincideAnterior = anterior
+      ? distanciaMetros(latitud, longitud, anterior.lat, anterior.lng) < RONDA_PUNTO_DISTANCIA_MINIMA
+      : false
+    const coincideOtroPunto = puntoDuplicadoCercano(
+      latitud, longitud, puntos,
+      editandoId === 'nuevo' ? undefined : editandoId ?? undefined,
+    ) !== null
+
+    const hora = capturadaAt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    if (coincideAnterior || coincideOtroPunto) {
+      setGpsEstado(MENSAJE_IPHONE_POSICION_ANTERIOR)
+    } else {
+      setGpsEstado(`Ubicación nueva capturada · precisión ${accuracy} m · ${hora}`)
+    }
+  }, [puntos, editandoId])
+
+  const obtenerGps = useCallback(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setGpsEstado('Este dispositivo no ofrece ubicación GPS.')
       return
     }
 
-    // Limpiar posición actual ANTES de capturar: una lectura fallida no debe
-    // dejar coordenadas viejas, y cada punto exige una lectura GPS nueva.
-    setForm(actual => ({
-      ...actual,
-      latitud: '',
-      longitud: '',
-      precision_metros: '',
-      origen_posicion: null,
-      posicion_capturada_at: null,
-    }))
-    setGpsEstado('Obteniendo ubicación…')
-    navigator.geolocation.getCurrentPosition(
+    // Cortar cualquier captura previa y limpiar la posición: cada punto exige una
+    // lectura GPS NUEVA; una lectura fallida no debe dejar coordenadas viejas.
+    limpiarWatch()
+    const inicio = Date.now()
+    inicioCapturaRef.current = inicio
+    mejorLecturaRef.current = null
+
+    setForm(actual => {
+      const prevLat = numeroOpcional(actual.latitud)
+      const prevLng = numeroOpcional(actual.longitud)
+      posicionAnteriorRef.current =
+        prevLat !== null && prevLng !== null ? { lat: prevLat, lng: prevLng } : null
+      return {
+        ...actual,
+        latitud: '',
+        longitud: '',
+        precision_metros: '',
+        origen_posicion: null,
+        posicion_capturada_at: null,
+      }
+    })
+    setCapturandoGps(true)
+    setGpsEstado('Buscando una ubicación GPS nueva…')
+
+    const finalizar = () => {
+      limpiarWatch()
+      setCapturandoGps(false)
+      const mejor = mejorLecturaRef.current
+      if (!mejor) {
+        setGpsEstado('No se pudo obtener una ubicación nueva. Esperá unos segundos al aire libre y volvé a intentar.')
+        return
+      }
+      aplicarLecturaGps(mejor)
+    }
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
       posicion => {
-        setForm(actual => ({
-          ...actual,
-          latitud: posicion.coords.latitude.toFixed(7),
-          longitud: posicion.coords.longitude.toFixed(7),
-          precision_metros: Math.round(posicion.coords.accuracy).toString(),
-          origen_posicion: 'gps',
-          posicion_capturada_at: new Date(posicion.timestamp).toISOString(),
-        }))
-        setGpsEstado(`Ubicación obtenida con precisión aproximada de ${Math.round(posicion.coords.accuracy)} m.`)
+        // Descartar lecturas claramente anteriores al inicio de la captura.
+        if (posicion.timestamp < inicio - GPS_TOLERANCIA_TS_MS) return
+
+        const previa = mejorLecturaRef.current
+        const esPosterior = posicion.timestamp >= inicio
+        if (!previa) {
+          mejorLecturaRef.current = posicion
+        } else {
+          const previaPosterior = previa.timestamp >= inicio
+          // Preferir una lectura posterior al inicio; a igualdad, menor accuracy.
+          if (esPosterior && !previaPosterior) {
+            mejorLecturaRef.current = posicion
+          } else if (esPosterior === previaPosterior && posicion.coords.accuracy < previa.coords.accuracy) {
+            mejorLecturaRef.current = posicion
+          }
+        }
+
+        const mejor = mejorLecturaRef.current!
+        setGpsEstado(`Buscando una ubicación GPS nueva… (precisión ${Math.round(mejor.coords.accuracy)} m)`)
+
+        // Cierre anticipado: lectura nueva, precisión razonable y mínimo de tiempo.
+        const transcurrido = Date.now() - inicio
+        if (
+          mejor.timestamp >= inicio &&
+          mejor.coords.accuracy <= GPS_PRECISION_OK_M &&
+          transcurrido >= GPS_CAPTURA_MIN_MS
+        ) {
+          finalizar()
+        }
       },
       fallo => {
+        // Si ya hay una lectura útil, usarla; si no, informar el error.
+        if (mejorLecturaRef.current) {
+          finalizar()
+          return
+        }
+        limpiarWatch()
+        setCapturandoGps(false)
         const mensaje = fallo.code === fallo.PERMISSION_DENIED
           ? 'Permiso de ubicación denegado. Podés habilitarlo y volver a intentar.'
           : 'No se pudo obtener una ubicación confiable. Volvé a intentar al aire libre.'
         setGpsEstado(mensaje)
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+      { enableHighAccuracy: true, timeout: GPS_CAPTURA_MAX_MS, maximumAge: 0 },
     )
-  }
+
+    timeoutCapturaRef.current = setTimeout(finalizar, GPS_CAPTURA_MAX_MS)
+  }, [limpiarWatch, aplicarLecturaGps])
 
   const moverDesdeMapa = (latitud: number, longitud: number) => {
+    limpiarWatch()
+    setCapturandoGps(false)
     setForm(actual => ({
       ...actual,
       latitud: latitud.toFixed(7),
@@ -270,6 +403,10 @@ export default function RondaPuntosEditor({
 
   const guardar = async () => {
     if (!editandoId || guardando) return
+    if (capturandoGps) {
+      setError('Esperá a que termine la captura de GPS antes de guardar.')
+      return
+    }
     setGuardando(true)
     setError('')
 
@@ -490,7 +627,16 @@ export default function RondaPuntosEditor({
                 </label>
                 <div className={styles.gpsBox}>
                   <div className={styles.gpsControls}>
-                    <button className={styles.button} type="button" onClick={obtenerGps} disabled={guardando}>Usar ubicación actual</button>
+                    <button
+                      className={`${styles.button} ${styles.buttonPrimary}`}
+                      type="button"
+                      onClick={obtenerGps}
+                      disabled={guardando || capturandoGps}
+                    >
+                      {capturandoGps
+                        ? 'Buscando GPS…'
+                        : coordenadasEditadasCompletas ? 'Actualizar GPS' : 'Usar ubicación actual'}
+                    </button>
                     <button
                       className={`${styles.button} ${ajusteMapa ? styles.buttonActive : ''}`}
                       type="button"
@@ -501,7 +647,7 @@ export default function RondaPuntosEditor({
                           return siguiente
                         })
                       }}
-                      disabled={guardando || !coordenadasEditadasCompletas}
+                      disabled={guardando || capturandoGps || !coordenadasEditadasCompletas}
                     >
                       {ajusteMapa ? 'Finalizar ajuste' : 'Ajustar en mapa'}
                     </button>
@@ -538,7 +684,7 @@ export default function RondaPuntosEditor({
               </div>
               <div className={styles.formActions}>
                 <button className={styles.button} type="button" onClick={cancelarEdicion} disabled={guardando}>Cancelar</button>
-                <button className={`${styles.button} ${styles.buttonPrimary}`} type="button" onClick={() => void guardar()} disabled={guardando}>
+                <button className={`${styles.button} ${styles.buttonPrimary}`} type="button" onClick={() => void guardar()} disabled={guardando || capturandoGps}>
                   {guardando ? 'Guardando…' : 'Guardar punto'}
                 </button>
               </div>
