@@ -136,6 +136,38 @@ function mensajeBloqueoFichaje(turno: Turno, guardiaId: string, ahora: Date): st
   return null
 }
 
+type EstadoTarjetaTurno =
+  | 'pendiente'
+  | 'cubierto'
+  | 'ingreso_anticipado'
+  | 'en_turno'
+  | 'salida_pendiente'
+  | 'completado'
+
+// Estado que muestra la tarjeta del turno. El fichaje solo no alcanza: se puede
+// dar presente hasta 30 minutos antes del inicio, y el registro queda abierto
+// después del fin mientras no haya egreso. En esos dos tramos el turno no está
+// vigente para el servidor, que habilita las rondas únicamente dentro de
+// [hora_inicio, hora_fin); anunciar "En turno" ahí contradecía al panel de
+// rondas. Se usan los mismos constructores de fecha/hora que el resto del
+// componente para que el límite sea el mismo que ya valida el fichaje.
+function estadoTarjetaTurno(turno: Turno, reg: Registro | undefined, ahora: Date): EstadoTarjetaTurno {
+  if (reg?.hora_salida_real) return 'completado'
+
+  if (reg) {
+    const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
+    const finTurno = fechaFinTurno(turno)
+    // Sin horario utilizable no se puede afirmar nada más preciso que el fichaje.
+    if (!inicioTurno || !finTurno) return 'en_turno'
+
+    if (ahora < inicioTurno) return 'ingreso_anticipado'
+    if (ahora >= finTurno) return 'salida_pendiente'
+    return 'en_turno'
+  }
+
+  return turno.estado === 'cubierto' ? 'cubierto' : 'pendiente'
+}
+
 async function consultarPermisoGps(): Promise<GpsPermissionState> {
   if (typeof navigator === 'undefined' || !navigator.geolocation) return 'unsupported'
 
@@ -390,6 +422,11 @@ const S: Record<string, React.CSSProperties> = {
       completado: { bg: 'rgba(16,185,129,.15)',  color: '#10b981' },
       programado: { bg: 'rgba(100,116,139,.15)', color: '#94a3b8' },
       cubierto:   { bg: 'rgba(16,185,129,.15)',  color: '#10b981' },
+      en_turno:   { bg: 'rgba(16,185,129,.15)',  color: '#10b981' },
+      // Ingreso registrado y salida disponible, pero el turno no está corriendo:
+      // ámbar para que no se lea como "En turno".
+      ingreso_anticipado: { bg: 'rgba(245,158,11,.15)', color: '#f59e0b' },
+      salida_pendiente:   { bg: 'rgba(245,158,11,.15)', color: '#f59e0b' },
     }
     const c = map[tipo] || { bg: 'rgba(100,116,139,.15)', color: '#94a3b8' }
     return {
@@ -1832,6 +1869,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
         {!loading && turnos.map(turno => {
           const obj     = getObjetivo(turno.objetivo_id)
           const reg     = registroDelTurno(turno.id)
+          const estadoTarjeta = estadoTarjetaTurno(turno, reg, ahora)
           const cargando = fichando === turno.id
           const bloqueoFichaje = mensajeBloqueoFichaje(turno, user.id, ahora)
           const puedeDarPresente = !bloqueoFichaje
@@ -1897,10 +1935,12 @@ export default function GuardiaMobile({ user }: { user: any }) {
 
               {/* Badge estado */}
               <div style={{ marginBottom: 14 }}>
-                <span style={S.badge(reg?.hora_salida_real ? 'completado' : reg ? 'presente' : turno.estado)}>
-                  {reg?.hora_salida_real ? '✓ Turno completado'
-                    : reg ? '● En turno'
-                    : turno.estado === 'cubierto' ? '✓ Cubierto'
+                <span style={S.badge(estadoTarjeta)}>
+                  {estadoTarjeta === 'completado' ? '✓ Turno completado'
+                    : estadoTarjeta === 'salida_pendiente' ? '⏳ Turno finalizado · Salida pendiente'
+                    : estadoTarjeta === 'ingreso_anticipado' ? `✓ Ingreso registrado · Comienza a las ${turno.hora_inicio.slice(0, 5)}`
+                    : estadoTarjeta === 'en_turno' ? '● En turno'
+                    : estadoTarjeta === 'cubierto' ? '✓ Cubierto'
                     : '○ Pendiente'}
                 </span>
               </div>
