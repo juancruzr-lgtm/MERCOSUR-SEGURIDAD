@@ -416,6 +416,24 @@ function supervisoresDeZona(zonaId: string | null | undefined, supervisorZonas: 
     .map(usuario => usuario.id)
 }
 
+// Alertas de rondas: persistidas por evaluar_ronda_alertas(); acá solo se
+// enrutan por zona y se envían con dedup por (usuario, objetivo, tipo), donde el
+// tipo embebe el id de la alerta → una notificación por alerta y supervisor.
+type RondaAlertaPush = {
+  id: string
+  tipo: string
+  objetivo_id: string
+  guardia_id: string
+  ronda: { nombre: string } | { nombre: string }[] | null
+  puesto: { nombre: string } | { nombre: string }[] | null
+}
+
+function nombreEmbebido(v: { nombre: string } | { nombre: string }[] | null | undefined): string {
+  if (!v) return ''
+  if (Array.isArray(v)) return v[0]?.nombre ?? ''
+  return v.nombre ?? ''
+}
+
 export async function GET(req: NextRequest) {
   const auth = authOk(req)
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.error === 'Falta CRON_SECRET' ? 500 : 401 })
@@ -605,6 +623,75 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── Alertas de RONDAS (no iniciada / no finalizada) ──────────────────────────
+  // Independiente de si hay turnos hoy: una alerta puede corresponder a un turno
+  // de ayer. Detecta (idempotente) y rutea por zona reutilizando supervisor_zonas.
+  let rondaAlertasPendientes = 0
+  let candidatosRondaNoIniciada = 0
+  let candidatosRondaNoFinalizada = 0
+  let rondaAlertasSinSupervisores = 0
+
+  try {
+    const { error: evalError } = await admin.client.rpc('evaluar_ronda_alertas')
+    if (evalError && !/evaluar_ronda_alertas|schema cache|does not exist/i.test(evalError.message)) {
+      console.error('[cron] evaluar_ronda_alertas error:', evalError.message)
+    }
+  } catch (e) {
+    console.error('[cron] evaluar_ronda_alertas excepción:', e)
+  }
+
+  const { data: rondaAlertasData, error: rondaAlertasError } = await admin.client
+    .from('ronda_alertas')
+    .select('id, tipo, objetivo_id, guardia_id, ronda:rondas_base(nombre), puesto:puestos(nombre)')
+    .eq('estado', 'pendiente')
+
+  const rondaAlertasErrorIgnorable = rondaAlertasError && /ronda_alertas|schema cache|does not exist/i.test(rondaAlertasError.message)
+  if (rondaAlertasError && !rondaAlertasErrorIgnorable) {
+    console.error('[cron] lectura ronda_alertas error:', rondaAlertasError.message)
+  }
+
+  const zonaPorObjetivo = new Map<string, string | null>()
+  objetivosSupervision.forEach(o => zonaPorObjetivo.set(o.id, o.zona_id ?? null))
+  const nombrePorObjetivo = new Map<string, string>()
+  objetivos.forEach(o => nombrePorObjetivo.set(o.id, o.nombre))
+
+  const rondaAlertas = (rondaAlertasErrorIgnorable ? [] : (rondaAlertasData || [])) as RondaAlertaPush[]
+  rondaAlertasPendientes = rondaAlertas.length
+
+  for (const alerta of rondaAlertas) {
+    const zonaId = zonaPorObjetivo.get(alerta.objetivo_id) ?? null
+    const supervisorIds = supervisoresDeZona(zonaId, supervisorZonas, usuarios)
+    if (supervisorIds.length === 0) {
+      rondaAlertasSinSupervisores += 1
+      continue
+    }
+
+    const esNoIniciada = alerta.tipo === 'no_iniciada'
+    if (esNoIniciada) candidatosRondaNoIniciada += 1
+    else candidatosRondaNoFinalizada += 1
+
+    const guardia = usuarios.find(u => u.id === alerta.guardia_id)
+    const rondaNombre = nombreEmbebido(alerta.ronda) || 'Ronda'
+    const puestoNombre = nombreEmbebido(alerta.puesto) || 'Puesto'
+    const objetivoNombre = nombrePorObjetivo.get(alerta.objetivo_id) || 'Objetivo'
+
+    const resultado = await sendToUsersObjetivo(
+      admin.client,
+      subscriptions,
+      supervisorIds,
+      alerta.objetivo_id,
+      `supervisor_ronda_${alerta.tipo}:${alerta.id}`,
+      {
+        title: esNoIniciada ? 'Ronda no iniciada' : 'Ronda sin finalizar',
+        body: `Ronda: ${rondaNombre} · Puesto: ${puestoNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}`,
+        url: '/dashboard',
+        tag: `ronda-alerta-${alerta.id}`,
+      },
+    )
+    sumarResultado(resultado)
+    alertasEnviadas += resultado.sent
+  }
+
   if (turnoIds.length === 0) {
     return NextResponse.json({
       ok: true,
@@ -613,6 +700,7 @@ export async function GET(req: NextRequest) {
       candidatos15: 0,
       alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
       alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores },
+      alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores },
       alertasEvaluadas,
       alertasOmitidasPorResueltas,
       alertasEnviadas,
@@ -789,6 +877,12 @@ export async function GET(req: NextRequest) {
       vencida: candidatosSupervisionVencida,
       proxima: candidatosSupervisionProxima,
       sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores,
+    },
+    alertasRonda: {
+      noIniciada: candidatosRondaNoIniciada,
+      noFinalizada: candidatosRondaNoFinalizada,
+      pendientes: rondaAlertasPendientes,
+      sinSupervisores: rondaAlertasSinSupervisores,
     },
     alertasEvaluadas,
     alertasOmitidasPorResueltas,

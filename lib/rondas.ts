@@ -1425,3 +1425,160 @@ export function mensajeContextoFirmaEvidencia(contexto: ContextoFirmaEvidencia):
     case 'error_firma':            return 'No se pudo generar el acceso a la foto. Probá de nuevo.'
   }
 }
+
+// ── Alertas de rondas (A4: capa cliente) ──────────────────────────────────────
+// Lectura y resolución de alertas persistentes. La detección y el push viven en
+// el evaluador SQL y el cron; acá solo se listan y se interviene.
+
+export type TipoRondaAlerta = 'no_iniciada' | 'no_finalizada'
+export type EstadoRondaAlerta = 'pendiente' | 'resuelta'
+export type AccionRondaAlerta =
+  | 'llamada_vigilador'
+  | 'solicitud_cumplimiento'
+  | 'justificacion'
+  | 'cierre_administrativo'
+  | 'resuelta'
+
+export const ACCIONES_RONDA_ALERTA: readonly AccionRondaAlerta[] =
+  ['llamada_vigilador', 'solicitud_cumplimiento', 'justificacion', 'cierre_administrativo', 'resuelta'] as const
+
+/** Acciones que cierran la alerta (y exigen comentario). */
+export function accionRondaAlertaCierra(accion: AccionRondaAlerta): boolean {
+  return accion === 'justificacion' || accion === 'cierre_administrativo' || accion === 'resuelta'
+}
+export const accionRondaAlertaRequiereComentario = accionRondaAlertaCierra
+
+export function etiquetaTipoRondaAlerta(tipo: TipoRondaAlerta): string {
+  return tipo === 'no_iniciada' ? 'No iniciada' : 'Sin finalizar'
+}
+
+export function etiquetaAccionRondaAlerta(accion: AccionRondaAlerta): string {
+  switch (accion) {
+    case 'llamada_vigilador':      return 'Llamada al vigilador'
+    case 'solicitud_cumplimiento': return 'Solicitud de cumplimiento'
+    case 'justificacion':          return 'Justificación'
+    case 'cierre_administrativo':  return 'Cierre administrativo'
+    case 'resuelta':               return 'Marcar resuelta'
+  }
+}
+
+export interface RondaAlerta {
+  id: string
+  tipo: TipoRondaAlerta
+  estado: EstadoRondaAlerta
+  objetivo_id: string
+  puesto_id: string
+  puesto_nombre: string
+  ronda_base_id: string
+  ronda_nombre: string
+  turno_id: string
+  guardia_id: string
+  guardia_nombre: string
+  ejecucion_id: string | null
+  ventana_inicio: string
+  ventana_fin: string
+  vencimiento_at: string
+  detectada_at: string
+  resuelta_por: string | null
+  resuelta_por_nombre: string | null
+  resuelta_at: string | null
+  accion: AccionRondaAlerta | null
+  comentario: string | null
+  intervenciones: number
+}
+
+export type ContextoRondaAlertas = 'ok' | 'sin_usuario' | 'sin_permiso' | 'parametro_invalido'
+
+export interface RespuestaRondaAlertas {
+  contexto: ContextoRondaAlertas
+  alertas: RondaAlerta[]
+}
+
+export async function listarRondaAlertasObjetivo(
+  objetivoId: string,
+  estado?: EstadoRondaAlerta,
+): Promise<ResultadoRondas<RespuestaRondaAlertas>> {
+  const { data, error } = await supabase.rpc('listar_ronda_alertas_objetivo', {
+    p_objetivo_id: objetivoId,
+    p_estado: estado ?? null,
+  })
+
+  if (error) {
+    registrarErrorSupabase('listar_ronda_alertas_objetivo', error)
+    return { data: null, error: mensajeError(error, 'No se pudieron cargar las alertas de rondas.') }
+  }
+
+  const bruto = (data ?? {}) as Partial<RespuestaRondaAlertas>
+  return {
+    data: {
+      contexto: (bruto.contexto ?? 'sin_permiso') as ContextoRondaAlertas,
+      alertas: Array.isArray(bruto.alertas) ? (bruto.alertas as RondaAlerta[]) : [],
+    },
+    error: null,
+  }
+}
+
+export type ContextoResolverAlerta =
+  | 'registrada'
+  | 'resuelta'
+  | 'ya_resuelta'
+  | 'sin_usuario'
+  | 'no_encontrada'
+  | 'sin_permiso'
+  | 'accion_invalida'
+  | 'comentario_requerido'
+  | 'cierre_no_aplicable'
+  // Propagados desde cerrar_ronda_bloqueada al delegar el cierre administrativo.
+  | 'motivo_invalido'
+  | 'ejecucion_no_bloqueada'
+  | 'ejecucion_no_encontrada'
+
+export interface RespuestaResolverAlerta {
+  contexto: ContextoResolverAlerta
+  alerta_id: string | null
+}
+
+export async function resolverRondaAlerta(
+  alertaId: string,
+  accion: AccionRondaAlerta,
+  comentario?: string,
+): Promise<ResultadoRondas<RespuestaResolverAlerta>> {
+  const { data, error } = await supabase.rpc('resolver_ronda_alerta', {
+    p_alerta_id: alertaId,
+    p_accion: accion,
+    p_comentario: comentario ?? null,
+  })
+
+  if (error) {
+    registrarErrorSupabase('resolver_ronda_alerta', error)
+    return { data: null, error: mensajeError(error, 'No se pudo registrar la intervención.') }
+  }
+
+  const bruto = (data ?? {}) as Partial<RespuestaResolverAlerta>
+  return {
+    data: {
+      contexto: (bruto.contexto ?? 'no_encontrada') as ContextoResolverAlerta,
+      alerta_id: bruto.alerta_id ?? null,
+    },
+    error: null,
+  }
+}
+
+/** Mensaje para el supervisor tras intervenir. `null` cuando fue exitoso. */
+export function mensajeContextoResolverAlerta(contexto: ContextoResolverAlerta): string | null {
+  switch (contexto) {
+    case 'registrada':
+    case 'resuelta':
+      return null
+    case 'ya_resuelta':          return 'La alerta ya estaba resuelta.'
+    case 'sin_usuario':          return 'No se pudo identificar tu usuario operativo.'
+    case 'no_encontrada':        return 'Esa alerta ya no existe.'
+    case 'sin_permiso':          return 'No tenés permiso para intervenir esta alerta.'
+    case 'accion_invalida':      return 'La acción no es válida.'
+    case 'comentario_requerido': return 'El comentario es obligatorio para esta acción.'
+    case 'cierre_no_aplicable':  return 'El cierre administrativo requiere una ejecución asociada. Usá justificación o resuelta.'
+    case 'motivo_invalido':      return 'El motivo del cierre debe tener al menos 10 caracteres.'
+    case 'ejecucion_no_bloqueada': return 'La ronda no está en curso: la terminó el vigilador.'
+    case 'ejecucion_no_encontrada': return 'La ejecución asociada ya no existe.'
+  }
+}

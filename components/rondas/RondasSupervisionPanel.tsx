@@ -15,6 +15,7 @@ import dynamic from 'next/dynamic'
 import RondasEnCursoPanel from './RondasEnCursoPanel'
 import RondasNativasPanel from './RondasNativasPanel'
 import RondaEjecucionDetalle from './RondaEjecucionDetalle'
+import RondaAlertasPanel from './RondaAlertasPanel'
 import type { PuntoMapaSupervision } from './RondaEjecucionMapa'
 import {
   listarEjecucionesObjetivo,
@@ -39,7 +40,7 @@ const RondaEjecucionMapa = dynamic(() => import('./RondaEjecucionMapa'), {
   loading: () => <div style={{ padding: 16, color: '#94a3b8', fontSize: 13 }}>Cargando mapa…</div>,
 })
 
-type Seccion = 'mapa' | 'en_curso' | 'historial' | 'config'
+type Seccion = 'mapa' | 'en_curso' | 'alertas' | 'historial' | 'config'
 
 interface Props {
   objetivoId: string
@@ -52,6 +53,7 @@ interface Props {
 const SECCIONES: { id: Seccion; label: string }[] = [
   { id: 'mapa',      label: 'Mapa' },
   { id: 'en_curso',  label: 'En curso' },
+  { id: 'alertas',   label: 'Alertas' },
   { id: 'historial', label: 'Historial' },
   { id: 'config',    label: 'Configuración' },
 ]
@@ -107,6 +109,8 @@ export default function RondasSupervisionPanel({
             <RondasEnCursoPanel objetivoId={objetivoId} onVerDetalle={setDetalleId} />
           </>
         )}
+
+        {seccion === 'alertas' && <RondaAlertasPanel objetivoId={objetivoId} />}
 
         {seccion === 'historial' && <SeccionHistorial objetivoId={objetivoId} onVerDetalle={setDetalleId} />}
 
