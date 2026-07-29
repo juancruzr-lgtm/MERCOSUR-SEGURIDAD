@@ -21,6 +21,8 @@ interface Props {
   objetivoId: string
   /** Permite al contenedor refrescar lo que dependa de las rondas tras un cierre. */
   onCierre?: () => void
+  /** Abre el detalle de una ejecución sin duplicar este panel (B5, opcional). */
+  onVerDetalle?: (ejecucionId: string) => void
 }
 
 function horaCorta(iso: string): string {
@@ -30,7 +32,7 @@ function horaCorta(iso: string): string {
     : d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-export default function RondasEnCursoPanel({ objetivoId, onCierre }: Props) {
+export default function RondasEnCursoPanel({ objetivoId, onCierre, onVerDetalle }: Props) {
   const [ejecuciones, setEjecuciones] = useState<EjecucionEnCurso[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
@@ -128,6 +130,15 @@ export default function RondasEnCursoPanel({ objetivoId, onCierre }: Props) {
                   {e.puntos_total - e.puntos_pendientes}/{e.puntos_total} puntos
                 </div>
               </div>
+              {onVerDetalle && (
+                <button
+                  type="button"
+                  style={{ ...btn, ...btnPrimary, flexShrink: 0 }}
+                  onClick={() => onVerDetalle(e.id)}
+                >
+                  Ver detalle
+                </button>
+              )}
               <button
                 type="button"
                 style={{ ...btn, ...btnSecondary, flexShrink: 0 }}

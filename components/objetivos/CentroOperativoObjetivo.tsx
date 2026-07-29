@@ -16,8 +16,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Badge, btn, btnPrimary, btnSecondary } from '@/components/ui/base'
-import RondasNativasPanel from '@/components/rondas/RondasNativasPanel'
-import RondasEnCursoPanel from '@/components/rondas/RondasEnCursoPanel'
+import RondasSupervisionPanel from '@/components/rondas/RondasSupervisionPanel'
 import styles from './CentroOperativoObjetivo.module.css'
 import {
   cargarLegajoObjetivo, cargarRondasObjetivo, derivarEstadoObjetivo,
@@ -325,16 +324,15 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
               Objetivo sin zona operativa asignada.
             </div>
           )}
-          <RondasNativasPanel
+          <RondasSupervisionPanel
             objetivoId={objetivoId}
             centroObjetivo={
               objetivo.lat !== null && objetivo.lng !== null
                 ? [objetivo.lat, objetivo.lng]
                 : null
             }
-            onDirtyChange={setRondasDirty}
+            onRondasDirtyChange={setRondasDirty}
           />
-          <RondasEnCursoPanel objetivoId={objetivoId} />
         </div>
       )}
 

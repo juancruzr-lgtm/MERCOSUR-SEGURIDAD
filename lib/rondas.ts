@@ -1031,6 +1031,7 @@ export type ContextoEjecucionesEnCurso = 'ok' | 'sin_usuario' | 'sin_permiso'
 
 export interface EjecucionEnCurso {
   id: string
+  ronda_id: string
   ronda_nombre: string
   guardia_nombre: string
   puesto_nombre: string
@@ -1143,5 +1144,284 @@ export function mensajeContextoCerrarRonda(contexto: ContextoCerrarRonda): strin
       return 'Esa ronda no está en curso: la terminó el vigilador y su resultado no se modifica.'
     case 'motivo_invalido':
       return `El motivo es obligatorio y debe tener al menos ${MOTIVO_CIERRE_MIN} caracteres.`
+  }
+}
+
+// ── Etapa 3.3 · B3: capa cliente de supervisión de rondas ─────────────────────
+// Consume las RPC autorizadas de detalle (B1) e historial (B0′) y el endpoint de
+// firma de evidencia (B2). Toda la autorización vive en el servidor; estas
+// funciones solo tipan y normalizan la respuesta. No aceptan ni envían
+// storage_path, ni guardia/puesto/objetivo de alcance fabricados por el cliente.
+
+export type EstadoPuntoEjecucion = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido'
+
+// ── B1: detalle de una ejecución para supervisión ─────────────────────────────
+
+export type ContextoDetalleEjecucion = 'ok' | 'sin_usuario' | 'no_encontrada' | 'sin_permiso'
+
+export interface EvidenciaRefRonda {
+  id: string
+  tipo_evidencia: string
+  bucket: string
+  storage_path: string
+  created_at: string
+}
+
+export interface PuntoEjecucionDetalle {
+  ejecucion_punto_id: string
+  ronda_punto_id: string
+  orden: number
+  nombre: string
+  estado: EstadoPuntoEjecucion
+  registrado_at: string | null
+  comentario: string | null
+  hay_novedad: boolean
+  requiere_foto: boolean
+  politica_foto: PoliticaFoto
+  requiere_gps: boolean
+  // Posición configurada al iniciar la ronda (snapshot inmutable).
+  config_latitud: number | null
+  config_longitud: number | null
+  config_radio_metros: number | null
+  // GPS real registrado por el vigilador.
+  latitud: number | null
+  longitud: number | null
+  precision_metros: number | null
+  distancia_metros: number | null
+  gps_ok: boolean | null
+  dentro_radio: boolean | null
+  foto_ok: boolean | null
+  // Referencias de evidencia (para firmar con firmarEvidenciaRonda). Sin URL.
+  evidencias: EvidenciaRefRonda[]
+}
+
+export interface EjecucionDetalleSupervisor {
+  id: string
+  estado: EstadoEjecucionRonda
+  resultado: ResultadoEjecucionRonda | null
+  iniciada_at: string
+  finalizada_at: string | null
+  fecha_operativa: string
+  iniciada_fuera_horario: boolean
+  puntos_total: number
+  puntos_completados: number
+  porcentaje: number
+  ronda_base_id: string
+  ronda_nombre: string
+  snap_intervalo_minutos: number
+  snap_hora_inicio: string | null
+  objetivo_id: string
+  objetivo_nombre: string
+  puesto_id: string
+  puesto_nombre: string
+  guardia_id: string
+  guardia_nombre: string
+  // Cierre administrativo: cerrada_por != null lo distingue de una ronda que el
+  // vigilador terminó con incumplidos (mismo estado/resultado).
+  cerrada_por: string | null
+  cerrada_por_nombre: string | null
+  cerrada_at: string | null
+  cerrada_motivo: string | null
+  es_cierre_administrativo: boolean
+}
+
+export interface DetalleEjecucionSupervisor {
+  contexto: ContextoDetalleEjecucion
+  ejecucion: EjecucionDetalleSupervisor | null
+  puntos: PuntoEjecucionDetalle[]
+}
+
+/** Detalle completo de UNA ejecución. Solo admin/supervisor de la zona. */
+export async function obtenerDetalleEjecucionSupervisor(
+  ejecucionId: string,
+): Promise<ResultadoRondas<DetalleEjecucionSupervisor>> {
+  const { data, error } = await supabase.rpc('rondas_ejecucion_detalle_supervisor', {
+    p_ejecucion_id: ejecucionId,
+  })
+
+  if (error) {
+    registrarErrorSupabase('rondas_ejecucion_detalle_supervisor', error)
+    return { data: null, error: mensajeError(error, 'No se pudo cargar el detalle de la ronda.') }
+  }
+
+  const bruto = (data ?? {}) as Partial<DetalleEjecucionSupervisor>
+  return {
+    data: {
+      contexto: (bruto.contexto ?? 'no_encontrada') as ContextoDetalleEjecucion,
+      ejecucion: (bruto.ejecucion ?? null) as EjecucionDetalleSupervisor | null,
+      puntos: Array.isArray(bruto.puntos) ? (bruto.puntos as PuntoEjecucionDetalle[]) : [],
+    },
+    error: null,
+  }
+}
+
+/** Mensaje para el supervisor según el contexto del detalle. */
+export function mensajeContextoDetalleEjecucion(contexto: ContextoDetalleEjecucion): string | null {
+  switch (contexto) {
+    case 'ok':            return null
+    case 'sin_usuario':   return 'No se pudo identificar tu usuario operativo.'
+    case 'no_encontrada': return 'Esa ejecución ya no existe.'
+    case 'sin_permiso':   return 'No tenés permiso para ver esta ronda.'
+  }
+}
+
+// ── B0′: historial de ejecuciones finalizadas de un objetivo ──────────────────
+
+export type ContextoEjecucionesObjetivo = 'ok' | 'sin_usuario' | 'rango_invalido' | 'sin_permiso'
+
+export interface EjecucionHistorialItem {
+  ejecucion_id: string
+  ronda_id: string
+  ronda_nombre: string
+  puesto_id: string
+  puesto_nombre: string
+  guardia_id: string
+  guardia_nombre: string
+  estado: EstadoEjecucionRonda
+  resultado: ResultadoEjecucionRonda | null
+  iniciada_at: string
+  finalizada_at: string | null
+  puntos_total: number
+  puntos_cumplidos: number
+  puntos_incumplidos: number
+  puntos_omitidos: number
+  cerrada_por: string | null
+  cerrada_at: string | null
+  cerrada_motivo: string | null
+  es_cierre_administrativo: boolean
+}
+
+export interface RespuestaEjecucionesObjetivo {
+  contexto: ContextoEjecucionesObjetivo
+  ejecuciones: EjecucionHistorialItem[]
+}
+
+/** Historial de ejecuciones FINALIZADas de un objetivo, en un rango de fechas. */
+export async function listarEjecucionesObjetivo(
+  objetivoId: string,
+  desde: string,
+  hasta: string,
+): Promise<ResultadoRondas<RespuestaEjecucionesObjetivo>> {
+  const { data, error } = await supabase.rpc('listar_ejecuciones_objetivo', {
+    p_objetivo_id: objetivoId,
+    p_desde: desde,
+    p_hasta: hasta,
+  })
+
+  if (error) {
+    registrarErrorSupabase('listar_ejecuciones_objetivo', error)
+    return { data: null, error: mensajeError(error, 'No se pudo cargar el historial de rondas.') }
+  }
+
+  const bruto = (data ?? {}) as Partial<RespuestaEjecucionesObjetivo>
+  return {
+    data: {
+      contexto: (bruto.contexto ?? 'sin_permiso') as ContextoEjecucionesObjetivo,
+      ejecuciones: Array.isArray(bruto.ejecuciones)
+        ? (bruto.ejecuciones as EjecucionHistorialItem[])
+        : [],
+    },
+    error: null,
+  }
+}
+
+/** Mensaje para el supervisor según el contexto del historial. */
+export function mensajeContextoEjecucionesObjetivo(contexto: ContextoEjecucionesObjetivo): string | null {
+  switch (contexto) {
+    case 'ok':             return null
+    case 'sin_usuario':    return 'No se pudo identificar tu usuario operativo.'
+    case 'rango_invalido': return 'El rango de fechas no es válido.'
+    case 'sin_permiso':    return 'No tenés permiso para ver el historial de este objetivo.'
+  }
+}
+
+// ── B2: URL firmada efímera para ver una foto de punto ────────────────────────
+
+export type ContextoFirmaEvidencia =
+  | 'ok'
+  | 'sin_usuario'
+  | 'parametro_invalido'
+  | 'evidencia_no_encontrada'
+  | 'sin_permiso'
+  | 'error_firma'
+
+export interface FirmaEvidenciaRonda {
+  contexto: ContextoFirmaEvidencia
+  /** URL firmada efímera. No persistir: caduca en `expira_en_s`. */
+  url: string | null
+  expira_en_s: number | null
+}
+
+interface RespuestaFirmaEndpoint {
+  contexto?: string
+  url?: string
+  expira_en_s?: number
+}
+
+/** Fallback de contexto si el cuerpo no trae uno (según status HTTP). */
+function contextoDesdeStatus(status: number): ContextoFirmaEvidencia {
+  switch (status) {
+    case 401: return 'sin_usuario'
+    case 400: return 'parametro_invalido'
+    case 404: return 'evidencia_no_encontrada'
+    case 403: return 'sin_permiso'
+    default:  return 'error_firma'   // incluye 502 y cualquier otro
+  }
+}
+
+/**
+ * Pide al servidor una URL firmada de corta duración para ver la foto de un
+ * punto de ronda. Envía SOLO el id de la evidencia con Authorization Bearer; el
+ * storage_path lo resuelve y valida el servidor. La URL es efímera: no se cachea
+ * (fetch con `cache: 'no-store'`) y el llamador no debe persistirla.
+ */
+export async function firmarEvidenciaRonda(
+  evidenciaId: string,
+): Promise<ResultadoRondas<FirmaEvidenciaRonda>> {
+  const { data: sesionData, error: sesionError } = await supabase.auth.getSession()
+  const token = sesionData.session?.access_token
+
+  if (sesionError || !token) {
+    return { data: { contexto: 'sin_usuario', url: null, expira_en_s: null }, error: null }
+  }
+
+  let response: Response
+  try {
+    response = await fetch(
+      `/api/rondas/evidencia?evidencia_id=${encodeURIComponent(evidenciaId)}`,
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+        // Respuesta con URL firmada efímera: nunca se cachea.
+        cache: 'no-store',
+      },
+    )
+  } catch {
+    return { data: null, error: 'No hay conexión para cargar la foto.' }
+  }
+
+  const body = (await response.json().catch(() => null)) as RespuestaFirmaEndpoint | null
+  // El contexto lo dicta el servidor (mismo vocabulario en 200 y en errores).
+  const contexto = (body?.contexto ?? contextoDesdeStatus(response.status)) as ContextoFirmaEvidencia
+
+  return {
+    data: {
+      contexto,
+      url: contexto === 'ok' ? body?.url ?? null : null,
+      expira_en_s: contexto === 'ok' ? body?.expira_en_s ?? null : null,
+    },
+    error: null,
+  }
+}
+
+/** Mensaje para el supervisor según el contexto de la firma de evidencia. */
+export function mensajeContextoFirmaEvidencia(contexto: ContextoFirmaEvidencia): string | null {
+  switch (contexto) {
+    case 'ok':                     return null
+    case 'sin_usuario':            return 'Tu sesión venció. Volvé a ingresar.'
+    case 'parametro_invalido':     return 'La referencia de la foto no es válida.'
+    case 'evidencia_no_encontrada':return 'No se encontró la foto de ese punto.'
+    case 'sin_permiso':            return 'No tenés permiso para ver esta evidencia.'
+    case 'error_firma':            return 'No se pudo generar el acceso a la foto. Probá de nuevo.'
   }
 }

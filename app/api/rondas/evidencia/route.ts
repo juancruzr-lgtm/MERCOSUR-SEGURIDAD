@@ -9,6 +9,8 @@ const MAX_FOTO_BYTES = 5 * 1024 * 1024
 const MIME_PERMITIDOS = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const POLITICAS_FOTO_VALIDAS = new Set(['obligatoria', 'opcional', 'solo_novedad'])
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+// Duración corta de la URL firmada de visualización (supervisión).
+const URL_FIRMA_SEGUNDOS = 60
 
 function firmaImagenValida(buffer: Buffer, mime: string): boolean {
   if (mime === 'image/jpeg') {
@@ -200,4 +202,124 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ evidencia })
+}
+
+// ── GET: URL firmada de visualización para supervisión (Etapa 3.3 · B2) ───────
+// Recibe SOLO una referencia de evidencia (evidencia_id). El storage_path se lee
+// de la base, nunca del cliente. Autoriza a admin o supervisor con alcance sobre
+// el objetivo de la ejecución, validando la cadena completa:
+//   evidencia → punto de ejecución → ejecución → objetivo.
+// Respuestas: ok | sin_usuario | parametro_invalido | evidencia_no_encontrada |
+//             sin_permiso | error_firma. Sin filtrar información sensible.
+
+function respuestaEvidencia(
+  contexto: string,
+  status: number,
+  extra?: Record<string, unknown>,
+) {
+  return NextResponse.json({ contexto, ...extra }, { status })
+}
+
+export async function GET(req: NextRequest) {
+  const admin = getSupabaseAdmin()
+  if (admin.error) return respuestaEvidencia('error_firma', 500)
+
+  // 1. Sesión obligatoria.
+  const token = getBearerToken(req)
+  if (!token) return respuestaEvidencia('sin_usuario', 401)
+
+  const { data: authData, error: authError } = await admin.client.auth.getUser(token)
+  if (authError || !authData.user) return respuestaEvidencia('sin_usuario', 401)
+
+  // 2. Rol: admin o supervisor, activo. (Vigilador no visualiza por esta vía.)
+  const { data: usuario, error: usuarioError } = await admin.client
+    .from('usuarios')
+    .select('id, rol, estado')
+    .eq('auth_user_id', authData.user.id)
+    .maybeSingle()
+
+  if (usuarioError) return respuestaEvidencia('error_firma', 500)
+  if (!usuario || usuario.estado !== 'activo' || !['admin', 'supervisor'].includes(usuario.rol)) {
+    return respuestaEvidencia('sin_permiso', 403)
+  }
+
+  // 3. Parámetro: solo un id de evidencia validado como UUID.
+  const evidenciaId = req.nextUrl.searchParams.get('evidencia_id')
+  if (!evidenciaId || !UUID_RE.test(evidenciaId)) {
+    return respuestaEvidencia('parametro_invalido', 400)
+  }
+
+  // 4. Evidencia por id. El path para firmar sale de acá, no del cliente.
+  //    Cualquier desajuste de proceso/tipo/bucket se trata como "no encontrada"
+  //    para no revelar la existencia de evidencias de otros procesos.
+  const { data: evidencia, error: evidenciaError } = await admin.client
+    .from('evidencias')
+    .select('id, proceso_tipo, proceso_id, tipo_evidencia, bucket, storage_path')
+    .eq('id', evidenciaId)
+    .maybeSingle()
+
+  if (evidenciaError) return respuestaEvidencia('error_firma', 500)
+  if (
+    !evidencia
+    || evidencia.proceso_tipo !== 'ronda'
+    || evidencia.tipo_evidencia !== 'punto_control'
+    || evidencia.bucket !== BUCKET
+  ) {
+    return respuestaEvidencia('evidencia_no_encontrada', 404)
+  }
+
+  // 5. Cadena autoritativa: evidencia.proceso_id → punto → ejecución → objetivo.
+  //    El objetivo se resuelve desde la ejecución (fuente de verdad), no desde
+  //    el objetivo_id denormalizado de la evidencia.
+  const { data: punto, error: puntoError } = await admin.client
+    .from('ronda_ejecucion_puntos')
+    .select('id, ronda_ejecucion_id')
+    .eq('id', evidencia.proceso_id)
+    .maybeSingle()
+
+  if (puntoError) return respuestaEvidencia('error_firma', 500)
+  if (!punto) return respuestaEvidencia('evidencia_no_encontrada', 404)
+
+  const { data: ejecucion, error: ejecucionError } = await admin.client
+    .from('ronda_ejecuciones')
+    .select('id, objetivo_id')
+    .eq('id', punto.ronda_ejecucion_id)
+    .maybeSingle()
+
+  if (ejecucionError) return respuestaEvidencia('error_firma', 500)
+  if (!ejecucion) return respuestaEvidencia('evidencia_no_encontrada', 404)
+
+  // 6. Alcance por objetivo. Admin ve todo; supervisor solo su zona asignada.
+  if (usuario.rol === 'supervisor') {
+    const { data: objetivo, error: objetivoError } = await admin.client
+      .from('objetivos')
+      .select('zona_id')
+      .eq('id', ejecucion.objetivo_id)
+      .maybeSingle()
+
+    if (objetivoError) return respuestaEvidencia('error_firma', 500)
+    if (!objetivo?.zona_id) return respuestaEvidencia('sin_permiso', 403)
+
+    const { data: zona, error: zonaError } = await admin.client
+      .from('supervisor_zonas')
+      .select('supervisor_id')
+      .eq('zona_id', objetivo.zona_id)
+      .eq('supervisor_id', usuario.id)
+      .maybeSingle()
+
+    if (zonaError) return respuestaEvidencia('error_firma', 500)
+    if (!zona) return respuestaEvidencia('sin_permiso', 403)
+  }
+
+  // 7. Firmar el path de la base con service_role. Bucket privado, corta duración.
+  const { data: firma, error: firmaError } = await admin.client.storage
+    .from(BUCKET)
+    .createSignedUrl(evidencia.storage_path, URL_FIRMA_SEGUNDOS)
+
+  if (firmaError || !firma?.signedUrl) return respuestaEvidencia('error_firma', 502)
+
+  return respuestaEvidencia('ok', 200, {
+    url: firma.signedUrl,
+    expira_en_s: URL_FIRMA_SEGUNDOS,
+  })
 }
