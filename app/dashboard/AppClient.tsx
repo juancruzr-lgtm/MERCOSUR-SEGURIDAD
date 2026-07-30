@@ -14,8 +14,7 @@ import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
-import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
-import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
+import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
@@ -776,16 +775,15 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 }
 
 function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNavigate }: any) {
-  // Rondas: el resumen se deriva del mismo listado que alimenta el panel de
-  // pendientes de abajo, no de una RPC de resumen aparte. Así el número del
-  // indicador y el detalle que se ve al hacer clic no pueden discrepar.
-  const [rondaAlertas, setRondaAlertas] = useState<RondaAlerta[]>([])
-  const resumenRondas = useMemo(() => resumirRondasAlcance(rondaAlertas), [rondaAlertas])
-
   const hoy = fechaHoyArgentina()
   const mesActual = hoy.slice(0, 7)
   const usuarios = guardias as Usuario[]
   const objetivosActivos = objetivos.filter((o: Objetivo) => o.estado === 'activo')
+  // Alcance del Control de Rondas. Los objetivos de prueba se excluyen acá igual
+  // que los excluye el servidor en el resto de las consultas de alcance completo.
+  const objetivosControlRondas = objetivosActivos
+    .filter((o: Objetivo) => !o.es_prueba)
+    .map((o: Objetivo) => ({ id: o.id, nombre: o.nombre || 'Objetivo sin nombre' }))
   const guardiasActivos = usuarios.filter((g: Usuario) => esRolGuardia(g.rol) && g.estado === 'activo')
   const turnosHoy = turnos.filter((t: Turno) => t.fecha === hoy)
   const turnoPorId = new Map<string, Turno>(turnos.map((t: Turno) => [t.id, t]))
@@ -1050,13 +1048,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     border: `1px solid ${n > 0 ? alpha(semanticColors.error, 0.4) : 'transparent'}`,
   })
 
-  const rondaTile = (value: number, color: string): React.CSSProperties => ({
-    background:alpha(brandColors.surface, 0.92),
-    border:`1px solid ${value > 0 ? alpha(color, 0.4) : brandColors.border}`,
-    borderRadius:8,
-    padding:'14px 16px',
-  })
-
   return (
     <div>
       <div style={{ display:'flex', flexWrap:'wrap', gap:12, alignItems:'flex-end', justifyContent:'space-between', marginBottom:24 }}>
@@ -1077,51 +1068,27 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         )
       })}
 
-      {/* ── 1. ATENCIÓN OPERATIVA ────────────────────────────────────────────
-          Va primero, antes que los indicadores: lo que exige una acción del
-          supervisor tiene que verse sin scrollear. Los indicadores describen la
-          operación y pueden esperar. */}
-      <div style={seccionTitulo}>Atención operativa</div>
-
-      {/* Rondas: hasta ahora no existía ni un dato de rondas en esta pantalla.
-          Había que entrar objetivo por objetivo para descubrir un incumplimiento. */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))', gap:12, marginBottom:16 }}>
-        <div style={rondaTile(resumenRondas.incumplidas, semanticColors.error)}>
-          <div style={S.label}>Rondas incumplidas</div>
-          <strong style={{ color: resumenRondas.incumplidas > 0 ? semanticColors.error : brandColors.textStrong }}>
-            {resumenRondas.incumplidas}
-          </strong>
-          <div style={{ fontSize:11, color:brandColors.muted, marginTop:4 }}>no iniciadas o sin finalizar</div>
-        </div>
-        <div style={rondaTile(resumenRondas.pendientes, brandColors.orange)}>
-          <div style={S.label}>Rondas pendientes</div>
-          <strong style={{ color: resumenRondas.pendientes > 0 ? brandColors.orange : brandColors.textStrong }}>
-            {resumenRondas.pendientes}
-          </strong>
-          <div style={{ fontSize:11, color:brandColors.muted, marginTop:4 }}>
-            {resumenRondas.suspendidas > 0 ? `${resumenRondas.suspendidas} suspendida(s) por el vigilador` : 'esperan intervención'}
-          </div>
-        </div>
-        <div style={rondaTile(resumenRondas.objetivosAfectados, semanticColors.warning)}>
-          <div style={S.label}>Objetivos afectados</div>
-          <strong style={{ color: resumenRondas.objetivosAfectados > 0 ? semanticColors.warning : brandColors.textStrong }}>
-            {resumenRondas.objetivosAfectados}
-          </strong>
-          <div style={{ fontSize:11, color:brandColors.muted, marginTop:4 }}>con al menos una ronda pendiente</div>
-        </div>
+      {/* ── 1. INDICADORES ───────────────────────────────────────────────────
+          Van pegados al título: son la lectura de un vistazo de la operación. */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:12, marginBottom:28 }}>
+        {metricas.map((m) => (
+          <StatCard key={m.label} label={m.label} value={m.value} sub={m.sub} color={m.color} onClick={() => onNavigate?.(m.page, m.filtro)} />
+        ))}
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16, marginBottom:16 }}>
-        <div style={{ ...alertBox, gridColumn:'1 / -1' }}>
-          <div style={alertTitle}>
-            Rondas pendientes de intervención
-            <span style={contadorPanel(resumenRondas.pendientes)}>{resumenRondas.pendientes}</span>
-          </div>
-          {/* Mismo componente que la pestaña Alertas del objetivo, en alcance
-              completo. `onAlertas` alimenta los tres indicadores de arriba. */}
-          <RondaAlertasPanel objetivoId={null} soloPendientes maximo={8} onAlertas={setRondaAlertas} />
-        </div>
+      {/* ── 2. CONTROL DE RONDAS ─────────────────────────────────────────────
+          Estado operativo por objetivo, no una lista de pendientes: una fila por
+          objetivo con su ronda relevante. Reemplaza al panel de alertas, que
+          solo podía mostrar lo que había fallado. */}
+      <div style={seccionTitulo}>Control de rondas</div>
+      <div style={{ ...alertBox, marginBottom:28 }}>
+        <ControlDeRondasPanel objetivos={objetivosControlRondas} />
+      </div>
 
+      {/* ── 3. ATENCIÓN OPERATIVA ────────────────────────────────────────── */}
+      <div style={seccionTitulo}>Atención operativa</div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16 }}>
         {panelesAtencion.map(panel => (
           <div key={panel.titulo} style={alertBox}>
             <div style={alertTitle}>
@@ -1135,15 +1102,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         ))}
       </div>
 
-      {/* ── 2. INDICADORES ───────────────────────────────────────────────────
-          Contexto de la operación. Ningún número de acá se repite en los
-          paneles de arriba. */}
-      <div style={{ ...seccionTitulo, marginTop:28 }}>Indicadores</div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:12 }}>
-        {metricas.map((m) => (
-          <StatCard key={m.label} label={m.label} value={m.value} sub={m.sub} color={m.color} onClick={() => onNavigate?.(m.page, m.filtro)} />
-        ))}
-      </div>
     </div>
   )
 }
