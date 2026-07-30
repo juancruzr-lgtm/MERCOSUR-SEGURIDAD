@@ -11,6 +11,8 @@ import { useSupervisorGps } from '@/lib/supervisor-gps'
 import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno } from '@/lib/puestos'
 import type { EstadoPuestos } from '@/lib/puestos'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
+import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
+import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
@@ -439,6 +441,9 @@ function resumenGps(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 
 export default function SupervisorMobile({ user }: any) {
   const [tab, setTab] = useState('inicio')
   const [objetivoLegajoId, setObjetivoLegajoId] = useState<string | null>(null)
+  // Rondas pendientes de todo el alcance. Se cargan una vez, en el panel montado
+  // en Inicio, y el mismo listado alimenta el contador y la pestaña Rondas.
+  const [rondaAlertas, setRondaAlertas] = useState<RondaAlerta[]>([])
   const [turnos, setTurnos] = useState<Turno[]>([])
   const [guardias, setGuardias] = useState<Usuario[]>([])
   const [supervisores, setSupervisores] = useState<Usuario[]>([])
@@ -1115,6 +1120,9 @@ export default function SupervisorMobile({ user }: any) {
     [turnosConGpsFueraRadio, intervenciones],
   )
 
+  // Alertas de asistencia. Las de rondas son otra fuente (ronda_alertas, vía RPC)
+  // y se cuentan aparte: mezclarlas en este total escondería el incumplimiento
+  // de rondas dentro de un número que el supervisor ya lee como "asistencia".
   const totalAlertasPendientes =
     turnosDescubiertosPendientes.length +
     turnosSinIngresoPendientes.length +
@@ -2104,11 +2112,14 @@ export default function SupervisorMobile({ user }: any) {
     }
   }
 
+  const resumenRondas = resumirRondasAlcance(rondaAlertas)
+
   const tabs = [
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
     { id: 'turnos', label: 'Turnos', icon: '📅' },
     { id: 'guardias', label: 'Guardias', icon: '👮' },
     { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
+    { id: 'rondas', label: 'Rondas', icon: '🔁' },
     { id: 'solicitudes', label: 'Solicitudes', icon: '📝' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
     { id: 'supervisiones', label: 'Supervisiones', icon: '☑️' },
@@ -2802,6 +2813,15 @@ export default function SupervisorMobile({ user }: any) {
                   <div style={{ ...statCard, borderTop:'3px solid #ef4444', cursor:'pointer' }} onClick={() => { setAgendaEstadoFiltro('vencido'); setTimeout(() => document.getElementById('sec-agenda')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50) }}><strong style={{ color:'#ef4444' }}>{agendaResumen.vencidas}</strong><span>🔴 Supervisiones vencidas</span></div>
                   <div style={{ ...statCard, borderTop:'3px solid #f59e0b', cursor:'pointer' }} onClick={() => { setAgendaEstadoFiltro('proximo'); setTimeout(() => document.getElementById('sec-agenda')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50) }}><strong style={{ color:'#f59e0b' }}>{agendaResumen.proximas}</strong><span>🟠 Próximas a vencer</span></div>
                   <div style={{ ...statCard, cursor:'pointer', borderTop:'3px solid #f59e0b' }} onClick={() => setTab('alertas')}><strong style={{ color:'#f59e0b' }}>{totalAlertasPendientes}</strong><span>🚨 Alertas pendientes</span></div>
+                  {/* Rondas incumplidas al frente: antes había que abrir cada
+                      objetivo para enterarse de que una ronda no se hizo. */}
+                  <div
+                    style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${resumenRondas.pendientes > 0 ? '#ef4444' : '#334155'}` }}
+                    onClick={() => setTab('rondas')}
+                  >
+                    <strong style={{ color: resumenRondas.pendientes > 0 ? '#ef4444' : '#e2e8f0' }}>{resumenRondas.pendientes}</strong>
+                    <span>🔁 Rondas pendientes</span>
+                  </div>
                 </div>
 
                 <div style={{ ...objetivoName, margin:'20px 0 8px' }}>Operación</div>
@@ -2981,6 +3001,37 @@ export default function SupervisorMobile({ user }: any) {
                 />
               </section>
             )}
+
+            {/* Rondas pendientes de TODOS los objetivos del supervisor.
+                Se renderiza siempre y se oculta con CSS en vez de desmontarse:
+                así el contador de Inicio tiene dato desde el arranque sin pedir
+                las alertas dos veces, y volver a la pestaña no recarga. */}
+            <section style={{ display: tab === 'rondas' ? 'block' : 'none' }}>
+              <div style={screenTitle}>Rondas</div>
+              <div style={dateText}>
+                Rondas de tus objetivos que esperan intervención. No hace falta entrar objetivo por objetivo.
+              </div>
+
+              <div style={statsGrid}>
+                <div style={{ ...statCard, borderTop:'3px solid #ef4444' }}>
+                  <strong style={{ color:'#ef4444' }}>{resumenRondas.incumplidas}</strong>
+                  <span>Incumplidas</span>
+                </div>
+                <div style={{ ...statCard, borderTop:'3px solid #3b82f6' }}>
+                  <strong style={{ color:'#3b82f6' }}>{resumenRondas.suspendidas}</strong>
+                  <span>Suspendidas</span>
+                </div>
+                <div style={{ ...statCard, borderTop:'3px solid #f59e0b' }}>
+                  <strong style={{ color:'#f59e0b' }}>{resumenRondas.objetivosAfectados}</strong>
+                  <span>Objetivos afectados</span>
+                </div>
+              </div>
+
+              <div style={{ ...card, marginTop:12 }}>
+                <RondaAlertasPanel objetivoId={null} soloPendientes onAlertas={setRondaAlertas} />
+              </div>
+            </section>
+
 
             {tab === 'objetivos' && !objetivoLegajoId && (
               <section>

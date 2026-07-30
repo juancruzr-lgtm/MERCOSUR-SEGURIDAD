@@ -24,6 +24,7 @@ import {
   presentacionSemaforo, fechaHoyLocal,
 } from '@/lib/legajo-objetivo'
 import type { LegajoObjetivo, RondaLegajo, TurnoLegajo } from '@/lib/legajo-objetivo'
+import { listarRondaAlertasObjetivo } from '@/lib/rondas'
 
 const S = { btn, btnPrimary, btnSecondary }
 
@@ -58,6 +59,23 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   }, [objetivoId, hoy])
 
   useEffect(() => { void recargar() }, [recargar])
+
+  // ── Rondas nativas pendientes ──
+  // Solo el contador para el resumen de arriba: el detalle y la intervención
+  // viven en la pestaña Alertas de RondasSupervisionPanel, más abajo. Sin esto
+  // el resumen del objetivo no decía nada de rondas nativas —su única métrica
+  // de rondas era "Checkpoints JWM hoy", del sistema importado.
+  const [rondasPendientes, setRondasPendientes] = useState<number | null>(null)
+
+  useEffect(() => {
+    let vivo = true
+    setRondasPendientes(null)
+    void listarRondaAlertasObjetivo(objetivoId, 'pendiente').then(({ data }) => {
+      if (!vivo) return
+      setRondasPendientes(data?.contexto === 'ok' ? data.alertas.length : 0)
+    })
+    return () => { vivo = false }
+  }, [objetivoId])
 
   // ── Historial de rondas JWM ──
   const [historial, setHistorial] = useState<RondaLegajo[]>([])
@@ -203,6 +221,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
           { label:'Sin fichar',   value:turnosSinFichar.length, color:'#f59e0b', anchor:'sec-turnos' },
           { label:'Alertas',      value:alertas.length,     color: alertas.length > 0 ? '#ef4444' : '#64748b', anchor:'sec-alertas' },
           { label:'Novedades',    value:novedadesObj.length, color: novedadesObj.length > 0 ? '#f59e0b' : '#64748b', anchor:'sec-alertas' },
+          { label:'Rondas pendientes', value: rondasPendientes ?? '…', color: (rondasPendientes ?? 0) > 0 ? '#ef4444' : '#64748b', anchor:'sec-rondas-nativas' },
           { label:'Checkpoints JWM hoy', value:historial.length, color:'#a78bfa', anchor:'sec-historial' },
         ].map(({ label, value, color, anchor }) => (
           <div

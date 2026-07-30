@@ -50,8 +50,9 @@ Estado: terminada.
 - Foto
 - Validaciones
 - Avance de puntos
+- Suspender ronda con motivo
 
-Estado: pendiente.
+Estado: terminada.
 
 ### Etapa 3.3 — App Supervisor
 
@@ -59,19 +60,37 @@ Estado: pendiente.
 - Estado en tiempo real
 - Historial
 - Evidencias
+- Intervención sobre alertas
 
-Estado: pendiente.
+Estado: terminada.
 
 ## Etapa 4 — Automatización
 
-- Rondas vencidas
-- Alertas
-- Push
-- Dashboard
-- KPIs
-- Reportes
+- Rondas vencidas — evaluador `evaluar_ronda_alertas()`, disparado por el cron
+- Alertas — `ronda_alertas` + `ronda_alerta_intervenciones`
+- Push — ruteo por zona dentro de `app/api/push/cron`
+- Dashboard — indicadores de rondas en el Panel Principal
+- KPIs — rondas pendientes / incumplidas / objetivos afectados
+- Reportes — pendiente
 
-Estado: pendiente.
+Estado: en curso. Falta Reportes.
+
+### Definiciones únicas (no duplicar)
+
+Tres cálculos tienen una sola implementación y no deben reescribirse en línea:
+
+- **Turno vigente** → `rondas_turno_vigente()`
+- **Ventana programada de ronda** → `rondas_ventanas_programadas()`.
+  La consumen el evaluador de alertas y el historial: por eso historial y
+  alertas no pueden contradecirse.
+- **Autorización sobre rondas de un objetivo** → `puede_administrar_rondas_objetivo()`
+
+### Historial y alertas son independientes
+
+`listar_rondas_programadas_objetivo()` deriva las filas y sus estados de la
+programación y de `ronda_ejecuciones`. No lee `ronda_alertas` para decidir qué
+mostrar: los campos `alerta_*` son anexo informativo. Vaciar `ronda_alertas` no
+cambiaría ni una fila del historial.
 
 ## Etapa 5 — Integraciones futuras
 

@@ -14,6 +14,8 @@ import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
+import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
+import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
@@ -774,6 +776,12 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 }
 
 function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNavigate }: any) {
+  // Rondas: el resumen se deriva del mismo listado que alimenta el panel de
+  // pendientes de abajo, no de una RPC de resumen aparte. Así el número del
+  // indicador y el detalle que se ve al hacer clic no pueden discrepar.
+  const [rondaAlertas, setRondaAlertas] = useState<RondaAlerta[]>([])
+  const resumenRondas = useMemo(() => resumirRondasAlcance(rondaAlertas), [rondaAlertas])
+
   const hoy = fechaHoyArgentina()
   const mesActual = hoy.slice(0, 7)
   const usuarios = guardias as Usuario[]
@@ -809,7 +817,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     if (!t.guardia_id) return false
     return !tieneEntradaConfirmada(t) || (tieneEntradaConfirmada(t) && !tieneSalida(t))
   })
-  const llegadasTarde = tardanzasRegistradas.length
 
   // ── Cálculo de horas: función auxiliar reutilizable ──────────────────────────
   // Agrupa registros por turno, selecciona el principal, suma horas_liquidables.
@@ -847,7 +854,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   const { horasLiquidables: horasMes, horasGPS: horasGPSMes } = sumarHorasPorTurnos(registrosMes, turnoPorId)
   const guardiasConAsistenciaMes = new Set(registrosMes.filter((r: RegistroAsistencia) => r.hora_entrada_real).map((r: RegistroAsistencia) => r.guardia_id)).size
   const turnosFinalizadosHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && r.hora_salida_real).length
-  const turnosEnCursoHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
   const novedadesUrgentes = novedades.filter((n: Novedad) => n.prioridad === 'urgente' && n.estado !== 'resuelta')
 
   const getGuardia = (id?: string | null) => usuarios.find((g: Usuario) => g.id === id)
@@ -871,18 +877,28 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     return 'Pasó ventana de fichaje sin asistencia'
   }
 
+  // Indicadores de contexto: describen la operación, no reclaman una acción.
+  // Todo lo que exige atención vive arriba, en los paneles, con su contador en
+  // el título — por eso acá ya no están "Turnos descubiertos", "Llegadas tarde"
+  // ni "Turnos sin fichar": cada uno tenía KPI, tarjeta de resumen Y panel, los
+  // tres alimentados por la misma variable.
   const metricas = [
     { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: semanticColors.info, page:'objetivos', filtro:{ tipo:'activos', label:'Objetivos activos' } },
     { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => esRolGuardia(g.rol)).length} guardias cargados`, color: semanticColors.success, page:'guardias', filtro:{ tipo:'activos', label:'Guardias activos' } },
     { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: brandColors.yellow, page:'turnos', filtro:{ tipo:'hoy', label:'Turnos de hoy' } },
     { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: semanticColors.success, page:'turnos', filtro:{ tipo:'cubiertos', label:'Turnos cubiertos hoy' } },
-    { label: 'Turnos descubiertos', value: turnosDescubiertos.length, sub: 'sin cobertura operativa', color: semanticColors.error, page:'turnos', filtro:{ tipo:'descubiertos', label:'Turnos descubiertos hoy' } },
+    // Sustituye también a "Turnos en curso hoy", que contaba los mismos registros
+    // (entrada sin salida) y solo podía diferir si un guardia tuviera dos turnos
+    // abiertos a la vez.
     { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: semanticColors.success, page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
+    { label: 'Turnos finalizados hoy', value: turnosFinalizadosHoy, sub: 'con entrada y salida', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Turnos finalizados hoy' } },
     { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'liquidables del día', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
-    { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: mesActual, color: brandColors.orange, page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
-    { label: 'Horas fichadas GPS', value: formatoHoras(horasGPSMes), sub: 'solo fichajes con entrada y salida', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'mes', label:'Horas fichadas GPS mes' } },
-    { label: 'Llegadas tarde', value: llegadasTarde, sub: 'tardanzas registradas hoy', color: semanticColors.warning, page:'asistencia', filtro:{ tipo:'tarde', label:'Llegadas tarde hoy' } },
-    { label: 'Turnos sin fichar', value: turnosSinFichar.length, sub: 'sin entrada +15 min', color: semanticColors.error, page:'turnos', filtro:{ tipo:'sin_fichar', label:'Turnos sin fichar hoy' } },
+    { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: `liquidables · ${mesActual}`, color: brandColors.orange, page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
+    // Antes existía además "Total horas reales", que mostraba `horasMes` — el
+    // mismo valor que la tarjeta de arriba — bajo un rótulo que prometía horas
+    // reales. Las reales son estas, las de fichaje GPS.
+    { label: 'Horas fichadas GPS', value: formatoHoras(horasGPSMes), sub: `reales · ${mesActual}`, color: semanticColors.info, page:'asistencia', filtro:{ tipo:'mes', label:'Horas fichadas GPS mes' } },
+    { label: 'Guardias con asistencia', value: guardiasConAsistenciaMes, sub: mesActual, color: semanticColors.success, page:'asistencia', filtro:{ tipo:'mes', label:'Guardias con asistencia' } },
   ]
 
   const alertBox: React.CSSProperties = {
@@ -913,14 +929,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     borderTop:`1px solid ${brandColors.border}`,
     fontSize:13,
     color:brandColors.muted,
-  }
-
-  const dashboardSummaryCard: React.CSSProperties = {
-    background:alpha(brandColors.surface, 0.86),
-    border:`1px solid ${brandColors.border}`,
-    borderRadius:8,
-    padding:18,
-    marginBottom:0,
   }
 
   const renderTurnoAlert = (turno: Turno, detalle: string, filtro: any) => (
@@ -985,6 +993,70 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     )
   }
 
+  // Paneles de atención. Cada uno lleva su contador en el título: ese es el
+  // único lugar donde ese número aparece en toda la pantalla.
+  const panelesAtencion: { titulo: string; items: any[]; vacio: string; render: (x: any) => React.ReactNode }[] = [
+    {
+      titulo: 'Turnos descubiertos',
+      items: turnosDescubiertos,
+      vacio: 'No hay turnos descubiertos hoy.',
+      render: (turno: Turno) => renderTurnoAlert(turno, detalleTurnoDescubierto(turno), { tipo:'descubiertos', label:'Turnos descubiertos hoy' }),
+    },
+    {
+      titulo: 'Guardias sin fichar',
+      items: turnosSinFichar,
+      vacio: 'No hay guardias demorados sin ingreso.',
+      render: (turno: Turno) => renderSinIngresoAlert(turno),
+    },
+    {
+      titulo: 'Tardanzas registradas',
+      items: tardanzasRegistradas,
+      vacio: 'No hay ingresos tarde registrados hoy.',
+      render: (registro: RegistroAsistencia) => renderTardanzaAlert(registro),
+    },
+    {
+      titulo: 'Fichajes fuera de radio',
+      items: fichajesFueraRadio,
+      vacio: 'No hay ingresos fuera del radio del objetivo.',
+      render: (registro: RegistroAsistencia) => renderFichajeFueraRadioAlert(registro),
+    },
+    {
+      titulo: 'Turnos con asistencia pendiente',
+      items: turnosAsistenciaPendiente,
+      vacio: 'No hay asistencias pendientes hoy.',
+      render: (turno: Turno) => renderTurnoAlert(turno, tieneEntradaConfirmada(turno) ? 'Entrada registrada, salida pendiente' : 'Entrada pendiente', { tipo:'pendientes_asistencia', label:'Turnos con asistencia pendiente' }),
+    },
+  ]
+
+  const seccionTitulo: React.CSSProperties = {
+    fontFamily:FONT_BRAND,
+    fontSize:12,
+    fontWeight:900,
+    letterSpacing:1.4,
+    textTransform:'uppercase',
+    color:brandColors.muted,
+    margin:'0 0 12px',
+  }
+
+  const contadorPanel = (n: number): React.CSSProperties => ({
+    display:'inline-block',
+    marginLeft:8,
+    padding:'1px 9px',
+    borderRadius:999,
+    fontSize:12,
+    fontWeight:900,
+    background: n > 0 ? alpha(semanticColors.error, 0.16) : alpha(brandColors.muted, 0.12),
+    color: n > 0 ? semanticColors.error : brandColors.muted,
+    border: `1px solid ${n > 0 ? alpha(semanticColors.error, 0.4) : 'transparent'}`,
+  })
+
+  const rondaTile = (value: number, color: string): React.CSSProperties => ({
+    background:alpha(brandColors.surface, 0.92),
+    border:`1px solid ${value > 0 ? alpha(color, 0.4) : brandColors.border}`,
+    borderRadius:8,
+    padding:'14px 16px',
+  })
+
   return (
     <div>
       <div style={{ display:'flex', flexWrap:'wrap', gap:12, alignItems:'flex-end', justifyContent:'space-between', marginBottom:24 }}>
@@ -1005,68 +1077,72 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         )
       })}
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:12, marginBottom:24 }}>
-        {metricas.map((m) => (
-          <StatCard key={m.label} label={m.label} value={m.value} sub={m.sub} color={m.color} onClick={() => onNavigate?.(m.page, m.filtro)} />
+      {/* ── 1. ATENCIÓN OPERATIVA ────────────────────────────────────────────
+          Va primero, antes que los indicadores: lo que exige una acción del
+          supervisor tiene que verse sin scrollear. Los indicadores describen la
+          operación y pueden esperar. */}
+      <div style={seccionTitulo}>Atención operativa</div>
+
+      {/* Rondas: hasta ahora no existía ni un dato de rondas en esta pantalla.
+          Había que entrar objetivo por objetivo para descubrir un incumplimiento. */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))', gap:12, marginBottom:16 }}>
+        <div style={rondaTile(resumenRondas.incumplidas, semanticColors.error)}>
+          <div style={S.label}>Rondas incumplidas</div>
+          <strong style={{ color: resumenRondas.incumplidas > 0 ? semanticColors.error : brandColors.textStrong }}>
+            {resumenRondas.incumplidas}
+          </strong>
+          <div style={{ fontSize:11, color:brandColors.muted, marginTop:4 }}>no iniciadas o sin finalizar</div>
+        </div>
+        <div style={rondaTile(resumenRondas.pendientes, brandColors.orange)}>
+          <div style={S.label}>Rondas pendientes</div>
+          <strong style={{ color: resumenRondas.pendientes > 0 ? brandColors.orange : brandColors.textStrong }}>
+            {resumenRondas.pendientes}
+          </strong>
+          <div style={{ fontSize:11, color:brandColors.muted, marginTop:4 }}>
+            {resumenRondas.suspendidas > 0 ? `${resumenRondas.suspendidas} suspendida(s) por el vigilador` : 'esperan intervención'}
+          </div>
+        </div>
+        <div style={rondaTile(resumenRondas.objetivosAfectados, semanticColors.warning)}>
+          <div style={S.label}>Objetivos afectados</div>
+          <strong style={{ color: resumenRondas.objetivosAfectados > 0 ? semanticColors.warning : brandColors.textStrong }}>
+            {resumenRondas.objetivosAfectados}
+          </strong>
+          <div style={{ fontSize:11, color:brandColors.muted, marginTop:4 }}>con al menos una ronda pendiente</div>
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16, marginBottom:16 }}>
+        <div style={{ ...alertBox, gridColumn:'1 / -1' }}>
+          <div style={alertTitle}>
+            Rondas pendientes de intervención
+            <span style={contadorPanel(resumenRondas.pendientes)}>{resumenRondas.pendientes}</span>
+          </div>
+          {/* Mismo componente que la pestaña Alertas del objetivo, en alcance
+              completo. `onAlertas` alimenta los tres indicadores de arriba. */}
+          <RondaAlertasPanel objetivoId={null} soloPendientes maximo={8} onAlertas={setRondaAlertas} />
+        </div>
+
+        {panelesAtencion.map(panel => (
+          <div key={panel.titulo} style={alertBox}>
+            <div style={alertTitle}>
+              {panel.titulo}
+              <span style={contadorPanel(panel.items.length)}>{panel.items.length}</span>
+            </div>
+            {panel.items.length === 0
+              ? <div style={emptyAlert}>{panel.vacio}</div>
+              : panel.items.map(panel.render)}
+          </div>
         ))}
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12, marginBottom:24 }}>
-        <div style={dashboardSummaryCard}><div style={S.label}>Mes actual</div><strong>{mesActual}</strong></div>
-        <div style={dashboardSummaryCard}><div style={S.label}>Total horas reales</div><strong>{formatoHoras(horasMes)}</strong></div>
-        <div style={dashboardSummaryCard}><div style={S.label}>Guardias con asistencia</div><strong>{guardiasConAsistenciaMes}</strong></div>
-        <div style={dashboardSummaryCard}><div style={S.label}>Turnos finalizados hoy</div><strong>{turnosFinalizadosHoy}</strong></div>
-        <div style={dashboardSummaryCard}><div style={S.label}>Turnos en curso hoy</div><strong>{turnosEnCursoHoy}</strong></div>
-        <div style={dashboardSummaryCard}><div style={S.label}>Turnos sin fichar hoy</div><strong>{turnosSinFichar.length}</strong></div>
-        <div style={dashboardSummaryCard}><div style={S.label}>Tardanzas registradas hoy</div><strong>{tardanzasRegistradas.length}</strong></div>
-        <div style={dashboardSummaryCard}><div style={S.label}>Fichajes fuera de radio</div><strong>{fichajesFueraRadio.length}</strong></div>
-      </div>
-
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16 }}>
-        <div style={alertBox}>
-          <div style={alertTitle}>Turnos descubiertos</div>
-          {turnosDescubiertos.length === 0 ? (
-            <div style={emptyAlert}>No hay turnos descubiertos hoy.</div>
-          ) : turnosDescubiertos.map((turno: Turno) =>
-            renderTurnoAlert(turno, detalleTurnoDescubierto(turno), { tipo:'descubiertos', label:'Turnos descubiertos hoy' })
-          )}
-        </div>
-
-        <div style={alertBox}>
-          <div style={alertTitle}>Guardias sin fichar</div>
-          {turnosSinFichar.length === 0 ? (
-            <div style={emptyAlert}>No hay guardias demorados sin ingreso.</div>
-          ) : turnosSinFichar.map((turno: Turno) =>
-            renderSinIngresoAlert(turno)
-          )}
-        </div>
-
-        <div style={alertBox}>
-          <div style={alertTitle}>Tardanzas registradas</div>
-          {tardanzasRegistradas.length === 0 ? (
-            <div style={emptyAlert}>No hay ingresos tarde registrados hoy.</div>
-          ) : tardanzasRegistradas.map((registro: RegistroAsistencia) =>
-            renderTardanzaAlert(registro)
-          )}
-        </div>
-
-        <div style={alertBox}>
-          <div style={alertTitle}>Fichajes fuera de radio</div>
-          {fichajesFueraRadio.length === 0 ? (
-            <div style={emptyAlert}>No hay ingresos fuera del radio del objetivo.</div>
-          ) : fichajesFueraRadio.map((registro: RegistroAsistencia) =>
-            renderFichajeFueraRadioAlert(registro)
-          )}
-        </div>
-
-        <div style={alertBox}>
-          <div style={alertTitle}>Turnos con asistencia pendiente</div>
-          {turnosAsistenciaPendiente.length === 0 ? (
-            <div style={emptyAlert}>No hay asistencias pendientes hoy.</div>
-          ) : turnosAsistenciaPendiente.map((turno: Turno) =>
-            renderTurnoAlert(turno, tieneEntradaConfirmada(turno) ? 'Entrada registrada, salida pendiente' : 'Entrada pendiente', { tipo:'pendientes_asistencia', label:'Turnos con asistencia pendiente' })
-          )}
-        </div>
+      {/* ── 2. INDICADORES ───────────────────────────────────────────────────
+          Contexto de la operación. Ningún número de acá se repite en los
+          paneles de arriba. */}
+      <div style={{ ...seccionTitulo, marginTop:28 }}>Indicadores</div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:12 }}>
+        {metricas.map((m) => (
+          <StatCard key={m.label} label={m.label} value={m.value} sub={m.sub} color={m.color} onClick={() => onNavigate?.(m.page, m.filtro)} />
+        ))}
       </div>
     </div>
   )

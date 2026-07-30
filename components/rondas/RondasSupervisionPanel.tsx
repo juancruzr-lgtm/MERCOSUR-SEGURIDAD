@@ -20,19 +20,25 @@ import type { PuntoMapaSupervision } from './RondaEjecucionMapa'
 import {
   listarEjecucionesObjetivo,
   listarEjecucionesEnCursoObjetivo,
+  listarRondasProgramadasObjetivo,
   obtenerAccesoRondasObjetivo,
   obtenerRondasPorObjetivo,
   obtenerRondaConPuntos,
   obtenerDetalleEjecucionSupervisor,
   mensajeContextoEjecucionesObjetivo,
   mensajeContextoDetalleEjecucion,
+  etiquetaEstadoRondaProgramada,
+  rondaProgramadaEsIncumplida,
   type EjecucionHistorialItem,
   type EjecucionEnCurso,
   type ContextoEjecucionesObjetivo,
   type RondaBaseResumen,
   type RondaPunto,
   type DetalleEjecucionSupervisor,
+  type RondaProgramada,
+  type EstadoRondaProgramada,
 } from '@/lib/rondas'
+import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 // Leaflet necesita window: el mapa de supervisión se carga solo en cliente.
 const RondaEjecucionMapa = dynamic(() => import('./RondaEjecucionMapa'), {
@@ -354,47 +360,110 @@ function MiniInfo({ label, valor }: { label: string; valor: string }) {
   )
 }
 
-// ── Sección Historial (B4: funcional, últimos 30 días por defecto) ────────────
+// ── Sección Historial ─────────────────────────────────────────────────────────
+// Una fila por ronda PROGRAMADA, no por ejecución: las no iniciadas aparecen
+// aunque nunca hayan existido en `ronda_ejecuciones`.
+//
+// El estado de cada fila lo deriva el servidor de la programación y la ejecución.
+// No depende de que exista una alerta: si se vaciaran las alertas, esta tabla
+// mostraría exactamente lo mismo. La suspensión declarada por el vigilador se
+// pinta como anotación sobre la fila, no como su estado.
+
+type FiltroHistorial = 'todas' | 'incumplidas' | EstadoRondaProgramada
+
+const FILTROS_HISTORIAL: { id: FiltroHistorial; label: string }[] = [
+  { id: 'todas',       label: 'Todas' },
+  { id: 'incumplidas', label: 'Incumplidas' },
+  { id: 'no_iniciada', label: 'No iniciadas' },
+  { id: 'incompleta',  label: 'Incompletas' },
+  { id: 'completada',  label: 'Completadas' },
+  { id: 'en_curso',    label: 'En curso' },
+  { id: 'pendiente',   label: 'Pendientes' },
+]
+
+function estiloEstado(estado: EstadoRondaProgramada): React.CSSProperties {
+  switch (estado) {
+    case 'completada':  return S.chipOk
+    case 'incompleta':  return S.chipWarn
+    case 'no_iniciada': return S.chipBad
+    case 'en_curso':    return S.chipInfo
+    case 'pendiente':   return S.chipNeutro
+  }
+}
 
 function SeccionHistorial({ objetivoId, onVerDetalle }: { objetivoId: string; onVerDetalle: (ejecucionId: string) => void }) {
   const [desde, setDesde] = useState<string>(hace30dias)
   const [hasta, setHasta] = useState<string>(() => fechaLocal(new Date()))
+  const [filtro, setFiltro] = useState<FiltroHistorial>('todas')
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [contexto, setContexto] = useState<ContextoEjecucionesObjetivo>('ok')
-  const [items, setItems] = useState<EjecucionHistorialItem[]>([])
+  const [items, setItems] = useState<RondaProgramada[]>([])
+
+  const iniciarCarga = useVigenciaCarga()
 
   const cargar = useCallback(async () => {
     setCargando(true)
-    const { data, error: err } = await listarEjecucionesObjetivo(objetivoId, desde, hasta)
+    const vigente = iniciarCarga()
+    const { data, error: err } = await listarRondasProgramadasObjetivo(objetivoId, desde, hasta)
+    // Cambiar de rango rápido dispara varias cargas: solo escribe la última.
+    if (!vigente()) return
     if (err) {
       setError(err); setItems([]); setContexto('ok')
     } else if (data) {
-      setError(null); setContexto(data.contexto); setItems(data.ejecuciones)
+      setError(null); setContexto(data.contexto); setItems(data.rondas)
     }
     setCargando(false)
-  }, [objetivoId, desde, hasta])
+  }, [objetivoId, desde, hasta, iniciarCarga])
 
   useEffect(() => { void cargar() }, [cargar])
+
+  const visibles = useMemo(() => items.filter(r => {
+    if (filtro === 'todas') return true
+    if (filtro === 'incumplidas') return rondaProgramadaEsIncumplida(r)
+    return r.estado === filtro
+  }), [items, filtro])
+
+  const conteos = useMemo(() => ({
+    total:       items.length,
+    incumplidas: items.filter(rondaProgramadaEsIncumplida).length,
+  }), [items])
 
   const sinPermiso = !cargando && !error && contexto === 'sin_permiso'
 
   return (
     <div>
       {!sinPermiso && (
-        <div style={S.filtros}>
-          <label style={S.filtroLabel}>
-            Desde
-            <input type="date" value={desde} max={hasta} onChange={e => setDesde(e.target.value)} style={S.fecha} />
-          </label>
-          <label style={S.filtroLabel}>
-            Hasta
-            <input type="date" value={hasta} min={desde} onChange={e => setHasta(e.target.value)} style={S.fecha} />
-          </label>
-          <button type="button" style={S.recargar} onClick={() => void cargar()} disabled={cargando}>
-            {cargando ? '…' : '↻'}
-          </button>
-        </div>
+        <>
+          <div style={S.filtros}>
+            <label style={S.filtroLabel}>
+              Desde
+              <input type="date" value={desde} max={hasta} onChange={e => setDesde(e.target.value)} style={S.fecha} />
+            </label>
+            <label style={S.filtroLabel}>
+              Hasta
+              <input type="date" value={hasta} min={desde} onChange={e => setHasta(e.target.value)} style={S.fecha} />
+            </label>
+            <button type="button" style={S.recargar} onClick={() => void cargar()} disabled={cargando}>
+              {cargando ? '…' : '↻'}
+            </button>
+          </div>
+
+          <div style={S.chipsFiltro} role="tablist" aria-label="Filtro de estado">
+            {FILTROS_HISTORIAL.map(f => (
+              <button
+                key={f.id}
+                type="button"
+                role="tab"
+                aria-selected={filtro === f.id}
+                style={{ ...S.filtroBtn, ...(filtro === f.id ? S.filtroBtnActivo : null) }}
+                onClick={() => setFiltro(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </>
       )}
 
       {cargando && <Nota>Cargando historial…</Nota>}
@@ -408,50 +477,91 @@ function SeccionHistorial({ objetivoId, onVerDetalle }: { objetivoId: string; on
       )}
 
       {!cargando && !error && contexto === 'ok' && items.length === 0 && (
-        <Nota>Sin rondas finalizadas en el período seleccionado.</Nota>
+        <Nota>No había rondas programadas en el período seleccionado.</Nota>
       )}
 
-      {!cargando && !error && contexto === 'ok' && items.length > 0 && (
+      {!cargando && !error && contexto === 'ok' && items.length > 0 && visibles.length === 0 && (
+        <Nota>Ninguna ronda del período coincide con este filtro.</Nota>
+      )}
+
+      {!cargando && !error && contexto === 'ok' && visibles.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
-          <div style={S.contador}>{items.length} ejecución(es)</div>
+          <div style={S.contador}>
+            {visibles.length} de {conteos.total} ronda(s) programada(s)
+            {conteos.incumplidas > 0 && ` · ${conteos.incumplidas} incumplida(s)`}
+          </div>
           <table style={S.tabla}>
             <thead>
               <tr>
-                {['Ronda', 'Puesto', 'Vigilador', 'Inicio', 'Resultado', 'Puntos', 'Detalle'].map(h => (
+                {['Ronda', 'Puesto', 'Vigilador', 'Ventana', 'Estado', 'Puntos', 'Detalle'].map(h => (
                   <th key={h} style={S.th}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {items.map(e => (
-                <tr key={e.ejecucion_id} style={S.tr}>
+              {visibles.map(r => (
+                <tr key={`${r.turno_id}-${r.ronda_base_id}-${r.ventana_inicio}`} style={S.tr}>
                   <td style={S.td}>
-                    <div style={S.celdaFuerte}>{e.ronda_nombre}</div>
+                    <div style={S.celdaFuerte}>{r.ronda_nombre}</div>
                   </td>
-                  <td style={S.td}>{e.puesto_nombre}</td>
-                  <td style={S.td}>{e.guardia_nombre}</td>
-                  <td style={{ ...S.td, whiteSpace: 'nowrap' }}>{horaCorta(e.iniciada_at)}</td>
+                  <td style={S.td}>{r.puesto_nombre}</td>
+                  <td style={S.td}>{r.guardia_nombre}</td>
+                  <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
+                    {horaCorta(r.ventana_inicio)}
+                    <div style={S.subCelda}>
+                      {r.iniciada_at ? `inició ${horaCorta(r.iniciada_at)}` : 'sin inicio'}
+                    </div>
+                  </td>
                   <td style={S.td}>
-                    <span style={{ ...S.chip, ...(e.resultado === 'completa' ? S.chipOk : S.chipWarn) }}>
-                      {e.resultado === 'completa' ? 'Completa' : 'Incompleta'}
+                    <span style={{ ...S.chip, ...estiloEstado(r.estado) }}>
+                      {etiquetaEstadoRondaProgramada(r.estado)}
                     </span>
-                    {e.es_cierre_administrativo && (
-                      <span style={{ ...S.chip, ...S.chipAdmin, marginLeft: 6 }} title={e.cerrada_motivo ?? undefined}>
+                    {r.inicio_tardio && (
+                      <span style={{ ...S.chip, ...S.chipWarn, marginLeft: 6 }} title="Se ejecutó después del vencimiento de su ventana">
+                        Tardía
+                      </span>
+                    )}
+                    {r.es_cierre_administrativo && (
+                      <span style={{ ...S.chip, ...S.chipAdmin, marginLeft: 6 }} title={r.cerrada_motivo ?? undefined}>
                         Cierre administrativo
+                      </span>
+                    )}
+                    {/* Anexo: no es el estado de la ronda, es una anotación sobre ella. */}
+                    {r.alerta_suspendida && (
+                      <span style={{ ...S.chip, ...S.chipInfo, marginLeft: 6 }} title={r.alerta_motivo_vigilador ?? undefined}>
+                        Suspendida
+                      </span>
+                    )}
+                    {r.alerta_estado === 'resuelta' && (
+                      <span
+                        style={{ ...S.chip, ...S.chipNeutro, marginLeft: 6 }}
+                        title={[r.alerta_comentario, r.alerta_resuelta_por_nombre].filter(Boolean).join(' — ') || undefined}
+                      >
+                        Intervenida
                       </span>
                     )}
                   </td>
                   <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
-                    <span style={S.puntoOk}>✓ {e.puntos_cumplidos}</span>
-                    {' · '}
-                    <span style={S.puntoBad}>✗ {e.puntos_incumplidos}</span>
-                    {' · '}
-                    <span style={S.puntoOmit}>⊘ {e.puntos_omitidos}</span>
+                    {r.ejecucion_id === null ? (
+                      <span style={S.puntoOmit}>—</span>
+                    ) : (
+                      <>
+                        <span style={S.puntoOk}>✓ {r.puntos_cumplidos}</span>
+                        {' · '}
+                        <span style={S.puntoBad}>✗ {r.puntos_incumplidos}</span>
+                        {' · '}
+                        <span style={S.puntoOmit}>⊘ {r.puntos_omitidos}</span>
+                      </>
+                    )}
                   </td>
                   <td style={S.td}>
-                    <button type="button" style={S.verDetalle} onClick={() => onVerDetalle(e.ejecucion_id)}>
-                      Ver
-                    </button>
+                    {r.ejecucion_id === null ? (
+                      <span style={S.sinDetalle}>Sin ejecución</span>
+                    ) : (
+                      <button type="button" style={S.verDetalle} onClick={() => onVerDetalle(r.ejecucion_id as string)}>
+                        Ver
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -508,10 +618,21 @@ const S: Record<string, React.CSSProperties> = {
   tr: { borderBottom: '1px solid #0f172a' },
   td: { padding: '8px 10px', color: '#cbd5e1', verticalAlign: 'top' },
   celdaFuerte: { color: '#e2e8f0', fontWeight: 700 },
-  chip: { fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap' },
+  chip: { fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap', display: 'inline-block' },
   chipOk: { background: '#052e16', color: '#4ade80', border: '1px solid #166534' },
   chipWarn: { background: '#3f2d10', color: '#fbbf24', border: '1px solid #b45309' },
+  chipBad: { background: '#3b1116', color: '#fca5a5', border: '1px solid #991b1b' },
+  chipInfo: { background: '#1e293b', color: '#93c5fd', border: '1px solid #2563eb' },
+  chipNeutro: { background: '#0f172a', color: '#94a3b8', border: '1px solid #334155' },
   chipAdmin: { background: '#3b1116', color: '#fca5a5', border: '1px solid #991b1b' },
+  chipsFiltro: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 },
+  filtroBtn: {
+    border: '1px solid #1e2d42', background: '#0f172a', color: '#94a3b8',
+    borderRadius: 999, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+  },
+  filtroBtnActivo: { background: '#f59e0b', color: '#111827', borderColor: '#f59e0b' },
+  subCelda: { fontSize: 10, color: '#64748b', marginTop: 2 },
+  sinDetalle: { fontSize: 11, color: '#475569', whiteSpace: 'nowrap' },
   puntoOk: { color: '#4ade80', fontWeight: 700 },
   puntoBad: { color: '#fca5a5', fontWeight: 700 },
   puntoOmit: { color: '#94a3b8', fontWeight: 700 },

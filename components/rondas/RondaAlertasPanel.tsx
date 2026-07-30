@@ -1,10 +1,17 @@
 'use client'
 
-// Etapa 3.3 · A5 — Alertas de rondas dentro del objetivo, con intervención.
-// Solo lectura + registro de intervenciones vía RPC (autorización por zona en el
-// servidor). No calcula alertas: las lee de ronda_alertas.
+// Alertas de rondas con intervención. Solo lectura + registro de intervenciones
+// vía RPC (autorización por zona en el servidor). No calcula alertas: las lee de
+// ronda_alertas.
+//
+// Sirve dos alcances con el mismo componente:
+//   objetivoId = string → las alertas de ese objetivo (pestaña Alertas del legajo)
+//   objetivoId = null   → las de todos los objetivos del usuario (panel principal
+//                         y pestaña Rondas del supervisor)
+// En alcance completo se muestra a qué objetivo pertenece cada alerta; es la
+// única diferencia de render.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   listarRondaAlertasObjetivo,
   resolverRondaAlerta,
@@ -20,7 +27,14 @@ import {
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 interface Props {
-  objetivoId: string
+  /** `null` = todos los objetivos del alcance del usuario. */
+  objetivoId: string | null
+  /** Se llama tras cada intervención y en cada carga, con las alertas vigentes. */
+  onAlertas?: (alertas: RondaAlerta[]) => void
+  /** Oculta los filtros y fuerza pendientes: para paneles empotrados. */
+  soloPendientes?: boolean
+  /** Corta el listado y avisa cuántas quedaron fuera. */
+  maximo?: number
 }
 
 type Filtro = 'pendiente' | 'resuelta' | 'todas'
@@ -37,7 +51,7 @@ function hora(iso: string): string {
   return Number.isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function RondaAlertasPanel({ objetivoId }: Props) {
+export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendientes = false, maximo }: Props) {
   const [filtro, setFiltro] = useState<Filtro>('pendiente')
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -45,34 +59,55 @@ export default function RondaAlertasPanel({ objetivoId }: Props) {
   const [alertas, setAlertas] = useState<RondaAlerta[]>([])
   const [intervenir, setIntervenir] = useState<RondaAlerta | null>(null)
 
+  // En alcance completo el objetivo no se sobreentiende: hay que decir cuál es.
+  const alcanceCompleto = objetivoId === null
   const iniciarCarga = useVigenciaCarga()
+
+  // `onAlertas` va por ref: si un consumidor pasa una arrow inline, su identidad
+  // cambia en cada render y, estando en las deps de `cargar`, dispararía una
+  // recarga por render. Con la ref el callback siempre es el último sin
+  // participar de las dependencias.
+  const onAlertasRef = useRef(onAlertas)
+  useEffect(() => { onAlertasRef.current = onAlertas }, [onAlertas])
 
   const cargar = useCallback(async () => {
     setCargando(true)
     const vigente = iniciarCarga()
-    const estado: EstadoRondaAlerta | undefined = filtro === 'todas' ? undefined : filtro
+    const efectivo: Filtro = soloPendientes ? 'pendiente' : filtro
+    const estado: EstadoRondaAlerta | undefined = efectivo === 'todas' ? undefined : efectivo
     const { data, error: err } = await listarRondaAlertasObjetivo(objetivoId, estado)
     // Cambiar de filtro rápido dispara varias cargas: solo escribe la última.
     if (!vigente()) return
-    if (err) { setError(err); setAlertas([]); setSinPermiso(false) }
+    if (err) { setError(err); setAlertas([]); setSinPermiso(false); onAlertasRef.current?.([]) }
     else {
       setError(null)
       setSinPermiso(data?.contexto === 'sin_permiso' || data?.contexto === 'sin_usuario')
-      setAlertas(data?.alertas ?? [])
+      const lista = data?.alertas ?? []
+      setAlertas(lista)
+      onAlertasRef.current?.(lista)
     }
     setCargando(false)
-  }, [objetivoId, filtro, iniciarCarga])
+  }, [objetivoId, filtro, soloPendientes, iniciarCarga])
 
   useEffect(() => { void cargar() }, [cargar])
 
+  const visibles = maximo != null ? alertas.slice(0, maximo) : alertas
+  const ocultas = alertas.length - visibles.length
+
   if (sinPermiso) {
-    return <div style={S.nota}>No tenés permiso para ver las alertas de este objetivo.</div>
+    return (
+      <div style={S.nota}>
+        {alcanceCompleto
+          ? 'No tenés objetivos asignados con alertas de rondas.'
+          : 'No tenés permiso para ver las alertas de este objetivo.'}
+      </div>
+    )
   }
 
   return (
     <div>
-      <div style={S.filtros} role="tablist" aria-label="Filtro de alertas">
-        {(['pendiente', 'resuelta', 'todas'] as Filtro[]).map(f => (
+      <div style={S.filtros} role={soloPendientes ? undefined : 'tablist'} aria-label="Filtro de alertas">
+        {!soloPendientes && (['pendiente', 'resuelta', 'todas'] as Filtro[]).map(f => (
           <button
             key={f}
             type="button"
@@ -92,12 +127,14 @@ export default function RondaAlertasPanel({ objetivoId }: Props) {
       {cargando && <div style={S.nota}>Cargando alertas…</div>}
       {!cargando && error && <div style={S.error} role="alert">{error}</div>}
       {!cargando && !error && alertas.length === 0 && (
-        <div style={S.nota}>{filtro === 'pendiente' ? 'No hay alertas pendientes.' : 'Sin alertas en este filtro.'}</div>
+        <div style={S.nota}>
+          {soloPendientes || filtro === 'pendiente' ? 'No hay alertas pendientes.' : 'Sin alertas en este filtro.'}
+        </div>
       )}
 
-      {!cargando && !error && alertas.length > 0 && (
+      {!cargando && !error && visibles.length > 0 && (
         <div style={S.lista}>
-          {alertas.map(a => (
+          {visibles.map(a => (
             <div key={a.id} style={S.card}>
               <div style={S.cardTop}>
                 <span style={{ ...S.tipo, ...(
@@ -112,6 +149,7 @@ export default function RondaAlertasPanel({ objetivoId }: Props) {
                 </span>
               </div>
 
+              {alcanceCompleto && <div style={S.objetivo}>{a.objetivo_nombre}</div>}
               <div style={S.ronda}>{a.ronda_nombre}</div>
               <div style={S.datos}>
                 {a.puesto_nombre} · {a.guardia_nombre}
@@ -138,6 +176,11 @@ export default function RondaAlertasPanel({ objetivoId }: Props) {
               )}
             </div>
           ))}
+          {ocultas > 0 && (
+            <div style={S.nota}>
+              y {ocultas} alerta(s) pendiente(s) más. Abrí Rondas para verlas todas.
+            </div>
+          )}
         </div>
       )}
 
@@ -268,6 +311,7 @@ const S: Record<string, React.CSSProperties> = {
   estado: { fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999, marginLeft: 'auto' },
   estadoPend: { background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155' },
   estadoResuelta: { background: '#052e16', color: '#4ade80', border: '1px solid #166534' },
+  objetivo: { fontSize: 11, fontWeight: 800, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2 },
   ronda: { fontSize: 15, fontWeight: 800, color: '#f8fafc' },
   datos: { fontSize: 12, color: '#cbd5e1', marginTop: 3 },
   datosTenue: { fontSize: 11, color: '#94a3b8', marginTop: 3 },

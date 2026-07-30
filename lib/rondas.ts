@@ -1388,6 +1388,116 @@ export function mensajeContextoEjecucionesObjetivo(contexto: ContextoEjecuciones
   }
 }
 
+// ── Historial por ronda PROGRAMADA ────────────────────────────────────────────
+// Responde "qué había que hacer y qué pasó con cada una", no "qué se ejecutó".
+// Una ronda que nadie inició no tiene fila en `ronda_ejecuciones`: acá igual
+// aparece, porque las filas salen de la programación.
+//
+// Independencia de las alertas: `estado`, `inicio_tardio` y
+// `es_cierre_administrativo` se derivan de programación + ejecución. Los campos
+// `alerta_*` son un anexo informativo —la suspensión declarada por el vigilador
+// y las intervenciones del supervisor hoy solo se persisten ahí— y no
+// condicionan qué filas existen ni en qué estado están.
+
+export type EstadoRondaProgramada =
+  | 'pendiente'    // sin ejecución, todavía en plazo
+  | 'no_iniciada'  // sin ejecución y vencida
+  | 'en_curso'
+  | 'completada'
+  | 'incompleta'
+
+export const ESTADOS_RONDA_PROGRAMADA: readonly EstadoRondaProgramada[] =
+  ['pendiente', 'no_iniciada', 'en_curso', 'completada', 'incompleta'] as const
+
+export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): string {
+  switch (estado) {
+    case 'pendiente':   return 'Pendiente'
+    case 'no_iniciada': return 'No iniciada'
+    case 'en_curso':    return 'En curso'
+    case 'completada':  return 'Completada'
+    case 'incompleta':  return 'Incompleta'
+  }
+}
+
+/** Una ronda programada cuenta como incumplida si venció sin cumplirse. */
+export function rondaProgramadaEsIncumplida(r: RondaProgramada): boolean {
+  return r.estado === 'no_iniciada' || r.estado === 'incompleta' || r.inicio_tardio
+}
+
+export interface RondaProgramada {
+  // Identidad de la obligación: existe haya o no ejecución.
+  ronda_base_id: string
+  ronda_nombre: string
+  puesto_id: string
+  puesto_nombre: string
+  turno_id: string
+  guardia_id: string
+  guardia_nombre: string
+  ventana_inicio: string
+  ventana_fin: string
+  vencimiento_at: string
+
+  estado: EstadoRondaProgramada
+  /** Se ejecutó, pero arrancó después del vencimiento de su ventana. */
+  inicio_tardio: boolean
+
+  ejecucion_id: string | null
+  iniciada_at: string | null
+  finalizada_at: string | null
+  resultado: ResultadoEjecucionRonda | null
+  puntos_total: number | null
+  puntos_cumplidos: number
+  puntos_incumplidos: number
+  puntos_omitidos: number
+  cerrada_por: string | null
+  cerrada_at: string | null
+  cerrada_motivo: string | null
+  es_cierre_administrativo: boolean
+
+  // Anexo informativo. Nunca deriva el estado de arriba.
+  alerta_id: string | null
+  alerta_tipo: TipoRondaAlerta | null
+  alerta_estado: EstadoRondaAlerta | null
+  alerta_suspendida: boolean | null
+  alerta_motivo_vigilador: string | null
+  alerta_accion: AccionRondaAlerta | null
+  alerta_comentario: string | null
+  alerta_resuelta_por_nombre: string | null
+  alerta_resuelta_at: string | null
+  alerta_intervenciones: number
+}
+
+export interface RespuestaRondasProgramadas {
+  contexto: ContextoEjecucionesObjetivo
+  rondas: RondaProgramada[]
+}
+
+/** Historial completo: una fila por ronda programada del objetivo en el rango. */
+export async function listarRondasProgramadasObjetivo(
+  objetivoId: string,
+  desde: string,
+  hasta: string,
+): Promise<ResultadoRondas<RespuestaRondasProgramadas>> {
+  const { data, error } = await supabase.rpc('listar_rondas_programadas_objetivo', {
+    p_objetivo_id: objetivoId,
+    p_desde: desde,
+    p_hasta: hasta,
+  })
+
+  if (error) {
+    return fallaRpc('listar_rondas_programadas_objetivo', error, 'No se pudo cargar el historial de rondas.')
+  }
+
+  const bruto = (data ?? {}) as Partial<RespuestaRondasProgramadas>
+  return {
+    data: {
+      contexto: (bruto.contexto ?? 'sin_permiso') as ContextoEjecucionesObjetivo,
+      rondas: Array.isArray(bruto.rondas) ? (bruto.rondas as RondaProgramada[]) : [],
+    },
+    error: null,
+  }
+}
+
 // ── B2: URL firmada efímera para ver una foto de punto ────────────────────────
 
 export type ContextoFirmaEvidencia =
@@ -1524,6 +1634,11 @@ export interface RondaAlerta {
   tipo: TipoRondaAlerta
   estado: EstadoRondaAlerta
   objetivo_id: string
+  /**
+   * Necesario cuando el listado mezcla objetivos (alcance completo). En las
+   * respuestas por objetivo viene igual y es redundante, no ausente.
+   */
+  objetivo_nombre: string
   puesto_id: string
   puesto_nombre: string
   ronda_base_id: string
@@ -1553,8 +1668,16 @@ export interface RespuestaRondaAlertas {
   alertas: RondaAlerta[]
 }
 
+/**
+ * Alertas de rondas de UN objetivo, o de todo el alcance del usuario.
+ *
+ * `objetivoId = null` pide el alcance completo: la misma RPC con el filtro
+ * relajado, no otra consulta. El servidor resuelve qué objetivos entran (zona
+ * del supervisor, o todos si es admin) y excluye los de prueba. Las alertas
+ * vienen ordenadas por vencimiento: lo más atrasado primero.
+ */
 export async function listarRondaAlertasObjetivo(
-  objetivoId: string,
+  objetivoId: string | null,
   estado?: EstadoRondaAlerta,
 ): Promise<ResultadoRondas<RespuestaRondaAlertas>> {
   const { data, error } = await supabase.rpc('listar_ronda_alertas_objetivo', {
@@ -1573,6 +1696,41 @@ export async function listarRondaAlertasObjetivo(
       alertas: Array.isArray(bruto.alertas) ? (bruto.alertas as RondaAlerta[]) : [],
     },
     error: null,
+  }
+}
+
+/** Alertas de rondas de todos los objetivos del alcance del usuario. */
+export function listarRondaAlertasAlcance(
+  estado?: EstadoRondaAlerta,
+): Promise<ResultadoRondas<RespuestaRondaAlertas>> {
+  return listarRondaAlertasObjetivo(null, estado)
+}
+
+export interface ResumenRondasAlcance {
+  /** Alertas pendientes: todo lo que espera intervención del supervisor. */
+  pendientes: number
+  /** Incumplimientos propiamente dichos: excluye las suspensiones declaradas. */
+  incumplidas: number
+  /** Suspensiones declaradas por el vigilador, todavía sin resolver. */
+  suspendidas: number
+  /** Objetivos distintos con al menos una alerta pendiente. */
+  objetivosAfectados: number
+}
+
+/**
+ * Indicadores de rondas del panel principal.
+ *
+ * Se derivan del mismo listado que alimenta el panel de pendientes, a propósito:
+ * una RPC de resumen aparte sería una segunda fuente de verdad que podría
+ * discrepar del detalle que el usuario ve al hacer clic.
+ */
+export function resumirRondasAlcance(alertas: RondaAlerta[]): ResumenRondasAlcance {
+  const pendientes = alertas.filter(a => a.estado === 'pendiente')
+  return {
+    pendientes: pendientes.length,
+    incumplidas: pendientes.filter(a => a.tipo !== 'suspendida').length,
+    suspendidas: pendientes.filter(a => a.tipo === 'suspendida').length,
+    objetivosAfectados: new Set(pendientes.map(a => a.objetivo_id)).size,
   }
 }
 
