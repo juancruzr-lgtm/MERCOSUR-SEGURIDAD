@@ -23,8 +23,12 @@ import {
   indexarRegistrosPorTurno, turnoTieneEntrada, nombrePersona,
   presentacionSemaforo, fechaHoyLocal,
 } from '@/lib/legajo-objetivo'
-import type { LegajoObjetivo, RondaLegajo, TurnoLegajo } from '@/lib/legajo-objetivo'
+import type { LegajoObjetivo, ObjetivoLegajo, RondaLegajo, TurnoLegajo } from '@/lib/legajo-objetivo'
 import { listarRondaAlertasObjetivo } from '@/lib/rondas'
+import {
+  SeccionUbicacion, SeccionAsistencias, SeccionRondas,
+  SeccionSupervisiones, SeccionNovedades,
+} from './LegajoSecciones'
 
 const S = { btn, btnPrimary, btnSecondary }
 
@@ -59,6 +63,17 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   }, [objetivoId, hoy])
 
   useEffect(() => { void recargar() }, [recargar])
+
+  // Al actualizar la ubicación se parchea el objetivo en memoria en vez de
+  // recargar el legajo entero: el resto de los datos no cambió y una recarga
+  // cerraría las secciones que el usuario tenga abiertas.
+  const aplicarObjetivo = useCallback((o: ObjetivoLegajo) => {
+    setDatos(prev => prev ? { ...prev, objetivo: o } : prev)
+  }, [])
+
+  // Solo admin y supervisor escriben coordenadas. RLS lo vuelve a validar en el
+  // servidor; esto evita ofrecer una acción que va a fallar.
+  const puedeEditarUbicacion = rolUsuario === 'admin' || rolUsuario === 'supervisor' || esAdmin === true
 
   // ── Rondas nativas pendientes ──
   // Solo el contador para el resumen de arriba: el detalle y la intervención
@@ -253,7 +268,14 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         </div>
       )}
 
-      {/* Turnos del día */}
+      {/* 2. Ubicación */}
+      <SeccionUbicacion
+        objetivo={objetivo}
+        puedeEditar={puedeEditarUbicacion}
+        onActualizado={aplicarObjetivo}
+      />
+
+      {/* 3. Turnos del día */}
       <div id="sec-turnos" style={card}>
         <div style={secTitle}>Turnos hoy</div>
         {turnosHoy.length === 0 ? (
@@ -296,6 +318,18 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         )}
       </div>
 
+      {/* 4. Asistencias y 5. Rondas. Ambas cargan al desplegarse. */}
+      <SeccionAsistencias
+        objetivoId={objetivoId}
+        onVerTodas={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('asistencia', { tipo:'objetivo', objetivoId })) : undefined}
+      />
+      <SeccionRondas
+        objetivoId={objetivoId}
+        onVerHistorial={() => ejecutarConConfirmacionRondas(() =>
+          document.getElementById('sec-rondas-nativas')?.scrollIntoView({ behavior:'smooth', block:'start' }),
+        )}
+      />
+
       {/* Última supervisión */}
       <div style={card}>
         <div style={secTitle}>Última supervisión</div>
@@ -334,6 +368,16 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
           </div>
         </div>
       )}
+
+      {/* 6-7. Supervisiones con su checklist. 8. Novedades. */}
+      <SeccionSupervisiones
+        objetivoId={objetivoId}
+        onVerDetalle={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('supervisiones', { tipo:'objetivo', objetivoId })) : undefined}
+      />
+      <SeccionNovedades
+        objetivoId={objetivoId}
+        onVerTodas={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('novedades', { tipo:'objetivo', objetivoId })) : undefined}
+      />
 
       {/* Configuración nativa, independiente del historial importado de JWM. */}
       {(rolUsuario === 'admin' || rolUsuario === 'supervisor') && (

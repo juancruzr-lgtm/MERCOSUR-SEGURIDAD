@@ -15,6 +15,7 @@ import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
+import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
@@ -1077,12 +1078,14 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
       </div>
 
       {/* ── 2. CONTROL DE RONDAS ─────────────────────────────────────────────
-          Estado operativo por objetivo, no una lista de pendientes: una fila por
-          objetivo con su ronda relevante. Reemplaza al panel de alertas, que
-          solo podía mostrar lo que había fallado. */}
-      <div style={seccionTitulo}>Control de rondas</div>
+          Estado operativo por objetivo, no una lista de pendientes: una tarjeta
+          por objetivo con su ronda relevante, en un carril horizontal para que
+          el panel no crezca en alto con la cantidad de objetivos. */}
       <div style={{ ...alertBox, marginBottom:28 }}>
-        <ControlDeRondasPanel objetivos={objetivosControlRondas} />
+        <ControlDeRondasPanel
+          objetivos={objetivosControlRondas}
+          onVerTodas={() => onNavigate?.('rondas')}
+        />
       </div>
 
       {/* ── 3. ATENCIÓN OPERATIVA ────────────────────────────────────────── */}
@@ -1102,6 +1105,33 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         ))}
       </div>
 
+    </div>
+  )
+}
+
+/**
+ * Pantalla completa de rondas — destino de "Ver todas" del panel del Dashboard.
+ *
+ * Hasta acá el escritorio no tenía dónde consultar las rondas de todos los
+ * objetivos: había que entrar objetivo por objetivo al Centro Operativo. Esta
+ * pantalla monta `RondaAlertasPanel` en alcance completo, que es exactamente lo
+ * que ya hace la pestaña Rondas del supervisor en móvil. No duplica nada: sin
+ * `soloPendientes` el panel muestra sus propios filtros (pendientes / resueltas
+ * / todas) y su propio flujo de intervención.
+ */
+function RondasGlobal() {
+  return (
+    <div>
+      <div style={{ marginBottom:20 }}>
+        <div style={S.title}>Rondas</div>
+        <div style={S.sub2}>
+          Alertas de rondas de todos tus objetivos. El estado por objetivo y el
+          historial completo de cada uno están en el legajo del objetivo.
+        </div>
+      </div>
+      <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16 }}>
+        <RondaAlertasPanel objetivoId={null} />
+      </div>
     </div>
   )
 }
@@ -9064,6 +9094,7 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'objetivos', icon:'🏢', label:'Objetivos' },
       { id:'turnos', icon:'📅', label:'Turnos' },
       { id:'asistencia', icon:'✅', label:'Asistencia' },
+      { id:'rondas', icon:'🔁', label:'Rondas' },
     ]},
     { section:'ADMINISTRACIÓN', items:[
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
@@ -9135,6 +9166,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={setPage} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
+              {page === 'rondas' && <RondasGlobal />}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}

@@ -38,6 +38,8 @@ export interface ObjetivoControlRondas {
 interface Props {
   /** Objetivos a consultar. El llamador filtra activos y de prueba. */
   objetivos: ObjetivoControlRondas[]
+  /** Navega a la pantalla completa de rondas. Sin esto, el encabezado no enlaza. */
+  onVerTodas?: () => void
 }
 
 // ── Estados operativos ────────────────────────────────────────────────────────
@@ -219,7 +221,7 @@ interface Balance {
 
 const BALANCE_VACIO: Balance = { llamadas: 0, sinPermiso: 0, sinRondas: 0, errores: 0 }
 
-export default function ControlDeRondasPanel({ objetivos }: Props) {
+export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filas, setFilas] = useState<Fila[]>([])
@@ -304,23 +306,30 @@ export default function ControlDeRondasPanel({ objetivos }: Props) {
   return (
     <div>
       <div style={S.cabecera}>
-        <div style={S.titulo}>Control de Rondas</div>
+        {/* El título también navega: es el patrón esperado en un panel-resumen. */}
+        <button type="button" style={S.tituloBtn} onClick={onVerTodas} disabled={!onVerTodas}>
+          Control de Rondas
+        </button>
+        {filas.length > 0 && (
+          <div style={S.resumen}>
+            {(['en_curso', 'incumplida', 'proxima', 'cumplida'] as EstadoOperativo[])
+              .filter(e => conteos[e] > 0)
+              .map(e => (
+                <span key={e} style={S.resumenItem}>
+                  {ICONO[e]} {conteos[e]}
+                </span>
+              ))}
+          </div>
+        )}
         <button type="button" onClick={() => void cargar()} disabled={cargando} style={S.recargar} aria-label="Actualizar">
           {cargando ? '…' : '↻'}
         </button>
+        {onVerTodas && (
+          <button type="button" style={S.verTodas} onClick={onVerTodas}>
+            Ver todas →
+          </button>
+        )}
       </div>
-
-      {filas.length > 0 && (
-        <div style={S.resumen}>
-          {(['en_curso', 'incumplida', 'proxima', 'cumplida'] as EstadoOperativo[])
-            .filter(e => conteos[e] > 0)
-            .map(e => (
-              <span key={e} style={S.resumenItem}>
-                {ICONO[e]} {conteos[e]} {ETIQUETA[e].toLowerCase()}
-              </span>
-            ))}
-        </div>
-      )}
 
       {cargando && filas.length === 0 && <div style={S.nota}>Cargando estado de rondas…</div>}
       {!cargando && error && <div style={S.error} role="alert">{error}</div>}
@@ -335,10 +344,13 @@ export default function ControlDeRondasPanel({ objetivos }: Props) {
         </div>
       )}
 
+      {/* Carril horizontal. `nowrap` + `overflow-x` es lo que impide que el panel
+          crezca en alto cuando hay muchos objetivos: en vez de apilarse, las
+          tarjetas se desplazan. La altura del panel es constante. */}
       {filas.length > 0 && (
-        <div style={S.lista}>
+        <div style={S.carril} role="list" aria-label="Rondas por objetivo">
           {filas.map(f => (
-            <FilaObjetivo
+            <TarjetaObjetivo
               key={f.objetivoId}
               fila={f}
               objetivoNombre={nombreDe(f.objetivoId)}
@@ -380,72 +392,67 @@ export default function ControlDeRondasPanel({ objetivos }: Props) {
 
 // ── Fila ──────────────────────────────────────────────────────────────────────
 
-function FilaObjetivo({
+/**
+ * Nombre corto de quien intervino.
+ *
+ * La tarjeta tiene ~200 px: un "Martínez, Sergio Alberto" la desbordaría. Se
+ * queda con el nombre de pila, contemplando los dos formatos que produce el
+ * sistema ("Apellido, Nombre" en las consultas por columnas y "Nombre Apellido"
+ * en algunas RPC).
+ */
+function nombreCorto(completo: string): string {
+  const limpio = completo.trim()
+  if (!limpio) return ''
+  const trasComa = limpio.includes(',') ? limpio.split(',')[1] : limpio
+  return (trasComa ?? '').trim().split(/\s+/)[0] || limpio
+}
+
+/**
+ * Tarjeta compacta: nombre, hora, estado e intervención en una línea cada uno.
+ *
+ * Se dejan afuera a propósito el nombre de la ronda, el puesto, el vigilador y
+ * el comentario de la intervención. Todo eso está a un clic, en el detalle. La
+ * tarjeta tiene que leerse en un segundo y, sobre todo, tener altura previsible:
+ * cualquier texto de largo variable la volvería irregular y rompería el carril.
+ */
+function TarjetaObjetivo({
   fila, objetivoNombre, onAbrir,
 }: { fila: Fila; objetivoNombre: string; onAbrir: () => void }) {
   const r = fila.ronda
   const estado = estadoOperativo(r)
-  const intervenida = fueIntervenida(r)
+
+  // Pie de la tarjeta: solo para incumplidas, que es donde importa saber si
+  // alguien ya se hizo cargo.
+  const pie = estado !== 'incumplida'
+    ? null
+    : r.alerta_resuelta_por_nombre
+      ? `Intervino: ${nombreCorto(r.alerta_resuelta_por_nombre)}`
+      : fueIntervenida(r)
+        ? `${r.alerta_intervenciones} intervención(es)`
+        : 'Sin intervención'
+
+  const pieDestacado = pie === 'Sin intervención'
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      style={{ ...S.fila, ...(estado === 'incumplida' ? S.filaIncumplida : estado === 'en_curso' ? S.filaEnCurso : null) }}
-      onClick={onAbrir}
-      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAbrir() } }}
-      aria-label={`${objetivoNombre}, ${ETIQUETA[estado]}. Ver detalle`}
+      role="listitem"
+      style={{ ...S.tarjeta, borderLeftColor: COLOR[estado] }}
     >
-      <div style={S.objetivo}>{objetivoNombre}</div>
-
-      <div style={S.linea}>
+      <button
+        type="button"
+        style={S.tarjetaBtn}
+        onClick={onAbrir}
+        aria-label={`${objetivoNombre}, ${hora(r.ventana_inicio)}, ${ETIQUETA[estado]}. Ver detalle`}
+      >
+        <span style={S.objetivo}>{objetivoNombre}</span>
         <span style={S.horaTexto}>{hora(r.ventana_inicio)}</span>
-        <span style={S.separador}>·</span>
         <span style={{ ...S.estadoTexto, color: COLOR[estado] }}>
           {ICONO[estado]} {ETIQUETA[estado]}
         </span>
-      </div>
-
-      <div style={S.contexto}>{r.ronda_nombre} · {r.puesto_nombre} · {r.guardia_nombre}</div>
-
-      {/* Anexo del motor: la suspensión la declara el vigilador, no es un estado. */}
-      {r.alerta_suspendida && (
-        <div style={{ ...S.anexo, ...S.recorte }}>
-          Suspendida por el vigilador{r.alerta_motivo_vigilador ? `: ${r.alerta_motivo_vigilador}` : ''}
-        </div>
-      )}
-
-      {/* Resumen de intervención. El historial completo vive en el detalle. */}
-      {estado === 'incumplida' && (
-        intervenida ? <ResumenIntervencion ronda={r} /> : <div style={S.sinIntervencion}>Sin intervención</div>
-      )}
-    </div>
-  )
-}
-
-function ResumenIntervencion({ ronda: r }: { ronda: RondaProgramada }) {
-  // `resuelta_por_nombre` solo se completa cuando la acción cierra la alerta.
-  // Con intervenciones abiertas (una llamada al vigilador, por ejemplo) hay
-  // actividad registrada pero todavía nadie firmó el cierre: decirlo es más
-  // honesto que inventar un nombre.
-  if (!r.alerta_resuelta_por_nombre) {
-    return (
-      <div style={S.intervencion}>
-        {r.alerta_intervenciones} intervención(es) registrada(s), sin cierre
-      </div>
-    )
-  }
-
-  const motivo = r.alerta_comentario
-    ?? (r.alerta_accion ? etiquetaAccionRondaAlerta(r.alerta_accion) : null)
-
-  return (
-    <div style={S.intervencion}>
-      <div style={S.recorte}>Intervino: {r.alerta_resuelta_por_nombre}</div>
-      {/* El comentario es texto libre y sin tope de longitud (el modal de
-          intervención solo exige un mínimo). Acá se recorta a dos líneas: el
-          Dashboard es un resumen y el texto íntegro está en el detalle. */}
-      {motivo && <div style={S.recorte}>Motivo: {motivo}</div>}
+        <span style={{ ...S.pieTarjeta, ...(pieDestacado ? S.pieAlerta : null) }}>
+          {pie ?? ' '}
+        </span>
+      </button>
     </div>
   )
 }
@@ -541,47 +548,64 @@ const COLOR: Record<EstadoOperativo, string> = {
 }
 
 const S: Record<string, React.CSSProperties> = {
-  cabecera: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 },
-  titulo: { fontSize: 15, fontWeight: 800, color: '#f8fafc' },
-  recargar: {
-    width: 30, height: 30, borderRadius: 999, border: '1px solid #1e2d42',
-    background: '#111827', color: '#e2e8f0', fontSize: 15, cursor: 'pointer', marginLeft: 'auto',
+  cabecera: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' },
+  tituloBtn: {
+    border: 'none', background: 'none', padding: 0,
+    fontSize: 15, fontWeight: 800, color: '#f8fafc', cursor: 'pointer', textAlign: 'left',
   },
-  resumen: { display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12, fontSize: 12, color: '#94a3b8' },
+  verTodas: {
+    border: 'none', background: 'none', padding: 0,
+    fontSize: 12, fontWeight: 700, color: '#f59e0b', cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  recargar: {
+    width: 26, height: 26, borderRadius: 999, border: '1px solid #1e2d42',
+    background: '#111827', color: '#e2e8f0', fontSize: 13, cursor: 'pointer', marginLeft: 'auto',
+  },
+  resumen: { display: 'flex', gap: 10, fontSize: 12, color: '#94a3b8' },
   resumenItem: { whiteSpace: 'nowrap' },
-  nota: { fontSize: 13, color: '#94a3b8', padding: '14px 4px' },
-  pie: { fontSize: 11, color: '#64748b', marginTop: 10 },
+  nota: { fontSize: 13, color: '#94a3b8', padding: '10px 4px' },
+  pie: { fontSize: 11, color: '#64748b', marginTop: 8 },
   error: {
     fontSize: 12, color: '#fecaca', background: '#3b1116',
     border: '1px solid #991b1b', borderRadius: 8, padding: 10, marginTop: 8,
   },
-  lista: { display: 'flex', flexDirection: 'column', gap: 8 },
-  fila: {
-    border: '1px solid #1e2d42', borderLeft: '3px solid #334155', borderRadius: 10,
-    background: '#111827', padding: '12px 14px', cursor: 'pointer',
-  },
-  filaIncumplida: { borderLeftColor: '#ef4444' },
-  filaEnCurso: { borderLeftColor: '#3b82f6' },
-  objetivo: {
-    fontSize: 13, fontWeight: 800, color: '#f8fafc',
-    textTransform: 'uppercase', letterSpacing: 0.6,
-    // Un nombre largo sin espacios no puede empujar el ancho de la tarjeta.
-    overflowWrap: 'anywhere',
-  },
-  // Recorte a dos líneas para el texto libre (comentarios de intervención y
-  // motivos del vigilador), que no tiene tope de longitud en origen.
-  recorte: {
-    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2,
-    overflow: 'hidden', overflowWrap: 'anywhere',
+
+  // ── Carril horizontal ──
+  // `flexWrap: nowrap` es la regla que sostiene todo el diseño: sin ella, con
+  // muchos objetivos las tarjetas caerían a una segunda fila y el panel volvería
+  // a comerse media pantalla. Con nowrap el excedente se desplaza.
+  carril: {
+    display: 'flex', flexDirection: 'row', flexWrap: 'nowrap', overflowX: 'auto',
+    gap: 10, paddingBottom: 6, scrollbarWidth: 'thin',
+    WebkitOverflowScrolling: 'touch',
   } as React.CSSProperties,
-  linea: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' },
-  horaTexto: { fontSize: 14, fontWeight: 800, color: '#e2e8f0' },
-  separador: { color: '#475569' },
-  estadoTexto: { fontSize: 13, fontWeight: 800 },
-  contexto: { fontSize: 11, color: '#64748b', marginTop: 4 },
-  anexo: { fontSize: 12, color: '#93c5fd', marginTop: 6, lineHeight: 1.5 },
-  intervencion: { fontSize: 12, color: '#cbd5e1', marginTop: 8, lineHeight: 1.6 },
-  sinIntervencion: { fontSize: 12, color: '#f59e0b', marginTop: 8, fontWeight: 700 },
+  tarjeta: {
+    flex: '0 0 auto', width: 200,
+    border: '1px solid #1e2d42', borderLeft: '3px solid #334155', borderRadius: 10,
+    background: '#111827',
+  },
+  // El botón ocupa toda la tarjeta: el área clickeable coincide con lo que se ve,
+  // y al ser un <button> nativo Enter y Espacio funcionan sin handler propio (y
+  // por lo tanto sin riesgo de doble disparo).
+  tarjetaBtn: {
+    display: 'flex', flexDirection: 'column', gap: 3,
+    width: '100%', border: 'none', background: 'none', cursor: 'pointer',
+    padding: '10px 12px', textAlign: 'left', font: 'inherit',
+  },
+  objetivo: {
+    fontSize: 12, fontWeight: 800, color: '#f8fafc',
+    textTransform: 'uppercase', letterSpacing: 0.5,
+    // Una línea y elipsis: la altura de la tarjeta no puede depender del largo
+    // del nombre, o el carril queda irregular.
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  horaTexto: { fontSize: 16, fontWeight: 800, color: '#e2e8f0', fontFamily: 'Syne,sans-serif' },
+  estadoTexto: { fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap' },
+  pieTarjeta: {
+    fontSize: 11, color: '#64748b', minHeight: 15,
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  pieAlerta: { color: '#f59e0b', fontWeight: 700 },
   overlay: {
     position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(2,6,15,.74)',
     display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,

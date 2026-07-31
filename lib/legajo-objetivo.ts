@@ -230,6 +230,229 @@ export async function cargarRondasObjetivo(
   return { rondas: (data ?? []) as RondaLegajo[], error: error?.message ?? null }
 }
 
+// ── Ficha operativa: historiales recientes ──────────────────────────────────
+//
+// Todo lo de acá alimenta las secciones del legajo que muestran "lo último" de
+// un objetivo. Tres reglas comunes:
+//
+//   * Siempre acotado. Ninguna consulta trae un historial abierto: o va por
+//     rango de días o por `limit`. El legajo es un resumen con acceso al
+//     detalle, no el detalle.
+//   * Sin lógica nueva. Los estados salen de columnas ya persistidas
+//     (`alerta_entrada`, `gps_ingreso_estado`, `estado`) y de los helpers que ya
+//     existen en lib/turnos.ts. No se recalcula ningún horario.
+//   * Todo parte de `objetivo_id`.
+
+/** Días de historial que muestran las secciones de resumen. */
+export const LEGAJO_DIAS_HISTORIAL = 7
+/** Tope de filas por sección de resumen. */
+export const LEGAJO_LIMITE_FILAS = 10
+
+export interface AsistenciaLegajo {
+  turno_id: string
+  fecha: string
+  hora_inicio: string
+  hora_fin: string
+  estado: string
+  guardia_id: string | null
+  guardia_nombre: string
+  hora_entrada_real: string | null
+  hora_salida_real: string | null
+  /** Columna persistida por el motor de asistencia. No se recalcula. */
+  alerta_entrada: string | null
+  gps_ingreso_estado: string | null
+  tipo_registro: string | null
+}
+
+export interface SupervisionRecienteLegajo {
+  id: string
+  created_at: string
+  estado: string | null
+  observaciones: string | null
+  supervisor_nombre: string
+  /** Conteo de respuestas del checklist. Deriva de supervision_respuestas. */
+  items_correctos: number
+  items_observados: number
+  items_total: number
+  fotos: number
+}
+
+export interface NovedadRecienteLegajo {
+  id: string
+  created_at: string
+  tipo: string
+  descripcion: string
+  prioridad: string
+  estado: string
+  autor_nombre: string
+}
+
+/** Fecha local YYYY-MM-DD desplazada N días hacia atrás. */
+export function fechaHaceDias(dias: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - dias)
+  return d.toLocaleDateString('sv-SE')
+}
+
+const COLS_REGISTRO_ASISTENCIA =
+  'id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, alerta_entrada, gps_ingreso_estado, tipo_registro'
+
+/**
+ * Asistencias recientes del objetivo: una fila por turno, con su registro.
+ *
+ * Parte de los turnos (la obligación) y no de los registros, para que un turno
+ * sin fichar también aparezca — es justamente el caso que interesa vigilar.
+ */
+export async function cargarAsistenciasObjetivo(
+  objetivoId: string,
+  dias: number = LEGAJO_DIAS_HISTORIAL,
+  limite: number = LEGAJO_LIMITE_FILAS,
+): Promise<{ asistencias: AsistenciaLegajo[]; error: string | null }> {
+  const { data: turnos, error: errTurnos } = await supabase
+    .from('turnos')
+    .select('id, fecha, hora_inicio, hora_fin, estado, guardia_id, guardia_original_id')
+    .eq('objetivo_id', objetivoId)
+    .gte('fecha', fechaHaceDias(dias))
+    .lte('fecha', fechaHoyLocal())
+    .order('fecha', { ascending: false })
+    .order('hora_inicio', { ascending: false })
+    .limit(limite)
+
+  if (errTurnos) return { asistencias: [], error: errTurnos.message }
+
+  const lista = turnos ?? []
+  if (lista.length === 0) return { asistencias: [], error: null }
+
+  const idsTurno = lista.map(t => t.id)
+  const idsPersona = Array.from(new Set(
+    lista.flatMap(t => [t.guardia_id, t.guardia_original_id]).filter(Boolean) as string[],
+  ))
+
+  const [registrosRes, personasRes] = await Promise.all([
+    supabase.from('registros_asistencia').select(COLS_REGISTRO_ASISTENCIA).in('turno_id', idsTurno),
+    idsPersona.length
+      ? supabase.from('usuarios').select(COLS_PERSONA).in('id', idsPersona)
+      : Promise.resolve({ data: [], error: null } as any),
+  ])
+
+  const personas = (personasRes.data ?? []) as PersonaLegajo[]
+  const registros = (registrosRes.data ?? []) as any[]
+
+  const asistencias: AsistenciaLegajo[] = lista.map(t => {
+    // Un turno puede tener varios registros; interesa el que tiene entrada.
+    const suyos = registros.filter(r => r.turno_id === t.id)
+    const reg = suyos.find(r => r.hora_entrada_real) ?? suyos[0] ?? null
+    return {
+      turno_id: t.id,
+      fecha: t.fecha,
+      hora_inicio: t.hora_inicio,
+      hora_fin: t.hora_fin,
+      estado: t.estado,
+      guardia_id: t.guardia_id,
+      guardia_nombre: nombrePersona(t.guardia_id, personas),
+      hora_entrada_real: reg?.hora_entrada_real ?? null,
+      hora_salida_real: reg?.hora_salida_real ?? null,
+      alerta_entrada: reg?.alerta_entrada ?? null,
+      gps_ingreso_estado: reg?.gps_ingreso_estado ?? null,
+      tipo_registro: reg?.tipo_registro ?? null,
+    }
+  })
+
+  return { asistencias, error: registrosRes.error?.message ?? null }
+}
+
+/**
+ * Supervisiones recientes con el resumen de su checklist.
+ *
+ * El checklist no es una entidad aparte: ejecutar un checklist ES registrar una
+ * supervisión, y sus ítems son las filas de `supervision_respuestas`. Por eso el
+ * conteo viaja acá y no en una consulta propia que mostraría lo mismo.
+ */
+export async function cargarSupervisionesObjetivo(
+  objetivoId: string,
+  limite: number = LEGAJO_LIMITE_FILAS,
+): Promise<{ supervisiones: SupervisionRecienteLegajo[]; error: string | null }> {
+  const { data, error } = await supabase
+    .from('supervisiones')
+    .select('id, created_at, estado, observaciones, supervisor:usuarios(nombre, apellido), respuestas:supervision_respuestas(resultado), fotos:supervision_fotos(id)')
+    .eq('objetivo_id', objetivoId)
+    .order('created_at', { ascending: false })
+    .limit(limite)
+
+  if (error) return { supervisiones: [], error: error.message }
+
+  const supervisiones = (data ?? []).map((s: any) => {
+    const respuestas = (s.respuestas ?? []) as { resultado: string }[]
+    const sup = Array.isArray(s.supervisor) ? s.supervisor[0] : s.supervisor
+    return {
+      id: s.id,
+      created_at: s.created_at,
+      estado: s.estado,
+      observaciones: s.observaciones,
+      supervisor_nombre: sup ? `${sup.apellido}, ${sup.nombre}` : '—',
+      items_correctos: respuestas.filter(r => r.resultado === 'correcto').length,
+      items_observados: respuestas.filter(r => r.resultado === 'observado').length,
+      items_total: respuestas.length,
+      fotos: (s.fotos ?? []).length,
+    }
+  })
+
+  return { supervisiones, error: null }
+}
+
+/** Novedades recientes del objetivo, de cualquier estado. */
+export async function cargarNovedadesObjetivo(
+  objetivoId: string,
+  limite: number = LEGAJO_LIMITE_FILAS,
+): Promise<{ novedades: NovedadRecienteLegajo[]; error: string | null }> {
+  const { data, error } = await supabase
+    .from('novedades')
+    .select('id, created_at, tipo, descripcion, prioridad, estado, autor:usuarios(nombre, apellido)')
+    .eq('objetivo_id', objetivoId)
+    .order('created_at', { ascending: false })
+    .limit(limite)
+
+  if (error) return { novedades: [], error: error.message }
+
+  const novedades = (data ?? []).map((n: any) => {
+    const autor = Array.isArray(n.autor) ? n.autor[0] : n.autor
+    return {
+      id: n.id,
+      created_at: n.created_at,
+      tipo: n.tipo,
+      descripcion: n.descripcion,
+      prioridad: n.prioridad,
+      estado: n.estado,
+      autor_nombre: autor ? `${autor.apellido}, ${autor.nombre}` : '—',
+    }
+  })
+
+  return { novedades, error: null }
+}
+
+/**
+ * Escribe la ubicación del objetivo.
+ *
+ * Misma escritura que ya hace el supervisor desde móvil (`objetivos.update` con
+ * lat/lng/radio). La autorización la resuelve RLS en el servidor; la interfaz
+ * además oculta la acción a quien no corresponde.
+ */
+export async function actualizarUbicacionObjetivo(
+  objetivoId: string,
+  lat: number,
+  lng: number,
+  radioMetros: number,
+): Promise<{ objetivo: ObjetivoLegajo | null; error: string | null }> {
+  const { data, error } = await supabase
+    .from('objetivos')
+    .update({ lat, lng, radio_metros: radioMetros })
+    .eq('id', objetivoId)
+    .select(COLS_OBJETIVO)
+    .single()
+
+  return { objetivo: (data ?? null) as ObjetivoLegajo | null, error: error?.message ?? null }
+}
+
 // ── Derivaciones puras ──────────────────────────────────────────────────────
 
 export type SemaforoObjetivo = 'critico' | 'atencion' | 'operativo' | 'sin_turnos'
