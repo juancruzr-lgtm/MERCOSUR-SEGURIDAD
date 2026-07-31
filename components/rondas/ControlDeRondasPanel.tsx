@@ -2,9 +2,10 @@
 
 // Control de Rondas — resumen ejecutivo del Dashboard Gerencial.
 //
-// Una fila por objetivo, con LA ronda relevante de ese objetivo: la que está en
-// curso, si no la que se incumplió, si no la próxima, si no la última cumplida.
-// El Dashboard responde "¿cómo viene la operación?", no "¿qué quedó pendiente?".
+// Una tarjeta por objetivo, con LA ÚLTIMA ronda de ese objetivo cuyo plazo ya
+// venció, sea cual sea su resultado. El Dashboard responde "¿cómo terminó lo
+// último que tenía que pasar acá?", no "¿qué es lo peor que pasó en el período?"
+// ni "¿qué viene después?".
 //
 // Fuente: `listar_rondas_programadas_objetivo`, la misma RPC que alimenta el
 // Historial del Centro Operativo. Devuelve una fila por ronda PROGRAMADA exista
@@ -28,6 +29,7 @@ import {
   etiquetaAccionRondaAlerta,
   type RondaProgramada,
 } from '@/lib/rondas'
+import { formatHora24, formatFechaHora } from '@/lib/formato'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 export interface ObjetivoControlRondas {
@@ -99,34 +101,68 @@ function ms(iso: string): number {
 }
 
 /**
- * La ronda relevante del objetivo: la de mayor prioridad operativa.
+ * La ronda relevante del objetivo: LA ÚLTIMA CUYO PLAZO YA VENCIÓ.
  *
- * Empates dentro del mismo grupo: para lo que ya pasó (en curso, incumplida,
- * cumplida) interesa lo más reciente; para lo que todavía no pasó (próxima),
- * lo más inminente.
+ * Es una regla temporal, no de gravedad. Antes se elegía por prioridad —una
+ * incumplida le ganaba a cualquier otra cosa—, y eso hacía que el objetivo
+ * quedara clavado en su peor momento del período: la ronda incumplida de anoche
+ * seguía ocupando la tarjeta aunque las tres de hoy se hubieran cumplido. La
+ * tarjeta dejaba de responder "cómo está esto ahora".
+ *
+ * Se toma `vencimiento_at <= ahora`, que en una sola condición cubre los dos
+ * descartes: la ronda futura todavía no venció, y la que está corriendo dentro
+ * de su ventana tampoco. De las que quedan gana la de vencimiento más reciente,
+ * cualquiera sea su resultado.
+ *
+ * Sin candidatas no hay fallback a la próxima: el objetivo se omite del carril.
+ * Mostrar una ronda que todavía no ocurrió como si fuera el estado actual es
+ * justamente lo que se venía a corregir.
+ *
+ * La comparación es segura respecto de la zona horaria: `vencimiento_at` es un
+ * instante absoluto (timestamptz serializado con offset) y `Date.now()` también,
+ * así que el huso del navegador no puede correr el corte. Solo afecta cómo se
+ * escribe la hora en pantalla, no qué ronda se elige.
  */
 function rondaRelevante(rondas: RondaProgramada[]): RondaProgramada | null {
-  if (rondas.length === 0) return null
-  return rondas.reduce((mejor, r) => {
-    const pr = prioridad(r)
-    const pm = prioridad(mejor)
-    if (pr !== pm) return pr < pm ? r : mejor
-    const haciaAdelante = pr === 4
-    return haciaAdelante
-      ? (ms(r.ventana_inicio) < ms(mejor.ventana_inicio) ? r : mejor)
-      : (ms(r.ventana_inicio) > ms(mejor.ventana_inicio) ? r : mejor)
-  })
+  const ahora = Date.now()
+  let mejor: RondaProgramada | null = null
+
+  for (const r of rondas) {
+    if (ms(r.vencimiento_at) > ahora) continue
+    if (mejor === null || ms(r.vencimiento_at) > ms(mejor.vencimiento_at)) mejor = r
+  }
+
+  return mejor
 }
 
+// 24 h vía lib/formato.ts. `toLocaleTimeString('es-AR')` sin `hour12` devuelve
+// "10:45 p. m." en los runtimes con ICU reciente, y en una operación con turnos
+// nocturnos esa ambigüedad se paga cara.
 function hora(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '--:--'
-    : d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+  return formatHora24(iso)
 }
 
 function fechaLocal(d: Date): string {
   return d.toLocaleDateString('sv-SE')
+}
+
+/**
+ * `true` si la ventana cae en el día de hoy.
+ *
+ * El carril consulta ayer y hoy. Sin la fecha a la vista, la ronda incumplida de
+ * anoche a las 22:45 se lee exactamente igual que la de esta noche, que todavía
+ * no ocurrió: el mismo "22:45" para una vencida y una próxima.
+ */
+function esDeHoy(iso: string): boolean {
+  const d = new Date(iso)
+  return !Number.isNaN(d.getTime()) && fechaLocal(d) === fechaLocal(new Date())
+}
+
+/** Día y mes, para distinguir la ronda de ayer de la de hoy. */
+function diaMes(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
 /**
@@ -215,6 +251,7 @@ interface Fila {
 interface Balance {
   llamadas: number
   sinPermiso: number
+  /** Sin ninguna ronda ya vencida: o no tiene programación, o todas son futuras. */
   sinRondas: number
   errores: number
 }
@@ -340,7 +377,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
             ? 'No hay objetivos activos.'
             : balance.sinPermiso === balance.llamadas
               ? 'No tenés objetivos asignados con rondas.'
-              : 'Ningún objetivo tiene rondas programadas en el período.'}
+              : 'Ningún objetivo tiene rondas finalizadas todavía.'}
         </div>
       )}
 
@@ -366,7 +403,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
         <div style={S.pie}>
           {[
             `${filas.length}/${balance.llamadas} objetivo(s)`,
-            balance.sinRondas > 0 ? `${balance.sinRondas} sin rondas programadas` : null,
+            balance.sinRondas > 0 ? `${balance.sinRondas} sin rondas finalizadas` : null,
             balance.sinPermiso > 0 ? `${balance.sinPermiso} fuera de tu alcance` : null,
             balance.errores > 0 ? `${balance.errores} no respondió` : null,
           ].filter(Boolean).join(' · ')}
@@ -420,6 +457,7 @@ function TarjetaObjetivo({
 }: { fila: Fila; objetivoNombre: string; onAbrir: () => void }) {
   const r = fila.ronda
   const estado = estadoOperativo(r)
+  const deHoy = esDeHoy(r.ventana_inicio)
 
   // Pie de la tarjeta: solo para incumplidas, que es donde importa saber si
   // alguien ya se hizo cargo.
@@ -442,10 +480,15 @@ function TarjetaObjetivo({
         type="button"
         style={S.tarjetaBtn}
         onClick={onAbrir}
-        aria-label={`${objetivoNombre}, ${hora(r.ventana_inicio)}, ${ETIQUETA[estado]}. Ver detalle`}
+        aria-label={`${objetivoNombre}, ${deHoy ? '' : `${diaMes(r.ventana_inicio)} `}${hora(r.ventana_inicio)}, ${ETIQUETA[estado]}. Ver detalle`}
       >
         <span style={S.objetivo}>{objetivoNombre}</span>
-        <span style={S.horaTexto}>{hora(r.ventana_inicio)}</span>
+        <span style={S.horaLinea}>
+          <span style={S.horaTexto}>{hora(r.ventana_inicio)}</span>
+          {/* La fecha aparece solo cuando NO es de hoy: si estuviera siempre,
+              sería ruido en la enorme mayoría de las tarjetas. */}
+          {!deHoy && <span style={S.diaEtiqueta}>{diaMes(r.ventana_inicio)}</span>}
+        </span>
         <span style={{ ...S.estadoTexto, color: COLOR[estado] }}>
           {ICONO[estado]} {ETIQUETA[estado]}
         </span>
@@ -462,11 +505,7 @@ function TarjetaObjetivo({
 // se ejecutó. Se muestra todo lo que sí existe.
 
 function fechaHora(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return iso ? formatFechaHora(iso) : '—'
 }
 
 function DetalleSinEjecucion({
@@ -599,7 +638,13 @@ const S: Record<string, React.CSSProperties> = {
     // del nombre, o el carril queda irregular.
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
+  horaLinea: { display: 'flex', alignItems: 'baseline', gap: 6 },
   horaTexto: { fontSize: 16, fontWeight: 800, color: '#e2e8f0', fontFamily: 'Syne,sans-serif' },
+  diaEtiqueta: {
+    fontSize: 10, fontWeight: 700, color: '#f59e0b',
+    background: 'rgba(245,158,11,.14)', border: '1px solid rgba(245,158,11,.3)',
+    borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap',
+  },
   estadoTexto: { fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap' },
   pieTarjeta: {
     fontSize: 11, color: '#64748b', minHeight: 15,

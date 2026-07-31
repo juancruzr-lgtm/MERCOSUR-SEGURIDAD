@@ -273,7 +273,8 @@ export default function RondaPuntosEditor({
       editandoId === 'nuevo' ? undefined : editandoId ?? undefined,
     ) !== null
 
-    const hora = capturadaAt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    // `hour12: false` explícito: 'es-AR' con ICU reciente devuelve "p. m.".
+    const hora = capturadaAt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
     if (coincideAnterior || coincideOtroPunto) {
       setGpsEstado(MENSAJE_IPHONE_POSICION_ANTERIOR)
     } else {

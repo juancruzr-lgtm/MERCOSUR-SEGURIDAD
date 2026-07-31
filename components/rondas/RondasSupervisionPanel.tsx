@@ -38,6 +38,7 @@ import {
   type RondaProgramada,
   type EstadoRondaProgramada,
 } from '@/lib/rondas'
+import { formatFechaHora } from '@/lib/formato'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 // Leaflet necesita window: el mapa de supervisión se carga solo en cliente.
@@ -72,11 +73,9 @@ function hace30dias(): string {
   d.setDate(d.getDate() - 30)
   return fechaLocal(d)
 }
+// 24 h vía lib/formato.ts. El historial mezcla días, así que conserva la fecha.
 function horaCorta(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return formatFechaHora(iso)
 }
 
 export default function RondasSupervisionPanel({

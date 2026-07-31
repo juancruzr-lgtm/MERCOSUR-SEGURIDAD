@@ -34,6 +34,7 @@ import {
   type RondaProgramada,
 } from '@/lib/rondas'
 import { capturarGpsNuevo } from '@/lib/gps-captura'
+import { formatHora24, formatFechaHora } from '@/lib/formato'
 
 const ObjetivoUbicacionMap = dynamic(() => import('./ObjetivoUbicacionMap'), {
   ssr: false,
@@ -83,13 +84,12 @@ function useSeccion(cargar: () => void) {
 
 // ── Utilidades de presentación ────────────────────────────────────────────────
 
+// 24 h vía lib/formato.ts: `toLocaleString('es-AR')` sin `hour12` devuelve
+// "10:45 p. m." en los runtimes con ICU reciente.
 function fechaHora(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return iso ? formatFechaHora(iso) : '—'
 }
+/** `hora_inicio`/`hora_fin` de turnos ya llegan como 'HH:MM:SS' en 24 h. */
 function horaCorta(v: string | null): string {
   return v ? v.slice(0, 5) : '—'
 }
@@ -98,8 +98,7 @@ function fechaCorta(f: string): string {
   return d && m ? `${d}/${m}` : f
 }
 function hora(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+  return formatHora24(iso)
 }
 
 function Chip({ color, children }: { color: string; children: React.ReactNode }) {

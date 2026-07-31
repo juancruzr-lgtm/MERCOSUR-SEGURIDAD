@@ -16,6 +16,7 @@ import {
   validarMotivoCierre,
   type EjecucionEnCurso,
 } from '@/lib/rondas'
+import { formatFechaHora } from '@/lib/formato'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 interface Props {
@@ -26,11 +27,9 @@ interface Props {
   onVerDetalle?: (ejecucionId: string) => void
 }
 
+// 24 h vía lib/formato.ts, igual que el resto del módulo de rondas.
 function horaCorta(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return formatFechaHora(iso)
 }
 
 export default function RondasEnCursoPanel({ objetivoId, onCierre, onVerDetalle }: Props) {

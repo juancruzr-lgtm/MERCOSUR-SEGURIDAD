@@ -17,18 +17,17 @@ import {
   type EjecucionDetalleSupervisor,
   type PuntoEjecucionDetalle,
 } from '@/lib/rondas'
+import { formatFechaHora } from '@/lib/formato'
 
 interface Props {
   ejecucionId: string
   onCerrar: () => void
 }
 
+// 24 h vía lib/formato.ts: en el detalle conviven horarios de ventana y de
+// registro, y un AM/PM ahí vuelve imposible leer una ronda nocturna.
 function fechaHora(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return iso ? formatFechaHora(iso) : '—'
 }
 
 function siNoNa(valor: boolean | null): { texto: string; color: string } {

@@ -25,6 +25,7 @@ import {
 } from '@/lib/legajo-objetivo'
 import type { LegajoObjetivo, ObjetivoLegajo, RondaLegajo, TurnoLegajo } from '@/lib/legajo-objetivo'
 import { listarRondaAlertasObjetivo } from '@/lib/rondas'
+import { formatFechaHora } from '@/lib/formato'
 import {
   SeccionUbicacion, SeccionAsistencias, SeccionRondas,
   SeccionSupervisiones, SeccionNovedades,
@@ -202,10 +203,9 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     )
   }
   const hora = (h: string) => h?.slice(0, 5) || '—'
-  const fechaCorta = (iso: string) => {
-    if (!iso) return '—'
-    return new Date(iso).toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })
-  }
+  // 24 h vía lib/formato.ts: `toLocaleDateString` con opciones de hora devuelve
+  // AM/PM en los runtimes con ICU reciente.
+  const fechaCorta = (iso: string) => (iso ? formatFechaHora(iso) : '—')
 
   const card: React.CSSProperties = { background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:16, marginBottom:16 }
   const secTitle: React.CSSProperties = { fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:14, color:'#e2e8f0', marginBottom:10, textTransform:'uppercase', letterSpacing:1 }
@@ -467,7 +467,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                     {historial.map((r: any) => (
                       <tr key={r.id} style={{ borderBottom:'1px solid #0f172a' }}>
                         <td style={{ padding:'7px 10px', color:'#93c5fd', whiteSpace:'nowrap', fontFamily:'Syne,sans-serif', fontWeight:600 }}>
-                          {new Date(r.fecha_hora).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}
+                          {formatFechaHora(r.fecha_hora)}
                         </td>
                         <td style={{ padding:'7px 10px', color:'#e2e8f0' }}>{r.checkpoint || '—'}</td>
                         <td style={{ padding:'7px 10px', color:'#94a3b8', whiteSpace:'nowrap' }}>{r.dispositivo_id || '—'}</td>

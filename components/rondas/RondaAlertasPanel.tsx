@@ -24,6 +24,7 @@ import {
   type EstadoRondaAlerta,
   type AccionRondaAlerta,
 } from '@/lib/rondas'
+import { formatHora24, formatFechaHora } from '@/lib/formato'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 interface Props {
@@ -39,16 +40,14 @@ interface Props {
 
 type Filtro = 'pendiente' | 'resuelta' | 'todas'
 
+// Formato 24 h desde lib/formato.ts. `toLocaleString('es-AR')` sin `hour12`
+// devuelve "10:45 p. m." en los runtimes con ICU reciente, que en una operación
+// de turnos nocturnos es una ambigüedad cara.
 function fechaHora(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return iso ? formatFechaHora(iso) : '—'
 }
 function hora(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+  return formatHora24(iso)
 }
 
 export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendientes = false, maximo }: Props) {
