@@ -27,8 +27,12 @@ import {
   obtenerDetalleEjecucionSupervisor,
   mensajeContextoEjecucionesObjetivo,
   mensajeContextoDetalleEjecucion,
-  etiquetaEstadoRondaProgramada,
   rondaProgramadaEsIncumplida,
+  estadoTecnicoRonda,
+  estadoAlertaRonda,
+  colorRondaProgramada,
+  resumenObservacionesRonda,
+  ETIQUETA_CORTA_ESTADO_TECNICO,
   type EjecucionHistorialItem,
   type EjecucionEnCurso,
   type ContextoEjecucionesObjetivo,
@@ -380,13 +384,13 @@ const FILTROS_HISTORIAL: { id: FiltroHistorial; label: string }[] = [
   { id: 'pendiente',   label: 'Pendientes' },
 ]
 
-function estiloEstado(estado: EstadoRondaProgramada): React.CSSProperties {
-  switch (estado) {
-    case 'completada':  return S.chipOk
-    case 'incompleta':  return S.chipWarn
-    case 'no_iniciada': return S.chipBad
-    case 'en_curso':    return S.chipInfo
-    case 'pendiente':   return S.chipNeutro
+// El chip de estado sale del modelo unificado de lib/rondas.ts: mismo color y
+// misma etiqueta que el Dashboard y el legajo. Sin reglas propias.
+function chipEstado(r: RondaProgramada): { texto: string; style: React.CSSProperties } {
+  const color = colorRondaProgramada(r)
+  return {
+    texto: ETIQUETA_CORTA_ESTADO_TECNICO[estadoTecnicoRonda(r)],
+    style: { background: `${color}22`, color, border: `1px solid ${color}55` },
   }
 }
 
@@ -512,18 +516,14 @@ function SeccionHistorial({ objetivoId, onVerDetalle }: { objetivoId: string; on
                     </div>
                   </td>
                   <td style={S.td}>
-                    <span style={{ ...S.chip, ...estiloEstado(r.estado) }}>
-                      {etiquetaEstadoRondaProgramada(r.estado)}
+                    {/* Estado técnico + observaciones + estado de alerta, en
+                        campos separados: la intervención nunca reemplaza al
+                        estado técnico. Colores del modelo unificado. */}
+                    <span style={{ ...S.chip, ...chipEstado(r).style }} title={resumenObservacionesRonda(r) ?? undefined}>
+                      {chipEstado(r).texto}
                     </span>
-                    {r.inicio_tardio && (
-                      <span style={{ ...S.chip, ...S.chipWarn, marginLeft: 6 }} title="Se ejecutó después del vencimiento de su ventana">
-                        Tardía
-                      </span>
-                    )}
-                    {r.es_cierre_administrativo && (
-                      <span style={{ ...S.chip, ...S.chipAdmin, marginLeft: 6 }} title={r.cerrada_motivo ?? undefined}>
-                        Cierre administrativo
-                      </span>
+                    {resumenObservacionesRonda(r) && (
+                      <div style={S.subCelda}>{resumenObservacionesRonda(r)}</div>
                     )}
                     {/* Anexo: no es el estado de la ronda, es una anotación sobre ella. */}
                     {r.alerta_suspendida && (
@@ -531,12 +531,12 @@ function SeccionHistorial({ objetivoId, onVerDetalle }: { objetivoId: string; on
                         Suspendida
                       </span>
                     )}
-                    {r.alerta_estado === 'resuelta' && (
+                    {estadoAlertaRonda(r) === 'intervenida' && (
                       <span
-                        style={{ ...S.chip, ...S.chipNeutro, marginLeft: 6 }}
+                        style={{ ...S.chip, ...S.chipIntervenida, marginLeft: 6 }}
                         title={[r.alerta_comentario, r.alerta_resuelta_por_nombre].filter(Boolean).join(' — ') || undefined}
                       >
-                        Intervenida
+                        Alerta intervenida
                       </span>
                     )}
                   </td>
@@ -624,6 +624,8 @@ const S: Record<string, React.CSSProperties> = {
   chipInfo: { background: '#1e293b', color: '#93c5fd', border: '1px solid #2563eb' },
   chipNeutro: { background: '#0f172a', color: '#94a3b8', border: '1px solid #334155' },
   chipAdmin: { background: '#3b1116', color: '#fca5a5', border: '1px solid #991b1b' },
+  // Verde lima del modelo unificado: alerta intervenida.
+  chipIntervenida: { background: '#a3e63522', color: '#a3e635', border: '1px solid #a3e63555' },
   chipsFiltro: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 },
   filtroBtn: {
     border: '1px solid #1e2d42', background: '#0f172a', color: '#94a3b8',

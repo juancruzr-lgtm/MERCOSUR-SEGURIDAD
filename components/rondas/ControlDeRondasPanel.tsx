@@ -25,9 +25,20 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import RondaEjecucionDetalle from './RondaEjecucionDetalle'
 import {
   listarRondasProgramadasObjetivo,
-  rondaProgramadaEsIncumplida,
   etiquetaAccionRondaAlerta,
+  estadoTecnicoRonda,
+  estadoAlertaRonda,
+  colorRondaProgramada,
+  ordenOperativoRonda,
+  ordenRondaEsHaciaAdelante,
+  resumenObservacionesRonda,
+  ETIQUETA_CORTA_ESTADO_TECNICO,
+  ETIQUETA_ESTADO_TECNICO,
+  ETIQUETA_ESTADO_ALERTA,
+  ICONO_ESTADO_TECNICO,
+  COLOR_ESTADO_TECNICO,
   type RondaProgramada,
+  type EstadoTecnicoRonda,
 } from '@/lib/rondas'
 import { formatHora24, formatFechaHora } from '@/lib/formato'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
@@ -44,56 +55,8 @@ interface Props {
   onVerTodas?: () => void
 }
 
-// ── Estados operativos ────────────────────────────────────────────────────────
-// Las cuatro etiquetas del tablero. No son estados nuevos: son la lectura
-// gerencial de los estados que ya produce el motor (`EstadoRondaProgramada`).
-//
-//   en_curso                              → En curso
-//   no_iniciada | incompleta | tardía     → Incumplida
-//   pendiente                             → Próxima
-//   completada                            → Cumplida
-
-type EstadoOperativo = 'en_curso' | 'incumplida' | 'proxima' | 'cumplida'
-
-const ETIQUETA: Record<EstadoOperativo, string> = {
-  en_curso:   'En curso',
-  incumplida: 'Incumplida',
-  proxima:    'Próxima',
-  cumplida:   'Cumplida',
-}
-
-const ICONO: Record<EstadoOperativo, string> = {
-  en_curso:   '⏳',
-  incumplida: '❌',
-  proxima:    '🕒',
-  cumplida:   '✅',
-}
-
-function estadoOperativo(r: RondaProgramada): EstadoOperativo {
-  // El orden importa: `en_curso` gana sobre "tardía" porque la ronda está
-  // ocurriendo ahora, y eso es lo que el supervisor necesita ver.
-  if (r.estado === 'en_curso') return 'en_curso'
-  if (rondaProgramadaEsIncumplida(r)) return 'incumplida'
-  if (r.estado === 'pendiente') return 'proxima'
-  return 'cumplida'
-}
-
-/** Hubo acción del supervisor sobre la alerta de esta ronda. */
-function fueIntervenida(r: RondaProgramada): boolean {
-  return r.alerta_estado === 'resuelta' || r.alerta_intervenciones > 0
-}
-
-// ── Prioridad operativa ───────────────────────────────────────────────────────
-// 1 En curso · 2 Incumplidas sin intervención · 3 Incumplidas intervenidas
-// 4 Próximas · 5 Cumplidas. Dentro de cada grupo, por horario.
-
-function prioridad(r: RondaProgramada): number {
-  const estado = estadoOperativo(r)
-  if (estado === 'en_curso') return 1
-  if (estado === 'incumplida') return fueIntervenida(r) ? 3 : 2
-  if (estado === 'proxima') return 4
-  return 5
-}
+// Estados, etiquetas, colores, íconos y orden: TODO viene de lib/rondas.ts.
+// Este componente no deriva nada; solo selecciona la ronda relevante y pinta.
 
 function ms(iso: string): number {
   const t = new Date(iso).getTime()
@@ -308,14 +271,17 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
       nuevas.push({ objetivoId: r.id, ronda })
     }
 
+    // Orden operativo único de lib/rondas.ts. En este carril entran solo rondas
+    // ya vencidas (selección temporal), así que en la práctica se ven los
+    // grupos 1-5; la función general cubre igual los demás.
     nuevas.sort((a, b) => {
-      const pa = prioridad(a.ronda)
-      const pb = prioridad(b.ronda)
+      const pa = ordenOperativoRonda(a.ronda)
+      const pb = ordenOperativoRonda(b.ronda)
       if (pa !== pb) return pa - pb
       const ta = ms(a.ronda.ventana_inicio)
       const tb = ms(b.ronda.ventana_inicio)
-      // Próximas: lo más inminente arriba. El resto: lo más reciente arriba.
-      return pa === 4 ? ta - tb : tb - ta
+      // Lo que aún no ocurrió: lo más inminente arriba. El resto: lo más reciente.
+      return ordenRondaEsHaciaAdelante(pa) ? ta - tb : tb - ta
     })
 
     // Solo es un error de pantalla si NINGÚN objetivo pudo consultarse. Con
@@ -335,8 +301,11 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
   const nombreDe = (id: string) => nombrePorId.get(id) ?? 'Objetivo'
 
   const conteos = useMemo(() => {
-    const c: Record<EstadoOperativo, number> = { en_curso: 0, incumplida: 0, proxima: 0, cumplida: 0 }
-    for (const f of filas) c[estadoOperativo(f.ronda)]++
+    const c: Record<EstadoTecnicoRonda, number> = {
+      proxima: 0, pendiente: 0, en_curso: 0,
+      cumplida: 0, cumplida_observada: 0, incompleta: 0, no_iniciada: 0,
+    }
+    for (const f of filas) c[estadoTecnicoRonda(f.ronda)]++
     return c
   }, [filas])
 
@@ -349,11 +318,11 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
         </button>
         {filas.length > 0 && (
           <div style={S.resumen}>
-            {(['en_curso', 'incumplida', 'proxima', 'cumplida'] as EstadoOperativo[])
+            {(['no_iniciada', 'en_curso', 'incompleta', 'cumplida_observada', 'cumplida'] as EstadoTecnicoRonda[])
               .filter(e => conteos[e] > 0)
               .map(e => (
-                <span key={e} style={S.resumenItem}>
-                  {ICONO[e]} {conteos[e]}
+                <span key={e} style={{ ...S.resumenItem, color: COLOR_ESTADO_TECNICO[e] }}>
+                  {ICONO_ESTADO_TECNICO[e]} {conteos[e]}
                 </span>
               ))}
           </div>
@@ -456,31 +425,36 @@ function TarjetaObjetivo({
   fila, objetivoNombre, onAbrir,
 }: { fila: Fila; objetivoNombre: string; onAbrir: () => void }) {
   const r = fila.ronda
-  const estado = estadoOperativo(r)
+  const tecnico = estadoTecnicoRonda(r)
+  const alerta = estadoAlertaRonda(r)
+  const color = colorRondaProgramada(r)
   const deHoy = esDeHoy(r.ventana_inicio)
 
-  // Pie de la tarjeta: solo para incumplidas, que es donde importa saber si
-  // alguien ya se hizo cargo.
-  const pie = estado !== 'incumplida'
-    ? null
-    : r.alerta_resuelta_por_nombre
-      ? `Intervino: ${nombreCorto(r.alerta_resuelta_por_nombre)}`
-      : fueIntervenida(r)
-        ? `${r.alerta_intervenciones} intervención(es)`
-        : 'Sin intervención'
+  // Pie de una línea. La intervención tiñe de lima pero NO reemplaza el estado
+  // técnico: la etiqueta sigue diciendo "No iniciada" y el pie dice quién actuó.
+  // En cumplidas con observaciones e incompletas, el pie es el resumen técnico.
+  const pie = alerta === 'intervenida'
+    ? (r.alerta_resuelta_por_nombre
+        ? `Intervino: ${nombreCorto(r.alerta_resuelta_por_nombre)}`
+        : `${r.alerta_intervenciones} intervención(es)`)
+    : alerta === 'pendiente'
+      ? 'Sin intervención'
+      : (tecnico === 'cumplida_observada' || tecnico === 'incompleta')
+        ? resumenObservacionesRonda(r)
+        : null
 
   const pieDestacado = pie === 'Sin intervención'
 
   return (
     <div
       role="listitem"
-      style={{ ...S.tarjeta, borderLeftColor: COLOR[estado] }}
+      style={{ ...S.tarjeta, borderLeftColor: color }}
     >
       <button
         type="button"
         style={S.tarjetaBtn}
         onClick={onAbrir}
-        aria-label={`${objetivoNombre}, ${deHoy ? '' : `${diaMes(r.ventana_inicio)} `}${hora(r.ventana_inicio)}, ${ETIQUETA[estado]}. Ver detalle`}
+        aria-label={`${objetivoNombre}, ${deHoy ? '' : `${diaMes(r.ventana_inicio)} `}${hora(r.ventana_inicio)}, ${ETIQUETA_ESTADO_TECNICO[tecnico]}${alerta !== 'sin_alerta' ? `, alerta ${ETIQUETA_ESTADO_ALERTA[alerta].toLowerCase()}` : ''}. Ver detalle`}
       >
         <span style={S.objetivo}>{objetivoNombre}</span>
         <span style={S.horaLinea}>
@@ -489,8 +463,8 @@ function TarjetaObjetivo({
               sería ruido en la enorme mayoría de las tarjetas. */}
           {!deHoy && <span style={S.diaEtiqueta}>{diaMes(r.ventana_inicio)}</span>}
         </span>
-        <span style={{ ...S.estadoTexto, color: COLOR[estado] }}>
-          {ICONO[estado]} {ETIQUETA[estado]}
+        <span style={{ ...S.estadoTexto, color }}>
+          {ICONO_ESTADO_TECNICO[tecnico]} {ETIQUETA_CORTA_ESTADO_TECNICO[tecnico]}
         </span>
         <span style={{ ...S.pieTarjeta, ...(pieDestacado ? S.pieAlerta : null) }}>
           {pie ?? ' '}
@@ -512,7 +486,8 @@ function DetalleSinEjecucion({
   fila, objetivoNombre, onCerrar,
 }: { fila: Fila; objetivoNombre: string; onCerrar: () => void }) {
   const r = fila.ronda
-  const estado = estadoOperativo(r)
+  const tecnico = estadoTecnicoRonda(r)
+  const alerta = estadoAlertaRonda(r)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCerrar() }
@@ -520,6 +495,8 @@ function DetalleSinEjecucion({
     return () => document.removeEventListener('keydown', onKey)
   }, [onCerrar])
 
+  // Estado técnico y estado de alerta van en campos SEPARADOS: intervenir una
+  // alerta no convierte la ronda en otra cosa.
   const datos: [string, string][] = [
     ['Objetivo', objetivoNombre],
     ['Ronda', r.ronda_nombre],
@@ -527,7 +504,8 @@ function DetalleSinEjecucion({
     ['Vigilador', r.guardia_nombre],
     ['Ventana', `${hora(r.ventana_inicio)} – ${hora(r.ventana_fin)}`],
     ['Vencimiento', fechaHora(r.vencimiento_at)],
-    ['Estado', ETIQUETA[estado]],
+    ['Estado técnico', ETIQUETA_ESTADO_TECNICO[tecnico]],
+    ['Alerta', ETIQUETA_ESTADO_ALERTA[alerta]],
   ]
 
   return (
@@ -561,7 +539,7 @@ function DetalleSinEjecucion({
 
         <div style={S.bloque}>
           <div style={S.bloqueTitulo}>Intervención</div>
-          {fueIntervenida(r) ? (
+          {alerta === 'intervenida' ? (
             <div style={S.bloqueTexto}>
               <div>Intervenciones registradas: {r.alerta_intervenciones}</div>
               {r.alerta_accion && <div>Acción: {etiquetaAccionRondaAlerta(r.alerta_accion)}</div>}
@@ -579,12 +557,6 @@ function DetalleSinEjecucion({
   )
 }
 
-const COLOR: Record<EstadoOperativo, string> = {
-  en_curso:   '#93c5fd',
-  incumplida: '#fca5a5',
-  proxima:    '#94a3b8',
-  cumplida:   '#4ade80',
-}
 
 const S: Record<string, React.CSSProperties> = {
   cabecera: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' },

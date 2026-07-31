@@ -40,6 +40,29 @@ export function fotoEsObligatoria(politica: PoliticaFoto, hayNovedad: boolean): 
   return politica === 'obligatoria' || (politica === 'solo_novedad' && hayNovedad)
 }
 
+// ── Control de evidencias por reincidencia GPS ────────────────────────────────
+// Tras dos incumplimientos GPS consecutivos en el mismo punto, la siguiente
+// visita nace con `foto_control_gps = true` en su snapshot: una única foto de
+// control, y el ciclo vuelve a cero. El contador y la decisión viven por
+// completo en el servidor (registrar_punto_ronda); el cliente solo muestra la
+// exigencia que el snapshot ya trae. No es una política del punto ni la
+// modifica: se suma como OR a la política manual configurada.
+
+export const MENSAJE_FOTO_CONTROL_GPS =
+  'Foto obligatoria de control por reiteración de registros fuera del radio.'
+
+/**
+ * Exigencia de foto de una visita: la política manual O la foto de control por
+ * reincidencia GPS. Misma composición que aplica el servidor.
+ */
+export function fotoEsObligatoriaEnVisita(
+  politica: PoliticaFoto,
+  hayNovedad: boolean,
+  fotoControlGps: boolean,
+): boolean {
+  return fotoEsObligatoria(politica, hayNovedad) || fotoControlGps
+}
+
 export interface RondaBase {
   id: string
   objetivo_id: string
@@ -687,6 +710,12 @@ export interface RondaEjecucionPuntoEstado {
   // ── Añadidos por la política de foto ──
   politica_foto: PoliticaFoto
   hay_novedad: boolean
+  /**
+   * La visita nació con foto de control por reincidencia GPS (snapshot del
+   * servidor). Independiente de `politica_foto`: distingue la foto automática
+   * de la configurada manualmente.
+   */
+  foto_control_gps: boolean
   requiere_gps: boolean
   latitud: number | null
   longitud: number | null
@@ -868,6 +897,8 @@ export interface VeredictoPuntoRonda {
   foto_ok?: boolean | null
   hay_novedad?: boolean
   politica_foto?: PoliticaFoto
+  /** La visita exigía foto de control por reincidencia GPS. */
+  foto_control_gps?: boolean
   distancia_metros?: number | null
 }
 
@@ -890,7 +921,11 @@ function normalizarEjecucion(bruto: any): RondaEjecucionActual | null {
   const puntos: RondaEjecucionPuntoEstado[] = Array.isArray(bruto.puntos) ? bruto.puntos : []
   return {
     ...bruto,
-    puntos: [...puntos].sort((a, b) => a.orden - b.orden),
+    puntos: [...puntos]
+      .sort((a, b) => a.orden - b.orden)
+      // Un servidor sin la migración de control GPS no manda la clave: se
+      // normaliza a false, que reproduce el comportamiento previo.
+      .map(p => ({ ...p, foto_control_gps: (p as any).foto_control_gps ?? false })),
   } as RondaEjecucionActual
 }
 
@@ -1233,6 +1268,8 @@ export interface PuntoEjecucionDetalle {
   hay_novedad: boolean
   requiere_foto: boolean
   politica_foto: PoliticaFoto
+  /** La visita nació con foto de control por reincidencia GPS. */
+  foto_control_gps: boolean
   requiere_gps: boolean
   // Posición configurada al iniciar la ronda (snapshot inmutable).
   config_latitud: number | null
@@ -1419,9 +1456,254 @@ export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): st
   }
 }
 
-/** Una ronda programada cuenta como incumplida si venció sin cumplirse. */
+// ═══ Modelo visual unificado de una ronda programada ═════════════════════════
+//
+// ÚNICA fuente de estado, etiqueta, color, ícono, orden y observaciones para
+// todas las pantallas (Dashboard, pantalla global, historial, legajo, detalle).
+// Ningún componente deriva nada por su cuenta: consumir estas funciones o nada.
+//
+// Dos ejes ORTOGONALES, nunca fundidos en una sola etiqueta:
+//
+//   Estado TÉCNICO   qué pasó con la obligación. Sale del motor (programación
+//                    + ejecución + contadores por punto). La intervención de un
+//                    supervisor jamás lo modifica.
+//   Estado de ALERTA solo aplica a rondas no iniciadas —la única situación que
+//                    genera alerta operativa—: pendiente (nadie la miró) o
+//                    intervenida (un supervisor ya actuó).
+//
+// El estado técnico refina `EstadoRondaProgramada` (el crudo de la RPC) con los
+// contadores que la misma fila ya trae, sin datos nuevos:
+//
+//   'pendiente' del motor  → proxima   si la ventana todavía no abrió
+//                          → pendiente si está abierta y sin ejecución
+//   'incompleta' del motor → incompleta          si hay puntos sin recorrer
+//                            (omitidos o cierre administrativo): ronda
+//                            abandonada a mitad de camino
+//                          → cumplida_observada  si se recorrió todo pero con
+//                            incumplimientos GPS: la ronda SE HIZO
+//   'completada'           → cumplida_observada  si arrancó tarde
+//                          → cumplida            si está limpia
+//
+// La foto de control por reincidencia GPS NO aparece acá a propósito: es una
+// exigencia de una visita puntual, no un estado de la ronda. La ronda se
+// clasifica por su resultado técnico final.
+
+export type EstadoTecnicoRonda =
+  | 'proxima'
+  | 'pendiente'
+  | 'en_curso'
+  | 'cumplida'
+  | 'cumplida_observada'
+  | 'incompleta'
+  | 'no_iniciada'
+
+export type EstadoAlertaVisual = 'sin_alerta' | 'pendiente' | 'intervenida'
+
+export const ETIQUETA_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
+  proxima:            'Próxima',
+  pendiente:          'Pendiente',
+  en_curso:           'En curso',
+  cumplida:           'Cumplida',
+  cumplida_observada: 'Cumplida con observaciones',
+  incompleta:         'Incompleta',
+  no_iniciada:        'No iniciada',
+}
+
+/** Versión corta para superficies compactas (tarjeta de 200 px, chips). */
+export const ETIQUETA_CORTA_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
+  proxima:            'Próxima',
+  pendiente:          'Pendiente',
+  en_curso:           'En curso',
+  cumplida:           'Cumplida',
+  cumplida_observada: 'Cumplida c/obs.',
+  incompleta:         'Incompleta',
+  no_iniciada:        'No iniciada',
+}
+
+export const ETIQUETA_ESTADO_ALERTA: Record<EstadoAlertaVisual, string> = {
+  sin_alerta:  'Sin alerta',
+  pendiente:   'Pendiente',
+  intervenida: 'Intervenida',
+}
+
+// Paleta única. El rojo queda reservado a la alerta pendiente por ronda no
+// iniciada: es lo único que exige atención inmediata. Incompleta va en naranja
+// para que una ronda iniciada y abandonada no se confunda con una que nadie
+// arrancó.
+export const COLOR_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
+  proxima:            '#94a3b8',  // gris
+  pendiente:          '#94a3b8',  // gris (etiqueta propia, mismo tono)
+  en_curso:           '#3b82f6',  // azul
+  cumplida:           '#22c55e',  // verde
+  cumplida_observada: '#86efac',  // verde claro
+  incompleta:         '#f97316',  // naranja
+  no_iniciada:        '#ef4444',  // rojo — solo mientras la alerta esté sin intervenir
+}
+
+/** Verde lima: alerta intervenida. Distinto del verde y del verde claro. */
+export const COLOR_ALERTA_INTERVENIDA = '#a3e635'
+
+export const ICONO_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
+  proxima:            '🕒',
+  pendiente:          '⏳',
+  en_curso:           '▶',
+  cumplida:           '✅',
+  cumplida_observada: '✅',
+  incompleta:         '⚠️',
+  no_iniciada:        '❌',
+}
+
+function msRonda(iso: string): number {
+  const t = new Date(iso).getTime()
+  return Number.isNaN(t) ? 0 : t
+}
+
+/**
+ * Estado técnico de la ronda. La separación próxima/pendiente compara contra
+ * `ventana_inicio`, que es un instante absoluto (timestamptz): el huso del
+ * navegador no puede correr el corte. El resto sale del estado del motor —que
+ * ya comparó `now()` contra el vencimiento en el servidor— y de los contadores.
+ */
+export function estadoTecnicoRonda(r: RondaProgramada, ahora: number = Date.now()): EstadoTecnicoRonda {
+  if (r.estado === 'pendiente') {
+    return ahora < msRonda(r.ventana_inicio) ? 'proxima' : 'pendiente'
+  }
+  if (r.estado === 'en_curso')    return 'en_curso'
+  if (r.estado === 'no_iniciada') return 'no_iniciada'
+
+  // Ejecución finalizada. Puntos sin recorrer o cierre forzado: abandono.
+  if (r.puntos_omitidos > 0 || r.es_cierre_administrativo) return 'incompleta'
+
+  // Se recorrió todo. Lo que queda son observaciones, no abandono.
+  if (r.puntos_incumplidos > 0 || r.inicio_tardio) return 'cumplida_observada'
+  if (r.estado === 'completada') return 'cumplida'
+
+  // `incompleta` sin omitidos ni incumplidos no debería existir (el motor solo
+  // finaliza con cero pendientes). Si aparece, la ronda igual se ejecutó: se
+  // marca observada en vez de acusar un abandono que los contadores no avalan.
+  return 'cumplida_observada'
+}
+
+/**
+ * Estado de la alerta operativa. Solo las rondas no iniciadas tienen alerta:
+ * cualquier otra situación devuelve 'sin_alerta', incluso si la fila trae un
+ * anexo de alerta de criterios históricos.
+ *
+ * 'intervenida' cubre tanto la alerta resuelta como la que tiene intervenciones
+ * abiertas (una llamada al vigilador, por ejemplo): en ambos casos un
+ * supervisor ya actuó y el rojo deja de corresponder.
+ */
+export function estadoAlertaRonda(r: RondaProgramada): EstadoAlertaVisual {
+  if (estadoTecnicoRonda(r) !== 'no_iniciada') return 'sin_alerta'
+  return (r.alerta_estado === 'resuelta' || r.alerta_intervenciones > 0)
+    ? 'intervenida'
+    : 'pendiente'
+}
+
+/** Color final de la ronda: la intervención tiñe de lima; el resto, su estado. */
+export function colorRondaProgramada(r: RondaProgramada): string {
+  return estadoAlertaRonda(r) === 'intervenida'
+    ? COLOR_ALERTA_INTERVENIDA
+    : COLOR_ESTADO_TECNICO[estadoTecnicoRonda(r)]
+}
+
+/**
+ * Orden operativo entre rondas (menor = más arriba). Único criterio para toda
+ * pantalla que liste o priorice rondas.
+ */
+export function ordenOperativoRonda(r: RondaProgramada): number {
+  const tecnico = estadoTecnicoRonda(r)
+  if (tecnico === 'no_iniciada') {
+    return estadoAlertaRonda(r) === 'pendiente' ? 1 : 3
+  }
+  switch (tecnico) {
+    case 'en_curso':           return 2
+    case 'incompleta':         return 4
+    case 'cumplida_observada': return 5
+    case 'pendiente':          return 6
+    case 'proxima':            return 7
+    case 'cumplida':           return 8
+  }
+}
+
+/** Grupos cuyo empate se resuelve por lo más inminente (aún no ocurrieron). */
+export function ordenRondaEsHaciaAdelante(orden: number): boolean {
+  return orden === 6 || orden === 7
+}
+
+/**
+ * Observaciones técnicas de una ronda finalizada, para mostrar como resumen
+ * breve. Derivan solo de los contadores que la fila ya trae; lo que el motor no
+ * expone (foto faltante, precisión GPS) no se inventa acá.
+ *
+ * Nota sobre "fuera del radio": `puntos_incumplidos` agrupa fuera-de-radio y
+ * GPS obligatorio sin lectura — el motor no los separa a nivel contador. El
+ * caso dominante es el desvío de radio y así se rotula; el detalle por punto
+ * muestra la distinción exacta.
+ */
+export function observacionesRonda(r: RondaProgramada): string[] {
+  const obs: string[] = []
+  if (r.puntos_incumplidos > 0) {
+    obs.push(`${r.puntos_incumplidos} punto(s) fuera del radio`)
+  }
+  if (r.puntos_omitidos > 0) {
+    obs.push(`${r.puntos_omitidos} punto(s) sin recorrer`)
+  }
+  if (r.inicio_tardio) obs.push('Inicio tardío')
+  if (r.es_cierre_administrativo) obs.push('Cierre administrativo')
+  return obs
+}
+
+/** Resumen de observaciones en una línea, o null si no hay. */
+export function resumenObservacionesRonda(r: RondaProgramada): string | null {
+  const obs = observacionesRonda(r)
+  return obs.length > 0 ? obs.join(' · ') : null
+}
+
+/**
+ * Una ronda programada cuenta como incumplida (filtro del historial y conteos).
+ *
+ * Delega en el estado técnico: no iniciada o abandonada. Una ronda recorrida
+ * con observaciones GPS ya no cuenta como incumplida — antes sí, y por eso un
+ * desvío de radio se pintaba igual que una ronda que nadie hizo.
+ */
 export function rondaProgramadaEsIncumplida(r: RondaProgramada): boolean {
-  return r.estado === 'no_iniciada' || r.estado === 'incompleta' || r.inicio_tardio
+  const tecnico = estadoTecnicoRonda(r)
+  return tecnico === 'no_iniciada' || tecnico === 'incompleta'
+}
+
+/**
+ * Estado técnico desde el contrato del DETALLE de ejecución (que no trae la
+ * ventana programada ni la alerta: solo la ejecución y sus puntos). Mismas
+ * reglas que `estadoTecnicoRonda`, con una limitación documentada: el inicio
+ * tardío respecto de la ventana no es derivable acá, así que una completada
+ * tardía se muestra 'cumplida' en esta vista.
+ */
+export function estadoTecnicoDetalleEjecucion(
+  estado: EstadoEjecucionRonda,
+  esCierreAdministrativo: boolean,
+  puntos: { estado: EstadoPuntoEjecucion }[],
+): EstadoTecnicoRonda {
+  if (estado === 'en_curso') return 'en_curso'
+  const omitidos = puntos.filter(p => p.estado === 'omitido').length
+  const incumplidos = puntos.filter(p => p.estado === 'incumplido').length
+  if (omitidos > 0 || esCierreAdministrativo) return 'incompleta'
+  if (incumplidos > 0) return 'cumplida_observada'
+  return 'cumplida'
+}
+
+/** Observaciones del detalle de ejecución, mismas frases que el resto. */
+export function observacionesDetalleEjecucion(
+  esCierreAdministrativo: boolean,
+  puntos: { estado: EstadoPuntoEjecucion }[],
+): string[] {
+  const obs: string[] = []
+  const incumplidos = puntos.filter(p => p.estado === 'incumplido').length
+  const omitidos = puntos.filter(p => p.estado === 'omitido').length
+  if (incumplidos > 0) obs.push(`${incumplidos} punto(s) fuera del radio`)
+  if (omitidos > 0) obs.push(`${omitidos} punto(s) sin recorrer`)
+  if (esCierreAdministrativo) obs.push('Cierre administrativo')
+  return obs
 }
 
 export interface RondaProgramada {

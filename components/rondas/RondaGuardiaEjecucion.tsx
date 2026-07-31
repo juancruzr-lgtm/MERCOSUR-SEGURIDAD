@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import {
   etiquetaPoliticaFoto,
-  fotoEsObligatoria,
+  fotoEsObligatoriaEnVisita,
   mensajeContextoRegistrarPunto,
   registrarPuntoRonda,
   subirFotoPuntoRonda,
+  MENSAJE_FOTO_CONTROL_GPS,
   type GpsPuntoRonda,
   type RondaEjecucionActual,
   type RondaEjecucionPuntoEstado,
@@ -165,9 +166,12 @@ export default function RondaGuardiaEjecucion({
 
   // Misma regla que aplica el servidor. Se recalcula al marcar la novedad:
   // con política `solo_novedad` es esa marca la que vuelve obligatoria una foto
-  // que hasta recién no se pedía.
+  // que hasta recién no se pedía. La foto de control por reincidencia GPS viene
+  // congelada en el snapshot y se suma como OR sin tocar la política.
   const politicaFoto = puntoActual?.politica_foto ?? 'obligatoria'
-  const fotoObligatoria = puntoActual != null && fotoEsObligatoria(politicaFoto, hayNovedad)
+  const fotoControlGps = puntoActual?.foto_control_gps ?? false
+  const fotoObligatoria = puntoActual != null
+    && fotoEsObligatoriaEnVisita(politicaFoto, hayNovedad, fotoControlGps)
 
   useEffect(() => {
     return () => {
@@ -227,9 +231,11 @@ export default function RondaGuardiaEjecucion({
       return
     }
     if (fotoObligatoria && !foto) {
-      setError(hayNovedad && politicaFoto === 'solo_novedad'
-        ? 'Marcaste que hay una novedad: la foto pasa a ser obligatoria.'
-        : 'Este punto requiere una foto antes de continuar.')
+      setError(fotoControlGps && politicaFoto !== 'obligatoria'
+        ? MENSAJE_FOTO_CONTROL_GPS
+        : hayNovedad && politicaFoto === 'solo_novedad'
+          ? 'Marcaste que hay una novedad: la foto pasa a ser obligatoria.'
+          : 'Este punto requiere una foto antes de continuar.')
       return
     }
 
@@ -375,10 +381,21 @@ export default function RondaGuardiaEjecucion({
           <span style={{ ...S.regla, ...(fotoObligatoria ? S.reglaActiva : S.reglaOpcional) }}>
             {etiquetaPoliticaFoto(politicaFoto)}
           </span>
+          {fotoControlGps && (
+            <span style={{ ...S.regla, ...S.reglaControl }}>Foto de control</span>
+          )}
           {puntoActual.radio_metros != null && (
             <span style={{ ...S.regla, ...S.reglaOpcional }}>Radio {puntoActual.radio_metros} m</span>
           )}
         </div>
+
+        {/* Aviso previo, no error: el vigilador se entera de la verificación
+            antes de intentar registrar, con el motivo explícito. */}
+        {fotoControlGps && (
+          <div style={S.avisoControl} role="status">
+            {MENSAJE_FOTO_CONTROL_GPS}
+          </div>
+        )}
 
         <div style={S.bloque}>
           <div style={S.bloqueTitulo}>1. Ubicación</div>
@@ -537,6 +554,12 @@ const S: Record<string, CSSProperties> = {
   regla: { borderRadius: 999, padding: '3px 8px', fontSize: 10, fontWeight: 800 },
   reglaActiva: { color: '#86efac', background: '#0b2a1c' },
   reglaOpcional: { color: '#94a3b8', background: '#1e293b' },
+  reglaControl: { color: '#fde68a', background: '#3f2d10', border: '1px solid #92400e' },
+  avisoControl: {
+    marginTop: 12, padding: '10px 12px', borderRadius: 10,
+    border: '1px solid #92400e', background: '#3f2d10', color: '#fde68a',
+    fontSize: 12, lineHeight: 1.5, fontWeight: 700,
+  },
   bloque: { marginTop: 14, paddingTop: 14, borderTop: '1px solid #1e2d42' },
   bloqueTitulo: { color: '#e2e8f0', fontSize: 13, fontWeight: 800, marginBottom: 8 },
   ayuda: { color: '#94a3b8', fontSize: 12, lineHeight: 1.5, marginBottom: 9 },

@@ -3464,17 +3464,27 @@ export default function SupervisorMobile({ user }: any) {
                     </div>
                   )}
 
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                    <button type="button" style={secondaryButton} onClick={resetFormularioSupervision}>
-                      Limpiar
-                    </button>
+                  {/* La acción principal va primero y sola: en pantallas angostas
+                      una grilla de dos columnas dejaba "Guardar supervisión" con
+                      ~115 px útiles, y como las pistas `1fr` no bajan del
+                      min-content de "supervisión", el botón desbordaba la tarjeta
+                      y quedaba cortado. Ahora ocupa el ancho disponible, con un
+                      tope para que no se estire en pantallas grandes. */}
+                  <div style={accionesSupervision}>
                     <button
                       type="button"
-                      style={{ ...refreshButton, opacity: asignando === 'guardar-supervision' ? 0.65 : 1 }}
+                      style={{ ...primaryActionButton, opacity: asignando === 'guardar-supervision' ? 0.65 : 1 }}
                       onClick={guardarSupervision}
                       disabled={asignando === 'guardar-supervision'}
                     >
                       {asignando === 'guardar-supervision' ? 'Guardando...' : 'Guardar supervisión'}
+                    </button>
+                    <button
+                      type="button"
+                      style={{ ...secondaryButton, minWidth: 0 }}
+                      onClick={resetFormularioSupervision}
+                    >
+                      Limpiar
                     </button>
                   </div>
                 </div>
@@ -3971,7 +3981,12 @@ const container: React.CSSProperties = {
   minHeight: '100vh',
   background: '#0a0e1a',
   color: '#e2e8f0',
-  paddingBottom: 72,
+  // 72 px de la barra fija + el home indicator del iPhone. Con el valor fijo
+  // anterior, el último control de cada pantalla quedaba debajo de la barra.
+  paddingBottom: 'calc(72px + env(safe-area-inset-bottom, 0px))',
+  // Ningún contenido puede generar scroll lateral en el shell móvil.
+  overflowX: 'hidden',
+  maxWidth: '100%',
   fontFamily: 'Arial, sans-serif',
 }
 
@@ -3992,6 +4007,11 @@ const brand: React.CSSProperties = {
 
 const main: React.CSSProperties = {
   padding: 20,
+  // Respeta el notch en horizontal sin perder los 20 px de margen base.
+  paddingLeft: 'max(20px, env(safe-area-inset-left, 0px))',
+  paddingRight: 'max(20px, env(safe-area-inset-right, 0px))',
+  boxSizing: 'border-box',
+  maxWidth: '100%',
 }
 
 const card: React.CSSProperties = {
@@ -4245,6 +4265,31 @@ const refreshButton: React.CSSProperties = {
   fontWeight: 800,
 }
 
+// Acciones del formulario de supervisión, en columna: la principal arriba y a
+// ancho completo, para que ningún ancho de pantalla la recorte.
+const accionesSupervision: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+  width: '100%',
+}
+
+// Botón de acción principal en móvil. `maxWidth` + `margin: auto` lo centran y
+// evitan que se estire en pantallas anchas; `minWidth: 0` impide que el texto
+// largo fuerce un ancho mínimo mayor que el contenedor, que es lo que producía
+// el desborde horizontal.
+const primaryActionButton: React.CSSProperties = {
+  ...refreshButton,
+  display: 'block',
+  boxSizing: 'border-box',
+  maxWidth: 420,
+  minWidth: 0,
+  marginLeft: 'auto',
+  marginRight: 'auto',
+  textAlign: 'center',
+  cursor: 'pointer',
+}
+
 const logoutButton: React.CSSProperties = {
   alignSelf: 'flex-start',
   background: '#dc2626',
@@ -4278,6 +4323,10 @@ const nav: React.CSSProperties = {
   display: 'flex',
   background: '#111827',
   borderTop: '1px solid #1e2d42',
+  // Debajo del overlay de modales (z-index 50) y por encima del contenido.
+  zIndex: 40,
+  // El home indicator no puede comerse los botones de navegación.
+  paddingBottom: 'env(safe-area-inset-bottom, 0px)',
 }
 
 const navButton: React.CSSProperties = {

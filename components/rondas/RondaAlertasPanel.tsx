@@ -143,8 +143,12 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
                 ) }}>
                   {etiquetaTipoRondaAlerta(a.tipo)}
                 </span>
-                <span style={{ ...S.estado, ...(a.estado === 'pendiente' ? S.estadoPend : S.estadoResuelta) }}>
-                  {a.estado === 'pendiente' ? 'Pendiente' : 'Resuelta'}
+                {/* Colores del modelo unificado: rojo = alerta pendiente (única
+                    situación que exige atención inmediata), lima = intervenida. */}
+                <span style={{ ...S.estado, ...(a.estado === 'pendiente' ? (a.intervenciones > 0 ? S.estadoIntervenida : S.estadoPend) : S.estadoResuelta) }}>
+                  {a.estado === 'pendiente'
+                    ? (a.intervenciones > 0 ? 'Intervenida · sin cierre' : 'Pendiente')
+                    : 'Intervenida'}
                 </span>
               </div>
 
@@ -308,8 +312,9 @@ const S: Record<string, React.CSSProperties> = {
   tipoSuspendida: { background: '#1e293b', color: '#93c5fd', border: '1px solid #2563eb' },
   motivoVig: { fontSize: 12, color: '#cbd5e1', marginTop: 6, lineHeight: 1.5 },
   estado: { fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999, marginLeft: 'auto' },
-  estadoPend: { background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155' },
-  estadoResuelta: { background: '#052e16', color: '#4ade80', border: '1px solid #166534' },
+  estadoPend: { background: '#ef444422', color: '#ef4444', border: '1px solid #ef444455' },
+  estadoIntervenida: { background: '#a3e63522', color: '#a3e635', border: '1px solid #a3e63555' },
+  estadoResuelta: { background: '#a3e63522', color: '#a3e635', border: '1px solid #a3e63555' },
   objetivo: { fontSize: 11, fontWeight: 800, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2 },
   ronda: { fontSize: 15, fontWeight: 800, color: '#f8fafc' },
   datos: { fontSize: 12, color: '#cbd5e1', marginTop: 3 },

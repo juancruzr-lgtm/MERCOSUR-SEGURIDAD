@@ -13,6 +13,10 @@ import {
   firmarEvidenciaRonda,
   mensajeContextoDetalleEjecucion,
   mensajeContextoFirmaEvidencia,
+  estadoTecnicoDetalleEjecucion,
+  observacionesDetalleEjecucion,
+  ETIQUETA_ESTADO_TECNICO,
+  COLOR_ESTADO_TECNICO,
   type DetalleEjecucionSupervisor,
   type EjecucionDetalleSupervisor,
   type PuntoEjecucionDetalle,
@@ -84,7 +88,7 @@ export default function RondaEjecucionDetalle({ ejecucionId, onCerrar }: Props) 
 
           {!cargando && !error && contexto === 'ok' && ejecucion && (
             <>
-              <Cabecera ejecucion={ejecucion} />
+              <Cabecera ejecucion={ejecucion} puntos={puntos} />
 
               {puntos.length === 0 ? (
                 <div style={S.nota}>Esta ejecución no tiene puntos registrados.</div>
@@ -103,7 +107,13 @@ export default function RondaEjecucionDetalle({ ejecucionId, onCerrar }: Props) 
 
 // ── Cabecera ──────────────────────────────────────────────────────────────────
 
-function Cabecera({ ejecucion }: { ejecucion: EjecucionDetalleSupervisor }) {
+function Cabecera({ ejecucion, puntos }: { ejecucion: EjecucionDetalleSupervisor; puntos: PuntoEjecucionDetalle[] }) {
+  // Estado técnico y observaciones del modelo unificado (lib/rondas.ts), en
+  // campos separados del estado crudo del motor. Este contrato no trae la
+  // alerta ni la ventana programada: acá no se inventan.
+  const tecnico = estadoTecnicoDetalleEjecucion(ejecucion.estado, ejecucion.es_cierre_administrativo, puntos)
+  const observaciones = observacionesDetalleEjecucion(ejecucion.es_cierre_administrativo, puntos)
+
   return (
     <div style={S.cabecera}>
       <div style={S.cabeceraTitulo}>{ejecucion.ronda_nombre}</div>
@@ -120,8 +130,9 @@ function Cabecera({ ejecucion }: { ejecucion: EjecucionDetalleSupervisor }) {
 
       <div style={S.grid}>
         <Dato label="Vigilador" valor={ejecucion.guardia_nombre} />
-        <Dato label="Estado" valor={ejecucion.estado} />
-        <Dato label="Resultado" valor={ejecucion.resultado ?? '—'} />
+        <Dato label="Estado técnico" valor={ETIQUETA_ESTADO_TECNICO[tecnico]} color={COLOR_ESTADO_TECNICO[tecnico]} />
+        <Dato label="Observaciones" valor={observaciones.length > 0 ? observaciones.join(' · ') : '—'} />
+        <Dato label="Estado del motor" valor={`${ejecucion.estado}${ejecucion.resultado ? ` · ${ejecucion.resultado}` : ''}`} />
         <Dato label="Inicio" valor={fechaHora(ejecucion.iniciada_at)} />
         <Dato label="Fin" valor={fechaHora(ejecucion.finalizada_at)} />
         <Dato label="Progreso" valor={`${ejecucion.puntos_completados}/${ejecucion.puntos_total} · ${ejecucion.porcentaje}%`} />
@@ -130,11 +141,11 @@ function Cabecera({ ejecucion }: { ejecucion: EjecucionDetalleSupervisor }) {
   )
 }
 
-function Dato({ label, valor }: { label: string; valor: string }) {
+function Dato({ label, valor, color }: { label: string; valor: string; color?: string }) {
   return (
     <div style={S.dato}>
       <span style={S.datoLabel}>{label}</span>
-      <span style={S.datoValor}>{valor}</span>
+      <span style={{ ...S.datoValor, ...(color ? { color } : null) }}>{valor}</span>
     </div>
   )
 }
@@ -156,6 +167,13 @@ function PuntoDetalle({ punto }: { punto: PuntoEjecucionDetalle }) {
             <span style={{ ...S.estadoChip, ...estadoPuntoStyle(punto.estado) }}>{punto.estado}</span>
             <span style={S.puntoMetaTxt}>Registrado: {fechaHora(punto.registrado_at)}</span>
             {punto.hay_novedad && <span style={{ ...S.estadoChip, ...S.chipNovedad }}>Novedad</span>}
+            {/* Distingue la foto automática de la configurada: esta visita nació
+                con verificación por reincidencia GPS. */}
+            {punto.foto_control_gps && (
+              <span style={{ ...S.estadoChip, ...S.chipControl }} title="Foto obligatoria de control por reiteración de registros fuera del radio">
+                Foto de control GPS
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -307,6 +325,7 @@ const S: Record<string, React.CSSProperties> = {
   puntoMetaTxt: { fontSize: 11, color: '#94a3b8' },
   estadoChip: { fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999, textTransform: 'capitalize' },
   chipNovedad: { background: '#3f2d10', color: '#fbbf24', border: '1px solid #b45309' },
+  chipControl: { background: '#1e293b', color: '#93c5fd', border: '1px solid #2563eb' },
   puntoGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
   mini: { background: '#0b1220', border: '1px solid #1a2436', borderRadius: 6, padding: '6px 8px' },
   miniLabel: { display: 'block', fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.3 },

@@ -29,8 +29,11 @@ import {
 } from '@/lib/legajo-objetivo'
 import {
   listarRondasProgramadasObjetivo,
-  etiquetaEstadoRondaProgramada,
-  rondaProgramadaEsIncumplida,
+  estadoTecnicoRonda,
+  estadoAlertaRonda,
+  colorRondaProgramada,
+  resumenObservacionesRonda,
+  ETIQUETA_CORTA_ESTADO_TECNICO,
   type RondaProgramada,
 } from '@/lib/rondas'
 import { capturarGpsNuevo } from '@/lib/gps-captura'
@@ -316,16 +319,23 @@ export function SeccionRondas({ objetivoId, onVerHistorial }: { objetivoId: stri
                 <tr key={`${r.turno_id}-${r.ronda_base_id}-${r.ventana_inicio}`} style={S.tr}>
                   <td style={S.td}>{hora(r.ventana_inicio)}<div style={S.sub}>{fechaCorta(r.ventana_inicio.slice(0, 10))}</div></td>
                   <td style={S.td}>
-                    <Chip color={rondaProgramadaEsIncumplida(r) ? '#ef4444' : r.estado === 'en_curso' ? '#3b82f6' : r.estado === 'completada' ? '#10b981' : '#64748b'}>
-                      {etiquetaEstadoRondaProgramada(r.estado)}
+                    {/* Estado técnico + color del modelo unificado de
+                        lib/rondas.ts: idéntico al Dashboard y al historial. */}
+                    <Chip color={colorRondaProgramada(r)}>
+                      {ETIQUETA_CORTA_ESTADO_TECNICO[estadoTecnicoRonda(r)]}
                     </Chip>
+                    {resumenObservacionesRonda(r) && (
+                      <div style={S.sub}>{resumenObservacionesRonda(r)}</div>
+                    )}
                   </td>
                   <td style={S.td}>{r.guardia_nombre}</td>
                   <td style={S.td}>
-                    {r.alerta_resuelta_por_nombre
-                      ? <span style={S.sub}>{r.alerta_resuelta_por_nombre}</span>
-                      : r.alerta_intervenciones > 0
-                        ? <span style={S.sub}>{r.alerta_intervenciones} intervención(es)</span>
+                    {estadoAlertaRonda(r) === 'intervenida'
+                      ? <span style={{ ...S.sub, color: '#a3e635' }}>
+                          {r.alerta_resuelta_por_nombre ?? `${r.alerta_intervenciones} intervención(es)`}
+                        </span>
+                      : estadoAlertaRonda(r) === 'pendiente'
+                        ? <span style={{ ...S.sub, color: '#ef4444' }}>Sin intervención</span>
                         : <span style={S.sub}>—</span>}
                   </td>
                   <td style={S.td}>
