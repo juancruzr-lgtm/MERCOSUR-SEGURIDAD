@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 import { initTelemetry, endSession } from '@/lib/telemetry'
@@ -15,6 +15,7 @@ import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
+import { estadoSupervision, frecuenciaSupervision, supervisionProximaAVencer } from '@/lib/supervisiones'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
@@ -446,6 +447,9 @@ export default function SupervisorMobile({ user }: any) {
   // Rondas pendientes de todo el alcance. Se cargan una vez, en el panel montado
   // en Inicio, y el mismo listado alimenta el contador y la pestaña Rondas.
   const [rondaAlertas, setRondaAlertas] = useState<RondaAlerta[]>([])
+  // Coordina Control de Rondas con el panel de pausadas: son hermanos y sin
+  // esto la pausa recién se veía al recargar la pantalla.
+  const [pausasToken, setPausasToken] = useState(0)
   const [turnos, setTurnos] = useState<Turno[]>([])
   const [guardias, setGuardias] = useState<Usuario[]>([])
   const [supervisores, setSupervisores] = useState<Usuario[]>([])
@@ -627,10 +631,14 @@ export default function SupervisorMobile({ user }: any) {
         .from('supervisor_zonas')
         .select('id, supervisor_id, zona_id')
         .eq('supervisor_id', user.id),
+      // Vigencia de supervisiones: sin filtro de fecha y con límite explícito.
+      // Sin el límite, PostgREST corta en 1000 y los objetivos supervisados hace
+      // tiempo reaparecen como "nunca supervisado".
       supabase
         .from('supervisiones')
         .select('objetivo_id, created_at')
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(5000),
     ])
 
     let guardiasData = guardiasResult.data
@@ -882,7 +890,9 @@ export default function SupervisorMobile({ user }: any) {
     tipoAlerta === 'descubierto'
       ? !turnoTieneIntervencionResolutiva(turno.id)
       : !alertaIntervenida(turno.id, tipoAlerta)
-  const esDescubiertoOperativo = (turno: Turno) => !turno.guardia_id
+  // Definición compartida con el Dashboard y el cron (lib/turnos.ts): sin guardia
+  // Y con obligación de cobertura vigente. Un turno reemplazado no es descubierto.
+  const esDescubiertoOperativo = (turno: Turno) => turnoSinCoberturaOperativa(turno)
   const esTurnoReasignado = (turno: Turno) => Boolean(
     turno.guardia_original_id &&
     turno.guardia_id &&
@@ -1019,17 +1029,20 @@ export default function SupervisorMobile({ user }: any) {
       : objetivosDeMiZona.filter(o => o.zona_id === agendaZonaFiltro)
 
     return base.map(objetivo => {
-      const frecuenciaHoras = objetivo.frecuencia_supervision_horas || 24
+      // Vigencia: mismo cálculo que el Dashboard y el cron (lib/supervisiones.ts).
+      const frecuenciaHoras = frecuenciaSupervision(objetivo)
       const ultimaIso = ultimaSupervisionPorObjetivo[objetivo.id] || null
       const horasDesdeUltima = ultimaIso ? (ahoraMs - new Date(ultimaIso).getTime()) / 3600000 : null
-      const horasFaltantes = horasDesdeUltima === null ? -Infinity : frecuenciaHoras - horasDesdeUltima
-      const estadoAgenda: 'vencido' | 'proximo' | 'al_dia' = !ultimaIso || horasFaltantes < 0
+      const estado = estadoSupervision(ultimaIso, frecuenciaHoras, ahoraMs)
+      // 'nunca' y 'vencida' comparten carril: ambas requieren ir a supervisar.
+      const estadoAgenda: 'vencido' | 'proximo' | 'al_dia' = estado !== 'vigente'
         ? 'vencido'
-        : horasFaltantes <= frecuenciaHoras * 0.25
+        : supervisionProximaAVencer(ultimaIso, frecuenciaHoras, ahoraMs)
           ? 'proximo'
           : 'al_dia'
 
       return {
+        estado,
         objetivo,
         zona: nombreZona(objetivo.zona_id),
         ultimaIso,
@@ -3042,7 +3055,11 @@ export default function SupervisorMobile({ user }: any) {
               </button>
 
               <div style={{ ...card, marginTop: 0, marginBottom: 16 }}>
-                <ControlDeRondasPanel objetivos={objetivosControlRondas} />
+                <ControlDeRondasPanel
+                  objetivos={objetivosControlRondas}
+                  onPausaCambiada={() => setPausasToken(t => t + 1)}
+                  recargarToken={pausasToken}
+                />
               </div>
 
               <div style={statsGrid}>
@@ -3061,7 +3078,11 @@ export default function SupervisorMobile({ user }: any) {
               </div>
 
               <div style={{ ...card, marginTop:12 }}>
-                <RondasPausadasPanel objetivoId={null} />
+                <RondasPausadasPanel
+                  objetivoId={null}
+                  onCambio={() => setPausasToken(t => t + 1)}
+                  recargarToken={pausasToken}
+                />
               </div>
 
               <div style={{ ...card, marginTop:12 }}>

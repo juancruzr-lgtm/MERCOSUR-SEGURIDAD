@@ -168,11 +168,26 @@ export type RegistroEntrada = {
 export const registroTieneEntradaConfirmada = (r: RegistroEntrada): boolean =>
   r.tipo_registro !== 'ausencia' && !!(r.hora_entrada_final || r.hora_entrada_real)
 
-// Un turno está sin cobertura operativa únicamente cuando no tiene guardia asignado.
+// Estados que cierran el turno sin que quede puesto a cubrir. Un turno en
+// alguno de estos estados queda con guardia_id en null por diseño: la cobertura
+// se resolvió en otro lado (otro turno lo reemplaza) o dejó de corresponder.
+// Contarlos como descubiertos genera alertas de un puesto que ya está resuelto.
+export const ESTADOS_TURNO_SIN_OBLIGACION_COBERTURA = ['reemplazado', 'anulado', 'cancelado'] as const
+
+export const turnoTieneObligacionDeCobertura = (turno: TurnoHorario): boolean =>
+  !ESTADOS_TURNO_SIN_OBLIGACION_COBERTURA.includes(
+    (turno.estado ?? '') as typeof ESTADOS_TURNO_SIN_OBLIGACION_COBERTURA[number],
+  )
+
+// Un turno está sin cobertura operativa cuando no tiene guardia asignado Y
+// además todavía debía cubrirse.
+//
 // La falta de fichaje no equivale a descubierto: un guardia asignado que no fichó
 // sigue siendo cobertura asignada y debe aparecer en "Sin fichar", no en "Descubiertos".
+// Un turno reemplazado tampoco lo es: quedó sin guardia justamente porque la
+// cobertura pasó a otro turno.
 export const turnoSinCoberturaOperativa = (turno: TurnoHorario): boolean =>
-  !turno.guardia_id
+  !turno.guardia_id && turnoTieneObligacionDeCobertura(turno)
 
 export const fechasVecinasTurno = (fecha: string) => {
   const base = fechaLocal(fecha)

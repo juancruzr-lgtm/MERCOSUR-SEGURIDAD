@@ -19,6 +19,7 @@ import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
+import { indexarUltimaSupervision, objetivoSupervisionVencida } from '@/lib/supervisiones'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -779,6 +780,9 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNavigate }: any) {
   const hoy = fechaHoyArgentina()
   const mesActual = hoy.slice(0, 7)
+  // Coordina Control de Rondas con el resumen de pausadas: son hermanos y sin
+  // esto la pausa recién se veía al recargar la página.
+  const [pausasToken, setPausasToken] = useState(0)
   const usuarios = guardias as Usuario[]
   const objetivosActivos = objetivos.filter((o: Objetivo) => o.estado === 'activo')
   // Alcance del Control de Rondas. Los objetivos de prueba se excluyen acá igual
@@ -1086,6 +1090,8 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         <ControlDeRondasPanel
           objetivos={objetivosControlRondas}
           onVerTodas={() => onNavigate?.('rondas')}
+          onPausaCambiada={() => setPausasToken(t => t + 1)}
+          recargarToken={pausasToken}
         />
       </div>
 
@@ -1096,6 +1102,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
           objetivoId={null}
           compacto
           onVerTodas={() => onNavigate?.('rondas')}
+          recargarToken={pausasToken}
         />
       </div>
 
@@ -1135,6 +1142,11 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
     .filter((o: Objetivo) => o.estado === 'activo' && !o.es_prueba)
     .map((o: Objetivo) => ({ id: o.id, nombre: o.nombre || 'Objetivo sin nombre' }))
 
+  // Control de Rondas y Rondas pausadas son hermanos: pausar en uno no
+  // refrescaba al otro y la pausa recién aparecía al recargar la página.
+  const [pausasToken, setPausasToken] = useState(0)
+  const refrescarPausas = () => setPausasToken(t => t + 1)
+
   return (
     <div>
       <div style={{ marginBottom:20 }}>
@@ -1145,12 +1157,20 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
         </div>
       </div>
       <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:16 }}>
-        <ControlDeRondasPanel objetivos={objetivosPanel} />
+        <ControlDeRondasPanel
+          objetivos={objetivosPanel}
+          onPausaCambiada={refrescarPausas}
+          recargarToken={pausasToken}
+        />
       </div>
       {/* Pausas en alcance completo. Mismo componente que ve el supervisor en
           móvil: el administrador no depende de entrar a "Vista Supervisor". */}
       <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:16 }}>
-        <RondasPausadasPanel objetivoId={null} />
+        <RondasPausadasPanel
+          objetivoId={null}
+          onCambio={refrescarPausas}
+          recargarToken={pausasToken}
+        />
       </div>
       <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16 }}>
         <div style={{ fontSize:15, fontWeight:800, color:brandColors.textStrong, marginBottom:10 }}>Alertas</div>
@@ -1758,22 +1778,24 @@ function SupervisionesAdmin({
     return map
   }, new Map()).values()).sort((a: any, b: any) => b.total - a.total)
 
-  const ultimaPorObjetivo = new Map<string, SupervisionAdmin>()
-  supervisiones.forEach((supervision: SupervisionAdmin) => {
-    const actual = ultimaPorObjetivo.get(supervision.objetivo_id)
-    if (!actual || new Date(supervision.created_at).getTime() > new Date(actual.created_at).getTime()) {
-      ultimaPorObjetivo.set(supervision.objetivo_id, supervision)
-    }
-  })
+  // Vigencia de supervisiones: una sola fuente y un solo cálculo.
+  //
+  // `supervisiones` viene recortado a las 500 más recientes para poder mostrar
+  // el detalle completo (respuestas, fotos, supervisor). Usarlo para decidir
+  // vigencia hacía que un objetivo supervisado hace tiempo saliera del recorte
+  // y reapareciera como "nunca supervisado" — y como el recorte se llena a
+  // medida que avanza el mes, el efecto parecía un reinicio mensual.
+  // `ultimasSupervisionesObjetivos` trae solo (objetivo_id, created_at) sin
+  // recorte por fecha: es la fuente correcta para vigencia.
+  const ultimaIsoPorObjetivo = indexarUltimaSupervision(
+    (ultimasSupervisionesObjetivos || []).length > 0 ? ultimasSupervisionesObjetivos : supervisiones,
+  )
 
   const objetivosSinSupervision = objetivos
     .filter((objetivo: Objetivo) => objetivo.estado === 'activo')
-    .filter((objetivo: Objetivo) => {
-      const ultima = ultimaPorObjetivo.get(objetivo.id)
-      if (!ultima) return true
-      const frecuenciaMs = (objetivo.frecuencia_supervision_horas || 24) * 60 * 60 * 1000
-      return ahora.getTime() - new Date(ultima.created_at).getTime() > frecuenciaMs
-    })
+    .filter((objetivo: Objetivo) =>
+      objetivoSupervisionVencida(objetivo, ultimaIsoPorObjetivo.get(objetivo.id) ?? null, ahora.getTime()),
+    )
   const ultimasSupervisiones = [...supervisiones]
     .sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 30)
@@ -1888,24 +1910,10 @@ function SupervisionesAdmin({
   const novedadesMesRanking = (novedades || []).filter((novedad: Novedad) => novedad.created_at?.slice(0, 7) === mesActual)
   const supervisionesMesRanking = ((supervisionesMesOperativas || []).length > 0 ? supervisionesMesOperativas : supervisiones)
     .filter((supervision: SupervisionRankingAdmin) => supervision.created_at?.slice(0, 7) === mesActual)
-  const fuenteUltimasRanking = (ultimasSupervisionesObjetivos || []).length > 0 ? ultimasSupervisionesObjetivos : supervisiones
-  const ultimaSupervisionRankingPorObjetivo = new Map<string, UltimaSupervisionObjetivoAdmin>()
-
-  ;[...fuenteUltimasRanking]
-    .sort((a: UltimaSupervisionObjetivoAdmin, b: UltimaSupervisionObjetivoAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .forEach((supervision: UltimaSupervisionObjetivoAdmin) => {
-      if (supervision.objetivo_id && !ultimaSupervisionRankingPorObjetivo.has(supervision.objetivo_id)) {
-        ultimaSupervisionRankingPorObjetivo.set(supervision.objetivo_id, supervision)
-      }
-    })
-
-  const objetivoVencidoRanking = (objetivo: Objetivo) => {
-    const ultima = ultimaSupervisionRankingPorObjetivo.get(objetivo.id)
-    if (!ultima) return true
-
-    const frecuenciaMs = (objetivo.frecuencia_supervision_horas || 24) * 60 * 60 * 1000
-    return ahora.getTime() - new Date(ultima.created_at).getTime() > frecuenciaMs
-  }
+  // Mismo índice y mismo cálculo que `objetivosSinSupervision`: antes el ranking
+  // leía otra fuente y podía contradecir al panel sobre el mismo objetivo.
+  const objetivoVencidoRanking = (objetivo: Objetivo) =>
+    objetivoSupervisionVencida(objetivo, ultimaIsoPorObjetivo.get(objetivo.id) ?? null, ahora.getTime())
 
   const usuarioActivoGuardia = (id?: string | null) => {
     if (!id) return null
@@ -2779,7 +2787,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   const estadoOperativo = (objetivoId: string) => {
     const ts = turnosHoyPorObjetivo(objetivoId)
     if (ts.length === 0) return null
-    const sinCubrir = ts.filter((t: any) => t.estado === 'descubierto' || !t.guardia_id).length
+    const sinCubrir = ts.filter((t: any) => turnoSinCoberturaOperativa(t)).length
     const cubiertos = ts.filter((t: any) => t.estado === 'cubierto' && t.guardia_id).length
     return { total: ts.length, cubiertos, sinCubrir }
   }
@@ -2920,7 +2928,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   const objetivosConTurnosHoy = objetivos.filter((o: any) => turnosHoyPorObjetivo(o.id).length > 0)
   const objetivosSinCubrirHoy = objetivos.filter((o: any) => {
     const ts = turnosHoyPorObjetivo(o.id)
-    return ts.some((t: any) => t.estado === 'descubierto' || !t.guardia_id)
+    return ts.some((t: any) => turnoSinCoberturaOperativa(t))
   })
 
   const filtrados = objetivos.filter((o: any) => {
@@ -5610,7 +5618,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _horasLiquidables: horasLiquidables,
       _cubierto: esTransicion,
       _sinFichar: !esTransicion && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
-      _descubierto: !esTransicion && (turno.estado === 'descubierto' || !turno.guardia_id),
+      _descubierto: !esTransicion && turnoSinCoberturaOperativa(turno),
       _enCurso: false,
     }
   })
@@ -5851,7 +5859,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       }, 0)
       const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
       const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length
-      const turnosDescubiertos = ts.filter((t: Turno) => t.estado === 'descubierto' || !t.guardia_id).length
+      const turnosDescubiertos = ts.filter((t: Turno) => turnoSinCoberturaOperativa(t)).length
 
       return {
         Objetivo: o.nombre,
@@ -7717,7 +7725,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
   const alertasPendientes = [
     ...turnosHoy
-      .filter((t: Turno) => !t.guardia_id || t.estado === 'descubierto')
+      .filter((t: Turno) => turnoSinCoberturaOperativa(t))
       .map((t: Turno) => alertaBase(t, 'descubierto', 'Puesto sin cobertura', !t.guardia_id ? 'Sin guardia asignado' : 'Pasó la ventana de fichaje sin asistencia', 'danger')),
     ...turnosHoy
       .filter((t: Turno) => t.guardia_id && t.estado !== 'descubierto' && !tieneEntrada(t) && minutosDesdeInicioTurno(t) >= 15)

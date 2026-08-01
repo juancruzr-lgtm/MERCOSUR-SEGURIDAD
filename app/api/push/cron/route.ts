@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import { sendWebPush, type PushPayload, type PushSubscriptionRow } from '../../_lib/web-push'
+import { turnoSinCoberturaOperativa } from '@/lib/turnos'
+import {
+  FRECUENCIA_SUPERVISION_DEFECTO_HORAS,
+  estadoSupervision,
+  indexarUltimaSupervision,
+  supervisionProximaAVencer,
+} from '@/lib/supervisiones'
 
 export const runtime = 'nodejs'
 
@@ -96,8 +103,6 @@ const SUPERVISION_ALERT_TYPES = {
   vencida: 'supervisor_supervision_vencida',
   proxima: 'supervisor_supervision_proxima',
 } as const
-const SUPERVISION_PROXIMA_PORCENTAJE = 0.25
-const FRECUENCIA_SUPERVISION_DEFECTO_HORAS = 24
 
 function localParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -558,21 +563,19 @@ export async function GET(req: NextRequest) {
 
   // ── Alertas de supervisiones por zona (vencida / proxima a vencer) ──
   // Independiente de si hay turnos hoy/manana: se evalua siempre.
-  const ultimaPorObjetivo = new Map<string, string>()
-  ultimasSupervisiones.forEach(s => {
-    if (!ultimaPorObjetivo.has(s.objetivo_id)) ultimaPorObjetivo.set(s.objetivo_id, s.created_at)
-  })
+  // Vigencia: unica definicion, en lib/supervisiones.ts. No interviene el mes.
+  const ultimaPorObjetivo = indexarUltimaSupervision(ultimasSupervisiones)
 
   for (const objetivo of objetivosSupervision) {
     if ((objetivo.estado || 'activo') !== 'activo') continue
 
     const frecuenciaHoras = objetivo.frecuencia_supervision_horas || FRECUENCIA_SUPERVISION_DEFECTO_HORAS
     const ultimaIso = ultimaPorObjetivo.get(objetivo.id) || null
-    const horasDesdeUltima = ultimaIso ? (Date.now() - new Date(ultimaIso).getTime()) / 3600000 : null
-    const horasFaltantes = horasDesdeUltima === null ? -Infinity : frecuenciaHoras - horasDesdeUltima
-    const estadoAgenda: 'vencido' | 'proximo' | 'al_dia' = !ultimaIso || horasFaltantes < 0
+    const estado = estadoSupervision(ultimaIso, frecuenciaHoras)
+    // 'nunca' y 'vencida' comparten el mismo aviso: hay que ir a supervisar.
+    const estadoAgenda: 'vencido' | 'proximo' | 'al_dia' = estado !== 'vigente'
       ? 'vencido'
-      : horasFaltantes <= frecuenciaHoras * SUPERVISION_PROXIMA_PORCENTAJE
+      : supervisionProximaAVencer(ultimaIso, frecuenciaHoras)
         ? 'proximo'
         : 'al_dia'
 
@@ -919,7 +922,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    if ((turno.estado === 'descubierto' || !turno.guardia_id) && minutosDesdeInicio >= -5 && minutosDesdeInicio <= 120) {
+    if (turnoSinCoberturaOperativa(turno) && minutosDesdeInicio >= -5 && minutosDesdeInicio <= 120) {
       alertasEvaluadas += 1
       if (registroEntrada || turno.estado === 'cubierto' || turnoFueReasignado(turno) || alertaResueltaPorIntervencion(intervenciones, turno.id, SUPERVISOR_ALERT_TYPES.puestoDescubierto)) {
         alertasOmitidasPorResueltas += 1

@@ -32,6 +32,11 @@ interface Props {
   onConteo?: (vigentes: number) => void
   /** "Ver todas" del modo compacto. */
   onVerTodas?: () => void
+  /**
+   * Cambiar este valor fuerza una recarga. Lo usa el padre cuando se pausó o
+   * reanudó desde el Control de Rondas, que es un componente hermano.
+   */
+  recargarToken?: number
 }
 
 export default function RondasPausadasPanel({
@@ -40,6 +45,7 @@ export default function RondasPausadasPanel({
   onCambio,
   onConteo,
   onVerTodas,
+  recargarToken = 0,
 }: Props) {
   const [pausas, setPausas] = useState<RondaPausa[]>([])
   const [historial, setHistorial] = useState(false)
@@ -60,7 +66,9 @@ export default function RondasPausadasPanel({
       setPausas(data?.pausas ?? [])
     }
     setCargando(false)
-  }, [objetivoId, historial, compacto])
+    // `recargarToken` no se usa en el cuerpo: está en las dependencias para que
+    // el padre pueda forzar una recarga cambiándolo.
+  }, [objetivoId, historial, compacto, recargarToken])
 
   useEffect(() => { void cargar() }, [cargar])
 

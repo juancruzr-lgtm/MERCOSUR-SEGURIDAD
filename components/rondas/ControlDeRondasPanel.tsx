@@ -55,6 +55,17 @@ interface Props {
   objetivos: ObjetivoControlRondas[]
   /** Navega a la pantalla completa de rondas. Sin esto, el encabezado no enlaza. */
   onVerTodas?: () => void
+  /**
+   * Se dispara cuando este panel pausa o reanuda una ronda. El padre lo usa para
+   * refrescar el panel de pausadas, que es un componente hermano y no se entera
+   * por su cuenta.
+   */
+  onPausaCambiada?: () => void
+  /**
+   * Cambiar este valor fuerza una recarga. Lo usa el padre cuando la pausa se
+   * modificó desde otro panel.
+   */
+  recargarToken?: number
 }
 
 // Estados, etiquetas, colores, íconos y orden: TODO viene de lib/rondas.ts.
@@ -223,7 +234,7 @@ interface Balance {
 
 const BALANCE_VACIO: Balance = { llamadas: 0, sinPermiso: 0, sinRondas: 0, errores: 0 }
 
-export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
+export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCambiada, recargarToken = 0 }: Props) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filas, setFilas] = useState<Fila[]>([])
@@ -292,7 +303,9 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
     setFilas(nuevas)
     setBalance(nuevoBalance)
     setCargando(false)
-  }, [claveObjetivos, iniciarCarga])
+    // `recargarToken` no se usa en el cuerpo: está en las dependencias para que
+    // el padre pueda forzar una recarga cambiándolo.
+  }, [claveObjetivos, iniciarCarga, recargarToken])
 
   useEffect(() => { void cargar() }, [cargar])
 
@@ -402,7 +415,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
               fila={detalle}
               objetivoNombre={nombreDe(detalle.objetivoId)}
               onCerrar={() => setDetalle(null)}
-              onActualizar={() => { setDetalle(null); void cargar() }}
+              onActualizar={() => { setDetalle(null); void cargar(); onPausaCambiada?.() }}
             />
       )}
     </div>
