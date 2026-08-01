@@ -1442,9 +1442,10 @@ export type EstadoRondaProgramada =
   | 'en_curso'
   | 'completada'
   | 'incompleta'
+  | 'pausada'      // sin ejecución, ventana cubierta por pausa de supervisor
 
 export const ESTADOS_RONDA_PROGRAMADA: readonly EstadoRondaProgramada[] =
-  ['pendiente', 'no_iniciada', 'en_curso', 'completada', 'incompleta'] as const
+  ['pendiente', 'no_iniciada', 'en_curso', 'completada', 'incompleta', 'pausada'] as const
 
 export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): string {
   switch (estado) {
@@ -1453,6 +1454,7 @@ export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): st
     case 'en_curso':    return 'En curso'
     case 'completada':  return 'Completada'
     case 'incompleta':  return 'Incompleta'
+    case 'pausada':     return 'Pausada'
   }
 }
 
@@ -1496,6 +1498,7 @@ export type EstadoTecnicoRonda =
   | 'cumplida_observada'
   | 'incompleta'
   | 'no_iniciada'
+  | 'pausada'
 
 export type EstadoAlertaVisual = 'sin_alerta' | 'pendiente' | 'intervenida'
 
@@ -1507,6 +1510,7 @@ export const ETIQUETA_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   cumplida_observada: 'Cumplida con observaciones',
   incompleta:         'Incompleta',
   no_iniciada:        'No iniciada',
+  pausada:            'Pausada',
 }
 
 /** Versión corta para superficies compactas (tarjeta de 200 px, chips). */
@@ -1518,6 +1522,7 @@ export const ETIQUETA_CORTA_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> =
   cumplida_observada: 'Cumplida c/obs.',
   incompleta:         'Incompleta',
   no_iniciada:        'No iniciada',
+  pausada:            'Pausada',
 }
 
 export const ETIQUETA_ESTADO_ALERTA: Record<EstadoAlertaVisual, string> = {
@@ -1538,6 +1543,7 @@ export const COLOR_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   cumplida_observada: '#86efac',  // verde claro
   incompleta:         '#f97316',  // naranja
   no_iniciada:        '#ef4444',  // rojo — solo mientras la alerta esté sin intervenir
+  pausada:            '#f59e0b',  // ámbar
 }
 
 /** Verde lima: alerta intervenida. Distinto del verde y del verde claro. */
@@ -1551,6 +1557,7 @@ export const ICONO_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   cumplida_observada: '✅',
   incompleta:         '⚠️',
   no_iniciada:        '❌',
+  pausada:            '⏸',
 }
 
 function msRonda(iso: string): number {
@@ -1565,6 +1572,7 @@ function msRonda(iso: string): number {
  * ya comparó `now()` contra el vencimiento en el servidor— y de los contadores.
  */
 export function estadoTecnicoRonda(r: RondaProgramada, ahora: number = Date.now()): EstadoTecnicoRonda {
+  if (r.pausada && !r.ejecucion_id) return 'pausada'
   if (r.estado === 'pendiente') {
     return ahora < msRonda(r.ventana_inicio) ? 'proxima' : 'pendiente'
   }
@@ -1623,6 +1631,7 @@ export function ordenOperativoRonda(r: RondaProgramada): number {
     case 'pendiente':          return 6
     case 'proxima':            return 7
     case 'cumplida':           return 8
+    case 'pausada':            return 9
   }
 }
 
@@ -1736,6 +1745,14 @@ export interface RondaProgramada {
   cerrada_motivo: string | null
   es_cierre_administrativo: boolean
 
+  // Anexo de pausa. NO condiciona el estado técnico cuando hay ejecución.
+  pausada: boolean
+  pausa_id: string | null
+  pausa_motivo: string | null
+  pausa_desde: string | null
+  pausa_hasta: string | null
+  pausada_por_nombre: string | null
+
   // Anexo informativo. Nunca deriva el estado de arriba.
   alerta_id: string | null
   alerta_tipo: TipoRondaAlerta | null
@@ -1775,6 +1792,106 @@ export async function listarRondasProgramadasObjetivo(
     data: {
       contexto: (bruto.contexto ?? 'sin_permiso') as ContextoEjecucionesObjetivo,
       rondas: Array.isArray(bruto.rondas) ? (bruto.rondas as RondaProgramada[]) : [],
+    },
+    error: null,
+  }
+}
+
+// ── Pausa de rondas ─────────────────────────────────────────────────────────────
+
+export type ContextoPausa =
+  | 'ok'
+  | 'sin_usuario'
+  | 'sin_permiso'
+  | 'ronda_no_encontrada'
+  | 'ya_pausada'
+  | 'motivo_invalido'
+  | 'hasta_invalido'
+  | 'pausa_no_encontrada'
+  | 'ya_reactivada'
+
+// Mensaje para el usuario. 'ok' devuelve null: no hay nada que mostrar.
+export function mensajeContextoPausa(contexto: ContextoPausa | undefined): string | null {
+  switch (contexto) {
+    case 'ok':                  return null
+    case 'sin_usuario':         return 'Tu sesión venció. Volvé a ingresar.'
+    case 'sin_permiso':         return 'No tenés permiso para pausar rondas de este objetivo.'
+    case 'ronda_no_encontrada': return 'No se encontró la ronda o está desactivada.'
+    case 'ya_pausada':          return 'Esta ronda ya tiene una pausa activa.'
+    case 'motivo_invalido':     return 'El motivo debe tener al menos 5 caracteres.'
+    case 'hasta_invalido':      return 'La fecha de reactivación tiene que ser posterior a ahora.'
+    case 'pausa_no_encontrada': return 'No se encontró la pausa indicada.'
+    case 'ya_reactivada':       return 'Esa pausa ya fue reanudada.'
+    default:                    return 'No se pudo completar la operación de pausa.'
+  }
+}
+
+export interface RondaPausa {
+  id: string
+  ronda_base_id: string
+  ronda_nombre: string
+  objetivo_id: string
+  objetivo_nombre: string
+  puesto_id: string
+  puesto_nombre: string
+  pausada_por: string
+  pausada_por_nombre: string
+  pausada_at: string
+  motivo: string
+  hasta_at: string | null
+  activa: boolean
+  vigente: boolean
+  reactivada_por: string | null
+  reactivada_por_nombre: string | null
+  reactivada_at: string | null
+  reactivada_comentario: string | null
+  reactivacion_automatica: boolean
+}
+
+export async function pausarRonda(
+  rondaBaseId: string,
+  motivo: string,
+  hastaAt?: string | null,
+): Promise<ResultadoRondas<{ contexto: ContextoPausa; pausa?: unknown; alertas_pendientes_anteriores?: number }>> {
+  const params: Record<string, unknown> = {
+    p_ronda_base_id: rondaBaseId,
+    p_motivo: motivo,
+  }
+  if (hastaAt) params.p_hasta_at = hastaAt
+
+  const { data, error } = await supabase.rpc('pausar_ronda', params)
+  if (error) return fallaRpc('pausar_ronda', error, 'No se pudo pausar la ronda.')
+  const bruto = (data ?? {}) as { contexto: ContextoPausa; pausa?: unknown; alertas_pendientes_anteriores?: number }
+  return { data: bruto, error: null }
+}
+
+export async function reanudarRonda(
+  pausaId: string,
+  comentario?: string | null,
+): Promise<ResultadoRondas<{ contexto: ContextoPausa; pausa?: unknown }>> {
+  const params: Record<string, unknown> = { p_pausa_id: pausaId }
+  if (comentario) params.p_reactivada_comentario = comentario
+
+  const { data, error } = await supabase.rpc('reanudar_ronda', params)
+  if (error) return fallaRpc('reanudar_ronda', error, 'No se pudo reanudar la ronda.')
+  const bruto = (data ?? {}) as { contexto: ContextoPausa; pausa?: unknown }
+  return { data: bruto, error: null }
+}
+
+export async function listarRondasPausadas(
+  objetivoId?: string | null,
+  soloActivas: boolean = true,
+): Promise<ResultadoRondas<{ contexto: ContextoPausa; pausas: RondaPausa[] }>> {
+  const params: Record<string, unknown> = { p_solo_activas: soloActivas }
+  if (objetivoId) params.p_objetivo_id = objetivoId
+
+  const { data, error } = await supabase.rpc('listar_rondas_pausadas', params)
+  if (error) return fallaRpc('listar_rondas_pausadas', error, 'No se pudo cargar las pausas.')
+  const bruto = (data ?? {}) as { contexto?: ContextoPausa; pausas?: RondaPausa[] }
+  return {
+    data: {
+      contexto: (bruto.contexto ?? 'sin_permiso') as ContextoPausa,
+      pausas: Array.isArray(bruto.pausas) ? bruto.pausas : [],
     },
     error: null,
   }

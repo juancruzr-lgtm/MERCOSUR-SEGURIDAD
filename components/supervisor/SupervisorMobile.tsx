@@ -12,6 +12,7 @@ import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno
 import type { EstadoPuestos } from '@/lib/puestos'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
+import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
 
@@ -3057,6 +3058,10 @@ export default function SupervisorMobile({ user }: any) {
                   <strong style={{ color:'#f59e0b' }}>{resumenRondas.objetivosAfectados}</strong>
                   <span>Objetivos afectados</span>
                 </div>
+              </div>
+
+              <div style={{ ...card, marginTop:12 }}>
+                <RondasPausadasPanel objetivoId={null} />
               </div>
 
               <div style={{ ...card, marginTop:12 }}>

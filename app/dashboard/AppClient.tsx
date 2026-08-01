@@ -16,6 +16,7 @@ import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
+import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
@@ -1081,9 +1082,19 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
           Estado operativo por objetivo, no una lista de pendientes: una tarjeta
           por objetivo con su ronda relevante, en un carril horizontal para que
           el panel no crezca en alto con la cantidad de objetivos. */}
-      <div style={{ ...alertBox, marginBottom:28 }}>
+      <div style={{ ...alertBox, marginBottom:16 }}>
         <ControlDeRondasPanel
           objetivos={objetivosControlRondas}
+          onVerTodas={() => onNavigate?.('rondas')}
+        />
+      </div>
+
+      {/* Pausas vigentes, visibles sin salir del Dashboard. El detalle y el
+          botón Reanudar están en la pantalla de Rondas. */}
+      <div style={{ ...alertBox, marginBottom:28 }}>
+        <RondasPausadasPanel
+          objetivoId={null}
+          compacto
           onVerTodas={() => onNavigate?.('rondas')}
         />
       </div>
@@ -1135,6 +1146,11 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
       </div>
       <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:16 }}>
         <ControlDeRondasPanel objetivos={objetivosPanel} />
+      </div>
+      {/* Pausas en alcance completo. Mismo componente que ve el supervisor en
+          móvil: el administrador no depende de entrar a "Vista Supervisor". */}
+      <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:16 }}>
+        <RondasPausadasPanel objetivoId={null} />
       </div>
       <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16 }}>
         <div style={{ fontSize:15, fontWeight:800, color:brandColors.textStrong, marginBottom:10 }}>Alertas</div>
@@ -8151,6 +8167,12 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
       {mensaje && <div style={{ background:'rgba(16,185,129,.12)', border:'1px solid rgba(16,185,129,.35)', color:'#86efac', borderRadius:8, padding:12, marginBottom:16 }}>{mensaje}</div>}
       {error && !accionActiva && <div style={{ background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.35)', color:'#fca5a5', borderRadius:8, padding:12, marginBottom:16 }}>{error}</div>}
+
+      {/* Una ronda pausada NO genera alerta: sin este bloque, la ausencia de
+          alertas acá es indistinguible de una ronda cumplida. */}
+      <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:24 }}>
+        <RondasPausadasPanel objetivoId={null} />
+      </div>
 
       {/* Cierre de turno modal */}
       {turnoParaCerrar && (

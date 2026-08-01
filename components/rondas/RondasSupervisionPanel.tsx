@@ -525,6 +525,11 @@ function SeccionHistorial({ objetivoId, onVerDetalle }: { objetivoId: string; on
                     {resumenObservacionesRonda(r) && (
                       <div style={S.subCelda}>{resumenObservacionesRonda(r)}</div>
                     )}
+                    {r.pausada && (
+                      <div style={S.subCelda} title={r.pausa_motivo ?? undefined}>
+                        {r.pausada_por_nombre ? `Pausada por ${r.pausada_por_nombre}` : 'Pausada'}
+                      </div>
+                    )}
                     {/* Anexo: no es el estado de la ronda, es una anotación sobre ella. */}
                     {r.alerta_suspendida && (
                       <span style={{ ...S.chip, ...S.chipInfo, marginLeft: 6 }} title={r.alerta_motivo_vigilador ?? undefined}>

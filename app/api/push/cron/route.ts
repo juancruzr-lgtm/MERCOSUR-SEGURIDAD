@@ -719,6 +719,7 @@ export async function GET(req: NextRequest) {
   // ronda_alertas. Dedup por (usuario, turno, tipo) con tipo = aviso:ronda:ventana.
   let avisos15m = 0
   let avisosPendiente = 0
+  let avisosOmitidosPorPausa = 0
   {
     // Una ronda hecha unos minutos ANTES del inicio de la ventana cuenta como
     // realizada para esa ventana: evita seguir avisando algo ya cumplido.
@@ -735,18 +736,35 @@ export async function GET(req: NextRequest) {
       const puestoIds = Array.from(new Set(turnosVigentes.map(t => t.puesto_id).filter(Boolean)))
       const turnoIdsVig = turnosVigentes.map(t => t.id)
 
-      const [rondasVigRes, ejecVigRes] = await Promise.all([
+      const [rondasVigRes, ejecVigRes, pausasRes] = await Promise.all([
         admin.client.from('rondas_base')
           .select('id, puesto_id, nombre, hora_inicio, intervalo_minutos')
           .in('puesto_id', puestoIds as string[]).eq('activo', true),
         admin.client.from('ronda_ejecuciones')
           .select('ronda_base_id, turno_id, iniciada_at, estado')
           .in('turno_id', turnoIdsVig).in('estado', ['en_curso', 'finalizada']),
+        admin.client.from('ronda_pausas')
+          .select('ronda_base_id, pausada_at, hasta_at')
+          .eq('activa', true),
       ])
 
       const rondasVig = (rondasVigRes.data || []) as Array<{ id: string; puesto_id: string; nombre: string; hora_inicio: string | null; intervalo_minutos: number }>
       const ejecMin = ((ejecVigRes.data || []) as Array<{ ronda_base_id: string; turno_id: string; iniciada_at: string }>)
         .map(e => ({ ...e, ini_min: isoALocalMin(e.iniciada_at) }))
+
+      // Pausas de supervisor vigentes: cubren las ventanas cuyo inicio cae dentro
+      // del período de pausa. Mismo criterio temporal que evaluar_ronda_alertas().
+      const pausasMin = ((pausasRes.data || []) as Array<{ ronda_base_id: string; pausada_at: string; hasta_at: string | null }>)
+        .map(p => ({
+          ronda_base_id: p.ronda_base_id,
+          desde_min: isoALocalMin(p.pausada_at),
+          hasta_min: p.hasta_at ? isoALocalMin(p.hasta_at) : null,
+        }))
+        .filter(p => p.hasta_min === null || p.hasta_min > ahora)
+      const ventanaPausada = (rondaBaseId: string, ventanaInicioMin: number) =>
+        pausasMin.some(p => p.ronda_base_id === rondaBaseId
+          && ventanaInicioMin >= p.desde_min
+          && (p.hasta_min === null || ventanaInicioMin < p.hasta_min))
 
       for (const t of turnosVigentes) {
         const tIni = fechaHoraMinutos(t.fecha, t.hora_inicio)
@@ -773,6 +791,7 @@ export async function GET(req: NextRequest) {
               && e.ini_min >= vi - RONDA_AVISO_GRACIA_MIN
               && e.ini_min < vi + interv - RONDA_AVISO_GRACIA_MIN)
             if (yaIniciada) continue
+            if (ventanaPausada(rb.id, vi)) { avisosOmitidosPorPausa += 1; continue }
 
             const clave = `${rb.id}:${vi}`
             const horaVentana = horaDeMin(vi)
@@ -812,7 +831,7 @@ export async function GET(req: NextRequest) {
       alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
       alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores },
       alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, suspendida: candidatosRondaSuspendida, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores },
-      recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente },
+      recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa },
       alertasEvaluadas,
       alertasOmitidasPorResueltas,
       alertasEnviadas,
@@ -997,7 +1016,7 @@ export async function GET(req: NextRequest) {
       pendientes: rondaAlertasPendientes,
       sinSupervisores: rondaAlertasSinSupervisores,
     },
-    recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente },
+    recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa },
     alertasEvaluadas,
     alertasOmitidasPorResueltas,
     alertasEnviadas,

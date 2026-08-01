@@ -25,6 +25,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import RondaEjecucionDetalle from './RondaEjecucionDetalle'
 import {
   listarRondasProgramadasObjetivo,
+  pausarRonda,
+  reanudarRonda,
   etiquetaAccionRondaAlerta,
   estadoTecnicoRonda,
   estadoAlertaRonda,
@@ -304,6 +306,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
     const c: Record<EstadoTecnicoRonda, number> = {
       proxima: 0, pendiente: 0, en_curso: 0,
       cumplida: 0, cumplida_observada: 0, incompleta: 0, no_iniciada: 0,
+      pausada: 0,
     }
     for (const f of filas) c[estadoTecnicoRonda(f.ronda)]++
     return c
@@ -385,11 +388,21 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas }: Props) {
           programación y la intervención. */}
       {detalle && (
         detalle.ronda.ejecucion_id !== null
-          ? <RondaEjecucionDetalle ejecucionId={detalle.ronda.ejecucion_id} onCerrar={() => setDetalle(null)} />
+          ? <RondaEjecucionDetalle
+              ejecucionId={detalle.ronda.ejecucion_id}
+              onCerrar={() => setDetalle(null)}
+              pausaInfo={detalle.ronda.pausada ? {
+                motivo: detalle.ronda.pausa_motivo,
+                desde: detalle.ronda.pausa_desde,
+                hasta: detalle.ronda.pausa_hasta,
+                supervisor: detalle.ronda.pausada_por_nombre,
+              } : undefined}
+            />
           : <DetalleSinEjecucion
               fila={detalle}
               objetivoNombre={nombreDe(detalle.objetivoId)}
               onCerrar={() => setDetalle(null)}
+              onActualizar={() => { setDetalle(null); void cargar() }}
             />
       )}
     </div>
@@ -433,7 +446,9 @@ function TarjetaObjetivo({
   // Pie de una línea. La intervención tiñe de lima pero NO reemplaza el estado
   // técnico: la etiqueta sigue diciendo "No iniciada" y el pie dice quién actuó.
   // En cumplidas con observaciones e incompletas, el pie es el resumen técnico.
-  const pie = alerta === 'intervenida'
+  const pie = tecnico === 'pausada'
+    ? (r.pausada_por_nombre ? `Pausada por ${nombreCorto(r.pausada_por_nombre)}` : 'Pausada')
+    : alerta === 'intervenida'
     ? (r.alerta_resuelta_por_nombre
         ? `Intervino: ${nombreCorto(r.alerta_resuelta_por_nombre)}`
         : `${r.alerta_intervenciones} intervención(es)`)
@@ -483,11 +498,19 @@ function fechaHora(iso: string | null): string {
 }
 
 function DetalleSinEjecucion({
-  fila, objetivoNombre, onCerrar,
-}: { fila: Fila; objetivoNombre: string; onCerrar: () => void }) {
+  fila, objetivoNombre, onCerrar, onActualizar,
+}: { fila: Fila; objetivoNombre: string; onCerrar: () => void; onActualizar: () => void }) {
   const r = fila.ronda
   const tecnico = estadoTecnicoRonda(r)
   const alerta = estadoAlertaRonda(r)
+
+  const [formPausa, setFormPausa] = useState(false)
+  const [motivoPausa, setMotivoPausa] = useState('')
+  const [hastaAt, setHastaAt] = useState('')
+  const [enviando, setEnviando] = useState(false)
+  const [errorForm, setErrorForm] = useState<string | null>(null)
+  const [formReanudar, setFormReanudar] = useState(false)
+  const [comentarioReanudar, setComentarioReanudar] = useState('')
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCerrar() }
@@ -495,8 +518,31 @@ function DetalleSinEjecucion({
     return () => document.removeEventListener('keydown', onKey)
   }, [onCerrar])
 
-  // Estado técnico y estado de alerta van en campos SEPARADOS: intervenir una
-  // alerta no convierte la ronda en otra cosa.
+  const ejecutarPausa = async () => {
+    if (motivoPausa.trim().length < 5) { setErrorForm('El motivo debe tener al menos 5 caracteres.'); return }
+    setEnviando(true); setErrorForm(null)
+    const { data, error } = await pausarRonda(
+      r.ronda_base_id, motivoPausa.trim(), hastaAt || null,
+    )
+    setEnviando(false)
+    if (error) { setErrorForm(error); return }
+    if (data?.contexto === 'ya_pausada') { setErrorForm('Esta ronda ya está pausada.'); return }
+    if (data?.contexto === 'motivo_invalido') { setErrorForm('Motivo demasiado corto.'); return }
+    if (data?.contexto === 'hasta_invalido') { setErrorForm('La fecha debe ser futura.'); return }
+    if (data?.contexto !== 'ok') { setErrorForm(`Error: ${data?.contexto ?? 'desconocido'}`); return }
+    onActualizar()
+  }
+
+  const ejecutarReanudacion = async () => {
+    if (!r.pausa_id) return
+    setEnviando(true); setErrorForm(null)
+    const { data, error } = await reanudarRonda(r.pausa_id, comentarioReanudar.trim() || null)
+    setEnviando(false)
+    if (error) { setErrorForm(error); return }
+    if (data?.contexto !== 'ok') { setErrorForm(`Error: ${data?.contexto ?? 'desconocido'}`); return }
+    onActualizar()
+  }
+
   const datos: [string, string][] = [
     ['Objetivo', objetivoNombre],
     ['Ronda', r.ronda_nombre],
@@ -507,6 +553,8 @@ function DetalleSinEjecucion({
     ['Estado técnico', ETIQUETA_ESTADO_TECNICO[tecnico]],
     ['Alerta', ETIQUETA_ESTADO_ALERTA[alerta]],
   ]
+
+  const puedeSerPausada = !r.pausada && (tecnico === 'no_iniciada' || tecnico === 'pendiente' || tecnico === 'proxima')
 
   return (
     <div style={S.overlay} role="dialog" aria-modal="true" aria-label="Detalle de la ronda" onClick={onCerrar}>
@@ -530,6 +578,49 @@ function DetalleSinEjecucion({
           ))}
         </div>
 
+        {r.pausada && (
+          <div style={{ ...S.bloque, borderTopColor: '#f59e0b' }}>
+            <div style={{ ...S.bloqueTitulo, color: '#f59e0b' }}>⏸ Pausa activa</div>
+            <div style={S.bloqueTexto}>
+              <div>Motivo: {r.pausa_motivo}</div>
+              <div>Desde: {fechaHora(r.pausa_desde)}</div>
+              {r.pausa_hasta && <div>Hasta: {fechaHora(r.pausa_hasta)}</div>}
+              {r.pausada_por_nombre && <div>Pausada por: {r.pausada_por_nombre}</div>}
+            </div>
+            {!formReanudar ? (
+              <button
+                type="button"
+                style={{ ...S.botonAccion, background: '#166534', marginTop: 10 }}
+                onClick={() => setFormReanudar(true)}
+              >Reanudar ronda</button>
+            ) : (
+              <div style={{ marginTop: 10 }}>
+                <textarea
+                  value={comentarioReanudar}
+                  onChange={e => setComentarioReanudar(e.target.value)}
+                  placeholder="Comentario de reanudación (opcional)"
+                  style={S.inputTexto}
+                  rows={2}
+                />
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                  <button
+                    type="button"
+                    style={{ ...S.botonAccion, background: '#166534', flex: 1 }}
+                    onClick={() => void ejecutarReanudacion()}
+                    disabled={enviando}
+                  >{enviando ? 'Reanudando…' : 'Confirmar reanudación'}</button>
+                  <button
+                    type="button"
+                    style={{ ...S.botonAccion, background: '#374151', flex: 0 }}
+                    onClick={() => setFormReanudar(false)}
+                    disabled={enviando}
+                  >Cancelar</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {r.alerta_suspendida && (
           <div style={S.bloque}>
             <div style={S.bloqueTitulo}>Suspensión declarada por el vigilador</div>
@@ -552,6 +643,59 @@ function DetalleSinEjecucion({
             <div style={S.bloqueTexto}>Sin intervención.</div>
           )}
         </div>
+
+        {puedeSerPausada && !formPausa && (
+          <button
+            type="button"
+            style={{ ...S.botonAccion, background: '#92400e', marginTop: 10, width: '100%' }}
+            onClick={() => setFormPausa(true)}
+          >⏸ Pausar ronda</button>
+        )}
+
+        {formPausa && (
+          <div style={{ ...S.bloque, borderTopColor: '#f59e0b' }}>
+            <div style={{ ...S.bloqueTitulo, color: '#f59e0b' }}>Pausar ronda</div>
+            <div style={{ ...S.aviso, marginBottom: 8, color: '#fbbf24' }}>
+              La pausa no borra ni resuelve alertas o incumplimientos anteriores.
+              Solo evita que se generen nuevas alertas para ventanas futuras.
+            </div>
+            <textarea
+              value={motivoPausa}
+              onChange={e => setMotivoPausa(e.target.value)}
+              placeholder="Motivo de la pausa (obligatorio, mín. 5 caracteres)"
+              style={S.inputTexto}
+              rows={2}
+            />
+            <div style={{ marginTop: 6 }}>
+              <label style={{ fontSize: 11, color: '#94a3b8', display: 'block', marginBottom: 3 }}>
+                Reactivación automática (opcional)
+              </label>
+              <input
+                type="datetime-local"
+                value={hastaAt}
+                onChange={e => setHastaAt(e.target.value)}
+                style={{ ...S.inputTexto, padding: '6px 8px' }}
+              />
+            </div>
+            {errorForm && <div style={{ fontSize: 12, color: '#fca5a5', marginTop: 6 }}>{errorForm}</div>}
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button
+                type="button"
+                style={{ ...S.botonAccion, background: '#92400e', flex: 1 }}
+                onClick={() => void ejecutarPausa()}
+                disabled={enviando || motivoPausa.trim().length < 5}
+              >{enviando ? 'Pausando…' : 'Confirmar pausa'}</button>
+              <button
+                type="button"
+                style={{ ...S.botonAccion, background: '#374151', flex: 0 }}
+                onClick={() => { setFormPausa(false); setErrorForm(null) }}
+                disabled={enviando}
+              >Cancelar</button>
+            </div>
+          </div>
+        )}
+
+        {errorForm && !formPausa && <div style={{ fontSize: 12, color: '#fca5a5', marginTop: 6 }}>{errorForm}</div>}
       </div>
     </div>
   )
@@ -645,4 +789,13 @@ const S: Record<string, React.CSSProperties> = {
   bloque: { marginTop: 12, borderTop: '1px solid #1e2d42', paddingTop: 10 },
   bloqueTitulo: { fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 700 },
   bloqueTexto: { fontSize: 12, color: '#cbd5e1', marginTop: 6, lineHeight: 1.6 },
+  botonAccion: {
+    border: 'none', borderRadius: 8, padding: '8px 14px', fontSize: 13,
+    fontWeight: 700, color: '#fff', cursor: 'pointer',
+  },
+  inputTexto: {
+    width: '100%', background: '#0f172a', border: '1px solid #1e2d42',
+    borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '8px 10px',
+    fontFamily: 'inherit', resize: 'vertical' as const,
+  },
 }

@@ -23,9 +23,17 @@ import {
 } from '@/lib/rondas'
 import { formatFechaHora } from '@/lib/formato'
 
+interface PausaInfo {
+  motivo: string | null
+  desde: string | null
+  hasta: string | null
+  supervisor: string | null
+}
+
 interface Props {
   ejecucionId: string
   onCerrar: () => void
+  pausaInfo?: PausaInfo
 }
 
 // 24 h vía lib/formato.ts: en el detalle conviven horarios de ventana y de
@@ -43,7 +51,7 @@ function numero(valor: number | null, sufijo = ''): string {
   return valor === null || valor === undefined ? '—' : `${valor}${sufijo}`
 }
 
-export default function RondaEjecucionDetalle({ ejecucionId, onCerrar }: Props) {
+export default function RondaEjecucionDetalle({ ejecucionId, onCerrar, pausaInfo }: Props) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<DetalleEjecucionSupervisor | null>(null)
@@ -78,6 +86,16 @@ export default function RondaEjecucionDetalle({ ejecucionId, onCerrar }: Props) 
         </div>
 
         <div style={S.body}>
+          {pausaInfo && (
+            <div style={S.avisoPausa} role="note">
+              <strong>⏸ Ronda pausada</strong>
+              {pausaInfo.supervisor ? ` · ${pausaInfo.supervisor}` : ''}
+              {pausaInfo.desde ? ` · desde ${fechaHora(pausaInfo.desde)}` : ''}
+              {pausaInfo.hasta ? ` · hasta ${fechaHora(pausaInfo.hasta)}` : ''}
+              {pausaInfo.motivo ? <div style={S.pausaMotivo}>{pausaInfo.motivo}</div> : null}
+            </div>
+          )}
+
           {cargando && <div style={S.nota}>Cargando detalle…</div>}
 
           {!cargando && error && <div style={S.error} role="alert">{error}</div>}
@@ -309,6 +327,11 @@ const S: Record<string, React.CSSProperties> = {
     border: '1px solid #991b1b', borderRadius: 8, padding: 10, marginBottom: 12,
   },
   avisoMotivo: { color: '#f8b4b4', marginTop: 6, lineHeight: 1.5 },
+  avisoPausa: {
+    fontSize: 12, color: '#fde68a', background: '#3b2f0f',
+    border: '1px solid #92400e', borderRadius: 8, padding: 10, marginBottom: 12,
+  },
+  pausaMotivo: { color: '#fcd34d', marginTop: 6, lineHeight: 1.5 },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 },
   dato: { background: '#0f172a', border: '1px solid #1a2436', borderRadius: 8, padding: '8px 10px' },
   datoLabel: { display: 'block', fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
