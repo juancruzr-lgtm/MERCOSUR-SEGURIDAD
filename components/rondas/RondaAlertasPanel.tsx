@@ -11,7 +11,7 @@
 // En alcance completo se muestra a qué objetivo pertenece cada alerta; es la
 // única diferencia de render.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   listarRondaAlertasObjetivo,
   resolverRondaAlerta,
@@ -50,6 +50,57 @@ function hora(iso: string): string {
   return formatHora24(iso)
 }
 
+interface GrupoAlerta {
+  key: string
+  objetivo_id: string
+  objetivo_nombre: string
+  ronda_base_id: string
+  ronda_nombre: string
+  puesto_nombre: string
+  alertas: RondaAlerta[]
+  pendientes: number
+  ultimaAlerta: RondaAlerta
+  tieneIntervenciones: boolean
+}
+
+function msAlerta(iso: string): number {
+  const t = new Date(iso).getTime()
+  return Number.isNaN(t) ? 0 : t
+}
+
+function agruparAlertas(alertas: RondaAlerta[]): GrupoAlerta[] {
+  const mapa = new Map<string, GrupoAlerta>()
+  for (const a of alertas) {
+    const key = `${a.objetivo_id}::${a.ronda_base_id}`
+    let grupo = mapa.get(key)
+    if (!grupo) {
+      grupo = {
+        key,
+        objetivo_id: a.objetivo_id,
+        objetivo_nombre: a.objetivo_nombre,
+        ronda_base_id: a.ronda_base_id,
+        ronda_nombre: a.ronda_nombre,
+        puesto_nombre: a.puesto_nombre,
+        alertas: [],
+        pendientes: 0,
+        ultimaAlerta: a,
+        tieneIntervenciones: false,
+      }
+      mapa.set(key, grupo)
+    }
+    grupo.alertas.push(a)
+    if (a.estado === 'pendiente') grupo.pendientes++
+    if (a.intervenciones > 0 || a.estado === 'resuelta') grupo.tieneIntervenciones = true
+    if (msAlerta(a.detectada_at) > msAlerta(grupo.ultimaAlerta.detectada_at)) {
+      grupo.ultimaAlerta = a
+    }
+  }
+  return Array.from(mapa.values()).sort((a, b) => {
+    if (a.pendientes !== b.pendientes) return b.pendientes - a.pendientes
+    return msAlerta(b.ultimaAlerta.detectada_at) - msAlerta(a.ultimaAlerta.detectada_at)
+  })
+}
+
 export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendientes = false, maximo }: Props) {
   const [filtro, setFiltro] = useState<Filtro>('pendiente')
   const [cargando, setCargando] = useState(true)
@@ -57,6 +108,7 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
   const [sinPermiso, setSinPermiso] = useState(false)
   const [alertas, setAlertas] = useState<RondaAlerta[]>([])
   const [intervenir, setIntervenir] = useState<RondaAlerta | null>(null)
+  const [expandido, setExpandido] = useState<Set<string>>(new Set())
 
   // En alcance completo el objetivo no se sobreentiende: hay que decir cuál es.
   const alcanceCompleto = objetivoId === null
@@ -90,8 +142,18 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
 
   useEffect(() => { void cargar() }, [cargar])
 
-  const visibles = maximo != null ? alertas.slice(0, maximo) : alertas
-  const ocultas = alertas.length - visibles.length
+  const todosGrupos = useMemo(() => agruparAlertas(alertas), [alertas])
+  const grupos = maximo != null ? todosGrupos.slice(0, maximo) : todosGrupos
+  const gruposOcultos = todosGrupos.length - grupos.length
+
+  const toggleExpandido = useCallback((key: string) => {
+    setExpandido(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
 
   if (sinPermiso) {
     return (
@@ -131,57 +193,93 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
         </div>
       )}
 
-      {!cargando && !error && visibles.length > 0 && (
+      {!cargando && !error && grupos.length > 0 && (
         <div style={S.lista}>
-          {visibles.map(a => (
-            <div key={a.id} style={S.card}>
+          {grupos.map(g => (
+            <div key={g.key} style={S.card}>
               <div style={S.cardTop}>
-                <span style={{ ...S.tipo, ...(
-                  a.tipo === 'no_iniciada' ? S.tipoNoIniciada
-                  : a.tipo === 'suspendida' ? S.tipoSuspendida
-                  : S.tipoNoFinalizada
-                ) }}>
-                  {etiquetaTipoRondaAlerta(a.tipo)}
+                <span style={{ ...S.tipo, ...(g.pendientes > 0 ? S.tipoNoIniciada : S.estadoResuelta) }}>
+                  {g.pendientes > 0
+                    ? `${g.pendientes} pendiente(s)`
+                    : `${g.alertas.length} resuelta(s)`}
                 </span>
-                {/* Colores del modelo unificado: rojo = alerta pendiente (única
-                    situación que exige atención inmediata), lima = intervenida. */}
-                <span style={{ ...S.estado, ...(a.estado === 'pendiente' ? (a.intervenciones > 0 ? S.estadoIntervenida : S.estadoPend) : S.estadoResuelta) }}>
-                  {a.estado === 'pendiente'
-                    ? (a.intervenciones > 0 ? 'Intervenida · sin cierre' : 'Pendiente')
-                    : 'Intervenida'}
+                <span style={{ ...S.estado, ...(g.tieneIntervenciones ? S.estadoIntervenida : (g.pendientes > 0 ? S.estadoPend : S.estadoResuelta)) }}>
+                  {g.tieneIntervenciones ? 'Intervenida' : (g.pendientes > 0 ? 'Sin intervención' : 'Resuelta')}
                 </span>
               </div>
 
-              {alcanceCompleto && <div style={S.objetivo}>{a.objetivo_nombre}</div>}
-              <div style={S.ronda}>{a.ronda_nombre}</div>
-              <div style={S.datos}>
-                {a.puesto_nombre} · {a.guardia_nombre}
-              </div>
+              {alcanceCompleto && <div style={S.objetivo}>{g.objetivo_nombre}</div>}
+              <div style={S.ronda}>{g.ronda_nombre}</div>
+              <div style={S.datos}>{g.puesto_nombre} · {g.ultimaAlerta.guardia_nombre}</div>
               <div style={S.datosTenue}>
-                Ventana {hora(a.ventana_inicio)}–{hora(a.ventana_fin)} · venció {fechaHora(a.vencimiento_at)}
+                Última: {fechaHora(g.ultimaAlerta.detectada_at)}
               </div>
-              {a.tipo === 'suspendida' && a.motivo_vigilador && (
-                <div style={S.motivoVig}>Motivo del vigilador: {a.motivo_vigilador}</div>
-              )}
 
-              {a.estado === 'resuelta' ? (
-                <div style={S.resolucion}>
-                  {a.accion ? etiquetaAccionRondaAlerta(a.accion) : 'Resuelta'}
-                  {a.resuelta_por_nombre ? ` · ${a.resuelta_por_nombre}` : ''}
-                  {a.resuelta_at ? ` · ${fechaHora(a.resuelta_at)}` : ''}
-                  {a.comentario ? <div style={S.comentario}>{a.comentario}</div> : null}
-                </div>
-              ) : (
-                <div style={S.acciones}>
-                  {a.intervenciones > 0 && <span style={S.intervCount}>{a.intervenciones} intervención(es)</span>}
-                  <button type="button" style={S.intervenirBtn} onClick={() => setIntervenir(a)}>Intervenir</button>
+              <div style={S.acciones}>
+                {g.pendientes > 0 && (
+                  <button type="button" style={S.intervenirBtn} onClick={() => {
+                    const pendiente = g.alertas.find(a => a.estado === 'pendiente')
+                    if (pendiente) setIntervenir(pendiente)
+                  }}>
+                    Intervenir
+                  </button>
+                )}
+                <button
+                  type="button"
+                  style={{ ...S.detalleBtn, marginLeft: g.pendientes > 0 ? 0 : 'auto' }}
+                  onClick={() => toggleExpandido(g.key)}
+                >
+                  {expandido.has(g.key) ? 'Ocultar detalle' : 'Ver detalle'}
+                </button>
+              </div>
+
+              {expandido.has(g.key) && (
+                <div style={S.detalleContenedor}>
+                  {g.alertas.map(a => (
+                    <div key={a.id} style={S.detalleCard}>
+                      <div style={S.cardTop}>
+                        <span style={{ ...S.tipo, ...(
+                          a.tipo === 'no_iniciada' ? S.tipoNoIniciada
+                          : a.tipo === 'suspendida' ? S.tipoSuspendida
+                          : S.tipoNoFinalizada
+                        ) }}>
+                          {etiquetaTipoRondaAlerta(a.tipo)}
+                        </span>
+                        <span style={{ ...S.estado, ...(a.estado === 'pendiente' ? (a.intervenciones > 0 ? S.estadoIntervenida : S.estadoPend) : S.estadoResuelta) }}>
+                          {a.estado === 'pendiente'
+                            ? (a.intervenciones > 0 ? 'Intervenida' : 'Pendiente')
+                            : 'Resuelta'}
+                        </span>
+                      </div>
+                      <div style={S.datos}>{a.guardia_nombre}</div>
+                      <div style={S.datosTenue}>
+                        Ventana {hora(a.ventana_inicio)}–{hora(a.ventana_fin)} · venció {fechaHora(a.vencimiento_at)}
+                      </div>
+                      {a.tipo === 'suspendida' && a.motivo_vigilador && (
+                        <div style={S.motivoVig}>Motivo: {a.motivo_vigilador}</div>
+                      )}
+                      {a.estado === 'resuelta' ? (
+                        <div style={S.resolucion}>
+                          {a.accion ? etiquetaAccionRondaAlerta(a.accion) : 'Resuelta'}
+                          {a.resuelta_por_nombre ? ` · ${a.resuelta_por_nombre}` : ''}
+                          {a.resuelta_at ? ` · ${fechaHora(a.resuelta_at)}` : ''}
+                          {a.comentario ? <div style={S.comentario}>{a.comentario}</div> : null}
+                        </div>
+                      ) : (
+                        <div style={{ ...S.acciones, marginTop: 8 }}>
+                          {a.intervenciones > 0 && <span style={S.intervCount}>{a.intervenciones} intervención(es)</span>}
+                          <button type="button" style={S.intervenirBtn} onClick={() => setIntervenir(a)}>Intervenir</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
           ))}
-          {ocultas > 0 && (
+          {gruposOcultos > 0 && (
             <div style={S.nota}>
-              y {ocultas} alerta(s) pendiente(s) más. Abrí Rondas para verlas todas.
+              y {gruposOcultos} ronda(s) más con alertas. Abrí Rondas para verlas todas.
             </div>
           )}
         </div>
@@ -239,6 +337,9 @@ function ModalIntervencion({
 
         <div style={S.modalSub}>
           {etiquetaTipoRondaAlerta(alerta.tipo)} · {alerta.ronda_nombre} · {alerta.guardia_nombre}
+        </div>
+        <div style={S.modalSub}>
+          Ventana {hora(alerta.ventana_inicio)}–{hora(alerta.ventana_fin)} · venció {fechaHora(alerta.vencimiento_at)}
         </div>
 
         <label style={S.label} htmlFor="accion-alerta">Acción</label>
@@ -326,6 +427,17 @@ const S: Record<string, React.CSSProperties> = {
   intervenirBtn: {
     marginLeft: 'auto', border: 'none', borderRadius: 8, padding: '8px 16px',
     background: '#f59e0b', color: '#111827', fontWeight: 800, fontSize: 13, cursor: 'pointer',
+  },
+  detalleBtn: {
+    border: '1px solid #1e2d42', background: '#0f172a', color: '#94a3b8',
+    borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 12, cursor: 'pointer',
+  },
+  detalleContenedor: {
+    marginTop: 10, paddingTop: 10, borderTop: '1px solid #1e2d42',
+    display: 'flex', flexDirection: 'column', gap: 8,
+  },
+  detalleCard: {
+    border: '1px solid #1e2d42', borderRadius: 8, background: '#0f172a', padding: 10,
   },
   overlay: {
     position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(2,6,15,.74)',

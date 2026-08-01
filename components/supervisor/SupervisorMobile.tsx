@@ -12,6 +12,7 @@ import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno
 import type { EstadoPuestos } from '@/lib/puestos'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
+import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
@@ -505,6 +506,7 @@ export default function SupervisorMobile({ user }: any) {
   const [loadingEdicionSup, setLoadingEdicionSup] = useState(false)
   const [errorEdicionSup, setErrorEdicionSup] = useState('')
   const [solicitudesAnterioresAbiertas, setSolicitudesAnterioresAbiertas] = useState(false)
+  const [crearRondaPickerAbierto, setCrearRondaPickerAbierto] = useState(false)
 
   const hoy = fechaHoy()
   const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
@@ -966,6 +968,10 @@ export default function SupervisorMobile({ user }: any) {
   }), [turnos, registros])
 
   const objetivosActivos = useMemo(() => objetivos.filter(o => (o.estado || 'activo') === 'activo'), [objetivos])
+  const objetivosControlRondas = useMemo(
+    () => objetivosActivos.map(o => ({ id: o.id, nombre: o.nombre || 'Objetivo sin nombre' })),
+    [objetivosActivos],
+  )
   const objetivoSupervision = useMemo(
     () => objetivos.find(o => o.id === supervisionObjetivoId) || null,
     [objetivos, supervisionObjetivoId],
@@ -2938,6 +2944,12 @@ export default function SupervisorMobile({ user }: any) {
             {tab === 'turnos' && (
               <section>
                 <div style={screenTitle}>Turnos por objetivo</div>
+                <button
+                  style={{ ...refreshButton, minHeight: 46, marginBottom: 12, textAlign: 'center' }}
+                  onClick={() => { setError(''); setMensaje(''); setModalTurno(true) }}
+                >
+                  Crear turno
+                </button>
                 <div style={dateText}>{rangoFecha.label} · {fechaDDMMYYYY(rangoFecha.desde)}{rangoFecha.desde !== rangoFecha.hasta ? ` a ${fechaDDMMYYYY(rangoFecha.hasta)}` : ''}</div>
                 {renderFiltrosFecha()}
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
@@ -3016,14 +3028,20 @@ export default function SupervisorMobile({ user }: any) {
               </section>
             )}
 
-            {/* Rondas pendientes de TODOS los objetivos del supervisor.
-                Se renderiza siempre y se oculta con CSS en vez de desmontarse:
-                así el contador de Inicio tiene dato desde el arranque sin pedir
-                las alertas dos veces, y volver a la pestaña no recarga. */}
+            {/* Rondas: se renderiza siempre y se oculta con CSS en vez de
+                desmontarse para que el contador de Inicio tenga dato desde el
+                arranque sin pedir las alertas dos veces. */}
             <section style={{ display: tab === 'rondas' ? 'block' : 'none' }}>
               <div style={screenTitle}>Rondas</div>
-              <div style={dateText}>
-                Rondas de tus objetivos que esperan intervención. No hace falta entrar objetivo por objetivo.
+              <button
+                style={{ ...refreshButton, minHeight: 46, marginBottom: 12, textAlign: 'center' }}
+                onClick={() => setCrearRondaPickerAbierto(true)}
+              >
+                Crear ronda
+              </button>
+
+              <div style={{ ...card, marginTop: 0, marginBottom: 16 }}>
+                <ControlDeRondasPanel objetivos={objetivosControlRondas} />
               </div>
 
               <div style={statsGrid}>
@@ -3042,6 +3060,7 @@ export default function SupervisorMobile({ user }: any) {
               </div>
 
               <div style={{ ...card, marginTop:12 }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: '#f8fafc', marginBottom: 10 }}>Alertas</div>
                 <RondaAlertasPanel objetivoId={null} soloPendientes onAlertas={setRondaAlertas} />
               </div>
             </section>
@@ -3050,15 +3069,13 @@ export default function SupervisorMobile({ user }: any) {
             {tab === 'objetivos' && !objetivoLegajoId && (
               <section>
                 <div style={screenTitle}>Objetivos</div>
-                <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
-
-                <div style={{ ...card, borderColor:'rgba(59,130,246,.35)', background:'rgba(59,130,246,.08)' }}>
-                  <div style={objetivoName}>Solicitudes de objetivos</div>
-                  <div style={{ ...muted, marginBottom:12 }}>Crear una solicitud pendiente para que administración apruebe el alta.</div>
-                  <button style={refreshButton} onClick={() => { setError(''); resetFormNuevoObjetivo(); setModalNuevoObjetivo(true) }}>
-                    Solicitar alta de objetivo
-                  </button>
-                </div>
+                <button
+                  style={{ ...refreshButton, minHeight: 46, marginBottom: 12, textAlign: 'center' }}
+                  onClick={() => { setError(''); resetFormNuevoObjetivo(); setModalNuevoObjetivo(true) }}
+                >
+                  Crear objetivo
+                </button>
+                <div style={dateText}>Las solicitudes de alta se envían a aprobación administrativa.</div>
 
                 {objetivos.map(objetivo => (
                   <div key={objetivo.id} style={card}>
@@ -3994,6 +4011,36 @@ export default function SupervisorMobile({ user }: any) {
                 {asignando === `objetivo-${objetivoEditando.id}` ? 'Guardando...' : 'Guardar'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {crearRondaPickerAbierto && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>Crear ronda</div>
+            <div style={muted}>Elegí un objetivo para abrir el editor de rondas en su legajo.</div>
+            {objetivosActivos.length === 0 && (
+              <div style={empty}>No hay objetivos activos.</div>
+            )}
+            <div style={{ maxHeight: '60vh', overflowY: 'auto', marginTop: 12 }}>
+              {objetivosActivos.map(o => (
+                <button
+                  key={o.id}
+                  style={{ ...secondaryButton, width: '100%', marginBottom: 8, textAlign: 'left', minHeight: 46 }}
+                  onClick={() => {
+                    setCrearRondaPickerAbierto(false)
+                    setObjetivoLegajoId(o.id)
+                    setTab('objetivos')
+                  }}
+                >
+                  {o.nombre}
+                </button>
+              ))}
+            </div>
+            <button style={{ ...secondaryButton, marginTop: 12, width: '100%' }} onClick={() => setCrearRondaPickerAbierto(false)}>
+              Cancelar
+            </button>
           </div>
         </div>
       )}
