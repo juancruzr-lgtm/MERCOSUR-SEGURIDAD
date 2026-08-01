@@ -504,6 +504,7 @@ export default function SupervisorMobile({ user }: any) {
   const [estadoOpEdicionSup, setEstadoOpEdicionSup] = useState<'FUTURO' | 'EN_CURSO' | 'FINALIZADO' | null>(null)
   const [loadingEdicionSup, setLoadingEdicionSup] = useState(false)
   const [errorEdicionSup, setErrorEdicionSup] = useState('')
+  const [solicitudesAnterioresAbiertas, setSolicitudesAnterioresAbiertas] = useState(false)
 
   const hoy = fechaHoy()
   const rangoFecha = rangoFiltroFechaTurnos(filtroFecha, hoy)
@@ -1402,7 +1403,7 @@ export default function SupervisorMobile({ user }: any) {
       setMensaje('Solicitud enviada: crear vigilador.')
       resetFormNuevoGuardia()
       setModalNuevoGuardia(false)
-      setTab('solicitudes')
+      setTab('alertas')
     } catch (solicitudError) {
       setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
     } finally {
@@ -1441,7 +1442,7 @@ export default function SupervisorMobile({ user }: any) {
       setMensaje('Solicitud enviada: crear objetivo.')
       resetFormNuevoObjetivo()
       setModalNuevoObjetivo(false)
-      setTab('solicitudes')
+      setTab('alertas')
     } catch (solicitudError) {
       setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
     } finally {
@@ -1463,7 +1464,7 @@ export default function SupervisorMobile({ user }: any) {
       })
       setMensaje(`Solicitud enviada: baja de ${guardia.apellido}, ${guardia.nombre}.`)
       setGuardiaEditando(null)
-      setTab('solicitudes')
+      setTab('alertas')
     } catch (solicitudError) {
       setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
     } finally {
@@ -1484,7 +1485,7 @@ export default function SupervisorMobile({ user }: any) {
       })
       setMensaje(`Solicitud enviada: baja de ${objetivo.nombre}.`)
       setObjetivoEditando(null)
-      setTab('solicitudes')
+      setTab('alertas')
     } catch (solicitudError) {
       setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
     } finally {
@@ -2116,13 +2117,12 @@ export default function SupervisorMobile({ user }: any) {
 
   const tabs = [
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
-    { id: 'turnos', label: 'Turnos', icon: '📅' },
-    { id: 'guardias', label: 'Guardias', icon: '👮' },
-    { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
-    { id: 'rondas', label: 'Rondas', icon: '🔁' },
-    { id: 'solicitudes', label: 'Solicitudes', icon: '📝' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
     { id: 'supervisiones', label: 'Supervisiones', icon: '☑️' },
+    { id: 'turnos', label: 'Turnos', icon: '📅' },
+    { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
+    { id: 'guardias', label: 'Guardias', icon: '👮' },
+    { id: 'rondas', label: 'Rondas', icon: '🔁' },
     { id: 'perfil', label: 'Perfil', icon: '👤' },
   ]
 
@@ -2805,31 +2805,53 @@ export default function SupervisorMobile({ user }: any) {
           <>
             {tab === 'inicio' && (
               <section>
-                <div style={screenTitle}>Operación</div>
-                <div style={dateText}>{rangoFecha.label} · {fechaDDMMYYYY(rangoFecha.desde)}{rangoFecha.desde !== rangoFecha.hasta ? ` a ${fechaDDMMYYYY(rangoFecha.hasta)}` : ''}</div>
-                {renderFiltrosFecha()}
+                <div style={screenTitle}>Inicio</div>
+                <div style={dateText}>Bandeja operativa · {fechaDDMMYYYY(hoy)}</div>
 
                 <div style={statsGrid}>
-                  <div style={{ ...statCard, borderTop:'3px solid #ef4444', cursor:'pointer' }} onClick={() => { setAgendaEstadoFiltro('vencido'); setTimeout(() => document.getElementById('sec-agenda')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50) }}><strong style={{ color:'#ef4444' }}>{agendaResumen.vencidas}</strong><span>🔴 Supervisiones vencidas</span></div>
-                  <div style={{ ...statCard, borderTop:'3px solid #f59e0b', cursor:'pointer' }} onClick={() => { setAgendaEstadoFiltro('proximo'); setTimeout(() => document.getElementById('sec-agenda')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50) }}><strong style={{ color:'#f59e0b' }}>{agendaResumen.proximas}</strong><span>🟠 Próximas a vencer</span></div>
-                  <div style={{ ...statCard, cursor:'pointer', borderTop:'3px solid #f59e0b' }} onClick={() => setTab('alertas')}><strong style={{ color:'#f59e0b' }}>{totalAlertasPendientes}</strong><span>🚨 Alertas pendientes</span></div>
-                  {/* Rondas incumplidas al frente: antes había que abrir cada
-                      objetivo para enterarse de que una ronda no se hizo. */}
-                  <div
-                    style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${resumenRondas.pendientes > 0 ? '#ef4444' : '#334155'}` }}
-                    onClick={() => setTab('rondas')}
-                  >
-                    <strong style={{ color: resumenRondas.pendientes > 0 ? '#ef4444' : '#e2e8f0' }}>{resumenRondas.pendientes}</strong>
-                    <span>🔁 Rondas pendientes</span>
+                  <div style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${resumen.descubiertos > 0 ? '#ef4444' : '#334155'}` }} onClick={() => { setFiltroTurnos('descubierto'); setTab('turnos') }}>
+                    <strong style={{ color: resumen.descubiertos > 0 ? '#ef4444' : '#e2e8f0' }}>{resumen.descubiertos}</strong>
+                    <span>Puestos descubiertos</span>
+                  </div>
+                  {(() => {
+                    const rondasNoIniciadas = rondaAlertas.filter(a => a.tipo === 'no_iniciada').length
+                    return (
+                      <div style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${rondasNoIniciadas > 0 ? '#ef4444' : '#334155'}` }} onClick={() => setTab('rondas')}>
+                        <strong style={{ color: rondasNoIniciadas > 0 ? '#ef4444' : '#e2e8f0' }}>{rondasNoIniciadas}</strong>
+                        <span>Rondas no iniciadas</span>
+                      </div>
+                    )
+                  })()}
+                  <div style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${agendaResumen.vencidas > 0 ? '#ef4444' : '#334155'}` }} onClick={() => { setAgendaEstadoFiltro('vencido'); setTimeout(() => document.getElementById('sec-agenda')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50) }}>
+                    <strong style={{ color: agendaResumen.vencidas > 0 ? '#ef4444' : '#e2e8f0' }}>{agendaResumen.vencidas}</strong>
+                    <span>Supervisiones vencidas</span>
+                  </div>
+                  <div style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${turnosSinIngresoPendientes.length > 0 ? '#f59e0b' : '#334155'}` }} onClick={() => setTab('alertas')}>
+                    <strong style={{ color: turnosSinIngresoPendientes.length > 0 ? '#f59e0b' : '#e2e8f0' }}>{turnosSinIngresoPendientes.length}</strong>
+                    <span>Guardias sin fichar</span>
+                  </div>
+                  <div style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${turnosConTardanzaPendientes.length > 0 ? '#f59e0b' : '#334155'}` }} onClick={() => setTab('alertas')}>
+                    <strong style={{ color: turnosConTardanzaPendientes.length > 0 ? '#f59e0b' : '#e2e8f0' }}>{turnosConTardanzaPendientes.length}</strong>
+                    <span>Tardanzas</span>
+                  </div>
+                  <div style={{ ...statCard, borderTop:'3px solid #334155' }}>
+                    <strong>{resumen.total}</strong>
+                    <span>Turnos hoy</span>
                   </div>
                 </div>
 
-                <div style={{ ...objetivoName, margin:'20px 0 8px' }}>Operación</div>
+                <div style={{ ...objetivoName, margin:'20px 0 8px' }}>Resumen operativo</div>
                 <div style={statsGrid}>
-                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('todos'); setTab('turnos') }}><strong>{resumen.total}</strong><span>Turnos hoy</span></div>
-                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('en turno'); setTab('turnos') }}><strong>{resumen.enTurno}</strong><span>En turno</span></div>
-                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('descubierto'); setTab('turnos') }}><strong>{resumen.descubiertos}</strong><span>Descubiertos</span></div>
-                  <div style={{ ...statCard, borderTop:'3px solid #10b981' }}><strong style={{ color:'#10b981' }}>{agendaResumen.realizadasHoy}</strong><span>Supervisiones realizadas hoy</span></div>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => { setFiltroTurnos('en turno'); setTab('turnos') }}><strong style={{ color:'#10b981' }}>{resumen.enTurno}</strong><span>En turno</span></div>
+                  <div style={{ ...statCard, borderTop:'3px solid #10b981' }}><strong style={{ color:'#10b981' }}>{agendaResumen.realizadasHoy}</strong><span>Supervisiones hoy</span></div>
+                  <div style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${agendaResumen.proximas > 0 ? '#f59e0b' : '#334155'}` }} onClick={() => { setAgendaEstadoFiltro('proximo'); setTimeout(() => document.getElementById('sec-agenda')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50) }}>
+                    <strong style={{ color: agendaResumen.proximas > 0 ? '#f59e0b' : '#e2e8f0' }}>{agendaResumen.proximas}</strong>
+                    <span>Próximas a vencer</span>
+                  </div>
+                  <div style={{ ...statCard, cursor:'pointer' }} onClick={() => setTab('alertas')}>
+                    <strong style={{ color: totalAlertasPendientes > 0 ? '#f59e0b' : '#e2e8f0' }}>{totalAlertasPendientes}</strong>
+                    <span>Alertas pendientes</span>
+                  </div>
                 </div>
 
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:8 }}>
@@ -2840,14 +2862,6 @@ export default function SupervisorMobile({ user }: any) {
                     disabled={activandoPush}
                   >
                     {activandoPush ? 'Activando...' : 'Activar notificaciones'}
-                  </button>
-                  <button style={secondaryButton} onClick={() => { setError(''); setMensaje(''); setModalTurno(true) }}>Crear turno</button>
-                  <button
-                    style={{ ...secondaryButton, gridColumn:'1 / -1', opacity: asignando === 'repetir-ayer' ? 0.65 : 1 }}
-                    onClick={repetirAyer}
-                    disabled={asignando === 'repetir-ayer'}
-                  >
-                    {asignando === 'repetir-ayer' ? 'Repitiendo...' : 'Repetir ayer'}
                   </button>
                 </div>
 
@@ -3083,51 +3097,6 @@ export default function SupervisorMobile({ user }: any) {
               </section>
             )}
 
-            {tab === 'solicitudes' && (
-              <section>
-                <div style={screenTitle}>Mis solicitudes</div>
-                <div style={dateText}>Seguimiento de altas y bajas enviadas a administración.</div>
-
-                {solicitudesAdmin.length === 0 ? (
-                  <div style={empty}>No tenés solicitudes registradas.</div>
-                ) : solicitudesAdmin.map(solicitud => {
-                  const datos = solicitud.datos_json || {}
-                  const colorEstado: EstadoTurno = solicitud.estado === 'aprobado'
-                    ? 'finalizado'
-                    : solicitud.estado === 'rechazado'
-                      ? 'descubierto'
-                      : 'pendiente de ingreso'
-
-                  return (
-                    <div key={solicitud.id} style={card}>
-                      <div style={turnoTop}>
-                        <div>
-                          <div style={objetivoName}>{tipoSolicitudLabel(solicitud.tipo)}</div>
-                          <div style={muted}>{datos.nombre ? `${datos.apellido ? `${datos.apellido}, ` : ''}${datos.nombre}` : solicitud.entidad}</div>
-                          <div style={muted}>{fechaDDMMYYYY(solicitud.created_at)}</div>
-                        </div>
-                        <span style={badge(colorEstado)}>{solicitud.estado}</span>
-                      </div>
-                      <div style={registrosDetalle}>
-                        {Object.entries(datos).slice(0, 6).map(([key, value]) => (
-                          <div key={key} style={registroItem}>
-                            <strong>{key.replace(/_/g, ' ')}</strong>
-                            <div style={muted}>{value === null || value === undefined || value === '' ? '—' : String(value)}</div>
-                          </div>
-                        ))}
-                        {solicitud.comentario_admin && (
-                          <div style={registroItem}>
-                            <strong>Comentario admin</strong>
-                            <div style={muted}>{solicitud.comentario_admin}</div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </section>
-            )}
-
             {tab === 'alertas' && (
               <section>
                 <div style={screenTitle}>Alertas de asistencia</div>
@@ -3275,6 +3244,81 @@ export default function SupervisorMobile({ user }: any) {
                     </div>
                   </div>
                 )}
+
+                <div style={{ ...objetivoName, margin:'20px 0 8px' }}>Solicitudes</div>
+                <div style={muted}>Seguimiento de altas y bajas enviadas a administración.</div>
+                {(() => {
+                  const pendientes = solicitudesAdmin.filter(s => s.estado === 'pendiente')
+                  const anteriores = solicitudesAdmin.filter(s => s.estado !== 'pendiente')
+                  const anterioresVisibles = solicitudesAnterioresAbiertas ? anteriores : anteriores.slice(0, 5)
+
+                  const renderSolicitud = (solicitud: SolicitudAdmin) => {
+                    const datos = solicitud.datos_json || {}
+                    const colorEstado: EstadoTurno = solicitud.estado === 'aprobado'
+                      ? 'finalizado'
+                      : solicitud.estado === 'rechazado'
+                        ? 'descubierto'
+                        : 'pendiente de ingreso'
+
+                    return (
+                      <div key={solicitud.id} style={{ ...card, marginTop:8 }}>
+                        <div style={turnoTop}>
+                          <div>
+                            <div style={objetivoName}>{tipoSolicitudLabel(solicitud.tipo)}</div>
+                            <div style={muted}>{datos.nombre ? `${datos.apellido ? `${datos.apellido}, ` : ''}${datos.nombre}` : solicitud.entidad}</div>
+                            <div style={muted}>{fechaDDMMYYYY(solicitud.created_at)}</div>
+                          </div>
+                          <span style={badge(colorEstado)}>{solicitud.estado}</span>
+                        </div>
+                        <div style={registrosDetalle}>
+                          {Object.entries(datos).slice(0, 6).map(([key, value]) => (
+                            <div key={key} style={registroItem}>
+                              <strong>{key.replace(/_/g, ' ')}</strong>
+                              <div style={muted}>{value === null || value === undefined || value === '' ? '—' : String(value)}</div>
+                            </div>
+                          ))}
+                          {solicitud.comentario_admin && (
+                            <div style={registroItem}>
+                              <strong>Comentario admin</strong>
+                              <div style={muted}>{solicitud.comentario_admin}</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  if (solicitudesAdmin.length === 0) {
+                    return <div style={{ ...empty, marginTop:8 }}>No tenés solicitudes registradas.</div>
+                  }
+
+                  return (
+                    <>
+                      {pendientes.length > 0 && pendientes.map(renderSolicitud)}
+                      {anteriores.length > 0 && (
+                        <>
+                          <div
+                            style={{ ...objetivoName, margin:'16px 0 4px', fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}
+                            onClick={() => setSolicitudesAnterioresAbiertas(!solicitudesAnterioresAbiertas)}
+                          >
+                            Solicitudes anteriores ({anteriores.length})
+                            <span style={{ fontSize:11 }}>{solicitudesAnterioresAbiertas ? '▲' : '▼'}</span>
+                          </div>
+                          {anterioresVisibles.map(renderSolicitud)}
+                          {!solicitudesAnterioresAbiertas && anteriores.length > 5 && (
+                            <button
+                              type="button"
+                              style={{ ...secondaryButton, marginTop:8, width:'100%' }}
+                              onClick={() => setSolicitudesAnterioresAbiertas(true)}
+                            >
+                              Ver todas ({anteriores.length})
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )
+                })()}
               </section>
             )}
 
@@ -3968,8 +4012,8 @@ export default function SupervisorMobile({ user }: any) {
               color: tab === t.id ? '#f59e0b' : '#94a3b8',
             }}
           >
-            <div style={{ fontSize: 20 }}>{t.icon}</div>
-            <div>{t.label}</div>
+            <div style={{ fontSize: 16 }}>{t.icon}</div>
+            <div style={{ fontSize: 10, lineHeight: 1.2 }}>{t.label}</div>
           </button>
         ))}
       </nav>
@@ -3981,9 +4025,7 @@ const container: React.CSSProperties = {
   minHeight: '100vh',
   background: '#0a0e1a',
   color: '#e2e8f0',
-  // 72 px de la barra fija + el home indicator del iPhone. Con el valor fijo
-  // anterior, el último control de cada pantalla quedaba debajo de la barra.
-  paddingBottom: 'calc(72px + env(safe-area-inset-bottom, 0px))',
+  paddingBottom: 'calc(93px + env(safe-area-inset-bottom, 0px))',
   // Ningún contenido puede generar scroll lateral en el shell móvil.
   overflowX: 'hidden',
   maxWidth: '100%',
@@ -4320,21 +4362,28 @@ const nav: React.CSSProperties = {
   left: 0,
   right: 0,
   bottom: 0,
-  display: 'flex',
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
   background: '#111827',
   borderTop: '1px solid #1e2d42',
-  // Debajo del overlay de modales (z-index 50) y por encima del contenido.
   zIndex: 40,
-  // El home indicator no puede comerse los botones de navegación.
   paddingBottom: 'env(safe-area-inset-bottom, 0px)',
 }
 
 const navButton: React.CSSProperties = {
-  flex: 1,
-  padding: '10px 4px',
+  padding: '4px 2px',
   border: 'none',
-  fontSize: 12,
+  fontSize: 11,
   cursor: 'pointer',
+  minWidth: 0,
+  minHeight: 46,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
 }
 
 function badge(estado: EstadoTurno): React.CSSProperties {
