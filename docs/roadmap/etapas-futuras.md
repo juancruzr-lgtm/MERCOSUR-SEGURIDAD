@@ -101,7 +101,7 @@ Un contenedor único por vigilador que agrupe:
 
 ---
 
-## 3. Validación mensual de planilla
+## 3. Cierre mensual de planilla con tres vistos
 
 ### Qué resuelve
 
@@ -118,19 +118,20 @@ Cuatro pasos, en orden estricto:
    acuerdo, deja una observación en vez de confirmar.
 3. **El supervisor valida.** Revisa lo confirmado y las observaciones. Puede
    devolver la planilla al vigilador o validarla.
-4. **Recién entonces queda disponible para liquidación.**
+4. **Administración da el tercer visto.** Recién después de este control la
+   planilla queda disponible y pasa a liquidación.
 
 ### Estados
 
 ```
-borrador → confirmada_vigilador → validada_supervisor → disponible_liquidacion
-                  ↑                        │
-                  └──── devuelta ──────────┘
+borrador → confirmada_vigilador → validada_supervisor → aprobada_administracion → disponible_liquidacion
+                  ↑                        │                         │
+                  └──── devuelta ──────────┴─────────────────────────┘
 ```
 
 ### Consideraciones de diseño
 
-- **El paso 4 debe ser un bloqueo real, no un aviso.** Si la liquidación puede
+- **El tercer visto debe ser un bloqueo real, no un aviso.** Si la liquidación puede
   ejecutarse igual sobre una planilla sin validar, el proceso no sirve.
 - **Qué pasa si el vigilador no confirma.** Necesita una salida: vencido un
   plazo, el supervisor debe poder validar dejando constancia de que se validó

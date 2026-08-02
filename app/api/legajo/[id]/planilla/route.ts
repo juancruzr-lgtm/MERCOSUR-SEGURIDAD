@@ -112,7 +112,7 @@ export async function GET(
       hora_entrada_real, hora_salida_real, horas_trabajadas,
       hora_entrada_final, hora_salida_final,
       objetivo_final_id, tipo_registro,
-      horas_liquidables, origen_cobertura, cierre_automatico,
+      horas_liquidables, origen_cobertura, cobertura_anulada_at, cierre_automatico,
       turno:turnos!inner(
         id, fecha, hora_inicio, hora_fin, objetivo_id,
         objetivo:objetivos(nombre, es_prueba)

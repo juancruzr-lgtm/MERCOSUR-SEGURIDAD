@@ -112,6 +112,11 @@ export interface RegistroAsistencia {
   comentario_final?: string | null
   horas_liquidables?: number | null
   origen_cobertura?: string | null
+  cobertura_anulada_at?: string | null
+  cobertura_anulada_por?: string | null
+  cobertura_anulada_motivo?: string | null
+  cobertura_intervencion_origen_id?: string | null
+  horas_liquidables_antes_anulacion?: number | null
   created_at: string
   // joins
   turno?: Turno

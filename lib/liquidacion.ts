@@ -22,6 +22,7 @@ export interface RegistroLiquidacion {
   horas_trabajadas?: number | string | null
   horas_liquidables?: number | string | null
   origen_cobertura?: string | null
+  cobertura_anulada_at?: string | null
   cierre_automatico?: boolean | null
 }
 
@@ -88,6 +89,9 @@ export function effectiveSalida(r?: RegistroLiquidacion | null): string | null {
 //   4. id lexicográfico                       — determinístico y estable
 
 export function scoreRegistro(r: RegistroLiquidacion): number {
+  // Una cobertura anulada se conserva como historial, pero nunca debe desplazar
+  // un fichaje o una corrección válida al elegir la línea liquidable del turno.
+  if (r.cobertura_anulada_at != null) return -1000
   return (r.horas_liquidables != null                                  ? 100 : 0) +
          (r.hora_entrada_final != null || r.hora_salida_final != null  ?  40 : 0) +
          (r.hora_entrada_real  != null                                 ?  10 : 0) +
@@ -162,6 +166,8 @@ export function horasLiquidablesRegistro(
   turno: TurnoLiquidacion,
   registro?: RegistroLiquidacion | null,
 ): number {
+  if (registro?.cobertura_anulada_at != null) return 0
+
   // Path 1: valor almacenado explícito — máxima prioridad
   if (registro?.horas_liquidables != null) {
     return normalizarHorasOficiales(Math.max(0, Number(registro.horas_liquidables) || 0))
@@ -220,6 +226,10 @@ function resolverOrigen(registro?: RegistroLiquidacion | null): {
   cargadoPorAdministracion: boolean
 } {
   const oc = registro?.origen_cobertura ?? null
+
+  if (registro?.cobertura_anulada_at != null) {
+    return { origenRegistro: 'cobertura_anulada', origenEtiqueta: 'Cobertura manual anulada', cargadoPorEmpleado: false, cargadoPorSupervisor: false, cargadoPorAdministracion: true }
+  }
 
   if (oc === 'saneamiento_historico_julio_2026') {
     return { origenRegistro: 'saneamiento', origenEtiqueta: 'Saneamiento histórico', cargadoPorEmpleado: false, cargadoPorSupervisor: false, cargadoPorAdministracion: false }
