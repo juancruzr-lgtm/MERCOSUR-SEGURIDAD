@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { registroTieneEntradaConfirmada } from '@/lib/turnos'
 import { track, initTelemetry } from '@/lib/telemetry'
+import { formatCuil } from '@/lib/revision-operativa'
 import SeccionTurnos from './SeccionTurnos'
 import SeccionPlanilla from './SeccionPlanilla'
 
@@ -14,6 +15,7 @@ interface DatosEmpleado {
   nombre: string
   apellido: string
   legajo: string | null
+  cuil?: string | null
   dni?: string
   email?: string
   rol: string
@@ -385,7 +387,7 @@ export default function LegajoPage() {
           <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>
             Legajo:{' '}
             <span style={{ fontWeight: 700, color: '#f59e0b', fontFamily: 'Syne, sans-serif' }}>
-              {empleado.legajo ?? '—'}
+              {empleado.cuil ? formatCuil(empleado.cuil) : (empleado.legajo ?? '—')}
             </span>
             {' · '}
             <span style={S.badge(empleado.estado === 'activo' ? '#22c55e' : '#ef4444')}>

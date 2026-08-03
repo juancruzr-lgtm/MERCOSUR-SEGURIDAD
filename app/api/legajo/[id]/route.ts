@@ -53,7 +53,7 @@ export async function GET(
   // ── Empleado ──────────────────────────────────────────────────────────────
   const { data: empleado, error: empleadoError } = await admin.client
     .from('usuarios')
-    .select('id, nombre, apellido, legajo, dni, rol, estado, foto_url, email')
+    .select('id, nombre, apellido, legajo, cuil, dni, rol, estado, foto_url, email')
     .eq('id', empleadoId)
     .single()
 
@@ -184,6 +184,7 @@ export async function GET(
       nombre: empleado.nombre,
       apellido: empleado.apellido,
       legajo: empleado.legajo,
+      cuil: empleado.cuil ?? null,
       dni: solicitante.rol === 'admin' ? empleado.dni : undefined,
       email: solicitante.rol === 'admin' ? empleado.email : undefined,
       rol: empleado.rol,

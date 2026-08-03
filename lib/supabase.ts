@@ -25,6 +25,7 @@ export interface Usuario {
   nombre: string
   apellido: string
   dni?: string
+  cuil?: string
   email?: string
   telefono?: string
   legajo: string
