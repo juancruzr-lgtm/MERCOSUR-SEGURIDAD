@@ -4701,50 +4701,168 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
     const turno = turnos.find((t: Turno) => t.id === registroEditandoManual.turno_id)
     if (!turno) { setEditandoManual(false); return }
     try {
-      const cambios: string[] = []
-      if (formEditManual.fecha !== turno.fecha) {
-        const { error } = await supabase.rpc('corregir_fecha_registro_manual', {
-          p_registro_id: registroEditandoManual.id,
-          p_nueva_fecha: formEditManual.fecha,
-          p_motivo: formEditManual.motivo.trim(),
-        })
-        if (error) throw error
-        cambios.push('fecha')
-        setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, fecha: formEditManual.fecha } : t))
+      const cambioFecha = formEditManual.fecha !== turno.fecha
+      const cambioHorario = formEditManual.hora_inicio !== turno.hora_inicio?.slice(0, 5) || formEditManual.hora_fin !== turno.hora_fin?.slice(0, 5)
+      const cambioObjetivo = formEditManual.objetivo_id !== ((registroEditandoManual as any).objetivo_final_id ?? turno.objetivo_id)
+
+      if (!cambioFecha && !cambioHorario && !cambioObjetivo) {
+        setRegistroEditandoManual(null)
+        return
       }
-      if (formEditManual.objetivo_id !== ((registroEditandoManual as any).objetivo_final_id ?? turno.objetivo_id)) {
-        await supabase.from('registros_asistencia').update({ objetivo_final_id: formEditManual.objetivo_id }).eq('id', registroEditandoManual.id)
-        cambios.push('objetivo')
-      }
-      if (formEditManual.hora_inicio !== turno.hora_inicio?.slice(0, 5) || formEditManual.hora_fin !== turno.hora_fin?.slice(0, 5)) {
-        await supabase.from('turnos').update({
-          hora_inicio: formEditManual.hora_inicio + ':00',
-          hora_fin: formEditManual.hora_fin + ':00',
-        }).eq('id', turno.id)
-        cambios.push('horario')
-        setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, hora_inicio: formEditManual.hora_inicio + ':00', hora_fin: formEditManual.hora_fin + ':00' } : t))
-      }
-      if (cambios.length > 0) {
-        await supabase.from('registros_asistencia_auditoria').insert({
-          registro_id: registroEditandoManual.id,
-          turno_id: turno.id,
-          modificado_por: user?.id,
-          campo: 'edicion_manual',
-          valor_anterior: JSON.stringify({ fecha: turno.fecha, objetivo_id: turno.objetivo_id, hora_inicio: turno.hora_inicio, hora_fin: turno.hora_fin }),
-          valor_nuevo: JSON.stringify({ fecha: formEditManual.fecha, objetivo_id: formEditManual.objetivo_id, hora_inicio: formEditManual.hora_inicio, hora_fin: formEditManual.hora_fin }),
-          comentario: formEditManual.motivo.trim(),
-        })
-        if (formEditManual.objetivo_id !== turno.objetivo_id) {
-          setRegistros((prev: RegistroAsistencia[]) =>
-            prev.map((r: RegistroAsistencia) => r.id === registroEditandoManual.id ? { ...r, objetivo_final_id: formEditManual.objetivo_id } : r)
-          )
-        }
-      }
+
+      const { data, error } = await supabase.rpc('corregir_turno_manual_operativo', {
+        p_operacion_id: crypto.randomUUID(),
+        p_registro_id: registroEditandoManual.id,
+        p_fecha: cambioFecha ? formEditManual.fecha : null,
+        p_hora_inicio: cambioHorario ? formEditManual.hora_inicio + ':00' : null,
+        p_hora_fin: cambioHorario ? formEditManual.hora_fin + ':00' : null,
+        p_objetivo_id: cambioObjetivo ? formEditManual.objetivo_id : null,
+        p_motivo: formEditManual.motivo.trim(),
+      })
+      if (error) throw error
+
+      const resultado = data as { turno: { id: string; fecha: string; hora_inicio: string; hora_fin: string; objetivo_id: string }; registro: { id: string; horas_liquidables: number } }
+      setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, fecha: resultado.turno.fecha, hora_inicio: resultado.turno.hora_inicio, hora_fin: resultado.turno.hora_fin, objetivo_id: resultado.turno.objetivo_id } : t))
+      setRegistros((prev: RegistroAsistencia[]) =>
+        prev.map((r: RegistroAsistencia) => r.id === registroEditandoManual.id ? { ...r, horas_liquidables: resultado.registro.horas_liquidables, objetivo_final_id: cambioObjetivo ? formEditManual.objetivo_id : (r as any).objetivo_final_id } : r)
+      )
       setRegistroEditandoManual(null)
     } catch (e: any) {
       alert(e.message || 'Error al guardar')
     } finally {
       setEditandoManual(false)
+    }
+  }
+
+  // ── Editar turno (Point 1) ──────────────────────────────────────────────────
+  const [turnoEditando, setTurnoEditando] = useState<Turno | null>(null)
+  const [formEditTurno, setFormEditTurno] = useState({ fecha: '', hora_inicio: '', hora_fin: '', comentario: '' })
+  const [editandoTurno, setEditandoTurno] = useState(false)
+
+  const abrirEdicionTurno = (turnoId: string) => {
+    const turno = turnos.find((t: Turno) => t.id === turnoId)
+    if (!turno) return
+    setTurnoEditando(turno)
+    setFormEditTurno({
+      fecha: turno.fecha,
+      hora_inicio: turno.hora_inicio?.slice(0, 5) || '',
+      hora_fin: turno.hora_fin?.slice(0, 5) || '',
+      comentario: '',
+    })
+  }
+
+  const guardarEdicionTurno = async () => {
+    if (!turnoEditando || !formEditTurno.comentario.trim()) return
+    setEditandoTurno(true)
+    try {
+      const cambios: Record<string, string | null> = {}
+      const snapshot: Record<string, string | null> = {}
+      if (formEditTurno.fecha !== turnoEditando.fecha) {
+        cambios.fecha = formEditTurno.fecha
+        snapshot.fecha = turnoEditando.fecha
+      }
+      if (formEditTurno.hora_inicio !== turnoEditando.hora_inicio?.slice(0, 5)) {
+        cambios.hora_inicio = formEditTurno.hora_inicio + ':00'
+        snapshot.hora_inicio = turnoEditando.hora_inicio
+      }
+      if (formEditTurno.hora_fin !== turnoEditando.hora_fin?.slice(0, 5)) {
+        cambios.hora_fin = formEditTurno.hora_fin + ':00'
+        snapshot.hora_fin = turnoEditando.hora_fin
+      }
+      if (Object.keys(cambios).length === 0) { setTurnoEditando(null); return }
+      const headers = await headersAdmin()
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ turno_id: turnoEditando.id, cambios, comentario: formEditTurno.comentario.trim(), snapshot }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Error al editar turno')
+      if (result.turno) {
+        setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoEditando.id ? { ...t, ...result.turno } : t))
+      }
+      setTurnoEditando(null)
+    } catch (e: any) {
+      alert(e.message || 'Error al editar turno')
+    } finally {
+      setEditandoTurno(false)
+    }
+  }
+
+  // ── Anular turno (Point 1) ─────────────────────────────────────────────────
+  const [turnoAnulando, setTurnoAnulando] = useState<Turno | null>(null)
+  const [motivoAnulacionTurno, setMotivoAnulacionTurno] = useState('')
+  const [anulandoTurno, setAnulandoTurno] = useState(false)
+
+  const anularTurno = async () => {
+    if (!turnoAnulando || !motivoAnulacionTurno.trim()) return
+    setAnulandoTurno(true)
+    try {
+      const headers = await headersAdmin()
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          turno_id: turnoAnulando.id,
+          cambios: { estado: 'anulado' },
+          comentario: `Anulación: ${motivoAnulacionTurno.trim()}`,
+          snapshot: { estado: turnoAnulando.estado },
+        }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Error al anular turno')
+      setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoAnulando.id ? { ...t, estado: 'anulado' } : t))
+      setTurnoAnulando(null)
+      setMotivoAnulacionTurno('')
+    } catch (e: any) {
+      alert(e.message || 'Error al anular turno')
+    } finally {
+      setAnulandoTurno(false)
+    }
+  }
+
+  // ── Clasificar día sin programación (Point 2) ───────────────────────────────
+  const [clasificandoDia, setClasificandoDia] = useState<{ fecha: string; empleadoId: string } | null>(null)
+  const [tipoNovedadDia, setTipoNovedadDia] = useState('franco')
+  const [observacionNovedadDia, setObservacionNovedadDia] = useState('')
+  const [guardandoNovedad, setGuardandoNovedad] = useState(false)
+
+  const TIPOS_NOVEDAD = [
+    { value: 'franco', label: 'Franco' },
+    { value: 'vacaciones', label: 'Vacaciones' },
+    { value: 'licencia', label: 'Licencia' },
+    { value: 'parte_medico', label: 'Parte médico / Enfermedad' },
+    { value: 'accidente', label: 'Accidente' },
+    { value: 'falta_justificada', label: 'Falta justificada' },
+    { value: 'falta_injustificada', label: 'Falta injustificada' },
+    { value: 'dia_estudio', label: 'Día de estudio' },
+    { value: 'suspension', label: 'Suspensión' },
+    { value: 'otra', label: 'Otra novedad' },
+  ] as const
+
+  const guardarClasificacionDia = async () => {
+    if (!clasificandoDia) return
+    setGuardandoNovedad(true)
+    try {
+      const { data, error } = await supabase.from('novedades_laborales').insert({
+        empleado_id: clasificandoDia.empleadoId,
+        tipo: tipoNovedadDia,
+        fecha_desde: clasificandoDia.fecha,
+        fecha_hasta: clasificandoDia.fecha,
+        observacion: observacionNovedadDia.trim() || null,
+        cargado_por: user?.id,
+        estado: 'aprobada',
+        aprobado_por: user?.id,
+        aprobado_at: new Date().toISOString(),
+      }).select().single()
+      if (error) throw error
+      if (data) setNovedadesLaborales((prev: any[]) => [...prev, data])
+      setClasificandoDia(null)
+      setObservacionNovedadDia('')
+    } catch (e: any) {
+      alert(e.message || 'Error al clasificar día')
+    } finally {
+      setGuardandoNovedad(false)
     }
   }
 
@@ -6423,6 +6541,30 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         Cargar manual
                       </button>
                     )}
+                    {row._turno_id && row.Estado !== 'Anulado' && (
+                      <div style={{ display:'flex', gap:4, marginTop: row._registro || row._sinFichar ? 4 : 0 }}>
+                        <button
+                          style={{ ...S.btn, ...S.btnSecondary, padding:'4px 8px', fontSize:11 }}
+                          onClick={() => abrirEdicionTurno(row._turno_id)}
+                        >
+                          Editar turno
+                        </button>
+                        <button
+                          style={{ ...S.btn, padding:'4px 8px', fontSize:11, background:'#450a0a', color:'#fca5a5', border:'1px solid #7f1d1d' }}
+                          onClick={() => { const t = turnos.find((t: Turno) => t.id === row._turno_id); if (t) { setTurnoAnulando(t); setMotivoAnulacionTurno('') } }}
+                        >
+                          Anular turno
+                        </button>
+                      </div>
+                    )}
+                    {row._estadoCalendario === 'sin_programacion' && empleadoSeleccionado && (
+                      <button
+                        style={{ ...S.btn, padding:'4px 8px', fontSize:11, background:'#1e3a5f', color:'#93c5fd', border:'1px solid #1e40af' }}
+                        onClick={() => { setClasificandoDia({ fecha: row._fecha, empleadoId: empleadoSeleccionado.id }); setTipoNovedadDia('franco'); setObservacionNovedadDia('') }}
+                      >
+                        Clasificar día
+                      </button>
+                    )}
                   </td>
                 </tr>
                 )
@@ -6496,6 +6638,22 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                       >
                         Cargar manual
                       </button>
+                    )}
+                    {row._turno_id && row.Estado !== 'Anulado' && (
+                      <div style={{ display:'flex', gap:4, marginTop: row._registro || row._sinFichar ? 4 : 0 }}>
+                        <button
+                          style={{ ...S.btn, ...S.btnSecondary, padding:'4px 8px', fontSize:11 }}
+                          onClick={() => abrirEdicionTurno(row._turno_id)}
+                        >
+                          Editar turno
+                        </button>
+                        <button
+                          style={{ ...S.btn, padding:'4px 8px', fontSize:11, background:'#450a0a', color:'#fca5a5', border:'1px solid #7f1d1d' }}
+                          onClick={() => { const t = turnos.find((t: Turno) => t.id === row._turno_id); if (t) { setTurnoAnulando(t); setMotivoAnulacionTurno('') } }}
+                        >
+                          Anular turno
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -6600,6 +6758,89 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           user={user}
           setRegistros={setRegistrosReportes}
         />
+      )}
+
+      {turnoEditando && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setTurnoEditando(null)}>
+          <div style={{ background:'#1e293b', borderRadius:12, padding:24, width:'100%', maxWidth:420, border:'1px solid #334155' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:18, fontWeight:700, marginBottom:16 }}>Editar turno</div>
+            <div style={{ display:'grid', gap:12 }}>
+              <div>
+                <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Fecha</label>
+                <input type="date" value={formEditTurno.fecha} onChange={e => setFormEditTurno(p => ({ ...p, fecha: e.target.value }))} style={{ ...S.input, width:'100%' }} />
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                <div>
+                  <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Hora inicio</label>
+                  <input type="time" value={formEditTurno.hora_inicio} onChange={e => setFormEditTurno(p => ({ ...p, hora_inicio: e.target.value }))} style={{ ...S.input, width:'100%' }} />
+                </div>
+                <div>
+                  <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Hora fin</label>
+                  <input type="time" value={formEditTurno.hora_fin} onChange={e => setFormEditTurno(p => ({ ...p, hora_fin: e.target.value }))} style={{ ...S.input, width:'100%' }} />
+                </div>
+              </div>
+              <div>
+                <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Motivo del cambio (obligatorio)</label>
+                <textarea value={formEditTurno.comentario} onChange={e => setFormEditTurno(p => ({ ...p, comentario: e.target.value }))} style={{ ...S.input, width:'100%', minHeight:60, resize:'vertical' }} placeholder="Describí el motivo del cambio..." />
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 }}>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setTurnoEditando(null)}>Cancelar</button>
+              <button style={{ ...S.btn, ...S.btnPrimary }} disabled={editandoTurno || !formEditTurno.comentario.trim()} onClick={guardarEdicionTurno}>
+                {editandoTurno ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {clasificandoDia && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setClasificandoDia(null)}>
+          <div style={{ background:'#1e293b', borderRadius:12, padding:24, width:'100%', maxWidth:380, border:'1px solid #334155' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:18, fontWeight:700, marginBottom:4 }}>Clasificar día</div>
+            <div style={{ fontSize:13, color:'#94a3b8', marginBottom:16 }}>{clasificandoDia.fecha}</div>
+            <div style={{ display:'grid', gap:12 }}>
+              <div>
+                <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Tipo de novedad</label>
+                <select value={tipoNovedadDia} onChange={e => setTipoNovedadDia(e.target.value)} style={{ ...S.input, width:'100%' }}>
+                  {TIPOS_NOVEDAD.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Observación (opcional)</label>
+                <textarea value={observacionNovedadDia} onChange={e => setObservacionNovedadDia(e.target.value)} style={{ ...S.input, width:'100%', minHeight:50, resize:'vertical' }} placeholder="Detalle adicional..." />
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 }}>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setClasificandoDia(null)}>Cancelar</button>
+              <button style={{ ...S.btn, ...S.btnPrimary }} disabled={guardandoNovedad} onClick={guardarClasificacionDia}>
+                {guardandoNovedad ? 'Guardando...' : 'Clasificar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {turnoAnulando && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setTurnoAnulando(null)}>
+          <div style={{ background:'#1e293b', borderRadius:12, padding:24, width:'100%', maxWidth:420, border:'1px solid #334155' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:18, fontWeight:700, marginBottom:8, color:'#fca5a5' }}>Anular turno</div>
+            <div style={{ fontSize:13, color:'#94a3b8', marginBottom:16 }}>
+              {turnoAnulando.fecha} &middot; {turnoAnulando.hora_inicio?.slice(0,5)}–{turnoAnulando.hora_fin?.slice(0,5)}
+              {(() => { const r = registros.find((r: RegistroAsistencia) => r.turno_id === turnoAnulando.id); return r ? ' — Este turno tiene fichajes registrados.' : '' })()}
+            </div>
+            <div>
+              <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Motivo de anulación (obligatorio)</label>
+              <textarea value={motivoAnulacionTurno} onChange={e => setMotivoAnulacionTurno(e.target.value)} style={{ ...S.input, width:'100%', minHeight:60, resize:'vertical' }} placeholder="Describí por qué se anula este turno..." />
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 }}>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setTurnoAnulando(null)}>Cancelar</button>
+              <button style={{ ...S.btn, background:'#7f1d1d', color:'#fca5a5', border:'1px solid #991b1b' }} disabled={anulandoTurno || !motivoAnulacionTurno.trim()} onClick={anularTurno}>
+                {anulandoTurno ? 'Anulando...' : 'Confirmar anulación'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
