@@ -14,6 +14,7 @@ export type AccionIntervencionOperativa =
   | 'alerta_revisada'
   | 'reapertura'
   | 'anulacion_cobertura'
+  | 'confirmar_asistencia'
 
 export type EstadoCicloVidaAlerta =
   | 'pendiente'
@@ -92,6 +93,7 @@ const ACCIONES_RESOLUTIVAS = new Set<AccionIntervencionOperativa>([
   'confirmar_cubierto',
   'marcado_cubierto_manual',
   'alerta_revisada',
+  'confirmar_asistencia',
 ])
 
 const ACCIONES_ATENCION = new Set<AccionIntervencionOperativa>([
@@ -100,6 +102,7 @@ const ACCIONES_ATENCION = new Set<AccionIntervencionOperativa>([
   'confirmar_cubierto',
   'marcado_cubierto_manual',
   'alerta_revisada',
+  'confirmar_asistencia',
 ])
 
 const ESTADOS_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancelado'])
@@ -138,6 +141,22 @@ function minutosTardanza(turno: TurnoDetectorOperativo, registro: RegistroDetect
   let diferencia = entrada - inicio
   if (minutosHora(turno.hora_fin)! <= inicio && diferencia < -720) diferencia += 1440
   return diferencia
+}
+
+export function calcularMinutosTardanza(horaInicio: string, horaFin: string, horaEntrada: string): number {
+  const inicio = minutosHora(horaInicio)
+  const entrada = minutosHora(horaEntrada)
+  if (inicio === null || entrada === null) return 0
+  let diferencia = entrada - inicio
+  const fin = minutosHora(horaFin)
+  if (fin !== null && fin <= inicio && diferencia < -720) diferencia += 1440
+  return Math.max(0, diferencia)
+}
+
+export function formatCuil(raw: string): string {
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length !== 11) return raw
+  return `${digits.slice(0, 2)}-${digits.slice(2, 10)}-${digits.slice(10)}`
 }
 
 export function detectarAlertasOperativas({
@@ -320,6 +339,7 @@ export function efectoIntervencionOperativa(accion: string) {
     alerta_revisada: 'Registra atención o justificación; la condición original puede seguir vigente.',
     reapertura: 'Reabre el seguimiento; no revierte turno, asistencia ni liquidación.',
     anulacion_cobertura: 'Invalida la cobertura manual para liquidación sin borrar historial.',
+    confirmar_asistencia: 'El supervisor confirmó asistencia del vigilador. No acredita fichaje ni afecta liquidación.',
     cierre: 'Cierra administrativamente la alerta.',
   }
   return efectos[accion] || 'Evento registrado sin efecto estructurado conocido.'

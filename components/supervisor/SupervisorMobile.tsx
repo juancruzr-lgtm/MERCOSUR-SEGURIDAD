@@ -158,7 +158,10 @@ interface RegistroAsistencia {
   guardia_id: string
   hora_entrada_real?: string | null
   hora_salida_real?: string | null
+  hora_entrada_final?: string | null
+  hora_salida_final?: string | null
   horas_trabajadas?: number | null
+  tipo_registro?: string | null
   latitud_ingreso?: number | string | null
   longitud_ingreso?: number | string | null
   precision_ingreso?: number | string | null
@@ -264,6 +267,29 @@ function esTipoAlertaOperativa(value?: string | null): value is TipoAlertaOperat
   return value === 'sin_fichar' || value === 'tardanza' || value === 'fuera_radio' || value === 'descubierto'
 }
 
+const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'] as const
+
+function infoTurnoAlerta(turno: { fecha: string; hora_inicio: string; hora_fin: string }) {
+  const [y, m, d] = turno.fecha.slice(0, 10).split('-').map(Number)
+  const fechaDate = new Date(y, m - 1, d)
+  const dia = DIAS_SEMANA[fechaDate.getDay()]
+  const dd = String(d).padStart(2, '0')
+  const mm = String(m).padStart(2, '0')
+  const fechaFmt = `${dd}/${mm}/${y}`
+  const esNocturno = turno.hora_fin <= turno.hora_inicio
+  const fechaFinDate = esNocturno ? new Date(y, m - 1, d + 1) : fechaDate
+  const dFin = String(fechaFinDate.getDate()).padStart(2, '0')
+  const mFin = String(fechaFinDate.getMonth() + 1).padStart(2, '0')
+  const yFin = fechaFinDate.getFullYear()
+  const fechaFinFmt = `${dFin}/${mFin}/${yFin}`
+  return {
+    linea: `Turno: ${dia} ${fechaFmt}`,
+    inicio: `Inicio: ${fechaFmt} ${horaCorta(turno.hora_inicio)}`,
+    fin: `Fin: ${fechaFinFmt} ${horaCorta(turno.hora_fin)}`,
+    nocturno: esNocturno,
+  }
+}
+
 function horasCortas(horas?: number | null): string {
   if (horas === null || horas === undefined) return '--'
   return `${Number(horas).toLocaleString('es-AR', { maximumFractionDigits: 2 })} h`
@@ -321,8 +347,11 @@ function fechaEntradaReal(turno: Turno, horaEntrada?: string | null): Date | nul
   const entradaReal = fechaHoraTurno(turno.fecha, horaEntrada)
   if (!inicioTurno || !finTurno || !entradaReal) return null
 
-  if (finTurno <= inicioTurno && entradaReal < inicioTurno) {
-    entradaReal.setDate(entradaReal.getDate() + 1)
+  if (finTurno <= inicioTurno) {
+    const diffMs = entradaReal.getTime() - inicioTurno.getTime()
+    if (diffMs < -12 * 60 * 60_000) {
+      entradaReal.setDate(entradaReal.getDate() + 1)
+    }
   }
 
   return entradaReal
@@ -330,7 +359,7 @@ function fechaEntradaReal(turno: Turno, horaEntrada?: string | null): Date | nul
 
 function minutosTardeRegistro(turno: Turno, registro?: RegistroAsistencia): number {
   const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
-  const entradaReal = fechaEntradaReal(turno, registro?.hora_entrada_real)
+  const entradaReal = fechaEntradaReal(turno, registro?.hora_entrada_final ?? registro?.hora_entrada_real)
   if (!inicioTurno || !entradaReal) return 0
 
   return Math.max(0, Math.floor((entradaReal.getTime() - inicioTurno.getTime()) / 60000))
@@ -900,9 +929,9 @@ export default function SupervisorMobile({ user }: any) {
   }
   const esTardanzaRegistrada = (turno: Turno) => {
     const registro = getRegistro(turno.id)
-    if (!registro?.hora_entrada_real) return false
+    if (!registro?.hora_entrada_final && !registro?.hora_entrada_real) return false
 
-    return registro.alerta_entrada === 'tarde' || minutosTardeRegistro(turno, registro) > 0
+    return minutosTardeRegistro(turno, registro) > 0
   }
   const guardiaEsperadoId = (turno: Turno) => turno.guardia_original_id || turno.guardia_id || null
   const nombreGuardiaEsperado = (turno: Turno) => {
@@ -920,7 +949,7 @@ export default function SupervisorMobile({ user }: any) {
     const registro = getRegistro(turno.id)
 
     if (registro?.hora_salida_real) return 'finalizado'
-    if (registro?.hora_entrada_real) return registro.alerta_entrada === 'tarde' ? 'tardanza' : 'en turno'
+    if (registro?.hora_entrada_final || registro?.hora_entrada_real) return minutosTardeRegistro(turno, registro) > 0 ? 'tardanza' : 'en turno'
     if (esDescubiertoOperativo(turno)) return 'descubierto'
     if (esTurnoReasignado(turno)) return 'reasignado'
     if (esSinIngreso(turno)) return 'pendiente de ingreso'
@@ -1106,7 +1135,7 @@ export default function SupervisorMobile({ user }: any) {
   const ocurrenciasTardanza = useMemo(
     () => registros.flatMap(registro => {
       const turno = turnos.find(item => item.id === registro.turno_id)
-      if (!turno || !registro.hora_entrada_real || !(registro.alerta_entrada === 'tarde' || minutosTardeRegistro(turno, registro) > 0)) return []
+      if (!turno || (!registro.hora_entrada_final && !registro.hora_entrada_real) || minutosTardeRegistro(turno, registro) <= 0) return []
       return [{ turno, registro }]
     }),
     [turnos, registros],
@@ -1743,7 +1772,7 @@ export default function SupervisorMobile({ user }: any) {
 
     const comentario = formIntervencion.comentario.trim()
     const motivo = formIntervencion.motivo.trim()
-    const requiereComentario = ['comentario', 'alerta_revisada'].includes(accionAlerta.accion)
+    const requiereComentario = ['comentario', 'alerta_revisada', 'confirmar_asistencia'].includes(accionAlerta.accion)
 
     if (requiereComentario && !comentario) {
       setError('Agregá un comentario para guardar la intervención.')
@@ -2142,6 +2171,7 @@ export default function SupervisorMobile({ user }: any) {
       confirmar_cubierto: 'Cobertura manual (solo administración)',
       marcado_cubierto_manual: 'Cobertura manual (solo administración)',
       alerta_revisada: 'Alerta revisada',
+      confirmar_asistencia: 'Confirmar asistencia',
       reapertura: 'Reapertura',
     }
 
@@ -2175,6 +2205,12 @@ export default function SupervisorMobile({ user }: any) {
         color: '#fcd34d',
         border: '1px solid rgba(245,158,11,.72)',
         boxShadow: '0 0 0 1px rgba(245,158,11,.25), 0 0 16px rgba(245,158,11,.18)',
+      },
+      confirmar_asistencia: {
+        background: 'rgba(16,185,129,.2)',
+        color: '#6ee7b7',
+        border: '1px solid rgba(16,185,129,.75)',
+        boxShadow: '0 0 0 1px rgba(16,185,129,.3), 0 0 18px rgba(16,185,129,.22)',
       },
     }
 
@@ -2273,7 +2309,7 @@ export default function SupervisorMobile({ user }: any) {
 
     const requiereGuardia = accionAlerta.accion === 'reasignacion'
     const requiereMotivo = accionAlerta.accion === 'reapertura'
-    const comentarioLabel = ['comentario', 'alerta_revisada'].includes(accionAlerta.accion) ? 'Comentario *' : 'Comentario'
+    const comentarioLabel = ['comentario', 'alerta_revisada', 'confirmar_asistencia'].includes(accionAlerta.accion) ? 'Comentario *' : 'Comentario'
     const loadingKey = `alerta-${turno.id}-${accionAlerta.accion}`
 
     return (
@@ -2317,7 +2353,7 @@ export default function SupervisorMobile({ user }: any) {
           value={formIntervencion.comentario}
           disabled={Boolean(asignando)}
           onChange={e => setFormIntervencion(prev => ({ ...prev, comentario: e.target.value }))}
-          placeholder="Ej.: Se llamó al guardia. Informa que llega en 10 minutos."
+          placeholder={accionAlerta.accion === 'confirmar_asistencia' ? 'Ej.: Verificado en el puesto a las 08:30. El guardia no tenía celular.' : 'Ej.: Se llamó al guardia. Informa que llega en 10 minutos.'}
         />
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
@@ -2335,13 +2371,22 @@ export default function SupervisorMobile({ user }: any) {
   const renderAccionesAlerta = (turno: Turno, tipoAlerta: TipoAlertaOperativa, registro?: RegistroAsistencia) => {
     const intervenida = alertaIntervenida(turno.id, tipoAlerta, registro?.id)
     const permiteGestionCobertura = ['sin_fichar', 'descubierto'].includes(tipoAlerta)
+    const ultimaNoComentario = intervencionesAlerta(turno.id, tipoAlerta, registro?.id).find(i => i.accion !== 'comentario')
+    const asistenciaConfirmada = ultimaNoComentario?.accion === 'confirmar_asistencia'
 
     return (
       <div style={alertaAccionesBox}>
         {renderContextoAlerta(turno, tipoAlerta, registro?.id)}
+        {asistenciaConfirmada && (
+          <div style={{ background:'rgba(16,185,129,.1)', border:'1px solid rgba(16,185,129,.3)', borderRadius:8, padding:12, marginBottom:10 }}>
+            <div style={{ color:'#6ee7b7', fontWeight:700, fontSize:14 }}>Asistencia confirmada por supervisor.</div>
+            <div style={{ color:'#94a3b8', fontSize:13, marginTop:4 }}>Fichaje pendiente de regularización.</div>
+          </div>
+        )}
         <div style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'center', marginBottom:8 }}>
           <div style={label}>Acciones</div>
           {intervenida && <span style={badge('finalizado')}>Intervenida</span>}
+          {!intervenida && asistenciaConfirmada && <span style={{ ...badge('finalizado'), background:'rgba(16,185,129,.15)', color:'#6ee7b7' }}>Asistencia confirmada</span>}
         </div>
         <div style={alertaActionGrid}>
           {permiteGestionCobertura && <button
@@ -2359,6 +2404,14 @@ export default function SupervisorMobile({ user }: any) {
             onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'marcado_descubierto', registro)}
           >
             Mantener descubierto
+          </button>}
+          {tipoAlerta === 'sin_fichar' && <button
+            type="button"
+            style={estiloBotonAccion('confirmar_asistencia', accionEstaSeleccionada(turno, tipoAlerta, 'confirmar_asistencia'))}
+            disabled={Boolean(asignando)}
+            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'confirmar_asistencia', registro)}
+          >
+            Confirmar asistencia
           </button>}
           {['tardanza', 'fuera_radio'].includes(tipoAlerta) && <button
             type="button"
@@ -2392,7 +2445,12 @@ export default function SupervisorMobile({ user }: any) {
           <div>
             <div style={objetivoName}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
             <div style={muted}>{guardia ? `${guardia.apellido}, ${guardia.nombre}` : nombreGuardiaEsperado(turno)}</div>
-            <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+            {(() => { const info = infoTurnoAlerta(turno); return (<>
+              <div style={muted}>{info.linea}</div>
+              <div style={muted}>{info.inicio}</div>
+              <div style={muted}>{info.fin}</div>
+              {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+            </>)})()}
             <div style={muted}>Tipo de alerta: {tipoAlerta}</div>
           </div>
           <span style={badge('finalizado')}>Intervenida</span>
@@ -3141,7 +3199,12 @@ export default function SupervisorMobile({ user }: any) {
                             <div style={turnoTop}>
                               <div>
                                 <div style={objetivoName}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
-                                <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+                                {(() => { const info = infoTurnoAlerta(turno); return (<>
+                                  <div style={muted}>{info.linea}</div>
+                                  <div style={muted}>{info.inicio}</div>
+                                  <div style={muted}>{info.fin}</div>
+                                  {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+                                </>)})()}
                                 <div style={muted}>Estado: {turno.estado || 'programado'}</div>
                                 <div style={muted}>Guardia esperado: {nombreGuardiaEsperado(turno)}</div>
                                 <div style={{ ...muted, color: '#f59e0b' }}>{detalleTurnoDescubierto(turno)}</div>
@@ -3172,9 +3235,13 @@ export default function SupervisorMobile({ user }: any) {
                               <div>
                                 <div style={objetivoName}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
                                 <div style={muted}>{objetivo?.direccion || 'Sin dirección registrada'}</div>
-                                <div style={muted}>Tipo: Guardia sin fichar / Objetivo en riesgo</div>
+                                {(() => { const info = infoTurnoAlerta(turno); return (<>
+                                  <div style={muted}>{info.linea}</div>
+                                  <div style={muted}>{info.inicio}</div>
+                                  <div style={muted}>{info.fin}</div>
+                                  {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+                                </>)})()}
                                 <div style={muted}>Guardia asignado: {guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
-                                <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
                                 <div style={{ ...muted, color: '#f59e0b' }}>Minutos de demora: {minutosAtrasoTurno(turno)}</div>
                                 <div style={{ ...muted, color: '#f59e0b' }}>Estado: Cobertura en riesgo</div>
                               </div>
@@ -3204,8 +3271,13 @@ export default function SupervisorMobile({ user }: any) {
                               <div>
                                 <div style={objetivoName}>{guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
                                 <div style={muted}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
-                                <div style={muted}>Horario programado: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
-                                <div style={muted}>Entrada real: {horaCorta(registro?.hora_entrada_real)}</div>
+                                {(() => { const info = infoTurnoAlerta(turno); return (<>
+                                  <div style={muted}>{info.linea}</div>
+                                  <div style={muted}>{info.inicio}</div>
+                                  <div style={muted}>{info.fin}</div>
+                                  {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+                                </>)})()}
+                                <div style={muted}>Entrada real: {horaCorta(registro?.hora_entrada_final ?? registro?.hora_entrada_real)}</div>
                                 <div style={{ ...muted, color: '#f59e0b' }}>Minutos tarde: {minutosTardeRegistro(turno, registro)}</div>
                                 <div style={{ ...muted, color: '#ef4444' }}>Estado: Tarde</div>
                               </div>
@@ -3236,7 +3308,12 @@ export default function SupervisorMobile({ user }: any) {
                               <div>
                                 <div style={objetivoName}>{guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
                                 <div style={muted}>{objetivo?.nombre || 'Objetivo sin nombre'}</div>
-                                <div style={muted}>Horario: {horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
+                                {(() => { const info = infoTurnoAlerta(turno); return (<>
+                                  <div style={muted}>{info.linea}</div>
+                                  <div style={muted}>{info.inicio}</div>
+                                  <div style={muted}>{info.fin}</div>
+                                  {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+                                </>)})()}
                                 <div style={muted}>Entrada real: {horaCorta(registro?.hora_entrada_real)}</div>
                                 <div style={{ ...muted, color: '#ef4444' }}>Distancia: {metrosTexto(registro?.distancia_ingreso_metros)}</div>
                                 <div style={muted}>Radio permitido: {metrosTexto(objetivo?.radio_metros)}</div>

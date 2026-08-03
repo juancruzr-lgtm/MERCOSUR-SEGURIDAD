@@ -41,6 +41,7 @@ type RegistroPush = {
   turno_id: string
   guardia_id: string
   hora_entrada_real?: string | null
+  hora_entrada_final?: string | null
   alerta_entrada?: string | null
   distancia_ingreso_metros?: number | string | null
   gps_ingreso_estado?: string | null
@@ -202,15 +203,17 @@ function supervisoresAsignados(turno: TurnoPush, usuarios: UsuarioPush[]) {
 
 function minutosTarde(turno: TurnoPush, registro?: RegistroPush | null) {
   const inicio = minutosHora(turno.hora_inicio)
-  let entrada = minutosHora(registro?.hora_entrada_real)
+  const entrada = minutosHora(registro?.hora_entrada_final ?? registro?.hora_entrada_real)
   if (inicio === null || entrada === null) return 0
 
-  if (entrada < inicio && inicio >= 18 * 60) entrada += 24 * 60
-  return Math.max(0, entrada - inicio)
+  let diferencia = entrada - inicio
+  const fin = minutosHora(turno.hora_fin)
+  if (fin !== null && fin <= inicio && diferencia < -720) diferencia += 1440
+  return Math.max(0, diferencia)
 }
 
 function esTardanza(turno: TurnoPush, registro?: RegistroPush | null) {
-  return Boolean(registro?.hora_entrada_real && (registro.alerta_entrada === 'tarde' || minutosTarde(turno, registro) > 5))
+  return Boolean((registro?.hora_entrada_final || registro?.hora_entrada_real) && minutosTarde(turno, registro) > 5)
 }
 
 function distanciaTexto(value?: number | string | null) {
@@ -240,7 +243,7 @@ function accionNormalizada(accion?: string | null) {
 }
 
 function accionResuelveAlerta(accion?: string | null) {
-  return ['confirmar_cubierto', 'reasignacion', 'marcado_descubierto', 'alerta_revisada'].includes(accionNormalizada(accion))
+  return ['confirmar_cubierto', 'reasignacion', 'marcado_descubierto', 'alerta_revisada', 'confirmar_asistencia'].includes(accionNormalizada(accion))
 }
 
 function tipoIntervencionDesdePush(tipo: string) {
@@ -850,7 +853,7 @@ export async function GET(req: NextRequest) {
   ] = await Promise.all([
     admin.client
       .from('registros_asistencia')
-      .select('id, turno_id, guardia_id, hora_entrada_real, alerta_entrada, distancia_ingreso_metros, gps_ingreso_estado, created_at')
+      .select('id, turno_id, guardia_id, hora_entrada_real, hora_entrada_final, alerta_entrada, distancia_ingreso_metros, gps_ingreso_estado, created_at')
       .in('turno_id', turnoIds),
     admin.client
       .from('supervisor_intervenciones')

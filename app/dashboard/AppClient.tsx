@@ -29,6 +29,7 @@ import {
   intervencionesDeOcurrencia,
 } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/revision-operativa'
+import { formatCuil } from '@/lib/revision-operativa'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -271,11 +272,11 @@ function fechaEntradaRealTurno(turno: Turno, horaEntrada?: string | null): Date 
   const entradaReal = fechaHoraTurnoLocal(turno.fecha, horaEntrada)
   if (!inicioTurno || !finTurno || !entradaReal) return null
 
-  // Nocturno: si la entrada cae en la ventana post-medianoche (antes del fin),
-  // es del día siguiente. Si cae antes del inicio (guardia llegó temprano),
-  // no sumar día.
-  if (finTurno <= inicioTurno && entradaReal < finTurno) {
-    entradaReal.setDate(entradaReal.getDate() + 1)
+  if (finTurno <= inicioTurno) {
+    const diffMs = entradaReal.getTime() - inicioTurno.getTime()
+    if (diffMs < -12 * 60 * 60_000) {
+      entradaReal.setDate(entradaReal.getDate() + 1)
+    }
   }
 
   return entradaReal
@@ -290,7 +291,7 @@ function minutosDesdeInicioTurno(turno: Turno, ahora = new Date()): number {
 
 function minutosTardeAsistencia(turno: Turno, registro?: RegistroAsistencia | null): number {
   const inicioTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_inicio)
-  const entradaReal = fechaEntradaRealTurno(turno, registro?.hora_entrada_real)
+  const entradaReal = fechaEntradaRealTurno(turno, registro?.hora_entrada_final ?? registro?.hora_entrada_real)
   if (!inicioTurno || !entradaReal) return 0
 
   return Math.max(0, Math.floor((entradaReal.getTime() - inicioTurno.getTime()) / 60000))
@@ -867,6 +868,27 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   const getGuardia = (id?: string | null) => usuarios.find((g: Usuario) => g.id === id)
   const getObjetivo = (id: string) => objetivos.find((o: Objetivo) => o.id === id)
   const hora = (value?: string) => value ? value.slice(0, 5) : '--:--'
+  const DIAS_SEMANA_ADMIN = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'] as const
+  const infoTurnoAlerta = (turno: { fecha: string; hora_inicio: string; hora_fin: string }) => {
+    const [y, mo, d] = turno.fecha.slice(0, 10).split('-').map(Number)
+    const fechaDate = new Date(y, mo - 1, d)
+    const dia = DIAS_SEMANA_ADMIN[fechaDate.getDay()]
+    const dd = String(d).padStart(2, '0')
+    const mm = String(mo).padStart(2, '0')
+    const fechaFmt = `${dd}/${mm}/${y}`
+    const esNocturno = turno.hora_fin <= turno.hora_inicio
+    const fechaFinDate = esNocturno ? new Date(y, mo - 1, d + 1) : fechaDate
+    const dFin = String(fechaFinDate.getDate()).padStart(2, '0')
+    const mFin = String(fechaFinDate.getMonth() + 1).padStart(2, '0')
+    const yFin = fechaFinDate.getFullYear()
+    const fechaFinFmt = `${dFin}/${mFin}/${yFin}`
+    return {
+      linea: `Turno: ${dia} ${fechaFmt}`,
+      inicio: `Inicio: ${fechaFmt} ${hora(turno.hora_inicio)}`,
+      fin: `Fin: ${fechaFinFmt} ${hora(turno.hora_fin)}`,
+      nocturno: esNocturno,
+    }
+  }
   const nombreGuardia = (id?: string | null) => {
     const guardia = getGuardia(id)
     return guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Sin guardia'
@@ -939,12 +961,15 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     color:brandColors.muted,
   }
 
-  const renderTurnoAlert = (turno: Turno, detalle: string, filtro: any, destino = 'turnos') => (
+  const renderTurnoAlert = (turno: Turno, detalle: string, filtro: any, destino = 'turnos') => {
+    const info = infoTurnoAlerta(turno)
+    return (
     <div key={turno.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.(destino, filtro)}>
       <strong style={{ color:'#f8fafc' }}>{nombreObjetivo(turno.objetivo_id)}</strong>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>
-        Horario: {hora(turno.hora_inicio)} a {hora(turno.hora_fin)}
-      </div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.linea}</div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.inicio}</div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
+      {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
       <div style={{ color:'#94a3b8', marginTop:4 }}>
         Estado: {turno.estado || 'programado'}
       </div>
@@ -953,28 +978,37 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
       </div>
       <div style={{ color:'#f59e0b', marginTop:4 }}>{detalle}</div>
     </div>
-  )
+  )}
 
-  const renderSinIngresoAlert = (turno: Turno) => (
+  const renderSinIngresoAlert = (turno: Turno) => {
+    const info = infoTurnoAlerta(turno)
+    return (
     <div key={turno.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('revision_operativa', { tipo:'sin_fichar', ids:turnosSinFichar.map(item => item.id), label:'Guardias sin fichar / objetivos en riesgo' })}>
       <strong style={{ color:'#f8fafc' }}>{nombreGuardia(turno.guardia_id)}</strong>
       <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {nombreObjetivo(turno.objetivo_id)}</div>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>Horario programado: {hora(turno.hora_inicio)} a {hora(turno.hora_fin)}</div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.linea}</div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.inicio}</div>
+      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
+      {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
       <div style={{ color:'#f59e0b', marginTop:4 }}>Minutos de demora: {minutosDesdeInicioTurno(turno)}</div>
       <div style={{ color:'#f59e0b', marginTop:4 }}>Estado: Sin ingreso</div>
     </div>
-  )
+  )}
 
   const renderTardanzaAlert = (registro: RegistroAsistencia) => {
     const turno = turnoPorId.get(registro.turno_id)
     if (!turno) return null
 
+    const info = infoTurnoAlerta(turno)
     return (
       <div key={registro.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('revision_operativa', { tipo:'tardanza', ids:tardanzasRegistradas.map(item => item.id), label:'Tardanzas registradas' })}>
         <strong style={{ color:'#f8fafc' }}>{nombreGuardia(registro.guardia_id || turno.guardia_id)}</strong>
         <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {nombreObjetivo(turno.objetivo_id)}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>Horario programado: {hora(turno.hora_inicio)} a {hora(turno.hora_fin)}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>Entrada real: {hora(registro.hora_entrada_real)}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.linea}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.inicio}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
+        {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
+        <div style={{ color:'#94a3b8', marginTop:4 }}>Entrada real: {hora(registro.hora_entrada_final ?? registro.hora_entrada_real)}</div>
         <div style={{ color:'#f59e0b', marginTop:4 }}>Minutos tarde: {minutosTardeAsistencia(turno, registro)}</div>
         <div style={{ color:'#ef4444', marginTop:4 }}>Estado: Tarde</div>
       </div>
@@ -988,10 +1022,15 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     const objetivo = getObjetivo(turno.objetivo_id)
     const gps = gpsRegistroAsistencia(registro, 'ingreso')
 
+    const info = infoTurnoAlerta(turno)
     return (
       <div key={registro.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('revision_operativa', { tipo:'fuera_radio', ids:fichajesFueraRadio.map(item => item.id), label:'Fichajes fuera de radio' })}>
         <strong style={{ color:'#f8fafc' }}>{nombreGuardia(registro.guardia_id || turno.guardia_id)}</strong>
         <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {objetivo?.nombre || 'Objetivo sin nombre'}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.linea}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.inicio}</div>
+        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
+        {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
         <div style={{ color:'#94a3b8', marginTop:4 }}>Hora ingreso: {hora(registro.hora_entrada_real)}</div>
         <div style={{ color:'#ef4444', marginTop:4 }}>Distancia: {metrosGpsTexto(registro.distancia_ingreso_metros)}</div>
         <div style={{ color:'#94a3b8', marginTop:4 }}>Radio permitido: {metrosGpsTexto(objetivo?.radio_metros)}</div>
@@ -5467,7 +5506,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     if (!registro || !registroTieneEntradaConfirmada(registro)) return pasoVentanaFichaje(turno) ? 'Sin fichar' : 'Programado'
     if (registro.tipo_registro === 'carga_manual') return 'Manual'
     const horaEntrada = registro.hora_entrada_final ?? registro.hora_entrada_real
-    if (horaEntrada && (registro.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, registro) > 0)) return 'Tarde'
+    if (horaEntrada && minutosTardeAsistencia(turno, registro) > 0) return 'Tarde'
     if (horaEntrada && !(registro.hora_salida_final ?? registro.hora_salida_real)) return 'En curso'
     return 'Cubierto'
   }
@@ -5477,7 +5516,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     if (registro?.tipo_registro === 'carga_manual') obs.push((registro as any)?.origen === 'reporte' ? 'Carga manual (desde reporte)' : 'Carga manual')
     if (turno.guardia_id && !registroTieneEntradaConfirmada(registro ?? {}) && pasoVentanaFichaje(turno)) obs.push('Sin fichar')
     if (registro?.hora_entrada_real && !registro.hora_salida_real) obs.push('En curso')
-    if (registro?.alerta_entrada === 'tarde') obs.push('Llegada tarde')
+    if (turno && registro && minutosTardeAsistencia(turno, registro) > 0) obs.push('Llegada tarde')
     if (registro?.alerta_entrada === 'anticipada') obs.push('Entrada anticipada')
     if (registro?.alerta_salida === 'anticipada') obs.push('Salida anticipada')
     if (registro?.alerta_salida === 'posterior') obs.push('Salida posterior')
@@ -7479,7 +7518,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const [supervisoresGuardia, setSupervisoresGuardia] = useState<any[]>([])
   const [puestosRevision, setPuestosRevision] = useState<any[]>([])
   const [loadingData, setLoadingData] = useState(true)
-  const [tab, setTab] = useState<'pendientes' | 'intervenidas' | 'cierre'>('pendientes')
+  const [tab, setTab] = useState<'pendientes' | 'intervenidas' | 'asistencias_confirmadas' | 'cierre'>('pendientes')
   const [accionActiva, setAccionActiva] = useState<{ alerta: AlertaOperativaAdmin, accion: AccionIntervencionAdmin, intervencionOrigen?: any } | null>(null)
   const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const [loadingAccion, setLoadingAccion] = useState('')
@@ -7632,6 +7671,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       confirmar_cubierto: 'Confirmar cubierto',
       marcado_cubierto_manual: 'Confirmar cubierto',
       alerta_revisada: 'Alerta revisada',
+      confirmar_asistencia: 'Confirmar asistencia',
       reapertura: 'Reapertura',
       anulacion_cobertura: 'Anulación de cobertura manual',
     }
@@ -7819,6 +7859,47 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
   const intervenidasOrdenadas = Array.from(alertasIntervenidas.values())
     .sort((a: any, b: any) => compararIntervencionesMasReciente(a.intervencion, b.intervencion))
+
+  const asistenciasConfirmadas = intervenciones
+    .filter((i: any) => i.accion === 'confirmar_asistencia')
+    .reduce((mapa: Map<string, any>, intervencion: any) => {
+      const turno = turnosHoy.find((t: Turno) => t.id === intervencion.turno_id)
+      if (!turno) return mapa
+      const key = `${turno.id}-${intervencion.registro_asistencia_id || 'sin'}`
+      if (mapa.has(key)) return mapa
+      const registro = intervencion.registro_asistencia_id
+        ? registros.find((r: RegistroAsistencia) => r.id === intervencion.registro_asistencia_id)
+        : undefined
+      const tieneRegistroManual = registros.some((r: RegistroAsistencia) =>
+        r.turno_id === turno.id &&
+        r.tipo_registro === 'carga_manual' &&
+        !(r as any).registro_anulado_at
+      )
+      if (tieneRegistroManual) return mapa
+      const intervencionesPosteriores = intervenciones.filter((i2: any) =>
+        i2.turno_id === turno.id &&
+        ['reapertura', 'anulacion_cobertura'].includes(i2.accion) &&
+        new Date(i2.created_at) > new Date(intervencion.created_at)
+      )
+      if (intervencionesPosteriores.length > 0) return mapa
+      const guardiaObj = usuarios.find((g: Usuario) => g.id === turno.guardia_id)
+      const objetivoObj = objetivos.find((o: Objetivo) => o.id === turno.objetivo_id)
+      const supervisorObj = usuarios.find((g: Usuario) => g.id === intervencion.supervisor_id)
+      const puestoObj = puestosRevision.find((p: any) => p.id === (turno as any).puesto_id)
+      mapa.set(key, {
+        turno,
+        registro,
+        intervencion,
+        guardia: guardiaObj,
+        objetivo: objetivoObj,
+        supervisor: supervisorObj,
+        puesto: puestoObj,
+      })
+      return mapa
+    }, new Map<string, any>())
+
+  const asistenciasConfirmadasLista = Array.from(asistenciasConfirmadas.values())
+    .sort((a: any, b: any) => (b.intervencion.created_at || '').localeCompare(a.intervencion.created_at || ''))
 
   const abrirAccion = (alerta: AlertaOperativaAdmin, accion: AccionIntervencionAdmin, intervencionOrigen?: any) => {
     setError('')
@@ -8326,6 +8407,9 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
             <button style={tabStyle(tab === 'intervenidas')} onClick={() => setTab('intervenidas')}>
               Alertas intervenidas ({intervenidasOrdenadas.length})
             </button>
+            <button style={tabStyle(tab === 'asistencias_confirmadas')} onClick={() => setTab('asistencias_confirmadas')}>
+              Asist. confirmadas ({asistenciasConfirmadasLista.length})
+            </button>
             <button style={tabStyle(tab === 'cierre')} onClick={() => setTab('cierre')}>
               Cierre de turnos ({turnosCierre.length})
             </button>
@@ -8361,6 +8445,81 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
             <div>No hay alertas intervenidas para hoy</div>
           </div>
         ) : intervenidasOrdenadas.map(renderIntervenida)
+      )}
+
+      {!loadingData && tab === 'asistencias_confirmadas' && (
+        asistenciasConfirmadasLista.length === 0 ? (
+          <div style={{ ...S.card, textAlign:'center', padding:48, color:'#64748b' }}>
+            <div style={{ fontSize:36, marginBottom:12 }}>✓</div>
+            <div>No hay asistencias confirmadas pendientes de regularización</div>
+          </div>
+        ) : (
+          <div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, color:'#e2e8f0', marginBottom:10 }}>
+              Asistencias confirmadas pendientes de regularización · {asistenciasConfirmadasLista.length}
+            </div>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ ...S.table, minWidth: 900 }}>
+                <thead>
+                  <tr>
+                    <th style={S.th}>Empleado</th>
+                    <th style={S.th}>CUIL / Legajo</th>
+                    <th style={S.th}>Objetivo</th>
+                    <th style={S.th}>Puesto</th>
+                    <th style={S.th}>Fecha turno</th>
+                    <th style={S.th}>Horario</th>
+                    <th style={S.th}>Supervisor</th>
+                    <th style={S.th}>Confirmado</th>
+                    <th style={S.th}>Comentario</th>
+                    <th style={S.th}>Estado</th>
+                    <th style={S.th}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {asistenciasConfirmadasLista.map((item: any) => {
+                    const g = item.guardia
+                    const cuil = g?.cuil ? formatCuil(g.cuil) : null
+                    return (
+                      <tr key={`ac-${item.turno.id}-${item.intervencion.id}`}>
+                        <td style={S.td}><strong>{g ? `${g.apellido}, ${g.nombre}` : '—'}</strong></td>
+                        <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>
+                          {cuil || g?.legajo || '—'}
+                          {cuil && g?.legajo ? <div style={{ fontSize:10, color:'#64748b', fontWeight:400 }}>Int: {g.legajo}</div> : null}
+                        </td>
+                        <td style={S.td}>{item.objetivo?.nombre || '—'}</td>
+                        <td style={S.td}>{item.puesto?.nombre || '—'}</td>
+                        <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:600 }}>{formatFecha(item.turno.fecha)}</td>
+                        <td style={S.td}>{formatHorarioAsignado(item.turno)}</td>
+                        <td style={S.td}>{item.supervisor ? `${item.supervisor.apellido}, ${item.supervisor.nombre}` : '—'}</td>
+                        <td style={{ ...S.td, fontSize:12 }}>{item.intervencion.created_at ? formatFechaHora(item.intervencion.created_at) : '—'}</td>
+                        <td style={{ ...S.td, fontSize:12, maxWidth:200 }}>{item.intervencion.comentario || '—'}</td>
+                        <td style={S.td}><Badge type="pendiente">Pend. regularización</Badge></td>
+                        <td style={S.td}>
+                          <div style={{ display:'flex', gap:4, flexDirection:'column' }}>
+                            <button
+                              style={{ ...S.btn, background:'#14532d', color:'#4ade80', border:'1px solid #166534', padding:'5px 10px', fontSize:11 }}
+                              onClick={() => {
+                                const alerta = alertaBase(item.turno, 'sin_fichar', '', '', 'warn', item.registro)
+                                abrirAccion(alerta, 'confirmar_cubierto')
+                              }}
+                            >Cargar asistencia manual</button>
+                            <button
+                              style={{ ...S.btn, background:'rgba(239,68,68,.15)', color:'#fca5a5', border:'1px solid rgba(239,68,68,.35)', padding:'5px 10px', fontSize:11 }}
+                              onClick={() => {
+                                const alerta = alertaBase(item.turno, 'sin_fichar', '', '', 'warn', item.registro)
+                                abrirAccion(alerta, 'reapertura')
+                              }}
+                            >Rechazar / reabrir</button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
       )}
 
       {tab === 'cierre' && (() => {
