@@ -8,11 +8,12 @@ import { track } from '@/lib/telemetry'
 interface FilaPlanilla {
   fecha: string
   dia_semana: string
-  hora_entrada: string
+  hora_entrada: string | null
   hora_salida: string | null
   horas: number
   objetivo_id: string | null
   objetivo_nombre: string | null
+  estado?: 'trabajado' | 'en_curso' | 'programado' | 'sin_programacion'
 }
 
 interface DatosPlanilla {
@@ -360,15 +361,31 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
               <tbody>
                 {datos.filas.map((fila, i) => {
                   const ultimo = i === datos.filas.length - 1
-                  const estilo = i % 2 === 0 ? S.trImpar : S.trPar
+                  const esSinProg = fila.estado === 'sin_programacion'
+                  const esProgramado = fila.estado === 'programado'
+                  const opacidad = esSinProg ? 0.4 : esProgramado ? 0.6 : 1
+                  const estilo = { ...(i % 2 === 0 ? S.trImpar : S.trPar), opacity: opacidad }
                   return (
-                    <tr key={`${fila.fecha}-${fila.hora_entrada}`} style={estilo}>
+                    <tr key={`${fila.fecha}-${fila.hora_entrada ?? 'sp'}`} style={estilo}>
                       <td style={S.td(ultimo)}>{formatearFecha(fila.fecha)}</td>
                       <td style={{ ...S.td(ultimo), color: '#64748b' }}>{fila.dia_semana}</td>
-                      <td style={S.td(ultimo)}>{fila.hora_entrada}</td>
-                      <td style={S.td(ultimo)}>{fila.hora_salida ?? <span style={{ color: '#f59e0b', fontSize: 11 }}>En curso</span>}</td>
-                      <td style={S.tdHoras(ultimo)}>{formatearHoras(fila.horas)}</td>
-                      <td style={S.tdObjetivo(ultimo)}>{fila.objetivo_nombre ?? '—'}</td>
+                      <td style={S.td(ultimo)}>
+                        {esSinProg
+                          ? <span style={{ color: '#475569', fontSize: 11, fontStyle: 'italic' }}>SIN PROGRAMACIÓN</span>
+                          : esProgramado
+                            ? <span style={{ color: '#64748b', fontSize: 11 }}>{fila.hora_entrada ?? '—'}</span>
+                            : fila.hora_entrada ?? '—'}
+                      </td>
+                      <td style={S.td(ultimo)}>
+                        {esSinProg ? '—'
+                          : esProgramado
+                            ? <span style={{ color: '#64748b', fontSize: 11 }}>{fila.hora_salida ?? '—'}</span>
+                            : fila.estado === 'en_curso'
+                              ? <span style={{ color: '#f59e0b', fontSize: 11 }}>En curso</span>
+                              : fila.hora_salida ?? '—'}
+                      </td>
+                      <td style={S.tdHoras(ultimo)}>{esSinProg || esProgramado ? '—' : formatearHoras(fila.horas)}</td>
+                      <td style={S.tdObjetivo(ultimo)}>{esProgramado ? <span style={{ fontStyle: 'italic' }}>{fila.objetivo_nombre ?? '—'}</span> : (fila.objetivo_nombre ?? '—')}</td>
                     </tr>
                   )
                 })}
@@ -382,7 +399,8 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
             <div style={S.totalValue}>{formatearHoras(datos.total_horas)} hs</div>
           </div>
           <div style={S.aclaracion}>
-            {datos.filas.length} {datos.filas.length === 1 ? 'turno' : 'turnos'} ·{' '}
+            {datos.filas.filter(f => f.estado === 'trabajado' || f.estado === 'en_curso').length} {datos.filas.filter(f => f.estado === 'trabajado' || f.estado === 'en_curso').length === 1 ? 'día trabajado' : 'días trabajados'} ·{' '}
+            {datos.filas.filter(f => f.estado === 'programado').length > 0 ? `${datos.filas.filter(f => f.estado === 'programado').length} programado(s) sin fichar · ` : ''}
             {labelMes(datos.mes)}
           </div>
         </>

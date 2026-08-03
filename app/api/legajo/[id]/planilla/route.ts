@@ -45,6 +45,7 @@ export interface FilaPlanilla {
   objetivo_id: string | null
   objetivo_nombre: string | null
   origen_etiqueta: string
+  estado: 'trabajado' | 'en_curso' | 'programado' | 'sin_programacion'
 }
 
 export interface RespuestaPlanilla {
@@ -184,6 +185,10 @@ export async function GET(
       objetivoNombre = (t.objetivo as any)?.nombre ?? null
     }
 
+    const tieneEntrada = linea.horaEntrada != null
+    const tieneSalida = linea.horaSalida != null
+    const estado = tieneEntrada && !tieneSalida ? 'en_curso' as const : 'trabajado' as const
+
     filas.push({
       fecha:           t.fecha,
       dia_semana:      diaSemana(t.fecha),
@@ -193,13 +198,63 @@ export async function GET(
       objetivo_id:     linea.objetivoEfectivoId,
       objetivo_nombre: objetivoNombre,
       origen_etiqueta: linea.origenEtiqueta,
+      estado,
+    })
+  }
+
+  const fechasConRegistro = new Set(filas.map(f => f.fecha))
+
+  // ── Turnos programados sin registro ────────────────────────────────────────
+  const { data: turnosProgramados } = await admin.client
+    .from('turnos')
+    .select('id, fecha, hora_inicio, hora_fin, objetivo_id, objetivo:objetivos(nombre)')
+    .eq('guardia_id', empleadoId)
+    .gte('fecha', desde)
+    .lte('fecha', hasta)
+    .in('estado', ['cubierto', 'pendiente'])
+
+  for (const t of (turnosProgramados ?? [])) {
+    if (fechasConRegistro.has(t.fecha)) continue
+    fechasConRegistro.add(t.fecha)
+    filas.push({
+      fecha: t.fecha,
+      dia_semana: diaSemana(t.fecha),
+      hora_entrada: t.hora_inicio?.slice(0, 5) ?? null,
+      hora_salida: t.hora_fin?.slice(0, 5) ?? null,
+      horas: 0,
+      objetivo_id: t.objetivo_id,
+      objetivo_nombre: (t.objetivo as any)?.nombre ?? null,
+      origen_etiqueta: 'Turno programado',
+      estado: 'programado',
+    })
+  }
+
+  // ── Días sin programación ──────────────────────────────────────────────────
+  const [aY, aM] = mes.split('-').map(Number)
+  const ultimoDia = new Date(aY, aM, 0).getDate()
+  for (let d = 1; d <= ultimoDia; d++) {
+    const fechaStr = `${mes}-${String(d).padStart(2, '0')}`
+    if (fechasConRegistro.has(fechaStr)) continue
+    filas.push({
+      fecha: fechaStr,
+      dia_semana: diaSemana(fechaStr),
+      hora_entrada: null,
+      hora_salida: null,
+      horas: 0,
+      objetivo_id: null,
+      objetivo_nombre: null,
+      origen_etiqueta: '',
+      estado: 'sin_programacion',
     })
   }
 
   // ── Ordenar por fecha y hora de entrada ───────────────────────────────────
   filas.sort((a, b) => {
     const fc = a.fecha.localeCompare(b.fecha)
-    return fc !== 0 ? fc : a.hora_entrada.localeCompare(b.hora_entrada)
+    if (fc !== 0) return fc
+    if (a.estado === 'sin_programacion') return 1
+    if (b.estado === 'sin_programacion') return -1
+    return (a.hora_entrada ?? '').localeCompare(b.hora_entrada ?? '')
   })
 
   const total_horas = Number(filas.reduce((s, f) => s + f.horas, 0).toFixed(2))

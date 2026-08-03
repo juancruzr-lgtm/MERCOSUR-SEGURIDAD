@@ -10,3 +10,9 @@ node_modules/
 
 # Artefactos varios
 *.tsbuildinfo
+
+# Auditorias locales con credenciales
+audit*_temp.js
+
+# Planillas privadas de clientes
+planiallas para comparar/

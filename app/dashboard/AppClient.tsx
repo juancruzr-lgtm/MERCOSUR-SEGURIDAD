@@ -4654,6 +4654,100 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
     setRegistroEditando(null)
   }
 
+  const [registroAnulando, setRegistroAnulando] = useState<RegistroAsistencia | null>(null)
+  const [motivoAnulacion, setMotivoAnulacion] = useState('')
+  const [anulando, setAnulando] = useState(false)
+
+  const anularRegistroManual = async () => {
+    if (!registroAnulando || !motivoAnulacion.trim()) return
+    setAnulando(true)
+    try {
+      const { error } = await supabase.rpc('anular_registro_manual', {
+        p_registro_id: registroAnulando.id,
+        p_motivo: motivoAnulacion.trim(),
+      })
+      if (error) throw error
+      setRegistros((prev: RegistroAsistencia[]) =>
+        prev.filter((r: RegistroAsistencia) => r.id !== registroAnulando.id)
+      )
+      setRegistroAnulando(null)
+      setMotivoAnulacion('')
+    } catch (e: any) {
+      alert(e.message || 'Error al anular')
+    } finally {
+      setAnulando(false)
+    }
+  }
+
+  const [registroEditandoManual, setRegistroEditandoManual] = useState<RegistroAsistencia | null>(null)
+  const [formEditManual, setFormEditManual] = useState({ fecha: '', objetivo_id: '', hora_inicio: '', hora_fin: '', motivo: '' })
+  const [editandoManual, setEditandoManual] = useState(false)
+
+  const abrirEdicionManual = (reg: RegistroAsistencia) => {
+    const turno = turnos.find((t: Turno) => t.id === reg.turno_id)
+    setRegistroEditandoManual(reg)
+    setFormEditManual({
+      fecha: turno?.fecha || '',
+      objetivo_id: (reg as any).objetivo_final_id ?? turno?.objetivo_id ?? '',
+      hora_inicio: turno?.hora_inicio?.slice(0, 5) || '',
+      hora_fin: turno?.hora_fin?.slice(0, 5) || '',
+      motivo: '',
+    })
+  }
+
+  const guardarEdicionManual = async () => {
+    if (!registroEditandoManual || !formEditManual.motivo.trim()) return
+    setEditandoManual(true)
+    const turno = turnos.find((t: Turno) => t.id === registroEditandoManual.turno_id)
+    if (!turno) { setEditandoManual(false); return }
+    try {
+      const cambios: string[] = []
+      if (formEditManual.fecha !== turno.fecha) {
+        const { error } = await supabase.rpc('corregir_fecha_registro_manual', {
+          p_registro_id: registroEditandoManual.id,
+          p_nueva_fecha: formEditManual.fecha,
+          p_motivo: formEditManual.motivo.trim(),
+        })
+        if (error) throw error
+        cambios.push('fecha')
+        setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, fecha: formEditManual.fecha } : t))
+      }
+      if (formEditManual.objetivo_id !== ((registroEditandoManual as any).objetivo_final_id ?? turno.objetivo_id)) {
+        await supabase.from('registros_asistencia').update({ objetivo_final_id: formEditManual.objetivo_id }).eq('id', registroEditandoManual.id)
+        cambios.push('objetivo')
+      }
+      if (formEditManual.hora_inicio !== turno.hora_inicio?.slice(0, 5) || formEditManual.hora_fin !== turno.hora_fin?.slice(0, 5)) {
+        await supabase.from('turnos').update({
+          hora_inicio: formEditManual.hora_inicio + ':00',
+          hora_fin: formEditManual.hora_fin + ':00',
+        }).eq('id', turno.id)
+        cambios.push('horario')
+        setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, hora_inicio: formEditManual.hora_inicio + ':00', hora_fin: formEditManual.hora_fin + ':00' } : t))
+      }
+      if (cambios.length > 0) {
+        await supabase.from('registros_asistencia_auditoria').insert({
+          registro_id: registroEditandoManual.id,
+          turno_id: turno.id,
+          modificado_por: user?.id,
+          campo: 'edicion_manual',
+          valor_anterior: JSON.stringify({ fecha: turno.fecha, objetivo_id: turno.objetivo_id, hora_inicio: turno.hora_inicio, hora_fin: turno.hora_fin }),
+          valor_nuevo: JSON.stringify({ fecha: formEditManual.fecha, objetivo_id: formEditManual.objetivo_id, hora_inicio: formEditManual.hora_inicio, hora_fin: formEditManual.hora_fin }),
+          comentario: formEditManual.motivo.trim(),
+        })
+        if (formEditManual.objetivo_id !== turno.objetivo_id) {
+          setRegistros((prev: RegistroAsistencia[]) =>
+            prev.map((r: RegistroAsistencia) => r.id === registroEditandoManual.id ? { ...r, objetivo_final_id: formEditManual.objetivo_id } : r)
+          )
+        }
+      }
+      setRegistroEditandoManual(null)
+    } catch (e: any) {
+      alert(e.message || 'Error al guardar')
+    } finally {
+      setEditandoManual(false)
+    }
+  }
+
   const [verEvidencias, setVerEvidencias] = useState<string | null>(null)
   const [evidenciasPorRegistro, setEvidenciasPorRegistro] = useState<Record<string, EvidenciaAdmin[]>>({})
   const [cargandoEvidencias, setCargandoEvidencias] = useState<string | null>(null)
@@ -5073,12 +5167,22 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
                     </td>
                     {esAdmin && (
                       <td style={S.td}>
-                        <button
-                          style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
-                          onClick={() => abrirCorreccion(r)}
-                        >
-                          Corregir
-                        </button>
+                        <div style={{ display:'flex', gap:4 }}>
+                          <button
+                            style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                            onClick={() => abrirCorreccion(r)}
+                          >
+                            Corregir
+                          </button>
+                          {r.tipo_registro === 'carga_manual' && !(r as any).registro_anulado_at && (
+                            <button
+                              style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#7f1d1d', color:'#fca5a5', border:'1px solid #991b1b' }}
+                              onClick={() => { setRegistroAnulando(r); setMotivoAnulacion('') }}
+                            >
+                              Anular
+                            </button>
+                          )}
+                        </div>
                       </td>
                     )}
                   </tr>
@@ -5152,6 +5256,83 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
           user={user}
           setRegistros={setRegistros}
         />
+      )}
+
+      {registroAnulando && (
+        <Modal title="Anular registro manual" onClose={() => setRegistroAnulando(null)}>
+          <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+            Esta acción anulará lógicamente el registro de carga manual. Las horas liquidables pasarán a 0. La operación queda registrada en auditoría.
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={S.label}>Motivo de anulación *</label>
+            <textarea
+              style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
+              value={motivoAnulacion}
+              onChange={e => setMotivoAnulacion(e.target.value)}
+              placeholder="Ingrese el motivo de la anulación..."
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setRegistroAnulando(null)}>Cancelar</button>
+            <button
+              style={{ ...S.btn, background: '#991b1b', color: '#fca5a5', border: '1px solid #7f1d1d', opacity: !motivoAnulacion.trim() || anulando ? 0.5 : 1 }}
+              disabled={!motivoAnulacion.trim() || anulando}
+              onClick={anularRegistroManual}
+            >
+              {anulando ? 'Anulando...' : 'Confirmar anulación'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {registroEditandoManual && (
+        <Modal title="Editar registro manual" onClose={() => setRegistroEditandoManual(null)}>
+          <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+            Corrección de registro de carga manual. Los cambios quedan registrados en auditoría.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={S.label}>Fecha *</label>
+              <input type="date" style={S.input} value={formEditManual.fecha} onChange={e => setFormEditManual({ ...formEditManual, fecha: e.target.value })} />
+            </div>
+            <div>
+              <label style={S.label}>Objetivo</label>
+              <select style={S.select} value={formEditManual.objetivo_id} onChange={e => setFormEditManual({ ...formEditManual, objetivo_id: e.target.value })}>
+                <option value="">— Sin objetivo —</option>
+                {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={S.label}>Hora inicio</label>
+              <input type="time" style={S.input} value={formEditManual.hora_inicio} onChange={e => setFormEditManual({ ...formEditManual, hora_inicio: e.target.value })} />
+            </div>
+            <div>
+              <label style={S.label}>Hora fin</label>
+              <input type="time" style={S.input} value={formEditManual.hora_fin} onChange={e => setFormEditManual({ ...formEditManual, hora_fin: e.target.value })} />
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={S.label}>Motivo de corrección *</label>
+            <textarea
+              style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
+              value={formEditManual.motivo}
+              onChange={e => setFormEditManual({ ...formEditManual, motivo: e.target.value })}
+              placeholder="Ingrese el motivo de la corrección..."
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setRegistroEditandoManual(null)}>Cancelar</button>
+            <button
+              style={{ ...S.btn, ...S.btnPrimary, opacity: !formEditManual.motivo.trim() || !formEditManual.fecha || editandoManual ? 0.5 : 1 }}
+              disabled={!formEditManual.motivo.trim() || !formEditManual.fecha || editandoManual}
+              onClick={guardarEdicionManual}
+            >
+              {editandoManual ? 'Guardando...' : 'Guardar cambios'}
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   )
@@ -5350,6 +5531,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
 
   const [turnosReportes, setTurnosReportes] = useState<Turno[]>([])
   const [registrosReportes, setRegistrosReportes] = useState<RegistroAsistencia[]>([])
+  const [novedadesLaborales, setNovedadesLaborales] = useState<any[]>([])
 
   useEffect(() => {
     if (filtroActivo?.mes) setMes(filtroActivo.mes)
@@ -5358,15 +5540,18 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   useEffect(() => {
     const [y, m] = mes.split('-').map(Number)
     const desdeStr = `${mes}-01`
+    const ultimoDia = new Date(y, m, 0).getDate()
+    const hastaStr = `${mes}-${String(ultimoDia).padStart(2, '0')}`
     const desdeISO = new Date(Date.UTC(y, m - 1, 1, 3, 0, 0)).toISOString()
     const hastaISO = new Date(Date.UTC(y, m, 1, 3, 0, 0)).toISOString()
-    const hastaStr = hastaISO.slice(0, 10)
     Promise.all([
-      supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: true }),
+      supabase.from('turnos').select('*').gte('fecha', desdeStr).lte('fecha', hastaStr).order('fecha', { ascending: true }),
       supabase.from('registros_asistencia').select('*').gte('created_at', desdeISO).lt('created_at', hastaISO).order('created_at', { ascending: false }),
-    ]).then(([t, r]) => {
+      supabase.from('novedades_laborales').select('*').eq('estado', 'aprobada').lte('fecha_desde', hastaStr).gte('fecha_hasta', desdeStr),
+    ]).then(([t, r, nl]) => {
       setTurnosReportes(t.data ?? [])
       setRegistrosReportes(r.data ?? [])
+      setNovedadesLaborales(nl.data ?? [])
     })
   }, [mes])
 
@@ -5571,9 +5756,81 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _tieneCobertura: tieneEntrada || horasLiquidables > 0,
       _sinFichar: !tieneEntrada && horasLiquidables === 0 && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
       _enCurso: Boolean(registro?.hora_entrada_real && !registro?.hora_salida_real),
-      _tarde: tieneEntrada && (registro?.alerta_entrada === 'tarde' || minutosTardeAsistencia(turno, registro) > 0),
+      _tarde: tieneEntrada && minutosTardeAsistencia(turno, registro) > 0,
+      _estadoCalendario: 'trabajado' as string,
     }
   })
+
+  // Calendario completo: agregar días sin turno
+  if (empleadoSeleccionado) {
+    const [aY, aM] = mes.split('-').map(Number)
+    const ultimoDiaMes = new Date(aY, aM, 0).getDate()
+    const fechasConTurno = new Set(planillaEmpleado.map((row: any) => row._fecha))
+
+    const novedadesEmpleado = novedadesLaborales.filter((n: any) => n.empleado_id === empleadoSeleccionado.id)
+    const novedadParaFecha = (fechaStr: string): any | null => {
+      return novedadesEmpleado.find((n: any) => n.fecha_desde <= fechaStr && n.fecha_hasta >= fechaStr) ?? null
+    }
+    const labelNovedad = (tipo: string): string => {
+      const labels: Record<string, string> = {
+        franco: 'Franco',
+        vacaciones: 'Vacaciones',
+        licencia: 'Licencia',
+        parte_medico: 'Parte médico',
+        accidente: 'Accidente',
+        falta_justificada: 'Falta justificada',
+        falta_injustificada: 'Falta injustificada',
+        dia_estudio: 'Día de estudio',
+        suspension: 'Suspensión',
+        otra: 'Otra novedad',
+      }
+      return labels[tipo] || tipo
+    }
+
+    for (let d = 1; d <= ultimoDiaMes; d++) {
+      const fechaStr = `${mes}-${String(d).padStart(2, '0')}`
+      if (fechasConTurno.has(fechaStr)) continue
+
+      const novedad = novedadParaFecha(fechaStr)
+      const estadoCal = novedad ? 'novedad' : 'sin_programacion'
+      const estadoLabel = novedad ? labelNovedad(novedad.tipo) : 'Sin programación'
+
+      planillaEmpleado.push({
+        Fecha: formatFecha(fechaStr),
+        Día: diaSemana(fechaStr),
+        Objetivo: '—',
+        'Horario programado': '—',
+        'Entrada real': '—',
+        'Salida real': '—',
+        'Horas reales': '—',
+        'Horas liquidables': '—',
+        Estado: estadoLabel,
+        'Observaciones / alertas': novedad?.observacion || '—',
+        'GPS ingreso': '—',
+        'Distancia ingreso': '—',
+        'Estado GPS ingreso': '—',
+        Origen: '',
+        _id: `cal-${fechaStr}`,
+        _turno_id: null,
+        _registro: null,
+        _fecha: fechaStr,
+        _horasReales: 0,
+        _horasLiquidables: 0,
+        _tieneEntrada: false,
+        _tieneCobertura: false,
+        _sinFichar: false,
+        _enCurso: false,
+        _tarde: false,
+        _estadoCalendario: estadoCal,
+      })
+    }
+
+    planillaEmpleado.sort((a: any, b: any) => {
+      const fa = a._fecha || ''
+      const fb = b._fecha || ''
+      return fa.localeCompare(fb)
+    })
+  }
 
   const totalesEmpleado = {
     dias: new Set(planillaEmpleado.filter((row: any) => row._tieneCobertura).map((row: any) => row._fecha)).size,
@@ -5745,7 +6002,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     const filas = [
       ['Planilla individual por empleado'],
       [`Mes/Año: ${mesLabel}`],
-      [`Empleado: ${empleadoSeleccionado.apellido}, ${empleadoSeleccionado.nombre} · Legajo: ${empleadoSeleccionado.legajo || '—'}`],
+      [`Empleado: ${empleadoSeleccionado.apellido}, ${empleadoSeleccionado.nombre} · Legajo: ${empleadoSeleccionado.cuil ? formatCuil(empleadoSeleccionado.cuil) : (empleadoSeleccionado.legajo || '—')}`],
       [],
       columnas,
       ...planillaEmpleado.map((row: any) => [
@@ -5852,7 +6109,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       const horasLiquidables = horasLiquidablesConRegistro + horasLiquidablesFallback
 
       return {
-        Legajo: g.legajo,
+        Legajo: g.cuil ? formatCuil(g.cuil) : (g.legajo || '—'),
         Apellido: g.apellido,
         Nombre: g.nombre,
         'Días Trabajados': dias,
@@ -6098,7 +6355,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           </div>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:800 }}>Planilla individual por empleado</div>
-            <div style={{ color:'#94a3b8', fontSize:13 }}>Empleado: <strong style={{ color:'#e2e8f0' }}>{empleadoSeleccionado ? `${empleadoSeleccionado.nombre} ${empleadoSeleccionado.apellido}` : '—'}</strong> · Legajo: <strong style={{ color:'#e2e8f0' }}>{empleadoSeleccionado?.legajo || '—'}</strong> · Mes: <strong style={{ color:'#e2e8f0' }}>{mesLabel}</strong></div>
+            <div style={{ color:'#94a3b8', fontSize:13 }}>Empleado: <strong style={{ color:'#e2e8f0' }}>{empleadoSeleccionado ? `${empleadoSeleccionado.nombre} ${empleadoSeleccionado.apellido}` : '—'}</strong> · Legajo: <strong style={{ color:'#e2e8f0' }}>{empleadoSeleccionado?.cuil ? formatCuil(empleadoSeleccionado.cuil) : (empleadoSeleccionado?.legajo || '—')}</strong>{empleadoSeleccionado?.cuil && empleadoSeleccionado?.legajo ? <span style={{ color:'#64748b' }}> (int: {empleadoSeleccionado.legajo})</span> : null} · Mes: <strong style={{ color:'#e2e8f0' }}>{mesLabel}</strong></div>
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px, 1fr))', gap:8, marginBottom:16 }}>
             {totalBox('Días trabajados', totalesEmpleado.dias)}
@@ -6111,30 +6368,52 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           <table style={S.table}>
             <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
             <tbody>
-              {planillaEmpleado.map((row: any) => (
-                <tr key={row._id}>
+              {planillaEmpleado.map((row: any) => {
+                const esCal = row._estadoCalendario === 'sin_programacion' || row._estadoCalendario === 'novedad'
+                const opacidadFila = row._estadoCalendario === 'sin_programacion' ? 0.4 : row._estadoCalendario === 'novedad' ? 0.65 : 1
+                const badgeType = row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Manual' ? 'ok' : row.Estado === 'Descubierto' ? 'descubierto' : row._estadoCalendario === 'novedad' ? 'pendiente' : row._estadoCalendario === 'sin_programacion' ? 'pendiente' : 'pendiente'
+                return (
+                <tr key={row._id} style={{ opacity: opacidadFila }}>
                   <td style={S.td}>{row.Fecha}</td>
                   <td style={S.td}>{row.Día}</td>
-                  <td style={S.td}><strong>{row.Objetivo}</strong></td>
+                  <td style={S.td}><strong>{esCal ? (row._estadoCalendario === 'novedad' ? '' : '') : ''}{row.Objetivo}</strong></td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{row['Horario programado']}</td>
                   <td style={S.td}>{row['Entrada real']}</td>
                   <td style={S.td}>{row['Salida real']}</td>
                   <td style={S.td}>{row['Horas reales']}</td>
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
-                  <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Manual' ? 'ok' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
+                  <td style={S.td}><Badge type={badgeType}>{row.Estado}</Badge></td>
                   <td style={{ ...S.td, fontSize:11, color:'#94a3b8', minWidth:140 }}>{row.Origen}</td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
                   <td style={S.td}>{row['GPS ingreso']}</td>
                   <td style={S.td}>{row['Distancia ingreso']}</td>
-                  <td style={S.td}><Badge type={row['Estado GPS ingreso'] === 'Fuera del radio' ? 'alerta' : row['Estado GPS ingreso'] === 'Dentro del radio' ? 'ok' : 'pendiente'}>{row['Estado GPS ingreso']}</Badge></td>
+                  <td style={S.td}>{!esCal ? <Badge type={row['Estado GPS ingreso'] === 'Fuera del radio' ? 'alerta' : row['Estado GPS ingreso'] === 'Dentro del radio' ? 'ok' : 'pendiente'}>{row['Estado GPS ingreso']}</Badge> : '—'}</td>
                   <td style={S.td}>
                     {row._registro && (
-                      <button
-                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
-                        onClick={() => setRegistroCorrigiendo(row._registro)}
-                      >
-                        Corregir
-                      </button>
+                      <div style={{ display:'flex', gap:4 }}>
+                        <button
+                          style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                          onClick={() => setRegistroCorrigiendo(row._registro)}
+                        >
+                          Corregir
+                        </button>
+                        {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
+                          <button
+                            style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#1e40af', color:'#93c5fd', border:'1px solid #1d4ed8' }}
+                            onClick={() => abrirEdicionManual(row._registro)}
+                          >
+                            Editar
+                          </button>
+                        )}
+                        {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
+                          <button
+                            style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#7f1d1d', color:'#fca5a5', border:'1px solid #991b1b' }}
+                            onClick={() => { setRegistroAnulando(row._registro); setMotivoAnulacion('') }}
+                          >
+                            Anular
+                          </button>
+                        )}
+                      </div>
                     )}
                     {!row._registro && row._sinFichar && (
                       <button
@@ -6146,10 +6425,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                     )}
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
-          {planillaEmpleado.length === 0 && renderEmpty('No hay turnos asignados o trabajados para este empleado en el mes seleccionado.')}
+          {planillaEmpleado.length === 0 && renderEmpty('No hay datos para este empleado en el mes seleccionado.')}
         </div>
       )}
 
