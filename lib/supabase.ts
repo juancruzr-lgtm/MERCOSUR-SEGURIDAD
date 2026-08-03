@@ -118,6 +118,9 @@ export interface RegistroAsistencia {
   cobertura_anulada_motivo?: string | null
   cobertura_intervencion_origen_id?: string | null
   horas_liquidables_antes_anulacion?: number | null
+  registro_anulado_at?: string | null
+  registro_anulado_por?: string | null
+  registro_anulado_motivo?: string | null
   created_at: string
   // joins
   turno?: Turno
