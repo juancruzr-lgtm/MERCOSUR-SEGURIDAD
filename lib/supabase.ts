@@ -228,7 +228,7 @@ export function calcularHorasLiquidables(
   const diferencia = Math.abs(minutosProgramados - minutosReales)
   const minutosLiquidables = diferencia <= toleranciaMinutos
     ? minutosProgramados
-    : minutosReales
+    : Math.min(minutosReales, minutosProgramados)
 
   return Number((minutosLiquidables / 60).toFixed(2))
 }
