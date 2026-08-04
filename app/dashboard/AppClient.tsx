@@ -4734,138 +4734,6 @@ function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supe
     }
   }
 
-  // ── Editar turno (Point 1) ──────────────────────────────────────────────────
-  const [turnoEditando, setTurnoEditando] = useState<Turno | null>(null)
-  const [formEditTurno, setFormEditTurno] = useState({ fecha: '', hora_inicio: '', hora_fin: '', comentario: '' })
-  const [editandoTurno, setEditandoTurno] = useState(false)
-
-  const abrirEdicionTurno = (turnoId: string) => {
-    const turno = turnos.find((t: Turno) => t.id === turnoId)
-    if (!turno) return
-    setTurnoEditando(turno)
-    setFormEditTurno({
-      fecha: turno.fecha,
-      hora_inicio: turno.hora_inicio?.slice(0, 5) || '',
-      hora_fin: turno.hora_fin?.slice(0, 5) || '',
-      comentario: '',
-    })
-  }
-
-  const guardarEdicionTurno = async () => {
-    if (!turnoEditando || !formEditTurno.comentario.trim()) return
-    setEditandoTurno(true)
-    try {
-      const cambios: Record<string, string | null> = {}
-      const snapshot: Record<string, string | null> = {}
-      if (formEditTurno.fecha !== turnoEditando.fecha) {
-        cambios.fecha = formEditTurno.fecha
-        snapshot.fecha = turnoEditando.fecha
-      }
-      if (formEditTurno.hora_inicio !== turnoEditando.hora_inicio?.slice(0, 5)) {
-        cambios.hora_inicio = formEditTurno.hora_inicio + ':00'
-        snapshot.hora_inicio = turnoEditando.hora_inicio
-      }
-      if (formEditTurno.hora_fin !== turnoEditando.hora_fin?.slice(0, 5)) {
-        cambios.hora_fin = formEditTurno.hora_fin + ':00'
-        snapshot.hora_fin = turnoEditando.hora_fin
-      }
-      if (Object.keys(cambios).length === 0) { setTurnoEditando(null); return }
-      const headers = await headersAdmin()
-      const res = await fetch('/api/turnos/editar', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ turno_id: turnoEditando.id, cambios, comentario: formEditTurno.comentario.trim(), snapshot }),
-      })
-      const result = await res.json()
-      if (!res.ok) throw new Error(result.error || 'Error al editar turno')
-      if (result.turno) {
-        setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoEditando.id ? { ...t, ...result.turno } : t))
-      }
-      setTurnoEditando(null)
-    } catch (e: any) {
-      alert(e.message || 'Error al editar turno')
-    } finally {
-      setEditandoTurno(false)
-    }
-  }
-
-  // ── Anular turno (Point 1) ─────────────────────────────────────────────────
-  const [turnoAnulando, setTurnoAnulando] = useState<Turno | null>(null)
-  const [motivoAnulacionTurno, setMotivoAnulacionTurno] = useState('')
-  const [anulandoTurno, setAnulandoTurno] = useState(false)
-
-  const anularTurno = async () => {
-    if (!turnoAnulando || !motivoAnulacionTurno.trim()) return
-    setAnulandoTurno(true)
-    try {
-      const headers = await headersAdmin()
-      const res = await fetch('/api/turnos/editar', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          turno_id: turnoAnulando.id,
-          cambios: { estado: 'anulado' },
-          comentario: `Anulación: ${motivoAnulacionTurno.trim()}`,
-          snapshot: { estado: turnoAnulando.estado },
-        }),
-      })
-      const result = await res.json()
-      if (!res.ok) throw new Error(result.error || 'Error al anular turno')
-      setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoAnulando.id ? { ...t, estado: 'anulado' } : t))
-      setTurnoAnulando(null)
-      setMotivoAnulacionTurno('')
-    } catch (e: any) {
-      alert(e.message || 'Error al anular turno')
-    } finally {
-      setAnulandoTurno(false)
-    }
-  }
-
-  // ── Clasificar día sin programación (Point 2) ───────────────────────────────
-  const [clasificandoDia, setClasificandoDia] = useState<{ fecha: string; empleadoId: string } | null>(null)
-  const [tipoNovedadDia, setTipoNovedadDia] = useState('franco')
-  const [observacionNovedadDia, setObservacionNovedadDia] = useState('')
-  const [guardandoNovedad, setGuardandoNovedad] = useState(false)
-
-  const TIPOS_NOVEDAD = [
-    { value: 'franco', label: 'Franco' },
-    { value: 'vacaciones', label: 'Vacaciones' },
-    { value: 'licencia', label: 'Licencia' },
-    { value: 'parte_medico', label: 'Parte médico / Enfermedad' },
-    { value: 'accidente', label: 'Accidente' },
-    { value: 'falta_justificada', label: 'Falta justificada' },
-    { value: 'falta_injustificada', label: 'Falta injustificada' },
-    { value: 'dia_estudio', label: 'Día de estudio' },
-    { value: 'suspension', label: 'Suspensión' },
-    { value: 'otra', label: 'Otra novedad' },
-  ] as const
-
-  const guardarClasificacionDia = async () => {
-    if (!clasificandoDia) return
-    setGuardandoNovedad(true)
-    try {
-      const { data, error } = await supabase.from('novedades_laborales').insert({
-        empleado_id: clasificandoDia.empleadoId,
-        tipo: tipoNovedadDia,
-        fecha_desde: clasificandoDia.fecha,
-        fecha_hasta: clasificandoDia.fecha,
-        observacion: observacionNovedadDia.trim() || null,
-        cargado_por: user?.id,
-        estado: 'aprobada',
-        aprobado_por: user?.id,
-        aprobado_at: new Date().toISOString(),
-      }).select().single()
-      if (error) throw error
-      if (data) setNovedadesLaborales((prev: any[]) => [...prev, data])
-      setClasificandoDia(null)
-      setObservacionNovedadDia('')
-    } catch (e: any) {
-      alert(e.message || 'Error al clasificar día')
-    } finally {
-      setGuardandoNovedad(false)
-    }
-  }
-
   const [verEvidencias, setVerEvidencias] = useState<string | null>(null)
   const [evidenciasPorRegistro, setEvidenciasPorRegistro] = useState<Record<string, EvidenciaAdmin[]>>({})
   const [cargandoEvidencias, setCargandoEvidencias] = useState<string | null>(null)
@@ -5650,6 +5518,145 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [turnosReportes, setTurnosReportes] = useState<Turno[]>([])
   const [registrosReportes, setRegistrosReportes] = useState<RegistroAsistencia[]>([])
   const [novedadesLaborales, setNovedadesLaborales] = useState<any[]>([])
+
+  // ── Editar turno ──────────────────────────────────────────────────
+  const [turnoEditando, setTurnoEditando] = useState<Turno | null>(null)
+  const [formEditTurno, setFormEditTurno] = useState({ fecha: '', hora_inicio: '', hora_fin: '', comentario: '' })
+  const [editandoTurno, setEditandoTurno] = useState(false)
+
+  const headersAdmin = async () => {
+    const { data } = await supabase.auth.getSession()
+    const token = data.session?.access_token
+    if (!token) throw new Error('Sesión de administrador requerida')
+    return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+  }
+
+  const abrirEdicionTurno = (turnoId: string) => {
+    const turno = turnos.find((t: Turno) => t.id === turnoId)
+    if (!turno) return
+    setTurnoEditando(turno)
+    setFormEditTurno({
+      fecha: turno.fecha,
+      hora_inicio: turno.hora_inicio?.slice(0, 5) || '',
+      hora_fin: turno.hora_fin?.slice(0, 5) || '',
+      comentario: '',
+    })
+  }
+
+  const guardarEdicionTurno = async () => {
+    if (!turnoEditando || !formEditTurno.comentario.trim()) return
+    setEditandoTurno(true)
+    try {
+      const cambios: Record<string, string | null> = {}
+      const snapshot: Record<string, string | null> = {}
+      if (formEditTurno.fecha !== turnoEditando.fecha) {
+        cambios.fecha = formEditTurno.fecha
+        snapshot.fecha = turnoEditando.fecha
+      }
+      if (formEditTurno.hora_inicio !== turnoEditando.hora_inicio?.slice(0, 5)) {
+        cambios.hora_inicio = formEditTurno.hora_inicio + ':00'
+        snapshot.hora_inicio = turnoEditando.hora_inicio
+      }
+      if (formEditTurno.hora_fin !== turnoEditando.hora_fin?.slice(0, 5)) {
+        cambios.hora_fin = formEditTurno.hora_fin + ':00'
+        snapshot.hora_fin = turnoEditando.hora_fin
+      }
+      if (Object.keys(cambios).length === 0) { setTurnoEditando(null); return }
+      const headers = await headersAdmin()
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ turno_id: turnoEditando.id, cambios, comentario: formEditTurno.comentario.trim(), snapshot }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Error al editar turno')
+      if (result.turno) {
+        setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoEditando.id ? { ...t, ...result.turno } : t))
+      }
+      setTurnoEditando(null)
+    } catch (e: any) {
+      alert(e.message || 'Error al editar turno')
+    } finally {
+      setEditandoTurno(false)
+    }
+  }
+
+  // ── Anular turno ──────────────────────────────────────────────────
+  const [turnoAnulando, setTurnoAnulando] = useState<Turno | null>(null)
+  const [motivoAnulacionTurno, setMotivoAnulacionTurno] = useState('')
+  const [anulandoTurno, setAnulandoTurno] = useState(false)
+
+  const anularTurno = async () => {
+    if (!turnoAnulando || !motivoAnulacionTurno.trim()) return
+    setAnulandoTurno(true)
+    try {
+      const headers = await headersAdmin()
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          turno_id: turnoAnulando.id,
+          cambios: { estado: 'anulado' },
+          comentario: `Anulación: ${motivoAnulacionTurno.trim()}`,
+          snapshot: { estado: turnoAnulando.estado },
+        }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Error al anular turno')
+      setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoAnulando.id ? { ...t, estado: 'anulado' } : t))
+      setTurnoAnulando(null)
+      setMotivoAnulacionTurno('')
+    } catch (e: any) {
+      alert(e.message || 'Error al anular turno')
+    } finally {
+      setAnulandoTurno(false)
+    }
+  }
+
+  // ── Clasificar día sin programación ─────────────────────────────────
+  const [clasificandoDia, setClasificandoDia] = useState<{ fecha: string; empleadoId: string } | null>(null)
+  const [tipoNovedadDia, setTipoNovedadDia] = useState('franco')
+  const [observacionNovedadDia, setObservacionNovedadDia] = useState('')
+  const [guardandoNovedad, setGuardandoNovedad] = useState(false)
+
+  const TIPOS_NOVEDAD = [
+    { value: 'franco', label: 'Franco' },
+    { value: 'vacaciones', label: 'Vacaciones' },
+    { value: 'licencia', label: 'Licencia' },
+    { value: 'parte_medico', label: 'Parte médico / Enfermedad' },
+    { value: 'accidente', label: 'Accidente' },
+    { value: 'falta_justificada', label: 'Falta justificada' },
+    { value: 'falta_injustificada', label: 'Falta injustificada' },
+    { value: 'dia_estudio', label: 'Día de estudio' },
+    { value: 'suspension', label: 'Suspensión' },
+    { value: 'otra', label: 'Otra novedad' },
+  ] as const
+
+  const guardarClasificacionDia = async () => {
+    if (!clasificandoDia) return
+    setGuardandoNovedad(true)
+    try {
+      const { data, error } = await supabase.from('novedades_laborales').insert({
+        empleado_id: clasificandoDia.empleadoId,
+        tipo: tipoNovedadDia,
+        fecha_desde: clasificandoDia.fecha,
+        fecha_hasta: clasificandoDia.fecha,
+        observacion: observacionNovedadDia.trim() || null,
+        cargado_por: user?.id,
+        estado: 'aprobada',
+        aprobado_por: user?.id,
+        aprobado_at: new Date().toISOString(),
+      }).select().single()
+      if (error) throw error
+      if (data) setNovedadesLaborales((prev: any[]) => [...prev, data])
+      setClasificandoDia(null)
+      setObservacionNovedadDia('')
+    } catch (e: any) {
+      alert(e.message || 'Error al clasificar día')
+    } finally {
+      setGuardandoNovedad(false)
+    }
+  }
 
   useEffect(() => {
     if (filtroActivo?.mes) setMes(filtroActivo.mes)
