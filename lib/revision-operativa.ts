@@ -153,6 +153,15 @@ export function calcularMinutosTardanza(horaInicio: string, horaFin: string, hor
   return Math.max(0, diferencia)
 }
 
+export function calcularMinutosTardanzaRegistro(
+  turno: { hora_inicio: string; hora_fin: string },
+  registro?: { hora_entrada_final?: string | null; hora_entrada_real?: string | null } | null,
+): number {
+  const horaEntrada = registro?.hora_entrada_final ?? registro?.hora_entrada_real
+  if (!horaEntrada) return 0
+  return calcularMinutosTardanza(turno.hora_inicio, turno.hora_fin, horaEntrada)
+}
+
 export function formatCuil(raw: string): string {
   const digits = raw.replace(/\D/g, '')
   if (digits.length !== 11) return raw

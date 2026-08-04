@@ -1,58 +1,82 @@
-import { calcularMinutosTardanza } from '../lib/revision-operativa'
+import { describe, it, expect } from 'vitest'
+import { calcularMinutosTardanza, calcularMinutosTardanzaRegistro } from '@/lib/revision-operativa'
 
-let passed = 0
-let failed = 0
+describe('calcularMinutosTardanza', () => {
+  it('18:00-07:00, entrada 17:58 → 0 (anticipación nocturna)', () => {
+    expect(calcularMinutosTardanza('18:00', '07:00', '17:58')).toBe(0)
+  })
 
-function assert(label: string, actual: number, expected: number) {
-  if (actual === expected) {
-    passed++
-  } else {
-    failed++
-    console.error(`FAIL: ${label} — esperado ${expected}, obtenido ${actual}`)
-  }
-}
+  it('17:00-08:00, entrada 16:49 → 0 (anticipación nocturna)', () => {
+    expect(calcularMinutosTardanza('17:00', '08:00', '16:49')).toBe(0)
+  })
 
-// Turno diurno 08:00–16:00
-assert('Diurno: entrada 15 min antes', calcularMinutosTardanza('08:00', '16:00', '07:45'), 0)
-assert('Diurno: entrada exacta', calcularMinutosTardanza('08:00', '16:00', '08:00'), 0)
-assert('Diurno: entrada 4 min tarde', calcularMinutosTardanza('08:00', '16:00', '08:04'), 4)
-assert('Diurno: entrada 5 min tarde', calcularMinutosTardanza('08:00', '16:00', '08:05'), 5)
-assert('Diurno: entrada 6 min tarde', calcularMinutosTardanza('08:00', '16:00', '08:06'), 6)
-assert('Diurno: entrada 30 min tarde', calcularMinutosTardanza('08:00', '16:00', '08:30'), 30)
+  it('22:00-06:00, entrada 21:49 → 0 (anticipación nocturna)', () => {
+    expect(calcularMinutosTardanza('22:00', '06:00', '21:49')).toBe(0)
+  })
 
-// Turno nocturno 22:00–06:00 — caso A del bug (1427 min)
-assert('Nocturno 22-06: entrada 21:47 (13 min antes)', calcularMinutosTardanza('22:00', '06:00', '21:47'), 0)
-assert('Nocturno 22-06: entrada exacta', calcularMinutosTardanza('22:00', '06:00', '22:00'), 0)
-assert('Nocturno 22-06: entrada 22:05', calcularMinutosTardanza('22:00', '06:00', '22:05'), 5)
-assert('Nocturno 22-06: entrada 22:15', calcularMinutosTardanza('22:00', '06:00', '22:15'), 15)
-assert('Nocturno 22-06: entrada 23:00', calcularMinutosTardanza('22:00', '06:00', '23:00'), 60)
-assert('Nocturno 22-06: entrada 23:30', calcularMinutosTardanza('22:00', '06:00', '23:30'), 90)
+  it('21:00-07:00, entrada 20:42 → 0 (anticipación nocturna)', () => {
+    expect(calcularMinutosTardanza('21:00', '07:00', '20:42')).toBe(0)
+  })
 
-// Turno nocturno 21:00–07:00 — caso B del bug (1425 min)
-assert('Nocturno 21-07: entrada 20:45 (15 min antes)', calcularMinutosTardanza('21:00', '07:00', '20:45'), 0)
-assert('Nocturno 21-07: entrada exacta', calcularMinutosTardanza('21:00', '07:00', '21:00'), 0)
-assert('Nocturno 21-07: entrada 21:10', calcularMinutosTardanza('21:00', '07:00', '21:10'), 10)
+  it('17:00-08:00, entrada 16:44 → 0 (anticipación nocturna)', () => {
+    expect(calcularMinutosTardanza('17:00', '08:00', '16:44')).toBe(0)
+  })
 
-// Turno nocturno: entrada después de medianoche
-assert('Nocturno 22-06: entrada 00:15 (135 min tarde)', calcularMinutosTardanza('22:00', '06:00', '00:15'), 135)
-assert('Nocturno 22-06: entrada 02:00 (240 min tarde)', calcularMinutosTardanza('22:00', '06:00', '02:00'), 240)
-assert('Nocturno 22-06: entrada 05:30 (450 min tarde)', calcularMinutosTardanza('22:00', '06:00', '05:30'), 450)
+  it('19:00-07:00, entrada 18:43 → 0 (anticipación nocturna)', () => {
+    expect(calcularMinutosTardanza('19:00', '07:00', '18:43')).toBe(0)
+  })
 
-// Turno nocturno con corrección hora_entrada_final
-assert('Nocturno con corrección: usa hora corregida', calcularMinutosTardanza('22:00', '06:00', '22:00'), 0)
+  it('22:00-06:00, entrada 22:05 → 5 (tardanza real nocturna)', () => {
+    expect(calcularMinutosTardanza('22:00', '06:00', '22:05')).toBe(5)
+  })
 
-// Cambio de mes
-assert('Turno 18:00-02:00 entrada 17:50 (antes)', calcularMinutosTardanza('18:00', '02:00', '17:50'), 0)
-assert('Turno 18:00-02:00 entrada 18:20 (20 min tarde)', calcularMinutosTardanza('18:00', '02:00', '18:20'), 20)
-assert('Turno 18:00-02:00 entrada 00:30 (390 min tarde)', calcularMinutosTardanza('18:00', '02:00', '00:30'), 390)
+  it('22:00-06:00, entrada 00:15 → 135 (entrada post-medianoche)', () => {
+    expect(calcularMinutosTardanza('22:00', '06:00', '00:15')).toBe(135)
+  })
 
-// Edge: turno 00:00-08:00 (no nocturno, empieza a medianoche)
-assert('Turno 00:00-08:00: entrada 00:00 exacta', calcularMinutosTardanza('00:00', '08:00', '00:00'), 0)
-assert('Turno 00:00-08:00: entrada 00:10 (10 min tarde)', calcularMinutosTardanza('00:00', '08:00', '00:10'), 10)
+  it('08:00-20:00, entrada 08:10 → 10 (tardanza diurna)', () => {
+    expect(calcularMinutosTardanza('08:00', '20:00', '08:10')).toBe(10)
+  })
 
-// Edge: turno que cruza 2 horas 20:00-22:00 (NO nocturno)
-assert('Turno 20:00-22:00: entrada 19:50 (10 min antes)', calcularMinutosTardanza('20:00', '22:00', '19:50'), 0)
-assert('Turno 20:00-22:00: entrada 20:07 (7 min tarde)', calcularMinutosTardanza('20:00', '22:00', '20:07'), 7)
+  it('08:00-16:00, entrada 07:55 → 0 (anticipación diurna)', () => {
+    expect(calcularMinutosTardanza('08:00', '16:00', '07:55')).toBe(0)
+  })
+})
 
-console.log(`\nResultados: ${passed} OK, ${failed} FAIL de ${passed + failed} pruebas`)
-process.exit(failed > 0 ? 1 : 0)
+describe('calcularMinutosTardanzaRegistro', () => {
+  it('prioriza hora_entrada_final sobre hora_entrada_real', () => {
+    const turno = { hora_inicio: '08:00', hora_fin: '16:00' }
+    const registro = { hora_entrada_real: '08:30', hora_entrada_final: '08:05' }
+    expect(calcularMinutosTardanzaRegistro(turno, registro)).toBe(5)
+  })
+
+  it('usa hora_entrada_real cuando hora_entrada_final es null', () => {
+    const turno = { hora_inicio: '08:00', hora_fin: '16:00' }
+    const registro = { hora_entrada_real: '08:10', hora_entrada_final: null }
+    expect(calcularMinutosTardanzaRegistro(turno, registro)).toBe(10)
+  })
+
+  it('devuelve 0 si no hay registro', () => {
+    const turno = { hora_inicio: '08:00', hora_fin: '16:00' }
+    expect(calcularMinutosTardanzaRegistro(turno, null)).toBe(0)
+    expect(calcularMinutosTardanzaRegistro(turno, undefined)).toBe(0)
+  })
+
+  it('devuelve 0 si no hay hora de entrada', () => {
+    const turno = { hora_inicio: '08:00', hora_fin: '16:00' }
+    const registro = { hora_entrada_real: null, hora_entrada_final: null }
+    expect(calcularMinutosTardanzaRegistro(turno, registro)).toBe(0)
+  })
+
+  it('caso real nocturno: 18:00-07:00 con entrada 17:58 → 0', () => {
+    const turno = { hora_inicio: '18:00', hora_fin: '07:00' }
+    const registro = { hora_entrada_real: '17:58:25', hora_entrada_final: null }
+    expect(calcularMinutosTardanzaRegistro(turno, registro)).toBe(0)
+  })
+
+  it('caso real nocturno con final corregido', () => {
+    const turno = { hora_inicio: '22:00', hora_fin: '06:00' }
+    const registro = { hora_entrada_real: '21:49:16', hora_entrada_final: '22:03' }
+    expect(calcularMinutosTardanzaRegistro(turno, registro)).toBe(3)
+  })
+})

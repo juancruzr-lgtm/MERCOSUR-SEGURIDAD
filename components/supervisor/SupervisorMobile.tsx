@@ -16,7 +16,7 @@ import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
 import { estadoSupervision, frecuenciaSupervision, supervisionProximaAVencer } from '@/lib/supervisiones'
-import { alertaEstaIntervenida, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
+import { alertaEstaIntervenida, calcularMinutosTardanzaRegistro, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOperativaCompartida } from '@/lib/revision-operativa'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
@@ -339,31 +339,6 @@ function minutosAtrasoTurno(turno: Turno, ahora = new Date()): number {
   return Math.max(0, Math.floor((ahora.getTime() - inicioTurno.getTime()) / 60000))
 }
 
-function fechaEntradaReal(turno: Turno, horaEntrada?: string | null): Date | null {
-  if (!horaEntrada) return null
-
-  const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
-  const finTurno = fechaHoraTurno(turno.fecha, turno.hora_fin)
-  const entradaReal = fechaHoraTurno(turno.fecha, horaEntrada)
-  if (!inicioTurno || !finTurno || !entradaReal) return null
-
-  if (finTurno <= inicioTurno) {
-    const diffMs = entradaReal.getTime() - inicioTurno.getTime()
-    if (diffMs < -12 * 60 * 60_000) {
-      entradaReal.setDate(entradaReal.getDate() + 1)
-    }
-  }
-
-  return entradaReal
-}
-
-function minutosTardeRegistro(turno: Turno, registro?: RegistroAsistencia): number {
-  const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
-  const entradaReal = fechaEntradaReal(turno, registro?.hora_entrada_final ?? registro?.hora_entrada_real)
-  if (!inicioTurno || !entradaReal) return 0
-
-  return Math.max(0, Math.floor((entradaReal.getTime() - inicioTurno.getTime()) / 60000))
-}
 
 function numeroGps(value: unknown): number | null {
   const numero = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
@@ -931,7 +906,7 @@ export default function SupervisorMobile({ user }: any) {
     const registro = getRegistro(turno.id)
     if (!registro?.hora_entrada_final && !registro?.hora_entrada_real) return false
 
-    return minutosTardeRegistro(turno, registro) > 0
+    return calcularMinutosTardanzaRegistro(turno, registro) > 0
   }
   const guardiaEsperadoId = (turno: Turno) => turno.guardia_original_id || turno.guardia_id || null
   const nombreGuardiaEsperado = (turno: Turno) => {
@@ -949,7 +924,7 @@ export default function SupervisorMobile({ user }: any) {
     const registro = getRegistro(turno.id)
 
     if (registro?.hora_salida_real) return 'finalizado'
-    if (registro?.hora_entrada_final || registro?.hora_entrada_real) return minutosTardeRegistro(turno, registro) > 0 ? 'tardanza' : 'en turno'
+    if (registro?.hora_entrada_final || registro?.hora_entrada_real) return calcularMinutosTardanzaRegistro(turno, registro) > 0 ? 'tardanza' : 'en turno'
     if (esDescubiertoOperativo(turno)) return 'descubierto'
     if (esTurnoReasignado(turno)) return 'reasignado'
     if (esSinIngreso(turno)) return 'pendiente de ingreso'
@@ -1135,7 +1110,7 @@ export default function SupervisorMobile({ user }: any) {
   const ocurrenciasTardanza = useMemo(
     () => registros.flatMap(registro => {
       const turno = turnos.find(item => item.id === registro.turno_id)
-      if (!turno || (!registro.hora_entrada_final && !registro.hora_entrada_real) || minutosTardeRegistro(turno, registro) <= 0) return []
+      if (!turno || (!registro.hora_entrada_final && !registro.hora_entrada_real) || calcularMinutosTardanzaRegistro(turno, registro) <= 0) return []
       return [{ turno, registro }]
     }),
     [turnos, registros],
@@ -3278,7 +3253,7 @@ export default function SupervisorMobile({ user }: any) {
                                   {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
                                 </>)})()}
                                 <div style={muted}>Entrada real: {horaCorta(registro?.hora_entrada_final ?? registro?.hora_entrada_real)}</div>
-                                <div style={{ ...muted, color: '#f59e0b' }}>Minutos tarde: {minutosTardeRegistro(turno, registro)}</div>
+                                <div style={{ ...muted, color: '#f59e0b' }}>Minutos tarde: {calcularMinutosTardanzaRegistro(turno, registro)}</div>
                                 <div style={{ ...muted, color: '#ef4444' }}>Estado: Tarde</div>
                               </div>
                               <span style={alertBadge('ingreso tarde')}>Tarde</span>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import { sendWebPush, type PushPayload, type PushSubscriptionRow } from '../../_lib/web-push'
+import { calcularMinutosTardanzaRegistro } from '@/lib/revision-operativa'
 import { turnoSinCoberturaOperativa } from '@/lib/turnos'
 import {
   FRECUENCIA_SUPERVISION_DEFECTO_HORAS,
@@ -201,19 +202,8 @@ function supervisoresAsignados(turno: TurnoPush, usuarios: UsuarioPush[]) {
     .map(usuario => usuario.id)
 }
 
-function minutosTarde(turno: TurnoPush, registro?: RegistroPush | null) {
-  const inicio = minutosHora(turno.hora_inicio)
-  const entrada = minutosHora(registro?.hora_entrada_final ?? registro?.hora_entrada_real)
-  if (inicio === null || entrada === null) return 0
-
-  let diferencia = entrada - inicio
-  const fin = minutosHora(turno.hora_fin)
-  if (fin !== null && fin <= inicio && diferencia < -720) diferencia += 1440
-  return Math.max(0, diferencia)
-}
-
 function esTardanza(turno: TurnoPush, registro?: RegistroPush | null) {
-  return Boolean((registro?.hora_entrada_final || registro?.hora_entrada_real) && minutosTarde(turno, registro) > 5)
+  return Boolean((registro?.hora_entrada_final || registro?.hora_entrada_real) && calcularMinutosTardanzaRegistro(turno, registro) > 5)
 }
 
 function distanciaTexto(value?: number | string | null) {

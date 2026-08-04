@@ -21,6 +21,7 @@ import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { indexarUltimaSupervision, objetivoSupervisionVencida } from '@/lib/supervisiones'
 import {
+  calcularMinutosTardanzaRegistro,
   claveOcurrenciaAlerta,
   compararIntervencionesMasReciente,
   detectarAlertasOperativas,
@@ -264,37 +265,11 @@ function fechaHoraTurnoLocal(fecha?: string | null, hora?: string | null): Date 
   return new Date(year, month - 1, day, hours, minutes, seconds)
 }
 
-function fechaEntradaRealTurno(turno: Turno, horaEntrada?: string | null): Date | null {
-  if (!horaEntrada) return null
-
-  const inicioTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_inicio)
-  const finTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_fin)
-  const entradaReal = fechaHoraTurnoLocal(turno.fecha, horaEntrada)
-  if (!inicioTurno || !finTurno || !entradaReal) return null
-
-  if (finTurno <= inicioTurno) {
-    const diffMs = entradaReal.getTime() - inicioTurno.getTime()
-    if (diffMs < -12 * 60 * 60_000) {
-      entradaReal.setDate(entradaReal.getDate() + 1)
-    }
-  }
-
-  return entradaReal
-}
-
 function minutosDesdeInicioTurno(turno: Turno, ahora = new Date()): number {
   const inicioTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_inicio)
   if (!inicioTurno) return 0
 
   return Math.max(0, Math.floor((ahora.getTime() - inicioTurno.getTime()) / 60000))
-}
-
-function minutosTardeAsistencia(turno: Turno, registro?: RegistroAsistencia | null): number {
-  const inicioTurno = fechaHoraTurnoLocal(turno.fecha, turno.hora_inicio)
-  const entradaReal = fechaEntradaRealTurno(turno, registro?.hora_entrada_final ?? registro?.hora_entrada_real)
-  if (!inicioTurno || !entradaReal) return 0
-
-  return Math.max(0, Math.floor((entradaReal.getTime() - inicioTurno.getTime()) / 60000))
 }
 
 function numeroGps(value: unknown): number | null {
@@ -1009,7 +984,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
         {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
         <div style={{ color:'#94a3b8', marginTop:4 }}>Entrada real: {hora(registro.hora_entrada_final ?? registro.hora_entrada_real)}</div>
-        <div style={{ color:'#f59e0b', marginTop:4 }}>Minutos tarde: {minutosTardeAsistencia(turno, registro)}</div>
+        <div style={{ color:'#f59e0b', marginTop:4 }}>Minutos tarde: {calcularMinutosTardanzaRegistro(turno, registro)}</div>
         <div style={{ color:'#ef4444', marginTop:4 }}>Estado: Tarde</div>
       </div>
     )
@@ -5828,7 +5803,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     if (!registro || !registroTieneEntradaConfirmada(registro)) return pasoVentanaFichaje(turno) ? 'Sin fichar' : 'Programado'
     if (registro.tipo_registro === 'carga_manual') return 'Manual'
     const horaEntrada = registro.hora_entrada_final ?? registro.hora_entrada_real
-    if (horaEntrada && minutosTardeAsistencia(turno, registro) > 0) return 'Tarde'
+    if (horaEntrada && calcularMinutosTardanzaRegistro(turno, registro) > 0) return 'Tarde'
     if (horaEntrada && !(registro.hora_salida_final ?? registro.hora_salida_real)) return 'En curso'
     return 'Cubierto'
   }
@@ -5838,7 +5813,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     if (registro?.tipo_registro === 'carga_manual') obs.push((registro as any)?.origen === 'reporte' ? 'Carga manual (desde reporte)' : 'Carga manual')
     if (turno.guardia_id && !registroTieneEntradaConfirmada(registro ?? {}) && pasoVentanaFichaje(turno)) obs.push('Sin fichar')
     if (registro?.hora_entrada_real && !registro.hora_salida_real) obs.push('En curso')
-    if (turno && registro && minutosTardeAsistencia(turno, registro) > 0) obs.push('Llegada tarde')
+    if (turno && registro && calcularMinutosTardanzaRegistro(turno, registro) > 0) obs.push('Llegada tarde')
     if (registro?.alerta_entrada === 'anticipada') obs.push('Entrada anticipada')
     if (registro?.alerta_salida === 'anticipada') obs.push('Salida anticipada')
     if (registro?.alerta_salida === 'posterior') obs.push('Salida posterior')
@@ -5893,7 +5868,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _tieneCobertura: tieneEntrada || horasLiquidables > 0,
       _sinFichar: !tieneEntrada && horasLiquidables === 0 && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
       _enCurso: Boolean(registro?.hora_entrada_real && !registro?.hora_salida_real),
-      _tarde: tieneEntrada && minutosTardeAsistencia(turno, registro) > 0,
+      _tarde: tieneEntrada && calcularMinutosTardanzaRegistro(turno, registro) > 0,
       _estadoCalendario: 'trabajado' as string,
     }
   })
@@ -8345,7 +8320,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       const configuracion: Record<TipoAlertaOperativaAdmin, { titulo: string, detalle: string, tono: AlertaOperativaAdmin['tono'] }> = {
         descubierto: { titulo:'Puesto sin cobertura', detalle:'Sin guardia asignado', tono:'danger' },
         sin_fichar: { titulo:'Guardia sin fichar / Objetivo en riesgo', detalle:`Cobertura en riesgo: ${minutosDesdeInicioTurno(turno)} minutos desde el inicio sin entrada registrada`, tono:'warn' },
-        tardanza: { titulo:'Tardanza registrada', detalle:`Llegó ${registro ? minutosTardeAsistencia(turno, registro) : 0} minutos tarde`, tono:'warn' },
+        tardanza: { titulo:'Tardanza registrada', detalle:`Llegó ${registro ? calcularMinutosTardanzaRegistro(turno, registro) : 0} minutos tarde`, tono:'warn' },
         fuera_radio: { titulo:'Fichaje fuera de radio', detalle:`Distancia: ${metrosGpsTexto(registro?.distancia_ingreso_metros)}`, tono:'danger' },
         salida_pendiente: { titulo:'Salida pendiente', detalle:'Tiene entrada registrada y no tiene salida luego del fin del turno', tono:'info' },
       }
