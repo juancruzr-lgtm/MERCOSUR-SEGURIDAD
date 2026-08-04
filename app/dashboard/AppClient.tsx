@@ -27,6 +27,7 @@ import {
   detectarAlertasOperativas,
   efectoIntervencionOperativa,
   estadoCicloVidaAlerta,
+  ESTADOS_SIN_OBLIGACION,
   intervencionesDeOcurrencia,
 } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/revision-operativa'
@@ -5498,6 +5499,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [turnoEditando, setTurnoEditando] = useState<Turno | null>(null)
   const [formEditTurno, setFormEditTurno] = useState({ fecha: '', hora_inicio: '', hora_fin: '', comentario: '' })
   const [editandoTurno, setEditandoTurno] = useState(false)
+  const [mostrarDiferencias, setMostrarDiferencias] = useState(false)
 
   const headersAdmin = async () => {
     const { data } = await supabase.auth.getSession()
@@ -6094,16 +6096,61 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     }
     return map
   })()
-  const totalHsLiquidablesMes = turnosMes.reduce((s: number, t: Turno) => {
-    if (objetivos.find((o: Objetivo) => o.id === t.objetivo_id)?.es_prueba) return s
+  const hoyISO = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const turnosBaseMes = turnosMes.filter((t: Turno) => {
+    if (objetivos.find((o: Objetivo) => o.id === t.objetivo_id)?.es_prueba) return false
+    if (ESTADOS_SIN_OBLIGACION.has(t.estado || '')) return false
+    if (t.fecha > hoyISO) return false
+    const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
+    if (reg?.hora_entrada_real && !reg?.hora_salida_real) return false
+    return true
+  })
+  const totalHsLiquidablesMes = turnosBaseMes.reduce((s: number, t: Turno) => {
     const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
     return s + resolverLineaLiquidacion(t, reg).horasLiquidables
   }, 0)
-  const totalHsProgramadasMes = turnosMes
+  const totalHsProgramadasMes = turnosBaseMes
     .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
   const pctCubierto = totalHsProgramadasMes > 0
     ? (totalHsLiquidablesMes / totalHsProgramadasMes * 100).toFixed(1)
     : null
+
+  const diferenciasMes = turnosBaseMes
+    .map((t: Turno) => {
+      const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
+      const linea = resolverLineaLiquidacion(t, reg)
+      const hsProg = horasProgramadasTurno(t)
+      const hsLiq = linea.horasLiquidables
+      const diff = hsLiq - hsProg
+      if (Math.abs(diff) < 0.01) return null
+      let motivo = ''
+      if (!reg) motivo = esPeriodoTransicion(t.fecha) ? 'Turno cubierto sin fichaje (transición)' : 'Sin registro de asistencia'
+      else if (reg.cobertura_anulada_at) motivo = 'Cobertura anulada'
+      else if (linea.origenRegistro === 'saneamiento') motivo = 'Saneamiento histórico'
+      else if (linea.origenRegistro === 'corregido') motivo = 'Horario corregido manualmente'
+      else if (linea.origenRegistro === 'supervisor') motivo = 'Carga de supervisor'
+      else if (linea.origenRegistro === 'administracion') motivo = 'Carga de administración'
+      else if (linea.origenRegistro === 'cierre_automatico') motivo = 'Cierre automático'
+      else if (reg.horas_liquidables != null) motivo = 'Horas liquidables ajustadas'
+      else if (reg.hora_entrada_final || reg.hora_salida_final) motivo = 'Tiempos corregidos'
+      else motivo = 'Requiere revisión'
+      return {
+        turno: t,
+        registro: reg,
+        linea,
+        hsProg,
+        hsLiq,
+        diff,
+        motivo,
+        guardiaId: t.guardia_id,
+        objetivoId: t.objetivo_id,
+      }
+    })
+    .filter(Boolean) as Array<{
+      turno: Turno; registro: any; linea: any;
+      hsProg: number; hsLiq: number; diff: number; motivo: string;
+      guardiaId: string | null; objetivoId: string | null;
+    }>
 
   const exportarPlanillaEmpleadoXLSX = async () => {
     if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
@@ -6428,17 +6475,17 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:10 }}>Resumen del mes — {mesLabel}</div>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:12 }}>
           <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #10b981' }}>
-            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas liquidables hasta ahora</div>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas liquidables hasta hoy</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#10b981' }}>{totalHsLiquidablesMes.toFixed(2)} hs</div>
-            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Registros cerrados · incluye correcciones y cargas manuales</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cerrados · excluye en curso y sin obligación</div>
           </div>
           <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #3b82f6' }}>
-            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas programadas del mes completo</div>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas programadas hasta hoy</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#3b82f6' }}>{totalHsProgramadasMes.toFixed(2)} hs</div>
-            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Incluye turnos futuros del mes</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cerrados · misma base que diferencia</div>
           </div>
-          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #f59e0b' }}>
-            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia</div>
+          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #f59e0b', cursor:'pointer', transition:'background .15s' }} onClick={() => setMostrarDiferencias(true)} title="Ver detalle de diferencias">
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia {diferenciasMes.length > 0 && <span style={{ color:'#f59e0b' }}>({diferenciasMes.length})</span>}</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color: (totalHsLiquidablesMes - totalHsProgramadasMes) < 0 ? '#ef4444' : '#10b981' }}>
               {(totalHsLiquidablesMes - totalHsProgramadasMes) >= 0 ? '+' : ''}{(totalHsLiquidablesMes - totalHsProgramadasMes).toFixed(2)} hs
             </div>
@@ -6731,6 +6778,89 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {mostrarDiferencias && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:9999, display:'flex', alignItems:'flex-start', justifyContent:'center', paddingTop:40, overflowY:'auto' }} onClick={() => setMostrarDiferencias(false)}>
+          <div style={{ background:'#0f172a', borderRadius:12, padding:24, width:'100%', maxWidth:960, border:'1px solid #1e2d42', marginBottom:40 }} onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+              <div>
+                <div style={{ fontSize:20, fontWeight:700, fontFamily:'Syne,sans-serif' }}>Diferencias del mes</div>
+                <div style={{ fontSize:13, color:'#94a3b8', marginTop:2 }}>{mesLabel} — {diferenciasMes.length} turno{diferenciasMes.length !== 1 ? 's' : ''} con diferencia entre horas programadas y liquidables</div>
+              </div>
+              <button style={{ background:'transparent', border:'none', color:'#64748b', fontSize:22, cursor:'pointer', padding:'4px 8px' }} onClick={() => setMostrarDiferencias(false)}>✕</button>
+            </div>
+            {diferenciasMes.length === 0 ? (
+              <div style={{ padding:32, textAlign:'center' as const, color:'#64748b' }}>No hay diferencias en turnos pasados de este mes.</div>
+            ) : (
+              <div style={{ overflowX:'auto' }}>
+                <table style={S.table}>
+                  <thead>
+                    <tr>
+                      <th style={S.th}>Fecha</th>
+                      <th style={S.th}>Guardia</th>
+                      <th style={S.th}>Objetivo</th>
+                      <th style={S.th}>Horario</th>
+                      <th style={{ ...S.th, textAlign:'right' as const }}>Prog.</th>
+                      <th style={{ ...S.th, textAlign:'right' as const }}>Liq.</th>
+                      <th style={{ ...S.th, textAlign:'right' as const }}>Dif.</th>
+                      <th style={S.th}>Motivo</th>
+                      <th style={S.th}>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {diferenciasMes.map(d => {
+                      const guardiaNombre = d.guardiaId ? (() => { const g = guardias.find((g: Usuario) => g.id === d.guardiaId); return g ? `${g.apellido}, ${g.nombre}` : '—' })() : '—'
+                      const objetivoNombre = d.objetivoId ? (objetivos.find((o: Objetivo) => o.id === d.objetivoId)?.nombre || '—') : '—'
+                      return (
+                        <tr key={d.turno.id}>
+                          <td style={S.td}>{formatFecha(d.turno.fecha)}</td>
+                          <td style={{ ...S.td, cursor: d.guardiaId ? 'pointer' : 'default', color: d.guardiaId ? '#38bdf8' : undefined }} onClick={() => {
+                            if (!d.guardiaId) return
+                            setEmpleadoId(d.guardiaId)
+                            setTab('planilla_empleado')
+                            setMostrarDiferencias(false)
+                          }}>{guardiaNombre}</td>
+                          <td style={{ ...S.td, cursor: d.objetivoId ? 'pointer' : 'default', color: d.objetivoId ? '#38bdf8' : undefined }} onClick={() => {
+                            if (!d.objetivoId) return
+                            setObjetivoId(d.objetivoId)
+                            setTab('planilla_objetivo')
+                            setMostrarDiferencias(false)
+                          }}>{objetivoNombre}</td>
+                          <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{formatHorarioAsignado(d.turno)}</td>
+                          <td style={{ ...S.td, textAlign:'right' as const, fontVariantNumeric:'tabular-nums' }}>{d.hsProg.toFixed(2)}</td>
+                          <td style={{ ...S.td, textAlign:'right' as const, fontVariantNumeric:'tabular-nums', color:'#10b981', fontWeight:700 }}>{d.hsLiq.toFixed(2)}</td>
+                          <td style={{ ...S.td, textAlign:'right' as const, fontVariantNumeric:'tabular-nums', fontWeight:700, color: d.diff < 0 ? '#ef4444' : '#10b981' }}>
+                            {d.diff >= 0 ? '+' : ''}{d.diff.toFixed(2)}
+                          </td>
+                          <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{d.motivo}</td>
+                          <td style={S.td}>
+                            <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                              <button style={{ ...S.btn, fontSize:11, padding:'3px 8px', background:'#1e293b', color:'#94a3b8', border:'1px solid #334155' }} onClick={() => { abrirEdicionTurno(d.turno.id); setMostrarDiferencias(false) }}>Editar turno</button>
+                              {d.registro && (
+                                <button style={{ ...S.btn, fontSize:11, padding:'3px 8px', background:'#1e293b', color:'#94a3b8', border:'1px solid #334155' }} onClick={() => { setRegistroCorrigiendo(d.registro); setMostrarDiferencias(false) }}>Corregir registro</button>
+                              )}
+                              {!d.registro && d.turno.guardia_id && (
+                                <button style={{ ...S.btn, fontSize:11, padding:'3px 8px', background:'#14532d', color:'#4ade80', border:'1px solid #166534' }} onClick={() => { setTurnoParaCargaManual(d.turno); setMostrarDiferencias(false) }}>Cargar asistencia</button>
+                              )}
+                              <button style={{ ...S.btn, fontSize:11, padding:'3px 8px', background:'#7f1d1d', color:'#fca5a5', border:'1px solid #991b1b' }} onClick={() => { setTurnoAnulando(d.turno); setMostrarDiferencias(false) }}>Anular</button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+                <div style={{ marginTop:12, padding:'8px 12px', background:'#1a2235', borderRadius:8, display:'flex', gap:16, fontSize:12, color:'#94a3b8' }}>
+                  <span>Total diferencia: <strong style={{ color: diferenciasMes.reduce((s, d) => s + d.diff, 0) < 0 ? '#ef4444' : '#10b981', fontVariantNumeric:'tabular-nums' }}>
+                    {diferenciasMes.reduce((s, d) => s + d.diff, 0) >= 0 ? '+' : ''}{diferenciasMes.reduce((s, d) => s + d.diff, 0).toFixed(2)} hs
+                  </strong></span>
+                  <span>{diferenciasMes.filter(d => d.diff < 0).length} con déficit · {diferenciasMes.filter(d => d.diff > 0).length} con excedente</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

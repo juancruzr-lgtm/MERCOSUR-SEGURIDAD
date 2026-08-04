@@ -105,7 +105,7 @@ const ACCIONES_ATENCION = new Set<AccionIntervencionOperativa>([
   'confirmar_asistencia',
 ])
 
-const ESTADOS_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancelado'])
+export const ESTADOS_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancelado'])
 const MS_MINUTO = 60_000
 const MS_DIA = 24 * 60 * MS_MINUTO
 
