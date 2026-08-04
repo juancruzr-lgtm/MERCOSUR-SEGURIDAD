@@ -2370,7 +2370,7 @@ function SupervisionesAdmin({
           {objetivosSinSupervision.length === 0 ? (
             <div style={{ color:'#64748b', fontSize:13 }}>Todos los objetivos activos están dentro de frecuencia.</div>
           ) : objetivosSinSupervision.map((objetivo: Objetivo) => {
-            const ultima = ultimaPorObjetivo.get(objetivo.id)
+            const ultima = ultimaIsoPorObjetivo.get(objetivo.id)
             return (
               <div
                 key={objetivo.id}
