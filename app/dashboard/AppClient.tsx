@@ -4451,7 +4451,8 @@ function CorregirRegistroModal({ registro, onClose, turnos, guardias, objetivos,
       return
     }
 
-    setRegistros((prev: RegistroAsistencia[]) => prev.map(r => r.id === registro.id ? { ...r, ...payload } as RegistroAsistencia : r))
+    const { data: updated } = await supabase.from('registros_asistencia').select('*').eq('id', registro.id).single()
+    setRegistros((prev: RegistroAsistencia[]) => prev.map(r => r.id === registro.id ? (updated ?? { ...r, ...payload }) as RegistroAsistencia : r))
     setLoadingEdicion(false)
     onClose()
   }
