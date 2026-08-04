@@ -6802,9 +6802,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                       <th style={S.th}>Fecha</th>
                       <th style={S.th}>Guardia</th>
                       <th style={S.th}>Objetivo</th>
-                      <th style={S.th}>Horario</th>
-                      <th style={{ ...S.th, textAlign:'right' as const }}>Prog.</th>
-                      <th style={{ ...S.th, textAlign:'right' as const }}>Liq.</th>
+                      <th style={S.th}>Ingreso Prog.</th>
+                      <th style={S.th}>Egreso Prog.</th>
+                      <th style={{ ...S.th, textAlign:'right' as const }}>Hs Prog.</th>
+                      <th style={{ ...S.th, textAlign:'right' as const }}>Hs Liq.</th>
                       <th style={{ ...S.th, textAlign:'right' as const }}>Dif.</th>
                       <th style={S.th}>Motivo</th>
                       <th style={S.th}>Acciones</th>
@@ -6829,7 +6830,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                             setTab('planilla_objetivo')
                             setMostrarDiferencias(false)
                           }}>{objetivoNombre}</td>
-                          <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{formatHorarioAsignado(d.turno)}</td>
+                          <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700, fontVariantNumeric:'tabular-nums' }}>{formatHoraTurno(d.turno.hora_inicio)}</td>
+                          <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700, fontVariantNumeric:'tabular-nums' }}>{formatHoraTurno(d.turno.hora_fin)}</td>
                           <td style={{ ...S.td, textAlign:'right' as const, fontVariantNumeric:'tabular-nums' }}>{d.hsProg.toFixed(2)}</td>
                           <td style={{ ...S.td, textAlign:'right' as const, fontVariantNumeric:'tabular-nums', color:'#10b981', fontWeight:700 }}>{d.hsLiq.toFixed(2)}</td>
                           <td style={{ ...S.td, textAlign:'right' as const, fontVariantNumeric:'tabular-nums', fontWeight:700, color: d.diff < 0 ? '#ef4444' : '#10b981' }}>
