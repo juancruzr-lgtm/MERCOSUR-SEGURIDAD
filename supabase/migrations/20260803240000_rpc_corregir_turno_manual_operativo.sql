@@ -27,6 +27,42 @@
 -- Retorna: jsonb con turno y registro actualizados
 -- ════════════════════════════════════════════════════════════════════
 
+-- ── 1. Tabla de idempotencia (ANTES de la función) ──────────────────
+
+CREATE TABLE IF NOT EXISTS public.correccion_turno_manual_log (
+  id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  operacion_id    uuid        NOT NULL UNIQUE,
+  registro_id     uuid        NOT NULL,
+  turno_id        uuid        NOT NULL,
+  ejecutado_por   uuid        NOT NULL REFERENCES public.usuarios(id),
+  solicitud_json  jsonb       NOT NULL,
+  cambios_aplicados jsonb     NOT NULL,
+  resultado_json  jsonb       NOT NULL,
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_correccion_turno_manual_log_registro
+  ON public.correccion_turno_manual_log (registro_id);
+
+ALTER TABLE public.correccion_turno_manual_log ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "admin_correccion_turno_manual_log"
+  ON public.correccion_turno_manual_log
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.usuarios u
+      WHERE u.auth_user_id = auth.uid()
+        AND u.rol = 'admin'
+        AND u.estado = 'activo'
+    )
+  );
+
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.correccion_turno_manual_log FROM anon, authenticated;
+GRANT SELECT ON TABLE public.correccion_turno_manual_log TO authenticated;
+
+-- ── 2. Función RPC ──────────────────────────────────────────────────
+
 CREATE OR REPLACE FUNCTION public.corregir_turno_manual_operativo(
   p_operacion_id  uuid,
   p_registro_id   uuid,
@@ -67,7 +103,7 @@ DECLARE
   v_motivo_limpio         text;
 BEGIN
 
-  -- ── 1. Validaciones básicas ──────────────────────────────────────
+  -- ── Validaciones básicas ─────────────────────────────────────────
 
   IF p_operacion_id IS NULL THEN
     RAISE EXCEPTION 'p_operacion_id es obligatorio';
@@ -78,7 +114,7 @@ BEGIN
     RAISE EXCEPTION 'El motivo de corrección es obligatorio';
   END IF;
 
-  -- ── 2. Autenticación y autorización ──────────────────────────────
+  -- ── Autenticación y autorización ─────────────────────────────────
 
   v_uid := auth.uid();
   IF v_uid IS NULL THEN
@@ -95,7 +131,7 @@ BEGIN
     RAISE EXCEPTION 'Solo administración activa puede corregir turnos manuales';
   END IF;
 
-  -- ── 3. Idempotencia ──────────────────────────────────────────────
+  -- ── Idempotencia ─────────────────────────────────────────────────
 
   v_solicitud_json := jsonb_build_object(
     'registro_id', p_registro_id,
@@ -117,7 +153,7 @@ BEGIN
     RETURN v_log_previo.resultado_json;
   END IF;
 
-  -- ── 4. Bloquear registro y turno ─────────────────────────────────
+  -- ── Bloquear registro y turno ────────────────────────────────────
 
   SELECT r.* INTO v_registro
   FROM public.registros_asistencia r
@@ -157,7 +193,7 @@ BEGIN
     RAISE EXCEPTION 'No autorizado para administrar este objetivo';
   END IF;
 
-  -- ── 5. Determinar qué campos cambian ─────────────────────────────
+  -- ── Determinar qué campos cambian ────────────────────────────────
 
   v_fecha_nueva := COALESCE(p_fecha, v_turno.fecha);
   v_hora_inicio_nueva := COALESCE(p_hora_inicio, v_turno.hora_inicio);
@@ -175,7 +211,7 @@ BEGIN
     RAISE EXCEPTION 'No se detectaron cambios respecto al turno actual';
   END IF;
 
-  -- ── 6. Verificar conflicto de fecha ──────────────────────────────
+  -- ── Verificar conflicto de fecha ─────────────────────────────────
 
   IF v_cambio_fecha THEN
     IF EXISTS (
@@ -193,7 +229,7 @@ BEGIN
     END IF;
   END IF;
 
-  -- ── 7. Actualizar turno ──────────────────────────────────────────
+  -- ── Actualizar turno ─────────────────────────────────────────────
 
   UPDATE public.turnos
   SET fecha       = v_fecha_nueva,
@@ -202,7 +238,7 @@ BEGIN
       objetivo_id = v_objetivo_id_nuevo
   WHERE id = v_turno.id;
 
-  -- ── 8. Auditoría de turno ────────────────────────────────────────
+  -- ── Auditoría de turno ───────────────────────────────────────────
 
   IF v_cambio_fecha THEN
     INSERT INTO public.turnos_auditoria (turno_id, campo, valor_anterior, valor_nuevo, modificado_por, comentario)
@@ -224,7 +260,7 @@ BEGIN
     VALUES (v_turno.id, 'objetivo_id', v_turno.objetivo_id::text, v_objetivo_id_nuevo::text, v_usuario.id, v_motivo_limpio);
   END IF;
 
-  -- ── 9. Recalcular horas_liquidables si cambió horario ────────────
+  -- ── Recalcular horas_liquidables si cambió horario ───────────────
 
   IF v_cambio_horario THEN
     v_horas_antes := COALESCE(v_registro.horas_liquidables, 0);
@@ -251,7 +287,7 @@ BEGIN
        'Recálculo por corrección de horario: ' || v_motivo_limpio);
   END IF;
 
-  -- ── 10. Auditoría de objetivo en registro ────────────────────────
+  -- ── Auditoría de objetivo en registro ────────────────────────────
 
   IF v_cambio_objetivo THEN
     UPDATE public.registros_asistencia
@@ -266,7 +302,7 @@ BEGIN
        v_motivo_limpio);
   END IF;
 
-  -- ── 11. Auditoría general ────────────────────────────────────────
+  -- ── Auditoría general ────────────────────────────────────────────
 
   INSERT INTO public.registros_asistencia_auditoria
     (registro_id, turno_id, modificado_por, campo, valor_anterior, valor_nuevo, comentario)
@@ -288,7 +324,7 @@ BEGIN
      )::text,
      v_motivo_limpio);
 
-  -- ── 12. Log de idempotencia ──────────────────────────────────────
+  -- ── Log de idempotencia ──────────────────────────────────────────
 
   INSERT INTO public.correccion_turno_manual_log (
     operacion_id,
@@ -326,7 +362,7 @@ BEGIN
     )
   );
 
-  -- ── 13. Retornar resultado ───────────────────────────────────────
+  -- ── Retornar resultado ───────────────────────────────────────────
 
   RETURN jsonb_build_object(
     'estado', 'aplicado',
@@ -347,24 +383,7 @@ BEGIN
 END;
 $$;
 
--- ── Tabla de idempotencia ────────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS public.correccion_turno_manual_log (
-  id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  operacion_id    uuid        NOT NULL UNIQUE,
-  registro_id     uuid        NOT NULL,
-  turno_id        uuid        NOT NULL,
-  ejecutado_por   uuid        NOT NULL REFERENCES public.usuarios(id),
-  solicitud_json  jsonb       NOT NULL,
-  cambios_aplicados jsonb     NOT NULL,
-  resultado_json  jsonb       NOT NULL,
-  created_at      timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_correccion_turno_manual_log_registro
-  ON public.correccion_turno_manual_log (registro_id);
-
--- ── Permisos ─────────────────────────────────────────────────────────────────
+-- ── 3. Permisos de la función ───────────────────────────────────────
 
 REVOKE EXECUTE ON FUNCTION public.corregir_turno_manual_operativo(uuid, uuid, date, time, time, uuid, text)
   FROM PUBLIC;
@@ -374,20 +393,3 @@ REVOKE EXECUTE ON FUNCTION public.corregir_turno_manual_operativo(uuid, uuid, da
 
 GRANT EXECUTE ON FUNCTION public.corregir_turno_manual_operativo(uuid, uuid, date, time, time, uuid, text)
   TO authenticated;
-
-ALTER TABLE public.correccion_turno_manual_log ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "admin_correccion_turno_manual_log"
-  ON public.correccion_turno_manual_log
-  FOR ALL
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.usuarios u
-      WHERE u.auth_user_id = auth.uid()
-        AND u.rol = 'admin'
-        AND u.estado = 'activo'
-    )
-  );
-
-REVOKE INSERT, UPDATE, DELETE ON TABLE public.correccion_turno_manual_log FROM anon, authenticated;
-GRANT SELECT ON TABLE public.correccion_turno_manual_log TO authenticated;

@@ -7,10 +7,13 @@
 
 BEGIN;
 
+SELECT set_config('request.jwt.claims', '{"sub": "67c2f633-b87c-432e-a372-7f842c923f30", "role": "authenticated"}', true);
+
 DO $$
 DECLARE
   v_turno_id       uuid;
   v_registro_id    uuid;
+  v_puesto_id      uuid;
   v_resultado      jsonb;
   v_horas          numeric;
   v_op1            uuid := gen_random_uuid();
@@ -26,8 +29,8 @@ BEGIN
 
   -- ── Buscar un turno con registro manual válido para las pruebas ──
 
-  SELECT r.id, r.turno_id, t.objetivo_id, r.guardia_id
-  INTO v_registro_id, v_turno_id, v_objetivo_id, v_guardia_id
+  SELECT r.id, r.turno_id, t.objetivo_id, r.guardia_id, t.puesto_id
+  INTO v_registro_id, v_turno_id, v_objetivo_id, v_guardia_id, v_puesto_id
   FROM registros_asistencia r
   JOIN turnos t ON t.id = r.turno_id
   WHERE r.tipo_registro = 'carga_manual'
@@ -102,9 +105,10 @@ BEGIN
   DECLARE
     v_otro_objetivo uuid;
   BEGIN
-    SELECT id INTO v_otro_objetivo
-    FROM objetivos
-    WHERE id <> v_objetivo_id
+    SELECT p.objetivo_id INTO v_otro_objetivo
+    FROM puestos p
+    WHERE p.id = v_puesto_id
+      AND p.objetivo_id <> v_objetivo_id
     LIMIT 1;
 
     IF v_otro_objetivo IS NOT NULL THEN
@@ -187,7 +191,7 @@ BEGIN
   DECLARE
     v_otro_obj uuid;
   BEGIN
-    SELECT id INTO v_otro_obj FROM objetivos WHERE id <> v_objetivo_id LIMIT 1;
+    SELECT p.objetivo_id INTO v_otro_obj FROM puestos p WHERE p.id = v_puesto_id AND p.objetivo_id <> v_objetivo_id LIMIT 1;
     IF v_otro_obj IS NOT NULL THEN
       BEGIN
         v_resultado := public.corregir_turno_manual_operativo(
