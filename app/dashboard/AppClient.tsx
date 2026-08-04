@@ -5667,15 +5667,27 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     const desdeStr = `${mes}-01`
     const ultimoDia = new Date(y, m, 0).getDate()
     const hastaStr = `${mes}-${String(ultimoDia).padStart(2, '0')}`
-    const desdeISO = new Date(Date.UTC(y, m - 1, 1, 3, 0, 0)).toISOString()
-    const hastaISO = new Date(Date.UTC(y, m, 1, 3, 0, 0)).toISOString()
+    const fetchAll = async (table: string, select: string, apply: (q: any) => any) => {
+      const PAGE = 1000
+      const all: any[] = []
+      let from = 0
+      while (true) {
+        const { data, error } = await apply(supabase.from(table).select(select)).range(from, from + PAGE - 1)
+        if (error) throw error
+        if (!data || data.length === 0) break
+        all.push(...data)
+        if (data.length < PAGE) break
+        from += PAGE
+      }
+      return all
+    }
     Promise.all([
-      supabase.from('turnos').select('*').gte('fecha', desdeStr).lte('fecha', hastaStr).order('fecha', { ascending: true }),
-      supabase.from('registros_asistencia').select('*').gte('created_at', desdeISO).lt('created_at', hastaISO).order('created_at', { ascending: false }),
+      fetchAll('turnos', '*', q => q.gte('fecha', desdeStr).lte('fecha', hastaStr).order('fecha', { ascending: true })),
+      fetchAll('registros_asistencia', '*,turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('created_at', { ascending: false })),
       supabase.from('novedades_laborales').select('*').eq('estado', 'aprobada').lte('fecha_desde', hastaStr).gte('fecha_hasta', desdeStr),
-    ]).then(([t, r, nl]) => {
-      setTurnosReportes(t.data ?? [])
-      setRegistrosReportes(r.data ?? [])
+    ]).then(([turnos, registros, nl]) => {
+      setTurnosReportes(turnos)
+      setRegistrosReportes(registros)
       setNovedadesLaborales(nl.data ?? [])
     })
   }, [mes])
@@ -6107,13 +6119,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     }
     return map
   })()
-  const totalHsLiquidablesMes = Array.from(_mejorRegistroPorTurnoReportes.entries()).reduce(
-    (s, [turnoId, r]) => {
-      const t = turnoPorId.get(turnoId)
-      return t ? s + resolverLineaLiquidacion(t, r).horasLiquidables : s
-    },
-    0,
-  )
+  const totalHsLiquidablesMes = turnosMes.reduce((s: number, t: Turno) => {
+    if (objetivos.find((o: Objetivo) => o.id === t.objetivo_id)?.es_prueba) return s
+    const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
+    return s + resolverLineaLiquidacion(t, reg).horasLiquidables
+  }, 0)
   const totalHsProgramadasMes = turnosMes
     .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
   const pctCubierto = totalHsProgramadasMes > 0
@@ -6278,10 +6288,14 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       }
       const turnosConAsistencia = principalesO.length
       const horasReales = principalesO.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
-      const horasLiquidables = principalesO.reduce((s: number, r: RegistroAsistencia) => {
+      const horasLiquidablesConReg = principalesO.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
         return turno ? s + horasLiquidablesRegistro(turno, r) : s
       }, 0)
+      const turnosSinRegObj = ts.filter((t: Turno) => !porTurnoO.has(t.id))
+      const horasLiquidablesSinReg = turnosSinRegObj.reduce((s: number, t: Turno) =>
+        s + resolverLineaLiquidacion(t, null).horasLiquidables, 0)
+      const horasLiquidables = horasLiquidablesConReg + horasLiquidablesSinReg
       const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
       const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length
       const turnosDescubiertos = ts.filter((t: Turno) => turnoSinCoberturaOperativa(t)).length
