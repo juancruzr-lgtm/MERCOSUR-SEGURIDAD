@@ -788,7 +788,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
   const registroActivo = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real)
   const guardiasEnTurno = new Set(registroActivo.map((r: RegistroAsistencia) => r.guardia_id)).size
-  const turnosCubiertos = turnosHoy.filter((t: Turno) => t.estado === 'cubierto' || tieneEntradaConfirmada(t)).length
   const alertasOperativasHoy = detectarAlertasOperativas({ turnos: turnosHoy, registros: registrosHoy })
   const idsTurnosDescubiertos = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'descubierto').map(a => a.turno_id))
   const idsTurnosSinFichar = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'sin_fichar').map(a => a.turno_id))
@@ -892,10 +891,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     { label: 'Objetivos activos', value: objetivosActivos.length, sub: `${objetivos.length} objetivos cargados`, color: semanticColors.info, page:'objetivos', filtro:{ tipo:'activos', label:'Objetivos activos' } },
     { label: 'Guardias activos', value: guardiasActivos.length, sub: `${usuarios.filter((g: Usuario) => esRolGuardia(g.rol)).length} guardias cargados`, color: semanticColors.success, page:'guardias', filtro:{ tipo:'activos', label:'Guardias activos' } },
     { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: brandColors.yellow, page:'turnos', filtro:{ tipo:'hoy', label:'Turnos de hoy' } },
-    { label: 'Turnos cubiertos', value: turnosCubiertos, sub: 'estado cubierto', color: semanticColors.success, page:'turnos', filtro:{ tipo:'cubiertos', label:'Turnos cubiertos hoy' } },
-    // Sustituye también a "Turnos en curso hoy", que contaba los mismos registros
-    // (entrada sin salida) y solo podía diferir si un guardia tuviera dos turnos
-    // abiertos a la vez.
     { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: semanticColors.success, page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
     { label: 'Turnos finalizados hoy', value: turnosFinalizadosHoy, sub: 'con entrada y salida', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Turnos finalizados hoy' } },
     { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'liquidables del día', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
@@ -3638,7 +3633,6 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   const filtrados = turnos.filter((t: Turno) => {
     if (idsFiltroTurnos.size > 0) return idsFiltroTurnos.has(t.id)
     if (t.fecha < rangoFecha.desde || t.fecha > rangoFecha.hasta) return false
-    if (filtroActivo?.tipo === 'cubiertos' && t.estado !== 'cubierto') return false
     if (filtroActivo?.tipo === 'descubiertos' && !turnoSinCoberturaOperativa(t)) return false
     if (filtroActivo?.tipo === 'sin_fichar' && (!t.guardia_id || tieneEntradaConfirmadaTurnos(t))) return false
     if (filtroActivo?.tipo === 'pendientes_asistencia' && (!t.guardia_id || (tieneEntradaConfirmadaTurnos(t) && tieneSalida(t)))) return false
