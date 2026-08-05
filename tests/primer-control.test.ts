@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accionesPrimerControl } from '@/lib/primer-control'
+import { accionesPrimerControl, filtrosDeFila } from '@/lib/primer-control'
 
 // Visibilidad de acciones del primer control del vigilador (OT-01/OT-02).
 // Las validaciones de identidad, idempotencia y no-modificación de horas
@@ -94,5 +94,42 @@ describe('accionesPrimerControl', () => {
       { estado: 'trabajado', estado_control: 'pendiente', permite_aceptar: true, turno_id: null },
       true,
     )).toEqual({ aceptar: false, solicitar: false })
+  })
+})
+
+// Clasificación de la bandeja del supervisor (Bloque D). Las validaciones de
+// alcance RLS, idempotencia de la RPC y conservación del texto original viven
+// en Postgres (revisar_primer_control + policies) y no son ejecutables acá
+// sin base de datos.
+
+describe('filtrosDeFila (bandeja del supervisor)', () => {
+  it('modificación solicitada con fichaje', () => {
+    expect(filtrosDeFila({ tieneFichaje: true, salidaAutomatica: false, estadoControl: 'modificacion_solicitada' }))
+      .toEqual(['modificaciones_solicitadas'])
+  })
+
+  it('sin respuesta del vigilador (con fichaje)', () => {
+    expect(filtrosDeFila({ tieneFichaje: true, salidaAutomatica: false, estadoControl: 'pendiente' }))
+      .toEqual(['sin_respuesta'])
+  })
+
+  it('aceptado por el vigilador', () => {
+    expect(filtrosDeFila({ tieneFichaje: true, salidaAutomatica: true, estadoControl: 'aceptado' }))
+      .toEqual(['aceptados'])
+  })
+
+  it('salida automática pendiente aparece en dos grupos', () => {
+    expect(filtrosDeFila({ tieneFichaje: true, salidaAutomatica: true, estadoControl: 'pendiente' }))
+      .toEqual(['sin_respuesta', 'salida_auto_pendiente'])
+  })
+
+  it('sin fichaje con solicitud', () => {
+    expect(filtrosDeFila({ tieneFichaje: false, salidaAutomatica: false, estadoControl: 'modificacion_solicitada' }))
+      .toEqual(['modificaciones_solicitadas', 'sin_fichaje_con_solicitud'])
+  })
+
+  it('sin fichaje y sin respuesta', () => {
+    expect(filtrosDeFila({ tieneFichaje: false, salidaAutomatica: false, estadoControl: 'pendiente' }))
+      .toEqual(['sin_respuesta', 'sin_fichaje_sin_respuesta'])
   })
 })

@@ -21,6 +21,65 @@ export const ETIQUETA_PRIMER_CONTROL: Record<EstadoPrimerControl, string> = {
 /** Etiqueta corta para la indicación de salida automática. */
 export const ETIQUETA_SALIDA_AUTOMATICA = 'Salida automática'
 
+// ── Ciclo de la solicitud de modificación (Bloque D) ─────────────────────────
+// El texto original del vigilador nunca se modifica; el estado avanza con
+// eventos registrados en revisiones_planilla.
+
+export const ESTADOS_SOLICITUD = ['pendiente', 'revisada', 'requiere_regularizacion', 'resuelta'] as const
+
+export type EstadoSolicitud = typeof ESTADOS_SOLICITUD[number]
+
+export const ETIQUETA_ESTADO_SOLICITUD: Record<EstadoSolicitud, string> = {
+  pendiente: 'Pendiente de revisión del supervisor',
+  revisada: 'Revisada por el supervisor',
+  requiere_regularizacion: 'Requiere regularización administrativa',
+  resuelta: 'Resuelta por Administración',
+}
+
+// ── Acciones del supervisor (Bloque D) ───────────────────────────────────────
+
+export const ACCIONES_SUPERVISOR = ['revisado', 'observacion', 'derivar_administracion'] as const
+
+export type AccionSupervisor = typeof ACCIONES_SUPERVISOR[number]
+
+export const ETIQUETA_ACCION_SUPERVISOR: Record<AccionSupervisor, string> = {
+  revisado: 'Marcar como revisado',
+  observacion: 'Dejar observación',
+  derivar_administracion: 'Requiere regularización administrativa',
+}
+
+// ── Filtros de la bandeja del supervisor ─────────────────────────────────────
+// Nombres de interfaz centralizados: cambiar acá, no en la bandeja.
+
+export const FILTROS_BANDEJA = [
+  { id: 'modificaciones_solicitadas', label: 'Modificaciones solicitadas' },
+  { id: 'sin_respuesta', label: 'Sin respuesta del vigilador' },
+  { id: 'aceptados', label: 'Aceptados por el vigilador' },
+  { id: 'salida_auto_pendiente', label: 'Salida automática pendiente' },
+  { id: 'sin_fichaje_con_solicitud', label: 'Sin fichaje con solicitud' },
+  { id: 'sin_fichaje_sin_respuesta', label: 'Sin fichaje y sin respuesta' },
+] as const
+
+export type FiltroBandeja = typeof FILTROS_BANDEJA[number]['id']
+
+export interface FilaClasificableBandeja {
+  tieneFichaje: boolean
+  salidaAutomatica: boolean
+  estadoControl: EstadoPrimerControl
+}
+
+/** A qué grupos de la bandeja pertenece una fila. Una fila puede estar en varios. */
+export function filtrosDeFila(f: FilaClasificableBandeja): FiltroBandeja[] {
+  const r: FiltroBandeja[] = []
+  if (f.estadoControl === 'modificacion_solicitada') r.push('modificaciones_solicitadas')
+  if (f.estadoControl === 'aceptado') r.push('aceptados')
+  if (f.estadoControl === 'pendiente') r.push('sin_respuesta')
+  if (f.salidaAutomatica && f.estadoControl === 'pendiente') r.push('salida_auto_pendiente')
+  if (!f.tieneFichaje && f.estadoControl === 'modificacion_solicitada') r.push('sin_fichaje_con_solicitud')
+  if (!f.tieneFichaje && f.estadoControl === 'pendiente') r.push('sin_fichaje_sin_respuesta')
+  return r
+}
+
 // ── Visibilidad de acciones del vigilador ────────────────────────────────────
 // Regla única (OT-01 continuidad):
 //   · pasado con asistencia, no revisado      → Aceptar + Solicitar modificación
