@@ -7184,11 +7184,15 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
   const [form, setForm] = useState({
     objetivo_id: '',
     turno_base_id: '',
+    puesto_id: '',
+    // Solo compatibilidad: se conserva el valor legacy al editar, no se edita.
     nombre_puesto: '',
     dias_semana: [1, 2, 3, 4, 5] as number[],
     guardia_habitual_id: '',
     activo: true,
   })
+  const [puestosForm, setPuestosForm] = useState<EstadoPuestos | null>(null)
+  const [errorForm, setErrorForm] = useState('')
   const [generando, setGenerando] = useState(false)
   const [mesGenerar, setMesGenerar] = useState(() => {
     const hoy = new Date()
@@ -7207,7 +7211,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     const [{ data: sv }, { data: tb }] = await Promise.all([
       supabase
         .from('servicios_objetivo')
-        .select(`*, objetivo:objetivos(nombre), turno_base:turnos_base(nombre, hora_inicio, hora_fin), guardia:usuarios(nombre, apellido)`)
+        .select(`*, objetivo:objetivos(nombre), turno_base:turnos_base(nombre, hora_inicio, hora_fin), guardia:usuarios(nombre, apellido), puesto:puestos(nombre)`)
         .order('created_at', { ascending: false }),
       supabase.from('turnos_base').select('*').eq('activo', true).order('hora_inicio'),
     ])
@@ -7218,19 +7222,40 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
 
   useEffect(() => { cargar() }, [])
 
-  const resetForm = () => setForm({ objetivo_id:'', turno_base_id:'', nombre_puesto:'', dias_semana:[1,2,3,4,5], guardia_habitual_id:'', activo:true })
+  const resetForm = () => { setForm({ objetivo_id:'', turno_base_id:'', puesto_id:'', nombre_puesto:'', dias_semana:[1,2,3,4,5], guardia_habitual_id:'', activo:true }); setErrorForm('') }
   const abrirNuevo = () => { resetForm(); setEditId(null); setModal(true) }
   const abrirEditar = (s: any) => {
-    setForm({ objetivo_id:s.objetivo_id, turno_base_id:s.turno_base_id, nombre_puesto:s.nombre_puesto||'', dias_semana:s.dias_semana||[1,2,3,4,5], guardia_habitual_id:s.guardia_habitual_id||'', activo:s.activo })
-    setEditId(s.id); setModal(true)
+    setForm({ objetivo_id:s.objetivo_id, turno_base_id:s.turno_base_id, puesto_id:s.puesto_id||'', nombre_puesto:s.nombre_puesto||'', dias_semana:s.dias_semana||[1,2,3,4,5], guardia_habitual_id:s.guardia_habitual_id||'', activo:s.activo })
+    setErrorForm(''); setEditId(s.id); setModal(true)
   }
+
+  // Puestos reales del objetivo elegido. Toda lógica nueva usa puesto_id;
+  // nombre_puesto queda solo como dato legacy visible.
+  useEffect(() => {
+    let vigente = true
+    if (!form.objetivo_id) { setPuestosForm(null); return }
+    obtenerPuestosActivos(form.objetivo_id).then(({ data }) => {
+      if (!vigente) return
+      setPuestosForm(data)
+      if (data?.caso === 'unico') {
+        setForm(prev => ({ ...prev, puesto_id: data.puestoUnicoId || '' }))
+      } else if (data && !data.puestos.some(p => p.id === form.puesto_id)) {
+        setForm(prev => ({ ...prev, puesto_id: '' }))
+      }
+    })
+    return () => { vigente = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.objetivo_id])
   const toggleDia = (num: number) => {
     setForm(prev => ({ ...prev, dias_semana: prev.dias_semana.includes(num) ? prev.dias_semana.filter(d => d !== num) : [...prev.dias_semana, num].sort((a,b) => a-b) }))
   }
   const guardar = async () => {
     if (!form.objetivo_id || !form.turno_base_id || form.dias_semana.length === 0) return
+    const puesto = resolverPuestoTurno(puestosForm, form.puesto_id)
+    if (!puesto.ok) { setErrorForm(puesto.error); return }
+    setErrorForm('')
     setLoading(true)
-    const payload = { objetivo_id:form.objetivo_id, turno_base_id:form.turno_base_id, nombre_puesto:form.nombre_puesto||null, dias_semana:form.dias_semana, guardia_habitual_id:form.guardia_habitual_id||null, activo:form.activo }
+    const payload = { objetivo_id:form.objetivo_id, turno_base_id:form.turno_base_id, puesto_id:puesto.puesto_id, nombre_puesto:form.nombre_puesto||null, dias_semana:form.dias_semana, guardia_habitual_id:form.guardia_habitual_id||null, activo:form.activo }
     const query = editId ? supabase.from('servicios_objetivo').update(payload).eq('id', editId) : supabase.from('servicios_objetivo').insert(payload)
     const { data } = await query.select('*, objetivo:objetivos(nombre), turno_base:turnos_base(nombre,hora_inicio,hora_fin), guardia:usuarios(nombre,apellido)').single()
     if (data) setServicios(prev => editId ? prev.map(s => s.id === editId ? data : s) : [data, ...prev])
@@ -7286,7 +7311,9 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     for (const srv of serviciosActivos) {
       if (!srv.turno_base || !srv.dias_semana?.length || !srv.guardia_habitual_id) continue
       const estadoPuestosSrv = puestosPorObjetivo.get(srv.objetivo_id) ?? null
-      const puestoSrv = resolverPuestoTurno(estadoPuestosSrv, null)
+      // El puesto real del servicio manda; si no lo tiene, aplica la regla
+      // única (objetivo con un solo puesto activo se resuelve solo).
+      const puestoSrv = resolverPuestoTurno(estadoPuestosSrv, srv.puesto_id ?? null)
       if (!puestoSrv.ok) {
         const nombreObjetivo = objetivos.find((o: Objetivo) => o.id === srv.objetivo_id)?.nombre || srv.objetivo_id
         objetivosOmitidos.set(srv.objetivo_id, `${nombreObjetivo}: ${puestoSrv.error}`)
@@ -7365,7 +7392,13 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
                       <div>{s.turno_base?.nombre || '—'}</div>
                       {s.turno_base && <div style={{ fontSize:11, color:'#f59e0b', fontFamily:'Syne,sans-serif', fontWeight:600 }}>{s.turno_base.hora_inicio} → {s.turno_base.hora_fin}</div>}
                     </td>
-                    <td style={{ ...S.td, color:'#94a3b8', fontSize:12 }}>{s.nombre_puesto || <span style={{ color:'#374151' }}>—</span>}</td>
+                    <td style={{ ...S.td, color:'#94a3b8', fontSize:12 }}>
+                      {s.puesto?.nombre
+                        ? <span style={{ color:'#e2e8f0' }}>{s.puesto.nombre}</span>
+                        : s.nombre_puesto
+                          ? <span title="Texto legacy sin vincular a un puesto real">{s.nombre_puesto} <span style={{ color:'#f59e0b', fontSize:10 }}>(texto)</span></span>
+                          : <span style={{ color:'#374151' }}>—</span>}
+                    </td>
                     <td style={S.td}>{diasLabel(s.dias_semana)}</td>
                     <td style={S.td}>{s.guardia ? `${s.guardia.apellido}, ${s.guardia.nombre}` : <span style={{ color:'#64748b' }}>Sin asignar</span>}</td>
                     <td style={S.td}><Badge type={s.activo ? 'activo' : 'inactivo'}>{s.activo ? 'Activo' : 'Inactivo'}</Badge></td>
@@ -7388,7 +7421,25 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
           footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => { setModal(false); setEditId(null); resetForm() }}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
           <div style={{ marginBottom:16 }}><label style={S.label}>Objetivo *</label><select style={S.select} value={form.objetivo_id} onChange={e => setForm({...form, objetivo_id:e.target.value})}><option value="">Seleccionar objetivo...</option>{objetivos.filter((o: any) => o.estado === 'activo').map((o: any) => <option key={o.id} value={o.id}>{o.nombre}</option>)}</select></div>
           <div style={{ marginBottom:16 }}><label style={S.label}>Turno Base *</label><select style={S.select} value={form.turno_base_id} onChange={e => setForm({...form, turno_base_id:e.target.value})}><option value="">Seleccionar turno...</option>{turnosBase.map((tb: any) => <option key={tb.id} value={tb.id}>{tb.nombre} ({tb.hora_inicio} → {tb.hora_fin})</option>)}</select></div>
-          <div style={{ marginBottom:16 }}><label style={S.label}>Nombre del puesto (opcional)</label><input style={S.input} value={form.nombre_puesto} onChange={e => setForm({...form, nombre_puesto:e.target.value})} placeholder="ej: Portería principal" /></div>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Puesto *</label>
+            {!form.objetivo_id ? (
+              <div style={{ fontSize:12, color:'#64748b', marginTop:6 }}>Elegí primero el objetivo.</div>
+            ) : puestosForm === null ? (
+              <div style={{ fontSize:12, color:'#64748b', marginTop:6 }}>Cargando puestos…</div>
+            ) : puestosForm.caso === 'sin_puestos' ? (
+              <div style={{ fontSize:12, color:'#ef4444', marginTop:6 }}>{MENSAJE_SIN_PUESTOS_ACTIVOS}</div>
+            ) : (
+              <select style={S.select} value={form.puesto_id} onChange={e => setForm({...form, puesto_id:e.target.value})}>
+                <option value="">Seleccionar puesto...</option>
+                {puestosForm.puestos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
+            )}
+            {form.nombre_puesto && !form.puesto_id && (
+              <div style={{ fontSize:11, color:'#f59e0b', marginTop:6 }}>Texto anterior sin vincular: “{form.nombre_puesto}”. Elegí el puesto real que corresponde.</div>
+            )}
+            {errorForm && <div style={{ fontSize:12, color:'#ef4444', marginTop:6 }}>{errorForm}</div>}
+          </div>
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Días de la semana *</label>
             <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:6 }}>
