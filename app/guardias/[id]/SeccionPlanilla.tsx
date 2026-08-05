@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { track } from '@/lib/telemetry'
 import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
-import { ETIQUETA_PRIMER_CONTROL, ETIQUETA_SALIDA_AUTOMATICA } from '@/lib/primer-control'
+import { ETIQUETA_PRIMER_CONTROL, ETIQUETA_SALIDA_AUTOMATICA, accionesPrimerControl } from '@/lib/primer-control'
 import type { EstadoPrimerControl } from '@/lib/primer-control'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
@@ -22,6 +22,7 @@ interface FilaPlanilla {
   puesto_nombre?: string | null
   salida_automatica?: boolean
   estado_control?: EstadoPrimerControl | null
+  permite_aceptar?: boolean
 }
 
 interface DatosPlanilla {
@@ -446,12 +447,7 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                     opacity: opacidad,
                     ...(conSalidaAuto && fila.estado_control === 'pendiente' ? { background: '#f59e0b10' } : {}),
                   }
-                  const mostrarBotones = Boolean(
-                    datos.es_titular &&
-                    fila.estado === 'trabajado' &&
-                    fila.estado_control === 'pendiente' &&
-                    fila.turno_id
-                  )
+                  const acciones = accionesPrimerControl(fila, Boolean(datos.es_titular))
                   return (
                     <tr key={`${fila.fecha}-${fila.hora_entrada ?? 'sp'}-${fila.turno_id ?? i}`} style={estilo}>
                       <td style={S.td(ultimo)}>{formatearFecha(fila.fecha)}</td>
@@ -493,23 +489,27 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                             ? <span style={{ color: '#10b981', fontSize: 11, fontWeight: 600 }}>✓ {ETIQUETA_PRIMER_CONTROL.aceptado}</span>
                             : fila.estado_control === 'modificacion_solicitada'
                               ? <span style={{ color: '#f59e0b', fontSize: 11, fontWeight: 600 }}>{ETIQUETA_PRIMER_CONTROL.modificacion_solicitada}</span>
-                              : mostrarBotones
+                              : (acciones.aceptar || acciones.solicitar)
                                 ? (
                                   <span style={{ display: 'inline-flex', gap: 6 }}>
-                                    <button
-                                      style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #16653488', background: '#14532d', color: '#4ade80', fontSize: 11, fontWeight: 600, cursor: 'pointer', opacity: accionando === fila.turno_id ? 0.5 : 1 }}
-                                      disabled={accionando !== null}
-                                      onClick={() => aceptarTurno(fila)}
-                                    >
-                                      {accionando === fila.turno_id ? 'Aceptando…' : 'Aceptar'}
-                                    </button>
-                                    <button
-                                      style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #92400e88', background: '#78350f', color: '#fbbf24', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
-                                      disabled={accionando !== null}
-                                      onClick={() => { setFilaSolicitud(fila); setTextoSolicitud(''); setErrorAccion(null) }}
-                                    >
-                                      Solicitar modificación
-                                    </button>
+                                    {acciones.aceptar && (
+                                      <button
+                                        style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #16653488', background: '#14532d', color: '#4ade80', fontSize: 11, fontWeight: 600, cursor: 'pointer', opacity: accionando === fila.turno_id ? 0.5 : 1 }}
+                                        disabled={accionando !== null}
+                                        onClick={() => aceptarTurno(fila)}
+                                      >
+                                        {accionando === fila.turno_id ? 'Aceptando…' : 'Aceptar'}
+                                      </button>
+                                    )}
+                                    {acciones.solicitar && (
+                                      <button
+                                        style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #92400e88', background: '#78350f', color: '#fbbf24', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                                        disabled={accionando !== null}
+                                        onClick={() => { setFilaSolicitud(fila); setTextoSolicitud(''); setErrorAccion(null) }}
+                                      >
+                                        Solicitar modificación
+                                      </button>
+                                    )}
                                   </span>
                                 )
                                 : <span style={{ color: '#64748b', fontSize: 11 }}>{ETIQUETA_PRIMER_CONTROL.pendiente}</span>}

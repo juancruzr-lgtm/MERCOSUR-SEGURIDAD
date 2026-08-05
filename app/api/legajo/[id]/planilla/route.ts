@@ -37,6 +37,17 @@ function diaSemana(iso: string): string {
   return DIAS_ES[new Date(y, m - 1, d).getDay()]
 }
 
+// Fin del turno como instante (Argentina UTC-3); nocturnos terminan al día siguiente.
+function turnoFinalizado(fecha: string, horaInicio: string, horaFin: string): boolean {
+  const [y, m, d] = fecha.slice(0, 10).split('-').map(Number)
+  const [hI, mI] = horaInicio.split(':').map(Number)
+  const [hF, mF] = horaFin.split(':').map(Number)
+  if (![y, m, d, hI, mI, hF, mF].every(Number.isFinite)) return false
+  const diaExtra = (hF < hI || (hF === hI && mF <= mI)) ? 1 : 0
+  const finMs = Date.UTC(y, m - 1, d + diaExtra, hF + 3, mF)
+  return finMs < Date.now()
+}
+
 // ── Tipos de respuesta ────────────────────────────────────────────────────────
 
 export interface FilaPlanilla {
@@ -55,6 +66,8 @@ export interface FilaPlanilla {
   salida_automatica: boolean
   // Primer control del vigilador — null cuando la fila no es revisable
   estado_control: EstadoPrimerControl | null
+  // false en turnos pasados sin fichaje: solo pueden solicitar modificación
+  permite_aceptar: boolean
 }
 
 export interface RespuestaPlanilla {
@@ -217,6 +230,7 @@ export async function GET(
       puesto_nombre:   (t.puesto as any)?.nombre ?? null,
       salida_automatica: Boolean(r.cierre_automatico),
       estado_control:  estado === 'trabajado' ? 'pendiente' : null,
+      permite_aceptar: estado === 'trabajado',
     })
   }
 
@@ -234,6 +248,9 @@ export async function GET(
   for (const t of (turnosProgramados ?? [])) {
     if (fechasConRegistro.has(t.fecha)) continue
     fechasConRegistro.add(t.fecha)
+    // Turno pasado sin fichaje: revisable solo mediante solicitud de
+    // modificación (nunca Aceptar — no hay asistencia que aceptar).
+    const yaFinalizado = turnoFinalizado(t.fecha, t.hora_inicio ?? '00:00', t.hora_fin ?? '00:00')
     filas.push({
       fecha: t.fecha,
       dia_semana: diaSemana(t.fecha),
@@ -248,7 +265,8 @@ export async function GET(
       turno_id: t.id,
       puesto_nombre: ((t as any).puesto)?.nombre ?? null,
       salida_automatica: false,
-      estado_control: null,
+      estado_control: yaFinalizado ? 'pendiente' : null,
+      permite_aceptar: false,
     })
   }
 
@@ -273,6 +291,7 @@ export async function GET(
       puesto_nombre: null,
       salida_automatica: false,
       estado_control: null,
+      permite_aceptar: false,
     })
   }
 
