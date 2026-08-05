@@ -4,6 +4,7 @@ import { puedeVerLegajo } from '@/lib/legajo'
 import { effectiveGuardia, selectRegistroPrincipal, resolverLineaLiquidacion } from '@/lib/liquidacion'
 import { caracteristicaTurno } from '@/lib/caracteristica-turno'
 import type { CaracteristicaTurno } from '@/lib/caracteristica-turno'
+import type { EstadoPrimerControl } from '@/lib/primer-control'
 
 export const runtime = 'nodejs'
 
@@ -49,6 +50,11 @@ export interface FilaPlanilla {
   origen_etiqueta: string
   estado: 'trabajado' | 'en_curso' | 'programado' | 'sin_programacion'
   caracteristica: CaracteristicaTurno | null
+  turno_id: string | null
+  puesto_nombre: string | null
+  salida_automatica: boolean
+  // Primer control del vigilador — null cuando la fila no es revisable
+  estado_control: EstadoPrimerControl | null
 }
 
 export interface RespuestaPlanilla {
@@ -57,6 +63,9 @@ export interface RespuestaPlanilla {
   mes: string
   desde: string
   hasta: string
+  // true si quien consulta es el titular del legajo (habilita los botones)
+  es_titular: boolean
+  pendientes_revision: number
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -118,8 +127,9 @@ export async function GET(
       objetivo_final_id, tipo_registro,
       horas_liquidables, origen_cobertura, cobertura_anulada_at, cierre_automatico,
       turno:turnos!inner(
-        id, fecha, hora_inicio, hora_fin, objetivo_id, tipo_evento,
-        objetivo:objetivos(nombre, es_prueba)
+        id, fecha, hora_inicio, hora_fin, objetivo_id, tipo_evento, puesto_id,
+        objetivo:objetivos(nombre, es_prueba),
+        puesto:puestos(nombre)
       )
     `)
     .or(`guardia_id.eq.${empleadoId},guardia_final_id.eq.${empleadoId}`)
@@ -203,6 +213,10 @@ export async function GET(
       origen_etiqueta: linea.origenEtiqueta,
       estado,
       caracteristica:  caracteristicaTurno(t.tipo_evento),
+      turno_id:        t.id,
+      puesto_nombre:   (t.puesto as any)?.nombre ?? null,
+      salida_automatica: Boolean(r.cierre_automatico),
+      estado_control:  estado === 'trabajado' ? 'pendiente' : null,
     })
   }
 
@@ -211,7 +225,7 @@ export async function GET(
   // ── Turnos programados sin registro ────────────────────────────────────────
   const { data: turnosProgramados } = await admin.client
     .from('turnos')
-    .select('id, fecha, hora_inicio, hora_fin, objetivo_id, tipo_evento, objetivo:objetivos(nombre)')
+    .select('id, fecha, hora_inicio, hora_fin, objetivo_id, tipo_evento, puesto_id, objetivo:objetivos(nombre), puesto:puestos(nombre)')
     .eq('guardia_id', empleadoId)
     .gte('fecha', desde)
     .lte('fecha', hasta)
@@ -231,6 +245,10 @@ export async function GET(
       origen_etiqueta: 'Turno programado',
       estado: 'programado',
       caracteristica: caracteristicaTurno((t as any).tipo_evento),
+      turno_id: t.id,
+      puesto_nombre: ((t as any).puesto)?.nombre ?? null,
+      salida_automatica: false,
+      estado_control: null,
     })
   }
 
@@ -251,7 +269,41 @@ export async function GET(
       origen_etiqueta: '',
       estado: 'sin_programacion',
       caracteristica: null,
+      turno_id: null,
+      puesto_nombre: null,
+      salida_automatica: false,
+      estado_control: null,
     })
+  }
+
+  // ── Primer control del vigilador: resolver estado por turno ───────────────
+  // Solicitud pendiente > aceptado > pendiente de revisión.
+  // Si las tablas del Bloque C aún no existen, las filas quedan 'pendiente'.
+  const turnoIdsRevisables = filas
+    .filter(f => f.estado_control !== null && f.turno_id)
+    .map(f => f.turno_id as string)
+
+  if (turnoIdsRevisables.length > 0) {
+    const [acepts, solis] = await Promise.all([
+      admin.client
+        .from('aceptaciones_planilla')
+        .select('turno_id')
+        .eq('empleado_id', empleadoId)
+        .in('turno_id', turnoIdsRevisables),
+      admin.client
+        .from('solicitudes_modificacion_planilla')
+        .select('turno_id')
+        .eq('empleado_id', empleadoId)
+        .eq('estado', 'pendiente')
+        .in('turno_id', turnoIdsRevisables),
+    ])
+    const aceptados = new Set((acepts.data ?? []).map((a: any) => a.turno_id))
+    const solicitados = new Set((solis.data ?? []).map((s: any) => s.turno_id))
+    for (const f of filas) {
+      if (f.estado_control === null || !f.turno_id) continue
+      if (solicitados.has(f.turno_id)) f.estado_control = 'modificacion_solicitada'
+      else if (aceptados.has(f.turno_id)) f.estado_control = 'aceptado'
+    }
   }
 
   // ── Ordenar por fecha y hora de entrada ───────────────────────────────────
@@ -264,6 +316,10 @@ export async function GET(
   })
 
   const total_horas = Number(filas.reduce((s, f) => s + f.horas, 0).toFixed(2))
+  const es_titular = solicitante.id === empleadoId
+  const pendientes_revision = filas.filter(f => f.estado_control === 'pendiente').length
 
-  return NextResponse.json({ filas, total_horas, mes, desde, hasta } satisfies RespuestaPlanilla)
+  return NextResponse.json({
+    filas, total_horas, mes, desde, hasta, es_titular, pendientes_revision,
+  } satisfies RespuestaPlanilla)
 }

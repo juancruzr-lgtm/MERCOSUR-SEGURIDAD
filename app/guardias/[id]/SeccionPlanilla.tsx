@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { track } from '@/lib/telemetry'
 import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
+import { ETIQUETA_PRIMER_CONTROL, ETIQUETA_SALIDA_AUTOMATICA } from '@/lib/primer-control'
+import type { EstadoPrimerControl } from '@/lib/primer-control'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -16,6 +18,10 @@ interface FilaPlanilla {
   objetivo_nombre: string | null
   estado?: 'trabajado' | 'en_curso' | 'programado' | 'sin_programacion'
   caracteristica?: 'normal' | 'cobertura' | 'capacitacion' | null
+  turno_id?: string | null
+  puesto_nombre?: string | null
+  salida_automatica?: boolean
+  estado_control?: EstadoPrimerControl | null
 }
 
 interface DatosPlanilla {
@@ -24,6 +30,8 @@ interface DatosPlanilla {
   mes: string
   desde: string
   hasta: string
+  es_titular?: boolean
+  pendientes_revision?: number
 }
 
 interface OpcionMes {
@@ -207,6 +215,13 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
   const [datos, setDatos] = useState<DatosPlanilla | null>(null)
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Primer control del vigilador
+  const [recargas, setRecargas] = useState(0)
+  const [accionando, setAccionando] = useState<string | null>(null)
+  const [errorAccion, setErrorAccion] = useState<string | null>(null)
+  const [filaSolicitud, setFilaSolicitud] = useState<FilaPlanilla | null>(null)
+  const [textoSolicitud, setTextoSolicitud] = useState('')
+  const [enviandoSolicitud, setEnviandoSolicitud] = useState(false)
 
   // Protección StrictMode — un evento por carga real
   const telemetriaIniciada = useRef(false)
@@ -298,7 +313,63 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
 
     void cargar()
     return () => { activo = false }
-  }, [empleadoId, mesSeleccionado])
+  }, [empleadoId, mesSeleccionado, recargas])
+
+  // Releer la respuesta autoritativa del servidor después de cada acción
+  const recargarPlanilla = () => setRecargas(v => v + 1)
+
+  const aceptarTurno = async (fila: FilaPlanilla) => {
+    if (!fila.turno_id || accionando) return
+    setAccionando(fila.turno_id)
+    setErrorAccion(null)
+    try {
+      const { error: rpcError } = await supabase.rpc('aceptar_turno_planilla', {
+        p_turno_id: fila.turno_id,
+      })
+      if (rpcError) throw new Error(rpcError.message)
+      track('planilla_turno_aceptado', {
+        screen: 'legajo_empleado',
+        screen_section: 'planilla',
+        category: 'guardia',
+        value_json: { empleado_id: empleadoId, turno_id: fila.turno_id, salida_automatica: Boolean(fila.salida_automatica) },
+      })
+      recargarPlanilla()
+    } catch (e) {
+      setErrorAccion(e instanceof Error ? e.message : 'No se pudo registrar la aceptación')
+    } finally {
+      setAccionando(null)
+    }
+  }
+
+  const enviarSolicitud = async () => {
+    if (!filaSolicitud?.turno_id || enviandoSolicitud) return
+    if (textoSolicitud.trim().length < 3) {
+      setErrorAccion('Debe indicar qué desea modificar')
+      return
+    }
+    setEnviandoSolicitud(true)
+    setErrorAccion(null)
+    try {
+      const { error: rpcError } = await supabase.rpc('solicitar_modificacion_planilla', {
+        p_turno_id: filaSolicitud.turno_id,
+        p_texto: textoSolicitud.trim(),
+      })
+      if (rpcError) throw new Error(rpcError.message)
+      track('planilla_modificacion_solicitada', {
+        screen: 'legajo_empleado',
+        screen_section: 'planilla',
+        category: 'guardia',
+        value_json: { empleado_id: empleadoId, turno_id: filaSolicitud.turno_id },
+      })
+      setFilaSolicitud(null)
+      setTextoSolicitud('')
+      recargarPlanilla()
+    } catch (e) {
+      setErrorAccion(e instanceof Error ? e.message : 'No se pudo enviar la solicitud')
+    } finally {
+      setEnviandoSolicitud(false)
+    }
+  }
 
   const cambiarMes = (mes: string) => {
     if (mes === mesSeleccionado) return
@@ -358,7 +429,9 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                   <th style={S.th}>Salida</th>
                   <th style={S.th}>Horas</th>
                   <th style={S.th}>Objetivo</th>
+                  <th style={S.th}>Puesto</th>
                   <th style={S.th}>Tipo</th>
+                  <th style={S.th}>Revisión</th>
                 </tr>
               </thead>
               <tbody>
@@ -367,9 +440,20 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                   const esSinProg = fila.estado === 'sin_programacion'
                   const esProgramado = fila.estado === 'programado'
                   const opacidad = esSinProg ? 0.4 : esProgramado ? 0.6 : 1
-                  const estilo = { ...(i % 2 === 0 ? S.trImpar : S.trPar), opacity: opacidad }
+                  const conSalidaAuto = Boolean(fila.salida_automatica)
+                  const estilo = {
+                    ...(i % 2 === 0 ? S.trImpar : S.trPar),
+                    opacity: opacidad,
+                    ...(conSalidaAuto && fila.estado_control === 'pendiente' ? { background: '#f59e0b10' } : {}),
+                  }
+                  const mostrarBotones = Boolean(
+                    datos.es_titular &&
+                    fila.estado === 'trabajado' &&
+                    fila.estado_control === 'pendiente' &&
+                    fila.turno_id
+                  )
                   return (
-                    <tr key={`${fila.fecha}-${fila.hora_entrada ?? 'sp'}`} style={estilo}>
+                    <tr key={`${fila.fecha}-${fila.hora_entrada ?? 'sp'}-${fila.turno_id ?? i}`} style={estilo}>
                       <td style={S.td(ultimo)}>{formatearFecha(fila.fecha)}</td>
                       <td style={{ ...S.td(ultimo), color: '#64748b' }}>{fila.dia_semana}</td>
                       <td style={S.td(ultimo)}>
@@ -385,15 +469,50 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                             ? <span style={{ color: '#64748b', fontSize: 11 }}>{fila.hora_salida ?? '—'}</span>
                             : fila.estado === 'en_curso'
                               ? <span style={{ color: '#f59e0b', fontSize: 11 }}>En curso</span>
-                              : fila.hora_salida ?? '—'}
+                              : (
+                                <>
+                                  {fila.hora_salida ?? '—'}
+                                  {conSalidaAuto && (
+                                    <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#f59e0b', border: '1px solid #f59e0b55', borderRadius: 4, padding: '1px 4px', textTransform: 'uppercase' as const }} title={ETIQUETA_SALIDA_AUTOMATICA}>auto</span>
+                                  )}
+                                </>
+                              )}
                       </td>
                       <td style={S.tdHoras(ultimo)}>{esSinProg || esProgramado ? '—' : formatearHoras(fila.horas)}</td>
                       <td style={S.tdObjetivo(ultimo)}>{esProgramado ? <span style={{ fontStyle: 'italic' }}>{fila.objetivo_nombre ?? '—'}</span> : (fila.objetivo_nombre ?? '—')}</td>
+                      <td style={{ ...S.td(ultimo), color: '#94a3b8', fontSize: 12 }}>{fila.puesto_nombre ?? '—'}</td>
                       <td style={S.td(ultimo)}>
                         {esSinProg || !fila.caracteristica ? '—'
                           : fila.caracteristica === 'normal'
                             ? <span style={{ color: '#64748b', fontSize: 11 }}>{etiquetaCaracteristica(fila.caracteristica)}</span>
                             : <span style={{ color: fila.caracteristica === 'capacitacion' ? '#a78bfa' : '#38bdf8', fontSize: 11, fontWeight: 600 }}>{etiquetaCaracteristica(fila.caracteristica)}</span>}
+                      </td>
+                      <td style={S.td(ultimo)}>
+                        {fila.estado_control == null ? '—'
+                          : fila.estado_control === 'aceptado'
+                            ? <span style={{ color: '#10b981', fontSize: 11, fontWeight: 600 }}>✓ {ETIQUETA_PRIMER_CONTROL.aceptado}</span>
+                            : fila.estado_control === 'modificacion_solicitada'
+                              ? <span style={{ color: '#f59e0b', fontSize: 11, fontWeight: 600 }}>{ETIQUETA_PRIMER_CONTROL.modificacion_solicitada}</span>
+                              : mostrarBotones
+                                ? (
+                                  <span style={{ display: 'inline-flex', gap: 6 }}>
+                                    <button
+                                      style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #16653488', background: '#14532d', color: '#4ade80', fontSize: 11, fontWeight: 600, cursor: 'pointer', opacity: accionando === fila.turno_id ? 0.5 : 1 }}
+                                      disabled={accionando !== null}
+                                      onClick={() => aceptarTurno(fila)}
+                                    >
+                                      {accionando === fila.turno_id ? 'Aceptando…' : 'Aceptar'}
+                                    </button>
+                                    <button
+                                      style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #92400e88', background: '#78350f', color: '#fbbf24', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                                      disabled={accionando !== null}
+                                      onClick={() => { setFilaSolicitud(fila); setTextoSolicitud(''); setErrorAccion(null) }}
+                                    >
+                                      Solicitar modificación
+                                    </button>
+                                  </span>
+                                )
+                                : <span style={{ color: '#64748b', fontSize: 11 }}>{ETIQUETA_PRIMER_CONTROL.pendiente}</span>}
                       </td>
                     </tr>
                   )
@@ -402,9 +521,20 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
             </table>
           </div>
 
+          {errorAccion && !filaSolicitud && (
+            <div style={{ color: '#ef4444', fontSize: 12, textAlign: 'center' as const, marginBottom: 8 }}>{errorAccion}</div>
+          )}
+
           {/* Total */}
           <div style={S.total}>
-            <div style={S.totalLabel}>Total de horas</div>
+            <div>
+              <div style={S.totalLabel}>Total de horas</div>
+              {datos.es_titular && (datos.pendientes_revision ?? 0) > 0 && (
+                <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 4 }}>
+                  {datos.pendientes_revision} turno{(datos.pendientes_revision ?? 0) !== 1 ? 's' : ''} pendiente{(datos.pendientes_revision ?? 0) !== 1 ? 's' : ''} de revisión
+                </div>
+              )}
+            </div>
             <div style={S.totalValue}>{formatearHoras(datos.total_horas)} hs</div>
           </div>
           <div style={S.aclaracion}>
@@ -413,6 +543,55 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
             {labelMes(datos.mes)}
           </div>
         </>
+      )}
+
+      {/* Modal: Solicitar modificación */}
+      {filaSolicitud && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => { if (!enviandoSolicitud) { setFilaSolicitud(null); setErrorAccion(null) } }}
+        >
+          <div
+            style={{ background: '#1e293b', borderRadius: 12, padding: 20, width: '100%', maxWidth: 420, border: '1px solid #334155' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, color: '#e2e8f0' }}>Solicitar modificación</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+              {formatearFecha(filaSolicitud.fecha)} · {filaSolicitud.objetivo_nombre ?? '—'} · {filaSolicitud.hora_entrada ?? '—'}–{filaSolicitud.hora_salida ?? '—'}
+              {filaSolicitud.salida_automatica ? ` · ${ETIQUETA_SALIDA_AUTOMATICA}` : ''}
+            </div>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>¿Qué desea modificar? *</label>
+            <textarea
+              value={textoSolicitud}
+              onChange={e => setTextoSolicitud(e.target.value)}
+              rows={4}
+              placeholder="Ej.: La salida correcta fue a las 07:00."
+              style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: 10, fontSize: 13, resize: 'vertical' as const, boxSizing: 'border-box' as const }}
+            />
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 6 }}>
+              La solicitud no modifica horarios ni horas: queda pendiente para revisión del supervisor.
+            </div>
+            {errorAccion && (
+              <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{errorAccion}</div>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
+              <button
+                style={{ padding: '10px 0', borderRadius: 8, border: '1px solid #334155', background: 'transparent', color: '#94a3b8', fontSize: 13, cursor: 'pointer' }}
+                disabled={enviandoSolicitud}
+                onClick={() => { setFilaSolicitud(null); setErrorAccion(null) }}
+              >
+                Cancelar
+              </button>
+              <button
+                style={{ padding: '10px 0', borderRadius: 8, border: '1px solid #92400e', background: '#78350f', color: '#fbbf24', fontSize: 13, fontWeight: 600, cursor: 'pointer', opacity: enviandoSolicitud || textoSolicitud.trim().length < 3 ? 0.5 : 1 }}
+                disabled={enviandoSolicitud || textoSolicitud.trim().length < 3}
+                onClick={enviarSolicitud}
+              >
+                {enviandoSolicitud ? 'Enviando…' : 'Enviar solicitud'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
