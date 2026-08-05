@@ -32,6 +32,7 @@ import {
 } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/revision-operativa'
 import { formatCuil } from '@/lib/revision-operativa'
+import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, caracteristicaTurno, esCapacitacion, etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -3342,6 +3343,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     fecha: fechaActualTurno(),
     hora_inicio: '06:00',
     hora_fin: '14:00',
+    tipo_evento: 'normal',
   })
   const [filtroFecha, setFiltroFecha] = useState<FiltroFechaTurnos>('hoy')
   const [loading, setLoading] = useState(false)
@@ -3573,7 +3575,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       puesto_id: puesto.puesto_id,
       guardia_id: form.guardia_id || null,
       estado: form.guardia_id ? 'programado' : 'descubierto',
-      tipo_evento: 'normal',
+      tipo_evento: caracteristicaTurno(form.tipo_evento),
       estado_revision: 'aprobado',
     }
 
@@ -3614,6 +3616,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
         fecha: fechaActualTurno(),
         hora_inicio: '06:00',
         hora_fin: '14:00',
+        tipo_evento: 'normal',
       })
     } else if (error) {
       setError(error.message)
@@ -3883,6 +3886,17 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
                 value={form.hora_fin}
                 onChange={e => setForm({ ...form, hora_fin:e.target.value })}
               />
+            </div>
+
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Característica</label>
+              <select
+                style={S.select}
+                value={form.tipo_evento}
+                onChange={e => setForm({ ...form, tipo_evento:e.target.value })}
+              >
+                {CARACTERISTICAS_TURNO.map(c => <option key={c} value={c}>{ETIQUETA_CARACTERISTICA[c]}</option>)}
+              </select>
             </div>
           </div>
         </Modal>
@@ -5849,6 +5863,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'Salida real': horaSalidaMostrar ? formatHoraTurno(horaSalidaMostrar) : '—',
       'Horas reales': mostrarHoras(horasReales),
       'Horas liquidables': mostrarHoras(horasLiquidables),
+      Característica: etiquetaCaracteristica(turno.tipo_evento),
       Estado: estado,
       'Observaciones / alertas': observacionesPlanilla(turno, registro, extra),
       'GPS ingreso': coordenadasGpsTexto(registro, 'ingreso'),
@@ -5913,6 +5928,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         'Salida real': '—',
         'Horas reales': '—',
         'Horas liquidables': '—',
+        Característica: '—',
         Estado: estadoLabel,
         'Observaciones / alertas': novedad?.observacion || '—',
         'GPS ingreso': '—',
@@ -5978,6 +5994,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'Salida efectiva': horaSalidaMostrar ? formatHoraTurno(horaSalidaMostrar) : '—',
       'Horas reales': mostrarHoras(horasReales),
       'Horas liquidables': mostrarHoras(horasLiquidables),
+      Característica: etiquetaCaracteristica(turno.tipo_evento),
       Origen: origenEtiquetaObj,
       Estado: estado,
       'Observaciones / alertas': observacionesPlanilla(turno, registro),
@@ -5991,6 +6008,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _horaInicio: turno.hora_inicio,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
+      _capacitacion: esCapacitacion(turno.tipo_evento),
       _cubierto: Boolean(registro.hora_entrada_real && (registro.hora_salida_final ?? registro.hora_salida_real)),
       _sinFichar: false,
       _descubierto: false,
@@ -6012,6 +6030,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'Salida efectiva': '—',
       'Horas reales': '—',
       'Horas liquidables': esTransicion ? mostrarHoras(horasLiquidables) : '—',
+      Característica: etiquetaCaracteristica(turno.tipo_evento),
       Estado: estado,
       'Observaciones / alertas': esTransicion ? 'Turno cubierto (período de transición)' : observacionesPlanilla(turno, undefined),
       'GPS ingreso': '—',
@@ -6025,6 +6044,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _horaInicio: turno.hora_inicio,
       _horasReales: 0,
       _horasLiquidables: horasLiquidables,
+      _capacitacion: esCapacitacion(turno.tipo_evento),
       _cubierto: esTransicion,
       _sinFichar: !esTransicion && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
       _descubierto: !esTransicion && turnoSinCoberturaOperativa(turno),
@@ -6069,7 +6089,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     descubiertos: planillaObjetivo.filter((row: any) => row._descubierto).length,
     enCurso: planillaObjetivo.filter((row: any) => row._enCurso).length,
     horasReales: registrosObjetivoDedup.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0),
-    horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => sum + (row._horasLiquidables || 0), 0),
+    // Capacitación: se paga al vigilador pero no se cobra al objetivo
+    horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => row._capacitacion ? sum : sum + (row._horasLiquidables || 0), 0),
   }
 
   // Totales globales del mes:
@@ -6305,13 +6326,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       }
       const turnosConAsistencia = principalesO.length
       const horasReales = principalesO.reduce((s: number, r: RegistroAsistencia) => s + Math.max(0, Number(r.horas_trabajadas) || 0), 0)
+      // Capacitación: se paga al vigilador pero no se cobra al objetivo
       const horasLiquidablesConReg = principalesO.reduce((s: number, r: RegistroAsistencia) => {
         const turno = turnoPorId.get(r.turno_id)
-        return turno ? s + horasLiquidablesRegistro(turno, r) : s
+        if (!turno || esCapacitacion(turno.tipo_evento)) return s
+        return s + horasLiquidablesRegistro(turno, r)
       }, 0)
       const turnosSinRegObj = ts.filter((t: Turno) => !porTurnoO.has(t.id))
       const horasLiquidablesSinReg = turnosSinRegObj.reduce((s: number, t: Turno) =>
-        s + resolverLineaLiquidacion(t, null).horasLiquidables, 0)
+        esCapacitacion(t.tipo_evento) ? s : s + resolverLineaLiquidacion(t, null).horasLiquidables, 0)
       const horasLiquidables = horasLiquidablesConReg + horasLiquidablesSinReg
       const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
       const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length
@@ -6522,7 +6545,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             {totalBox('Tardanzas', totalesEmpleado.tardanzas)}
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
             <tbody>
               {planillaEmpleado.map((row: any) => {
                 const esCal = row._estadoCalendario === 'sin_programacion' || row._estadoCalendario === 'novedad'
@@ -6538,6 +6561,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                   <td style={S.td}>{row['Salida real']}</td>
                   <td style={S.td}>{row['Horas reales']}</td>
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
+                  <td style={{ ...S.td, fontSize:11, color: row.Característica === ETIQUETA_CARACTERISTICA.capacitacion ? '#a78bfa' : row.Característica === ETIQUETA_CARACTERISTICA.cobertura ? '#38bdf8' : '#64748b' }}>{row.Característica}</td>
                   <td style={S.td}><Badge type={badgeType}>{row.Estado}</Badge></td>
                   <td style={{ ...S.td, fontSize:11, color:'#94a3b8', minWidth:140 }}>{row.Origen}</td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>
@@ -6641,7 +6665,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             {totalBox('Horas liquidables', totalesObjetivo.horasLiquidables.toFixed(2))}
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
             <tbody>
               {planillaObjetivo.map((row: any) => (
                 <tr key={row._id}>
@@ -6654,6 +6678,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                   <td style={S.td}>{row['Salida efectiva']}</td>
                   <td style={S.td}>{row['Horas reales']}</td>
                   <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
+                  <td style={{ ...S.td, fontSize:11, color: row._capacitacion ? '#a78bfa' : row.Característica === ETIQUETA_CARACTERISTICA.cobertura ? '#38bdf8' : '#64748b' }}>{row.Característica}{row._capacitacion ? ' · no se cobra' : ''}</td>
                   <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Manual' ? 'ok' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
                   <td style={{ ...S.td, fontSize:11, color:'#94a3b8', minWidth:140 }}>{row.Origen}</td>
                   <td style={{ ...S.td, minWidth:180 }}>{row['Observaciones / alertas']}</td>

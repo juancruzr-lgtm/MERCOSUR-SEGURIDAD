@@ -9,6 +9,7 @@ import { formatFechaHora } from '@/lib/formato'
 import { initTelemetry, endSession } from '@/lib/telemetry'
 import { useSupervisorGps } from '@/lib/supervisor-gps'
 import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno } from '@/lib/puestos'
+import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA } from '@/lib/caracteristica-turno'
 import type { EstadoPuestos } from '@/lib/puestos'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
@@ -3855,8 +3856,7 @@ export default function SupervisorMobile({ user }: any) {
             <input type="time" style={input} value={formTurno.hora_fin} onChange={e => setFormTurno({ ...formTurno, hora_fin:e.target.value })} />
             <label style={label}>Tipo</label>
             <select style={select} value={formTurno.tipo_evento} onChange={e => setFormTurno({ ...formTurno, tipo_evento:e.target.value })}>
-              <option value="normal">Normal</option>
-              <option value="cobertura">Cobertura</option>
+              {CARACTERISTICAS_TURNO.map(c => <option key={c} value={c}>{ETIQUETA_CARACTERISTICA[c]}</option>)}
             </select>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
               <button style={secondaryButton} onClick={() => setModalTurno(false)}>Cancelar</button>

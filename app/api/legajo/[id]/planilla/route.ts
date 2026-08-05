@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../../_lib/employee-auth'
 import { puedeVerLegajo } from '@/lib/legajo'
 import { effectiveGuardia, selectRegistroPrincipal, resolverLineaLiquidacion } from '@/lib/liquidacion'
+import { caracteristicaTurno } from '@/lib/caracteristica-turno'
+import type { CaracteristicaTurno } from '@/lib/caracteristica-turno'
 
 export const runtime = 'nodejs'
 
@@ -46,6 +48,7 @@ export interface FilaPlanilla {
   objetivo_nombre: string | null
   origen_etiqueta: string
   estado: 'trabajado' | 'en_curso' | 'programado' | 'sin_programacion'
+  caracteristica: CaracteristicaTurno | null
 }
 
 export interface RespuestaPlanilla {
@@ -115,7 +118,7 @@ export async function GET(
       objetivo_final_id, tipo_registro,
       horas_liquidables, origen_cobertura, cobertura_anulada_at, cierre_automatico,
       turno:turnos!inner(
-        id, fecha, hora_inicio, hora_fin, objetivo_id,
+        id, fecha, hora_inicio, hora_fin, objetivo_id, tipo_evento,
         objetivo:objetivos(nombre, es_prueba)
       )
     `)
@@ -199,6 +202,7 @@ export async function GET(
       objetivo_nombre: objetivoNombre,
       origen_etiqueta: linea.origenEtiqueta,
       estado,
+      caracteristica:  caracteristicaTurno(t.tipo_evento),
     })
   }
 
@@ -207,7 +211,7 @@ export async function GET(
   // ── Turnos programados sin registro ────────────────────────────────────────
   const { data: turnosProgramados } = await admin.client
     .from('turnos')
-    .select('id, fecha, hora_inicio, hora_fin, objetivo_id, objetivo:objetivos(nombre)')
+    .select('id, fecha, hora_inicio, hora_fin, objetivo_id, tipo_evento, objetivo:objetivos(nombre)')
     .eq('guardia_id', empleadoId)
     .gte('fecha', desde)
     .lte('fecha', hasta)
@@ -226,6 +230,7 @@ export async function GET(
       objetivo_nombre: (t.objetivo as any)?.nombre ?? null,
       origen_etiqueta: 'Turno programado',
       estado: 'programado',
+      caracteristica: caracteristicaTurno((t as any).tipo_evento),
     })
   }
 
@@ -245,6 +250,7 @@ export async function GET(
       objetivo_nombre: null,
       origen_etiqueta: '',
       estado: 'sin_programacion',
+      caracteristica: null,
     })
   }
 

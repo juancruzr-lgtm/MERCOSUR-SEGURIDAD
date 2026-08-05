@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { track } from '@/lib/telemetry'
+import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -14,6 +15,7 @@ interface FilaPlanilla {
   objetivo_id: string | null
   objetivo_nombre: string | null
   estado?: 'trabajado' | 'en_curso' | 'programado' | 'sin_programacion'
+  caracteristica?: 'normal' | 'cobertura' | 'capacitacion' | null
 }
 
 interface DatosPlanilla {
@@ -356,6 +358,7 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                   <th style={S.th}>Salida</th>
                   <th style={S.th}>Horas</th>
                   <th style={S.th}>Objetivo</th>
+                  <th style={S.th}>Tipo</th>
                 </tr>
               </thead>
               <tbody>
@@ -386,6 +389,12 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                       </td>
                       <td style={S.tdHoras(ultimo)}>{esSinProg || esProgramado ? '—' : formatearHoras(fila.horas)}</td>
                       <td style={S.tdObjetivo(ultimo)}>{esProgramado ? <span style={{ fontStyle: 'italic' }}>{fila.objetivo_nombre ?? '—'}</span> : (fila.objetivo_nombre ?? '—')}</td>
+                      <td style={S.td(ultimo)}>
+                        {esSinProg || !fila.caracteristica ? '—'
+                          : fila.caracteristica === 'normal'
+                            ? <span style={{ color: '#64748b', fontSize: 11 }}>{etiquetaCaracteristica(fila.caracteristica)}</span>
+                            : <span style={{ color: fila.caracteristica === 'capacitacion' ? '#a78bfa' : '#38bdf8', fontSize: 11, fontWeight: 600 }}>{etiquetaCaracteristica(fila.caracteristica)}</span>}
+                      </td>
                     </tr>
                   )
                 })}
