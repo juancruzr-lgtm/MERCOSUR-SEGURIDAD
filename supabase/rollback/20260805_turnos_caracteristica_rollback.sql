@@ -1,8 +1,11 @@
 -- Rollback de 20260805100000_turnos_caracteristica.sql
 --
--- Revierte constraint, NOT NULL y default. NO revierte el backfill
--- NULL→'normal' (era el valor efectivo que ya asumía el frontend;
--- revertirlo a NULL no aporta y perdería información).
+-- Revierte constraint, NOT NULL y default. NO revierte:
+--   · el backfill NULL→'normal' (comportamiento que ya asumía el frontend);
+--   · la normalización cobertura_urgente→'cobertura' (3 turnos del objetivo
+--     de prueba Casa Juan — autorizada el 2026-08-05, sin valor operativo);
+--   · el constraint legacy (normal|cobertura_urgente|reemplazo_no_planificado)
+--     no se restaura: taxonomía reemplazada por OT-01.
 
 BEGIN;
 
