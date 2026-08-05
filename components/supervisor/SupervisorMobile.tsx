@@ -11,6 +11,7 @@ import { useSupervisorGps } from '@/lib/supervisor-gps'
 import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno } from '@/lib/puestos'
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA } from '@/lib/caracteristica-turno'
 import type { EstadoPuestos } from '@/lib/puestos'
+import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
@@ -2106,6 +2107,7 @@ export default function SupervisorMobile({ user }: any) {
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
     { id: 'supervisiones', label: 'Supervisiones', icon: '☑️' },
     { id: 'turnos', label: 'Turnos', icon: '📅' },
+    { id: 'planillas', label: 'Planillas', icon: '📋' },
     { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
     { id: 'guardias', label: 'Guardias', icon: '👮' },
     { id: 'rondas', label: 'Rondas', icon: '🔁' },
@@ -3637,6 +3639,12 @@ export default function SupervisorMobile({ user }: any) {
                     </button>
                   </div>
                 ))}
+              </section>
+            )}
+
+            {tab === 'planillas' && (
+              <section>
+                <BandejaPlanillas user={user} />
               </section>
             )}
 
