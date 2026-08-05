@@ -788,7 +788,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
   const registroActivo = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real)
   const guardiasEnTurno = new Set(registroActivo.map((r: RegistroAsistencia) => r.guardia_id)).size
-  const turnosCubiertos = turnosHoy.filter((t: Turno) => t.estado === 'cubierto').length
+  const turnosCubiertos = turnosHoy.filter((t: Turno) => t.estado === 'cubierto' || tieneEntradaConfirmada(t)).length
   const alertasOperativasHoy = detectarAlertasOperativas({ turnos: turnosHoy, registros: registrosHoy })
   const idsTurnosDescubiertos = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'descubierto').map(a => a.turno_id))
   const idsTurnosSinFichar = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'sin_fichar').map(a => a.turno_id))
