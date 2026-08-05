@@ -4,6 +4,8 @@ import { puedeVerLegajo } from '@/lib/legajo'
 import { rangoTurno, esTurnoNocturno } from '@/lib/turnos'
 
 export const runtime = 'nodejs'
+// Datos por sesión: jamás cachear (ver planilla/route.ts).
+export const dynamic = 'force-dynamic'
 
 // Determina hoy, ayer y el instante actual en hora local Argentina (UTC-3).
 // rangoTurno() en el servidor (Vercel UTC) interpreta hora_inicio/hora_fin como horas

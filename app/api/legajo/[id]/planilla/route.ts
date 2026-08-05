@@ -7,6 +7,10 @@ import type { CaracteristicaTurno } from '@/lib/caracteristica-turno'
 import type { EstadoPrimerControl } from '@/lib/primer-control'
 
 export const runtime = 'nodejs'
+// Respuesta por sesión y por estado del primer control: jamás cachear.
+// Sin esto, Vercel sirve una copia estática y Mi Planilla no refleja
+// aceptaciones/solicitudes recién creadas hasta un redeploy.
+export const dynamic = 'force-dynamic'
 
 const RE_MES = /^\d{4}-\d{2}$/
 

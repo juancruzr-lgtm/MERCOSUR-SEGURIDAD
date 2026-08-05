@@ -3,6 +3,8 @@ import { getBearerToken, getSupabaseAdmin } from '../../../_lib/employee-auth'
 import { puedeVerLegajo } from '@/lib/legajo'
 
 export const runtime = 'nodejs'
+// Datos por sesión: jamás cachear (ver planilla/route.ts).
+export const dynamic = 'force-dynamic'
 
 const ESTADOS_VALIDOS = new Set(['programado', 'cubierto', 'descubierto'])
 const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/
