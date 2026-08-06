@@ -34,6 +34,8 @@ import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/rev
 import { formatCuil } from '@/lib/revision-operativa'
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, caracteristicaTurno, esCapacitacion, etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 import { ETIQUETA_VINCULACION, sugerirVinculacion } from '@/lib/vinculacion-puestos'
+import { ETIQUETA_PREVISION, previsualizarMes } from '@/lib/programacion'
+import type { EstadoPrevision, ResultadoPrevision } from '@/lib/programacion'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -7206,6 +7208,8 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     return `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`
   })
   const [resultadoGeneracion, setResultadoGeneracion] = useState<string | null>(null)
+  // Vista previa mensual (Bloque E, commit 3): solo lectura, nada se inserta.
+  const [prevision, setPrevision] = useState<ResultadoPrevision | null>(null)
 
   const DIAS = [
     { num:1, label:'Lun' }, { num:2, label:'Mar' }, { num:3, label:'Mié' },
@@ -7300,83 +7304,48 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     return sorted.map(d => DIAS.find(x => x.num === d)?.label || '').join(', ')
   }
 
+  // Generar mes (Bloque E, commit 3): ya no inserta. Junta los datos y arma
+  // la vista previa con el helper puro previsualizarMes; la creación real a
+  // partir de la vista previa corresponde al próximo commit.
   const generarMes = async () => {
     if (!mesGenerar) return
-    setGenerando(true); setResultadoGeneracion(null)
+    setGenerando(true); setResultadoGeneracion(null); setPrevision(null)
     const [anio, mes] = mesGenerar.split('-').map(Number)
     const { data: serviciosActivos, error } = await supabase
-      .from('servicios_objetivo').select('*, turno_base:turnos_base(hora_inicio, hora_fin)').eq('activo', true)
-    if (error || !serviciosActivos?.length) { setResultadoGeneracion('No hay servicios activos para generar.'); setGenerando(false); return }
+      .from('servicios_objetivo')
+      .select('*, turno_base:turnos_base(nombre, hora_inicio, hora_fin, activo), guardia:usuarios(nombre, apellido), puesto:puestos(nombre)')
+      .eq('activo', true)
+    if (error || !serviciosActivos?.length) { setResultadoGeneracion('No hay servicios activos para previsualizar.'); setGenerando(false); return }
+
     const fechaDesde = `${anio}-${String(mes).padStart(2,'0')}-01`
     const ultimoDia = new Date(anio, mes, 0).getDate()
     const fechaHasta = `${anio}-${String(mes).padStart(2,'0')}-${ultimoDia}`
+    // Un día a cada lado para que los nocturnos vecinos al mes cuenten en la
+    // deduplicación y en las superposiciones del guardia sugerido.
     const fechaConsultaDesde = fechasVecinasTurno(fechaDesde)[0]
     const fechaConsultaHasta = fechasVecinasTurno(fechaHasta)[2]
-    const { data: turnosExistentes } = await supabase
-      .from('turnos')
-      .select('id, objetivo_id, guardia_id, fecha, hora_inicio, hora_fin')
-      .gte('fecha', fechaConsultaDesde)
-      .lte('fecha', fechaConsultaHasta)
-      .eq('tipo_evento', 'normal')
-    const existentes = new Set((turnosExistentes || []).map((t: any) => `${t.objetivo_id}|${t.guardia_id}|${t.fecha}|${t.hora_inicio}|${t.hora_fin}`))
-
-    // Puestos de todos los objetivos involucrados, en una sola consulta.
-    // Los objetivos sin puestos activos, o con más de uno, se omiten y se
-    // informan: la generación masiva no puede elegir por el usuario.
-    const { data: puestosPorObjetivo, error: errPuestos } = await obtenerPuestosActivosDeObjetivos(
-      serviciosActivos.map((s: any) => s.objetivo_id),
-    )
-    if (errPuestos || !puestosPorObjetivo) {
-      setResultadoGeneracion(errPuestos || 'No se pudieron cargar los puestos.')
+    const [{ data: turnosExistentes, error: errTurnos }, { data: puestosPorObjetivo, error: errPuestos }] = await Promise.all([
+      supabase
+        .from('turnos')
+        .select('id, objetivo_id, puesto_id, guardia_id, servicio_base_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
+        .gte('fecha', fechaConsultaDesde)
+        .lte('fecha', fechaConsultaHasta),
+      obtenerPuestosActivosDeObjetivos(serviciosActivos.map((s: any) => s.objetivo_id)),
+    ])
+    if (errTurnos || errPuestos || !puestosPorObjetivo) {
+      setResultadoGeneracion(errPuestos || 'No se pudieron cargar los datos para la vista previa.')
       setGenerando(false)
       return
     }
-    const objetivosOmitidos = new Map<string, string>()
 
-    const nuevos: any[] = []
-    for (const srv of serviciosActivos) {
-      if (!srv.turno_base || !srv.dias_semana?.length || !srv.guardia_habitual_id) continue
-      const estadoPuestosSrv = puestosPorObjetivo.get(srv.objetivo_id) ?? null
-      // El puesto real del servicio manda; si no lo tiene, aplica la regla
-      // única (objetivo con un solo puesto activo se resuelve solo).
-      const puestoSrv = resolverPuestoTurno(estadoPuestosSrv, srv.puesto_id ?? null)
-      if (!puestoSrv.ok) {
-        const nombreObjetivo = objetivos.find((o: Objetivo) => o.id === srv.objetivo_id)?.nombre || srv.objetivo_id
-        objetivosOmitidos.set(srv.objetivo_id, `${nombreObjetivo}: ${puestoSrv.error}`)
-        continue
-      }
-      const guardiaId = srv.guardia_habitual_id
-      for (let dia = 1; dia <= ultimoDia; dia++) {
-        const fecha = new Date(anio, mes - 1, dia)
-        let diaSemana = fecha.getDay(); if (diaSemana === 0) diaSemana = 7
-        if (!srv.dias_semana.includes(diaSemana)) continue
-        const fechaStr = `${anio}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`
-        const key = `${srv.objetivo_id}|${guardiaId}|${fechaStr}|${srv.turno_base.hora_inicio}|${srv.turno_base.hora_fin}`
-        if (existentes.has(key)) continue
-        const candidato = { objetivo_id:srv.objetivo_id, puesto_id:puestoSrv.puesto_id, guardia_id:guardiaId, guardia_original_id:guardiaId, guardia_real_id:null, fecha:fechaStr, hora_inicio:srv.turno_base.hora_inicio, hora_fin:srv.turno_base.hora_fin, estado:'programado', tipo_evento:'normal', estado_revision:'aprobado', servicio_base_id:srv.id }
-        if (tieneTurnoSuperpuesto([...(turnosExistentes || []), ...nuevos], candidato)) {
-          setResultadoGeneracion(MENSAJE_TURNO_SUPERPUESTO)
-          setGenerando(false)
-          return
-        }
-        nuevos.push(candidato)
-      }
-    }
-    const avisoOmitidos = objetivosOmitidos.size > 0
-      ? `\n⚠️ Omitidos por puesto no resuelto:\n· ${Array.from(objetivosOmitidos.values()).join('\n· ')}`
-      : ''
-
-    if (nuevos.length === 0) {
-      setResultadoGeneracion(`No hay turnos nuevos para generar. Todos ya existen o no tienen guardia asignado.${avisoOmitidos}`)
-      setGenerando(false)
-      return
-    }
-    let insertados = 0
-    for (let i = 0; i < nuevos.length; i += 100) {
-      const { error: errInsert } = await supabase.from('turnos').insert(nuevos.slice(i, i + 100))
-      if (!errInsert) insertados += Math.min(100, nuevos.length - i)
-    }
-    setResultadoGeneracion(`✅ Generados ${insertados} turnos para ${mesGenerar}.${avisoOmitidos}`)
+    setPrevision(previsualizarMes({
+      anio,
+      mes,
+      servicios: serviciosActivos,
+      objetivos,
+      puestosPorObjetivo,
+      turnosExistentes: turnosExistentes ?? [],
+    }))
     setGenerando(false)
   }
 
@@ -7389,10 +7358,10 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
 
       <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, marginBottom:20 }}>
         <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>📅 Generar turnos del mes</div>
-        <div style={{ fontSize:13, color:'#64748b', marginBottom:16 }}>Crea automáticamente los turnos en base a los servicios activos.</div>
+        <div style={{ fontSize:13, color:'#64748b', marginBottom:16 }}>Muestra la vista previa del mes en base a los servicios activos. En esta etapa no se crea ningún turno.</div>
         <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
           <input type="month" style={{ ...S.input, width:'auto', minWidth:160 }} value={mesGenerar} onChange={e => { setMesGenerar(e.target.value); setResultadoGeneracion(null) }} />
-          <button style={{ ...S.btn, ...S.btnPrimary, opacity: generando ? 0.6 : 1 }} onClick={generarMes} disabled={generando}>{generando ? '⏳ Generando...' : '⚡ Generar mes'}</button>
+          <button style={{ ...S.btn, ...S.btnPrimary, opacity: generando ? 0.6 : 1 }} onClick={generarMes} disabled={generando}>{generando ? '⏳ Preparando vista previa...' : '⚡ Generar mes'}</button>
         </div>
         {resultadoGeneracion && (
           <div style={{ marginTop:12, padding:'10px 14px', borderRadius:8, fontSize:13, background: resultadoGeneracion.startsWith('✅') ? 'rgba(16,185,129,.1)' : 'rgba(245,158,11,.1)', border: `1px solid ${resultadoGeneracion.startsWith('✅') ? 'rgba(16,185,129,.3)' : 'rgba(245,158,11,.3)'}`, color: resultadoGeneracion.startsWith('✅') ? '#10b981' : '#f59e0b' }}>
@@ -7400,6 +7369,74 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
           </div>
         )}
       </div>
+
+      {prevision && (
+        <Modal title={`Vista previa — ${prevision.mes}`} onClose={() => setPrevision(null)}
+          footer={<button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setPrevision(null)}>Cerrar</button>}>
+          <div style={{ fontSize:13, color:'#64748b', marginBottom:14 }}>
+            Vista previa de solo lectura: todavía no se creó ningún turno. La creación desde esta vista corresponde a la próxima etapa.
+          </div>
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16 }}>
+            {[
+              { label:'Total esperado', valor: prevision.resumen.total_esperado, color:'#e2e8f0' },
+              { label: ETIQUETA_PREVISION.valido, valor: prevision.resumen.validos, color:'#10b981' },
+              { label: ETIQUETA_PREVISION.ya_existe, valor: prevision.resumen.existentes, color:'#60a5fa' },
+              { label:'Conflictos', valor: prevision.resumen.conflictos, color:'#ef4444' },
+              { label:'Servicios excluidos', valor: prevision.resumen.servicios_excluidos, color:'#f59e0b' },
+              { label:'Sin puesto', valor: prevision.resumen.servicios_sin_puesto, color:'#f59e0b' },
+            ].map(chip => (
+              <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 14px', textAlign:'center' }}>
+                <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, color:chip.color }}>{chip.valor}</div>
+                <div style={{ fontSize:11, color:'#64748b' }}>{chip.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {prevision.advertencias.length > 0 && (
+            <div style={{ background:'rgba(245,158,11,.07)', border:'1px solid rgba(245,158,11,.3)', borderRadius:8, padding:'10px 14px', marginBottom:16 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:'#f59e0b', marginBottom:6 }}>Servicios que no pueden previsualizarse</div>
+              {prevision.advertencias.map(a => (
+                <div key={a.servicio_id} style={{ fontSize:12, color:'#e2e8f0', marginBottom:2 }}>
+                  · <strong>{a.objetivo_nombre}</strong>{a.turno_base_nombre ? ` — ${a.turno_base_nombre}` : ''}: <span style={{ color:'#f59e0b' }}>{a.detalle}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {prevision.filas.length === 0 ? (
+            <div style={{ textAlign:'center', padding:24, color:'#64748b' }}>Ningún servicio habilitado genera fechas en este mes.</div>
+          ) : (
+            <div style={{ overflowX:'auto', maxHeight:420, overflowY:'auto' }}>
+              <table style={S.table}>
+                <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Puesto</th><th style={S.th}>Turno base</th><th style={S.th}>Horario</th><th style={S.th}>Guardia sugerido</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Detalle</th></tr></thead>
+                <tbody>
+                  {prevision.filas.map((f, i) => {
+                    const colorEstado: Record<EstadoPrevision, string> = {
+                      valido:'#10b981', ya_existe:'#60a5fa', conflicto_horario:'#ef4444',
+                      sin_puesto:'#f59e0b', turno_base_inactivo:'#f59e0b', objetivo_inactivo:'#94a3b8',
+                      objetivo_prueba:'#94a3b8', config_invalida:'#f59e0b',
+                    }
+                    return (
+                      <tr key={`${f.servicio_id}|${f.fecha}|${i}`}>
+                        <td style={S.td}>{f.fecha}</td>
+                        <td style={S.td}>{f.dia_semana}</td>
+                        <td style={S.td}><strong>{f.objetivo_nombre}</strong></td>
+                        <td style={S.td}>{f.puesto_nombre || '—'}</td>
+                        <td style={S.td}>{f.turno_base_nombre}</td>
+                        <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontSize:12 }}>{f.hora_inicio} → {f.hora_fin}</td>
+                        <td style={S.td}>{f.guardia_sugerido_nombre || <span style={{ color:'#64748b' }}>Sin guardia sugerido</span>}</td>
+                        <td style={S.td}>{f.caracteristica}</td>
+                        <td style={{ ...S.td, color: colorEstado[f.estado], fontSize:12, whiteSpace:'nowrap' }}>{ETIQUETA_PREVISION[f.estado]}</td>
+                        <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{f.detalle || ''}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
+      )}
 
       {(() => {
         // Regularización: servicios sin puesto real vinculado.
