@@ -337,3 +337,70 @@ export function previsualizarMes(params: {
 
   return { mes: mesStr, filas, advertencias, resumen }
 }
+
+// ── Creación parcial (commit 4) ──────────────────────────────────────────────
+//
+// Solo las filas 'valido' pueden crearse, y siempre con confirmación
+// explícita del administrador. El payload lleva únicamente servicio y fecha:
+// horario y puesto los deriva y revalida la RPC crear_turnos_programacion_parcial,
+// que además deduplica en servidor y audita la operación completa.
+
+/** Clave estable de una fila de la vista previa (para la selección). */
+export const clavePrevision = (f: Pick<FilaPrevision, 'servicio_id' | 'fecha'>) =>
+  `${f.servicio_id}|${f.fecha}`
+
+export interface FilaCreacion {
+  servicio_id: string
+  fecha: string
+}
+
+/** Filas a enviar a la RPC: solo válidas y seleccionadas. */
+export function payloadCreacionParcial(
+  filas: FilaPrevision[],
+  seleccion: Set<string>,
+): FilaCreacion[] {
+  return filas
+    .filter(f => f.estado === 'valido' && seleccion.has(clavePrevision(f)))
+    .map(f => ({ servicio_id: f.servicio_id, fecha: f.fecha }))
+}
+
+export interface ResumenConfirmacion {
+  cantidad: number
+  objetivos: string[]
+  puestos: number
+}
+
+/** Datos del diálogo de confirmación previo a crear. */
+export function resumenConfirmacion(
+  filas: FilaPrevision[],
+  seleccion: Set<string>,
+): ResumenConfirmacion {
+  const elegidas = filas.filter(f => f.estado === 'valido' && seleccion.has(clavePrevision(f)))
+  return {
+    cantidad: elegidas.length,
+    objetivos: [...new Set(elegidas.map(f => f.objetivo_nombre))],
+    puestos: new Set(elegidas.map(f => f.puesto_id ?? '')).size,
+  }
+}
+
+/** Resultado por fila que devuelve la RPC. */
+export interface FilaResultadoCreacion {
+  servicio_id: string
+  fecha: string
+  resultado: 'creada' | 'ya_existe' | 'omitida'
+  motivo: string | null
+  turno_id: string | null
+}
+
+export interface ResultadoCreacion {
+  operacion_id: string
+  mes: string
+  solicitadas: number
+  creadas: number
+  ya_existentes: number
+  omitidas: number
+  turnos_creados: string[]
+  filas: FilaResultadoCreacion[]
+  /** true si la RPC devolvió el resultado guardado de la misma operación. */
+  repetida?: boolean
+}

@@ -34,8 +34,8 @@ import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/rev
 import { formatCuil } from '@/lib/revision-operativa'
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, caracteristicaTurno, esCapacitacion, etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 import { ETIQUETA_VINCULACION, sugerirVinculacion } from '@/lib/vinculacion-puestos'
-import { ETIQUETA_PREVISION, previsualizarMes } from '@/lib/programacion'
-import type { EstadoPrevision, ResultadoPrevision } from '@/lib/programacion'
+import { ETIQUETA_PREVISION, clavePrevision, payloadCreacionParcial, previsualizarMes, resumenConfirmacion } from '@/lib/programacion'
+import type { EstadoPrevision, ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -7208,8 +7208,14 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     return `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`
   })
   const [resultadoGeneracion, setResultadoGeneracion] = useState<string | null>(null)
-  // Vista previa mensual (Bloque E, commit 3): solo lectura, nada se inserta.
+  // Vista previa mensual (Bloque E, commit 3): la vista no inserta nada.
   const [prevision, setPrevision] = useState<ResultadoPrevision | null>(null)
+  // Creación parcial (commit 4): selección de filas válidas + confirmación
+  // explícita. La escritura vive solo en la RPC crear_turnos_programacion_parcial.
+  const [seleccion, setSeleccion] = useState<Set<string>>(new Set())
+  const [faseCreacion, setFaseCreacion] = useState<'seleccion' | 'confirmar' | 'creando' | 'resultado'>('seleccion')
+  const [resultadoCreacion, setResultadoCreacion] = useState<ResultadoCreacion | null>(null)
+  const [errorCreacion, setErrorCreacion] = useState('')
 
   const DIAS = [
     { num:1, label:'Lun' }, { num:2, label:'Mar' }, { num:3, label:'Mié' },
@@ -7304,18 +7310,16 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     return sorted.map(d => DIAS.find(x => x.num === d)?.label || '').join(', ')
   }
 
-  // Generar mes (Bloque E, commit 3): ya no inserta. Junta los datos y arma
-  // la vista previa con el helper puro previsualizarMes; la creación real a
-  // partir de la vista previa corresponde al próximo commit.
-  const generarMes = async () => {
-    if (!mesGenerar) return
-    setGenerando(true); setResultadoGeneracion(null); setPrevision(null)
+  // Vista previa (Bloque E, commit 3): junta los datos autoritativos del
+  // servidor y arma la vista con el helper puro previsualizarMes. También se
+  // reutiliza tras crear turnos, para refrescar sin F5.
+  const armarPrevision = async (): Promise<ResultadoPrevision | null> => {
     const [anio, mes] = mesGenerar.split('-').map(Number)
     const { data: serviciosActivos, error } = await supabase
       .from('servicios_objetivo')
       .select('*, turno_base:turnos_base(nombre, hora_inicio, hora_fin, activo), guardia:usuarios(nombre, apellido), puesto:puestos(nombre)')
       .eq('activo', true)
-    if (error || !serviciosActivos?.length) { setResultadoGeneracion('No hay servicios activos para previsualizar.'); setGenerando(false); return }
+    if (error || !serviciosActivos?.length) { setResultadoGeneracion('No hay servicios activos para previsualizar.'); return null }
 
     const fechaDesde = `${anio}-${String(mes).padStart(2,'0')}-01`
     const ultimoDia = new Date(anio, mes, 0).getDate()
@@ -7334,19 +7338,79 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     ])
     if (errTurnos || errPuestos || !puestosPorObjetivo) {
       setResultadoGeneracion(errPuestos || 'No se pudieron cargar los datos para la vista previa.')
-      setGenerando(false)
-      return
+      return null
     }
 
-    setPrevision(previsualizarMes({
+    return previsualizarMes({
       anio,
       mes,
       servicios: serviciosActivos,
       objetivos,
       puestosPorObjetivo,
       turnosExistentes: turnosExistentes ?? [],
-    }))
+    })
+  }
+
+  const generarMes = async () => {
+    if (!mesGenerar) return
+    setGenerando(true); setResultadoGeneracion(null); setPrevision(null)
+    const r = await armarPrevision()
+    if (r) {
+      setPrevision(r)
+      // Por defecto quedan seleccionadas todas las válidas; la cantidad se
+      // muestra antes de confirmar y la creación exige confirmación aparte.
+      setSeleccion(new Set(r.filas.filter(f => f.estado === 'valido').map(clavePrevision)))
+      setFaseCreacion('seleccion')
+      setResultadoCreacion(null)
+      setErrorCreacion('')
+    }
     setGenerando(false)
+  }
+
+  const cerrarPrevision = () => {
+    setPrevision(null)
+    setFaseCreacion('seleccion')
+    setResultadoCreacion(null)
+    setErrorCreacion('')
+  }
+
+  const toggleSeleccion = (clave: string) => {
+    if (faseCreacion !== 'seleccion') return
+    setSeleccion(prev => {
+      const proxima = new Set(prev)
+      if (proxima.has(clave)) proxima.delete(clave)
+      else proxima.add(clave)
+      return proxima
+    })
+  }
+
+  // Confirmación → RPC. La RPC revalida cada fila en servidor, deduplica sin
+  // depender del guardia, omite las inválidas sin abortar el lote y audita la
+  // operación completa (idempotente por operacion_id).
+  const crearSeleccionados = async () => {
+    if (!prevision || faseCreacion === 'creando') return
+    const filasPayload = payloadCreacionParcial(prevision.filas, seleccion)
+    if (filasPayload.length === 0) return
+    setFaseCreacion('creando')
+    setErrorCreacion('')
+    const { data, error } = await supabase.rpc('crear_turnos_programacion_parcial', {
+      p_operacion_id: crypto.randomUUID(),
+      p_mes: prevision.mes,
+      p_filas: filasPayload,
+    })
+    if (error) {
+      setErrorCreacion(error.message)
+      setFaseCreacion('confirmar')
+      return
+    }
+    setResultadoCreacion(data as ResultadoCreacion)
+    // Releer del servidor: las filas creadas pasan a "Ya existe" sin F5.
+    const refresco = await armarPrevision()
+    if (refresco) {
+      setPrevision(refresco)
+      setSeleccion(new Set(refresco.filas.filter(f => f.estado === 'valido').map(clavePrevision)))
+    }
+    setFaseCreacion('resultado')
   }
 
   return (
@@ -7370,12 +7434,65 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
         )}
       </div>
 
-      {prevision && (
-        <Modal title={`Vista previa — ${prevision.mes}`} onClose={() => setPrevision(null)}
-          footer={<button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setPrevision(null)}>Cerrar</button>}>
+      {prevision && (() => {
+        const seleccionadas = payloadCreacionParcial(prevision.filas, seleccion).length
+        const confirmacion = resumenConfirmacion(prevision.filas, seleccion)
+        return (
+        <Modal title={`Vista previa — ${prevision.mes}`} onClose={cerrarPrevision}
+          footer={<>
+            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={cerrarPrevision}>Cerrar</button>
+            {faseCreacion === 'seleccion' && prevision.resumen.validos > 0 && (
+              <button
+                style={{ ...S.btn, ...S.btnPrimary, opacity: seleccionadas === 0 ? 0.5 : 1 }}
+                disabled={seleccionadas === 0}
+                onClick={() => setFaseCreacion('confirmar')}
+              >
+                Crear turnos seleccionados ({seleccionadas})
+              </button>
+            )}
+          </>}>
           <div style={{ fontSize:13, color:'#64748b', marginBottom:14 }}>
-            Vista previa de solo lectura: todavía no se creó ningún turno. La creación desde esta vista corresponde a la próxima etapa.
+            La vista previa no modifica nada: los turnos seleccionados se crean recién al confirmar. Las filas no válidas son de solo lectura.
           </div>
+
+          {faseCreacion === 'confirmar' && (
+            <div style={{ background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.35)', borderRadius:8, padding:'12px 16px', marginBottom:16 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:'#f59e0b', marginBottom:8 }}>Confirmar creación — {prevision.mes}</div>
+              <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:4 }}>Se crearán <strong>{confirmacion.cantidad}</strong> turnos en <strong>{confirmacion.objetivos.length}</strong> objetivo{confirmacion.objetivos.length !== 1 ? 's' : ''} ({confirmacion.objetivos.join(', ')}) sobre <strong>{confirmacion.puestos}</strong> puesto{confirmacion.puestos !== 1 ? 's' : ''}.</div>
+              <div style={{ fontSize:12, color:'#f59e0b', marginBottom:4 }}>Los turnos se crean sin vigilador asignado: el supervisor lo asigna después.</div>
+              <div style={{ fontSize:12, color:'#94a3b8', marginBottom:10 }}>Los turnos ya existentes y los conflictos no serán modificados.</div>
+              {errorCreacion && <div style={{ fontSize:12, color:'#ef4444', marginBottom:10 }}>{errorCreacion}</div>}
+              <div style={{ display:'flex', gap:10 }}>
+                <button style={{ ...S.btn, ...S.btnSecondary, padding:'8px 14px' }} onClick={() => setFaseCreacion('seleccion')}>Volver</button>
+                <button style={{ ...S.btn, ...S.btnPrimary, padding:'8px 14px' }} onClick={crearSeleccionados}>Confirmar creación</button>
+              </div>
+            </div>
+          )}
+
+          {faseCreacion === 'creando' && (
+            <div style={{ background:'rgba(96,165,250,.08)', border:'1px solid rgba(96,165,250,.3)', borderRadius:8, padding:'12px 16px', marginBottom:16, color:'#60a5fa', fontSize:13 }}>
+              ⏳ Creando turnos seleccionados…
+            </div>
+          )}
+
+          {faseCreacion === 'resultado' && resultadoCreacion && (
+            <div style={{ background:'rgba(16,185,129,.07)', border:'1px solid rgba(16,185,129,.3)', borderRadius:8, padding:'12px 16px', marginBottom:16 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:'#10b981', marginBottom:6 }}>
+                ✅ {resultadoCreacion.creadas} turno{resultadoCreacion.creadas !== 1 ? 's' : ''} creado{resultadoCreacion.creadas !== 1 ? 's' : ''} · {resultadoCreacion.ya_existentes} ya existía{resultadoCreacion.ya_existentes !== 1 ? 'n' : ''} · {resultadoCreacion.omitidas} omitida{resultadoCreacion.omitidas !== 1 ? 's' : ''}
+                {resultadoCreacion.repetida ? ' · (operación ya ejecutada: se muestra el resultado guardado)' : ''}
+              </div>
+              {resultadoCreacion.filas.filter(f => f.resultado !== 'creada').map((f, i) => (
+                <div key={`${f.servicio_id}|${f.fecha}|${i}`} style={{ fontSize:12, color:'#94a3b8' }}>
+                  · {f.fecha}: {f.resultado === 'ya_existe' ? 'ya existía' : 'omitida'}{f.motivo ? ` — ${f.motivo}` : ''}
+                </div>
+              ))}
+              {resultadoCreacion.turnos_creados.length > 0 && (
+                <div style={{ fontSize:11, color:'#64748b', marginTop:6 }}>IDs creados: {resultadoCreacion.turnos_creados.join(', ')}</div>
+              )}
+              <div style={{ fontSize:12, color:'#64748b', marginTop:6 }}>La tabla de abajo ya está releída del servidor: las filas creadas figuran como "Ya existe".</div>
+            </div>
+          )}
+
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16 }}>
             {[
               { label:'Total esperado', valor: prevision.resumen.total_esperado, color:'#e2e8f0' },
@@ -7406,9 +7523,23 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
           {prevision.filas.length === 0 ? (
             <div style={{ textAlign:'center', padding:24, color:'#64748b' }}>Ningún servicio habilitado genera fechas en este mes.</div>
           ) : (
+            <>
+            {prevision.resumen.validos > 0 && faseCreacion === 'seleccion' && (
+              <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+                <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }}
+                  onClick={() => setSeleccion(new Set(prevision.filas.filter(f => f.estado === 'valido').map(clavePrevision)))}>
+                  Seleccionar todas las válidas
+                </button>
+                <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }}
+                  onClick={() => setSeleccion(new Set())}>
+                  Desmarcar todas
+                </button>
+                <span style={{ fontSize:13, color:'#e2e8f0' }}>Se crearán <strong style={{ color:'#10b981' }}>{seleccionadas}</strong> de {prevision.resumen.validos} filas válidas.</span>
+              </div>
+            )}
             <div style={{ overflowX:'auto', maxHeight:420, overflowY:'auto' }}>
               <table style={S.table}>
-                <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Puesto</th><th style={S.th}>Turno base</th><th style={S.th}>Horario</th><th style={S.th}>Guardia sugerido</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Detalle</th></tr></thead>
+                <thead><tr><th style={S.th}>Crear</th><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Puesto</th><th style={S.th}>Turno base</th><th style={S.th}>Horario</th><th style={S.th}>Guardia sugerido</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Detalle</th></tr></thead>
                 <tbody>
                   {prevision.filas.map((f, i) => {
                     const colorEstado: Record<EstadoPrevision, string> = {
@@ -7416,8 +7547,19 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
                       sin_puesto:'#f59e0b', turno_base_inactivo:'#f59e0b', objetivo_inactivo:'#94a3b8',
                       objetivo_prueba:'#94a3b8', config_invalida:'#f59e0b',
                     }
+                    const clave = clavePrevision(f)
                     return (
-                      <tr key={`${f.servicio_id}|${f.fecha}|${i}`}>
+                      <tr key={`${clave}|${i}`}>
+                        <td style={S.td}>
+                          {f.estado === 'valido' ? (
+                            <input
+                              type="checkbox"
+                              checked={seleccion.has(clave)}
+                              disabled={faseCreacion !== 'seleccion'}
+                              onChange={() => toggleSeleccion(clave)}
+                            />
+                          ) : null}
+                        </td>
                         <td style={S.td}>{f.fecha}</td>
                         <td style={S.td}>{f.dia_semana}</td>
                         <td style={S.td}><strong>{f.objetivo_nombre}</strong></td>
@@ -7434,9 +7576,11 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </Modal>
-      )}
+        )
+      })()}
 
       {(() => {
         // Regularización: servicios sin puesto real vinculado.

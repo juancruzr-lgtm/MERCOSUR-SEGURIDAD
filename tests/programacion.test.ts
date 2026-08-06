@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   ETIQUETA_PREVISION,
   MENSAJE_SERVICIO_SIN_PUESTO,
+  clavePrevision,
   fechasDelMes,
+  payloadCreacionParcial,
   previsualizarMes,
+  resumenConfirmacion,
 } from '@/lib/programacion'
 import type {
   ObjetivoPrevision,
@@ -233,6 +236,55 @@ describe('previsualizarMes', () => {
     // Con las entradas congeladas, cualquier intento de escritura lanzaría.
     expect(() => prever({ servicios, objetivos, turnosExistentes: turnos, puestosPorObjetivo: mapa })).not.toThrow()
     expect(JSON.stringify({ servicios, objetivos, turnos })).toBe(antes)
+  })
+
+  it('creación parcial: el payload lleva solo filas válidas seleccionadas', () => {
+    // Una fila válida, una en conflicto y una ya existente: aunque las tres
+    // estén "seleccionadas", solo la válida entra al payload.
+    const r = prever({
+      servicios: [servicioBase({ dias_semana: [6], guardia_habitual_id: 'g1' })],
+      turnosExistentes: [
+        { id: 't-1', objetivo_id: 'obj-1', puesto_id: 'p1', servicio_base_id: 'srv-1',
+          fecha: '2026-08-01', hora_inicio: '08:00:00', hora_fin: '16:00:00', estado: 'programado' },
+        { id: 't-2', objetivo_id: 'obj-otro', guardia_id: 'g1',
+          fecha: '2026-08-08', hora_inicio: '10:00:00', hora_fin: '12:00:00', estado: 'programado' },
+      ],
+    })
+    const todas = new Set(r.filas.map(clavePrevision))
+    const payload = payloadCreacionParcial(r.filas, todas)
+    expect(payload).toHaveLength(3) // sábados 15, 22 y 29
+    expect(payload.map(f => f.fecha)).toEqual(['2026-08-15', '2026-08-22', '2026-08-29'])
+    // La regla aprobada: el turno se crea sin vigilador. El payload no lleva
+    // guardia; la RPC inserta guardia_id NULL siempre.
+    for (const fila of payload) {
+      expect(Object.keys(fila).sort()).toEqual(['fecha', 'servicio_id'])
+    }
+  })
+
+  it('creación parcial: desmarcar filas las excluye del payload', () => {
+    const r = prever({ servicios: [servicioBase({ dias_semana: [6] })] })
+    const todas = r.filas.map(clavePrevision)
+    const sinPrimera = new Set(todas.slice(1))
+    expect(payloadCreacionParcial(r.filas, sinPrimera)).toHaveLength(4)
+    expect(payloadCreacionParcial(r.filas, new Set())).toHaveLength(0)
+  })
+
+  it('creación parcial: resumen de confirmación (objetivos y puestos)', () => {
+    const r = prever({
+      servicios: [
+        servicioBase({ id: 'srv-1', dias_semana: [6] }),
+        servicioBase({ id: 'srv-2', objetivo_id: 'obj-2', puesto_id: 'p2', dias_semana: [7], puesto: { nombre: 'Acceso' } }),
+      ],
+      objetivos: [objetivoBase, { id: 'obj-2', nombre: 'Objetivo Dos', estado: 'activo', es_prueba: false }],
+      puestosPorObjetivo: new Map([
+        ['obj-1', estadoPuestos([puesto('p1')])],
+        ['obj-2', estadoPuestos([puesto('p2', 'obj-2', 'Acceso')])],
+      ]),
+    })
+    const c = resumenConfirmacion(r.filas, new Set(r.filas.map(clavePrevision)))
+    expect(c.cantidad).toBe(r.resumen.validos)
+    expect(c.objetivos.sort()).toEqual(['Objetivo Dos', 'Objetivo Uno'])
+    expect(c.puestos).toBe(2)
   })
 
   it('clasificaciones centralizadas con etiqueta para cada estado', () => {
