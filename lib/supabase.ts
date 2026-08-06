@@ -75,6 +75,9 @@ export interface Turno {
   estado: 'programado' | 'cubierto' | 'descubierto'
   revisado_por?: string | null
   revisado_at?: string | null
+  publicado?: boolean | null
+  publicado_at?: string | null
+  publicado_por?: string | null
   // joins
   guardia?: Usuario
   objetivo?: Objetivo

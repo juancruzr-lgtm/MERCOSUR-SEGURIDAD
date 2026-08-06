@@ -64,6 +64,19 @@ describe('estados y resumen', () => {
     expect(ETIQUETA_ESTADO_ASIGNACION.publicado).toBe('Publicado')
   })
 
+  it('estadoAsignacion: publicado prevalece sobre asignado y sobre programado', () => {
+    expect(estadoAsignacion({ guardia_id: null, publicado: true })).toBe('publicado')
+    expect(estadoAsignacion({ guardia_id: 'g1', publicado: true })).toBe('publicado')
+    expect(estadoAsignacion({ guardia_id: 'g1', publicado: false })).toBe('asignado')
+  })
+
+  it('resumen del mes cuenta publicados por separado de asignados', () => {
+    const turnos = turnosNSER().map((x, i) => i % 5 === 0 ? { ...x, guardia_id: 'g1', publicado: true } : x)
+    const r = resumenAsignacionMensual(turnos, '2026-08-07', '10:00')
+    expect(r.publicados).toBeGreaterThan(0)
+    expect(r.asignados).toBe(0) // los publicados no vuelven a contar como asignados
+  })
+
   it('resumen del mes: turnos futuros con 0 asignados de entrada', () => {
     // 25 días x 3 posiciones = 75 turnos. A las 10:00 del 07/08, los dos
     // diurnos de ESE día (07:00) ya empezaron y no cuentan como futuros;

@@ -3341,6 +3341,20 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   )
 }
 function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActivo, limpiarFiltro, user }: any) {
+  // Refresca al entrar a la pantalla: el estado (incluida la publicación de
+  // programación, hecha desde el legajo del objetivo) puede haber cambiado
+  // desde que se cargaron los datos globales al iniciar sesión. Sin esto no
+  // se vería "sin F5" al navegar acá después de publicar.
+  useEffect(() => {
+    let vigente = true
+    const desdeStr = `${mesActualArgentina()}-01`
+    const hastaISO = inicioMesSiguienteArgISO()
+    const hastaStr = hastaISO.slice(0, 10)
+    void supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false })
+      .then(({ data }) => { if (vigente && data) setTurnos(data) })
+    return () => { vigente = false }
+  }, [])
+
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({
     guardia_id: '',
@@ -3818,6 +3832,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
                   <td style={S.td}>
                     <Badge type={t.estado}>{t.estado}</Badge>
+                    {t.publicado && <div style={{ marginTop:4 }}><Badge type="publicado">Publicado</Badge></div>}
                   </td>
 
                   <td style={S.td}>

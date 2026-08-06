@@ -15,8 +15,8 @@
 import { horariosSuperpuestos } from '@/lib/turnos'
 
 // ── Estados visibles ─────────────────────────────────────────────────────────
-// Publicado existe como estado futuro (no funcional en este bloque): un
-// turno nunca llega a él desde acá.
+// Publicado prevalece sobre Asignado/Programado: una vez publicado, el turno
+// ya fue comunicado y ese es el dato relevante para quien mira la grilla.
 export type EstadoAsignacion = 'programado' | 'asignado' | 'publicado'
 
 export const ETIQUETA_ESTADO_ASIGNACION: Record<EstadoAsignacion, string> = {
@@ -25,8 +25,8 @@ export const ETIQUETA_ESTADO_ASIGNACION: Record<EstadoAsignacion, string> = {
   publicado: 'Publicado',
 }
 
-export const estadoAsignacion = (t: { guardia_id?: string | null }): EstadoAsignacion =>
-  t.guardia_id ? 'asignado' : 'programado'
+export const estadoAsignacion = (t: { guardia_id?: string | null; publicado?: boolean | null }): EstadoAsignacion =>
+  t.publicado ? 'publicado' : t.guardia_id ? 'asignado' : 'programado'
 
 // ── Entradas ─────────────────────────────────────────────────────────────────
 
@@ -42,6 +42,7 @@ export interface TurnoGrilla {
   guardia_habitual_id?: string | null
   estado: string
   tipo_evento?: string | null
+  publicado?: boolean | null
 }
 
 export interface VigiladorGrilla {
@@ -141,7 +142,7 @@ export function resumenAsignacionMensual(
     futuros: futuros.length,
     programados: futuros.filter(t => estadoAsignacion(t) === 'programado').length,
     asignados: futuros.filter(t => estadoAsignacion(t) === 'asignado').length,
-    publicados: 0, // Publicado no es funcional en este bloque.
+    publicados: futuros.filter(t => estadoAsignacion(t) === 'publicado').length,
   }
 }
 

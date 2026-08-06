@@ -44,6 +44,11 @@ import type {
   PatronDias, PlanAsignacion, TurnoGrilla, VigiladorGrilla,
 } from '@/lib/asignacion-mensual'
 import {
+  ETIQUETA_MOTIVO_OMISION_PUBLICACION, etiquetaAlcancePublicacion,
+  planificarPublicacion, puedePublicarProgramacion,
+} from '@/lib/publicacion-programacion'
+import type { FiltroPublicacion, PlanPublicacion as PlanPublicacionMensual } from '@/lib/publicacion-programacion'
+import {
   SeccionUbicacion, SeccionAsistencias, SeccionRondas,
   SeccionSupervisiones, SeccionNovedades,
 } from './LegajoSecciones'
@@ -283,6 +288,79 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     setAsignandoRango(false)
     if (!res.ok) { setResultadoRango(`❌ ${res.error}`); return }
     setResultadoRango(`✅ ${res.resumen}`)
+  }
+
+  // ── Publicación de la programación mensual ──
+  // Cambia únicamente turnos.publicado — nunca horarios, posiciones,
+  // vigiladores, asistencias, GPS ni horas; no crea ni elimina turnos.
+  // Mismo modelo de permisos que la asignación de vigiladores (admin o
+  // supervisor dentro de su zona); no se amplía.
+  const puedePublicar = puedePublicarProgramacion(rolUsuario) || esAdmin === true
+  const [modoSeleccionPublicar, setModoSeleccionPublicar] = useState(false)
+  const [turnosSeleccionadosPublicar, setTurnosSeleccionadosPublicar] = useState<Set<string>>(new Set())
+  const [modalPublicar, setModalPublicar] = useState(false)
+  const [publicarDesde, setPublicarDesde] = useState('')
+  const [publicarHasta, setPublicarHasta] = useState('')
+  const [publicarPosiciones, setPublicarPosiciones] = useState<Set<string>>(new Set())
+  const [publicando, setPublicando] = useState(false)
+  const [resultadoPublicar, setResultadoPublicar] = useState<string | null>(null)
+  const [errorPublicar, setErrorPublicar] = useState('')
+
+  const posicionesGrilla = grillaMensual.filas.map(f => ({ id: f.puesto_id, nombre: f.puesto_nombre }))
+    .filter((p, i, arr) => p.id && arr.findIndex(x => x.id === p.id) === i)
+
+  const toggleSeleccionCelda = (turnoId: string) => {
+    setTurnosSeleccionadosPublicar(prev => {
+      const next = new Set(prev)
+      if (next.has(turnoId)) next.delete(turnoId); else next.add(turnoId)
+      return next
+    })
+  }
+
+  const abrirPublicar = () => {
+    setErrorPublicar('')
+    setResultadoPublicar(null)
+    if (turnosSeleccionadosPublicar.size === 0) {
+      setPublicarDesde(desdeMes)
+      setPublicarHasta(hastaMes)
+      setPublicarPosiciones(new Set())
+    }
+    setModalPublicar(true)
+  }
+
+  const filtroPublicar: FiltroPublicacion = turnosSeleccionadosPublicar.size > 0
+    ? { modo: 'turnos', turnoIds: [...turnosSeleccionadosPublicar] }
+    : { modo: 'rango', desde: publicarDesde || desdeMes, hasta: publicarHasta || hastaMes, puestoIds: publicarPosiciones.size > 0 ? [...publicarPosiciones] : null }
+
+  const planPublicar: PlanPublicacionMensual = planificarPublicacion(turnosGrilla, filtroPublicar)
+
+  const confirmarPublicar = async () => {
+    if (planPublicar.turno_ids.length === 0) return
+    setPublicando(true)
+    setErrorPublicar('')
+    setResultadoPublicar(null)
+    const nombresPos = publicarPosiciones.size > 0
+      ? posicionesGrilla.filter(p => publicarPosiciones.has(p.id)).map(p => p.nombre)
+      : undefined
+    const alcance = etiquetaAlcancePublicacion(filtroPublicar, nombresPos)
+    const { data, error } = await supabase.rpc('publicar_turnos_programacion', {
+      p_objetivo_id: objetivoId,
+      p_turno_ids: planPublicar.turno_ids,
+      p_alcance: alcance,
+    })
+    setPublicando(false)
+    if (error) { setErrorPublicar(error.message); return }
+    const r = data as any
+    setResultadoPublicar(`✅ ${r.publicados} publicado(s) · ${r.ya_publicados} ya publicado(s) · ${r.omitidos} omitido(s)`)
+    setTurnosSeleccionadosPublicar(new Set())
+    setModoSeleccionPublicar(false)
+    await cargarMensual()
+  }
+
+  const cerrarModalPublicar = () => {
+    setModalPublicar(false)
+    setResultadoPublicar(null)
+    setErrorPublicar('')
   }
 
   // ── Posiciones operativas: alta, edición, duplicación, desactivación ──
@@ -806,7 +884,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                     { label:'Turnos futuros', valor: resumenMensual.futuros, color:'#e2e8f0' },
                     { label: ETIQUETA_ESTADO_ASIGNACION.programado, valor: resumenMensual.programados, color:'#f59e0b' },
                     { label: ETIQUETA_ESTADO_ASIGNACION.asignado, valor: resumenMensual.asignados, color:'#10b981' },
-                    { label: ETIQUETA_ESTADO_ASIGNACION.publicado + ' (próximo bloque)', valor: resumenMensual.publicados, color:'#64748b' },
+                    { label: ETIQUETA_ESTADO_ASIGNACION.publicado, valor: resumenMensual.publicados, color:'#60a5fa' },
                   ].map(chip => (
                     <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'6px 12px', textAlign:'center' }}>
                       <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:chip.color }}>{chip.valor}</div>
@@ -840,6 +918,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                         <option value="todos">Todos los estados</option>
                         <option value="programado">{ETIQUETA_ESTADO_ASIGNACION.programado}</option>
                         <option value="asignado">{ETIQUETA_ESTADO_ASIGNACION.asignado}</option>
+                        <option value="publicado">{ETIQUETA_ESTADO_ASIGNACION.publicado}</option>
                       </select>
                       <select value={filtroGuardiaMensual} onChange={e => setFiltroGuardiaMensual(e.target.value)} style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}>
                         <option value="">Todos los vigiladores</option>
@@ -868,6 +947,26 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                       : `${filtradosLista.length} de ${turnosMensual.length} turnos del mes`}
                   </span>
                 </div>
+
+                {puedePublicar && (
+                  <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+                    <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12 }} onClick={abrirPublicar}>
+                      Publicar programación
+                    </button>
+                    {vistaMensual === 'grilla' && (
+                      <button
+                        type="button"
+                        style={{ ...S.btn, ...(modoSeleccionPublicar ? S.btnPrimary : S.btnSecondary), padding:'6px 12px', fontSize:12 }}
+                        onClick={() => { setModoSeleccionPublicar(v => !v); setTurnosSeleccionadosPublicar(new Set()) }}
+                      >
+                        {modoSeleccionPublicar ? 'Cancelar selección' : 'Seleccionar turnos para publicar'}
+                      </button>
+                    )}
+                    {modoSeleccionPublicar && turnosSeleccionadosPublicar.size > 0 && (
+                      <span style={{ fontSize:12, color:'#60a5fa' }}>{turnosSeleccionadosPublicar.size} turno(s) seleccionado(s)</span>
+                    )}
+                  </div>
+                )}
                 {mensualError && <div style={{ color:'#ef4444', fontSize:12, marginBottom:8 }}>{mensualError}</div>}
                 {!mensualCargando && turnosMensual.length === 0 && !mensualError && (
                   <div style={{ color:'#64748b', fontSize:13 }}>Sin turnos programados para este mes.</div>
@@ -903,23 +1002,27 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                               const futuro = esTurnoFuturo(t, hoy, horaActualStr)
                               const conConflicto = conflictosGrilla.has(t.id)
                               const est = estadoAsignacion(t)
-                              const colorFondo = conConflicto ? 'rgba(239,68,68,.15)' : est === 'asignado' ? 'rgba(16,185,129,.1)' : 'rgba(148,163,184,.08)'
-                              const colorTexto = conConflicto ? '#ef4444' : est === 'asignado' ? '#10b981' : '#94a3b8'
+                              const seleccionadoPublicar = turnosSeleccionadosPublicar.has(t.id)
+                              const colorFondo = seleccionadoPublicar ? 'rgba(96,165,250,.22)'
+                                : conConflicto ? 'rgba(239,68,68,.15)'
+                                : est === 'publicado' ? 'rgba(96,165,250,.12)'
+                                : est === 'asignado' ? 'rgba(16,185,129,.1)' : 'rgba(148,163,184,.08)'
+                              const colorTexto = conConflicto ? '#ef4444' : est === 'publicado' ? '#60a5fa' : est === 'asignado' ? '#10b981' : '#94a3b8'
                               return (
                                 <td key={f} style={{ borderBottom:'1px solid #0f172a', padding:2, textAlign:'center' }}>
                                   <button
                                     type="button"
-                                    disabled={!futuro}
-                                    onClick={() => futuro && abrirCelda(t)}
-                                    title={conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
+                                    disabled={!modoSeleccionPublicar && !futuro}
+                                    onClick={() => modoSeleccionPublicar ? toggleSeleccionCelda(t.id) : (futuro && abrirCelda(t))}
+                                    title={modoSeleccionPublicar ? 'Click para incluir/excluir de la publicación' : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
                                     style={{
                                       width:'100%', minWidth:48, padding:'5px 3px', borderRadius:6, fontSize:10.5,
                                       background: colorFondo, color: colorTexto,
-                                      border: conConflicto ? '1px solid rgba(239,68,68,.4)' : '1px solid transparent',
-                                      cursor: futuro ? 'pointer' : 'default', opacity: futuro ? 1 : 0.55,
+                                      border: seleccionadoPublicar ? '1px solid #60a5fa' : conConflicto ? '1px solid rgba(239,68,68,.4)' : '1px solid transparent',
+                                      cursor: (modoSeleccionPublicar || futuro) ? 'pointer' : 'default', opacity: (modoSeleccionPublicar || futuro) ? 1 : 0.55,
                                     }}
                                   >
-                                    {t.guardia_nombre ? t.guardia_nombre.split(',')[0] : '—'}
+                                    {seleccionadoPublicar ? '✓ ' : ''}{t.guardia_nombre ? t.guardia_nombre.split(',')[0] : '—'}
                                   </button>
                                 </td>
                               )
@@ -949,7 +1052,10 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                             <td style={{ padding:'6px 8px', color:'#e2e8f0' }}>{t.puesto_nombre ?? '—'}</td>
                             <td style={{ padding:'6px 8px', color:'#94a3b8', fontFamily:'Syne,sans-serif', fontWeight:700 }}>{hora(t.hora_inicio)} – {hora(t.hora_fin)}</td>
                             <td style={{ padding:'6px 8px', color: t.guardia_id ? '#e2e8f0' : '#f59e0b' }}>{nombreVigilador(t)}</td>
-                            <td style={{ padding:'6px 8px', color:'#94a3b8' }}>{t.estado}</td>
+                            <td style={{ padding:'6px 8px', color:'#94a3b8' }}>
+                              {t.estado}
+                              {t.publicado && <span style={{ marginLeft:6, color:'#60a5fa', fontWeight:700 }}>· Publicado</span>}
+                            </td>
                             <td style={{ padding:'6px 8px', color:'#94a3b8' }}>{etiquetaCaracteristica(t.tipo_evento)}</td>
                             <td style={{ padding:'6px 8px', color: t.servicio_base_id ? '#60a5fa' : '#94a3b8' }}>{origenTurno(t)}</td>
                           </tr>
@@ -963,6 +1069,86 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
           })()}
         </div>
       </div>
+
+      {/* Modal: publicar programación (mes / rango / posiciones / turnos elegidos) */}
+      {modalPublicar && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={cerrarModalPublicar}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:480, maxWidth:'92vw', maxHeight:'85vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>Publicar programación</div>
+            <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>
+              Solo cambia el estado a Publicado. No modifica horarios, posiciones, vigiladores, asistencias, GPS ni horas. No crea ni elimina turnos.
+            </div>
+
+            {turnosSeleccionadosPublicar.size > 0 ? (
+              <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:12 }}>
+                Alcance: <strong>{turnosSeleccionadosPublicar.size} turno(s) seleccionado(s) manualmente</strong> en la grilla.
+              </div>
+            ) : (
+              <>
+                <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+                  <div style={{ flex:1 }}>
+                    <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Desde</label>
+                    <input type="date" value={publicarDesde || desdeMes} onChange={e => setPublicarDesde(e.target.value)}
+                      style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'7px 9px', fontSize:13, marginTop:4 }} />
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Hasta</label>
+                    <input type="date" value={publicarHasta || hastaMes} onChange={e => setPublicarHasta(e.target.value)}
+                      style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'7px 9px', fontSize:13, marginTop:4 }} />
+                  </div>
+                </div>
+                <div style={{ marginBottom:12 }}>
+                  <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Posiciones (vacío = todas)</label>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:6 }}>
+                    {posicionesGrilla.map(p => {
+                      const activa = publicarPosiciones.has(p.id)
+                      return (
+                        <button key={p.id} type="button"
+                          onClick={() => setPublicarPosiciones(prev => {
+                            const next = new Set(prev)
+                            if (next.has(p.id)) next.delete(p.id); else next.add(p.id)
+                            return next
+                          })}
+                          style={{ ...S.btn, ...(activa ? S.btnPrimary : S.btnSecondary), padding:'4px 10px', fontSize:11 }}
+                        >
+                          {p.nombre}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:10, marginBottom:12 }}>
+              <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:4 }}>
+                <strong style={{ color:'#60a5fa' }}>{planPublicar.resumen.validos}</strong> turno(s) se van a publicar
+                {planPublicar.resumen.ya_publicados > 0 && <> · {planPublicar.resumen.ya_publicados} ya estaban publicados</>}
+                {planPublicar.resumen.omitidos > 0 && <> · {planPublicar.resumen.omitidos} se omiten</>}
+              </div>
+              {planPublicar.resumen.omitidos > 0 && (
+                <ul style={{ margin:'6px 0 0', paddingLeft:18, fontSize:11.5, color:'#94a3b8' }}>
+                  {(Object.entries(planPublicar.resumen.omitidos_por_motivo) as [keyof typeof planPublicar.resumen.omitidos_por_motivo, number][])
+                    .filter(([, n]) => n > 0)
+                    .map(([motivo, n]) => (
+                      <li key={motivo}>{n} × {ETIQUETA_MOTIVO_OMISION_PUBLICACION[motivo]}</li>
+                    ))}
+                </ul>
+              )}
+            </div>
+
+            {errorPublicar && <div style={{ color:'#ef4444', fontSize:12, marginBottom:10 }}>{errorPublicar}</div>}
+            {resultadoPublicar && <div style={{ color:'#10b981', fontSize:12, marginBottom:10 }}>{resultadoPublicar}</div>}
+
+            <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary }} onClick={cerrarModalPublicar}>Cerrar</button>
+              <button type="button" style={{ ...S.btn, ...S.btnPrimary }} disabled={publicando || planPublicar.turno_ids.length === 0} onClick={confirmarPublicar}>
+                {publicando ? 'Publicando…' : `Confirmar publicación (${planPublicar.resumen.validos})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: asignación individual (clic en celda de la grilla) */}
       {celdaEditando && (

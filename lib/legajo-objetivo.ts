@@ -549,6 +549,8 @@ export interface TurnoMensualLegajo {
   estado: string
   tipo_evento: string | null
   servicio_base_id: string | null
+  publicado: boolean
+  publicado_at: string | null
 }
 
 export type FiltroAsignacion = 'todos' | 'con' | 'sin'
@@ -599,7 +601,7 @@ export async function cargarProgramacionMensualObjetivo(
   const { desde, hasta } = rangoMesLegajo(mes)
   const { data, error } = await supabase
     .from('turnos')
-    .select('id, fecha, puesto_id, guardia_id, hora_inicio, hora_fin, estado, tipo_evento, servicio_base_id, puesto:puestos(nombre)')
+    .select('id, fecha, puesto_id, guardia_id, hora_inicio, hora_fin, estado, tipo_evento, servicio_base_id, publicado, publicado_at, puesto:puestos(nombre)')
     .eq('objetivo_id', objetivoId)
     .gte('fecha', desde)
     .lte('fecha', hasta)
@@ -621,6 +623,8 @@ export async function cargarProgramacionMensualObjetivo(
       estado: t.estado,
       tipo_evento: t.tipo_evento ?? null,
       servicio_base_id: t.servicio_base_id ?? null,
+      publicado: t.publicado === true,
+      publicado_at: t.publicado_at ?? null,
     }
   })
 

@@ -56,6 +56,7 @@ export function Badge({ type, children }: { type: string, children: React.ReactN
     importante:[alpha(semanticColors.warning, 0.16), semanticColors.warning],
     normal:[alpha(semanticColors.info, 0.15), semanticColors.info],
     programado:[alpha(brandColors.muted, 0.15), brandColors.text],
+    publicado:[alpha(semanticColors.info, 0.15), semanticColors.info],
     advertencia:[alpha(semanticColors.warning, 0.16), semanticColors.warning],
     alerta:[alpha(semanticColors.error, 0.15), semanticColors.error],
   }
