@@ -35,8 +35,8 @@ export const ETIQUETA_VINCULACION: Record<EstadoVinculacion, string> = {
   vinculado: 'Vinculado',
   sugerencia_unica: 'Coincidencia única',
   ambiguo: 'Varias coincidencias — elegir',
-  sin_coincidencia: 'Sin puesto compatible',
-  sin_puestos: 'El objetivo no tiene puestos activos',
+  sin_coincidencia: 'Sin posición operativa compatible',
+  sin_puestos: 'El objetivo no tiene posiciones operativas activas',
 }
 
 const normalizar = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')

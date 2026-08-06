@@ -3822,7 +3822,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
               automáticamente y con ninguno se bloquea el alta. */}
           {estadoPuestos?.caso === 'multiple' && (
             <div style={{ marginBottom:16 }}>
-              <label style={S.label}>Puesto</label>
+              <label style={S.label}>Posición operativa</label>
               <select
                 style={S.select}
                 value={form.puesto_id}
@@ -7458,7 +7458,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
           {faseCreacion === 'confirmar' && (
             <div style={{ background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.35)', borderRadius:8, padding:'12px 16px', marginBottom:16 }}>
               <div style={{ fontSize:14, fontWeight:700, color:'#f59e0b', marginBottom:8 }}>Confirmar creación — {prevision.mes}</div>
-              <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:4 }}>Se crearán <strong>{confirmacion.cantidad}</strong> turnos en <strong>{confirmacion.objetivos.length}</strong> objetivo{confirmacion.objetivos.length !== 1 ? 's' : ''} ({confirmacion.objetivos.join(', ')}) sobre <strong>{confirmacion.puestos}</strong> puesto{confirmacion.puestos !== 1 ? 's' : ''}.</div>
+              <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:4 }}>Se crearán <strong>{confirmacion.cantidad}</strong> turnos en <strong>{confirmacion.objetivos.length}</strong> objetivo{confirmacion.objetivos.length !== 1 ? 's' : ''} ({confirmacion.objetivos.join(', ')}) sobre <strong>{confirmacion.puestos}</strong> posici{confirmacion.puestos !== 1 ? 'ones' : 'ón'} operativa{confirmacion.puestos !== 1 ? 's' : ''}.</div>
               <div style={{ fontSize:12, color:'#f59e0b', marginBottom:4 }}>Los turnos se crean sin vigilador asignado: el supervisor lo asigna después.</div>
               <div style={{ fontSize:12, color:'#94a3b8', marginBottom:10 }}>Los turnos ya existentes y los conflictos no serán modificados.</div>
               {errorCreacion && <div style={{ fontSize:12, color:'#ef4444', marginBottom:10 }}>{errorCreacion}</div>}
@@ -7500,7 +7500,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
               { label: ETIQUETA_PREVISION.ya_existe, valor: prevision.resumen.existentes, color:'#60a5fa' },
               { label:'Conflictos', valor: prevision.resumen.conflictos, color:'#ef4444' },
               { label:'Servicios excluidos', valor: prevision.resumen.servicios_excluidos, color:'#f59e0b' },
-              { label:'Sin puesto', valor: prevision.resumen.servicios_sin_puesto, color:'#f59e0b' },
+              { label:'Sin posición operativa', valor: prevision.resumen.servicios_sin_puesto, color:'#f59e0b' },
             ].map(chip => (
               <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 14px', textAlign:'center' }}>
                 <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, color:chip.color }}>{chip.valor}</div>
@@ -7539,7 +7539,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
             )}
             <div style={{ overflowX:'auto', maxHeight:420, overflowY:'auto' }}>
               <table style={S.table}>
-                <thead><tr><th style={S.th}>Crear</th><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Puesto</th><th style={S.th}>Turno base</th><th style={S.th}>Horario</th><th style={S.th}>Guardia sugerido</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Detalle</th></tr></thead>
+                <thead><tr><th style={S.th}>Crear</th><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Posición operativa</th><th style={S.th}>Turno base</th><th style={S.th}>Horario</th><th style={S.th}>Guardia sugerido</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Detalle</th></tr></thead>
                 <tbody>
                   {prevision.filas.map((f, i) => {
                     const colorEstado: Record<EstadoPrevision, string> = {
@@ -7590,8 +7590,8 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
           <div style={{ background:'#111827', border:'1px solid #92400e55', borderRadius:12, padding:20, marginBottom:20 }}>
             <div style={{ display:'flex', alignItems:'center', gap:12, cursor:'pointer' }} onClick={() => setMostrarReg(v => !v)}>
               <div style={{ flex:1 }}>
-                <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700 }}>🧩 Regularización de puestos <span style={{ color:'#f59e0b' }}>({pendientesReg.length} servicio{pendientesReg.length !== 1 ? 's' : ''} sin puesto real)</span></div>
-                <div style={{ fontSize:13, color:'#64748b' }}>Vinculá cada servicio con su puesto real. Nada se decide automáticamente y no se crean puestos.</div>
+                <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700 }}>🧩 Regularización de posiciones operativas <span style={{ color:'#f59e0b' }}>({pendientesReg.length} servicio{pendientesReg.length !== 1 ? 's' : ''} sin posición operativa)</span></div>
+                <div style={{ fontSize:13, color:'#64748b' }}>Vinculá cada servicio con su posición operativa real. Nada se decide automáticamente y no se crean posiciones.</div>
               </div>
               <span style={{ color:'#64748b' }}>{mostrarReg ? '▲' : '▼'}</span>
             </div>
@@ -7599,7 +7599,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
               <div style={{ marginTop:14, overflowX:'auto' }}>
                 {msgVinculo && <div style={{ color:'#ef4444', fontSize:12, marginBottom:8 }}>{msgVinculo}</div>}
                 <table style={S.table}>
-                  <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Turno base</th><th style={S.th}>Nombre histórico</th><th style={S.th}>Puesto sugerido</th><th style={S.th}>Estado</th><th style={S.th}></th></tr></thead>
+                  <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Turno base</th><th style={S.th}>Nombre histórico</th><th style={S.th}>Posición sugerida</th><th style={S.th}>Estado</th><th style={S.th}></th></tr></thead>
                   <tbody>
                     {pendientesReg.map((s: any) => {
                       const puestos = puestosReg?.get(s.objetivo_id)?.puestos ?? []
@@ -7614,7 +7614,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
                             {sug.estado === 'sugerencia_unica' && <span style={{ color:'#10b981' }}>{sug.puestoSugerido?.nombre}</span>}
                             {sug.estado === 'ambiguo' && (
                               <select style={{ ...S.select, width:'auto', minWidth:150 }} value={elegido} onChange={e => setSeleccionVinculo(prev => ({ ...prev, [s.id]: e.target.value }))}>
-                                <option value="">Elegir puesto...</option>
+                                <option value="">Elegir posición...</option>
                                 {sug.candidatos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                               </select>
                             )}
@@ -7651,7 +7651,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
         ) : (
           <div style={{ overflowX:'auto' }}>
             <table style={S.table}>
-              <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Turno Base</th><th style={S.th}>Puesto</th><th style={S.th}>Días</th><th style={S.th}>Guardia Habitual</th><th style={S.th}>Estado</th><th style={S.th}></th></tr></thead>
+              <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Turno Base</th><th style={S.th}>Posición operativa</th><th style={S.th}>Días</th><th style={S.th}>Guardia Habitual</th><th style={S.th}>Estado</th><th style={S.th}></th></tr></thead>
               <tbody>
                 {servicios.map((s: any) => (
                   <tr key={s.id}>
@@ -7664,7 +7664,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
                       {s.puesto?.nombre
                         ? <span style={{ color:'#e2e8f0' }}>{s.puesto.nombre}</span>
                         : s.nombre_puesto
-                          ? <span title="Texto legacy sin vincular a un puesto real">{s.nombre_puesto} <span style={{ color:'#f59e0b', fontSize:10 }}>(texto)</span></span>
+                          ? <span title="Texto legacy sin vincular a una posición operativa real">{s.nombre_puesto} <span style={{ color:'#f59e0b', fontSize:10 }}>(texto)</span></span>
                           : <span style={{ color:'#374151' }}>—</span>}
                     </td>
                     <td style={S.td}>{diasLabel(s.dias_semana)}</td>
@@ -7690,21 +7690,21 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
           <div style={{ marginBottom:16 }}><label style={S.label}>Objetivo *</label><select style={S.select} value={form.objetivo_id} onChange={e => setForm({...form, objetivo_id:e.target.value})}><option value="">Seleccionar objetivo...</option>{objetivos.filter((o: any) => o.estado === 'activo').map((o: any) => <option key={o.id} value={o.id}>{o.nombre}</option>)}</select></div>
           <div style={{ marginBottom:16 }}><label style={S.label}>Turno Base *</label><select style={S.select} value={form.turno_base_id} onChange={e => setForm({...form, turno_base_id:e.target.value})}><option value="">Seleccionar turno...</option>{turnosBase.map((tb: any) => <option key={tb.id} value={tb.id}>{tb.nombre} ({tb.hora_inicio} → {tb.hora_fin})</option>)}</select></div>
           <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Puesto *</label>
+            <label style={S.label}>Posición operativa *</label>
             {!form.objetivo_id ? (
               <div style={{ fontSize:12, color:'#64748b', marginTop:6 }}>Elegí primero el objetivo.</div>
             ) : puestosForm === null ? (
-              <div style={{ fontSize:12, color:'#64748b', marginTop:6 }}>Cargando puestos…</div>
+              <div style={{ fontSize:12, color:'#64748b', marginTop:6 }}>Cargando posiciones operativas…</div>
             ) : puestosForm.caso === 'sin_puestos' ? (
               <div style={{ fontSize:12, color:'#ef4444', marginTop:6 }}>{MENSAJE_SIN_PUESTOS_ACTIVOS}</div>
             ) : (
               <select style={S.select} value={form.puesto_id} onChange={e => setForm({...form, puesto_id:e.target.value})}>
-                <option value="">Seleccionar puesto...</option>
+                <option value="">Seleccionar posición operativa...</option>
                 {puestosForm.puestos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
               </select>
             )}
             {form.nombre_puesto && !form.puesto_id && (
-              <div style={{ fontSize:11, color:'#f59e0b', marginTop:6 }}>Texto anterior sin vincular: “{form.nombre_puesto}”. Elegí el puesto real que corresponde.</div>
+              <div style={{ fontSize:11, color:'#f59e0b', marginTop:6 }}>Texto anterior sin vincular: “{form.nombre_puesto}”. Elegí la posición operativa real que corresponde.</div>
             )}
             {errorForm && <div style={{ fontSize:12, color:'#ef4444', marginTop:6 }}>{errorForm}</div>}
           </div>

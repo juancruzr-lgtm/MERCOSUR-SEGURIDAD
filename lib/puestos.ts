@@ -32,11 +32,13 @@ export interface EstadoPuestos {
   puestoUnicoId: string | null
 }
 
+// Terminología visible: "posición operativa" (los nombres técnicos puestos/
+// puesto_id se conservan en base y código por compatibilidad).
 export const MENSAJE_SIN_PUESTOS_ACTIVOS =
-  'Este objetivo no tiene puestos activos. Creá un puesto antes de generar turnos.'
+  'Este objetivo no tiene posiciones operativas activas. Creá una posición operativa antes de generar turnos.'
 
 export const MENSAJE_PUESTO_REQUERIDO =
-  'Este objetivo tiene más de un puesto activo: elegí a cuál corresponde el turno.'
+  'Este objetivo tiene más de una posición operativa activa: elegí a cuál corresponde el turno.'
 
 const COLS_PUESTO = 'id, objetivo_id, nombre, orden'
 
@@ -65,7 +67,7 @@ export async function obtenerPuestosActivos(
     .order('orden', { ascending: true, nullsFirst: false })
     .order('nombre', { ascending: true })
 
-  if (error) return { data: null, error: 'No se pudieron cargar los puestos del objetivo.' }
+  if (error) return { data: null, error: 'No se pudieron cargar las posiciones operativas del objetivo.' }
   return { data: clasificarPuestos((data ?? []) as PuestoActivo[]), error: null }
 }
 
@@ -88,7 +90,7 @@ export async function obtenerPuestosActivosDeObjetivos(
     .order('orden', { ascending: true, nullsFirst: false })
     .order('nombre', { ascending: true })
 
-  if (error) return { data: null, error: 'No se pudieron cargar los puestos de los objetivos.' }
+  if (error) return { data: null, error: 'No se pudieron cargar las posiciones operativas de los objetivos.' }
 
   const porObjetivo = new Map<string, PuestoActivo[]>()
   for (const puesto of (data ?? []) as PuestoActivo[]) {
@@ -117,7 +119,7 @@ export function resolverPuestoTurno(
   estado: EstadoPuestos | null,
   puestoSeleccionado?: string | null,
 ): ResolucionPuesto {
-  if (!estado) return { ok: false, error: 'Todavía no se cargaron los puestos del objetivo.' }
+  if (!estado) return { ok: false, error: 'Todavía no se cargaron las posiciones operativas del objetivo.' }
 
   if (estado.caso === 'sin_puestos') {
     return { ok: false, error: MENSAJE_SIN_PUESTOS_ACTIVOS }
@@ -130,7 +132,7 @@ export function resolverPuestoTurno(
   const elegido = puestoSeleccionado?.trim()
   if (!elegido) return { ok: false, error: MENSAJE_PUESTO_REQUERIDO }
   if (!estado.puestos.some(p => p.id === elegido)) {
-    return { ok: false, error: 'El puesto elegido no pertenece a este objetivo.' }
+    return { ok: false, error: 'La posición operativa elegida no pertenece a este objetivo.' }
   }
   return { ok: true, puesto_id: elegido }
 }

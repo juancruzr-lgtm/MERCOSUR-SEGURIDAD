@@ -45,7 +45,7 @@ export const ETIQUETA_PREVISION: Record<EstadoPrevision, string> = {
   valido: 'Válido para crear',
   ya_existe: 'Ya existe',
   conflicto_horario: 'Conflicto de horario',
-  sin_puesto: 'Servicio sin puesto',
+  sin_puesto: 'Servicio sin posición operativa',
   turno_base_inactivo: 'Turno base inactivo',
   objetivo_inactivo: 'Objetivo inactivo',
   objetivo_prueba: 'Objetivo de prueba excluido',
@@ -53,7 +53,7 @@ export const ETIQUETA_PREVISION: Record<EstadoPrevision, string> = {
 }
 
 export const MENSAJE_SERVICIO_SIN_PUESTO =
-  'No se puede programar: servicio sin puesto vinculado'
+  'No se puede programar: servicio sin posición operativa vinculada'
 
 export const MENSAJE_GUARDIA_SUGERIDO_SUPERPUESTO =
   'El guardia sugerido ya tiene un turno superpuesto en ese horario.'
@@ -251,7 +251,7 @@ export function previsualizarMes(params: {
     const puestosObjetivo = puestosPorObjetivo.get(srv.objetivo_id)?.puestos ?? []
     const puestoActivo = puestosObjetivo.find(p => p.id === srv.puesto_id)
     if (!puestoActivo) {
-      advertir(srv, 'config_invalida', 'El puesto vinculado no está activo o no pertenece al objetivo.')
+      advertir(srv, 'config_invalida', 'La posición operativa vinculada no está activa o no pertenece al objetivo.')
       continue
     }
     if (!srv.turno_base) {

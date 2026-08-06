@@ -256,7 +256,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       {/* Puestos */}
       {puestos.length > 0 && (
         <div style={card}>
-          <div style={secTitle}>Puestos</div>
+          <div style={secTitle}>Posiciones operativas</div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
             {puestos.map((p: any) => (
               <div key={p.id} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 14px', fontSize:13 }}>

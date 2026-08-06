@@ -291,7 +291,7 @@ describe('previsualizarMes', () => {
     expect(ETIQUETA_PREVISION.valido).toBe('Válido para crear')
     expect(ETIQUETA_PREVISION.ya_existe).toBe('Ya existe')
     expect(ETIQUETA_PREVISION.conflicto_horario).toBe('Conflicto de horario')
-    expect(ETIQUETA_PREVISION.sin_puesto).toBe('Servicio sin puesto')
+    expect(ETIQUETA_PREVISION.sin_puesto).toBe('Servicio sin posición operativa')
     expect(ETIQUETA_PREVISION.turno_base_inactivo).toBe('Turno base inactivo')
     expect(ETIQUETA_PREVISION.objetivo_inactivo).toBe('Objetivo inactivo')
     expect(ETIQUETA_PREVISION.objetivo_prueba).toBe('Objetivo de prueba excluido')
