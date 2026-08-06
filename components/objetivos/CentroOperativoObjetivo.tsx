@@ -34,6 +34,16 @@ import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 import { listarRondaAlertasObjetivo } from '@/lib/rondas'
 import { formatFechaHora } from '@/lib/formato'
 import {
+  ETIQUETA_ESTADO_ASIGNACION, ETIQUETA_MOTIVO_OMISION,
+  armarGrillaMensual, estadoAsignacion, esTurnoFuturo,
+  filtrarGrillaMensual, planificarAsignacionRango,
+  resumenAsignacionMensual, turnosEnConflicto,
+} from '@/lib/asignacion-mensual'
+import type {
+  EstadoAsignacion, FilaGrillaPosicion, FiltrosGrillaMensual,
+  PatronDias, PlanAsignacion, TurnoGrilla, VigiladorGrilla,
+} from '@/lib/asignacion-mensual'
+import {
   SeccionUbicacion, SeccionAsistencias, SeccionRondas,
   SeccionSupervisiones, SeccionNovedades,
 } from './LegajoSecciones'
@@ -112,20 +122,155 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const [filtroPuestoMensual, setFiltroPuestoMensual] = useState('')
   const [filtroAsignacionMensual, setFiltroAsignacionMensual] = useState<FiltroAsignacion>('todos')
 
+  const cargarMensual = useCallback(async () => {
+    setMensualCargando(true)
+    setMensualError(null)
+    const res = await cargarProgramacionMensualObjetivo(objetivoId, mesMensual)
+    setTurnosMensual(res.turnos)
+    setPersonasMensual(res.personas)
+    setMensualError(res.error)
+    setMensualCargando(false)
+  }, [objetivoId, mesMensual])
+
+  useEffect(() => {
+    if (!mostrarMensual) return
+    void cargarMensual()
+  }, [mostrarMensual, cargarMensual])
+
+  // ── Asignación de vigiladores sobre la grilla mensual ──
+  // Prototipo funcional (Bloque E): pasa turnos de Programado a Asignado.
+  // No publica, no notifica. Vista Grilla (por defecto) o Lista (existente).
+  const [vistaMensual, setVistaMensual] = useState<'grilla' | 'lista'>('grilla')
+  const [vigiladoresActivos, setVigiladoresActivos] = useState<VigiladorGrilla[]>([])
+  const [sugeridoPorPuesto, setSugeridoPorPuesto] = useState<Map<string, string>>(new Map())
+  const [filtroEstadoMensual, setFiltroEstadoMensual] = useState<EstadoAsignacion | 'todos'>('todos')
+  const [filtroGuardiaMensual, setFiltroGuardiaMensual] = useState('')
+  const [filtroConflictoMensual, setFiltroConflictoMensual] = useState<'todos' | 'con' | 'sin'>('todos')
+
   useEffect(() => {
     if (!mostrarMensual) return
     let vivo = true
-    setMensualCargando(true)
-    setMensualError(null)
-    void cargarProgramacionMensualObjetivo(objetivoId, mesMensual).then(res => {
-      if (!vivo) return
-      setTurnosMensual(res.turnos)
-      setPersonasMensual(res.personas)
-      setMensualError(res.error)
-      setMensualCargando(false)
-    })
+    void supabase.from('usuarios').select('id, nombre, apellido, estado, rol')
+      .in('rol', ['guardia', 'vigilador']).eq('estado', 'activo').order('apellido')
+      .then(({ data }) => {
+        if (!vivo || !data) return
+        setVigiladoresActivos(data.map((u: any) => ({ id: u.id, nombre: `${u.apellido}, ${u.nombre}`, estado: u.estado })))
+      })
+    void supabase.from('servicios_objetivo').select('puesto_id, guardia_habitual_id')
+      .eq('objetivo_id', objetivoId).eq('activo', true)
+      .then(({ data }) => {
+        if (!vivo || !data) return
+        const mapa = new Map<string, string>()
+        for (const s of data as any[]) if (s.puesto_id && s.guardia_habitual_id) mapa.set(s.puesto_id, s.guardia_habitual_id)
+        setSugeridoPorPuesto(mapa)
+      })
     return () => { vivo = false }
-  }, [mostrarMensual, mesMensual, objetivoId])
+  }, [mostrarMensual, objetivoId])
+
+  const nombreVigiladorGrilla = (id: string | null) => {
+    if (!id) return null
+    return vigiladoresActivos.find(v => v.id === id)?.nombre ?? nombrePersona(id, personasMensual)
+  }
+
+  const turnosGrilla: TurnoGrilla[] = turnosMensual.map(t => ({
+    id: t.id, puesto_id: t.puesto_id, puesto_nombre: t.puesto_nombre,
+    fecha: t.fecha, hora_inicio: t.hora_inicio, hora_fin: t.hora_fin,
+    guardia_id: t.guardia_id, guardia_nombre: nombreVigiladorGrilla(t.guardia_id),
+    guardia_habitual_id: t.puesto_id ? sugeridoPorPuesto.get(t.puesto_id) ?? null : null,
+    estado: t.estado, tipo_evento: t.tipo_evento,
+  }))
+
+  const [anioMensual, mesNumMensual] = mesMensual.split('-').map(Number)
+  const desdeMes = `${mesMensual}-01`
+  const hastaMes = `${mesMensual}-${String(new Date(anioMensual, mesNumMensual, 0).getDate()).padStart(2, '0')}`
+  const grillaMensual = armarGrillaMensual(turnosGrilla, desdeMes, hastaMes)
+  const conflictosGrilla = turnosEnConflicto(turnosGrilla)
+  const horaActualRef = new Date()
+  const horaActualStr = `${String(horaActualRef.getHours()).padStart(2,'0')}:${String(horaActualRef.getMinutes()).padStart(2,'0')}`
+  const resumenMensual = resumenAsignacionMensual(turnosGrilla, hoy, horaActualStr)
+
+  // ── Modal: asignación individual (clic en celda) ──
+  const [celdaEditando, setCeldaEditando] = useState<TurnoGrilla | null>(null)
+  const [guardiaCelda, setGuardiaCelda] = useState('')
+  const [errorCelda, setErrorCelda] = useState('')
+  const [asignandoCelda, setAsignandoCelda] = useState(false)
+
+  // ── Modal: asignación por rango / por fila completa ──
+  const [filaAsignando, setFilaAsignando] = useState<FilaGrillaPosicion | null>(null)
+  const [modoFilaCompleta, setModoFilaCompleta] = useState(false)
+  const [rangoDesde, setRangoDesde] = useState('')
+  const [rangoHasta, setRangoHasta] = useState('')
+  const [rangoGuardia, setRangoGuardia] = useState('')
+  const [rangoPatron, setRangoPatron] = useState<PatronDias>('todos')
+  const [rangoExcluir, setRangoExcluir] = useState('')
+  const [asignandoRango, setAsignandoRango] = useState(false)
+  const [resultadoRango, setResultadoRango] = useState<string | null>(null)
+
+  const abrirCelda = (t: TurnoGrilla) => {
+    setCeldaEditando(t)
+    setGuardiaCelda(t.guardia_id ?? t.guardia_habitual_id ?? '')
+    setErrorCelda('')
+  }
+
+  const ejecutarAsignacion = async (turnoIds: string[], guardiaId: string, masiva: boolean): Promise<{ ok: boolean; error?: string; resumen?: string }> => {
+    if (turnoIds.length === 0) return { ok: false, error: 'No hay turnos válidos para asignar.' }
+    const { data, error } = await supabase.rpc('asignar_vigilador_turnos', {
+      p_operacion_id: crypto.randomUUID(),
+      p_guardia_id: guardiaId,
+      p_turno_ids: turnoIds,
+      p_masiva: masiva,
+    })
+    if (error) return { ok: false, error: error.message }
+    await cargarMensual()
+    const r = data as any
+    return { ok: true, resumen: `${r.asignadas} asignado(s) · ${r.ya_asignadas} ya asignado(s) · ${r.omitidas} omitido(s)` }
+  }
+
+  const confirmarCelda = async () => {
+    if (!celdaEditando || !guardiaCelda) return
+    setAsignandoCelda(true)
+    setErrorCelda('')
+    const res = await ejecutarAsignacion([celdaEditando.id], guardiaCelda, false)
+    setAsignandoCelda(false)
+    if (!res.ok) { setErrorCelda(res.error ?? 'No se pudo asignar.'); return }
+    setCeldaEditando(null)
+  }
+
+  const abrirRango = (fila: FilaGrillaPosicion, filaCompleta: boolean) => {
+    const fechas = [...fila.celdas.keys()].sort()
+    setFilaAsignando(fila)
+    setModoFilaCompleta(filaCompleta)
+    setRangoDesde(filaCompleta ? (fechas[0] ?? desdeMes) : desdeMes)
+    setRangoHasta(filaCompleta ? (fechas[fechas.length - 1] ?? hastaMes) : hastaMes)
+    setRangoGuardia(sugeridoPorPuesto.get(fila.puesto_id) ?? '')
+    setRangoPatron('todos')
+    setRangoExcluir('')
+    setResultadoRango(null)
+  }
+
+  const planRango: PlanAsignacion | null = filaAsignando && rangoGuardia
+    ? planificarAsignacionRango({
+        fila: filaAsignando,
+        desde: rangoDesde || desdeMes,
+        hasta: rangoHasta || hastaMes,
+        guardiaId: rangoGuardia,
+        patron: rangoPatron,
+        excluir: rangoExcluir.split(',').map(s => s.trim()).filter(Boolean),
+        fechaActual: hoy,
+        horaActual: horaActualStr,
+        turnosVigilador: turnosGrilla.filter(t => t.guardia_id === rangoGuardia),
+      })
+    : null
+
+  const confirmarRango = async () => {
+    if (!planRango || !rangoGuardia || planRango.turno_ids.length === 0) return
+    setAsignandoRango(true)
+    setResultadoRango(null)
+    const res = await ejecutarAsignacion(planRango.turno_ids, rangoGuardia, true)
+    setAsignandoRango(false)
+    if (!res.ok) { setResultadoRango(`❌ ${res.error}`); return }
+    setResultadoRango(`✅ ${res.resumen}`)
+  }
 
   // ── Historial de rondas JWM ──
   const [historial, setHistorial] = useState<RondaLegajo[]>([])
@@ -352,7 +497,9 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         )}
 
         {/* Programación mensual: el mes completo del objetivo, sin ocultar
-            turnos sin vigilador ni limitar a hoy/próximos. */}
+            turnos sin vigilador ni limitar a hoy/próximos. Prototipo
+            funcional de asignación (Bloque E): Programado → Asignado.
+            No publica, no notifica. */}
         <div style={{ marginTop:12, paddingTop:12, borderTop:'1px solid #1e2d42' }}>
           <button
             type="button"
@@ -363,10 +510,6 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
           </button>
 
           {mostrarMensual && (() => {
-            const filtrados = filtrarProgramacionMensual(turnosMensual, {
-              puestoId: filtroPuestoMensual || null,
-              asignacion: filtroAsignacionMensual,
-            })
             const posiciones = Array.from(
               new Map(
                 turnosMensual
@@ -374,11 +517,47 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                   .map(t => [t.puesto_id as string, t.puesto_nombre ?? '—']),
               ).entries(),
             )
+            const guardiasEnMes = Array.from(
+              new Map(
+                turnosGrilla.filter(t => t.guardia_id)
+                  .map(t => [t.guardia_id as string, t.guardia_nombre ?? '—']),
+              ).entries(),
+            )
+            const filtrosGrilla: FiltrosGrillaMensual = {
+              puestoId: filtroPuestoMensual || null,
+              estado: filtroEstadoMensual,
+              guardiaId: filtroGuardiaMensual || null,
+              conConflicto: filtroConflictoMensual === 'todos' ? null : filtroConflictoMensual === 'con',
+            }
+            const idsVisibles = new Set(filtrarGrillaMensual(turnosGrilla, filtrosGrilla).map(t => t.id))
             const nombreVigilador = (t: TurnoMensualLegajo) =>
               t.guardia_id ? nombrePersona(t.guardia_id, personasMensual) : ETIQUETA_SIN_ASIGNAR
+            const filtradosLista = filtrarProgramacionMensual(turnosMensual, {
+              puestoId: filtroPuestoMensual || null,
+              asignacion: filtroAsignacionMensual,
+            })
             return (
               <div style={{ marginTop:12 }}>
+                {/* Resumen del mes — se recalcula sin F5 tras cada asignación. */}
+                <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+                  {[
+                    { label:'Turnos futuros', valor: resumenMensual.futuros, color:'#e2e8f0' },
+                    { label: ETIQUETA_ESTADO_ASIGNACION.programado, valor: resumenMensual.programados, color:'#f59e0b' },
+                    { label: ETIQUETA_ESTADO_ASIGNACION.asignado, valor: resumenMensual.asignados, color:'#10b981' },
+                    { label: ETIQUETA_ESTADO_ASIGNACION.publicado + ' (próximo bloque)', valor: resumenMensual.publicados, color:'#64748b' },
+                  ].map(chip => (
+                    <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'6px 12px', textAlign:'center' }}>
+                      <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:chip.color }}>{chip.valor}</div>
+                      <div style={{ fontSize:10, color:'#64748b' }}>{chip.label}</div>
+                    </div>
+                  ))}
+                </div>
+
                 <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+                  <div style={{ display:'flex', gap:4 }}>
+                    <button type="button" style={{ ...S.btn, ...(vistaMensual === 'grilla' ? S.btnPrimary : S.btnSecondary), padding:'6px 12px', fontSize:12 }} onClick={() => setVistaMensual('grilla')}>Vista Grilla</button>
+                    <button type="button" style={{ ...S.btn, ...(vistaMensual === 'lista' ? S.btnPrimary : S.btnSecondary), padding:'6px 12px', fontSize:12 }} onClick={() => setVistaMensual('lista')}>Vista Lista</button>
+                  </div>
                   <input
                     type="month"
                     value={mesMensual}
@@ -393,24 +572,104 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                     <option value="">Todas las posiciones</option>
                     {posiciones.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
                   </select>
-                  <select
-                    value={filtroAsignacionMensual}
-                    onChange={e => setFiltroAsignacionMensual(e.target.value as FiltroAsignacion)}
-                    style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}
-                  >
-                    <option value="todos">Todos</option>
-                    <option value="con">Con vigilador</option>
-                    <option value="sin">Sin vigilador</option>
-                  </select>
+                  {vistaMensual === 'grilla' ? (
+                    <>
+                      <select value={filtroEstadoMensual} onChange={e => setFiltroEstadoMensual(e.target.value as any)} style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}>
+                        <option value="todos">Todos los estados</option>
+                        <option value="programado">{ETIQUETA_ESTADO_ASIGNACION.programado}</option>
+                        <option value="asignado">{ETIQUETA_ESTADO_ASIGNACION.asignado}</option>
+                      </select>
+                      <select value={filtroGuardiaMensual} onChange={e => setFiltroGuardiaMensual(e.target.value)} style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}>
+                        <option value="">Todos los vigiladores</option>
+                        {guardiasEnMes.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
+                      </select>
+                      <select value={filtroConflictoMensual} onChange={e => setFiltroConflictoMensual(e.target.value as any)} style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}>
+                        <option value="todos">Con y sin conflicto</option>
+                        <option value="con">Solo con conflicto</option>
+                        <option value="sin">Solo sin conflicto</option>
+                      </select>
+                    </>
+                  ) : (
+                    <select
+                      value={filtroAsignacionMensual}
+                      onChange={e => setFiltroAsignacionMensual(e.target.value as FiltroAsignacion)}
+                      style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}
+                    >
+                      <option value="todos">Todos</option>
+                      <option value="con">Con vigilador</option>
+                      <option value="sin">Sin vigilador</option>
+                    </select>
+                  )}
                   <span style={{ fontSize:12, color:'#64748b' }}>
-                    {mensualCargando ? 'Cargando…' : `${filtrados.length} de ${turnosMensual.length} turnos del mes`}
+                    {mensualCargando ? 'Cargando…' : vistaMensual === 'grilla'
+                      ? `${idsVisibles.size} de ${turnosGrilla.length} turnos del mes`
+                      : `${filtradosLista.length} de ${turnosMensual.length} turnos del mes`}
                   </span>
                 </div>
                 {mensualError && <div style={{ color:'#ef4444', fontSize:12, marginBottom:8 }}>{mensualError}</div>}
                 {!mensualCargando && turnosMensual.length === 0 && !mensualError && (
                   <div style={{ color:'#64748b', fontSize:13 }}>Sin turnos programados para este mes.</div>
                 )}
-                {filtrados.length > 0 && (
+
+                {vistaMensual === 'grilla' && grillaMensual.filas.length > 0 && (
+                  <div style={{ overflowX:'auto', maxHeight:480, overflowY:'auto' }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ position:'sticky', left:0, top:0, zIndex:2, background:'#111827', textAlign:'left', padding:'6px 8px', color:'#64748b', fontSize:10, textTransform:'uppercase', borderBottom:'1px solid #1e2d42', minWidth:170 }}>Posición · Horario</th>
+                          {grillaMensual.fechas.map(f => (
+                            <th key={f} style={{ position:'sticky', top:0, background:'#111827', textAlign:'center', padding:'4px 6px', color:'#64748b', fontSize:10, borderBottom:'1px solid #1e2d42', minWidth:52 }}>{f.slice(8, 10)}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {grillaMensual.filas
+                          .filter(fila => !filtroPuestoMensual || fila.puesto_id === filtroPuestoMensual)
+                          .map(fila => (
+                          <tr key={`${fila.puesto_id}|${fila.hora_inicio}`}>
+                            <td style={{ position:'sticky', left:0, background:'#0b1220', padding:'6px 8px', borderBottom:'1px solid #0f172a' }}>
+                              <div style={{ color:'#e2e8f0', fontWeight:600 }}>{fila.puesto_nombre}</div>
+                              <div style={{ color:'#64748b', fontFamily:'Syne,sans-serif' }}>{fila.hora_inicio}–{fila.hora_fin}</div>
+                              <div style={{ display:'flex', gap:4, marginTop:4 }}>
+                                <button type="button" title="Asignar desde/hasta con patrón de días" style={{ ...S.btn, ...S.btnSecondary, padding:'2px 6px', fontSize:10 }} onClick={() => abrirRango(fila, false)}>Rango</button>
+                                <button type="button" title="Asignar todos los turnos visibles de esta posición" style={{ ...S.btn, ...S.btnSecondary, padding:'2px 6px', fontSize:10 }} onClick={() => abrirRango(fila, true)}>Fila completa</button>
+                              </div>
+                            </td>
+                            {grillaMensual.fechas.map(f => {
+                              const t = fila.celdas.get(f)
+                              if (!t || !idsVisibles.has(t.id)) return <td key={f} style={{ borderBottom:'1px solid #0f172a', padding:4 }} />
+                              const futuro = esTurnoFuturo(t, hoy, horaActualStr)
+                              const conConflicto = conflictosGrilla.has(t.id)
+                              const est = estadoAsignacion(t)
+                              const colorFondo = conConflicto ? 'rgba(239,68,68,.15)' : est === 'asignado' ? 'rgba(16,185,129,.1)' : 'rgba(148,163,184,.08)'
+                              const colorTexto = conConflicto ? '#ef4444' : est === 'asignado' ? '#10b981' : '#94a3b8'
+                              return (
+                                <td key={f} style={{ borderBottom:'1px solid #0f172a', padding:2, textAlign:'center' }}>
+                                  <button
+                                    type="button"
+                                    disabled={!futuro}
+                                    onClick={() => futuro && abrirCelda(t)}
+                                    title={conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
+                                    style={{
+                                      width:'100%', minWidth:48, padding:'5px 3px', borderRadius:6, fontSize:10.5,
+                                      background: colorFondo, color: colorTexto,
+                                      border: conConflicto ? '1px solid rgba(239,68,68,.4)' : '1px solid transparent',
+                                      cursor: futuro ? 'pointer' : 'default', opacity: futuro ? 1 : 0.55,
+                                    }}
+                                  >
+                                    {t.guardia_nombre ? t.guardia_nombre.split(',')[0] : '—'}
+                                  </button>
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {vistaMensual === 'lista' && filtradosLista.length > 0 && (
                   <div style={{ overflowX:'auto', maxHeight:420, overflowY:'auto' }}>
                     <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
                       <thead>
@@ -421,7 +680,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                         </tr>
                       </thead>
                       <tbody>
-                        {filtrados.map(t => (
+                        {filtradosLista.map(t => (
                           <tr key={t.id} style={{ borderBottom:'1px solid #0f172a' }}>
                             <td style={{ padding:'6px 8px', color:'#e2e8f0' }}>{t.fecha}</td>
                             <td style={{ padding:'6px 8px', color:'#94a3b8' }}>{diaSemanaCorto(t.fecha)}</td>
@@ -442,6 +701,112 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
           })()}
         </div>
       </div>
+
+      {/* Modal: asignación individual (clic en celda de la grilla) */}
+      {celdaEditando && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setCeldaEditando(null)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:360, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>Asignar vigilador</div>
+            <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>
+              {celdaEditando.puesto_nombre} · {celdaEditando.fecha} · {celdaEditando.hora_inicio}–{celdaEditando.hora_fin}
+            </div>
+            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Vigilador</label>
+            <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={guardiaCelda} onChange={e => setGuardiaCelda(e.target.value)}>
+              <option value="">Seleccionar…</option>
+              {vigiladoresActivos.map(v => (
+                <option key={v.id} value={v.id}>{v.nombre}{v.id === celdaEditando.guardia_habitual_id ? ' (sugerido)' : ''}</option>
+              ))}
+            </select>
+            {celdaEditando.guardia_habitual_id && guardiaCelda !== celdaEditando.guardia_habitual_id && (
+              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:8 }}>Sugerencia habitual: {nombreVigiladorGrilla(celdaEditando.guardia_habitual_id)}</div>
+            )}
+            {conflictosGrilla.has(celdaEditando.id) && (
+              <div style={{ fontSize:11, color:'#ef4444', marginBottom:8 }}>Este turno tiene un conflicto de horario detectado con otro turno del vigilador asignado.</div>
+            )}
+            {errorCelda && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorCelda}</div>}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setCeldaEditando(null)}>Cancelar</button>
+              <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !guardiaCelda || asignandoCelda ? 0.5 : 1 }} disabled={!guardiaCelda || asignandoCelda} onClick={confirmarCelda}>
+                {asignandoCelda ? 'Asignando…' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: asignación por rango / por fila completa */}
+      {filaAsignando && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setFilaAsignando(null)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:460, maxWidth:'90vw', maxHeight:'85vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>
+              {modoFilaCompleta ? 'Asignar todos los turnos visibles de esta posición' : 'Asignar por rango'}
+            </div>
+            <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>{filaAsignando.puesto_nombre} · {filaAsignando.hora_inicio}–{filaAsignando.hora_fin}</div>
+
+            {!modoFilaCompleta && (
+              <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+                <div style={{ flex:1 }}>
+                  <label style={{ fontSize:11, color:'#64748b' }}>Asignar desde</label>
+                  <input type="date" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={rangoDesde} onChange={e => setRangoDesde(e.target.value)} />
+                </div>
+                <div style={{ flex:1 }}>
+                  <label style={{ fontSize:11, color:'#64748b' }}>Asignar hasta</label>
+                  <input type="date" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={rangoHasta} onChange={e => setRangoHasta(e.target.value)} />
+                </div>
+              </div>
+            )}
+
+            <label style={{ fontSize:11, color:'#64748b' }}>Vigilador</label>
+            <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={rangoGuardia} onChange={e => setRangoGuardia(e.target.value)}>
+              <option value="">Seleccionar…</option>
+              {vigiladoresActivos.map(v => (
+                <option key={v.id} value={v.id}>{v.nombre}{v.id === sugeridoPorPuesto.get(filaAsignando.puesto_id) ? ' (sugerido)' : ''}</option>
+              ))}
+            </select>
+
+            {!modoFilaCompleta && (
+              <>
+                <label style={{ fontSize:11, color:'#64748b' }}>Días</label>
+                <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={rangoPatron} onChange={e => setRangoPatron(e.target.value as PatronDias)}>
+                  <option value="todos">Todos los días</option>
+                  <option value="lun_vie">Lunes a viernes</option>
+                  <option value="sab_dom">Sábados y domingos</option>
+                </select>
+                <label style={{ fontSize:11, color:'#64748b' }}>Excluir fechas puntuales (YYYY-MM-DD separadas por coma)</label>
+                <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12, marginTop:4, marginBottom:8 }} value={rangoExcluir} onChange={e => setRangoExcluir(e.target.value)} placeholder="2026-08-15, 2026-08-16" />
+              </>
+            )}
+
+            {planRango && (
+              <div style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:10, marginBottom:10, fontSize:12 }}>
+                <div style={{ color:'#e2e8f0', marginBottom:4 }}>
+                  <strong>{planRango.resumen.validos}</strong> válido(s) de <strong>{planRango.resumen.total}</strong> turno(s) del rango.
+                </div>
+                <div style={{ color:'#64748b' }}>Ya asignados a este vigilador: {planRango.resumen.ya_asignados} · Conflictos detectados: {planRango.resumen.conflictos} · Omitidos: {planRango.resumen.omitidos}</div>
+                {planRango.filas.filter(f => f.estado === 'omitido').length > 0 && (
+                  <div style={{ marginTop:6, color:'#94a3b8', maxHeight:100, overflowY:'auto' }}>
+                    {planRango.filas.filter(f => f.estado === 'omitido').slice(0, 8).map(f => (
+                      <div key={f.turno_id}>· {f.fecha}: {f.motivo ? ETIQUETA_MOTIVO_OMISION[f.motivo as keyof typeof ETIQUETA_MOTIVO_OMISION] ?? f.motivo : ''}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {resultadoRango && <div style={{ fontSize:12, marginBottom:8, color: resultadoRango.startsWith('✅') ? '#10b981' : '#ef4444' }}>{resultadoRango}</div>}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setFilaAsignando(null)}>Cerrar</button>
+              <button
+                type="button"
+                style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !planRango || planRango.resumen.validos === 0 || asignandoRango ? 0.5 : 1 }}
+                disabled={!planRango || planRango.resumen.validos === 0 || asignandoRango}
+                onClick={confirmarRango}
+              >
+                {asignandoRango ? 'Asignando…' : `Confirmar (${planRango?.resumen.validos ?? 0})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 4. Asistencias y 5. Rondas. Ambas cargan al desplegarse. */}
       <SeccionAsistencias
