@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accionesPrimerControl, filtrosDeFila } from '@/lib/primer-control'
+import { accionesPrimerControl, filtrosDeFila, formatearDuracionHoraMin, etiquetaEstadoGps } from '@/lib/primer-control'
 
 // Visibilidad de acciones del primer control del vigilador (OT-01/OT-02).
 // Las validaciones de identidad, idempotencia y no-modificación de horas
@@ -131,5 +131,56 @@ describe('filtrosDeFila (bandeja del supervisor)', () => {
   it('sin fichaje y sin respuesta', () => {
     expect(filtrosDeFila({ tieneFichaje: false, salidaAutomatica: false, estadoControl: 'pendiente' }))
       .toEqual(['sin_respuesta', 'sin_fichaje_sin_respuesta'])
+  })
+})
+
+// Resumen post-egreso (continuidad): formato de duración y etiqueta de GPS.
+// No hay decimales ni conceptos de liquidación en lo que se muestra acá.
+
+describe('formatearDuracionHoraMin', () => {
+  it('horas enteras', () => {
+    expect(formatearDuracionHoraMin(8)).toBe('8h 0min')
+  })
+
+  it('horas con fracción', () => {
+    expect(formatearDuracionHoraMin(8.5)).toBe('8h 30min')
+  })
+
+  it('redondea minutos sueltos', () => {
+    expect(formatearDuracionHoraMin(1.0167)).toBe('1h 1min') // 1h 1min (1.0167*60=61.0min)
+  })
+
+  it('cero u horas negativas: sin dato', () => {
+    expect(formatearDuracionHoraMin(0)).toBe('—')
+    expect(formatearDuracionHoraMin(-1)).toBe('—')
+  })
+
+  it('null o undefined: sin dato', () => {
+    expect(formatearDuracionHoraMin(null)).toBe('—')
+    expect(formatearDuracionHoraMin(undefined)).toBe('—')
+  })
+
+  it('nunca devuelve un número decimal suelto (ej. "8.5")', () => {
+    expect(formatearDuracionHoraMin(8.5)).not.toMatch(/\d\.\d/)
+  })
+})
+
+describe('etiquetaEstadoGps', () => {
+  it('dentro_radio', () => {
+    expect(etiquetaEstadoGps('dentro_radio')).toBe('GPS OK · dentro del radio')
+  })
+  it('fuera_radio', () => {
+    expect(etiquetaEstadoGps('fuera_radio')).toBe('GPS fuera del objetivo')
+  })
+  it('objetivo_sin_gps', () => {
+    expect(etiquetaEstadoGps('objetivo_sin_gps')).toBe('GPS registrado · objetivo sin ubicación configurada')
+  })
+  it('gps_no_disponible', () => {
+    expect(etiquetaEstadoGps('gps_no_disponible')).toBe('Sin GPS')
+  })
+  it('null, undefined o desconocido: Sin GPS', () => {
+    expect(etiquetaEstadoGps(null)).toBe('Sin GPS')
+    expect(etiquetaEstadoGps(undefined)).toBe('Sin GPS')
+    expect(etiquetaEstadoGps('algo_raro')).toBe('Sin GPS')
   })
 })

@@ -72,6 +72,14 @@ export interface FilaPlanilla {
   estado_control: EstadoPrimerControl | null
   // false en turnos pasados sin fichaje: solo pueden solicitar modificación
   permite_aceptar: boolean
+  // Resumen post-egreso (continuidad): horario tal como fue programado en el
+  // turno, distinto de hora_entrada/hora_salida (que son lo efectivamente
+  // registrado) — y el estado GPS de cada marca, para el resumen que el
+  // vigilador ve al aceptar o solicitar modificación.
+  hora_inicio_programada: string | null
+  hora_fin_programada: string | null
+  gps_ingreso_estado: string | null
+  gps_egreso_estado: string | null
 }
 
 export interface RespuestaPlanilla {
@@ -143,6 +151,7 @@ export async function GET(
       hora_entrada_final, hora_salida_final,
       objetivo_final_id, tipo_registro,
       horas_liquidables, origen_cobertura, cobertura_anulada_at, cierre_automatico,
+      gps_ingreso_estado, gps_egreso_estado,
       turno:turnos!inner(
         id, fecha, hora_inicio, hora_fin, objetivo_id, tipo_evento, puesto_id,
         objetivo:objetivos(nombre, es_prueba),
@@ -235,6 +244,10 @@ export async function GET(
       salida_automatica: Boolean(r.cierre_automatico),
       estado_control:  estado === 'trabajado' ? 'pendiente' : null,
       permite_aceptar: estado === 'trabajado',
+      hora_inicio_programada: t.hora_inicio ? t.hora_inicio.slice(0, 5) : null,
+      hora_fin_programada:    t.hora_fin    ? t.hora_fin.slice(0, 5)    : null,
+      gps_ingreso_estado: r.gps_ingreso_estado ?? null,
+      gps_egreso_estado:  r.gps_egreso_estado  ?? null,
     })
   }
 
@@ -271,6 +284,10 @@ export async function GET(
       salida_automatica: false,
       estado_control: yaFinalizado ? 'pendiente' : null,
       permite_aceptar: false,
+      hora_inicio_programada: t.hora_inicio?.slice(0, 5) ?? null,
+      hora_fin_programada:    t.hora_fin?.slice(0, 5)    ?? null,
+      gps_ingreso_estado: null,
+      gps_egreso_estado:  null,
     })
   }
 
@@ -296,6 +313,10 @@ export async function GET(
       salida_automatica: false,
       estado_control: null,
       permite_aceptar: false,
+      hora_inicio_programada: null,
+      hora_fin_programada: null,
+      gps_ingreso_estado: null,
+      gps_egreso_estado: null,
     })
   }
 

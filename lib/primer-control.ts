@@ -110,3 +110,31 @@ export function accionesPrimerControl(
   if (fila.estado === 'programado') return { aceptar: false, solicitar: true }
   return nada
 }
+
+// ── Resumen post-egreso (continuidad) ────────────────────────────────────────
+// Aparece apenas se registra la salida y, si no se respondió ahí, queda
+// disponible después en Mi Planilla (mismo turno_id, mismo estado_control:
+// una sola fuente de verdad, no hay estado paralelo para el resumen).
+
+/** "8h 30min" — nunca decimales ni conceptos de liquidación. */
+export function formatearDuracionHoraMin(horasDecimal: number | null | undefined): string {
+  if (horasDecimal == null || horasDecimal <= 0) return '—'
+  const totalMin = Math.round(horasDecimal * 60)
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return `${h}h ${m}min`
+}
+
+// Mismos 4 estados que ya persisten en registros_asistencia.gps_ingreso_estado /
+// gps_egreso_estado (ver components/guardia/GuardiaMobile.tsx) — no inventar otros.
+export type GpsEstadoRadio = 'dentro_radio' | 'fuera_radio' | 'objetivo_sin_gps' | 'gps_no_disponible'
+
+export function etiquetaEstadoGps(estado: GpsEstadoRadio | string | null | undefined): string {
+  switch (estado) {
+    case 'dentro_radio': return 'GPS OK · dentro del radio'
+    case 'fuera_radio': return 'GPS fuera del objetivo'
+    case 'objetivo_sin_gps': return 'GPS registrado · objetivo sin ubicación configurada'
+    case 'gps_no_disponible': return 'Sin GPS'
+    default: return 'Sin GPS'
+  }
+}

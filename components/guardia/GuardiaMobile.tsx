@@ -5,6 +5,7 @@ import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
+import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
 
 // ── CONSTANTES ────────────────────────────────────────────────
 const INGRESO_PENDIENTE_KEY = 'mercosur_ingreso_pendiente'
@@ -19,6 +20,7 @@ interface Turno {
   hora_inicio: string
   hora_fin: string
   objetivo_id: string
+  puesto_id?: string | null
   estado: string
 }
 
@@ -29,6 +31,11 @@ interface Objetivo {
   lat?: number
   lng?: number
   radio_metros?: number
+}
+
+interface Puesto {
+  id: string
+  nombre: string
 }
 
 interface Registro {
@@ -526,6 +533,11 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [turnos, setTurnos]       = useState<Turno[]>([])
   const [objetivos, setObjetivos] = useState<Objetivo[]>([])
   const [registros, setRegistros] = useState<Registro[]>([])
+  const [puestos, setPuestos]     = useState<Puesto[]>([])
+  // Resumen post-egreso (continuidad): se abre solo, apenas se registra la
+  // salida. Si no se responde y se cierra la app, sigue disponible en Mi
+  // Planilla — no hay otro lugar donde vivan estos datos.
+  const [resumenTurnoId, setResumenTurnoId] = useState<string | null>(null)
   const [loading, setLoading]     = useState(true)
   const [fichando, setFichando]   = useState<string | null>(null)
   const [mensaje, setMensaje]     = useState<{ texto: string, tipo: 'ok' | 'warn' | 'error' } | null>(null)
@@ -621,7 +633,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
     if (!silencioso) setRefrescando(true)
 
     try {
-      const [turnosRes, objetivosRes, registrosRes] = await Promise.all([
+      const [turnosRes, objetivosRes, registrosRes, puestosRes] = await Promise.all([
 
         supabase
           .from('turnos')
@@ -639,14 +651,19 @@ export default function GuardiaMobile({ user }: { user: any }) {
           .select('*')
           .eq('guardia_id', user.id),
 
+        supabase
+          .from('puestos')
+          .select('id, nombre'),
+
       ])
 
       // Un error deja intactos los datos previos: la pantalla nunca se vacía.
-      if (turnosRes.error || objetivosRes.error || registrosRes.error) {
+      if (turnosRes.error || objetivosRes.error || registrosRes.error || puestosRes.error) {
         console.error('Error cargando datos del guardia', {
           turnos: turnosRes.error,
           objetivos: objetivosRes.error,
           registros: registrosRes.error,
+          puestos: puestosRes.error,
         })
         setErrorCarga('No se pudieron actualizar los turnos')
         return
@@ -663,6 +680,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
       setTurnos(filtrados)
       setObjetivos(objetivosRes.data || [])
       setRegistros(registrosRes.data || [])
+      setPuestos(puestosRes.data || [])
       setErrorCarga(null)
       setUltimaActualizacion(new Date())
     } catch (error) {
@@ -1469,6 +1487,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
           : mensajeAuditoriaRadio(auditoriaEgreso, gps),
         tipo: auditoriaEgreso.estado === 'fuera_radio' || !gps ? 'warn' : 'ok',
       })
+      // Resumen post-egreso (continuidad): aparece apenas se registra la
+      // salida. Si el vigilador cierra la app sin responder, el mismo turno
+      // queda disponible después en Mi Planilla.
+      setResumenTurnoId(turno.id)
     }
 
     setFichando(null)
@@ -1524,6 +1546,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
   }
 
   const getObjetivo = (id: string) => objetivos.find(o => o.id === id)
+  const getPuesto = (id?: string | null) => id ? puestos.find(p => p.id === id) : undefined
 
   // ── RENDER ────────────────────────────────────────────────
   return (
@@ -2016,6 +2039,37 @@ export default function GuardiaMobile({ user }: { user: any }) {
         </div>
 
       </div>
+
+      {/* Resumen post-egreso (continuidad): aparece solo apenas se registra
+          la salida. Reutiliza aceptar_turno_planilla / solicitar_modificacion_planilla. */}
+      {resumenTurnoId && (() => {
+        const turnoResumen = turnos.find(t => t.id === resumenTurnoId)
+        const registroResumen = registros.find(r => r.turno_id === resumenTurnoId)
+        if (!turnoResumen || !registroResumen) return null
+        const objetivoResumen = getObjetivo(turnoResumen.objetivo_id)
+        const puestoResumen = getPuesto(turnoResumen.puesto_id)
+        return (
+          <ResumenJornadaModal
+            turnoId={turnoResumen.id}
+            empleadoId={user.id}
+            objetivoNombre={objetivoResumen?.nombre ?? null}
+            puestoNombre={puestoResumen?.nombre ?? null}
+            horaInicioProgramada={turnoResumen.hora_inicio?.slice(0, 5) ?? null}
+            horaFinProgramada={turnoResumen.hora_fin?.slice(0, 5) ?? null}
+            horaEntradaRegistrada={registroResumen.hora_entrada_real?.slice(0, 5) ?? null}
+            horaSalidaRegistrada={registroResumen.hora_salida_real?.slice(0, 5) ?? null}
+            horasTrabajadas={registroResumen.horas_trabajadas ?? null}
+            salidaAutomatica={false}
+            gpsIngresoEstado={registroResumen.gps_ingreso_estado ?? null}
+            gpsEgresoEstado={registroResumen.gps_egreso_estado ?? null}
+            estado="trabajado"
+            estadoControlInicial="pendiente"
+            permiteAceptar
+            esTitular
+            onClose={() => setResumenTurnoId(null)}
+          />
+        )
+      })()}
     </div>
   )
 }

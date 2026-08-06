@@ -5,6 +5,7 @@ import { track } from '@/lib/telemetry'
 import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 import { ETIQUETA_PRIMER_CONTROL, ETIQUETA_SALIDA_AUTOMATICA, accionesPrimerControl } from '@/lib/primer-control'
 import type { EstadoPrimerControl } from '@/lib/primer-control'
+import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -23,6 +24,10 @@ interface FilaPlanilla {
   salida_automatica?: boolean
   estado_control?: EstadoPrimerControl | null
   permite_aceptar?: boolean
+  hora_inicio_programada?: string | null
+  hora_fin_programada?: string | null
+  gps_ingreso_estado?: string | null
+  gps_egreso_estado?: string | null
 }
 
 interface DatosPlanilla {
@@ -221,6 +226,9 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
   const [accionando, setAccionando] = useState<string | null>(null)
   const [errorAccion, setErrorAccion] = useState<string | null>(null)
   const [filaSolicitud, setFilaSolicitud] = useState<FilaPlanilla | null>(null)
+  // Resumen post-egreso (continuidad): si el vigilador no respondió al
+  // registrar la salida, acá queda disponible el mismo resumen.
+  const [filaResumen, setFilaResumen] = useState<FilaPlanilla | null>(null)
   const [textoSolicitud, setTextoSolicitud] = useState('')
   const [enviandoSolicitud, setEnviandoSolicitud] = useState(false)
 
@@ -513,6 +521,14 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                                   </span>
                                 )
                                 : <span style={{ color: '#64748b', fontSize: 11 }}>{ETIQUETA_PRIMER_CONTROL.pendiente}</span>}
+                        {fila.estado_control != null && (
+                          <button
+                            style={{ display: 'block', marginTop: 4, padding: 0, border: 'none', background: 'none', color: '#38bdf8', fontSize: 10.5, cursor: 'pointer', textDecoration: 'underline' }}
+                            onClick={() => setFilaResumen(fila)}
+                          >
+                            Ver resumen
+                          </button>
+                        )}
                       </td>
                     </tr>
                   )
@@ -592,6 +608,31 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
             </div>
           </div>
         </div>
+      )}
+
+      {/* Resumen post-egreso (continuidad): mismo componente que se abre solo
+          al registrar la salida — acá queda disponible si no se respondió ahí. */}
+      {filaResumen && filaResumen.turno_id && (
+        <ResumenJornadaModal
+          turnoId={filaResumen.turno_id}
+          empleadoId={empleadoId}
+          objetivoNombre={filaResumen.objetivo_nombre ?? null}
+          puestoNombre={filaResumen.puesto_nombre ?? null}
+          horaInicioProgramada={filaResumen.hora_inicio_programada ?? null}
+          horaFinProgramada={filaResumen.hora_fin_programada ?? null}
+          horaEntradaRegistrada={filaResumen.estado === 'programado' ? null : (filaResumen.hora_entrada ?? null)}
+          horaSalidaRegistrada={filaResumen.estado === 'programado' ? null : (filaResumen.hora_salida ?? null)}
+          horasTrabajadas={filaResumen.horas ?? null}
+          salidaAutomatica={Boolean(filaResumen.salida_automatica)}
+          gpsIngresoEstado={filaResumen.gps_ingreso_estado ?? null}
+          gpsEgresoEstado={filaResumen.gps_egreso_estado ?? null}
+          estado={filaResumen.estado ?? 'trabajado'}
+          estadoControlInicial={filaResumen.estado_control ?? null}
+          permiteAceptar={filaResumen.permite_aceptar !== false}
+          esTitular={Boolean(datos?.es_titular)}
+          onClose={() => setFilaResumen(null)}
+          onCambio={() => { setFilaResumen(null); recargarPlanilla() }}
+        />
       )}
     </div>
   )
