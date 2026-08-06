@@ -172,7 +172,13 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     return vigiladoresActivos.find(v => v.id === id)?.nombre ?? nombrePersona(id, personasMensual)
   }
 
-  const turnosGrilla: TurnoGrilla[] = turnosMensual.map(t => ({
+  // La grilla de asignación es solo para cobertura normal: capacitaciones y
+  // coberturas/reemplazos quedan fuera de este bloque (restricción explícita).
+  // La Vista Lista, en cambio, sigue mostrando todos los turnos del mes sin
+  // filtrar — eso no cambia.
+  const turnosGrilla: TurnoGrilla[] = turnosMensual
+    .filter(t => (t.tipo_evento ?? 'normal') === 'normal')
+    .map(t => ({
     id: t.id, puesto_id: t.puesto_id, puesto_nombre: t.puesto_nombre,
     fecha: t.fecha, hora_inicio: t.hora_inicio, hora_fin: t.hora_fin,
     guardia_id: t.guardia_id, guardia_nombre: nombreVigiladorGrilla(t.guardia_id),
