@@ -71,8 +71,9 @@ export function sugerirVinculacion(
   if (coincidencias.length > 1) {
     return { estado: 'ambiguo', puestoSugerido: null, candidatos: coincidencias }
   }
-  // Nombre legacy sin match (p. ej. "DIURNO A" contra "Principal"): queda
-  // pendiente. No se sugiere el único puesto del objetivo: no hay información
-  // suficiente para asumir que representan lo mismo.
-  return { estado: 'sin_coincidencia', puestoSugerido: null, candidatos: [] }
+  // Nombre legacy sin match (p. ej. "DIURNO A" contra "Vigilador 1"): nunca
+  // se sugiere nada. Los candidatos son todas las posiciones activas del
+  // objetivo para que el administrador pueda elegir manualmente cuál
+  // corresponde; sin esa elección explícita el servicio queda pendiente.
+  return { estado: 'sin_coincidencia', puestoSugerido: null, candidatos: puestosDelObjetivo }
 }

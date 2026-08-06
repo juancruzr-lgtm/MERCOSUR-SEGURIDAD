@@ -31,11 +31,22 @@ describe('sugerirVinculacion', () => {
 
   it('caso NACION SERVICIOS: nombre legacy sin match no sugiere el único puesto', () => {
     // "DIURNO A" contra "Principal": debe quedar pendiente, nunca sugerirse
-    // Principal automáticamente ni crearse puestos.
+    // Principal automáticamente ni crearse posiciones. Los candidatos listan
+    // las posiciones activas SOLO para que el administrador elija a mano.
     const r = sugerirVinculacion({ puesto_id: null, nombre_puesto: 'DIURNO A' }, [p('p1', 'Principal')])
     expect(r.estado).toBe('sin_coincidencia')
     expect(r.puestoSugerido).toBeNull()
-    expect(r.candidatos).toEqual([])
+    expect(r.candidatos.map(c => c.id)).toEqual(['p1'])
+  })
+
+  it('sin coincidencia con varias posiciones: candidatos para elección manual, sin sugerencia', () => {
+    const r = sugerirVinculacion(
+      { puesto_id: null, nombre_puesto: 'DIURNO B' },
+      [p('p1', 'Principal'), p('p2', 'Vigilador 1'), p('p3', 'Vigilador 2')],
+    )
+    expect(r.estado).toBe('sin_coincidencia')
+    expect(r.puestoSugerido).toBeNull()
+    expect(r.candidatos).toHaveLength(3)
   })
 
   it('sin nombre legacy y un solo puesto activo: sugerencia única (regla única del proyecto)', () => {

@@ -7612,17 +7612,20 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
                           <td style={{ ...S.td, color:'#f59e0b', fontSize:12 }}>{s.nombre_puesto || <span style={{ color:'#64748b' }}>sin nombre</span>}</td>
                           <td style={S.td}>
                             {sug.estado === 'sugerencia_unica' && <span style={{ color:'#10b981' }}>{sug.puestoSugerido?.nombre}</span>}
-                            {sug.estado === 'ambiguo' && (
+                            {/* Sin coincidencia de nombre: nada se sugiere; el
+                                administrador elige manualmente entre las
+                                posiciones activas del objetivo. */}
+                            {(sug.estado === 'ambiguo' || sug.estado === 'sin_coincidencia') && sug.candidatos.length > 0 && (
                               <select style={{ ...S.select, width:'auto', minWidth:150 }} value={elegido} onChange={e => setSeleccionVinculo(prev => ({ ...prev, [s.id]: e.target.value }))}>
                                 <option value="">Elegir posición...</option>
                                 {sug.candidatos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                               </select>
                             )}
-                            {(sug.estado === 'sin_coincidencia' || sug.estado === 'sin_puestos') && <span style={{ color:'#64748b' }}>—</span>}
+                            {(sug.estado === 'sin_puestos' || (sug.estado === 'sin_coincidencia' && sug.candidatos.length === 0)) && <span style={{ color:'#64748b' }}>—</span>}
                           </td>
                           <td style={{ ...S.td, fontSize:12, color: sug.estado === 'sugerencia_unica' ? '#10b981' : sug.estado === 'ambiguo' ? '#f59e0b' : '#94a3b8' }}>{ETIQUETA_VINCULACION[sug.estado]}</td>
                           <td style={S.td}>
-                            {(sug.estado === 'sugerencia_unica' || sug.estado === 'ambiguo') && (
+                            {(sug.estado === 'sugerencia_unica' || sug.estado === 'ambiguo' || (sug.estado === 'sin_coincidencia' && sug.candidatos.length > 0)) && (
                               <button
                                 style={{ ...S.btn, ...S.btnPrimary, padding:'6px 12px', fontSize:12, opacity: vinculando === s.id || !elegido ? 0.5 : 1 }}
                                 disabled={vinculando !== null || !elegido}

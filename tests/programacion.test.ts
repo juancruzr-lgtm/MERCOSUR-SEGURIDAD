@@ -238,6 +238,53 @@ describe('previsualizarMes', () => {
     expect(JSON.stringify({ servicios, objetivos, turnos })).toBe(antes)
   })
 
+  it('posiciones operativas: dos servicios simultáneos con distinta posición son ambos válidos', () => {
+    // NACION ENTRE RIOS: Vigilador 1 y Vigilador 2 cubren el mismo horario
+    // 07-19 el mismo día. No son duplicados porque difieren en puesto_id.
+    const r = prever({
+      servicios: [
+        servicioBase({ id: 'srv-v1', puesto_id: 'pv1', dias_semana: [6], puesto: { nombre: 'Vigilador 1' }, guardia_habitual_id: 'g1' }),
+        servicioBase({ id: 'srv-v2', puesto_id: 'pv2', dias_semana: [6], puesto: { nombre: 'Vigilador 2' }, guardia_habitual_id: 'g2' }),
+      ],
+      puestosPorObjetivo: new Map([['obj-1', estadoPuestos([puesto('pv1', 'obj-1', 'Vigilador 1'), puesto('pv2', 'obj-1', 'Vigilador 2')])]]),
+    })
+    const primerSabado = r.filas.filter(f => f.fecha === '2026-08-01')
+    expect(primerSabado).toHaveLength(2)
+    expect(primerSabado.every(f => f.estado === 'valido')).toBe(true)
+    expect(r.resumen.conflictos).toBe(0)
+    expect(r.resumen.existentes).toBe(0)
+  })
+
+  it('posiciones operativas: tercera posición nocturna válida el mismo día', () => {
+    const r = prever({
+      servicios: [
+        servicioBase({ id: 'srv-v1', puesto_id: 'pv1', dias_semana: [6], puesto: { nombre: 'Vigilador 1' } }),
+        servicioBase({ id: 'srv-v3', puesto_id: 'pv3', dias_semana: [6], puesto: { nombre: 'Vigilador 3' },
+          turno_base: { nombre: 'NOCTURNO 19-07', hora_inicio: '19:00', hora_fin: '07:00', activo: true } }),
+      ],
+      puestosPorObjetivo: new Map([['obj-1', estadoPuestos([puesto('pv1', 'obj-1', 'Vigilador 1'), puesto('pv3', 'obj-1', 'Vigilador 3')])]]),
+    })
+    expect(r.filas.filter(f => f.fecha === '2026-08-01' && f.estado === 'valido')).toHaveLength(2)
+  })
+
+  it('posiciones operativas: el duplicado exige coincidencia también de posición', () => {
+    // Un turno histórico del mismo objetivo/horario pero con la posición
+    // legacy "Principal" NO marca como existente al servicio vinculado a
+    // Vigilador 1 (los históricos no se tocan; conviven).
+    const r = prever({
+      servicios: [servicioBase({ id: 'srv-v1', puesto_id: 'pv1', dias_semana: [6], puesto: { nombre: 'Vigilador 1' } })],
+      puestosPorObjetivo: new Map([['obj-1', estadoPuestos([puesto('pv1', 'obj-1', 'Vigilador 1')])]]),
+      turnosExistentes: [
+        { id: 't-hist', objetivo_id: 'obj-1', puesto_id: 'p-principal', servicio_base_id: null,
+          guardia_id: 'g9', fecha: '2026-08-01', hora_inicio: '08:00:00', hora_fin: '16:00:00', estado: 'cubierto' },
+        { id: 't-mismo', objetivo_id: 'obj-1', puesto_id: 'pv1', servicio_base_id: null,
+          guardia_id: 'g8', fecha: '2026-08-08', hora_inicio: '08:00:00', hora_fin: '16:00:00', estado: 'cubierto' },
+      ],
+    })
+    expect(r.filas.find(f => f.fecha === '2026-08-01')?.estado).toBe('valido')   // distinta posición
+    expect(r.filas.find(f => f.fecha === '2026-08-08')?.estado).toBe('ya_existe') // misma posición
+  })
+
   it('creación parcial: el payload lleva solo filas válidas seleccionadas', () => {
     // Una fila válida, una en conflicto y una ya existente: aunque las tres
     // estén "seleccionadas", solo la válida entra al payload.
