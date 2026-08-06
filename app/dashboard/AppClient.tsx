@@ -34,7 +34,7 @@ import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/rev
 import { formatCuil } from '@/lib/revision-operativa'
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, caracteristicaTurno, esCapacitacion, etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 import { ETIQUETA_VINCULACION, sugerirVinculacion } from '@/lib/vinculacion-puestos'
-import { ETIQUETA_PREVISION, clavePrevision, payloadCreacionParcial, previsualizarMes, resumenConfirmacion } from '@/lib/programacion'
+import { DETALLE_COBERTURA_EQUIVALENTE, ETIQUETA_PREVISION, MENSAJE_VACANTE_COMPATIBLE, clavePrevision, coberturaEquivalenteOtraPosicion, payloadCreacionParcial, previsualizarMes, resumenConfirmacion, vacantesCompatibles } from '@/lib/programacion'
 import type { EstadoPrevision, ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
 import { ETIQUETA_CLASIFICACION, ETIQUETA_COMPARACION, NOTA_ALCANCE_MOTOR, analizarCoberturaHistorica } from '@/lib/cobertura-historica'
 import type { ClasificacionPatron, ResultadoCobertura } from '@/lib/cobertura-historica'
@@ -3355,6 +3355,12 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   const [error, setError] = useState('')
   const [mensaje, setMensaje] = useState('')
   const [estadoPuestos, setEstadoPuestos] = useState<EstadoPuestos | null>(null)
+  // Prevención de duplicados: vacantes programadas compatibles detectadas al
+  // crear un turno manual. Advertencia con opciones, nunca bloqueo.
+  const [vacantesAlta, setVacantesAlta] = useState<any[] | null>(null)
+  const [equivalentesAlta, setEquivalentesAlta] = useState(0)
+  const [vacanteElegida, setVacanteElegida] = useState('')
+  const [asignandoVacante, setAsignandoVacante] = useState(false)
 
   // El objetivo elegido define si el puesto se asigna solo, hay que elegirlo o
   // no se puede crear el turno. Regla única en lib/puestos.ts.
@@ -3562,7 +3568,44 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     return tieneTurnoSuperpuesto(data || [], candidato)
   }
 
-  const guardar = async () => {
+  // Asignar el guardia del formulario sobre una vacante ya programada, por el
+  // flujo auditado (/api/turnos/editar), en lugar de crear un turno duplicado.
+  const asignarSobreVacante = async () => {
+    if (!vacanteElegida || !form.guardia_id || asignandoVacante) return
+    setAsignandoVacante(true)
+    setError('')
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData?.session?.access_token
+    if (!token) { setError('Sesión expirada. Volvé a iniciar sesión.'); setAsignandoVacante(false); return }
+    try {
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          turno_id: vacanteElegida,
+          cambios: { guardia_id: form.guardia_id, estado: 'programado' },
+          comentario: 'Asignación sobre vacante programada desde el alta manual',
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) { setError(json?.error || 'No se pudo asignar sobre la vacante.'); setAsignandoVacante(false); return }
+    } catch {
+      setError('Error de red. Verificá tu conexión y volvé a intentar.')
+      setAsignandoVacante(false)
+      return
+    }
+    const { data: turnosActualizados } = await supabase
+      .from('turnos').select('*')
+      .order('fecha', { ascending: false }).order('hora_inicio', { ascending: true })
+    if (turnosActualizados) setTurnos(turnosActualizados)
+    setMensaje('✓ Vigilador asignado sobre la vacante programada')
+    setAsignandoVacante(false)
+    setVacantesAlta(null)
+    setModal(false)
+    setForm({ guardia_id: '', objetivo_id: '', fecha: fechaActualTurno(), hora_inicio: '06:00', hora_fin: '14:00', tipo_evento: 'normal' })
+  }
+
+  const guardar = async (omitirAvisoVacantes = false) => {
     if (!form.objetivo_id || !form.fecha || !form.hora_inicio || !form.hora_fin) return
 
     setError('')
@@ -3572,6 +3615,27 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     if (!puesto.ok) {
       setError(puesto.error)
       return
+    }
+
+    // Antes de crear: si el objetivo ya tiene una posición programada SIN
+    // vigilador que se superpone con este horario, ofrecer asignar sobre esa
+    // vacante en lugar de duplicar la cobertura. Advertencia, nunca bloqueo:
+    // "Crear de todos modos" sigue disponible (pueden ser posiciones
+    // simultáneas legítimas).
+    if (!omitirAvisoVacantes) {
+      const { data: delObjetivo } = await supabase
+        .from('turnos')
+        .select('id, objetivo_id, puesto_id, guardia_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
+        .eq('objetivo_id', form.objetivo_id)
+        .in('fecha', fechasVecinasTurno(form.fecha))
+      const candidatoAlta = { objetivo_id: form.objetivo_id, puesto_id: puesto.puesto_id, fecha: form.fecha, hora_inicio: form.hora_inicio, hora_fin: form.hora_fin }
+      const vacantes = vacantesCompatibles(delObjetivo ?? [], candidatoAlta)
+      if (vacantes.length > 0) {
+        setVacantesAlta(vacantes)
+        setEquivalentesAlta(coberturaEquivalenteOtraPosicion(delObjetivo ?? [], candidatoAlta).length)
+        setVacanteElegida(vacantes[0].id)
+        return
+      }
     }
 
     const { puesto_id: _descartado, ...camposForm } = form
@@ -3614,6 +3678,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
       setFiltroFecha(filtroDestino)
       setMensaje('✓ Turno creado correctamente')
+      setVacantesAlta(null)
       setModal(false)
       setForm({
         guardia_id: '',
@@ -3778,20 +3843,20 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       {modal && (
         <Modal
           title="Nuevo Turno"
-          onClose={() => setModal(false)}
+          onClose={() => { setModal(false); setVacantesAlta(null) }}
           footer={
             <>
               <button
                 style={{ ...S.btn, ...S.btnSecondary }}
-                onClick={() => setModal(false)}
+                onClick={() => { setModal(false); setVacantesAlta(null) }}
               >
                 Cancelar
               </button>
 
               <button
                 style={{ ...S.btn, ...S.btnPrimary }}
-                onClick={guardar}
-                disabled={loading || estadoPuestos?.caso === 'sin_puestos'}
+                onClick={() => guardar()}
+                disabled={loading || estadoPuestos?.caso === 'sin_puestos' || Boolean(vacantesAlta?.length)}
               >
                 {loading ? 'Creando...' : 'Crear turno'}
               </button>
@@ -3801,6 +3866,40 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
           {error && (
             <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontSize:13 }}>
               {error}
+            </div>
+          )}
+
+          {vacantesAlta && vacantesAlta.length > 0 && (
+            <div style={{ marginBottom:16, padding:12, borderRadius:8, background:'rgba(96,165,250,.08)', border:'1px solid rgba(96,165,250,.35)' }}>
+              <div style={{ color:'#60a5fa', fontSize:13, fontWeight:700, marginBottom:6 }}>{MENSAJE_VACANTE_COMPATIBLE}</div>
+              {vacantesAlta.length > 1 ? (
+                <select style={{ ...S.select, marginBottom:8 }} value={vacanteElegida} onChange={e => setVacanteElegida(e.target.value)}>
+                  {vacantesAlta.map((v: any) => (
+                    <option key={v.id} value={v.id}>{v.fecha} · {String(v.hora_inicio).slice(0,5)}–{String(v.hora_fin).slice(0,5)}</option>
+                  ))}
+                </select>
+              ) : (
+                <div style={{ fontSize:12, color:'#e2e8f0', marginBottom:8 }}>
+                  Vacante: {vacantesAlta[0].fecha} · {String(vacantesAlta[0].hora_inicio).slice(0,5)}–{String(vacantesAlta[0].hora_fin).slice(0,5)}
+                </div>
+              )}
+              {equivalentesAlta > 0 && (
+                <div style={{ fontSize:11, color:'#94a3b8', marginBottom:8 }}>{DETALLE_COBERTURA_EQUIVALENTE}: {equivalentesAlta} turno(s) del mismo horario en otra posición.</div>
+              )}
+              {!form.guardia_id && (
+                <div style={{ fontSize:11, color:'#f59e0b', marginBottom:8 }}>Para asignar sobre la vacante, elegí primero el guardia.</div>
+              )}
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                <button style={{ ...S.btn, ...S.btnPrimary, padding:'6px 12px', fontSize:12, opacity: !form.guardia_id || asignandoVacante ? 0.5 : 1 }} disabled={!form.guardia_id || asignandoVacante} onClick={asignarSobreVacante}>
+                  {asignandoVacante ? 'Asignando…' : 'Asignar sobre turno existente'}
+                </button>
+                <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => { setVacantesAlta(null); void guardar(true) }}>
+                  Crear de todos modos
+                </button>
+                <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={() => setVacantesAlta(null)}>
+                  Cancelar
+                </button>
+              </div>
             </div>
           )}
 

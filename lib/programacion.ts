@@ -23,7 +23,7 @@
  * sin guardia habitual se previsualiza igual.
  */
 
-import { tieneTurnoSuperpuesto } from '@/lib/turnos'
+import { horariosSuperpuestos, tieneTurnoSuperpuesto } from '@/lib/turnos'
 import type { TurnoHorario } from '@/lib/turnos'
 import { ESTADOS_SIN_OBLIGACION } from '@/lib/revision-operativa'
 import { caracteristicaTurno, etiquetaCaracteristica } from '@/lib/caracteristica-turno'
@@ -62,6 +62,12 @@ export const MENSAJE_SERVICIO_SIN_PUESTO =
 
 export const MENSAJE_GUARDIA_SUGERIDO_SUPERPUESTO =
   'El guardia sugerido ya tiene un turno superpuesto en ese horario.'
+
+export const MENSAJE_VACANTE_COMPATIBLE =
+  'Ya existe una posición programada sin vigilador para este horario.'
+
+export const DETALLE_COBERTURA_EQUIVALENTE =
+  'Cobertura equivalente en otra posición'
 
 // ── Entradas ─────────────────────────────────────────────────────────────────
 
@@ -214,11 +220,16 @@ export function previsualizarMes(params: {
   // turnos normales y no debe chocar con capacitaciones/coberturas.
   const porServicio = new Set<string>()
   const porSlotManual = new Set<string>()
+  // Mismo objetivo + fecha + horario en OTRA posición: no es duplicado
+  // técnico (dos posiciones simultáneas son legítimas) pero se advierte como
+  // cobertura equivalente para que el administrador la revise.
+  const porSlotSinPosicion = new Set<string>()
   for (const t of vigentes) {
     if (caracteristicaTurno(t.tipo_evento) !== 'normal') continue
     const horario = `${t.fecha}|${hora5(t.hora_inicio)}|${hora5(t.hora_fin)}|${t.puesto_id ?? ''}`
     if (t.servicio_base_id) porServicio.add(`${t.servicio_base_id}|${horario}`)
     porSlotManual.add(`${t.objetivo_id}|${horario}`)
+    porSlotSinPosicion.add(`${t.objetivo_id}|${t.fecha}|${hora5(t.hora_inicio)}|${hora5(t.hora_fin)}`)
   }
 
   // Para superposiciones del guardia sugerido cuentan TODOS los turnos
@@ -341,7 +352,10 @@ export function previsualizarMes(params: {
         continue
       }
 
-      filas.push({ ...base, estado: 'valido', detalle: null })
+      // Advertencia (nunca bloqueo): mismo objetivo/fecha/horario cubierto
+      // por otra posición operativa.
+      const equivalente = porSlotSinPosicion.has(`${srv.objetivo_id}|${fecha}|${hora5(horaInicio)}|${hora5(horaFin)}`)
+      filas.push({ ...base, estado: 'valido', detalle: equivalente ? DETALLE_COBERTURA_EQUIVALENTE : null })
       // Las filas válidas participan de las superposiciones siguientes,
       // igual que lo harían los turnos recién insertados.
       paraSuperposicion.push(candidato)
@@ -406,6 +420,59 @@ export function resumenConfirmacion(
     objetivos: [...new Set(elegidas.map(f => f.objetivo_nombre))],
     puestos: new Set(elegidas.map(f => f.puesto_id ?? '')).size,
   }
+}
+
+// ── Prevención de duplicados en el alta manual ──────────────────────────────
+
+export interface TurnoVacanteCandidato {
+  id?: string | null
+  objetivo_id: string
+  puesto_id?: string | null
+  guardia_id?: string | null
+  fecha: string
+  hora_inicio: string
+  hora_fin: string
+  estado?: string | null
+  tipo_evento?: string | null
+}
+
+/**
+ * Turnos programados SIN vigilador del mismo objetivo que se superponen con
+ * el candidato de un alta manual. Es una ADVERTENCIA para ofrecer "asignar
+ * sobre la vacante" en lugar de crear un turno nuevo: nunca un bloqueo
+ * (pueden existir varias posiciones simultáneas legítimas). Capacitaciones y
+ * estados sin obligación no cuentan como vacante.
+ */
+export function vacantesCompatibles<T extends TurnoVacanteCandidato>(
+  turnos: T[],
+  candidato: { objetivo_id: string; fecha: string; hora_inicio: string; hora_fin: string },
+): T[] {
+  return turnos.filter(t =>
+    t.objetivo_id === candidato.objetivo_id &&
+    !t.guardia_id &&
+    !ESTADOS_SIN_OBLIGACION.has(t.estado || '') &&
+    caracteristicaTurno(t.tipo_evento) === 'normal' &&
+    horariosSuperpuestos(t, candidato),
+  )
+}
+
+/**
+ * Turnos vigentes (con o sin vigilador) del mismo objetivo, fecha y horario
+ * exacto en OTRA posición operativa: cobertura equivalente. Solo informa.
+ */
+export function coberturaEquivalenteOtraPosicion<T extends TurnoVacanteCandidato>(
+  turnos: T[],
+  candidato: { objetivo_id: string; puesto_id?: string | null; fecha: string; hora_inicio: string; hora_fin: string },
+): T[] {
+  return turnos.filter(t =>
+    t.objetivo_id === candidato.objetivo_id &&
+    t.fecha === candidato.fecha &&
+    hora5(t.hora_inicio) === hora5(candidato.hora_inicio) &&
+    hora5(t.hora_fin) === hora5(candidato.hora_fin) &&
+    (t.puesto_id ?? '') !== (candidato.puesto_id ?? '') &&
+    !ESTADOS_SIN_OBLIGACION.has(t.estado || '') &&
+    caracteristicaTurno(t.tipo_evento) === 'normal',
+  )
 }
 
 /** Resultado por fila que devuelve la RPC. */

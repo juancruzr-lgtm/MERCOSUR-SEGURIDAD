@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DETALLE_COBERTURA_EQUIVALENTE,
   ETIQUETA_PREVISION,
   MENSAJE_SERVICIO_SIN_PUESTO,
+  MENSAJE_VACANTE_COMPATIBLE,
   clavePrevision,
+  coberturaEquivalenteOtraPosicion,
   fechasDelMes,
   payloadCreacionParcial,
   previsualizarMes,
   resumenConfirmacion,
+  vacantesCompatibles,
 } from '@/lib/programacion'
 import type {
   ObjetivoPrevision,
@@ -285,6 +289,40 @@ describe('previsualizarMes', () => {
     expect(r.filas.find(f => f.fecha === '2026-08-08')?.estado).toBe('ya_existe') // misma posición
   })
 
+  it('alta manual: vacante programada compatible detectada (advertencia, sin bloqueo)', () => {
+    const turnos = [
+      { id: 'vac-1', objetivo_id: 'obj-1', puesto_id: 'pv1', guardia_id: null, fecha: '2026-08-10', hora_inicio: '07:00:00', hora_fin: '19:00:00', estado: 'programado', tipo_evento: 'normal' },
+      { id: 'asig', objetivo_id: 'obj-1', puesto_id: 'pv2', guardia_id: 'g1', fecha: '2026-08-10', hora_inicio: '07:00:00', hora_fin: '19:00:00', estado: 'programado', tipo_evento: 'normal' },
+      { id: 'anulada', objetivo_id: 'obj-1', puesto_id: 'pv3', guardia_id: null, fecha: '2026-08-10', hora_inicio: '07:00:00', hora_fin: '19:00:00', estado: 'reemplazado', tipo_evento: 'normal' },
+      { id: 'capa', objetivo_id: 'obj-1', puesto_id: 'pv1', guardia_id: null, fecha: '2026-08-10', hora_inicio: '07:00:00', hora_fin: '19:00:00', estado: 'programado', tipo_evento: 'capacitacion' },
+      { id: 'otro-obj', objetivo_id: 'obj-2', puesto_id: 'px', guardia_id: null, fecha: '2026-08-10', hora_inicio: '07:00:00', hora_fin: '19:00:00', estado: 'programado', tipo_evento: 'normal' },
+    ]
+    const candidato = { objetivo_id: 'obj-1', fecha: '2026-08-10', hora_inicio: '08:00', hora_fin: '16:00' }
+    const vacantes = vacantesCompatibles(turnos, candidato)
+    // Solo la vacante real: excluye asignados, estados sin obligación,
+    // capacitaciones y otros objetivos. La superposición parcial cuenta.
+    expect(vacantes.map(v => v.id)).toEqual(['vac-1'])
+  })
+
+  it('alta manual: vacante nocturna detectada por superposición que cruza medianoche', () => {
+    const turnos = [
+      { id: 'vac-noc', objetivo_id: 'obj-1', puesto_id: 'pv3', guardia_id: null, fecha: '2026-08-10', hora_inicio: '19:00:00', hora_fin: '07:00:00', estado: 'programado', tipo_evento: 'normal' },
+    ]
+    expect(vacantesCompatibles(turnos, { objetivo_id: 'obj-1', fecha: '2026-08-10', hora_inicio: '22:00', hora_fin: '06:00' })).toHaveLength(1)
+    // Sin vacantes → sin advertencia: el alta sigue su curso normal.
+    expect(vacantesCompatibles(turnos, { objetivo_id: 'obj-1', fecha: '2026-08-10', hora_inicio: '08:00', hora_fin: '16:00' })).toHaveLength(0)
+  })
+
+  it('alta manual: cobertura equivalente en otra posición solo informa', () => {
+    const turnos = [
+      { id: 'ppal', objetivo_id: 'obj-1', puesto_id: 'p-principal', guardia_id: 'g1', fecha: '2026-08-10', hora_inicio: '07:00:00', hora_fin: '19:00:00', estado: 'cubierto', tipo_evento: 'normal' },
+      { id: 'misma-pos', objetivo_id: 'obj-1', puesto_id: 'pv1', guardia_id: 'g2', fecha: '2026-08-10', hora_inicio: '07:00:00', hora_fin: '19:00:00', estado: 'programado', tipo_evento: 'normal' },
+    ]
+    const candidato = { objetivo_id: 'obj-1', puesto_id: 'pv1', fecha: '2026-08-10', hora_inicio: '07:00', hora_fin: '19:00' }
+    // Distinta posición → equivalente; la misma posición no cuenta acá.
+    expect(coberturaEquivalenteOtraPosicion(turnos, candidato).map(t => t.id)).toEqual(['ppal'])
+  })
+
   it('creación parcial: el payload lleva solo filas válidas seleccionadas', () => {
     // Una fila válida, una en conflicto y una ya existente: aunque las tres
     // estén "seleccionadas", solo la válida entra al payload.
@@ -381,7 +419,26 @@ describe('previsualizarMes', () => {
     expect(r.filas.find(f => f.fecha === '2026-08-15')?.estado).toBe('valido')
   })
 
+  it('cross-posición: cobertura equivalente en otra posición es advertencia, no duplicado', () => {
+    // Turno manual existente bajo la posición histórica Principal, mismo
+    // objetivo/fecha/horario que el servicio de Vigilador 1: la fila sigue
+    // siendo válida (posiciones simultáneas legítimas) con la advertencia.
+    const r = prever({
+      servicios: [servicioBase({ id: 'srv-v1', puesto_id: 'pv1', dias_semana: [6], puesto: { nombre: 'Vigilador 1' } })],
+      puestosPorObjetivo: new Map([['obj-1', estadoPuestos([puesto('pv1', 'obj-1', 'Vigilador 1')])]]),
+      turnosExistentes: [{
+        id: 't-ppal', objetivo_id: 'obj-1', puesto_id: 'p-principal', servicio_base_id: null,
+        guardia_id: 'g9', fecha: '2026-08-01', hora_inicio: '08:00:00', hora_fin: '16:00:00', estado: 'cubierto',
+      }],
+    })
+    const fila = r.filas.find(f => f.fecha === '2026-08-01')
+    expect(fila?.estado).toBe('valido')
+    expect(fila?.detalle).toBe(DETALLE_COBERTURA_EQUIVALENTE)
+    expect(r.filas.find(f => f.fecha === '2026-08-08')?.detalle).toBeNull()
+  })
+
   it('clasificaciones centralizadas con etiqueta para cada estado', () => {
+    expect(MENSAJE_VACANTE_COMPATIBLE).toBe('Ya existe una posición programada sin vigilador para este horario.')
     expect(ETIQUETA_PREVISION.valido).toBe('Válido para crear')
     expect(ETIQUETA_PREVISION.ya_existe).toBe('Ya existe')
     expect(ETIQUETA_PREVISION.conflicto_horario).toBe('Conflicto de horario')
