@@ -21,6 +21,7 @@ import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { indexarUltimaSupervision, objetivoSupervisionVencida } from '@/lib/supervisiones'
 import {
+  alertaEstaIntervenida,
   calcularMinutosTardanzaRegistro,
   claveOcurrenciaAlerta,
   compararIntervencionesMasReciente,
@@ -9021,15 +9022,15 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       return alertaBase(turno, deteccion.tipo_alerta, cfg.titulo, cfg.detalle, cfg.tono, registro)
     })
     .filter((alerta): alerta is AlertaOperativaAdmin => Boolean(alerta))
+    // Una alerta con intervención resolutiva ya registrada no es "pendiente",
+    // aunque el detector la siga marcando como condición vigente (p. ej.
+    // tardanza/fuera_radio son hechos fijos que nunca dejan de detectarse).
+    .filter((alerta) => !alertaEstaIntervenida(intervenciones, alerta.turno.id, alerta.tipo, alerta.registro?.id))
     .sort((a, b) => {
       const fechaA = fechaHoraTurnoLocal(a.turno.fecha, a.turno.hora_inicio)?.getTime() || 0
       const fechaB = fechaHoraTurnoLocal(b.turno.fecha, b.turno.hora_inicio)?.getTime() || 0
       return fechaB - fechaA
     })
-  const clavesCondicionVigente = new Set(deteccionesOperativas.map((deteccion) =>
-    claveOcurrenciaAlerta(deteccion.turno_id, deteccion.tipo_alerta, deteccion.registro_asistencia_id)
-  ))
-
   const idsFiltroRevision = new Set((filtroActivo?.ids || []) as string[])
   const alertasPendientesVisibles = filtroActivo?.tipo
     ? alertasPendientes.filter((alerta) =>
@@ -9060,9 +9061,11 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     }, new Map<string, any>())
 
   Array.from(alertasIntervenidas.entries()).forEach(([key, item]: [string, any]) => {
-    const alerta = alertaBase(item.turno, item.tipo, '', '', 'info', item.registro)
-    const estado = estadoAlerta(alerta, clavesCondicionVigente.has(key))
-    if (!['resuelta_operativamente', 'cerrada'].includes(estado)) {
+    // Misma condición usada para sacar una alerta de "Pendientes": si tiene
+    // intervención resolutiva vigente (no reabierta), pertenece a esta pestaña,
+    // sin importar si el detector sigue encontrando la condición original.
+    const intervenida = alertaEstaIntervenida(intervenciones, item.turno.id, item.tipo, item.registro?.id)
+    if (!intervenida) {
       alertasIntervenidas.delete(key)
     }
   })
