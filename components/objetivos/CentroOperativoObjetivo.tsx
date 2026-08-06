@@ -47,6 +47,13 @@ import {
   SeccionUbicacion, SeccionAsistencias, SeccionRondas,
   SeccionSupervisiones, SeccionNovedades,
 } from './LegajoSecciones'
+import {
+  cargarPosicionesOperativas, cargarDependenciasPosicion, cargarDependenciasEliminacion,
+  crearPosicionOperativa, editarPosicionOperativa, duplicarPosicionOperativa, eliminarPosicionOperativa,
+  construirCambiosEdicion, sugerirNombreDuplicado, motivoBloqueoDesactivar, motivoBloqueoEliminar,
+  puedeEscribirPosiciones, filtroConfigurarCobertura,
+} from '@/lib/puestos'
+import type { PosicionOperativa, DependenciasPosicion, DependenciasEliminacion } from '@/lib/puestos'
 
 const S = { btn, btnPrimary, btnSecondary }
 
@@ -278,6 +285,137 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     setResultadoRango(`✅ ${res.resumen}`)
   }
 
+  // ── Posiciones operativas: alta, edición, duplicación, desactivación ──
+  // Preferencia de este bloque: admin escribe, supervisor solo lee (no se
+  // amplían permisos silenciosamente). El servidor (RPC) vuelve a validar
+  // todo — este flag solo gobierna qué botones se muestran.
+  const puedeEscribirPos = puedeEscribirPosiciones(rolUsuario) || esAdmin === true
+  const [posicionesOp, setPosicionesOp] = useState<PosicionOperativa[]>([])
+  const [coberturaPorPosicion, setCoberturaPorPosicion] = useState<Set<string>>(new Set())
+  const [cargandoPosiciones, setCargandoPosiciones] = useState(true)
+
+  const cargarPosiciones = useCallback(async () => {
+    setCargandoPosiciones(true)
+    const res = await cargarPosicionesOperativas(objetivoId)
+    setPosicionesOp(res.posiciones)
+    setCoberturaPorPosicion(res.conCobertura)
+    setCargandoPosiciones(false)
+  }, [objetivoId])
+
+  useEffect(() => { void cargarPosiciones() }, [cargarPosiciones])
+
+  const horaActualLocal = () => {
+    const d = new Date()
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+
+  // Modal único para crear/editar/duplicar (mismo formulario, distinto envío).
+  const [modalPosicion, setModalPosicion] = useState<null | { modo: 'crear' | 'editar' | 'duplicar'; base?: PosicionOperativa }>(null)
+  const [formPosicion, setFormPosicion] = useState({ nombre: '', orden: '', observacion: '', activo: true })
+  const [errorPosicion, setErrorPosicion] = useState('')
+  const [guardandoPosicion, setGuardandoPosicion] = useState(false)
+
+  const abrirCrearPosicion = () => {
+    setFormPosicion({ nombre: '', orden: '', observacion: '', activo: true })
+    setErrorPosicion('')
+    setModalPosicion({ modo: 'crear' })
+  }
+  const abrirEditarPosicion = (p: PosicionOperativa) => {
+    setFormPosicion({ nombre: p.nombre, orden: p.orden != null ? String(p.orden) : '', observacion: p.observacion ?? '', activo: p.activo })
+    setErrorPosicion('')
+    setModalPosicion({ modo: 'editar', base: p })
+  }
+  const abrirDuplicarPosicion = (p: PosicionOperativa) => {
+    setFormPosicion({ nombre: sugerirNombreDuplicado(p.nombre, posicionesOp), orden: '', observacion: '', activo: true })
+    setErrorPosicion('')
+    setModalPosicion({ modo: 'duplicar', base: p })
+  }
+
+  const guardarPosicion = async () => {
+    if (!modalPosicion) return
+    if (!formPosicion.nombre.trim()) { setErrorPosicion('El nombre es obligatorio.'); return }
+    setGuardandoPosicion(true)
+    setErrorPosicion('')
+    const ordenNum = formPosicion.orden.trim() ? Number(formPosicion.orden) : null
+    let error: string | null = null
+    if (modalPosicion.modo === 'crear') {
+      ;({ error } = await crearPosicionOperativa(objetivoId, formPosicion.nombre, ordenNum, formPosicion.observacion))
+    } else if (modalPosicion.modo === 'duplicar' && modalPosicion.base) {
+      ;({ error } = await duplicarPosicionOperativa(modalPosicion.base.id, formPosicion.nombre))
+    } else if (modalPosicion.modo === 'editar' && modalPosicion.base) {
+      const cambios = construirCambiosEdicion(modalPosicion.base, {
+        nombre: formPosicion.nombre, orden: ordenNum, observacion: formPosicion.observacion, activo: modalPosicion.base.activo,
+      })
+      if (Object.keys(cambios).length > 1) ({ error } = await editarPosicionOperativa(cambios))
+    }
+    setGuardandoPosicion(false)
+    if (error) { setErrorPosicion(error); return }
+    await cargarPosiciones()
+    setModalPosicion(null)
+  }
+
+  // Desactivar: primero muestra qué la bloquea (lectura), después confirma.
+  const [desactivando, setDesactivando] = useState<PosicionOperativa | null>(null)
+  const [depDesactivar, setDepDesactivar] = useState<DependenciasPosicion | null>(null)
+  const [cargandoDepDesactivar, setCargandoDepDesactivar] = useState(false)
+  const [errorDesactivar, setErrorDesactivar] = useState('')
+  const [confirmandoDesactivar, setConfirmandoDesactivar] = useState(false)
+
+  const abrirDesactivar = async (p: PosicionOperativa) => {
+    setDesactivando(p)
+    setErrorDesactivar('')
+    setDepDesactivar(null)
+    setCargandoDepDesactivar(true)
+    const { data } = await cargarDependenciasPosicion(p.id, hoy, horaActualLocal())
+    setDepDesactivar(data)
+    setCargandoDepDesactivar(false)
+  }
+  const confirmarDesactivar = async () => {
+    if (!desactivando) return
+    setConfirmandoDesactivar(true)
+    setErrorDesactivar('')
+    const { error } = await editarPosicionOperativa({ id: desactivando.id, activo: false })
+    setConfirmandoDesactivar(false)
+    if (error) { setErrorDesactivar(error); return }
+    await cargarPosiciones()
+    setDesactivando(null)
+  }
+  const activarPosicion = async (p: PosicionOperativa) => {
+    setErrorPosicion('')
+    const { error } = await editarPosicionOperativa({ id: p.id, activo: true })
+    if (error) { setErrorPosicion(error); return }
+    await cargarPosiciones()
+  }
+
+  // Eliminación excepcional: solo cuando no queda ninguna referencia.
+  const [eliminando, setEliminando] = useState<{ p: PosicionOperativa; dep: DependenciasEliminacion } | null>(null)
+  const [motivoEliminar, setMotivoEliminar] = useState('')
+  const [errorEliminar, setErrorEliminar] = useState('')
+  const [confirmandoEliminar, setConfirmandoEliminar] = useState(false)
+
+  const abrirEliminar = async (p: PosicionOperativa) => {
+    setErrorPosicion('')
+    const { data, error } = await cargarDependenciasEliminacion(p.id)
+    if (error || !data) { setErrorPosicion(error ?? 'No se pudieron revisar las dependencias.'); return }
+    setMotivoEliminar('')
+    setErrorEliminar('')
+    setEliminando({ p, dep: data })
+  }
+  const confirmarEliminar = async () => {
+    if (!eliminando) return
+    setConfirmandoEliminar(true)
+    setErrorEliminar('')
+    const { ok, error } = await eliminarPosicionOperativa(eliminando.p.id, motivoEliminar)
+    setConfirmandoEliminar(false)
+    if (!ok) { setErrorEliminar(error ?? 'No se pudo eliminar.'); return }
+    await cargarPosiciones()
+    setEliminando(null)
+  }
+
+  const irAConfigurarCobertura = (p: PosicionOperativa) => {
+    onNavigate?.('servicios_objetivo', filtroConfigurarCobertura(objetivoId, p.id))
+  }
+
   // ── Historial de rondas JWM ──
   const [historial, setHistorial] = useState<RondaLegajo[]>([])
   const [histDesde, setHistDesde] = useState(hoy)
@@ -336,7 +474,6 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
 
   // Todas las derivaciones salen del servicio: no se recalcula nada acá.
   const objetivo          = datos?.objetivo ?? null
-  const puestos           = datos?.puestos ?? []
   const turnosHoy         = datos?.turnosHoy ?? []
   const registros         = datos?.registros ?? []
   const ultimaSupervision = datos?.ultimaSupervision ?? null
@@ -438,17 +575,136 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         ))}
       </div>
 
-      {/* Puestos */}
-      {puestos.length > 0 && (
-        <div style={card}>
-          <div style={secTitle}>Posiciones operativas</div>
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-            {puestos.map((p: any) => (
-              <div key={p.id} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 14px', fontSize:13 }}>
-                <span style={{ color:'#e2e8f0', fontWeight:600 }}>{p.nombre}</span>
-                {p.orden && <span style={{ color:'#475569', fontSize:11, marginLeft:6 }}>#{p.orden}</span>}
+      {/* Posiciones operativas: alta/edición/duplicación/desactivación desde el
+          legajo. El horario y los días de cada posición no viven acá — son de
+          servicios_objetivo; "Configurar cobertura" abre ese formulario. */}
+      <div style={card}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
+          <div style={{ ...secTitle, flex:1, marginBottom:0 }}>Posiciones operativas</div>
+          {puedeEscribirPos && (
+            <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 12px', fontSize:12 }} onClick={abrirCrearPosicion}>
+              + Agregar posición operativa
+            </button>
+          )}
+        </div>
+        {errorPosicion && !modalPosicion && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorPosicion}</div>}
+        {cargandoPosiciones ? (
+          <div style={{ color:'#64748b', fontSize:13 }}>Cargando…</div>
+        ) : posicionesOp.length === 0 ? (
+          <div style={{ color:'#64748b', fontSize:13 }}>Sin posiciones operativas todavía.</div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {posicionesOp.map(p => {
+              const sinCobertura = p.activo && !coberturaPorPosicion.has(p.id)
+              return (
+                <div key={p.id} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px', opacity: p.activo ? 1 : 0.65 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                    <span style={{ color:'#e2e8f0', fontWeight:600, fontSize:13 }}>{p.nombre}</span>
+                    {p.orden != null && <span style={{ color:'#475569', fontSize:11 }}>#{p.orden}</span>}
+                    <Badge type={p.activo ? 'activo' : 'inactivo'}>{p.activo ? 'Activa' : 'Inactiva'}</Badge>
+                    {sinCobertura && <Badge type="advertencia">Sin cobertura configurada</Badge>}
+                  </div>
+                  {p.observacion && <div style={{ fontSize:12, color:'#64748b', marginTop:4 }}>{p.observacion}</div>}
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:8 }}>
+                    <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => irAConfigurarCobertura(p)}>Configurar cobertura</button>
+                    {puedeEscribirPos && <>
+                      <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirEditarPosicion(p)}>Editar</button>
+                      <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirDuplicarPosicion(p)}>Duplicar</button>
+                      {p.activo ? (
+                        <button type="button" style={{ ...S.btn, padding:'5px 10px', fontSize:11, background:'rgba(239,68,68,.1)', color:'#ef4444', border:'1px solid rgba(239,68,68,.3)' }} onClick={() => abrirDesactivar(p)}>Desactivar</button>
+                      ) : (
+                        <>
+                          <button type="button" style={{ ...S.btn, padding:'5px 10px', fontSize:11, background:'rgba(16,185,129,.1)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }} onClick={() => activarPosicion(p)}>Activar</button>
+                          <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirEliminar(p)}>Eliminar…</button>
+                        </>
+                      )}
+                    </>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Modal: crear / editar / duplicar posición operativa */}
+      {modalPosicion && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setModalPosicion(null)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:380, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:12 }}>
+              {modalPosicion.modo === 'crear' ? 'Agregar posición operativa' : modalPosicion.modo === 'duplicar' ? `Duplicar "${modalPosicion.base?.nombre}"` : `Editar "${modalPosicion.base?.nombre}"`}
+            </div>
+            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Nombre *</label>
+            <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10 }} value={formPosicion.nombre} onChange={e => setFormPosicion({ ...formPosicion, nombre: e.target.value })} placeholder="Vigilador 1, Recepción, Garita norte…" />
+            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Orden (vacío = automático)</label>
+            <input type="number" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10 }} value={formPosicion.orden} onChange={e => setFormPosicion({ ...formPosicion, orden: e.target.value })} />
+            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Observación (opcional)</label>
+            <textarea style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10, minHeight:60 }} value={formPosicion.observacion} onChange={e => setFormPosicion({ ...formPosicion, observacion: e.target.value })} />
+            {errorPosicion && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorPosicion}</div>}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setModalPosicion(null)}>Cancelar</button>
+              <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !formPosicion.nombre.trim() || guardandoPosicion ? 0.5 : 1 }} disabled={!formPosicion.nombre.trim() || guardandoPosicion} onClick={guardarPosicion}>
+                {guardandoPosicion ? 'Guardando…' : modalPosicion.modo === 'crear' ? 'Crear' : modalPosicion.modo === 'duplicar' ? 'Duplicar' : 'Guardar cambios'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: desactivar (muestra qué la bloquea antes de confirmar) */}
+      {desactivando && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setDesactivando(null)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:400, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:8 }}>Desactivar "{desactivando.nombre}"</div>
+            {cargandoDepDesactivar || !depDesactivar ? (
+              <div style={{ color:'#64748b', fontSize:13 }}>Revisando dependencias…</div>
+            ) : motivoBloqueoDesactivar(depDesactivar) ? (
+              <div style={{ fontSize:13, color:'#f59e0b', background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', borderRadius:8, padding:10 }}>
+                {motivoBloqueoDesactivar(depDesactivar)}
               </div>
-            ))}
+            ) : (
+              <>
+                <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:8 }}>Sin turnos futuros vigentes ni servicios activos vinculados. No aparecerá en nuevas altas; los históricos siguen visibles.</div>
+                {errorDesactivar && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorDesactivar}</div>}
+              </>
+            )}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:14 }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setDesactivando(null)}>Cancelar</button>
+              {depDesactivar && !motivoBloqueoDesactivar(depDesactivar) && (
+                <button type="button" style={{ ...S.btn, padding:'6px 14px', fontSize:12, background:'rgba(239,68,68,.15)', color:'#fecaca', border:'1px solid rgba(239,68,68,.45)', opacity: confirmandoDesactivar ? 0.5 : 1 }} disabled={confirmandoDesactivar} onClick={confirmarDesactivar}>
+                  {confirmandoDesactivar ? 'Desactivando…' : 'Confirmar desactivación'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: eliminación excepcional (solo sin referencias) */}
+      {eliminando && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setEliminando(null)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:400, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:8 }}>Eliminar "{eliminando.p.nombre}"</div>
+            {motivoBloqueoEliminar(eliminando.dep) ? (
+              <div style={{ fontSize:13, color:'#f59e0b', background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', borderRadius:8, padding:10 }}>
+                {motivoBloqueoEliminar(eliminando.dep)}
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:8 }}>Nunca tuvo turnos, servicios ni historial más allá de su creación. La eliminación es física (no se puede deshacer) y queda auditada.</div>
+                <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Motivo</label>
+                <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={motivoEliminar} onChange={e => setMotivoEliminar(e.target.value)} placeholder="Creada por error…" />
+                {errorEliminar && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorEliminar}</div>}
+              </>
+            )}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setEliminando(null)}>Cancelar</button>
+              {!motivoBloqueoEliminar(eliminando.dep) && (
+                <button type="button" style={{ ...S.btn, padding:'6px 14px', fontSize:12, background:'rgba(239,68,68,.15)', color:'#fecaca', border:'1px solid rgba(239,68,68,.45)', opacity: confirmandoEliminar ? 0.5 : 1 }} disabled={confirmandoEliminar} onClick={confirmarEliminar}>
+                  {confirmandoEliminar ? 'Eliminando…' : 'Eliminar definitivamente'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

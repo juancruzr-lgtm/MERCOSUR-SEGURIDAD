@@ -15,6 +15,13 @@
 // son las que permiten mostrarle algo útil a quien está cargando el turno.
 
 import { supabase } from '@/lib/supabase'
+import { ordenarPosiciones } from '@/lib/posiciones-operativas'
+import type { PosicionOperativa, DependenciasPosicion, DependenciasEliminacion } from '@/lib/posiciones-operativas'
+
+// Reexporta toda la lógica pura de gestión de posiciones (sin Supabase, ver
+// lib/posiciones-operativas.ts) para que el resto de la app siga importando
+// todo desde acá con un solo `from '@/lib/puestos'`.
+export * from '@/lib/posiciones-operativas'
 
 export interface PuestoActivo {
   id: string
@@ -135,4 +142,137 @@ export function resolverPuestoTurno(
     return { ok: false, error: 'La posición operativa elegida no pertenece a este objetivo.' }
   }
   return { ok: true, puesto_id: elegido }
+}
+
+// ============================================================================
+// Gestión de posiciones operativas (Bloque E) — carga y escritura contra
+// Supabase. Las reglas puras (normalización, dedupe, orden, dependencias)
+// viven en lib/posiciones-operativas.ts y se reexportan arriba.
+// ============================================================================
+//
+// Toda escritura pasa por RPCs SECURITY DEFINER (crear/editar/duplicar/
+// eliminar_posicion_operativa): validación en servidor, transaccional,
+// auditada en `puestos_auditoria`.
+
+// ── Carga ────────────────────────────────────────────────────────────────────
+
+const COLS_POSICION = 'id, objetivo_id, nombre, orden, activo, observacion, created_at'
+
+/**
+ * Todas las posiciones del objetivo (activas e inactivas: los históricos no
+ * se ocultan) más qué posiciones activas tienen al menos un servicio activo
+ * vinculado — la base del indicador "Sin cobertura configurada".
+ */
+export async function cargarPosicionesOperativas(
+  objetivoId: string,
+): Promise<{ posiciones: PosicionOperativa[]; conCobertura: Set<string>; error: string | null }> {
+  const [posicionesRes, serviciosRes] = await Promise.all([
+    supabase.from('puestos').select(COLS_POSICION).eq('objetivo_id', objetivoId),
+    supabase.from('servicios_objetivo').select('puesto_id').eq('objetivo_id', objetivoId).eq('activo', true),
+  ])
+  if (posicionesRes.error) return { posiciones: [], conCobertura: new Set(), error: posicionesRes.error.message }
+
+  const conCobertura = new Set(
+    (serviciosRes.data ?? []).map((s: any) => s.puesto_id).filter(Boolean) as string[],
+  )
+  return {
+    posiciones: ordenarPosiciones((posicionesRes.data ?? []) as PosicionOperativa[]),
+    conCobertura,
+    error: null,
+  }
+}
+
+/**
+ * Cuenta previa (solo lectura) para el diálogo de confirmación antes de
+ * desactivar: cuántos turnos futuros vigentes y servicios activos dependen de
+ * la posición. La RPC vuelve a validar esto mismo en servidor.
+ */
+export async function cargarDependenciasPosicion(
+  puestoId: string,
+  fechaActual: string,
+  horaActual: string,
+): Promise<{ data: DependenciasPosicion | null; error: string | null }> {
+  const [turnosRes, serviciosRes] = await Promise.all([
+    supabase.from('turnos').select('id, fecha, hora_inicio, estado').eq('puesto_id', puestoId).neq('estado', 'reemplazado'),
+    supabase.from('servicios_objetivo').select('id', { count: 'exact', head: true }).eq('puesto_id', puestoId).eq('activo', true),
+  ])
+  if (turnosRes.error) return { data: null, error: turnosRes.error.message }
+  if (serviciosRes.error) return { data: null, error: serviciosRes.error.message }
+
+  const turnosFuturos = (turnosRes.data ?? []).filter((t: any) =>
+    t.fecha > fechaActual || (t.fecha === fechaActual && String(t.hora_inicio).slice(0, 5) > horaActual),
+  ).length
+
+  return { data: { turnosFuturos, serviciosActivos: serviciosRes.count ?? 0 }, error: null }
+}
+
+/**
+ * Cuenta previa (solo lectura) para el diálogo de eliminación excepcional:
+ * turnos y servicios de cualquier momento (no solo futuros) más historial de
+ * auditoría más allá de la propia creación. La RPC vuelve a validar esto.
+ */
+export async function cargarDependenciasEliminacion(
+  puestoId: string,
+): Promise<{ data: DependenciasEliminacion | null; error: string | null }> {
+  const [turnosRes, serviciosRes, auditoriaRes] = await Promise.all([
+    supabase.from('turnos').select('id', { count: 'exact', head: true }).eq('puesto_id', puestoId),
+    supabase.from('servicios_objetivo').select('id', { count: 'exact', head: true }).eq('puesto_id', puestoId),
+    supabase.from('puestos_auditoria').select('id', { count: 'exact', head: true }).eq('puesto_id', puestoId).neq('accion', 'crear'),
+  ])
+  if (turnosRes.error) return { data: null, error: turnosRes.error.message }
+  if (serviciosRes.error) return { data: null, error: serviciosRes.error.message }
+  if (auditoriaRes.error) return { data: null, error: auditoriaRes.error.message }
+
+  return {
+    data: {
+      turnosTotal: turnosRes.count ?? 0,
+      serviciosTotal: serviciosRes.count ?? 0,
+      auditoriaMasAllaDeCrear: auditoriaRes.count ?? 0,
+    },
+    error: null,
+  }
+}
+
+// ── Escritura (RPCs auditadas) ──────────────────────────────────────────────
+
+export async function crearPosicionOperativa(
+  objetivoId: string, nombre: string, orden: number | null, observacion: string | null,
+): Promise<{ data: PosicionOperativa | null; error: string | null }> {
+  const { data, error } = await supabase.rpc('crear_posicion_operativa', {
+    p_objetivo_id: objetivoId, p_nombre: nombre.trim(), p_orden: orden, p_observacion: observacion || null,
+  })
+  if (error) return { data: null, error: error.message }
+  return { data: data as PosicionOperativa, error: null }
+}
+
+export async function editarPosicionOperativa(
+  cambios: { id: string; nombre?: string; orden?: number | null; observacion?: string | null; activo?: boolean },
+): Promise<{ data: PosicionOperativa | null; error: string | null }> {
+  const { data, error } = await supabase.rpc('editar_posicion_operativa', {
+    p_id: cambios.id,
+    p_nombre: cambios.nombre ?? null,
+    p_orden: cambios.orden === undefined ? null : cambios.orden,
+    p_observacion: cambios.observacion === undefined ? null : cambios.observacion,
+    p_activo: cambios.activo === undefined ? null : cambios.activo,
+  })
+  if (error) return { data: null, error: error.message }
+  return { data: data as PosicionOperativa, error: null }
+}
+
+export async function duplicarPosicionOperativa(
+  idOrigen: string, nombreNuevo: string,
+): Promise<{ data: PosicionOperativa | null; error: string | null }> {
+  const { data, error } = await supabase.rpc('duplicar_posicion_operativa', {
+    p_id_origen: idOrigen, p_nombre_nuevo: nombreNuevo.trim(),
+  })
+  if (error) return { data: null, error: error.message }
+  return { data: data as PosicionOperativa, error: null }
+}
+
+export async function eliminarPosicionOperativa(
+  id: string, motivo: string,
+): Promise<{ ok: boolean; error: string | null }> {
+  const { error } = await supabase.rpc('eliminar_posicion_operativa', { p_id: id, p_motivo: motivo || null })
+  if (error) return { ok: false, error: error.message }
+  return { ok: true, error: null }
 }
