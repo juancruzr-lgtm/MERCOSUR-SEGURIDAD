@@ -195,7 +195,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     fecha: t.fecha, hora_inicio: t.hora_inicio, hora_fin: t.hora_fin,
     guardia_id: t.guardia_id, guardia_nombre: nombreVigiladorGrilla(t.guardia_id),
     guardia_habitual_id: t.puesto_id ? sugeridoPorPuesto.get(t.puesto_id) ?? null : null,
-    estado: t.estado, tipo_evento: t.tipo_evento,
+    estado: t.estado, tipo_evento: t.tipo_evento, publicado: t.publicado,
   }))
 
   const [anioMensual, mesNumMensual] = mesMensual.split('-').map(Number)
