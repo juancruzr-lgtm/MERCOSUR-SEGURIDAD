@@ -33,6 +33,7 @@ import {
 import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/revision-operativa'
 import { formatCuil } from '@/lib/revision-operativa'
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, caracteristicaTurno, esCapacitacion, etiquetaCaracteristica } from '@/lib/caracteristica-turno'
+import { ETIQUETA_VINCULACION, sugerirVinculacion } from '@/lib/vinculacion-puestos'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -7193,6 +7194,12 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
   })
   const [puestosForm, setPuestosForm] = useState<EstadoPuestos | null>(null)
   const [errorForm, setErrorForm] = useState('')
+  // Regularización de servicios legacy → puestos reales (Bloque E, commit 2)
+  const [puestosReg, setPuestosReg] = useState<Map<string, EstadoPuestos> | null>(null)
+  const [mostrarReg, setMostrarReg] = useState(false)
+  const [vinculando, setVinculando] = useState<string | null>(null)
+  const [seleccionVinculo, setSeleccionVinculo] = useState<Record<string, string>>({})
+  const [msgVinculo, setMsgVinculo] = useState('')
   const [generando, setGenerando] = useState(false)
   const [mesGenerar, setMesGenerar] = useState(() => {
     const hoy = new Date()
@@ -7217,7 +7224,26 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
     ])
     if (sv) setServicios(sv)
     if (tb) setTurnosBase(tb)
+    if (sv?.length) {
+      const { data: mapa } = await obtenerPuestosActivosDeObjetivos(sv.map((s: any) => s.objetivo_id))
+      setPuestosReg(mapa)
+    }
     setLoadingData(false)
+  }
+
+  // La vinculación la confirma siempre el administrador; la RPC audita
+  // usuario, servicio, puesto elegido y valor anterior en una transacción.
+  const vincularPuesto = async (servicioId: string, puestoId: string) => {
+    if (!puestoId || vinculando) return
+    setVinculando(servicioId)
+    setMsgVinculo('')
+    const { error } = await supabase.rpc('vincular_servicio_puesto', {
+      p_servicio_id: servicioId,
+      p_puesto_id: puestoId,
+    })
+    if (error) setMsgVinculo(error.message)
+    else await cargar()
+    setVinculando(null)
   }
 
   useEffect(() => { cargar() }, [])
@@ -7374,6 +7400,67 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
           </div>
         )}
       </div>
+
+      {(() => {
+        // Regularización: servicios sin puesto real vinculado.
+        const pendientesReg = servicios.filter((s: any) => !s.puesto_id)
+        if (pendientesReg.length === 0) return null
+        return (
+          <div style={{ background:'#111827', border:'1px solid #92400e55', borderRadius:12, padding:20, marginBottom:20 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:12, cursor:'pointer' }} onClick={() => setMostrarReg(v => !v)}>
+              <div style={{ flex:1 }}>
+                <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700 }}>🧩 Regularización de puestos <span style={{ color:'#f59e0b' }}>({pendientesReg.length} servicio{pendientesReg.length !== 1 ? 's' : ''} sin puesto real)</span></div>
+                <div style={{ fontSize:13, color:'#64748b' }}>Vinculá cada servicio con su puesto real. Nada se decide automáticamente y no se crean puestos.</div>
+              </div>
+              <span style={{ color:'#64748b' }}>{mostrarReg ? '▲' : '▼'}</span>
+            </div>
+            {mostrarReg && (
+              <div style={{ marginTop:14, overflowX:'auto' }}>
+                {msgVinculo && <div style={{ color:'#ef4444', fontSize:12, marginBottom:8 }}>{msgVinculo}</div>}
+                <table style={S.table}>
+                  <thead><tr><th style={S.th}>Objetivo</th><th style={S.th}>Turno base</th><th style={S.th}>Nombre histórico</th><th style={S.th}>Puesto sugerido</th><th style={S.th}>Estado</th><th style={S.th}></th></tr></thead>
+                  <tbody>
+                    {pendientesReg.map((s: any) => {
+                      const puestos = puestosReg?.get(s.objetivo_id)?.puestos ?? []
+                      const sug = sugerirVinculacion(s, puestos)
+                      const elegido = seleccionVinculo[s.id] ?? sug.puestoSugerido?.id ?? ''
+                      return (
+                        <tr key={s.id}>
+                          <td style={S.td}><strong>{s.objetivo?.nombre || '—'}</strong></td>
+                          <td style={S.td}>{s.turno_base ? `${s.turno_base.nombre} (${s.turno_base.hora_inicio}–${s.turno_base.hora_fin})` : '—'}</td>
+                          <td style={{ ...S.td, color:'#f59e0b', fontSize:12 }}>{s.nombre_puesto || <span style={{ color:'#64748b' }}>sin nombre</span>}</td>
+                          <td style={S.td}>
+                            {sug.estado === 'sugerencia_unica' && <span style={{ color:'#10b981' }}>{sug.puestoSugerido?.nombre}</span>}
+                            {sug.estado === 'ambiguo' && (
+                              <select style={{ ...S.select, width:'auto', minWidth:150 }} value={elegido} onChange={e => setSeleccionVinculo(prev => ({ ...prev, [s.id]: e.target.value }))}>
+                                <option value="">Elegir puesto...</option>
+                                {sug.candidatos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                              </select>
+                            )}
+                            {(sug.estado === 'sin_coincidencia' || sug.estado === 'sin_puestos') && <span style={{ color:'#64748b' }}>—</span>}
+                          </td>
+                          <td style={{ ...S.td, fontSize:12, color: sug.estado === 'sugerencia_unica' ? '#10b981' : sug.estado === 'ambiguo' ? '#f59e0b' : '#94a3b8' }}>{ETIQUETA_VINCULACION[sug.estado]}</td>
+                          <td style={S.td}>
+                            {(sug.estado === 'sugerencia_unica' || sug.estado === 'ambiguo') && (
+                              <button
+                                style={{ ...S.btn, ...S.btnPrimary, padding:'6px 12px', fontSize:12, opacity: vinculando === s.id || !elegido ? 0.5 : 1 }}
+                                disabled={vinculando !== null || !elegido}
+                                onClick={() => vincularPuesto(s.id, elegido)}
+                              >
+                                {vinculando === s.id ? 'Vinculando…' : 'Vincular'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       <div style={S.card}>
         {loadingData ? (
