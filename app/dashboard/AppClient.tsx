@@ -7278,7 +7278,7 @@ function ZonasOperativas({ guardias, objetivos, zonas, setZonas, supervisorZonas
 }
 
 // ── SERVICIOS OBJETIVO ────────────────────────────────────────
-function ServiciosObjetivo({ guardias, objetivos }: any) {
+function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }: any) {
   const [servicios, setServicios] = useState<any[]>([])
   const [turnosBase, setTurnosBase] = useState<any[]>([])
   const [modal, setModal] = useState(false)
@@ -7390,6 +7390,19 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
   }
 
   useEffect(() => { cargar() }, [])
+
+  // "Configurar cobertura" desde el legajo del objetivo (Bloque E): abre este
+  // mismo formulario con el objetivo y la posición ya elegidos. No crea el
+  // servicio automáticamente — solo lo deja listo para que el admin lo cargue.
+  useEffect(() => {
+    if (!filtroActivo || filtroActivo.tipo !== 'configurar_cobertura') return
+    setForm({ objetivo_id: filtroActivo.objetivoId, turno_base_id:'', puesto_id: filtroActivo.puestoId || '', nombre_puesto:'', dias_semana:[1,2,3,4,5], guardia_habitual_id:'', activo:true })
+    setErrorForm('')
+    setEditId(null)
+    setModal(true)
+    limpiarFiltro?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroActivo])
 
   const resetForm = () => { setForm({ objetivo_id:'', turno_base_id:'', puesto_id:'', nombre_puesto:'', dias_semana:[1,2,3,4,5], guardia_habitual_id:'', activo:true }); setErrorForm('') }
   const abrirNuevo = () => { resetForm(); setEditId(null); setModal(true) }
@@ -10667,11 +10680,11 @@ const esGuardia = esRolGuardia(user.rol)
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={esRolAdmin(user?.rol)} />}
-              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={setPage} />}
+              {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
               {page === 'rondas' && <RondasGlobal objetivos={objetivos} />}
-              {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} />}
+              {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
