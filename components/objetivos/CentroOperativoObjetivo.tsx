@@ -22,8 +22,15 @@ import {
   cargarLegajoObjetivo, cargarRondasObjetivo, derivarEstadoObjetivo,
   indexarRegistrosPorTurno, turnoTieneEntrada, nombrePersona,
   presentacionSemaforo, fechaHoyLocal,
+  cargarProgramacionMensualObjetivo, filtrarProgramacionMensual, origenTurno,
+  ETIQUETA_SIN_ASIGNAR,
 } from '@/lib/legajo-objetivo'
-import type { LegajoObjetivo, ObjetivoLegajo, RondaLegajo, TurnoLegajo } from '@/lib/legajo-objetivo'
+import type {
+  FiltroAsignacion, LegajoObjetivo, ObjetivoLegajo, PersonaLegajo,
+  RondaLegajo, TurnoLegajo, TurnoMensualLegajo,
+} from '@/lib/legajo-objetivo'
+import { diaSemanaCorto } from '@/lib/programacion'
+import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 import { listarRondaAlertasObjetivo } from '@/lib/rondas'
 import { formatFechaHora } from '@/lib/formato'
 import {
@@ -92,6 +99,33 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     })
     return () => { vivo = false }
   }, [objetivoId])
+
+  // ── Programación mensual (dentro de la sección de turnos) ──
+  // Solo lectura por ahora: la asignación de vigiladores llega en el próximo
+  // bloque y va a montarse sobre esta misma vista.
+  const [mostrarMensual, setMostrarMensual] = useState(false)
+  const [mesMensual, setMesMensual] = useState(() => hoy.slice(0, 7))
+  const [turnosMensual, setTurnosMensual] = useState<TurnoMensualLegajo[]>([])
+  const [personasMensual, setPersonasMensual] = useState<PersonaLegajo[]>([])
+  const [mensualCargando, setMensualCargando] = useState(false)
+  const [mensualError, setMensualError] = useState<string | null>(null)
+  const [filtroPuestoMensual, setFiltroPuestoMensual] = useState('')
+  const [filtroAsignacionMensual, setFiltroAsignacionMensual] = useState<FiltroAsignacion>('todos')
+
+  useEffect(() => {
+    if (!mostrarMensual) return
+    let vivo = true
+    setMensualCargando(true)
+    setMensualError(null)
+    void cargarProgramacionMensualObjetivo(objetivoId, mesMensual).then(res => {
+      if (!vivo) return
+      setTurnosMensual(res.turnos)
+      setPersonasMensual(res.personas)
+      setMensualError(res.error)
+      setMensualCargando(false)
+    })
+    return () => { vivo = false }
+  }, [mostrarMensual, mesMensual, objetivoId])
 
   // ── Historial de rondas JWM ──
   const [historial, setHistorial] = useState<RondaLegajo[]>([])
@@ -316,6 +350,97 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             ))}
           </div>
         )}
+
+        {/* Programación mensual: el mes completo del objetivo, sin ocultar
+            turnos sin vigilador ni limitar a hoy/próximos. */}
+        <div style={{ marginTop:12, paddingTop:12, borderTop:'1px solid #1e2d42' }}>
+          <button
+            type="button"
+            style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }}
+            onClick={() => setMostrarMensual(v => !v)}
+          >
+            {mostrarMensual ? 'Ocultar programación mensual' : 'Ver programación mensual'}
+          </button>
+
+          {mostrarMensual && (() => {
+            const filtrados = filtrarProgramacionMensual(turnosMensual, {
+              puestoId: filtroPuestoMensual || null,
+              asignacion: filtroAsignacionMensual,
+            })
+            const posiciones = Array.from(
+              new Map(
+                turnosMensual
+                  .filter(t => t.puesto_id)
+                  .map(t => [t.puesto_id as string, t.puesto_nombre ?? '—']),
+              ).entries(),
+            )
+            const nombreVigilador = (t: TurnoMensualLegajo) =>
+              t.guardia_id ? nombrePersona(t.guardia_id, personasMensual) : ETIQUETA_SIN_ASIGNAR
+            return (
+              <div style={{ marginTop:12 }}>
+                <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+                  <input
+                    type="month"
+                    value={mesMensual}
+                    onChange={e => setMesMensual(e.target.value)}
+                    style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}
+                  />
+                  <select
+                    value={filtroPuestoMensual}
+                    onChange={e => setFiltroPuestoMensual(e.target.value)}
+                    style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}
+                  >
+                    <option value="">Todas las posiciones</option>
+                    {posiciones.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
+                  </select>
+                  <select
+                    value={filtroAsignacionMensual}
+                    onChange={e => setFiltroAsignacionMensual(e.target.value as FiltroAsignacion)}
+                    style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 10px', fontSize:13 }}
+                  >
+                    <option value="todos">Todos</option>
+                    <option value="con">Con vigilador</option>
+                    <option value="sin">Sin vigilador</option>
+                  </select>
+                  <span style={{ fontSize:12, color:'#64748b' }}>
+                    {mensualCargando ? 'Cargando…' : `${filtrados.length} de ${turnosMensual.length} turnos del mes`}
+                  </span>
+                </div>
+                {mensualError && <div style={{ color:'#ef4444', fontSize:12, marginBottom:8 }}>{mensualError}</div>}
+                {!mensualCargando && turnosMensual.length === 0 && !mensualError && (
+                  <div style={{ color:'#64748b', fontSize:13 }}>Sin turnos programados para este mes.</div>
+                )}
+                {filtrados.length > 0 && (
+                  <div style={{ overflowX:'auto', maxHeight:420, overflowY:'auto' }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                      <thead>
+                        <tr>
+                          {['Fecha','Día','Posición operativa','Horario','Vigilador','Estado','Caract.','Origen'].map(h => (
+                            <th key={h} style={{ textAlign:'left', padding:'6px 8px', color:'#64748b', fontSize:11, textTransform:'uppercase', letterSpacing:0.5, borderBottom:'1px solid #1e2d42', position:'sticky', top:0, background:'#111827' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtrados.map(t => (
+                          <tr key={t.id} style={{ borderBottom:'1px solid #0f172a' }}>
+                            <td style={{ padding:'6px 8px', color:'#e2e8f0' }}>{t.fecha}</td>
+                            <td style={{ padding:'6px 8px', color:'#94a3b8' }}>{diaSemanaCorto(t.fecha)}</td>
+                            <td style={{ padding:'6px 8px', color:'#e2e8f0' }}>{t.puesto_nombre ?? '—'}</td>
+                            <td style={{ padding:'6px 8px', color:'#94a3b8', fontFamily:'Syne,sans-serif', fontWeight:700 }}>{hora(t.hora_inicio)} – {hora(t.hora_fin)}</td>
+                            <td style={{ padding:'6px 8px', color: t.guardia_id ? '#e2e8f0' : '#f59e0b' }}>{nombreVigilador(t)}</td>
+                            <td style={{ padding:'6px 8px', color:'#94a3b8' }}>{t.estado}</td>
+                            <td style={{ padding:'6px 8px', color:'#94a3b8' }}>{etiquetaCaracteristica(t.tipo_evento)}</td>
+                            <td style={{ padding:'6px 8px', color: t.servicio_base_id ? '#60a5fa' : '#94a3b8' }}>{origenTurno(t)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+        </div>
       </div>
 
       {/* 4. Asistencias y 5. Rondas. Ambas cargan al desplegarse. */}

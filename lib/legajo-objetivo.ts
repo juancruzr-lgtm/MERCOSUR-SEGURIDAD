@@ -531,3 +531,107 @@ export function presentacionSemaforo(semaforo: SemaforoObjetivo): { color: strin
   if (semaforo === 'operativo') return { color: '#10b981', label: 'Operativo' }
   return { color: '#64748b', label: 'Sin turnos hoy' }
 }
+
+// ── Programación mensual del objetivo ───────────────────────────────────────
+//
+// Extiende la sección de turnos del legajo (Turnos hoy / Próximos) con la
+// vista del mes completo. Solo lectura: la asignación de vigiladores llega en
+// el próximo bloque. Los turnos sin vigilador se muestran siempre.
+
+export interface TurnoMensualLegajo {
+  id: string
+  fecha: string
+  puesto_id: string | null
+  puesto_nombre: string | null
+  guardia_id: string | null
+  hora_inicio: string
+  hora_fin: string
+  estado: string
+  tipo_evento: string | null
+  servicio_base_id: string | null
+}
+
+export type FiltroAsignacion = 'todos' | 'con' | 'sin'
+
+export const ETIQUETA_ORIGEN_TURNO = {
+  programacion: 'Programación mensual',
+  manual: 'Manual',
+} as const
+
+export const ETIQUETA_SIN_ASIGNAR = 'Sin asignar'
+
+/** Origen del turno: los generados por programación llevan servicio_base_id. */
+export const origenTurno = (t: Pick<TurnoMensualLegajo, 'servicio_base_id'>): string =>
+  t.servicio_base_id ? ETIQUETA_ORIGEN_TURNO.programacion : ETIQUETA_ORIGEN_TURNO.manual
+
+/** Rango [desde, hasta] de un mes YYYY-MM (respeta 28/29/30/31 días). */
+export function rangoMesLegajo(mes: string): { desde: string; hasta: string } {
+  const [anio, m] = mes.split('-').map(Number)
+  const ultimo = new Date(anio, m, 0).getDate()
+  return { desde: `${mes}-01`, hasta: `${mes}-${String(ultimo).padStart(2, '0')}` }
+}
+
+/**
+ * Filtro puro de la vista mensual. `puestoId` vacío = todas las posiciones
+ * (incluye la histórica "Principal"); `asignacion` distingue con/sin vigilador.
+ */
+export function filtrarProgramacionMensual<T extends Pick<TurnoMensualLegajo, 'puesto_id' | 'guardia_id'>>(
+  turnos: T[],
+  filtro: { puestoId?: string | null; asignacion?: FiltroAsignacion },
+): T[] {
+  return turnos.filter(t => {
+    if (filtro.puestoId && t.puesto_id !== filtro.puestoId) return false
+    if (filtro.asignacion === 'con' && !t.guardia_id) return false
+    if (filtro.asignacion === 'sin' && t.guardia_id) return false
+    return true
+  })
+}
+
+/**
+ * Turnos del objetivo para un mes, con su posición operativa, más las
+ * personas referenciadas. Trae TODOS los turnos del mes (con o sin
+ * vigilador, cualquier posición): la vista no oculta nada.
+ */
+export async function cargarProgramacionMensualObjetivo(
+  objetivoId: string,
+  mes: string,
+): Promise<{ turnos: TurnoMensualLegajo[]; personas: PersonaLegajo[]; error: string | null }> {
+  const { desde, hasta } = rangoMesLegajo(mes)
+  const { data, error } = await supabase
+    .from('turnos')
+    .select('id, fecha, puesto_id, guardia_id, hora_inicio, hora_fin, estado, tipo_evento, servicio_base_id, puesto:puestos(nombre)')
+    .eq('objetivo_id', objetivoId)
+    .gte('fecha', desde)
+    .lte('fecha', hasta)
+    .order('fecha', { ascending: true })
+    .order('hora_inicio', { ascending: true })
+
+  if (error) return { turnos: [], personas: [], error: error.message }
+
+  const turnos: TurnoMensualLegajo[] = (data ?? []).map((t: any) => {
+    const puesto = Array.isArray(t.puesto) ? t.puesto[0] : t.puesto
+    return {
+      id: t.id,
+      fecha: t.fecha,
+      puesto_id: t.puesto_id ?? null,
+      puesto_nombre: puesto?.nombre ?? null,
+      guardia_id: t.guardia_id ?? null,
+      hora_inicio: t.hora_inicio,
+      hora_fin: t.hora_fin,
+      estado: t.estado,
+      tipo_evento: t.tipo_evento ?? null,
+      servicio_base_id: t.servicio_base_id ?? null,
+    }
+  })
+
+  const guardiaIds = Array.from(new Set(turnos.map(t => t.guardia_id).filter(Boolean) as string[]))
+  const personasRes = guardiaIds.length
+    ? await supabase.from('usuarios').select(COLS_PERSONA).in('id', guardiaIds)
+    : { data: [], error: null } as any
+
+  return {
+    turnos,
+    personas: (personasRes.data ?? []) as PersonaLegajo[],
+    error: personasRes.error?.message ?? null,
+  }
+}
