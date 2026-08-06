@@ -334,10 +334,58 @@ describe('previsualizarMes', () => {
     expect(c.puestos).toBe(2)
   })
 
+  it('fecha pasada: visible, solo lectura y fuera del payload; no bloquea futuras', () => {
+    // "Hoy" es el 15/08: los sábados 1 y 8 quedan como fecha_pasada, los
+    // sábados 15 (turno 08:00 ya comenzado a las 10:30), y 22/29 futuros.
+    const r = prever({
+      servicios: [servicioBase({ dias_semana: [6] })],
+    })
+    const conBloqueo = previsualizarMes({
+      anio: 2026, mes: 8,
+      servicios: [servicioBase({ dias_semana: [6] })],
+      objetivos: [objetivoBase],
+      puestosPorObjetivo: new Map([['obj-1', estadoPuestos([puesto('p1')])]]),
+      turnosExistentes: [],
+      fechaActual: '2026-08-15',
+      horaActual: '10:30',
+    })
+    expect(r.filas).toHaveLength(5) // sin fechaActual no se aplica el bloqueo
+    expect(conBloqueo.filas).toHaveLength(5) // pasadas siguen visibles
+    const porFecha = Object.fromEntries(conBloqueo.filas.map(f => [f.fecha, f.estado]))
+    expect(porFecha['2026-08-01']).toBe('fecha_pasada')
+    expect(porFecha['2026-08-08']).toBe('fecha_pasada')
+    expect(porFecha['2026-08-15']).toBe('fecha_pasada') // hoy, turno ya comenzado
+    expect(porFecha['2026-08-22']).toBe('valido')       // futura seleccionable
+    expect(porFecha['2026-08-29']).toBe('valido')
+    expect(conBloqueo.resumen.fechas_pasadas).toBe(3)
+    expect(conBloqueo.resumen.validos).toBe(2)
+    // El payload nunca incluye pasadas, aunque estén "seleccionadas".
+    const todas = new Set(conBloqueo.filas.map(clavePrevision))
+    expect(payloadCreacionParcial(conBloqueo.filas, todas).map(f => f.fecha))
+      .toEqual(['2026-08-22', '2026-08-29'])
+  })
+
+  it('fecha de hoy con turno todavía no comenzado sigue siendo válida', () => {
+    const r = previsualizarMes({
+      anio: 2026, mes: 8,
+      servicios: [servicioBase({
+        dias_semana: [6],
+        turno_base: { nombre: 'Tarde', hora_inicio: '19:00', hora_fin: '23:00', activo: true },
+      })],
+      objetivos: [objetivoBase],
+      puestosPorObjetivo: new Map([['obj-1', estadoPuestos([puesto('p1')])]]),
+      turnosExistentes: [],
+      fechaActual: '2026-08-15',
+      horaActual: '10:30',
+    })
+    expect(r.filas.find(f => f.fecha === '2026-08-15')?.estado).toBe('valido')
+  })
+
   it('clasificaciones centralizadas con etiqueta para cada estado', () => {
     expect(ETIQUETA_PREVISION.valido).toBe('Válido para crear')
     expect(ETIQUETA_PREVISION.ya_existe).toBe('Ya existe')
     expect(ETIQUETA_PREVISION.conflicto_horario).toBe('Conflicto de horario')
+    expect(ETIQUETA_PREVISION.fecha_pasada).toBe('Fecha pasada')
     expect(ETIQUETA_PREVISION.sin_puesto).toBe('Servicio sin posición operativa')
     expect(ETIQUETA_PREVISION.turno_base_inactivo).toBe('Turno base inactivo')
     expect(ETIQUETA_PREVISION.objetivo_inactivo).toBe('Objetivo inactivo')

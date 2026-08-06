@@ -1,0 +1,6 @@
+-- Rollback de 20260807120000_generacion_sin_retroactivos.sql
+-- Restaura la versión anterior de la RPC (sin el bloqueo de fechas pasadas):
+-- reaplicar la función definida en
+--   supabase/migrations/20260807100000_crear_turnos_programacion_parcial.sql
+-- (sección CREATE OR REPLACE FUNCTION + grants). No toca la tabla de
+-- auditoría ni datos.

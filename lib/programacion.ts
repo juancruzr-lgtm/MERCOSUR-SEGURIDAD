@@ -35,6 +35,7 @@ export type EstadoPrevision =
   | 'valido'              // se puede crear
   | 'ya_existe'           // el turno ya está en la base
   | 'conflicto_horario'   // el guardia sugerido queda superpuesto
+  | 'fecha_pasada'        // no se programa retroactivamente desde acá
   | 'sin_puesto'          // servicio legacy sin puesto vinculado
   | 'turno_base_inactivo'
   | 'objetivo_inactivo'
@@ -45,12 +46,16 @@ export const ETIQUETA_PREVISION: Record<EstadoPrevision, string> = {
   valido: 'Válido para crear',
   ya_existe: 'Ya existe',
   conflicto_horario: 'Conflicto de horario',
+  fecha_pasada: 'Fecha pasada',
   sin_puesto: 'Servicio sin posición operativa',
   turno_base_inactivo: 'Turno base inactivo',
   objetivo_inactivo: 'Objetivo inactivo',
   objetivo_prueba: 'Objetivo de prueba excluido',
   config_invalida: 'Configuración inválida',
 }
+
+export const DETALLE_FECHA_PASADA =
+  'Los días pasados se resuelven por regularización administrativa, no desde la programación.'
 
 export const MENSAJE_SERVICIO_SIN_PUESTO =
   'No se puede programar: servicio sin posición operativa vinculada'
@@ -133,6 +138,7 @@ export interface ResumenPrevision {
   validos: number
   existentes: number
   conflictos: number
+  fechas_pasadas: number
   servicios_excluidos: number
   servicios_sin_puesto: number
 }
@@ -183,8 +189,16 @@ export function previsualizarMes(params: {
   objetivos: ObjetivoPrevision[]
   puestosPorObjetivo: Map<string, EstadoPuestos>
   turnosExistentes: TurnoExistentePrevision[]
+  /**
+   * Fecha y hora actuales (YYYY-MM-DD / HH:MM) para bloquear la creación
+   * retroactiva: una fecha anterior, o la de hoy cuando el turno ya comenzó,
+   * se clasifica 'fecha_pasada' (visible, solo lectura, no seleccionable).
+   * Sin estos parámetros no se aplica el bloqueo (útil en tests históricos).
+   */
+  fechaActual?: string
+  horaActual?: string
 }): ResultadoPrevision {
-  const { anio, mes, servicios, objetivos, puestosPorObjetivo, turnosExistentes } = params
+  const { anio, mes, servicios, objetivos, puestosPorObjetivo, turnosExistentes, fechaActual, horaActual } = params
   const mesStr = `${anio}-${pad2(mes)}`
 
   const objetivoPorId = new Map(objetivos.map(o => [o.id, o]))
@@ -317,6 +331,16 @@ export function previsualizarMes(params: {
         continue
       }
 
+      // Sin creación retroactiva: fecha anterior, o la de hoy con el turno
+      // ya comenzado, queda visible pero solo lectura. No bloquea el resto.
+      if (fechaActual && (
+        fecha < fechaActual ||
+        (fecha === fechaActual && horaActual !== undefined && hora5(horaInicio) <= horaActual)
+      )) {
+        filas.push({ ...base, estado: 'fecha_pasada', detalle: DETALLE_FECHA_PASADA })
+        continue
+      }
+
       filas.push({ ...base, estado: 'valido', detalle: null })
       // Las filas válidas participan de las superposiciones siguientes,
       // igual que lo harían los turnos recién insertados.
@@ -331,6 +355,7 @@ export function previsualizarMes(params: {
     validos: contar('valido'),
     existentes: contar('ya_existe'),
     conflictos: contar('conflicto_horario'),
+    fechas_pasadas: contar('fecha_pasada'),
     servicios_excluidos: advertencias.filter(a => a.estado !== 'sin_puesto').length,
     servicios_sin_puesto: advertencias.filter(a => a.estado === 'sin_puesto').length,
   }

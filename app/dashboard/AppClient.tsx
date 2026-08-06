@@ -7341,6 +7341,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
       return null
     }
 
+    const ahora = new Date()
     return previsualizarMes({
       anio,
       mes,
@@ -7348,6 +7349,10 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
       objetivos,
       puestosPorObjetivo,
       turnosExistentes: turnosExistentes ?? [],
+      // Bloqueo de creación retroactiva: los días pasados (y el de hoy si el
+      // turno ya comenzó) quedan visibles pero no seleccionables.
+      fechaActual: fechaActualTurno(),
+      horaActual: `${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`,
     })
   }
 
@@ -7499,6 +7504,7 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
               { label: ETIQUETA_PREVISION.valido, valor: prevision.resumen.validos, color:'#10b981' },
               { label: ETIQUETA_PREVISION.ya_existe, valor: prevision.resumen.existentes, color:'#60a5fa' },
               { label:'Conflictos', valor: prevision.resumen.conflictos, color:'#ef4444' },
+              { label:'Fechas pasadas', valor: prevision.resumen.fechas_pasadas, color:'#94a3b8' },
               { label:'Servicios excluidos', valor: prevision.resumen.servicios_excluidos, color:'#f59e0b' },
               { label:'Sin posición operativa', valor: prevision.resumen.servicios_sin_puesto, color:'#f59e0b' },
             ].map(chip => (
@@ -7544,8 +7550,8 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
                   {prevision.filas.map((f, i) => {
                     const colorEstado: Record<EstadoPrevision, string> = {
                       valido:'#10b981', ya_existe:'#60a5fa', conflicto_horario:'#ef4444',
-                      sin_puesto:'#f59e0b', turno_base_inactivo:'#f59e0b', objetivo_inactivo:'#94a3b8',
-                      objetivo_prueba:'#94a3b8', config_invalida:'#f59e0b',
+                      fecha_pasada:'#94a3b8', sin_puesto:'#f59e0b', turno_base_inactivo:'#f59e0b',
+                      objetivo_inactivo:'#94a3b8', objetivo_prueba:'#94a3b8', config_invalida:'#f59e0b',
                     }
                     const clave = clavePrevision(f)
                     return (
