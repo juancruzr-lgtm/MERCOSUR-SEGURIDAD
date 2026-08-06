@@ -36,6 +36,8 @@ import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, caracteristicaTurno, es
 import { ETIQUETA_VINCULACION, sugerirVinculacion } from '@/lib/vinculacion-puestos'
 import { ETIQUETA_PREVISION, clavePrevision, payloadCreacionParcial, previsualizarMes, resumenConfirmacion } from '@/lib/programacion'
 import type { EstadoPrevision, ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
+import { ETIQUETA_CLASIFICACION, ETIQUETA_COMPARACION, analizarCoberturaHistorica } from '@/lib/cobertura-historica'
+import type { ClasificacionPatron, ResultadoCobertura } from '@/lib/cobertura-historica'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -7216,6 +7218,38 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
   const [faseCreacion, setFaseCreacion] = useState<'seleccion' | 'confirmar' | 'creando' | 'resultado'>('seleccion')
   const [resultadoCreacion, setResultadoCreacion] = useState<ResultadoCreacion | null>(null)
   const [errorCreacion, setErrorCreacion] = useState('')
+  // Motor de cobertura histórica: analiza julio 2026 y muestra propuestas.
+  // Solo lectura; no crea turnos, no modifica servicios.
+  const [cobertura, setCobertura] = useState<ResultadoCobertura | null>(null)
+  const [analizandoCobertura, setAnalizandoCobertura] = useState(false)
+  const [errorCobertura, setErrorCobertura] = useState('')
+
+  const MES_ANALISIS = { anio: 2026, mes: 7, desde: '2026-07-01', hasta: '2026-07-31' }
+
+  const analizarCobertura = async () => {
+    if (analizandoCobertura) return
+    setAnalizandoCobertura(true)
+    setErrorCobertura('')
+    const { data: turnosJulio, error } = await supabase
+      .from('turnos')
+      .select('id, objetivo_id, puesto_id, guardia_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
+      .gte('fecha', MES_ANALISIS.desde)
+      .lte('fecha', MES_ANALISIS.hasta)
+      .limit(5000)
+    if (error) {
+      setErrorCobertura(error.message)
+      setAnalizandoCobertura(false)
+      return
+    }
+    setCobertura(analizarCoberturaHistorica({
+      anio: MES_ANALISIS.anio,
+      mes: MES_ANALISIS.mes,
+      turnos: turnosJulio ?? [],
+      objetivos,
+      servicios,
+    }))
+    setAnalizandoCobertura(false)
+  }
 
   const DIAS = [
     { num:1, label:'Lun' }, { num:2, label:'Mar' }, { num:3, label:'Mié' },
@@ -7431,7 +7465,9 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
         <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
           <input type="month" style={{ ...S.input, width:'auto', minWidth:160 }} value={mesGenerar} onChange={e => { setMesGenerar(e.target.value); setResultadoGeneracion(null) }} />
           <button style={{ ...S.btn, ...S.btnPrimary, opacity: generando ? 0.6 : 1 }} onClick={generarMes} disabled={generando}>{generando ? '⏳ Preparando vista previa...' : '⚡ Generar mes'}</button>
+          <button style={{ ...S.btn, ...S.btnSecondary, opacity: analizandoCobertura ? 0.6 : 1 }} onClick={analizarCobertura} disabled={analizandoCobertura}>{analizandoCobertura ? '⏳ Analizando…' : '📊 Analizar cobertura de julio'}</button>
         </div>
+        {errorCobertura && <div style={{ marginTop:10, color:'#ef4444', fontSize:12 }}>{errorCobertura}</div>}
         {resultadoGeneracion && (
           <div style={{ marginTop:12, padding:'10px 14px', borderRadius:8, fontSize:13, background: resultadoGeneracion.startsWith('✅') ? 'rgba(16,185,129,.1)' : 'rgba(245,158,11,.1)', border: `1px solid ${resultadoGeneracion.startsWith('✅') ? 'rgba(16,185,129,.3)' : 'rgba(245,158,11,.3)'}`, color: resultadoGeneracion.startsWith('✅') ? '#10b981' : '#f59e0b' }}>
             {resultadoGeneracion}
@@ -7584,6 +7620,70 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
             </div>
             </>
           )}
+        </Modal>
+        )
+      })()}
+
+      {cobertura && (() => {
+        const colorClasif: Record<ClasificacionPatron, string> = {
+          fuerte:'#10b981', probable:'#60a5fa', revision:'#f59e0b', excepcion:'#94a3b8', sin_informacion:'#64748b',
+        }
+        return (
+        <Modal title={`Cobertura histórica — ${cobertura.mes}`} onClose={() => setCobertura(null)}
+          footer={<button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setCobertura(null)}>Cerrar</button>}>
+          <div style={{ fontSize:13, color:'#64748b', marginBottom:14 }}>
+            Propuesta basada únicamente en la cobertura real de julio. No representa el contrato, no crea turnos ni modifica servicios: es material para decidir la programación del mes siguiente.
+          </div>
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16 }}>
+            {[
+              { label:'Objetivos analizados', valor: cobertura.resumen.objetivos_analizados, color:'#e2e8f0' },
+              { label:'Con patrón fuerte', valor: cobertura.resumen.con_patron_fuerte, color:'#10b981' },
+              { label:'Con patrón probable', valor: cobertura.resumen.con_patron_probable, color:'#60a5fa' },
+              { label:'Requieren revisión', valor: cobertura.resumen.requieren_revision, color:'#f59e0b' },
+              { label:'Sin información suficiente', valor: cobertura.resumen.sin_informacion, color:'#64748b' },
+            ].map(chip => (
+              <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 14px', textAlign:'center' }}>
+                <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, color:chip.color }}>{chip.valor}</div>
+                <div style={{ fontSize:11, color:'#64748b' }}>{chip.label}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ maxHeight:460, overflowY:'auto', display:'flex', flexDirection:'column', gap:14 }}>
+            {cobertura.objetivos.map(obj => (
+              <div key={obj.objetivo_id} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:10, padding:14 }}>
+                <div style={{ fontFamily:'Syne,sans-serif', fontSize:14, fontWeight:700, marginBottom:8 }}>{obj.objetivo_nombre}</div>
+                <div style={{ overflowX:'auto' }}>
+                  <table style={S.table}>
+                    <thead><tr><th style={S.th}>Días</th><th style={S.th}>Horario</th><th style={S.th}>Posiciones</th><th style={S.th}>Observado</th><th style={S.th}>%</th><th style={S.th}>Clasificación</th><th style={S.th}>vs. configuración</th></tr></thead>
+                    <tbody>
+                      {obj.patrones.map((p, i) => (
+                        <tr key={i}>
+                          <td style={S.td}>{p.etiqueta_dias}</td>
+                          <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontSize:12 }}>{p.hora_inicio}–{p.hora_fin}{p.nocturno ? ' 🌙' : ''}</td>
+                          <td style={{ ...S.td, textAlign:'center' }}>{p.posiciones}</td>
+                          <td style={S.td}>{p.dias_cumplidos} de {p.dias_observados} días</td>
+                          <td style={S.td}>{p.porcentaje}%</td>
+                          <td style={{ ...S.td, color: colorClasif[p.clasificacion], fontSize:12, whiteSpace:'nowrap' }}>{ETIQUETA_CLASIFICACION[p.clasificacion]}</td>
+                          <td style={{ ...S.td, fontSize:12, color: p.comparacion === 'coincide' ? '#10b981' : '#f59e0b' }}>{p.comparacion ? ETIQUETA_COMPARACION[p.comparacion] : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {obj.patrones.some(p => p.excepciones.length > 0) && (
+                  <div style={{ fontSize:11, color:'#94a3b8', marginTop:8 }}>
+                    Excepciones: {obj.patrones.flatMap(p => p.excepciones).slice(0, 6).join(' · ')}
+                  </div>
+                )}
+                {obj.advertencias.length > 0 && (
+                  <div style={{ fontSize:11, color:'#f59e0b', marginTop:6 }}>⚠ {obj.advertencias.join(' · ')}</div>
+                )}
+                {obj.configuracion_adicional.length > 0 && (
+                  <div style={{ fontSize:11, color:'#64748b', marginTop:6 }}>Configuración adicional: {obj.configuracion_adicional.join(' · ')}</div>
+                )}
+              </div>
+            ))}
+          </div>
         </Modal>
         )
       })()}
