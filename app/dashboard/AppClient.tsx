@@ -36,7 +36,7 @@ import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, caracteristicaTurno, es
 import { ETIQUETA_VINCULACION, sugerirVinculacion } from '@/lib/vinculacion-puestos'
 import { ETIQUETA_PREVISION, clavePrevision, payloadCreacionParcial, previsualizarMes, resumenConfirmacion } from '@/lib/programacion'
 import type { EstadoPrevision, ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
-import { ETIQUETA_CLASIFICACION, ETIQUETA_COMPARACION, analizarCoberturaHistorica } from '@/lib/cobertura-historica'
+import { ETIQUETA_CLASIFICACION, ETIQUETA_COMPARACION, NOTA_ALCANCE_MOTOR, analizarCoberturaHistorica } from '@/lib/cobertura-historica'
 import type { ClasificacionPatron, ResultadoCobertura } from '@/lib/cobertura-historica'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
@@ -7626,21 +7626,22 @@ function ServiciosObjetivo({ guardias, objetivos }: any) {
 
       {cobertura && (() => {
         const colorClasif: Record<ClasificacionPatron, string> = {
-          fuerte:'#10b981', probable:'#60a5fa', revision:'#f59e0b', excepcion:'#94a3b8', sin_informacion:'#64748b',
+          fuerte:'#10b981', probable:'#60a5fa', revision:'#f59e0b', excepcion:'#94a3b8',
+          cambio_esquema:'#f59e0b', sin_informacion:'#64748b',
         }
         return (
         <Modal title={`Cobertura histórica — ${cobertura.mes}`} onClose={() => setCobertura(null)}
           footer={<button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setCobertura(null)}>Cerrar</button>}>
           <div style={{ fontSize:13, color:'#64748b', marginBottom:14 }}>
-            Propuesta basada únicamente en la cobertura real de julio. No representa el contrato, no crea turnos ni modifica servicios: es material para decidir la programación del mes siguiente.
+            {NOTA_ALCANCE_MOTOR} Los días sin registros se tratan como datos no registrados, no como ausencia de servicio. No crea turnos ni modifica servicios.
           </div>
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16 }}>
             {[
               { label:'Objetivos analizados', valor: cobertura.resumen.objetivos_analizados, color:'#e2e8f0' },
-              { label:'Con patrón fuerte', valor: cobertura.resumen.con_patron_fuerte, color:'#10b981' },
+              { label:'Con patrón claro', valor: cobertura.resumen.con_patron_fuerte, color:'#10b981' },
               { label:'Con patrón probable', valor: cobertura.resumen.con_patron_probable, color:'#60a5fa' },
               { label:'Requieren revisión', valor: cobertura.resumen.requieren_revision, color:'#f59e0b' },
-              { label:'Sin información suficiente', valor: cobertura.resumen.sin_informacion, color:'#64748b' },
+              { label:'Sin datos suficientes', valor: cobertura.resumen.sin_informacion, color:'#64748b' },
             ].map(chip => (
               <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 14px', textAlign:'center' }}>
                 <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, color:chip.color }}>{chip.valor}</div>
