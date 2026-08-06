@@ -12,7 +12,7 @@
 --   - La alerta permanece visible (fichaje pendiente de regularización).
 --   - Administración decide por separado si carga asistencia manual.
 
-do $$
+do $migracion_confirmar_asistencia$
 declare
   v_oid regprocedure;
   v_definicion text;
@@ -76,4 +76,4 @@ begin
 
   raise notice 'Acción confirmar_asistencia agregada correctamente al RPC';
 end;
-$$;
+$migracion_confirmar_asistencia$;

@@ -1,7 +1,7 @@
 -- Rollback: quita 'confirmar_asistencia' del RPC registrar_intervencion_operativa.
 -- Las intervenciones ya registradas con esta acción se conservan como historial.
 
-do $$
+do $rollback_confirmar_asistencia$
 declare
   v_oid regprocedure;
   v_definicion text;
@@ -55,4 +55,4 @@ begin
 
   raise notice 'Rollback de confirmar_asistencia completado';
 end;
-$$;
+$rollback_confirmar_asistencia$;
