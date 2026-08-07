@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION,
-  cubreElTurno, esPendienteDeAccion, estadoRevision, etiquetaResumenMes,
-  filtrarFilasBandeja, nombreMes, objetivoEnAlcance, requiereRevision,
+  cubreElTurno, esPendienteDeAccion, estadoRevision, etiquetaDiferencia,
+  etiquetaResumenMes, filtrarFilasBandeja, horasDelTramo, horasProgramadas,
+  nombreMes, objetivoEnAlcance, planCorreccionHorario, requiereRevision,
   opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   resumenBandejaMensual,
 } from '@/lib/bandeja-planillas'
@@ -14,7 +15,7 @@ import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 // el resumen del mes.
 
 const fila = (over: Partial<FilaBandejaMensual> = {}): FilaBandejaMensual => ({
-  turnoId: 't1', empleadoId: 'e1', vigilador: 'ROMERO, FACUNDO',
+  turnoId: 't1', empleadoId: 'e1', registroId: 'r1', vigilador: 'ROMERO, FACUNDO',
   fecha: '2026-08-10',
   objetivoId: 'o1', objetivo: 'CLUB',
   puestoId: 'p1', puesto: 'Principal',
@@ -164,6 +165,82 @@ describe('requiereRevision — la conformidad del vigilador no siempre alcanza',
     expect(requiereRevision(fila({ revisado: true, entrada: '07:30' }))).toBe(false)
     expect(requiereRevision(fila({ solicitudEstado: 'resuelta', entrada: '07:30' }))).toBe(false)
   })
+})
+
+// Corrección del horario reconocido. Espeja calcular_horas_reconocidas de
+// Postgres, que es quien realmente guarda: esto solo alimenta la vista previa
+// del modal antes de confirmar.
+describe('horasDelTramo y horasProgramadas', () => {
+  it('tramo diurno', () => expect(horasDelTramo('07:00', '19:00')).toBe(12))
+  it('tramo que excede el turno', () => expect(horasDelTramo('07:00', '20:00')).toBe(13))
+  it('tramo que cruza medianoche', () => expect(horasDelTramo('22:00', '07:00')).toBe(9))
+  it('media hora', () => expect(horasDelTramo('07:00', '07:30')).toBe(0.5))
+  it('horas programadas de un turno normal', () => expect(horasProgramadas('07:00', '19:00')).toBe(12))
+  it('horas programadas de un nocturno', () => expect(horasProgramadas('22:00', '06:00')).toBe(8))
+})
+
+describe('planCorreccionHorario — el ejemplo del turno 07:00-19:00', () => {
+  const plan = (over: Partial<Parameters<typeof planCorreccionHorario>[0]> = {}) =>
+    planCorreccionHorario({
+      horaInicioProg: '07:00', horaFinProg: '19:00',
+      entradaReconocida: '07:00', salidaReconocida: '20:00',
+      motivo: 'Verificado con el cliente',
+      ...over,
+    })
+
+  it('reconocer hasta las 20:00 da 13 h y excede el turno', () => {
+    const p = plan()
+    expect(p.horasReconocidas).toBe(13)
+    expect(p.horasProgramadas).toBe(12)
+    expect(p.diferencia).toBe(1)
+    expect(p.excedeTurno).toBe(true)
+    expect(p.requiereFueraDeTurno).toBe(true)
+    expect(p.bloqueo).toBeNull()
+  })
+
+  it('reconocer exactamente lo programado no exige el flag', () => {
+    const p = plan({ salidaReconocida: '19:00' })
+    expect(p.diferencia).toBe(0)
+    expect(p.excedeTurno).toBe(false)
+    expect(p.quedaCorto).toBe(false)
+    expect(p.requiereFueraDeTurno).toBe(false)
+  })
+
+  it('reconocer menos también sale de lo programado', () => {
+    const p = plan({ salidaReconocida: '18:00' })
+    expect(p.horasReconocidas).toBe(11)
+    expect(p.diferencia).toBe(-1)
+    expect(p.quedaCorto).toBe(true)
+    expect(p.excedeTurno).toBe(false)
+    expect(p.requiereFueraDeTurno).toBe(true)
+  })
+
+  it('sin motivo no se puede guardar', () => {
+    expect(plan({ motivo: '' }).bloqueo).toMatch(/motivo/i)
+    expect(plan({ motivo: 'ok' }).bloqueo).toMatch(/motivo/i)
+  })
+
+  it('sin horario completo no se puede guardar', () => {
+    expect(plan({ salidaReconocida: '' }).bloqueo).toMatch(/entrada y la salida/i)
+  })
+
+  it('entrada igual a salida es inválido', () => {
+    expect(plan({ entradaReconocida: '07:00', salidaReconocida: '07:00' }).bloqueo).toMatch(/igual/i)
+  })
+
+  it('turno nocturno reconociendo una hora de más', () => {
+    const p = plan({ horaInicioProg: '22:00', horaFinProg: '06:00', entradaReconocida: '22:00', salidaReconocida: '07:00' })
+    expect(p.horasProgramadas).toBe(8)
+    expect(p.horasReconocidas).toBe(9)
+    expect(p.excedeTurno).toBe(true)
+  })
+})
+
+describe('etiquetaDiferencia', () => {
+  it('una hora por encima', () => expect(etiquetaDiferencia(1)).toBe('1 h por encima del turno'))
+  it('hora y media por encima', () => expect(etiquetaDiferencia(1.5)).toBe('1 h 30 min por encima del turno'))
+  it('45 minutos por debajo', () => expect(etiquetaDiferencia(-0.75)).toBe('45 min por debajo del turno'))
+  it('sin diferencia', () => expect(etiquetaDiferencia(0)).toMatch(/Coincide/))
 })
 
 describe('filtrarFilasBandeja', () => {

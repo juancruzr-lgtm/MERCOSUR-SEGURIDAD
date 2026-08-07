@@ -34,8 +34,8 @@ import {
 import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud } from '@/lib/primer-control'
 import { limitesDelMes } from '@/lib/calendario-mes'
 import {
-  ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, cubreElTurno,
-  estadoRevision, etiquetaResumenMes, filtrarFilasBandeja,
+  ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, cubreElTurno, etiquetaDiferencia,
+  estadoRevision, etiquetaResumenMes, filtrarFilasBandeja, planCorreccionHorario,
   objetivoEnAlcance, opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   resumenBandejaMensual,
 } from '@/lib/bandeja-planillas'
@@ -63,6 +63,17 @@ const hora = (h?: string | null) => (h ? h.slice(0, 5) : null)
 
 const mesActualArg = () =>
   new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 7)
+
+/** Nombres legibles de los campos que audita corregir_registro_asistencia. */
+const ETIQUETA_CAMPO_AUDITORIA: Record<string, string> = {
+  hora_entrada_final: 'Entrada reconocida',
+  hora_salida_final: 'Salida reconocida',
+  horas_liquidables: 'Horas reconocidas',
+  comentario_final: 'Comentario',
+  guardia_final_id: 'Vigilador',
+  objetivo_final_id: 'Objetivo',
+  reconocido_fuera_de_turno: 'Reconocido fuera del turno programado',
+}
 
 const COLOR_ESTADO: Record<EstadoRevision, string> = {
   pendiente: '#94a3b8',
@@ -111,6 +122,89 @@ export default function BandejaPlanillas({
   const [comentario, setComentario] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [errorAccion, setErrorAccion] = useState('')
+
+  // ── Corregir horario reconocido ──
+  // Reutiliza corregir_registro_asistencia: los mismos campos _final y la misma
+  // tabla de auditoría que usa la corrección de Administración. No hay una
+  // segunda fuente de horas.
+  const [correccion, setCorreccion] = useState<FilaBandejaMensual | null>(null)
+  const [corrEntrada, setCorrEntrada] = useState('')
+  const [corrSalida, setCorrSalida] = useState('')
+  const [corrMotivo, setCorrMotivo] = useState('')
+  const [corrConfirmando, setCorrConfirmando] = useState(false)
+  const [corrGuardando, setCorrGuardando] = useState(false)
+  const [corrError, setCorrError] = useState('')
+
+  // ── Auditoría por registro, para mostrar el rastro de las correcciones ──
+  const [auditoria, setAuditoria] = useState<Map<string, any[]>>(new Map())
+  const [auditoriaAbierta, setAuditoriaAbierta] = useState<string | null>(null)
+
+  const abrirCorreccion = (f: FilaBandejaMensual) => {
+    setCorreccion(f)
+    // Arranca con lo fichado: el supervisor ajusta desde ahí.
+    setCorrEntrada(f.entrada ?? f.horaInicioProg)
+    setCorrSalida(f.salida ?? f.horaFinProg)
+    setCorrMotivo('')
+    setCorrConfirmando(false)
+    setCorrError('')
+  }
+
+  const planCorr = correccion ? planCorreccionHorario({
+    horaInicioProg: correccion.horaInicioProg,
+    horaFinProg: correccion.horaFinProg,
+    entradaReconocida: corrEntrada,
+    salidaReconocida: corrSalida,
+    motivo: corrMotivo,
+  }) : null
+
+  const guardarCorreccion = async () => {
+    if (!correccion || !planCorr || planCorr.bloqueo || corrGuardando) return
+    if (!correccion.registroId) { setCorrError('Este turno no tiene registro de asistencia para corregir.'); return }
+    setCorrGuardando(true)
+    setCorrError('')
+    try {
+      const { error: rpcError } = await supabase.rpc('corregir_registro_asistencia', {
+        p_registro_id: correccion.registroId,
+        p_payload: {
+          hora_entrada_final: corrEntrada,
+          hora_salida_final: corrSalida,
+          comentario_final: corrMotivo.trim(),
+        },
+        p_comentario: corrMotivo.trim(),
+        p_reconocer_fuera_de_turno: planCorr.requiereFueraDeTurno,
+      })
+      if (rpcError) throw new Error(rpcError.message)
+      // La solicitud del vigilador queda resuelta con la misma RPC de siempre.
+      if (correccion.solicitudId) {
+        await supabase.rpc('revisar_primer_control', {
+          p_turno_id: correccion.turnoId,
+          p_empleado_id: correccion.empleadoId,
+          p_accion: 'revisado',
+          p_comentario: `Horario reconocido ${corrEntrada}–${corrSalida}: ${corrMotivo.trim()}`,
+          p_solicitud_id: correccion.solicitudId,
+        })
+      }
+      setCorreccion(null)
+      setRecargas(v => v + 1)
+    } catch (e) {
+      setCorrError(e instanceof Error ? e.message : 'No se pudo guardar la corrección')
+    } finally {
+      setCorrGuardando(false)
+    }
+  }
+
+  const verAuditoria = async (registroId: string) => {
+    if (auditoriaAbierta === registroId) { setAuditoriaAbierta(null); return }
+    setAuditoriaAbierta(registroId)
+    if (auditoria.has(registroId)) return
+    const { data } = await supabase
+      .from('registros_asistencia_auditoria')
+      .select('id, campo, valor_anterior, valor_nuevo, comentario, created_at, modificado_por')
+      .eq('registro_id', registroId)
+      .order('created_at', { ascending: false })
+      .limit(60)
+    setAuditoria(prev => new Map(prev).set(registroId, data ?? []))
+  }
 
   // Si el contenedor cambia el filtro inicial (por ejemplo al entrar desde la
   // planilla de otro guardia), la bandeja lo adopta.
@@ -213,6 +307,7 @@ export default function BandejaPlanillas({
         resultado.push({
           turnoId: t.id,
           empleadoId,
+          registroId: registro?.id ?? null,
           vigilador: nombrePor.get(empleadoId) ?? '—',
           fecha: t.fecha,
           objetivoId: t.objetivo_id,
@@ -470,10 +565,144 @@ export default function BandejaPlanillas({
               >
                 {ETIQUETA_ACCION_SUPERVISOR.derivar_administracion}
               </button>
+              {f.registroId && (
+                <button
+                  style={{ ...btn, border: '1px solid #1d4ed8', background: '#1e3a8a', color: '#bfdbfe' }}
+                  onClick={() => abrirCorreccion(f)}
+                >
+                  Corregir horario reconocido
+                </button>
+              )}
+              {f.registroId && (
+                <button style={{ ...btn, fontSize: 11.5, color: '#94a3b8' }} onClick={() => verAuditoria(f.registroId!)}>
+                  {auditoriaAbierta === f.registroId ? 'Ocultar historial' : 'Ver historial'}
+                </button>
+              )}
             </div>
+
+            {f.registroId && auditoriaAbierta === f.registroId && (
+              <div style={{ marginTop: 10, background: '#0b1220', border: '1px solid #1e2d42', borderRadius: 8, padding: 10 }}>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: .5, marginBottom: 6 }}>
+                  Historial de correcciones
+                </div>
+                {!auditoria.has(f.registroId) && <div style={muted}>Cargando…</div>}
+                {auditoria.get(f.registroId)?.length === 0 && (
+                  <div style={muted}>Sin correcciones registradas.</div>
+                )}
+                {(auditoria.get(f.registroId) ?? []).map((a: any) => (
+                  <div key={a.id} style={{ fontSize: 12, color: '#cbd5e1', paddingBottom: 6, marginBottom: 6, borderBottom: '1px solid #16202e' }}>
+                    <span style={{ color: '#94a3b8' }}>{new Date(a.created_at).toLocaleString('es-AR')}</span>
+                    {' · '}<strong>{ETIQUETA_CAMPO_AUDITORIA[a.campo] ?? a.campo}</strong>
+                    {a.campo === 'reconocido_fuera_de_turno'
+                      ? <span style={{ color: '#fbbf24' }}> · autorizado</span>
+                      : <>: <span style={{ color: '#94a3b8' }}>{a.valor_anterior ?? '—'}</span> → <span style={{ color: '#10b981' }}>{a.valor_nuevo ?? '—'}</span></>}
+                    {a.comentario && <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>{a.comentario}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )
       })}
+
+      {/* Corregir horario reconocido — via corregir_registro_asistencia */}
+      {correccion && planCorr && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => { if (!corrGuardando) setCorreccion(null) }}
+        >
+          <div style={{ background: '#1e293b', borderRadius: 12, padding: 20, width: '100%', maxWidth: 460, border: '1px solid #334155', maxHeight: '88vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>Corregir horario reconocido</div>
+            <div style={{ ...muted, marginBottom: 12 }}>
+              {correccion.vigilador} · {fmtFecha(correccion.fecha)} · {correccion.objetivo} · {correccion.puesto}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+              <div style={{ background: '#0b1220', border: '1px solid #1e2d42', borderRadius: 8, padding: '8px 10px' }}>
+                <div style={{ fontSize: 10.5, color: '#64748b', textTransform: 'uppercase' }}>Horario programado</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{correccion.horaInicioProg}–{correccion.horaFinProg}</div>
+                <div style={muted}>{planCorr.horasProgramadas} h</div>
+              </div>
+              <div style={{ background: '#0b1220', border: '1px solid #1e2d42', borderRadius: 8, padding: '8px 10px' }}>
+                <div style={{ fontSize: 10.5, color: '#64748b', textTransform: 'uppercase' }}>Fichaje real</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{correccion.entrada ?? '—'}–{correccion.salida ?? '—'}</div>
+                <div style={muted}>{correccion.salidaAutomatica ? ETIQUETA_SALIDA_AUTOMATICA : 'Fichaje del vigilador'}</div>
+              </div>
+            </div>
+
+            {correccion.solicitudTexto && (
+              <div style={{ background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 8, padding: 10, marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: '#f59e0b', marginBottom: 4 }}>Lo que informa el vigilador</div>
+                <div style={{ fontSize: 13, color: '#e2e8f0', whiteSpace: 'pre-wrap' }}>{correccion.solicitudTexto}</div>
+              </div>
+            )}
+
+            <label style={{ display: 'block', fontSize: 11, color: '#64748b', textTransform: 'uppercase', marginBottom: 6 }}>
+              Horario reconocido
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+              <input type="time" value={corrEntrada} onChange={e => setCorrEntrada(e.target.value)}
+                style={{ ...sel, width: '100%', fontSize: 14 }} />
+              <input type="time" value={corrSalida} onChange={e => setCorrSalida(e.target.value)}
+                style={{ ...sel, width: '100%', fontSize: 14 }} />
+            </div>
+
+            <div style={{
+              background: planCorr.excedeTurno ? 'rgba(245,158,11,.1)' : '#0b1220',
+              border: `1px solid ${planCorr.excedeTurno ? 'rgba(245,158,11,.4)' : '#1e2d42'}`,
+              borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 13,
+            }}>
+              Se reconocen <strong style={{ color: planCorr.excedeTurno ? '#f59e0b' : '#10b981' }}>{planCorr.horasReconocidas} h</strong>
+              {' '}sobre {planCorr.horasProgramadas} h programadas
+              <div style={{ ...muted, marginTop: 2 }}>{etiquetaDiferencia(planCorr.diferencia)}</div>
+            </div>
+
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Motivo *</label>
+            <textarea
+              value={corrMotivo}
+              onChange={e => setCorrMotivo(e.target.value)}
+              rows={3}
+              placeholder="Ej.: verificado con el cliente, el vigilador se quedó hasta las 20:00 por relevo tardío."
+              style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: 10, fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }}
+            />
+
+            {planCorr.bloqueo && <div style={{ color: '#f59e0b', fontSize: 12, marginTop: 8 }}>{planCorr.bloqueo}</div>}
+            {corrError && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{corrError}</div>}
+
+            {/* Confirmación específica: reconocer por encima del turno programado */}
+            {corrConfirmando && (
+              <div style={{ marginTop: 12, background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.45)', borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 6 }}>
+                  Vas a reconocer tiempo por encima del turno
+                </div>
+                <div style={{ fontSize: 12.5, color: '#e2e8f0' }}>
+                  El turno programado es de {planCorr.horasProgramadas} h y estás reconociendo {planCorr.horasReconocidas} h
+                  ({etiquetaDiferencia(planCorr.diferencia).toLowerCase()}).
+                  Estas horas <strong>van a liquidación</strong> y queda registrado quién lo autorizó, cuándo y por qué.
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
+              <button style={{ ...btn, padding: '10px 0' }} disabled={corrGuardando}
+                onClick={() => corrConfirmando ? setCorrConfirmando(false) : setCorreccion(null)}>
+                {corrConfirmando ? 'Volver' : 'Cancelar'}
+              </button>
+              <button
+                style={{ ...btn, padding: '10px 0', background: '#f59e0b', color: '#111827', border: '1px solid #f59e0b', fontWeight: 700, opacity: planCorr.bloqueo || corrGuardando ? .5 : 1 }}
+                disabled={!!planCorr.bloqueo || corrGuardando}
+                onClick={() => {
+                  // Por encima del turno pide una confirmación aparte; el resto guarda directo.
+                  if (planCorr.excedeTurno && !corrConfirmando) { setCorrConfirmando(true); return }
+                  void guardarCorreccion()
+                }}
+              >
+                {corrGuardando ? 'Guardando…' : corrConfirmando ? 'Confirmar y reconocer' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {accionFila && (
         <div

@@ -101,6 +101,98 @@ export function cubreElTurno(
   return entrada <= inicioProg + toleranciaMin && salida >= finProg - toleranciaMin
 }
 
+// ── Corrección del horario reconocido ────────────────────────────────────────
+//
+// El turno programado manda: el fichaje por si solo nunca mueve las horas. La
+// unica forma de reconocer un horario distinto es esta, con motivo y auditoria.
+//
+// Espeja la aritmetica de calcular_horas_reconocidas en Postgres (misma
+// resolucion de turnos nocturnos, sin tope ni tolerancia). Es solo para la
+// vista previa del modal: lo que se guarda lo recalcula la RPC en el servidor.
+
+/**
+ * Duración exacta de un tramo, en horas. Sin tope contra lo programado.
+ *
+ * Una salida anterior a la entrada significa que cruzó medianoche. Da el mismo
+ * resultado que calcular_horas_reconocidas en Postgres: cuando el turno es
+ * nocturno, esa función desplaza entrada y salida al día siguiente, y el
+ * desplazamiento se cancela en la resta.
+ */
+export function horasDelTramo(entrada: string, salida: string): number {
+  const e = aMinutos(entrada)
+  const s = aMinutos(salida)
+  if (e == null || s == null) return 0
+  const salidaAbs = s < e ? s + 1440 : s
+  return Math.round(((salidaAbs - e) / 60) * 100) / 100
+}
+
+/** Duración programada del turno, en horas. */
+export function horasProgramadas(horaInicioProg: string, horaFinProg: string): number {
+  const i = aMinutos(horaInicioProg)
+  const f = aMinutos(horaFinProg)
+  if (i == null || f == null) return 0
+  const fin = f <= i ? f + 1440 : f
+  return Math.round(((fin - i) / 60) * 100) / 100
+}
+
+export interface PlanCorreccionHorario {
+  /** null si se puede guardar; si no, el motivo por el que falta algo. */
+  bloqueo: string | null
+  horasReconocidas: number
+  horasProgramadas: number
+  /** Diferencia contra lo programado. Positiva = por encima del turno. */
+  diferencia: number
+  /** Reconoce tiempo POR ENCIMA del turno: exige confirmación aparte. */
+  excedeTurno: boolean
+  /** Reconoce menos que el turno programado. */
+  quedaCorto: boolean
+  /** true cuando hay que mandar p_reconocer_fuera_de_turno a la RPC. */
+  requiereFueraDeTurno: boolean
+}
+
+export function planCorreccionHorario(p: {
+  horaInicioProg: string
+  horaFinProg: string
+  entradaReconocida: string
+  salidaReconocida: string
+  motivo: string
+}): PlanCorreccionHorario {
+  const prog = horasProgramadas(p.horaInicioProg, p.horaFinProg)
+  const reconocidas = p.entradaReconocida && p.salidaReconocida
+    ? horasDelTramo(p.entradaReconocida, p.salidaReconocida)
+    : 0
+  const diferencia = Math.round((reconocidas - prog) * 100) / 100
+  // Un minuto de diferencia ya sale de lo programado: el flag existe justamente
+  // para que la RPC no vuelva a redondear contra el turno.
+  const excedeTurno = diferencia > 0
+  const quedaCorto = diferencia < 0
+
+  let bloqueo: string | null = null
+  if (!p.entradaReconocida || !p.salidaReconocida) bloqueo = 'Completá la entrada y la salida reconocidas.'
+  else if (p.entradaReconocida === p.salidaReconocida) bloqueo = 'La salida no puede ser igual a la entrada.'
+  else if (p.motivo.trim().length < 3) bloqueo = 'El motivo es obligatorio.'
+
+  return {
+    bloqueo,
+    horasReconocidas: reconocidas,
+    horasProgramadas: prog,
+    diferencia,
+    excedeTurno,
+    quedaCorto,
+    requiereFueraDeTurno: excedeTurno || quedaCorto,
+  }
+}
+
+/** "1 h 30 min por encima del turno" / "45 min por debajo". */
+export function etiquetaDiferencia(diferencia: number): string {
+  if (diferencia === 0) return 'Coincide con el turno programado'
+  const totalMin = Math.round(Math.abs(diferencia) * 60)
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  const dur = [h > 0 ? `${h} h` : null, m > 0 ? `${m} min` : null].filter(Boolean).join(' ')
+  return `${dur} ${diferencia > 0 ? 'por encima' : 'por debajo'} del turno`
+}
+
 /**
  * ¿La fila espera que alguien haga algo?
  *
@@ -125,6 +217,8 @@ export function requiereRevision(f: FilaBandejaMensual): boolean {
 export interface FilaBandejaMensual {
   turnoId: string
   empleadoId: string
+  /** Registro de asistencia principal del turno. null si no hubo fichaje. */
+  registroId: string | null
   vigilador: string
   fecha: string
   objetivoId: string

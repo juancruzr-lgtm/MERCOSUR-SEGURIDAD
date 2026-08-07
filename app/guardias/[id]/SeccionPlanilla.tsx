@@ -209,6 +209,17 @@ const S = {
 
 // ── Componente principal ──────────────────────────────────────────────────────
 
+/** Nombres legibles de los campos que audita corregir_registro_asistencia. */
+const ETIQUETA_CAMPO_CORRECCION: Record<string, string> = {
+  hora_entrada_final: 'Entrada reconocida',
+  hora_salida_final: 'Salida reconocida',
+  horas_liquidables: 'Horas reconocidas',
+  comentario_final: 'Comentario',
+  guardia_final_id: 'Vigilador',
+  objetivo_final_id: 'Objetivo',
+  reconocido_fuera_de_turno: 'Reconocido fuera del turno programado',
+}
+
 export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) {
   const router = useRouter()
   const mesActual = mesActualCliente()
@@ -225,6 +236,9 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
   const [error, setError] = useState<string | null>(null)
   // Primer control del vigilador
   const [recargas, setRecargas] = useState(0)
+  // Historial de correcciones por turno (registros_asistencia_auditoria)
+  const [auditoriaPorTurno, setAuditoriaPorTurno] = useState<Map<string, any[]>>(new Map())
+  const [historialAbierto, setHistorialAbierto] = useState<string | null>(null)
   const [accionando, setAccionando] = useState<string | null>(null)
   const [errorAccion, setErrorAccion] = useState<string | null>(null)
   const [filaSolicitud, setFilaSolicitud] = useState<FilaPlanilla | null>(null)
@@ -287,6 +301,27 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
           }
         } else {
           setDatos(json)
+          // Historial de correcciones del mes, en una sola consulta. Se enlaza
+          // por turno_id, que es lo que la planilla ya expone. Misma tabla que
+          // escribe corregir_registro_asistencia: no hay fuente paralela.
+          const turnoIds = (json.filas ?? [])
+            .map((f: FilaPlanilla) => f.turno_id)
+            .filter(Boolean) as string[]
+          if (turnoIds.length > 0) {
+            const { data: audit } = await supabase
+              .from('registros_asistencia_auditoria')
+              .select('id, turno_id, campo, valor_anterior, valor_nuevo, comentario, created_at')
+              .in('turno_id', turnoIds)
+              .order('created_at', { ascending: false })
+              .limit(500)
+            const mapa = new Map<string, any[]>()
+            for (const a of (audit ?? [])) {
+              mapa.set(a.turno_id, [...(mapa.get(a.turno_id) ?? []), a])
+            }
+            setAuditoriaPorTurno(mapa)
+          } else {
+            setAuditoriaPorTurno(new Map())
+          }
           if (!cargaRegistrada.current) {
             cargaRegistrada.current = true
             track('legajo_planilla_cargada', {
@@ -540,6 +575,29 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                               Ver en revisión
                             </button>
                           </>
+                        )}
+                        {/* Rastro de las correcciones de horario reconocido */}
+                        {fila.turno_id && (auditoriaPorTurno.get(fila.turno_id)?.length ?? 0) > 0 && (
+                          <button
+                            style={{ display: 'block', marginTop: 2, padding: 0, border: 'none', background: 'none', color: '#f59e0b', fontSize: 10.5, cursor: 'pointer', textDecoration: 'underline' }}
+                            onClick={() => setHistorialAbierto(historialAbierto === fila.turno_id ? null : fila.turno_id)}
+                          >
+                            {historialAbierto === fila.turno_id ? 'Ocultar corrección' : `Corregido (${auditoriaPorTurno.get(fila.turno_id)!.length})`}
+                          </button>
+                        )}
+                        {fila.turno_id && historialAbierto === fila.turno_id && (
+                          <div style={{ marginTop: 6, background: '#0b1220', border: '1px solid #1e2d42', borderRadius: 6, padding: 8, textAlign: 'left', maxWidth: 340 }}>
+                            {(auditoriaPorTurno.get(fila.turno_id) ?? []).map((a: any) => (
+                              <div key={a.id} style={{ fontSize: 10.5, color: '#cbd5e1', marginBottom: 5 }}>
+                                <span style={{ color: '#64748b' }}>{new Date(a.created_at).toLocaleString('es-AR')}</span>
+                                {' · '}<strong>{ETIQUETA_CAMPO_CORRECCION[a.campo] ?? a.campo}</strong>
+                                {a.campo === 'reconocido_fuera_de_turno'
+                                  ? <span style={{ color: '#f59e0b' }}> · autorizado</span>
+                                  : <>: {a.valor_anterior ?? '—'} → <span style={{ color: '#10b981' }}>{a.valor_nuevo ?? '—'}</span></>}
+                                {a.comentario && <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>{a.comentario}</div>}
+                              </div>
+                            ))}
+                          </div>
                         )}
                       </td>
                     </tr>
