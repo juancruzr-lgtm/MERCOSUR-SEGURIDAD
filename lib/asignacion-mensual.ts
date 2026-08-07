@@ -16,18 +16,25 @@ import { horariosSuperpuestos } from '@/lib/turnos'
 import { ESTADOS_SIN_OBLIGACION } from '@/lib/revision-operativa'
 
 // ── Estados visibles ─────────────────────────────────────────────────────────
-// Publicado prevalece sobre Asignado/Programado: una vez publicado, el turno
-// ya fue comunicado y ese es el dato relevante para quien mira la grilla.
-export type EstadoAsignacion = 'programado' | 'asignado' | 'publicado'
+//
+// Un turno futuro solo puede estar de dos formas: creado pero sin cubrir
+// (Programado), o con vigilador (Asignado). Asignar es el último paso.
+//
+// Hubo un tercer estado, "Publicado", pensado como el momento de avisarle al
+// vigilador. Nunca llegó a avisar nada: el turno le aparecía en Mis Turnos y
+// en su planilla estuviera publicado o no, así que era un paso extra que no
+// cambiaba nada y confundía. El campo turnos.publicado y la RPC
+// publicar_turnos_programacion quedan en la base, sin uso, por si más adelante
+// se retoma con una notificación real detrás.
+export type EstadoAsignacion = 'programado' | 'asignado'
 
 export const ETIQUETA_ESTADO_ASIGNACION: Record<EstadoAsignacion, string> = {
   programado: 'Programado',
   asignado: 'Asignado',
-  publicado: 'Publicado',
 }
 
-export const estadoAsignacion = (t: { guardia_id?: string | null; publicado?: boolean | null }): EstadoAsignacion =>
-  t.publicado ? 'publicado' : t.guardia_id ? 'asignado' : 'programado'
+export const estadoAsignacion = (t: { guardia_id?: string | null }): EstadoAsignacion =>
+  t.guardia_id ? 'asignado' : 'programado'
 
 // ── Entradas ─────────────────────────────────────────────────────────────────
 
@@ -117,9 +124,9 @@ export function armarGrillaMensual(turnos: TurnoGrilla[], desde: string, hasta: 
 
 export interface ResumenAsignacionMensual {
   futuros: number
+  /** Futuros todavía sin vigilador: lo que falta cubrir. */
   programados: number
   asignados: number
-  publicados: number
 }
 
 /** Turno "futuro" = no empezó todavía (fecha/hora Argentina de referencia). */
@@ -148,7 +155,6 @@ export function resumenAsignacionMensual(
     futuros: futuros.length,
     programados: futuros.filter(t => estadoAsignacion(t) === 'programado').length,
     asignados: futuros.filter(t => estadoAsignacion(t) === 'asignado').length,
-    publicados: futuros.filter(t => estadoAsignacion(t) === 'publicado').length,
   }
 }
 

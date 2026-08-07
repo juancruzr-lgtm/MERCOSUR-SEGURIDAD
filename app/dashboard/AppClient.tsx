@@ -3832,7 +3832,6 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
                   <td style={S.td}>
                     <Badge type={t.estado}>{t.estado}</Badge>
-                    {t.publicado && <div style={{ marginTop:4 }}><Badge type="publicado">Publicado</Badge></div>}
                   </td>
 
                   <td style={S.td}>

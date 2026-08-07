@@ -61,20 +61,21 @@ describe('estados y resumen', () => {
     expect(estadoAsignacion({ guardia_id: 'g1' })).toBe('asignado')
     expect(ETIQUETA_ESTADO_ASIGNACION.programado).toBe('Programado')
     expect(ETIQUETA_ESTADO_ASIGNACION.asignado).toBe('Asignado')
-    expect(ETIQUETA_ESTADO_ASIGNACION.publicado).toBe('Publicado')
   })
 
-  it('estadoAsignacion: publicado prevalece sobre asignado y sobre programado', () => {
-    expect(estadoAsignacion({ guardia_id: null, publicado: true })).toBe('publicado')
-    expect(estadoAsignacion({ guardia_id: 'g1', publicado: true })).toBe('publicado')
-    expect(estadoAsignacion({ guardia_id: 'g1', publicado: false })).toBe('asignado')
+  // Hubo un tercer estado, "Publicado", que nunca llegó a avisarle nada al
+  // vigilador: el turno le aparecía en Mis Turnos y en su planilla igual. Se
+  // quitó, y turnos.publicado dejó de participar del estado visible.
+  it('el campo publicado ya no cambia el estado: manda tener vigilador o no', () => {
+    expect(estadoAsignacion({ guardia_id: null, publicado: true } as any)).toBe('programado')
+    expect(estadoAsignacion({ guardia_id: 'g1', publicado: true } as any)).toBe('asignado')
+    expect(estadoAsignacion({ guardia_id: 'g1', publicado: false } as any)).toBe('asignado')
   })
 
-  it('resumen del mes cuenta publicados por separado de asignados', () => {
+  it('el resumen cuenta como asignados los turnos con vigilador, publicados o no', () => {
     const turnos = turnosNSER().map((x, i) => i % 5 === 0 ? { ...x, guardia_id: 'g1', publicado: true } : x)
     const r = resumenAsignacionMensual(turnos, '2026-08-07', '10:00')
-    expect(r.publicados).toBeGreaterThan(0)
-    expect(r.asignados).toBe(0) // los publicados no vuelven a contar como asignados
+    expect(r.asignados).toBeGreaterThan(0)
   })
 
   it('resumen del mes: turnos futuros con 0 asignados de entrada', () => {
@@ -86,7 +87,6 @@ describe('estados y resumen', () => {
     expect(r.futuros).toBe(73)
     expect(r.programados).toBe(73)
     expect(r.asignados).toBe(0)
-    expect(r.publicados).toBe(0)
   })
 
   it('resumen tras una asignación: 2 pasan a asignados sin cambiar el total futuro', () => {
