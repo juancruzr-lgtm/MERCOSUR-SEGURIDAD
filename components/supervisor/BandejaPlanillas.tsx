@@ -1,11 +1,23 @@
 'use client'
 
 /**
- * BandejaPlanillas — Revisión del supervisor sobre el primer control (Bloque D).
+ * BandejaPlanillas — Revisión de planillas (primer control), mensual.
  *
- * Se integra como pestaña de SupervisorMobile (no es un módulo paralelo):
- * reutiliza la sesión, el patrón visual y el alcance por zonas del supervisor.
- * La RLS del servidor limita además lo que este componente puede leer.
+ * UNA sola bandeja con dos puntos de montaje: la pestaña Planillas de
+ * SupervisorMobile y la sección "Revisión de planillas" de administración. No
+ * hay copias ni lógica paralela: lo que cambia entre una y otra son props
+ * (alcance y densidad), no el comportamiento.
+ *
+ * Trabaja sobre UN MES calendario, el mismo período con el que se cierra la
+ * liquidación. Antes era una ventana fija de 30 días y las consultas de
+ * aceptaciones, solicitudes y revisiones se pedían SIN filtro de fecha, con un
+ * tope de 5000 filas: traían el historial completo y, al superarlo, habrían
+ * cortado en silencio haciendo reaparecer como pendientes turnos ya revisados.
+ * Ahora las tres van acotadas al mes por join con turnos.
+ *
+ * Alcance: administración ve todos los objetivos; supervisión, los de sus
+ * zonas (objetivoEnAlcance en lib/bandeja-planillas). La RLS del servidor sigue
+ * siendo el límite real.
  *
  * El supervisor solo deja constancia operativa (revisado / observación /
  * derivar a administración) vía RPC revisar_primer_control. Nunca modifica
@@ -17,35 +29,22 @@ import { supabase } from '@/lib/supabase'
 import { effectiveGuardia, selectRegistroPrincipal, resolverLineaLiquidacion } from '@/lib/liquidacion'
 import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 import {
-  ETIQUETA_PRIMER_CONTROL, ETIQUETA_SALIDA_AUTOMATICA, ETIQUETA_ESTADO_SOLICITUD,
-  ETIQUETA_ACCION_SUPERVISOR, FILTROS_BANDEJA, filtrosDeFila,
+  ETIQUETA_SALIDA_AUTOMATICA, ETIQUETA_ESTADO_SOLICITUD, ETIQUETA_ACCION_SUPERVISOR,
 } from '@/lib/primer-control'
-import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud, FiltroBandeja } from '@/lib/primer-control'
+import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud } from '@/lib/primer-control'
+import { limitesDelMes } from '@/lib/calendario-mes'
+import {
+  ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION,
+  estadoRevision, etiquetaResumenMes, filtrarFilasBandeja,
+  objetivoEnAlcance, opcionesObjetivo, opcionesPuesto, opcionesVigilador,
+  resumenBandejaMensual,
+} from '@/lib/bandeja-planillas'
+import type { EstadoRevision, FilaBandejaMensual, FiltroTernario } from '@/lib/bandeja-planillas'
 
 const ESTADOS_SIN_OBLIGACION_LOCAL = new Set(['reemplazado', 'anulado', 'cancelado'])
 
-interface FilaBandeja {
-  turnoId: string
-  empleadoId: string
-  vigilador: string
-  fecha: string
-  objetivo: string
-  puesto: string
-  horario: string
-  entrada: string | null
-  salida: string | null
-  horas: number
-  caracteristica: string
-  tipoEvento: string | null
-  salidaAutomatica: boolean
-  tieneFichaje: boolean
-  estadoControl: EstadoPrimerControl
-  solicitudId: string | null
-  solicitudTexto: string | null
-  solicitudEstado: EstadoSolicitud | null
-  revisado: boolean
-  observaciones: number
-}
+/** Tope por consulta. Si se alcanza, se avisa en pantalla en vez de cortar callado. */
+const TOPE_FILAS = 3000
 
 function finTurnoMs(fecha: string, horaInicio: string, horaFin: string): number {
   const [y, m, d] = fecha.slice(0, 10).split('-').map(Number)
@@ -62,42 +61,95 @@ function fmtFecha(iso: string): string {
 
 const hora = (h?: string | null) => (h ? h.slice(0, 5) : null)
 
-export default function BandejaPlanillas({ user }: { user: any }) {
+const mesActualArg = () =>
+  new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 7)
+
+const COLOR_ESTADO: Record<EstadoRevision, string> = {
+  pendiente: '#94a3b8',
+  aceptado: '#10b981',
+  modificacion_solicitada: '#f59e0b',
+  revisado_supervisor: '#10b981',
+  pendiente_regularizacion: '#fbbf24',
+  resuelto: '#60a5fa',
+}
+
+export interface BandejaPlanillasProps {
+  user: any
+  /** Administración ve todos los objetivos; supervisión, los de sus zonas. */
+  esAdmin?: boolean
+  /** Mes inicial 'YYYY-MM'. Por defecto, el mes en curso. */
+  mesInicial?: string
+  /** Abre filtrada por un vigilador (link desde la planilla del guardia). */
+  empleadoInicial?: string | null
+  /** 'comoda' en escritorio; 'compacta' en la vista móvil del supervisor. */
+  densidad?: 'comoda' | 'compacta'
+}
+
+export default function BandejaPlanillas({
+  user,
+  esAdmin = false,
+  mesInicial,
+  empleadoInicial = null,
+  densidad = 'compacta',
+}: BandejaPlanillasProps) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
-  const [filas, setFilas] = useState<FilaBandeja[]>([])
-  const [filtro, setFiltro] = useState<FiltroBandeja>('modificaciones_solicitadas')
+  const [aviso, setAviso] = useState('')
+  const [filas, setFilas] = useState<FilaBandejaMensual[]>([])
   const [recargas, setRecargas] = useState(0)
-  const [accionFila, setAccionFila] = useState<{ fila: FilaBandeja, accion: AccionSupervisor } | null>(null)
+
+  const [mes, setMes] = useState(mesInicial || mesActualArg())
+  const [fEmpleado, setFEmpleado] = useState(empleadoInicial ?? '')
+  const [fObjetivo, setFObjetivo] = useState('')
+  const [fPuesto, setFPuesto] = useState('')
+  const [fEstado, setFEstado] = useState<EstadoRevision | 'todos'>('todos')
+  const [fFichaje, setFFichaje] = useState<FiltroTernario>('todos')
+  const [fSalidaAuto, setFSalidaAuto] = useState<FiltroTernario>('todos')
+  const [soloPendientes, setSoloPendientes] = useState(false)
+
+  const [accionFila, setAccionFila] = useState<{ fila: FilaBandejaMensual, accion: AccionSupervisor } | null>(null)
   const [comentario, setComentario] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [errorAccion, setErrorAccion] = useState('')
+
+  // Si el contenedor cambia el filtro inicial (por ejemplo al entrar desde la
+  // planilla de otro guardia), la bandeja lo adopta.
+  useEffect(() => { setFEmpleado(empleadoInicial ?? '') }, [empleadoInicial])
+  useEffect(() => { if (mesInicial) setMes(mesInicial) }, [mesInicial])
 
   useEffect(() => {
     let activo = true
     const cargar = async () => {
       setCargando(true)
       setError('')
-      const hoy = new Date(Date.now() - 3 * 60 * 60 * 1000)
-      const desde = new Date(hoy.getTime() - 30 * 86400000).toISOString().slice(0, 10)
-      const hasta = hoy.toISOString().slice(0, 10)
+      setAviso('')
+      const { desde, hasta } = limitesDelMes(mes)
 
+      // Las cuatro consultas auxiliares van acotadas al mes por join con turnos:
+      // ninguna trae historial completo.
       const [turnosR, registrosR, aceptR, soliR, reviR, guardiasR, zonasR] = await Promise.all([
         supabase.from('turnos')
-          .select('id, fecha, hora_inicio, hora_fin, estado, tipo_evento, guardia_id, objetivo_id, puesto:puestos(nombre), objetivo:objetivos(nombre, es_prueba, zona_id)')
+          .select('id, fecha, hora_inicio, hora_fin, estado, tipo_evento, guardia_id, objetivo_id, puesto_id, puesto:puestos(nombre), objetivo:objetivos(nombre, es_prueba, zona_id)')
           .gte('fecha', desde).lte('fecha', hasta)
           .order('fecha', { ascending: false })
-          .limit(3000),
+          .limit(TOPE_FILAS),
         supabase.from('registros_asistencia')
           .select('id, turno_id, guardia_id, guardia_final_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, cierre_automatico, cobertura_anulada_at, turno:turnos!inner(fecha)')
           .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .limit(5000),
-        supabase.from('aceptaciones_planilla').select('turno_id, empleado_id').limit(5000),
+          .limit(TOPE_FILAS),
+        supabase.from('aceptaciones_planilla')
+          .select('turno_id, empleado_id, turno:turnos!inner(fecha)')
+          .gte('turno.fecha', desde).lte('turno.fecha', hasta)
+          .limit(TOPE_FILAS),
         supabase.from('solicitudes_modificacion_planilla')
-          .select('id, turno_id, empleado_id, texto, estado, created_at')
+          .select('id, turno_id, empleado_id, texto, estado, created_at, turno:turnos!inner(fecha)')
+          .gte('turno.fecha', desde).lte('turno.fecha', hasta)
           .order('created_at', { ascending: false })
-          .limit(5000),
-        supabase.from('revisiones_planilla').select('turno_id, empleado_id, solicitud_id, accion').limit(5000),
+          .limit(TOPE_FILAS),
+        supabase.from('revisiones_planilla')
+          .select('turno_id, empleado_id, solicitud_id, accion, turno:turnos!inner(fecha)')
+          .gte('turno.fecha', desde).lte('turno.fecha', hasta)
+          .limit(TOPE_FILAS),
         supabase.from('usuarios').select('id, nombre, apellido').limit(2000),
         supabase.from('supervisor_zonas').select('zona_id').eq('supervisor_id', user?.id ?? ''),
       ])
@@ -108,6 +160,9 @@ export default function BandejaPlanillas({ user }: { user: any }) {
         setError(err.message)
         setCargando(false)
         return
+      }
+      if ((turnosR.data ?? []).length >= TOPE_FILAS) {
+        setAviso(`Se alcanzó el tope de ${TOPE_FILAS} turnos para este mes: puede faltar información. Filtrá por objetivo o vigilador.`)
       }
 
       const nombrePor = new Map<string, string>((guardiasR.data ?? []).map((g: any) => [g.id, `${g.apellido}, ${g.nombre}`]))
@@ -129,24 +184,23 @@ export default function BandejaPlanillas({ user }: { user: any }) {
         }
       }
       const revisadoSet = new Set<string>()
+      const derivadoSet = new Set<string>()
       const obsCount = new Map<string, number>()
       for (const r of ((reviR.data ?? []) as any[])) {
         const k = `${r.turno_id}:${r.empleado_id}`
         if (r.accion === 'revisado') revisadoSet.add(k)
+        if (r.accion === 'derivar_administracion') derivadoSet.add(k)
         if (r.accion === 'observacion') obsCount.set(k, (obsCount.get(k) ?? 0) + 1)
       }
 
       const ahora = Date.now()
-      const resultado: FilaBandeja[] = []
+      const resultado: FilaBandejaMensual[] = []
       for (const t of ((turnosR.data ?? []) as any[])) {
         if ((t.objetivo as any)?.es_prueba) continue
         if (ESTADOS_SIN_OBLIGACION_LOCAL.has(t.estado || '')) continue
         if (finTurnoMs(t.fecha, t.hora_inicio, t.hora_fin) >= ahora) continue
-        // Alcance por zonas (regla existente: sin zonas asignadas = alcance total)
-        if (zonasMias.size > 0) {
-          const zona = (t.objetivo as any)?.zona_id
-          if (!zona || !zonasMias.has(zona)) continue
-        }
+        if (!objetivoEnAlcance((t.objetivo as any)?.zona_id, esAdmin, zonasMias)) continue
+
         const registro = selectRegistroPrincipal(registrosPorTurno.get(t.id) ?? []) as any
         const empleadoId = (registro ? effectiveGuardia(registro) : null) ?? t.guardia_id
         if (!empleadoId) continue
@@ -161,14 +215,15 @@ export default function BandejaPlanillas({ user }: { user: any }) {
           empleadoId,
           vigilador: nombrePor.get(empleadoId) ?? '—',
           fecha: t.fecha,
+          objetivoId: t.objetivo_id,
           objetivo: (t.objetivo as any)?.nombre ?? '—',
+          puestoId: t.puesto_id ?? null,
           puesto: (t.puesto as any)?.nombre ?? '—',
           horario: `${hora(t.hora_inicio)}–${hora(t.hora_fin)}`,
           entrada: hora(linea.horaEntrada),
           salida: hora(linea.horaSalida),
           horas: linea.horasLiquidables,
           caracteristica: etiquetaCaracteristica(t.tipo_evento),
-          tipoEvento: t.tipo_evento ?? null,
           salidaAutomatica: Boolean(registro?.cierre_automatico),
           tieneFichaje: Boolean(registro),
           estadoControl,
@@ -176,6 +231,7 @@ export default function BandejaPlanillas({ user }: { user: any }) {
           solicitudTexto: solicitud?.texto ?? null,
           solicitudEstado: (solicitud?.estado as EstadoSolicitud) ?? null,
           revisado: revisadoSet.has(k),
+          derivado: derivadoSet.has(k),
           observaciones: obsCount.get(k) ?? 0,
         })
       }
@@ -184,21 +240,30 @@ export default function BandejaPlanillas({ user }: { user: any }) {
     }
     void cargar()
     return () => { activo = false }
-  }, [user?.id, recargas])
+  }, [user?.id, esAdmin, mes, recargas])
 
-  const contadores = useMemo(() => {
-    const c = new Map<FiltroBandeja, number>()
-    for (const f of FILTROS_BANDEJA) c.set(f.id, 0)
-    for (const fila of filas) {
-      for (const id of filtrosDeFila(fila)) c.set(id, (c.get(id) ?? 0) + 1)
-    }
-    return c
-  }, [filas])
+  const resumen = useMemo(() => resumenBandejaMensual(filas), [filas])
+  const visibles = useMemo(() => filtrarFilasBandeja(filas, {
+    empleadoId: fEmpleado || null,
+    objetivoId: fObjetivo || null,
+    puestoId: fPuesto || null,
+    estado: fEstado,
+    conFichaje: fFichaje,
+    salidaAutomatica: fSalidaAuto,
+    soloPendientes,
+  }), [filas, fEmpleado, fObjetivo, fPuesto, fEstado, fFichaje, fSalidaAuto, soloPendientes])
 
-  const visibles = useMemo(
-    () => filas.filter(f => filtrosDeFila(f).includes(filtro)),
-    [filas, filtro],
-  )
+  const optVigiladores = useMemo(() => opcionesVigilador(filas), [filas])
+  const optObjetivos = useMemo(() => opcionesObjetivo(filas), [filas])
+  const optPuestos = useMemo(() => opcionesPuesto(filas), [filas])
+
+  const limpiarFiltros = () => {
+    setFEmpleado(''); setFObjetivo(''); setFPuesto('')
+    setFEstado('todos'); setFFichaje('todos'); setFSalidaAuto('todos')
+    setSoloPendientes(false)
+  }
+  const hayFiltros = !!(fEmpleado || fObjetivo || fPuesto) ||
+    fEstado !== 'todos' || fFichaje !== 'todos' || fSalidaAuto !== 'todos' || soloPendientes
 
   const ejecutarAccion = async () => {
     if (!accionFila || enviando) return
@@ -228,85 +293,177 @@ export default function BandejaPlanillas({ user }: { user: any }) {
     }
   }
 
+  const ancho = densidad === 'comoda'
   const card: React.CSSProperties = { background: '#111827', border: '1px solid #1e2d42', borderRadius: 12, padding: 14, marginBottom: 10 }
-  const chip = (activo: boolean): React.CSSProperties => ({
-    padding: '6px 10px', borderRadius: 8, fontSize: 12, cursor: 'pointer', textAlign: 'left',
-    border: activo ? '1px solid #f59e0b' : '1px solid #334155',
-    background: activo ? '#f59e0b18' : 'none',
-    color: activo ? '#f59e0b' : '#94a3b8',
-  })
   const btn: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, fontSize: 12, cursor: 'pointer', border: '1px solid #334155', background: '#1e293b', color: '#e2e8f0' }
   const muted: React.CSSProperties = { fontSize: 12, color: '#94a3b8' }
+  const sel: React.CSSProperties = {
+    background: '#0f172a', border: '1px solid #1e2d42', borderRadius: 8,
+    color: '#e2e8f0', padding: '6px 9px', fontSize: 12.5, minWidth: 0,
+  }
+  const campo = (etiqueta: string, hijo: React.ReactNode) => (
+    <div style={{ minWidth: 0 }}>
+      <label style={{ display: 'block', fontSize: 10.5, color: '#64748b', textTransform: 'uppercase', letterSpacing: .5, marginBottom: 3 }}>{etiqueta}</label>
+      {hijo}
+    </div>
+  )
 
   return (
     <div>
-      <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 4 }}>Planillas — Primer control</div>
+      <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 4 }}>Revisión de planillas</div>
       <div style={{ ...muted, marginBottom: 12 }}>
-        Turnos finalizados de los últimos 30 días dentro de su alcance. La revisión deja constancia: no modifica horas.
+        Turnos ya finalizados del mes elegido{esAdmin ? '' : ', dentro de su alcance'}. La revisión deja constancia: no modifica horas.
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
-        {FILTROS_BANDEJA.map(f => (
-          <button key={f.id} style={chip(filtro === f.id)} onClick={() => setFiltro(f.id)}>
-            {f.label} <strong style={{ color: filtro === f.id ? '#f59e0b' : '#e2e8f0' }}>({contadores.get(f.id) ?? 0})</strong>
-          </button>
+      {/* Resumen del mes */}
+      <div style={{
+        background: resumen.cerrado ? 'rgba(16,185,129,.08)' : '#0b1220',
+        border: `1px solid ${resumen.cerrado ? 'rgba(16,185,129,.35)' : '#1e2d42'}`,
+        borderRadius: 10, padding: '10px 14px', marginBottom: 12,
+        display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+      }}>
+        <input
+          type="month"
+          value={mes}
+          onChange={e => e.target.value && setMes(e.target.value)}
+          style={{ ...sel, width: 'auto' }}
+        />
+        <strong style={{ fontSize: 13.5, color: resumen.cerrado ? '#10b981' : '#e2e8f0' }}>
+          {cargando ? 'Cargando…' : etiquetaResumenMes(mes, resumen)}
+        </strong>
+      </div>
+
+      {/* Filtros */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: ancho ? 'repeat(auto-fit, minmax(150px, 1fr))' : '1fr 1fr',
+        gap: 8, marginBottom: 10,
+      }}>
+        {campo('Estado', (
+          <select style={{ ...sel, width: '100%' }} value={fEstado} onChange={e => setFEstado(e.target.value as EstadoRevision | 'todos')}>
+            <option value="todos">Todos</option>
+            {ESTADOS_REVISION.map(e => (
+              <option key={e} value={e}>{ETIQUETA_ESTADO_REVISION[e]} ({resumen.porEstado[e]})</option>
+            ))}
+          </select>
+        ))}
+        {campo('Vigilador', (
+          <select style={{ ...sel, width: '100%' }} value={fEmpleado} onChange={e => setFEmpleado(e.target.value)}>
+            <option value="">Todos</option>
+            {optVigiladores.map(o => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+          </select>
+        ))}
+        {campo('Objetivo', (
+          <select style={{ ...sel, width: '100%' }} value={fObjetivo} onChange={e => setFObjetivo(e.target.value)}>
+            <option value="">Todos</option>
+            {optObjetivos.map(o => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+          </select>
+        ))}
+        {campo('Posición operativa', (
+          <select style={{ ...sel, width: '100%' }} value={fPuesto} onChange={e => setFPuesto(e.target.value)}>
+            <option value="">Todas</option>
+            {optPuestos.map(o => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+          </select>
+        ))}
+        {campo('Fichaje', (
+          <select style={{ ...sel, width: '100%' }} value={fFichaje} onChange={e => setFFichaje(e.target.value as FiltroTernario)}>
+            <option value="todos">Con y sin fichaje</option>
+            <option value="si">Solo con fichaje</option>
+            <option value="no">Solo sin fichaje</option>
+          </select>
+        ))}
+        {campo('Salida automática', (
+          <select style={{ ...sel, width: '100%' }} value={fSalidaAuto} onChange={e => setFSalidaAuto(e.target.value as FiltroTernario)}>
+            <option value="todos">Todas</option>
+            <option value="si">Solo salida automática</option>
+            <option value="no">Sin salida automática</option>
+          </select>
         ))}
       </div>
 
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+        <button
+          type="button"
+          onClick={() => setSoloPendientes(v => !v)}
+          style={{
+            ...btn,
+            border: soloPendientes ? '1px solid #f59e0b' : '1px solid #334155',
+            background: soloPendientes ? '#f59e0b18' : '#1e293b',
+            color: soloPendientes ? '#f59e0b' : '#e2e8f0',
+          }}
+        >
+          {soloPendientes ? '✓ ' : ''}Solo lo pendiente ({resumen.pendientes})
+        </button>
+        {hayFiltros && (
+          <button type="button" style={btn} onClick={limpiarFiltros}>Limpiar filtros</button>
+        )}
+        <span style={muted}>
+          {cargando ? '' : `${visibles.length} de ${resumen.total} registros del mes`}
+        </span>
+      </div>
+
+      {aviso && (
+        <div style={{ color: '#f59e0b', background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>
+          {aviso}
+        </div>
+      )}
       {cargando && <div style={{ ...muted, padding: 24, textAlign: 'center' }}>Cargando bandeja…</div>}
       {!cargando && error && <div style={{ color: '#ef4444', padding: 12 }}>{error}</div>}
       {!cargando && !error && visibles.length === 0 && (
-        <div style={{ ...muted, padding: 24, textAlign: 'center' }}>Sin turnos en este grupo.</div>
+        <div style={{ ...muted, padding: 24, textAlign: 'center' }}>
+          {resumen.total === 0
+            ? 'No hay turnos finalizados para revisar en este mes.'
+            : 'Ningún registro coincide con los filtros elegidos.'}
+        </div>
       )}
 
-      {!cargando && !error && visibles.map(f => (
-        <div key={`${f.turnoId}-${f.empleadoId}`} style={card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-            <div style={{ fontWeight: 700 }}>{f.vigilador}</div>
-            <div style={muted}>{fmtFecha(f.fecha)}</div>
-          </div>
-          <div style={muted}>{f.objetivo} · {f.puesto} · {f.horario}</div>
-          <div style={muted}>
-            Entrada: {f.entrada ?? '—'} · Salida: {f.salida ?? '—'}
-            {f.salidaAutomatica && <span style={{ marginLeft: 6, color: '#f59e0b', fontWeight: 700 }}>({ETIQUETA_SALIDA_AUTOMATICA})</span>}
-            {' '}· Horas: <strong style={{ color: '#f59e0b' }}>{f.horas > 0 ? f.horas.toFixed(2) : '—'}</strong>
-          </div>
-          <div style={muted}>
-            Característica: <span style={{ color: f.tipoEvento === 'capacitacion' ? '#a78bfa' : f.tipoEvento === 'cobertura' ? '#38bdf8' : '#94a3b8' }}>{f.caracteristica}</span>
-            {!f.tieneFichaje && <span style={{ marginLeft: 6, color: '#ef4444' }}>· Sin fichaje</span>}
-          </div>
-          <div style={{ marginTop: 6, fontSize: 12 }}>
-            Primer control:{' '}
-            <span style={{ fontWeight: 700, color: f.estadoControl === 'aceptado' ? '#10b981' : f.estadoControl === 'modificacion_solicitada' ? '#f59e0b' : '#94a3b8' }}>
-              {ETIQUETA_PRIMER_CONTROL[f.estadoControl]}
-            </span>
-            {f.revisado && <span style={{ marginLeft: 8, color: '#10b981' }}>✓ Revisado</span>}
-            {f.observaciones > 0 && <span style={{ marginLeft: 8, color: '#94a3b8' }}>{f.observaciones} obs.</span>}
-          </div>
-          {f.solicitudTexto && (
-            <div style={{ marginTop: 8, background: '#0f172a', border: '1px solid #33415577', borderRadius: 8, padding: 10 }}>
-              <div style={{ fontSize: 11, color: '#f59e0b', marginBottom: 4 }}>
-                Solicitud del vigilador{f.solicitudEstado ? ` · ${ETIQUETA_ESTADO_SOLICITUD[f.solicitudEstado]}` : ''}
-              </div>
-              <div style={{ fontSize: 13, color: '#e2e8f0', whiteSpace: 'pre-wrap' }}>{f.solicitudTexto}</div>
+      {!cargando && !error && visibles.map(f => {
+        const est = estadoRevision(f)
+        return (
+          <div key={`${f.turnoId}-${f.empleadoId}`} style={card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 700 }}>{f.vigilador}</div>
+              <div style={muted}>{fmtFecha(f.fecha)}</div>
             </div>
-          )}
-          <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-            <button style={btn} onClick={() => { setAccionFila({ fila: f, accion: 'revisado' }); setComentario(''); setErrorAccion('') }}>
-              {ETIQUETA_ACCION_SUPERVISOR.revisado}
-            </button>
-            <button style={btn} onClick={() => { setAccionFila({ fila: f, accion: 'observacion' }); setComentario(''); setErrorAccion('') }}>
-              {ETIQUETA_ACCION_SUPERVISOR.observacion}
-            </button>
-            <button
-              style={{ ...btn, border: '1px solid #92400e', background: '#78350f', color: '#fbbf24' }}
-              onClick={() => { setAccionFila({ fila: f, accion: 'derivar_administracion' }); setComentario(''); setErrorAccion('') }}
-            >
-              {ETIQUETA_ACCION_SUPERVISOR.derivar_administracion}
-            </button>
+            <div style={muted}>{f.objetivo} · {f.puesto} · {f.horario}</div>
+            <div style={muted}>
+              Entrada: {f.entrada ?? '—'} · Salida: {f.salida ?? '—'}
+              {f.salidaAutomatica && <span style={{ marginLeft: 6, color: '#f59e0b', fontWeight: 700 }}>({ETIQUETA_SALIDA_AUTOMATICA})</span>}
+              {' '}· Horas: <strong style={{ color: '#f59e0b' }}>{f.horas > 0 ? f.horas.toFixed(2) : '—'}</strong>
+            </div>
+            <div style={muted}>
+              Característica: {f.caracteristica}
+              {!f.tieneFichaje && <span style={{ marginLeft: 6, color: '#ef4444' }}>· Sin fichaje</span>}
+            </div>
+            <div style={{ marginTop: 6, fontSize: 12 }}>
+              Estado: <span style={{ fontWeight: 700, color: COLOR_ESTADO[est] }}>{ETIQUETA_ESTADO_REVISION[est]}</span>
+              {f.observaciones > 0 && <span style={{ marginLeft: 8, color: '#94a3b8' }}>{f.observaciones} obs.</span>}
+            </div>
+            {f.solicitudTexto && (
+              <div style={{ marginTop: 8, background: '#0f172a', border: '1px solid #33415577', borderRadius: 8, padding: 10 }}>
+                <div style={{ fontSize: 11, color: '#f59e0b', marginBottom: 4 }}>
+                  Solicitud del vigilador{f.solicitudEstado ? ` · ${ETIQUETA_ESTADO_SOLICITUD[f.solicitudEstado]}` : ''}
+                </div>
+                <div style={{ fontSize: 13, color: '#e2e8f0', whiteSpace: 'pre-wrap' }}>{f.solicitudTexto}</div>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+              <button style={btn} onClick={() => { setAccionFila({ fila: f, accion: 'revisado' }); setComentario(''); setErrorAccion('') }}>
+                {ETIQUETA_ACCION_SUPERVISOR.revisado}
+              </button>
+              <button style={btn} onClick={() => { setAccionFila({ fila: f, accion: 'observacion' }); setComentario(''); setErrorAccion('') }}>
+                {ETIQUETA_ACCION_SUPERVISOR.observacion}
+              </button>
+              <button
+                style={{ ...btn, border: '1px solid #92400e', background: '#78350f', color: '#fbbf24' }}
+                onClick={() => { setAccionFila({ fila: f, accion: 'derivar_administracion' }); setComentario(''); setErrorAccion('') }}
+              >
+                {ETIQUETA_ACCION_SUPERVISOR.derivar_administracion}
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
 
       {accionFila && (
         <div
@@ -329,18 +486,18 @@ export default function BandejaPlanillas({ user }: { user: any }) {
             <textarea
               value={comentario}
               onChange={e => setComentario(e.target.value)}
-              rows={3}
-              style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: 10, fontSize: 13, boxSizing: 'border-box', resize: 'vertical' }}
+              rows={4}
+              style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: 10, fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }}
             />
             {errorAccion && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{errorAccion}</div>}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
-              <button style={{ ...btn, background: 'transparent' }} disabled={enviando} onClick={() => setAccionFila(null)}>Cancelar</button>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
+              <button style={{ ...btn, padding: '10px 0' }} disabled={enviando} onClick={() => setAccionFila(null)}>Cancelar</button>
               <button
-                style={{ ...btn, background: '#14532d', border: '1px solid #166534', color: '#4ade80', fontWeight: 700, opacity: enviando ? 0.5 : 1 }}
+                style={{ ...btn, padding: '10px 0', background: '#f59e0b', color: '#111827', border: '1px solid #f59e0b', fontWeight: 700, opacity: enviando ? .6 : 1 }}
                 disabled={enviando}
                 onClick={ejecutarAccion}
               >
-                {enviando ? 'Guardando…' : 'Confirmar'}
+                {enviando ? 'Registrando…' : 'Confirmar'}
               </button>
             </div>
           </div>
