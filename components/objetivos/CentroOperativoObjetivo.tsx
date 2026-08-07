@@ -14,7 +14,7 @@
 // desde cualquier pantalla sin arrastrar el estado global del panel de admin.
 
 import { useCallback, useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { supabase, headersSesion } from '@/lib/supabase'
 import { Badge, btn, btnPrimary, btnSecondary } from '@/components/ui/base'
 import RondasSupervisionPanel from '@/components/rondas/RondasSupervisionPanel'
 import styles from './CentroOperativoObjetivo.module.css'
@@ -35,7 +35,8 @@ import { listarRondaAlertasObjetivo } from '@/lib/rondas'
 import { formatFechaHora } from '@/lib/formato'
 import {
   ETIQUETA_ESTADO_ASIGNACION, ETIQUETA_MOTIVO_OMISION,
-  armarGrillaMensual, estadoAsignacion, esTurnoFuturo,
+  accionesCelda, armarGrillaMensual, celdaTieneAcciones,
+  estadoAsignacion, esTurnoFuturo,
   filtrarGrillaMensual, planificarAsignacionRango,
   resumenAsignacionMensual, turnosEnConflicto,
 } from '@/lib/asignacion-mensual'
@@ -212,9 +213,18 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const horaActualStr = `${String(horaActualRef.getHours()).padStart(2,'0')}:${String(horaActualRef.getMinutes()).padStart(2,'0')}`
   const resumenMensual = resumenAsignacionMensual(turnosGrilla, hoy, horaActualStr)
 
-  // ── Modal: asignación individual (clic en celda) ──
+  // ── Modal: acciones sobre un turno (clic en celda) ──
+  // Un solo modal con menú: asignar/cambiar/quitar vigilador, cambiar el
+  // horario de ese día y anular. Las tres últimas van por /api/turnos/editar,
+  // que ya audita el cambio y revalida en servidor qué se puede tocar según
+  // el turno sea futuro, en curso o finalizado. No se creó ninguna RPC nueva.
+  type ModoCelda = 'menu' | 'vigilador' | 'horario' | 'quitar' | 'anular'
   const [celdaEditando, setCeldaEditando] = useState<TurnoGrilla | null>(null)
+  const [modoCelda, setModoCelda] = useState<ModoCelda>('menu')
   const [guardiaCelda, setGuardiaCelda] = useState('')
+  const [horaInicioCelda, setHoraInicioCelda] = useState('')
+  const [horaFinCelda, setHoraFinCelda] = useState('')
+  const [motivoCelda, setMotivoCelda] = useState('')
   const [errorCelda, setErrorCelda] = useState('')
   const [asignandoCelda, setAsignandoCelda] = useState(false)
 
@@ -231,8 +241,83 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
 
   const abrirCelda = (t: TurnoGrilla) => {
     setCeldaEditando(t)
+    setModoCelda('menu')
     setGuardiaCelda(t.guardia_id ?? t.guardia_habitual_id ?? '')
+    setHoraInicioCelda(t.hora_inicio)
+    setHoraFinCelda(t.hora_fin)
+    setMotivoCelda('')
     setErrorCelda('')
+  }
+
+  const cerrarCelda = () => {
+    setCeldaEditando(null)
+    setModoCelda('menu')
+    setMotivoCelda('')
+    setErrorCelda('')
+  }
+
+  /**
+   * Cambios que no son "asignar sobre un turno vacío": los ejecuta
+   * /api/turnos/editar, que audita y revalida en servidor. `snapshot` le
+   * permite detectar que el turno cambió desde que se abrió el modal.
+   */
+  const editarTurnoCelda = async (
+    cambios: Record<string, string | null>,
+    comentario: string,
+    snapshot: Record<string, string | null>,
+  ): Promise<boolean> => {
+    if (!celdaEditando) return false
+    setAsignandoCelda(true)
+    setErrorCelda('')
+    try {
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers: await headersSesion(),
+        body: JSON.stringify({ turno_id: celdaEditando.id, cambios, comentario, snapshot }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'No se pudo guardar el cambio')
+      await cargarMensual()
+      cerrarCelda()
+      return true
+    } catch (e) {
+      setErrorCelda(e instanceof Error ? e.message : 'No se pudo guardar el cambio')
+      return false
+    } finally {
+      setAsignandoCelda(false)
+    }
+  }
+
+  const confirmarHorarioCelda = async () => {
+    if (!celdaEditando) return
+    if (!horaInicioCelda || !horaFinCelda) { setErrorCelda('Completá el horario.'); return }
+    if (horaInicioCelda === horaFinCelda) { setErrorCelda('El horario de fin no puede ser igual al de inicio.'); return }
+    if (horaInicioCelda === celdaEditando.hora_inicio && horaFinCelda === celdaEditando.hora_fin) {
+      setErrorCelda('El horario es el mismo que ya tenía.'); return
+    }
+    await editarTurnoCelda(
+      { hora_inicio: horaInicioCelda, hora_fin: horaFinCelda },
+      `Cambio de horario desde la grilla: ${celdaEditando.hora_inicio}–${celdaEditando.hora_fin} → ${horaInicioCelda}–${horaFinCelda}`,
+      { hora_inicio: celdaEditando.hora_inicio, hora_fin: celdaEditando.hora_fin },
+    )
+  }
+
+  const confirmarQuitarVigilador = async () => {
+    if (!celdaEditando || motivoCelda.trim().length < 3) return
+    await editarTurnoCelda(
+      { guardia_id: null },
+      `Vigilador quitado desde la grilla: ${motivoCelda.trim()}`,
+      { guardia_id: celdaEditando.guardia_id ?? null },
+    )
+  }
+
+  const confirmarAnularCelda = async () => {
+    if (!celdaEditando || motivoCelda.trim().length < 3) return
+    await editarTurnoCelda(
+      { estado: 'anulado' },
+      `Anulación desde la grilla: ${motivoCelda.trim()}`,
+      { estado: celdaEditando.estado },
+    )
   }
 
   const ejecutarAsignacion = async (turnoIds: string[], guardiaId: string, masiva: boolean): Promise<{ ok: boolean; error?: string; resumen?: string }> => {
@@ -251,12 +336,28 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
 
   const confirmarCelda = async () => {
     if (!celdaEditando || !guardiaCelda) return
-    setAsignandoCelda(true)
-    setErrorCelda('')
-    const res = await ejecutarAsignacion([celdaEditando.id], guardiaCelda, false)
-    setAsignandoCelda(false)
-    if (!res.ok) { setErrorCelda(res.error ?? 'No se pudo asignar.'); return }
-    setCeldaEditando(null)
+    if (guardiaCelda === celdaEditando.guardia_id) { setErrorCelda('Ya está asignado a ese vigilador.'); return }
+
+    // Turno vacío: la RPC de asignación, que además valida superposiciones del
+    // vigilador. Turno que ya tiene a otro: reasignación por la vía auditada
+    // (la RPC la rechaza a propósito y remite a la edición del turno).
+    if (!celdaEditando.guardia_id) {
+      setAsignandoCelda(true)
+      setErrorCelda('')
+      const res = await ejecutarAsignacion([celdaEditando.id], guardiaCelda, false)
+      setAsignandoCelda(false)
+      if (!res.ok) { setErrorCelda(res.error ?? 'No se pudo asignar.'); return }
+      cerrarCelda()
+      return
+    }
+
+    const anterior = nombreVigiladorGrilla(celdaEditando.guardia_id) ?? 'sin asignar'
+    const nuevo = nombreVigiladorGrilla(guardiaCelda) ?? guardiaCelda
+    await editarTurnoCelda(
+      { guardia_id: guardiaCelda },
+      `Cambio de vigilador desde la grilla: ${anterior} → ${nuevo}`,
+      { guardia_id: celdaEditando.guardia_id },
+    )
   }
 
   const abrirRango = (fila: FilaGrillaPosicion, filaCompleta: boolean) => {
@@ -1253,37 +1354,144 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         </div>
       )}
 
-      {/* Modal: asignación individual (clic en celda de la grilla) */}
-      {celdaEditando && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setCeldaEditando(null)}>
-          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:360, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>Asignar vigilador</div>
-            <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>
-              {celdaEditando.puesto_nombre} · {celdaEditando.fecha} · {celdaEditando.hora_inicio}–{celdaEditando.hora_fin}
+      {/* Modal: acciones sobre un turno (clic en celda de la grilla) */}
+      {celdaEditando && (() => {
+        const acc = accionesCelda(celdaEditando, hoy, horaActualStr, puedePublicar)
+        const cabecera = `${celdaEditando.puesto_nombre} · ${celdaEditando.fecha} · ${celdaEditando.hora_inicio}–${celdaEditando.hora_fin}`
+        const opcion = (texto: string, sub: string, destructivo: boolean, onClick: () => void) => (
+          <button
+            type="button"
+            onClick={onClick}
+            style={{
+              width:'100%', textAlign:'left', background:'#0f172a',
+              border:`1px solid ${destructivo ? '#7f1d1d' : '#1e2d42'}`, borderRadius:8,
+              padding:'9px 12px', cursor:'pointer', marginBottom:6,
+            }}
+          >
+            <div style={{ fontSize:13, color: destructivo ? '#f87171' : '#e2e8f0', fontWeight:600 }}>{texto}</div>
+            <div style={{ fontSize:11, color:'#64748b' }}>{sub}</div>
+          </button>
+        )
+        return (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => cerrarCelda()}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:380, maxWidth:'90vw', maxHeight:'85vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>
+              {modoCelda === 'menu' ? 'Turno' :
+               modoCelda === 'vigilador' ? (celdaEditando.guardia_id ? 'Cambiar vigilador' : 'Asignar vigilador') :
+               modoCelda === 'horario' ? 'Cambiar horario de este día' : 'Anular turno'}
             </div>
-            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Vigilador</label>
-            <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={guardiaCelda} onChange={e => setGuardiaCelda(e.target.value)}>
-              <option value="">Seleccionar…</option>
-              {vigiladoresActivos.map(v => (
-                <option key={v.id} value={v.id}>{v.nombre}{v.id === celdaEditando.guardia_habitual_id ? ' (sugerido)' : ''}</option>
-              ))}
-            </select>
-            {celdaEditando.guardia_habitual_id && guardiaCelda !== celdaEditando.guardia_habitual_id && (
-              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:8 }}>Sugerencia habitual: {nombreVigiladorGrilla(celdaEditando.guardia_habitual_id)}</div>
-            )}
+            <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>{cabecera}</div>
+            <div style={{ fontSize:12, marginBottom:12 }}>
+              <span style={{ color: celdaEditando.guardia_nombre ? '#e2e8f0' : '#f59e0b' }}>
+                {celdaEditando.guardia_nombre ?? ETIQUETA_SIN_ASIGNAR}
+              </span>
+              {celdaEditando.publicado && <span style={{ color:'#60a5fa', fontWeight:700 }}> · Publicado</span>}
+            </div>
+
             {conflictosGrilla.has(celdaEditando.id) && (
-              <div style={{ fontSize:11, color:'#ef4444', marginBottom:8 }}>Este turno tiene un conflicto de horario detectado con otro turno del vigilador asignado.</div>
+              <div style={{ fontSize:11, color:'#ef4444', marginBottom:8 }}>Este turno tiene un conflicto de horario con otro turno del vigilador asignado.</div>
             )}
+
+            {modoCelda === 'menu' && (
+              <>
+                {celdaEditando.publicado && (
+                  <div style={{ fontSize:11, color:'#60a5fa', background:'rgba(96,165,250,.08)', border:'1px solid rgba(96,165,250,.3)', borderRadius:6, padding:'6px 10px', marginBottom:10 }}>
+                    Ya se le avisó al vigilador. Si cambiás algo, conviene avisarle.
+                  </div>
+                )}
+                {acc.asignar && opcion('Asignar vigilador', 'Elegir quién cubre este turno', false, () => { setModoCelda('vigilador'); setErrorCelda('') })}
+                {acc.cambiarVigilador && opcion('Cambiar vigilador', 'Reemplazar a quien está asignado', false, () => { setModoCelda('vigilador'); setErrorCelda('') })}
+                {acc.quitarVigilador && opcion('Quitar vigilador', 'El turno queda sin cubrir', false, () => { setModoCelda('quitar'); setErrorCelda('') })}
+                {acc.cambiarHorario && opcion('Cambiar horario', 'Solo para este día', false, () => {
+                  setHoraInicioCelda(celdaEditando.hora_inicio); setHoraFinCelda(celdaEditando.hora_fin)
+                  setModoCelda('horario'); setErrorCelda('')
+                })}
+                {acc.anular && opcion('Anular turno', 'Deja de contar, pero queda el registro', true, () => { setModoCelda('anular'); setErrorCelda('') })}
+                {!celdaTieneAcciones(acc) && (
+                  <div style={{ fontSize:12, color:'#64748b' }}>
+                    Este turno ya no se modifica desde la grilla (ya empezó, es pasado o está anulado).
+                  </div>
+                )}
+              </>
+            )}
+
+            {modoCelda === 'vigilador' && (
+              <>
+                <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Vigilador</label>
+                <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={guardiaCelda} onChange={e => setGuardiaCelda(e.target.value)}>
+                  <option value="">Seleccionar…</option>
+                  {vigiladoresActivos.map(v => (
+                    <option key={v.id} value={v.id}>{v.nombre}{v.id === celdaEditando.guardia_habitual_id ? ' (sugerido)' : ''}</option>
+                  ))}
+                </select>
+                {celdaEditando.guardia_habitual_id && guardiaCelda !== celdaEditando.guardia_habitual_id && (
+                  <div style={{ fontSize:11, color:'#60a5fa', marginBottom:8 }}>Sugerencia habitual: {nombreVigiladorGrilla(celdaEditando.guardia_habitual_id)}</div>
+                )}
+              </>
+            )}
+
+            {modoCelda === 'horario' && (
+              <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+                <div style={{ flex:1 }}>
+                  <label style={{ fontSize:11, color:'#64748b' }}>Hora inicio</label>
+                  <input type="time" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={horaInicioCelda} onChange={e => setHoraInicioCelda(e.target.value)} />
+                </div>
+                <div style={{ flex:1 }}>
+                  <label style={{ fontSize:11, color:'#64748b' }}>Hora fin</label>
+                  <input type="time" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={horaFinCelda} onChange={e => setHoraFinCelda(e.target.value)} />
+                </div>
+              </div>
+            )}
+
+            {(modoCelda === 'anular' || modoCelda === 'quitar') && (
+              <>
+                <div style={{ fontSize:12, color:'#e2e8f0', marginBottom:8 }}>
+                  {modoCelda === 'anular'
+                    ? 'El turno deja de contar para cobertura, planillas y liquidación. No se borra: queda registrado como anulado.'
+                    : 'El turno queda programado pero sin vigilador asignado.'}
+                </div>
+                <label style={{ fontSize:11, color:'#64748b' }}>Motivo *</label>
+                <input
+                  style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12, marginTop:4, marginBottom:8 }}
+                  value={motivoCelda}
+                  onChange={e => setMotivoCelda(e.target.value)}
+                  placeholder={modoCelda === 'anular' ? 'Ej.: el cliente cancela el servicio ese día' : 'Ej.: pidió el día'}
+                />
+              </>
+            )}
+
             {errorCelda && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorCelda}</div>}
+
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
-              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setCeldaEditando(null)}>Cancelar</button>
-              <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !guardiaCelda || asignandoCelda ? 0.5 : 1 }} disabled={!guardiaCelda || asignandoCelda} onClick={confirmarCelda}>
-                {asignandoCelda ? 'Asignando…' : 'Confirmar'}
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }}
+                onClick={() => modoCelda === 'menu' ? cerrarCelda() : (setModoCelda('menu'), setErrorCelda(''))}>
+                {modoCelda === 'menu' ? 'Cerrar' : 'Volver'}
               </button>
+              {modoCelda === 'vigilador' && (
+                <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !guardiaCelda || asignandoCelda ? 0.5 : 1 }} disabled={!guardiaCelda || asignandoCelda} onClick={confirmarCelda}>
+                  {asignandoCelda ? 'Guardando…' : 'Confirmar'}
+                </button>
+              )}
+              {modoCelda === 'horario' && (
+                <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: asignandoCelda ? 0.5 : 1 }} disabled={asignandoCelda} onClick={confirmarHorarioCelda}>
+                  {asignandoCelda ? 'Guardando…' : 'Guardar horario'}
+                </button>
+              )}
+              {modoCelda === 'quitar' && (
+                <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: motivoCelda.trim().length < 3 || asignandoCelda ? 0.5 : 1 }} disabled={motivoCelda.trim().length < 3 || asignandoCelda} onClick={confirmarQuitarVigilador}>
+                  {asignandoCelda ? 'Guardando…' : 'Quitar vigilador'}
+                </button>
+              )}
+              {modoCelda === 'anular' && (
+                <button type="button" style={{ ...S.btn, padding:'6px 14px', fontSize:12, background:'#7f1d1d', color:'#fecaca', border:'1px solid #991b1b', opacity: motivoCelda.trim().length < 3 || asignandoCelda ? 0.5 : 1 }} disabled={motivoCelda.trim().length < 3 || asignandoCelda} onClick={confirmarAnularCelda}>
+                  {asignandoCelda ? 'Anulando…' : 'Anular turno'}
+                </button>
+              )}
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {/* Modal: crear los turnos de una posición (programación desde la grilla) */}
       {modalGenerar && (

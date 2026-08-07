@@ -13,6 +13,7 @@
  */
 
 import { horariosSuperpuestos } from '@/lib/turnos'
+import { ESTADOS_SIN_OBLIGACION } from '@/lib/revision-operativa'
 
 // ── Estados visibles ─────────────────────────────────────────────────────────
 // Publicado prevalece sobre Asignado/Programado: una vez publicado, el turno
@@ -194,6 +195,55 @@ export function filtrarGrillaMensual(
     return true
   })
 }
+
+// ── Acciones disponibles al hacer clic en una celda ──────────────────────────
+//
+// Qué se puede hacer sobre un turno concreto desde la grilla. La regla vive
+// acá (pura y testeable) y no repartida por el JSX.
+//
+// `publicado` NO restringe nada: publicar solo avisa al vigilador, no congela
+// el turno. Lo que manda es si el turno todavía no empezó — la misma frontera
+// que aplica /api/turnos/editar, que es quien ejecuta estos cambios y vuelve a
+// validarlos en servidor.
+
+export interface AccionesCelda {
+  asignar: boolean
+  cambiarVigilador: boolean
+  quitarVigilador: boolean
+  cambiarHorario: boolean
+  anular: boolean
+}
+
+const SIN_ACCIONES: AccionesCelda = {
+  asignar: false, cambiarVigilador: false, quitarVigilador: false,
+  cambiarHorario: false, anular: false,
+}
+
+export function accionesCelda(
+  turno: Pick<TurnoGrilla, 'guardia_id' | 'estado' | 'fecha' | 'hora_inicio'>,
+  fechaActual: string,
+  horaActual: string,
+  puedeEscribir: boolean,
+): AccionesCelda {
+  if (!puedeEscribir) return SIN_ACCIONES
+  // Un turno anulado, cancelado o reemplazado ya no se toca desde la grilla.
+  if (ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) return SIN_ACCIONES
+  // Iniciado o pasado: se resuelve por asistencia/regularización, no acá.
+  if (!esTurnoFuturo(turno, fechaActual, horaActual)) return SIN_ACCIONES
+
+  const tieneVigilador = !!turno.guardia_id
+  return {
+    asignar: !tieneVigilador,
+    cambiarVigilador: tieneVigilador,
+    quitarVigilador: tieneVigilador,
+    cambiarHorario: true,
+    anular: true,
+  }
+}
+
+/** true si la celda ofrece al menos una acción (para saber si el clic hace algo). */
+export const celdaTieneAcciones = (a: AccionesCelda): boolean =>
+  a.asignar || a.cambiarVigilador || a.quitarVigilador || a.cambiarHorario || a.anular
 
 // ── Plan de asignación (individual, por rango, por fila completa) ────────────
 

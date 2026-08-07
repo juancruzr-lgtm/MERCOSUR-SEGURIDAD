@@ -16,6 +16,18 @@ export const supabase = createClient(
   supabaseAnonKey || 'missing-anon-key',
 )
 
+/**
+ * Headers con el token de la sesión actual, para las rutas /api que validan
+ * el Bearer en servidor (por ejemplo /api/turnos/editar). Lanza si no hay
+ * sesión: preferible a mandar la llamada y recibir un 401 sin contexto.
+ */
+export async function headersSesion(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession()
+  const token = data.session?.access_token
+  if (!token) throw new Error('Sesión requerida')
+  return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+}
+
 // Tipos principales
 export type Rol = 'admin' | 'supervisor' | 'guardia' | 'vigilador'
 export type Estado = 'activo' | 'inactivo'
