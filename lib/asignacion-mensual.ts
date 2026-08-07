@@ -237,7 +237,12 @@ const dow1a7 = (fecha: string): number => {
   return x === 0 ? 7 : x
 }
 
-const diasDelPatron = (patron: PatronDias, seleccionadas?: string[]): ((fecha: string) => boolean) => {
+/**
+ * Predicado "esta fecha entra en el patrón elegido". Exportado para que la
+ * generación de turnos desde la grilla (lib/generacion-grilla) use exactamente
+ * el mismo criterio de días que la asignación por rango.
+ */
+export const diasDelPatron = (patron: PatronDias, seleccionadas?: string[]): ((fecha: string) => boolean) => {
   if (patron === 'todos') return () => true
   if (patron === 'lun_vie') return f => dow1a7(f) <= 5
   if (patron === 'sab_dom') return f => dow1a7(f) >= 6

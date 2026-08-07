@@ -44,6 +44,11 @@ import type {
   PatronDias, PlanAsignacion, TurnoGrilla, VigiladorGrilla,
 } from '@/lib/asignacion-mensual'
 import {
+  ETIQUETA_GENERACION_CELDA, motivoBloqueoGeneracion,
+  planificarGeneracionGrilla, resumenResultadoGeneracion,
+} from '@/lib/generacion-grilla'
+import type { PlanGeneracionGrilla, ResultadoGeneracionGrilla } from '@/lib/generacion-grilla'
+import {
   ETIQUETA_MOTIVO_OMISION_PUBLICACION, etiquetaAlcancePublicacion,
   planificarPublicacion, puedePublicarProgramacion,
 } from '@/lib/publicacion-programacion'
@@ -361,6 +366,88 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     setModalPublicar(false)
     setResultadoPublicar(null)
     setErrorPublicar('')
+  }
+
+  // ── Programación desde la grilla: crear los turnos de una posición ──
+  // Evita el rodeo de salir a la pantalla de Programación para el caso
+  // cotidiano ("esta posición, de lunes a viernes, de 22 a 06"). No reemplaza
+  // ni modifica "Generar mes": ese camino sigue igual.
+  //
+  // Mismo modelo de permisos que la asignación y la publicación (admin o
+  // supervisor); la RPC crear_turnos_posicion_objetivo revalida todo en
+  // servidor y es la única vía de escritura.
+  const [modalGenerar, setModalGenerar] = useState(false)
+  const [genPuesto, setGenPuesto] = useState('')
+  const [genHoraInicio, setGenHoraInicio] = useState('')
+  const [genHoraFin, setGenHoraFin] = useState('')
+  const [genDesde, setGenDesde] = useState('')
+  const [genHasta, setGenHasta] = useState('')
+  const [genPatron, setGenPatron] = useState<PatronDias>('todos')
+  const [genExcluir, setGenExcluir] = useState('')
+  const [generandoTurnos, setGenerandoTurnos] = useState(false)
+  const [resultadoGenerar, setResultadoGenerar] = useState<string | null>(null)
+  const [errorGenerar, setErrorGenerar] = useState('')
+
+  // El rango arranca desde hoy (no desde el 1°) para no ofrecer por defecto un
+  // montón de días pasados que igual no se pueden crear.
+  const desdeSugerido = hoy > desdeMes && hoy <= hastaMes ? hoy : desdeMes
+
+  const abrirGenerar = (fila?: FilaGrillaPosicion) => {
+    setGenPuesto(fila?.puesto_id ?? '')
+    setGenHoraInicio(fila?.hora_inicio ?? '')
+    setGenHoraFin(fila?.hora_fin ?? '')
+    setGenDesde(desdeSugerido)
+    setGenHasta(hastaMes)
+    setGenPatron('todos')
+    setGenExcluir('')
+    setResultadoGenerar(null)
+    setErrorGenerar('')
+    setModalGenerar(true)
+  }
+
+  const bloqueoGenerar = motivoBloqueoGeneracion({
+    puestoId: genPuesto, horaInicio: genHoraInicio, horaFin: genHoraFin,
+    desde: genDesde, hasta: genHasta,
+  })
+
+  // El plan se calcula contra los turnos del mes ya cargados. Las fechas del
+  // formulario están acotadas a ese mes justamente para que lo que se muestra
+  // acá coincida con lo que la RPC va a encontrar.
+  const planGenerar: PlanGeneracionGrilla | null = bloqueoGenerar ? null
+    : planificarGeneracionGrilla({
+        puestoId: genPuesto,
+        horaInicio: genHoraInicio,
+        horaFin: genHoraFin,
+        desde: genDesde,
+        hasta: genHasta,
+        patron: genPatron,
+        excluir: genExcluir.split(',').map(s => s.trim()).filter(Boolean),
+        turnosExistentes: turnosMensual.map(t => ({
+          puesto_id: t.puesto_id, fecha: t.fecha,
+          hora_inicio: t.hora_inicio, hora_fin: t.hora_fin,
+          estado: t.estado, tipo_evento: t.tipo_evento,
+        })),
+        fechaActual: hoy,
+        horaActual: horaActualStr,
+      })
+
+  const confirmarGenerar = async () => {
+    if (!planGenerar || planGenerar.fechas_a_crear.length === 0 || generandoTurnos) return
+    setGenerandoTurnos(true)
+    setErrorGenerar('')
+    setResultadoGenerar(null)
+    const { data, error } = await supabase.rpc('crear_turnos_posicion_objetivo', {
+      p_operacion_id: crypto.randomUUID(),
+      p_objetivo_id: objetivoId,
+      p_puesto_id: genPuesto,
+      p_hora_inicio: genHoraInicio,
+      p_hora_fin: genHoraFin,
+      p_fechas: planGenerar.fechas_a_crear,
+    })
+    setGenerandoTurnos(false)
+    if (error) { setErrorGenerar(error.message); return }
+    setResultadoGenerar(`✅ ${resumenResultadoGeneracion(data as ResultadoGeneracionGrilla)}`)
+    await cargarMensual()
   }
 
   // ── Posiciones operativas: alta, edición, duplicación, desactivación ──
@@ -950,6 +1037,16 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
 
                 {puedePublicar && (
                   <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+                    {vistaMensual === 'grilla' && (
+                      <button
+                        type="button"
+                        title="Crear los turnos de una posición operativa para este mes"
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }}
+                        onClick={() => abrirGenerar()}
+                      >
+                        + Agregar turnos
+                      </button>
+                    )}
                     <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12 }} onClick={abrirPublicar}>
                       Publicar programación
                     </button>
@@ -969,7 +1066,10 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                 )}
                 {mensualError && <div style={{ color:'#ef4444', fontSize:12, marginBottom:8 }}>{mensualError}</div>}
                 {!mensualCargando && turnosMensual.length === 0 && !mensualError && (
-                  <div style={{ color:'#64748b', fontSize:13 }}>Sin turnos programados para este mes.</div>
+                  <div style={{ color:'#64748b', fontSize:13 }}>
+                    Sin turnos programados para este mes.
+                    {puedePublicar && vistaMensual === 'grilla' && ' Usá “+ Agregar turnos” para crearlos desde acá.'}
+                  </div>
                 )}
 
                 {vistaMensual === 'grilla' && grillaMensual.filas.length > 0 && (
@@ -991,7 +1091,10 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                             <td style={{ position:'sticky', left:0, background:'#0b1220', padding:'6px 8px', borderBottom:'1px solid #0f172a' }}>
                               <div style={{ color:'#e2e8f0', fontWeight:600 }}>{fila.puesto_nombre}</div>
                               <div style={{ color:'#64748b', fontFamily:'Syne,sans-serif' }}>{fila.hora_inicio}–{fila.hora_fin}</div>
-                              <div style={{ display:'flex', gap:4, marginTop:4 }}>
+                              <div style={{ display:'flex', gap:4, marginTop:4, flexWrap:'wrap' }}>
+                                {puedePublicar && (
+                                  <button type="button" title="Crear los turnos que falten en esta posición y horario" style={{ ...S.btn, ...S.btnPrimary, padding:'2px 6px', fontSize:10 }} onClick={() => abrirGenerar(fila)}>+ Agregar</button>
+                                )}
                                 <button type="button" title="Asignar desde/hasta con patrón de días" style={{ ...S.btn, ...S.btnSecondary, padding:'2px 6px', fontSize:10 }} onClick={() => abrirRango(fila, false)}>Rango</button>
                                 <button type="button" title="Asignar todos los turnos visibles de esta posición" style={{ ...S.btn, ...S.btnSecondary, padding:'2px 6px', fontSize:10 }} onClick={() => abrirRango(fila, true)}>Fila completa</button>
                               </div>
@@ -1176,6 +1279,100 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
               <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setCeldaEditando(null)}>Cancelar</button>
               <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !guardiaCelda || asignandoCelda ? 0.5 : 1 }} disabled={!guardiaCelda || asignandoCelda} onClick={confirmarCelda}>
                 {asignandoCelda ? 'Asignando…' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: crear los turnos de una posición (programación desde la grilla) */}
+      {modalGenerar && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setModalGenerar(false)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:480, maxWidth:'90vw', maxHeight:'85vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>Agregar turnos</div>
+            <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>
+              Crea los turnos de una posición para este mes. Se crean sin vigilador: la asignación es el paso siguiente.
+            </div>
+
+            <label style={{ fontSize:11, color:'#64748b' }}>Posición operativa</label>
+            <select
+              style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }}
+              value={genPuesto}
+              onChange={e => setGenPuesto(e.target.value)}
+            >
+              <option value="">Seleccionar…</option>
+              {posicionesOp.filter(p => p.activo).map(p => (
+                <option key={p.id} value={p.id}>{p.nombre}</option>
+              ))}
+            </select>
+
+            <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:11, color:'#64748b' }}>Hora inicio</label>
+                <input type="time" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={genHoraInicio} onChange={e => setGenHoraInicio(e.target.value)} />
+              </div>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:11, color:'#64748b' }}>Hora fin</label>
+                <input type="time" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={genHoraFin} onChange={e => setGenHoraFin(e.target.value)} />
+              </div>
+            </div>
+            {genHoraInicio && genHoraFin && genHoraFin < genHoraInicio && (
+              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:8 }}>Turno nocturno: termina al día siguiente.</div>
+            )}
+
+            <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:11, color:'#64748b' }}>Desde</label>
+                <input type="date" min={desdeMes} max={hastaMes} style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={genDesde} onChange={e => setGenDesde(e.target.value)} />
+              </div>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:11, color:'#64748b' }}>Hasta</label>
+                <input type="date" min={desdeMes} max={hastaMes} style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={genHasta} onChange={e => setGenHasta(e.target.value)} />
+              </div>
+            </div>
+
+            <label style={{ fontSize:11, color:'#64748b' }}>Días</label>
+            <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={genPatron} onChange={e => setGenPatron(e.target.value as PatronDias)}>
+              <option value="todos">Todos los días</option>
+              <option value="lun_vie">Lunes a viernes</option>
+              <option value="sab_dom">Sábados y domingos</option>
+            </select>
+
+            <label style={{ fontSize:11, color:'#64748b' }}>Excluir fechas puntuales (YYYY-MM-DD separadas por coma)</label>
+            <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12, marginTop:4, marginBottom:8 }} value={genExcluir} onChange={e => setGenExcluir(e.target.value)} placeholder={`${desdeSugerido}, ${hastaMes}`} />
+
+            {bloqueoGenerar && <div style={{ fontSize:12, color:'#f59e0b', marginBottom:10 }}>{bloqueoGenerar}</div>}
+
+            {planGenerar && (
+              <div style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:10, marginBottom:10, fontSize:12 }}>
+                <div style={{ color:'#e2e8f0', marginBottom:4 }}>
+                  Se van a crear <strong style={{ color:'#10b981' }}>{planGenerar.resumen.validos}</strong> turno(s) de {planGenerar.resumen.total} día(s) del rango.
+                </div>
+                <div style={{ color:'#64748b' }}>
+                  Ya existen: {planGenerar.resumen.ya_existen} · Fechas pasadas: {planGenerar.resumen.fechas_pasadas} · Fuera del patrón o excluidos: {planGenerar.resumen.omitidos}
+                </div>
+                {planGenerar.filas.filter(f => f.estado !== 'valido' && f.estado !== 'fuera_de_patron').length > 0 && (
+                  <div style={{ marginTop:6, color:'#94a3b8', maxHeight:100, overflowY:'auto' }}>
+                    {planGenerar.filas.filter(f => f.estado !== 'valido' && f.estado !== 'fuera_de_patron').slice(0, 8).map(f => (
+                      <div key={f.fecha}>· {f.fecha} ({f.dia_semana}): {ETIQUETA_GENERACION_CELDA[f.estado]}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {errorGenerar && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorGenerar}</div>}
+            {resultadoGenerar && <div style={{ fontSize:12, color:'#10b981', marginBottom:8 }}>{resultadoGenerar}</div>}
+
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setModalGenerar(false)}>Cerrar</button>
+              <button
+                type="button"
+                style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !planGenerar || planGenerar.resumen.validos === 0 || generandoTurnos ? 0.5 : 1 }}
+                disabled={!planGenerar || planGenerar.resumen.validos === 0 || generandoTurnos}
+                onClick={confirmarGenerar}
+              >
+                {generandoTurnos ? 'Creando…' : `Crear (${planGenerar?.resumen.validos ?? 0})`}
               </button>
             </div>
           </div>
