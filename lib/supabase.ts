@@ -84,7 +84,12 @@ export interface Turno {
   fecha: string
   hora_inicio: string
   hora_fin: string
-  estado: 'programado' | 'cubierto' | 'descubierto'
+  /**
+   * Estados admitidos por el CHECK de turnos.estado. Los tres últimos
+   * (reemplazado/anulado/cancelado) son los que ESTADOS_SIN_OBLIGACION trata
+   * como "el turno ya no cuenta" en cobertura, planillas y liquidación.
+   */
+  estado: 'programado' | 'cubierto' | 'descubierto' | 'ausente' | 'reemplazado' | 'anulado' | 'cancelado'
   revisado_por?: string | null
   revisado_at?: string | null
   publicado?: boolean | null
