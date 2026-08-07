@@ -54,6 +54,33 @@ describe('accionesCelda — publicar no congela el turno', () => {
   })
 })
 
+describe('accionesCelda — anular es reversible', () => {
+  it('turno anulado futuro: solo se ofrece reactivar', () => {
+    const a = accionesCelda(turno({ estado: 'anulado', guardia_id: 'g1' }), HOY, AHORA, true)
+    expect(a.reactivar).toBe(true)
+    expect(a.anular).toBe(false)
+    expect(a.asignar).toBe(false)
+    expect(a.cambiarVigilador).toBe(false)
+    expect(a.cambiarHorario).toBe(false)
+  })
+
+  it('turno cancelado futuro: también se puede reactivar', () => {
+    expect(accionesCelda(turno({ estado: 'cancelado' }), HOY, AHORA, true).reactivar).toBe(true)
+  })
+
+  it('un turno vigente nunca ofrece reactivar', () => {
+    expect(accionesCelda(turno(), HOY, AHORA, true).reactivar).toBe(false)
+  })
+
+  it('anulado pero ya pasado: no se reactiva desde la grilla', () => {
+    expect(accionesCelda(turno({ estado: 'anulado', fecha: '2026-08-01' }), HOY, AHORA, true).reactivar).toBe(false)
+  })
+
+  it('reemplazado no se reactiva: hay otro turno cubriendo', () => {
+    expect(accionesCelda(turno({ estado: 'reemplazado' }), HOY, AHORA, true).reactivar).toBe(false)
+  })
+})
+
 describe('accionesCelda — turnos que no se tocan desde la grilla', () => {
   it('turno pasado: ninguna acción', () => {
     expect(celdaTieneAcciones(accionesCelda(turno({ fecha: '2026-08-01' }), HOY, AHORA, true))).toBe(false)
@@ -67,15 +94,7 @@ describe('accionesCelda — turnos que no se tocan desde la grilla', () => {
     expect(celdaTieneAcciones(accionesCelda(turno({ fecha: HOY, hora_inicio: '22:00' }), HOY, AHORA, true))).toBe(true)
   })
 
-  it('turno anulado: ninguna acción', () => {
-    expect(celdaTieneAcciones(accionesCelda(turno({ estado: 'anulado' }), HOY, AHORA, true))).toBe(false)
-  })
-
-  it('turno cancelado: ninguna acción', () => {
-    expect(celdaTieneAcciones(accionesCelda(turno({ estado: 'cancelado' }), HOY, AHORA, true))).toBe(false)
-  })
-
-  it('turno reemplazado: ninguna acción', () => {
+  it('turno reemplazado: ninguna acción (lo sustituye otro turno)', () => {
     expect(celdaTieneAcciones(accionesCelda(turno({ estado: 'reemplazado' }), HOY, AHORA, true))).toBe(false)
   })
 

@@ -133,12 +133,17 @@ export function esTurnoFuturo(
   return hora5(t.hora_inicio) > horaActual
 }
 
+/** El turno sigue contando para cobertura (no anulado/cancelado/reemplazado). */
+export const turnoVigente = (t: Pick<TurnoGrilla, 'estado'>): boolean =>
+  !ESTADOS_SIN_OBLIGACION.has(t.estado || '')
+
 export function resumenAsignacionMensual(
   turnos: TurnoGrilla[],
   fechaActual: string,
   horaActual: string,
 ): ResumenAsignacionMensual {
-  const futuros = turnos.filter(t => esTurnoFuturo(t, fechaActual, horaActual))
+  // Un turno anulado no es un turno futuro a cubrir: no suma en ningún contador.
+  const futuros = turnos.filter(t => turnoVigente(t) && esTurnoFuturo(t, fechaActual, horaActual))
   return {
     futuros: futuros.length,
     programados: futuros.filter(t => estadoAsignacion(t) === 'programado').length,
@@ -212,12 +217,16 @@ export interface AccionesCelda {
   quitarVigilador: boolean
   cambiarHorario: boolean
   anular: boolean
+  reactivar: boolean
 }
 
 const SIN_ACCIONES: AccionesCelda = {
   asignar: false, cambiarVigilador: false, quitarVigilador: false,
-  cambiarHorario: false, anular: false,
+  cambiarHorario: false, anular: false, reactivar: false,
 }
+
+/** Anular es reversible: estos estados vuelven a 'programado' con un clic. */
+export const ESTADOS_REACTIVABLES = new Set(['anulado', 'cancelado'])
 
 export function accionesCelda(
   turno: Pick<TurnoGrilla, 'guardia_id' | 'estado' | 'fecha' | 'hora_inicio'>,
@@ -226,10 +235,19 @@ export function accionesCelda(
   puedeEscribir: boolean,
 ): AccionesCelda {
   if (!puedeEscribir) return SIN_ACCIONES
-  // Un turno anulado, cancelado o reemplazado ya no se toca desde la grilla.
-  if (ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) return SIN_ACCIONES
   // Iniciado o pasado: se resuelve por asistencia/regularización, no acá.
   if (!esTurnoFuturo(turno, fechaActual, horaActual)) return SIN_ACCIONES
+
+  const estado = turno.estado || ''
+
+  // Anulado o cancelado: la única salida es volver a activarlo. Anular no es
+  // una puerta de una sola dirección — si fue un error, se deshace acá mismo
+  // en vez de obligar a crear otro turno al lado.
+  if (ESTADOS_REACTIVABLES.has(estado)) return { ...SIN_ACCIONES, reactivar: true }
+
+  // Reemplazado sí es definitivo desde acá: existe OTRO turno que lo sustituye,
+  // y reactivarlo dejaría el objetivo cubierto dos veces.
+  if (ESTADOS_SIN_OBLIGACION.has(estado)) return SIN_ACCIONES
 
   const tieneVigilador = !!turno.guardia_id
   return {
@@ -238,12 +256,13 @@ export function accionesCelda(
     quitarVigilador: tieneVigilador,
     cambiarHorario: true,
     anular: true,
+    reactivar: false,
   }
 }
 
 /** true si la celda ofrece al menos una acción (para saber si el clic hace algo). */
 export const celdaTieneAcciones = (a: AccionesCelda): boolean =>
-  a.asignar || a.cambiarVigilador || a.quitarVigilador || a.cambiarHorario || a.anular
+  a.asignar || a.cambiarVigilador || a.quitarVigilador || a.cambiarHorario || a.anular || a.reactivar
 
 // ── Plan de asignación (individual, por rango, por fila completa) ────────────
 

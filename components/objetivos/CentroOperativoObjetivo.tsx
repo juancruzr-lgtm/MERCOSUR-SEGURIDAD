@@ -38,7 +38,7 @@ import {
   accionesCelda, armarGrillaMensual, celdaTieneAcciones,
   estadoAsignacion, esTurnoFuturo,
   filtrarGrillaMensual, planificarAsignacionRango,
-  resumenAsignacionMensual, turnosEnConflicto,
+  resumenAsignacionMensual, turnoVigente, turnosEnConflicto,
 } from '@/lib/asignacion-mensual'
 import type {
   EstadoAsignacion, FilaGrillaPosicion, FiltrosGrillaMensual,
@@ -316,6 +316,17 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     await editarTurnoCelda(
       { estado: 'anulado' },
       `Anulación desde la grilla: ${motivoCelda.trim()}`,
+      { estado: celdaEditando.estado },
+    )
+  }
+
+  // Deshacer una anulación: vuelve a 'programado' conservando vigilador y
+  // horario. No hace falta pedir motivo — reactivar no destruye nada.
+  const confirmarReactivarCelda = async () => {
+    if (!celdaEditando) return
+    await editarTurnoCelda(
+      { estado: 'programado' },
+      `Reactivación desde la grilla (estaba ${celdaEditando.estado})`,
       { estado: celdaEditando.estado },
     )
   }
@@ -1206,23 +1217,29 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                               const futuro = esTurnoFuturo(t, hoy, horaActualStr)
                               const conConflicto = conflictosGrilla.has(t.id)
                               const est = estadoAsignacion(t)
+                              // Un turno anulado no debe leerse como uno vigente: pierde el
+                              // color de estado y se tacha, aunque siga marcado como publicado.
+                              const anulado = !turnoVigente(t)
                               const seleccionadoPublicar = turnosSeleccionadosPublicar.has(t.id)
-                              const colorFondo = seleccionadoPublicar ? 'rgba(96,165,250,.22)'
+                              const colorFondo = anulado ? 'rgba(100,116,139,.07)'
+                                : seleccionadoPublicar ? 'rgba(96,165,250,.22)'
                                 : conConflicto ? 'rgba(239,68,68,.15)'
                                 : est === 'publicado' ? 'rgba(96,165,250,.12)'
                                 : est === 'asignado' ? 'rgba(16,185,129,.1)' : 'rgba(148,163,184,.08)'
-                              const colorTexto = conConflicto ? '#ef4444' : est === 'publicado' ? '#60a5fa' : est === 'asignado' ? '#10b981' : '#94a3b8'
+                              const colorTexto = anulado ? '#64748b'
+                                : conConflicto ? '#ef4444' : est === 'publicado' ? '#60a5fa' : est === 'asignado' ? '#10b981' : '#94a3b8'
                               return (
                                 <td key={f} style={{ borderBottom:'1px solid #0f172a', padding:2, textAlign:'center' }}>
                                   <button
                                     type="button"
                                     disabled={!modoSeleccionPublicar && !futuro}
                                     onClick={() => modoSeleccionPublicar ? toggleSeleccionCelda(t.id) : (futuro && abrirCelda(t))}
-                                    title={modoSeleccionPublicar ? 'Click para incluir/excluir de la publicación' : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
+                                    title={modoSeleccionPublicar ? 'Click para incluir/excluir de la publicación' : anulado ? `Turno ${t.estado} — clic para reactivarlo` : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
                                     style={{
                                       width:'100%', minWidth:48, padding:'5px 3px', borderRadius:6, fontSize:10.5,
                                       background: colorFondo, color: colorTexto,
-                                      border: seleccionadoPublicar ? '1px solid #60a5fa' : conConflicto ? '1px solid rgba(239,68,68,.4)' : '1px solid transparent',
+                                      border: seleccionadoPublicar ? '1px solid #60a5fa' : conConflicto && !anulado ? '1px solid rgba(239,68,68,.4)' : anulado ? '1px dashed #334155' : '1px solid transparent',
+                                      textDecoration: anulado ? 'line-through' : 'none',
                                       cursor: (modoSeleccionPublicar || futuro) ? 'pointer' : 'default', opacity: (modoSeleccionPublicar || futuro) ? 1 : 0.55,
                                     }}
                                   >
@@ -1406,10 +1423,11 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                   setHoraInicioCelda(celdaEditando.hora_inicio); setHoraFinCelda(celdaEditando.hora_fin)
                   setModoCelda('horario'); setErrorCelda('')
                 })}
-                {acc.anular && opcion('Anular turno', 'Deja de contar, pero queda el registro', true, () => { setModoCelda('anular'); setErrorCelda('') })}
+                {acc.anular && opcion('Anular turno', 'Deja de contar, pero queda el registro. Se puede deshacer', true, () => { setModoCelda('anular'); setErrorCelda('') })}
+                {acc.reactivar && opcion('Reactivar turno', 'Vuelve a contar como programado', false, confirmarReactivarCelda)}
                 {!celdaTieneAcciones(acc) && (
                   <div style={{ fontSize:12, color:'#64748b' }}>
-                    Este turno ya no se modifica desde la grilla (ya empezó, es pasado o está anulado).
+                    Este turno ya no se modifica desde la grilla: ya empezó o es pasado.
                   </div>
                 )}
               </>
