@@ -59,6 +59,10 @@ export const DETALLE_GENERACION_FECHA_PASADA =
 export const DETALLE_GENERACION_YA_EXISTE =
   'Ya hay un turno cargado para esa posición, fecha y horario.'
 
+/** Puesto doblado: se agrega otro turno sobre los que ya hay, a propósito. */
+export const detalleSeSuma = (cuantos: number) =>
+  `Ya hay ${cuantos} turno${cuantos !== 1 ? 's' : ''} en esta posición y horario: se agrega uno más.`
+
 // ── Entradas ─────────────────────────────────────────────────────────────────
 
 /** Turno ya cargado del objetivo, para deduplicar y avisar coberturas equivalentes. */
@@ -153,10 +157,20 @@ export function planificarGeneracionGrilla(params: {
   turnosExistentes: TurnoExistenteGrilla[]
   fechaActual: string
   horaActual: string
+  /**
+   * Puesto doblado: agregar turnos aunque la posición ya tenga uno ese día en
+   * ese horario. Sin esto, un objetivo que lleva 3 vigiladores en la misma
+   * posición los fines de semana no se puede cargar desde acá.
+   *
+   * La protección contra duplicados accidentales sigue activa por defecto: hay
+   * que pedirlo explícitamente, igual que el "Crear de todos modos" del alta
+   * manual de turnos.
+   */
+  permitirDuplicado?: boolean
 }): PlanGeneracionGrilla {
   const {
     puestoId, desde, hasta, patron, diasSeleccionados, excluir,
-    turnosExistentes, fechaActual, horaActual,
+    turnosExistentes, fechaActual, horaActual, permitirDuplicado = false,
   } = params
   const horaInicio = hora5(params.horaInicio)
   const horaFin = hora5(params.horaFin)
@@ -164,15 +178,18 @@ export function planificarGeneracionGrilla(params: {
   const excluidas = new Set(excluir ?? [])
   const enPatron = diasDelPatron(patron, diasSeleccionados)
 
-  // Ocupado: misma posición, fecha y horario exacto.
-  // Equivalente: mismo horario y fecha en OTRA posición — no bloquea (dos
+  // Ocupado: cuántos turnos vigentes hay ya en esta posición, fecha y horario.
+  // Se cuenta —no es un booleano— porque un puesto puede estar doblado con
+  // más de dos, y hay que poder decir cuántos hay al agregar otro.
+  //
+  // Equivalente: mismo horario y fecha en OTRA posición — nunca bloquea (dos
   // posiciones simultáneas son legítimas), solo se informa.
-  const ocupado = new Set<string>()
+  const ocupado = new Map<string, number>()
   const equivalente = new Set<string>()
   for (const t of turnosExistentes) {
     if (!ocupaCobertura(t)) continue
     const franja = `${t.fecha}|${hora5(t.hora_inicio)}|${hora5(t.hora_fin)}`
-    if ((t.puesto_id ?? '') === puestoId) ocupado.add(franja)
+    if ((t.puesto_id ?? '') === puestoId) ocupado.set(franja, (ocupado.get(franja) ?? 0) + 1)
     else equivalente.add(franja)
   }
 
@@ -189,7 +206,8 @@ export function planificarGeneracionGrilla(params: {
       filas.push({ ...base, estado: 'fuera_de_patron', detalle: null })
       continue
     }
-    if (ocupado.has(franja)) {
+    const yaHay = ocupado.get(franja) ?? 0
+    if (yaHay > 0 && !permitirDuplicado) {
       filas.push({ ...base, estado: 'ya_existe', detalle: DETALLE_GENERACION_YA_EXISTE })
       continue
     }
@@ -200,7 +218,9 @@ export function planificarGeneracionGrilla(params: {
     filas.push({
       ...base,
       estado: 'valido',
-      detalle: equivalente.has(franja) ? DETALLE_COBERTURA_EQUIVALENTE : null,
+      detalle: yaHay > 0
+        ? detalleSeSuma(yaHay)
+        : equivalente.has(franja) ? DETALLE_COBERTURA_EQUIVALENTE : null,
     })
   }
 

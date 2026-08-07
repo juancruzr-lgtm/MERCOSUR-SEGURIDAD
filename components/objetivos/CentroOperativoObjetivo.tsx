@@ -456,6 +456,10 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // Vigilador opcional: si se elige, los turnos quedan asignados en el mismo
   // paso. Vacío = se crean sin cubrir y se asignan después desde la grilla.
   const [genGuardia, setGenGuardia] = useState('')
+  // Puesto doblado: agregar turnos aunque la posición ya tenga uno ese día en
+  // ese horario. Hay que pedirlo a propósito; sin esto la protección contra
+  // duplicados accidentales sigue activa.
+  const [genDuplicar, setGenDuplicar] = useState(false)
   const [generandoTurnos, setGenerandoTurnos] = useState(false)
   const [resultadoGenerar, setResultadoGenerar] = useState<string | null>(null)
   const [errorGenerar, setErrorGenerar] = useState('')
@@ -466,6 +470,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     setGenHoraInicio(fila?.hora_inicio ?? '')
     setGenHoraFin(fila?.hora_fin ?? '')
     setGenDias(new Set())
+    setGenDuplicar(false)
     // Arranca con el guardia habitual de la posición, si hay uno configurado.
     setGenGuardia(puesto ? (sugeridoPorPuesto.get(puesto) ?? '') : '')
     setResultadoGenerar(null)
@@ -490,6 +495,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       desde: fecha, hasta: fecha, patron: 'todos',
       turnosExistentes: turnosParaGeneracion,
       fechaActual: hoy, horaActual: horaActualStr,
+      permitirDuplicado: genDuplicar,
     }).filas
     if (!fila) return { habilitado: false }
     if (fila.estado === 'ya_existe') return { habilitado: false, yaResuelto: true, nota: 'Ya hay un turno en esta posición y horario' }
@@ -517,6 +523,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         turnosExistentes: turnosParaGeneracion,
         fechaActual: hoy,
         horaActual: horaActualStr,
+        permitirDuplicado: genDuplicar,
       })
 
   const confirmarGenerar = async () => {
@@ -531,6 +538,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       p_hora_inicio: genHoraInicio,
       p_hora_fin: genHoraFin,
       p_fechas: planGenerar.fechas_a_crear,
+      p_permitir_duplicado: genDuplicar,
     })
     if (error) { setGenerandoTurnos(false); setErrorGenerar(error.message); return }
 
@@ -1452,6 +1460,21 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                 ? 'Los turnos se crean y quedan asignados a esta persona.'
                 : 'Los turnos se crean sin cubrir: los asignás después desde la grilla.'}
             </div>
+
+            <label style={{ display:'flex', gap:8, alignItems:'flex-start', cursor:'pointer', background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'9px 11px', marginBottom:10 }}>
+              <input
+                type="checkbox"
+                checked={genDuplicar}
+                onChange={e => setGenDuplicar(e.target.checked)}
+                style={{ marginTop:2, flex:'none' }}
+              />
+              <span>
+                <span style={{ fontSize:12.5, color:'#e2e8f0', display:'block' }}>Puesto doblado: agregar aunque ya haya turnos</span>
+                <span style={{ fontSize:11, color:'#64748b' }}>
+                  Para cuando la posición lleva más de un vigilador a la vez. Cada día suma un turno más a los que ya tenga.
+                </span>
+              </span>
+            </label>
 
             <label style={{ fontSize:11, color:'#64748b', display:'block', marginBottom:6 }}>Días del mes</label>
             {genPuesto && genHoraInicio && genHoraFin ? (

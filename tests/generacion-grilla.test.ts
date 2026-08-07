@@ -135,6 +135,53 @@ describe('planificarGeneracionGrilla — turnos ya existentes', () => {
   })
 })
 
+// Un puesto puede llevar más de un vigilador a la vez (MUSEO CASTAGNINO tiene 3
+// en Principal los fines de semana). Sin permitirDuplicado eso no se podía
+// cargar desde la grilla, aunque el alta manual de turnos siempre lo permitió.
+describe('planificarGeneracionGrilla — puesto doblado', () => {
+  const existente: TurnoExistenteGrilla = {
+    puesto_id: PUESTO, fecha: '2026-08-06', hora_inicio: '22:00', hora_fin: '06:00', estado: 'programado',
+  }
+
+  it('con permitirDuplicado, un día ya ocupado vuelve a ser válido', () => {
+    const plan = planBase({ turnosExistentes: [existente], permitirDuplicado: true })
+    expect(plan.fechas_a_crear).toContain('2026-08-06')
+    expect(plan.resumen.ya_existen).toBe(0)
+  })
+
+  it('avisa cuántos turnos ya hay', () => {
+    const plan = planBase({ turnosExistentes: [existente], permitirDuplicado: true })
+    expect(plan.filas.find(f => f.fecha === '2026-08-06')?.detalle).toMatch(/Ya hay 1 turno/)
+  })
+
+  it('cuenta bien cuando ya hay varios: no hay tope', () => {
+    const tres = [
+      existente,
+      { ...existente, puesto_id: PUESTO },
+      { ...existente, puesto_id: PUESTO },
+    ]
+    const plan = planBase({ turnosExistentes: tres, permitirDuplicado: true })
+    expect(plan.filas.find(f => f.fecha === '2026-08-06')?.detalle).toMatch(/Ya hay 3 turnos/)
+    expect(plan.fechas_a_crear).toContain('2026-08-06')
+  })
+
+  it('sin permitirDuplicado sigue bloqueando: la protección no se pierde', () => {
+    const plan = planBase({ turnosExistentes: [existente] })
+    expect(plan.filas.find(f => f.fecha === '2026-08-06')?.estado).toBe('ya_existe')
+  })
+
+  it('duplicar no habilita fechas pasadas', () => {
+    const plan = planBase({ desde: '2026-08-01', hasta: '2026-08-05', permitirDuplicado: true })
+    expect(plan.filas.find(f => f.fecha === '2026-08-03')?.estado).toBe('fecha_pasada')
+  })
+
+  it('duplicar no ignora el patrón de días ni las exclusiones', () => {
+    const plan = planBase({ permitirDuplicado: true, patron: 'lun_vie', excluir: ['2026-08-10'] })
+    expect(plan.fechas_a_crear).not.toContain('2026-08-08') // sábado
+    expect(plan.fechas_a_crear).not.toContain('2026-08-10') // excluido
+  })
+})
+
 describe('planificarGeneracionGrilla — sin creación retroactiva', () => {
   it('fecha anterior a hoy queda como fecha pasada', () => {
     const plan = planBase({ desde: '2026-08-01', hasta: '2026-08-05' })
