@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { track } from '@/lib/telemetry'
 import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
@@ -209,6 +210,7 @@ const S = {
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) {
+  const router = useRouter()
   const mesActual = mesActualCliente()
   const mesAnterior = mesAnteriorCliente(mesActual)
 
@@ -522,12 +524,22 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                                 )
                                 : <span style={{ color: '#64748b', fontSize: 11 }}>{ETIQUETA_PRIMER_CONTROL.pendiente}</span>}
                         {fila.estado_control != null && (
-                          <button
-                            style={{ display: 'block', marginTop: 4, padding: 0, border: 'none', background: 'none', color: '#38bdf8', fontSize: 10.5, cursor: 'pointer', textDecoration: 'underline' }}
-                            onClick={() => setFilaResumen(fila)}
-                          >
-                            Ver resumen
-                          </button>
+                          <>
+                            <button
+                              style={{ display: 'block', marginTop: 4, padding: 0, border: 'none', background: 'none', color: '#38bdf8', fontSize: 10.5, cursor: 'pointer', textDecoration: 'underline' }}
+                              onClick={() => setFilaResumen(fila)}
+                            >
+                              Ver resumen
+                            </button>
+                            {/* Abre la MISMA bandeja de revisión, filtrada por este
+                                vigilador y el mes que se está viendo. */}
+                            <button
+                              style={{ display: 'block', marginTop: 2, padding: 0, border: 'none', background: 'none', color: '#94a3b8', fontSize: 10.5, cursor: 'pointer', textDecoration: 'underline' }}
+                              onClick={() => router.push(`/dashboard?page=revision_planillas&empleado=${empleadoId}&mes=${mesSeleccionado}`)}
+                            >
+                              Ver en revisión
+                            </button>
+                          </>
                         )}
                       </td>
                     </tr>

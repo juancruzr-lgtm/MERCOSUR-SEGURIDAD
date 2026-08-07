@@ -14,6 +14,7 @@ import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
+import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
@@ -10444,6 +10445,23 @@ export default function AppPage() {
   const [supervisorZonas, setSupervisorZonas] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [filtros, setFiltros] = useState<Record<string, any>>({})
+
+  // Entrada por URL: permite linkear a una sección con filtros ya puestos, por
+  // ejemplo desde la planilla del guardia hacia la bandeja de revisión filtrada
+  // por esa persona y ese mes. Se lee una sola vez, al montar.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    const destino = q.get('page')
+    if (destino !== 'revision_planillas') return
+    setPage(destino)
+    setFiltros(prev => ({
+      ...prev,
+      revision_planillas: {
+        empleadoId: q.get('empleado') || null,
+        mes: q.get('mes') || undefined,
+      },
+    }))
+  }, [])
   const [adminMobileView, setAdminMobileView] = useState<AdminMobileView>('admin')
   const [esPantallaChicaAdmin, setEsPantallaChicaAdmin] = useState(false)
   const [adminDataLoaded, setAdminDataLoaded] = useState(false)
@@ -10632,6 +10650,7 @@ const esGuardia = esRolGuardia(user.rol)
     ]},
     { section:'ADMINISTRACIÓN', items:[
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
+      { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
       { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
       { id:'novedades', icon:'📋', label:'Novedades' },
       { id:'reportes', icon:'📈', label:'Reportes' },
@@ -10706,6 +10725,18 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} setRegistros={setRegistros} user={user} supervisorZonas={supervisorZonas} zonasOperativas={zonasOperativas} filtroActivo={filtros.revision_operativa} limpiarFiltro={() => limpiarFiltro('revision_operativa')} />}
+              {/* La MISMA bandeja que ve el supervisor: mismo componente, no una copia.
+                  Desde acá con alcance de administración (todos los objetivos) y en
+                  densidad cómoda; el filtro por vigilador llega desde la planilla del guardia. */}
+              {page === 'revision_planillas' && (
+                <BandejaPlanillas
+                  user={user}
+                  esAdmin
+                  densidad="comoda"
+                  empleadoInicial={filtros.revision_planillas?.empleadoId ?? null}
+                  mesInicial={filtros.revision_planillas?.mes}
+                />
+              )}
               {page === 'supervisiones' && (
                 <SupervisionesAdmin
                   supervisiones={supervisionesAdmin}
