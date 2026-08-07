@@ -196,20 +196,30 @@ export function etiquetaDiferencia(diferencia: number): string {
 /**
  * ¿La fila espera que alguien haga algo?
  *
- * Además de los estados abiertos, entra acá una aceptada por el vigilador cuyo
- * fichaje NO cubre el turno: entró tarde o se fue antes. La conformidad del
- * vigilador no alcanza para cerrar eso — si llegó tarde por un problema real se
- * cuenta el turno completo, y si llegó tarde de verdad corresponde descontar.
- * Esa decisión es del supervisor.
+ * Lo que manda es si el turno quedó cubierto, no si el vigilador contestó.
  *
- * El caso que más se escapaba: entrar 30' tarde y salir 30' tarde da las mismas
- * horas que lo programado, así que hoy nadie lo miraba nunca.
+ *   · Fichaje que NO cubre el turno (entró tarde o se fue antes) → hay una
+ *     decisión que tomar: si fue por un problema real se cuenta el turno
+ *     completo, y si no, corresponde descontar. Eso lo resuelve el supervisor.
+ *   · Modificación solicitada o derivado a administración → alguien pidió algo.
+ *   · Fichaje que cubre el turno → no hay nada que resolver, haya aceptado el
+ *     vigilador o no.
+ *
+ * La falta de respuesta del vigilador dejó de contar por sí sola. Antes, un
+ * turno cubierto de punta a punta figuraba como pendiente solo porque nadie
+ * apretó "Aceptar" en el celular — y como la aceptación en Mi Planilla es
+ * reciente, eso arrastraba cientos de turnos viejos que no tenían nada de malo.
+ * "Sin respuesta del vigilador" sigue existiendo como estado y como filtro,
+ * para poder auditarlo cuando haga falta.
+ *
+ * Un turno sin fichaje tampoco cubre el turno, así que sigue pidiendo revisión.
  */
 export function requiereRevision(f: FilaBandejaMensual): boolean {
   const estado = estadoRevision(f)
-  if (esPendienteDeAccion(estado)) return true
-  if (estado === 'aceptado') return !cubreElTurno(f)
-  return false
+  if (estado === 'revisado_supervisor' || estado === 'resuelto') return false
+  if (estado === 'modificacion_solicitada' || estado === 'pendiente_regularizacion') return true
+  // 'pendiente' y 'aceptado': decide la cobertura del turno.
+  return !cubreElTurno(f)
 }
 
 // ── Fila de la bandeja ───────────────────────────────────────────────────────

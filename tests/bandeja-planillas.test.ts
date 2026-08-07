@@ -30,6 +30,14 @@ const fila = (over: Partial<FilaBandejaMensual> = {}): FilaBandejaMensual => ({
   ...over,
 })
 
+/**
+ * Fila que SÍ pide revisión: sin respuesta del vigilador Y con el fichaje
+ * incompleto (se retiró una hora antes). Hace falta desde que la falta de
+ * respuesta por sí sola dejó de contar: lo que manda es la cobertura del turno.
+ */
+const filaPendiente = (over: Partial<FilaBandejaMensual> = {}): FilaBandejaMensual =>
+  fila({ estadoControl: 'pendiente', salida: '18:00', ...over })
+
 describe('estadoRevision — un estado por fila', () => {
   it('sin respuesta del vigilador: pendiente', () => {
     expect(estadoRevision(fila())).toBe('pendiente')
@@ -133,7 +141,8 @@ describe('cubreElTurno — turno nocturno 22:00 a 06:00', () => {
   it('se va antes de terminar', () => expect(nocturno('22:00', '05:00')).toBe(false))
 })
 
-describe('requiereRevision — la conformidad del vigilador no siempre alcanza', () => {
+// Lo que manda es si el turno quedó cubierto, no si el vigilador contestó.
+describe('requiereRevision — decide la cobertura del turno', () => {
   it('aceptado y cubriendo el turno: no se revisa', () => {
     expect(requiereRevision(fila({ estadoControl: 'aceptado' }))).toBe(false)
   })
@@ -147,7 +156,7 @@ describe('requiereRevision — la conformidad del vigilador no siempre alcanza',
   })
 
   it('el caso que se escapaba: entra tarde y sale tarde, mismas horas', () => {
-    // 12 h reales = 12 h programadas, así que hoy cobraba completo y nadie lo miraba.
+    // 12 h reales = 12 h programadas, así que las horas coincidían y nadie lo miraba.
     expect(requiereRevision(fila({ estadoControl: 'aceptado', entrada: '07:30', salida: '19:30' }))).toBe(true)
   })
 
@@ -155,9 +164,34 @@ describe('requiereRevision — la conformidad del vigilador no siempre alcanza',
     expect(requiereRevision(fila({ estadoControl: 'aceptado', salida: '18:00' }))).toBe(true)
   })
 
-  it('los estados abiertos siempre se revisan, cubran o no', () => {
-    expect(requiereRevision(fila())).toBe(true)
+  // El caso MAIDANA: entró 07:35 y salió 14:08 sobre un turno 08:00-14:00.
+  // Cubrió todo; figuraba como pendiente solo porque nunca apretó "Aceptar".
+  it('sin respuesta del vigilador pero cubriendo el turno: NO se revisa', () => {
+    expect(requiereRevision(fila({
+      estadoControl: 'pendiente',
+      horaInicioProg: '08:00', horaFinProg: '14:00',
+      entrada: '07:35', salida: '14:08',
+    }))).toBe(false)
+  })
+
+  // El caso BUSTAMANTE: turno 00:00-08:00, se retiró 07:43.
+  it('sin respuesta y sin cubrir el turno: sí se revisa', () => {
+    expect(requiereRevision(fila({
+      estadoControl: 'pendiente',
+      horaInicioProg: '00:00', horaFinProg: '08:00',
+      entrada: '00:01', salida: '07:43',
+    }))).toBe(true)
+  })
+
+  it('sin fichaje: sí se revisa', () => {
+    expect(requiereRevision(fila({ tieneFichaje: false, entrada: null, salida: null }))).toBe(true)
+  })
+
+  it('modificación solicitada se revisa aunque el fichaje cubra', () => {
     expect(requiereRevision(fila({ estadoControl: 'modificacion_solicitada' }))).toBe(true)
+  })
+
+  it('derivado a administración se revisa aunque el fichaje cubra', () => {
     expect(requiereRevision(fila({ derivado: true }))).toBe(true)
   })
 
@@ -245,10 +279,11 @@ describe('etiquetaDiferencia', () => {
 
 describe('filtrarFilasBandeja', () => {
   const filas = [
-    fila({ turnoId: 'a', empleadoId: 'e1', objetivoId: 'o1', puestoId: 'p1' }),
+    // a, c y d piden revisión; b (aceptado y cubriendo) y e (ya revisado) no.
+    filaPendiente({ turnoId: 'a', empleadoId: 'e1', objetivoId: 'o1', puestoId: 'p1' }),
     fila({ turnoId: 'b', empleadoId: 'e2', objetivoId: 'o2', puestoId: 'p2', estadoControl: 'aceptado' }),
-    fila({ turnoId: 'c', empleadoId: 'e1', objetivoId: 'o2', puestoId: 'p2', tieneFichaje: false }),
-    fila({ turnoId: 'd', empleadoId: 'e3', objetivoId: 'o1', puestoId: 'p1', salidaAutomatica: true }),
+    fila({ turnoId: 'c', empleadoId: 'e1', objetivoId: 'o2', puestoId: 'p2', tieneFichaje: false, entrada: null, salida: null }),
+    filaPendiente({ turnoId: 'd', empleadoId: 'e3', objetivoId: 'o1', puestoId: 'p1', salidaAutomatica: true }),
     fila({ turnoId: 'e', empleadoId: 'e1', objetivoId: 'o1', puestoId: 'p1', revisado: true }),
   ]
   const ids = (f: Parameters<typeof filtrarFilasBandeja>[1]) =>
@@ -300,11 +335,11 @@ describe('filtrarFilasBandeja', () => {
 describe('resumenBandejaMensual', () => {
   it('cuenta el total y los pendientes', () => {
     const r = resumenBandejaMensual([
-      fila(), fila({ estadoControl: 'aceptado' }), fila({ estadoControl: 'modificacion_solicitada' }),
+      filaPendiente(), fila({ estadoControl: 'aceptado' }), fila({ estadoControl: 'modificacion_solicitada' }),
       fila({ revisado: true }), fila({ derivado: true }),
     ])
     expect(r.total).toBe(5)
-    expect(r.pendientes).toBe(3) // pendiente + modificacion_solicitada + regularizacion
+    expect(r.pendientes).toBe(3) // sin cubrir + modificacion_solicitada + regularizacion
     expect(r.porEstado.aceptado).toBe(1)
     expect(r.porEstado.revisado_supervisor).toBe(1)
   })
@@ -330,7 +365,7 @@ describe('resumenBandejaMensual', () => {
 describe('etiquetaResumenMes', () => {
   it('formato pedido: mes, pendientes y total', () => {
     const r = resumenBandejaMensual([
-      ...Array.from({ length: 12 }, (_, i) => fila({ turnoId: `p${i}` })),
+      ...Array.from({ length: 12 }, (_, i) => filaPendiente({ turnoId: `p${i}` })),
       ...Array.from({ length: 328 }, (_, i) => fila({ turnoId: `a${i}`, estadoControl: 'aceptado' })),
     ])
     expect(etiquetaResumenMes('2026-08', r)).toBe('Agosto 2026 — 12 pendientes de 340 registros')
@@ -347,7 +382,7 @@ describe('etiquetaResumenMes', () => {
   })
 
   it('singular en un solo pendiente', () => {
-    expect(etiquetaResumenMes('2026-08', resumenBandejaMensual([fila()])))
+    expect(etiquetaResumenMes('2026-08', resumenBandejaMensual([filaPendiente()])))
       .toBe('Agosto 2026 — 1 pendiente de 1 registro')
   })
 

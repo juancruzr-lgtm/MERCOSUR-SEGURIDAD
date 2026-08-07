@@ -409,7 +409,9 @@ export default function BandejaPlanillas({
     <div>
       <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 4 }}>Revisión de planillas</div>
       <div style={{ ...muted, marginBottom: 12 }}>
-        Turnos ya finalizados del mes elegido{esAdmin ? '' : ', dentro de su alcance'}. La revisión deja constancia: no modifica horas.
+        Turnos ya finalizados del mes elegido{esAdmin ? '' : ', dentro de su alcance'}.
+        Pendiente es el turno que no quedó cubierto o sobre el que el vigilador pidió algo,
+        no el que simplemente no respondió.
       </div>
 
       {/* Resumen del mes */}
@@ -536,12 +538,14 @@ export default function BandejaPlanillas({
               Estado: <span style={{ fontWeight: 700, color: COLOR_ESTADO[est] }}>{ETIQUETA_ESTADO_REVISION[est]}</span>
               {f.observaciones > 0 && <span style={{ marginLeft: 8, color: '#94a3b8' }}>{f.observaciones} obs.</span>}
             </div>
-            {/* Aceptado pero el fichaje no cubre el turno: entró tarde o se fue
-                antes. La conformidad del vigilador no cierra eso solo. */}
-            {est === 'aceptado' && !cubreElTurno(f) && (
+            {/* El motivo concreto por el que la fila pide revisión: el fichaje
+                no cubre el turno programado. Es lo que hay que decidir. */}
+            {(est === 'aceptado' || est === 'pendiente') && !cubreElTurno(f) && (
               <div style={{ marginTop: 6, fontSize: 11.5, color: '#f59e0b', background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 6, padding: '6px 10px' }}>
-                Aceptado por el vigilador, pero el fichaje no cubre el turno programado
-                ({f.horaInicioProg}–{f.horaFinProg}): {f.entrada && f.horaInicioProg && f.entrada > f.horaInicioProg ? 'entró tarde' : 'se retiró antes'}.
+                {!f.tieneFichaje
+                  ? `Sin fichaje sobre el turno programado (${f.horaInicioProg}–${f.horaFinProg}).`
+                  : `El fichaje no cubre el turno programado (${f.horaInicioProg}–${f.horaFinProg}): ${f.entrada && f.entrada > f.horaInicioProg ? 'entró tarde' : 'se retiró antes'}.`}
+                {est === 'aceptado' && ' Aceptado por el vigilador.'}
               </div>
             )}
             {f.solicitudTexto && (
