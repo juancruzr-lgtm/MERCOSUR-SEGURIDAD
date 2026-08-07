@@ -163,12 +163,19 @@ export interface FiltrosGrillaMensual {
   conConflicto?: boolean | null // true=solo con conflicto, false=solo sin, null/undefined=todos
 }
 
-/** Turno con conflicto: superpuesto con otro turno vigente del mismo guardia. */
+/**
+ * Turno con conflicto: superpuesto con otro turno vigente del mismo guardia.
+ *
+ * Un turno anulado, cancelado o reemplazado NO genera conflicto: ya no obliga
+ * a nadie a estar ahí. Sin esto, anular un turno y crear el reemplazo dejaba
+ * los dos marcados en rojo por un choque que en la práctica ya no existía.
+ */
 export function turnosEnConflicto(turnos: TurnoGrilla[]): Set<string> {
   const conflictivos = new Set<string>()
   const porGuardia = new Map<string, TurnoGrilla[]>()
   for (const t of turnos) {
     if (!t.guardia_id) continue
+    if (!turnoVigente(t)) continue
     porGuardia.set(t.guardia_id, [...(porGuardia.get(t.guardia_id) ?? []), t])
   }
   for (const lista of porGuardia.values()) {

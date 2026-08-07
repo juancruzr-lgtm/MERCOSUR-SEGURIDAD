@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { accionesCelda, celdaTieneAcciones } from '@/lib/asignacion-mensual'
+import { accionesCelda, celdaTieneAcciones, turnosEnConflicto } from '@/lib/asignacion-mensual'
+import type { TurnoGrilla } from '@/lib/asignacion-mensual'
 
 // Acciones disponibles al hacer clic en una celda de la grilla mensual.
 // La ejecución real (cambiar vigilador/horario, anular) vive en
@@ -51,6 +52,36 @@ describe('accionesCelda — publicar no congela el turno', () => {
     expect(a.anular).toBe(true)
     expect(a.cambiarHorario).toBe(true)
     expect(a.cambiarVigilador).toBe(true)
+  })
+})
+
+// Un turno anulado ya no obliga a nadie: no puede chocar con su reemplazo.
+describe('turnosEnConflicto — los turnos anulados no generan conflicto', () => {
+  const base = (over: Partial<TurnoGrilla>): TurnoGrilla => ({
+    id: 'x', puesto_id: 'p1', puesto_nombre: 'Principal',
+    fecha: '2026-08-10', hora_inicio: '10:00', hora_fin: '18:00',
+    guardia_id: 'g1', guardia_nombre: 'Romero', estado: 'programado',
+    ...over,
+  })
+
+  it('dos turnos vigentes superpuestos: ambos en conflicto', () => {
+    const c = turnosEnConflicto([base({ id: 'a' }), base({ id: 'b' })])
+    expect(c.has('a')).toBe(true)
+    expect(c.has('b')).toBe(true)
+  })
+
+  it('el anulado y su reemplazo no chocan', () => {
+    const c = turnosEnConflicto([base({ id: 'viejo', estado: 'anulado' }), base({ id: 'nuevo' })])
+    expect(c.size).toBe(0)
+  })
+
+  it('tampoco cuentan cancelado ni reemplazado', () => {
+    expect(turnosEnConflicto([base({ id: 'a', estado: 'cancelado' }), base({ id: 'b' })]).size).toBe(0)
+    expect(turnosEnConflicto([base({ id: 'a', estado: 'reemplazado' }), base({ id: 'b' })]).size).toBe(0)
+  })
+
+  it('turnos de distinto vigilador no chocan aunque se superpongan', () => {
+    expect(turnosEnConflicto([base({ id: 'a' }), base({ id: 'b', guardia_id: 'g2' })]).size).toBe(0)
   })
 })
 
