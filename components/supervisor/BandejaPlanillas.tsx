@@ -34,7 +34,7 @@ import {
 import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud } from '@/lib/primer-control'
 import { limitesDelMes } from '@/lib/calendario-mes'
 import {
-  ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION,
+  ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, cubreElTurno,
   estadoRevision, etiquetaResumenMes, filtrarFilasBandeja,
   objetivoEnAlcance, opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   resumenBandejaMensual,
@@ -220,6 +220,8 @@ export default function BandejaPlanillas({
           puestoId: t.puesto_id ?? null,
           puesto: (t.puesto as any)?.nombre ?? '—',
           horario: `${hora(t.hora_inicio)}–${hora(t.hora_fin)}`,
+          horaInicioProg: hora(t.hora_inicio) ?? '',
+          horaFinProg: hora(t.hora_fin) ?? '',
           entrada: hora(linea.horaEntrada),
           salida: hora(linea.horaSalida),
           horas: linea.horasLiquidables,
@@ -439,6 +441,14 @@ export default function BandejaPlanillas({
               Estado: <span style={{ fontWeight: 700, color: COLOR_ESTADO[est] }}>{ETIQUETA_ESTADO_REVISION[est]}</span>
               {f.observaciones > 0 && <span style={{ marginLeft: 8, color: '#94a3b8' }}>{f.observaciones} obs.</span>}
             </div>
+            {/* Aceptado pero el fichaje no cubre el turno: entró tarde o se fue
+                antes. La conformidad del vigilador no cierra eso solo. */}
+            {est === 'aceptado' && !cubreElTurno(f) && (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: '#f59e0b', background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 6, padding: '6px 10px' }}>
+                Aceptado por el vigilador, pero el fichaje no cubre el turno programado
+                ({f.horaInicioProg}–{f.horaFinProg}): {f.entrada && f.horaInicioProg && f.entrada > f.horaInicioProg ? 'entró tarde' : 'se retiró antes'}.
+              </div>
+            )}
             {f.solicitudTexto && (
               <div style={{ marginTop: 8, background: '#0f172a', border: '1px solid #33415577', borderRadius: 8, padding: 10 }}>
                 <div style={{ fontSize: 11, color: '#f59e0b', marginBottom: 4 }}>

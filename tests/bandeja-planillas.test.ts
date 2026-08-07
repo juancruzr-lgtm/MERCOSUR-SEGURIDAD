@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION,
-  esPendienteDeAccion, estadoRevision, etiquetaResumenMes,
-  filtrarFilasBandeja, nombreMes, objetivoEnAlcance,
+  cubreElTurno, esPendienteDeAccion, estadoRevision, etiquetaResumenMes,
+  filtrarFilasBandeja, nombreMes, objetivoEnAlcance, requiereRevision,
   opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   resumenBandejaMensual,
 } from '@/lib/bandeja-planillas'
@@ -18,7 +18,9 @@ const fila = (over: Partial<FilaBandejaMensual> = {}): FilaBandejaMensual => ({
   fecha: '2026-08-10',
   objetivoId: 'o1', objetivo: 'CLUB',
   puestoId: 'p1', puesto: 'Principal',
-  horario: '07:00–19:00', entrada: '07:00', salida: '19:00', horas: 12,
+  horario: '07:00–19:00',
+  horaInicioProg: '07:00', horaFinProg: '19:00',
+  entrada: '07:00', salida: '19:00', horas: 12,
   caracteristica: 'Normal',
   salidaAutomatica: false, tieneFichaje: true,
   estadoControl: 'pendiente',
@@ -97,6 +99,70 @@ describe('esPendienteDeAccion', () => {
     expect(esPendienteDeAccion('aceptado')).toBe(false)
     expect(esPendienteDeAccion('revisado_supervisor')).toBe(false)
     expect(esPendienteDeAccion('resuelto')).toBe(false)
+  })
+})
+
+// El turno es el que manda: trabajar de más no lo agranda, así que entrar antes
+// o salir después NO requiere que el supervisor mire nada. Lo que sí requiere
+// decisión es entrar tarde o irse antes.
+describe('cubreElTurno — turno de 07:00 a 19:00', () => {
+  const con = (entrada: string | null, salida: string | null) =>
+    cubreElTurno(fila({ entrada, salida }))
+
+  it('ficha justo', () => expect(con('07:00', '19:00')).toBe(true))
+  it('entra antes y sale después', () => expect(con('06:30', '19:30')).toBe(true))
+  it('se queda 3 horas de más', () => expect(con('07:00', '22:00')).toBe(true))
+  it('entra 30 minutos tarde', () => expect(con('07:30', '19:00')).toBe(false))
+  it('entra tarde y sale tarde: igual no cubre', () => expect(con('07:30', '19:30')).toBe(false))
+  it('se va una hora antes', () => expect(con('07:00', '18:00')).toBe(false))
+  it('sin fichaje no cubre', () => expect(con(null, null)).toBe(false))
+
+  it('unos minutos de margen no cuentan como tardanza', () => {
+    expect(con('07:04', '18:56')).toBe(true)
+  })
+})
+
+describe('cubreElTurno — turno nocturno 22:00 a 06:00', () => {
+  const nocturno = (entrada: string, salida: string) =>
+    cubreElTurno(fila({ horaInicioProg: '22:00', horaFinProg: '06:00', entrada, salida }))
+
+  it('ficha justo cruzando medianoche', () => expect(nocturno('22:00', '06:00')).toBe(true))
+  it('entra antes y sale después', () => expect(nocturno('21:45', '06:20')).toBe(true))
+  it('entra tarde', () => expect(nocturno('22:40', '06:00')).toBe(false))
+  it('se va antes de terminar', () => expect(nocturno('22:00', '05:00')).toBe(false))
+})
+
+describe('requiereRevision — la conformidad del vigilador no siempre alcanza', () => {
+  it('aceptado y cubriendo el turno: no se revisa', () => {
+    expect(requiereRevision(fila({ estadoControl: 'aceptado' }))).toBe(false)
+  })
+
+  it('aceptado habiéndose quedado de más: tampoco se revisa', () => {
+    expect(requiereRevision(fila({ estadoControl: 'aceptado', entrada: '06:30', salida: '22:00' }))).toBe(false)
+  })
+
+  it('aceptado pero entró tarde: sí se revisa', () => {
+    expect(requiereRevision(fila({ estadoControl: 'aceptado', entrada: '07:30' }))).toBe(true)
+  })
+
+  it('el caso que se escapaba: entra tarde y sale tarde, mismas horas', () => {
+    // 12 h reales = 12 h programadas, así que hoy cobraba completo y nadie lo miraba.
+    expect(requiereRevision(fila({ estadoControl: 'aceptado', entrada: '07:30', salida: '19:30' }))).toBe(true)
+  })
+
+  it('aceptado pero se fue antes: sí se revisa', () => {
+    expect(requiereRevision(fila({ estadoControl: 'aceptado', salida: '18:00' }))).toBe(true)
+  })
+
+  it('los estados abiertos siempre se revisan, cubran o no', () => {
+    expect(requiereRevision(fila())).toBe(true)
+    expect(requiereRevision(fila({ estadoControl: 'modificacion_solicitada' }))).toBe(true)
+    expect(requiereRevision(fila({ derivado: true }))).toBe(true)
+  })
+
+  it('ya revisado o resuelto no vuelve, aunque el fichaje no cubra', () => {
+    expect(requiereRevision(fila({ revisado: true, entrada: '07:30' }))).toBe(false)
+    expect(requiereRevision(fila({ solicitudEstado: 'resuelta', entrada: '07:30' }))).toBe(false)
   })
 })
 

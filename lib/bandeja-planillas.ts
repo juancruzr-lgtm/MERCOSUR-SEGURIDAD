@@ -54,6 +54,72 @@ export const ESTADOS_PENDIENTES: ReadonlySet<EstadoRevision> = new Set<EstadoRev
 
 export const esPendienteDeAccion = (e: EstadoRevision): boolean => ESTADOS_PENDIENTES.has(e)
 
+// ── Cobertura del turno ──────────────────────────────────────────────────────
+
+/**
+ * Margen para dar por cubierto un extremo del turno. Es el mismo umbral con el
+ * que calcAlertaEntrada marca una entrada como tardanza, para que la bandeja y
+ * las alertas no digan cosas distintas del mismo fichaje.
+ */
+export const TOLERANCIA_COBERTURA_MIN = 5
+
+const aMinutos = (h?: string | null): number | null => {
+  if (!h) return null
+  const [hh, mm] = h.split(':').map(Number)
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null
+  return hh * 60 + mm
+}
+
+/**
+ * ¿El fichaje cubre el turno completo? Entrar antes o salir después SÍ cubre:
+ * el turno es el que manda y quedarse de más no lo agranda. Lo que no cubre es
+ * entrar tarde o irse antes.
+ *
+ * Los turnos nocturnos (fin <= inicio) se resuelven igual que en
+ * calcularHorasLiquidables: la entrada de madrugada y la salida anterior al
+ * inicio pertenecen al día siguiente.
+ */
+export function cubreElTurno(
+  f: Pick<FilaBandejaMensual, 'horaInicioProg' | 'horaFinProg' | 'entrada' | 'salida'>,
+  toleranciaMin: number = TOLERANCIA_COBERTURA_MIN,
+): boolean {
+  const inicioProg = aMinutos(f.horaInicioProg)
+  const finProgCrudo = aMinutos(f.horaFinProg)
+  const entradaReal = aMinutos(f.entrada)
+  const salidaReal = aMinutos(f.salida)
+  if (inicioProg == null || finProgCrudo == null || entradaReal == null || salidaReal == null) return false
+
+  const nocturno = finProgCrudo <= inicioProg
+  const finProg = nocturno ? finProgCrudo + 1440 : finProgCrudo
+
+  let entrada = entradaReal
+  if (nocturno && entradaReal <= finProgCrudo) entrada += 1440
+  let salida = salidaReal
+  if (nocturno && salidaReal <= inicioProg) salida += 1440
+  if (salida < entrada) salida += 1440
+
+  return entrada <= inicioProg + toleranciaMin && salida >= finProg - toleranciaMin
+}
+
+/**
+ * ¿La fila espera que alguien haga algo?
+ *
+ * Además de los estados abiertos, entra acá una aceptada por el vigilador cuyo
+ * fichaje NO cubre el turno: entró tarde o se fue antes. La conformidad del
+ * vigilador no alcanza para cerrar eso — si llegó tarde por un problema real se
+ * cuenta el turno completo, y si llegó tarde de verdad corresponde descontar.
+ * Esa decisión es del supervisor.
+ *
+ * El caso que más se escapaba: entrar 30' tarde y salir 30' tarde da las mismas
+ * horas que lo programado, así que hoy nadie lo miraba nunca.
+ */
+export function requiereRevision(f: FilaBandejaMensual): boolean {
+  const estado = estadoRevision(f)
+  if (esPendienteDeAccion(estado)) return true
+  if (estado === 'aceptado') return !cubreElTurno(f)
+  return false
+}
+
 // ── Fila de la bandeja ───────────────────────────────────────────────────────
 
 export interface FilaBandejaMensual {
@@ -66,6 +132,10 @@ export interface FilaBandejaMensual {
   puestoId: string | null
   puesto: string
   horario: string
+  /** Horario programado. Es el que manda: trabajar de más no agranda el turno. */
+  horaInicioProg: string
+  horaFinProg: string
+  /** Horario efectivamente fichado. */
   entrada: string | null
   salida: string | null
   horas: number
@@ -134,7 +204,7 @@ export function filtrarFilasBandeja(
     if (f.conFichaje === 'no' && fila.tieneFichaje) return false
     if (f.salidaAutomatica === 'si' && !fila.salidaAutomatica) return false
     if (f.salidaAutomatica === 'no' && fila.salidaAutomatica) return false
-    if (f.soloPendientes && !esPendienteDeAccion(estado)) return false
+    if (f.soloPendientes && !requiereRevision(fila)) return false
     return true
   })
 }
@@ -156,9 +226,8 @@ export function resumenBandejaMensual(filas: FilaBandejaMensual[]): ResumenBande
 
   let pendientes = 0
   for (const fila of filas) {
-    const e = estadoRevision(fila)
-    porEstado[e] += 1
-    if (esPendienteDeAccion(e)) pendientes += 1
+    porEstado[estadoRevision(fila)] += 1
+    if (requiereRevision(fila)) pendientes += 1
   }
   return {
     total: filas.length,
