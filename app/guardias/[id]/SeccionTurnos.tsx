@@ -25,6 +25,8 @@ interface TurnoLegajo {
   puesto_id: string | null
   puesto_nombre: string | null
   tipo_cobertura: TipoCobertura
+  /** Turno de un objetivo de prueba: se muestra igual, pero marcado. */
+  objetivo_es_prueba?: boolean
 }
 
 interface RespuestaTurnos {
@@ -260,7 +262,22 @@ function TarjetaTurno({ turno }: { turno: TurnoLegajo }) {
 
       {/* Columna principal */}
       <div>
-        <div style={S.objetivo}>{turno.objetivo_nombre ?? '—'}</div>
+        <div style={S.objetivo}>
+          {turno.objetivo_nombre ?? '—'}
+          {turno.objetivo_es_prueba && (
+            <span
+              title="Objetivo de prueba: no cuenta para las horas del mes"
+              style={{
+                marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: .04,
+                textTransform: 'uppercase', color: '#f59e0b',
+                background: 'rgba(245,158,11,.12)', border: '1px solid rgba(245,158,11,.35)',
+                borderRadius: 4, padding: '1px 5px', verticalAlign: 'middle',
+              }}
+            >
+              Prueba
+            </span>
+          )}
+        </div>
         <div style={S.detalle}>
           <span>{formatearHora(turno.hora_inicio)} – {formatearHora(turno.hora_fin)}</span>
           {turno.puesto_nombre && <span>· {turno.puesto_nombre}</span>}

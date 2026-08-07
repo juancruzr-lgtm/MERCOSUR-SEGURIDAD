@@ -210,9 +210,12 @@ export async function GET(
   const turnosMap = new Map<string, { turno: any; tipo: TipoCobertura }>()
 
   for (const t of (turnosF1 ?? [])) {
-    // Excluir objetivos de prueba en todas las fuentes
-    if ((t.objetivo as any)?.es_prueba) continue
-
+    // Los objetivos de prueba NO se excluyen: si el turno está asignado a esta
+    // persona, tiene que verse en su legajo. Ocultarlo hacía que el legajo
+    // contradijera a la programación (el turno existía, estaba publicado, y
+    // acá no aparecía). Se marcan con objetivo_es_prueba para que la UI los
+    // distinga; las horas y la liquidación siguen saliendo de la planilla, que
+    // sí los deja fuera de los totales.
     const esProgramadoActual = t.guardia_id === empleadoId
     const eraOriginal = (t as any).guardia_original_id === empleadoId
 
@@ -264,7 +267,7 @@ export async function GET(
 
     const t = (r as any).turno
     if (!t || !t.id) continue
-    if ((t.objetivo as any)?.es_prueba) continue
+    // Igual que en la Fuente 1: los objetivos de prueba se marcan, no se ocultan.
     if (turnosMap.has(t.id)) continue  // ya clasificado por Fuente 1 con mayor detalle
 
     turnosMap.set(t.id, { turno: t, tipo: 'reemplazo' })
@@ -302,6 +305,10 @@ export async function GET(
     puesto_id:       t.puesto_id ?? null,
     puesto_nombre:   (t.puesto as any)?.nombre ?? null,
     tipo_cobertura:  tipo,
+    // Se informa en vez de ocultarse: el turno está asignado a esta persona y
+    // esconderlo hacía que su legajo no coincidiera con la programación. La UI
+    // lo muestra con una marca "Prueba".
+    objetivo_es_prueba: ((t.objetivo as any)?.es_prueba ?? false) as boolean,
   })
 
   return NextResponse.json({

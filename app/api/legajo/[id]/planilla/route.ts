@@ -253,14 +253,24 @@ export async function GET(
 
   const fechasConRegistro = new Set(filas.map(f => f.fecha))
 
-  // ── Turnos programados sin registro ────────────────────────────────────────
+  // ── Turnos programados sin registro (incluye los futuros) ──────────────────
+  // Son los turnos que el vigilador tiene por delante y todavía no fichó. Se
+  // listan con horas 0, así que no alteran las horas del mes: esas salen de
+  // conCobertura, que además excluye objetivos de prueba.
+  //
+  // El filtro por estado va por exclusión, no por lista blanca. Antes pedía
+  // ('cubierto','pendiente'): 'pendiente' no es un estado real de turnos y
+  // faltaba 'programado', que es con el que nacen TODOS los turnos que crea la
+  // programación. Por eso ningún turno programado aparecía nunca en la
+  // planilla. Se excluyen los estados sin obligación de cobertura, el mismo
+  // criterio que usa el resto del sistema (ESTADOS_SIN_OBLIGACION).
   const { data: turnosProgramados } = await admin.client
     .from('turnos')
     .select('id, fecha, hora_inicio, hora_fin, objetivo_id, tipo_evento, puesto_id, objetivo:objetivos(nombre), puesto:puestos(nombre)')
     .eq('guardia_id', empleadoId)
     .gte('fecha', desde)
     .lte('fecha', hasta)
-    .in('estado', ['cubierto', 'pendiente'])
+    .not('estado', 'in', '("reemplazado","anulado","cancelado")')
 
   for (const t of (turnosProgramados ?? [])) {
     if (fechasConRegistro.has(t.fecha)) continue
