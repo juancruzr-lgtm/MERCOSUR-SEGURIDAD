@@ -17,6 +17,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase, headersSesion } from '@/lib/supabase'
 import { Badge, btn, btnPrimary, btnSecondary } from '@/components/ui/base'
 import RondasSupervisionPanel from '@/components/rondas/RondasSupervisionPanel'
+import SelectorDiasMes from './SelectorDiasMes'
+import { fechasDeAtajo, rangoDeSeleccion } from '@/lib/calendario-mes'
 import styles from './CentroOperativoObjetivo.module.css'
 import {
   cargarLegajoObjetivo, cargarRondasObjetivo, derivarEstadoObjetivo,
@@ -42,7 +44,7 @@ import {
 } from '@/lib/asignacion-mensual'
 import type {
   EstadoAsignacion, FilaGrillaPosicion, FiltrosGrillaMensual,
-  PatronDias, PlanAsignacion, TurnoGrilla, VigiladorGrilla,
+  PlanAsignacion, TurnoGrilla, VigiladorGrilla,
 } from '@/lib/asignacion-mensual'
 import {
   ETIQUETA_GENERACION_CELDA, motivoBloqueoGeneracion,
@@ -231,11 +233,8 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // ── Modal: asignación por rango / por fila completa ──
   const [filaAsignando, setFilaAsignando] = useState<FilaGrillaPosicion | null>(null)
   const [modoFilaCompleta, setModoFilaCompleta] = useState(false)
-  const [rangoDesde, setRangoDesde] = useState('')
-  const [rangoHasta, setRangoHasta] = useState('')
+  const [rangoDias, setRangoDias] = useState<Set<string>>(new Set())
   const [rangoGuardia, setRangoGuardia] = useState('')
-  const [rangoPatron, setRangoPatron] = useState<PatronDias>('todos')
-  const [rangoExcluir, setRangoExcluir] = useState('')
   const [asignandoRango, setAsignandoRango] = useState(false)
   const [resultadoRango, setResultadoRango] = useState<string | null>(null)
 
@@ -371,26 +370,44 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     )
   }
 
+  /**
+   * Días de una fila que se pueden asignar al vigilador elegido. Sirve tanto
+   * para pintar el calendario como para el atajo "Fila completa": una sola
+   * definición de "este día se puede", en vez de dos que se desincronicen.
+   */
+  const estadoDiaAsignacion = (fila: FilaGrillaPosicion, guardiaId: string) => (fecha: string) => {
+    const t = fila.celdas.get(fecha)
+    if (!t) return { habilitado: false, nota: 'Sin turno ese día' }
+    if (!turnoVigente(t)) return { habilitado: false, nota: `Turno ${t.estado}` }
+    if (!esTurnoFuturo(t, hoy, horaActualStr)) return { habilitado: false, nota: 'Ya empezó o es pasado' }
+    if (t.guardia_id && t.guardia_id === guardiaId) return { habilitado: false, yaResuelto: true, nota: 'Ya asignado a este vigilador' }
+    if (t.guardia_id) return { habilitado: false, nota: `Asignado a ${t.guardia_nombre ?? 'otro vigilador'}` }
+    return { habilitado: true }
+  }
+
   const abrirRango = (fila: FilaGrillaPosicion, filaCompleta: boolean) => {
-    const fechas = [...fila.celdas.keys()].sort()
+    const guardia = sugeridoPorPuesto.get(fila.puesto_id) ?? ''
     setFilaAsignando(fila)
     setModoFilaCompleta(filaCompleta)
-    setRangoDesde(filaCompleta ? (fechas[0] ?? desdeMes) : desdeMes)
-    setRangoHasta(filaCompleta ? (fechas[fechas.length - 1] ?? hastaMes) : hastaMes)
-    setRangoGuardia(sugeridoPorPuesto.get(fila.puesto_id) ?? '')
-    setRangoPatron('todos')
-    setRangoExcluir('')
+    setRangoGuardia(guardia)
+    // "Fila completa" arranca con todo lo asignable ya marcado; "Rango" en
+    // blanco, para que el usuario elija.
+    setRangoDias(filaCompleta
+      ? new Set(fechasDeAtajo(mesMensual, 'todos', f => estadoDiaAsignacion(fila, guardia)(f).habilitado))
+      : new Set())
     setResultadoRango(null)
   }
 
-  const planRango: PlanAsignacion | null = filaAsignando && rangoGuardia
+  const rangoSeleccion = rangoDeSeleccion(rangoDias)
+
+  const planRango: PlanAsignacion | null = filaAsignando && rangoGuardia && rangoSeleccion
     ? planificarAsignacionRango({
         fila: filaAsignando,
-        desde: rangoDesde || desdeMes,
-        hasta: rangoHasta || hastaMes,
+        desde: rangoSeleccion.desde,
+        hasta: rangoSeleccion.hasta,
         guardiaId: rangoGuardia,
-        patron: rangoPatron,
-        excluir: rangoExcluir.split(',').map(s => s.trim()).filter(Boolean),
+        patron: 'seleccion',
+        diasSeleccionados: [...rangoDias],
         fechaActual: hoy,
         horaActual: horaActualStr,
         turnosVigilador: turnosGrilla.filter(t => t.guardia_id === rangoGuardia),
@@ -492,53 +509,63 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const [genPuesto, setGenPuesto] = useState('')
   const [genHoraInicio, setGenHoraInicio] = useState('')
   const [genHoraFin, setGenHoraFin] = useState('')
-  const [genDesde, setGenDesde] = useState('')
-  const [genHasta, setGenHasta] = useState('')
-  const [genPatron, setGenPatron] = useState<PatronDias>('todos')
-  const [genExcluir, setGenExcluir] = useState('')
+  const [genDias, setGenDias] = useState<Set<string>>(new Set())
   const [generandoTurnos, setGenerandoTurnos] = useState(false)
   const [resultadoGenerar, setResultadoGenerar] = useState<string | null>(null)
   const [errorGenerar, setErrorGenerar] = useState('')
-
-  // El rango arranca desde hoy (no desde el 1°) para no ofrecer por defecto un
-  // montón de días pasados que igual no se pueden crear.
-  const desdeSugerido = hoy > desdeMes && hoy <= hastaMes ? hoy : desdeMes
 
   const abrirGenerar = (fila?: FilaGrillaPosicion) => {
     setGenPuesto(fila?.puesto_id ?? '')
     setGenHoraInicio(fila?.hora_inicio ?? '')
     setGenHoraFin(fila?.hora_fin ?? '')
-    setGenDesde(desdeSugerido)
-    setGenHasta(hastaMes)
-    setGenPatron('todos')
-    setGenExcluir('')
+    setGenDias(new Set())
     setResultadoGenerar(null)
     setErrorGenerar('')
     setModalGenerar(true)
   }
 
+  const turnosParaGeneracion = turnosMensual.map(t => ({
+    puesto_id: t.puesto_id, fecha: t.fecha,
+    hora_inicio: t.hora_inicio, hora_fin: t.hora_fin,
+    estado: t.estado, tipo_evento: t.tipo_evento,
+  }))
+
+  // Estado de cada día del calendario: se ve por qué un día no se puede elegir
+  // (pasado, o ya tiene turno en esa posición y horario) en vez de descubrirlo
+  // al confirmar. Se apoya en el mismo planificador que arma el plan final,
+  // así el calendario y el resumen nunca dicen cosas distintas.
+  const estadoDiaGeneracion = (fecha: string) => {
+    if (!genPuesto || !genHoraInicio || !genHoraFin) return { habilitado: false }
+    const [fila] = planificarGeneracionGrilla({
+      puestoId: genPuesto, horaInicio: genHoraInicio, horaFin: genHoraFin,
+      desde: fecha, hasta: fecha, patron: 'todos',
+      turnosExistentes: turnosParaGeneracion,
+      fechaActual: hoy, horaActual: horaActualStr,
+    }).filas
+    if (!fila) return { habilitado: false }
+    if (fila.estado === 'ya_existe') return { habilitado: false, yaResuelto: true, nota: 'Ya hay un turno en esta posición y horario' }
+    if (fila.estado === 'fecha_pasada') return { habilitado: false, nota: 'Fecha pasada' }
+    return { habilitado: true, nota: fila.detalle ?? undefined }
+  }
+
+  const rangoGen = rangoDeSeleccion(genDias)
   const bloqueoGenerar = motivoBloqueoGeneracion({
     puestoId: genPuesto, horaInicio: genHoraInicio, horaFin: genHoraFin,
-    desde: genDesde, hasta: genHasta,
-  })
+    desde: rangoGen?.desde, hasta: rangoGen?.hasta,
+  }) ?? (genDias.size === 0 ? 'Elegí al menos un día en el calendario.' : null)
 
-  // El plan se calcula contra los turnos del mes ya cargados. Las fechas del
-  // formulario están acotadas a ese mes justamente para que lo que se muestra
-  // acá coincida con lo que la RPC va a encontrar.
-  const planGenerar: PlanGeneracionGrilla | null = bloqueoGenerar ? null
+  // El plan se calcula contra los turnos del mes ya cargados; el calendario
+  // solo ofrece días de ese mes para que coincida con lo que verá la RPC.
+  const planGenerar: PlanGeneracionGrilla | null = (bloqueoGenerar || !rangoGen) ? null
     : planificarGeneracionGrilla({
         puestoId: genPuesto,
         horaInicio: genHoraInicio,
         horaFin: genHoraFin,
-        desde: genDesde,
-        hasta: genHasta,
-        patron: genPatron,
-        excluir: genExcluir.split(',').map(s => s.trim()).filter(Boolean),
-        turnosExistentes: turnosMensual.map(t => ({
-          puesto_id: t.puesto_id, fecha: t.fecha,
-          hora_inicio: t.hora_inicio, hora_fin: t.hora_fin,
-          estado: t.estado, tipo_evento: t.tipo_evento,
-        })),
+        desde: rangoGen.desde,
+        hasta: rangoGen.hasta,
+        patron: 'seleccion',
+        diasSeleccionados: [...genDias],
+        turnosExistentes: turnosParaGeneracion,
         fechaActual: hoy,
         horaActual: horaActualStr,
       })
@@ -1546,28 +1573,16 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
               <div style={{ fontSize:11, color:'#60a5fa', marginBottom:8 }}>Turno nocturno: termina al día siguiente.</div>
             )}
 
-            <div style={{ display:'flex', gap:8, marginBottom:8 }}>
-              <div style={{ flex:1 }}>
-                <label style={{ fontSize:11, color:'#64748b' }}>Desde</label>
-                <input type="date" min={desdeMes} max={hastaMes} style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={genDesde} onChange={e => setGenDesde(e.target.value)} />
+            <label style={{ fontSize:11, color:'#64748b', display:'block', marginBottom:6 }}>Días del mes</label>
+            {genPuesto && genHoraInicio && genHoraFin ? (
+              <SelectorDiasMes mes={mesMensual} seleccionadas={genDias} onCambio={setGenDias} estadoDia={estadoDiaGeneracion} />
+            ) : (
+              <div style={{ fontSize:12, color:'#64748b', background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'12px 14px', marginBottom:8 }}>
+                Elegí la posición y el horario para ver el calendario.
               </div>
-              <div style={{ flex:1 }}>
-                <label style={{ fontSize:11, color:'#64748b' }}>Hasta</label>
-                <input type="date" min={desdeMes} max={hastaMes} style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={genHasta} onChange={e => setGenHasta(e.target.value)} />
-              </div>
-            </div>
+            )}
 
-            <label style={{ fontSize:11, color:'#64748b' }}>Días</label>
-            <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={genPatron} onChange={e => setGenPatron(e.target.value as PatronDias)}>
-              <option value="todos">Todos los días</option>
-              <option value="lun_vie">Lunes a viernes</option>
-              <option value="sab_dom">Sábados y domingos</option>
-            </select>
-
-            <label style={{ fontSize:11, color:'#64748b' }}>Excluir fechas puntuales (YYYY-MM-DD separadas por coma)</label>
-            <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12, marginTop:4, marginBottom:8 }} value={genExcluir} onChange={e => setGenExcluir(e.target.value)} placeholder={`${desdeSugerido}, ${hastaMes}`} />
-
-            {bloqueoGenerar && <div style={{ fontSize:12, color:'#f59e0b', marginBottom:10 }}>{bloqueoGenerar}</div>}
+            {bloqueoGenerar && <div style={{ fontSize:12, color:'#f59e0b', margin:'10px 0' }}>{bloqueoGenerar}</div>}
 
             {planGenerar && (
               <div style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:10, marginBottom:10, fontSize:12 }}>
@@ -1614,38 +1629,42 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             </div>
             <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>{filaAsignando.puesto_nombre} · {filaAsignando.hora_inicio}–{filaAsignando.hora_fin}</div>
 
-            {!modoFilaCompleta && (
-              <div style={{ display:'flex', gap:8, marginBottom:8 }}>
-                <div style={{ flex:1 }}>
-                  <label style={{ fontSize:11, color:'#64748b' }}>Asignar desde</label>
-                  <input type="date" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={rangoDesde} onChange={e => setRangoDesde(e.target.value)} />
-                </div>
-                <div style={{ flex:1 }}>
-                  <label style={{ fontSize:11, color:'#64748b' }}>Asignar hasta</label>
-                  <input type="date" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12 }} value={rangoHasta} onChange={e => setRangoHasta(e.target.value)} />
-                </div>
-              </div>
-            )}
-
             <label style={{ fontSize:11, color:'#64748b' }}>Vigilador</label>
-            <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={rangoGuardia} onChange={e => setRangoGuardia(e.target.value)}>
+            <select
+              style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10 }}
+              value={rangoGuardia}
+              onChange={e => {
+                const nuevo = e.target.value
+                setRangoGuardia(nuevo)
+                // Al cambiar de vigilador cambia qué días se pueden asignar:
+                // en "Fila completa" se rehace la selección, y en cualquier
+                // caso se descartan los que ya no correspondan.
+                const puede = (f: string) => estadoDiaAsignacion(filaAsignando, nuevo)(f).habilitado
+                setRangoDias(modoFilaCompleta
+                  ? new Set(fechasDeAtajo(mesMensual, 'todos', puede))
+                  : new Set([...rangoDias].filter(puede)))
+              }}
+            >
               <option value="">Seleccionar…</option>
               {vigiladoresActivos.map(v => (
                 <option key={v.id} value={v.id}>{v.nombre}{v.id === sugeridoPorPuesto.get(filaAsignando.puesto_id) ? ' (sugerido)' : ''}</option>
               ))}
             </select>
 
-            {!modoFilaCompleta && (
+            {rangoGuardia ? (
               <>
-                <label style={{ fontSize:11, color:'#64748b' }}>Días</label>
-                <select style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={rangoPatron} onChange={e => setRangoPatron(e.target.value as PatronDias)}>
-                  <option value="todos">Todos los días</option>
-                  <option value="lun_vie">Lunes a viernes</option>
-                  <option value="sab_dom">Sábados y domingos</option>
-                </select>
-                <label style={{ fontSize:11, color:'#64748b' }}>Excluir fechas puntuales (YYYY-MM-DD separadas por coma)</label>
-                <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12, marginTop:4, marginBottom:8 }} value={rangoExcluir} onChange={e => setRangoExcluir(e.target.value)} placeholder="2026-08-15, 2026-08-16" />
+                <label style={{ fontSize:11, color:'#64748b', display:'block', marginBottom:6 }}>Días a asignar</label>
+                <SelectorDiasMes
+                  mes={mesMensual}
+                  seleccionadas={rangoDias}
+                  onCambio={setRangoDias}
+                  estadoDia={estadoDiaAsignacion(filaAsignando, rangoGuardia)}
+                />
               </>
+            ) : (
+              <div style={{ fontSize:12, color:'#64748b', background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'12px 14px', marginBottom:8 }}>
+                Elegí el vigilador para ver qué días se le pueden asignar.
+              </div>
             )}
 
             {planRango && (
