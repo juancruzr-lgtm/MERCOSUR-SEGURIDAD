@@ -66,7 +66,15 @@ export interface FilaGrillaPosicion {
   puesto_nombre: string
   hora_inicio: string
   hora_fin: string
-  celdas: Map<string, TurnoGrilla> // fecha → turno
+  /**
+   * fecha → turnos de ese día en esta posición y horario.
+   *
+   * Es una lista, no un turno suelto: una misma posición puede tener más de un
+   * turno el mismo día en el mismo horario (un puesto doblado, o un refuerzo).
+   * Cuando esto era un único valor, el segundo turno pisaba al primero y
+   * desaparecía de la grilla aunque siguiera existiendo en la Vista Lista.
+   */
+  celdas: Map<string, TurnoGrilla[]>
 }
 
 export interface GrillaMensual {
@@ -113,7 +121,14 @@ export function armarGrillaMensual(turnos: TurnoGrilla[], desde: string, hasta: 
       }
       filasPorClave.set(clave, fila)
     }
-    fila.celdas.set(t.fecha, t)
+    fila.celdas.set(t.fecha, [...(fila.celdas.get(t.fecha) ?? []), t])
+  }
+  // Orden estable dentro del día: primero los que ya tienen vigilador.
+  for (const fila of filasPorClave.values()) {
+    for (const [fecha, lista] of fila.celdas) {
+      fila.celdas.set(fecha, [...lista].sort((a, b) =>
+        (a.guardia_nombre ?? '').localeCompare(b.guardia_nombre ?? '') || a.id.localeCompare(b.id)))
+    }
   }
   const filas = [...filasPorClave.values()].sort((a, b) =>
     a.hora_inicio.localeCompare(b.hora_inicio) || a.puesto_nombre.localeCompare(b.puesto_nombre))
@@ -358,22 +373,26 @@ export function planificarAsignacionRango(params: {
   const turnosVigilador = params.turnosVigilador ?? []
 
   const filas: FilaPlanAsignacion[] = []
-  for (const [fecha, turno] of fila.celdas) {
+  // Un día puede tener más de un turno en la misma posición y horario: cada
+  // uno se planifica por separado y produce su propia fila.
+  for (const [fecha, turnosDelDia] of fila.celdas) {
     if (fecha < desde || fecha > hasta) continue
-    if (excluidas.has(fecha)) { filas.push({ turno_id: turno.id, fecha, estado: 'omitido', motivo: 'excluido' }); continue }
-    if (!enPatron(fecha)) { filas.push({ turno_id: turno.id, fecha, estado: 'omitido', motivo: 'fuera_de_rango' }); continue }
-    if (!esTurnoFuturo(turno, fechaActual, horaActual)) {
-      filas.push({ turno_id: turno.id, fecha, estado: 'omitido', motivo: 'pasado_o_iniciado' }); continue
-    }
-    if (turno.guardia_id) {
-      if (turno.guardia_id === guardiaId) {
-        filas.push({ turno_id: turno.id, fecha, estado: 'ya_asignado_mismo', motivo: null })
-      } else {
-        filas.push({ turno_id: turno.id, fecha, estado: 'omitido', motivo: 'ya_asignado_otro' })
+    for (const turno of turnosDelDia) {
+      if (excluidas.has(fecha)) { filas.push({ turno_id: turno.id, fecha, estado: 'omitido', motivo: 'excluido' }); continue }
+      if (!enPatron(fecha)) { filas.push({ turno_id: turno.id, fecha, estado: 'omitido', motivo: 'fuera_de_rango' }); continue }
+      if (!esTurnoFuturo(turno, fechaActual, horaActual)) {
+        filas.push({ turno_id: turno.id, fecha, estado: 'omitido', motivo: 'pasado_o_iniciado' }); continue
       }
-      continue
+      if (turno.guardia_id) {
+        if (turno.guardia_id === guardiaId) {
+          filas.push({ turno_id: turno.id, fecha, estado: 'ya_asignado_mismo', motivo: null })
+        } else {
+          filas.push({ turno_id: turno.id, fecha, estado: 'omitido', motivo: 'ya_asignado_otro' })
+        }
+        continue
+      }
+      filas.push({ turno_id: turno.id, fecha, estado: 'valido', motivo: null })
     }
-    filas.push({ turno_id: turno.id, fecha, estado: 'valido', motivo: null })
   }
   filas.sort((a, b) => a.fecha.localeCompare(b.fecha))
 

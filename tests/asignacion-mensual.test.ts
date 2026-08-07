@@ -50,8 +50,21 @@ describe('armarGrillaMensual', () => {
   it('turnos programados visibles en la grilla (celda por fecha)', () => {
     const g = armarGrillaMensual(turnosNSER(), '2026-08-07', '2026-08-31')
     const filaV1 = g.filas.find(f => f.puesto_nombre === 'Vigilador 1')!
-    expect(filaV1.celdas.get('2026-08-10')?.id).toBe('v1-2026-08-10')
+    expect(filaV1.celdas.get('2026-08-10')?.map(t => t.id)).toEqual(['v1-2026-08-10'])
     expect(filaV1.celdas.size).toBe(25)
+  })
+
+  // Un puesto doblado: dos turnos el mismo día, misma posición y horario. Antes
+  // el segundo pisaba al primero y desaparecía de la grilla, aunque siguiera
+  // apareciendo en la Vista Lista.
+  it('dos turnos el mismo día en la misma posición y horario: no se pisan', () => {
+    const base = turnosNSER().filter(t => t.puesto_nombre === 'Vigilador 1')
+    const extra = { ...base[0], id: 'extra', guardia_id: 'g9', guardia_nombre: 'Otro, Vigilador' }
+    const g = armarGrillaMensual([...base, extra], '2026-08-01', '2026-08-31')
+    const fila = g.filas.find(f => f.puesto_nombre === 'Vigilador 1')!
+    const delDia = fila.celdas.get(base[0].fecha) ?? []
+    expect(delDia).toHaveLength(2)
+    expect(delDia.map(t => t.id).sort()).toEqual([base[0].id, 'extra'].sort())
   })
 })
 

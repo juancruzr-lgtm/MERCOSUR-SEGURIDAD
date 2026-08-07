@@ -372,13 +372,25 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
    * definición de "este día se puede", en vez de dos que se desincronicen.
    */
   const estadoDiaAsignacion = (fila: FilaGrillaPosicion, guardiaId: string) => (fecha: string) => {
-    const t = fila.celdas.get(fecha)
-    if (!t) return { habilitado: false, nota: 'Sin turno ese día' }
-    if (!turnoVigente(t)) return { habilitado: false, nota: `Turno ${t.estado}` }
-    if (!esTurnoFuturo(t, hoy, horaActualStr)) return { habilitado: false, nota: 'Ya empezó o es pasado' }
-    if (t.guardia_id && t.guardia_id === guardiaId) return { habilitado: false, yaResuelto: true, nota: 'Ya asignado a este vigilador' }
-    if (t.guardia_id) return { habilitado: false, nota: `Asignado a ${t.guardia_nombre ?? 'otro vigilador'}` }
-    return { habilitado: true }
+    // Un día puede tener varios turnos en la misma posición y horario: alcanza
+    // con que UNO sea asignable para poder elegir el día.
+    const delDia = fila.celdas.get(fecha) ?? []
+    if (delDia.length === 0) return { habilitado: false, nota: 'Sin turno ese día' }
+
+    const libre = delDia.find(t => turnoVigente(t) && esTurnoFuturo(t, hoy, horaActualStr) && !t.guardia_id)
+    if (libre) {
+      return delDia.length > 1
+        ? { habilitado: true, nota: `${delDia.length} turnos ese día: se asigna el que está sin cubrir` }
+        : { habilitado: true }
+    }
+    if (delDia.some(t => t.guardia_id === guardiaId)) {
+      return { habilitado: false, yaResuelto: true, nota: 'Ya asignado a este vigilador' }
+    }
+    const conOtro = delDia.find(t => t.guardia_id)
+    if (conOtro) return { habilitado: false, nota: `Asignado a ${conOtro.guardia_nombre ?? 'otro vigilador'}` }
+    const anulado = delDia.find(t => !turnoVigente(t))
+    if (anulado) return { habilitado: false, nota: `Turno ${anulado.estado}` }
+    return { habilitado: false, nota: 'Ya empezó o es pasado' }
   }
 
   const abrirRango = (fila: FilaGrillaPosicion, filaCompleta: boolean) => {
@@ -441,15 +453,21 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const [genHoraInicio, setGenHoraInicio] = useState('')
   const [genHoraFin, setGenHoraFin] = useState('')
   const [genDias, setGenDias] = useState<Set<string>>(new Set())
+  // Vigilador opcional: si se elige, los turnos quedan asignados en el mismo
+  // paso. Vacío = se crean sin cubrir y se asignan después desde la grilla.
+  const [genGuardia, setGenGuardia] = useState('')
   const [generandoTurnos, setGenerandoTurnos] = useState(false)
   const [resultadoGenerar, setResultadoGenerar] = useState<string | null>(null)
   const [errorGenerar, setErrorGenerar] = useState('')
 
   const abrirGenerar = (fila?: FilaGrillaPosicion) => {
-    setGenPuesto(fila?.puesto_id ?? '')
+    const puesto = fila?.puesto_id ?? ''
+    setGenPuesto(puesto)
     setGenHoraInicio(fila?.hora_inicio ?? '')
     setGenHoraFin(fila?.hora_fin ?? '')
     setGenDias(new Set())
+    // Arranca con el guardia habitual de la posición, si hay uno configurado.
+    setGenGuardia(puesto ? (sugeridoPorPuesto.get(puesto) ?? '') : '')
     setResultadoGenerar(null)
     setErrorGenerar('')
     setModalGenerar(true)
@@ -514,10 +532,26 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       p_hora_fin: genHoraFin,
       p_fechas: planGenerar.fechas_a_crear,
     })
+    if (error) { setGenerandoTurnos(false); setErrorGenerar(error.message); return }
+
+    const r = data as ResultadoGeneracionGrilla
+    let resumen = resumenResultadoGeneracion(r)
+
+    // Si se eligió vigilador, se asignan los recién creados en el mismo paso.
+    // Va por la RPC de asignación de siempre —que valida superposiciones y
+    // audita— en vez de meter el vigilador en la creación: así crear y asignar
+    // siguen siendo dos operaciones trazables por separado, pero un solo clic.
+    if (genGuardia && r.turnos_creados.length > 0) {
+      const res = await ejecutarAsignacion(r.turnos_creados, genGuardia, true)
+      resumen += res.ok
+        ? ` · ${res.resumen}`
+        : ` · turnos creados, pero no se pudo asignar: ${res.error}`
+    } else {
+      await cargarMensual()
+    }
+
     setGenerandoTurnos(false)
-    if (error) { setErrorGenerar(error.message); return }
-    setResultadoGenerar(`✅ ${resumenResultadoGeneracion(data as ResultadoGeneracionGrilla)}`)
-    await cargarMensual()
+    setResultadoGenerar(`✅ ${resumen}`)
   }
 
   // ── Posiciones operativas: alta, edición, duplicación, desactivación ──
@@ -1151,36 +1185,45 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                               </div>
                             </td>
                             {grillaMensual.fechas.map(f => {
-                              const t = fila.celdas.get(f)
-                              if (!t || !idsVisibles.has(t.id)) return <td key={f} style={{ borderBottom:'1px solid #0f172a', padding:4 }} />
-                              const futuro = esTurnoFuturo(t, hoy, horaActualStr)
-                              const conConflicto = conflictosGrilla.has(t.id)
-                              const est = estadoAsignacion(t)
-                              // Un turno anulado no debe leerse como uno vigente: pierde el
-                              // color de estado y se muestra tachado.
-                              const anulado = !turnoVigente(t)
-                              const colorFondo = anulado ? 'rgba(100,116,139,.07)'
-                                : conConflicto ? 'rgba(239,68,68,.15)'
-                                : est === 'asignado' ? 'rgba(16,185,129,.1)' : 'rgba(148,163,184,.08)'
-                              const colorTexto = anulado ? '#64748b'
-                                : conConflicto ? '#ef4444' : est === 'asignado' ? '#10b981' : '#94a3b8'
+                              // Puede haber más de un turno ese día en la misma
+                              // posición y horario (puesto doblado): se apilan.
+                              const delDia = (fila.celdas.get(f) ?? []).filter(t => idsVisibles.has(t.id))
+                              if (delDia.length === 0) return <td key={f} style={{ borderBottom:'1px solid #0f172a', padding:4 }} />
                               return (
                                 <td key={f} style={{ borderBottom:'1px solid #0f172a', padding:2, textAlign:'center' }}>
-                                  <button
-                                    type="button"
-                                    disabled={!futuro}
-                                    onClick={() => futuro && abrirCelda(t)}
-                                    title={anulado ? `Turno ${t.estado} — clic para reactivarlo` : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
-                                    style={{
-                                      width:'100%', minWidth:48, padding:'5px 3px', borderRadius:6, fontSize:10.5,
-                                      background: colorFondo, color: colorTexto,
-                                      border: conConflicto && !anulado ? '1px solid rgba(239,68,68,.4)' : anulado ? '1px dashed #334155' : '1px solid transparent',
-                                      textDecoration: anulado ? 'line-through' : 'none',
-                                      cursor: futuro ? 'pointer' : 'default', opacity: futuro ? 1 : 0.55,
-                                    }}
-                                  >
-                                    {t.guardia_nombre ? t.guardia_nombre.split(',')[0] : '—'}
-                                  </button>
+                                  <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                                    {delDia.map(t => {
+                                      const futuro = esTurnoFuturo(t, hoy, horaActualStr)
+                                      const conConflicto = conflictosGrilla.has(t.id)
+                                      const est = estadoAsignacion(t)
+                                      // Un turno anulado no debe leerse como uno vigente: pierde
+                                      // el color de estado y se muestra tachado.
+                                      const anulado = !turnoVigente(t)
+                                      const colorFondo = anulado ? 'rgba(100,116,139,.07)'
+                                        : conConflicto ? 'rgba(239,68,68,.15)'
+                                        : est === 'asignado' ? 'rgba(16,185,129,.1)' : 'rgba(148,163,184,.08)'
+                                      const colorTexto = anulado ? '#64748b'
+                                        : conConflicto ? '#ef4444' : est === 'asignado' ? '#10b981' : '#94a3b8'
+                                      return (
+                                        <button
+                                          key={t.id}
+                                          type="button"
+                                          disabled={!futuro}
+                                          onClick={() => futuro && abrirCelda(t)}
+                                          title={anulado ? `Turno ${t.estado} — clic para reactivarlo` : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
+                                          style={{
+                                            width:'100%', minWidth:48, padding:'5px 3px', borderRadius:6, fontSize:10.5,
+                                            background: colorFondo, color: colorTexto,
+                                            border: conConflicto && !anulado ? '1px solid rgba(239,68,68,.4)' : anulado ? '1px dashed #334155' : '1px solid transparent',
+                                            textDecoration: anulado ? 'line-through' : 'none',
+                                            cursor: futuro ? 'pointer' : 'default', opacity: futuro ? 1 : 0.55,
+                                          }}
+                                        >
+                                          {t.guardia_nombre ? t.guardia_nombre.split(',')[0] : '—'}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
                                 </td>
                               )
                             })}
@@ -1392,6 +1435,23 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             {genHoraInicio && genHoraFin && genHoraFin < genHoraInicio && (
               <div style={{ fontSize:11, color:'#60a5fa', marginBottom:8 }}>Turno nocturno: termina al día siguiente.</div>
             )}
+
+            <label style={{ fontSize:11, color:'#64748b' }}>Vigilador (opcional)</label>
+            <select
+              style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4 }}
+              value={genGuardia}
+              onChange={e => setGenGuardia(e.target.value)}
+            >
+              <option value="">Dejar sin asignar</option>
+              {vigiladoresActivos.map(v => (
+                <option key={v.id} value={v.id}>{v.nombre}{v.id === sugeridoPorPuesto.get(genPuesto) ? ' (habitual)' : ''}</option>
+              ))}
+            </select>
+            <div style={{ fontSize:11, color:'#64748b', margin:'4px 0 10px' }}>
+              {genGuardia
+                ? 'Los turnos se crean y quedan asignados a esta persona.'
+                : 'Los turnos se crean sin cubrir: los asignás después desde la grilla.'}
+            </div>
 
             <label style={{ fontSize:11, color:'#64748b', display:'block', marginBottom:6 }}>Días del mes</label>
             {genPuesto && genHoraInicio && genHoraFin ? (
