@@ -1171,9 +1171,19 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                       <thead>
                         <tr>
                           <th style={{ position:'sticky', left:0, top:0, zIndex:2, background:'#111827', textAlign:'left', padding:'6px 8px', color:'#64748b', fontSize:10, textTransform:'uppercase', borderBottom:'1px solid #1e2d42', minWidth:170 }}>Posición · Horario</th>
-                          {grillaMensual.fechas.map(f => (
-                            <th key={f} style={{ position:'sticky', top:0, background:'#111827', textAlign:'center', padding:'4px 6px', color:'#64748b', fontSize:10, borderBottom:'1px solid #1e2d42', minWidth:52 }}>{f.slice(8, 10)}</th>
-                          ))}
+                          {/* Día de la semana sobre el número: sin él hay que
+                              contar a mano para saber qué celda es sábado. Los
+                              fines de semana van resaltados. */}
+                          {grillaMensual.fechas.map(f => {
+                            const dia = diaSemanaCorto(f)
+                            const finDeSemana = dia === 'Sáb' || dia === 'Dom'
+                            return (
+                              <th key={f} style={{ position:'sticky', top:0, background:'#111827', textAlign:'center', padding:'4px 6px', color: finDeSemana ? '#94a3b8' : '#64748b', fontSize:10, borderBottom:'1px solid #1e2d42', minWidth:52, fontWeight: finDeSemana ? 700 : 400 }}>
+                                <div style={{ fontSize:9, letterSpacing:.3, textTransform:'uppercase' }}>{dia}</div>
+                                <div style={{ fontSize:11 }}>{f.slice(8, 10)}</div>
+                              </th>
+                            )
+                          })}
                         </tr>
                       </thead>
                       <tbody>

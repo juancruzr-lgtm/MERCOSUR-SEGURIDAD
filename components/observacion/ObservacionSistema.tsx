@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
+import { formatHora24 } from '@/lib/formato'
 
 // ── Paleta y helpers de estilo ────────────────────────────────────────────────
 
@@ -577,7 +578,7 @@ function TabResumen() {
         <div>
           <div style={{ fontSize: 18, fontWeight: 900, fontFamily: FONT, color: sem.color }}>{sem.label}</div>
           <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>
-            Generado {haceQuanto(data.generado_en)} · {new Date(data.generado_en ?? '').toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
+            Generado {haceQuanto(data.generado_en)} · {formatHora24(data.generado_en ?? '')}
           </div>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 32, flexWrap: 'wrap' }}>

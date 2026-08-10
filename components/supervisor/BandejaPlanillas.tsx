@@ -33,6 +33,7 @@ import {
 } from '@/lib/primer-control'
 import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud } from '@/lib/primer-control'
 import { limitesDelMes } from '@/lib/calendario-mes'
+import { formatFechaHora } from '@/lib/formato'
 import {
   ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, cubreElTurno, etiquetaDiferencia,
   estadoRevision, etiquetaResumenMes, filtrarFilasBandeja, planCorreccionHorario,
@@ -595,7 +596,7 @@ export default function BandejaPlanillas({
                 )}
                 {(auditoria.get(f.registroId) ?? []).map((a: any) => (
                   <div key={a.id} style={{ fontSize: 12, color: '#cbd5e1', paddingBottom: 6, marginBottom: 6, borderBottom: '1px solid #16202e' }}>
-                    <span style={{ color: '#94a3b8' }}>{new Date(a.created_at).toLocaleString('es-AR')}</span>
+                    <span style={{ color: '#94a3b8' }}>{formatFechaHora(a.created_at)}</span>
                     {' · '}<strong>{ETIQUETA_CAMPO_AUDITORIA[a.campo] ?? a.campo}</strong>
                     {a.campo === 'reconocido_fuera_de_turno'
                       ? <span style={{ color: '#fbbf24' }}> · autorizado</span>

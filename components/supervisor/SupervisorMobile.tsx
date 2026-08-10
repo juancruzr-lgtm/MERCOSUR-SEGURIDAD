@@ -284,11 +284,20 @@ function infoTurnoAlerta(turno: { fecha: string; hora_inicio: string; hora_fin: 
   const mFin = String(fechaFinDate.getMonth() + 1).padStart(2, '0')
   const yFin = fechaFinDate.getFullYear()
   const fechaFinFmt = `${dFin}/${mFin}/${yFin}`
+  const ahora = new Date()
+  const [hi, mi] = turno.hora_inicio.split(':').map(Number)
+  const [hf, mf] = turno.hora_fin.split(':').map(Number)
+  const inicioDate = new Date(y, m - 1, d, hi, mi)
+  const finDate = new Date(fechaFinDate.getFullYear(), fechaFinDate.getMonth(), fechaFinDate.getDate(), hf, mf)
+  let estadoTemporal: 'en_curso' | 'finalizado' | 'antiguo' = 'antiguo'
+  if (ahora >= inicioDate && ahora <= finDate) estadoTemporal = 'en_curso'
+  else if (ahora > finDate && (ahora.getTime() - finDate.getTime()) < 86400000) estadoTemporal = 'finalizado'
   return {
     linea: `Turno: ${dia} ${fechaFmt}`,
     inicio: `Inicio: ${fechaFmt} ${horaCorta(turno.hora_inicio)}`,
     fin: `Fin: ${fechaFinFmt} ${horaCorta(turno.hora_fin)}`,
     nocturno: esNocturno,
+    estadoTemporal,
   }
 }
 
@@ -451,6 +460,13 @@ export default function SupervisorMobile({ user }: any) {
   // Coordina Control de Rondas con el panel de pausadas: son hermanos y sin
   // esto la pausa recién se veía al recargar la pantalla.
   const [pausasToken, setPausasToken] = useState(0)
+  // Fuerza el remontaje del panel de alertas de rondas desde el botón
+  // Actualizar de Inicio: el panel trae sus propias alertas al montarse y no
+  // expone una forma de recargarlo desde afuera.
+  const [recargaRondas, setRecargaRondas] = useState(0)
+  // Turno al que hay que llevar al supervisor desde una alerta, para que no
+  // tenga que buscarlo a mano en la lista.
+  const [turnoFoco, setTurnoFoco] = useState<string | null>(null)
   const [turnos, setTurnos] = useState<Turno[]>([])
   const [guardias, setGuardias] = useState<Usuario[]>([])
   const [supervisores, setSupervisores] = useState<Usuario[]>([])
@@ -825,6 +841,13 @@ export default function SupervisorMobile({ user }: any) {
 
   useEffect(() => {
     if (user?.id && user?.rol) void initTelemetry(user.id, user.rol)
+  }, [])
+
+  // Al abrir la vista, recalcular las alertas de rondas una vez para que el
+  // contador de Inicio refleje el estado real y no el de la última corrida.
+  useEffect(() => {
+    void recalcularAlertasRondas().then(() => setRecargaRondas(v => v + 1))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Puestos activos del objetivo elegido en el alta de turno. Definen si el
@@ -1614,13 +1637,13 @@ export default function SupervisorMobile({ user }: any) {
       .from('objetivos')
       .update(payload)
       .eq('id', objetivoEditando.id)
-      .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado')
+      .select('*')
       .single()
 
     if (updateError) {
       setError(updateError.message)
     } else if (data) {
-      setObjetivos(prev => prev.map(o => o.id === objetivoEditando.id ? data as Objetivo : o))
+      setObjetivos(prev => prev.map(o => o.id === objetivoEditando.id ? { ...o, ...data } as Objetivo : o))
       setObjetivoEditando(null)
     }
 
@@ -1717,6 +1740,55 @@ export default function SupervisorMobile({ user }: any) {
   const cerrarAccionAlerta = () => {
     setAccionAlerta(null)
     setFormIntervencion({ guardia_id:'', comentario:'', motivo:'' })
+  }
+
+  /**
+   * Recalcula las alertas de rondas antes de leerlas.
+   *
+   * Las alertas 'no_iniciada' no se derivan al consultar: son filas que crea
+   * evaluar_ronda_alertas(), y esa función solo se invocaba desde
+   * /api/push/cron, que no tiene ningún programador configurado (no hay crons
+   * en vercel.json, ni pg_cron, ni workflows). O sea que en la práctica nunca
+   * corría, y por eso el contador de Inicio mostraba menos rondas no iniciadas
+   * de las que correspondía.
+   *
+   * Se llama a la misma función autoritativa —no se calcula nada en paralelo—.
+   * Es idempotente: la tabla tiene un único por (ronda_base_id, turno_id,
+   * ventana_inicio, tipo) y el insert hace ON CONFLICT DO UPDATE, así que
+   * repetirla no duplica ni pisa intervenciones.
+   *
+   * Si la función no estuviera disponible, se sigue adelante y se muestran las
+   * alertas que ya existan: nunca deja la pantalla sin datos.
+   */
+  const recalcularAlertasRondas = async () => {
+    const { error } = await supabase.rpc('evaluar_ronda_alertas')
+    if (error && !/evaluar_ronda_alertas|schema cache|does not exist|permission/i.test(error.message)) {
+      console.error('[rondas] evaluar_ronda_alertas:', error.message)
+    }
+  }
+
+  /**
+   * Desde una alerta de puesto descubierto, lleva a ese mismo turno en la
+   * pestaña Turnos y lo resalta. Ahí ya está el selector "Asignar guardia" con
+   * el objetivo, la posición, la fecha y el horario del turno: no hace falta
+   * reconstruir el contexto ni existe una segunda vía de creación.
+   *
+   * Se ajusta el filtro de fecha al día del turno para que la lista lo
+   * contenga, incluso si el supervisor estaba mirando otro período.
+   */
+  const irACubrirTurno = (turno: Turno) => {
+    setFiltroTurnos('todos')
+    const filtroDelTurno = filtroFechaTurnosParaFecha(turno.fecha)
+    if (filtroDelTurno !== filtroFecha) {
+      setFiltroFecha(filtroDelTurno)
+      void cargarDatos(filtroDelTurno)
+    }
+    setTurnoFoco(turno.id)
+    setTab('turnos')
+    // Tras el cambio de pestaña, acercar la tarjeta del turno.
+    setTimeout(() => {
+      document.getElementById(`turno-${turno.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 120)
   }
 
   const recargarEstadoAlerta = async (turnoId: string) => {
@@ -2209,14 +2281,10 @@ export default function SupervisorMobile({ user }: any) {
           <div style={label}>Supervisor asignado</div>
           <div style={registroValue}>{nombreSupervisorGuardia(turno)}</div>
         </div>
-        <div>
-          <div style={label}>Jefe operativo</div>
-          <div style={registroValue}>{ultima?.jefe_operativo || JEFE_OPERATIVO}</div>
-        </div>
-        <div>
-          <div style={label}>Director técnico</div>
-          <div style={registroValue}>{ultima?.director_tecnico || DIRECTOR_TECNICO}</div>
-        </div>
+        {/* Jefe operativo y director técnico se siguen registrando en cada
+            intervención y quedan en la auditoría; dejan de mostrarse acá porque
+            son siempre los mismos en todas las alertas y no ayudan a resolver
+            el problema, que es para lo que sirve esta tarjeta. */}
         <div>
           <div style={label}>Supervisor que intervino</div>
           <div style={registroValue}>{supervisorIntervinoId ? nombreSupervisor(supervisorIntervinoId) : 'Sin intervención'}</div>
@@ -2428,6 +2496,9 @@ export default function SupervisorMobile({ user }: any) {
               <div style={muted}>{info.inicio}</div>
               <div style={muted}>{info.fin}</div>
               {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+              {info.estadoTemporal === 'en_curso' && <div style={{ ...muted, color: '#10b981', fontWeight: 600 }}>En curso</div>}
+              {info.estadoTemporal === 'finalizado' && <div style={{ ...muted, color: '#60a5fa' }}>Finalizado</div>}
+              {info.estadoTemporal === 'antiguo' && <div style={{ ...muted, color: '#ef4444' }}>Antiguo</div>}
             </>)})()}
             <div style={muted}>Tipo de alerta: {tipoAlerta}</div>
           </div>
@@ -2657,7 +2728,10 @@ export default function SupervisorMobile({ user }: any) {
     const gpsEgreso = resumenGps(registro, 'egreso')
 
     return (
-      <div key={turno.id} style={turnoCard}>
+      <div key={turno.id} id={`turno-${turno.id}`} style={{
+        ...turnoCard,
+        ...(turnoFoco === turno.id ? { border: '1px solid #f59e0b', boxShadow: '0 0 0 1px rgba(245,158,11,.35)' } : {}),
+      }}>
         <div style={turnoTop}>
           <div>
             <div style={horario}>{horaCorta(turno.hora_inicio)} a {horaCorta(turno.hora_fin)}</div>
@@ -2839,8 +2913,28 @@ export default function SupervisorMobile({ user }: any) {
           <>
             {tab === 'inicio' && (
               <section>
-                <div style={screenTitle}>Inicio</div>
-                <div style={dateText}>Bandeja operativa · {fechaDDMMYYYY(hoy)}</div>
+                <div style={{ display:'flex', alignItems:'flex-start', gap:12, flexWrap:'wrap' }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={screenTitle}>Inicio</div>
+                    <div style={dateText}>Bandeja operativa · {fechaDDMMYYYY(hoy)}</div>
+                  </div>
+                  {/* Recarga el estado operativo sin F5 ni salir de la pantalla:
+                      cargarDatos() vuelve a traer turnos, objetivos, guardias,
+                      supervisiones y zonas, y el cambio de recargaRondas remonta
+                      el panel de rondas, que trae sus propias alertas. */}
+                  <button
+                    type="button"
+                    onClick={() => { void cargarDatos(); void recalcularAlertasRondas().then(() => setRecargaRondas(v => v + 1)) }}
+                    disabled={loading}
+                    style={{
+                      background:'#1e293b', border:'1px solid #334155', borderRadius:10,
+                      color: loading ? '#64748b' : '#e2e8f0', padding:'8px 14px', fontSize:13,
+                      cursor: loading ? 'default' : 'pointer', minHeight:40, flex:'none',
+                    }}
+                  >
+                    {loading ? 'Actualizando…' : '↻ Actualizar'}
+                  </button>
+                </div>
 
                 <div style={statsGrid}>
                   <div style={{ ...statCard, cursor:'pointer', borderTop:`3px solid ${resumen.descubiertos > 0 ? '#ef4444' : '#334155'}` }} onClick={() => { setFiltroTurnos('descubierto'); setTab('turnos') }}>
@@ -2868,7 +2962,12 @@ export default function SupervisorMobile({ user }: any) {
                     <strong style={{ color: turnosConTardanzaPendientes.length > 0 ? '#f59e0b' : '#e2e8f0' }}>{turnosConTardanzaPendientes.length}</strong>
                     <span>Tardanzas</span>
                   </div>
-                  <div style={{ ...statCard, borderTop:'3px solid #334155' }}>
+                  {/* Lleva a Turnos con el período de hoy, como el resto de las
+                      tarjetas: antes se veía igual pero no era accionable. */}
+                  <div
+                    style={{ ...statCard, cursor:'pointer', borderTop:'3px solid #334155' }}
+                    onClick={() => { setFiltroTurnos('todos'); setFiltroFecha('hoy'); void cargarDatos('hoy'); setTab('turnos') }}
+                  >
                     <strong>{resumen.total}</strong>
                     <span>Turnos hoy</span>
                   </div>
@@ -3101,7 +3200,7 @@ export default function SupervisorMobile({ user }: any) {
 
               <div style={{ ...card, marginTop:12 }}>
                 <div style={{ fontSize: 15, fontWeight: 800, color: '#f8fafc', marginBottom: 10 }}>Alertas</div>
-                <RondaAlertasPanel objetivoId={null} soloPendientes onAlertas={setRondaAlertas} />
+                <RondaAlertasPanel key={recargaRondas} objetivoId={null} soloPendientes onAlertas={setRondaAlertas} />
               </div>
             </section>
 
@@ -3182,6 +3281,9 @@ export default function SupervisorMobile({ user }: any) {
                                   <div style={muted}>{info.inicio}</div>
                                   <div style={muted}>{info.fin}</div>
                                   {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+                                  {info.estadoTemporal === 'en_curso' && <div style={{ ...muted, color: '#10b981', fontWeight: 600 }}>En curso</div>}
+                                  {info.estadoTemporal === 'finalizado' && <div style={{ ...muted, color: '#60a5fa' }}>Finalizado</div>}
+                                  {info.estadoTemporal === 'antiguo' && <div style={{ ...muted, color: '#ef4444' }}>Antiguo</div>}
                                 </>)})()}
                                 <div style={muted}>Estado: {turno.estado || 'programado'}</div>
                                 <div style={muted}>Guardia esperado: {nombreGuardiaEsperado(turno)}</div>
@@ -3189,6 +3291,17 @@ export default function SupervisorMobile({ user }: any) {
                               </div>
                               <span style={badge('descubierto')}>descubierto</span>
                             </div>
+                            {/* Lleva al mismo turno en la pestaña Turnos, donde
+                                ya está el selector "Asignar guardia" con el
+                                objetivo, la posición, la fecha y el horario
+                                cargados. No hay una segunda vía de creación. */}
+                            <button
+                              type="button"
+                              onClick={() => irACubrirTurno(turno)}
+                              style={{ ...secondaryButton, marginTop:10, minHeight:44, background:'#1e3a8a', color:'#bfdbfe', border:'1px solid #1d4ed8' }}
+                            >
+                              Cubrir este turno
+                            </button>
                             {renderAccionesAlerta(turno, 'descubierto')}
                           </div>
                         )
@@ -3218,6 +3331,9 @@ export default function SupervisorMobile({ user }: any) {
                                   <div style={muted}>{info.inicio}</div>
                                   <div style={muted}>{info.fin}</div>
                                   {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+                                  {info.estadoTemporal === 'en_curso' && <div style={{ ...muted, color: '#10b981', fontWeight: 600 }}>En curso</div>}
+                                  {info.estadoTemporal === 'finalizado' && <div style={{ ...muted, color: '#60a5fa' }}>Finalizado</div>}
+                                  {info.estadoTemporal === 'antiguo' && <div style={{ ...muted, color: '#ef4444' }}>Antiguo</div>}
                                 </>)})()}
                                 <div style={muted}>Guardia asignado: {guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Guardia sin asignar'}</div>
                                 <div style={{ ...muted, color: '#f59e0b' }}>Minutos de demora: {minutosAtrasoTurno(turno)}</div>
@@ -3254,6 +3370,9 @@ export default function SupervisorMobile({ user }: any) {
                                   <div style={muted}>{info.inicio}</div>
                                   <div style={muted}>{info.fin}</div>
                                   {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+                                  {info.estadoTemporal === 'en_curso' && <div style={{ ...muted, color: '#10b981', fontWeight: 600 }}>En curso</div>}
+                                  {info.estadoTemporal === 'finalizado' && <div style={{ ...muted, color: '#60a5fa' }}>Finalizado</div>}
+                                  {info.estadoTemporal === 'antiguo' && <div style={{ ...muted, color: '#ef4444' }}>Antiguo</div>}
                                 </>)})()}
                                 <div style={muted}>Entrada real: {horaCorta(registro?.hora_entrada_final ?? registro?.hora_entrada_real)}</div>
                                 <div style={{ ...muted, color: '#f59e0b' }}>Minutos tarde: {calcularMinutosTardanzaRegistro(turno, registro)}</div>
@@ -3291,6 +3410,9 @@ export default function SupervisorMobile({ user }: any) {
                                   <div style={muted}>{info.inicio}</div>
                                   <div style={muted}>{info.fin}</div>
                                   {info.nocturno && <div style={{ ...muted, color: '#818cf8' }}>Nocturno</div>}
+                                  {info.estadoTemporal === 'en_curso' && <div style={{ ...muted, color: '#10b981', fontWeight: 600 }}>En curso</div>}
+                                  {info.estadoTemporal === 'finalizado' && <div style={{ ...muted, color: '#60a5fa' }}>Finalizado</div>}
+                                  {info.estadoTemporal === 'antiguo' && <div style={{ ...muted, color: '#ef4444' }}>Antiguo</div>}
                                 </>)})()}
                                 <div style={muted}>Entrada real: {horaCorta(registro?.hora_entrada_real)}</div>
                                 <div style={{ ...muted, color: '#ef4444' }}>Distancia: {metrosTexto(registro?.distancia_ingreso_metros)}</div>
@@ -3307,11 +3429,12 @@ export default function SupervisorMobile({ user }: any) {
                   </div>
                 )}
 
-                <div style={{ ...objetivoName, margin:'20px 0 8px' }}>Alertas intervenidas</div>
+                <div style={{ borderTop: '2px solid rgba(148,163,184,.2)', margin: '24px 0 16px' }} />
+                <div style={{ ...objetivoName, margin:'0 0 8px' }}>Alertas intervenidas (resueltas)</div>
                 {alertasIntervenidas.length === 0 ? (
                   <div style={empty}>No hay alertas intervenidas.</div>
                 ) : (
-                  <div style={{ ...card, borderColor:'rgba(16,185,129,.25)', background:'rgba(16,185,129,.07)' }}>
+                  <div style={{ ...card, borderColor:'rgba(16,185,129,.25)', background:'rgba(16,185,129,.07)', opacity: 0.85 }}>
                     <div style={muted}>{alertasIntervenidas.length} alerta(s) resueltas por intervención.</div>
                     <div style={{ marginTop: 12 }}>
                       {alertasIntervenidas.map(renderAlertaIntervenida)}

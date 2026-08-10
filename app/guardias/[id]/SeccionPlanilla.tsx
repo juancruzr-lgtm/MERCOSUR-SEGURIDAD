@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { track } from '@/lib/telemetry'
 import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
+import { formatFechaHora } from '@/lib/formato'
 import { ETIQUETA_PRIMER_CONTROL, ETIQUETA_SALIDA_AUTOMATICA, accionesPrimerControl } from '@/lib/primer-control'
 import type { EstadoPrimerControl } from '@/lib/primer-control'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
@@ -589,7 +590,7 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                           <div style={{ marginTop: 6, background: '#0b1220', border: '1px solid #1e2d42', borderRadius: 6, padding: 8, textAlign: 'left', maxWidth: 340 }}>
                             {(auditoriaPorTurno.get(fila.turno_id) ?? []).map((a: any) => (
                               <div key={a.id} style={{ fontSize: 10.5, color: '#cbd5e1', marginBottom: 5 }}>
-                                <span style={{ color: '#64748b' }}>{new Date(a.created_at).toLocaleString('es-AR')}</span>
+                                <span style={{ color: '#64748b' }}>{formatFechaHora(a.created_at)}</span>
                                 {' · '}<strong>{ETIQUETA_CAMPO_CORRECCION[a.campo] ?? a.campo}</strong>
                                 {a.campo === 'reconocido_fuera_de_turno'
                                   ? <span style={{ color: '#f59e0b' }}> · autorizado</span>
