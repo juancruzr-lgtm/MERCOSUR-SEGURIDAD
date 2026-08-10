@@ -2010,6 +2010,32 @@ export function accionRondaAlertaCierra(accion: AccionRondaAlerta): boolean {
 }
 export const accionRondaAlertaRequiereComentario = accionRondaAlertaCierra
 
+/**
+ * Cuánto hace que venció la ventana de la ronda, en minutos.
+ *
+ * Se mide contra `vencimiento_at` —el deadline con la tolerancia ya aplicada,
+ * calculado en el servidor— y no contra `ventana_inicio`: la alerta nace recién
+ * cuando pasa la tolerancia, así que contar desde el inicio previsto sumaría
+ * siempre esos minutos de más. Ambos son timestamptz absolutos, de modo que el
+ * huso del navegador no puede correr la cuenta.
+ *
+ * Devuelve 0 si todavía no venció: nunca se muestra una demora negativa.
+ */
+export function demoraAlertaMinutos(vencimientoAt: string, ahora: number = Date.now()): number {
+  const vencimiento = msRonda(vencimientoAt)
+  if (!vencimiento) return 0
+  return Math.max(0, Math.floor((ahora - vencimiento) / 60000))
+}
+
+/** "1 h 20 min" · "45 min" · "recién vencida". */
+export function etiquetaDemora(minutos: number): string {
+  if (minutos <= 0) return 'recién vencida'
+  const h = Math.floor(minutos / 60)
+  const m = minutos % 60
+  if (h === 0) return `${m} min`
+  return m === 0 ? `${h} h` : `${h} h ${m} min`
+}
+
 export function etiquetaTipoRondaAlerta(tipo: TipoRondaAlerta): string {
   switch (tipo) {
     case 'no_iniciada':   return 'No iniciada'

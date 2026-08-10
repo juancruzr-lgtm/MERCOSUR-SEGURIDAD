@@ -18,6 +18,10 @@ import {
   etiquetaTipoRondaAlerta,
   etiquetaAccionRondaAlerta,
   accionRondaAlertaCierra,
+  demoraAlertaMinutos,
+  etiquetaDemora,
+  pausarRonda,
+  mensajeContextoPausa,
   ACCIONES_RONDA_ALERTA,
   mensajeContextoResolverAlerta,
   type RondaAlerta,
@@ -108,6 +112,7 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
   const [sinPermiso, setSinPermiso] = useState(false)
   const [alertas, setAlertas] = useState<RondaAlerta[]>([])
   const [intervenir, setIntervenir] = useState<RondaAlerta | null>(null)
+  const [pausar, setPausar] = useState<RondaAlerta | null>(null)
   const [expandido, setExpandido] = useState<Set<string>>(new Set())
 
   // En alcance completo el objetivo no se sobreentiende: hay que decir cuál es.
@@ -211,8 +216,24 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
               {alcanceCompleto && <div style={S.objetivo}>{g.objetivo_nombre}</div>}
               <div style={S.ronda}>{g.ronda_nombre}</div>
               <div style={S.datos}>{g.puesto_nombre} · {g.ultimaAlerta.guardia_nombre}</div>
+              {/* Para decidir hace falta saber a qué hora tenía que empezar y
+                  cuánto hace que no empieza; con la fecha de detección sola no
+                  alcanza. La demora se mide contra el vencimiento, que ya trae
+                  aplicada la tolerancia configurada. */}
               <div style={S.datosTenue}>
-                Última: {fechaHora(g.ultimaAlerta.detectada_at)}
+                Prevista: {fechaHora(g.ultimaAlerta.ventana_inicio)}
+                {g.pendientes > 0 && (
+                  <>
+                    {' · '}
+                    <strong style={{ color: '#fbbf24' }}>
+                      Demora {etiquetaDemora(demoraAlertaMinutos(g.ultimaAlerta.vencimiento_at))}
+                    </strong>
+                  </>
+                )}
+              </div>
+              <div style={S.datosTenue}>
+                Detectada: {fechaHora(g.ultimaAlerta.detectada_at)}
+                {g.ultimaAlerta.accion && <> · Última acción: {etiquetaAccionRondaAlerta(g.ultimaAlerta.accion)}</>}
               </div>
 
               <div style={S.acciones}>
@@ -222,6 +243,15 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
                     if (pendiente) setIntervenir(pendiente)
                   }}>
                     Intervenir
+                  </button>
+                )}
+                {/* Pausar la ronda desde la propia alerta, reutilizando
+                    pausar_ronda: la ronda sigue existiendo y queda registrado
+                    quién la pausó, cuándo y por qué. Reanudar vive en el panel
+                    de Rondas pausadas, que ya lista las activas con su id. */}
+                {g.pendientes > 0 && (
+                  <button type="button" style={S.detalleBtn} onClick={() => setPausar(g.ultimaAlerta)}>
+                    Pausar ronda
                   </button>
                 )}
                 <button
@@ -292,6 +322,91 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
           onHecho={() => { setIntervenir(null); void cargar() }}
         />
       )}
+
+      {pausar && (
+        <ModalPausar
+          alerta={pausar}
+          onCerrar={() => setPausar(null)}
+          onHecho={() => { setPausar(null); void cargar() }}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Pausar la ronda desde la alerta. Usa pausar_ronda, la misma RPC del panel de
+ * Rondas pausadas: la ronda no se borra, queda una fila en ronda_pausas con
+ * quién la pausó, cuándo y el motivo, y solo puede haber una pausa activa por
+ * ronda. Pausar no resuelve la alerta por sí solo — eso sigue siendo una
+ * decisión aparte desde Intervenir.
+ */
+function ModalPausar({ alerta, onCerrar, onHecho }: {
+  alerta: RondaAlerta
+  onCerrar: () => void
+  onHecho: () => void
+}) {
+  const [motivo, setMotivo] = useState('')
+  const [enviando, setEnviando] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // La tabla exige al menos 5 caracteres: se valida acá para no ir y volver.
+  const motivoValido = motivo.trim().length >= 5
+
+  const confirmar = async () => {
+    if (!motivoValido || enviando) return
+    setEnviando(true)
+    setError(null)
+    const { data, error: err } = await pausarRonda(alerta.ronda_base_id, motivo.trim())
+    setEnviando(false)
+    if (err) { setError(err); return }
+    if (data && data.contexto !== 'ok') {
+      setError(mensajeContextoPausa(data.contexto))
+      return
+    }
+    onHecho()
+  }
+
+  return (
+    <div style={S.overlay} onClick={() => { if (!enviando) onCerrar() }}>
+      <div style={S.modal} onClick={e => e.stopPropagation()}>
+        <div style={S.modalHeader}>
+          <span style={S.modalTitulo}>Pausar ronda</span>
+          <button type="button" onClick={onCerrar} style={S.cerrar} aria-label="Cerrar">✕</button>
+        </div>
+        <div style={S.modalSub}>{alerta.ronda_nombre} · {alerta.objetivo_nombre}</div>
+        <div style={{ ...S.modalSub, marginBottom: 12 }}>
+          La ronda deja de exigirse mientras esté pausada, pero sigue existiendo y queda
+          registrado quién la pausó y por qué. La alerta no se cierra sola: si corresponde
+          darla por atendida, usá Intervenir.
+        </div>
+
+        <label style={S.label} htmlFor="motivo-pausa">Motivo *</label>
+        <textarea
+          id="motivo-pausa"
+          value={motivo}
+          onChange={e => setMotivo(e.target.value)}
+          rows={3}
+          placeholder="Ej.: obra en el objetivo, el recorrido no se puede hacer esta semana."
+          style={S.textarea}
+        />
+        {!motivoValido && motivo.length > 0 && (
+          <div style={S.aviso}>El motivo tiene que tener al menos 5 caracteres.</div>
+        )}
+        {error && <div style={S.error}>{error}</div>}
+
+        <div style={S.modalBotones}>
+          <button type="button" onClick={onCerrar} style={S.btnSec} disabled={enviando}>Cancelar</button>
+          <button
+            type="button"
+            onClick={confirmar}
+            style={!motivoValido || enviando ? S.btnOff : S.btnPri}
+            disabled={!motivoValido || enviando}
+          >
+            {enviando ? 'Pausando…' : 'Pausar ronda'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
