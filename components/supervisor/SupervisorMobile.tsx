@@ -2174,6 +2174,25 @@ export default function SupervisorMobile({ user }: any) {
 
   const resumenRondas = resumirRondasAlcance(rondaAlertas)
 
+  // Las tarjetas del resumen de Rondas llevan a los paneles que ya están más
+  // abajo en la misma pantalla: no hay pantalla nueva ni segunda consulta, el
+  // dato que cuenta la tarjeta es el mismo que el panel ya tiene cargado.
+  const refIncumplidas = useRef<HTMLDivElement | null>(null)
+  const refSuspendidas = useRef<HTMLDivElement | null>(null)
+  const refObjetivos = useRef<HTMLDivElement | null>(null)
+  const [focoRondas, setFocoRondas] = useState<'incumplidas' | 'suspendidas' | 'objetivos' | null>(null)
+
+  const irAPanelRondas = (destino: 'incumplidas' | 'suspendidas' | 'objetivos') => {
+    const ref = destino === 'incumplidas' ? refIncumplidas
+      : destino === 'suspendidas' ? refSuspendidas
+      : refObjetivos
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // El resaltado se apaga solo: es una ayuda para ubicar la vista, no un
+    // estado de la pantalla que haya que limpiar a mano.
+    setFocoRondas(destino)
+    window.setTimeout(() => setFocoRondas(actual => (actual === destino ? null : actual)), 1800)
+  }
+
   const tabs = [
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
@@ -3167,7 +3186,10 @@ export default function SupervisorMobile({ user }: any) {
                 Crear ronda
               </button>
 
-              <div style={{ ...card, marginTop: 0, marginBottom: 16 }}>
+              <div
+                ref={refObjetivos}
+                style={{ ...card, marginTop: 0, marginBottom: 16, ...(focoRondas === 'objetivos' ? panelEnFoco : null) }}
+              >
                 <ControlDeRondasPanel
                   objetivos={objetivosControlRondas}
                   onPausaCambiada={() => setPausasToken(t => t + 1)}
@@ -3176,21 +3198,39 @@ export default function SupervisorMobile({ user }: any) {
               </div>
 
               <div style={statsGrid}>
-                <div style={{ ...statCard, borderTop:'3px solid #ef4444' }}>
+                <button
+                  type="button"
+                  style={{ ...statCardBtn, borderTop:'3px solid #ef4444' }}
+                  onClick={() => irAPanelRondas('incumplidas')}
+                  aria-label={`Ver ${resumenRondas.incumplidas} rondas incumplidas`}
+                >
                   <strong style={{ color:'#ef4444' }}>{resumenRondas.incumplidas}</strong>
                   <span>Incumplidas</span>
-                </div>
-                <div style={{ ...statCard, borderTop:'3px solid #3b82f6' }}>
+                </button>
+                <button
+                  type="button"
+                  style={{ ...statCardBtn, borderTop:'3px solid #3b82f6' }}
+                  onClick={() => irAPanelRondas('suspendidas')}
+                  aria-label={`Ver ${resumenRondas.suspendidas} rondas suspendidas o pausadas`}
+                >
                   <strong style={{ color:'#3b82f6' }}>{resumenRondas.suspendidas}</strong>
                   <span>Suspendidas</span>
-                </div>
-                <div style={{ ...statCard, borderTop:'3px solid #f59e0b' }}>
+                </button>
+                <button
+                  type="button"
+                  style={{ ...statCardBtn, borderTop:'3px solid #f59e0b' }}
+                  onClick={() => irAPanelRondas('objetivos')}
+                  aria-label={`Ver los ${resumenRondas.objetivosAfectados} objetivos afectados`}
+                >
                   <strong style={{ color:'#f59e0b' }}>{resumenRondas.objetivosAfectados}</strong>
                   <span>Objetivos afectados</span>
-                </div>
+                </button>
               </div>
 
-              <div style={{ ...card, marginTop:12 }}>
+              <div
+                ref={refSuspendidas}
+                style={{ ...card, marginTop:12, ...(focoRondas === 'suspendidas' ? panelEnFoco : null) }}
+              >
                 <RondasPausadasPanel
                   objetivoId={null}
                   onCambio={() => setPausasToken(t => t + 1)}
@@ -3198,7 +3238,10 @@ export default function SupervisorMobile({ user }: any) {
                 />
               </div>
 
-              <div style={{ ...card, marginTop:12 }}>
+              <div
+                ref={refIncumplidas}
+                style={{ ...card, marginTop:12, ...(focoRondas === 'incumplidas' ? panelEnFoco : null) }}
+              >
                 <div style={{ fontSize: 15, fontWeight: 800, color: '#f8fafc', marginBottom: 10 }}>Alertas</div>
                 <RondaAlertasPanel key={recargaRondas} objetivoId={null} soloPendientes onAlertas={setRondaAlertas} />
               </div>
@@ -4527,6 +4570,26 @@ const statCard: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 4,
+}
+
+// Misma tarjeta, pero como <button>: el resumen de Rondas lleva al panel que ya
+// está más abajo en la pantalla. Se resetea la apariencia nativa del botón para
+// que no se distinga de statCard, y se deja el cursor y el foco visibles porque
+// acá sí hay algo que tocar.
+const statCardBtn: React.CSSProperties = {
+  ...statCard,
+  appearance: 'none',
+  font: 'inherit',
+  textAlign: 'left',
+  cursor: 'pointer',
+  width: '100%',
+}
+
+/** Resaltado momentáneo del panel al que se saltó desde el resumen. */
+const panelEnFoco: React.CSSProperties = {
+  outline: '2px solid #f59e0b',
+  outlineOffset: 2,
+  transition: 'outline-color 300ms ease',
 }
 
 const refreshButton: React.CSSProperties = {

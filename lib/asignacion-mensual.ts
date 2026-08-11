@@ -432,3 +432,102 @@ export function planificarAsignacionFila(params: {
     turnosVigilador: params.turnosVigilador,
   })
 }
+
+// ── Resultado de asignar_vigilador_turnos ────────────────────────────────────
+//
+// La RPC valida turno por turno sin abortar el lote, así que puede volver sin
+// error de transporte y con todas las filas omitidas. Antes la grilla leía solo
+// `error` y, si venía null, cerraba el modal: el vigilador no quedaba asignado y
+// nadie decía por qué. Acá se lee la fila.
+//
+// La detección de superposición NO se repite: `conflicto` viene armado por la
+// RPC, que es la única autoridad. Esto solo lo redacta.
+
+export interface ConflictoAsignacion {
+  turnoId?: string | null
+  vigilador?: string | null
+  objetivo?: string | null
+  puesto?: string | null
+  /** 'YYYY-MM-DD' tal como la devuelve Postgres. */
+  fecha?: string | null
+  /** 'HH:MM' en 24 horas, ya formateado por la RPC. */
+  horaInicio?: string | null
+  horaFin?: string | null
+}
+
+export type ResultadoFilaAsignacion = 'asignada' | 'ya_asignada' | 'omitida'
+
+export interface FilaResultadoAsignacion {
+  turnoId: string
+  resultado: ResultadoFilaAsignacion
+  motivo?: string | null
+  conflicto?: ConflictoAsignacion | null
+}
+
+/** 'YYYY-MM-DD' → 'DD/MM'. Devuelve '' si no se puede interpretar. */
+const diaMes = (fecha?: string | null): string => {
+  if (!fecha) return ''
+  const [a, m, d] = fecha.split('-')
+  return a && m && d ? `${d}/${m}` : ''
+}
+
+/**
+ * "No se puede asignar a ALVAREZ, YAMIL. Ya tiene un turno de 17:00 a 07:00 en
+ * Laromet ruta 34 (Vigilador 2) el 12/08."
+ *
+ * Cada dato se suma solo si vino: un conflicto sin puesto no deja paréntesis
+ * vacíos ni un "el " colgando. Horarios en 24 horas.
+ */
+export function mensajeConflictoAsignacion(c: ConflictoAsignacion): string {
+  const quien = c.vigilador?.trim()
+  const cabeza = quien ? `No se puede asignar a ${quien}.` : 'No se puede asignar.'
+
+  const partes: string[] = ['Ya tiene un turno']
+  if (c.horaInicio && c.horaFin) partes.push(`de ${c.horaInicio} a ${c.horaFin}`)
+  if (c.objetivo?.trim()) {
+    partes.push(`en ${c.objetivo.trim()}${c.puesto?.trim() ? ` (${c.puesto.trim()})` : ''}`)
+  }
+  const dia = diaMes(c.fecha)
+  if (dia) partes.push(`el ${dia}`)
+
+  return `${cabeza} ${partes.join(' ')}.`
+}
+
+/**
+ * Traduce la respuesta de la RPC para una asignación de UNA celda.
+ *
+ * `ya_asignada` no es un fallo: el reintento idempotente llegó al mismo estado
+ * que se buscaba, así que la celda se cierra igual.
+ */
+export function resultadoAsignacionCelda(
+  filas: FilaResultadoAsignacion[] | null | undefined,
+): { ok: boolean; error: string | null } {
+  const fila = filas?.[0]
+  if (!fila) return { ok: false, error: 'La asignación no devolvió resultado.' }
+  if (fila.resultado === 'asignada' || fila.resultado === 'ya_asignada') {
+    return { ok: true, error: null }
+  }
+  if (fila.conflicto) return { ok: false, error: mensajeConflictoAsignacion(fila.conflicto) }
+  return { ok: false, error: fila.motivo?.trim() || 'No se pudo asignar el turno.' }
+}
+
+/** Normaliza las filas crudas de la RPC (snake_case) al tipo de acá. */
+export function normalizarFilasAsignacion(filas: unknown): FilaResultadoAsignacion[] {
+  if (!Array.isArray(filas)) return []
+  return filas.map((f: any) => ({
+    turnoId: f?.turno_id,
+    resultado: f?.resultado,
+    motivo: f?.motivo ?? null,
+    conflicto: f?.conflicto
+      ? {
+          turnoId: f.conflicto.turno_id ?? null,
+          vigilador: f.conflicto.vigilador ?? null,
+          objetivo: f.conflicto.objetivo ?? null,
+          puesto: f.conflicto.puesto ?? null,
+          fecha: f.conflicto.fecha ?? null,
+          horaInicio: f.conflicto.hora_inicio ?? null,
+          horaFin: f.conflicto.hora_fin ?? null,
+        }
+      : null,
+  }))
+}

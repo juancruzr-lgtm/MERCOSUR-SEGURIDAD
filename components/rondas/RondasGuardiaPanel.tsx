@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  accionRecorrida,
   calcularEstadoTemporalRonda,
   iniciarRonda,
   mensajeContextoIniciar,
@@ -270,11 +271,23 @@ export default function RondasGuardiaPanel({ objetivos, ahora, recargaSolicitada
               <div style={S.contexto}>
                 {data.puesto_nombre || 'Puesto'}{data.objetivo_nombre ? ` · ${data.objetivo_nombre}` : ''}
               </div>
+
+              {/* El error de inicio es uno solo para el panel: se muestra acá
+                  arriba y no repetido en cada tarjeta. Mientras el detalle está
+                  abierto lo muestra el modal. */}
+              {errorInicio && !rondaAbierta && (
+                <div style={S.errorPanel} role="alert">{errorInicio}</div>
+              )}
               <div style={S.lista}>
                 {data.rondas.map(ronda => {
                   const estado = calcularEstadoTemporalRonda(ronda.hora_inicio, ahora)
                   const meta = ESTADO_META[estado]
                   const sinPuntos = ronda.cantidad_puntos === 0
+                  // La acción principal sale de la ventana que ya calculó el
+                  // servidor. Iniciar es un toque desde acá: el detalle con el
+                  // mapa pasa a ser opcional.
+                  const accion = accionRecorrida(ronda)
+                  const arrancando = iniciandoRondaId === ronda.ronda_id
                   return (
                     <div key={ronda.ronda_id} style={S.card}>
                       <div style={S.cardTop}>
@@ -301,6 +314,24 @@ export default function RondasGuardiaPanel({ objetivos, ahora, recargaSolicitada
 
                       <button
                         type="button"
+                        style={{ ...S.iniciarBtn, ...(!accion.habilitada || arrancando ? S.iniciarBtnOff : null) }}
+                        onClick={() => {
+                          setErrorInicio(null)
+                          void comenzarRonda(ronda)
+                        }}
+                        disabled={!accion.habilitada || arrancando}
+                      >
+                        {arrancando ? 'Iniciando recorrida…' : accion.etiqueta}
+                      </button>
+
+                      {accion.detalle && (
+                        <div style={S.accionDetalle}>{accion.detalle}</div>
+                      )}
+
+                      {/* Ver el recorrido queda como acción secundaria: sirve
+                          para mirar el mapa antes de salir, no para arrancar. */}
+                      <button
+                        type="button"
                         style={{ ...S.verBtn, ...(sinPuntos ? S.verBtnOff : null) }}
                         onClick={() => {
                           setErrorInicio(null)
@@ -308,7 +339,7 @@ export default function RondasGuardiaPanel({ objetivos, ahora, recargaSolicitada
                         }}
                         disabled={sinPuntos}
                       >
-                        {sinPuntos ? 'Sin puntos para recorrer' : 'Ver recorrido'}
+                        Ver recorrido
                       </button>
                     </div>
                   )
@@ -360,9 +391,24 @@ const S: Record<string, React.CSSProperties> = {
   dato: { flex: 1, background: '#0f1729', border: '1px solid #1a2436', borderRadius: 8, padding: '8px 10px' },
   datoLabel: { display: 'block', fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
   datoValor: { display: 'block', fontSize: 13, fontWeight: 700, color: '#e2e8f0' },
-  verBtn: {
-    width: '100%', padding: '11px 12px', borderRadius: 10, border: 'none',
-    background: '#f59e0b', color: '#111827', fontWeight: 800, fontSize: 14, cursor: 'pointer',
+  // Acción principal: arrancar. Más alta y en verde para que se distinga de
+  // "Ver recorrido", que pasó a ser secundaria.
+  iniciarBtn: {
+    width: '100%', padding: '15px 12px', borderRadius: 10, border: 'none',
+    background: '#22c55e', color: '#052e16', fontWeight: 800, fontSize: 16,
+    cursor: 'pointer', marginBottom: 8,
   },
-  verBtnOff: { background: '#1e293b', color: '#64748b', cursor: 'not-allowed' },
+  iniciarBtnOff: { background: '#1e293b', color: '#94a3b8', cursor: 'not-allowed' },
+  accionDetalle: { fontSize: 12, color: '#94a3b8', marginBottom: 8, lineHeight: 1.4 },
+  errorPanel: {
+    background: '#7f1d1d', color: '#fee2e2', borderRadius: 10,
+    padding: '10px 12px', fontSize: 13, marginBottom: 10,
+  },
+  // Secundaria desde este cambio: sirve para mirar el mapa antes de salir.
+  verBtn: {
+    width: '100%', padding: '10px 12px', borderRadius: 10,
+    border: '1px solid #334155', background: 'transparent',
+    color: '#e2e8f0', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+  },
+  verBtnOff: { borderColor: '#1e293b', color: '#64748b', cursor: 'not-allowed' },
 }

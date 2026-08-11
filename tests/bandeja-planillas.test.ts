@@ -129,6 +129,22 @@ describe('cubreElTurno — turno de 07:00 a 19:00', () => {
   it('unos minutos de margen no cuentan como tardanza', () => {
     expect(con('07:04', '18:56')).toBe(true)
   })
+
+  // Tolerancia operativa de revisión: 15 minutos. Estos casos fijan el borde
+  // para que un cambio del umbral no pase inadvertido. Es solo clasificación:
+  // no toca horas ni liquidación, y no es una regla de descuento.
+  describe('borde de los 15 minutos', () => {
+    it('entra 15 tarde: sigue siendo relevo normal', () => expect(con('07:15', '19:00')).toBe(true))
+    it('entra 16 tarde: ya requiere revisión', () => expect(con('07:16', '19:00')).toBe(false))
+    it('sale 15 antes: sigue siendo relevo normal', () => expect(con('07:00', '18:45')).toBe(true))
+    it('sale 16 antes: ya requiere revisión', () => expect(con('07:00', '18:44')).toBe(false))
+    it('irse una hora antes sigue siendo excepción real', () => expect(con('07:00', '17:52')).toBe(false))
+  })
+
+  it('la tolerancia se puede pasar por parámetro sin tocar la constante', () => {
+    expect(cubreElTurno(fila({ entrada: '07:10', salida: '19:00' }), 5)).toBe(false)
+    expect(cubreElTurno(fila({ entrada: '07:10', salida: '19:00' }), 15)).toBe(true)
+  })
 })
 
 describe('cubreElTurno — turno nocturno 22:00 a 06:00', () => {

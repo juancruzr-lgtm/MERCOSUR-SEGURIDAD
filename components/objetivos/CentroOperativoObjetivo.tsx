@@ -39,7 +39,8 @@ import {
   ETIQUETA_ESTADO_ASIGNACION, ETIQUETA_MOTIVO_OMISION,
   accionesCelda, armarGrillaMensual, celdaTieneAcciones,
   estadoAsignacion, esTurnoFuturo,
-  filtrarGrillaMensual, planificarAsignacionRango,
+  filtrarGrillaMensual, mensajeConflictoAsignacion, normalizarFilasAsignacion,
+  planificarAsignacionRango, resultadoAsignacionCelda,
   resumenAsignacionMensual, turnoVigente, turnosEnConflicto,
 } from '@/lib/asignacion-mensual'
 import type {
@@ -337,7 +338,29 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     if (error) return { ok: false, error: error.message }
     await cargarMensual()
     const r = data as any
-    return { ok: true, resumen: `${r.asignadas} asignado(s) · ${r.ya_asignadas} ya asignado(s) · ${r.omitidas} omitido(s)` }
+    const filas = normalizarFilasAsignacion(r?.filas)
+
+    // La RPC valida turno por turno sin abortar el lote: puede volver sin error
+    // y con todo omitido. Para una sola celda eso es un rechazo, no un éxito;
+    // antes se cerraba el modal sin decir nada.
+    if (turnoIds.length === 1) {
+      const res = resultadoAsignacionCelda(filas)
+      if (!res.ok) return { ok: false, error: res.error ?? 'No se pudo asignar.' }
+    }
+
+    // En el lote, el primer conflicto explica el resumen: repetir veinte veces
+    // la misma superposición no agrega nada.
+    const conflicto = filas.find(f => f.resultado === 'omitida' && f.conflicto)?.conflicto ?? null
+    const detalle = conflicto
+      ? ` · ${mensajeConflictoAsignacion(conflicto)}`
+      : (filas.find(f => f.resultado === 'omitida' && f.motivo)?.motivo
+          ? ` · ${filas.find(f => f.resultado === 'omitida' && f.motivo)!.motivo}`
+          : '')
+
+    return {
+      ok: true,
+      resumen: `${r.asignadas} asignado(s) · ${r.ya_asignadas} ya asignado(s) · ${r.omitidas} omitido(s)${detalle}`,
+    }
   }
 
   const confirmarCelda = async () => {

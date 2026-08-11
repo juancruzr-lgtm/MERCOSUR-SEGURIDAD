@@ -754,6 +754,17 @@ export interface RondaGuardia {
   activa: boolean
   cantidad_puntos: number
   puntos: RondaGuardiaPunto[]
+  // Próxima ventana exigible del turno vigente. La calcula
+  // rondas_ventanas_programadas en el servidor —la misma fuente que las
+  // alertas—: acá no se deriva nada. `null` cuando al turno no le queda
+  // ninguna ventana por delante.
+  ventana_inicio?: string | null
+  ventana_fin?: string | null
+  vencimiento_at?: string | null
+  /** 'HH:MM' en hora Argentina, ya formateado por la RPC. */
+  ventana_inicio_hhmm?: string | null
+  /** La ventana está abierta en este momento: se puede arrancar ya. */
+  habilitada_ahora?: boolean
   // Placeholder para Etapa 3.2 — App Vigilador. Permanece `null` en Etapa 3.1.
   ejecucion_actual: RondaEjecucionActual | null
 }
@@ -2273,5 +2284,52 @@ export function mensajeContextoSuspenderRonda(contexto: ContextoSuspenderRonda):
     case 'sin_turno_vigente':   return 'No tenés un turno vigente en este momento.'
     case 'motivo_invalido':     return 'Aclará brevemente la tarea que te impide hacer la ronda.'
     case 'ronda_no_disponible': return 'Esa ronda no corresponde a tu puesto actual.'
+  }
+}
+
+// ── Acción principal de la recorrida (app del vigilador) ─────────────────────
+//
+// Para el vigilador iniciar una recorrida tiene que ser un toque, no un
+// recorrido por tres pantallas. Esto decide qué dice y qué hace el botón
+// principal de la tarjeta.
+//
+// NO decide si la ronda puede arrancar: eso lo resuelve iniciar_ronda() en el
+// servidor, que sigue siendo la única autoridad sobre ventanas y pausas. Acá
+// solo se elige el texto y si el botón está disponible, a partir de la ventana
+// que ya vino calculada por rondas_ventanas_programadas.
+
+export interface AccionRecorrida {
+  /** Texto del botón o del aviso. */
+  etiqueta: string
+  /** false cuando todavía no corresponde arrancar o no hay nada que recorrer. */
+  habilitada: boolean
+  /** Motivo por el que no se puede arrancar, para mostrarlo al lado. */
+  detalle: string | null
+}
+
+export function accionRecorrida(r: Pick<RondaGuardia,
+  'cantidad_puntos' | 'habilitada_ahora' | 'ventana_inicio_hhmm'>): AccionRecorrida {
+  if (r.cantidad_puntos === 0) {
+    return {
+      etiqueta: 'Sin puntos para recorrer',
+      habilitada: false,
+      detalle: 'Esta ronda todavía no tiene puntos cargados.',
+    }
+  }
+  if (r.habilitada_ahora) {
+    return { etiqueta: 'Iniciar recorrida', habilitada: true, detalle: null }
+  }
+  if (r.ventana_inicio_hhmm) {
+    return {
+      etiqueta: `Recorrida habilitada a las ${r.ventana_inicio_hhmm}`,
+      habilitada: false,
+      detalle: null,
+    }
+  }
+  // Sin ventana por delante: al turno no le queda ninguna recorrida exigible.
+  return {
+    etiqueta: 'Sin recorridas pendientes',
+    habilitada: false,
+    detalle: 'No queda ninguna recorrida por hacer en este turno.',
   }
 }

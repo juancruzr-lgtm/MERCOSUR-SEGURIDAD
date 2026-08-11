@@ -57,11 +57,23 @@ export const esPendienteDeAccion = (e: EstadoRevision): boolean => ESTADOS_PENDI
 // ── Cobertura del turno ──────────────────────────────────────────────────────
 
 /**
- * Margen para dar por cubierto un extremo del turno. Es el mismo umbral con el
- * que calcAlertaEntrada marca una entrada como tardanza, para que la bandeja y
- * las alertas no digan cosas distintas del mismo fichaje.
+ * Margen para dar por cubierto un extremo del turno.
+ *
+ * Es una TOLERANCIA OPERATIVA DE REVISIÓN, no de liquidación. Decide una sola
+ * cosa: si el supervisor tiene que mirar la fila. No mueve horas, no toca
+ * liquidación y NO es una regla automática de descuento por tardanza.
+ *
+ * Estaba en 5 minutos y llenaba la bandeja de relevos normales. Medido sobre
+ * agosto de 2026: de los ~155 desvíos del mes, unos 98 eran de 6 a 20 minutos
+ * —alguien que ficha la salida a las 15:52 de un turno que termina 16:00—. Eso
+ * es el ruido del relevo, no una irregularidad que merezca intervención humana.
+ *
+ * Ojo: ya NO es el mismo umbral que calcAlertaEntrada (lib/supabase.ts), que
+ * sigue marcando 'tarde' a partir de 5 minutos. Son dos preguntas distintas
+ * —"¿hubo tardanza?" contra "¿alguien tiene que revisar esto?"— y desde este
+ * cambio tienen umbrales distintos a propósito.
  */
-export const TOLERANCIA_COBERTURA_MIN = 5
+export const TOLERANCIA_COBERTURA_MIN = 15
 
 const aMinutos = (h?: string | null): number | null => {
   if (!h) return null
