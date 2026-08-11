@@ -88,6 +88,8 @@ export default function AnalisisIAPanel({
   const [error, setError] = useState('')
   const [ampliada, setAmpliada] = useState<string | null>(null)
   const [guardandoId, setGuardandoId] = useState<string | null>(null)
+  const [filtro, setFiltro] = useState<'todas' | 'pendientes' | 'revisar' | 'insuficiente' | 'normales'>('todas')
+  const [detalle, setDetalle] = useState<string | null>(null)
 
   // Disparo manual
   const [ejecutando, setEjecutando] = useState(false)
@@ -168,11 +170,25 @@ export default function AnalisisIAPanel({
   // ── Conjuntos por pestaña ───────────────────────────────────────────────
   const completados = filas.filter(a => a.estado === 'completado')
 
-  // La bandeja muestra lo que la IA marcó + la muestra de control de normales
-  // (para poder medir falsos negativos), y prioriza lo no revisado.
+  // La bandeja muestra TODO lo analizado, no sólo lo que la IA marcó.
+  // Ocultar las SIN_OBSERVACIONES haría imposible detectar un falso negativo
+  // — que la IA diga "normal" sobre una foto que en realidad está mal — y ése
+  // es el error más caro de los cuatro. El filtro está para acotar cuando el
+  // volumen crezca, no para esconder.
   const bandeja = completados
-    .filter(a => a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.revision_estado !== 'PENDIENTE')
-    .sort((a, b) => (a.revision_estado === 'PENDIENTE' ? -1 : 1) - (b.revision_estado === 'PENDIENTE' ? -1 : 1))
+    .filter(a => {
+      if (filtro === 'pendientes') return a.revision_estado === 'PENDIENTE'
+      if (filtro === 'revisar') return a.clasificacion_efectiva === 'REVISAR'
+      if (filtro === 'insuficiente') return a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE'
+      if (filtro === 'normales') return a.clasificacion_efectiva === 'SIN_OBSERVACIONES'
+      return true
+    })
+    .sort((a, b) => {
+      const pa = a.revision_estado === 'PENDIENTE' ? 0 : 1
+      const pb = b.revision_estado === 'PENDIENTE' ? 0 : 1
+      if (pa !== pb) return pa - pb
+      return b.evidencia_created_at.localeCompare(a.evidencia_created_at)
+    })
 
   const incorrectas = completados.filter(a => a.revision_estado === 'INCORRECTO')
 
@@ -253,8 +269,49 @@ export default function AnalisisIAPanel({
                 disabled={guardandoId === a.id}
                 onClick={() => revisar(a.id, 'INCORRECTO')}>❌ INCORRECTO</button>
             </div>
+
+            <button
+              onClick={() => setDetalle(detalle === a.id ? null : a.id)}
+              style={{ background: 'none', border: 'none', color: C.sub, fontSize: 11, cursor: 'pointer', padding: '8px 0 0' }}
+            >{detalle === a.id ? '▾ Ocultar detalle' : '▸ Ver qué evaluó la IA'}</button>
           </div>
         </div>
+
+        {detalle === a.id && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, fontSize: 11, color: C.sub }}>
+              <span>Nitidez: <strong style={{ color: C.text }}>{a.resultado_json?.calidad?.nitidez ?? '—'}</strong></span>
+              <span>Iluminación: <strong style={{ color: C.text }}>{a.resultado_json?.calidad?.iluminacion ?? '—'}</strong></span>
+              <span>Encuadre: <strong style={{ color: C.text }}>{a.resultado_json?.calidad?.encuadre ?? '—'}</strong></span>
+              <span>Evaluable: <strong style={{ color: C.text }}>{a.resultado_json?.evaluable ? 'sí' : 'no'}</strong></span>
+            </div>
+
+            {(a.resultado_json?.elementos ?? []).length === 0
+              ? <div style={{ fontSize: 12, color: C.muted }}>Sin desglose por elemento.</div>
+              : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {a.resultado_json.elementos.map((el: any) => {
+                    const col = el.valor === 'PRESENTE' ? C.green : el.valor === 'AUSENTE' ? C.red : C.muted
+                    return (
+                      <div key={el.clave} style={{
+                        border: `1px solid ${col}44`, borderRadius: 6, padding: '6px 10px',
+                        background: col + '11', minWidth: 130,
+                      }}>
+                        <div style={{ fontSize: 11, color: C.text, fontWeight: 700 }}>{el.clave}</div>
+                        <div style={{ fontSize: 10, color: col, fontWeight: 700 }}>{el.valor.replace(/_/g, ' ')}</div>
+                        {el.comentario && (
+                          <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{el.comentario}</div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>}
+
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
+              <strong style={{ color: C.sub }}>NO DETERMINABLE</strong> significa que la IA no pudo verlo en la foto.
+              No significa que falte.
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -341,11 +398,30 @@ export default function AnalisisIAPanel({
       {cargando && <div style={{ color: C.muted, padding: 24 }}>Cargando…</div>}
 
       {!cargando && tab === 'revision' && (
-        bandeja.length === 0
-          ? <div style={{ ...card(), color: C.muted, fontSize: 13 }}>
-              No hay nada para revisar. Si todavía no analizaste ninguna foto, entrá a “Analizar fotos”.
-            </div>
-          : bandeja.map(a => <Tarjeta key={a.id} a={a} />)
+        <>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+            {([
+              ['todas', `Todas (${completados.length})`],
+              ['pendientes', `Sin revisar (${completados.filter(a => a.revision_estado === 'PENDIENTE').length})`],
+              ['revisar', `Revisar (${completados.filter(a => a.clasificacion_efectiva === 'REVISAR').length})`],
+              ['insuficiente', `Ev. insuficiente (${completados.filter(a => a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE').length})`],
+              ['normales', `Sin observaciones (${completados.filter(a => a.clasificacion_efectiva === 'SIN_OBSERVACIONES').length})`],
+            ] as const).map(([id, label]) => (
+              <button key={id} onClick={() => setFiltro(id)}
+                style={{ ...boton(filtro === id ? C.yellow : C.muted), padding: '5px 11px', fontSize: 11 }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {bandeja.length === 0
+            ? <div style={{ ...card(), color: C.muted, fontSize: 13 }}>
+                {completados.length === 0
+                  ? 'Todavía no analizaste ninguna foto. Entrá a “Analizar fotos”.'
+                  : 'No hay fotos con ese filtro.'}
+              </div>
+            : bandeja.map(a => <Tarjeta key={a.id} a={a} />)}
+        </>
       )}
 
       {!cargando && tab === 'incorrectas' && (
