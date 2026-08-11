@@ -55,7 +55,7 @@ async function correr() {
       modo: 'produccion',
       limite: Math.min(Number(cfg.get('ia_lote_max') ?? 5), LIMITE_DURO),
       filtros: { desde: activacion, tipos },
-      presupuestoMs: 55_000,
+      presupuestoMs: 45_000,
       maxIntentos: Number(cfg.get('ia_max_intentos') ?? 5),
       cuotaMuestra: Number(cfg.get('ia_muestra_normales_por_dia') ?? 10),
       maxReferencias: Number(cfg.get('ia_referencias_max') ?? 4),

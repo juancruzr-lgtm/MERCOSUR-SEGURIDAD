@@ -58,9 +58,12 @@ export type ResultadoItem = {
 }
 
 export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: ResultadoItem[], encolados: number }> {
-  const { client, modo, limite, filtros, loteId, presupuestoMs, cuotaMuestra = 0, maxReferencias = 4, soloGpsFueraRadio = false } = op
+  const { client, modo, limite, filtros, loteId, presupuestoMs, maxIntentos = 5, cuotaMuestra = 0, maxReferencias = 4, soloGpsFueraRadio = false } = op
   const inicio = Date.now()
-  const RESERVA_MS = 8_000
+  const RESERVA_MS = 5_000
+  // Peor caso observado: una imagen con 4 referencias tarda ~20 s.
+  const ESTIMADO_INICIAL_MS = 22_000
+  const duraciones: number[] = []
 
   const tipos = filtros?.tipos?.length
     ? filtros.tipos.filter(t => (TIPOS_SOPORTADOS as readonly string[]).includes(t))
@@ -133,10 +136,21 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
   for (const ev of evidencias) {
     // Corte por presupuesto ANTES de reclamar la fila: lo que no llegamos a
     // analizar queda sin encolar, no colgado en 'procesando'.
-    if (Date.now() - inicio > presupuestoMs - RESERVA_MS) {
-      resultados.push({ evidencia_id: ev.id, estado: 'omitida', motivo: 'Sin tiempo en este lote' })
+    //
+    // No alcanza con mirar el tiempo transcurrido: hay que estimar si la
+    // PRÓXIMA foto entra. Antes se chequeaba sólo lo ya gastado, así que una
+    // foto que arrancaba cerca del límite igual se lanzaba y hacía morir la
+    // función por timeout — Vercel devolvía su página de error en texto plano
+    // y el lote entero se perdía. Se usa la duración observada; para la primera
+    // se asume el peor caso conocido.
+    const estimado = duraciones.length > 0
+      ? duraciones.reduce((a, b) => a + b, 0) / duraciones.length
+      : ESTIMADO_INICIAL_MS
+    if (Date.now() - inicio + estimado > presupuestoMs - RESERVA_MS) {
+      resultados.push({ evidencia_id: ev.id, estado: 'omitida', motivo: 'Sin tiempo en este lote — volvé a ejecutar' })
       continue
     }
+    const arranque = Date.now()
 
     const conf = configPorTipo.get(ev.tipo_evidencia)
     if (!conf) {
@@ -213,14 +227,55 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
       .select('id')
       .single()
 
-    if (errorClaim || !fila) {
+    // ── Reintento de un análisis fallido ──────────────────────────────────
+    // El índice único rechaza el insert si ya hay una fila para esta evidencia
+    // y versión. Eso es correcto para lo ya completado, pero dejaba huérfano lo
+    // que falló: un 429 de cuota o un timeout quedaban en 'error' para siempre,
+    // porque el reclamo siguiente los leía como "ya analizada". Se recupera la
+    // fila existente y, si es reintentable, se reusa.
+    let filaId = fila?.id ?? null
+
+    if (errorClaim?.code === '23505') {
+      const { data: previa } = await client
+        .from('evidencia_analisis')
+        .select('id, estado, intentos, proximo_intento_at')
+        .eq('evidencia_id', ev.id)
+        .eq('analisis_tipo', ev.tipo_evidencia)
+        .eq('configuracion_version', conf.version)
+        .eq('modo', modo)
+        .maybeSingle()
+
+      const reintentable = previa
+        && previa.estado === 'error'
+        && (previa.intentos ?? 0) < maxIntentos
+        && (!previa.proximo_intento_at || new Date(previa.proximo_intento_at) <= new Date())
+
+      if (reintentable) {
+        await client.from('evidencia_analisis')
+          .update({ estado: 'procesando', intentos: (previa!.intentos ?? 0) + 1, ultimo_error: null })
+          .eq('id', previa!.id)
+        filaId = previa!.id
+      } else {
+        resultados.push({
+          evidencia_id: ev.id,
+          estado: 'omitida',
+          motivo: previa?.estado === 'error'
+            ? `Reintento pendiente (intento ${previa.intentos} de ${maxIntentos})`
+            : `Ya analizada con ${conf.version}`,
+        })
+        continue
+      }
+    } else if (errorClaim || !fila) {
       resultados.push({
         evidencia_id: ev.id,
         estado: 'omitida',
-        motivo: errorClaim?.code === '23505' ? `Ya analizada con ${conf.version}` : (errorClaim?.message ?? 'No se pudo encolar'),
+        motivo: errorClaim?.message ?? 'No se pudo encolar',
       })
       continue
     }
+
+    if (!filaId) continue
+    const filaActual = { id: filaId }
     encolados++
 
     const criterios = leerCriterios(conf.criterios).elementos
@@ -246,9 +301,9 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
           confianza: 1,
           motivos: ['EVIDENCIA_ALTERADA'],
           resumen: 'Los bytes almacenados no coinciden con el hash registrado al subir la evidencia.',
-        }).eq('id', fila.id)
+        }).eq('id', filaActual.id)
 
-        resultados.push({ evidencia_id: ev.id, analisis_id: fila.id, estado: 'completado', clasificacion_efectiva: 'REVISAR', motivos: ['EVIDENCIA_ALTERADA'] })
+        resultados.push({ evidencia_id: ev.id, analisis_id: filaActual.id, estado: 'completado', clasificacion_efectiva: 'REVISAR', motivos: ['EVIDENCIA_ALTERADA'] })
         continue
       }
 
@@ -341,10 +396,11 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         tokens_entrada: respuesta.tokensEntrada,
         tokens_salida: respuesta.tokensSalida,
         costo_estimado_usd: 0,
-      }).eq('id', fila.id)
+      }).eq('id', filaActual.id)
 
+      duraciones.push(Date.now() - arranque)
       resultados.push({
-        evidencia_id: ev.id, analisis_id: fila.id, estado: 'completado',
+        evidencia_id: ev.id, analisis_id: filaActual.id, estado: 'completado',
         clasificacion_ia: normalizado.clasificacion,
         clasificacion_efectiva: efectiva,
         motivos: motivosFinales,
@@ -357,9 +413,9 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         error_clase: clase,
         ultimo_error: String(e?.message ?? e).slice(0, 500),
         proximo_intento_at: clase === 'transitorio' ? new Date(Date.now() + 60_000).toISOString() : null,
-      }).eq('id', fila.id)
+      }).eq('id', filaActual.id)
 
-      resultados.push({ evidencia_id: ev.id, analisis_id: fila.id, estado: 'error', error: String(e?.message ?? e).slice(0, 300) })
+      resultados.push({ evidencia_id: ev.id, analisis_id: filaActual.id, estado: 'error', error: String(e?.message ?? e).slice(0, 300) })
     }
   }
 

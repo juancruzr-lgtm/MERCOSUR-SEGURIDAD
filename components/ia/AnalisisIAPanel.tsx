@@ -101,7 +101,10 @@ export default function AnalisisIAPanel({
   // Disparo manual
   const [ejecutando, setEjecutando] = useState(false)
   const [salida, setSalida] = useState<any>(null)
-  const [f, setF] = useState({ desde: '', hasta: '', objetivo_id: '', tipo: '', limite: 5 })
+  // Por defecto 3: con 4 fotos de referencia cada análisis tarda ~20 s y el
+  // plan Hobby corta la función a los 60. Mejor varias corridas cortas que un
+  // lote entero perdido por timeout.
+  const [f, setF] = useState({ desde: '', hasta: '', objetivo_id: '', tipo: '', limite: 3 })
 
   const nombreObjetivo = useMemo(
     () => new Map(objetivos.map((o: any) => [o.id, o.nombre])), [objetivos])
@@ -155,7 +158,7 @@ export default function AnalisisIAPanel({
         headers: { ...(await headersAuth()), 'Content-Type': 'application/json' },
         body: JSON.stringify({
           modo: 'prueba',
-          limite: Number(f.limite) || 5,
+          limite: Number(f.limite) || 3,
           filtros: {
             desde: f.desde ? new Date(f.desde).toISOString() : undefined,
             hasta: f.hasta ? new Date(f.hasta + 'T23:59:59').toISOString() : undefined,
@@ -164,7 +167,22 @@ export default function AnalisisIAPanel({
           },
         }),
       })
-      const json = await res.json()
+      // Si la función se pasa de los 60 s, Vercel responde su propia página de
+      // error en texto plano. Parsearla como JSON daba "Unexpected token 'A'",
+      // que no le dice nada a nadie. Se detecta y se traduce.
+      const texto = await res.text()
+      let json: any
+      try {
+        json = JSON.parse(texto)
+      } catch {
+        setSalida({
+          error: res.status === 504 || /timeout|FUNCTION_INVOCATION/i.test(texto)
+            ? 'El análisis tardó más de 60 segundos y el servidor lo cortó. Probá con 2 o 3 fotos y volvé a ejecutar.'
+            : `El servidor respondió algo inesperado (HTTP ${res.status}). Probá con menos fotos.`,
+        })
+        return
+      }
+
       setSalida(res.ok ? json : { error: json.error })
       if (res.ok) await cargar()
     } catch (e: any) {
