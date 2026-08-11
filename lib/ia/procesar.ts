@@ -8,9 +8,9 @@
 
 import { createHash } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { leerCriterios } from './referencias'
-import { derivarClasificacion, normalizarResultado, schemaRespuesta, type Umbrales } from './contratos'
-import { GeminiVision } from './gemini'
+import { catalogoInicial, leerCriterios } from './referencias'
+import { construirPrompt, derivarClasificacion, normalizarResultado, schemaRespuesta, type Umbrales } from './contratos'
+import { GeminiVision, MODELO_GEMINI_DEFECTO } from './gemini'
 import { ErrorProveedor } from './proveedor'
 
 export const TIPOS_SOPORTADOS = ['uniforme', 'libro_guardia', 'punto_control'] as const
@@ -90,6 +90,40 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
     .eq('activo', true)
 
   const configPorTipo = new Map((configs ?? []).map(c => [c.analisis_tipo as string, c]))
+
+  // ── Auto-provisión de la configuración técnica ────────────────────────────
+  // El prompt y el modelo son detalle de implementación, no una decisión que la
+  // operación tenga que tomar antes de poder usar el sistema. Si falta la
+  // configuración de un tipo, se crea sola con el catálogo por defecto y queda
+  // activa. Administración puede después ajustar los criterios desde la pantalla,
+  // pero nunca está obligada a pasar por ahí para empezar.
+  for (const tipo of tipos) {
+    if (configPorTipo.has(tipo)) continue
+
+    const criteriosBase = catalogoInicial(tipo as any)
+    if (criteriosBase.length === 0) continue
+
+    const prompt = construirPrompt(tipo, criteriosBase)
+    const { data: creada } = await client
+      .from('ia_configuraciones')
+      .insert({
+        analisis_tipo: tipo,
+        version: 'v1',
+        nombre: `${tipo} — criterios por defecto`,
+        descripcion: 'Creada automáticamente al primer análisis. Editable desde Referencias IA.',
+        criterios: { elementos: criteriosBase },
+        proveedor: 'gemini',
+        modelo: MODELO_GEMINI_DEFECTO,
+        prompt,
+        prompt_sha256: createHash('sha256').update(prompt).digest('hex'),
+        schema_json: schemaRespuesta() as any,
+        activo: true,
+      })
+      .select('*')
+      .single()
+
+    if (creada) configPorTipo.set(tipo, creada)
+  }
 
   const proveedor = new GeminiVision()
   const schema = schemaRespuesta()

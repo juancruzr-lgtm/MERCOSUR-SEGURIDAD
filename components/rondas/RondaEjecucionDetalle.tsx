@@ -21,6 +21,7 @@ import {
   type EjecucionDetalleSupervisor,
   type PuntoEjecucionDetalle,
 } from '@/lib/rondas'
+import RondaIAPuntos from '@/components/ia/RondaIAPuntos'
 import { formatFechaHora } from '@/lib/formato'
 
 interface PausaInfo {
@@ -107,6 +108,10 @@ export default function RondaEjecucionDetalle({ ejecucionId, onCerrar, pausaInfo
           {!cargando && !error && contexto === 'ok' && ejecucion && (
             <>
               <Cabecera ejecucion={ejecucion} puntos={puntos} />
+
+              {/* Capa de evaluación visual sobre la ronda existente. Sólo lee y
+                  traduce: no altera obligación, orden, GPS ni alertas. */}
+              <RondaIAPuntos puntos={puntos} />
 
               {puntos.length === 0 ? (
                 <div style={S.nota}>Esta ejecución no tiene puntos registrados.</div>
