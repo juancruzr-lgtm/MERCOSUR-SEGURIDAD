@@ -57,6 +57,7 @@ async function correr() {
       filtros: { desde: activacion, tipos },
       presupuestoMs: 55_000,
       maxIntentos: Number(cfg.get('ia_max_intentos') ?? 5),
+      cuotaMuestra: Number(cfg.get('ia_muestra_normales_por_dia') ?? 10),
     })
 
     return NextResponse.json({

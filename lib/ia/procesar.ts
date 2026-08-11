@@ -34,6 +34,9 @@ export type OpcionesProceso = {
   /** Milisegundos disponibles antes de que la función sea cortada. */
   presupuestoMs: number
   maxIntentos: number
+  /** Cuántas SIN_OBSERVACIONES por día entran igual a revisión humana.
+   *  0 desactiva la muestra. Sólo aplica en modo produccion. */
+  cuotaMuestra?: number
 }
 
 export type ResultadoItem = {
@@ -49,7 +52,7 @@ export type ResultadoItem = {
 }
 
 export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: ResultadoItem[], encolados: number }> {
-  const { client, modo, limite, filtros, loteId, presupuestoMs, maxIntentos } = op
+  const { client, modo, limite, filtros, loteId, presupuestoMs, cuotaMuestra = 0 } = op
   const inicio = Date.now()
   const RESERVA_MS = 8_000
 
@@ -197,7 +200,27 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
 
       const efectiva = derivarClasificacion(normalizado, criterios, umbrales)
 
+      // ── Muestra de control ────────────────────────────────────────────
+      // Una foto SIN_OBSERVACIONES no va a la bandeja: sería ruido. Pero si
+      // NINGUNA se revisa nunca, un falso negativo -la IA dice "normal" sobre
+      // una foto que está mal- es indetectable, y es el error más caro.
+      // Por eso una cuota diaria de normales entra igual a revisión.
+      let enMuestra = false
+      if (efectiva === 'SIN_OBSERVACIONES' && modo === 'produccion') {
+        const cuota = Number(cuotaMuestra)
+        if (cuota > 0) {
+          const desdeHoy = new Date(); desdeHoy.setHours(0, 0, 0, 0)
+          const { count } = await client
+            .from('evidencia_analisis')
+            .select('id', { count: 'exact', head: true })
+            .eq('en_muestra_control', true)
+            .gte('analizado_at', desdeHoy.toISOString())
+          enMuestra = (count ?? 0) < cuota
+        }
+      }
+
       await client.from('evidencia_analisis').update({
+        en_muestra_control: enMuestra,
         estado: 'completado',
         analizado_at: new Date().toISOString(),
         sha256_analizado: sha,

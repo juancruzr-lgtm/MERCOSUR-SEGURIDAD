@@ -58,6 +58,7 @@ type Analisis = {
   configuracion_version: string
   revision_estado: string
   revisado_at: string | null
+  en_muestra_control: boolean
   evidencia_created_at: string
   objetivo_id: string
   guardia_id: string | null
@@ -88,7 +89,7 @@ export default function AnalisisIAPanel({
   const [error, setError] = useState('')
   const [ampliada, setAmpliada] = useState<string | null>(null)
   const [guardandoId, setGuardandoId] = useState<string | null>(null)
-  const [filtro, setFiltro] = useState<'todas' | 'pendientes' | 'revisar' | 'insuficiente' | 'normales'>('todas')
+  const [filtro, setFiltro] = useState<'bandeja' | 'revisar' | 'insuficiente' | 'normales' | 'revisadas' | 'todas'>('bandeja')
   const [detalle, setDetalle] = useState<string | null>(null)
 
   // Disparo manual
@@ -177,10 +178,16 @@ export default function AnalisisIAPanel({
   // volumen crezca, no para esconder.
   const bandeja = completados
     .filter(a => {
-      if (filtro === 'pendientes') return a.revision_estado === 'PENDIENTE'
+      // Vista por defecto: sólo lo que requiere una mirada humana y todavía no
+      // la tuvo. Al marcar CORRECTO o INCORRECTO, la foto sale de acá.
+      if (filtro === 'bandeja') {
+        if (a.revision_estado !== 'PENDIENTE') return false
+        return a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control
+      }
       if (filtro === 'revisar') return a.clasificacion_efectiva === 'REVISAR'
       if (filtro === 'insuficiente') return a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE'
       if (filtro === 'normales') return a.clasificacion_efectiva === 'SIN_OBSERVACIONES'
+      if (filtro === 'revisadas') return a.revision_estado !== 'PENDIENTE'
       return true
     })
     .sort((a, b) => {
@@ -401,11 +408,12 @@ export default function AnalisisIAPanel({
         <>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
             {([
-              ['todas', `Todas (${completados.length})`],
-              ['pendientes', `Sin revisar (${completados.filter(a => a.revision_estado === 'PENDIENTE').length})`],
+              ['bandeja', `Para revisar (${completados.filter(a => a.revision_estado === 'PENDIENTE' && (a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control)).length})`],
               ['revisar', `Revisar (${completados.filter(a => a.clasificacion_efectiva === 'REVISAR').length})`],
               ['insuficiente', `Ev. insuficiente (${completados.filter(a => a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE').length})`],
               ['normales', `Sin observaciones (${completados.filter(a => a.clasificacion_efectiva === 'SIN_OBSERVACIONES').length})`],
+              ['revisadas', `Ya revisadas (${completados.filter(a => a.revision_estado !== 'PENDIENTE').length})`],
+              ['todas', `Todas (${completados.length})`],
             ] as const).map(([id, label]) => (
               <button key={id} onClick={() => setFiltro(id)}
                 style={{ ...boton(filtro === id ? C.yellow : C.muted), padding: '5px 11px', fontSize: 11 }}>
@@ -417,8 +425,10 @@ export default function AnalisisIAPanel({
           {bandeja.length === 0
             ? <div style={{ ...card(), color: C.muted, fontSize: 13 }}>
                 {completados.length === 0
-                  ? 'Todavía no analizaste ninguna foto. Entrá a “Analizar fotos”.'
-                  : 'No hay fotos con ese filtro.'}
+                  ? 'Todavía no se analizó ninguna foto.'
+                  : filtro === 'bandeja'
+                    ? 'Nada pendiente: todas las fotos anómalas ya fueron revisadas.'
+                    : 'No hay fotos con ese filtro.'}
               </div>
             : bandeja.map(a => <Tarjeta key={a.id} a={a} />)}
         </>
