@@ -14,6 +14,7 @@ import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import ReferenciasIAPanel from '@/components/ia/ReferenciasIAPanel'
+import AnalisisIAPanel from '@/components/ia/AnalisisIAPanel'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
@@ -10651,6 +10652,7 @@ const esGuardia = esRolGuardia(user.rol)
     ]},
     { section:'ADMINISTRACIÓN', items:[
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
+      { id:'revision_fotos_ia', icon:'🤖', label:'Revisión de fotos IA' },
       { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
       { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
       { id:'novedades', icon:'📋', label:'Novedades' },
@@ -10760,6 +10762,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'turnos_base' && <TurnosBase />}
               {page === 'observacion' && <ObservacionSistema onNavigate={navegarConFiltro} />}
               {page === 'referencias_ia' && <ReferenciasIAPanel user={user} />}
+              {page === 'revision_fotos_ia' && <AnalisisIAPanel user={user} objetivos={objetivos} guardias={guardias} />}
             </>
           )
         )}

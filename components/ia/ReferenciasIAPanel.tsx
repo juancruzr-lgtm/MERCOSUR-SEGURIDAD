@@ -379,6 +379,26 @@ function TabConfiguraciones({ tipo, esAdmin }: { tipo: TipoReferenciaIA, esAdmin
     }
   }
 
+  // Deriva el prompt desde los criterios y fija el modelo: pasa de borrador a
+  // analizable. No se escribe prompt a mano en ningún lado.
+  const preparar = async (id: string) => {
+    setGuardando(true); setError('')
+    try {
+      const res = await fetch('/api/ia/referencias/preparar', {
+        method: 'POST',
+        headers: { ...(await headersAuth()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'No se pudo preparar')
+      await cargar()
+    } catch (e: any) {
+      setError(e.message || 'Error')
+    } finally {
+      setGuardando(false)
+    }
+  }
+
   const iniciarAlta = () => {
     setBorrador({ nombre: `${ETIQUETA_TIPO[tipo]} — criterios`, descripcion: '', elementos: catalogoInicial(tipo) })
     setCreando(true)
@@ -449,6 +469,14 @@ function TabConfiguraciones({ tipo, esAdmin }: { tipo: TipoReferenciaIA, esAdmin
               <button style={boton(C.blue)} onClick={() => setExpandida(abierta ? null : cfg.id)}>
                 {abierta ? 'Cerrar' : 'Ver detalle'}
               </button>
+              {esAdmin && esBorrador(cfg) && (
+                <button
+                  style={boton(C.yellow, !guardando)}
+                  disabled={guardando}
+                  title="Genera el prompt a partir de los criterios y fija el modelo"
+                  onClick={() => preparar(cfg.id)}
+                >Preparar para análisis</button>
+              )}
               {esAdmin && (
                 <button
                   style={boton(vigente ? C.red : C.green, !guardando)}
