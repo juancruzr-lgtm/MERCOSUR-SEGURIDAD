@@ -189,6 +189,38 @@ export const turnoTieneObligacionDeCobertura = (turno: TurnoHorario): boolean =>
 export const turnoSinCoberturaOperativa = (turno: TurnoHorario): boolean =>
   !turno.guardia_id && turnoTieneObligacionDeCobertura(turno)
 
+// ── Objetivo pausado ─────────────────────────────────────────────────────────
+//
+// Pausar o suspender un objetivo es, en la base, `objetivos.estado = 'inactivo'`:
+// el CHECK sólo admite 'activo' e 'inactivo', no hay un estado "pausado" aparte.
+// Este es el ÚNICO criterio de objetivo operativo; el espejo SQL es
+// `o.estado = 'activo'` en rondas_ventanas_programadas y en
+// asignar_vigilador_turnos. No agregar una segunda noción en otro lado.
+//
+// Mientras está pausado, sus turnos se conservan en la base pero no generan
+// obligaciones: ni cobertura, ni ronda, ni conflicto de asignación.
+export interface ObjetivoOperativo {
+  estado?: string | null
+}
+
+/**
+ * Sin dato de objetivo se asume operativo: quien no puede resolverlo no debe
+ * silenciar alertas por las dudas. El filtro se aplica donde el objetivo se
+ * conoce, y ahí sí es taxativo.
+ */
+export const objetivoEstaOperativo = (objetivo?: ObjetivoOperativo | null): boolean =>
+  (objetivo?.estado ?? 'activo') === 'activo'
+
+/**
+ * Obligación de cobertura completa: el turno la tiene Y el objetivo está
+ * operativo. Es lo que decide si un turno sin guardia es un puesto descubierto
+ * de verdad o un turno guardado de un objetivo pausado.
+ */
+export const turnoSinCoberturaEnObjetivoOperativo = (
+  turno: TurnoHorario,
+  objetivo?: ObjetivoOperativo | null,
+): boolean => objetivoEstaOperativo(objetivo) && turnoSinCoberturaOperativa(turno)
+
 export const fechasVecinasTurno = (fecha: string) => {
   const base = fechaLocal(fecha)
   if (!base) return [fecha]

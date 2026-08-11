@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 import { initTelemetry, endSession } from '@/lib/telemetry'
@@ -913,7 +913,12 @@ export default function SupervisorMobile({ user }: any) {
     !alertaIntervenida(turno.id, tipoAlerta, registroId)
   // Definición compartida con el Dashboard y el cron (lib/turnos.ts): sin guardia
   // Y con obligación de cobertura vigente. Un turno reemplazado no es descubierto.
-  const esDescubiertoOperativo = (turno: Turno) => turnoSinCoberturaOperativa(turno)
+  //
+  // Se suma el estado del objetivo: un objetivo pausado conserva sus turnos pero
+  // no genera obligación, así que tampoco puestos descubiertos. Mismo criterio
+  // que aplica el servidor en rondas_ventanas_programadas.
+  const esDescubiertoOperativo = (turno: Turno) =>
+    turnoSinCoberturaEnObjetivoOperativo(turno, getObjetivo(turno.objetivo_id))
   const esTurnoReasignado = (turno: Turno) => Boolean(
     turno.guardia_original_id &&
     turno.guardia_id &&

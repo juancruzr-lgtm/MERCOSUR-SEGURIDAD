@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import { sendWebPush, type PushPayload, type PushSubscriptionRow } from '../../_lib/web-push'
 import { calcularMinutosTardanzaRegistro } from '@/lib/revision-operativa'
-import { turnoSinCoberturaOperativa } from '@/lib/turnos'
+import { objetivoEstaOperativo, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import {
   FRECUENCIA_SUPERVISION_DEFECTO_HORAS,
   estadoSupervision,
@@ -35,6 +35,9 @@ type UsuarioPush = {
 type ObjetivoPush = {
   id: string
   nombre: string
+  // La consulta ya lo traía; faltaba declararlo. Sin esto el filtro de objetivo
+  // pausado compilaría igual y no filtraría nada.
+  estado?: string | null
 }
 
 type RegistroPush = {
@@ -872,6 +875,14 @@ export async function GET(req: NextRequest) {
 
   for (const turno of turnos) {
     const objetivo = objetivos.find(item => item.id === turno.objetivo_id)
+
+    // Objetivo pausado: sus turnos se conservan pero no generan obligación. Las
+    // cuatro alertas de este bucle —recordatorio 30', recordatorio 15', sin
+    // fichaje y puesto descubierto— derivan todas de que el objetivo esté
+    // operativo, así que ninguna corresponde. Mismo criterio que aplican
+    // rondas_ventanas_programadas y asignar_vigilador_turnos en el servidor.
+    if (!objetivoEstaOperativo(objetivo)) continue
+
     const guardia = usuarios.find(item => item.id === turno.guardia_id)
     const inicio = fechaHoraMinutos(turno.fecha, turno.hora_inicio)
     const minutosHastaInicio = Math.floor(inicio - ahora)
