@@ -25,10 +25,10 @@ describe('catálogos', () => {
     ])
   })
 
-  it('el libro arranca con los 6 campos pedidos', () => {
-    expect(CAMPOS_LIBRO.map(e => e.clave)).toEqual([
-      'fecha', 'hora', 'firma', 'novedades', 'legibilidad', 'pagina_visible',
-    ])
+  it('el libro arranca corto: cargado y sin tachaduras', () => {
+    // Un catálogo largo marca casi todo sobre un manuscrito y llena la bandeja
+    // de ruido. Dos criterios gruesos rinden más que seis finos.
+    expect(CAMPOS_LIBRO.map(e => e.clave)).toEqual(['cargado', 'sin_tachaduras'])
   })
 
   it('los tres valores de verificación incluyen NO_DETERMINABLE', () => {

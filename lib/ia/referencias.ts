@@ -47,13 +47,13 @@ export const ELEMENTOS_UNIFORME: ElementoCriterio[] = [
   { clave: 'otros',      etiqueta: 'Otros elementos',  requerido: false, nota: '' },
 ]
 
+// Deliberadamente corto. Un catálogo largo hace que el libro salga marcado
+// casi siempre: cada campo es otra oportunidad de que la IA no lo distinga en
+// una foto de un manuscrito, y la bandeja se llena de ruido. Dos criterios
+// gruesos y verificables rinden más que seis finos y discutibles.
 export const CAMPOS_LIBRO: ElementoCriterio[] = [
-  { clave: 'fecha',            etiqueta: 'Fecha',                       requerido: true,  nota: '' },
-  { clave: 'hora',             etiqueta: 'Hora',                        requerido: true,  nota: '' },
-  { clave: 'firma',            etiqueta: 'Firma',                       requerido: true,  nota: '' },
-  { clave: 'novedades',        etiqueta: 'Novedades',                   requerido: true,  nota: 'Sólo presencia de escritura. No se transcribe el contenido.' },
-  { clave: 'legibilidad',      etiqueta: 'Legibilidad',                 requerido: true,  nota: 'Si no alcanza para determinar, el resultado es EVIDENCIA_INSUFICIENTE.' },
-  { clave: 'pagina_visible',   etiqueta: 'Página suficientemente visible', requerido: true, nota: '' },
+  { clave: 'cargado',        etiqueta: 'El libro está cargado', requerido: true, nota: 'Hay escritura en la página. No se transcribe ni se evalúa el contenido.' },
+  { clave: 'sin_tachaduras', etiqueta: 'Sin tachaduras',        requerido: true, nota: 'Tachones, sobreescrituras o correcciones evidentes.' },
 ]
 
 export const CAMPOS_PUNTO_CONTROL: ElementoCriterio[] = [

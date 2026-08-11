@@ -97,6 +97,7 @@ export default function AnalisisIAPanel({
   const [guardandoId, setGuardandoId] = useState<string | null>(null)
   const [filtro, setFiltro] = useState<'bandeja' | 'revisar' | 'insuficiente' | 'normales' | 'revisadas' | 'todas'>('bandeja')
   const [detalle, setDetalle] = useState<string | null>(null)
+  const [aviso, setAviso] = useState('')
 
   // Disparo manual
   const [ejecutando, setEjecutando] = useState(false)
@@ -147,6 +148,24 @@ export default function AnalisisIAPanel({
     if (e) { setError(e.message); setGuardandoId(null); return }
     setFilas(prev => prev.map(a => a.id === id
       ? { ...a, revision_estado: decision, revisado_at: new Date().toISOString() } : a))
+
+    // Una foto de ronda que una persona confirmó como correcta es la mejor
+    // referencia posible para ese punto. Si el punto no tenía ninguna, se
+    // promueve sola: el punto queda calibrado sin trabajo extra. El servidor
+    // valida todo y nunca pisa una referencia cargada a mano.
+    const fila = filas.find(a => a.id === id)
+    if (decision === 'CORRECTO' && fila?.analisis_tipo === 'punto_control') {
+      try {
+        const res = await fetch('/api/ia/puntos/promover-referencia', {
+          method: 'POST',
+          headers: { ...(await headersAuth()), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ analisis_id: id }),
+        })
+        const json = await res.json()
+        if (json?.promovida) setAviso('Esta foto quedó como referencia visual del punto.')
+      } catch { /* la revisión ya quedó guardada; la promoción es un extra */ }
+    }
+
     setGuardandoId(null)
   }
 
@@ -416,6 +435,14 @@ export default function AnalisisIAPanel({
       </div>
 
       {error && <div style={{ ...card({ borderColor: C.red + '66', marginBottom: 14 }), color: C.red, fontSize: 13 }}>{error}</div>}
+
+      {aviso && (
+        <div style={{ ...card({ borderColor: C.green + '66', marginBottom: 14 }), color: C.green, fontSize: 13,
+          display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+          <span>✓ {aviso}</span>
+          <button style={{ ...boton(C.muted), padding: '4px 10px', fontSize: 11 }} onClick={() => setAviso('')}>Cerrar</button>
+        </div>
+      )}
 
       {tab === 'analizar' && esAdmin && (
         <div style={card({ marginBottom: 18 })}>
