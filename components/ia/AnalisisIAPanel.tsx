@@ -284,6 +284,13 @@ export default function AnalisisIAPanel({
               <span style={badge(COLOR_CLASIF[clasif] ?? C.muted)}>{clasif.replace(/_/g, ' ')}</span>
               <span style={badge(C.muted)}>{ETIQUETA_TIPO_EV[a.analisis_tipo] ?? a.analisis_tipo}</span>
               {a.modo === 'prueba' && <span style={badge(C.blue)}>PRUEBA</span>}
+              {/* Sin este cartel, una foto "sin observaciones" en la bandeja
+                  parece un error del filtro. Con él se entiende por qué está. */}
+              {a.en_muestra_control && a.clasificacion_efectiva === 'SIN_OBSERVACIONES' && (
+                <span style={badge(C.blue)} title="Muestra al azar para verificar que la IA no deje pasar errores">
+                  MUESTRA DE CONTROL
+                </span>
+              )}
               {a.revision_estado !== 'PENDIENTE' && (
                 <span style={badge(a.revision_estado === 'CORRECTO' ? C.green : C.red)}>
                   HUMANO: {a.revision_estado}
@@ -517,6 +524,15 @@ export default function AnalisisIAPanel({
               </button>
             ))}
           </div>
+
+          {filtro === 'bandeja' && bandeja.some(a => a.en_muestra_control && a.clasificacion_efectiva === 'SIN_OBSERVACIONES') && (
+            <div style={{ ...card({ marginBottom: 12, padding: '10px 14px' }), fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
+              Algunas fotos de esta lista dicen <strong style={{ color: C.green }}>SIN OBSERVACIONES</strong> y llevan
+              el cartel <strong style={{ color: C.blue }}>MUESTRA DE CONTROL</strong>. Son fotos normales sorteadas al
+              azar: sirven para descubrir si la IA está dejando pasar algo. Es el único error que no se detecta solo.
+              Se ajusta la cantidad con <code>ia_muestra_normales_por_dia</code>.
+            </div>
+          )}
 
           {bandeja.length === 0
             ? <div style={{ ...card(), color: C.muted, fontSize: 13 }}>
