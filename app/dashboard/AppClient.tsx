@@ -13,6 +13,7 @@ import type { EstadoPuestos } from '@/lib/puestos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
+import ReferenciasIAPanel from '@/components/ia/ReferenciasIAPanel'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
@@ -10662,6 +10663,7 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'checklists', icon:'☑️', label:'Checklists' },
       { id:'turnos_base', icon:'⏰', label:'Turnos Base' },
       { id:'zonas_operativas', icon:'🗺️', label:'Zonas operativas' },
+      { id:'referencias_ia', icon:'🖼️', label:'Referencias IA' },
     ]},
     { section:'SISTEMA', items:[
       { id:'observacion', icon:'🔭', label:'Observación del Sistema' },
@@ -10757,6 +10759,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
               {page === 'observacion' && <ObservacionSistema onNavigate={navegarConFiltro} />}
+              {page === 'referencias_ia' && <ReferenciasIAPanel user={user} />}
             </>
           )
         )}

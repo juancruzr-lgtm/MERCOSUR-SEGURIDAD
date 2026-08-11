@@ -17,6 +17,7 @@ import { POLITICAS_FOTO, etiquetaPoliticaFoto, ayudaPoliticaFoto } from '@/lib/r
 import type { NuevoRondaPunto, OrigenPosicion, PoliticaFoto, RondaPunto } from '@/lib/rondas'
 import { capturarGpsNuevo, type CapturaGpsEnCurso } from '@/lib/gps-captura'
 import type { PuntoRondaMapa } from './RondaPuntosMap'
+import ReferenciaPuntoIA from '@/components/ia/ReferenciaPuntoIA'
 import styles from './Rondas.module.css'
 
 const RondaPuntosMap = dynamic(() => import('./RondaPuntosMap'), {
@@ -629,6 +630,13 @@ export default function RondaPuntosEditor({
                     <input type="checkbox" checked={form.activo} onChange={evento => setForm({ ...form, activo: evento.target.checked })} />
                     Punto activo
                   </label>
+                )}
+                {/* Referencia IA: sólo sobre un punto ya existente — necesita su id.
+                    Escribe únicamente en ronda_punto_referencias; no altera el punto. */}
+                {editandoId && editandoId !== 'nuevo' && (
+                  <div className={styles.full}>
+                    <ReferenciaPuntoIA rondaPuntoId={editandoId} />
+                  </div>
                 )}
               </div>
               <div className={styles.formActions}>
