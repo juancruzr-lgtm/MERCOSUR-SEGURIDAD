@@ -17,8 +17,11 @@ import { procesarLote, LIMITE_DURO } from '@/lib/ia/procesar'
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
+// Secreto propio de la IA. Se prefiere IA_CRON_SECRET para no compartir el de
+// /api/push/cron: así rotar uno no afecta al otro, y Vercel oculta el valor de
+// las variables sensibles una vez guardadas. Cae a CRON_SECRET si no está.
 function autorizado(req: NextRequest): boolean {
-  const esperado = process.env.CRON_SECRET
+  const esperado = process.env.IA_CRON_SECRET || process.env.CRON_SECRET
   if (!esperado) return false
   return req.headers.get('authorization') === `Bearer ${esperado}`
 }
