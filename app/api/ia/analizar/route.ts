@@ -18,10 +18,14 @@ import { GeminiVision } from '@/lib/ia/gemini'
 import { ErrorProveedor } from '@/lib/ia/proveedor'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
+// El plan Hobby de Vercel corta las funciones a 60 s. Con ~6-10 s por imagen,
+// un lote de 5 entra cómodo. Por eso el tope duro es bajo: es preferible correr
+// el análisis varias veces que perder un lote entero por timeout.
+export const maxDuration = 60
 
 const TIPOS_SOPORTADOS = ['uniforme', 'libro_guardia'] as const
-const LIMITE_DURO = 25
+const LIMITE_DURO = 6
+const MS_RESERVA_RESPUESTA = 8_000
 
 type Cuerpo = {
   evidencia_ids?: string[]
@@ -107,8 +111,17 @@ export async function POST(req: NextRequest) {
   const schema = schemaRespuesta()
   const resultados: any[] = []
   let encolados = 0
+  const inicio = Date.now()
 
   for (const ev of evidencias) {
+    // Corte por presupuesto de tiempo. Se evalúa ANTES de reclamar la fila:
+    // así lo que no llegamos a analizar queda sin encolar, en lugar de quedar
+    // colgado en 'procesando' cuando la función muera por timeout.
+    if (Date.now() - inicio > maxDuration * 1000 - MS_RESERVA_RESPUESTA) {
+      resultados.push({ evidencia_id: ev.id, estado: 'omitida', motivo: 'Sin tiempo en este lote — volvé a ejecutar' })
+      continue
+    }
+
     const conf = configPorTipo.get(ev.tipo_evidencia)
 
     if (!conf) {

@@ -308,7 +308,7 @@ export default function AnalisisIAPanel({
                 <option value="libro_guardia">Sólo libro</option>
               </select></div>
             <div><label style={{ fontSize: 11, color: C.sub, display: 'block' }}>Cantidad</label>
-              <input type="number" min={1} max={25} style={{ ...input, width: 80 }}
+              <input type="number" min={1} max={6} style={{ ...input, width: 80 }}
                 value={f.limite} onChange={e => setF({ ...f, limite: Number(e.target.value) })} /></div>
             <button style={boton(C.green, !ejecutando)} disabled={ejecutando} onClick={ejecutar}>
               {ejecutando ? 'Analizando…' : 'Analizar'}
