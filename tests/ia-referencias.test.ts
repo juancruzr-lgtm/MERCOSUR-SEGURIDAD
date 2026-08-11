@@ -42,8 +42,16 @@ describe('catálogos', () => {
     expect(ELEMENTOS_UNIFORME[0].etiqueta).toBe('Camisa / chomba')
   })
 
-  it('punto_control todavía no tiene catálogo', () => {
-    expect(catalogoInicial('punto_control')).toEqual([])
+  it('punto de ronda arranca con la comparación contra la referencia', () => {
+    const claves = catalogoInicial('punto_control').map(e => e.clave)
+    expect(claves).toContain('coincide_con_referencia')
+    expect(claves).toContain('escena_interpretable')
+    expect(claves).toContain('sin_obstruccion')
+  })
+
+  it('la iluminación no es requerida en rondas: las nocturnas son legítimamente oscuras', () => {
+    const iluminacion = catalogoInicial('punto_control').find(e => e.clave === 'iluminacion_suficiente')
+    expect(iluminacion?.requerido).toBe(false)
   })
 })
 

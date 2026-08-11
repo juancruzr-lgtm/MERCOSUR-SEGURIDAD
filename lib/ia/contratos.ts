@@ -106,8 +106,16 @@ Tu tarea es determinar qué elementos del uniforme reglamentario son visibles y 
 Tu tarea es determinar si la página es legible y qué campos aparecen completados.
 NO transcribas el contenido: sólo presencia y legibilidad.`,
   punto_control: `Estás mirando la foto que un vigilador sacó al registrar un punto de control durante una ronda.
-Tu tarea es evaluar si la imagen sirve como evidencia. NO afirmes si la ubicación es la correcta:
-no tenés forma de saberlo.`,
+
+Esta foto se analiza porque el GPS del dispositivo quedó FUERA del radio permitido del punto.
+Tu tarea es aportar evidencia visual complementaria: ¿la imagen se parece a la referencia de
+ese punto o no?
+
+El GPS sigue siendo la evidencia geográfica principal. Vos NO decidís si el vigilador estuvo
+donde debía. Aportás una señal más para que una persona decida.
+
+Si NO recibiste una foto de referencia, el elemento "coincide_con_referencia" es
+NO_DETERMINABLE de forma obligatoria: sin patrón no hay comparación posible.`,
 }
 
 export function construirPrompt(analisisTipo: string, elementos: ElementoCriterio[]): string {

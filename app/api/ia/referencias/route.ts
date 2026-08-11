@@ -13,7 +13,10 @@ import { siguienteVersion, validarCriterios, type TipoReferenciaIA } from '@/lib
 
 export const runtime = 'nodejs'
 
-const TIPOS_VALIDOS: TipoReferenciaIA[] = ['uniforme', 'libro_guardia']
+// punto_control incluido: la configuración es global (criterios y prompt), pero
+// las FOTOS de referencia de ronda no van acá — cada punto tiene la suya, se
+// carga desde el editor del punto y se guarda en ronda_punto_referencias.
+const TIPOS_VALIDOS: TipoReferenciaIA[] = ['uniforme', 'libro_guardia', 'punto_control']
 
 // ── POST — crear una configuración nueva (borrador) ─────────────────────────
 export async function POST(req: NextRequest) {
@@ -29,10 +32,7 @@ export async function POST(req: NextRequest) {
 
   const tipo = body?.analisis_tipo
   if (!TIPOS_VALIDOS.includes(tipo)) {
-    return NextResponse.json(
-      { error: 'analisis_tipo debe ser uniforme o libro_guardia. Los puntos de ronda se cargan desde el punto.' },
-      { status: 400 },
-    )
+    return NextResponse.json({ error: 'analisis_tipo inválido' }, { status: 400 })
   }
 
   const nombre = typeof body?.nombre === 'string' ? body.nombre.trim() : ''

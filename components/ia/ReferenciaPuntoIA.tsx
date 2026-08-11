@@ -129,7 +129,7 @@ export default function ReferenciaPuntoIA({
         <span style={{
           fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
           background: C.yellow + '22', color: C.yellow,
-        }}>ANÁLISIS DE RONDAS NO ACTIVADO</span>
+        }}>SE USA SI EL GPS FALLA</span>
       </div>
 
       <div style={{ fontSize: 12, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>

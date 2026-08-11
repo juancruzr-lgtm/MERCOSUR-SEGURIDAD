@@ -59,6 +59,7 @@ async function correr() {
       maxIntentos: Number(cfg.get('ia_max_intentos') ?? 5),
       cuotaMuestra: Number(cfg.get('ia_muestra_normales_por_dia') ?? 10),
       maxReferencias: Number(cfg.get('ia_referencias_max') ?? 4),
+      soloGpsFueraRadio: cfg.get('ia_ronda_solo_gps_fuera_radio') !== 'false',
     })
 
     return NextResponse.json({

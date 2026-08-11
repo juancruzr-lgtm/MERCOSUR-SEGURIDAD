@@ -602,8 +602,9 @@ function TabPuntos() {
           La foto de referencia de cada punto se carga <strong style={{ color: C.text }}>desde el punto de control</strong>,
           en la configuración de la ronda. Esta pantalla es un inventario para ver qué falta.
           <br />
-          El análisis IA de rondas <strong style={{ color: C.yellow }}>todavía no está activado</strong>: la referencia
-          es metadata y no modifica obligación, GPS, política de foto ni alertas.
+          El análisis de rondas se dispara <strong style={{ color: C.yellow }}>sólo cuando el GPS quedó fuera del
+          radio</strong> del punto. El GPS sigue siendo la evidencia geográfica; la foto aporta una señal más para
+          que una persona decida. Sin referencia cargada, la comparación resulta NO DETERMINABLE.
         </div>
         <div style={{ display: 'flex', gap: 16, marginTop: 14, flexWrap: 'wrap' }}>
           <div><span style={badge(C.green)}>{conRef}</span> <span style={{ fontSize: 12, color: C.sub }}>con referencia</span></div>
@@ -684,7 +685,11 @@ export default function ReferenciasIAPanel({ user }: { user?: { rol?: string } }
       </div>
 
       {tab === 'puntos'
-        ? <TabPuntos />
+        ? <>
+            <TabConfiguraciones key="punto_control" tipo="punto_control" esAdmin={esAdmin} />
+            <div style={{ height: 8 }} />
+            <TabPuntos />
+          </>
         : <TabConfiguraciones key={tab} tipo={tab} esAdmin={esAdmin} />}
     </div>
   )

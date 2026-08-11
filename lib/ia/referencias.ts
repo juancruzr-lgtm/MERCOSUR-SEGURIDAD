@@ -56,9 +56,17 @@ export const CAMPOS_LIBRO: ElementoCriterio[] = [
   { clave: 'pagina_visible',   etiqueta: 'Página suficientemente visible', requerido: true, nota: '' },
 ]
 
+export const CAMPOS_PUNTO_CONTROL: ElementoCriterio[] = [
+  { clave: 'coincide_con_referencia', etiqueta: 'Coincide con la foto de referencia', requerido: true,  nota: 'Sólo si el punto tiene referencia cargada. Sin referencia va NO_DETERMINABLE.' },
+  { clave: 'escena_interpretable',    etiqueta: 'Escena interpretable',               requerido: true,  nota: 'Se distinguen elementos, no es una superficie uniforme ni una imagen vacía.' },
+  { clave: 'sin_obstruccion',         etiqueta: 'Sin obstrucción',                    requerido: true,  nota: 'La cámara no está tapada por dedo, tela ni superficie pegada.' },
+  { clave: 'iluminacion_suficiente',  etiqueta: 'Iluminación suficiente',             requerido: false, nota: 'Las rondas nocturnas son legítimamente oscuras.' },
+]
+
 export function catalogoInicial(tipo: TipoReferenciaIA): ElementoCriterio[] {
   if (tipo === 'uniforme') return ELEMENTOS_UNIFORME.map(e => ({ ...e }))
   if (tipo === 'libro_guardia') return CAMPOS_LIBRO.map(e => ({ ...e }))
+  if (tipo === 'punto_control') return CAMPOS_PUNTO_CONTROL.map(e => ({ ...e }))
   return []
 }
 

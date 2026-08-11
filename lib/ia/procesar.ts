@@ -13,7 +13,7 @@ import { derivarClasificacion, normalizarResultado, schemaRespuesta, type Umbral
 import { GeminiVision } from './gemini'
 import { ErrorProveedor } from './proveedor'
 
-export const TIPOS_SOPORTADOS = ['uniforme', 'libro_guardia'] as const
+export const TIPOS_SOPORTADOS = ['uniforme', 'libro_guardia', 'punto_control'] as const
 export const LIMITE_DURO = 6
 
 export type FiltrosLote = {
@@ -39,6 +39,8 @@ export type OpcionesProceso = {
   cuotaMuestra?: number
   /** Tope de fotos de referencia a enviar junto con la evidencia. */
   maxReferencias?: number
+  /** Rondas: analizar solo cuando el GPS quedo fuera del radio. */
+  soloGpsFueraRadio?: boolean
 }
 
 export type ResultadoItem = {
@@ -54,7 +56,7 @@ export type ResultadoItem = {
 }
 
 export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: ResultadoItem[], encolados: number }> {
-  const { client, modo, limite, filtros, loteId, presupuestoMs, cuotaMuestra = 0, maxReferencias = 4 } = op
+  const { client, modo, limite, filtros, loteId, presupuestoMs, cuotaMuestra = 0, maxReferencias = 4, soloGpsFueraRadio = true } = op
   const inicio = Date.now()
   const RESERVA_MS = 8_000
 
@@ -64,7 +66,7 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
 
   let q = client
     .from('evidencias')
-    .select('id, tipo_evidencia, bucket, storage_path, content_type, contenido_sha256, objetivo_id, guardia_id, turno_id, created_at')
+    .select('id, tipo_evidencia, proceso_id, bucket, storage_path, content_type, contenido_sha256, objetivo_id, guardia_id, turno_id, created_at')
     .in('tipo_evidencia', tipos)
     .order('created_at', { ascending: false })
     .limit(Math.min(limite, LIMITE_DURO))
@@ -112,6 +114,35 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
     if (!ev.objetivo_id) {
       resultados.push({ evidencia_id: ev.id, estado: 'omitida', motivo: 'Evidencia sin objetivo' })
       continue
+    }
+
+    // ── Rondas: sólo cuando el GPS falló ──────────────────────────────────
+    // El GPS sigue siendo la evidencia geográfica. La foto no lo reemplaza: se
+    // analiza únicamente cuando el GPS quedó fuera del radio, para aportar una
+    // señal más a una decisión humana. Analizar todas las fotos de ronda sería
+    // gastar cuota en confirmar lo que el GPS ya resolvió.
+    let rondaPuntoId: string | null = null
+    if (ev.tipo_evidencia === 'punto_control') {
+      const { data: ejec } = await client
+        .from('ronda_ejecucion_puntos')
+        .select('ronda_punto_id, dentro_radio, distancia_metros')
+        .eq('id', ev.proceso_id)
+        .maybeSingle()
+
+      if (!ejec) {
+        // Las 8 evidencias huérfanas del 28-29/07 caen acá. No se bloquea nada.
+        resultados.push({ evidencia_id: ev.id, estado: 'omitida', motivo: 'Punto de ejecución inexistente' })
+        continue
+      }
+      if (soloGpsFueraRadio && ejec.dentro_radio !== false) {
+        resultados.push({
+          evidencia_id: ev.id,
+          estado: 'omitida',
+          motivo: ejec.dentro_radio === true ? 'GPS dentro del radio' : 'GPS sin dato',
+        })
+        continue
+      }
+      rondaPuntoId = ejec.ronda_punto_id
     }
 
     const { data: fila, error: errorClaim } = await client
@@ -178,13 +209,24 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
       // Cada referencia es otra imagen en el pedido: mejora el juicio del
       // modelo pero suma tokens y segundos. El tope es configurable para poder
       // ajustarlo si la cuota del free tier o el reloj de 60 s aprietan.
-      const { data: imgs } = await client
-        .from('ia_referencia_imagenes')
-        .select('bucket, storage_path, content_type')
-        .eq('configuracion_id', conf.id)
-        .eq('activo', true)
-        .order('orden')
-        .limit(maxReferencias)
+      // Uniforme y libro comparan contra las referencias de la configuración.
+      // Un punto de ronda compara contra SU propia referencia: no hay un
+      // "portón correcto" genérico, cada punto tiene el suyo.
+      const imgs = rondaPuntoId
+        ? (await client
+            .from('ronda_punto_referencias')
+            .select('bucket, storage_path, content_type')
+            .eq('ronda_punto_id', rondaPuntoId)
+            .eq('activo', true)
+            .order('vigente_desde', { ascending: false })
+            .limit(maxReferencias)).data
+        : (await client
+            .from('ia_referencia_imagenes')
+            .select('bucket, storage_path, content_type')
+            .eq('configuracion_id', conf.id)
+            .eq('activo', true)
+            .order('orden')
+            .limit(maxReferencias)).data
 
       const referencias: Array<{ bytes: Buffer, mime: string }> = []
       for (const img of imgs ?? []) {

@@ -65,6 +65,7 @@ export async function POST(req: NextRequest) {
       presupuestoMs: 55_000,
       maxIntentos: Number(cfg.get('ia_max_intentos') ?? 5),
       maxReferencias: Number(cfg.get('ia_referencias_max') ?? 4),
+      soloGpsFueraRadio: cfg.get('ia_ronda_solo_gps_fuera_radio') !== 'false',
     })
 
     if (loteId) {
