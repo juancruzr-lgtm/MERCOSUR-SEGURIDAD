@@ -39,7 +39,9 @@ export type OpcionesProceso = {
   cuotaMuestra?: number
   /** Tope de fotos de referencia a enviar junto con la evidencia. */
   maxReferencias?: number
-  /** Rondas: analizar solo cuando el GPS quedo fuera del radio. */
+  /** Kill-switch: si es true, sólo analiza fotos de ronda cuyo GPS quedó fuera
+   *  del radio. Por defecto false — toda foto de punto se analiza, porque GPS y
+   *  foto controlan cosas distintas. */
   soloGpsFueraRadio?: boolean
 }
 
@@ -56,7 +58,7 @@ export type ResultadoItem = {
 }
 
 export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: ResultadoItem[], encolados: number }> {
-  const { client, modo, limite, filtros, loteId, presupuestoMs, cuotaMuestra = 0, maxReferencias = 4, soloGpsFueraRadio = true } = op
+  const { client, modo, limite, filtros, loteId, presupuestoMs, cuotaMuestra = 0, maxReferencias = 4, soloGpsFueraRadio = false } = op
   const inicio = Date.now()
   const RESERVA_MS = 8_000
 
@@ -116,12 +118,17 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
       continue
     }
 
-    // ── Rondas: sólo cuando el GPS falló ──────────────────────────────────
-    // El GPS sigue siendo la evidencia geográfica. La foto no lo reemplaza: se
-    // analiza únicamente cuando el GPS quedó fuera del radio, para aportar una
-    // señal más a una decisión humana. Analizar todas las fotos de ronda sería
-    // gastar cuota en confirmar lo que el GPS ya resolvió.
+    // ── Rondas ────────────────────────────────────────────────────────────
+    // GPS y foto controlan cosas distintas: el GPS dice DÓNDE estuvo, la foto
+    // dice QUÉ evidencia presentó. Por eso toda foto de punto se analiza, haya
+    // marcado el GPS bien o mal. La ausencia de foto no se analiza porque
+    // simplemente no existe la evidencia.
+    //
+    // dentro_radio no decide si se analiza: agrega contexto al resultado.
     let rondaPuntoId: string | null = null
+    let gpsFueraRadio = false
+    let distanciaMetros: number | null = null
+
     if (ev.tipo_evidencia === 'punto_control') {
       const { data: ejec } = await client
         .from('ronda_ejecucion_puntos')
@@ -130,10 +137,12 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         .maybeSingle()
 
       if (!ejec) {
-        // Las 8 evidencias huérfanas del 28-29/07 caen acá. No se bloquea nada.
+        // Las 8 evidencias huérfanas del 28-29/07 caen acá. No bloquean el lote.
         resultados.push({ evidencia_id: ev.id, estado: 'omitida', motivo: 'Punto de ejecución inexistente' })
         continue
       }
+
+      // Kill-switch temporal. Por defecto está apagado: se analiza todo.
       if (soloGpsFueraRadio && ejec.dentro_radio !== false) {
         resultados.push({
           evidencia_id: ev.id,
@@ -142,7 +151,10 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         })
         continue
       }
+
       rondaPuntoId = ejec.ronda_punto_id
+      gpsFueraRadio = ejec.dentro_radio === false
+      distanciaMetros = ejec.distancia_metros ?? null
     }
 
     const { data: fila, error: errorClaim } = await client
@@ -245,7 +257,17 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
       const normalizado = normalizarResultado(respuesta.json, criterios)
       if (!normalizado) throw new ErrorProveedor('Respuesta del modelo sin forma utilizable', 'transitorio')
 
-      const efectiva = derivarClasificacion(normalizado, criterios, umbrales)
+      let efectiva = derivarClasificacion(normalizado, criterios, umbrales)
+      let motivosFinales = normalizado.motivos
+
+      // ── Contexto de GPS ─────────────────────────────────────────────────
+      // No sustituye al GPS ni lo reinterpreta: agrega el dato al caso para que
+      // quien revisa vea las dos señales juntas. Una foto impecable con el GPS
+      // fuera del radio sigue mereciendo una mirada, y al revés también.
+      if (gpsFueraRadio) {
+        motivosFinales = ['GPS_FUERA_DE_RADIO', ...motivosFinales]
+        if (efectiva === 'SIN_OBSERVACIONES') efectiva = 'REVISAR'
+      }
 
       // ── Muestra de control ────────────────────────────────────────────
       // Una foto SIN_OBSERVACIONES no va a la bandeja: sería ruido. Pero si
@@ -278,8 +300,10 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         clasificacion_efectiva: efectiva,
         evaluable: normalizado.evaluable,
         confianza: normalizado.confianza,
-        motivos: normalizado.motivos,
-        resumen: normalizado.resumen,
+        motivos: motivosFinales,
+        resumen: gpsFueraRadio && distanciaMetros != null
+          ? `GPS a ${Math.round(distanciaMetros)} m del punto. ${normalizado.resumen}`.slice(0, 240)
+          : normalizado.resumen,
         tokens_entrada: respuesta.tokensEntrada,
         tokens_salida: respuesta.tokensSalida,
         costo_estimado_usd: 0,
@@ -289,7 +313,7 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         evidencia_id: ev.id, analisis_id: fila.id, estado: 'completado',
         clasificacion_ia: normalizado.clasificacion,
         clasificacion_efectiva: efectiva,
-        motivos: normalizado.motivos,
+        motivos: motivosFinales,
         resumen: normalizado.resumen,
       })
     } catch (e: any) {

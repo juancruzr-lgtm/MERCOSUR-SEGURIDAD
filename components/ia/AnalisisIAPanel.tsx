@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { ETIQUETA_MOTIVO } from '@/lib/ia/contratos'
+import IngresosDiaPanel from '@/components/ia/IngresosDiaPanel'
 
 const FONT = brandTypography?.fontFamily ?? 'system-ui, sans-serif'
 const C = {
@@ -133,53 +134,6 @@ export default function AnalisisIAPanel({
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
-
-  // ── Ingresos sin foto ───────────────────────────────────────────────────
-  // El punto ciego del sistema: si el vigilador fichó y no subió las dos fotos,
-  // la IA no tiene nada que analizar y el caso no aparece por ningún lado. Se
-  // detecta por ausencia, comparando fichajes contra evidencias.
-  //
-  // Sólo admin: `registros_asistencia` no tiene alcance por zona en su RLS
-  // (deuda conocida, ver auditoría), así que mostrárselo a un supervisor
-  // filtraría mal. Se resuelve cuando se corrija esa RLS.
-  const [sinFoto, setSinFoto] = useState<Array<{ id: string, guardia_id: string | null, objetivo_id: string | null, created_at: string }>>([])
-
-  useEffect(() => {
-    if (tab !== 'diario' || !esAdmin) { setSinFoto([]); return }
-    let vigente = true
-    ;(async () => {
-      // Día en hora Argentina: de las 03:00 UTC a las 03:00 UTC del día siguiente.
-      const desde = new Date(`${fechaDiario}T03:00:00.000Z`)
-      const hasta = new Date(desde.getTime() + 24 * 60 * 60 * 1000)
-
-      const { data: regs } = await supabase
-        .from('registros_asistencia')
-        .select('id, guardia_id, created_at, turno_id, turnos(objetivo_id)')
-        .gte('created_at', desde.toISOString())
-        .lt('created_at', hasta.toISOString())
-
-      const lista = (regs ?? []) as any[]
-      if (lista.length === 0) { if (vigente) setSinFoto([]); return }
-
-      const { data: evs } = await supabase
-        .from('evidencias')
-        .select('proceso_id')
-        .eq('proceso_tipo', 'ingreso')
-        .in('proceso_id', lista.map(r => r.id))
-
-      const conFoto = new Set((evs ?? []).map(e => e.proceso_id as string))
-      if (!vigente) return
-      setSinFoto(lista
-        .filter(r => !conFoto.has(r.id))
-        .map(r => ({
-          id: r.id,
-          guardia_id: r.guardia_id,
-          objetivo_id: Array.isArray(r.turnos) ? r.turnos[0]?.objetivo_id : r.turnos?.objetivo_id,
-          created_at: r.created_at,
-        })))
-    })()
-    return () => { vigente = false }
-  }, [tab, fechaDiario, esAdmin])
 
   // ── Revisión: un clic, se guarda y sigue ────────────────────────────────
   const revisar = async (id: string, decision: 'CORRECTO' | 'INCORRECTO') => {
@@ -617,36 +571,14 @@ export default function AnalisisIAPanel({
           )}
 
           {esAdmin && (
-            <div style={card({ marginBottom: 14, borderColor: sinFoto.length > 0 ? C.red + '55' : C.border })}>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={badge(sinFoto.length > 0 ? C.red : C.green)}>
-                  {sinFoto.length}
-                </span>
-                <strong style={{ fontSize: 14, color: C.text }}>Ingresos sin foto</strong>
-                <span style={{ fontSize: 11, color: C.muted }}>
-                  Fichajes de ese día sin evidencia de uniforme ni de libro. La IA no puede verlos: no existe la foto.
-                </span>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: C.text, margin: "4px 0 10px" }}>
+                Ingresos del día
               </div>
-
-              {sinFoto.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  {sinFoto.map(r => (
-                    <div key={r.id} style={{
-                      display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12,
-                      padding: '7px 0', borderTop: `1px solid ${C.border}`,
-                    }}>
-                      <span style={{ color: C.text, fontWeight: 700, minWidth: 160 }}>
-                        {r.guardia_id ? nombreGuardia.get(r.guardia_id) ?? '—' : '—'}
-                      </span>
-                      <span style={{ color: C.sub, minWidth: 140 }}>
-                        {r.objetivo_id ? nombreObjetivo.get(r.objetivo_id) ?? '—' : 'Sin objetivo'}
-                      </span>
-                      <span style={{ color: C.muted }}>{fechaHora(r.created_at)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <IngresosDiaPanel fecha={fechaDiario} objetivos={objetivos} guardias={guardias} />
             </div>
+          )}
+
           )}
 
           {diario.pendientes.length > 0 && (

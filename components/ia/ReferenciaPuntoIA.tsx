@@ -6,8 +6,8 @@
 // Escribe EXCLUSIVAMENTE en `ronda_punto_referencias` vía /api/ia/puntos/referencia.
 //
 // No toca politica_foto, foto_requerida, GPS, orden, obligación, ejecución ni
-// alertas. El análisis IA de rondas todavía no está activado: esto sólo deja la
-// referencia lista para cuando lo esté.
+// alertas. Se usa para comparar contra la foto que el vigilador saca en el punto.
+//
 
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -129,11 +129,11 @@ export default function ReferenciaPuntoIA({
         <span style={{
           fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
           background: C.yellow + '22', color: C.yellow,
-        }}>SE USA SI EL GPS FALLA</span>
+        }}>SE COMPARA CON LA FOTO DEL PUNTO</span>
       </div>
 
       <div style={{ fontSize: 12, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
-        Metadata para el análisis futuro. No modifica la política de foto, el GPS,
+        La IA compara la foto que saca el vigilador contra esta referencia. No modifica la política de foto, el GPS,
         la obligación ni las alertas de este punto.
       </div>
 
