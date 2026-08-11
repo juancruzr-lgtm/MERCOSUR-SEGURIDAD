@@ -225,7 +225,7 @@ export default function AnalisisIAPanel({
         precision: vp + fp > 0 ? Math.round((vp / (vp + fp)) * 100) : null,
       }
     }
-    return ['uniforme', 'libro_guardia'].map(porTipo)
+    return ['uniforme', 'libro_guardia', 'punto_control'].map(porTipo)
   }, [completados])
 
   // ── Tarjeta ─────────────────────────────────────────────────────────────
@@ -417,9 +417,10 @@ export default function AnalisisIAPanel({
               </select></div>
             <div><label style={{ fontSize: 11, color: C.sub, display: 'block' }}>Tipo</label>
               <select style={input} value={f.tipo} onChange={e => setF({ ...f, tipo: e.target.value })}>
-                <option value="">Uniforme y libro</option>
+                <option value="">Todos los tipos</option>
                 <option value="uniforme">Sólo uniforme</option>
                 <option value="libro_guardia">Sólo libro</option>
+                <option value="punto_control">Sólo rondas</option>
               </select></div>
             <div><label style={{ fontSize: 11, color: C.sub, display: 'block' }}>Cantidad</label>
               <input type="number" min={1} max={6} style={{ ...input, width: 80 }}
@@ -603,7 +604,7 @@ export default function AnalisisIAPanel({
 
       {!cargando && tab === 'metricas' && (
         <>
-          {m.map(x => (
+          {m.filter(x => x.total > 0 || x.tipo !== 'punto_control').map(x => (
             <div key={x.tipo} style={card({ marginBottom: 14 })}>
               <div style={{ fontWeight: 800, fontSize: 15, color: C.text, marginBottom: 12 }}>
                 {ETIQUETA_TIPO_EV[x.tipo]}
