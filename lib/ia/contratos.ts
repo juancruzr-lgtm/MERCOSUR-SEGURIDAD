@@ -22,7 +22,10 @@ export const MOTIVOS = [
   'FOTO_OSCURA', 'FOTO_BORROSA', 'FOTO_SOBREEXPUESTA', 'CAMARA_TAPADA',
   'ENCUADRE_INSUFICIENTE', 'SIN_PERSONA_EN_IMAGEN', 'MULTIPLES_PERSONAS',
   'ELEMENTO_REQUERIDO_AUSENTE', 'ELEMENTO_NO_DETERMINABLE',
-  'ILEGIBLE', 'NO_CORRESPONDE_AL_TIPO', 'OTRO',
+  'ILEGIBLE', 'NO_CORRESPONDE_AL_TIPO',
+  // Rondas: la escena no se parece a la del punto, o no hay con qué comparar.
+  'ESCENA_NO_COINCIDE', 'SIN_BASE_DE_COMPARACION',
+  'OTRO',
 ] as const
 export type Motivo = typeof MOTIVOS[number]
 
@@ -105,17 +108,54 @@ Tu tarea es determinar qué elementos del uniforme reglamentario son visibles y 
   libro_guardia: `Estás mirando la foto del libro de guardia que un vigilador saca al fichar su ingreso.
 Tu tarea es determinar si la página es legible y qué campos aparecen completados.
 NO transcribas el contenido: sólo presencia y legibilidad.`,
-  punto_control: `Estás mirando la foto que un vigilador sacó al registrar un punto de control durante una ronda.
+  punto_control: `Estás mirando la foto que un vigilador sacó al registrar un punto de control
+durante una ronda.
 
-Esta foto se analiza porque el GPS del dispositivo quedó FUERA del radio permitido del punto.
-Tu tarea es aportar evidencia visual complementaria: ¿la imagen se parece a la referencia de
-ese punto o no?
+Tu tarea es decidir si esa foto fue tomada EN EL MISMO LUGAR que las imágenes de referencia
+y de ejemplo que recibiste.
 
+CÓMO COMPARAR — leé la escena, no los píxeles.
+No estás buscando dos imágenes iguales. Estás reconociendo un lugar, como lo haría una
+persona que ya estuvo ahí. Fijate en lo que no se mueve:
+- estructuras principales: paredes, techos, columnas, rejas;
+- accesos: portones, puertas, molinetes, tranqueras;
+- la garita y su posición relativa;
+- caminos, veredas, playones, sentido y forma del terreno;
+- vegetación grande: árboles, canteros, cercos vivos;
+- objetos permanentes: carteles, luminarias, tanques, containers, numeración;
+- la perspectiva general y cómo se ordenan esos elementos entre sí.
+
+DIFERENCIAS QUE DEBÉS TOLERAR — no son motivo para decir que no coincide:
+- día, noche, amanecer, contraluz, foco o linterna;
+- lluvia, niebla, barro, nieve, charcos, viento;
+- personas presentes o ausentes;
+- vehículos estacionados, movidos o retirados;
+- vegetación más crecida, podada o seca según la estación;
+- puertas o portones abiertos en una foto y cerrados en otra;
+- cambios de ángulo, altura, distancia o encuadre de unos pocos metros;
+- objetos temporales: bolsas, conos, herramientas, cajas.
+
+CUÁNDO SÍ decir que NO coincide:
+solamente si los elementos permanentes son incompatibles — otro tipo de construcción, otro
+acceso, otra distribución del espacio, un interior cuando la referencia es un exterior, o una
+escena sin ningún elemento reconocible en común. Es decir: cuando una persona razonable
+diría "esto es otro lado", no "esto está distinto".
+
+VALOR DEL ELEMENTO coincide_con_referencia:
+- PRESENTE: es el mismo lugar, aunque cambie la luz, el clima o el encuadre.
+- AUSENTE: es otro lugar. Usalo sólo con evidencia clara, no ante la duda.
+- NO_DETERMINABLE: no podés saberlo — no recibiste ninguna imagen de comparación,
+  o la foto no muestra suficiente escena. Ante la duda va acá, nunca AUSENTE.
+
+Si NO recibiste NI referencia formal NI ejemplos aceptados, "coincide_con_referencia" es
+NO_DETERMINABLE de forma obligatoria y agregás el motivo SIN_BASE_DE_COMPARACION: sin patrón
+no hay comparación posible.
+
+LÍMITES DE TU ROL:
 El GPS sigue siendo la evidencia geográfica principal. Vos NO decidís si el vigilador estuvo
-donde debía. Aportás una señal más para que una persona decida.
-
-Si NO recibiste una foto de referencia, el elemento "coincide_con_referencia" es
-NO_DETERMINABLE de forma obligatoria: sin patrón no hay comparación posible.`,
+donde debía, NO afirmás que haya fraude, engaño ni intención, y NO proponés sanciones.
+Aportás una señal más para que una persona decida. Que una foto no coincida puede deberse a
+una referencia desactualizada, una obra, un cambio de acceso o un error de carga.`,
 }
 
 export function construirPrompt(analisisTipo: string, elementos: ElementoCriterio[]): string {
@@ -133,6 +173,47 @@ export function construirPrompt(analisisTipo: string, elementos: ElementoCriteri
     '',
     'Respondé únicamente con el JSON del schema. Sin texto adicional.',
   ].join('\n')
+}
+
+/**
+ * Bloque que describe QUÉ imágenes acompañan a esta evidencia en particular.
+ *
+ * Va aparte del prompt guardado en `ia_configuraciones` a propósito: ese prompt
+ * es estable y su sha256 queda registrado para poder reconstruir un análisis
+ * viejo. La memoria visual, en cambio, cambia foto a foto. Mezclarlos invalidaría
+ * el hash en cada análisis y la trazabilidad se perdería.
+ */
+export function bloqueContextoVisual(m: {
+  referencias: number
+  positivos: number
+  negativos: number
+}): string {
+  const total = m.referencias + m.positivos + m.negativos
+  if (total === 0) {
+    return [
+      'IMÁGENES DE COMPARACIÓN RECIBIDAS: ninguna.',
+      'No tenés con qué comparar: "coincide_con_referencia" es NO_DETERMINABLE',
+      'y agregás el motivo SIN_BASE_DE_COMPARACION.',
+    ].join('\n')
+  }
+
+  const lineas = ['IMÁGENES DE COMPARACIÓN RECIBIDAS, en este orden:']
+  if (m.referencias > 0) lineas.push(`- ${m.referencias} REFERENCIA FORMAL cargada por Administración.`)
+  if (m.positivos > 0) {
+    lineas.push(
+      `- ${m.positivos} EJEMPLO(S) ACEPTADO(S): fotos reales de este mismo punto que una`,
+      '  persona revisó y confirmó como correctas. Muestran el rango normal de',
+      '  variación del lugar: distintas horas, climas y encuadres. Usalas para no',
+      '  confundir una variación legítima con otro lugar.',
+    )
+  }
+  if (m.negativos > 0) {
+    lineas.push(
+      `- ${m.negativos} EJEMPLO(S) RECHAZADO(S): fotos de este punto que una persona marcó`,
+      '  como incorrectas. Son el borde de lo aceptable, no la norma.',
+    )
+  }
+  return lineas.join('\n')
 }
 
 // ── Normalización de la respuesta ───────────────────────────────────────────
@@ -251,5 +332,9 @@ export const ETIQUETA_MOTIVO: Record<string, string> = {
   ELEMENTO_NO_DETERMINABLE: 'Elemento no determinable',
   ILEGIBLE: 'Ilegible',
   NO_CORRESPONDE_AL_TIPO: 'No corresponde al tipo de evidencia',
+  ESCENA_NO_COINCIDE: 'La escena no coincide con el punto',
+  SIN_BASE_DE_COMPARACION: 'Sin referencia ni historial para comparar',
+  GPS_FUERA_DE_RADIO: 'GPS fuera del radio',
+  EVIDENCIA_ALTERADA: 'La evidencia fue alterada',
   OTRO: 'Otro',
 }

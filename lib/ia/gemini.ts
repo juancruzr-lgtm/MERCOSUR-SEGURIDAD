@@ -44,8 +44,23 @@ export class GeminiVision implements ProveedorVision {
     // Las referencias van PRIMERO y rotuladas, para que el modelo entienda que
     // son el patrón y no la evidencia bajo análisis.
     for (const ref of pedido.referencias ?? []) {
-      partes.push({ text: 'REFERENCIA (así debería verse lo correcto):' })
+      partes.push({ text: 'REFERENCIA FORMAL (cargada por Administración; así debería verse lo correcto):' })
       partes.push({ inline_data: { mime_type: ref.mime, data: ref.bytes.toString('base64') } })
+    }
+
+    // Después la memoria visual, separada de la referencia y con la clase
+    // explícita. El orden importa: primero el patrón, después la variación real
+    // del lugar, y recién al final la foto en discusión.
+    const positivos = (pedido.ejemplos ?? []).filter(e => e.clase === 'positivo')
+    const negativos = (pedido.ejemplos ?? []).filter(e => e.clase === 'negativo')
+
+    for (const ej of positivos) {
+      partes.push({ text: 'EJEMPLO ACEPTADO (foto real de ESTE MISMO punto que una persona confirmó como correcta):' })
+      partes.push({ inline_data: { mime_type: ej.mime, data: ej.bytes.toString('base64') } })
+    }
+    for (const ej of negativos) {
+      partes.push({ text: 'EJEMPLO RECHAZADO (foto real de ESTE MISMO punto que una persona marcó como incorrecta):' })
+      partes.push({ inline_data: { mime_type: ej.mime, data: ej.bytes.toString('base64') } })
     }
 
     partes.push({ text: 'EVIDENCIA A ANALIZAR:' })

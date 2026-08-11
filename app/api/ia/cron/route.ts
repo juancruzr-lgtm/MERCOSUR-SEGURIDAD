@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import { procesarLote, LIMITE_DURO } from '@/lib/ia/procesar'
+import { LIMITES_MEMORIA_DEFECTO } from '@/lib/ia/memoria'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -59,7 +60,16 @@ async function correr() {
       maxIntentos: Number(cfg.get('ia_max_intentos') ?? 5),
       cuotaMuestra: Number(cfg.get('ia_muestra_normales_por_dia') ?? 10),
       maxReferencias: Number(cfg.get('ia_referencias_max') ?? 4),
-      soloGpsFueraRadio: cfg.get('ia_ronda_solo_gps_fuera_radio') !== 'false',
+      // Con la clave ausente esto valía `true` y el cron analizaba SÓLO las
+      // fotos con GPS fuera de radio. Además de contradecir la regla acordada
+      // —GPS y foto son controles independientes—, sesgaba la memoria visual:
+      // el historial confirmado se habría armado únicamente con casos anómalos.
+      soloGpsFueraRadio: cfg.get('ia_ronda_solo_gps_fuera_radio') === 'true',
+      limitesMemoria: {
+        maxPositivos: Number(cfg.get('ia_memoria_max_positivos') ?? LIMITES_MEMORIA_DEFECTO.maxPositivos),
+        maxNegativos: Number(cfg.get('ia_memoria_max_negativos') ?? LIMITES_MEMORIA_DEFECTO.maxNegativos),
+        minimoParaHistorial: Number(cfg.get('ia_memoria_minimo_historial') ?? LIMITES_MEMORIA_DEFECTO.minimoParaHistorial),
+      },
     })
 
     return NextResponse.json({

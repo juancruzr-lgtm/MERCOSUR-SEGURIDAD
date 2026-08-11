@@ -15,7 +15,7 @@ export type EstadoPuntoIA =
   | 'FOTO_FALTANTE'      // se exigía foto y no llegó
   | 'FOTO_NO_COINCIDE'   // hay referencia y la IA dice que no se parece
   | 'FOTO_INSUFICIENTE'  // oscura, tapada, borrosa, vacía: no se puede evaluar
-  | 'SIN_REFERENCIA'     // hay foto, pero el punto no tiene referencia cargada
+  | 'SIN_REFERENCIA'     // hay foto, pero no hay referencia ni historial con qué comparar
   | 'PENDIENTE'          // hay foto y todavía no se analizó
 
 export const ETIQUETA_ESTADO_PUNTO: Record<EstadoPuntoIA, string> = {
@@ -24,7 +24,7 @@ export const ETIQUETA_ESTADO_PUNTO: Record<EstadoPuntoIA, string> = {
   FOTO_FALTANTE: 'Foto requerida faltante',
   FOTO_NO_COINCIDE: 'La foto no coincide',
   FOTO_INSUFICIENTE: 'Foto no evaluable',
-  SIN_REFERENCIA: 'Sin referencia visual configurada',
+  SIN_REFERENCIA: 'Sin referencia ni historial suficiente',
   PENDIENTE: 'Análisis pendiente',
 }
 
@@ -35,7 +35,7 @@ export const ETIQUETA_FOTO: Record<EstadoPuntoIA, string> = {
   FOTO_FALTANTE: 'FALTANTE',
   FOTO_NO_COINCIDE: 'NO COINCIDE',
   FOTO_INSUFICIENTE: 'INSUFICIENTE',
-  SIN_REFERENCIA: 'Sin referencia',
+  SIN_REFERENCIA: 'Sin comparación',
   PENDIENTE: 'Pendiente',
 }
 
@@ -46,7 +46,11 @@ export type EntradaPunto = {
   fotoRequerida: boolean
   /** Llegó la foto. */
   fotoRecibida: boolean
-  /** El punto tiene una referencia visual activa. */
+  /**
+   * Hay con qué comparar: referencia formal cargada por Administración, o
+   * historial propio del punto —fotos confirmadas por una persona—, o las dos.
+   * Ver lib/ia/memoria.ts: para el vigilador da igual de dónde salga el patrón.
+   */
   tieneReferencia: boolean
   /** null = todavía sin analizar. */
   clasificacion: 'SIN_OBSERVACIONES' | 'REVISAR' | 'EVIDENCIA_INSUFICIENTE' | null

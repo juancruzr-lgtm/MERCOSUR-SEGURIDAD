@@ -9,6 +9,13 @@ export type PedidoVision = {
   imagen: { bytes: Buffer, mime: string }
   /** Fotos de referencia (uniforme correcto, ejemplo de libro). Puede ir vacío. */
   referencias?: Array<{ bytes: Buffer, mime: string }>
+  /**
+   * Memoria visual: fotos reales del MISMO punto que una persona ya confirmó.
+   * Van rotuladas por clase para que el modelo sepa qué está mirando; sin el
+   * rótulo, un ejemplo negativo se leería como otra referencia de lo correcto
+   * y empeoraría el juicio en vez de mejorarlo.
+   */
+  ejemplos?: Array<{ bytes: Buffer, mime: string, clase: 'positivo' | 'negativo' }>
   prompt: string
   /** JSON Schema que la respuesta debe cumplir. */
   schema: Record<string, unknown>

@@ -9,8 +9,9 @@
 import { createHash } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { catalogoInicial, leerCriterios } from './referencias'
-import { construirPrompt, derivarClasificacion, normalizarResultado, schemaRespuesta, type Umbrales } from './contratos'
+import { bloqueContextoVisual, construirPrompt, derivarClasificacion, normalizarResultado, schemaRespuesta, type Umbrales } from './contratos'
 import { GeminiVision, MODELO_GEMINI_DEFECTO } from './gemini'
+import { cargarMemoriaPunto, LIMITES_MEMORIA_DEFECTO, type EjemploPedido, type LimitesMemoria } from './memoria'
 import { ErrorProveedor } from './proveedor'
 
 export const TIPOS_SOPORTADOS = ['uniforme', 'libro_guardia', 'punto_control'] as const
@@ -39,6 +40,8 @@ export type OpcionesProceso = {
   cuotaMuestra?: number
   /** Tope de fotos de referencia a enviar junto con la evidencia. */
   maxReferencias?: number
+  /** Cuántos ejemplos humanos confirmados acompañan a una foto de ronda. */
+  limitesMemoria?: LimitesMemoria
   /** Kill-switch: si es true, sólo analiza fotos de ronda cuyo GPS quedó fuera
    *  del radio. Por defecto false — toda foto de punto se analiza, porque GPS y
    *  foto controlan cosas distintas. */
@@ -58,7 +61,11 @@ export type ResultadoItem = {
 }
 
 export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: ResultadoItem[], encolados: number }> {
-  const { client, modo, limite, filtros, loteId, presupuestoMs, maxIntentos = 5, cuotaMuestra = 0, maxReferencias = 4, soloGpsFueraRadio = false } = op
+  const {
+    client, modo, limite, filtros, loteId, presupuestoMs, maxIntentos = 5,
+    cuotaMuestra = 0, maxReferencias = 4, soloGpsFueraRadio = false,
+    limitesMemoria = LIMITES_MEMORIA_DEFECTO,
+  } = op
   const inicio = Date.now()
   const RESERVA_MS = 5_000
   // Peor caso observado: una imagen con 4 referencias tarda ~20 s.
@@ -217,6 +224,11 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         objetivo_id: ev.objetivo_id,
         guardia_id: ev.guardia_id,
         turno_id: ev.turno_id,
+        // Denormalizado a propósito: sin esto, juntar la memoria visual de un
+        // punto obligaría a recorrer ejecuciones → evidencias → análisis en cada
+        // foto, dentro del presupuesto de 45 s. También es lo que hace posible
+        // medir aciertos por punto sin recalcular el join.
+        ronda_punto_id: rondaPuntoId,
         evidencia_created_at: ev.created_at,
         sha256_esperado: ev.contenido_sha256,
         estado: 'procesando',
@@ -252,7 +264,12 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
 
       if (reintentable) {
         await client.from('evidencia_analisis')
-          .update({ estado: 'procesando', intentos: (previa!.intentos ?? 0) + 1, ultimo_error: null })
+          .update({
+            estado: 'procesando',
+            intentos: (previa!.intentos ?? 0) + 1,
+            ultimo_error: null,
+            ronda_punto_id: rondaPuntoId,
+          })
           .eq('id', previa!.id)
         filaId = previa!.id
       } else {
@@ -307,38 +324,64 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         continue
       }
 
-      // Cada referencia es otra imagen en el pedido: mejora el juicio del
-      // modelo pero suma tokens y segundos. El tope es configurable para poder
-      // ajustarlo si la cuota del free tier o el reloj de 60 s aprietan.
-      // Uniforme y libro comparan contra las referencias de la configuración.
-      // Un punto de ronda compara contra SU propia referencia: no hay un
-      // "portón correcto" genérico, cada punto tiene el suyo.
-      const imgs = rondaPuntoId
-        ? (await client
-            .from('ronda_punto_referencias')
-            .select('bucket, storage_path, content_type')
-            .eq('ronda_punto_id', rondaPuntoId)
-            .eq('activo', true)
-            .order('vigente_desde', { ascending: false })
-            .limit(maxReferencias)).data
-        : (await client
-            .from('ia_referencia_imagenes')
-            .select('bucket, storage_path, content_type')
-            .eq('configuracion_id', conf.id)
-            .eq('activo', true)
-            .order('orden')
-            .limit(maxReferencias)).data
-
+      // Cada imagen es otro bloque de tokens y otros segundos de reloj. Los
+      // topes son configurables para poder ajustarlos si la cuota del free tier
+      // o el límite de 60 s aprietan.
+      //
+      // Uniforme y libro comparan contra las referencias de la configuración:
+      // el uniforme reglamentario es uno solo para toda la empresa.
+      //
+      // Un punto de ronda no: no existe un "portón correcto" genérico. Compara
+      // contra SU referencia formal y contra su propia memoria visual — fotos
+      // reales de ESE punto que una persona ya confirmó. Ver lib/ia/memoria.ts.
       const referencias: Array<{ bytes: Buffer, mime: string }> = []
-      for (const img of imgs ?? []) {
-        const { data: refBlob } = await client.storage.from(img.bucket).download(img.storage_path)
-        if (refBlob) referencias.push({ bytes: Buffer.from(await refBlob.arrayBuffer()), mime: img.content_type ?? 'image/jpeg' })
+      let ejemplos: EjemploPedido[] = []
+      let positivosDisponibles = 0
+
+      if (rondaPuntoId) {
+        const memoria = await cargarMemoriaPunto(client, rondaPuntoId, {
+          limites: limitesMemoria,
+          maxReferencias: 1,
+          excluirSha256: ev.contenido_sha256 ?? sha,
+        })
+        referencias.push(...memoria.referencias)
+        ejemplos = memoria.ejemplos
+        positivosDisponibles = memoria.positivosDisponibles
+      } else {
+        const { data: imgs } = await client
+          .from('ia_referencia_imagenes')
+          .select('bucket, storage_path, content_type')
+          .eq('configuracion_id', conf.id)
+          .eq('activo', true)
+          .order('orden')
+          .limit(maxReferencias)
+
+        for (const img of imgs ?? []) {
+          const { data: refBlob } = await client.storage.from(img.bucket).download(img.storage_path)
+          if (refBlob) referencias.push({ bytes: Buffer.from(await refBlob.arrayBuffer()), mime: img.content_type ?? 'image/jpeg' })
+        }
       }
+
+      // El prompt guardado en la configuración es estable y su sha256 permite
+      // reconstruir un análisis viejo. Lo que cambia foto a foto —cuántas
+      // imágenes de comparación fueron— se agrega acá, sin tocar ese hash.
+      const promptFinal = rondaPuntoId
+        ? [
+            conf.prompt,
+            '',
+            bloqueContextoVisual({
+              referencias: referencias.length,
+              positivos: ejemplos.filter(e => e.clase === 'positivo').length,
+              negativos: ejemplos.filter(e => e.clase === 'negativo').length,
+            }),
+          ].join('\n')
+        : conf.prompt
 
       const respuesta = await proveedor.analizar({
         imagen: { bytes, mime: ev.content_type ?? 'image/jpeg' },
         referencias,
-        prompt: conf.prompt,
+        ejemplos,
+        prompt: promptFinal,
         schema,
         modelo: conf.modelo,
       })
@@ -348,6 +391,17 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
 
       let efectiva = derivarClasificacion(normalizado, criterios, umbrales)
       let motivosFinales = normalizado.motivos
+
+      // ── Sin con qué comparar ────────────────────────────────────────────
+      // Que un punto no tenga referencia ni historial NO es una falta del
+      // vigilador: es una configuración incompleta. Se deja el motivo visible
+      // para que se pueda corregir, pero no eleva la clasificación — culpar a
+      // alguien por una carencia nuestra sería exactamente el error a evitar.
+      if (rondaPuntoId && referencias.length === 0 && positivosDisponibles === 0) {
+        if (!motivosFinales.includes('SIN_BASE_DE_COMPARACION')) {
+          motivosFinales = ['SIN_BASE_DE_COMPARACION', ...motivosFinales]
+        }
+      }
 
       // ── Contexto de GPS ─────────────────────────────────────────────────
       // No sustituye al GPS ni lo reinterpreta: agrega el dato al caso para que

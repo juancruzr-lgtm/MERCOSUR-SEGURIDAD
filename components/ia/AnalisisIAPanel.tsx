@@ -95,9 +95,18 @@ export default function AnalisisIAPanel({
   const [error, setError] = useState('')
   const [ampliada, setAmpliada] = useState<string | null>(null)
   const [guardandoId, setGuardandoId] = useState<string | null>(null)
-  const [filtro, setFiltro] = useState<'bandeja' | 'revisar' | 'insuficiente' | 'normales' | 'revisadas' | 'todas'>('bandeja')
+  // Dos ejes distintos, nunca mezclados:
+  //   ia_*     → qué dijo el modelo (clasificación original, no se pisa nunca)
+  //   humano_* → qué decidió una persona
+  // Confundirlos hacía leer "REVISAR" como "todavía sin revisar", cuando puede
+  // ser una foto ya revisada donde la persona le corrigió la mano a la IA.
+  const [filtro, setFiltro] = useState<
+    'bandeja' | 'revisadas' | 'ia_revisar' | 'ia_normales' | 'ia_insuficiente'
+    | 'humano_correcto' | 'humano_incorrecto' | 'todas'
+  >('bandeja')
   const [detalle, setDetalle] = useState<string | null>(null)
   const [aviso, setAviso] = useState('')
+  const [metricasPunto, setMetricasPunto] = useState<any[]>([])
 
   // Disparo manual
   const [ejecutando, setEjecutando] = useState(false)
@@ -123,6 +132,18 @@ export default function AnalisisIAPanel({
     const lista = (data ?? []) as Analisis[]
     setFilas(lista)
     setCargando(false)
+
+    // Métricas por punto de ronda. Vista derivada: agrega sobre TODO el
+    // historial, no sobre las 300 filas que trae la bandeja, así que un punto
+    // con muchos análisis no queda medido por una ventana arbitraria.
+    // Si la migración de memoria visual todavía no se aplicó, la vista no
+    // existe y esto falla en silencio: el resto del panel sigue andando.
+    supabase
+      .from('ia_metricas_punto')
+      .select('*')
+      .order('analizadas', { ascending: false })
+      .limit(100)
+      .then(({ data: mp }) => setMetricasPunto(mp ?? []), () => setMetricasPunto([]))
 
     const conFoto = lista.filter(a => a.estado === 'completado').slice(0, 60)
     if (conFoto.length === 0) return
@@ -227,10 +248,14 @@ export default function AnalisisIAPanel({
         if (a.revision_estado !== 'PENDIENTE') return false
         return a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control
       }
-      if (filtro === 'revisar') return a.clasificacion_efectiva === 'REVISAR'
-      if (filtro === 'insuficiente') return a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE'
-      if (filtro === 'normales') return a.clasificacion_efectiva === 'SIN_OBSERVACIONES'
+      // Lo que dijo la IA, sin importar si ya fue revisada.
+      if (filtro === 'ia_revisar') return a.clasificacion_efectiva === 'REVISAR'
+      if (filtro === 'ia_insuficiente') return a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE'
+      if (filtro === 'ia_normales') return a.clasificacion_efectiva === 'SIN_OBSERVACIONES'
+      // Lo que decidió una persona.
       if (filtro === 'revisadas') return a.revision_estado !== 'PENDIENTE'
+      if (filtro === 'humano_correcto') return a.revision_estado === 'CORRECTO'
+      if (filtro === 'humano_incorrecto') return a.revision_estado === 'INCORRECTO'
       return true
     })
     .sort((a, b) => {
@@ -280,8 +305,26 @@ export default function AnalisisIAPanel({
                 sin vista previa</div>}
 
           <div style={{ flex: '1 1 240px', minWidth: 220 }}>
+            {/* Dos ejes separados y rotulados.
+                "REVISAR" es la opinión de la IA, no un estado de trámite: una
+                foto puede decir IA: REVISAR y REVISADO: CORRECTO al mismo tiempo
+                — significa que la persona le corrigió la mano al modelo. Sin el
+                prefijo, esa fila se leía como pendiente y nadie entendía por qué
+                seguía apareciendo. La clasificación original nunca se pisa:
+                es lo único que permite medir si la IA acierta. */}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-              <span style={badge(COLOR_CLASIF[clasif] ?? C.muted)}>{clasif.replace(/_/g, ' ')}</span>
+              <span style={badge(COLOR_CLASIF[clasif] ?? C.muted)}
+                title="Lo que dictaminó la IA al analizar la foto">
+                IA: {clasif.replace(/_/g, ' ')}
+              </span>
+              {a.revision_estado === 'PENDIENTE'
+                ? <span style={badge(C.muted)} title="Todavía ninguna persona la revisó">
+                    PENDIENTE DE REVISIÓN
+                  </span>
+                : <span style={badge(a.revision_estado === 'CORRECTO' ? C.green : C.red)}
+                    title="Decisión de una persona. Es la que vale.">
+                    REVISADO: {a.revision_estado}
+                  </span>}
               <span style={badge(C.muted)}>{ETIQUETA_TIPO_EV[a.analisis_tipo] ?? a.analisis_tipo}</span>
               {a.modo === 'prueba' && <span style={badge(C.blue)}>PRUEBA</span>}
               {/* Sin este cartel, una foto "sin observaciones" en la bandeja
@@ -291,9 +334,16 @@ export default function AnalisisIAPanel({
                   MUESTRA DE CONTROL
                 </span>
               )}
-              {a.revision_estado !== 'PENDIENTE' && (
-                <span style={badge(a.revision_estado === 'CORRECTO' ? C.green : C.red)}>
-                  HUMANO: {a.revision_estado}
+              {/* Cuando la persona contradice a la IA, decirlo explícito: es el
+                  dato que alimenta la precisión de la pestaña Métricas. */}
+              {a.revision_estado === 'CORRECTO' && a.clasificacion_efectiva === 'REVISAR' && (
+                <span style={badge(C.yellow)} title="La IA marcó esta foto y la persona la aprobó igual">
+                  LA IA SE EQUIVOCÓ
+                </span>
+              )}
+              {a.revision_estado === 'INCORRECTO' && a.clasificacion_efectiva === 'SIN_OBSERVACIONES' && (
+                <span style={badge(C.red)} title="La IA no marcó nada y la persona encontró un problema">
+                  LA IA NO LO DETECTÓ
                 </span>
               )}
             </div>
@@ -509,13 +559,31 @@ export default function AnalisisIAPanel({
 
       {!cargando && tab === 'revision' && (
         <>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+          {/* Los filtros se agrupan por eje. Antes convivían en una sola fila
+              "Revisar / Ya revisadas", y leídos seguidos parecían dos etapas de
+              lo mismo cuando son dos preguntas distintas: qué dijo la máquina y
+              qué decidió la persona. */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: C.muted, letterSpacing: .5, marginRight: 2 }}>ESTADO DE REVISIÓN</span>
             {([
-              ['bandeja', `Para revisar (${completados.filter(a => a.revision_estado === 'PENDIENTE' && (a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control)).length})`],
-              ['revisar', `Revisar (${completados.filter(a => a.clasificacion_efectiva === 'REVISAR').length})`],
-              ['insuficiente', `Ev. insuficiente (${completados.filter(a => a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE').length})`],
-              ['normales', `Sin observaciones (${completados.filter(a => a.clasificacion_efectiva === 'SIN_OBSERVACIONES').length})`],
-              ['revisadas', `Ya revisadas (${completados.filter(a => a.revision_estado !== 'PENDIENTE').length})`],
+              ['bandeja', `Pendientes (${completados.filter(a => a.revision_estado === 'PENDIENTE' && (a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control)).length})`],
+              ['revisadas', `Revisadas (${completados.filter(a => a.revision_estado !== 'PENDIENTE').length})`],
+              ['humano_correcto', `Correctas por humano (${completados.filter(a => a.revision_estado === 'CORRECTO').length})`],
+              ['humano_incorrecto', `Incorrectas por humano (${completados.filter(a => a.revision_estado === 'INCORRECTO').length})`],
+            ] as const).map(([id, label]) => (
+              <button key={id} onClick={() => setFiltro(id)}
+                style={{ ...boton(filtro === id ? C.yellow : C.muted), padding: '5px 11px', fontSize: 11 }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: C.muted, letterSpacing: .5, marginRight: 2 }}>CLASIFICACIÓN DE LA IA</span>
+            {([
+              ['ia_revisar', `IA marcó revisar (${completados.filter(a => a.clasificacion_efectiva === 'REVISAR').length})`],
+              ['ia_normales', `IA sin observaciones (${completados.filter(a => a.clasificacion_efectiva === 'SIN_OBSERVACIONES').length})`],
+              ['ia_insuficiente', `IA evidencia insuficiente (${completados.filter(a => a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE').length})`],
               ['todas', `Todas (${completados.length})`],
             ] as const).map(([id, label]) => (
               <button key={id} onClick={() => setFiltro(id)}
@@ -524,6 +592,13 @@ export default function AnalisisIAPanel({
               </button>
             ))}
           </div>
+
+          {(filtro === 'ia_revisar' || filtro === 'ia_normales' || filtro === 'ia_insuficiente') && (
+            <div style={{ ...card({ marginBottom: 12, padding: '10px 14px' }), fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
+              Estás viendo el dictamen de la <strong>IA</strong>, no el estado de revisión. Acá pueden aparecer
+              fotos que una persona ya revisó — mirá el segundo cartel de cada tarjeta para saberlo.
+            </div>
+          )}
 
           {filtro === 'bandeja' && bandeja.some(a => a.en_muestra_control && a.clasificacion_efectiva === 'SIN_OBSERVACIONES') && (
             <div style={{ ...card({ marginBottom: 12, padding: '10px 14px' }), fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
@@ -641,8 +716,6 @@ export default function AnalisisIAPanel({
             </div>
           )}
 
-          )}
-
           {diario.pendientes.length > 0 && (
             <>
               <div style={{ fontSize: 14, fontWeight: 800, color: C.yellow, margin: '18px 0 10px' }}>
@@ -708,6 +781,76 @@ export default function AnalisisIAPanel({
               )}
             </div>
           ))}
+
+          {/* ── Por punto de ronda ──────────────────────────────────────────
+              El promedio general esconde lo que importa: un punto con buena
+              referencia puede tapar a otro donde la IA se equivoca siempre.
+              La columna "Ejemplos" dice cuánta memoria visual acumuló ese punto;
+              donde está en 0, la IA está comparando a ciegas. */}
+          {metricasPunto.length > 0 && (
+            <div style={card({ marginBottom: 14 })}>
+              <div style={{ fontWeight: 800, fontSize: 15, color: C.text, marginBottom: 4 }}>
+                Puntos de ronda
+              </div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
+                Cada punto aprende por separado: un portón y un pasillo interno no se parecen en nada.
+                <strong style={{ color: C.sub }}> Ejemplos</strong> son fotos de ese punto que una persona
+                confirmó como correctas y que se envían como contexto en el próximo análisis.
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 640 }}>
+                  <thead>
+                    <tr style={{ color: C.muted, textAlign: 'left' }}>
+                      {['Punto', 'Analizadas', 'Correctas', 'Incorrectas', 'Falsos +', 'Falsos −', 'Precisión', 'Ejemplos', 'Ref.']
+                        .map(h => (
+                          <th key={h} style={{ padding: '6px 8px', borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>
+                        ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {metricasPunto.filter((p: any) => Number(p.analizadas) > 0).map((p: any) => {
+                      const vp = Number(p.verdaderos_positivos)
+                      const fp = Number(p.falsos_positivos)
+                      // Sin marcas confirmadas la precisión no existe. Mostrar 0%
+                      // o 100% ahí sería inventar una medición.
+                      const precision = vp + fp > 0 ? Math.round((vp / (vp + fp)) * 100) : null
+                      const sinBase = Number(p.ejemplos_positivos) === 0 && Number(p.referencias_formales) === 0
+                      return (
+                        <tr key={p.ronda_punto_id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                          <td style={{ padding: '6px 8px', color: C.text, fontWeight: 600 }}>
+                            {p.punto_nombre}
+                            {sinBase && (
+                              <div style={{ fontSize: 10, color: C.yellow, fontWeight: 400 }}>
+                                sin referencia ni historial
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '6px 8px', color: C.sub }}>{p.analizadas}</td>
+                          <td style={{ padding: '6px 8px', color: C.green }}>{p.correctas_humano}</td>
+                          <td style={{ padding: '6px 8px', color: C.red }}>{p.incorrectas_humano}</td>
+                          <td style={{ padding: '6px 8px', color: Number(p.falsos_positivos) > 0 ? C.red : C.muted }}>
+                            {p.falsos_positivos}
+                          </td>
+                          <td style={{ padding: '6px 8px', color: Number(p.falsos_negativos) > 0 ? C.red : C.muted }}>
+                            {p.falsos_negativos}
+                          </td>
+                          <td style={{ padding: '6px 8px', color: C.yellow, fontWeight: 700 }}>
+                            {precision == null ? '—' : `${precision}%`}
+                          </td>
+                          <td style={{ padding: '6px 8px', color: Number(p.ejemplos_positivos) > 0 ? C.green : C.muted }}>
+                            {p.ejemplos_positivos}
+                          </td>
+                          <td style={{ padding: '6px 8px', color: Number(p.referencias_formales) > 0 ? C.green : C.muted }}>
+                            {p.referencias_formales}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
 
