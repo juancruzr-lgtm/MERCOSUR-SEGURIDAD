@@ -80,7 +80,12 @@ async function headersAuth(): Promise<Record<string, string>> {
 export default function AnalisisIAPanel({
   user, objetivos = [], guardias = [],
 }: { user?: { rol?: string }, objetivos?: any[], guardias?: any[] }) {
-  const [tab, setTab] = useState<'analizar' | 'revision' | 'incorrectas' | 'metricas'>('revision')
+  const [tab, setTab] = useState<'analizar' | 'revision' | 'incorrectas' | 'metricas' | 'diario'>('revision')
+  const [fechaDiario, setFechaDiario] = useState(() => {
+    // Hoy en hora Argentina, no en la del navegador.
+    const arg = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }))
+    return `${arg.getFullYear()}-${String(arg.getMonth() + 1).padStart(2, '0')}-${String(arg.getDate()).padStart(2, '0')}`
+  })
   const esAdmin = user?.rol === 'admin'
 
   const [filas, setFilas] = useState<Analisis[]>([])
@@ -323,9 +328,53 @@ export default function AnalisisIAPanel({
     )
   }
 
+  // ── Resumen diario ──────────────────────────────────────────────────────
+  // Agrupa por la fecha de la EVIDENCIA (cuándo se sacó la foto), no por la del
+  // análisis: una foto de anoche analizada esta mañana pertenece a anoche.
+  const diario = useMemo(() => {
+    const delDia = completados.filter(a => {
+      const d = new Date(a.evidencia_created_at)
+        .toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })
+      return d === fechaDiario
+    })
+
+    const excepciones = delDia.filter(a =>
+      (a.revision_estado === 'PENDIENTE' && (a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control))
+      || a.revision_estado === 'INCORRECTO')
+
+    const agrupar = (clave: (a: Analisis) => string) => {
+      const mapa = new Map<string, number>()
+      for (const a of excepciones) {
+        const k = clave(a) || '—'
+        mapa.set(k, (mapa.get(k) ?? 0) + 1)
+      }
+      return [...mapa.entries()].sort((x, y) => y[1] - x[1])
+    }
+
+    return {
+      total: delDia.length,
+      sin: delDia.filter(a => a.clasificacion_efectiva === 'SIN_OBSERVACIONES').length,
+      revisar: delDia.filter(a => a.clasificacion_efectiva === 'REVISAR').length,
+      insuf: delDia.filter(a => a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE').length,
+      revisadas: delDia.filter(a => a.revision_estado !== 'PENDIENTE').length,
+      correctas: delDia.filter(a => a.revision_estado === 'CORRECTO').length,
+      incorrectas: delDia.filter(a => a.revision_estado === 'INCORRECTO').length,
+      falsosPositivos: delDia.filter(a => a.clasificacion_efectiva === 'REVISAR' && a.revision_estado === 'CORRECTO').length,
+      falsosNegativos: delDia.filter(a => a.clasificacion_efectiva === 'SIN_OBSERVACIONES' && a.revision_estado === 'INCORRECTO').length,
+      pendientes: delDia.filter(a => a.revision_estado === 'PENDIENTE'
+        && (a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control)),
+      confirmadas: delDia.filter(a => a.revision_estado === 'INCORRECTO'),
+      porObjetivo: agrupar(a => nombreObjetivo.get(a.objetivo_id) ?? '—'),
+      porVigilador: agrupar(a => (a.guardia_id ? nombreGuardia.get(a.guardia_id) : '') ?? '—'),
+      porTipo: agrupar(a => ETIQUETA_TIPO_EV[a.analisis_tipo] ?? a.analisis_tipo),
+      porMotivo: agrupar(a => a.motivos?.[0] ? (ETIQUETA_MOTIVO[a.motivos[0]] ?? a.motivos[0]) : 'Sin motivo'),
+    }
+  }, [completados, fechaDiario, nombreObjetivo, nombreGuardia])
+
   const tabs: Array<{ id: typeof tab, label: string }> = [
     { id: 'revision', label: `Revisión (${bandeja.filter(a => a.revision_estado === 'PENDIENTE').length})` },
     { id: 'incorrectas', label: `Incorrectas (${incorrectas.length})` },
+    { id: 'diario', label: 'Resumen diario' },
     { id: 'metricas', label: 'Métricas' },
     ...(esAdmin ? [{ id: 'analizar' as const, label: 'Analizar fotos' }] : []),
   ]
@@ -443,6 +492,100 @@ export default function AnalisisIAPanel({
           {incorrectas.length === 0
             ? <div style={{ ...card(), color: C.muted, fontSize: 13 }}>Ninguna foto marcada como incorrecta.</div>
             : incorrectas.map(a => <Tarjeta key={a.id} a={a} />)}
+        </>
+      )}
+
+      {!cargando && tab === 'diario' && (
+        <>
+          <div style={card({ marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' })}>
+            <label style={{ fontSize: 12, color: C.sub }}>Fecha</label>
+            <input type="date" style={input} value={fechaDiario} onChange={e => setFechaDiario(e.target.value)} />
+            <span style={{ fontSize: 11, color: C.muted }}>
+              Agrupa por el día en que se sacó la foto, no por cuándo se analizó.
+            </span>
+          </div>
+
+          <div style={card({ marginBottom: 14 })}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.text, marginBottom: 14 }}>
+              Resumen IA — {fechaDiario.split('-').reverse().join('/')}
+            </div>
+            {diario.total === 0
+              ? <div style={{ color: C.muted, fontSize: 13 }}>No hay fotos analizadas de ese día.</div>
+              : <>
+                  <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 12 }}>
+                    {([
+                      ['Analizadas', diario.total, C.text],
+                      ['Sin observaciones', diario.sin, C.green],
+                      ['Revisar', diario.revisar, C.yellow],
+                      ['Ev. insuficiente', diario.insuf, C.blue],
+                    ] as const).map(([l, v, col]) => (
+                      <div key={l}>
+                        <div style={{ fontSize: 24, fontWeight: 900, color: col }}>{v}</div>
+                        <div style={{ color: C.muted }}>{l}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 12,
+                    marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+                    {([
+                      ['Revisadas', diario.revisadas, C.text],
+                      ['Correctas', diario.correctas, C.green],
+                      ['Incorrectas confirmadas', diario.incorrectas, C.red],
+                      ['Falsas alarmas', diario.falsosPositivos, C.yellow],
+                      ['Se le escaparon', diario.falsosNegativos, C.red],
+                    ] as const).map(([l, v, col]) => (
+                      <div key={l}>
+                        <div style={{ fontSize: 24, fontWeight: 900, color: col }}>{v}</div>
+                        <div style={{ color: C.muted }}>{l}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>}
+          </div>
+
+          {diario.total > 0 && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+              {([
+                ['Por objetivo', diario.porObjetivo],
+                ['Por vigilador', diario.porVigilador],
+                ['Por tipo', diario.porTipo],
+                ['Por motivo', diario.porMotivo],
+              ] as const).map(([titulo, filas]) => (
+                <div key={titulo} style={card({ flex: '1 1 220px', minWidth: 200 })}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.sub, marginBottom: 8 }}>
+                    {titulo.toUpperCase()}
+                  </div>
+                  {filas.length === 0
+                    ? <div style={{ fontSize: 12, color: C.muted }}>Sin excepciones.</div>
+                    : filas.map(([k, n]) => (
+                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between',
+                          fontSize: 12, color: C.text, padding: '3px 0' }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k}</span>
+                          <strong style={{ color: C.yellow, marginLeft: 8 }}>{n}</strong>
+                        </div>
+                      ))}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {diario.pendientes.length > 0 && (
+            <>
+              <div style={{ fontSize: 14, fontWeight: 800, color: C.yellow, margin: '18px 0 10px' }}>
+                Pendientes de revisión ({diario.pendientes.length})
+              </div>
+              {diario.pendientes.map(a => <Tarjeta key={a.id} a={a} />)}
+            </>
+          )}
+
+          {diario.confirmadas.length > 0 && (
+            <>
+              <div style={{ fontSize: 14, fontWeight: 800, color: C.red, margin: '18px 0 10px' }}>
+                Incorrectas confirmadas ({diario.confirmadas.length})
+              </div>
+              {diario.confirmadas.map(a => <Tarjeta key={a.id} a={a} />)}
+            </>
+          )}
         </>
       )}
 
