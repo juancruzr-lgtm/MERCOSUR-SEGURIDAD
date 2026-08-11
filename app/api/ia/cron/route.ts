@@ -58,6 +58,7 @@ async function correr() {
       presupuestoMs: 55_000,
       maxIntentos: Number(cfg.get('ia_max_intentos') ?? 5),
       cuotaMuestra: Number(cfg.get('ia_muestra_normales_por_dia') ?? 10),
+      maxReferencias: Number(cfg.get('ia_referencias_max') ?? 4),
     })
 
     return NextResponse.json({

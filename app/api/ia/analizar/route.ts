@@ -64,6 +64,7 @@ export async function POST(req: NextRequest) {
       loteId,
       presupuestoMs: 55_000,
       maxIntentos: Number(cfg.get('ia_max_intentos') ?? 5),
+      maxReferencias: Number(cfg.get('ia_referencias_max') ?? 4),
     })
 
     if (loteId) {

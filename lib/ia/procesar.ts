@@ -37,6 +37,8 @@ export type OpcionesProceso = {
   /** Cuántas SIN_OBSERVACIONES por día entran igual a revisión humana.
    *  0 desactiva la muestra. Sólo aplica en modo produccion. */
   cuotaMuestra?: number
+  /** Tope de fotos de referencia a enviar junto con la evidencia. */
+  maxReferencias?: number
 }
 
 export type ResultadoItem = {
@@ -52,7 +54,7 @@ export type ResultadoItem = {
 }
 
 export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: ResultadoItem[], encolados: number }> {
-  const { client, modo, limite, filtros, loteId, presupuestoMs, cuotaMuestra = 0 } = op
+  const { client, modo, limite, filtros, loteId, presupuestoMs, cuotaMuestra = 0, maxReferencias = 4 } = op
   const inicio = Date.now()
   const RESERVA_MS = 8_000
 
@@ -173,13 +175,16 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         continue
       }
 
+      // Cada referencia es otra imagen en el pedido: mejora el juicio del
+      // modelo pero suma tokens y segundos. El tope es configurable para poder
+      // ajustarlo si la cuota del free tier o el reloj de 60 s aprietan.
       const { data: imgs } = await client
         .from('ia_referencia_imagenes')
         .select('bucket, storage_path, content_type')
         .eq('configuracion_id', conf.id)
         .eq('activo', true)
         .order('orden')
-        .limit(2)
+        .limit(maxReferencias)
 
       const referencias: Array<{ bytes: Buffer, mime: string }> = []
       for (const img of imgs ?? []) {
