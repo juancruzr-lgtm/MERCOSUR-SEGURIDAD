@@ -16,6 +16,42 @@ const TIMEOUT_DEFECTO_MS = 60_000
 /** Modelo por defecto. Se sobreescribe desde ia_configuraciones.modelo. */
 export const MODELO_GEMINI_DEFECTO = 'gemini-3.5-flash'
 
+/**
+ * Extrae lo útil del cuerpo de error de Gemini.
+ *
+ * Antes esto era un `slice(0, 300)` ciego sobre el JSON crudo, y los 300
+ * caracteres se iban enteros en el preámbulo (`{"error":{"code":429,"message":
+ * "You exceeded your current quota..."`) más los dos links de documentación.
+ * Justo después de ese corte viene la línea `Quota exceeded for metric: ...`,
+ * que es la única que dice QUÉ límite se agotó — por minuto o por día — y de eso
+ * depende si la solución es bajar el lote o pagar. Quedaba siempre invisible.
+ *
+ * Ahora se prioriza esa línea y se descartan los links, que no aportan nada al
+ * registro. Sigue habiendo tope de largo: el cuerpo puede reflejar el pedido.
+ */
+export function resumirError(cuerpo: string): string {
+  let mensaje = cuerpo
+  try {
+    const json = JSON.parse(cuerpo)
+    if (typeof json?.error?.message === 'string') mensaje = json.error.message
+  } catch {
+    // No era JSON: puede ser una página de error del borde. Se usa tal cual.
+  }
+
+  // Los links se van siempre: ocupan lugar y no dicen nada que sirva en un log.
+  const limpio = mensaje.replace(/https?:\/\/\S+/g, '')
+
+  // Se prioriza qué cuota se agotó y en cuánto se puede reintentar. Esas dos
+  // líneas responden "¿bajo el lote o hay que pagar?" y "¿cuánto falta?".
+  const utiles = limpio
+    .split('\n')
+    .map(l => l.replace(/^\s*\*\s*/, '').replace(/\s+/g, ' ').trim())
+    .filter(l => /quota exceeded|limit:|metric:|retry in/i.test(l))
+
+  const texto = utiles.length > 0 ? utiles.join(' · ') : limpio
+  return texto.replace(/\s+/g, ' ').trim().slice(0, 400)
+}
+
 function claseDeStatus(status: number): 'transitorio' | 'permanente' {
   // 429 (cuota del free tier), 500, 503 y timeouts se reintentan.
   // 400 (schema/pedido mal armado), 401/403 (clave) y 404 (modelo) no.
@@ -100,8 +136,8 @@ export class GeminiVision implements ProveedorVision {
 
     if (!res.ok) {
       // El cuerpo de error de Gemini puede traer la clave si el pedido fue mal
-      // armado; se recorta y no se registra completo.
-      throw new ErrorProveedor(`HTTP ${res.status}: ${texto.slice(0, 300)}`, claseDeStatus(res.status))
+      // armado; nunca se registra completo.
+      throw new ErrorProveedor(`HTTP ${res.status}: ${resumirError(texto)}`, claseDeStatus(res.status))
     }
 
     let sobre: any
