@@ -36,9 +36,13 @@ import {
 import { actualizarUbicacionObjetivo } from '@/lib/legajo-objetivo'
 import {
   aplicarSugerenciaGpsObjetivo,
+  cargarHistorialUbicaciones,
+  contarPuntosRondaObjetivo,
   diagnosticarGpsObjetivo,
+  establecerTipoUbicacion,
   sugerenciaObjetivoAplicable,
   type DiagnosticoGpsObjetivo,
+  type UbicacionVigencia,
 } from '@/lib/gps-objetivos'
 import {
   cargarMarcacionesPunto,
@@ -138,6 +142,12 @@ export default function PaginaGps({
   const [diagnosticoObjetivo, setDiagnosticoObjetivo] = useState<DiagnosticoGpsObjetivo | null>(null)
   const [analizandoObjetivo, setAnalizandoObjetivo] = useState(false)
   const [aplicandoObjetivo, setAplicandoObjetivo] = useState(false)
+  // El marcador sólo se arrastra en modo mover: hay que pedirlo explícitamente.
+  const [modoMover, setModoMover] = useState(false)
+  const [cambiandoTipo, setCambiandoTipo] = useState(false)
+  const [historialUbicaciones, setHistorialUbicaciones] = useState<UbicacionVigencia[]>([])
+  const [puntosRondaObjetivo, setPuntosRondaObjetivo] = useState(0)
+  const [vigenteDesde, setVigenteDesde] = useState('')
   // Radio tentativo del punto seleccionado, todavía sin guardar. Sólo se dibuja.
   const [radioPreview, setRadioPreview] = useState<number | null>(null)
   const [mensaje, setMensaje] = useState('')
@@ -488,12 +498,20 @@ export default function PaginaGps({
     setGuardandoObjetivo(true)
     const { objetivo: actualizado, error: errorGuardar } = await actualizarUbicacionObjetivo(
       objetivo.id, objetivoPropuesto.lat, objetivoPropuesto.lng, radio,
+      undefined,
+      // Sólo un móvil puede declarar desde cuándo rige; el servidor lo ignora
+      // en un objetivo fijo.
+      vigenteDesde ? new Date(vigenteDesde).toISOString() : null,
     )
     setGuardandoObjetivo(false)
 
     if (errorGuardar) { setError(errorGuardar); return }
 
     setObjetivoPropuesto(null)
+    setModoMover(false)
+    setVigenteDesde('')
+    const { historial } = await cargarHistorialUbicaciones(objetivo.id)
+    setHistorialUbicaciones(historial)
     if (actualizado) {
       // El dueño de la lista de objetivos es el dashboard: se le avisa para que
       // el resto de las pantallas vea el valor nuevo sin recargar.
@@ -501,6 +519,57 @@ export default function PaginaGps({
       setSeleccion({ tipo: 'objetivo', datos: actualizado })
     }
     setMensaje(`Objetivo movido ${movido} m y auditado.`)
+  }
+
+  const objetivoSeleccionadoId = seleccion?.tipo === 'objetivo' ? seleccion.datos.id : null
+
+  // Al seleccionar un objetivo se trae su historial y cuántos puntos de ronda
+  // cuelgan de él, que es lo que hace falta para advertir antes de moverlo.
+  useEffect(() => {
+    let vigente = true
+    setHistorialUbicaciones([])
+    setPuntosRondaObjetivo(0)
+    setModoMover(false)
+    setVigenteDesde('')
+    if (!objetivoSeleccionadoId) return
+
+    ;(async () => {
+      const [{ historial }, cantidad] = await Promise.all([
+        cargarHistorialUbicaciones(objetivoSeleccionadoId),
+        contarPuntosRondaObjetivo(objetivoSeleccionadoId),
+      ])
+      if (!vigente) return
+      setHistorialUbicaciones(historial)
+      setPuntosRondaObjetivo(cantidad)
+    })()
+
+    return () => { vigente = false }
+  }, [objetivoSeleccionadoId])
+
+  const cambiarTipoUbicacion = async (tipo: 'fijo' | 'movil') => {
+    if (!objetivoSeleccionadoId) return
+    limpiarAvisos()
+    setCambiandoTipo(true)
+    const { error: errorTipo } = await establecerTipoUbicacion(objetivoSeleccionadoId, tipo)
+    setCambiandoTipo(false)
+    if (errorTipo) { setError(errorTipo); return }
+
+    const actualizado = { ...seleccion?.datos, tipo_ubicacion: tipo }
+    onObjetivoActualizado?.(actualizado)
+    setSeleccion({ tipo: 'objetivo', datos: actualizado })
+    // El diagnóstico depende del tipo: el anterior ya no vale.
+    setDiagnosticoObjetivo(null)
+    setMensaje(tipo === 'movil'
+      ? 'Marcado como móvil. El diagnóstico va a mirar sólo los fichajes de la ubicación vigente.'
+      : 'Marcado como fijo. El diagnóstico vuelve a mirar la ventana completa.')
+  }
+
+  /** Muestra en el mapa los puntos de ronda de este objetivo. */
+  const verPuntosDelObjetivo = () => {
+    if (!objetivoSeleccionadoId) return
+    setObjetivoId(objetivoSeleccionadoId)
+    setCapasActivas(previas => new Set(Array.from(previas).concat('puntos_ronda')))
+    setMensaje('Filtrado por este objetivo, con la capa de puntos de ronda encendida.')
   }
 
   /** Pide el diagnóstico del objetivo al servidor. No modifica nada. */
@@ -704,7 +773,7 @@ export default function PaginaGps({
                   }
                 : null
             }
-            objetivoArrastrableId={seleccion?.tipo === 'objetivo' ? seleccion.datos.id : null}
+            objetivoArrastrableId={modoMover ? objetivoSeleccionadoId : null}
             objetivoPropuesto={objetivoPropuesto}
             onObjetivoArrastrado={(id, lat, lng) => {
               limpiarAvisos()
@@ -762,9 +831,24 @@ export default function PaginaGps({
           metrosPropuestos={metrosPropuestos}
           onAnalizarObjetivo={analizarObjetivo}
           onAplicarObjetivo={aplicarObjetivo}
+          objetivoCtl={{
+            modoMover,
+            tipoUbicacion: (seleccion?.tipo === 'objetivo' && seleccion.datos.tipo_ubicacion === 'movil')
+              ? 'movil' : 'fijo',
+            cambiandoTipo,
+            historial: historialUbicaciones,
+            puntosRonda: puntosRondaObjetivo,
+            vigenteDesde,
+            onIniciarMover: () => { limpiarAvisos(); setModoMover(true) },
+            onCancelarMover: () => { setModoMover(false); setObjetivoPropuesto(null) },
+            onCambiarTipo: cambiarTipoUbicacion,
+            onVigenteDesdeChange: setVigenteDesde,
+            onVerPuntosRonda: verPuntosDelObjetivo,
+          }}
           onCerrar={() => {
             setSeleccion(null); setMarcaciones([]); setRadioPreview(null)
-            setObjetivoPropuesto(null); setDiagnosticoObjetivo(null); limpiarAvisos()
+            setObjetivoPropuesto(null); setDiagnosticoObjetivo(null)
+            setModoMover(false); setVigenteDesde(''); limpiarAvisos()
           }}
         />
       </div>

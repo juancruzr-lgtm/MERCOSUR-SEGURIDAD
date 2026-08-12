@@ -6,6 +6,11 @@ import { activarNotificacionesPush } from '@/lib/push-client'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
+// Única ruta para escribir la ubicación de un objetivo: abre la vigencia en el
+// historial y deja el cambio auditado. El UPDATE directo ya no está permitido.
+// Con alias: este componente ya tiene una función local llamada
+// `actualizarUbicacionObjetivo` (el handler del botón "usar mi ubicación").
+import { actualizarUbicacionObjetivo as guardarUbicacionObjetivo } from '@/lib/legajo-objetivo'
 import { initTelemetry, endSession } from '@/lib/telemetry'
 import { useSupervisorGps } from '@/lib/supervisor-gps'
 import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno } from '@/lib/puestos'
@@ -1373,18 +1378,20 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
 
     navigator.geolocation.getCurrentPosition(async position => {
-      const payload = {
-        lat: position.coords.latitude,
-        lng: position.coords.longitude,
-        radio_metros: objetivo.radio_metros || 200,
-      }
-
-      const { data, error: updateError } = await supabase.from('objetivos').update(payload).eq('id', objetivo.id).select().single()
+      // La ubicación de un objetivo ya no se escribe con un UPDATE directo:
+      // va por la ruta autoritativa, que además abre la vigencia en el
+      // historial y deja el cambio auditado.
+      const { objetivo: actualizado, error: updateError } = await guardarUbicacionObjetivo(
+        objetivo.id,
+        position.coords.latitude,
+        position.coords.longitude,
+        objetivo.radio_metros || 200,
+      )
 
       if (updateError) {
-        setError(updateError.message)
-      } else if (data) {
-        setObjetivos(prev => prev.map(o => o.id === objetivo.id ? { ...o, ...data } : o))
+        setError(updateError)
+      } else if (actualizado) {
+        setObjetivos(prev => prev.map(o => o.id === objetivo.id ? { ...o, ...actualizado } : o))
       }
 
       setAsignando(null)
@@ -1630,27 +1637,38 @@ export default function SupervisorMobile({ user }: any) {
       return
     }
 
-    const payload = {
-      direccion: formObjetivo.direccion.trim() || null,
-      lat,
-      lng,
-      radio_metros: radio,
-      estado: formObjetivo.estado,
-    }
-
+    // El formulario mezcla datos administrativos con la ubicación, pero ya no
+    // se pueden guardar juntos: lat/lng/radio sólo los escribe la ruta
+    // autoritativa. Se hacen en dos pasos, primero lo administrativo.
     const { data, error: updateError } = await supabase
       .from('objetivos')
-      .update(payload)
+      .update({
+        direccion: formObjetivo.direccion.trim() || null,
+        estado: formObjetivo.estado,
+      })
       .eq('id', objetivoEditando.id)
       .select('*')
       .single()
 
     if (updateError) {
       setError(updateError.message)
-    } else if (data) {
-      setObjetivos(prev => prev.map(o => o.id === objetivoEditando.id ? { ...o, ...data } as Objetivo : o))
-      setObjetivoEditando(null)
+      setAsignando(null)
+      return
     }
+
+    const { objetivo: conUbicacion, error: errorUbicacion } = await guardarUbicacionObjetivo(
+      objetivoEditando.id, lat, lng, radio,
+    )
+
+    if (errorUbicacion) {
+      setError(errorUbicacion)
+      setAsignando(null)
+      return
+    }
+
+    const resultado = { ...(data ?? {}), ...(conUbicacion ?? {}) }
+    setObjetivos(prev => prev.map(o => o.id === objetivoEditando.id ? { ...o, ...resultado } as Objetivo : o))
+    setObjetivoEditando(null)
 
     setAsignando(null)
   }

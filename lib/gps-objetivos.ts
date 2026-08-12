@@ -122,6 +122,83 @@ export async function diagnosticarGpsObjetivo(
  * auditoría distingue este cambio de uno hecho a mano: queda con
  * `origen = 'diagnostico_gps'` y la firma del análisis que lo originó.
  */
+// ── Historial de vigencias ───────────────────────────────────────────────────
+
+export interface UbicacionVigencia {
+  id: string
+  lat: number
+  lng: number
+  radio_metros: number
+  vigente_desde: string
+  vigente_hasta: string | null
+  origen: 'incorporacion_inicial' | 'alta' | 'manual' | 'diagnostico_gps'
+  firma: string | null
+}
+
+export function etiquetaOrigenVigencia(origen: UbicacionVigencia['origen']): string {
+  switch (origen) {
+    case 'incorporacion_inicial': return 'Incorporación inicial'
+    case 'alta':                  return 'Alta del objetivo'
+    case 'manual':                return 'Corrección manual'
+    case 'diagnostico_gps':       return 'Diagnóstico GPS'
+  }
+}
+
+/** Ubicaciones que tuvo el objetivo, de la vigente hacia atrás. */
+export async function cargarHistorialUbicaciones(
+  objetivoId: string,
+): Promise<{ historial: UbicacionVigencia[]; error: string | null }> {
+  const { data, error } = await supabase
+    .from('objetivo_ubicaciones')
+    .select('id, lat, lng, radio_metros, vigente_desde, vigente_hasta, origen, firma')
+    .eq('objetivo_id', objetivoId)
+    .order('vigente_desde', { ascending: false })
+    .limit(20)
+
+  if (error) return { historial: [], error: error.message }
+  return { historial: (data ?? []) as UbicacionVigencia[], error: null }
+}
+
+/**
+ * Cuántos puntos de ronda activos cuelgan de este objetivo.
+ *
+ * Se usa para advertir antes de moverlo: los puntos NO se mueven con él, son
+ * ubicaciones propias y moverlas es otra decisión.
+ */
+export async function contarPuntosRondaObjetivo(
+  objetivoId: string,
+): Promise<number> {
+  const { data: rondas } = await supabase
+    .from('rondas_base')
+    .select('id')
+    .eq('objetivo_id', objetivoId)
+
+  const ids = ((rondas ?? []) as any[]).map(r => r.id)
+  if (ids.length === 0) return 0
+
+  const { count } = await supabase
+    .from('ronda_puntos')
+    .select('id', { count: 'exact', head: true })
+    .in('ronda_base_id', ids)
+    .eq('activo', true)
+    .not('latitud', 'is', null)
+
+  return count ?? 0
+}
+
+/** Marca el objetivo como fijo o móvil. `tipo_ubicacion` sí es escribible. */
+export async function establecerTipoUbicacion(
+  objetivoId: string,
+  tipo: 'fijo' | 'movil',
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('objetivos')
+    .update({ tipo_ubicacion: tipo })
+    .eq('id', objetivoId)
+
+  return { error: error?.message ?? null }
+}
+
 export async function aplicarSugerenciaGpsObjetivo(
   diagnostico: DiagnosticoGpsObjetivo,
 ): Promise<{ objetivo: ObjetivoLegajo | null; error: string | null }> {

@@ -1,0 +1,30 @@
+-- ============================================================================
+-- ROLLBACK · Diagnóstico acotado a la vigencia en objetivos móviles
+-- ============================================================================
+--
+-- NO EJECUTAR JUNTO CON LA MIGRACIÓN.
+--
+-- Esta migración no creó ni modificó ninguna tabla: fue un `create or replace`
+-- de `diagnosticar_gps_objetivo`. Revertirla es volver a la versión anterior de
+-- esa misma función.
+--
+-- CÓMO SE REVIERTE
+--
+--   Ejecutar de nuevo, completo, el archivo:
+--   supabase/migrations/20260814200000_objetivo_diagnostico_gps.sql
+--
+--   Es idempotente en lo que importa: su `create table` fallaría si se corre
+--   entero, así que hay que ejecutar SÓLO el bloque `create or replace function
+--   public.diagnosticar_gps_objetivo(...)` de ese archivo, más sus tres líneas
+--   de grants al final.
+--
+-- No se transcribe la función acá a propósito: tener dos copias del mismo
+-- cuerpo en el repositorio garantiza que en algún momento se desincronicen y
+-- que el rollback restaure una versión que nunca estuvo en producción.
+--
+-- QUÉ NO SE PIERDE
+--
+-- Los diagnósticos ya calculados quedan en objetivo_diagnosticos_gps. Los de
+-- objetivos móviles fueron calculados con la ventana acotada a su vigencia; su
+-- campo `detalle` lo deja registrado en 'acotado_a_vigencia'.
+-- ============================================================================

@@ -8,6 +8,9 @@ import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/li
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
+// Única ruta para escribir lat/lng/radio de un objetivo. `authenticated` no
+// tiene privilegio de UPDATE sobre esas columnas: van sí o sí por acá.
+import { actualizarUbicacionObjetivo } from '@/lib/legajo-objetivo'
 // Lectura del GPS de asistencia. Vive en lib/ porque lo comparte la Página GPS:
 // `registros_asistencia` tiene dos nomenclaturas de columnas y tiene que haber
 // una sola función que las resuelva.
@@ -2825,18 +2828,23 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     if (!form.nombre.trim()) return
     setLoading(true)
 
+    const radioNuevo = Number(form.radio_metros) || 200
+
     const payload = {
       nombre: form.nombre.trim(),
       cliente: form.cliente.trim() || null,
       direccion: form.direccion.trim() || null,
       estado: form.estado,
-      radio_metros: Number(form.radio_metros) || 200,
       checklist_plantilla_id: form.checklist_plantilla_id || null,
       frecuencia_supervision_horas: Math.max(1, Number(form.frecuencia_supervision_horas) || 24),
       zona_id: form.zona_id || null,
     }
 
     if (editId) {
+      // El radio ya no viaja en este payload: es una columna GPS y sólo la
+      // escribe establecer_ubicacion_objetivo(), que además abre la vigencia
+      // en el historial. Se guarda primero lo administrativo y después, si el
+      // radio cambió y el objetivo tiene ubicación, se llama a la ruta.
       const { data } = await supabase
         .from('objetivos')
         .update(payload)
@@ -2844,10 +2852,30 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
         .select()
         .single()
       if (data) setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? data : o))
+
+      const anterior = (objetivos as any[]).find(o => o.id === editId)
+      const radioCambio = anterior && Number(anterior.radio_metros) !== radioNuevo
+      const tieneUbicacion = anterior
+        && typeof anterior.lat === 'number' && typeof anterior.lng === 'number'
+
+      if (radioCambio && tieneUbicacion) {
+        const { objetivo: conRadio, error: errorRadio } = await actualizarUbicacionObjetivo(
+          editId, anterior.lat, anterior.lng, radioNuevo,
+        )
+        if (errorRadio) {
+          alert(`Los datos se guardaron, pero el radio no: ${errorRadio}`)
+        } else if (conRadio) {
+          setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? { ...o, ...conRadio } : o))
+        }
+      } else if (radioCambio && !tieneUbicacion) {
+        alert('El radio no se guardó: primero hay que cargarle una ubicación al objetivo.')
+      }
     } else {
+      // El alta sigue siendo un INSERT normal, con su radio. El trigger
+      // trg_objetivos_vigencia_alta abre la primera vigencia solo.
       const { data } = await supabase
         .from('objetivos')
-        .insert(payload)
+        .insert({ ...payload, radio_metros: radioNuevo })
         .select()
         .single()
       if (data) setObjetivos((prev: any[]) => [...prev, data])

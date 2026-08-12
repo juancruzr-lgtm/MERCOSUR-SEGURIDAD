@@ -16,10 +16,12 @@ import { useEffect, useState } from 'react'
 import { urlFotoReferencia, etiquetaDiagnostico, proponeCambio, type PuntoRondaGps } from '@/lib/gps-mapa'
 import {
   etiquetaConfianza,
+  etiquetaOrigenVigencia,
   etiquetaRecomendacionObjetivo,
   evidenciaTexto,
   sugerenciaObjetivoAplicable,
   type DiagnosticoGpsObjetivo,
+  type UbicacionVigencia,
 } from '@/lib/gps-objetivos'
 import styles from './Gps.module.css'
 
@@ -68,6 +70,7 @@ export default function PanelDetalle({
   metrosPropuestos,
   onAnalizarObjetivo,
   onAplicarObjetivo,
+  objetivoCtl,
   onCerrar,
 }: {
   seleccion: SeleccionGps | null
@@ -97,6 +100,20 @@ export default function PanelDetalle({
   metrosPropuestos: number | null
   onAnalizarObjetivo: (objetivoId: string) => void
   onAplicarObjetivo: () => void
+  /** Todo lo que hace falta para gestionar la ubicación del objetivo. */
+  objetivoCtl: {
+    modoMover: boolean
+    tipoUbicacion: 'fijo' | 'movil'
+    cambiandoTipo: boolean
+    historial: UbicacionVigencia[]
+    puntosRonda: number
+    vigenteDesde: string
+    onIniciarMover: () => void
+    onCancelarMover: () => void
+    onCambiarTipo: (tipo: 'fijo' | 'movil') => void
+    onVigenteDesdeChange: (valor: string) => void
+    onVerPuntosRonda: () => void
+  }
   onCerrar: () => void
 }) {
   const [fotoUrl, setFotoUrl] = useState<string | null>(null)
@@ -162,6 +179,29 @@ export default function PanelDetalle({
             <Fila label="Coordenadas" valor={coordenada(o.lat ?? null, o.lng ?? null)} />
             <Fila label="Radio" valor={o.radio_metros ? `${o.radio_metros} m` : '—'} />
             <Fila label="Estado" valor={o.estado || '—'} />
+
+            {/* ── Fijo / Móvil ──────────────────────────────────────────── */}
+            <div className={styles.editorRadio}>
+              <span className={styles.label}>Tipo de ubicación</span>
+              <div className={styles.editorRadioFila}>
+                {(['fijo', 'movil'] as const).map(tipo => (
+                  <button
+                    key={tipo}
+                    type="button"
+                    className={`${styles.capa} ${objetivoCtl.tipoUbicacion === tipo ? styles.capaActiva : ''}`}
+                    onClick={() => objetivoCtl.onCambiarTipo(tipo)}
+                    disabled={objetivoCtl.cambiandoTipo || guardandoObjetivo}
+                  >
+                    {tipo === 'fijo' ? 'Fijo' : 'Móvil'}
+                  </button>
+                ))}
+              </div>
+              <div className={styles.ayudaRadio}>
+                {objetivoCtl.tipoUbicacion === 'movil'
+                  ? 'Se traslada. Sus ubicaciones anteriores no fueron errores, y el diagnóstico sólo mira los fichajes posteriores a la mudanza.'
+                  : 'No se traslada. Si los fichajes caen lejos, la ubicación está mal cargada.'}
+              </div>
+            </div>
 
             {/* ── Diagnóstico sobre los fichajes reales ─────────────────── */}
             {(() => {
@@ -244,6 +284,38 @@ export default function PanelDetalle({
                   {metrosPropuestos !== null && <div>Desplazamiento: {metrosPropuestos} m</div>}
                   <div>Radio: {o.radio_metros ?? '—'} m (no cambia)</div>
                 </div>
+
+                {/* Sólo un móvil declara desde cuándo rige: en uno fijo, una
+                    ubicación nueva corrige algo que estaba mal, y corregir es
+                    siempre ahora. */}
+                {objetivoCtl.tipoUbicacion === 'movil' && (
+                  <div className={styles.editorRadio}>
+                    <label className={styles.label} htmlFor="gps-vigente-desde">
+                      Rige desde
+                    </label>
+                    <input
+                      id="gps-vigente-desde"
+                      className={styles.input}
+                      type="datetime-local"
+                      value={objetivoCtl.vigenteDesde}
+                      onChange={e => objetivoCtl.onVigenteDesdeChange(e.target.value)}
+                      disabled={guardandoObjetivo}
+                    />
+                    <div className={styles.ayudaRadio}>
+                      Vacío = desde ahora. Los fichajes anteriores a esta fecha
+                      siguen perteneciendo a la ubicación anterior y no se tocan.
+                    </div>
+                  </div>
+                )}
+
+                {objetivoCtl.puntosRonda > 0 && (
+                  <div className={`${styles.diagnostico} ${styles.diagnosticoAlerta}`}>
+                    Al guardar, los {objetivoCtl.puntosRonda} punto
+                    {objetivoCtl.puntosRonda === 1 ? '' : 's'} de ronda de este
+                    objetivo <b>quedan donde están</b>. Si el objetivo se mudó,
+                    hay que revisarlos aparte.
+                  </div>
+                )}
                 <div className={styles.acciones}>
                   <button
                     className={`${styles.boton} ${styles.botonPrimario}`}
@@ -263,21 +335,73 @@ export default function PanelDetalle({
                   </button>
                 </div>
               </>
+            ) : objetivoCtl.modoMover ? (
+              <div className={`${styles.diagnostico} ${styles.diagnosticoNeutro}`}>
+                <div style={{ fontWeight: 700 }}>Modo mover activo</div>
+                <div style={{ marginTop: 4 }}>
+                  Arrastrá el marcador azul del objetivo hasta el lugar correcto.
+                  No se guarda hasta que confirmes.
+                </div>
+                {objetivoCtl.puntosRonda > 0 && (
+                  <div style={{ marginTop: 8, color: '#fcd34d' }}>
+                    Este objetivo tiene {objetivoCtl.puntosRonda} punto
+                    {objetivoCtl.puntosRonda === 1 ? '' : 's'} de ronda. <b>No se
+                    mueven con él</b>: son ubicaciones propias. Revisalos después.
+                    <div style={{ marginTop: 6 }}>
+                      <button className={styles.boton} type="button" onClick={objetivoCtl.onVerPuntosRonda}>
+                        Ver sus puntos de ronda
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className={styles.acciones}>
+                  <button className={styles.boton} type="button" onClick={objetivoCtl.onCancelarMover}>
+                    Salir del modo mover
+                  </button>
+                </div>
+              </div>
             ) : (
-              <div className={styles.soloLectura}>
-                Arrastrá el marcador de este objetivo en el mapa para proponer otra
-                ubicación. Arrastrar no guarda nada: te muestra dónde quedaría el
-                radio y recién confirmás acá.
+              <div className={styles.acciones}>
+                <button
+                  className={styles.boton}
+                  type="button"
+                  onClick={objetivoCtl.onIniciarMover}
+                  disabled={guardandoObjetivo || aplicandoObjetivo}
+                >
+                  📍 Mover objetivo
+                </button>
+              </div>
+            )}
+
+            {/* ── Historial de ubicaciones ─────────────────────────────── */}
+            {objetivoCtl.historial.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div className={styles.label}>Ubicaciones que tuvo</div>
+                {objetivoCtl.historial.map(v => (
+                  <div key={v.id} className={styles.fila} style={{ display: 'block' }}>
+                    <div className={styles.filaLabel}>
+                      {new Date(v.vigente_desde).toLocaleDateString('es-AR')}
+                      {' → '}
+                      {v.vigente_hasta
+                        ? new Date(v.vigente_hasta).toLocaleDateString('es-AR')
+                        : 'vigente'}
+                      {' · '}{etiquetaOrigenVigencia(v.origen)}
+                    </div>
+                    <div className={styles.filaValor} style={{ textAlign: 'left' }}>
+                      {Number(v.lat).toFixed(6)}, {Number(v.lng).toFixed(6)} · {v.radio_metros} m
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
             <div className={styles.soloLectura}>
-              Mover un objetivo cambia dónde puede fichar el personal. Los dos
-              caminos quedan registrados en la auditoría y se distinguen entre
-              sí: arrastrar y guardar es un cambio <b>manual</b>; aplicar la
-              sugerencia queda como <b>diagnostico_gps</b> con la firma del
-              análisis. Para ver los fichajes sobre los que se calculó, prendé
-              las capas de Ingresos y Egresos y filtrá por este objetivo.
+              Mover un objetivo cambia dónde puede fichar el personal <b>de acá en
+              adelante</b>: los fichajes ya registrados conservan la distancia y
+              el veredicto que se calcularon contra la ubicación de su momento, y
+              no se recalculan nunca. Los dos caminos quedan auditados y se
+              distinguen: mover a mano es <b>manual</b>; aplicar la sugerencia es
+              <b> diagnostico_gps</b> con la firma del análisis.
             </div>
           </>
         )

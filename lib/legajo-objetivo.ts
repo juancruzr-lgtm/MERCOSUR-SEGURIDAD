@@ -123,7 +123,7 @@ export const fechaHoyLocal = () => new Date().toLocaleDateString('sv-SE')
 // ── Carga ───────────────────────────────────────────────────────────────────
 
 const COLS_OBJETIVO =
-  'id, nombre, cliente, direccion, lat, lng, radio_metros, estado, zona_id, frecuencia_supervision_horas'
+  'id, nombre, cliente, direccion, lat, lng, radio_metros, estado, zona_id, frecuencia_supervision_horas, tipo_ubicacion'
 const COLS_PUESTO   = 'id, nombre, activo, orden'
 const COLS_TURNO    = 'id, objetivo_id, puesto_id, guardia_id, guardia_original_id, fecha, hora_inicio, hora_fin, estado'
 const COLS_REGISTRO = 'id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, tipo_registro'
@@ -443,30 +443,39 @@ export interface ContextoCambioObjetivo {
   firma: string
 }
 
+/**
+ * ÚNICA ruta para cambiar la ubicación o el radio de un objetivo.
+ *
+ * Ya no hace un UPDATE: llama a `establecer_ubicacion_objetivo()`, que en una
+ * sola transacción cierra la vigencia anterior del historial, abre la nueva y
+ * actualiza `objetivos` —que sigue siendo lo que leen fichajes, rondas y
+ * supervisiones—. Escribir esas columnas por fuera de acá ya no es posible:
+ * `authenticated` no tiene privilegio de UPDATE sobre lat, lng ni radio_metros.
+ *
+ * `vigenteDesde` sólo lo respeta un objetivo MÓVIL: en uno fijo, una ubicación
+ * nueva es una corrección de algo que estaba mal, y corregir es siempre ahora.
+ * El servidor lo fuerza; acá se manda y él decide.
+ */
 export async function actualizarUbicacionObjetivo(
   objetivoId: string,
   lat: number,
   lng: number,
   radioMetros: number,
   contexto?: ContextoCambioObjetivo,
+  vigenteDesde?: string | null,
 ): Promise<{ objetivo: ObjetivoLegajo | null; error: string | null }> {
-  // Las columnas de contexto NO son estado del objetivo: son transporte para el
-  // trigger de auditoría, que las consume y las deja en NULL antes de guardar.
-  // Sin contexto, el cambio queda registrado como modificación manual.
-  const payload: Record<string, unknown> = { lat, lng, radio_metros: radioMetros }
-  if (contexto) {
-    payload.ctx_cambio_origen = contexto.origen
-    payload.ctx_cambio_firma = contexto.firma
-  }
+  const { data, error } = await supabase.rpc('establecer_ubicacion_objetivo', {
+    p_objetivo_id: objetivoId,
+    p_lat: lat,
+    p_lng: lng,
+    p_radio_metros: radioMetros,
+    p_vigente_desde: vigenteDesde ?? null,
+    p_origen: contexto?.origen ?? 'manual',
+    p_firma: contexto?.firma ?? null,
+  })
 
-  const { data, error } = await supabase
-    .from('objetivos')
-    .update(payload)
-    .eq('id', objetivoId)
-    .select(COLS_OBJETIVO)
-    .single()
-
-  return { objetivo: (data ?? null) as ObjetivoLegajo | null, error: error?.message ?? null }
+  if (error) return { objetivo: null, error: error.message }
+  return { objetivo: (data ?? null) as ObjetivoLegajo | null, error: null }
 }
 
 // ── Derivaciones puras ──────────────────────────────────────────────────────
