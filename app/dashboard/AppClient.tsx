@@ -8,6 +8,21 @@ import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/li
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
+// Lectura del GPS de asistencia. Vive en lib/ porque lo comparte la Página GPS:
+// `registros_asistencia` tiene dos nomenclaturas de columnas y tiene que haber
+// una sola función que las resuelva.
+import {
+  GPS_PRECISION_MAX_METROS,
+  numeroGps,
+  gpsRegistroAsistencia,
+  metrosGpsTexto,
+  estadoGpsRegistro,
+  distanciaGpsRegistro,
+  coordenadasGpsTexto,
+  estadoGpsTexto,
+  distanciaMetrosCoordenadas,
+  auditoriaSupervisionGps,
+} from '@/lib/gps-asistencia'
 import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, obtenerPuestosActivosDeObjetivos, resolverPuestoTurno } from '@/lib/puestos'
 import type { EstadoPuestos } from '@/lib/puestos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
@@ -51,6 +66,11 @@ const SupervisionMap = dynamic(() => import('@/components/supervisiones/Supervis
 const AsistenciaMap = dynamic(() => import('@/components/asistencia/AsistenciaMap'), {
   ssr: false,
   loading: () => <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', background:'#111827', border:'1px solid #1e2d42', borderRadius:8, color:'#94a3b8', marginBottom:20 }}>Cargando mapa...</div>,
+})
+
+const PaginaGps = dynamic(() => import('@/components/gps/PaginaGps'), {
+  ssr: false,
+  loading: () => <div style={{ color:'#64748b', padding:48, textAlign:'center' }}>Cargando mapa operativo…</div>,
 })
 
 interface EvidenciaAdmin {
@@ -154,7 +174,10 @@ const ADMIN_MOBILE_VIEW_KEY = 'mercosur_admin_mobile_view'
 // alpha() y FONT_BRAND se importan de components/ui/base para poder compartirlos
 // con los componentes extraídos de este archivo.
 
-const GPS_PRECISION_MAX_METROS = 100
+// GPS_PRECISION_MAX_METROS y los helpers de GPS de asistencia se importan de
+// lib/gps-asistencia.ts desde que los comparte la Página GPS. No redefinirlos
+// acá: la tabla tiene dos nomenclaturas de columnas y una segunda lectura
+// terminaría discrepando con la primera.
 
 function detectarPantallaChicaAdmin(): boolean {
   if (typeof window === 'undefined') return false
@@ -283,52 +306,9 @@ function minutosDesdeInicioTurno(turno: Turno, ahora = new Date()): number {
   return Math.max(0, Math.floor((ahora.getTime() - inicioTurno.getTime()) / 60000))
 }
 
-function numeroGps(value: unknown): number | null {
-  const numero = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
-  return Number.isFinite(numero) ? numero : null
-}
-
-function gpsRegistroAsistencia(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso') {
-  const lat = tipo === 'ingreso'
-    ? numeroGps(registro?.latitud_ingreso ?? registro?.lat_entrada)
-    : numeroGps(registro?.latitud_egreso ?? registro?.lat_salida)
-  const lng = tipo === 'ingreso'
-    ? numeroGps(registro?.longitud_ingreso ?? registro?.lng_entrada)
-    : numeroGps(registro?.longitud_egreso ?? registro?.lng_salida)
-  const precision = tipo === 'ingreso'
-    ? numeroGps(registro?.precision_ingreso)
-    : numeroGps(registro?.precision_egreso)
-
-  return lat !== null && lng !== null ? { lat, lng, precision } : null
-}
-
-function metrosGpsTexto(valor?: unknown): string {
-  const metros = numeroGps(valor)
-  return metros !== null ? `${Math.round(metros).toLocaleString('es-AR')} m` : '—'
-}
-
-function estadoGpsRegistro(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string | null | undefined {
-  return tipo === 'ingreso' ? registro?.gps_ingreso_estado : registro?.gps_egreso_estado
-}
-
-function distanciaGpsRegistro(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): number | null {
-  return numeroGps(tipo === 'ingreso' ? registro?.distancia_ingreso_metros : registro?.distancia_egreso_metros)
-}
-
-function coordenadasGpsTexto(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string {
-  const gps = gpsRegistroAsistencia(registro, tipo)
-  if (!gps) return '—'
-  return `${gps.lat.toFixed(6)}, ${gps.lng.toFixed(6)}`
-}
-
-function estadoGpsTexto(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string {
-  const estado = estadoGpsRegistro(registro, tipo)
-  if (estado === 'dentro_radio') return 'Dentro del radio'
-  if (estado === 'fuera_radio') return 'Fuera del radio'
-  if (estado === 'objetivo_sin_gps') return 'Objetivo sin GPS'
-  if (estado === 'gps_no_disponible') return 'GPS no disponible'
-  return gpsRegistroAsistencia(registro, tipo) ? 'GPS registrado' : 'Sin GPS'
-}
+// numeroGps, gpsRegistroAsistencia, metrosGpsTexto, estadoGpsRegistro,
+// distanciaGpsRegistro, coordenadasGpsTexto y estadoGpsTexto se movieron sin
+// cambios a lib/gps-asistencia.ts y se importan al principio de este archivo.
 
 function textoAuditoriaGps(registro: RegistroAsistencia | any, tipo: 'ingreso' | 'egreso'): string {
   const gps = gpsRegistroAsistencia(registro, tipo)
@@ -361,44 +341,8 @@ function objetivoTieneGps(objetivo: Objetivo | any): boolean {
   return numeroGps(objetivo?.lat) !== null && numeroGps(objetivo?.lng) !== null && (numeroGps(objetivo?.radio_metros) || 0) > 0
 }
 
-function distanciaMetrosCoordenadas(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const radioTierra = 6371000
-  const rad = Math.PI / 180
-  const dLat = (lat2 - lat1) * rad
-  const dLng = (lng2 - lng1) * rad
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
-    Math.sin(dLng / 2) ** 2
-
-  return 2 * radioTierra * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
-
-function auditoriaSupervisionGps(supervision: Pick<SupervisionAdmin, 'lat' | 'lng' | 'precision_gps'>, objetivo?: Objetivo | null) {
-  const lat = numeroGps(supervision.lat)
-  const lng = numeroGps(supervision.lng)
-  const precision = numeroGps(supervision.precision_gps)
-  const objetivoLat = numeroGps(objetivo?.lat)
-  const objetivoLng = numeroGps(objetivo?.lng)
-  const radio = numeroGps(objetivo?.radio_metros)
-  const distancia = lat !== null && lng !== null && objetivoLat !== null && objetivoLng !== null
-    ? distanciaMetrosCoordenadas(lat, lng, objetivoLat, objetivoLng)
-    : null
-  const dentroRadio = distancia !== null && radio !== null && radio > 0
-    ? distancia <= radio
-    : null
-
-  return {
-    lat,
-    lng,
-    precision,
-    gpsImpreciso: precision !== null && precision > GPS_PRECISION_MAX_METROS,
-    objetivoLat,
-    objetivoLng,
-    radio,
-    distancia_objetivo_metros: distancia,
-    dentro_radio: dentroRadio,
-  }
-}
+// distanciaMetrosCoordenadas y auditoriaSupervisionGps también se movieron sin
+// cambios a lib/gps-asistencia.ts, por el mismo motivo.
 
 function esRolGuardia(rol?: string | null): boolean {
   return rol === 'guardia' || rol === 'vigilador'
@@ -10679,6 +10623,7 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'turnos', icon:'📅', label:'Turnos' },
       { id:'asistencia', icon:'✅', label:'Asistencia' },
       { id:'rondas', icon:'🔁', label:'Rondas' },
+      { id:'pagina_gps', icon:'📍', label:'Página GPS' },
     ]},
     { section:'ADMINISTRACIÓN', items:[
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
@@ -10754,6 +10699,17 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
               {page === 'rondas' && <RondasGlobal objetivos={objetivos} />}
+              {/* Vista transversal de GPS. Recibe los mismos datos ya cargados
+                  que consume Asistencia: no repite ninguna consulta de evidencia. */}
+              {page === 'pagina_gps' && (
+                <PaginaGps
+                  objetivos={objetivos}
+                  registros={registros}
+                  turnos={turnos}
+                  guardias={guardias}
+                  supervisiones={supervisionesAdmin}
+                />
+              )}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}

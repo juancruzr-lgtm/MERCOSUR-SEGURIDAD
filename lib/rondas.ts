@@ -568,9 +568,24 @@ export async function agregarPunto(
   return { data: data as RondaPunto, error: null }
 }
 
+/**
+ * Contexto del cambio. Viaja en el mismo UPDATE, en dos columnas de transporte
+ * que el trigger `trg_ronda_puntos_zz_auditoria` consume y deja en NULL antes
+ * de persistir: nunca quedan guardadas en el punto.
+ *
+ * Si no se manda, el cambio queda auditado como modificación manual. Sólo se
+ * usa al aplicar una sugerencia del diagnóstico GPS.
+ */
+export interface ContextoCambioPunto {
+  origen: 'diagnostico_gps'
+  /** Firma del diagnóstico que originó la sugerencia (`dg1:<md5>`). */
+  firma: string
+}
+
 export async function actualizarPunto(
   puntoId: string,
   cambios: ActualizarRondaPunto,
+  contexto?: ContextoCambioPunto,
 ): Promise<ResultadoRondas<RondaPunto>> {
   if (cambios.gps_requerido === true) {
     const errorConfiguracionGps = validarConfiguracionGpsObligatoria(cambios)
@@ -629,9 +644,17 @@ export async function actualizarPunto(
     payload.precision_metros = null
   }
 
+  // Las columnas de contexto no forman parte del punto: son transporte para el
+  // trigger de auditoría, que las lee y las anula antes de guardar.
+  const payloadConContexto: Record<string, unknown> = { ...payload }
+  if (contexto) {
+    payloadConContexto.ctx_cambio_origen = contexto.origen
+    payloadConContexto.ctx_cambio_firma = contexto.firma
+  }
+
   const { data, error } = await supabase
     .from('ronda_puntos')
-    .update(payload)
+    .update(payloadConContexto)
     .eq('id', puntoId)
     .select(COLS_RONDA_PUNTO)
     .single()
@@ -644,6 +667,116 @@ export function desactivarPunto(
   puntoId: string,
 ): Promise<ResultadoRondas<RondaPunto>> {
   return actualizarPunto(puntoId, { activo: false })
+}
+
+// ── Diagnóstico GPS de un punto ──────────────────────────────────────────────
+// Compara la configuración del punto contra dónde marcaron realmente los
+// vigiladores en sus visitas. No modifica nada: propone. Aplicar la propuesta
+// es una decisión de la persona, y queda registrada en la auditoría.
+
+export type RecomendacionGps =
+  | 'sin_datos'
+  | 'sin_cambios'
+  | 'ajustar_radio'
+  | 'recentrar'
+  | 'recentrar_y_radio'
+
+export interface DiagnosticoGpsPunto {
+  id: string
+  ronda_punto_id: string
+  firma: string
+  dias_analizados: number
+  visitas_consideradas: number
+  radio_actual: number | null
+  latitud_actual: number | null
+  longitud_actual: number | null
+  latitud_sugerida: number | null
+  longitud_sugerida: number | null
+  radio_sugerido: number | null
+  distancia_p50: number | null
+  distancia_p90: number | null
+  distancia_max: number | null
+  desplazamiento_metros: number | null
+  recomendacion: RecomendacionGps
+  created_at: string
+}
+
+/** ¿La recomendación propone un cambio concreto que se pueda aplicar? */
+export function sugerenciaAplicable(diagnostico: DiagnosticoGpsPunto): boolean {
+  return (
+    diagnostico.recomendacion !== 'sin_datos' &&
+    diagnostico.recomendacion !== 'sin_cambios' &&
+    diagnostico.latitud_sugerida !== null &&
+    diagnostico.longitud_sugerida !== null &&
+    diagnostico.radio_sugerido !== null
+  )
+}
+
+/** Frase corta para mostrar al lado del punto, en criollo. */
+export function resumenSugerenciaGps(diagnostico: DiagnosticoGpsPunto): string {
+  const corrido = diagnostico.desplazamiento_metros
+  const metros = corrido === null ? null : Math.round(corrido)
+
+  switch (diagnostico.recomendacion) {
+    case 'sin_datos':
+      return `Sin datos suficientes (${diagnostico.visitas_consideradas} visitas con GPS en ${diagnostico.dias_analizados} días).`
+    case 'sin_cambios':
+      return `Bien configurado según ${diagnostico.visitas_consideradas} visitas reales.`
+    case 'ajustar_radio':
+      return `El radio conviene que sea ${diagnostico.radio_sugerido} m (hoy ${diagnostico.radio_actual ?? '—'} m), según ${diagnostico.visitas_consideradas} visitas.`
+    case 'recentrar':
+      return `El punto está ${metros} m corrido de donde marcan los vigiladores, según ${diagnostico.visitas_consideradas} visitas.`
+    case 'recentrar_y_radio':
+      return metros === null
+        ? `El punto no tiene ubicación; se sugiere ubicarlo y usar radio ${diagnostico.radio_sugerido} m, según ${diagnostico.visitas_consideradas} visitas.`
+        : `El punto está ${metros} m corrido y el radio conviene que sea ${diagnostico.radio_sugerido} m, según ${diagnostico.visitas_consideradas} visitas.`
+  }
+}
+
+/**
+ * Pide el diagnóstico de un punto. Es idempotente del lado del servidor: un
+ * diagnóstico idéntico dentro de las 24 h devuelve el mismo, no crea otro.
+ */
+export async function diagnosticarGpsPunto(
+  puntoId: string,
+  dias = 90,
+): Promise<ResultadoRondas<DiagnosticoGpsPunto>> {
+  const { data, error } = await supabase.rpc('diagnosticar_gps_ronda_punto', {
+    p_ronda_punto_id: puntoId,
+    p_dias: dias,
+  })
+
+  if (error) {
+    return { data: null, error: mensajeError(error, 'No se pudo analizar el GPS del punto.') }
+  }
+  return { data: data as DiagnosticoGpsPunto, error: null }
+}
+
+/**
+ * Aplica la sugerencia al punto. Manda el contexto para que la auditoría
+ * registre que el cambio vino del diagnóstico y con qué firma, en lugar de
+ * quedar como una edición manual más.
+ */
+export async function aplicarSugerenciaGps(
+  diagnostico: DiagnosticoGpsPunto,
+): Promise<ResultadoRondas<RondaPunto>> {
+  if (!sugerenciaAplicable(diagnostico)) {
+    return { data: null, error: 'Este diagnóstico no propone ningún cambio para aplicar.' }
+  }
+
+  return actualizarPunto(
+    diagnostico.ronda_punto_id,
+    {
+      latitud: diagnostico.latitud_sugerida,
+      longitud: diagnostico.longitud_sugerida,
+      radio_metros: diagnostico.radio_sugerido,
+      // La coordenada sale del promedio de mediciones GPS reales, no de una
+      // corrección escrita a mano. Que venga de una sugerencia lo registra la
+      // auditoría, no esta columna.
+      origen_posicion: 'gps',
+    },
+    { origen: 'diagnostico_gps', firma: diagnostico.firma },
+  )
 }
 
 export async function reordenarPuntos(

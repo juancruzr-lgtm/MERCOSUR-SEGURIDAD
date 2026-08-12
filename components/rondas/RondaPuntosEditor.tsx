@@ -14,7 +14,15 @@ import {
   MENSAJE_RONDA_PUNTO_DUPLICADO,
 } from '@/lib/rondas'
 import { POLITICAS_FOTO, etiquetaPoliticaFoto, ayudaPoliticaFoto } from '@/lib/rondas'
-import type { NuevoRondaPunto, OrigenPosicion, PoliticaFoto, RondaPunto } from '@/lib/rondas'
+import {
+  diagnosticarGpsPunto,
+  aplicarSugerenciaGps,
+  sugerenciaAplicable,
+  resumenSugerenciaGps,
+} from '@/lib/rondas'
+import type {
+  DiagnosticoGpsPunto, NuevoRondaPunto, OrigenPosicion, PoliticaFoto, RondaPunto,
+} from '@/lib/rondas'
 import { capturarGpsNuevo, type CapturaGpsEnCurso } from '@/lib/gps-captura'
 import type { PuntoRondaMapa } from './RondaPuntosMap'
 import ReferenciaPuntoIA from '@/components/ia/ReferenciaPuntoIA'
@@ -122,6 +130,44 @@ function formulariosIguales(a: PuntoForm | null, b: PuntoForm): boolean {
   return a !== null && JSON.stringify(a) === JSON.stringify(b)
 }
 
+/**
+ * Sugerencia de GPS de un punto, con el botón que la aplica.
+ *
+ * Compara la configuración del punto contra dónde marcaron realmente los
+ * vigiladores. Sólo aparece el botón cuando hay algo concreto que corregir: si
+ * el punto está bien, se muestra el texto y nada más.
+ */
+function SugerenciaGps({
+  diagnostico,
+  aplicando,
+  deshabilitado,
+  onAplicar,
+}: {
+  diagnostico: DiagnosticoGpsPunto
+  aplicando: boolean
+  deshabilitado: boolean
+  onAplicar: () => void
+}) {
+  const aplicable = sugerenciaAplicable(diagnostico)
+  return (
+    <div className={styles.suggestion}>
+      <span className={aplicable ? styles.suggestionAlert : undefined}>
+        {resumenSugerenciaGps(diagnostico)}
+      </span>
+      {aplicable && (
+        <button
+          className={`${styles.button} ${styles.buttonPrimary}`}
+          type="button"
+          onClick={onAplicar}
+          disabled={deshabilitado || aplicando}
+        >
+          {aplicando ? 'Aplicando…' : 'Aplicar corrección'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function RondaPuntosEditor({
   rondaBaseId,
   centroObjetivo = null,
@@ -141,6 +187,13 @@ export default function RondaPuntosEditor({
   const [gpsEstado, setGpsEstado] = useState('')
   const [capturandoGps, setCapturandoGps] = useState(false)
 
+  // Diagnóstico GPS por punto. Se recalcula cada vez que se recarga la lista.
+  const [diagnosticos, setDiagnosticos] = useState<Record<string, DiagnosticoGpsPunto>>({})
+  const [analizandoGps, setAnalizandoGps] = useState(false)
+  const [aplicandoId, setAplicandoId] = useState<string | null>(null)
+  // Descarta resultados de un análisis viejo si mientras tanto se recargó.
+  const analisisTokenRef = useRef(0)
+
   // Captura en curso + posición que tenía el formulario antes de capturar.
   const capturaGpsRef = useRef<CapturaGpsEnCurso | null>(null)
   const posicionAnteriorRef = useRef<{ lat: number; lng: number } | null>(null)
@@ -155,6 +208,28 @@ export default function RondaPuntosEditor({
   const hayCambiosPendientes =
     editandoId !== null && !formulariosIguales(formInicial, form)
 
+  // Un diagnóstico por punto activo, en paralelo. El servidor es idempotente:
+  // pedir dos veces el mismo análisis dentro de 24 h no genera uno nuevo.
+  const analizarGps = useCallback(async (lista: RondaPunto[]) => {
+    const token = ++analisisTokenRef.current
+    const activos = lista.filter(punto => punto.activo)
+    if (activos.length === 0) {
+      setDiagnosticos({})
+      return
+    }
+    setAnalizandoGps(true)
+    const resultados = await Promise.all(
+      activos.map(async punto => (await diagnosticarGpsPunto(punto.id)).data),
+    )
+    if (token !== analisisTokenRef.current) return
+    const porPunto: Record<string, DiagnosticoGpsPunto> = {}
+    for (const diagnostico of resultados) {
+      if (diagnostico) porPunto[diagnostico.ronda_punto_id] = diagnostico
+    }
+    setDiagnosticos(porPunto)
+    setAnalizandoGps(false)
+  }, [])
+
   const cargar = useCallback(async () => {
     setCargando(true)
     const resultado = await obtenerRondaConPuntos(rondaBaseId)
@@ -163,9 +238,25 @@ export default function RondaPuntosEditor({
     } else {
       setPuntos(resultado.data.puntos)
       setError('')
+      void analizarGps(resultado.data.puntos)
     }
     setCargando(false)
-  }, [rondaBaseId])
+  }, [rondaBaseId, analizarGps])
+
+  const aplicarCorreccionGps = useCallback(async (punto: RondaPunto) => {
+    const diagnostico = diagnosticos[punto.id]
+    if (!diagnostico) return
+    setAplicandoId(punto.id)
+    setError('')
+    const resultado = await aplicarSugerenciaGps(diagnostico)
+    setAplicandoId(null)
+    if (resultado.error) {
+      setError(resultado.error)
+      return
+    }
+    onCambio()
+    await cargar()
+  }, [diagnosticos, onCambio, cargar])
 
   useEffect(() => { void cargar() }, [cargar])
 
@@ -526,8 +617,20 @@ export default function RondaPuntosEditor({
                         </div>
                         <div className={styles.meta}>
                           {etiquetaPoliticaFoto(punto.politica_foto)} · {punto.gps_requerido ? 'GPS requerido' : 'GPS opcional'}
+                          {punto.radio_metros !== null ? ` · radio ${punto.radio_metros} m` : ' · sin radio'}
                           {punto.latitud !== null ? ` · ${punto.latitud.toFixed(5)}, ${punto.longitud?.toFixed(5)}` : ''}
                         </div>
+                        {punto.activo && diagnosticos[punto.id] && (
+                          <SugerenciaGps
+                            diagnostico={diagnosticos[punto.id]}
+                            aplicando={aplicandoId === punto.id}
+                            deshabilitado={guardando || aplicandoId !== null}
+                            onAplicar={() => void aplicarCorreccionGps(punto)}
+                          />
+                        )}
+                        {punto.activo && analizandoGps && !diagnosticos[punto.id] && (
+                          <div className={styles.suggestion}>Analizando GPS…</div>
+                        )}
                       </div>
                       <div className={styles.actions}>
                         <button className={styles.button} type="button" onClick={() => abrirEdicion(punto)} disabled={guardando}>Editar</button>

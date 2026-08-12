@@ -54,6 +54,24 @@
   line-height: 1.5;
 }
 
+/* Sugerencia del diagnóstico GPS, debajo de los datos del punto. */
+.suggestion {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Sólo cuando hay algo concreto que corregir. */
+.suggestionAlert {
+  color: #b45309;
+  font-weight: 600;
+}
+
 .formGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
