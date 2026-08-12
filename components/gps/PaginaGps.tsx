@@ -557,6 +557,7 @@ export default function PaginaGps({
               if (supervision) setSeleccion({ tipo: 'supervision', datos: supervision })
             }}
             altura="min(66vh, 620px)"
+            selectorFondo
           />
 
           <div className={styles.leyenda}>

@@ -16,7 +16,7 @@
 // igual que antes, que es lo que mantiene intacto el Mapa CGO.
 //
 
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import { MapContainer, Marker, Circle, Popup, TileLayer, useMap } from 'react-leaflet'
 
@@ -129,11 +129,47 @@ type Props = {
   onSupervisionClick?: (supervisionId: string) => void
   /** Alto del mapa. Por defecto, el mismo que usaba el Mapa CGO. */
   altura?: string
+  /**
+   * Muestra el selector Calles / Satélite / Híbrido.
+   *
+   * Por defecto false: el Mapa CGO de Asistencia no lo pide y sigue viéndose
+   * exactamente igual que antes, con el fondo de calles de OpenStreetMap.
+   */
+  selectorFondo?: boolean
 }
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
 const FALLBACK_CENTER: [number, number] = [-32.9442, -60.6505]
+
+// ── Fondos de mapa ───────────────────────────────────────────────────────────
+//
+// Sólo cambia la imagen de fondo (el tilePane de Leaflet). Marcadores, círculos
+// de radio, selección y filtros viven en overlayPane y markerPane, que Leaflet
+// dibuja SIEMPRE por encima del fondo y que este selector no toca.
+//
+// Ninguna de las tres capas pide API key: son los endpoints públicos de
+// ArcGIS Online, los mismos que usa el plugin leaflet-providers.
+
+export type FondoMapa = 'calles' | 'satelite' | 'hibrido'
+
+const URL_OSM = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+// Ojo con el orden: Esri sirve {z}/{y}/{x}, al revés que OSM.
+const URL_ESRI_IMAGEN = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+const URL_ESRI_LIMITES = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
+const URL_ESRI_TRANSPORTE = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'
+
+const ATRIBUCION_OSM =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+const ATRIBUCION_ESRI =
+  'Tiles &copy; <a href="https://www.esri.com">Esri</a> — Source: Esri, i-cubed, USDA, USGS, ' +
+  'AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+
+const FONDOS: { id: FondoMapa; label: string }[] = [
+  { id: 'calles', label: 'Calles' },
+  { id: 'satelite', label: 'Satélite' },
+  { id: 'hibrido', label: 'Híbrido' },
+]
 
 const COLOR_OBJETIVO = '#2563eb'
 const COLOR_PUNTO_RONDA = '#a855f7'
@@ -363,7 +399,11 @@ export default function MapaOperativo({
   onObjetivoClick,
   onSupervisionClick,
   altura = 'min(58vh, 520px)',
+  selectorFondo = false,
 }: Props) {
+  // El fondo es estado local del mapa: cambiarlo no toca ningún dato, ningún
+  // filtro ni la selección. Sólo se reemplaza la imagen de abajo.
+  const [fondo, setFondo] = useState<FondoMapa>('calles')
   const ingresos = useMemo(
     () => (capasActivas.has('ingresos') ? markers.filter(m => m.tipo === 'ingreso') : []),
     [capasActivas, markers],
@@ -386,6 +426,31 @@ export default function MapaOperativo({
 
   return (
     <div style={{ border: '1px solid #1e2d42', borderRadius: 8, overflow: 'hidden', background: '#111827' }}>
+      {selectorFondo && (
+        <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderBottom: '1px solid #1e2d42', flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginRight: 4 }}>Fondo</span>
+          {FONDOS.map(opcion => (
+            <button
+              key={opcion.id}
+              type="button"
+              onClick={() => setFondo(opcion.id)}
+              style={{
+                border: `1px solid ${fondo === opcion.id ? '#f59e0b' : '#1e2d42'}`,
+                background: fondo === opcion.id ? '#f59e0b' : 'transparent',
+                color: fondo === opcion.id ? '#0a0e1a' : '#94a3b8',
+                borderRadius: 999,
+                padding: '4px 12px',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              {opcion.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div style={{ height: altura, minHeight: 340, width: '100%' }}>
         <MapContainer
           center={allPositions[0] || FALLBACK_CENTER}
@@ -393,10 +458,29 @@ export default function MapaOperativo({
           style={{ height: '100%', width: '100%' }}
           scrollWheelZoom
         >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+          {/* Fondo. Va en el tilePane, siempre por debajo de nuestras capas.
+              `key` fuerza el reemplazo limpio del tile layer al cambiar. */}
+          {fondo === 'calles' && (
+            <TileLayer key="fondo-calles" attribution={ATRIBUCION_OSM} url={URL_OSM} />
+          )}
+
+          {fondo !== 'calles' && (
+            <TileLayer
+              key="fondo-satelite"
+              attribution={ATRIBUCION_ESRI}
+              url={URL_ESRI_IMAGEN}
+              maxNativeZoom={19}
+            />
+          )}
+
+          {/* Híbrido: sobre la imagen, las referencias de Esri — límites,
+              localidades y nombres de calles y rutas. Son tiles transparentes. */}
+          {fondo === 'hibrido' && (
+            <>
+              <TileLayer key="fondo-limites" url={URL_ESRI_LIMITES} maxNativeZoom={19} />
+              <TileLayer key="fondo-transporte" url={URL_ESRI_TRANSPORTE} maxNativeZoom={19} />
+            </>
+          )}
           <FitBounds positions={allPositions} />
           <FlyTo registroSeleccionado={registroSeleccionado} markers={markers} />
 
