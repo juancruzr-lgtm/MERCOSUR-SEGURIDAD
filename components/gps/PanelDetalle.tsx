@@ -42,12 +42,15 @@ export default function PanelDetalle({
   cargandoMarcaciones,
   analizando,
   aplicando,
+  guardandoRadio,
   mensaje,
   error,
   onAnalizar,
   onAplicar,
   onVerMarcaciones,
   onOcultarMarcaciones,
+  onRadioPreview,
+  onGuardarRadio,
   onCerrar,
 }: {
   seleccion: SeleccionGps | null
@@ -55,18 +58,39 @@ export default function PanelDetalle({
   cargandoMarcaciones: boolean
   analizando: boolean
   aplicando: boolean
+  guardandoRadio: boolean
   mensaje: string
   error: string
   onAnalizar: (punto: PuntoRondaGps) => void
   onAplicar: (punto: PuntoRondaGps) => void
   onVerMarcaciones: (punto: PuntoRondaGps) => void
   onOcultarMarcaciones: () => void
+  /** Radio tentativo para dibujar en el mapa. null borra la vista previa. */
+  onRadioPreview: (metros: number | null) => void
+  onGuardarRadio: (punto: PuntoRondaGps, metros: number) => void
   onCerrar: () => void
 }) {
   const [fotoUrl, setFotoUrl] = useState<string | null>(null)
   const [ampliada, setAmpliada] = useState(false)
+  const [radioTexto, setRadioTexto] = useState('')
 
   const referenciaId = seleccion?.tipo === 'punto' ? seleccion.datos.referenciaId : null
+  const puntoId = seleccion?.tipo === 'punto' ? seleccion.datos.id : null
+  const radioActual = seleccion?.tipo === 'punto' ? seleccion.datos.radioMetros : null
+
+  // Al cambiar de punto (o al volver de guardar) el campo arranca con el valor
+  // vigente y se limpia la vista previa: nunca queda un radio tentativo de otro
+  // punto dibujado en el mapa.
+  useEffect(() => {
+    setRadioTexto(radioActual !== null ? String(radioActual) : '')
+    onRadioPreview(null)
+    // onRadioPreview es estable en la página; incluirlo re-dispararía esto.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [puntoId, radioActual])
+
+  const radioEditado = Number(radioTexto.trim().replace(',', '.'))
+  const radioValido = Number.isFinite(radioEditado) && radioEditado > 0
+  const radioCambio = radioValido && radioEditado !== radioActual
 
   // La foto se resuelve recién acá, para un solo punto y sólo si existe.
   useEffect(() => {
@@ -216,12 +240,62 @@ export default function PanelDetalle({
               )}
             </div>
 
+            {/* Ajuste manual del radio. Va por la misma ruta que el editor de
+                Rondas y queda auditado como cambio manual. */}
+            <div className={styles.editorRadio}>
+              <label className={styles.label} htmlFor="gps-radio">Radio de marcación (m)</label>
+              <div className={styles.editorRadioFila}>
+                <input
+                  id="gps-radio"
+                  className={styles.input}
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={radioTexto}
+                  disabled={guardandoRadio || aplicando}
+                  onChange={e => {
+                    const texto = e.target.value
+                    setRadioTexto(texto)
+                    const valor = Number(texto.trim().replace(',', '.'))
+                    onRadioPreview(Number.isFinite(valor) && valor > 0 ? valor : null)
+                  }}
+                />
+                <button
+                  className={`${styles.boton} ${styles.botonPrimario}`}
+                  type="button"
+                  onClick={() => onGuardarRadio(p, Math.round(radioEditado))}
+                  disabled={!radioCambio || guardandoRadio || aplicando}
+                >
+                  {guardandoRadio ? 'Guardando…' : 'Guardar radio'}
+                </button>
+                {radioCambio && !guardandoRadio && (
+                  <button
+                    className={styles.boton}
+                    type="button"
+                    onClick={() => {
+                      setRadioTexto(radioActual !== null ? String(radioActual) : '')
+                      onRadioPreview(null)
+                    }}
+                  >
+                    Descartar
+                  </button>
+                )}
+              </div>
+              <div className={styles.ayudaRadio}>
+                {radioTexto.trim() && !radioValido
+                  ? 'El radio tiene que ser un número mayor que cero.'
+                  : radioCambio
+                    ? 'El círculo punteado del mapa es el radio nuevo. Todavía no se guardó.'
+                    : 'Cambiá el número para ver el radio nuevo dibujado en el mapa.'}
+              </div>
+            </div>
+
             <div className={styles.acciones}>
               <button
                 className={styles.boton}
                 type="button"
                 onClick={() => onAnalizar(p)}
-                disabled={analizando || aplicando}
+                disabled={analizando || aplicando || guardandoRadio}
               >
                 {analizando ? 'Analizando…' : p.diagnosticoEstado ? 'Volver a analizar' : 'Analizar GPS'}
               </button>
@@ -231,7 +305,7 @@ export default function PanelDetalle({
                   className={`${styles.boton} ${styles.botonPrimario}`}
                   type="button"
                   onClick={() => onAplicar(p)}
-                  disabled={analizando || aplicando}
+                  disabled={analizando || aplicando || guardandoRadio}
                 >
                   {aplicando ? 'Aplicando…' : 'Aplicar sugerencia'}
                 </button>
@@ -258,9 +332,10 @@ export default function PanelDetalle({
             )}
 
             <div className={styles.soloLectura}>
-              Aplicar guarda por la misma ruta que usa el editor de Rondas y queda
-              registrado en la auditoría del punto. Las marcaciones son evidencia:
-              se miran, no se mueven.
+              Guardar el radio y aplicar la sugerencia usan la misma ruta que el
+              editor de Rondas: los dos quedan registrados en la auditoría del
+              punto, uno como cambio manual y el otro como diagnóstico. Las
+              marcaciones son evidencia: se miran, no se mueven.
             </div>
 
             {ampliada && fotoUrl && (

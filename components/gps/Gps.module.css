@@ -224,6 +224,34 @@
   color: #94a3b8;
 }
 
+/* Ajuste manual del radio del punto seleccionado. */
+.editorRadio {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #1e2d42;
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.04);
+}
+
+.editorRadioFila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.editorRadioFila .input {
+  width: 96px;
+}
+
+.ayudaRadio {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
 .miniatura {
   margin-top: 12px;
 }

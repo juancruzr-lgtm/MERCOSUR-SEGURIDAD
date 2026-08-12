@@ -41,7 +41,7 @@ import {
   type MarcacionPunto,
   type PuntoRondaGps,
 } from '@/lib/gps-mapa'
-import { aplicarSugerenciaGps, diagnosticarGpsPunto } from '@/lib/rondas'
+import { actualizarPunto, aplicarSugerenciaGps, diagnosticarGpsPunto } from '@/lib/rondas'
 import type { MarcacionCGO, MarkerCGO, ObjetivoCGO, PuntoRondaCGO, SupervisionCGO } from './MapaOperativo'
 import PanelDetalle, { type SeleccionGps } from './PanelDetalle'
 import styles from './Gps.module.css'
@@ -119,6 +119,9 @@ export default function PaginaGps({
   const [cargandoMarcaciones, setCargandoMarcaciones] = useState(false)
   const [analizando, setAnalizando] = useState(false)
   const [aplicando, setAplicando] = useState(false)
+  const [guardandoRadio, setGuardandoRadio] = useState(false)
+  // Radio tentativo del punto seleccionado, todavía sin guardar. Sólo se dibuja.
+  const [radioPreview, setRadioPreview] = useState<number | null>(null)
   const [mensaje, setMensaje] = useState('')
   const [error, setError] = useState('')
 
@@ -306,9 +309,15 @@ export default function PaginaGps({
   const seleccionarPunto = (puntoId: string) => {
     limpiarAvisos()
     setMarcaciones([])
+    setRadioPreview(null)
     const punto = puntos.find(p => p.id === puntoId)
     if (punto) setSeleccion({ tipo: 'punto', datos: punto })
   }
+
+  // Estable: el panel la deja fuera de las dependencias de su efecto.
+  const previsualizarRadio = useCallback((metros: number | null) => {
+    setRadioPreview(metros)
+  }, [])
 
   const analizar = async (punto: PuntoRondaGps) => {
     limpiarAvisos()
@@ -375,6 +384,46 @@ export default function PaginaGps({
     setMarcaciones([])
     setAplicando(false)
     setMensaje('Corrección aplicada y auditada.')
+  }
+
+  /**
+   * Ajuste manual del radio.
+   *
+   * Va por `actualizarPunto()`, la misma ruta que el editor de Rondas. Sin
+   * contexto de diagnóstico, así que la auditoría lo registra como cambio
+   * manual, que es exactamente lo que es.
+   */
+  const guardarRadio = async (punto: PuntoRondaGps, metros: number) => {
+    limpiarAvisos()
+
+    if (!Number.isFinite(metros) || metros <= 0) {
+      setError('El radio tiene que ser un número mayor que cero.')
+      return
+    }
+
+    const anterior = punto.radioMetros !== null ? `${punto.radioMetros} m` : 'sin radio'
+    const confirmado = window.confirm(
+      `Se va a cambiar el radio del punto "${punto.nombre}" de ${anterior} a ${metros} m.\n\n` +
+      'Es el radio con el que se juzga si el vigilador marcó dentro o fuera. ' +
+      'El cambio queda registrado en la auditoría como modificación manual.\n\n¿Confirmás?',
+    )
+    if (!confirmado) return
+
+    setGuardandoRadio(true)
+    const { error: errorGuardar } = await actualizarPunto(punto.id, { radio_metros: metros })
+    if (errorGuardar) {
+      setError(errorGuardar)
+      setGuardandoRadio(false)
+      return
+    }
+
+    // Se relee de la base en vez de parchear el marcador.
+    const frescos = await cargarPuntos()
+    const actualizado = frescos.find(p => p.id === punto.id)
+    if (actualizado) setSeleccion({ tipo: 'punto', datos: actualizado })
+    setRadioPreview(null)
+    setGuardandoRadio(false)
+    setMensaje(`Radio actualizado a ${metros} m y auditado.`)
   }
 
   const verMarcaciones = async (punto: PuntoRondaGps) => {
@@ -495,6 +544,7 @@ export default function PaginaGps({
             puntosRonda={puntosCapa}
             marcaciones={marcacionesCapa}
             puntoSeleccionadoId={seleccion?.tipo === 'punto' ? seleccion.datos.id : null}
+            radioPreviewMetros={radioPreview}
             onPuntoClick={seleccionarPunto}
             onObjetivoClick={(id: string) => {
               limpiarAvisos()
@@ -533,13 +583,16 @@ export default function PaginaGps({
           cargandoMarcaciones={cargandoMarcaciones}
           analizando={analizando}
           aplicando={aplicando}
+          guardandoRadio={guardandoRadio}
           mensaje={mensaje}
           error={error}
           onAnalizar={analizar}
           onAplicar={aplicar}
           onVerMarcaciones={verMarcaciones}
           onOcultarMarcaciones={() => setMarcaciones([])}
-          onCerrar={() => { setSeleccion(null); setMarcaciones([]); limpiarAvisos() }}
+          onRadioPreview={previsualizarRadio}
+          onGuardarRadio={guardarRadio}
+          onCerrar={() => { setSeleccion(null); setMarcaciones([]); setRadioPreview(null); limpiarAvisos() }}
         />
       </div>
     </div>

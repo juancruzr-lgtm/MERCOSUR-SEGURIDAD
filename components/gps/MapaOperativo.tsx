@@ -119,6 +119,11 @@ type Props = {
   /** Marcaciones históricas del punto seleccionado. Evidencia, sólo lectura. */
   marcaciones?: MarcacionCGO[]
   puntoSeleccionadoId?: string | null
+  /**
+   * Radio que se está probando para el punto seleccionado, todavía sin guardar.
+   * Se dibuja punteado sobre el radio actual para poder compararlos.
+   */
+  radioPreviewMetros?: number | null
   onPuntoClick?: (puntoId: string) => void
   onObjetivoClick?: (objetivoId: string) => void
   onSupervisionClick?: (supervisionId: string) => void
@@ -353,6 +358,7 @@ export default function MapaOperativo({
   puntosRonda = [],
   marcaciones = [],
   puntoSeleccionadoId = null,
+  radioPreviewMetros = null,
   onPuntoClick,
   onObjetivoClick,
   onSupervisionClick,
@@ -468,6 +474,21 @@ export default function MapaOperativo({
                     fillColor: p.conRecomendacion ? COLOR_PUNTO_RONDA_ALERTA : COLOR_PUNTO_RONDA,
                     fillOpacity: 0.06,
                     weight: p.id === puntoSeleccionadoId ? 2.5 : 1.5,
+                  }}
+                />
+              )}
+              {/* Radio que se está probando, todavía sin guardar. Punteado y
+                  encima del actual, para poder comparar uno con otro. */}
+              {p.id === puntoSeleccionadoId && radioPreviewMetros !== null && radioPreviewMetros > 0 && (
+                <Circle
+                  center={[p.lat, p.lng]}
+                  radius={radioPreviewMetros}
+                  pathOptions={{
+                    color: '#38bdf8',
+                    fillColor: '#38bdf8',
+                    fillOpacity: 0.08,
+                    weight: 2,
+                    dashArray: '6 5',
                   }}
                 />
               )}
