@@ -8,14 +8,26 @@
 // ES la mejor referencia disponible — la validó un humano. A partir de ahí el
 // punto queda calibrado solo.
 //
-// Sólo actúa si el punto NO tiene referencia activa: nunca pisa una que alguien
-// haya cargado a mano. Y la referencia queda visible y desactivable desde el
-// editor del punto, como cualquier otra.
+// Qué pisa y qué no, según el `origen` de la referencia vigente:
+//   · sin referencia activa      → la crea
+//   · origen 'revision_humana'   → la reemplaza y cierra la vigencia anterior
+//   · origen 'manual'            → no la toca nunca; la cargó Administración
+//   · origen desconocido         → no la toca; ante la duda, no se pisa
+//
+// Antes bastaba con que existiera una referencia activa para bloquear todo, y
+// una foto auto-promovida hace meses quedaba tan protegida como una decisión
+// de Administración: el punto se congelaba con una imagen que ya no lo describe.
+//
+// Nada de esto ocurre sin una persona: `revision_estado` lo escribe únicamente
+// ia_registrar_revision(). Una predicción de Gemini nunca llega sola hasta acá,
+// y un INCORRECTO nunca cambia una referencia.
 
 import { createHash } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { alcanzaObjetivo, objetivoDePunto, requireOperadorIA } from '../../_lib/auth'
-import { BUCKET_REFERENCIAS, MAX_BYTES_REFERENCIA, pathReferenciaPunto } from '@/lib/ia/referencias'
+import {
+  BUCKET_REFERENCIAS, MAX_BYTES_REFERENCIA, decidirPromocionReferencia, pathReferenciaPunto,
+} from '@/lib/ia/referencias'
 
 export const runtime = 'nodejs'
 
@@ -29,14 +41,9 @@ export async function POST(req: NextRequest) {
   const analisisId = typeof body?.analisis_id === 'string' ? body.analisis_id : ''
   if (!analisisId) return NextResponse.json({ error: 'analisis_id requerido' }, { status: 400 })
 
-  // ── Interruptor ───────────────────────────────────────────────────────────
   const { data: cfg } = await ctx.client
     .from('app_config').select('value').eq('key', 'ia_ronda_referencia_automatica').maybeSingle()
-  if (cfg?.value === 'false') {
-    return NextResponse.json({ promovida: false, motivo: 'Promoción automática desactivada' })
-  }
 
-  // ── El análisis tiene que ser de ronda y estar confirmado por una persona ──
   const { data: analisis } = await ctx.client
     .from('evidencia_analisis')
     .select('id, analisis_tipo, revision_estado, objetivo_id, evidencias!inner(id, proceso_id, bucket, storage_path, content_type)')
@@ -44,12 +51,6 @@ export async function POST(req: NextRequest) {
     .maybeSingle()
 
   if (!analisis) return NextResponse.json({ error: 'Análisis inexistente' }, { status: 404 })
-  if (analisis.analisis_tipo !== 'punto_control') {
-    return NextResponse.json({ promovida: false, motivo: 'No es una foto de ronda' })
-  }
-  if (analisis.revision_estado !== 'CORRECTO') {
-    return NextResponse.json({ promovida: false, motivo: 'La foto no está confirmada como correcta' })
-  }
 
   const ev: any = Array.isArray(analisis.evidencias) ? analisis.evidencias[0] : analisis.evidencias
   if (!ev?.storage_path) return NextResponse.json({ error: 'Evidencia sin archivo' }, { status: 404 })
@@ -70,16 +71,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Sin alcance sobre el objetivo de este punto' }, { status: 403 })
   }
 
-  // ── Nunca pisar una referencia existente ──────────────────────────────────
-  const { data: yaTiene } = await ctx.client
+  // ── ¿Crear, reemplazar o no tocar nada? ───────────────────────────────────
+  // La decisión es lógica pura y vive en lib/ia/referencias.ts: una referencia
+  // equivocada envenena todos los análisis siguientes de ese punto, así que la
+  // regla se prueba exhaustivamente en tests y no se reparte por acá.
+  const { data: activa } = await ctx.client
     .from('ronda_punto_referencias')
-    .select('id')
+    .select('id, origen')
     .eq('ronda_punto_id', ejec.ronda_punto_id)
     .eq('activo', true)
     .maybeSingle()
 
-  if (yaTiene) {
-    return NextResponse.json({ promovida: false, motivo: 'El punto ya tiene referencia activa' })
+  const decision = decidirPromocionReferencia({
+    analisisTipo: analisis.analisis_tipo,
+    revisionEstado: analisis.revision_estado,
+    referenciaActiva: activa ?? null,
+    automatizacionActiva: cfg?.value !== 'false',
+  })
+
+  if (decision.accion === 'omitir') {
+    return NextResponse.json({ promovida: false, motivo: decision.motivo })
   }
 
   // ── Copiar los bytes al bucket de referencias ─────────────────────────────
@@ -111,6 +122,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: errorUpload.message }, { status: 500 })
   }
 
+  const ahora = new Date().toISOString()
+
+  // Reemplazo con historia: la anterior NO se borra, se le cierra la vigencia.
+  // Se cierra ANTES de insertar la nueva para que no queden dos activas ni por
+  // un instante — mismo orden que usa la carga manual. Si el insert siguiente
+  // falla, el punto queda sin referencia activa pero con todo el histórico
+  // intacto: se recupera reactivándola desde el editor, y nada se pierde.
+  if (decision.accion === 'reemplazar') {
+    const { error: errorCierre } = await ctx.client
+      .from('ronda_punto_referencias')
+      .update({ activo: false, vigente_hasta: ahora })
+      .eq('id', decision.referenciaAnteriorId)
+      .eq('activo', true)
+
+    if (errorCierre) {
+      return NextResponse.json(
+        { error: `No se pudo cerrar la referencia anterior: ${errorCierre.message}` },
+        { status: 500 },
+      )
+    }
+  }
+
   const { data: fila, error: errorInsert } = await ctx.client
     .from('ronda_punto_referencias')
     .insert({
@@ -121,8 +154,9 @@ export async function POST(req: NextRequest) {
       bytes: bytes.length,
       content_type: mime,
       descripcion: 'Tomada de una foto real confirmada como correcta en la revisión.',
+      origen: 'revision_humana',
       activo: true,
-      vigente_desde: new Date().toISOString(),
+      vigente_desde: ahora,
       created_by: ctx.usuario.id,
     })
     .select('id')

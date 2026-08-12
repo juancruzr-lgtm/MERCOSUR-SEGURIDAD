@@ -121,6 +121,9 @@ export async function POST(req: NextRequest) {
       bytes: buffer.length,
       content_type: archivo.type,
       descripcion: typeof descripcion === 'string' ? descripcion.trim().slice(0, 400) || null : null,
+      // Explícito, no por default de la columna: lo que sube una persona desde
+      // el editor queda protegido de la promoción automática para siempre.
+      origen: 'manual',
       activo: true,
       vigente_desde: ahora,
       created_by: ctx.usuario.id,

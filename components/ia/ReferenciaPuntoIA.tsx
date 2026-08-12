@@ -26,6 +26,7 @@ const C = {
 type Referencia = {
   id: string
   descripcion: string | null
+  origen: string | null
   activo: boolean
   vigente_desde: string
   vigente_hasta: string | null
@@ -56,7 +57,7 @@ export default function ReferenciaPuntoIA({
   const cargar = useCallback(async () => {
     const { data } = await supabase
       .from('ronda_punto_referencias')
-      .select('id, descripcion, activo, vigente_desde, vigente_hasta, created_at')
+      .select('id, descripcion, origen, activo, vigente_desde, vigente_hasta, created_at')
       .eq('ronda_punto_id', rondaPuntoId)
       .order('vigente_desde', { ascending: false })
 
@@ -152,6 +153,16 @@ export default function ReferenciaPuntoIA({
                 }}>sin vista previa</div>}
             <div style={{ fontSize: 10, color: C.muted, marginTop: 6 }}>
               Vigente desde {fecha(activa.vigente_desde)}
+            </div>
+            {/* De esto depende si el sistema puede sustituirla solo. Sin verlo,
+                no hay forma de saber por qué una referencia se actualizó sola y
+                otra no. */}
+            <div style={{ fontSize: 10, marginTop: 4, color: activa.origen === 'manual' ? C.green : C.sub }}>
+              {activa.origen === 'manual'
+                ? '🔒 Cargada por Administración — no se reemplaza sola'
+                : activa.origen === 'revision_humana'
+                  ? '↻ Tomada de una foto confirmada — se actualiza con la próxima confirmación'
+                  : '🔒 Origen desconocido — no se reemplaza sola'}
             </div>
             {activa.descripcion && (
               <div style={{ fontSize: 11, color: C.sub, marginTop: 4 }}>{activa.descripcion}</div>

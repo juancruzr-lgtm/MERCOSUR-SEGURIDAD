@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   CAMPOS_LIBRO,
   ELEMENTOS_UNIFORME,
+  ETIQUETA_ORIGEN_REFERENCIA,
+  ORIGENES_REFERENCIA,
   VALORES_VERIFICACION,
   catalogoInicial,
+  decidirPromocionReferencia,
   esBorrador,
   estaVigenteAhora,
   estabaVigente,
@@ -231,5 +234,67 @@ describe('paths de Storage', () => {
   it('separa configuraciones de puntos', () => {
     expect(pathReferenciaConfig('abc', 'deadbeef', 'image/png')).toBe('configuraciones/abc/deadbeef.png')
     expect(pathReferenciaPunto('xyz', 'cafe', 'image/jpeg')).toBe('puntos/xyz/cafe.jpg')
+  })
+})
+
+describe('decidirPromocionReferencia', () => {
+  const base = {
+    analisisTipo: 'punto_control',
+    revisionEstado: 'CORRECTO',
+    referenciaActiva: null as { id: string, origen: string | null } | null,
+    automatizacionActiva: true,
+  }
+  const d = (over: Partial<typeof base> = {}) => decidirPromocionReferencia({ ...base, ...over })
+
+  it('sin referencia activa, una foto confirmada pasa a ser la referencia', () => {
+    expect(d().accion).toBe('crear')
+  })
+
+  it('reemplaza una referencia que el propio sistema habia promovido', () => {
+    const r = d({ referenciaActiva: { id: 'ref-vieja', origen: 'revision_humana' } })
+    expect(r.accion).toBe('reemplazar')
+    if (r.accion === 'reemplazar') expect(r.referenciaAnteriorId).toBe('ref-vieja')
+  })
+
+  it('nunca pisa una referencia que cargo Administracion a mano', () => {
+    // Es la garantía que sostiene todo lo demás: si la automatización pudiera
+    // sustituir una decisión humana explícita, no habría forma de fijar nada.
+    const r = d({ referenciaActiva: { id: 'ref-manual', origen: 'manual' } })
+    expect(r.accion).toBe('omitir')
+    if (r.accion === 'omitir') expect(r.motivo).toMatch(/Administración/)
+  })
+
+  it('ante un origen desconocido no pisa nada', () => {
+    // Una fila anterior a la columna, o un valor futuro que este codigo no
+    // conoce. El lado seguro es no tocar.
+    expect(d({ referenciaActiva: { id: 'x', origen: null } }).accion).toBe('omitir')
+    expect(d({ referenciaActiva: { id: 'x', origen: 'otra_cosa' } }).accion).toBe('omitir')
+  })
+
+  it('INCORRECTO nunca cambia la referencia, ni siquiera si no hay ninguna', () => {
+    expect(d({ revisionEstado: 'INCORRECTO' }).accion).toBe('omitir')
+    expect(d({ revisionEstado: 'INCORRECTO', referenciaActiva: { id: 'x', origen: 'revision_humana' } }).accion)
+      .toBe('omitir')
+  })
+
+  it('una foto sin revisar no promueve nada: Gemini solo nunca alcanza', () => {
+    expect(d({ revisionEstado: 'PENDIENTE' }).accion).toBe('omitir')
+  })
+
+  it('no toca referencias de ronda desde una foto de uniforme o libro', () => {
+    expect(d({ analisisTipo: 'uniforme' }).accion).toBe('omitir')
+    expect(d({ analisisTipo: 'libro_guardia' }).accion).toBe('omitir')
+  })
+
+  it('el interruptor global apaga hasta la creacion', () => {
+    expect(d({ automatizacionActiva: false }).accion).toBe('omitir')
+    expect(d({ automatizacionActiva: false, referenciaActiva: { id: 'x', origen: 'revision_humana' } }).accion)
+      .toBe('omitir')
+  })
+
+  it('los dos origenes validos tienen etiqueta legible', () => {
+    for (const o of ORIGENES_REFERENCIA) {
+      expect(ETIQUETA_ORIGEN_REFERENCIA[o]).toBeTruthy()
+    }
   })
 })

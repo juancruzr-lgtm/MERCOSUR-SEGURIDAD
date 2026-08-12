@@ -281,3 +281,73 @@ export function pathReferenciaConfig(configuracionId: string, sufijo: string, mi
 export function pathReferenciaPunto(rondaPuntoId: string, sufijo: string, mime: string): string {
   return `puntos/${rondaPuntoId}/${sufijo}.${extensionDeMime(mime)}`
 }
+
+// ── Origen de una referencia de punto ───────────────────────────────────────
+//
+// Distingue quién la puso, y de eso depende si la automatización puede
+// reemplazarla. Sin esta distinción, una referencia auto-promovida hace un año
+// quedaba tan protegida como una que cargó Administración a mano, y el punto
+// se congelaba con una foto que ya no describe el lugar.
+
+export const ORIGENES_REFERENCIA = ['manual', 'revision_humana'] as const
+export type OrigenReferencia = typeof ORIGENES_REFERENCIA[number]
+
+export const ETIQUETA_ORIGEN_REFERENCIA: Record<OrigenReferencia, string> = {
+  manual: 'Cargada por Administración',
+  revision_humana: 'Tomada de una foto confirmada',
+}
+
+export type ReferenciaActiva = { id: string, origen: string | null }
+
+export type DecisionPromocion =
+  | { accion: 'crear' }
+  | { accion: 'reemplazar', referenciaAnteriorId: string }
+  | { accion: 'omitir', motivo: string }
+
+/**
+ * ¿Qué hacer con la referencia del punto cuando una persona revisa una foto?
+ *
+ * Lógica pura: sin red, sin Supabase. La decisión de pisar o no una referencia
+ * es la parte del sistema con más consecuencias a futuro —una referencia mala
+ * envenena todos los análisis siguientes de ese punto— así que vive acá, donde
+ * se puede probar exhaustivamente, y no repartida en un route handler.
+ *
+ * Reglas:
+ *   · INCORRECTO nunca toca la referencia. Sólo suma un ejemplo negativo.
+ *   · Sin referencia activa → la foto confirmada pasa a serlo.
+ *   · Referencia 'revision_humana' → la reemplaza, cerrando la vigencia anterior.
+ *   · Referencia 'manual' → intocable. La foto sólo entra a la memoria visual.
+ *   · Origen desconocido → se trata como 'manual'. Ante la duda, no se pisa.
+ */
+export function decidirPromocionReferencia(args: {
+  analisisTipo: string
+  revisionEstado: string
+  referenciaActiva: ReferenciaActiva | null
+  automatizacionActiva: boolean
+}): DecisionPromocion {
+  if (!args.automatizacionActiva) {
+    return { accion: 'omitir', motivo: 'Promoción automática desactivada' }
+  }
+  if (args.analisisTipo !== 'punto_control') {
+    return { accion: 'omitir', motivo: 'No es una foto de ronda' }
+  }
+
+  // Una predicción de Gemini nunca llega hasta acá por sí sola: este estado lo
+  // escribe únicamente ia_registrar_revision(), que exige una persona.
+  if (args.revisionEstado !== 'CORRECTO') {
+    return { accion: 'omitir', motivo: 'La foto no está confirmada como correcta' }
+  }
+
+  if (!args.referenciaActiva) return { accion: 'crear' }
+
+  if (args.referenciaActiva.origen === 'revision_humana') {
+    return { accion: 'reemplazar', referenciaAnteriorId: args.referenciaActiva.id }
+  }
+
+  return {
+    accion: 'omitir',
+    motivo: args.referenciaActiva.origen === 'manual'
+      ? 'La referencia vigente la cargó Administración: no se reemplaza sola'
+      : 'La referencia vigente tiene origen desconocido: no se reemplaza sola',
+  }
+}
