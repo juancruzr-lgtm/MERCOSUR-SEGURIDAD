@@ -131,6 +131,11 @@ type Props = {
   /** Posición propuesta todavía sin guardar, para dibujar ahí el radio. */
   objetivoPropuesto?: { id: string; lat: number; lng: number } | null
   /**
+   * Ubicación y radio que sugiere el diagnóstico, para comparar contra los
+   * actuales. Se dibuja aparte y en verde: es una propuesta, no el estado.
+   */
+  objetivoSugerido?: { id: string; lat: number; lng: number; radioMetros: number } | null
+  /**
    * Radio que se está probando para el punto seleccionado, todavía sin guardar.
    * Se dibuja punteado sobre el radio actual para poder compararlos.
    */
@@ -409,6 +414,7 @@ export default function MapaOperativo({
   objetivoArrastrableId = null,
   onObjetivoArrastrado,
   objetivoPropuesto = null,
+  objetivoSugerido = null,
   onPuntoClick,
   onObjetivoClick,
   onSupervisionClick,
@@ -550,6 +556,41 @@ export default function MapaOperativo({
             </React.Fragment>
             )
           })}
+
+          {/* Ubicación que sugiere el diagnóstico del objetivo. Va en verde y
+              aparte del marcador real: es una propuesta, no el estado. */}
+          {objetivoSugerido && capasActivas.has('objetivos') && (
+            <React.Fragment key={`sugerido-${objetivoSugerido.id}`}>
+              <Circle
+                center={[objetivoSugerido.lat, objetivoSugerido.lng]}
+                radius={objetivoSugerido.radioMetros}
+                pathOptions={{
+                  color: '#22c55e', fillColor: '#22c55e', fillOpacity: 0.07,
+                  weight: 2, dashArray: '4 4',
+                }}
+              />
+              <Marker
+                position={[objetivoSugerido.lat, objetivoSugerido.lng]}
+                icon={L.divIcon({
+                  className: '',
+                  html: `<span style="width:20px;height:20px;border-radius:4px;border:2px solid rgba(255,255,255,.95);background:#22c55e;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:10px;color:#052e16;box-shadow:0 4px 12px rgba(0,0,0,.45);">S</span>`,
+                  iconSize: [20, 20],
+                  iconAnchor: [10, 10],
+                  popupAnchor: [0, -12],
+                })}
+              >
+                <Popup>
+                  <div style={{ minWidth: 170, fontSize: 12, color: '#374151' }}>
+                    <div style={{ fontWeight: 800, marginBottom: 4, color: '#0f172a' }}>Ubicación sugerida</div>
+                    <div>Radio sugerido: {objetivoSugerido.radioMetros} m</div>
+                    <div style={{ marginTop: 4, color: '#6b7280' }}>
+                      Calculada sobre los fichajes reales. Todavía no se aplicó.
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            </React.Fragment>
+          )}
 
           {/* Capa: ingresos */}
           {ingresos.map(m => (

@@ -35,6 +35,12 @@ import {
 } from '@/lib/gps-asistencia'
 import { actualizarUbicacionObjetivo } from '@/lib/legajo-objetivo'
 import {
+  aplicarSugerenciaGpsObjetivo,
+  diagnosticarGpsObjetivo,
+  sugerenciaObjetivoAplicable,
+  type DiagnosticoGpsObjetivo,
+} from '@/lib/gps-objetivos'
+import {
   cargarMarcacionesPunto,
   cargarPuntosRondaGps,
   etiquetaDiagnostico,
@@ -129,6 +135,9 @@ export default function PaginaGps({
   // Posición propuesta al arrastrar el marcador de un objetivo. Todavía no se
   // guardó nada: arrastrar propone, confirmar guarda.
   const [objetivoPropuesto, setObjetivoPropuesto] = useState<{ id: string; lat: number; lng: number } | null>(null)
+  const [diagnosticoObjetivo, setDiagnosticoObjetivo] = useState<DiagnosticoGpsObjetivo | null>(null)
+  const [analizandoObjetivo, setAnalizandoObjetivo] = useState(false)
+  const [aplicandoObjetivo, setAplicandoObjetivo] = useState(false)
   // Radio tentativo del punto seleccionado, todavía sin guardar. Sólo se dibuja.
   const [radioPreview, setRadioPreview] = useState<number | null>(null)
   const [mensaje, setMensaje] = useState('')
@@ -300,6 +309,17 @@ export default function PaginaGps({
     conRecomendacion: proponeCambio(p.diagnosticoEstado),
     incumplimientosConsecutivos: p.incumplimientosConsecutivos,
   })), [puntosFiltrados])
+
+  // Metros entre la ubicación guardada y la propuesta a mano. Se calcula con el
+  // mismo Haversine que usa el resto del sistema.
+  const metrosPropuestos = useMemo(() => {
+    if (!objetivoPropuesto) return null
+    const objetivo = objetivos.find(o => o.id === objetivoPropuesto.id)
+    if (!objetivo || typeof objetivo.lat !== 'number' || typeof objetivo.lng !== 'number') return null
+    return Math.round(distanciaMetrosCoordenadas(
+      objetivo.lat, objetivo.lng, objetivoPropuesto.lat, objetivoPropuesto.lng,
+    ))
+  }, [objetivoPropuesto, objetivos])
 
   const marcacionesCapa = useMemo<MarcacionCGO[]>(() => marcaciones.map(m => ({
     id: m.id,
@@ -483,6 +503,67 @@ export default function PaginaGps({
     setMensaje(`Objetivo movido ${movido} m y auditado.`)
   }
 
+  /** Pide el diagnóstico del objetivo al servidor. No modifica nada. */
+  const analizarObjetivo = async (objetivoId: string) => {
+    limpiarAvisos()
+    setAnalizandoObjetivo(true)
+    const { data, error: errorRpc } = await diagnosticarGpsObjetivo(objetivoId)
+    setAnalizandoObjetivo(false)
+    if (errorRpc || !data) { setError(errorRpc || 'No se pudo analizar el objetivo.'); return }
+    setDiagnosticoObjetivo(data)
+  }
+
+  /**
+   * Aplica la sugerencia. Vuelve a pedir el diagnóstico para que la firma que
+   * queda en la auditoría sea la que calculó el servidor, no una de pantalla.
+   */
+  const aplicarObjetivo = async () => {
+    if (!diagnosticoObjetivo) return
+    limpiarAvisos()
+
+    const objetivo = objetivos.find(o => o.id === diagnosticoObjetivo.objetivo_id)
+    if (!objetivo) return
+
+    setAplicandoObjetivo(true)
+    const { data: fresco, error: errorDiag } = await diagnosticarGpsObjetivo(objetivo.id)
+    if (errorDiag || !fresco) {
+      setError(errorDiag || 'No se pudo obtener el diagnóstico.')
+      setAplicandoObjetivo(false)
+      return
+    }
+
+    if (!sugerenciaObjetivoAplicable(fresco)) {
+      setDiagnosticoObjetivo(fresco)
+      setAplicandoObjetivo(false)
+      setMensaje('El análisis ya no propone un cambio aplicable. No se modificó nada.')
+      return
+    }
+
+    const movido = fresco.desplazamiento_metros !== null ? Math.round(fresco.desplazamiento_metros) : null
+    const confirmado = window.confirm(
+      `Se va a aplicar la sugerencia al objetivo "${objetivo.nombre}".\n\n` +
+      `Ubicación: ${objetivo.lat}, ${objetivo.lng}\n` +
+      `        →  ${fresco.latitud_sugerida}, ${fresco.longitud_sugerida}\n` +
+      (movido !== null ? `Desplazamiento: ${movido} m\n` : '') +
+      `Radio: ${fresco.radio_actual ?? '—'} m → ${fresco.radio_sugerido} m\n\n` +
+      `Evidencia: ${fresco.marcaciones} marcaciones de ${fresco.guardias_distintos} guardias ` +
+      `en ${fresco.dias_distintos} días.\n\n` +
+      'Cambia dónde puede fichar el personal. Queda auditado como diagnostico_gps.\n\n¿Confirmás?',
+    )
+    if (!confirmado) { setAplicandoObjetivo(false); return }
+
+    const { objetivo: actualizado, error: errorAplicar } = await aplicarSugerenciaGpsObjetivo(fresco)
+    setAplicandoObjetivo(false)
+    if (errorAplicar) { setError(errorAplicar); return }
+
+    if (actualizado) {
+      onObjetivoActualizado?.(actualizado)
+      setSeleccion({ tipo: 'objetivo', datos: actualizado })
+    }
+    setDiagnosticoObjetivo(null)
+    setMensaje('Sugerencia aplicada y auditada como diagnostico_gps.')
+  }
+
   const verMarcaciones = async (punto: PuntoRondaGps) => {
     limpiarAvisos()
     setCargandoMarcaciones(true)
@@ -606,9 +687,23 @@ export default function PaginaGps({
             onObjetivoClick={(id: string) => {
               limpiarAvisos()
               if (objetivoPropuesto && objetivoPropuesto.id !== id) setObjetivoPropuesto(null)
+              if (diagnosticoObjetivo && diagnosticoObjetivo.objetivo_id !== id) setDiagnosticoObjetivo(null)
               const objetivo = objetivos.find(o => o.id === id)
               if (objetivo) setSeleccion({ tipo: 'objetivo', datos: objetivo })
             }}
+            objetivoSugerido={
+              diagnosticoObjetivo
+                && diagnosticoObjetivo.latitud_sugerida !== null
+                && diagnosticoObjetivo.longitud_sugerida !== null
+                && diagnosticoObjetivo.radio_sugerido !== null
+                ? {
+                    id: diagnosticoObjetivo.objetivo_id,
+                    lat: diagnosticoObjetivo.latitud_sugerida,
+                    lng: diagnosticoObjetivo.longitud_sugerida,
+                    radioMetros: diagnosticoObjetivo.radio_sugerido,
+                  }
+                : null
+            }
             objetivoArrastrableId={seleccion?.tipo === 'objetivo' ? seleccion.datos.id : null}
             objetivoPropuesto={objetivoPropuesto}
             onObjetivoArrastrado={(id, lat, lng) => {
@@ -661,9 +756,15 @@ export default function PaginaGps({
           guardandoObjetivo={guardandoObjetivo}
           onConfirmarObjetivo={confirmarUbicacionObjetivo}
           onDescartarObjetivo={() => { setObjetivoPropuesto(null); limpiarAvisos() }}
+          diagnosticoObjetivo={diagnosticoObjetivo}
+          analizandoObjetivo={analizandoObjetivo}
+          aplicandoObjetivo={aplicandoObjetivo}
+          metrosPropuestos={metrosPropuestos}
+          onAnalizarObjetivo={analizarObjetivo}
+          onAplicarObjetivo={aplicarObjetivo}
           onCerrar={() => {
             setSeleccion(null); setMarcaciones([]); setRadioPreview(null)
-            setObjetivoPropuesto(null); limpiarAvisos()
+            setObjetivoPropuesto(null); setDiagnosticoObjetivo(null); limpiarAvisos()
           }}
         />
       </div>

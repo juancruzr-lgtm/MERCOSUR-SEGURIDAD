@@ -437,15 +437,31 @@ export async function cargarNovedadesObjetivo(
  * lat/lng/radio). La autorización la resuelve RLS en el servidor; la interfaz
  * además oculta la acción a quien no corresponde.
  */
+export interface ContextoCambioObjetivo {
+  origen: 'diagnostico_gps'
+  /** Firma del diagnóstico que originó la sugerencia (`dgo1:<md5>`). */
+  firma: string
+}
+
 export async function actualizarUbicacionObjetivo(
   objetivoId: string,
   lat: number,
   lng: number,
   radioMetros: number,
+  contexto?: ContextoCambioObjetivo,
 ): Promise<{ objetivo: ObjetivoLegajo | null; error: string | null }> {
+  // Las columnas de contexto NO son estado del objetivo: son transporte para el
+  // trigger de auditoría, que las consume y las deja en NULL antes de guardar.
+  // Sin contexto, el cambio queda registrado como modificación manual.
+  const payload: Record<string, unknown> = { lat, lng, radio_metros: radioMetros }
+  if (contexto) {
+    payload.ctx_cambio_origen = contexto.origen
+    payload.ctx_cambio_firma = contexto.firma
+  }
+
   const { data, error } = await supabase
     .from('objetivos')
-    .update({ lat, lng, radio_metros: radioMetros })
+    .update(payload)
     .eq('id', objetivoId)
     .select(COLS_OBJETIVO)
     .single()

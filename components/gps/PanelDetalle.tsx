@@ -14,6 +14,13 @@
 
 import { useEffect, useState } from 'react'
 import { urlFotoReferencia, etiquetaDiagnostico, proponeCambio, type PuntoRondaGps } from '@/lib/gps-mapa'
+import {
+  etiquetaConfianza,
+  etiquetaRecomendacionObjetivo,
+  evidenciaTexto,
+  sugerenciaObjetivoAplicable,
+  type DiagnosticoGpsObjetivo,
+} from '@/lib/gps-objetivos'
 import styles from './Gps.module.css'
 
 export type SeleccionGps =
@@ -55,6 +62,12 @@ export default function PanelDetalle({
   guardandoObjetivo,
   onConfirmarObjetivo,
   onDescartarObjetivo,
+  diagnosticoObjetivo,
+  analizandoObjetivo,
+  aplicandoObjetivo,
+  metrosPropuestos,
+  onAnalizarObjetivo,
+  onAplicarObjetivo,
   onCerrar,
 }: {
   seleccion: SeleccionGps | null
@@ -77,6 +90,13 @@ export default function PanelDetalle({
   guardandoObjetivo: boolean
   onConfirmarObjetivo: () => void
   onDescartarObjetivo: () => void
+  /** Diagnóstico del objetivo seleccionado, si ya se pidió. */
+  diagnosticoObjetivo: DiagnosticoGpsObjetivo | null
+  analizandoObjetivo: boolean
+  aplicandoObjetivo: boolean
+  metrosPropuestos: number | null
+  onAnalizarObjetivo: (objetivoId: string) => void
+  onAplicarObjetivo: () => void
   onCerrar: () => void
 }) {
   const [fotoUrl, setFotoUrl] = useState<string | null>(null)
@@ -143,13 +163,86 @@ export default function PanelDetalle({
             <Fila label="Radio" valor={o.radio_metros ? `${o.radio_metros} m` : '—'} />
             <Fila label="Estado" valor={o.estado || '—'} />
 
+            {/* ── Diagnóstico sobre los fichajes reales ─────────────────── */}
+            {(() => {
+              const d = diagnosticoObjetivo?.objetivo_id === o.id ? diagnosticoObjetivo : null
+              if (!d) return null
+
+              const aplicable = sugerenciaObjetivoAplicable(d)
+              const clase = aplicable
+                ? styles.diagnosticoAlerta
+                : d.recomendacion === 'sin_cambios'
+                  ? styles.diagnosticoOk
+                  : styles.diagnosticoNeutro
+
+              return (
+                <div className={`${styles.diagnostico} ${clase}`}>
+                  <div style={{ fontWeight: 700 }}>{etiquetaRecomendacionObjetivo(d.recomendacion)}</div>
+                  <div style={{ marginTop: 4, opacity: 0.85 }}>
+                    {etiquetaConfianza(d.confianza)} · {evidenciaTexto(d)}
+                  </div>
+                  {d.desplazamiento_metros !== null && (
+                    <div style={{ marginTop: 2, opacity: 0.85 }}>
+                      Los fichajes caen a {Math.round(d.desplazamiento_metros)} m de la ubicación actual.
+                    </div>
+                  )}
+                  {d.latitud_sugerida !== null && d.longitud_sugerida !== null && (
+                    <div style={{ marginTop: 2, opacity: 0.85 }}>
+                      Sugerida: {coordenada(d.latitud_sugerida, d.longitud_sugerida)}
+                    </div>
+                  )}
+                  {d.radio_sugerido !== null && (
+                    <div style={{ marginTop: 2, opacity: 0.85 }}>
+                      Radio: {d.radio_actual ?? '—'} m → {d.radio_sugerido} m
+                    </div>
+                  )}
+                  {d.distancia_p90 !== null && (
+                    <div style={{ marginTop: 2, opacity: 0.7 }}>
+                      El 90 % de las marcaciones cae dentro de {Math.round(d.distancia_p90)} m del centro sugerido.
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
+            <div className={styles.acciones}>
+              <button
+                className={styles.boton}
+                type="button"
+                onClick={() => onAnalizarObjetivo(o.id)}
+                disabled={analizandoObjetivo || aplicandoObjetivo || guardandoObjetivo}
+              >
+                {analizandoObjetivo
+                  ? 'Analizando fichajes…'
+                  : diagnosticoObjetivo?.objetivo_id === o.id ? 'Volver a analizar' : 'Analizar fichajes'}
+              </button>
+
+              {diagnosticoObjetivo?.objetivo_id === o.id
+                && sugerenciaObjetivoAplicable(diagnosticoObjetivo)
+                && !objetivoPropuesto && (
+                <button
+                  className={`${styles.boton} ${styles.botonPrimario}`}
+                  type="button"
+                  onClick={onAplicarObjetivo}
+                  disabled={analizandoObjetivo || aplicandoObjetivo || guardandoObjetivo}
+                >
+                  {aplicandoObjetivo ? 'Aplicando…' : 'Aplicar sugerencia GPS'}
+                </button>
+              )}
+            </div>
+
             {objetivoPropuesto?.id === o.id ? (
               <>
                 <div className={`${styles.diagnostico} ${styles.diagnosticoAlerta}`}>
-                  Ubicación propuesta, sin guardar:
+                  <div style={{ fontWeight: 700 }}>Corrección manual sin guardar</div>
                   <div style={{ marginTop: 4 }}>
-                    {objetivoPropuesto.lat.toFixed(6)}, {objetivoPropuesto.lng.toFixed(6)}
+                    Antes: {coordenada(o.lat ?? null, o.lng ?? null)}
                   </div>
+                  <div>
+                    Propuesta: {objetivoPropuesto.lat.toFixed(6)}, {objetivoPropuesto.lng.toFixed(6)}
+                  </div>
+                  {metrosPropuestos !== null && <div>Desplazamiento: {metrosPropuestos} m</div>}
+                  <div>Radio: {o.radio_metros ?? '—'} m (no cambia)</div>
                 </div>
                 <div className={styles.acciones}>
                   <button
@@ -158,7 +251,7 @@ export default function PanelDetalle({
                     onClick={onConfirmarObjetivo}
                     disabled={guardandoObjetivo}
                   >
-                    {guardandoObjetivo ? 'Guardando…' : 'Confirmar ubicación'}
+                    {guardandoObjetivo ? 'Guardando…' : 'Guardar corrección'}
                   </button>
                   <button
                     className={styles.boton}
@@ -179,9 +272,12 @@ export default function PanelDetalle({
             )}
 
             <div className={styles.soloLectura}>
-              Mover un objetivo cambia dónde puede fichar el personal. El cambio
-              queda registrado en la auditoría del objetivo, con quién lo hizo y
-              los valores anterior y nuevo. El radio se edita desde el legajo.
+              Mover un objetivo cambia dónde puede fichar el personal. Los dos
+              caminos quedan registrados en la auditoría y se distinguen entre
+              sí: arrastrar y guardar es un cambio <b>manual</b>; aplicar la
+              sugerencia queda como <b>diagnostico_gps</b> con la firma del
+              análisis. Para ver los fichajes sobre los que se calculó, prendé
+              las capas de Ingresos y Egresos y filtrá por este objetivo.
             </div>
           </>
         )
