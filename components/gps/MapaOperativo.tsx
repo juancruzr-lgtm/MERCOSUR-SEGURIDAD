@@ -16,7 +16,7 @@
 // igual que antes, que es lo que mantiene intacto el Mapa CGO.
 //
 
-import React, { useEffect, useMemo } from 'react'
+import React, { useEffect, useMemo, useRef } from 'react'
 import L from 'leaflet'
 import { MapContainer, Marker, Circle, Popup, TileLayer, useMap } from 'react-leaflet'
 
@@ -248,14 +248,26 @@ function FitBounds({ positions }: { positions: [number, number][] }) {
   const map = useMap()
   const key = positions.map(p => p.join(',')).join('|')
 
+  // Las posiciones se leen por referencia y NO van en las dependencias: el array
+  // se reconstruye en cada render, así que incluirlo re-encuadraba el mapa
+  // aunque las coordenadas fueran exactamente las mismas. Eso hacía que al
+  // volver a consultar la base (analizar un punto, por ejemplo) se perdiera el
+  // zoom y la referencia visual que tenía el usuario.
+  //
+  // Con `key` como única dependencia, el mapa se reencuadra sólo cuando el
+  // conjunto de posiciones cambió de verdad: al cambiar filtros o capas.
+  const positionsRef = useRef(positions)
+  positionsRef.current = positions
+
   useEffect(() => {
-    if (!positions.length) return
-    if (positions.length === 1) {
-      map.setView(positions[0], 17)
+    const actuales = positionsRef.current
+    if (!actuales.length) return
+    if (actuales.length === 1) {
+      map.setView(actuales[0], 17)
       return
     }
-    map.fitBounds(L.latLngBounds(positions), { padding: [36, 36], maxZoom: 17 })
-  }, [key, map, positions])
+    map.fitBounds(L.latLngBounds(actuales), { padding: [36, 36], maxZoom: 17 })
+  }, [key, map])
 
   return null
 }
