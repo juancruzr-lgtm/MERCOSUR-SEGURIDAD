@@ -28,10 +28,12 @@ import { formatFechaHora } from '@/lib/formato'
 import {
   GPS_PRECISION_MAX_METROS,
   auditoriaSupervisionGps,
+  distanciaMetrosCoordenadas,
   estadoGpsTexto,
   gpsRegistroAsistencia,
   metrosGpsTexto,
 } from '@/lib/gps-asistencia'
+import { actualizarUbicacionObjetivo } from '@/lib/legajo-objetivo'
 import {
   cargarMarcacionesPunto,
   cargarPuntosRondaGps,
@@ -90,12 +92,15 @@ export default function PaginaGps({
   turnos,
   guardias,
   supervisiones,
+  onObjetivoActualizado,
 }: {
   objetivos: Objetivo[]
   registros: RegistroAsistencia[]
   turnos: Turno[]
   guardias: Usuario[]
   supervisiones: any[]
+  /** Avisa al dashboard que un objetivo cambió, para refrescar su lista. */
+  onObjetivoActualizado?: (objetivo: any) => void
 }) {
   // ── Filtros ───────────────────────────────────────────────────────────────
   const [desde, setDesde] = useState(haceDiasISO(7))
@@ -120,6 +125,10 @@ export default function PaginaGps({
   const [analizando, setAnalizando] = useState(false)
   const [aplicando, setAplicando] = useState(false)
   const [guardandoRadio, setGuardandoRadio] = useState(false)
+  const [guardandoObjetivo, setGuardandoObjetivo] = useState(false)
+  // Posición propuesta al arrastrar el marcador de un objetivo. Todavía no se
+  // guardó nada: arrastrar propone, confirmar guarda.
+  const [objetivoPropuesto, setObjetivoPropuesto] = useState<{ id: string; lat: number; lng: number } | null>(null)
   // Radio tentativo del punto seleccionado, todavía sin guardar. Sólo se dibuja.
   const [radioPreview, setRadioPreview] = useState<number | null>(null)
   const [mensaje, setMensaje] = useState('')
@@ -426,6 +435,54 @@ export default function PaginaGps({
     setMensaje(`Radio actualizado a ${metros} m y auditado.`)
   }
 
+  /**
+   * Confirma la ubicación propuesta para un objetivo.
+   *
+   * Escribe por `actualizarUbicacionObjetivo()`, que ya existía y es la que usa
+   * el legajo: no se agrega un quinto camino de escritura. Sin contexto de
+   * diagnóstico, así que la auditoría lo registra como cambio manual.
+   */
+  const confirmarUbicacionObjetivo = async () => {
+    if (!objetivoPropuesto) return
+    limpiarAvisos()
+
+    const objetivo = objetivos.find(o => o.id === objetivoPropuesto.id)
+    if (!objetivo) return
+
+    const radio = typeof objetivo.radio_metros === 'number' ? objetivo.radio_metros : 200
+    const movido = Math.round(distanciaMetrosCoordenadas(
+      objetivo.lat as number, objetivo.lng as number,
+      objetivoPropuesto.lat, objetivoPropuesto.lng,
+    ))
+
+    const confirmado = window.confirm(
+      `Se va a mover "${objetivo.nombre}" ${movido} m.\n\n` +
+      `Nueva ubicación: ${objetivoPropuesto.lat.toFixed(6)}, ${objetivoPropuesto.lng.toFixed(6)}\n` +
+      `Radio: ${radio} m (no cambia)\n\n` +
+      'Es la zona donde el personal puede fichar: moverla cambia qué fichajes ' +
+      'quedan dentro y cuáles fuera de radio, de acá en adelante. El cambio ' +
+      'queda registrado en la auditoría del objetivo.\n\n¿Confirmás?',
+    )
+    if (!confirmado) return
+
+    setGuardandoObjetivo(true)
+    const { objetivo: actualizado, error: errorGuardar } = await actualizarUbicacionObjetivo(
+      objetivo.id, objetivoPropuesto.lat, objetivoPropuesto.lng, radio,
+    )
+    setGuardandoObjetivo(false)
+
+    if (errorGuardar) { setError(errorGuardar); return }
+
+    setObjetivoPropuesto(null)
+    if (actualizado) {
+      // El dueño de la lista de objetivos es el dashboard: se le avisa para que
+      // el resto de las pantallas vea el valor nuevo sin recargar.
+      onObjetivoActualizado?.(actualizado)
+      setSeleccion({ tipo: 'objetivo', datos: actualizado })
+    }
+    setMensaje(`Objetivo movido ${movido} m y auditado.`)
+  }
+
   const verMarcaciones = async (punto: PuntoRondaGps) => {
     limpiarAvisos()
     setCargandoMarcaciones(true)
@@ -548,8 +605,15 @@ export default function PaginaGps({
             onPuntoClick={seleccionarPunto}
             onObjetivoClick={(id: string) => {
               limpiarAvisos()
+              if (objetivoPropuesto && objetivoPropuesto.id !== id) setObjetivoPropuesto(null)
               const objetivo = objetivos.find(o => o.id === id)
               if (objetivo) setSeleccion({ tipo: 'objetivo', datos: objetivo })
+            }}
+            objetivoArrastrableId={seleccion?.tipo === 'objetivo' ? seleccion.datos.id : null}
+            objetivoPropuesto={objetivoPropuesto}
+            onObjetivoArrastrado={(id, lat, lng) => {
+              limpiarAvisos()
+              setObjetivoPropuesto({ id, lat, lng })
             }}
             onSupervisionClick={(id: string) => {
               limpiarAvisos()
@@ -593,7 +657,14 @@ export default function PaginaGps({
           onOcultarMarcaciones={() => setMarcaciones([])}
           onRadioPreview={previsualizarRadio}
           onGuardarRadio={guardarRadio}
-          onCerrar={() => { setSeleccion(null); setMarcaciones([]); setRadioPreview(null); limpiarAvisos() }}
+          objetivoPropuesto={objetivoPropuesto}
+          guardandoObjetivo={guardandoObjetivo}
+          onConfirmarObjetivo={confirmarUbicacionObjetivo}
+          onDescartarObjetivo={() => { setObjetivoPropuesto(null); limpiarAvisos() }}
+          onCerrar={() => {
+            setSeleccion(null); setMarcaciones([]); setRadioPreview(null)
+            setObjetivoPropuesto(null); limpiarAvisos()
+          }}
         />
       </div>
     </div>

@@ -127,6 +127,14 @@ export function SeccionUbicacion({
   const [mensaje, setMensaje] = useState<string | null>(null)
   const [precision, setPrecision] = useState<number | null>(null)
 
+  // Corrección a mano. Existe porque la captura de GPS sólo sirve estando
+  // parado en el objetivo: si la ubicación quedó mal cargada, desde el
+  // escritorio no había forma de arreglarla.
+  const [editando, setEditando] = useState(false)
+  const [latTexto, setLatTexto] = useState('')
+  const [lngTexto, setLngTexto] = useState('')
+  const [radioTexto, setRadioTexto] = useState('')
+
   const tieneUbicacion = objetivo.lat !== null && objetivo.lng !== null
 
   const actualizar = async () => {
@@ -166,6 +174,53 @@ export function SeccionUbicacion({
     }
   }
 
+  const abrirEdicion = () => {
+    setMensaje(null)
+    setLatTexto(objetivo.lat !== null ? String(objetivo.lat) : '')
+    setLngTexto(objetivo.lng !== null ? String(objetivo.lng) : '')
+    setRadioTexto(objetivo.radio_metros !== null ? String(objetivo.radio_metros) : '')
+    setEditando(true)
+  }
+
+  const numero = (texto: string): number | null => {
+    const valor = Number(texto.trim().replace(',', '.'))
+    return Number.isFinite(valor) ? valor : null
+  }
+
+  const guardarManual = async () => {
+    setMensaje(null)
+
+    const lat = numero(latTexto)
+    const lng = numero(lngTexto)
+    const radio = numero(radioTexto)
+
+    if (lat === null || lng === null) { setMensaje('Latitud y longitud tienen que ser números.'); return }
+    if (lat < -90 || lat > 90) { setMensaje('La latitud tiene que estar entre -90 y 90.'); return }
+    if (lng < -180 || lng > 180) { setMensaje('La longitud tiene que estar entre -180 y 180.'); return }
+    if (radio === null || radio <= 0) { setMensaje('El radio tiene que ser mayor que cero.'); return }
+
+    const confirmado = window.confirm(
+      `Se va a cambiar la ubicación de "${objetivo.nombre}".\n\n` +
+      `Radio: ${objetivo.radio_metros ?? '—'} m → ${Math.round(radio)} m\n\n` +
+      'Es la zona donde el personal puede fichar. El cambio queda registrado ' +
+      'en la auditoría del objetivo.\n\n¿Confirmás?',
+    )
+    if (!confirmado) return
+
+    setEstado('guardando')
+    const { objetivo: actualizado, error } = await actualizarUbicacionObjetivo(
+      objetivo.id, lat, lng, Math.round(radio),
+    )
+    setEstado('idle')
+
+    if (error) { setMensaje(error); return }
+    if (actualizado) {
+      onActualizado(actualizado)
+      setEditando(false)
+      setMensaje('Ubicación corregida y registrada en la auditoría.')
+    }
+  }
+
   const trabajando = estado !== 'idle'
 
   return (
@@ -193,15 +248,54 @@ export function SeccionUbicacion({
         <Dato label="Radio" valor={objetivo.radio_metros !== null ? `${objetivo.radio_metros} m` : '—'} />
       </div>
 
-      {puedeEditar && (
-        <div style={{ marginTop: 12 }}>
+      {puedeEditar && !editando && (
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" style={{ ...S.btn, opacity: trabajando ? 0.6 : 1 }} onClick={() => void actualizar()} disabled={trabajando}>
             {estado === 'capturando'
               ? `Obteniendo GPS${precision !== null ? ` (±${Math.round(precision)} m)` : ''}…`
               : estado === 'guardando' ? 'Guardando…' : '📍 Actualizar ubicación'}
           </button>
+          <button type="button" style={{ ...S.btn, opacity: trabajando ? 0.6 : 1 }} onClick={abrirEdicion} disabled={trabajando}>
+            ✏️ Corregir a mano
+          </button>
           <div style={S.aviso}>
-            Toma la posición del dispositivo actual. Usalo estando en el objetivo.
+            «Actualizar ubicación» toma la posición del dispositivo: sirve estando
+            en el objetivo. «Corregir a mano» sirve desde cualquier lado, y es lo
+            que hay que usar cuando la ubicación quedó mal cargada.
+          </div>
+        </div>
+      )}
+
+      {puedeEditar && editando && (
+        <div style={{ marginTop: 12 }}>
+          <div style={S.grid}>
+            <div style={S.celda}>
+              <span style={S.celdaLabel}>Latitud</span>
+              <input value={latTexto} onChange={e => setLatTexto(e.target.value)} disabled={trabajando}
+                style={{ background:'#0a0e1a', border:'1px solid #1e2d42', borderRadius:6, padding:'6px 8px', color:'#e2e8f0', fontSize:13, width:'100%' }} />
+            </div>
+            <div style={S.celda}>
+              <span style={S.celdaLabel}>Longitud</span>
+              <input value={lngTexto} onChange={e => setLngTexto(e.target.value)} disabled={trabajando}
+                style={{ background:'#0a0e1a', border:'1px solid #1e2d42', borderRadius:6, padding:'6px 8px', color:'#e2e8f0', fontSize:13, width:'100%' }} />
+            </div>
+            <div style={S.celda}>
+              <span style={S.celdaLabel}>Radio (m)</span>
+              <input value={radioTexto} onChange={e => setRadioTexto(e.target.value)} disabled={trabajando} type="number" min={1}
+                style={{ background:'#0a0e1a', border:'1px solid #1e2d42', borderRadius:6, padding:'6px 8px', color:'#e2e8f0', fontSize:13, width:'100%' }} />
+            </div>
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" style={{ ...S.btn, opacity: trabajando ? 0.6 : 1 }} onClick={() => void guardarManual()} disabled={trabajando}>
+              {estado === 'guardando' ? 'Guardando…' : 'Guardar ubicación'}
+            </button>
+            <button type="button" style={{ ...S.btn, opacity: trabajando ? 0.6 : 1 }} onClick={() => { setEditando(false); setMensaje(null) }} disabled={trabajando}>
+              Cancelar
+            </button>
+          </div>
+          <div style={S.aviso}>
+            Las coordenadas se pueden copiar de Google Maps. Este radio es la zona
+            donde el personal puede fichar: el cambio queda auditado.
           </div>
         </div>
       )}

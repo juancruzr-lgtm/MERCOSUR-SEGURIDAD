@@ -10708,6 +10708,9 @@ const esGuardia = esRolGuardia(user.rol)
                   turnos={turnos}
                   guardias={guardias}
                   supervisiones={supervisionesAdmin}
+                  onObjetivoActualizado={(actualizado: any) =>
+                    setObjetivos((prev: any[]) => prev.map(o => o.id === actualizado.id ? { ...o, ...actualizado } : o))
+                  }
                 />
               )}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} />}

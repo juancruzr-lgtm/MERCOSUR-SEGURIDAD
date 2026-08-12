@@ -120,6 +120,17 @@ type Props = {
   marcaciones?: MarcacionCGO[]
   puntoSeleccionadoId?: string | null
   /**
+   * Objetivo que se puede arrastrar. Sólo uno por vez, y sólo el seleccionado.
+   *
+   * Arrastrar NO guarda: se avisa la posición propuesta y quien decide es la
+   * pantalla, con confirmación. Sin esta prop ningún objetivo se mueve, que es
+   * como sigue comportándose el Mapa CGO de Asistencia.
+   */
+  objetivoArrastrableId?: string | null
+  onObjetivoArrastrado?: (objetivoId: string, lat: number, lng: number) => void
+  /** Posición propuesta todavía sin guardar, para dibujar ahí el radio. */
+  objetivoPropuesto?: { id: string; lat: number; lng: number } | null
+  /**
    * Radio que se está probando para el punto seleccionado, todavía sin guardar.
    * Se dibuja punteado sobre el radio actual para poder compararlos.
    */
@@ -395,6 +406,9 @@ export default function MapaOperativo({
   marcaciones = [],
   puntoSeleccionadoId = null,
   radioPreviewMetros = null,
+  objetivoArrastrableId = null,
+  onObjetivoArrastrado,
+  objetivoPropuesto = null,
   onPuntoClick,
   onObjetivoClick,
   onSupervisionClick,
@@ -485,27 +499,57 @@ export default function MapaOperativo({
           <FlyTo registroSeleccionado={registroSeleccionado} markers={markers} />
 
           {/* Capa: objetivos + círculo de radio */}
-          {objetivosActivos.map(obj => (
+          {objetivosActivos.map(obj => {
+            const propuesto = objetivoPropuesto?.id === obj.id ? objetivoPropuesto : null
+            // El radio acompaña a la posición propuesta: lo que interesa ver es
+            // dónde quedaría la zona de fichaje, no dónde estaba.
+            const centro: [number, number] = propuesto ? [propuesto.lat, propuesto.lng] : [obj.lat, obj.lng]
+            const arrastrable = obj.id === objetivoArrastrableId
+
+            return (
             <React.Fragment key={obj.id}>
               <Circle
-                center={[obj.lat, obj.lng]}
+                center={centro}
                 radius={obj.radio_metros}
-                pathOptions={{ color: COLOR_OBJETIVO, fillColor: COLOR_OBJETIVO, fillOpacity: 0.05, weight: 1.5, dashArray: '6 4' }}
+                pathOptions={{
+                  color: propuesto ? '#38bdf8' : COLOR_OBJETIVO,
+                  fillColor: propuesto ? '#38bdf8' : COLOR_OBJETIVO,
+                  fillOpacity: 0.05,
+                  weight: propuesto ? 2 : 1.5,
+                  dashArray: '6 4',
+                }}
               />
               <Marker
-                position={[obj.lat, obj.lng]}
+                position={centro}
                 icon={objetivoIcon(obj.nombre)}
-                eventHandlers={onObjetivoClick ? { click: () => onObjetivoClick(obj.id) } : undefined}
+                draggable={arrastrable}
+                eventHandlers={{
+                  ...(onObjetivoClick ? { click: () => onObjetivoClick(obj.id) } : {}),
+                  ...(arrastrable && onObjetivoArrastrado
+                    ? {
+                        dragend: (evento: any) => {
+                          const posicion = evento.target.getLatLng()
+                          onObjetivoArrastrado(obj.id, posicion.lat, posicion.lng)
+                        },
+                      }
+                    : {}),
+                }}
               >
                 <Popup>
                   <div style={{ minWidth: 160, fontSize: 13 }}>
                     <div style={{ fontWeight: 800, marginBottom: 4, color: '#0f172a' }}>{obj.nombre}</div>
                     <div style={{ color: '#6b7280', fontSize: 12 }}>Radio permitido: {obj.radio_metros} m</div>
+                    {arrastrable && (
+                      <div style={{ color: '#0369a1', fontSize: 12, marginTop: 4, fontWeight: 600 }}>
+                        Arrastralo para proponer otra ubicación.
+                      </div>
+                    )}
                   </div>
                 </Popup>
               </Marker>
             </React.Fragment>
-          ))}
+            )
+          })}
 
           {/* Capa: ingresos */}
           {ingresos.map(m => (

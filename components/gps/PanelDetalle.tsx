@@ -51,6 +51,10 @@ export default function PanelDetalle({
   onOcultarMarcaciones,
   onRadioPreview,
   onGuardarRadio,
+  objetivoPropuesto,
+  guardandoObjetivo,
+  onConfirmarObjetivo,
+  onDescartarObjetivo,
   onCerrar,
 }: {
   seleccion: SeleccionGps | null
@@ -68,6 +72,11 @@ export default function PanelDetalle({
   /** Radio tentativo para dibujar en el mapa. null borra la vista previa. */
   onRadioPreview: (metros: number | null) => void
   onGuardarRadio: (punto: PuntoRondaGps, metros: number) => void
+  /** Ubicación propuesta al arrastrar el objetivo. Todavía sin guardar. */
+  objetivoPropuesto: { id: string; lat: number; lng: number } | null
+  guardandoObjetivo: boolean
+  onConfirmarObjetivo: () => void
+  onDescartarObjetivo: () => void
   onCerrar: () => void
 }) {
   const [fotoUrl, setFotoUrl] = useState<string | null>(null)
@@ -133,10 +142,46 @@ export default function PanelDetalle({
             <Fila label="Coordenadas" valor={coordenada(o.lat ?? null, o.lng ?? null)} />
             <Fila label="Radio" valor={o.radio_metros ? `${o.radio_metros} m` : '—'} />
             <Fila label="Estado" valor={o.estado || '—'} />
+
+            {objetivoPropuesto?.id === o.id ? (
+              <>
+                <div className={`${styles.diagnostico} ${styles.diagnosticoAlerta}`}>
+                  Ubicación propuesta, sin guardar:
+                  <div style={{ marginTop: 4 }}>
+                    {objetivoPropuesto.lat.toFixed(6)}, {objetivoPropuesto.lng.toFixed(6)}
+                  </div>
+                </div>
+                <div className={styles.acciones}>
+                  <button
+                    className={`${styles.boton} ${styles.botonPrimario}`}
+                    type="button"
+                    onClick={onConfirmarObjetivo}
+                    disabled={guardandoObjetivo}
+                  >
+                    {guardandoObjetivo ? 'Guardando…' : 'Confirmar ubicación'}
+                  </button>
+                  <button
+                    className={styles.boton}
+                    type="button"
+                    onClick={onDescartarObjetivo}
+                    disabled={guardandoObjetivo}
+                  >
+                    Descartar
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className={styles.soloLectura}>
+                Arrastrá el marcador de este objetivo en el mapa para proponer otra
+                ubicación. Arrastrar no guarda nada: te muestra dónde quedaría el
+                radio y recién confirmás acá.
+              </div>
+            )}
+
             <div className={styles.soloLectura}>
-              La ubicación y el radio del objetivo son de sólo lectura desde acá.
-              Todavía no existe auditoría de cambios GPS de objetivos, así que se
-              siguen editando desde el legajo del objetivo, donde ya se hacía.
+              Mover un objetivo cambia dónde puede fichar el personal. El cambio
+              queda registrado en la auditoría del objetivo, con quién lo hizo y
+              los valores anterior y nuevo. El radio se edita desde el legajo.
             </div>
           </>
         )
