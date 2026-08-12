@@ -779,6 +779,10 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   // Coordina Control de Rondas con el resumen de pausadas: son hermanos y sin
   // esto la pausa recién se veía al recargar la página.
   const [pausasToken, setPausasToken] = useState(0)
+  // Intervenciones del día, para no seguir pidiendo atención sobre algo que el
+  // supervisor ya atendió. Misma consulta que hace Revisión Operativa; acá sólo
+  // se leen para filtrar.
+  const [intervencionesHoy, setIntervencionesHoy] = useState<any[]>([])
   const usuarios = guardias as Usuario[]
   const objetivosActivos = objetivos.filter((o: Objetivo) => o.estado === 'activo')
   // Alcance del Control de Rondas. Los objetivos de prueba se excluyen acá igual
@@ -798,7 +802,33 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
   const registroActivo = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real)
   const guardiasEnTurno = new Set(registroActivo.map((r: RegistroAsistencia) => r.guardia_id)).size
-  const alertasOperativasHoy = detectarAlertasOperativas({ turnos: turnosHoy, registros: registrosHoy })
+  // Atención operativa. Dos filtros que antes faltaban acá y que Revisión
+  // Operativa sí aplicaba, así que el panel mostraba más de lo que había para
+  // hacer:
+  //   · `objetivos` — un objetivo pausado conserva sus turnos pero no genera
+  //     obligación, así que tampoco alertas;
+  //   · `alertaEstaIntervenida` — lo que el supervisor ya atendió deja de pedir
+  //     atención. Es la misma función que usa Revisión Operativa: una sola
+  //     definición de "intervenida", no dos.
+  const idsTurnosHoy = turnosHoy.map((t: Turno) => t.id).join(',')
+  useEffect(() => {
+    let vigente = true
+    const ids = idsTurnosHoy ? idsTurnosHoy.split(',') : []
+    if (ids.length === 0) { setIntervencionesHoy([]); return }
+    supabase
+      .from('supervisor_intervenciones')
+      .select('*')
+      .in('turno_id', ids)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => { if (vigente) setIntervencionesHoy(data || []) })
+    return () => { vigente = false }
+  }, [idsTurnosHoy])
+
+  const alertasOperativasHoy = detectarAlertasOperativas({
+    turnos: turnosHoy,
+    registros: registrosHoy,
+    objetivos,
+  }).filter(a => !alertaEstaIntervenida(intervencionesHoy, a.turno_id, a.tipo_alerta, a.registro_asistencia_id))
   const idsTurnosDescubiertos = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'descubierto').map(a => a.turno_id))
   const idsTurnosSinFichar = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'sin_fichar').map(a => a.turno_id))
   const idsRegistrosTardanza = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'tardanza').map(a => a.registro_asistencia_id))

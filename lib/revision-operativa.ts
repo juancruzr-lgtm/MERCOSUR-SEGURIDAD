@@ -171,14 +171,29 @@ export function formatCuil(raw: string): string {
 export function detectarAlertasOperativas({
   turnos,
   registros,
+  objetivos,
   ahora = new Date(),
   umbrales = UMBRALES_ALERTAS_OPERATIVAS,
 }: {
   turnos: TurnoDetectorOperativo[]
   registros: RegistroDetectorOperativo[]
+  /**
+   * Estado de los objetivos. Si se pasa, los turnos de un objetivo pausado
+   * (estado <> 'activo') no generan ninguna alerta: sus turnos se conservan
+   * pero quedan fuera de la operación.
+   *
+   * Es opcional para no romper a quien todavía no lo pase, pero omitirlo
+   * significa "no sé el estado", no "están todos activos": quien tenga el dato
+   * debe pasarlo. Mismo criterio que aplica el servidor en
+   * rondas_ventanas_programadas y en asignar_vigilador_turnos.
+   */
+  objetivos?: { id: string; estado?: string | null }[]
   ahora?: Date
   umbrales?: UmbralesDetectorOperativo
 }): AlertaOperativaDetectada[] {
+  const objetivoPausado = new Set(
+    (objetivos ?? []).filter(o => (o.estado ?? 'activo') !== 'activo').map(o => o.id),
+  )
   const ahoraMs = ahora.getTime()
   const registrosPorTurno = new Map<string, RegistroDetectorOperativo[]>()
   for (const registro of registros) {
@@ -207,6 +222,10 @@ export function detectarAlertasOperativas({
   for (const turno of turnos) {
     const rango = rangoTurnoArgentina(turno)
     if (!rango || ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) continue
+    // Objetivo pausado: ninguna de las cuatro alertas de este detector
+    // —descubierto, sin fichar, tardanza, fuera de radio— corresponde, porque
+    // las cuatro derivan de que el objetivo esté operativo.
+    if (objetivoPausado.has(turno.objetivo_id)) continue
     const registrosTurno = registrosPorTurno.get(turno.id) || []
     const registrosValidos = registrosTurno.filter((registro) => registro.tipo_registro !== 'ausencia')
     const tieneEntrada = registrosValidos.some((registro) => Boolean(registro.hora_entrada_final || registro.hora_entrada_real))

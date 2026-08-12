@@ -51,3 +51,46 @@ describe('turnoSinCoberturaEnObjetivoOperativo', () => {
     expect(turnoSinCoberturaEnObjetivoOperativo(conGuardia as any, pausado)).toBe(false)
   })
 })
+
+// El detector compartido de alertas operativas: una sola fuente para los cuatro
+// paneles del panel de administracion (descubierto, sin fichar, tardanza, fuera
+// de radio). El estado del objetivo se aplica aca, no en cada panel.
+import { detectarAlertasOperativas } from '@/lib/revision-operativa'
+
+const ayer = new Date(Date.now() - 24 * 3600 * 1000).toISOString().slice(0, 10)
+const turnoDescubierto = {
+  id: 't1', objetivo_id: 'o1', puesto_id: null, guardia_id: null,
+  fecha: ayer, hora_inicio: '08:00', hora_fin: '16:00', estado: 'programado',
+}
+
+describe('detectarAlertasOperativas y el estado del objetivo', () => {
+  it('objetivo activo: detecta el turno descubierto', () => {
+    const a = detectarAlertasOperativas({
+      turnos: [turnoDescubierto as any], registros: [],
+      objetivos: [{ id: 'o1', estado: 'activo' }],
+    })
+    expect(a.some(x => x.tipo_alerta === 'descubierto')).toBe(true)
+  })
+
+  it('objetivo pausado: no detecta nada', () => {
+    const a = detectarAlertasOperativas({
+      turnos: [turnoDescubierto as any], registros: [],
+      objetivos: [{ id: 'o1', estado: 'inactivo' }],
+    })
+    expect(a).toHaveLength(0)
+  })
+
+  it('sin pasar objetivos se comporta como antes: no silencia nada', () => {
+    const a = detectarAlertasOperativas({ turnos: [turnoDescubierto as any], registros: [] })
+    expect(a.some(x => x.tipo_alerta === 'descubierto')).toBe(true)
+  })
+
+  it('un objetivo pausado no silencia los turnos de otro objetivo activo', () => {
+    const otro = { ...turnoDescubierto, id: 't2', objetivo_id: 'o2' }
+    const a = detectarAlertasOperativas({
+      turnos: [turnoDescubierto as any, otro as any], registros: [],
+      objetivos: [{ id: 'o1', estado: 'inactivo' }, { id: 'o2', estado: 'activo' }],
+    })
+    expect(a.map(x => x.turno_id)).toEqual(['t2'])
+  })
+})
