@@ -21,6 +21,24 @@ describe('estadoPunto', () => {
   })
 
   it('un punto no registrado manda sobre todo lo demás', () => {
+    expect(estadoPunto(p({ cumplido: false, registrado: false, fotoRecibida: false }))).toBe('PUNTO_FALTANTE')
+  })
+
+  // Caso real: ronda del 11/08 21:02. El vigilador pasó, sacó la foto y la
+  // subió; el punto quedó 'incumplido' porque la coordenada configurada estaba
+  // a 13 km. La pantalla decía "Punto no registrado" y le atribuía a él un
+  // error de carga nuestro.
+  it('registrado pero incumplido por GPS NO es un punto faltante', () => {
+    const punto = p({ cumplido: false, registrado: true, dentroRadio: false })
+    expect(estadoPunto(punto)).not.toBe('PUNTO_FALTANTE')
+    expect(gpsFueraRadio(punto)).toBe(true)
+  })
+
+  it('el GPS fuera de radio no descalifica la foto: son controles distintos', () => {
+    expect(estadoPunto(p({ cumplido: false, registrado: true, dentroRadio: false }))).toBe('OK')
+  })
+
+  it('sin `registrado` se comporta como antes: no rompe a quien no lo informa', () => {
     expect(estadoPunto(p({ cumplido: false, fotoRecibida: false }))).toBe('PUNTO_FALTANTE')
   })
 

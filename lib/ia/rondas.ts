@@ -40,8 +40,20 @@ export const ETIQUETA_FOTO: Record<EstadoPuntoIA, string> = {
 }
 
 export type EntradaPunto = {
-  /** El vigilador registró el punto. */
+  /** El punto quedó cumplido según las reglas de la ronda. */
   cumplido: boolean
+  /**
+   * El vigilador PASÓ por el punto y lo registró, haya dado bien el GPS o no.
+   *
+   * Es distinto de `cumplido`: un punto registrado a las 21:02, con foto, puede
+   * quedar 'incumplido' porque el GPS marcó fuera de radio. Tratar eso como
+   * "no registrado" le atribuye al vigilador un problema de configuración —
+   * justo lo que este módulo existe para evitar.
+   *
+   * Si no se informa, se asume `cumplido` para no cambiar el comportamiento de
+   * quien todavía no distingue los dos casos.
+   */
+  registrado?: boolean
   /** La política del punto exigía foto. */
   fotoRequerida: boolean
   /** Llegó la foto. */
@@ -72,7 +84,10 @@ export type EntradaPunto = {
  * del vigilador. Por eso nunca se traduce como que la foto esté mal.
  */
 export function estadoPunto(p: EntradaPunto): EstadoPuntoIA {
-  if (!p.cumplido) return 'PUNTO_FALTANTE'
+  // PUNTO_FALTANTE es "el vigilador no pasó". Un punto registrado pero marcado
+  // incumplido por GPS NO es faltante: pasó, sacó la foto y la subió. Ese caso
+  // lo reporta `gpsFueraRadio()`, que es un control aparte a propósito.
+  if (!(p.registrado ?? p.cumplido)) return 'PUNTO_FALTANTE'
   if (p.fotoRequerida && !p.fotoRecibida) return 'FOTO_FALTANTE'
   if (!p.fotoRecibida) return 'OK'                    // no exigía foto y no la mandó
   if (p.clasificacion === null) return 'PENDIENTE'
@@ -155,7 +170,11 @@ export function resumirRonda(puntos: EntradaPunto[]): ResumenRonda {
   }
 
   for (const p of puntos) {
-    if (p.cumplido) r.cumplidos++; else r.faltantes++
+    if (p.cumplido) r.cumplidos++
+    // "Faltantes" cuenta puntos por los que el vigilador NO pasó. Un punto
+    // registrado que quedó incumplido por GPS no falta: está en gpsFueraRadio.
+    // Sumarlo acá haría leer un problema de coordenadas como abandono de ronda.
+    if (!(p.registrado ?? p.cumplido)) r.faltantes++
     if (p.fotoRequerida) r.fotosRequeridas++
     if (p.fotoRecibida) r.fotosRecibidas++
     if (gpsFueraRadio(p)) r.gpsFueraRadio++
