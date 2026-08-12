@@ -155,6 +155,15 @@ type Props = {
   /** Alto del mapa. Por defecto, el mismo que usaba el Mapa CGO. */
   altura?: string
   /**
+   * Cambiar este valor reencuadra el mapa. La pantalla lo mueve sólo cuando el
+   * usuario pidió ver otra cosa: filtros o capas. Seleccionar un marcador NO
+   * debe cambiarlo, o se le va el zoom en la cara.
+   *
+   * Sin esta prop, el encuadre se rige por las coordenadas dibujadas, que es el
+   * comportamiento histórico del Mapa CGO de Asistencia.
+   */
+  fitToken?: string
+  /**
    * Muestra el selector Calles / Satélite / Híbrido.
    *
    * Por defecto false: el Mapa CGO de Asistencia no lo pide y sigue viéndose
@@ -310,18 +319,32 @@ function iniciales(texto: string): string {
 
 // ── Sub-componentes del mapa ──────────────────────────────────────────────────
 
-function FitBounds({ positions }: { positions: [number, number][] }) {
+/**
+ * Encuadra el mapa para que entre todo lo dibujado.
+ *
+ * CUÁNDO REENCUADRA, Y POR QUÉ ASÍ
+ *
+ * Reencuadrar mueve la vista abajo de los pies del usuario. Sólo se justifica
+ * cuando él pidió ver otra cosa: cambió un filtro, prendió o apagó una capa.
+ * Nunca cuando seleccionó un marcador para mirarlo de cerca — ahí perder el
+ * zoom es exactamente lo contrario de lo que quería.
+ *
+ * Por eso el disparador es `fitToken`: un valor que la pantalla cambia a
+ * propósito cuando corresponde reencuadrar. Atarlo a las posiciones dibujadas
+ * —como estaba antes— no alcanza: seleccionar algo puede reordenar o
+ * reconstruir esa lista sin que el usuario haya pedido nada, y el mapa se iba
+ * para atrás solo.
+ *
+ * Sin `fitToken` se cae al comportamiento anterior, basado en las coordenadas.
+ * Eso deja el Mapa CGO de Asistencia exactamente como estaba.
+ */
+function FitBounds({ positions, fitToken }: { positions: [number, number][]; fitToken?: string }) {
   const map = useMap()
   const key = positions.map(p => p.join(',')).join('|')
+  const disparador = fitToken ?? key
 
-  // Las posiciones se leen por referencia y NO van en las dependencias: el array
-  // se reconstruye en cada render, así que incluirlo re-encuadraba el mapa
-  // aunque las coordenadas fueran exactamente las mismas. Eso hacía que al
-  // volver a consultar la base (analizar un punto, por ejemplo) se perdiera el
-  // zoom y la referencia visual que tenía el usuario.
-  //
-  // Con `key` como única dependencia, el mapa se reencuadra sólo cuando el
-  // conjunto de posiciones cambió de verdad: al cambiar filtros o capas.
+  // Las posiciones se leen por referencia: el array se reconstruye en cada
+  // render y tenerlo en las dependencias volvería a disparar el encuadre.
   const positionsRef = useRef(positions)
   positionsRef.current = positions
 
@@ -333,7 +356,7 @@ function FitBounds({ positions }: { positions: [number, number][] }) {
       return
     }
     map.fitBounds(L.latLngBounds(actuales), { padding: [36, 36], maxZoom: 17 })
-  }, [key, map])
+  }, [disparador, map])
 
   return null
 }
@@ -432,6 +455,7 @@ export default function MapaOperativo({
   onSupervisionClick,
   altura = 'min(58vh, 520px)',
   selectorFondo = false,
+  fitToken,
 }: Props) {
   // El fondo es estado local del mapa: cambiarlo no toca ningún dato, ningún
   // filtro ni la selección. Sólo se reemplaza la imagen de abajo.
@@ -513,7 +537,7 @@ export default function MapaOperativo({
               <TileLayer key="fondo-transporte" url={URL_ESRI_TRANSPORTE} maxNativeZoom={19} />
             </>
           )}
-          <FitBounds positions={allPositions} />
+          <FitBounds positions={allPositions} fitToken={fitToken} />
           <FlyTo registroSeleccionado={registroSeleccionado} markers={markers} />
 
           {/* Capa: objetivos + círculo de radio */}

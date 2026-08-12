@@ -336,6 +336,22 @@ export default function PaginaGps({
     ))
   }, [objetivoPropuesto, objetivos])
 
+  /**
+   * Lo único que reencuadra el mapa.
+   *
+   * Cambia sólo cuando el usuario pidió ver otra cosa: filtros o capas.
+   * Deliberadamente NO incluye la selección, ni el diagnóstico, ni las
+   * marcaciones, ni las posiciones propuestas: seleccionar un marcador para
+   * mirarlo de cerca no puede tirarte el zoom para atrás.
+   */
+  const fitToken = useMemo(
+    () => [
+      desde, hasta, objetivoId, vigiladorId, filtroPuntos,
+      Array.from(capasActivas).sort().join(','),
+    ].join('|'),
+    [desde, hasta, objetivoId, vigiladorId, filtroPuntos, capasActivas],
+  )
+
   const marcacionesCapa = useMemo<MarcacionCGO[]>(() => marcaciones.map(m => ({
     id: m.id,
     lat: m.latitud,
@@ -859,6 +875,7 @@ export default function PaginaGps({
             }}
             altura="min(66vh, 620px)"
             selectorFondo
+            fitToken={fitToken}
           />
 
           <div className={styles.leyenda}>
