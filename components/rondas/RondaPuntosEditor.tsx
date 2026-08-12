@@ -181,6 +181,10 @@ export default function RondaPuntosEditor({
   const [form, setForm] = useState<PuntoForm>(crearFormVacio)
   const [formInicial, setFormInicial] = useState<PuntoForm | null>(null)
   const [ajusteMapa, setAjusteMapa] = useState(false)
+  // El mapa vivía siempre en una columna angosta al lado de la lista. Con esto
+  // pasa a ocupar todo el ancho, que es lo que hace falta para ubicar un punto
+  // sobre la imagen satelital. Es sólo layout: no cambia datos ni lógica.
+  const [mapaAncho, setMapaAncho] = useState(false)
   const [esMovil, setEsMovil] = useState(false)
   const [interaccionMapa, setInteraccionMapa] = useState(false)
   const [error, setError] = useState('')
@@ -588,7 +592,7 @@ export default function RondaPuntosEditor({
 
       {error && <div className={styles.message}>{error}</div>}
 
-      <div className={styles.pointsWorkspace}>
+      <div className={`${styles.pointsWorkspace} ${mapaAncho ? styles.pointsWorkspaceAncho : ''}`}>
         <div className={styles.pointsColumn}>
           {cargando ? (
             <div className={styles.help}>Cargando puntos…</div>
@@ -758,6 +762,14 @@ export default function RondaPuntosEditor({
               <div className={styles.name}>Mapa de puntos</div>
               <div className={styles.help}>Seleccioná un marcador para editar el punto.</div>
             </div>
+            <button
+              className={`${styles.button} ${mapaAncho ? styles.buttonActive : ''}`}
+              type="button"
+              onClick={() => setMapaAncho(actual => !actual)}
+              title={mapaAncho ? 'Volver a la vista en dos columnas' : 'Ver el mapa a todo el ancho'}
+            >
+              {mapaAncho ? '↕ Contraer mapa' : '↔ Ampliar mapa'}
+            </button>
             {esMovil && (
               <button
                 className={`${styles.button} ${interaccionMapa ? styles.buttonActive : ''}`}

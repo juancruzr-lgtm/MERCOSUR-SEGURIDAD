@@ -265,6 +265,22 @@
   top: 12px;
 }
 
+/* Mapa a todo el ancho: la lista de puntos pasa abajo y el mapa deja de estar
+   encerrado en una columna de 360 px, donde ubicar un punto sobre la imagen
+   satelital es imposible. Sólo layout. */
+.pointsWorkspaceAncho {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pointsWorkspaceAncho .mapColumn {
+  order: -1;
+  position: static;
+}
+
+.pointsWorkspaceAncho .mapCanvas {
+  height: min(72vh, 760px);
+}
+
 .mapHeader {
   align-items: center;
   display: flex;

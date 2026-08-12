@@ -148,6 +148,11 @@ export default function PaginaGps({
   const [historialUbicaciones, setHistorialUbicaciones] = useState<UbicacionVigencia[]>([])
   const [puntosRondaObjetivo, setPuntosRondaObjetivo] = useState(0)
   const [vigenteDesde, setVigenteDesde] = useState('')
+  // Mover un punto de ronda: mismo criterio que el objetivo. Arrastrar propone,
+  // confirmar guarda.
+  const [modoMoverPunto, setModoMoverPunto] = useState(false)
+  const [puntoPropuesto, setPuntoPropuesto] = useState<{ id: string; lat: number; lng: number } | null>(null)
+  const [guardandoPunto, setGuardandoPunto] = useState(false)
   // Radio tentativo del punto seleccionado, todavía sin guardar. Sólo se dibuja.
   const [radioPreview, setRadioPreview] = useState<number | null>(null)
   const [mensaje, setMensaje] = useState('')
@@ -349,9 +354,21 @@ export default function PaginaGps({
     limpiarAvisos()
     setMarcaciones([])
     setRadioPreview(null)
+    if (puntoPropuesto && puntoPropuesto.id !== puntoId) setPuntoPropuesto(null)
+    setModoMoverPunto(false)
     const punto = puntos.find(p => p.id === puntoId)
     if (punto) setSeleccion({ tipo: 'punto', datos: punto })
   }
+
+  // Metros entre la posición guardada del punto y la propuesta a mano.
+  const metrosPuntoPropuesto = useMemo(() => {
+    if (!puntoPropuesto) return null
+    const punto = puntos.find(p => p.id === puntoPropuesto.id)
+    if (!punto) return null
+    return Math.round(distanciaMetrosCoordenadas(
+      punto.latitud, punto.longitud, puntoPropuesto.lat, puntoPropuesto.lng,
+    ))
+  }, [puntoPropuesto, puntos])
 
   // Estable: el panel la deja fuera de las dependencias de su efecto.
   const previsualizarRadio = useCallback((metros: number | null) => {
@@ -633,6 +650,54 @@ export default function PaginaGps({
     setMensaje('Sugerencia aplicada y auditada como diagnostico_gps.')
   }
 
+  /**
+   * Confirma la nueva ubicación de un punto de ronda.
+   *
+   * Escribe por `actualizarPunto()`, la misma ruta que el editor de Rondas, sin
+   * contexto de diagnóstico: la auditoría lo registra como cambio manual.
+   * `origen_posicion: 'manual'` porque la posición la puso una persona sobre el
+   * mapa, no una captura GPS — y con eso el servidor limpia la precisión, que
+   * dejó de tener sentido.
+   */
+  const confirmarUbicacionPunto = async () => {
+    if (!puntoPropuesto) return
+    limpiarAvisos()
+
+    const punto = puntos.find(p => p.id === puntoPropuesto.id)
+    if (!punto) return
+
+    const movido = Math.round(distanciaMetrosCoordenadas(
+      punto.latitud, punto.longitud, puntoPropuesto.lat, puntoPropuesto.lng,
+    ))
+
+    const confirmado = window.confirm(
+      `Se va a mover el punto "${punto.nombre}" ${movido} m.\n\n` +
+      `Antes:    ${punto.latitud.toFixed(6)}, ${punto.longitud.toFixed(6)}\n` +
+      `Después:  ${puntoPropuesto.lat.toFixed(6)}, ${puntoPropuesto.lng.toFixed(6)}\n` +
+      `Radio: ${punto.radioMetros ?? '—'} m (no cambia)\n\n` +
+      'Es el lugar donde el vigilador tiene que marcar. El cambio queda ' +
+      'registrado en la auditoría del punto como modificación manual.\n\n¿Confirmás?',
+    )
+    if (!confirmado) return
+
+    setGuardandoPunto(true)
+    const { error: errorGuardar } = await actualizarPunto(punto.id, {
+      latitud: puntoPropuesto.lat,
+      longitud: puntoPropuesto.lng,
+      origen_posicion: 'manual',
+    })
+    setGuardandoPunto(false)
+
+    if (errorGuardar) { setError(errorGuardar); return }
+
+    setPuntoPropuesto(null)
+    setModoMoverPunto(false)
+    const frescos = await cargarPuntos()
+    const actualizado = frescos.find(p => p.id === punto.id)
+    if (actualizado) setSeleccion({ tipo: 'punto', datos: actualizado })
+    setMensaje(`Punto movido ${movido} m y auditado.`)
+  }
+
   const verMarcaciones = async (punto: PuntoRondaGps) => {
     limpiarAvisos()
     setCargandoMarcaciones(true)
@@ -752,6 +817,14 @@ export default function PaginaGps({
             marcaciones={marcacionesCapa}
             puntoSeleccionadoId={seleccion?.tipo === 'punto' ? seleccion.datos.id : null}
             radioPreviewMetros={radioPreview}
+            puntoArrastrableId={
+              modoMoverPunto && seleccion?.tipo === 'punto' ? seleccion.datos.id : null
+            }
+            puntoPropuesto={puntoPropuesto}
+            onPuntoArrastrado={(id, lat, lng) => {
+              limpiarAvisos()
+              setPuntoPropuesto({ id, lat, lng })
+            }}
             onPuntoClick={seleccionarPunto}
             onObjetivoClick={(id: string) => {
               limpiarAvisos()
@@ -831,6 +904,15 @@ export default function PaginaGps({
           metrosPropuestos={metrosPropuestos}
           onAnalizarObjetivo={analizarObjetivo}
           onAplicarObjetivo={aplicarObjetivo}
+          puntoCtl={{
+            modoMover: modoMoverPunto,
+            propuesto: puntoPropuesto,
+            metrosPropuestos: metrosPuntoPropuesto,
+            guardando: guardandoPunto,
+            onIniciarMover: () => { limpiarAvisos(); setModoMoverPunto(true) },
+            onCancelarMover: () => { setModoMoverPunto(false); setPuntoPropuesto(null) },
+            onConfirmar: confirmarUbicacionPunto,
+          }}
           objetivoCtl={{
             modoMover,
             tipoUbicacion: (seleccion?.tipo === 'objetivo' && seleccion.datos.tipo_ubicacion === 'movil')
@@ -848,7 +930,8 @@ export default function PaginaGps({
           onCerrar={() => {
             setSeleccion(null); setMarcaciones([]); setRadioPreview(null)
             setObjetivoPropuesto(null); setDiagnosticoObjetivo(null)
-            setModoMover(false); setVigenteDesde(''); limpiarAvisos()
+            setModoMover(false); setVigenteDesde('')
+            setModoMoverPunto(false); setPuntoPropuesto(null); limpiarAvisos()
           }}
         />
       </div>

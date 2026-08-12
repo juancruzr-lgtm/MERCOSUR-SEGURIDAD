@@ -43,11 +43,15 @@ function Recentrar({ lat, lng }: { lat: number; lng: number }) {
 }
 
 export default function ObjetivoUbicacionMap({ lat, lng, radioMetros, nombre }: Props) {
+  // Antes eran 260 px fijos: el objetivo y su radio quedaban apretados contra
+  // los bordes y no se distinguía el portón del predio. Ahora acompaña la
+  // altura del resto de los mapas del sistema, con un piso para pantallas
+  // chicas. Sólo cambia el tamaño: ni la lógica ni los datos.
   return (
     <MapContainer
       center={[lat, lng]}
       zoom={17}
-      style={{ height: 260, width: '100%', borderRadius: 10 }}
+      style={{ height: 'min(52vh, 460px)', minHeight: 300, width: '100%', borderRadius: 10 }}
       scrollWheelZoom={false}
     >
       <TileLayer

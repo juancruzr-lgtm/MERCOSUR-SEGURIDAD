@@ -136,6 +136,15 @@ type Props = {
    */
   objetivoSugerido?: { id: string; lat: number; lng: number; radioMetros: number } | null
   /**
+   * Punto de ronda que se puede arrastrar. Sólo uno, sólo el seleccionado, y
+   * sólo cuando la pantalla lo pide. Arrastrar NO guarda: avisa la posición
+   * propuesta y la pantalla decide, con confirmación.
+   */
+  puntoArrastrableId?: string | null
+  onPuntoArrastrado?: (puntoId: string, lat: number, lng: number) => void
+  /** Posición propuesta del punto, todavía sin guardar. */
+  puntoPropuesto?: { id: string; lat: number; lng: number } | null
+  /**
    * Radio que se está probando para el punto seleccionado, todavía sin guardar.
    * Se dibuja punteado sobre el radio actual para poder compararlos.
    */
@@ -415,6 +424,9 @@ export default function MapaOperativo({
   onObjetivoArrastrado,
   objetivoPropuesto = null,
   objetivoSugerido = null,
+  puntoArrastrableId = null,
+  onPuntoArrastrado,
+  puntoPropuesto = null,
   onPuntoClick,
   onObjetivoClick,
   onSupervisionClick,
@@ -632,15 +644,26 @@ export default function MapaOperativo({
           })}
 
           {/* Capa: puntos de ronda + su radio configurado */}
-          {puntosActivos.map(p => (
+          {puntosActivos.map(p => {
+            const propuestoPunto = puntoPropuesto?.id === p.id ? puntoPropuesto : null
+            // El radio sigue al punto propuesto: lo que interesa ver es dónde
+            // quedaría la zona de control, no dónde estaba.
+            const centroPunto: [number, number] = propuestoPunto
+              ? [propuestoPunto.lat, propuestoPunto.lng]
+              : [p.lat, p.lng]
+            const puntoArrastrable = p.id === puntoArrastrableId
+
+            return (
             <React.Fragment key={p.id}>
               {p.radioMetros !== null && p.radioMetros > 0 && (
                 <Circle
-                  center={[p.lat, p.lng]}
+                  center={centroPunto}
                   radius={p.radioMetros}
                   pathOptions={{
-                    color: p.conRecomendacion ? COLOR_PUNTO_RONDA_ALERTA : COLOR_PUNTO_RONDA,
-                    fillColor: p.conRecomendacion ? COLOR_PUNTO_RONDA_ALERTA : COLOR_PUNTO_RONDA,
+                    color: propuestoPunto ? '#38bdf8'
+                      : p.conRecomendacion ? COLOR_PUNTO_RONDA_ALERTA : COLOR_PUNTO_RONDA,
+                    fillColor: propuestoPunto ? '#38bdf8'
+                      : p.conRecomendacion ? COLOR_PUNTO_RONDA_ALERTA : COLOR_PUNTO_RONDA,
                     fillOpacity: 0.06,
                     weight: p.id === puntoSeleccionadoId ? 2.5 : 1.5,
                   }}
@@ -650,7 +673,7 @@ export default function MapaOperativo({
                   encima del actual, para poder comparar uno con otro. */}
               {p.id === puntoSeleccionadoId && radioPreviewMetros !== null && radioPreviewMetros > 0 && (
                 <Circle
-                  center={[p.lat, p.lng]}
+                  center={centroPunto}
                   radius={radioPreviewMetros}
                   pathOptions={{
                     color: '#38bdf8',
@@ -662,9 +685,20 @@ export default function MapaOperativo({
                 />
               )}
               <Marker
-                position={[p.lat, p.lng]}
+                position={centroPunto}
                 icon={puntoRondaIcon(p, p.id === puntoSeleccionadoId)}
-                eventHandlers={onPuntoClick ? { click: () => onPuntoClick(p.id) } : undefined}
+                draggable={puntoArrastrable}
+                eventHandlers={{
+                  ...(onPuntoClick ? { click: () => onPuntoClick(p.id) } : {}),
+                  ...(puntoArrastrable && onPuntoArrastrado
+                    ? {
+                        dragend: (evento: any) => {
+                          const posicion = evento.target.getLatLng()
+                          onPuntoArrastrado(p.id, posicion.lat, posicion.lng)
+                        },
+                      }
+                    : {}),
+                }}
               >
                 <Popup>
                   <div style={{ minWidth: 190, fontSize: 13 }}>
@@ -678,11 +712,17 @@ export default function MapaOperativo({
                         {p.diagnostico}
                       </div>
                     )}
+                    {puntoArrastrable && (
+                      <div style={{ color: '#0369a1', fontSize: 12, marginTop: 4, fontWeight: 600 }}>
+                        Arrastralo para proponer otra ubicación.
+                      </div>
+                    )}
                   </div>
                 </Popup>
               </Marker>
             </React.Fragment>
-          ))}
+            )
+          })}
 
           {/* Marcaciones históricas del punto seleccionado. EVIDENCIA: sin
               eventHandlers, sin draggable. Sólo se miran. */}

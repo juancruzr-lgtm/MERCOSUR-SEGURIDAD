@@ -70,6 +70,7 @@ export default function PanelDetalle({
   metrosPropuestos,
   onAnalizarObjetivo,
   onAplicarObjetivo,
+  puntoCtl,
   objetivoCtl,
   onCerrar,
 }: {
@@ -100,6 +101,16 @@ export default function PanelDetalle({
   metrosPropuestos: number | null
   onAnalizarObjetivo: (objetivoId: string) => void
   onAplicarObjetivo: () => void
+  /** Mover el punto de ronda seleccionado. Arrastrar propone, confirmar guarda. */
+  puntoCtl: {
+    modoMover: boolean
+    propuesto: { id: string; lat: number; lng: number } | null
+    metrosPropuestos: number | null
+    guardando: boolean
+    onIniciarMover: () => void
+    onCancelarMover: () => void
+    onConfirmar: () => void
+  }
   /** Todo lo que hace falta para gestionar la ubicación del objetivo. */
   objetivoCtl: {
     modoMover: boolean
@@ -555,7 +566,66 @@ export default function PanelDetalle({
               </div>
             </div>
 
+            {/* ── Mover el punto ───────────────────────────────────────── */}
+            {puntoCtl.propuesto?.id === p.id ? (
+              <>
+                <div className={`${styles.diagnostico} ${styles.diagnosticoAlerta}`}>
+                  <div style={{ fontWeight: 700 }}>Nueva ubicación sin guardar</div>
+                  <div style={{ marginTop: 4 }}>Antes: {coordenada(p.latitud, p.longitud)}</div>
+                  <div>
+                    Propuesta: {puntoCtl.propuesto.lat.toFixed(6)}, {puntoCtl.propuesto.lng.toFixed(6)}
+                  </div>
+                  {puntoCtl.metrosPropuestos !== null && (
+                    <div>Desplazamiento: {puntoCtl.metrosPropuestos} m</div>
+                  )}
+                  <div>Radio: {p.radioMetros !== null ? `${p.radioMetros} m` : '—'} (no cambia)</div>
+                </div>
+                <div className={styles.acciones}>
+                  <button
+                    className={`${styles.boton} ${styles.botonPrimario}`}
+                    type="button"
+                    onClick={puntoCtl.onConfirmar}
+                    disabled={puntoCtl.guardando}
+                  >
+                    {puntoCtl.guardando ? 'Guardando…' : 'Guardar ubicación'}
+                  </button>
+                  <button
+                    className={styles.boton}
+                    type="button"
+                    onClick={puntoCtl.onCancelarMover}
+                    disabled={puntoCtl.guardando}
+                  >
+                    Descartar
+                  </button>
+                </div>
+              </>
+            ) : puntoCtl.modoMover ? (
+              <div className={`${styles.diagnostico} ${styles.diagnosticoNeutro}`}>
+                <div style={{ fontWeight: 700 }}>Modo mover activo</div>
+                <div style={{ marginTop: 4 }}>
+                  Arrastrá el marcador de este punto hasta el lugar correcto. Sobre
+                  Satélite o Híbrido se ve dónde está el portón de verdad. No se
+                  guarda hasta que confirmes.
+                </div>
+                <div className={styles.acciones}>
+                  <button className={styles.boton} type="button" onClick={puntoCtl.onCancelarMover}>
+                    Salir del modo mover
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div className={styles.acciones}>
+              {!puntoCtl.modoMover && !puntoCtl.propuesto && (
+                <button
+                  className={styles.boton}
+                  type="button"
+                  onClick={puntoCtl.onIniciarMover}
+                  disabled={analizando || aplicando || guardandoRadio}
+                >
+                  📍 Mover punto
+                </button>
+              )}
               <button
                 className={styles.boton}
                 type="button"
