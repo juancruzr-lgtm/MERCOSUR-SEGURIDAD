@@ -135,6 +135,27 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
     if (creada) configPorTipo.set(tipo, creada)
   }
 
+  // ── Objetivos móviles ───────────────────────────────────────────────────
+  // Un objetivo móvil es una máquina que se traslada todos los días: no hay
+  // garita, y sin garita no hay libro de guardia. La foto que sube el vigilador
+  // en ese campo es del puesto o del equipo, no de un libro — el modelo la
+  // evaluaba con los criterios "cargado" y "sin tachaduras", respondía que no
+  // hay libro, y cada ingreso terminaba en la bandeja como si fuera una falta.
+  //
+  // Se resuelve sin columna nueva: en esta operación "se traslada" y "no tiene
+  // libro" son el mismo hecho, y la ausencia de garita es la causa de ambos.
+  // Si algún día aparece un móvil que sí lleva libro, ahí sí hace falta separar
+  // los dos conceptos en una columna propia.
+  const objetivoIds = [...new Set(evidencias.map(e => e.objetivo_id).filter(Boolean))]
+  const { data: objetivos } = await client
+    .from('objetivos')
+    .select('id, tipo_ubicacion')
+    .in('id', objetivoIds)
+
+  const objetivoEsMovil = new Set(
+    (objetivos ?? []).filter(o => o.tipo_ubicacion === 'movil').map(o => o.id as string),
+  )
+
   const proveedor = new GeminiVision()
   const schema = schemaRespuesta()
   const resultados: ResultadoItem[] = []
@@ -170,6 +191,19 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
     }
     if (!ev.objetivo_id) {
       resultados.push({ evidencia_id: ev.id, estado: 'omitida', motivo: 'Evidencia sin objetivo' })
+      continue
+    }
+
+    // Se omite ANTES de reclamar la fila y antes de llamar a Gemini: no gasta
+    // cuota, no crea análisis, no llega a la bandeja y no cuenta como error.
+    // La evidencia se sigue guardando; simplemente no se juzga contra un
+    // criterio que en ese objetivo no aplica.
+    if (ev.tipo_evidencia === 'libro_guardia' && objetivoEsMovil.has(ev.objetivo_id)) {
+      resultados.push({
+        evidencia_id: ev.id,
+        estado: 'omitida',
+        motivo: 'Objetivo móvil: sin garita no hay libro de guardia',
+      })
       continue
     }
 

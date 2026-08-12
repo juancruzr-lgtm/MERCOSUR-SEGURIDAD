@@ -74,3 +74,49 @@ describe('resumirIngresos', () => {
     })
   })
 })
+
+describe('objetivo movil: el libro no aplica', () => {
+  // Maquinas que se trasladan todos los dias. Sin garita no hay libro, y el
+  // vigilador igual sube una foto del puesto en ese campo porque el fichaje se
+  // la exige. Antes esa foto se juzgaba con los criterios del libro y cada
+  // ingreso terminaba marcado.
+  const movil = (over: Partial<EstadoFoto> = {}): Ingreso => ({
+    uniforme: { recibida: true, clasificacion: 'SIN_OBSERVACIONES', revision: 'PENDIENTE' },
+    libro: { recibida: true, clasificacion: null, revision: null, noAplica: true, ...over },
+  })
+
+  it('no queda pendiente esperando un analisis que nunca va a ocurrir', () => {
+    expect(estadoIngreso(movil())).toBe('COMPLETO_SIN_OBSERVACIONES')
+  })
+
+  it('tampoco cuenta como falta de evidencia si no llego', () => {
+    expect(estadoIngreso(movil({ recibida: false }))).toBe('COMPLETO_SIN_OBSERVACIONES')
+  })
+
+  it('el uniforme sigue controlandose igual', () => {
+    const ing = movil()
+    ing.uniforme = { recibida: true, clasificacion: 'REVISAR', revision: 'PENDIENTE' }
+    expect(estadoIngreso(ing)).toBe('PENDIENTE_DE_REVISION')
+  })
+
+  it('el uniforme faltante sigue siendo falta de evidencia', () => {
+    const ing = movil()
+    ing.uniforme = { recibida: false, clasificacion: null, revision: null }
+    expect(estadoIngreso(ing)).toBe('FALTA_EVIDENCIA')
+  })
+
+  it('no infla el contador de "sin libro" del informe diario', () => {
+    const r = resumirIngresos([movil({ recibida: false }), movil()])
+    expect(r.sinLibro).toBe(0)
+    expect(r.completos).toBe(2)
+  })
+
+  it('un objetivo fijo sin libro sigue contando como falta', () => {
+    const fijo: Ingreso = {
+      uniforme: { recibida: true, clasificacion: 'SIN_OBSERVACIONES', revision: 'PENDIENTE' },
+      libro: { recibida: false, clasificacion: null, revision: null },
+    }
+    expect(estadoIngreso(fijo)).toBe('FALTA_EVIDENCIA')
+    expect(resumirIngresos([fijo]).sinLibro).toBe(1)
+  })
+})

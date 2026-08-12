@@ -49,6 +49,13 @@ const ETIQUETA_CLASIF: Record<string, string> = {
 }
 
 function CeldaFoto({ f }: { f: EstadoFoto }) {
+  // Se chequea ANTES que `recibida`: en un puesto móvil no hay libro, así que
+  // decir "FALTA LA FOTO" sería reclamar algo que la operación no pide.
+  if (f.noAplica) {
+    return <span style={badge(C.muted)} title="Puesto móvil: sin garita no hay libro de guardia">
+      NO CORRESPONDE
+    </span>
+  }
   if (!f.recibida) {
     return <span style={badge(C.red)}>FALTA LA FOTO</span>
   }
@@ -158,7 +165,22 @@ export default function IngresosDiaPanel({
 
   useEffect(() => { cargar() }, [cargar])
 
-  const resumen = useMemo(() => resumirIngresos(filas), [filas])
+  // Un objetivo móvil es una máquina que se traslada a diario: no tiene garita
+  // y por lo tanto no tiene libro de guardia. Se marca acá, al derivar, y no al
+  // traer los datos: así el cambio de un objetivo se refleja sin recargar.
+  const objetivosMoviles = useMemo(
+    () => new Set(objetivos.filter((o: any) => o.tipo_ubicacion === 'movil').map((o: any) => o.id)),
+    [objetivos],
+  )
+
+  const filasEvaluables = useMemo(
+    () => filas.map(f => objetivosMoviles.has(f.objetivoId)
+      ? { ...f, libro: { ...f.libro, noAplica: true } }
+      : f),
+    [filas, objetivosMoviles],
+  )
+
+  const resumen = useMemo(() => resumirIngresos(filasEvaluables), [filasEvaluables])
 
   if (cargando) return <div style={{ color: C.muted, padding: 24 }}>Cargando ingresos…</div>
   if (error) return <div style={{ ...card({ borderColor: C.red + '66' }), color: C.red, fontSize: 13 }}>{error}</div>
@@ -188,9 +210,9 @@ export default function IngresosDiaPanel({
         </div>
       </div>
 
-      {filas.length === 0
+      {filasEvaluables.length === 0
         ? <div style={{ ...card(), color: C.muted, fontSize: 13 }}>No hay ingresos registrados ese día.</div>
-        : filas.map(f => {
+        : filasEvaluables.map(f => {
             const estado = estadoIngreso(f)
             const color = PALETA[COLOR_ESTADO_INGRESO[estado]]
             return (

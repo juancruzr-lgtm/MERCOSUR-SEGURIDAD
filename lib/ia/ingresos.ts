@@ -28,6 +28,15 @@ export type EstadoFoto = {
   /** null = recibida pero todavía sin analizar. */
   clasificacion: 'SIN_OBSERVACIONES' | 'REVISAR' | 'EVIDENCIA_INSUFICIENTE' | null
   revision: 'PENDIENTE' | 'CORRECTO' | 'INCORRECTO' | null
+  /**
+   * Esta foto no corresponde en este objetivo: no se exige ni se analiza.
+   * Caso real: un objetivo móvil es una máquina que se traslada a diario, no
+   * tiene garita y por lo tanto no tiene libro de guardia.
+   *
+   * Es distinto de "no llegó". Una foto que no aplica no puede faltar, y
+   * tampoco puede quedar pendiente de un análisis que nunca va a ocurrir.
+   */
+  noAplica?: boolean
 }
 
 export type Ingreso = {
@@ -52,7 +61,12 @@ export type Ingreso = {
  * la IA. No son lo mismo y no deberían mezclarse.
  */
 export function estadoIngreso(ing: Ingreso): EstadoIngreso {
-  const fotos = [ing.uniforme, ing.libro]
+  // Lo que no se exige no participa de ninguna regla. Si se dejara entrar, un
+  // ingreso de objetivo móvil quedaría PENDIENTE_DE_REVISION para siempre,
+  // esperando el análisis de un libro que no existe: el mismo ruido de antes,
+  // corrido de la bandeja al resumen diario.
+  const fotos = [ing.uniforme, ing.libro].filter(f => !f.noAplica)
+  if (fotos.length === 0) return 'COMPLETO_SIN_OBSERVACIONES'
 
   if (fotos.some(f => f.revision === 'INCORRECTO')) return 'INCORRECTO_CONFIRMADO'
   if (fotos.some(f => !f.recibida)) return 'FALTA_EVIDENCIA'
@@ -92,12 +106,19 @@ export function resumirIngresos(ingresos: Ingreso[]): ResumenIngresos {
 
   for (const i of ingresos) {
     const estado = estadoIngreso(i)
-    if (i.uniforme.recibida && i.libro.recibida) r.completos++
+
+    // Una foto que no se exige nunca falta. Sin esto, cada ingreso de un
+    // objetivo móvil sumaría a "sin libro" y el informe diario mostraría como
+    // incumplimiento algo que la operación ni siquiera pide.
+    const faltaUniforme = !i.uniforme.recibida && !i.uniforme.noAplica
+    const faltaLibro    = !i.libro.recibida    && !i.libro.noAplica
+
+    if (!faltaUniforme && !faltaLibro) r.completos++
     // Las tres categorías de faltante son excluyentes: un ingreso sin ninguna
     // foto se cuenta una sola vez y no infla los otros dos contadores.
-    if (!i.uniforme.recibida && !i.libro.recibida) r.sinNinguna++
-    else if (!i.uniforme.recibida) r.sinUniforme++
-    else if (!i.libro.recibida) r.sinLibro++
+    if (faltaUniforme && faltaLibro) r.sinNinguna++
+    else if (faltaUniforme) r.sinUniforme++
+    else if (faltaLibro) r.sinLibro++
 
     if (estado === 'PENDIENTE_DE_REVISION') r.pendientes++
     if (estado === 'INCORRECTO_CONFIRMADO') r.incorrectos++

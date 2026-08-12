@@ -2776,6 +2776,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     checklist_plantilla_id: '',
     frecuencia_supervision_horas: 24,
     zona_id: '',
+    tipo_ubicacion: 'fijo',
   }
   const [form, setForm] = useState(formVacio)
 
@@ -2809,6 +2810,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       checklist_plantilla_id: o.checklist_plantilla_id || '',
       frecuencia_supervision_horas: o.frecuencia_supervision_horas || 24,
       zona_id: o.zona_id || '',
+      tipo_ubicacion: o.tipo_ubicacion || 'fijo',
     })
     setEditId(o.id)
     setModal(true)
@@ -2838,6 +2840,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       checklist_plantilla_id: form.checklist_plantilla_id || null,
       frecuencia_supervision_horas: Math.max(1, Number(form.frecuencia_supervision_horas) || 24),
       zona_id: form.zona_id || null,
+      tipo_ubicacion: form.tipo_ubicacion === 'movil' ? 'movil' : 'fijo',
     }
 
     if (editId) {
@@ -3308,6 +3311,29 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Puesto móvil. Estaba sólo en Página GPS, donde nadie lo encontraba
+              y donde además se lee como un detalle de mapa. Acá queda junto al
+              resto de lo que define el servicio, que es lo que realmente es:
+              cambia qué evidencia se le exige al vigilador. */}
+          <div style={{ marginBottom:16 }}>
+            <label style={{ ...S.label, display:'flex', alignItems:'flex-start', gap:10, cursor:'pointer' }}>
+              <input
+                type="checkbox"
+                checked={form.tipo_ubicacion === 'movil'}
+                onChange={e => setForm({ ...form, tipo_ubicacion: e.target.checked ? 'movil' : 'fijo' })}
+                style={{ marginTop:2, width:16, height:16, cursor:'pointer', flexShrink:0 }}
+              />
+              <span>
+                Puesto móvil (sin garita fija)
+                <span style={{ display:'block', fontWeight:400, fontSize:12, opacity:.7, marginTop:4, lineHeight:1.5 }}>
+                  Máquinas o equipos que se trasladan. Al no haber garita no hay libro de guardia:
+                  la IA deja de pedirlo y de marcar esos ingresos como incompletos. Además, los
+                  fichajes lejos de la coordenada cargada dejan de leerse como error de ubicación.
+                </span>
+              </span>
+            </label>
           </div>
         </Modal>
       )}
