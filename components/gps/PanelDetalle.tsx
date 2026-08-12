@@ -207,10 +207,14 @@ export default function PanelDetalle({
                   </button>
                 ))}
               </div>
+              {/* El mismo campo se tilda desde Objetivos como "Servicio móvil o
+                  eventual". Se nombra igual acá para que no parezcan dos cosas
+                  distintas, y se aclara la consecuencia sobre el libro: quien lo
+                  cambia desde el mapa no tiene por qué adivinarla. */}
               <div className={styles.ayudaRadio}>
                 {objetivoCtl.tipoUbicacion === 'movil'
-                  ? 'Se traslada. Sus ubicaciones anteriores no fueron errores, y el diagnóstico sólo mira los fichajes posteriores a la mudanza.'
-                  : 'No se traslada. Si los fichajes caen lejos, la ubicación está mal cargada.'}
+                  ? 'Servicio móvil o eventual. Se traslada: sus ubicaciones anteriores no fueron errores, y el diagnóstico sólo mira los fichajes posteriores a la mudanza. Al no haber garita fija tampoco se le exige libro de actas.'
+                  : 'No se traslada. Si los fichajes caen lejos, la ubicación está mal cargada, y se le exige libro de actas.'}
               </div>
             </div>
 

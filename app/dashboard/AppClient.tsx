@@ -3326,11 +3326,13 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
                 style={{ marginTop:2, width:16, height:16, cursor:'pointer', flexShrink:0 }}
               />
               <span>
-                Puesto móvil (sin garita fija)
+                Servicio móvil o eventual (sin garita fija)
                 <span style={{ display:'block', fontWeight:400, fontSize:12, opacity:.7, marginTop:4, lineHeight:1.5 }}>
-                  Máquinas o equipos que se trasladan. Al no haber garita no hay libro de guardia:
-                  la IA deja de pedirlo y de marcar esos ingresos como incompletos. Además, los
-                  fichajes lejos de la coordenada cargada dejan de leerse como error de ubicación.
+                  Máquinas que se trasladan a diario, o servicios de pocos días que cambian de
+                  dirección. Al no haber garita no hay libro de actas: la IA deja de pedirlo y
+                  esos ingresos dejan de figurar como incompletos. Además, los fichajes lejos de
+                  la coordenada cargada dejan de leerse como error de ubicación, porque en estos
+                  servicios la ubicación cambia de verdad.
                 </span>
               </span>
             </label>
