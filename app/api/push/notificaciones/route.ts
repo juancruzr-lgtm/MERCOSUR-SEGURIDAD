@@ -21,13 +21,21 @@ import { enviarNotificaciones } from '../../_lib/push-notificaciones'
 
 export const runtime = 'nodejs'
 
+/**
+ * Secreto propio, distinto del de /api/push/cron.
+ *
+ * No hay respaldo a CRON_SECRET a propósito: si este endpoint aceptara aquel
+ * token, quien lo tuviera podría igualmente disparar esta ruta y la separación
+ * no serviría de nada. Son dos llaves para dos puertas, y esta puerta no abre
+ * con la otra llave.
+ */
 function authOk(req: NextRequest) {
-  const expected = process.env.CRON_SECRET
-  if (!expected) return { ok: false, error: 'Falta CRON_SECRET' }
+  const expected = process.env.PUSH_CRON_SECRET
+  if (!expected) return { ok: false, error: 'Falta PUSH_CRON_SECRET' }
   const header = req.headers.get('authorization') || ''
   return header === `Bearer ${expected}`
     ? { ok: true }
-    : { ok: false, error: 'Cron no autorizado' }
+    : { ok: false, error: 'No autorizado' }
 }
 
 export async function GET(req: NextRequest) {
@@ -35,7 +43,7 @@ export async function GET(req: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json(
       { error: auth.error },
-      { status: auth.error === 'Falta CRON_SECRET' ? 500 : 401 },
+      { status: auth.error === 'Falta PUSH_CRON_SECRET' ? 500 : 401 },
     )
   }
 
@@ -43,7 +51,7 @@ export async function GET(req: NextRequest) {
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
   // ?solo_usuario=<id> limita la corrida entera a ese destinatario: es la prueba
-  // controlada previa a encender el cron. Se lee DESPUÉS de validar CRON_SECRET,
+  // controlada previa a encender el cron. Se lee DESPUÉS de validar el secreto,
   // así que sin el token no hay forma de dirigir un envío a nadie.
   //
   // Sin el parámetro el comportamiento es el global de siempre: soloUsuarioId

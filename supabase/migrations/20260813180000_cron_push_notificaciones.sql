@@ -22,13 +22,22 @@
 -- NO llama a /api/push/cron, que sí ejecuta cerrar_turnos_abiertos().
 --
 -- EL SECRETO
--- CRON_SECRET no se escribe en esta migración ni en ningún commit. Se guarda
--- una sola vez en el vault de Supabase y desde acá se lee por nombre:
+-- Este endpoint NO usa CRON_SECRET. Tiene llave propia, PUSH_CRON_SECRET, para
+-- que quien tenga la de /api/push/cron —la que sí cierra turnos— no pueda
+-- disparar ésta, ni al revés.
 --
---   select vault.create_secret('EL_VALOR_REAL', 'cron_secret_push',
---                              'Bearer token de /api/push/notificaciones');
+-- El valor no se escribe en esta migración ni en ningún commit. Vive en dos
+-- lugares, con el mismo valor:
 --
--- Ese comando se ejecuta a mano, una vez, y no queda versionado.
+--   · variables de entorno de Vercel, como PUSH_CRON_SECRET;
+--   · vault de Supabase, bajo el nombre push_cron_secret.
+--
+-- Se guarda a mano, una vez:
+--
+--   select vault.create_secret('EL_VALOR_REAL', 'push_cron_secret',
+--                              'Bearer de /api/push/notificaciones');
+--
+-- Desde acá se lee por nombre, nunca por valor.
 --
 -- Reversible: select cron.unschedule('push-notificaciones');
 
@@ -57,7 +66,7 @@ select cron.schedule(
         'Authorization',
         'Bearer ' || (select decrypted_secret
                         from vault.decrypted_secrets
-                       where name = 'cron_secret_push')
+                       where name = 'push_cron_secret')
       ),
       timeout_milliseconds := 25000
     );
