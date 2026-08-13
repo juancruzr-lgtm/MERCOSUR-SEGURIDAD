@@ -119,7 +119,10 @@ export default function BandejaPlanillas({
   const [fEstado, setFEstado] = useState<EstadoRevision | 'todos'>('todos')
   const [fFichaje, setFFichaje] = useState<FiltroTernario>('todos')
   const [fSalidaAuto, setFSalidaAuto] = useState<FiltroTernario>('todos')
-  const [soloPendientes, setSoloPendientes] = useState(false)
+  // Arranca filtrada: la bandeja es una cola de trabajo, no el registro del
+  // mes. Abrir con los 283 registros para encontrar los 75 que piden algo
+  // obligaba a barrer a ojo. El boton sigue estando para ver todo.
+  const [soloPendientes, setSoloPendientes] = useState(true)
 
   const [accionFila, setAccionFila] = useState<{ fila: FilaBandejaMensual, accion: AccionSupervisor } | null>(null)
   const [comentario, setComentario] = useState('')
