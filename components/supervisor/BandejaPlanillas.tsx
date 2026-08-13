@@ -35,10 +35,12 @@ import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud } from '@/l
 import { limitesDelMes } from '@/lib/calendario-mes'
 import { formatFechaHora } from '@/lib/formato'
 import {
-  ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, cubreElTurno, etiquetaDiferencia,
-  estadoRevision, etiquetaResumenMes, filtrarFilasBandeja, planCorreccionHorario,
+  ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, ETIQUETA_MOTIVO_NO_CUBRE,
+  ETIQUETA_NO_REQUIERE_REVISION, cubreElTurno, etiquetaDiferencia,
+  estadoRevision, etiquetaResumenMes, filtrarFilasBandeja, motivoNoCubre,
+  planCorreccionHorario,
   objetivoEnAlcance, opcionesObjetivo, opcionesPuesto, opcionesVigilador,
-  resumenBandejaMensual,
+  requiereRevision, resumenBandejaMensual,
 } from '@/lib/bandeja-planillas'
 import type { EstadoRevision, FilaBandejaMensual, FiltroTernario } from '@/lib/bandeja-planillas'
 
@@ -519,6 +521,12 @@ export default function BandejaPlanillas({
 
       {!cargando && !error && visibles.map(f => {
         const est = estadoRevision(f)
+        // El estado de revision y "pide accion" no son lo mismo: un turno
+        // cubierto de punta a punta que el vigilador nunca respondio sigue en
+        // estado 'pendiente' y no hay nada que hacer con el. Mostrar el estado
+        // crudo hacia que TODAS las filas dijeran "Pendiente" mientras el
+        // contador del mes decia 75 de 283.
+        const pide = requiereRevision(f)
         return (
           <div key={`${f.turnoId}-${f.empleadoId}`} style={card}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
@@ -536,7 +544,19 @@ export default function BandejaPlanillas({
               {!f.tieneFichaje && <span style={{ marginLeft: 6, color: '#ef4444' }}>· Sin fichaje</span>}
             </div>
             <div style={{ marginTop: 6, fontSize: 12 }}>
-              Estado: <span style={{ fontWeight: 700, color: COLOR_ESTADO[est] }}>{ETIQUETA_ESTADO_REVISION[est]}</span>
+              Estado:{' '}
+              {pide ? (
+                <span style={{ fontWeight: 700, color: COLOR_ESTADO[est] }}>{ETIQUETA_ESTADO_REVISION[est]}</span>
+              ) : (
+                <>
+                  <span style={{ fontWeight: 700, color: '#10b981' }}>✓ {ETIQUETA_NO_REQUIERE_REVISION}</span>
+                  {/* El estado real no se esconde: sirve para auditar quien
+                      respondio y quien no, pero deja de pedir atencion. */}
+                  <span style={{ marginLeft: 8, color: '#64748b', fontSize: 11 }}>
+                    ({ETIQUETA_ESTADO_REVISION[est].toLowerCase()})
+                  </span>
+                </>
+              )}
               {f.observaciones > 0 && <span style={{ marginLeft: 8, color: '#94a3b8' }}>{f.observaciones} obs.</span>}
             </div>
             {/* El motivo concreto por el que la fila pide revisión: el fichaje
@@ -545,7 +565,9 @@ export default function BandejaPlanillas({
               <div style={{ marginTop: 6, fontSize: 11.5, color: '#f59e0b', background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 6, padding: '6px 10px' }}>
                 {!f.tieneFichaje
                   ? `Sin fichaje sobre el turno programado (${f.horaInicioProg}–${f.horaFinProg}).`
-                  : `El fichaje no cubre el turno programado (${f.horaInicioProg}–${f.horaFinProg}): ${f.entrada && f.entrada > f.horaInicioProg ? 'entró tarde' : 'se retiró antes'}.`}
+                  : `El fichaje no cubre el turno programado (${f.horaInicioProg}–${f.horaFinProg})${
+                      motivoNoCubre(f) ? `: ${ETIQUETA_MOTIVO_NO_CUBRE[motivoNoCubre(f)!]}` : ''
+                    }.`}
                 {est === 'aceptado' && ' Aceptado por el vigilador.'}
               </div>
             )}

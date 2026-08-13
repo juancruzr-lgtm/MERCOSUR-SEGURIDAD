@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { track } from '@/lib/telemetry'
-import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
+import { etiquetaCaracteristica, notaCapacitacionIncluida } from '@/lib/caracteristica-turno'
 import { formatFechaHora } from '@/lib/formato'
 import { ETIQUETA_PRIMER_CONTROL, ETIQUETA_SALIDA_AUTOMATICA, accionesPrimerControl } from '@/lib/primer-control'
 import type { EstadoPrimerControl } from '@/lib/primer-control'
@@ -568,13 +568,19 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                               Ver resumen
                             </button>
                             {/* Abre la MISMA bandeja de revisión, filtrada por este
-                                vigilador y el mes que se está viendo. */}
-                            <button
-                              style={{ display: 'block', marginTop: 2, padding: 0, border: 'none', background: 'none', color: '#94a3b8', fontSize: 10.5, cursor: 'pointer', textDecoration: 'underline' }}
-                              onClick={() => router.push(`/dashboard?page=revision_planillas&empleado=${empleadoId}&mes=${mesSeleccionado}`)}
-                            >
-                              Ver en revisión
-                            </button>
+                                vigilador y el mes que se está viendo.
+                                Solo para quien mira el legajo de otro: la bandeja
+                                es una pantalla de administración. Al propio
+                                vigilador el link lo dejaba en "mis turnos", que no
+                                es ningún lado. */}
+                            {!datos.es_titular && (
+                              <button
+                                style={{ display: 'block', marginTop: 2, padding: 0, border: 'none', background: 'none', color: '#94a3b8', fontSize: 10.5, cursor: 'pointer', textDecoration: 'underline' }}
+                                onClick={() => router.push(`/dashboard?page=revision_planillas&empleado=${empleadoId}&mes=${mesSeleccionado}`)}
+                              >
+                                Ver en revisión
+                              </button>
+                            )}
                           </>
                         )}
                         {/* Rastro de las correcciones de horario reconocido */}
@@ -624,6 +630,16 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
             </div>
             <div style={S.totalValue}>{formatearHoras(datos.total_horas)} hs</div>
           </div>
+          {/* Este total sí suma las capacitaciones: al vigilador se le pagan.
+              Se aclara porque el mismo turno no aparece en lo que se le cobra
+              al objetivo, y sin la nota la diferencia parece un error. */}
+          {(() => {
+            const cap = datos.filas
+              .filter(f => f.caracteristica === 'capacitacion')
+              .reduce((acc, f) => ({ horas: acc.horas + (f.horas || 0), turnos: acc.turnos + 1 }), { horas: 0, turnos: 0 })
+            const nota = notaCapacitacionIncluida(cap.horas, cap.turnos)
+            return nota ? <div style={{ fontSize: 11, color: '#a78bfa', marginTop: 6, lineHeight: 1.4 }}>{nota}</div> : null
+          })()}
           <div style={S.aclaracion}>
             {datos.filas.filter(f => f.estado === 'trabajado' || f.estado === 'en_curso').length} {datos.filas.filter(f => f.estado === 'trabajado' || f.estado === 'en_curso').length === 1 ? 'día trabajado' : 'días trabajados'} ·{' '}
             {datos.filas.filter(f => f.estado === 'programado').length > 0 ? `${datos.filas.filter(f => f.estado === 'programado').length} programado(s) sin fichar · ` : ''}

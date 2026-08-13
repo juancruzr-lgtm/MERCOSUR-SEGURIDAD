@@ -32,7 +32,11 @@ import type {
   RondaLegajo, TurnoLegajo, TurnoMensualLegajo,
 } from '@/lib/legajo-objetivo'
 import { diaSemanaCorto } from '@/lib/programacion'
-import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
+import {
+  COLOR_CARACTERISTICA, ETIQUETA_CARACTERISTICA, MOTIVO_CAPACITACION,
+  caracteristicaTurno, esCapacitacion, etiquetaCaracteristica,
+} from '@/lib/caracteristica-turno'
+import type { CaracteristicaTurno } from '@/lib/caracteristica-turno'
 import { listarRondaAlertasObjetivo } from '@/lib/rondas'
 import { formatFechaHora } from '@/lib/formato'
 import {
@@ -194,12 +198,16 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     return vigiladoresActivos.find(v => v.id === id)?.nombre ?? nombrePersona(id, personasMensual)
   }
 
-  // La grilla de asignación es solo para cobertura normal: capacitaciones y
-  // coberturas/reemplazos quedan fuera de este bloque (restricción explícita).
-  // La Vista Lista, en cambio, sigue mostrando todos los turnos del mes sin
-  // filtrar — eso no cambia.
+  // La grilla muestra TODOS los turnos del mes, cualquiera sea su
+  // característica. Antes filtraba a 'normal' y el resultado era que una
+  // capacitación o una cobertura no existían para quien programa: no se veían
+  // acá y solo aparecían en la Vista Lista. Se distinguen por color, y lo que
+  // no cambia es el dinero — una capacitación se paga y no se cobra.
+  //
+  // Efecto buscado con las coberturas: quedan apiladas en la misma celda que
+  // el turno que reemplazaron (que se ve tachado, por su estado), así el
+  // reemplazo se lee como tal en vez de desaparecer.
   const turnosGrilla: TurnoGrilla[] = turnosMensual
-    .filter(t => (t.tipo_evento ?? 'normal') === 'normal')
     .map(t => ({
     id: t.id, puesto_id: t.puesto_id, puesto_nombre: t.puesto_nombre,
     fecha: t.fecha, hora_inicio: t.hora_inicio, hora_fin: t.hora_fin,
@@ -212,10 +220,17 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const desdeMes = `${mesMensual}-01`
   const hastaMes = `${mesMensual}-${String(new Date(anioMensual, mesNumMensual, 0).getDate()).padStart(2, '0')}`
   const grillaMensual = armarGrillaMensual(turnosGrilla, desdeMes, hastaMes)
+  // El conflicto se calcula sobre TODOS: nadie puede estar en una capacitación
+  // y en un turno a la vez, aunque una de las dos cosas no se le cobre a nadie.
   const conflictosGrilla = turnosEnConflicto(turnosGrilla)
   const horaActualRef = new Date()
   const horaActualStr = `${String(horaActualRef.getHours()).padStart(2,'0')}:${String(horaActualRef.getMinutes()).padStart(2,'0')}`
+  // Los chips cuentan trabajo de asignación —cuántos turnos futuros falta
+  // cubrir— y eso incluye capacitaciones: alguien tiene que ir. Lo que sigue
+  // contando solo turnos normales es la cobertura del objetivo, que vive en
+  // otro lado (lib/programacion, lib/cobertura-historica) y no se toca acá.
   const resumenMensual = resumenAsignacionMensual(turnosGrilla, hoy, horaActualStr)
+  const capacitacionesMes = turnosGrilla.filter(t => esCapacitacion(t.tipo_evento) && turnoVigente(t)).length
 
   // ── Modal: acciones sobre un turno (clic en celda) ──
   // Un solo modal con menú: asignar/cambiar/quitar vigilador, cambiar el
@@ -553,6 +568,11 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // supervisor); la RPC crear_turnos_posicion_objetivo revalida todo en
   // servidor y es la única vía de escritura.
   const [modalGenerar, setModalGenerar] = useState(false)
+  // Qué se está creando. No es un select dentro del modal: se entra por un
+  // botón u otro y el modal ya sabe qué va a crear. Elegir "capacitación" en
+  // un desplegable, con el resto del formulario idéntico, es demasiado fácil
+  // de pasar por alto —y una capacitación mal cargada no se le cobra a nadie.
+  const [genCaracteristica, setGenCaracteristica] = useState<CaracteristicaTurno>('normal')
   const [genPuesto, setGenPuesto] = useState('')
   const [genHoraInicio, setGenHoraInicio] = useState('')
   const [genHoraFin, setGenHoraFin] = useState('')
@@ -568,8 +588,23 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const [resultadoGenerar, setResultadoGenerar] = useState<string | null>(null)
   const [errorGenerar, setErrorGenerar] = useState('')
 
-  const abrirGenerar = (fila?: FilaGrillaPosicion) => {
+  /**
+   * Con qué característica arranca "+ Agregar" desde una fila.
+   *
+   * Una capacitación en un horario propio arma su propia fila. Si el botón de
+   * esa fila creara turnos normales, quien la usa cargaría cobertura facturable
+   * creyendo que suma capacitación. Solo se asume capacitación cuando TODA la
+   * fila lo es: mezclada, gana el caso habitual.
+   */
+  const caracteristicaDeFila = (fila: FilaGrillaPosicion): CaracteristicaTurno => {
+    const vigentes = Array.from(fila.celdas.values()).flat().filter(turnoVigente)
+    if (vigentes.length === 0) return 'normal'
+    return vigentes.every(t => esCapacitacion(t.tipo_evento)) ? 'capacitacion' : 'normal'
+  }
+
+  const abrirGenerar = (fila?: FilaGrillaPosicion, caracteristica?: CaracteristicaTurno) => {
     const puesto = fila?.puesto_id ?? ''
+    setGenCaracteristica(caracteristica ?? (fila ? caracteristicaDeFila(fila) : 'normal'))
     setGenPuesto(puesto)
     setGenHoraInicio(fila?.hora_inicio ?? '')
     setGenHoraFin(fila?.hora_fin ?? '')
@@ -600,9 +635,15 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       turnosExistentes: turnosParaGeneracion,
       fechaActual: hoy, horaActual: horaActualStr,
       permitirDuplicado: genDuplicar,
+      caracteristica: genCaracteristica,
     }).filas
     if (!fila) return { habilitado: false }
-    if (fila.estado === 'ya_existe') return { habilitado: false, yaResuelto: true, nota: 'Ya hay un turno en esta posición y horario' }
+    if (fila.estado === 'ya_existe') return {
+      habilitado: false, yaResuelto: true,
+      nota: genCaracteristica === 'normal'
+        ? 'Ya hay un turno en esta posición y horario'
+        : `Ya hay una ${ETIQUETA_CARACTERISTICA[genCaracteristica].toLowerCase()} en esta posición y horario`,
+    }
     if (fila.estado === 'fecha_pasada') return { habilitado: false, nota: 'Fecha pasada' }
     return { habilitado: true, nota: fila.detalle ?? undefined }
   }
@@ -628,6 +669,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         fechaActual: hoy,
         horaActual: horaActualStr,
         permitirDuplicado: genDuplicar,
+        caracteristica: genCaracteristica,
       })
 
   const confirmarGenerar = async () => {
@@ -643,6 +685,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       p_hora_fin: genHoraFin,
       p_fechas: planGenerar.fechas_a_crear,
       p_permitir_duplicado: genDuplicar,
+      p_tipo_evento: genCaracteristica,
     })
     if (error) { setGenerandoTurnos(false); setErrorGenerar(error.message); return }
 
@@ -1247,6 +1290,13 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                       <div style={{ fontSize:10, color:'#64748b' }}>{chip.label}</div>
                     </div>
                   ))}
+                  {capacitacionesMes > 0 && (
+                    <div style={{ background:'#0b1220', border:`1px solid ${COLOR_CARACTERISTICA.capacitacion}44`, borderRadius:8, padding:'6px 12px', textAlign:'center' }}
+                      title="Se le pagan al vigilador y no se le cobran al objetivo">
+                      <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:COLOR_CARACTERISTICA.capacitacion ?? '#a78bfa' }}>{capacitacionesMes}</div>
+                      <div style={{ fontSize:10, color:'#64748b' }}>Capacitación · no se cobra</div>
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
@@ -1313,6 +1363,17 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                     >
                       + Agregar turnos
                     </button>
+                    {/* Botón propio, no una opción dentro del anterior: una
+                        capacitación se paga y no se cobra, así que crearla
+                        tiene que ser una decisión y no un descuido. */}
+                    <button
+                      type="button"
+                      title="Crear turnos de capacitación: se le pagan al vigilador y no se le cobran al objetivo"
+                      style={{ ...S.btn, padding:'6px 14px', fontSize:12, background:'#2e1065', color:'#c4b5fd', border:'1px solid #4c1d95' }}
+                      onClick={() => abrirGenerar(undefined, 'capacitacion')}
+                    >
+                      + Capacitación
+                    </button>
                   </div>
                 )}
                 {mensualError && <div style={{ color:'#ef4444', fontSize:12, marginBottom:8 }}>{mensualError}</div>}
@@ -1375,11 +1436,20 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                                       // Un turno anulado no debe leerse como uno vigente: pierde
                                       // el color de estado y se muestra tachado.
                                       const anulado = !turnoVigente(t)
+                                      // Una característica que no es la habitual pisa el color de
+                                      // estado: en una grilla llena de turnos normales, lo que hay
+                                      // que ver primero es que ESE no lo es. El conflicto y la
+                                      // anulación siguen mandando por encima: son problemas.
+                                      const caract = caracteristicaTurno(t.tipo_evento)
+                                      const colorCaract = COLOR_CARACTERISTICA[caract]
                                       const colorFondo = anulado ? 'rgba(100,116,139,.07)'
                                         : conConflicto ? 'rgba(239,68,68,.15)'
+                                        : caract === 'capacitacion' ? 'rgba(167,139,250,.14)'
+                                        : caract === 'cobertura' ? 'rgba(56,189,248,.14)'
                                         : est === 'asignado' ? 'rgba(16,185,129,.1)' : 'rgba(148,163,184,.08)'
                                       const colorTexto = anulado ? '#64748b'
-                                        : conConflicto ? '#ef4444' : est === 'asignado' ? '#10b981' : '#94a3b8'
+                                        : conConflicto ? '#ef4444'
+                                        : colorCaract ?? (est === 'asignado' ? '#10b981' : '#94a3b8')
                                       const marcado = seleccion.has(t.id)
                                       return (
                                         <button
@@ -1401,13 +1471,20 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                                             if (modoSeleccion && arrastrando) pintarCelda(t.id)
                                           }}
                                           title={modoSeleccion ? (marcado ? 'Marcado — clic para desmarcar' : 'Clic o arrastrá para marcar')
-                                            : anulado ? `Turno ${t.estado} — clic para reactivarlo` : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
+                                            : anulado ? `Turno ${t.estado} — clic para reactivarlo`
+                                            : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador'
+                                            : caract === 'capacitacion' ? `Capacitación · ${ETIQUETA_ESTADO_ASIGNACION[est]} — se le paga al vigilador, no se le cobra al objetivo`
+                                            : caract === 'cobertura' ? `Cobertura (reemplazo) · ${ETIQUETA_ESTADO_ASIGNACION[est]}`
+                                            : ETIQUETA_ESTADO_ASIGNACION[est]}
                                           style={{
                                             width:'100%', minWidth:48, padding:'5px 3px', borderRadius:6, fontSize:10.5,
                                             background: marcado ? 'rgba(245,158,11,.28)' : colorFondo,
                                             color: marcado ? '#fde68a' : colorTexto,
                                             border: marcado ? '2px solid #f59e0b'
-                                              : conConflicto && !anulado ? '1px solid rgba(239,68,68,.4)' : anulado ? '1px dashed #334155' : '1px solid transparent',
+                                              : conConflicto && !anulado ? '1px solid rgba(239,68,68,.4)'
+                                              : anulado ? '1px dashed #334155'
+                                              : colorCaract && !anulado ? `1px solid ${colorCaract}66`
+                                              : '1px solid transparent',
                                             textDecoration: anulado ? 'line-through' : 'none',
                                             cursor: modoSeleccion ? 'pointer' : futuro ? 'pointer' : 'default',
                                             opacity: modoSeleccion ? 1 : futuro ? 1 : 0.55,
@@ -1416,6 +1493,14 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                                           }}
                                         >
                                           {t.guardia_nombre ? t.guardia_nombre.split(',')[0] : '—'}
+                                          {/* El color solo no alcanza: una celda sin vigilador dice
+                                              "—" y quedaría igual a cualquier otra para quien no
+                                              distingue violeta de gris. */}
+                                          {caract !== 'normal' && (
+                                            <div style={{ fontSize:8.5, letterSpacing:.2, opacity:.85, marginTop:1 }}>
+                                              {caract === 'capacitacion' ? 'CAPAC.' : 'COBERT.'}
+                                            </div>
+                                          )}
                                         </button>
                                       )
                                     })}
@@ -1664,10 +1749,20 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       {modalGenerar && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setModalGenerar(false)}>
           <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:480, maxWidth:'90vw', maxHeight:'85vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>Agregar turnos</div>
-            <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>
+              {genCaracteristica === 'capacitacion' ? 'Agregar capacitación' : 'Agregar turnos'}
+            </div>
+            <div style={{ fontSize:12, color:'#64748b', marginBottom: genCaracteristica === 'capacitacion' ? 8 : 12 }}>
               Crea los turnos de una posición para este mes. Se crean sin vigilador: la asignación es el paso siguiente.
             </div>
+            {/* El modal es el mismo para los dos casos: si no dijera qué está
+                creando, no habría forma de darse cuenta de que se entró por el
+                botón equivocado hasta ver la grilla. */}
+            {genCaracteristica === 'capacitacion' && (
+              <div style={{ fontSize:12, color:'#c4b5fd', background:'rgba(167,139,250,.1)', border:'1px solid rgba(167,139,250,.3)', borderRadius:8, padding:'8px 10px', marginBottom:12, lineHeight:1.4 }}>
+                Estos turnos se cargan como <strong>{ETIQUETA_CARACTERISTICA.capacitacion}</strong>: {MOTIVO_CAPACITACION}. No cuentan como cobertura del objetivo.
+              </div>
+            )}
 
             <label style={{ fontSize:11, color:'#64748b' }}>Posición operativa</label>
             <select

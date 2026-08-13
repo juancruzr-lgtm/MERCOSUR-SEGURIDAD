@@ -135,6 +135,61 @@ describe('planificarGeneracionGrilla — turnos ya existentes', () => {
   })
 })
 
+// La grilla ahora puede crear capacitaciones, no solo turnos normales. El
+// duplicado se mide contra la MISMA característica: una capacitación y un turno
+// normal en la misma posición y horario son dos cosas distintas —una se le
+// cobra al objetivo y la otra no— y pueden convivir.
+describe('planificarGeneracionGrilla — característica del turno', () => {
+  const normal: TurnoExistenteGrilla = {
+    puesto_id: PUESTO, fecha: '2026-08-06', hora_inicio: '22:00', hora_fin: '06:00', estado: 'programado',
+  }
+  const capacitacion: TurnoExistenteGrilla = { ...normal, tipo_evento: 'capacitacion' }
+
+  it('por defecto se planifica un turno normal (comportamiento previo)', () => {
+    const plan = planBase({ turnosExistentes: [normal] })
+    expect(plan.filas.find(f => f.fecha === '2026-08-06')?.estado).toBe('ya_existe')
+  })
+
+  it('crear capacitación donde hay un turno normal: se crea', () => {
+    const plan = planBase({ turnosExistentes: [normal], caracteristica: 'capacitacion' })
+    expect(plan.fechas_a_crear).toContain('2026-08-06')
+  })
+
+  it('crear capacitación donde ya hay esa capacitación: no se duplica', () => {
+    const plan = planBase({ turnosExistentes: [capacitacion], caracteristica: 'capacitacion' })
+    expect(plan.filas.find(f => f.fecha === '2026-08-06')?.estado).toBe('ya_existe')
+    expect(plan.fechas_a_crear).not.toContain('2026-08-06')
+  })
+
+  it('una capacitación anulada no ocupa: la fecha vuelve a estar libre', () => {
+    const plan = planBase({
+      turnosExistentes: [{ ...capacitacion, estado: 'anulado' }],
+      caracteristica: 'capacitacion',
+    })
+    expect(plan.fechas_a_crear).toContain('2026-08-06')
+  })
+
+  it('permitirDuplicado también vale para capacitaciones', () => {
+    const plan = planBase({
+      turnosExistentes: [capacitacion],
+      caracteristica: 'capacitacion',
+      permitirDuplicado: true,
+    })
+    expect(plan.fechas_a_crear).toContain('2026-08-06')
+  })
+
+  it('una capacitación no avisa "cobertura equivalente": no cubre nada', () => {
+    // Turno normal en OTRA posición, mismo día y horario: para un turno normal
+    // eso se informa; para una capacitación es ruido.
+    const enOtraPosicion = { ...normal, puesto_id: OTRO_PUESTO }
+    const comoNormal = planBase({ turnosExistentes: [enOtraPosicion] })
+    expect(comoNormal.filas.find(f => f.fecha === '2026-08-06')?.detalle).toBeTruthy()
+
+    const comoCapacitacion = planBase({ turnosExistentes: [enOtraPosicion], caracteristica: 'capacitacion' })
+    expect(comoCapacitacion.filas.find(f => f.fecha === '2026-08-06')?.detalle).toBeNull()
+  })
+})
+
 // Un puesto puede llevar más de un vigilador a la vez (MUSEO CASTAGNINO tiene 3
 // en Principal los fines de semana). Sin permitirDuplicado eso no se podía
 // cargar desde la grilla, aunque el alta manual de turnos siempre lo permitió.

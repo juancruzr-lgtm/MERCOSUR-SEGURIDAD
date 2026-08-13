@@ -3,6 +3,7 @@ import {
   ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION,
   cubreElTurno, esPendienteDeAccion, estadoRevision, etiquetaDiferencia,
   etiquetaResumenMes, filtrarFilasBandeja, horasDelTramo, horasProgramadas,
+  motivoNoCubre,
   nombreMes, objetivoEnAlcance, planCorreccionHorario, requiereRevision,
   opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   resumenBandejaMensual,
@@ -144,6 +145,48 @@ describe('cubreElTurno — turno de 07:00 a 19:00', () => {
   it('la tolerancia se puede pasar por parámetro sin tocar la constante', () => {
     expect(cubreElTurno(fila({ entrada: '07:10', salida: '19:00' }), 5)).toBe(false)
     expect(cubreElTurno(fila({ entrada: '07:10', salida: '19:00' }), 15)).toBe(true)
+  })
+})
+
+// El motivo que se le muestra al supervisor tiene que señalar el lado que
+// realmente falló. La bandeja lo decidía con `entrada > horaInicioProg`, sin
+// tolerancia: una entrada un minuto tarde —que cubre— tapaba una salida
+// anticipada y mandaba a mirar el lado equivocado. Caso real del 12/08/2026:
+// RAPSODIA 08:30–20:30, fichaje 08:37–20:07, decía "entró tarde".
+describe('motivoNoCubre — el lado que realmente falla', () => {
+  const motivo = (entrada: string | null, salida: string | null) =>
+    motivoNoCubre(fila({ entrada, salida }))
+
+  it('cubre: no hay motivo', () => expect(motivo('07:00', '19:00')).toBeNull())
+  it('entrada dentro de tolerancia, salida anticipada → se retiró antes', () => {
+    expect(motivo('07:07', '18:37')).toBe('se_retiro_antes')
+  })
+  it('entrada tarde, salida completa → entró tarde', () => {
+    expect(motivo('07:40', '19:00')).toBe('entro_tarde')
+  })
+  it('las dos cosas', () => expect(motivo('07:40', '18:00')).toBe('ambos'))
+  it('sin fichaje no se puede decir el motivo', () => expect(motivo(null, null)).toBeNull())
+
+  it('el caso de RAPSODIA: 08:30–20:30 fichando 08:37–20:07', () => {
+    const f = fila({ horaInicioProg: '08:30', horaFinProg: '20:30', entrada: '08:37', salida: '20:07' })
+    expect(cubreElTurno(f)).toBe(false)
+    expect(motivoNoCubre(f)).toBe('se_retiro_antes')
+  })
+
+  it('nocturno: se retira antes cruzando medianoche', () => {
+    const f = fila({ horaInicioProg: '22:00', horaFinProg: '06:00', entrada: '22:05', salida: '05:00' })
+    expect(motivoNoCubre(f)).toBe('se_retiro_antes')
+  })
+
+  it('coherente con cubreElTurno: hay motivo si y solo si no cubre', () => {
+    const casos: Array<[string, string]> = [
+      ['07:00', '19:00'], ['07:15', '19:00'], ['07:16', '19:00'],
+      ['07:00', '18:45'], ['07:00', '18:44'], ['07:40', '18:00'],
+    ]
+    for (const [e, s] of casos) {
+      const f = fila({ entrada: e, salida: s })
+      expect(motivoNoCubre(f) === null).toBe(cubreElTurno(f))
+    }
   })
 })
 

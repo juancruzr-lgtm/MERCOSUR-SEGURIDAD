@@ -21,8 +21,10 @@
  *   · ESTADOS_SIN_OBLIGACION de lib/revision-operativa — un turno anulado,
  *     reemplazado o cancelado NO ocupa el lugar: esa fecha vuelve a estar
  *     libre para programar;
- *   · caracteristicaTurno de lib/caracteristica-turno — solo los turnos
- *     'normal' ocupan cobertura; una capacitación no bloquea la generación;
+ *   · caracteristicaTurno de lib/caracteristica-turno — la deduplicación se
+ *     hace contra turnos de la MISMA característica (una capacitación no
+ *     bloquea un turno normal ni al revés) y solo los 'normal' ocupan
+ *     cobertura del objetivo;
  *   · la deduplicación por objetivo+puesto+fecha+horario y la etiqueta
  *     DETALLE_COBERTURA_EQUIVALENTE de lib/programacion — mismo criterio y
  *     mismo texto que ya usa la vista previa mensual;
@@ -34,6 +36,7 @@ import type { PatronDias } from '@/lib/asignacion-mensual'
 import { DETALLE_COBERTURA_EQUIVALENTE, diaSemanaCorto } from '@/lib/programacion'
 import { ESTADOS_SIN_OBLIGACION } from '@/lib/revision-operativa'
 import { caracteristicaTurno } from '@/lib/caracteristica-turno'
+import type { CaracteristicaTurno } from '@/lib/caracteristica-turno'
 
 // ── Clasificación de cada fecha del rango ────────────────────────────────────
 
@@ -132,9 +135,23 @@ export function motivoBloqueoGeneracion(params: {
 
 // ── Plan ─────────────────────────────────────────────────────────────────────
 
-/** Turno existente que sigue ocupando el lugar (no anulado/reemplazado/cancelado). */
+/** Turno vigente: no anulado, no reemplazado, no cancelado. */
+const vigente = (t: TurnoExistenteGrilla) => !ESTADOS_SIN_OBLIGACION.has(t.estado || '')
+
+/**
+ * Duplicado a evitar: un turno vigente de la MISMA característica.
+ *
+ * Se compara contra la característica que se está creando, no siempre contra
+ * 'normal'. Programar una capacitación donde ya hay un turno normal es
+ * legítimo —son cosas distintas, una se cobra y la otra no— pero cargar dos
+ * veces la misma capacitación sigue siendo el error que hay que frenar.
+ */
+const mismaCaracteristica = (t: TurnoExistenteGrilla, caracteristica: CaracteristicaTurno) =>
+  vigente(t) && caracteristicaTurno(t.tipo_evento) === caracteristica
+
+/** Solo un turno normal vigente ocupa cobertura del objetivo. */
 const ocupaCobertura = (t: TurnoExistenteGrilla) =>
-  !ESTADOS_SIN_OBLIGACION.has(t.estado || '') && caracteristicaTurno(t.tipo_evento) === 'normal'
+  vigente(t) && caracteristicaTurno(t.tipo_evento) === 'normal'
 
 /**
  * Expande el rango elegido a fechas y clasifica cada una. No crea nada.
@@ -167,10 +184,16 @@ export function planificarGeneracionGrilla(params: {
    * manual de turnos.
    */
   permitirDuplicado?: boolean
+  /**
+   * Qué se está creando. Por defecto 'normal', que es lo que hacía este
+   * planificador antes de que la grilla pudiera cargar capacitaciones.
+   */
+  caracteristica?: CaracteristicaTurno
 }): PlanGeneracionGrilla {
   const {
     puestoId, desde, hasta, patron, diasSeleccionados, excluir,
     turnosExistentes, fechaActual, horaActual, permitirDuplicado = false,
+    caracteristica = 'normal',
   } = params
   const horaInicio = hora5(params.horaInicio)
   const horaFin = hora5(params.horaFin)
@@ -187,10 +210,16 @@ export function planificarGeneracionGrilla(params: {
   const ocupado = new Map<string, number>()
   const equivalente = new Set<string>()
   for (const t of turnosExistentes) {
-    if (!ocupaCobertura(t)) continue
     const franja = `${t.fecha}|${hora5(t.hora_inicio)}|${hora5(t.hora_fin)}`
-    if ((t.puesto_id ?? '') === puestoId) ocupado.set(franja, (ocupado.get(franja) ?? 0) + 1)
-    else equivalente.add(franja)
+    // Duplicado: se mide contra turnos de la misma característica y posición.
+    if ((t.puesto_id ?? '') === puestoId && mismaCaracteristica(t, caracteristica)) {
+      ocupado.set(franja, (ocupado.get(franja) ?? 0) + 1)
+    }
+    // Cobertura equivalente en otra posición: solo tiene sentido avisarlo
+    // cuando lo que se crea es cobertura real. Una capacitación no cubre nada.
+    if ((t.puesto_id ?? '') !== puestoId && caracteristica === 'normal' && ocupaCobertura(t)) {
+      equivalente.add(franja)
+    }
   }
 
   const filas: FilaGeneracion[] = []
