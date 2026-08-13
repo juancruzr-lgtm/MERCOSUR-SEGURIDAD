@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   estadoPunto, estadoRonda, gpsFueraRadio, leerCoincidencia,
-  requiereRevision, resumirRonda, type EntradaPunto,
+  gpsExcedeMargenDeError, requiereRevision, resumirRonda, type EntradaPunto,
 } from '../lib/ia/rondas'
 
 const base: EntradaPunto = {
@@ -167,5 +167,51 @@ describe('leerCoincidencia', () => {
   it('ignora valores fuera del vocabulario', () => {
     expect(leerCoincidencia({ elementos: [{ clave: 'coincide_con_referencia', valor: 'QUIZAS' }] }))
       .toBeNull()
+  })
+})
+
+describe('gpsExcedeMargenDeError', () => {
+  // Caso real de la bandeja del 13/08: "GPS a 16 m del punto. La imagen coincide
+  // correctamente con la referencia formal." El punto tenia radio 10 y el equipo
+  // midio con 30 m de error: esos 6 m de exceso no se distinguen de cero.
+  it('un exceso menor que la precision del equipo no es desvio', () => {
+    expect(gpsExcedeMargenDeError({
+      distanciaMetros: 16, radioMetros: 10, precisionMetros: 30,
+    })).toBe(false)
+  })
+
+  it('un desvio grande con buena precision si lo es', () => {
+    // 138 m con precision de 9: el equipo sabe muy bien donde esta.
+    expect(gpsExcedeMargenDeError({
+      distanciaMetros: 138, radioMetros: 50, precisionMetros: 9,
+    })).toBe(true)
+  })
+
+  it('justo en el limite no cuenta como desvio', () => {
+    expect(gpsExcedeMargenDeError({
+      distanciaMetros: 40, radioMetros: 10, precisionMetros: 30,
+    })).toBe(false)
+  })
+
+  it('un metro mas alla del limite si', () => {
+    expect(gpsExcedeMargenDeError({
+      distanciaMetros: 41, radioMetros: 10, precisionMetros: 30,
+    })).toBe(true)
+  })
+
+  it('sin precision no se puede afirmar que sea ruido: lo trata como desvio', () => {
+    expect(gpsExcedeMargenDeError({
+      distanciaMetros: 100, radioMetros: 50, precisionMetros: null,
+    })).toBe(true)
+  })
+
+  it('sin distancia o sin radio tampoco descarta nada', () => {
+    expect(gpsExcedeMargenDeError({ distanciaMetros: null, radioMetros: 50, precisionMetros: 10 })).toBe(true)
+    expect(gpsExcedeMargenDeError({ distanciaMetros: 100, radioMetros: null, precisionMetros: 10 })).toBe(true)
+  })
+
+  it('valores corruptos no rompen ni inventan un descarte', () => {
+    expect(gpsExcedeMargenDeError({ distanciaMetros: NaN, radioMetros: 10, precisionMetros: 30 })).toBe(true)
+    expect(gpsExcedeMargenDeError({ distanciaMetros: 16, radioMetros: 10, precisionMetros: -5 })).toBe(true)
   })
 })

@@ -102,6 +102,40 @@ export function gpsFueraRadio(p: EntradaPunto): boolean {
   return p.dentroRadio === false
 }
 
+/**
+ * ¿El punto quedó fuera del radio por MÁS de lo que el equipo puede medir?
+ *
+ * "Fuera del radio" es una comparación contra un número exacto, pero la medición
+ * no lo es. Un teléfono que informa 30 m de precisión y cae a 16 m de un punto
+ * con radio 10 no estuvo lejos: estuvo dentro del margen de error de su propio
+ * sensor. Tratar eso como desvío manda a revisión fotos impecables todos los
+ * días, y el revisor aprende a apretar CORRECTO sin mirar — que es la forma más
+ * cara de romper un control.
+ *
+ * Sólo tiene sentido preguntarlo cuando `dentro_radio` ya dio false.
+ *
+ * Ante la falta de datos devuelve true: sin precisión no se puede afirmar que
+ * el desvío sea ruido, y el lado seguro es que una persona lo mire.
+ *
+ * Esto NO reemplaza corregir un radio mal configurado. Un punto con radio de
+ * 10 m y precisión de 34 m sigue estando mal cargado; esto sólo evita que su
+ * error de configuración se cobre en horas de revisión.
+ */
+export function gpsExcedeMargenDeError(m: {
+  distanciaMetros: number | null
+  radioMetros: number | null
+  precisionMetros: number | null
+}): boolean {
+  const { distanciaMetros: d, radioMetros: r, precisionMetros: p } = m
+  if (d == null || r == null || p == null) return true
+  if (!Number.isFinite(d) || !Number.isFinite(r) || !Number.isFinite(p)) return true
+  if (p < 0) return true
+
+  // Cuánto se pasó del borde del radio. Si eso entra en el error de medición,
+  // la lectura no distingue "se pasó" de "no se pasó".
+  return (d - r) > p
+}
+
 /** ¿Este punto necesita que una persona lo mire? */
 export function requiereRevision(p: EntradaPunto): boolean {
   const e = estadoPunto(p)

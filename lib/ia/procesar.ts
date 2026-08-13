@@ -12,6 +12,7 @@ import { catalogoInicial, leerCriterios } from './referencias'
 import { bloqueContextoVisual, construirPrompt, derivarClasificacion, normalizarResultado, schemaRespuesta, type Umbrales } from './contratos'
 import { GeminiVision, MODELO_GEMINI_DEFECTO } from './gemini'
 import { cargarMemoriaPunto, LIMITES_MEMORIA_DEFECTO, type EjemploPedido, type LimitesMemoria } from './memoria'
+import { gpsExcedeMargenDeError } from './rondas'
 import { ErrorProveedor } from './proveedor'
 
 export const TIPOS_SOPORTADOS = ['uniforme', 'libro_guardia', 'punto_control'] as const
@@ -216,12 +217,15 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
     // dentro_radio no decide si se analiza: agrega contexto al resultado.
     let rondaPuntoId: string | null = null
     let gpsFueraRadio = false
+    let gpsDesvioReal = false
     let distanciaMetros: number | null = null
+    let precisionMetros: number | null = null
+    let radioMetros: number | null = null
 
     if (ev.tipo_evidencia === 'punto_control') {
       const { data: ejec } = await client
         .from('ronda_ejecucion_puntos')
-        .select('ronda_punto_id, dentro_radio, distancia_metros')
+        .select('ronda_punto_id, dentro_radio, distancia_metros, precision_metros, snap_radio_metros')
         .eq('id', ev.proceso_id)
         .maybeSingle()
 
@@ -244,6 +248,16 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
       rondaPuntoId = ejec.ronda_punto_id
       gpsFueraRadio = ejec.dentro_radio === false
       distanciaMetros = ejec.distancia_metros ?? null
+      precisionMetros = ejec.precision_metros ?? null
+      // El radio congelado al momento de la ejecución, no el actual: si alguien
+      // corrige el radio hoy, esta medición se sigue juzgando con el que regía.
+      radioMetros = ejec.snap_radio_metros ?? null
+
+      gpsDesvioReal = gpsFueraRadio && gpsExcedeMargenDeError({
+        distanciaMetros,
+        radioMetros,
+        precisionMetros,
+      })
     }
 
     const { data: fila, error: errorClaim } = await client
@@ -439,11 +453,24 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
 
       // ── Contexto de GPS ─────────────────────────────────────────────────
       // No sustituye al GPS ni lo reinterpreta: agrega el dato al caso para que
-      // quien revisa vea las dos señales juntas. Una foto impecable con el GPS
-      // fuera del radio sigue mereciendo una mirada, y al revés también.
+      // quien revisa vea las dos señales juntas.
+      //
+      // El motivo se registra SIEMPRE que la lectura cayó fuera del radio: es un
+      // hecho, queda guardado, se puede filtrar y contar, y se ve en la tarjeta.
+      //
+      // Lo que NO hace es mandar la foto a revisión. Si la imagen está bien, no
+      // hay nada que una persona pueda decidir mirándola: ya se sabe que la foto
+      // corresponde al punto. Antes cualquier "fuera de radio" elevaba una foto
+      // impecable a REVISAR, y con radios de 10 m contra equipos que miden con
+      // 30 m de error la bandeja se llenaba de casos sin decisión posible. Un
+      // revisor que abre veinte fotos perfectas por día aprende a apretar
+      // CORRECTO sin mirar, y ahí se pierde el control entero.
+      //
+      // El GPS no queda sin control: se sigue viendo por punto en el detalle de
+      // la ronda y en los tableros de fuera de radio, que es donde se interpreta
+      // junto al resto del recorrido y no foto por foto.
       if (gpsFueraRadio) {
         motivosFinales = ['GPS_FUERA_DE_RADIO', ...motivosFinales]
-        if (efectiva === 'SIN_OBSERVACIONES') efectiva = 'REVISAR'
       }
 
       // ── Muestra de control ────────────────────────────────────────────
@@ -478,8 +505,14 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         evaluable: normalizado.evaluable,
         confianza: normalizado.confianza,
         motivos: motivosFinales,
+        // Cuando el desvío entra en el error de medición del propio equipo se
+        // dice explícito. Sin esa aclaración, "GPS a 16 m del punto" se lee como
+        // un dato acusatorio cuando en realidad el teléfono no puede distinguir
+        // esos 16 m de cero.
         resumen: gpsFueraRadio && distanciaMetros != null
-          ? `GPS a ${Math.round(distanciaMetros)} m del punto. ${normalizado.resumen}`.slice(0, 240)
+          ? `GPS a ${Math.round(distanciaMetros)} m del punto${
+              gpsDesvioReal ? '' : ' (dentro del margen de error del equipo)'
+            }. ${normalizado.resumen}`.slice(0, 240)
           : normalizado.resumen,
         tokens_entrada: respuesta.tokensEntrada,
         tokens_salida: respuesta.tokensSalida,
