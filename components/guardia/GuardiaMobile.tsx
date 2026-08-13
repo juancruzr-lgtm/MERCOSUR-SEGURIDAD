@@ -31,6 +31,8 @@ interface Objetivo {
   lat?: number
   lng?: number
   radio_metros?: number
+  /** Objetivo pausado: el turno se conserva pero no se puede fichar el ingreso. */
+  estado?: string | null
 }
 
 interface Puesto {
@@ -127,9 +129,24 @@ function turnoFueReasignado(turno: Turno, guardiaId: string): boolean {
   )
 }
 
-function mensajeBloqueoFichaje(turno: Turno, guardiaId: string, ahora: Date): string | null {
+// Sólo decide sobre el INGRESO. El egreso va por otro camino a propósito: si
+// pausan un objetivo con el vigilador adentro, ya fichado, tiene que poder
+// registrar la salida igual. Bloquearlo lo dejaría sin cerrar el turno.
+function mensajeBloqueoFichaje(
+  turno: Turno,
+  guardiaId: string,
+  ahora: Date,
+  objetivo?: { estado?: string | null } | null,
+): string | null {
   if (turnoFueReasignado(turno, guardiaId)) {
     return 'Su turno fue reasignado por supervisión.'
+  }
+
+  // Objetivo pausado: el turno se conserva pero está fuera de operación. Mismo
+  // criterio que el servidor (objetivos.estado = 'activo'). Sin el dato no se
+  // bloquea: no dejar a nadie sin fichar por una consulta incompleta.
+  if (objetivo && (objetivo.estado ?? 'activo') !== 'activo') {
+    return 'Este objetivo está temporalmente fuera de servicio. Contacte al supervisor.'
   }
 
   const inicioTurno = fechaHoraTurno(turno.fecha, turno.hora_inicio)
@@ -644,7 +661,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
 
         supabase
           .from('objetivos')
-          .select('id, nombre, direccion, lat, lng, radio_metros'),
+          // `estado` es nuevo: sin él la pantalla no podía saber que el objetivo
+          // estaba pausado y ofrecía fichar igual.
+          .select('id, nombre, direccion, lat, lng, radio_metros, estado'),
 
         supabase
           .from('registros_asistencia')
@@ -890,7 +909,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
 
   // Iniciar ingreso: valida, obtiene GPS, luego abre flujo de fotos
   const iniciarIngreso = async (turno: Turno) => {
-    const bloqueo = mensajeBloqueoFichaje(turno, user.id, new Date())
+    const bloqueo = mensajeBloqueoFichaje(turno, user.id, new Date(), getObjetivo(turno.objetivo_id))
     if (bloqueo) {
       setMensaje({ texto: bloqueo, tipo: 'error' })
       setTimeout(() => setMensaje(null), 4000)
@@ -1902,7 +1921,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
           const reg     = registroDelTurno(turno.id)
           const estadoTarjeta = estadoTarjetaTurno(turno, reg, ahora)
           const cargando = fichando === turno.id
-          const bloqueoFichaje = mensajeBloqueoFichaje(turno, user.id, ahora)
+          const bloqueoFichaje = mensajeBloqueoFichaje(turno, user.id, ahora, obj)
           const puedeDarPresente = !bloqueoFichaje
           const gpsBloqueaPresente = permisoGps === 'checking' || permisoGps === 'denied' || permisoGps === 'unsupported'
           const gpsIngreso = auditoriaGps(reg, 'ingreso', obj)
