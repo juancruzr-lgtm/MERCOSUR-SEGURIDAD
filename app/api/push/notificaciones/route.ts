@@ -22,6 +22,27 @@ import { enviarNotificaciones } from '../../_lib/push-notificaciones'
 export const runtime = 'nodejs'
 
 /**
+ * Sin esto la deduplicación no funciona.
+ *
+ * Next 14 cachea las peticiones `fetch` por defecto, y el cliente de Supabase
+ * usa `fetch` por debajo. Un `.select()` es un GET —cacheable— y un `.insert()`
+ * es un POST —nunca cacheado—. Resultado: la corrida leía notificaciones_enviadas
+ * del caché de Next, no veía lo que ella misma acababa de escribir, y volvía a
+ * mandar el mismo aviso en cada ciclo. El insert siguiente sí llegaba a la base
+ * y chocaba contra la restricción única, pero ese error se descarta a propósito,
+ * así que no quedaba rastro.
+ *
+ * Verificado el 13/08/2026: tres llamadas seguidas dentro de la misma ventana
+ * enviaron el mismo aviso tres veces y escribieron una sola fila.
+ *
+ * NOTA: getSupabaseAdmin() no desactiva este caché, así que cualquier otra ruta
+ * que lea por ese cliente tiene el mismo problema. Corregirlo ahí es más amplio
+ * que este bloque y va aparte.
+ */
+export const fetchCache = 'force-no-store'
+export const dynamic = 'force-dynamic'
+
+/**
  * Secreto propio, distinto del de /api/push/cron.
  *
  * No hay respaldo a CRON_SECRET a propósito: si este endpoint aceptara aquel
