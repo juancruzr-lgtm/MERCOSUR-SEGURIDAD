@@ -94,3 +94,45 @@ describe('detectarAlertasOperativas y el estado del objetivo', () => {
     expect(a.map(x => x.turno_id)).toEqual(['t2'])
   })
 })
+
+// Superposición: un turno en un objetivo pausado NO ocupa al vigilador. Es la
+// comprobación previa del cliente; la autoridad sigue siendo
+// asignar_vigilador_turnos, que aplica el mismo criterio con o2.estado.
+import { tieneTurnoSuperpuesto, idsObjetivosPausados } from '@/lib/turnos'
+
+const enCasaJuan = {
+  id: 'tA', guardia_id: 'g1', objetivo_id: 'pausado',
+  fecha: '2026-08-13', hora_inicio: '08:00', hora_fin: '16:00',
+}
+const candidatoMismoHorario = {
+  guardia_id: 'g1', objetivo_id: 'activo',
+  fecha: '2026-08-13', hora_inicio: '08:00', hora_fin: '16:00',
+}
+const pausados = idsObjetivosPausados([
+  { id: 'pausado', estado: 'inactivo' },
+  { id: 'activo', estado: 'activo' },
+])
+
+describe('tieneTurnoSuperpuesto y objetivos pausados', () => {
+  it('sin el set se comporta como antes: bloquea', () => {
+    expect(tieneTurnoSuperpuesto([enCasaJuan], candidatoMismoHorario)).toBe(true)
+  })
+
+  it('el turno de un objetivo pausado no bloquea el mismo horario en uno activo', () => {
+    expect(tieneTurnoSuperpuesto([enCasaJuan], candidatoMismoHorario, null, pausados)).toBe(false)
+  })
+
+  it('el turno de un objetivo activo sigue bloqueando', () => {
+    const enActivo = { ...enCasaJuan, objetivo_id: 'activo' }
+    expect(tieneTurnoSuperpuesto([enActivo], candidatoMismoHorario, null, pausados)).toBe(true)
+  })
+
+  it('un turno sin objetivo_id no se descarta: sin el dato se prefiere advertir', () => {
+    const sinObjetivo = { ...enCasaJuan, objetivo_id: null }
+    expect(tieneTurnoSuperpuesto([sinObjetivo], candidatoMismoHorario, null, pausados)).toBe(true)
+  })
+
+  it('excluirTurnoId sigue funcionando', () => {
+    expect(tieneTurnoSuperpuesto([enCasaJuan], candidatoMismoHorario, 'tA', null)).toBe(false)
+  })
+})

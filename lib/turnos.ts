@@ -5,6 +5,8 @@ export type TurnoHorario = {
   hora_inicio: string
   hora_fin: string
   estado?: string | null
+  /** Necesario para descartar los turnos de objetivos pausados. */
+  objetivo_id?: string | null
 }
 
 export const MENSAJE_TURNO_SUPERPUESTO = 'El guardia ya tiene un turno asignado en ese horario.'
@@ -117,16 +119,39 @@ export function horariosSuperpuestos(turnoA: TurnoHorario, turnoB: TurnoHorario)
   return rangoA.inicio < rangoB.fin && rangoB.inicio < rangoA.fin
 }
 
+/**
+ * Ids de los objetivos que no están operativos. Se arma una vez y se pasa a
+ * tieneTurnoSuperpuesto; evita recorrer la lista de objetivos por cada turno.
+ */
+export const idsObjetivosPausados = (
+  objetivos?: { id: string; estado?: string | null }[] | null,
+): Set<string> =>
+  new Set((objetivos ?? []).filter(o => !objetivoEstaOperativo(o)).map(o => o.id))
+
+/**
+ * Comprobación previa de superposición, del lado del cliente. La autoridad es
+ * asignar_vigilador_turnos en el servidor; esto sólo evita el viaje de ida.
+ *
+ * `objetivosPausados` descarta los turnos de objetivos fuera de operación: un
+ * vigilador con un turno en un objetivo pausado NO está ocupado, porque no va a
+ * ir a trabajar ahí. Mismo criterio que aplica la RPC con `o2.estado = 'activo'`.
+ *
+ * Requiere que los turnos traigan `objetivo_id`. Si no lo traen, no se descarta
+ * ninguno: sin el dato se prefiere advertir de más antes que dejar pasar una
+ * superposición real. La RPC decide igual.
+ */
 export const tieneTurnoSuperpuesto = (
   turnos: TurnoHorario[],
   candidato: TurnoHorario,
   excluirTurnoId?: string | null,
+  objetivosPausados?: Set<string> | null,
 ) => {
   if (!candidato.guardia_id) return false
 
   return turnos.some(turno => {
     if (!turno.guardia_id || turno.guardia_id !== candidato.guardia_id) return false
     if (excluirTurnoId && turno.id === excluirTurnoId) return false
+    if (objetivosPausados && turno.objetivo_id && objetivosPausados.has(turno.objetivo_id)) return false
     return horariosSuperpuestos(turno, candidato)
   })
 }

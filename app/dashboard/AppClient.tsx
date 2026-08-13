@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion } from '@/lib/liquidacion'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, registroTieneEntradaConfirmada } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir lat/lng/radio de un objetivo. `authenticated` no
@@ -3381,6 +3381,9 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   )
 }
 function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActivo, limpiarFiltro, user }: any) {
+  // Un turno en un objetivo pausado no ocupa al vigilador: se conserva pero no
+  // bloquea asignarlo en un objetivo activo. Mismo criterio que la RPC.
+  const objetivosPausados = idsObjetivosPausados(objetivos)
   // Refresca al entrar a la pantalla: el estado (incluida la publicación de
   // programación, hecha desde el legajo del objetivo) puede haber cambiado
   // desde que se cargaron los datos globales al iniciar sesión. Sin esto no
@@ -3503,7 +3506,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     if (estadoOperativoEdicion === 'FUTURO' && guardiaNuevoId) {
       const { data, error: turnosError } = await supabase
         .from('turnos')
-        .select('id, guardia_id, fecha, hora_inicio, hora_fin')
+        .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
         .eq('guardia_id', guardiaNuevoId)
         .in('fecha', fechasVecinasTurno(turnoEditando.fecha))
 
@@ -3518,7 +3521,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
         hora_inicio: formEdicion.hora_inicio,
         hora_fin: formEdicion.hora_fin,
       }
-      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditando.id)) {
+      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditando.id, objetivosPausados)) {
         setErrorEdicion(MENSAJE_TURNO_SUPERPUESTO)
         return
       }
@@ -3611,7 +3614,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
     const { data, error: turnosError } = await supabase
       .from('turnos')
-      .select('id, guardia_id, fecha, hora_inicio, hora_fin')
+      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
       .eq('guardia_id', candidato.guardia_id)
       .in('fecha', fechasVecinasTurno(candidato.fecha))
 
@@ -3620,7 +3623,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       return null
     }
 
-    return tieneTurnoSuperpuesto(data || [], candidato)
+    return tieneTurnoSuperpuesto(data || [], candidato, null, objetivosPausados)
   }
 
   // Asignar el guardia del formulario sobre una vacante ya programada, por el
@@ -5936,6 +5939,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const turnosMes = [...turnosReportes]
     .sort((a: Turno, b: Turno) => `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`))
   const turnoPorId = new Map<string, Turno>(turnosMes.map((t: Turno) => [t.id, t]))
+  const objetivoPorIdPlanilla = new Map<string, Objetivo>(objetivos.map((o: Objetivo) => [o.id, o]))
   const registrosMes = registrosReportes.filter((r: RegistroAsistencia) => Boolean(turnoPorId.get(r.turno_id)))
   const registrosPorTurno = new Map<string, RegistroAsistencia[]>()
   registrosMes.forEach((r: RegistroAsistencia) => {
@@ -6206,7 +6210,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _capacitacion: esCapacitacion(turno.tipo_evento),
       _cubierto: esTransicion,
       _sinFichar: !esTransicion && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
-      _descubierto: !esTransicion && turnoSinCoberturaOperativa(turno),
+      // Un objetivo pausado no genera obligacion de cobertura: no hay puesto
+      // descubierto que marcar en la planilla.
+      _descubierto: !esTransicion && turnoSinCoberturaOperativa(turno)
+        && objetivoEstaOperativo(objetivoPorIdPlanilla.get(turno.objetivo_id)),
       _enCurso: false,
     }
   })
@@ -6497,7 +6504,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       const horasLiquidables = horasLiquidablesConReg + horasLiquidablesSinReg
       const turnosEnCurso = regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length
       const turnosSinFichar = ts.filter((t: Turno) => t.guardia_id && !regs.some((r: RegistroAsistencia) => r.turno_id === t.id && r.hora_entrada_real)).length
-      const turnosDescubiertos = ts.filter((t: Turno) => turnoSinCoberturaOperativa(t)).length
+      // Mismo criterio que el resto: un objetivo pausado no acumula descubiertos.
+      const turnosDescubiertos = objetivoEstaOperativo(o)
+        ? ts.filter((t: Turno) => turnoSinCoberturaOperativa(t)).length
+        : 0
 
       return {
         Objetivo: o.nombre,

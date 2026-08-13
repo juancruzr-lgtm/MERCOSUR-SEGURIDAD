@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, idsObjetivosPausados } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir la ubicación de un objetivo: abre la vigencia en el
@@ -476,6 +476,9 @@ export default function SupervisorMobile({ user }: any) {
   const [guardias, setGuardias] = useState<Usuario[]>([])
   const [supervisores, setSupervisores] = useState<Usuario[]>([])
   const [objetivos, setObjetivos] = useState<Objetivo[]>([])
+  // Un turno en un objetivo pausado no ocupa al vigilador: se conserva pero no
+  // bloquea asignarlo en un objetivo activo. Mismo criterio que la RPC.
+  const objetivosPausados = idsObjetivosPausados(objetivos)
   const [registros, setRegistros] = useState<RegistroAsistencia[]>([])
   const [intervenciones, setIntervenciones] = useState<SupervisorIntervencion[]>([])
   const [supervisoresGuardia, setSupervisoresGuardia] = useState<SupervisorGuardia[]>([])
@@ -1220,7 +1223,7 @@ export default function SupervisorMobile({ user }: any) {
 
     const { data, error: turnosError } = await supabase
       .from('turnos')
-      .select('id, guardia_id, fecha, hora_inicio, hora_fin')
+      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
       .eq('guardia_id', candidato.guardia_id)
       .in('fecha', fechasVecinasTurno(candidato.fecha))
 
@@ -1229,7 +1232,7 @@ export default function SupervisorMobile({ user }: any) {
       return null
     }
 
-    return tieneTurnoSuperpuesto(data || [], candidato, excluirTurnoId)
+    return tieneTurnoSuperpuesto(data || [], candidato, excluirTurnoId, objetivosPausados)
   }
 
   const crearTurno = async () => {
@@ -1340,7 +1343,7 @@ export default function SupervisorMobile({ user }: any) {
         existente.hora_fin === candidato.hora_fin
       )
       const superpuesto = candidato.guardia_id
-        ? tieneTurnoSuperpuesto(comparacion, candidato)
+        ? tieneTurnoSuperpuesto(comparacion, candidato, null, objetivosPausados)
         : false
 
       if (duplicado || superpuesto) return acumulados
@@ -2625,7 +2628,7 @@ export default function SupervisorMobile({ user }: any) {
     if (estadoOpEdicionSup === 'FUTURO' && formEdicionSup.guardia_id) {
       const { data, error: turnosError } = await supabase
         .from('turnos')
-        .select('id, guardia_id, fecha, hora_inicio, hora_fin')
+        .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
         .eq('guardia_id', formEdicionSup.guardia_id)
         .in('fecha', fechasVecinasTurno(turnoEditandoSup.fecha))
 
@@ -2637,7 +2640,7 @@ export default function SupervisorMobile({ user }: any) {
         hora_inicio: formEdicionSup.hora_inicio,
         hora_fin: formEdicionSup.hora_fin,
       }
-      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditandoSup.id)) {
+      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditandoSup.id, objetivosPausados)) {
         setErrorEdicionSup(MENSAJE_TURNO_SUPERPUESTO)
         return
       }
