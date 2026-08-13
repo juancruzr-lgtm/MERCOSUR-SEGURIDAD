@@ -54,6 +54,16 @@ export const ESTADOS_PENDIENTES: ReadonlySet<EstadoRevision> = new Set<EstadoRev
 
 export const esPendienteDeAccion = (e: EstadoRevision): boolean => ESTADOS_PENDIENTES.has(e)
 
+/**
+ * Etiqueta de una fila que NO requiere accion, aunque su estado de revision
+ * siga siendo 'pendiente' porque el vigilador nunca respondio.
+ *
+ * Sin esto, cada fila mostraba "Pendiente" y el contador del mes decia otra
+ * cosa ("75 pendientes de 283"): la pantalla se contradecia sola y obligaba a
+ * revisar a mano turnos que estaban perfectos.
+ */
+export const ETIQUETA_NO_REQUIERE_REVISION = 'No requiere revisión'
+
 // ── Cobertura del turno ──────────────────────────────────────────────────────
 
 /**
@@ -111,6 +121,49 @@ export function cubreElTurno(
   if (salida < entrada) salida += 1440
 
   return entrada <= inicioProg + toleranciaMin && salida >= finProg - toleranciaMin
+}
+
+/**
+ * Qué lado del turno no quedó cubierto. null cuando el fichaje cubre, o cuando
+ * faltan datos para saberlo.
+ *
+ * Existe porque la bandeja explicaba el motivo con `entrada > horaInicioProg`,
+ * sin tolerancia: una entrada un minuto tarde —que SÍ cubre— hacía que la fila
+ * dijera "entró tarde" aunque el problema real fuera una salida anticipada.
+ * Mandaba al supervisor a mirar el lado equivocado.
+ */
+export function motivoNoCubre(
+  f: Pick<FilaBandejaMensual, 'horaInicioProg' | 'horaFinProg' | 'entrada' | 'salida'>,
+  toleranciaMin: number = TOLERANCIA_COBERTURA_MIN,
+): 'entro_tarde' | 'se_retiro_antes' | 'ambos' | null {
+  const inicioProg = aMinutos(f.horaInicioProg)
+  const finProgCrudo = aMinutos(f.horaFinProg)
+  const entradaReal = aMinutos(f.entrada)
+  const salidaReal = aMinutos(f.salida)
+  if (inicioProg == null || finProgCrudo == null || entradaReal == null || salidaReal == null) return null
+
+  // Misma resolución de nocturnos que cubreElTurno: si cambia una, cambia la otra.
+  const nocturno = finProgCrudo <= inicioProg
+  const finProg = nocturno ? finProgCrudo + 1440 : finProgCrudo
+
+  let entrada = entradaReal
+  if (nocturno && entradaReal <= finProgCrudo) entrada += 1440
+  let salida = salidaReal
+  if (nocturno && salidaReal <= inicioProg) salida += 1440
+  if (salida < entrada) salida += 1440
+
+  const tarde = entrada > inicioProg + toleranciaMin
+  const antes = salida < finProg - toleranciaMin
+  if (tarde && antes) return 'ambos'
+  if (tarde) return 'entro_tarde'
+  if (antes) return 'se_retiro_antes'
+  return null
+}
+
+export const ETIQUETA_MOTIVO_NO_CUBRE: Record<'entro_tarde' | 'se_retiro_antes' | 'ambos', string> = {
+  entro_tarde: 'entró tarde',
+  se_retiro_antes: 'se retiró antes',
+  ambos: 'entró tarde y se retiró antes',
 }
 
 // ── Corrección del horario reconocido ────────────────────────────────────────

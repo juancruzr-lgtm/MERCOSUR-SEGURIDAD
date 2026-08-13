@@ -54,7 +54,7 @@ import {
 } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/revision-operativa'
 import { formatCuil } from '@/lib/revision-operativa'
-import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, caracteristicaTurno, esCapacitacion, etiquetaCaracteristica } from '@/lib/caracteristica-turno'
+import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, MOTIVO_CAPACITACION, caracteristicaTurno, esCapacitacion, etiquetaCaracteristica, notaCapacitacionExcluida, notaCapacitacionIncluida } from '@/lib/caracteristica-turno'
 import { ETIQUETA_VINCULACION, sugerirVinculacion } from '@/lib/vinculacion-puestos'
 import { DETALLE_COBERTURA_EQUIVALENTE, ETIQUETA_PREVISION, MENSAJE_VACANTE_COMPATIBLE, clavePrevision, coberturaEquivalenteOtraPosicion, payloadCreacionParcial, previsualizarMes, resumenConfirmacion, vacantesCompatibles } from '@/lib/programacion'
 import type { EstadoPrevision, ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
@@ -6039,6 +6039,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _fecha: turno.fecha,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
+      // Al vigilador SÍ se le pagan: suman en su total. Se marcan igual, porque
+      // su planilla y la del objetivo van a dar distinto sobre los mismos turnos.
+      _capacitacion: esCapacitacion(turno.tipo_evento),
       _tieneEntrada: tieneEntrada,
       _tieneCobertura: tieneEntrada || horasLiquidables > 0,
       _sinFichar: !tieneEntrada && horasLiquidables === 0 && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
@@ -6120,10 +6123,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     })
   }
 
+  const capacitacionEmpleado = planillaEmpleado
+    .filter((row: any) => row._capacitacion)
+    .reduce((acc: { horas: number; turnos: number }, row: any) => (
+      { horas: acc.horas + (row._horasLiquidables || 0), turnos: acc.turnos + 1 }
+    ), { horas: 0, turnos: 0 })
+
   const totalesEmpleado = {
     dias: new Set(planillaEmpleado.filter((row: any) => row._tieneCobertura).map((row: any) => row._fecha)).size,
     horasReales: planillaEmpleado.reduce((sum: number, row: any) => sum + row._horasReales, 0),
+    // Al vigilador se le paga todo lo que trabajó, capacitación incluida.
     horasLiquidables: planillaEmpleado.reduce((sum: number, row: any) => sum + row._horasLiquidables, 0),
+    horasCapacitacion: capacitacionEmpleado.horas,
+    turnosCapacitacion: capacitacionEmpleado.turnos,
     sinFichar: planillaEmpleado.filter((row: any) => row._sinFichar).length,
     enCurso: planillaEmpleado.filter((row: any) => row._enCurso).length,
     tardanzas: planillaEmpleado.filter((row: any) => row._tarde).length,
@@ -6248,6 +6260,20 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     return result
   })()
 
+  // Lo que se descontó del total del objetivo. Se cuenta por turno —no por
+  // fila— porque un mismo turno puede aparecer dos veces si lo cubrieron dos
+  // vigiladores, y no son dos capacitaciones.
+  const capacitacionObjetivo = (() => {
+    const turnos = new Set<string>()
+    let horas = 0
+    for (const row of planillaObjetivo as any[]) {
+      if (!row._capacitacion) continue
+      turnos.add(row._turno_id)
+      horas += row._horasLiquidables || 0
+    }
+    return { horas, turnos: turnos.size }
+  })()
+
   const totalesObjetivo = {
     total: new Set(planillaObjetivo.map((row: any) => row._turno_id)).size,
     cubiertos: planillaObjetivo.filter((row: any) => row._cubierto).length,
@@ -6257,6 +6283,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     horasReales: registrosObjetivoDedup.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0),
     // Capacitación: se paga al vigilador pero no se cobra al objetivo
     horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => row._capacitacion ? sum : sum + (row._horasLiquidables || 0), 0),
+    horasCapacitacion: capacitacionObjetivo.horas,
+    turnosCapacitacion: capacitacionObjetivo.turnos,
   }
 
   // Totales globales del mes:
@@ -6296,6 +6324,21 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const pctCubierto = totalHsProgramadasMes > 0
     ? (totalHsLiquidablesMes / totalHsProgramadasMes * 100).toFixed(1)
     : null
+
+  // Este total es de toda la empresa: suma capacitaciones porque son horas que
+  // se pagan. Programadas y liquidables las cuentan a las dos, así que el % de
+  // cobertura no se distorsiona. Solo se marca cuánto de esa suma no se factura.
+  const capacitacionMes = turnosBaseMes.reduce(
+    (acc: { horas: number; turnos: number }, t: Turno) => {
+      if (!esCapacitacion(t.tipo_evento)) return acc
+      const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
+      return {
+        horas: acc.horas + resolverLineaLiquidacion(t, reg).horasLiquidables,
+        turnos: acc.turnos + 1,
+      }
+    },
+    { horas: 0, turnos: 0 },
+  )
 
   const diferenciasMes = turnosBaseMes
     .map((t: Turno) => {
@@ -6364,6 +6407,14 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       ['Días trabajados', totalesEmpleado.dias],
       ['Horas reales totales', Number(totalesEmpleado.horasReales.toFixed(2))],
       ['Horas liquidables totales', Number(totalesEmpleado.horasLiquidables.toFixed(2))],
+      // La misma aclaración que en pantalla: el Excel viaja solo y tiene que
+      // explicar por qué este total no coincide con el de la planilla del objetivo.
+      ...(notaCapacitacionIncluida(totalesEmpleado.horasCapacitacion, totalesEmpleado.turnosCapacitacion)
+        ? [
+            ['Horas de capacitación', Number(totalesEmpleado.horasCapacitacion.toFixed(2))],
+            [notaCapacitacionIncluida(totalesEmpleado.horasCapacitacion, totalesEmpleado.turnosCapacitacion)],
+          ]
+        : []),
       ['Tardanzas', totalesEmpleado.tardanzas],
       ['Turnos sin fichar', totalesEmpleado.sinFichar],
     ]
@@ -6403,6 +6454,14 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       ['Turnos descubiertos', totalesObjetivo.descubiertos],
       ['Horas reales totales', Number(totalesObjetivo.horasReales.toFixed(2))],
       ['Horas liquidables totales', Number(totalesObjetivo.horasLiquidables.toFixed(2))],
+      // Este Excel es el que puede terminar frente al cliente: si la columna
+      // "Horas liquidables" suma más que el total, tiene que decir por qué.
+      ...(notaCapacitacionExcluida(totalesObjetivo.horasCapacitacion, totalesObjetivo.turnosCapacitacion)
+        ? [
+            ['Horas de capacitación (no facturables)', Number(totalesObjetivo.horasCapacitacion.toFixed(2))],
+            [notaCapacitacionExcluida(totalesObjetivo.horasCapacitacion, totalesObjetivo.turnosCapacitacion)],
+          ]
+        : []),
     ]
     const nombre = `objetivo_${archivoParte(objetivoSeleccionado.nombre)}_${mesArchivo()}.xlsx`
 
@@ -6616,10 +6675,13 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     { id:'objetivos', label:'Resumen objetivos' },
     { id:'novedades', label:'Novedades' },
   ]
-  const totalBox = (label: string, value: string | number) => (
+  // `nota` explica de dónde sale una diferencia en el total (hoy: capacitaciones).
+  // Va en violeta, el mismo color con el que la columna Caract. marca capacitación.
+  const totalBox = (label: string, value: string | number, nota?: string | null) => (
     <div style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 12px' }}>
       <div style={{ fontSize:10, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>{label}</div>
       <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, color:'#e2e8f0' }}>{value}</div>
+      {nota && <div style={{ fontSize:10, color:'#a78bfa', marginTop:4, lineHeight:1.35 }}>{nota}</div>}
     </div>
   )
   const renderEmpty = (text: string) => <div style={{ padding:24, color:'#64748b', textAlign:'center' as const }}>{text}</div>
@@ -6665,6 +6727,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas liquidables hasta hoy</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#10b981' }}>{totalHsLiquidablesMes.toFixed(2)} hs</div>
             <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cerrados · excluye en curso y sin obligación</div>
+            {notaCapacitacionIncluida(capacitacionMes.horas, capacitacionMes.turnos) && (
+              <div style={{ fontSize:11, color:'#a78bfa', marginTop:4, lineHeight:1.35 }}>
+                {notaCapacitacionIncluida(capacitacionMes.horas, capacitacionMes.turnos)}
+              </div>
+            )}
           </div>
           <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #3b82f6' }}>
             <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas programadas hasta hoy</div>
@@ -6708,7 +6775,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px, 1fr))', gap:8, marginBottom:16 }}>
             {totalBox('Días trabajados', totalesEmpleado.dias)}
             {totalBox('Horas reales', totalesEmpleado.horasReales.toFixed(2))}
-            {totalBox('Horas liquidables', totalesEmpleado.horasLiquidables.toFixed(2))}
+            {totalBox('Horas liquidables', totalesEmpleado.horasLiquidables.toFixed(2),
+              notaCapacitacionIncluida(totalesEmpleado.horasCapacitacion, totalesEmpleado.turnosCapacitacion))}
             {totalBox('Sin fichar', totalesEmpleado.sinFichar)}
             {totalBox('En curso', totalesEmpleado.enCurso)}
             {totalBox('Tardanzas', totalesEmpleado.tardanzas)}
@@ -6831,7 +6899,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             {totalBox('Descubiertos', totalesObjetivo.descubiertos)}
             {totalBox('En curso', totalesObjetivo.enCurso)}
             {totalBox('Horas reales', totalesObjetivo.horasReales.toFixed(2))}
-            {totalBox('Horas liquidables', totalesObjetivo.horasLiquidables.toFixed(2))}
+            {totalBox('Horas liquidables', totalesObjetivo.horasLiquidables.toFixed(2),
+              notaCapacitacionExcluida(totalesObjetivo.horasCapacitacion, totalesObjetivo.turnosCapacitacion))}
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
@@ -6846,7 +6915,12 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                   <td style={S.td}>{row['Entrada efectiva']}</td>
                   <td style={S.td}>{row['Salida efectiva']}</td>
                   <td style={S.td}>{row['Horas reales']}</td>
-                  <td style={{ ...S.td, color:'#10b981', fontWeight:700 }}>{row['Horas liquidables']}</td>
+                  {/* En violeta las horas que NO entran en el total del objetivo:
+                      si no, la columna parece sumar más de lo que dice el total. */}
+                  <td
+                    style={{ ...S.td, color: row._capacitacion ? '#a78bfa' : '#10b981', fontWeight:700 }}
+                    title={row._capacitacion ? `Capacitación: ${MOTIVO_CAPACITACION}` : undefined}
+                  >{row['Horas liquidables']}</td>
                   <td style={{ ...S.td, fontSize:11, color: row._capacitacion ? '#a78bfa' : row.Característica === ETIQUETA_CARACTERISTICA.cobertura ? '#38bdf8' : '#64748b' }}>{row.Característica}{row._capacitacion ? ' · no se cobra' : ''}</td>
                   <td style={S.td}><Badge type={row.Estado === 'Cubierto' ? 'cubierto' : row.Estado === 'Manual' ? 'ok' : row.Estado === 'Descubierto' ? 'descubierto' : 'pendiente'}>{row.Estado}</Badge></td>
                   <td style={{ ...S.td, fontSize:11, color:'#94a3b8', minWidth:140 }}>{row.Origen}</td>
