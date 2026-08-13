@@ -56,6 +56,70 @@ export async function GET(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
+  // ── DIAGNÓSTICO TEMPORAL — quitar antes de fusionar ──────────────────────
+  //
+  // La deduplicación reenvía siempre: notificationAlreadySent no encuentra
+  // filas que sí existen, aunque el insert posterior choque contra la
+  // restricción única. Escribe viéndolas y lee sin verlas.
+  //
+  // Esto no envía nada. Lee la fila más reciente y después intenta encontrarla
+  // con la MISMA consulta que usa la deduplicación. Si no se encuentra a sí
+  // misma, el defecto queda aislado sin depender de datos de prueba.
+  if (req.nextUrl.searchParams.get('diagnostico') === '1') {
+    const ultima = await admin.client
+      .from('notificaciones_enviadas')
+      .select('usuario_id, turno_id, tipo, created_at')
+      .order('created_at', { ascending: false })
+      .limit(1)
+
+    const fila = ultima.data?.[0]
+    if (!fila) {
+      return NextResponse.json({ paso1_ultimaFila: null, error: ultima.error?.message ?? 'tabla vacía' })
+    }
+
+    // La consulta textual de notificationAlreadySent, sobre esa misma fila.
+    const comoDedup = await admin.client
+      .from('notificaciones_enviadas')
+      .select('id')
+      .eq('usuario_id', fila.usuario_id)
+      .eq('turno_id', fila.turno_id)
+      .eq('tipo', fila.tipo)
+      .maybeSingle()
+
+    // Igual pero sin maybeSingle, para separar el filtro del modificador.
+    const sinMaybeSingle = await admin.client
+      .from('notificaciones_enviadas')
+      .select('id')
+      .eq('usuario_id', fila.usuario_id)
+      .eq('turno_id', fila.turno_id)
+      .eq('tipo', fila.tipo)
+
+    // Un solo filtro por vez, para ver cuál de los tres no matchea.
+    const soloUsuario = await admin.client
+      .from('notificaciones_enviadas').select('id').eq('usuario_id', fila.usuario_id)
+    const soloTurno = await admin.client
+      .from('notificaciones_enviadas').select('id').eq('turno_id', fila.turno_id)
+    const soloTipo = await admin.client
+      .from('notificaciones_enviadas').select('id').eq('tipo', fila.tipo)
+
+    return NextResponse.json({
+      paso1_filaLeida: {
+        usuario_id: fila.usuario_id,
+        turno_id: fila.turno_id,
+        tipo: fila.tipo,
+        turno_id_es_null: fila.turno_id === null,
+        created_at: fila.created_at,
+      },
+      paso2_comoLoHaceDedup: { encontro: Boolean(comoDedup.data), error: comoDedup.error?.message ?? null },
+      paso3_sinMaybeSingle: { filas: sinMaybeSingle.data?.length ?? 0, error: sinMaybeSingle.error?.message ?? null },
+      paso4_filtroPorSeparado: {
+        soloUsuario: { filas: soloUsuario.data?.length ?? 0, error: soloUsuario.error?.message ?? null },
+        soloTurno: { filas: soloTurno.data?.length ?? 0, error: soloTurno.error?.message ?? null },
+        soloTipo: { filas: soloTipo.data?.length ?? 0, error: soloTipo.error?.message ?? null },
+      },
+    })
+  }
+
   // ?solo_usuario=<id> limita la corrida entera a ese destinatario: es la prueba
   // controlada previa a encender el cron. Se lee DESPUÉS de validar el secreto,
   // así que sin el token no hay forma de dirigir un envío a nadie.
