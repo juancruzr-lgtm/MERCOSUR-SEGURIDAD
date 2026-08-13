@@ -1,7 +1,16 @@
 -- Disparador de las notificaciones push
 --
--- NO APLICAR TODAVÍA. Este archivo queda listo para la prueba controlada; la
--- activación global es una decisión aparte.
+-- APLICADA EN PRODUCCIÓN el 13/08/2026.
+--
+-- Apunta a la URL de producción, así que mientras este PR no esté fusionado el
+-- job golpea un 404 y no envía nada. Al fusionar, la primera corrida sale sola
+-- dentro de los 10 minutos siguientes: fusionar ES el encendido.
+--
+-- Antes de fusionar se sembraron 222 filas en notificaciones_enviadas —las
+-- alertas de ronda pendientes por cada supervisor de la zona— para que el
+-- histórico quede marcado como ya avisado y sólo se notifique de acá en
+-- adelante. Sin eso, la primera corrida mandaba 148 avisos de golpe, 74 de
+-- ellos a una sola persona.
 --
 -- POR QUÉ NO VERCEL CRON
 -- El proyecto está en plan Hobby, donde los cron jobs se ejecutan una vez por
