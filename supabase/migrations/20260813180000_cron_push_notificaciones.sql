@@ -22,14 +22,14 @@
 -- NO llama a /api/push/cron, que sí ejecuta cerrar_turnos_abiertos().
 --
 -- EL SECRETO
--- Este endpoint NO usa CRON_SECRET. Tiene llave propia, PUSH_CRON_SECRET, para
+-- Este endpoint NO usa CRON_SECRET. Tiene llave propia, push_cron_secret, para
 -- que quien tenga la de /api/push/cron —la que sí cierra turnos— no pueda
 -- disparar ésta, ni al revés.
 --
 -- El valor no se escribe en esta migración ni en ningún commit. Vive en dos
 -- lugares, con el mismo valor:
 --
---   · variables de entorno de Vercel, como PUSH_CRON_SECRET;
+--   · variables de entorno de Vercel, como push_cron_secret;
 --   · vault de Supabase, bajo el nombre push_cron_secret.
 --
 -- Se guarda a mano, una vez:

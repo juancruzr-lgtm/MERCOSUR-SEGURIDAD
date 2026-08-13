@@ -28,10 +28,16 @@ export const runtime = 'nodejs'
  * token, quien lo tuviera podría igualmente disparar esta ruta y la separación
  * no serviría de nada. Son dos llaves para dos puertas, y esta puerta no abre
  * con la otra llave.
+ *
+ * El nombre va en minúsculas porque así está cargada la variable en Vercel, y
+ * en Linux process.env distingue mayúsculas: buscarla como PUSH_CRON_SECRET
+ * daría undefined y la ruta respondería 500 sin que el problema tenga nada que
+ * ver con las notificaciones. Es la única variable del proyecto en minúsculas;
+ * si algún día se renombra en Vercel, hay que cambiarla también acá.
  */
 function authOk(req: NextRequest) {
-  const expected = process.env.PUSH_CRON_SECRET
-  if (!expected) return { ok: false, error: 'Falta PUSH_CRON_SECRET' }
+  const expected = process.env.push_cron_secret
+  if (!expected) return { ok: false, error: 'Falta push_cron_secret' }
   const header = req.headers.get('authorization') || ''
   return header === `Bearer ${expected}`
     ? { ok: true }
@@ -43,7 +49,7 @@ export async function GET(req: NextRequest) {
   if (!auth.ok) {
     return NextResponse.json(
       { error: auth.error },
-      { status: auth.error === 'Falta PUSH_CRON_SECRET' ? 500 : 401 },
+      { status: auth.error === 'Falta push_cron_secret' ? 500 : 401 },
     )
   }
 
