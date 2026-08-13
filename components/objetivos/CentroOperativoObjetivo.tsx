@@ -54,6 +54,11 @@ import {
 import type { PlanGeneracionGrilla, ResultadoGeneracionGrilla } from '@/lib/generacion-grilla'
 import { puedePublicarProgramacion } from '@/lib/publicacion-programacion'
 import {
+  TOPE_LOTE, agregarASeleccion, alternarSeleccion,
+  planificarLoteGrilla, resumenOmitidos,
+} from '@/lib/seleccion-grilla'
+import type { AccionLote, PlanLoteGrilla } from '@/lib/seleccion-grilla'
+import {
   SeccionUbicacion, SeccionAsistencias, SeccionRondas,
   SeccionSupervisiones, SeccionNovedades,
 } from './LegajoSecciones'
@@ -230,6 +235,43 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // ── Modal: asignación por rango / por fila completa ──
   const [filaAsignando, setFilaAsignando] = useState<FilaGrillaPosicion | null>(null)
   const [modoFilaCompleta, setModoFilaCompleta] = useState(false)
+  // ── Selección múltiple en la grilla ────────────────────────────────────────
+  // Se entra en modo selección con un botón —como el selector de fotos del
+  // teléfono— y recién ahí el clic marca en vez de abrir el menú de la celda.
+  // Sin ese modo, arrastrar para seleccionar y tocar para editar se pisarían.
+  const [modoSeleccion, setModoSeleccion] = useState(false)
+  const [seleccion, setSeleccion] = useState<Set<string>>(new Set())
+  const [arrastrando, setArrastrando] = useState(false)
+  const [accionLote, setAccionLote] = useState<AccionLote | null>(null)
+  const [motivoLote, setMotivoLote] = useState('')
+  const [aplicandoLote, setAplicandoLote] = useState(false)
+  const [errorLote, setErrorLote] = useState('')
+  const [resultadoLote, setResultadoLote] = useState<string | null>(null)
+
+  // El arrastre termina aunque se suelte el botón fuera de la tabla.
+  useEffect(() => {
+    if (!arrastrando) return
+    const soltar = () => setArrastrando(false)
+    window.addEventListener('pointerup', soltar)
+    window.addEventListener('pointercancel', soltar)
+    return () => {
+      window.removeEventListener('pointerup', soltar)
+      window.removeEventListener('pointercancel', soltar)
+    }
+  }, [arrastrando])
+
+  const salirDeSeleccion = () => {
+    setModoSeleccion(false)
+    setSeleccion(new Set())
+    setArrastrando(false)
+    setAccionLote(null)
+    setMotivoLote('')
+    setErrorLote('')
+  }
+
+  const marcarCelda = (turnoId: string) => setSeleccion(s => alternarSeleccion(s, turnoId))
+  const pintarCelda = (turnoId: string) => setSeleccion(s => agregarASeleccion(s, [turnoId]))
+
   const [rangoDias, setRangoDias] = useState<Set<string>>(new Set())
   const [rangoGuardia, setRangoGuardia] = useState('')
   const [asignandoRango, setAsignandoRango] = useState(false)
@@ -462,6 +504,45 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // no duplicar el criterio de permisos. Las RPC y /api/turnos/editar lo
   // vuelven a validar en servidor; este flag solo decide qué botones se ven.
   const puedeProgramar = puedePublicarProgramacion(rolUsuario) || esAdmin === true
+  // ── Operación en lote sobre lo seleccionado ────────────────────────────────
+  // El plan se calcula antes de tocar nada para poder mostrarlo: cuántos se
+  // aplican, cuáles quedan afuera y por qué. Las reglas son las mismas de una
+  // celda suelta (accionesCelda), no hay una segunda definición.
+  const planLote: PlanLoteGrilla | null = accionLote
+    ? planificarLoteGrilla({
+        turnos: turnosGrilla,
+        seleccion,
+        accion: accionLote,
+        fechaActual: hoy,
+        horaActual: horaActualStr,
+        puedeEscribir: puedeProgramar,
+        motivo: motivoLote,
+      })
+    : null
+
+  const aplicarLote = async () => {
+    if (!accionLote || !planLote || planLote.bloqueo) return
+    setAplicandoLote(true)
+    setErrorLote('')
+    const { data, error } = await supabase.rpc('anular_turnos_lote', {
+      p_operacion_id: crypto.randomUUID(),
+      p_turno_ids: planLote.aplicables,
+      p_accion: accionLote,
+      p_motivo: accionLote === 'anular' ? motivoLote.trim() : null,
+    })
+    setAplicandoLote(false)
+    if (error) { setErrorLote(error.message); return }
+
+    const r = data as any
+    // La RPC valida turno por turno sin abortar el lote: puede volver sin error
+    // y con parte omitida. Se informa el detalle, no solo el total pedido.
+    const primerOmitido = (r?.filas ?? []).find((x: any) => x?.resultado === 'omitido' && x?.motivo)
+    const detalle = primerOmitido ? ' · ' + primerOmitido.motivo : ''
+    setResultadoLote('✅ ' + r.aplicados + ' aplicado(s) · ' + r.omitidos + ' omitido(s)' + detalle)
+    await cargarMensual()
+    salirDeSeleccion()
+  }
+
 
   // ── Programación desde la grilla: crear los turnos de una posición ──
   // Evita el rodeo de salir a la pantalla de Programación para el caso
@@ -1100,6 +1181,60 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             })
             return (
               <div style={{ marginTop:12 }}>
+                {/* Selección múltiple. Fuera del modo, la grilla se comporta
+                    igual que siempre: un clic abre el menú de la celda. */}
+                {puedeProgramar && (
+                  <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+                    {!modoSeleccion ? (
+                      <button
+                        type="button"
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }}
+                        onClick={() => { setModoSeleccion(true); setResultadoLote(null) }}
+                      >
+                        Seleccionar varios
+                      </button>
+                    ) : (
+                      <>
+                        <span style={{ color:'#f59e0b', fontWeight:700, fontSize:13 }}>
+                          {seleccion.size} marcado{seleccion.size === 1 ? '' : 's'}
+                        </span>
+                        <span style={{ color:'#64748b', fontSize:11 }}>
+                          Tocá o arrastrá sobre los turnos
+                        </span>
+                        <button
+                          type="button"
+                          disabled={seleccion.size === 0}
+                          style={{ ...S.btn, padding:'5px 12px', fontSize:12,
+                            background: seleccion.size ? '#7f1d1d' : '#1e293b',
+                            color: seleccion.size ? '#fecaca' : '#64748b',
+                            cursor: seleccion.size ? 'pointer' : 'not-allowed' }}
+                          onClick={() => { setAccionLote('anular'); setMotivoLote(''); setErrorLote('') }}
+                        >
+                          Anular
+                        </button>
+                        <button
+                          type="button"
+                          disabled={seleccion.size === 0}
+                          style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12,
+                            opacity: seleccion.size ? 1 : .5 }}
+                          onClick={() => { setAccionLote('reactivar'); setMotivoLote(''); setErrorLote('') }}
+                        >
+                          Reactivar
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }}
+                          onClick={salirDeSeleccion}
+                        >
+                          Cancelar
+                        </button>
+                      </>
+                    )}
+                    {resultadoLote && (
+                      <span style={{ color:'#94a3b8', fontSize:12 }}>{resultadoLote}</span>
+                    )}
+                  </div>
+                )}
                 {/* Resumen del mes — se recalcula sin F5 tras cada asignación. */}
                 <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
                   {[
@@ -1245,19 +1380,39 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                                         : est === 'asignado' ? 'rgba(16,185,129,.1)' : 'rgba(148,163,184,.08)'
                                       const colorTexto = anulado ? '#64748b'
                                         : conConflicto ? '#ef4444' : est === 'asignado' ? '#10b981' : '#94a3b8'
+                                      const marcado = seleccion.has(t.id)
                                       return (
                                         <button
                                           key={t.id}
                                           type="button"
-                                          disabled={!futuro}
-                                          onClick={() => futuro && abrirCelda(t)}
-                                          title={anulado ? `Turno ${t.estado} — clic para reactivarlo` : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
+                                          disabled={!modoSeleccion && !futuro}
+                                          onClick={() => {
+                                            if (modoSeleccion) { marcarCelda(t.id); return }
+                                            if (futuro) abrirCelda(t)
+                                          }}
+                                          onPointerDown={() => {
+                                            if (!modoSeleccion) return
+                                            setArrastrando(true)
+                                          }}
+                                          onPointerEnter={() => {
+                                            // Arrastrar sobre las celdas las va marcando, como el
+                                            // selector de fotos del teléfono. Suma, nunca quita:
+                                            // volver sobre lo pintado no lo borra.
+                                            if (modoSeleccion && arrastrando) pintarCelda(t.id)
+                                          }}
+                                          title={modoSeleccion ? (marcado ? 'Marcado — clic para desmarcar' : 'Clic o arrastrá para marcar')
+                                            : anulado ? `Turno ${t.estado} — clic para reactivarlo` : conConflicto ? 'Conflicto: superpuesto con otro turno del mismo vigilador' : ETIQUETA_ESTADO_ASIGNACION[est]}
                                           style={{
                                             width:'100%', minWidth:48, padding:'5px 3px', borderRadius:6, fontSize:10.5,
-                                            background: colorFondo, color: colorTexto,
-                                            border: conConflicto && !anulado ? '1px solid rgba(239,68,68,.4)' : anulado ? '1px dashed #334155' : '1px solid transparent',
+                                            background: marcado ? 'rgba(245,158,11,.28)' : colorFondo,
+                                            color: marcado ? '#fde68a' : colorTexto,
+                                            border: marcado ? '2px solid #f59e0b'
+                                              : conConflicto && !anulado ? '1px solid rgba(239,68,68,.4)' : anulado ? '1px dashed #334155' : '1px solid transparent',
                                             textDecoration: anulado ? 'line-through' : 'none',
-                                            cursor: futuro ? 'pointer' : 'default', opacity: futuro ? 1 : 0.55,
+                                            cursor: modoSeleccion ? 'pointer' : futuro ? 'pointer' : 'default',
+                                            opacity: modoSeleccion ? 1 : futuro ? 1 : 0.55,
+                                            // Sin esto el arrastre selecciona texto en vez de celdas.
+                                            userSelect: 'none', touchAction: 'none',
                                           }}
                                         >
                                           {t.guardia_nombre ? t.guardia_nombre.split(',')[0] : '—'}
@@ -1309,6 +1464,69 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       </div>
 
       {/* Modal: acciones sobre un turno (clic en celda de la grilla) */}
+      {/* Confirmación del lote. Muestra qué va a pasar ANTES de aplicarlo:
+          cuántos se procesan y cuántos quedan afuera con el motivo. */}
+      {accionLote && planLote && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(2,6,23,.75)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:60, padding:16 }}>
+          <div style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:12, padding:18, width:'100%', maxWidth:460 }}>
+            <div style={{ fontWeight:800, color:'#e2e8f0', fontSize:16, marginBottom:4 }}>
+              {accionLote === 'anular' ? 'Anular turnos seleccionados' : 'Reactivar turnos seleccionados'}
+            </div>
+            <div style={{ color:'#94a3b8', fontSize:12, marginBottom:12 }}>
+              {planLote.aplicables.length} de {seleccion.size} marcado{seleccion.size === 1 ? '' : 's'} se {planLote.aplicables.length === 1 ? 'va' : 'van'} a procesar.
+            </div>
+
+            {resumenOmitidos(planLote.omitidos) && (
+              <div style={{ background:'rgba(245,158,11,.1)', border:'1px solid rgba(245,158,11,.3)', borderRadius:8, padding:'8px 10px', color:'#fbbf24', fontSize:12, marginBottom:12 }}>
+                {resumenOmitidos(planLote.omitidos)}
+              </div>
+            )}
+
+            {accionLote === 'anular' && (
+              <>
+                <div style={{ color:'#94a3b8', fontSize:11, marginBottom:4 }}>Motivo (queda en la auditoría)</div>
+                <textarea
+                  value={motivoLote}
+                  onChange={e => setMotivoLote(e.target.value)}
+                  placeholder="Ej.: el cliente cancela el servicio hasta fin de mes"
+                  rows={2}
+                  style={{ width:'100%', background:'#111827', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginBottom:10, resize:'vertical' }}
+                />
+              </>
+            )}
+
+            {planLote.bloqueo && (
+              <div style={{ color:'#fbbf24', fontSize:12, marginBottom:10 }}>{planLote.bloqueo}</div>
+            )}
+            {errorLote && (
+              <div style={{ color:'#ef4444', fontSize:12, marginBottom:10 }}>{errorLote}</div>
+            )}
+
+            <div style={{ display:'flex', gap:8 }}>
+              <button
+                type="button"
+                style={{ ...S.btn, ...S.btnSecondary, flex:1, padding:'9px 12px' }}
+                onClick={() => { setAccionLote(null); setErrorLote('') }}
+                disabled={aplicandoLote}
+              >
+                Volver
+              </button>
+              <button
+                type="button"
+                style={{ ...S.btn, flex:2, padding:'9px 12px', fontWeight:700,
+                  background: planLote.bloqueo || aplicandoLote ? '#1e293b' : accionLote === 'anular' ? '#7f1d1d' : '#065f46',
+                  color: planLote.bloqueo || aplicandoLote ? '#64748b' : '#e2e8f0',
+                  cursor: planLote.bloqueo || aplicandoLote ? 'not-allowed' : 'pointer' }}
+                onClick={() => void aplicarLote()}
+                disabled={!!planLote.bloqueo || aplicandoLote}
+              >
+                {aplicandoLote ? 'Aplicando…' : planLote.resumen}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {celdaEditando && (() => {
         const acc = accionesCelda(celdaEditando, hoy, horaActualStr, puedeProgramar)
         const cabecera = `${celdaEditando.puesto_nombre} · ${celdaEditando.fecha} · ${celdaEditando.hora_inicio}–${celdaEditando.hora_fin}`
