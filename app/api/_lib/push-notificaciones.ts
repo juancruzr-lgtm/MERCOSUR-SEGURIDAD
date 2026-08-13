@@ -28,6 +28,7 @@ import { objetivoEstaOperativo, turnoSinCoberturaOperativa } from '@/lib/turnos'
 import {
   FRECUENCIA_SUPERVISION_DEFECTO_HORAS,
   estadoSupervision,
+  horasParaVencimiento,
   indexarUltimaSupervision,
   supervisionProximaAVencer,
 } from '@/lib/supervisiones'
@@ -661,7 +662,19 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
 
     if (estadoAgenda === 'vencido') {
       candidatosSupervisionVencida += 1
-      const detalle = ultimaIso ? `Vencida desde hace ${Math.round(horasDesdeUltima as number)} h` : 'Sin supervision registrada'
+      // horasDesdeUltima nunca existió: la línea que la definía falta desde el
+      // origen. Nadie lo notó porque esta ruta jamás llegó a ejecutarse, y el
+      // `as number` silenciaba al compilador. Al correr, tiraba ReferenceError
+      // y mataba la corrida entera —no sólo esta alerta—, porque esto está
+      // fuera del try/catch por suscripción.
+      //
+      // horasParaVencimiento devuelve las horas que FALTAN, negativas cuando ya
+      // venció; se invierte el signo. Se usa esa función y no una cuenta propia
+      // porque la vigencia tiene una sola definición, en lib/supervisiones.
+      const horasVencida = horasParaVencimiento(ultimaIso, frecuenciaHoras)
+      const detalle = horasVencida !== null
+        ? `Vencida desde hace ${Math.max(0, Math.round(-horasVencida))} h`
+        : 'Sin supervision registrada'
       const resultado = await sendToUsersObjetivo(
         admin.client,
         subscriptions,
