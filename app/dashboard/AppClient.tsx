@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion } from '@/lib/liquidacion'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, registroTieneEntradaConfirmada } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir lat/lng/radio de un objetivo. `authenticated` no
@@ -2786,10 +2786,16 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     return turnos.filter((t: any) => t.objetivo_id === objetivoId && t.fecha === hoy)
   }
 
+  // Un objetivo pausado conserva sus turnos pero no genera obligación: no
+  // corresponde marcarle "sin cubrir". Mismo criterio que el resto del sistema.
+  const objetivoOperativoPorId = (objetivoId: string) =>
+    objetivoEstaOperativo(objetivos.find((o: any) => o.id === objetivoId))
+
   const estadoOperativo = (objetivoId: string) => {
     const ts = turnosHoyPorObjetivo(objetivoId)
     if (ts.length === 0) return null
-    const sinCubrir = ts.filter((t: any) => turnoSinCoberturaOperativa(t)).length
+    const operativo = objetivoOperativoPorId(objetivoId)
+    const sinCubrir = operativo ? ts.filter((t: any) => turnoSinCoberturaOperativa(t)).length : 0
     const cubiertos = ts.filter((t: any) => t.estado === 'cubierto' && t.guardia_id).length
     return { total: ts.length, cubiertos, sinCubrir }
   }
@@ -2956,6 +2962,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
 
   const objetivosConTurnosHoy = objetivos.filter((o: any) => turnosHoyPorObjetivo(o.id).length > 0)
   const objetivosSinCubrirHoy = objetivos.filter((o: any) => {
+    if (!objetivoEstaOperativo(o)) return false
     const ts = turnosHoyPorObjetivo(o.id)
     return ts.some((t: any) => turnoSinCoberturaOperativa(t))
   })
@@ -9050,7 +9057,10 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     tono,
   })
 
-  const deteccionesOperativas = detectarAlertasOperativas({ turnos: turnosHoy, registros })
+  // `objetivos` va siempre: un objetivo pausado conserva sus turnos pero no
+  // genera obligación, así que ninguna de sus alertas corresponde. Sin este
+  // argumento el detector no puede saberlo y las emite igual.
+  const deteccionesOperativas = detectarAlertasOperativas({ turnos: turnosHoy, registros, objetivos })
   const alertasPendientes = deteccionesOperativas
     .map((deteccion) => {
       const turno = turnosHoy.find((item: Turno) => item.id === deteccion.turno_id)
