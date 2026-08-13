@@ -16,7 +16,7 @@
 // igual que antes, que es lo que mantiene intacto el Mapa CGO.
 //
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import { MapContainer, Marker, Circle, Popup, TileLayer, useMap } from 'react-leaflet'
 
@@ -155,14 +155,22 @@ type Props = {
   /** Alto del mapa. Por defecto, el mismo que usaba el Mapa CGO. */
   altura?: string
   /**
-   * Cambiar este valor reencuadra el mapa. La pantalla lo mueve sólo cuando el
-   * usuario pidió ver otra cosa: filtros o capas. Seleccionar un marcador NO
-   * debe cambiarlo, o se le va el zoom en la cara.
+   * Cambiar este valor reencuadra el mapa. Con `vistaId` presente, lo mueve
+   * únicamente el botón de encuadrar: nada de lo que pase en la pantalla toca
+   * la cámara.
    *
-   * Sin esta prop, el encuadre se rige por las coordenadas dibujadas, que es el
+   * Sin `vistaId`, el encuadre se rige por las coordenadas dibujadas, que es el
    * comportamiento histórico del Mapa CGO de Asistencia.
    */
   fitToken?: string
+  /**
+   * Activa la memoria del encuadre y apaga el reencuadre automático.
+   *
+   * Con esto el mapa nunca se mueve solo: recuerda dónde lo dejó el usuario
+   * —incluso si el componente se vuelve a montar— y sólo reencuadra cuando él
+   * lo pide. Prender una capa deja de mandarlo a ver tres provincias.
+   */
+  vistaId?: string
   /**
    * Muestra el selector Calles / Satélite / Híbrido.
    *
@@ -338,17 +346,32 @@ function iniciales(texto: string): string {
  * Sin `fitToken` se cae al comportamiento anterior, basado en las coordenadas.
  * Eso deja el Mapa CGO de Asistencia exactamente como estaba.
  */
-function FitBounds({ positions, fitToken }: { positions: [number, number][]; fitToken?: string }) {
+/**
+ * Encuadre guardado por pantalla, fuera de React.
+ *
+ * Vive a nivel de módulo a propósito: si el componente se vuelve a montar por
+ * cualquier motivo, `MapContainer` sólo lee `center` y `zoom` al montarse y
+ * volvería al encuadre inicial. Guardándolo acá, el mapa reaparece donde el
+ * usuario lo dejó.
+ */
+const vistasGuardadas = new Map<string, { centro: [number, number]; zoom: number }>()
+
+function FitBounds({
+  positions, fitToken, vistaId,
+}: {
+  positions: [number, number][]
+  fitToken?: string
+  vistaId?: string
+}) {
   const map = useMap()
   const key = positions.map(p => p.join(',')).join('|')
-  const disparador = fitToken ?? key
 
   // Las posiciones se leen por referencia: el array se reconstruye en cada
   // render y tenerlo en las dependencias volvería a disparar el encuadre.
   const positionsRef = useRef(positions)
   positionsRef.current = positions
 
-  useEffect(() => {
+  const encuadrar = useCallback(() => {
     const actuales = positionsRef.current
     if (!actuales.length) return
     if (actuales.length === 1) {
@@ -356,7 +379,48 @@ function FitBounds({ positions, fitToken }: { positions: [number, number][]; fit
       return
     }
     map.fitBounds(L.latLngBounds(actuales), { padding: [36, 36], maxZoom: 17 })
-  }, [disparador, map])
+  }, [map])
+
+  // ── Memoria del encuadre ─────────────────────────────────────────────────
+  // Sólo cuando la pantalla pide memoria (vistaId). Sin ella, el componente se
+  // comporta igual que siempre, que es lo que mantiene intacto el Mapa CGO.
+  useEffect(() => {
+    if (!vistaId) return
+
+    const guardada = vistasGuardadas.get(vistaId)
+    if (guardada) map.setView(guardada.centro, guardada.zoom)
+    else encuadrar()
+
+    const recordar = () => {
+      const centro = map.getCenter()
+      vistasGuardadas.set(vistaId, { centro: [centro.lat, centro.lng], zoom: map.getZoom() })
+    }
+    map.on('moveend', recordar)
+    map.on('zoomend', recordar)
+    return () => {
+      map.off('moveend', recordar)
+      map.off('zoomend', recordar)
+    }
+  }, [map, vistaId, encuadrar])
+
+  // ── Encuadre automático ──────────────────────────────────────────────────
+  // Con `vistaId`, el encuadre deja de ser automático: lo pide el usuario con
+  // el botón, que es lo que mueve `fitToken`. Nada de lo que pase en la
+  // pantalla —seleccionar, analizar, recargar— le toca la cámara.
+  //
+  // Sin `vistaId` se conserva el comportamiento histórico: reencuadra cuando
+  // cambian las coordenadas dibujadas.
+  const primeraRef = useRef(true)
+
+  useEffect(() => {
+    if (vistaId) {
+      // El primer disparo lo maneja el efecto de memoria, para no pelearle.
+      if (primeraRef.current) { primeraRef.current = false; return }
+      encuadrar()
+      return
+    }
+    encuadrar()
+  }, [fitToken ?? key, vistaId, encuadrar]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return null
 }
@@ -456,6 +520,7 @@ export default function MapaOperativo({
   altura = 'min(58vh, 520px)',
   selectorFondo = false,
   fitToken,
+  vistaId,
 }: Props) {
   // El fondo es estado local del mapa: cambiarlo no toca ningún dato, ningún
   // filtro ni la selección. Sólo se reemplaza la imagen de abajo.
@@ -537,7 +602,7 @@ export default function MapaOperativo({
               <TileLayer key="fondo-transporte" url={URL_ESRI_TRANSPORTE} maxNativeZoom={19} />
             </>
           )}
-          <FitBounds positions={allPositions} fitToken={fitToken} />
+          <FitBounds positions={allPositions} fitToken={fitToken} vistaId={vistaId} />
           <FlyTo registroSeleccionado={registroSeleccionado} markers={markers} />
 
           {/* Capa: objetivos + círculo de radio */}

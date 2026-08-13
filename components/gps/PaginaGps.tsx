@@ -337,20 +337,18 @@ export default function PaginaGps({
   }, [objetivoPropuesto, objetivos])
 
   /**
-   * Lo único que reencuadra el mapa.
+   * Lo único que reencuadra el mapa: el botón "Encuadrar todo".
    *
-   * Cambia sólo cuando el usuario pidió ver otra cosa: filtros o capas.
-   * Deliberadamente NO incluye la selección, ni el diagnóstico, ni las
-   * marcaciones, ni las posiciones propuestas: seleccionar un marcador para
-   * mirarlo de cerca no puede tirarte el zoom para atrás.
+   * Antes esto dependía de los filtros y las capas, y ahí estaba el problema:
+   * prender la capa de Ingresos encuadraba para que entraran TODOS los
+   * fichajes, y con objetivos repartidos en varias ciudades eso te manda a ver
+   * media provincia justo cuando estabas mirando un portón.
+   *
+   * Ahora la cámara es del usuario. El mapa recuerda dónde la dejó y sólo se
+   * mueve si lo pide.
    */
-  const fitToken = useMemo(
-    () => [
-      desde, hasta, objetivoId, vigiladorId, filtroPuntos,
-      Array.from(capasActivas).sort().join(','),
-    ].join('|'),
-    [desde, hasta, objetivoId, vigiladorId, filtroPuntos, capasActivas],
-  )
+  const [encuadres, setEncuadres] = useState(0)
+  const fitToken = String(encuadres)
 
   const marcacionesCapa = useMemo<MarcacionCGO[]>(() => marcaciones.map(m => ({
     id: m.id,
@@ -789,6 +787,17 @@ export default function PaginaGps({
               {capa.label}
             </button>
           ))}
+          {/* El mapa no se mueve solo. Si te perdiste, esto te devuelve la
+              vista completa — pero lo pedís vos. */}
+          <button
+            type="button"
+            className={styles.boton}
+            style={{ marginLeft: 'auto' }}
+            onClick={() => setEncuadres(n => n + 1)}
+            title="Ajustar el zoom para que entre todo lo que está dibujado"
+          >
+            🎯 Encuadrar todo
+          </button>
         </div>
       </div>
 
@@ -876,6 +885,7 @@ export default function PaginaGps({
             altura="min(66vh, 620px)"
             selectorFondo
             fitToken={fitToken}
+            vistaId="pagina-gps"
           />
 
           <div className={styles.leyenda}>
