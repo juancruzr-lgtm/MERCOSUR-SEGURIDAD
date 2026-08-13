@@ -500,8 +500,33 @@ function horaDeMin(min: number): string {
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
 }
 
-export async function enviarNotificaciones(client: any) {
+/**
+ * Envío controlado a un solo destinatario, para la prueba previa a encender el
+ * cron. `soloUsuarioId` restringe la corrida entera a ese usuario.
+ *
+ * POR QUÉ ALCANZA CON FILTRAR LAS SUSCRIPCIONES
+ * Todo el envío pasa por sendToUsers / sendToUsersObjetivo, y las dos leen sus
+ * destinatarios del mismo arreglo `subscriptions`. Para cualquier otro usuario
+ * ese arreglo queda vacío, y ambas cortan con `continue` ANTES de
+ * markNotificationSent*: no se le manda nada y tampoco se le escribe fila en
+ * notificaciones_enviadas. No hace falta tocar los diez puntos de llamada —que
+ * es justo donde uno se olvida de uno y termina notificando a un tercero.
+ *
+ * Lo que NO cambia son las reglas: no se fabrica un aviso. Sale el que
+ * correspondía por las reglas existentes, o no sale ninguno. Y la fila de
+ * deduplicación del usuario probado se escribe normalmente, que es lo que
+ * permite comprobar que la segunda corrida no repite.
+ *
+ * Las suscripciones de los demás no se modifican: sólo quedan fuera de esta
+ * consulta.
+ */
+export interface OpcionesEnvio {
+  soloUsuarioId?: string | null
+}
+
+export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio = {}) {
   const admin = { client }
+  const soloUsuarioId = opciones.soloUsuarioId || null
 
   const hoy = fechaLocal()
   const ayer = sumarDias(hoy, -1)
@@ -529,10 +554,14 @@ export async function enviarNotificaciones(client: any) {
     admin.client
       .from('objetivos')
       .select('id, nombre, estado, zona_id, frecuencia_supervision_horas'),
-    admin.client
-      .from('push_subscriptions')
-      .select('id, usuario_id, endpoint, p256dh, auth')
-      .eq('activo', true),
+    (() => {
+      const q = admin.client
+        .from('push_subscriptions')
+        .select('id, usuario_id, endpoint, p256dh, auth')
+        .eq('activo', true)
+      // Único punto donde se restringe la prueba controlada. Ver OpcionesEnvio.
+      return soloUsuarioId ? q.eq('usuario_id', soloUsuarioId) : q
+    })(),
     admin.client
       .from('zonas_operativas')
       .select('id, nombre'),
@@ -1086,5 +1115,10 @@ export async function enviarNotificaciones(client: any) {
     alertasEnviadas,
     sent,
     skipped,
+    // Sólo en la prueba controlada: deja constancia de a quién se limitó y a
+    // cuántos dispositivos suyos podía llegar.
+    ...(soloUsuarioId
+      ? { pruebaControlada: { usuarioId: soloUsuarioId, dispositivos: subscriptions.length } }
+      : {}),
   })
 }

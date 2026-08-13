@@ -42,6 +42,14 @@ export async function GET(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const resultado = await enviarNotificaciones(admin.client)
+  // ?solo_usuario=<id> limita la corrida entera a ese destinatario: es la prueba
+  // controlada previa a encender el cron. Se lee DESPUÉS de validar CRON_SECRET,
+  // así que sin el token no hay forma de dirigir un envío a nadie.
+  //
+  // Sin el parámetro el comportamiento es el global de siempre: soloUsuarioId
+  // queda en null y no se filtra nada.
+  const soloUsuarioId = req.nextUrl.searchParams.get('solo_usuario')
+
+  const resultado = await enviarNotificaciones(admin.client, { soloUsuarioId })
   return NextResponse.json(resultado, { status: resultado.ok === false ? 500 : 200 })
 }
