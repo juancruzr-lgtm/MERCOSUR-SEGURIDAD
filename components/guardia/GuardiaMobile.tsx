@@ -717,6 +717,42 @@ export default function GuardiaMobile({ user }: { user: any }) {
     }
   }, [user.id, user.rol, hoy, ayer])
 
+  // ── Turnos de la planilla sin revisar ──────────────────────────────────────
+  //
+  // El vigilador confirma su jornada en el resumen que aparece apenas marca la
+  // salida. Si lo cierra sin responder —o si nunca marcó salida y el turno lo
+  // cerró el cron, en cuyo caso el resumen no llegó a aparecer— la acción
+  // queda en Mi Planilla, que es justo la pantalla donde no entra.
+  //
+  // Este contador trae ese número acá, a la pantalla que sí mira todos los
+  // días. No calcula nada nuevo: es el mismo `pendientes_revision` que ya
+  // devuelve la API del legajo.
+  const [pendientesPlanilla, setPendientesPlanilla] = useState(0)
+
+  const cargarPendientesPlanilla = useCallback(async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData?.session?.access_token
+      if (!token) return
+      const res = await fetch(`/api/legajo/${user.id}/planilla`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return
+      const json = await res.json()
+      setPendientesPlanilla(Number(json?.pendientes_revision) || 0)
+    } catch {
+      // Un contador que no carga no puede romper la pantalla de fichaje:
+      // se queda con el valor anterior y no muestra ningún error.
+    }
+  }, [user.id])
+
+  // Se recalcula con cada refresco de la pantalla —el ↻ y los automáticos ya
+  // mueven ultimaActualizacion—, así baja solo cuando el vigilador confirma.
+  useEffect(() => {
+    if (!ultimaActualizacion) return
+    void cargarPendientesPlanilla()
+  }, [cargarPendientesPlanilla, ultimaActualizacion])
+
   // Mantiene la bandera de "operación en curso" sin recrear recargarDatos.
   useEffect(() => {
     operacionEnCursoRef.current = ingresoFase !== 'idle' || fichando !== null
@@ -1813,6 +1849,27 @@ export default function GuardiaMobile({ user }: { user: any }) {
           {activandoPush ? 'Activando...' : 'Activar notificaciones'}
         </button>
 
+        {/* Sólo aparece si hay algo que hacer: un cartel permanente en cero se
+            vuelve parte del fondo y deja de leerse. */}
+        {pendientesPlanilla > 0 && (
+          <button
+            type="button"
+            onClick={() => router.push(`/guardias/${user.id}`)}
+            style={{
+              ...S.btn,
+              background: 'rgba(245,158,11,.12)',
+              border: '1px solid rgba(245,158,11,.45)',
+              color: '#fbbf24',
+              marginBottom: 10,
+              fontSize: 14,
+              lineHeight: 1.35,
+            }}
+          >
+            Tenés {pendientesPlanilla} turno{pendientesPlanilla === 1 ? '' : 's'} sin revisar en tu planilla
+            <div style={{ fontSize: 12, color: '#d97706', marginTop: 2 }}>Tocá para revisarlos</div>
+          </button>
+        )}
+
         <button
           type="button"
           onClick={() => router.push(`/guardias/${user.id}`)}
@@ -2085,7 +2142,11 @@ export default function GuardiaMobile({ user }: { user: any }) {
             estadoControlInicial="pendiente"
             permiteAceptar
             esTitular
-            onClose={() => setResumenTurnoId(null)}
+            // Si acepta acá mismo, el contador tiene que bajar sin esperar al
+            // próximo refresco: si no, el cartel lo sigue mandando a Mi Planilla
+            // por un turno que acaba de confirmar.
+            onCambio={() => { void cargarPendientesPlanilla() }}
+            onClose={() => { setResumenTurnoId(null); void cargarPendientesPlanilla() }}
           />
         )
       })()}
