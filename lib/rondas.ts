@@ -1716,7 +1716,11 @@ function msRonda(iso: string): number {
  * ya comparó `now()` contra el vencimiento en el servidor— y de los contadores.
  */
 export function estadoTecnicoRonda(r: RondaProgramada, ahora: number = Date.now()): EstadoTecnicoRonda {
-  if (r.pausada && !r.ejecucion_id) return 'pausada'
+  // `pausa_vigente`, no `pausada`: una pausa ya reanudada dejaba la tarjeta en
+  // "Pausada" para siempre, mientras el panel de rondas pausadas —que sí mira
+  // solo las activas— decía que no había ninguna. Las dos pantallas se
+  // contradecían. El historial sigue en `pausada` y en los campos pausa_*.
+  if (r.pausa_vigente && !r.ejecucion_id) return 'pausada'
   if (r.estado === 'pendiente') {
     return ahora < msRonda(r.ventana_inicio) ? 'proxima' : 'pendiente'
   }
@@ -1890,7 +1894,14 @@ export interface RondaProgramada {
   es_cierre_administrativo: boolean
 
   // Anexo de pausa. NO condiciona el estado técnico cuando hay ejecución.
+  //
+  // Son dos preguntas distintas y hay que elegir la correcta:
+  //   pausada       — historial: esta ventana estuvo cubierta por una pausa,
+  //                   aunque después se haya reanudado. Sirve para auditar.
+  //   pausa_vigente — operativo: esa pausa sigue activa AHORA. Es la única que
+  //                   puede afirmar "está pausada" en una pantalla de estado.
   pausada: boolean
+  pausa_vigente: boolean
   pausa_id: string | null
   pausa_motivo: string | null
   pausa_desde: string | null
