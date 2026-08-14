@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin, isObsAuthErr } from '../../_lib/obs-auth'
+import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 
 const MAX_EVENTS = 10_000
 
@@ -38,7 +39,15 @@ export async function GET(req: NextRequest) {
     client.from('objetivos').select('id, nombre, cliente, estado'),
     client.from('supervisor_intervenciones').select('id, supervisor_id, tipo_alerta, accion, created_at').gte('created_at', desde).limit(5000),
     client.from('registros_asistencia_auditoria').select('id, modificado_por, campo, motivo, created_at').gte('created_at', desde).limit(5000),
-    client.from('supervisiones').select('id, supervisor_id, objetivo_id, estado, created_at').gte('created_at', desde).limit(5000),
+    // Se truncaba en 1000 apenas la ventana superara ese volumen. Se agrega el
+    // orden explícito porque sin él la paginación no es determinista: PostgREST
+    // no garantiza el mismo orden entre páginas si no se lo pedís.
+    fetchPaginadoResult((d, h) =>
+      client.from('supervisiones').select('id, supervisor_id, objetivo_id, estado, created_at')
+        .gte('created_at', desde)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(d, h)),
     client.from('novedades').select('id, guardia_id, objetivo_id, prioridad, estado, tipo, created_at').gte('created_at', desde).limit(2000),
   ])
 
