@@ -567,7 +567,9 @@ function DetalleSinEjecucion({
     ['Alerta', ETIQUETA_ESTADO_ALERTA[alerta]],
   ]
 
-  const puedeSerPausada = !r.pausada && (tecnico === 'no_iniciada' || tecnico === 'pendiente' || tecnico === 'proxima')
+  // Con `pausada` no se podía volver a pausar una ronda cuya pausa anterior ya
+  // había sido reanudada: el historial bloqueaba la acción operativa.
+  const puedeSerPausada = !r.pausa_vigente && (tecnico === 'no_iniciada' || tecnico === 'pendiente' || tecnico === 'proxima')
 
   return (
     <div style={S.overlay} role="dialog" aria-modal="true" aria-label="Detalle de la ronda" onClick={onCerrar}>
@@ -591,7 +593,8 @@ function DetalleSinEjecucion({
           ))}
         </div>
 
-        {r.pausada && (
+        {/* El bloque dice "Pausa activa": sólo puede mostrarse si lo está. */}
+        {r.pausa_vigente && (
           <div style={{ ...S.bloque, borderTopColor: '#f59e0b' }}>
             <div style={{ ...S.bloqueTitulo, color: '#f59e0b' }}>⏸ Pausa activa</div>
             <div style={S.bloqueTexto}>
