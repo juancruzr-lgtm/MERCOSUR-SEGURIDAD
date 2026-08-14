@@ -342,6 +342,93 @@ export function estadoRevision(f: Pick<FilaBandejaMensual,
   return 'pendiente'
 }
 
+// ── Estado de revisión por turno+empleado ────────────────────────────────────
+// Lo que la bandeja arma desde aceptaciones_planilla,
+// solicitudes_modificacion_planilla y revisiones_planilla. Vive acá porque no
+// es sólo de la bandeja: Reportes → Diferencias necesita la misma respuesta a
+// "¿esto ya se resolvió?", y con dos construcciones distintas la misma fila
+// aparecía pendiente en una pantalla y resuelta en la otra.
+
+export const claveRevision = (turnoId: string, empleadoId: string) => `${turnoId}:${empleadoId}`
+
+export interface EstadoRevisionClave {
+  estadoControl: EstadoPrimerControl
+  solicitudId: string | null
+  solicitudTexto: string | null
+  solicitudEstado: EstadoSolicitud | null
+  revisado: boolean
+  derivado: boolean
+  observaciones: number
+}
+
+export function construirRevisionPorClave(
+  aceptaciones: Array<{ turno_id: string; empleado_id: string }>,
+  /** Ordenadas por created_at descendente: la primera vista es la más reciente. */
+  solicitudes: Array<{ id?: string; turno_id: string; empleado_id: string; texto?: string | null; estado: string }>,
+  revisiones: Array<{ turno_id: string; empleado_id: string; accion: string }>,
+): Map<string, EstadoRevisionClave> {
+  // Las claves se juntan a mano en un array en vez de iterar los Set: el
+  // target de compilación es ES5 y el spread de Set/Map no compila.
+  const claves: string[] = []
+  const vistas = new Set<string>()
+  const anotar = (k: string) => { if (!vistas.has(k)) { vistas.add(k); claves.push(k) } }
+
+  const aceptados = new Set<string>()
+  for (const a of aceptaciones) {
+    const k = claveRevision(a.turno_id, a.empleado_id)
+    aceptados.add(k); anotar(k)
+  }
+
+  const solicitudPor = new Map<string, typeof solicitudes[number]>()
+  for (const s of solicitudes) {
+    const k = claveRevision(s.turno_id, s.empleado_id)
+    anotar(k)
+    // Preferir la no resuelta: una solicitud vieja ya cerrada no puede tapar
+    // una nueva abierta sobre el mismo turno.
+    const previa = solicitudPor.get(k)
+    if (!previa || (previa.estado === 'resuelta' && s.estado !== 'resuelta')) solicitudPor.set(k, s)
+  }
+
+  const revisado = new Set<string>()
+  const derivado = new Set<string>()
+  const observaciones = new Map<string, number>()
+  for (const r of revisiones) {
+    const k = claveRevision(r.turno_id, r.empleado_id)
+    anotar(k)
+    if (r.accion === 'revisado') revisado.add(k)
+    if (r.accion === 'derivar_administracion') derivado.add(k)
+    if (r.accion === 'observacion') observaciones.set(k, (observaciones.get(k) ?? 0) + 1)
+  }
+
+  const mapa = new Map<string, EstadoRevisionClave>()
+  for (const k of claves) {
+    const solicitud = solicitudPor.get(k) ?? null
+    mapa.set(k, {
+      estadoControl: solicitud && solicitud.estado !== 'resuelta'
+        ? 'modificacion_solicitada'
+        : aceptados.has(k) ? 'aceptado' : 'pendiente',
+      solicitudId: solicitud?.id ?? null,
+      solicitudTexto: solicitud?.texto ?? null,
+      solicitudEstado: (solicitud?.estado as EstadoSolicitud) ?? null,
+      revisado: revisado.has(k),
+      derivado: derivado.has(k),
+      observaciones: observaciones.get(k) ?? 0,
+    })
+  }
+  return mapa
+}
+
+/** Estado por defecto de un turno sobre el que nadie hizo nada todavía. */
+export const REVISION_SIN_TOCAR: EstadoRevisionClave = {
+  estadoControl: 'pendiente',
+  solicitudId: null,
+  solicitudTexto: null,
+  solicitudEstado: null,
+  revisado: false,
+  derivado: false,
+  observaciones: 0,
+}
+
 // ── Filtros ──────────────────────────────────────────────────────────────────
 
 export type FiltroTernario = 'todos' | 'si' | 'no'

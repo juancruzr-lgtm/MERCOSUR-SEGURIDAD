@@ -33,10 +33,12 @@ import {
 } from '@/lib/primer-control'
 import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud } from '@/lib/primer-control'
 import { limitesDelMes } from '@/lib/calendario-mes'
+import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import { formatFechaHora } from '@/lib/formato'
 import {
   ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, ETIQUETA_MOTIVO_NO_CUBRE,
-  ETIQUETA_NO_REQUIERE_REVISION, cubreElTurno, etiquetaDiferencia,
+  ETIQUETA_NO_REQUIERE_REVISION, REVISION_SIN_TOCAR, claveRevision,
+  construirRevisionPorClave, cubreElTurno, etiquetaDiferencia,
   estadoRevision, etiquetaResumenMes, filtrarFilasBandeja, motivoNoCubre,
   planCorreccionHorario,
   objetivoEnAlcance, opcionesObjetivo, opcionesPuesto, opcionesVigilador,
@@ -45,9 +47,6 @@ import {
 import type { EstadoRevision, FilaBandejaMensual, FiltroTernario } from '@/lib/bandeja-planillas'
 
 const ESTADOS_SIN_OBLIGACION_LOCAL = new Set(['reemplazado', 'anulado', 'cancelado'])
-
-/** Tope por consulta. Si se alcanza, se avisa en pantalla en vez de cortar callado. */
-const TOPE_FILAS = 3000
 
 function finTurnoMs(fecha: string, horaInicio: string, horaFin: string): number {
   const [y, m, d] = fecha.slice(0, 10).split('-').map(Number)
@@ -108,7 +107,6 @@ export default function BandejaPlanillas({
 }: BandejaPlanillasProps) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
-  const [aviso, setAviso] = useState('')
   const [filas, setFilas] = useState<FilaBandejaMensual[]>([])
   const [recargas, setRecargas] = useState(0)
 
@@ -222,35 +220,46 @@ export default function BandejaPlanillas({
     const cargar = async () => {
       setCargando(true)
       setError('')
-      setAviso('')
       const { desde, hasta } = limitesDelMes(mes)
 
-      // Las cuatro consultas auxiliares van acotadas al mes por join con turnos:
-      // ninguna trae historial completo.
+      // Todas las consultas del mes se paginan. PostgREST corta en `max_rows`
+      // (1000 en este proyecto) sin devolver error: un `.limit()` mayor no lo
+      // levanta, sólo hace creer que alcanza. Con 1263 turnos en agosto 2026 la
+      // bandeja perdia los del 1 al 5 —el orden es por fecha descendente, así
+      // que lo que se cae es el principio del mes— y ningún aviso saltaba.
+      //
+      // El segundo `order` por id es el que hace segura la paginación: sin un
+      // desempate estable, dos páginas pueden repetir u omitir filas.
       const [turnosR, registrosR, aceptR, soliR, reviR, guardiasR, zonasR] = await Promise.all([
-        supabase.from('turnos')
+        fetchPaginadoResult((d, h) => supabase.from('turnos')
           .select('id, fecha, hora_inicio, hora_fin, estado, tipo_evento, guardia_id, objetivo_id, puesto_id, puesto:puestos(nombre), objetivo:objetivos(nombre, es_prueba, zona_id)')
           .gte('fecha', desde).lte('fecha', hasta)
-          .order('fecha', { ascending: false })
-          .limit(TOPE_FILAS),
-        supabase.from('registros_asistencia')
+          .order('fecha', { ascending: false }).order('id')
+          .range(d, h)),
+        fetchPaginadoResult((d, h) => supabase.from('registros_asistencia')
           .select('id, turno_id, guardia_id, guardia_final_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, cierre_automatico, cobertura_anulada_at, turno:turnos!inner(fecha)')
           .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .limit(TOPE_FILAS),
-        supabase.from('aceptaciones_planilla')
+          .order('id')
+          .range(d, h)),
+        fetchPaginadoResult((d, h) => supabase.from('aceptaciones_planilla')
           .select('turno_id, empleado_id, turno:turnos!inner(fecha)')
           .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .limit(TOPE_FILAS),
-        supabase.from('solicitudes_modificacion_planilla')
+          .order('turno_id')
+          .range(d, h)),
+        fetchPaginadoResult((d, h) => supabase.from('solicitudes_modificacion_planilla')
           .select('id, turno_id, empleado_id, texto, estado, created_at, turno:turnos!inner(fecha)')
           .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .order('created_at', { ascending: false })
-          .limit(TOPE_FILAS),
-        supabase.from('revisiones_planilla')
+          .order('created_at', { ascending: false }).order('id')
+          .range(d, h)),
+        fetchPaginadoResult((d, h) => supabase.from('revisiones_planilla')
           .select('turno_id, empleado_id, solicitud_id, accion, turno:turnos!inner(fecha)')
           .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .limit(TOPE_FILAS),
-        supabase.from('usuarios').select('id, nombre, apellido').limit(2000),
+          .order('turno_id')
+          .range(d, h)),
+        fetchPaginadoResult((d, h) => supabase.from('usuarios')
+          .select('id, nombre, apellido')
+          .order('id')
+          .range(d, h)),
         supabase.from('supervisor_zonas').select('zona_id').eq('supervisor_id', user?.id ?? ''),
       ])
 
@@ -260,9 +269,6 @@ export default function BandejaPlanillas({
         setError(err.message)
         setCargando(false)
         return
-      }
-      if ((turnosR.data ?? []).length >= TOPE_FILAS) {
-        setAviso(`Se alcanzó el tope de ${TOPE_FILAS} turnos para este mes: puede faltar información. Filtrá por objetivo o vigilador.`)
       }
 
       const nombrePor = new Map<string, string>((guardiasR.data ?? []).map((g: any) => [g.id, `${g.apellido}, ${g.nombre}`]))
@@ -274,25 +280,14 @@ export default function BandejaPlanillas({
         arr.push(r)
         registrosPorTurno.set(r.turno_id, arr)
       }
-      const aceptados = new Set(((aceptR.data ?? []) as any[]).map(a => `${a.turno_id}:${a.empleado_id}`))
-      const solicitudPor = new Map<string, any>()
-      for (const s of ((soliR.data ?? []) as any[])) {
-        const k = `${s.turno_id}:${s.empleado_id}`
-        // orden desc: la primera vista es la más reciente; preferir la no resuelta
-        if (!solicitudPor.has(k) || (solicitudPor.get(k).estado === 'resuelta' && s.estado !== 'resuelta')) {
-          solicitudPor.set(k, s)
-        }
-      }
-      const revisadoSet = new Set<string>()
-      const derivadoSet = new Set<string>()
-      const obsCount = new Map<string, number>()
-      for (const r of ((reviR.data ?? []) as any[])) {
-        const k = `${r.turno_id}:${r.empleado_id}`
-        if (r.accion === 'revisado') revisadoSet.add(k)
-        if (r.accion === 'derivar_administracion') derivadoSet.add(k)
-        if (r.accion === 'observacion') obsCount.set(k, (obsCount.get(k) ?? 0) + 1)
-      }
-
+      // Misma construcción que consume Reportes → Diferencias: si esto viviera
+      // sólo acá, la misma fila podría figurar pendiente en una pantalla y
+      // resuelta en la otra.
+      const revisionPor = construirRevisionPorClave(
+        (aceptR.data ?? []) as any[],
+        (soliR.data ?? []) as any[],
+        (reviR.data ?? []) as any[],
+      )
       const ahora = Date.now()
       const resultado: FilaBandejaMensual[] = []
       for (const t of ((turnosR.data ?? []) as any[])) {
@@ -305,11 +300,7 @@ export default function BandejaPlanillas({
         const empleadoId = (registro ? effectiveGuardia(registro) : null) ?? t.guardia_id
         if (!empleadoId) continue
         const linea = resolverLineaLiquidacion(t, registro ?? null)
-        const k = `${t.id}:${empleadoId}`
-        const solicitud = solicitudPor.get(k) ?? null
-        const estadoControl: EstadoPrimerControl = solicitud && solicitud.estado !== 'resuelta'
-          ? 'modificacion_solicitada'
-          : aceptados.has(k) ? 'aceptado' : 'pendiente'
+        const revision = revisionPor.get(claveRevision(t.id, empleadoId)) ?? REVISION_SIN_TOCAR
         resultado.push({
           turnoId: t.id,
           empleadoId,
@@ -329,13 +320,7 @@ export default function BandejaPlanillas({
           caracteristica: etiquetaCaracteristica(t.tipo_evento),
           salidaAutomatica: Boolean(registro?.cierre_automatico),
           tieneFichaje: Boolean(registro),
-          estadoControl,
-          solicitudId: solicitud?.id ?? null,
-          solicitudTexto: solicitud?.texto ?? null,
-          solicitudEstado: (solicitud?.estado as EstadoSolicitud) ?? null,
-          revisado: revisadoSet.has(k),
-          derivado: derivadoSet.has(k),
-          observaciones: obsCount.get(k) ?? 0,
+          ...revision,
         })
       }
       setFilas(resultado)
@@ -507,11 +492,6 @@ export default function BandejaPlanillas({
         </span>
       </div>
 
-      {aviso && (
-        <div style={{ color: '#f59e0b', background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>
-          {aviso}
-        </div>
-      )}
       {cargando && <div style={{ ...muted, padding: 24, textAlign: 'center' }}>Cargando bandeja…</div>}
       {!cargando && error && <div style={{ color: '#ef4444', padding: 12 }}>{error}</div>}
       {!cargando && !error && visibles.length === 0 && (

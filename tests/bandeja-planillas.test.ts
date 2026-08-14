@@ -7,6 +7,7 @@ import {
   nombreMes, objetivoEnAlcance, planCorreccionHorario, requiereRevision,
   opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   resumenBandejaMensual,
+  REVISION_SIN_TOCAR, claveRevision, construirRevisionPorClave,
 } from '@/lib/bandeja-planillas'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 
@@ -493,5 +494,80 @@ describe('objetivoEnAlcance', () => {
   it('supervisor sin zonas asignadas: alcance total (regla existente)', () => {
     expect(objetivoEnAlcance('z5', false, new Set())).toBe(true)
     expect(objetivoEnAlcance('z5', false, null)).toBe(true)
+  })
+})
+
+// ── Estado de revisión por turno+empleado ────────────────────────────────────
+// Es la fuente que comparten Revisión de planillas y Reportes → Diferencias.
+// Antes Diferencias no la consultaba: un turno ya revisado o derivado seguía
+// apareciendo idéntico a uno intacto.
+
+describe('construirRevisionPorClave', () => {
+  const K = claveRevision('t1', 'e1')
+
+  it('turno sobre el que nadie hizo nada: no aparece en el mapa', () => {
+    const m = construirRevisionPorClave([], [], [])
+    expect(m.get(K)).toBeUndefined()
+    expect(estadoRevision(REVISION_SIN_TOCAR)).toBe('pendiente')
+    expect(esPendienteDeAccion('pendiente')).toBe(true)
+  })
+
+  it('aceptado por el vigilador deja de ser pendiente', () => {
+    const m = construirRevisionPorClave([{ turno_id: 't1', empleado_id: 'e1' }], [], [])
+    expect(estadoRevision(m.get(K)!)).toBe('aceptado')
+    expect(esPendienteDeAccion('aceptado')).toBe(false)
+  })
+
+  it('revisado por el supervisor deja de ser pendiente', () => {
+    const m = construirRevisionPorClave([], [], [{ turno_id: 't1', empleado_id: 'e1', accion: 'revisado' }])
+    expect(estadoRevision(m.get(K)!)).toBe('revisado_supervisor')
+    expect(esPendienteDeAccion('revisado_supervisor')).toBe(false)
+  })
+
+  it('derivado a administración sigue pendiente de regularización', () => {
+    const m = construirRevisionPorClave([], [], [{ turno_id: 't1', empleado_id: 'e1', accion: 'derivar_administracion' }])
+    expect(estadoRevision(m.get(K)!)).toBe('pendiente_regularizacion')
+    expect(esPendienteDeAccion('pendiente_regularizacion')).toBe(true)
+  })
+
+  it('solicitud resuelta cierra el ciclo', () => {
+    const m = construirRevisionPorClave([], [{ turno_id: 't1', empleado_id: 'e1', estado: 'resuelta' }], [])
+    expect(estadoRevision(m.get(K)!)).toBe('resuelto')
+    expect(esPendienteDeAccion('resuelto')).toBe(false)
+  })
+
+  it('solicitud abierta pide acción', () => {
+    const m = construirRevisionPorClave([], [{ turno_id: 't1', empleado_id: 'e1', estado: 'pendiente' }], [])
+    expect(estadoRevision(m.get(K)!)).toBe('modificacion_solicitada')
+    expect(esPendienteDeAccion('modificacion_solicitada')).toBe(true)
+  })
+
+  it('una solicitud vieja resuelta no tapa una nueva abierta', () => {
+    // Llegan ordenadas por created_at descendente: primero la más reciente.
+    const m = construirRevisionPorClave([], [
+      { turno_id: 't1', empleado_id: 'e1', estado: 'resuelta' },
+      { turno_id: 't1', empleado_id: 'e1', estado: 'pendiente' },
+    ], [])
+    expect(estadoRevision(m.get(K)!)).toBe('modificacion_solicitada')
+  })
+
+  it('lo del supervisor pesa más que la respuesta del vigilador', () => {
+    const m = construirRevisionPorClave(
+      [{ turno_id: 't1', empleado_id: 'e1' }],
+      [{ turno_id: 't1', empleado_id: 'e1', estado: 'pendiente' }],
+      [{ turno_id: 't1', empleado_id: 'e1', accion: 'revisado' }],
+    )
+    expect(estadoRevision(m.get(K)!)).toBe('revisado_supervisor')
+  })
+
+  it('cuenta las observaciones y no mezcla empleados del mismo turno', () => {
+    const m = construirRevisionPorClave([], [], [
+      { turno_id: 't1', empleado_id: 'e1', accion: 'observacion' },
+      { turno_id: 't1', empleado_id: 'e1', accion: 'observacion' },
+      { turno_id: 't1', empleado_id: 'e2', accion: 'revisado' },
+    ])
+    expect(m.get(K)!.observaciones).toBe(2)
+    expect(estadoRevision(m.get(K)!)).toBe('pendiente')
+    expect(estadoRevision(m.get(claveRevision('t1', 'e2'))!)).toBe('revisado_supervisor')
   })
 })

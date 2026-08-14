@@ -4,7 +4,12 @@ import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa } from '@/lib/liquidacion'
-import { fetchPaginado } from '@/lib/fetch-paginado'
+import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
+import {
+  ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
+  construirRevisionPorClave, esPendienteDeAccion, estadoRevision,
+} from '@/lib/bandeja-planillas'
+import type { EstadoRevision, EstadoRevisionClave } from '@/lib/bandeja-planillas'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -5686,6 +5691,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [formEditTurno, setFormEditTurno] = useState({ fecha: '', hora_inicio: '', hora_fin: '', comentario: '' })
   const [editandoTurno, setEditandoTurno] = useState(false)
   const [mostrarDiferencias, setMostrarDiferencias] = useState(false)
+  // Estado de revisión por turno+empleado, de la misma fuente que la bandeja.
+  const [revisionMes, setRevisionMes] = useState<Map<string, EstadoRevisionClave>>(new Map())
+  // La lista de diferencias arranca en lo que todavía pide acción; el resto
+  // sigue accesible, con su estado a la vista.
+  const [difSoloPendientes, setDifSoloPendientes] = useState(true)
 
   const headersAdmin = async () => {
     const { data } = await supabase.auth.getSession()
@@ -5830,28 +5840,23 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     const desdeStr = `${mes}-01`
     const ultimoDia = new Date(y, m, 0).getDate()
     const hastaStr = `${mes}-${String(ultimoDia).padStart(2, '0')}`
-    const fetchAll = async (table: string, select: string, apply: (q: any) => any) => {
-      const PAGE = 1000
-      const all: any[] = []
-      let from = 0
-      while (true) {
-        const { data, error } = await apply(supabase.from(table).select(select)).range(from, from + PAGE - 1)
-        if (error) throw error
-        if (!data || data.length === 0) break
-        all.push(...data)
-        if (data.length < PAGE) break
-        from += PAGE
-      }
-      return all
-    }
+    const fetchAll = (table: string, select: string, apply: (q: any) => any) =>
+      fetchPaginado((desde, hasta) => apply(supabase.from(table).select(select)).range(desde, hasta))
+    // Aceptaciones, solicitudes y revisiones son la misma fuente que consume
+    // Revisión de planillas. Sin ellas, Diferencias no puede distinguir un turno
+    // ya resuelto de uno intacto: los mostraba iguales.
     Promise.all([
-      fetchAll('turnos', '*', q => q.gte('fecha', desdeStr).lte('fecha', hastaStr).order('fecha', { ascending: true })),
-      fetchAll('registros_asistencia', '*,turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('created_at', { ascending: false })),
+      fetchAll('turnos', '*', q => q.gte('fecha', desdeStr).lte('fecha', hastaStr).order('fecha', { ascending: true }).order('id')),
+      fetchAll('registros_asistencia', '*,turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('created_at', { ascending: false }).order('id')),
       supabase.from('novedades_laborales').select('*').eq('estado', 'aprobada').lte('fecha_desde', hastaStr).gte('fecha_hasta', desdeStr),
-    ]).then(([turnos, registros, nl]) => {
+      fetchAll('aceptaciones_planilla', 'turno_id, empleado_id, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('turno_id')),
+      fetchAll('solicitudes_modificacion_planilla', 'id, turno_id, empleado_id, estado, created_at, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('created_at', { ascending: false }).order('id')),
+      fetchAll('revisiones_planilla', 'turno_id, empleado_id, accion, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('turno_id')),
+    ]).then(([turnos, registros, nl, acept, soli, revi]) => {
       setTurnosReportes(turnos)
       setRegistrosReportes(registros)
       setNovedadesLaborales(nl.data ?? [])
+      setRevisionMes(construirRevisionPorClave(acept, soli, revi))
     })
   }, [mes])
 
@@ -6359,6 +6364,13 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       else if (reg.horas_liquidables != null) motivo = 'Horas liquidables ajustadas'
       else if (reg.hora_entrada_final || reg.hora_salida_final) motivo = 'Tiempos corregidos'
       else motivo = 'Requiere revisión'
+      // Una diferencia de horas dice QUÉ pasó; el estado de revisión dice si
+      // alguien todavía tiene que hacer algo. Son dos preguntas distintas y
+      // antes acá sólo se respondía la primera: un turno ya revisado o derivado
+      // se veía igual que uno intacto.
+      const empleadoId = effectiveGuardia(reg) ?? t.guardia_id
+      const revision = (empleadoId ? revisionMes.get(claveRevision(t.id, empleadoId)) : null) ?? REVISION_SIN_TOCAR
+      const estado = estadoRevision(revision)
       return {
         turno: t,
         registro: reg,
@@ -6367,6 +6379,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         hsLiq,
         diff,
         motivo,
+        estado,
+        pendiente: esPendienteDeAccion(estado),
+        observaciones: revision.observaciones,
         guardiaId: t.guardia_id,
         objetivoId: t.objetivo_id,
       }
@@ -6374,8 +6389,12 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     .filter(Boolean) as Array<{
       turno: Turno; registro: any; linea: any;
       hsProg: number; hsLiq: number; diff: number; motivo: string;
+      estado: EstadoRevision; pendiente: boolean; observaciones: number;
       guardiaId: string | null; objetivoId: string | null;
     }>
+
+  const diferenciasPendientes = diferenciasMes.filter(d => d.pendiente)
+  const diferenciasVisibles = difSoloPendientes ? diferenciasPendientes : diferenciasMes
 
   const exportarPlanillaEmpleadoXLSX = async () => {
     if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
@@ -6739,7 +6758,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cerrados · misma base que diferencia</div>
           </div>
           <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #f59e0b', cursor:'pointer', transition:'background .15s' }} onClick={() => setMostrarDiferencias(true)} title="Ver detalle de diferencias">
-            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia {diferenciasMes.length > 0 && <span style={{ color:'#f59e0b' }}>({diferenciasMes.length})</span>}</div>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia {diferenciasPendientes.length > 0 && <span style={{ color:'#f59e0b' }}>({diferenciasPendientes.length} pendiente{diferenciasPendientes.length !== 1 ? 's' : ''})</span>}</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color: (totalHsLiquidablesMes - totalHsProgramadasMes) < 0 ? '#ef4444' : '#10b981' }}>
               {(totalHsLiquidablesMes - totalHsProgramadasMes) >= 0 ? '+' : ''}{(totalHsLiquidablesMes - totalHsProgramadasMes).toFixed(2)} hs
             </div>
@@ -7050,12 +7069,38 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
               <div>
                 <div style={{ fontSize:20, fontWeight:700, fontFamily:'Syne,sans-serif' }}>Diferencias del mes</div>
-                <div style={{ fontSize:13, color:'#94a3b8', marginTop:2 }}>{mesLabel} — {diferenciasMes.length} turno{diferenciasMes.length !== 1 ? 's' : ''} con diferencia entre horas programadas y liquidables</div>
+                <div style={{ fontSize:13, color:'#94a3b8', marginTop:2 }}>
+                  {mesLabel} — {diferenciasPendientes.length} pendiente{diferenciasPendientes.length !== 1 ? 's' : ''} de {diferenciasMes.length} turno{diferenciasMes.length !== 1 ? 's' : ''} con diferencia
+                </div>
               </div>
               <button style={{ background:'transparent', border:'none', color:'#64748b', fontSize:22, cursor:'pointer', padding:'4px 8px' }} onClick={() => setMostrarDiferencias(false)}>✕</button>
             </div>
-            {diferenciasMes.length === 0 ? (
-              <div style={{ padding:32, textAlign:'center' as const, color:'#64748b' }}>No hay diferencias en turnos pasados de este mes.</div>
+            {/* Una diferencia ya revisada, derivada o resuelta no desaparece:
+                deja de contar como pendiente y muestra su estado. */}
+            <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:12, flexWrap:'wrap' }}>
+              <button
+                onClick={() => setDifSoloPendientes(v => !v)}
+                style={{
+                  ...S.btn, fontSize:12, padding:'5px 10px',
+                  border: difSoloPendientes ? '1px solid #f59e0b' : '1px solid #334155',
+                  background: difSoloPendientes ? '#f59e0b18' : '#1e293b',
+                  color: difSoloPendientes ? '#f59e0b' : '#e2e8f0',
+                }}
+              >
+                {difSoloPendientes ? '✓ ' : ''}Solo lo pendiente ({diferenciasPendientes.length})
+              </button>
+              <span style={{ fontSize:12, color:'#64748b' }}>
+                {difSoloPendientes
+                  ? `${diferenciasMes.length - diferenciasPendientes.length} ya resuelta${diferenciasMes.length - diferenciasPendientes.length !== 1 ? 's' : ''} oculta${diferenciasMes.length - diferenciasPendientes.length !== 1 ? 's' : ''}`
+                  : 'Mostrando todas, incluidas las ya resueltas'}
+              </span>
+            </div>
+            {diferenciasVisibles.length === 0 ? (
+              <div style={{ padding:32, textAlign:'center' as const, color:'#64748b' }}>
+                {diferenciasMes.length === 0
+                  ? 'No hay diferencias en turnos pasados de este mes.'
+                  : 'No queda nada pendiente: todas las diferencias del mes están revisadas o resueltas.'}
+              </div>
             ) : (
               <div style={{ overflowX:'auto' }}>
                 <table style={S.table}>
@@ -7070,11 +7115,12 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                       <th style={{ ...S.th, textAlign:'right' as const }}>Hs Liq.</th>
                       <th style={{ ...S.th, textAlign:'right' as const }}>Dif.</th>
                       <th style={S.th}>Motivo</th>
+                      <th style={S.th}>Estado</th>
                       <th style={S.th}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {diferenciasMes.map(d => {
+                    {diferenciasVisibles.map(d => {
                       const guardiaNombre = d.guardiaId ? (() => { const g = guardias.find((g: Usuario) => g.id === d.guardiaId); return g ? `${g.apellido}, ${g.nombre}` : '—' })() : '—'
                       const objetivoNombre = d.objetivoId ? (objetivos.find((o: Objetivo) => o.id === d.objetivoId)?.nombre || '—') : '—'
                       return (
@@ -7100,6 +7146,14 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                             {d.diff >= 0 ? '+' : ''}{d.diff.toFixed(2)}
                           </td>
                           <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{d.motivo}</td>
+                          <td style={{ ...S.td, fontSize:12 }}>
+                            <span style={{ color: d.pendiente ? '#f59e0b' : '#10b981' }}>
+                              {ETIQUETA_ESTADO_REVISION[d.estado]}
+                            </span>
+                            {d.observaciones > 0 && (
+                              <span style={{ color:'#64748b', marginLeft:6 }}>· {d.observaciones} obs.</span>
+                            )}
+                          </td>
                           <td style={S.td}>
                             <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
                               <button style={{ ...S.btn, fontSize:11, padding:'3px 8px', background:'#1e293b', color:'#94a3b8', border:'1px solid #334155' }} onClick={() => { abrirEdicionTurno(d.turno.id); setMostrarDiferencias(false) }}>Editar turno</button>
@@ -7118,10 +7172,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                   </tbody>
                 </table>
                 <div style={{ marginTop:12, padding:'8px 12px', background:'#1a2235', borderRadius:8, display:'flex', gap:16, fontSize:12, color:'#94a3b8' }}>
-                  <span>Total diferencia: <strong style={{ color: diferenciasMes.reduce((s, d) => s + d.diff, 0) < 0 ? '#ef4444' : '#10b981', fontVariantNumeric:'tabular-nums' }}>
-                    {diferenciasMes.reduce((s, d) => s + d.diff, 0) >= 0 ? '+' : ''}{diferenciasMes.reduce((s, d) => s + d.diff, 0).toFixed(2)} hs
+                  <span>Total diferencia{difSoloPendientes ? ' pendiente' : ''}: <strong style={{ color: diferenciasVisibles.reduce((s, d) => s + d.diff, 0) < 0 ? '#ef4444' : '#10b981', fontVariantNumeric:'tabular-nums' }}>
+                    {diferenciasVisibles.reduce((s, d) => s + d.diff, 0) >= 0 ? '+' : ''}{diferenciasVisibles.reduce((s, d) => s + d.diff, 0).toFixed(2)} hs
                   </strong></span>
-                  <span>{diferenciasMes.filter(d => d.diff < 0).length} con déficit · {diferenciasMes.filter(d => d.diff > 0).length} con excedente</span>
+                  <span>{diferenciasVisibles.filter(d => d.diff < 0).length} con déficit · {diferenciasVisibles.filter(d => d.diff > 0).length} con excedente</span>
                 </div>
               </div>
             )}
@@ -10608,15 +10662,15 @@ export default function AppPage() {
       // Turnos y asistencia del mes se paginan: superan las 1000 filas que
       // PostgREST devuelve como máximo, y el recorte es silencioso. Sin paginar,
       // `order('fecha', desc)` dejaba afuera los primeros días del mes.
-      fetchPaginado<Turno>((desde, hasta) =>
-        supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }).range(desde, hasta),
-      ).then(data => ({ data })),
+      fetchPaginadoResult<Turno>((desde, hasta) =>
+        supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }).order('id').range(desde, hasta),
+      ),
       // El filtro va por la fecha del turno, no por `created_at` del registro:
       // una cobertura precargada o una regularización posterior pertenecen al
       // mes que trabajaron, no al mes en que se cargaron.
-      fetchPaginado<RegistroAsistencia>((desde, hasta) =>
-        supabase.from('registros_asistencia').select('*,turno:turnos!inner(fecha)').gte('turno.fecha', desdeStr).lt('turno.fecha', hastaStr).order('created_at', { ascending: false }).range(desde, hasta),
-      ).then(data => ({ data })),
+      fetchPaginadoResult<RegistroAsistencia>((desde, hasta) =>
+        supabase.from('registros_asistencia').select('*,turno:turnos!inner(fecha)').gte('turno.fecha', desdeStr).lt('turno.fecha', hastaStr).order('created_at', { ascending: false }).order('id').range(desde, hasta),
+      ),
       supabase.from('novedades').select('*').order('created_at', { ascending: false }),
       supabase.from('checklist_plantillas').select('*').order('nombre'),
       supabase.from('checklist_items').select('*').order('orden', { ascending: true }),
