@@ -844,6 +844,12 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     esObjetivoPrueba,
   })
   const horasMes = totalHorasLiquidables(turnosReconocidosMes, mejorRegistroMes)
+  // Total programado del mes completo, con la misma definición que la tarjeta
+  // homónima de Reportes: mes entero, sin anulados/cancelados/reemplazados ni
+  // objetivos de prueba. Es el techo contra el que se leen las horas
+  // trabajadas: sin él, 2.881 hs no dice si vamos bien o mal.
+  const horasProgramadasMesDashboard = turnosOperativosDelMes(turnosMesDashboard, { esObjetivoPrueba })
+    .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
   const guardiasConAsistenciaMes = new Set(registrosMes.filter((r: RegistroAsistencia) => r.hora_entrada_real).map((r: RegistroAsistencia) => r.guardia_id)).size
   const turnosFinalizadosHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && r.hora_salida_real).length
   const novedadesUrgentes = novedades.filter((n: Novedad) => n.prioridad === 'urgente' && n.estado !== 'resuelta')
@@ -902,6 +908,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: semanticColors.success, page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
     { label: 'Turnos finalizados hoy', value: turnosFinalizadosHoy, sub: 'con entrada y salida', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Turnos finalizados hoy' } },
     { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'liquidables del día', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
+    { label: 'Horas programadas mes', value: formatoHoras(horasProgramadasMesDashboard), sub: `mes completo · ${mesActual}`, color: semanticColors.info, page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas programadas ${mesActual}` } },
     { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: `liquidables · ${mesActual}`, color: brandColors.orange, page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
     // Antes existía además "Total horas reales", que mostraba `horasMes` — el
     // mismo valor que la tarjeta de arriba — bajo un rótulo que prometía horas
@@ -6362,49 +6369,52 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     hastaFecha: hoyISO,
     esObjetivoPrueba: _esObjetivoPruebaReportes,
   })
-  // ── Las cuatro métricas del mes ────────────────────────────────────────────
+  // ── Las cinco métricas del mes ─────────────────────────────────────────────
   //
-  // Antes había una sola base para todo y mezclaba conceptos: incluía los
-  // turnos de HOY que todavía no habían empezado —contándolos como deuda— y
-  // excluía a quien estaba trabajando en ese momento, que no aparecía en
-  // ninguna columna. La diferencia se leía como incumplimiento cuando una parte
-  // era simplemente el día en curso.
-  //
-  // Ahora cada hora del mes cae en exactamente una categoría:
-  //   exigibles + en curso + aún no empezados = total programado del mes.
+  // Son CINCO conceptos distintos y no hay que forzarlos a cerrar entre sí.
+  // En particular, NO vale que reconocidas + pendiente = exigibles: las
+  // reconocidas incluyen horas de turnos que todavía no terminaron y
+  // extensiones reales por encima de lo programado. La única reconciliación
+  // exacta es la del pendiente, turno por turno sobre el universo exigible.
 
-  // 1. Todo lo operativamente válido del mes, sin filtro de fecha.
+  // 1. Todo lo operativamente válido del mes, esté asignado o no.
   const turnosOperativosMes = turnosOperativosDelMes(turnosMes, {
     esObjetivoPrueba: _esObjetivoPruebaReportes,
   })
   const totalHsProgramadasMesCompleto = turnosOperativosMes
     .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
 
-  // 2. Lo que ya terminó: lo único reclamable.
+  // 2. De eso, lo que ya tiene vigilador. Es una métrica de PROGRAMACIÓN, no de
+  //    asistencia: un turno futuro con vigilador asignado cuenta.
+  const turnosAsignadosMes = turnosOperativosMes.filter((t: Turno) => Boolean(t.guardia_id))
+  const totalHsAsignadasMes = turnosAsignadosMes
+    .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+  const totalHsSinAsignar = totalHsProgramadasMesCompleto - totalHsAsignadasMes
+
+  // 3. Lo que ya terminó: el universo sobre el que se puede reclamar.
   const turnosExigibles = turnosExigiblesHastaAhora(turnosMes, {
     esObjetivoPrueba: _esObjetivoPruebaReportes,
   })
   const totalHsExigibles = turnosExigibles
     .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
 
-  // 3. Reconocidas sobre ese mismo universo, con la fuente autoritativa intacta.
-  const totalHsLiquidablesMes = totalHorasLiquidables(turnosExigibles, _mejorRegistroPorTurnoReportes)
+  // 4. Horas de trabajo efectivamente reconocidas. Va sobre el universo
+  //    autoritativo de siempre —el mismo que usa el Panel Principal— y NO sobre
+  //    el exigible: si alguien fichó salida a las 15:00 de un turno que termina
+  //    a las 16:00, esas horas ya están reconocidas y tienen que contarse.
+  //    Atarlo al universo exigible hacía que las dos pantallas mostraran
+  //    números distintos para el mismo concepto.
+  const totalHsLiquidablesMes = totalHorasLiquidables(turnosBaseMes, _mejorRegistroPorTurnoReportes)
 
-  // 4. Pendiente turno por turno, sin compensar entre turnos.
+  // 5. Pendiente turno por turno, sin compensar entre turnos. Es lo único que
+  //    reconcilia exacto con el detalle.
   const totalHsPendiente = totalPendiente(turnosExigibles, _mejorRegistroPorTurnoReportes)
 
-  // Las dos categorías que antes quedaban invisibles, para que la suma cierre.
+  // Lo que queda por delante, para leer la tarjeta de exigibles en contexto.
   const ahoraMs = Date.now()
-  const turnosEnCurso = turnosOperativosMes.filter((t: Turno) =>
-    !turnoExigible(t, ahoraMs) && finProgramadoTurno(t) - horasProgramadasTurno(t) * 3_600_000 <= ahoraMs)
-  const turnosSinEmpezar = turnosOperativosMes.filter((t: Turno) =>
-    finProgramadoTurno(t) - horasProgramadasTurno(t) * 3_600_000 > ahoraMs)
-  const hsEnCurso = turnosEnCurso.reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
-  const hsSinEmpezar = turnosSinEmpezar.reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
-
-  const pctCubierto = totalHsExigibles > 0
-    ? (totalHsLiquidablesMes / totalHsExigibles * 100).toFixed(1)
-    : null
+  const hsNoExigiblesAun = turnosOperativosMes
+    .filter((t: Turno) => !turnoExigible(t, ahoraMs))
+    .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
 
   // Capacitación del mes COMPLETO: es carga pagable y por eso entra en el
   // total, pero no se le factura al objetivo. Va identificada aparte en la
@@ -6419,7 +6429,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
 
   // La misma capacitación, pero sólo la ya reconocida: es la que explica por
   // qué el total liquidable y lo facturable al objetivo no coinciden.
-  const capacitacionMes = turnosExigibles.reduce(
+  // Capacitación ya reconocida: mismo universo que la tarjeta de reconocidas.
+  const capacitacionMes = turnosBaseMes.reduce(
     (acc: { horas: number; turnos: number }, t: Turno) => {
       if (!esCapacitacion(t.tipo_evento)) return acc
       const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
@@ -6842,27 +6853,37 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #64748b' }}>
             <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Total programado del mes</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#e2e8f0' }}>{totalHsProgramadasMesCompleto.toFixed(2)} hs</div>
-            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Mes completo · excluye anulados y objetivos de prueba</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Todos los turnos programados del mes, estén o no asignados.</div>
             {capacitacionMesCompleto.horas > 0 && (
               <div style={{ fontSize:11, color:'#a78bfa', marginTop:4, lineHeight:1.35 }}>
                 Incluye {capacitacionMesCompleto.horas.toFixed(2)} hs de capacitación ({capacitacionMesCompleto.turnos} turno{capacitacionMesCompleto.turnos !== 1 ? 's' : ''}): {MOTIVO_CAPACITACION}.
               </div>
             )}
           </div>
+          {/* Métrica de PROGRAMACIÓN, no de asistencia: un turno futuro con
+              vigilador asignado cuenta acá. */}
+          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #8b5cf6' }}>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Total asignado del mes</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#a78bfa' }}>{totalHsAsignadasMes.toFixed(2)} hs</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos del mes que ya tienen vigilador asignado.</div>
+            {totalHsSinAsignar > 0.005 && (
+              <div style={{ fontSize:11, color:'#f59e0b', marginTop:4 }}>Sin asignar: {totalHsSinAsignar.toFixed(2)} hs</div>
+            )}
+          </div>
           <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #3b82f6' }}>
             <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Programadas exigibles hasta ahora</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#3b82f6' }}>{totalHsExigibles.toFixed(2)} hs</div>
-            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cuyo horario ya terminó</div>
-            <div style={{ fontSize:10.5, color:'#475569', marginTop:3, lineHeight:1.35 }}>
-              No incluye {hsEnCurso.toFixed(2)} hs en curso ni {hsSinEmpezar.toFixed(2)} hs que aún no empezaron.
-            </div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cuyo horario ya terminó.</div>
+            {hsNoExigiblesAun > 0.005 && (
+              <div style={{ fontSize:10.5, color:'#475569', marginTop:3, lineHeight:1.35 }}>
+                Faltan {hsNoExigiblesAun.toFixed(2)} hs de turnos en curso o que aún no empezaron.
+              </div>
+            )}
           </div>
           <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #10b981' }}>
             <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas reconocidas hasta ahora</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#10b981' }}>{totalHsLiquidablesMes.toFixed(2)} hs</div>
-            {pctCubierto !== null && (
-              <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>{pctCubierto}% de lo exigible</div>
-            )}
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Horas trabajadas reconocidas por vigilador, supervisor o administrador.</div>
             {notaCapacitacionIncluida(capacitacionMes.horas, capacitacionMes.turnos) && (
               <div style={{ fontSize:11, color:'#a78bfa', marginTop:4, lineHeight:1.35 }}>
                 {notaCapacitacionIncluida(capacitacionMes.horas, capacitacionMes.turnos)}
@@ -6880,7 +6901,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color: totalHsPendiente > 0 ? '#ef4444' : '#10b981' }}>
               {totalHsPendiente.toFixed(2)} hs
             </div>
-            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Suma turno por turno · sin compensar entre turnos</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Horas de turnos terminados que todavía faltan reconocer.</div>
           </div>
         </div>
       </div>
