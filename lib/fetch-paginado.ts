@@ -10,19 +10,32 @@
 
 export const FILAS_POR_PAGINA = 1000
 
+/**
+ * `maxFilas` corta la paginación en un techo deliberado. No es lo mismo que el
+ * tope de PostgREST: ese es una limitación que hay que sortear, éste es una
+ * decisión —"con 10.000 eventos alcanza para el análisis"— que hay que
+ * respetar. Quien lo use tiene que declarar que el resultado es parcial: para
+ * eso conviene comparar contra el total real de la ventana.
+ */
 export async function fetchPaginado<T = any>(
   consulta: (desde: number, hasta: number) => PromiseLike<{ data: T[] | null; error: any }>,
   filasPorPagina: number = FILAS_POR_PAGINA,
+  maxFilas?: number,
 ): Promise<T[]> {
   const todas: T[] = []
   let desde = 0
   for (;;) {
-    const { data, error } = await consulta(desde, desde + filasPorPagina - 1)
+    if (maxFilas != null && todas.length >= maxFilas) break
+    // La última página se recorta para no pasarse del techo pedido.
+    const pedir = maxFilas != null
+      ? Math.min(filasPorPagina, maxFilas - todas.length)
+      : filasPorPagina
+    const { data, error } = await consulta(desde, desde + pedir - 1)
     if (error) throw error
     if (!data || data.length === 0) break
     todas.push(...data)
-    if (data.length < filasPorPagina) break
-    desde += filasPorPagina
+    if (data.length < pedir) break
+    desde += pedir
   }
   return todas
 }
@@ -37,9 +50,10 @@ export async function fetchPaginado<T = any>(
 export async function fetchPaginadoResult<T = any>(
   consulta: (desde: number, hasta: number) => PromiseLike<{ data: T[] | null; error: any }>,
   filasPorPagina: number = FILAS_POR_PAGINA,
+  maxFilas?: number,
 ): Promise<{ data: T[]; error: any }> {
   try {
-    return { data: await fetchPaginado<T>(consulta, filasPorPagina), error: null }
+    return { data: await fetchPaginado<T>(consulta, filasPorPagina, maxFilas), error: null }
   } catch (error) {
     return { data: [], error }
   }
