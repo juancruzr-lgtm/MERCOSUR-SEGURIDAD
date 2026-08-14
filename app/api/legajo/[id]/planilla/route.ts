@@ -90,7 +90,13 @@ export interface RespuestaPlanilla {
   hasta: string
   // true si quien consulta es el titular del legajo (habilita los botones)
   es_titular: boolean
+  // Todo lo que espera respuesta del vigilador: aceptar O solicitar un cambio.
   pendientes_revision: number
+  // El subconjunto que realmente se puede ACEPTAR. Un turno pasado sin fichaje
+  // cuenta en el primero y no en el segundo: no hay asistencia que aceptar, y
+  // aceptar_turno_planilla lo rechaza. Sin este número el cartel del legajo
+  // prometía una acción que en la pantalla no existía.
+  pendientes_aceptacion: number
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -227,6 +233,13 @@ export async function GET(
     const tieneEntrada = linea.horaEntrada != null
     const tieneSalida = linea.horaSalida != null
     const estado = tieneEntrada && !tieneSalida ? 'en_curso' as const : 'trabajado' as const
+    // Mismo corte que aplica aceptar_turno_planilla con `v_fin > now()`. Sin
+    // esto la fila ofrecía "Aceptar" apenas había entrada y salida fichadas
+    // —por ejemplo si el vigilador marcó la salida antes del fin programado—
+    // y la RPC contestaba "El turno todavia no finalizo": botón visible que no
+    // podía funcionar. La condición vive en un solo lado.
+    const finalizado = turnoFinalizado(t.fecha, t.hora_inicio ?? '00:00', t.hora_fin ?? '00:00')
+    const revisable = estado === 'trabajado' && finalizado
 
     filas.push({
       fecha:           t.fecha,
@@ -242,8 +255,8 @@ export async function GET(
       turno_id:        t.id,
       puesto_nombre:   (t.puesto as any)?.nombre ?? null,
       salida_automatica: Boolean(r.cierre_automatico),
-      estado_control:  estado === 'trabajado' ? 'pendiente' : null,
-      permite_aceptar: estado === 'trabajado',
+      estado_control:  revisable ? 'pendiente' : null,
+      permite_aceptar: revisable,
       hora_inicio_programada: t.hora_inicio ? t.hora_inicio.slice(0, 5) : null,
       hora_fin_programada:    t.hora_fin    ? t.hora_fin.slice(0, 5)    : null,
       gps_ingreso_estado: r.gps_ingreso_estado ?? null,
@@ -371,9 +384,12 @@ export async function GET(
 
   const total_horas = Number(filas.reduce((s, f) => s + f.horas, 0).toFixed(2))
   const es_titular = solicitante.id === empleadoId
-  const pendientes_revision = filas.filter(f => f.estado_control === 'pendiente').length
+  const pendientes = filas.filter(f => f.estado_control === 'pendiente')
+  const pendientes_revision = pendientes.length
+  const pendientes_aceptacion = pendientes.filter(f => f.permite_aceptar).length
 
   return NextResponse.json({
-    filas, total_horas, mes, desde, hasta, es_titular, pendientes_revision,
+    filas, total_horas, mes, desde, hasta, es_titular,
+    pendientes_revision, pendientes_aceptacion,
   } satisfies RespuestaPlanilla)
 }

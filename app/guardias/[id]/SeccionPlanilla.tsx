@@ -40,6 +40,7 @@ interface DatosPlanilla {
   hasta: string
   es_titular?: boolean
   pendientes_revision?: number
+  pendientes_aceptacion?: number
 }
 
 interface OpcionMes {
@@ -584,6 +585,14 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                               : (acciones.aceptar || acciones.solicitar)
                                 ? (
                                   <span style={{ display: 'grid', gap: 4 }}>
+                                    {/* Sin esto la fila mostraba el botón naranja
+                                        y nada más: el vigilador veía que no podía
+                                        aceptar pero no por qué. */}
+                                    {!acciones.aceptar && (
+                                      <span style={{ color: '#64748b', fontSize: 10, lineHeight: 1.25 }}>
+                                        Sin fichaje: no hay asistencia que aceptar
+                                      </span>
+                                    )}
                                     {acciones.aceptar && (
                                       <button
                                         style={{ ...S.btnAccion(true), opacity: accionando === fila.turno_id ? 0.5 : 1 }}
@@ -681,11 +690,24 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
           <div style={S.total}>
             <div>
               <div style={S.totalLabel}>Total de horas</div>
-              {datos.es_titular && (datos.pendientes_revision ?? 0) > 0 && (
-                <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 4 }}>
-                  {datos.pendientes_revision} turno{(datos.pendientes_revision ?? 0) !== 1 ? 's' : ''} pendiente{(datos.pendientes_revision ?? 0) !== 1 ? 's' : ''} de revisión
-                </div>
-              )}
+              {datos.es_titular && (datos.pendientes_revision ?? 0) > 0 && (() => {
+                const total = datos.pendientes_revision ?? 0
+                const aceptar = datos.pendientes_aceptacion ?? 0
+                const sinFichaje = total - aceptar
+                return (
+                  <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 4, lineHeight: 1.4 }}>
+                    {total} turno{total !== 1 ? 's' : ''} pendiente{total !== 1 ? 's' : ''} de revisión
+                    {/* El desglose es lo que evita que el vigilador busque un
+                        botón "Aceptar" que para esas filas no corresponde. */}
+                    {aceptar > 0 && <div style={{ color: '#4ade80' }}>{aceptar} para aceptar</div>}
+                    {sinFichaje > 0 && (
+                      <div style={{ color: '#94a3b8' }}>
+                        {sinFichaje} sin fichaje: solo se puede solicitar un cambio
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
             <div style={S.totalValue}>{formatearHoras(datos.total_horas)} hs</div>
           </div>
