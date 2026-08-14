@@ -848,8 +848,22 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   // homónima de Reportes: mes entero, sin anulados/cancelados/reemplazados ni
   // objetivos de prueba. Es el techo contra el que se leen las horas
   // trabajadas: sin él, 2.881 hs no dice si vamos bien o mal.
-  const horasProgramadasMesDashboard = turnosOperativosDelMes(turnosMesDashboard, { esObjetivoPrueba })
+  const turnosOperativosMesDashboard = turnosOperativosDelMes(turnosMesDashboard, { esObjetivoPrueba })
+  const horasProgramadasMesDashboard = turnosOperativosMesDashboard
     .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+  // Lo que queda por delante del mes: turnos cuyo horario todavía no terminó.
+  // Es la pregunta operativa —"¿qué me falta cubrir?"— y por eso se mide en
+  // horas y no en turnos: un turno de 12 horas sin vigilador no pesa lo mismo
+  // que uno de 4.
+  const ahoraDashboard = Date.now()
+  const turnosRestantesMes = turnosOperativosMesDashboard
+    .filter((t: Turno) => !turnoExigible(t, ahoraDashboard))
+  const hsRestantesMes = turnosRestantesMes
+    .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+  const hsRestantesConVigilador = turnosRestantesMes
+    .filter((t: Turno) => Boolean(t.guardia_id))
+    .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+  const hsRestantesSinVigilador = hsRestantesMes - hsRestantesConVigilador
   const guardiasConAsistenciaMes = new Set(registrosMes.filter((r: RegistroAsistencia) => r.hora_entrada_real).map((r: RegistroAsistencia) => r.guardia_id)).size
   const turnosFinalizadosHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && r.hora_salida_real).length
   const novedadesUrgentes = novedades.filter((n: Novedad) => n.prioridad === 'urgente' && n.estado !== 'resuelta')
@@ -913,7 +927,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     // Antes existía además "Total horas reales", que mostraba `horasMes` — el
     // mismo valor que la tarjeta de arriba — bajo un rótulo que prometía horas
     // reales. Las reales son estas, las de fichaje GPS.
-    { label: 'Horas fichadas GPS', value: formatoHoras(horasGPSMes), sub: `reales · ${mesActual}`, color: semanticColors.info, page:'asistencia', filtro:{ tipo:'mes', label:'Horas fichadas GPS mes' } },
+    { label: 'Horas programadas restantes', value: formatoHoras(hsRestantesMes), sub: `${formatoHoras(hsRestantesConVigilador)} con vigilador · ${formatoHoras(hsRestantesSinVigilador)} sin asignar`, color: semanticColors.info, page:'turnos', filtro:{ tipo:'mes', mes:mesActual, label:`Turnos restantes ${mesActual}` } },
     { label: 'Guardias con asistencia', value: guardiasConAsistenciaMes, sub: mesActual, color: semanticColors.success, page:'asistencia', filtro:{ tipo:'mes', label:'Guardias con asistencia' } },
   ]
 
@@ -5185,6 +5199,44 @@ function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, obje
     setModal(false); setLoading(false)
   }
 
+  // ── Horas del mes por origen ───────────────────────────────────────────────
+  //
+  // De dónde salieron las horas reconocidas: fichaje GPS del vigilador, carga
+  // de supervisor, de administración, cierre automático o corrección. Es la
+  // pregunta de esta pantalla —quién registró qué— y no la de Reportes, que
+  // mira cuánto se paga. Las horas GPS son las realmente fichadas, distintas
+  // de las liquidables: entrar diez minutos antes suma acá y no allá.
+  const mesAsistencia = fechaCorteOperativa().slice(0, 7)
+  const turnoPorIdAsistencia = new Map<string, Turno>((turnos || []).map((t: Turno) => [t.id, t]))
+  const objetivoPruebaAsistencia = (objetivoId?: string | null) =>
+    Boolean((objetivos || []).find((o: Objetivo) => o.id === objetivoId)?.es_prueba)
+  const registrosMesAsistencia = (registros || []).filter((r: RegistroAsistencia) =>
+    turnoPorIdAsistencia.get(r.turno_id)?.fecha?.slice(0, 7) === mesAsistencia)
+  const mejorPorTurnoAsistencia = mejorRegistroPorTurno(
+    registrosMesAsistencia, turnoPorIdAsistencia, objetivoPruebaAsistencia,
+  )
+  const resumenOrigenMes = (() => {
+    let horasGPS = 0
+    const porOrigen = new Map<string, { horas: number; registros: number }>()
+    for (const [turnoId, reg] of Array.from(mejorPorTurnoAsistencia.entries())) {
+      const turno = turnoPorIdAsistencia.get(turnoId)
+      if (!turno) continue
+      const linea = resolverLineaLiquidacion(turno, reg)
+      horasGPS += linea.horasFichadasGPS
+      const previo = porOrigen.get(linea.origenEtiqueta) ?? { horas: 0, registros: 0 }
+      porOrigen.set(linea.origenEtiqueta, {
+        horas: previo.horas + linea.horasLiquidables,
+        registros: previo.registros + 1,
+      })
+    }
+    return {
+      horasGPS,
+      origenes: Array.from(porOrigen.entries())
+        .map(([etiqueta, v]) => ({ etiqueta, ...v }))
+        .sort((a, b) => b.horas - a.horas),
+    }
+  })()
+
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
@@ -5200,6 +5252,29 @@ function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, obje
           <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={limpiarFiltro}>Limpiar filtro</button>
         </div>
       )}
+
+      {resumenOrigenMes.origenes.length > 0 && (
+        <div style={{ ...S.card, marginBottom:20, background:'#0f172a', border:'1px solid #1e2d42' }}>
+          <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:10 }}>
+            Horas del mes por origen — {mesAsistencia}
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(170px, 1fr))', gap:12 }}>
+            <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #38bdf8' }}>
+              <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas fichadas GPS</div>
+              <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#38bdf8' }}>{resumenOrigenMes.horasGPS.toFixed(2)} hs</div>
+              <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Tiempo realmente fichado, no lo liquidable.</div>
+            </div>
+            {resumenOrigenMes.origenes.map(o => (
+              <div key={o.etiqueta} style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #475569' }}>
+                <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>{o.etiqueta}</div>
+                <div style={{ fontFamily:'Syne,sans-serif', fontSize:20, fontWeight:800, color:'#e2e8f0' }}>{o.horas.toFixed(2)} hs</div>
+                <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>{o.registros} registro{o.registros !== 1 ? 's' : ''}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {mostrarMapa && (
         <div style={{ marginBottom:20 }}>
           {/* Selector de modo */}
