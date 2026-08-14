@@ -4209,7 +4209,7 @@ const MOTIVOS_CARGA_MANUAL = [
   'Otro',
 ]
 
-function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegistros }: any) {
+function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegistros, setTurnos }: any) {
   const [form, setForm] = useState({
     guardia_id: turno?.guardia_id || '',
     hora_entrada: '',
@@ -4805,7 +4805,7 @@ function CorregirRegistroModal({ registro, onClose, turnos, guardias, objetivos,
   )
 }
 
-function Asistencia({ registros, setRegistros, turnos, guardias, objetivos, supervisiones, filtroActivo, limpiarFiltro, user, esAdmin }: any) {
+function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, objetivos, supervisiones, filtroActivo, limpiarFiltro, user, esAdmin }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ turno_id:'', hora_entrada_real:'', hora_salida_real:'', observacion:'' })
   const [loading, setLoading] = useState(false)
@@ -7202,6 +7202,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           guardias={guardias}
           user={user}
           setRegistros={setRegistrosReportes}
+          setTurnos={setTurnosReportes}
         />
       )}
 
@@ -10910,7 +10911,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={esRolAdmin(user?.rol)} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
-              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
+              {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
               {page === 'rondas' && <RondasGlobal objetivos={objetivos} />}
               {/* Vista transversal de GPS. Recibe los mismos datos ya cargados
                   que consume Asistencia: no repite ninguna consulta de evidencia. */}
