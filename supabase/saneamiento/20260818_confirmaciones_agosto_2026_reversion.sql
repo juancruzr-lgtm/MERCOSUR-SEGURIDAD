@@ -1,0 +1,84 @@
+-- ════════════════════════════════════════════════════════════════════
+-- REVERSIÓN de 20260818_confirmaciones_agosto_2026.sql
+--
+-- Da de baja las asistencias creadas por el saneamiento SIN BORRARLAS. Se usa
+-- el circuito de anulación que ya existe (cobertura_anulada_at), el mismo que
+-- usa anular_cobertura_manual_operativa: la fila queda, deja de contar para
+-- liquidación, y la traza de que un supervisor confirmó no se pierde.
+--
+-- Un DELETE sería más simple y estaría mal: perdería la evidencia de que la
+-- confirmación existió y de que el sistema la materializó.
+--
+-- Las asistencias del saneamiento se identifican sin ambigüedad por la
+-- combinación de origen y el prefijo del texto que escribió el bloque:
+--   origen_cobertura = 'confirmacion_supervisor'
+--   observacion LIKE 'Saneamiento 18/08/2026 —%'
+--
+-- Esto NO alcanza a las asistencias que cree confirmar_asistencia de acá en
+-- adelante: esas comparten el origen pero no el prefijo.
+--
+-- ── 1. VER QUÉ SE VA A REVERTIR (correr esto primero, es solo lectura) ──────
+--
+--   select r.id, r.turno_id, t.fecha, o.nombre as objetivo,
+--          u.apellido || ', ' || u.nombre as vigilador,
+--          r.horas_liquidables, r.observacion
+--   from public.registros_asistencia r
+--   join public.turnos t    on t.id = r.turno_id
+--   left join public.objetivos o on o.id = t.objetivo_id
+--   left join public.usuarios u  on u.id = coalesce(r.guardia_final_id, r.guardia_id)
+--   where r.origen_cobertura = 'confirmacion_supervisor'
+--     and r.observacion like 'Saneamiento 18/08/2026 —%'
+--     and r.cobertura_anulada_at is null
+--   order by t.fecha;
+--
+-- ── 2. REVERTIR (descomentar y ejecutar solo si hace falta) ─────────────────
+
+-- do $reversion$
+-- declare
+--   v_admin_id uuid;
+--   v_filas    int;
+-- begin
+--   select u.id into v_admin_id
+--   from public.usuarios u
+--   where u.auth_user_id = 'c110bb0e-f0e4-42dd-af05-a1056f931d14'
+--     and u.estado = 'activo' and u.rol = 'admin';
+--
+--   if not found then
+--     raise exception 'Admin no encontrado; corregir el auth_user_id';
+--   end if;
+--
+--   -- Las horas previas se conservan en horas_liquidables_antes_anulacion,
+--   -- que es lo que permitiría volver a activarlas si se decide otra cosa.
+--   update public.registros_asistencia r
+--      set horas_liquidables_antes_anulacion = r.horas_liquidables,
+--          horas_liquidables                 = 0,
+--          cobertura_anulada_at              = now(),
+--          cobertura_anulada_por             = v_admin_id,
+--          cobertura_anulada_motivo          = 'Reversión del saneamiento de confirmaciones de agosto 2026'
+--    where r.origen_cobertura = 'confirmacion_supervisor'
+--      and r.observacion like 'Saneamiento 18/08/2026 —%'
+--      and r.cobertura_anulada_at is null;
+--
+--   get diagnostics v_filas = row_count;
+--   raise notice 'Asistencias anuladas: %', v_filas;
+--
+--   -- El turno vuelve a 'programado' sólo si no le queda ninguna otra cobertura.
+--   update public.turnos t
+--      set estado = 'programado'
+--    where t.estado = 'cubierto'
+--      and not exists (
+--        select 1 from public.registros_asistencia r2
+--        where r2.turno_id = t.id
+--          and r2.cobertura_anulada_at is null
+--          and coalesce(r2.tipo_registro, '') <> 'ausencia'
+--      )
+--      and exists (
+--        select 1 from public.registros_asistencia r3
+--        where r3.turno_id = t.id
+--          and r3.observacion like 'Saneamiento 18/08/2026 —%'
+--      );
+--
+--   get diagnostics v_filas = row_count;
+--   raise notice 'Turnos devueltos a programado: %', v_filas;
+-- end;
+-- $reversion$;

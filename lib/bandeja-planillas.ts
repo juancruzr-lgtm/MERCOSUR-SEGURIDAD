@@ -311,6 +311,19 @@ export interface FilaBandejaMensual {
   caracteristica: string
   salidaAutomatica: boolean
   tieneFichaje: boolean
+  /**
+   * Ausencia marcada por un supervisor sobre este turno.
+   *
+   * Va aparte de `tieneFichaje` a propósito: una ausencia NO es un fichaje y
+   * nunca aporta horas. Si además hubo reemplazo, la fila muestra al reemplazo
+   * con sus horas y `ausenciaVigilador` conserva el nombre del que faltó — son
+   * dos personas distintas sobre el mismo turno.
+   */
+  esAusencia?: boolean
+  ausenciaVigilador?: string | null
+  ausenciaComentario?: string | null
+  ausenciaSupervisor?: string | null
+  ausenciaAt?: string | null
   /** Lo que respondió el vigilador. */
   estadoControl: EstadoPrimerControl
   solicitudId: string | null

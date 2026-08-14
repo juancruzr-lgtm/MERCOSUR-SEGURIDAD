@@ -15,6 +15,7 @@ export type AccionIntervencionOperativa =
   | 'reapertura'
   | 'anulacion_cobertura'
   | 'confirmar_asistencia'
+  | 'ausente'
 
 export type EstadoCicloVidaAlerta =
   | 'pendiente'
@@ -94,6 +95,8 @@ const ACCIONES_RESOLUTIVAS = new Set<AccionIntervencionOperativa>([
   'marcado_cubierto_manual',
   'alerta_revisada',
   'confirmar_asistencia',
+  // Marcar ausente también resuelve la alerta: el supervisor decidió qué pasó.
+  'ausente',
 ])
 
 const ACCIONES_ATENCION = new Set<AccionIntervencionOperativa>([
@@ -103,6 +106,8 @@ const ACCIONES_ATENCION = new Set<AccionIntervencionOperativa>([
   'marcado_cubierto_manual',
   'alerta_revisada',
   'confirmar_asistencia',
+  // Marcar ausente también resuelve la alerta: el supervisor decidió qué pasó.
+  'ausente',
 ])
 
 export const ESTADOS_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancelado'])
@@ -183,6 +188,14 @@ export function evaluarSinFichar(
   // Sin guardia asignado el problema es 'descubierto', no 'sin fichar'.
   if (!turno.guardia_id) return 'no_corresponde'
   if (turno.estado === 'descubierto') return 'no_corresponde'
+  // El supervisor ya decidió que el vigilador faltó: la pregunta "¿por qué no
+  // fichó?" está contestada y la alerta deja de pedir intervención.
+  //
+  // Ojo con la asimetría, que es deliberada: 'ausente' cierra la ALERTA pero
+  // NO está en ESTADOS_SIN_OBLIGACION, así que el turno sigue en el universo de
+  // horas programadas y, si nadie lo cubre, sigue explicando la diferencia
+  // pendiente. Una falta no borra la obligación de haber cubierto el puesto.
+  if (turno.estado === 'ausente') return 'no_corresponde'
   if (ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) return 'no_corresponde'
   if (!objetivoOperativo) return 'no_corresponde'
   if (tieneEntrada) return 'no_corresponde'
@@ -449,7 +462,13 @@ export function efectoIntervencionOperativa(accion: string) {
     alerta_revisada: 'Registra atención o justificación; la condición original puede seguir vigente.',
     reapertura: 'Reabre el seguimiento; no revierte turno, asistencia ni liquidación.',
     anulacion_cobertura: 'Invalida la cobertura manual para liquidación sin borrar historial.',
-    confirmar_asistencia: 'El supervisor confirmó asistencia del vigilador. No acredita fichaje ni afecta liquidación.',
+    // Desde 20260818100000 esta acción SÍ materializa la asistencia: llama a
+    // registrar_cobertura con origen 'confirmacion_supervisor'. El texto viejo
+    // —"no acredita fichaje ni afecta liquidación"— describía la versión que
+    // dejaba el turno en cero horas aunque el supervisor hubiera verificado
+    // presencia. Si el efecto cambia, este texto cambia con él.
+    confirmar_asistencia: 'Crea la asistencia con el horario programado y la acredita para liquidación. No registra fichaje ni GPS.',
+    ausente: 'Registra la ausencia del vigilador con cero horas. El turno sigue exigiendo cobertura hasta que alguien lo cubra.',
     cierre: 'Cierra administrativamente la alerta.',
   }
   return efectos[accion] || 'Evento registrado sin efecto estructurado conocido.'

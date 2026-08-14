@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { track } from '@/lib/telemetry'
@@ -30,6 +30,10 @@ interface FilaPlanilla {
   hora_fin_programada?: string | null
   gps_ingreso_estado?: string | null
   gps_egreso_estado?: string | null
+  es_ausencia?: boolean
+  ausencia_observacion?: string | null
+  ausencia_supervisor?: string | null
+  ausencia_at?: string | null
 }
 
 interface DatosPlanilla {
@@ -542,7 +546,8 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                   }
                   const acciones = accionesPrimerControl(fila, Boolean(datos.es_titular))
                   return (
-                    <tr key={`${fila.fecha}-${fila.hora_entrada ?? 'sp'}-${fila.turno_id ?? i}`} style={estilo}>
+                    <Fragment key={`${fila.fecha}-${fila.hora_entrada ?? 'sp'}-${fila.turno_id ?? i}`}>
+                    <tr style={estilo}>
                       {/* Fecha corta + día abreviado, apilados: dos datos en el
                           ancho de uno. El año es el del mes elegido. */}
                       <td style={S.td(ultimo)}>
@@ -676,6 +681,31 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                         )}
                       </td>
                     </tr>
+                    {/* Ausencia marcada por un supervisor. Va en su propia fila
+                        a todo el ancho para que el motivo se lea completo en el
+                        celular, sin comprimirlo dentro de una columna. */}
+                    {fila.es_ausencia && (
+                      <tr style={{ background: 'rgba(239,68,68,.08)' }}>
+                        <td colSpan={8} style={{ padding: '8px 10px', borderBottom: ultimo ? 'none' : '1px solid #0f1929' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: '#f87171' }}>Ausente</span>
+                            <span style={{ fontSize: 11, color: '#ef4444' }}>· 0 h reconocidas</span>
+                          </div>
+                          {fila.ausencia_observacion && (
+                            <div style={{ fontSize: 11, color: '#fca5a5', lineHeight: 1.45, whiteSpace: 'normal' as const }}>
+                              Comentario del supervisor: {fila.ausencia_observacion}
+                            </div>
+                          )}
+                          {(fila.ausencia_supervisor || fila.ausencia_at) && (
+                            <div style={{ fontSize: 10, color: '#ef4444', marginTop: 2 }}>
+                              {fila.ausencia_supervisor ?? 'Supervisor'}
+                              {fila.ausencia_at ? ` · ${formatFechaHora(fila.ausencia_at)}` : ''}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   )
                 })}
               </tbody>

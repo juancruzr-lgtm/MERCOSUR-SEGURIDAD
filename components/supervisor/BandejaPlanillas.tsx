@@ -237,7 +237,7 @@ export default function BandejaPlanillas({
           .order('fecha', { ascending: false }).order('id')
           .range(d, h)),
         fetchPaginadoResult((d, h) => supabase.from('registros_asistencia')
-          .select('id, turno_id, guardia_id, guardia_final_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, cierre_automatico, cobertura_anulada_at, turno:turnos!inner(fecha)')
+          .select('id, turno_id, guardia_id, guardia_final_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, cierre_automatico, cobertura_anulada_at, observacion, turno:turnos!inner(fecha)')
           .gte('turno.fecha', desde).lte('turno.fecha', hasta)
           .order('id')
           .range(d, h)),
@@ -273,12 +273,43 @@ export default function BandejaPlanillas({
 
       const nombrePor = new Map<string, string>((guardiasR.data ?? []).map((g: any) => [g.id, `${g.apellido}, ${g.nombre}`]))
       const zonasMias = new Set<string>(((zonasR.data ?? []) as any[]).map(z => z.zona_id))
+      // Desdoblamiento: las ausencias salen del camino de las horas y entran
+      // por uno propio, sólo para mostrarlas. `registrosPorTurno` alimenta
+      // selectRegistroPrincipal y resolverLineaLiquidacion —la cadena
+      // autoritativa— y sigue sin ver una sola ausencia, que es lo que impide
+      // que una falta se convierta en horas.
       const registrosPorTurno = new Map<string, any[]>()
+      const ausenciaPorTurno = new Map<string, any>()
+      const ausenciaIds: string[] = []
       for (const r of (registrosR.data ?? []) as any[]) {
-        if (r.tipo_registro === 'ausencia' || r.cobertura_anulada_at) continue
+        if (r.tipo_registro === 'ausencia') {
+          if (!ausenciaPorTurno.has(r.turno_id)) {
+            ausenciaPorTurno.set(r.turno_id, r)
+            ausenciaIds.push(r.id)
+          }
+          continue
+        }
+        if (r.cobertura_anulada_at) continue
         const arr = registrosPorTurno.get(r.turno_id) ?? []
         arr.push(r)
         registrosPorTurno.set(r.turno_id, arr)
+      }
+
+      // Quién marcó cada ausencia y cuándo: sale de la auditoría que ya escribe
+      // la RPC. No hacen falta columnas nuevas en registros_asistencia.
+      const autorAusencia = new Map<string, { nombre: string | null; fecha: string }>()
+      if (ausenciaIds.length > 0) {
+        const { data: audAus } = await supabase
+          .from('registros_asistencia_auditoria')
+          .select('registro_id, modificado_por, created_at')
+          .in('registro_id', ausenciaIds)
+          .eq('campo', 'ausencia_supervisor')
+        for (const a of ((audAus ?? []) as any[])) {
+          autorAusencia.set(a.registro_id, {
+            nombre: nombrePor.get(a.modificado_por) ?? null,
+            fecha: a.created_at,
+          })
+        }
       }
       // Misma construcción que consume Reportes → Diferencias: si esto viviera
       // sólo acá, la misma fila podría figurar pendiente en una pantalla y
@@ -301,6 +332,11 @@ export default function BandejaPlanillas({
         if (!empleadoId) continue
         const linea = resolverLineaLiquidacion(t, registro ?? null)
         const revision = revisionPor.get(claveRevision(t.id, empleadoId)) ?? REVISION_SIN_TOCAR
+        // La ausencia queda a nombre del vigilador ORIGINAL, que no siempre es
+        // el de la fila: si después entró un reemplazo, la fila muestra al
+        // reemplazo con sus horas y la ausencia sigue nombrando al que faltó.
+        const ausencia = ausenciaPorTurno.get(t.id)
+        const autorAus = ausencia ? autorAusencia.get(ausencia.id) : undefined
         resultado.push({
           turnoId: t.id,
           empleadoId,
@@ -320,6 +356,11 @@ export default function BandejaPlanillas({
           caracteristica: etiquetaCaracteristica(t.tipo_evento),
           salidaAutomatica: Boolean(registro?.cierre_automatico),
           tieneFichaje: Boolean(registro),
+          esAusencia: Boolean(ausencia),
+          ausenciaVigilador: ausencia ? (nombrePor.get(ausencia.guardia_id) ?? '—') : null,
+          ausenciaComentario: ausencia?.observacion ?? null,
+          ausenciaSupervisor: autorAus?.nombre ?? null,
+          ausenciaAt: autorAus?.fecha ?? null,
           ...revision,
         })
       }
@@ -524,8 +565,32 @@ export default function BandejaPlanillas({
             </div>
             <div style={muted}>
               Característica: {f.caracteristica}
-              {!f.tieneFichaje && <span style={{ marginLeft: 6, color: '#ef4444' }}>· Sin fichaje</span>}
+              {!f.tieneFichaje && !f.esAusencia && <span style={{ marginLeft: 6, color: '#ef4444' }}>· Sin fichaje</span>}
             </div>
+            {/* Ausencia marcada por un supervisor. Se muestra completa —quién
+                faltó, quién lo marcó y cuándo— porque es la explicación de por
+                qué ese turno no tiene horas de ese vigilador. */}
+            {f.esAusencia && (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: '#fca5a5', background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.3)', borderRadius: 6, padding: '6px 10px' }}>
+                <div style={{ fontWeight: 600, color: '#f87171' }}>
+                  Ausente · {f.ausenciaVigilador ?? '—'} · 0 h reconocidas
+                </div>
+                {f.ausenciaComentario && (
+                  <div style={{ marginTop: 2 }}>Comentario del supervisor: {f.ausenciaComentario}</div>
+                )}
+                {(f.ausenciaSupervisor || f.ausenciaAt) && (
+                  <div style={{ marginTop: 2, color: '#ef4444', fontSize: 11 }}>
+                    {f.ausenciaSupervisor ?? 'Supervisor'}
+                    {f.ausenciaAt ? ` · ${formatFechaHora(f.ausenciaAt)}` : ''}
+                  </div>
+                )}
+                {f.tieneFichaje && (
+                  <div style={{ marginTop: 4, color: '#94a3b8' }}>
+                    Cubierto después por {f.vigilador}: {f.horas.toFixed(2)} h a su nombre.
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ marginTop: 6, fontSize: 12 }}>
               Estado:{' '}
               {pide ? (

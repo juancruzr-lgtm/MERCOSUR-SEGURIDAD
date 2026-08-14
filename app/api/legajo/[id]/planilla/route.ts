@@ -80,6 +80,12 @@ export interface FilaPlanilla {
   hora_fin_programada: string | null
   gps_ingreso_estado: string | null
   gps_egreso_estado: string | null
+  // Ausencia marcada por un supervisor. Opcionales porque sólo las traen las
+  // filas de turnos sin cobertura: el resto no puede ser una ausencia.
+  es_ausencia?: boolean
+  ausencia_observacion?: string | null
+  ausencia_supervisor?: string | null
+  ausencia_at?: string | null
 }
 
 export interface RespuestaPlanilla {
@@ -187,6 +193,26 @@ export async function GET(
     return linea.horasTrabajadasOficiales > 0 || linea.horaEntrada != null
   })
 
+  // Ausencias marcadas por un supervisor. Van por separado y NO entran a
+  // `conCobertura`: ese es el camino de las horas, y una ausencia no tiene
+  // horas. Acá sólo se las recupera para mostrarlas, que es justamente lo que
+  // faltaba —hasta ahora se filtraban y el vigilador nunca se enteraba de que
+  // le habían marcado una falta—.
+  const ausenciasPorTurno = new Map<string, any>()
+  // Los ids se juntan en un array aparte: el target de compilación es ES5 y el
+  // spread de Map/Set no compila (mismo motivo que en lib/bandeja-planillas).
+  const ausenciaIds: string[] = []
+  for (const r of (registros ?? [])) {
+    if (r.tipo_registro !== 'ausencia') continue
+    if (effectiveGuardia(r) !== empleadoId) continue
+    const t = (r as any).turno
+    if (!t || (t.objetivo as any)?.es_prueba) continue
+    if (!ausenciasPorTurno.has(r.turno_id)) {
+      ausenciasPorTurno.set(r.turno_id, r)
+      ausenciaIds.push(r.id)
+    }
+  }
+
   // ── Resolver nombres para objetivo_final_id distintos al del turno ────────
   const objetivoFinalIds = [...new Set(
     conCobertura
@@ -285,9 +311,29 @@ export async function GET(
     .lte('fecha', hasta)
     .not('estado', 'in', '("reemplazado","anulado","cancelado")')
 
+  // Quién marcó cada ausencia y cuándo. Sale de la auditoría que ya escribe la
+  // RPC: no hace falta agregar columnas a registros_asistencia.
+  const autorAusencia = new Map<string, { nombre: string | null; fecha: string }>()
+  if (ausenciasPorTurno.size > 0) {
+    const { data: auditorias } = await admin.client
+      .from('registros_asistencia_auditoria')
+      .select('registro_id, modificado_por, created_at, usuario:usuarios!modificado_por(nombre, apellido)')
+      .in('registro_id', ausenciaIds)
+      .eq('campo', 'ausencia_supervisor')
+    for (const a of (auditorias ?? [])) {
+      const u = (a as any).usuario
+      autorAusencia.set((a as any).registro_id, {
+        nombre: u ? `${u.apellido}, ${u.nombre}` : null,
+        fecha: (a as any).created_at,
+      })
+    }
+  }
+
   for (const t of (turnosProgramados ?? [])) {
     if (fechasConRegistro.has(t.fecha)) continue
     fechasConRegistro.add(t.fecha)
+    const ausencia = ausenciasPorTurno.get(t.id)
+    const autor = ausencia ? autorAusencia.get(ausencia.id) : undefined
     // Turno pasado sin fichaje: revisable solo mediante solicitud de
     // modificación (nunca Aceptar — no hay asistencia que aceptar).
     const yaFinalizado = turnoFinalizado(t.fecha, t.hora_inicio ?? '00:00', t.hora_fin ?? '00:00')
@@ -305,8 +351,14 @@ export async function GET(
       turno_id: t.id,
       puesto_nombre: ((t as any).puesto)?.nombre ?? null,
       salida_automatica: false,
+      // Una ausencia ya tiene decisión tomada: no se acepta una asistencia que
+      // no existe. Solicitar cambio sigue disponible para discutirla.
       estado_control: yaFinalizado ? 'pendiente' : null,
       permite_aceptar: false,
+      es_ausencia: Boolean(ausencia),
+      ausencia_observacion: ausencia?.observacion ?? null,
+      ausencia_supervisor: autor?.nombre ?? null,
+      ausencia_at: autor?.fecha ?? null,
       hora_inicio_programada: t.hora_inicio?.slice(0, 5) ?? null,
       hora_fin_programada:    t.hora_fin?.slice(0, 5)    ?? null,
       gps_ingreso_estado: null,
