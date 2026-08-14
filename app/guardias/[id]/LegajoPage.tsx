@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { registroTieneEntradaConfirmada } from '@/lib/turnos'
 import { track, initTelemetry } from '@/lib/telemetry'
@@ -78,6 +78,21 @@ const SECCIONES = [
 ] as const
 
 type SeccionId = (typeof SECCIONES)[number]['id']
+
+/**
+ * Sección con la que abre el legajo, tomada de `?seccion=`.
+ *
+ * El legajo abría siempre en "Situación actual". El cartel de Mi Planilla —
+ * "Tenés N turnos sin revisar · Tocá para revisarlos"— mandaba a /guardias/{id}
+ * a secas, así que el vigilador caía en una pantalla donde no hay nada para
+ * aceptar y tenía que adivinar que la acción estaba detrás de otra pestaña.
+ * Por eso el circuito de aceptación quedó sin uso: no es que los botones no
+ * estén, es que nadie llegaba hasta ellos.
+ */
+function seccionInicial(valor: string | null): SeccionId {
+  const existe = SECCIONES.some(s => s.id === valor)
+  return existe ? (valor as SeccionId) : 'situacion'
+}
 
 // ── Helpers de formato ────────────────────────────────────────────────────────
 
@@ -218,12 +233,13 @@ const S = {
 export default function LegajoPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const empleadoId = typeof params.id === 'string' ? params.id : ''
 
   const [datos, setDatos] = useState<DatosLegajo | null>(null)
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [seccion, setSeccion] = useState<SeccionId>('situacion')
+  const [seccion, setSeccion] = useState<SeccionId>(() => seccionInicial(searchParams.get('seccion')))
   const [rolUsuario, setRolUsuario] = useState<string | null>(null)
 
   // Protección contra doble disparo (StrictMode / re-render)

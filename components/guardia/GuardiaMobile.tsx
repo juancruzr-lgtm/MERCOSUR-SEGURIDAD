@@ -1854,7 +1854,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
         {pendientesPlanilla > 0 && (
           <button
             type="button"
-            onClick={() => router.push(`/guardias/${user.id}`)}
+            onClick={() => router.push(`/guardias/${user.id}?seccion=planilla`)}
             style={{
               ...S.btn,
               background: 'rgba(245,158,11,.12)',
