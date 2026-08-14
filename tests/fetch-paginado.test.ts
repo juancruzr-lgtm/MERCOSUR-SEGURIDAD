@@ -73,6 +73,79 @@ describe('fetchPaginado — bordes', () => {
   })
 })
 
+// `maxFilas` es un techo DELIBERADO, distinto del tope de PostgREST. obs/usage
+// decide que con 10.000 eventos alcanza para el tablero; lo que estaba roto era
+// que ese techo no se cumplía (llegaban 1.000) y que nadie detectaba la
+// diferencia. Caso real del 14/08/2026: 20.484 eventos en 30 días.
+describe('fetchPaginado — techo deliberado (maxFilas)', () => {
+  it('con 20.484 filas y techo 10.000 devuelve exactamente 10.000', async () => {
+    const { consulta, llamadas } = tablaDe(20484)
+    const todas = await fetchPaginado(consulta, FILAS_POR_PAGINA, 10_000)
+    expect(todas).toHaveLength(10_000)
+    expect(llamadas).toHaveLength(10)
+  })
+
+  it('recorta la última página para no pasarse del techo', async () => {
+    const { consulta, llamadas } = tablaDe(20484)
+    const todas = await fetchPaginado(consulta, FILAS_POR_PAGINA, 1500)
+    expect(todas).toHaveLength(1500)
+    expect(llamadas).toEqual([[0, 999], [1000, 1499]])
+  })
+
+  it('techo menor a una página: una sola llamada', async () => {
+    const { consulta, llamadas } = tablaDe(20484)
+    expect(await fetchPaginado(consulta, FILAS_POR_PAGINA, 250)).toHaveLength(250)
+    expect(llamadas).toEqual([[0, 249]])
+  })
+
+  it('techo mayor que la tabla: devuelve todo y no inventa filas', async () => {
+    const { consulta } = tablaDe(1253)
+    expect(await fetchPaginado(consulta, FILAS_POR_PAGINA, 10_000)).toHaveLength(1253)
+  })
+
+  it('sin techo el comportamiento no cambia', async () => {
+    const { consulta } = tablaDe(1253)
+    expect(await fetchPaginado(consulta)).toHaveLength(1253)
+  })
+
+  it('el techo respeta el orden: se queda con las primeras, no con cualquiera', async () => {
+    const { consulta } = tablaDe(20484)
+    const todas = await fetchPaginado<{ id: number }>(consulta, FILAS_POR_PAGINA, 10_000)
+    expect(todas[0].id).toBe(1)
+    expect(todas[9999].id).toBe(10_000)
+  })
+})
+
+// La detección de truncamiento que usa obs/usage. Antes comparaba la cantidad
+// traída contra el techo: con 1.000 de 20.484, `1000 >= 10000` daba false y el
+// tablero se declaraba completo analizando el 5% de los datos.
+describe('detección de análisis parcial', () => {
+  const esParcial = (enVentana: number | null, analizados: number, tope: number) =>
+    enVentana != null ? enVentana > analizados : analizados >= tope
+
+  it('20.484 en ventana y 10.000 analizados: PARCIAL', () => {
+    expect(esParcial(20484, 10_000, 10_000)).toBe(true)
+  })
+
+  it('el bug viejo daba completo con 1.000 de 20.484', () => {
+    expect(1000 >= 10_000).toBe(false)          // lo que se evaluaba antes
+    expect(esParcial(20484, 1000, 10_000)).toBe(true)  // lo que corresponde
+  })
+
+  it('todo entra: NO parcial', () => {
+    expect(esParcial(823, 823, 10_000)).toBe(false)
+  })
+
+  it('justo en el techo y sin sobrantes: NO parcial', () => {
+    expect(esParcial(10_000, 10_000, 10_000)).toBe(false)
+  })
+
+  it('sin count disponible cae al criterio viejo, que ahora sí es válido', () => {
+    expect(esParcial(null, 10_000, 10_000)).toBe(true)
+    expect(esParcial(null, 4321, 10_000)).toBe(false)
+  })
+})
+
 describe('fetchPaginado vs fetchPaginadoResult — manejo de error', () => {
   const queFalla = async () => ({ data: null, error: new Error('boom') })
 

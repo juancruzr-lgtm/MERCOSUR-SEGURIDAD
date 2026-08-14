@@ -25,6 +25,7 @@ export async function GET(req: NextRequest) {
 
   const [
     eventosRes,
+    eventosTotalRes,
     usuariosRes,
     objetivosRes,
     intervencioneRes,
@@ -32,9 +33,25 @@ export async function GET(req: NextRequest) {
     supervisionesRes,
     novedadesRes,
   ] = await Promise.all([
-    // Límite explícito: evita descargar cientos de miles de filas en sistemas maduros.
-    // Si se alcanza el límite, la respuesta incluye truncado: true.
-    client.from('os_events').select('user_id, user_rol, event_name, event_category, screen, objetivo_id, duration_ms, value_text, err_code, app_version, device_type, client_ts').gte('created_at', desde).limit(MAX_EVENTS),
+    // Techo deliberado de MAX_EVENTS: no tiene sentido bajar cientos de miles
+    // de filas para un tablero. Pero `.limit(MAX_EVENTS)` no lo cumplía: el
+    // tope de PostgREST (1000) manda sobre el del cliente, así que el análisis
+    // corría sobre 1.000 eventos y encima sin ORDER BY, o sea un subconjunto
+    // arbitrario y no "los más recientes". Se pagina hasta el techo real, con
+    // orden estable para que sean efectivamente los últimos.
+    fetchPaginadoResult((d, h) =>
+      client.from('os_events')
+        .select('user_id, user_rol, event_name, event_category, screen, objetivo_id, duration_ms, value_text, err_code, app_version, device_type, client_ts, id, created_at')
+        .gte('created_at', desde)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(d, h),
+      undefined,
+      MAX_EVENTS),
+    // Cuántos hay REALMENTE en la ventana. Sin este número no se puede saber si
+    // el techo se alcanzó: comparar la cantidad traída contra MAX_EVENTS fallaba
+    // en silencio cuando el tope efectivo era otro.
+    client.from('os_events').select('id', { count: 'exact', head: true }).gte('created_at', desde),
     client.from('usuarios').select('id, nombre, apellido, rol, estado'),
     client.from('objetivos').select('id, nombre, cliente, estado'),
     client.from('supervisor_intervenciones').select('id, supervisor_id, tipo_alerta, accion, created_at').gte('created_at', desde).limit(5000),
@@ -172,13 +189,22 @@ export async function GET(req: NextRequest) {
   const ingresoConfirmed = new Set(eventos.filter((e: any) => e.event_name === 'ingreso_confirmed').map((e: any) => e.user_id + e.client_ts?.slice(0, 10)))
   const posiblesAbandonos = [...ingresoStarted].filter(k => !ingresoConfirmed.has(k)).length
 
-  const eventosTruncados = eventos.length >= MAX_EVENTS
+  // El total real de la ventana, que es lo único que permite saber si quedó
+  // algo afuera. Antes se comparaba la cantidad traída contra MAX_EVENTS: con
+  // 1.000 eventos de 20.484, `1000 >= 10000` daba false y el tablero se
+  // declaraba completo mientras analizaba el 5% de los datos.
+  const eventosEnVentana = eventosTotalRes.count ?? null
+  const eventosTruncados = eventosEnVentana != null
+    ? eventosEnVentana > eventos.length
+    : eventos.length >= MAX_EVENTS
 
   return NextResponse.json({
     periodo_dias: days,
     analisis_parcial: eventosTruncados,
     resumen: {
       total_eventos_analizados: eventos.length,
+      total_eventos_en_ventana: eventosEnVentana,
+      tope_analisis: MAX_EVENTS,
       usuarios_activos_periodo: actividadPorUsuario.length,
       objetivos_con_actividad: actividadPorObjetivo.length,
       supervisiones_realizadas: supervisiones.length,
