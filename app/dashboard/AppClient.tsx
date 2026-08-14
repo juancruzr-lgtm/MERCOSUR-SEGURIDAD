@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa } from '@/lib/liquidacion'
+import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -51,6 +51,7 @@ import {
   alertaEstaIntervenida,
   calcularMinutosTardanzaRegistro,
   claveOcurrenciaAlerta,
+  ESTADOS_SIN_OBLIGACION,
   compararIntervencionesMasReciente,
   detectarAlertasOperativas,
   efectoIntervencionOperativa,
@@ -1942,6 +1943,41 @@ function SupervisionesAdmin({
     return usuario && usuario.estado === 'activo' && esRolGuardia(usuario.rol) ? usuario : null
   }
 
+  // ── Carga horaria proporcional por supervisor ──────────────────────────────
+  //
+  // Los turnos propios de los supervisores todavía no existen en el sistema, así
+  // que no hay forma de saber qué parte de la carga le toca a cada uno. Lo que
+  // sí se puede decir sin inventar nada: cuántas horas programadas válidas tiene
+  // la zona y entre cuántos supervisores activos se reparte.
+  //
+  // Es un reparto por cabeza, no por franja. Cuando existan los horarios reales
+  // —mañana/tarde/noche y las coberturas de franco— esto se reemplaza por el
+  // reparto real. Hasta entonces, repetir el total de la zona en cada fila daba
+  // a entender que cada supervisor cargaba 11.519,5 h él solo.
+  const supervisoresActivosPorZona = new Map<string, number>()
+  for (const asignacion of (supervisorZonas || [])) {
+    const s = (guardias || []).find((u: Usuario) => u.id === asignacion.supervisor_id)
+    if (!s || s.estado !== 'activo') continue
+    if (!asignacion.zona_id) continue
+    supervisoresActivosPorZona.set(
+      asignacion.zona_id,
+      (supervisoresActivosPorZona.get(asignacion.zona_id) ?? 0) + 1,
+    )
+  }
+
+  // Horas programadas VÁLIDAS por zona: mismo criterio que el resto del sistema
+  // —sin anulados, cancelados ni reemplazados, sin objetivos de prueba—.
+  const horasValidasPorZona = new Map<string, number>()
+  for (const turno of turnosMesRanking) {
+    const objetivo = objetivosActivosRanking.find((o: Objetivo) => o.id === turno.objetivo_id)
+    if (!objetivo || !objetivo.zona_id || objetivo.es_prueba) continue
+    if (ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) continue
+    horasValidasPorZona.set(
+      objetivo.zona_id,
+      (horasValidasPorZona.get(objetivo.zona_id) ?? 0) + horasProgramadasTurno(turno),
+    )
+  }
+
   const rankingSupervisores = supervisoresRanking.map((supervisor: Usuario) => {
     const asignaciones = (supervisorZonas || []).filter((asignacion: any) => asignacion.supervisor_id === supervisor.id)
     const zonaIds = new Set(asignaciones.map((asignacion: any) => asignacion.zona_id).filter(Boolean))
@@ -1966,8 +2002,14 @@ function SupervisionesAdmin({
       zonasSinResolver: asignaciones.length - zonas.length,
       objetivos: objetivosAsignados.length,
       vigiladores: vigiladoresIds.size,
-      horasMes: turnosObjetivosMes.reduce((total: number, turno: Turno) => total + horasProgramadasTurno(turno), 0),
-      turnosMes: turnosObjetivosMes.length,
+      // Carga proporcional: por cada zona que cubre, las horas válidas de esa
+      // zona divididas entre sus supervisores activos. Un supervisor con dos
+      // zonas suma la parte que le toca en cada una.
+      cargaProporcional: Array.from(zonaIds).reduce((total: number, zonaId: any) => {
+        const horasZona = horasValidasPorZona.get(zonaId) ?? 0
+        const cuantos = supervisoresActivosPorZona.get(zonaId) ?? 1
+        return total + horasZona / Math.max(cuantos, 1)
+      }, 0),
       supervisionesMes: supervisionesMesRanking.filter((supervision: SupervisionRankingAdmin) =>
         supervision.supervisor_id === supervisor.id && objetivoIds.has(supervision.objetivo_id)
       ).length,
@@ -1977,8 +2019,7 @@ function SupervisionesAdmin({
     }
   }).sort((a: any, b: any) =>
     b.objetivos - a.objetivos ||
-    b.horasMes - a.horasMes ||
-    b.turnosMes - a.turnosMes ||
+    b.cargaProporcional - a.cargaProporcional ||
     nombreSupervisor(a.supervisor.id).localeCompare(nombreSupervisor(b.supervisor.id))
   )
   const aplicarFiltro = (filtro: { tipo: string; label: string; supervisor_id?: string; objetivo_id?: string; ids?: string[] }) => {
@@ -2247,8 +2288,7 @@ function SupervisionesAdmin({
                   <th style={S.th}>Zonas</th>
                   <th style={S.th}>Objetivos</th>
                   <th style={S.th}>Vigiladores</th>
-                  <th style={S.th}>Horas mes</th>
-                  <th style={S.th}>Turnos mes</th>
+                  <th style={S.th} title="Horas programadas válidas de su zona divididas entre los supervisores activos asignados a esa zona. Reparto por cabeza: los turnos propios de supervisor todavía no están definidos en el sistema.">Carga horaria proporcional</th>
                   <th style={S.th}>Supervisiones mes</th>
                   <th style={S.th}>Vencidas</th>
                 </tr>
@@ -2279,8 +2319,7 @@ function SupervisionesAdmin({
                     </td>
                     <td style={S.td}>{item.objetivos}</td>
                     <td style={S.td}>{item.vigiladores}</td>
-                    <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:800 }}>{horasRankingTexto(item.horasMes)}</td>
-                    <td style={S.td}>{item.turnosMes}</td>
+                    <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:800 }}>{horasRankingTexto(item.cargaProporcional)}</td>
                     <td style={S.td}>{item.supervisionesMes}</td>
                     <td style={S.td} onClick={e => { e.stopPropagation(); aplicarFiltro({ tipo: 'vencidas_supervisor', label: `Vencidas · ${nombreSupervisor(item.supervisor.id)}`, supervisor_id: item.supervisor.id }) }} title="Ver supervisiones vencidas de este supervisor">
                       <Badge type={item.vencidas > 0 ? 'advertencia' : 'ok'}>{item.vencidas}</Badge>
@@ -6323,17 +6362,64 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     hastaFecha: hoyISO,
     esObjetivoPrueba: _esObjetivoPruebaReportes,
   })
-  const totalHsLiquidablesMes = totalHorasLiquidables(turnosBaseMes, _mejorRegistroPorTurnoReportes)
-  const totalHsProgramadasMes = turnosBaseMes
+  // ── Las cuatro métricas del mes ────────────────────────────────────────────
+  //
+  // Antes había una sola base para todo y mezclaba conceptos: incluía los
+  // turnos de HOY que todavía no habían empezado —contándolos como deuda— y
+  // excluía a quien estaba trabajando en ese momento, que no aparecía en
+  // ninguna columna. La diferencia se leía como incumplimiento cuando una parte
+  // era simplemente el día en curso.
+  //
+  // Ahora cada hora del mes cae en exactamente una categoría:
+  //   exigibles + en curso + aún no empezados = total programado del mes.
+
+  // 1. Todo lo operativamente válido del mes, sin filtro de fecha.
+  const turnosOperativosMes = turnosOperativosDelMes(turnosMes, {
+    esObjetivoPrueba: _esObjetivoPruebaReportes,
+  })
+  const totalHsProgramadasMesCompleto = turnosOperativosMes
     .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
-  const pctCubierto = totalHsProgramadasMes > 0
-    ? (totalHsLiquidablesMes / totalHsProgramadasMes * 100).toFixed(1)
+
+  // 2. Lo que ya terminó: lo único reclamable.
+  const turnosExigibles = turnosExigiblesHastaAhora(turnosMes, {
+    esObjetivoPrueba: _esObjetivoPruebaReportes,
+  })
+  const totalHsExigibles = turnosExigibles
+    .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+
+  // 3. Reconocidas sobre ese mismo universo, con la fuente autoritativa intacta.
+  const totalHsLiquidablesMes = totalHorasLiquidables(turnosExigibles, _mejorRegistroPorTurnoReportes)
+
+  // 4. Pendiente turno por turno, sin compensar entre turnos.
+  const totalHsPendiente = totalPendiente(turnosExigibles, _mejorRegistroPorTurnoReportes)
+
+  // Las dos categorías que antes quedaban invisibles, para que la suma cierre.
+  const ahoraMs = Date.now()
+  const turnosEnCurso = turnosOperativosMes.filter((t: Turno) =>
+    !turnoExigible(t, ahoraMs) && finProgramadoTurno(t) - horasProgramadasTurno(t) * 3_600_000 <= ahoraMs)
+  const turnosSinEmpezar = turnosOperativosMes.filter((t: Turno) =>
+    finProgramadoTurno(t) - horasProgramadasTurno(t) * 3_600_000 > ahoraMs)
+  const hsEnCurso = turnosEnCurso.reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+  const hsSinEmpezar = turnosSinEmpezar.reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
+
+  const pctCubierto = totalHsExigibles > 0
+    ? (totalHsLiquidablesMes / totalHsExigibles * 100).toFixed(1)
     : null
 
-  // Este total es de toda la empresa: suma capacitaciones porque son horas que
-  // se pagan. Programadas y liquidables las cuentan a las dos, así que el % de
-  // cobertura no se distorsiona. Solo se marca cuánto de esa suma no se factura.
-  const capacitacionMes = turnosBaseMes.reduce(
+  // Capacitación del mes COMPLETO: es carga pagable y por eso entra en el
+  // total, pero no se le factura al objetivo. Va identificada aparte en la
+  // tarjeta para que nadie la sume a lo cobrable.
+  const capacitacionMesCompleto = turnosOperativosMes.reduce(
+    (acc: { horas: number; turnos: number }, t: Turno) => {
+      if (!esCapacitacion(t.tipo_evento)) return acc
+      return { horas: acc.horas + horasProgramadasTurno(t), turnos: acc.turnos + 1 }
+    },
+    { horas: 0, turnos: 0 },
+  )
+
+  // La misma capacitación, pero sólo la ya reconocida: es la que explica por
+  // qué el total liquidable y lo facturable al objetivo no coinciden.
+  const capacitacionMes = turnosExigibles.reduce(
     (acc: { horas: number; turnos: number }, t: Turno) => {
       if (!esCapacitacion(t.tipo_evento)) return acc
       const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
@@ -6345,13 +6431,17 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     { horas: 0, turnos: 0 },
   )
 
-  const diferenciasMes = turnosBaseMes
+  const diferenciasMes = turnosExigibles
     .map((t: Turno) => {
       const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
       const linea = resolverLineaLiquidacion(t, reg)
       const hsProg = horasProgramadasTurno(t)
       const hsLiq = linea.horasLiquidables
       const diff = hsLiq - hsProg
+      // Lo que aporta a la tarjeta. Nunca negativo: un turno extendido —el
+      // vigilador se quedó porque no llegó el relevo— genera horas que
+      // corresponden, pero no compensan las que faltan en otro turno.
+      const pendienteHs = Math.max(hsProg - hsLiq, 0)
       if (Math.abs(diff) < 0.01) return null
       let motivo = ''
       if (!reg) motivo = esPeriodoTransicion(t.fecha) ? 'Turno cubierto sin fichaje (transición)' : 'Sin registro de asistencia'
@@ -6378,6 +6468,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         hsProg,
         hsLiq,
         diff,
+        pendienteHs,
         motivo,
         estado,
         pendiente: esPendienteDeAccion(estado),
@@ -6388,13 +6479,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     })
     .filter(Boolean) as Array<{
       turno: Turno; registro: any; linea: any;
-      hsProg: number; hsLiq: number; diff: number; motivo: string;
+      hsProg: number; hsLiq: number; diff: number; pendienteHs: number; motivo: string;
       estado: EstadoRevision; pendiente: boolean; observaciones: number;
       guardiaId: string | null; objetivoId: string | null;
     }>
 
-  const diferenciasPendientes = diferenciasMes.filter(d => d.pendiente)
-  const diferenciasVisibles = difSoloPendientes ? diferenciasPendientes : diferenciasMes
+  // Los que EXPLICAN la tarjeta: los que aportan horas al pendiente. Es el
+  // filtro con el que abre el detalle, para que lo que se ve sume exactamente
+  // lo que dice la tarjeta. Un turno extendido tiene diferencia pero aporta
+  // cero, así que no explica nada: se ve apagando el filtro.
+  const diferenciasQueExplican = diferenciasMes.filter(d => d.pendienteHs > 0)
+  const diferenciasVisibles = difSoloPendientes ? diferenciasQueExplican : diferenciasMes
+  // Cuántas de esas todavía esperan una acción humana (estado de revisión).
+  const diferenciasPendientes = diferenciasQueExplican.filter(d => d.pendiente)
 
   const exportarPlanillaEmpleadoXLSX = async () => {
     if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
@@ -6741,30 +6838,49 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       {/* Bloque de totales del mes */}
       <div style={{ ...S.card, marginBottom:16, background:'#0f172a', border:'1px solid #1e2d42' }}>
         <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:10 }}>Resumen del mes — {mesLabel}</div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(190px, 1fr))', gap:12 }}>
+          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #64748b' }}>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Total programado del mes</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#e2e8f0' }}>{totalHsProgramadasMesCompleto.toFixed(2)} hs</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Mes completo · excluye anulados y objetivos de prueba</div>
+            {capacitacionMesCompleto.horas > 0 && (
+              <div style={{ fontSize:11, color:'#a78bfa', marginTop:4, lineHeight:1.35 }}>
+                Incluye {capacitacionMesCompleto.horas.toFixed(2)} hs de capacitación ({capacitacionMesCompleto.turnos} turno{capacitacionMesCompleto.turnos !== 1 ? 's' : ''}): {MOTIVO_CAPACITACION}.
+              </div>
+            )}
+          </div>
+          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #3b82f6' }}>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Programadas exigibles hasta ahora</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#3b82f6' }}>{totalHsExigibles.toFixed(2)} hs</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cuyo horario ya terminó</div>
+            <div style={{ fontSize:10.5, color:'#475569', marginTop:3, lineHeight:1.35 }}>
+              No incluye {hsEnCurso.toFixed(2)} hs en curso ni {hsSinEmpezar.toFixed(2)} hs que aún no empezaron.
+            </div>
+          </div>
           <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #10b981' }}>
-            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas liquidables hasta hoy</div>
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas reconocidas hasta ahora</div>
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#10b981' }}>{totalHsLiquidablesMes.toFixed(2)} hs</div>
-            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cerrados · excluye en curso y sin obligación</div>
+            {pctCubierto !== null && (
+              <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>{pctCubierto}% de lo exigible</div>
+            )}
             {notaCapacitacionIncluida(capacitacionMes.horas, capacitacionMes.turnos) && (
               <div style={{ fontSize:11, color:'#a78bfa', marginTop:4, lineHeight:1.35 }}>
                 {notaCapacitacionIncluida(capacitacionMes.horas, capacitacionMes.turnos)}
               </div>
             )}
           </div>
-          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #3b82f6' }}>
-            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Horas programadas hasta hoy</div>
-            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color:'#3b82f6' }}>{totalHsProgramadasMes.toFixed(2)} hs</div>
-            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Turnos cerrados · misma base que diferencia</div>
-          </div>
-          <div style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #f59e0b', cursor:'pointer', transition:'background .15s' }} onClick={() => setMostrarDiferencias(true)} title="Ver detalle de diferencias">
-            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia {diferenciasPendientes.length > 0 && <span style={{ color:'#f59e0b' }}>({diferenciasPendientes.length} pendiente{diferenciasPendientes.length !== 1 ? 's' : ''})</span>}</div>
-            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color: (totalHsLiquidablesMes - totalHsProgramadasMes) < 0 ? '#ef4444' : '#10b981' }}>
-              {(totalHsLiquidablesMes - totalHsProgramadasMes) >= 0 ? '+' : ''}{(totalHsLiquidablesMes - totalHsProgramadasMes).toFixed(2)} hs
+          <div
+            style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #f59e0b', cursor:'pointer', transition:'background .15s' }}
+            // Abre siempre filtrada: lo que se ve tiene que sumar lo que dice
+            // la tarjeta, sin que haya que tocar nada.
+            onClick={() => { setDifSoloPendientes(true); setMostrarDiferencias(true) }}
+            title="Ver los turnos que explican el pendiente"
+          >
+            <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia pendiente {diferenciasPendientes.length > 0 && <span style={{ color:'#f59e0b' }}>({diferenciasPendientes.length} pendiente{diferenciasPendientes.length !== 1 ? 's' : ''})</span>}</div>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color: totalHsPendiente > 0 ? '#ef4444' : '#10b981' }}>
+              {totalHsPendiente.toFixed(2)} hs
             </div>
-            {pctCubierto !== null && (
-              <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>{pctCubierto}% del mes cubierto</div>
-            )}
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Suma turno por turno · sin compensar entre turnos</div>
           </div>
         </div>
       </div>
@@ -7070,13 +7186,18 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
               <div>
                 <div style={{ fontSize:20, fontWeight:700, fontFamily:'Syne,sans-serif' }}>Diferencias del mes</div>
                 <div style={{ fontSize:13, color:'#94a3b8', marginTop:2 }}>
-                  {mesLabel} — {diferenciasPendientes.length} pendiente{diferenciasPendientes.length !== 1 ? 's' : ''} de {diferenciasMes.length} turno{diferenciasMes.length !== 1 ? 's' : ''} con diferencia
+                  {mesLabel} — {diferenciasQueExplican.length} turno{diferenciasQueExplican.length !== 1 ? 's' : ''} explica{diferenciasQueExplican.length === 1 ? '' : 'n'} el pendiente
+                  {diferenciasPendientes.length > 0 && `, ${diferenciasPendientes.length} sin resolver`}
+                  {diferenciasMes.length > diferenciasQueExplican.length &&
+                    ` · ${diferenciasMes.length - diferenciasQueExplican.length} con extensión de jornada`}
                 </div>
               </div>
               <button style={{ background:'transparent', border:'none', color:'#64748b', fontSize:22, cursor:'pointer', padding:'4px 8px' }} onClick={() => setMostrarDiferencias(false)}>✕</button>
             </div>
-            {/* Una diferencia ya revisada, derivada o resuelta no desaparece:
-                deja de contar como pendiente y muestra su estado. */}
+            {/* El filtro por defecto deja sólo lo que explica la tarjeta. Las
+                extensiones de jornada tienen diferencia pero aportan cero, así
+                que no explican nada: se ven apagando el filtro, con sus horas
+                completas y sin marca de error. */}
             <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:12, flexWrap:'wrap' }}>
               <button
                 onClick={() => setDifSoloPendientes(v => !v)}
@@ -7087,19 +7208,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                   color: difSoloPendientes ? '#f59e0b' : '#e2e8f0',
                 }}
               >
-                {difSoloPendientes ? '✓ ' : ''}Solo lo pendiente ({diferenciasPendientes.length})
+                {difSoloPendientes ? '✓ ' : ''}Solo lo que explica la diferencia ({diferenciasQueExplican.length})
               </button>
               <span style={{ fontSize:12, color:'#64748b' }}>
                 {difSoloPendientes
-                  ? `${diferenciasMes.length - diferenciasPendientes.length} ya resuelta${diferenciasMes.length - diferenciasPendientes.length !== 1 ? 's' : ''} oculta${diferenciasMes.length - diferenciasPendientes.length !== 1 ? 's' : ''}`
-                  : 'Mostrando todas, incluidas las ya resueltas'}
+                  ? `${diferenciasMes.length - diferenciasQueExplican.length} turno${diferenciasMes.length - diferenciasQueExplican.length !== 1 ? 's' : ''} con extensión de jornada oculto${diferenciasMes.length - diferenciasQueExplican.length !== 1 ? 's' : ''}`
+                  : 'Mostrando también las extensiones de jornada, que no suman al pendiente'}
               </span>
             </div>
             {diferenciasVisibles.length === 0 ? (
               <div style={{ padding:32, textAlign:'center' as const, color:'#64748b' }}>
                 {diferenciasMes.length === 0
-                  ? 'No hay diferencias en turnos pasados de este mes.'
-                  : 'No queda nada pendiente: todas las diferencias del mes están revisadas o resueltas.'}
+                  ? 'No hay diferencias en los turnos ya exigibles de este mes.'
+                  : 'Ningún turno genera pendiente: las diferencias que quedan son extensiones de jornada.'}
               </div>
             ) : (
               <div style={{ overflowX:'auto' }}>
@@ -7114,6 +7235,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                       <th style={{ ...S.th, textAlign:'right' as const }}>Hs Prog.</th>
                       <th style={{ ...S.th, textAlign:'right' as const }}>Hs Liq.</th>
                       <th style={{ ...S.th, textAlign:'right' as const }}>Dif.</th>
+                      {/* Lo que este turno aporta a la tarjeta. Una extensión
+                          legítima aporta 0: no compensa a otro turno. */}
+                      <th style={{ ...S.th, textAlign:'right' as const }}>Pendiente</th>
                       <th style={S.th}>Motivo</th>
                       <th style={S.th}>Estado</th>
                       <th style={S.th}>Acciones</th>
@@ -7145,6 +7269,12 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                           <td style={{ ...S.td, textAlign:'right' as const, fontVariantNumeric:'tabular-nums', fontWeight:700, color: d.diff < 0 ? '#ef4444' : '#10b981' }}>
                             {d.diff >= 0 ? '+' : ''}{d.diff.toFixed(2)}
                           </td>
+                          <td
+                            style={{ ...S.td, textAlign:'right' as const, fontVariantNumeric:'tabular-nums', fontWeight:700, color: d.pendienteHs > 0 ? '#ef4444' : '#64748b' }}
+                            title={d.pendienteHs === 0 ? 'Horas reconocidas por encima de lo programado: no compensan otros turnos' : undefined}
+                          >
+                            {d.pendienteHs.toFixed(2)}
+                          </td>
                           <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{d.motivo}</td>
                           <td style={{ ...S.td, fontSize:12 }}>
                             <span style={{ color: d.pendiente ? '#f59e0b' : '#10b981' }}>
@@ -7171,12 +7301,24 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                     })}
                   </tbody>
                 </table>
-                <div style={{ marginTop:12, padding:'8px 12px', background:'#1a2235', borderRadius:8, display:'flex', gap:16, fontSize:12, color:'#94a3b8' }}>
-                  <span>Total diferencia{difSoloPendientes ? ' pendiente' : ''}: <strong style={{ color: diferenciasVisibles.reduce((s, d) => s + d.diff, 0) < 0 ? '#ef4444' : '#10b981', fontVariantNumeric:'tabular-nums' }}>
-                    {diferenciasVisibles.reduce((s, d) => s + d.diff, 0) >= 0 ? '+' : ''}{diferenciasVisibles.reduce((s, d) => s + d.diff, 0).toFixed(2)} hs
-                  </strong></span>
-                  <span>{diferenciasVisibles.filter(d => d.diff < 0).length} con déficit · {diferenciasVisibles.filter(d => d.diff > 0).length} con excedente</span>
-                </div>
+                {/* Reconciliación explícita contra la tarjeta. Si el filtro
+                    "solo lo pendiente" está activo se muestran menos filas, y
+                    entonces la suma no tiene por qué dar el total: se avisa. */}
+                {(() => {
+                  const sumaPendiente = diferenciasVisibles.reduce((s, d) => s + d.pendienteHs, 0)
+                  const cierra = Math.abs(sumaPendiente - totalHsPendiente) < 0.005
+                  return (
+                    <div style={{ marginTop:12, padding:'8px 12px', background:'#1a2235', borderRadius:8, display:'flex', gap:16, fontSize:12, color:'#94a3b8', flexWrap:'wrap', alignItems:'center' }}>
+                      <span>Suma de pendientes: <strong style={{ color:'#ef4444', fontVariantNumeric:'tabular-nums' }}>{sumaPendiente.toFixed(2)} hs</strong></span>
+                      <span style={{ color: cierra ? '#10b981' : '#f59e0b' }}>
+                        {cierra
+                          ? '✓ coincide con la tarjeta'
+                          : `la tarjeta suma ${totalHsPendiente.toFixed(2)} hs sobre todos los turnos exigibles`}
+                      </span>
+                      <span>{diferenciasVisibles.filter(d => d.pendienteHs > 0).length} con pendiente · {diferenciasVisibles.filter(d => d.diff > 0).length} con extensión de jornada</span>
+                    </div>
+                  )
+                })()}
               </div>
             )}
           </div>

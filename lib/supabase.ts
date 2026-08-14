@@ -90,6 +90,13 @@ export interface Turno {
    * como "el turno ya no cuenta" en cobertura, planillas y liquidación.
    */
   estado: 'programado' | 'cubierto' | 'descubierto' | 'ausente' | 'reemplazado' | 'anulado' | 'cancelado'
+  /**
+   * Característica del turno, validada por turnos_tipo_evento_check.
+   * Faltaba en el tipo aunque el código ya la leía en varios lugares: cada uso
+   * daba TS2339 y sólo no rompía porque el build corre con ignoreBuildErrors.
+   * Las etiquetas y la normalización viven en lib/caracteristica-turno.
+   */
+  tipo_evento?: 'normal' | 'cobertura' | 'capacitacion' | null
   revisado_por?: string | null
   revisado_at?: string | null
   publicado?: boolean | null

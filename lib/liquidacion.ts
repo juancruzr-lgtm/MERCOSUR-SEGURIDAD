@@ -180,7 +180,6 @@ export function horasLiquidablesRegistro(
   const horaSalidaReal   = registro?.hora_salida_real   ?? null
 
   // Path 2: corrección/autorización explícita vía campos _final
-  // Si al menos uno está presente, se usan los tiempos efectivos autorizados.
   if (horaEntradaFinal || horaSalidaFinal) {
     const entrada = horaEntradaFinal ?? horaEntradaReal
     const salida  = horaSalidaFinal  ?? horaSalidaReal
@@ -191,8 +190,6 @@ export function horasLiquidablesRegistro(
   }
 
   // Path 3: fichaje GPS completo sin corrección → duración programada del turno
-  // Se pasan los tiempos del propio turno como "GPS" para obtener minutosProgramados
-  // (diferencia = 0 → rama dentro de tolerancia → devuelve minutosProgramados).
   if (horaEntradaReal && horaSalidaReal) {
     return calcularHorasLiquidables(
       turno.fecha, turno.hora_inicio, turno.hora_fin,
@@ -318,6 +315,77 @@ export function turnosReconocidosHastaCorte<
     if (reg?.hora_entrada_real && !reg?.hora_salida_real) return false
     return true
   })
+}
+
+// ── Exigibilidad ──────────────────────────────────────────────────────────────
+//
+// Un turno es EXIGIBLE cuando su fin programado ya pasó. Recién ahí tiene
+// sentido preguntarse si las horas están reconocidas: antes no hay nada que
+// reclamar.
+//
+// No confundir con "tiene fichaje incompleto". Un turno que terminó a las 14:00
+// y cuyo vigilador no fichó la salida SÍ es exigible — esa falta es justamente
+// lo que hay que ver. Y uno que empieza a las 22:00 no es exigible al mediodía
+// aunque su fecha sea hoy.
+
+/** Instante en que termina el turno programado, en ms. Los nocturnos terminan al día siguiente. */
+export function finProgramadoTurno(turno: TurnoLiquidacion): number {
+  const [hi, mi] = turno.hora_inicio.split(':').map(Number)
+  const [hf, mf] = turno.hora_fin.split(':').map(Number)
+  const nocturno = (hf * 60 + mf) <= (hi * 60 + mi)
+  // Mismo criterio que cerrar_turnos_abiertos() y aceptar_turno_planilla() en
+  // Postgres: si el fin no es posterior al inicio, el turno cruza la medianoche.
+  const base = Date.parse(`${turno.fecha}T00:00:00-03:00`)
+  return base + (nocturno ? 24 * 60 : 0) * 60_000 + (hf * 60 + mf) * 60_000
+}
+
+/** El turno ya terminó. Uno en curso o que no empezó devuelve false. */
+export function turnoExigible(turno: TurnoLiquidacion, ahora: number = Date.now()): boolean {
+  return finProgramadoTurno(turno) < ahora
+}
+
+/** Turnos del mes operativamente válidos: sin objetivos de prueba ni estados sin obligación. */
+export function turnosOperativosDelMes<T extends TurnoUniverso>(
+  turnos: T[],
+  opts: { esObjetivoPrueba: (objetivoId?: string | null) => boolean },
+): T[] {
+  return turnos.filter(t =>
+    !opts.esObjetivoPrueba(t.objetivo_id) && !ESTADOS_SIN_OBLIGACION.has(t.estado || ''),
+  )
+}
+
+/** De los operativos, los que ya terminaron. Es el universo de lo reclamable. */
+export function turnosExigiblesHastaAhora<T extends TurnoUniverso>(
+  turnos: T[],
+  opts: { esObjetivoPrueba: (objetivoId?: string | null) => boolean; ahora?: number },
+): T[] {
+  const ahora = opts.ahora ?? Date.now()
+  return turnosOperativosDelMes(turnos, opts).filter(t => turnoExigible(t, ahora))
+}
+
+// ── Pendiente por turno ───────────────────────────────────────────────────────
+//
+// Se calcula turno por turno y nunca se compensa entre turnos. Un vigilador que
+// se quedó dos horas de más porque no llegó el relevo generó horas que
+// corresponden —se le pagan y se le cobran al cliente—, pero esas horas no
+// tapan las que faltan en otro turno de otra persona. Por eso el piso es cero:
+// un turno extendido aporta 0 al pendiente, no un crédito.
+
+export function pendienteTurno<T extends TurnoLiquidacion, R extends RegistroLiquidacion>(
+  turno: T,
+  registro?: R | null,
+): number {
+  const programadas = horasProgramadasTurno(turno)
+  const reconocidas = resolverLineaLiquidacion(turno, registro ?? null).horasLiquidables
+  return Math.max(programadas - reconocidas, 0)
+}
+
+/** Suma de los pendientes individuales. Nunca una resta global. */
+export function totalPendiente<
+  T extends TurnoUniverso,
+  R extends RegistroUniverso,
+>(turnos: T[], mejorRegistro: Map<string, R>): number {
+  return turnos.reduce((suma, t) => suma + pendienteTurno(t, mejorRegistro.get(t.id) ?? null), 0)
 }
 
 // Total autoritativo de horas reconocidas sobre un universo ya filtrado.
