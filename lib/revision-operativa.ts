@@ -119,12 +119,92 @@ function instanteArgentina(fecha: string, hora: string) {
   return Date.UTC(anio, mes - 1, dia, horas + 3, minutos, segundos)
 }
 
-function rangoTurnoArgentina(turno: TurnoDetectorOperativo) {
+function rangoTurnoArgentina(turno: TurnoHorarioAlerta) {
   const inicio = instanteArgentina(turno.fecha, turno.hora_inicio)
   let fin = instanteArgentina(turno.fecha, turno.hora_fin)
   if (inicio === null || fin === null) return null
   if (fin <= inicio) fin += MS_DIA
   return { inicio, fin }
+}
+
+// ── Vigencia de la alerta "sin fichar" ───────────────────────────────────────
+//
+// Una alerta operativa sólo debe estar pendiente mientras la condición que la
+// originó siga vigente y todavía se pueda intervenir. "Sin fichar" no cumplía
+// eso: la condición era `pasaron 15 minutos del inicio y no hay entrada`, sin
+// tope superior, así que un turno de ayer seguía alertando para siempre y el
+// contador de demora crecía solo (se llegaron a ver 2.121 minutos).
+//
+// La Vista Supervisor además no aplicaba ninguna exclusión —ni estado del turno
+// ni objetivo pausado—, y sólo coincidía con Administración de casualidad,
+// porque el Panel Principal carga únicamente los turnos de hoy. Con la misma
+// condición abierta, la diferencia la hacía la ventana de carga, no el criterio.
+//
+// Terminado el turno la alerta deja de ser operativa: el supervisor ya no puede
+// hacer que alguien entre ayer. El incumplimiento no se pierde —el turno queda
+// sin horas reconocidas y aparece en Revisión de planillas para regularizar—,
+// pero deja de ocupar el panel de lo que hay que atender ahora.
+
+export interface TurnoHorarioAlerta {
+  fecha: string
+  hora_inicio: string
+  hora_fin: string
+}
+
+export interface TurnoVigenciaSinFichar extends TurnoHorarioAlerta {
+  guardia_id?: string | null
+  estado?: string | null
+}
+
+export type VigenciaSinFichar =
+  /** No corresponde alerta: sin guardia, sin obligación, o todavía hay margen. */
+  | 'no_corresponde'
+  /** Vigente: el turno está en curso y el supervisor todavía puede intervenir. */
+  | 'vigente'
+  /** El turno terminó sin entrada. Deja de ser alerta; queda para regularizar. */
+  | 'vencida'
+
+export function evaluarSinFichar(
+  turno: TurnoVigenciaSinFichar,
+  {
+    tieneEntrada,
+    objetivoOperativo = true,
+    ahora = new Date(),
+    minutosSinFichar = UMBRALES_ALERTAS_OPERATIVAS.sin_fichar_minutos,
+  }: {
+    tieneEntrada: boolean
+    /** Estado del objetivo. Sin el dato se asume operativo: quien no puede
+     *  resolverlo no debe silenciar alertas por las dudas. */
+    objetivoOperativo?: boolean
+    ahora?: Date
+    minutosSinFichar?: number
+  },
+): VigenciaSinFichar {
+  // Sin guardia asignado el problema es 'descubierto', no 'sin fichar'.
+  if (!turno.guardia_id) return 'no_corresponde'
+  if (turno.estado === 'descubierto') return 'no_corresponde'
+  if (ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) return 'no_corresponde'
+  if (!objetivoOperativo) return 'no_corresponde'
+  if (tieneEntrada) return 'no_corresponde'
+
+  const rango = rangoTurnoArgentina(turno)
+  if (!rango) return 'no_corresponde'
+
+  const ahoraMs = ahora.getTime()
+  if (ahoraMs < rango.inicio + minutosSinFichar * MS_MINUTO) return 'no_corresponde'
+  return ahoraMs < rango.fin ? 'vigente' : 'vencida'
+}
+
+/**
+ * Único criterio de vigencia de la alerta `sin_fichar`. Lo usan el detector
+ * compartido (Panel Principal) y la Vista Supervisor, para que las dos pantallas
+ * deriven de la misma definición y no de su ventana de carga.
+ */
+export function alertaSinFicharVigente(
+  turno: TurnoVigenciaSinFichar,
+  opciones: Parameters<typeof evaluarSinFichar>[1],
+): boolean {
+  return evaluarSinFichar(turno, opciones) === 'vigente'
 }
 
 function minutosHora(hora?: string | null) {
@@ -233,12 +313,14 @@ export function detectarAlertasOperativas({
 
     if (!turno.guardia_id && ahoraMs >= rango.inicio) {
       agregar(turno, 'descubierto', rango.inicio)
-    } else if (
-      turno.guardia_id &&
-      turno.estado !== 'descubierto' &&
-      !tieneEntrada &&
-      ahoraMs >= rango.inicio + umbrales.sin_fichar_minutos * MS_MINUTO
-    ) {
+    } else if (alertaSinFicharVigente(turno, {
+      tieneEntrada,
+      // El estado del turno y el del objetivo ya se filtraron arriba, antes de
+      // entrar al bucle: acá lo que aporta la función compartida es el tope
+      // superior —la alerta vive mientras el turno esté en curso—.
+      ahora,
+      minutosSinFichar: umbrales.sin_fichar_minutos,
+    })) {
       agregar(turno, 'sin_fichar', rango.inicio + umbrales.sin_fichar_minutos * MS_MINUTO)
     }
 

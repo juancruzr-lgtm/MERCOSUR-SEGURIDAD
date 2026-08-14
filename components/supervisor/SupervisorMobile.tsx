@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, idsObjetivosPausados } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, objetivoEstaOperativo, registroTieneEntradaConfirmada, idsObjetivosPausados } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir la ubicación de un objetivo: abre la vigencia en el
@@ -23,11 +23,15 @@ import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
 import { estadoSupervision, frecuenciaSupervision, supervisionProximaAVencer } from '@/lib/supervisiones'
-import { alertaEstaIntervenida, calcularMinutosTardanzaRegistro, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
+import { alertaEstaIntervenida, calcularMinutosTardanzaRegistro, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, evaluarSinFichar, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOperativaCompartida } from '@/lib/revision-operativa'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
-type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto'
+// Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
+// primeros, pero la consulta trae también los otros —la ventana de la Vista
+// Supervisor incluye turnos anulados— y el tipo angosto ocultaba justamente que
+// había que excluirlos de las alertas. Espejo de lib/supabase.ts.
+type EstadoTurnoPersistido = 'programado' | 'cubierto' | 'descubierto' | 'ausente' | 'reemplazado' | 'anulado' | 'cancelado'
 type TipoAlerta = 'sin entrada' | 'sin ingreso' | 'entrada registrada' | 'salida registrada' | 'turno descubierto' | 'ingreso tarde' | 'reasignado'
 type TipoAlertaOperativa = Exclude<TipoAlertaOperativaCompartida, 'salida_pendiente'>
 type AccionIntervencion = AccionIntervencionOperativa
@@ -932,14 +936,25 @@ export default function SupervisorMobile({ user }: any) {
     turno.guardia_id &&
     turno.guardia_original_id !== turno.guardia_id
   )
-  const esSinIngreso = (turno: Turno) => {
-    const registro = getRegistro(turno.id)
-    return Boolean(
-      turno.guardia_id &&
-      !(registro?.hora_entrada_final || (registro?.tipo_registro !== 'ausencia' && registro?.hora_entrada_real)) &&
-      minutosAtrasoTurno(turno) >= 15
-    )
-  }
+  // Vigencia de "sin fichar", con el mismo criterio que el Panel Principal
+  // (lib/revision-operativa). Antes esto era `pasaron 15 minutos y no hay
+  // entrada`, sin tope superior y sin ninguna exclusión: un turno anulado o de
+  // un objetivo pausado alertaba igual, y los de ayer no dejaban de alertar
+  // nunca. Coincidía con Administración sólo porque el Panel Principal carga
+  // los turnos de hoy; acá la ventana incluye ayer por los nocturnos.
+  const vigenciaSinFichar = (turno: Turno) => evaluarSinFichar(turno, {
+    // Todos los registros del turno, no sólo el último: es lo que mira el
+    // detector compartido para decidir si hubo entrada.
+    tieneEntrada: getRegistrosTurno(turno.id).some(registroTieneEntradaConfirmada),
+    objetivoOperativo: objetivoEstaOperativo(getObjetivo(turno.objetivo_id)),
+  })
+  // Alerta operativa: sólo mientras el turno sigue en curso y el supervisor
+  // todavía puede intervenir.
+  const esSinIngreso = (turno: Turno) => vigenciaSinFichar(turno) === 'vigente'
+  // Etiqueta del listado: un turno que terminó sin fichaje sigue mostrándose
+  // como pendiente de ingreso —es lo que pasó— aunque ya no genere alerta.
+  // Se regulariza por Revisión de planillas.
+  const faltaIngreso = (turno: Turno) => vigenciaSinFichar(turno) !== 'no_corresponde'
   const esTardanzaRegistrada = (turno: Turno) => {
     const registro = getRegistro(turno.id)
     if (!registro?.hora_entrada_final && !registro?.hora_entrada_real) return false
@@ -965,7 +980,7 @@ export default function SupervisorMobile({ user }: any) {
     if (registro?.hora_entrada_final || registro?.hora_entrada_real) return calcularMinutosTardanzaRegistro(turno, registro) > 0 ? 'tardanza' : 'en turno'
     if (esDescubiertoOperativo(turno)) return 'descubierto'
     if (esTurnoReasignado(turno)) return 'reasignado'
-    if (esSinIngreso(turno)) return 'pendiente de ingreso'
+    if (faltaIngreso(turno)) return 'pendiente de ingreso'
     if (turno.estado === 'cubierto') return 'cubierto'
     return 'programado'
   }
@@ -976,7 +991,7 @@ export default function SupervisorMobile({ user }: any) {
     if (registro?.hora_salida_real) return 'salida registrada'
     if (registro?.hora_entrada_real) return esTardanzaRegistrada(turno) ? 'ingreso tarde' : 'entrada registrada'
     if (esDescubiertoOperativo(turno)) return 'turno descubierto'
-    if (esSinIngreso(turno)) return 'sin ingreso'
+    if (faltaIngreso(turno)) return 'sin ingreso'
     if (esTurnoReasignado(turno)) return 'reasignado'
     return 'sin entrada'
   }
