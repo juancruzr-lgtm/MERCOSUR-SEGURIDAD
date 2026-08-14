@@ -3,7 +3,8 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion } from '@/lib/liquidacion'
+import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa } from '@/lib/liquidacion'
+import { fetchPaginado } from '@/lib/fetch-paginado'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -49,7 +50,6 @@ import {
   detectarAlertasOperativas,
   efectoIntervencionOperativa,
   estadoCicloVidaAlerta,
-  ESTADOS_SIN_OBLIGACION,
   intervencionesDeOcurrencia,
 } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/revision-operativa'
@@ -822,7 +822,22 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   }
 
   const { horasLiquidables: horasHoy } = sumarHorasPorTurnos(registrosHoy, turnoPorId)
-  const { horasLiquidables: horasMes, horasGPS: horasGPSMes } = sumarHorasPorTurnos(registrosMes, turnoPorId)
+  const { horasGPS: horasGPSMes } = sumarHorasPorTurnos(registrosMes, turnoPorId)
+
+  // "Horas trabajadas mes" responde la misma pregunta que "Horas liquidables
+  // hasta hoy" de Planillas, así que sale del mismo universo: se recorren
+  // turnos —no registros—, y se excluyen futuros, en curso y sin obligación.
+  // Recorrer registros contaba de menos: un turno sin registro no existía, y
+  // ningún filtro de corte se aplicaba.
+  const esObjetivoPrueba = (objetivoId?: string | null) =>
+    Boolean(objetivoPorId.get(objetivoId || '')?.es_prueba)
+  const turnosMesDashboard = turnos.filter((t: Turno) => t.fecha?.slice(0, 7) === mesActual)
+  const mejorRegistroMes = mejorRegistroPorTurno(registrosMes, turnoPorId, esObjetivoPrueba)
+  const turnosReconocidosMes = turnosReconocidosHastaCorte(turnosMesDashboard, mejorRegistroMes, {
+    hastaFecha: hoy,
+    esObjetivoPrueba,
+  })
+  const horasMes = totalHorasLiquidables(turnosReconocidosMes, mejorRegistroMes)
   const guardiasConAsistenciaMes = new Set(registrosMes.filter((r: RegistroAsistencia) => r.hora_entrada_real).map((r: RegistroAsistencia) => r.guardia_id)).size
   const turnosFinalizadosHoy = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && r.hora_salida_real).length
   const novedadesUrgentes = novedades.filter((n: Novedad) => n.prioridad === 'urgente' && n.estado !== 'resuelta')
@@ -6287,38 +6302,23 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     turnosCapacitacion: capacitacionObjetivo.turnos,
   }
 
-  // Totales globales del mes:
-  // - deduplicados por turno (selectRegistroPrincipal)
-  // - excluye ausencias y objetivos es_prueba
-  // - incluye coberturas manuales y saneamiento (tienen horas_liquidables sin GPS)
-  // - misma lógica que Dashboard "Horas trabajadas mes" para que coincidan
-  const _mejorRegistroPorTurnoReportes = (() => {
-    const map = new Map<string, RegistroAsistencia>()
-    for (const r of registrosMes) {
-      if (r.tipo_registro === 'ausencia') continue
-      const turno = turnoPorId.get(r.turno_id)
-      if (!turno) continue
-      if (objetivos.find((o: Objetivo) => o.id === turno.objetivo_id)?.es_prueba) continue
-      const actual = map.get(r.turno_id)
-      if (!actual || scoreRegistro(r) > scoreRegistro(actual)) {
-        map.set(r.turno_id, r)
-      }
-    }
-    return map
-  })()
-  const hoyISO = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const turnosBaseMes = turnosMes.filter((t: Turno) => {
-    if (objetivos.find((o: Objetivo) => o.id === t.objetivo_id)?.es_prueba) return false
-    if (ESTADOS_SIN_OBLIGACION.has(t.estado || '')) return false
-    if (t.fecha > hoyISO) return false
-    const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
-    if (reg?.hora_entrada_real && !reg?.hora_salida_real) return false
-    return true
+  // Totales globales del mes. El universo lo define `lib/liquidacion`, el mismo
+  // que usa el Dashboard para "Horas trabajadas mes": deduplicado por turno,
+  // sin ausencias ni objetivos es_prueba, y con las coberturas manuales y el
+  // saneamiento incluidos (traen horas_liquidables aunque no tengan GPS).
+  const _esObjetivoPruebaReportes = (objetivoId?: string | null) =>
+    Boolean(objetivos.find((o: Objetivo) => o.id === objetivoId)?.es_prueba)
+  const _mejorRegistroPorTurnoReportes = mejorRegistroPorTurno(
+    registrosMes,
+    turnoPorId,
+    _esObjetivoPruebaReportes,
+  )
+  const hoyISO = fechaCorteOperativa()
+  const turnosBaseMes = turnosReconocidosHastaCorte(turnosMes, _mejorRegistroPorTurnoReportes, {
+    hastaFecha: hoyISO,
+    esObjetivoPrueba: _esObjetivoPruebaReportes,
   })
-  const totalHsLiquidablesMes = turnosBaseMes.reduce((s: number, t: Turno) => {
-    const reg = _mejorRegistroPorTurnoReportes.get(t.id) ?? null
-    return s + resolverLineaLiquidacion(t, reg).horasLiquidables
-  }, 0)
+  const totalHsLiquidablesMes = totalHorasLiquidables(turnosBaseMes, _mejorRegistroPorTurnoReportes)
   const totalHsProgramadasMes = turnosBaseMes
     .reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
   const pctCubierto = totalHsProgramadasMes > 0
@@ -10600,14 +10600,23 @@ export default function AppPage() {
     const mesActual = mesActualArgentina()
     const [fdY, fdM] = mesActual.split('-').map(Number)
     const desdeStr = `${mesActual}-01`
-    const desdeISO = new Date(Date.UTC(fdY, fdM - 1, 1, 3, 0, 0)).toISOString()
     const hastaISO = new Date(Date.UTC(fdY, fdM, 1, 3, 0, 0)).toISOString()
     const hastaStr = hastaISO.slice(0, 10)
     const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
       supabase.from('usuarios').select('*').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
-      supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }),
-      supabase.from('registros_asistencia').select('*').gte('created_at', desdeISO).lt('created_at', hastaISO).order('created_at', { ascending: false }),
+      // Turnos y asistencia del mes se paginan: superan las 1000 filas que
+      // PostgREST devuelve como máximo, y el recorte es silencioso. Sin paginar,
+      // `order('fecha', desc)` dejaba afuera los primeros días del mes.
+      fetchPaginado<Turno>((desde, hasta) =>
+        supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }).range(desde, hasta),
+      ).then(data => ({ data })),
+      // El filtro va por la fecha del turno, no por `created_at` del registro:
+      // una cobertura precargada o una regularización posterior pertenecen al
+      // mes que trabajaron, no al mes en que se cargaron.
+      fetchPaginado<RegistroAsistencia>((desde, hasta) =>
+        supabase.from('registros_asistencia').select('*,turno:turnos!inner(fecha)').gte('turno.fecha', desdeStr).lt('turno.fecha', hastaStr).order('created_at', { ascending: false }).range(desde, hasta),
+      ).then(data => ({ data })),
       supabase.from('novedades').select('*').order('created_at', { ascending: false }),
       supabase.from('checklist_plantillas').select('*').order('nombre'),
       supabase.from('checklist_items').select('*').order('orden', { ascending: true }),

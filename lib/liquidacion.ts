@@ -7,6 +7,7 @@
  */
 
 import { calcularHorasLiquidables } from '@/lib/supabase'
+import { ESTADOS_SIN_OBLIGACION } from '@/lib/revision-operativa'
 
 // ── Tipos mínimos ─────────────────────────────────────────────────────────────
 
@@ -253,6 +254,81 @@ function resolverOrigen(registro?: RegistroLiquidacion | null): {
     return { origenRegistro: 'corregido', origenEtiqueta: 'Registro corregido', cargadoPorEmpleado: false, cargadoPorSupervisor: false, cargadoPorAdministracion: false }
   }
   return { origenRegistro: 'empleado', origenEtiqueta: 'Fichado por el empleado', cargadoPorEmpleado: true, cargadoPorSupervisor: false, cargadoPorAdministracion: false }
+}
+
+// ── Universo reconocido del mes ───────────────────────────────────────────────
+// Fuente única del CONJUNTO de turnos que cuentan como horas reconocidas hasta
+// el corte. Antes cada pantalla armaba el suyo: Reportes iteraba turnos y
+// aplicaba estos filtros; Dashboard iteraba registros y no aplicaba ninguno.
+// Con datos completos eso daba dos totales distintos para la misma pregunta.
+
+export interface TurnoUniverso extends TurnoLiquidacion {
+  id: string
+}
+
+export interface RegistroUniverso extends RegistroLiquidacion {
+  turno_id: string
+  tipo_registro?: string | null
+}
+
+// Corte operativo: el día en curso en hora Argentina (UTC-3).
+export function fechaCorteOperativa(ahora: Date = new Date()): string {
+  return new Date(ahora.getTime() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
+}
+
+// Un registro principal por turno. Descarta ausencias, turnos ausentes del mapa
+// y objetivos de prueba. El desempate es por `scoreRegistro`, primero en ganar.
+export function mejorRegistroPorTurno<R extends RegistroUniverso>(
+  registros: R[],
+  turnoPorId: Map<string, TurnoUniverso>,
+  esObjetivoPrueba: (objetivoId?: string | null) => boolean,
+): Map<string, R> {
+  const map = new Map<string, R>()
+  for (const r of registros) {
+    if (r.tipo_registro === 'ausencia') continue
+    const turno = turnoPorId.get(r.turno_id)
+    if (!turno) continue
+    if (esObjetivoPrueba(turno.objetivo_id)) continue
+    const actual = map.get(r.turno_id)
+    if (!actual || scoreRegistro(r) > scoreRegistro(actual)) {
+      map.set(r.turno_id, r)
+    }
+  }
+  return map
+}
+
+// Turnos cuyas horas ya corresponde reconocer. Excluye, en este orden:
+//   · objetivos de prueba;
+//   · estados sin obligación (reemplazado/anulado/cancelado);
+//   · turnos futuros — todavía no ocurrieron;
+//   · turnos en curso — hay entrada pero no salida, la jornada no está cerrada.
+export function turnosReconocidosHastaCorte<
+  T extends TurnoUniverso,
+  R extends RegistroUniverso,
+>(
+  turnos: T[],
+  mejorRegistro: Map<string, R>,
+  opts: { hastaFecha: string; esObjetivoPrueba: (objetivoId?: string | null) => boolean },
+): T[] {
+  return turnos.filter(t => {
+    if (opts.esObjetivoPrueba(t.objetivo_id)) return false
+    if (ESTADOS_SIN_OBLIGACION.has(t.estado || '')) return false
+    if (t.fecha > opts.hastaFecha) return false
+    const reg = mejorRegistro.get(t.id) ?? null
+    if (reg?.hora_entrada_real && !reg?.hora_salida_real) return false
+    return true
+  })
+}
+
+// Total autoritativo de horas reconocidas sobre un universo ya filtrado.
+export function totalHorasLiquidables<
+  T extends TurnoUniverso,
+  R extends RegistroUniverso,
+>(turnos: T[], mejorRegistro: Map<string, R>): number {
+  return turnos.reduce(
+    (suma, t) => suma + resolverLineaLiquidacion(t, mejorRegistro.get(t.id) ?? null).horasLiquidables,
+    0,
+  )
 }
 
 // ── Línea completa de liquidación ─────────────────────────────────────────────
