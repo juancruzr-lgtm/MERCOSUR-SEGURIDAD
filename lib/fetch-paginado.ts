@@ -26,3 +26,21 @@ export async function fetchPaginado<T = any>(
   }
   return todas
 }
+
+/**
+ * Igual que `fetchPaginado`, pero devuelve la forma `{ data, error }` de
+ * supabase-js en vez de lanzar. Permite reemplazar una consulta directa dentro
+ * de un `Promise.all` sin cambiar cómo el llamador maneja los errores: si esto
+ * lanzara, el `Promise.all` se rechazaría entero y la pantalla quedaría
+ * cargando para siempre.
+ */
+export async function fetchPaginadoResult<T = any>(
+  consulta: (desde: number, hasta: number) => PromiseLike<{ data: T[] | null; error: any }>,
+  filasPorPagina: number = FILAS_POR_PAGINA,
+): Promise<{ data: T[]; error: any }> {
+  try {
+    return { data: await fetchPaginado<T>(consulta, filasPorPagina), error: null }
+  } catch (error) {
+    return { data: [], error }
+  }
+}
