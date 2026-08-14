@@ -180,6 +180,7 @@ export function horasLiquidablesRegistro(
   const horaSalidaReal   = registro?.hora_salida_real   ?? null
 
   // Path 2: corrección/autorización explícita vía campos _final
+  // Si al menos uno está presente, se usan los tiempos efectivos autorizados.
   if (horaEntradaFinal || horaSalidaFinal) {
     const entrada = horaEntradaFinal ?? horaEntradaReal
     const salida  = horaSalidaFinal  ?? horaSalidaReal
@@ -190,6 +191,8 @@ export function horasLiquidablesRegistro(
   }
 
   // Path 3: fichaje GPS completo sin corrección → duración programada del turno
+  // Se pasan los tiempos del propio turno como "GPS" para obtener minutosProgramados
+  // (diferencia = 0 → rama dentro de tolerancia → devuelve minutosProgramados).
   if (horaEntradaReal && horaSalidaReal) {
     return calcularHorasLiquidables(
       turno.fecha, turno.hora_inicio, turno.hora_fin,
