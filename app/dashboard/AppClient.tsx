@@ -10686,11 +10686,23 @@ export default function AppPage() {
         .gte('created_at', inicioMes)
         .lt('created_at', inicioMesSiguiente)
         .order('created_at', { ascending: false }),
-      supabase
-        .from('supervisiones')
-        .select('objetivo_id, created_at')
-        .order('created_at', { ascending: false })
-        .limit(5000),
+      // Última supervisión por objetivo. El .limit(5000) no servía: PostgREST
+      // corta en 1000 igual, sin avisar, y con 1.253 supervisiones se perdían
+      // 253 — objetivos que figuraban "sin supervisar nunca" por truncamiento.
+      // El orden secundario por id hace estable la paginación: sin desempate,
+      // dos filas con el mismo created_at pueden repetirse o saltearse entre
+      // páginas.
+      // `id` va en el select aunque no se use: se ordena por él, y no depender
+      // de que PostgREST acepte ordenar por una columna no seleccionada evita
+      // un modo de falla feo — si la consulta fallara, esto devuelve data: []
+      // y todos los objetivos pasarían a decir "Nunca supervisado".
+      fetchPaginadoResult((desde, hasta) =>
+        supabase
+          .from('supervisiones')
+          .select('id, objetivo_id, created_at')
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(desde, hasta)),
       supabase.from('zonas_operativas').select('*').order('nombre'),
       supabase.from('supervisor_zonas').select('*'),
     ])

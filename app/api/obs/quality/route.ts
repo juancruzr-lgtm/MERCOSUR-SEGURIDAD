@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin, isObsAuthErr } from '../../_lib/obs-auth'
+import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 
 const LIMIT_REGISTROS = 5000
 const LIMIT_EVIDENCIAS = 5000
@@ -30,7 +31,14 @@ export async function GET(req: NextRequest) {
       .gte('fecha', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
       .lte('fecha', new Date().toISOString().slice(0, 10)),
     client.from('registros_asistencia').select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, lat_entrada, lng_entrada, foto_entrada_url, tipo_registro').order('created_at', { ascending: false }).limit(LIMIT_REGISTROS),
-    client.from('supervisiones').select('id, objetivo_id, supervisor_id, lat, lng, precision_gps, estado').order('created_at', { ascending: false }).limit(2000),
+    // El .limit(2000) no evitaba nada: PostgREST corta en 1000 sin avisar y las
+    // métricas se calculaban sobre 1.000 de 1.253 supervisiones. El orden
+    // secundario por id hace estable la paginación.
+    fetchPaginadoResult((desde, hasta) =>
+      client.from('supervisiones').select('id, objetivo_id, supervisor_id, lat, lng, precision_gps, estado')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(desde, hasta)),
     client.from('novedades').select('id, guardia_id, objetivo_id, tipo, descripcion, prioridad, estado, created_at'),
     client.from('evidencias').select('id, proceso_tipo, proceso_id, guardia_id, objetivo_id, tipo_evidencia').limit(LIMIT_EVIDENCIAS),
     client.from('puestos').select('id, objetivo_id, nombre, activo'),
