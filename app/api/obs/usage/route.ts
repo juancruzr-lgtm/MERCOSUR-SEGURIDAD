@@ -41,7 +41,11 @@ export async function GET(req: NextRequest) {
     // orden estable para que sean efectivamente los últimos.
     fetchPaginadoResult((d, h) =>
       client.from('os_events')
-        .select('user_id, user_rol, event_name, event_category, screen, objetivo_id, duration_ms, value_text, err_code, app_version, device_type, client_ts, id, created_at')
+        // `device_type` NO existe en os_events —está en os_sessions— y venía en
+        // el select desde que se escribió la ruta. PostgREST devolvía 400, el
+        // .data quedaba en null y el análisis de eventos corría sobre un array
+        // vacío. Como `0 >= MAX_EVENTS` es false, encima se declaraba completo.
+        .select('user_id, user_rol, event_name, event_category, screen, objetivo_id, duration_ms, value_text, err_code, app_version, client_ts, id, created_at')
         .gte('created_at', desde)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
