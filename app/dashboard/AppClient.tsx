@@ -11192,6 +11192,10 @@ const esGuardia = esRolGuardia(user.rol)
                   densidad="comoda"
                   empleadoInicial={filtros.revision_planillas?.empleadoId ?? null}
                   mesInicial={filtros.revision_planillas?.mes}
+                  // "Modificar turno" abre el editor de turnos que ya existe:
+                  // corregir la programación es otro circuito y por eso no
+                  // genera ninguna ausencia.
+                  onNavigate={(pagina, f) => navegarConFiltro(pagina, f)}
                 />
               )}
               {page === 'supervisiones' && (
