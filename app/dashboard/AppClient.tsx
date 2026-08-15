@@ -34,6 +34,10 @@ import {
 } from '@/lib/gps-asistencia'
 import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, obtenerPuestosActivosDeObjetivos, resolverPuestoTurno } from '@/lib/puestos'
 import type { EstadoPuestos } from '@/lib/puestos'
+// Generación por rango de guardias de supervisor. La expansión de fechas y el
+// descarte de duplicados son puros y viven en lib/ para poder testearlos.
+import { normalizarTextoGuardia, previsualizarGeneracion, resumenGeneracion } from '@/lib/guardias-supervisor'
+import type { PrevisionGeneracion } from '@/lib/guardias-supervisor'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
@@ -247,7 +251,6 @@ const S: Record<string, React.CSSProperties> = {
   statGrid: { display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:16, marginBottom:28 },
 }
 
-const ZONA_SUPERVISORES_GUARDIA = 'Rosario / General'
 const JEFE_OPERATIVO_GUARDIA = 'Aldo Monzón'
 const DIRECTOR_TECNICO_GUARDIA = 'Rodolfo Romero'
 
@@ -8694,19 +8697,41 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
 
 
 // ── SUPERVISORES DE GUARDIA ──────────────────────────────────
-function SupervisoresGuardia({ guardias, user }: any) {
+function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
   const hoy = new Date().toLocaleDateString('sv-SE')
   const rolesOperativos = [
     { value: 'supervisor', label: 'Supervisor' },
     { value: 'jefe_operativo', label: 'Jefe operativo' },
     { value: 'director_tecnico', label: 'Director técnico' },
   ]
+  const DIAS_GUARDIA = [
+    { num:1, label:'Lun' }, { num:2, label:'Mar' }, { num:3, label:'Mié' },
+    { num:4, label:'Jue' }, { num:5, label:'Vie' }, { num:6, label:'Sáb' },
+    { num:7, label:'Dom' },
+  ]
+  // La zona ya no tiene default: antes venía fija en 'Rosario / General', que no
+  // es el nombre de ninguna zona de zonas_operativas, así que toda guardia
+  // cargada con el default quedaba invisible para la búsqueda del supervisor de
+  // guardia (compara contra zonas_operativas.nombre). Ahora se elige del catálogo.
   const formInicial = () => ({
     supervisor_id: '',
     fecha: hoy,
     hora_inicio: '18:00',
     hora_fin: '06:00',
-    zona: ZONA_SUPERVISORES_GUARDIA,
+    zona: '',
+    rol_operativo: 'supervisor',
+    estado: 'activo',
+    observacion: '',
+  })
+
+  const formGeneracionInicial = () => ({
+    supervisor_id: '',
+    zona: '',
+    desde: hoy,
+    hasta: hoy,
+    dias_semana: [1, 2, 3, 4, 5] as number[],
+    hora_inicio: '18:00',
+    hora_fin: '06:00',
     rol_operativo: 'supervisor',
     estado: 'activo',
     observacion: '',
@@ -8720,10 +8745,31 @@ function SupervisoresGuardia({ guardias, user }: any) {
   const [historialSeleccionado, setHistorialSeleccionado] = useState<any | null>(null)
   const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error', texto: string } | null>(null)
   const [form, setForm] = useState(formInicial)
+  const [modalGenerar, setModalGenerar] = useState(false)
+  const [formGen, setFormGen] = useState(formGeneracionInicial)
+  const [prevision, setPrevision] = useState<PrevisionGeneracion | null>(null)
+  const [previsionLoading, setPrevisionLoading] = useState(false)
+  const [generando, setGenerando] = useState(false)
 
   const supervisoresDisponibles = guardias
     .filter((g: any) => ['supervisor', 'admin'].includes(g.rol))
     .sort((a: any, b: any) => `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`))
+
+  const zonasActivas = (zonas as any[]).filter(z => (z.estado || 'activo') !== 'inactivo')
+
+  /**
+   * Opciones del select de zona. Se agrega la zona ya cargada en la fila cuando
+   * no está en el catálogo (texto libre viejo o zona inactivada): editar una
+   * guardia no puede cambiarle la zona en silencio.
+   */
+  const opcionesZona = (zonaActual: string) => {
+    const nombres = zonasActivas.map(z => z.nombre)
+    const actual = (zonaActual || '').trim()
+    if (actual && !nombres.some(n => normalizarTextoGuardia(n) === normalizarTextoGuardia(actual))) {
+      return [...nombres, actual]
+    }
+    return nombres
+  }
 
   const cargar = async () => {
     setLoadingData(true)
@@ -8765,7 +8811,7 @@ function SupervisoresGuardia({ guardias, user }: any) {
       fecha: item.fecha || hoy,
       hora_inicio: formatHoraTurno(item.hora_inicio) === '—' ? '18:00' : formatHoraTurno(item.hora_inicio),
       hora_fin: formatHoraTurno(item.hora_fin) === '—' ? '06:00' : formatHoraTurno(item.hora_fin),
-      zona: item.zona || ZONA_SUPERVISORES_GUARDIA,
+      zona: item.zona || '',
       rol_operativo: item.rol_operativo || 'supervisor',
       estado: item.estado || 'activo',
       observacion: item.observacion || '',
@@ -8781,6 +8827,11 @@ function SupervisoresGuardia({ guardias, user }: any) {
       return
     }
 
+    if (!form.zona.trim()) {
+      setMensaje({ tipo:'error', texto:'Elegí la zona operativa: sin zona la guardia no se encuentra desde los objetivos.' })
+      return
+    }
+
     setLoading(true)
     setMensaje(null)
 
@@ -8789,7 +8840,7 @@ function SupervisoresGuardia({ guardias, user }: any) {
       fecha: form.fecha,
       hora_inicio: form.hora_inicio,
       hora_fin: form.hora_fin,
-      zona: form.zona || ZONA_SUPERVISORES_GUARDIA,
+      zona: form.zona.trim(),
       rol_operativo: form.rol_operativo,
       estado: form.estado,
       observacion: form.observacion.trim() || null,
@@ -8836,6 +8887,105 @@ function SupervisoresGuardia({ guardias, user }: any) {
     }
   }
 
+  // ── Generación por rango ──────────────────────────────────────────────────
+  //
+  // Cargar día por día una zona completa era inviable. Acá se elige supervisor,
+  // zona, rango, días de la semana y horario; se cuenta cuántas filas salen y
+  // recién después se inserta. La expansión y el descarte de duplicados los
+  // hace lib/guardias-supervisor: esta parte sólo consulta y escribe.
+
+  const abrirGenerar = () => {
+    setFormGen(formGeneracionInicial())
+    setPrevision(null)
+    setMensaje(null)
+    setModalGenerar(true)
+  }
+
+  const cerrarGenerar = () => {
+    setModalGenerar(false)
+    setFormGen(formGeneracionInicial())
+    setPrevision(null)
+  }
+
+  // Cualquier cambio invalida el conteo: no se inserta contra una vista previa
+  // que ya no corresponde a lo que muestra el formulario.
+  const editarGen = (patch: any) => {
+    setFormGen(prev => ({ ...prev, ...patch }))
+    setPrevision(null)
+  }
+
+  const toggleDiaGen = (num: number) => {
+    setFormGen(prev => ({
+      ...prev,
+      dias_semana: prev.dias_semana.includes(num)
+        ? prev.dias_semana.filter(d => d !== num)
+        : [...prev.dias_semana, num].sort((a, b) => a - b),
+    }))
+    setPrevision(null)
+  }
+
+  const previsualizar = async () => {
+    setMensaje(null)
+
+    // Primero la validación pura: si el formulario está mal, no se consulta.
+    const soloValidacion = previsualizarGeneracion(formGen, [])
+    if (soloValidacion.errores.length) {
+      setPrevision(soloValidacion)
+      return
+    }
+
+    setPrevisionLoading(true)
+
+    // Las guardias ya cargadas de ese supervisor dentro del rango. Se traen
+    // todas, incluidas las inactivas: una fila idéntica inactivada sigue siendo
+    // la misma carga, duplicarla no la reactiva.
+    const { data, error } = await supabase
+      .from('supervisores_guardia')
+      .select('supervisor_id,zona,fecha,hora_inicio,hora_fin')
+      .eq('supervisor_id', formGen.supervisor_id)
+      .gte('fecha', formGen.desde)
+      .lte('fecha', formGen.hasta)
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      setPrevisionLoading(false)
+      return
+    }
+
+    setPrevision(previsualizarGeneracion(formGen, data || []))
+    setPrevisionLoading(false)
+  }
+
+  const generar = async () => {
+    if (!prevision || prevision.errores.length || prevision.aCrear.length === 0) return
+
+    setGenerando(true)
+    setMensaje(null)
+
+    const payload = prevision.aCrear.map(fila => ({ ...fila, creado_por: user?.id || null }))
+    const { error } = await supabase.from('supervisores_guardia').insert(payload)
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      setGenerando(false)
+      return
+    }
+
+    const creadas = prevision.aCrear.length
+    const omitidas = prevision.duplicadas.length
+    setGenerando(false)
+    cerrarGenerar()
+    await cargar()
+    setMensaje({
+      tipo:'ok',
+      texto: `Se crearon ${creadas} guardia(s)${omitidas ? ` · ${omitidas} ya existían y se omitieron` : ''}.`,
+    })
+  }
+
+  const zonasConGuardias = guardiasSupervisor
+    .map(item => (item.zona || '').trim())
+    .filter((zona, i, todas) => zona && todas.indexOf(zona) === i)
+
   const historial = historialSeleccionado
     ? guardiasSupervisor
       .filter(item => item.supervisor_id === historialSeleccionado.supervisor_id)
@@ -8847,14 +8997,20 @@ function SupervisoresGuardia({ guardias, user }: any) {
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
         <div style={{ flex:1 }}>
           <div style={S.title}>Supervisores de guardia</div>
-          <div style={S.sub2}>Zona {ZONA_SUPERVISORES_GUARDIA} · Jefe operativo {JEFE_OPERATIVO_GUARDIA} · Director técnico {DIRECTOR_TECNICO_GUARDIA}</div>
+          <div style={S.sub2}>Jefe operativo {JEFE_OPERATIVO_GUARDIA} · Director técnico {DIRECTOR_TECNICO_GUARDIA}</div>
         </div>
-        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>+ Nueva guardia</button>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+          <button style={{ ...S.btn, ...S.btnSecondary }} onClick={abrirGenerar}>📅 Generar por rango</button>
+          <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>+ Nueva guardia</button>
+        </div>
       </div>
 
       <div style={{ ...S.card, display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:12 }}>
-        <div><div style={S.label}>Supervisores operativos</div><strong>Fulla · Aranda · Martínez</strong></div>
-        <div><div style={S.label}>Zona actual</div><strong>{ZONA_SUPERVISORES_GUARDIA}</strong></div>
+        <div><div style={S.label}>Guardias cargadas</div><strong>{guardiasSupervisor.length}</strong></div>
+        <div>
+          <div style={S.label}>Zonas con guardias</div>
+          <strong>{zonasConGuardias.length ? zonasConGuardias.join(' · ') : 'Ninguna'}</strong>
+        </div>
         <div><div style={S.label}>Regla de intervención</div><strong>Cualquier supervisor logueado puede intervenir</strong></div>
       </div>
 
@@ -8891,7 +9047,7 @@ function SupervisoresGuardia({ guardias, user }: any) {
                     <td style={S.td}>{horario(item)}</td>
                     <td style={S.td}>{nombreUsuario(item.supervisor_id)}</td>
                     <td style={S.td}>{rolLabel(item.rol_operativo)}</td>
-                    <td style={S.td}>{item.zona || ZONA_SUPERVISORES_GUARDIA}</td>
+                    <td style={S.td}>{item.zona || <span style={{ color:'#ef4444' }}>Sin zona</span>}</td>
                     <td style={S.td}><Badge type={item.estado || 'activo'}>{item.estado || 'activo'}</Badge></td>
                     <td style={{ ...S.td, color:'#94a3b8', minWidth:180 }}>{item.observacion || '—'}</td>
                     <td style={S.td}>
@@ -8939,7 +9095,13 @@ function SupervisoresGuardia({ guardias, user }: any) {
           footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => { setModal(false); setEditId(null); setForm(formInicial()) }}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
           <div style={S.grid2}>
             <div style={{ marginBottom:16 }}><label style={S.label}>Fecha *</label><input type="date" style={S.input} value={form.fecha} onChange={e => setForm({...form, fecha:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Zona</label><input style={S.input} value={form.zona} onChange={e => setForm({...form, zona:e.target.value})} /></div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Zona operativa *</label>
+              <select style={S.select} value={form.zona} onChange={e => setForm({...form, zona:e.target.value})}>
+                <option value="">Seleccionar zona...</option>
+                {opcionesZona(form.zona).map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+              </select>
+            </div>
           </div>
           <div style={S.grid2}>
             <div style={{ marginBottom:16 }}><label style={S.label}>Hora inicio *</label><input type="time" style={S.input} value={form.hora_inicio} onChange={e => setForm({...form, hora_inicio:e.target.value})} /></div>
@@ -8973,6 +9135,117 @@ function SupervisoresGuardia({ guardias, user }: any) {
             <label style={S.label}>Observación</label>
             <textarea style={{ ...S.input, minHeight:90, resize:'vertical' }} value={form.observacion} onChange={e => setForm({...form, observacion:e.target.value})} placeholder="Comentario operativo opcional" />
           </div>
+        </Modal>
+      )}
+
+      {modalGenerar && (
+        <Modal
+          title="Generar guardias por rango"
+          onClose={cerrarGenerar}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={cerrarGenerar}>Cancelar</button>
+              {prevision && !prevision.errores.length && prevision.aCrear.length > 0 ? (
+                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={generar} disabled={generando}>
+                  {generando ? 'Creando...' : `Crear ${prevision.aCrear.length} guardia(s)`}
+                </button>
+              ) : (
+                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={previsualizar} disabled={previsionLoading}>
+                  {previsionLoading ? 'Calculando...' : 'Ver cuántas se crean'}
+                </button>
+              )}
+            </>
+          }
+        >
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Supervisor asignado *</label>
+            <select style={S.select} value={formGen.supervisor_id} onChange={e => editarGen({ supervisor_id:e.target.value })}>
+              <option value="">Seleccionar supervisor...</option>
+              {supervisoresDisponibles.filter((s: any) => s.estado === 'activo').map((s: any) => (
+                <option key={s.id} value={s.id}>{s.apellido}, {s.nombre}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Zona operativa *</label>
+            <select style={S.select} value={formGen.zona} onChange={e => editarGen({ zona:e.target.value })}>
+              <option value="">Seleccionar zona...</option>
+              {zonasActivas.map((z: any) => <option key={z.id} value={z.nombre}>{z.nombre}</option>)}
+            </select>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Desde *</label><input type="date" style={S.input} value={formGen.desde} onChange={e => editarGen({ desde:e.target.value })} /></div>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hasta *</label><input type="date" style={S.input} value={formGen.hasta} onChange={e => editarGen({ hasta:e.target.value })} /></div>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Días de la semana *</label>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:6 }}>
+              {DIAS_GUARDIA.map(d => {
+                const sel = formGen.dias_semana.includes(d.num)
+                return (
+                  <button
+                    key={d.num}
+                    onClick={() => toggleDiaGen(d.num)}
+                    style={{ padding:'8px 14px', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600, border: sel ? '1px solid #f59e0b' : '1px solid #1e2d42', background: sel ? 'rgba(245,158,11,0.15)' : '#1a2235', color: sel ? '#f59e0b' : '#64748b' }}
+                  >
+                    {d.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hora inicio *</label><input type="time" style={S.input} value={formGen.hora_inicio} onChange={e => editarGen({ hora_inicio:e.target.value })} /></div>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hora fin *</label><input type="time" style={S.input} value={formGen.hora_fin} onChange={e => editarGen({ hora_fin:e.target.value })} /></div>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Rol operativo</label>
+              <select style={S.select} value={formGen.rol_operativo} onChange={e => editarGen({ rol_operativo:e.target.value })}>
+                {rolesOperativos.map(rol => <option key={rol.value} value={rol.value}>{rol.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Estado</label>
+              <select style={S.select} value={formGen.estado} onChange={e => editarGen({ estado:e.target.value })}>
+                <option value="activo">Activo</option>
+                <option value="inactivo">Inactivo</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Observación</label>
+            <textarea style={{ ...S.input, minHeight:70, resize:'vertical' }} value={formGen.observacion} onChange={e => editarGen({ observacion:e.target.value })} placeholder="Se repite en todas las guardias generadas" />
+          </div>
+
+          {prevision && (
+            <div style={{
+              padding:14,
+              borderRadius:8,
+              border:`1px solid ${prevision.errores.length ? 'rgba(239,68,68,.35)' : 'rgba(16,185,129,.35)'}`,
+              background: prevision.errores.length ? 'rgba(239,68,68,.08)' : 'rgba(16,185,129,.08)',
+              color: prevision.errores.length ? '#ef4444' : '#10b981',
+              fontSize:13,
+            }}>
+              <div style={{ fontWeight:600 }}>{resumenGeneracion(prevision)}</div>
+              {!prevision.errores.length && prevision.aCrear.length > 0 && (
+                <div style={{ color:'#94a3b8', marginTop:6 }}>
+                  Del {formatFecha(prevision.aCrear[0].fecha)} al {formatFecha(prevision.aCrear[prevision.aCrear.length - 1].fecha)} · {formGen.hora_inicio} a {formGen.hora_fin}
+                </div>
+              )}
+              {prevision.duplicadas.length > 0 && (
+                <div style={{ color:'#94a3b8', marginTop:6 }}>
+                  Ya cargadas: {prevision.duplicadas.slice(0, 8).map(f => formatFecha(f)).join(', ')}{prevision.duplicadas.length > 8 ? ` y ${prevision.duplicadas.length - 8} más` : ''}
+                </div>
+              )}
+            </div>
+          )}
         </Modal>
       )}
     </div>
@@ -11227,7 +11500,7 @@ const esGuardia = esRolGuardia(user.rol)
               )}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
-              {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
+              {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} zonas={zonasOperativas} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} setRegistros={setRegistros} user={user} supervisorZonas={supervisorZonas} zonasOperativas={zonasOperativas} filtroActivo={filtros.revision_operativa} limpiarFiltro={() => limpiarFiltro('revision_operativa')} />}
               {/* La MISMA bandeja que ve el supervisor: mismo componente, no una copia.
