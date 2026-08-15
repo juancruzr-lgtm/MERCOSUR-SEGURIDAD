@@ -14,7 +14,7 @@ function validIso(v: string | null): string | null {
 
 // ── GET /api/obs/events ────────────────────────────────────────────────────────
 // Browser paginado de eventos de telemetría.
-// Query params: page, limit, from, to, user_id, objetivo_id, event_name, category, only_errors, app_version, device_type
+// Query params: page, limit, from, to, user_id, objetivo_id, event_name, category, only_errors, app_version
 export async function GET(req: NextRequest) {
   const auth = await requireAdmin(req)
   if (isObsAuthErr(auth)) return NextResponse.json({ error: auth.error }, { status: auth.status })
@@ -34,13 +34,19 @@ export async function GET(req: NextRequest) {
   const category   = p.get('category')   || null
   const onlyErrors = p.get('only_errors') === '1'
   const appVersion = p.get('app_version') || null
-  const deviceType = p.get('device_type') || null
 
   // count: 'exact' es necesario para que la respuesta incluya el total de páginas
+  //
+  // OJO: device_type y os_name NO existen en os_events (viven en os_sessions).
+  // El select los pedía y PostgREST devolvía 400: la pestaña de telemetría
+  // cruda respondió 500 en TODAS sus cargas desde que se escribió. Mismo bug
+  // ya corregido en usage y en summary. El filtro por dispositivo tampoco es
+  // posible acá (os_events.session_id no tiene FK, no hay join embebido):
+  // el dispositivo se consulta en la pestaña de sesiones.
   let q = client
     .from('os_events')
     .select(
-      'id, session_id, seq, user_id, user_rol, event_name, event_category, screen, screen_section, objetivo_id, turno_id, gps_lat, gps_lng, gps_accuracy_m, gps_distance_m, gps_status, network_type, battery_pct, client_ts, duration_ms, value_num, value_text, value_json, err_screen, err_component, err_function, err_code, err_message, prev_events, app_version, device_type, os_name, created_at',
+      'id, session_id, seq, user_id, user_rol, event_name, event_category, screen, screen_section, objetivo_id, turno_id, gps_lat, gps_lng, gps_accuracy_m, gps_distance_m, gps_status, network_type, battery_pct, client_ts, duration_ms, value_num, value_text, value_json, err_screen, err_component, err_function, err_code, err_message, prev_events, app_version, created_at',
       { count: 'exact' }
     )
 
@@ -53,7 +59,6 @@ export async function GET(req: NextRequest) {
   if (category)   q = q.eq('event_category', category)
   if (onlyErrors) q = q.not('err_code', 'is', null)
   if (appVersion) q = q.eq('app_version', appVersion)
-  if (deviceType) q = q.eq('device_type', deviceType)
 
   const { data, error, count } = await q
     .order('created_at', { ascending: false })
