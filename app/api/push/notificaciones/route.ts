@@ -22,6 +22,18 @@ import { enviarNotificaciones } from '../../_lib/push-notificaciones'
 export const runtime = 'nodejs'
 
 /**
+ * Sin esto la corrida se corta a los 10 segundos y el 500 queda con cuerpo
+ * vacío en pg_net (net._http_response): es EXACTAMENTE lo que venía pasando —
+ * todos los ticks entre el 14/08 18:40 y el 15/08 00:30 (hora local) dieron
+ * 500 sin body. La función manda de arriba hacia abajo (supervisiones →
+ * rondas → turnos), así que con el default de Vercel los avisos al VIGILADOR,
+ * que están al final, eran los primeros en morir cuando había backlog. Los
+ * envíos se hacen en serie a propósito (dedup consultada por destinatario);
+ * 60 segundos alcanzan con margen para un ciclo completo.
+ */
+export const maxDuration = 60
+
+/**
  * Sin esto la deduplicación no funciona.
  *
  * Next 14 cachea las peticiones `fetch` por defecto, y el cliente de Supabase

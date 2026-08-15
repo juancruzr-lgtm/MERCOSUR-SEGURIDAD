@@ -25,6 +25,10 @@ import { enviarNotificaciones } from '../../_lib/push-notificaciones'
 
 export const runtime = 'nodejs'
 
+// Misma razón que en /api/push/notificaciones: el ciclo completo de envíos en
+// serie no entra en los 10 segundos del default de Vercel.
+export const maxDuration = 60
+
 // Misma razón que en /api/push/notificaciones: sin esto, Next 14 cachea los GET
 // de Supabase y la deduplicación deja de ver lo que ella misma acaba de escribir.
 export const fetchCache = 'force-no-store'
