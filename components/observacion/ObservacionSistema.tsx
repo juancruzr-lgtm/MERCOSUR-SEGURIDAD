@@ -586,7 +586,8 @@ function TabEstado() {
   const ev  = data.eventos ?? {}
   const op  = data.operaciones ?? {}
   const ses = data.sesiones ?? {}
-  const errores48h = data.errores_recientes?.length ?? 0
+  // Total real de 48 h; la lista visible viene recortada a 20.
+  const errores48h = (data as any).errores_48h_total ?? data.errores_recientes?.length ?? 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
