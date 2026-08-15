@@ -6,7 +6,9 @@ import {
   cambiarEstadoRonda,
   crearRondaBase,
 } from '@/lib/rondas'
-import type { PuestoRonda, RondaBase, RondaBaseResumen } from '@/lib/rondas'
+import { motivoRondaSinVentanas, ventanasRondaEnTurno } from '@/lib/rondas'
+import type { PuestoRonda, RondaBase, RondaBaseResumen, TurnoVentanaRonda } from '@/lib/rondas'
+import { supabase } from '@/lib/supabase'
 import RondaPuntosEditor from './RondaPuntosEditor'
 import styles from './Rondas.module.css'
 
@@ -58,6 +60,54 @@ export default function RondaBaseEditor({
   const baseDirty = JSON.stringify(form) !== JSON.stringify(baseGuardada)
   const hayCambios = baseDirty || puntosDirty
 
+  // Turnos del puesto, sólo para anticipar qué generaría esta configuración.
+  // No decide nada: la obligación la calcula rondas_ventanas_programadas en el
+  // servidor. Acá se usan para no dejar guardar en silencio una hora que
+  // dejaría el puesto sin ninguna ronda.
+  const [turnosRef, setTurnosRef] = useState<TurnoVentanaRonda[]>([])
+
+  useEffect(() => {
+    if (!form.puesto_id) { setTurnosRef([]); return }
+    let activo = true
+    void supabase
+      .from('turnos')
+      .select('hora_inicio, hora_fin')
+      .eq('puesto_id', form.puesto_id)
+      .not('estado', 'in', '("reemplazado","anulado","cancelado")')
+      .order('fecha', { ascending: false })
+      .limit(60)
+      .then(({ data }) => {
+        if (!activo) return
+        const vistos = new Set<string>()
+        const unicos: TurnoVentanaRonda[] = []
+        for (const t of (data ?? []) as any[]) {
+          const k = `${t.hora_inicio}-${t.hora_fin}`
+          if (vistos.has(k)) continue
+          vistos.add(k)
+          unicos.push({ hora_inicio: t.hora_inicio, hora_fin: t.hora_fin })
+        }
+        setTurnosRef(unicos)
+      })
+    return () => { activo = false }
+  }, [form.puesto_id])
+
+  const rondaConfigurada = {
+    hora_inicio: form.hora_inicio ? `${form.hora_inicio}:00` : null,
+    intervalo_minutos: Number(form.intervalo),
+  }
+  const errorVentanas = motivoRondaSinVentanas(rondaConfigurada, turnosRef)
+
+  // Vista previa sobre el turno más frecuente del puesto: que el administrador
+  // vea los horarios antes de guardar, no después de que falten rondas.
+  const previsualizacion = (() => {
+    if (errorVentanas || turnosRef.length === 0) return ''
+    const turno = turnosRef.find(t => ventanasRondaEnTurno(t, rondaConfigurada).length > 0)
+    if (!turno) return ''
+    const v = ventanasRondaEnTurno(turno, rondaConfigurada)
+    const muestra = v.slice(0, 6).join(' → ') + (v.length > 6 ? ' → …' : '')
+    return `En un turno ${turno.hora_inicio.slice(0, 5)}–${turno.hora_fin.slice(0, 5)}: ${v.length} ronda${v.length === 1 ? '' : 's'} · ${muestra}`
+  })()
+
   useEffect(() => onDirtyChange(hayCambios), [hayCambios, onDirtyChange])
   useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
@@ -89,6 +139,12 @@ export default function RondaBaseEditor({
     if (guardando) return
     if (!ronda && !form.puesto_id) {
       setError('Seleccioná el puesto al que pertenece la ronda.')
+      return
+    }
+    // Una hora fuera de la ventana del turno se guardaba sin protestar y el
+    // puesto quedaba sin ninguna ronda, sin que nada lo dijera.
+    if (errorVentanas) {
+      setError(errorVentanas)
       return
     }
     setGuardando(true)
@@ -189,7 +245,19 @@ export default function RondaBaseEditor({
         <div className={styles.field}>
           <label htmlFor="ronda-base-hora-inicio">Primera ronda / hora de inicio</label>
           <input id="ronda-base-hora-inicio" type="time" value={form.hora_inicio} onChange={evento => setForm({ ...form, hora_inicio: evento.target.value })} />
-          <div className={styles.help}>Referencia futura para calcular intervalos; todavía no genera obligaciones.</div>
+          {/* El texto anterior decía que era "referencia futura" y que "todavía
+              no genera obligaciones". Era exactamente al revés: esta hora ancla
+              el ciclo completo. Verificado en producción: NACION SANTA FE con
+              primera 23:00 y 60 min genera 23:00 → 00:00 → … → 06:00. */}
+          <div className={styles.help}>
+            Hora de inicio del ciclo. Las rondas se repiten desde esta hora según el intervalo
+            configurado mientras exista un turno operativo.
+          </div>
+          {previsualizacion && (
+            <div className={styles.help} style={{ color: '#38bdf8' }}>
+              {previsualizacion}
+            </div>
+          )}
         </div>
         <div className={`${styles.field} ${styles.full}`}>
           <label htmlFor="ronda-base-descripcion">Descripción opcional</label>

@@ -2477,3 +2477,86 @@ export function accionRecorrida(r: Pick<RondaGuardia,
     detalle: 'No queda ninguna recorrida por hacer en este turno.',
   }
 }
+
+// ── Ventanas que genera una ronda ────────────────────────────────────────────
+//
+// Espejo en TypeScript de rondas_ventanas_programadas (Postgres). La autoridad
+// sigue siendo la función SQL: esto NO genera obligaciones, sólo permite
+// mostrarle al administrador qué va a producir su configuración antes de
+// guardarla.
+//
+// La regla es: ventana = base + N·intervalo, mientras la ventana empiece antes
+// de que termine el turno. `base` es la hora de inicio de la ronda reposicionada
+// dentro del turno, o el inicio del turno si la ronda no tiene hora propia.
+//
+// Existe porque la pantalla decía que "Primera ronda" era una referencia futura
+// que no generaba obligaciones — y era exactamente al revés: ancla todo el
+// ciclo. Y porque una hora mal elegida puede dejar el turno sin ninguna ronda
+// sin que nada avise.
+
+export interface TurnoVentanaRonda {
+  hora_inicio: string
+  hora_fin: string
+}
+
+const minutosDelDia = (hora: string): number => {
+  const [h, m] = hora.split(':').map(Number)
+  return h * 60 + m
+}
+
+const comoHora = (minutos: number): string => {
+  const m = ((minutos % 1440) + 1440) % 1440
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+}
+
+/**
+ * Horarios ('HH:MM') que la ronda genera dentro de ese turno.
+ *
+ * Nocturnos: si el turno termina antes de empezar, el fin va al día siguiente;
+ * y la hora base se empuja hacia adelante hasta caer dentro del turno. Es lo
+ * mismo que hace el `while v_base < v_t_ini` de la función SQL.
+ */
+export function ventanasRondaEnTurno(
+  turno: TurnoVentanaRonda,
+  ronda: { hora_inicio?: string | null; intervalo_minutos: number },
+): string[] {
+  const intervalo = Number(ronda.intervalo_minutos)
+  if (!Number.isFinite(intervalo) || intervalo <= 0) return []
+
+  const inicioTurno = minutosDelDia(turno.hora_inicio)
+  let finTurno = minutosDelDia(turno.hora_fin)
+  if (finTurno <= inicioTurno) finTurno += 1440
+
+  let base = ronda.hora_inicio ? minutosDelDia(ronda.hora_inicio) : inicioTurno
+  while (base < inicioTurno) base += 1440
+
+  const ventanas: string[] = []
+  for (let n = 0; n <= 10000; n++) {
+    const inicio = base + n * intervalo
+    if (inicio >= finTurno) break
+    ventanas.push(comoHora(inicio))
+  }
+  return ventanas
+}
+
+/**
+ * Motivo por el que la configuración no generaría ninguna ronda, o null si
+ * genera al menos una en algún turno de referencia.
+ *
+ * Sin turnos de referencia devuelve null: no se puede afirmar que esté mal una
+ * configuración cuyo puesto todavía no tiene turnos.
+ */
+export function motivoRondaSinVentanas(
+  ronda: { hora_inicio?: string | null; intervalo_minutos: number },
+  turnos: TurnoVentanaRonda[],
+): string | null {
+  if (turnos.length === 0) return null
+  const alguna = turnos.some(t => ventanasRondaEnTurno(t, ronda).length > 0)
+  if (alguna) return null
+
+  const ejemplo = turnos[0]
+  const hora = ronda.hora_inicio ? ronda.hora_inicio.slice(0, 5) : 'el inicio del turno'
+  return `Con esta configuración no se generaría ninguna ronda: la primera ronda (${hora}) `
+    + `queda fuera del turno ${ejemplo.hora_inicio.slice(0, 5)}–${ejemplo.hora_fin.slice(0, 5)}. `
+    + `Elegí una hora dentro del turno.`
+}
