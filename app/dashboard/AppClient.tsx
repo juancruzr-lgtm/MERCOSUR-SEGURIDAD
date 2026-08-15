@@ -804,11 +804,19 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     return () => { vigente = false }
   }, [idsTurnosHoy])
 
-  const alertasOperativasHoy = detectarAlertasOperativas({
+  const alertasDetectadasHoy = detectarAlertasOperativas({
     turnos: turnosHoy,
     registros: registrosHoy,
     objetivos,
-  }).filter(a => !alertaEstaIntervenida(intervencionesHoy, a.turno_id, a.tipo_alerta, a.registro_asistencia_id))
+  })
+  const alertasOperativasHoy = alertasDetectadasHoy
+    .filter(a => !alertaEstaIntervenida(intervencionesHoy, a.turno_id, a.tipo_alerta, a.registro_asistencia_id))
+  // Atendidas del día: detectadas pero ya intervenidas. Sin este número, el
+  // "0" de una tarjeta no distingue "no pasó nada" de "pasó y el supervisor
+  // ya lo despachó" — que son dos días operativos muy distintos.
+  const atendidasHoyPorTipo = (tipo: TipoAlertaOperativa) => alertasDetectadasHoy
+    .filter(a => a.tipo_alerta === tipo && alertaEstaIntervenida(intervencionesHoy, a.turno_id, a.tipo_alerta, a.registro_asistencia_id))
+    .length
   const idsTurnosDescubiertos = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'descubierto').map(a => a.turno_id))
   const idsTurnosSinFichar = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'sin_fichar').map(a => a.turno_id))
   const idsRegistrosTardanza = new Set(alertasOperativasHoy.filter(a => a.tipo_alerta === 'tardanza').map(a => a.registro_asistencia_id))
@@ -1068,30 +1076,36 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   }
 
   // Paneles de atención. Cada uno lleva su contador en el título: ese es el
-  // único lugar donde ese número aparece en toda la pantalla.
-  const panelesAtencion: { titulo: string; items: any[]; vacio: string; render: (x: any) => React.ReactNode }[] = [
+  // único lugar donde ese número aparece en toda la pantalla. `atendidas` es
+  // el segundo número: lo que hoy ya pasó por el supervisor. Un 0 pelado no
+  // dice si el día vino limpio o si alguien lo limpió.
+  const panelesAtencion: { titulo: string; items: any[]; vacio: string; atendidas?: number; render: (x: any) => React.ReactNode }[] = [
     {
       titulo: 'Turnos descubiertos',
       items: turnosDescubiertos,
       vacio: 'No hay turnos descubiertos hoy.',
+      atendidas: atendidasHoyPorTipo('descubierto'),
       render: (turno: Turno) => renderTurnoAlert(turno, detalleTurnoDescubierto(turno), { tipo:'descubierto', ids:turnosDescubiertos.map(item => item.id), label:'Puestos sin cobertura' }, 'revision_operativa'),
     },
     {
       titulo: 'Guardias sin fichar',
       items: turnosSinFichar,
       vacio: 'No hay guardias demorados sin ingreso.',
+      atendidas: atendidasHoyPorTipo('sin_fichar'),
       render: (turno: Turno) => renderSinIngresoAlert(turno),
     },
     {
       titulo: 'Tardanzas registradas',
       items: tardanzasRegistradas,
       vacio: 'No hay ingresos tarde registrados hoy.',
+      atendidas: atendidasHoyPorTipo('tardanza'),
       render: (registro: RegistroAsistencia) => renderTardanzaAlert(registro),
     },
     {
       titulo: 'Fichajes fuera de radio',
       items: fichajesFueraRadio,
       vacio: 'No hay ingresos fuera del radio del objetivo.',
+      atendidas: atendidasHoyPorTipo('fuera_radio'),
       render: (registro: RegistroAsistencia) => renderFichajeFueraRadioAlert(registro),
     },
     {
@@ -1185,9 +1199,14 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
             <div style={alertTitle}>
               {panel.titulo}
               <span style={contadorPanel(panel.items.length)}>{panel.items.length}</span>
+              {(panel.atendidas ?? 0) > 0 && (
+                <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:semanticColors.success }}>
+                  ✓ {panel.atendidas} atendida{panel.atendidas === 1 ? '' : 's'} hoy
+                </span>
+              )}
             </div>
             {panel.items.length === 0
-              ? <div style={emptyAlert}>{panel.vacio}</div>
+              ? <div style={emptyAlert}>{(panel.atendidas ?? 0) > 0 ? `Sin pendientes: la(s) ${panel.atendidas} de hoy ya fueron atendidas por un supervisor.` : panel.vacio}</div>
               : panel.items.map(panel.render)}
           </div>
         ))}
