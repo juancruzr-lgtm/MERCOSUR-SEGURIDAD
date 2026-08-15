@@ -54,6 +54,10 @@ import type { PrevisionGeneracion, PrevisionMes, ReglaSemanal } from '@/lib/guar
 // ninguna pantalla vuelve a calcular esto por su cuenta.
 import { TEXTO_ORIGEN, guardiaCubreInstante, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import type { OrigenResolucion } from '@/lib/responsables-operativos'
+// Clasificación de carga operativa: exclusiva / compartida (contada una vez) /
+// sin supervisor. NO son horas trabajadas por el supervisor y no se reparten.
+import { LEYENDA_CARGA, cargaDeSupervisor, clasificarCargaZonas } from '@/lib/carga-operativa'
+import type { CargaZona } from '@/lib/carga-operativa'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
@@ -1822,6 +1826,39 @@ function SupervisionesAdmin({
   })
   const [filtroTabla, setFiltroTabla] = useState<{ tipo: string; label: string; supervisor_id?: string; objetivo_id?: string; ids?: string[] } | null>(null)
   const tablaRef = useRef<HTMLDivElement>(null)
+
+  // Guardias efectivas del mes para clasificar la carga operativa. Se piden
+  // desde un día antes hasta un día después del mes: los nocturnos entrantes
+  // y los turnos que terminan pasadas las 07:00 del primer día siguiente
+  // necesitan la guardia vecina (las "2 h fantasma" de la auditoría de agosto
+  // salieron de no hacerlo). Si la tabla no existe todavía, la carga queda
+  // vacía y la pantalla lo dice, sin romperse.
+  const [guardiasCargaMes, setGuardiasCargaMes] = useState<any[]>([])
+  useEffect(() => {
+    let vigente = true
+    const offsetDia = (fecha: string, dias: number) => {
+      const [anio, mes, dia] = fecha.split('-').map(Number)
+      return new Date(anio, mes - 1, dia + dias).toLocaleDateString('sv-SE')
+    }
+    const rango = rangoDelMes(mesActual)
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('supervisores_guardia')
+        .select('supervisor_id, zona, fecha, hora_inicio, hora_fin, estado, tipo_evento, rol_operativo')
+        .gte('fecha', offsetDia(rango.desde, -1))
+        .lte('fecha', offsetDia(rango.hasta, 1))
+      if (!vigente) return
+      if (error) {
+        if (!/supervisores_guardia|tipo_evento|schema cache|does not exist|column/i.test(error.message)) {
+          console.error('[supervisiones] guardias para carga:', error.message)
+        }
+        setGuardiasCargaMes([])
+        return
+      }
+      setGuardiasCargaMes(data || [])
+    })()
+    return () => { vigente = false }
+  }, [mesActual])
   const ahora = new Date()
   const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
   const fechaHora = (fecha?: string | null) => fecha ? formatFechaHora(fecha) : '—'
@@ -2006,40 +2043,23 @@ function SupervisionesAdmin({
     return usuario && usuario.estado === 'activo' && esRolGuardia(usuario.rol) ? usuario : null
   }
 
-  // ── Carga horaria proporcional por supervisor ──────────────────────────────
+  // ── Carga operativa por zona: exclusiva / compartida / sin supervisor ─────
   //
-  // Los turnos propios de los supervisores todavía no existen en el sistema, así
-  // que no hay forma de saber qué parte de la carga le toca a cada uno. Lo que
-  // sí se puede decir sin inventar nada: cuántas horas programadas válidas tiene
-  // la zona y entre cuántos supervisores activos se reparte.
-  //
-  // Es un reparto por cabeza, no por franja. Cuando existan los horarios reales
-  // —mañana/tarde/noche y las coberturas de franco— esto se reemplaza por el
-  // reparto real. Hasta entonces, repetir el total de la zona en cada fila daba
-  // a entender que cada supervisor cargaba 11.519,5 h él solo.
-  const supervisoresActivosPorZona = new Map<string, number>()
-  for (const asignacion of (supervisorZonas || [])) {
-    const s = (guardias || []).find((u: Usuario) => u.id === asignacion.supervisor_id)
-    if (!s || s.estado !== 'activo') continue
-    if (!asignacion.zona_id) continue
-    supervisoresActivosPorZona.set(
-      asignacion.zona_id,
-      (supervisoresActivosPorZona.get(asignacion.zona_id) ?? 0) + 1,
-    )
-  }
-
-  // Horas programadas VÁLIDAS por zona: mismo criterio que el resto del sistema
-  // —sin anulados, cancelados ni reemplazados, sin objetivos de prueba—.
-  const horasValidasPorZona = new Map<string, number>()
-  for (const turno of turnosMesRanking) {
-    const objetivo = objetivosActivosRanking.find((o: Objetivo) => o.id === turno.objetivo_id)
-    if (!objetivo || !objetivo.zona_id || objetivo.es_prueba) continue
-    if (ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) continue
-    horasValidasPorZona.set(
-      objetivo.zona_id,
-      (horasValidasPorZona.get(objetivo.zona_id) ?? 0) + horasProgramadasTurno(turno),
-    )
-  }
+  // Reemplaza el reparto por cabeza que vivía acá. La carga se clasifica por
+  // franja de guardia real (lib/carga-operativa): lo que cubre uno solo es
+  // exclusivo, lo que cubren varios a la vez es COMPARTIDO y cuenta una sola
+  // vez en el total de la zona — no se divide 50/50 ni por cantidad, porque
+  // esta métrica es carga de servicios bajo supervisión, no horas trabajadas
+  // por la persona. Mismos filtros de validez que antes: sin anulados,
+  // cancelados ni reemplazados (lo aplica el lib) y sin objetivos de prueba.
+  const cargasPorZona = clasificarCargaZonas({
+    turnos: turnosMesRanking,
+    objetivos: objetivosActivosRanking,
+    guardias: guardiasCargaMes,
+    supervisorZonas: supervisorZonas || [],
+    zonas: zonasOperativas || [],
+    usuarios: guardias || [],
+  })
 
   const rankingSupervisores = supervisoresRanking.map((supervisor: Usuario) => {
     const asignaciones = (supervisorZonas || []).filter((asignacion: any) => asignacion.supervisor_id === supervisor.id)
@@ -2065,14 +2085,9 @@ function SupervisionesAdmin({
       zonasSinResolver: asignaciones.length - zonas.length,
       objetivos: objetivosAsignados.length,
       vigiladores: vigiladoresIds.size,
-      // Carga proporcional: por cada zona que cubre, las horas válidas de esa
-      // zona divididas entre sus supervisores activos. Un supervisor con dos
-      // zonas suma la parte que le toca en cada una.
-      cargaProporcional: Array.from(zonaIds).reduce((total: number, zonaId: any) => {
-        const horasZona = horasValidasPorZona.get(zonaId) ?? 0
-        const cuantos = supervisoresActivosPorZona.get(zonaId) ?? 1
-        return total + horasZona / Math.max(cuantos, 1)
-      }, 0),
+      // Su carga: exclusiva por un lado y compartida por el otro, rotulada.
+      // Nunca se suman en un solo número.
+      carga: cargaDeSupervisor(cargasPorZona, supervisor.id, zonaIds as Set<string>),
       supervisionesMes: supervisionesMesRanking.filter((supervision: SupervisionRankingAdmin) =>
         supervision.supervisor_id === supervisor.id && objetivoIds.has(supervision.objetivo_id)
       ).length,
@@ -2081,8 +2096,10 @@ function SupervisionesAdmin({
       resueltas: novedadesObjetivosMes.filter((novedad: Novedad) => novedad.estado === 'resuelta').length,
     }
   }).sort((a: any, b: any) =>
+    // El orden ya no usa la carga: las horas de zona no miden desempeño.
+    // Desempata lo que sí es trabajo real: las supervisiones hechas en el mes.
     b.objetivos - a.objetivos ||
-    b.cargaProporcional - a.cargaProporcional ||
+    b.supervisionesMes - a.supervisionesMes ||
     nombreSupervisor(a.supervisor.id).localeCompare(nombreSupervisor(b.supervisor.id))
   )
   const aplicarFiltro = (filtro: { tipo: string; label: string; supervisor_id?: string; objetivo_id?: string; ids?: string[] }) => {
@@ -2340,6 +2357,45 @@ function SupervisionesAdmin({
           </div>
         )}
 
+        {cargasPorZona.size > 0 && (
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:8, padding:14, marginBottom:14 }}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, marginBottom:4 }}>Carga operativa por zona</div>
+            <div style={{ color:'#64748b', fontSize:12, marginBottom:10 }}>{LEYENDA_CARGA}</div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:14 }}>
+              {Array.from(cargasPorZona.values())
+                .sort((a: CargaZona, b: CargaZona) => b.totalHoras - a.totalHoras)
+                .map((carga: CargaZona) => (
+                  <div key={carga.zonaId} style={{ borderTop:'2px solid #1e2d42', paddingTop:8 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', fontWeight:800, marginBottom:6 }}>
+                      <span>{(zonasPorId.get(carga.zonaId) as any)?.nombre || 'Zona'}</span>
+                      <span style={{ fontFamily:'Syne,sans-serif' }}>{horasRankingTexto(carga.totalHoras)}</span>
+                    </div>
+                    {Object.entries(carga.exclusivas)
+                      .sort(([, a]: any, [, b]: any) => b - a)
+                      .map(([supervisorId, horas]: any) => (
+                        <div key={supervisorId} style={{ display:'flex', justifyContent:'space-between', fontSize:13, padding:'3px 0' }}>
+                          <span style={{ color:'#94a3b8' }}>Exclusiva {nombreSupervisor(supervisorId)}</span>
+                          <span>{horasRankingTexto(horas)}</span>
+                        </div>
+                      ))}
+                    {carga.compartidas.map(compartida => (
+                      <div key={compartida.supervisorIds.join('|')} style={{ display:'flex', justifyContent:'space-between', fontSize:13, padding:'3px 0' }}>
+                        <span style={{ color:'#f59e0b' }}>Compartida {compartida.supervisorIds.map(id => nombreSupervisor(id).split(',')[0]).join(' + ')}</span>
+                        <span>{horasRankingTexto(compartida.horas)}</span>
+                      </div>
+                    ))}
+                    {carga.sinSupervisor > 0 && (
+                      <div style={{ display:'flex', justifyContent:'space-between', fontSize:13, padding:'3px 0', color:'#ef4444' }}>
+                        <span>Sin supervisor</span>
+                        <span>{horasRankingTexto(carga.sinSupervisor)}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+
         {rankingSupervisores.length === 0 ? (
           <div style={{ color:'#64748b', fontSize:13 }}>No hay supervisores activos con zonas asignadas.</div>
         ) : (
@@ -2351,7 +2407,7 @@ function SupervisionesAdmin({
                   <th style={S.th}>Zonas</th>
                   <th style={S.th}>Objetivos</th>
                   <th style={S.th}>Vigiladores</th>
-                  <th style={S.th} title="Horas programadas válidas de su zona divididas entre los supervisores activos asignados a esa zona. Reparto por cabeza: los turnos propios de supervisor todavía no están definidos en el sistema.">Carga horaria proporcional</th>
+                  <th style={S.th} title={LEYENDA_CARGA}>Carga operativa</th>
                   <th style={S.th}>Supervisiones mes</th>
                   <th style={S.th}>Vencidas</th>
                 </tr>
@@ -2382,7 +2438,17 @@ function SupervisionesAdmin({
                     </td>
                     <td style={S.td}>{item.objetivos}</td>
                     <td style={S.td}>{item.vigiladores}</td>
-                    <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:800 }}>{horasRankingTexto(item.cargaProporcional)}</td>
+                    <td style={S.td}>
+                      <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800 }}>
+                        {item.carga.exclusiva > 0 ? horasRankingTexto(item.carga.exclusiva) : '—'}
+                        <span style={{ color:'#64748b', fontSize:11, fontWeight:400 }}> exclusiva</span>
+                      </div>
+                      {item.carga.compartidas.map((compartida: any) => (
+                        <div key={compartida.supervisorIds.join('|')} style={{ color:'#94a3b8', fontSize:12, marginTop:3 }}>
+                          + compartida c/ {compartida.supervisorIds.filter((id: string) => id !== item.supervisor.id).map((id: string) => nombreSupervisor(id).split(',')[0]).join(', ')}: {horasRankingTexto(compartida.horas)}
+                        </div>
+                      ))}
+                    </td>
                     <td style={S.td}>{item.supervisionesMes}</td>
                     <td style={S.td} onClick={e => { e.stopPropagation(); aplicarFiltro({ tipo: 'vencidas_supervisor', label: `Vencidas · ${nombreSupervisor(item.supervisor.id)}`, supervisor_id: item.supervisor.id }) }} title="Ver supervisiones vencidas de este supervisor">
                       <Badge type={item.vencidas > 0 ? 'advertencia' : 'ok'}>{item.vencidas}</Badge>
