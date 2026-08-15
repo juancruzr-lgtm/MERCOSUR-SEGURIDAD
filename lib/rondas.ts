@@ -2560,3 +2560,29 @@ export function motivoRondaSinVentanas(
     + `queda fuera del turno ${ejemplo.hora_inicio.slice(0, 5)}–${ejemplo.hora_fin.slice(0, 5)}. `
     + `Elegí una hora dentro del turno.`
 }
+
+/**
+ * Coordenadas pegadas como un solo texto: "-32.9468, -60.6393".
+ *
+ * Es lo que sale de "Copiar coordenadas" en Google Maps y de casi cualquier
+ * mapa. Hasta ahora había que partirlo a mano en dos campos, que es donde se
+ * cuelan los errores de tipeo.
+ *
+ * Acepta coma o espacio como separador y tolera el paréntesis que agregan
+ * algunas apps. Devuelve null si no son dos números dentro del rango
+ * geográfico válido: no se guarda una coordenada que no se pudo leer.
+ */
+export function parsearCoordenadasPegadas(texto: string): { lat: number; lng: number } | null {
+  const limpio = texto.replace(/[()\[\]]/g, ' ').trim()
+  if (!limpio) return null
+
+  const partes = limpio.split(/\s*[,;]\s*|\s+/).filter(Boolean)
+  if (partes.length !== 2) return null
+
+  const lat = Number(partes[0])
+  const lng = Number(partes[1])
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null
+
+  return { lat, lng }
+}

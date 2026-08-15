@@ -44,6 +44,10 @@ import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
+// Mismo panel de configuración que usa el legajo del objetivo. Se monta también
+// en la solapa Rondas para poder editar rondas y puntos sin entrar objetivo por
+// objetivo. No es un editor nuevo: es el que ya existía.
+import RondasNativasPanel from '@/components/rondas/RondasNativasPanel'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { indexarUltimaSupervision, objetivoSupervisionVencida } from '@/lib/supervisiones'
@@ -1189,6 +1193,7 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
   // refrescaba al otro y la pausa recién aparecía al recargar la página.
   const [pausasToken, setPausasToken] = useState(0)
   const refrescarPausas = () => setPausasToken(t => t + 1)
+  const [objetivoConfig, setObjetivoConfig] = useState('')
 
   return (
     <div>
@@ -1214,6 +1219,24 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
           onCambio={refrescarPausas}
           recargarToken={pausasToken}
         />
+      </div>
+      {/* Configuración de rondas y puntos, sin salir de esta solapa. Monta el
+          MISMO panel que el legajo del objetivo —lista, Administrar, editor de
+          puntos—: no hay un segundo editor ni otra tabla. Lo único que agrega
+          acá es elegir de qué objetivo, porque esta pantalla es transversal. */}
+      <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:16 }}>
+        <div style={{ fontSize:15, fontWeight:800, color:brandColors.textStrong, marginBottom:10 }}>Configuración de rondas y puntos</div>
+        <select
+          value={objetivoConfig}
+          onChange={e => setObjetivoConfig(e.target.value)}
+          style={{ background:'#0f172a', border:`1px solid ${brandColors.border}`, borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginBottom:12, minWidth:260 }}
+        >
+          <option value="">Elegí un objetivo…</option>
+          {objetivosPanel.map(o => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+        </select>
+        {objetivoConfig
+          ? <RondasNativasPanel objetivoId={objetivoConfig} onDirtyChange={() => {}} />
+          : <div style={{ fontSize:13, color:'#94a3b8' }}>Elegí un objetivo para ver y editar sus rondas y puntos.</div>}
       </div>
       <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16 }}>
         <div style={{ fontSize:15, fontWeight:800, color:brandColors.textStrong, marginBottom:10 }}>Alertas</div>
