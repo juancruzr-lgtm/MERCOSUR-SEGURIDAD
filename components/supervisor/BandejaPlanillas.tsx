@@ -96,6 +96,12 @@ export interface BandejaPlanillasProps {
   empleadoInicial?: string | null
   /** 'comoda' en escritorio; 'compacta' en la vista móvil del supervisor. */
   densidad?: 'comoda' | 'compacta'
+  /**
+   * Navegación a otra pantalla del panel. La usa "Modificar turno" para abrir
+   * el editor de turnos que ya existe, en vez de duplicar acá la edición.
+   * Opcional: donde no se pase, el botón simplemente no aparece.
+   */
+  onNavigate?: (pagina: string, filtros?: Record<string, unknown>) => void
 }
 
 export default function BandejaPlanillas({
@@ -104,6 +110,7 @@ export default function BandejaPlanillas({
   mesInicial,
   empleadoInicial = null,
   densidad = 'compacta',
+  onNavigate,
 }: BandejaPlanillasProps) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
@@ -123,6 +130,16 @@ export default function BandejaPlanillas({
   const [soloPendientes, setSoloPendientes] = useState(true)
 
   const [accionFila, setAccionFila] = useState<{ fila: FilaBandejaMensual, accion: AccionSupervisor } | null>(null)
+  // Resolución operativa de un turno que ya terminó sin fichaje.
+  //
+  // Desde el fix de vigencia (PR #24) una alerta `sin_fichar` deja de existir
+  // cuando el turno termina: el supervisor ya no puede hacer que alguien entre
+  // ayer. Pero el turno sigue sin horas y alguien tiene que decir qué pasó, y
+  // esa decisión no tenía dónde tomarse — por eso agosto necesitó saneamiento.
+  // Acá está el segundo momento del mismo flujo, con las mismas dos acciones y
+  // la MISMA RPC que usa la Vista Supervisor mientras el turno está en curso.
+  // No se reabre la alerta ni se crea otra fuente de horas.
+  const [resolucion, setResolucion] = useState<{ fila: FilaBandejaMensual, accion: 'confirmar_asistencia' | 'ausente' } | null>(null)
   const [comentario, setComentario] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [errorAccion, setErrorAccion] = useState('')
@@ -394,6 +411,36 @@ export default function BandejaPlanillas({
   const hayFiltros = !!(fEmpleado || fObjetivo || fPuesto) ||
     fEstado !== 'todos' || fFichaje !== 'todos' || fSalidaAuto !== 'todos' || soloPendientes
 
+  const ejecutarResolucion = async () => {
+    if (!resolucion || enviando) return
+    if (comentario.trim().length < 3) {
+      setErrorAccion('El comentario es obligatorio: hay que decir qué pasó con el turno')
+      return
+    }
+    setEnviando(true)
+    setErrorAccion('')
+    try {
+      // Misma RPC, mismo tipo de alerta y mismas guardas que en la Vista
+      // Supervisor. La RPC resuelve el guardia desde el turno y rechaza si ya
+      // hay asistencia, si el turno perdió obligación o si ya se intervino.
+      const { error: rpcError } = await supabase.rpc('registrar_intervencion_operativa', {
+        p_operacion_id: crypto.randomUUID(),
+        p_turno_id: resolucion.fila.turnoId,
+        p_tipo_alerta: 'sin_fichar',
+        p_accion: resolucion.accion,
+        p_comentario: comentario.trim(),
+      })
+      if (rpcError) throw new Error(rpcError.message)
+      setResolucion(null)
+      setComentario('')
+      setRecargas(v => v + 1)
+    } catch (e) {
+      setErrorAccion(e instanceof Error ? e.message : 'No se pudo registrar la resolución')
+    } finally {
+      setEnviando(false)
+    }
+  }
+
   const ejecutarAccion = async () => {
     if (!accionFila || enviando) return
     const { fila, accion } = accionFila
@@ -570,6 +617,34 @@ export default function BandejaPlanillas({
             {/* Ausencia marcada por un supervisor. Se muestra completa —quién
                 faltó, quién lo marcó y cuándo— porque es la explicación de por
                 qué ese turno no tiene horas de ese vigilador. */}
+            {/* Turno terminado sin fichaje y sin decisión: las mismas tres
+                opciones que ofrece la alerta mientras el turno está en curso.
+                Modificar turno abre la edición existente, así que cambiar el
+                vigilador NO crea una ausencia. */}
+            {!f.tieneFichaje && !f.esAusencia && (
+              <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' as const }}>
+                <button
+                  style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #16653488', background: '#14532d', color: '#4ade80', fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}
+                  onClick={() => { setResolucion({ fila: f, accion: 'confirmar_asistencia' }); setComentario(''); setErrorAccion('') }}
+                >
+                  Confirmar asistencia
+                </button>
+                <button
+                  style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #99303088', background: '#7f1d1d', color: '#fca5a5', fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}
+                  onClick={() => { setResolucion({ fila: f, accion: 'ausente' }); setComentario(''); setErrorAccion('') }}
+                >
+                  Ausente
+                </button>
+                {onNavigate && (
+                  <button
+                    style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #334155', background: 'transparent', color: '#94a3b8', fontSize: 11.5, cursor: 'pointer' }}
+                    onClick={() => onNavigate('turnos', { objetivoId: f.objetivoId, fecha: f.fecha })}
+                  >
+                    Modificar turno
+                  </button>
+                )}
+              </div>
+            )}
             {f.esAusencia && (
               <div style={{ marginTop: 6, fontSize: 11.5, color: '#fca5a5', background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.3)', borderRadius: 6, padding: '6px 10px' }}>
                 <div style={{ fontWeight: 600, color: '#f87171' }}>
@@ -773,6 +848,52 @@ export default function BandejaPlanillas({
                 }}
               >
                 {corrGuardando ? 'Guardando…' : corrConfirmando ? 'Confirmar y reconocer' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resolucion && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => { if (!enviando) setResolucion(null) }}
+        >
+          <div style={{ background: '#1e293b', borderRadius: 12, padding: 20, width: '100%', maxWidth: 440, border: '1px solid #334155' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, color: '#e2e8f0' }}>
+              {resolucion.accion === 'confirmar_asistencia' ? 'Confirmar asistencia' : 'Marcar ausente'}
+            </div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>
+              {resolucion.fila.fecha} · {resolucion.fila.objetivo} · {resolucion.fila.horario} · {resolucion.fila.vigilador}
+            </div>
+            <div style={{ fontSize: 11.5, color: resolucion.accion === 'confirmar_asistencia' ? '#4ade80' : '#fca5a5', marginBottom: 10, lineHeight: 1.45 }}>
+              {resolucion.accion === 'confirmar_asistencia'
+                ? `Se reconocerán las horas del turno programado (${resolucion.fila.horaInicioProg}–${resolucion.fila.horaFinProg}) a nombre de ${resolucion.fila.vigilador}. No se registra fichaje ni GPS.`
+                : 'Se registra la ausencia con 0 horas. El turno sigue exigiendo cobertura: continúa en diferencia pendiente hasta que alguien lo cubra.'}
+            </div>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Comentario *</label>
+            <textarea
+              value={comentario}
+              onChange={e => setComentario(e.target.value)}
+              rows={3}
+              placeholder={resolucion.accion === 'confirmar_asistencia' ? 'Ej.: Verificado en el puesto con foto junto al relevo.' : 'Ej.: No se presentó al puesto, no atiende el teléfono.'}
+              style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: 10, fontSize: 13, resize: 'vertical' as const, boxSizing: 'border-box' as const }}
+            />
+            {errorAccion && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{errorAccion}</div>}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
+              <button
+                style={{ padding: '10px 0', borderRadius: 8, border: '1px solid #334155', background: 'transparent', color: '#94a3b8', fontSize: 13, cursor: 'pointer' }}
+                disabled={enviando}
+                onClick={() => { setResolucion(null); setErrorAccion('') }}
+              >
+                Cancelar
+              </button>
+              <button
+                style={{ padding: '10px 0', borderRadius: 8, border: 'none', background: resolucion.accion === 'confirmar_asistencia' ? '#14532d' : '#7f1d1d', color: resolucion.accion === 'confirmar_asistencia' ? '#4ade80' : '#fca5a5', fontSize: 13, fontWeight: 600, cursor: 'pointer', opacity: enviando || comentario.trim().length < 3 ? 0.5 : 1 }}
+                disabled={enviando || comentario.trim().length < 3}
+                onClick={ejecutarResolucion}
+              >
+                {enviando ? 'Guardando…' : 'Confirmar'}
               </button>
             </div>
           </div>
