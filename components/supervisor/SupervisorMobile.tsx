@@ -898,11 +898,27 @@ export default function SupervisorMobile({ user }: any) {
     const supervisor = getSupervisor(id)
     return supervisor ? nombrePersona(supervisor) : 'Supervisor no encontrado'
   }
-  const supervisorGuardiaAsignado = (turno: Turno) =>
-    supervisoresGuardia.find(asignacion =>
+  // Zona real del objetivo del turno. Antes esto comparaba contra la constante
+  // ZONA_OPERATIVA ('Rosario / General'), un literal en vez de la zona del
+  // objetivo: cualquier turno de Rafaela o Reconquista decía "Sin supervisor
+  // asignado" aunque hubiera guardia cubriendo, porque la condición lo
+  // descartaba antes de mirar la fecha. Mismo defecto que había en AppClient.
+  //
+  // La comparación va normalizada: supervisores_guardia.zona es texto libre y
+  // en producción está en minúsculas ('rafaela'), mientras zonas_operativas
+  // guarda 'Rafaela'.
+  const normalizarZona = (valor?: string | null) => (valor ?? '').trim().toLowerCase()
+
+  const supervisorGuardiaAsignado = (turno: Turno) => {
+    const objetivo = getObjetivo(turno.objetivo_id)
+    const zonaObjetivo = objetivo?.zona_id ? nombreZona(objetivo.zona_id) : null
+    // Sin zona conocida no se atribuye el supervisor de otra zona: es peor que
+    // decir que no hay.
+    if (!zonaObjetivo || zonaObjetivo === 'Sin zona') return null
+    return supervisoresGuardia.find(asignacion =>
       asignacion.estado !== 'inactivo' &&
       asignacion.rol_operativo === 'supervisor' &&
-      asignacion.zona === ZONA_OPERATIVA &&
+      normalizarZona(asignacion.zona) === normalizarZona(zonaObjetivo) &&
       fechaHoraEnRango(
         turno.fecha,
         turno.hora_inicio,
@@ -911,6 +927,7 @@ export default function SupervisorMobile({ user }: any) {
         asignacion.hora_fin,
       )
     ) || null
+  }
   const nombreSupervisorGuardia = (turno: Turno) => {
     const asignacion = supervisorGuardiaAsignado(turno)
     return asignacion?.supervisor_id ? nombreSupervisor(asignacion.supervisor_id) : 'Sin supervisor asignado'

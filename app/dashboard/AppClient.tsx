@@ -9298,11 +9298,35 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     return labels[tipo]
   }
 
-  const supervisorGuardiaAsignado = (turno: Turno) =>
-    supervisoresGuardia.find((asignacion: any) =>
+  // Zona del objetivo del turno, que es contra la que hay que buscar al
+  // supervisor de guardia.
+  //
+  // Antes esto comparaba contra la constante ZONA_OPERATIVA_ADMIN
+  // ('Rosario / General'), o sea contra un literal en lugar de contra la zona
+  // real. Consecuencia: cualquier objetivo de Rafaela o Reconquista decía
+  // "Sin supervisor asignado" aunque hubiera un supervisor de guardia
+  // cubriendo ese horario — la condición lo descartaba antes de mirar la
+  // fecha. Se vio en LAROMET IRIGOYEN, que es de Rafaela.
+  //
+  // La comparación va normalizada porque supervisores_guardia.zona es texto
+  // libre y en producción está cargado en minúsculas ('rafaela'), mientras que
+  // zonas_operativas.nombre viene capitalizado ('Rafaela').
+  const zonaDelTurno = (turno: Turno): string | null => {
+    const objetivo = (objetivos as any[]).find(o => o.id === turno.objetivo_id)
+    if (!objetivo?.zona_id) return null
+    const zona = (zonasOperativas as any[]).find(z => z.id === objetivo.zona_id)
+    return zona?.nombre ?? null
+  }
+
+  const supervisorGuardiaAsignado = (turno: Turno) => {
+    const zonaObjetivo = zonaDelTurno(turno)
+    // Sin zona conocida no se puede afirmar quién es el supervisor de guardia.
+    // Devolver null es más honesto que atribuírselo al de otra zona.
+    if (!zonaObjetivo) return null
+    return supervisoresGuardia.find((asignacion: any) =>
       normalizarOperativo(asignacion.estado || 'activo') !== 'inactivo' &&
       normalizarOperativo(asignacion.rol_operativo || 'supervisor') === 'supervisor' &&
-      normalizarOperativo(asignacion.zona || ZONA_OPERATIVA_ADMIN) === normalizarOperativo(ZONA_OPERATIVA_ADMIN) &&
+      normalizarOperativo(asignacion.zona || '') === normalizarOperativo(zonaObjetivo) &&
       fechaHoraEnRangoAdmin(
         turno.fecha,
         turno.hora_inicio,
@@ -9311,6 +9335,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
         asignacion.hora_fin,
       )
     ) || null
+  }
 
   const intervencionesAlerta = (alerta: Pick<AlertaOperativaAdmin, 'turno' | 'tipo' | 'registro'>) =>
     intervencionesDeOcurrencia(
