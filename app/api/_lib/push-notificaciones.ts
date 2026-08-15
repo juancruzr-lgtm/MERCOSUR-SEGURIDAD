@@ -720,6 +720,15 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       alertasEnviadas += resultado.sent
     } else {
       candidatosSupervisionProxima += 1
+      // horasFaltantes no existía: el gemelo exacto del bug de horasDesdeUltima
+      // de la rama de vencidas (ver arriba). Nunca explotó porque ningún
+      // objetivo caía en 'proximo'… hasta el 14/08/2026 ~18:40, cuando el
+      // primero entró en ese estado: desde ahí CADA corrida moría acá con
+      // ReferenceError —esta sección es la primera— y rondas, turnos y avisos
+      // al vigilador no se ejecutaban más. El 500 con cuerpo vacío de pg_net
+      // era esto, no un timeout. Misma fuente única que la rama de vencidas:
+      // horasParaVencimiento, positivas mientras sigue vigente.
+      const horasFaltantes = horasParaVencimiento(ultimaIso, frecuenciaHoras)
       const resultado = await sendToUsersObjetivo(
         admin.client,
         subscriptions,
@@ -728,7 +737,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
         `${SUPERVISION_ALERT_TYPES.proxima}:${ciclo}`,
         {
           title: 'Supervisión próxima a vencer',
-          body: `Objetivo: ${objetivo.nombre} · Zona: ${zonaNombre} · Quedan ${Math.max(0, Math.round(horasFaltantes))} h`,
+          body: `Objetivo: ${objetivo.nombre} · Zona: ${zonaNombre} · Quedan ${horasFaltantes !== null ? Math.max(0, Math.round(horasFaltantes)) : '?'} h`,
           url: '/dashboard',
           tag: `objetivo-${objetivo.id}-supervision-proxima`,
         },
