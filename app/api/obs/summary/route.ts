@@ -368,6 +368,9 @@ export async function GET(req: NextRequest) {
       importantes_abiertas: novedadesImportantes,
       total_abiertas: novedadesData.length,
     },
+    // Total real de errores en 48 h (la lista de abajo viene recortada a 20;
+    // el semáforo y el contador del encabezado usan este número, no el corte).
+    errores_48h_total: errRecientes.length,
     pantallas_mas_usadas_7d: pantallasOrdenadas,
     versiones_activas_7d: versionCounts,
     dispositivos_7d: { por_tipo: dispositivoCounts, por_os: osCounts },
