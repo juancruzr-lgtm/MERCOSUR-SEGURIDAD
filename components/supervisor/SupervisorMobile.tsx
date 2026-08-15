@@ -1862,7 +1862,7 @@ export default function SupervisorMobile({ user }: any) {
 
     const comentario = formIntervencion.comentario.trim()
     const motivo = formIntervencion.motivo.trim()
-    const requiereComentario = ['comentario', 'alerta_revisada', 'confirmar_asistencia'].includes(accionAlerta.accion)
+    const requiereComentario = ['comentario', 'alerta_revisada', 'confirmar_asistencia', 'ausente'].includes(accionAlerta.accion)
 
     if (requiereComentario && !comentario) {
       setError('Agregá un comentario para guardar la intervención.')
@@ -2282,6 +2282,7 @@ export default function SupervisorMobile({ user }: any) {
       marcado_cubierto_manual: 'Cobertura manual (solo administración)',
       alerta_revisada: 'Alerta revisada',
       confirmar_asistencia: 'Confirmar asistencia',
+      ausente: 'Ausente',
       reapertura: 'Reapertura',
     }
 
@@ -2415,7 +2416,7 @@ export default function SupervisorMobile({ user }: any) {
 
     const requiereGuardia = accionAlerta.accion === 'reasignacion'
     const requiereMotivo = accionAlerta.accion === 'reapertura'
-    const comentarioLabel = ['comentario', 'alerta_revisada', 'confirmar_asistencia'].includes(accionAlerta.accion) ? 'Comentario *' : 'Comentario'
+    const comentarioLabel = ['comentario', 'alerta_revisada', 'confirmar_asistencia', 'ausente'].includes(accionAlerta.accion) ? 'Comentario *' : 'Comentario'
     const loadingKey = `alerta-${turno.id}-${accionAlerta.accion}`
 
     return (
@@ -2479,6 +2480,11 @@ export default function SupervisorMobile({ user }: any) {
     const permiteGestionCobertura = ['sin_fichar', 'descubierto'].includes(tipoAlerta)
     const ultimaNoComentario = intervencionesAlerta(turno.id, tipoAlerta, registro?.id).find(i => i.accion !== 'comentario')
     const asistenciaConfirmada = ultimaNoComentario?.accion === 'confirmar_asistencia'
+    const esSinFichar = tipoAlerta === 'sin_fichar'
+    // La ausencia se lee del dato, no de la intervención: si el registro existe,
+    // la decisión ya se tomó aunque la intervención se haya guardado con otra
+    // acción. Es lo mismo que habilita "Enviar reemplazo".
+    const ausenciaRegistrada = getRegistrosTurno(turno.id).some(r => r.tipo_registro === 'ausencia')
 
     return (
       <div style={alertaAccionesBox}>
@@ -2494,46 +2500,95 @@ export default function SupervisorMobile({ user }: any) {
           {intervenida && <span style={badge('finalizado')}>Intervenida</span>}
           {!intervenida && asistenciaConfirmada && <span style={{ ...badge('finalizado'), background:'rgba(16,185,129,.15)', color:'#6ee7b7' }}>Asistencia confirmada</span>}
         </div>
+        {/* En 'sin fichar' el supervisor tiene que DECIDIR qué pasó con el
+            turno: o el vigilador estuvo, o faltó, o lo que estaba mal era la
+            programación. Antes había cuatro caminos y tres eran ambiguos —el
+            resultado se vio en agosto, donde las confirmaciones de presencia
+            quedaron guardadas como 'Comentar' y 'Mantener descubierto' y nunca
+            se materializó una sola asistencia. Por eso acá no hay botón
+            'Comentar' suelto: el comentario es obligatorio dentro de cada
+            decisión. En el resto de las alertas se conserva tal cual estaba. */}
         <div style={alertaActionGrid}>
-          {permiteGestionCobertura && <button
+          {esSinFichar ? (
+            <>
+              <button
+                type="button"
+                style={estiloBotonAccion('confirmar_asistencia', accionEstaSeleccionada(turno, tipoAlerta, 'confirmar_asistencia'))}
+                disabled={Boolean(asignando)}
+                onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'confirmar_asistencia', registro)}
+              >
+                Confirmar asistencia
+              </button>
+              <button
+                type="button"
+                style={estiloBotonAccion('ausente', accionEstaSeleccionada(turno, tipoAlerta, 'ausente'), dangerButton)}
+                disabled={Boolean(asignando)}
+                onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'ausente', registro)}
+              >
+                Ausente
+              </button>
+              {/* Modificar turno no es una decisión sobre la asistencia: es
+                  corregir la programación. Por eso abre la edición del turno
+                  que ya existe en lugar de sumar acciones a la RPC — y por eso
+                  el vigilador original NO queda ausente cuando se cambia. */}
+              <button
+                type="button"
+                style={estiloBotonAccion('reasignacion', false)}
+                disabled={Boolean(asignando)}
+                onClick={() => abrirEdicionTurno(turno)}
+              >
+                Modificar turno
+              </button>
+            </>
+          ) : (
+            <>
+              {permiteGestionCobertura && <button
+                type="button"
+                style={estiloBotonAccion('reasignacion', accionEstaSeleccionada(turno, tipoAlerta, 'reasignacion'))}
+                disabled={Boolean(asignando)}
+                onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'reasignacion', registro)}
+              >
+                Reasignar
+              </button>}
+              {permiteGestionCobertura && <button
+                type="button"
+                style={estiloBotonAccion('marcado_descubierto', accionEstaSeleccionada(turno, tipoAlerta, 'marcado_descubierto'), dangerButton)}
+                disabled={Boolean(asignando)}
+                onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'marcado_descubierto', registro)}
+              >
+                Mantener descubierto
+              </button>}
+              {['tardanza', 'fuera_radio'].includes(tipoAlerta) && <button
+                type="button"
+                style={estiloBotonAccion('comentario', accionEstaSeleccionada(turno, tipoAlerta, 'alerta_revisada'))}
+                disabled={Boolean(asignando)}
+                onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'alerta_revisada', registro)}
+              >Justificar / atender</button>}
+              <button
+                type="button"
+                style={estiloBotonAccion('comentario', accionEstaSeleccionada(turno, tipoAlerta, 'comentario'))}
+                disabled={Boolean(asignando)}
+                onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'comentario', registro)}
+              >
+                Comentar
+              </button>
+            </>
+          )}
+        </div>
+        {/* Enviar reemplazo aparece DESPUÉS de marcar la ausencia, no antes:
+            primero se registra que el asignado faltó —esa fila queda—, recién
+            después se elige quién cubre. Reutiliza la reasignación existente,
+            que valida superposiciones y conserva guardia_original_id. */}
+        {esSinFichar && ausenciaRegistrada && (
+          <button
             type="button"
-            style={estiloBotonAccion('reasignacion', accionEstaSeleccionada(turno, tipoAlerta, 'reasignacion'))}
+            style={{ ...estiloBotonAccion('reasignacion', accionEstaSeleccionada(turno, tipoAlerta, 'reasignacion')), width: '100%', marginTop: 8 }}
             disabled={Boolean(asignando)}
             onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'reasignacion', registro)}
           >
-            Reasignar
-          </button>}
-          {permiteGestionCobertura && <button
-            type="button"
-            style={estiloBotonAccion('marcado_descubierto', accionEstaSeleccionada(turno, tipoAlerta, 'marcado_descubierto'), dangerButton)}
-            disabled={Boolean(asignando)}
-            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'marcado_descubierto', registro)}
-          >
-            Mantener descubierto
-          </button>}
-          {tipoAlerta === 'sin_fichar' && <button
-            type="button"
-            style={estiloBotonAccion('confirmar_asistencia', accionEstaSeleccionada(turno, tipoAlerta, 'confirmar_asistencia'))}
-            disabled={Boolean(asignando)}
-            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'confirmar_asistencia', registro)}
-          >
-            Confirmar asistencia
-          </button>}
-          {['tardanza', 'fuera_radio'].includes(tipoAlerta) && <button
-            type="button"
-            style={estiloBotonAccion('comentario', accionEstaSeleccionada(turno, tipoAlerta, 'alerta_revisada'))}
-            disabled={Boolean(asignando)}
-            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'alerta_revisada', registro)}
-          >Justificar / atender</button>}
-          <button
-            type="button"
-            style={estiloBotonAccion('comentario', accionEstaSeleccionada(turno, tipoAlerta, 'comentario'))}
-            disabled={Boolean(asignando)}
-            onClick={() => abrirAccionAlerta(turno, tipoAlerta, 'comentario', registro)}
-          >
-            Comentar
+            Enviar reemplazo
           </button>
-        </div>
+        )}
         {renderPanelAccion(turno, tipoAlerta, registro?.id)}
         {renderHistorialAlerta(turno, tipoAlerta, registro?.id)}
       </div>
