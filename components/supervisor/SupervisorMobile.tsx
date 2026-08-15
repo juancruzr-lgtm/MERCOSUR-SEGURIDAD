@@ -23,6 +23,9 @@ import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
 import { estadoSupervision, frecuenciaSupervision, supervisionProximaAVencer } from '@/lib/supervisiones'
+// LA resolución de responsables operativos, compartida con AppClient y push.
+import { TEXTO_ORIGEN, guardiaCubreInstante, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
+import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import { alertaEstaIntervenida, calcularMinutosTardanzaRegistro, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, evaluarSinFichar, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOperativaCompartida } from '@/lib/revision-operativa'
 
@@ -622,7 +625,7 @@ export default function SupervisorMobile({ user }: any) {
         .order('apellido'),
       supabase
         .from('supervisores_guardia')
-        .select('id, supervisor_id, fecha, hora_inicio, hora_fin, zona, rol_operativo, estado, observacion, creado_por, created_at')
+        .select('id, supervisor_id, fecha, hora_inicio, hora_fin, zona, rol_operativo, estado, tipo_evento, observacion, creado_por, created_at')
         .gte('fecha', sumarDiasFecha(rango.desde, -1))
         .lte('fecha', rango.hasta)
         .order('fecha', { ascending: true })
@@ -659,10 +662,13 @@ export default function SupervisorMobile({ user }: any) {
         .from('zonas_operativas')
         .select('id, nombre, estado')
         .order('nombre'),
+      // TODAS las asignaciones, no sólo las del usuario logueado: la
+      // resolución de responsables necesita saber quién es el responsable de
+      // cada zona (el fallback de Rafaela/Reconquista), no sólo "mis zonas".
+      // Las zonas propias se siguen derivando filtrando por user.id.
       supabase
         .from('supervisor_zonas')
-        .select('id, supervisor_id, zona_id')
-        .eq('supervisor_id', user.id),
+        .select('id, supervisor_id, zona_id'),
       // Vigencia de supervisiones: sin filtro de fecha y con límite explícito.
       // Sin el límite, PostgREST corta en 1000 y los objetivos supervisados hace
       // tiempo reaparecen como "nunca supervisado".
@@ -898,39 +904,51 @@ export default function SupervisorMobile({ user }: any) {
     const supervisor = getSupervisor(id)
     return supervisor ? nombrePersona(supervisor) : 'Supervisor no encontrado'
   }
-  // Zona real del objetivo del turno. Antes esto comparaba contra la constante
-  // ZONA_OPERATIVA ('Rosario / General'), un literal en vez de la zona del
-  // objetivo: cualquier turno de Rafaela o Reconquista decía "Sin supervisor
-  // asignado" aunque hubiera guardia cubriendo, porque la condición lo
-  // descartaba antes de mirar la fecha. Mismo defecto que había en AppClient.
-  //
-  // La comparación va normalizada: supervisores_guardia.zona es texto libre y
-  // en producción está en minúsculas ('rafaela'), mientras zonas_operativas
-  // guarda 'Rafaela'.
-  const normalizarZona = (valor?: string | null) => (valor ?? '').trim().toLowerCase()
-
-  const supervisorGuardiaAsignado = (turno: Turno) => {
+  // Responsables operativos del turno, con LA resolución compartida
+  // (lib/responsables-operativos): guardia efectiva que cubre el instante →
+  // responsable único de supervisor_zonas → nadie, sin elegir uno
+  // arbitrariamente. Puede devolver varios (Rosario diurno: Sabino + Sergio).
+  // Misma implementación que AppClient y push; acá no se recalcula nada.
+  const supervisorGuardiaAsignado = (turno: Turno): {
+    supervisor_id: string | null
+    supervisor_ids: string[]
+    origen: OrigenResolucion
+    observacion: string | null
+  } | null => {
     const objetivo = getObjetivo(turno.objetivo_id)
-    const zonaObjetivo = objetivo?.zona_id ? nombreZona(objetivo.zona_id) : null
-    // Sin zona conocida no se atribuye el supervisor de otra zona: es peor que
-    // decir que no hay.
-    if (!zonaObjetivo || zonaObjetivo === 'Sin zona') return null
-    return supervisoresGuardia.find(asignacion =>
-      asignacion.estado !== 'inactivo' &&
-      asignacion.rol_operativo === 'supervisor' &&
-      normalizarZona(asignacion.zona) === normalizarZona(zonaObjetivo) &&
-      fechaHoraEnRango(
-        turno.fecha,
-        turno.hora_inicio,
-        asignacion.fecha.slice(0, 10),
-        asignacion.hora_inicio,
-        asignacion.hora_fin,
-      )
-    ) || null
+    const resolucion = resolverResponsablesOperativos({
+      zonaId: objetivo?.zona_id ?? null,
+      fecha: turno.fecha,
+      hora: String(turno.hora_inicio).slice(0, 5),
+      guardias: supervisoresGuardia,
+      supervisorZonas,
+      zonas: zonasOperativas,
+      usuarios: supervisores,
+    })
+
+    if (resolucion.responsables.length === 0 && resolucion.origen === 'sin_zona') return null
+
+    const filaGuardia = resolucion.origen === 'guardia_efectiva'
+      ? supervisoresGuardia.find(g =>
+          resolucion.responsables.includes(g.supervisor_id) &&
+          guardiaCubreInstante(g, turno.fecha, String(turno.hora_inicio).slice(0, 5)) &&
+          g.observacion)
+      : null
+
+    return {
+      supervisor_id: resolucion.responsables[0] || null,
+      supervisor_ids: resolucion.responsables,
+      origen: resolucion.origen,
+      observacion: filaGuardia?.observacion || null,
+    }
   }
   const nombreSupervisorGuardia = (turno: Turno) => {
     const asignacion = supervisorGuardiaAsignado(turno)
-    return asignacion?.supervisor_id ? nombreSupervisor(asignacion.supervisor_id) : 'Sin supervisor asignado'
+    if (!asignacion) return TEXTO_ORIGEN.sin_zona
+    if (asignacion.supervisor_ids.length > 0) {
+      return asignacion.supervisor_ids.map(id => nombreSupervisor(id)).join(' + ')
+    }
+    return TEXTO_ORIGEN[asignacion.origen]
   }
   const intervencionesAlerta = (turnoId: string, tipoAlerta: TipoAlertaOperativa, registroId?: string | null) =>
     intervencionesDeOcurrencia(intervenciones, turnoId, tipoAlerta, registroId)
@@ -1075,9 +1093,11 @@ export default function SupervisorMobile({ user }: any) {
     criticas: supervisionesHoy.filter(s => s.estado === 'critico').length,
   }), [supervisionesHoy])
 
+  // supervisorZonas ahora trae TODAS las asignaciones (las necesita la
+  // resolución de responsables); las zonas propias se filtran acá por usuario.
   const zonasIdsAsignadas = useMemo(
-    () => new Set(supervisorZonas.map(sz => sz.zona_id)),
-    [supervisorZonas],
+    () => new Set(supervisorZonas.filter(sz => sz.supervisor_id === user.id).map(sz => sz.zona_id)),
+    [supervisorZonas, user.id],
   )
   const nombreZona = (zonaId?: string | null) => zonasOperativas.find(z => z.id === zonaId)?.nombre || 'Sin zona'
 

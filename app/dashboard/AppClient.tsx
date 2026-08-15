@@ -49,6 +49,11 @@ import {
   resumenMes,
 } from '@/lib/guardias-supervisor'
 import type { PrevisionGeneracion, PrevisionMes, ReglaSemanal } from '@/lib/guardias-supervisor'
+// LA resolución de responsables operativos (guardia efectiva → único
+// responsable de zona → nadie). Compartida con SupervisorMobile y push:
+// ninguna pantalla vuelve a calcular esto por su cuenta.
+import { TEXTO_ORIGEN, guardiaCubreInstante, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
+import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
@@ -10090,43 +10095,54 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     return labels[tipo]
   }
 
-  // Zona del objetivo del turno, que es contra la que hay que buscar al
-  // supervisor de guardia.
-  //
-  // Antes esto comparaba contra la constante ZONA_OPERATIVA_ADMIN
-  // ('Rosario / General'), o sea contra un literal en lugar de contra la zona
-  // real. Consecuencia: cualquier objetivo de Rafaela o Reconquista decía
-  // "Sin supervisor asignado" aunque hubiera un supervisor de guardia
-  // cubriendo ese horario — la condición lo descartaba antes de mirar la
-  // fecha. Se vio en LAROMET IRIGOYEN, que es de Rafaela.
-  //
-  // La comparación va normalizada porque supervisores_guardia.zona es texto
-  // libre y en producción está cargado en minúsculas ('rafaela'), mientras que
-  // zonas_operativas.nombre viene capitalizado ('Rafaela').
-  const zonaDelTurno = (turno: Turno): string | null => {
+  // Responsables operativos del turno, con LA resolución compartida
+  // (lib/responsables-operativos): guardia efectiva que cubre el instante →
+  // responsable único de supervisor_zonas → nadie, sin elegir arbitrariamente.
+  // Puede devolver varios (Rosario diurno: Sabino + Sergio) y se muestran
+  // todos. El rol del usuario no filtra: la responsabilidad sale de la
+  // asignación.
+  const supervisorGuardiaAsignado = (turno: Turno): {
+    supervisor_id: string | null
+    supervisor_ids: string[]
+    origen: OrigenResolucion
+    observacion: string | null
+  } | null => {
     const objetivo = (objetivos as any[]).find(o => o.id === turno.objetivo_id)
-    if (!objetivo?.zona_id) return null
-    const zona = (zonasOperativas as any[]).find(z => z.id === objetivo.zona_id)
-    return zona?.nombre ?? null
+    const resolucion = resolverResponsablesOperativos({
+      zonaId: objetivo?.zona_id ?? null,
+      fecha: turno.fecha,
+      hora: String(turno.hora_inicio).slice(0, 5),
+      guardias: supervisoresGuardia,
+      supervisorZonas,
+      zonas: zonasOperativas,
+      usuarios: guardias,
+    })
+
+    if (resolucion.responsables.length === 0 && resolucion.origen === 'sin_zona') return null
+
+    // La observación viaja sólo cuando viene de una guardia concreta.
+    const filaGuardia = resolucion.origen === 'guardia_efectiva'
+      ? supervisoresGuardia.find((g: any) =>
+          resolucion.responsables.includes(g.supervisor_id) &&
+          guardiaCubreInstante(g, turno.fecha, String(turno.hora_inicio).slice(0, 5)) &&
+          g.observacion)
+      : null
+
+    return {
+      supervisor_id: resolucion.responsables[0] || null,
+      supervisor_ids: resolucion.responsables,
+      origen: resolucion.origen,
+      observacion: filaGuardia?.observacion || null,
+    }
   }
 
-  const supervisorGuardiaAsignado = (turno: Turno) => {
-    const zonaObjetivo = zonaDelTurno(turno)
-    // Sin zona conocida no se puede afirmar quién es el supervisor de guardia.
-    // Devolver null es más honesto que atribuírselo al de otra zona.
-    if (!zonaObjetivo) return null
-    return supervisoresGuardia.find((asignacion: any) =>
-      normalizarOperativo(asignacion.estado || 'activo') !== 'inactivo' &&
-      normalizarOperativo(asignacion.rol_operativo || 'supervisor') === 'supervisor' &&
-      normalizarOperativo(asignacion.zona || '') === normalizarOperativo(zonaObjetivo) &&
-      fechaHoraEnRangoAdmin(
-        turno.fecha,
-        turno.hora_inicio,
-        String(asignacion.fecha || '').slice(0, 10),
-        asignacion.hora_inicio,
-        asignacion.hora_fin,
-      )
-    ) || null
+  // Nombres de TODOS los responsables, o el motivo si no hay ninguno.
+  const nombresResponsables = (asignacion: ReturnType<typeof supervisorGuardiaAsignado>) => {
+    if (!asignacion) return TEXTO_ORIGEN.sin_zona
+    if (asignacion.supervisor_ids.length > 0) {
+      return asignacion.supervisor_ids.map(id => nombreUsuario(id)).join(' + ')
+    }
+    return TEXTO_ORIGEN[asignacion.origen]
   }
 
   const intervencionesAlerta = (alerta: Pick<AlertaOperativaAdmin, 'turno' | 'tipo' | 'registro'>) =>
@@ -10584,7 +10600,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
         <div><div style={S.label}>Tipo de alerta</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{tipoAlertaLabel(alerta.tipo)}</div></div>
         <div><div style={S.label}>Guardia asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(alerta.turno.guardia_id)}</div></div>
         {minutosDemora !== null && <div><div style={S.label}>Minutos de demora</div><div style={{ fontSize:13, color:'#f59e0b' }}>{minutosDemora}</div></div>}
-        <div><div style={S.label}>Supervisor asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{asignacion?.supervisor_id ? nombreUsuario(asignacion.supervisor_id) : 'Sin supervisor asignado'}</div></div>
+        <div><div style={S.label}>Supervisor asignado</div><div style={{ fontSize:13, color: asignacion?.supervisor_ids.length ? '#e2e8f0' : '#f59e0b' }}>{nombresResponsables(asignacion)}</div></div>
         <div><div style={S.label}>Estado</div><div style={{ fontSize:13, color: ciclo === 'resuelta_operativamente' ? '#10b981' : '#f59e0b' }}>{estadoVisible}</div></div>
         <div><div style={S.label}>Jefe operativo</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{ultima?.jefe_operativo || JEFE_OPERATIVO_ADMIN}</div></div>
         <div><div style={S.label}>Director técnico</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{ultima?.director_tecnico || DIRECTOR_TECNICO_ADMIN}</div></div>
@@ -10794,7 +10810,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
           <div><div style={S.label}>Guardia asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(turno.guardia_id)}</div></div>
           <div><div style={S.label}>Acción realizada</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{accionLabel(intervencion.accion)}</div></div>
           <div><div style={S.label}>Supervisor/admin que intervino</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{nombreUsuario(intervencion.supervisor_intervino_id || intervencion.supervisor_id)}</div></div>
-          <div><div style={S.label}>Supervisor asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{intervencion.supervisor_asignado_id ? nombreUsuario(intervencion.supervisor_asignado_id) : asignacion?.supervisor_id ? nombreUsuario(asignacion.supervisor_id) : 'Sin supervisor asignado'}</div></div>
+          <div><div style={S.label}>Supervisor asignado</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{intervencion.supervisor_asignado_id ? nombreUsuario(intervencion.supervisor_asignado_id) : nombresResponsables(asignacion)}</div></div>
           <div><div style={S.label}>Fecha/hora</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{fechaHoraTexto(intervencion.created_at)}</div></div>
           <div><div style={S.label}>Estado</div><div style={{ fontSize:13, color:'#10b981' }}>Intervenida</div></div>
           <div style={{ gridColumn:'1 / -1' }}><div style={S.label}>Comentario</div><div style={{ fontSize:13, color:'#e2e8f0' }}>{intervencion.comentario || '—'}</div></div>

@@ -25,6 +25,11 @@ import {
 } from '@/lib/notificaciones-push'
 import { calcularMinutosTardanzaRegistro } from '@/lib/revision-operativa'
 import { objetivoEstaOperativo, turnoSinCoberturaOperativa } from '@/lib/turnos'
+// LA resolución de responsables operativos: guardia efectiva → responsable
+// único de zona → nadie (sin elegir arbitrariamente). La misma que usan las
+// pantallas; acá no se reimplementa nada.
+import { resolverResponsablesOperativos } from '@/lib/responsables-operativos'
+import type { GuardiaOperativa } from '@/lib/responsables-operativos'
 import {
   FRECUENCIA_SUPERVISION_DEFECTO_HORAS,
   estadoSupervision,
@@ -112,14 +117,6 @@ type SupervisionUltimaPush = {
 }
 
 const TZ = 'America/Argentina/Buenos_Aires'
-const SUPERVISOR_ROLES = ['supervisor', 'admin']
-const SUPERVISORES_DIURNOS = [
-  { nombre: 'Sabino', apellido: 'Aranda' },
-  { nombre: 'Sergio', apellido: 'Martínez' },
-]
-const SUPERVISORES_NOCTURNOS = [
-  { nombre: 'Walter', apellido: 'Fulla' },
-]
 const SUPERVISOR_ALERT_TYPES = {
   tardanza: 'supervisor_tardanza',
   sinFichaje: 'supervisor_sin_fichaje',
@@ -193,43 +190,6 @@ function minutosHora(hora?: string | null) {
   const [hours, minutes] = hora.split(':').map(Number)
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null
   return hours * 60 + minutes
-}
-
-function turnoEsDiurno(turno: TurnoPush) {
-  const inicio = minutosHora(turno.hora_inicio)
-  if (inicio === null) return false
-  return inicio >= 6 * 60 && inicio < 18 * 60
-}
-
-function normalizarTexto(value?: string | null) {
-  return (value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase()
-}
-
-function coincideSupervisor(usuario: UsuarioPush, esperado: { nombre: string, apellido: string }) {
-  const nombre = normalizarTexto(usuario.nombre)
-  const apellido = normalizarTexto(usuario.apellido)
-  const esperadoNombre = normalizarTexto(esperado.nombre)
-  const esperadoApellido = normalizarTexto(esperado.apellido)
-  const nombreCompleto = normalizarTexto(`${usuario.nombre} ${usuario.apellido}`)
-  const apellidoNombre = normalizarTexto(`${usuario.apellido} ${usuario.nombre}`)
-  const esperadoCompleto = normalizarTexto(`${esperado.nombre} ${esperado.apellido}`)
-  const esperadoInvertido = normalizarTexto(`${esperado.apellido} ${esperado.nombre}`)
-
-  return (
-    nombre === esperadoNombre && apellido === esperadoApellido
-  ) || nombreCompleto.includes(esperadoCompleto) || nombreCompleto.includes(esperadoInvertido) || apellidoNombre.includes(esperadoCompleto) || apellidoNombre.includes(esperadoInvertido)
-}
-
-function supervisoresAsignados(turno: TurnoPush, usuarios: UsuarioPush[]) {
-  const esperados = turnoEsDiurno(turno) ? SUPERVISORES_DIURNOS : SUPERVISORES_NOCTURNOS
-  return usuarios
-    .filter(usuario => SUPERVISOR_ROLES.includes(usuario.rol))
-    .filter(usuario => esperados.some(esperado => coincideSupervisor(usuario, esperado)))
-    .map(usuario => usuario.id)
 }
 
 function esTardanza(turno: TurnoPush, registro?: RegistroPush | null) {
@@ -459,17 +419,6 @@ async function sendToUsersObjetivo(
   return { sent, skipped, fallos: fallosObj }
 }
 
-function supervisoresDeZona(zonaId: string | null | undefined, supervisorZonas: SupervisorZonaPush[], usuarios: UsuarioPush[]) {
-  if (!zonaId) return []
-  const supervisorIds = new Set(
-    supervisorZonas.filter(sz => sz.zona_id === zonaId).map(sz => sz.supervisor_id),
-  )
-
-  return usuarios
-    .filter(usuario => usuario.rol === 'supervisor' && supervisorIds.has(usuario.id))
-    .map(usuario => usuario.id)
-}
-
 // Alertas de rondas: persistidas por evaluar_ronda_alertas(); acá solo se
 // enrutan por zona y se envían con dedup por (usuario, objetivo, tipo), donde el
 // tipo embebe el id de la alerta → una notificación por alerta y supervisor.
@@ -543,6 +492,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     zonasResult,
     supervisorZonasResult,
     ultimasSupervisionesResult,
+    supervisoresGuardiaResult,
   ] = await Promise.all([
     admin.client
       .from('turnos')
@@ -573,6 +523,14 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       .from('supervisiones')
       .select('objetivo_id, created_at')
       .order('created_at', { ascending: false }),
+    // Guardias efectivas para resolver responsables. Desde anteayer porque una
+    // nocturna arranca un día y cubre la madrugada del siguiente, y los turnos
+    // procesados llegan hasta mañana.
+    admin.client
+      .from('supervisores_guardia')
+      .select('supervisor_id, zona, fecha, hora_inicio, hora_fin, estado, tipo_evento, rol_operativo')
+      .gte('fecha', sumarDias(ayer, -1))
+      .lte('fecha', manana),
   ])
 
   if (turnosError || usuariosError || objetivosError || subscriptionsError) {
@@ -582,9 +540,12 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   const zonasErrorIgnorable = zonasResult.error && /zonas_operativas|schema cache|does not exist/i.test(zonasResult.error.message)
   const supervisorZonasErrorIgnorable = supervisorZonasResult.error && /supervisor_zonas|schema cache|does not exist/i.test(supervisorZonasResult.error.message)
   const ultimasSupervisionesErrorIgnorable = ultimasSupervisionesResult.error && /supervisiones|schema cache|does not exist/i.test(ultimasSupervisionesResult.error.message)
+  // Sin la tabla o sin las columnas de excepciones (migración no corrida), la
+  // resolución degrada al fallback por zona en lugar de tirar la corrida.
+  const supervisoresGuardiaErrorIgnorable = supervisoresGuardiaResult.error && /supervisores_guardia|tipo_evento|schema cache|does not exist|column/i.test(supervisoresGuardiaResult.error.message)
 
-  if ((zonasResult.error && !zonasErrorIgnorable) || (supervisorZonasResult.error && !supervisorZonasErrorIgnorable) || (ultimasSupervisionesResult.error && !ultimasSupervisionesErrorIgnorable)) {
-    return { ok: false, error: zonasResult.error?.message || supervisorZonasResult.error?.message || ultimasSupervisionesResult.error?.message }
+  if ((zonasResult.error && !zonasErrorIgnorable) || (supervisorZonasResult.error && !supervisorZonasErrorIgnorable) || (ultimasSupervisionesResult.error && !ultimasSupervisionesErrorIgnorable) || (supervisoresGuardiaResult.error && !supervisoresGuardiaErrorIgnorable)) {
+    return { ok: false, error: zonasResult.error?.message || supervisorZonasResult.error?.message || ultimasSupervisionesResult.error?.message || supervisoresGuardiaResult.error?.message }
   }
 
   const turnos = (turnosData || []) as TurnoPush[]
@@ -595,7 +556,76 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   const zonasOperativas = (zonasErrorIgnorable ? [] : (zonasResult.data || [])) as ZonaOperativaPush[]
   const supervisorZonas = (supervisorZonasErrorIgnorable ? [] : (supervisorZonasResult.data || [])) as SupervisorZonaPush[]
   const ultimasSupervisiones = (ultimasSupervisionesErrorIgnorable ? [] : (ultimasSupervisionesResult.data || [])) as SupervisionUltimaPush[]
+  const guardiasOperativas = (supervisoresGuardiaErrorIgnorable ? [] : (supervisoresGuardiaResult.data || [])) as GuardiaOperativa[]
   const turnoIds = turnos.map(turno => turno.id)
+
+  // ── Resolución de responsables ────────────────────────────────────────────
+  //
+  // Guardia efectiva (zona + instante, con nocturnos y excepciones) →
+  // responsable único de supervisor_zonas → nadie. El ROL NO FILTRA: un admin
+  // asignado operativamente (Sergio) recibe igual; `usuarios` ya viene sólo
+  // con activos. Puede devolver VARIOS (Rosario diurno: Sabino + Sergio) y se
+  // les manda a todos: la deduplicación por (usuario, turno/objetivo, tipo)
+  // evita el doble envío al mismo destinatario.
+  const zonaPorObjetivo = new Map<string, string | null>()
+  objetivosSupervision.forEach(o => zonaPorObjetivo.set(o.id, o.zona_id ?? null))
+
+  let alertasSinResponsable = 0
+  let alertasVariosSinGuardia = 0
+  let responsablesSinDispositivo = 0
+
+  const destinatariosOperativos = (zonaId: string | null | undefined, fecha: string, hora: string, contexto: string): string[] => {
+    const resolucion = resolverResponsablesOperativos({
+      zonaId: zonaId ?? null,
+      fecha,
+      hora,
+      guardias: guardiasOperativas,
+      supervisorZonas,
+      zonas: zonasOperativas,
+      usuarios,
+    })
+
+    if (resolucion.responsables.length === 0) {
+      if (resolucion.origen === 'multiples_sin_guardia') {
+        alertasVariosSinGuardia += 1
+        console.warn(`[push] ${contexto}: falta definir la guardia (${resolucion.candidatosZona.length} responsables posibles, no se elige uno).`)
+      } else {
+        alertasSinResponsable += 1
+        console.warn(`[push] ${contexto}: sin responsable (${resolucion.origen}).`)
+      }
+      return []
+    }
+
+    // Responsable correcto pero sin dispositivo: es un problema de ENTREGA,
+    // no de resolución. Se registra aparte para no confundirlo con "sin
+    // supervisor asignado". En la prueba controlada las suscripciones vienen
+    // filtradas a un usuario, así que ahí no se mide.
+    if (!soloUsuarioId) {
+      const sinDispositivo = resolucion.responsables.filter(id => !subscriptions.some(s => s.usuario_id === id))
+      if (sinDispositivo.length > 0) {
+        responsablesSinDispositivo += sinDispositivo.length
+        console.warn(`[push] ${contexto}: responsable encontrado · sin dispositivo push registrado (${sinDispositivo.length} de ${resolucion.responsables.length}).`)
+      }
+    }
+
+    return resolucion.responsables
+  }
+
+  // Instante local "ahora", para las alertas que no tienen un turno que les dé
+  // fecha y hora (supervisiones vencidas, rondas).
+  const horaAhora = horaDeMin(ahora)
+
+  // El instante de una alerta de turno es el INICIO del turno: un turno de
+  // 06:00 le corresponde a quien cubre las 06:00, aunque la alerta salga a las
+  // 06:20. Se llama sólo cuando hay alerta que mandar, para no llenar el log
+  // con turnos que no alertan.
+  const destinatariosParaTurno = (turno: TurnoPush, contexto: string) =>
+    destinatariosOperativos(
+      zonaPorObjetivo.get(turno.objetivo_id),
+      turno.fecha,
+      turno.hora_inicio.slice(0, 5),
+      `${contexto} (turno ${turno.fecha} ${turno.hora_inicio.slice(0, 5)})`,
+    )
 
   const turnosProcesados = turnos.length
   let candidatos30 = 0
@@ -645,10 +675,8 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       continue
     }
 
-    const supervisorIds = supervisoresDeZona(objetivo.zona_id, supervisorZonas, usuarios)
+    const supervisorIds = destinatariosOperativos(objetivo.zona_id, hoy, horaAhora, `supervisión ${estadoAgenda} de "${objetivo.nombre}"`)
     if (supervisorIds.length === 0) {
-      const zonaNombre = zonasOperativas.find(z => z.id === objetivo.zona_id)?.nombre || objetivo.zona_id
-      console.warn(`[cron-push] Objetivo "${objetivo.nombre}" (${objetivo.id}) esta ${estadoAgenda} pero la zona "${zonaNombre}" no tiene supervisores asignados en supervisor_zonas.`)
       objetivosSinZonaOSinSupervisores += 1
       continue
     }
@@ -733,8 +761,6 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     console.error('[cron] lectura ronda_alertas error:', rondaAlertasError.message)
   }
 
-  const zonaPorObjetivo = new Map<string, string | null>()
-  objetivosSupervision.forEach(o => zonaPorObjetivo.set(o.id, o.zona_id ?? null))
   const nombrePorObjetivo = new Map<string, string>()
   objetivos.forEach(o => nombrePorObjetivo.set(o.id, o.nombre))
 
@@ -743,7 +769,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
 
   for (const alerta of rondaAlertas) {
     const zonaId = zonaPorObjetivo.get(alerta.objetivo_id) ?? null
-    const supervisorIds = supervisoresDeZona(zonaId, supervisorZonas, usuarios)
+    const supervisorIds = destinatariosOperativos(zonaId, hoy, horaAhora, `ronda ${alerta.tipo} en "${nombrePorObjetivo.get(alerta.objetivo_id) || alerta.objetivo_id}"`)
     if (supervisorIds.length === 0) {
       rondaAlertasSinSupervisores += 1
       continue
@@ -904,6 +930,13 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       alertasEvaluadas,
       alertasOmitidasPorResueltas,
       alertasEnviadas,
+      // "Sin responsable" y "responsable sin dispositivo" son problemas
+      // distintos: el primero es de asignación, el segundo de entrega.
+      resolucionResponsables: {
+        sinResponsable: alertasSinResponsable,
+        variosSinGuardia: alertasVariosSinGuardia,
+        responsablesSinDispositivo,
+      },
       sent,
       skipped,
     })
@@ -958,7 +991,6 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     const minutosDesdeInicio = Math.floor(ahora - inicio)
     const registroEntrada = registros.find(registro => registro.turno_id === turno.id && registro.hora_entrada_real)
     const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
-    const supervisoresTurno = supervisoresAsignados(turno, usuarios)
 
     if (turno.guardia_id && minutosHastaInicio >= 20 && minutosHastaInicio <= 35) {
       candidatos30 += 1
@@ -1016,7 +1048,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
         alertasOmitidasPorResueltas += 1
       } else {
         candidatosSupervisorSinFichaje += 1
-        await enviarAlertaSupervisor(supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.sinFichaje, {
+        await enviarAlertaSupervisor(destinatariosParaTurno(turno, 'sin fichaje'), turno.id, SUPERVISOR_ALERT_TYPES.sinFichaje, {
           title: 'Guardia sin fichaje',
           body: supervisorBody(turno, guardia, objetivoNombre, 'sin fichaje'),
           url: '/dashboard',
@@ -1031,7 +1063,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
         alertasOmitidasPorResueltas += 1
       } else {
         candidatosSupervisorPuestoDescubierto += 1
-        await enviarAlertaSupervisor(supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.puestoDescubierto, {
+        await enviarAlertaSupervisor(destinatariosParaTurno(turno, 'puesto descubierto'), turno.id, SUPERVISOR_ALERT_TYPES.puestoDescubierto, {
           title: 'Puesto descubierto',
           body: supervisorBody(turno, guardia, objetivoNombre, registroEntrada?.hora_entrada_real || 'sin registro'),
           url: '/dashboard',
@@ -1053,7 +1085,6 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     const objetivo = objetivos.find(item => item.id === turno.objetivo_id)
     const guardia = usuarios.find(item => item.id === registro.guardia_id || item.id === turno.guardia_id)
     const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
-    const supervisoresTurno = supervisoresAsignados(turno, usuarios)
 
     alertasEvaluadas += 1
     if (alertaResueltaPorIntervencion(intervenciones, turno.id, SUPERVISOR_ALERT_TYPES.tardanza, registro.id)) {
@@ -1062,7 +1093,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     }
 
     candidatosSupervisorTardanza += 1
-    await enviarAlertaSupervisor(supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.tardanza, {
+    await enviarAlertaSupervisor(destinatariosParaTurno(turno, 'tardanza'), turno.id, SUPERVISOR_ALERT_TYPES.tardanza, {
       title: 'Tardanza registrada',
       body: supervisorBody(turno, guardia, objetivoNombre, registro.hora_entrada_real),
       url: '/dashboard',
@@ -1082,7 +1113,6 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     const objetivo = objetivos.find(item => item.id === turno.objetivo_id)
     const guardia = usuarios.find(item => item.id === registro.guardia_id || item.id === turno.guardia_id)
     const objetivoNombre = objetivo?.nombre || 'Objetivo sin nombre'
-    const supervisoresTurno = supervisoresAsignados(turno, usuarios)
 
     alertasEvaluadas += 1
     if (alertaResueltaPorIntervencion(intervenciones, turno.id, SUPERVISOR_ALERT_TYPES.fueraRadio, registro.id)) {
@@ -1091,7 +1121,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     }
 
     candidatosSupervisorFueraRadio += 1
-    await enviarAlertaSupervisor(supervisoresTurno, turno.id, SUPERVISOR_ALERT_TYPES.fueraRadio, {
+    await enviarAlertaSupervisor(destinatariosParaTurno(turno, 'fuera de radio'), turno.id, SUPERVISOR_ALERT_TYPES.fueraRadio, {
       title: 'Fichaje fuera de radio',
       body: supervisorBody(turno, guardia, objetivoNombre, registro.hora_entrada_real, `Distancia GPS: ${distanciaTexto(registro.distancia_ingreso_metros)}`),
       url: '/dashboard',
@@ -1126,6 +1156,11 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     alertasEvaluadas,
     alertasOmitidasPorResueltas,
     alertasEnviadas,
+    resolucionResponsables: {
+      sinResponsable: alertasSinResponsable,
+      variosSinGuardia: alertasVariosSinGuardia,
+      responsablesSinDispositivo,
+    },
     sent,
     skipped,
     // Sólo en la prueba controlada: deja constancia de a quién se limitó y a
