@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin, isObsAuthErr } from '../../_lib/obs-auth'
+import { semaforoTecnico } from '@/lib/observacion'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,10 @@ export async function GET(req: NextRequest) {
     eventosXScreen7d,
     eventosXVersion7d,
     auditoriasRecientes,
+    supervisiones7dCnt,
+    supervisionesHoyCnt,
+    intervenciones7dCnt,
+    rondasPendientesCnt,
   ] = await Promise.allSettled([
     // Sesiones activas hoy
     client.from('os_sessions')
@@ -98,9 +103,16 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(50),
 
-    // Errores recientes (48h) — cubre tanto "hoy" como "ayer"
+    // Errores recientes (48h) — cubre tanto "hoy" como "ayer".
+    //
+    // OJO: device_type y os_name NO existen en os_events (viven en
+    // os_sessions). Pedirlos acá hacía que PostgREST devolviera 400, el
+    // allSettled lo tragara y "Errores recientes" llegara SIEMPRE vacío —
+    // el mismo bug que ya se había corregido en /api/obs/usage. Si algún día
+    // hace falta el dispositivo del error, se resuelve por session_id contra
+    // os_sessions; no volver a pedirlo acá.
     client.from('os_events')
-      .select('id, event_name, err_code, err_message, user_id, objetivo_id, app_version, client_ts, screen, device_type, os_name, value_json')
+      .select('id, session_id, event_name, err_code, err_message, user_id, objetivo_id, app_version, client_ts, screen, value_json')
       .not('err_code', 'is', null)
       .gte('created_at', hace48h)
       .order('client_ts', { ascending: false })
@@ -123,10 +135,21 @@ export async function GET(req: NextRequest) {
       .select('id, campo, valor_anterior, valor_nuevo, motivo, created_at, modificado_por, turno_id')
       .order('created_at', { ascending: false })
       .limit(20),
+
+    // ── Operación real, SIEMPRE desde tablas operativas ──────────────────
+    // Regla de la auditoría: si existe la tabla autoritativa, la telemetría
+    // no es fuente. "Supervisiones" acá son filas de `supervisiones`, no el
+    // evento supervision_saved (pueden divergir si el teléfono no reportó).
+    client.from('supervisiones').select('id', { count: 'exact', head: true }).gte('created_at', hace7),
+    client.from('supervisiones').select('id', { count: 'exact', head: true }).gte('created_at', hoy),
+    client.from('supervisor_intervenciones').select('id', { count: 'exact', head: true }).gte('created_at', hace7),
+    client.from('ronda_alertas').select('id', { count: 'exact', head: true }).eq('estado', 'pendiente'),
   ])
 
   const value = <T,>(r: PromiseSettledResult<{ data: T | null }>) =>
     r.status === 'fulfilled' ? (r.value?.data ?? []) : []
+  const cuenta = (r: PromiseSettledResult<{ count: number | null }>) =>
+    r.status === 'fulfilled' ? (r.value?.count ?? 0) : 0
 
   // ── Datos ────────────────────────────────────────────────────────────────────
 
@@ -266,16 +289,23 @@ export async function GET(req: NextRequest) {
     return acc
   }, {})
 
-  // ── Semáforo general del sistema ──────────────────────────────────────────────
+  // ── Semáforo del sistema: SOLO señales técnicas vivas ────────────────────────
+  //
+  // Antes participaban las novedades urgentes (tabla sin datos desde mayo:
+  // nunca disparaba) y los puestos descubiertos (operación, no software). El
+  // criterio completo, con umbrales documentados, vive en lib/observacion.
 
   const tasaErrorHoy = totalEventosHoy > 0 ? erroresHoyCnt / totalEventosHoy * 100 : 0
-  let estadoSistema: 'operativo' | 'atencion' | 'critico' = 'operativo'
-  if (tasaErrorHoy > 10 || novedadesUrgentes > 3 || turnosDescubiertos > 2) estadoSistema = 'atencion'
-  if (tasaErrorHoy > 20 || novedadesUrgentes > 5) estadoSistema = 'critico'
+  const semaforo = semaforoTecnico({
+    eventosHoy: totalEventosHoy,
+    erroresHoy: erroresHoyCnt,
+    erroresRecientes48h: errRecientes.length,
+  })
 
   return NextResponse.json({
     generado_en: new Date().toISOString(),
-    estado_sistema: estadoSistema,
+    estado_sistema: semaforo.estado,
+    estado_motivo: semaforo.motivo,
     sesiones: {
       activas_hoy: sesionesActivasHoy,
       totales_hoy: sesionesTotalesHoy,
@@ -325,6 +355,13 @@ export async function GET(req: NextRequest) {
       fichajes_entrada: fichajesEntrada,
       tardanzas: fichajesTardanza,
       fuera_radio: fichajesFueraRadio,
+    },
+    // Desde tablas operativas (nunca telemetría): ver comentario en las queries.
+    operacion_real: {
+      supervisiones_hoy: cuenta(supervisionesHoyCnt as any),
+      supervisiones_7d: cuenta(supervisiones7dCnt as any),
+      intervenciones_7d: cuenta(intervenciones7dCnt as any),
+      rondas_alertas_pendientes: cuenta(rondasPendientesCnt as any),
     },
     novedades: {
       urgentes_abiertas: novedadesUrgentes,

@@ -3,6 +3,22 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { formatHora24 } from '@/lib/formato'
+// Reglas y textos de esta pantalla, testeados aparte. Las decisiones vienen de
+// docs/auditoria-metricas-telemetria.md: leer ese documento antes de tocar acá.
+import {
+  AYUDA_EVENTOS_USO,
+  COLUMNA_ERRORES_TECNICOS,
+  DEF_USUARIO_ACTIVO_ESTADO,
+  DEF_USUARIO_ACTIVO_USO,
+  ETIQUETA_ABANDONOS,
+  ETIQUETA_EVENTOS_USO,
+  SUB_ACTIVIDAD_USUARIO,
+  SUB_RANKING_GPS,
+  TITULO_RANKING_GPS,
+  esAnalisisParcial,
+  notaAbandonos,
+  textoAnalisisParcial,
+} from '@/lib/observacion'
 
 // ── Paleta y helpers de estilo ────────────────────────────────────────────────
 
@@ -214,7 +230,9 @@ function haceQuanto(iso: string | null | undefined): string {
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
-type Tab = 'resumen' | 'telemetria' | 'uso' | 'sesiones' | 'calidad'
+// Cuatro bloques conceptuales (Estado / Uso / Operación / Históricos) más el
+// registro técnico crudo, que es una herramienta de diagnóstico, no un bloque.
+type Tab = 'estado' | 'uso' | 'operacion' | 'historicos' | 'telemetria'
 type ObservatorioNavigate = (destino: string, filtro?: Record<string, any>) => void
 
 type TelemetriaFiltros = {
@@ -224,16 +242,17 @@ type TelemetriaFiltros = {
   category: string
   status: string
   app_version: string
-  device_type: string
 }
 
 interface SummaryData {
   generado_en?: string
   estado_sistema?: 'operativo' | 'atencion' | 'critico'
+  estado_motivo?: string
   sesiones?: any
   eventos?: any
   operaciones?: any
   cobertura_hoy?: any
+  operacion_real?: any
   novedades?: any
   pantallas_mas_usadas_7d?: [string, number][]
   versiones_activas_7d?: Record<string, { total: number; errores: number }>
@@ -296,7 +315,6 @@ function filtrosTelemetriaDefault(): TelemetriaFiltros {
     category: '',
     status: '',
     app_version: '',
-    device_type: '',
   }
 }
 
@@ -547,9 +565,11 @@ function ReportActions({ targetRef, titulo }: { targetRef: React.RefObject<HTMLD
   )
 }
 
-// ── Tab: RESUMEN ──────────────────────────────────────────────────────────────
+// ── Tab: ESTADO DEL SISTEMA ───────────────────────────────────────────────────
+// Salud técnica de la aplicación, nada más. La operación (turnos, fichajes,
+// supervisiones) vive en su propia pestaña, con sus tablas autoritativas.
 
-function TabResumen() {
+function TabEstado() {
   const [data, setData]       = useState<SummaryData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
@@ -565,24 +585,24 @@ function TabResumen() {
   const sem = semaforo(data.estado_sistema)
   const ev  = data.eventos ?? {}
   const op  = data.operaciones ?? {}
-  const cob = data.cobertura_hoy ?? {}
-  const nov = data.novedades ?? {}
   const ses = data.sesiones ?? {}
+  const errores48h = data.errores_recientes?.length ?? 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
 
-      {/* Semáforo */}
+      {/* Semáforo técnico: qué lo mueve está documentado en lib/observacion */}
       <div style={card({ display: 'flex', alignItems: 'center', gap: 20, padding: '16px 24px' })}>
         <div style={{ width: 18, height: 18, borderRadius: '50%', background: sem.color, boxShadow: `0 0 12px ${sem.color}` }} />
         <div>
           <div style={{ fontSize: 18, fontWeight: 900, fontFamily: FONT, color: sem.color }}>{sem.label}</div>
+          <div style={{ fontSize: 12, color: C.sub, fontFamily: FONT }}>{data.estado_motivo ?? ''}</div>
           <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>
-            Generado {haceQuanto(data.generado_en)} · {formatHora24(data.generado_en ?? '')}
+            Sólo salud técnica de la app · Generado {haceQuanto(data.generado_en)} · {formatHora24(data.generado_en ?? '')}
           </div>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-          <div style={{ textAlign: 'center' }}>
+          <div style={{ textAlign: 'center' }} title={DEF_USUARIO_ACTIVO_ESTADO}>
             <div style={{ fontSize: 22, fontWeight: 900, fontFamily: FONT, color: C.text }}>{ses.usuarios_unicos_hoy ?? 0}</div>
             <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT }}>Usuarios hoy</div>
           </div>
@@ -595,34 +615,21 @@ function TabResumen() {
             <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT }}>Errores hoy</div>
           </div>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 22, fontWeight: 900, fontFamily: FONT, color: nov.urgentes_abiertas > 0 ? C.red : C.green }}>{nov.urgentes_abiertas ?? 0}</div>
-            <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT }}>Novedades urgentes</div>
+            <div style={{ fontSize: 22, fontWeight: 900, fontFamily: FONT, color: errores48h > 0 ? C.orange : C.green }}>{errores48h}</div>
+            <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT }}>Errores 48 h</div>
           </div>
         </div>
       </div>
 
       {/* KPIs técnicos */}
       <div>
-        <SeccionTitulo titulo="Telemetría — hoy" />
+        <SeccionTitulo titulo="Salud de la aplicación — hoy y últimos 7 días" />
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <KpiCard label="Acciones registradas" value={ev.total_hoy ?? 0} />
-          <KpiCard label="Tasa de error" value={ev.tasa_error_pct != null ? ev.tasa_error_pct.toFixed(1) + '%' : '—'} color={ev.tasa_error_pct > 10 ? C.red : C.green} />
+          <KpiCard label={ETIQUETA_EVENTOS_USO + ' (hoy)'} value={ev.total_hoy ?? 0} sub={AYUDA_EVENTOS_USO} />
+          <KpiCard label="Tasa de error" value={ev.tasa_error_pct != null ? ev.tasa_error_pct.toFixed(1) + '%' : '—'} color={ev.tasa_error_pct > 10 ? C.red : C.green} sub="Errores de la app sobre eventos del día" />
           <KpiCard label="GPS éxito (7d)" value={op.gps?.tasa_exito_pct != null ? op.gps.tasa_exito_pct + '%' : '—'} color={op.gps?.tasa_exito_pct < 80 ? C.red : op.gps?.tasa_exito_pct < 90 ? C.orange : C.green} sub={`${op.gps?.exitosos_7d ?? 0} / ${op.gps?.solicitados_7d ?? 0} solicitudes`} />
           <KpiCard label="Ingreso éxito (7d)" value={op.ingresos?.tasa_exito_pct != null ? op.ingresos.tasa_exito_pct + '%' : '—'} color={op.ingresos?.tasa_exito_pct < 90 ? C.red : C.green} sub={`Habitual: ${ms(op.ingresos?.p50_ms)} · Alto: ${ms(op.ingresos?.p95_ms)}`} />
           <KpiCard label="Egreso éxito (7d)" value={op.egresos?.tasa_exito_pct != null ? op.egresos.tasa_exito_pct + '%' : '—'} color={op.egresos?.tasa_exito_pct != null && op.egresos.tasa_exito_pct < 90 ? C.red : C.green} sub={`Habitual: ${ms(op.egresos?.p50_ms)} · ${op.egresos?.anulados_7d ?? 0} anulados`} />
-          <KpiCard label="Supervisiones (7d)" value={op.supervisiones?.exitosas_7d ?? 0} sub={`${op.supervisiones?.abandonadas_7d ?? 0} abandonadas`} color={(op.supervisiones?.abandonadas_7d ?? 0) > 2 ? C.orange : C.green} />
-        </div>
-      </div>
-
-      {/* Cobertura operativa hoy */}
-      <div>
-        <SeccionTitulo titulo="Cobertura operativa — hoy" />
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <KpiCard label="Turnos programados" value={cob.turnos_programados ?? 0} />
-          <KpiCard label="Fichajes entrada" value={cob.fichajes_entrada ?? 0} color={C.green} />
-          <KpiCard label="Descubiertos" value={cob.turnos_descubiertos ?? 0} color={cob.turnos_descubiertos > 0 ? C.red : C.green} />
-          <KpiCard label="Tardanzas" value={cob.tardanzas ?? 0} color={cob.tardanzas > 3 ? C.orange : C.sub} />
-          <KpiCard label="Fuera de radio" value={cob.fuera_radio ?? 0} color={cob.fuera_radio > 2 ? C.orange : C.sub} />
         </div>
       </div>
 
@@ -634,7 +641,9 @@ function TabResumen() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {['Hora', 'Actividad', 'Problema', 'Pantalla', 'Dispositivo', 'Versión'].map(h => (
+                  {/* Sin columna Dispositivo: os_events no la tiene; pedirla fue
+                      lo que dejó esta tabla vacía durante semanas. */}
+                  {['Hora', 'Actividad', 'Problema', 'Pantalla', 'Versión'].map(h => (
                     <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT }}>{h}</th>
                   ))}
                 </tr>
@@ -646,7 +655,6 @@ function TabResumen() {
                     <td style={{ padding: '8px 14px', fontSize: 12, color: C.text, fontFamily: FONT }}>{nombreEvento(e.event_name)}</td>
                     <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{textoProblema(e)}</td>
                     <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{nombrePantalla(e.screen)}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{nombreDispositivo(e.device_type)}</td>
                     <td style={{ padding: '8px 14px' }}>{e.app_version ? <span style={badge(C.blue)}>{e.app_version}</span> : '—'}</td>
                   </tr>
                 ))}
@@ -656,81 +664,63 @@ function TabResumen() {
         </div>
       )}
 
-      {/* Pantallas más usadas */}
-      {(data.pantallas_mas_usadas_7d?.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 280 }}>
-            <SeccionTitulo titulo="Pantallas más usadas (7 días)" />
-            <div style={card({ padding: '12px 0' })}>
-              {data.pantallas_mas_usadas_7d!.slice(0, 10).map(([screen, cnt]: [string, number], i: number) => {
-                const max = data.pantallas_mas_usadas_7d![0][1]
-                return (
-                  <div key={screen} style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ fontSize: 11, color: C.muted, width: 20, fontFamily: FONT }}>{i + 1}</div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 12, fontFamily: FONT, color: C.text, marginBottom: 3 }}>{nombrePantalla(screen)}</div>
-                      <div style={{ height: 4, borderRadius: 2, background: C.border, overflow: 'hidden' }}>
-                        <div style={{ width: pct(cnt, max), height: '100%', background: C.yellow, borderRadius: 2 }} />
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: C.text, fontFamily: FONT, minWidth: 40, textAlign: 'right' }}>{cnt}</div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Versiones activas */}
-          {Object.keys(data.versiones_activas_7d ?? {}).length > 0 && (
-            <div style={{ flex: 1, minWidth: 260 }}>
-              <SeccionTitulo titulo="Versiones activas (7 días)" />
-              <div style={card()}>
-                {Object.entries(data.versiones_activas_7d!).sort((a, b) => b[1].total - a[1].total).map(([v, d]) => (
-                  <div key={v} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-                    <span style={badge(C.blue)}>{v}</span>
-                    <div style={{ flex: 1, fontSize: 12, color: C.sub, fontFamily: FONT }}>{d.total} eventos</div>
-                    <div style={{ fontSize: 12, color: d.errores > 0 ? C.red : C.green, fontFamily: FONT }}>{d.errores} errores</div>
-                  </div>
-                ))}
+      {/* Versiones activas */}
+      {Object.keys(data.versiones_activas_7d ?? {}).length > 0 && (
+        <div style={{ maxWidth: 480 }}>
+          <SeccionTitulo titulo="Versiones activas (7 días)" />
+          <div style={card()}>
+            {Object.entries(data.versiones_activas_7d!).sort((a, b) => b[1].total - a[1].total).map(([v, d]) => (
+              <div key={v} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+                <span style={badge(C.blue)}>{v}</span>
+                <div style={{ flex: 1, fontSize: 12, color: C.sub, fontFamily: FONT }}>{d.total} eventos</div>
+                <div style={{ fontSize: 12, color: d.errores > 0 ? C.red : C.green, fontFamily: FONT }}>{d.errores} errores</div>
               </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Correcciones de datos */}
-      {(data.auditorias_recientes?.length ?? 0) > 0 && (
-        <div>
-          <SeccionTitulo titulo="Correcciones de datos recientes" />
-          <div style={{ ...card(), padding: 0, overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {['Fecha', 'Dato corregido', 'Valor anterior', 'Valor nuevo', 'Motivo'].map(h => (
-                    <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.auditorias_recientes!.map((a: any, i: number) => (
-                  <tr key={a.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff05' }}>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(a.created_at)}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.yellow, fontFamily: FONT }}>{campoLegible(a.campo)}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{valorLegible(a.valor_anterior)}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.text, fontFamily: FONT }}>{valorLegible(a.valor_nuevo)}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT }}>{a.motivo}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            ))}
           </div>
         </div>
       )}
+
+      {/* Sesiones y dispositivos: misma familia técnica, embebido acá */}
+      <div>
+        <SeccionTitulo titulo="Sesiones y dispositivos" sub="Quién inició sesión, desde qué equipo y por cuánto tiempo" />
+        <TabSesiones />
+      </div>
+
     </div>
   )
 }
 
-// ── Tab: TELEMETRÍA ───────────────────────────────────────────────────────────
+// Tabla de correcciones administrativas (auditoría de asistencia). Es dato
+// OPERATIVO — la usa la pestaña Operación, no la de salud técnica.
+function TablaCorrecciones({ auditorias }: { auditorias: any[] }) {
+  if (!auditorias.length) return <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{SIN_REGISTROS}</div>
+  return (
+    <div style={{ ...card(), padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+            {['Fecha', 'Dato corregido', 'Valor anterior', 'Valor nuevo', 'Motivo'].map(h => (
+              <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {auditorias.map((a: any, i: number) => (
+            <tr key={a.id} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? 'transparent' : '#ffffff05' }}>
+              <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT, whiteSpace: 'nowrap' }}>{fechaCorta(a.created_at)}</td>
+              <td style={{ padding: '8px 14px', fontSize: 12, color: C.yellow, fontFamily: FONT }}>{campoLegible(a.campo)}</td>
+              <td style={{ padding: '8px 14px', fontSize: 12, color: C.muted, fontFamily: FONT }}>{valorLegible(a.valor_anterior)}</td>
+              <td style={{ padding: '8px 14px', fontSize: 12, color: C.text, fontFamily: FONT }}>{valorLegible(a.valor_nuevo)}</td>
+              <td style={{ padding: '8px 14px', fontSize: 12, color: C.sub, fontFamily: FONT }}>{a.motivo}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Tab: REGISTRO TÉCNICO (eventos crudos) ────────────────────────────────────
 
 function TabTelemetria() {
   const [data, setData]         = useState<EventsData | null>(null)
@@ -749,7 +739,6 @@ function TabTelemetria() {
     if (filtros.category)    params.category     = filtros.category
     if (filtros.status === 'errores') params.only_errors = '1'
     if (filtros.app_version) params.app_version  = filtros.app_version
-    if (filtros.device_type) params.device_type  = filtros.device_type
     fetchObs('events', params).then(setData).catch(e => setError(e.message)).finally(() => setLoading(false))
   }, [page, filtros])
 
@@ -807,14 +796,6 @@ function TabTelemetria() {
               <option value="errores">Solo problemas</option>
             </select>
           </div>
-          <div style={{ flex: 1, minWidth: 100 }}>
-            <label style={labelStyle}>Dispositivo</label>
-            <select style={inputStyle} value={filtros.device_type} onChange={e => setCampo('device_type', e.target.value)}>
-              <option value="">Todos</option>
-              <option value="mobile">Móvil</option>
-              <option value="desktop">Escritorio</option>
-            </select>
-          </div>
           <button onClick={limpiarFiltros} style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 18px', fontWeight: 700, fontFamily: FONT, fontSize: 13, cursor: 'pointer' }}>Restablecer</button>
         </div>
         <div style={{ fontSize: 11, color: C.muted, fontFamily: FONT, marginTop: 10 }}>
@@ -835,7 +816,7 @@ function TabTelemetria() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
                   <thead>
                     <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                      {['Fecha', 'Actividad', 'Área', 'Pantalla', 'Duración', 'Problema', 'Ubicación', 'Conexión', 'Versión', 'Dispositivo'].map(h => (
+                      {['Fecha', 'Actividad', 'Área', 'Pantalla', 'Duración', 'Problema', 'Ubicación', 'Conexión', 'Versión'].map(h => (
                         <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT, whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
@@ -852,7 +833,6 @@ function TabTelemetria() {
                         <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT, whiteSpace: 'nowrap' }}>{e.gps_status || e.gps_lat ? 'Disponible' : 'No informado'}</td>
                         <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{humanizarCodigo(e.network_type, 'No informado')}</td>
                         <td style={{ padding: '7px 12px' }}>{e.app_version ? <span style={badge(C.blue)}>{e.app_version}</span> : '—'}</td>
-                        <td style={{ padding: '7px 12px', fontSize: 11, color: C.muted, fontFamily: FONT }}>{nombreDispositivo(e.device_type)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -894,6 +874,10 @@ function TabUso() {
   const pantallas = data.pantallas_mas_usadas ?? []
   const eventos = data.eventos_mas_frecuentes ?? []
   const actividadUsuarios = data.actividad_por_usuario ?? []
+  const analizados = res.total_eventos_analizados ?? 0
+  const totalVentana = res.total_eventos_en_ventana ?? null
+  const parcial = esAnalisisParcial(analizados, totalVentana)
+  const avisoParcial = textoAnalisisParcial(analizados, totalVentana)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -904,13 +888,33 @@ function TabUso() {
         ))}
       </div>
 
+      {/* El aviso de análisis parcial va PRIMERO: sin él, todo lo de abajo
+          parece representar el período completo cuando es una muestra. */}
+      {avisoParcial && (
+        <div style={{ background: C.orange + '15', border: `1px solid ${C.orange}55`, color: C.orange, borderRadius: 8, padding: '12px 16px', fontSize: 13, fontFamily: FONT, fontWeight: 600 }}>
+          ⚠ {avisoParcial}
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <KpiCard label="Acciones analizadas" value={(res.total_eventos_analizados ?? 0).toLocaleString()} />
-        <KpiCard label="Usuarios activos" value={res.usuarios_activos_periodo ?? 0} />
-        <KpiCard label="Supervisiones" value={res.supervisiones_realizadas ?? 0} color={C.green} />
-        <KpiCard label="Intervenciones" value={res.intervenciones_realizadas ?? 0} color={C.orange} />
-        <KpiCard label="Correcciones admin" value={res.correcciones_admin ?? 0} color={res.correcciones_admin > 20 ? C.orange : C.sub} />
-        <KpiCard label="Posibles abandonos" value={res.posibles_abandonos_ingreso ?? 0} color={res.posibles_abandonos_ingreso > 5 ? C.red : C.green} sub="ingresos sin confirmar" />
+        <KpiCard
+          label={parcial ? 'Eventos de uso analizados (muestra)' : 'Eventos de uso analizados'}
+          value={analizados.toLocaleString()}
+          sub={totalVentana != null ? `de ${Number(totalVentana).toLocaleString()} registrados en el período` : AYUDA_EVENTOS_USO}
+        />
+        <KpiCard label="Usuarios activos" value={res.usuarios_activos_periodo ?? 0} sub={DEF_USUARIO_ACTIVO_USO} />
+      </div>
+
+      {/* Experimental: nunca en rojo-alarma y siempre con su nota. Las señales
+          operativas (supervisiones, intervenciones, correcciones) viven en la
+          pestaña Operación, con sus tablas reales. */}
+      <div style={{ maxWidth: 560 }}>
+        <KpiCard
+          label={ETIQUETA_ABANDONOS}
+          value={res.posibles_abandonos_ingreso ?? 0}
+          color={C.sub}
+          sub={notaAbandonos(parcial)}
+        />
       </div>
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
@@ -957,13 +961,13 @@ function TabUso() {
       </div>
 
       <div>
-        <SeccionTitulo titulo="Actividad por usuario" sub="Ordenado por cantidad de acciones" />
+        <SeccionTitulo titulo="Actividad por usuario" sub={SUB_ACTIVIDAD_USUARIO} />
         {actividadUsuarios.length === 0 ? <EmptyState /> : (
           <div style={{ ...card(), padding: 0, overflow: 'hidden', overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {['Usuario', 'Rol', 'Acciones', 'Problemas', 'Tasa de problema', 'Pantallas usadas'].map(h => (
+                  {['Usuario', 'Rol', 'Eventos', COLUMNA_ERRORES_TECNICOS, 'Pantallas usadas'].map(h => (
                     <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: FONT }}>{h}</th>
                   ))}
                 </tr>
@@ -974,8 +978,9 @@ function TabUso() {
                     <td style={{ padding: '8px 14px', fontSize: 13, color: C.text, fontFamily: FONT }}>{u.usuario ? `${u.usuario.apellido}, ${u.usuario.nombre}` : 'Usuario desconocido'}</td>
                     <td style={{ padding: '8px 14px' }}><span style={badge(C.blue)}>{nombreRol(u.rol)}</span></td>
                     <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 700, color: C.text, fontFamily: FONT }}>{u.total_eventos}</td>
-                    <td style={{ padding: '8px 14px', fontSize: 13, color: u.errores > 0 ? C.red : C.green, fontFamily: FONT }}>{u.errores}</td>
-                    <td style={{ padding: '8px 14px' }}><span style={badge(u.tasa_error_pct > 10 ? C.red : u.tasa_error_pct > 5 ? C.orange : C.green)}>{u.tasa_error_pct}%</span></td>
+                    {/* Color neutro a propósito: son errores del dispositivo o
+                        de red, no una medición de la persona. */}
+                    <td style={{ padding: '8px 14px' }}><span style={badge(C.blue)}>{u.errores} · {u.tasa_error_pct}%</span></td>
                     <td style={{ padding: '8px 14px', fontSize: 13, color: C.sub, fontFamily: FONT }}>{u.pantallas_distintas}</td>
                   </tr>
                 ))}
@@ -985,45 +990,26 @@ function TabUso() {
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        {[
-          { titulo: 'Supervisores más activos', data: data.supervisores_mas_activos, key: 'supervisiones', label: 'supervisiones' },
-          { titulo: 'Guardias con más problemas de ubicación', data: data.guardias_mas_errores_gps, key: 'errores_gps', label: 'problemas' },
-          { titulo: 'Supervisores con más intervenciones', data: data.supervisores_mas_intervenciones, key: 'intervenciones', label: 'intervenciones' },
-        ].map(({ titulo, data: d, key, label }) => (
-          <div key={titulo} style={{ flex: 1, minWidth: 220 }}>
-            <SeccionTitulo titulo={titulo} />
-            <div style={card()}>
-              {(d ?? []).slice(0, 8).map((item: any, i: number) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                  <div style={{ fontSize: 11, color: C.muted, width: 16 }}>{i + 1}</div>
-                  <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>
-                    {item.usuario ? `${item.usuario.apellido ?? ''}, ${item.usuario.nombre ?? ''}` : 'Usuario desconocido'}
-                  </div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: C.yellow, fontFamily: FONT }}>{item[key]} <span style={{ fontWeight: 400, color: C.muted }}>{label}</span></div>
-                </div>
-              ))}
-              {(d?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{SIN_REGISTROS}</div>}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {(data.objetivos_mas_novedades?.length ?? 0) > 0 && (
-        <div>
-          <SeccionTitulo titulo="Objetivos con más novedades" />
-          <div style={card({ padding: '12px 0' })}>
-            {data.objetivos_mas_novedades!.slice(0, 10).map((item: any, i: number) => (
-              <div key={i} style={{ padding: '7px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ fontSize: 11, color: C.muted, width: 16 }}>{i + 1}</div>
-                <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>{item.objetivo?.nombre ?? 'Objetivo desconocido'}</div>
-                <div style={{ fontSize: 12, color: C.sub, fontFamily: FONT }}>{item.objetivo?.cliente ?? ''}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: item.novedades > 5 ? C.red : C.orange, fontFamily: FONT }}>{item.novedades} novedades</div>
+      {/* Los rankings OPERATIVOS (supervisiones, intervenciones) viven en la
+          pestaña Operación, leídos de sus tablas reales. Acá queda sólo la
+          señal técnica de ubicación, nombrada como lo que es: dispositivos,
+          no conducta. "Objetivos con más novedades" se retiró: la tabla
+          novedades no tiene datos desde mayo 2026. */}
+      <div style={{ maxWidth: 480 }}>
+        <SeccionTitulo titulo={TITULO_RANKING_GPS} sub={SUB_RANKING_GPS} />
+        <div style={card()}>
+          {(data.guardias_mas_errores_gps ?? []).slice(0, 8).map((item: any, i: number) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div style={{ fontSize: 11, color: C.muted, width: 16 }}>{i + 1}</div>
+              <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>
+                {item.usuario ? `${item.usuario.apellido ?? ''}, ${item.usuario.nombre ?? ''}` : 'Usuario desconocido'}
               </div>
-            ))}
-          </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: FONT }}>{item.errores_gps} <span style={{ fontWeight: 400, color: C.muted }}>incidencias</span></div>
+            </div>
+          ))}
+          {((data.guardias_mas_errores_gps?.length ?? 0) === 0) && <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{SIN_REGISTROS}</div>}
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -1242,18 +1228,174 @@ function TabCalidad({ onNavigate }: { onNavigate?: ObservatorioNavigate }) {
     </div>
   )
 }
+// ── Tab: OPERACIÓN ────────────────────────────────────────────────────────────
+// Regla de la auditoría: acá la fuente es SIEMPRE la tabla operativa
+// autoritativa (turnos, registros_asistencia, supervisiones,
+// supervisor_intervenciones, ronda_alertas, registros_asistencia_auditoria).
+// La telemetría no participa: si el teléfono no reportó, la operación igual
+// queda registrada en su tabla.
+
+function TabOperacion({ onNavigate }: { onNavigate?: ObservatorioNavigate }) {
+  const [summary, setSummary] = useState<SummaryData | null>(null)
+  const [usage, setUsage]     = useState<UsageData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState<string | null>(null)
+
+  useEffect(() => {
+    Promise.all([fetchObs('summary'), fetchObs('usage', { days: '30' })])
+      .then(([s, u]) => { setSummary(s); setUsage(u) })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <Spinner />
+  if (error)   return <Error mensaje={error} />
+  if (!summary) return <EmptyState />
+
+  const cob = summary.cobertura_hoy ?? {}
+  const opReal = summary.operacion_real ?? {}
+  const res = usage?.resumen ?? {}
+
+  const rankings = [
+    { titulo: 'Supervisores más activos (30 días)', data: usage?.supervisores_mas_activos, key: 'supervisiones', label: 'supervisiones' },
+    { titulo: 'Supervisores con más intervenciones (30 días)', data: usage?.supervisores_mas_intervenciones, key: 'intervenciones', label: 'intervenciones' },
+  ]
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>
+        Todos los números de esta pestaña salen de las tablas operativas reales, nunca de la telemetría del teléfono.
+        Las alertas pendientes y su atención se gestionan desde el Panel Principal y Revisión Operativa.
+      </div>
+
+      <div>
+        <SeccionTitulo titulo="Cobertura — hoy" sub="Turnos y fichajes del día, de las tablas de turnos y asistencia" />
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <KpiCard label="Turnos programados" value={cob.turnos_programados ?? 0} />
+          <KpiCard label="Fichajes entrada" value={cob.fichajes_entrada ?? 0} color={C.green} />
+          <KpiCard label="Descubiertos" value={cob.turnos_descubiertos ?? 0} color={cob.turnos_descubiertos > 0 ? C.red : C.green} sub="Problema operativo, no técnico" />
+          <KpiCard label="Tardanzas" value={cob.tardanzas ?? 0} color={C.sub} sub="Crudas; su atención se ve en el Panel Principal" />
+          <KpiCard label="Fuera de radio" value={cob.fuera_radio ?? 0} color={C.sub} sub="Señal GPS cruda; requiere revisión del supervisor" />
+        </div>
+      </div>
+
+      <div>
+        <SeccionTitulo titulo="Supervisión y rondas" sub="Tablas: supervisiones · supervisor_intervenciones · ronda_alertas" />
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <KpiCard label="Supervisiones hoy" value={opReal.supervisiones_hoy ?? 0} color={C.green} />
+          <KpiCard label="Supervisiones (7d)" value={opReal.supervisiones_7d ?? 0} />
+          <KpiCard label="Intervenciones (7d)" value={opReal.intervenciones_7d ?? 0} />
+          <KpiCard label="Alertas de ronda pendientes" value={opReal.rondas_alertas_pendientes ?? 0} color={opReal.rondas_alertas_pendientes > 0 ? C.orange : C.green} sub="Sin contar las saneadas administrativamente" />
+          <KpiCard label="Correcciones admin (30d)" value={res.correcciones_admin ?? 0} color={C.sub} />
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {rankings.map(({ titulo, data: d, key, label }) => (
+          <div key={titulo} style={{ flex: 1, minWidth: 240 }}>
+            <SeccionTitulo titulo={titulo} />
+            <div style={card()}>
+              {(d ?? []).slice(0, 8).map((item: any, i: number) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: C.muted, width: 16 }}>{i + 1}</div>
+                  <div style={{ flex: 1, fontSize: 12, color: C.text, fontFamily: FONT }}>
+                    {item.usuario ? `${item.usuario.apellido ?? ''}, ${item.usuario.nombre ?? ''}` : 'Usuario desconocido'}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.yellow, fontFamily: FONT }}>{item[key]} <span style={{ fontWeight: 400, color: C.muted }}>{label}</span></div>
+                </div>
+              ))}
+              {(d?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: C.muted, fontFamily: FONT }}>{SIN_REGISTROS}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <SeccionTitulo titulo="Correcciones de datos recientes" sub="Auditoría de asistencia: qué se corrigió, valores y motivo" />
+        <TablaCorrecciones auditorias={summary.auditorias_recientes ?? []} />
+      </div>
+
+      <div>
+        <SeccionTitulo titulo="Calidad de datos" sub="Controles sobre las tablas operativas, con acceso directo a corregir" />
+        <TabCalidad onNavigate={onNavigate} />
+      </div>
+    </div>
+  )
+}
+
+// ── Tab: INDICADORES HISTÓRICOS ───────────────────────────────────────────────
+// Espacio preparado a propósito SIN puntajes: decisión del 15/08/2026
+// (docs/auditoria-metricas-telemetria.md). Primero se acumulan indicadores
+// objetivos; un "Empleado 82/100" queda para una etapa posterior, y nunca se
+// construirá sobre señales crudas sin revisión humana.
+
+function TabHistoricos() {
+  const bloque = (titulo: string, items: Array<{ nombre: string; nota?: string }>) => (
+    <div style={{ flex: 1, minWidth: 300 }}>
+      <SeccionTitulo titulo={titulo} />
+      <div style={card()}>
+        {items.map(item => (
+          <div key={item.nombre} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderBottom: `1px solid ${C.border}44` }}>
+            <span style={{ fontSize: 13, color: C.text, fontFamily: FONT }}>{item.nombre}</span>
+            <span style={{ fontSize: 11, color: C.muted, fontFamily: FONT, textAlign: 'right' }}>{item.nota ?? 'Disponible'}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <div style={card({ borderLeft: `4px solid ${C.yellow}` })}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: C.text, fontFamily: FONT, marginBottom: 6 }}>
+          En preparación — sin puntajes por decisión de gestión
+        </div>
+        <div style={{ fontSize: 13, color: C.sub, fontFamily: FONT, lineHeight: 1.6 }}>
+          Este bloque va a mostrar la evolución histórica por empleado y por objetivo usando únicamente
+          datos confiables ya registrados. Deliberadamente no existe todavía un puntaje único
+          (&quot;Empleado 82/100&quot;): primero se acumulan indicadores objetivos, y toda señal con revisión
+          humana se separa en <strong>detectada / confirmada / descartada / justificada</strong>. Un error del
+          teléfono, un GPS aislado o una alerta sin revisar nunca van a convertirse solos en desempeño
+          negativo. Referencia: docs/auditoria-metricas-telemetria.md.
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {bloque('Por empleado — con datos desde ya', [
+          { nombre: 'Turnos programados y trabajados', nota: 'desde 03/2026' },
+          { nombre: 'Horas reconocidas', nota: 'desde 06/2026' },
+          { nombre: 'Puntualidad y tardanzas (con su revisión)', nota: 'desde 06/2026' },
+          { nombre: 'Fichajes propios vs confirmados vs corregidos', nota: 'desde 06/2026' },
+          { nombre: 'Intervenciones de supervisor recibidas', nota: 'desde 06/2026' },
+          { nombre: 'Planillas aceptadas', nota: 'desde 08/2026' },
+          { nombre: 'Rondas cumplidas', nota: 'historia corta (07/2026) — sin peso todavía' },
+          { nombre: 'Evidencias IA confirmadas por revisión humana', nota: 'historia corta (08/2026) — sin peso todavía' },
+        ])}
+        {bloque('Por objetivo — con datos desde ya', [
+          { nombre: 'Horas programadas / reconocidas / diferencia', nota: 'desde 03–06/2026' },
+          { nombre: 'Descubiertos y su atención', nota: 'desde 06/2026' },
+          { nombre: 'Reemplazos y coberturas', nota: 'desde 03/2026' },
+          { nombre: 'Supervisiones y observaciones', nota: 'desde 06/2026' },
+          { nombre: 'Carga operativa (exclusiva/compartida)', nota: 'en pantalla Supervisiones' },
+          { nombre: 'Rondas programadas vs cumplidas', nota: 'historia corta (08/2026) — sin peso todavía' },
+        ])}
+      </div>
+    </div>
+  )
+}
+
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function ObservacionSistema({ onNavigate }: { onNavigate?: ObservatorioNavigate }) {
-  const [tab, setTab] = useState<Tab>('resumen')
+  const [tab, setTab] = useState<Tab>('estado')
   const informeRef = useRef<HTMLDivElement>(null)
 
   const tabs: { id: Tab; label: string; icono: string }[] = [
-    { id: 'resumen',    label: 'Resumen',         icono: '📊' },
-    { id: 'telemetria', label: 'Telemetría',       icono: '🔭' },
-    { id: 'uso',        label: 'Uso del sistema',  icono: '📈' },
-    { id: 'sesiones',   label: 'Sesiones',         icono: '💻' },
-    { id: 'calidad',    label: 'Calidad de datos', icono: '✓' },
+    { id: 'estado',     label: 'Estado del sistema',     icono: '🩺' },
+    { id: 'uso',        label: 'Uso de la app',          icono: '📈' },
+    { id: 'operacion',  label: 'Operación',              icono: '🛡️' },
+    { id: 'historicos', label: 'Indicadores históricos', icono: '📚' },
+    { id: 'telemetria', label: 'Registro técnico',       icono: '🔭' },
   ]
   const tabActiva = tabs.find(t => t.id === tab)
 
@@ -1264,7 +1406,7 @@ export default function ObservacionSistema({ onNavigate }: { onNavigate?: Observ
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 900, color: C.text, fontFamily: FONT, margin: 0 }}>Observación del Sistema</h1>
           <p style={{ fontSize: 13, color: C.muted, margin: '6px 0 0', fontFamily: FONT }}>
-            Estado del sistema · Uso operativo · Calidad de datos · Trazabilidad
+            ¿Funciona bien la app? · ¿Cuánto se usa? · ¿Qué pasa en la operación? · ¿Qué datos aún no son confiables?
           </p>
         </div>
         <ReportActions targetRef={informeRef} titulo={`Observatorio - ${tabActiva?.label ?? 'Informe'}`} />
@@ -1300,11 +1442,11 @@ export default function ObservacionSistema({ onNavigate }: { onNavigate?: Observ
       {/* Contenido */}
       <style>{`@media print { body * { visibility: hidden !important; } [data-observatorio-print], [data-observatorio-print] * { visibility: visible !important; } [data-observatorio-print] { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; background: white !important; color: black !important; } }`}</style>
       <div ref={informeRef} data-observatorio-print="true">
-        {tab === 'resumen'    && <TabResumen />}
-        {tab === 'telemetria' && <TabTelemetria />}
+        {tab === 'estado'     && <TabEstado />}
         {tab === 'uso'        && <TabUso />}
-        {tab === 'sesiones'   && <TabSesiones />}
-        {tab === 'calidad'    && <TabCalidad onNavigate={onNavigate} />}
+        {tab === 'operacion'  && <TabOperacion onNavigate={onNavigate} />}
+        {tab === 'historicos' && <TabHistoricos />}
+        {tab === 'telemetria' && <TabTelemetria />}
       </div>
     </div>
   )

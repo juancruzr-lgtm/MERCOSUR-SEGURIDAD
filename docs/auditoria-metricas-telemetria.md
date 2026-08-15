@@ -230,6 +230,61 @@ Bloques, todos con datos que HOY existen:
    cruda: sólo confirmado por revisión humana; diferenciar confirmado /
    descartado / justificado).
 
+## Implementación posterior a la auditoría (15/08/2026, mismo día)
+
+La reorganización de la pantalla se implementó sobre esta auditoría. Qué
+cambió y qué significa cada cosa visible:
+
+### Corregido
+- **`summary`**: el select de errores recientes ya no pide `device_type`/
+  `os_name` a `os_events` → "Errores recientes (48 h)" **por fin trae datos**.
+  El detalle de dispositivo del error se retiró de la tabla (si algún día se
+  necesita, se resuelve por `session_id` → `os_sessions`).
+- **`events`** (hallado al implementar, mismo patrón): el select también los
+  pedía → **la pestaña de eventos crudos respondía 500 en TODAS sus cargas
+  desde que existía**. Corregido; se retiró además el filtro por dispositivo
+  (imposible sin FK a os_sessions) y su selector en la UI.
+- **Semáforo**: recalculado SOLO con señales técnicas vivas — tasa de error
+  del día (con mínimo de 20 eventos para que la tasa sea señal) y errores de
+  aplicación en 48 h. Umbrales documentados en `lib/observacion.ts`
+  (`semaforoTecnico`): amarillo ≥10 errores 48h o tasa >10%; rojo ≥30 o >20%.
+  Novedades (tabla muerta) y descubiertos (operación) ya no participan; la
+  pantalla muestra el MOTIVO del color.
+
+### Reorganización (pestañas)
+`Estado del sistema` (salud técnica + sesiones/dispositivos) ·
+`Uso de la app` (usage + aviso de análisis parcial SIEMPRE visible cuando
+aplica) · `Operación` (tablas operativas + calidad de datos + correcciones) ·
+`Indicadores históricos` (espacio preparado, sin puntajes) ·
+`Registro técnico` (browser de eventos crudos, herramienta de diagnóstico).
+
+### Tarjetas renombradas / retiradas / con fuente nueva
+| Antes | Ahora | Nota |
+|---|---|---|
+| "Acciones registradas" | "Eventos de uso registrados" + ayuda | un scroll no es una "acción" |
+| "Acciones analizadas" | "Eventos de uso analizados (muestra)" + "de N registrados" | explicita el tope |
+| "Posibles abandonos" (verde/rojo) | "Posibles abandonos de ingreso (experimental)" neutro + nota | "No confiable" con análisis parcial; `usage` expone `posibles_abandonos_confiable` |
+| "Guardias con más problemas de ubicación" | "Dispositivos con más incidencias de ubicación" + "no mide desempeño" | teléfono ≠ empleado |
+| "Tasa de problema" por usuario (rojo) | "Errores técnicos" en color neutro | ídem |
+| "Novedades urgentes" (header) | retirada | tabla sin datos desde 05/2026 |
+| "Objetivos con más novedades" | retirada | ídem |
+| "Supervisiones (7d)" en Resumen (telemetría) | "Supervisiones hoy/7d" en Operación desde la TABLA `supervisiones` | fuente autoritativa; `summary` ahora devuelve `operacion_real` |
+| Cobertura hoy (en Resumen) | movida a Operación con aclaraciones | crudas vs atendidas se gestiona en Panel Principal |
+| Correcciones de datos (en Resumen) | movida a Operación | es operación |
+
+### Tests que fijan estas decisiones (`tests/observacion.test.ts`)
+Guardas de fuente que leen las rutas y fallan si un select de `os_events`
+vuelve a pedir `device_type`/`os_name`; texto exacto del aviso parcial;
+umbrales del semáforo; firma del semáforo sin novedades/descubiertos;
+etiquetas que no insinúan conducta; nota de abandonos.
+
+### Pendiente (sin cambios respecto de §10)
+La lista de Etapa 2 sigue igual salvo el punto 1 (bug de summary: hecho, más
+el gemelo de events). Siguen pendientes: instrumentar `objetivo_id`, abandonos
+server-side, decidir el destino de `novedades`, unificar la definición de
+usuario activo entre summary y usage a nivel de DATO (la UI ya explicita cada
+definición), umbral de rotación de personal, y acumular historia de rondas/IA.
+
 ## Decisiones tomadas (no reabrir sin motivo)
 
 - Sin puntaje único por ahora (15/08/2026).

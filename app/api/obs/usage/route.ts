@@ -216,6 +216,10 @@ export async function GET(req: NextRequest) {
       correcciones_admin: auditorias.length,
       novedades_generadas: novedades.length,
       posibles_abandonos_ingreso: posiblesAbandonos,
+      // Con análisis parcial este número NO es confiable: el inicio del
+      // fichaje puede entrar en la muestra y su confirmación quedar afuera,
+      // contando como abandono algo que se completó. La UI debe marcarlo.
+      posibles_abandonos_confiable: !eventosTruncados,
     },
     pantallas_mas_usadas: pantallasRanking,
     eventos_mas_frecuentes: eventosRanking,
