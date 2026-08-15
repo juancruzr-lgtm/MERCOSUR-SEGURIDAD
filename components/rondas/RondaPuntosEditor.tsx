@@ -13,7 +13,7 @@ import {
   RONDA_PUNTO_DISTANCIA_MINIMA,
   MENSAJE_RONDA_PUNTO_DUPLICADO,
 } from '@/lib/rondas'
-import { POLITICAS_FOTO, etiquetaPoliticaFoto, ayudaPoliticaFoto } from '@/lib/rondas'
+import { POLITICAS_FOTO, etiquetaPoliticaFoto, ayudaPoliticaFoto, parsearCoordenadasPegadas } from '@/lib/rondas'
 import {
   diagnosticarGpsPunto,
   aplicarSugerenciaGps,
@@ -341,6 +341,31 @@ export default function RondaPuntosEditor({
       return siguiente
     })
     setGpsEstado('')
+  }
+
+  // Pegar "lat, lng" de una sola vez. Escribe en los MISMOS campos que la carga
+  // manual y deja el mismo origen_posicion: no es otro circuito, es otra forma
+  // de llenar el que ya existe. Sirve para cargar puntos desde la oficina, sin
+  // ir hasta el portón — que es lo que hace falta cuando una ronda quedó sin
+  // ningún punto cargado.
+  const pegarCoordenadas = (texto: string) => {
+    const coords = parsearCoordenadasPegadas(texto)
+    if (!coords) {
+      setError('No pude leer las coordenadas. Pegá latitud y longitud separadas por coma, por ejemplo: -32.9468, -60.6393')
+      return
+    }
+    limpiarWatch()
+    setCapturandoGps(false)
+    setForm(actual => ({
+      ...actual,
+      latitud: coords.lat.toFixed(7),
+      longitud: coords.lng.toFixed(7),
+      precision_metros: '',
+      origen_posicion: 'manual',
+      posicion_capturada_at: new Date().toISOString(),
+    }))
+    setGpsEstado('')
+    setError('')
   }
 
   // Aplica la mejor lectura al formulario y avisa si el iPhone repitió una
@@ -715,6 +740,33 @@ export default function RondaPuntosEditor({
                       La nueva posición se guardará al presionar Guardar punto.
                     </div>
                   )}
+                </div>
+                {/* Pegar el par de una vez, tal como sale de Google Maps.
+                    Llena los mismos campos de abajo; no guarda por su cuenta. */}
+                <div className={`${styles.field} ${styles.full}`}>
+                  <label htmlFor="ronda-punto-pegar">Pegar coordenadas</label>
+                  <input
+                    id="ronda-punto-pegar"
+                    placeholder="-32.9468, -60.6393"
+                    onPaste={evento => {
+                      const texto = evento.clipboardData.getData('text')
+                      if (parsearCoordenadasPegadas(texto)) {
+                        evento.preventDefault()
+                        pegarCoordenadas(texto)
+                        ;(evento.target as HTMLInputElement).value = ''
+                      }
+                    }}
+                    onKeyDown={evento => {
+                      if (evento.key !== 'Enter') return
+                      evento.preventDefault()
+                      pegarCoordenadas((evento.target as HTMLInputElement).value)
+                      ;(evento.target as HTMLInputElement).value = ''
+                    }}
+                  />
+                  <div className={styles.help}>
+                    Pegá latitud y longitud separadas por coma y se completan los dos campos.
+                    O usá el botón de GPS para tomar la ubicación del dispositivo.
+                  </div>
                 </div>
                 <div className={styles.field}>
                   <label htmlFor="ronda-punto-latitud">Latitud</label>
