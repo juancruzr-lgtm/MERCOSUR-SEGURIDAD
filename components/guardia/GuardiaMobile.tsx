@@ -728,6 +728,11 @@ export default function GuardiaMobile({ user }: { user: any }) {
   // días. No calcula nada nuevo: es el mismo `pendientes_revision` que ya
   // devuelve la API del legajo.
   const [pendientesPlanilla, setPendientesPlanilla] = useState(0)
+  // Cuántos de esos se pueden ACEPTAR. Un turno pasado sin fichaje espera
+  // respuesta pero no admite aceptación: sólo se puede pedir un cambio. El
+  // cartel contaba todo junto, así que podía anunciar 8 turnos y llevar a una
+  // pantalla sin un solo botón "Aceptar" —que fue exactamente lo que pasó—.
+  const [aceptablesPlanilla, setAceptablesPlanilla] = useState(0)
 
   const cargarPendientesPlanilla = useCallback(async () => {
     try {
@@ -740,6 +745,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
       if (!res.ok) return
       const json = await res.json()
       setPendientesPlanilla(Number(json?.pendientes_revision) || 0)
+      setAceptablesPlanilla(Number(json?.pendientes_aceptacion) || 0)
     } catch {
       // Un contador que no carga no puede romper la pantalla de fichaje:
       // se queda con el valor anterior y no muestra ningún error.
@@ -1854,7 +1860,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
         {pendientesPlanilla > 0 && (
           <button
             type="button"
-            onClick={() => router.push(`/guardias/${user.id}`)}
+            onClick={() => router.push(`/guardias/${user.id}?seccion=planilla`)}
             style={{
               ...S.btn,
               background: 'rgba(245,158,11,.12)',
@@ -1866,7 +1872,11 @@ export default function GuardiaMobile({ user }: { user: any }) {
             }}
           >
             Tenés {pendientesPlanilla} turno{pendientesPlanilla === 1 ? '' : 's'} sin revisar en tu planilla
-            <div style={{ fontSize: 12, color: '#d97706', marginTop: 2 }}>Tocá para revisarlos</div>
+            <div style={{ fontSize: 12, color: '#d97706', marginTop: 2 }}>
+              {aceptablesPlanilla > 0
+                ? `${aceptablesPlanilla} para aceptar · tocá para revisarlos`
+                : 'Ninguno tiene fichaje: solo podés pedir un cambio'}
+            </div>
           </button>
         )}
 

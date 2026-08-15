@@ -40,6 +40,7 @@ interface DatosPlanilla {
   hasta: string
   es_titular?: boolean
   pendientes_revision?: number
+  pendientes_aceptacion?: number
 }
 
 interface OpcionMes {
@@ -71,6 +72,12 @@ function labelMes(mes: string): string {
 function formatearFecha(iso: string): string {
   const [y, m, d] = iso.split('-')
   return `${d}/${m}/${y}`
+}
+
+/** "14/08" — sin el año, que es el del mes que se está mirando. */
+function formatearFechaCorta(iso: string): string {
+  const [, m, d] = iso.split('-')
+  return `${d}/${m}`
 }
 
 function formatearHoras(h: number): string {
@@ -110,33 +117,45 @@ const S = {
     border: '1px solid #1e2d42',
     marginBottom: 16,
   } as React.CSSProperties,
+  // El vigilador lee esto en el celular. Las cinco primeras columnas —fecha,
+  // objetivo, horario, horas y las acciones— suman ~358 px y entran enteras en
+  // la pantalla más chica de uso real; el resto (puesto, tipo, detalle) queda a
+  // la derecha para quien quiera arrastrar. Antes el mínimo era 520 px con la
+  // columna de los botones novena y última: en un teléfono había que scrollear
+  // hasta el extremo derecho para encontrar "Aceptar".
+  // `fixed` es lo que hace que los anchos del colgroup se respeten: con el
+  // algoritmo automático son sugerencias y el contenido más largo de cada
+  // columna termina mandando. Con `width: 100%` + `minWidth`, en el teléfono
+  // cada columna queda en su ancho declarado y en pantalla grande el sobrante
+  // se reparte proporcionalmente.
   table: {
     width: '100%',
+    tableLayout: 'fixed' as const,
     borderCollapse: 'collapse' as const,
-    fontSize: 13,
-    minWidth: 520,
+    fontSize: 12,
+    minWidth: 664,
   } as React.CSSProperties,
   th: {
     background: '#111827',
     color: '#64748b',
     fontWeight: 600,
-    fontSize: 11,
+    fontSize: 10,
     textTransform: 'uppercase' as const,
-    letterSpacing: '0.05em',
-    padding: '10px 14px',
+    letterSpacing: '0.04em',
+    padding: '9px 6px',
     textAlign: 'left' as const,
     borderBottom: '1px solid #1e2d42',
     whiteSpace: 'nowrap' as const,
   } as React.CSSProperties,
   td: (ultimo: boolean): React.CSSProperties => ({
-    padding: '10px 14px',
+    padding: '8px 6px',
     borderBottom: ultimo ? 'none' : '1px solid #0f1929',
     color: '#e2e8f0',
     whiteSpace: 'nowrap' as const,
     verticalAlign: 'middle',
   }),
   tdHoras: (ultimo: boolean): React.CSSProperties => ({
-    padding: '10px 14px',
+    padding: '8px 6px',
     borderBottom: ultimo ? 'none' : '1px solid #0f1929',
     color: '#f59e0b',
     fontWeight: 700,
@@ -144,13 +163,28 @@ const S = {
     whiteSpace: 'nowrap' as const,
   }),
   tdObjetivo: (ultimo: boolean): React.CSSProperties => ({
-    padding: '10px 14px',
+    padding: '8px 6px',
     borderBottom: ultimo ? 'none' : '1px solid #0f1929',
-    color: '#94a3b8',
-    maxWidth: 200,
+    color: '#cbd5e1',
     overflow: 'hidden' as const,
     textOverflow: 'ellipsis' as const,
     whiteSpace: 'nowrap' as const,
+  }),
+  /** Botón de acción del vigilador: ocupa el ancho de su columna y puede
+   *  envolver en dos renglones, que es lo que permite achicar la columna. */
+  btnAccion: (activo: boolean): React.CSSProperties => ({
+    display: 'block',
+    width: '100%',
+    padding: '5px 4px',
+    borderRadius: 6,
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: 'pointer',
+    whiteSpace: 'normal' as const,
+    lineHeight: 1.2,
+    border: activo ? '1px solid #16653488' : '1px solid #92400e88',
+    background: activo ? '#14532d' : '#78350f',
+    color: activo ? '#4ade80' : '#fbbf24',
   }),
   trPar: {
     background: '#0d1526',
@@ -468,17 +502,30 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
         <>
           <div style={S.tableWrap}>
             <table style={S.table}>
+              {/* El ancho de cada columna se fija acá: es lo que garantiza que
+                  las cinco primeras entren juntas en el ancho del teléfono. */}
+              <colgroup>
+                {/* Las cinco primeras suman 338 px: entran juntas en el ancho
+                    útil de un teléfono. Las tres últimas quedan a la derecha. */}
+                <col style={{ width: 44 }} />
+                <col style={{ width: 92 }} />
+                <col style={{ width: 72 }} />
+                <col style={{ width: 30 }} />
+                <col style={{ width: 100 }} />
+                <col style={{ width: 110 }} />
+                <col style={{ width: 88 }} />
+                <col style={{ width: 128 }} />
+              </colgroup>
               <thead>
                 <tr>
                   <th style={S.th}>Fecha</th>
-                  <th style={S.th}>Día</th>
-                  <th style={S.th}>Entrada</th>
-                  <th style={S.th}>Salida</th>
-                  <th style={S.th}>Horas</th>
                   <th style={S.th}>Objetivo</th>
+                  <th style={S.th}>Horario</th>
+                  <th style={S.th}>Hs</th>
+                  <th style={S.th}>Revisión</th>
                   <th style={S.th}>Puesto</th>
                   <th style={S.th}>Tipo</th>
-                  <th style={S.th}>Revisión</th>
+                  <th style={S.th}>Detalle</th>
                 </tr>
               </thead>
               <tbody>
@@ -496,39 +543,39 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                   const acciones = accionesPrimerControl(fila, Boolean(datos.es_titular))
                   return (
                     <tr key={`${fila.fecha}-${fila.hora_entrada ?? 'sp'}-${fila.turno_id ?? i}`} style={estilo}>
-                      <td style={S.td(ultimo)}>{formatearFecha(fila.fecha)}</td>
-                      <td style={{ ...S.td(ultimo), color: '#64748b' }}>{fila.dia_semana}</td>
+                      {/* Fecha corta + día abreviado, apilados: dos datos en el
+                          ancho de uno. El año es el del mes elegido. */}
                       <td style={S.td(ultimo)}>
-                        {esSinProg
-                          ? <span style={{ color: '#475569', fontSize: 11, fontStyle: 'italic' }}>SIN PROGRAMACIÓN</span>
-                          : esProgramado
-                            ? <span style={{ color: '#64748b', fontSize: 11 }}>{fila.hora_entrada ?? '—'}</span>
-                            : fila.hora_entrada ?? '—'}
+                        <div>{formatearFechaCorta(fila.fecha)}</div>
+                        <div style={{ color: '#64748b', fontSize: 10 }}>{fila.dia_semana}</div>
                       </td>
-                      <td style={S.td(ultimo)}>
-                        {esSinProg ? '—'
+                      <td style={S.tdObjetivo(ultimo)} title={fila.objetivo_nombre ?? undefined}>
+                        {esSinProg
+                          ? <span style={{ color: '#475569', fontSize: 10, fontStyle: 'italic' }}>Sin programación</span>
                           : esProgramado
-                            ? <span style={{ color: '#64748b', fontSize: 11 }}>{fila.hora_salida ?? '—'}</span>
-                            : fila.estado === 'en_curso'
-                              ? <span style={{ color: '#f59e0b', fontSize: 11 }}>En curso</span>
-                              : (
-                                <>
-                                  {fila.hora_salida ?? '—'}
-                                  {conSalidaAuto && (
-                                    <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#f59e0b', border: '1px solid #f59e0b55', borderRadius: 4, padding: '1px 4px', textTransform: 'uppercase' as const }} title={ETIQUETA_SALIDA_AUTOMATICA}>auto</span>
-                                  )}
-                                </>
-                              )}
+                            ? <span style={{ fontStyle: 'italic', color: '#94a3b8' }}>{fila.objetivo_nombre ?? '—'}</span>
+                            : (fila.objetivo_nombre ?? '—')}
+                      </td>
+                      {/* Entrada y salida en una sola celda: es como se lee un
+                          turno, y libera una columna entera. */}
+                      <td style={S.td(ultimo)}>
+                        {esSinProg ? '—' : fila.estado === 'en_curso' ? (
+                          <>
+                            <div>{fila.hora_entrada ?? '—'}</div>
+                            <div style={{ color: '#f59e0b', fontSize: 10 }}>En curso</div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={esProgramado ? { color: '#64748b' } : undefined}>
+                              {`${fila.hora_entrada ?? '—'}–${fila.hora_salida ?? '—'}`}
+                            </div>
+                            {conSalidaAuto && (
+                              <div style={{ fontSize: 9, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase' as const }} title={ETIQUETA_SALIDA_AUTOMATICA}>salida auto</div>
+                            )}
+                          </>
+                        )}
                       </td>
                       <td style={S.tdHoras(ultimo)}>{esSinProg || esProgramado ? '—' : formatearHoras(fila.horas)}</td>
-                      <td style={S.tdObjetivo(ultimo)}>{esProgramado ? <span style={{ fontStyle: 'italic' }}>{fila.objetivo_nombre ?? '—'}</span> : (fila.objetivo_nombre ?? '—')}</td>
-                      <td style={{ ...S.td(ultimo), color: '#94a3b8', fontSize: 12 }}>{fila.puesto_nombre ?? '—'}</td>
-                      <td style={S.td(ultimo)}>
-                        {esSinProg || !fila.caracteristica ? '—'
-                          : fila.caracteristica === 'normal'
-                            ? <span style={{ color: '#64748b', fontSize: 11 }}>{etiquetaCaracteristica(fila.caracteristica)}</span>
-                            : <span style={{ color: fila.caracteristica === 'capacitacion' ? '#a78bfa' : '#38bdf8', fontSize: 11, fontWeight: 600 }}>{etiquetaCaracteristica(fila.caracteristica)}</span>}
-                      </td>
                       <td style={S.td(ultimo)}>
                         {fila.estado_control == null ? '—'
                           : fila.estado_control === 'aceptado'
@@ -537,10 +584,18 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                               ? <span style={{ color: '#f59e0b', fontSize: 11, fontWeight: 600 }}>{ETIQUETA_PRIMER_CONTROL.modificacion_solicitada}</span>
                               : (acciones.aceptar || acciones.solicitar)
                                 ? (
-                                  <span style={{ display: 'inline-flex', gap: 6 }}>
+                                  <span style={{ display: 'grid', gap: 4 }}>
+                                    {/* Sin esto la fila mostraba el botón naranja
+                                        y nada más: el vigilador veía que no podía
+                                        aceptar pero no por qué. */}
+                                    {!acciones.aceptar && (
+                                      <span style={{ color: '#64748b', fontSize: 10, lineHeight: 1.25 }}>
+                                        Sin fichaje: no hay asistencia que aceptar
+                                      </span>
+                                    )}
                                     {acciones.aceptar && (
                                       <button
-                                        style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #16653488', background: '#14532d', color: '#4ade80', fontSize: 11, fontWeight: 600, cursor: 'pointer', opacity: accionando === fila.turno_id ? 0.5 : 1 }}
+                                        style={{ ...S.btnAccion(true), opacity: accionando === fila.turno_id ? 0.5 : 1 }}
                                         disabled={accionando !== null}
                                         onClick={() => aceptarTurno(fila)}
                                       >
@@ -549,16 +604,29 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
                                     )}
                                     {acciones.solicitar && (
                                       <button
-                                        style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #92400e88', background: '#78350f', color: '#fbbf24', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                                        style={S.btnAccion(false)}
                                         disabled={accionando !== null}
                                         onClick={() => { setFilaSolicitud(fila); setTextoSolicitud(''); setErrorAccion(null) }}
+                                        title="Solicitar modificación"
                                       >
-                                        Solicitar modificación
+                                        Solicitar cambio
                                       </button>
                                     )}
                                   </span>
                                 )
                                 : <span style={{ color: '#64748b', fontSize: 11 }}>{ETIQUETA_PRIMER_CONTROL.pendiente}</span>}
+                      </td>
+                      {/* De acá a la derecha va lo que no hace falta para
+                          aceptar un turno: el vigilador lo alcanza arrastrando,
+                          y en pantalla grande se ve todo junto igual. */}
+                      <td style={{ ...S.tdObjetivo(ultimo), color: '#94a3b8' }} title={fila.puesto_nombre ?? undefined}>{fila.puesto_nombre ?? '—'}</td>
+                      <td style={S.td(ultimo)}>
+                        {esSinProg || !fila.caracteristica ? '—'
+                          : fila.caracteristica === 'normal'
+                            ? <span style={{ color: '#64748b', fontSize: 11 }}>{etiquetaCaracteristica(fila.caracteristica)}</span>
+                            : <span style={{ color: fila.caracteristica === 'capacitacion' ? '#a78bfa' : '#38bdf8', fontSize: 11, fontWeight: 600 }}>{etiquetaCaracteristica(fila.caracteristica)}</span>}
+                      </td>
+                      <td style={S.td(ultimo)}>
                         {fila.estado_control != null && (
                           <>
                             <button
@@ -622,11 +690,24 @@ export default function SeccionPlanilla({ empleadoId }: { empleadoId: string }) 
           <div style={S.total}>
             <div>
               <div style={S.totalLabel}>Total de horas</div>
-              {datos.es_titular && (datos.pendientes_revision ?? 0) > 0 && (
-                <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 4 }}>
-                  {datos.pendientes_revision} turno{(datos.pendientes_revision ?? 0) !== 1 ? 's' : ''} pendiente{(datos.pendientes_revision ?? 0) !== 1 ? 's' : ''} de revisión
-                </div>
-              )}
+              {datos.es_titular && (datos.pendientes_revision ?? 0) > 0 && (() => {
+                const total = datos.pendientes_revision ?? 0
+                const aceptar = datos.pendientes_aceptacion ?? 0
+                const sinFichaje = total - aceptar
+                return (
+                  <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 4, lineHeight: 1.4 }}>
+                    {total} turno{total !== 1 ? 's' : ''} pendiente{total !== 1 ? 's' : ''} de revisión
+                    {/* El desglose es lo que evita que el vigilador busque un
+                        botón "Aceptar" que para esas filas no corresponde. */}
+                    {aceptar > 0 && <div style={{ color: '#4ade80' }}>{aceptar} para aceptar</div>}
+                    {sinFichaje > 0 && (
+                      <div style={{ color: '#94a3b8' }}>
+                        {sinFichaje} sin fichaje: solo se puede solicitar un cambio
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
             <div style={S.totalValue}>{formatearHoras(datos.total_horas)} hs</div>
           </div>
