@@ -34,6 +34,21 @@ import {
 } from '@/lib/gps-asistencia'
 import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, obtenerPuestosActivosDeObjetivos, resolverPuestoTurno } from '@/lib/puestos'
 import type { EstadoPuestos } from '@/lib/puestos'
+// Programación semanal de supervisores. La expansión de las reglas en filas
+// diarias y el descarte de duplicados son puros y viven en lib/ para poder
+// testearlos: la pantalla sólo consulta, muestra el conteo e inserta.
+import {
+  TIPOS_EVENTO_GUARDIA,
+  TIPOS_SIN_COBERTURA,
+  etiquetaDias,
+  normalizarTextoGuardia,
+  previsualizarDesdeReglas,
+  previsualizarGeneracion,
+  rangoDelMes,
+  resumenGeneracion,
+  resumenMes,
+} from '@/lib/guardias-supervisor'
+import type { PrevisionGeneracion, PrevisionMes, ReglaSemanal } from '@/lib/guardias-supervisor'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
@@ -247,7 +262,6 @@ const S: Record<string, React.CSSProperties> = {
   statGrid: { display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:16, marginBottom:28 },
 }
 
-const ZONA_SUPERVISORES_GUARDIA = 'Rosario / General'
 const JEFE_OPERATIVO_GUARDIA = 'Aldo Monzón'
 const DIRECTOR_TECNICO_GUARDIA = 'Rodolfo Romero'
 
@@ -8694,22 +8708,58 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
 
 
 // ── SUPERVISORES DE GUARDIA ──────────────────────────────────
-function SupervisoresGuardia({ guardias, user }: any) {
+function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
   const hoy = new Date().toLocaleDateString('sv-SE')
   const rolesOperativos = [
     { value: 'supervisor', label: 'Supervisor' },
     { value: 'jefe_operativo', label: 'Jefe operativo' },
     { value: 'director_tecnico', label: 'Director técnico' },
   ]
+  const DIAS_GUARDIA = [
+    { num:1, label:'Lun' }, { num:2, label:'Mar' }, { num:3, label:'Mié' },
+    { num:4, label:'Jue' }, { num:5, label:'Vie' }, { num:6, label:'Sáb' },
+    { num:7, label:'Dom' },
+  ]
+  // La zona ya no tiene default: antes venía fija en 'Rosario / General', que no
+  // es el nombre de ninguna zona de zonas_operativas, así que toda guardia
+  // cargada con el default quedaba invisible para la búsqueda del supervisor de
+  // guardia (compara contra zonas_operativas.nombre). Ahora se elige del catálogo.
   const formInicial = () => ({
     supervisor_id: '',
     fecha: hoy,
     hora_inicio: '18:00',
     hora_fin: '06:00',
-    zona: ZONA_SUPERVISORES_GUARDIA,
+    zona: '',
+    rol_operativo: 'supervisor',
+    estado: 'activo',
+    tipo_evento: 'normal',
+    observacion: '',
+  })
+
+  const formGeneracionInicial = () => ({
+    supervisor_id: '',
+    zona: '',
+    desde: hoy,
+    hasta: hoy,
+    dias_semana: [1, 2, 3, 4, 5] as number[],
+    hora_inicio: '18:00',
+    hora_fin: '06:00',
     rol_operativo: 'supervisor',
     estado: 'activo',
     observacion: '',
+  })
+
+  const formReglaInicial = () => ({
+    supervisor_id: '',
+    zona_id: '',
+    dias_semana: [1, 2, 3, 4, 5] as number[],
+    hora_inicio: '07:00',
+    hora_fin: '19:00',
+    rol_operativo: 'supervisor',
+    observacion: '',
+    activo: true,
+    vigencia_desde: '',
+    vigencia_hasta: '',
   })
 
   const [guardiasSupervisor, setGuardiasSupervisor] = useState<any[]>([])
@@ -8717,13 +8767,48 @@ function SupervisoresGuardia({ guardias, user }: any) {
   const [loading, setLoading] = useState(false)
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
+  // Fila que se está editando, para saber qué cambió respecto de lo generado.
+  const [editOriginal, setEditOriginal] = useState<any | null>(null)
   const [historialSeleccionado, setHistorialSeleccionado] = useState<any | null>(null)
   const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error', texto: string } | null>(null)
   const [form, setForm] = useState(formInicial)
+  const [modalGenerar, setModalGenerar] = useState(false)
+  const [formGen, setFormGen] = useState(formGeneracionInicial)
+  const [prevision, setPrevision] = useState<PrevisionGeneracion | null>(null)
+  const [previsionLoading, setPrevisionLoading] = useState(false)
+  const [generando, setGenerando] = useState(false)
+
+  // Programación semanal
+  const [reglas, setReglas] = useState<any[]>([])
+  const [reglasDisponibles, setReglasDisponibles] = useState(true)
+  const [modalRegla, setModalRegla] = useState(false)
+  const [editReglaId, setEditReglaId] = useState<string | null>(null)
+  const [formRegla, setFormRegla] = useState(formReglaInicial)
+  const [modalMes, setModalMes] = useState(false)
+  const [mesGenerar, setMesGenerar] = useState(hoy.slice(0, 7))
+  const [previsionMes, setPrevisionMes] = useState<PrevisionMes | null>(null)
+  const [previsionMesLoading, setPrevisionMesLoading] = useState(false)
+  const [generandoMes, setGenerandoMes] = useState(false)
 
   const supervisoresDisponibles = guardias
     .filter((g: any) => ['supervisor', 'admin'].includes(g.rol))
     .sort((a: any, b: any) => `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`))
+
+  const zonasActivas = (zonas as any[]).filter(z => (z.estado || 'activo') !== 'inactivo')
+
+  /**
+   * Opciones del select de zona. Se agrega la zona ya cargada en la fila cuando
+   * no está en el catálogo (texto libre viejo o zona inactivada): editar una
+   * guardia no puede cambiarle la zona en silencio.
+   */
+  const opcionesZona = (zonaActual: string) => {
+    const nombres = zonasActivas.map(z => z.nombre)
+    const actual = (zonaActual || '').trim()
+    if (actual && !nombres.some(n => normalizarTextoGuardia(n) === normalizarTextoGuardia(actual))) {
+      return [...nombres, actual]
+    }
+    return nombres
+  }
 
   const cargar = async () => {
     setLoadingData(true)
@@ -8742,12 +8827,36 @@ function SupervisoresGuardia({ guardias, user }: any) {
     setLoadingData(false)
   }
 
-  useEffect(() => { cargar() }, [])
+  // Las reglas semanales son una capa nueva: si todavía no se corrió la
+  // migración, la pantalla sigue funcionando como antes en vez de romperse.
+  const cargarReglas = async () => {
+    const { data, error } = await supabase
+      .from('supervisor_guardia_reglas')
+      .select('*')
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      if (/supervisor_guardia_reglas|schema cache|does not exist/i.test(error.message)) {
+        setReglasDisponibles(false)
+        return
+      }
+      setMensaje({ tipo:'error', texto:error.message })
+      return
+    }
+
+    setReglasDisponibles(true)
+    setReglas(data || [])
+  }
+
+  useEffect(() => { cargar(); cargarReglas() }, [])
 
   const nombreUsuario = (id?: string | null) => {
     const usuario = guardias.find((g: any) => g.id === id)
     return usuario ? `${usuario.apellido}, ${usuario.nombre}` : 'Sin supervisor'
   }
+
+  const nombreZona = (zonaId?: string | null) =>
+    (zonas as any[]).find(z => z.id === zonaId)?.nombre || ''
 
   const rolLabel = (rol?: string | null) => rolesOperativos.find(r => r.value === rol)?.label || rol || '—'
   const horario = (item: any) => `${formatHoraTurno(item.hora_inicio)} a ${formatHoraTurno(item.hora_fin)}`
@@ -8755,8 +8864,16 @@ function SupervisoresGuardia({ guardias, user }: any) {
   const abrirNuevo = () => {
     setForm(formInicial())
     setEditId(null)
+    setEditOriginal(null)
     setMensaje(null)
     setModal(true)
+  }
+
+  const cerrarModalGuardia = () => {
+    setModal(false)
+    setEditId(null)
+    setEditOriginal(null)
+    setForm(formInicial())
   }
 
   const abrirEditar = (item: any) => {
@@ -8765,11 +8882,13 @@ function SupervisoresGuardia({ guardias, user }: any) {
       fecha: item.fecha || hoy,
       hora_inicio: formatHoraTurno(item.hora_inicio) === '—' ? '18:00' : formatHoraTurno(item.hora_inicio),
       hora_fin: formatHoraTurno(item.hora_fin) === '—' ? '06:00' : formatHoraTurno(item.hora_fin),
-      zona: item.zona || ZONA_SUPERVISORES_GUARDIA,
+      zona: item.zona || '',
       rol_operativo: item.rol_operativo || 'supervisor',
       estado: item.estado || 'activo',
+      tipo_evento: item.tipo_evento || 'normal',
       observacion: item.observacion || '',
     })
+    setEditOriginal(item)
     setEditId(item.id)
     setMensaje(null)
     setModal(true)
@@ -8781,6 +8900,11 @@ function SupervisoresGuardia({ guardias, user }: any) {
       return
     }
 
+    if (!form.zona.trim()) {
+      setMensaje({ tipo:'error', texto:'Elegí la zona operativa: sin zona la guardia no se encuentra desde los objetivos.' })
+      return
+    }
+
     setLoading(true)
     setMensaje(null)
 
@@ -8789,10 +8913,24 @@ function SupervisoresGuardia({ guardias, user }: any) {
       fecha: form.fecha,
       hora_inicio: form.hora_inicio,
       hora_fin: form.hora_fin,
-      zona: form.zona || ZONA_SUPERVISORES_GUARDIA,
+      zona: form.zona.trim(),
       rol_operativo: form.rol_operativo,
       estado: form.estado,
       observacion: form.observacion.trim() || null,
+    }
+
+    // Las excepciones son columnas de la migración de programación semanal. Si
+    // todavía no se corrió, la pantalla guarda como guardaba antes en lugar de
+    // fallar por una columna que no existe.
+    if (reglasDisponibles) {
+      payload.tipo_evento = form.tipo_evento
+
+      // Reemplazo: si a una guardia ya cargada se le cambia el supervisor,
+      // queda registrado a quién está cubriendo. Sólo se escribe la primera
+      // vez, para que un segundo cambio no borre al titular original.
+      if (editId && editOriginal?.supervisor_id && editOriginal.supervisor_id !== form.supervisor_id && !editOriginal.supervisor_original_id) {
+        payload.supervisor_original_id = editOriginal.supervisor_id
+      }
     }
 
     if (!editId) payload.creado_por = user?.id || null
@@ -8808,9 +8946,7 @@ function SupervisoresGuardia({ guardias, user }: any) {
     } else if (data) {
       setGuardiasSupervisor(prev => editId ? prev.map(item => item.id === editId ? data : item) : [data, ...prev])
       setMensaje({ tipo:'ok', texto: editId ? 'Guardia actualizada.' : 'Guardia de supervisor creada.' })
-      setModal(false)
-      setEditId(null)
-      setForm(formInicial())
+      cerrarModalGuardia()
     }
 
     setLoading(false)
@@ -8836,6 +8972,284 @@ function SupervisoresGuardia({ guardias, user }: any) {
     }
   }
 
+  // ── Generación por rango ──────────────────────────────────────────────────
+  //
+  // Cargar día por día una zona completa era inviable. Acá se elige supervisor,
+  // zona, rango, días de la semana y horario; se cuenta cuántas filas salen y
+  // recién después se inserta. La expansión y el descarte de duplicados los
+  // hace lib/guardias-supervisor: esta parte sólo consulta y escribe.
+
+  const abrirGenerar = () => {
+    setFormGen(formGeneracionInicial())
+    setPrevision(null)
+    setMensaje(null)
+    setModalGenerar(true)
+  }
+
+  const cerrarGenerar = () => {
+    setModalGenerar(false)
+    setFormGen(formGeneracionInicial())
+    setPrevision(null)
+  }
+
+  // Cualquier cambio invalida el conteo: no se inserta contra una vista previa
+  // que ya no corresponde a lo que muestra el formulario.
+  const editarGen = (patch: any) => {
+    setFormGen(prev => ({ ...prev, ...patch }))
+    setPrevision(null)
+  }
+
+  const toggleDiaGen = (num: number) => {
+    setFormGen(prev => ({
+      ...prev,
+      dias_semana: prev.dias_semana.includes(num)
+        ? prev.dias_semana.filter(d => d !== num)
+        : [...prev.dias_semana, num].sort((a, b) => a - b),
+    }))
+    setPrevision(null)
+  }
+
+  const previsualizar = async () => {
+    setMensaje(null)
+
+    // Primero la validación pura: si el formulario está mal, no se consulta.
+    const soloValidacion = previsualizarGeneracion(formGen, [])
+    if (soloValidacion.errores.length) {
+      setPrevision(soloValidacion)
+      return
+    }
+
+    setPrevisionLoading(true)
+
+    // Las guardias ya cargadas de ese supervisor dentro del rango. Se traen
+    // todas, incluidas las inactivas: una fila idéntica inactivada sigue siendo
+    // la misma carga, duplicarla no la reactiva.
+    const { data, error } = await supabase
+      .from('supervisores_guardia')
+      .select('supervisor_id,zona,fecha,hora_inicio,hora_fin')
+      .eq('supervisor_id', formGen.supervisor_id)
+      .gte('fecha', formGen.desde)
+      .lte('fecha', formGen.hasta)
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      setPrevisionLoading(false)
+      return
+    }
+
+    setPrevision(previsualizarGeneracion(formGen, data || []))
+    setPrevisionLoading(false)
+  }
+
+  const generar = async () => {
+    if (!prevision || prevision.errores.length || prevision.aCrear.length === 0) return
+
+    setGenerando(true)
+    setMensaje(null)
+
+    const payload = prevision.aCrear.map(fila => ({ ...fila, creado_por: user?.id || null }))
+    const { error } = await supabase.from('supervisores_guardia').insert(payload)
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      setGenerando(false)
+      return
+    }
+
+    const creadas = prevision.aCrear.length
+    const omitidas = prevision.duplicadas.length
+    setGenerando(false)
+    cerrarGenerar()
+    await cargar()
+    setMensaje({
+      tipo:'ok',
+      texto: `Se crearon ${creadas} guardia(s)${omitidas ? ` · ${omitidas} ya existían y se omitieron` : ''}.`,
+    })
+  }
+
+  // ── Programación semanal ──────────────────────────────────────────────────
+  //
+  // La regla es la plantilla; el calendario efectivo sigue siendo
+  // supervisores_guardia. Un franco, un reemplazo o un cambio de horario se
+  // cargan sobre la guardia del día y NO vuelven hacia la regla.
+
+  const reglasSemanales = (): ReglaSemanal[] => reglas.map(r => ({
+    id: r.id,
+    supervisor_id: r.supervisor_id,
+    zona_id: r.zona_id,
+    zona_nombre: nombreZona(r.zona_id),
+    dias_semana: r.dias_semana || [],
+    hora_inicio: r.hora_inicio,
+    hora_fin: r.hora_fin,
+    rol_operativo: r.rol_operativo,
+    observacion: r.observacion,
+    activo: r.activo,
+    vigencia_desde: r.vigencia_desde,
+    vigencia_hasta: r.vigencia_hasta,
+  }))
+
+  const abrirNuevaRegla = () => {
+    setFormRegla(formReglaInicial())
+    setEditReglaId(null)
+    setMensaje(null)
+    setModalRegla(true)
+  }
+
+  const abrirEditarRegla = (r: any) => {
+    setFormRegla({
+      supervisor_id: r.supervisor_id || '',
+      zona_id: r.zona_id || '',
+      dias_semana: r.dias_semana || [],
+      hora_inicio: formatHoraTurno(r.hora_inicio) === '—' ? '07:00' : formatHoraTurno(r.hora_inicio),
+      hora_fin: formatHoraTurno(r.hora_fin) === '—' ? '19:00' : formatHoraTurno(r.hora_fin),
+      rol_operativo: r.rol_operativo || 'supervisor',
+      observacion: r.observacion || '',
+      activo: r.activo !== false,
+      vigencia_desde: r.vigencia_desde || '',
+      vigencia_hasta: r.vigencia_hasta || '',
+    })
+    setEditReglaId(r.id)
+    setMensaje(null)
+    setModalRegla(true)
+  }
+
+  const toggleDiaRegla = (num: number) => {
+    setFormRegla(prev => ({
+      ...prev,
+      dias_semana: prev.dias_semana.includes(num)
+        ? prev.dias_semana.filter(d => d !== num)
+        : [...prev.dias_semana, num].sort((a, b) => a - b),
+    }))
+  }
+
+  const guardarRegla = async () => {
+    if (!formRegla.supervisor_id || !formRegla.zona_id || !formRegla.dias_semana.length || !formRegla.hora_inicio || !formRegla.hora_fin) {
+      setMensaje({ tipo:'error', texto:'Completá supervisor, zona, días y horario.' })
+      return
+    }
+
+    if (formRegla.vigencia_desde && formRegla.vigencia_hasta && formRegla.vigencia_hasta < formRegla.vigencia_desde) {
+      setMensaje({ tipo:'error', texto:'La vigencia "hasta" no puede ser anterior a la vigencia "desde".' })
+      return
+    }
+
+    setLoading(true)
+    setMensaje(null)
+
+    const payload: any = {
+      supervisor_id: formRegla.supervisor_id,
+      zona_id: formRegla.zona_id,
+      dias_semana: formRegla.dias_semana,
+      hora_inicio: formRegla.hora_inicio,
+      hora_fin: formRegla.hora_fin,
+      rol_operativo: formRegla.rol_operativo,
+      observacion: formRegla.observacion.trim() || null,
+      activo: formRegla.activo,
+      vigencia_desde: formRegla.vigencia_desde || null,
+      vigencia_hasta: formRegla.vigencia_hasta || null,
+    }
+
+    if (!editReglaId) payload.creado_por = user?.id || null
+
+    const query = editReglaId
+      ? supabase.from('supervisor_guardia_reglas').update(payload).eq('id', editReglaId)
+      : supabase.from('supervisor_guardia_reglas').insert(payload)
+
+    const { data, error } = await query.select('*').single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+    } else if (data) {
+      setReglas(prev => editReglaId ? prev.map(r => r.id === editReglaId ? data : r) : [...prev, data])
+      setMensaje({ tipo:'ok', texto: editReglaId ? 'Regla actualizada.' : 'Regla semanal creada.' })
+      setModalRegla(false)
+      setEditReglaId(null)
+      setFormRegla(formReglaInicial())
+    }
+
+    setLoading(false)
+  }
+
+  // Desactivar una regla no borra las guardias que ya generó: deja de producir
+  // filas nuevas de acá en adelante. El calendario ya publicado se corrige día
+  // por día, que es donde vive la excepción.
+  const toggleRegla = async (r: any) => {
+    const { data, error } = await supabase
+      .from('supervisor_guardia_reglas')
+      .update({ activo: !(r.activo !== false) })
+      .eq('id', r.id)
+      .select('*')
+      .single()
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      return
+    }
+
+    if (data) {
+      setReglas(prev => prev.map(x => x.id === r.id ? data : x))
+      setPrevisionMes(null)
+    }
+  }
+
+  const abrirGenerarMes = () => {
+    setMesGenerar(hoy.slice(0, 7))
+    setPrevisionMes(null)
+    setMensaje(null)
+    setModalMes(true)
+  }
+
+  const previsualizarMesGuardias = async () => {
+    setMensaje(null)
+    setPrevisionMesLoading(true)
+
+    const rango = rangoDelMes(mesGenerar)
+
+    // Se traen TODAS las guardias del mes, de cualquier supervisor: la
+    // deduplicación necesita ver también lo cargado a mano.
+    const { data, error } = await supabase
+      .from('supervisores_guardia')
+      .select('supervisor_id,zona,fecha,hora_inicio,hora_fin,regla_id')
+      .gte('fecha', rango.desde)
+      .lte('fecha', rango.hasta)
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      setPrevisionMesLoading(false)
+      return
+    }
+
+    setPrevisionMes(previsualizarDesdeReglas(reglasSemanales(), rango, data || []))
+    setPrevisionMesLoading(false)
+  }
+
+  const generarMes = async () => {
+    if (!previsionMes || previsionMes.errores.length || previsionMes.aCrear.length === 0) return
+
+    setGenerandoMes(true)
+    setMensaje(null)
+
+    const payload = previsionMes.aCrear.map(fila => ({ ...fila, creado_por: user?.id || null }))
+    const { error } = await supabase.from('supervisores_guardia').insert(payload)
+
+    if (error) {
+      setMensaje({ tipo:'error', texto:error.message })
+      setGenerandoMes(false)
+      return
+    }
+
+    const creadas = previsionMes.aCrear.length
+    setGenerandoMes(false)
+    setModalMes(false)
+    setPrevisionMes(null)
+    await cargar()
+    setMensaje({ tipo:'ok', texto:`Se generaron ${creadas} guardia(s) para ${mesGenerar}.` })
+  }
+
+  const zonasConGuardias = guardiasSupervisor
+    .map(item => (item.zona || '').trim())
+    .filter((zona, i, todas) => zona && todas.indexOf(zona) === i)
+
   const historial = historialSeleccionado
     ? guardiasSupervisor
       .filter(item => item.supervisor_id === historialSeleccionado.supervisor_id)
@@ -8847,14 +9261,89 @@ function SupervisoresGuardia({ guardias, user }: any) {
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
         <div style={{ flex:1 }}>
           <div style={S.title}>Supervisores de guardia</div>
-          <div style={S.sub2}>Zona {ZONA_SUPERVISORES_GUARDIA} · Jefe operativo {JEFE_OPERATIVO_GUARDIA} · Director técnico {DIRECTOR_TECNICO_GUARDIA}</div>
+          <div style={S.sub2}>Jefe operativo {JEFE_OPERATIVO_GUARDIA} · Director técnico {DIRECTOR_TECNICO_GUARDIA}</div>
         </div>
-        <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>+ Nueva guardia</button>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+          {reglasDisponibles && <button style={{ ...S.btn, ...S.btnSecondary }} onClick={abrirGenerarMes}>🗓️ Generar mes</button>}
+          <button style={{ ...S.btn, ...S.btnSecondary }} onClick={abrirGenerar}>📅 Generar por rango</button>
+          <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>+ Nueva guardia</button>
+        </div>
       </div>
 
+      {reglasDisponibles && (
+        <div style={S.card}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:10 }}>
+            <div>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700 }}>Programación semanal</div>
+              <div style={{ fontSize:13, color:'#64748b' }}>
+                La plantilla. Genera las guardias del calendario; los francos, reemplazos y cambios se cargan sobre el día, no acá.
+              </div>
+            </div>
+            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={abrirNuevaRegla}>+ Nueva regla</button>
+          </div>
+
+          {reglas.length === 0 ? (
+            <div style={{ textAlign:'center', padding:28, color:'#64748b' }}>
+              No hay reglas cargadas. Una regla es un bloque horario con sus días: un supervisor puede tener varias.
+            </div>
+          ) : (
+            <div style={{ overflowX:'auto' }}>
+              <table style={S.table}>
+                <thead>
+                  <tr>
+                    <th style={S.th}>Supervisor</th>
+                    <th style={S.th}>Zona</th>
+                    <th style={S.th}>Días</th>
+                    <th style={S.th}>Horario</th>
+                    <th style={S.th}>Vigencia</th>
+                    <th style={S.th}>Estado</th>
+                    <th style={S.th}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reglas.map(r => (
+                    <tr key={r.id}>
+                      <td style={S.td}>{nombreUsuario(r.supervisor_id)}</td>
+                      <td style={S.td}>{nombreZona(r.zona_id) || <span style={{ color:'#ef4444' }}>Zona borrada</span>}</td>
+                      <td style={S.td}>{etiquetaDias(r.dias_semana || [])}</td>
+                      <td style={S.td}>
+                        {formatHoraTurno(r.hora_inicio)} a {formatHoraTurno(r.hora_fin)}
+                        {formatHoraTurno(r.hora_fin) <= formatHoraTurno(r.hora_inicio) && (
+                          <span style={{ color:'#64748b', fontSize:12 }}> · nocturno</span>
+                        )}
+                      </td>
+                      <td style={{ ...S.td, color:'#94a3b8', fontSize:13 }}>
+                        {r.vigencia_desde || r.vigencia_hasta
+                          ? `${r.vigencia_desde ? formatFecha(r.vigencia_desde) : 'sin inicio'} → ${r.vigencia_hasta ? formatFecha(r.vigencia_hasta) : 'sin fin'}`
+                          : 'Permanente'}
+                      </td>
+                      <td style={S.td}><Badge type={r.activo !== false ? 'activo' : 'inactivo'}>{r.activo !== false ? 'activa' : 'inactiva'}</Badge></td>
+                      <td style={S.td}>
+                        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                          <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }} onClick={() => abrirEditarRegla(r)}>Editar</button>
+                          <button
+                            style={{ ...S.btn, padding:'6px 10px', fontSize:12, background: r.activo !== false ? 'rgba(239,68,68,.1)' : 'rgba(16,185,129,.1)', color: r.activo !== false ? '#ef4444' : '#10b981', border:`1px solid ${r.activo !== false ? 'rgba(239,68,68,.3)' : 'rgba(16,185,129,.3)'}` }}
+                            onClick={() => toggleRegla(r)}
+                          >
+                            {r.activo !== false ? 'Desactivar' : 'Activar'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ ...S.card, display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:12 }}>
-        <div><div style={S.label}>Supervisores operativos</div><strong>Fulla · Aranda · Martínez</strong></div>
-        <div><div style={S.label}>Zona actual</div><strong>{ZONA_SUPERVISORES_GUARDIA}</strong></div>
+        <div><div style={S.label}>Guardias cargadas</div><strong>{guardiasSupervisor.length}</strong></div>
+        <div>
+          <div style={S.label}>Zonas con guardias</div>
+          <strong>{zonasConGuardias.length ? zonasConGuardias.join(' · ') : 'Ninguna'}</strong>
+        </div>
         <div><div style={S.label}>Regla de intervención</div><strong>Cualquier supervisor logueado puede intervenir</strong></div>
       </div>
 
@@ -8889,10 +9378,22 @@ function SupervisoresGuardia({ guardias, user }: any) {
                   <tr key={item.id}>
                     <td style={S.td}>{formatFecha(item.fecha)}</td>
                     <td style={S.td}>{horario(item)}</td>
-                    <td style={S.td}>{nombreUsuario(item.supervisor_id)}</td>
+                    <td style={S.td}>
+                      {nombreUsuario(item.supervisor_id)}
+                      {item.supervisor_original_id && (
+                        <div style={{ fontSize:12, color:'#f59e0b' }}>cubre a {nombreUsuario(item.supervisor_original_id)}</div>
+                      )}
+                    </td>
                     <td style={S.td}>{rolLabel(item.rol_operativo)}</td>
-                    <td style={S.td}>{item.zona || ZONA_SUPERVISORES_GUARDIA}</td>
-                    <td style={S.td}><Badge type={item.estado || 'activo'}>{item.estado || 'activo'}</Badge></td>
+                    <td style={S.td}>{item.zona || <span style={{ color:'#ef4444' }}>Sin zona</span>}</td>
+                    <td style={S.td}>
+                      <Badge type={item.estado || 'activo'}>{item.estado || 'activo'}</Badge>
+                      {item.tipo_evento && item.tipo_evento !== 'normal' && (
+                        <div style={{ fontSize:12, marginTop:4, color: TIPOS_SIN_COBERTURA.has(item.tipo_evento) ? '#ef4444' : '#f59e0b' }}>
+                          {TIPOS_EVENTO_GUARDIA.find(t => t.value === item.tipo_evento)?.label || item.tipo_evento}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ ...S.td, color:'#94a3b8', minWidth:180 }}>{item.observacion || '—'}</td>
                     <td style={S.td}>
                       <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
@@ -8935,11 +9436,17 @@ function SupervisoresGuardia({ guardias, user }: any) {
       )}
 
       {modal && (
-        <Modal title={editId ? 'Editar guardia de supervisor' : 'Nueva guardia de supervisor'} onClose={() => { setModal(false); setEditId(null); setForm(formInicial()) }}
-          footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => { setModal(false); setEditId(null); setForm(formInicial()) }}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
+        <Modal title={editId ? 'Editar guardia de supervisor' : 'Nueva guardia de supervisor'} onClose={cerrarModalGuardia}
+          footer={<><button style={{ ...S.btn, ...S.btnSecondary }} onClick={cerrarModalGuardia}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardar} disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</button></>}>
           <div style={S.grid2}>
             <div style={{ marginBottom:16 }}><label style={S.label}>Fecha *</label><input type="date" style={S.input} value={form.fecha} onChange={e => setForm({...form, fecha:e.target.value})} /></div>
-            <div style={{ marginBottom:16 }}><label style={S.label}>Zona</label><input style={S.input} value={form.zona} onChange={e => setForm({...form, zona:e.target.value})} /></div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Zona operativa *</label>
+              <select style={S.select} value={form.zona} onChange={e => setForm({...form, zona:e.target.value})}>
+                <option value="">Seleccionar zona...</option>
+                {opcionesZona(form.zona).map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+              </select>
+            </div>
           </div>
           <div style={S.grid2}>
             <div style={{ marginBottom:16 }}><label style={S.label}>Hora inicio *</label><input type="time" style={S.input} value={form.hora_inicio} onChange={e => setForm({...form, hora_inicio:e.target.value})} /></div>
@@ -8969,10 +9476,295 @@ function SupervisoresGuardia({ guardias, user }: any) {
               </select>
             </div>
           </div>
+          {reglasDisponibles && (
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Excepción del día</label>
+              <select style={S.select} value={form.tipo_evento} onChange={e => setForm({...form, tipo_evento:e.target.value})}>
+                {TIPOS_EVENTO_GUARDIA.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+              <div style={{ fontSize:12, color:'#64748b', marginTop:6 }}>
+                Franco y ausencia significan que ese día no hay cobertura. La excepción es sólo de este día: no modifica la programación semanal.
+              </div>
+            </div>
+          )}
+
+          {editOriginal?.regla_id && (
+            <div style={{ marginBottom:16, fontSize:12, color:'#64748b' }}>
+              Generada desde la programación semanal. Editarla no cambia la regla, y regenerar el mes no vuelve a crear este día.
+            </div>
+          )}
+
+          {editOriginal?.supervisor_original_id && (
+            <div style={{ marginBottom:16, fontSize:12, color:'#f59e0b' }}>
+              Cubre a {nombreUsuario(editOriginal.supervisor_original_id)}
+            </div>
+          )}
+
           <div style={{ marginBottom:8 }}>
             <label style={S.label}>Observación</label>
             <textarea style={{ ...S.input, minHeight:90, resize:'vertical' }} value={form.observacion} onChange={e => setForm({...form, observacion:e.target.value})} placeholder="Comentario operativo opcional" />
           </div>
+        </Modal>
+      )}
+
+      {modalGenerar && (
+        <Modal
+          title="Generar guardias por rango"
+          onClose={cerrarGenerar}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={cerrarGenerar}>Cancelar</button>
+              {prevision && !prevision.errores.length && prevision.aCrear.length > 0 ? (
+                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={generar} disabled={generando}>
+                  {generando ? 'Creando...' : `Crear ${prevision.aCrear.length} guardia(s)`}
+                </button>
+              ) : (
+                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={previsualizar} disabled={previsionLoading}>
+                  {previsionLoading ? 'Calculando...' : 'Ver cuántas se crean'}
+                </button>
+              )}
+            </>
+          }
+        >
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Supervisor asignado *</label>
+            <select style={S.select} value={formGen.supervisor_id} onChange={e => editarGen({ supervisor_id:e.target.value })}>
+              <option value="">Seleccionar supervisor...</option>
+              {supervisoresDisponibles.filter((s: any) => s.estado === 'activo').map((s: any) => (
+                <option key={s.id} value={s.id}>{s.apellido}, {s.nombre}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Zona operativa *</label>
+            <select style={S.select} value={formGen.zona} onChange={e => editarGen({ zona:e.target.value })}>
+              <option value="">Seleccionar zona...</option>
+              {zonasActivas.map((z: any) => <option key={z.id} value={z.nombre}>{z.nombre}</option>)}
+            </select>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Desde *</label><input type="date" style={S.input} value={formGen.desde} onChange={e => editarGen({ desde:e.target.value })} /></div>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hasta *</label><input type="date" style={S.input} value={formGen.hasta} onChange={e => editarGen({ hasta:e.target.value })} /></div>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Días de la semana *</label>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:6 }}>
+              {DIAS_GUARDIA.map(d => {
+                const sel = formGen.dias_semana.includes(d.num)
+                return (
+                  <button
+                    key={d.num}
+                    onClick={() => toggleDiaGen(d.num)}
+                    style={{ padding:'8px 14px', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600, border: sel ? '1px solid #f59e0b' : '1px solid #1e2d42', background: sel ? 'rgba(245,158,11,0.15)' : '#1a2235', color: sel ? '#f59e0b' : '#64748b' }}
+                  >
+                    {d.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hora inicio *</label><input type="time" style={S.input} value={formGen.hora_inicio} onChange={e => editarGen({ hora_inicio:e.target.value })} /></div>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hora fin *</label><input type="time" style={S.input} value={formGen.hora_fin} onChange={e => editarGen({ hora_fin:e.target.value })} /></div>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Rol operativo</label>
+              <select style={S.select} value={formGen.rol_operativo} onChange={e => editarGen({ rol_operativo:e.target.value })}>
+                {rolesOperativos.map(rol => <option key={rol.value} value={rol.value}>{rol.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Estado</label>
+              <select style={S.select} value={formGen.estado} onChange={e => editarGen({ estado:e.target.value })}>
+                <option value="activo">Activo</option>
+                <option value="inactivo">Inactivo</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Observación</label>
+            <textarea style={{ ...S.input, minHeight:70, resize:'vertical' }} value={formGen.observacion} onChange={e => editarGen({ observacion:e.target.value })} placeholder="Se repite en todas las guardias generadas" />
+          </div>
+
+          {prevision && (
+            <div style={{
+              padding:14,
+              borderRadius:8,
+              border:`1px solid ${prevision.errores.length ? 'rgba(239,68,68,.35)' : 'rgba(16,185,129,.35)'}`,
+              background: prevision.errores.length ? 'rgba(239,68,68,.08)' : 'rgba(16,185,129,.08)',
+              color: prevision.errores.length ? '#ef4444' : '#10b981',
+              fontSize:13,
+            }}>
+              <div style={{ fontWeight:600 }}>{resumenGeneracion(prevision)}</div>
+              {!prevision.errores.length && prevision.aCrear.length > 0 && (
+                <div style={{ color:'#94a3b8', marginTop:6 }}>
+                  Del {formatFecha(prevision.aCrear[0].fecha)} al {formatFecha(prevision.aCrear[prevision.aCrear.length - 1].fecha)} · {formGen.hora_inicio} a {formGen.hora_fin}
+                </div>
+              )}
+              {prevision.duplicadas.length > 0 && (
+                <div style={{ color:'#94a3b8', marginTop:6 }}>
+                  Ya cargadas: {prevision.duplicadas.slice(0, 8).map(f => formatFecha(f)).join(', ')}{prevision.duplicadas.length > 8 ? ` y ${prevision.duplicadas.length - 8} más` : ''}
+                </div>
+              )}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {modalRegla && (
+        <Modal
+          title={editReglaId ? 'Editar regla semanal' : 'Nueva regla semanal'}
+          onClose={() => { setModalRegla(false); setEditReglaId(null); setFormRegla(formReglaInicial()) }}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => { setModalRegla(false); setEditReglaId(null); setFormRegla(formReglaInicial()) }}>Cancelar</button>
+              <button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardarRegla} disabled={loading}>{loading ? 'Guardando...' : 'Guardar regla'}</button>
+            </>
+          }
+        >
+          <div style={{ marginBottom:16, fontSize:12, color:'#64748b' }}>
+            Una regla es un bloque horario con sus días. Un supervisor con horarios distintos según el día lleva varias reglas
+            (por ejemplo: dom a jue 07-19, viernes 07-13, y viernes 19-07 como nocturno aparte).
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Supervisor *</label>
+            <select style={S.select} value={formRegla.supervisor_id} onChange={e => setFormRegla({...formRegla, supervisor_id:e.target.value})}>
+              <option value="">Seleccionar supervisor...</option>
+              {supervisoresDisponibles.filter((s: any) => s.estado === 'activo' || s.id === formRegla.supervisor_id).map((s: any) => (
+                <option key={s.id} value={s.id}>{s.apellido}, {s.nombre}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Zona operativa *</label>
+            <select style={S.select} value={formRegla.zona_id} onChange={e => setFormRegla({...formRegla, zona_id:e.target.value})}>
+              <option value="">Seleccionar zona...</option>
+              {zonasActivas.map((z: any) => <option key={z.id} value={z.id}>{z.nombre}</option>)}
+            </select>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Días de la semana *</label>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:6 }}>
+              {DIAS_GUARDIA.map(d => {
+                const sel = formRegla.dias_semana.includes(d.num)
+                return (
+                  <button
+                    key={d.num}
+                    onClick={() => toggleDiaRegla(d.num)}
+                    style={{ padding:'8px 14px', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600, border: sel ? '1px solid #f59e0b' : '1px solid #1e2d42', background: sel ? 'rgba(245,158,11,0.15)' : '#1a2235', color: sel ? '#f59e0b' : '#64748b' }}
+                  >
+                    {d.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hora inicio *</label><input type="time" style={S.input} value={formRegla.hora_inicio} onChange={e => setFormRegla({...formRegla, hora_inicio:e.target.value})} /></div>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Hora fin *</label><input type="time" style={S.input} value={formRegla.hora_fin} onChange={e => setFormRegla({...formRegla, hora_fin:e.target.value})} /></div>
+          </div>
+
+          {formRegla.hora_fin <= formRegla.hora_inicio && (
+            <div style={{ marginBottom:16, fontSize:12, color:'#f59e0b' }}>
+              Horario nocturno: la guardia se genera con la fecha del día de inicio.
+            </div>
+          )}
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Vigencia desde</label><input type="date" style={S.input} value={formRegla.vigencia_desde} onChange={e => setFormRegla({...formRegla, vigencia_desde:e.target.value})} /></div>
+            <div style={{ marginBottom:16 }}><label style={S.label}>Vigencia hasta</label><input type="date" style={S.input} value={formRegla.vigencia_hasta} onChange={e => setFormRegla({...formRegla, vigencia_hasta:e.target.value})} /></div>
+          </div>
+          <div style={{ marginTop:-8, marginBottom:16, fontSize:12, color:'#64748b' }}>
+            Opcional. Sirve para cambiar la programación sin borrar la regla anterior ni reescribir lo ya generado.
+          </div>
+
+          <div style={S.grid2}>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Rol operativo</label>
+              <select style={S.select} value={formRegla.rol_operativo} onChange={e => setFormRegla({...formRegla, rol_operativo:e.target.value})}>
+                {rolesOperativos.map(rol => <option key={rol.value} value={rol.value}>{rol.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom:16 }}>
+              <label style={S.label}>Estado</label>
+              <select style={S.select} value={formRegla.activo ? 'activo' : 'inactivo'} onChange={e => setFormRegla({...formRegla, activo: e.target.value === 'activo'})}>
+                <option value="activo">Activa</option>
+                <option value="inactivo">Inactiva</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ marginBottom:8 }}>
+            <label style={S.label}>Observación</label>
+            <textarea style={{ ...S.input, minHeight:70, resize:'vertical' }} value={formRegla.observacion} onChange={e => setFormRegla({...formRegla, observacion:e.target.value})} placeholder="Se copia en cada guardia generada" />
+          </div>
+        </Modal>
+      )}
+
+      {modalMes && (
+        <Modal
+          title="Generar mes desde la programación semanal"
+          onClose={() => { setModalMes(false); setPrevisionMes(null) }}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => { setModalMes(false); setPrevisionMes(null) }}>Cancelar</button>
+              {previsionMes && !previsionMes.errores.length && previsionMes.aCrear.length > 0 ? (
+                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={generarMes} disabled={generandoMes}>
+                  {generandoMes ? 'Generando...' : `Generar ${previsionMes.aCrear.length} guardia(s)`}
+                </button>
+              ) : (
+                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={previsualizarMesGuardias} disabled={previsionMesLoading}>
+                  {previsionMesLoading ? 'Calculando...' : 'Ver qué se va a crear'}
+                </button>
+              )}
+            </>
+          }
+        >
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Mes *</label>
+            <input type="month" style={S.input} value={mesGenerar} onChange={e => { setMesGenerar(e.target.value); setPrevisionMes(null) }} />
+          </div>
+
+          <div style={{ marginBottom:16, fontSize:12, color:'#64748b' }}>
+            Se expanden todas las reglas activas. Lo que ya está cargado no se toca: ni las guardias generadas antes, ni las
+            editadas, ni las cargadas a mano. Volver a generar el mismo mes es seguro.
+          </div>
+
+          {previsionMes && (
+            <div style={{
+              padding:14,
+              borderRadius:8,
+              border:`1px solid ${previsionMes.errores.length ? 'rgba(239,68,68,.35)' : 'rgba(16,185,129,.35)'}`,
+              background: previsionMes.errores.length ? 'rgba(239,68,68,.08)' : 'rgba(16,185,129,.08)',
+              color: previsionMes.errores.length ? '#ef4444' : '#10b981',
+              fontSize:13,
+            }}>
+              <div style={{ fontWeight:600, marginBottom:8 }}>{resumenMes(previsionMes)}</div>
+              {previsionMes.porRegla.map(item => (
+                <div key={item.regla.id} style={{ color:'#94a3b8', paddingTop:6, borderTop:'1px solid #1e2d42' }}>
+                  {nombreUsuario(item.regla.supervisor_id)} · {etiquetaDias(item.regla.dias_semana)} · {item.regla.hora_inicio?.slice(0,5)} a {item.regla.hora_fin?.slice(0,5)}
+                  {' → '}
+                  {item.omitida
+                    ? <span style={{ color:'#64748b' }}>{item.omitida}</span>
+                    : <strong style={{ color:'#10b981' }}>{item.aCrear.length} guardia(s)</strong>}
+                  {!item.omitida && item.duplicadas.length > 0 && (
+                    <span style={{ color:'#64748b' }}> · {item.duplicadas.length} ya estaban</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </Modal>
       )}
     </div>
@@ -11227,7 +12019,7 @@ const esGuardia = esRolGuardia(user.rol)
               )}
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
-              {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} />}
+              {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} zonas={zonasOperativas} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} setRegistros={setRegistros} user={user} supervisorZonas={supervisorZonas} zonasOperativas={zonasOperativas} filtroActivo={filtros.revision_operativa} limpiarFiltro={() => limpiarFiltro('revision_operativa')} />}
               {/* La MISMA bandeja que ve el supervisor: mismo componente, no una copia.
