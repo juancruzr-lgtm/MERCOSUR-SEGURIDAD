@@ -6,17 +6,27 @@ import {
   MENSAJE_RANGO_LARGO,
   MENSAJE_SIN_DIAS,
   MENSAJE_SIN_HORARIO,
+  MENSAJE_SIN_REGLAS,
   MENSAJE_SIN_SUPERVISOR,
   MENSAJE_SIN_ZONA,
+  MOTIVO_FUERA_DE_VIGENCIA,
+  MOTIVO_REGLA_INACTIVA,
+  MOTIVO_REGLA_INCOMPLETA,
+  MOTIVO_TODO_EXISTE,
   claveGuardia,
   diaSemanaIso,
   diasDelRango,
   esNocturno,
+  etiquetaDias,
   fechasEnRango,
+  guardiaCubre,
+  previsualizarDesdeReglas,
   previsualizarGeneracion,
+  rangoDelMes,
   resumenGeneracion,
+  resumenMes,
 } from '@/lib/guardias-supervisor'
-import type { GuardiaExistente, ParametrosGeneracion } from '@/lib/guardias-supervisor'
+import type { GuardiaExistente, ParametrosGeneracion, ReglaSemanal } from '@/lib/guardias-supervisor'
 
 // Generación por rango de guardias de supervisor.
 // Todo lo de acá es puro: expansión de fechas, deduplicación contra lo que ya
@@ -278,5 +288,211 @@ describe('resumenGeneracion', () => {
   it('muestra los errores cuando la configuración no sirve', () => {
     const prevision = previsualizarGeneracion({ ...base, dias_semana: [] })
     expect(resumenGeneracion(prevision)).toContain(MENSAJE_SIN_DIAS)
+  })
+})
+
+// ── Programación semanal ─────────────────────────────────────────────────────
+// Las reglas de Rosario, tal como están en la operación real:
+//   Sabino  · dom a jue 07-19 · vie 07-13 · vie 19-07 (nocturno)
+//   Walter  · sáb a jue 19-07 (nocturno)
+//   Sergio  · lun a sáb 07-19
+
+const regla = (over: Partial<ReglaSemanal> = {}): ReglaSemanal => ({
+  id: 'regla-1',
+  supervisor_id: 'sup-sergio',
+  zona_id: 'zona-rosario',
+  zona_nombre: 'Rosario',
+  dias_semana: [1, 2, 3, 4, 5, 6],
+  hora_inicio: '07:00',
+  hora_fin: '19:00',
+  rol_operativo: 'supervisor',
+  observacion: null,
+  activo: true,
+  vigencia_desde: null,
+  vigencia_hasta: null,
+  ...over,
+})
+
+const SABINO = [
+  regla({ id: 'sabino-diurno', supervisor_id: 'sup-sabino', dias_semana: [7, 1, 2, 3, 4], hora_inicio: '07:00', hora_fin: '19:00' }),
+  regla({ id: 'sabino-viernes', supervisor_id: 'sup-sabino', dias_semana: [5], hora_inicio: '07:00', hora_fin: '13:00' }),
+  regla({ id: 'sabino-nocturno', supervisor_id: 'sup-sabino', dias_semana: [5], hora_inicio: '19:00', hora_fin: '07:00' }),
+]
+
+describe('previsualizarDesdeReglas', () => {
+  it('genera septiembre completo desde una regla', () => {
+    const prevision = previsualizarDesdeReglas([regla()], rangoDelMes('2026-09'))
+
+    expect(prevision.errores).toEqual([])
+    expect(prevision.desde).toBe('2026-09-01')
+    expect(prevision.hasta).toBe('2026-09-30')
+    // Septiembre 2026: 26 días de lunes a sábado.
+    expect(prevision.aCrear).toHaveLength(26)
+    expect(prevision.aCrear.every(f => f.regla_id === 'regla-1' && f.origen === 'regla' && f.tipo_evento === 'normal')).toBe(true)
+  })
+
+  it('las tres reglas de Sabino conviven, incluida la nocturna del viernes', () => {
+    const prevision = previsualizarDesdeReglas(SABINO, { desde: '2026-09-04', hasta: '2026-09-04' }) // viernes
+
+    expect(prevision.aCrear).toHaveLength(2)
+    expect(prevision.aCrear.map(f => `${f.hora_inicio}-${f.hora_fin}`).sort())
+      .toEqual(['07:00-13:00', '19:00-07:00'])
+    // La nocturna se guarda con la fecha del viernes, no la del sábado.
+    expect(prevision.aCrear.every(f => f.fecha === '2026-09-04')).toBe(true)
+  })
+
+  it('el mismo día, dos supervisores distintos generan dos filas', () => {
+    const prevision = previsualizarDesdeReglas(
+      [regla({ id: 'sergio', supervisor_id: 'sup-sergio' }), regla({ id: 'sabino', supervisor_id: 'sup-sabino', dias_semana: [1] })],
+      { desde: '2026-09-07', hasta: '2026-09-07' }, // lunes
+    )
+
+    expect(prevision.aCrear).toHaveLength(2)
+    expect(prevision.aCrear.map(f => f.supervisor_id).sort()).toEqual(['sup-sabino', 'sup-sergio'])
+  })
+
+  it('regenerar el mismo mes no crea nada', () => {
+    const primera = previsualizarDesdeReglas([regla()], rangoDelMes('2026-09'))
+    const yaEnBase = primera.aCrear.map(f => ({
+      supervisor_id: f.supervisor_id, zona: f.zona, fecha: f.fecha,
+      hora_inicio: f.hora_inicio, hora_fin: f.hora_fin, regla_id: f.regla_id,
+    }))
+
+    const segunda = previsualizarDesdeReglas([regla()], rangoDelMes('2026-09'), yaEnBase)
+
+    expect(segunda.aCrear).toEqual([])
+    expect(segunda.duplicadas).toBe(26)
+    expect(segunda.porRegla[0].omitida).toBe(MOTIVO_TODO_EXISTE)
+  })
+
+  it('un día con el horario cambiado no se regenera: la clave es la regla, no el horario', () => {
+    // El 10/09 se editó de 07:00-19:00 a 07:00-13:00. Sin regla_id volvería a
+    // crearse la fila original y el día quedaría con las dos.
+    const editada: GuardiaExistente = {
+      supervisor_id: 'sup-sergio', zona: 'Rosario', fecha: '2026-09-10',
+      hora_inicio: '07:00:00', hora_fin: '13:00:00', regla_id: 'regla-1',
+    }
+
+    const prevision = previsualizarDesdeReglas([regla()], rangoDelMes('2026-09'), [editada])
+
+    expect(prevision.aCrear.some(f => f.fecha === '2026-09-10')).toBe(false)
+    expect(prevision.porRegla[0].duplicadas).toContain('2026-09-10')
+  })
+
+  it('una guardia cargada a mano bloquea la fila equivalente de la regla', () => {
+    const manual: GuardiaExistente = {
+      supervisor_id: 'sup-sergio', zona: 'rosario', fecha: '2026-09-01',
+      hora_inicio: '07:00:00', hora_fin: '19:00:00', regla_id: null,
+    }
+
+    const prevision = previsualizarDesdeReglas([regla()], rangoDelMes('2026-09'), [manual])
+
+    expect(prevision.aCrear.some(f => f.fecha === '2026-09-01')).toBe(false)
+    expect(prevision.duplicadas).toBe(1)
+  })
+
+  it('respeta la vigencia recortando el período pedido', () => {
+    const prevision = previsualizarDesdeReglas(
+      [regla({ vigencia_desde: '2026-09-15' })],
+      rangoDelMes('2026-09'),
+    )
+
+    expect(prevision.aCrear[0].fecha).toBe('2026-09-15')
+    expect(prevision.aCrear.every(f => f.fecha >= '2026-09-15')).toBe(true)
+  })
+
+  it('omite la regla inactiva, la vencida y la incompleta, con su motivo', () => {
+    const prevision = previsualizarDesdeReglas(
+      [
+        regla({ id: 'r-inactiva', activo: false }),
+        regla({ id: 'r-vencida', vigencia_hasta: '2026-08-31' }),
+        regla({ id: 'r-incompleta', zona_nombre: '  ' }),
+        regla({ id: 'r-sin-dias', dias_semana: [] }),
+      ],
+      rangoDelMes('2026-09'),
+    )
+
+    expect(prevision.aCrear).toEqual([])
+    expect(prevision.porRegla.map(r => r.omitida)).toEqual([
+      MOTIVO_REGLA_INACTIVA,
+      MOTIVO_FUERA_DE_VIGENCIA,
+      MOTIVO_REGLA_INCOMPLETA,
+      MOTIVO_REGLA_INCOMPLETA,
+    ])
+  })
+
+  it('dos reglas idénticas no duplican el día', () => {
+    const prevision = previsualizarDesdeReglas(
+      [regla({ id: 'r-1' }), regla({ id: 'r-2' })],
+      { desde: '2026-09-07', hasta: '2026-09-07' },
+    )
+
+    expect(prevision.aCrear).toHaveLength(1)
+    expect(prevision.duplicadas).toBe(1)
+  })
+
+  it('rechaza el rango invertido y la ausencia de reglas', () => {
+    expect(previsualizarDesdeReglas([regla()], { desde: '2026-09-30', hasta: '2026-09-01' }).errores)
+      .toContain(MENSAJE_RANGO_INVERTIDO)
+    expect(previsualizarDesdeReglas([], rangoDelMes('2026-09')).errores)
+      .toContain(MENSAJE_SIN_REGLAS)
+  })
+
+  it('la observación de la regla viaja a cada fila generada', () => {
+    const prevision = previsualizarDesdeReglas(
+      [regla({ observacion: '  turno base  ' })],
+      { desde: '2026-09-07', hasta: '2026-09-07' },
+    )
+    expect(prevision.aCrear[0].observacion).toBe('turno base')
+  })
+})
+
+describe('guardiaCubre', () => {
+  it('el franco y la ausencia no cuentan como cobertura', () => {
+    expect(guardiaCubre({ estado: 'activo', tipo_evento: 'normal' })).toBe(true)
+    expect(guardiaCubre({ estado: 'activo', tipo_evento: 'reemplazo' })).toBe(true)
+    expect(guardiaCubre({ estado: 'activo', tipo_evento: 'cobertura' })).toBe(true)
+    expect(guardiaCubre({ estado: 'activo', tipo_evento: 'franco' })).toBe(false)
+    expect(guardiaCubre({ estado: 'activo', tipo_evento: 'ausencia' })).toBe(false)
+  })
+
+  it('una guardia inactivada no cubre aunque sea normal', () => {
+    expect(guardiaCubre({ estado: 'inactivo', tipo_evento: 'normal' })).toBe(false)
+  })
+
+  it('sin datos asume guardia normal activa', () => {
+    expect(guardiaCubre({})).toBe(true)
+  })
+})
+
+describe('rangoDelMes', () => {
+  it('resuelve el último día real de cada mes', () => {
+    expect(rangoDelMes('2026-09')).toEqual({ desde: '2026-09-01', hasta: '2026-09-30' })
+    expect(rangoDelMes('2026-02')).toEqual({ desde: '2026-02-01', hasta: '2026-02-28' })
+    expect(rangoDelMes('2028-02')).toEqual({ desde: '2028-02-01', hasta: '2028-02-29' })
+  })
+})
+
+describe('etiquetaDias', () => {
+  it('usa rango sólo cuando los días son consecutivos', () => {
+    expect(etiquetaDias([1, 2, 3, 4, 5, 6])).toBe('Lun a Sáb')
+    expect(etiquetaDias([7, 1, 2, 3, 4])).toBe('Lun · Mar · Mié · Jue · Dom')
+    expect(etiquetaDias([5])).toBe('Vie')
+    expect(etiquetaDias([1, 2, 3, 4, 5, 6, 7])).toBe('Todos los días')
+    expect(etiquetaDias([])).toBe('—')
+  })
+})
+
+describe('resumenMes', () => {
+  it('dice cuántas filas y desde cuántas reglas', () => {
+    const prevision = previsualizarDesdeReglas(SABINO, { desde: '2026-09-04', hasta: '2026-09-04' })
+    expect(resumenMes(prevision)).toBe('Se van a crear 2 guardia(s) desde 2 regla(s).')
+  })
+
+  it('avisa cuando ya estaba todo generado', () => {
+    const primera = previsualizarDesdeReglas([regla()], rangoDelMes('2026-09'))
+    const yaEnBase = primera.aCrear.map(f => ({ ...f, regla_id: f.regla_id }))
+    const segunda = previsualizarDesdeReglas([regla()], rangoDelMes('2026-09'), yaEnBase)
+    expect(resumenMes(segunda)).toBe('Se van a crear 0 guardia(s) desde 0 regla(s) · 26 ya existen y se omiten.')
   })
 })

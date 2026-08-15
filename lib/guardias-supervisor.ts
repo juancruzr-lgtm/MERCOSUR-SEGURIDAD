@@ -74,6 +74,8 @@ export interface GuardiaExistente {
   fecha?: string | null
   hora_inicio?: string | null
   hora_fin?: string | null
+  /** Regla de la que salió la fila. Null en las cargas manuales. */
+  regla_id?: string | null
 }
 
 export interface FilaGuardiaGenerada {
@@ -85,6 +87,9 @@ export interface FilaGuardiaGenerada {
   rol_operativo: string
   estado: string
   observacion: string | null
+  regla_id?: string | null
+  origen?: string
+  tipo_evento?: string
 }
 
 export interface PrevisionGeneracion {
@@ -266,4 +271,250 @@ export function resumenGeneracion(prevision: PrevisionGeneracion): string {
   if (prevision.duplicadas.length) partes.push(`${prevision.duplicadas.length} ya existen y se omiten`)
   if (prevision.nocturno) partes.push('horario nocturno: la fecha es la de inicio')
   return `${partes.join(' · ')}.`
+}
+
+// ── Programación semanal (plantilla) ─────────────────────────────────────────
+//
+// Una regla es un bloque horario con sus días, NO "el horario del supervisor":
+// Sabino son tres reglas (dom-jue 07-19, vie 07-13, vie 19-07 nocturno).
+// Generar un mes es expandir todas las reglas activas del período.
+//
+// La plantilla no es el calendario. Lo que leen las alertas, la Vista
+// Supervisor y el reparto de carga es `supervisores_guardia`, porque ahí están
+// las excepciones del día. Una excepción NUNCA vuelve hacia la regla.
+
+/** Excepciones que se cargan sobre una guardia ya generada. */
+export const TIPOS_EVENTO_GUARDIA = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'franco', label: 'Franco' },
+  { value: 'ausencia', label: 'Ausencia' },
+  { value: 'reemplazo', label: 'Reemplazo' },
+  { value: 'cobertura', label: 'Cobertura extra' },
+  { value: 'cambio_horario', label: 'Cambio de horario' },
+] as const
+
+/**
+ * Tipos que significan que ese día NO hay cobertura.
+ *
+ * Quien lea las guardias efectivas —alertas, Vista Supervisor, reparto de
+ * carga— tiene que excluirlas, igual que la revisión operativa excluye los
+ * turnos reemplazados o anulados. Un franco cargado como excepción sigue
+ * siendo una fila de la tabla: si no se lo excluye, se cuenta como cobertura.
+ */
+export const TIPOS_SIN_COBERTURA = new Set(['franco', 'ausencia'])
+
+/** true si la guardia efectivamente cubre (no es franco ni ausencia, ni está inactiva). */
+export function guardiaCubre(guardia: { estado?: string | null; tipo_evento?: string | null }): boolean {
+  if (normalizarTextoGuardia(guardia.estado || 'activo') === 'inactivo') return false
+  return !TIPOS_SIN_COBERTURA.has(normalizarTextoGuardia(guardia.tipo_evento || 'normal'))
+}
+
+export interface ReglaSemanal {
+  id: string
+  supervisor_id: string
+  zona_id: string
+  /** Nombre canónico de la zona, resuelto contra zonas_operativas. */
+  zona_nombre: string
+  /** 1=Lun … 7=Dom */
+  dias_semana: number[]
+  hora_inicio: string
+  hora_fin: string
+  rol_operativo?: string | null
+  observacion?: string | null
+  activo?: boolean | null
+  vigencia_desde?: string | null
+  vigencia_hasta?: string | null
+}
+
+export interface PrevisionRegla {
+  regla: ReglaSemanal
+  aCrear: FilaGuardiaGenerada[]
+  duplicadas: string[]
+  /** Motivo por el que la regla no aportó nada. */
+  omitida?: string
+}
+
+export interface PrevisionMes {
+  desde: string
+  hasta: string
+  aCrear: FilaGuardiaGenerada[]
+  duplicadas: number
+  porRegla: PrevisionRegla[]
+  errores: string[]
+}
+
+export const MENSAJE_SIN_REGLAS = 'No hay reglas semanales activas para ese período.'
+export const MOTIVO_REGLA_INACTIVA = 'Regla inactiva'
+export const MOTIVO_FUERA_DE_VIGENCIA = 'Fuera de vigencia para ese período'
+export const MOTIVO_REGLA_INCOMPLETA = 'Regla incompleta (falta zona, horario o días)'
+export const MOTIVO_SIN_FECHAS = 'Ningún día del período coincide con la regla'
+export const MOTIVO_TODO_EXISTE = 'Ya estaba generado por completo'
+
+/**
+ * Clave de una fila generada por regla: la regla y la fecha, nada más.
+ *
+ * Esto es lo que hace idempotente la regeneración de un mes ya editado. Si el
+ * 10/09 de Sergio se cambió de 07:00-19:00 a 07:00-13:00, la clave por horario
+ * no lo encontraría y volvería a crear la fila original: el mes quedaría con la
+ * guardia corregida Y la original. Con la regla como clave, ese día ya está
+ * cubierto y no se toca. Por eso un franco se carga como excepción sobre la
+ * fila y no borrándola: una fila borrada vuelve en la próxima generación.
+ */
+export function claveReglaFecha(reglaId: string, fecha: string): string {
+  return `regla:${reglaId}|${String(fecha).slice(0, 10)}`
+}
+
+const reglaEsUsable = (regla: ReglaSemanal): string | null => {
+  if (regla.activo === false) return MOTIVO_REGLA_INACTIVA
+  if (!regla.supervisor_id || !regla.zona_nombre?.trim()) return MOTIVO_REGLA_INCOMPLETA
+  if (!HORA_VALIDA.test(hora5(regla.hora_inicio)) || !HORA_VALIDA.test(hora5(regla.hora_fin))) return MOTIVO_REGLA_INCOMPLETA
+  if (!regla.dias_semana?.length) return MOTIVO_REGLA_INCOMPLETA
+  return null
+}
+
+/**
+ * Expande todas las reglas en las filas diarias de un período.
+ *
+ * `existentes` son las guardias ya cargadas en ese rango. Se descarta una
+ * fecha si ya hay una fila de la misma regla (aunque esté editada) o una fila
+ * idéntica cargada a mano: generar el mes nunca pisa lo que ya está.
+ */
+export function previsualizarDesdeReglas(
+  reglas: ReglaSemanal[],
+  rango: { desde: string; hasta: string },
+  existentes: GuardiaExistente[] = [],
+): PrevisionMes {
+  const desde = (rango.desde ?? '').trim()
+  const hasta = (rango.hasta ?? '').trim()
+  const errores: string[] = []
+
+  if (!FECHA_VALIDA.test(desde) || !FECHA_VALIDA.test(hasta)) errores.push(MENSAJE_FECHAS_INCOMPLETAS)
+  else if (hasta < desde) errores.push(MENSAJE_RANGO_INVERTIDO)
+  else if (diasDelRango(desde, hasta) > MAX_DIAS_RANGO) errores.push(MENSAJE_RANGO_LARGO)
+  if (!reglas.length) errores.push(MENSAJE_SIN_REGLAS)
+
+  if (errores.length) {
+    return { desde, hasta, aCrear: [], duplicadas: 0, porRegla: [], errores }
+  }
+
+  // Dos claves distintas contra lo ya cargado: por regla (sobrevive a los
+  // cambios de horario) y por slot exacto (atrapa lo cargado a mano).
+  const porRegla = new Set<string>()
+  const porSlot = new Set<string>()
+  for (const fila of existentes) {
+    if (fila.regla_id) porRegla.add(claveReglaFecha(fila.regla_id, String(fila.fecha ?? '')))
+    porSlot.add(claveGuardia(fila))
+  }
+
+  const resultado: PrevisionRegla[] = []
+  const todas: FilaGuardiaGenerada[] = []
+  let duplicadas = 0
+
+  for (const regla of reglas) {
+    const inutilizable = reglaEsUsable(regla)
+    if (inutilizable) {
+      resultado.push({ regla, aCrear: [], duplicadas: [], omitida: inutilizable })
+      continue
+    }
+
+    // La vigencia recorta el período pedido, no lo reemplaza.
+    const inicio = regla.vigencia_desde && regla.vigencia_desde > desde ? regla.vigencia_desde : desde
+    const fin = regla.vigencia_hasta && regla.vigencia_hasta < hasta ? regla.vigencia_hasta : hasta
+
+    if (fin < inicio) {
+      resultado.push({ regla, aCrear: [], duplicadas: [], omitida: MOTIVO_FUERA_DE_VIGENCIA })
+      continue
+    }
+
+    const fechas = fechasEnRango(inicio, fin, regla.dias_semana)
+    if (!fechas.length) {
+      resultado.push({ regla, aCrear: [], duplicadas: [], omitida: MOTIVO_SIN_FECHAS })
+      continue
+    }
+
+    const zona = regla.zona_nombre.trim()
+    const horaInicio = hora5(regla.hora_inicio)
+    const horaFin = hora5(regla.hora_fin)
+    const deLaRegla: FilaGuardiaGenerada[] = []
+    const repetidas: string[] = []
+
+    for (const fecha of fechas) {
+      const claveR = claveReglaFecha(regla.id, fecha)
+      const claveS = claveGuardia({
+        supervisor_id: regla.supervisor_id,
+        zona,
+        fecha,
+        hora_inicio: horaInicio,
+        hora_fin: horaFin,
+      })
+
+      if (porRegla.has(claveR) || porSlot.has(claveS)) {
+        repetidas.push(fecha)
+        continue
+      }
+
+      porRegla.add(claveR)
+      porSlot.add(claveS)
+      deLaRegla.push({
+        supervisor_id: regla.supervisor_id,
+        fecha,
+        hora_inicio: horaInicio,
+        hora_fin: horaFin,
+        zona,
+        rol_operativo: regla.rol_operativo || 'supervisor',
+        estado: 'activo',
+        observacion: (regla.observacion ?? '').trim() || null,
+        regla_id: regla.id,
+        origen: 'regla',
+        tipo_evento: 'normal',
+      })
+    }
+
+    duplicadas += repetidas.length
+    todas.push(...deLaRegla)
+    resultado.push({
+      regla,
+      aCrear: deLaRegla,
+      duplicadas: repetidas,
+      omitida: deLaRegla.length === 0 ? MOTIVO_TODO_EXISTE : undefined,
+    })
+  }
+
+  return { desde, hasta, aCrear: todas, duplicadas, porRegla: resultado, errores }
+}
+
+/** Resumen en una línea de la generación desde reglas. */
+export function resumenMes(prevision: PrevisionMes): string {
+  if (prevision.errores.length) return prevision.errores.join(' ')
+  if (!prevision.aCrear.length && !prevision.duplicadas) {
+    return 'Ninguna regla activa produce guardias en ese período.'
+  }
+
+  const reglasQueAportan = prevision.porRegla.filter(r => r.aCrear.length).length
+  const partes = [`Se van a crear ${prevision.aCrear.length} guardia(s) desde ${reglasQueAportan} regla(s)`]
+  if (prevision.duplicadas) partes.push(`${prevision.duplicadas} ya existen y se omiten`)
+  return `${partes.join(' · ')}.`
+}
+
+/** Primer y último día del mes 'YYYY-MM'. */
+export function rangoDelMes(mes: string): { desde: string; hasta: string } {
+  const [anio, numeroMes] = mes.split('-').map(Number)
+  if (!anio || !numeroMes) return { desde: '', hasta: '' }
+  const ultimo = new Date(anio, numeroMes, 0).getDate()
+  return { desde: `${anio}-${pad2(numeroMes)}-01`, hasta: `${anio}-${pad2(numeroMes)}-${pad2(ultimo)}` }
+}
+
+/** Etiqueta de los días de una regla: [1,2,3,4,5] → 'Lun a Vie'. */
+export function etiquetaDias(dias: number[]): string {
+  const nombres = ['', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+  const ordenados = dias.filter((d, i, todos) => d >= 1 && d <= 7 && todos.indexOf(d) === i).sort((a, b) => a - b)
+  if (!ordenados.length) return '—'
+  if (ordenados.length === 7) return 'Todos los días'
+
+  // Se muestra como rango sólo si los días son consecutivos. 'dom a jue' no lo
+  // es en esta numeración (7,1,2,3,4) y se lista tal cual, que es más honesto
+  // que inventar un rango que cruza el fin de semana.
+  const consecutivos = ordenados.every((d, i) => i === 0 || d === ordenados[i - 1] + 1)
+  if (consecutivos && ordenados.length > 2) return `${nombres[ordenados[0]]} a ${nombres[ordenados[ordenados.length - 1]]}`
+  return ordenados.map(d => nombres[d]).join(' · ')
 }
