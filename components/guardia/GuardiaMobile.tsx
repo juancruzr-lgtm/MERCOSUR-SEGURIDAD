@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
+import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
@@ -1846,14 +1847,13 @@ export default function GuardiaMobile({ user }: { user: any }) {
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={activarPush}
-          disabled={activandoPush}
-          style={{ ...S.btn, ...S.btnSalida, marginBottom: 10, opacity: activandoPush ? 0.65 : 1 }}
-        >
-          {activandoPush ? 'Activando...' : 'Activar notificaciones'}
-        </button>
+        {/* Diagnóstico del dispositivo + activar + prueba real, por el mismo
+            Web Push de los recordatorios de turno/egreso/ronda. Reemplaza el
+            botón suelto: ahora el vigilador ve si su teléfono está bien y
+            qué tocar si no. */}
+        <div style={{ marginBottom: 10 }}>
+          <EstadoNotificaciones />
+        </div>
 
         {/* Sólo aparece si hay algo que hacer: un cartel permanente en cero se
             vuelve parte del fondo y deja de leerse. */}

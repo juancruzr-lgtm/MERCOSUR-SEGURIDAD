@@ -776,7 +776,34 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   const rondaAlertas = (rondaAlertasErrorIgnorable ? [] : (rondaAlertasData || [])) as RondaAlertaPush[]
   rondaAlertasPendientes = rondaAlertas.length
 
+  // Una alerta de ronda se avisa UNA sola vez: a los responsables del momento
+  // en que se detectó. La deduplicación de sendToUsersObjetivo es por
+  // (usuario, objetivo, tipo), correcta por persona — pero el conjunto de
+  // responsables cambia con la hora. Verificado en producción el 18/08/2026:
+  // cada alerta nocturna se le mandaba a Fulla al detectarse y, a las 07:00,
+  // se le volvía a mandar a Aranda y a Martínez cuando entraban de guardia:
+  // el turno diurno arrancaba con 10 push acumuladas de la noche. Si nadie la
+  // atendió, el que entra la ve en su bandeja de pendientes; no se le reenvía.
+  //
+  // Se consulta de una vez qué alertas ya tienen algún envío registrado, para
+  // cualquier destinatario, y esas se saltan antes de resolver responsables.
+  let rondaAlertasYaAvisadas = 0
+  const tiposRonda = rondaAlertas.map(a => `supervisor_ronda_${a.tipo}:${a.id}`)
+  const yaAvisadas = new Set<string>()
+  if (tiposRonda.length > 0) {
+    const { data: enviadasData } = await admin.client
+      .from('notificaciones_enviadas')
+      .select('tipo')
+      .in('tipo', tiposRonda)
+    for (const fila of (enviadasData || []) as Array<{ tipo: string }>) yaAvisadas.add(fila.tipo)
+  }
+
   for (const alerta of rondaAlertas) {
+    if (yaAvisadas.has(`supervisor_ronda_${alerta.tipo}:${alerta.id}`)) {
+      rondaAlertasYaAvisadas += 1
+      continue
+    }
+
     const zonaId = zonaPorObjetivo.get(alerta.objetivo_id) ?? null
     const supervisorIds = destinatariosOperativos(zonaId, hoy, horaAhora, `ronda ${alerta.tipo} en "${nombrePorObjetivo.get(alerta.objetivo_id) || alerta.objetivo_id}"`)
     if (supervisorIds.length === 0) {
@@ -933,7 +960,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       candidatos15: 0,
       alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
       alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores },
-      alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, suspendida: candidatosRondaSuspendida, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores },
+      alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, suspendida: candidatosRondaSuspendida, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores, yaAvisadas: rondaAlertasYaAvisadas },
       recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa },
     egresoPendiente: candidatosEgreso,
       alertasEvaluadas,
@@ -1160,6 +1187,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       suspendida: candidatosRondaSuspendida,
       pendientes: rondaAlertasPendientes,
       sinSupervisores: rondaAlertasSinSupervisores,
+      yaAvisadas: rondaAlertasYaAvisadas,
     },
     recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa },
     alertasEvaluadas,
