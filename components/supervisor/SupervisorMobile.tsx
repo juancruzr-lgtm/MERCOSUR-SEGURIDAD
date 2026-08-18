@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
+import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, objetivoEstaOperativo, registroTieneEntradaConfirmada, idsObjetivosPausados } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
@@ -3951,6 +3952,12 @@ export default function SupervisorMobile({ user }: any) {
               <section>
                 <div style={screenTitle}>Perfil</div>
                 <div style={dateText}>Datos de usuario y seguridad</div>
+
+                {/* Diagnóstico del dispositivo + prueba real por el mismo Web
+                    Push de las alertas. Ver components/push/EstadoNotificaciones. */}
+                <div style={{ marginBottom: 14 }}>
+                  <EstadoNotificaciones />
+                </div>
 
                 <div style={card}>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>

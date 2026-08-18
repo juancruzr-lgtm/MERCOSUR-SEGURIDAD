@@ -1,6 +1,8 @@
 'use client'
 
 import { supabase } from './supabase'
+import { evaluarEstadoPush } from './push-estado'
+import type { EstadoPush, PermisoNotificaciones } from './push-estado'
 
 type PushActivationResult =
   | { ok: true, message: string }
@@ -164,6 +166,111 @@ async function guardarSuscripcion(token: string, subscription: PushSubscription)
     throw error
   } finally {
     clearTimeout(timeoutId)
+  }
+}
+
+// ── Diagnóstico del dispositivo ──────────────────────────────────────────────
+//
+// Junta lo que sabe el navegador (permiso, Service Worker, suscripción actual)
+// con lo que sabe el servidor (endpoints guardados, último envío) y lo evalúa
+// con lib/push-estado. La suscripción del navegador se compara contra las
+// guardadas: "tener alguna suscripción histórica" no es estar suscripto.
+
+export interface DiagnosticoPushDispositivo {
+  estado: EstadoPush
+  endpointNavegador: string | null
+  ultimoEnvio: string | null
+  ultimoEnvioTitulo: string | null
+}
+
+async function tokenSesion(): Promise<string | null> {
+  const { data } = await withTimeout(supabase.auth.getSession(), API_TIMEOUT_MS, 'Sesión no disponible.')
+  return data.session?.access_token ?? null
+}
+
+export async function diagnosticarPushDispositivo(): Promise<DiagnosticoPushDispositivo> {
+  const contextoSeguro = typeof window !== 'undefined' && window.isSecureContext
+  const pushSoportado = typeof window !== 'undefined' && 'PushManager' in window
+  const permiso: PermisoNotificaciones = typeof Notification === 'undefined'
+    ? 'no_soportado'
+    : (Notification.permission as PermisoNotificaciones)
+
+  let serviceWorkerActivo = false
+  let endpointNavegador: string | null = null
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    try {
+      const reg = await withTimeout(navigator.serviceWorker.getRegistration('/'), SERVICE_WORKER_TIMEOUT_MS, 'SW')
+      serviceWorkerActivo = Boolean(reg?.active)
+      if (reg?.pushManager) {
+        const sub = await withTimeout(reg.pushManager.getSubscription(), SERVICE_WORKER_TIMEOUT_MS, 'sub')
+        endpointNavegador = sub?.endpoint ?? null
+      }
+    } catch {
+      // Sin SW disponible: el estado lo dice.
+    }
+  }
+
+  let endpointsGuardados: string[] = []
+  let fechaSuscripcion: string | null = null
+  let ultimoEnvio: string | null = null
+  let ultimoEnvioTitulo: string | null = null
+  try {
+    const token = await tokenSesion()
+    if (token) {
+      const res = await fetch('/api/push/estado', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
+      if (res.ok) {
+        const data = await res.json()
+        const subs = (data.suscripciones || []) as Array<{ endpoint: string; activo: boolean; updated_at: string }>
+        endpointsGuardados = subs.filter(s => s.activo).map(s => s.endpoint)
+        fechaSuscripcion = subs.find(s => s.endpoint === endpointNavegador)?.updated_at ?? null
+        ultimoEnvio = data.ultimo_envio?.created_at ?? null
+        ultimoEnvioTitulo = data.ultimo_envio?.titulo ?? null
+      }
+    }
+  } catch {
+    // Sin servidor no se puede comparar: quedará como no suscripto.
+  }
+
+  const estado = evaluarEstadoPush({
+    permiso,
+    serviceWorkerActivo,
+    pushSoportado,
+    contextoSeguro,
+    endpointNavegador,
+    endpointsGuardados,
+    esIos: isIosDevice(),
+    esPwaInstalada: isStandalonePwa(),
+    fechaSuscripcion,
+    ultimoEnvio,
+  })
+
+  return { estado: { ...estado }, endpointNavegador, ultimoEnvio, ultimoEnvioTitulo }
+}
+
+export type ResultadoPruebaPush =
+  | { ok: true; resultado: 'enviado'; enviado_en: string }
+  | { ok: false; resultado: 'sin_dispositivo' | 'suscripcion_invalida' | 'envio_rechazado' | 'error'; error: string }
+
+/** Manda una Web Push real de prueba al dispositivo actual (mismo circuito que las alertas). */
+export async function enviarPushDePrueba(): Promise<ResultadoPruebaPush> {
+  try {
+    const reg = await withTimeout(navigator.serviceWorker.getRegistration('/'), SERVICE_WORKER_TIMEOUT_MS, 'Service Worker no disponible.')
+    const sub = reg?.pushManager ? await reg.pushManager.getSubscription() : null
+    if (!sub) return { ok: false, resultado: 'sin_dispositivo', error: 'Este navegador no tiene suscripción push. Tocá "Activar notificaciones".' }
+
+    const token = await tokenSesion()
+    if (!token) return { ok: false, resultado: 'error', error: 'Sesión no disponible.' }
+
+    const res = await fetch('/api/push/prueba', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ endpoint: sub.endpoint }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (data?.ok) return { ok: true, resultado: 'enviado', enviado_en: data.enviado_en }
+    return { ok: false, resultado: data?.resultado || 'error', error: data?.error || `HTTP ${res.status}` }
+  } catch (e) {
+    return { ok: false, resultado: 'error', error: errorMessage(e) }
   }
 }
 
