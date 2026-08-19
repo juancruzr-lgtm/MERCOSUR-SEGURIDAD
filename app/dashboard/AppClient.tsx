@@ -6099,7 +6099,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       supabase.from('novedades_laborales').select('*').eq('estado', 'aprobada').lte('fecha_desde', hastaStr).gte('fecha_hasta', desdeStr),
       fetchAll('aceptaciones_planilla', 'turno_id, empleado_id, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('turno_id')),
       fetchAll('solicitudes_modificacion_planilla', 'id, turno_id, empleado_id, estado, created_at, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('created_at', { ascending: false }).order('id')),
-      fetchAll('revisiones_planilla', 'turno_id, empleado_id, accion, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('turno_id')),
+      fetchAll('revisiones_planilla', 'turno_id, empleado_id, accion, created_at, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('turno_id')),
     ]).then(([turnos, registros, nl, acept, soli, revi]) => {
       setTurnosReportes(turnos)
       setRegistrosReportes(registros)

@@ -378,7 +378,8 @@ export function construirRevisionPorClave(
   aceptaciones: Array<{ turno_id: string; empleado_id: string }>,
   /** Ordenadas por created_at descendente: la primera vista es la más reciente. */
   solicitudes: Array<{ id?: string; turno_id: string; empleado_id: string; texto?: string | null; estado: string }>,
-  revisiones: Array<{ turno_id: string; empleado_id: string; accion: string }>,
+  /** created_at decide cual accion vale: sin fecha, gana la derivacion. */
+  revisiones: Array<{ turno_id: string; empleado_id: string; accion: string; created_at?: string | null }>,
 ): Map<string, EstadoRevisionClave> {
   // Las claves se juntan a mano en un array en vez de iterar los Set: el
   // target de compilación es ES5 y el spread de Set/Map no compila.
@@ -402,15 +403,52 @@ export function construirRevisionPorClave(
     if (!previa || (previa.estado === 'resuelta' && s.estado !== 'resuelta')) solicitudPor.set(k, s)
   }
 
-  const revisado = new Set<string>()
-  const derivado = new Set<string>()
+  // Gana la ULTIMA accion, no "alguna vez paso".
+  //
+  // Antes esto eran dos Set: bastaba con que existiera una derivacion para que
+  // la fila quedara derivada para siempre. Y como estadoRevision mira `derivado`
+  // antes que `revisado`, ningun "Marcar como revisado" posterior podia sacarla
+  // de la bandeja. La unica salida prevista —una solicitud en estado 'resuelta'—
+  // no la escribe ninguna parte del codigo, asi que era una puerta sin picaporte:
+  // el supervisor derivaba, se arrepentia, marcaba revisado y no pasaba nada.
+  //
+  // Con la fecha, la fila refleja lo ultimo que decidio el supervisor: deriva y
+  // queda derivada; si despues la revisa, sale; si la vuelve a derivar, vuelve a
+  // entrar. Ante empate o falta de fecha gana la derivacion, que es como se
+  // comportaba antes: preferimos dejar una fila de mas en la bandeja que perderla.
+  const marcaRevisado = new Map<string, number>()
+  const marcaDerivado = new Map<string, number>()
   const observaciones = new Map<string, number>()
+
+  const momento = (iso?: string | null) => {
+    const t = iso ? Date.parse(iso) : NaN
+    return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY
+  }
+  const marcarUltima = (m: Map<string, number>, k: string, t: number) => {
+    const previa = m.get(k)
+    if (previa === undefined || t > previa) m.set(k, t)
+  }
+
   for (const r of revisiones) {
     const k = claveRevision(r.turno_id, r.empleado_id)
     anotar(k)
-    if (r.accion === 'revisado') revisado.add(k)
-    if (r.accion === 'derivar_administracion') derivado.add(k)
+    const t = momento(r.created_at)
+    if (r.accion === 'revisado') marcarUltima(marcaRevisado, k, t)
+    if (r.accion === 'derivar_administracion') marcarUltima(marcaDerivado, k, t)
     if (r.accion === 'observacion') observaciones.set(k, (observaciones.get(k) ?? 0) + 1)
+  }
+
+  const esDerivado = (k: string) => {
+    const d = marcaDerivado.get(k)
+    if (d === undefined) return false
+    const r = marcaRevisado.get(k)
+    return r === undefined || d >= r
+  }
+  const esRevisado = (k: string) => {
+    const r = marcaRevisado.get(k)
+    if (r === undefined) return false
+    const d = marcaDerivado.get(k)
+    return d === undefined || r > d
   }
 
   const mapa = new Map<string, EstadoRevisionClave>()
@@ -423,8 +461,8 @@ export function construirRevisionPorClave(
       solicitudId: solicitud?.id ?? null,
       solicitudTexto: solicitud?.texto ?? null,
       solicitudEstado: (solicitud?.estado as EstadoSolicitud) ?? null,
-      revisado: revisado.has(k),
-      derivado: derivado.has(k),
+      revisado: esRevisado(k),
+      derivado: esDerivado(k),
       observaciones: observaciones.get(k) ?? 0,
     })
   }
