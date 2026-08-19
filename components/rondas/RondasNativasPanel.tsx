@@ -43,13 +43,22 @@ export default function RondasNativasPanel({
   const [error, setError] = useState('')
   const [editando, setEditando] = useState<RondaBaseResumen | null | undefined>(undefined)
 
-  const cargar = useCallback(async () => {
-    setCargando(true)
+  // `silencioso` refresca los datos sin tocar `cargando`. Es lo que usa el editor
+  // despues de guardar: con el spinner encendido el ternario de mas abajo saca a
+  // RondaBaseEditor del arbol, React lo desmonta y al volver a montarse pisa lo
+  // recien guardado con el valor con el que se abrio. Mismo criterio que
+  // RondasGuardiaPanel.
+  const cargar = useCallback(async (silencioso = false) => {
+    if (!silencioso) setCargando(true)
+    const terminar = () => {
+      if (!silencioso) setCargando(false)
+    }
+
     const accesoRes = await obtenerAccesoRondasObjetivo(objetivoId)
     if (accesoRes.error) {
       setError(accesoRes.error)
       setAcceso(null)
-      setCargando(false)
+      terminar()
       return
     }
 
@@ -58,7 +67,7 @@ export default function RondasNativasPanel({
       setRondas([])
       setPuestos([])
       setError('')
-      setCargando(false)
+      terminar()
       return
     }
 
@@ -69,11 +78,17 @@ export default function RondasNativasPanel({
     if (rondasRes.error || puestosRes.error) {
       setError(rondasRes.error || puestosRes.error || 'No se pudieron cargar las rondas.')
     } else {
-      setRondas(rondasRes.data)
+      const frescas = rondasRes.data
+      setRondas(frescas)
       setPuestos(puestosRes.data)
       setError('')
+      // La ronda abierta tiene que seguir a la lista. `null` es "creando una
+      // ronda nueva" y `undefined` es "editor cerrado": ninguno de los dos se pisa.
+      setEditando(previo =>
+        previo ? (frescas.find(ronda => ronda.id === previo.id) ?? previo) : previo,
+      )
     }
-    setCargando(false)
+    terminar()
   }, [objetivoId])
 
   useEffect(() => {
@@ -123,7 +138,7 @@ export default function RondasNativasPanel({
             onDirtyChange(false)
             void cargar()
           }}
-          onCambio={() => void cargar()}
+          onCambio={() => void cargar(true)}
           onDirtyChange={onDirtyChange}
         />
       ) : (
