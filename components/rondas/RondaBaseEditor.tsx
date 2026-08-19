@@ -57,6 +57,13 @@ export default function RondaBaseEditor({
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState('')
   const [mensaje, setMensaje] = useState('')
+  // El input type="time" no sabe expresar "sin hora": al vaciarlo el navegador
+  // termina en 00:00, que NO es lo mismo — ancla el ciclo a medianoche en vez de
+  // al turno. Este checkbox es la unica via de la pantalla para producir el null
+  // que la logica ya soporta (ventanasRondaEnTurno: base = hora_inicio ?? inicio
+  // del turno).
+  const [sinHora, setSinHora] = useState(!inicial.hora_inicio)
+  const [horaPrevia, setHoraPrevia] = useState(inicial.hora_inicio || '08:00')
   const baseDirty = JSON.stringify(form) !== JSON.stringify(baseGuardada)
   const hayCambios = baseDirty || puntosDirty
 
@@ -135,6 +142,16 @@ export default function RondaBaseEditor({
     if (confirmarSalida()) onCerrar()
   }
 
+  const alternarSinHora = (marcado: boolean) => {
+    setSinHora(marcado)
+    if (marcado) {
+      if (form.hora_inicio) setHoraPrevia(form.hora_inicio)
+      setForm(actual => ({ ...actual, hora_inicio: '' }))
+    } else {
+      setForm(actual => ({ ...actual, hora_inicio: horaPrevia }))
+    }
+  }
+
   const guardarBase = async () => {
     if (guardando) return
     if (!ronda && !form.puesto_id) {
@@ -175,6 +192,8 @@ export default function RondaBaseEditor({
       const guardada = formInicial({ ...resultado.data, cantidad_puntos: 0 }, puestos)
       setForm(guardada)
       setBaseGuardada(guardada)
+      setSinHora(!guardada.hora_inicio)
+      if (guardada.hora_inicio) setHoraPrevia(guardada.hora_inicio)
       setMensaje(ronda ? 'Ronda actualizada.' : 'Ronda creada. Ya podés configurar sus puntos.')
       onCambio()
     }
@@ -244,14 +263,25 @@ export default function RondaBaseEditor({
         </div>
         <div className={styles.field}>
           <label htmlFor="ronda-base-hora-inicio">Primera ronda / hora de inicio</label>
-          <input id="ronda-base-hora-inicio" type="time" value={form.hora_inicio} onChange={evento => setForm({ ...form, hora_inicio: evento.target.value })} />
+          <input
+            id="ronda-base-hora-inicio"
+            type="time"
+            value={form.hora_inicio}
+            disabled={sinHora}
+            onChange={evento => setForm({ ...form, hora_inicio: evento.target.value })}
+          />
+          <label className={styles.help} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={sinHora} onChange={evento => alternarSinHora(evento.target.checked)} />
+            Sin hora fija — arranca con cada turno (24 h)
+          </label>
           {/* El texto anterior decía que era "referencia futura" y que "todavía
               no genera obligaciones". Era exactamente al revés: esta hora ancla
               el ciclo completo. Verificado en producción: NACION SANTA FE con
               primera 23:00 y 60 min genera 23:00 → 00:00 → … → 06:00. */}
           <div className={styles.help}>
-            Hora de inicio del ciclo. Las rondas se repiten desde esta hora según el intervalo
-            configurado mientras exista un turno operativo.
+            {sinHora
+              ? 'Cobertura 24 h: el ciclo arranca al comenzar cada turno del puesto y se repite según el intervalo mientras exista un turno activo, sea cual sea su horario.'
+              : 'Hora de inicio del ciclo. Las rondas se repiten desde esta hora según el intervalo configurado mientras exista un turno activo, y solo en los turnos que contengan esa hora.'}
           </div>
           {previsualizacion && (
             <div className={styles.help} style={{ color: '#38bdf8' }}>
