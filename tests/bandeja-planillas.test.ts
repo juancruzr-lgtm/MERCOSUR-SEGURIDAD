@@ -571,3 +571,82 @@ describe('construirRevisionPorClave', () => {
     expect(estadoRevision(m.get(claveRevision('t1', 'e2'))!)).toBe('revisado_supervisor')
   })
 })
+
+// ── Gana la última acción, no "alguna vez pasó" ──────────────────────────────
+//
+// El caso real que lo motivó: un supervisor derivó una planilla a
+// Administración, se arrepintió y la marcó como revisada. La fila siguió en la
+// bandeja para siempre, porque `derivado` era un "alguna vez pasó" y
+// estadoRevision lo mira antes que `revisado`. La única salida prevista —una
+// solicitud en estado 'resuelta'— no la escribe ninguna parte del código.
+
+describe('precedencia por fecha entre derivar y revisar', () => {
+  const t = (accion: string, created_at: string) =>
+    ({ turno_id: 't1', empleado_id: 'e1', accion, created_at })
+  const k = claveRevision('t1', 'e1')
+
+  it('revisar despues de derivar saca la fila de la bandeja', () => {
+    const m = construirRevisionPorClave([], [], [
+      t('derivar_administracion', '2026-08-18T22:03:00Z'),
+      t('revisado', '2026-08-18T22:30:00Z'),
+    ])
+    expect(m.get(k)!.derivado).toBe(false)
+    expect(m.get(k)!.revisado).toBe(true)
+    expect(estadoRevision(m.get(k)!)).toBe('revisado_supervisor')
+  })
+
+  it('derivar despues de revisar la vuelve a poner en la bandeja', () => {
+    const m = construirRevisionPorClave([], [], [
+      t('revisado', '2026-08-18T22:30:00Z'),
+      t('derivar_administracion', '2026-08-19T09:58:00Z'),
+    ])
+    expect(m.get(k)!.derivado).toBe(true)
+    expect(m.get(k)!.revisado).toBe(false)
+    expect(estadoRevision(m.get(k)!)).toBe('pendiente_regularizacion')
+  })
+
+  it('el caso real de Benitez: derivar, revisar, derivar -> queda derivada', () => {
+    const m = construirRevisionPorClave([], [], [
+      t('derivar_administracion', '2026-08-18T22:03:00Z'),
+      t('revisado', '2026-08-18T22:30:00Z'),
+      t('derivar_administracion', '2026-08-19T09:58:00Z'),
+    ])
+    expect(estadoRevision(m.get(k)!)).toBe('pendiente_regularizacion')
+  })
+
+  it('y un revisado posterior a esas tres la saca', () => {
+    const m = construirRevisionPorClave([], [], [
+      t('derivar_administracion', '2026-08-18T22:03:00Z'),
+      t('revisado', '2026-08-18T22:30:00Z'),
+      t('derivar_administracion', '2026-08-19T09:58:00Z'),
+      t('revisado', '2026-08-19T10:15:00Z'),
+    ])
+    expect(estadoRevision(m.get(k)!)).toBe('revisado_supervisor')
+  })
+
+  it('el orden del arreglo no importa: manda la fecha', () => {
+    const m = construirRevisionPorClave([], [], [
+      t('revisado', '2026-08-19T10:15:00Z'),
+      t('derivar_administracion', '2026-08-18T22:03:00Z'),
+    ])
+    expect(estadoRevision(m.get(k)!)).toBe('revisado_supervisor')
+  })
+
+  it('sin fecha se comporta como antes: gana la derivacion', () => {
+    const m = construirRevisionPorClave([], [], [
+      { turno_id: 't1', empleado_id: 'e1', accion: 'derivar_administracion' },
+      { turno_id: 't1', empleado_id: 'e1', accion: 'revisado' },
+    ])
+    expect(estadoRevision(m.get(k)!)).toBe('pendiente_regularizacion')
+  })
+
+  it('las observaciones se siguen contando aparte', () => {
+    const m = construirRevisionPorClave([], [], [
+      t('observacion', '2026-08-18T20:00:00Z'),
+      t('observacion', '2026-08-18T21:00:00Z'),
+      t('revisado', '2026-08-18T22:00:00Z'),
+    ])
+    expect(m.get(k)!.observaciones).toBe(2)
+    expect(m.get(k)!.revisado).toBe(true)
+  })
+})

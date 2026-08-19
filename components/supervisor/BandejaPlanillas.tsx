@@ -269,7 +269,7 @@ export default function BandejaPlanillas({
           .order('created_at', { ascending: false }).order('id')
           .range(d, h)),
         fetchPaginadoResult((d, h) => supabase.from('revisiones_planilla')
-          .select('turno_id, empleado_id, solicitud_id, accion, turno:turnos!inner(fecha)')
+          .select('turno_id, empleado_id, solicitud_id, accion, created_at, turno:turnos!inner(fecha)')
           .gte('turno.fecha', desde).lte('turno.fecha', hasta)
           .order('turno_id')
           .range(d, h)),
