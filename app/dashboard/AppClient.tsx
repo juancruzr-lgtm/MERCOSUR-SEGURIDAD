@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
+import { faltaZonaOperativa, MOTIVO_ZONA_OBLIGATORIA, MOTIVO_ZONA_OBLIGATORIA_SOLICITUD, ERROR_ZONA_OBLIGATORIA_SOLICITUD } from '@/lib/objetivos'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -3041,6 +3042,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
   // la interfaz (ver lib/puestos.ts) ni puede tener rondas.
   const guardar = async () => {
     if (!form.nombre.trim()) return
+    if (faltaZonaOperativa(form.zona_id)) return
     setLoading(true)
 
     const radioNuevo = Number(form.radio_metros) || 200
@@ -3417,7 +3419,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
               <button
                 style={{ ...S.btn, ...S.btnPrimary }}
                 onClick={guardar}
-                disabled={loading || !form.nombre.trim()}
+                disabled={loading || !form.nombre.trim() || faltaZonaOperativa(form.zona_id)}
               >
                 {loading ? 'Guardando...' : editId ? 'Guardar cambios' : 'Crear objetivo'}
               </button>
@@ -3513,17 +3515,22 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
             </div>
 
             <div style={{ marginBottom:16 }}>
-              <label style={S.label}>Zona operativa</label>
+              <label style={S.label}>Zona operativa *</label>
               <select
                 style={S.select}
                 value={form.zona_id}
                 onChange={e => setForm({ ...form, zona_id:e.target.value })}
               >
-                <option value="">Sin zona</option>
+                <option value="">— Elegí zona —</option>
                 {zonasOperativas.map((z: any) => (
                   <option key={z.id} value={z.id}>{z.nombre}</option>
                 ))}
               </select>
+              {faltaZonaOperativa(form.zona_id) && (
+                <div style={{ fontSize:11, color:'#f59e0b', marginTop:4, lineHeight:1.35 }}>
+                  {MOTIVO_ZONA_OBLIGATORIA}
+                </div>
+              )}
             </div>
           </div>
 
@@ -8506,11 +8513,13 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
 
 
 // ── SOLICITUDES ADMINISTRATIVAS ───────────────────────────────
-function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos }: any) {
+function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos, zonasOperativas = [] }: any) {
   const [solicitudes, setSolicitudes] = useState<SolicitudAdmin[]>([])
   const [loading, setLoading] = useState(true)
   const [accionLoading, setAccionLoading] = useState<string | null>(null)
   const [comentarios, setComentarios] = useState<Record<string, string>>({})
+  // Zona elegida por el admin al aprobar un alta de objetivo, por solicitud.
+  const [zonaSolicitud, setZonaSolicitud] = useState<Record<string, string>>({})
   const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error', texto: string } | null>(null)
 
   const cargar = async () => {
@@ -8555,12 +8564,17 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
     return String(value)
   }
 
-  const crearObjetivoDesdeSolicitud = async (datos: Record<string, any>) => {
+  // La solicitud la carga un supervisor y no trae zona: la elige el admin al
+  // aprobar. Es obligatoria — un objetivo sin zona no entra al ranking de
+  // supervisores ni aparece en la bandeja de nadie, y queda invisible hasta
+  // que alguien lo busca a mano.
+  const crearObjetivoDesdeSolicitud = async (datos: Record<string, any>, zonaId: string | null) => {
     const lat = datos.lat === null || datos.lat === undefined || datos.lat === '' ? null : Number(datos.lat)
     const lng = datos.lng === null || datos.lng === undefined || datos.lng === '' ? null : Number(datos.lng)
 
     if (!String(datos.nombre || '').trim()) throw new Error('La solicitud no tiene nombre de objetivo.')
     if ((lat !== null && !Number.isFinite(lat)) || (lng !== null && !Number.isFinite(lng))) throw new Error('La solicitud tiene GPS inválido.')
+    if (faltaZonaOperativa(zonaId)) throw new Error(ERROR_ZONA_OBLIGATORIA_SOLICITUD)
 
     const payload = {
       nombre: String(datos.nombre).trim(),
@@ -8570,6 +8584,7 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
       lng,
       radio_metros: Number(datos.radio_metros) || 200,
       estado: 'activo',
+      zona_id: zonaId,
     }
 
     const { data, error } = await supabase.from('objetivos').insert(payload).select().single()
@@ -8661,7 +8676,7 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
     try {
       let entidadId = solicitud.entidad_id || null
 
-      if (solicitud.tipo === 'crear_objetivo') entidadId = await crearObjetivoDesdeSolicitud(datos)
+      if (solicitud.tipo === 'crear_objetivo') entidadId = await crearObjetivoDesdeSolicitud(datos, zonaSolicitud[solicitud.id] || null)
       if (solicitud.tipo === 'baja_objetivo') await inactivarObjetivo(solicitud.entidad_id)
       if (solicitud.tipo === 'crear_vigilador') entidadId = await crearGuardiaDesdeSolicitud(datos)
       if (solicitud.tipo === 'baja_vigilador') await inactivarGuardia(solicitud.entidad_id)
@@ -8721,6 +8736,27 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
 
         {resoluble && (
           <>
+            {solicitud.tipo === 'crear_objetivo' && (
+              <div style={{ marginBottom:12 }}>
+                <label style={S.label}>Zona operativa *</label>
+                <select
+                  style={S.select}
+                  value={zonaSolicitud[solicitud.id] || ''}
+                  onChange={e => setZonaSolicitud(prev => ({ ...prev, [solicitud.id]: e.target.value }))}
+                >
+                  <option value="">— Elegí zona —</option>
+                  {zonasOperativas.map((z: any) => (
+                    <option key={z.id} value={z.id}>{z.nombre}</option>
+                  ))}
+                </select>
+                {faltaZonaOperativa(zonaSolicitud[solicitud.id]) && (
+                  <div style={{ fontSize:11, color:'#f59e0b', marginTop:4, lineHeight:1.35 }}>
+                    {MOTIVO_ZONA_OBLIGATORIA_SOLICITUD}
+                  </div>
+                )}
+              </div>
+            )}
+
             <label style={S.label}>Comentario administrativo</label>
             <textarea
               style={{ ...S.input, resize:'vertical', minHeight:68, marginBottom:12 }}
@@ -8739,7 +8775,11 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
               <button
                 style={{ ...S.btn, background:'rgba(16,185,129,.16)', color:'#86efac', border:'1px solid rgba(16,185,129,.35)' }}
                 onClick={() => aprobar(solicitud)}
-                disabled={accionLoading === `rechazar-${solicitud.id}` || accionLoading === `aprobar-${solicitud.id}`}
+                disabled={
+                  accionLoading === `rechazar-${solicitud.id}`
+                  || accionLoading === `aprobar-${solicitud.id}`
+                  || (solicitud.tipo === 'crear_objetivo' && faltaZonaOperativa(zonaSolicitud[solicitud.id]))
+                }
               >
                 {accionLoading === `aprobar-${solicitud.id}` ? 'Aprobando...' : 'Aprobar'}
               </button>
@@ -12121,7 +12161,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} zonas={zonasOperativas} />}
-              {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
+              {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} zonasOperativas={zonasOperativas} />}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} setRegistros={setRegistros} user={user} supervisorZonas={supervisorZonas} zonasOperativas={zonasOperativas} filtroActivo={filtros.revision_operativa} limpiarFiltro={() => limpiarFiltro('revision_operativa')} />}
               {/* La MISMA bandeja que ve el supervisor: mismo componente, no una copia.
                   Desde acá con alcance de administración (todos los objetivos) y en
