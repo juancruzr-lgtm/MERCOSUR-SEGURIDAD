@@ -19,6 +19,13 @@ interface Props {
   objetivoId: string
   centroObjetivo?: [number, number] | null
   onDirtyChange: (dirty: boolean) => void
+  /**
+   * Abre el editor directamente sobre esta ronda al terminar la carga.
+   *
+   * Lo usa el Centro de Rondas para llegar desde la lista general al MISMO
+   * editor de siempre, sin montar un segundo arbol de componentes.
+   */
+  rondaInicialId?: string | null
 }
 
 function mensajeAcceso(acceso: AccesoRondasObjetivo): string {
@@ -35,6 +42,7 @@ export default function RondasNativasPanel({
   objetivoId,
   centroObjetivo,
   onDirtyChange,
+  rondaInicialId = null,
 }: Props) {
   const [rondas, setRondas] = useState<RondaBaseResumen[]>([])
   const [puestos, setPuestos] = useState<PuestoRonda[]>([])
@@ -84,12 +92,18 @@ export default function RondasNativasPanel({
       setError('')
       // La ronda abierta tiene que seguir a la lista. `null` es "creando una
       // ronda nueva" y `undefined` es "editor cerrado": ninguno de los dos se pisa.
-      setEditando(previo =>
-        previo ? (frescas.find(ronda => ronda.id === previo.id) ?? previo) : previo,
-      )
+      setEditando(previo => {
+        // Editor cerrado y el llamador pidio una ronda concreta: se abre sola.
+        if (previo === undefined) {
+          return rondaInicialId
+            ? (frescas.find(ronda => ronda.id === rondaInicialId) ?? previo)
+            : previo
+        }
+        return previo ? (frescas.find(ronda => ronda.id === previo.id) ?? previo) : previo
+      })
     }
     terminar()
-  }, [objetivoId])
+  }, [objetivoId, rondaInicialId])
 
   useEffect(() => {
     setEditando(undefined)
