@@ -29,6 +29,10 @@ import {
   type AccionRondaAlerta,
 } from '@/lib/rondas'
 import { formatHora24, formatFechaHora } from '@/lib/formato'
+import {
+  regularizarAlertasHistoricas, resumenPrevioRegularizacion, validarMotivoRegularizacion,
+} from '@/lib/rondas'
+import type { ResumenRegularizacion } from '@/lib/rondas'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
 
 interface Props {
@@ -189,6 +193,12 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
           {cargando ? '…' : '↻'}
         </button>
       </div>
+
+      {/* Solo en la pantalla completa de alertas: en los resumenes embebidos
+          seria una accion administrativa fuera de lugar. */}
+      {!soloPendientes && (
+        <RegularizarHistoricas objetivoId={objetivoId} onAplicado={() => void cargar()} />
+      )}
 
       {cargando && <div style={S.nota}>Cargando alertas…</div>}
       {!cargando && error && <div style={S.error} role="alert">{error}</div>}
@@ -589,4 +599,132 @@ const S: Record<string, React.CSSProperties> = {
     borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 800, cursor: 'pointer',
   },
   btnOff: { background: '#334155', color: '#64748b', cursor: 'not-allowed' },
+}
+
+// ── Regularizar alertas anteriores ───────────────────────────────────────────
+//
+// Cerrar en lote alertas viejas que son ciertas pero ya no son trabajo de hoy.
+// Nunca borra: cada cierre pasa por resolver_ronda_alerta y queda su
+// intervencion con actor, motivo y fecha. Por eso el flujo es en dos pasos —
+// primero se ve a quien afecta, despues se confirma con motivo.
+
+function RegularizarHistoricas({ objetivoId, onAplicado }: {
+  objetivoId: string | null
+  onAplicado: () => void
+}) {
+  const [abierto, setAbierto] = useState(false)
+  const [hasta, setHasta] = useState('')
+  const [motivo, setMotivo] = useState('')
+  const [previa, setPrevia] = useState<ResumenRegularizacion | null>(null)
+  const [trabajando, setTrabajando] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [hecho, setHecho] = useState<string | null>(null)
+
+  const errorMotivo = motivo ? validarMotivoRegularizacion(motivo) : null
+
+  const reiniciar = () => {
+    setPrevia(null); setError(null); setHecho(null)
+  }
+
+  const verPrevia = async () => {
+    if (!hasta) { setError('Elegí hasta qué fecha regularizar.'); return }
+    setTrabajando(true); setError(null); setHecho(null)
+    const r = await regularizarAlertasHistoricas({ hasta, objetivoId, soloConteo: true })
+    if (r.error) setError(r.error)
+    else setPrevia(r.data)
+    setTrabajando(false)
+  }
+
+  const aplicar = async () => {
+    const problema = validarMotivoRegularizacion(motivo)
+    if (problema) { setError(problema); return }
+    if (!previa || previa.total === 0) return
+    if (!window.confirm(
+      `Se van a cerrar ${previa.total} alertas pendientes anteriores a ${hasta}. `
+      + 'Quedan en el historial, no se borra ninguna. ¿Confirmás?',
+    )) return
+
+    setTrabajando(true); setError(null)
+    const r = await regularizarAlertasHistoricas({ hasta, motivo, objetivoId, soloConteo: false })
+    if (r.error) {
+      setError(r.error)
+    } else {
+      setHecho(`${r.data.regularizadas} alerta${r.data.regularizadas === 1 ? '' : 's'} regularizada${r.data.regularizadas === 1 ? '' : 's'}. Siguen en el historial.`)
+      setPrevia(null); setMotivo('')
+      onAplicado()
+    }
+    setTrabajando(false)
+  }
+
+  if (!abierto) {
+    return (
+      <div style={{ marginBottom: 10 }}>
+        <button type="button" style={S.filtroBtn} onClick={() => setAbierto(true)}>
+          Regularizar alertas anteriores
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ marginBottom: 12, padding: 12, border: '1px solid #33415577', borderRadius: 8, background: '#0f172a' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <strong style={{ fontSize: 12.5, color: '#e2e8f0' }}>Regularizar alertas anteriores</strong>
+        <button type="button" style={S.filtroBtn} onClick={() => { setAbierto(false); reiniciar() }}>Cerrar</button>
+      </div>
+
+      <div style={{ fontSize: 11.5, color: '#94a3b8', marginBottom: 10 }}>
+        Cierra las alertas pendientes vencidas antes de la fecha elegida. No se borra ninguna:
+        quedan como resueltas, con tu nombre y el motivo, y siguen consultables en el historial.
+      </div>
+
+      <label style={{ fontSize: 11.5, color: '#94a3b8', display: 'block', marginBottom: 4 }}>
+        Hasta la fecha (sin incluirla)
+      </label>
+      <input
+        type="date"
+        value={hasta}
+        onChange={e => { setHasta(e.target.value); reiniciar() }}
+        style={{ ...S.filtroBtn, padding: '6px 10px', marginRight: 8 }}
+      />
+      <button type="button" style={S.filtroBtn} onClick={() => void verPrevia()} disabled={trabajando || !hasta}>
+        {trabajando ? '…' : 'Ver qué se va a cerrar'}
+      </button>
+
+      {previa && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, color: '#38bdf8', marginBottom: 8 }}>
+            {resumenPrevioRegularizacion(previa)}
+          </div>
+          {previa.total > 0 && (
+            <>
+              <label style={{ fontSize: 11.5, color: '#94a3b8', display: 'block', marginBottom: 4 }}>
+                Motivo (queda asentado en cada alerta)
+              </label>
+              <textarea
+                value={motivo}
+                onChange={e => setMotivo(e.target.value)}
+                rows={2}
+                maxLength={500}
+                placeholder="Por ejemplo: alertas previas al encendido del monitoreo automático."
+                style={{ width: '100%', background: '#0b1220', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 6, padding: 8, fontSize: 12 }}
+              />
+              {errorMotivo && <div style={{ fontSize: 11.5, color: '#f59e0b', marginTop: 4 }}>{errorMotivo}</div>}
+              <button
+                type="button"
+                style={{ ...S.filtroBtn, ...S.filtroBtnActivo, marginTop: 8 }}
+                onClick={() => void aplicar()}
+                disabled={trabajando || Boolean(validarMotivoRegularizacion(motivo))}
+              >
+                {trabajando ? 'Regularizando…' : `Regularizar ${previa.total}`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {error && <div style={{ ...S.error, marginTop: 10 }} role="alert">{error}</div>}
+      {hecho && <div style={{ fontSize: 12, color: '#10b981', marginTop: 10 }}>{hecho}</div>}
+    </div>
+  )
 }
