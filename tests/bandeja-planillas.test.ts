@@ -8,6 +8,7 @@ import {
   opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   resumenBandejaMensual,
   REVISION_SIN_TOCAR, claveRevision, construirRevisionPorClave,
+  esConfirmacionHumana, resueltoPorConfirmacionYAceptacion,
 } from '@/lib/bandeja-planillas'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 
@@ -648,5 +649,93 @@ describe('precedencia por fecha entre derivar y revisar', () => {
     ])
     expect(m.get(k)!.observaciones).toBe(2)
     expect(m.get(k)!.revisado).toBe(true)
+  })
+})
+
+// ── Confirmación de supervisor + aceptación del vigilador ────────────────────
+//
+// El caso TABORDA: turno 17:00–08:00 en LAROMET sin fichaje del vigilador, el
+// supervisor confirmó la asistencia con foto de relevo y despues el vigilador
+// acepto su planilla. La fila seguia pidiendo revision para siempre porque sin
+// entrada/salida `cubreElTurno` devuelve false, y la pantalla lo explicaba como
+// "el fichaje no cubre el turno" — describiendo mal la fuente.
+
+describe('confirmación de supervisor + aceptación del vigilador', () => {
+  // Un registro confirmado por supervisor EXISTE (por eso tieneFichaje es true)
+  // pero no tiene horas observadas: no se inventa un GPS que no hubo.
+  const confirmada = (over: Partial<FilaBandejaMensual> = {}): FilaBandejaMensual =>
+    fila({
+      horaInicioProg: '17:00', horaFinProg: '08:00',
+      entrada: null, salida: null, horas: 15,
+      tieneFichaje: true,
+      origenCobertura: 'confirmacion_supervisor',
+      estadoControl: 'aceptado',
+      ...over,
+    })
+
+  it('sin otra diferencia: deja de pedir revisión del supervisor', () => {
+    expect(resueltoPorConfirmacionYAceptacion(confirmada())).toBe(true)
+    expect(requiereRevision(confirmada())).toBe(false)
+  })
+
+  it('sigue sin cubrir el turno: la regla no finge que hubo fichaje', () => {
+    expect(cubreElTurno(confirmada())).toBe(false)
+  })
+
+  it('con solicitud de modificación pendiente: sigue pendiente', () => {
+    const f = confirmada({ solicitudEstado: 'pendiente', solicitudId: 's1' })
+    expect(resueltoPorConfirmacionYAceptacion(f)).toBe(false)
+    expect(requiereRevision(f)).toBe(true)
+  })
+
+  it('con regularización administrativa real: sigue el circuito administrativo', () => {
+    const f = confirmada({ derivado: true })
+    expect(resueltoPorConfirmacionYAceptacion(f)).toBe(false)
+    expect(estadoRevision(f)).toBe('pendiente_regularizacion')
+    expect(requiereRevision(f)).toBe(true)
+  })
+
+  it('con ausencia marcada: no se cierra sola', () => {
+    const f = confirmada({ esAusencia: true })
+    expect(resueltoPorConfirmacionYAceptacion(f)).toBe(false)
+    expect(requiereRevision(f)).toBe(true)
+  })
+
+  it('sin aceptación del vigilador: falta una de las dos decisiones', () => {
+    const f = confirmada({ estadoControl: 'pendiente' })
+    expect(resueltoPorConfirmacionYAceptacion(f)).toBe(false)
+    expect(requiereRevision(f)).toBe(true)
+  })
+
+  it('con la solicitud ya resuelta por Administración: sí cierra', () => {
+    expect(resueltoPorConfirmacionYAceptacion(confirmada({ solicitudEstado: 'resuelta' }))).toBe(true)
+  })
+
+  it('fichaje GPS que no cubre: la regla no aplica, decide la cobertura', () => {
+    const f = confirmada({ origenCobertura: 'fichaje_gps', entrada: '18:30', salida: '08:00' })
+    expect(resueltoPorConfirmacionYAceptacion(f)).toBe(false)
+    expect(requiereRevision(f)).toBe(true)
+  })
+
+  it('sin origen registrado: la regla no aplica', () => {
+    expect(resueltoPorConfirmacionYAceptacion(confirmada({ origenCobertura: null })).valueOf()).toBe(false)
+  })
+
+  it('confirmar no es lo mismo que cargar ni que corregir', () => {
+    expect(esConfirmacionHumana('confirmacion_supervisor')).toBe(true)
+    expect(esConfirmacionHumana('confirmacion_supervisor_legacy')).toBe(true)
+    expect(esConfirmacionHumana('confirmacion_admin')).toBe(true)
+    expect(esConfirmacionHumana('carga_supervisor')).toBe(false)
+    expect(esConfirmacionHumana('correccion_supervisor')).toBe(false)
+    expect(esConfirmacionHumana('fichaje_gps')).toBe(false)
+  })
+
+  it('la regla no toca las horas de la fila', () => {
+    const f = confirmada()
+    const antes = f.horas
+    requiereRevision(f)
+    expect(f.horas).toBe(antes)
+    expect(f.entrada).toBeNull()
+    expect(f.salida).toBeNull()
   })
 })

@@ -40,6 +40,7 @@ import {
   ETIQUETA_NO_REQUIERE_REVISION, REVISION_SIN_TOCAR, claveRevision,
   construirRevisionPorClave, cubreElTurno, etiquetaDiferencia,
   estadoRevision, etiquetaResumenMes, filtrarFilasBandeja, motivoNoCubre,
+  resueltoPorConfirmacionYAceptacion, TEXTO_CONFIRMADA_Y_ACEPTADA,
   planCorreccionHorario,
   objetivoEnAlcance, opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   requiereRevision, resumenBandejaMensual,
@@ -254,7 +255,7 @@ export default function BandejaPlanillas({
           .order('fecha', { ascending: false }).order('id')
           .range(d, h)),
         fetchPaginadoResult((d, h) => supabase.from('registros_asistencia')
-          .select('id, turno_id, guardia_id, guardia_final_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, cierre_automatico, cobertura_anulada_at, observacion, turno:turnos!inner(fecha)')
+          .select('id, turno_id, guardia_id, guardia_final_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, cierre_automatico, cobertura_anulada_at, observacion, origen_cobertura, turno:turnos!inner(fecha)')
           .gte('turno.fecha', desde).lte('turno.fecha', hasta)
           .order('id')
           .range(d, h)),
@@ -373,6 +374,7 @@ export default function BandejaPlanillas({
           caracteristica: etiquetaCaracteristica(t.tipo_evento),
           salidaAutomatica: Boolean(registro?.cierre_automatico),
           tieneFichaje: Boolean(registro),
+          origenCobertura: registro?.origen_cobertura ?? null,
           esAusencia: Boolean(ausencia),
           ausenciaVigilador: ausencia ? (nombrePor.get(ausencia.guardia_id) ?? '—') : null,
           ausenciaComentario: ausencia?.observacion ?? null,
@@ -684,7 +686,16 @@ export default function BandejaPlanillas({
             </div>
             {/* El motivo concreto por el que la fila pide revisión: el fichaje
                 no cubre el turno programado. Es lo que hay que decidir. */}
-            {(est === 'aceptado' || est === 'pendiente') && !cubreElTurno(f) && (
+            {/* La presencia no vino de un fichaje sino de un supervisor, y el
+                vigilador ya aceptó la jornada. No hay nada que volver a
+                confirmar: decir "el fichaje no cubre" seria describir mal la
+                fuente. */}
+            {resueltoPorConfirmacionYAceptacion(f) && (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: '#38bdf8', background: 'rgba(56,189,248,.08)', border: '1px solid rgba(56,189,248,.3)', borderRadius: 6, padding: '6px 10px' }}>
+                {TEXTO_CONFIRMADA_Y_ACEPTADA}
+              </div>
+            )}
+            {(est === 'aceptado' || est === 'pendiente') && !cubreElTurno(f) && !resueltoPorConfirmacionYAceptacion(f) && (
               <div style={{ marginTop: 6, fontSize: 11.5, color: '#f59e0b', background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 6, padding: '6px 10px' }}>
                 {!f.tieneFichaje
                   ? `Sin fichaje sobre el turno programado (${f.horaInicioProg}–${f.horaFinProg}).`

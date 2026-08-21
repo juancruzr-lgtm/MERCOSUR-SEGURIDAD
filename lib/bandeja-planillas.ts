@@ -279,10 +279,56 @@ export function etiquetaDiferencia(diferencia: number): string {
  *
  * Un turno sin fichaje tampoco cubre el turno, así que sigue pidiendo revisión.
  */
+/**
+ * Orígenes en los que una persona dio fe de la presencia, sin fichaje GPS.
+ *
+ * Sólo la familia `confirmacion_*`: confirmar es atestiguar que el vigilador
+ * estaba. `carga_*` y `correccion_*` son otro acto —cargar o corregir un
+ * dato— y no cierran nada por sí solos.
+ */
+export const ORIGENES_CONFIRMACION_HUMANA = new Set([
+  'confirmacion_supervisor',
+  'confirmacion_supervisor_legacy',
+  'confirmacion_admin',
+])
+
+export function esConfirmacionHumana(origen: string | null | undefined): boolean {
+  return typeof origen === 'string' && ORIGENES_CONFIRMACION_HUMANA.has(origen)
+}
+
+/** Lo que la fila muestra cuando la presencia no vino de un fichaje. */
+export const TEXTO_CONFIRMADA_Y_ACEPTADA =
+  'Asistencia confirmada por supervisor y aceptada por el vigilador.'
+
+/**
+ * La presencia la confirmó un supervisor y después el propio vigilador aceptó
+ * esa jornada: dos decisiones humanas, una por nivel. Pedirle al supervisor que
+ * vuelva a confirmar lo que él mismo confirmó no agrega información, y era la
+ * razón por la que estas filas no salían nunca de la bandeja: sin fichaje,
+ * `cubreElTurno` devuelve false para siempre.
+ *
+ * NO cierra si queda cualquier otra diferencia real. La ausencia, la solicitud
+ * abierta y la derivación a Administración son circuitos propios y siguen su
+ * curso. Tampoco toca horas: el origen se lee, no se usa para calcular.
+ */
+export function resueltoPorConfirmacionYAceptacion(
+  f: Pick<FilaBandejaMensual,
+    'origenCobertura' | 'estadoControl' | 'solicitudEstado' | 'derivado' | 'esAusencia'>,
+): boolean {
+  if (!esConfirmacionHumana(f.origenCobertura)) return false
+  if (f.estadoControl !== 'aceptado') return false
+  if (f.esAusencia) return false
+  if (f.derivado) return false
+  if (f.solicitudEstado && f.solicitudEstado !== 'resuelta') return false
+  return true
+}
+
 export function requiereRevision(f: FilaBandejaMensual): boolean {
   const estado = estadoRevision(f)
   if (estado === 'revisado_supervisor' || estado === 'resuelto') return false
   if (estado === 'modificacion_solicitada' || estado === 'pendiente_regularizacion') return true
+  // Confirmación de supervisor + aceptación del vigilador: ya está decidido.
+  if (resueltoPorConfirmacionYAceptacion(f)) return false
   // 'pendiente' y 'aceptado': decide la cobertura del turno.
   return !cubreElTurno(f)
 }
@@ -311,6 +357,14 @@ export interface FilaBandejaMensual {
   caracteristica: string
   salidaAutomatica: boolean
   tieneFichaje: boolean
+  /**
+   * `registros_asistencia.origen_cobertura` del registro principal.
+   *
+   * Sirve para UNA sola cosa: saber si la presencia la atestiguó una persona en
+   * vez de un fichaje GPS. Nunca para recalcular horas ni para reemplazar la
+   * fuente de asistencia, que sigue siendo la de siempre.
+   */
+  origenCobertura?: string | null
   /**
    * Ausencia marcada por un supervisor sobre este turno.
    *
