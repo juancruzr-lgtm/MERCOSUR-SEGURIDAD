@@ -36,6 +36,11 @@
 -- p_solo_conteo arranca en true a proposito: la llamada natural muestra a
 -- quien se va a afectar y no cambia nada. Para aplicar hay que pedirlo.
 
+-- NOTA: el cuerpo va con etiqueta $BODY$ y no con $ pelado. El editor SQL del
+-- dashboard de Supabase parsea el $ mal: corta la sentencia en el primer ";"
+-- del cuerpo, cree que una variable es una tabla nueva y le agrega solo un
+-- "ALTER TABLE ... ENABLE ROW LEVEL SECURITY", dejando el $ sin cerrar
+-- (42601). Con etiqueta nombrada no pasa. Verificado el 2026-08-21.
 create or replace function public.regularizar_ronda_alertas_historicas(
   p_hasta       date,                    -- alertas vencidas ANTES de esta fecha (00:00 local)
   p_motivo      text    default null,
@@ -47,7 +52,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public, pg_catalog
-as $$
+as $BODY$
 declare
   v_tz        constant text := 'America/Argentina/Buenos_Aires';
   v_usuario_id uuid;
@@ -135,7 +140,7 @@ begin
     'omitidas',      v_omitidas
   );
 end;
-$$;
+$BODY$;
 
 comment on function public.regularizar_ronda_alertas_historicas(date, text, text[], uuid, boolean) is
   'Cierra en lote alertas de ronda pendientes vencidas antes de una fecha, delegando cada '
