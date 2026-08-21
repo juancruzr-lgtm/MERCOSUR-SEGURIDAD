@@ -37,7 +37,7 @@
 -- quien se va a afectar y no cambia nada. Para aplicar hay que pedirlo.
 
 -- NOTA: el cuerpo va con etiqueta $BODY$ y no con $$ pelado. El editor SQL del
--- dashboard de Supabase parsea el $ mal: corta la sentencia en el primer ";"
+-- dashboard de Supabase parsea el $$ mal: corta la sentencia en el primer ";"
 -- del cuerpo, cree que una variable es una tabla nueva y le agrega solo un
 -- "ALTER TABLE ... ENABLE ROW LEVEL SECURITY", dejando el $ sin cerrar
 -- (42601). Con etiqueta nombrada no pasa. Verificado el 2026-08-21.
