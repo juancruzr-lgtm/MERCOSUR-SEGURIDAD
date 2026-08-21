@@ -36,7 +36,7 @@
 -- p_solo_conteo arranca en true a proposito: la llamada natural muestra a
 -- quien se va a afectar y no cambia nada. Para aplicar hay que pedirlo.
 
--- NOTA: el cuerpo va con etiqueta $BODY$ y no con $ pelado. El editor SQL del
+-- NOTA: el cuerpo va con etiqueta $BODY$ y no con $$ pelado. El editor SQL del
 -- dashboard de Supabase parsea el $ mal: corta la sentencia en el primer ";"
 -- del cuerpo, cree que una variable es una tabla nueva y le agrega solo un
 -- "ALTER TABLE ... ENABLE ROW LEVEL SECURITY", dejando el $ sin cerrar
