@@ -39,7 +39,7 @@
 -- NOTA: el cuerpo va con etiqueta $BODY$ y no con $$ pelado. El editor SQL del
 -- dashboard de Supabase parsea el $$ mal: corta la sentencia en el primer ";"
 -- del cuerpo, cree que una variable es una tabla nueva y le agrega solo un
--- "ALTER TABLE ... ENABLE ROW LEVEL SECURITY", dejando el $ sin cerrar
+-- "ALTER TABLE ... ENABLE ROW LEVEL SECURITY", dejando el $$ sin cerrar
 -- (42601). Con etiqueta nombrada no pasa. Verificado el 2026-08-21.
 create or replace function public.regularizar_ronda_alertas_historicas(
   p_hasta       date,                    -- alertas vencidas ANTES de esta fecha (00:00 local)
