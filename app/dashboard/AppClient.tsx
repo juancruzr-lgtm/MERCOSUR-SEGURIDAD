@@ -69,6 +69,8 @@ import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
+import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
+import ControlImagenesIAPanel from '@/components/ia/ControlImagenesIAPanel'
 // Mismo panel de configuración que usa el legajo del objetivo. Se monta también
 // en la solapa Rondas para poder editar rondas y puntos sin entrar objetivo por
 // objetivo. No es un editor nuevo: es el que ya existía.
@@ -908,26 +910,6 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   const getObjetivo = (id: string) => objetivos.find((o: Objetivo) => o.id === id)
   const hora = (value?: string) => value ? value.slice(0, 5) : '--:--'
   const DIAS_SEMANA_ADMIN = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'] as const
-  const infoTurnoAlerta = (turno: { fecha: string; hora_inicio: string; hora_fin: string }) => {
-    const [y, mo, d] = turno.fecha.slice(0, 10).split('-').map(Number)
-    const fechaDate = new Date(y, mo - 1, d)
-    const dia = DIAS_SEMANA_ADMIN[fechaDate.getDay()]
-    const dd = String(d).padStart(2, '0')
-    const mm = String(mo).padStart(2, '0')
-    const fechaFmt = `${dd}/${mm}/${y}`
-    const esNocturno = turno.hora_fin <= turno.hora_inicio
-    const fechaFinDate = esNocturno ? new Date(y, mo - 1, d + 1) : fechaDate
-    const dFin = String(fechaFinDate.getDate()).padStart(2, '0')
-    const mFin = String(fechaFinDate.getMonth() + 1).padStart(2, '0')
-    const yFin = fechaFinDate.getFullYear()
-    const fechaFinFmt = `${dFin}/${mFin}/${yFin}`
-    return {
-      linea: `Turno: ${dia} ${fechaFmt}`,
-      inicio: `Inicio: ${fechaFmt} ${hora(turno.hora_inicio)}`,
-      fin: `Fin: ${fechaFinFmt} ${hora(turno.hora_fin)}`,
-      nocturno: esNocturno,
-    }
-  }
   const nombreGuardia = (id?: string | null) => {
     const guardia = getGuardia(id)
     return guardia ? `${guardia.apellido}, ${guardia.nombre}` : 'Sin guardia'
@@ -975,147 +957,97 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     boxShadow:`0 14px 34px ${alpha(brandColors.black, 0.16)}`,
   }
 
-  const alertTitle: React.CSSProperties = {
-    fontFamily:FONT_BRAND,
-    fontSize:15,
-    fontWeight:900,
-    marginBottom:12,
-    color:brandColors.textStrong,
+  // Paneles de atención, en tarjetas. Cada uno resume su caso más urgente en
+  // dos líneas y lleva al detalle completo, que vive en su pantalla.
+  //
+  // Antes cada panel desplegaba la ficha entera de cada item — objetivo, turno,
+  // inicio, fin, nocturno, estado, guardia esperado — así que los cinco
+  // ocupaban lo mismo tuvieran 0 o 40 casos. Con la operación funcionando la
+  // mayoría vive en cero, y media pantalla se iba en repetir "no hay nada".
+  // La tarjeta en cero se apaga; la que pide acción es la única que levanta
+  // color y contador.
+  type PanelAtencion = {
+    titulo: string
+    items: any[]
+    vacio: string
+    atendidas?: number
+    severidad: string
+    resumen: (x: any) => { titulo: string; detalle: string }
+    navegar: () => void
   }
 
-  const alertItem: React.CSSProperties = {
-    padding:'12px 0',
-    borderTop:`1px solid ${brandColors.border}`,
-    fontSize:13,
-    color:brandColors.text,
-  }
-
-  const emptyAlert: React.CSSProperties = {
-    padding:'12px 0',
-    borderTop:`1px solid ${brandColors.border}`,
-    fontSize:13,
-    color:brandColors.muted,
-  }
-
-  const renderTurnoAlert = (turno: Turno, detalle: string, filtro: any, destino = 'turnos') => {
-    const info = infoTurnoAlerta(turno)
-    return (
-    <div key={turno.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.(destino, filtro)}>
-      <strong style={{ color:'#f8fafc' }}>{nombreObjetivo(turno.objetivo_id)}</strong>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.linea}</div>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.inicio}</div>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
-      {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
-      <div style={{ color:'#94a3b8', marginTop:4 }}>
-        Estado: {turno.estado || 'programado'}
-      </div>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>
-        Guardia esperado: {nombreGuardiaEsperado(turno)}
-      </div>
-      <div style={{ color:'#f59e0b', marginTop:4 }}>{detalle}</div>
-    </div>
-  )}
-
-  const renderSinIngresoAlert = (turno: Turno) => {
-    const info = infoTurnoAlerta(turno)
-    return (
-    <div key={turno.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('revision_operativa', { tipo:'sin_fichar', ids:turnosSinFichar.map(item => item.id), label:'Guardias sin fichar / objetivos en riesgo' })}>
-      <strong style={{ color:'#f8fafc' }}>{nombreGuardia(turno.guardia_id)}</strong>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {nombreObjetivo(turno.objetivo_id)}</div>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.linea}</div>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.inicio}</div>
-      <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
-      {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
-      <div style={{ color:'#f59e0b', marginTop:4 }}>Minutos de demora: {minutosDesdeInicioTurno(turno)}</div>
-      <div style={{ color:'#f59e0b', marginTop:4 }}>Estado: Sin ingreso</div>
-    </div>
-  )}
-
-  const renderTardanzaAlert = (registro: RegistroAsistencia) => {
-    const turno = turnoPorId.get(registro.turno_id)
-    if (!turno) return null
-
-    const info = infoTurnoAlerta(turno)
-    return (
-      <div key={registro.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('revision_operativa', { tipo:'tardanza', ids:tardanzasRegistradas.map(item => item.id), label:'Tardanzas registradas' })}>
-        <strong style={{ color:'#f8fafc' }}>{nombreGuardia(registro.guardia_id || turno.guardia_id)}</strong>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {nombreObjetivo(turno.objetivo_id)}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.linea}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.inicio}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
-        {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
-        <div style={{ color:'#94a3b8', marginTop:4 }}>Entrada real: {hora(registro.hora_entrada_final ?? registro.hora_entrada_real)}</div>
-        <div style={{ color:'#f59e0b', marginTop:4 }}>Minutos tarde: {calcularMinutosTardanzaRegistro(turno, registro)}</div>
-        <div style={{ color:'#ef4444', marginTop:4 }}>Estado: Tarde</div>
-      </div>
-    )
-  }
-
-  const renderFichajeFueraRadioAlert = (registro: RegistroAsistencia) => {
-    const turno = turnoPorId.get(registro.turno_id)
-    if (!turno) return null
-
-    const objetivo = getObjetivo(turno.objetivo_id)
-    const gps = gpsRegistroAsistencia(registro, 'ingreso')
-
-    const info = infoTurnoAlerta(turno)
-    return (
-      <div key={registro.id} style={{ ...alertItem, cursor:'pointer' }} onClick={() => onNavigate?.('revision_operativa', { tipo:'fuera_radio', ids:fichajesFueraRadio.map(item => item.id), label:'Fichajes fuera de radio' })}>
-        <strong style={{ color:'#f8fafc' }}>{nombreGuardia(registro.guardia_id || turno.guardia_id)}</strong>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>Objetivo: {objetivo?.nombre || 'Objetivo sin nombre'}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.linea}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.inicio}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>{info.fin}</div>
-        {info.nocturno && <div style={{ color:'#818cf8', marginTop:4 }}>Nocturno</div>}
-        <div style={{ color:'#94a3b8', marginTop:4 }}>Hora ingreso: {hora(registro.hora_entrada_real)}</div>
-        <div style={{ color:'#ef4444', marginTop:4 }}>Distancia: {metrosGpsTexto(registro.distancia_ingreso_metros)}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>Radio permitido: {metrosGpsTexto(objetivo?.radio_metros)}</div>
-        <div style={{ color:'#94a3b8', marginTop:4 }}>Precisión GPS: {metrosGpsTexto(gps?.precision)}</div>
-        <div style={{ color:'#ef4444', marginTop:4 }}>Estado: Fuera del radio</div>
-      </div>
-    )
-  }
-
-  // Paneles de atención. Cada uno lleva su contador en el título: ese es el
-  // único lugar donde ese número aparece en toda la pantalla. `atendidas` es
-  // el segundo número: lo que hoy ya pasó por el supervisor. Un 0 pelado no
-  // dice si el día vino limpio o si alguien lo limpió.
-  const panelesAtencion: { titulo: string; items: any[]; vacio: string; atendidas?: number; render: (x: any) => React.ReactNode }[] = [
+  const panelesAtencion: PanelAtencion[] = [
     {
       titulo: 'Turnos descubiertos',
       items: turnosDescubiertos,
-      vacio: 'No hay turnos descubiertos hoy.',
+      vacio: 'Sin turnos descubiertos hoy.',
       atendidas: atendidasHoyPorTipo('descubierto'),
-      render: (turno: Turno) => renderTurnoAlert(turno, detalleTurnoDescubierto(turno), { tipo:'descubierto', ids:turnosDescubiertos.map(item => item.id), label:'Puestos sin cobertura' }, 'revision_operativa'),
+      severidad: semanticColors.error,
+      resumen: (t: Turno) => ({
+        titulo: nombreObjetivo(t.objetivo_id),
+        detalle: `${hora(t.hora_inicio)}–${hora(t.hora_fin)} · ${detalleTurnoDescubierto(t)}`,
+      }),
+      navegar: () => onNavigate?.('revision_operativa', { tipo:'descubierto', ids:turnosDescubiertos.map(item => item.id), label:'Puestos sin cobertura' }),
     },
     {
       titulo: 'Guardias sin fichar',
       items: turnosSinFichar,
-      vacio: 'No hay guardias demorados sin ingreso.',
+      vacio: 'Sin guardias demorados sin ingreso.',
       atendidas: atendidasHoyPorTipo('sin_fichar'),
-      render: (turno: Turno) => renderSinIngresoAlert(turno),
+      severidad: brandColors.yellow,
+      resumen: (t: Turno) => ({
+        titulo: nombreGuardia(t.guardia_id),
+        detalle: `${nombreObjetivo(t.objetivo_id)} · ${minutosDesdeInicioTurno(t)} min de demora`,
+      }),
+      navegar: () => onNavigate?.('revision_operativa', { tipo:'sin_fichar', ids:turnosSinFichar.map(item => item.id), label:'Guardias sin fichar / objetivos en riesgo' }),
     },
     {
       titulo: 'Tardanzas registradas',
       items: tardanzasRegistradas,
-      vacio: 'No hay ingresos tarde registrados hoy.',
+      vacio: 'Sin ingresos tarde hoy.',
       atendidas: atendidasHoyPorTipo('tardanza'),
-      render: (registro: RegistroAsistencia) => renderTardanzaAlert(registro),
+      severidad: semanticColors.error,
+      resumen: (r: RegistroAsistencia) => {
+        const t = turnoPorId.get(r.turno_id)
+        return {
+          titulo: nombreGuardia(r.guardia_id || t?.guardia_id),
+          detalle: t
+            ? `${nombreObjetivo(t.objetivo_id)} · ${calcularMinutosTardanzaRegistro(t, r)} min tarde`
+            : 'Turno no encontrado',
+        }
+      },
+      navegar: () => onNavigate?.('revision_operativa', { tipo:'tardanza', ids:tardanzasRegistradas.map(item => item.id), label:'Tardanzas registradas' }),
     },
     {
       titulo: 'Fichajes fuera de radio',
       items: fichajesFueraRadio,
-      vacio: 'No hay ingresos fuera del radio del objetivo.',
+      vacio: 'Sin ingresos fuera del radio.',
       atendidas: atendidasHoyPorTipo('fuera_radio'),
-      render: (registro: RegistroAsistencia) => renderFichajeFueraRadioAlert(registro),
+      severidad: semanticColors.error,
+      resumen: (r: RegistroAsistencia) => {
+        const t = turnoPorId.get(r.turno_id)
+        const o = t ? getObjetivo(t.objetivo_id) : null
+        return {
+          titulo: nombreGuardia(r.guardia_id || t?.guardia_id),
+          detalle: `${o?.nombre || 'Objetivo sin nombre'} · ${metrosGpsTexto(r.distancia_ingreso_metros)} (radio ${metrosGpsTexto(o?.radio_metros)})`,
+        }
+      },
+      navegar: () => onNavigate?.('revision_operativa', { tipo:'fuera_radio', ids:fichajesFueraRadio.map(item => item.id), label:'Fichajes fuera de radio' }),
     },
     {
       titulo: 'Turnos con asistencia pendiente',
       items: turnosAsistenciaPendiente,
-      vacio: 'No hay asistencias pendientes hoy.',
-      render: (turno: Turno) => renderTurnoAlert(turno, tieneEntradaConfirmada(turno) ? 'Entrada registrada, salida pendiente' : 'Entrada pendiente', { tipo:'pendientes_asistencia', label:'Turnos con asistencia pendiente' }),
+      vacio: 'Sin asistencias pendientes hoy.',
+      severidad: semanticColors.info,
+      resumen: (t: Turno) => ({
+        titulo: `${nombreObjetivo(t.objetivo_id)} · ${nombreGuardiaEsperado(t)}`,
+        detalle: `${hora(t.hora_inicio)}–${hora(t.hora_fin)} · ${tieneEntradaConfirmada(t) ? 'salida pendiente' : 'entrada pendiente'}`,
+      }),
+      navegar: () => onNavigate?.('turnos', { tipo:'pendientes_asistencia', label:'Turnos con asistencia pendiente' }),
     },
   ]
+
+  const panelesConAccion = panelesAtencion.filter(p => p.items.length > 0).length
 
   const seccionTitulo: React.CSSProperties = {
     fontFamily:FONT_BRAND,
@@ -1171,46 +1103,116 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
           Estado operativo por objetivo, no una lista de pendientes: una tarjeta
           por objetivo con su ronda relevante, en un carril horizontal para que
           el panel no crezca en alto con la cantidad de objetivos. */}
-      <div style={{ ...alertBox, marginBottom:16 }}>
+      {/* Las pausas vigentes cierran el carril como una tarjeta más: son estado
+          de rondas, no un tema aparte. Antes abrían su propia sección abajo, y
+          con dos pausas se leía un bloque entero para decir "2". El detalle y
+          el botón Reanudar siguen en la pantalla de Rondas. */}
+      <div style={{ ...alertBox, marginBottom:28 }}>
         <ControlDeRondasPanel
           objetivos={objetivosControlRondas}
           onVerTodas={() => onNavigate?.('rondas')}
           onPausaCambiada={() => setPausasToken(t => t + 1)}
           recargarToken={pausasToken}
-        />
-      </div>
-
-      {/* Pausas vigentes, visibles sin salir del Dashboard. El detalle y el
-          botón Reanudar están en la pantalla de Rondas. */}
-      <div style={{ ...alertBox, marginBottom:28 }}>
-        <RondasPausadasPanel
-          objetivoId={null}
-          compacto
-          onVerTodas={() => onNavigate?.('rondas')}
-          recargarToken={pausasToken}
+          slotFinal={
+            <div style={{ flex:'0 0 auto', width:210 }}>
+              <RondasPausadasPanel
+                objetivoId={null}
+                compacto
+                onVerTodas={() => onNavigate?.('rondas')}
+                recargarToken={pausasToken}
+              />
+            </div>
+          }
         />
       </div>
 
       {/* ── 3. ATENCIÓN OPERATIVA ────────────────────────────────────────── */}
-      <div style={seccionTitulo}>Atención operativa</div>
+      <div style={seccionTitulo}>
+        Atención operativa
+        <span style={{ marginLeft:8, color:brandColors.muted, fontWeight:700, letterSpacing:0 }}>
+          {panelesConAccion === 0
+            ? 'todo al día'
+            : `${panelesConAccion} de ${panelesAtencion.length} requiere${panelesConAccion === 1 ? '' : 'n'} acción`}
+        </span>
+      </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:16 }}>
-        {panelesAtencion.map(panel => (
-          <div key={panel.titulo} style={alertBox}>
-            <div style={alertTitle}>
-              {panel.titulo}
-              <span style={contadorPanel(panel.items.length)}>{panel.items.length}</span>
-              {(panel.atendidas ?? 0) > 0 && (
-                <span style={{ marginLeft:8, fontSize:11, fontWeight:700, color:semanticColors.success }}>
-                  ✓ {panel.atendidas} atendida{panel.atendidas === 1 ? '' : 's'} hoy
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(236px,1fr))', gap:12 }}>
+        {panelesAtencion.map(panel => {
+          const cantidad = panel.items.length
+          const atendidas = panel.atendidas ?? 0
+          const primero = cantidad > 0 ? panel.resumen(panel.items[0]) : null
+          return (
+            // Botón, no div: la tarjeta entera lleva a su pantalla, y con 0
+            // también — ver que no hay nada pendiente es una consulta válida.
+            // Como <button> queda accesible por teclado sin agregar nada.
+            <button
+              key={panel.titulo}
+              type="button"
+              onClick={panel.navegar}
+              title={`Ir a ${panel.titulo}`}
+              style={{
+                background: cantidad > 0 ? alpha(brandColors.surface, 0.92) : 'transparent',
+                border: `1px solid ${brandColors.border}`,
+                borderLeft: `3px solid ${cantidad > 0 ? panel.severidad : 'transparent'}`,
+                borderRadius:8,
+                padding:'13px 14px',
+                minHeight:104,
+                display:'flex',
+                flexDirection:'column',
+                cursor:'pointer',
+                textAlign:'left',
+                font:'inherit',
+                color:'inherit',
+                width:'100%',
+              }}
+            >
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                <span style={{ fontSize:11.5, fontWeight:700, color: cantidad > 0 ? brandColors.text : brandColors.muted }}>
+                  {panel.titulo}
                 </span>
+                <span style={contadorPanel(cantidad)}>{cantidad}</span>
+                {atendidas > 0 && (
+                  <span style={{ marginLeft:'auto', fontSize:10.5, fontWeight:700, color:semanticColors.success }}>
+                    ✓ {atendidas} atendida{atendidas === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+
+              {primero ? (
+                <>
+                  <div style={{ fontSize:12.5, fontWeight:700, color:brandColors.textStrong, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                    {primero.titulo}
+                  </div>
+                  <div style={{ fontSize:11.5, color:brandColors.text, marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                    {primero.detalle}
+                  </div>
+                  <div style={{ marginTop:'auto', paddingTop:8, fontSize:11, fontWeight:700, color:panel.severidad }}>
+                    {cantidad === 1 ? 'Ver el caso →' : `Ver los ${cantidad} →`}
+                  </div>
+                </>
+              ) : (
+                <div style={{ marginTop:'auto', fontSize:11.5, color:brandColors.muted }}>
+                  {atendidas > 0
+                    ? `Las ${atendidas} de hoy ya fueron atendidas.`
+                    : panel.vacio}
+                </div>
               )}
-            </div>
-            {panel.items.length === 0
-              ? <div style={emptyAlert}>{(panel.atendidas ?? 0) > 0 ? `Sin pendientes: la(s) ${panel.atendidas} de hoy ya fueron atendidas por un supervisor.` : panel.vacio}</div>
-              : panel.items.map(panel.render)}
-          </div>
-        ))}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* ── 4. CONTROL DE PLANILLAS ─────────────────────────────────────── */}
+      <div style={{ ...alertBox, marginTop:28 }}>
+        <ControlPlanillasPanel
+          mes={mesActual}
+          onVerBandeja={() => onNavigate?.('revision_planillas')}
+        />
+      </div>
+
+      {/* ── 5. CONTROL DE IMÁGENES IA ───────────────────────────────────── */}
+      <div style={{ ...alertBox, marginTop:16 }}>
+        <ControlImagenesIAPanel onVerTodas={() => onNavigate?.('revision_fotos_ia')} />
       </div>
 
     </div>
