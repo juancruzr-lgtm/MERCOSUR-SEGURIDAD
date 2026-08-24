@@ -5937,7 +5937,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [revisionMes, setRevisionMes] = useState<Map<string, EstadoRevisionClave>>(new Map())
   // La lista de diferencias arranca en lo que todavía pide acción; el resto
   // sigue accesible, con su estado a la vista.
-  const [difSoloPendientes, setDifSoloPendientes] = useState(true)
+  // Tres conjuntos, no dos: lo que espera decision (lo que dice la tarjeta),
+  // lo que explica las horas, y todo. El toggle anterior alternaba entre los
+  // dos ultimos y nunca mostraba el primero, que es justo el que se busca al
+  // entrar desde "Diferencia pendiente (N pendientes)".
+  const [difVista, setDifVista] = useState<'sin_resolver' | 'explican' | 'todas'>('sin_resolver')
 
   const headersAdmin = async () => {
     const { data } = await supabase.auth.getSession()
@@ -6696,7 +6700,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   // lo que dice la tarjeta. Un turno extendido tiene diferencia pero aporta
   // cero, así que no explica nada: se ve apagando el filtro.
   const diferenciasQueExplican = diferenciasMes.filter(d => d.pendienteHs > 0)
-  const diferenciasVisibles = difSoloPendientes ? diferenciasQueExplican : diferenciasMes
+  const diferenciasVisibles =
+    difVista === 'sin_resolver' ? diferenciasQueExplican.filter(d => d.pendiente)
+    : difVista === 'explican'   ? diferenciasQueExplican
+    :                             diferenciasMes
   // Cuántas de esas todavía esperan una acción humana (estado de revisión).
   const diferenciasPendientes = diferenciasQueExplican.filter(d => d.pendiente)
 
@@ -7090,7 +7097,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             style={{ background:'#1a2235', borderRadius:8, padding:'12px 16px', borderLeft:'3px solid #f59e0b', cursor:'pointer', transition:'background .15s' }}
             // Abre siempre filtrada: lo que se ve tiene que sumar lo que dice
             // la tarjeta, sin que haya que tocar nada.
-            onClick={() => { setDifSoloPendientes(true); setMostrarDiferencias(true) }}
+            onClick={() => { setDifVista('sin_resolver'); setMostrarDiferencias(true) }}
             title="Ver los turnos que explican el pendiente"
           >
             <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia pendiente {diferenciasPendientes.length > 0 && <span style={{ color:'#f59e0b' }}>({diferenciasPendientes.length} pendiente{diferenciasPendientes.length !== 1 ? 's' : ''})</span>}</div>
@@ -7416,27 +7423,38 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                 que no explican nada: se ven apagando el filtro, con sus horas
                 completas y sin marca de error. */}
             <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:12, flexWrap:'wrap' }}>
-              <button
-                onClick={() => setDifSoloPendientes(v => !v)}
-                style={{
-                  ...S.btn, fontSize:12, padding:'5px 10px',
-                  border: difSoloPendientes ? '1px solid #f59e0b' : '1px solid #334155',
-                  background: difSoloPendientes ? '#f59e0b18' : '#1e293b',
-                  color: difSoloPendientes ? '#f59e0b' : '#e2e8f0',
-                }}
-              >
-                {difSoloPendientes ? '✓ ' : ''}Solo lo que explica la diferencia ({diferenciasQueExplican.length})
-              </button>
+              {([
+                { id:'sin_resolver' as const, texto:'Sin resolver', n:diferenciasPendientes.length },
+                { id:'explican' as const,     texto:'Explican el pendiente', n:diferenciasQueExplican.length },
+                { id:'todas' as const,        texto:'Todas', n:diferenciasMes.length },
+              ]).map(op => (
+                <button
+                  key={op.id}
+                  onClick={() => setDifVista(op.id)}
+                  style={{
+                    ...S.btn, fontSize:12, padding:'5px 10px',
+                    border: difVista === op.id ? '1px solid #f59e0b' : '1px solid #334155',
+                    background: difVista === op.id ? '#f59e0b18' : '#1e293b',
+                    color: difVista === op.id ? '#f59e0b' : '#e2e8f0',
+                  }}
+                >
+                  {difVista === op.id ? '✓ ' : ''}{op.texto} ({op.n})
+                </button>
+              ))}
               <span style={{ fontSize:12, color:'#64748b' }}>
-                {difSoloPendientes
-                  ? `${diferenciasMes.length - diferenciasQueExplican.length} turno${diferenciasMes.length - diferenciasQueExplican.length !== 1 ? 's' : ''} con extensión de jornada oculto${diferenciasMes.length - diferenciasQueExplican.length !== 1 ? 's' : ''}`
-                  : 'Mostrando también las extensiones de jornada, que no suman al pendiente'}
+                {difVista === 'sin_resolver'
+                  ? 'Turnos que todavía esperan una decisión.'
+                  : difVista === 'explican'
+                  ? 'Todo lo que aporta horas al pendiente, resuelto o no.'
+                  : 'Incluye las extensiones de jornada, que no suman al pendiente.'}
               </span>
             </div>
             {diferenciasVisibles.length === 0 ? (
               <div style={{ padding:32, textAlign:'center' as const, color:'#64748b' }}>
                 {diferenciasMes.length === 0
                   ? 'No hay diferencias en los turnos ya exigibles de este mes.'
+                  : difVista === 'sin_resolver'
+                  ? 'No queda ninguna diferencia esperando decisión. Las que aportan horas ya fueron resueltas.'
                   : 'Ningún turno genera pendiente: las diferencias que quedan son extensiones de jornada.'}
               </div>
             ) : (
