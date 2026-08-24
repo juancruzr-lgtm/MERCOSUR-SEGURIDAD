@@ -2586,3 +2586,110 @@ export function parsearCoordenadasPegadas(texto: string): { lat: number; lng: nu
 
   return { lat, lng }
 }
+
+// ── Regularización histórica de alertas de ronda ─────────────────────────────
+//
+// Cerrar en lote alertas viejas que son ciertas pero ya no son trabajo de hoy.
+// No borra nada: cada cierre pasa por resolver_ronda_alerta, que deja su fila
+// en ronda_alerta_intervenciones con actor, motivo y fecha.
+
+/** Mínimo del motivo. Un "ok" no explica nada dentro de seis meses. */
+export const REGULARIZACION_MOTIVO_MINIMO = 10
+
+export function validarMotivoRegularizacion(motivo: string): string | null {
+  const limpio = motivo.trim()
+  if (limpio.length === 0) return 'El motivo es obligatorio.'
+  if (limpio.length < REGULARIZACION_MOTIVO_MINIMO) {
+    return `Explicá el motivo con al menos ${REGULARIZACION_MOTIVO_MINIMO} caracteres.`
+  }
+  return null
+}
+
+export type ContextoRegularizacion =
+  | 'vista_previa'
+  | 'aplicado'
+  | 'sin_usuario'
+  | 'fecha_requerida'
+  | 'motivo_requerido'
+  | 'tipo_invalido'
+
+export interface ResumenRegularizacion {
+  contexto: ContextoRegularizacion
+  hasta: string | null
+  total: number
+  por_tipo: Record<string, number>
+  por_objetivo: Record<string, number>
+  regularizadas: number
+  omitidas: number
+}
+
+export function mensajeContextoRegularizacion(contexto: ContextoRegularizacion): string | null {
+  switch (contexto) {
+    case 'sin_usuario':     return 'Tu sesión venció. Volvé a ingresar.'
+    case 'fecha_requerida': return 'Elegí hasta qué fecha regularizar.'
+    case 'motivo_requerido': return `El motivo es obligatorio y necesita al menos ${REGULARIZACION_MOTIVO_MINIMO} caracteres.`
+    case 'tipo_invalido':   return 'Tipo de alerta no válido.'
+    default:                return null
+  }
+}
+
+/** Texto de la vista previa: qué se va a cerrar, antes de cerrarlo. */
+export function resumenPrevioRegularizacion(r: ResumenRegularizacion): string {
+  if (r.total === 0) return 'No hay alertas pendientes anteriores a esa fecha.'
+  const tipos = Object.entries(r.por_tipo)
+    .map(([tipo, n]) => `${n} ${etiquetaTipoRondaAlerta(tipo as TipoRondaAlerta)}`)
+    .join(' · ')
+  const objetivos = Object.keys(r.por_objetivo).length
+  return `${r.total} alerta${r.total === 1 ? '' : 's'} en ${objetivos} objetivo${objetivos === 1 ? '' : 's'}`
+    + (tipos ? ` — ${tipos}` : '')
+}
+
+function normalizarResumenRegularizacion(bruto: any): ResumenRegularizacion {
+  return {
+    contexto:      (bruto?.contexto ?? 'vista_previa') as ContextoRegularizacion,
+    hasta:         bruto?.hasta ?? null,
+    total:         Number(bruto?.total ?? 0),
+    por_tipo:      (bruto?.por_tipo ?? {}) as Record<string, number>,
+    por_objetivo:  (bruto?.por_objetivo ?? {}) as Record<string, number>,
+    regularizadas: Number(bruto?.regularizadas ?? 0),
+    omitidas:      Number(bruto?.omitidas ?? 0),
+  }
+}
+
+/**
+ * Vista previa (`soloConteo: true`, el default) o aplicación del lote.
+ *
+ * La vista previa NO modifica nada: sirve para mostrar a quién va a afectar
+ * antes de confirmar. Aplicar exige motivo.
+ */
+export async function regularizarAlertasHistoricas(params: {
+  hasta: string
+  motivo?: string
+  tipos?: TipoRondaAlerta[] | null
+  objetivoId?: string | null
+  soloConteo?: boolean
+}): Promise<ResultadoRondas<ResumenRegularizacion>> {
+  const soloConteo = params.soloConteo ?? true
+
+  if (!soloConteo) {
+    const errorMotivo = validarMotivoRegularizacion(params.motivo ?? '')
+    if (errorMotivo) return { data: null, error: errorMotivo }
+  }
+
+  const { data, error } = await supabase.rpc('regularizar_ronda_alertas_historicas', {
+    p_hasta:       params.hasta,
+    p_motivo:      params.motivo ?? null,
+    p_tipos:       params.tipos ?? null,
+    p_objetivo_id: params.objetivoId ?? null,
+    p_solo_conteo: soloConteo,
+  })
+
+  if (error) {
+    return fallaRpc('regularizarAlertasHistoricas', error, 'No se pudo regularizar las alertas.')
+  }
+
+  const resumen = normalizarResumenRegularizacion(data)
+  const mensaje = mensajeContextoRegularizacion(resumen.contexto)
+  if (mensaje) return { data: null, error: mensaje }
+  return { data: resumen, error: null }
+}
