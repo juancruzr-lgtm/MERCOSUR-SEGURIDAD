@@ -66,6 +66,7 @@ import AnalisisIAPanel from '@/components/ia/AnalisisIAPanel'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
+import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
@@ -1237,7 +1238,6 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
   // refrescaba al otro y la pausa recién aparecía al recargar la página.
   const [pausasToken, setPausasToken] = useState(0)
   const refrescarPausas = () => setPausasToken(t => t + 1)
-  const [objetivoConfig, setObjetivoConfig] = useState('')
 
   return (
     <div>
@@ -1264,23 +1264,15 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
           recargarToken={pausasToken}
         />
       </div>
-      {/* Configuración de rondas y puntos, sin salir de esta solapa. Monta el
-          MISMO panel que el legajo del objetivo —lista, Administrar, editor de
-          puntos—: no hay un segundo editor ni otra tabla. Lo único que agrega
-          acá es elegir de qué objetivo, porque esta pantalla es transversal. */}
+      {/* Configuración de rondas y puntos. Antes habia que elegir un objetivo
+          en un desplegable y recien ahi aparecia su lista: para saber donde
+          ajustar un radio habia que ir probando objetivo por objetivo. Ahora la
+          lista es transversal —una fila por ronda, con puntos, frecuencia,
+          ancla del ciclo, ultima ejecucion y alertas— y "Ver / Administrar"
+          monta el MISMO RondasNativasPanel de siempre, apuntado a esa ronda.
+          No hay un segundo editor ni otra tabla. */}
       <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:16 }}>
-        <div style={{ fontSize:15, fontWeight:800, color:brandColors.textStrong, marginBottom:10 }}>Configuración de rondas y puntos</div>
-        <select
-          value={objetivoConfig}
-          onChange={e => setObjetivoConfig(e.target.value)}
-          style={{ background:'#0f172a', border:`1px solid ${brandColors.border}`, borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginBottom:12, minWidth:260 }}
-        >
-          <option value="">Elegí un objetivo…</option>
-          {objetivosPanel.map(o => <option key={o.id} value={o.id}>{o.nombre}</option>)}
-        </select>
-        {objetivoConfig
-          ? <RondasNativasPanel objetivoId={objetivoConfig} onDirtyChange={() => {}} />
-          : <div style={{ fontSize:13, color:'#94a3b8' }}>Elegí un objetivo para ver y editar sus rondas y puntos.</div>}
+        <CentroDeRondas objetivos={objetivosPanel} />
       </div>
       <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16 }}>
         <div style={{ fontSize:15, fontWeight:800, color:brandColors.textStrong, marginBottom:10 }}>Alertas</div>

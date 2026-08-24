@@ -2693,3 +2693,110 @@ export async function regularizarAlertasHistoricas(params: {
   if (mensaje) return { data: null, error: mensaje }
   return { data: resumen, error: null }
 }
+
+// ── Centro de Rondas: una fila por ronda activa, sin entrar objetivo por objetivo ──
+//
+// Agrega lo que ya existe en vez de inventar una vista nueva: rondas_base,
+// ronda_puntos, ronda_ejecuciones y ronda_alertas. Cuatro consultas para todo
+// el alcance, no N por objetivo. Cada fila enlaza al MISMO editor de siempre.
+
+export interface FilaCentroRondas {
+  rondaId: string
+  objetivoId: string
+  objetivoNombre: string
+  puestoId: string
+  puestoNombre: string
+  nombre: string
+  activo: boolean
+  cantidadPuntos: number
+  intervaloMinutos: number
+  /** null = sin hora fija: arranca con cada turno. */
+  horaInicio: string | null
+  ultimaEjecucion: string | null
+  alertasPendientes: number
+}
+
+/** Cómo se lee el ancla del ciclo en la lista. */
+export function etiquetaHoraInicioRonda(horaInicio: string | null): string {
+  return horaInicio
+    ? `Desde ${horaInicio.slice(0, 5)}`
+    : 'Arranca con cada turno / mientras exista turno activo'
+}
+
+/**
+ * Orden operativo del centro: primero lo que reclama atención.
+ * Alertas pendientes, después las inactivas, después por objetivo y nombre.
+ */
+export function ordenarFilasCentroRondas(filas: FilaCentroRondas[]): FilaCentroRondas[] {
+  return [...filas].sort((a, b) => {
+    if (a.alertasPendientes !== b.alertasPendientes) return b.alertasPendientes - a.alertasPendientes
+    if (a.activo !== b.activo) return a.activo ? -1 : 1
+    const porObjetivo = a.objetivoNombre.localeCompare(b.objetivoNombre)
+    if (porObjetivo !== 0) return porObjetivo
+    return a.nombre.localeCompare(b.nombre)
+  })
+}
+
+export async function listarCentroRondas(
+  objetivoIds: string[],
+): Promise<ResultadoRondas<FilaCentroRondas[]>> {
+  if (objetivoIds.length === 0) return { data: [], error: null }
+
+  const rondasRes = await supabase
+    .from('rondas_base')
+    .select('id, objetivo_id, puesto_id, nombre, intervalo_minutos, hora_inicio, activo, objetivo:objetivos(nombre), puesto:puestos(nombre)')
+    .in('objetivo_id', objetivoIds)
+
+  if (rondasRes.error) {
+    return { data: null, error: mensajeError(rondasRes.error, 'No se pudieron cargar las rondas.') }
+  }
+
+  const rondas = (rondasRes.data ?? []) as any[]
+  if (rondas.length === 0) return { data: [], error: null }
+  const ids = rondas.map(r => r.id as string)
+
+  // Puntos activos, alertas pendientes y última ejecución: en paralelo. Si
+  // alguna falla se degrada a cero/null en vez de romper la pantalla entera —
+  // ver la lista con un dato de menos es mejor que no verla.
+  const [puntosRes, alertasRes, ejecRes] = await Promise.all([
+    supabase.from('ronda_puntos').select('ronda_base_id').in('ronda_base_id', ids).eq('activo', true),
+    supabase.from('ronda_alertas').select('ronda_base_id').in('ronda_base_id', ids).eq('estado', 'pendiente'),
+    supabase.from('ronda_ejecuciones').select('ronda_base_id, iniciada_at').in('ronda_base_id', ids)
+      .order('iniciada_at', { ascending: false }),
+  ])
+
+  const contar = (filas: any[] | null | undefined, campo = 'ronda_base_id'): Map<string, number> => {
+    const m = new Map<string, number>()
+    for (const fila of (filas ?? [])) {
+      const k = fila[campo] as string
+      m.set(k, (m.get(k) ?? 0) + 1)
+    }
+    return m
+  }
+
+  const puntos = contar(puntosRes.data as any[])
+  const alertas = contar(alertasRes.data as any[])
+
+  // Ya vienen ordenadas descendente: la primera de cada ronda es la última.
+  const ultima = new Map<string, string>()
+  for (const e of ((ejecRes.data ?? []) as any[])) {
+    if (!ultima.has(e.ronda_base_id)) ultima.set(e.ronda_base_id, e.iniciada_at)
+  }
+
+  const filas: FilaCentroRondas[] = rondas.map(r => ({
+    rondaId:           r.id,
+    objetivoId:        r.objetivo_id,
+    objetivoNombre:    r.objetivo?.nombre ?? '—',
+    puestoId:          r.puesto_id,
+    puestoNombre:      r.puesto?.nombre ?? '—',
+    nombre:            r.nombre,
+    activo:            Boolean(r.activo),
+    cantidadPuntos:    puntos.get(r.id) ?? 0,
+    intervaloMinutos:  Number(r.intervalo_minutos),
+    horaInicio:        r.hora_inicio ?? null,
+    ultimaEjecucion:   ultima.get(r.id) ?? null,
+    alertasPendientes: alertas.get(r.id) ?? 0,
+  }))
+
+  return { data: ordenarFilasCentroRondas(filas), error: null }
+}
