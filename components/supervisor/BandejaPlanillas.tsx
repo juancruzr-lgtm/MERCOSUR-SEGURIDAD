@@ -40,6 +40,7 @@ import {
   ETIQUETA_NO_REQUIERE_REVISION, REVISION_SIN_TOCAR, claveRevision,
   construirRevisionPorClave, cubreElTurno, etiquetaDiferencia,
   estadoRevision, etiquetaResumenMes, filtrarFilasBandeja, motivoNoCubre,
+  construirFilasBandeja,
   resueltoPorConfirmacionYAceptacion, TEXTO_CONFIRMADA_Y_ACEPTADA,
   planCorreccionHorario,
   objetivoEnAlcance, opcionesObjetivo, opcionesPuesto, opcionesVigilador,
@@ -289,100 +290,38 @@ export default function BandejaPlanillas({
         return
       }
 
-      const nombrePor = new Map<string, string>((guardiasR.data ?? []).map((g: any) => [g.id, `${g.apellido}, ${g.nombre}`]))
-      const zonasMias = new Set<string>(((zonasR.data ?? []) as any[]).map(z => z.zona_id))
-      // Desdoblamiento: las ausencias salen del camino de las horas y entran
-      // por uno propio, sólo para mostrarlas. `registrosPorTurno` alimenta
-      // selectRegistroPrincipal y resolverLineaLiquidacion —la cadena
-      // autoritativa— y sigue sin ver una sola ausencia, que es lo que impide
-      // que una falta se convierta en horas.
-      const registrosPorTurno = new Map<string, any[]>()
-      const ausenciaPorTurno = new Map<string, any>()
-      const ausenciaIds: string[] = []
-      for (const r of (registrosR.data ?? []) as any[]) {
-        if (r.tipo_registro === 'ausencia') {
-          if (!ausenciaPorTurno.has(r.turno_id)) {
-            ausenciaPorTurno.set(r.turno_id, r)
-            ausenciaIds.push(r.id)
-          }
-          continue
-        }
-        if (r.cobertura_anulada_at) continue
-        const arr = registrosPorTurno.get(r.turno_id) ?? []
-        arr.push(r)
-        registrosPorTurno.set(r.turno_id, arr)
-      }
-
-      // Quién marcó cada ausencia y cuándo: sale de la auditoría que ya escribe
-      // la RPC. No hacen falta columnas nuevas en registros_asistencia.
-      const autorAusencia = new Map<string, { nombre: string | null; fecha: string }>()
-      if (ausenciaIds.length > 0) {
-        const { data: audAus } = await supabase
+      // La auditoria dice quien marco cada ausencia y cuando. Sale de lo que
+      // ya escribe la RPC: no hacen falta columnas nuevas.
+      const idsAusencia = ((registrosR.data ?? []) as any[])
+        .filter(r => r.tipo_registro === 'ausencia').map(r => r.id)
+      let auditoriaAusencias: any[] = []
+      if (idsAusencia.length > 0) {
+        const { data } = await supabase
           .from('registros_asistencia_auditoria')
           .select('registro_id, modificado_por, created_at')
-          .in('registro_id', ausenciaIds)
+          .in('registro_id', idsAusencia)
           .eq('campo', 'ausencia_supervisor')
-        for (const a of ((audAus ?? []) as any[])) {
-          autorAusencia.set(a.registro_id, {
-            nombre: nombrePor.get(a.modificado_por) ?? null,
-            fecha: a.created_at,
-          })
-        }
+        auditoriaAusencias = (data ?? []) as any[]
       }
-      // Misma construcción que consume Reportes → Diferencias: si esto viviera
-      // sólo acá, la misma fila podría figurar pendiente en una pantalla y
-      // resuelta en la otra.
-      const revisionPor = construirRevisionPorClave(
-        (aceptR.data ?? []) as any[],
-        (soliR.data ?? []) as any[],
-        (reviR.data ?? []) as any[],
-      )
-      const ahora = Date.now()
-      const resultado: FilaBandejaMensual[] = []
-      for (const t of ((turnosR.data ?? []) as any[])) {
-        if ((t.objetivo as any)?.es_prueba) continue
-        if (ESTADOS_SIN_OBLIGACION_LOCAL.has(t.estado || '')) continue
-        if (finTurnoMs(t.fecha, t.hora_inicio, t.hora_fin) >= ahora) continue
-        if (!objetivoEnAlcance((t.objetivo as any)?.zona_id, esAdmin, zonasMias)) continue
+      if (!activo) return
 
-        const registro = selectRegistroPrincipal(registrosPorTurno.get(t.id) ?? []) as any
-        const empleadoId = (registro ? effectiveGuardia(registro) : null) ?? t.guardia_id
-        if (!empleadoId) continue
-        const linea = resolverLineaLiquidacion(t, registro ?? null)
-        const revision = revisionPor.get(claveRevision(t.id, empleadoId)) ?? REVISION_SIN_TOCAR
-        // La ausencia queda a nombre del vigilador ORIGINAL, que no siempre es
-        // el de la fila: si después entró un reemplazo, la fila muestra al
-        // reemplazo con sus horas y la ausencia sigue nombrando al que faltó.
-        const ausencia = ausenciaPorTurno.get(t.id)
-        const autorAus = ausencia ? autorAusencia.get(ausencia.id) : undefined
-        resultado.push({
-          turnoId: t.id,
-          empleadoId,
-          registroId: registro?.id ?? null,
-          vigilador: nombrePor.get(empleadoId) ?? '—',
-          fecha: t.fecha,
-          objetivoId: t.objetivo_id,
-          objetivo: (t.objetivo as any)?.nombre ?? '—',
-          puestoId: t.puesto_id ?? null,
-          puesto: (t.puesto as any)?.nombre ?? '—',
-          horario: `${hora(t.hora_inicio)}–${hora(t.hora_fin)}`,
-          horaInicioProg: hora(t.hora_inicio) ?? '',
-          horaFinProg: hora(t.hora_fin) ?? '',
-          entrada: hora(linea.horaEntrada),
-          salida: hora(linea.horaSalida),
-          horas: linea.horasLiquidables,
-          caracteristica: etiquetaCaracteristica(t.tipo_evento),
-          salidaAutomatica: Boolean(registro?.cierre_automatico),
-          tieneFichaje: Boolean(registro),
-          origenCobertura: registro?.origen_cobertura ?? null,
-          esAusencia: Boolean(ausencia),
-          ausenciaVigilador: ausencia ? (nombrePor.get(ausencia.guardia_id) ?? '—') : null,
-          ausenciaComentario: ausencia?.observacion ?? null,
-          ausenciaSupervisor: autorAus?.nombre ?? null,
-          ausenciaAt: autorAus?.fecha ?? null,
-          ...revision,
-        })
-      }
+      // La definicion de fila vive en lib, no aca: el Cierre Operativo hace la
+      // misma pregunta y con dos construcciones distintas la misma fila
+      // aparecia pendiente en una pantalla y resuelta en la otra.
+      const resultado = construirFilasBandeja({
+        turnos:        (turnosR.data ?? []) as any[],
+        registros:     (registrosR.data ?? []) as any[],
+        aceptaciones:  (aceptR.data ?? []) as any[],
+        solicitudes:   (soliR.data ?? []) as any[],
+        revisiones:    (reviR.data ?? []) as any[],
+        guardias:      (guardiasR.data ?? []) as any[],
+        auditoriaAusencias,
+        zonasMias:     ((zonasR.data ?? []) as any[]).map(z => z.zona_id),
+        esAdmin,
+      }, {
+        selectRegistroPrincipal, effectiveGuardia, resolverLineaLiquidacion,
+        etiquetaCaracteristica, objetivoEnAlcance,
+      })
       setFilas(resultado)
       setCargando(false)
     }
