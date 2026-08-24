@@ -8,7 +8,7 @@ import {
 import type { ResumenRegularizacion } from '@/lib/rondas'
 
 // Regularización histórica de alertas de ronda. El cierre en si vive en la RPC
-// regularizar_ronda_alertas_historicas y no es ejecutable sin base: delega cada
+// cerrar_ronda_alertas_pendientes y no es ejecutable sin base: delega cada
 // alerta en resolver_ronda_alerta, que ya escribe la intervencion con actor,
 // motivo y fecha, y nunca borra. Lo que se cubre aca es el contrato del cliente.
 
