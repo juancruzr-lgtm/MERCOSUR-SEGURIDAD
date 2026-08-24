@@ -2662,7 +2662,18 @@ function normalizarResumenRegularizacion(bruto: any): ResumenRegularizacion {
  * La vista previa NO modifica nada: sirve para mostrar a quién va a afectar
  * antes de confirmar. Aplicar exige motivo.
  */
-export async function regularizarAlertasHistoricas(params: {
+/**
+ * Cierra alertas pendientes vencidas dentro de un rango.
+ *
+ * Dos usos, el mismo acto: el saneamiento historico (sin `desde`) y el cierre
+ * de la jornada (`desde` = hoy). Las rondas pendientes son un problema del dia,
+ * no una deuda eterna, asi que lo normal es lo segundo.
+ *
+ * Cerrar NO dice que la ronda se haya hecho: la alerta conserva su tipo, que es
+ * lo que despues alimenta "programadas vs realizadas vs no realizadas".
+ */
+export async function cerrarAlertasPendientes(params: {
+  desde?: string | null
   hasta: string
   motivo?: string
   tipos?: TipoRondaAlerta[] | null
@@ -2676,7 +2687,8 @@ export async function regularizarAlertasHistoricas(params: {
     if (errorMotivo) return { data: null, error: errorMotivo }
   }
 
-  const { data, error } = await supabase.rpc('regularizar_ronda_alertas_historicas', {
+  const { data, error } = await supabase.rpc('cerrar_ronda_alertas_pendientes', {
+    p_desde:       params.desde ?? null,
     p_hasta:       params.hasta,
     p_motivo:      params.motivo ?? null,
     p_tipos:       params.tipos ?? null,
@@ -2685,7 +2697,7 @@ export async function regularizarAlertasHistoricas(params: {
   })
 
   if (error) {
-    return fallaRpc('regularizarAlertasHistoricas', error, 'No se pudo regularizar las alertas.')
+    return fallaRpc('cerrarAlertasPendientes', error, 'No se pudieron cerrar las alertas.')
   }
 
   const resumen = normalizarResumenRegularizacion(data)

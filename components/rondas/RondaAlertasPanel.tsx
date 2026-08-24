@@ -30,7 +30,7 @@ import {
 } from '@/lib/rondas'
 import { formatHora24, formatFechaHora } from '@/lib/formato'
 import {
-  regularizarAlertasHistoricas, resumenPrevioRegularizacion, validarMotivoRegularizacion,
+  cerrarAlertasPendientes, resumenPrevioRegularizacion, validarMotivoRegularizacion,
 } from '@/lib/rondas'
 import type { ResumenRegularizacion } from '@/lib/rondas'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
@@ -629,7 +629,7 @@ function RegularizarHistoricas({ objetivoId, onAplicado }: {
   const verPrevia = async () => {
     if (!hasta) { setError('Elegí hasta qué fecha regularizar.'); return }
     setTrabajando(true); setError(null); setHecho(null)
-    const r = await regularizarAlertasHistoricas({ hasta, objetivoId, soloConteo: true })
+    const r = await cerrarAlertasPendientes({ hasta, objetivoId, soloConteo: true })
     if (r.error) setError(r.error)
     else setPrevia(r.data)
     setTrabajando(false)
@@ -645,7 +645,7 @@ function RegularizarHistoricas({ objetivoId, onAplicado }: {
     )) return
 
     setTrabajando(true); setError(null)
-    const r = await regularizarAlertasHistoricas({ hasta, motivo, objetivoId, soloConteo: false })
+    const r = await cerrarAlertasPendientes({ hasta, motivo, objetivoId, soloConteo: false })
     if (r.error) {
       setError(r.error)
     } else {
