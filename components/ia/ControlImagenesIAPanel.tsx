@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { brandColors, semanticColors } from '@/lib/brand-theme'
+import TarjetaMetrica from '@/components/TarjetaMetrica'
 
 const C = {
   card: '#1a2235', border: '#1e2d42', muted: '#64748b', faint: '#475569',
@@ -137,21 +138,16 @@ export default function ControlImagenesIAPanel({ onVerTodas }: { onVerTodas?: ()
       ) : (
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(142px,1fr))', gap:10 }}>
           {metricas.map(m => (
-            <div
+            <TarjetaMetrica
               key={m.l}
-              style={{
-                background: C.card,
-                border: `1px solid ${m.destacar ? 'rgba(245,158,11,.34)' : C.border}`,
-                borderRadius: 8,
-                padding: '11px 12px',
-              }}
-            >
-              <div style={{ fontSize:10, fontWeight:700, letterSpacing:.7, textTransform:'uppercase', color:C.muted }}>{m.l}</div>
-              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, fontSize:22, marginTop:4, letterSpacing:-.4, color:m.color, fontVariantNumeric:'tabular-nums' }}>
-                {m.v}
-              </div>
-              <div style={{ fontSize:10.5, color:C.faint, marginTop:2 }}>{m.h}</div>
-            </div>
+              etiqueta={m.l}
+              valor={m.v}
+              ayuda={m.h}
+              color={m.color}
+              destacar={m.destacar}
+              onClick={onVerTodas}
+              titulo="Ir a Revisión de fotos IA"
+            />
           ))}
         </div>
       )}

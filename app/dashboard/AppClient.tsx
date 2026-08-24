@@ -1141,9 +1141,14 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
           const atendidas = panel.atendidas ?? 0
           const primero = cantidad > 0 ? panel.resumen(panel.items[0]) : null
           return (
-            <div
+            // Botón, no div: la tarjeta entera lleva a su pantalla, y con 0
+            // también — ver que no hay nada pendiente es una consulta válida.
+            // Como <button> queda accesible por teclado sin agregar nada.
+            <button
               key={panel.titulo}
-              onClick={cantidad > 0 ? panel.navegar : undefined}
+              type="button"
+              onClick={panel.navegar}
+              title={`Ir a ${panel.titulo}`}
               style={{
                 background: cantidad > 0 ? alpha(brandColors.surface, 0.92) : 'transparent',
                 border: `1px solid ${brandColors.border}`,
@@ -1153,7 +1158,11 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
                 minHeight:104,
                 display:'flex',
                 flexDirection:'column',
-                cursor: cantidad > 0 ? 'pointer' : 'default',
+                cursor:'pointer',
+                textAlign:'left',
+                font:'inherit',
+                color:'inherit',
+                width:'100%',
               }}
             >
               <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
@@ -1187,7 +1196,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
                     : panel.vacio}
                 </div>
               )}
-            </div>
+            </button>
           )
         })}
       </div>
