@@ -68,6 +68,8 @@ import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
+import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
+import ControlImagenesIAPanel from '@/components/ia/ControlImagenesIAPanel'
 // Mismo panel de configuración que usa el legajo del objetivo. Se monta también
 // en la solapa Rondas para poder editar rondas y puntos sin entrar objetivo por
 // objetivo. No es un editor nuevo: es el que ya existía.
@@ -1188,6 +1190,19 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
             </div>
           )
         })}
+      </div>
+
+      {/* ── 4. CONTROL DE PLANILLAS ─────────────────────────────────────── */}
+      <div style={{ ...alertBox, marginTop:28 }}>
+        <ControlPlanillasPanel
+          mes={mesActual}
+          onVerBandeja={() => onNavigate?.('revision_planillas')}
+        />
+      </div>
+
+      {/* ── 5. CONTROL DE IMÁGENES IA ───────────────────────────────────── */}
+      <div style={{ ...alertBox, marginTop:16 }}>
+        <ControlImagenesIAPanel onVerTodas={() => onNavigate?.('revision_fotos_ia')} />
       </div>
 
     </div>
