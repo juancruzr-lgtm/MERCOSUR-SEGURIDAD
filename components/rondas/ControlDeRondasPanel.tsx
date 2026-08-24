@@ -62,6 +62,12 @@ interface Props {
    */
   onPausaCambiada?: () => void
   /**
+   * Tarjeta extra al final del carril. Las rondas pausadas viven acá y no en
+   * una sección aparte: describen el mismo carril, así que se leen al lado de
+   * lo que describen en vez de abrir un bloque entero más abajo.
+   */
+  slotFinal?: React.ReactNode
+  /**
    * Cambiar este valor fuerza una recarga. Lo usa el padre cuando la pausa se
    * modificó desde otro panel.
    */
@@ -234,7 +240,7 @@ interface Balance {
 
 const BALANCE_VACIO: Balance = { llamadas: 0, sinPermiso: 0, sinRondas: 0, errores: 0 }
 
-export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCambiada, recargarToken = 0 }: Props) {
+export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCambiada, recargarToken = 0, slotFinal }: Props) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filas, setFilas] = useState<Fila[]>([])
@@ -369,7 +375,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCam
       {/* Carril horizontal. `nowrap` + `overflow-x` es lo que impide que el panel
           crezca en alto cuando hay muchos objetivos: en vez de apilarse, las
           tarjetas se desplazan. La altura del panel es constante. */}
-      {filas.length > 0 && (
+      {(filas.length > 0 || slotFinal) && (
         <div style={S.carril} role="list" aria-label="Rondas por objetivo">
           {filas.map(f => (
             <TarjetaObjetivo
@@ -379,6 +385,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCam
               onAbrir={() => setDetalle(f)}
             />
           ))}
+          {slotFinal}
         </div>
       )}
 
