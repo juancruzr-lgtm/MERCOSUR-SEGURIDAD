@@ -279,7 +279,25 @@ export function normalizarResultado(bruto: unknown, elementos: ElementoCriterio[
 
 export type Umbrales = {
   confianzaMinima?: number
+  /** Fuerzan REVISAR aunque el modelo no lo pida. Override explicito. */
   motivosQueObliganRevisar?: string[]
+  /**
+   * Lista blanca: si esta configurada, un REVISAR discrecional solo sobrevive
+   * cuando alguno de sus motivos figura aca. Vacia o ausente = comportamiento
+   * de siempre, sin filtrar nada.
+   *
+   * Existe porque medido sobre produccion el REVISAR crudo del modelo tiene
+   * precision 0%: de 100 fotos que un humano miro porque la IA las marco, se
+   * descartaron las 100, en los tres tipos. Un umbral de confianza no separa
+   * nada —los tres buckets viven entre 0,89 y 0,99—, asi que el corte util es
+   * por motivo y tipo. Como cada tipo de analisis tiene su propia
+   * configuracion, la lista viaja por configuracion.
+   *
+   * Cambiar esta lista NO exige volver a llamar al proveedor: la clasificacion
+   * efectiva se re-deriva sobre el historico, que es lo que permite medir el
+   * antes y el despues antes de publicar.
+   */
+  motivosQueHabilitanRevisar?: string[]
 }
 
 export function derivarClasificacion(
@@ -301,15 +319,29 @@ export function derivarClasificacion(
   if (resultado.clasificacion === 'EVIDENCIA_INSUFICIENTE') return 'EVIDENCIA_INSUFICIENTE'
   if (resultado.confianza < confianzaMinima) return 'EVIDENCIA_INSUFICIENTE'
 
-  const requeridas = new Set(elementos.filter(e => e.requerido).map(e => e.clave))
-  const faltaRequerido = resultado.elementos.some(e => requeridas.has(e.clave) && e.valor === 'AUSENTE')
-  if (faltaRequerido) return 'REVISAR'
-
+  // Override explicito: lo que obliga, obliga, y no lo filtra la lista blanca.
   const obligan = new Set(umbrales.motivosQueObliganRevisar ?? [])
   if (resultado.motivos.some(m => obligan.has(m))) return 'REVISAR'
 
-  if (resultado.clasificacion === 'REVISAR') return 'REVISAR'
-  return 'SIN_OBSERVACIONES'
+  const requeridas = new Set(elementos.filter(e => e.requerido).map(e => e.clave))
+  const faltaRequerido = resultado.elementos.some(e => requeridas.has(e.clave) && e.valor === 'AUSENTE')
+
+  const proponeRevisar = faltaRequerido || resultado.clasificacion === 'REVISAR'
+  if (!proponeRevisar) return 'SIN_OBSERVACIONES'
+
+  // Lista blanca. Sin configurar, todo sigue como antes.
+  const habilitan = umbrales.motivosQueHabilitanRevisar
+  if (!habilitan || habilitan.length === 0) return 'REVISAR'
+
+  // La falta de un elemento requerido tiene su propio motivo, que puede no
+  // venir en la respuesta del modelo. Se agrega para que la lista blanca pueda
+  // decidir tambien sobre ese camino, que es el que mas ruido aporto.
+  const permitidos = new Set(habilitan)
+  const motivos = faltaRequerido
+    ? [...resultado.motivos, 'ELEMENTO_REQUERIDO_AUSENTE']
+    : resultado.motivos
+
+  return motivos.some(m => permitidos.has(m)) ? 'REVISAR' : 'SIN_OBSERVACIONES'
 }
 
 /** Motivo principal a mostrar en la tarjeta de la bandeja. */
