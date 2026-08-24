@@ -705,3 +705,147 @@ export function objetivoEnAlcance(
   if (!zonasDelSupervisor || zonasDelSupervisor.size === 0) return true
   return !!objetivoZonaId && zonasDelSupervisor.has(objetivoZonaId)
 }
+
+// ── Construcción de las filas del mes ────────────────────────────────────────
+//
+// Vivía dentro de BandejaPlanillas. Se extrae para que el Cierre Operativo
+// pueda preguntar "cuántas planillas requieren decisión" sin reimplementar la
+// definición de fila —que es donde se decide qué registro manda, qué horas se
+// muestran y qué turno queda afuera—. Dos construcciones distintas para la
+// misma pregunta es exactamente lo que ya rompió los contadores del tablero.
+//
+// Es pura: recibe lo que se leyó de la base y no consulta nada.
+
+const ESTADOS_TURNO_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancelado'])
+
+const soloHora = (h?: string | null) => (h ? h.slice(0, 5) : null)
+
+/** Fin del turno en ms locales, con el cruce de medianoche resuelto. */
+export function finTurnoMs(fecha: string, horaInicio: string, horaFin: string): number {
+  const [a, m, d] = String(fecha).slice(0, 10).split('-').map(Number)
+  const [hi, mi] = String(horaInicio).slice(0, 5).split(':').map(Number)
+  const [hf, mf] = String(horaFin).slice(0, 5).split(':').map(Number)
+  const fin = new Date(a, m - 1, d, hf, mf, 0)
+  if (hf * 60 + mf <= hi * 60 + mi) fin.setDate(fin.getDate() + 1)
+  return fin.getTime()
+}
+
+export interface DatosBandejaMensual {
+  turnos: any[]
+  registros: any[]
+  aceptaciones: any[]
+  solicitudes: any[]
+  revisiones: any[]
+  guardias: Array<{ id: string; nombre?: string | null; apellido?: string | null }>
+  /** Filas de registros_asistencia_auditoria con campo = 'ausencia_supervisor'. */
+  auditoriaAusencias?: Array<{ registro_id: string; modificado_por: string; created_at: string }>
+  /** Array, no Iterable: el target es ES5 y no acepta construir un Set desde uno generico. */
+  zonasMias: string[]
+  esAdmin: boolean
+  /** Para poder fijar el reloj en los tests. */
+  ahora?: number
+}
+
+/**
+ * Dependencias que vienen del módulo de liquidación. Se inyectan en vez de
+ * importarse acá para no atar esta capa a esa cadena: quien construye filas ya
+ * la tiene, y el test puede pasar una versión mínima.
+ */
+export interface DependenciasFilas {
+  selectRegistroPrincipal: (registros: any[]) => any
+  effectiveGuardia: (registro: any) => string | null
+  resolverLineaLiquidacion: (turno: any, registro: any | null) => {
+    horaEntrada?: string | null
+    horaSalida?: string | null
+    horasLiquidables: number
+  }
+  etiquetaCaracteristica: (tipoEvento: any) => string
+  objetivoEnAlcance: (zonaId: any, esAdmin: boolean, zonasMias: Set<string>) => boolean
+}
+
+export function construirFilasBandeja(
+  datos: DatosBandejaMensual,
+  dep: DependenciasFilas,
+): FilaBandejaMensual[] {
+  const nombrePor = new Map<string, string>(
+    (datos.guardias ?? []).map(g => [g.id, `${g.apellido}, ${g.nombre}`]),
+  )
+  const zonasMias = new Set<string>(datos.zonasMias ?? [])
+
+  // Las ausencias salen del camino de las horas y entran por uno propio, sólo
+  // para mostrarlas: es lo que impide que una falta se convierta en horas.
+  const registrosPorTurno = new Map<string, any[]>()
+  const ausenciaPorTurno = new Map<string, any>()
+  for (const r of (datos.registros ?? [])) {
+    if (r.tipo_registro === 'ausencia') {
+      if (!ausenciaPorTurno.has(r.turno_id)) ausenciaPorTurno.set(r.turno_id, r)
+      continue
+    }
+    if (r.cobertura_anulada_at) continue
+    const arr = registrosPorTurno.get(r.turno_id) ?? []
+    arr.push(r)
+    registrosPorTurno.set(r.turno_id, arr)
+  }
+
+  const autorAusencia = new Map<string, { nombre: string | null; fecha: string }>()
+  for (const a of (datos.auditoriaAusencias ?? [])) {
+    autorAusencia.set(a.registro_id, {
+      nombre: nombrePor.get(a.modificado_por) ?? null,
+      fecha: a.created_at,
+    })
+  }
+
+  const revisionPor = construirRevisionPorClave(
+    datos.aceptaciones ?? [], datos.solicitudes ?? [], datos.revisiones ?? [],
+  )
+
+  const ahora = datos.ahora ?? Date.now()
+  const filas: FilaBandejaMensual[] = []
+
+  for (const t of (datos.turnos ?? [])) {
+    if (t.objetivo?.es_prueba) continue
+    if (ESTADOS_TURNO_SIN_OBLIGACION.has(t.estado || '')) continue
+    // Un turno que todavía no terminó no se revisa: no hay nada que decidir.
+    if (finTurnoMs(t.fecha, t.hora_inicio, t.hora_fin) >= ahora) continue
+    if (!dep.objetivoEnAlcance(t.objetivo?.zona_id, datos.esAdmin, zonasMias)) continue
+
+    const registro = dep.selectRegistroPrincipal(registrosPorTurno.get(t.id) ?? [])
+    const empleadoId = (registro ? dep.effectiveGuardia(registro) : null) ?? t.guardia_id
+    if (!empleadoId) continue
+
+    const linea = dep.resolverLineaLiquidacion(t, registro ?? null)
+    const revision = revisionPor.get(claveRevision(t.id, empleadoId)) ?? REVISION_SIN_TOCAR
+    const ausencia = ausenciaPorTurno.get(t.id)
+    const autorAus = ausencia ? autorAusencia.get(ausencia.id) : undefined
+
+    filas.push({
+      turnoId: t.id,
+      empleadoId,
+      registroId: registro?.id ?? null,
+      vigilador: nombrePor.get(empleadoId) ?? '—',
+      fecha: t.fecha,
+      objetivoId: t.objetivo_id,
+      objetivo: t.objetivo?.nombre ?? '—',
+      puestoId: t.puesto_id ?? null,
+      puesto: t.puesto?.nombre ?? '—',
+      horario: `${soloHora(t.hora_inicio)}–${soloHora(t.hora_fin)}`,
+      horaInicioProg: soloHora(t.hora_inicio) ?? '',
+      horaFinProg: soloHora(t.hora_fin) ?? '',
+      entrada: soloHora(linea.horaEntrada),
+      salida: soloHora(linea.horaSalida),
+      horas: linea.horasLiquidables,
+      caracteristica: dep.etiquetaCaracteristica(t.tipo_evento),
+      salidaAutomatica: Boolean(registro?.cierre_automatico),
+      tieneFichaje: Boolean(registro),
+      origenCobertura: registro?.origen_cobertura ?? null,
+      esAusencia: Boolean(ausencia),
+      ausenciaVigilador: ausencia ? (nombrePor.get(ausencia.guardia_id) ?? '—') : null,
+      ausenciaComentario: ausencia?.observacion ?? null,
+      ausenciaSupervisor: autorAus?.nombre ?? null,
+      ausenciaAt: autorAus?.fecha ?? null,
+      ...revision,
+    })
+  }
+
+  return filas
+}
