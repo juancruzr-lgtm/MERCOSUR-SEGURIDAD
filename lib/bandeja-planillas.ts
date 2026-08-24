@@ -323,6 +323,41 @@ export function resueltoPorConfirmacionYAceptacion(
   return true
 }
 
+export interface ConteoPorEstadoRevision {
+  modificacion: number
+  derivadas: number
+  revisadas: number
+  resueltas: number
+}
+
+/**
+ * Cuenta por el estado REAL de cada clave, no por la existencia del dato que lo
+ * originó.
+ *
+ * El resumen del Dashboard contaba `solicitudEstado` a secas: una solicitud ya
+ * resuelta por Administración —o ya revisada— seguía sumando a "Modificación
+ * solicitada". El número existía y la fila no aparecía al entrar, porque la
+ * bandeja clasifica por `estadoRevision`. Dos definiciones para la misma
+ * pregunta; ahora hay una sola y vive acá.
+ */
+export function contarPorEstadoRevision(
+  porClave: Map<string, EstadoRevisionClave>,
+): ConteoPorEstadoRevision {
+  const conteo: ConteoPorEstadoRevision = {
+    modificacion: 0, derivadas: 0, revisadas: 0, resueltas: 0,
+  }
+  porClave.forEach(entrada => {
+    switch (estadoRevision(entrada)) {
+      case 'pendiente_regularizacion': conteo.derivadas    += 1; break
+      case 'revisado_supervisor':      conteo.revisadas    += 1; break
+      case 'modificacion_solicitada':  conteo.modificacion += 1; break
+      case 'resuelto':                 conteo.resueltas    += 1; break
+      default: break
+    }
+  })
+  return conteo
+}
+
 export function requiereRevision(f: FilaBandejaMensual): boolean {
   const estado = estadoRevision(f)
   if (estado === 'revisado_supervisor' || estado === 'resuelto') return false

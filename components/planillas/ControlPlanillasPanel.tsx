@@ -14,14 +14,18 @@
  * que alguien cerró y lo que quedó derivado. Para el total del mes está el
  * enlace a la bandeja, que es su dueña.
  *
- * El estado de cada turno/empleado lo deriva `construirRevisionPorClave`, la
- * misma función que usa la bandeja. Acá no hay lógica de estados propia.
+ * El estado de cada turno/empleado lo derivan `construirRevisionPorClave` y
+ * `contarPorEstadoRevision`, las mismas funciones que usa la bandeja. Acá no
+ * hay lógica de estados propia — y antes sí la había: se contaba
+ * `solicitudEstado` a secas, así que una solicitud ya resuelta o ya revisada
+ * seguía sumando a "Modificación solicitada". El número aparecía en el tablero
+ * y al entrar no había ninguna fila.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
-import { construirRevisionPorClave, claveRevision } from '@/lib/bandeja-planillas'
+import { construirRevisionPorClave, claveRevision, contarPorEstadoRevision } from '@/lib/bandeja-planillas'
 import { brandColors, semanticColors } from '@/lib/brand-theme'
 import TarjetaMetrica from '@/components/TarjetaMetrica'
 
@@ -36,12 +40,13 @@ const C = {
 type Conteos = {
   aceptadas: number
   modificacion: number
+  resueltas: number
   revisadas: number
   derivadas: number
   conAccion: number
 }
 
-const VACIO: Conteos = { aceptadas: 0, modificacion: 0, revisadas: 0, derivadas: 0, conAccion: 0 }
+const VACIO: Conteos = { aceptadas: 0, modificacion: 0, revisadas: 0, derivadas: 0, resueltas: 0, conAccion: 0 }
 
 export default function ControlPlanillasPanel({
   mes, onVerBandeja,
@@ -82,16 +87,11 @@ export default function ControlPlanillasPanel({
 
     const porClave = construirRevisionPorClave(acep.data, soli.data, revi.data)
 
-    let modificacion = 0, revisadas = 0, derivadas = 0
-    porClave.forEach(e => {
-      if (e.derivado) derivadas++
-      else if (e.revisado) revisadas++
-      else if (e.solicitudEstado) modificacion++
-    })
+    const { modificacion, revisadas, derivadas, resueltas } = contarPorEstadoRevision(porClave)
 
     const aceptadas = new Set(acep.data.map(a => claveRevision(a.turno_id, a.empleado_id))).size
 
-    setC({ aceptadas, modificacion, revisadas, derivadas, conAccion: porClave.size })
+    setC({ aceptadas, modificacion, revisadas, derivadas, resueltas, conAccion: porClave.size })
     setCargando(false)
   }, [mes])
 
@@ -102,6 +102,7 @@ export default function ControlPlanillasPanel({
     { l: 'Derivadas a administración', v: c.derivadas, h: 'esperan regularización', color: C.yellow, destacar: c.derivadas > 0 },
     { l: 'Aceptadas por vigilador', v: c.aceptadas, h: 'sin nada por resolver', color: C.green, destacar: false },
     { l: 'Revisadas por supervisor', v: c.revisadas, h: 'cerradas', color: C.green, destacar: false },
+    { l: 'Resueltas por administración', v: c.resueltas, h: 'cerradas del otro lado', color: C.green, destacar: false },
   ]
 
   return (
