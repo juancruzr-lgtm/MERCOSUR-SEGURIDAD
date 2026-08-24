@@ -9,6 +9,7 @@ import {
   resumenBandejaMensual,
   REVISION_SIN_TOCAR, claveRevision, construirRevisionPorClave,
   esConfirmacionHumana, resueltoPorConfirmacionYAceptacion,
+  contarPorEstadoRevision,
 } from '@/lib/bandeja-planillas'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 
@@ -737,5 +738,60 @@ describe('confirmación de supervisor + aceptación del vigilador', () => {
     expect(f.horas).toBe(antes)
     expect(f.entrada).toBeNull()
     expect(f.salida).toBeNull()
+  })
+})
+
+// El tablero decia "1 modificacion solicitada" y al entrar no habia ninguna fila.
+// El resumen contaba `solicitudEstado` a secas, asi que una solicitud ya resuelta
+// por Administracion —o ya revisada— seguia sumando ahi, mientras la bandeja la
+// clasificaba por `estadoRevision` como Resuelto o Revisado.
+
+describe('contarPorEstadoRevision — el tablero y la bandeja dicen lo mismo', () => {
+  const mapa = (...entradas: Array<Partial<typeof REVISION_SIN_TOCAR>>) => {
+    const m = new Map<string, typeof REVISION_SIN_TOCAR>()
+    entradas.forEach((e, i) => m.set(`t${i}:e${i}`, { ...REVISION_SIN_TOCAR, ...e }))
+    return m
+  }
+
+  it('una solicitud RESUELTA no es una modificación pendiente', () => {
+    const c = contarPorEstadoRevision(mapa({ solicitudEstado: 'resuelta' }))
+    expect(c.modificacion).toBe(0)
+    expect(c.resueltas).toBe(1)
+  })
+
+  it('una solicitud REVISADA por el supervisor tampoco', () => {
+    const c = contarPorEstadoRevision(mapa({ solicitudEstado: 'revisada' }))
+    expect(c.modificacion).toBe(0)
+    expect(c.revisadas).toBe(1)
+  })
+
+  it('la que sigue abierta sí cuenta', () => {
+    const c = contarPorEstadoRevision(mapa({
+      estadoControl: 'modificacion_solicitada', solicitudEstado: 'pendiente',
+    }))
+    expect(c.modificacion).toBe(1)
+  })
+
+  it('derivada a administración cuenta como derivada, no como modificación', () => {
+    const c = contarPorEstadoRevision(mapa({ derivado: true, solicitudEstado: 'pendiente' }))
+    expect(c.derivadas).toBe(1)
+    expect(c.modificacion).toBe(0)
+  })
+
+  it('cada clave cae en una sola categoría', () => {
+    const c = contarPorEstadoRevision(mapa(
+      { estadoControl: 'modificacion_solicitada', solicitudEstado: 'pendiente' },
+      { solicitudEstado: 'resuelta' },
+      { revisado: true },
+      { derivado: true },
+      {},
+    ))
+    expect(c.modificacion + c.resueltas + c.revisadas + c.derivadas).toBe(4)
+  })
+
+  it('coincide con estadoRevision, que es de donde sale', () => {
+    const entrada = { ...REVISION_SIN_TOCAR, solicitudEstado: 'resuelta' as const }
+    expect(estadoRevision(entrada)).toBe('resuelto')
+    expect(contarPorEstadoRevision(new Map([['k', entrada]])).resueltas).toBe(1)
   })
 })
