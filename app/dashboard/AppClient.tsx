@@ -1286,6 +1286,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin 
   const router = useRouter()
   const [modal, setModal] = useState(false)
   const formVacio = { nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
+  const [grupoRol, setGrupoRol] = useState<'vigiladores' | 'supervisores' | 'administracion'>('vigiladores')
   const [form, setForm] = useState(formVacio)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -1582,9 +1583,26 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin 
     setAccionLoading(null)
   }
 
+  // Los supervisores no son guardias. Mezclados en la misma lista obligan a
+  // leer la columna Rol de cada fila para saber a quien se esta mirando, y la
+  // pantalla se usa sobre todo para trabajar con vigiladores.
+  //
+  // "Administracion" es un cajon de sastre a proposito: cualquier rol que no
+  // sea vigilador ni supervisor cae ahi. Un rol nuevo aparece en algun lado en
+  // vez de desaparecer de la pantalla sin que nadie se entere.
+  const esVigilador = (g: Usuario) => ['guardia', 'vigilador'].includes(g.rol || 'guardia')
+  const esSupervisor = (g: Usuario) => (g.rol || '') === 'supervisor'
+  const grupoDe = (g: Usuario) => esVigilador(g) ? 'vigiladores' : esSupervisor(g) ? 'supervisores' : 'administracion'
+
+  const conteoGrupos = { vigiladores: 0, supervisores: 0, administracion: 0 } as Record<string, number>
+  for (const g of guardias as Usuario[]) conteoGrupos[grupoDe(g)] += 1
+
   const idsFiltroGuardias = new Set((filtroActivo?.ids ?? []) as string[])
   const guardiasFiltrados = guardias.filter((g: Usuario) => {
+    // Un enlace que pide ids concretos manda: si vino de otra pantalla a ver a
+    // alguien, no se lo esconde porque este en otra solapa.
     if (idsFiltroGuardias.size > 0) return idsFiltroGuardias.has(g.id)
+    if (grupoDe(g) !== grupoRol) return false
     if (filtroActivo?.tipo === 'activos') return g.estado === 'activo'
     return true
   })
@@ -1594,7 +1612,11 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin 
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
         <div style={{ flex:1 }}>
           <div style={S.title}>Guardias / Empleados</div>
-          <div style={S.sub2}>{guardias.length} empleados registrados</div>
+          <div style={S.sub2}>
+            {idsFiltroGuardias.size > 0
+              ? `${guardiasFiltrados.length} de ${guardias.length} empleados`
+              : `${guardiasFiltrados.length} de ${guardias.length} empleados registrados`}
+          </div>
         </div>
 
         <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'flex-end' }}>
@@ -1637,6 +1659,28 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin 
       )}
 
       <div style={S.card}>
+        {idsFiltroGuardias.size === 0 && (
+          <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
+            {([
+              { id:'vigiladores' as const,    texto:'Vigiladores' },
+              { id:'supervisores' as const,   texto:'Supervisores' },
+              { id:'administracion' as const, texto:'Administración' },
+            ]).map(op => (
+              <button
+                key={op.id}
+                onClick={() => setGrupoRol(op.id)}
+                style={{
+                  ...S.btn, fontSize:12, padding:'6px 12px',
+                  border: grupoRol === op.id ? '1px solid #f59e0b' : '1px solid #334155',
+                  background: grupoRol === op.id ? '#f59e0b18' : '#1e293b',
+                  color: grupoRol === op.id ? '#f59e0b' : '#e2e8f0',
+                }}
+              >
+                {grupoRol === op.id ? '✓ ' : ''}{op.texto} ({conteoGrupos[op.id]})
+              </button>
+            ))}
+          </div>
+        )}
         <table style={S.table}>
           <thead>
             <tr>
