@@ -63,18 +63,26 @@ export default function ControlPlanillasPanel({
 
     // Mismas consultas que la bandeja, paginadas: el mes supera las 1000 filas
     // que devuelve PostgREST y el recorte es silencioso.
+    //
+    // Y con la misma exclusion de objetivos de prueba. Sin ella el tablero
+    // decia "1 modificacion solicitada" y al entrar no habia ninguna fila: la
+    // solicitud existia, pero sobre el objetivo Casa Juan, que es de testeo y
+    // la bandeja descarta. El numero era de un universo y la lista de otro.
     const [acep, soli, revi] = await Promise.all([
       fetchPaginadoResult((d, h) => supabase.from('aceptaciones_planilla')
-        .select('turno_id, empleado_id, turno:turnos!inner(fecha)')
+        .select('turno_id, empleado_id, turno:turnos!inner(fecha, objetivo:objetivos!inner(es_prueba))')
         .gte('turno.fecha', desde).lte('turno.fecha', hasta)
+        .eq('turno.objetivo.es_prueba', false)
         .order('turno_id').range(d, h)),
       fetchPaginadoResult((d, h) => supabase.from('solicitudes_modificacion_planilla')
-        .select('id, turno_id, empleado_id, texto, estado, created_at, turno:turnos!inner(fecha)')
+        .select('id, turno_id, empleado_id, texto, estado, created_at, turno:turnos!inner(fecha, objetivo:objetivos!inner(es_prueba))')
         .gte('turno.fecha', desde).lte('turno.fecha', hasta)
+        .eq('turno.objetivo.es_prueba', false)
         .order('created_at', { ascending: false }).order('id').range(d, h)),
       fetchPaginadoResult((d, h) => supabase.from('revisiones_planilla')
-        .select('turno_id, empleado_id, accion, created_at, turno:turnos!inner(fecha)')
+        .select('turno_id, empleado_id, accion, created_at, turno:turnos!inner(fecha, objetivo:objetivos!inner(es_prueba))')
         .gte('turno.fecha', desde).lte('turno.fecha', hasta)
+        .eq('turno.objetivo.es_prueba', false)
         .order('turno_id').range(d, h)),
     ])
 
