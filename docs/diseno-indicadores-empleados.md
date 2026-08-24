@@ -303,33 +303,101 @@ hay que moverlos o cambiar los pesos.
 
 ---
 
-## 15. Simulación de agosto 2026 — PENDIENTE DE DATOS
+## 15. Simulación de agosto 2026 — RESULTADOS REALES
 
-**No hay simulación todavía.** Requiere leer producción, y el editor SQL del
-dashboard no fue operable desde esta sesión (la extensión del navegador inyecta
-en un frame vacío; verificado con `document.body.innerText.length === 0`).
+Corrida el 24/08/2026 sobre producción, solo lectura, sin guardar ningún
+puntaje. **65 empleados · 1.029 turnos exigibles.** Consultas en
+[`consultas/simulacion-puntaje-agosto.sql`](consultas/simulacion-puntaje-agosto.sql).
 
-Las consultas están en [`consultas/simulacion-puntaje-agosto.sql`](consultas/simulacion-puntaje-agosto.sql).
-Son de **solo lectura** y no guardan ningún puntaje.
+Sólo tres dimensiones activas: Rondas y Calidad quedaron fuera por falta de
+historia comparable.
 
-Al correrlas se obtiene, por empleado: turnos exigibles, cumplidos, ausencias,
-confirmados por supervisor, fichajes propios, tardanzas, salidas automáticas,
-rondas por tipo y evidencias IA revisadas. Con eso se calcula cada variante y la
-distribución:
+### Distribución
 
-```
-9–10 · 8–9 · 7–8 · 6–7 · <6 · datos insuficientes
-```
+| | 9–10 | 8–9 | 7–8 | 6–7 | <6 | insuf. |
+|---|---:|---:|---:|---:|---:|---:|
+| **A** Equilibrada | **39 (60 %)** | 10 | 5 | 1 | 1 | 9 |
+| **B** Presencia primero | **44 (68 %)** | 6 | 5 | 0 | 1 | 9 |
+| **C** Procedimiento fuerte | **38 (58 %)** | 10 | 6 | 0 | 2 | 9 |
 
-**Qué hay que buscar en el resultado:**
+Mediana: **9,45 · 9,67 · 9,50**. Catorce empleados sacan **10,00 exacto** en las
+tres variantes.
 
-1. ¿Una variante da 9–10 a casi todos? → no separa, no sirve.
-2. ¿Un solo error hunde a alguien? → la muestra mínima es baja o el peso alto.
-3. ¿Alguien con 9 turnos saca 10? → subir la muestra mínima.
-4. ¿Los de objetivos sin rondas quedan sistemáticamente arriba o abajo? → la
-   normalización está mal.
-5. ¿Los objetivos con mala señal concentran los peores Procedimiento? → es el
-   teléfono, no la persona: revisar antes de publicar.
+### Los cinco chequeos
+
+**1. ¿Notas demasiado altas? SÍ, las tres.** Entre el 58 % y el 68 % cae en
+9–10 y la mediana ronda 9,5. Ninguna variante separa.
+
+**La causa está identificada: Asistencia no discrimina.** 56 de 65 empleados
+(86 %) tienen Asistencia exactamente 10,0, y en **todo agosto hubo UNA sola
+ausencia confirmada**. Una dimensión casi constante con 35–45 % del peso sólo
+puede inflar el promedio.
+
+**2. ¿Castiga un error aislado? No — pero Puntualidad está rota.** El problema
+es el inverso: castiga lo *crónico* sin preguntarse por qué.
+
+| Empleado | entradas tarde | Asistencia | Procedimiento |
+|---|---|---:|---:|
+| CONTARDE | **10 de 10 (100 %)** | 10,0 | 10,0 |
+| OJEDA | **17 de 18 (94 %)** | 10,0 | 9,5 |
+| GALLO | **9 de 10 (90 %)** | 10,0 | 9,0 |
+
+Nadie llega tarde el 100 % de sus turnos con asistencia y procedimiento
+perfectos. Eso es un **horario programado que no coincide con el real**, no una
+persona impuntual. Es exactamente el uso de señal cruda que la auditoría de
+telemetría prohíbe: `alerta_entrada` necesita el filtro de tardanza
+justificada/corregida, que todavía no está conectado.
+
+**3. ¿Beneficia a los de poca muestra? El corte de 8 turnos lo evita**, y
+protege en las dos direcciones: RODRIGUEZ (2 turnos) habría sacado 8,75 y GOMEZ
+JOSE MARÍA (4 turnos) 5,31. Los dos quedan fuera. Excluidos: **9 de 65**.
+
+**4. ¿Sesgo por problemas técnicos? SÍ, y hay que resolverlo antes de
+publicar.** MARTINEZ SANTIAGO tiene **11 cierres automáticos en 19 turnos** —
+Procedimiento 4,2. Que más de la mitad de sus jornadas las cierre el sistema
+parece del sitio o del dispositivo, no de la persona. Mismo patrón en MAIDANA
+(7 de 22).
+
+**5. ¿Doble penalización? No.** La separación funciona y se ve en el caso más
+claro: **ROSÓN JUAN**, 18 de 23 turnos confirmados por supervisor. Asistencia
+**9,6** (estuvo), Procedimiento **2,2** (no registró). Un mismo hecho, una sola
+dimensión. Es el peor puntaje real del mes y por el motivo correcto.
+
+### Hallazgo adicional: huecos de registro contados como faltas
+
+12 turnos (1,2 %) no tienen ni fichaje ni ausencia. Hoy bajan **Asistencia**
+como si fueran inasistencias. **Es el error que este documento dice evitar**:
+convertir un problema de registro en una falta. MARTINEZ RAUL cae a Asistencia
+5,0 por 3 turnos sin registro sobre 8.
+
+### Variante D — correctiva
+
+Probada: Asistencia sólo baja por **ausencia confirmada**, Puntualidad con peso
+0, Procedimiento sin contar cierre automático. Pesos 20 / 0 / 60.
+
+| | 9–10 | 8–9 | 7–8 | 6–7 | <6 | insuf. |
+|---|---:|---:|---:|---:|---:|---:|
+| **D** | 36 | 11 | 4 | 2 | 3 | 9 |
+
+Mejora el fondo de la tabla —el rango pasa a **4,13 → 10,00**— y los seis casos
+con problema real quedan claramente separados: ROSÓN 4,13 · MARTINEZ SANTIAGO
+5,66 · MARTINEZ RAUL 5,94 · CENTURION 6,45 · TABORDA NICOLÁS 6,50 · GAUTO 7,38.
+
+Pero **sigue con 22 empleados en 10,00 exacto**. La compresión no se arregla con
+pesos.
+
+### Conclusión de la simulación
+
+**Con los datos de agosto, la única dimensión que discrimina es
+Procedimiento/App.** Y eso, leído bien, es una buena noticia operativa: una
+ausencia en el mes y la enorme mayoría sin incidencias.
+
+Pero cambia para qué sirve el número. Con esta distribución, un puntaje 0–10 no
+ordena a la gente: **señala un puñado de casos**. Seis personas concentran el
+problema real, y todas por el mismo motivo — jornadas que no quedan registradas.
+
+De ahí que los cortes de categoría propuestos no sirvan tal cual: si 9–10 es
+"Excelente" y ahí cae el 60 %, la etiqueta no informa nada.
 
 ---
 
@@ -369,15 +437,61 @@ Guardas obligatorias, con test cada una:
 
 ---
 
+## 16. Fórmula candidata — NO DEFINITIVA
+
+Después de la simulación, la candidata **no es ninguna de las tres originales**.
+
+```
+Asistencia      peso 20   sólo baja por AUSENCIA CONFIRMADA
+                          un turno sin registro es un hueco de datos, no una falta
+Procedimiento   peso 60   incidencia = turno sin entrada o sin salida
+                          el cierre automático NO cuenta hasta saber si es la persona
+Puntualidad     peso  0   hasta conectar el filtro de tardanza justificada
+Rondas          peso 20   sólo cuando tenga un mes comparable, y sólo si aplica
+Calidad         peso  0   hasta tener volumen de revisiones post-lista blanca
+```
+
+**Muestra mínima definitiva propuesta: 8 turnos exigibles.** Validada contra la
+distribución real — excluye a 9 de 65 y protege en las dos direcciones.
+
+### Cortes de categoría — recalibrados
+
+Los originales no sirven: con el 60 % en 9–10, "Excelente" no informa. Con la
+distribución real:
+
+| Rango | Etiqueta | Cuántos caen (variante D) |
+|---|---|---:|
+| 9,5–10 | Sin observaciones | ~30 |
+| 8,5–9,4 | Correcto | ~12 |
+| 7,0–8,4 | Con observaciones de registro | ~8 |
+| < 7,0 | Requiere seguimiento | ~6 |
+
+Cuatro categorías, no cinco, y con nombres que describen **qué pasó** en vez de
+calificar a la persona. "Sin observaciones" es la norma esperable, no un premio.
+
+### Antes de programar nada
+
+1. **Investigar el cierre automático.** MARTINEZ SANTIAGO (11 de 19) y MAIDANA
+   (7 de 22) pueden ser el sitio, no la persona. Si es el sitio, se arregla el
+   sitio y el puntaje ni se entera.
+2. **Conectar el filtro de tardanza justificada** antes de activar Puntualidad.
+3. **Revisar los 12 turnos sin registro** — son 1,2 %, y hoy castigan.
+4. **Confirmar la unión exacta de incidencias por turno.** La simulación usó
+   cotas; la mediana de diferencia es 0,00 pero el peor caso llega a 1,84
+   puntos.
+
+---
+
 ## Decisiones pendientes de JC
 
-1. **Qué variante de pesos** (A, B o C) — o una propia. Es decisión de gestión.
-2. **Muestra mínima**: ¿8 turnos es razonable para el negocio?
-3. **Cortes de categoría**: validar contra la distribución real.
+1. **¿Publicar un puntaje con esta distribución?** Es la pregunta de fondo. Con
+   una ausencia en el mes y el 60 % en 9–10, el número no ordena: señala seis
+   casos. Puede ser suficiente — pero entonces conviene llamarlo *alerta de
+   seguimiento* y no *puntaje*.
+2. **Pesos**: ¿se acepta la candidata (20/60/0), o preferís otra distribución?
+3. **Muestra mínima**: ¿8 turnos es razonable para el negocio?
 4. **¿El vigilador ve su puntaje?** Cambia el tono de todo el módulo.
-5. **¿Desde cuándo?** Rondas tiene 26 días e IA 13. Propuesta: arrancar con
-   Asistencia + Puntualidad + Procedimiento, y sumar Rondas y Calidad cuando cada
-   una tenga su mes.
+5. **¿Cuándo entra Rondas?** Tiene 26 días. Propuesta: septiembre completo.
 6. **Snapshot mensual**: ¿se congela el día 1 del mes siguiente, o después del
    cierre de liquidación?
 
