@@ -36,6 +36,10 @@
 -- p_solo_conteo arranca en true a proposito: la llamada natural muestra a
 -- quien se va a afectar y no cambia nada. Para aplicar hay que pedirlo.
 
+-- NOTA: el cuerpo va con etiqueta $BODY$ y adentro no se usa
+-- "select <una columna> into <un destino>", que es lo que rompia esta migracion
+-- en el editor del dashboard. Ver el comentario junto a la asignacion de
+-- v_usuario_id, mas abajo.
 create or replace function public.regularizar_ronda_alertas_historicas(
   p_hasta       date,                    -- alertas vencidas ANTES de esta fecha (00:00 local)
   p_motivo      text    default null,
@@ -47,7 +51,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public, pg_catalog
-as $$
+as $BODY$
 declare
   v_tz        constant text := 'America/Argentina/Buenos_Aires';
   v_usuario_id uuid;
@@ -66,10 +70,19 @@ begin
     raise exception 'Sesion requerida';
   end if;
 
-  select u.id into v_usuario_id
-  from public.usuarios u
-  where u.auth_user_id = auth.uid() and u.estado = 'activo'
-  limit 1;
+  -- Asignacion en vez de SELECT ... INTO. El editor SQL del dashboard lee
+  -- "select <una columna> into <un destino>" como el SELECT INTO de SQL plano,
+  -- que CREA una tabla: corta la sentencia ahi y le agrega solo un
+  -- "ALTER TABLE v_usuario_id ENABLE ROW LEVEL SECURITY", rompiendo el cuerpo.
+  -- Con := no se confunde. Los INTO de varios destinos o hacia un record no
+  -- disparan el problema. Verificado el 2026-08-24 contra la migracion
+  -- 20260819120000, que usa INTO multiple y aplica sin drama.
+  v_usuario_id := (
+    select u.id
+    from public.usuarios u
+    where u.auth_user_id = auth.uid() and u.estado = 'activo'
+    limit 1
+  );
   if v_usuario_id is null then
     return jsonb_build_object('contexto', 'sin_usuario');
   end if;
@@ -135,7 +148,7 @@ begin
     'omitidas',      v_omitidas
   );
 end;
-$$;
+$BODY$;
 
 comment on function public.regularizar_ronda_alertas_historicas(date, text, text[], uuid, boolean) is
   'Cierra en lote alertas de ronda pendientes vencidas antes de una fecha, delegando cada '
