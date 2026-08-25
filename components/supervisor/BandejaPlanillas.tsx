@@ -33,7 +33,7 @@ import {
 } from '@/lib/primer-control'
 import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud } from '@/lib/primer-control'
 import { limitesDelMes } from '@/lib/calendario-mes'
-import { fetchPaginadoResult } from '@/lib/fetch-paginado'
+import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { formatFechaHora } from '@/lib/formato'
 import {
   ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, ETIQUETA_MOTIVO_NO_CUBRE,
@@ -249,79 +249,18 @@ export default function BandejaPlanillas({
       //
       // El segundo `order` por id es el que hace segura la paginación: sin un
       // desempate estable, dos páginas pueden repetir u omitir filas.
-      const [turnosR, registrosR, aceptR, soliR, reviR, guardiasR, zonasR] = await Promise.all([
-        fetchPaginadoResult((d, h) => supabase.from('turnos')
-          .select('id, fecha, hora_inicio, hora_fin, estado, tipo_evento, guardia_id, objetivo_id, puesto_id, puesto:puestos(nombre), objetivo:objetivos(nombre, es_prueba, zona_id)')
-          .gte('fecha', desde).lte('fecha', hasta)
-          .order('fecha', { ascending: false }).order('id')
-          .range(d, h)),
-        fetchPaginadoResult((d, h) => supabase.from('registros_asistencia')
-          .select('id, turno_id, guardia_id, guardia_final_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, cierre_automatico, cobertura_anulada_at, observacion, origen_cobertura, turno:turnos!inner(fecha)')
-          .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .order('id')
-          .range(d, h)),
-        fetchPaginadoResult((d, h) => supabase.from('aceptaciones_planilla')
-          .select('turno_id, empleado_id, turno:turnos!inner(fecha)')
-          .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .order('turno_id')
-          .range(d, h)),
-        fetchPaginadoResult((d, h) => supabase.from('solicitudes_modificacion_planilla')
-          .select('id, turno_id, empleado_id, texto, estado, created_at, turno:turnos!inner(fecha)')
-          .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .order('created_at', { ascending: false }).order('id')
-          .range(d, h)),
-        fetchPaginadoResult((d, h) => supabase.from('revisiones_planilla')
-          .select('turno_id, empleado_id, solicitud_id, accion, created_at, turno:turnos!inner(fecha)')
-          .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-          .order('turno_id')
-          .range(d, h)),
-        fetchPaginadoResult((d, h) => supabase.from('usuarios')
-          .select('id, nombre, apellido')
-          .order('id')
-          .range(d, h)),
-        supabase.from('supervisor_zonas').select('zona_id').eq('supervisor_id', user?.id ?? ''),
-      ])
-
+      // Las consultas viven en lib/bandeja-datos: el indicador de desempeno
+      // necesita exactamente estas filas, y con dos cargas distintas tarde o
+      // temprano una traeria un turno que la otra no.
+      const { filas: resultado, error: errCarga } = await cargarFilasBandeja({
+        mes, esAdmin, usuarioId: user?.id ?? null,
+      })
       if (!activo) return
-      const err = turnosR.error || registrosR.error || guardiasR.error
-      if (err) {
-        setError(err.message)
+      if (errCarga) {
+        setError(errCarga)
         setCargando(false)
         return
       }
-
-      // La auditoria dice quien marco cada ausencia y cuando. Sale de lo que
-      // ya escribe la RPC: no hacen falta columnas nuevas.
-      const idsAusencia = ((registrosR.data ?? []) as any[])
-        .filter(r => r.tipo_registro === 'ausencia').map(r => r.id)
-      let auditoriaAusencias: any[] = []
-      if (idsAusencia.length > 0) {
-        const { data } = await supabase
-          .from('registros_asistencia_auditoria')
-          .select('registro_id, modificado_por, created_at')
-          .in('registro_id', idsAusencia)
-          .eq('campo', 'ausencia_supervisor')
-        auditoriaAusencias = (data ?? []) as any[]
-      }
-      if (!activo) return
-
-      // La definicion de fila vive en lib, no aca: el Cierre Operativo hace la
-      // misma pregunta y con dos construcciones distintas la misma fila
-      // aparecia pendiente en una pantalla y resuelta en la otra.
-      const resultado = construirFilasBandeja({
-        turnos:        (turnosR.data ?? []) as any[],
-        registros:     (registrosR.data ?? []) as any[],
-        aceptaciones:  (aceptR.data ?? []) as any[],
-        solicitudes:   (soliR.data ?? []) as any[],
-        revisiones:    (reviR.data ?? []) as any[],
-        guardias:      (guardiasR.data ?? []) as any[],
-        auditoriaAusencias,
-        zonasMias:     ((zonasR.data ?? []) as any[]).map(z => z.zona_id),
-        esAdmin,
-      }, {
-        selectRegistroPrincipal, effectiveGuardia, resolverLineaLiquidacion,
-        etiquetaCaracteristica, objetivoEnAlcance,
-      })
       setFilas(resultado)
       setCargando(false)
     }

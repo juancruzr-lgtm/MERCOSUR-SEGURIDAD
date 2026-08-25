@@ -67,6 +67,7 @@ import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjet
 import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import CentroDeRondas from '@/components/rondas/CentroDeRondas'
+import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
@@ -1282,11 +1283,14 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
   )
 }
 
-function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin }: any) {
+function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
   const formVacio = { nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
   const [grupoRol, setGrupoRol] = useState<'vigiladores' | 'supervisores' | 'administracion'>('vigiladores')
+  // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
+  // la misma gente, no una aplicacion aparte.
+  const [vista, setVista] = useState<'empleados' | 'desempeno'>('empleados')
   const [form, setForm] = useState(formVacio)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -1607,6 +1611,42 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin 
     return true
   })
 
+  // Dos formas de mirar la misma gente, en la misma pantalla.
+  const conmutadorVista = (
+    <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
+      {([
+        { id:'empleados' as const, texto:'Empleados' },
+        { id:'desempeno' as const, texto:'Desempeño' },
+      ]).map(op => (
+        <button
+          key={op.id}
+          type="button"
+          onClick={() => setVista(op.id)}
+          style={{
+            ...S.btn, fontSize:12.5, padding:'7px 14px', fontWeight:700,
+            border: vista === op.id ? '1px solid #38bdf8' : '1px solid #334155',
+            background: vista === op.id ? '#38bdf818' : '#1e293b',
+            color: vista === op.id ? '#38bdf8' : '#e2e8f0',
+          }}
+        >
+          {op.texto}
+        </button>
+      ))}
+    </div>
+  )
+
+  if (vista === 'desempeno') {
+    return (
+      <div>
+        <div style={{ marginBottom:20 }}>
+          <div style={S.title}>Guardias / Empleados</div>
+          <div style={S.sub2}>Desempeño y cumplimiento por período</div>
+        </div>
+        {conmutadorVista}
+        <DesempenoPanel esAdmin={Boolean(esAdmin)} usuarioId={usuarioId ?? null} />
+      </div>
+    )
+  }
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
@@ -1659,7 +1699,9 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin 
       )}
 
       <div style={S.card}>
-        {idsFiltroGuardias.size === 0 && (
+        {conmutadorVista}
+
+      {idsFiltroGuardias.size === 0 && (
           <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
             {([
               { id:'vigiladores' as const,    texto:'Vigiladores' },
@@ -12155,7 +12197,7 @@ const esGuardia = esRolGuardia(user.rol)
           ) : (
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
-              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={esRolAdmin(user?.rol)} />}
+              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={esRolAdmin(user?.rol)} usuarioId={user?.id ?? null} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}

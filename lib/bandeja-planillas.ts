@@ -401,6 +401,17 @@ export interface FilaBandejaMensual {
    */
   origenCobertura?: string | null
   /**
+   * El vigilador registro su entrada / su salida CON SU FICHAJE, sin
+   * correcciones posteriores. Se lee de hora_entrada_real / hora_salida_real,
+   * no de los campos _final: una correccion de admin arregla la hora, pero no
+   * convierte en propio un registro que no lo fue.
+   *
+   * Lo consume el indicador de desempeno. La bandeja sigue mostrando las horas
+   * reconocidas, que es otra pregunta.
+   */
+  entradaPropia?: boolean
+  salidaPropia?: boolean
+  /**
    * Ausencia marcada por un supervisor sobre este turno.
    *
    * Va aparte de `tieneFichaje` a propósito: una ausencia NO es un fichaje y
@@ -838,6 +849,8 @@ export function construirFilasBandeja(
       salidaAutomatica: Boolean(registro?.cierre_automatico),
       tieneFichaje: Boolean(registro),
       origenCobertura: registro?.origen_cobertura ?? null,
+      entradaPropia: Boolean(registro?.hora_entrada_real),
+      salidaPropia: Boolean(registro?.hora_salida_real),
       esAusencia: Boolean(ausencia),
       ausenciaVigilador: ausencia ? (nombrePor.get(ausencia.guardia_id) ?? '—') : null,
       ausenciaComentario: ausencia?.observacion ?? null,
