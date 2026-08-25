@@ -18,6 +18,7 @@ import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA } from '@/lib/caracteristica-turno'
 import type { EstadoPuestos } from '@/lib/puestos'
 import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
+import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
@@ -2275,6 +2276,7 @@ export default function SupervisorMobile({ user }: any) {
   const tabs = [
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
+    { id: 'cierre', label: 'Cierre', icon: '🌙' },
     { id: 'supervisiones', label: 'Supervisiones', icon: '☑️' },
     { id: 'turnos', label: 'Turnos', icon: '📅' },
     { id: 'planillas', label: 'Planillas', icon: '📋' },
@@ -3939,6 +3941,17 @@ export default function SupervisorMobile({ user }: any) {
                     </button>
                   </div>
                 ))}
+              </section>
+            )}
+
+            {/* Cierre Operativo Diario: qué le queda a ESTE supervisor antes de
+                cerrar la guardia. Agrega lo que ya detectan las otras pantallas;
+                los responsables salen de la asignación, nunca del rol. */}
+            {tab === 'cierre' && (
+              <section>
+                <div style={screenTitle}>Cierre Operativo</div>
+                <div style={dateText}>Lo que queda antes de cerrar la guardia</div>
+                <CierreOperativoPanel esAdmin={false} usuarioId={user?.id ?? null} />
               </section>
             )}
 

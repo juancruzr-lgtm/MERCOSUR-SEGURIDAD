@@ -1207,3 +1207,96 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       : {}),
   })
 }
+
+// ── Resumen de Cierre Operativo ──────────────────────────────────────────────
+//
+// UN aviso por responsable y por día, no uno por incidencia. El resto de este
+// módulo avisa hecho por hecho mientras la jornada pasa; el cierre es el
+// resumen de lo que quedó sin decidir, y mandarlo fragmentado lo volvería
+// indistinguible del ruido que ya recibe.
+//
+// La deduplicación va por `tipo`, que lleva la fecha adentro
+// ("cierre_operativo:2026-08-25"): sin turno ni objetivo al que colgarse, la
+// unicidad es (usuario, día). Se registra igual en notificaciones_enviadas,
+// que es donde se puede auditar qué salió.
+
+/** La clave del día. Es también el `tipo` con el que se deduplica. */
+export function claveCierreOperativo(fecha: string): string {
+  return `cierre_operativo:${fecha}`
+}
+
+async function resumenCierreYaEnviado(client: any, usuarioId: string, clave: string) {
+  const { data, error } = await client
+    .from('notificaciones_enviadas')
+    .select('id')
+    .eq('usuario_id', usuarioId)
+    .eq('tipo', clave)
+    .is('turno_id', null)
+    .is('objetivo_id', null)
+    .maybeSingle()
+
+  if (error) throw error
+  return Boolean(data)
+}
+
+/**
+ * Manda el resumen a cada responsable. Una sola vez por día y por persona.
+ *
+ * `enviar` se inyecta en los tests, igual que en sendToUsers: la selección y la
+ * deduplicación se prueban sin salir a la red.
+ */
+export async function enviarResumenCierre(
+  client: any,
+  subscriptions: PushSubscriptionRow[],
+  destinatarios: Array<{ usuarioId: string; payload: PushPayload }>,
+  fecha: string,
+  enviar: (s: PushSubscriptionRow, p: PushPayload) => Promise<{ status: number }> = sendWebPush,
+) {
+  const clave = claveCierreOperativo(fecha)
+  let sent = 0
+  let skipped = 0
+  let fallos = 0
+
+  const vistos = new Set<string>()
+  for (const { usuarioId, payload } of destinatarios) {
+    if (!usuarioId || vistos.has(usuarioId)) continue
+    vistos.add(usuarioId)
+
+    if (await resumenCierreYaEnviado(client, usuarioId, clave)) { skipped += 1; continue }
+
+    const suyas = subscriptions.filter(s => s.usuario_id === usuarioId)
+    if (suyas.length === 0) { skipped += 1; continue }
+
+    let entregado = false
+    for (const subscription of suyas) {
+      try {
+        const response = await enviar(subscription, payload)
+        if (response.status === 404 || response.status === 410) {
+          await client.from('push_subscriptions').update({ activo: false }).eq('id', subscription.id)
+        } else {
+          entregado = true
+        }
+      } catch (e) {
+        fallos += 1
+        console.error('[push] cierre, suscripción', subscription.id, e instanceof Error ? e.message : e)
+      }
+    }
+
+    // Sin ninguna entrega no se marca: el próximo intento lo reintenta en vez
+    // de darlo por hecho.
+    if (!entregado) { skipped += 1; continue }
+
+    const { error } = await client.from('notificaciones_enviadas').insert({
+      usuario_id: usuarioId,
+      turno_id: null,
+      objetivo_id: null,
+      tipo: clave,
+      titulo: payload.title,
+      mensaje: payload.body,
+    })
+    if (error && !/duplicate key/i.test(error.message)) throw error
+    sent += 1
+  }
+
+  return { sent, skipped, fallos }
+}

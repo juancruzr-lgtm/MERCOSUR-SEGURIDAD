@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CATEGORIAS_CIERRE,
+  agruparPorCategoria,
   cierreDeResponsable,
   cierreEstaLimpio,
   construirCierreOperativo,
@@ -153,5 +154,26 @@ describe('responsable histórico: la deuda no cambia de dueño al rotar la guard
     const deSabino = cierreDeResponsable(items, SABINO, '2026-08-21', catalogos)
     expect(deSabino.hoy.total).toBe(0)
     expect(deSabino.anteriores.total).toBe(1)
+  })
+})
+
+describe('agruparPorCategoria: lo que ve el supervisor en la lista', () => {
+  it('sólo aparecen las categorías con algo', () => {
+    const r = resumirCierre([item({ id: 'a' }), item({ id: 'b', categoria: 'rondas' })])
+    expect(agruparPorCategoria(r).map(g => g.categoria)).toEqual(['planillas', 'rondas'])
+  })
+
+  it('lo resuelto no aparece en ningún grupo', () => {
+    const r = resumirCierre([item({ id: 'a', resueltoPorSupervisor: true })])
+    expect(agruparPorCategoria(r)).toEqual([])
+  })
+
+  it('dentro de cada grupo: primero el día más reciente, y ahí por hora', () => {
+    const r = resumirCierre([
+      item({ id: 'a', fecha: '2026-08-24', hora: '22:00' }),
+      item({ id: 'b', fecha: '2026-08-25', hora: '19:00' }),
+      item({ id: 'c', fecha: '2026-08-25', hora: '07:00' }),
+    ])
+    expect(agruparPorCategoria(r)[0].items.map(i => i.id)).toEqual(['c', 'b', 'a'])
   })
 })

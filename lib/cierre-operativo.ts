@@ -122,6 +122,54 @@ export function cierreEstaLimpio(cierre: CierreOperativo): boolean {
   return cierre.hoy.total === 0
 }
 
+// ── Presentación ─────────────────────────────────────────────────────────────
+
+/** Los items de un resumen, agrupados por categoría y ordenados por hora. */
+export function agruparPorCategoria(resumen: ResumenCierre): Array<{
+  categoria: CategoriaCierre
+  items: ItemCierre[]
+}> {
+  return CATEGORIAS_CIERRE
+    .map(categoria => ({
+      categoria,
+      items: resumen.items
+        .filter(i => i.categoria === categoria)
+        .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.hora.localeCompare(b.hora)),
+    }))
+    .filter(g => g.items.length > 0)
+}
+
+/**
+ * El texto del aviso de cierre. Uno solo por responsable y por día: el que
+ * recibe veinte avisos deja de leerlos, y el cierre es justamente el resumen
+ * de todo lo demás.
+ *
+ * Dice el número y qué es, no "revisá el sistema": un aviso que obliga a abrir
+ * la app para saber si hace falta abrir la app no sirve de nada.
+ */
+export function textoPushCierre(cierre: CierreOperativo): { titulo: string; cuerpo: string } {
+  const hoy = cierre.hoy.total
+  const arrastre = cierre.anteriores.total
+
+  if (hoy === 0 && arrastre === 0) {
+    return {
+      titulo: 'Cierre operativo al día',
+      cuerpo: 'No te queda nada pendiente para cerrar la guardia.',
+    }
+  }
+
+  const titulo = hoy === 0
+    ? 'Cierre operativo: hoy sin pendientes'
+    : `Cierre operativo: ${hoy} pendiente${hoy === 1 ? '' : 's'}`
+
+  const partes: string[] = []
+  if (hoy > 0) partes.push(`Hoy: ${detalleCierre(cierre.hoy)}.`)
+  if (arrastre > 0) {
+    partes.push(`De días anteriores: ${arrastre} sin resolver (${detalleCierre(cierre.anteriores)}).`)
+  }
+  return { titulo, cuerpo: partes.join(' ') }
+}
+
 // ── Responsable de cada item ─────────────────────────────────────────────────
 //
 // Se resuelve con la fecha y hora DEL HECHO, no con las de ahora. Es lo que
