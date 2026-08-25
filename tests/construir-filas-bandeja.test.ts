@@ -44,14 +44,18 @@ const datos = (over: Partial<DatosBandejaMensual> = {}): DatosBandejaMensual => 
 })
 
 describe('finTurnoMs — el cruce de medianoche', () => {
-  it('un turno diurno termina el mismo día', () => {
+  // Las expectativas van como instante absoluto y no con `new Date(...)` local:
+  // asi escritas, el test comprueba la hora de la operacion y no la del proceso
+  // que lo corre. Con la version anterior pasaban en una maquina argentina y
+  // fallaban en UTC, que es justo donde estaba el defecto.
+  it('un turno diurno termina el mismo día, a las 19:00 de Argentina', () => {
     expect(finTurnoMs('2026-08-19', '07:00', '19:00'))
-      .toBe(new Date(2026, 7, 19, 19, 0, 0).getTime())
+      .toBe(Date.parse('2026-08-19T22:00:00Z'))
   })
 
-  it('uno nocturno termina al día siguiente', () => {
+  it('uno nocturno termina al día siguiente, a las 07:00 de Argentina', () => {
     expect(finTurnoMs('2026-08-19', '19:00', '07:00'))
-      .toBe(new Date(2026, 7, 20, 7, 0, 0).getTime())
+      .toBe(Date.parse('2026-08-20T10:00:00Z'))
   })
 })
 
@@ -121,5 +125,36 @@ describe('la fila que sí se construye', () => {
     expect(fila.horario).toBe('07:00–19:00')
     expect(fila.horaInicioProg).toBe('07:00')
     expect(fila.vigilador).toBe('TABORDA, PABLO')
+  })
+})
+
+describe('finTurnoMs no depende de la zona del proceso', () => {
+  // Es el bug que le mandaba al supervisor planillas de turnos en curso: en el
+  // navegador de un argentino daba bien, y en la función de Vercel —UTC—
+  // adelantaba tres horas el fin de cada turno.
+  const enTz = (tz: string, fn: () => number) => {
+    const previa = process.env.TZ
+    process.env.TZ = tz
+    try { return fn() } finally { process.env.TZ = previa }
+  }
+
+  it('un turno que termina a las 14:00 termina al mismo instante en UTC que en Buenos Aires', () => {
+    const enBA = enTz('America/Argentina/Buenos_Aires', () => finTurnoMs('2026-08-25', '08:00', '14:00'))
+    const enUTC = enTz('UTC', () => finTurnoMs('2026-08-25', '08:00', '14:00'))
+    expect(enUTC).toBe(enBA)
+  })
+
+  it('y ese instante es 14:00 hora argentina, o sea 17:00 UTC', () => {
+    expect(finTurnoMs('2026-08-25', '08:00', '14:00')).toBe(Date.parse('2026-08-25T17:00:00Z'))
+  })
+
+  it('el nocturno cruza al día siguiente, también en hora argentina', () => {
+    expect(finTurnoMs('2026-08-25', '19:00', '07:00')).toBe(Date.parse('2026-08-26T10:00:00Z'))
+  })
+
+  it('un turno que todavía no terminó queda del lado de "no terminó"', () => {
+    // 12:45 hora argentina del 25. Un turno hasta las 14:00 sigue en curso.
+    const ahora = Date.parse('2026-08-25T15:45:00Z')
+    expect(finTurnoMs('2026-08-25', '08:00', '14:00')).toBeGreaterThan(ahora)
   })
 })
