@@ -42,7 +42,9 @@ import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import { requireAdminIA } from '../../ia/_lib/auth'
 import { enviarResumenCierre } from '../../_lib/push-notificaciones'
 import type { PushSubscriptionRow } from '../../_lib/web-push'
-import { cargarItemsCierre, fechaOperativaHoy, partirInstante } from '@/lib/cierre-datos'
+import {
+  cargarItemsCierre, diaAnterior, fechaOperativaHoy, partirInstante,
+} from '@/lib/cierre-datos'
 import { cierreDeResponsable, detalleCierre, textoPushCierre } from '@/lib/cierre-operativo'
 import { responsablesQueCierran, zonasConGuardiaCargada } from '@/lib/cierre-aviso'
 
@@ -99,6 +101,30 @@ export async function GET(req: NextRequest) {
   // `?todos=1` ignora el filtro por fin de guardia. Sólo para simular: sirve
   // para ver el cuadro completo sin esperar a que alguien esté cerrando.
   const todos = req.nextUrl.searchParams.get('todos') === '1' && simular
+
+  // Primero lo barato: ¿hay alguien cerrando ahora?
+  //
+  // Cargar el mes entero son unas veinte consultas paginadas. El cron corre
+  // cada quince minutos y la enorme mayoría de las corridas no tiene a nadie
+  // terminando guardia: hacer todo ese trabajo para descubrirlo sería pagar
+  // noventa y seis veces por día algo que se responde con una sola consulta.
+  const guardiasPrevias = await client.from('supervisores_guardia')
+    .select('supervisor_id, zona, fecha, hora_inicio, hora_fin, estado, tipo_evento, rol_operativo')
+    .gte('fecha', diaAnterior(local.fecha)).lte('fecha', local.fecha)
+  if (guardiasPrevias.error) {
+    return NextResponse.json({ error: guardiasPrevias.error.message }, { status: 500 })
+  }
+  const cerrandoAhora = responsablesQueCierran((guardiasPrevias.data ?? []) as any[], {
+    fecha: local.fecha, hora: local.hora, tolerancia: TOLERANCIA_CRON_MIN,
+  })
+  if (cerrandoAhora.length === 0 && !todos) {
+    return NextResponse.json({
+      ok: true, simulado: simular, fecha,
+      ahora_local: `${local.fecha} ${local.hora}`,
+      cerrando_ahora: 0, sent: 0, skipped: 0, fallos: 0,
+      nota: 'Nadie termina guardia en esta ventana; no se cargo nada mas.',
+    })
+  }
 
   // Alcance completo (esAdmin) a propósito: el recorte por responsable lo hace
   // después cierreDeResponsable, con la asignación de cada hecho. Recortar
