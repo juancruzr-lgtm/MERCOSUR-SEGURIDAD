@@ -1,6 +1,11 @@
-# Diseño del indicador de desempeño del empleado
+# Indicador de Desempeño y Cumplimiento
 
-**Fecha:** 2026-08-24 · **Estado:** propuesta, NADA implementado · **Decide:** JC
+**Fecha:** 2026-08-24 · **Estado:** V2 candidata, NADA implementado · **Decide:** JC
+
+> **Qué es y qué no es.** Detecta **desvíos sostenidos** y muestra **evolución**.
+> No es un ranking. No busca dispersión: si todos cumplen, todos pueden tener
+> buen desempeño. Un mes en el que 39 personas están en "Excelente" es un buen
+> mes, no un indicador roto.
 
 Documento de continuidad. La auditoría previa vive en
 [`auditoria-metricas-telemetria.md`](auditoria-metricas-telemetria.md) y no se
@@ -437,48 +442,180 @@ Guardas obligatorias, con test cada una:
 
 ---
 
-## 16. Fórmula candidata — NO DEFINITIVA
+## 16. V2 — fórmula candidata
 
-Después de la simulación, la candidata **no es ninguna de las tres originales**.
+Sólo **Asistencia confirmada + Procedimiento**. Lo demás queda fuera hasta tener
+señal confiable.
 
 ```
-Asistencia      peso 20   sólo baja por AUSENCIA CONFIRMADA
-                          un turno sin registro es un hueco de datos, no una falta
-Procedimiento   peso 60   incidencia = turno sin entrada o sin salida
-                          el cierre automático NO cuenta hasta saber si es la persona
-Puntualidad     peso  0   hasta conectar el filtro de tardanza justificada
-Rondas          peso 20   sólo cuando tenga un mes comparable, y sólo si aplica
-Calidad         peso  0   hasta tener volumen de revisiones post-lista blanca
+Asistencia     peso 20   = 10 × (1 − ausencias_confirmadas / turnos_con_evidencia)
+                          Un turno SIN evidencia sale del denominador.
+                          Sin dato ≠ ausencia.
+
+Procedimiento  peso 60   = 10 × (1 − incidencias / turnos_evaluables)
+                          incidencia = jornada sin registro propio de entrada o salida
+                          MÁXIMO UNA por turno
+                          turnos_evaluables excluye los de cierre automático
+
+Puntualidad    peso  0   fuera, hasta depurar horarios programados irreales
+Rondas         peso  0   fuera, hasta cumplir el período mínimo de historia
+Calidad / IA   peso  0   fuera, hasta tener revisiones post-lista blanca
 ```
 
-**Muestra mínima definitiva propuesta: 8 turnos exigibles.** Validada contra la
-distribución real — excluye a 9 de 65 y protege en las dos direcciones.
+### Muestra mínima — DOS condiciones
 
-### Cortes de categoría — recalibrados
+| Condición | Valor |
+|---|---|
+| Observaciones válidas | **≥ 8** |
+| Cobertura sobre turnos exigibles | **≥ 70 %** |
 
-Los originales no sirven: con el 60 % en 9–10, "Excelente" no informa. Con la
-distribución real:
+**La segunda condición apareció por un error de la V1.** Al excluir los turnos
+con cierre automático, MARTINEZ SANTIAGO pasaba a **10,00 con 8 de 19 turnos
+evaluados**: excluir dato no confiable le fabricó un puntaje perfecto. Sin el
+requisito de cobertura, cuanto peor es la calidad del dato de alguien, mejor
+puntúa.
 
-| Rango | Etiqueta | Cuántos caen (variante D) |
-|---|---|---:|
-| 9,5–10 | Sin observaciones | ~30 |
-| 8,5–9,4 | Correcto | ~12 |
-| 7,0–8,4 | Con observaciones de registro | ~8 |
-| < 7,0 | Requiere seguimiento | ~6 |
+Cambia el estado de tres personas: MARTINEZ SANTIAGO (42 % de cobertura),
+TABORDA NICOLÁS (60 %) y MAIDANA (68 %). Los tres pasan a **Datos
+insuficientes**, que es lo honesto.
 
-Cuatro categorías, no cinco, y con nombres que describen **qué pasó** en vez de
-calificar a la persona. "Sin observaciones" es la norma esperable, no un premio.
+### Resultado sobre agosto 2026
 
-### Antes de programar nada
+| Estado | Empleados | |
+|---|---:|---:|
+| **Excelente** (≥ 9,5) | 39 | 60 % |
+| **Correcto** (8,5–9,49) | 9 | 14 % |
+| **Requiere seguimiento** (7,0–8,49) | 2 | 3 % |
+| **Requiere intervención** (< 7,0) | 2 | 3 % |
+| **Datos insuficientes** | 13 | 20 % |
 
-1. **Investigar el cierre automático.** MARTINEZ SANTIAGO (11 de 19) y MAIDANA
-   (7 de 22) pueden ser el sitio, no la persona. Si es el sitio, se arregla el
-   sitio y el puntaje ni se entera.
-2. **Conectar el filtro de tardanza justificada** antes de activar Puntualidad.
-3. **Revisar los 12 turnos sin registro** — son 1,2 %, y hoy castigan.
-4. **Confirmar la unión exacta de incidencias por turno.** La simulación usó
-   cotas; la mediana de diferencia es 0,00 pero el peor caso llega a 1,84
-   puntos.
+Los 39 en "Excelente" tienen **cero incidencias**. No es inflación: es que
+cumplieron.
+
+### Umbrales — de dónde salen
+
+**No de percentiles.** De qué significa cada nivel, leído sobre los casos reales:
+
+| Estado | Criterio observado |
+|---|---|
+| **Excelente** | 0 incidencias, o 1 sobre muestra grande |
+| **Correcto** | 1–3 incidencias aisladas (7 %–19 % de sus jornadas) |
+| **Requiere seguimiento** | 22 %–27 % de jornadas sin registro propio — patrón, no accidente |
+| **Requiere intervención** | más del 50 % — el registro dejó de funcionar |
+
+El corte de 7,0 cae en un hueco real de los datos: entre CENTURION (6,03) y
+CACERES (7,95) no hay nadie.
+
+### Los casos pedidos
+
+**ROSÓN JUAN — 3,86 · Requiere intervención**
+Asistencia 10,0 · Procedimiento 1,8 · 22 observaciones válidas
+**18 de 22 jornadas (82 %) confirmadas por supervisor sin registro propio.**
+Excluido: 1 turno sin evidencia.
+→ Estuvo siempre. El problema es que su jornada no queda registrada casi nunca.
+
+**CENTURION AGUSTIN — 6,03 · Requiere intervención**
+Asistencia 10,0 · Procedimiento 4,7 · 17 observaciones
+9 de 17 jornadas (53 %) sin registro propio. Excluido: 2 turnos sin evidencia.
+
+**MARTINEZ RAUL — Datos insuficientes**
+Asistencia 8,0 · Procedimiento 2,0 · **5 observaciones válidas de 8 turnos**
+1 ausencia confirmada, 4 jornadas confirmadas por supervisor.
+Excluido: 3 turnos sin evidencia alguna.
+→ En la V1 sacaba 5,00. Con 5 observaciones **no se publica ningún número**.
+
+**MARTINEZ SANTIAGO — Datos insuficientes**
+**11 de 19 turnos con cierre automático.** Cobertura 42 %.
+→ En la V1 sacaba 10,00, que era peor que un error: era engañoso.
+**Caso a auditar:** que más de la mitad de sus jornadas las cierre el sistema
+parece del sitio o del dispositivo, no de la persona.
+
+**MAIDANA JUAN — Datos insuficientes**
+7 de 22 turnos con cierre automático. Cobertura 68 %, apenas debajo del corte.
+**Caso a auditar**, mismo patrón.
+
+**Los 35 con 10,00 exacto**
+Entre 8 y 31 observaciones válidas. Cero incidencias, cero ausencias.
+El de mayor muestra: SERVIN NESTOR, 31 observaciones.
+→ Bajo el marco nuevo esto **no es un problema a corregir**.
+
+**Poca muestra — 13 en Datos insuficientes**
+Diez por debajo de 8 observaciones (VILLA 7, FAIXAT 6, MENA BRIAN 6, TABORDA
+PABLO 6, GOMEZ LUCAS 5, RAMOS JUAN 5, MARTINEZ RAUL 5, RODRIGUEZ 2, VAZQUEZ 2,
+GOMEZ JOSE MARÍA 1) y tres por cobertura.
+
+### Datos excluidos por no confiables — agosto
+
+| Motivo | Turnos | |
+|---|---:|---|
+| Sin evidencia alguna | 12 | fuera del denominador; no son faltas |
+| Cierre automático | 68 | fuera de Procedimiento hasta auditar |
+| Tardanzas crudas | todas | dimensión desactivada |
+
+---
+
+## 17. Estados
+
+| Estado | Rango | Qué dice |
+|---|---|---|
+| **Excelente** | ≥ 9,5 | Cumplió sin observaciones |
+| **Correcto** | 8,5 – 9,49 | Incidencias aisladas, nada sistemático |
+| **Requiere seguimiento** | 7,0 – 8,49 | Patrón incipiente: conviene hablarlo |
+| **Requiere intervención** | < 7,0 | El registro dejó de funcionar: hay que actuar |
+| **Datos insuficientes** | — | < 8 observaciones o < 70 % de cobertura |
+
+**El número nunca va solo.** Siempre acompañado de dimensiones y motivos.
+"Requiere intervención" sin decir *qué* pasó es una acusación, no un indicador.
+
+---
+
+## 18. Tendencia mensual
+
+El valor real del indicador no es el número de un mes: es **si mejora**.
+
+```
+ROSÓN JUAN
+Junio  —        (sin datos)
+Julio  6,20     Requiere intervención
+Agosto 3,86  ↓  Requiere intervención
+
+Procedimiento:  7,1 → 4,0 → 1,8   ↓↓
+```
+
+- Un mes malo aislado **no** define a nadie: se ve en la serie.
+- Un buen día no borra un mal mes: el período es la unidad.
+- La tendencia por dimensión es más útil que la del total — dice *qué* se
+  deterioró.
+- Con snapshot mensual (§12), la serie es auditable aunque los datos se
+  corrijan después.
+
+---
+
+## 19. Detalle para Administración
+
+Abrir un empleado tiene que responder **qué hechos** explican cada dimensión.
+
+```
+ROSÓN JUAN — Agosto 2026 — 3,86 / 10 — Requiere intervención
+
+Asistencia          10,0    22 de 22 jornadas con evidencia. 0 ausencias.
+Procedimiento        1,8    18 de 22 jornadas sin registro propio
+
+  Las 18 jornadas:
+  02/08  LAROMET RP41   19:00–07:00   confirmada por MARTÍNEZ, EDUARDO
+  04/08  LAROMET RP41   19:00–07:00   confirmada por MARTÍNEZ, EDUARDO
+  …                                              [ver las 18]
+
+Excluido del cálculo:
+  1 turno sin evidencia alguna (07/08) — no cuenta como falta
+
+Dimensiones fuera del puntaje este período:
+  Puntualidad   — horarios programados en revisión
+  Rondas        — sin historia comparable todavía
+  Calidad / IA  — sin revisiones suficientes
+```
+
+Cada hecho enlaza al turno concreto. **Nada de números sin respaldo.**
 
 ---
 
