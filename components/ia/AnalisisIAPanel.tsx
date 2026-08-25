@@ -14,7 +14,12 @@ import IngresosDiaPanel from '@/components/ia/IngresosDiaPanel'
 import {
   AYUDA_REVISION_IA, ETIQUETA_REVISION_IA, cuentaParaAprendizajeIA, esDecisionHumana,
   esSaneada, esperaRevision,
+  MOTIVO_SANEAMIENTO_IA,
 } from '@/lib/ia/revision'
+import {
+  resumenPrevioSaneamiento, sanearObservacionesPrevias,
+} from '@/lib/ia/saneamiento'
+import type { ResumenSaneamientoIA } from '@/lib/ia/saneamiento'
 
 const FONT = brandTypography?.fontFamily ?? 'system-ui, sans-serif'
 const C = {
@@ -111,6 +116,11 @@ export default function AnalisisIAPanel({
   const [detalle, setDetalle] = useState<string | null>(null)
   const [aviso, setAviso] = useState('')
   const [metricasPunto, setMetricasPunto] = useState<any[]>([])
+
+  // Saneamiento del backlog anterior al criterio vigente.
+  const [saneando, setSaneando] = useState(false)
+  const [previaSaneo, setPreviaSaneo] = useState<ResumenSaneamientoIA | null>(null)
+  const [motivoSaneo, setMotivoSaneo] = useState(MOTIVO_SANEAMIENTO_IA)
 
   // Disparo manual
   const [ejecutando, setEjecutando] = useState(false)
@@ -300,6 +310,24 @@ export default function AnalisisIAPanel({
     }
     return ['uniforme', 'libro_guardia', 'punto_control'].map(porTipo)
   }, [completados])
+
+  const previsualizarSaneo = async () => {
+    setSaneando(true); setError(''); setAviso('')
+    const r = await sanearObservacionesPrevias({ soloConteo: true })
+    setSaneando(false)
+    if (r.error) { setError(r.error); return }
+    setPreviaSaneo(r.data)
+  }
+
+  const aplicarSaneo = async () => {
+    setSaneando(true); setError(''); setAviso('')
+    const r = await sanearObservacionesPrevias({ motivo: motivoSaneo, soloConteo: false })
+    setSaneando(false)
+    if (r.error) { setError(r.error); return }
+    setAviso(`${r.data?.saneadas ?? 0} observacion(es) cerradas administrativamente. No se borro ninguna foto ni se modifico la prediccion de la IA.`)
+    setPreviaSaneo(null); setMotivoSaneo(MOTIVO_SANEAMIENTO_IA)
+    await cargar()
+  }
 
   // ── Tarjeta ─────────────────────────────────────────────────────────────
   const Tarjeta = ({ a }: { a: Analisis }) => {
@@ -574,6 +602,79 @@ export default function AnalisisIAPanel({
 
       {!cargando && tab === 'revision' && (
         <>
+          {/* Saneamiento del backlog anterior al criterio vigente.
+              Sólo Administración: alcanza a todos los objetivos. El corte no se
+              elige acá — sale de la configuración de IA activa, así que la
+              pantalla no puede inventar una fecha. */}
+          {esAdmin && (
+            <div style={{ ...card({ marginBottom: 12 }), borderColor: C.yellow + '55' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                Sanear observaciones anteriores al criterio vigente
+              </div>
+              <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, marginBottom: 8 }}>
+                Las cierra administrativamente. <b>No</b> valida la evidencia ni marca
+                un incumplimiento: nadie las revisó, y quedan aparte de las métricas de
+                precisión de la IA. No se borra ninguna foto y la predicción original
+                queda intacta.
+              </div>
+              {!previaSaneo ? (
+                <button
+                  onClick={() => void previsualizarSaneo()}
+                  disabled={saneando}
+                  style={{ ...boton(C.yellow), fontSize: 12 }}>
+                  {saneando ? 'Consultando…' : 'Ver qué se sanearía'}
+                </button>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 12.5, color: C.text, marginBottom: 8 }}>
+                    {resumenPrevioSaneamiento(previaSaneo)}
+                    {previaSaneo.corte && (
+                      <span style={{ color: C.muted }}>
+                        {' '}· criterio vigente desde{' '}
+                        {new Date(previaSaneo.corte).toLocaleString('es-AR', {
+                          timeZone: 'America/Argentina/Buenos_Aires',
+                          dateStyle: 'short', timeStyle: 'short',
+                        })}
+                      </span>
+                    )}
+                  </div>
+                  {previaSaneo.total > 0 && (
+                    <>
+                      <textarea
+                        value={motivoSaneo}
+                        onChange={e => setMotivoSaneo(e.target.value)}
+                        rows={3}
+                        style={{
+                          width: '100%', background: C.card, color: C.text,
+                          border: `1px solid ${C.border}`, borderRadius: 8,
+                          padding: '8px 10px', fontSize: 12, fontFamily: 'inherit',
+                        }}
+                      />
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                        <button
+                          onClick={() => void aplicarSaneo()}
+                          disabled={saneando}
+                          style={{ ...boton(C.yellow), fontSize: 12 }}>
+                          {saneando ? 'Saneando…' : `Sanear las ${previaSaneo.total}`}
+                        </button>
+                        <button
+                          onClick={() => { setPreviaSaneo(null); setMotivoSaneo(MOTIVO_SANEAMIENTO_IA) }}
+                          style={{ ...boton(C.muted), fontSize: 12 }}>
+                          Cancelar
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {previaSaneo.total === 0 && (
+                    <button onClick={() => setPreviaSaneo(null)} style={{ ...boton(C.muted), fontSize: 12 }}>
+                      Volver
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Los filtros se agrupan por eje. Antes convivían en una sola fila
               "Revisar / Ya revisadas", y leídos seguidos parecían dos etapas de
               lo mismo cuando son dos preguntas distintas: qué dijo la máquina y
