@@ -17,8 +17,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import {
-  ETIQUETA_CATEGORIA_CIERRE, agruparPorCategoria, cierreDeResponsable,
-  construirCierreOperativo, detalleCierre,
+  ETIQUETA_CATEGORIA_CIERRE, agruparPorCategoria, construirCierreOperativo,
+  detalleCierre, responsablesDeItem,
 } from '@/lib/cierre-operativo'
 import type { CategoriaCierre, CierreOperativo, ItemCierre } from '@/lib/cierre-operativo'
 import { cargarItemsCierre, fechaOperativaHoy } from '@/lib/cierre-datos'
@@ -134,25 +134,37 @@ export default function CierreOperativoPanel({ esAdmin, usuarioId, nombreUsuario
     return u ? `${u.apellido}, ${u.nombre}` : id.slice(0, 8)
   }, [nombreUsuario, catalogos.usuarios])
 
+  // Los responsables de cada item, resueltos UNA vez. Se calcula por item y no
+  // por usuario a propósito: preguntarle a la resolución si cada item es de
+  // cada persona sería recorrer las guardias del mes tantas veces como gente
+  // hay, y la respuesta es siempre la misma.
+  const responsablesPorItem = useMemo(() => {
+    const mapa = new Map<string, string[]>()
+    for (const i of items) mapa.set(i.id, responsablesDeItem(i, catalogos))
+    return mapa
+  }, [items, catalogos])
+
   // El cierre que se muestra. Sin responsable elegido es el total del alcance;
   // con uno, el suyo —resuelto con la fecha y hora del hecho, así una deuda
   // vieja no cambia de dueño porque hoy rotó la guardia.
   const cierre: CierreOperativo = useMemo(() => {
     const quien = verComo || (esAdmin ? '' : usuarioId || '')
-    if (!quien) return construirCierreOperativo(items, fecha)
-    return cierreDeResponsable(items, quien, fecha, catalogos)
-  }, [items, fecha, verComo, esAdmin, usuarioId, catalogos])
+    const suyos = quien
+      ? items.filter(i => (responsablesPorItem.get(i.id) ?? []).indexOf(quien) >= 0)
+      : items
+    return construirCierreOperativo(suyos, fecha)
+  }, [items, fecha, verComo, esAdmin, usuarioId, responsablesPorItem])
 
-  // Quiénes tienen algo pendiente hoy. Sale de la resolución, no de una lista
-  // de supervisores: un admin asignado aparece igual que cualquier otro.
+  // Quiénes tienen algo pendiente. Sale de la resolución, no de una lista de
+  // supervisores: un admin asignado aparece igual que cualquier otro.
   const responsablesConPendientes = useMemo(() => {
     const ids = new Set<string>()
-    for (const u of catalogos.usuarios) {
-      const c = cierreDeResponsable(items, u.id, fecha, catalogos)
-      if (c.hoy.total + c.anteriores.total > 0) ids.add(u.id)
+    for (const i of items) {
+      if (i.resueltoPorSupervisor) continue
+      for (const id of responsablesPorItem.get(i.id) ?? []) ids.add(id)
     }
     return Array.from(ids).sort((a, b) => nombre(a).localeCompare(nombre(b)))
-  }, [items, fecha, catalogos, nombre])
+  }, [items, responsablesPorItem, nombre])
 
   const sinAtribuir = useMemo(
     () => items.filter(i => !i.zonaId).length,
