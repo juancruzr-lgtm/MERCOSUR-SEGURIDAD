@@ -30,6 +30,14 @@ export interface CargaFilasParams {
   esAdmin: boolean
   /** Id del usuario, para resolver su alcance por zona. */
   usuarioId: string | null
+  /**
+   * Cliente de Supabase a usar. Por defecto el del navegador, que es lo que
+   * necesitan las pantallas. Una ruta de servidor pasa el suyo —el mismo
+   * codigo, otra credencial— en vez de reescribir las consultas: dos copias
+   * distintas de que turno entra es exactamente el problema que este
+   * modulo vino a resolver.
+   */
+  client?: any
 }
 
 export interface CargaFilasResultado {
@@ -45,38 +53,39 @@ export interface CargaFilasResultado {
  */
 export async function cargarFilasBandeja(p: CargaFilasParams): Promise<CargaFilasResultado> {
   const { desde, hasta } = limitesDelMesDesempeno(p.mes)
+  const db = p.client ?? supabase
 
   const [turnosR, registrosR, aceptR, soliR, reviR, guardiasR, zonasR] = await Promise.all([
-    fetchPaginadoResult((d, h) => supabase.from('turnos')
+    fetchPaginadoResult((d, h) => db.from('turnos')
       .select('id, fecha, hora_inicio, hora_fin, estado, tipo_evento, guardia_id, objetivo_id, puesto_id, puesto:puestos(nombre), objetivo:objetivos(nombre, es_prueba, zona_id)')
       .gte('fecha', desde).lte('fecha', hasta)
       .order('fecha', { ascending: false }).order('id')
       .range(d, h)),
-    fetchPaginadoResult((d, h) => supabase.from('registros_asistencia')
+    fetchPaginadoResult((d, h) => db.from('registros_asistencia')
       .select('id, turno_id, guardia_id, guardia_final_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, cierre_automatico, cobertura_anulada_at, observacion, origen_cobertura, turno:turnos!inner(fecha)')
       .gte('turno.fecha', desde).lte('turno.fecha', hasta)
       .order('id')
       .range(d, h)),
-    fetchPaginadoResult((d, h) => supabase.from('aceptaciones_planilla')
+    fetchPaginadoResult((d, h) => db.from('aceptaciones_planilla')
       .select('turno_id, empleado_id, turno:turnos!inner(fecha)')
       .gte('turno.fecha', desde).lte('turno.fecha', hasta)
       .order('turno_id')
       .range(d, h)),
-    fetchPaginadoResult((d, h) => supabase.from('solicitudes_modificacion_planilla')
+    fetchPaginadoResult((d, h) => db.from('solicitudes_modificacion_planilla')
       .select('id, turno_id, empleado_id, texto, estado, created_at, turno:turnos!inner(fecha)')
       .gte('turno.fecha', desde).lte('turno.fecha', hasta)
       .order('created_at', { ascending: false }).order('id')
       .range(d, h)),
-    fetchPaginadoResult((d, h) => supabase.from('revisiones_planilla')
+    fetchPaginadoResult((d, h) => db.from('revisiones_planilla')
       .select('turno_id, empleado_id, solicitud_id, accion, created_at, turno:turnos!inner(fecha)')
       .gte('turno.fecha', desde).lte('turno.fecha', hasta)
       .order('turno_id')
       .range(d, h)),
-    fetchPaginadoResult((d, h) => supabase.from('usuarios')
+    fetchPaginadoResult((d, h) => db.from('usuarios')
       .select('id, nombre, apellido')
       .order('id')
       .range(d, h)),
-    supabase.from('supervisor_zonas').select('zona_id').eq('supervisor_id', p.usuarioId ?? ''),
+    db.from('supervisor_zonas').select('zona_id').eq('supervisor_id', p.usuarioId ?? ''),
   ])
 
   const err = turnosR.error || registrosR.error || guardiasR.error
@@ -88,7 +97,7 @@ export async function cargarFilasBandeja(p: CargaFilasParams): Promise<CargaFila
     .filter(r => r.tipo_registro === 'ausencia').map(r => r.id)
   let auditoriaAusencias: any[] = []
   if (idsAusencia.length > 0) {
-    const { data } = await supabase
+    const { data } = await db
       .from('registros_asistencia_auditoria')
       .select('registro_id, modificado_por, created_at')
       .in('registro_id', idsAusencia)

@@ -67,6 +67,7 @@ import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjet
 import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import CentroDeRondas from '@/components/rondas/CentroDeRondas'
+import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
@@ -12129,6 +12130,7 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'pagina_gps', icon:'📍', label:'Página GPS' },
     ]},
     { section:'ADMINISTRACIÓN', items:[
+      { id:'cierre_operativo', icon:'🌙', label:'Cierre Operativo' },
       { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
       { id:'revision_fotos_ia', icon:'🤖', label:'Revisión de fotos IA' },
       { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
@@ -12220,6 +12222,16 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} zonas={zonasOperativas} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
+              {/* El cierre no es un módulo nuevo: agrega lo que ya detectan
+                  Revisión de planillas, las alertas de ronda, Revisión Operativa
+                  y la bandeja de IA, y responde qué queda antes de cerrar la
+                  guardia. Las decisiones se siguen tomando con las mismas RPC. */}
+              {page === 'cierre_operativo' && (
+                <CierreOperativoPanel
+                  esAdmin={esRolAdmin(user?.rol)}
+                  usuarioId={user?.id ?? null}
+                />
+              )}
               {page === 'revision_operativa' && <RevisionOperativa guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} setTurnos={setTurnos} setRegistros={setRegistros} user={user} supervisorZonas={supervisorZonas} zonasOperativas={zonasOperativas} filtroActivo={filtros.revision_operativa} limpiarFiltro={() => limpiarFiltro('revision_operativa')} />}
               {/* La MISMA bandeja que ve el supervisor: mismo componente, no una copia.
                   Desde acá con alcance de administración (todos los objetivos) y en
