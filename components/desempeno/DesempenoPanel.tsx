@@ -20,6 +20,7 @@ import {
   mesesDisponibles, resumirDesempeno,
 } from '@/lib/desempeno-datos'
 import type { DesempenoEmpleado } from '@/lib/desempeno-datos'
+import { puedeAbrirDesempeno } from '@/lib/desempeno-visibilidad'
 
 const COLOR_ESTADO: Record<EstadoDesempeno, string> = {
   excelente:             '#10b981',
@@ -65,7 +66,15 @@ function Puntaje({ d }: { d: DesempenoEmpleado }) {
 interface Props {
   esAdmin: boolean
   usuarioId: string | null
-  /** Sólo este empleado. Es lo que usa el vigilador para verse a sí mismo. */
+  /**
+   * Rol del usuario. En Etapa 1 el vigilador NO ve el indicador: la guarda
+   * esta aca ademas de en el ruteo, porque una pantalla que no deberia
+   * mostrarse no tiene que depender de que nadie se olvide de esconderla.
+   */
+  rol?: string | null
+  /** app_config.desempeno_visible_vigilador. Apagado por defecto. */
+  visibleParaVigilador?: boolean
+  /** Sólo este empleado. Lo usa Administración para abrir un legajo. */
   empleadoId?: string | null
   /** Oculta el encabezado cuando se embebe en el legajo. */
   compacto?: boolean
@@ -73,7 +82,11 @@ interface Props {
 
 export default function DesempenoPanel({
   esAdmin, usuarioId, empleadoId = null, compacto = false,
+  rol = null, visibleParaVigilador = false,
 }: Props) {
+  // Etapa 1: solo Administracion y Supervision. Se decide antes de cualquier
+  // consulta: sin acceso no se lee ni un dato.
+  const habilitado = esAdmin || puedeAbrirDesempeno(rol, visibleParaVigilador)
   const [mes, setMes] = useState(() => mesPorDefecto())
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
@@ -86,6 +99,7 @@ export default function DesempenoPanel({
   const soloUno = Boolean(empleadoId)
 
   const cargar = useCallback(async () => {
+    if (!habilitado) { setCargando(false); return }
     setCargando(true)
     const { filas, error: err } = await cargarFilasBandeja({ mes, esAdmin, usuarioId })
     if (err) { setError(err); setLista([]); setCargando(false); return }
@@ -93,7 +107,7 @@ export default function DesempenoPanel({
     setLista(desempenoPorEmpleado(propias))
     setError('')
     setCargando(false)
-  }, [mes, esAdmin, usuarioId, empleadoId])
+  }, [mes, esAdmin, usuarioId, empleadoId, habilitado])
 
   useEffect(() => { void cargar() }, [cargar])
 
@@ -113,6 +127,8 @@ export default function DesempenoPanel({
   const resumen = useMemo(() => resumirDesempeno(lista), [lista])
   const meses = useMemo(() => mesesDisponibles('2026-06'), [])
   const estados = Object.keys(ETIQUETA_ESTADO) as EstadoDesempeno[]
+
+  if (!habilitado) return null
 
   return (
     <div>

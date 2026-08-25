@@ -1283,7 +1283,7 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
   )
 }
 
-function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId }: any) {
+function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
   const formVacio = { nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
@@ -1643,7 +1643,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           <div style={S.sub2}>Desempeño y cumplimiento por período</div>
         </div>
         {conmutadorVista}
-        <DesempenoPanel esAdmin={Boolean(esAdmin)} usuarioId={usuarioId ?? null} />
+        <DesempenoPanel esAdmin={Boolean(esAdmin)} usuarioId={usuarioId ?? null} rol={rol ?? null} />
       </div>
     )
   }
@@ -12197,7 +12197,7 @@ const esGuardia = esRolGuardia(user.rol)
           ) : (
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
-              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={esRolAdmin(user?.rol)} usuarioId={user?.id ?? null} />}
+              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={esRolAdmin(user?.rol)} usuarioId={user?.id ?? null} rol={user?.rol ?? null} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
