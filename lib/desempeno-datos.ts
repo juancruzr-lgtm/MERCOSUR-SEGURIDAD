@@ -4,7 +4,7 @@
 // Todo sale de construirFilasBandeja, que es la misma fuente que usa Revisión
 // de planillas. Este archivo sólo traduce y agrupa.
 
-import { calcularDesempeno } from '@/lib/desempeno'
+import { calcularDesempeno, hechoDeJornada } from '@/lib/desempeno'
 import type { JornadaDesempeno, ResultadoDesempeno } from '@/lib/desempeno'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 
@@ -22,7 +22,11 @@ export interface DesempenoEmpleado {
 export function jornadaDesdeFila(f: FilaBandejaMensual): JornadaDesempeno {
   return {
     turnoId: f.turnoId,
-    tieneRegistro: f.tieneFichaje,
+    // Una ausencia confirmada ES evidencia: alguien verifico que no vino.
+    // construirFilasBandeja saca las ausencias de registrosPorTurno, asi que
+    // tieneFichaje queda en false; sin este OR, una falta confirmada se contaba
+    // como "sin evidencia" y desaparecia del denominador.
+    tieneRegistro: f.tieneFichaje || Boolean(f.esAusencia),
     esAusencia: Boolean(f.esAusencia),
     entradaPropia: Boolean(f.entradaPropia),
     salidaPropia: Boolean(f.salidaPropia),
@@ -104,29 +108,27 @@ export function jornadasDelMotivo(
   d: DesempenoEmpleado,
   tipo: 'sin_registro_propio' | 'entrada_sin_salida' | 'ausencia' | 'sin_evidencia',
 ): FilaBandejaMensual[] {
-  return d.jornadas.filter(f => {
-    if (!f.tieneFichaje) return tipo === 'sin_evidencia'
-    if (f.esAusencia) return tipo === 'ausencia'
-    if (!f.entradaPropia) return tipo === 'sin_registro_propio'
-    if (!f.salidaPropia) return tipo === 'entrada_sin_salida'
-    return false
-  })
+  // Reusa hechoDeJornada en vez de repetir el orden: tenerlo escrito dos
+  // veces ya hizo que una ausencia apareciera como 'sin evidencia' aca mientras
+  // el calculo la contaba bien.
+  return d.jornadas.filter(f => hechoDeJornada(jornadaDesdeFila(f)) === tipo)
 }
 
 // ── Períodos ─────────────────────────────────────────────────────────────────
 
 /**
- * El mes que conviene abrir por defecto: el último CERRADO.
+ * El mes que se abre por defecto: EL EN CURSO.
  *
- * El mes en curso casi siempre da "datos insuficientes" —le faltan turnos— y
- * abrir en una pantalla vacía hace parecer que el indicador no funciona.
+ * El indicador solo cuenta turnos ya TERMINADOS, asi que el mes en curso es
+ * evaluable desde el primer dia: lo que todavia no ocurrio simplemente no
+ * entra. Abrir en el mes anterior escondia el mes que a la operacion le
+ * importa.
+ *
+ * Los primeros dias del mes va a decir "datos insuficientes" para casi todos.
+ * Eso es correcto y esta explicado en pantalla, con el selector de mes al lado.
  */
 export function mesPorDefecto(hoy: Date = new Date()): string {
-  const y = hoy.getFullYear()
-  const m = hoy.getMonth() // 0-based: el mes anterior ya cerrado
-  const fecha = new Date(y, m - 1 + 1, 1) // primer día del mes en curso
-  fecha.setDate(0)                        // último día del mes anterior
-  return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}`
+  return hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0')
 }
 
 /** "2026-08" → "agosto de 2026". */

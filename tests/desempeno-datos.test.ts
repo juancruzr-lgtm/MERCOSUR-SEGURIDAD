@@ -152,11 +152,12 @@ describe('resumirDesempeno', () => {
 })
 
 describe('períodos', () => {
-  it('abre en el último mes cerrado, no en el actual', () => {
-    // El mes en curso casi siempre da "datos insuficientes": abrir ahí hace
-    // parecer que el indicador no funciona.
-    expect(mesPorDefecto(new Date(2026, 8, 15))).toBe('2026-08')
-    expect(mesPorDefecto(new Date(2026, 0, 3))).toBe('2025-12')
+  it('abre en el mes en curso', () => {
+    // El indicador solo cuenta turnos ya terminados, asi que el mes en curso es
+    // evaluable desde el primer dia: lo que no ocurrio no entra.
+    expect(mesPorDefecto(new Date(2026, 7, 25))).toBe('2026-08')
+    expect(mesPorDefecto(new Date(2026, 8, 15))).toBe('2026-09')
+    expect(mesPorDefecto(new Date(2026, 0, 3))).toBe('2026-01')
   })
 
   it('etiqueta legible', () => {
@@ -173,5 +174,56 @@ describe('períodos', () => {
   it('cruza el año sin romperse', () => {
     const m = mesesDisponibles('2025-11', new Date(2026, 0, 10))
     expect(m).toEqual(['2026-01', '2025-12', '2025-11'])
+  })
+})
+
+// Regresion: en produccion MARTINEZ RAUL mostraba 4/8 jornadas donde la
+// simulacion daba 5. construirFilasBandeja saca las ausencias de
+// registrosPorTurno, asi que tieneFichaje queda en false, y el hecho primario
+// mira tieneRegistro antes que esAusencia: una falta confirmada se contaba como
+// "sin evidencia" y salia del denominador.
+
+describe('una ausencia confirmada es evidencia, no un hueco', () => {
+  const ausencia = (over: Partial<FilaBandejaMensual> = {}) => fila({
+    esAusencia: true,
+    tieneFichaje: false,      // asi la construye la bandeja
+    entradaPropia: false,
+    salidaPropia: false,
+    ...over,
+  })
+
+  it('cuenta como observacion valida, no como dato faltante', () => {
+    const j = jornadaDesdeFila(ausencia())
+    expect(j.tieneRegistro).toBe(true)
+    expect(j.esAusencia).toBe(true)
+  })
+
+  it('baja Asistencia y entra al denominador', () => {
+    const filas = [
+      ausencia({ turnoId: 'aus' }),
+      ...Array.from({ length: 9 }, (_, i) => fila({ turnoId: `ok${i}` })),
+    ]
+    const d = desempenoPorEmpleado(filas)[0]
+    expect(d.resultado.observacionesValidas).toBe(10)
+    expect(d.resultado.sinEvidencia).toBe(0)
+    expect(d.resultado.ausencias).toBe(1)
+    expect(d.resultado.asistencia).toBe(9)
+    expect(d.resultado.cobertura).toBe(1)
+  })
+
+  it('un turno sin nada sigue siendo un hueco', () => {
+    const j = jornadaDesdeFila(fila({
+      tieneFichaje: false, esAusencia: false, entradaPropia: false, salidaPropia: false,
+    }))
+    expect(j.tieneRegistro).toBe(false)
+  })
+
+  it('la ausencia aparece en su motivo y no en "sin datos"', () => {
+    const d = desempenoPorEmpleado([
+      ausencia({ turnoId: 'aus' }),
+      ...Array.from({ length: 9 }, (_, i) => fila({ turnoId: `ok${i}` })),
+    ])[0]
+    expect(jornadasDelMotivo(d, 'ausencia').map(f => f.turnoId)).toEqual(['aus'])
+    expect(jornadasDelMotivo(d, 'sin_evidencia')).toEqual([])
   })
 })
