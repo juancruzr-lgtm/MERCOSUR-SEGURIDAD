@@ -21,7 +21,7 @@ import {
   detalleCierre, responsablesDeItem,
 } from '@/lib/cierre-operativo'
 import type { CategoriaCierre, CierreOperativo, ItemCierre } from '@/lib/cierre-operativo'
-import { cargarItemsCierre, fechaOperativaHoy } from '@/lib/cierre-datos'
+import { cargarItemsCierre, fechaOperativaHoy, rangoCierreDelDia } from '@/lib/cierre-datos'
 import {
   REGULARIZACION_MOTIVO_MINIMO, cerrarAlertasPendientes,
   resumenPrevioRegularizacion, validarMotivoRegularizacion,
@@ -178,7 +178,7 @@ export default function CierreOperativoPanel({ esAdmin, usuarioId, nombreUsuario
   // lo que cambia es que deja de ser trabajo abierto de esta guardia.
   const previsualizarRondas = async () => {
     setCerrandoRondas(true); setError(''); setAviso('')
-    const r = await cerrarAlertasPendientes({ desde: fecha, hasta: fecha, soloConteo: true })
+    const r = await cerrarAlertasPendientes({ ...rangoCierreDelDia(fecha), soloConteo: true })
     setCerrandoRondas(false)
     if (r.error) { setError(r.error); return }
     setPreviaRondas(r.data)
@@ -189,7 +189,7 @@ export default function CierreOperativoPanel({ esAdmin, usuarioId, nombreUsuario
     if (errorMotivo) { setError(errorMotivo); return }
     setCerrandoRondas(true); setError('')
     const r = await cerrarAlertasPendientes({
-      desde: fecha, hasta: fecha, motivo: motivoRondas, soloConteo: false,
+      ...rangoCierreDelDia(fecha), motivo: motivoRondas, soloConteo: false,
     })
     setCerrandoRondas(false)
     if (r.error) { setError(r.error); return }
@@ -358,7 +358,14 @@ export default function CierreOperativoPanel({ esAdmin, usuarioId, nombreUsuario
           </button>
         ) : (
           <div style={{ marginTop:10 }}>
-            <div style={{ ...S.dim, marginBottom:8 }}>{resumenPrevioRegularizacion(previaRondas)}</div>
+            <div style={{ ...S.dim, marginBottom:8 }}>
+              {previaRondas.total === 0
+                // El texto de resumenPrevioRegularizacion habla del saneamiento
+                // historico —"anteriores a esa fecha"— y aca confunde: lo que se
+                // cierra es el dia, no lo de antes.
+                ? `No hay rondas vencidas pendientes del ${fecha}.`
+                : resumenPrevioRegularizacion(previaRondas)}
+            </div>
             {previaRondas.total > 0 && (
               <>
                 <input
