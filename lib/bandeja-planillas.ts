@@ -725,13 +725,50 @@ const ESTADOS_TURNO_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancela
 const soloHora = (h?: string | null) => (h ? h.slice(0, 5) : null)
 
 /** Fin del turno en ms locales, con el cruce de medianoche resuelto. */
+const TZ_OPERATIVA = 'America/Argentina/Buenos_Aires'
+
+/**
+ * Minutos que la hora local de la operacion le lleva a UTC en ese instante.
+ *
+ * Se calcula con Intl en vez de asumir -3 fijo: la respuesta sale del sistema y
+ * no de una constante que envejece.
+ */
+function offsetOperativoMin(utcMs: number): number {
+  const partes = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: TZ_OPERATIVA, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(new Date(utcMs))
+  const [f, h] = partes.split(' ')
+  const [Y, M, D] = f.split('-').map(Number)
+  const [hh, mm, ss] = h.split(':').map(Number)
+  return (Date.UTC(Y, M - 1, D, hh, mm, ss) - utcMs) / 60000
+}
+
+/**
+ * Fin del turno en milisegundos absolutos, con el cruce de medianoche resuelto.
+ *
+ * La hora del turno es SIEMPRE hora de la operacion, no la del proceso que
+ * corre este codigo. Antes se construia con `new Date(a, m-1, d, ...)`, que
+ * interpreta en la zona del proceso: en el navegador de un supervisor argentino
+ * daba bien, pero en una funcion de Vercel —que corre en UTC— adelantaba tres
+ * horas el fin de cada turno. El aviso de cierre terminaba contando como
+ * "terminados" turnos que todavia estaban en curso, y le mandaba al supervisor
+ * planillas de gente que seguia trabajando.
+ */
 export function finTurnoMs(fecha: string, horaInicio: string, horaFin: string): number {
   const [a, m, d] = String(fecha).slice(0, 10).split('-').map(Number)
   const [hi, mi] = String(horaInicio).slice(0, 5).split(':').map(Number)
   const [hf, mf] = String(horaFin).slice(0, 5).split(':').map(Number)
-  const fin = new Date(a, m - 1, d, hf, mf, 0)
-  if (hf * 60 + mf <= hi * 60 + mi) fin.setDate(fin.getDate() + 1)
-  return fin.getTime()
+
+  let comoSiFueraUtc = Date.UTC(a, m - 1, d, hf, mf, 0)
+  if (hf * 60 + mf <= hi * 60 + mi) comoSiFueraUtc += 86400000
+
+  // Dos pasadas: la primera estima el offset con una fecha aproximada, la
+  // segunda lo confirma sobre el instante ya corregido. Con offset fijo la
+  // segunda no cambia nada; si algun dia volviera el horario de verano, esto
+  // sigue cayendo del lado correcto.
+  const aprox = comoSiFueraUtc - offsetOperativoMin(comoSiFueraUtc) * 60000
+  return comoSiFueraUtc - offsetOperativoMin(aprox) * 60000
 }
 
 export interface DatosBandejaMensual {
