@@ -309,65 +309,100 @@ export interface CargaCierreResultado {
   error: string | null
 }
 
+/** El primer error de las consultas, con la tabla adelante para poder ubicarlo. */
+function primerError(pares: Array<[string, any]>): string | null {
+  for (const [tabla, r] of pares) {
+    if (r && r.error) return `${tabla}: ${r.error.message}`
+  }
+  return null
+}
+
 export async function cargarItemsCierre(p: CargaCierreParams): Promise<CargaCierreResultado> {
   const { desde, hasta } = limitesDelMesDesempeno(p.mes)
   const diaDesde = diaAnterior(p.fechaOperativa)
   const db = p.client ?? supabase
 
-  const [bandeja, objetivosR, rondasR, iaR, turnosR, registrosR, intervencionesR, usuariosR] =
-    await Promise.all([
-      cargarFilasBandeja({ mes: p.mes, esAdmin: p.esAdmin, usuarioId: p.usuarioId, client: db }),
-      db.from('objetivos').select('id, nombre, zona_id, estado, es_prueba'),
-      db
-        .from('ronda_alertas')
-        .select('id, objetivo_id, tipo, estado, ventana_inicio, comentario, objetivo:objetivos(nombre, es_prueba), ronda:rondas_base(nombre), guardia:usuarios(nombre, apellido)')
-        .gte('ventana_inicio', `${desde}T00:00:00`)
-        .lte('ventana_inicio', `${hasta}T23:59:59`)
-        .eq('estado', 'pendiente'),
-      db
-        .from('evidencia_analisis')
-        .select('id, analisis_tipo, objetivo_id, revision_estado, clasificacion_efectiva, evidencia_created_at, motivos, resumen, objetivo:objetivos(nombre, es_prueba), guardia:usuarios(nombre, apellido)')
-        .gte('evidencia_created_at', `${desde}T00:00:00`)
-        .lte('evidencia_created_at', `${hasta}T23:59:59`)
-        .eq('revision_estado', 'PENDIENTE')
-        .eq('clasificacion_efectiva', 'REVISAR'),
-      db
-        .from('turnos')
-        .select('id, objetivo_id, puesto_id, guardia_id, fecha, hora_inicio, hora_fin, estado')
-        .gte('fecha', diaDesde).lte('fecha', p.fechaOperativa),
-      db
-        .from('registros_asistencia')
-        .select('id, turno_id, guardia_id, tipo_registro, hora_entrada_real, hora_entrada_final, hora_salida_real, hora_salida_final, alerta_entrada, gps_ingreso_estado, turno:turnos!inner(fecha)')
-        .gte('turno.fecha', diaDesde).lte('turno.fecha', p.fechaOperativa),
-      db
-        .from('supervisor_intervenciones')
-        .select('id, turno_id, tipo_alerta, accion, registro_asistencia_id, created_at, secuencia_evento, turno:turnos!inner(fecha)')
-        .gte('turno.fecha', diaDesde).lte('turno.fecha', p.fechaOperativa),
-      db.from('usuarios').select('id, nombre, apellido'),
-    ])
+  // Sin embeds de PostgREST en ronda_alertas ni evidencia_analisis.
+  //
+  // Las dos tienen DOS claves foráneas a `usuarios` —el vigilador y quien
+  // resolvió/revisó—, así que pedir `usuarios(...)` sin decir cuál es ambiguo:
+  // PostgREST responde 300 Multiple Choices y `data` vuelve null. La pantalla
+  // mostraba cero rondas y cero fotos sin ningún error a la vista.
+  //
+  // Se podría desambiguar con el nombre del constraint, pero eso ata la
+  // consulta a un nombre de índice. Los nombres salen de los catálogos que esta
+  // función ya trae igual: una consulta menos y nada que se rompa si mañana
+  // aparece otra FK. Lo mismo con el nombre de la ronda, que se resuelve contra
+  // rondas_base por id.
+  const [
+    bandeja, objetivosR, rondasBaseR, rondasR, iaR,
+    turnosR, registrosR, intervencionesR, usuariosR,
+  ] = await Promise.all([
+    cargarFilasBandeja({ mes: p.mes, esAdmin: p.esAdmin, usuarioId: p.usuarioId, client: db }),
+    db.from('objetivos').select('id, nombre, zona_id, estado, es_prueba'),
+    db.from('rondas_base').select('id, nombre'),
+    db
+      .from('ronda_alertas')
+      .select('id, objetivo_id, ronda_base_id, guardia_id, tipo, estado, ventana_inicio, comentario')
+      .gte('ventana_inicio', `${desde}T00:00:00`)
+      .lte('ventana_inicio', `${hasta}T23:59:59`)
+      .eq('estado', 'pendiente'),
+    db
+      .from('evidencia_analisis')
+      .select('id, analisis_tipo, objetivo_id, guardia_id, revision_estado, clasificacion_efectiva, evidencia_created_at, motivos, resumen')
+      .gte('evidencia_created_at', `${desde}T00:00:00`)
+      .lte('evidencia_created_at', `${hasta}T23:59:59`)
+      .eq('revision_estado', 'PENDIENTE')
+      .eq('clasificacion_efectiva', 'REVISAR'),
+    db
+      .from('turnos')
+      .select('id, objetivo_id, puesto_id, guardia_id, fecha, hora_inicio, hora_fin, estado')
+      .gte('fecha', diaDesde).lte('fecha', p.fechaOperativa),
+    db
+      .from('registros_asistencia')
+      .select('id, turno_id, guardia_id, tipo_registro, hora_entrada_real, hora_entrada_final, hora_salida_real, hora_salida_final, alerta_entrada, gps_ingreso_estado, turno:turnos!inner(fecha)')
+      .gte('turno.fecha', diaDesde).lte('turno.fecha', p.fechaOperativa),
+    db
+      .from('supervisor_intervenciones')
+      .select('id, turno_id, tipo_alerta, accion, registro_asistencia_id, created_at, secuencia_evento, turno:turnos!inner(fecha)')
+      .gte('turno.fecha', diaDesde).lte('turno.fecha', p.fechaOperativa),
+    db.from('usuarios').select('id, nombre, apellido'),
+  ])
 
-  if (bandeja.error) return { items: [], objetivos: [], error: bandeja.error }
+  // Cualquier fuente que falle corta acá. Antes sólo se miraba la bandeja, y
+  // una consulta caída se veía igual que un día sin pendientes: cero. En una
+  // pantalla cuyo objetivo es llegar a cero, ese cero es el peor error posible.
+  const fallo = bandeja.error
+    || primerError([
+      ['objetivos', objetivosR], ['rondas_base', rondasBaseR], ['ronda_alertas', rondasR],
+      ['evidencia_analisis', iaR], ['turnos', turnosR], ['registros_asistencia', registrosR],
+      ['supervisor_intervenciones', intervencionesR], ['usuarios', usuariosR],
+    ])
+  if (fallo) return { items: [], objetivos: [], error: fallo }
 
   // Los objetivos de prueba nunca entran al cierre: Casa Juan no es trabajo de
   // nadie. Planillas ya los excluye por su cuenta; acá se excluyen las otras
   // tres fuentes.
   const objetivosReales = ((objetivosR.data ?? []) as any[]).filter(o => !o.es_prueba)
   const idsReales = new Set(objetivosReales.map(o => o.id))
+  const nombreObjetivo = new Map<string, string>(objetivosReales.map(o => [o.id, o.nombre]))
 
-  const nombre = (u: any) => (u ? `${u.apellido}, ${u.nombre}` : null)
   const nombrePorGuardia: Record<string, string> = {}
   for (const u of ((usuariosR.data ?? []) as any[])) {
     nombrePorGuardia[u.id] = `${u.apellido}, ${u.nombre}`
   }
+  const nombreRonda = new Map<string, string>(
+    ((rondasBaseR.data ?? []) as any[]).map(r => [r.id, r.nombre]),
+  )
 
   const alertas: AlertaRondaCierre[] = ((rondasR.data ?? []) as any[])
-    .filter(a => !a.objetivo?.es_prueba)
+    .filter(a => idsReales.has(a.objetivo_id))
     .map(a => ({
       id: a.id,
       objetivo_id: a.objetivo_id,
-      objetivo_nombre: a.objetivo?.nombre ?? null,
-      ronda_nombre: a.ronda?.nombre ?? null,
-      guardia_nombre: nombre(a.guardia),
+      objetivo_nombre: nombreObjetivo.get(a.objetivo_id) ?? null,
+      ronda_nombre: a.ronda_base_id ? nombreRonda.get(a.ronda_base_id) ?? null : null,
+      guardia_nombre: a.guardia_id ? nombrePorGuardia[a.guardia_id] ?? null : null,
       tipo: a.tipo,
       estado: a.estado,
       ventana_inicio: a.ventana_inicio,
@@ -375,13 +410,13 @@ export async function cargarItemsCierre(p: CargaCierreParams): Promise<CargaCier
     }))
 
   const evidencias: EvidenciaIACierre[] = ((iaR.data ?? []) as any[])
-    .filter(e => !e.objetivo?.es_prueba)
+    .filter(e => idsReales.has(e.objetivo_id))
     .map(e => ({
       id: e.id,
       analisis_tipo: e.analisis_tipo,
       objetivo_id: e.objetivo_id,
-      objetivo_nombre: e.objetivo?.nombre ?? null,
-      guardia_nombre: nombre(e.guardia),
+      objetivo_nombre: nombreObjetivo.get(e.objetivo_id) ?? null,
+      guardia_nombre: e.guardia_id ? nombrePorGuardia[e.guardia_id] ?? null : null,
       revision_estado: e.revision_estado,
       clasificacion_efectiva: e.clasificacion_efectiva,
       evidencia_created_at: e.evidencia_created_at,
