@@ -258,7 +258,36 @@ Tendencia: `Junio 8,1 · Julio 8,5 ↑ · Agosto 8,8 ↑`, y lo mismo por dimens
 **Sin rankings públicos entre vigiladores.** Comparar personas en una pantalla
 compartida convierte una herramienta de mejora en un instrumento de presión.
 
-El vigilador ve **su** número y **por qué**. Ésa es la parte que sirve.
+### Visibilidad configurable — DECIDIDO (24/08)
+
+La visibilidad se controla **desde Administración**, no se hornea en el código.
+
+**Etapa 1: arranca apagado para el vigilador.** Lo ven Administración y el
+supervisor en su zona. Cuando la operación esté conforme con lo que dice el
+indicador, se prende.
+
+Se guarda en `app_config`, que ya es el lugar de este tipo de interruptores
+(`supervisor_gps_enabled`, `ronda_alerta_tolerancia_min`). **No hace falta tabla
+nueva.**
+
+```
+desempeno_visible_vigilador   false | true
+desempeno_visible_supervisor  true          (su zona)
+```
+
+**Pero el interruptor NO es lo que decide el diseño.** El texto explicativo se
+escribe **desde el día uno como si lo fuera a leer el empleado**: en segunda
+persona, describiendo hechos, sin lenguaje acusatorio.
+
+El motivo es concreto. Si el texto se escribe "para adentro" —"18 jornadas sin
+registro propio, reincidente"— el día que quieras mostrárselo al vigilador no
+alcanza con cambiar un flag: hay que reescribir el módulo. Escribirlo bien
+desde el principio hace que prender la visibilidad sea configuración, no
+rediseño.
+
+Regla práctica: **si un texto no se lo mostrarías a la persona, no debería
+existir en el módulo.** Los hechos son los mismos; lo que cambia es si están
+escritos para informar o para acusar.
 
 ---
 
@@ -627,7 +656,10 @@ Cada hecho enlaza al turno concreto. **Nada de números sin respaldo.**
    seguimiento* y no *puntaje*.
 2. **Pesos**: ¿se acepta la candidata (20/60/0), o preferís otra distribución?
 3. **Muestra mínima**: ¿8 turnos es razonable para el negocio?
-4. **¿El vigilador ve su puntaje?** Cambia el tono de todo el módulo.
+4. ~~**¿El vigilador ve su puntaje?**~~ **RESUELTO 24/08:** configurable desde
+   Administración vía `app_config`, arrancando **apagado** para el vigilador.
+   El texto se escribe igual como si él lo fuera a leer, para que activarlo
+   después sea un flag y no un rediseño.
 5. **¿Cuándo entra Rondas?** Tiene 26 días. Propuesta: septiembre completo.
 6. **Snapshot mensual**: ¿se congela el día 1 del mes siguiente, o después del
    cierre de liquidación?
