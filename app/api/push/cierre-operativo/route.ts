@@ -1,31 +1,50 @@
 /**
  * /api/push/cierre-operativo — un aviso de resumen por responsable y por día.
  *
- * ESTA RUTA NO ESTÁ PROGRAMADA, igual que /api/push/cron. Encenderla es una
- * decisión aparte: hoy salen unos veinte avisos diarios y sumar uno más tiene
- * que ser algo que se decida a propósito, no un efecto de haberla creado.
- * Cuando se decida, se agenda con pg_cron al horario de relevo, como está
- * hecho en la migración 20260813180000.
+ * CUÁNDO SALE
+ * Cuando la guardia de cada responsable está por terminar, no a una hora fija.
+ * Un horario fijo le llegaría a destiempo a todo el que no cierre justo a esa
+ * hora, y como la deduplicación es por (usuario, día), ese aviso a destiempo le
+ * consumiría el del final de SU guardia. Por eso el cron corre seguido y
+ * `responsablesQueCierran` decide en cada corrida quién está cerrando, leyendo
+ * `supervisores_guardia`: la programación real, sin nombres ni horarios acá.
  *
- * Qué manda: lo que le queda a cada responsable antes de cerrar la guardia —
- * pendientes de hoy y arrastre de días anteriores— en UN solo aviso.
+ * LIMITACIÓN CONOCIDA, dicha en voz alta en la respuesta
+ * Un responsable de zona SIN guardia horaria —las zonas con un único asignado—
+ * no tiene fin de guardia en ninguna tabla. El cron no puede saber cuándo
+ * avisarle, así que no le avisa, y la respuesta lo informa en
+ * `zonas_sin_guardia_hoy`. Inventarle un horario sería peor que no mandarle
+ * nada.
  *
- * De dónde sale: exactamente de las mismas funciones que muestra la pantalla
- * (lib/cierre-datos + lib/cierre-operativo), con el cliente de servidor
- * inyectado. No hay una segunda definición de "qué está pendiente": si la
- * hubiera, el aviso y la pantalla dirían números distintos.
+ * QUÉ MANDA
+ * Lo que le queda antes de cerrar la guardia —pendientes de hoy y arrastre— en
+ * UN solo aviso. Nunca a quien tiene cero: el "estás al día" que nadie pidió es
+ * ruido.
  *
- * A quién: a quien resuelve lib/responsables-operativos con la fecha y hora
- * DEL HECHO. Nunca por rol: un admin asignado a la guardia recibe igual, y un
- * supervisor sin asignación no recibe. Eso ya se eliminó una vez del ruteo de
- * push y volver a meterlo sería una regresión.
+ * DE DÓNDE SALE
+ * De las mismas funciones que muestra la pantalla (lib/cierre-datos +
+ * lib/cierre-operativo), con el cliente de servidor inyectado. No hay una
+ * segunda definición de "qué está pendiente".
+ *
+ * A QUIÉN
+ * A quien resuelve lib/responsables-operativos con la fecha y hora DEL HECHO.
+ * Nunca por rol: un admin asignado a la guardia recibe igual, y un supervisor
+ * sin asignación no. Eso ya se eliminó una vez del ruteo de push.
+ *
+ * CÓMO SE LLAMA
+ *   · pg_cron  → Authorization: Bearer $CRON_SECRET, y manda de verdad.
+ *   · una persona de Administración autenticada → sólo `?simular=1`. Existe
+ *     para poder VERIFICAR la ruta sin tener el secreto a mano y sin mandarle
+ *     nada a nadie.
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
+import { requireAdminIA } from '../../ia/_lib/auth'
 import { enviarResumenCierre } from '../../_lib/push-notificaciones'
 import type { PushSubscriptionRow } from '../../_lib/web-push'
-import { cargarItemsCierre, fechaOperativaHoy } from '@/lib/cierre-datos'
-import { cierreDeResponsable, textoPushCierre } from '@/lib/cierre-operativo'
+import { cargarItemsCierre, fechaOperativaHoy, partirInstante } from '@/lib/cierre-datos'
+import { cierreDeResponsable, detalleCierre, textoPushCierre } from '@/lib/cierre-operativo'
+import { responsablesQueCierran, zonasConGuardiaCargada } from '@/lib/cierre-aviso'
 
 export const runtime = 'nodejs'
 
@@ -38,33 +57,48 @@ export const maxDuration = 60
 export const fetchCache = 'force-no-store'
 export const dynamic = 'force-dynamic'
 
-function authOk(req: NextRequest) {
+/** Tolerancia hacia atrás: el intervalo del cron. Ver `responsablesQueCierran`. */
+const TOLERANCIA_CRON_MIN = 15
+
+function cronAutorizado(req: NextRequest): boolean {
   const expected = process.env.CRON_SECRET
-  if (!expected) return { ok: false, error: 'Falta CRON_SECRET' }
-  const header = req.headers.get('authorization') || ''
-  return header === `Bearer ${expected}`
-    ? { ok: true }
-    : { ok: false, error: 'Cron no autorizado' }
+  if (!expected) return false
+  return (req.headers.get('authorization') || '') === `Bearer ${expected}`
+}
+
+/** null = puede seguir. Devuelve la respuesta de rechazo si no. */
+async function accesoDenegado(
+  req: NextRequest, simular: boolean, esCron: boolean,
+): Promise<NextResponse | null> {
+  if (esCron) return null
+  if (!simular) return NextResponse.json({ error: 'Cron no autorizado' }, { status: 401 })
+  const ctx = await requireAdminIA(req)
+  if (ctx.ok) return null
+  // ContextoIA es una union discriminada, pero con `strict: false` el narrowing
+  // no la separa acá. Se lee explícito en vez de dejar un error nuevo.
+  return (ctx as { respuesta: NextResponse }).respuesta
 }
 
 export async function GET(req: NextRequest) {
-  const auth = authOk(req)
-  if (!auth.ok) {
-    return NextResponse.json(
-      { error: auth.error },
-      { status: auth.error === 'Falta CRON_SECRET' ? 500 : 401 },
-    )
-  }
+  const simular = req.nextUrl.searchParams.get('simular') === '1'
+  const esCron = cronAutorizado(req)
+
+  // Sin el secreto sólo se admite simular, y sólo a Administración. Nadie puede
+  // disparar envíos reales con una sesión de navegador.
+  const bloqueo = await accesoDenegado(req, simular, esCron)
+  if (bloqueo) return bloqueo
 
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
   const client = admin.client
 
-  // `simular=1` calcula y responde a quién le saldría qué, sin mandar nada.
-  // Es la forma de mirar el aviso antes de encenderlo.
-  const simular = req.nextUrl.searchParams.get('simular') === '1'
-  const fecha = req.nextUrl.searchParams.get('fecha') || fechaOperativaHoy()
+  const ahora = new Date()
+  const local = partirInstante(ahora.toISOString())
+  const fecha = req.nextUrl.searchParams.get('fecha') || fechaOperativaHoy(ahora)
   const mes = fecha.slice(0, 7)
+  // `?todos=1` ignora el filtro por fin de guardia. Sólo para simular: sirve
+  // para ver el cuadro completo sin esperar a que alguien esté cerrando.
+  const todos = req.nextUrl.searchParams.get('todos') === '1' && simular
 
   // Alcance completo (esAdmin) a propósito: el recorte por responsable lo hace
   // después cierreDeResponsable, con la asignación de cada hecho. Recortar
@@ -86,49 +120,76 @@ export async function GET(req: NextRequest) {
   ])
 
   const usuarios = (usuariosR.data ?? []) as any[]
+  const guardias = (guardiasR.data ?? []) as any[]
   const catalogos = {
-    guardias:        (guardiasR.data ?? []) as any[],
+    guardias,
     supervisorZonas: (supZonasR.data ?? []) as any[],
     zonas:           (zonasR.data ?? []) as any[],
     usuarios,
   }
 
-  // Un destinatario por persona con algo que decidir. Quien no tiene nada
-  // pendiente no recibe: el aviso "estás al día" que nadie pidió es ruido.
-  const destinatarios = usuarios
-    .map(u => {
-      const suyo = cierreDeResponsable(cierre.items, u.id, fecha, catalogos)
-      return { usuarioId: u.id as string, cierre: suyo }
-    })
+  // Quiénes están cerrando ahora. Sale de la guardia real, no de una lista.
+  const cerrando = responsablesQueCierran(guardias, {
+    fecha: local.fecha, hora: local.hora, tolerancia: TOLERANCIA_CRON_MIN,
+  })
+  const leToca = new Set(cerrando)
+
+  const subs = (subsR.data ?? []) as PushSubscriptionRow[]
+  const conSuscripcion = new Set(subs.map(s => s.usuario_id))
+
+  const candidatos = usuarios
+    .map(u => ({ usuarioId: u.id as string, cierre: cierreDeResponsable(cierre.items, u.id, fecha, catalogos) }))
     .filter(d => d.cierre.hoy.total + d.cierre.anteriores.total > 0)
     .map(d => {
       const { titulo, cuerpo } = textoPushCierre(d.cierre)
+      const u = usuarios.find(x => x.id === d.usuarioId)
       return {
         usuarioId: d.usuarioId,
+        nombre: u ? `${u.apellido}, ${u.nombre}` : d.usuarioId,
+        rol: u?.rol ?? null,
+        hoy: d.cierre.hoy.total,
+        anteriores: d.cierre.anteriores.total,
+        detalle_hoy: detalleCierre(d.cierre.hoy),
+        detalle_anteriores: detalleCierre(d.cierre.anteriores),
+        por_categoria_hoy: d.cierre.hoy.porCategoria,
+        por_categoria_anteriores: d.cierre.anteriores.porCategoria,
+        cierra_ahora: leToca.has(d.usuarioId),
+        suscripcion_push: conSuscripcion.has(d.usuarioId),
         payload: { title: titulo, body: cuerpo, url: '/dashboard' },
       }
     })
 
+  const destinatarios = todos ? candidatos : candidatos.filter(c => c.cierra_ahora)
+
   if (simular) {
+    // Las zonas que hoy NO tienen ninguna guardia cargada: a sus responsables
+    // de zona el cron no les puede avisar, porque no hay fin de guardia.
+    const conGuardia = new Set(zonasConGuardiaCargada(guardias, local.fecha))
+    const zonasSinGuardia = ((zonasR.data ?? []) as any[])
+      .map(z => z.nombre)
+      .filter(n => !conGuardia.has(String(n ?? '').trim().toLowerCase()))
+
     return NextResponse.json({
       ok: true,
       simulado: true,
       fecha,
+      ahora_local: `${local.fecha} ${local.hora}`,
       items: cierre.items.length,
-      destinatarios: destinatarios.map(d => ({
-        usuario_id: d.usuarioId,
-        titulo: d.payload.title,
-        mensaje: d.payload.body,
-      })),
+      cerrando_ahora: cerrando.length,
+      zonas_sin_guardia_hoy: zonasSinGuardia,
+      // Sin `todos=1` esto es exactamente lo que se mandaría en esta corrida.
+      destinatarios,
     })
   }
 
   const resultado = await enviarResumenCierre(
-    client,
-    (subsR.data ?? []) as PushSubscriptionRow[],
-    destinatarios,
+    client, subs,
+    destinatarios.map(d => ({ usuarioId: d.usuarioId, payload: d.payload })),
     fecha,
   )
 
-  return NextResponse.json({ ok: true, fecha, items: cierre.items.length, ...resultado })
+  return NextResponse.json({
+    ok: true, fecha, items: cierre.items.length,
+    cerrando_ahora: cerrando.length, ...resultado,
+  })
 }
