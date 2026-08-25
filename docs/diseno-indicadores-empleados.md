@@ -979,3 +979,76 @@ automático, confirmación— queda intacto y consultable.
 Con la V2.1 esta tabla pasa a ser **opcional para Etapa 1**: como el cierre
 automático ya no participa del cálculo, no hay nada urgente que justificar. Se
 implementa cuando aparezca el primer caso probado, no antes.
+
+---
+
+## 23. Etapa 1 — implementación real del cálculo (25/08/2026)
+
+`lib/desempeno.ts`. Puro, sin dependencias, sin consultas.
+
+### El hecho primario, en orden
+
+```
+hechoDeJornada(j):
+  sin registro          -> 'sin_evidencia'         fuera del denominador
+  ausencia confirmada   -> 'ausencia'              baja Asistencia
+  sin entrada propia    -> 'sin_registro_propio'   baja Procedimiento
+  sin salida propia     -> 'entrada_sin_salida'    baja Procedimiento
+  si no                 -> 'correcta'
+```
+
+**El primero que aplica gana y los demás no se miran.** Es lo que garantiza que
+una jornada no pueda penalizar dos veces por el mismo evento.
+
+### `cierre_automatico` no es un parámetro del módulo
+
+No aparece en `JornadaDesempeno`. **No hay forma de que sume una segunda
+penalización, porque el dato no entra.** Es una garantía estructural, más fuerte
+que una regla que alguien puede olvidar. Agregarlo sería una regresión, y está
+escrito así en el encabezado del archivo.
+
+### Qué devuelve
+
+`puntaje` · `estado` · `asistencia` · `procedimiento` · `observacionesValidas` ·
+`jornadasAplicables` · `cobertura` · `datosInsuficientes` · `incidencias` por
+tipo · `ausencias` · `sinEvidencia` · `motivos`.
+
+**Los motivos salen de contadores**, nunca de texto generado:
+
+```
+motivosDeIncidencias({ sin_registro_propio: 4, entrada_sin_salida: 2 }, 0)
+  → "4 jornadas trabajadas sin registro propio"
+  → "2 entradas sin salida registrada"
+```
+
+Si el número cambia, el texto cambia con él, y siempre se puede volver de la
+frase al hecho.
+
+`faltanteParaMuestra()` explica **cuánto falta** cuando no alcanza la muestra:
+decir "datos insuficientes" sin decir cuánto no le sirve a nadie.
+
+### Verificación contra la simulación
+
+Se recalculó agosto 2026 con el módulo real sobre los mismos 65 períodos y
+1.029 turnos. **Reproduce la V2.1 sin ninguna divergencia:**
+
+| Estado | Documentado | Módulo |
+|---|---:|---:|
+| Excelente | 31 | **31** |
+| Correcto | 15 | **15** |
+| Requiere seguimiento | 5 | **5** |
+| Requiere intervención | 4 | **4** |
+| Datos insuficientes | 10 | **10** |
+
+Un solo ajuste hizo falta: el redondeo iba **antes** de combinar las
+dimensiones, lo que corría el total hasta un centésimo. Ahora se redondea al
+final.
+
+La verificación quedó como test permanente (`tests/desempeno-agosto-2026.test.ts`)
+con una fixture **sin identidades** — sólo los contadores de cada período. Fija
+la distribución, el peor caso, los dos patrones de conducta y que ninguna
+jornada sin evidencia se haya convertido en falta.
+
+### Lo que falta de Etapa 1
+
+La vista `Desempeño`. El cálculo está listo y verificado; la presentación no.
