@@ -608,6 +608,104 @@ GOMEZ JOSE MARÍA 1) y tres por cobertura.
 
 ---
 
+## 16 bis. Las tres auditorías previas — CERRADAS (25/08/2026)
+
+Solo lectura. **Ningún dato fue corregido**: se clasificó la causa de cada caso.
+
+### A. Cierres automáticos — el sitio o la persona
+
+El discriminador es comparar empleados **del mismo objetivo**.
+
+| Caso | Evidencia | Veredicto |
+|---|---|---|
+| **MARTINEZ SANTIAGO** | 10 de 20 (50 %) en NACIÓN SERVICIOS ENTRE RÍOS. Su compañero González Nicolás, **mismo objetivo**: 2 de 22 (9 %) | **La persona** |
+| **MAIDANA** | 6 de 22 (27 %) en PLAZA DE LA COOPERACIÓN. **Único** con cierre automático entre los 3 que trabajan ahí | **La persona** |
+| **DEPÓSITO FISCAL** | Los **tres** empleados, con tasas parecidas: OTERO 22 %, BARRIOS 17 %, SOLER 14 % | **El sitio** |
+| **TABORDA NICOLÁS** | 6 de 20 (30 %) en RANDSTAD, pero es el **único** que trabaja ahí | **Indeterminado** |
+
+Los 68 cierres se reparten en 22 objetivos: no hay un sitio roto que explique
+todo. En la mayoría es **un empleado entre varios**, lo que apunta a la persona.
+
+**Regla que queda:** el cierre automático cuenta como incidencia **sólo cuando
+es atribuible**. Del sitio o indeterminado → fuera del denominador.
+
+### B. Horarios programados — el umbral está en 5 minutos
+
+`calcAlertaEntrada` marca `'tarde'` con **más de 5 minutos** de diferencia
+(`lib/supabase.ts`, `if (diff > 5)`). La tolerancia de cobertura, en cambio, es
+de 15. **Son dos umbrales distintos para la misma pregunta.**
+
+| Empleado · turno | Entradas reales | Lectura |
+|---|---|---|
+| GALLO 19:00 | 19:06:48 → 19:08:35 | **Umbral estricto.** 8 minutos |
+| OJEDA 19:00 | 19:04:40 → 19:25:28 | **Umbral estricto.** Promedio 10 min |
+| CONTARDE 19:00 | 19:13:39 → 19:20:16 | **Umbral estricto**, algunas al límite |
+| **CONTARDE 07:00** | 07:16 → **10:07** | **Tardanza real.** Hasta 3 horas |
+| **GALLO 07:00** | 07:05 → **08:49** | **Tardanza real.** Hasta 1h50 |
+
+Los dos patrones conviven **en la misma persona**: turnos de noche limpios y
+problemas reales de mañana. Por eso el agregado daba "90 % tarde" y parecía
+absurdo.
+
+**Conclusión:** Puntualidad es recuperable, pero **no con este umbral**. Antes
+hay que unificar la tolerancia con la de cobertura (15 min) y volver a medir.
+Sigue **fuera del puntaje**.
+
+### C. Los 12 turnos sin evidencia
+
+Los doce son `estado = programado`, `tipo_evento = normal`. **No** son
+capacitaciones ni eventos especiales: son jornadas comunes sin ningún registro.
+
+Concentración: MARTINEZ RAUL 3, CENTURION 2, el resto uno cada uno.
+
+**Confirma la regla:** sacarlos del denominador es correcto — no hay evidencia
+de que faltaran. Pero son 12 casos que merecen revisión operativa, no
+estadística.
+
+---
+
+## 16 ter. V2 FINAL — con las causas clasificadas
+
+| Estado | Empleados | |
+|---|---:|---:|
+| **Excelente** (≥ 9,5) | 39 | 60 % |
+| **Correcto** (8,5–9,49) | 9 | 14 % |
+| **Requiere seguimiento** (7,0–8,49) | 3 | 5 % |
+| **Requiere intervención** (< 7,0) | 3 | 5 % |
+| **Datos insuficientes** | 11 | 17 % |
+
+### Qué cambió al clasificar las causas
+
+| Empleado | V2 preliminar | V2 final | Por qué |
+|---|---|---|---|
+| MARTINEZ SANTIAGO | Datos insuficientes | **5,66 · Requiere intervención** | El cierre automático es suyo, no del sitio |
+| MAIDANA | Datos insuficientes | **7,61 · Requiere seguimiento** | Ídem |
+| OTERO | 7,61 | **9,53 · Excelente** | El cierre automático es del sitio |
+| BARRIOS | 8,04 | **10,00 · Excelente** | Ídem |
+| SOLER | 9,45 | **10,00 · Excelente** | Ídem |
+| TABORDA NICOLÁS | Datos insuficientes | **Datos insuficientes** | Indeterminado: único en su objetivo |
+
+**Esto es lo que valió la auditoría.** Sin clasificar la causa, el indicador
+premiaba a quien tenía peor calidad de dato y castigaba a tres personas por un
+problema del sitio.
+
+### Los seis que requieren atención
+
+| | Puntaje | Jornadas sin registro propio |
+|---|---:|---|
+| ROSÓN JUAN | 3,86 | 18 de 22 (82 %) |
+| MARTINEZ SANTIAGO | 5,66 | 11 de 19 (58 %) |
+| CENTURION AGUSTIN | 6,03 | 9 de 17 (53 %) |
+| MAIDANA JUAN | 7,61 | 7 de 22 (32 %) |
+| CACERES DARIO | 7,95 | 3 de 11 (27 %) |
+| RÍOS RAUL | 8,33 | 4 de 18 (22 %) |
+
+**Los seis por el mismo motivo.** El indicador no está señalando gente floja:
+señala un problema de registro concentrado en seis personas y, en un caso, en
+un sitio.
+
+---
+
 ## 17. Estados
 
 | Estado | Rango | Qué dice |
@@ -709,3 +807,59 @@ Cada hecho enlaza al turno concreto. **Nada de números sin respaldo.**
 - `lib/revision-operativa.ts` — alertas operativas, tardanzas, estados sin obligación
 - `supabase/migrations/20260810200000_rondas_cierre_activacion_y_estados_sin_obligacion.sql` — obligación de ronda
 - `supabase/migrations/20260811100000_ia_analisis_base.sql` — `revision_estado`, feedback IA
+
+---
+
+## 20. Etapa 1 de implementación — PROPUESTA
+
+Los resultados siguen siendo coherentes después de las tres auditorías, así que
+la V2 está lista para programarse. Alcance mínimo, sin nada especulativo.
+
+### Qué entra
+
+| | |
+|---|---|
+| Dimensiones | **Asistencia (20) + Procedimiento (60)**. Nada más |
+| Muestra | ≥ 8 observaciones **y** ≥ 70 % de cobertura |
+| Estados | los cinco definidos |
+| Período | mes calendario |
+| Cálculo | **dinámico**, sin snapshot todavía |
+| Ubicación | pestaña `Desempeño` en el legajo del empleado |
+| Visibilidad | Admin y Supervisor (su zona) + **el vigilador su propio dato**, vía `app_config` |
+
+### Qué NO entra
+
+- Puntualidad, Rondas y Calidad: pesos en 0, **declaradas pero apagadas**.
+- Snapshots y tabla de historial: recién cuando haya dos meses que comparar.
+- Rankings, comparativas y cualquier vista que ponga empleados uno al lado del otro.
+- Corrección automática de datos.
+
+### Orden propuesto
+
+1. **`lib/desempeno.ts`** — cálculo puro, con tests. Reutiliza
+   `construirFilasBandeja` para el universo de turnos: **no** se redefine qué es
+   un turno exigible.
+2. **Clasificación del cierre automático** — tabla o `app_config` con los
+   objetivos donde el cierre automático es del sitio. Empieza con DEPÓSITO
+   FISCAL. Sin esto, tres personas quedan mal puntuadas.
+3. **Pestaña `Desempeño`** en el legajo, con el detalle hecho por hecho.
+4. **Vista del vigilador**, con el texto en segunda persona y el mensaje de
+   datos insuficientes.
+5. **Flag de visibilidad** en `app_config`.
+
+Los pasos 1 y 2 son los que tienen riesgo; 3 a 5 son presentación.
+
+### Antes de empezar hay que decidir
+
+1. **Umbral de tardanza.** ¿Se unifica `calcAlertaEntrada` en 15 minutos, igual
+   que la cobertura? Afecta a toda la app, no sólo al indicador. Es la
+   condición para reactivar Puntualidad.
+2. **Los seis casos.** ¿Se conversan antes de que el indicador exista, o se
+   deja que el indicador sea el que los muestre?
+3. **DEPÓSITO FISCAL.** ¿Se investiga por qué los tres empleados tienen cierre
+   automático? Si se arregla el sitio, el problema desaparece solo.
+
+---
+
+**Última actualización:** 25/08/2026 — tres auditorías cerradas, V2 final.
+Nada implementado.
