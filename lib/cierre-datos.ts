@@ -264,11 +264,32 @@ export function fechaOperativaHoy(ahora = new Date(), tz = 'America/Argentina/Bu
   return partirInstante(ahora.toISOString(), tz).fecha
 }
 
+/** Corre la fecha n días. Trabaja al mediodía UTC para no rozar ningún cambio de hora. */
+function correrDias(fecha: string, dias: number): string {
+  const d = new Date(fecha + 'T12:00:00Z')
+  d.setUTCDate(d.getUTCDate() + dias)
+  return d.toISOString().slice(0, 10)
+}
+
 /** El día anterior, para arrastrar los nocturnos que cruzan medianoche. */
 export function diaAnterior(fecha: string): string {
-  const d = new Date(`${fecha}T12:00:00Z`)
-  d.setUTCDate(d.getUTCDate() - 1)
-  return d.toISOString().slice(0, 10)
+  return correrDias(fecha, -1)
+}
+
+/**
+ * El rango que hay que pasarle a cerrarAlertasPendientes para cerrar UN día.
+ *
+ * El `p_hasta` de la RPC es EXCLUSIVO: su comentario dice "vencidas ANTES de
+ * esta fecha" y compara contra la medianoche que ABRE el día. Para cerrar el 25
+ * hay que pedir hasta el 26.
+ *
+ * Existe como función y no como una cuenta suelta en la pantalla porque pasar
+ * el mismo día en los dos extremos deja un rango vacío y la RPC responde cero
+ * sin ningún error: la vista previa decía "no hay nada que cerrar" con nueve
+ * rondas listadas arriba.
+ */
+export function rangoCierreDelDia(fecha: string): { desde: string; hasta: string } {
+  return { desde: fecha, hasta: correrDias(fecha, 1) }
 }
 
 /**

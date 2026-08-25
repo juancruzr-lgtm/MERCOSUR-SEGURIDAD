@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   alertasOperativasParaCierre, diaAnterior, esSaneada, estamparZonas, itemsDeFotosIA,
-  itemsDeOperacion, itemsDePlanillas, itemsDeRondas, partirInstante,
+  itemsDeOperacion, itemsDePlanillas, itemsDeRondas, partirInstante, rangoCierreDelDia,
 } from '@/lib/cierre-datos'
 import type { AlertaRondaCierre, EvidenciaIACierre } from '@/lib/cierre-datos'
 import { construirCierreOperativo, resumirCierre } from '@/lib/cierre-operativo'
@@ -301,5 +301,33 @@ describe('diaAnterior', () => {
 
   it('cruza el inicio de mes', () => {
     expect(diaAnterior('2026-08-01')).toBe('2026-07-31')
+  })
+})
+
+// ── El rango que espera la RPC ───────────────────────────────────────────────
+
+describe('rangoCierreDelDia: el límite superior es exclusivo', () => {
+  it('para cerrar el 25 se pide hasta el 26', () => {
+    // cerrar_ronda_alertas_pendientes compara `vencimiento_at < p_hasta` contra
+    // la medianoche que ABRE el día. Con hasta = 25 no entra nada del 25.
+    expect(rangoCierreDelDia('2026-08-25')).toEqual({ desde: '2026-08-25', hasta: '2026-08-26' })
+  })
+
+  it('los dos extremos nunca son el mismo día: sería un rango vacío', () => {
+    // Ese era el defecto: la vista previa decía cero con nueve rondas listadas.
+    for (const f of ['2026-08-01', '2026-08-31', '2026-12-31', '2027-02-28']) {
+      expect(rangoCierreDelDia(f).hasta).not.toBe(rangoCierreDelDia(f).desde)
+    }
+  })
+
+  it('cruza fin de mes y fin de año', () => {
+    expect(rangoCierreDelDia('2026-08-31').hasta).toBe('2026-09-01')
+    expect(rangoCierreDelDia('2026-12-31').hasta).toBe('2027-01-01')
+  })
+
+  it('el día del cambio de hora no corre la fecha', () => {
+    // La cuenta va al mediodía UTC justamente para no rozarlo.
+    expect(rangoCierreDelDia('2026-03-01')).toEqual({ desde: '2026-03-01', hasta: '2026-03-02' })
+    expect(diaAnterior('2026-03-01')).toBe('2026-02-28')
   })
 })
