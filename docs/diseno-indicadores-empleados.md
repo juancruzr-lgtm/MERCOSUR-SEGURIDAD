@@ -863,3 +863,119 @@ Los pasos 1 y 2 son los que tienen riesgo; 3 a 5 son presentación.
 
 **Última actualización:** 25/08/2026 — tres auditorías cerradas, V2 final.
 Nada implementado.
+
+---
+
+## 21. Corrección de la auditoría y V2.1 (25/08/2026)
+
+### Dos errores míos, corregidos
+
+**1. Comparé universos distintos.** La auditoría de DEPÓSITO FISCAL no filtraba
+turnos ya terminados ni estados operativos. Con el universo de la V2, SOLER pasa
+de "4 de 7 sin salida" a **0 de 16**. Toda la sospecha sobre él era el artefacto.
+
+**2. El hallazgo de "22 sin salida contra 11 cierres automáticos" era falso**,
+del mismo artefacto. Con el universo correcto, en todo agosto:
+
+| | |
+|---|---:|
+| Jornadas con entrada y sin salida | **60** |
+| Cierres automáticos | **70** |
+| Filas donde ambos coinciden exactamente | **61 de 67** |
+
+**El cierre automático se dispara casi exactamente cuando falta la salida.** No
+son dos incidencias: son el hecho y la reacción del sistema.
+
+### Consecuencia de diseño: el cierre automático NO participa
+
+`cierre_automatico` deja de intervenir en el cálculo. El hecho primario de cada
+jornada es uno solo:
+
+| Situación | Procedimiento |
+|---|---|
+| Registró entrada y salida | correcto |
+| Necesitó confirmación del supervisor | **1 incidencia** |
+| Registró entrada pero no salida | **1 incidencia** |
+| Cierre automático derivado de esa falta | **no suma nada** |
+| Sin registro alguno | fuera del denominador |
+| Turno todavía abierto o no exigible | no es incidencia |
+
+Esto **elimina la clasificación sitio/persona de adentro de la fórmula**. Ya no
+hace falta decidir de quién es el cierre automático para poder calcular.
+
+### V2.1 sobre agosto
+
+| Estado | | |
+|---|---:|---:|
+| Excelente | 31 | 48 % |
+| Correcto | 15 | 23 % |
+| Requiere seguimiento | 5 | 8 % |
+| Requiere intervención | 4 | 6 % |
+| Datos insuficientes | 10 | 15 % |
+
+Separa mejor que todas las versiones anteriores, sin haber buscado dispersión.
+
+### Hallazgo: son DOS conductas distintas
+
+| Empleado | Confirmadas | Entrada sin salida | Qué pasa |
+|---|---:|---:|---|
+| ROSÓN | **18** | 0 | No registra **nada**, nunca |
+| CENTURION | **9** | 0 | Ídem |
+| MARTINEZ SANTIAGO | 0 | **11** | Registra la entrada, **nunca la salida** |
+| TABORDA NICOLÁS | 1 | **6** | Ídem |
+| OTERO | 1 | **6** | Ídem |
+
+**El puntaje las mezcla; el detalle debe separarlas.** No se conversa igual con
+quien nunca abre la app que con quien la abre al entrar y se olvida al salir.
+
+### DEPÓSITO FISCAL — causa indeterminada
+
+Con el universo correcto: OTERO 7,61 · BARRIOS 8,82 · **SOLER 10,00**. No hay un
+patrón uniforme del sitio. OTERO se destaca, y trabaja **exclusivamente** ahí, así
+que no se puede separar persona de sitio con los datos disponibles.
+
+**Queda como causa indeterminada, pendiente de verificación operativa.** Con la
+V2.1 esto ya no bloquea el cálculo: nadie está excluido ni penalizado por una
+causa no probada.
+
+---
+
+## 22. Justificación de incidencias por sitio — auditoría de reutilización
+
+**No existe ninguna estructura reutilizable.** Se revisaron todas las candidatas:
+
+| Tabla | Por qué no sirve |
+|---|---|
+| `supervisor_intervenciones` | Es por **turno** (`turno_id`), no por objetivo y período |
+| `novedades_laborales` | Rango de fechas + tipo + motivo, pero sobre **empleado**, y su semántica es laboral (licencias) |
+| `ronda_pausas` | La forma correcta —objetivo, puesto, motivo, desde/hasta, quién— pero atada a `ronda_base_id` |
+| `registros_asistencia_auditoria` | Corrige **un registro**, no declara una condición de un sitio |
+| `objetivos_auditoria` | Cambios sobre el objetivo, no incidencias operativas |
+| `novedades` | Muerta desde 05/2026 |
+
+### Propuesta mínima — `objetivo_incidencias`
+
+Copia la forma de `ronda_pausas`, que ya resolvió este problema para rondas.
+
+```sql
+objetivo_id     uuid  not null      -- el sitio
+puesto_id       uuid  null          -- opcional: null = todo el objetivo
+desde           date  not null
+hasta           date  null          -- null = todavía abierta
+tipo            text  not null      -- sin_senal | falla_dispositivo |
+                                    -- procedimiento_salida | otro
+afecta          text  not null      -- procedimiento | asistencia | ambas
+motivo          text  not null      -- mínimo 10 caracteres
+registrada_por  uuid  not null      -- quién
+created_at      timestamptz         -- cuándo
+anulada_at      timestamptz null    -- se anula, NUNCA se borra
+anulada_por     uuid  null
+```
+
+**No toca ningún fichaje.** El cálculo la lee y saca del denominador individual
+las jornadas que caen dentro del rango; el hecho original —fichaje, cierre
+automático, confirmación— queda intacto y consultable.
+
+Con la V2.1 esta tabla pasa a ser **opcional para Etapa 1**: como el cierre
+automático ya no participa del cálculo, no hay nada urgente que justificar. Se
+implementa cuando aparezca el primer caso probado, no antes.
