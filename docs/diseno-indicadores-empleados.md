@@ -258,13 +258,38 @@ Tendencia: `Junio 8,1 · Julio 8,5 ↑ · Agosto 8,8 ↑`, y lo mismo por dimens
 **Sin rankings públicos entre vigiladores.** Comparar personas en una pantalla
 compartida convierte una herramienta de mejora en un instrumento de presión.
 
-### Visibilidad configurable — DECIDIDO (24/08)
+### Visibilidad — DECIDIDO (25/08)
 
-La visibilidad se controla **desde Administración**, no se hornea en el código.
+**El vigilador SÍ ve su propio indicador**, siempre que haya muestra suficiente.
+Nunca ve rankings ni puntajes de otros.
 
-**Etapa 1: arranca apagado para el vigilador.** Lo ven Administración y el
-supervisor en su zona. Cuando la operación esté conforme con lo que dice el
-indicador, se prende.
+Su vista muestra, completa:
+
+| | |
+|---|---|
+| Puntaje | X / 10 |
+| Estado | Excelente · Correcto · Requiere seguimiento · Requiere intervención |
+| Dimensiones | Asistencia y Procedimiento, con su valor |
+| Jornadas evaluadas | cuántas entraron al cálculo |
+| Cobertura del período | qué porcentaje de sus turnos pudo evaluarse |
+| Motivos concretos | los hechos, uno por uno |
+| Tendencia | evolución mensual |
+
+**Sin muestra suficiente no se muestra ningún número.** Ni parcial, ni
+provisorio, ni en gris:
+
+> **Datos insuficientes para calcular tu desempeño.**
+> Se evaluaron 5 de tus 8 jornadas del período. Hacen falta al menos 8 jornadas
+> con registro y una cobertura del 70 %.
+
+Decir *"tenés 6,2 pero con pocos datos"* es peor que no decir nada: el número
+queda, la advertencia se olvida.
+
+**Administración y Supervisión** ven el detalle de los empleados **dentro de su
+alcance** — la zona, en el caso del supervisor.
+
+La visibilidad se controla igual **desde Administración** vía `app_config`, para
+poder apagarla si hace falta.
 
 Se guarda en `app_config`, que ya es el lugar de este tipo de interruptores
 (`supervisor_gps_enabled`, `ronda_alerta_tolerancia_min`). **No hace falta tabla
