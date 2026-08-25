@@ -16,6 +16,8 @@
 // contra ese doble castigo es que el dato no entre: por eso no está en la
 // interfaz de entrada, y agregarlo sería una regresión.
 
+import { ORIGENES_CONFIRMACION_HUMANA } from '@/lib/turnos'
+
 export const PESO_ASISTENCIA = 20
 export const PESO_PROCEDIMIENTO = 60
 
@@ -25,14 +27,10 @@ export const MIN_COBERTURA = 0.7
 
 /**
  * Orígenes en los que una persona dio fe de la presencia, sin fichaje propio.
- * Espeja ORIGENES_CONFIRMACION_HUMANA de lib/bandeja-planillas: la misma
- * pregunta no puede tener dos respuestas.
+ * Antes esta lista estaba duplicada acá "espejando" la de bandeja-planillas.
+ * Ahora se importa: la misma pregunta no puede tener dos respuestas.
  */
-const ORIGENES_CONFIRMACION = new Set([
-  'confirmacion_supervisor',
-  'confirmacion_supervisor_legacy',
-  'confirmacion_admin',
-])
+const ORIGENES_CONFIRMACION = ORIGENES_CONFIRMACION_HUMANA
 
 export const TIPOS_INCIDENCIA = ['sin_registro_propio', 'entrada_sin_salida'] as const
 export type TipoIncidencia = typeof TIPOS_INCIDENCIA[number]
