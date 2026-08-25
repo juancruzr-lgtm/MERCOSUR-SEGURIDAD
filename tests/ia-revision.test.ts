@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   cuentaParaAprendizajeIA, esDecisionHumana, esSaneada, esperaRevision,
   salioDeLaBandeja,
+  MOTIVO_SANEAMIENTO_IA,
 } from '@/lib/ia/revision'
+import {
+  mensajeContextoSaneamiento, resumenPrevioSaneamiento, validarMotivoSaneamiento,
+} from '@/lib/ia/saneamiento'
 import { itemsDeFotosIA } from '@/lib/cierre-datos'
 import { resumirCierre } from '@/lib/cierre-operativo'
 
@@ -71,5 +75,62 @@ describe('el Cierre Operativo trata la saneada como resuelta', () => {
 
   it('y una pendiente sigue estando', () => {
     expect(resumirCierre(itemsDeFotosIA([ev('PENDIENTE')])).total).toBe(1)
+  })
+})
+
+// ── El lote de saneamiento ───────────────────────────────────────────────────
+
+describe('resumen previo del saneamiento', () => {
+  const r = (porTipo: Record<string, number>, total: number) => ({
+    contexto: 'vista_previa' as const, corte: null, total, porTipo, saneadas: 0,
+  })
+
+  it('nombra los tres tipos en castellano y de mayor a menor', () => {
+    expect(resumenPrevioSaneamiento(r({ punto_control: 83, uniforme: 65, libro_guardia: 20 }, 168)))
+      .toBe('168 observaciones — 83 de ronda · 65 de uniforme · 20 de libro de guardia')
+  })
+
+  it('sin nada que sanear lo dice sin números', () => {
+    expect(resumenPrevioSaneamiento(r({}, 0)))
+      .toBe('No quedan observaciones anteriores al criterio vigente.')
+  })
+
+  it('una sola no se pluraliza', () => {
+    expect(resumenPrevioSaneamiento(r({ uniforme: 1 }, 1))).toContain('1 observación —')
+  })
+})
+
+describe('el motivo es obligatorio y tiene que explicar', () => {
+  it('vacío no sirve', () => {
+    expect(validarMotivoSaneamiento('   ')).toBe('El motivo es obligatorio.')
+  })
+
+  it('un "ok" tampoco: dentro de seis meses no explica nada', () => {
+    expect(validarMotivoSaneamiento('ok')).toContain('al menos')
+  })
+
+  it('el motivo acordado pasa', () => {
+    expect(validarMotivoSaneamiento(MOTIVO_SANEAMIENTO_IA)).toBeNull()
+  })
+
+  it('el motivo acordado dice explícitamente que no valida ni acusa', () => {
+    // Es lo que va a quedar escrito en 168 filas de historial.
+    expect(MOTIVO_SANEAMIENTO_IA).toContain('No implica validación de la evidencia')
+    expect(MOTIVO_SANEAMIENTO_IA).toContain('ni incumplimiento del vigilador')
+  })
+})
+
+describe('los contextos de la RPC se traducen a algo accionable', () => {
+  it('sin admin explica por qué', () => {
+    expect(mensajeContextoSaneamiento('requiere_admin')).toContain('todos los objetivos')
+  })
+
+  it('sin criterio activo no se inventa un corte', () => {
+    expect(mensajeContextoSaneamiento('sin_corte')).toContain('no se puede saber')
+  })
+
+  it('vista previa y aplicado no son errores', () => {
+    expect(mensajeContextoSaneamiento('vista_previa')).toBeNull()
+    expect(mensajeContextoSaneamiento('aplicado')).toBeNull()
   })
 })
