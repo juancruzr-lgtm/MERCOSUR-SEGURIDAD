@@ -32,7 +32,7 @@
  * sin asignación no. Eso ya se eliminó una vez del ruteo de push.
  *
  * CÓMO SE LLAMA
- *   · pg_cron  → Authorization: Bearer $CRON_SECRET, y manda de verdad.
+ *   · pg_cron  → Authorization: Bearer <push_cron_secret>, y manda de verdad.
  *   · una persona de Administración autenticada → sólo `?simular=1`. Existe
  *     para poder VERIFICAR la ruta sin tener el secreto a mano y sin mandarle
  *     nada a nadie.
@@ -62,8 +62,20 @@ export const dynamic = 'force-dynamic'
 /** Tolerancia hacia atrás: el intervalo del cron. Ver `responsablesQueCierran`. */
 const TOLERANCIA_CRON_MIN = 15
 
+/**
+ * La MISMA llave que /api/push/notificaciones, y por eso el mismo nombre.
+ *
+ * La separacion que importa es contra /api/push/cron, que modifica asistencia
+ * y recalcula horas: esa puerta tiene su propia llave y no abre con esta. El
+ * cierre solo avisa, igual que las notificaciones, asi que comparte llave con
+ * ellas —que ademas es la que pg_cron ya saca del vault como push_cron_secret.
+ *
+ * El nombre va en MINUSCULAS porque asi esta cargada la variable en Vercel y en
+ * Linux process.env distingue mayusculas. Buscarla como CRON_SECRET devolvia
+ * undefined, y la ruta le contestaba 401 a su propio cron.
+ */
 function cronAutorizado(req: NextRequest): boolean {
-  const expected = process.env.CRON_SECRET
+  const expected = process.env.push_cron_secret
   if (!expected) return false
   return (req.headers.get('authorization') || '') === `Bearer ${expected}`
 }
