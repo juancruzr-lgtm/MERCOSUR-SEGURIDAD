@@ -38,6 +38,18 @@ creerlo.
 día 25 hay que pedir hasta el 26. Eso vive en `rangoCierreDelDia()`, escrito una
 sola vez y con su motivo al lado.
 
+**La hora del turno es la de la operación, no la del proceso.** `finTurnoMs`
+construía el instante con `new Date(a, m-1, d, ...)`, que interpreta en la zona
+del proceso: en el navegador argentino daba bien y en la función de Vercel —UTC—
+adelantaba tres horas el fin de cada turno. El aviso le contaba al supervisor
+planillas de turnos que **seguían en curso**. Los tests ahora corren en las dos
+zonas; si alguna vez volvés a tocar fechas, corré `TZ=UTC npx vitest run`.
+
+**La llave del cron se llama `push_cron_secret`, en minúsculas.** No
+`CRON_SECRET`: ésa es la de `/api/push/cron`, que sí modifica asistencia y
+horas. En Linux `process.env` distingue mayúsculas, así que buscar la
+equivocada devuelve `undefined` y la ruta le contesta `401` a su propio cron.
+
 ### Verificado en producción el 25/08
 
 Rondas 9 hoy + 6 arrastre, operación 1, fotos IA 0, planillas 0 — reconciliado
@@ -117,7 +129,15 @@ que el editor SQL no puede invocarla — a propósito: quien sanea queda registr
 
 **Activo desde el 25/08.** PRs #64, #65, #66.
 
-`cron.job` → `push_cierre_operativo`, **`7,22,37,52 * * * *`**.
+`cron.job` → `push_cierre_operativo`, **`7,22,37,52 * * * *`**. Activo y
+verificado: el job dispara, la ruta autoriza y contesta `200`.
+
+**El primer envío real todavía no ocurrió.** Los cierres de hoy son 19:00
+(Aranda y Martínez) y 07:00 del 26 (Fulla, nocturna), así que el primer aviso
+sale a las **18:30–19:15** sin que nadie lo esté mirando. El camino está
+cubierto por tests (18 de `responsablesQueCierran`, 11 de `enviarResumenCierre`)
+y la deduplicación por índice único, pero conviene mirar
+`notificaciones_enviadas` con `tipo = 'cierre_operativo:<fecha>'` mañana.
 
 ### Por qué cada 15 minutos y no a una hora fija
 
@@ -197,8 +217,8 @@ antes de cambiar nada.
 **Verificación de alcance con sesión real de supervisor.**
 
 El render de la pestaña *Cierre* del móvil está verificado con la vista
-supervisor de una sesión de Administración: monta, muestra los marcadores, la
-acción y las dos listas. Lo que **no** se puede verificar así es el contenido con
+supervisor de una sesión de Administración: monta, muestra el título, los dos
+marcadores, la acción de cerrar rondas y las dos listas separadas. Lo que **no** se puede verificar así es el contenido con
 un supervisor real, porque ese usuario carga con `esAdmin = false` y su alcance
 por zona — un camino que la vista de admin no reproduce.
 
