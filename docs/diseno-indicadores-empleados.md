@@ -258,7 +258,40 @@ Tendencia: `Junio 8,1 · Julio 8,5 ↑ · Agosto 8,8 ↑`, y lo mismo por dimens
 **Sin rankings públicos entre vigiladores.** Comparar personas en una pantalla
 compartida convierte una herramienta de mejora en un instrumento de presión.
 
-### Visibilidad — DECIDIDO (25/08)
+### Visibilidad — REVISADO (25/08, decision posterior)
+
+> **El vigilador NO accede al indicador en Etapa 1.** Sin pestaña, sin tarjeta,
+> sin número, sin detalle — **ni siquiera "Datos insuficientes"**.
+>
+> El motivo no es técnico: el modelo está en validación, y mostrarle una
+> evaluación a una persona es difícil de deshacer. Primero hay que estar
+> seguros de que es justa y estable.
+
+| | Etapa 1 |
+|---|---|
+| **Administración** | ve todo, calcula y audita |
+| **Supervisión** | sólo empleados de su alcance operativo |
+| **Vigilador** | **sin acceso** |
+
+El alcance del supervisor NO tiene una regla nueva: lo resuelve
+`objetivoEnAlcance` dentro de la carga de filas, que es el helper que ya usa
+toda la app. Un supervisor sólo recibe empleados de su zona, así que no hay una
+segunda autorización que pueda contradecir a la primera.
+
+**La arquitectura queda lista, apagada por defecto.** `app_config`, clave
+`desempeno_visible_vigilador`, mismo patrón que `supervisor_gps_enabled`. El
+default es `false` **y ése es el default seguro**: si la clave no existe, si la
+consulta falla o si alguien la borra, no se muestra nada.
+
+**No se enciende sola con el tiempo.** Habilitarla será una decisión explícita,
+después de validar varios meses, los casos de baja puntuación, los falsos
+positivos, los datos insuficientes, y de incorporar rondas, IA y puntualidad.
+
+La guarda vive en dos lugares a propósito: en el ruteo y dentro del propio
+panel. Una pantalla que no debería mostrarse no tiene que depender de que nadie
+se olvide de esconderla.
+
+### Visibilidad — propuesta original (24/08, SUPERSEDIDA)
 
 **El vigilador SÍ ve su propio indicador**, siempre que haya muestra suficiente.
 Nunca ve rankings ni puntajes de otros.
