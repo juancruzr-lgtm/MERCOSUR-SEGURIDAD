@@ -11,6 +11,10 @@ import { supabase } from '@/lib/supabase'
 import { brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { ETIQUETA_MOTIVO } from '@/lib/ia/contratos'
 import IngresosDiaPanel from '@/components/ia/IngresosDiaPanel'
+import {
+  AYUDA_REVISION_IA, ETIQUETA_REVISION_IA, cuentaParaAprendizajeIA, esDecisionHumana,
+  esSaneada, esperaRevision,
+} from '@/lib/ia/revision'
 
 const FONT = brandTypography?.fontFamily ?? 'system-ui, sans-serif'
 const C = {
@@ -102,7 +106,7 @@ export default function AnalisisIAPanel({
   // ser una foto ya revisada donde la persona le corrigió la mano a la IA.
   const [filtro, setFiltro] = useState<
     'bandeja' | 'revisadas' | 'ia_revisar' | 'ia_normales' | 'ia_insuficiente'
-    | 'humano_correcto' | 'humano_incorrecto' | 'todas'
+    | 'humano_correcto' | 'humano_incorrecto' | 'saneadas' | 'todas'
   >('bandeja')
   const [detalle, setDetalle] = useState<string | null>(null)
   const [aviso, setAviso] = useState('')
@@ -245,7 +249,7 @@ export default function AnalisisIAPanel({
       // Vista por defecto: sólo lo que requiere una mirada humana y todavía no
       // la tuvo. Al marcar CORRECTO o INCORRECTO, la foto sale de acá.
       if (filtro === 'bandeja') {
-        if (a.revision_estado !== 'PENDIENTE') return false
+        if (!esperaRevision(a.revision_estado)) return false
         return a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control
       }
       // Lo que dijo la IA, sin importar si ya fue revisada.
@@ -253,14 +257,17 @@ export default function AnalisisIAPanel({
       if (filtro === 'ia_insuficiente') return a.clasificacion_efectiva === 'EVIDENCIA_INSUFICIENTE'
       if (filtro === 'ia_normales') return a.clasificacion_efectiva === 'SIN_OBSERVACIONES'
       // Lo que decidió una persona.
-      if (filtro === 'revisadas') return a.revision_estado !== 'PENDIENTE'
+      // "Revisadas" son las que MIRO una persona. Una saneada salio de la
+      // bandeja sin que nadie la mirara: tiene su propio filtro.
+      if (filtro === 'revisadas') return esDecisionHumana(a.revision_estado)
+      if (filtro === 'saneadas') return esSaneada(a.revision_estado)
       if (filtro === 'humano_correcto') return a.revision_estado === 'CORRECTO'
       if (filtro === 'humano_incorrecto') return a.revision_estado === 'INCORRECTO'
       return true
     })
     .sort((a, b) => {
-      const pa = a.revision_estado === 'PENDIENTE' ? 0 : 1
-      const pb = b.revision_estado === 'PENDIENTE' ? 0 : 1
+      const pa = esperaRevision(a.revision_estado) ? 0 : 1
+      const pb = esperaRevision(b.revision_estado) ? 0 : 1
       if (pa !== pb) return pa - pb
       return b.evidencia_created_at.localeCompare(a.evidencia_created_at)
     })
@@ -270,7 +277,10 @@ export default function AnalisisIAPanel({
   const m = useMemo(() => {
     const porTipo = (tipo: string) => {
       const t = completados.filter(a => a.analisis_tipo === tipo)
-      const rev = t.filter(a => a.revision_estado !== 'PENDIENTE')
+      // Solo las decisiones humanas miden a la IA. Una saneada se cerro sin
+      // que nadie la mirara: contarla como acierto o error seria medir con una
+      // respuesta que nadie dio.
+      const rev = t.filter(a => cuentaParaAprendizajeIA(a.revision_estado))
       const vp = t.filter(a => a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' && a.revision_estado === 'INCORRECTO').length
       const fp = t.filter(a => a.clasificacion_efectiva === 'REVISAR' && a.revision_estado === 'CORRECTO').length
       const vn = t.filter(a => a.clasificacion_efectiva === 'SIN_OBSERVACIONES' && a.revision_estado === 'CORRECTO').length
@@ -283,6 +293,7 @@ export default function AnalisisIAPanel({
         revisadas: rev.length,
         correctas: t.filter(a => a.revision_estado === 'CORRECTO').length,
         incorrectas: t.filter(a => a.revision_estado === 'INCORRECTO').length,
+        saneadas: t.filter(a => esSaneada(a.revision_estado)).length,
         vp, fp, vn, fn,
         precision: vp + fp > 0 ? Math.round((vp / (vp + fp)) * 100) : null,
       }
@@ -295,7 +306,7 @@ export default function AnalisisIAPanel({
     const clasif = a.clasificacion_efectiva ?? '—'
     const motivo = a.motivos?.[0]
     return (
-      <div style={card({ marginBottom: 12, borderColor: a.revision_estado === 'PENDIENTE' ? C.border : C.green + '44' })}>
+      <div style={card({ marginBottom: 12, borderColor: esDecisionHumana(a.revision_estado) ? C.green + '44' : C.border })}>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
           {urls[a.id]
             ? <img src={urls[a.id]} alt="" onClick={() => setAmpliada(urls[a.id])}
@@ -317,14 +328,18 @@ export default function AnalisisIAPanel({
                 title="Lo que dictaminó la IA al analizar la foto">
                 IA: {clasif.replace(/_/g, ' ')}
               </span>
-              {a.revision_estado === 'PENDIENTE'
-                ? <span style={badge(C.muted)} title="Todavía ninguna persona la revisó">
-                    PENDIENTE DE REVISIÓN
-                  </span>
-                : <span style={badge(a.revision_estado === 'CORRECTO' ? C.green : C.red)}
-                    title="Decisión de una persona. Es la que vale.">
-                    REVISADO: {a.revision_estado}
-                  </span>}
+              {/* Una saneada NO va en rojo ni dice "REVISADO": nadie la miro. Pintarla
+                  como una decision humana en contra seria acusar al vigilador de algo
+                  que nunca se verifico. */}
+              <span
+                style={badge(
+                  esperaRevision(a.revision_estado) ? C.muted
+                  : esSaneada(a.revision_estado)    ? C.muted
+                  : a.revision_estado === 'CORRECTO' ? C.green : C.red,
+                )}
+                title={AYUDA_REVISION_IA[a.revision_estado] ?? ''}>
+                {ETIQUETA_REVISION_IA[a.revision_estado] ?? a.revision_estado}
+              </span>
               <span style={badge(C.muted)}>{ETIQUETA_TIPO_EV[a.analisis_tipo] ?? a.analisis_tipo}</span>
               {a.modo === 'prueba' && <span style={badge(C.blue)}>PRUEBA</span>}
               {/* Sin este cartel, una foto "sin observaciones" en la bandeja
@@ -566,10 +581,11 @@ export default function AnalisisIAPanel({
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8, alignItems: 'center' }}>
             <span style={{ fontSize: 10, color: C.muted, letterSpacing: .5, marginRight: 2 }}>ESTADO DE REVISIÓN</span>
             {([
-              ['bandeja', `Pendientes (${completados.filter(a => a.revision_estado === 'PENDIENTE' && (a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control)).length})`],
-              ['revisadas', `Revisadas (${completados.filter(a => a.revision_estado !== 'PENDIENTE').length})`],
+              ['bandeja', `Pendientes (${completados.filter(a => esperaRevision(a.revision_estado) && (a.clasificacion_efectiva !== 'SIN_OBSERVACIONES' || a.en_muestra_control)).length})`],
+              ['revisadas', `Revisadas (${completados.filter(a => esDecisionHumana(a.revision_estado)).length})`],
               ['humano_correcto', `Correctas por humano (${completados.filter(a => a.revision_estado === 'CORRECTO').length})`],
               ['humano_incorrecto', `Incorrectas por humano (${completados.filter(a => a.revision_estado === 'INCORRECTO').length})`],
+              ['saneadas', `Cerradas administrativamente (${completados.filter(a => esSaneada(a.revision_estado)).length})`],
             ] as const).map(([id, label]) => (
               <button key={id} onClick={() => setFiltro(id)}
                 style={{ ...boton(filtro === id ? C.yellow : C.muted), padding: '5px 11px', fontSize: 11 }}>
