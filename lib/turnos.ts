@@ -186,12 +186,43 @@ export type RegistroEntrada = {
   tipo_registro?: string | null
   hora_entrada_real?: string | null
   hora_entrada_final?: string | null
+  origen_cobertura?: string | null
 }
 
-// Devuelve true si el registro representa una entrada efectivamente confirmada.
-// Excluye ausencias. Considera tanto fichaje original como corrección del supervisor.
+/**
+ * Orígenes en los que una persona dio fe de la presencia sin que haya fichaje
+ * propio. Vive acá, en el módulo base, porque la misma pregunta la hacen la
+ * bandeja, el desempeño y las pantallas de turnos: una sola definición.
+ *
+ * Ojo con lo que NO entra: 'carga_supervisor' es una carga de datos, no una
+ * confirmación de que la persona estaba.
+ */
+export const ORIGENES_CONFIRMACION_HUMANA = new Set([
+  'confirmacion_supervisor',
+  'confirmacion_supervisor_legacy',
+  'confirmacion_admin',
+])
+
+export function esConfirmacionHumana(origen: string | null | undefined): boolean {
+  return typeof origen === 'string' && ORIGENES_CONFIRMACION_HUMANA.has(origen)
+}
+
+// Devuelve true si la presencia del vigilador está confirmada. Excluye ausencias.
+//
+// Tres formas de confirmarla, no una:
+//   1. fichaje propio          → hora_entrada_real
+//   2. corrección del supervisor → hora_entrada_final
+//   3. confirmación humana      → un supervisor dio fe de que estaba trabajando
+//
+// La tercera faltaba, y por eso un turno confirmado por el supervisor aparecía
+// como "entrada pendiente" en Turnos y en el Panel Principal mientras la
+// liquidación ya lo pagaba completo: las pantallas miraban la hora y la
+// confirmación no escribe ninguna, a propósito — no se inventa un fichaje que
+// no ocurrió. Lo que hay que mirar es si la presencia está confirmada, no si
+// hay un horario.
 export const registroTieneEntradaConfirmada = (r: RegistroEntrada): boolean =>
-  r.tipo_registro !== 'ausencia' && !!(r.hora_entrada_final || r.hora_entrada_real)
+  r.tipo_registro !== 'ausencia'
+  && (!!(r.hora_entrada_final || r.hora_entrada_real) || esConfirmacionHumana(r.origen_cobertura))
 
 // Estados que cierran el turno sin que quede puesto a cubrir. Un turno en
 // alguno de estos estados queda con guardia_id en null por diseño: la cobertura

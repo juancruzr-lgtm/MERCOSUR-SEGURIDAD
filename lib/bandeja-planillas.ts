@@ -16,6 +16,7 @@
  */
 
 import type { EstadoPrimerControl, EstadoSolicitud } from '@/lib/primer-control'
+import { ORIGENES_CONFIRMACION_HUMANA, esConfirmacionHumana } from '@/lib/turnos'
 
 // ── Estado visible de la fila ────────────────────────────────────────────────
 
@@ -286,15 +287,7 @@ export function etiquetaDiferencia(diferencia: number): string {
  * estaba. `carga_*` y `correccion_*` son otro acto —cargar o corregir un
  * dato— y no cierran nada por sí solos.
  */
-export const ORIGENES_CONFIRMACION_HUMANA = new Set([
-  'confirmacion_supervisor',
-  'confirmacion_supervisor_legacy',
-  'confirmacion_admin',
-])
-
-export function esConfirmacionHumana(origen: string | null | undefined): boolean {
-  return typeof origen === 'string' && ORIGENES_CONFIRMACION_HUMANA.has(origen)
-}
+export { ORIGENES_CONFIRMACION_HUMANA, esConfirmacionHumana }
 
 /** Lo que la fila muestra cuando la presencia no vino de un fichaje. */
 export const TEXTO_CONFIRMADA_Y_ACEPTADA =
