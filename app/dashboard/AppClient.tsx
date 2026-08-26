@@ -69,6 +69,9 @@ import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
+import { cargarFilasBandeja } from '@/lib/bandeja-datos'
+import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
+import { ETIQUETA_ESTADO as ETIQUETA_CUMPLIMIENTO, resumenCorto } from '@/lib/cumplimiento'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
@@ -1284,6 +1287,40 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
   )
 }
 
+/**
+ * El puntaje en la tabla. Clickeable: lleva al detalle, que es donde el numero
+ * se explica. Un numero que no se puede abrir es un numero que hay que creer.
+ */
+function CeldaCumplimiento({ dato, cargando, onAbrir }: {
+  dato?: { cumplimiento: { puntaje: number | null, estado: string } },
+  cargando: boolean,
+  onAbrir: () => void,
+}) {
+  const COLOR: Record<string, string> = {
+    excelente: '#10b981', correcto: '#38bdf8', requiere_seguimiento: '#f59e0b',
+    requiere_intervencion: '#ef4444', datos_insuficientes: '#94a3b8',
+  }
+  if (cargando && !dato) return <span style={{ fontSize:12, color:'#64748b' }}>Calculando…</span>
+  // Sin jornadas en el periodo no hay nada que mostrar, y un cero seria mentira.
+  if (!dato) return <span style={{ fontSize:12, color:'#64748b' }}>—</span>
+
+  const r = dato.cumplimiento
+  const color = COLOR[r.estado] ?? '#94a3b8'
+  return (
+    <button
+      onClick={onAbrir}
+      title="Ver el detalle y por que da ese numero"
+      style={{
+        background:'transparent', border:'none', padding:0, cursor:'pointer',
+        color, fontSize:12.5, fontWeight:700, textAlign:'left',
+        textDecoration:'underline', textUnderlineOffset:3,
+        textDecorationColor: color + '66',
+      }}>
+      {resumenCorto(r as any)}
+    </button>
+  )
+}
+
 function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
@@ -1292,6 +1329,29 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
   const [vista, setVista] = useState<'empleados' | 'desempeno'>('empleados')
+
+  // Cumplimiento Operativo en la tabla principal: verlo no puede exigir entrar
+  // primero a otra pestaña. Sale del MISMO calculo que la pestaña Desempeno
+  // —desempenoPorEmpleado—, asi que los dos numeros no pueden discrepar.
+  const mesCumplimiento = mesPorDefecto()
+  const [cumplimiento, setCumplimiento] = useState<Map<string, any>>(new Map())
+  const [cargandoCumplimiento, setCargandoCumplimiento] = useState(false)
+
+  useEffect(() => {
+    // Solo Administracion. El vigilador no ve puntajes en ningun lado.
+    if (!esAdmin) return
+    let vigente = true
+    setCargandoCumplimiento(true)
+    cargarFilasBandeja({ mes: mesCumplimiento, esAdmin: true, usuarioId: usuarioId ?? null })
+      .then(({ filas }) => {
+        if (!vigente) return
+        const mapa = new Map<string, any>()
+        for (const d of desempenoPorEmpleado(filas)) mapa.set(d.empleadoId, d)
+        setCumplimiento(mapa)
+      })
+      .finally(() => { if (vigente) setCargandoCumplimiento(false) })
+    return () => { vigente = false }
+  }, [mesCumplimiento, esAdmin, usuarioId])
   const [form, setForm] = useState(formVacio)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -1617,7 +1677,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
       {([
         { id:'empleados' as const, texto:'Empleados' },
-        { id:'desempeno' as const, texto:'Desempeño' },
+        { id:'desempeno' as const, texto:'Cumplimiento operativo' },
       ]).map(op => (
         <button
           key={op.id}
@@ -1729,10 +1789,13 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
             <tr>
               <th style={S.th}>Nombre</th>
               <th style={S.th}>Apellido</th>
-              <th style={S.th}>DNI</th>
               <th style={S.th}>Legajo</th>
               <th style={S.th}>Email</th>
-              <th style={S.th}>Rol</th>
+              {/* El rol solo se muestra donde distingue algo. En la lista de
+                  vigiladores decia "guardia" en las 75 filas: una columna que
+                  repite el filtro que ya elegiste no informa, ocupa. */}
+              {grupoRol !== 'vigiladores' && <th style={S.th}>Rol</th>}
+              {esAdmin && <th style={S.th}>Cumplimiento operativo</th>}
               <th style={S.th}>Estado</th>
               <th style={S.th}>Acceso</th>
               <th style={S.th}>Acciones</th>
@@ -1747,14 +1810,22 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                 </td>
 
                 <td style={S.td}>{g.apellido}</td>
-                <td style={S.td}>{g.dni || '—'}</td>
                 <td style={S.td}>
                   <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>
                     {g.legajo || '—'}
                   </span>
                 </td>
                 <td style={{ ...S.td, maxWidth:180, wordBreak:'break-word' }}>{g.email || '—'}</td>
-                <td style={S.td}>{g.rol}</td>
+                {grupoRol !== 'vigiladores' && <td style={S.td}>{g.rol}</td>}
+                {esAdmin && (
+                  <td style={S.td}>
+                    <CeldaCumplimiento
+                      dato={cumplimiento.get(g.id)}
+                      cargando={cargandoCumplimiento}
+                      onAbrir={() => router.push(`/guardias/${g.id}?seccion=cumplimiento`)}
+                    />
+                  </td>
+                )}
 
                 <td style={S.td}>
                   <Badge type={g.estado}>{g.estado}</Badge>

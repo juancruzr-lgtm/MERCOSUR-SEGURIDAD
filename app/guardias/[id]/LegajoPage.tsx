@@ -7,6 +7,7 @@ import { track, initTelemetry } from '@/lib/telemetry'
 import { formatCuil } from '@/lib/revision-operativa'
 import SeccionTurnos from './SeccionTurnos'
 import SeccionPlanilla from './SeccionPlanilla'
+import FichaCumplimiento from '@/components/cumplimiento/FichaCumplimiento'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ const SECCIONES = [
   { id: 'situacion', label: 'Situación actual' },
   { id: 'turnos', label: 'Turnos' },
   { id: 'planilla', label: 'Mi Planilla' },
+  { id: 'cumplimiento', label: 'Cumplimiento operativo' },
   { id: 'asistencias', label: 'Asistencias' },
   { id: 'supervisiones', label: 'Supervisiones' },
   { id: 'novedades', label: 'Novedades laborales' },
@@ -241,6 +243,9 @@ export default function LegajoPage() {
   const [error, setError] = useState<string | null>(null)
   const [seccion, setSeccion] = useState<SeccionId>(() => seccionInicial(searchParams.get('seccion')))
   const [rolUsuario, setRolUsuario] = useState<string | null>(null)
+  // Id del usuario que MIRA, no del legajo. Lo necesita cargarFilasBandeja
+  // para resolver su alcance por zona.
+  const [usuarioId, setUsuarioId] = useState<string | null>(null)
 
   // Protección contra doble disparo (StrictMode / re-render)
   const telemetriaIniciada = useRef(false)
@@ -268,6 +273,7 @@ export default function LegajoPage() {
 
           const rol = perfil.rol ?? 'admin'
           setRolUsuario(rol)
+          setUsuarioId(perfil.id)
           void initTelemetry(perfil.id, rol as any)
           track('legajo_abierto', {
             screen: 'legajo_empleado',
@@ -450,7 +456,16 @@ export default function LegajoPage() {
           <SeccionPlanilla empleadoId={empleadoId} />
         )}
 
-        {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla' && (
+        {/* Solo Administracion. El vigilador no ve su puntaje ni sus incidencias:
+            hasta validar que la evaluacion completa es justa, mostrarsela seria
+            pedirle que se defienda de un numero que todavia no cubre su trabajo. */}
+        {seccion === 'cumplimiento' && (
+          esAdmin
+            ? <FichaCumplimiento empleadoId={empleadoId} esAdmin usuarioId={usuarioId} />
+            : <div style={S.placeholder}>Esta seccion es de uso interno de Administracion.</div>
+        )}
+
+        {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla' && seccion !== 'cumplimiento' && (
           <div style={S.placeholder}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
             <div>Esta sección está disponible en una próxima etapa.</div>

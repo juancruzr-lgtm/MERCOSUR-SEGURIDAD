@@ -5,6 +5,22 @@ import {
 } from '@/lib/cumplimiento'
 import type { JornadaCumplimiento } from '@/lib/cumplimiento'
 import { calcularDesempeno } from '@/lib/desempeno'
+import { desempenoPorEmpleado, jornadaCumplimientoDesdeFila } from '@/lib/desempeno-datos'
+
+/** Una fila de bandeja mínima, del mismo shape que produce construirFilasBandeja. */
+let seq = 0
+const fila = (empleadoId: string, over: Record<string, any> = {}) => ({
+  turnoId: 't' + (seq++), empleadoId, registroId: 'r',
+  vigilador: empleadoId, fecha: '2026-08-10',
+  objetivoId: 'o1', objetivo: 'LAROMET', puestoId: 'p1', puesto: 'Principal',
+  horario: '07:00–19:00', horaInicioProg: '07:00', horaFinProg: '19:00',
+  entrada: '06:50', salida: '19:00', horas: 12,
+  caracteristica: 'Normal', salidaAutomatica: false, tieneFichaje: true,
+  entradaPropia: true, salidaPropia: true,
+  estadoControl: 'pendiente', solicitudId: null, solicitudTexto: null,
+  solicitudEstado: null, revisado: false, derivado: false, observaciones: 0,
+  ...over,
+})
 
 // Cumplimiento Operativo. Mide el procedimiento, no si alguien es buen
 // vigilador: una persona puede ser la que el cliente pide por nombre y sacar 4
@@ -260,5 +276,49 @@ describe('resumenCorto — lo que ve la tabla de Guardias', () => {
 
   it('usa coma decimal', () => {
     expect(resumenCorto({ puntaje: 8.9, estado: 'correcto' })).toContain('8,9')
+  })
+})
+
+// ── La tabla y el detalle no pueden discrepar ───────────────────────────────
+
+describe('un solo número para las dos pantallas', () => {
+  it('la tabla de Guardias y la ficha del empleado salen del mismo cálculo', () => {
+    // La tabla usa desempenoPorEmpleado(); la ficha llama a calcularCumplimiento
+    // sobre las jornadas de esa persona. Si fueran dos cuentas distintas,
+    // alguien vería 7,4 en un lado y 7,6 en el otro y no sabría cuál creer.
+    const filas = [
+      fila('A', { salidaPropia: false }), fila('A'), fila('A'), fila('A'),
+      fila('A'), fila('A'), fila('A'), fila('A'), fila('A'), fila('A'),
+      fila('B'), fila('B'), fila('B'), fila('B'),
+      fila('B'), fila('B'), fila('B'), fila('B'),
+    ]
+    const porEmpleado = desempenoPorEmpleado(filas as any)
+    for (const d of porEmpleado) {
+      const directo = calcularCumplimiento(
+        (filas as any).filter((f: any) => f.empleadoId === d.empleadoId).map(jornadaCumplimientoDesdeFila),
+      )
+      expect(d.cumplimiento.puntaje).toBe(directo.puntaje)
+      expect(d.cumplimiento.estado).toBe(directo.estado)
+    }
+  })
+
+  it('y el resumen corto de la tabla usa ese mismo número', () => {
+    const filas = Array.from({ length: 10 }, () => fila('A'))
+    const d = desempenoPorEmpleado(filas as any)[0]
+    expect(resumenCorto(d.cumplimiento)).toContain(
+      d.cumplimiento.puntaje!.toFixed(1).replace('.', ','),
+    )
+  })
+})
+
+describe('el orden es operativo, no un podio', () => {
+  it('primero quien necesita una decisión, último quien está bien', () => {
+    const filas = [
+      ...Array.from({ length: 10 }, () => fila('BIEN')),
+      ...Array.from({ length: 10 }, () => fila('MAL', { entradaPropia: false, salidaPropia: false })),
+    ]
+    const orden = desempenoPorEmpleado(filas as any).map(d => d.empleadoId)
+    expect(orden[0]).toBe('MAL')
+    expect(orden[orden.length - 1]).toBe('BIEN')
   })
 })
