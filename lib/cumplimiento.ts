@@ -307,11 +307,13 @@ export const ETIQUETA_DIMENSION: Record<ClaveDimension, string> = {
 
 /**
  * `puntuable`     entra al promedio con su peso.
- * `en_validacion` se calcula y se muestra, pero con peso 0: falta la auditoría
- *                 que diga que el dato es atribuible a la persona.
+ * `en_validacion` tiene nota y se muestra, pero NO entra al promedio. O bien su
+ *                 peso es cero, o bien su universo quedó recortado por
+ *                 exclusiones que nadie pudo justificar.
+ * `no_aplica`     la persona no tuvo ese requerimiento. No le falta nada.
  * `sin_datos`     no hay ni siquiera con qué describirla en este período.
  */
-export type EstadoDimension = 'puntuable' | 'en_validacion' | 'sin_datos'
+export type EstadoDimension = 'puntuable' | 'en_validacion' | 'no_aplica' | 'sin_datos'
 
 /**
  * Los pesos de HOY.
@@ -355,6 +357,25 @@ export const PESOS: Record<ClaveDimension, number> = {
   evidencias:    0,
 }
 
+/**
+ * Lo que las cuatro dimensiones de fuente externa aportan al resultado.
+ *
+ * Se INYECTAN en vez de consultarse acá a propósito: el X/10 no puede depender
+ * de una consulta que puede fallar. Si Rondas no carga, las tres dimensiones
+ * que puntúan siguen dando exactamente el mismo número que antes.
+ */
+export interface AporteDimension {
+  nota: number | null
+  detalle: string
+  /** Tiene nota pero el universo quedó recortado sin justificación. */
+  enValidacion?: boolean
+  /** No tuvo ese requerimiento. Distinto de "no hay datos". */
+  noAplica?: boolean
+  faltante?: string | null
+}
+
+export type FuentesCumplimiento = Partial<Record<ClaveDimension, AporteDimension>>
+
 export interface Dimension {
   clave: ClaveDimension
   etiqueta: string
@@ -387,35 +408,104 @@ const pluralJornadas = (n: number) => `${n} ${n === 1 ? 'jornada' : 'jornadas'}`
  * qué hacer para habilitarla.
  */
 const FALTANTE: Partial<Record<ClaveDimension, string>> = {
-  rondas: 'Falta contar rondas exigibles contra cumplidas por persona '
-    + '(RONDAS-obligaciones-agosto), separando pausadas, cerradas administrativamente '
-    + 'y fallas técnicas no atribuibles al vigilador.',
-  uniforme: 'Falta muestra con revisión humana. Una observación de la IA sin '
-    + 'confirmar no baja el puntaje, y no haber subido la foto es un hecho de '
-    + 'Procedimiento, no una afirmación sobre el uniforme.',
-  libro_guardia: 'Falta muestra con revisión humana, y distinguir "no subió la foto" '
-    + 'de "el libro está mal". No son el mismo problema.',
-  evidencias: 'Falta definir el hecho primario cuando una foto no es evaluable: '
-    + 'ahí el problema es la evidencia, no lo que la evidencia no pudo mostrar.',
+  rondas: 'Quedan ventanas pausadas sin causa registrada. Una pausa sin causa '
+    + 'puede haber sido un problema técnico o la ronda que no se hacía, y las dos '
+    + 'se leen igual: el número describe un universo recortado a ciegas.',
+  uniforme: 'Quedan observaciones de la IA sin revisar. Hasta que una persona se '
+    + 'pronuncie no son faltas, y la nota sólo describe lo que alguien miró.',
+  libro_guardia: 'Quedan observaciones de la IA sin revisar. No subir la foto es un '
+    + 'hecho de Procedimiento; que el libro esté mal es otra cosa y necesita que '
+    + 'una persona lo confirme.',
+  evidencias: 'Descriptiva por decisión: mide si la foto se podía leer, no lo que '
+    + 'la foto muestra. No corresponde que baje el puntaje de nadie.',
 }
 
-export function calcularCumplimiento(jornadas: JornadaCumplimiento[]): ResultadoCumplimiento {
+// ── Simulación de pesos ─────────────────────────────────────────────────────
+
+/**
+ * Combinaciones a comparar sobre datos reales antes de mover un peso.
+ *
+ * La `actual` es la de producción y está acá para que la comparación tenga
+ * línea de base. Las otras dos no son propuestas: son las dos preguntas que hay
+ * que poder responder con números —"¿qué pasa si Rondas pesa lo mismo que
+ * Asistencia?" y "¿qué pasa si todo lo medible pesa?"— antes de decidir nada.
+ *
+ * Elegir una por cómo queda la distribución sería fabricar diferencias entre
+ * personas. Se elige por si el número que sale se puede sostener frente a la
+ * persona que lo recibe.
+ */
+export const VARIANTES_PESOS: Record<string, Record<ClaveDimension, number>> = {
+  actual: {
+    asistencia: 20, puntualidad: 40, procedimiento: 60,
+    rondas: 0, uniforme: 0, libro_guardia: 0, evidencias: 0,
+  },
+  rondas_como_asistencia: {
+    asistencia: 20, puntualidad: 40, procedimiento: 60,
+    rondas: 20, uniforme: 0, libro_guardia: 0, evidencias: 0,
+  },
+  todo_lo_medible: {
+    asistencia: 20, puntualidad: 40, procedimiento: 60,
+    rondas: 30, uniforme: 15, libro_guardia: 15, evidencias: 0,
+  },
+}
+
+/** Cómo se reparte el 100 % con una combinación dada, contando sólo lo puntuable. */
+export function normalizacion(
+  pesos: Record<ClaveDimension, number>,
+  puntuables: ClaveDimension[],
+): Record<string, number> {
+  const total = puntuables.reduce((s, c) => s + (pesos[c] ?? 0), 0)
+  const out: Record<string, number> = {}
+  for (const c of puntuables) {
+    out[c] = total > 0 ? Math.round((1000 * (pesos[c] ?? 0)) / total) / 10 : 0
+  }
+  return out
+}
+
+/**
+ * @param fuentes  Rondas, Uniforme, Libro y Calidad, ya medidas.
+ * @param pesos    Se inyectan para poder SIMULAR otra combinación con esta
+ *                 misma función. Una simulación que reimplemente el promedio no
+ *                 prueba nada sobre el promedio de producción.
+ */
+export function calcularCumplimiento(
+  jornadas: JornadaCumplimiento[],
+  fuentes: FuentesCumplimiento = {},
+  pesos: Record<ClaveDimension, number> = PESOS,
+): ResultadoCumplimiento {
   const base = calcularDesempeno(jornadas)
   const punt = resumirPuntualidad(jornadas)
 
   const dimension = (
     clave: ClaveDimension, nota: number | null, detalle: string,
+    extra: { enValidacion?: boolean; noAplica?: boolean; faltante?: string | null } = {},
   ): Dimension => {
-    const peso = PESOS[clave]
+    const peso = pesos[clave] ?? 0
     const hayDato = nota !== null
+    // Una dimensión en validación NO puntúa aunque tenga peso. La validación es
+    // sobre el universo, no sobre la importancia: si no se sabe qué se excluyó,
+    // el número no se puede sostener y ningún peso lo arregla.
     const estado: EstadoDimension =
-      peso > 0 && hayDato ? 'puntuable'
-      : hayDato           ? 'en_validacion'
-      :                     'sin_datos'
+      peso > 0 && hayDato && !extra.enValidacion ? 'puntuable'
+      : hayDato                                  ? 'en_validacion'
+      : extra.noAplica                           ? 'no_aplica'
+      :                                            'sin_datos'
     return {
       clave, etiqueta: ETIQUETA_DIMENSION[clave], nota, peso, estado, detalle,
-      ...(estado === 'puntuable' ? {} : { faltante: FALTANTE[clave] }),
+      ...(estado === 'puntuable'
+        ? {}
+        : { faltante: extra.faltante ?? FALTANTE[clave] }),
     }
+  }
+
+  const aporte = (clave: ClaveDimension, porDefecto: string): Dimension => {
+    const f = fuentes[clave]
+    if (!f) return dimension(clave, null, porDefecto)
+    return dimension(clave, f.nota, f.detalle, {
+      enValidacion: f.enValidacion,
+      noAplica: f.noAplica,
+      faltante: f.faltante,
+    })
   }
 
   const dimensiones: Dimension[] = [
@@ -428,10 +518,10 @@ export function calcularCumplimiento(jornadas: JornadaCumplimiento[]): Resultado
       base.observacionesValidas > 0
         ? `${base.incidencias.sin_registro_propio + base.incidencias.entrada_sin_salida} incidencia(s) sobre ${pluralJornadas(base.observacionesValidas)}`
         : 'Sin jornadas evaluables en el período'),
-    dimension('rondas', null, 'Pendiente de medir rondas exigibles contra cumplidas'),
-    dimension('uniforme', null, 'Pendiente de muestra con revisión humana'),
-    dimension('libro_guardia', null, 'Pendiente de muestra con revisión humana'),
-    dimension('evidencias', null, 'Pendiente de definir el hecho primario'),
+    aporte('rondas', 'Pendiente de medir rondas exigibles contra cumplidas'),
+    aporte('uniforme', 'Pendiente de muestra con revisión humana'),
+    aporte('libro_guardia', 'Pendiente de muestra con revisión humana'),
+    aporte('evidencias', 'Pendiente de definir el hecho primario'),
   ]
 
   // El promedio sale SOLO de las puntuables. Una dimensión en validación no

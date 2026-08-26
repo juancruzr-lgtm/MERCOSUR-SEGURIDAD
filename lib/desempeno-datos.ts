@@ -8,7 +8,7 @@ import { calcularDesempeno, hechoDeJornada } from '@/lib/desempeno'
 import type { JornadaDesempeno, ResultadoDesempeno } from '@/lib/desempeno'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 import { calcularCumplimiento } from '@/lib/cumplimiento'
-import type { JornadaCumplimiento, ResultadoCumplimiento } from '@/lib/cumplimiento'
+import type { FuentesCumplimiento, JornadaCumplimiento, ResultadoCumplimiento } from '@/lib/cumplimiento'
 
 export interface DesempenoEmpleado {
   empleadoId: string
@@ -64,7 +64,16 @@ export function jornadaCumplimientoDesdeFila(f: FilaBandejaMensual): JornadaCump
  * Agrupa por empleado y calcula. El orden es OPERATIVO, no un podio: primero lo
  * que necesita una decisión.
  */
-export function desempenoPorEmpleado(filas: FilaBandejaMensual[]): DesempenoEmpleado[] {
+/**
+ * @param fuentes  Rondas y evidencias ya medidas, por empleado. Opcional: sin
+ *                 ellas las cuatro dimensiones externas quedan sin datos y el
+ *                 puntaje es EXACTAMENTE el mismo, porque pesan 0. Es lo que
+ *                 permite que un fallo al leer rondas no cambie ningún número.
+ */
+export function desempenoPorEmpleado(
+  filas: FilaBandejaMensual[],
+  fuentes?: Map<string, FuentesCumplimiento>,
+): DesempenoEmpleado[] {
   const porEmpleado = new Map<string, FilaBandejaMensual[]>()
   for (const f of filas) {
     const arr = porEmpleado.get(f.empleadoId) ?? []
@@ -76,7 +85,10 @@ export function desempenoPorEmpleado(filas: FilaBandejaMensual[]): DesempenoEmpl
   porEmpleado.forEach((jornadas, empleadoId) => {
     const objetivos: string[] = []
     for (const j of jornadas) if (!objetivos.includes(j.objetivo)) objetivos.push(j.objetivo)
-    const cumplimiento = calcularCumplimiento(jornadas.map(jornadaCumplimientoDesdeFila))
+    const cumplimiento = calcularCumplimiento(
+      jornadas.map(jornadaCumplimientoDesdeFila),
+      fuentes?.get(empleadoId) ?? {},
+    )
     out.push({
       empleadoId,
       empleado: jornadas[0]?.vigilador ?? '—',
