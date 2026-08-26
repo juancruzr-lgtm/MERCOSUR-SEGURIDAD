@@ -26,6 +26,11 @@ import {
 import type { DesempenoEmpleado } from '@/lib/desempeno-datos'
 import { puedeAbrirDesempeno } from '@/lib/desempeno-visibilidad'
 import { AYUDA_SIN_ZONAS, MENSAJE_SIN_ZONAS } from '@/lib/bandeja-planillas'
+import {
+  cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
+} from '@/lib/cumplimiento-fuentes'
+import { agruparCapacitacion, ensenanzasDeEmpleado } from '@/lib/entrenador-datos'
+import { ETIQUETA_ENTRENAMIENTO } from '@/lib/entrenador-operativo'
 
 const COLOR_ESTADO: Record<EstadoDesempeno, string> = {
   excelente:             '#10b981',
@@ -104,6 +109,8 @@ export default function DesempenoPanel({
   const [filtroObjetivo, setFiltroObjetivo] = useState('')
   const [busqueda, setBusqueda] = useState('')
   const [abierto, setAbierto] = useState<string | null>(null)
+  const [medido, setMedido] = useState<Map<string, ReturnType<typeof fuentesDeEmpleado>>>(new Map())
+  const [avisoFuentes, setAvisoFuentes] = useState('')
 
   const soloUno = Boolean(empleadoId)
 
@@ -114,7 +121,28 @@ export default function DesempenoPanel({
     setSinZonas(sz)
     if (err) { setError(err); setLista([]); setCargando(false); return }
     const propias = empleadoId ? filas.filter(f => f.empleadoId === empleadoId) : filas
-    setLista(desempenoPorEmpleado(propias))
+
+    // Rondas y evidencias del mes entero: dos consultas para toda la lista, no
+    // dos por persona. Si fallan, la lista sale igual —esas cuatro dimensiones
+    // pesan 0— y el aviso lo dice en vez de esconderlo.
+    const [rr, ee] = await Promise.all([
+      cargarRondasDelMes(mes),
+      cargarEvidenciasDelMes(mes),
+    ])
+    const porRondas = new Map(rr.datos.map(d => [d.guardiaId, d]))
+    const porEvidencia = evidenciasPorEmpleado(ee.evidencias)
+    const fuentes = new Map(
+      propias.map(f => f.empleadoId).filter((v, i, a) => a.indexOf(v) === i).map(id => [
+        id,
+        fuentesDeEmpleado(porRondas.get(id) ?? null, porEvidencia.get(id) ?? []),
+      ]),
+    )
+
+    setAvisoFuentes([rr.error, ee.error].filter(Boolean).join(' · '))
+    setMedido(fuentes)
+    setLista(desempenoPorEmpleado(propias, new Map(
+      Array.from(fuentes.entries()).map(([id, m]) => [id, m.fuentes]),
+    )))
     setError('')
     setCargando(false)
   }, [mes, esAdmin, usuarioId, empleadoId, habilitado])
@@ -135,6 +163,28 @@ export default function DesempenoPanel({
   }), [lista, filtroEstado, filtroObjetivo, busqueda])
 
   const resumen = useMemo(() => resumirDesempeno(lista), [lista])
+
+  /**
+   * Quién necesita capacitación, agrupado por tema.
+   *
+   * Sale de las MISMAS enseñanzas que recibiría cada persona: no hay una
+   * segunda cuenta de "quién anda mal" que pueda decir otra cosa. Las
+   * incidencias aisladas no entran — una sola vez no es una necesidad de
+   * capacitación, y meterlas llenaría la lista de gente que se equivocó una vez.
+   */
+  const capacitacion = useMemo(() => agruparCapacitacion(
+    lista.map(d => {
+      const m = medido.get(d.empleadoId)
+      return {
+        empleadoId: d.empleadoId,
+        empleado: d.empleado,
+        ensenanzas: ensenanzasDeEmpleado(mes, d.cumplimiento, m
+          ? { rondas: m.rondas, uniforme: m.uniforme, libro: m.libro, calidad: m.calidad }
+          : {}),
+      }
+    }),
+    ETIQUETA_ENTRENAMIENTO,
+  ), [lista, medido, mes])
   const meses = useMemo(() => mesesDisponibles('2026-06'), [])
   const estados = Object.keys(ETIQUETA_ESTADO) as EstadoDesempeno[]
 
@@ -193,6 +243,36 @@ export default function DesempenoPanel({
       </div>
 
       {error && <div style={{ ...S.caja, color:'#f87171', marginBottom:12 }}>{error}</div>}
+
+      {avisoFuentes && (
+        <div style={{ ...S.caja, ...S.tenue, borderColor:'#f59e0b55', marginBottom:12 }}>
+          No se pudieron leer rondas o evidencias: {avisoFuentes}. Esas dimensiones no
+          pesan en el puntaje, así que los números de la lista no cambiaron.
+        </div>
+      )}
+
+      {!soloUno && !cargando && capacitacion.length > 0 && (
+        <div style={{ ...S.caja, marginBottom:12 }}>
+          <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:8 }}>NECESITAN CAPACITACIÓN</div>
+          {capacitacion.map(g => (
+            <div key={g.clave} style={{ padding:'6px 0', borderBottom:'1px solid #1e2d4266' }}>
+              <div style={{ ...S.dim, fontWeight:600 }}>
+                {g.etiqueta} — {g.personas.length} {g.personas.length === 1 ? 'persona' : 'personas'}
+                {g.patrones > 0 && (
+                  <span style={{ color:'#f59e0b', fontWeight:400 }}>
+                    {' · '}{g.patrones} con patrón persistente
+                  </span>
+                )}
+              </div>
+              <div style={{ ...S.tenue, marginTop:2 }}>{g.personas.join(' · ')}</div>
+            </div>
+          ))}
+          <div style={{ ...S.tenue, marginTop:8, lineHeight:1.5 }}>
+            Agrupa a quien reincidió, no a quien se equivocó una vez. Es una lista de
+            qué enseñar, no de a quién sancionar.
+          </div>
+        </div>
+      )}
 
       {cargando ? (
         <div style={S.tenue}>Calculando desempeño…</div>

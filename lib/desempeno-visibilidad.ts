@@ -47,7 +47,13 @@ export function puedeVerDesempeno(p: ParametrosVisibilidad): boolean {
   if (rol === 'admin') return true
   if (rol === 'supervisor') return true
   // Vigilador: sólo lo suyo, y sólo si Administración lo habilitó.
-  return p.esPropio && p.visibleParaVigilador
+  //
+  // Boolean() no es decorativo: si la clave de app_config no existe, el valor
+  // llega undefined y esto devolvía undefined en una función que promete
+  // boolean. Hoy todos los llamadores la leen en contexto booleano y el
+  // comportamiento es correcto, pero un solo `=== false` en el futuro abriría
+  // el acceso. Una función de permisos devuelve false, no ausencia de false.
+  return Boolean(p.esPropio && p.visibleParaVigilador)
 }
 
 /** ¿Se le ofrece siquiera la pantalla? */

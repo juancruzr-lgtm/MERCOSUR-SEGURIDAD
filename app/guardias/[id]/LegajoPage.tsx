@@ -393,6 +393,12 @@ export default function LegajoPage() {
   const { empleado, turno_actual, registro_actual, proximo_turno, novedad_vigente } = datos
   const asistencia = estadoAsistencia(turno_actual, registro_actual)
   const esAdmin = rolUsuario === 'admin'
+  // Supervisión también usa el Cumplimiento —es un usuario interno del puntaje—
+  // pero sólo ve a los empleados de sus zonas. El recorte no se decide acá: lo
+  // aplica cargarFilasBandeja con el mismo objetivoEnAlcance que usa toda la app,
+  // así que no hay una segunda regla de autorización que pueda contradecir a la
+  // primera. Un supervisor sin zonas no ve a nadie.
+  const esSupervision = esAdmin || rolUsuario === 'supervisor'
 
   // ── Render: encabezado ────────────────────────────────────────────────────
   return (
@@ -456,13 +462,15 @@ export default function LegajoPage() {
           <SeccionPlanilla empleadoId={empleadoId} />
         )}
 
-        {/* Solo Administracion. El vigilador no ve su puntaje ni sus incidencias:
-            hasta validar que la evaluacion completa es justa, mostrarsela seria
-            pedirle que se defienda de un numero que todavia no cubre su trabajo. */}
+        {/* Administracion y Supervision. El vigilador NO ve su puntaje ni sus
+            incidencias: hasta validar que la evaluacion completa es justa,
+            mostrarsela seria pedirle que se defienda de un numero que todavia no
+            cubre su trabajo. Lo que si puede recibir son instrucciones concretas
+            sobre que corregir, y eso viaja por otro lado. */}
         {seccion === 'cumplimiento' && (
-          esAdmin
-            ? <FichaCumplimiento empleadoId={empleadoId} esAdmin usuarioId={usuarioId} />
-            : <div style={S.placeholder}>Esta seccion es de uso interno de Administracion.</div>
+          esSupervision
+            ? <FichaCumplimiento empleadoId={empleadoId} esAdmin={esAdmin} usuarioId={usuarioId} />
+            : <div style={S.placeholder}>Esta seccion es de uso interno de Administracion y Supervision.</div>
         )}
 
         {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla' && seccion !== 'cumplimiento' && (

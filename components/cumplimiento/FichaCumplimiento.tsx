@@ -19,11 +19,12 @@ import {
 import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
 import { jornadaCumplimientoDesdeFila, etiquetaMes, mesPorDefecto, mesesDisponibles } from '@/lib/desempeno-datos'
 import { faltanteParaMuestra } from '@/lib/desempeno'
+import { AYUDA_SIN_ZONAS, MENSAJE_SIN_ZONAS } from '@/lib/bandeja-planillas'
 import {
-  cargarEvidenciasEmpleado, cargarRondasEmpleado, detalleCalidad, detalleEvidencia,
-  detalleRondas, resumirCalidad, resumirEvidencias, resumirRondas,
+  cargarEvidenciasEmpleado, cargarRondasEmpleado, causasLegibles, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
 import type { EvidenciaCumplimiento, RondasEmpleado } from '@/lib/cumplimiento-fuentes'
+import BloqueEntrenamiento from './BloqueEntrenamiento'
 
 const COLOR_ESTADO: Record<EstadoDesempeno, string> = {
   excelente:             '#10b981',
@@ -44,23 +45,41 @@ const S = {
 
 const coma = (v: number) => v.toFixed(1).replace('.', ',')
 
+/**
+ * Una dimensión, con su nota y con lo que esa nota vale.
+ *
+ * Las cuatro dimensiones nuevas SÍ muestran número, porque ya se mide cumplido
+ * sobre requerido válido. Pero el número va apagado y con la etiqueta
+ * "En validación" al lado: lo que no puede pasar es que se lea igual que el de
+ * las que sí entran al promedio. Un 7,2 en validación y un 7,2 puntuable no son
+ * el mismo dato, y quien mira la pantalla tiene que verlo sin preguntar.
+ */
 function FilaDimension({ d, pie }: { d: Dimension, pie?: React.ReactNode }) {
   const puntua = d.estado === 'puntuable'
+  const hayNota = d.nota !== null
   return (
     <div style={S.fila}>
       <span style={{ ...S.dim, flex:'1 1 180px', fontWeight: puntua ? 600 : 400, color: puntua ? '#e2e8f0' : '#94a3b8' }}>
         {d.etiqueta}
       </span>
       <span style={{
-        fontSize: puntua ? 16 : 12.5,
-        fontWeight: puntua ? 800 : 600,
-        color: puntua ? '#e2e8f0' : '#64748b',
-        minWidth: 92, textAlign:'right', fontFamily: puntua ? 'Syne,sans-serif' : 'inherit',
+        display:'flex', gap:8, alignItems:'baseline', justifyContent:'flex-end',
+        minWidth: 150, flexWrap:'wrap' as const,
       }}>
-        {/* Una dimensión que no pesa NO muestra su nota como si contara: se
-            informa el estado. Ver el número al lado de los que sí pesan haría
-            creer que participa del promedio. */}
-        {puntua && d.nota !== null ? coma(d.nota) : 'En validación'}
+        <span style={{
+          fontSize: puntua ? 16 : 14,
+          fontWeight: puntua ? 800 : 700,
+          color: puntua ? '#e2e8f0' : hayNota ? '#7c8aa0' : '#64748b',
+          fontFamily: hayNota ? 'Syne,sans-serif' : 'inherit',
+        }}>
+          {hayNota ? coma(d.nota as number) : d.estado === 'no_aplica' ? 'No aplica' : 'Sin datos'}
+        </span>
+        {!puntua && hayNota && (
+          <span style={{ ...S.chip, fontSize:9.5, color:'#94a3b8', background:'#1e293b',
+                         border:'1px solid #33415577', whiteSpace:'nowrap' as const }}>
+            EN VALIDACIÓN
+          </span>
+        )}
       </span>
       <span style={{ ...S.tenue, flex:'1 1 100%', marginTop:2 }}>
         {d.detalle}
@@ -107,7 +126,13 @@ function DetalleTardanzas({ p }: { p: ResumenPuntualidad }) {
 
 interface Props {
   empleadoId: string
-  /** Sólo Administración. El vigilador no ve nada de esto. */
+  /**
+   * Administración ve todo; un supervisor sólo lo que cae en sus zonas.
+   *
+   * Se pasa tal cual a `cargarFilasBandeja`, que es donde vive el recorte. Con
+   * `false` y sin zonas asignadas la carga devuelve vacío, y esta pantalla
+   * muestra el aviso en vez de una ficha en blanco.
+   */
   esAdmin: boolean
   usuarioId: string | null
 }
@@ -125,11 +150,12 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   // Estas dos fuentes no cortan la pantalla si fallan: son descriptivas y de
   // peso 0. El aviso se muestra en su dimensión, no como error general.
   const [avisoFuentes, setAvisoFuentes] = useState('')
+  const [sinZonas, setSinZonas] = useState(false)
 
   const cargar = useCallback(async () => {
-    if (!esAdmin) { setCargando(false); return }
     setCargando(true); setError('')
-    const { filas: todas, error: err } = await cargarFilasBandeja({ mes, esAdmin, usuarioId })
+    const { filas: todas, error: err, sinZonas: sz } = await cargarFilasBandeja({ mes, esAdmin, usuarioId })
+    setSinZonas(sz)
     if (err) { setError(err); setFilas([]); setCargando(false); return }
     setTodasLasFilas(todas)
     setFilas(todas.filter(f => f.empleadoId === empleadoId))
@@ -147,32 +173,19 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   useEffect(() => { void cargar() }, [cargar])
 
   const jornadas = useMemo(() => filas.map(jornadaCumplimientoDesdeFila), [filas])
-  const r = useMemo(() => calcularCumplimiento(jornadas), [jornadas])
+  // Rondas y evidencias entran al cálculo como aportes, con peso 0. Si la
+  // consulta falla llegan vacías y las tres dimensiones que puntúan dan
+  // exactamente el mismo número: el X/10 no depende de ellas.
+  const medido = useMemo(() => fuentesDeEmpleado(rondas, evidencias), [rondas, evidencias])
+  const resRondas = medido.rondas
+  const r = useMemo(
+    () => calcularCumplimiento(jornadas, medido.fuentes),
+    [jornadas, medido],
+  )
   // El patrón se calcula sobre TODO el mes —hace falta ver a los demás— y
   // después se recorta a los puestos donde ESTA persona llegó tarde: el resto
   // no explica nada de su número.
-  const resRondas = useMemo(() => resumirRondas(rondas), [rondas])
-  const resUniforme = useMemo(() => resumirEvidencias(evidencias, 'uniforme'), [evidencias])
-  const resLibro = useMemo(() => resumirEvidencias(evidencias, 'libro_guardia'), [evidencias])
-  const resCalidad = useMemo(() => resumirCalidad(evidencias), [evidencias])
-
-  /**
-   * El detalle real de las cuatro que no puntúan. Se reemplaza acá y no en
-   * lib/cumplimiento porque el cálculo del X/10 no debe depender de consultas
-   * que pueden fallar: si Rondas no carga, el número sigue siendo el mismo.
-   */
-  const dimensiones = useMemo(() => r.dimensiones.map(d => {
-    if (d.clave === 'rondas') {
-      const etiqueta = resRondas.estado === 'no_aplica' ? 'No aplica'
-        : resRondas.estado === 'datos_insuficientes' ? 'Datos insuficientes'
-        : `${resRondas.porcentaje} % de cumplimiento`
-      return { ...d, detalle: `${etiqueta} · ${detalleRondas(resRondas)}` }
-    }
-    if (d.clave === 'uniforme') return { ...d, detalle: detalleEvidencia(resUniforme) }
-    if (d.clave === 'libro_guardia') return { ...d, detalle: detalleEvidencia(resLibro) }
-    if (d.clave === 'evidencias') return { ...d, detalle: detalleCalidad(resCalidad) }
-    return d
-  }), [r, resRondas, resUniforme, resLibro, resCalidad])
+  const dimensiones = r.dimensiones
 
   const patrones = useMemo(() => {
     const suyos = new Set(r.puntualidad.tardanzas.map(t => `${t.objetivo}@${t.horaInicioProg}`))
@@ -180,10 +193,16 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
       .filter(pt => suyos.has(`${pt.objetivo}@${pt.horaInicio}`))
   }, [todasLasFilas, r])
 
-  // Sin acceso no se carga ni se muestra nada. La guarda está acá además de en
-  // el ruteo: una pantalla que no debería verse no puede depender de que nadie
-  // se olvide de esconderla.
-  if (!esAdmin) return null
+  // Un supervisor sin zonas asignadas no ve a nadie, y hay que decirlo: una
+  // ficha vacía se lee como "esta persona no tiene nada", que es otra cosa.
+  if (sinZonas) {
+    return (
+      <div style={{ ...S.caja, borderColor:'#f59e0b55' }}>
+        <div style={{ color:'#fcd34d', fontWeight:700 }}>{MENSAJE_SIN_ZONAS}</div>
+        <div style={{ ...S.tenue, marginTop:6 }}>{AYUDA_SIN_ZONAS}</div>
+      </div>
+    )
+  }
 
   const color = COLOR_ESTADO[r.estado]
 
@@ -216,9 +235,11 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         {/* Lo que este número NO dice. Va acá y no en una nota al pie: es la
             confusión más cara que puede provocar la pantalla. */}
         <div style={{ ...S.tenue, marginTop:8, lineHeight:1.5 }}>
-          Mide el cumplimiento del procedimiento — presencia, horario y uso de la app.
-          No mide la calidad del trabajo del vigilador: la evaluación del supervisor
-          y la del cliente son otra capa, y todavía no existen.
+          El puntaje sale de presencia, horario y uso de la app. Rondas, uniforme, libro
+          de guardia y calidad de las fotos ya se miden y se muestran abajo, pero
+          <b> no entran al número</b> mientras digan «En validación».
+          Nada de esto mide la calidad del trabajo del vigilador: la evaluación del
+          supervisor y la del cliente son otra capa, y todavía no existen.
         </div>
         {r.puntaje === null && (
           <div style={{ ...S.tenue, marginTop:8, color:'#fcd34d' }}>
@@ -257,23 +278,55 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         </div>
       )}
 
-      {Object.keys(resRondas.motivosPausa).length > 0 && (
+      {resRondas.bajoPausa > 0 && (
         <div style={{ ...S.caja, marginTop:14 }}>
           <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:8 }}>
-            RONDAS EXCLUIDAS POR PAUSA
+            RONDAS BAJO PAUSA · {resRondas.bajoPausa}
           </div>
-          {Object.entries(resRondas.motivosPausa)
-            .sort((a, b) => (b[1] as number) - (a[1] as number))
-            .map(([motivo, cuantas]) => (
-              <div key={motivo} style={{ ...S.dim, padding:'4px 0' }}>
-                · {cuantas} — «{motivo}»
+
+          {/* Primero la causa, que es el dato con el que se cuenta. */}
+          {causasLegibles(resRondas).map(c => (
+            <div key={c.causa} style={{ ...S.dim, padding:'4px 0' }}>
+              · {c.cantidad} — {c.etiqueta}
+              {c.causa === 'no_se_realiza' && (
+                <span style={{ color:'#fcd34d' }}> · cuentan como no realizadas</span>
+              )}
+              {c.causa === 'sin_clasificar' && (
+                <span style={{ color:'#94a3b8' }}> · fuera del cálculo</span>
+              )}
+            </div>
+          ))}
+
+          {/* Después el motivo escrito a mano, tal cual, sin interpretar. */}
+          {Object.keys(resRondas.motivosPausa).length > 0 && (
+            <div style={{ marginTop:10 }}>
+              <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:4 }}>
+                MOTIVO, TAL COMO SE ESCRIBIÓ
               </div>
-            ))}
-          <div style={{ ...S.tenue, marginTop:8, lineHeight:1.5 }}>
-            El motivo lo escribió quien pausó la ronda, y se muestra tal cual. Una pausa
-            por un problema técnico y otra porque la ronda no se estaba haciendo se leen
-            igual acá: por eso <b>Rondas todavía no puntúa</b>. Distinguirlas por las
-            palabras del motivo sería adivinar.
+              {Object.entries(resRondas.motivosPausa)
+                .sort((a, b) => (b[1] as number) - (a[1] as number))
+                .map(([motivo, cuantas]) => (
+                  <div key={motivo} style={{ ...S.tenue, padding:'3px 0', color:'#cbd5e1' }}>
+                    · {cuantas} — «{motivo}»
+                  </div>
+                ))}
+            </div>
+          )}
+
+          <div style={{ ...S.tenue, marginTop:10, lineHeight:1.5 }}>
+            {resRondas.pausaSinClasificar > 0 ? (
+              <>
+                <b>{resRondas.pausaSinClasificar}</b> de estas pausas son anteriores a que
+                existiera la causa estructurada, así que no se sabe si el problema era
+                técnico o si la ronda no se estaba haciendo. Quedan fuera del cálculo y
+                mantienen <b>Rondas en validación</b>: distinguirlas por las palabras del
+                motivo sería adivinar. Toda pausa nueva ya tiene causa obligatoria.
+              </>
+            ) : (
+              <>La causa la eligió quien pausó la ronda. Sólo las marcadas «se podía hacer
+              y no se estaba haciendo» cuentan como no realizadas; las demás salen del
+              cálculo sin penalizar a nadie.</>
+            )}
           </div>
         </div>
       )}
@@ -298,6 +351,13 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
           </div>
         </div>
       )}
+      <BloqueEntrenamiento
+        empleadoId={empleadoId}
+        periodo={mes}
+        resultado={r}
+        fuentes={{ rondas: medido.rondas, uniforme: medido.uniforme, libro: medido.libro, calidad: medido.calidad }}
+      />
+
       <div style={{ ...S.caja, marginTop:14 }}>
         <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:6 }}>TODAVÍA NO IMPLEMENTADO</div>
         <div style={{ ...S.tenue, lineHeight:1.6 }}>
