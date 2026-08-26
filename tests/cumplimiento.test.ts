@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  MINUTOS_PRESENTACION_PREVIA, PESOS, calcularCumplimiento, hechoDePuntualidad,
-  resumenCorto, resumirPuntualidad,
+  BANDAS_PUNTUALIDAD, MINUTOS_PRESENTACION_PREVIA, PESOS, PESO_PUNTUALIDAD,
+  bandaDeDemora, calcularCumplimiento, detallePuntualidad, hechoDePuntualidad,
+  minutosDeDemora, patronesDeHorarioSospechoso, resumenCorto, resumirPuntualidad,
 } from '@/lib/cumplimiento'
 import type { JornadaCumplimiento } from '@/lib/cumplimiento'
 import { calcularDesempeno } from '@/lib/desempeno'
@@ -109,7 +110,8 @@ describe('puntualidad: cuándo NO se juzga', () => {
       j({ esAusencia: true }),
     ])
     expect(r).toMatchObject({ puntuales: 0, impuntuales: 1, sinDato: 2, evaluadas: 1 })
-    expect(r.nota).toBe(0)
+    // Una sola jornada, y es una tardanza leve: 10 × (1 − 0,25/1).
+    expect(r.nota).toBe(7.5)
   })
 })
 
@@ -165,11 +167,6 @@ describe('las siete dimensiones se muestran desde el primer día', () => {
     ])
   })
 
-  it('sólo Asistencia y Procedimiento puntúan hoy', () => {
-    const r = calcularCumplimiento(base())
-    const puntuables = r.dimensiones.filter(d => d.estado === 'puntuable').map(d => d.clave)
-    expect(puntuables).toEqual(['asistencia', 'procedimiento'])
-  })
 
   it('una dimensión que no puntúa dice qué le falta, no "no disponible"', () => {
     const r = calcularCumplimiento(base())
@@ -178,13 +175,6 @@ describe('las siete dimensiones se muestran desde el primer día', () => {
     }
   })
 
-  it('Puntualidad se calcula y se muestra aunque no pese', () => {
-    const r = calcularCumplimiento([...base(11), j({ turnoId: 'x', entrada: '07:30' })])
-    const p = r.dimensiones.find(d => d.clave === 'puntualidad')!
-    expect(p.estado).toBe('en_validacion')
-    expect(p.nota).not.toBeNull()
-    expect(p.peso).toBe(0)
-  })
 
   it('las que no tienen dato quedan en sin_datos, no en cero', () => {
     const r = calcularCumplimiento(base())
@@ -195,36 +185,6 @@ describe('las siete dimensiones se muestran desde el primer día', () => {
     }
   })
 
-  it('una dimensión sin muestra suficiente NO entra al promedio', () => {
-    // Doce jornadas perfectas salvo una impuntual. Si Puntualidad entrara,
-    // el total bajaría; como pesa 0, no se mueve.
-    const conImpuntual = calcularCumplimiento([...base(11), j({ turnoId: 'x', entrada: '08:00' })])
-    const todasPuntuales = calcularCumplimiento(base(12))
-    expect(conImpuntual.puntaje).toBe(todasPuntuales.puntaje)
-    expect(conImpuntual.puntualidad.impuntuales).toBe(1)
-  })
-})
-
-describe('el número no cambia respecto de lo que ya está en producción', () => {
-  it('con los pesos de hoy, el total es el mismo que calcula el núcleo', () => {
-    // Encender una dimensión tiene que ser una decisión explícita, nunca un
-    // efecto colateral de haber agregado el módulo.
-    for (const jornadas of [
-      base(12),
-      base(12, { salidaPropia: false }),
-      [...base(10), j({ turnoId: 'a', esAusencia: true }), j({ turnoId: 'b', entradaPropia: false })],
-    ]) {
-      expect(calcularCumplimiento(jornadas).puntaje).toBe(calcularDesempeno(jornadas).puntaje)
-    }
-  })
-
-  it('los pesos que no están auditados son cero', () => {
-    expect(PESOS.puntualidad).toBe(0)
-    expect(PESOS.rondas).toBe(0)
-    expect(PESOS.uniforme).toBe(0)
-    expect(PESOS.libro_guardia).toBe(0)
-    expect(PESOS.evidencias).toBe(0)
-  })
 })
 
 // ── Muestra mínima y explicabilidad ─────────────────────────────────────────
@@ -320,5 +280,285 @@ describe('el orden es operativo, no un podio', () => {
     const orden = desempenoPorEmpleado(filas as any).map(d => d.empleadoId)
     expect(orden[0]).toBe('MAL')
     expect(orden[orden.length - 1]).toBe('BIEN')
+  })
+})
+
+// ── Bandas ──────────────────────────────────────────────────────────────────
+
+describe('las bandas de tardanza', () => {
+  const banda = (min: number) => bandaDeDemora(min).clave
+
+  it('0 y antes es puntual', () => {
+    expect(banda(-15)).toBe('puntual')
+    expect(banda(0)).toBe('puntual')
+  })
+
+  it('1 a 5 es leve', () => {
+    expect(banda(1)).toBe('leve')
+    expect(banda(5)).toBe('leve')
+  })
+
+  it('6 abre la banda siguiente', () => {
+    expect(banda(6)).toBe('tardanza')
+    expect(banda(15)).toBe('tardanza')
+  })
+
+  it('16 abre la de importante', () => {
+    expect(banda(16)).toBe('importante')
+    expect(banda(30)).toBe('importante')
+  })
+
+  it('más de 30 es grave', () => {
+    expect(banda(31)).toBe('grave')
+    expect(banda(476)).toBe('grave')
+  })
+
+  it('cada banda pesa más que la anterior', () => {
+    const p = BANDAS_PUNTUALIDAD.map(b => b.penalizacion)
+    for (let i = 1; i < p.length; i++) expect(p[i]).toBeGreaterThan(p[i - 1])
+  })
+})
+
+describe('minutos de demora', () => {
+  it('07:04 sobre un turno de 07:00 son 4 minutos', () => {
+    expect(minutosDeDemora(j({ horaInicioProg: '07:00', entrada: '07:04' }))).toBe(4)
+  })
+
+  it('llegar antes da negativo', () => {
+    expect(minutosDeDemora(j({ horaInicioProg: '07:00', entrada: '06:45' }))).toBe(-15)
+  })
+
+  it('el nocturno no desplaza la fecha ni inventa 22 horas', () => {
+    expect(minutosDeDemora(j({
+      horaInicioProg: '22:00', horaFinProg: '06:00', entrada: '21:50',
+    }))).toBe(-10)
+    expect(minutosDeDemora(j({
+      horaInicioProg: '22:00', horaFinProg: '06:00', entrada: '22:18',
+    }))).toBe(18)
+  })
+
+  it('sin fichaje propio no hay minutos que medir', () => {
+    expect(minutosDeDemora(j({ entradaPropia: false, entrada: '09:00' }))).toBeNull()
+  })
+})
+
+// ── La nota ─────────────────────────────────────────────────────────────────
+
+describe('la nota de Puntualidad', () => {
+  it('todas puntuales es 10', () => {
+    expect(resumirPuntualidad(base(20)).nota).toBe(10)
+  })
+
+  it('una tardanza leve aislada NO destruye el mes', () => {
+    const r = resumirPuntualidad([...base(19), j({ turnoId: 'x', entrada: '07:03' })])
+    expect(r.nota).toBeGreaterThanOrEqual(9.8)
+  })
+
+  it('la reincidencia sí baja la nota', () => {
+    const una = resumirPuntualidad([...base(19), j({ turnoId: 'x', entrada: '07:10' })]).nota!
+    const ocho = resumirPuntualidad([
+      ...base(12),
+      ...Array.from({ length: 8 }, (_, i) => j({ turnoId: 'y' + i, entrada: '07:10' })),
+    ]).nota!
+    expect(ocho).toBeLessThan(una)
+  })
+
+  it('una tardanza grave pesa más que una leve', () => {
+    const leve = resumirPuntualidad([...base(19), j({ turnoId: 'x', entrada: '07:03' })]).nota!
+    const grave = resumirPuntualidad([...base(19), j({ turnoId: 'x', entrada: '08:30' })]).nota!
+    expect(grave).toBeLessThan(leve)
+  })
+
+  it('nunca baja de cero', () => {
+    const r = resumirPuntualidad(Array.from({ length: 3 }, (_, i) =>
+      j({ turnoId: 'g' + i, entrada: '10:00' })))
+    expect(r.nota).toBe(0)
+  })
+
+  it('las no evaluables no entran al denominador', () => {
+    const r = resumirPuntualidad([
+      ...base(10),
+      ...Array.from({ length: 5 }, (_, i) => j({ turnoId: 'n' + i, entradaPropia: false })),
+    ])
+    expect(r.evaluadas).toBe(10)
+    expect(r.sinDato).toBe(5)
+    expect(r.nota).toBe(10)
+  })
+
+  it('sin ninguna evaluable no hay nota, y no es cero', () => {
+    const r = resumirPuntualidad(base(5, { entradaPropia: false }))
+    expect(r.nota).toBeNull()
+  })
+})
+
+describe('trazabilidad: del número al hecho', () => {
+  it('cada tardanza queda con su fecha, turno, hora y minutos', () => {
+    const r = resumirPuntualidad([
+      ...base(10),
+      j({ turnoId: 't-tarde', fecha: '2026-08-17', objetivo: 'LAROMET', entrada: '07:11' }),
+    ])
+    expect(r.tardanzas).toHaveLength(1)
+    expect(r.tardanzas[0]).toMatchObject({
+      fecha: '2026-08-17', objetivo: 'LAROMET',
+      horaInicioProg: '07:00', entrada: '07:11', minutos: 11, banda: 'tardanza',
+    })
+  })
+
+  it('las puntuales no ensucian la lista', () => {
+    expect(resumirPuntualidad(base(10)).tardanzas).toEqual([])
+  })
+
+  it('se ordenan de mayor a menor demora', () => {
+    const r = resumirPuntualidad([
+      j({ turnoId: 'a', entrada: '07:04' }),
+      j({ turnoId: 'b', entrada: '07:40' }),
+      j({ turnoId: 'c', entrada: '07:12' }),
+    ])
+    expect(r.tardanzas.map(t => t.minutos)).toEqual([40, 12, 4])
+  })
+
+  it('el detalle coincide con los contadores', () => {
+    const r = resumirPuntualidad([...base(10), j({ turnoId: 'x', entrada: '07:20' })])
+    const texto = detallePuntualidad(r)
+    expect(texto).toContain('10 de 11 puntuales')
+    expect(texto).toContain('1 tardanza importante')
+    expect(texto).toContain('máxima 20 min')
+  })
+})
+
+// ── Horarios sospechosos: señalan, no perdonan ──────────────────────────────
+
+describe('patrones de horario a revisar', () => {
+  const enINTA = (i: number, empleadoId: string, min: number) => ({
+    ...j({
+      turnoId: 'i' + i, objetivo: 'INTA', horaInicioProg: '07:00',
+      entrada: `07:${String(min).padStart(2, '0')}`,
+    }),
+    empleadoId,
+  })
+
+  it('varias personas tarde en el mismo puesto levantan la advertencia', () => {
+    const jornadas = [
+      enINTA(1, 'A', 45), enINTA(2, 'A', 50), enINTA(3, 'B', 40),
+      enINTA(4, 'B', 55), enINTA(5, 'A', 48),
+    ]
+    const p = patronesDeHorarioSospechoso(jornadas as any)
+    expect(p).toHaveLength(1)
+    expect(p[0]).toMatchObject({ objetivo: 'INTA', horaInicio: '07:00', personas: 2, porcentajeTarde: 100 })
+  })
+
+  it('una sola persona no hace patrón: eso es un problema suyo', () => {
+    const jornadas = [enINTA(1, 'A', 45), enINTA(2, 'A', 50), enINTA(3, 'A', 40),
+      enINTA(4, 'A', 55), enINTA(5, 'A', 48)]
+    expect(patronesDeHorarioSospechoso(jornadas as any)).toEqual([])
+  })
+
+  it('la advertencia NO perdona ninguna tardanza', () => {
+    // Es el punto entero: señalar el horario y seguir contando la impuntualidad.
+    const jornadas = [enINTA(1, 'A', 45), enINTA(2, 'A', 50), enINTA(3, 'B', 40),
+      enINTA(4, 'B', 55), enINTA(5, 'A', 48)]
+    expect(patronesDeHorarioSospechoso(jornadas as any)).toHaveLength(1)
+    expect(resumirPuntualidad(jornadas as any).nota).toBe(0)
+    expect(resumirPuntualidad(jornadas as any).impuntuales).toBe(5)
+  })
+
+  it('demoras chicas no levantan advertencia: son puntualidad, no programación', () => {
+    const jornadas = [enINTA(1, 'A', 2), enINTA(2, 'A', 3), enINTA(3, 'B', 1),
+      enINTA(4, 'B', 4), enINTA(5, 'A', 2)]
+    expect(patronesDeHorarioSospechoso(jornadas as any)).toEqual([])
+  })
+})
+
+// ── Puntualidad dentro del X/10 ─────────────────────────────────────────────
+
+describe('Puntualidad ya pesa en el X/10', () => {
+  it('las tres dimensiones puntúan', () => {
+    const r = calcularCumplimiento(base(12))
+    expect(r.dimensiones.filter(d => d.estado === 'puntuable').map(d => d.clave))
+      .toEqual(['asistencia', 'puntualidad', 'procedimiento'])
+  })
+
+  it('el peso es el declarado y no cambió el de las otras dos', () => {
+    expect(PESOS.puntualidad).toBe(PESO_PUNTUALIDAD)
+    expect(PESOS.asistencia).toBe(20)
+    expect(PESOS.procedimiento).toBe(60)
+  })
+
+  it('las cuatro que faltan siguen en cero', () => {
+    for (const c of ['rondas', 'uniforme', 'libro_guardia', 'evidencias'] as const) {
+      expect(PESOS[c]).toBe(0)
+    }
+  })
+
+  it('llegar tarde ahora sí mueve el número', () => {
+    const puntual = calcularCumplimiento(base(20))!.puntaje!
+    const tarde = calcularCumplimiento([
+      ...base(12),
+      ...Array.from({ length: 8 }, (_, i) => j({ turnoId: 'z' + i, entrada: '07:20' })),
+    ])!.puntaje!
+    expect(tarde).toBeLessThan(puntual)
+  })
+
+  it('quien viene todos los días y llega puntual no cae por usar mal la app', () => {
+    // El caso real de producción: CENTURION, con 10 incidencias sobre 18
+    // jornadas. Con Procedimiento al 75 % del número daba 5,8 —intervención—
+    // aunque vino todos los días y llegó puntual. Ahora queda en seguimiento:
+    // el problema sigue visible en su dimensión, sin declararlo el peor caso.
+    const r = calcularCumplimiento([
+      ...base(8),
+      ...Array.from({ length: 10 }, (_, i) => j({ turnoId: 'p' + i, salidaPropia: false })),
+    ])
+    expect(r.dimensiones.find(d => d.clave === 'asistencia')!.nota).toBe(10)
+    expect(r.dimensiones.find(d => d.clave === 'puntualidad')!.nota).toBe(10)
+    expect(r.estado).toBe('requiere_seguimiento')
+  })
+
+  it('pero no registrar NADA en todo el mes sigue siendo intervención', () => {
+    // El rebalanceo no perdona el caso extremo, y no debe: alguien que no
+    // registró ni una entrada ni una salida en veinte jornadas necesita que
+    // alguien intervenga.
+    const r = calcularCumplimiento(base(20, { entradaPropia: false, salidaPropia: false }))
+    expect(r.estado).toBe('requiere_intervencion')
+  })
+
+  it('sin fichaje propio: Asistencia cumplida, Procedimiento penaliza, Puntualidad no', () => {
+    const r = calcularCumplimiento(base(20, { entradaPropia: false, salidaPropia: false }))
+    expect(r.dimensiones.find(d => d.clave === 'asistencia')!.nota).toBe(10)
+    expect(r.dimensiones.find(d => d.clave === 'procedimiento')!.nota).toBe(0)
+    expect(r.puntualidad.evaluadas).toBe(0)
+    expect(r.dimensiones.find(d => d.clave === 'puntualidad')!.estado).toBe('sin_datos')
+  })
+
+  it('y esa dimensión sin dato no entra al promedio como cero', () => {
+    const sinFichaje = calcularCumplimiento(base(20, { entradaPropia: false, salidaPropia: false }))
+    // Sólo Asistencia y Procedimiento: (10*20 + 0*60)/80 = 2,5
+    expect(sinFichaje.puntaje).toBe(2.5)
+  })
+
+  it('una asistencia confirmada por supervisor no es ausencia ni impuntualidad', () => {
+    const r = calcularCumplimiento(base(20, {
+      entradaPropia: false, salidaPropia: false, origenCobertura: 'confirmacion_supervisor',
+    }))
+    expect(r.base.ausencias).toBe(0)
+    expect(r.puntualidad.impuntuales).toBe(0)
+  })
+})
+
+describe('Puntualidad no toca nada de liquidación', () => {
+  it('el módulo no lee horas ni estados de asistencia', () => {
+    // La jornada que entra al cálculo no tiene horas, ni liquidables, ni
+    // cierre automático: no puede modificar lo que no conoce.
+    const campos = Object.keys(j())
+    for (const prohibido of ['horas', 'horasLiquidables', 'cierre_automatico', 'estadoControl']) {
+      expect(campos).not.toContain(prohibido)
+    }
+  })
+
+  it('cambiar la puntualidad no cambia Asistencia ni Procedimiento', () => {
+    const puntual = calcularCumplimiento(base(20))
+    const tarde = calcularCumplimiento(base(20, { entrada: '07:25' }))
+    expect(tarde.base.asistencia).toBe(puntual.base.asistencia)
+    expect(tarde.base.procedimiento).toBe(puntual.base.procedimiento)
+    expect(tarde.base.incidencias).toEqual(puntual.base.incidencias)
   })
 })
