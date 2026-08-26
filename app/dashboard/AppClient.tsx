@@ -1701,7 +1701,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       <div>
         <div style={{ marginBottom:20 }}>
           <div style={S.title}>Guardias / Empleados</div>
-          <div style={S.sub2}>Desempeño y cumplimiento por período</div>
+          <div style={S.sub2}>Cumplimiento operativo por período</div>
         </div>
         {conmutadorVista}
         <DesempenoPanel esAdmin={Boolean(esAdmin)} usuarioId={usuarioId ?? null} rol={rol ?? null} />
