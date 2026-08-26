@@ -43,6 +43,7 @@ import {
   construirFilasBandeja,
   resueltoPorConfirmacionYAceptacion, TEXTO_CONFIRMADA_Y_ACEPTADA,
   planCorreccionHorario,
+  AYUDA_SIN_ZONAS, MENSAJE_SIN_ZONAS,
   objetivoEnAlcance, opcionesObjetivo, opcionesPuesto, opcionesVigilador,
   requiereRevision, resumenBandejaMensual,
 } from '@/lib/bandeja-planillas'
@@ -117,6 +118,9 @@ export default function BandejaPlanillas({
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
   const [filas, setFilas] = useState<FilaBandejaMensual[]>([])
+  // Sin zonas no es lo mismo que sin turnos: son dos problemas con dueños
+  // distintos y el mensaje tiene que decir cuál es.
+  const [sinZonas, setSinZonas] = useState(false)
   const [recargas, setRecargas] = useState(0)
 
   const [mes, setMes] = useState(mesInicial || mesActualArg())
@@ -252,7 +256,7 @@ export default function BandejaPlanillas({
       // Las consultas viven en lib/bandeja-datos: el indicador de desempeno
       // necesita exactamente estas filas, y con dos cargas distintas tarde o
       // temprano una traeria un turno que la otra no.
-      const { filas: resultado, error: errCarga } = await cargarFilasBandeja({
+      const { filas: resultado, error: errCarga, sinZonas: sz } = await cargarFilasBandeja({
         mes, esAdmin, usuarioId: user?.id ?? null,
       })
       if (!activo) return
@@ -261,6 +265,7 @@ export default function BandejaPlanillas({
         setCargando(false)
         return
       }
+      setSinZonas(sz)
       setFilas(resultado)
       setCargando(false)
     }
@@ -464,9 +469,12 @@ export default function BandejaPlanillas({
       {!cargando && error && <div style={{ color: '#ef4444', padding: 12 }}>{error}</div>}
       {!cargando && !error && visibles.length === 0 && (
         <div style={{ ...muted, padding: 24, textAlign: 'center' }}>
-          {resumen.total === 0
-            ? 'No hay turnos finalizados para revisar en este mes.'
-            : 'Ningún registro coincide con los filtros elegidos.'}
+          {sinZonas
+            ? <><div style={{ color:'#fcd34d', fontWeight:700 }}>{MENSAJE_SIN_ZONAS}</div>
+               <div style={{ marginTop:6 }}>{AYUDA_SIN_ZONAS}</div></>
+            : resumen.total === 0
+              ? 'No hay turnos finalizados para revisar en este mes.'
+              : 'Ningún registro coincide con los filtros elegidos.'}
         </div>
       )}
 

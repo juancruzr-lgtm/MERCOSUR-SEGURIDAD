@@ -693,11 +693,28 @@ export const opcionesPuesto = (filas: FilaBandejaMensual[]) =>
 // ── Alcance de datos ─────────────────────────────────────────────────────────
 
 /**
- * Administración ve todos los objetivos; supervisión, solo los de sus zonas.
- * Un supervisor sin zonas asignadas conserva el alcance total, que es la regla
- * que ya aplican las RPC de programación — no se cambia acá.
+ * Lo que ve un supervisor sin zonas. Un solo texto para todas las pantallas:
+ * si cada una escribiera el suyo, tarde o temprano una diría "sin datos" y el
+ * supervisor buscaría el problema donde no está.
+ */
+export const MENSAJE_SIN_ZONAS = 'No tenés zonas operativas asignadas.'
+export const AYUDA_SIN_ZONAS =
+  'Pedile a Administración que te asigne al menos una zona operativa para ver tus objetivos.'
+
+
+/**
+ * Administración ve todos los objetivos; supervisión, sólo los de sus zonas.
  *
- * Esto solo decide qué se muestra: la RLS del servidor sigue siendo el límite
+ * ── Sin zonas asignadas NO es alcance total ─────────────────────────────────
+ * Antes, un supervisor sin ninguna zona veía TODO. La intención era no dejar a
+ * nadie sin pantalla, pero el efecto era el contrario del que se busca: la
+ * ausencia de configuración abría el acceso en vez de cerrarlo, y agregar una
+ * zona —el acto que parece dar permiso— en realidad se lo quitaba.
+ *
+ * Ahora sin zonas no se ve nada, y la pantalla lo dice. Un permiso que falta
+ * tiene que verse como un permiso que falta, no como un permiso total.
+ *
+ * Esto sólo decide qué se muestra: la RLS del servidor sigue siendo el límite
  * real de lo que cada usuario puede leer.
  */
 export function objetivoEnAlcance(
@@ -706,7 +723,7 @@ export function objetivoEnAlcance(
   zonasDelSupervisor: ReadonlySet<string> | null,
 ): boolean {
   if (esAdmin) return true
-  if (!zonasDelSupervisor || zonasDelSupervisor.size === 0) return true
+  if (!zonasDelSupervisor || zonasDelSupervisor.size === 0) return false
   return !!objetivoZonaId && zonasDelSupervisor.has(objetivoZonaId)
 }
 

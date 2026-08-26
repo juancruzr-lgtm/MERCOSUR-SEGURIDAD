@@ -25,6 +25,7 @@ import {
 } from '@/lib/desempeno-datos'
 import type { DesempenoEmpleado } from '@/lib/desempeno-datos'
 import { puedeAbrirDesempeno } from '@/lib/desempeno-visibilidad'
+import { AYUDA_SIN_ZONAS, MENSAJE_SIN_ZONAS } from '@/lib/bandeja-planillas'
 
 const COLOR_ESTADO: Record<EstadoDesempeno, string> = {
   excelente:             '#10b981',
@@ -98,6 +99,7 @@ export default function DesempenoPanel({
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
   const [lista, setLista] = useState<DesempenoEmpleado[]>([])
+  const [sinZonas, setSinZonas] = useState(false)
   const [filtroEstado, setFiltroEstado] = useState<'todos' | EstadoDesempeno>('todos')
   const [filtroObjetivo, setFiltroObjetivo] = useState('')
   const [busqueda, setBusqueda] = useState('')
@@ -108,7 +110,8 @@ export default function DesempenoPanel({
   const cargar = useCallback(async () => {
     if (!habilitado) { setCargando(false); return }
     setCargando(true)
-    const { filas, error: err } = await cargarFilasBandeja({ mes, esAdmin, usuarioId })
+    const { filas, error: err, sinZonas: sz } = await cargarFilasBandeja({ mes, esAdmin, usuarioId })
+    setSinZonas(sz)
     if (err) { setError(err); setLista([]); setCargando(false); return }
     const propias = empleadoId ? filas.filter(f => f.empleadoId === empleadoId) : filas
     setLista(desempenoPorEmpleado(propias))
@@ -195,7 +198,12 @@ export default function DesempenoPanel({
         <div style={S.tenue}>Calculando desempeño…</div>
       ) : visibles.length === 0 ? (
         <div style={{ ...S.caja, ...S.tenue }}>
-          {lista.length === 0
+          {sinZonas ? (
+            <>
+              <div style={{ color:'#fcd34d', fontWeight:700 }}>{MENSAJE_SIN_ZONAS}</div>
+              <div style={{ marginTop:6 }}>{AYUDA_SIN_ZONAS}</div>
+            </>
+          ) : lista.length === 0
             ? 'No hay jornadas evaluables en ' + etiquetaMes(mes) + '.'
             : 'Ningún empleado coincide con los filtros.'}
         </div>

@@ -43,6 +43,12 @@ export interface CargaFilasParams {
 export interface CargaFilasResultado {
   filas: FilaBandejaMensual[]
   error: string | null
+  /**
+   * El usuario no es admin y no tiene ninguna zona asignada. Sin esto la
+   * pantalla no puede distinguir "no te toca nada este mes" de "no tenés
+   * permisos configurados", y son dos problemas con dueños distintos.
+   */
+  sinZonas: boolean
 }
 
 /**
@@ -89,7 +95,9 @@ export async function cargarFilasBandeja(p: CargaFilasParams): Promise<CargaFila
   ])
 
   const err = turnosR.error || registrosR.error || guardiasR.error
-  if (err) return { filas: [], error: err.message }
+  const zonasMias = ((zonasR.data ?? []) as any[]).map(z => z.zona_id)
+  const sinZonas = !p.esAdmin && zonasMias.length === 0
+  if (err) return { filas: [], error: err.message, sinZonas }
 
   // Quién marcó cada ausencia y cuándo: sale de la auditoría que ya escribe la
   // RPC. No hacen falta columnas nuevas.
@@ -113,12 +121,12 @@ export async function cargarFilasBandeja(p: CargaFilasParams): Promise<CargaFila
     revisiones:    (reviR.data ?? []) as any[],
     guardias:      (guardiasR.data ?? []) as any[],
     auditoriaAusencias,
-    zonasMias:     ((zonasR.data ?? []) as any[]).map(z => z.zona_id),
+    zonasMias,
     esAdmin:       p.esAdmin,
   }, {
     selectRegistroPrincipal, effectiveGuardia, resolverLineaLiquidacion,
     etiquetaCaracteristica, objetivoEnAlcance,
   })
 
-  return { filas, error: null }
+  return { filas, error: null, sinZonas }
 }
