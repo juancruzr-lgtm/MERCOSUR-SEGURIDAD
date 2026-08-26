@@ -51,8 +51,10 @@ import {
 } from '@/lib/cumplimiento-fuentes'
 import { ensenanzasDeEmpleado } from '@/lib/entrenador-datos'
 import {
-  CLAVE_DIA_ENVIO, CLAVE_HORA_ENVIO, ENVIO_POR_DEFECTO,
-  correspondeNotificar, ensenanzaPrioritaria, esMomentoDeEnviar,
+  CLAVE_COOLDOWN_GLOBAL, CLAVE_DIA_ENVIO, CLAVE_HORA_ENVIO,
+  COOLDOWN_GLOBAL_DIAS, ENVIO_POR_DEFECTO,
+  correspondeNotificar, diasParaProximoEnvio, ensenanzaPrioritaria,
+  esMomentoDeEnviar, puedeRecibirAhora,
 } from '@/lib/entrenador-operativo'
 import type { Ensenanza, EnvioPrevio } from '@/lib/entrenador-operativo'
 import { partirInstante } from '@/lib/cierre-datos'
@@ -168,11 +170,17 @@ export async function GET(req: NextRequest) {
   const ignorarMomento = req.nextUrl.searchParams.get('ignorar_momento') === '1' && simular
 
   const configR = await client.from('app_config').select('key, value')
-    .in('key', [CLAVE_DIA_ENVIO, CLAVE_HORA_ENVIO])
+    .in('key', [CLAVE_DIA_ENVIO, CLAVE_HORA_ENVIO, CLAVE_COOLDOWN_GLOBAL])
   if (configR.error) return NextResponse.json({ error: configR.error.message }, { status: 500 })
   const config = new Map(((configR.data ?? []) as any[]).map(c => [c.key, c.value]))
   const diaConfigurado = Number(config.get(CLAVE_DIA_ENVIO) ?? ENVIO_POR_DEFECTO.dia)
   const horaConfigurada = String(config.get(CLAVE_HORA_ENVIO) ?? ENVIO_POR_DEFECTO.hora)
+  // El techo de volumen por persona. Configurable, con default explícito: un
+  // número escondido en el código no se puede ajustar cuando la operación
+  // muestra que molesta.
+  const cooldownGlobal = Number(config.get(CLAVE_COOLDOWN_GLOBAL) ?? COOLDOWN_GLOBAL_DIAS)
+  const diasCooldown = Number.isFinite(cooldownGlobal) && cooldownGlobal >= 0
+    ? cooldownGlobal : COOLDOWN_GLOBAL_DIAS
 
   // Alcance completo a propósito: esta ruta le escribe al vigilador, no a un
   // responsable de zona. El recorte por zona no aplica.
@@ -302,7 +310,8 @@ export async function GET(req: NextRequest) {
       rondas: m.rondas, uniforme: m.uniforme, libro: m.libro, calidad: m.calidad,
     })
     const previos = previosPorEmpleado.get(d.empleadoId) ?? []
-    const elegida = ensenanzaPrioritaria(ensenanzas, previos, ahora)
+    const elegida = ensenanzaPrioritaria(ensenanzas, previos, ahora, diasCooldown)
+    const enCooldownGlobal = !puedeRecibirAhora(previos, ahora, diasCooldown)
 
     const trabajando = enTurnoAhora.has(d.empleadoId)
     const momento = ignorarMomento || esMomentoDeEnviar({
@@ -315,7 +324,9 @@ export async function GET(req: NextRequest) {
     const suscripcion = conSuscripcion.has(d.empleadoId)
 
     const motivoNoEnvia =
-      !elegida    ? 'nada que enseñar, o ya lo recibió'
+      enCooldownGlobal
+        ? `recibió otro entrenamiento hace poco (faltan ${diasParaProximoEnvio(previos, ahora, diasCooldown)} días)`
+      : !elegida    ? 'nada que enseñar, o ya lo recibió'
       : trabajando ? 'está en turno ahora'
       : !momento   ? 'fuera de la ventana de envío configurada'
       : !suscripcion ? 'no tiene suscripción push'
@@ -368,6 +379,8 @@ export async function GET(req: NextRequest) {
           entrenamientos_previos_mismo_tipo: mismoTipo.length,
           ultimo_previo: mismoTipo.map(x => x.periodo + ' (' + x.enviadoEn.slice(0, 10) + ')').join(', ') || null,
           en_cooldown: enCooldown,
+          en_cooldown_global: !puedeRecibirAhora(previos, ahora, diasCooldown),
+          dias_para_proximo: diasParaProximoEnvio(previos, ahora, diasCooldown),
           es_el_que_se_mandaria: c.elegida ? c.elegida.clave === e.clave : false,
           por_que_es_atribuible: c.respaldo[e.clave] ?? null,
         }
@@ -403,7 +416,7 @@ export async function GET(req: NextRequest) {
       periodo,
       periodo_anterior: mesAnterior(`${periodo}-01`),
       ahora_local: `${local.fecha} ${local.hora}`,
-      ventana: { dia_semana: diaConfigurado, hora: horaConfigurada },
+      ventana: { dia_semana: diaConfigurado, hora: horaConfigurada, cooldown_global_dias: diasCooldown },
       evaluados: candidatos.length,
       con_ensenanza: candidatos.filter(c => c.elegida).length,
       se_enviarian: aEnviar.length,
