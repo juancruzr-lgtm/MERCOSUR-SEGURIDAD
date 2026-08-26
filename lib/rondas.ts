@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import type { CausaPausa } from '@/lib/rondas-causas'
 
 export const RONDA_INTERVALO_MINIMO = 15
 export const RONDA_INTERVALO_MAXIMO = 10080
@@ -1262,6 +1263,7 @@ export type ContextoCerrarRonda =
   | 'ejecucion_no_encontrada'
   | 'ejecucion_no_bloqueada'  // la terminó el vigilador: no se reescribe
   | 'motivo_invalido'
+  | 'causa_invalida'
 
 export type ContextoEjecucionesEnCurso = 'ok' | 'sin_usuario' | 'sin_permiso'
 
@@ -1961,6 +1963,8 @@ export type ContextoPausa =
   | 'ronda_no_encontrada'
   | 'ya_pausada'
   | 'motivo_invalido'
+  /** Falta la causa estructurada, o no es una de las seis válidas. */
+  | 'causa_invalida'
   | 'hasta_invalido'
   | 'pausa_no_encontrada'
   | 'ya_reactivada'
@@ -1974,6 +1978,7 @@ export function mensajeContextoPausa(contexto: ContextoPausa | undefined): strin
     case 'ronda_no_encontrada': return 'No se encontró la ronda o está desactivada.'
     case 'ya_pausada':          return 'Esta ronda ya tiene una pausa activa.'
     case 'motivo_invalido':     return 'El motivo debe tener al menos 5 caracteres.'
+    case 'causa_invalida':      return 'Elegí una causa para la pausa: de eso depende si estas rondas se le cuentan o no al vigilador.'
     case 'hasta_invalido':      return 'La fecha de reactivación tiene que ser posterior a ahora.'
     case 'pausa_no_encontrada': return 'No se encontró la pausa indicada.'
     case 'ya_reactivada':       return 'Esa pausa ya fue reanudada.'
@@ -1993,6 +1998,8 @@ export interface RondaPausa {
   pausada_por_nombre: string
   pausada_at: string
   motivo: string
+  /** Causa estructurada. null en las pausas anteriores a la clasificación. */
+  causa: string | null
   hasta_at: string | null
   activa: boolean
   vigente: boolean
@@ -2003,16 +2010,26 @@ export interface RondaPausa {
   reactivacion_automatica: boolean
 }
 
+/**
+ * Pausar una ronda. La causa es OBLIGATORIA y no tiene default.
+ *
+ * No es un parametro opcional por descuido: de la causa depende si las ventanas
+ * que cubra esta pausa se le cuentan al vigilador como no realizadas o salen
+ * del universo. Un default habria contestado por quien pausa, que es el unico
+ * que sabe la respuesta. La RPC de 3 argumentos —sin causa— quedo revocada.
+ */
 export async function pausarRonda(
   rondaBaseId: string,
   motivo: string,
-  hastaAt?: string | null,
+  hastaAt: string | null,
+  causa: CausaPausa,
 ): Promise<ResultadoRondas<{ contexto: ContextoPausa; pausa?: unknown; alertas_pendientes_anteriores?: number }>> {
   const params: Record<string, unknown> = {
     p_ronda_base_id: rondaBaseId,
     p_motivo: motivo,
+    p_hasta_at: hastaAt ?? null,
+    p_causa: causa,
   }
-  if (hastaAt) params.p_hasta_at = hastaAt
 
   const { data, error } = await supabase.rpc('pausar_ronda', params)
   if (error) return fallaRpc('pausar_ronda', error, 'No se pudo pausar la ronda.')

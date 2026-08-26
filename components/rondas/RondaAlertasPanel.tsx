@@ -34,6 +34,8 @@ import {
 } from '@/lib/rondas'
 import type { ResumenRegularizacion } from '@/lib/rondas'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
+import SelectorCausaPausa from './SelectorCausaPausa'
+import type { CausaPausa } from '@/lib/rondas-causas'
 
 interface Props {
   /** `null` = todos los objetivos del alcance del usuario. */
@@ -357,17 +359,23 @@ function ModalPausar({ alerta, onCerrar, onHecho }: {
   onHecho: () => void
 }) {
   const [motivo, setMotivo] = useState('')
+  const [causa, setCausa] = useState<CausaPausa | ''>('')
   const [enviando, setEnviando] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // La tabla exige al menos 5 caracteres: se valida acá para no ir y volver.
   const motivoValido = motivo.trim().length >= 5
+  // Sin causa no se pausa. No hay opción por defecto a propósito: elegir por
+  // quien pausa sería contestar la única pregunta que él sabe responder.
+  const listo = motivoValido && causa !== ''
 
   const confirmar = async () => {
-    if (!motivoValido || enviando) return
+    if (!listo || enviando) return
     setEnviando(true)
     setError(null)
-    const { data, error: err } = await pausarRonda(alerta.ronda_base_id, motivo.trim())
+    const { data, error: err } = await pausarRonda(
+      alerta.ronda_base_id, motivo.trim(), null, causa as CausaPausa,
+    )
     setEnviando(false)
     if (err) { setError(err); return }
     if (data && data.contexto !== 'ok') {
@@ -391,7 +399,9 @@ function ModalPausar({ alerta, onCerrar, onHecho }: {
           darla por atendida, usá Intervenir.
         </div>
 
-        <label style={S.label} htmlFor="motivo-pausa">Motivo *</label>
+        <SelectorCausaPausa valor={causa} onCambio={setCausa} disabled={enviando} />
+
+        <label style={{ ...S.label, marginTop: 12 }} htmlFor="motivo-pausa">Motivo *</label>
         <textarea
           id="motivo-pausa"
           value={motivo}
@@ -410,8 +420,8 @@ function ModalPausar({ alerta, onCerrar, onHecho }: {
           <button
             type="button"
             onClick={confirmar}
-            style={!motivoValido || enviando ? S.btnOff : S.btnPri}
-            disabled={!motivoValido || enviando}
+            style={!listo || enviando ? S.btnOff : S.btnPri}
+            disabled={!listo || enviando}
           >
             {enviando ? 'Pausando…' : 'Pausar ronda'}
           </button>

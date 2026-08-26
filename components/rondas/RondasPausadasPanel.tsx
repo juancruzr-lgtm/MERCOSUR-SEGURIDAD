@@ -13,6 +13,7 @@
 // mismo alcance: si la RPC devolvió la fila, el usuario puede intervenirla.
 
 import { useCallback, useEffect, useState } from 'react'
+import { etiquetaCausa } from '@/lib/rondas-causas'
 import {
   listarRondasPausadas,
   reanudarRonda,
@@ -155,6 +156,7 @@ export default function RondasPausadasPanel({
           <div key={p.id} style={p.vigente ? S.tarjetaVigente : S.tarjeta}>
             <div style={S.rondaNombre}>{p.ronda_nombre}</div>
             <div style={S.sub}>{p.objetivo_nombre} · {p.puesto_nombre}</div>
+            <div style={S.motivo}>Causa: {etiquetaCausa(p.causa)}</div>
             <div style={S.motivo}>Motivo: {p.motivo}</div>
             <div style={S.sub}>
               Pausada por {p.pausada_por_nombre} · {formatFechaHora(p.pausada_at)}
@@ -204,6 +206,7 @@ export default function RondasPausadasPanel({
                 <Dato label="Pausada" valor={formatFechaHora(p.pausada_at)} />
                 <Dato label="Hasta" valor={p.hasta_at ? formatFechaHora(p.hasta_at) : 'Sin límite'} />
                 <Dato label="Estado" valor={p.vigente ? 'Vigente' : p.activa ? 'Vencida' : 'Reanudada'} />
+                <Dato label="Causa" valor={etiquetaCausa(p.causa)} ancho />
                 <Dato label="Motivo" valor={p.motivo} ancho />
                 {p.reactivada_comentario && (
                   <Dato label="Comentario de reanudación" valor={p.reactivada_comentario} ancho />

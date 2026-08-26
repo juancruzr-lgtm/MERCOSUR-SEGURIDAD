@@ -22,6 +22,8 @@
 // cuatro etiquetas operativas y ordena. Todo lo demás lo decide el servidor.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import SelectorCausaPausa from './SelectorCausaPausa'
+import type { CausaPausa } from '@/lib/rondas-causas'
 import RondaEjecucionDetalle from './RondaEjecucionDetalle'
 import {
   listarRondasProgramadasObjetivo,
@@ -526,6 +528,7 @@ function DetalleSinEjecucion({
 
   const [formPausa, setFormPausa] = useState(false)
   const [motivoPausa, setMotivoPausa] = useState('')
+  const [causaPausa, setCausaPausa] = useState<CausaPausa | ''>('')
   const [hastaAt, setHastaAt] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [errorForm, setErrorForm] = useState<string | null>(null)
@@ -540,14 +543,18 @@ function DetalleSinEjecucion({
 
   const ejecutarPausa = async () => {
     if (motivoPausa.trim().length < 5) { setErrorForm('El motivo debe tener al menos 5 caracteres.'); return }
+    // La causa decide si estas ventanas se le cuentan al vigilador. No hay
+    // default: la elige quien pausa.
+    if (causaPausa === '') { setErrorForm('Elegí la causa de la pausa.'); return }
     setEnviando(true); setErrorForm(null)
     const { data, error } = await pausarRonda(
-      r.ronda_base_id, motivoPausa.trim(), hastaAt || null,
+      r.ronda_base_id, motivoPausa.trim(), hastaAt || null, causaPausa,
     )
     setEnviando(false)
     if (error) { setErrorForm(error); return }
     if (data?.contexto === 'ya_pausada') { setErrorForm('Esta ronda ya está pausada.'); return }
     if (data?.contexto === 'motivo_invalido') { setErrorForm('Motivo demasiado corto.'); return }
+    if (data?.contexto === 'causa_invalida') { setErrorForm('La causa elegida no es válida.'); return }
     if (data?.contexto === 'hasta_invalido') { setErrorForm('La fecha debe ser futura.'); return }
     if (data?.contexto !== 'ok') { setErrorForm(`Error: ${data?.contexto ?? 'desconocido'}`); return }
     onActualizar()
@@ -682,11 +689,12 @@ function DetalleSinEjecucion({
               La pausa no borra ni resuelve alertas o incumplimientos anteriores.
               Solo evita que se generen nuevas alertas para ventanas futuras.
             </div>
+            <SelectorCausaPausa valor={causaPausa} onCambio={setCausaPausa} disabled={enviando} />
             <textarea
               value={motivoPausa}
               onChange={e => setMotivoPausa(e.target.value)}
               placeholder="Motivo de la pausa (obligatorio, mín. 5 caracteres)"
-              style={S.inputTexto}
+              style={{ ...S.inputTexto, marginTop: 10 }}
               rows={2}
             />
             <div style={{ marginTop: 6 }}>
@@ -706,7 +714,7 @@ function DetalleSinEjecucion({
                 type="button"
                 style={{ ...S.botonAccion, background: '#92400e', flex: 1 }}
                 onClick={() => void ejecutarPausa()}
-                disabled={enviando || motivoPausa.trim().length < 5}
+                disabled={enviando || motivoPausa.trim().length < 5 || causaPausa === ''}
               >{enviando ? 'Pausando…' : 'Confirmar pausa'}</button>
               <button
                 type="button"
