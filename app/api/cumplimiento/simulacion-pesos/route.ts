@@ -93,11 +93,16 @@ export async function GET(req: NextRequest) {
       no_aplica: {} as Record<string, number>,
       suma_puntajes: 0,
       con_puntaje: 0,
+      puntajes: [] as number[],
       cambian_de_categoria: 0,
       // Quien cambia y HACIA DONDE. Es lo que decide: si encender una dimension
       // rescata de "requiere intervencion" a alguien cuyo problema sigue ahi,
       // el indicador dejo de senalar justo a quien mas atencion necesita.
-      cambios: [] as Array<{ empleado: string; de: string; a: string; puntaje_de: number | null; puntaje_a: number | null }>,
+      cambios: [] as Array<{
+        empleado: string; de: string; a: string
+        puntaje_de: number | null; puntaje_a: number | null
+        dimensiones: Record<string, string>; pesa_sobre: string; causa: string
+      }>,
       mayor_baja: null as null | { empleado: string; de: number; a: number },
       mayor_suba: null as null | { empleado: string; de: number; a: number },
     }
@@ -123,13 +128,34 @@ export async function GET(req: NextRequest) {
           : d.estado === 'no_aplica' ? 'no_aplica' : null
         if (donde) acc[donde][d.clave] = (acc[donde][d.clave] ?? 0) + 1
       }
-      if (r.puntaje !== null) { acc.suma_puntajes += r.puntaje; acc.con_puntaje += 1 }
+      if (r.puntaje !== null) {
+        acc.suma_puntajes += r.puntaje
+        acc.con_puntaje += 1
+        acc.puntajes.push(r.puntaje)
+      }
       if (r.estado !== base.estado) {
         acc.cambian_de_categoria += 1
+        // El detalle completo: sin esto no se puede explicar POR QUE cambió.
+        const dims: Record<string, string> = {}
+        for (const d of r.dimensiones) {
+          if (d.clave === 'evidencias') continue
+          dims[d.clave] =
+            d.estado === 'puntuable'           ? `${d.nota} (peso ${d.peso})`
+            : d.estado === 'no_aplica'          ? 'no aplica'
+            : d.estado === 'datos_insuficientes' ? 'datos insuficientes'
+            : d.estado === 'en_validacion'      ? `${d.nota} en validación (no suma)`
+            :                                     'sin datos'
+        }
+        const puntuables = r.dimensiones.filter(d => d.estado === 'puntuable')
         acc.cambios.push({
           empleado: nombre,
           de: ETIQUETA_ESTADO[base.estado], a: ETIQUETA_ESTADO[r.estado],
           puntaje_de: base.puntaje, puntaje_a: r.puntaje,
+          dimensiones: dims,
+          pesa_sobre: puntuables.map(d => d.clave).join('+'),
+          causa: (r.puntaje ?? 0) > (base.puntaje ?? 0)
+            ? `sube: entran ${puntuables.filter(d => VARIANTES_PESOS.actual[d.clave] === 0).map(d => `${d.clave} ${d.nota}`).join(', ') || 'nada nuevo'} y Procedimiento pasa a pesar ${Math.round(1000 * (puntuables.find(d => d.clave === 'procedimiento')?.peso ?? 0) / puntuables.reduce((s, d) => s + d.peso, 0)) / 10} %`
+            : `baja: entran ${puntuables.filter(d => VARIANTES_PESOS.actual[d.clave] === 0).map(d => `${d.clave} ${d.nota}`).join(', ') || 'nada nuevo'}`,
         })
       }
       if (r.puntaje !== null && base.puntaje !== null) {
@@ -146,9 +172,16 @@ export async function GET(req: NextRequest) {
 
   for (const v of variantes) {
     const acc = resultado[v]
+    const ps: number[] = [...acc.puntajes].sort((a: number, b: number) => a - b)
     acc.promedio = acc.con_puntaje > 0
       ? Math.round((acc.suma_puntajes / acc.con_puntaje) * 100) / 100 : null
+    acc.mediana = ps.length === 0 ? null
+      : ps.length % 2 === 1 ? ps[(ps.length - 1) / 2]
+      : Math.round(((ps[ps.length / 2 - 1] + ps[ps.length / 2]) / 2) * 100) / 100
+    acc.minimo = ps.length > 0 ? ps[0] : null
+    acc.maximo = ps.length > 0 ? ps[ps.length - 1] : null
     delete acc.suma_puntajes
+    delete acc.puntajes
     const puntuables = DIMENSIONES.filter(d => (acc.puntuables[d] ?? 0) > 0)
     acc.normalizacion = normalizacion(VARIANTES_PESOS[v], puntuables)
     acc.dimensiones_que_puntuan = puntuables.map(d => ETIQUETA_DIMENSION[d])

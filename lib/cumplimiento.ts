@@ -311,9 +311,14 @@ export const ETIQUETA_DIMENSION: Record<ClaveDimension, string> = {
  *                 peso es cero, o bien su universo quedó recortado por
  *                 exclusiones que nadie pudo justificar.
  * `no_aplica`     la persona no tuvo ese requerimiento. No le falta nada.
+ * `datos_insuficientes` lo tuvo, pero con tan poca muestra que un número diría
+ *                 más de lo que sabe. NO regala puntos: queda fuera del
+ *                 denominador, igual que `no_aplica`, pero no significa lo mismo
+ *                 y por eso se dicen distinto.
  * `sin_datos`     no hay ni siquiera con qué describirla en este período.
  */
-export type EstadoDimension = 'puntuable' | 'en_validacion' | 'no_aplica' | 'sin_datos'
+export type EstadoDimension =
+  | 'puntuable' | 'en_validacion' | 'no_aplica' | 'datos_insuficientes' | 'sin_datos'
 
 /**
  * Los pesos de HOY.
@@ -371,6 +376,8 @@ export interface AporteDimension {
   enValidacion?: boolean
   /** No tuvo ese requerimiento. Distinto de "no hay datos". */
   noAplica?: boolean
+  /** Lo tuvo, pero la muestra no alcanza. Tampoco regala puntos. */
+  datosInsuficientes?: boolean
   faltante?: string | null
 }
 
@@ -473,6 +480,37 @@ export const VARIANTES_PESOS: Record<string, Record<ClaveDimension, number>> = {
     asistencia: 20, puntualidad: 40, procedimiento: 60,
     rondas: 40, uniforme: 25, libro_guardia: 25, evidencias: 0,
   },
+
+  // ── Los cuatro modelos de la revisión integral ────────────────────────────
+  //
+  // Replantean la pregunta: el X/10 deja de medir sobre todo si alguien usa
+  // bien la app y pasa a medir la PRESTACIÓN del servicio. La app es el
+  // instrumento con el que se mide, no lo que se mide.
+  //
+  // Procedimiento baja de 60 a 10 en los cuatro. No porque deje de importar
+  // —un registro incompleto sigue siendo una incidencia real— sino porque
+  // pesaba 60 cuando era casi la única señal confiable que había, y ya no lo es.
+
+  /** A · EQUILIBRADO */
+  modelo_a_equilibrado: {
+    asistencia: 25, rondas: 25, puntualidad: 20, procedimiento: 10,
+    uniforme: 10, libro_guardia: 10, evidencias: 0,
+  },
+  /** B · PRESTACIÓN FUERTE */
+  modelo_b_prestacion: {
+    asistencia: 25, rondas: 30, puntualidad: 20, procedimiento: 10,
+    uniforme: 7.5, libro_guardia: 7.5, evidencias: 0,
+  },
+  /** C · OPERACIÓN FUERTE */
+  modelo_c_operacion: {
+    asistencia: 25, rondas: 35, puntualidad: 20, procedimiento: 10,
+    uniforme: 5, libro_guardia: 5, evidencias: 0,
+  },
+  /** D · RONDAS MUY FUERTE */
+  modelo_d_rondas: {
+    asistencia: 20, rondas: 40, puntualidad: 20, procedimiento: 10,
+    uniforme: 5, libro_guardia: 5, evidencias: 0,
+  },
 }
 
 /** Cómo se reparte el 100 % con una combinación dada, contando sólo lo puntuable. */
@@ -504,7 +542,10 @@ export function calcularCumplimiento(
 
   const dimension = (
     clave: ClaveDimension, nota: number | null, detalle: string,
-    extra: { enValidacion?: boolean; noAplica?: boolean; faltante?: string | null } = {},
+    extra: {
+      enValidacion?: boolean; noAplica?: boolean
+      datosInsuficientes?: boolean; faltante?: string | null
+    } = {},
   ): Dimension => {
     const peso = pesos[clave] ?? 0
     const hayDato = nota !== null
@@ -515,6 +556,7 @@ export function calcularCumplimiento(
       peso > 0 && hayDato && !extra.enValidacion ? 'puntuable'
       : hayDato                                  ? 'en_validacion'
       : extra.noAplica                           ? 'no_aplica'
+      : extra.datosInsuficientes                 ? 'datos_insuficientes'
       :                                            'sin_datos'
     // `null` A PROPÓSITO no es lo mismo que "no vino".
     //
@@ -535,6 +577,7 @@ export function calcularCumplimiento(
     return dimension(clave, f.nota, f.detalle, {
       enValidacion: f.enValidacion,
       noAplica: f.noAplica,
+      datosInsuficientes: f.datosInsuficientes,
       faltante: f.faltante,
     })
   }

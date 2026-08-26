@@ -493,6 +493,7 @@ export function fuentesDeEmpleado(
       detalle: detalleRondas(r),
       enValidacion: r.enValidacion,
       noAplica: r.estado === 'no_aplica',
+      datosInsuficientes: r.medicion.estado === 'datos_insuficientes',
       faltante: porQue(r.medicion, 'ronda', 'rondas',
         'Quedan ventanas pausadas sin causa registrada. Una pausa sin causa puede haber '
         + 'sido un problema técnico o la ronda que no se hacía, y las dos se leen igual: '
@@ -503,6 +504,7 @@ export function fuentesDeEmpleado(
       detalle: detalleEvidencia(uniforme),
       enValidacion: uniforme.enValidacion,
       noAplica: uniforme.medicion.estado === 'no_aplica',
+      datosInsuficientes: uniforme.medicion.estado === 'datos_insuficientes',
       faltante: porQue(uniforme.medicion, 'evidencia de uniforme', 'evidencias de uniforme',
         'Quedan observaciones de la IA sin revisar. Hasta que una persona se pronuncie no '
         + 'son faltas, y la nota sólo describe lo que alguien miró.'),
@@ -514,6 +516,7 @@ export function fuentesDeEmpleado(
       // Sin ninguna foto de libro en el período no se afirma nada: puede ser un
       // objetivo móvil, donde no hay libro que fotografiar.
       noAplica: libro.medicion.estado === 'no_aplica',
+      datosInsuficientes: libro.medicion.estado === 'datos_insuficientes',
       faltante: porQue(libro.medicion, 'registro de libro', 'registros de libro',
         'Quedan observaciones de la IA sin revisar. No subir la foto es un hecho de '
         + 'Procedimiento; que el libro esté mal es otra cosa y necesita que una persona '
@@ -526,6 +529,7 @@ export function fuentesDeEmpleado(
       // si la foto se podía leer, y eso no debe bajarle el puntaje a nadie.
       enValidacion: true,
       noAplica: calidad.medicion.estado === 'no_aplica',
+      datosInsuficientes: calidad.medicion.estado === 'datos_insuficientes',
       faltante: calidad.medicion.estado === 'medible'
         ? 'Descriptiva por decisión: mide si la foto se podía leer, no lo que la foto '
           + 'muestra. No corresponde que baje el puntaje de nadie.'
