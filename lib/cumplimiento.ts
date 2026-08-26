@@ -511,6 +511,39 @@ export const VARIANTES_PESOS: Record<string, Record<ClaveDimension, number>> = {
     asistencia: 20, rondas: 40, puntualidad: 20, procedimiento: 10,
     uniforme: 5, libro_guardia: 5, evidencias: 0,
   },
+
+  /**
+   * E · PRESTACIÓN SIN LASTRE
+   *
+   * Sale de mirar la dispersión real de agosto, contando sólo a quien tiene al
+   * menos una incidencia en cada dimensión:
+   *
+   *   Puntualidad     44 de 65 personas, desvío 2,53, peor 0
+   *   Procedimiento   38 de 65,          desvío 2,53, peor 0
+   *   Rondas          13 de 17,          desvío 3,38, peor 0
+   *   Uniforme        14 de 62,          desvío 1,72, peor 2,5
+   *   Libro            9 de 60,          desvío 0,54, peor 7,5
+   *
+   * Libro es casi constante: 51 de 60 personas tienen exactamente 10. Un peso
+   * alto ahí no agrega información y sí agrega denominador — empuja a todos
+   * hacia arriba por igual. En los modelos A-D, Uniforme y Libro suman 20 de
+   * peso en dimensiones cuasi-constantes mientras Procedimiento baja 50, y el
+   * resultado es que alguien con el 60 % de sus jornadas mal registradas queda
+   * "Correcto".
+   *
+   * Este modelo conserva la intención —la prestación pesa más que la habilidad
+   * con la app— pero sin compensarla con lastre:
+   *
+   *   · Asistencia y Puntualidad suben: presentarse, y presentarse a horario,
+   *     ES la prestación. Puntualidad además es la señal más amplia que hay.
+   *   · Rondas alto donde aplica: es la que más discrimina.
+   *   · Procedimiento baja de 60 a 25: deja de dominar, no deja de importar.
+   *   · Uniforme y Libro entran con el peso que su dispersión justifica.
+   */
+  modelo_e_sin_lastre: {
+    asistencia: 25, rondas: 30, puntualidad: 25, procedimiento: 25,
+    uniforme: 8, libro_guardia: 4, evidencias: 0,
+  },
 }
 
 /** Cómo se reparte el 100 % con una combinación dada, contando sólo lo puntuable. */
