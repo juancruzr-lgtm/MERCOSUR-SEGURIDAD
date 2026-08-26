@@ -493,9 +493,37 @@ describe('objetivoEnAlcance', () => {
     expect(objetivoEnAlcance(null, false, new Set(['z1']))).toBe(false)
   })
 
-  it('supervisor sin zonas asignadas: alcance total (regla existente)', () => {
-    expect(objetivoEnAlcance('z5', false, new Set())).toBe(true)
-    expect(objetivoEnAlcance('z5', false, null)).toBe(true)
+  it('supervisor SIN zonas no ve nada', () => {
+    // Antes veia todo. La ausencia de configuracion abria el acceso en vez de
+    // cerrarlo, y agregar una zona -el acto que parece dar permiso- se lo quitaba.
+    expect(objetivoEnAlcance('z5', false, new Set())).toBe(false)
+    expect(objetivoEnAlcance('z5', false, null)).toBe(false)
+    expect(objetivoEnAlcance(null, false, new Set())).toBe(false)
+  })
+
+  it('supervisor con una zona ve solo esa', () => {
+    expect(objetivoEnAlcance('rosario', false, new Set(['rosario']))).toBe(true)
+    expect(objetivoEnAlcance('rafaela', false, new Set(['rosario']))).toBe(false)
+  })
+
+  it('supervisor con varias zonas ve esas y ninguna mas', () => {
+    const suyas = new Set(['rosario', 'rafaela'])
+    expect(objetivoEnAlcance('rosario', false, suyas)).toBe(true)
+    expect(objetivoEnAlcance('rafaela', false, suyas)).toBe(true)
+    expect(objetivoEnAlcance('reconquista', false, suyas)).toBe(false)
+  })
+
+  it('admin no pierde acceso, tenga o no zonas', () => {
+    expect(objetivoEnAlcance('z5', true, new Set())).toBe(true)
+    expect(objetivoEnAlcance('z5', true, null)).toBe(true)
+    expect(objetivoEnAlcance(null, true, new Set(['otra']))).toBe(true)
+  })
+
+  it('nadie gana acceso por no ser admin: sin zonas es cero, no total', () => {
+    // Vale para cualquier rol que no sea admin, vigilador incluido.
+    for (const zona of ['z1', 'z2', null]) {
+      expect(objetivoEnAlcance(zona, false, new Set())).toBe(false)
+    }
   })
 })
 
