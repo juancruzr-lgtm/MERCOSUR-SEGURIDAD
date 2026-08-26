@@ -1,6 +1,10 @@
 'use client'
 
-// Indicador de Desempeño y Cumplimiento — vista de Etapa 1.
+// Cumplimiento Operativo — la lista, por empleado.
+//
+// El detalle de una persona vive en components/cumplimiento/FichaCumplimiento,
+// con las siete dimensiones. Esta pantalla es la bandeja: quién necesita una
+// decisión primero. No es un podio y el orden no va de mejor a peor.
 //
 // NO calcula nada: todo sale de lib/desempeno.ts, que es la única definición.
 // Las filas salen de la misma carga que usa Revisión de planillas, así que las
@@ -135,11 +139,13 @@ export default function DesempenoPanel({
       {!compacto && (
         <div style={{ marginBottom:14 }}>
           <div style={{ fontSize:15, fontWeight:800, fontFamily:'Syne,sans-serif', color:'#e2e8f0' }}>
-            Desempeño · {etiquetaMes(mes)}
+            Cumplimiento operativo · {etiquetaMes(mes)}
           </div>
           <div style={S.tenue}>
-            Resume asistencia y cumplimiento del procedimiento registrado en la aplicación.
-            No modifica por sí mismo las horas ni la liquidación.
+            Mide el cumplimiento del procedimiento —presencia, horario y uso de la aplicación—,
+            no la calidad del trabajo del vigilador: alguien puede ser el que el cliente pide
+            por nombre y tener un problema concreto con la app. La evaluación del supervisor y
+            la del cliente son otra capa y todavía no existen. No modifica horas ni liquidación.
           </div>
         </div>
       )}
