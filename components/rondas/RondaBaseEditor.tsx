@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { eliminarRondaBase, mensajeContextoEliminarRonda } from '@/lib/rondas'
 import {
   actualizarRondaBase,
   cambiarEstadoRonda,
@@ -55,6 +56,7 @@ export default function RondaBaseEditor({
   const [baseGuardada, setBaseGuardada] = useState<BaseForm>(inicial)
   const [puntosDirty, setPuntosDirty] = useState(false)
   const [guardando, setGuardando] = useState(false)
+  const [confirmandoBorrado, setConfirmandoBorrado] = useState(false)
   const [error, setError] = useState('')
   const [mensaje, setMensaje] = useState('')
   // El input type="time" no sabe expresar "sin hora": al vaciarlo el navegador
@@ -217,6 +219,26 @@ export default function RondaBaseEditor({
     setGuardando(false)
   }
 
+  /**
+   * Eliminar la ronda. Solo si nunca se ejecutó.
+   *
+   * La decisión de si se puede o no la toma la base, no esta pantalla: si tiene
+   * ejecuciones la RPC contesta `tiene_historia` y no borra nada. Acá sólo se
+   * muestra lo que contestó.
+   */
+  const eliminar = async () => {
+    if (!ronda || guardando) return
+    setGuardando(true)
+    setMensaje(null)
+    const { data, error } = await eliminarRondaBase(ronda.id)
+    setGuardando(false)
+    if (error) { setMensaje(error); return }
+    const aviso = data ? mensajeContextoEliminarRonda(data) : 'No se pudo eliminar la ronda.'
+    if (aviso) { setMensaje(aviso); setConfirmandoBorrado(false); return }
+    onCambio()
+    onCerrar()
+  }
+
   return (
     <div className={styles.editor}>
       <div className={styles.header} style={{ marginBottom: 14 }}>
@@ -296,6 +318,29 @@ export default function RondaBaseEditor({
       </div>
 
       <div className={styles.actions} style={{ justifyContent: 'flex-end', marginTop: 14 }}>
+        {ronda && !confirmandoBorrado && (
+          <button
+            className={styles.button}
+            type="button"
+            onClick={() => setConfirmandoBorrado(true)}
+            disabled={guardando}
+          >
+            Eliminar ronda
+          </button>
+        )}
+        {ronda && confirmandoBorrado && (
+          <>
+            <span style={{ fontSize: 12, color: '#fbbf24', alignSelf: 'center', marginRight: 6 }}>
+              Se elimina con sus puntos y alertas. Si ya tiene ejecuciones no se borra.
+            </span>
+            <button className={styles.button} type="button" onClick={() => setConfirmandoBorrado(false)} disabled={guardando}>
+              Cancelar
+            </button>
+            <button className={`${styles.button} ${styles.buttonDanger}`} type="button" onClick={() => void eliminar()} disabled={guardando}>
+              {guardando ? 'Eliminando…' : 'Confirmar eliminación'}
+            </button>
+          </>
+        )}
         {ronda && (
           <button className={`${styles.button} ${ronda.activo ? styles.buttonDanger : ''}`} type="button" onClick={() => void cambiarActivo()} disabled={guardando}>
             {ronda.activo ? 'Desactivar ronda' : 'Activar ronda'}
