@@ -36,17 +36,64 @@ export type { EstadoDesempeno, MotivoDesempeno }
 // ── Puntualidad ─────────────────────────────────────────────────────────────
 
 /**
- * El vigilador debe presentarse 15 minutos antes para prepararse y anoticiarse
- * de las novedades. La ventana correcta es [inicio − 15, inicio].
+ * El vigilador debe presentarse 15 minutos antes para prepararse, anoticiarse
+ * de las novedades y recibir el puesto. La ventana correcta es
+ * [inicio − 15, inicio].
  *
  * Que el sistema TÉCNICAMENTE permita fichar unos minutos más tarde no vuelve
  * puntual a ese ingreso: son dos cosas distintas y viven en lugares distintos.
  * La tolerancia de fichaje pertenece a la operación y a la liquidación, y este
- * módulo no la toca ni la lee.
+ * módulo no la lee ni la toca.
+ *
+ * ── Por qué NO se excluyen los horarios sospechosos ─────────────────────────
+ * El horario programado es la referencia mientras no lo corrija una persona.
+ * Si está mal cargado, queremos que el indicador lo haga VISIBLE para que
+ * alguien lo revise y lo corrija — no esconderlo detrás de una excepción
+ * estadística. Una excepción automática dejaría el dato malo intacto y sin que
+ * nadie se entere.
+ *
+ * Para eso existe `patronesDeHorarioSospechoso`, que señala el puesto sin
+ * neutralizar ninguna impuntualidad.
  */
 export const MINUTOS_PRESENTACION_PREVIA = 15
 
 export type HechoPuntualidad = 'puntual' | 'impuntual' | 'sin_dato'
+
+export type ClaveBanda = 'puntual' | 'leve' | 'tardanza' | 'importante' | 'grave'
+
+export interface BandaPuntualidad {
+  clave: ClaveBanda
+  etiqueta: string
+  /** Minutos de demora desde el inicio programado. `hasta` inclusive. */
+  desde: number
+  hasta: number
+  /**
+   * Cuánto resta esa jornada, en "jornadas equivalentes". La nota es
+   * 10 × (1 − Σpenalización / evaluables), así que 1.0 equivale a perder una
+   * jornada entera.
+   *
+   * Los valores salen de simular agosto 2026 sobre 54 personas con muestra:
+   * una tardanza leve aislada deja la nota en 9,7–9,9 —no destruye el mes— y
+   * la reincidencia sí baja (17 tardanzas de 6–15 en 20 jornadas → 5,1).
+   * No se eligieron para fabricar dispersión: 15 personas quedaron en 10,0.
+   */
+  penalizacion: number
+}
+
+export const BANDAS_PUNTUALIDAD: BandaPuntualidad[] = [
+  { clave: 'puntual',    etiqueta: 'Puntual',              desde: -Infinity, hasta: 0,        penalizacion: 0 },
+  { clave: 'leve',       etiqueta: 'Tardanza leve',        desde: 1,         hasta: 5,        penalizacion: 0.25 },
+  { clave: 'tardanza',   etiqueta: 'Tardanza',             desde: 6,         hasta: 15,       penalizacion: 0.5 },
+  { clave: 'importante', etiqueta: 'Tardanza importante',  desde: 16,        hasta: 30,       penalizacion: 1 },
+  { clave: 'grave',      etiqueta: 'Tardanza grave',       desde: 31,        hasta: Infinity, penalizacion: 2 },
+]
+
+export function bandaDeDemora(minutos: number): BandaPuntualidad {
+  for (const b of BANDAS_PUNTUALIDAD) {
+    if (minutos >= b.desde && minutos <= b.hasta) return b
+  }
+  return BANDAS_PUNTUALIDAD[BANDAS_PUNTUALIDAD.length - 1]
+}
 
 function aMinutos(hora?: string | null): number | null {
   const m = /^(\d{1,2}):(\d{2})/.exec(String(hora ?? ''))
@@ -54,28 +101,33 @@ function aMinutos(hora?: string | null): number | null {
 }
 
 export interface JornadaCumplimiento extends JornadaDesempeno {
+  /** Fecha del turno, para poder mostrar el hecho detrás del número. */
+  fecha?: string | null
   /** Horario programado del turno. */
   horaInicioProg?: string | null
   horaFinProg?: string | null
-  /** Hora de entrada efectivamente registrada. */
+  /**
+   * Hora de entrada reconocida. Si Administración corrigió el fichaje, ésta es
+   * la corregida: la corrección humana es la fuente autoritativa y este módulo
+   * no la discute ni mantiene una segunda versión del dato.
+   */
   entrada?: string | null
+  objetivo?: string | null
 }
 
 /**
- * Puntualidad de UNA jornada.
- *
- * `sin_dato` cuando el vigilador no registró su propia entrada. Es deliberado:
- * esa jornada ya cuenta como incidencia de Procedimiento, y llamarla además
- * "impuntual" sería castigar dos veces el mismo hecho. Además sería inventar:
- * si nadie fichó, no se sabe a qué hora llegó.
+ * Minutos de demora respecto del inicio programado. Negativo = llegó antes.
+ * `null` cuando no se puede saber.
  */
-export function hechoDePuntualidad(j: JornadaCumplimiento): HechoPuntualidad {
-  if (!j.tieneRegistro || j.esAusencia) return 'sin_dato'
-  if (!j.entradaPropia) return 'sin_dato'
+export function minutosDeDemora(j: JornadaCumplimiento): number | null {
+  if (!j.tieneRegistro || j.esAusencia) return null
+  // Sin fichaje propio no se sabe a qué hora llegó. Ya cuenta como incidencia
+  // de Procedimiento; suponer una hora sería inventar y castigar dos veces.
+  if (!j.entradaPropia) return null
 
   const inicio = aMinutos(j.horaInicioProg)
   const entradaCruda = aMinutos(j.entrada)
-  if (inicio === null || entradaCruda === null) return 'sin_dato'
+  if (inicio === null || entradaCruda === null) return null
 
   // Nocturno: si el turno arranca a las 22:00 y la entrada dice 21:50, llegó
   // temprano; si dice 01:00, llegó al día siguiente. El corte se hace lejos del
@@ -85,7 +137,24 @@ export function hechoDePuntualidad(j: JornadaCumplimiento): HechoPuntualidad {
   let entrada = entradaCruda
   if (nocturno && entradaCruda < inicio - 720) entrada += 1440
 
-  return entrada <= inicio ? 'puntual' : 'impuntual'
+  return entrada - inicio
+}
+
+export function hechoDePuntualidad(j: JornadaCumplimiento): HechoPuntualidad {
+  const m = minutosDeDemora(j)
+  if (m === null) return 'sin_dato'
+  return m <= 0 ? 'puntual' : 'impuntual'
+}
+
+/** Una jornada tarde, con todo lo que hace falta para poder rastrearla. */
+export interface DetalleTardanza {
+  turnoId: string
+  fecha: string | null
+  objetivo: string | null
+  horaInicioProg: string | null
+  entrada: string | null
+  minutos: number
+  banda: ClaveBanda
 }
 
 export interface ResumenPuntualidad {
@@ -94,24 +163,120 @@ export interface ResumenPuntualidad {
   sinDato: number
   /** Sobre las jornadas donde SÍ se puede juzgar. */
   evaluadas: number
+  porBanda: Record<ClaveBanda, number>
+  /** Promedio de demora contando SOLO las tardías. */
+  promedioTarde: number | null
+  maximo: number | null
   nota: number | null
+  /** Las tardías, de mayor a menor demora. Es la trazabilidad del número. */
+  tardanzas: DetalleTardanza[]
 }
 
 export function resumirPuntualidad(jornadas: JornadaCumplimiento[]): ResumenPuntualidad {
-  let puntuales = 0
-  let impuntuales = 0
+  const porBanda: Record<ClaveBanda, number> = {
+    puntual: 0, leve: 0, tardanza: 0, importante: 0, grave: 0,
+  }
+  const tardanzas: DetalleTardanza[] = []
   let sinDato = 0
+  let penalizacion = 0
+  let sumaTarde = 0
+  let maximo: number | null = null
+
   for (const j of jornadas) {
-    const h = hechoDePuntualidad(j)
-    if (h === 'puntual') puntuales += 1
-    else if (h === 'impuntual') impuntuales += 1
-    else sinDato += 1
+    const m = minutosDeDemora(j)
+    if (m === null) { sinDato += 1; continue }
+    const banda = bandaDeDemora(m)
+    porBanda[banda.clave] += 1
+    penalizacion += banda.penalizacion
+    if (m > 0) {
+      sumaTarde += m
+      if (maximo === null || m > maximo) maximo = m
+      tardanzas.push({
+        turnoId: j.turnoId,
+        fecha: j.fecha ?? null,
+        objetivo: j.objetivo ?? null,
+        horaInicioProg: j.horaInicioProg ?? null,
+        entrada: j.entrada ?? null,
+        minutos: m,
+        banda: banda.clave,
+      })
+    }
   }
+
+  const puntuales = porBanda.puntual
+  const impuntuales = porBanda.leve + porBanda.tardanza + porBanda.importante + porBanda.grave
   const evaluadas = puntuales + impuntuales
+
   return {
-    puntuales, impuntuales, sinDato, evaluadas,
-    nota: evaluadas > 0 ? Math.round((10 * puntuales / evaluadas) * 100) / 100 : null,
+    puntuales, impuntuales, sinDato, evaluadas, porBanda,
+    promedioTarde: impuntuales > 0 ? Math.round(sumaTarde / impuntuales) : null,
+    maximo,
+    // Piso en 0: alguien con más penalización que jornadas no baja de cero, y
+    // un número negativo no significaría nada.
+    nota: evaluadas > 0
+      ? Math.round(Math.max(0, 10 * (1 - penalizacion / evaluadas)) * 100) / 100
+      : null,
+    tardanzas: tardanzas.sort((a, b) => b.minutos - a.minutos),
   }
+}
+
+// ── Horarios posiblemente mal cargados ──────────────────────────────────────
+
+export interface PatronHorario {
+  objetivo: string
+  horaInicio: string
+  entradas: number
+  personas: number
+  porcentajeTarde: number
+  promedioTarde: number
+}
+
+/** Un patrón necesita repetirse, con más de una persona, y con demora real. */
+export const UMBRAL_PATRON = { entradas: 5, personas: 2, porcentaje: 70, promedio: 10 }
+
+/**
+ * Puestos donde la tardanza parece del horario y no de las personas.
+ *
+ * NO neutraliza ninguna impuntualidad: es una advertencia para que alguien
+ * revise la programación. Si el horario estaba mal, se corrige por el mecanismo
+ * de siempre y el indicador pasa a usar el dato corregido — que es el que ya
+ * lee, porque `entrada` viene de la hora reconocida.
+ */
+export function patronesDeHorarioSospechoso(
+  jornadas: JornadaCumplimiento[],
+  umbral = UMBRAL_PATRON,
+): PatronHorario[] {
+  const grupos = new Map<string, { obj: string; ini: string; ms: number[]; personas: Set<string> }>()
+
+  for (const j of jornadas) {
+    const m = minutosDeDemora(j)
+    if (m === null || !j.objetivo || !j.horaInicioProg) continue
+    const clave = `${j.objetivo}@${j.horaInicioProg}`
+    const g = grupos.get(clave) ?? {
+      obj: j.objetivo, ini: j.horaInicioProg, ms: [], personas: new Set<string>(),
+    }
+    g.ms.push(m)
+    // La persona sale del turno, no de la jornada: dos filas del mismo vigilador
+    // no convierten un problema individual en un patrón del puesto.
+    if (j.turnoId) g.personas.add(String((j as any).empleadoId ?? j.turnoId))
+    grupos.set(clave, g)
+  }
+
+  const out: PatronHorario[] = []
+  grupos.forEach(g => {
+    const tarde = g.ms.filter(m => m > 0)
+    if (g.ms.length < umbral.entradas || g.personas.size < umbral.personas) return
+    const pct = Math.round((100 * tarde.length) / g.ms.length)
+    if (pct < umbral.porcentaje || tarde.length === 0) return
+    const prom = Math.round(tarde.reduce((s, m) => s + m, 0) / tarde.length)
+    if (prom < umbral.promedio) return
+    out.push({
+      objetivo: g.obj, horaInicio: g.ini, entradas: g.ms.length,
+      personas: g.personas.size, porcentajeTarde: pct, promedioTarde: prom,
+    })
+  })
+
+  return out.sort((a, b) => b.promedioTarde - a.promedioTarde)
 }
 
 // ── Las siete dimensiones ───────────────────────────────────────────────────
@@ -151,14 +316,26 @@ export type EstadoDimension = 'puntuable' | 'en_validacion' | 'sin_datos'
  * en producción. Eso está cubierto por un test: encender una dimensión tiene
  * que ser una decisión, nunca un efecto colateral.
  */
+/**
+ * Peso de Puntualidad, elegido sobre la simulacion de agosto 2026.
+ *
+ * Con 40 la normalizacion queda Asistencia 16,7 %, Puntualidad 33,3 % y
+ * Procedimiento 50 %. Antes Procedimiento era el 75 % del numero, y eso hacia
+ * que usar mal la app dominara el resultado de alguien que vino todos los dias
+ * y llego puntual: exactamente lo que este indicador no debe afirmar.
+ *
+ * Los pesos de Asistencia y Procedimiento NO se tocaron; el rebalanceo sale de
+ * agregar la dimension nueva al denominador.
+ */
+export const PESO_PUNTUALIDAD = 40
+
 export const PESOS: Record<ClaveDimension, number> = {
   asistencia:    PESO_ASISTENCIA,
   procedimiento: PESO_PROCEDIMIENTO,
-  // Calculada y testeada. Pesa cuando PUNT-1 y PUNT-2 confirmen que los
-  // horarios programados representan la operación real: una programación
-  // cargada con varias horas de desvío convertiría un error nuestro en mala
-  // conducta del vigilador.
-  puntualidad:   0,
+  // Mide contra el horario programado, que es la referencia mientras nadie lo
+  // corrija. Un horario mal cargado se hace VISIBLE por patronesDeHorarioSospechoso,
+  // no se esconde con una excepcion automatica.
+  puntualidad:   PESO_PUNTUALIDAD,
   // Pesa cuando RONDAS-obligaciones-agosto permita contar rondas EXIGIBLES vs
   // CUMPLIDAS por persona, y distinguir lo no atribuible: pausadas, cerradas
   // administrativamente, problemas técnicos, configuración que no correspondía.
@@ -202,8 +379,6 @@ const pluralJornadas = (n: number) => `${n} ${n === 1 ? 'jornada' : 'jornadas'}`
  * qué hacer para habilitarla.
  */
 const FALTANTE: Partial<Record<ClaveDimension, string>> = {
-  puntualidad: 'Falta la auditoría de horarios programados (PUNT-1 y PUNT-2). '
-    + 'Sin ella, una programación mal cargada se leería como impuntualidad de la persona.',
   rondas: 'Falta contar rondas exigibles contra cumplidas por persona '
     + '(RONDAS-obligaciones-agosto), separando pausadas, cerradas administrativamente '
     + 'y fallas técnicas no atribuibles al vigilador.',
@@ -240,11 +415,7 @@ export function calcularCumplimiento(jornadas: JornadaCumplimiento[]): Resultado
       base.observacionesValidas > 0
         ? `${base.ausencias} ausencia(s) confirmada(s) sobre ${pluralJornadas(base.observacionesValidas)}`
         : 'Sin jornadas evaluables en el período'),
-    dimension('puntualidad', punt.nota,
-      punt.evaluadas > 0
-        ? `${punt.impuntuales} ingreso(s) posterior(es) al horario sobre ${punt.evaluadas} evaluable(s)`
-          + (punt.sinDato > 0 ? ` · ${punt.sinDato} sin fichaje propio, no se juzga` : '')
-        : 'Sin ingresos propios que se puedan evaluar'),
+    dimension('puntualidad', punt.nota, detallePuntualidad(punt)),
     dimension('procedimiento', base.procedimiento,
       base.observacionesValidas > 0
         ? `${base.incidencias.sin_registro_propio + base.incidencias.entrada_sin_salida} incidencia(s) sobre ${pluralJornadas(base.observacionesValidas)}`
@@ -305,4 +476,19 @@ export function resumenCorto(r: { puntaje: number | null; estado: EstadoDesempen
   const etiqueta = ETIQUETA_ESTADO[r.estado]
   if (r.puntaje === null) return `— · ${etiqueta}`
   return `${r.puntaje.toFixed(1).replace('.', ',')} / 10 · ${etiqueta}`
+}
+
+/** "19 de 23 puntuales · 2 de 1–5 min · 1 de 6–15 · demora promedio 6 min". */
+export function detallePuntualidad(p: ResumenPuntualidad): string {
+  if (p.evaluadas === 0) return 'Sin ingresos propios que se puedan evaluar'
+  const partes = [`${p.puntuales} de ${p.evaluadas} puntuales`]
+  for (const b of BANDAS_PUNTUALIDAD) {
+    if (b.clave === 'puntual') continue
+    const n = p.porBanda[b.clave]
+    if (n > 0) partes.push(`${n} ${b.etiqueta.toLowerCase()}`)
+  }
+  if (p.promedioTarde !== null) partes.push(`demora promedio ${p.promedioTarde} min`)
+  if (p.maximo !== null && p.maximo > 0) partes.push(`máxima ${p.maximo} min`)
+  if (p.sinDato > 0) partes.push(`${p.sinDato} sin fichaje propio, no se juzga`)
+  return partes.join(' · ')
 }

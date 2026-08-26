@@ -51,6 +51,8 @@ export function jornadaDesdeFila(f: FilaBandejaMensual): JornadaDesempeno {
 export function jornadaCumplimientoDesdeFila(f: FilaBandejaMensual): JornadaCumplimiento {
   return {
     ...jornadaDesdeFila(f),
+    fecha: f.fecha,
+    objetivo: f.objetivo,
     horaInicioProg: f.horaInicioProg,
     horaFinProg: f.horaFinProg,
     entrada: f.entrada,

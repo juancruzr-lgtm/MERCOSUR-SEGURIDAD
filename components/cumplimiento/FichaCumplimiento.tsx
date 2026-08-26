@@ -13,8 +13,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
-import { ETIQUETA_ESTADO, calcularCumplimiento } from '@/lib/cumplimiento'
-import type { Dimension, EstadoDesempeno } from '@/lib/cumplimiento'
+import {
+  BANDAS_PUNTUALIDAD, ETIQUETA_ESTADO, calcularCumplimiento, patronesDeHorarioSospechoso,
+} from '@/lib/cumplimiento'
+import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
 import { jornadaCumplimientoDesdeFila, etiquetaMes, mesPorDefecto, mesesDisponibles } from '@/lib/desempeno-datos'
 import { faltanteParaMuestra } from '@/lib/desempeno'
 
@@ -37,7 +39,7 @@ const S = {
 
 const coma = (v: number) => v.toFixed(1).replace('.', ',')
 
-function FilaDimension({ d }: { d: Dimension }) {
+function FilaDimension({ d, pie }: { d: Dimension, pie?: React.ReactNode }) {
   const puntua = d.estado === 'puntuable'
   return (
     <div style={S.fila}>
@@ -58,7 +60,42 @@ function FilaDimension({ d }: { d: Dimension }) {
       <span style={{ ...S.tenue, flex:'1 1 100%', marginTop:2 }}>
         {d.detalle}
         {d.faltante && <span style={{ color:'#64748b' }}> · {d.faltante}</span>}
+        {pie}
       </span>
+    </div>
+  )
+}
+
+
+/**
+ * Las tardanzas, una por una. El pedido fue explicito: no alcanza con
+ * "Puntualidad 8,7" — hay que poder ver que jornada, a que hora empezaba el
+ * turno, a que hora ficho y cuantos minutos fueron.
+ */
+function DetalleTardanzas({ p }: { p: ResumenPuntualidad }) {
+  const [abierto, setAbierto] = useState(false)
+  if (p.tardanzas.length === 0) return null
+  return (
+    <div style={{ marginTop: 4 }}>
+      <button
+        onClick={() => setAbierto(v => !v)}
+        style={{ background:'transparent', border:'none', padding:0, cursor:'pointer',
+                 color:'#38bdf8', fontSize:11.5, textDecoration:'underline', textUnderlineOffset:3 }}>
+        {abierto ? 'Ocultar' : `Ver las ${p.tardanzas.length} tardanzas`}
+      </button>
+      {abierto && (
+        <div style={{ marginTop:6 }}>
+          {p.tardanzas.map(t => (
+            <div key={t.turnoId} style={{ ...S.tenue, padding:'3px 0', color:'#cbd5e1' }}>
+              {t.fecha ? t.fecha.slice(8, 10) + '/' + t.fecha.slice(5, 7) : '—'}
+              {t.objetivo ? ' · ' + t.objetivo : ''}
+              {' · turno ' + (t.horaInicioProg ?? '—')}
+              {' · fichó ' + (t.entrada ?? '—')}
+              <span style={{ color:'#fcd34d', fontWeight:700 }}>{' · +' + t.minutos + ' min'}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -87,10 +124,12 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
 
   useEffect(() => { void cargar() }, [cargar])
 
-  const r = useMemo(
-    () => calcularCumplimiento(filas.map(jornadaCumplimientoDesdeFila)),
-    [filas],
-  )
+  const jornadas = useMemo(() => filas.map(jornadaCumplimientoDesdeFila), [filas])
+  const r = useMemo(() => calcularCumplimiento(jornadas), [jornadas])
+  // Sobre las jornadas de ESTA persona: si sus tardanzas se concentran en un
+  // puesto donde además hay otros llegando tarde, conviene mirar el horario
+  // antes que a la persona. No perdona ninguna tardanza; sólo lo señala.
+  const patrones = useMemo(() => patronesDeHorarioSospechoso(jornadas), [jornadas])
 
   // Sin acceso no se carga ni se muestra nada. La guarda está acá además de en
   // el ruteo: una pantalla que no debería verse no puede depender de que nadie
@@ -141,7 +180,13 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
 
       <div style={{ ...S.caja, marginTop:14 }}>
         <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:4 }}>DIMENSIONES</div>
-        {r.dimensiones.map(d => <FilaDimension key={d.clave} d={d} />)}
+        {r.dimensiones.map(d => (
+          <FilaDimension
+            key={d.clave}
+            d={d}
+            pie={d.clave === 'puntualidad' ? <DetalleTardanzas p={r.puntualidad} /> : undefined}
+          />
+        ))}
       </div>
 
       {r.motivos.length > 0 && (
@@ -156,6 +201,26 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         </div>
       )}
 
+      {patrones.length > 0 && (
+        <div style={{ ...S.caja, marginTop:14, borderColor:'#f59e0b55' }}>
+          <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:8, color:'#fcd34d' }}>
+            POSIBLE HORARIO A REVISAR
+          </div>
+          {patrones.map(pt => (
+            <div key={pt.objetivo + pt.horaInicio} style={{ ...S.dim, padding:'4px 0' }}>
+              · {pt.objetivo} · turno {pt.horaInicio} — {pt.entradas} entradas de{' '}
+              {pt.personas} vigilador(es), {pt.porcentajeTarde} % posteriores al inicio,{' '}
+              demora promedio +{pt.promedioTarde} min
+            </div>
+          ))}
+          <div style={{ ...S.tenue, marginTop:8, lineHeight:1.5 }}>
+            Varias personas llegando tarde al mismo puesto suele ser el horario cargado,
+            no las personas. <b>Esto no descuenta ninguna tardanza</b>: si el horario
+            estaba mal, hay que corregirlo por el circuito de siempre y el indicador pasa
+            a usar el dato corregido.
+          </div>
+        </div>
+      )}
       <div style={{ ...S.caja, marginTop:14 }}>
         <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:6 }}>TODAVÍA NO IMPLEMENTADO</div>
         <div style={{ ...S.tenue, lineHeight:1.6 }}>
