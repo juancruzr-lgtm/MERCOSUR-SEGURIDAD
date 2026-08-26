@@ -489,7 +489,10 @@ export async function crearRondaBase(
       descripcion: datos.descripcion?.trim() || null,
       intervalo_minutos: datos.intervalo_minutos,
       hora_inicio: datos.hora_inicio || null,
-      activo: datos.activo ?? true,
+      // Una ronda nace como BORRADOR. Antes nacia operativa y empezaba a exigir
+      // en el mismo instante en que se creaba, cuando todavia no tenia ni un
+      // punto cargado. Se activa desde el editor, una vez configurada.
+      activo: datos.activo ?? false,
     })
     .select(COLS_RONDA_BASE)
     .single()
@@ -529,6 +532,57 @@ export async function actualizarRondaBase(
 
   if (error) return { data: null, error: mensajeError(error, 'No se pudo actualizar la ronda.') }
   return { data: data as RondaBase, error: null }
+}
+
+export type ContextoEliminarRonda =
+  | 'ok'
+  | 'sin_usuario'
+  | 'sin_permiso'
+  | 'ronda_no_encontrada'
+  /** Ya tiene ejecuciones: no se borra, se archiva. */
+  | 'tiene_historia'
+
+export interface ResultadoEliminarRonda {
+  contexto: ContextoEliminarRonda
+  ronda_nombre?: string
+  ejecuciones?: number
+  activa?: boolean
+  puntos_eliminados?: number
+  alertas_eliminadas?: number
+  pausas_eliminadas?: number
+}
+
+/**
+ * Elimina una ronda SOLO si nunca tuvo ejecuciones.
+ *
+ * Con ejecuciones devuelve `tiene_historia` y no borra nada: esas ejecuciones
+ * son el registro de que una persona recorrio el objetivo y saco las fotos, y
+ * eso no se tira para limpiar una pantalla. Ahi corresponde desactivar.
+ */
+export async function eliminarRondaBase(
+  rondaBaseId: string,
+  motivo?: string | null,
+): Promise<ResultadoRondas<ResultadoEliminarRonda>> {
+  const { data, error } = await supabase.rpc('eliminar_ronda_base', {
+    p_ronda_base_id: rondaBaseId,
+    p_motivo: motivo ?? null,
+  })
+  if (error) return fallaRpc('eliminar_ronda_base', error, 'No se pudo eliminar la ronda.')
+  return { data: (data ?? {}) as ResultadoEliminarRonda, error: null }
+}
+
+export function mensajeContextoEliminarRonda(r: ResultadoEliminarRonda): string | null {
+  switch (r.contexto) {
+    case 'ok':                  return null
+    case 'sin_usuario':         return 'Tu sesión venció. Volvé a ingresar.'
+    case 'sin_permiso':         return 'No tenés permiso para eliminar rondas de este objetivo.'
+    case 'ronda_no_encontrada': return 'No se encontró la ronda.'
+    case 'tiene_historia':
+      return `Esta ronda ya tiene ${r.ejecuciones} ejecución(es) registradas, así que no se borra: `
+        + 'ese historial es el registro de que alguien la recorrió. '
+        + (r.activa ? 'Desactivala para sacarla de operación.' : 'Ya está desactivada.')
+    default:                    return 'No se pudo eliminar la ronda.'
+  }
 }
 
 export function cambiarEstadoRonda(
