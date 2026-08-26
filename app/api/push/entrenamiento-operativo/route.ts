@@ -170,6 +170,15 @@ export async function GET(req: NextRequest) {
   const nombres = new Map<string, string>()
   for (const f of bandeja.filas) nombres.set(f.empleadoId, f.vigilador)
 
+  // Quien no tiene filas de bandeja tampoco tiene nombre ahí, y la simulación
+  // mostraba un UUID crudo justo en la pantalla que se usa para decidir si un
+  // mensaje sale. Se completa desde usuarios.
+  const faltanNombre = Array.from(porEvidencia.keys()).filter(id => !nombres.has(id))
+  if (faltanNombre.length > 0) {
+    const r = await client.from('usuarios').select('id, nombre, apellido').in('id', faltanNombre)
+    for (const u of ((r.data ?? []) as any[])) nombres.set(u.id, `${u.apellido}, ${u.nombre}`)
+  }
+
   porEvidencia.forEach((evidencias, empleadoId) => {
     if (yaEstan.has(empleadoId)) return
     if (soloEmpleado && empleadoId !== soloEmpleado) return
@@ -337,13 +346,37 @@ export async function GET(req: NextRequest) {
       requeridos_previos: e.requeridos,
     }).select('id').single()
 
+    let registroId: string | null = registro.data?.id ?? null
+
     if (registro.error) {
-      // Duplicado = otra corrida ya lo tomó. No es un fallo.
-      if (/duplicate key/i.test(registro.error.message)) { skipped += 1; continue }
-      fallos += 1
-      console.error('[entrenamiento] registro', c.empleadoId, registro.error.message)
-      continue
+      if (!/duplicate key/i.test(registro.error.message)) {
+        fallos += 1
+        console.error('[entrenamiento] registro', c.empleadoId, registro.error.message)
+        continue
+      }
+
+      // Ya existe una fila para (empleado, tipo, período). Hay dos casos muy
+      // distintos y tratarlos igual rompía el reintento:
+      //
+      //   notificado_at con fecha  ya se le mandó. No se manda de nuevo.
+      //   notificado_at en null    se registró y NO se llegó a entregar —el
+      //                            endpoint estaba vencido, el servicio push
+      //                            falló—. Hay que reintentar sobre ESA fila.
+      //
+      // Antes se salteaba en los dos casos, así que un intento fallido dejaba
+      // la instrucción registrada y muerta: el unique bloqueaba para siempre
+      // el reintento que el comentario prometía.
+      const existente = await client.from('entrenamiento_operativo')
+        .select('id, notificado_at')
+        .eq('empleado_id', c.empleadoId).eq('tipo', e.clave).eq('periodo', e.periodo)
+        .maybeSingle()
+
+      if (existente.error || !existente.data) { skipped += 1; continue }
+      if (existente.data.notificado_at) { skipped += 1; continue }
+      registroId = existente.data.id
     }
+
+    if (!registroId) { skipped += 1; continue }
 
     let entregado = false
     for (const s of suyas) {
@@ -370,7 +403,7 @@ export async function GET(req: NextRequest) {
 
     await client.from('entrenamiento_operativo')
       .update({ notificado_at: new Date().toISOString(), canal: 'push' })
-      .eq('id', registro.data.id)
+      .eq('id', registroId)
 
     await client.from('notificaciones_enviadas').insert({
       usuario_id: c.empleadoId,
