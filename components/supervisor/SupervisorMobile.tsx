@@ -18,6 +18,7 @@ import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA } from '@/lib/caracteristica-turno'
 import type { EstadoPuestos } from '@/lib/puestos'
 import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
+import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
@@ -2273,6 +2274,12 @@ export default function SupervisorMobile({ user }: any) {
     window.setTimeout(() => setFocoRondas(actual => (actual === destino ? null : actual)), 1800)
   }
 
+  // Dentro de Guardias, las mismas dos vistas que en escritorio: la lista de
+  // personas y su desempeño. El alcance por zona no se decide acá — lo aplica
+  // cargarFilasBandeja con objetivoEnAlcance, así que el supervisor ve sólo
+  // los empleados de sus zonas sin una segunda regla que pueda contradecirla.
+  const [vistaGuardias, setVistaGuardias] = useState<'lista' | 'desempeno'>('lista')
+
   const tabs = [
     { id: 'inicio', label: 'Inicio', icon: '🏠' },
     { id: 'alertas', label: 'Alertas', icon: '⚠️' },
@@ -3268,8 +3275,39 @@ export default function SupervisorMobile({ user }: any) {
             {tab === 'guardias' && (
               <section>
                 <div style={screenTitle}>Guardias / Vigiladores</div>
-                <div style={dateText}>Altas y bajas se envían a aprobación administrativa.</div>
+                <div style={dateText}>
+                  {vistaGuardias === 'desempeno'
+                    ? 'Cumplimiento operativo por período, de tus zonas.'
+                    : 'Altas y bajas se envían a aprobación administrativa.'}
+                </div>
 
+                <div style={{ display:'flex', gap:8, margin:'12px 0 4px', flexWrap:'wrap' }}>
+                  {([
+                    { id: 'lista' as const, texto: 'Vigiladores' },
+                    { id: 'desempeno' as const, texto: 'Cumplimiento' },
+                  ]).map(op => (
+                    <button
+                      key={op.id}
+                      type="button"
+                      onClick={() => setVistaGuardias(op.id)}
+                      style={{
+                        ...secondaryButton,
+                        flex: 1,
+                        borderColor: vistaGuardias === op.id ? '#38bdf8' : '#334155',
+                        background: vistaGuardias === op.id ? 'rgba(56,189,248,.09)' : '#1e293b',
+                        color: vistaGuardias === op.id ? '#38bdf8' : '#e2e8f0',
+                      }}
+                    >
+                      {op.texto}
+                    </button>
+                  ))}
+                </div>
+
+                {vistaGuardias === 'desempeno' && (
+                  <DesempenoPanel esAdmin={false} usuarioId={user?.id ?? null} rol={user?.rol ?? null} compacto />
+                )}
+
+                {vistaGuardias === 'lista' && (<>
                 <div style={{ ...card, borderColor:'rgba(59,130,246,.35)', background:'rgba(59,130,246,.08)' }}>
                   <div style={objetivoName}>Solicitudes de vigiladores</div>
                   <div style={{ ...muted, marginBottom:12 }}>Crear una solicitud pendiente para que administración apruebe el alta.</div>
@@ -3297,6 +3335,7 @@ export default function SupervisorMobile({ user }: any) {
                     </div>
                   </div>
                 ))}
+                </>)}
               </section>
             )}
 
