@@ -19,6 +19,11 @@ import {
 import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
 import { jornadaCumplimientoDesdeFila, etiquetaMes, mesPorDefecto, mesesDisponibles } from '@/lib/desempeno-datos'
 import { faltanteParaMuestra } from '@/lib/desempeno'
+import {
+  cargarEvidenciasEmpleado, cargarRondasEmpleado, detalleCalidad, detalleEvidencia,
+  detalleRondas, resumirCalidad, resumirEvidencias, resumirRondas,
+} from '@/lib/cumplimiento-fuentes'
+import type { EvidenciaCumplimiento, RondasEmpleado } from '@/lib/cumplimiento-fuentes'
 
 const COLOR_ESTADO: Record<EstadoDesempeno, string> = {
   excelente:             '#10b981',
@@ -115,6 +120,11 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   // Todas las del mes, no sólo las de esta persona: el patrón de horario es
   // del puesto y necesita ver a los demás.
   const [todasLasFilas, setTodasLasFilas] = useState<any[]>([])
+  const [rondas, setRondas] = useState<RondasEmpleado | null>(null)
+  const [evidencias, setEvidencias] = useState<EvidenciaCumplimiento[]>([])
+  // Estas dos fuentes no cortan la pantalla si fallan: son descriptivas y de
+  // peso 0. El aviso se muestra en su dimensión, no como error general.
+  const [avisoFuentes, setAvisoFuentes] = useState('')
 
   const cargar = useCallback(async () => {
     if (!esAdmin) { setCargando(false); return }
@@ -124,6 +134,14 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
     setTodasLasFilas(todas)
     setFilas(todas.filter(f => f.empleadoId === empleadoId))
     setCargando(false)
+
+    const [rr, ee] = await Promise.all([
+      cargarRondasEmpleado(mes, empleadoId),
+      cargarEvidenciasEmpleado(mes, empleadoId),
+    ])
+    setRondas(rr.dato)
+    setEvidencias(ee.evidencias)
+    setAvisoFuentes([rr.error, ee.error].filter(Boolean).join(' · '))
   }, [mes, esAdmin, usuarioId, empleadoId])
 
   useEffect(() => { void cargar() }, [cargar])
@@ -133,6 +151,29 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   // El patrón se calcula sobre TODO el mes —hace falta ver a los demás— y
   // después se recorta a los puestos donde ESTA persona llegó tarde: el resto
   // no explica nada de su número.
+  const resRondas = useMemo(() => resumirRondas(rondas), [rondas])
+  const resUniforme = useMemo(() => resumirEvidencias(evidencias, 'uniforme'), [evidencias])
+  const resLibro = useMemo(() => resumirEvidencias(evidencias, 'libro_guardia'), [evidencias])
+  const resCalidad = useMemo(() => resumirCalidad(evidencias), [evidencias])
+
+  /**
+   * El detalle real de las cuatro que no puntúan. Se reemplaza acá y no en
+   * lib/cumplimiento porque el cálculo del X/10 no debe depender de consultas
+   * que pueden fallar: si Rondas no carga, el número sigue siendo el mismo.
+   */
+  const dimensiones = useMemo(() => r.dimensiones.map(d => {
+    if (d.clave === 'rondas') {
+      const etiqueta = resRondas.estado === 'no_aplica' ? 'No aplica'
+        : resRondas.estado === 'datos_insuficientes' ? 'Datos insuficientes'
+        : `${resRondas.porcentaje} % de cumplimiento`
+      return { ...d, detalle: `${etiqueta} · ${detalleRondas(resRondas)}` }
+    }
+    if (d.clave === 'uniforme') return { ...d, detalle: detalleEvidencia(resUniforme) }
+    if (d.clave === 'libro_guardia') return { ...d, detalle: detalleEvidencia(resLibro) }
+    if (d.clave === 'evidencias') return { ...d, detalle: detalleCalidad(resCalidad) }
+    return d
+  }), [r, resRondas, resUniforme, resLibro, resCalidad])
+
   const patrones = useMemo(() => {
     const suyos = new Set(r.puntualidad.tardanzas.map(t => `${t.objetivo}@${t.horaInicioProg}`))
     return patronesDeHorarioSospechoso(todasLasFilas.map(jornadaCumplimientoDesdeFila))
@@ -188,7 +229,7 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
 
       <div style={{ ...S.caja, marginTop:14 }}>
         <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:4 }}>DIMENSIONES</div>
-        {r.dimensiones.map(d => (
+        {dimensiones.map(d => (
           <FilaDimension
             key={d.clave}
             d={d}
@@ -209,6 +250,33 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         </div>
       )}
 
+      {avisoFuentes && (
+        <div style={{ ...S.caja, marginTop:14, borderColor:'#f59e0b55', ...S.tenue }}>
+          No se pudieron leer las fuentes de Rondas o evidencias: {avisoFuentes}.
+          {' '}El puntaje no depende de ellas y no cambió.
+        </div>
+      )}
+
+      {Object.keys(resRondas.motivosPausa).length > 0 && (
+        <div style={{ ...S.caja, marginTop:14 }}>
+          <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:8 }}>
+            RONDAS EXCLUIDAS POR PAUSA
+          </div>
+          {Object.entries(resRondas.motivosPausa)
+            .sort((a, b) => (b[1] as number) - (a[1] as number))
+            .map(([motivo, cuantas]) => (
+              <div key={motivo} style={{ ...S.dim, padding:'4px 0' }}>
+                · {cuantas} — «{motivo}»
+              </div>
+            ))}
+          <div style={{ ...S.tenue, marginTop:8, lineHeight:1.5 }}>
+            El motivo lo escribió quien pausó la ronda, y se muestra tal cual. Una pausa
+            por un problema técnico y otra porque la ronda no se estaba haciendo se leen
+            igual acá: por eso <b>Rondas todavía no puntúa</b>. Distinguirlas por las
+            palabras del motivo sería adivinar.
+          </div>
+        </div>
+      )}
       {patrones.length > 0 && (
         <div style={{ ...S.caja, marginTop:14, borderColor:'#f59e0b55' }}>
           <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:8, color:'#fcd34d' }}>
