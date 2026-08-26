@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  COOLDOWN_DIAS, ENVIO_POR_DEFECTO, PRIORIDAD, UMBRAL, clavePush,
+  COOLDOWN_DIAS, COOLDOWN_GLOBAL_DIAS, ENVIO_POR_DEFECTO, PRIORIDAD, UMBRAL, clavePush,
+  diasParaProximoEnvio, puedeRecibirAhora,
   correspondeNotificar, ensenanzaPrioritaria, ensenanzasDeCumplimiento,
   esMomentoDeEnviar, evolucion, severidadDe,
 } from '@/lib/entrenador-operativo'
@@ -365,5 +366,90 @@ describe('la evolución describe, no puntúa', () => {
     const e = evolucion(7, null)
     expect(e.sentido).toBe('sin_datos')
     expect(e.delta).toBeNull()
+  })
+})
+
+// ── Cooldown GLOBAL: uno por persona, no uno por dimensión ──────────────────
+
+describe('el techo de volumen es por persona, no por tema', () => {
+  const conCuatroProblemas = entrada({
+    puntualidad: { impuntuales: 6, evaluadas: 20, horaInicio: '07:00' },
+    procedimiento: { incidencias: 5, jornadas: 20, sinRegistro: 3, entradaSinSalida: 2 },
+    rondas: { incidencias: 8, requeridos: 20 },
+    uniforme: { confirmadas: 4, revisadas: 12 },
+  })
+  const todas = () => ensenanzasDeCumplimiento(conCuatroProblemas)
+
+  it('el default declarado son catorce días', () => {
+    expect(COOLDOWN_GLOBAL_DIAS).toBe(14)
+  })
+
+  it('sin envíos previos se le puede escribir', () => {
+    expect(puedeRecibirAhora([], AHORA)).toBe(true)
+    expect(ensenanzaPrioritaria(todas(), [], AHORA)?.clave).toBe('puntualidad')
+  })
+
+  it('recién notificado de OTRO tema, no recibe nada', () => {
+    // Este es el caso que motivó el cambio: con el cooldown sólo por tipo,
+    // alguien con cuatro dimensiones flojas recibía cuatro mensajes distintos
+    // en cuatro corridas seguidas.
+    const previos: EnvioPrevio[] = [
+      { clave: 'procedimiento_registro', periodo: '2026-08', enviadoEn: '2026-08-28T10:00:00Z' },
+    ]
+    expect(puedeRecibirAhora(previos, AHORA)).toBe(false)
+    expect(ensenanzaPrioritaria(todas(), previos, AHORA)).toBeNull()
+  })
+
+  it('pasados los catorce días vuelve a corresponder', () => {
+    const previos: EnvioPrevio[] = [
+      { clave: 'puntualidad', periodo: '2026-07', enviadoEn: '2026-08-01T10:00:00Z' },
+    ]
+    expect(puedeRecibirAhora(previos, AHORA)).toBe(true)
+    // Del 01/08 al 01/09 pasó un mes: venció el cooldown global Y el de
+    // puntualidad, así que puntualidad vuelve a ganar por prioridad. Insistir
+    // con el mismo tema un mes después es correcto: sigue sin corregirse.
+    expect(ensenanzaPrioritaria(todas(), previos, AHORA)?.clave).toBe('puntualidad')
+  })
+
+  it('con el global vencido pero el del tema no, pasa al siguiente', () => {
+    // 20 días desde el envío: el global (14) ya venció, pero el de un patrón
+    // de puntualidad (14) también... así que se fuerza con un tipo cuyo
+    // cooldown sigue corriendo por ser del MISMO período.
+    const previos: EnvioPrevio[] = [
+      { clave: 'puntualidad', periodo: '2026-08', enviadoEn: '2026-08-01T10:00:00Z' },
+    ]
+    expect(puedeRecibirAhora(previos, AHORA)).toBe(true)
+    // Mismo período: puntualidad no se repite, y sale el siguiente en prioridad.
+    expect(ensenanzaPrioritaria(todas(), previos, AHORA)?.clave).toBe('procedimiento_registro')
+  })
+
+  it('cuenta el envío MÁS RECIENTE, no el primero', () => {
+    const previos: EnvioPrevio[] = [
+      { clave: 'rondas', periodo: '2026-06', enviadoEn: '2026-06-01T10:00:00Z' },
+      { clave: 'uniforme', periodo: '2026-08', enviadoEn: '2026-08-30T10:00:00Z' },
+    ]
+    expect(puedeRecibirAhora(previos, AHORA)).toBe(false)
+  })
+
+  it('dice cuántos días faltan, para poder explicarlo', () => {
+    const previos: EnvioPrevio[] = [
+      { clave: 'rondas', periodo: '2026-08', enviadoEn: '2026-08-30T13:00:00Z' },
+    ]
+    // Del 30/08 al 01/09 pasaron 2 días; faltan 12.
+    expect(diasParaProximoEnvio(previos, AHORA)).toBe(12)
+    expect(diasParaProximoEnvio([], AHORA)).toBe(0)
+  })
+
+  it('el cooldown es configurable: con 0 no frena nada', () => {
+    const previos: EnvioPrevio[] = [
+      { clave: 'procedimiento_registro', periodo: '2026-08', enviadoEn: '2026-08-31T23:00:00Z' },
+    ]
+    expect(puedeRecibirAhora(previos, AHORA, 0)).toBe(true)
+    expect(ensenanzaPrioritaria(todas(), previos, AHORA, 0)?.clave).toBe('puntualidad')
+  })
+
+  it('una fecha ilegible no abre ni cierra la puerta por error', () => {
+    expect(puedeRecibirAhora([{ clave: 'rondas', periodo: '2026-08', enviadoEn: 'no-es-fecha' }], AHORA))
+      .toBe(true)
   })
 })

@@ -408,16 +408,74 @@ export function correspondeNotificar(
   return true
 }
 
+// ── Cooldown GLOBAL: uno por persona, no uno por dimensión ──────────────────
+
+export const CLAVE_COOLDOWN_GLOBAL = 'entrenamiento_cooldown_global_dias'
+
+/**
+ * Días que tienen que pasar antes de mandarle CUALQUIER otro entrenamiento a la
+ * misma persona.
+ *
+ * El cooldown por tipo no alcanzaba. Impedía repetir el mismo tema, pero no
+ * impedía que alguien con cuatro dimensiones flojas recibiera cuatro mensajes
+ * distintos en cuatro corridas seguidas — uno de procedimiento, otro de
+ * puntualidad, otro de rondas, otro de uniforme. Desde el teléfono eso no se
+ * lee como cuatro consejos: se lee como que el sistema le encontró cuatro cosas
+ * mal en una semana.
+ *
+ * Catorce días: da tiempo a que aplique lo que se le dijo antes de señalarle lo
+ * siguiente. Y una instrucción que no llega a tiempo no se pierde — se manda en
+ * la próxima ventana.
+ */
+export const COOLDOWN_GLOBAL_DIAS = 14
+
+/**
+ * ¿Le podemos escribir a esta persona ahora, sea del tema que sea?
+ *
+ * Mira el último envío de CUALQUIER tipo. Es el techo de volumen que hace que
+ * "enseñar" no se convierta en "insistir".
+ */
+export function puedeRecibirAhora(
+  previos: EnvioPrevio[], ahora: Date, cooldownGlobalDias = COOLDOWN_GLOBAL_DIAS,
+): boolean {
+  let ultimo = 0
+  for (const p of previos) {
+    const cuando = Date.parse(p.enviadoEn)
+    if (Number.isFinite(cuando) && cuando > ultimo) ultimo = cuando
+  }
+  if (ultimo === 0) return true
+  return ahora.getTime() - ultimo >= cooldownGlobalDias * DIA_MS
+}
+
+/** Cuántos días faltan para poder volver a escribirle. 0 = ya se puede. */
+export function diasParaProximoEnvio(
+  previos: EnvioPrevio[], ahora: Date, cooldownGlobalDias = COOLDOWN_GLOBAL_DIAS,
+): number {
+  let ultimo = 0
+  for (const p of previos) {
+    const cuando = Date.parse(p.enviadoEn)
+    if (Number.isFinite(cuando) && cuando > ultimo) ultimo = cuando
+  }
+  if (ultimo === 0) return 0
+  const faltan = cooldownGlobalDias * DIA_MS - (ahora.getTime() - ultimo)
+  return faltan <= 0 ? 0 : Math.ceil(faltan / DIA_MS)
+}
+
 /**
  * UNA sola enseñanza por vez. La más prioritaria que corresponda notificar.
  *
  * Alguien con cinco problemas no recibe cinco mensajes: recibe el que más
  * importa. Cinco avisos el mismo día no enseñan cinco cosas — enseñan a
  * silenciar las notificaciones.
+ *
+ * Y tampoco cinco avisos en cinco semanas: el cooldown GLOBAL lo frena aunque
+ * cada tema tenga el suyo cumplido.
  */
 export function ensenanzaPrioritaria(
   ensenanzas: Ensenanza[], previos: EnvioPrevio[], ahora: Date,
+  cooldownGlobalDias = COOLDOWN_GLOBAL_DIAS,
 ): Ensenanza | null {
+  if (!puedeRecibirAhora(previos, ahora, cooldownGlobalDias)) return null
   const elegibles = ensenanzas
     .filter(e => correspondeNotificar(e, previos, ahora))
     .sort((a, b) => a.prioridad - b.prioridad)
