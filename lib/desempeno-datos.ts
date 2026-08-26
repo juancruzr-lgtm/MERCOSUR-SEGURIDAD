@@ -126,7 +126,11 @@ export interface ResumenDesempeno {
 export function resumirDesempeno(lista: DesempenoEmpleado[]): ResumenDesempeno {
   const porEstado: Record<string, number> = {}
   for (const d of lista) {
-    porEstado[d.resultado.estado] = (porEstado[d.resultado.estado] ?? 0) + 1
+    // El estado del CUMPLIMIENTO, no el del núcleo: si acá se contara
+    // `resultado` la lista mostraría la distribución de antes de Puntualidad
+    // mientras la tabla muestra la de después.
+    const estado = d.cumplimiento.estado
+    porEstado[estado] = (porEstado[estado] ?? 0) + 1
   }
   return { total: lista.length, porEstado }
 }
