@@ -46,6 +46,31 @@ const S = {
 const coma = (v: number) => v.toFixed(1).replace('.', ',')
 
 /**
+ * Las siete dimensiones, agrupadas por lo que significan.
+ *
+ * "Prestó el servicio" y "lo dejó registrado" son dos cosas distintas, se
+ * corrigen distinto, y mezclarlas en una lista de siete filas obliga a quien
+ * mira a reconstruir mentalmente cuál es cuál cada vez.
+ */
+const GRUPOS: Array<{ titulo: string; ayuda: string; claves: string[] }> = [
+  {
+    titulo: 'PRESTACIÓN DEL SERVICIO',
+    ayuda: 'Si estuvo, si llegó a horario y si cumplió las obligaciones del puesto.',
+    claves: ['asistencia', 'puntualidad', 'rondas'],
+  },
+  {
+    titulo: 'USO Y DOCUMENTACIÓN',
+    ayuda: 'Si dejó registrado su trabajo con la aplicación y la documentación del puesto.',
+    claves: ['procedimiento', 'uniforme', 'libro_guardia'],
+  },
+  {
+    titulo: 'CALIDAD DE LA EVIDENCIA',
+    ayuda: 'Descriptiva: mide si la foto se podía leer, no lo que muestra. No modifica el puntaje.',
+    claves: ['evidencias'],
+  },
+]
+
+/**
  * Una dimensión, con su nota y con lo que esa nota vale.
  *
  * Las cuatro dimensiones nuevas SÍ muestran número, porque ya se mide cumplido
@@ -260,16 +285,26 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         )}
       </div>
 
-      <div style={{ ...S.caja, marginTop:14 }}>
-        <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:4 }}>DIMENSIONES</div>
-        {dimensiones.map(d => (
-          <FilaDimension
-            key={d.clave}
-            d={d}
-            pie={d.clave === 'puntualidad' ? <DetalleTardanzas p={r.puntualidad} /> : undefined}
-          />
-        ))}
-      </div>
+      {/* Agrupadas por lo que significan, no por cómo se calculan. Alguien que
+          mira esto tiene que poder separar "prestó el servicio" de "lo dejó
+          registrado", que son dos cosas distintas y se corrigen distinto. */}
+      {GRUPOS.map(g => {
+        const suyas = dimensiones.filter(d => g.claves.indexOf(d.clave) >= 0)
+        if (suyas.length === 0) return null
+        return (
+          <div key={g.titulo} style={{ ...S.caja, marginTop:14 }}>
+            <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:2 }}>{g.titulo}</div>
+            <div style={{ ...S.tenue, color:'#64748b', marginBottom:6 }}>{g.ayuda}</div>
+            {suyas.map(d => (
+              <FilaDimension
+                key={d.clave}
+                d={d}
+                pie={d.clave === 'puntualidad' ? <DetalleTardanzas p={r.puntualidad} /> : undefined}
+              />
+            ))}
+          </div>
+        )
+      })}
 
       {r.motivos.length > 0 && (
         <div style={{ ...S.caja, marginTop:14 }}>

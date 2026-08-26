@@ -321,44 +321,71 @@ export type EstadoDimension =
   | 'puntuable' | 'en_validacion' | 'no_aplica' | 'datos_insuficientes' | 'sin_datos'
 
 /**
- * Los pesos de HOY.
+ * MODELO E — los pesos de producción desde el 26/08/2026.
  *
- * Sólo pesan las dos dimensiones auditadas contra agosto 2026. Las otras cinco
- * están en cero a propósito y subirlas es cambiar este objeto —una vez que la
- * auditoría correspondiente exista—, no reescribir el módulo.
+ * ── Qué cambió y por qué ────────────────────────────────────────────────────
+ * Hasta hoy Procedimiento valía el 50 % del número. No porque usar bien la app
+ * sea la mitad del trabajo de un vigilador, sino porque durante meses fue casi
+ * la única señal confiable que había. Ya no lo es: Rondas mide obligaciones
+ * reales, y Uniforme y Libro tienen revisión humana al día.
  *
- * Con Puntualidad en 0, el número que sale de acá es EXACTAMENTE el que ya está
- * en producción. Eso está cubierto por un test: encender una dimensión tiene
- * que ser una decisión, nunca un efecto colateral.
+ * El indicador pasa a medir la PRESTACIÓN del servicio. La app es el
+ * instrumento con el que se mide, no lo que se mide.
+ *
+ * ── Por qué estos números y no los otros cuatro modelos ─────────────────────
+ * Se simularon cinco combinaciones sobre agosto 2026 con las 65 personas
+ * reales. Las cuatro propuestas primero —Rondas 25-40 con Procedimiento en 10 y
+ * Uniforme+Libro en 20— ablandaban el indicador: la bandeja de atención pasaba
+ * de 11 personas a 4, y alguien con 12 de 20 jornadas sin registro propio
+ * quedaba "Correcto".
+ *
+ * La causa está en la dispersión real, contando sólo a quien tiene al menos una
+ * incidencia en cada dimensión:
+ *
+ *   Puntualidad     44 de 65 personas, desvío 2,53, peor 0
+ *   Procedimiento   38 de 65,          desvío 2,53, peor 0
+ *   Rondas          13 de 17,          desvío 3,38, peor 0
+ *   Uniforme        14 de 62,          desvío 1,72, peor 2,5
+ *   Libro            9 de 60,          desvío 0,54, peor 7,5
+ *
+ * Libro es casi constante: 51 de 60 personas tienen exactamente 10. Darle peso
+ * 10 no agrega información y sí agrega denominador — empuja a todos hacia
+ * arriba por igual. Por eso entra con 4: forma parte de la prestación y se
+ * cuenta, pero no hace de lastre.
+ *
+ * ── Los pesos son RELATIVOS ────────────────────────────────────────────────
+ * No suman 100 ni tienen por qué. El promedio se normaliza sobre las
+ * dimensiones que APLICAN a cada persona: quien no tiene rondas no arrastra el
+ * peso 30 al denominador, y su número sale de las otras cinco. Ver
+ * `calcularCumplimiento`.
  */
-/**
- * Peso de Puntualidad, elegido sobre la simulacion de agosto 2026.
- *
- * Con 40 la normalizacion queda Asistencia 16,7 %, Puntualidad 33,3 % y
- * Procedimiento 50 %. Antes Procedimiento era el 75 % del numero, y eso hacia
- * que usar mal la app dominara el resultado de alguien que vino todos los dias
- * y llego puntual: exactamente lo que este indicador no debe afirmar.
- *
- * Los pesos de Asistencia y Procedimiento NO se tocaron; el rebalanceo sale de
- * agregar la dimension nueva al denominador.
- */
-export const PESO_PUNTUALIDAD = 40
+export const PESO_PUNTUALIDAD = 25
 
 export const PESOS: Record<ClaveDimension, number> = {
-  asistencia:    PESO_ASISTENCIA,
-  procedimiento: PESO_PROCEDIMIENTO,
+  // Prestó el servicio que tenía asignado. Es el piso de todo lo demás.
+  asistencia:    25,
+  // La que más discrimina donde aplica —desvío 3,38— y la que la operación
+  // reclama por nombre. Sólo pesa para quien tuvo obligaciones válidas.
+  rondas:        30,
+  // Presentarse, y presentarse a horario, ES la prestación. Además es la señal
+  // más amplia que hay: alcanza a 44 de 65 personas.
+  //
   // Mide contra el horario programado, que es la referencia mientras nadie lo
-  // corrija. Un horario mal cargado se hace VISIBLE por patronesDeHorarioSospechoso,
-  // no se esconde con una excepcion automatica.
+  // corrija. Un horario mal cargado se hace VISIBLE por
+  // patronesDeHorarioSospechoso, no se esconde con una excepción automática.
   puntualidad:   PESO_PUNTUALIDAD,
-  // Pesa cuando RONDAS-obligaciones-agosto permita contar rondas EXIGIBLES vs
-  // CUMPLIDAS por persona, y distinguir lo no atribuible: pausadas, cerradas
-  // administrativamente, problemas técnicos, configuración que no correspondía.
-  rondas:        0,
-  // Las tres de evidencia esperan muestra confiable con revisión humana. Una
-  // observación de IA sin confirmar no puede bajar un puntaje.
-  uniforme:      0,
-  libro_guardia: 0,
+  // Baja de 60 a 25. Deja de dominar; no deja de importar. Sigue siendo, junto
+  // con Puntualidad, la dimensión con más dispersión real.
+  procedimiento: 25,
+  // Sólo sobre evidencia que una persona pudo evaluar. Una foto ilegible no es
+  // "mal uniformado": ese hecho pertenece a Calidad.
+  uniforme:      8,
+  // Poco peso porque hoy casi no discrimina, pero completar bien el libro es
+  // parte de la prestación y tiene que contarse.
+  libro_guardia: 4,
+  // DESCRIPTIVA por decisión, no por falta de datos. Mide si la foto se podía
+  // leer, no lo que la foto muestra, y eso no debe bajarle el puntaje a nadie.
+  // Sirve para enseñar y alimenta al Entrenador.
   evidencias:    0,
 }
 
@@ -442,7 +469,10 @@ const FALTANTE: Partial<Record<ClaveDimension, string>> = {
  * persona que lo recibe.
  */
 export const VARIANTES_PESOS: Record<string, Record<ClaveDimension, number>> = {
-  /** La de producción. Está acá para que la comparación tenga línea de base. */
+  /**
+   * Los pesos que estuvieron en producción hasta el 26/08/2026. Se conservan
+   * como línea de base: sin ellos no se puede comparar contra de dónde venimos.
+   */
   actual: {
     asistencia: 20, puntualidad: 40, procedimiento: 60,
     rondas: 0, uniforme: 0, libro_guardia: 0, evidencias: 0,

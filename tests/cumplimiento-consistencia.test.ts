@@ -167,27 +167,45 @@ describe('21-24. quién ve qué', () => {
 
 // ── Las dimensiones nuevas no entran al número ──────────────────────────────
 
-describe('encender una dimensión es una decisión, no un efecto colateral', () => {
+describe('MODELO E · los pesos de producción', () => {
   const jornadas = MES.map(jornadaCumplimientoDesdeFila)
 
-  it('Rondas, Uniforme, Libro y Calidad tienen peso 0 hoy', () => {
-    for (const c of ['rondas', 'uniforme', 'libro_guardia', 'evidencias'] as ClaveDimension[]) {
-      expect(PESOS[c]).toBe(0)
-    }
+  it('son exactamente los decididos', () => {
+    // Cambiar cualquiera de estos números es cambiar qué significa el X/10 para
+    // 65 personas. Tiene que ser una decisión explícita, no un descuido.
+    expect(PESOS).toEqual({
+      asistencia: 25, rondas: 30, puntualidad: 25, procedimiento: 25,
+      uniforme: 8, libro_guardia: 4, evidencias: 0,
+    })
   })
 
-  it('el puntaje es el mismo con y sin las cuatro fuentes', () => {
+  it('Procedimiento dejó de dominar: ya no vale la mitad del número', () => {
+    const r = calcularCumplimiento(jornadas, fuentesDeEmpleado(RONDAS, EVIDENCIAS).fuentes)
+    const puntuables = r.dimensiones.filter(d => d.estado === 'puntuable')
+    const total = puntuables.reduce((s, d) => s + d.peso, 0)
+    const proc = puntuables.find(d => d.clave === 'procedimiento')!
+    expect(proc.peso / total).toBeLessThan(0.3)
+    // Con los pesos anteriores era exactamente la mitad.
+    const totalViejo = 20 + 40 + 60
+    expect(60 / totalViejo).toBe(0.5)
+  })
+
+  it('Calidad de evidencias sigue en cero: describe, no puntúa', () => {
+    expect(PESOS.evidencias).toBe(0)
+  })
+
+  it('ahora las cuatro fuentes SÍ cambian el puntaje', () => {
     const sin = calcularCumplimiento(jornadas)
     const con = calcularCumplimiento(jornadas, fuentesDeEmpleado(RONDAS, EVIDENCIAS).fuentes)
-    expect(con.puntaje).toBe(sin.puntaje)
-    expect(con.estado).toBe(sin.estado)
+    expect(con.puntaje).not.toBe(sin.puntaje)
   })
 
-  it('tienen nota y se muestran, pero en validación', () => {
-    const r = calcularCumplimiento(jornadas, fuentesDeEmpleado(RONDAS, EVIDENCIAS).fuentes)
-    const rondasDim = r.dimensiones.find(d => d.clave === 'rondas')
-    expect(rondasDim?.nota).toBe(7.5)
-    expect(rondasDim?.estado).toBe('en_validacion')
+  it('Rondas con universo limpio puntúa', () => {
+    const limpio = fuentesDeEmpleado(rondas({ obligaciones: 24, cumplidas: 18, noIniciada: 6 }), EVIDENCIAS)
+    const r = calcularCumplimiento(jornadas, limpio.fuentes)
+    const d = r.dimensiones.find(x => x.clave === 'rondas')
+    expect(d?.estado).toBe('puntuable')
+    expect(d?.peso).toBe(30)
   })
 
   it('una dimensión en validación NO puntúa aunque tenga peso', () => {
@@ -197,35 +215,45 @@ describe('encender una dimensión es una decisión, no un efecto colateral', () 
       rondas({ obligaciones: 24, cumplidas: 18, noIniciada: 4, bajoPausa: 2, pausaSinClasificar: 2 }),
       EVIDENCIAS,
     )
-    const pesos = { ...PESOS, rondas: 30 }
-    const r = calcularCumplimiento(jornadas, conAmbiguedad.fuentes, pesos)
+    const r = calcularCumplimiento(jornadas, conAmbiguedad.fuentes)
     const dim = r.dimensiones.find(d => d.clave === 'rondas')
     expect(dim?.nota).not.toBeNull()
     expect(dim?.estado).toBe('en_validacion')
-    expect(r.puntaje).toBe(calcularCumplimiento(jornadas).puntaje)
+    // Y su peso 30 tampoco entra al denominador.
+    const total = r.dimensiones.filter(d => d.estado === 'puntuable').reduce((s, d) => s + d.peso, 0)
+    expect(total).toBe(25 + 25 + 25 + 8 + 4)
   })
 
-  it('sin ambigüedad y con peso, sí entra', () => {
-    const limpio = fuentesDeEmpleado(rondas({ obligaciones: 24, cumplidas: 18, noIniciada: 6 }), EVIDENCIAS)
-    const pesos = { ...PESOS, rondas: 30 }
-    const r = calcularCumplimiento(jornadas, limpio.fuentes, pesos)
-    expect(r.dimensiones.find(d => d.clave === 'rondas')?.estado).toBe('puntuable')
-    expect(r.puntaje).not.toBe(calcularCumplimiento(jornadas).puntaje)
-  })
-
-  it('"no aplica" nunca entra como cero', () => {
+  it('"no aplica" nunca entra como cero ni arrastra su peso', () => {
     const sinRondas = fuentesDeEmpleado(null, EVIDENCIAS)
-    const pesos = { ...PESOS, rondas: 30 }
-    const r = calcularCumplimiento(jornadas, sinRondas.fuentes, pesos)
+    const r = calcularCumplimiento(jornadas, sinRondas.fuentes)
     expect(r.dimensiones.find(d => d.clave === 'rondas')?.estado).toBe('no_aplica')
-    expect(r.puntaje).toBe(calcularCumplimiento(jornadas).puntaje)
+    const total = r.dimensiones.filter(d => d.estado === 'puntuable').reduce((s, d) => s + d.peso, 0)
+    expect(total).toBe(25 + 25 + 25 + 8 + 4)
+    // Y no lo hunde: con todo lo demás igual, no tener rondas no cambia nada
+    // respecto de tenerlas perfectas.
+    const conPerfectas = calcularCumplimiento(
+      jornadas, fuentesDeEmpleado(rondas({ obligaciones: 20, cumplidas: 20 }), EVIDENCIAS).fuentes,
+    )
+    expect((conPerfectas.puntaje as number) >= (r.puntaje as number)).toBe(true)
+  })
+
+  it('"datos insuficientes" tampoco arrastra su peso', () => {
+    const pocas = fuentesDeEmpleado(rondas({ obligaciones: 5, cumplidas: 3, noIniciada: 2 }), EVIDENCIAS)
+    const r = calcularCumplimiento(jornadas, pocas.fuentes)
+    expect(r.dimensiones.find(d => d.clave === 'rondas')?.estado).toBe('datos_insuficientes')
+    const total = r.dimensiones.filter(d => d.estado === 'puntuable').reduce((s, d) => s + d.peso, 0)
+    expect(total).toBe(25 + 25 + 25 + 8 + 4)
   })
 })
 
 describe('la simulación de pesos usa la misma función que producción', () => {
   it('hay al menos tres variantes declaradas', () => {
     expect(Object.keys(VARIANTES_PESOS).length).toBeGreaterThanOrEqual(3)
-    expect(VARIANTES_PESOS.actual).toEqual(PESOS)
+    // `actual` es la línea de base HISTÓRICA, no los pesos de hoy: sin ella no
+    // se puede comparar contra de dónde venimos.
+    expect(VARIANTES_PESOS.modelo_e_sin_lastre).toEqual(PESOS)
+    expect(VARIANTES_PESOS.actual).not.toEqual(PESOS)
   })
 
   it('la normalización dice cómo se reparte el 100 %', () => {
