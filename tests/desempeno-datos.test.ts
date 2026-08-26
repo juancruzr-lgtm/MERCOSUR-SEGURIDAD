@@ -87,6 +87,8 @@ describe('ordenOperativo — bandeja, no podio', () => {
       incidencias: { sin_registro_propio: incid, entrada_sin_salida: 0 },
       ausencias: 0, sinEvidencia: 0, motivos: [],
     },
+    // ordenOperativo sólo mira el estado; el resto del objeto no participa.
+    cumplimiento: { dimensiones: [], motivos: [] } as any,
   })
 
   it('intervención primero, excelente último', () => {

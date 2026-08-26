@@ -7,6 +7,8 @@
 import { calcularDesempeno, hechoDeJornada } from '@/lib/desempeno'
 import type { JornadaDesempeno, ResultadoDesempeno } from '@/lib/desempeno'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
+import { calcularCumplimiento } from '@/lib/cumplimiento'
+import type { JornadaCumplimiento, ResultadoCumplimiento } from '@/lib/cumplimiento'
 
 export interface DesempenoEmpleado {
   empleadoId: string
@@ -14,6 +16,12 @@ export interface DesempenoEmpleado {
   /** Objetivos donde trabajó en el período, para poder filtrar. */
   objetivos: string[]
   resultado: ResultadoDesempeno
+  /**
+   * Las siete dimensiones. `resultado` es su nucleo —Asistencia y
+   * Procedimiento— y sigue ahi para lo que ya lo consume: son la misma cuenta
+   * mirada con distinto detalle, no dos calculos.
+   */
+  cumplimiento: ResultadoCumplimiento
   /** Las filas que lo formaron, para abrir el hecho detrás de cada motivo. */
   jornadas: FilaBandejaMensual[]
 }
@@ -35,6 +43,21 @@ export function jornadaDesdeFila(f: FilaBandejaMensual): JornadaDesempeno {
 }
 
 /**
+ * La misma jornada, con lo que Puntualidad necesita para poder juzgarla.
+ *
+ * El horario programado y la entrada ya venian en la fila; no hace falta una
+ * consulta nueva ni una segunda definicion de que turno entra.
+ */
+export function jornadaCumplimientoDesdeFila(f: FilaBandejaMensual): JornadaCumplimiento {
+  return {
+    ...jornadaDesdeFila(f),
+    horaInicioProg: f.horaInicioProg,
+    horaFinProg: f.horaFinProg,
+    entrada: f.entrada,
+  }
+}
+
+/**
  * Agrupa por empleado y calcula. El orden es OPERATIVO, no un podio: primero lo
  * que necesita una decisión.
  */
@@ -50,11 +73,13 @@ export function desempenoPorEmpleado(filas: FilaBandejaMensual[]): DesempenoEmpl
   porEmpleado.forEach((jornadas, empleadoId) => {
     const objetivos: string[] = []
     for (const j of jornadas) if (!objetivos.includes(j.objetivo)) objetivos.push(j.objetivo)
+    const cumplimiento = calcularCumplimiento(jornadas.map(jornadaCumplimientoDesdeFila))
     out.push({
       empleadoId,
       empleado: jornadas[0]?.vigilador ?? '—',
       objetivos: objetivos.sort(),
-      resultado: calcularDesempeno(jornadas.map(jornadaDesdeFila)),
+      resultado: cumplimiento.base,
+      cumplimiento,
       jornadas,
     })
   })
