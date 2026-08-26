@@ -435,17 +435,30 @@ const FALTANTE: Partial<Record<ClaveDimension, string>> = {
  * persona que lo recibe.
  */
 export const VARIANTES_PESOS: Record<string, Record<ClaveDimension, number>> = {
+  /** La de producción. Está acá para que la comparación tenga línea de base. */
   actual: {
     asistencia: 20, puntualidad: 40, procedimiento: 60,
     rondas: 0, uniforme: 0, libro_guardia: 0, evidencias: 0,
   },
-  rondas_como_asistencia: {
+  /** Sólo evidencias: uniforme y libro, que tienen el universo más limpio. */
+  solo_evidencias: {
+    asistencia: 20, puntualidad: 40, procedimiento: 60,
+    rondas: 0, uniforme: 20, libro_guardia: 20, evidencias: 0,
+  },
+  /** Sólo Rondas, al peso de Asistencia. */
+  solo_rondas: {
     asistencia: 20, puntualidad: 40, procedimiento: 60,
     rondas: 20, uniforme: 0, libro_guardia: 0, evidencias: 0,
   },
-  todo_lo_medible: {
+  /** Las tres, con peso moderado: el procedimiento sigue mandando. */
+  las_tres_suave: {
     asistencia: 20, puntualidad: 40, procedimiento: 60,
-    rondas: 30, uniforme: 15, libro_guardia: 15, evidencias: 0,
+    rondas: 20, uniforme: 15, libro_guardia: 15, evidencias: 0,
+  },
+  /** Las tres, con Rondas pesando como Puntualidad. */
+  las_tres_fuerte: {
+    asistencia: 20, puntualidad: 40, procedimiento: 60,
+    rondas: 40, uniforme: 25, libro_guardia: 25, evidencias: 0,
   },
 }
 

@@ -236,7 +236,7 @@ describe('la simulación de pesos usa la misma función que producción', () => 
   })
 
   it('con Rondas adentro, Procedimiento deja de dominar', () => {
-    const n = normalizacion(VARIANTES_PESOS.todo_lo_medible,
+    const n = normalizacion(VARIANTES_PESOS.las_tres_suave,
       ['asistencia', 'puntualidad', 'procedimiento', 'rondas', 'uniforme', 'libro_guardia'])
     expect(n.procedimiento).toBeLessThan(50)
     expect(Object.values(n).reduce((s, v) => s + v, 0)).toBeCloseTo(100, 0)
