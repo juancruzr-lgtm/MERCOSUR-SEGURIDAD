@@ -45,6 +45,7 @@ import { sendWebPush } from '../../_lib/web-push'
 import type { PushPayload, PushSubscriptionRow } from '../../_lib/web-push'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado } from '@/lib/desempeno-datos'
+import { calcularCumplimiento } from '@/lib/cumplimiento'
 import {
   cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
@@ -142,7 +143,44 @@ export async function GET(req: NextRequest) {
   const filas = soloEmpleado
     ? bandeja.filas.filter(f => f.empleadoId === soloEmpleado)
     : bandeja.filas
-  const lista = desempenoPorEmpleado(filas)
+
+  /**
+   * A quién se evalúa: quien tuvo jornadas Y quien subió evidencias.
+   *
+   * ── Por qué no alcanza con la bandeja ──────────────────────────────────────
+   * La bandeja excluye los turnos de objetivos de prueba, para que los datos de
+   * prueba no contaminen el indicador. Correcto. Pero la ruta armaba su lista
+   * SÓLO desde ahí, así que alguien con evidencias reales y sin ninguna jornada
+   * evaluable quedaba fuera por completo: no se lo evaluaba ni para decirle que
+   * cuatro de sus siete fotos no se podían leer, que es un hecho suyo y no
+   * depende de ningún turno.
+   *
+   * Sus dimensiones de jornada quedan en "sin datos" —no se inventa nada— y
+   * sólo pueden producir instrucción las que salen de sus evidencias.
+   *
+   * Hoy esto alcanza a UNA persona en toda la base: el usuario de prueba. Se
+   * midió antes de cambiarlo.
+   */
+  const lista: Array<{ empleadoId: string; empleado: string; cumplimiento: ReturnType<typeof calcularCumplimiento> }> =
+    desempenoPorEmpleado(filas).map(d => ({
+      empleadoId: d.empleadoId, empleado: d.empleado, cumplimiento: d.cumplimiento,
+    }))
+
+  const yaEstan = new Set(lista.map(d => d.empleadoId))
+  const nombres = new Map<string, string>()
+  for (const f of bandeja.filas) nombres.set(f.empleadoId, f.vigilador)
+
+  porEvidencia.forEach((evidencias, empleadoId) => {
+    if (yaEstan.has(empleadoId)) return
+    if (soloEmpleado && empleadoId !== soloEmpleado) return
+    const medido = fuentesDeEmpleado(porRondas.get(empleadoId) ?? null, evidencias)
+    lista.push({
+      empleadoId,
+      empleado: nombres.get(empleadoId) ?? empleadoId,
+      // Sin jornadas: Asistencia, Puntualidad y Procedimiento quedan sin datos.
+      cumplimiento: calcularCumplimiento([], medido.fuentes),
+    })
+  })
 
   const [turnosHoyR, previosR, subsR] = await Promise.all([
     // Quién está trabajando ahora. No se le manda nada a quien está en turno.

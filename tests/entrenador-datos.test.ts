@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { agruparCapacitacion, entradaEntrenador, turnoMasDemorado } from '@/lib/entrenador-datos'
+import {
+  agruparCapacitacion, ensenanzasDeEmpleado, entradaEntrenador, turnoMasDemorado,
+} from '@/lib/entrenador-datos'
 import { ETIQUETA_ENTRENAMIENTO, ensenanzasDeCumplimiento } from '@/lib/entrenador-operativo'
 import { calcularCumplimiento } from '@/lib/cumplimiento'
 import { fuentesDeEmpleado } from '@/lib/cumplimiento-fuentes'
@@ -156,5 +158,56 @@ describe('quién necesita capacitación', () => {
       { empleadoId: 'a', empleado: 'ALFA', ensenanzas: [ens('procedimiento_registro', 'patron')] },
     ], ETIQUETA_ENTRENAMIENTO)
     expect(g[0].etiqueta).toBe('Registro de entrada y salida')
+  })
+})
+
+// ── Quien tiene evidencias pero ninguna jornada evaluable ───────────────────
+
+describe('sin jornadas, las evidencias siguen pudiendo enseñar', () => {
+  const cuatroIlegibles = [
+    ...Array.from({ length: 3 }, () => ({
+      analisis_tipo: 'punto_control', clasificacion_efectiva: 'REVISAR',
+      revision_estado: 'CORRECTO', guardia_id: 'f1',
+    })),
+    ...Array.from({ length: 4 }, () => ({
+      analisis_tipo: 'uniforme', clasificacion_efectiva: 'EVIDENCIA_INSUFICIENTE',
+      guardia_id: 'f1',
+    })),
+  ]
+
+  it('las dimensiones de jornada quedan sin datos, no en cero', () => {
+    const medido = fuentesDeEmpleado(null, cuatroIlegibles)
+    const r = calcularCumplimiento([], medido.fuentes)
+    for (const clave of ['asistencia', 'puntualidad', 'procedimiento']) {
+      const d = r.dimensiones.find(x => x.clave === clave)
+      expect(d?.nota).toBeNull()
+      expect(d?.estado).not.toBe('puntuable')
+    }
+    expect(r.puntaje).toBeNull()
+  })
+
+  it('y aun así se genera la instrucción de calidad de fotos', () => {
+    const medido = fuentesDeEmpleado(null, cuatroIlegibles)
+    const r = calcularCumplimiento([], medido.fuentes)
+    const ens = ensenanzasDeEmpleado('2026-08', r, {
+      rondas: medido.rondas, uniforme: medido.uniforme, libro: medido.libro, calidad: medido.calidad,
+    })
+    expect(ens.map(e => e.clave)).toEqual(['calidad_evidencias'])
+    expect(ens[0].severidad).toBe('patron')
+    expect(ens[0].texto).toContain('4 de tus 7 fotos')
+  })
+
+  it('sin jornadas NO se inventa una instrucción de asistencia ni de puntualidad', () => {
+    const r = calcularCumplimiento([], fuentesDeEmpleado(null, []).fuentes)
+    expect(ensenanzasDeEmpleado('2026-08', r)).toHaveLength(0)
+  })
+
+  it('el uniforme con todas las fotos ilegibles no acusa a nadie', () => {
+    // Las cuatro de uniforme son EVIDENCIA_INSUFICIENTE: salen del universo de
+    // Uniforme y cuentan en Calidad. Nadie afirmó que estuviera mal vestido.
+    const medido = fuentesDeEmpleado(null, cuatroIlegibles)
+    expect(medido.uniforme.medicion.validos).toBe(0)
+    expect(medido.uniforme.confirmadas).toBe(0)
+    expect(medido.calidad.medicion.incidencias).toBe(4)
   })
 })
