@@ -259,13 +259,34 @@ export function ensenanzasDeCumplimiento(e: EntradaEntrenador): Ensenanza[] {
     if (p.entradaSinSalida > 0) {
       detalle.push(`${p.entradaSinSalida} ${plural(p.entradaSinSalida, 'entrada', 'entradas')} sin salida registrada`)
     }
+    // ── El texto describe LO QUE PASÓ, no una categoría ────────────────────
+    //
+    // "tu asistencia tuvo que ser confirmada por el supervisor" no es lo mismo
+    // que "el sistema cerró tu registro". Un texto único para los dos casos le
+    // decía a alguien con 6 salidas sin marcar y 1 sola confirmación que el
+    // supervisor había tenido que confirmarlo 7 veces. Es falso, y es
+    // justamente el tipo de afirmación que hace que un mensaje sobre el propio
+    // trabajo pierda toda credibilidad.
+    const frases: string[] = []
+    if (p.entradaSinSalida > 0) {
+      frases.push(
+        `En ${p.entradaSinSalida} de tus ${p.jornadas} ${plural(p.jornadas, 'jornada', 'jornadas')} `
+        + `registraste la entrada pero no la salida, y el sistema tuvo que cerrar el registro por vos. `
+        + 'Marcá la salida al terminar el turno: así queda tu propio horario y no una hora estimada.',
+      )
+    }
+    if (p.sinRegistro > 0) {
+      frases.push(
+        `En ${p.sinRegistro} ${plural(p.sinRegistro, 'jornada', 'jornadas')} no quedó ningún registro tuyo `
+        + 'y tu asistencia tuvo que confirmarla el supervisor. '
+        + 'Marcá la entrada al llegar y la salida al terminar el turno.',
+      )
+    }
+
     agregar(
       'procedimiento_registro', p.incidencias, p.jornadas,
       detalle.join(' y '),
-      `En ${p.incidencias} de tus ${p.jornadas} ${plural(p.jornadas, 'jornada', 'jornadas')} tu asistencia `
-        + 'tuvo que ser confirmada por el supervisor porque el registro quedó incompleto. '
-        + 'Marcá la entrada al llegar y la salida al terminar el turno: si no marcás la salida, '
-        + 'el sistema cierra el registro solo y tu jornada queda sin tu propio dato.',
+      frases.join(' '),
       detalle,
     )
   }
