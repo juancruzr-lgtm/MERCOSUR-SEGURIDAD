@@ -490,11 +490,16 @@ export function calcularCumplimiento(
       : hayDato                                  ? 'en_validacion'
       : extra.noAplica                           ? 'no_aplica'
       :                                            'sin_datos'
+    // `null` A PROPÓSITO no es lo mismo que "no vino".
+    //
+    // Con `extra.faltante ?? FALTANTE[clave]` un null explícito caía igual al
+    // texto genérico del módulo, y eso le decía a alguien sin ninguna ronda que
+    // "quedan ventanas pausadas sin causa registrada". El aporte que sabe que no
+    // hay nada que explicar tiene que poder decirlo y que se le haga caso.
+    const faltante = extra.faltante === undefined ? FALTANTE[clave] : extra.faltante
     return {
       clave, etiqueta: ETIQUETA_DIMENSION[clave], nota, peso, estado, detalle,
-      ...(estado === 'puntuable'
-        ? {}
-        : { faltante: extra.faltante ?? FALTANTE[clave] }),
+      ...(estado === 'puntuable' || !faltante ? {} : { faltante }),
     }
   }
 
