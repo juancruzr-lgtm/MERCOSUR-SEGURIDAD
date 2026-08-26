@@ -184,3 +184,107 @@ tienen 10; el indicador describe hechos y no fabrica diferencias entre personas.
    auditoría (quién evaluó, cuándo, qué período) antes de escribir código.
 6. **Verificación de alcance con sesión real de supervisor** — sigue pendiente
    desde el 25/08.
+
+---
+
+# Actualización — Puntualidad activa (26/08/2026, tarde)
+
+PRs #74 (la dimensión), #75 y #76 (dos defectos encontrados verificando).
+
+## La regla
+
+Ventana **`[inicio − 15, inicio]`**. Turno 07:00 → 06:45–07:00 puntual,
+**07:01 en adelante impuntual**. La tolerancia técnica de fichaje no la cambia:
+este módulo no la lee ni la toca.
+
+**Los horarios sospechosos NO se excluyen.** El horario programado es la
+referencia mientras nadie lo corrija; excluir automáticamente los puestos raros
+dejaría el dato malo intacto y sin que nadie se entere.
+
+## Fórmula
+
+| Banda | Minutos | Resta |
+|---|---|---|
+| Puntual | ≤ 0 | 0 |
+| Leve | 1–5 | 0,25 |
+| Tardanza | 6–15 | 0,5 |
+| Importante | 16–30 | 1 |
+| Grave | > 30 | 2 |
+
+`nota = 10 × (1 − Σresta / evaluables)`, piso en 0.
+
+**Peso 40.** Normalización resultante: Asistencia 16,7 % · Puntualidad 33,3 % ·
+Procedimiento 50 %. Los pesos de Asistencia (20) y Procedimiento (60) **no se
+tocaron**: el rebalanceo sale de agregar la dimensión al denominador. Antes
+Procedimiento era el 75 % del número.
+
+**Muestra mínima:** la del núcleo — 8 jornadas con registro y 70 % de cobertura.
+No hay una segunda regla de suficiencia.
+
+**No evaluables:** sin fichaje propio, ausencia confirmada, o sin horario. Salen
+del denominador, no cuentan como impuntualidad y no entran al promedio como
+cero.
+
+## Agosto 2026 — 993 entradas evaluables
+
+| | |
+|---|---|
+| Puntuales | 769 (77,4 %) |
+| 1–5 min | 103 |
+| 6–15 min | 71 |
+| 16–30 min | 23 |
+| > 30 min | 27 |
+| máximo | 476 min |
+
+Distribución del X/10 (56 personas con muestra):
+
+| | Antes | Después |
+|---|---|---|
+| Excelente | 31 | **27** |
+| Correcto | 14 | **17** |
+| Seguimiento | 7 | **9** |
+| Intervención | 4 | **3** |
+
+Quince personas tienen Puntualidad 10,0. **No se buscó dispersión.**
+
+## Patrones de horario a revisar
+
+Detectados sobre agosto, y **no descuentan ninguna tardanza**:
+
+| Puesto | Entradas | Personas | % tarde | Promedio |
+|---|---|---|---|---|
+| NACION SERVICIOS ENTRE RIOS @ 19:00 | 27 | 3 | 70 % | +10 min |
+| INTA @ 19:00 | 10 | 2 | 90 % | +12 min |
+| INTA @ 07:00 | 10 | 2 | 70 % | +23 min |
+
+La corrección de un horario **no necesita código nuevo**: el indicador mide la
+hora *reconocida* (`hora_entrada_final` cuando existe), así que corregir un
+fichaje por el circuito de siempre ya cambia el número. Comprobado: con la hora
+corregida INTA @ 07:00 baja de 100 % a 70 % de tardanzas.
+
+## Dos defectos encontrados verificando en producción
+
+**El patrón contaba jornadas como personas** (#75). Decía *"20 entradas de 20
+vigiladores"* sobre una sola persona. Además se calculaba sobre las jornadas de
+un solo empleado, cuando lo que distingue un horario mal cargado de alguien
+impuntual es si **los demás** también llegan tarde ahí.
+
+**La lista mostraba el número de antes** (#76). La tabla y la ficha leían
+`cumplimiento`; la lista —y con ella la vista del supervisor, que reusa el mismo
+panel— leía `resultado`, que es sólo el núcleo. Administración contaba 27/17/9/3
+y la lista 31/14/7/4 sobre la misma gente. El test que existía comparaba tabla
+contra ficha y no lo agarró; el nuevo compara **las tres**.
+
+## Alcance del supervisor — atención
+
+`objetivoEnAlcance` devuelve **true cuando el supervisor no tiene zonas
+asignadas**: en ese caso ve todo. Es una regla **pre-existente** de
+`lib/bandeja-planillas.ts` que rige también Revisión de planillas y el Cierre
+Operativo, los tres en la lista de "no tocar", así que **no se modificó**.
+
+Conviene decidirlo aparte: la orden pide "más restrictivo por defecto" ante
+dudas de permisos, y esta regla es lo contrario.
+
+## Lo que sigue
+
+Rondas, Uniforme, Libro y Evidencias siguen en peso 0, sin cambios.
