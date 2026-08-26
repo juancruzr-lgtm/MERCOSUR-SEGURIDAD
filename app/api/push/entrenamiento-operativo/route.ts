@@ -128,7 +128,7 @@ export async function GET(req: NextRequest) {
   if (bandeja.error) return NextResponse.json({ error: bandeja.error }, { status: 500 })
 
   const [rr, ee] = await Promise.all([
-    cargarRondasDelMes(periodo, client),
+    cargarRondasDelMes(periodo, client, true),
     cargarEvidenciasDelMes(periodo, client),
   ])
   // Si estas dos fallan el aviso podría decirle a alguien que no completó

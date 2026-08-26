@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
   if (bandeja.error) return NextResponse.json({ error: bandeja.error }, { status: 500 })
 
   const [rr, ee] = await Promise.all([
-    cargarRondasDelMes(mes, client),
+    cargarRondasDelMes(mes, client, true),
     cargarEvidenciasDelMes(mes, client),
   ])
   const fallo = [rr.error, ee.error].filter(Boolean).join(' · ')

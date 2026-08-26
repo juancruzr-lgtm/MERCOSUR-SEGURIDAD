@@ -180,13 +180,32 @@ export async function cargarRondasEmpleado(
   return { dato: datos.find(d => d.guardiaId === empleadoId) ?? null, error: null }
 }
 
-/** Todas las filas del mes. Una consulta, para la tabla y para la simulación. */
+/**
+ * Todas las filas del mes. Una consulta, para la tabla y para la simulación.
+ *
+ * ── Por qué hay dos RPC y no una ───────────────────────────────────────────
+ * `cumplimiento_rondas_por_empleado` recorta por zona leyendo `auth.uid()`, que
+ * es lo correcto en el navegador. Pero las rutas de servidor corren con
+ * service_role, ahí `auth.uid()` es NULL y esa función devuelve CERO FILAS sin
+ * ningún error: la ruta de entrenamiento no le habría enseñado a nadie sobre
+ * rondas, y la simulación de pesos habría dicho que Rondas no cambia nada
+ * cuando ni siquiera estaba mirando los datos.
+ *
+ * @param servicio  `true` SÓLO desde el servidor, con el cliente de servicio y
+ *                  el permiso ya validado por quien llama. La RPC de servicio
+ *                  no está concedida a `authenticated`, así que aunque este
+ *                  flag llegara en `true` desde el navegador la llamada
+ *                  fallaría en vez de ampliar el alcance de nadie.
+ */
 export async function cargarRondasDelMes(
-  mes: string, client: any = supabase,
+  mes: string, client: any = supabase, servicio = false,
 ): Promise<{ datos: RondasEmpleado[]; error: string | null }> {
   const [y, m] = mes.split('-').map(Number)
   const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate()
-  const { data, error } = await client.rpc('cumplimiento_rondas_por_empleado', {
+  const rpc = servicio
+    ? 'cumplimiento_rondas_por_empleado_servicio'
+    : 'cumplimiento_rondas_por_empleado'
+  const { data, error } = await client.rpc(rpc, {
     p_desde: `${mes}-01`,
     p_hasta: `${mes}-${String(ultimo).padStart(2, '0')}`,
   })
