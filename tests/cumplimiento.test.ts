@@ -6,7 +6,9 @@ import {
 } from '@/lib/cumplimiento'
 import type { JornadaCumplimiento } from '@/lib/cumplimiento'
 import { calcularDesempeno } from '@/lib/desempeno'
-import { desempenoPorEmpleado, jornadaCumplimientoDesdeFila } from '@/lib/desempeno-datos'
+import {
+  desempenoPorEmpleado, jornadaCumplimientoDesdeFila, resumirDesempeno,
+} from '@/lib/desempeno-datos'
 
 /** Una fila de bandeja mínima, del mismo shape que produce construirFilasBandeja. */
 let seq = 0
@@ -594,5 +596,37 @@ describe('el patrón cuenta personas, no jornadas', () => {
       return x
     })
     expect(patronesDeHorarioSospechoso(jornadas)).toEqual([])
+  })
+})
+
+describe('el mismo número en las TRES pantallas', () => {
+  // El test anterior sólo comparaba tabla contra ficha. La lista usaba
+  // `resultado` —el núcleo, sin Puntualidad— y mostraba 31/14/7/4 mientras la
+  // tabla mostraba 27/17/9/3 sobre la misma gente.
+  const conTardanzas = [
+    ...Array.from({ length: 14 }, (_, i) => fila('A', { turnoId: 'a' + i })),
+    ...Array.from({ length: 6 }, (_, i) => fila('A', { turnoId: 'b' + i, entrada: '07:20' })),
+  ]
+
+  it('la lista, la tabla y la ficha salen del mismo objeto', () => {
+    const [d] = desempenoPorEmpleado(conTardanzas as any)
+    const ficha = calcularCumplimiento(
+      (conTardanzas as any).map(jornadaCumplimientoDesdeFila),
+    )
+    expect(d.cumplimiento.puntaje).toBe(ficha.puntaje)
+    expect(d.cumplimiento.estado).toBe(ficha.estado)
+    expect(resumenCorto(d.cumplimiento)).toContain(ficha.puntaje!.toFixed(1).replace('.', ','))
+  })
+
+  it('y ese número NO es el del núcleo cuando hay tardanzas', () => {
+    // Si alguna pantalla vuelve a leer `resultado`, este test la delata.
+    const [d] = desempenoPorEmpleado(conTardanzas as any)
+    expect(d.cumplimiento.puntaje).not.toBe(d.resultado.puntaje)
+  })
+
+  it('el resumen por estado cuenta el estado del cumplimiento', () => {
+    const lista = desempenoPorEmpleado(conTardanzas as any)
+    const resumen = resumirDesempeno(lista)
+    expect(resumen.porEstado[lista[0].cumplimiento.estado]).toBe(1)
   })
 })

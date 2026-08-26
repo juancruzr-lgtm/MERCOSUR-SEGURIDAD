@@ -57,7 +57,10 @@ function Chip({ estado }: { estado: EstadoDesempeno }) {
 
 /** El número nunca va solo: siempre con dimensiones y motivos. */
 function Puntaje({ d }: { d: DesempenoEmpleado }) {
-  const r = d.resultado
+  // `cumplimiento`, no `resultado`: el segundo es sólo el núcleo —Asistencia
+  // y Procedimiento— y no incluye Puntualidad. Usarlo acá hacía que esta
+  // pantalla mostrara un número distinto al de la tabla para la misma persona.
+  const r = d.cumplimiento
   if (r.puntaje === null) return <span style={{ ...S.tenue, fontWeight:600 }}>—</span>
   return (
     <span style={{ fontSize:17, fontWeight:800, color:COLOR_ESTADO[r.estado], fontFamily:'Syne,sans-serif' }}>
@@ -122,7 +125,7 @@ export default function DesempenoPanel({
   }, [lista])
 
   const visibles = useMemo(() => lista.filter(d => {
-    if (filtroEstado !== 'todos' && d.resultado.estado !== filtroEstado) return false
+    if (filtroEstado !== 'todos' && d.cumplimiento.estado !== filtroEstado) return false
     if (filtroObjetivo && d.objetivos.indexOf(filtroObjetivo) < 0) return false
     if (busqueda && d.empleado.toLowerCase().indexOf(busqueda.toLowerCase()) < 0) return false
     return true
@@ -227,7 +230,8 @@ function Empleado({ d, abierto, onAbrir, soloUno, mes }: {
   soloUno: boolean
   mes: string
 }) {
-  const r = d.resultado
+  const r = d.cumplimiento
+  const nucleo = d.resultado
 
   return (
     <div>
@@ -242,17 +246,25 @@ function Empleado({ d, abierto, onAbrir, soloUno, mes }: {
         <Chip estado={r.estado} />
         <div style={{ minWidth:78, textAlign:'right' }}><Puntaje d={d} /></div>
 
-        {!r.datosInsuficientes && r.asistencia !== null && r.procedimiento !== null && (
-          <div style={{ ...S.tenue, minWidth:170 }}>
-            Asistencia <strong style={{ color:'#e2e8f0' }}>{coma(r.asistencia)}</strong>
-            {' · '}
-            Procedimiento <strong style={{ color:'#e2e8f0' }}>{coma(r.procedimiento)}</strong>
+        {/* Las tres que puntúan, en el mismo orden que la ficha. Se leen del
+            resultado de Cumplimiento para que no puedan discrepar del número. */}
+        {!nucleo.datosInsuficientes && (
+          <div style={{ ...S.tenue, minWidth:210 }}>
+            {r.dimensiones
+              .filter(dim => dim.estado === 'puntuable' && dim.nota !== null)
+              .map((dim, k) => (
+                <span key={dim.clave}>
+                  {k > 0 ? ' · ' : ''}
+                  {dim.etiqueta.split(' /')[0]}{' '}
+                  <strong style={{ color:'#e2e8f0' }}>{coma(dim.nota!)}</strong>
+                </span>
+              ))}
           </div>
         )}
 
         <div style={{ ...S.tenue, minWidth:150 }}>
-          {r.observacionesValidas}/{r.jornadasAplicables} jornadas ·
-          {' '}{Math.round(r.cobertura * 100)} % de cobertura
+          {nucleo.observacionesValidas}/{nucleo.jornadasAplicables} jornadas ·
+          {' '}{Math.round(nucleo.cobertura * 100)} % de cobertura
         </div>
 
         {!soloUno && (
@@ -276,6 +288,7 @@ const BLOQUES = [
 
 function Detalle({ d, mes }: { d: DesempenoEmpleado; mes: string }) {
   const r = d.resultado
+  const c = d.cumplimiento
 
   if (r.datosInsuficientes) {
     return (
