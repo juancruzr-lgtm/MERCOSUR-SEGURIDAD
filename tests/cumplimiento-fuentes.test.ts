@@ -388,3 +388,36 @@ describe('las evidencias de objetivos de prueba no cuentan', () => {
     expect(resumirCalidad(conTest).medicion.incidencias).toBe(2)
   })
 })
+
+describe('la ambigüedad se explica sólo a quien la tiene', () => {
+  it('sin observaciones pendientes NO se le dice que quedan sin revisar', () => {
+    // Le decía "Quedan observaciones de la IA sin revisar" a alguien con cero
+    // pendientes. Es lo primero que lee quien va a decidir sobre esa persona.
+    const limpio = [
+      ...Array.from({ length: 5 }, () => ev({ clasificacion_efectiva: 'SIN_OBSERVACIONES' })),
+      ev({ revision_estado: 'CORRECTO' }),
+    ]
+    const { fuentes, uniforme } = fuentesDeEmpleado(null, limpio)
+    expect(uniforme.observadasPendientes).toBe(0)
+    expect(fuentes.uniforme?.faltante).not.toContain('sin revisar')
+    expect(fuentes.uniforme?.faltante).toContain('no pesa todavía')
+  })
+
+  it('con observaciones pendientes sí se explica', () => {
+    const conPendientes = [
+      ...Array.from({ length: 5 }, () => ev({ clasificacion_efectiva: 'SIN_OBSERVACIONES' })),
+      ev({ revision_estado: 'PENDIENTE' }),
+    ]
+    const { fuentes } = fuentesDeEmpleado(null, conPendientes)
+    expect(fuentes.uniforme?.faltante).toContain('sin revisar')
+  })
+
+  it('lo mismo para rondas: sin pausas sin causa, no se habla de pausas', () => {
+    const sinAmbiguedad = fuentesDeEmpleado(
+      { guardiaId: 'g', obligaciones: 20, cumplidas: 18, noIniciada: 2, noFinalizada: 0,
+        suspendida: 0, saneadas: 0, bajoPausa: 0, pausaAtribuible: 0, pausaNoAtribuible: 0,
+        pausaCapacitacion: 0, pausaSinClasificar: 0, motivosPausa: {}, causasPausa: {} }, [])
+    expect(sinAmbiguedad.fuentes.rondas?.faltante).not.toContain('pausadas')
+    expect(sinAmbiguedad.fuentes.rondas?.faltante).toContain('no pesa todavía')
+  })
+})

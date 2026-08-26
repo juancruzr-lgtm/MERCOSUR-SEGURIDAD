@@ -468,7 +468,7 @@ export function fuentesDeEmpleado(
    * se conocen los números de la persona.
    */
   const porQue = (
-    m: { estado: string; validos: number; minimo: number; requeridos: number },
+    m: { estado: string; validos: number; minimo: number; requeridos: number; ambigua?: boolean },
     uno: string, plural: string, ambiguo: string,
   ): string | null => {
     const cuenta = (n: number) => `${n} ${n === 1 ? uno : plural}`
@@ -484,7 +484,14 @@ export function fuentesDeEmpleado(
       const verbo = m.validos === 1 ? 'se pudo' : 'se pudieron'
       return `Sólo ${cuenta(m.validos)} ${verbo} evaluar: hacen falta al menos ${m.minimo}`
     }
-    return ambiguo
+    // La explicación de la ambigüedad SÓLO para quien la tiene. Puesta sobre
+    // alguien con cero observaciones pendientes le afirma algo falso, y es lo
+    // primero que lee quien va a decidir sobre esa persona.
+    if (m.ambigua) return ambiguo
+    // Tiene nota y el universo está limpio: si no puntúa es porque su peso
+    // todavía es cero, que es una decisión y no una carencia de datos.
+    return 'Se mide y no pesa todavía: la dimensión está en validación mientras '
+      + 'se decide cuánto debe influir en el puntaje.'
   }
 
   const fuentes: FuentesCumplimiento = {
