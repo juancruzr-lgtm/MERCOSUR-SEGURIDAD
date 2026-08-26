@@ -185,7 +185,38 @@ describe('17. el mensaje deriva de hechos, no de un texto fijo', () => {
     }), 'procedimiento_registro')
     expect(e?.motivo).toContain('3 jornadas trabajadas sin registro propio')
     expect(e?.motivo).toContain('2 entradas sin salida registrada')
-    expect(e?.texto).toContain('5 de tus 20 jornadas')
+    // El texto cuenta CADA hecho por separado. Un texto único para los dos
+    // le decía a alguien con 6 salidas sin marcar y 1 sola confirmación que el
+    // supervisor lo había confirmado 7 veces.
+    expect(e?.texto).toContain('En 2 de tus 20 jornadas registraste la entrada pero no la salida')
+    expect(e?.texto).toContain('En 3 jornadas no quedó ningún registro tuyo')
+    expect(e?.texto).not.toContain('5 de tus 20')
+  })
+
+  it('con sólo salidas sin marcar NO menciona al supervisor', () => {
+    // Es el caso de quien ficha todos los días y sólo se olvida de cerrar.
+    // Decirle que el supervisor tuvo que confirmarlo sería falso.
+    const e = soloDe(entrada({
+      procedimiento: { incidencias: 6, jornadas: 23, sinRegistro: 0, entradaSinSalida: 6 },
+    }), 'procedimiento_registro')
+    expect(e?.texto).toContain('registraste la entrada pero no la salida')
+    expect(e?.texto).not.toContain('supervisor')
+  })
+
+  it('con sólo jornadas sin registro NO habla de salidas', () => {
+    const e = soloDe(entrada({
+      procedimiento: { incidencias: 4, jornadas: 20, sinRegistro: 4, entradaSinSalida: 0 },
+    }), 'procedimiento_registro')
+    expect(e?.texto).toContain('no quedó ningún registro tuyo')
+    expect(e?.texto).not.toContain('pero no la salida')
+  })
+
+  it('el verbo concuerda con "tu asistencia", no con las jornadas', () => {
+    const e = soloDe(entrada({
+      procedimiento: { incidencias: 4, jornadas: 20, sinRegistro: 4, entradaSinSalida: 0 },
+    }), 'procedimiento_registro')
+    expect(e?.texto).toContain('tu asistencia tuvo que confirmarla')
+    expect(e?.texto).not.toContain('tuvieron que confirmarla')
   })
 
   it('ningún texto contiene el puntaje ni una categoría', () => {
