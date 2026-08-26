@@ -324,8 +324,10 @@ describe('la explicación de por qué no puntúa habla de ESTA persona', () => {
     // cero rondas le afirmaba que "quedan ventanas pausadas sin causa", que es
     // sencillamente falso sobre él.
     const { fuentes } = fuentesDeEmpleado(null, [])
-    expect(fuentes.rondas?.faltante).toBe('No tuvo rondas en el período')
-    expect(fuentes.rondas?.faltante).not.toContain('pausadas')
+    // Sin requerimientos el detalle ya lo dice; una segunda línea repitiéndolo
+    // no aporta nada, y la genérica afirmaba algo falso sobre esta persona.
+    expect(fuentes.rondas?.detalle).toBe('Sin rondas asignadas en el período')
+    expect(fuentes.rondas?.faltante).toBeNull()
   })
 
   it('a quien las tuvo todas excluidas se le dice eso', () => {
@@ -333,6 +335,7 @@ describe('la explicación de por qué no puntúa habla de ESTA persona', () => {
       rondas({ obligaciones: 40, bajoPausa: 40, pausaSinClasificar: 40 }), [],
     )
     expect(fuentes.rondas?.faltante).toBe('Sus 40 rondas quedaron fuera del cálculo')
+    expect(fuentes.rondas?.faltante).not.toContain('1 rondas')
   })
 
   it('con muestra chica se dice cuántas faltan, no que haya ambigüedad', () => {
@@ -347,10 +350,22 @@ describe('la explicación de por qué no puntúa habla de ESTA persona', () => {
     expect(fuentes.rondas?.faltante).toContain('sin causa registrada')
   })
 
+  it('el singular no dice "1 evidencias"', () => {
+    const una = [ev({ clasificacion_efectiva: 'SIN_OBSERVACIONES' })]
+    expect(fuentesDeEmpleado(null, una).fuentes.uniforme?.faltante)
+      .toBe('Sólo 1 evidencia de uniforme se pudo evaluar: hacen falta al menos 5')
+  })
+
+  it('el plural del verbo también concuerda', () => {
+    const pocas = Array.from({ length: 3 }, () => ev({ clasificacion_efectiva: 'SIN_OBSERVACIONES' }))
+    expect(fuentesDeEmpleado(null, pocas).fuentes.uniforme?.faltante)
+      .toBe('Sólo 3 evidencias de uniforme se pudieron evaluar: hacen falta al menos 5')
+  })
+
   it('lo mismo para uniforme y libro', () => {
     const pocas = Array.from({ length: 2 }, () => ev({ clasificacion_efectiva: 'SIN_OBSERVACIONES' }))
     const { fuentes } = fuentesDeEmpleado(null, pocas)
     expect(fuentes.uniforme?.faltante).toContain('hacen falta al menos 5')
-    expect(fuentes.libro_guardia?.faltante).toBe('No tuvo registros de libro en el período')
+    expect(fuentes.libro_guardia?.faltante).toBeNull()
   })
 })
