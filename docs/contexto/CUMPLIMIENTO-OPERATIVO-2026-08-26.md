@@ -288,3 +288,118 @@ dudas de permisos, y esta regla es lo contrario.
 ## Lo que sigue
 
 Rondas, Uniforme, Libro y Evidencias siguen en peso 0, sin cambios.
+
+---
+
+# Actualización — Permisos, Rondas y evidencias (26/08/2026, tarde)
+
+PRs #78 (permisos) y #79 (Rondas + evidencias). Migración
+`20260826140000_cumplimiento_rondas_por_empleado`.
+
+## 1. Un supervisor sin zonas ya no ve todo
+
+`objetivoEnAlcance` devolvía `true` cuando el supervisor no tenía zonas. La
+ausencia de configuración **abría** el acceso, y agregar una zona —el acto que
+parece dar permiso— se lo quitaba. Ahora sin zonas no ve nada y la pantalla lo
+dice con el motivo.
+
+Es un solo cambio central: Revisión de planillas, Cierre Operativo, Cumplimiento
+y la vista del supervisor pasan todos por `cargarFilasBandeja`.
+
+**Impacto real:** los admins no cambian (`esAdmin` corta antes). El único
+supervisor sin zonas es **Monzon, Aldo**.
+
+`cargarFilasBandeja` devuelve `sinZonas` para distinguir *"no te toca nada este
+mes"* de *"no tenés permisos configurados"*.
+
+## 2. Rondas: por qué NO puntúa
+
+De las **2035 obligaciones** de agosto, **571 cayeron bajo una pausa** — y todas
+figuraban como *cumplidas*, porque el evaluador no genera alertas sobre una
+ronda pausada. Contarlas infla el numerador con ventanas que nadie hizo porque
+no correspondía hacerlas.
+
+Los motivos de esas pausas son el problema:
+
+| Motivo (textual, sin clasificar) | Ventanas |
+|---|---|
+| "la pauso por que no se hace" | 199 |
+| "no se hace no se por que esta" | 104 |
+| "Hasta que se use bien" | 91 |
+| "No se esta realizando y suma alertas" | 8 |
+| "no tiene puntos cargados" | 124 |
+| "No le da ubicación en los puntos" | 29 |
+| "Sólo viernes, sábado y domingo" | 16 |
+
+**El 70 % de las pausas se pusieron porque la ronda no se hacía.** Excluirlas
+todas premia el patrón *no la hago → me la pausan → desaparece*. No excluir
+ninguna castiga a quien no podía hacerla. Y el motivo es **texto libre**:
+clasificarlo por palabras sería frágil, consecuente y adivinado.
+
+**Caso que lo demuestra:** ALMADA tiene 8 ventanas excluidas por una pausa cuyo
+motivo dice *«No se está realizando… restaurar cuando se hable con el
+vigilador»*. Con esas 8 adentro su cumplimiento sería 71 %, no 81 %.
+
+**Lo que falta, concreto:** un campo de causa en `ronda_pausas`
+(`tecnica | configuracion | no_se_realiza | no_aplica`) elegido por quien pausa.
+Es una decisión de producto más una migración, no una inferencia.
+
+### Señales técnicas que SÍ existen
+
+`ronda_punto_diagnosticos_gps` — 57 diagnósticos sobre 32 puntos de 10 rondas:
+27 recomiendan recentrar o ajustar radio. Sirven para arreglar la configuración,
+pero **no dicen qué ventana concreta se perdió por eso**, así que hoy no
+permiten atribuir.
+
+### La RPC
+
+`cumplimiento_rondas_por_empleado(desde, hasta)` calcula el agregado donde vive
+la autoridad. `rondas_ventanas_programadas` está revocada para `authenticated` a
+propósito, y el espejo en TypeScript aclara que **no genera obligaciones**.
+
+Reconciliado contra la base para ALMADA: 84 = 47 cumplidas + 11 no realizadas +
+8 bajo pausa + 18 saneadas. Coincide exacto con la pantalla.
+
+### No aplica ≠ Datos insuficientes ≠ cero
+
+- **No aplica** — sin rondas asignadas. No le falta nada.
+- **Datos insuficientes** — menos de 8 obligaciones atribuibles.
+- Si **todo** quedó excluido tampoco es 0 %: no hubo nada exigible.
+
+## 3. Uniforme, Libro y Calidad — descriptivas, peso 0
+
+- `SANEADO` no penaliza ni entra al aprendizaje.
+- IA sin revisión humana **no penaliza**.
+- Descartada por una persona = **falso positivo de la IA**, no falta del
+  vigilador.
+- Confirmada por una persona = única incidencia válida.
+- Una foto no evaluable cuenta en **Calidad** y NO se convierte en "uniforme
+  incorrecto": el hecho primario es la foto.
+- No haber subido la foto **deriva de no haber fichado**, que Procedimiento ya
+  penaliza. No se cuenta dos veces.
+
+Las cuatro fuentes se cargan **aparte del X/10**: si fallan, el número no cambia.
+
+## 4. Estado de los pesos
+
+| Dimensión | Peso |
+|---|---|
+| Asistencia | 20 |
+| Puntualidad | 40 |
+| Procedimiento | 60 |
+| Rondas | **0** |
+| Uniforme | **0** |
+| Libro de guardia | **0** |
+| Calidad de evidencias | **0** |
+
+## 5. Desempeño general — previsto, no implementado
+
+```
+DESEMPEÑO GENERAL (futuro)
+├── Cumplimiento Operativo      ← lo único que existe hoy
+├── Evaluación del Supervisor   ← periódica y auditada: quién, cuándo, qué período
+└── Evaluación del Cliente      ← conformidad, trato, y si pide a esa persona
+```
+
+Un empleado puede usar mal la app, trabajar excelente y ser pedido por el
+cliente. **Esas tres cosas no se mezclan hoy en el X/10.**
