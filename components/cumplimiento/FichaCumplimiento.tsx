@@ -72,8 +72,20 @@ function FilaDimension({ d, pie }: { d: Dimension, pie?: React.ReactNode }) {
           color: puntua ? '#e2e8f0' : hayNota ? '#7c8aa0' : '#64748b',
           fontFamily: hayNota ? 'Syne,sans-serif' : 'inherit',
         }}>
-          {hayNota ? coma(d.nota as number) : d.estado === 'no_aplica' ? 'No aplica' : 'Sin datos'}
+          {/* Las tres respuestas sin número NO significan lo mismo y por eso
+              se dicen distinto. "Sin datos" sobre alguien que no tuvo la
+              obligación suena a que falta información sobre él, y lo que pasa
+              es que no le correspondía. */}
+          {hayNota ? coma(d.nota as number)
+            : d.estado === 'no_aplica'           ? 'No aplica'
+            : d.estado === 'datos_insuficientes' ? 'Datos insuficientes'
+            :                                      'Sin datos'}
         </span>
+        {puntua && (
+          <span style={{ ...S.tenue, fontSize:10, whiteSpace:'nowrap' as const }}>
+            peso {d.peso}
+          </span>
+        )}
         {!puntua && hayNota && (
           <span style={{ ...S.chip, fontSize:9.5, color:'#94a3b8', background:'#1e293b',
                          border:'1px solid #33415577', whiteSpace:'nowrap' as const }}>
