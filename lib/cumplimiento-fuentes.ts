@@ -236,6 +236,8 @@ export async function cargarRondasDelMes(
 
 export interface EvidenciaCumplimiento {
   analisis_tipo: string
+  /** Para poder dejar afuera los objetivos de prueba. */
+  objetivo_id?: string | null
   clasificacion_efectiva?: string | null
   revision_estado?: string | null
   motivos?: string[] | null
@@ -350,23 +352,46 @@ export function detalleEvidencia(r: ResumenEvidencia): string {
   return partes.join(' · ')
 }
 
+/**
+ * Los objetivos marcados como de prueba.
+ *
+ * Existe porque las evidencias eran la ÚNICA fuente del Cumplimiento que no los
+ * excluía. Los turnos los filtra la bandeja y las ventanas de ronda las filtra
+ * `rondas_ventanas_programadas`; las fotos entraban igual, así que una foto
+ * sacada en un objetivo de prueba le bajaba la nota de Calidad a una persona
+ * real. Ahora las tres fuentes usan el mismo criterio.
+ */
+export async function objetivosDePrueba(client: any = supabase): Promise<Set<string>> {
+  const { data, error } = await client.from('objetivos').select('id').eq('es_prueba', true)
+  // Ante un fallo se devuelve vacío a propósito: preferir no excluir nada antes
+  // que excluir de más y hacer desaparecer evidencias reales sin que se note.
+  if (error) return new Set<string>()
+  return new Set(((data ?? []) as any[]).map(o => String(o.id)))
+}
+
+function esProductiva(e: any, prueba: Set<string>): boolean {
+  if ((TIPOS_EVIDENCIA_IA as readonly string[]).indexOf(e.analisis_tipo) < 0) return false
+  return !prueba.has(String(e.objetivo_id ?? ''))
+}
+
 export async function cargarEvidenciasEmpleado(
   mes: string, empleadoId: string, client: any = supabase,
 ): Promise<{ evidencias: EvidenciaCumplimiento[]; error: string | null }> {
   const [y, m] = mes.split('-').map(Number)
   const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate()
-  const { data, error } = await client
-    .from('evidencia_analisis')
-    .select('analisis_tipo, clasificacion_efectiva, revision_estado, motivos, guardia_id')
-    .eq('guardia_id', empleadoId)
-    .eq('estado', 'completado')
-    .gte('evidencia_created_at', `${mes}-01T00:00:00`)
-    .lte('evidencia_created_at', `${mes}-${String(ultimo).padStart(2, '0')}T23:59:59`)
+  const [prueba, { data, error }] = await Promise.all([
+    objetivosDePrueba(client),
+    client
+      .from('evidencia_analisis')
+      .select('analisis_tipo, clasificacion_efectiva, revision_estado, motivos, guardia_id, objetivo_id')
+      .eq('guardia_id', empleadoId)
+      .eq('estado', 'completado')
+      .gte('evidencia_created_at', `${mes}-01T00:00:00`)
+      .lte('evidencia_created_at', `${mes}-${String(ultimo).padStart(2, '0')}T23:59:59`),
+  ])
   if (error) return { evidencias: [], error: error.message }
   return {
-    evidencias: ((data ?? []) as any[]).filter(
-      e => (TIPOS_EVIDENCIA_IA as readonly string[]).indexOf(e.analisis_tipo) >= 0,
-    ),
+    evidencias: ((data ?? []) as any[]).filter(e => esProductiva(e, prueba)),
     error: null,
   }
 }
@@ -517,6 +542,7 @@ export async function cargarEvidenciasDelMes(
 ): Promise<{ evidencias: EvidenciaCumplimiento[]; error: string | null }> {
   const [y, m] = mes.split('-').map(Number)
   const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  const prueba = await objetivosDePrueba(client)
   const salida: EvidenciaCumplimiento[] = []
   // Paginado: el mes entero pasa holgadamente el límite de 1000 filas de
   // PostgREST, y una página silenciosamente truncada haría que a la mitad de la
@@ -525,7 +551,7 @@ export async function cargarEvidenciasDelMes(
   for (let desde = 0; ; desde += TAM) {
     const { data, error } = await client
       .from('evidencia_analisis')
-      .select('analisis_tipo, clasificacion_efectiva, revision_estado, motivos, guardia_id')
+      .select('analisis_tipo, clasificacion_efectiva, revision_estado, motivos, guardia_id, objetivo_id')
       .eq('estado', 'completado')
       .gte('evidencia_created_at', `${mes}-01T00:00:00`)
       .lte('evidencia_created_at', `${mes}-${String(ultimo).padStart(2, '0')}T23:59:59`)
@@ -533,9 +559,7 @@ export async function cargarEvidenciasDelMes(
       .range(desde, desde + TAM - 1)
     if (error) return { evidencias: [], error: error.message }
     const pagina = (data ?? []) as any[]
-    salida.push(...pagina.filter(
-      e => (TIPOS_EVIDENCIA_IA as readonly string[]).indexOf(e.analisis_tipo) >= 0,
-    ))
+    salida.push(...pagina.filter(e => esProductiva(e, prueba)))
     if (pagina.length < TAM) break
   }
   return { evidencias: salida, error: null }
