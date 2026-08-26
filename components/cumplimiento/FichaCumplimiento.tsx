@@ -112,12 +112,16 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
   const [filas, setFilas] = useState<any[]>([])
+  // Todas las del mes, no sólo las de esta persona: el patrón de horario es
+  // del puesto y necesita ver a los demás.
+  const [todasLasFilas, setTodasLasFilas] = useState<any[]>([])
 
   const cargar = useCallback(async () => {
     if (!esAdmin) { setCargando(false); return }
     setCargando(true); setError('')
     const { filas: todas, error: err } = await cargarFilasBandeja({ mes, esAdmin, usuarioId })
     if (err) { setError(err); setFilas([]); setCargando(false); return }
+    setTodasLasFilas(todas)
     setFilas(todas.filter(f => f.empleadoId === empleadoId))
     setCargando(false)
   }, [mes, esAdmin, usuarioId, empleadoId])
@@ -126,10 +130,14 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
 
   const jornadas = useMemo(() => filas.map(jornadaCumplimientoDesdeFila), [filas])
   const r = useMemo(() => calcularCumplimiento(jornadas), [jornadas])
-  // Sobre las jornadas de ESTA persona: si sus tardanzas se concentran en un
-  // puesto donde además hay otros llegando tarde, conviene mirar el horario
-  // antes que a la persona. No perdona ninguna tardanza; sólo lo señala.
-  const patrones = useMemo(() => patronesDeHorarioSospechoso(jornadas), [jornadas])
+  // El patrón se calcula sobre TODO el mes —hace falta ver a los demás— y
+  // después se recorta a los puestos donde ESTA persona llegó tarde: el resto
+  // no explica nada de su número.
+  const patrones = useMemo(() => {
+    const suyos = new Set(r.puntualidad.tardanzas.map(t => `${t.objetivo}@${t.horaInicioProg}`))
+    return patronesDeHorarioSospechoso(todasLasFilas.map(jornadaCumplimientoDesdeFila))
+      .filter(pt => suyos.has(`${pt.objetivo}@${pt.horaInicio}`))
+  }, [todasLasFilas, r])
 
   // Sin acceso no se carga ni se muestra nada. La guarda está acá además de en
   // el ruteo: una pantalla que no debería verse no puede depender de que nadie
@@ -209,7 +217,8 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
           {patrones.map(pt => (
             <div key={pt.objetivo + pt.horaInicio} style={{ ...S.dim, padding:'4px 0' }}>
               · {pt.objetivo} · turno {pt.horaInicio} — {pt.entradas} entradas de{' '}
-              {pt.personas} vigilador(es), {pt.porcentajeTarde} % posteriores al inicio,{' '}
+              {pt.personas} vigilador{pt.personas === 1 ? '' : 'es'},{' '}
+              {pt.porcentajeTarde} % posteriores al inicio,{' '}
               demora promedio +{pt.promedioTarde} min
             </div>
           ))}

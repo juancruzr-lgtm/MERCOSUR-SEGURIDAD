@@ -562,3 +562,37 @@ describe('Puntualidad no toca nada de liquidación', () => {
     expect(tarde.base.incidencias).toEqual(puntual.base.incidencias)
   })
 })
+
+describe('el patrón cuenta personas, no jornadas', () => {
+  const enPuesto = (i: number, empleadoId: string, min: number) => j({
+    turnoId: 'x' + i, empleadoId, objetivo: 'NACION', horaInicioProg: '19:00',
+    horaFinProg: '07:00', entrada: `19:${String(min).padStart(2, '0')}`,
+  })
+
+  it('las jornadas de una sola persona NO levantan la advertencia', () => {
+    // En producción decía "20 entradas de 20 vigiladores" sobre una sola
+    // persona: contaba turnos como si fueran gente.
+    const jornadas = Array.from({ length: 20 }, (_, i) => enPuesto(i, 'A', 12))
+    expect(patronesDeHorarioSospechoso(jornadas)).toEqual([])
+  })
+
+  it('y con dos personas cuenta dos, no veinte', () => {
+    const jornadas = [
+      ...Array.from({ length: 10 }, (_, i) => enPuesto(i, 'A', 12)),
+      ...Array.from({ length: 10 }, (_, i) => enPuesto(100 + i, 'B', 14)),
+    ]
+    const p = patronesDeHorarioSospechoso(jornadas)
+    expect(p).toHaveLength(1)
+    expect(p[0].personas).toBe(2)
+    expect(p[0].entradas).toBe(20)
+  })
+
+  it('sin empleadoId no se levanta la advertencia: mejor callar que inventar', () => {
+    const jornadas = Array.from({ length: 20 }, (_, i) => {
+      const x = enPuesto(i, 'A', 12)
+      delete (x as any).empleadoId
+      return x
+    })
+    expect(patronesDeHorarioSospechoso(jornadas)).toEqual([])
+  })
+})

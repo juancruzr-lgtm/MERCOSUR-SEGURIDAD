@@ -101,6 +101,8 @@ function aMinutos(hora?: string | null): number | null {
 }
 
 export interface JornadaCumplimiento extends JornadaDesempeno {
+  /** De quién es la jornada. Sin esto no se puede contar personas. */
+  empleadoId?: string | null
   /** Fecha del turno, para poder mostrar el hecho detrás del número. */
   fecha?: string | null
   /** Horario programado del turno. */
@@ -237,6 +239,11 @@ export const UMBRAL_PATRON = { entradas: 5, personas: 2, porcentaje: 70, promedi
 /**
  * Puestos donde la tardanza parece del horario y no de las personas.
  *
+ * Se le pasan TODAS las jornadas del período, no las de una persona: si sólo
+ * ve las de un vigilador no puede saber si los demás también llegan tarde ahí,
+ * que es justamente lo que distingue un horario mal cargado de una persona
+ * impuntual.
+ *
  * NO neutraliza ninguna impuntualidad: es una advertencia para que alguien
  * revise la programación. Si el horario estaba mal, se corrige por el mecanismo
  * de siempre y el indicador pasa a usar el dato corregido — que es el que ya
@@ -256,9 +263,10 @@ export function patronesDeHorarioSospechoso(
       obj: j.objetivo, ini: j.horaInicioProg, ms: [], personas: new Set<string>(),
     }
     g.ms.push(m)
-    // La persona sale del turno, no de la jornada: dos filas del mismo vigilador
-    // no convierten un problema individual en un patrón del puesto.
-    if (j.turnoId) g.personas.add(String((j as any).empleadoId ?? j.turnoId))
+    // Sin empleadoId no se cuenta: es preferible no levantar la advertencia a
+    // levantarla contando jornadas como si fueran personas. Eso decía
+    // "20 entradas de 20 vigiladores" sobre una sola persona.
+    if (j.empleadoId) g.personas.add(String(j.empleadoId))
     grupos.set(clave, g)
   }
 
