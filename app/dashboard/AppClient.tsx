@@ -71,6 +71,9 @@ import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
+import {
+  cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
+} from '@/lib/cumplimiento-fuentes'
 import { ETIQUETA_ESTADO as ETIQUETA_CUMPLIMIENTO, resumenCorto } from '@/lib/cumplimiento'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
@@ -1331,8 +1334,14 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   const [vista, setVista] = useState<'empleados' | 'desempeno'>('empleados')
 
   // Cumplimiento Operativo en la tabla principal: verlo no puede exigir entrar
-  // primero a otra pestaña. Sale del MISMO calculo que la pestaña Desempeno
-  // —desempenoPorEmpleado—, asi que los dos numeros no pueden discrepar.
+  // primero a otra pestaña.
+  //
+  // Sale del MISMO calculo que la pestaña Desempeno y que la ficha del legajo
+  // —desempenoPorEmpleado con las MISMAS fuentes—, asi que los tres numeros no
+  // pueden discrepar. Cargar las filas sin rondas ni evidencias ya no alcanza:
+  // desde el modelo E esas dimensiones pesan, y omitirlas mostraria aca un
+  // numero distinto al de la ficha. Es exactamente la regresion que ya paso una
+  // vez, cuando una pantalla leia el nucleo y otra el cumplimiento completo.
   const mesCumplimiento = mesPorDefecto()
   const [cumplimiento, setCumplimiento] = useState<Map<string, any>>(new Map())
   const [cargandoCumplimiento, setCargandoCumplimiento] = useState(false)
@@ -1342,11 +1351,23 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     if (!esAdmin) return
     let vigente = true
     setCargandoCumplimiento(true)
-    cargarFilasBandeja({ mes: mesCumplimiento, esAdmin: true, usuarioId: usuarioId ?? null })
-      .then(({ filas }) => {
+    Promise.all([
+      cargarFilasBandeja({ mes: mesCumplimiento, esAdmin: true, usuarioId: usuarioId ?? null }),
+      cargarRondasDelMes(mesCumplimiento),
+      cargarEvidenciasDelMes(mesCumplimiento),
+    ])
+      .then(([bandeja, rr, ee]) => {
         if (!vigente) return
+        const porRondas = new Map(rr.datos.map(d => [d.guardiaId, d]))
+        const porEvidencia = evidenciasPorEmpleado(ee.evidencias)
+        const ids: string[] = []
+        for (const f of bandeja.filas) if (ids.indexOf(f.empleadoId) < 0) ids.push(f.empleadoId)
+        const fuentes = new Map(ids.map(id => [
+          id,
+          fuentesDeEmpleado(porRondas.get(id) ?? null, porEvidencia.get(id) ?? []).fuentes,
+        ]))
         const mapa = new Map<string, any>()
-        for (const d of desempenoPorEmpleado(filas)) mapa.set(d.empleadoId, d)
+        for (const d of desempenoPorEmpleado(bandeja.filas, fuentes)) mapa.set(d.empleadoId, d)
         setCumplimiento(mapa)
       })
       .finally(() => { if (vigente) setCargandoCumplimiento(false) })
