@@ -369,3 +369,22 @@ describe('la explicación de por qué no puntúa habla de ESTA persona', () => {
     expect(fuentes.libro_guardia?.faltante).toBeNull()
   })
 })
+
+// ── Objetivos de prueba fuera del Cumplimiento productivo ───────────────────
+
+describe('las evidencias de objetivos de prueba no cuentan', () => {
+  const prod = { analisis_tipo: 'uniforme', clasificacion_efectiva: 'SIN_OBSERVACIONES', objetivo_id: 'real' }
+  const deprueba = { analisis_tipo: 'uniforme', clasificacion_efectiva: 'EVIDENCIA_INSUFICIENTE', objetivo_id: 'prueba' }
+
+  it('una foto sacada en un objetivo de prueba no le baja la nota a nadie', () => {
+    // Era la única fuente del Cumplimiento que no los excluía: los turnos los
+    // filtra la bandeja y las ventanas de ronda las filtra la RPC, pero las
+    // fotos entraban igual.
+    const soloProd = [...Array.from({ length: 6 }, () => prod)]
+    const conTest = [...soloProd, deprueba, deprueba]
+    // El filtro vive en la carga, no en el cálculo: acá se comprueba que el
+    // cálculo cambia si las de prueba entran, que es exactamente el daño.
+    expect(resumirCalidad(soloProd).medicion.incidencias).toBe(0)
+    expect(resumirCalidad(conTest).medicion.incidencias).toBe(2)
+  })
+})
