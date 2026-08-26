@@ -94,6 +94,10 @@ export async function GET(req: NextRequest) {
       suma_puntajes: 0,
       con_puntaje: 0,
       cambian_de_categoria: 0,
+      // Quien cambia y HACIA DONDE. Es lo que decide: si encender una dimension
+      // rescata de "requiere intervencion" a alguien cuyo problema sigue ahi,
+      // el indicador dejo de senalar justo a quien mas atencion necesita.
+      cambios: [] as Array<{ empleado: string; de: string; a: string; puntaje_de: number | null; puntaje_a: number | null }>,
       mayor_baja: null as null | { empleado: string; de: number; a: number },
       mayor_suba: null as null | { empleado: string; de: number; a: number },
     }
@@ -120,7 +124,14 @@ export async function GET(req: NextRequest) {
         if (donde) acc[donde][d.clave] = (acc[donde][d.clave] ?? 0) + 1
       }
       if (r.puntaje !== null) { acc.suma_puntajes += r.puntaje; acc.con_puntaje += 1 }
-      if (r.estado !== base.estado) acc.cambian_de_categoria += 1
+      if (r.estado !== base.estado) {
+        acc.cambian_de_categoria += 1
+        acc.cambios.push({
+          empleado: nombre,
+          de: ETIQUETA_ESTADO[base.estado], a: ETIQUETA_ESTADO[r.estado],
+          puntaje_de: base.puntaje, puntaje_a: r.puntaje,
+        })
+      }
       if (r.puntaje !== null && base.puntaje !== null) {
         const delta = r.puntaje - base.puntaje
         if (delta < -0.001 && (!acc.mayor_baja || delta < acc.mayor_baja.delta)) {
