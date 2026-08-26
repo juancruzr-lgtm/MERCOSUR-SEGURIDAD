@@ -128,12 +128,16 @@ as $fn$
     count(*) filter (where x.pausada and not x.saneada and x.causa_pausa in ('tecnica_gps', 'configuracion', 'no_aplica'))::integer,
     count(*) filter (where x.pausada and not x.saneada and x.causa_pausa = 'capacitacion')::integer,
     count(*) filter (where x.pausada and not x.saneada and (x.causa_pausa is null or x.causa_pausa = 'otra'))::integer,
-    coalesce(max(motivos.j), '{}'::jsonb),
-    coalesce(max(causas.j),  '{}'::jsonb)
+    coalesce(motivos.j, '{}'::jsonb),
+    coalesce(causas.j,  '{}'::jsonb)
   from x
   left join motivos on motivos.guardia_id = x.guardia_id
   left join causas  on causas.guardia_id  = x.guardia_id
-  group by x.guardia_id;
+  -- Agrupar tambien por los dos jsonb en vez de envolverlos en max(): no
+  -- existe max(jsonb) y no hace falta, porque cada uno ya es unico por
+  -- guardia_id —salen de CTEs agrupadas por guardia_id—, asi que agregarlos al
+  -- group by no parte ninguna fila.
+  group by x.guardia_id, motivos.j, causas.j;
 $fn$;
 
 comment on function public.cumplimiento_rondas_por_empleado(date, date) is
