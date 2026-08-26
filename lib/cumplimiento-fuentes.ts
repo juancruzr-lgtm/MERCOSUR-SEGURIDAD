@@ -433,18 +433,49 @@ export function fuentesDeEmpleado(
   const libro = resumirEvidencias(evidencias, 'libro_guardia', curva)
   const calidad = resumirCalidad(evidencias, curva)
 
+  /**
+   * Por qué esta dimensión no puntúa, para ESTA persona.
+   *
+   * El texto genérico del módulo describe por qué la dimensión sigue en
+   * validación en general, y puesto sobre alguien que no tuvo ninguna ronda
+   * afirma algo falso: le decía "quedan ventanas pausadas sin causa" a quien no
+   * tiene ni una. Cada estado tiene su propia explicación y se elige acá, donde
+   * se conocen los números de la persona.
+   */
+  const porQue = (
+    m: { estado: string; validos: number; minimo: number; requeridos: number },
+    plural: string, ambiguo: string,
+  ): string | null => {
+    if (m.estado === 'no_aplica') {
+      return m.requeridos === 0
+        ? `No tuvo ${plural} en el período`
+        : `Sus ${m.requeridos} ${plural} quedaron fuera del cálculo`
+    }
+    if (m.estado === 'datos_insuficientes') {
+      return `Con ${m.validos} ${plural} evaluables no alcanza: hacen falta al menos ${m.minimo}`
+    }
+    return ambiguo
+  }
+
   const fuentes: FuentesCumplimiento = {
     rondas: {
       nota: r.nota,
       detalle: detalleRondas(r),
       enValidacion: r.enValidacion,
       noAplica: r.estado === 'no_aplica',
+      faltante: porQue(r.medicion, 'rondas',
+        'Quedan ventanas pausadas sin causa registrada. Una pausa sin causa puede haber '
+        + 'sido un problema técnico o la ronda que no se hacía, y las dos se leen igual: '
+        + 'el número describe un universo recortado a ciegas.'),
     },
     uniforme: {
       nota: uniforme.nota,
       detalle: detalleEvidencia(uniforme),
       enValidacion: uniforme.enValidacion,
-      noAplica: uniforme.total === 0,
+      noAplica: uniforme.medicion.estado === 'no_aplica',
+      faltante: porQue(uniforme.medicion, 'evidencias de uniforme',
+        'Quedan observaciones de la IA sin revisar. Hasta que una persona se pronuncie no '
+        + 'son faltas, y la nota sólo describe lo que alguien miró.'),
     },
     libro_guardia: {
       nota: libro.nota,
@@ -452,7 +483,11 @@ export function fuentesDeEmpleado(
       enValidacion: libro.enValidacion,
       // Sin ninguna foto de libro en el período no se afirma nada: puede ser un
       // objetivo móvil, donde no hay libro que fotografiar.
-      noAplica: libro.total === 0,
+      noAplica: libro.medicion.estado === 'no_aplica',
+      faltante: porQue(libro.medicion, 'registros de libro',
+        'Quedan observaciones de la IA sin revisar. No subir la foto es un hecho de '
+        + 'Procedimiento; que el libro esté mal es otra cosa y necesita que una persona '
+        + 'lo confirme.'),
     },
     evidencias: {
       nota: calidad.nota,
@@ -460,7 +495,11 @@ export function fuentesDeEmpleado(
       // Calidad se queda descriptiva por decisión, no por falta de datos: mide
       // si la foto se podía leer, y eso no debe bajarle el puntaje a nadie.
       enValidacion: true,
-      noAplica: calidad.total === 0,
+      noAplica: calidad.medicion.estado === 'no_aplica',
+      faltante: calidad.medicion.estado === 'medible'
+        ? 'Descriptiva por decisión: mide si la foto se podía leer, no lo que la foto '
+          + 'muestra. No corresponde que baje el puntaje de nadie.'
+        : porQue(calidad.medicion, 'evidencias', ''),
     },
   }
 
