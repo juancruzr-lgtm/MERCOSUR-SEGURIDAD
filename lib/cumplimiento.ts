@@ -440,6 +440,19 @@ export const VARIANTES_PESOS: Record<string, Record<ClaveDimension, number>> = {
     asistencia: 20, puntualidad: 40, procedimiento: 60,
     rondas: 0, uniforme: 0, libro_guardia: 0, evidencias: 0,
   },
+  /**
+   * Evidencias con peso bajo.
+   *
+   * Con 20 y 20, Procedimiento cae del 50 % al 37,5 % del número y se lleva
+   * puestos los dos casos graves: gente con el 60 % de sus jornadas mal
+   * registradas sale de "requiere intervención" por dimensiones donde no tiene
+   * un solo problema. Con 10 y 10 la corrección hacia abajo se conserva y la
+   * dilución es menor.
+   */
+  evidencias_leve: {
+    asistencia: 20, puntualidad: 40, procedimiento: 60,
+    rondas: 0, uniforme: 10, libro_guardia: 10, evidencias: 0,
+  },
   /** Sólo evidencias: uniforme y libro, que tienen el universo más limpio. */
   solo_evidencias: {
     asistencia: 20, puntualidad: 40, procedimiento: 60,
