@@ -272,11 +272,11 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         {/* Lo que este número NO dice. Va acá y no en una nota al pie: es la
             confusión más cara que puede provocar la pantalla. */}
         <div style={{ ...S.tenue, marginTop:8, lineHeight:1.5 }}>
-          El puntaje sale de presencia, horario y uso de la app. Rondas, uniforme, libro
-          de guardia y calidad de las fotos ya se miden y se muestran abajo, pero
-          <b> no entran al número</b> mientras digan «En validación».
-          Nada de esto mide la calidad del trabajo del vigilador: la evaluación del
-          supervisor y la del cliente son otra capa, y todavía no existen.
+          Mide la prestación del servicio: si estuvo, si llegó a horario, si cumplió
+          las rondas que le tocaban, y si dejó todo eso registrado. Las dimensiones
+          que dicen <b>«En validación»</b> se muestran pero no entran al número.
+          Nada de esto mide la calidad del trato ni del criterio del vigilador: la
+          evaluación del supervisor y la del cliente son otra capa, y todavía no existen.
         </div>
         {r.puntaje === null && (
           <div style={{ ...S.tenue, marginTop:8, color:'#fcd34d' }}>
