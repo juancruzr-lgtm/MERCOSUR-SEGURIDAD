@@ -444,15 +444,20 @@ export function fuentesDeEmpleado(
    */
   const porQue = (
     m: { estado: string; validos: number; minimo: number; requeridos: number },
-    plural: string, ambiguo: string,
+    uno: string, plural: string, ambiguo: string,
   ): string | null => {
+    const cuenta = (n: number) => `${n} ${n === 1 ? uno : plural}`
     if (m.estado === 'no_aplica') {
-      return m.requeridos === 0
-        ? `No tuvo ${plural} en el período`
-        : `Sus ${m.requeridos} ${plural} quedaron fuera del cálculo`
+      // Con cero requerimientos el detalle ya dice "Sin rondas asignadas en el
+      // período". Repetirlo acá agrega una segunda línea que no aporta nada.
+      return m.requeridos === 0 ? null : `Sus ${cuenta(m.requeridos)} quedaron fuera del cálculo`
     }
     if (m.estado === 'datos_insuficientes') {
-      return `Con ${m.validos} ${plural} evaluables no alcanza: hacen falta al menos ${m.minimo}`
+      // El verbo también concuerda: "1 evidencia se pudieron evaluar" es la
+      // clase de detalle que hace que una pantalla se lea como descuidada, y
+      // esta se usa para decidir sobre personas.
+      const verbo = m.validos === 1 ? 'se pudo' : 'se pudieron'
+      return `Sólo ${cuenta(m.validos)} ${verbo} evaluar: hacen falta al menos ${m.minimo}`
     }
     return ambiguo
   }
@@ -463,7 +468,7 @@ export function fuentesDeEmpleado(
       detalle: detalleRondas(r),
       enValidacion: r.enValidacion,
       noAplica: r.estado === 'no_aplica',
-      faltante: porQue(r.medicion, 'rondas',
+      faltante: porQue(r.medicion, 'ronda', 'rondas',
         'Quedan ventanas pausadas sin causa registrada. Una pausa sin causa puede haber '
         + 'sido un problema técnico o la ronda que no se hacía, y las dos se leen igual: '
         + 'el número describe un universo recortado a ciegas.'),
@@ -473,7 +478,7 @@ export function fuentesDeEmpleado(
       detalle: detalleEvidencia(uniforme),
       enValidacion: uniforme.enValidacion,
       noAplica: uniforme.medicion.estado === 'no_aplica',
-      faltante: porQue(uniforme.medicion, 'evidencias de uniforme',
+      faltante: porQue(uniforme.medicion, 'evidencia de uniforme', 'evidencias de uniforme',
         'Quedan observaciones de la IA sin revisar. Hasta que una persona se pronuncie no '
         + 'son faltas, y la nota sólo describe lo que alguien miró.'),
     },
@@ -484,7 +489,7 @@ export function fuentesDeEmpleado(
       // Sin ninguna foto de libro en el período no se afirma nada: puede ser un
       // objetivo móvil, donde no hay libro que fotografiar.
       noAplica: libro.medicion.estado === 'no_aplica',
-      faltante: porQue(libro.medicion, 'registros de libro',
+      faltante: porQue(libro.medicion, 'registro de libro', 'registros de libro',
         'Quedan observaciones de la IA sin revisar. No subir la foto es un hecho de '
         + 'Procedimiento; que el libro esté mal es otra cosa y necesita que una persona '
         + 'lo confirme.'),
@@ -499,7 +504,7 @@ export function fuentesDeEmpleado(
       faltante: calidad.medicion.estado === 'medible'
         ? 'Descriptiva por decisión: mide si la foto se podía leer, no lo que la foto '
           + 'muestra. No corresponde que baje el puntaje de nadie.'
-        : porQue(calidad.medicion, 'evidencias', ''),
+        : porQue(calidad.medicion, 'evidencia', 'evidencias', ''),
     },
   }
 
