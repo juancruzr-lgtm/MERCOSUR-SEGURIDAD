@@ -315,3 +315,42 @@ describe('calidad de evidencias', () => {
     expect(fuentes.evidencias?.enValidacion).toBe(true)
   })
 })
+
+// ── El "por qué no puntúa" es de la persona, no del módulo ──────────────────
+
+describe('la explicación de por qué no puntúa habla de ESTA persona', () => {
+  it('a quien no tuvo rondas no se le dice que tiene ventanas pausadas', () => {
+    // Era un texto genérico del módulo puesto sobre cualquiera: a alguien con
+    // cero rondas le afirmaba que "quedan ventanas pausadas sin causa", que es
+    // sencillamente falso sobre él.
+    const { fuentes } = fuentesDeEmpleado(null, [])
+    expect(fuentes.rondas?.faltante).toBe('No tuvo rondas en el período')
+    expect(fuentes.rondas?.faltante).not.toContain('pausadas')
+  })
+
+  it('a quien las tuvo todas excluidas se le dice eso', () => {
+    const { fuentes } = fuentesDeEmpleado(
+      rondas({ obligaciones: 40, bajoPausa: 40, pausaSinClasificar: 40 }), [],
+    )
+    expect(fuentes.rondas?.faltante).toBe('Sus 40 rondas quedaron fuera del cálculo')
+  })
+
+  it('con muestra chica se dice cuántas faltan, no que haya ambigüedad', () => {
+    const { fuentes } = fuentesDeEmpleado(rondas({ obligaciones: 5, cumplidas: 5 }), [])
+    expect(fuentes.rondas?.faltante).toContain('hacen falta al menos 8')
+  })
+
+  it('sólo cuando hay nota se explica la ambigüedad', () => {
+    const { fuentes } = fuentesDeEmpleado(
+      rondas({ obligaciones: 20, cumplidas: 15, noIniciada: 3, bajoPausa: 2, pausaSinClasificar: 2 }), [],
+    )
+    expect(fuentes.rondas?.faltante).toContain('sin causa registrada')
+  })
+
+  it('lo mismo para uniforme y libro', () => {
+    const pocas = Array.from({ length: 2 }, () => ev({ clasificacion_efectiva: 'SIN_OBSERVACIONES' }))
+    const { fuentes } = fuentesDeEmpleado(null, pocas)
+    expect(fuentes.uniforme?.faltante).toContain('hacen falta al menos 5')
+    expect(fuentes.libro_guardia?.faltante).toBe('No tuvo registros de libro en el período')
+  })
+})
