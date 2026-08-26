@@ -242,3 +242,33 @@ describe('la simulación de pesos usa la misma función que producción', () => 
     expect(Object.values(n).reduce((s, v) => s + v, 0)).toBeCloseTo(100, 0)
   })
 })
+
+describe('un "no hay nada que explicar" explícito no cae al texto genérico', () => {
+  const jornadas = MES.map(jornadaCumplimientoDesdeFila)
+
+  it('sin rondas, la dimensión no muestra el motivo de otras personas', () => {
+    // Con `extra.faltante ?? FALTANTE[clave]` un null explícito caía igual al
+    // texto del módulo, y le decía a alguien con CERO rondas que "quedan
+    // ventanas pausadas sin causa registrada".
+    const r = calcularCumplimiento(jornadas, fuentesDeEmpleado(null, EVIDENCIAS).fuentes)
+    const d = r.dimensiones.find(x => x.clave === 'rondas')
+    expect(d?.estado).toBe('no_aplica')
+    expect(d?.faltante).toBeUndefined()
+    expect(d?.detalle).toBe('Sin rondas asignadas en el período')
+  })
+
+  it('con ambigüedad real sí se explica', () => {
+    const conPausas = fuentesDeEmpleado(
+      rondas({ obligaciones: 24, cumplidas: 18, noIniciada: 4, bajoPausa: 2, pausaSinClasificar: 2 }),
+      EVIDENCIAS,
+    )
+    const d = calcularCumplimiento(jornadas, conPausas.fuentes).dimensiones
+      .find(x => x.clave === 'rondas')
+    expect(d?.faltante).toContain('sin causa registrada')
+  })
+
+  it('una dimensión sin aporte sigue usando el texto del módulo', () => {
+    const d = calcularCumplimiento(jornadas).dimensiones.find(x => x.clave === 'rondas')
+    expect(d?.faltante).toContain('pausadas sin causa registrada')
+  })
+})
