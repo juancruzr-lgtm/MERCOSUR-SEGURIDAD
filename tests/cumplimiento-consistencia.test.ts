@@ -167,14 +167,14 @@ describe('21-24. quién ve qué', () => {
 
 // ── Las dimensiones nuevas no entran al número ──────────────────────────────
 
-describe('MODELO E · los pesos de producción', () => {
+describe('MODELO 6 · los pesos de producción', () => {
   const jornadas = MES.map(jornadaCumplimientoDesdeFila)
 
   it('son exactamente los decididos', () => {
     // Cambiar cualquiera de estos números es cambiar qué significa el X/10 para
     // 65 personas. Tiene que ser una decisión explícita, no un descuido.
     expect(PESOS).toEqual({
-      asistencia: 25, rondas: 30, puntualidad: 25, procedimiento: 25,
+      asistencia: 20, rondas: 35, puntualidad: 25, procedimiento: 18,
       uniforme: 8, libro_guardia: 4, evidencias: 0,
     })
   })
@@ -205,7 +205,7 @@ describe('MODELO E · los pesos de producción', () => {
     const r = calcularCumplimiento(jornadas, limpio.fuentes)
     const d = r.dimensiones.find(x => x.clave === 'rondas')
     expect(d?.estado).toBe('puntuable')
-    expect(d?.peso).toBe(30)
+    expect(d?.peso).toBe(35)
   })
 
   it('una dimensión en validación NO puntúa aunque tenga peso', () => {
@@ -219,9 +219,9 @@ describe('MODELO E · los pesos de producción', () => {
     const dim = r.dimensiones.find(d => d.clave === 'rondas')
     expect(dim?.nota).not.toBeNull()
     expect(dim?.estado).toBe('en_validacion')
-    // Y su peso 30 tampoco entra al denominador.
+    // Y su peso 35 tampoco entra al denominador.
     const total = r.dimensiones.filter(d => d.estado === 'puntuable').reduce((s, d) => s + d.peso, 0)
-    expect(total).toBe(25 + 25 + 25 + 8 + 4)
+    expect(total).toBe(20 + 25 + 18 + 8 + 4)
   })
 
   it('"no aplica" nunca entra como cero ni arrastra su peso', () => {
@@ -229,7 +229,7 @@ describe('MODELO E · los pesos de producción', () => {
     const r = calcularCumplimiento(jornadas, sinRondas.fuentes)
     expect(r.dimensiones.find(d => d.clave === 'rondas')?.estado).toBe('no_aplica')
     const total = r.dimensiones.filter(d => d.estado === 'puntuable').reduce((s, d) => s + d.peso, 0)
-    expect(total).toBe(25 + 25 + 25 + 8 + 4)
+    expect(total).toBe(20 + 25 + 18 + 8 + 4)
     // Y no lo hunde: con todo lo demás igual, no tener rondas no cambia nada
     // respecto de tenerlas perfectas.
     const conPerfectas = calcularCumplimiento(
@@ -243,7 +243,7 @@ describe('MODELO E · los pesos de producción', () => {
     const r = calcularCumplimiento(jornadas, pocas.fuentes)
     expect(r.dimensiones.find(d => d.clave === 'rondas')?.estado).toBe('datos_insuficientes')
     const total = r.dimensiones.filter(d => d.estado === 'puntuable').reduce((s, d) => s + d.peso, 0)
-    expect(total).toBe(25 + 25 + 25 + 8 + 4)
+    expect(total).toBe(20 + 25 + 18 + 8 + 4)
   })
 })
 
@@ -252,7 +252,7 @@ describe('la simulación de pesos usa la misma función que producción', () => 
     expect(Object.keys(VARIANTES_PESOS).length).toBeGreaterThanOrEqual(3)
     // `actual` es la línea de base HISTÓRICA, no los pesos de hoy: sin ella no
     // se puede comparar contra de dónde venimos.
-    expect(VARIANTES_PESOS.modelo_e_sin_lastre).toEqual(PESOS)
+    expect(VARIANTES_PESOS.sim6_propuesto).toEqual(PESOS)
     expect(VARIANTES_PESOS.actual).not.toEqual(PESOS)
   })
 

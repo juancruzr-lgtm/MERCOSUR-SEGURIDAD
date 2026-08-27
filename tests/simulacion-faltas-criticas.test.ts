@@ -345,8 +345,9 @@ describe('30 · mejor desempeño nunca da peor resultado', () => {
     }
   })
 
-  it('el modelo productivo sigue sin topes ni escala', () => {
-    expect(PESOS).toEqual(VARIANTES_PESOS.modelo_e_sin_lastre)
+  it('el puntaje de la Capa 1 sigue siendo un promedio, sin topes adentro', () => {
+    expect(PESOS).toEqual(VARIANTES_PESOS.sim6_propuesto)
+    // calcularCumplimiento no conoce las faltas críticas: son una capa aparte.
     const res = calcularCumplimiento(mes(20).map(jornadaCumplimientoDesdeFila), {}, PESOS)
     expect(res.puntaje).toBe(10)
   })

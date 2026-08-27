@@ -55,10 +55,12 @@ const MODELOS: Modelo[] = [
 // ── Nada de esto está activo ────────────────────────────────────────────────
 
 describe('la simulación no toca producción', () => {
-  it('los pesos productivos siguen siendo el Modelo E', () => {
-    expect(PESOS).toEqual(VARIANTES_PESOS.modelo_e_sin_lastre)
-    expect(PESOS.rondas).toBe(30)
-    expect(PESOS.procedimiento).toBe(25)
+  it('el Modelo 6 pasó a ser el productivo; los demás siguen siendo simulación', () => {
+    expect(PESOS).toEqual(VARIANTES_PESOS.sim6_propuesto)
+    expect(PESOS.rondas).toBe(35)
+    expect(PESOS.procedimiento).toBe(18)
+    // Y el que era productivo queda como variante de comparación.
+    expect(VARIANTES_PESOS.modelo_e_sin_lastre).not.toEqual(PESOS)
   })
 
   it('los seis modelos existen, con pesos no negativos y Calidad en cero', () => {

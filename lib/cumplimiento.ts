@@ -316,7 +316,12 @@ export type ClaveDimension = typeof DIMENSIONES[number]
 export const ETIQUETA_DIMENSION: Record<ClaveDimension, string> = {
   asistencia:    'Asistencia',
   puntualidad:   'Puntualidad',
-  procedimiento: 'Procedimiento / uso de la app',
+  // El identificador interno sigue siendo `procedimiento` —lo usan la base, las
+  // RPC y el Entrenador— pero el lenguaje de negocio es otro: lo que esta
+  // dimensión mide es si registró su jornada en la app, no si prestó bien el
+  // servicio. Llamarla "Procedimiento" hacía que un problema de registro se
+  // leyera como un problema de desempeño.
+  procedimiento: 'Registro en App',
   rondas:        'Rondas',
   uniforme:      'Uniforme',
   libro_guardia: 'Libro de guardia',
@@ -381,25 +386,46 @@ export const PESO_PUNTUALIDAD = 25
 
 export const PESOS: Record<ClaveDimension, number> = {
   // Prestó el servicio que tenía asignado. Es el piso de todo lo demás.
-  asistencia:    25,
-  // La que más discrimina donde aplica —desvío 3,38— y la que la operación
-  // reclama por nombre. Sólo pesa para quien tuvo obligaciones válidas.
-  rondas:        30,
+  //
+  // 20 y no 25: tiene 1 incidencia en 1115 jornadas de agosto. Subirla de 15 a
+  // 30 mueve el promedio 0,18 y el MÍNIMO 0,50 — es decir, protege más al que
+  // peor está, que es lo contrario de lo buscado. Sigue siendo conceptualmente
+  // central, y quien falta de verdad lo paga en una dimensión que casi nadie
+  // tiene manchada. Lo grave de una ausencia no se expresa con peso: se expresa
+  // con una falta crítica (ver `lib/evaluacion-final.ts`).
+  asistencia:    20,
+  // La dimensión que más discrimina donde aplica, y la que ES el servicio:
+  // recorrer el objetivo. Sólo pesa para quien tuvo obligaciones válidas.
+  //
+  // 35 y no 40: a 40 la cobertura media del modelo CAE de 69 % a 66 %, porque
+  // Rondas es la dimensión menos medible y darle más peso hace que se mida
+  // menos del modelo. A cambio sólo mueve a los dos que las incumplen, que ya
+  // se movieron a 35.
+  rondas:        35,
   // Presentarse, y presentarse a horario, ES la prestación. Además es la señal
-  // más amplia que hay: alcanza a 44 de 65 personas.
+  // más amplia que hay: alcanza a 64 de 65 personas.
   //
   // Mide contra el horario programado, que es la referencia mientras nadie lo
   // corrija. Un horario mal cargado se hace VISIBLE por
   // patronesDeHorarioSospechoso, no se esconde con una excepción automática.
   puntualidad:   PESO_PUNTUALIDAD,
-  // Baja de 60 a 25. Deja de dominar; no deja de importar. Sigue siendo, junto
-  // con Puntualidad, la dimensión con más dispersión real.
-  procedimiento: 25,
+  // REGISTRO EN APP. Mide el uso correcto del instrumento de medición, no la
+  // calidad del servicio. Un buen vigilador puede usar mal la app.
+  //
+  // 18 y no 10: con 10, alguien con 12 de 21 jornadas sin cerrar queda en 8,95
+  // y su problema deja de verse. 18 lo deja ver sin que domine: la prueba es
+  // que "rondas en 4" quede por debajo de "registro en 4", y con estos pesos la
+  // diferencia es de 0,93 puntos contra los 0,26 del modelo anterior.
+  procedimiento: 18,
   // Sólo sobre evidencia que una persona pudo evaluar. Una foto ilegible no es
   // "mal uniformado": ese hecho pertenece a Calidad.
+  //
+  // 8 y no 3: con 3, el único caso de agosto con uniforme observado y
+  // confirmado por una persona pasa de 9,28 a 9,52 y deja de notarse.
   uniforme:      8,
-  // Poco peso porque hoy casi no discrimina, pero completar bien el libro es
-  // parte de la prestación y tiene que contarse.
+  // Poco peso porque hoy casi no discrimina —33 de 41 personas tienen
+  // exactamente 10— pero completar bien el libro es parte de la prestación y
+  // tiene que contarse.
   libro_guardia: 4,
   // DESCRIPTIVA por decisión, no por falta de datos. Mide si la foto se podía
   // leer, no lo que la foto muestra, y eso no debe bajarle el puntaje a nadie.
