@@ -542,6 +542,43 @@ export const VARIANTES_PESOS: Record<string, Record<ClaveDimension, number>> = {
     uniforme: 5, libro_guardia: 5, evidencias: 0,
   },
 
+  // ── Revisión del 27/08: Rondas como prestación concreta ──────────────────
+  //
+  // La pregunta que abren estos modelos: hacer una ronda ES el servicio de
+  // seguridad, no un trámite. Si Rondas vale 30 y Procedimiento 25, el sistema
+  // está diciendo que registrar bien en la app pesa casi lo mismo que recorrer
+  // el objetivo. Estos modelos prueban qué pasa si no.
+  //
+  // Todos comparten la misma prioridad conceptual: Asistencia y Rondas muy
+  // importantes, Puntualidad y Procedimiento importantes, Uniforme y Libro
+  // complementarias pero reales, Calidad descriptiva.
+
+  /** F · Rondas 35, Procedimiento baja a 20. */
+  modelo_f_rondas35: {
+    asistencia: 25, rondas: 35, puntualidad: 25, procedimiento: 20,
+    uniforme: 8, libro_guardia: 4, evidencias: 0,
+  },
+  /** G · Rondas 40, Procedimiento 20. La prestación manda con claridad. */
+  modelo_g_rondas40: {
+    asistencia: 25, rondas: 40, puntualidad: 25, procedimiento: 20,
+    uniforme: 8, libro_guardia: 4, evidencias: 0,
+  },
+  /** H · Rondas 40 y Asistencia 30: las dos "muy importantes" bien arriba. */
+  modelo_h_prestacion_alta: {
+    asistencia: 30, rondas: 40, puntualidad: 20, procedimiento: 15,
+    uniforme: 8, libro_guardia: 4, evidencias: 0,
+  },
+  /** I · Como E pero con Uniforme y Libro más presentes. */
+  modelo_i_evidencia_real: {
+    asistencia: 25, rondas: 35, puntualidad: 22, procedimiento: 20,
+    uniforme: 12, libro_guardia: 8, evidencias: 0,
+  },
+  /** J · Procedimiento al mínimo defendible: mide sólo uso de la app. */
+  modelo_j_app_minima: {
+    asistencia: 30, rondas: 40, puntualidad: 25, procedimiento: 12,
+    uniforme: 8, libro_guardia: 5, evidencias: 0,
+  },
+
   /**
    * E · PRESTACIÓN SIN LASTRE
    *

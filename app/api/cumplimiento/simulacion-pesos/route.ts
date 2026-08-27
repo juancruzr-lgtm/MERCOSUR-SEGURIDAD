@@ -137,18 +137,57 @@ export async function GET(req: NextRequest) {
           : d.estado === 'en_validacion' ? `${d.nota} (en validación)`
           : 'sin datos'
       }
+      // El estado de cada dimensión, para poder contar el universo sin
+      // reimplementar la regla en SQL.
+      const estados: Record<string, string> = {}
+      for (const d of rProd.dimensiones) estados[d.clave] = d.estado
+      const notas: Record<string, number | null> = {}
+      for (const d of rProd.dimensiones) notas[d.clave] = d.nota
+
+      // El puntaje bajo CADA modelo de pesos, para poder cruzar pesos × escala
+      // sin volver a pedir los datos.
+      const porModelo: Record<string, number | null> = {}
+      for (const v of variantes) {
+        porModelo[v] = calcularCumplimiento(jornadas, medido.fuentes, VARIANTES_PESOS[v]).puntaje
+      }
+
       porPersona.push({
         empleado: nombre,
         puntaje: rProd.puntaje,
         estado: ETIQUETA_ESTADO[rProd.estado],
         jornadas: rProd.base.observacionesValidas,
         dimensiones: dims,
-        rondas_detalle: medido.rondas.medicion.validos > 0
-          ? `${medido.rondas.cumplidas}/${medido.rondas.medicion.validos}` : null,
-        uniforme_detalle: medido.uniforme.medicion.validos > 0
-          ? `${medido.uniforme.medicion.cumplidos}/${medido.uniforme.medicion.validos}` : null,
-        libro_detalle: medido.libro.medicion.validos > 0
-          ? `${medido.libro.medicion.cumplidos}/${medido.libro.medicion.validos}` : null,
+        estados,
+        notas,
+        por_modelo: porModelo,
+        // Requerido válido / cumplido de cada dimensión, tal como lo cuenta el
+        // motor. Es lo que permite reconciliar el universo sin aproximar.
+        req: {
+          asistencia: { req: rProd.base.observacionesValidas, inc: rProd.base.ausencias },
+          puntualidad: { req: rProd.puntualidad.evaluadas, inc: rProd.puntualidad.impuntuales },
+          procedimiento: {
+            req: rProd.base.observacionesValidas,
+            inc: rProd.base.incidencias.sin_registro_propio + rProd.base.incidencias.entrada_sin_salida,
+            sin_registro: rProd.base.incidencias.sin_registro_propio,
+            entrada_sin_salida: rProd.base.incidencias.entrada_sin_salida,
+          },
+          rondas: {
+            req: medido.rondas.medicion.validos, inc: medido.rondas.medicion.incidencias,
+            excluidas: medido.rondas.medicion.excluidos,
+            saneadas: medido.rondas.saneadas, sin_causa: medido.rondas.pausaSinClasificar,
+          },
+          uniforme: {
+            req: medido.uniforme.medicion.validos, inc: medido.uniforme.medicion.incidencias,
+            excluidas: medido.uniforme.medicion.excluidos, ilegibles: medido.uniforme.noEvaluables,
+          },
+          libro_guardia: {
+            req: medido.libro.medicion.validos, inc: medido.libro.medicion.incidencias,
+            excluidas: medido.libro.medicion.excluidos, ilegibles: medido.libro.noEvaluables,
+          },
+          evidencias: {
+            req: medido.calidad.medicion.validos, inc: medido.calidad.medicion.incidencias,
+          },
+        },
       })
     }
 
