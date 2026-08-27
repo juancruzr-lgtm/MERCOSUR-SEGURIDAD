@@ -71,6 +71,7 @@ import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
+import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import {
   cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
@@ -1369,9 +1370,18 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       cargarFilasBandeja({ mes: mesCumplimiento, esAdmin: true, usuarioId: usuarioId ?? null }),
       cargarRondasDelMes(mesCumplimiento),
       cargarEvidenciasDelMes(mesCumplimiento),
+      // Lo que Administracion clasifico en Reportes. Solo aprobadas y solo las
+      // que solapan el mes: pendientes y rechazadas no afirman nada.
+      supabase.from('novedades_laborales')
+        .select('empleado_id, tipo, fecha_desde, fecha_hasta, estado')
+        .eq('estado', 'aprobada')
+        .lte('fecha_desde', `${mesCumplimiento}-31`)
+        .gte('fecha_hasta', `${mesCumplimiento}-01`),
     ])
-      .then(([bandeja, rr, ee]) => {
+      .then(([bandeja, rr, ee, nov]) => {
         if (!vigente) return
+        // Si las novedades fallan, NO se inventa una falta: se sigue sin ellas.
+        const nn = (nov?.data ?? []) as any[]
         const porRondas = new Map(rr.datos.map(d => [d.guardiaId, d]))
         const porEvidencia = evidenciasPorEmpleado(ee.evidencias)
         const ids: string[] = []
@@ -1382,11 +1392,25 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         const fuentes = new Map(ids.map(id => [id, medido.get(id)!.fuentes]))
         // Los conteos de rondas, para la falta critica. Solo cuando la medicion
         // es sostenible: con muestra insuficiente no hay porcentaje que valga.
-        const medidas = new Map(ids.flatMap(id => {
+        // Las fechas en que CADA persona tenia turno: sin esto, una novedad de
+        // rango largo contaria faltas en dias que no le tocaba trabajar.
+        const fechasPorEmpleado = new Map<string, string[]>()
+        for (const f of bandeja.filas) {
+          const arr = fechasPorEmpleado.get(f.empleadoId) ?? []
+          arr.push(f.fecha)
+          fechasPorEmpleado.set(f.empleadoId, arr)
+        }
+        const medidas = new Map(ids.map(id => {
           const m = medido.get(id)!.rondas.medicion
-          return m.estado === 'medible'
-            ? [[id, { rondasCumplidas: m.cumplidos, rondasExigibles: m.validos }] as const]
-            : []
+          return [id, {
+            // Con muestra insuficiente no hay porcentaje que valga: se pasa 0/0
+            // y faltaPorRondas devuelve null.
+            rondasCumplidas: m.estado === 'medible' ? m.cumplidos : 0,
+            rondasExigibles: m.estado === 'medible' ? m.validos : 0,
+            inasistenciasInjustificadas: inasistenciasInjustificadas(
+              nn, id, fechasPorEmpleado.get(id) ?? [],
+            ),
+          }] as const
         }))
         const mapa = new Map<string, any>()
         for (const d of desempenoPorEmpleado(bandeja.filas, fuentes, medidas)) mapa.set(d.empleadoId, d)

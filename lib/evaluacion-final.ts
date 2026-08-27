@@ -191,19 +191,18 @@ export function faltaPorRondas(cumplidas: number, exigibles: number): FaltaCriti
 /**
  * Inasistencia injustificada confirmada.
  *
- * ⚠️ NO ESTÁ ACTIVA. Pide el dato ya clasificado en vez de deducirlo, y hoy
- * nadie se lo pasa: ver `INASISTENCIA_ACTIVA` abajo.
- *
- * Una ausencia en `registros_asistencia` (tipo_registro = 'ausencia') dice que
- * no vino, NO por qué. El motivo estructurado vive en `novedades_laborales`
- * —tipo 'falta_injustificada' con estado 'aprobada', con aprobador, fecha y
- * comprobante— y el módulo de Cumplimiento todavía no la cruza. Mientras eso no
- * exista, "no vino" y "faltó sin aviso" son indistinguibles, y confundirlas
- * aplaza a alguien que estaba de vacaciones.
+ * El dato viene ya clasificado, no deducido: `lib/novedades-laborales.ts` lo
+ * saca de lo que Administración eligió en Reportes —`falta_injustificada` con
+ * estado `aprobada`—, que es un valor de una lista cerrada, con autor y fecha
+ * de aprobación. No sale de un comentario ni de la falta de un fichaje.
  *
  * Lo que NUNCA es una inasistencia: trabajar sin dejar registro propio, que el
  * supervisor confirme la asistencia, o un cierre automático de salida. En los
- * tres casos la persona estuvo.
+ * tres casos la persona estuvo, y el hecho pertenece a Registro en App.
+ *
+ * No escalona: una falta y tres faltas topean igual en 4. La cantidad se
+ * muestra, porque tres no es lo mismo que una para quien tiene que decidir,
+ * pero no hay datos para calibrar un segundo escalón y ponerlo sería inventar.
  */
 export function faltaPorInasistencia(injustificadasConfirmadas: number): FaltaCritica | null {
   if (injustificadasConfirmadas < 1) return null
@@ -217,17 +216,18 @@ export function faltaPorInasistencia(injustificadasConfirmadas: number): FaltaCr
 }
 
 /**
- * El interruptor de la regla de inasistencia. Encenderlo requiere ANTES:
+ * La regla de inasistencia está ACTIVA.
  *
- *   1. cruzar `novedades_laborales` (tipo = 'falta_injustificada',
- *      estado = 'aprobada') contra la fecha del turno;
- *   2. verificar en producción que la tabla existe y está poblada;
- *   3. resolver qué pasa cuando el rango de la novedad cubre parcialmente el
- *      turno, que es el caso ambiguo que queda.
+ * Se encendió después de auditar el flujo real: Reportes escribe el motivo
+ * estructurado en `novedades_laborales`, con rango de un solo día y aprobación
+ * en el acto. La fuente es determinística y la eligió una persona.
  *
- * Sin las tres, el tope no se puede sostener frente a alguien.
+ * Lo que NO se hizo todavía, y está en
+ * `JORNADAS_JUSTIFICADAS_SALEN_DEL_UNIVERSO`: que un franco o una licencia
+ * saquen esa jornada del denominador de las demás dimensiones. Eso mueve el
+ * denominador de mucha gente a la vez y no se pudo medir contra producción.
  */
-export const INASISTENCIA_ACTIVA = false
+export const INASISTENCIA_ACTIVA = true
 
 // ── La composición, en orden ────────────────────────────────────────────────
 

@@ -8,7 +8,7 @@ import { calcularDesempeno, hechoDeJornada } from '@/lib/desempeno'
 import type { JornadaDesempeno, ResultadoDesempeno } from '@/lib/desempeno'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 import { PESOS, calcularCumplimiento } from '@/lib/cumplimiento'
-import { evaluar, faltaPorRondas } from '@/lib/evaluacion-final'
+import { INASISTENCIA_ACTIVA, evaluar, faltaPorInasistencia, faltaPorRondas } from '@/lib/evaluacion-final'
 import type { Evaluacion } from '@/lib/evaluacion-final'
 import type { FuentesCumplimiento, JornadaCumplimiento, ResultadoCumplimiento } from '@/lib/cumplimiento'
 
@@ -81,6 +81,11 @@ export function jornadaCumplimientoDesdeFila(f: FilaBandejaMensual): JornadaCump
 export interface MedidasCriticas {
   rondasCumplidas: number
   rondasExigibles: number
+  /**
+   * Inasistencias injustificadas CONFIRMADAS en el período, ya clasificadas por
+   * `lib/novedades-laborales.ts`. Nunca se deduce acá: llega contada.
+   */
+  inasistenciasInjustificadas?: number
 }
 
 /**
@@ -119,9 +124,12 @@ export function desempenoPorEmpleado(
     const m = medidas?.get(empleadoId)
     const evaluacion = cumplimiento.puntaje === null ? null : evaluar(
       cumplimiento.puntaje * 10, cumplimiento.dimensiones, PESOS,
-      // La inasistencia no se pasa: todavía no se puede distinguir una falta
-      // sin aviso de unas vacaciones aprobadas. Ver INASISTENCIA_ACTIVA.
-      [m ? faltaPorRondas(m.rondasCumplidas, m.rondasExigibles) : null],
+      [
+        m ? faltaPorRondas(m.rondasCumplidas, m.rondasExigibles) : null,
+        // Sólo lo que Administración clasificó explícitamente en Reportes. Sin
+        // el dato no hay falta: la ausencia de una novedad no es una falta.
+        INASISTENCIA_ACTIVA ? faltaPorInasistencia(m?.inasistenciasInjustificadas ?? 0) : null,
+      ],
     )
 
     out.push({

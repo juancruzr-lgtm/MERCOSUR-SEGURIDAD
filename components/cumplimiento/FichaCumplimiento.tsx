@@ -13,11 +13,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
+import { supabase } from '@/lib/supabase'
 import {
   BANDAS_PUNTUALIDAD, ETIQUETA_ESTADO, PESOS, calcularCumplimiento,
   patronesDeHorarioSospechoso,
 } from '@/lib/cumplimiento'
-import { evaluar, faltaPorRondas } from '@/lib/evaluacion-final'
+import { INASISTENCIA_ACTIVA, evaluar, faltaPorInasistencia, faltaPorRondas } from '@/lib/evaluacion-final'
+import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
 import { jornadaCumplimientoDesdeFila, etiquetaMes, mesPorDefecto, mesesDisponibles } from '@/lib/desempeno-datos'
 import { faltanteParaMuestra } from '@/lib/desempeno'
@@ -193,6 +195,7 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   const [todasLasFilas, setTodasLasFilas] = useState<any[]>([])
   const [rondas, setRondas] = useState<RondasEmpleado | null>(null)
   const [evidencias, setEvidencias] = useState<EvidenciaCumplimiento[]>([])
+  const [novedades, setNovedades] = useState<any[]>([])
   // Estas dos fuentes no cortan la pantalla si fallan: son descriptivas y de
   // peso 0. El aviso se muestra en su dimensión, no como error general.
   const [avisoFuentes, setAvisoFuentes] = useState('')
@@ -207,12 +210,23 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
     setFilas(todas.filter(f => f.empleadoId === empleadoId))
     setCargando(false)
 
-    const [rr, ee] = await Promise.all([
+    const [rr, ee, nov] = await Promise.all([
       cargarRondasEmpleado(mes, empleadoId),
       cargarEvidenciasEmpleado(mes, empleadoId),
+      // Lo que Administración clasificó en Reportes para esta persona. Sólo
+      // aprobadas: pendiente y rechazada no afirman nada.
+      supabase.from('novedades_laborales')
+        .select('empleado_id, tipo, fecha_desde, fecha_hasta, estado')
+        .eq('empleado_id', empleadoId)
+        .eq('estado', 'aprobada')
+        .lte('fecha_desde', `${mes}-31`)
+        .gte('fecha_hasta', `${mes}-01`),
     ])
     setRondas(rr.dato)
     setEvidencias(ee.evidencias)
+    // Si falla, se sigue sin ellas: nunca se inventa una falta por un error de
+    // lectura.
+    setNovedades((nov?.data ?? []) as any[])
     setAvisoFuentes([rr.error, ee.error].filter(Boolean).join(' · '))
   }, [mes, esAdmin, usuarioId, empleadoId])
 
@@ -242,10 +256,16 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   const evaluacion = useMemo(() => {
     if (r.puntaje === null) return null
     const m = resRondas.medicion
+    // Sólo los días en que TENÍA turno: una novedad de rango largo no puede
+    // inventar faltas en días que no le tocaba trabajar.
+    const inasistencias = INASISTENCIA_ACTIVA
+      ? inasistenciasInjustificadas(novedades, empleadoId, filas.map(f => f.fecha))
+      : 0
     return evaluar(r.puntaje * 10, r.dimensiones, PESOS, [
       m.estado === 'medible' ? faltaPorRondas(m.cumplidos, m.validos) : null,
+      faltaPorInasistencia(inasistencias),
     ])
-  }, [r, resRondas])
+  }, [r, resRondas, novedades, empleadoId, filas])
 
   const patrones = useMemo(() => {
     const suyos = new Set(r.puntualidad.tardanzas.map(t => `${t.objetivo}@${t.horaInicioProg}`))

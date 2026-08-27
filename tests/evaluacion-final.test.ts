@@ -170,8 +170,10 @@ describe('falta crítica · Rondas', () => {
 // ── Inasistencia ────────────────────────────────────────────────────────────
 
 describe('falta crítica · inasistencia', () => {
-  it('la regla NO está activa: falta el cruce con novedades_laborales', () => {
-    expect(INASISTENCIA_ACTIVA).toBe(false)
+  it('la regla está activa: el cruce con novedades_laborales existe', () => {
+    // Se encendió tras auditar el flujo real: Reportes escribe el motivo
+    // estructurado, con rango de un día y aprobación en el acto.
+    expect(INASISTENCIA_ACTIVA).toBe(true)
   })
 
   it('una inasistencia injustificada confirmada impone tope 4', () => {
