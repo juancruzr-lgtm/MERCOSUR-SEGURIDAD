@@ -82,10 +82,63 @@ export interface Medicion {
   minimo: number
   /**
    * Hay exclusiones que nadie pudo justificar. La nota existe pero describe un
-   * universo recortado a ciegas: se muestra "En validación".
+   * universo recortado a ciegas.
+   *
+   * Que sea ambigua NO decide por sí sola si la dimensión puntúa: eso lo dice
+   * `bloquea`.
    */
   ambigua: boolean
+  /**
+   * Las dos puntas entre las que se mueve la verdad cuando hay ambigüedad.
+   *
+   *   techo  la nota sobre el universo saneado. Es lo más favorable posible
+   *          para el vigilador: supone que TODO lo ambiguo no era exigible.
+   *   piso   la nota si nada se excluyera. Es el peor caso concebible.
+   *
+   * `null` cuando no hay ambigüedad, porque entonces no hay rango: hay un dato.
+   */
+  rango: { piso: number; techo: number } | null
+  /**
+   * La ambigüedad impide concluir, así que la dimensión no puede puntuar.
+   *
+   * Ver `LA REGLA DE ATRIBUCIÓN` abajo.
+   */
+  bloquea: boolean
 }
+
+// ── LA REGLA DE ATRIBUCIÓN ──────────────────────────────────────────────────
+//
+// «La incertidumbre protege al vigilador sobre lo que no sabemos; no elimina lo
+//  que sí sabemos.»
+//
+// Antes, cualquier exclusión ambigua sacaba la dimensión entera del puntaje. La
+// intención era no afirmar un número sobre un universo recortado a ciegas. El
+// efecto medido sobre agosto fue el contrario del buscado: alguien con 0 rondas
+// hechas de 9 exigibles —y 0 de 16 si no se excluyera nada— terminaba con nota
+// 10, porque 7 pausas sin clasificar sacaron Rondas del cálculo. La ficha
+// mostraba "Rondas 0" al lado de ese 10. Cuanto más sucia la medición, más
+// protegido el peor cumplimiento.
+//
+// La regla nueva compara las dos puntas del rango:
+//
+//   · Si ni siquiera el TECHO aprueba, la conclusión no depende de lo que no
+//     sabemos: está mal de cualquier forma que se lo mire. La dimensión puntúa,
+//     y puntúa con el techo — nunca con el piso.
+//   · Si el techo aprueba y el piso no, la diferencia sí depende de lo que nadie
+//     clasificó. Sigue sin puntuar.
+//
+// Lo que la regla NO hace, y no puede hacer nunca:
+//   · inventar qué pasó con lo ambiguo;
+//   · convertir un ambiguo en incumplimiento;
+//   · puntuar con el piso;
+//   · empeorar a alguien por debajo de su mejor medición posible.
+//
+// Se puede defender en una frase frente a un vigilador: «si aun contando sólo
+// lo que te podemos exigir con certeza no llegás a aprobar, no sirve alegar que
+// el resto no se sabe».
+
+/** La nota mínima que se considera cumplimiento. Es el 6 de la escala escolar. */
+export const APRUEBA_DESDE = 6
 
 export interface ParametrosMedicion {
   requeridos: number
@@ -107,6 +160,19 @@ export function medir(p: ParametrosMedicion): Medicion {
     : validos < p.minimo ? 'datos_insuficientes'
     :                      'medible'
 
+  // Sin muestra no se inventa un número, ni siquiera "provisorio": una vez que
+  // aparece en pantalla alguien lo usa.
+  const nota = estado === 'medible' ? notaDe(cumplidos, validos, p.curva) : null
+  const ambigua = exclusiones.some(e => e.ambigua)
+
+  // El rango sólo existe si hay ambigüedad Y hay una nota que comparar. El piso
+  // se mide sobre TODO lo requerido con los mismos cumplidos: es el peor caso
+  // concebible, y está acá para poder decir cuánta incertidumbre hay, no para
+  // puntuar con él.
+  const rango = ambigua && nota !== null
+    ? { piso: notaDe(cumplidos, p.requeridos, p.curva) ?? 0, techo: nota }
+    : null
+
   return {
     requeridos: p.requeridos,
     exclusiones,
@@ -115,11 +181,14 @@ export function medir(p: ParametrosMedicion): Medicion {
     cumplidos,
     incidencias: validos - cumplidos,
     estado,
-    // Sin muestra no se inventa un número, ni siquiera "provisorio": una vez
-    // que aparece en pantalla alguien lo usa.
-    nota: estado === 'medible' ? notaDe(cumplidos, validos, p.curva) : null,
+    nota,
     minimo: p.minimo,
-    ambigua: exclusiones.some(e => e.ambigua),
+    ambigua,
+    rango,
+    // Si ni el techo aprueba, la ambigüedad no cambia la conclusión y no puede
+    // seguir tapándola. Sin nota que comparar sigue bloqueando: ahí la duda es
+    // total.
+    bloquea: ambigua && (nota === null || nota >= APRUEBA_DESDE),
   }
 }
 

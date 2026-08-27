@@ -174,6 +174,24 @@ export interface ResumenPuntualidad {
   tardanzas: DetalleTardanza[]
 }
 
+/**
+ * Cuánto del mes hace falta poder medir para que la nota de Puntualidad
+ * describa el mes y no un puñado de días sueltos.
+ *
+ * La mitad. No sale de optimizar ninguna distribución: es el punto donde la
+ * muestra deja de ser mayoritaria. Ver la REGLA 2 en `calcularCumplimiento`.
+ */
+export const COBERTURA_MINIMA_PUNTUALIDAD = 0.5
+
+/** Jornadas con ingreso propio evaluable sobre jornadas evaluables. */
+export function coberturaPuntualidad(evaluadas: number, jornadas: number): number {
+  return jornadas > 0 ? evaluadas / jornadas : 0
+}
+
+export function puntualidadEsSostenible(evaluadas: number, jornadas: number): boolean {
+  return coberturaPuntualidad(evaluadas, jornadas) >= COBERTURA_MINIMA_PUNTUALIDAD
+}
+
 export function resumirPuntualidad(jornadas: JornadaCumplimiento[]): ResumenPuntualidad {
   const porBanda: Record<ClaveBanda, number> = {
     puntual: 0, leve: 0, tardanza: 0, importante: 0, grave: 0,
@@ -640,6 +658,28 @@ export function calcularCumplimiento(
   const base = calcularDesempeno(jornadas)
   const punt = resumirPuntualidad(jornadas)
 
+  // ── REGLA 2 · UN HECHO, UN CASTIGO ────────────────────────────────────────
+  //
+  // «Lo que no sabemos no suma ni resta; lo que sabemos se penaliza una sola
+  //  vez.»
+  //
+  // La hora de llegada sólo se puede medir donde hay fichaje propio: sin marca
+  // de entrada no hay nada que comparar, y `minutosDeDemora` ya devuelve null
+  // ahí. Eso está bien y no se discute.
+  //
+  // El problema es el denominador que queda. Alguien con 25 jornadas y 20 sin
+  // registro propio se medía sobre las 5 restantes: 2 tardanzas daban nota 5,
+  // como si llegara tarde el 40 % del mes. Sobre las 25 reales serían el 8 %.
+  //
+  // El mismo hecho —no fichar— ya está penalizado en Procedimiento, que es
+  // donde corresponde. Deformar además el denominador de Puntualidad es
+  // castigarlo dos veces, y la segunda vez sin ninguna evidencia: de esos 20
+  // días no sabemos a qué hora llegó.
+  //
+  // Debajo del mínimo de cobertura no se da nota. No es un 10 ni un 0: la
+  // dimensión sale del denominador y no suma ni resta.
+  const puntualidadSostenible = puntualidadEsSostenible(punt.evaluadas, base.observacionesValidas)
+
   const dimension = (
     clave: ClaveDimension, nota: number | null, detalle: string,
     extra: {
@@ -687,7 +727,18 @@ export function calcularCumplimiento(
       base.observacionesValidas > 0
         ? `${base.ausencias} ausencia(s) confirmada(s) sobre ${pluralJornadas(base.observacionesValidas)}`
         : 'Sin jornadas evaluables en el período'),
-    dimension('puntualidad', punt.nota, detallePuntualidad(punt)),
+    dimension('puntualidad',
+      puntualidadSostenible ? punt.nota : null,
+      detallePuntualidad(punt),
+      puntualidadSostenible ? {} : {
+        datosInsuficientes: punt.evaluadas > 0,
+        faltante: punt.evaluadas > 0
+          ? `Se pudo medir la hora de llegada en ${punt.evaluadas} de `
+            + `${pluralJornadas(base.observacionesValidas)}. Con esa cobertura, la nota `
+            + 'describiría esas jornadas y no el mes. Las que no tienen registro propio '
+            + 'ya se cuentan en Procedimiento.'
+          : null,
+      }),
     dimension('procedimiento', base.procedimiento,
       base.observacionesValidas > 0
         ? `${base.incidencias.sin_registro_propio + base.incidencias.entrada_sin_salida} incidencia(s) sobre ${pluralJornadas(base.observacionesValidas)}`

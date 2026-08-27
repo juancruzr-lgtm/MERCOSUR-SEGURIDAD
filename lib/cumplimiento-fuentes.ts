@@ -145,7 +145,7 @@ export function resumirRondas(
     causasPausa: r.causasPausa,
     porcentaje: medicion.validos > 0 ? Math.round((100 * r.cumplidas) / medicion.validos) : null,
     nota: medicion.nota,
-    enValidacion: medicion.ambigua,
+    enValidacion: medicion.bloquea,
   }
 }
 
@@ -331,7 +331,7 @@ export function resumirEvidencias(
     curva,
   })
 
-  return { ...c, medicion, nota: medicion.nota, enValidacion: medicion.ambigua }
+  return { ...c, medicion, nota: medicion.nota, enValidacion: medicion.bloquea }
 }
 
 /**
@@ -468,7 +468,7 @@ export function fuentesDeEmpleado(
    * se conocen los números de la persona.
    */
   const porQue = (
-    m: { estado: string; validos: number; minimo: number; requeridos: number; ambigua?: boolean },
+    m: { estado: string; validos: number; minimo: number; requeridos: number; bloquea?: boolean },
     uno: string, plural: string, ambiguo: string,
   ): string | null => {
     const cuenta = (n: number) => `${n} ${n === 1 ? uno : plural}`
@@ -487,7 +487,7 @@ export function fuentesDeEmpleado(
     // La explicación de la ambigüedad SÓLO para quien la tiene. Puesta sobre
     // alguien con cero observaciones pendientes le afirma algo falso, y es lo
     // primero que lee quien va a decidir sobre esa persona.
-    if (m.ambigua) return ambiguo
+    if (m.bloquea) return ambiguo
     // Tiene nota y el universo está limpio: si no puntúa es porque su peso
     // todavía es cero, que es una decisión y no una carencia de datos.
     return 'Se mide y no pesa todavía: la dimensión está en validación mientras '
