@@ -89,6 +89,7 @@ describe('ordenOperativo — bandeja, no podio', () => {
     },
     // ordenOperativo sólo mira el estado; el resto del objeto no participa.
     cumplimiento: { dimensiones: [], motivos: [] } as any,
+    evaluacion: null,
   })
 
   it('intervención primero, excelente último', () => {

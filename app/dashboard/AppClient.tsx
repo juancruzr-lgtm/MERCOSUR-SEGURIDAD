@@ -71,6 +71,7 @@ import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
+import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import {
   cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
@@ -1295,7 +1296,7 @@ function RondasGlobal({ objetivos }: { objetivos: Objetivo[] }) {
  * se explica. Un numero que no se puede abrir es un numero que hay que creer.
  */
 function CeldaCumplimiento({ dato, cargando, onAbrir }: {
-  dato?: { cumplimiento: { puntaje: number | null, estado: string } },
+  dato?: { cumplimiento: { puntaje: number | null, estado: string }, evaluacion?: any },
   cargando: boolean,
   onAbrir: () => void,
 }) {
@@ -1308,18 +1309,32 @@ function CeldaCumplimiento({ dato, cargando, onAbrir }: {
   if (!dato) return <span style={{ fontSize:12, color:'#64748b' }}>—</span>
 
   const r = dato.cumplimiento
-  const color = COLOR[r.estado] ?? '#94a3b8'
+  const e = dato.evaluacion
+  // La tabla muestra la NOTA FINAL, la misma que el detalle. Mostrar aca el
+  // indice y alla la nota topeada haria que las dos pantallas dijeran cosas
+  // distintas sobre la misma persona.
+  const color = e?.faltas?.length ? '#ef4444' : COLOR[r.estado] ?? '#94a3b8'
+  const texto = e
+    ? `${e.notaFinal.toFixed(1).replace('.', ',')} / 10 · ${e.concepto}`
+    : resumenCorto(r as any)
   return (
     <button
       onClick={onAbrir}
-      title="Ver el detalle y por que da ese numero"
+      title={e?.explicacion ?? 'Ver el detalle y por que da ese numero'}
       style={{
         background:'transparent', border:'none', padding:0, cursor:'pointer',
         color, fontSize:12.5, fontWeight:700, textAlign:'left',
         textDecoration:'underline', textUnderlineOffset:3,
         textDecorationColor: color + '66',
       }}>
-      {resumenCorto(r as any)}
+      {texto}
+      {/* Una falta critica no puede quedar escondida detras de un numero: el
+          punto de la tabla es poder barrerla y ver quien necesita atencion. */}
+      {e?.faltas?.length > 0 && (
+        <span style={{ display:'block', fontSize:10.5, fontWeight:600, color:'#fca5a5' }}>
+          Falta critica
+        </span>
+      )}
     </button>
   )
 }
@@ -1355,19 +1370,50 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       cargarFilasBandeja({ mes: mesCumplimiento, esAdmin: true, usuarioId: usuarioId ?? null }),
       cargarRondasDelMes(mesCumplimiento),
       cargarEvidenciasDelMes(mesCumplimiento),
+      // Lo que Administracion clasifico en Reportes. Solo aprobadas y solo las
+      // que solapan el mes: pendientes y rechazadas no afirman nada.
+      supabase.from('novedades_laborales')
+        .select('empleado_id, tipo, fecha_desde, fecha_hasta, estado')
+        .eq('estado', 'aprobada')
+        .lte('fecha_desde', `${mesCumplimiento}-31`)
+        .gte('fecha_hasta', `${mesCumplimiento}-01`),
     ])
-      .then(([bandeja, rr, ee]) => {
+      .then(([bandeja, rr, ee, nov]) => {
         if (!vigente) return
+        // Si las novedades fallan, NO se inventa una falta: se sigue sin ellas.
+        const nn = (nov?.data ?? []) as any[]
         const porRondas = new Map(rr.datos.map(d => [d.guardiaId, d]))
         const porEvidencia = evidenciasPorEmpleado(ee.evidencias)
         const ids: string[] = []
         for (const f of bandeja.filas) if (ids.indexOf(f.empleadoId) < 0) ids.push(f.empleadoId)
-        const fuentes = new Map(ids.map(id => [
-          id,
-          fuentesDeEmpleado(porRondas.get(id) ?? null, porEvidencia.get(id) ?? []).fuentes,
+        const medido = new Map(ids.map(id => [
+          id, fuentesDeEmpleado(porRondas.get(id) ?? null, porEvidencia.get(id) ?? []),
         ]))
+        const fuentes = new Map(ids.map(id => [id, medido.get(id)!.fuentes]))
+        // Los conteos de rondas, para la falta critica. Solo cuando la medicion
+        // es sostenible: con muestra insuficiente no hay porcentaje que valga.
+        // Las fechas en que CADA persona tenia turno: sin esto, una novedad de
+        // rango largo contaria faltas en dias que no le tocaba trabajar.
+        const fechasPorEmpleado = new Map<string, string[]>()
+        for (const f of bandeja.filas) {
+          const arr = fechasPorEmpleado.get(f.empleadoId) ?? []
+          arr.push(f.fecha)
+          fechasPorEmpleado.set(f.empleadoId, arr)
+        }
+        const medidas = new Map(ids.map(id => {
+          const m = medido.get(id)!.rondas.medicion
+          return [id, {
+            // Con muestra insuficiente no hay porcentaje que valga: se pasa 0/0
+            // y faltaPorRondas devuelve null.
+            rondasCumplidas: m.estado === 'medible' ? m.cumplidos : 0,
+            rondasExigibles: m.estado === 'medible' ? m.validos : 0,
+            inasistenciasInjustificadas: inasistenciasInjustificadas(
+              nn, id, fechasPorEmpleado.get(id) ?? [],
+            ),
+          }] as const
+        }))
         const mapa = new Map<string, any>()
-        for (const d of desempenoPorEmpleado(bandeja.filas, fuentes)) mapa.set(d.empleadoId, d)
+        for (const d of desempenoPorEmpleado(bandeja.filas, fuentes, medidas)) mapa.set(d.empleadoId, d)
         setCumplimiento(mapa)
       })
       .finally(() => { if (vigente) setCargandoCumplimiento(false) })

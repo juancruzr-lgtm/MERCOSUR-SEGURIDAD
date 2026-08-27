@@ -480,11 +480,11 @@ describe('Puntualidad ya pesa en el X/10', () => {
       .toEqual(['asistencia', 'puntualidad', 'procedimiento'])
   })
 
-  it('los pesos son los del modelo E', () => {
+  it('los pesos son los del Modelo 6', () => {
     expect(PESOS.puntualidad).toBe(PESO_PUNTUALIDAD)
-    expect(PESOS.asistencia).toBe(25)
-    expect(PESOS.procedimiento).toBe(25)
-    expect(PESOS.rondas).toBe(30)
+    expect(PESOS.asistencia).toBe(20)
+    expect(PESOS.procedimiento).toBe(18)
+    expect(PESOS.rondas).toBe(35)
   })
 
   it('sólo Calidad de evidencias queda en cero', () => {
@@ -535,14 +535,14 @@ describe('Puntualidad ya pesa en el X/10', () => {
 
   it('y esa dimensión sin dato no entra al promedio como cero', () => {
     const sinFichaje = calcularCumplimiento(base(20, { entradaPropia: false, salidaPropia: false }))
-    // Sólo Asistencia y Procedimiento entran: (10×25 + 0×25) / 50 = 5,0.
+    // Sólo Asistencia y Registro en App entran: (10×20 + 0×18) / 38 = 5,26.
     //
     // Lo que importa no es el 5 sino el DENOMINADOR: Puntualidad quedó fuera
     // porque no hay con qué juzgarla, y su peso 25 no arrastra a nadie hacia
-    // abajo. Si entrara como cero el resultado sería 3,33.
-    expect(sinFichaje.puntaje).toBe(5)
+    // abajo. Si entrara como cero el resultado sería 3,17.
+    expect(sinFichaje.puntaje).toBe(5.26)
     const puntuables = sinFichaje.dimensiones.filter(d => d.estado === 'puntuable')
-    expect(puntuables.reduce((s, d) => s + d.peso, 0)).toBe(50)
+    expect(puntuables.reduce((s, d) => s + d.peso, 0)).toBe(38)
   })
 
   it('una asistencia confirmada por supervisor no es ausencia ni impuntualidad', () => {

@@ -7,7 +7,9 @@
 import { calcularDesempeno, hechoDeJornada } from '@/lib/desempeno'
 import type { JornadaDesempeno, ResultadoDesempeno } from '@/lib/desempeno'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
-import { calcularCumplimiento } from '@/lib/cumplimiento'
+import { PESOS, calcularCumplimiento } from '@/lib/cumplimiento'
+import { INASISTENCIA_ACTIVA, evaluar, faltaPorInasistencia, faltaPorRondas } from '@/lib/evaluacion-final'
+import type { Evaluacion } from '@/lib/evaluacion-final'
 import type { FuentesCumplimiento, JornadaCumplimiento, ResultadoCumplimiento } from '@/lib/cumplimiento'
 
 export interface DesempenoEmpleado {
@@ -22,6 +24,11 @@ export interface DesempenoEmpleado {
    * mirada con distinto detalle, no dos calculos.
    */
   cumplimiento: ResultadoCumplimiento
+  /**
+   * Nota final, concepto, cobertura y faltas críticas. `null` cuando no hay
+   * puntaje: sin muestra no hay nada que topear.
+   */
+  evaluacion: Evaluacion | null
   /** Las filas que lo formaron, para abrir el hecho detrás de cada motivo. */
   jornadas: FilaBandejaMensual[]
 }
@@ -65,14 +72,35 @@ export function jornadaCumplimientoDesdeFila(f: FilaBandejaMensual): JornadaCump
  * que necesita una decisión.
  */
 /**
+ * Lo que hace falta para decidir la falta crítica de Rondas, por empleado.
+ *
+ * Va aparte de `fuentes` porque `FuentesCumplimiento` lleva la NOTA de cada
+ * dimensión y esto son los conteos: 19 de 52 no se puede reconstruir desde un
+ * 3,65 sin volver a inventar el denominador.
+ */
+export interface MedidasCriticas {
+  rondasCumplidas: number
+  rondasExigibles: number
+  /**
+   * Inasistencias injustificadas CONFIRMADAS en el período, ya clasificadas por
+   * `lib/novedades-laborales.ts`. Nunca se deduce acá: llega contada.
+   */
+  inasistenciasInjustificadas?: number
+}
+
+/**
  * @param fuentes  Rondas y evidencias ya medidas, por empleado. Opcional: sin
  *                 ellas las cuatro dimensiones externas quedan sin datos y el
  *                 puntaje es EXACTAMENTE el mismo, porque pesan 0. Es lo que
  *                 permite que un fallo al leer rondas no cambie ningún número.
+ * @param medidas  Los conteos de rondas. Sin ellos no se puede detectar la
+ *                 falta crítica, y la evaluación sale sin tope — nunca con un
+ *                 tope inventado.
  */
 export function desempenoPorEmpleado(
   filas: FilaBandejaMensual[],
   fuentes?: Map<string, FuentesCumplimiento>,
+  medidas?: Map<string, MedidasCriticas>,
 ): DesempenoEmpleado[] {
   const porEmpleado = new Map<string, FilaBandejaMensual[]>()
   for (const f of filas) {
@@ -89,12 +117,28 @@ export function desempenoPorEmpleado(
       jornadas.map(jornadaCumplimientoDesdeFila),
       fuentes?.get(empleadoId) ?? {},
     )
+    // CAPA 2, en la MISMA función que la capa 1. Es lo que garantiza que la
+    // tabla y el detalle no puedan mostrar números distintos: el día que se
+    // calculara en dos lados, un cambio en uno de ellos dejaría al otro
+    // mintiendo, y nadie lo notaría hasta que alguien comparara las pantallas.
+    const m = medidas?.get(empleadoId)
+    const evaluacion = cumplimiento.puntaje === null ? null : evaluar(
+      cumplimiento.puntaje * 10, cumplimiento.dimensiones, PESOS,
+      [
+        m ? faltaPorRondas(m.rondasCumplidas, m.rondasExigibles) : null,
+        // Sólo lo que Administración clasificó explícitamente en Reportes. Sin
+        // el dato no hay falta: la ausencia de una novedad no es una falta.
+        INASISTENCIA_ACTIVA ? faltaPorInasistencia(m?.inasistenciasInjustificadas ?? 0) : null,
+      ],
+    )
+
     out.push({
       empleadoId,
       empleado: jornadas[0]?.vigilador ?? '—',
       objetivos: objetivos.sort(),
       resultado: cumplimiento.base,
       cumplimiento,
+      evaluacion,
       jornadas,
     })
   })

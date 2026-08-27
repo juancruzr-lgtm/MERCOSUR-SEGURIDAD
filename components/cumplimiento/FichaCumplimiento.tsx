@@ -13,9 +13,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
+import { supabase } from '@/lib/supabase'
 import {
-  BANDAS_PUNTUALIDAD, ETIQUETA_ESTADO, calcularCumplimiento, patronesDeHorarioSospechoso,
+  BANDAS_PUNTUALIDAD, ETIQUETA_ESTADO, PESOS, calcularCumplimiento,
+  patronesDeHorarioSospechoso,
 } from '@/lib/cumplimiento'
+import { INASISTENCIA_ACTIVA, evaluar, faltaPorInasistencia, faltaPorRondas } from '@/lib/evaluacion-final'
+import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
 import { jornadaCumplimientoDesdeFila, etiquetaMes, mesPorDefecto, mesesDisponibles } from '@/lib/desempeno-datos'
 import { faltanteParaMuestra } from '@/lib/desempeno'
@@ -55,16 +59,23 @@ const coma = (v: number) => v.toFixed(1).replace('.', ',')
 const GRUPOS: Array<{ titulo: string; ayuda: string; claves: string[] }> = [
   {
     titulo: 'PRESTACIÓN DEL SERVICIO',
-    ayuda: 'Si estuvo, si llegó a horario y si cumplió las obligaciones del puesto.',
-    claves: ['asistencia', 'puntualidad', 'rondas'],
+    ayuda: 'Lo que el cliente recibe: si estuvo, si llegó a horario, si recorrió el '
+      + 'objetivo, si se presentó uniformado y si dejó el libro completo.',
+    claves: ['asistencia', 'rondas', 'puntualidad', 'uniforme', 'libro_guardia'],
   },
   {
-    titulo: 'USO Y DOCUMENTACIÓN',
-    ayuda: 'Si dejó registrado su trabajo con la aplicación y la documentación del puesto.',
-    claves: ['procedimiento', 'uniforme', 'libro_guardia'],
+    // Separado del resto a propósito. Uniforme y Libro estaban acá y no
+    // corresponde: un uniforme incorrecto lo ve el cliente, y no fichar la
+    // salida no lo ve nadie más que nosotros. Mezclarlos hacía que un problema
+    // de registro se leyera como un problema de servicio.
+    titulo: 'USO DE LA APP',
+    ayuda: 'Si dejó registrada su jornada con la aplicación. Es el instrumento con '
+      + 'el que medimos, no lo que se mide: alguien puede prestar bien el servicio '
+      + 'y usar mal la app.',
+    claves: ['procedimiento'],
   },
   {
-    titulo: 'CALIDAD DE LA EVIDENCIA',
+    titulo: 'CALIDAD DE LA MEDICIÓN',
     ayuda: 'Descriptiva: mide si la foto se podía leer, no lo que muestra. No modifica el puntaje.',
     claves: ['evidencias'],
   },
@@ -184,6 +195,7 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   const [todasLasFilas, setTodasLasFilas] = useState<any[]>([])
   const [rondas, setRondas] = useState<RondasEmpleado | null>(null)
   const [evidencias, setEvidencias] = useState<EvidenciaCumplimiento[]>([])
+  const [novedades, setNovedades] = useState<any[]>([])
   // Estas dos fuentes no cortan la pantalla si fallan: son descriptivas y de
   // peso 0. El aviso se muestra en su dimensión, no como error general.
   const [avisoFuentes, setAvisoFuentes] = useState('')
@@ -198,12 +210,23 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
     setFilas(todas.filter(f => f.empleadoId === empleadoId))
     setCargando(false)
 
-    const [rr, ee] = await Promise.all([
+    const [rr, ee, nov] = await Promise.all([
       cargarRondasEmpleado(mes, empleadoId),
       cargarEvidenciasEmpleado(mes, empleadoId),
+      // Lo que Administración clasificó en Reportes para esta persona. Sólo
+      // aprobadas: pendiente y rechazada no afirman nada.
+      supabase.from('novedades_laborales')
+        .select('empleado_id, tipo, fecha_desde, fecha_hasta, estado')
+        .eq('empleado_id', empleadoId)
+        .eq('estado', 'aprobada')
+        .lte('fecha_desde', `${mes}-31`)
+        .gte('fecha_hasta', `${mes}-01`),
     ])
     setRondas(rr.dato)
     setEvidencias(ee.evidencias)
+    // Si falla, se sigue sin ellas: nunca se inventa una falta por un error de
+    // lectura.
+    setNovedades((nov?.data ?? []) as any[])
     setAvisoFuentes([rr.error, ee.error].filter(Boolean).join(' · '))
   }, [mes, esAdmin, usuarioId, empleadoId])
 
@@ -223,6 +246,26 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   // después se recorta a los puestos donde ESTA persona llegó tarde: el resto
   // no explica nada de su número.
   const dimensiones = r.dimensiones
+
+  // CAPA 2. Sin puntaje no hay nada que topear: la muestra no alcanzó y eso ya
+  // se dice aparte.
+  //
+  // La falta por inasistencia NO se pasa: hoy no se puede distinguir una falta
+  // sin aviso de unas vacaciones aprobadas, y aplazar por esa duda sería peor
+  // que no aplazar. Ver INASISTENCIA_ACTIVA en lib/evaluacion-final.ts.
+  const evaluacion = useMemo(() => {
+    if (r.puntaje === null) return null
+    const m = resRondas.medicion
+    // Sólo los días en que TENÍA turno: una novedad de rango largo no puede
+    // inventar faltas en días que no le tocaba trabajar.
+    const inasistencias = INASISTENCIA_ACTIVA
+      ? inasistenciasInjustificadas(novedades, empleadoId, filas.map(f => f.fecha))
+      : 0
+    return evaluar(r.puntaje * 10, r.dimensiones, PESOS, [
+      m.estado === 'medible' ? faltaPorRondas(m.cumplidos, m.validos) : null,
+      faltaPorInasistencia(inasistencias),
+    ])
+  }, [r, resRondas, novedades, empleadoId, filas])
 
   const patrones = useMemo(() => {
     const suyos = new Set(r.puntualidad.tardanzas.map(t => `${t.objetivo}@${t.horaInicioProg}`))
@@ -259,16 +302,65 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
       )}
 
       <div style={S.caja}>
-        <div style={{ ...S.tenue, letterSpacing:.5 }}>CUMPLIMIENTO OPERATIVO</div>
+        <div style={{ ...S.tenue, letterSpacing:.5 }}>
+          {evaluacion ? 'NOTA FINAL' : 'CUMPLIMIENTO OPERATIVO'}
+        </div>
         <div style={{ display:'flex', alignItems:'baseline', gap:12, marginTop:6, flexWrap:'wrap' }}>
           <span style={{ fontSize:38, fontWeight:800, color, fontFamily:'Syne,sans-serif' }}>
-            {r.puntaje === null ? '—' : coma(r.puntaje)}
-            {r.puntaje !== null && <span style={{ fontSize:15, fontWeight:600, color:'#64748b' }}> / 10</span>}
+            {evaluacion ? coma(evaluacion.notaFinal) : r.puntaje === null ? '—' : coma(r.puntaje)}
+            {(evaluacion || r.puntaje !== null) && <span style={{ fontSize:15, fontWeight:600, color:'#64748b' }}> / 10</span>}
           </span>
           <span style={{ ...S.chip, color, background:color + '1a', border:`1px solid ${color}55` }}>
-            {ETIQUETA_ESTADO[r.estado]}
+            {evaluacion ? evaluacion.concepto : ETIQUETA_ESTADO[r.estado]}
           </span>
         </div>
+
+        {/* La falta crítica va ARRIBA del desempeño y con el hecho a la vista.
+            Sin esto, una nota de 4 al lado de un 9,1 de desempeño se lee como
+            un error de cuentas. */}
+        {evaluacion?.faltas.map(f => (
+          <div key={f.clave} style={{
+            marginTop:12, padding:'10px 12px', borderRadius:8,
+            background:'#ef44441a', border:'1px solid #ef444455',
+          }}>
+            <div style={{ ...S.tenue, letterSpacing:.5, color:'#fca5a5' }}>FALTA CRÍTICA</div>
+            <div style={{ marginTop:4, color:'#fecaca' }}>{f.hecho}</div>
+            <div style={{ ...S.tenue, marginTop:4 }}>
+              La nota mensual no puede superar {coma(f.tope)}/10.
+            </div>
+          </div>
+        ))}
+
+        {evaluacion && (
+          <div style={{ ...S.tenue, marginTop:10, lineHeight:1.7 }}>
+            <div>
+              Índice de desempeño <b style={{ color:'#e2e8f0' }}>{coma(evaluacion.desempeno)} / 10</b>
+              {' '}· {coma(r.puntaje as number)} de cumplimiento ponderado
+            </div>
+            <div>
+              Cobertura <b style={{ color:'#e2e8f0' }}>{evaluacion.cobertura.ajustada ?? 0} %</b>
+              {' '}de lo exigible
+              {evaluacion.cobertura.noAplica > 0
+                && ` · ${evaluacion.cobertura.noAplica} puntos de peso no le aplicaban`}
+            </div>
+          </div>
+        )}
+
+        {/* Con menos del mínimo medido no se afirma un concepto: se dice qué se
+            pudo ver. Una mala nota que sale sólo del Registro en App, con la
+            mitad del servicio sin medir, no describe a un mal vigilador. */}
+        {evaluacion?.alcance === 'parcial' && (
+          <div style={{
+            marginTop:12, padding:'10px 12px', borderRadius:8,
+            background:'#f59e0b1a', border:'1px solid #f59e0b55',
+          }}>
+            <div style={{ ...S.tenue, letterSpacing:.5, color:'#fcd34d' }}>EVALUACIÓN PARCIAL</div>
+            <div style={{ ...S.tenue, marginTop:4 }}>
+              Se pudo evaluar el {evaluacion.cobertura.ajustada ?? 0} % de los requerimientos
+              aplicables. La nota es orientativa: no alcanza para un concepto integral del mes.
+            </div>
+          </div>
+        )}
         {/* Lo que este número NO dice. Va acá y no en una nota al pie: es la
             confusión más cara que puede provocar la pantalla. */}
         <div style={{ ...S.tenue, marginTop:8, lineHeight:1.5 }}>

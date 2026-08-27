@@ -316,7 +316,12 @@ export type ClaveDimension = typeof DIMENSIONES[number]
 export const ETIQUETA_DIMENSION: Record<ClaveDimension, string> = {
   asistencia:    'Asistencia',
   puntualidad:   'Puntualidad',
-  procedimiento: 'Procedimiento / uso de la app',
+  // El identificador interno sigue siendo `procedimiento` —lo usan la base, las
+  // RPC y el Entrenador— pero el lenguaje de negocio es otro: lo que esta
+  // dimensión mide es si registró su jornada en la app, no si prestó bien el
+  // servicio. Llamarla "Procedimiento" hacía que un problema de registro se
+  // leyera como un problema de desempeño.
+  procedimiento: 'Registro en App',
   rondas:        'Rondas',
   uniforme:      'Uniforme',
   libro_guardia: 'Libro de guardia',
@@ -381,25 +386,46 @@ export const PESO_PUNTUALIDAD = 25
 
 export const PESOS: Record<ClaveDimension, number> = {
   // Prestó el servicio que tenía asignado. Es el piso de todo lo demás.
-  asistencia:    25,
-  // La que más discrimina donde aplica —desvío 3,38— y la que la operación
-  // reclama por nombre. Sólo pesa para quien tuvo obligaciones válidas.
-  rondas:        30,
+  //
+  // 20 y no 25: tiene 1 incidencia en 1115 jornadas de agosto. Subirla de 15 a
+  // 30 mueve el promedio 0,18 y el MÍNIMO 0,50 — es decir, protege más al que
+  // peor está, que es lo contrario de lo buscado. Sigue siendo conceptualmente
+  // central, y quien falta de verdad lo paga en una dimensión que casi nadie
+  // tiene manchada. Lo grave de una ausencia no se expresa con peso: se expresa
+  // con una falta crítica (ver `lib/evaluacion-final.ts`).
+  asistencia:    20,
+  // La dimensión que más discrimina donde aplica, y la que ES el servicio:
+  // recorrer el objetivo. Sólo pesa para quien tuvo obligaciones válidas.
+  //
+  // 35 y no 40: a 40 la cobertura media del modelo CAE de 69 % a 66 %, porque
+  // Rondas es la dimensión menos medible y darle más peso hace que se mida
+  // menos del modelo. A cambio sólo mueve a los dos que las incumplen, que ya
+  // se movieron a 35.
+  rondas:        35,
   // Presentarse, y presentarse a horario, ES la prestación. Además es la señal
-  // más amplia que hay: alcanza a 44 de 65 personas.
+  // más amplia que hay: alcanza a 64 de 65 personas.
   //
   // Mide contra el horario programado, que es la referencia mientras nadie lo
   // corrija. Un horario mal cargado se hace VISIBLE por
   // patronesDeHorarioSospechoso, no se esconde con una excepción automática.
   puntualidad:   PESO_PUNTUALIDAD,
-  // Baja de 60 a 25. Deja de dominar; no deja de importar. Sigue siendo, junto
-  // con Puntualidad, la dimensión con más dispersión real.
-  procedimiento: 25,
+  // REGISTRO EN APP. Mide el uso correcto del instrumento de medición, no la
+  // calidad del servicio. Un buen vigilador puede usar mal la app.
+  //
+  // 18 y no 10: con 10, alguien con 12 de 21 jornadas sin cerrar queda en 8,95
+  // y su problema deja de verse. 18 lo deja ver sin que domine: la prueba es
+  // que "rondas en 4" quede por debajo de "registro en 4", y con estos pesos la
+  // diferencia es de 0,93 puntos contra los 0,26 del modelo anterior.
+  procedimiento: 18,
   // Sólo sobre evidencia que una persona pudo evaluar. Una foto ilegible no es
   // "mal uniformado": ese hecho pertenece a Calidad.
+  //
+  // 8 y no 3: con 3, el único caso de agosto con uniforme observado y
+  // confirmado por una persona pasa de 9,28 a 9,52 y deja de notarse.
   uniforme:      8,
-  // Poco peso porque hoy casi no discrimina, pero completar bien el libro es
-  // parte de la prestación y tiene que contarse.
+  // Poco peso porque hoy casi no discrimina —33 de 41 personas tienen
+  // exactamente 10— pero completar bien el libro es parte de la prestación y
+  // tiene que contarse.
   libro_guardia: 4,
   // DESCRIPTIVA por decisión, no por falta de datos. Mide si la foto se podía
   // leer, no lo que la foto muestra, y eso no debe bajarle el puntaje a nadie.
@@ -625,6 +651,68 @@ export const VARIANTES_PESOS: Record<string, Record<ClaveDimension, number>> = {
    *   · Procedimiento baja de 60 a 25: deja de dominar, no deja de importar.
    *   · Uniforme y Libro entran con el peso que su dispersión justifica.
    */
+  // ── Simulación del 27/08, ya con las reglas de atribución aplicadas ───────
+  //
+  // Los cuatro modelos pedidos más el que sale de mirar los casos. Todos
+  // comparten el mismo principio: el X/10 tiene que hablar de la PRESTACIÓN
+  // —asistir, llegar a horario, hacer las rondas— y usar la app como
+  // instrumento de medición, no como lo medido.
+  //
+  // La prueba que los separa no está en el promedio, que se mueve una décima
+  // entre el más duro y el más blando. Está en comparar dos casos:
+  //
+  //   A · Rondas 4 y todo lo demás en 10   → el que no presta el servicio
+  //   B · Procedimiento 4 y todo en 10     → el que no usa bien la app
+  //
+  // Si A no queda por debajo de B, el modelo dice que registrar importa más que
+  // recorrer, y eso es exactamente lo que no se quiere.
+
+  /** 1 · Equilibrado. */
+  sim1_equilibrado: {
+    asistencia: 20, rondas: 30, puntualidad: 25, procedimiento: 15,
+    uniforme: 7, libro_guardia: 3, evidencias: 0,
+  },
+  /** 2 · Rondas fuerte. */
+  sim2_rondas_fuerte: {
+    asistencia: 20, rondas: 35, puntualidad: 25, procedimiento: 12,
+    uniforme: 5, libro_guardia: 3, evidencias: 0,
+  },
+  /** 3 · Rondas muy fuerte. Máxima separación entre A y B. */
+  sim3_rondas_muy_fuerte: {
+    asistencia: 20, rondas: 40, puntualidad: 25, procedimiento: 10,
+    uniforme: 3, libro_guardia: 2, evidencias: 0,
+  },
+  /** 4 · Prestación fuerte. */
+  sim4_prestacion_fuerte: {
+    asistencia: 25, rondas: 35, puntualidad: 25, procedimiento: 10,
+    uniforme: 3, libro_guardia: 2, evidencias: 0,
+  },
+  /**
+   * 6 · El que sale de los casos, no del promedio.
+   *
+   * Rondas 35 y no 40: a 40 la cobertura media del modelo cae de 69 % a 66 %
+   * —Rondas es la dimensión menos medible, así que darle más peso hace que se
+   * mida MENOS del modelo— y a cambio sólo mueve a los dos que las incumplen,
+   * que ya se movieron a 35.
+   *
+   * Procedimiento 18 y no 10: con 10, alguien con 12 de 21 jornadas sin cerrar
+   * queda en 8,95 y su problema deja de verse. Con 18 se ve y no domina.
+   *
+   * Uniforme 8 y Libro 4: con 3 y 2, el único caso de agosto con uniforme y
+   * libro observados por una persona pasa de 9,28 a 9,52 y deja de notarse.
+   * Libro se queda en 4 porque 33 de 41 tienen exactamente 10.
+   *
+   * Asistencia 20 y no 25: tiene 1 incidencia en 1115 jornadas. Subirla de 15 a
+   * 30 mueve el promedio 0,18 y el MÍNIMO 0,50 — protege más al que peor está,
+   * que es lo contrario de lo buscado. Sigue siendo conceptualmente central: es
+   * la condición de todo lo demás, y quien falta de verdad lo paga en una
+   * dimensión que casi nadie tiene manchada.
+   */
+  sim6_propuesto: {
+    asistencia: 20, rondas: 35, puntualidad: 25, procedimiento: 18,
+    uniforme: 8, libro_guardia: 4, evidencias: 0,
+  },
+
   modelo_e_sin_lastre: {
     asistencia: 25, rondas: 30, puntualidad: 25, procedimiento: 25,
     uniforme: 8, libro_guardia: 4, evidencias: 0,
