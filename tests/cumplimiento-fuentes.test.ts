@@ -98,7 +98,7 @@ describe('la pausa cuenta según la causa que eligió una persona', () => {
     expect(r.pausaCapacitacion).toBe(10)
   })
 
-  it('una pausa sin causa sale del universo Y deja la nota en validación', () => {
+  it('una pausa sin causa sale del universo', () => {
     // Es el caso de todo agosto: la causa no existía cuando se crearon.
     const r = resumirRondas(rondas({
       obligaciones: 20, cumplidas: 10, pausaSinClasificar: 2,
@@ -106,7 +106,33 @@ describe('la pausa cuenta según la causa que eligió una persona', () => {
     }))
     expect(r.atribuibles).toBe(18)
     expect(r.nota).not.toBeNull()
+    // Lo ambiguo NO se convierte en incumplimiento: las 2 quedan fuera, no
+    // contadas como no realizadas.
+    expect(r.noRealizadas).toBe(0)
+  })
+
+  it('si con las ambiguas afuera igual no aprueba, la ambigüedad no lo tapa', () => {
+    // 10 de 18 comprobables es 5,56: no aprueba ni suponiendo que las 2
+    // ambiguas no eran exigibles. Las ambiguas sólo podrían empeorarlo.
+    const r = resumirRondas(rondas({
+      obligaciones: 20, cumplidas: 10, pausaSinClasificar: 2,
+      bajoPausa: 2, causasPausa: { sin_clasificar: 2 },
+    }))
+    expect(r.medicion.ambigua).toBe(true)
+    expect(r.enValidacion).toBe(false)
+    expect(r.medicion.rango).toEqual({ piso: 5, techo: 5.56 })
+  })
+
+  it('pero si las ambiguas pueden cambiar la conclusión, sigue en validación', () => {
+    // 16 de 18 es 8,89 y aprueba; contando las 2 ambiguas sería 8,0, que
+    // también aprueba, pero el rango vive del lado bueno del corte y no se
+    // afirma un número que depende de lo que nadie clasificó.
+    const r = resumirRondas(rondas({
+      obligaciones: 20, cumplidas: 16, pausaSinClasificar: 2,
+      bajoPausa: 2, causasPausa: { sin_clasificar: 2 },
+    }))
     expect(r.enValidacion).toBe(true)
+    expect(r.medicion.rango!.techo).toBe(8.89)
   })
 
   it('sin pausas sin clasificar la nota deja de estar en validación', () => {
