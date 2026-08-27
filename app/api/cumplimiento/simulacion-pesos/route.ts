@@ -108,6 +108,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ?detalle=1 devuelve el puntaje y las dimensiones de CADA persona.
+  //
+  // Sirve para simular sobre los números reales cualquier cosa que se derive
+  // del puntaje —una escala escolar, un corte, una agrupación— sin volver a
+  // calcularlo por fuera. Recalcular en otro lado es exactamente cómo aparecen
+  // dos números distintos para la misma persona.
+  const detalle = req.nextUrl.searchParams.get('detalle') === '1'
+  const porPersona: any[] = []
+
   porEmpleado.forEach((filas, empleadoId) => {
     const jornadas = filas.map(jornadaCumplimientoDesdeFila)
     const medido = fuentesDeEmpleado(
@@ -117,6 +126,31 @@ export async function GET(req: NextRequest) {
     )
     const nombre = filas[0]?.vigilador ?? empleadoId
     const base = calcularCumplimiento(jornadas, medido.fuentes, VARIANTES_PESOS.actual)
+
+    if (detalle) {
+      const rProd = calcularCumplimiento(jornadas, medido.fuentes)
+      const dims: Record<string, any> = {}
+      for (const d of rProd.dimensiones) {
+        dims[d.clave] = d.estado === 'puntuable' ? d.nota
+          : d.estado === 'no_aplica' ? 'no aplica'
+          : d.estado === 'datos_insuficientes' ? 'datos insuficientes'
+          : d.estado === 'en_validacion' ? `${d.nota} (en validación)`
+          : 'sin datos'
+      }
+      porPersona.push({
+        empleado: nombre,
+        puntaje: rProd.puntaje,
+        estado: ETIQUETA_ESTADO[rProd.estado],
+        jornadas: rProd.base.observacionesValidas,
+        dimensiones: dims,
+        rondas_detalle: medido.rondas.medicion.validos > 0
+          ? `${medido.rondas.cumplidas}/${medido.rondas.medicion.validos}` : null,
+        uniforme_detalle: medido.uniforme.medicion.validos > 0
+          ? `${medido.uniforme.medicion.cumplidos}/${medido.uniforme.medicion.validos}` : null,
+        libro_detalle: medido.libro.medicion.validos > 0
+          ? `${medido.libro.medicion.cumplidos}/${medido.libro.medicion.validos}` : null,
+      })
+    }
 
     for (const v of variantes) {
       const r = calcularCumplimiento(jornadas, medido.fuentes, VARIANTES_PESOS[v])
@@ -199,5 +233,6 @@ export async function GET(req: NextRequest) {
       + 'Si una variante muestra peso en una dimensión que sigue en validación, ese peso '
       + 'no está haciendo nada todavía, y encenderla requiere cerrar la ambigüedad primero.',
     variantes: resultado,
+    ...(detalle ? { personas: porPersona.sort((a, b) => (b.puntaje ?? -1) - (a.puntaje ?? -1)) } : {}),
   })
 }
