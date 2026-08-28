@@ -21,8 +21,9 @@ import {
 } from '@/lib/escalamiento-descubierto'
 import type { ClaveNivel, TurnoEscalable } from '@/lib/escalamiento-descubierto'
 import { normalizarTelefonoAr } from '@/lib/telefono-ar'
-import { proveedorPorDefecto, proveedorSimulado } from '@/lib/whatsapp'
+import { configuracionMeta, proveedorPorDefecto, proveedorSimulado } from '@/lib/whatsapp'
 import { resolverResponsablesOperativos } from '@/lib/responsables-operativos'
+import { sumarDiasFecha } from '@/lib/turnos'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -102,7 +103,7 @@ export async function GET(req: Request) {
     year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(ahora.getTime() - 86400000))
 
-  const [turnosRes, objetivosRes, usuariosRes, registrosRes, destinatariosRes, zonasRes, svRes, puestosRes] =
+  const [turnosRes, objetivosRes, usuariosRes, registrosRes, destinatariosRes, zonasRes, svRes, puestosRes, guardiasRes] =
     await Promise.all([
       client.from('turnos')
         .select('id, guardia_id, objetivo_id, puesto_id, fecha, hora_inicio, hora_fin, estado')
@@ -117,6 +118,17 @@ export async function GET(req: Request) {
       client.from('zonas_operativas').select('id, nombre'),
       client.from('supervisor_zonas').select('supervisor_id, zona_id'),
       client.from('puestos').select('id, nombre'),
+      // LA fuente de responsabilidad horaria. Sin esto la resolución sólo puede
+      // caer al fallback "responsable único de zona", y una zona con tres
+      // supervisores asignados —Rosario— nunca resuelve: devuelve
+      // multiples_sin_guardia y el aviso no sale.
+      //
+      // Desde ayer-1 porque una guardia nocturna arranca un día y cubre la
+      // madrugada del siguiente. Mismo rango que usa push.
+      client.from('supervisores_guardia')
+        .select('supervisor_id, zona, fecha, hora_inicio, hora_fin, estado, tipo_evento, rol_operativo')
+        .gte('fecha', sumarDiasFecha(ayer, -1))
+        .lte('fecha', hoy),
     ])
 
   const turnos = (turnosRes.data ?? []) as TurnoEscalable[]
@@ -125,6 +137,7 @@ export async function GET(req: Request) {
   const registros = registrosRes.data ?? []
   const zonas = zonasRes.data ?? []
   const supervisorZonas = svRes.data ?? []
+  const guardias = (guardiasRes.data ?? []) as any[]
   const puestos = new Map<string, string>(
     ((puestosRes.data ?? []) as any[]).map(p => [p.id, p.nombre]),
   )
@@ -136,6 +149,7 @@ export async function GET(req: Request) {
     ['turnos', turnosRes], ['objetivos', objetivosRes], ['usuarios', usuariosRes],
     ['registros', registrosRes], ['destinatarios', destinatariosRes],
     ['zonas_operativas', zonasRes], ['supervisor_zonas', svRes], ['puestos', puestosRes],
+    ['supervisores_guardia', guardiasRes],
   ].filter(([, r]: any) => r?.error).map(([n, r]: any) => `${n}: ${r.error.message}`)
 
   const nombreDe = (id?: string | null) => {
@@ -175,14 +189,33 @@ export async function GET(req: Request) {
     // Nivel 30: la lista configurada.
     let destinatarios: string[] = []
     let motivoSinDestinatario: string | null = null
+    let origenResolucion: string | null = null
+    let candidatosZona: string[] = []
 
     if (nivel === NIVEL.supervisor) {
       const r = resolverResponsablesOperativos({
         zonaId: objetivo?.zona_id ?? null,
-        guardias: [], supervisorZonas, zonas, usuarios,
-      } as any)
+        // El instante que decide es el INICIO del turno, no "ahora": es el
+        // momento en que el puesto tenía que estar cubierto, y es el que hace
+        // que a un turno nocturno le responda quien estaba de guardia esa noche.
+        fecha: t.fecha,
+        hora: t.hora_inicio.slice(0, 5),
+        guardias, supervisorZonas, zonas, usuarios,
+      })
+      // Si cubren varios a la vez, son TODOS responsables: se le manda a cada
+      // uno, individualmente, y la deduplicación por (usuario, turno, tipo)
+      // impide que alguno reciba dos veces. No se elige el primero.
       destinatarios = r.responsables ?? []
-      if (destinatarios.length === 0) motivoSinDestinatario = 'SIN_SUPERVISOR_RESPONSABLE'
+      origenResolucion = r.origen
+      if (destinatarios.length === 0) {
+        // El motivo importa: `multiples_sin_guardia` significa que falta cargar
+        // la guardia de esa zona, y se arregla en Programación. `sin_zona`
+        // significa que el objetivo no tiene zona. No son el mismo problema.
+        motivoSinDestinatario = r.origen === 'multiples_sin_guardia'
+          ? 'VARIOS_RESPONSABLES_SIN_GUARDIA_DEFINIDA'
+          : 'SIN_SUPERVISOR_RESPONSABLE'
+        candidatosZona = (r.candidatosZona ?? []).map(id => nombreDe(id)).filter(Boolean) as string[]
+      }
     } else {
       destinatarios = (destinatariosRes.data ?? [])
         .filter((x: any) => x.activo)
@@ -208,7 +241,11 @@ export async function GET(req: Request) {
 
     if (motivoSinDestinatario) {
       // Se registra y se sigue. El caso sin supervisor llega igual al nivel 30.
-      acciones.push({ turno: t.id, nivel, descartado: motivoSinDestinatario, objetivo: vars.objetivo })
+      acciones.push({
+        turno: t.id, nivel, descartado: motivoSinDestinatario, objetivo: vars.objetivo,
+        puesto: vars.puesto, horario: vars.horario, vigilador: vars.vigilador,
+        origenResolucion, candidatosZona,
+      })
       filasAuditoria.push({
         turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
         guardia_id: t.guardia_id, nivel, minutos_descubierto: min,
@@ -286,6 +323,7 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     modo: enviarDeVerdad ? (proveedor.configurado ? 'ENVIO_REAL' : 'SIN_PROVEEDOR_NO_ENVIA') : 'SIMULACION',
+    meta: configuracionMeta(),
     ...(fuentesConError.length > 0 ? { FUENTES_CON_ERROR: fuentesConError } : {}),
     proveedor: proveedor.nombre,
     proveedorConfigurado: proveedor.configurado,

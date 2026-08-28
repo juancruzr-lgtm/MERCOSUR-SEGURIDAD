@@ -5,7 +5,7 @@ import {
 } from '@/lib/escalamiento-descubierto'
 import type { ContextoTurno, TurnoEscalable } from '@/lib/escalamiento-descubierto'
 import { normalizarTelefonoAr, mostrarTelefono } from '@/lib/telefono-ar'
-import { proveedorMeta, proveedorSimulado } from '@/lib/whatsapp'
+import { configuracionMeta, proveedorMeta, proveedorSimulado } from '@/lib/whatsapp'
 
 // El escalamiento de un puesto descubierto. No decide si el puesto está
 // descubierto —eso lo dice lib/turnos.ts— sino a quién avisarle y cuándo.
@@ -330,6 +330,43 @@ describe('19-20 · el proveedor falla', () => {
     expect(r.error).not.toMatch(/Bearer|[A-Za-z0-9]{40}/)
     if (previo.t) process.env.WHATSAPP_TOKEN = previo.t
     if (previo.p) process.env.WHATSAPP_PHONE_ID = previo.p
+  })
+
+  it('la configuración dice QUÉ falta, no sólo que falta', () => {
+    const previo = { t: process.env.WHATSAPP_TOKEN, p: process.env.WHATSAPP_PHONE_ID }
+    delete process.env.WHATSAPP_TOKEN
+    delete process.env.WHATSAPP_PHONE_ID
+    const c = configuracionMeta()
+    expect(c.completa).toBe(false)
+    expect(c.faltan).toEqual(['WHATSAPP_PHONE_ID', 'WHATSAPP_TOKEN'])
+    // Lo que NO falta ya tiene valor por defecto y no bloquea nada.
+    expect(c.idioma).toBe('es_AR')
+    expect(c.plantillas.quince).toBe('puesto_descubierto_15')
+    expect(c.plantillas.treinta).toBe('puesto_descubierto_30')
+    if (previo.t) process.env.WHATSAPP_TOKEN = previo.t
+    if (previo.p) process.env.WHATSAPP_PHONE_ID = previo.p
+  })
+
+  it('con las dos credenciales queda completa', () => {
+    const previo = { t: process.env.WHATSAPP_TOKEN, p: process.env.WHATSAPP_PHONE_ID }
+    process.env.WHATSAPP_TOKEN = 'x'
+    process.env.WHATSAPP_PHONE_ID = 'y'
+    const c = configuracionMeta()
+    expect(c.completa).toBe(true)
+    expect(c.faltan).toEqual([])
+    expect(proveedorMeta().configurado).toBe(true)
+    if (previo.t) process.env.WHATSAPP_TOKEN = previo.t; else delete process.env.WHATSAPP_TOKEN
+    if (previo.p) process.env.WHATSAPP_PHONE_ID = previo.p; else delete process.env.WHATSAPP_PHONE_ID
+  })
+
+  it('la configuración NUNCA expone el valor de las credenciales', () => {
+    const previo = process.env.WHATSAPP_TOKEN
+    process.env.WHATSAPP_TOKEN = 'secreto-que-no-debe-salir'
+    const c = JSON.stringify(configuracionMeta())
+    expect(c).not.toContain('secreto-que-no-debe-salir')
+    // Sólo dice si está o no, nunca cuánto vale.
+    expect(configuracionMeta().token).toBe(true)
+    if (previo) process.env.WHATSAPP_TOKEN = previo; else delete process.env.WHATSAPP_TOKEN
   })
 
   it('el proveedor simulado registra y no manda nada', async () => {
