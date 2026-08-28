@@ -102,7 +102,7 @@ export async function GET(req: Request) {
     year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(ahora.getTime() - 86400000))
 
-  const [turnosRes, objetivosRes, usuariosRes, registrosRes, destinatariosRes, zonasRes, svRes] =
+  const [turnosRes, objetivosRes, usuariosRes, registrosRes, destinatariosRes, zonasRes, svRes, puestosRes] =
     await Promise.all([
       client.from('turnos')
         .select('id, guardia_id, objetivo_id, puesto_id, fecha, hora_inicio, hora_fin, estado')
@@ -111,8 +111,12 @@ export async function GET(req: Request) {
       client.from('usuarios').select('id, nombre, apellido, telefono, rol, estado'),
       client.from('registros_asistencia').select('turno_id, hora_entrada_real'),
       client.from('escalamiento_destinatarios').select('usuario_id, rol_en_escalamiento, activo'),
-      client.from('zonas').select('id, nombre'),
+      // La tabla se llama zonas_operativas. Con el nombre equivocado la consulta
+      // devolvía data: null SIN romper, y todos los casos habrían salido como
+      // SIN_SUPERVISOR_RESPONSABLE: un dry-run plausible y completamente falso.
+      client.from('zonas_operativas').select('id, nombre'),
       client.from('supervisor_zonas').select('supervisor_id, zona_id'),
+      client.from('puestos').select('id, nombre'),
     ])
 
   const turnos = (turnosRes.data ?? []) as TurnoEscalable[]
@@ -121,7 +125,18 @@ export async function GET(req: Request) {
   const registros = registrosRes.data ?? []
   const zonas = zonasRes.data ?? []
   const supervisorZonas = svRes.data ?? []
-  const puestos = new Map<string, string>()
+  const puestos = new Map<string, string>(
+    ((puestosRes.data ?? []) as any[]).map(p => [p.id, p.nombre]),
+  )
+
+  // Una fuente que falla en silencio es peor que una que rompe: el dry-run
+  // seguiría dando un resultado con forma correcta y contenido falso. Los
+  // errores viajan en la respuesta para que se vean.
+  const fuentesConError = [
+    ['turnos', turnosRes], ['objetivos', objetivosRes], ['usuarios', usuariosRes],
+    ['registros', registrosRes], ['destinatarios', destinatariosRes],
+    ['zonas_operativas', zonasRes], ['supervisor_zonas', svRes], ['puestos', puestosRes],
+  ].filter(([, r]: any) => r?.error).map(([n, r]: any) => `${n}: ${r.error.message}`)
 
   const nombreDe = (id?: string | null) => {
     const u = usuarios.find((x: any) => x.id === id)
@@ -271,6 +286,7 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     modo: enviarDeVerdad ? (proveedor.configurado ? 'ENVIO_REAL' : 'SIN_PROVEEDOR_NO_ENVIA') : 'SIMULACION',
+    ...(fuentesConError.length > 0 ? { FUENTES_CON_ERROR: fuentesConError } : {}),
     proveedor: proveedor.nombre,
     proveedorConfigurado: proveedor.configurado,
     turnosEvaluados: turnos.length,
