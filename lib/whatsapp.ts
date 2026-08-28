@@ -44,17 +44,55 @@ export interface ProveedorWhatsApp {
 }
 
 /**
+ * Todo lo que hace falta para poder enviar, y qué falta si no se puede.
+ *
+ * Se expone para que el dry-run diga exactamente qué está pendiente en vez de
+ * un "no configurado" que no le sirve a nadie.
+ */
+export interface ConfiguracionMeta {
+  phoneId: boolean
+  token: boolean
+  idioma: string
+  plantillas: { quince: string; treinta: string }
+  completa: boolean
+  faltan: string[]
+}
+
+export function configuracionMeta(): ConfiguracionMeta {
+  const token = Boolean(process.env.WHATSAPP_TOKEN)
+  const phoneId = Boolean(process.env.WHATSAPP_PHONE_ID)
+  const faltan: string[] = []
+  if (!phoneId) faltan.push('WHATSAPP_PHONE_ID')
+  if (!token) faltan.push('WHATSAPP_TOKEN')
+
+  return {
+    phoneId, token,
+    // El idioma de la plantilla aprobada. Meta lo exige exacto: una plantilla
+    // aprobada en es_AR no se puede enviar pidiendo es.
+    idioma: process.env.WHATSAPP_IDIOMA || 'es_AR',
+    plantillas: {
+      quince: process.env.WHATSAPP_PLANTILLA_15 || 'puesto_descubierto_15',
+      treinta: process.env.WHATSAPP_PLANTILLA_30 || 'puesto_descubierto_30',
+    },
+    completa: token && phoneId,
+    faltan,
+  }
+}
+
+/**
  * Meta WhatsApp Cloud API.
  *
  * Las credenciales salen SÓLO de variables de entorno y nunca se registran:
  * `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`. Si falta cualquiera, el proveedor
  * queda `configurado: false` y el escalamiento no intenta enviar nada — no
- * falla ruidosamente en cada corrida del cron.
+ * falla ruidosamente en cada corrida del cron, ni rompe el push, que es un
+ * canal aparte y no depende de esto.
  */
 export function proveedorMeta(): ProveedorWhatsApp {
   const token = process.env.WHATSAPP_TOKEN
   const phoneId = process.env.WHATSAPP_PHONE_ID
   const version = process.env.WHATSAPP_API_VERSION || 'v21.0'
+  const idioma = configuracionMeta().idioma
 
   return {
     nombre: 'meta_cloud',
@@ -76,7 +114,7 @@ export function proveedorMeta(): ProveedorWhatsApp {
             type: 'template',
             template: {
               name: destino.plantilla,
-              language: { code: 'es_AR' },
+              language: { code: idioma },
               components: [{
                 type: 'body',
                 parameters: destino.variables.map(text => ({ type: 'text', text })),
