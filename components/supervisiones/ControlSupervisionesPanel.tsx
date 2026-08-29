@@ -3,56 +3,82 @@
 /**
  * components/supervisiones/ControlSupervisionesPanel.tsx
  *
- * Resumen del mes de Supervisiones para el Dashboard.
+ * Supervisiones en el Dashboard. Lo primero es QUÉ OBJETIVOS ESTÁN SIN
+ * SUPERVISAR, no cuántas supervisiones se hicieron.
  *
- * El tablero tenía Rondas, Planillas e Imágenes IA, pero de las supervisiones
- * —que es lo que el supervisor sale a hacer al objetivo— no había una sola
- * línea: había que entrar a la pantalla para saber si se hicieron.
+ * Contar las hechas dice que hubo actividad; no dice dónde falta ir. Un mes con
+ * 40 supervisiones puede tener 12 objetivos que nadie visita hace una semana, y
+ * eso es lo que hay que poder ver de un vistazo.
  *
- * Cuenta el TRABAJO ABIERTO, igual que el panel de planillas: lo que reclama
- * una decisión primero, y el volumen después. Una supervisión "incompleta" no
- * es un error del sistema: es una visita que se registró sin el checklist o
- * sin la foto obligatoria, y alguien tiene que resolverla.
+ * La vigencia sale de `lib/supervisiones.ts`, que es la definición única:
+ * `ultima_supervision + frecuencia_supervision_horas` contra ahora. Acá no se
+ * recalcula nada — ese cálculo llegó a estar repetido en cuatro lugares con
+ * defaults distintos, y un mismo objetivo aparecía vencido en un panel y
+ * vigente en otro.
  *
- * El estado lo escribe el móvil al guardar (`supervisiones.estado`), y acá NO
- * se recalcula: reproducir esa regla sería una segunda fuente de verdad para
- * la misma pregunta.
+ * OJO con el rango: la última supervisión se busca en TODO el historial, sin
+ * filtrar por mes. Recortarla por el mes en curso es lo que hacía que el día 1
+ * apareciera todo como "nunca supervisado".
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { brandColors, semanticColors } from '@/lib/brand-theme'
 import TarjetaMetrica from '@/components/TarjetaMetrica'
+import {
+  estadoSupervisionObjetivo, frecuenciaSupervision, horasParaVencimiento,
+  indexarUltimaSupervision, supervisionProximaAVencer,
+} from '@/lib/supervisiones'
+import type { EstadoSupervision } from '@/lib/supervisiones'
 
 const C = {
-  muted: '#64748b', faint: '#475569',
+  muted: '#64748b', faint: '#475569', text: '#e2e8f0',
   yellow: brandColors.yellow ?? '#f59e0b',
   green: semanticColors.success ?? '#10b981',
   red: semanticColors.error ?? '#ef4444',
 }
 
-type Conteos = {
-  total: number
-  ok: number
-  conObservacion: number
-  critico: number
-  incompleta: number
-  sinFoto: number
-  objetivos: number
-  ultima: string | null
+type ObjetivoEstado = {
+  id: string
+  nombre: string
+  estado: EstadoSupervision
+  /** Horas de atraso. `null` si nunca se supervisó. */
+  atraso: number | null
+  frecuencia: number
 }
 
-const VACIO: Conteos = {
-  total: 0, ok: 0, conObservacion: 0, critico: 0,
-  incompleta: 0, sinFoto: 0, objetivos: 0, ultima: null,
+type Datos = {
+  pendientes: ObjetivoEstado[]
+  porVencer: number
+  vigentes: number
+  totalObjetivos: number
+  /** Del mes, como contexto secundario. */
+  mesTotal: number
+  mesIncompletas: number
+  mesCriticas: number
+}
+
+const VACIO: Datos = {
+  pendientes: [], porVencer: 0, vigentes: 0, totalObjetivos: 0,
+  mesTotal: 0, mesIncompletas: 0, mesCriticas: 0,
+}
+
+/** "hace 3 d 4 h" — para que el atraso se lea sin hacer cuentas. */
+function atrasoLegible(horas: number): string {
+  const h = Math.floor(Math.abs(horas))
+  if (h < 24) return `${h} h`
+  const d = Math.floor(h / 24)
+  const resto = h % 24
+  return resto === 0 ? `${d} d` : `${d} d ${resto} h`
 }
 
 export default function ControlSupervisionesPanel({
   mes, onVerTodas,
 }: { mes: string; onVerTodas?: () => void }) {
-  const [c, setC] = useState<Conteos>(VACIO)
+  const [d, setD] = useState<Datos>(VACIO)
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [verTodos, setVerTodos] = useState(false)
 
   const cargar = useCallback(async () => {
     setCargando(true); setError(null)
@@ -60,64 +86,84 @@ export default function ControlSupervisionesPanel({
     const desde = `${mes}-01`
     const hasta = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
 
-    // El rango va sobre created_at con hora, para no perder las del último día.
-    const { data, error: err } = await supabase
-      .from('supervisiones')
-      .select('id, estado, objetivo_id, created_at')
-      .gte('created_at', `${desde}T00:00:00`)
-      .lte('created_at', `${hasta}T23:59:59`)
-      .order('created_at', { ascending: false })
+    const [objRes, ultRes, mesRes] = await Promise.all([
+      // Sólo lo que se supervisa de verdad: activos y fuera de prueba.
+      supabase.from('objetivos')
+        .select('id, nombre, estado, es_prueba, frecuencia_supervision_horas')
+        .eq('estado', 'activo'),
+      // TODO el historial, sin filtro de mes. Ver la nota de arriba.
+      supabase.from('supervisiones').select('objetivo_id, created_at'),
+      supabase.from('supervisiones')
+        .select('id, estado')
+        .gte('created_at', `${desde}T00:00:00`)
+        .lte('created_at', `${hasta}T23:59:59`),
+    ])
 
-    if (err) {
-      setError('No se pudo leer las supervisiones del mes.')
-      setC(VACIO); setCargando(false)
+    if (objRes.error || ultRes.error) {
+      setError('No se pudo leer el estado de supervisión de los objetivos.')
+      setD(VACIO); setCargando(false)
       return
     }
 
-    const filas = data ?? []
-    // Cuáles tienen al menos una foto: una supervisión sin evidencia se puede
-    // haber hecho igual, pero no se puede mostrar.
-    const ids = filas.map(f => f.id)
-    let conFoto = new Set<string>()
-    if (ids.length > 0) {
-      const { data: fotos } = await supabase
-        .from('supervision_fotos')
-        .select('supervision_id')
-        .in('supervision_id', ids)
-      conFoto = new Set((fotos ?? []).map((f: any) => f.supervision_id))
+    const objetivos = (objRes.data ?? []).filter((o: any) => !o.es_prueba)
+    const ultima = indexarUltimaSupervision(ultRes.data ?? [])
+    const ahora = Date.now()
+
+    const pendientes: ObjetivoEstado[] = []
+    let porVencer = 0
+    let vigentes = 0
+
+    for (const o of objetivos as any[]) {
+      const iso = ultima.get(o.id) ?? null
+      const estado = estadoSupervisionObjetivo(o, iso, ahora)
+      const frecuencia = frecuenciaSupervision(o)
+
+      if (estado === 'vigente') {
+        vigentes += 1
+        if (supervisionProximaAVencer(iso, frecuencia, ahora)) porVencer += 1
+        continue
+      }
+      const restantes = horasParaVencimiento(iso, frecuencia, ahora)
+      pendientes.push({
+        id: o.id,
+        nombre: o.nombre || 'Objetivo sin nombre',
+        estado,
+        atraso: restantes === null ? null : -restantes,
+        frecuencia,
+      })
     }
 
-    setC({
-      total: filas.length,
-      ok: filas.filter(f => f.estado === 'ok').length,
-      conObservacion: filas.filter(f => f.estado === 'con_observacion').length,
-      critico: filas.filter(f => f.estado === 'critico').length,
-      incompleta: filas.filter(f => f.estado === 'incompleta').length,
-      sinFoto: filas.filter(f => !conFoto.has(f.id)).length,
-      objetivos: new Set(filas.map(f => f.objetivo_id)).size,
-      ultima: filas[0]?.created_at ?? null,
+    // Primero los que nunca se supervisaron, después por atraso descendente:
+    // es el orden en que conviene salir a cubrirlos.
+    pendientes.sort((a, b) => {
+      if ((a.atraso === null) !== (b.atraso === null)) return a.atraso === null ? -1 : 1
+      return (b.atraso ?? 0) - (a.atraso ?? 0)
+    })
+
+    const delMes = mesRes.data ?? []
+    setD({
+      pendientes, porVencer, vigentes, totalObjetivos: objetivos.length,
+      mesTotal: delMes.length,
+      mesIncompletas: delMes.filter((s: any) => s.estado === 'incompleta').length,
+      mesCriticas: delMes.filter((s: any) => s.estado === 'critico').length,
     })
     setCargando(false)
   }, [mes])
 
   useEffect(() => { void cargar() }, [cargar])
 
-  // Primero lo que pide acción, después el volumen. No es un podio.
-  const metricas = [
-    { l: 'Críticas', v: c.critico, h: 'observación de criticidad alta', color: C.red, destacar: c.critico > 0 },
-    { l: 'Incompletas', v: c.incompleta, h: 'sin checklist o sin foto obligatoria', color: C.yellow, destacar: c.incompleta > 0 },
-    { l: 'Sin foto adjunta', v: c.sinFoto, h: 'quedaron sin evidencia', color: C.yellow, destacar: c.sinFoto > 0 },
-    { l: 'Con observación', v: c.conObservacion, h: 'algo para corregir', color: C.yellow, destacar: false },
-    { l: 'Sin novedad', v: c.ok, h: 'checklist completo y sin observaciones', color: C.green, destacar: false },
-    { l: 'Objetivos visitados', v: c.objetivos, h: 'distintos, en el mes', color: C.green, destacar: false },
-  ]
+  const nunca = d.pendientes.filter(p => p.estado === 'nunca').length
+  const vencidas = d.pendientes.length - nunca
+  const aMostrar = verTodos ? d.pendientes : d.pendientes.slice(0, 8)
 
-  const ultimaLegible = c.ultima
-    ? new Date(c.ultima).toLocaleString('es-AR', {
-      timeZone: 'America/Argentina/Buenos_Aires',
-      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-    })
-    : null
+  const metricas = [
+    { l: 'Sin supervisar', v: vencidas, h: 'pasó su frecuencia', color: C.red, destacar: vencidas > 0 },
+    { l: 'Nunca supervisados', v: nunca, h: 'no tienen ninguna visita', color: C.red, destacar: nunca > 0 },
+    { l: 'Por vencer', v: d.porVencer, h: 'les queda poco del ciclo', color: C.yellow, destacar: d.porVencer > 0 },
+    { l: 'Al día', v: d.vigentes, h: `de ${d.totalObjetivos} objetivos activos`, color: C.green, destacar: false },
+    { l: 'Incompletas del mes', v: d.mesIncompletas, h: 'sin checklist o sin foto', color: C.yellow, destacar: d.mesIncompletas > 0 },
+    { l: 'Críticas del mes', v: d.mesCriticas, h: 'observación de criticidad alta', color: C.red, destacar: d.mesCriticas > 0 },
+  ]
 
   return (
     <div>
@@ -127,8 +173,10 @@ export default function ControlSupervisionesPanel({
         </span>
         {!cargando && !error && (
           <span style={{ fontSize:11, color:C.faint }}>
-            {mes} · {c.total} supervisión{c.total === 1 ? '' : 'es'}
-            {ultimaLegible && ` · última ${ultimaLegible}`}
+            {d.pendientes.length > 0
+              ? `${d.pendientes.length} objetivo${d.pendientes.length === 1 ? '' : 's'} sin supervisar`
+              : `${d.totalObjetivos} objetivos al día`}
+            {' · '}{d.mesTotal} supervisión{d.mesTotal === 1 ? '' : 'es'} en {mes}
           </span>
         )}
         {onVerTodas && (
@@ -144,28 +192,63 @@ export default function ControlSupervisionesPanel({
       {error ? (
         <div style={{ fontSize:12, color:C.red }}>{error}</div>
       ) : cargando ? (
-        <div style={{ fontSize:12, color:C.muted }}>Cargando resumen…</div>
-      ) : c.total === 0 ? (
-        // Cero supervisiones y cero errores no es lo mismo que "todo bien":
-        // significa que nadie salió a supervisar en el mes, y hay que decirlo.
-        <div style={{ fontSize:12, color:C.yellow }}>
-          No hay supervisiones registradas en {mes}.
-        </div>
+        <div style={{ fontSize:12, color:C.muted }}>Cargando estado de supervisión…</div>
       ) : (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:10 }}>
-          {metricas.map(m => (
-            <TarjetaMetrica
-              key={m.l}
-              etiqueta={m.l}
-              valor={m.v}
-              ayuda={m.h}
-              color={m.v > 0 ? m.color : C.muted}
-              destacar={m.destacar}
-              onClick={onVerTodas}
-              titulo="Ir a Supervisiones"
-            />
-          ))}
-        </div>
+        <>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:10 }}>
+            {metricas.map(m => (
+              <TarjetaMetrica
+                key={m.l}
+                etiqueta={m.l}
+                valor={m.v}
+                ayuda={m.h}
+                color={m.v > 0 ? m.color : C.muted}
+                destacar={m.destacar}
+                onClick={onVerTodas}
+                titulo="Ir a Supervisiones"
+              />
+            ))}
+          </div>
+
+          {/* La lista con NOMBRES. Un contador que dice "12 sin supervisar" no
+              sirve para salir a cubrirlos: hay que saber cuáles son. */}
+          {d.pendientes.length > 0 ? (
+            <div style={{ marginTop:14, borderTop:'1px solid #1e2d4266', paddingTop:12 }}>
+              <div style={{ fontSize:11, color:C.muted, marginBottom:8, letterSpacing:.4 }}>
+                OBJETIVOS QUE RECLAMAN VISITA
+              </div>
+              {aMostrar.map(p => (
+                <div key={p.id} style={{
+                  display:'flex', gap:10, alignItems:'baseline', flexWrap:'wrap',
+                  padding:'6px 0', borderBottom:'1px solid #1e2d4233',
+                }}>
+                  <span style={{ fontSize:13, color:C.text, flex:'1 1 200px' }}>{p.nombre}</span>
+                  <span style={{ fontSize:11.5, fontWeight:700, color: p.estado === 'nunca' ? C.muted : C.red }}>
+                    {p.estado === 'nunca'
+                      ? 'Nunca supervisado'
+                      : `Atrasado ${atrasoLegible(p.atraso ?? 0)}`}
+                  </span>
+                  <span style={{ fontSize:10.5, color:C.faint, whiteSpace:'nowrap' }}>
+                    cada {p.frecuencia} h
+                  </span>
+                </div>
+              ))}
+              {d.pendientes.length > 8 && (
+                <button
+                  onClick={() => setVerTodos(v => !v)}
+                  style={{ marginTop:8, background:'none', border:'none', padding:0, cursor:'pointer',
+                    color:C.yellow, fontSize:11, fontWeight:700, fontFamily:'inherit' }}
+                >
+                  {verTodos ? 'Ver menos' : `Ver los ${d.pendientes.length}`}
+                </button>
+              )}
+            </div>
+          ) : (
+            <div style={{ marginTop:14, fontSize:12, color:C.green }}>
+              Todos los objetivos activos están dentro de su frecuencia de supervisión.
+            </div>
+          )}
+        </>
       )}
     </div>
   )
