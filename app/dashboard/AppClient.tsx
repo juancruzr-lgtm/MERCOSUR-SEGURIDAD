@@ -80,6 +80,7 @@ import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
 import ControlImagenesIAPanel from '@/components/ia/ControlImagenesIAPanel'
+import ControlSupervisionesPanel from '@/components/supervisiones/ControlSupervisionesPanel'
 // Mismo panel de configuración que usa el legajo del objetivo. Se monta también
 // en la solapa Rondas para poder editar rondas y puntos sin entrar objetivo por
 // objetivo. No es un editor nuevo: es el que ya existía.
@@ -1219,7 +1220,17 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         />
       </div>
 
-      {/* ── 5. CONTROL DE IMÁGENES IA ───────────────────────────────────── */}
+      {/* ── 5. CONTROL DE SUPERVISIONES ─────────────────────────────────── */}
+      {/* Va antes de Imágenes IA a propósito: una supervisión crítica o
+          incompleta reclama una decisión, y la calidad de las fotos no. */}
+      <div style={{ ...alertBox, marginTop:16 }}>
+        <ControlSupervisionesPanel
+          mes={mesActual}
+          onVerTodas={() => onNavigate?.('supervisiones')}
+        />
+      </div>
+
+      {/* ── 6. CONTROL DE IMÁGENES IA ───────────────────────────────────── */}
       <div style={{ ...alertBox, marginTop:16 }}>
         <ControlImagenesIAPanel onVerTodas={() => onNavigate?.('revision_fotos_ia')} />
       </div>

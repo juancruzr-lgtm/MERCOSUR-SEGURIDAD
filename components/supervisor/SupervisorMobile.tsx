@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
+import { comprimirImagen, superaElLimite } from '@/lib/comprimir-imagen'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, objetivoEstaOperativo, registroTieneEntradaConfirmada, idsObjetivosPausados } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -534,6 +535,7 @@ export default function SupervisorMobile({ user }: any) {
   const [supervisionObservaciones, setSupervisionObservaciones] = useState('')
   const [supervisionRespuestas, setSupervisionRespuestas] = useState<Record<string, { resultado: ResultadoChecklist, observacion: string }>>({})
   const [supervisionFotos, setSupervisionFotos] = useState<File[]>([])
+  const [comprimiendoFotos, setComprimiendoFotos] = useState(false)
   const [confirmarGpsImpreciso, setConfirmarGpsImpreciso] = useState(false)
   const [capturandoGps, setCapturandoGps] = useState(false)
   const [detalleSupervision, setDetalleSupervision] = useState<Supervision | null>(null)
@@ -1991,10 +1993,44 @@ export default function SupervisorMobile({ user }: any) {
     setConfirmarGpsImpreciso(false)
   }
 
-  const agregarFotosSupervision = (files: FileList | null) => {
+  /**
+   * Comprime al AGREGAR, no al subir.
+   *
+   * Antes se subía el archivo original y una foto de celular —3 a 8 MB— no
+   * entraba en el límite de body de la función: el supervisor sacaba la foto y
+   * al guardar le decía que no se pudo cargar. El fichaje ya comprimía; esto
+   * usa la misma función.
+   *
+   * Hacerlo acá y no en el envío tiene una ventaja: si algo falla, se entera en
+   * el momento de elegir la foto y puede sacar otra, en vez de descubrirlo
+   * recién al guardar toda la supervisión.
+   */
+  const agregarFotosSupervision = async (files: FileList | null) => {
     const nuevasFotos = Array.from(files || [])
     if (nuevasFotos.length === 0) return
-    setSupervisionFotos(prev => [...prev, ...nuevasFotos])
+
+    setComprimiendoFotos(true)
+    setError('')
+    const listas: File[] = []
+    const fallidas: string[] = []
+
+    for (const original of nuevasFotos) {
+      try {
+        listas.push(await comprimirImagen(original))
+      } catch {
+        // Si no se pudo comprimir pero el original ya entra, se usa igual: es
+        // preferible una foto grande subida a ninguna foto.
+        if (!superaElLimite(original)) listas.push(original)
+        else fallidas.push(original.name)
+      }
+    }
+
+    if (listas.length > 0) setSupervisionFotos(prev => [...prev, ...listas])
+    if (fallidas.length > 0) {
+      setError(`No se pudo procesar ${fallidas.length === 1 ? 'la foto' : 'las fotos'} `
+        + `${fallidas.join(', ')}. Probá sacarla de nuevo con menos resolución.`)
+    }
+    setComprimiendoFotos(false)
   }
 
   const actualizarRespuestaSupervision = (itemId: string, patch: Partial<{ resultado: ResultadoChecklist, observacion: string }>) => {
@@ -3895,7 +3931,7 @@ export default function SupervisorMobile({ user }: any) {
                         capture="environment"
                         style={{ display:'none' }}
                         onChange={e => {
-                          agregarFotosSupervision(e.target.files)
+                          void agregarFotosSupervision(e.target.files)
                           e.currentTarget.value = ''
                         }}
                       />
@@ -3908,7 +3944,7 @@ export default function SupervisorMobile({ user }: any) {
                         multiple
                         style={{ display:'none' }}
                         onChange={e => {
-                          agregarFotosSupervision(e.target.files)
+                          void agregarFotosSupervision(e.target.files)
                           e.currentTarget.value = ''
                         }}
                       />
@@ -3930,13 +3966,17 @@ export default function SupervisorMobile({ user }: any) {
                       y quedaba cortado. Ahora ocupa el ancho disponible, con un
                       tope para que no se estire en pantallas grandes. */}
                   <div style={accionesSupervision}>
+                    {/* Mientras se achica una foto, guardar dejaría la supervisión
+                        sin ella y con el estado equivocado. */}
                     <button
                       type="button"
-                      style={{ ...primaryActionButton, opacity: asignando === 'guardar-supervision' ? 0.65 : 1 }}
+                      style={{ ...primaryActionButton, opacity: (asignando === 'guardar-supervision' || comprimiendoFotos) ? 0.65 : 1 }}
                       onClick={guardarSupervision}
-                      disabled={asignando === 'guardar-supervision'}
+                      disabled={asignando === 'guardar-supervision' || comprimiendoFotos}
                     >
-                      {asignando === 'guardar-supervision' ? 'Guardando...' : 'Guardar supervisión'}
+                      {comprimiendoFotos ? 'Procesando foto...'
+                        : asignando === 'guardar-supervision' ? 'Guardando...'
+                        : 'Guardar supervisión'}
                     </button>
                     <button
                       type="button"
