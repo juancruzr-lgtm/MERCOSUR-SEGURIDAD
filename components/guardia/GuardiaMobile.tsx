@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
+import { MINUTOS_AVISO_SALIDA_ANTICIPADA, minutosHastaFinDeTurno } from '@/lib/salida-anticipada'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
@@ -1413,6 +1414,46 @@ export default function GuardiaMobile({ user }: { user: any }) {
 
   // Marcar salida — instrumentado con el mismo nivel que el ingreso
   const marcarSalida = async (turno: Turno, registro: Registro) => {
+    // ── Salida muy anticipada: preguntar antes ──────────────────────────────
+    // Un vigilador fichó la salida a las 08:14 de un turno que iba hasta las
+    // 19:00 —una hora y cuarto después de entrar— y el turno quedó cerrado el
+    // resto del día. Lo notó Administración recién a las 11, cuando la ventana
+    // de 30 minutos para anular el egreso ya había pasado y hubo que corregirlo
+    // en la base.
+    //
+    // El botón está al lado del de rondas y se toca sin querer. Un turno de 12
+    // horas no se cierra a la hora y cuarto: si eso pasa, casi siempre es un
+    // error, y basta con preguntar.
+    //
+    // No bloquea: una salida anticipada real —relevo, emergencia, licencia a
+    // mitad de turno— existe y tiene que poder registrarse. Sólo pide confirmar.
+    const faltan = minutosHastaFinDeTurno(turno)
+    if (faltan !== null && faltan > MINUTOS_AVISO_SALIDA_ANTICIPADA) {
+      const horas = Math.floor(faltan / 60)
+      const mins = faltan % 60
+      const cuanto = horas > 0 ? `${horas} h ${mins} min` : `${mins} min`
+      const ok = window.confirm(
+        `Tu turno termina a las ${(turno.hora_fin || '').slice(0, 5)} y todavía faltan ${cuanto}.\n\n`
+        + '¿Seguro que querés registrar la salida ahora?\n\n'
+        + 'Si te equivocaste, cancelá: podés seguir trabajando normalmente.',
+      )
+      if (!ok) {
+        track('egreso_anticipado_cancelado', {
+          screen: 'egreso_flow',
+          turno_id: turno.id,
+          registro_id: registro.id,
+          value_json: { minutos_restantes: faltan },
+        })
+        return
+      }
+      track('egreso_anticipado_confirmado', {
+        screen: 'egreso_flow',
+        turno_id: turno.id,
+        registro_id: registro.id,
+        value_json: { minutos_restantes: faltan },
+      })
+    }
+
     setFichando(turno.id)
     setMensaje(null)
 
