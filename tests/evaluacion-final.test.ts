@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   COBERTURA_MINIMA, INASISTENCIA_ACTIVA, MINIMO_RONDAS_EXIGIBLES, alcanceDe,
   coberturaDe, conceptoDe, evaluar, faltaPorInasistencia, faltaPorRondas, notaEscolar,
+  MINIMO_TURNOS_INCUMPLIDOS,
 } from '@/lib/evaluacion-final'
 import { ETIQUETA_DIMENSION, PESOS, calcularCumplimiento } from '@/lib/cumplimiento'
 import type { ClaveDimension } from '@/lib/cumplimiento'
@@ -164,6 +165,81 @@ describe('falta crítica · Rondas', () => {
     }), [])
     expect(noSe.rondas.medicion.validos).toBe(30)
     expect(faltaPorRondas(12, 30)!.tope).toBe(4)
+  })
+})
+
+// ── Modelo C: la severidad depende del porcentaje Y de la reincidencia ──────
+//
+// El hecho que lo motivó, con datos reales de agosto: OYOLA hizo 0 de 9 rondas
+// en UN turno —de 23 que trabajó— y GOMEZ 0 de 33 en CUATRO. Los dos daban 0 %
+// y recibían el mismo tope 4, que afirma "de este mes no se puede decir nada
+// bueno". Una jornada no alcanza para afirmar eso; cuatro sí.
+
+describe('regla crítica de Rondas por reincidencia (Modelo C)', () => {
+  // Los ejemplos obligatorios de la orden de trabajo, tal cual.
+  const casos: [number, number, number, number | null, string][] = [
+    [0, 9, 1, 6, 'OYOLA: 0 % en un solo turno'],
+    [0, 33, 4, 4, 'GOMEZ: 0 % repartido en cuatro turnos'],
+    [19, 52, 3, 4, 'PIÑERO: 36,5 % con incumplimiento en tres turnos'],
+    [5, 10, 3, 6, '50 % → tope 6 aunque sea reincidente'],
+    [4, 10, 1, 6, '40 % en un solo turno'],
+    [4, 10, 2, 4, '40 % en dos turnos distintos'],
+    [1, 2, 1, null, 'muestra insuficiente: 2 < 8 exigibles'],
+  ]
+
+  it.each(casos)('%i de %i en %i turnos → tope %s (%s)',
+    (cumplidas, exigibles, turnos, tope) => {
+      expect(faltaPorRondas(cumplidas, exigibles, turnos)?.tope ?? null).toBe(tope)
+    })
+
+  it('dos turnos es el umbral exacto', () => {
+    expect(MINIMO_TURNOS_INCUMPLIDOS).toBe(2)
+    expect(faltaPorRondas(0, 20, 1)!.tope).toBe(6)
+    expect(faltaPorRondas(0, 20, 2)!.tope).toBe(4)
+  })
+
+  it('el volumen NO mejora el porcentaje: sólo gradúa el tope', () => {
+    // El mismo 0 % en los dos casos. Lo único distinto es la severidad.
+    const uno = faltaPorRondas(0, 30, 1)!
+    const varios = faltaPorRondas(0, 30, 5)!
+    expect(uno.hecho).toContain('0 de 30 rondas exigibles (0 %)')
+    expect(varios.hecho).toContain('0 de 30 rondas exigibles (0 %)')
+    expect(uno.tope).toBe(6)
+    expect(varios.tope).toBe(4)
+  })
+
+  it('un episodio aislado NO queda absuelto: sigue habiendo falta crítica', () => {
+    const f = faltaPorRondas(0, 9, 1)
+    expect(f).not.toBeNull()
+    expect(f!.tope).toBe(6)
+  })
+
+  it('sin el dato de turnos se asume reincidencia: no se absuelve por ignorancia', () => {
+    expect(faltaPorRondas(0, 9)!.tope).toBe(4)
+    expect(faltaPorRondas(0, 9, null)!.tope).toBe(4)
+    expect(faltaPorRondas(0, 9, undefined)!.tope).toBe(4)
+  })
+
+  it('sobre 60 % no hay falta, tenga los turnos que tenga', () => {
+    for (const t of [1, 2, 10]) expect(faltaPorRondas(6, 10, t)).toBeNull()
+  })
+
+  it('el hecho nombra los turnos y sigue sin lenguaje disciplinario', () => {
+    const f = faltaPorRondas(0, 33, 4)!
+    expect(f.hecho).toBe('Realizó 0 de 33 rondas exigibles (0 %), con incumplimiento en 4 turnos')
+    expect(f.hecho).not.toMatch(/dormido|abandon|negligen|reiterad|grave|falta de/i)
+  })
+
+  it('un solo turno se dice en singular', () => {
+    expect(faltaPorRondas(0, 9, 1)!.hecho).toContain('en 1 turno')
+  })
+
+  it('el tope no puede SUBIR una nota que ya era peor', () => {
+    // Índice 20 da una nota de desempeño muy por debajo de 6. El tope de 6 que
+    // trae el episodio aislado es un techo, nunca un piso.
+    const e = evaluar(20, dims({}), PESOS, [faltaPorRondas(0, 9, 1)])
+    expect(e.desempeno).toBeLessThan(6)
+    expect(e.notaFinal).toBe(e.desempeno)
   })
 })
 

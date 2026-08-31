@@ -173,19 +173,64 @@ export const RONDAS_CRITICO = 50
 export const RONDAS_GRAVE = 60
 
 /**
+ * Turnos distintos con incumplimiento a partir de los cuales el hecho deja de
+ * ser un episodio y describe cómo trabaja la persona.
+ *
+ * Dos. Con dos turnos distintos ya no puede ser el día que pasó algo, el
+ * objetivo con la ronda mal configurada o el turno donde hubo una emergencia:
+ * son dos jornadas separadas en las que la ronda no se hizo. Pedir tres dejaría
+ * dos noches seguidas malas sin ninguna consecuencia sobre la nota final.
+ */
+export const MINIMO_TURNOS_INCUMPLIDOS = 2
+
+/**
  * `cumplidas` y `exigibles` son las que quedaron DESPUÉS de las reglas de
  * atribución: sin las técnicas, sin las de configuración, sin las anteriores a
  * la creación de la ronda, sin las de jornadas con ausencia registrada y sin
  * las ambiguas que no se pueden resolver.
+ *
+ * ── Por qué el tercer parámetro ─────────────────────────────────────────────
+ * El porcentaje dice qué proporción de lo exigible se hizo. NO dice sobre
+ * cuánta operación se midió eso, y esos son dos hechos distintos:
+ *
+ *   0 de 9 rondas, todas en UN turno, de 23 turnos trabajados en el mes
+ *   0 de 33 rondas, repartidas en CUATRO turnos, los cuatro incumplidos
+ *
+ * Los dos dan 0 %. Hasta acá los dos recibían el mismo tope 4, que es la
+ * afirmación más fuerte que hace el modelo: "de este mes no se puede decir
+ * nada bueno". Una sola jornada no alcanza para afirmar eso.
+ *
+ * LO QUE NO CAMBIA: la NOTA de Rondas. El porcentaje sigue siendo
+ * cumplidas/exigibles y sigue pesando lo mismo; un 0 % sigue arrastrando la
+ * dimensión a cero. El volumen de turnos no mejora el porcentaje de nadie.
+ * Lo único que gradúa es la SEVERIDAD del tope sobre la nota final.
+ *
+ * `turnosConIncumplimiento` indefinido —dato no disponible— aplica el tope
+ * duro: ante la falta del dato no se absuelve a nadie.
  */
-export function faltaPorRondas(cumplidas: number, exigibles: number): FaltaCritica | null {
+export function faltaPorRondas(
+  cumplidas: number,
+  exigibles: number,
+  turnosConIncumplimiento?: number | null,
+): FaltaCritica | null {
   if (exigibles < MINIMO_RONDAS_EXIGIBLES) return null
   const pct = (100 * cumplidas) / exigibles
   if (pct >= RONDAS_GRAVE) return null
 
+  // Sin el dato, se asume reincidencia: no absolver por falta de información.
+  const turnos = turnosConIncumplimiento ?? MINIMO_TURNOS_INCUMPLIDOS
+  const reincidente = turnos >= MINIMO_TURNOS_INCUMPLIDOS
+
+  // Entre 50 y 60 el tope es 6 con o sin reincidencia: el incumplimiento existe
+  // pero la mayoría de las rondas se hizo, y ahí el volumen no agrega nada.
+  const tope = pct < RONDAS_CRITICO ? (reincidente ? 4 : 6) : 6
+
   const hecho = `Realizó ${cumplidas} de ${exigibles} rondas exigibles `
     + `(${Math.round(pct * 10) / 10} %)`
-  return { clave: 'rondas_incumplidas', hecho, tope: pct < RONDAS_CRITICO ? 4 : 6 }
+    + (turnosConIncumplimiento == null ? ''
+      : `, con incumplimiento en ${turnosConIncumplimiento} turno${turnosConIncumplimiento === 1 ? '' : 's'}`)
+
+  return { clave: 'rondas_incumplidas', hecho, tope }
 }
 
 /**

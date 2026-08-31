@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   MIN_EVIDENCIAS, MIN_OBLIGACIONES_RONDAS, causasLegibles, detalleCalidad,
   detalleEvidencia, detalleRondas, fuentesDeEmpleado, resumirCalidad,
-  resumirEvidencias, resumirRondas,
+  resumirEvidencias, resumirRondas, volumenRondas,
 } from '@/lib/cumplimiento-fuentes'
 import type { EvidenciaCumplimiento, RondasEmpleado } from '@/lib/cumplimiento-fuentes'
 import { atribucionDeCausa } from '@/lib/rondas-causas'
@@ -445,5 +445,69 @@ describe('la ambigüedad se explica sólo a quien la tiene', () => {
         pausaCapacitacion: 0, pausaSinClasificar: 0, motivosPausa: {}, causasPausa: {} }, [])
     expect(sinAmbiguedad.fuentes.rondas?.faltante).not.toContain('pausadas')
     expect(sinAmbiguedad.fuentes.rondas?.faltante).toContain('no pesa todavía')
+  })
+})
+
+// ── Volumen de turnos ───────────────────────────────────────────────────────
+// El porcentaje dice qué proporción de lo exigible se hizo. Esto dice sobre
+// cuánta operación se midió, que es lo que separa un episodio de un patrón.
+
+describe('volumen de turnos en el detalle de Rondas', () => {
+  const conVolumen = (o: Partial<RondasEmpleado>) => resumirRondas(rondas(o))
+
+  it('el caso OYOLA: 0 de 9 en un solo turno', () => {
+    const r = conVolumen({
+      obligaciones: 16, cumplidas: 0, noIniciada: 9, bajoPausa: 7, pausaSinClasificar: 7,
+      turnosConObligacion: 1, turnosConAtribuibles: 1, turnosConIncumplimiento: 1,
+    })
+    expect(volumenRondas(r)).toBe(
+      'Obligación de ronda en 1 turno · incumplimiento en 1 de 1 turno evaluados · episodio aislado',
+    )
+    expect(detalleRondas(r)).toContain('Obligación de ronda en 1 turno')
+  })
+
+  it('el caso GOMEZ: el mismo 0 % repartido en cuatro turnos se lee distinto', () => {
+    const r = conVolumen({
+      obligaciones: 33, cumplidas: 0, noIniciada: 33,
+      turnosConObligacion: 4, turnosConAtribuibles: 4, turnosConIncumplimiento: 4,
+    })
+    expect(volumenRondas(r)).toContain('incumplimiento en 4 de 4 turnos evaluados')
+    expect(volumenRondas(r)).toContain('incumplimiento reiterado')
+  })
+
+  it('sin incumplimiento no dice ni episodio ni reiterado', () => {
+    const r = conVolumen({
+      obligaciones: 20, cumplidas: 20,
+      turnosConObligacion: 5, turnosConAtribuibles: 5, turnosConIncumplimiento: 0,
+    })
+    expect(volumenRondas(r)).toBe('Obligación de ronda en 5 turnos · incumplimiento en 0 de 5 turnos evaluados')
+  })
+
+  it('con todo excluido no afirma nada sobre turnos evaluados', () => {
+    // 16 ventanas, las 16 pausadas: ese turno no se evaluó.
+    const r = conVolumen({
+      obligaciones: 16, cumplidas: 0, bajoPausa: 16, pausaSinClasificar: 16,
+      turnosConObligacion: 1, turnosConAtribuibles: 0, turnosConIncumplimiento: 0,
+    })
+    expect(volumenRondas(r)).toBe('Obligación de ronda en 1 turno')
+  })
+
+  it('sin el dato —RPC vieja— no se inventa un volumen', () => {
+    const r = conVolumen({ obligaciones: 20, cumplidas: 15, noIniciada: 5 })
+    expect(r.turnosConObligacion).toBe(0)
+    expect(volumenRondas(r)).toBeNull()
+    // Y el detalle sigue siendo el de antes, sin línea extra.
+    expect(detalleRondas(r)).not.toContain('Obligación de ronda')
+  })
+
+  it('el volumen NO toca el porcentaje', () => {
+    const pocos = conVolumen({ obligaciones: 20, cumplidas: 5, noIniciada: 15, turnosConIncumplimiento: 1 })
+    const muchos = conVolumen({ obligaciones: 20, cumplidas: 5, noIniciada: 15, turnosConIncumplimiento: 9 })
+    expect(pocos.porcentaje).toBe(muchos.porcentaje)
+    expect(pocos.nota).toBe(muchos.nota)
+  })
+
+  it('sin rondas asignadas el detalle no cambia', () => {
+    expect(detalleRondas(resumirRondas(null))).toBe('Sin rondas asignadas en el período')
   })
 })
