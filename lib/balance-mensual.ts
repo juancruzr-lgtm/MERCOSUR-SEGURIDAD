@@ -201,6 +201,19 @@ function bloqueRondas(e: EntradaBalance): BloqueBalance | null {
     + `${plural(atribuibles, 'ronda exigible', 'rondas exigibles')} y `
     + `${cumplidas === 0 ? 'no se registró ninguna como realizada' : `registraste ${cumplidas} como ${plural(cumplidas, 'realizada', 'realizadas')}`}.`,
   ]
+
+  // Por qué el número evaluado es menor que el programado. Sin esto, alguien
+  // con 16 rondas programadas lee "se evaluaron 9" y no sabe qué pasó con las
+  // otras 7 — y la respuesta lo favorece: quedaron fuera y no se le cobran.
+  const fueraDeEvaluacion = r.medicion.requeridos - atribuibles
+  if (fueraDeEvaluacion > 0) {
+    hechos.push(
+      `Otras ${fueraDeEvaluacion} ${plural(fueraDeEvaluacion, 'quedó', 'quedaron')} fuera de la `
+      + 'evaluación porque estuvieron pausadas o se cerraron administrativamente, así que no '
+      + `${plural(fueraDeEvaluacion, 'cuenta', 'cuentan')} ni a favor ni en contra.`,
+    )
+  }
+
   if (enCuantos) hechos.push(enCuantos.trim())
 
   const incumplidos = r.turnosConIncumplimiento ?? 0
@@ -216,6 +229,14 @@ function bloqueRondas(e: EntradaBalance): BloqueBalance | null {
         ? `Quedaron rondas sin registrar en 1 de los ${turnos(evaluados)} evaluados.`
         : `Quedaron rondas sin registrar en ${incumplidos} de ${turnos(evaluados)} ${plural(evaluados, 'evaluado', 'evaluados')}.`,
     )
+    // El salto de "obligación en 16 turnos" a "7 evaluados" no se explica solo,
+    // y quien lo lee tiene derecho a saber por qué se lo mide sobre menos.
+    if (conObligacion > evaluados) {
+      hechos.push(
+        `En ${plural(conObligacion - evaluados, 'el otro turno', `los otros ${conObligacion - evaluados} turnos`)} `
+        + `las rondas estuvieron pausadas y no ${plural(conObligacion - evaluados, 'se evaluó', 'se evaluaron')}.`,
+      )
+    }
   }
   // Una sola jornada es un episodio dentro de la muestra disponible, y decirlo
   // no es atenuar nada: es la diferencia entre un hecho y un hábito.

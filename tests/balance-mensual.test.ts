@@ -365,3 +365,64 @@ describe('el texto', () => {
     expect(r.mejorar).toBe(0)
   })
 })
+
+// ── Los números que no se explican solos ────────────────────────────────────
+//
+// "Se evaluaron 9" cuando había 16 programadas, o "3 de 7 turnos" cuando la
+// obligación estuvo en 16, dejan una pregunta abierta. La respuesta favorece a
+// la persona —esas rondas no se le cobran— así que callarla es peor.
+
+describe('el balance explica por qué se lo mide sobre menos', () => {
+  const conExclusiones = entrada({
+    turnosTrabajados: 23,
+    base: base({ observacionesValidas: 23, jornadasAplicables: 23 }) as any,
+    puntualidad: punt({ evaluadas: 23, puntuales: 23, porBanda: { puntual: 23, leve: 0, tardanza: 0, importante: 0, grave: 0 } }) as any,
+    rondas: rondas({
+      medicion: { ...rondas().medicion, requeridos: 16, validos: 9, cumplidos: 0, incidencias: 9, excluidos: 7 },
+      atribuibles: 9, cumplidas: 0, porcentaje: 0,
+      turnosConObligacion: 1, turnosConAtribuibles: 1,
+      turnosConIncumplimiento: 1, turnosSinIncumplimiento: 0,
+    }) as any,
+  })
+
+  it('dice qué pasó con las rondas que quedaron fuera', () => {
+    const r = generarBalance(conExclusiones).bloques.find(x => x.clave === 'rondas')!
+    const t = r.hechos.join(' ')
+    expect(t).toContain('Otras 7 quedaron fuera de la evaluación')
+    expect(t).toContain('no cuentan ni a favor ni en contra')
+  })
+
+  it('explica el salto entre turnos con obligación y turnos evaluados', () => {
+    const r = generarBalance(entrada({
+      turnosTrabajados: 24,
+      rondas: rondas({
+        medicion: { ...rondas().medicion, requeridos: 216, validos: 52, cumplidos: 19, incidencias: 33, excluidos: 164 },
+        atribuibles: 52, cumplidas: 19, porcentaje: 37,
+        turnosConObligacion: 16, turnosConAtribuibles: 7,
+        turnosConIncumplimiento: 3, turnosSinIncumplimiento: 4,
+      }) as any,
+    })).bloques.find(x => x.clave === 'rondas')!
+    expect(r.hechos.join(' ')).toContain('En los otros 9 turnos las rondas estuvieron pausadas y no se evaluaron.')
+  })
+
+  it('sin exclusiones no agrega ninguna aclaración de más', () => {
+    const r = generarBalance(entrada({
+      rondas: rondas({
+        medicion: { ...rondas().medicion, requeridos: 48, validos: 48, cumplidos: 40, incidencias: 8, excluidos: 0 },
+        cumplidas: 40, turnosConIncumplimiento: 3,
+      }) as any,
+    })).bloques.find(x => x.clave === 'rondas')!
+    expect(r.hechos.join(' ')).not.toContain('quedaron fuera de la evaluación')
+    expect(r.hechos.join(' ')).not.toContain('estuvieron pausadas y no')
+  })
+
+  it('un solo turno fuera se dice en singular', () => {
+    const r = generarBalance(entrada({
+      rondas: rondas({
+        medicion: { ...rondas().medicion, requeridos: 48, validos: 40, cumplidos: 30, incidencias: 10, excluidos: 8 },
+        cumplidas: 30, turnosConObligacion: 9, turnosConAtribuibles: 8, turnosConIncumplimiento: 2,
+      }) as any,
+    })).bloques.find(x => x.clave === 'rondas')!
+    expect(r.hechos.join(' ')).toContain('En el otro turno las rondas estuvieron pausadas')
+  })
+})
