@@ -19,7 +19,7 @@ import {
   patronesDeHorarioSospechoso,
 } from '@/lib/cumplimiento'
 import { INASISTENCIA_ACTIVA, evaluar, faltaPorInasistencia, faltaPorRondas } from '@/lib/evaluacion-final'
-import { balanceATexto, generarBalance, resumenBalance } from '@/lib/balance-mensual'
+import { ETIQUETA_TIPO_DEVOLUCION, balanceATexto, generarBalance, resumenBalance } from '@/lib/balance-mensual'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
 import { jornadaCumplimientoDesdeFila, etiquetaMes, mesPorDefecto, mesesDisponibles } from '@/lib/desempeno-datos'
@@ -542,7 +542,7 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
             qué conviene hacer distinto.
           </div>
 
-          {balance.corresponde ? (
+          {balance.disponible ? (
             <pre style={{
               whiteSpace:'pre-wrap', fontFamily:'inherit', fontSize:13, lineHeight:1.65,
               color:'#cbd5e1', background:'#0b1220', border:'1px solid #1e2d4266',
@@ -550,7 +550,7 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
             }}>{balanceATexto(balance)}</pre>
           ) : (
             <div style={{ fontSize:13, color:'#94a3b8' }}>
-              <b>No recibiría balance este mes.</b> {balance.motivoSiNoCorresponde}
+              <b>No recibiría balance este mes.</b> {balance.motivoSiNoDisponible}
             </div>
           )}
 
@@ -560,6 +560,17 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
               <div style={{ ...S.tenue, marginTop:10, fontSize:11.5 }}>
                 {res.bien} en orden · {res.mejorar} a mejorar · {res.sinDatos} sin datos
                 suficientes · {res.noAplica} no aplican
+                <div style={{ marginTop:6 }}>
+                  Tipo de devolución:{' '}
+                  <b style={{ color:'#cbd5e1' }}>{ETIQUETA_TIPO_DEVOLUCION[balance.tipoDevolucion]}</b>
+                  {' · '}
+                  {/* Tener balance y necesitar un mensaje son preguntas distintas.
+                      A quien cumplió todo no se le inventa una recomendación
+                      para justificar una notificación mensual. */}
+                  {balance.candidatoEntrenador
+                    ? <>el Entrenador le hablaría de <b style={{ color:'#f59e0b' }}>{balance.motivoEntrenador}</b></>
+                    : <span style={{ color:'#10b981' }}>sin mensaje del Entrenador: no hay nada accionable</span>}
+                </div>
               </div>
             )
           })()}

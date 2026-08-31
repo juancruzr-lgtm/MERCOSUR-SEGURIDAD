@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  GRUPO_DE, MINIMO_JORNADAS_BALANCE, balanceATexto, generarBalance, mesEnPalabras,
+  GRUPO_DE, MINIMO_JORNADAS_BALANCE, balanceATexto, bloqueAmerita, generarBalance, mesEnPalabras,
   resumenBalance,
 } from '@/lib/balance-mensual'
 import type { EntradaBalance } from '@/lib/balance-mensual'
@@ -322,8 +322,8 @@ describe('cuándo no se manda', () => {
       base: base({ observacionesValidas: 2, jornadasAplicables: 2 }) as any,
       turnosTrabajados: 2,
     }))
-    expect(b.corresponde).toBe(false)
-    expect(b.motivoSiNoCorresponde).toContain('2 jornadas evaluadas')
+    expect(b.disponible).toBe(false)
+    expect(b.motivoSiNoDisponible).toContain('2 jornadas evaluadas')
     expect(MINIMO_JORNADAS_BALANCE).toBe(3)
   })
 
@@ -334,11 +334,11 @@ describe('cuándo no se manda', () => {
       puntualidad: punt({ evaluadas: 0, puntuales: 0 }) as any,
       rondas: null, uniforme: null, libro: null,
     }))
-    expect(b.corresponde).toBe(false)
+    expect(b.disponible).toBe(false)
   })
 
   it('con muestra suficiente sí corresponde', () => {
-    expect(generarBalance(entrada()).corresponde).toBe(true)
+    expect(generarBalance(entrada()).disponible).toBe(true)
   })
 })
 
@@ -424,5 +424,183 @@ describe('el balance explica por qué se lo mide sobre menos', () => {
       }) as any,
     })).bloques.find(x => x.clave === 'rondas')!
     expect(r.hechos.join(' ')).toContain('En el otro turno las rondas estuvieron pausadas')
+  })
+})
+
+// ── Denominadores distintos ─────────────────────────────────────────────────
+//
+// El caso: 10 turnos trabajados, Puntualidad dice 8, Registro dice 10. Las dos
+// cifras son correctas y juntas parecen una inconsistencia.
+
+describe('cuando una dimensión mide sobre menos jornadas, se explica', () => {
+  const conMenos = entrada({
+    turnosTrabajados: 10,
+    base: base({ observacionesValidas: 10, jornadasAplicables: 10 }) as any,
+    puntualidad: punt({ evaluadas: 8, puntuales: 6, impuntuales: 2, sinDato: 2,
+      porBanda: { puntual: 6, leve: 2, tardanza: 0, importante: 0, grave: 0 } }) as any,
+  })
+
+  it('Puntualidad dice por qué mide sobre 8 y no sobre 10', () => {
+    const p = generarBalance(conMenos).bloques.find(x => x.clave === 'puntualidad')!
+    expect(p.hechos.join(' ')).toContain('2 de 8 jornadas evaluadas')
+    expect(p.hechos.join(' ')).toContain('Puntualidad se mide en las jornadas donde hubo un ingreso propio registrado.')
+  })
+
+  it('la explicación también aparece cuando llegó bien a todas', () => {
+    const p = generarBalance(entrada({
+      base: base({ observacionesValidas: 10 }) as any,
+      puntualidad: punt({ evaluadas: 8, puntuales: 8, sinDato: 2, porBanda: { puntual: 8, leve: 0, tardanza: 0, importante: 0, grave: 0 } }) as any,
+    })).bloques.find(x => x.clave === 'puntualidad')!
+    expect(p.estado).toBe('bien')
+    expect(p.hechos.join(' ')).toContain('ingreso propio registrado')
+  })
+
+  it('con los denominadores iguales NO se agrega la aclaración', () => {
+    const p = generarBalance(entrada()).bloques.find(x => x.clave === 'puntualidad')!
+    expect(p.hechos.join(' ')).not.toContain('ingreso propio registrado')
+  })
+
+  it('el registro en la app sigue midiendo sobre el total, sin contradicción', () => {
+    const b = generarBalance(conMenos)
+    const reg = b.bloques.find(x => x.clave === 'procedimiento')!
+    expect(reg.hechos.join(' ')).toContain('10 jornadas')
+    // Y el texto completo explica el porqué de la diferencia.
+    expect(balanceATexto(b)).toContain('ingreso propio registrado')
+  })
+})
+
+// ── Balance disponible ≠ mensaje del Entrenador ─────────────────────────────
+
+describe('tener balance y recibir un mensaje son cosas distintas', () => {
+  it('quien cumplió todo tiene balance y NO es candidato', () => {
+    const b = generarBalance(entrada())
+    expect(b.disponible).toBe(true)
+    expect(b.candidatoEntrenador).toBe(false)
+    expect(b.motivoEntrenador).toBeNull()
+    expect(b.tipoDevolucion).toBe('sin_intervencion')
+  })
+
+  it('no se inventa una recomendación para justificar un envío', () => {
+    const b = generarBalance(entrada())
+    expect(b.bloques.filter(x => x.recomendacion).length).toBe(0)
+  })
+
+  it('muestra insuficiente: ni balance ni mensaje', () => {
+    const b = generarBalance(entrada({ base: base({ observacionesValidas: 2 }) as any }))
+    expect(b.disponible).toBe(false)
+    expect(b.candidatoEntrenador).toBe(false)
+    expect(b.tipoDevolucion).toBe('muestra_insuficiente')
+  })
+
+  it('el motivo nombra las dimensiones que lo hacen candidato', () => {
+    const b = generarBalance(entrada({
+      base: base({ ausencias: 2 }) as any,
+      puntualidad: punt({ impuntuales: 4, puntuales: 16 }) as any,
+    }))
+    expect(b.candidatoEntrenador).toBe(true)
+    expect(b.motivoEntrenador).toContain('Asistencia')
+    expect(b.motivoEntrenador).toContain('Puntualidad')
+  })
+})
+
+// ── App no es servicio ──────────────────────────────────────────────────────
+
+describe('clasificación del tipo de devolución', () => {
+  /** Asistió, fue puntual, cumplió las rondas — pero fichó mal. */
+  it('sólo fichaje → Uso de la App, no problema de servicio', () => {
+    const b = generarBalance(entrada({
+      base: base({ incidencias: { sin_registro_propio: 5, entrada_sin_salida: 0, salida_automatica: 0 } }) as any,
+    }))
+    expect(b.tipoDevolucion).toBe('uso_app')
+    expect(b.candidatoEntrenador).toBe(true)
+    expect(b.bloques.filter(x => x.grupo === 'servicio' && x.estado === 'mejorar')).toHaveLength(0)
+  })
+
+  it('sólo rondas → Prestación del Servicio', () => {
+    const b = generarBalance(entrada({
+      rondas: rondas({
+        medicion: { ...rondas().medicion, cumplidos: 20, incidencias: 28 },
+        cumplidas: 20, turnosConIncumplimiento: 4,
+      }) as any,
+    }))
+    expect(b.tipoDevolucion).toBe('prestacion_servicio')
+  })
+
+  it('rondas + fichaje → App + Servicio', () => {
+    const b = generarBalance(entrada({
+      base: base({ incidencias: { sin_registro_propio: 4, entrada_sin_salida: 0, salida_automatica: 0 } }) as any,
+      rondas: rondas({
+        medicion: { ...rondas().medicion, cumplidos: 20, incidencias: 28 },
+        cumplidas: 20, turnosConIncumplimiento: 4,
+      }) as any,
+    }))
+    expect(b.tipoDevolucion).toBe('app_y_servicio')
+  })
+
+  it('lo NO medible no cuenta como problema', () => {
+    const b = generarBalance(entrada({
+      dimensiones: dims({ rondas: 'no_aplica', uniforme: 'datos_insuficientes', libro_guardia: 'no_aplica' }),
+      rondas: null, uniforme: null, libro: null,
+    }))
+    expect(b.tipoDevolucion).toBe('sin_intervencion')
+    expect(b.candidatoEntrenador).toBe(false)
+  })
+
+  it('la calidad de la foto cuenta como uso de la app', () => {
+    // Sacar la evidencia es usar la herramienta, no prestar el servicio.
+    const b = generarBalance(entrada({ calidad: evidencia({ noEvaluables: 4, total: 10 }) as any }))
+    expect(b.tipoDevolucion).toBe('uso_app')
+  })
+})
+
+// ── Un hecho aislado no dispara un mensaje ──────────────────────────────────
+//
+// Se usa el MISMO umbral que ya aplica el Entrenador (`severidadDe`): una
+// incidencia suelta es `aislada` y las aisladas no se notifican. Sin esto,
+// cualquier tardanza única haría candidato a casi todo el mundo y la
+// clasificación dejaría de servir para decidir a quién hablarle.
+
+describe('el umbral para hablarle a alguien', () => {
+  it('una tardanza en 26 jornadas se cuenta pero no amerita mensaje', () => {
+    const b = generarBalance(entrada({
+      turnosTrabajados: 29,
+      base: base({ observacionesValidas: 29 }) as any,
+      puntualidad: punt({ evaluadas: 26, puntuales: 25, impuntuales: 1, sinDato: 3,
+        porBanda: { puntual: 25, leve: 1, tardanza: 0, importante: 0, grave: 0 } }) as any,
+    }))
+    // El hecho SÍ está en el balance: es cierto y no se esconde.
+    expect(balanceATexto(b)).toContain('1 de 26 jornadas evaluadas')
+    // Pero no lo convierte en candidato.
+    expect(b.candidatoEntrenador).toBe(false)
+    expect(b.tipoDevolucion).toBe('sin_intervencion')
+  })
+
+  it('dos ya son reincidencia y sí ameritan', () => {
+    const b = generarBalance(entrada({
+      puntualidad: punt({ evaluadas: 26, puntuales: 24, impuntuales: 2,
+        porBanda: { puntual: 24, leve: 2, tardanza: 0, importante: 0, grave: 0 } }) as any,
+    }))
+    expect(b.candidatoEntrenador).toBe(true)
+    expect(b.tipoDevolucion).toBe('prestacion_servicio')
+  })
+
+  it('una proporción alta amerita aunque sean pocas', () => {
+    // 2 de 5 es el 40 %: patrón por proporción.
+    const b = generarBalance(entrada({
+      base: base({ observacionesValidas: 5, incidencias: { sin_registro_propio: 2, entrada_sin_salida: 0, salida_automatica: 0 } }) as any,
+      puntualidad: punt({ evaluadas: 5, puntuales: 5 }) as any,
+    }))
+    expect(b.candidatoEntrenador).toBe(true)
+    expect(b.tipoDevolucion).toBe('uso_app')
+  })
+
+  it('bloqueAmerita respeta el estado del bloque', () => {
+    expect(bloqueAmerita({ clave: 'rondas', etiqueta: 'R', grupo: 'servicio', estado: 'bien', hechos: [] })).toBe(false)
+    expect(bloqueAmerita({ clave: 'rondas', etiqueta: 'R', grupo: 'servicio', estado: 'sin_datos', hechos: [] })).toBe(false)
+    expect(bloqueAmerita({ clave: 'rondas', etiqueta: 'R', grupo: 'servicio', estado: 'no_aplica', hechos: [] })).toBe(false)
+  })
+
+  it('sin conteos, un bloque a mejorar amerita: no se absuelve por falta de dato', () => {
+    expect(bloqueAmerita({ clave: 'rondas', etiqueta: 'R', grupo: 'servicio', estado: 'mejorar', hechos: [] })).toBe(true)
   })
 })

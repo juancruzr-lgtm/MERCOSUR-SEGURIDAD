@@ -13,7 +13,7 @@ import type { EstadoRevision, EstadoRevisionClave } from '@/lib/bandeja-planilla
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { evaluarCambioDeFin, mensajeImpacto } from '@/lib/relevo'
 import { repartirHorasDelDia } from '@/lib/horas-del-dia'
-import { generarBalance, resumenBalance } from '@/lib/balance-mensual'
+import { ETIQUETA_TIPO_DEVOLUCION, generarBalance, resumenBalance } from '@/lib/balance-mensual'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
@@ -1408,8 +1408,11 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
         turnos: d.balance.turnosTrabajados,
         alcance: d.evaluacion?.alcance ?? 'sin evaluación',
         ...res,
-        recibe: d.balance.corresponde,
-        motivo: d.balance.motivoSiNoCorresponde,
+        recibe: d.balance.disponible,
+        motivo: d.balance.motivoSiNoDisponible,
+        tipo: d.balance.tipoDevolucion,
+        candidato: d.balance.candidatoEntrenador,
+        motivoEntrenador: d.balance.motivoEntrenador,
         bloques: d.balance.bloques,
       })
     })
@@ -1417,6 +1420,16 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
   }, [cumplimiento, guardias])
 
   const reciben = filas.filter(f => f.recibe).length
+  const candidatos = filas.filter(f => f.candidato).length
+  const porTipo = (t: string) => filas.filter(f => f.tipo === t).length
+
+  const COLOR_TIPO: Record<string, string> = {
+    sin_intervencion: '#10b981',
+    uso_app: '#38bdf8',
+    prestacion_servicio: '#f59e0b',
+    app_y_servicio: '#ef4444',
+    muestra_insuficiente: '#64748b',
+  }
 
   return (
     <div style={{ marginTop:24, background:'#0f172a', border:'1px solid #1e2d42', borderRadius:10, padding:16 }}>
@@ -1425,7 +1438,8 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
           Balance del mes · vista previa · no se envía
         </span>
         <span style={{ fontSize:11.5, color:'#475569' }}>
-          {cargando ? 'calculando…' : `${reciben} de ${filas.length} recibirían balance de ${mes}`}
+          {cargando ? 'calculando…'
+            : `${reciben} de ${filas.length} con balance · ${candidatos} con algo concreto que mejorar`}
         </span>
         <button
           onClick={() => setAbierto(v => !v)}
@@ -1436,7 +1450,20 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
       <div style={{ fontSize:11.5, color:'#94a3b8', marginTop:6, lineHeight:1.6 }}>
         Devolución operativa: hechos medidos y qué conviene hacer distinto. Sin nota, sin
         concepto y sin comparación con nadie. El texto completo de cada persona está en su legajo.
+        <br />
+        <b style={{ color:'#cbd5e1' }}>Tener balance y recibir un mensaje son dos cosas distintas</b>:
+        quien cumplió todo tiene balance y no necesita que el Entrenador le hable.
       </div>
+
+      {!cargando && (
+        <div style={{ display:'flex', gap:14, flexWrap:'wrap', marginTop:10, fontSize:11.5 }}>
+          {(['sin_intervencion', 'uso_app', 'prestacion_servicio', 'app_y_servicio', 'muestra_insuficiente'] as const).map(t => (
+            <span key={t} style={{ color: COLOR_TIPO[t] }}>
+              <b>{porTipo(t)}</b> {ETIQUETA_TIPO_DEVOLUCION[t]}
+            </span>
+          ))}
+        </div>
+      )}
 
       {abierto && !cargando && (
         <div style={{ marginTop:12, overflowX:'auto' }}>
@@ -1450,7 +1477,9 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
                 <th style={{ padding:'6px 8px' }}>A mejorar</th>
                 <th style={{ padding:'6px 8px' }}>Sin datos</th>
                 <th style={{ padding:'6px 8px' }}>No aplica</th>
-                <th style={{ padding:'6px 8px' }}>¿Recibe?</th>
+                <th style={{ padding:'6px 8px' }}>Tipo de devolución</th>
+                <th style={{ padding:'6px 8px' }}>Balance</th>
+                <th style={{ padding:'6px 8px' }}>¿Le habla el Entrenador?</th>
               </tr>
             </thead>
             <tbody>
@@ -1463,8 +1492,14 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
                   <td style={{ padding:'6px 8px', color: f.mejorar > 0 ? '#f59e0b' : '#475569' }}>{f.mejorar}</td>
                   <td style={{ padding:'6px 8px', color:'#94a3b8' }}>{f.sinDatos}</td>
                   <td style={{ padding:'6px 8px', color:'#475569' }}>{f.noAplica}</td>
-                  <td style={{ padding:'6px 8px', color: f.recibe ? '#10b981' : '#94a3b8' }}>
-                    {f.recibe ? 'Sí' : `No — ${f.motivo}`}
+                  <td style={{ padding:'6px 8px', color: COLOR_TIPO[f.tipo] ?? '#94a3b8', fontWeight:600 }}>
+                    {ETIQUETA_TIPO_DEVOLUCION[f.tipo as keyof typeof ETIQUETA_TIPO_DEVOLUCION] ?? f.tipo}
+                  </td>
+                  <td style={{ padding:'6px 8px', color: f.recibe ? '#cbd5e1' : '#94a3b8' }}>
+                    {f.recibe ? 'Disponible' : `No — ${f.motivo}`}
+                  </td>
+                  <td style={{ padding:'6px 8px', color: f.candidato ? '#f59e0b' : '#475569' }}>
+                    {f.candidato ? `Sí — ${f.motivoEntrenador}` : 'No hace falta'}
                   </td>
                 </tr>
               ))}
