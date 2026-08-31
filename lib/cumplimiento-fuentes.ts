@@ -43,6 +43,21 @@ export interface RondasEmpleado {
   motivosPausa: Record<string, number>
   /** Causa estructurada → cuántas ventanas cubrió. */
   causasPausa: Record<string, number>
+  // ── Volumen: en cuántos TURNOS se repartió todo lo de arriba ──────────────
+  // El porcentaje dice qué proporción se hizo; esto dice sobre cuánta operación
+  // se midió. 0 % en un turno y 0 % en cuatro no son el mismo hecho.
+  //
+  // OPCIONALES a propósito: los agrega la migración 20260831120000, y si esa se
+  // revirtiera la RPC dejaría de devolverlos. Que falten tiene que degradar la
+  // severidad a su comportamiento anterior, no romper la pantalla.
+  /** Turnos donde se generó al menos una ventana. */
+  turnosConObligacion?: number
+  /** De esos, en cuántos quedó algo exigible tras sacar saneadas y pausadas. */
+  turnosConAtribuibles?: number
+  /** Turnos con al menos una ronda sin hacer. */
+  turnosConIncumplimiento?: number
+  /** Turnos evaluados donde se hizo todo. */
+  turnosSinIncumplimiento?: number
 }
 
 export const MIN_OBLIGACIONES_RONDAS = 8
@@ -70,6 +85,12 @@ export interface ResumenRondas {
   nota: number | null
   /** Quedaron exclusiones que nadie justificó: la nota no se puede sostener. */
   enValidacion: boolean
+  /** En cuántos turnos se repartió la obligación. No afecta el porcentaje. */
+  turnosConObligacion: number
+  turnosConAtribuibles: number
+  /** Turnos con al menos una ronda sin hacer: es lo que gradúa la severidad. */
+  turnosConIncumplimiento: number
+  turnosSinIncumplimiento: number
 }
 
 /**
@@ -98,6 +119,8 @@ export function resumirRondas(
     excluidas: 0, saneadas: 0, bajoPausa: 0, pausaAtribuible: 0, pausaNoAtribuible: 0,
     pausaCapacitacion: 0, pausaSinClasificar: 0, motivosPausa: {}, causasPausa: {},
     porcentaje: null, nota: null, enValidacion: false,
+    turnosConObligacion: 0, turnosConAtribuibles: 0,
+    turnosConIncumplimiento: 0, turnosSinIncumplimiento: 0,
   }
   if (!r || r.obligaciones === 0) return vacio
 
@@ -146,6 +169,10 @@ export function resumirRondas(
     porcentaje: medicion.validos > 0 ? Math.round((100 * r.cumplidas) / medicion.validos) : null,
     nota: medicion.nota,
     enValidacion: medicion.bloquea,
+    turnosConObligacion: r.turnosConObligacion ?? 0,
+    turnosConAtribuibles: r.turnosConAtribuibles ?? 0,
+    turnosConIncumplimiento: r.turnosConIncumplimiento ?? 0,
+    turnosSinIncumplimiento: r.turnosSinIncumplimiento ?? 0,
   }
 }
 
@@ -162,6 +189,34 @@ export function detalleRondas(x: ResumenRondas): string {
   }
   for (const e of x.medicion.exclusiones) partes.push(`${e.cantidad} ${e.etiqueta}`)
   if (partes.length === 0) return 'Sin obligaciones exigibles en el período'
+
+  // El volumen, después del porcentaje y sin mezclarse con él. Un 0 % en un
+  // turno y un 0 % en cuatro se leen igual hasta que se dice en cuántos turnos
+  // fue; el porcentaje no cambia, cambia lo que se puede afirmar con él.
+  const vol = volumenRondas(x)
+  return vol ? `${partes.join(' · ')}\n${vol}` : partes.join(' · ')
+}
+
+/**
+ * "Obligación de ronda en 1 turno · incumplimiento en 1 de 1 evaluados ·
+ * episodio aislado".
+ *
+ * Describe hechos contados, sin lenguaje disciplinario: dice en cuántos turnos
+ * pasó, no por qué pasó. "Episodio aislado" y "reiterado" son la diferencia
+ * entre una jornada y varias, nada más.
+ */
+export function volumenRondas(x: ResumenRondas): string | null {
+  if (x.turnosConObligacion <= 0) return null
+  const t = (n: number) => `${n} turno${n === 1 ? '' : 's'}`
+
+  const partes = [`Obligación de ronda en ${t(x.turnosConObligacion)}`]
+  if (x.turnosConAtribuibles > 0) {
+    partes.push(
+      `incumplimiento en ${x.turnosConIncumplimiento} de ${t(x.turnosConAtribuibles)} evaluados`,
+    )
+    if (x.turnosConIncumplimiento >= 2) partes.push('incumplimiento reiterado')
+    else if (x.turnosConIncumplimiento === 1) partes.push('episodio aislado')
+  }
   return partes.join(' · ')
 }
 
@@ -227,6 +282,10 @@ export async function cargarRondasDelMes(
       pausaSinClasificar: Number(fila.pausa_sin_clasificar ?? 0),
       motivosPausa: (fila.motivos_pausa ?? {}) as Record<string, number>,
       causasPausa: (fila.causas_pausa ?? {}) as Record<string, number>,
+      turnosConObligacion: Number(fila.turnos_con_obligacion ?? 0),
+      turnosConAtribuibles: Number(fila.turnos_con_atribuibles ?? 0),
+      turnosConIncumplimiento: Number(fila.turnos_con_incumplimiento ?? 0),
+      turnosSinIncumplimiento: Number(fila.turnos_sin_incumplimiento ?? 0),
     })),
     error: null,
   }

@@ -82,6 +82,12 @@ export interface MedidasCriticas {
   rondasCumplidas: number
   rondasExigibles: number
   /**
+   * En cuántos TURNOS distintos quedó al menos una ronda sin hacer. Gradúa la
+   * severidad del tope, nunca el porcentaje. Sin el dato no se absuelve a
+   * nadie: `faltaPorRondas` asume reincidencia.
+   */
+  turnosConIncumplimiento?: number
+  /**
    * Inasistencias injustificadas CONFIRMADAS en el período, ya clasificadas por
    * `lib/novedades-laborales.ts`. Nunca se deduce acá: llega contada.
    */
@@ -125,7 +131,7 @@ export function desempenoPorEmpleado(
     const evaluacion = cumplimiento.puntaje === null ? null : evaluar(
       cumplimiento.puntaje * 10, cumplimiento.dimensiones, PESOS,
       [
-        m ? faltaPorRondas(m.rondasCumplidas, m.rondasExigibles) : null,
+        m ? faltaPorRondas(m.rondasCumplidas, m.rondasExigibles, m.turnosConIncumplimiento) : null,
         // Sólo lo que Administración clasificó explícitamente en Reportes. Sin
         // el dato no hay falta: la ausencia de una novedad no es una falta.
         INASISTENCIA_ACTIVA ? faltaPorInasistencia(m?.inasistenciasInjustificadas ?? 0) : null,

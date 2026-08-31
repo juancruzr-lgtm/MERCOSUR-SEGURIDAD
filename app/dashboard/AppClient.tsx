@@ -12,6 +12,7 @@ import {
 import type { EstadoRevision, EstadoRevisionClave } from '@/lib/bandeja-planillas'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { evaluarCambioDeFin, mensajeImpacto } from '@/lib/relevo'
+import { repartirHorasDelDia } from '@/lib/horas-del-dia'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
@@ -877,6 +878,36 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
   }
 
   const { horasLiquidables: horasHoy } = sumarHorasPorTurnos(registrosHoy, turnoPorId)
+
+  /**
+   * Las mismas horas de hoy, partidas en jornadas terminadas y jornadas que
+   * siguen corriendo.
+   *
+   * El total NO cambia: `cerradas + enCurso` es exactamente `horasHoy`. Lo que
+   * cambia es que la tarjeta deja de afirmar "trabajadas" sobre un servicio en
+   * curso. Con 105 cargas manuales en agosto —el 43 % de las horas del mes— y
+   * dos de cada tres creadas antes del fin del turno, esa afirmación se hacía
+   * todos los días.
+   *
+   * Se reusa la MISMA selección de registro por turno que la liquidación: si
+   * acá se eligiera otro, las dos columnas no sumarían el total.
+   */
+  const horasDelDia = useMemo(() => {
+    const mejorPorTurno = new Map<string, RegistroAsistencia>()
+    for (const r of registrosHoy) {
+      if (r.tipo_registro === 'ausencia') continue
+      const t = turnoPorId.get(r.turno_id)
+      if (!t || objetivoPorId.get(t.objetivo_id)?.es_prueba) continue
+      const actual = mejorPorTurno.get(r.turno_id)
+      if (!actual || scoreRegistro(r) > scoreRegistro(actual)) mejorPorTurno.set(r.turno_id, r)
+    }
+    const pares: Array<{ turno: any; registro: any }> = []
+    mejorPorTurno.forEach((registro, turnoId) => {
+      const turno = turnoPorId.get(turnoId)
+      if (turno) pares.push({ turno, registro })
+    })
+    return repartirHorasDelDia(pares)
+  }, [registrosHoy, turnoPorId, objetivoPorId])
   const { horasGPS: horasGPSMes } = sumarHorasPorTurnos(registrosMes, turnoPorId)
 
   // "Horas trabajadas mes" responde la misma pregunta que "Horas liquidables
@@ -950,7 +981,10 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     { label: 'Turnos de hoy', value: turnosHoy.length, sub: hoy, color: brandColors.yellow, page:'turnos', filtro:{ tipo:'hoy', label:'Turnos de hoy' } },
     { label: 'Guardias en turno', value: guardiasEnTurno, sub: 'con entrada sin salida', color: semanticColors.success, page:'asistencia', filtro:{ tipo:'en_turno', label:'Guardias en turno' } },
     { label: 'Turnos finalizados hoy', value: turnosFinalizadosHoy, sub: 'con entrada y salida', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Turnos finalizados hoy' } },
-    { label: 'Horas trabajadas hoy', value: formatoHoras(horasHoy), sub: 'liquidables del día', color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas trabajadas hoy' } },
+    // Dos tarjetas y no una: "trabajadas" sobre un turno que todavía corre
+    // afirma un hecho que no ocurrió. La suma de las dos es el total de siempre.
+    { label: 'Horas cerradas hoy', value: formatoHoras(horasDelDia.cerradas), sub: `${horasDelDia.turnosCerrados} jornada${horasDelDia.turnosCerrados === 1 ? '' : 's'} terminada${horasDelDia.turnosCerrados === 1 ? '' : 's'}`, color: semanticColors.info, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas cerradas hoy' } },
+    { label: 'Horas reconocidas en curso', value: formatoHoras(horasDelDia.enCurso), sub: `${horasDelDia.turnosEnCurso} turno${horasDelDia.turnosEnCurso === 1 ? '' : 's'} sin terminar · total del día ${formatoHoras(horasDelDia.total)}`, color: brandColors.yellow, page:'asistencia', filtro:{ tipo:'hoy', label:'Horas reconocidas en curso' } },
     { label: 'Horas programadas mes', value: formatoHoras(horasProgramadasMesDashboard), sub: `mes completo · ${mesActual}`, color: semanticColors.info, page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas programadas ${mesActual}` } },
     { label: 'Horas trabajadas mes', value: formatoHoras(horasMes), sub: `liquidables · ${mesActual}`, color: brandColors.orange, page:'reportes', filtro:{ tipo:'mes', mes:mesActual, label:`Horas trabajadas ${mesActual}` } },
     // Antes existía además "Total horas reales", que mostraba `horasMes` — el
@@ -1413,12 +1447,15 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           fechasPorEmpleado.set(f.empleadoId, arr)
         }
         const medidas = new Map(ids.map(id => {
-          const m = medido.get(id)!.rondas.medicion
+          const rondas = medido.get(id)!.rondas
+          const m = rondas.medicion
           return [id, {
             // Con muestra insuficiente no hay porcentaje que valga: se pasa 0/0
             // y faltaPorRondas devuelve null.
             rondasCumplidas: m.estado === 'medible' ? m.cumplidos : 0,
             rondasExigibles: m.estado === 'medible' ? m.validos : 0,
+            // Gradúa la severidad del tope, no el porcentaje.
+            turnosConIncumplimiento: rondas.turnosConIncumplimiento,
             inasistenciasInjustificadas: inasistenciasInjustificadas(
               nn, id, fechasPorEmpleado.get(id) ?? [],
             ),

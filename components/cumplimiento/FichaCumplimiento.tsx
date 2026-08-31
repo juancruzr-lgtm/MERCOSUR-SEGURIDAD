@@ -129,7 +129,10 @@ function FilaDimension({ d, pie }: { d: Dimension, pie?: React.ReactNode }) {
           </span>
         )}
       </span>
-      <span style={{ ...S.tenue, flex:'1 1 100%', marginTop:2 }}>
+      {/* pre-line: el detalle de Rondas trae el volumen de turnos en su propia
+          línea. Sin esto, "0 de 9 realizadas" y "Obligación en 1 turno" se
+          leerían pegados como si fueran la misma frase. */}
+      <span style={{ ...S.tenue, flex:'1 1 100%', marginTop:2, whiteSpace:'pre-line' as const }}>
         {d.detalle}
         {d.faltante && <span style={{ color:'#64748b' }}> · {d.faltante}</span>}
         {pie}
@@ -262,7 +265,9 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
       ? inasistenciasInjustificadas(novedades, empleadoId, filas.map(f => f.fecha))
       : 0
     return evaluar(r.puntaje * 10, r.dimensiones, PESOS, [
-      m.estado === 'medible' ? faltaPorRondas(m.cumplidos, m.validos) : null,
+      m.estado === 'medible'
+        ? faltaPorRondas(m.cumplidos, m.validos, resRondas.turnosConIncumplimiento)
+        : null,
       faltaPorInasistencia(inasistencias),
     ])
   }, [r, resRondas, novedades, empleadoId, filas])
