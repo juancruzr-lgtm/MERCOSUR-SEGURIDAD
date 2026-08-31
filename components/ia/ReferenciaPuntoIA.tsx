@@ -143,7 +143,7 @@ export default function ReferenciaPuntoIA({
           <div style={{ width: 160 }}>
             {urls[activa.id]
               ? <img
-                  src={urls[activa.id]} alt=""
+                  src={urls[activa.id]} alt="" loading="lazy" decoding="async"
                   style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 6, cursor: 'zoom-in', display: 'block' }}
                   onClick={() => setAmpliada(urls[activa.id])}
                 />
@@ -235,7 +235,7 @@ export default function ReferenciaPuntoIA({
                 <div key={h.id} style={{ width: 96, opacity: 0.6 }}>
                   {urls[h.id]
                     ? <img
-                        src={urls[h.id]} alt=""
+                        src={urls[h.id]} alt="" loading="lazy" decoding="async"
                         style={{ width: '100%', height: 72, objectFit: 'cover', borderRadius: 4, cursor: 'zoom-in', display: 'block' }}
                         onClick={() => setAmpliada(urls[h.id])}
                       />

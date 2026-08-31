@@ -255,7 +255,7 @@ function ImagenesConfiguracion({
           }}>
             {urls[img.id]
               ? <img
-                  src={urls[img.id]} alt=""
+                  src={urls[img.id]} alt="" loading="lazy" decoding="async"
                   style={{ width: '100%', height: 96, objectFit: 'cover', cursor: 'zoom-in', display: 'block' }}
                   onClick={() => setAmpliada(urls[img.id])}
                 />
