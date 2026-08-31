@@ -3932,7 +3932,10 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
    */
   const avisoRelevo = useMemo(() => {
     if (!turnoEditando || !formEdicion.hora_fin) return null
-    if (formEdicion.hora_fin === (turnoEditando.hora_fin ?? '').slice(0, 5)) return null
+    // Los dos lados se recortan a HH:MM: la base guarda "19:00:00" y el input
+    // type="time" devuelve "19:00". Sin normalizar, abrir el modal sin tocar
+    // nada ya parecería un cambio y el aviso saldría siempre.
+    if (formEdicion.hora_fin.slice(0, 5) === (turnoEditando.hora_fin ?? '').slice(0, 5)) return null
 
     const impacto = evaluarCambioDeFin(
       turnoEditando as any,
