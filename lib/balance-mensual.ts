@@ -35,6 +35,7 @@
 import type { ClaveDimension, Dimension, ResumenPuntualidad } from '@/lib/cumplimiento'
 import { ETIQUETA_DIMENSION } from '@/lib/cumplimiento'
 import type { ResultadoDesempeno } from '@/lib/desempeno'
+import { severidadDe } from '@/lib/entrenador-operativo'
 import type { ResumenEvidencia, ResumenRondas } from '@/lib/cumplimiento-fuentes'
 
 export type GrupoBalance = 'servicio' | 'app' | 'medicion'
@@ -58,6 +59,51 @@ export interface BloqueBalance {
   hechos: string[]
   /** UNA acción concreta. Sólo cuando hay algo que mejorar. */
   recomendacion?: string
+  /**
+   * Cuántas incidencias sobre cuántos requerimientos. Sirve para decidir si el
+   * hecho amerita que el Entrenador hable, con el MISMO umbral que ya usa el
+   * Entrenador: una tardanza en veintiséis jornadas se cuenta en el balance
+   * —está, es cierta— pero no dispara un mensaje.
+   */
+  incidencias?: number
+  requeridos?: number
+}
+
+/**
+ * ¿Este bloque amerita que el Entrenador hable?
+ *
+ * Delega en `severidadDe`, que es donde ya vive el criterio: una incidencia
+ * suelta es `aislada` y las aisladas no se notifican. Sin esto, cualquier
+ * tardanza única convertiría a casi todos en candidatos y la clasificación
+ * dejaría de servir para decidir a quién hablarle.
+ */
+export function bloqueAmerita(b: BloqueBalance): boolean {
+  if (b.estado !== 'mejorar') return false
+  if (b.incidencias == null || b.requeridos == null) return true
+  return severidadDe(b.incidencias, b.requeridos) !== 'aislada'
+}
+
+/**
+ * Por qué el sistema querría hablarle a alguien. NO es una nota ni una escala:
+ * son categorías excluyentes que dicen dónde está el problema, si lo hay.
+ */
+export type TipoDevolucion =
+  /** Nada accionable. El balance existe, pero no hay qué corregir. */
+  | 'sin_intervencion'
+  /** Prestó el servicio; lo que falló fue dejarlo registrado. */
+  | 'uso_app'
+  /** Lo que falló es lo que el cliente recibe. */
+  | 'prestacion_servicio'
+  | 'app_y_servicio'
+  /** Se midió tan poco que el balance diría más de lo que sabe. */
+  | 'muestra_insuficiente'
+
+export const ETIQUETA_TIPO_DEVOLUCION: Record<TipoDevolucion, string> = {
+  sin_intervencion: 'Sin intervención',
+  uso_app: 'Uso de la App',
+  prestacion_servicio: 'Prestación del Servicio',
+  app_y_servicio: 'App + Servicio',
+  muestra_insuficiente: 'Muestra insuficiente',
 }
 
 export interface BalanceMensual {
@@ -72,9 +118,27 @@ export interface BalanceMensual {
    * balance armado sobre tres jornadas se lea como el balance del mes.
    */
   notaDeCobertura: string | null
-  /** ¿Hay algo real que contar? */
-  corresponde: boolean
-  motivoSiNoCorresponde: string | null
+  /**
+   * ¿Hay un balance que se pueda mostrar? Existe para todo el que tenga
+   * muestra suficiente, ande bien o mal.
+   */
+  disponible: boolean
+  motivoSiNoDisponible: string | null
+  tipoDevolucion: TipoDevolucion
+  /**
+   * ¿Corresponde que el Entrenador le hable?
+   *
+   * Es una pregunta DISTINTA de si hay balance. Alguien que cumplió todo tiene
+   * balance disponible y no necesita ningún mensaje: mandarle una notificación
+   * mensual para decirle que está todo bien es la forma más rápida de que la
+   * próxima, la que sí importa, no se lea.
+   *
+   * El reconocimiento es otra cosa y todavía no existe. No se inventa una
+   * recomendación para justificar un envío.
+   */
+  candidatoEntrenador: boolean
+  /** Qué dimensiones lo hacen candidato. `null` si no lo es. */
+  motivoEntrenador: string | null
 }
 
 /** A qué grupo pertenece cada dimensión del modelo. */
@@ -158,6 +222,7 @@ function bloqueAsistencia(e: EntradaBalance): BloqueBalance | null {
   return {
     clave: 'asistencia', etiqueta: 'Asistencia', grupo: 'servicio', estado: 'mejorar',
     hechos: [`Se registraron ${ausencias} ${plural(ausencias, 'ausencia', 'ausencias')} sobre ${jornadas(evaluadas)}.`],
+    incidencias: ausencias, requeridos: evaluadas,
     recomendacion: 'Si no vas a poder cubrir un turno, avisá con la mayor anticipación '
       + 'posible para que se pueda reasignar a tiempo.',
   }
@@ -246,6 +311,7 @@ function bloqueRondas(e: EntradaBalance): BloqueBalance | null {
 
   return {
     clave: 'rondas', etiqueta: 'Rondas', grupo: 'servicio', estado: 'mejorar', hechos,
+    incidencias: atribuibles - cumplidas, requeridos: atribuibles,
     recomendacion: 'Cuando el puesto tenga rondas asignadas, iniciá el recorrido desde la '
       + 'aplicación y registrá todos los puntos indicados antes de que termine cada intervalo.',
   }
@@ -265,10 +331,19 @@ function bloquePuntualidad(e: EntradaBalance): BloqueBalance | null {
   }
   if (est === 'no_aplica') return null
 
+  // Por qué Puntualidad mide sobre menos jornadas que las trabajadas. Sin esta
+  // línea, alguien con 10 turnos lee "8 jornadas evaluadas" acá y "10 jornadas"
+  // en el registro, y las dos cifras correctas parecen contradecirse.
+  // Se dice UNA vez y sólo cuando los números difieren.
+  const denominador = p.evaluadas < e.base.observacionesValidas
+    ? 'Puntualidad se mide en las jornadas donde hubo un ingreso propio registrado.'
+    : null
+
   if (p.impuntuales === 0) {
+    const hechos = [`Llegaste dentro del horario en ${plural(p.evaluadas, 'la', 'las')} ${jornadas(p.evaluadas)} ${plural(p.evaluadas, 'evaluada', 'evaluadas')}.`]
+    if (denominador) hechos.push(denominador)
     return {
-      clave: 'puntualidad', etiqueta: 'Puntualidad', grupo: 'servicio', estado: 'bien',
-      hechos: [`Llegaste dentro del horario en ${plural(p.evaluadas, 'la', 'las')} ${jornadas(p.evaluadas)} ${plural(p.evaluadas, 'evaluada', 'evaluadas')}.`],
+      clave: 'puntualidad', etiqueta: 'Puntualidad', grupo: 'servicio', estado: 'bien', hechos,
     }
   }
 
@@ -279,9 +354,11 @@ function bloquePuntualidad(e: EntradaBalance): BloqueBalance | null {
   if (p.porBanda.grave > 0) {
     hechos.push(`${p.porBanda.grave} de ${plural(p.porBanda.grave, 'ellas superó', 'ellas superaron')} los 30 minutos.`)
   }
+  if (denominador) hechos.push(denominador)
 
   return {
     clave: 'puntualidad', etiqueta: 'Puntualidad', grupo: 'servicio', estado: 'mejorar', hechos,
+    incidencias: p.impuntuales, requeridos: p.evaluadas,
     recomendacion: 'Registrá el ingreso al llegar, dentro del horario programado. '
       + 'Podés fichar desde 15 minutos antes del inicio del turno.',
   }
@@ -315,6 +392,7 @@ function bloqueRegistro(e: EntradaBalance): BloqueBalance | null {
 
   return {
     clave: 'procedimiento', etiqueta: 'Registro en la app', grupo: 'app', estado: 'mejorar', hechos,
+    incidencias: total, requeridos: evaluadas,
     // Se dice explícitamente que esto es la app y no el servicio: alguien puede
     // haber trabajado las doce horas completas y tener esta observación.
     recomendacion: 'Marcá el ingreso al comenzar el turno y la salida al terminarlo. '
@@ -356,6 +434,7 @@ function bloqueEvidencia(
 
   return {
     clave, etiqueta, grupo: 'servicio', estado: 'mejorar',
+    incidencias: resumen.confirmadas, requeridos: revisadas,
     hechos: [`De ${revisadas} ${plural(revisadas, 'control revisado', 'controles revisados')}, `
       + `${resumen.confirmadas} ${plural(resumen.confirmadas, 'quedó confirmado', 'quedaron confirmados')} `
       + 'por una persona del área.'],
@@ -372,6 +451,7 @@ function bloqueCalidad(e: EntradaBalance): BloqueBalance | null {
 
   return {
     clave: 'evidencias', etiqueta: 'Calidad de las fotos', grupo: 'medicion', estado: 'mejorar',
+    incidencias: c.noEvaluables, requeridos: c.total,
     hechos: [`${c.noEvaluables} de ${c.total} ${plural(c.total, 'foto no pudo', 'fotos no pudieron')} `
       + 'usarse para el control porque no se veía con claridad.'],
     recomendacion: 'Sacá la foto con buena luz, de frente y sin movimiento, para que se pueda '
@@ -404,24 +484,61 @@ export function generarBalance(e: EntradaBalance): BalanceMensual {
     ? `Durante ${mes} trabajaste ${turnos(e.turnosTrabajados)}.`
     : `Balance de ${mes}.`
 
-  // Con muy pocas jornadas no se manda: el balance diría más de lo que sabe.
+  const comun = {
+    empleadoId: e.empleadoId, periodo: e.periodo, turnosTrabajados: e.turnosTrabajados,
+    encabezado, bloques,
+  }
+
+  // Con muy pocas jornadas no hay balance: diría más de lo que sabe.
   if (evaluadas < MINIMO_JORNADAS_BALANCE) {
     return {
-      empleadoId: e.empleadoId, periodo: e.periodo, turnosTrabajados: e.turnosTrabajados,
-      encabezado, bloques, notaDeCobertura: null, corresponde: false,
-      motivoSiNoCorresponde: `Sólo ${jornadas(evaluadas)} ${plural(evaluadas, 'evaluada', 'evaluadas')} `
+      ...comun, notaDeCobertura: null, disponible: false,
+      motivoSiNoDisponible: `Sólo ${jornadas(evaluadas)} ${plural(evaluadas, 'evaluada', 'evaluadas')} `
         + `en el período: por debajo del mínimo de ${MINIMO_JORNADAS_BALANCE}.`,
+      tipoDevolucion: 'muestra_insuficiente',
+      candidatoEntrenador: false, motivoEntrenador: null,
     }
   }
 
   const medibles = bloques.filter(b => b.estado === 'bien' || b.estado === 'mejorar')
   if (medibles.length === 0) {
     return {
-      empleadoId: e.empleadoId, periodo: e.periodo, turnosTrabajados: e.turnosTrabajados,
-      encabezado, bloques, notaDeCobertura: null, corresponde: false,
-      motivoSiNoCorresponde: 'Ninguna dimensión quedó en condiciones de evaluarse en el período.',
+      ...comun, notaDeCobertura: null, disponible: false,
+      motivoSiNoDisponible: 'Ninguna dimensión quedó en condiciones de evaluarse en el período.',
+      tipoDevolucion: 'muestra_insuficiente',
+      candidatoEntrenador: false, motivoEntrenador: null,
     }
   }
+
+  // ── Dónde está el problema, si lo hay ─────────────────────────────────────
+  //
+  // Un vigilador que asistió, llegó a horario y completó las rondas pero fichó
+  // mal NO tiene un problema de desempeño del servicio: tiene un problema de
+  // registro. Clasificarlo junto al que no hizo las rondas borra la única
+  // distinción que hace accionable el mensaje.
+  //
+  // La calidad de la foto cuenta como uso de la app: sacar la evidencia es
+  // parte de usar la herramienta, no de prestar el servicio. Y lo que no se
+  // pudo medir —uniforme sin controles, rondas que no aplican— NO es un
+  // problema de nadie y no entra en esta cuenta.
+  // Sólo lo que AMERITA hablar. Un hecho aislado —una tardanza en veintiséis
+  // jornadas— se cuenta en el balance porque es cierto, pero no convierte a
+  // nadie en candidato: si todos lo son, la clasificación no sirve para decidir
+  // a quién hablarle, y el mensaje que sí importa se pierde entre los demás.
+  const aMejorar = bloques.filter(bloqueAmerita)
+  const servicio = aMejorar.filter(b => b.grupo === 'servicio')
+  const app = aMejorar.filter(b => b.grupo === 'app' || b.grupo === 'medicion')
+
+  const tipoDevolucion: TipoDevolucion =
+    servicio.length > 0 && app.length > 0 ? 'app_y_servicio'
+      : servicio.length > 0 ? 'prestacion_servicio'
+        : app.length > 0 ? 'uso_app'
+          : 'sin_intervencion'
+
+  const candidatoEntrenador = aMejorar.length > 0
+  const motivoEntrenador = candidatoEntrenador
+    ? aMejorar.map(b => b.etiqueta).join(', ')
+    : null
 
   // Se dice cuánto del cuadro quedó sin medir. No es una advertencia legal: es
   // para que nadie lea "todo bien" cuando en realidad se miró la mitad.
@@ -432,8 +549,8 @@ export function generarBalance(e: EntradaBalance): BalanceMensual {
     : null
 
   return {
-    empleadoId: e.empleadoId, periodo: e.periodo, turnosTrabajados: e.turnosTrabajados,
-    encabezado, bloques, notaDeCobertura, corresponde: true, motivoSiNoCorresponde: null,
+    ...comun, notaDeCobertura, disponible: true, motivoSiNoDisponible: null,
+    tipoDevolucion, candidatoEntrenador, motivoEntrenador,
   }
 }
 
