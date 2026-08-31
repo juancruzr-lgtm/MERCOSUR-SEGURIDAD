@@ -19,6 +19,7 @@ import {
   patronesDeHorarioSospechoso,
 } from '@/lib/cumplimiento'
 import { INASISTENCIA_ACTIVA, evaluar, faltaPorInasistencia, faltaPorRondas } from '@/lib/evaluacion-final'
+import { balanceATexto, generarBalance, resumenBalance } from '@/lib/balance-mensual'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
 import { jornadaCumplimientoDesdeFila, etiquetaMes, mesPorDefecto, mesesDisponibles } from '@/lib/desempeno-datos'
@@ -249,6 +250,30 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   // después se recorta a los puestos donde ESTA persona llegó tarde: el resto
   // no explica nada de su número.
   const dimensiones = r.dimensiones
+
+  /**
+   * El balance del mes tal como lo recibiría esta persona.
+   *
+   * Se arma con lo MISMO que ya calculó la ficha —dimensiones, base,
+   * puntualidad, resúmenes de rondas y evidencias— así que no puede decir algo
+   * distinto de lo que muestra la pantalla. No recibe la `Evaluacion`: la nota
+   * no llega hasta el generador (ver lib/balance-mensual.ts).
+   *
+   * Es SÓLO vista previa administrativa: no se envía nada, y el bloque se
+   * renderiza únicamente con `esAdmin`.
+   */
+  const balance = useMemo(() => generarBalance({
+    empleadoId,
+    periodo: mes,
+    turnosTrabajados: filas.length,
+    dimensiones: r.dimensiones,
+    base: r.base,
+    puntualidad: r.puntualidad,
+    rondas: resRondas,
+    uniforme: medido.uniforme,
+    libro: medido.libro,
+    calidad: medido.calidad,
+  }), [empleadoId, mes, filas.length, r, resRondas, medido])
 
   // CAPA 2. Sin puntaje no hay nada que topear: la muestra no alcanzó y eso ya
   // se dice aparte.
@@ -501,6 +526,45 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         resultado={r}
         fuentes={{ rondas: medido.rondas, uniforme: medido.uniforme, libro: medido.libro, calidad: medido.calidad }}
       />
+
+      {/* Vista previa del balance mensual. SÓLO admin: el vigilador no lo ve
+          en ningún caso y no se envía nada. Está acá y no en una pantalla
+          aparte para que sea imposible que diga algo distinto del cuadro de
+          arriba: se arma con el mismo cálculo que ya está en pantalla. */}
+      {esAdmin && (
+        <div style={{ ...S.caja, marginTop:14 }}>
+          <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:6 }}>
+            BALANCE DEL MES · VISTA PREVIA · NO SE ENVÍA
+          </div>
+          <div style={{ ...S.tenue, lineHeight:1.6, marginBottom:10 }}>
+            Es el texto que recibiría esta persona como devolución operativa. No lleva
+            nota, concepto ni comparación con nadie: sólo los hechos que se midieron y
+            qué conviene hacer distinto.
+          </div>
+
+          {balance.corresponde ? (
+            <pre style={{
+              whiteSpace:'pre-wrap', fontFamily:'inherit', fontSize:13, lineHeight:1.65,
+              color:'#cbd5e1', background:'#0b1220', border:'1px solid #1e2d4266',
+              borderRadius:8, padding:'12px 14px', margin:0,
+            }}>{balanceATexto(balance)}</pre>
+          ) : (
+            <div style={{ fontSize:13, color:'#94a3b8' }}>
+              <b>No recibiría balance este mes.</b> {balance.motivoSiNoCorresponde}
+            </div>
+          )}
+
+          {(() => {
+            const res = resumenBalance(balance)
+            return (
+              <div style={{ ...S.tenue, marginTop:10, fontSize:11.5 }}>
+                {res.bien} en orden · {res.mejorar} a mejorar · {res.sinDatos} sin datos
+                suficientes · {res.noAplica} no aplican
+              </div>
+            )
+          })()}
+        </div>
+      )}
 
       <div style={{ ...S.caja, marginTop:14 }}>
         <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:6 }}>TODAVÍA NO IMPLEMENTADO</div>

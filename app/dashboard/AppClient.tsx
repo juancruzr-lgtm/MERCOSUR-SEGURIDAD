@@ -13,6 +13,7 @@ import type { EstadoRevision, EstadoRevisionClave } from '@/lib/bandeja-planilla
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
 import { evaluarCambioDeFin, mensajeImpacto } from '@/lib/relevo'
 import { repartirHorasDelDia } from '@/lib/horas-del-dia'
+import { generarBalance, resumenBalance } from '@/lib/balance-mensual'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
@@ -1385,6 +1386,96 @@ function CeldaCumplimiento({ dato, cargando, onAbrir }: {
   )
 }
 
+/**
+ * Vista previa de los balances mensuales. SÓLO Administración, y no envía nada.
+ *
+ * Es la tabla que hace falta para decidir si el texto está listo antes de que
+ * lo lea nadie: quién recibiría balance, sobre cuánta muestra, qué se le diría
+ * bien y qué a mejorar. El texto completo de cada uno está en su legajo.
+ */
+function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
+  const [abierto, setAbierto] = useState(false)
+
+  const filas = useMemo(() => {
+    const out: any[] = []
+    cumplimiento.forEach((d: any) => {
+      if (!d?.balance) return
+      const g = (guardias as Usuario[]).find(u => u.id === d.empleadoId)
+      const res = resumenBalance(d.balance)
+      out.push({
+        id: d.empleadoId,
+        nombre: g ? `${g.apellido}, ${g.nombre}` : d.empleado,
+        turnos: d.balance.turnosTrabajados,
+        alcance: d.evaluacion?.alcance ?? 'sin evaluación',
+        ...res,
+        recibe: d.balance.corresponde,
+        motivo: d.balance.motivoSiNoCorresponde,
+        bloques: d.balance.bloques,
+      })
+    })
+    return out.sort((a, b) => (Number(b.mejorar) - Number(a.mejorar)) || a.nombre.localeCompare(b.nombre))
+  }, [cumplimiento, guardias])
+
+  const reciben = filas.filter(f => f.recibe).length
+
+  return (
+    <div style={{ marginTop:24, background:'#0f172a', border:'1px solid #1e2d42', borderRadius:10, padding:16 }}>
+      <div style={{ display:'flex', gap:10, alignItems:'baseline', flexWrap:'wrap' }}>
+        <span style={{ fontFamily:'Syne,sans-serif', fontSize:12, fontWeight:800, letterSpacing:1.4, textTransform:'uppercase', color:'#64748b' }}>
+          Balance del mes · vista previa · no se envía
+        </span>
+        <span style={{ fontSize:11.5, color:'#475569' }}>
+          {cargando ? 'calculando…' : `${reciben} de ${filas.length} recibirían balance de ${mes}`}
+        </span>
+        <button
+          onClick={() => setAbierto(v => !v)}
+          style={{ marginLeft:'auto', background:'none', border:'none', cursor:'pointer', color:'#f59e0b', fontSize:11, fontWeight:700, fontFamily:'inherit' }}
+        >{abierto ? 'Ocultar' : 'Ver detalle'}</button>
+      </div>
+
+      <div style={{ fontSize:11.5, color:'#94a3b8', marginTop:6, lineHeight:1.6 }}>
+        Devolución operativa: hechos medidos y qué conviene hacer distinto. Sin nota, sin
+        concepto y sin comparación con nadie. El texto completo de cada persona está en su legajo.
+      </div>
+
+      {abierto && !cargando && (
+        <div style={{ marginTop:12, overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+            <thead>
+              <tr style={{ color:'#64748b', textAlign:'left' }}>
+                <th style={{ padding:'6px 8px' }}>Vigilador</th>
+                <th style={{ padding:'6px 8px' }}>Turnos</th>
+                <th style={{ padding:'6px 8px' }}>Cobertura</th>
+                <th style={{ padding:'6px 8px' }}>En orden</th>
+                <th style={{ padding:'6px 8px' }}>A mejorar</th>
+                <th style={{ padding:'6px 8px' }}>Sin datos</th>
+                <th style={{ padding:'6px 8px' }}>No aplica</th>
+                <th style={{ padding:'6px 8px' }}>¿Recibe?</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f: any) => (
+                <tr key={f.id} style={{ borderTop:'1px solid #1e2d4266', color:'#cbd5e1' }}>
+                  <td style={{ padding:'6px 8px' }}>{f.nombre}</td>
+                  <td style={{ padding:'6px 8px' }}>{f.turnos}</td>
+                  <td style={{ padding:'6px 8px', color: f.alcance === 'integral' ? '#10b981' : '#f59e0b' }}>{f.alcance}</td>
+                  <td style={{ padding:'6px 8px', color:'#10b981' }}>{f.bien}</td>
+                  <td style={{ padding:'6px 8px', color: f.mejorar > 0 ? '#f59e0b' : '#475569' }}>{f.mejorar}</td>
+                  <td style={{ padding:'6px 8px', color:'#94a3b8' }}>{f.sinDatos}</td>
+                  <td style={{ padding:'6px 8px', color:'#475569' }}>{f.noAplica}</td>
+                  <td style={{ padding:'6px 8px', color: f.recibe ? '#10b981' : '#94a3b8' }}>
+                    {f.recibe ? 'Sí' : `No — ${f.motivo}`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
@@ -1461,8 +1552,32 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
             ),
           }] as const
         }))
+        // Turnos del mes por persona, para el encabezado del balance.
+        const turnosPorEmpleado = new Map<string, number>()
+        for (const f of bandeja.filas) {
+          turnosPorEmpleado.set(f.empleadoId, (turnosPorEmpleado.get(f.empleadoId) ?? 0) + 1)
+        }
+
         const mapa = new Map<string, any>()
-        for (const d of desempenoPorEmpleado(bandeja.filas, fuentes, medidas)) mapa.set(d.empleadoId, d)
+        for (const d of desempenoPorEmpleado(bandeja.filas, fuentes, medidas)) {
+          const m = medido.get(d.empleadoId)
+          // El balance sale del MISMO cálculo que la fila: no se recalcula
+          // nada. Y no recibe `d.evaluacion`, así que la nota no puede
+          // filtrarse al texto. Ver lib/balance-mensual.ts.
+          const balance = m ? generarBalance({
+            empleadoId: d.empleadoId,
+            periodo: mesCumplimiento,
+            turnosTrabajados: turnosPorEmpleado.get(d.empleadoId) ?? 0,
+            dimensiones: d.cumplimiento.dimensiones,
+            base: d.cumplimiento.base,
+            puntualidad: d.cumplimiento.puntualidad,
+            rondas: m.rondas,
+            uniforme: m.uniforme,
+            libro: m.libro,
+            calidad: m.calidad,
+          }) : null
+          mapa.set(d.empleadoId, { ...d, balance })
+        }
         setCumplimiento(mapa)
       })
       .finally(() => { if (vigente) setCargandoCumplimiento(false) })
@@ -1821,6 +1936,14 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         </div>
         {conmutadorVista}
         <DesempenoPanel esAdmin={Boolean(esAdmin)} usuarioId={usuarioId ?? null} rol={rol ?? null} />
+        {esAdmin && (
+          <TablaBalancesPreview
+            cumplimiento={cumplimiento}
+            guardias={guardias}
+            cargando={cargandoCumplimiento}
+            mes={mesCumplimiento}
+          />
+        )}
       </div>
     )
   }
