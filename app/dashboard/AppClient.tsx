@@ -11,6 +11,7 @@ import {
 } from '@/lib/bandeja-planillas'
 import type { EstadoRevision, EstadoRevisionClave } from '@/lib/bandeja-planillas'
 import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/lib/supabase'
+import { evaluarCambioDeFin, mensajeImpacto } from '@/lib/relevo'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
@@ -3920,6 +3921,39 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     setEstadoOperativoEdicion(null)
   }
 
+  /**
+   * El impacto del nuevo horario sobre el relevo del MISMO puesto.
+   *
+   * Se calcula con los turnos que ya están en memoria: el relevo del día está
+   * en la misma lista que se está mirando, así que no hace falta ir a buscarlo.
+   * Es sólo un aviso — extender un turno solapado puede ser exactamente lo que
+   * se quiere cuando hay traspaso presencial— pero tiene que ser una decisión
+   * tomada y no un efecto que aparece a fin de mes.
+   */
+  const avisoRelevo = useMemo(() => {
+    if (!turnoEditando || !formEdicion.hora_fin) return null
+    // Los dos lados se recortan a HH:MM: la base guarda "19:00:00" y el input
+    // type="time" devuelve "19:00". Sin normalizar, abrir el modal sin tocar
+    // nada ya parecería un cambio y el aviso saldría siempre.
+    if (formEdicion.hora_fin.slice(0, 5) === (turnoEditando.hora_fin ?? '').slice(0, 5)) return null
+
+    const impacto = evaluarCambioDeFin(
+      turnoEditando as any,
+      formEdicion.hora_fin,
+      // Sólo hace falta mirar la fecha del turno y la siguiente: un relevo
+      // nunca empieza más de un día después del inicio.
+      (turnos as Turno[]).filter(t => fechasVecinasTurno(turnoEditando.fecha).includes(t.fecha)) as any,
+    )
+    if (!impacto) return null
+
+    const texto = mensajeImpacto(impacto, (id) => {
+      const g = (guardias as Usuario[]).find(u => u.id === id)
+      return g ? `${g.apellido}, ${g.nombre}` : 'otro vigilador'
+    })
+    if (!texto) return null
+    return { clase: impacto.clase, empeora: impacto.empeora, texto }
+  }, [turnoEditando, formEdicion.hora_fin, turnos, guardias])
+
   const guardarEdicion = async () => {
     if (!turnoEditando) return
     if (!user?.id) {
@@ -4589,6 +4623,26 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
               />
             </div>
           </div>
+
+          {/* Qué le pasa a la cobertura del puesto. Correr el fin de un turno
+              puede pisar al relevo o dejar un hueco, y hasta acá las dos cosas
+              pasaban en silencio: los dos turnos quedaban válidos y el
+              solapamiento recién se veía en la liquidación. */}
+          {avisoRelevo && (
+            <div style={{
+              marginBottom:16, padding:12, borderRadius:8, fontSize:13, lineHeight:1.5,
+              background: avisoRelevo.empeora ? 'rgba(239,68,68,.08)' : 'rgba(100,116,139,.08)',
+              border: `1px solid ${avisoRelevo.empeora ? 'rgba(239,68,68,.3)' : 'rgba(100,116,139,.25)'}`,
+              color: avisoRelevo.empeora ? '#fca5a5' : '#94a3b8',
+            }}>
+              <strong>{avisoRelevo.clase === 'solapamiento' ? 'Doble cobertura' : 'Hueco de cobertura'}</strong>
+              {' — '}{avisoRelevo.texto}
+              {!avisoRelevo.empeora && ' Ya era así antes de este cambio.'}
+              <div style={{ marginTop:6, fontSize:11.5, opacity:.85 }}>
+                Esto cambia la programación del puesto, no las horas trabajadas.
+              </div>
+            </div>
+          )}
 
           <div style={{ marginBottom:16 }}>
             <label style={S.label}>Estado</label>
@@ -10320,6 +10374,9 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const [error, setError] = useState('')
   const [mensaje, setMensaje] = useState('')
   const [turnoParaCerrar, setTurnoParaCerrar] = useState<Turno | null>(null)
+  const [turnoParaAnular, setTurnoParaAnular] = useState<Turno | null>(null)
+  const [motivoAnulacionTurnoRO, setMotivoAnulacionTurnoRO] = useState('')
+  const [anulandoTurnoRO, setAnulandoTurnoRO] = useState(false)
   const operacionesEnCurso = useRef<Set<string>>(new Set())
   const operacionesIds = useRef<Map<string, string>>(new Map())
   const [confirmacionManualAceptada, setConfirmacionManualAceptada] = useState(false)
@@ -10359,6 +10416,46 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   }
 
   const hora = (value?: string | null) => value ? value.slice(0, 5) : '--:--'
+
+  /**
+   * Anula el turno por la MISMA vía que Reportes: /api/turnos/editar con
+   * estado 'anulado'. No hay lógica de anulación nueva ni una segunda RPC —
+   * dos caminos que anulan distinto terminan divergiendo.
+   */
+  const anularTurnoDescubierto = async () => {
+    if (!turnoParaAnular || !motivoAnulacionTurnoRO.trim()) return
+    setAnulandoTurnoRO(true)
+    setError('')
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData?.session?.access_token
+      if (!token) throw new Error('Sesión expirada. Volvé a iniciar sesión.')
+
+      const res = await fetch('/api/turnos/editar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          turno_id: turnoParaAnular.id,
+          cambios: { estado: 'anulado' },
+          comentario: `Anulación: ${motivoAnulacionTurnoRO.trim()}`,
+          snapshot: { estado: turnoParaAnular.estado },
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error || 'No se pudo anular el turno.')
+
+      setTurnos((prev: Turno[]) => prev.map((t: Turno) =>
+        t.id === turnoParaAnular.id ? { ...t, estado: 'anulado' as const } : t
+      ))
+      setTurnoParaAnular(null)
+      setMotivoAnulacionTurnoRO('')
+      setMensaje('Turno anulado. Sale de las alertas de puesto descubierto.')
+    } catch (e: any) {
+      setError(e?.message || 'No se pudo anular el turno.')
+    } finally {
+      setAnulandoTurnoRO(false)
+    }
+  }
 
   const duracionProgramada = (turno: Turno) => {
     const inicio = fechaHoraTurnoLocal(turno.fecha, turno.hora_inicio)
@@ -11069,6 +11166,17 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
             disabled={Boolean(loadingAccion)}
             onClick={() => abrirAccion(alerta, 'marcado_descubierto')}
           >Mantener descubierto</button>}
+          {/* Un turno que nunca debió existir —el supervisor lo creó y no llegó
+              a asignarlo— no se resuelve reasignando ni manteniéndolo: se
+              anula. Hasta acá había que saber de memoria que eso estaba en
+              Reportes → planilla por objetivo, y mientras tanto la alerta
+              seguía sonando. Es la misma vía que usa Reportes. */}
+          {esAdmin && alerta.tipo === 'descubierto' && !alerta.turno.guardia_id && <button
+            type="button"
+            style={{ ...S.btn, justifyContent:'center', background:'rgba(148,163,184,.12)', color:'#cbd5e1', border:'1px solid rgba(148,163,184,.35)' }}
+            disabled={Boolean(loadingAccion)}
+            onClick={() => { setTurnoParaAnular(alerta.turno); setMotivoAnulacionTurnoRO('') }}
+          >Anular turno</button>}
           {alerta.tipo === 'sin_fichar' && !coberturaManualVigente && <button
             type="button"
             style={{
@@ -11225,6 +11333,40 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
             setMensaje('Turno cerrado correctamente.')
           }}
         />
+      )}
+
+      {turnoParaAnular && (
+        <Modal
+          title="Anular turno descubierto"
+          onClose={() => setTurnoParaAnular(null)}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setTurnoParaAnular(null)}>Cancelar</button>
+              <button
+                style={{ ...S.btn, background:'#ef4444', color:'#fff', opacity: motivoAnulacionTurnoRO.trim() && !anulandoTurnoRO ? 1 : 0.5 }}
+                disabled={!motivoAnulacionTurnoRO.trim() || anulandoTurnoRO}
+                onClick={anularTurnoDescubierto}
+              >{anulandoTurnoRO ? 'Anulando…' : 'Anular turno'}</button>
+            </>
+          }
+        >
+          <div style={{ fontSize:13, color:'#cbd5e1', marginBottom:12, lineHeight:1.6 }}>
+            <strong>{nombreObjetivo(turnoParaAnular.objetivo_id)}</strong> · {formatFecha(turnoParaAnular.fecha)} · {hora(turnoParaAnular.hora_inicio)} a {hora(turnoParaAnular.hora_fin)}
+          </div>
+          <div style={{ fontSize:12.5, color:'#94a3b8', marginBottom:14, lineHeight:1.6 }}>
+            El turno deja de exigir cobertura y sale de las alertas. No se borra:
+            queda registrado como anulado, con el motivo y quién lo hizo.
+            Usalo cuando el turno <strong>no debía existir</strong> — si el puesto
+            hay que cubrirlo igual, la acción es Reasignar.
+          </div>
+          <label style={S.label}>Motivo (obligatorio)</label>
+          <textarea
+            style={{ ...S.input, minHeight:70, resize:'vertical' }}
+            value={motivoAnulacionTurnoRO}
+            onChange={e => setMotivoAnulacionTurnoRO(e.target.value)}
+            placeholder="Ej: turno creado por error, el objetivo no tiene servicio ese día"
+          />
+        </Modal>
       )}
 
       {/* Turnos listos para cierre */}

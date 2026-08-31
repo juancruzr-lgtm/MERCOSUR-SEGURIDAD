@@ -337,7 +337,7 @@ export default function AnalisisIAPanel({
       <div style={card({ marginBottom: 12, borderColor: esDecisionHumana(a.revision_estado) ? C.green + '44' : C.border })}>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
           {urls[a.id]
-            ? <img src={urls[a.id]} alt="" onClick={() => setAmpliada(urls[a.id])}
+            ? <img src={urls[a.id]} alt="" loading="lazy" decoding="async" onClick={() => setAmpliada(urls[a.id])}
                 style={{ width: 150, height: 150, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', flexShrink: 0 }} />
             : <div style={{ width: 150, height: 150, borderRadius: 8, border: `1px dashed ${C.border}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 11, flexShrink: 0 }}>
