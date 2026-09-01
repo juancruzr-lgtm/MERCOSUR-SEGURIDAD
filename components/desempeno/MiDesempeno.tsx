@@ -30,6 +30,9 @@ import {
   etiquetaDePeriodo, vistaDeEvaluacion,
   type FilaPublicada, type VistaDesempeno,
 } from '@/lib/mi-desempeno'
+import {
+  entrenamientoDeEvaluacion, type EntrenamientoDelMes,
+} from '@/lib/entrenador-desde-snapshot'
 
 const S: Record<string, React.CSSProperties> = {
   caja:    { background:'#0f172a', border:'1px solid #1e293b', borderRadius:12, padding:16 },
@@ -52,11 +55,13 @@ export default function MiDesempeno({
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
   const [vista, setVista] = useState<VistaDesempeno | null>(null)
+  const [entrenamiento, setEntrenamiento] = useState<EntrenamientoDelMes | null>(null)
 
   const cargar = useCallback(async () => {
     setCargando(true)
     setError('')
     setVista(null)
+    setEntrenamiento(null)
 
     let q = supabase
       .from('evaluaciones_mensuales')
@@ -69,7 +74,11 @@ export default function MiDesempeno({
     setCargando(false)
     if (err) { setError(err.message); return }
     if (!data || data.length === 0) { setVista(null); return }
-    setVista(vistaDeEvaluacion(data[0] as FilaPublicada))
+    const publicada = data[0] as FilaPublicada
+    setVista(vistaDeEvaluacion(publicada))
+    // El Entrenador sale de la MISMA fila: no vuelve a consultar ni a calcular,
+    // así que no puede decir algo distinto de lo que muestra la evaluación.
+    setEntrenamiento(entrenamientoDeEvaluacion(publicada))
   }, [empleadoId, periodo])
 
   useEffect(() => { void cargar() }, [cargar])
@@ -94,8 +103,14 @@ export default function MiDesempeno({
         <div>
           <div style={S.titulo}>Tu evaluación · {etiquetaDePeriodo(vista.periodo)}</div>
           <div style={S.tenue}>
-            Mide cómo se cumplió el procedimiento: presencia, horario, rondas y uso de
-            la aplicación. No mide tu trato con el cliente ni modifica tus horas.
+            Mercosur Seguridad evalúa mensualmente el cumplimiento de los procedimientos
+            registrados mediante la aplicación. El uso correcto de la app forma parte de
+            esta evaluación.
+          </div>
+          <div style={{ ...S.tenue, marginTop:6 }}>
+            No es una calificación de todo tu trabajo: mide procedimiento —presencia,
+            horario, rondas y registro—, no tu trato con el cliente ni tu oficio. Tampoco
+            modifica tus horas.
           </div>
         </div>
       )}
@@ -225,6 +240,34 @@ export default function MiDesempeno({
               {b.hechos.map((h, i) => (
                 <div key={i} style={S.tenue}>{h}</div>
               ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Entrenador Operativo ──────────────────────────────────────────────
+          Sale de la misma fila publicada. Enseña: no amenaza, no anuncia
+          medidas y no compara con nadie. */}
+      {entrenamiento && !entrenamiento.sinMuestra && (
+        <div style={{ ...S.caja, borderColor:'#38bdf855' }}>
+          <div style={{ ...S.rotulo, marginBottom:8 }}>Entrenador operativo</div>
+
+          {entrenamiento.felicitacion && (
+            <div style={{ fontSize:13, color:'#4ade80', lineHeight:1.6 }}>
+              {entrenamiento.felicitacion}
+            </div>
+          )}
+
+          {entrenamiento.servicioReconocido && (
+            <div style={{ fontSize:13, color:'#cbd5e1', lineHeight:1.6, marginBottom:10 }}>
+              {entrenamiento.servicioReconocido}
+            </div>
+          )}
+
+          {entrenamiento.recomendaciones.map(r => (
+            <div key={r.clave} style={{ marginBottom:10 }}>
+              <div style={{ fontSize:13, color:'#e2e8f0', fontWeight:700 }}>{r.etiqueta}</div>
+              <div style={{ fontSize:13, color:'#cbd5e1', lineHeight:1.6 }}>{r.texto}</div>
             </div>
           ))}
         </div>

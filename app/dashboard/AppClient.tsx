@@ -74,6 +74,7 @@ import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
+import TableroGerencia from '@/components/gerencia/TableroGerencia'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
@@ -1544,7 +1545,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   const [grupoRol, setGrupoRol] = useState<'vigiladores' | 'supervisores' | 'administracion'>('vigiladores')
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
-  const [vista, setVista] = useState<'empleados' | 'desempeno'>('empleados')
+  const [vista, setVista] = useState<'empleados' | 'desempeno' | 'gerencia'>('empleados')
 
   // Cumplimiento Operativo en la tabla principal: verlo no puede exigir entrar
   // primero a otra pestaña.
@@ -1970,6 +1971,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       {([
         { id:'empleados' as const, texto:'Empleados' },
         { id:'desempeno' as const, texto:'Cumplimiento operativo' },
+        { id:'gerencia' as const, texto:'Tablero de Gerencia' },
       ]).map(op => (
         <button
           key={op.id}
@@ -1987,6 +1989,23 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       ))}
     </div>
   )
+
+  if (vista === 'gerencia') {
+    return (
+      <div>
+        <div style={{ marginBottom:20 }}>
+          <div style={S.title}>Guardias / Empleados</div>
+          <div style={S.sub2}>Tablero de Gerencia · evaluación congelada</div>
+        </div>
+        {conmutadorVista}
+        <TableroGerencia
+          esAdmin={Boolean(esAdmin)}
+          usuarioId={usuarioId ?? null}
+          onAbrirEmpleado={id => { window.location.href = `/guardias/${id}?seccion=desempeno` }}
+        />
+      </div>
+    )
+  }
 
   if (vista === 'desempeno') {
     return (
