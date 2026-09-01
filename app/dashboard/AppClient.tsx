@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
-import { resolverTurnoDeFila } from '@/lib/planilla-acciones'
+import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -6764,6 +6764,17 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const registroPrincipal = (turno: Turno, guardiaId?: string | null) =>
     selectRegistroPrincipal(registrosPorTurno.get(turno.id) || [], guardiaId)
   const estadoPlanilla = (turno: Turno, registro?: RegistroAsistencia) => {
+    // Un turno anulado ya no se describe por su cobertura: está fuera del mes.
+    //
+    // Esta línea iba DESPUÉS de `!turno.guardia_id`, y como los turnos que se
+    // anulan son casi siempre descubiertos, el corte por "Descubierto" ganaba
+    // siempre y 'Anulado' era inalcanzable. Consecuencias, las dos visibles:
+    // la fila seguía diciendo "Descubierto" después de anularla, y como el
+    // botón se muestra con `row.Estado !== 'Anulado'`, seguía ofreciendo
+    // "Anular turno" sobre algo ya anulado. Se podía anular lo mismo una y
+    // otra vez sin que la pantalla acusara recibo —la segunda vez la API
+    // responde `sin_cambios`, así que tampoco había error que lo delatara.
+    if (ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) return ETIQUETA_TURNO_SIN_OBLIGACION[turno.estado as string] ?? 'Anulado'
     if (!turno.guardia_id) return 'Descubierto'
     if (!registro || !registroTieneEntradaConfirmada(registro)) return pasoVentanaFichaje(turno) ? 'Sin fichar' : 'Programado'
     if (registro.tipo_registro === 'carga_manual') return 'Manual'
@@ -7232,6 +7243,21 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   // Cuántas de esas todavía esperan una acción humana (estado de revisión).
   const diferenciasPendientes = diferenciasQueExplican.filter(d => d.pendiente)
 
+  // La tarjeta dice "horas que todavía faltan reconocer". Una diferencia que el
+  // supervisor ya revisó no es eso: es una hora sobre la que alguien YA decidió
+  // —que el turno duró menos, que no se prestó, que se corrigió el horario—. La
+  // tarjeta las seguía sumando igual, así que el mes nunca podía llegar a cero
+  // por más que se revisara todo, y el número dejaba de significar trabajo
+  // abierto.
+  //
+  // El total no se pierde: se muestra debajo, dicho como lo que es.
+  //
+  // Esto NO toca las horas reconocidas ni la liquidación: sólo cambia de qué
+  // universo habla esta tarjeta. `resolverLineaLiquidacion` queda igual.
+  const repartoPendiente = repartirPendiente(diferenciasQueExplican)
+  const hsPendienteSinResolver = repartoPendiente.esperaDecision
+  const hsPendienteYaRevisado = repartoPendiente.yaRevisado
+
   const exportarPlanillaEmpleadoXLSX = async () => {
     if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
 
@@ -7626,10 +7652,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             title="Ver los turnos que explican el pendiente"
           >
             <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' as const, letterSpacing:1, marginBottom:4 }}>Diferencia pendiente {diferenciasPendientes.length > 0 && <span style={{ color:'#f59e0b' }}>({diferenciasPendientes.length} pendiente{diferenciasPendientes.length !== 1 ? 's' : ''})</span>}</div>
-            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color: totalHsPendiente > 0 ? '#ef4444' : '#10b981' }}>
-              {totalHsPendiente.toFixed(2)} hs
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:22, fontWeight:800, color: hsPendienteSinResolver > 0 ? '#ef4444' : '#10b981' }}>
+              {hsPendienteSinResolver.toFixed(2)} hs
             </div>
-            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Horas de turnos terminados que todavía faltan reconocer.</div>
+            <div style={{ fontSize:11, color:'#475569', marginTop:2 }}>Horas de turnos terminados que todavía esperan una decisión.</div>
+            {hsPendienteYaRevisado > 0 && (
+              <div style={{ fontSize:11, color:'#64748b', marginTop:4 }}>
+                <strong style={{ color:'#94a3b8', fontVariantNumeric:'tabular-nums' }}>{hsPendienteYaRevisado.toFixed(2)} hs</strong> más ya fueron revisadas por el supervisor: no cuentan acá.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -7724,7 +7755,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         Cargar manual
                       </button>
                     )}
-                    {row._turno_id && row.Estado !== 'Anulado' && (
+                    {row._turno_id && admiteAccionesDePlanilla(row.Estado) && (
                       <div style={{ display:'flex', gap:4, marginTop: row._registro || row._sinFichar ? 4 : 0 }}>
                         <button
                           style={{ ...S.btn, ...S.btnSecondary, padding:'4px 8px', fontSize:11 }}
@@ -7829,7 +7860,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         Cargar manual
                       </button>
                     )}
-                    {row._turno_id && row.Estado !== 'Anulado' && (
+                    {row._turno_id && admiteAccionesDePlanilla(row.Estado) && (
                       <div style={{ display:'flex', gap:4, marginTop: row._registro || row._sinFichar ? 4 : 0 }}>
                         <button
                           style={{ ...S.btn, ...S.btnSecondary, padding:'4px 8px', fontSize:11 }}
@@ -7930,7 +7961,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
 
       {mostrarDiferencias && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:9999, display:'flex', alignItems:'flex-start', justifyContent:'center', paddingTop:40, overflowY:'auto' }} onClick={() => setMostrarDiferencias(false)}>
-          <div style={{ background:'#0f172a', borderRadius:12, padding:24, width:'100%', maxWidth:960, border:'1px solid #1e2d42', marginBottom:40 }} onClick={e => e.stopPropagation()}>
+          {/* 960 px alcanzaban cuando la tabla tenía menos columnas. Con doce
+              —y una de ellas con tres botones— el ancho sobrante de una pantalla
+              grande se desperdiciaba y las Acciones quedaban del otro lado del
+              scroll horizontal. */}
+          <div style={{ background:'#0f172a', borderRadius:12, padding:24, width:'100%', maxWidth:'min(1400px, 95vw)', border:'1px solid #1e2d42', marginBottom:40 }} onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
               <div>
                 <div style={{ fontSize:20, fontWeight:700, fontFamily:'Syne,sans-serif' }}>Diferencias del mes</div>
@@ -8000,7 +8035,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                       <th style={{ ...S.th, textAlign:'right' as const }}>Pendiente</th>
                       <th style={S.th}>Motivo</th>
                       <th style={S.th}>Estado</th>
-                      <th style={S.th}>Acciones</th>
+                      {/* Anclada a la derecha: si la tabla igual no entra, los
+                          botones tienen que seguir estando donde se los busca y
+                          no del otro lado del scroll. */}
+                      <th style={{ ...S.th, position:'sticky' as const, right:0, background:'#0f172a', zIndex:2 }}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -8044,7 +8082,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                               <span style={{ color:'#64748b', marginLeft:6 }}>· {d.observaciones} obs.</span>
                             )}
                           </td>
-                          <td style={S.td}>
+                          <td style={{ ...S.td, position:'sticky' as const, right:0, background:'#0f172a', zIndex:1 }}>
                             <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
                               <button style={{ ...S.btn, fontSize:11, padding:'3px 8px', background:'#1e293b', color:'#94a3b8', border:'1px solid #334155' }} onClick={() => { abrirEdicionTurno(d.turno.id); setMostrarDiferencias(false) }}>Editar turno</button>
                               {d.registro && (
@@ -8066,14 +8104,16 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                     entonces la suma no tiene por qué dar el total: se avisa. */}
                 {(() => {
                   const sumaPendiente = diferenciasVisibles.reduce((s, d) => s + d.pendienteHs, 0)
-                  const cierra = Math.abs(sumaPendiente - totalHsPendiente) < 0.005
+                  // La tarjeta mide sólo lo que espera decisión; acá se compara
+                  // contra eso, no contra el total de diferencias del mes.
+                  const cierra = Math.abs(sumaPendiente - hsPendienteSinResolver) < 0.005
                   return (
                     <div style={{ marginTop:12, padding:'8px 12px', background:'#1a2235', borderRadius:8, display:'flex', gap:16, fontSize:12, color:'#94a3b8', flexWrap:'wrap', alignItems:'center' }}>
                       <span>Suma de pendientes: <strong style={{ color:'#ef4444', fontVariantNumeric:'tabular-nums' }}>{sumaPendiente.toFixed(2)} hs</strong></span>
                       <span style={{ color: cierra ? '#10b981' : '#f59e0b' }}>
                         {cierra
                           ? '✓ coincide con la tarjeta'
-                          : `la tarjeta suma ${totalHsPendiente.toFixed(2)} hs sobre todos los turnos exigibles`}
+                          : `la tarjeta suma ${hsPendienteSinResolver.toFixed(2)} hs: sólo lo que espera decisión`}
                       </span>
                       <span>{diferenciasVisibles.filter(d => d.pendienteHs > 0).length} con pendiente · {diferenciasVisibles.filter(d => d.diff > 0).length} con extensión de jornada</span>
                     </div>
