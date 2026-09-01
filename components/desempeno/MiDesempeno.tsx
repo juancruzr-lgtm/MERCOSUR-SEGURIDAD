@@ -33,6 +33,9 @@ import {
 import {
   entrenamientoDeEvaluacion, type EntrenamientoDelMes,
 } from '@/lib/entrenador-desde-snapshot'
+import {
+  observarEvaluacion, registrarLectura, type Observacion,
+} from '@/lib/entrega-evaluacion'
 
 const S: Record<string, React.CSSProperties> = {
   caja:    { background:'#0f172a', border:'1px solid #1e293b', borderRadius:12, padding:16 },
@@ -56,6 +59,12 @@ export default function MiDesempeno({
   const [error, setError] = useState('')
   const [vista, setVista] = useState<VistaDesempeno | null>(null)
   const [entrenamiento, setEntrenamiento] = useState<EntrenamientoDelMes | null>(null)
+  const [evaluacionId, setEvaluacionId] = useState<string | null>(null)
+  const [observacion, setObservacion] = useState<Observacion | null>(null)
+  const [escribiendo, setEscribiendo] = useState(false)
+  const [texto, setTexto] = useState('')
+  const [enviando, setEnviando] = useState(false)
+  const [avisoObs, setAvisoObs] = useState('')
 
   const cargar = useCallback(async () => {
     setCargando(true)
@@ -79,6 +88,23 @@ export default function MiDesempeno({
     // El Entrenador sale de la MISMA fila: no vuelve a consultar ni a calcular,
     // así que no puede decir algo distinto de lo que muestra la evaluación.
     setEntrenamiento(entrenamientoDeEvaluacion(publicada))
+    setEvaluacionId(publicada.id ?? null)
+
+    if (publicada.id) {
+      // Visto se registra solo, al abrir. No hay botón de confirmar: pedirle a
+      // alguien que acredite algo que el sistema puede observar agrega un paso
+      // que la mitad no da. Es idempotente, y si falla no se corta la vista:
+      // la persona tiene que poder leer su nota igual.
+      void registrarLectura(publicada.id)
+
+      const { data: obs } = await supabase
+        .from('observaciones_evaluacion')
+        .select('*')
+        .eq('evaluacion_id', publicada.id)
+        .order('creado_at', { ascending: false })
+        .limit(1)
+      setObservacion((obs?.[0] as Observacion) ?? null)
+    }
   }, [empleadoId, periodo])
 
   useEffect(() => { void cargar() }, [cargar])
@@ -289,6 +315,105 @@ export default function MiDesempeno({
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── Observación ───────────────────────────────────────────────────────
+          Separada del visto a propósito. Que hayas abierto tu evaluación no
+          significa que estés de acuerdo con ella; objetarla es un acto
+          distinto, y explícito. */}
+      {evaluacionId && (
+        <div style={S.caja}>
+          {observacion ? (
+            <>
+              <div style={{ ...S.rotulo, marginBottom:6 }}>
+                Tu observación · {observacion.estado === 'abierta'
+                  ? 'esperando respuesta'
+                  : observacion.estado === 'respondida' ? 'respondida' : 'cerrada'}
+              </div>
+              <div style={{ fontSize:13, color:'#cbd5e1', lineHeight:1.6 }}>
+                {observacion.texto}
+              </div>
+              {observacion.respuesta && (
+                <div style={{ marginTop:10, paddingTop:10, borderTop:'1px solid #1e293b' }}>
+                  <div style={{ ...S.rotulo, marginBottom:4 }}>Respuesta de Administración</div>
+                  <div style={{ fontSize:13, color:'#e2e8f0', lineHeight:1.6 }}>
+                    {observacion.respuesta}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : escribiendo ? (
+            <>
+              <div style={{ ...S.rotulo, marginBottom:6 }}>Hacer una observación</div>
+              <div style={{ ...S.tenue, marginBottom:8 }}>
+                Contá qué querés aclarar o revisar. Esto no cambia tu nota por sí solo:
+                lo lee Administración y te responde.
+              </div>
+              <textarea
+                value={texto}
+                onChange={e => setTexto(e.target.value)}
+                rows={4}
+                placeholder="Por ejemplo: el objetivo no tenía rondas configuradas ese mes…"
+                style={{
+                  width:'100%', background:'#1e293b', border:'1px solid #334155',
+                  color:'#e2e8f0', borderRadius:8, padding:10, fontSize:13,
+                  fontFamily:'inherit', resize:'vertical',
+                }}
+              />
+              <div style={{ display:'flex', gap:8, marginTop:8 }}>
+                <button
+                  type="button"
+                  disabled={enviando || texto.trim().length < 5}
+                  onClick={async () => {
+                    setEnviando(true)
+                    const r = await observarEvaluacion(evaluacionId, texto)
+                    setEnviando(false)
+                    if (r.error) { setAvisoObs(r.error); return }
+                    setEscribiendo(false)
+                    setTexto('')
+                    void cargar()
+                  }}
+                  style={{
+                    background:'#38bdf818', border:'1px solid #38bdf8', color:'#38bdf8',
+                    borderRadius:8, padding:'7px 14px', fontSize:12.5, fontWeight:700,
+                    cursor: texto.trim().length < 5 ? 'default' : 'pointer',
+                    opacity: texto.trim().length < 5 ? .5 : 1,
+                  }}
+                >
+                  {enviando ? 'Enviando…' : 'Enviar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setEscribiendo(false); setTexto(''); setAvisoObs('') }}
+                  style={{
+                    background:'#1e293b', border:'1px solid #334155', color:'#e2e8f0',
+                    borderRadius:8, padding:'7px 14px', fontSize:12.5, cursor:'pointer',
+                  }}
+                >
+                  Cancelar
+                </button>
+              </div>
+              {avisoObs && <div style={{ ...S.tenue, color:'#f87171', marginTop:8 }}>{avisoObs}</div>}
+            </>
+          ) : (
+            <>
+              <div style={{ ...S.tenue, marginBottom:8 }}>
+                Si algo de esta evaluación no refleja lo que pasó, podés decirlo.
+              </div>
+              <button
+                type="button"
+                onClick={() => setEscribiendo(true)}
+                style={{
+                  background:'#1e293b', border:'1px solid #334155', color:'#e2e8f0',
+                  borderRadius:8, padding:'8px 14px', fontSize:12.5, fontWeight:700,
+                  cursor:'pointer',
+                }}
+              >
+                Hacer una observación / Solicitar revisión
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
