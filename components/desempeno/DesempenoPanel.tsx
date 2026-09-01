@@ -15,6 +15,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
+import { supabase } from '@/lib/supabase'
+import { INASISTENCIA_ACTIVA } from '@/lib/evaluacion-final'
+import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
+import type { MedidasCriticas } from '@/lib/desempeno-datos'
 import {
   ETIQUETA_ESTADO, MIN_COBERTURA, MIN_OBSERVACIONES, faltanteParaMuestra,
 } from '@/lib/desempeno'
@@ -77,18 +81,38 @@ function Chip({ estado }: { estado: EstadoDesempeno }) {
   )
 }
 
-/** El número nunca va solo: siempre con dimensiones y motivos. */
+/**
+ * La NOTA FINAL. Nunca el cumplimiento ponderado.
+ *
+ * Son dos capas distintas del mismo modelo y confundirlas fue el defecto que
+ * esta pantalla tuvo hasta hoy: mostraba `cumplimiento.puntaje` —la capa 1, el
+ * porcentaje dividido por diez— con el sufijo "/ 10", así que se leía como una
+ * calificación. La nota real sale de `evaluacion.notaFinal`, después de la
+ * escala escolar y de los topes del Modelo C, y es la que muestra la ficha del
+ * legajo.
+ *
+ * OYOLA lo hacía evidente: 6,8 acá, 4,0 en su ficha, el mismo mes.
+ *
+ * El ponderado sigue estando a la vista, pero debajo y dicho como lo que es:
+ * un porcentaje de cumplimiento, no una nota.
+ */
 function Puntaje({ d }: { d: DesempenoEmpleado }) {
-  // `cumplimiento`, no `resultado`: el segundo es sólo el núcleo —Asistencia
-  // y Procedimiento— y no incluye Puntualidad. Usarlo acá hacía que esta
-  // pantalla mostrara un número distinto al de la tabla para la misma persona.
   const r = d.cumplimiento
-  if (r.puntaje === null) return <span style={{ ...S.tenue, fontWeight:600 }}>—</span>
+  if (r.puntaje === null || !d.evaluacion) {
+    return <span style={{ ...S.tenue, fontWeight:600 }}>—</span>
+  }
+  const e = d.evaluacion
+  const topeado = e.faltas.length > 0
   return (
-    <span style={{ fontSize:17, fontWeight:800, color:COLOR_ESTADO[r.estado], fontFamily:'Syne,sans-serif' }}>
-      {coma(r.puntaje)}
-      <span style={{ fontSize:11, fontWeight:600, color:'#64748b' }}> / 10</span>
-    </span>
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:1 }}>
+      <span style={{ fontSize:17, fontWeight:800, color:COLOR_ESTADO[r.estado], fontFamily:'Syne,sans-serif' }}>
+        {coma(e.notaFinal)}
+        <span style={{ fontSize:11, fontWeight:600, color:'#64748b' }}> / 10</span>
+      </span>
+      <span style={{ fontSize:10, color: topeado ? '#f59e0b' : '#64748b', whiteSpace:'nowrap' }}>
+        {Math.round(r.puntaje * 10)} % cumpl.{topeado ? ' · con tope' : ''}
+      </span>
+    </div>
   )
 }
 
@@ -142,10 +166,18 @@ export default function DesempenoPanel({
     // Rondas y evidencias del mes entero: dos consultas para toda la lista, no
     // dos por persona. Si fallan, la lista sale igual —esas cuatro dimensiones
     // pesan 0— y el aviso lo dice en vez de esconderlo.
-    const [rr, ee] = await Promise.all([
+    const [rr, ee, nv] = await Promise.all([
       cargarRondasDelMes(mes),
       cargarEvidenciasDelMes(mes),
+      // Lo mismo que consulta la ficha, pero del mes entero: una sola vez para
+      // toda la lista. Sólo aprobadas — pendiente y rechazada no afirman nada.
+      supabase.from('novedades_laborales')
+        .select('empleado_id, tipo, fecha_desde, fecha_hasta, estado')
+        .eq('estado', 'aprobada')
+        .lte('fecha_desde', `${mes}-31`)
+        .gte('fecha_hasta', `${mes}-01`),
     ])
+    const nov = (nv.data ?? []) as any[]
     const porRondas = new Map(rr.datos.map(d => [d.guardiaId, d]))
     const porEvidencia = evidenciasPorEmpleado(ee.evidencias)
     const fuentes = new Map(
@@ -157,9 +189,45 @@ export default function DesempenoPanel({
 
     setAvisoFuentes([rr.error, ee.error].filter(Boolean).join(' · '))
     setMedido(fuentes)
-    setLista(desempenoPorEmpleado(propias, new Map(
-      Array.from(fuentes.entries()).map(([id, m]) => [id, m.fuentes]),
-    )))
+
+    /**
+     * Las medidas críticas, que son las que habilitan la CAPA 2.
+     *
+     * Sin esto la lista mostraba la capa 1 y la ficha del legajo la capa 4, y
+     * las dos decían "X / 10" sobre la misma persona y el mismo mes. OYOLA
+     * figuraba 6,8 acá y 4,0 allá.
+     *
+     * Se arman con el MISMO criterio que la ficha: el tope de Rondas sólo entra
+     * cuando la medición es `medible`. Cuando no lo es se pasan exigibles en 0,
+     * que es como `faltaPorRondas` expresa "no hay base para topear" — no se
+     * omite el registro, porque omitirlo haría que `faltaPorRondas` asumiera
+     * reincidencia por falta de dato.
+     */
+    const fechasPorEmpleado = new Map<string, string[]>()
+    for (const f of propias) {
+      const arr = fechasPorEmpleado.get(f.empleadoId) ?? []
+      arr.push(f.fecha)
+      fechasPorEmpleado.set(f.empleadoId, arr)
+    }
+    const medidas = new Map<string, MedidasCriticas>()
+    fuentes.forEach((m, id) => {
+      const med = m.rondas.medicion
+      const esMedible = med.estado === 'medible'
+      medidas.set(id, {
+        rondasCumplidas: esMedible ? med.cumplidos : 0,
+        rondasExigibles: esMedible ? med.validos : 0,
+        turnosConIncumplimiento: m.rondas.turnosConIncumplimiento,
+        inasistenciasInjustificadas: INASISTENCIA_ACTIVA
+          ? inasistenciasInjustificadas(nov, id, fechasPorEmpleado.get(id) ?? [])
+          : 0,
+      })
+    })
+
+    setLista(desempenoPorEmpleado(
+      propias,
+      new Map(Array.from(fuentes.entries()).map(([id, m]) => [id, m.fuentes])),
+      medidas,
+    ))
     setError('')
     setCargando(false)
   }, [mes, esAdmin, usuarioId, empleadoId, habilitado])
