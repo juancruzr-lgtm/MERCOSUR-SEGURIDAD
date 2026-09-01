@@ -30,3 +30,26 @@ export function resolverTurnoDeFila<T extends TurnoIdentificable>(
   return delMesVisible.find(t => t.id === turnoId)
     ?? globales.find(t => t.id === turnoId)
 }
+
+/**
+ * Cómo se lee en la planilla un turno que salió del mes.
+ *
+ * Son los tres de `ESTADOS_SIN_OBLIGACION`. Se nombran acá para que la fila
+ * diga cuál de los tres fue: "Anulado" a secas sobre un turno reemplazado
+ * contaría otra historia.
+ */
+export const ETIQUETA_TURNO_SIN_OBLIGACION: Record<string, string> = {
+  anulado: 'Anulado',
+  cancelado: 'Cancelado',
+  reemplazado: 'Reemplazado',
+}
+
+/**
+ * ¿Se puede editar o anular este turno desde la planilla?
+ *
+ * No, si ya está fuera del mes. El guard anterior era `row.Estado !== 'Anulado'`
+ * y nunca se cumplía, porque el estado de la fila jamás decía 'Anulado'.
+ */
+export function admiteAccionesDePlanilla(estadoFila: string): boolean {
+  return !Object.values(ETIQUETA_TURNO_SIN_OBLIGACION).includes(estadoFila)
+}

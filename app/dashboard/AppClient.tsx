@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
-import { resolverTurnoDeFila } from '@/lib/planilla-acciones'
+import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, resolverTurnoDeFila } from '@/lib/planilla-acciones'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -6764,6 +6764,17 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const registroPrincipal = (turno: Turno, guardiaId?: string | null) =>
     selectRegistroPrincipal(registrosPorTurno.get(turno.id) || [], guardiaId)
   const estadoPlanilla = (turno: Turno, registro?: RegistroAsistencia) => {
+    // Un turno anulado ya no se describe por su cobertura: está fuera del mes.
+    //
+    // Esta línea iba DESPUÉS de `!turno.guardia_id`, y como los turnos que se
+    // anulan son casi siempre descubiertos, el corte por "Descubierto" ganaba
+    // siempre y 'Anulado' era inalcanzable. Consecuencias, las dos visibles:
+    // la fila seguía diciendo "Descubierto" después de anularla, y como el
+    // botón se muestra con `row.Estado !== 'Anulado'`, seguía ofreciendo
+    // "Anular turno" sobre algo ya anulado. Se podía anular lo mismo una y
+    // otra vez sin que la pantalla acusara recibo —la segunda vez la API
+    // responde `sin_cambios`, así que tampoco había error que lo delatara.
+    if (ESTADOS_SIN_OBLIGACION.has(turno.estado || '')) return ETIQUETA_TURNO_SIN_OBLIGACION[turno.estado as string] ?? 'Anulado'
     if (!turno.guardia_id) return 'Descubierto'
     if (!registro || !registroTieneEntradaConfirmada(registro)) return pasoVentanaFichaje(turno) ? 'Sin fichar' : 'Programado'
     if (registro.tipo_registro === 'carga_manual') return 'Manual'
@@ -7724,7 +7735,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         Cargar manual
                       </button>
                     )}
-                    {row._turno_id && row.Estado !== 'Anulado' && (
+                    {row._turno_id && admiteAccionesDePlanilla(row.Estado) && (
                       <div style={{ display:'flex', gap:4, marginTop: row._registro || row._sinFichar ? 4 : 0 }}>
                         <button
                           style={{ ...S.btn, ...S.btnSecondary, padding:'4px 8px', fontSize:11 }}
@@ -7829,7 +7840,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         Cargar manual
                       </button>
                     )}
-                    {row._turno_id && row.Estado !== 'Anulado' && (
+                    {row._turno_id && admiteAccionesDePlanilla(row.Estado) && (
                       <div style={{ display:'flex', gap:4, marginTop: row._registro || row._sinFichar ? 4 : 0 }}>
                         <button
                           style={{ ...S.btn, ...S.btnSecondary, padding:'4px 8px', fontSize:11 }}
