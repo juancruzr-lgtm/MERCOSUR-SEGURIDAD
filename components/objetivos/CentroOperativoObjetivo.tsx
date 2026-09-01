@@ -32,6 +32,16 @@ import type {
   RondaLegajo, TurnoLegajo, TurnoMensualLegajo,
 } from '@/lib/legajo-objetivo'
 import { diaSemanaCorto } from '@/lib/programacion'
+import type { ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
+import {
+  MENSAJE_BLOQUEO_COMPLETAR, avisoDivergenciaMesAnterior, motivoBloqueoConfirmar,
+  payloadSeleccionServicios, previsionPorServicio, resumenCompletarMes,
+  seleccionInicialCompletar, totalesDeSeleccion,
+} from '@/lib/completar-mes'
+import { clasificarPuestos } from '@/lib/puestos'
+import { analizarCoberturaHistorica } from '@/lib/cobertura-historica'
+import { mesAnteriorDe } from '@/lib/logica-detectada'
+import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   COLOR_CARACTERISTICA, ETIQUETA_CARACTERISTICA, MOTIVO_CAPACITACION,
   caracteristicaTurno, esCapacitacion, etiquetaCaracteristica,
@@ -167,6 +177,23 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // Prototipo funcional (Bloque E): pasa turnos de Programado a Asignado.
   // No publica, no notifica. Vista Grilla (por defecto) o Lista (existente).
   const [vistaMensual, setVistaMensual] = useState<'grilla' | 'lista'>('grilla')
+
+  // ── Completar mes desde la grilla (la experiencia principal) ──
+  // La estructura declarada en servicios_objetivo es la única fuente; la
+  // vista previa es previsualizarMes acotado a este objetivo y la creación
+  // va por crear_turnos_programacion_parcial (idempotente, auditada, sin
+  // vigilador). Desde acá NUNCA se infiere ni se declara estructura.
+  const [serviciosDeclarados, setServiciosDeclarados] = useState<any[]>([])
+  const [avisoMesAnterior, setAvisoMesAnterior] = useState<string | null>(null)
+  const [completarPrevision, setCompletarPrevision] = useState<ResultadoPrevision | null>(null)
+  // Qué patrones se completan ESTE mes (por servicio_objetivo.id). Se arma al
+  // abrir el modal con todos los activos marcados y muere al cerrarlo: la
+  // estructura habitual no se toca y el mes siguiente vuelve completa.
+  const [seleccionCompletar, setSeleccionCompletar] = useState<Set<string>>(new Set())
+  const [faseCompletar, setFaseCompletar] = useState<'previa' | 'creando' | 'resultado'>('previa')
+  const [resultadoCompletar, setResultadoCompletar] = useState<ResultadoCreacion | null>(null)
+  const [errorCompletar, setErrorCompletar] = useState('')
+
   const [vigiladoresActivos, setVigiladoresActivos] = useState<VigiladorGrilla[]>([])
   const [sugeridoPorPuesto, setSugeridoPorPuesto] = useState<Map<string, string>>(new Map())
   const [filtroEstadoMensual, setFiltroEstadoMensual] = useState<EstadoAsignacion | 'todos'>('todos')
@@ -182,16 +209,79 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         if (!vivo || !data) return
         setVigiladoresActivos(data.map((u: any) => ({ id: u.id, nombre: `${u.apellido}, ${u.nombre}`, estado: u.estado })))
       })
-    void supabase.from('servicios_objetivo').select('puesto_id, guardia_habitual_id')
+    // La estructura declarada completa: alimenta el sugerido por puesto (como
+    // siempre) y el bloque "Completar mes" de arriba de la grilla.
+    void supabase.from('servicios_objetivo')
+      .select('id, objetivo_id, puesto_id, guardia_habitual_id, dias_semana, activo, turno_base:turnos_base(nombre, hora_inicio, hora_fin, activo), puesto:puestos(nombre)')
       .eq('objetivo_id', objetivoId).eq('activo', true)
       .then(({ data }) => {
         if (!vivo || !data) return
+        setServiciosDeclarados(data as any[])
         const mapa = new Map<string, string>()
         for (const s of data as any[]) if (s.puesto_id && s.guardia_habitual_id) mapa.set(s.puesto_id, s.guardia_habitual_id)
         setSugeridoPorPuesto(mapa)
       })
     return () => { vivo = false }
   }, [mostrarMensual, objetivoId])
+
+  // Chequeo contra el mes anterior: si lo declarado difiere de lo que
+  // realmente se programó (p. ej. el mes pasado se quitó un turno), la grilla
+  // avisa y manda a Lógica detectada. Aviso, nunca cambio automático.
+  useEffect(() => {
+    setAvisoMesAnterior(null)
+    if (!mostrarMensual || !datos?.objetivo || serviciosDeclarados.length === 0) return
+    const ref = mesAnteriorDe(mesMensual)
+    if (!ref) return
+    let vivo = true
+    void (async () => {
+      const { data } = await fetchPaginadoResult((desde, hasta) =>
+        supabase.from('turnos')
+          .select('id, objetivo_id, puesto_id, guardia_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
+          .eq('objetivo_id', objetivoId)
+          .gte('fecha', ref.desde).lte('fecha', ref.hasta)
+          .order('id').range(desde, hasta))
+      if (!vivo) return
+      const analisis = analizarCoberturaHistorica({
+        anio: ref.anio, mes: ref.mes, turnos: data ?? [],
+        objetivos: [{ id: objetivoId, nombre: datos.objetivo.nombre, estado: datos.objetivo.estado, es_prueba: datos.objetivo.es_prueba }],
+        servicios: serviciosDeclarados,
+      }).objetivos[0] ?? null
+      setAvisoMesAnterior(avisoDivergenciaMesAnterior(analisis))
+    })()
+    return () => { vivo = false }
+  }, [mostrarMensual, mesMensual, objetivoId, serviciosDeclarados, datos?.objetivo])
+
+  const confirmarCompletarMes = async () => {
+    if (!completarPrevision || faseCompletar === 'creando') return
+    if (motivoBloqueoConfirmar(completarPrevision.filas, seleccionCompletar)) return
+    // Solo las filas válidas de los patrones marcados para este mes.
+    const filas = payloadSeleccionServicios(completarPrevision.filas, seleccionCompletar)
+    if (filas.length === 0) return
+    setFaseCompletar('creando')
+    setErrorCompletar('')
+    const { data, error } = await supabase.rpc('crear_turnos_programacion_parcial', {
+      p_operacion_id: crypto.randomUUID(),
+      p_mes: mesMensual,
+      p_filas: filas,
+    })
+    if (error) {
+      setErrorCompletar(error.message)
+      setFaseCompletar('previa')
+      return
+    }
+    setResultadoCompletar(data as ResultadoCreacion)
+    setFaseCompletar('resultado')
+    // Los turnos nuevos aparecen en esta misma grilla, sin salir de acá.
+    await cargarMensual()
+  }
+
+  const cerrarCompletar = () => {
+    setCompletarPrevision(null)
+    setSeleccionCompletar(new Set())
+    setFaseCompletar('previa')
+    setResultadoCompletar(null)
+    setErrorCompletar('')
+  }
 
   const nombreVigiladorGrilla = (id: string | null) => {
     if (!id) return null
@@ -1222,8 +1312,191 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
               puestoId: filtroPuestoMensual || null,
               asignacion: filtroAsignacionMensual,
             })
+            // Completar mes: todo se calcula con lo que la grilla ya tiene
+            // cargado (estructura declarada + turnos del mes + posiciones).
+            const objetivoPrevision = {
+              id: objetivoId,
+              nombre: datos?.objetivo.nombre ?? '',
+              estado: datos?.objetivo.estado ?? null,
+              es_prueba: datos?.objetivo.es_prueba ?? false,
+            }
+            const completar = resumenCompletarMes({
+              objetivo: objetivoPrevision,
+              mes: mesMensual,
+              servicios: serviciosDeclarados,
+              puestos: clasificarPuestos(posicionesOp.filter(p => p.activo)),
+              turnosExistentes: turnosMensual.map(t => ({ ...t, objetivo_id: objetivoId })),
+              fechaActual: hoy,
+              horaActual: horaActualStr,
+            })
+            const etiquetaMes = new Date(anioMensual, mesNumMensual - 1, 1)
+              .toLocaleDateString('es-AR', { month: 'long', year: 'numeric' }).toUpperCase()
             return (
               <div style={{ marginTop:12 }}>
+                {/* ── PROGRAMACIÓN — bloque Completar mes ─────────────────── */}
+                <div style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:10, padding:14, marginBottom:12 }}>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:14, fontWeight:700, marginBottom:8 }}>
+                    PROGRAMACIÓN — {etiquetaMes}
+                  </div>
+                  {completar.logica.length > 0 && (
+                    <div style={{ marginBottom:10 }}>
+                      <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Lógica habitual declarada</div>
+                      {completar.logica.map(l => (
+                        <div key={l.servicio_id} style={{ fontSize:13, color:'#e2e8f0' }}>
+                          <strong>{l.puesto}</strong> · {l.hora_inicio}–{l.hora_fin}{l.nocturno ? ' 🌙' : ''} · {l.etiqueta_dias}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {completar.bloqueo ? (
+                    <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+                      <span style={{ fontSize:13, color:'#f59e0b' }}>{MENSAJE_BLOQUEO_COMPLETAR[completar.bloqueo]}</span>
+                      {completar.bloqueo === 'sin_estructura' && esAdmin && onNavigate && (
+                        <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 12px', fontSize:12 }}
+                          onClick={() => onNavigate('servicios_objetivo')}>
+                          Configurar estructura (Lógica detectada)
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+                        {[
+                          { label:'Turnos existentes', valor: completar.resumen!.existentes, color:'#60a5fa' },
+                          { label:'Turnos faltantes', valor: completar.resumen!.faltantes, color:'#10b981' },
+                          { label:'Conflictos', valor: completar.resumen!.conflictos, color: completar.resumen!.conflictos ? '#ef4444' : '#64748b' },
+                        ].map(chip => (
+                          <div key={chip.label} style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, padding:'6px 12px', textAlign:'center' }}>
+                            <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:chip.color }}>{chip.valor}</div>
+                            <div style={{ fontSize:10, color:'#64748b' }}>{chip.label}</div>
+                          </div>
+                        ))}
+                        {esAdmin && (
+                          <button type="button"
+                            disabled={completar.resumen!.faltantes === 0}
+                            style={{ ...S.btn, ...S.btnPrimary, padding:'8px 16px', fontSize:13,
+                              opacity: completar.resumen!.faltantes === 0 ? .5 : 1 }}
+                            onClick={() => { setCompletarPrevision(completar.resumen!.prevision); setSeleccionCompletar(seleccionInicialCompletar(completar.logica)); setFaseCompletar('previa'); setResultadoCompletar(null); setErrorCompletar('') }}>
+                            COMPLETAR MES
+                          </button>
+                        )}
+                        {completar.resumen!.faltantes === 0 && (
+                          <span style={{ fontSize:12, color:'#10b981' }}>El mes ya está completo según la estructura declarada.</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize:11, color:'#64748b', marginTop:6 }}>
+                        Los turnos se crean sin vigilador: se asignan después desde esta misma grilla.
+                      </div>
+                    </>
+                  )}
+                  {avisoMesAnterior && (
+                    <div style={{ marginTop:8, padding:'8px 12px', borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.35)', fontSize:12, color:'#f59e0b', display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+                      <span>⚠ {avisoMesAnterior}</span>
+                      {esAdmin && onNavigate && (
+                        <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'3px 10px', fontSize:11 }}
+                          title="Solo si la estructura habitual realmente cambió"
+                          onClick={() => onNavigate('servicios_objetivo')}>
+                          ¿Cambió la estructura habitual? Lógica detectada
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal: vista previa de Completar mes (solo este objetivo). */}
+                {completarPrevision && (
+                  <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={cerrarCompletar}>
+                    <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:'min(720px, 94vw)', maxHeight:'86vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
+                      <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:6 }}>
+                        Completar {etiquetaMes.toLowerCase()} — {datos?.objetivo.nombre}
+                      </div>
+                      <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>
+                        La vista previa no modifica nada. Elegí qué líneas de la estructura habitual completar ESTE mes: desmarcar una línea no cambia la lógica habitual (el mes que viene vuelve completa) — solo la excluye de esta creación. Los turnos se crean sin vigilador.
+                      </div>
+                      {(() => {
+                        const lineas = previsionPorServicio(completarPrevision.filas)
+                        const diasPorServicio = new Map(completar.logica.map(l => [l.servicio_id, l.etiqueta_dias]))
+                        const totales = totalesDeSeleccion(completarPrevision.filas, seleccionCompletar)
+                        const bloqueoConfirmar = motivoBloqueoConfirmar(completarPrevision.filas, seleccionCompletar)
+                        const alternar = (id: string) => setSeleccionCompletar(prev => {
+                          const proxima = new Set(prev)
+                          if (proxima.has(id)) proxima.delete(id)
+                          else proxima.add(id)
+                          return proxima
+                        })
+                        return (
+                          <>
+                            <div style={{ marginBottom:12 }}>
+                              {lineas.map(l => {
+                                const marcada = seleccionCompletar.has(l.servicio_id)
+                                return (
+                                  <label key={l.servicio_id} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', borderRadius:8, cursor: faseCompletar === 'previa' ? 'pointer' : 'default', background: marcada ? 'rgba(16,185,129,.05)' : 'transparent', border:`1px solid ${marcada ? 'rgba(16,185,129,.25)' : '#1e2d42'}`, marginBottom:6, opacity: marcada ? 1 : .55 }}>
+                                    <input type="checkbox" checked={marcada} disabled={faseCompletar !== 'previa'} onChange={() => alternar(l.servicio_id)} />
+                                    <div style={{ flex:1 }}>
+                                      <div style={{ fontSize:13, color:'#e2e8f0' }}>
+                                        <strong>{l.puesto}</strong> · {l.hora_inicio}–{l.hora_fin}{l.nocturno ? ' 🌙' : ''} · {diasPorServicio.get(l.servicio_id) ?? ''}
+                                      </div>
+                                      <div style={{ fontSize:11, color:'#94a3b8' }}>
+                                        {l.a_crear} a crear · {l.existentes} existente{l.existentes !== 1 ? 's' : ''}
+                                        {l.fechas_pasadas > 0 ? ` · ${l.fechas_pasadas} pasada${l.fechas_pasadas !== 1 ? 's' : ''}` : ''}
+                                        {l.conflictos > 0 ? ` · ${l.conflictos} conflicto${l.conflictos !== 1 ? 's' : ''}` : ''}
+                                        {' · '}{Math.round(l.horas)} h
+                                      </div>
+                                    </div>
+                                  </label>
+                                )
+                              })}
+                            </div>
+                            <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+                              {[
+                                { label:'A crear', valor: totales.a_crear, color:'#10b981' },
+                                { label:'Ya existentes', valor: totales.existentes, color:'#60a5fa' },
+                                { label:'Conflictos', valor: totales.conflictos, color: totales.conflictos ? '#ef4444' : '#64748b' },
+                                { label:'Fechas pasadas', valor: totales.fechas_pasadas, color:'#94a3b8' },
+                                { label:'Nocturnos a crear', valor: totales.nocturnos_a_crear, color:'#a78bfa' },
+                                { label:'Horas a crear', valor: `${Math.round(totales.horas_a_crear)} h`, color:'#e2e8f0' },
+                              ].map(chip => (
+                                <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'6px 12px', textAlign:'center' }}>
+                                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:chip.color }}>{chip.valor}</div>
+                                  <div style={{ fontSize:10, color:'#64748b' }}>{chip.label}</div>
+                                </div>
+                              ))}
+                            </div>
+                            {bloqueoConfirmar && faseCompletar === 'previa' && (
+                              <div style={{ fontSize:12, color:'#f59e0b', marginBottom:10 }}>{bloqueoConfirmar}</div>
+                            )}
+                          </>
+                        )
+                      })()}
+                      {faseCompletar === 'resultado' && resultadoCompletar ? (
+                        <div style={{ background:'rgba(16,185,129,.07)', border:'1px solid rgba(16,185,129,.3)', borderRadius:8, padding:'10px 14px', marginBottom:12, fontSize:13, color:'#10b981' }}>
+                          ✅ {resultadoCompletar.creadas} turno{resultadoCompletar.creadas !== 1 ? 's' : ''} creado{resultadoCompletar.creadas !== 1 ? 's' : ''} · {resultadoCompletar.ya_existentes} ya existía{resultadoCompletar.ya_existentes !== 1 ? 'n' : ''} · {resultadoCompletar.omitidas} omitido{resultadoCompletar.omitidas !== 1 ? 's' : ''}. La grilla ya está actualizada.
+                        </div>
+                      ) : (
+                        <div style={{ fontSize:12, color:'#94a3b8', marginBottom:12 }}>
+                          Los turnos ya existentes, los conflictos y las fechas pasadas no se tocan. La creación es idempotente: repetirla no duplica.
+                        </div>
+                      )}
+                      {errorCompletar && <div style={{ fontSize:12, color:'#ef4444', marginBottom:10 }}>{errorCompletar}</div>}
+                      <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+                        <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'8px 14px' }} onClick={cerrarCompletar}>
+                          {faseCompletar === 'resultado' ? 'Cerrar' : 'Cancelar'}
+                        </button>
+                        {faseCompletar !== 'resultado' && (() => {
+                          const bloqueado = faseCompletar === 'creando' ||
+                            motivoBloqueoConfirmar(completarPrevision.filas, seleccionCompletar) !== null
+                          return (
+                            <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'8px 14px', opacity: bloqueado ? .5 : 1 }}
+                              disabled={bloqueado}
+                              onClick={() => void confirmarCompletarMes()}>
+                              {faseCompletar === 'creando' ? '⏳ Creando…' : 'Confirmar y completar mes'}
+                            </button>
+                          )
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {/* Selección múltiple. Fuera del modo, la grilla se comporta
                     igual que siempre: un clic abre el menú de la celda. */}
                 {puedeProgramar && (

@@ -37,6 +37,8 @@ export interface ObjetivoLegajo {
   estado: string | null
   zona_id: string | null
   frecuencia_supervision_horas: number | null
+  /** Objetivo de prueba: excluido de la programación (Completar mes lo bloquea). */
+  es_prueba?: boolean | null
 }
 
 export interface PuestoLegajo {
@@ -123,7 +125,7 @@ export const fechaHoyLocal = () => new Date().toLocaleDateString('sv-SE')
 // ── Carga ───────────────────────────────────────────────────────────────────
 
 const COLS_OBJETIVO =
-  'id, nombre, cliente, direccion, lat, lng, radio_metros, estado, zona_id, frecuencia_supervision_horas, tipo_ubicacion'
+  'id, nombre, cliente, direccion, lat, lng, radio_metros, estado, zona_id, frecuencia_supervision_horas, tipo_ubicacion, es_prueba'
 const COLS_PUESTO   = 'id, nombre, activo, orden'
 const COLS_TURNO    = 'id, objetivo_id, puesto_id, guardia_id, guardia_original_id, fecha, hora_inicio, hora_fin, estado'
 const COLS_REGISTRO = 'id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, tipo_registro'
