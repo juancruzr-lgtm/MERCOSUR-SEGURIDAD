@@ -788,3 +788,86 @@ regla del mes se cumple. Queda 🟡 por dos cosas que necesitan a una persona:
 
 Resueltas esas dos, agosto cierra 🟢 en 13.015,00 h —o en 13.762,50 si la
 decisión sobre el P1 es que esas horas van.
+
+---
+
+## Ciclo 12 — Los seis duplicados, y tres defectos que los tapaban
+
+JC quiso anular seis turnos duplicados de agosto y la pantalla no se lo
+permitía. Detrás había tres defectos distintos, todos de la misma pantalla.
+
+### Los seis turnos
+
+Quedaron del día que se cambió la forma de crear turnos. Todos descubiertos,
+todos sin ningún fichaje, **64,00 h** en total.
+
+| Fecha | Objetivo | Horario | Hs | Tenía gemelo cubierto |
+|---|---|---|---:|---|
+| 04/08 | SKATEPARK | 15:00–23:00 | 8 | gemelo idéntico, tampoco trabajado |
+| 07/08 | CIRSE | 22:00–06:00 | 8 | sí |
+| 07/08 | NACION SERVICIOS ENTRE RIOS | 07:00–19:00 | 12 | sí |
+| 07/08 | NACION SERVICIOS ENTRE RIOS | 07:00–19:00 | 12 | sí |
+| 08/08 | ANTENA | 07:00–19:00 | 12 | sí |
+| 08/08 | NACION SERVICIOS ENTRE RIOS | 19:00–07:00 | 12 | sí |
+
+Cinco de los seis tenían, el mismo día y en el mismo objetivo, un turno idéntico
+que **sí se cubrió**: el servicio se prestó y el duplicado era programación de
+más. El de SKATEPARK también era duplicado —había dos turnos idénticos de
+15:00–23:00— pero **ninguno de los dos se trabajó**, así que anular el
+descubierto quita el duplicado sin afirmar que el objetivo estuvo cubierto esa
+tarde. El turno de PIÑERO queda como lo que es: un turno sin registro, y está en
+la lista de catorce del ciclo 11.
+
+Los seis quedaron anulados. **No queda ningún turno descubierto sin registro en
+agosto.**
+
+### Defecto 1 — el botón no hacía nada (PR #133)
+
+Las filas de la planilla se dibujan con `turnosReportes`, el mes elegido en el
+selector. "Anular turno" y "Editar turno" buscaban el turno en la prop `turnos`,
+que la pantalla de Turnos recarga acotada **al mes en curso**.
+
+Mientras el mes mirado y el mes en curso coincidían no se notaba. A las 00:00 del
+1º de septiembre, todos los botones de la planilla de agosto quedaron muertos:
+el `find` no encontraba nada, el guard `if (!turno) return` cortaba, y el handler
+terminaba **en silencio**. Sin modal, sin error, sin nada en consola.
+
+Ese silencio es lo peor del defecto: desde afuera se lee como un problema de
+permisos, y no lo era — la API aceptaba el cambio, el click nunca le llegaba.
+
+### Defecto 2 — un turno anulado seguía diciendo "Descubierto" (PR #134)
+
+`estadoPlanilla` cortaba primero por `!turno.guardia_id`. Como los turnos que se
+anulan son casi siempre descubiertos, ese corte ganaba siempre y el estado
+`'Anulado'` era **inalcanzable**. La fila no cambiaba y el botón seguía
+ofreciéndose sobre algo ya anulado.
+
+Se podía anular lo mismo una y otra vez sin que la pantalla acusara recibo: la
+segunda vez la API detecta que no hay cambio y responde `sin_cambios`, sin error
+que lo delate. Fue exactamente lo que le pasó a JC con ANTENA, donde uno de los
+dos turnos ya estaba anulado de antes.
+
+### Defecto 3 — la tarjeta contaba lo que ya estaba resuelto (PR #134)
+
+"Diferencia pendiente" dice medir *horas que todavía faltan reconocer* y sumaba
+**toda** diferencia del mes. Pero una diferencia que el supervisor ya revisó no
+falta reconocer: alguien ya decidió que el turno duró menos, que no se prestó o
+que el horario estaba mal cargado.
+
+Los 47 turnos que explicaban el pendiente decían todos "Revisado por supervisor",
+el filtro "Sin resolver" marcaba 0, y la tarjeta igual mostraba 194 hs. El mes no
+podía llegar a cero por más que se revisara todo.
+
+Ahora cuenta sólo lo que espera decisión —**15,00 h**, el turno de BENITEZ— y
+dice debajo cuánto ya se revisó, para no perder el total de vista. El criterio no
+es nuevo: `ESTADOS_PENDIENTES` en `bandeja-planillas` ya definía qué estados
+esperan acción.
+
+**No toca la liquidación.** `resolverLineaLiquidacion`, las horas reconocidas y
+el programado quedan idénticos. Cambia de qué universo habla la tarjeta.
+
+### Además
+
+El modal tenía 960 px fijos con doce columnas: en pantalla grande sobraba lugar
+al costado y la columna Acciones quedaba del otro lado del scroll. Ahora usa el
+ancho disponible y esa columna queda anclada a la derecha.
