@@ -701,3 +701,90 @@ Quedan **5 nocturnos del 31/08 abiertos (65,00 h)**, todos de turnos que termina
 a las 08:00. El Panel Principal muestra 14 guardias en turno a las 07:15, que es
 otra vez la confirmación en vivo de PR #131: antes de ese arreglo, a esta hora
 del día siguiente habrían sido 0.
+
+---
+
+## Ciclo 11 — Reconciliación final de agosto
+
+Medido el **01/09/2026 a las 08:22**, con el mes entero ya vencido.
+
+### Los cinco números
+
+| Métrica | Valor |
+|---|---:|
+| Total programado | **13.961,00** |
+| Total asignado | **13.961,00** |
+| Programadas exigibles | **13.961,00** |
+| Horas reconocidas | **13.015,00** |
+| Diferencia que espera decisión | **15,00** (1 turno) |
+| Diferencia ya revisada por el supervisor | 194,00 |
+
+Programado = asignado = exigibles. El mes está completo, todo asignado y todo
+vencido: no queda nada por empezar ni nada sin vigilador.
+
+El programado bajó de 14.025,00 a 13.961,00 —64,00 h exactas— por los seis
+turnos duplicados que JC anuló esta mañana. Ver el ciclo 12.
+
+### La brecha, descompuesta hasta el último decimal
+
+**13.961,00 − 13.015,00 = 946,00 h no reconocidas.** Se reparten así:
+
+| Concepto | Turnos | Horas |
+|---|---:|---:|
+| **P1** — cerrados por el Cierre Automático pero excluidos por `turnosReconocidosHastaCorte` | 68 | **747,50** |
+| Turno todavía abierto (BENITEZ, LAROMET ROSARIO 31/08 17:00–08:00) | 1 | **15,00** |
+| Turnos sin ningún registro de asistencia | 14 | **147,50** |
+| Diferencias parciales, ya revisadas por el supervisor | 33 | 46,50 |
+| Menos extensiones de jornada (liquidable > programado) | 5 | −10,50 |
+| **Total** | | **946,00** |
+
+Los cuatro sumandos salen de mediciones independientes —la base para los tres
+primeros, la propia app para los dos últimos— y cierran solos. La app dice
+"48 turnos explican el pendiente, suma 209,00 hs, 1 sin resolver, 5 con
+extensión": 747,50 + 209,00 − 10,50 = 946,00.
+
+### Lo que falta, con nombre y apellido
+
+**Un turno abierto.** BENITEZ, MIGUEL ANGEL — LAROMET ROSARIO, 31/08,
+17:00–08:00. Terminó a las 08:00 de hoy y todavía no fichó la salida. Se
+resuelve solo o con una carga del supervisor.
+
+**Catorce turnos sin ningún registro — 147,50 h.** Todos tienen vigilador
+asignado; ninguno es descubierto.
+
+| Fecha | Objetivo | Horario | Vigilador | Hs |
+|---|---|---|---|---:|
+| 02/08 | SRT | 19:00–07:00 | CENTURION, AGUSTIN | 12 |
+| 03/08 | ANTENA | 12:00–19:00 | BARREIRO, ARIEL GUSTAVO | 7 |
+| 04/08 | CLUB | 23:00–07:00 | ROSÓN, JUAN RAMÓN | 8 |
+| 04/08 | LAROMET RP41 PUESTO 2 | 18:00–08:00 | MARTINEZ, RAUL EXEQUIEL | 14 |
+| 04/08 | SKATEPARK | 15:00–23:00 | PIÑERO, WALTER | 8 |
+| 04/08 | SRT | 23:00–07:00 | CENTURION, AGUSTIN | 8 |
+| 06/08 | LAROMET ROSARIO | 13:00–19:00 | PEREZ, SANTIAGO | 6 |
+| 06/08 | RAPSODIA | 16:00–23:00 | GONZALEZ, ADALBERTO LUCAS | 7 |
+| 07/08 | LAROMET RP41 1 | 18:00–07:00 | MARTINEZ, RAUL EXEQUIEL | 13 |
+| 08/08 | LAROMET IRIGOYEN | 19:00–07:00 | MARTINEZ, RAUL EXEQUIEL | 12 |
+| 08/08 | Laromet ruta 34 | 17:00–07:00 | GOMEZ, JOSE MARIA | 14 |
+| 22/08 | LAROMET IRIGOYEN | 19:00–07:00 | MARTINEZ, RAUL EXEQUIEL | 12 |
+| 23/08 | LAROMET FUNES 2 | 20:00–08:00 | RÍOS, RAUL MIGUEL | 12 |
+| 24/08 | LAROMET FUNES 2 | 17:00–07:30 | RÍOS, RAUL MIGUEL | 14,5 |
+
+Concentrados: **MARTINEZ, RAUL EXEQUIEL 4 turnos / 51 h**, RÍOS 2 / 26,5 h,
+CENTURION 2 / 20 h.
+
+Y concentrados en el tiempo: **once de los catorce son del 2 al 8 de agosto**,
+la misma ventana en la que aparecieron los seis duplicados. No es casualidad: es
+el arrastre del cambio en la forma de crear turnos. Los tres restantes —22, 23 y
+24— son otra cosa y hay que mirarlos aparte.
+
+### Estado: 🟡
+
+No porque haya nada roto. Los números cierran, las pantallas coinciden y la
+regla del mes se cumple. Queda 🟡 por dos cosas que necesitan a una persona:
+
+1. **747,50 h esperan tu decisión** (P1, ciclo 9). Es lo único que puede mover
+   el total del mes.
+2. **147,50 h en 14 turnos** hay que cargarlas o justificarlas.
+
+Resueltas esas dos, agosto cierra 🟢 en 13.015,00 h —o en 13.762,50 si la
+decisión sobre el P1 es que esas horas van.
