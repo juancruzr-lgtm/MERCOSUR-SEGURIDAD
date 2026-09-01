@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
+import { resolverTurnoDeFila } from '@/lib/planilla-acciones'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -6454,8 +6455,24 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
   }
 
+  /**
+   * El turno de una fila de la planilla, buscado donde realmente está.
+   *
+   * Las filas se arman con `turnosReportes`, que es el mes que el usuario
+   * eligió arriba. La prop `turnos` es otra cosa: la pantalla de Turnos la
+   * recarga acotada al MES EN CURSO. Buscar ahí el turno de una fila de
+   * agosto, un 1º de septiembre, no lo encuentra — y como los dos botones
+   * cortaban en seco con `if (!turno) return`, el click no hacía nada: ni
+   * modal, ni error, ni pista. Desde afuera se lee como "no me deja anular".
+   *
+   * Primero el mes que se está mirando; `turnos` queda de respaldo por si la
+   * fila viniera de otro lado.
+   */
+  const turnoDeLaFila = (turnoId: string): Turno | undefined =>
+    resolverTurnoDeFila<Turno>(turnoId, turnosReportes, turnos)
+
   const abrirEdicionTurno = (turnoId: string) => {
-    const turno = turnos.find((t: Turno) => t.id === turnoId)
+    const turno = turnoDeLaFila(turnoId)
     if (!turno) return
     setTurnoEditando(turno)
     setFormEditTurno({
@@ -6494,6 +6511,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       const result = await res.json()
       if (!res.ok) throw new Error(result.error || 'Error al editar turno')
       if (result.turno) {
+        setTurnosReportes((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoEditando.id ? { ...t, ...result.turno } : t))
         setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoEditando.id ? { ...t, ...result.turno } : t))
       }
       setTurnoEditando(null)
@@ -6526,6 +6544,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       })
       const result = await res.json()
       if (!res.ok) throw new Error(result.error || 'Error al anular turno')
+      // La planilla se dibuja con `turnosReportes`; sin esto la fila seguiría
+      // mostrándose sin anular hasta recargar la pantalla.
+      setTurnosReportes((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoAnulando.id ? { ...t, estado: 'anulado' } : t))
       setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoAnulando.id ? { ...t, estado: 'anulado' } : t))
       setTurnoAnulando(null)
       setMotivoAnulacionTurno('')
@@ -7713,7 +7734,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         </button>
                         <button
                           style={{ ...S.btn, padding:'4px 8px', fontSize:11, background:'#450a0a', color:'#fca5a5', border:'1px solid #7f1d1d' }}
-                          onClick={() => { const t = turnos.find((t: Turno) => t.id === row._turno_id); if (t) { setTurnoAnulando(t); setMotivoAnulacionTurno('') } }}
+                          onClick={() => { const t = turnoDeLaFila(row._turno_id); if (t) { setTurnoAnulando(t); setMotivoAnulacionTurno('') } }}
                         >
                           Anular turno
                         </button>
@@ -7818,7 +7839,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         </button>
                         <button
                           style={{ ...S.btn, padding:'4px 8px', fontSize:11, background:'#450a0a', color:'#fca5a5', border:'1px solid #7f1d1d' }}
-                          onClick={() => { const t = turnos.find((t: Turno) => t.id === row._turno_id); if (t) { setTurnoAnulando(t); setMotivoAnulacionTurno('') } }}
+                          onClick={() => { const t = turnoDeLaFila(row._turno_id); if (t) { setTurnoAnulando(t); setMotivoAnulacionTurno('') } }}
                         >
                           Anular turno
                         </button>
