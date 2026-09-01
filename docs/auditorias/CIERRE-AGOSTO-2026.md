@@ -136,3 +136,35 @@ de salida.
 Los 14 nocturnos con fichaje GPS son **pendientes legitimos de cierre**:
 pertenecen a agosto y cierran entre las 06:00 y las 08:00 del 01/09. No son un
 problema y no deben forzarse.
+
+---
+
+## CICLO 6 — Recorrido de producción (00:00 del 01/09)
+
+### BUG P1 encontrado EN VIVO: los nocturnos desaparecen a medianoche
+
+El cruce de medianoche no sólo sirvió para confirmar que agosto no se mueve;
+destapó un bug que sólo es visible en ese instante.
+
+A las **00:00:22**, con catorce vigiladores adentro de sus objetivos, el
+Dashboard mostraba:
+
+| tarjeta | mostraba | realidad |
+|---|---|---|
+| Guardias en turno | **0** | **14** |
+| Turnos finalizados hoy | 0 | 0 (correcto) |
+| Horas cerradas hoy | 0 h | 0 h (correcto) |
+| Horas reconocidas en curso | 0 h | los 14 en curso |
+
+**Causa:** dos filtros por día encadenados. La carga traía turnos desde el día 1
+del mes —los del 31/08 no llegaban al navegador— y además el panel filtraba
+`turno.fecha === hoy`. Un turno que arranca el último día del mes quedaba fuera
+de los dos.
+
+**Impacto:** ocho horas cada madrugada sin visibilidad de quién está trabajando.
+No afecta horas ni liquidación: el dato está bien guardado, se mostraba mal.
+
+**Corregido en [#131](https://github.com/juancruzr-lgtm/MERCOSUR-SEGURIDAD/pull/131)** — la carga arranca un día antes y "Guardias en
+turno" pregunta lo que dice su etiqueta: quién entró y no salió, mirando hoy y
+ayer. La regla del mes no cambia: el turno del 31/08 se carga para verlo en
+curso, pero sigue siendo de agosto.
