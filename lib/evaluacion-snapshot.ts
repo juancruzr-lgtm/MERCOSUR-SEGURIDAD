@@ -106,7 +106,14 @@ export function filaDeEvaluacion(
     datos_insuficientes: sinDatos,
     // `ajustada` es la que decide: mide sobre lo que le aplicaba, no sobre el
     // total teórico. Es la que la ficha muestra como "cobertura de lo exigible".
-    cobertura: sinDatos ? null : redondear((e!.cobertura?.ajustada ?? 0) * 100),
+    //
+    // Ya viene en porcentaje —`coberturaDe` redondea a un decimal sobre 100—,
+    // así que NO se vuelve a escalar. Multiplicarla otra vez daba 10.000 y la
+    // columna `numeric(5,2)` rechazaba la fila entera.
+    //
+    // `null` cuando no había nada exigible: eso no es cobertura cero, es que la
+    // pregunta no aplicaba, y un 0 se leería como si no se hubiera medido nada.
+    cobertura: sinDatos ? null : redondear(e!.cobertura?.ajustada ?? null),
     alcance: sinDatos ? null : (e!.alcance ?? null),
     estado_desempeno: d.cumplimiento?.estado ?? null,
     dimensiones: d.cumplimiento?.dimensiones ?? [],

@@ -22,7 +22,10 @@ const persona = (over: any = {}): EntradaSnapshot => ({
     evaluacion: over.evaluacion === null ? null : {
       indice: 94, desempeno: over.indice ?? 8.1, notaFinal: over.nota ?? 8.1,
       concepto: over.concepto ?? 'Muy bueno',
-      cobertura: { medido: 100, teorico: 110, noAplica: 10, bruta: 0.9, ajustada: 1 },
+      // `coberturaDe` devuelve porcentajes, no fracciones: 100 es cobertura total.
+      cobertura: over.cobertura === null
+        ? { medido: 100, teorico: 110, noAplica: 10, bruta: 90.9, ajustada: null }
+        : { medido: 100, teorico: 110, noAplica: 10, bruta: 90.9, ajustada: over.cobertura ?? 100 },
       alcance: 'completo', faltas: over.faltas ?? [], explicacion: over.explicacion ?? '',
     } as any,
     jornadas: new Array(over.jornadas ?? 24).fill({}),
@@ -48,8 +51,16 @@ describe('las cuatro capas viajan separadas', () => {
     expect(f.indice).toBe(8.1)
   })
 
-  it('la cobertura se guarda como porcentaje', () => {
+  it('la cobertura se guarda como porcentaje, tal cual la da el motor', () => {
+    // `coberturaDe` ya devuelve 0-100. Volver a multiplicar por 100 daba 10.000
+    // y `numeric(5,2)` rechazaba la fila entera con "numeric field overflow".
     expect(f.cobertura).toBe(100)
+    expect(filaDeEvaluacion(persona({ cobertura: 72.7 }), '2026-08').cobertura).toBe(72.7)
+  })
+
+  it('sin nada exigible la cobertura queda en null, no en cero', () => {
+    // Cero se leería como "no se midió nada"; null dice que no aplicaba.
+    expect(filaDeEvaluacion(persona({ cobertura: null }), '2026-08').cobertura).toBeNull()
   })
 
   it('arranca en calculada: publicar es un acto aparte', () => {

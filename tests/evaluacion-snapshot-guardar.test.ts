@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { guardarSnapshot } from '@/lib/evaluacion-snapshot-guardar'
 
 // El upsert reemplaza la fila entera. La regla que se prueba acá es que volver a
 // congelar un mes NO despublique lo que la gente ya vio.
@@ -18,7 +19,6 @@ vi.mock('@/lib/supabase', () => ({
   },
 }))
 
-const { guardarSnapshot } = await import('@/lib/evaluacion-snapshot-guardar')
 
 const persona = (id: string) => ({
   desempeno: {
