@@ -412,3 +412,81 @@ las horas**: ¿esas horas están reconocidas o no?
 **En cualquiera de los dos casos, una de las dos pantallas está mostrando un
 número que no corresponde.** Lo que no puede pasar es lo actual: que las horas
 no estén en ninguna de las dos.
+
+---
+
+## Ciclo 7 — Recorrido visual: Cumplimiento Operativo
+
+Verificado en producción sobre **agosto de 2026**, vista Administración.
+
+### Lo que está bien
+
+Las cinco tarjetas de tipo de devolución están y **suman exacto**:
+
+| Tarjeta | Cantidad |
+|---|---|
+| Sin intervención | 12 |
+| Uso de la App | 10 |
+| Prestación del Servicio | 17 |
+| App + Servicio | 24 |
+| Muestra insuficiente | 2 |
+| **Total** | **65** de 65 empleados |
+
+El filtro funciona: al tocar "Uso de la App" la tabla pasa a `10 de 65 empleados`
+y quedan exactamente esas 10 filas. La tarjeta "Todos" restituye las 65.
+
+El mini gráfico de composición está en la fila y repetido en el detalle, y
+distingue las tres cosas que antes se confundían: una nota (`3,1`), una
+dimensión que no aplica (`N/A`) y una que no se pudo medir (`Sin datos`).
+Ninguna de las dos últimas se dibuja como barra en cero.
+
+Los casos nombrados leen lo que tienen que leer:
+
+| Persona | Nota | Tipo | Causa | Coherente |
+|---|---|---|---|---|
+| PIÑERO, WALTER | 7,4 | App + Servicio | Rondas + Registro en la app | Sí — Rondas 3,6 |
+| OYOLA, JORGE MARCELO | 6,8 | Prestación del Servicio | Rondas | Sí — Rondas 0,0, Modelo C aplicado |
+| MENA, BRIAN | 6,6 | Uso de la App | Registro en la app | Sí — Registro App 2,7 |
+| OTERO, RUBÉN | 9,2 | App + Servicio | Registro en la app + Rondas | Sí — 7,0 y 9,4 |
+| MARTINEZ, SANTIAGO | 8,4 | App + Servicio | Registro en la app + Puntualidad | Sí — 23/23 jornadas medibles |
+
+### Defecto encontrado y corregido — PR #132
+
+**ROSÓN, JUAN RAMÓN** mostraba, en el mismo renglón, `Puntualidad: Sin datos` en
+el gráfico y `Registro en la app + Puntualidad` como causa. La pantalla decía dos
+cosas distintas de la misma dimensión.
+
+El detalle da el dato exacto: **20 de 29 jornadas sin registro propio**, o sea
+31 % de cobertura. `calcularCumplimiento` ya sacaba Puntualidad del cálculo por
+debajo del 50 % (`puntualidadEsSostenible`), y el motivo está escrito en el
+propio código: no fichar ya se penaliza en Registro en la app, y medir además la
+hora de llegada sobre las pocas jornadas que quedan es castigar dos veces el
+mismo hecho, la segunda sin evidencia.
+
+`bloquePuntualidad` en `lib/balance-mensual.ts` no respetaba esa regla: sólo
+cortaba con `evaluadas === 0`. Corregido para que honre el estado que ya trae la
+dimensión.
+
+Efecto secundario que también se corrige: ROSÓN pasa de **App + Servicio** a
+**Uso de la App**, que es su problema real. La clasificación existe para decidir
+a quién hablarle y de qué, y ahí decía el tema equivocado.
+
+`npx vitest run` 1941 passing (era 1936) · `npx tsc --noEmit` 142 = baseline ·
+build OK. **PR abierto, no mergeado** — el merge quedó bloqueado; hay que
+mergearlo a mano.
+
+### Para decidir, no es un bug — BENITEZ
+
+**BENITEZ, MIGUEL ANGEL** tiene `10,0 / 10 · Excelente` con todas las
+dimensiones en 10, y sin embargo la tarjeta lo pone en **Uso de la App**, con
+causa **Calidad de las fotos**.
+
+No es una contradicción: Calidad tiene peso 0, así que no baja la nota, pero sí
+es algo concreto que se puede mejorar, y la tarjeta dice explícitamente
+"dónde conviene intervenir, que es distinto de la nota". Funciona como fue
+diseñado.
+
+La pregunta es de criterio, no técnica: **¿querés que alguien con 10,0 y
+"Excelente" aparezca marcado para intervención?** Si la respuesta es no, la
+Calidad de las fotos tendría que dejar de mover el tipo de devolución mientras
+siga pesando 0. No lo toqué porque es criterio de negocio.
