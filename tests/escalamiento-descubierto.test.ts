@@ -5,7 +5,10 @@ import {
 } from '@/lib/escalamiento-descubierto'
 import type { ContextoTurno, TurnoEscalable } from '@/lib/escalamiento-descubierto'
 import { normalizarTelefonoAr, mostrarTelefono } from '@/lib/telefono-ar'
-import { configuracionMeta, proveedorMeta, proveedorSimulado } from '@/lib/whatsapp'
+import {
+  configuracionMeta, corteActivacionWhatsApp, pasaCorteWhatsApp,
+  proveedorMeta, proveedorSimulado,
+} from '@/lib/whatsapp'
 
 // El escalamiento de un puesto descubierto. No decide si el puesto está
 // descubierto —eso lo dice lib/turnos.ts— sino a quién avisarle y cuándo.
@@ -412,6 +415,33 @@ describe('el mensaje dice el hecho', () => {
   it('las plantillas tienen los nombres que se van a pedir en Meta', () => {
     expect(PLANTILLA[NIVEL.supervisor]).toBe('puesto_descubierto_15')
     expect(PLANTILLA[NIVEL.operativo]).toBe('puesto_descubierto_30')
+  })
+})
+
+describe('el punto de corte de activación del canal', () => {
+  const activacion = Date.parse('2026-09-01T18:00:00Z')
+
+  it('sin la clave configurada el canal NO está activado: nada pasa', () => {
+    for (const valor of [null, undefined, '', '   ', 'no es una fecha']) {
+      expect(corteActivacionWhatsApp(valor)).toBeNull()
+    }
+    expect(pasaCorteWhatsApp(Date.parse('2099-01-01T00:00:00Z'), null)).toBe(false)
+  })
+
+  it('un valor ISO UTC define el instante de activación', () => {
+    expect(corteActivacionWhatsApp('2026-09-01T18:00:00Z')).toBe(activacion)
+    expect(corteActivacionWhatsApp('  2026-09-01T18:00:00Z  ')).toBe(activacion)
+  })
+
+  it('un evento anterior al corte se ignora; uno igual o posterior pasa', () => {
+    expect(pasaCorteWhatsApp(activacion - 1, activacion)).toBe(false)
+    expect(pasaCorteWhatsApp(activacion, activacion)).toBe(true)
+    expect(pasaCorteWhatsApp(activacion + 60000, activacion)).toBe(true)
+  })
+
+  it('un evento sin fecha parseable no pasa: no se escala lo que no se puede fechar', () => {
+    expect(pasaCorteWhatsApp(Date.parse(''), activacion)).toBe(false)
+    expect(pasaCorteWhatsApp(NaN, activacion)).toBe(false)
   })
 })
 
