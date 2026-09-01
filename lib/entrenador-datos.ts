@@ -112,6 +112,17 @@ export function ensenanzasDeEmpleado(
  *
  * Es el resumen que pide Administración, y sale de las mismas enseñanzas que
  * recibe cada persona: no hay una segunda cuenta de "quién anda mal".
+ *
+ * ── SIN CONSUMIDOR PRODUCTIVO desde el 31/08/2026 ───────────────────────────
+ * La alimentaba el bloque "Necesitan capacitación" del panel de Cumplimiento,
+ * que se reemplazó por la clasificación por tipo de devolución: listar seis
+ * grupos con treinta nombres decía quién se equivocó pero no servía para
+ * gestionar, porque no distinguía a quien no presta el servicio de quien lo
+ * presta y no lo registra.
+ *
+ * Queda acá, con sus tests, porque la agregación por tema sigue siendo válida
+ * y puede hacer falta para una vista de capacitación propia. Si en un tiempo
+ * nadie la usó, se borra.
  */
 export interface GrupoCapacitacion {
   clave: string

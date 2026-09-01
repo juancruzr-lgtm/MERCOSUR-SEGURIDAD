@@ -29,8 +29,24 @@ import { AYUDA_SIN_ZONAS, MENSAJE_SIN_ZONAS } from '@/lib/bandeja-planillas'
 import {
   cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
-import { agruparCapacitacion, ensenanzasDeEmpleado } from '@/lib/entrenador-datos'
-import { ETIQUETA_ENTRENAMIENTO } from '@/lib/entrenador-operativo'
+import { ETIQUETA_TIPO_DEVOLUCION, causaPrincipal, generarBalance } from '@/lib/balance-mensual'
+import type { TipoDevolucion } from '@/lib/balance-mensual'
+import ComposicionNota from '@/components/cumplimiento/ComposicionNota'
+
+const TIPOS: TipoDevolucion[] = [
+  'sin_intervencion', 'uso_app', 'prestacion_servicio', 'app_y_servicio', 'muestra_insuficiente',
+]
+
+/** Colores conceptualmente separados: verde ok, celeste app, ambar servicio,
+ *  rojo ambos, gris sin base. Nunca se depende solo del color — la etiqueta de
+ *  texto va siempre al lado. */
+const COLOR_TIPO: Record<TipoDevolucion, string> = {
+  sin_intervencion: '#10b981',
+  uso_app: '#38bdf8',
+  prestacion_servicio: '#f59e0b',
+  app_y_servicio: '#ef4444',
+  muestra_insuficiente: '#64748b',
+}
 
 const COLOR_ESTADO: Record<EstadoDesempeno, string> = {
   excelente:             '#10b981',
@@ -105,6 +121,7 @@ export default function DesempenoPanel({
   const [error, setError] = useState('')
   const [lista, setLista] = useState<DesempenoEmpleado[]>([])
   const [sinZonas, setSinZonas] = useState(false)
+  const [filtroTipo, setFiltroTipo] = useState<'todos' | TipoDevolucion>('todos')
   const [filtroEstado, setFiltroEstado] = useState<'todos' | EstadoDesempeno>('todos')
   const [filtroObjetivo, setFiltroObjetivo] = useState('')
   const [busqueda, setBusqueda] = useState('')
@@ -155,36 +172,66 @@ export default function DesempenoPanel({
     return Array.from(s).sort()
   }, [lista])
 
+  const resumen = useMemo(() => resumirDesempeno(lista), [lista])
+
+  /**
+   * El balance de cada persona, para clasificarla.
+   *
+   * Reemplaza al bloque "Necesitan capacitación", que listaba seis grupos con
+   * treinta nombres cada uno: eso decía quién se equivocó pero no servía para
+   * gestionar, porque no distinguía a quien no presta el servicio de quien lo
+   * presta y no lo registra.
+   *
+   * Sale del MISMO cálculo que ya alimenta la fila —no hay una segunda cuenta
+   * de "quién anda mal"— y usa el mismo umbral del Entrenador: las incidencias
+   * aisladas no convierten a nadie en caso.
+   */
+  const balances = useMemo(() => {
+    const out = new Map<string, ReturnType<typeof generarBalance>>()
+    for (const d of lista) {
+      const m = medido.get(d.empleadoId)
+      out.set(d.empleadoId, generarBalance({
+        empleadoId: d.empleadoId,
+        periodo: mes,
+        turnosTrabajados: d.jornadas.length,
+        dimensiones: d.cumplimiento.dimensiones,
+        base: d.cumplimiento.base,
+        puntualidad: d.cumplimiento.puntualidad,
+        rondas: m?.rondas ?? null,
+        uniforme: m?.uniforme ?? null,
+        libro: m?.libro ?? null,
+        calidad: m?.calidad ?? null,
+      }))
+    }
+    return out
+  }, [lista, medido, mes])
+
+  /**
+   * Cuánta gente hay en cada categoría.
+   *
+   * Se cuenta sobre `lista`, que ya viene recortada por el alcance de quien
+   * mira: un supervisor de zona no puede ver "20 con problemas" si sólo tiene
+   * acceso a 5. El recorte lo hace `cargarFilasBandeja`, no una regla nueva acá.
+   */
+  const porTipo = useMemo(() => {
+    const c: Record<TipoDevolucion, number> = {
+      sin_intervencion: 0, uso_app: 0, prestacion_servicio: 0,
+      app_y_servicio: 0, muestra_insuficiente: 0,
+    }
+    balances.forEach(b => { c[b.tipoDevolucion] += 1 })
+    return c
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [balances])
+
+  // El filtro por categoría CONVIVE con los otros: mes, estado, objetivo y
+  // búsqueda se siguen aplicando encima. No es una pantalla aparte.
   const visibles = useMemo(() => lista.filter(d => {
+    if (filtroTipo !== 'todos' && balances.get(d.empleadoId)?.tipoDevolucion !== filtroTipo) return false
     if (filtroEstado !== 'todos' && d.cumplimiento.estado !== filtroEstado) return false
     if (filtroObjetivo && d.objetivos.indexOf(filtroObjetivo) < 0) return false
     if (busqueda && d.empleado.toLowerCase().indexOf(busqueda.toLowerCase()) < 0) return false
     return true
-  }), [lista, filtroEstado, filtroObjetivo, busqueda])
-
-  const resumen = useMemo(() => resumirDesempeno(lista), [lista])
-
-  /**
-   * Quién necesita capacitación, agrupado por tema.
-   *
-   * Sale de las MISMAS enseñanzas que recibiría cada persona: no hay una
-   * segunda cuenta de "quién anda mal" que pueda decir otra cosa. Las
-   * incidencias aisladas no entran — una sola vez no es una necesidad de
-   * capacitación, y meterlas llenaría la lista de gente que se equivocó una vez.
-   */
-  const capacitacion = useMemo(() => agruparCapacitacion(
-    lista.map(d => {
-      const m = medido.get(d.empleadoId)
-      return {
-        empleadoId: d.empleadoId,
-        empleado: d.empleado,
-        ensenanzas: ensenanzasDeEmpleado(mes, d.cumplimiento, m
-          ? { rondas: m.rondas, uniforme: m.uniforme, libro: m.libro, calidad: m.calidad }
-          : {}),
-      }
-    }),
-    ETIQUETA_ENTRENAMIENTO,
-  ), [lista, medido, mes])
+  }), [lista, balances, filtroTipo, filtroEstado, filtroObjetivo, busqueda])
   const meses = useMemo(() => mesesDisponibles('2026-06'), [])
   const estados = Object.keys(ETIQUETA_ESTADO) as EstadoDesempeno[]
 
@@ -251,25 +298,36 @@ export default function DesempenoPanel({
         </div>
       )}
 
-      {!soloUno && !cargando && capacitacion.length > 0 && (
+      {/* Reemplaza al bloque "Necesitan capacitación", que listaba seis grupos
+          con treinta nombres cada uno. Los nombres están en la tabla: acá va
+          CUÁNTOS y DÓNDE, y tocar una tarjeta filtra la lista. */}
+      {!soloUno && !cargando && lista.length > 0 && (
         <div style={{ ...S.caja, marginBottom:12 }}>
-          <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:8 }}>NECESITAN CAPACITACIÓN</div>
-          {capacitacion.map(g => (
-            <div key={g.clave} style={{ padding:'6px 0', borderBottom:'1px solid #1e2d4266' }}>
-              <div style={{ ...S.dim, fontWeight:600 }}>
-                {g.etiqueta} — {g.personas.length} {g.personas.length === 1 ? 'persona' : 'personas'}
-                {g.patrones > 0 && (
-                  <span style={{ color:'#f59e0b', fontWeight:400 }}>
-                    {' · '}{g.patrones} con patrón persistente
-                  </span>
-                )}
-              </div>
-              <div style={{ ...S.tenue, marginTop:2 }}>{g.personas.join(' · ')}</div>
-            </div>
-          ))}
-          <div style={{ ...S.tenue, marginTop:8, lineHeight:1.5 }}>
-            Agrupa a quien reincidió, no a quien se equivocó una vez. Es una lista de
-            qué enseñar, no de a quién sancionar.
+          <div style={{ ...S.tenue, letterSpacing:.5, marginBottom:10 }}>
+            RESUMEN OPERATIVO · {etiquetaMes(mes).toUpperCase()}
+          </div>
+
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            <TarjetaTipo
+              activo={filtroTipo === 'todos'} n={lista.length} etiqueta="Todos"
+              color="#94a3b8" onClick={() => setFiltroTipo('todos')}
+            />
+            {TIPOS.map(t => (
+              <TarjetaTipo
+                key={t}
+                activo={filtroTipo === t}
+                n={porTipo[t]}
+                etiqueta={ETIQUETA_TIPO_DEVOLUCION[t]}
+                color={COLOR_TIPO[t]}
+                onClick={() => setFiltroTipo(filtroTipo === t ? 'todos' : t)}
+              />
+            ))}
+          </div>
+
+          <div style={{ ...S.tenue, marginTop:10, lineHeight:1.55 }}>
+            <b style={{ color:'#cbd5e1' }}>Dónde conviene intervenir</b>, que es distinto
+            de la nota: alguien puede tener 7,5 por no registrar y otro 7,5 por no hacer
+            las rondas. Cuenta sólo lo reiterado — una incidencia suelta no hace un caso.
           </div>
         </div>
       )}
@@ -291,8 +349,13 @@ export default function DesempenoPanel({
         <div style={S.caja}>
           {!soloUno && (
             <div style={{ ...S.tenue, marginBottom:8 }}>
-              {visibles.length} de {lista.length} empleados · ordenados por prioridad
-              operativa, no por puntaje
+              {visibles.length} de {lista.length} empleados · orden operativo, no por
+              puntaje: <b style={{ color:'#cbd5e1' }}>requiere intervención → requiere
+              seguimiento → datos insuficientes → correcto → excelente</b>, y dentro de
+              cada grupo primero el que tiene más incidencias.
+              {' '}Datos insuficientes va tercero y no último porque también pide una
+              acción —faltan jornadas que registrar—, aunque no sea un problema de la
+              persona.
             </div>
           )}
           {visibles.map(d => (
@@ -303,6 +366,7 @@ export default function DesempenoPanel({
               mes={mes}
               abierto={soloUno || abierto === d.empleadoId}
               onAbrir={() => setAbierto(abierto === d.empleadoId ? null : d.empleadoId)}
+              balance={balances.get(d.empleadoId)}
             />
           ))}
         </div>
@@ -311,48 +375,89 @@ export default function DesempenoPanel({
   )
 }
 
-function Empleado({ d, abierto, onAbrir, soloUno, mes }: {
+/** Una tarjeta del resumen. Filtra la tabla al tocarla. */
+function TarjetaTipo({ activo, n, etiqueta, color, onClick }: {
+  activo: boolean; n: number; etiqueta: string; color: string; onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      // El estado activo NO depende sólo del color: lleva borde y fondo. Alguien
+      // que no distingue el verde del ámbar tiene que poder ver cuál está puesto.
+      style={{
+        background: activo ? color + '22' : '#0b1220',
+        border: `1px solid ${activo ? color : '#1e2d42'}`,
+        borderRadius:10, padding:'8px 12px', cursor:'pointer',
+        display:'flex', flexDirection:'column', gap:2, minWidth:120,
+        fontFamily:'inherit', textAlign:'left',
+      }}
+    >
+      <span style={{ fontSize:18, fontWeight:800, fontFamily:'Syne,sans-serif', color }}>
+        {n}
+      </span>
+      <span style={{ fontSize:11, color: activo ? '#e2e8f0' : '#94a3b8', fontWeight: activo ? 700 : 400 }}>
+        {etiqueta}
+      </span>
+    </button>
+  )
+}
+
+function Empleado({ d, abierto, onAbrir, soloUno, mes, balance }: {
   d: DesempenoEmpleado
   abierto: boolean
   onAbrir: () => void
   soloUno: boolean
   mes: string
+  balance?: ReturnType<typeof generarBalance>
 }) {
   const r = d.cumplimiento
   const nucleo = d.resultado
+  const tipo = balance?.tipoDevolucion
+  const causa = balance ? causaPrincipal(balance) : null
 
   return (
     <div>
       <div style={S.fila}>
-        <div style={{ flex:1, minWidth:190 }}>
+        <div style={{ flex:'1 1 200px', minWidth:180 }}>
           {!soloUno && (
             <div style={{ fontSize:13, fontWeight:700, color:'#e2e8f0' }}>{d.empleado}</div>
           )}
-          <div style={S.tenue}>{d.objetivos.join(' · ')}</div>
+          {/* Resumidos: con seis objetivos la fila se hacía ilegible. */}
+          <div style={{ ...S.tenue, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:220 }}
+               title={d.objetivos.join(' · ')}>
+            {d.objetivos.length <= 2
+              ? d.objetivos.join(' · ')
+              : `${d.objetivos.slice(0, 2).join(' · ')} +${d.objetivos.length - 2}`}
+          </div>
         </div>
 
-        <Chip estado={r.estado} />
-        <div style={{ minWidth:78, textAlign:'right' }}><Puntaje d={d} /></div>
-
-        {/* Las tres que puntúan, en el mismo orden que la ficha. Se leen del
-            resultado de Cumplimiento para que no puedan discrepar del número. */}
-        {!nucleo.datosInsuficientes && (
-          <div style={{ ...S.tenue, minWidth:210 }}>
-            {r.dimensiones
-              .filter(dim => dim.estado === 'puntuable' && dim.nota !== null)
-              .map((dim, k) => (
-                <span key={dim.clave}>
-                  {k > 0 ? ' · ' : ''}
-                  {dim.etiqueta.split(' /')[0]}{' '}
-                  <strong style={{ color:'#e2e8f0' }}>{coma(dim.nota!)}</strong>
-                </span>
-              ))}
-          </div>
+        {/* Dos ejes distintos, uno al lado del otro: el estado dice CÓMO le fue,
+            el tipo dice DÓNDE conviene intervenir. Un 7,5 puede ser por no
+            registrar o por no hacer rondas, y no es lo mismo. */}
+        {tipo && (
+          <span style={{
+            ...S.chip, whiteSpace:'nowrap',
+            color: COLOR_TIPO[tipo], background: COLOR_TIPO[tipo] + '1a',
+            border: '1px solid ' + COLOR_TIPO[tipo] + '55',
+          }}>
+            {ETIQUETA_TIPO_DEVOLUCION[tipo]}
+          </span>
         )}
 
-        <div style={{ ...S.tenue, minWidth:150 }}>
+        <Chip estado={r.estado} />
+        <div style={{ minWidth:72, textAlign:'right' }}><Puntaje d={d} /></div>
+
+        {/* La composición, al lado del número: hace evidente si baja por el
+            servicio o por el registro sin tener que abrir el detalle. */}
+        {!nucleo.datosInsuficientes && (
+          <ComposicionNota dimensiones={r.dimensiones} />
+        )}
+
+        <div style={{ ...S.tenue, minWidth:130, flex:'0 1 auto' }}>
+          {causa && <div style={{ color:'#cbd5e1', fontWeight:600 }}>{causa}</div>}
           {nucleo.observacionesValidas}/{nucleo.jornadasAplicables} jornadas ·
-          {' '}{Math.round(nucleo.cobertura * 100)} % de cobertura
+          {' '}{Math.round(nucleo.cobertura * 100)} %
         </div>
 
         {!soloUno && (
@@ -402,6 +507,16 @@ function Detalle({ d, mes }: { d: DesempenoEmpleado; mes: string }) {
       <div style={{ ...S.caja, background:'#0b1220' }}>
         <div style={{ fontSize:12.5, fontWeight:700, color:'#e2e8f0', marginBottom:10 }}>
           Qué explica este resultado
+        </div>
+
+        {/* Las seis dimensiones completas, que salieron de la fila para que la
+            tabla dejara de ser ilegible. Acá no se pierde nada: es el mismo
+            componente, más grande. */}
+        <div style={{ marginBottom:14, paddingBottom:12, borderBottom:'1px solid #1e2d4266' }}>
+          <div style={{ ...S.tenue, letterSpacing:.4, marginBottom:8 }}>
+            CÓMO SE COMPONE LA NOTA
+          </div>
+          <ComposicionNota dimensiones={c.dimensiones} tamano="amplio" />
         </div>
 
         {r.motivos.length === 0 && (
