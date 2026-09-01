@@ -51,6 +51,8 @@ export interface RondaAlertaEscalable {
   /** timestamptz de la ventana programada. */
   ventana_inicio?: string | null
   ventana_fin?: string | null
+  /** timestamptz de cuándo el sistema detectó el incumplimiento. */
+  detectada_at?: string | null
 }
 
 export type MotivoDescarteRonda =

@@ -79,6 +79,45 @@ export function configuracionMeta(): ConfiguracionMeta {
   }
 }
 
+// ── Punto de corte de activación del canal ──────────────────────────────────
+//
+// El canal WhatsApp arranca con historia acumulada: al momento de encenderlo
+// ya existen alertas de ronda pendientes de semanas y turnos en ventana. Sin
+// un corte, la primera corrida real escalaría todo ese backlog de golpe.
+//
+// El corte es UNA fila de app_config —la misma infraestructura que usan la IA
+// y la visibilidad de desempeño— con fecha-hora UTC:
+//
+//   insert into app_config (key, value, description)
+//   values ('whatsapp_activo_desde', '2026-09-01T18:00:00Z', '...');
+//
+// Sólo los eventos ocurridos DESDE ese instante (inclusive) se escalan por
+// WhatsApp. Y sin la clave configurada el canal NO está activado: ningún
+// evento pasa, ni en envío real ni como candidato. Activar es un acto
+// explícito y queda auditado en la propia fila (app_config no se borra sola).
+//
+// El corte es del CANAL, no de las alertas: no toca ronda_alertas, no resuelve
+// históricos y el push no lo mira.
+
+export const CLAVE_WHATSAPP_ACTIVO_DESDE = 'whatsapp_activo_desde'
+
+/**
+ * El instante de activación en ms epoch, o null si el canal no está activado
+ * (clave ausente, vacía o con un valor que no es una fecha).
+ */
+export function corteActivacionWhatsApp(valor?: string | null): number | null {
+  const v = (valor ?? '').trim()
+  if (!v) return null
+  const ms = Date.parse(v)
+  return Number.isFinite(ms) ? ms : null
+}
+
+/** ¿El evento (ms epoch) queda del lado activo del corte? Sin corte, nada pasa. */
+export function pasaCorteWhatsApp(eventoMs: number, corte: number | null): boolean {
+  if (corte === null) return false
+  return Number.isFinite(eventoMs) && eventoMs >= corte
+}
+
 /**
  * Meta WhatsApp Cloud API.
  *

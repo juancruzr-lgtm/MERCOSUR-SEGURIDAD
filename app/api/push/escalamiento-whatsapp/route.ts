@@ -26,7 +26,10 @@ import {
 } from '@/lib/escalamiento-ronda'
 import type { RondaAlertaEscalable } from '@/lib/escalamiento-ronda'
 import { normalizarTelefonoAr } from '@/lib/telefono-ar'
-import { configuracionMeta, proveedorPorDefecto, proveedorSimulado } from '@/lib/whatsapp'
+import {
+  CLAVE_WHATSAPP_ACTIVO_DESDE, configuracionMeta, corteActivacionWhatsApp,
+  pasaCorteWhatsApp, proveedorPorDefecto, proveedorSimulado,
+} from '@/lib/whatsapp'
 import { instanteLocal, nombreResponsablesOperativos, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import { sumarDiasFecha } from '@/lib/turnos'
 
@@ -139,10 +142,18 @@ export async function GET(req: Request) {
       // no_iniciada: pausas, capacitación, objetivos de prueba y demás
       // exclusiones ya actuaron al momento de crear (o no crear) la alerta.
       client.from('ronda_alertas')
-        .select('id, tipo, estado, objetivo_id, puesto_id, turno_id, guardia_id, ventana_inicio, ventana_fin, ronda:rondas_base(nombre)')
+        .select('id, tipo, estado, objetivo_id, puesto_id, turno_id, guardia_id, ventana_inicio, ventana_fin, detectada_at, ronda:rondas_base(nombre)')
         .eq('estado', 'pendiente')
         .eq('tipo', 'no_iniciada'),
     ])
+
+  // El punto de corte del canal: sin la clave configurada, WhatsApp no está
+  // activado y ningún evento —viejo o nuevo— se escala. Ver lib/whatsapp.ts.
+  const corteRes = await client.from('app_config')
+    .select('value').eq('key', CLAVE_WHATSAPP_ACTIVO_DESDE).maybeSingle()
+  const corte = corteActivacionWhatsApp((corteRes.data as any)?.value)
+  let ignoradosCorteTurnos = 0
+  let ignoradosCorteRondas = 0
 
   const turnos = (turnosRes.data ?? []) as TurnoEscalable[]
   const objetivos = objetivosRes.data ?? []
@@ -195,6 +206,14 @@ export async function GET(req: Request) {
       continue
     }
     const nivel = d.nivel as ClaveNivel
+
+    // El evento es el inicio del turno que quedó descubierto. Anterior al
+    // corte de activación → no se escala por WhatsApp (el push no cambia).
+    if (!pasaCorteWhatsApp(ahora.getTime() - min * 60000, corte)) {
+      ignoradosCorteTurnos += 1
+      descartes.anterior_al_corte_whatsapp = (descartes.anterior_al_corte_whatsapp ?? 0) + 1
+      continue
+    }
 
     // ── Destinatarios ──────────────────────────────────────────────────────
     // Nivel 15: el responsable de la zona del objetivo, con LA resolución que
@@ -367,6 +386,14 @@ export async function GET(req: Request) {
       if (d.motivo) descartesRonda[d.motivo] = (descartesRonda[d.motivo] ?? 0) + 1
       continue
     }
+    // El evento es la DETECCIÓN de la alerta. Las 70 pendientes históricas
+    // quedan del lado viejo del corte y no se escalan; una alerta nueva
+    // (detectada después de activar) pasa normalmente.
+    if (!pasaCorteWhatsApp(Date.parse(alerta.detectada_at ?? ''), corte)) {
+      ignoradosCorteRondas += 1
+      descartesRonda.anterior_al_corte_whatsapp = (descartesRonda.anterior_al_corte_whatsapp ?? 0) + 1
+      continue
+    }
     if (avisadasRonda.has(claveDedupRonda(alerta))) {
       descartesRonda.ya_avisada = (descartesRonda.ya_avisada ?? 0) + 1
       continue
@@ -481,6 +508,12 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     modo: enviarDeVerdad ? (proveedor.configurado ? 'ENVIO_REAL' : 'SIN_PROVEEDOR_NO_ENVIA') : 'SIMULACION',
+    activacion: {
+      clave: CLAVE_WHATSAPP_ACTIVO_DESDE,
+      configurada: corte !== null,
+      desde: corte !== null ? new Date(corte).toISOString() : null,
+      ignoradosPorCorte: { turnos: ignoradosCorteTurnos, rondas: ignoradosCorteRondas },
+    },
     meta: configuracionMeta(),
     ...(fuentesConError.length > 0 ? { FUENTES_CON_ERROR: fuentesConError } : {}),
     proveedor: proveedor.nombre,
