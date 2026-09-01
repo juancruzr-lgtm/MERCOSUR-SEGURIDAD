@@ -617,15 +617,25 @@ export async function cargarEvidenciasDelMes(
   // Paginado: el mes entero pasa holgadamente el límite de 1000 filas de
   // PostgREST, y una página silenciosamente truncada haría que a la mitad de la
   // gente le falten evidencias sin ningún error a la vista.
+  //
+  // El DESEMPATE POR `id` es lo que hace estable esa paginación, y no es
+  // teórico: en agosto de 2026 hay 2.024 evidencias con 526 timestamps
+  // repetidos —hasta tres filas comparten el mismo—, y las posiciones 1.999 y
+  // 2.000, justo en el borde entre la segunda y la tercera página, tienen el
+  // mismo `evidencia_created_at`. Sin un segundo criterio, PostgreSQL no
+  // garantiza cuál de las dos devuelve primero, así que entre una página y la
+  // siguiente una fila puede repetirse o perderse. Es el mismo defecto que ya
+  // se corrigió en supervisiones y en la bandeja.
   const TAM = 1000
   for (let desde = 0; ; desde += TAM) {
     const { data, error } = await client
       .from('evidencia_analisis')
-      .select('analisis_tipo, clasificacion_efectiva, revision_estado, motivos, guardia_id, objetivo_id')
+      .select('id, analisis_tipo, clasificacion_efectiva, revision_estado, motivos, guardia_id, objetivo_id')
       .eq('estado', 'completado')
       .gte('evidencia_created_at', `${mes}-01T00:00:00`)
       .lte('evidencia_created_at', `${mes}-${String(ultimo).padStart(2, '0')}T23:59:59`)
       .order('evidencia_created_at', { ascending: true })
+      .order('id', { ascending: true })
       .range(desde, desde + TAM - 1)
     if (error) return { evidencias: [], error: error.message }
     const pagina = (data ?? []) as any[]

@@ -73,17 +73,20 @@ export default function ControlPlanillasPanel({
         .select('turno_id, empleado_id, turno:turnos!inner(fecha, objetivo:objetivos!inner(es_prueba))')
         .gte('turno.fecha', desde).lte('turno.fecha', hasta)
         .eq('turno.objetivo.es_prueba', false)
-        .order('turno_id').range(d, h)),
+        .order('turno_id').order('empleado_id').range(d, h)),
       fetchPaginadoResult((d, h) => supabase.from('solicitudes_modificacion_planilla')
         .select('id, turno_id, empleado_id, texto, estado, created_at, turno:turnos!inner(fecha, objetivo:objetivos!inner(es_prueba))')
         .gte('turno.fecha', desde).lte('turno.fecha', hasta)
         .eq('turno.objetivo.es_prueba', false)
         .order('created_at', { ascending: false }).order('id').range(d, h)),
+      // Desempate: hay 13 turnos con más de una revisión. Sin él, el día que
+      // esta tabla pase las 1.000 filas el orden dejaría de ser estable entre
+      // páginas y una revisión podría repetirse o perderse.
       fetchPaginadoResult((d, h) => supabase.from('revisiones_planilla')
         .select('turno_id, empleado_id, accion, created_at, turno:turnos!inner(fecha, objetivo:objetivos!inner(es_prueba))')
         .gte('turno.fecha', desde).lte('turno.fecha', hasta)
         .eq('turno.objetivo.es_prueba', false)
-        .order('turno_id').range(d, h)),
+        .order('turno_id').order('created_at').order('empleado_id').range(d, h)),
     ])
 
     const fallo = acep.error || soli.error || revi.error
