@@ -168,3 +168,58 @@ No afecta horas ni liquidación: el dato está bien guardado, se mostraba mal.
 turno" pregunta lo que dice su etiqueta: quién entró y no salió, mirando hoy y
 ayer. La regla del mes no cambia: el turno del 31/08 se carga para verlo en
 curso, pero sigue siendo de agosto.
+
+---
+
+## CORRECCIÓN IMPORTANTE — el total de agosto NO es 2.722,56 h
+
+En el Ciclo 2 medí las horas sumando la columna `registros_asistencia.horas_liquidables`.
+**Ese número está mal** y la señal estaba a la vista: `fichaje_gps` daba 1.543 h
+repartidas en 1.228 registros, o sea **1,26 h por turno**, imposible para turnos
+de 8 a 12 horas.
+
+La columna está mayormente **vacía** en los fichajes GPS. Las horas se calculan
+al vuelo en `horasLiquidablesRegistro` (lib/liquidacion.ts) con cinco reglas:
+
+| regla | qué hace | agosto |
+|---|---|---|
+| P1 | valor almacenado | 2.722,56 h (252 regs) |
+| P2 | horarios `_final` corregidos | 0 |
+| P3 | entrada y salida reales → **duración programada** | **10.937,50 h** (1070 regs) |
+| P5 | resto → 0 | 0 h (14 regs, los nocturnos en curso) |
+
+### Total correcto de agosto
+
+| corte | horas |
+|---|---|
+| Total general | **13.660,06** |
+| Suma por empleado (66) | **13.660,06** |
+| Suma por objetivo (41) | **13.660,06** |
+| **Diferencia** | **0,00** ✓ |
+
+La reconciliación interna se mantiene perfecta: el error estaba en la escala,
+no en el reparto.
+
+## BRECHA ABIERTA — 747,72 h contra Reportes
+
+Reportes muestra **12.870,00 h reconocidas** para agosto. Mi cálculo
+independiente da 13.660,06. Aplicando los filtros que la pantalla debería usar:
+
+| paso | horas |
+|---|---|
+| Crudo | 13.660,06 |
+| − objetivos `es_prueba` | 13.643,72 |
+| − turnos anulados | 13.629,72 |
+| − turnos aún en curso | 13.617,72 |
+| **Reportes dice** | **12.870,00** |
+| **Brecha sin explicar** | **747,72** |
+
+Puede ser que mi réplica de las reglas omita alguna exclusión legítima, o que la
+pantalla esté dejando horas afuera. **Hasta resolverlo, agosto no puede
+declararse conciliado.**
+
+Datos de contexto de la propia pantalla, que tampoco cierran entre sí:
+programadas exigibles 13.853, reconocidas 12.870 → 983 h de hueco, pero la
+tarjeta "Diferencia pendiente" declara 258 h en 6 turnos.
+
+**Estado: 🔴 mientras la brecha siga abierta.**
