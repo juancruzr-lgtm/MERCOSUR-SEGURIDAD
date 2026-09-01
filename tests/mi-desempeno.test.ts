@@ -64,6 +64,46 @@ describe('sin muestra no se muestra ningun numero', () => {
     expect(v.explicacionSinMuestra).toContain('No es una nota baja')
   })
 
+  it('no se muestra NINGUN puntaje, aunque haya mediciones parciales', () => {
+    // El caso RAMOS: asistencia y puntualidad si tenian medicion sobre 5
+    // jornadas. Mostrarlas al lado de "no hay evaluacion consolidada" las
+    // convierte en una nota parcial a los ojos de quien lee.
+    expect(v.dimensiones).toEqual([])
+    expect(v.informativas).toEqual([])
+    expect(JSON.stringify(v)).not.toMatch(/\d,\d\d/)
+  })
+
+  it('en su lugar se cuentan hechos, sin cuanto dio cada uno', () => {
+    const h = v.hechosSinMuestra.join(' ')
+    expect(h).toContain('Jornadas registradas en el período: 5')
+    expect(h).toContain('Hay información registrada de:')
+    expect(h).toContain('Todavía no alcanza para consolidar la evaluación mensual')
+  })
+
+  it('se nombra lo que no le correspondia, sin puntaje', () => {
+    const u = vistaDeEvaluacion(fila({
+      datos_insuficientes: true, nota_final: null,
+      dimensiones: [
+        { clave: 'rondas', etiqueta: 'Rondas', nota: null, peso: 35, estado: 'no_aplica' },
+        { clave: 'asistencia', etiqueta: 'Asistencia', nota: 10, peso: 20, estado: 'puntuable' },
+      ],
+      contexto: { jornadas: 5, objetivos: ['ACA'] },
+    }))
+    const h = u.hechosSinMuestra.join(' ')
+    expect(h).toContain('No te correspondió este mes: Rondas')
+    expect(h).toContain('Hay información registrada de: Asistencia')
+    expect(h).not.toContain('10')
+  })
+
+  it('una evaluacion parcial NO cae en esta rama: tiene nota y se explica', () => {
+    // MENA: hay evaluacion, con cobertura limitada. No es lo mismo que no tenerla.
+    const p = vistaDeEvaluacion(fila({ alcance: 'parcial', cobertura: 53.5, nota_final: 3.89 }))
+    expect(p.sinMuestra).toBe(false)
+    expect(p.nota).toBe('3,89')
+    expect(p.hechosSinMuestra).toEqual([])
+    expect(p.dimensiones.length).toBeGreaterThan(0)
+  })
+
   it('con una sola jornada el texto queda en singular', () => {
     const u = vistaDeEvaluacion(fila({
       datos_insuficientes: true, nota_final: null, contexto: { jornadas: 1 },

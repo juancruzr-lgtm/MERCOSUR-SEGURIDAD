@@ -71,6 +71,14 @@ export interface VistaDesempeno {
   cumplimiento: string | null
   /** El texto que reemplaza a la nota cuando no hay muestra. */
   explicacionSinMuestra: string | null
+  /**
+   * Hechos del período cuando no hay evaluación, SIN puntajes.
+   *
+   * Un 9,00 al lado de "no hay evaluación consolidada" se lee como una nota
+   * parcial, y no lo es: es una medición suelta sobre una muestra que no
+   * alcanza. Se dice qué información existe, no cuánto dio.
+   */
+  hechosSinMuestra: string[]
   /** Aviso cuando el mes se pudo medir sólo en parte. */
   avisoDeCobertura: string | null
   /** Sólo cuando un tope efectivamente bajó la nota. */
@@ -145,8 +153,38 @@ export function vistaDeEvaluacion(fila: FilaPublicada): VistaDesempeno {
     .filter(Boolean)
 
   // ── Sin muestra: no hay número que mostrar ────────────────────────────────
+  //
+  // Ni la nota, ni un cero, ni el puntaje suelto de una dimensión. Aunque haya
+  // mediciones parciales —una asistencia completa sobre cinco jornadas, por
+  // ejemplo—, mostrarlas como cifras al lado de "no hay evaluación consolidada"
+  // las convierte en una nota parcial a los ojos de quien lee. Se cuenta qué
+  // información existe; cuánto dio se calla hasta que la muestra alcance.
   if (fila.datos_insuficientes || fila.nota_final === null) {
-    const jornadas = Number(objeto(fila.contexto).jornadas ?? 0)
+    const ctx = objeto(fila.contexto)
+    const jornadas = Number(ctx.jornadas ?? 0)
+    const objetivos = lista(ctx.objetivos).map(String).filter(Boolean)
+
+    const conRegistro = dims.filter(d => d.estado === 'puntuable').map(d => d.etiqueta)
+    const noCorrespondio = dims.filter(d => d.estado === 'no_aplica').map(d => d.etiqueta)
+
+    const hechos: string[] = []
+    if (jornadas > 0) {
+      hechos.push(`Jornadas registradas en el período: ${jornadas}.`)
+    }
+    if (objetivos.length > 0) {
+      hechos.push(`${objetivos.length === 1 ? 'Objetivo' : 'Objetivos'} `
+        + `donde trabajaste: ${objetivos.join(', ')}.`)
+    }
+    if (conRegistro.length > 0) {
+      hechos.push(`Hay información registrada de: ${conRegistro.join(', ')}.`)
+    }
+    if (noCorrespondio.length > 0) {
+      hechos.push(`No te ${noCorrespondio.length === 1 ? 'correspondió' : 'correspondieron'} `
+        + `este mes: ${noCorrespondio.join(', ')}.`)
+    }
+    hechos.push('Todavía no alcanza para consolidar la evaluación mensual, '
+      + 'así que este mes no lleva calificación.')
+
     return {
       periodo: fila.periodo,
       sinMuestra: true,
@@ -161,11 +199,13 @@ export function vistaDeEvaluacion(fila: FilaPublicada): VistaDesempeno {
             + 'y son muy pocas para describir el mes.'
           : '.')
         + ' No es una nota baja ni una observación: es que no hay con qué medir.',
+      hechosSinMuestra: hechos,
       avisoDeCobertura: null,
       topeAplicado: null,
       aTenerEnCuenta: [],
-      dimensiones: dims,
-      informativas,
+      // Vacías a propósito: la pantalla no tiene qué puntaje mostrar.
+      dimensiones: [],
+      informativas: [],
       loQueSalioBien: [],
       loQueConvieneMejorar: [],
       encabezadoDelBalance: null,
@@ -202,6 +242,7 @@ export function vistaDeEvaluacion(fila: FilaPublicada): VistaDesempeno {
     sinMuestra: false,
     nota: numero(fila.nota_final, 2),
     concepto: fila.concepto,
+    hechosSinMuestra: [],
     // Un decimal y el signo de porcentaje pegado al número: que no se pueda
     // leer como una nota sobre 10 ni por descuido.
     cumplimiento: numero(fila.cumplimiento_ponderado, 1),

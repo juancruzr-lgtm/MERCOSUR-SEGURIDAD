@@ -107,6 +107,15 @@ export default function MiDesempeno({
           <div style={{ fontSize:13, color:'#cbd5e1', lineHeight:1.6 }}>
             {vista.explicacionSinMuestra}
           </div>
+          {/* Hechos, nunca puntajes: un 9,00 acá se leería como nota parcial. */}
+          {vista.hechosSinMuestra.length > 0 && (
+            <div style={{ marginTop:12, borderTop:'1px solid #1e293b', paddingTop:10 }}>
+              <div style={{ ...S.rotulo, marginBottom:6 }}>Lo que sí quedó registrado</div>
+              {vista.hechosSinMuestra.map((h, i) => (
+                <div key={i} style={{ ...S.tenue, marginBottom:3 }}>· {h}</div>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <>
@@ -171,8 +180,8 @@ export default function MiDesempeno({
       )}
 
       {/* ── De dónde sale la nota ─────────────────────────────────────────────
-          Se muestra siempre, también sin muestra: sirve para entender qué se
-          mira, aunque este mes no haya alcanzado para calificar. */}
+          Sólo cuando hay nota. Sin muestra esta lista viene vacía: los puntajes
+          sueltos de un mes que no se pudo evaluar se leen como nota parcial. */}
       {vista.dimensiones.length > 0 && (
         <div style={S.caja}>
           <div style={{ ...S.rotulo, marginBottom:10 }}>Qué se mira, y cuánto pesa</div>
