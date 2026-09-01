@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  FERIADOS_NACIONALES, esFeriadoNacional, feriadoDeFecha, feriadoDelTurno,
+  CALENDARIO_NACIONAL, FERIADOS_NACIONALES, diaDeCalendario,
+  esDiaNoLaborableTuristico, esFeriadoNacional, feriadoDeFecha, feriadoDelTurno,
   feriadosDelMes, resumirFeriados, turnoCuentaEnFeriado,
 } from '@/lib/feriados'
 import { ESTADOS_SIN_OBLIGACION } from '@/lib/revision-operativa'
@@ -155,5 +156,99 @@ describe('el resumen cuenta días, no turnos', () => {
       { fecha: '2026-08-17', cuenta: true, horas: 0.005 },
     ])
     expect(r.horas).toBe(7.01)
+  })
+})
+
+// ── Un día no laborable turístico NO es un feriado nacional ─────────────────
+//
+// La distinción que sostiene el módulo. En un feriado nacional rige el descanso
+// dominical; un puente turístico es optativo para el empleador. Contarlos
+// juntos inflaría "Feriados cubiertos" con días que no lo son.
+//
+// Los tres de 2026 salen del decreto del Ejecutivo: 23/03, 10/07 y 07/12.
+
+describe('los días no laborables turísticos no cuentan como feriado', () => {
+  const TURISTICOS_2026 = ['2026-03-23', '2026-07-10', '2026-12-07']
+
+  it.each(TURISTICOS_2026)('%s NO es feriado nacional', fecha => {
+    expect(esFeriadoNacional(fecha)).toBe(false)
+    expect(feriadoDeFecha(fecha)).toBeNull()
+    expect(feriadoDelTurno({ fecha })).toBeNull()
+  })
+
+  it.each(TURISTICOS_2026)('%s sí está en el calendario, como turístico', fecha => {
+    const d = diaDeCalendario(fecha)
+    expect(d).not.toBeNull()
+    expect(d!.categoria).toBe('dia_no_laborable_turistico')
+    expect(esDiaNoLaborableTuristico(fecha)).toBe(true)
+  })
+
+  it.each(TURISTICOS_2026)('un turno trabajado el %s no suma al conteo', fecha => {
+    expect(cuenta(turno(fecha), 12)).toBe(false)
+  })
+
+  it('no aumentan "Feriados nacionales cubiertos"', () => {
+    const r = resumirFeriados(TURISTICOS_2026.map(fecha => ({
+      fecha, cuenta: cuenta(turno(fecha), 12), horas: 12,
+    })))
+    expect(r.feriadosCubiertos).toBe(0)
+    expect(r.horas).toBe(0)
+  })
+
+  it('el feriado vecino de cada turístico SÍ cuenta: no se confunden', () => {
+    // 23/03 turístico vs 24/03 Memoria · 10/07 turístico vs 09/07 Independencia
+    // · 07/12 turístico vs 08/12 Inmaculada.
+    expect(esFeriadoNacional('2026-03-24')).toBe(true)
+    expect(esFeriadoNacional('2026-07-09')).toBe(true)
+    expect(esFeriadoNacional('2026-12-08')).toBe(true)
+  })
+
+  it('ningún turístico se coló en la lista de feriados nacionales', () => {
+    const fechas = FERIADOS_NACIONALES.map(f => f.fecha)
+    for (const t of TURISTICOS_2026) expect(fechas).not.toContain(t)
+    expect(FERIADOS_NACIONALES.every(f => f.categoria === 'feriado_nacional')).toBe(true)
+  })
+
+  it('feriadosDelMes tampoco los devuelve', () => {
+    expect(feriadosDelMes('2026-03').map(f => f.fecha)).toEqual(['2026-03-24'])
+    expect(feriadosDelMes('2026-07').map(f => f.fecha)).toEqual(['2026-07-09'])
+    expect(feriadosDelMes('2026-12').map(f => f.fecha)).toEqual(['2026-12-08', '2026-12-25'])
+  })
+})
+
+// ── El calendario 2026, contrastado con la fuente oficial ───────────────────
+
+describe('el calendario 2026 coincide con el oficial', () => {
+  const del2026 = (cat: string) =>
+    CALENDARIO_NACIONAL.filter(d => d.fecha.startsWith('2026') && d.categoria === cat)
+
+  it('son 16 feriados nacionales', () => {
+    expect(del2026('feriado_nacional')).toHaveLength(16)
+  })
+
+  it('son 12 fijos y 4 trasladables', () => {
+    const nac = del2026('feriado_nacional')
+    expect(nac.filter(f => f.tipo === 'trasladable')).toHaveLength(4)
+    expect(nac.filter(f => f.tipo === 'inamovible' || f.tipo === 'movil')).toHaveLength(12)
+  })
+
+  it('los cuatro trasladables están en su fecha corrida', () => {
+    const t = del2026('feriado_nacional').filter(f => f.tipo === 'trasladable').map(f => f.fecha)
+    expect(t).toEqual(['2026-06-15', '2026-08-17', '2026-10-12', '2026-11-23'])
+  })
+
+  it('Carnaval son los dos días, lunes y martes', () => {
+    const carnaval = CALENDARIO_NACIONAL.filter(d => d.nombre === 'Carnaval')
+    expect(carnaval.map(d => d.fecha)).toEqual(['2026-02-16', '2026-02-17'])
+  })
+
+  it('son 3 días no laborables turísticos', () => {
+    expect(del2026('dia_no_laborable_turistico').map(d => d.fecha))
+      .toEqual(['2026-03-23', '2026-07-10', '2026-12-07'])
+  })
+
+  it('no hay fechas repetidas entre feriados y no laborables', () => {
+    const fechas = CALENDARIO_NACIONAL.map(d => d.fecha)
+    expect(new Set(fechas).size).toBe(fechas.length)
   })
 })
