@@ -1,4 +1,95 @@
-# Cierre de agosto 2026 — auditoría
+# Cierre de agosto 2026
+
+## ESTADO DE AGOSTO: 🟢 CONCILIADO / LISTO PARA PLANILLAS
+
+> Este cierre representa un **estado conciliado al 01/09/2026**. Agosto sigue
+> siendo editable mediante las funciones administrativas normales de la
+> aplicación. Una modificación posterior legítima puede cambiar los totales.
+>
+> No hay bloqueo contable, ni candado mensual, ni permisos nuevos.
+
+### Los números al corte
+
+| Concepto | Horas |
+|---|---:|
+| **Liquidación a vigiladores** | **13.957,50** |
+| **Facturación a objetivos** | **13.921,50** |
+| Diferencia | **36,00** |
+
+La diferencia son las **36,00 h de capacitación** en 3 turnos: se le pagan al
+vigilador y no se le cobran al objetivo. Es la única razón por la que los dos
+totales no coinciden, y está verificada contra la base.
+
+| Control | Valor |
+|---|---:|
+| Total programado del mes | 13.963,50 |
+| Total asignado | 13.963,50 |
+| Programadas exigibles | 13.963,50 |
+| Horas reconocidas | 13.168,00 |
+| Diferencia que espera decisión | **0,00** |
+
+### Feriado nacional del 17/08
+
+**41 empleados · 41 turnos · 430,50 h liquidables.** Es información y conteo: no
+altera la liquidación ni agrega adicionales.
+
+Verificado que ningún turno del 16→17 se contó por error, y que los del 17→18 se
+contaron completos.
+
+### Controles de cierre
+
+| # | Control | Resultado |
+|---|---|---|
+| 1 | Turnos de agosto todavía abiertos | **0** |
+| 2 | Turnos sin registro pendientes de decisión | **0** — el único sin registro es la ausencia confirmada de MARTINEZ del 08/08 |
+| 3 | Turnos anulados que aporten horas | **0** |
+| 4 | Los 6 duplicados anulados siguen fuera | **6 de 6** |
+| 5 | Nocturnos iniciados el 31/08 | **15 turnos, 172,00 h, completos en agosto** |
+| 6 | Turnos iniciados el 31/07 que entren en agosto | **0** — los 16 quedan en julio |
+| 7 | Diferencias "Sin resolver" que afecten horas | **0** |
+| 8 | Planillas por empleado reconcilian con liquidación | **Sí** |
+| 9 | Planillas por objetivo reconcilian con facturación | **Sí** |
+| 10 | XLSX por empleado y por objetivo mantienen los totales | **Sí** |
+
+### Regularizaciones aplicadas, todas por vía administrativa
+
+Sin fichaje GPS inventado. Todas `carga_manual` / `carga_admin`, con motivo,
+responsable y asiento de auditoría.
+
+| Caso | Horas | Fundamento |
+|---|---:|---|
+| PIÑERO · 04/08 SKATEPARK | +8,00 | 7 rondas ejecutadas y vinculadas al turno entre 15:07 y 20:21 |
+| Nueve turnos de Sergio Martínez | +93,00 | "Cumple el horario establecido" asentado en la revisión de planilla |
+| ROSÓN · 04/08 CLUB | +8,00 | Confirmado por JC; los otros 7 turnos del período ya venían del saneamiento del 18/08 |
+| RÍOS · 23/08 LAROMET FUNES 2 | +14,50 | "El servicio se cubrió de 17 a 07:30, modifica el cliente" — horario del turno corregido |
+| RÍOS · 24/08 LAROMET FUNES 2 | +14,50 | Confirmado por JC tras verificar que nadie más cubrió la franja |
+| BENITEZ · 31/08 LAROMET ROSARIO | 15,00 | Se resolvió solo: fichó salida 08:36 y el cierre automático escribió 08:00 |
+| MARTINEZ · 08/08 LAROMET IRIGOYEN | 0,00 | Ausencia confirmada — prueba controlada del 14/08 |
+
+**Total regularizado: +138,00 h.**
+
+---
+
+## Cómo leer lo que sigue
+
+Todo lo que viene a continuación es la **historia de la auditoría**, escrita
+durante el precierre entre la noche del 31/08 y la mañana del 01/09. Se conserva
+completa a propósito: contiene el rastro de cada hallazgo, cada consulta y cada
+error propio corregido.
+
+**Los hallazgos que después se resolvieron están marcados como RESUELTO en la
+sección final del documento.** El estado que vale es el de arriba.
+
+Una corrección importante sobre el precierre, porque es la que más confusión
+puede generar: **las 747,50 h nunca faltaron de las planillas ni de los XLSX de
+liquidación o facturación.** Estaban en todas las salidas que se usan para
+liquidar. Lo que fallaba era la lectura de una sola tarjeta del resumen, que
+usaba un criterio de "turno cerrado" distinto del resto del sistema. Ver el
+ciclo 9 y su resolución al final.
+
+---
+
+## Historia de la auditoría
 
 Regla autoritativa: **el mes de un turno lo determina su fecha de INICIO**. El
 turno completo pertenece a ese mes y nunca se parte. Un turno 31/08 20:00 →
@@ -919,3 +1010,96 @@ bien; lo que no hay es uso.
 tarjeta "SIN CUBRIR HOY" cuenta turnos sin vigilador asignado; el "0 cubiertos"
 de cada fila cuenta turnos ya cerrados. A las 08:30, con la gente trabajando, se
 lee como una contradicción. Es redacción, no cálculo.
+
+---
+
+# RESOLUCIÓN DE LOS HALLAZGOS
+
+Cada hallazgo del precierre, con su estado al 01/09/2026. Lo de arriba es la
+historia; esto es en qué terminó.
+
+## RESUELTO — las 747,50 h nunca faltaron en las planillas
+
+El ciclo 9 concluyó que 68 turnos cerrados por el Cierre Automático quedaban
+fuera de las horas reconocidas, y lo planteó como una decisión de negocio de
+747,50 h.
+
+**Eso era cierto sólo para una tarjeta del resumen, no para la liquidación.**
+
+Se siguió la cadena de cálculo de cada salida y quedó establecido que:
+
+| Salida | ¿Faltaban las 747,50 h? |
+|---|---|
+| Resumen guardias — lo que se liquida al vigilador | **No** |
+| Resumen objetivos — lo que se factura | **No** |
+| Planilla mensual por empleado | **No** |
+| XLSX por empleado | **No** |
+| Total individual de cada empleado | **No** |
+| Planilla por objetivo y su XLSX | **No** |
+| Tarjeta "Horas reconocidas hasta ahora" del resumen | **Sí — sólo acá** |
+
+Son dos cadenas distintas. Las planillas y los XLSX usan
+`resolverLineaLiquidacion` / `horasLiquidablesRegistro`, que resuelven la salida
+como `hora_salida_final ?? hora_salida_real` y por lo tanto toman la que escribió
+el Cierre Automático. La tarjeta usaba `turnosReconocidosHastaCorte`, que mira
+sólo `hora_salida_real` y descarta el turno entero.
+
+Comprobado con el caso de MARTINEZ, SANTIAGO: 14 turnos cerrados por el sistema,
+276,00 h programadas y 276,00 h liquidables en su planilla, en su XLSX y en el
+resumen de guardias. Cobra el mes completo.
+
+**No se tocó nada de esto.** El defecto es de lectura de una tarjeta y no afectó
+ninguna planilla ni ninguna factura.
+
+## RESUELTO — BENITEZ, 31/08, 15,00 h
+
+Se resolvió solo y sin fallo del cron: fichó la salida a las 08:36 y el Cierre
+Automático escribió 08:00. Liquida 15,00 h. De los 14 nocturnos del 31/08, 13
+ficharon salida por su cuenta y sólo el suyo necesitó el cierre automático.
+
+## RESUELTO — los 14 turnos sin registro, 147,50 h
+
+Ya no son un pendiente abierto. Se resolvieron así:
+
+| Caso | Resultado |
+|---|---|
+| PIÑERO 04/08 | Regularizado, +8,00 h |
+| Nueve turnos con "cumple el horario establecido" | Regularizados, +93,00 h |
+| ROSÓN 04/08 | Regularizado, +8,00 h |
+| RÍOS 23/08 | Regularizado, +14,50 h, con corrección de horario |
+| RÍOS 24/08 | Regularizado, +14,50 h |
+| MARTINEZ 08/08 | Ausencia confirmada, 0 h |
+
+**Quedan cero turnos sin registro pendientes de decisión.**
+
+## RESUELTO — la regla de negocio que ordenó todo esto
+
+Quedó fijada por JC durante el cierre:
+
+> Cuando un supervisor deja asentado que un servicio se cubrió durante
+> determinado horario, esas son las horas que corresponden liquidar. No se exige
+> fichaje GPS adicional para desconocer una cobertura que el supervisor ya
+> confirmó.
+
+Es lo que permitió cerrar los nueve turnos de Sergio Martínez y el de Ríos del
+23/08 sin inventar ningún fichaje.
+
+## RESUELTO — defectos de código corregidos y desplegados
+
+| PR | Qué corrige |
+|---|---|
+| #130 | Paginación de evidencias sin desempate: una fila podía perderse o repetirse |
+| #131 | A las 00:00 el tablero perdía a los vigiladores que estaban trabajando |
+| #132 | El balance juzgaba Puntualidad por debajo de la cobertura mínima |
+| #133 | "Anular turno" y "Editar turno" no hacían nada al mirar otro mes |
+| #134 | Turno anulado seguía diciendo "Descubierto"; la diferencia pendiente contaba lo ya revisado; el modal no entraba en pantalla |
+| #135 | El login imprimía la sesión —con los tokens— en la consola del navegador |
+| #136 | Feriados nacionales trabajados: conteo, no liquidación |
+| #137 | Separación estricta entre feriado nacional y día no laborable turístico |
+
+## Lo que NO se hizo, a propósito
+
+- No se bloqueó agosto. No hay campo de cierre, ni candado, ni RLS nueva.
+- No se tocaron los pesos, el Modelo C, la escala ni las reglas de liquidación.
+- No se activó WhatsApp, ni el Entrenador, ni la visibilidad al vigilador.
+- No se creó ninguna automatización nueva.
