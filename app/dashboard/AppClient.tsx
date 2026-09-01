@@ -8605,14 +8605,21 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
     if (analizandoCobertura || !mesAnalisis) return
     setAnalizandoCobertura(true)
     setErrorCobertura('')
-    const { data: turnosMes, error } = await supabase
-      .from('turnos')
-      .select('id, objetivo_id, puesto_id, guardia_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
-      .gte('fecha', mesAnalisis.desde)
-      .lte('fecha', mesAnalisis.hasta)
-      .limit(5000)
+    // El mes entero, paginado: PostgREST corta en db-max-rows (1000) sin
+    // avisar, y agosto ya supera ese tope — con .limit(5000) el análisis
+    // perdía objetivos completos en silencio (ANTENA y LAROMET ROSARIO no
+    // aparecían en la lógica detectada). Mismo remedio que el resto del
+    // dashboard: lib/fetch-paginado, con orden por id para paginar estable.
+    const { data: turnosMes, error } = await fetchPaginadoResult((desde, hasta) =>
+      supabase
+        .from('turnos')
+        .select('id, objetivo_id, puesto_id, guardia_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
+        .gte('fecha', mesAnalisis.desde)
+        .lte('fecha', mesAnalisis.hasta)
+        .order('id')
+        .range(desde, hasta))
     if (error) {
-      setErrorCobertura(error.message)
+      setErrorCobertura(error.message ?? String(error))
       setAnalizandoCobertura(false)
       return
     }
