@@ -158,7 +158,7 @@ describe.skipIf(!hayFixture)('demo: lógica detectada sobre snapshot de producci
       else if (f.estado === 'fecha_pasada') r.pasadas++
       porObjetivo.set(f.objetivo_nombre, r)
     }
-    for (const [nombre, r] of porObjetivo) {
+    for (const [nombre, r] of Array.from(porObjetivo.entries())) {
       lineas.push(`   ${nombre}: a crear ${r.validos} · ya existentes ${r.existentes} · fechas pasadas ${r.pasadas}`)
     }
 

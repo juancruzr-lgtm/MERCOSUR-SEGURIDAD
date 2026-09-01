@@ -193,6 +193,7 @@ const propuestaBase = (extra: Partial<PropuestaFranja> = {}): PropuestaFranja =>
   dias_con_registro: 31, dias_observados: 31,
   comparacion: 'falta_configuracion',
   puestos_sugeridos: [], turno_base_id: 'tb-diurno', turno_base_nombre: 'DIURNO 07-19',
+  franjas_observadas: ['07:00|19:00'],
   ...extra,
 })
 
@@ -247,6 +248,37 @@ describe('planDeclaracion', () => {
     expect(plan.actualizar_dias).toEqual([{ servicio_id: 'srv-1', dias_semana: [1, 2, 3, 4, 5, 6, 7] }])
   })
 
+  it('dias_diferentes con dos puestos en la misma franja: solo modifica el puesto elegido', () => {
+    // srv-v1 (Lun–Vie) y srv-v2 (fin de semana) comparten la franja 07–19.
+    // Aceptar la propuesta para p-v1 no puede tocar el esquema de p-v2.
+    const plan = planDeclaracion({
+      elecciones: [{ propuesta: propuestaBase({ comparacion: 'dias_diferentes' }), puesto_ids: ['p-v1'] }],
+      serviciosExistentes: [
+        { id: 'srv-v1', objetivo_id: OBJ, puesto_id: 'p-v1', activo: true, dias_semana: [1, 2, 3, 4, 5], turno_base: { hora_inicio: '07:00', hora_fin: '19:00' } },
+        { id: 'srv-v2', objetivo_id: OBJ, puesto_id: 'p-v2', activo: true, dias_semana: [6, 7], turno_base: { hora_inicio: '07:00', hora_fin: '19:00' } },
+      ],
+      turnosBase: CATALOGO_BASES,
+    })
+    expect(plan.errores).toEqual([])
+    expect(plan.actualizar_dias).toEqual([{ servicio_id: 'srv-v1', dias_semana: [1, 2, 3, 4, 5, 6, 7] }])
+    expect(plan.crear_servicios).toEqual([])
+    expect(plan.desactivar_servicios).toEqual([])
+    expect(plan.advertencias.some(a => a.includes('otro puesto'))).toBe(true)
+  })
+
+  it('dias_diferentes crea el servicio del puesto elegido si no existe en la franja', () => {
+    const plan = planDeclaracion({
+      elecciones: [{ propuesta: propuestaBase({ comparacion: 'dias_diferentes' }), puesto_ids: ['p-v2'] }],
+      serviciosExistentes: [
+        { id: 'srv-v1', objetivo_id: OBJ, puesto_id: 'p-v1', activo: true, dias_semana: [1, 2, 3, 4, 5], turno_base: { hora_inicio: '07:00', hora_fin: '19:00' } },
+      ],
+      turnosBase: CATALOGO_BASES,
+    })
+    expect(plan.actualizar_dias).toEqual([])
+    expect(plan.crear_servicios.map(s => s.puesto_id)).toEqual(['p-v2'])
+    expect(plan.crear_servicios[0].dias_semana).toEqual([1, 2, 3, 4, 5, 6, 7])
+  })
+
   it('cantidad_diferente crea solo los puestos que faltan', () => {
     const plan = planDeclaracion({
       elecciones: [{ propuesta: propuestaBase({ comparacion: 'cantidad_diferente', posiciones: 2 }), puesto_ids: ['p-v1', 'p-v2'] }],
@@ -271,6 +303,27 @@ describe('planDeclaracion', () => {
     expect(plan.crear_servicios).toHaveLength(1)
     expect(plan.desactivar_servicios).toEqual(['srv-viejo'])
     expect(resumenPlan(plan)).toContain('1 servicio(s) a desactivar')
+  })
+
+  it('horario_diferente no desactiva una franja observada cuya propuesta no se marcó', () => {
+    // El objetivo tiene dos franjas declaradas: la diurna se observó todo el
+    // mes (su propuesta simplemente no se marcó) y la 22–06 no registró nada.
+    // Aceptar la propuesta nocturna 19–07 debe desactivar SOLO la 22–06.
+    const nocturna = propuestaBase({
+      comparacion: 'horario_diferente',
+      hora_inicio: '19:00', hora_fin: '07:00', turno_base_id: null,
+      franjas_observadas: ['07:00|19:00', '19:00|07:00'],
+    })
+    const plan = planDeclaracion({
+      elecciones: [{ propuesta: nocturna, puesto_ids: ['p-principal'] }],
+      serviciosExistentes: [
+        { id: 'srv-diurno', objetivo_id: OBJ, puesto_id: 'p-principal', activo: true, dias_semana: [1, 2, 3, 4, 5, 6, 7], turno_base: { hora_inicio: '07:00', hora_fin: '19:00' } },
+        { id: 'srv-viejo', objetivo_id: OBJ, puesto_id: 'p-principal', activo: true, dias_semana: [1, 2, 3, 4, 5, 6, 7], turno_base: { hora_inicio: '22:00', hora_fin: '06:00' } },
+      ],
+      turnosBase: CATALOGO_BASES,
+    })
+    expect(plan.desactivar_servicios).toEqual(['srv-viejo'])
+    expect(plan.crear_servicios.map(s => `${s.hora_inicio}-${s.hora_fin}`)).toEqual(['19:00-07:00'])
   })
 })
 

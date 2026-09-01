@@ -182,6 +182,13 @@ export interface PropuestaFranja {
   puestos_sugeridos: PuestoSugerido[]
   turno_base_id: string | null
   turno_base_nombre: string | null
+  /**
+   * TODAS las franjas del objetivo con algún registro en el mes analizado
+   * (cualquier clasificación). Al resolver un horario_diferente, solo puede
+   * desactivarse una franja declarada que NO esté acá: una franja declarada
+   * y observada nunca se toca, aunque su propuesta no se haya marcado.
+   */
+  franjas_observadas: string[]
 }
 
 const hora5 = (h?: string | null) => (h ?? '').slice(0, 5)
@@ -205,6 +212,8 @@ export function armarPropuestasObjetivo(params: {
 }): PropuestaFranja[] {
   const { analisis, turnos, turnosBase, puestos } = params
   const puestoPorId = new Map(puestos.map(p => [p.id, p.nombre ?? '—']))
+  const franjasObservadas = Array.from(new Set(
+    analisis.patrones.map(p => `${p.hora_inicio}|${p.hora_fin}`)))
 
   const propuestas: PropuestaFranja[] = []
   for (const patron of analisis.patrones) {
@@ -256,6 +265,7 @@ export function armarPropuestasObjetivo(params: {
       puestos_sugeridos,
       turno_base_id: base?.id ?? null,
       turno_base_nombre: base?.nombre ?? null,
+      franjas_observadas: franjasObservadas,
     })
   }
   return propuestas
@@ -363,9 +373,35 @@ export function planDeclaracion(params: {
     }
 
     if (propuesta.comparacion === 'dias_diferentes') {
-      // Declarar el histórico = actualizar los días de los servicios de la franja.
+      // Declarar el histórico actualiza SOLO los servicios de la franja cuyo
+      // puesto fue elegido en esta propuesta. Otro puesto de la misma franja
+      // con su propio esquema de días (p. ej. uno de lunes a viernes y otro
+      // de fin de semana) no se toca; queda avisado, nunca modificado.
+      const elegidos = new Set(puesto_ids)
+      const cubiertos = new Set(activosDeFranja.map(s => s.puesto_id ?? ''))
+      let noTocados = 0
       for (const s of activosDeFranja) {
-        plan.actualizar_dias.push({ servicio_id: s.id, dias_semana: [...propuesta.dias_semana] })
+        if (s.puesto_id && elegidos.has(s.puesto_id)) {
+          plan.actualizar_dias.push({ servicio_id: s.id, dias_semana: [...propuesta.dias_semana] })
+        } else {
+          noTocados++
+        }
+      }
+      // Puesto elegido sin servicio declarado en la franja: se crea, para que
+      // la configuración termine igual a la estructura aceptada.
+      for (const puesto_id of puesto_ids.filter(id => !cubiertos.has(id))) {
+        plan.crear_servicios.push({
+          objetivo_id: propuesta.objetivo_id,
+          puesto_id,
+          hora_inicio: propuesta.hora_inicio,
+          hora_fin: propuesta.hora_fin,
+          turno_base_id: turnoBaseId,
+          dias_semana: [...propuesta.dias_semana],
+        })
+      }
+      if (noTocados > 0) {
+        plan.advertencias.push(
+          `${etiqueta}: ${noTocados} servicio(s) de la misma franja con otro puesto no se modifican.`)
       }
       continue
     }
@@ -394,11 +430,14 @@ export function planDeclaracion(params: {
     }
 
     if (propuesta.comparacion === 'horario_diferente') {
-      // Declarar el histórico desactiva las franjas declaradas que no se
-      // observaron — decisión explícita del administrador, listada en el plan.
-      const franjasElegidas = new Set(elecciones.map(e => `${e.propuesta.hora_inicio}|${e.propuesta.hora_fin}`))
+      // Se desactiva EXACTAMENTE la divergencia que se está resolviendo: las
+      // franjas declaradas que el mes analizado no registró nunca. Una franja
+      // declarada y observada no se toca, aunque su propuesta no se haya
+      // marcado — que una propuesta quede sin seleccionar jamás desactiva
+      // otra franja válida. Todo sale listado en el plan de confirmación.
+      const observadas = new Set(propuesta.franjas_observadas)
       const noObservados = serviciosExistentes.filter(s =>
-        s.activo && s.objetivo_id === propuesta.objetivo_id && !franjasElegidas.has(franjaDe(s)))
+        s.activo && s.objetivo_id === propuesta.objetivo_id && !observadas.has(franjaDe(s)))
       for (const s of noObservados) {
         if (!plan.desactivar_servicios.includes(s.id)) plan.desactivar_servicios.push(s.id)
       }

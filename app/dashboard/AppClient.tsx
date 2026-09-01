@@ -8575,7 +8575,7 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
   const [propSeleccion, setPropSeleccion] = useState<Set<string>>(new Set())
   const [propPuestos, setPropPuestos] = useState<Record<string, string[]>>({})
   // Plan de escritura pendiente de confirmación (una declaración por vez).
-  const [declaracion, setDeclaracion] = useState<{ objetivoNombre: string; plan: PlanDeclaracion } | null>(null)
+  const [declaracion, setDeclaracion] = useState<{ objetivoId: string; objetivoNombre: string; plan: PlanDeclaracion } | null>(null)
   const [declarando, setDeclarando] = useState(false)
   const [msgDeclaracion, setMsgDeclaracion] = useState('')
 
@@ -8635,49 +8635,45 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
     setAnalizandoCobertura(false)
   }
 
-  // Bloque 3: ejecutar el plan confirmado. Escribe SOLO configuración
-  // (turnos_base faltantes y servicios_objetivo); nunca turnos. Todo lo que
-  // se escribe salió listado en el diálogo de confirmación.
+  // Bloque 3: ejecutar el plan confirmado. Una sola RPC transaccional
+  // (declarar_estructura_programacion): o se aplica el plan completo o no
+  // se escribe nada. Declara SOLO configuración (turnos_base faltantes y
+  // servicios_objetivo, con auditoría en la misma transacción); nunca
+  // turnos. Todo lo que escribe salió listado en el diálogo de confirmación.
   const declararEstructura = async () => {
     if (declarando || !declaracion) return
-    const { plan } = declaracion
+    const { objetivoId, plan } = declaracion
     setDeclarando(true)
     setMsgDeclaracion('')
-    try {
-      const idPorFranja = new Map<string, string>()
-      for (const tb of plan.crear_turnos_base) {
-        const { data, error } = await supabase.from('turnos_base')
-          .insert({ nombre: tb.nombre, hora_inicio: tb.hora_inicio, hora_fin: tb.hora_fin, activo: true })
-          .select('id').single()
-        if (error || !data) throw new Error(error?.message || 'No se pudo crear el turno base')
-        idPorFranja.set(`${tb.hora_inicio}|${tb.hora_fin}`, data.id)
-      }
-      for (const s of plan.crear_servicios) {
-        const turnoBaseId = s.turno_base_id ?? idPorFranja.get(`${s.hora_inicio}|${s.hora_fin}`)
-        if (!turnoBaseId) throw new Error(`Franja ${s.hora_inicio}–${s.hora_fin} sin turno base resuelto`)
-        const { error } = await supabase.from('servicios_objetivo').insert({
-          objetivo_id: s.objetivo_id, puesto_id: s.puesto_id, turno_base_id: turnoBaseId,
-          dias_semana: s.dias_semana, guardia_habitual_id: null, activo: true,
-        })
-        if (error) throw new Error(error.message)
-      }
-      for (const u of plan.actualizar_dias) {
-        const { error } = await supabase.from('servicios_objetivo').update({ dias_semana: u.dias_semana }).eq('id', u.servicio_id)
-        if (error) throw new Error(error.message)
-      }
-      for (const id of plan.desactivar_servicios) {
-        const { error } = await supabase.from('servicios_objetivo').update({ activo: false }).eq('id', id)
-        if (error) throw new Error(error.message)
-      }
-      setDeclaracion(null)
-      // Releer la configuración y re-analizar: las propuestas declaradas
-      // pasan a "coincide" sin cerrar el modal.
-      const sv = await cargar()
-      setMsgDeclaracion(`✅ Estructura declarada (${resumenPlan(plan)}). Los turnos se crean después desde Generar mes.`)
-      await analizarCobertura(sv ?? undefined)
-    } catch (e: any) {
-      setMsgDeclaracion(`⚠ No se pudo declarar: ${e.message}`)
+    const { data, error } = await supabase.rpc('declarar_estructura_programacion', {
+      p_objetivo_id: objetivoId,
+      p_crear_turnos_base: plan.crear_turnos_base,
+      p_crear_servicios: plan.crear_servicios.map(s => ({
+        puesto_id: s.puesto_id, hora_inicio: s.hora_inicio, hora_fin: s.hora_fin,
+        turno_base_id: s.turno_base_id, dias_semana: s.dias_semana,
+      })),
+      p_actualizar_dias: plan.actualizar_dias,
+      p_desactivar_servicios: plan.desactivar_servicios,
+    })
+    if (error) {
+      setMsgDeclaracion(`⚠ No se declaró nada (la operación es todo-o-nada): ${error.message}`)
+      setDeclarando(false)
+      return
     }
+    setDeclaracion(null)
+    // Releer la configuración y re-analizar: las propuestas declaradas
+    // pasan a "coincide" sin cerrar el modal.
+    const sv = await cargar()
+    const r = (data ?? {}) as any
+    const partes = [
+      r.servicios_creados ? `${r.servicios_creados} servicio(s) creado(s)` : '',
+      r.servicios_ya_declarados ? `${r.servicios_ya_declarados} ya declarado(s)` : '',
+      r.servicios_actualizados ? `${r.servicios_actualizados} actualizado(s)` : '',
+      r.servicios_desactivados ? `${r.servicios_desactivados} desactivado(s)` : '',
+      r.turnos_base_creados ? `${r.turnos_base_creados} turno(s) base creado(s)` : '',
+    ].filter(Boolean).join(' · ')
+    setMsgDeclaracion(`✅ Estructura declarada (${partes || resumenPlan(plan)}). Los turnos se crean después desde Generar mes.`)
+    await analizarCobertura(sv ?? undefined)
     setDeclarando(false)
   }
 
@@ -9109,7 +9105,7 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
             return
           }
           setMsgDeclaracion('')
-          setDeclaracion({ objetivoNombre, plan })
+          setDeclaracion({ objetivoId: elecciones[0].propuesta.objetivo_id, objetivoNombre, plan })
         }
 
         return (
@@ -9234,7 +9230,7 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
                           {p.turno_base_id
                             ? <span style={{ fontSize:11, color:'#64748b' }}>turno base: {p.turno_base_nombre}</span>
                             : <span style={{ fontSize:11, color:'#f59e0b' }}>se creará el turno base {p.hora_inicio}–{p.hora_fin}</span>}
-                          {marcada && p.comparacion !== 'dias_diferentes' && Array.from({ length: p.posiciones }).map((_, i) => (
+                          {marcada && Array.from({ length: p.posiciones }).map((_, i) => (
                             <select key={i} style={{ ...S.input, width:'auto', minWidth:130, padding:'4px 8px', fontSize:12 }}
                               value={elegidos[i] ?? ''}
                               onChange={e => setPropPuestos(prev => { const arr = [...(prev[clave] ?? [])]; arr[i] = e.target.value; return { ...prev, [clave]: arr } })}>
