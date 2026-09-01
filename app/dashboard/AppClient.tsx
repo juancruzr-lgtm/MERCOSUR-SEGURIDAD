@@ -75,6 +75,7 @@ import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
+import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
@@ -1199,7 +1200,17 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         />
       </div>
 
-      {/* ── 3. ATENCIÓN OPERATIVA ────────────────────────────────────────── */}
+      {/* ── 3. CUMPLIMIENTO DEL MES ──────────────────────────────────────────
+          Cómo terminó la evaluación publicada, en tres lecturas. El detalle
+          —distribución, dimensiones y uso de la app— se abre al tocarlo: acá
+          entra lo que se mira de reojo, no lo que se estudia. */}
+      <div style={{ ...alertBox, marginBottom:28 }}>
+        <ResumenEvaluacionPanel
+          onVerDetalle={() => onNavigate?.('guardias', { tipo:'evaluacion', label:'Cumplimiento del mes' })}
+        />
+      </div>
+
+      {/* ── 4. ATENCIÓN OPERATIVA ────────────────────────────────────────── */}
       <div style={seccionTitulo}>
         Atención operativa
         <span style={{ marginLeft:8, color:brandColors.muted, fontWeight:700, letterSpacing:0 }}>
@@ -1546,6 +1557,13 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
   const [vista, setVista] = useState<'empleados' | 'desempeno' | 'gerencia'>('empleados')
+
+  // El Panel Principal entra directo al detalle de la evaluación. Sin esto, el
+  // "Ver detalle →" dejaba al usuario en la lista de empleados teniendo que
+  // adivinar cuál de las tres pestañas era la que había pedido.
+  useEffect(() => {
+    if (filtroActivo?.tipo === 'evaluacion') setVista('gerencia')
+  }, [filtroActivo])
 
   // Cumplimiento Operativo en la tabla principal: verlo no puede exigir entrar
   // primero a otra pestaña.
