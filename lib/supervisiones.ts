@@ -138,3 +138,57 @@ export function indexarUltimaSupervision(
 
   return indice
 }
+
+// ── Qué objetivos reclaman una visita ───────────────────────────────────────
+//
+// Estar `activo` en la base no significa estar operando. Cinco de los 39
+// objetivos activos no tienen un turno desde hace semanas —MUSEO CASTAGNINO
+// desde el 17/08, LAROMET RP41 PUESTO 2 desde el 04/08— y el panel los
+// reclamaba igual: pedía ir a supervisar lugares donde no hay nadie a quien
+// supervisar. Dos de los tres "nunca supervisados" eran de estos.
+//
+// Un objetivo sin servicio no es un incumplimiento de nadie. Contarlo infla
+// "sin supervisar" con trabajo que no existe, y esa es la forma más rápida de
+// que la lista deje de leerse.
+
+/**
+ * Días hacia atrás sin ningún turno que hacen que un objetivo se considere
+ * fuera de operación.
+ *
+ * Siete. La frecuencia de supervisión más larga configurada es de 72 horas, así
+ * que una semana deja pasar holgadamente a los objetivos con servicio
+ * intermitente —los que se cubren sólo algunos días— y sólo saca a los que
+ * efectivamente dejaron de operar. Con tres días, un objetivo de fin de semana
+ * desaparecería los miércoles.
+ */
+export const DIAS_SIN_OPERACION = 7
+
+/**
+ * ¿Este objetivo tiene servicio vigente?
+ *
+ * `fechas` son las de sus turnos NO anulados, en 'YYYY-MM-DD'. Alcanza con una
+ * dentro de la ventana o en el futuro: un objetivo cuyo servicio arranca la
+ * semana que viene ya está operando aunque todavía no haya tenido a nadie.
+ */
+export function objetivoEnOperacion(
+  fechas: Array<string | null | undefined>,
+  ahora: Date = new Date(),
+): boolean {
+  const limite = new Date(ahora)
+  limite.setDate(limite.getDate() - DIAS_SIN_OPERACION)
+  const corte = fechaISO(limite)
+
+  for (const f of fechas) {
+    if (!f) continue
+    // Comparación de cadenas 'YYYY-MM-DD': ordena igual que las fechas y no
+    // arrastra el huso, que en los bordes del día corría un turno de lugar.
+    if (f.slice(0, 10) >= corte) return true
+  }
+  return false
+}
+
+function fechaISO(d: Date): string {
+  const mes = String(d.getMonth() + 1).padStart(2, '0')
+  const dia = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mes}-${dia}`
+}
