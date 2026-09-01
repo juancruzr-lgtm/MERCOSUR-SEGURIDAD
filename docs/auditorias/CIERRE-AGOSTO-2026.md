@@ -495,12 +495,12 @@ siga pesando 0. No lo toqué porque es criterio de negocio.
 
 ## Ciclo 8 — El cambio de mes, observado en vivo
 
-Medido en producción a las **02:30 del 01/09/2026**, o sea del otro lado del
+Medido en producción a las **06:45 del 01/09/2026**, o sea del otro lado del
 límite. Esto era lo único que no se podía verificar leyendo código.
 
 ### Agosto: antes y después de la medianoche
 
-| Métrica | 31/08 (antes) | 01/09 02:30 (después) | Δ |
+| Métrica | 31/08 (antes) | 01/09 06:45 (después) | Δ |
 |---|---:|---:|---:|
 | Total programado | 14.025,00 | **14.025,00** | **0,00** |
 | Total asignado | 13.961,00 | **13.961,00** | **0,00** |
@@ -592,7 +592,7 @@ De los 75 turnos de agosto con entrada y sin `hora_salida_real`:
 | **B** — no tienen ninguna salida (abiertos de verdad) | 7 | 89,00 |
 
 El grupo **B** está bien excluido: son los nocturnos del 31/08 que a esta hora
-—02:30 del 01/09— siguen corriendo.
+—06:45 del 01/09— seguían corriendo.
 
 | Objetivo | Horario | Vigilador |
 |---|---|---|
