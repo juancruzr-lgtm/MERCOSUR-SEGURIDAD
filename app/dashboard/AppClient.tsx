@@ -589,14 +589,17 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
     setLoading(true)
     setError('')
     setResetMsg('')
-    console.log('LOGIN EMAIL', emailLogin)
 
+    // Acá había tres console.log de depuración —el email, el error y `data`—.
+    // El último es el grave: `data` es la respuesta completa de
+    // `signInWithPassword`, o sea `session.access_token` y
+    // `session.refresh_token` impresos en la consola del navegador, en
+    // producción, en cada inicio de sesión de cada vigilador. El error ya se
+    // le muestra al usuario con `mensajeErrorAuth`; los tres no hacían falta.
     const { data, error: err } = await supabase.auth.signInWithPassword({
       email: emailLogin,
       password: passwordLogin,
     })
-    console.log('LOGIN ERROR', err)
-    console.log('LOGIN DATA', data)
 
     if (err) {
       setError(mensajeErrorAuth(err, 'inicio de sesión'))
