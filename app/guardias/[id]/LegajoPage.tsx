@@ -8,6 +8,7 @@ import { formatCuil } from '@/lib/revision-operativa'
 import SeccionTurnos from './SeccionTurnos'
 import SeccionPlanilla from './SeccionPlanilla'
 import FichaCumplimiento from '@/components/cumplimiento/FichaCumplimiento'
+import MiDesempeno from '@/components/desempeno/MiDesempeno'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -70,10 +71,8 @@ const SECCIONES = [
   { id: 'turnos', label: 'Turnos' },
   { id: 'planilla', label: 'Mi Planilla' },
   { id: 'cumplimiento', label: 'Cumplimiento operativo' },
-  { id: 'asistencias', label: 'Asistencias' },
-  { id: 'supervisiones', label: 'Supervisiones' },
   { id: 'novedades', label: 'Novedades laborales' },
-  { id: 'reporte', label: 'Reporte mensual' },
+  { id: 'desempeno', label: 'Mi Desempeño' },
   { id: 'documentacion', label: 'Documentación' },
   { id: 'historial', label: 'Historial' },
   { id: 'indicadores', label: 'Indicadores' },
@@ -473,7 +472,20 @@ export default function LegajoPage() {
             : <div style={S.placeholder}>Esta seccion es de uso interno de Administracion y Supervision.</div>
         )}
 
-        {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla' && seccion !== 'cumplimiento' && (
+        {/* La evaluación mensual, como la lee la persona.
+            Ocupa la pestaña que decía "Reporte mensual" y nunca mostró nada.
+
+            No hay chequeo de rol acá a propósito: lo hace RLS. El vigilador
+            sólo puede leer su propia fila y sólo publicada; Administración y
+            Supervisión leen dentro de su alcance. Un `if` en el frontend sería
+            una segunda regla de autorización que podría contradecir a la
+            primera, y la que manda es la de la base. */}
+        {seccion === 'desempeno' && (
+          <MiDesempeno empleadoId={empleadoId} />
+        )}
+
+        {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla'
+          && seccion !== 'cumplimiento' && seccion !== 'desempeno' && (
           <div style={S.placeholder}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
             <div>Esta sección está disponible en una próxima etapa.</div>
