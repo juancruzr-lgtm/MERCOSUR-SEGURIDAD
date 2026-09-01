@@ -86,8 +86,19 @@ export function adopcionDeFila(fila: FilaPublicada): AdopcionEmpleado | null {
     .find(b => b?.clave === 'procedimiento')
   if (!bloque) return null
 
-  const jornadas = Number(bloque.requeridos ?? 0)
+  // Ni "no me correspondía" ni "no se midió" permiten afirmar nada sobre cómo
+  // usa la app: se devuelve null en vez de contarlo como uso correcto.
+  const estado = String(bloque.estado ?? '')
+  if (estado === 'no_aplica' || estado === 'sin_datos') return null
+
+  // Un bloque en estado `bien` no trae `requeridos` ni `incidencias`: el balance
+  // sólo los emite cuando hay algo que contar. Tomarlos como cero dejaba fuera
+  // de la clasificación justamente a los que fichan bien, y la pantalla mostraba
+  // cero personas con uso correcto. Las jornadas salen entonces del contexto,
+  // que es el mismo universo con el que se armó el bloque.
   const sinRegistroPropio = Number(bloque.incidencias ?? 0)
+  const jornadas = Number(bloque.requeridos ?? 0)
+    || Number(objeto(fila.contexto).jornadas ?? 0)
   if (jornadas <= 0) return null
 
   const severidad = severidadDe(sinRegistroPropio, jornadas)

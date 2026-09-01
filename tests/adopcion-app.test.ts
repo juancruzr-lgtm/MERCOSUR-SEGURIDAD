@@ -129,3 +129,67 @@ describe('el resumen para Gerencia', () => {
     expect(v.casos).toEqual([])
   })
 })
+
+// ── El bloque "bien" no trae numeros ────────────────────────────────────────
+//
+// `balance-mensual` sólo emite `requeridos`/`incidencias` cuando hay algo que
+// contar. Leerlos como cero dejaba fuera de la clasificacion a todo el que
+// ficha bien: la pantalla mostraba CERO personas con uso correcto sobre 65.
+
+describe('quien ficha bien se cuenta, aunque el bloque no traiga numeros', () => {
+  const conBloqueBien = (over: any = {}, contexto: any = { jornadas: 26 }) => ({
+    empleado_id: 'ok', periodo: '2026-08',
+    cumplimiento_ponderado: 99.8, indice: 9.9, nota_final: 9.9, concepto: 'Excelente',
+    datos_insuficientes: false, cobertura: 100, alcance: 'integral',
+    estado_desempeno: 'excelente', dimensiones: [], faltas: [], explicacion: null,
+    balance: {
+      bloques: [{
+        clave: 'procedimiento', grupo: 'app', estado: 'bien',
+        etiqueta: 'Registro en la app',
+        hechos: ['Tus ingresos y egresos quedaron registrados en las 26 jornadas evaluadas.'],
+        ...over,
+      }],
+    },
+    contexto, estado: 'publicada',
+  }) as any
+
+  it('se clasifica como uso correcto, no se descarta', () => {
+    const a = adopcionDeFila(conBloqueBien())
+    expect(a).not.toBeNull()
+    expect(a!.clase).toBe('uso_correcto')
+    expect(a!.sinRegistroPropio).toBe(0)
+  })
+
+  it('las jornadas salen del contexto cuando el bloque no las trae', () => {
+    expect(adopcionDeFila(conBloqueBien())!.jornadas).toBe(26)
+    expect(adopcionDeFila(conBloqueBien())!.proporcion).toBe(0)
+  })
+
+  it('si el bloque SI trae requeridos, mandan los del bloque', () => {
+    const a = adopcionDeFila(conBloqueBien({ requeridos: 30 }, { jornadas: 26 }))!
+    expect(a.jornadas).toBe(30)
+  })
+
+  it('sin jornadas por ningun lado no se afirma nada', () => {
+    expect(adopcionDeFila(conBloqueBien({}, {}))).toBeNull()
+  })
+})
+
+describe('lo que no se pudo medir no cuenta como uso correcto', () => {
+  const conEstado = (estado: string) => ({
+    empleado_id: 'x', periodo: '2026-08',
+    cumplimiento_ponderado: null, indice: null, nota_final: null, concepto: null,
+    datos_insuficientes: true, cobertura: null, alcance: 'parcial',
+    estado_desempeno: null, dimensiones: [], faltas: [], explicacion: null,
+    balance: { bloques: [{ clave: 'procedimiento', estado, hechos: [] }] },
+    contexto: { jornadas: 10 }, estado: 'publicada',
+  }) as any
+
+  it('no_aplica devuelve null', () => {
+    expect(adopcionDeFila(conEstado('no_aplica'))).toBeNull()
+  })
+
+  it('sin_datos devuelve null', () => {
+    expect(adopcionDeFila(conEstado('sin_datos'))).toBeNull()
+  })
+})
