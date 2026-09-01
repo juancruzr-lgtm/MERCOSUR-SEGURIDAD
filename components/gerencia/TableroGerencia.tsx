@@ -39,6 +39,10 @@ import {
   ETIQUETA_INTERVENCION, intervencionesDe, proximoEscalon, registrarIntervencion,
   type Intervencion,
 } from '@/lib/intervenciones-uso-app'
+import {
+  cargarEntrega, estadoDeEntrega,
+  type Lectura, type Observacion,
+} from '@/lib/entrega-evaluacion'
 
 const VERDE = '#4ade80'
 const AMARILLO = '#facc15'
@@ -111,6 +115,10 @@ export default function TableroGerencia({
   const [pestana, setPestana] = useState<Pestana>('distribucion')
   /** Banda de nota abierta: 8 son los que sacaron 8,0 a 8,9. */
   const [banda, setBanda] = useState<number | null>(null)
+  const [lecturas, setLecturas] = useState<Lectura[]>([])
+  const [observaciones, setObservaciones] = useState<Observacion[]>([])
+  /** Grupo de entrega abierto, para ver los nombres. */
+  const [grupo, setGrupo] = useState<'vistas' | 'no_vistas' | 'observaciones' | null>(null)
 
   const cargar = useCallback(async () => {
     setCargando(true)
@@ -133,6 +141,9 @@ export default function TableroGerencia({
         [u.id, `${u.apellido ?? ''}, ${u.nombre ?? ''}`.replace(/^, |, $/, '')])))
     }
     setPrevias(await intervencionesDe(mes))
+    const entrega = await cargarEntrega(mes)
+    setLecturas(entrega.lecturas)
+    setObservaciones(entrega.observaciones)
     setCargando(false)
   }, [mes])
 
@@ -163,6 +174,11 @@ export default function TableroGerencia({
     }
     return m
   }, [delMes])
+
+  const entrega = useMemo(
+    () => estadoDeEntrega(delMes, lecturas, observaciones),
+    [delMes, lecturas, observaciones],
+  )
 
   if (cargando) return <div style={{ ...S.caja, ...S.tenue }}>Cargando la evaluación congelada…</div>
   if (error) return <div style={{ ...S.caja, color:'#f87171' }}>{error}</div>
@@ -200,6 +216,64 @@ export default function TableroGerencia({
           rotulo="Evaluados" valor={String(r.total)}
           nota={`${r.sinMuestra} sin muestra · ${r.parciales} parciales · ${r.conTope} con tope`}
         />
+      </div>
+
+      {/* ── Entrega ───────────────────────────────────────────────────────────
+          Dos estados: publicada y vista. "Vista" acredita que la abrió, no que
+          esté de acuerdo; para eso está la observación, que es un acto aparte. */}
+      <div style={S.caja}>
+        <div style={{ display:'flex', gap:28, flexWrap:'wrap' }}>
+          {([
+            { id:null, rotulo:'Publicadas', valor:entrega.publicadas, color:'#e2e8f0' },
+            { id:'vistas' as const, rotulo:'Vistas', valor:entrega.vistas, color:VERDE },
+            { id:'no_vistas' as const, rotulo:'No vistas', valor:entrega.noVistas, color:AMARILLO },
+            { id:'observaciones' as const, rotulo:'Observaciones abiertas', valor:entrega.observacionesAbiertas, color:ROJO },
+          ]).map(x => (
+            <div
+              key={x.rotulo}
+              onClick={() => x.id && setGrupo(grupo === x.id ? null : x.id)}
+              style={{ cursor: x.id ? 'pointer' : 'default', minWidth:120 }}
+            >
+              <div style={{ ...S.rotulo, marginBottom:2 }}>{x.rotulo}</div>
+              <div style={{
+                fontFamily:'Syne,sans-serif', fontSize:28, fontWeight:900,
+                color:x.color, lineHeight:1.1,
+                borderBottom: grupo === x.id ? `2px solid ${x.color}` : '2px solid transparent',
+                display:'inline-block',
+              }}>{x.valor}</div>
+            </div>
+          ))}
+        </div>
+
+        {grupo && (
+          <div style={{ marginTop:14, paddingTop:12, borderTop:'1px solid #1e293b' }}>
+            {(grupo === 'vistas' ? entrega.idsVistas
+              : grupo === 'no_vistas' ? entrega.idsNoVistas
+                : entrega.idsConObservacion).map(id => {
+              const obs = observaciones.find(o => o.empleado_id === id && o.estado === 'abierta')
+              return (
+                <div
+                  key={id}
+                  onClick={() => onAbrirEmpleado?.(id)}
+                  style={{
+                    padding:'6px 0', fontSize:13, color:'#cbd5e1',
+                    cursor: onAbrirEmpleado ? 'pointer' : 'default',
+                    borderBottom:'1px solid #1e293b',
+                  }}
+                >
+                  {nombres.get(id) ?? 'Sin nombre'}
+                  {obs && <span style={{ ...S.tenue, marginLeft:10 }}>“{obs.texto}”</span>}
+                </div>
+              )
+            })}
+            {grupo === 'no_vistas' && entrega.noVistas > 0 && (
+              <div style={{ ...S.tenue, marginTop:10 }}>
+                Todavía no abrieron su evaluación. Publicada no es entregada: si hace falta
+                que la vean, hay que avisarles.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Una cosa por vez ──────────────────────────────────────────────── */}

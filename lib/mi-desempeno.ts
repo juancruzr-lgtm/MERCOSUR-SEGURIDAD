@@ -25,6 +25,8 @@
 
 /** La fila tal cual viene de `evaluaciones_mensuales`. */
 export interface FilaPublicada {
+  /** Necesario para registrar la lectura y para colgarle una observación. */
+  id?: string
   empleado_id: string
   periodo: string
   cumplimiento_ponderado: number | null
