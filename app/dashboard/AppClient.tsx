@@ -14,7 +14,7 @@ import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/li
 import { evaluarCambioDeFin, mensajeImpacto } from '@/lib/relevo'
 import { repartirHorasDelDia } from '@/lib/horas-del-dia'
 import { ETIQUETA_TIPO_DEVOLUCION, generarBalance, resumenBalance } from '@/lib/balance-mensual'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada, sumarDiasFecha } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir lat/lng/radio de un objetivo. `authenticated` no
@@ -796,7 +796,26 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
     registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && registroTieneEntradaConfirmada(r))
   const tieneSalida = (turno: Turno) =>
     registrosHoy.some((r: RegistroAsistencia) => r.turno_id === turno.id && r.hora_salida_real)
-  const registroActivo = registrosHoy.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real)
+  /**
+   * Quién está adentro del objetivo AHORA.
+   *
+   * No se filtra por `fecha === hoy`: la pregunta no es de qué día es el turno
+   * sino si la persona entró y todavía no salió. Un nocturno que arrancó ayer
+   * a las 20:00 sigue trabajando a las 00:30, y filtrarlo por el día lo hacía
+   * desaparecer del panel justo cuando cambiaba la fecha — el 01/09 a las
+   * 00:00 el tablero decía "Guardias en turno: 0" con catorce personas
+   * adentro.
+   *
+   * Se mira el día de hoy y el anterior, que es donde puede haber un turno
+   * todavía abierto. Más atrás sería arrastrar turnos que nadie cerró, y eso
+   * es un problema distinto que ya tiene su propia alerta.
+   */
+  const ayerISO = sumarDiasFecha(hoy, -1)
+  const registroActivo = registros.filter((r: RegistroAsistencia) => {
+    if (!r.hora_entrada_real || r.hora_salida_real) return false
+    const f = turnoPorId.get(r.turno_id)?.fecha
+    return f === hoy || f === ayerISO
+  })
   const guardiasEnTurno = new Set(registroActivo.map((r: RegistroAsistencia) => r.guardia_id)).size
   // Atención operativa. Dos filtros que antes faltaban acá y que Revisión
   // Operativa sí aplicaba, así que el panel mostraba más de lo que había para
@@ -12418,7 +12437,19 @@ export default function AppPage() {
     const inicioMesSiguiente = inicioMesSiguienteArgISO(ahora)
     const mesActual = mesActualArgentina()
     const [fdY, fdM] = mesActual.split('-').map(Number)
-    const desdeStr = `${mesActual}-01`
+    // Un día ANTES del inicio del mes.
+    //
+    // A las 00:00 del día 1, los turnos nocturnos que arrancaron el último día
+    // del mes anterior siguen corriendo: el 01/09 a las 00:00 había catorce
+    // vigiladores trabajando, todos en turnos del 31/08. Cargando sólo desde el
+    // día 1, esos turnos no entran, y el panel mostraba "Guardias en turno: 0"
+    // durante toda la madrugada, con la gente adentro del objetivo.
+    //
+    // No contamina las métricas del mes: `registrosMes` y `turnosMesDashboard`
+    // filtran por `fecha.slice(0,7) === mesActual`, así que un turno del 31/08
+    // se carga pero no suma a septiembre. El mes de un turno lo sigue fijando
+    // su fecha de inicio.
+    const desdeStr = sumarDiasFecha(`${mesActual}-01`, -1)
     const hastaISO = new Date(Date.UTC(fdY, fdM, 1, 3, 0, 0)).toISOString()
     const hastaStr = hastaISO.slice(0, 10)
     const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
