@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   NIVEL, PLANTILLA, VENTANA_OPERATIVA, VENTANA_SUPERVISOR, decidir,
-  sigueDescubierto, textoMensaje, variablesDeMensaje,
+  sigueDescubierto, textoMensaje, variablesDeMensaje, variablesParaPlantilla,
 } from '@/lib/escalamiento-descubierto'
 import type { ContextoTurno, TurnoEscalable } from '@/lib/escalamiento-descubierto'
 import { normalizarTelefonoAr, mostrarTelefono } from '@/lib/telefono-ar'
@@ -412,5 +412,31 @@ describe('el mensaje dice el hecho', () => {
   it('las plantillas tienen los nombres que se van a pedir en Meta', () => {
     expect(PLANTILLA[NIVEL.supervisor]).toBe('puesto_descubierto_15')
     expect(PLANTILLA[NIVEL.operativo]).toBe('puesto_descubierto_30')
+  })
+})
+
+describe('las variables que viajan a Meta coinciden con cada plantilla', () => {
+  // Meta rechaza el envío entero si la cantidad de parámetros no coincide con
+  // la plantilla aprobada. El 15 no nombra al supervisor (le llega a él);
+  // el 30 sí lo nombra.
+  const datos = variablesDeMensaje(turno(), {
+    objetivo: 'BANCO NACION', puesto: 'Tesoro', vigilador: 'PEREZ, JUAN', supervisor: 'GOMEZ, ANA',
+  })
+
+  it('el 15 manda exactamente 4, en el orden de la plantilla', () => {
+    expect(variablesParaPlantilla(NIVEL.supervisor, datos)).toEqual([
+      'BANCO NACION', 'Tesoro', '19:00–07:00', 'PEREZ, JUAN',
+    ])
+  })
+
+  it('el 30 manda exactamente 5: las mismas 4 más el supervisor al final', () => {
+    expect(variablesParaPlantilla(NIVEL.operativo, datos)).toEqual([
+      'BANCO NACION', 'Tesoro', '19:00–07:00', 'PEREZ, JUAN', 'GOMEZ, ANA',
+    ])
+  })
+
+  it('lo que usa el texto de cada nivel es lo que su plantilla recibe', () => {
+    expect(textoMensaje(NIVEL.supervisor, datos)).not.toContain('GOMEZ, ANA')
+    expect(textoMensaje(NIVEL.operativo, datos)).toContain('GOMEZ, ANA')
   })
 })

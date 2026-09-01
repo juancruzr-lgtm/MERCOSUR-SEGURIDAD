@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   guardiaCubreInstante,
   instanteLocal,
+  nombreResponsablesOperativos,
   resolverResponsablesOperativos,
 } from '@/lib/responsables-operativos'
 import type { GuardiaOperativa, ParametrosResolucion } from '@/lib/responsables-operativos'
@@ -244,6 +245,66 @@ describe('resolverResponsablesOperativos — excepciones y estados', () => {
     const porNombre = resolver({ zonaNombre: 'rosario', zonaId: null })
     const porId = resolver({ zonaNombre: null, zonaId: 'z-rosario' })
     expect(porNombre.responsables).toEqual(porId.responsables)
+  })
+})
+
+// El nombre que va DENTRO del mensaje de escalamiento de 30 minutos. Es la
+// misma resolución que elige a los destinatarios del 15; acá se prueba que el
+// texto nombre a quien la guardia dice, no al que devolvería el fallback.
+describe('nombreResponsablesOperativos (el supervisor del mensaje +30)', () => {
+  const NOMBRES: Record<string, string> = {
+    sabino: 'ARANDA, SABINO',
+    sergio: 'MARTINEZ, SERGIO',
+    walter: 'FULLA, WALTER',
+    cristian: 'WILHJELM, CRISTIAN',
+    acosta: 'ACOSTA, CARLOS',
+  }
+  const nombreDe = (id: string) => NOMBRES[id] ?? null
+
+  const nombrar = (over: Partial<ParametrosResolucion>) => nombreResponsablesOperativos({
+    zonaNombre: 'Rosario',
+    fecha: '2026-09-07',
+    hora: '10:00',
+    guardias: GUARDIAS_SEPTIEMBRE,
+    supervisorZonas: SUPERVISOR_ZONAS,
+    zonas: ZONAS,
+    usuarios: USUARIOS,
+    ...over,
+  }, nombreDe)
+
+  it('nombra al supervisor de guardia, y si cubren dos a la vez nombra a los dos', () => {
+    // Rosario lunes 10:00: Sabino y Sergio de guardia simultánea.
+    expect(nombrar({})).toBe('ARANDA, SABINO y MARTINEZ, SERGIO')
+  })
+
+  it('REGRESIÓN: con guardias vacías el nombre se perdía aunque la guardia estuviera cargada', () => {
+    // Éste era el bug del endpoint: resolvía el nombre del +30 con
+    // guardias: [], y una zona con varios asignados caía en
+    // multiples_sin_guardia → "Sin supervisor asignado" con la guardia cargada.
+    expect(nombrar({ guardias: [] })).toBeNull()
+    expect(nombrar({})).not.toBeNull()
+  })
+
+  it('no usa el fallback de zona cuando hay guardia que decide', () => {
+    // Rosario tiene TRES asignados de zona; si ignorara supervisores_guardia
+    // no podría nombrar a nadie (o nombraría a cualquiera). La guardia del
+    // lunes a la noche es de Walter, y el mensaje debe decir Walter.
+    expect(nombrar({ hora: '23:00' })).toBe('FULLA, WALTER')
+  })
+
+  it('turno nocturno: la madrugada la cubre la guardia que empezó el día anterior', () => {
+    // Martes 03:00 → guardia nocturna del lunes (Walter, 19:00→07:00).
+    expect(nombrar({ fecha: '2026-09-08', hora: '03:00' })).toBe('FULLA, WALTER')
+  })
+
+  it('sin guardia efectiva cae al responsable único de zona', () => {
+    // Rafaela no tiene guardias cargadas y tiene un solo asignado.
+    expect(nombrar({ zonaNombre: 'Rafaela' })).toBe('WILHJELM, CRISTIAN')
+  })
+
+  it('sin responsable no inventa un nombre: devuelve null', () => {
+    expect(nombrar({ zonaNombre: 'Zona Vacía' })).toBeNull()
+    expect(nombrar({ zonaNombre: null, zonaId: null })).toBeNull()
   })
 })
 

@@ -164,6 +164,21 @@ export const PLANTILLA: Record<ClaveNivel, string> = {
 }
 
 /**
+ * Las variables que se le mandan a Meta, en el orden en que la plantilla del
+ * nivel las numera ({{1}}…).
+ *
+ * Cada plantilla recibe EXACTAMENTE las variables que su texto usa: Meta
+ * rechaza el envío entero si la cantidad no coincide con la plantilla
+ * aprobada. El mensaje de 15 le llega al propio supervisor responsable y no
+ * lo nombra: cuatro variables. El de 30 sí nombra al supervisor del primer
+ * escalamiento: cinco.
+ */
+export function variablesParaPlantilla(nivel: ClaveNivel, d: DatosMensaje): string[] {
+  const comunes = [d.objetivo, d.puesto, d.horario, d.vigilador]
+  return nivel === NIVEL.operativo ? [...comunes, d.supervisor] : comunes
+}
+
+/**
  * El texto, para el dry-run y para el registro de auditoría.
  *
  * En producción el cuerpo lo arma Meta desde la plantilla aprobada: una

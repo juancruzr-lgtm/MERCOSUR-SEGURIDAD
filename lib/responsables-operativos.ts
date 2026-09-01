@@ -220,6 +220,25 @@ export function resolverResponsablesOperativos(params: ParametrosResolucion): Re
   return { responsables: [], origen: 'sin_responsable', candidatosZona: [] }
 }
 
+/**
+ * Los responsables resueltos como UN texto, para mensajes que los nombran.
+ *
+ * Si cubren varios a la vez, se nombran todos ("Aranda, Sabino y Martínez,
+ * Sergio"): elegir uno arbitrariamente diría algo falso sobre quién era
+ * responsable. Sin responsable que nombrar devuelve null, y el mensaje pone
+ * su propio texto por defecto.
+ */
+export function nombreResponsablesOperativos(
+  params: ParametrosResolucion,
+  nombreDe: (id: string) => string | null | undefined,
+): string | null {
+  const resolucion = resolverResponsablesOperativos(params)
+  const nombres = resolucion.responsables
+    .map(id => nombreDe(id))
+    .filter((nombre): nombre is string => Boolean(nombre))
+  return nombres.length > 0 ? nombres.join(' y ') : null
+}
+
 /** Fecha (YYYY-MM-DD) y hora (HH:MM) locales de un Date, para eventos "ahora". */
 export function instanteLocal(ahora: Date = new Date(), timeZone = 'America/Argentina/Buenos_Aires'): { fecha: string; hora: string } {
   const partes = new Intl.DateTimeFormat('en-CA', {
