@@ -636,3 +636,68 @@ taparla antes de que decidas sería esconder el problema en vez de resolverlo.
 Si decidís que van, el texto correcto para esa columna no es "En curso" sino
 **"Salida no fichada"**, que es lo que realmente pasó — el ORIGEN ya dice
 "Cierre automático".
+
+---
+
+## Ciclo 10 — XLSX real, y la convergencia en marcha
+
+### El XLSX existe, es válido y sus números cierran
+
+Descargada y abierta la **Planilla empleado** de MARTINEZ, SANTIAGO · agosto de
+2026. Es un XLSX real (zip OOXML, 10 partes, hoja `Planilla`, 43 filas, rango con
+autofiltro `A5:M36`), no un CSV renombrado.
+
+Los totales que trae el propio archivo cierran contra la suma de sus filas:
+
+| Total del XLSX | Valor | Verificación |
+|---|---:|---|
+| Horas liquidables totales | 264 | suma exacta de las 25 filas con turno |
+| Días trabajados | 24 | 25 turnos − 1 sin fichar |
+| Horas de capacitación | 36 | = 3 turnos de capacitación en la base |
+| Horas reales totales | 100,16 | |
+
+Y contra la base, para el mismo empleado y mes:
+
+| Concepto | Base | XLSX |
+|---|---:|---:|
+| Turnos de agosto | 24 (276,00 h programadas) | 24 días trabajados |
+| Turnos con registro | 24 | 24 |
+| Turnos de capacitación | 3 · 36,00 h | 36 h |
+| Cerrados por el sistema sin salida propia | 14 · 165,00 h | 14 filas con Horas reales 0 |
+
+276,00 programadas − 12,00 del turno del 31/08 que seguía en curso = **264,00
+liquidables**. Cierra.
+
+### Dos cosas del export que conviene mirar
+
+1. **La columna "Característica" no se exporta.** El total de capacitación sí
+   está al pie, pero en el XLSX no se puede saber *qué* filas son capacitación.
+   Como esas horas se le pagan al vigilador y no se le cobran al objetivo, quien
+   arme la factura desde el Excel no tiene cómo separarlas fila por fila.
+
+2. **"Horas reales" escribe `0` donde la pantalla escribe `—`.** Son cosas
+   distintas: `—` es "no se midió", `0` es "trabajó cero". Los 14 turnos cerrados
+   por el sistema entran al Excel como 0, así que cualquier suma de esa columna
+   da 100,16 h para un mes de 264 h liquidables. El número no está mal, pero se
+   presta a leerse como horas trabajadas.
+
+Ninguna de las dos toca un total. Las dejo señaladas, no las cambié.
+
+### La convergencia, medida tres veces
+
+| Métrica | 31/08 | 01/09 06:45 | 01/09 07:20 |
+|---|---:|---:|---:|
+| Total programado | 14.025,00 | 14.025,00 | **14.025,00** |
+| Total asignado | 13.961,00 | 13.961,00 | **13.961,00** |
+| Exigibles | 13.853,00 | 13.948,00 | 13.948,00 |
+| Reconocidas | 12.870,00 | 12.941,00 | **12.965,00** |
+| Diferencia pendiente | 258,00 | 282,00 (8) | **258,00 (6)** |
+
+Programado y asignado siguen clavados. Las reconocidas suben solas a medida que
+los nocturnos fichan la salida, y la diferencia pendiente ya volvió a las 258,00 h
+de partida, ahora en 6 turnos en vez de 8.
+
+Quedan **5 nocturnos del 31/08 abiertos (65,00 h)**, todos de turnos que terminan
+a las 08:00. El Panel Principal muestra 14 guardias en turno a las 07:15, que es
+otra vez la confirmación en vivo de PR #131: antes de ese arreglo, a esta hora
+del día siguiente habrían sido 0.
