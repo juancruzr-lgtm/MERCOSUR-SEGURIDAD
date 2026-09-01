@@ -20,9 +20,14 @@ import {
   NIVEL, PLANTILLA, decidir, textoMensaje, variablesDeMensaje, variablesParaPlantilla,
 } from '@/lib/escalamiento-descubierto'
 import type { ClaveNivel, TurnoEscalable } from '@/lib/escalamiento-descubierto'
+import {
+  NIVEL_RONDA, PLANTILLA_RONDA, claveDedupRonda, datosDeRonda, decidirRonda,
+  horarioVentana, textoMensajeRonda, variablesRondaParaPlantilla,
+} from '@/lib/escalamiento-ronda'
+import type { RondaAlertaEscalable } from '@/lib/escalamiento-ronda'
 import { normalizarTelefonoAr } from '@/lib/telefono-ar'
 import { configuracionMeta, proveedorPorDefecto, proveedorSimulado } from '@/lib/whatsapp'
-import { nombreResponsablesOperativos, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
+import { instanteLocal, nombreResponsablesOperativos, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import { sumarDiasFecha } from '@/lib/turnos'
 
 export const runtime = 'nodejs'
@@ -103,7 +108,7 @@ export async function GET(req: Request) {
     year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(ahora.getTime() - 86400000))
 
-  const [turnosRes, objetivosRes, usuariosRes, registrosRes, destinatariosRes, zonasRes, svRes, puestosRes, guardiasRes] =
+  const [turnosRes, objetivosRes, usuariosRes, registrosRes, destinatariosRes, zonasRes, svRes, puestosRes, guardiasRes, rondaAlertasRes] =
     await Promise.all([
       client.from('turnos')
         .select('id, guardia_id, objetivo_id, puesto_id, fecha, hora_inicio, hora_fin, estado')
@@ -129,6 +134,14 @@ export async function GET(req: Request) {
         .select('supervisor_id, zona, fecha, hora_inicio, hora_fin, estado, tipo_evento, rol_operativo')
         .gte('fecha', sumarDiasFecha(ayer, -1))
         .lte('fecha', hoy),
+      // Rondas: el hecho lo determina evaluar_ronda_alertas() por pg_cron y
+      // queda en ronda_alertas. Acá SOLO se leen las pendientes de tipo
+      // no_iniciada: pausas, capacitación, objetivos de prueba y demás
+      // exclusiones ya actuaron al momento de crear (o no crear) la alerta.
+      client.from('ronda_alertas')
+        .select('id, tipo, estado, objetivo_id, puesto_id, turno_id, guardia_id, ventana_inicio, ventana_fin, ronda:rondas_base(nombre)')
+        .eq('estado', 'pendiente')
+        .eq('tipo', 'no_iniciada'),
     ])
 
   const turnos = (turnosRes.data ?? []) as TurnoEscalable[]
@@ -149,7 +162,7 @@ export async function GET(req: Request) {
     ['turnos', turnosRes], ['objetivos', objetivosRes], ['usuarios', usuariosRes],
     ['registros', registrosRes], ['destinatarios', destinatariosRes],
     ['zonas_operativas', zonasRes], ['supervisor_zonas', svRes], ['puestos', puestosRes],
-    ['supervisores_guardia', guardiasRes],
+    ['supervisores_guardia', guardiasRes], ['ronda_alertas', rondaAlertasRes],
   ].filter(([, r]: any) => r?.error).map(([n, r]: any) => `${n}: ${r.error.message}`)
 
   const nombreDe = (id?: string | null) => {
@@ -323,6 +336,144 @@ export async function GET(req: Request) {
     }
   }
 
+  // ── Rondas no iniciadas ────────────────────────────────────────────────────
+  // Mismo canal, misma seguridad, mismo dry-run. La alerta ya existe en
+  // ronda_alertas; acá sólo se resuelve a quién escribirle y se deduplica.
+  const rondasNoIniciadas = (rondaAlertasRes.data ?? []) as Array<RondaAlertaEscalable & {
+    ronda?: { nombre: string } | { nombre: string }[] | null
+  }>
+  const descartesRonda: Record<string, number> = {}
+
+  // Una alerta se avisa UNA sola vez, a los responsables del momento: misma
+  // semántica que el push de rondas (verificado en producción el 18/08/2026:
+  // reavisar en cada cambio de guardia acumulaba 10 push de la madrugada).
+  // Si algún destinatario ya la recibió, la alerta no se vuelve a escalar.
+  const avisadasRonda = new Set<string>()
+  if (rondasNoIniciadas.length > 0) {
+    const enviadasRondaRes = await client.from('notificaciones_enviadas')
+      .select('tipo')
+      .in('tipo', rondasNoIniciadas.map(claveDedupRonda))
+    for (const fila of (enviadasRondaRes.data ?? []) as any[]) avisadasRonda.add(fila.tipo)
+  }
+
+  const ahoraLocal = instanteLocal(ahora)
+  const nombreEmbebido = (v?: { nombre: string } | { nombre: string }[] | null): string | null =>
+    Array.isArray(v) ? (v[0]?.nombre ?? null) : (v?.nombre ?? null)
+
+  for (const alerta of rondasNoIniciadas) {
+    const objetivo = objetivos.find((o: any) => o.id === alerta.objetivo_id)
+    const d = decidirRonda(alerta, { objetivo })
+    if (!d.escala) {
+      if (d.motivo) descartesRonda[d.motivo] = (descartesRonda[d.motivo] ?? 0) + 1
+      continue
+    }
+    if (avisadasRonda.has(claveDedupRonda(alerta))) {
+      descartesRonda.ya_avisada = (descartesRonda.ya_avisada ?? 0) + 1
+      continue
+    }
+
+    // El responsable del MOMENTO, no el del inicio de la ventana: la alerta
+    // pide intervención ahora, y quien está de guardia ahora es quien puede
+    // actuar. Es el mismo criterio del push de rondas.
+    const r = resolverResponsablesOperativos({
+      zonaId: (objetivo as any)?.zona_id ?? null,
+      fecha: ahoraLocal.fecha,
+      hora: ahoraLocal.hora,
+      guardias, supervisorZonas, zonas, usuarios,
+    })
+
+    const vars = datosDeRonda({
+      objetivo: (objetivo as any)?.nombre,
+      ronda: nombreEmbebido(alerta.ronda),
+      horario: horarioVentana(alerta.ventana_inicio, alerta.ventana_fin),
+      vigilador: nombreDe(alerta.guardia_id),
+    })
+    const texto = textoMensajeRonda(vars)
+
+    if ((r.responsables ?? []).length === 0) {
+      const motivo = r.origen === 'multiples_sin_guardia'
+        ? 'VARIOS_RESPONSABLES_SIN_GUARDIA_DEFINIDA'
+        : 'SIN_SUPERVISOR_RESPONSABLE'
+      acciones.push({
+        alerta: alerta.id, nivel: NIVEL_RONDA, descartado: motivo,
+        objetivo: vars.objetivo, ronda: vars.ronda, horario: vars.horario,
+        vigilador: vars.vigilador, origenResolucion: r.origen,
+        candidatosZona: (r.candidatosZona ?? []).map(id => nombreDe(id)).filter(Boolean),
+      })
+      filasAuditoria.push({
+        turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
+        puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
+        ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA,
+        resultado: motivo.toLowerCase(), proveedor: proveedor.nombre,
+      })
+      continue
+    }
+
+    for (const usuarioId of Array.from(new Set(r.responsables))) {
+      const u = usuarios.find((x: any) => x.id === usuarioId)
+      const tel = normalizarTelefonoAr(u?.telefono)
+
+      if (!tel.e164) {
+        acciones.push({
+          alerta: alerta.id, nivel: NIVEL_RONDA, destinatario: nombreDe(usuarioId),
+          descartado: tel.motivo === 'vacio' ? 'SIN_TELEFONO' : 'TELEFONO_INVALIDO',
+          telefonoCargado: tel.original,
+        })
+        filasAuditoria.push({
+          turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
+          puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
+          ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA, destinatario_id: usuarioId,
+          proveedor: proveedor.nombre,
+          resultado: tel.motivo === 'vacio' ? 'sin_telefono' : 'telefono_invalido',
+          error: `teléfono cargado: ${tel.original || '(vacío)'}`,
+        })
+        continue
+      }
+
+      const destino = {
+        telefono: tel.e164,
+        plantilla: PLANTILLA_RONDA,
+        variables: variablesRondaParaPlantilla(vars),
+      }
+
+      if (!enviarDeVerdad || !proveedor.configurado) {
+        acciones.push({
+          alerta: alerta.id, nivel: NIVEL_RONDA, objetivo: vars.objetivo,
+          ronda: vars.ronda, horario: vars.horario, vigilador: vars.vigilador,
+          destinatario: nombreDe(usuarioId), telefono: tel.e164,
+          plantilla: destino.plantilla, origenResolucion: r.origen,
+          enviaria: true, texto,
+        })
+        continue
+      }
+
+      const envio = await proveedor.enviar(destino)
+      acciones.push({
+        alerta: alerta.id, nivel: NIVEL_RONDA, destinatario: nombreDe(usuarioId),
+        telefono: tel.e164, ok: envio.ok, error: envio.error,
+      })
+      filasAuditoria.push({
+        turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
+        puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
+        ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA, destinatario_id: usuarioId,
+        telefono: tel.e164, plantilla: destino.plantilla,
+        resultado: envio.ok ? 'enviado' : 'fallido', id_proveedor: envio.idProveedor,
+        proveedor: proveedor.nombre, error: envio.error,
+      })
+
+      // Igual que en puestos: un rechazo del proveedor no se marca como
+      // avisado y la próxima corrida reintenta.
+      if (envio.ok) {
+        await client.from('notificaciones_enviadas')
+          .insert({
+            usuario_id: usuarioId, objetivo_id: alerta.objetivo_id,
+            turno_id: null, tipo: claveDedupRonda(alerta),
+          })
+          .then(() => {}, () => {})
+      }
+    }
+  }
+
   if (enviarDeVerdad && filasAuditoria.length > 0) {
     await client.from('escalamiento_whatsapp_envios').insert(filasAuditoria)
       .then(() => {}, (e: any) => console.error('[escalamiento] auditoría', e?.message))
@@ -337,7 +488,10 @@ export async function GET(req: Request) {
     turnosEvaluados: turnos.length,
     accionesNivel15: acciones.filter(a => a.nivel === NIVEL.supervisor).length,
     accionesNivel30: acciones.filter(a => a.nivel === NIVEL.operativo).length,
+    rondasPendientesEvaluadas: rondasNoIniciadas.length,
+    accionesRonda: acciones.filter(a => a.nivel === NIVEL_RONDA).length,
     descartes,
+    descartesRonda,
     acciones,
   })
 }
