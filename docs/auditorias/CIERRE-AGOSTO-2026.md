@@ -353,3 +353,62 @@ quedaron descubiertos, todos entre el 04 y el 08 de agosto.
 Para cada uno: corregir el fichaje, cargar la cobertura manualmente, o dejarlo
 sin reconocer. **No se toca ninguno desde acá** — son horas y son criterio de
 negocio.
+
+---
+
+## P1 · 747,50 h RECONOCIDAS QUE NO APARECEN EN NINGÚN LADO
+
+**Requiere tu decisión. No se tocó nada.**
+
+### El hecho
+
+| concepto | horas | turnos |
+|---|---|---|
+| Programadas exigibles | 13.853,00 | 1331 |
+| Reconocidas (lo que muestra Reportes) | 12.870,00 | 1264 |
+| **Hueco** | **983,00** | |
+
+Ese hueco se descompone así:
+
+| | horas | turnos |
+|---|---|---|
+| **Entrada sin salida, PERO con horas ya cargadas** | **747,50** | **68** |
+| Sin ningún registro | 199,50 | 19 |
+| Resto (diferencias parciales) | ~36 | |
+
+### Por qué quedan en tierra de nadie
+
+Un turno con entrada, sin salida, y con `horas_liquidables` cargadas por un
+supervisor cae en un hueco entre dos reglas:
+
+1. `turnosReconocidosHastaCorte` (lib/liquidacion.ts:315) lo **excluye** de las
+   horas reconocidas: `if (reg?.hora_entrada_real && !reg?.hora_salida_real) return false`
+2. La tarjeta "Diferencia pendiente" **tampoco lo cuenta**, porque su cálculo es
+   `max(hsProg − hsLiq, 0)` y sus horas ya están completas: `hsLiq = hsProg`.
+
+Resultado: **747,50 horas que un supervisor ya reconoció no suman en el total de
+horas reconocidas, y tampoco figuran como pendientes de reconocer.**
+
+Verificado: los 68 turnos tienen exactamente 747,50 h programadas y 747,50 h
+cargadas. No falta ni sobra ninguna.
+
+### Por qué no lo corregí
+
+Cambiar ese filtro mueve el total de horas reconocidas de **12.870,00** a
+**13.617,50** — 747,50 h más. Eso impacta liquidación directamente y es una
+decisión de negocio, no un arreglo técnico.
+
+### La pregunta para JC
+
+Un turno donde el vigilador entró, no fichó la salida, y **el supervisor cargó
+las horas**: ¿esas horas están reconocidas o no?
+
+- **Si SÍ** → es un bug de presentación: el filtro debería mirar también
+  `horas_liquidables`, y agosto tiene 13.617,50 h reconocidas.
+- **Si NO** → el número actual es correcto, pero entonces la tarjeta "Diferencia
+  pendiente" está subdeclarando: debería decir ~983 h y no 258 h, porque esas
+  747,50 h sí faltan reconocer.
+
+**En cualquiera de los dos casos, una de las dos pantallas está mostrando un
+número que no corresponde.** Lo que no puede pasar es lo actual: que las horas
+no estén en ninguna de las dos.
