@@ -281,3 +281,75 @@ o dejarlos sin reconocer.
 
 **Estado: 🟡 PRECIERRE** — el sistema es coherente y los números cierran; falta
 que terminen los nocturnos y que se resuelvan los 101 casos humanos.
+
+---
+
+## LOS 101 CASOS QUE NECESITAN DECISIÓN HUMANA
+
+**1.107,00 h en juego.** Ninguno es un bug: son turnos que el sistema no puede
+resolver solo porque falta un dato que alguien tiene que aportar o decidir.
+
+### H1 · Entrada sin salida — 82 turnos, 907,50 h
+
+De los 82, **14 son los nocturnos que estaban corriendo** y cierran solos entre
+las 06:00 y las 08:00. Los otros **68 (≈730 h)** quedaron abiertos y nadie los
+cerró.
+
+Está muy concentrado: **cinco personas explican 427 h, casi la mitad**.
+
+| vigilador | casos | horas |
+|---|---|---|
+| **MARTINEZ, SANTIAGO** | **15** | **177,00** |
+| **TABORDA, NICOLÁS** | **8** | **96,50** |
+| **OTERO, RUBÉN** | **7** | **84,00** |
+| GAUTO, MISAEL | 4 | 38,50 |
+| MAIDANA, JUAN CLAUDIO | 4 | 31,00 |
+| FLEYTAS, CLAUDIO | 3 | 41,50 |
+| BORGNIS, MARTÍN | 3 | 37,00 |
+| BARRIOS, BRIAN EMANUEL | 3 | 36,00 |
+| BARREIRO, ARIEL GUSTAVO | 3 | 21,00 |
+| RIVAS, JUAN DOMINGO | 2 | 24,00 |
+| González, Nicolás Federico | 2 | 24,00 |
+| GONZALEZ, ADALBERTO LUCAS | 2 | 24,00 |
+| FIGGINI, MAXIMILIANO | 2 | 24,00 |
+| VIEYRA, ALBERTO GERNAN | 2 | 20,00 |
+| SANCHEZ, CÉSAR LUIS | 2 | 20,00 |
+| GOMEZ, JOSE MARIA | 2 | 18,00 |
+| BARRIENTOS, DANIEL GUSTAVO | 2 | 16,00 |
+| otros 16 con 1 caso cada uno | 16 | ~194,00 |
+
+Que tres personas concentren 30 de los 82 casos sugiere un hábito —olvidarse de
+fichar la salida—, no un problema técnico distribuido.
+
+### H2 · Sin ningún registro — 19 turnos, 199,50 h
+
+| fecha | vigilador | objetivo | horas |
+|---|---|---|---|
+| 02/08 | CENTURION, AGUSTIN | SRT | 12,00 |
+| 03/08 | BARREIRO, ARIEL GUSTAVO | ANTENA | 7,00 |
+| 04/08 | **(SIN VIGILADOR)** | SKATEPARK | 8,00 |
+| 04/08 | CENTURION, AGUSTIN | SRT | 8,00 |
+| 04/08 | MARTINEZ, RAUL EXEQUIEL | LAROMET RP41 PUESTO 2 | 14,00 |
+| 04/08 | PIÑERO, WALTER | SKATEPARK | 8,00 |
+| 04/08 | ROSÓN, JUAN RAMÓN | CLUB | 8,00 |
+| 06/08 | GONZALEZ, ADALBERTO LUCAS | RAPSODIA | 7,00 |
+| 06/08 | PEREZ, SANTIAGO | LAROMET ROSARIO | 6,00 |
+| 07/08 | **(SIN VIGILADOR)** | CIRSE | 8,00 |
+| 07/08 | **(SIN VIGILADOR)** | NACION SERVICIOS E.R. | 12,00 |
+| 07/08 | **(SIN VIGILADOR)** | NACION SERVICIOS E.R. | 12,00 |
+| 07/08 | MARTINEZ, RAUL EXEQUIEL | LAROMET RP41 1 | 13,00 |
+| 08/08 | **(SIN VIGILADOR)** | ANTENA | 12,00 |
+| 08/08 | **(SIN VIGILADOR)** | NACION SERVICIOS E.R. | 12,00 |
+| 08/08 | GOMEZ, JOSE MARIA | Laromet ruta 34 | 14,00 |
+| 22/08 | MARTINEZ, RAUL EXEQUIEL | LAROMET IRIGOYEN | 12,00 |
+| 23/08 | RÍOS, RAUL MIGUEL | LAROMET FUNES 2 | 12,00 |
+| 24/08 | RÍOS, RAUL MIGUEL | LAROMET FUNES 2 | 14,50 |
+
+**Seis de estos turnos nunca tuvieron vigilador asignado** (52 h): puestos que
+quedaron descubiertos, todos entre el 04 y el 08 de agosto.
+
+### Qué hay que decidir
+
+Para cada uno: corregir el fichaje, cargar la cobertura manualmente, o dejarlo
+sin reconocer. **No se toca ninguno desde acá** — son horas y son criterio de
+negocio.
