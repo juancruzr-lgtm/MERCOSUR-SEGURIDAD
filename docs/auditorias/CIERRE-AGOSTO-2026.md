@@ -537,3 +537,102 @@ entre las 06:00 y las 08:00 hay que releer estos cinco números: si exigibles pa
 a 14.025,00 − (no asignadas) y la diferencia pendiente baja sola, agosto cierra
 🟢. Si la diferencia se queda arriba de las 258 h originales, son turnos que
 nadie va a cerrar y hay que listarlos por nombre.
+
+---
+
+## Ciclo 9 — P1: encontré la causa raíz, y me corrijo
+
+Las 747,50 h que quedaban fuera de reconocidas y fuera de pendientes **no son
+una pregunta de criterio**. Son una línea de código.
+
+### Primero, la corrección
+
+Más arriba escribí que esas horas las habían **cargado los supervisores**. Es
+falso. Las cargó el **Cierre Automático**, las 68 sin excepción:
+
+| Quién cerró esos turnos | Turnos |
+|---|---:|
+| `cierre_automatico` | **68** |
+| Supervisor / carga manual | 0 |
+
+Importa porque cambia a quién hay que preguntarle: no es un tema de cómo cargan
+los supervisores, es el propio sistema el que cerró esos turnos y después la
+pantalla no los cuenta.
+
+### La causa raíz
+
+En `lib/liquidacion.ts` hay **dos definiciones distintas de "el turno tiene
+salida"**, en el mismo archivo:
+
+| Función | Cómo decide si hay salida |
+|---|---|
+| `resolverLineaLiquidacion` (P2) | `hora_salida_final ?? hora_salida_real` |
+| `estadoPlanilla` (AppClient) | `hora_salida_final ?? hora_salida_real` |
+| **`turnosReconocidosHastaCorte`** | **sólo `hora_salida_real`** |
+
+```ts
+// lib/liquidacion.ts — turnosReconocidosHastaCorte
+if (reg?.hora_entrada_real && !reg?.hora_salida_real) return false
+```
+
+El comentario que la acompaña dice que excluye *"turnos en curso — hay entrada
+pero no salida, la jornada no está cerrada"*. Pero un turno con
+`hora_salida_final` **sí está cerrado**: eso es exactamente lo que escribe el
+Cierre Automático, y es el campo que `resolverLineaLiquidacion` usa para
+calcular las horas. Se lo excluye por una condición que contradice el propósito
+que el propio comentario declara.
+
+### El reparto exacto, medido en la base
+
+De los 75 turnos de agosto con entrada y sin `hora_salida_real`:
+
+| Grupo | Turnos | Horas |
+|---|---:|---:|
+| **A** — tienen `hora_salida_final` (cerrados por el sistema) | **68** | **747,50** |
+| **B** — no tienen ninguna salida (abiertos de verdad) | 7 | 89,00 |
+
+El grupo **B** está bien excluido: son los nocturnos del 31/08 que a esta hora
+—02:30 del 01/09— siguen corriendo.
+
+| Objetivo | Horario | Vigilador |
+|---|---|---|
+| ACA | 20:00–08:00 | VIEYRA, ALBERTO GERNAN |
+| LAROMET FUNES 2 | 20:00–08:00 | CORREA, SERGIO ADRIAN |
+| LAROMET ROSARIO | 17:00–08:00 | BENITEZ, MIGUEL ANGEL |
+| NACION SANTA FE | 19:00–07:00 | FIGGINI, MAXIMILIANO |
+| NACION SERVICIOS ENTRE RIOS | 19:00–07:00 | MARTINEZ, SANTIAGO |
+| PEAJE | 18:00–08:00 | OYOLA, JORGE MARCELO |
+| PNC | 20:00–08:00 | FERNANDEZ, JONATAN |
+
+El grupo **A** son turnos del 7, del 11, del 13 de agosto. Están cerrados,
+liquidados y a tres semanas de distancia. No hay ninguna lectura en la que estén
+"en curso".
+
+### El síntoma visible, en la planilla que se exporta
+
+La misma asimetría aparece en la columna OBSERVACIONES de la planilla —y por lo
+tanto en el XLSX. `observacionesPlanilla` mira sólo `hora_salida_real` mientras
+`estadoPlanilla` mira las dos, así que el mismo renglón se contradice:
+
+```
+07/08/2026  NACION SERVICIOS ENTRE RIOS  19:00–07:00  18:56  07:00
+            HS REALES —   HS LIQUIDABLES 12.00
+            ESTADO: Cubierto     OBSERVACIONES: En curso
+```
+
+Cubierto y En curso, en la misma fila, el 1º de septiembre.
+
+### Por qué no lo corregí
+
+Mover esa línea suma **747,50 h** a las reconocidas de agosto: de 12.941,00 a
+**13.688,50**. Eso toca liquidación, y la orden es marcarlo, no tocarlo.
+
+El arreglo es de una línea y ya sé cuál es. **Lo dejo escrito y sin aplicar,
+esperando tu decisión.** Cuando la tomes, las dos cosas —el filtro y el texto de
+OBSERVACIONES— tienen que salir juntas: no toqué el "En curso" de la planilla
+justamente porque hoy es la única señal visible de que esos turnos existen, y
+taparla antes de que decidas sería esconder el problema en vez de resolverlo.
+
+Si decidís que van, el texto correcto para esa columna no es "En curso" sino
+**"Salida no fichada"**, que es lo que realmente pasó — el ORIGEN ya dice
+"Cierre automático".
