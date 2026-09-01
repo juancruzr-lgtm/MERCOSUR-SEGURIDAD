@@ -490,3 +490,50 @@ La pregunta es de criterio, no técnica: **¿querés que alguien con 10,0 y
 "Excelente" aparezca marcado para intervención?** Si la respuesta es no, la
 Calidad de las fotos tendría que dejar de mover el tipo de devolución mientras
 siga pesando 0. No lo toqué porque es criterio de negocio.
+
+---
+
+## Ciclo 8 — El cambio de mes, observado en vivo
+
+Medido en producción a las **02:30 del 01/09/2026**, o sea del otro lado del
+límite. Esto era lo único que no se podía verificar leyendo código.
+
+### Agosto: antes y después de la medianoche
+
+| Métrica | 31/08 (antes) | 01/09 02:30 (después) | Δ |
+|---|---:|---:|---:|
+| Total programado | 14.025,00 | **14.025,00** | **0,00** |
+| Total asignado | 13.961,00 | **13.961,00** | **0,00** |
+| Programadas exigibles | 13.853,00 | 13.948,00 | +95,00 |
+| Horas reconocidas | 12.870,00 | 12.941,00 | +71,00 |
+| Diferencia pendiente | 258,00 | 282,00 (8 turnos) | +24,00 |
+
+**Programado y asignado no se movieron ni una centésima.** Eso es exactamente lo
+que tenía que pasar: el universo de agosto lo fija la fecha de inicio del turno,
+así que los 14 turnos nocturnos que arrancaron el 31/08 a las 19:00 y a las 23:00
+y terminan el 01/09 a las 07:00 **siguen enteros en agosto**. Ninguno se partió,
+ninguno migró.
+
+Lo que sí se movió es lo que tenía que moverse, y sólo por el paso del tiempo:
+
+- **Exigibles +95,00 h** — turnos que a la hora de la primera medición estaban en
+  curso y ahora ya terminaron su horario.
+- **Reconocidas +71,00 h** — los que además ya cerraron el fichaje.
+- Quedan **77,00 h en curso**: los nocturnos que cierran entre 06:00 y 08:00.
+
+### La contraprueba
+
+Septiembre arranca en **362,00 h programadas / 362,00 asignadas / 0,00 exigibles
+/ 0,00 reconocidas**. Si algún turno nocturno del 31/08 se hubiera contado por su
+fecha de fin, tendría que haber aparecido acá y haber desaparecido de agosto.
+Agosto no bajó y septiembre no tiene nada que no le corresponda.
+
+**La regla del mes se cumple.** No hay que hacer nada.
+
+### Lo que queda para el cierre definitivo
+
+77,00 h en curso y 282,00 h pendientes en 8 turnos. Cuando cierren los nocturnos
+entre las 06:00 y las 08:00 hay que releer estos cinco números: si exigibles pasa
+a 14.025,00 − (no asignadas) y la diferencia pendiente baja sola, agosto cierra
+🟢. Si la diferencia se queda arriba de las 258 h originales, son turnos que
+nadie va a cerrar y hay que listarlos por nombre.
