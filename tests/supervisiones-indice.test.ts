@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  estadoSupervisionObjetivo, indexarUltimaSupervision,
+  DIAS_SIN_OPERACION, estadoSupervisionObjetivo, indexarUltimaSupervision, objetivoEnOperacion,
 } from '@/lib/supervisiones'
 
 // El caso real que motivó estos tests: el panel del tablero decía "6 objetivos
@@ -77,5 +77,64 @@ describe('los objetivos que se cuentan', () => {
     // No se lo saca de la cuenta por no tener frecuencia configurada: se lo
     // mide con el default. Sacarlo lo volvería invisible.
     expect(estadoSupervisionObjetivo(objetivo(null), null, AHORA)).toBe('nunca')
+  })
+})
+
+// ── Objetivos que no están operando ─────────────────────────────────────────
+//
+// Cinco de los 39 objetivos activos no tienen un turno desde hace semanas
+// —MUSEO CASTAGNINO desde el 17/08, LAROMET RP41 PUESTO 2 desde el 04/08— y el
+// panel los reclamaba igual. Pedir que se vaya a supervisar un lugar donde no
+// hay nadie llena la lista de trabajo que no existe.
+
+describe('un objetivo sin servicio no reclama visita', () => {
+  const AHORA_D = new Date('2026-08-31T21:00:00-03:00')
+
+  it('con un turno de hoy, está operando', () => {
+    expect(objetivoEnOperacion(['2026-08-31'], AHORA_D)).toBe(true)
+  })
+
+  it('el último turno hace 3 días sigue contando', () => {
+    // LAROMET RP41 1: turnos sueltos, el último el 28/08. Sigue operando.
+    expect(objetivoEnOperacion(['2026-08-28'], AHORA_D)).toBe(true)
+  })
+
+  it('el último turno hace 19 días, no', () => {
+    // LAROMET CARCARAÑA: 12/08.
+    expect(objetivoEnOperacion(['2026-08-12', '2026-08-05'], AHORA_D)).toBe(false)
+  })
+
+  it('el último turno hace 27 días, tampoco', () => {
+    // LAROMET RP41 PUESTO 2: 04/08.
+    expect(objetivoEnOperacion(['2026-08-04'], AHORA_D)).toBe(false)
+  })
+
+  it('un turno FUTURO alcanza: el servicio arranca la semana que viene', () => {
+    expect(objetivoEnOperacion(['2026-09-15'], AHORA_D)).toBe(true)
+  })
+
+  it('sin ningún turno, no opera', () => {
+    expect(objetivoEnOperacion([], AHORA_D)).toBe(false)
+  })
+
+  it('el borde son 7 días exactos', () => {
+    expect(DIAS_SIN_OPERACION).toBe(7)
+    expect(objetivoEnOperacion(['2026-08-24'], AHORA_D)).toBe(true)
+    expect(objetivoEnOperacion(['2026-08-23'], AHORA_D)).toBe(false)
+  })
+
+  it('un objetivo de fin de semana no desaparece entre semana', () => {
+    // Es el motivo de que sean 7 y no 3: con 3, el que cubre sábados quedaría
+    // fuera todos los miércoles.
+    expect(objetivoEnOperacion(['2026-08-29'], AHORA_D)).toBe(true)
+  })
+
+  it('fechas nulas o rotas se descartan sin romper', () => {
+    expect(objetivoEnOperacion([null, undefined, ''], AHORA_D)).toBe(false)
+    expect(objetivoEnOperacion([null, '2026-08-30'], AHORA_D)).toBe(true)
+  })
+
+  it('acepta timestamps completos, no sólo la fecha', () => {
+    expect(objetivoEnOperacion(['2026-08-30T22:00:00Z'], AHORA_D)).toBe(true)
   })
 })
