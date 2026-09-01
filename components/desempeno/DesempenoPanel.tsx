@@ -33,6 +33,8 @@ import { AYUDA_SIN_ZONAS, MENSAJE_SIN_ZONAS } from '@/lib/bandeja-planillas'
 import {
   cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
+import { guardarSnapshot } from '@/lib/evaluacion-snapshot-guardar'
+import type { EntradaSnapshot } from '@/lib/evaluacion-snapshot'
 import { ETIQUETA_TIPO_DEVOLUCION, causaPrincipal, generarBalance } from '@/lib/balance-mensual'
 import type { TipoDevolucion } from '@/lib/balance-mensual'
 import ComposicionNota from '@/components/cumplimiento/ComposicionNota'
@@ -152,6 +154,8 @@ export default function DesempenoPanel({
   const [abierto, setAbierto] = useState<string | null>(null)
   const [medido, setMedido] = useState<Map<string, ReturnType<typeof fuentesDeEmpleado>>>(new Map())
   const [avisoFuentes, setAvisoFuentes] = useState('')
+  const [congelando, setCongelando] = useState(false)
+  const [avisoSnapshot, setAvisoSnapshot] = useState('')
 
   const soloUno = Boolean(empleadoId)
 
@@ -303,6 +307,43 @@ export default function DesempenoPanel({
   const meses = useMemo(() => mesesDisponibles('2026-06'), [])
   const estados = Object.keys(ETIQUETA_ESTADO) as EstadoDesempeno[]
 
+  /**
+   * Congelar el mes.
+   *
+   * No recalcula: toma `lista`, `balances` y `medido` —lo que la pantalla ya
+   * está mostrando— y lo deposita tal cual. Congelar y publicar son dos actos
+   * distintos: esto deja las filas en 'calculada' y nadie las ve todavía.
+   */
+  const congelar = useCallback(async () => {
+    setCongelando(true)
+    setAvisoSnapshot('')
+    const entradas: EntradaSnapshot[] = lista.map(d => {
+      const m = medido.get(d.empleadoId)
+      const med = m?.rondas.medicion
+      const medible = med?.estado === 'medible'
+      return {
+        desempeno: d,
+        balance: balances.get(d.empleadoId) ?? null,
+        contexto: {
+          rondasExigibles: medible ? med!.validos : 0,
+          rondasCumplidas: medible ? med!.cumplidos : 0,
+          turnosConObligacionDeRonda: m?.rondas.turnosConObligacion ?? 0,
+          turnosConIncumplimientoDeRonda: m?.rondas.turnosConIncumplimiento ?? 0,
+        },
+      }
+    })
+    const r = await guardarSnapshot(entradas, mes, usuarioId)
+    setCongelando(false)
+    setAvisoSnapshot(
+      r.error
+        ? `No se pudo congelar: ${r.error}`
+        : `Congeladas ${r.guardadas} evaluaciones de ${etiquetaMes(mes)}`
+          + (r.publicadasPreservadas > 0
+            ? ` · ${r.publicadasPreservadas} ya publicadas se mantuvieron publicadas`
+            : ' · quedan en «calculada», todavía no las ve nadie'),
+    )
+  }, [lista, balances, medido, mes, usuarioId])
+
   if (!habilitado) return null
 
   return (
@@ -355,7 +396,24 @@ export default function DesempenoPanel({
         <button style={S.btn} type="button" onClick={() => void cargar()} disabled={cargando}>
           {cargando ? '…' : '↻'}
         </button>
+
+        {/* Congelar no publica: deja la evaluación fija para poder responder por
+            ella. Publicar es un acto aparte y explícito. */}
+        {esAdmin && !soloUno && (
+          <button
+            style={S.btn}
+            type="button"
+            onClick={() => void congelar()}
+            disabled={cargando || congelando || lista.length === 0}
+          >
+            {congelando ? 'Congelando…' : 'Congelar evaluación del mes'}
+          </button>
+        )}
       </div>
+
+      {avisoSnapshot && (
+        <div style={{ ...S.caja, ...S.tenue, marginBottom:12 }}>{avisoSnapshot}</div>
+      )}
 
       {error && <div style={{ ...S.caja, color:'#f87171', marginBottom:12 }}>{error}</div>}
 
