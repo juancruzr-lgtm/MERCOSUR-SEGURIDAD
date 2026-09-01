@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
+import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -6833,11 +6834,18 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'Horas liquidables': mostrarHoras(horasLiquidables),
       Característica: etiquetaCaracteristica(turno.tipo_evento),
       Estado: estado,
+      Feriado: feriadoDelTurno(turno)?.nombre ?? 'No',
       'Observaciones / alertas': observacionesPlanilla(turno, registro, extra),
       'GPS ingreso': coordenadasGpsTexto(registro, 'ingreso'),
       'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
       'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
       Origen: origenEtiquetaEmpleado,
+      // El feriado lo fija la fecha de INICIO del turno, igual que el mes: un
+      // nocturno del 16 que termina el 17 no es feriado, y uno del 17 que
+      // termina el 18 lo es completo. `_feriadoCuenta` exige además que se haya
+      // trabajado — no alcanza con que el día fuera feriado.
+      _feriado: feriadoDelTurno(turno),
+      _feriadoCuenta: turnoCuentaEnFeriado(turno, horasLiquidables, ESTADOS_SIN_OBLIGACION),
       _id: `${turno.id}-${registro?.id || 'sin-registro'}`,
       _turno_id: turno.id,
       _registro: registro || null,
@@ -6944,6 +6952,12 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     sinFichar: planillaEmpleado.filter((row: any) => row._sinFichar).length,
     enCurso: planillaEmpleado.filter((row: any) => row._enCurso).length,
     tardanzas: planillaEmpleado.filter((row: any) => row._tarde).length,
+    // Información y conteo, no una regla salarial: no altera `horasLiquidables`
+    // ni agrega adicionales. Cuenta DÍAS de feriado cubiertos, no turnos, para
+    // que dos turnos del mismo feriado no se lean como dos feriados.
+    feriados: resumirFeriados(planillaEmpleado.map((row: any) => ({
+      fecha: row._fecha, cuenta: Boolean(row._feriadoCuenta), horas: row._horasLiquidables || 0,
+    }))),
   }
 
   // Planilla por objetivo: una fila por registro (no por turno).
@@ -6977,10 +6991,13 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       Característica: etiquetaCaracteristica(turno.tipo_evento),
       Origen: origenEtiquetaObj,
       Estado: estado,
+      Feriado: feriadoDelTurno(turno)?.nombre ?? 'No',
       'Observaciones / alertas': observacionesPlanilla(turno, registro),
       'GPS ingreso': coordenadasGpsTexto(registro, 'ingreso'),
       'Distancia ingreso': metrosGpsTexto(registro?.distancia_ingreso_metros),
       'Estado GPS ingreso': estadoGpsTexto(registro, 'ingreso'),
+      _feriado: feriadoDelTurno(turno),
+      _feriadoCuenta: turnoCuentaEnFeriado(turno, horasLiquidables, ESTADOS_SIN_OBLIGACION),
       _id: `${turno.id}-${registro.id}`,
       _turno_id: turno.id,
       _registro: registro,
@@ -7012,11 +7029,14 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       'Horas liquidables': esTransicion ? mostrarHoras(horasLiquidables) : '—',
       Característica: etiquetaCaracteristica(turno.tipo_evento),
       Estado: estado,
+      Feriado: feriadoDelTurno(turno)?.nombre ?? 'No',
       'Observaciones / alertas': esTransicion ? 'Turno cubierto (período de transición)' : observacionesPlanilla(turno, undefined),
       'GPS ingreso': '—',
       'Distancia ingreso': '—',
       'Estado GPS ingreso': '—',
       Origen: esTransicion ? 'Turno cubierto (sin fichaje)' : '—',
+      _feriado: feriadoDelTurno(turno),
+      _feriadoCuenta: turnoCuentaEnFeriado(turno, horasLiquidables, ESTADOS_SIN_OBLIGACION),
       _id: `${turno.id}-sin-registro`,
       _turno_id: turno.id,
       _registro: null,
@@ -7090,6 +7110,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => row._capacitacion ? sum : sum + (row._horasLiquidables || 0), 0),
     horasCapacitacion: capacitacionObjetivo.horas,
     turnosCapacitacion: capacitacionObjetivo.turnos,
+    // Se marcan para poder auditar el objetivo y, si alguna vez hubiera
+    // tratamiento diferencial, facturarlo. Hoy no cambia lo que se cobra.
+    feriados: resumirFeriados(planillaObjetivo.map((row: any) => ({
+      fecha: row._fecha, cuenta: Boolean(row._feriadoCuenta), horas: row._horasLiquidables || 0,
+    }))),
   }
 
   // Totales globales del mes. El universo lo define `lib/liquidacion`, el mismo
@@ -7264,7 +7289,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const exportarPlanillaEmpleadoXLSX = async () => {
     if (!empleadoSeleccionado || planillaEmpleado.length === 0) return
 
-    const columnas = ['Fecha', 'Día', 'Objetivo', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado', 'Origen', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
+    const columnas = ['Fecha', 'Día', 'Objetivo', 'Horario programado', 'Entrada real', 'Salida real', 'Horas reales', 'Horas liquidables', 'Estado', 'Origen', 'Feriado', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
     const filas = [
       ['Planilla individual por empleado'],
       [`Mes/Año: ${mesLabel}`],
@@ -7282,6 +7307,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         Number(row._horasLiquidables.toFixed(2)),
         row.Estado,
         row.Origen,
+        row.Feriado,
         row['GPS ingreso'],
         row['Distancia ingreso'],
         row['Estado GPS ingreso'],
@@ -7301,6 +7327,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         : []),
       ['Tardanzas', totalesEmpleado.tardanzas],
       ['Turnos sin fichar', totalesEmpleado.sinFichar],
+      ['Feriados nacionales cubiertos', totalesEmpleado.feriados.feriadosCubiertos],
+      ['Horas trabajadas en feriados', Number(totalesEmpleado.feriados.horas.toFixed(2))],
+      ['Los feriados se cuentan por la fecha de inicio del turno. Es información: no altera las horas liquidables.'],
     ]
     const nombre = `empleado_${archivoParte(`${empleadoSeleccionado.apellido}_${empleadoSeleccionado.nombre}`)}_${mesArchivo()}.xlsx`
 
@@ -7310,7 +7339,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const exportarPlanillaObjetivoXLSX = async () => {
     if (!objetivoSeleccionado || planillaObjetivo.length === 0) return
 
-    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada efectiva', 'Salida efectiva', 'Horas reales', 'Horas liquidables', 'Estado', 'Origen', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
+    const columnas = ['Fecha', 'Guardia', 'Horario programado', 'Entrada efectiva', 'Salida efectiva', 'Horas reales', 'Horas liquidables', 'Estado', 'Origen', 'Feriado', 'GPS ingreso', 'Distancia ingreso', 'Estado GPS ingreso']
     const filas = [
       ['Planilla mensual por objetivo'],
       [`Mes/Año: ${mesLabel}`],
@@ -7327,6 +7356,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         Number(row._horasLiquidables.toFixed(2)),
         row.Estado,
         row.Origen,
+        row.Feriado,
         row['GPS ingreso'],
         row['Distancia ingreso'],
         row['Estado GPS ingreso'],
@@ -7346,6 +7376,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             [notaCapacitacionExcluida(totalesObjetivo.horasCapacitacion, totalesObjetivo.turnosCapacitacion)],
           ]
         : []),
+      ['Feriados nacionales cubiertos', totalesObjetivo.feriados.feriadosCubiertos],
+      ['Horas en feriados', Number(totalesObjetivo.feriados.horas.toFixed(2))],
+      ['Los feriados se marcan por la fecha de inicio del turno. Hoy no modifican lo facturado.'],
     ]
     const nombre = `objetivo_${archivoParte(objetivoSeleccionado.nombre)}_${mesArchivo()}.xlsx`
 
@@ -7390,6 +7423,25 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       const horasLiquidablesFallback = turnosFallback.reduce((s: number, t: Turno) => s + horasProgramadasTurno(t), 0)
       const horasLiquidables = horasLiquidablesConRegistro + horasLiquidablesFallback
 
+      // Feriados nacionales cubiertos por esta persona. Mismo criterio que la
+      // planilla: la fecha de inicio del turno manda, y sólo cuenta si se
+      // reconocieron horas. Es conteo, no liquidación.
+      const feriados = resumirFeriados([
+        ...principalesG.map((r: RegistroAsistencia) => {
+          const t = turnoPorId.get(r.turno_id)
+          const hs = t ? horasLiquidablesRegistro(t, r) : 0
+          return {
+            fecha: t?.fecha ?? '',
+            cuenta: Boolean(t) && turnoCuentaEnFeriado(t as Turno, hs, ESTADOS_SIN_OBLIGACION),
+            horas: hs,
+          }
+        }),
+        ...turnosFallback.map((t: Turno) => {
+          const hs = horasProgramadasTurno(t)
+          return { fecha: t.fecha, cuenta: turnoCuentaEnFeriado(t, hs, ESTADOS_SIN_OBLIGACION), horas: hs }
+        }),
+      ])
+
       return {
         Legajo: g.cuil ? formatCuil(g.cuil) : (g.legajo || '—'),
         Apellido: g.apellido,
@@ -7401,6 +7453,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         'En Curso': regs.filter((r: RegistroAsistencia) => r.hora_entrada_real && !r.hora_salida_real).length,
         Tardanzas: regs.filter((r: RegistroAsistencia) => r.alerta_entrada === 'tarde').length,
         'Salidas Anticipadas': regs.filter((r: RegistroAsistencia) => r.alerta_salida === 'anticipada').length,
+        'Feriados Cubiertos': feriados.feriadosCubiertos,
+        'Horas en Feriados': feriados.horas.toFixed(2),
         _registros: regs.length,
         _fallback: turnosFallback.length,
       }
@@ -7478,6 +7532,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       Number(row['En Curso']) || 0,
       Number(row.Tardanzas) || 0,
       Number(row['Salidas Anticipadas']) || 0,
+      Number(row['Feriados Cubiertos']) || 0,
+      Number(row['Horas en Feriados']) || 0,
     ])
     const totales = {
       guardias: filasGuardias.length,
@@ -7487,13 +7543,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       enCurso: filasGuardias.reduce((sum: number, row: any[]) => sum + row[5], 0),
       tardanzas: filasGuardias.reduce((sum: number, row: any[]) => sum + row[6], 0),
       salidasAnticipadas: filasGuardias.reduce((sum: number, row: any[]) => sum + row[7], 0),
+      feriadosCubiertos: filasGuardias.reduce((sum: number, row: any[]) => sum + row[8], 0),
+      horasFeriados: filasGuardias.reduce((sum: number, row: any[]) => sum + row[9], 0),
     }
     const filas = [
       ['Resumen guardias'],
       [`Generado: ${formatFechaHora(new Date())}`],
       [filtrosReporte()],
       [],
-      ['Legajo', 'Guardia', 'Días trabajados', 'Horas reales', 'Horas liquidables', 'En curso', 'Tardanzas', 'Salidas anticipadas'],
+      ['Legajo', 'Guardia', 'Días trabajados', 'Horas reales', 'Horas liquidables', 'En curso', 'Tardanzas', 'Salidas anticipadas', 'Feriados cubiertos', 'Horas en feriados'],
       ...filasGuardias,
       [],
       ['Totales'],
@@ -7504,6 +7562,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       ['Turnos en curso', totales.enCurso],
       ['Tardanzas', totales.tardanzas],
       ['Salidas anticipadas', totales.salidasAnticipadas],
+      ['Feriados nacionales cubiertos', totales.feriadosCubiertos],
+      ['Horas en feriados', Number(totales.horasFeriados.toFixed(2))],
     ]
 
     await descargarXLSX(`resumen_guardias_${mesArchivo()}.xlsx`, filas, 4, filasGuardias.length, [3, 4, 1])
@@ -7698,6 +7758,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             {totalBox('Sin fichar', totalesEmpleado.sinFichar)}
             {totalBox('En curso', totalesEmpleado.enCurso)}
             {totalBox('Tardanzas', totalesEmpleado.tardanzas)}
+            {/* Conteo, no liquidación: las horas ya están contadas arriba y acá
+                sólo se dice cuántas de ellas cayeron en feriado nacional. */}
+            {totalBox('Feriados nacionales cubiertos', totalesEmpleado.feriados.feriadosCubiertos)}
+            {totalBox('Horas trabajadas en feriados', totalesEmpleado.feriados.horas.toFixed(2),
+              'No modifica las horas liquidables.')}
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
@@ -7709,7 +7774,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                 return (
                 <tr key={row._id} style={{ opacity: opacidadFila }}>
                   <td style={S.td}>{row.Fecha}</td>
-                  <td style={S.td}>{row.Día}</td>
+                  {/* La marca va pegada al día porque es una propiedad de la
+                      jornada, no del turno: se decide por la fecha de inicio. */}
+                  <td style={S.td}>
+                    {row.Día}
+                    {row._feriado && (
+                      <div
+                        style={{ fontSize:9, fontWeight:800, letterSpacing:.6, color:'#c084fc', marginTop:2, textTransform:'uppercase' as const }}
+                        title={`${row._feriado.nombre}${row._feriadoCuenta ? '' : ' — no se trabajó, no cuenta'}`}
+                      >
+                        Feriado nacional{row._feriadoCuenta ? '' : ' (no trabajado)'}
+                      </div>
+                    )}
+                  </td>
                   <td style={S.td}><strong>{esCal ? (row._estadoCalendario === 'novedad' ? '' : '') : ''}{row.Objetivo}</strong></td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{row['Horario programado']}</td>
                   <td style={S.td}>{row['Entrada real']}</td>
@@ -7819,6 +7896,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             {totalBox('Horas reales', totalesObjetivo.horasReales.toFixed(2))}
             {totalBox('Horas liquidables', totalesObjetivo.horasLiquidables.toFixed(2),
               notaCapacitacionExcluida(totalesObjetivo.horasCapacitacion, totalesObjetivo.turnosCapacitacion))}
+            {totalBox('Feriados cubiertos', totalesObjetivo.feriados.feriadosCubiertos)}
+            {totalBox('Horas en feriados', totalesObjetivo.feriados.horas.toFixed(2),
+              'Para auditar. Hoy no cambia lo facturado.')}
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Programado</th><th style={S.th}>Guardia asignado</th><th style={S.th}>Guardia que fichó</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
@@ -7826,7 +7906,17 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
               {planillaObjetivo.map((row: any) => (
                 <tr key={row._id}>
                   <td style={S.td}>{row.Fecha}</td>
-                  <td style={S.td}>{row.Día}</td>
+                  <td style={S.td}>
+                    {row.Día}
+                    {row._feriado && (
+                      <div
+                        style={{ fontSize:9, fontWeight:800, letterSpacing:.6, color:'#c084fc', marginTop:2, textTransform:'uppercase' as const }}
+                        title={`${row._feriado.nombre}${row._feriadoCuenta ? '' : ' — no se trabajó, no cuenta'}`}
+                      >
+                        Feriado nacional{row._feriadoCuenta ? '' : ' (no trabajado)'}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{row['Horario programado']}</td>
                   <td style={S.td}>{row['Guardia asignado']}</td>
                   <td style={S.td}>{row['Guardia que fichó']}</td>
@@ -7895,7 +7985,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={exportarResumenGuardiasXLSX}>Exportar XLSX</button>
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th></tr></thead>
+            <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th><th style={S.th}>Feriados</th><th style={S.th}>Hs Feriados</th></tr></thead>
             <tbody>
               {reporteGuardias.map((g: any) => (
                 <tr key={g.Legajo}>
@@ -7907,6 +7997,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                   <td style={S.td}>{g['En Curso'] > 0 ? <Badge type="pendiente">{g['En Curso']}</Badge> : '—'}</td>
                   <td style={S.td}>{g.Tardanzas > 0 ? <Badge type="tarde">{g.Tardanzas}</Badge> : '—'}</td>
                   <td style={S.td}>{g['Salidas Anticipadas'] > 0 ? <Badge type="anticipada">{g['Salidas Anticipadas']}</Badge> : '—'}</td>
+                  <td style={S.td}>{g['Feriados Cubiertos'] > 0 ? <strong style={{ color:'#c084fc' }}>{g['Feriados Cubiertos']}</strong> : '—'}</td>
+                  <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{Number(g['Horas en Feriados']) > 0 ? `${g['Horas en Feriados']}h` : '—'}</td>
                 </tr>
               ))}
             </tbody>
