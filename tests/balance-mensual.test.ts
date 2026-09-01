@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  GRUPO_DE, MINIMO_JORNADAS_BALANCE, balanceATexto, bloqueAmerita, generarBalance, mesEnPalabras,
+  GRUPO_DE, MINIMO_JORNADAS_BALANCE, balanceATexto, bloqueAmerita, causaPrincipal,
+  generarBalance, mesEnPalabras,
   resumenBalance,
 } from '@/lib/balance-mensual'
 import type { EntradaBalance } from '@/lib/balance-mensual'
@@ -602,5 +603,110 @@ describe('el umbral para hablarle a alguien', () => {
 
   it('sin conteos, un bloque a mejorar amerita: no se absuelve por falta de dato', () => {
     expect(bloqueAmerita({ clave: 'rondas', etiqueta: 'R', grupo: 'servicio', estado: 'mejorar', hechos: [] })).toBe(true)
+  })
+})
+
+// ── La causa que se muestra en la fila ──────────────────────────────────────
+
+describe('causa principal', () => {
+  it('sin nada accionable no inventa una causa', () => {
+    expect(causaPrincipal(generarBalance(entrada()))).toBe('Sin intervención')
+  })
+
+  it('sólo fichaje: la causa es el registro, no el servicio', () => {
+    const b = generarBalance(entrada({
+      base: base({ incidencias: { sin_registro_propio: 6, entrada_sin_salida: 0, salida_automatica: 0 } }) as any,
+    }))
+    expect(causaPrincipal(b)).toBe('Registro en la app')
+  })
+
+  it('sólo rondas', () => {
+    const b = generarBalance(entrada({
+      rondas: rondas({
+        medicion: { ...rondas().medicion, cumplidos: 20, incidencias: 28 },
+        cumplidas: 20, turnosConIncumplimiento: 4,
+      }) as any,
+    }))
+    expect(causaPrincipal(b)).toBe('Rondas')
+  })
+
+  it('con dos causas las nombra a las dos', () => {
+    const b = generarBalance(entrada({
+      base: base({ incidencias: { sin_registro_propio: 8, entrada_sin_salida: 0, salida_automatica: 0 } }) as any,
+      rondas: rondas({
+        medicion: { ...rondas().medicion, cumplidos: 10, incidencias: 38 },
+        cumplidas: 10, turnosConIncumplimiento: 6,
+      }) as any,
+    }))
+    const c = causaPrincipal(b)
+    expect(c).toContain('Rondas')
+    expect(c).toContain('Registro en la app')
+  })
+
+  it('NO elige la dimensión con nota más baja si es un hecho aislado', () => {
+    // Puntualidad 9,7 por UNA tardanza en 26 no es la causa de nadie.
+    const b = generarBalance(entrada({
+      base: base({ observacionesValidas: 26, incidencias: { sin_registro_propio: 5, entrada_sin_salida: 0, salida_automatica: 0 } }) as any,
+      puntualidad: punt({ evaluadas: 26, puntuales: 25, impuntuales: 1,
+        porBanda: { puntual: 25, leve: 1, tardanza: 0, importante: 0, grave: 0 } }) as any,
+    }))
+    expect(causaPrincipal(b)).toBe('Registro en la app')
+    expect(causaPrincipal(b)).not.toContain('Puntualidad')
+  })
+
+  it('nombra como mucho dos: la fila no es el detalle', () => {
+    const b = generarBalance(entrada({
+      base: base({ ausencias: 4, incidencias: { sin_registro_propio: 8, entrada_sin_salida: 4, salida_automatica: 0 } }) as any,
+      puntualidad: punt({ impuntuales: 9, puntuales: 11 }) as any,
+      rondas: rondas({ medicion: { ...rondas().medicion, cumplidos: 0, incidencias: 48 }, cumplidas: 0, turnosConIncumplimiento: 9 }) as any,
+    }))
+    expect(causaPrincipal(b).split(' + ').length).toBeLessThanOrEqual(2)
+  })
+
+  it('con muestra insuficiente lo dice, no inventa una dimensión', () => {
+    const b = generarBalance(entrada({ base: base({ observacionesValidas: 2 }) as any }))
+    expect(causaPrincipal(b)).toBe('Muestra insuficiente')
+  })
+})
+
+// ── El motor no se toca ─────────────────────────────────────────────────────
+//
+// La clasificación y el gráfico son PRESENTACIÓN. Si generar el balance
+// cambiara una nota o un estado, la tabla y la ficha dirían cosas distintas de
+// la misma persona.
+
+describe('generar el balance no altera lo que recibe', () => {
+  it('las dimensiones salen intactas', () => {
+    const e = entrada()
+    const antes = JSON.stringify(e.dimensiones)
+    generarBalance(e)
+    expect(JSON.stringify(e.dimensiones)).toBe(antes)
+  })
+
+  it('la base y la puntualidad tampoco cambian', () => {
+    const e = entrada()
+    const antes = JSON.stringify({ b: e.base, p: e.puntualidad })
+    generarBalance(e)
+    expect(JSON.stringify({ b: e.base, p: e.puntualidad })).toBe(antes)
+  })
+
+  it('los resúmenes de rondas y evidencias quedan igual', () => {
+    const e = entrada()
+    const antes = JSON.stringify({ r: e.rondas, u: e.uniforme, l: e.libro })
+    generarBalance(e)
+    expect(JSON.stringify({ r: e.rondas, u: e.uniforme, l: e.libro })).toBe(antes)
+  })
+
+  it('dos llamadas seguidas dan el mismo resultado', () => {
+    const e = entrada()
+    expect(JSON.stringify(generarBalance(e))).toBe(JSON.stringify(generarBalance(e)))
+  })
+
+  it('el balance no expone ninguna nota de dimensión', () => {
+    // Las notas viven en `dimensiones`, que el balance lee pero no copia.
+    const b = generarBalance(entrada())
+    const json = JSON.stringify(b)
+    expect(json).not.toContain('"nota"')
+    expect(json).not.toContain('"peso"')
   })
 })

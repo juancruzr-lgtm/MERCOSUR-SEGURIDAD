@@ -584,6 +584,36 @@ export function balanceATexto(b: BalanceMensual): string {
   return partes.join('\n')
 }
 
+/**
+ * La causa administrativa, en dos palabras. Para la fila de la bandeja.
+ *
+ * Sale de los MISMOS bloques que ameritan mensaje del Entrenador, no de la
+ * dimensión con nota más baja. Alguien puede tener Puntualidad 9,7 —su nota más
+ * baja— y una sola tardanza: eso no es su causa, es un día.
+ *
+ * Se nombran como mucho dos. Con tres o más deja de caber en la fila y deja de
+ * ser un resumen; el detalle completo está a un clic.
+ */
+export function causaPrincipal(b: BalanceMensual): string {
+  if (b.tipoDevolucion === 'muestra_insuficiente') return 'Muestra insuficiente'
+
+  const ameritan = b.bloques.filter(bloqueAmerita)
+  if (ameritan.length === 0) return 'Sin intervención'
+
+  // Primero lo que ya es patrón, y dentro de eso lo de mayor proporción: es el
+  // orden en que conviene atacarlo, no el de la nota.
+  const ordenadas = [...ameritan].sort((x, y) => {
+    const sx = severidadDe(x.incidencias ?? 1, x.requeridos ?? 1) === 'patron' ? 1 : 0
+    const sy = severidadDe(y.incidencias ?? 1, y.requeridos ?? 1) === 'patron' ? 1 : 0
+    if (sx !== sy) return sy - sx
+    const px = (x.incidencias ?? 0) / Math.max(1, x.requeridos ?? 1)
+    const py = (y.incidencias ?? 0) / Math.max(1, y.requeridos ?? 1)
+    return py - px
+  })
+
+  return ordenadas.slice(0, 2).map(x => x.etiqueta).join(' + ')
+}
+
 /** Resumen de una línea para la vista previa administrativa. */
 export function resumenBalance(b: BalanceMensual): {
   bien: number; mejorar: number; sinDatos: number; noAplica: number
