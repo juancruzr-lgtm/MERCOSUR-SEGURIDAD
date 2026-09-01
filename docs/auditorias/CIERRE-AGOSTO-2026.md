@@ -85,3 +85,54 @@ confirmar que no se solapan entre sí).
 - Snapshot POST-medianoche y comparación de los 15 nocturnos 31/08 → 01/09.
 - Ciclo 3: planillas de empleado y objetivo, XLSX reales.
 - Ciclo 6: recorrido visual de producción.
+
+---
+
+## CICLO 5 — Cruce de medianoche 31/08 → 01/09
+
+La prueba real de la regla del mes, tomada a 11 segundos del cambio de fecha y
+repetida 33 segundos después.
+
+| | PRE `2026-08-31 23:59:49` | POST `2026-09-01 00:00:22` |
+|---|---|---|
+| Turnos de agosto | 1482 | **1482** |
+| Horas liquidables | 2722,56 | **2722,56** |
+| Registros | 1336 | **1336** |
+
+### Los 15 nocturnos del 31/08
+
+Todos con la misma foto antes y después: mismo estado, misma entrada, misma
+salida, mismas horas, mismo tipo de registro.
+
+| objetivo | horario | vigilador | estado | entrada | horas |
+|---|---|---|---|---|---|
+| ACA | 20:00-08:00 | VIEYRA | programado | 20:00 | - |
+| ANTENA | 19:00-07:00 | CACERES | programado | 18:44 | - |
+| CIRSE | 22:00-06:00 | ALMADA | programado | 21:52 | - |
+| CLUB | 23:00-07:00 | ROSON | programado | 22:50 | - |
+| CYE CONSTRUCCIONES | 18:00-07:00 | IBARRA | programado | 17:47 | - |
+| DEPOSITO FISCAL | 19:00-07:00 | BARRIOS | programado | 18:43 | - |
+| ECCO | 21:00-07:00 | RAMOS | programado | 20:32 | - |
+| LAROMET FUNES | 20:00-08:00 | CENTURION | cubierto | - | 12,00 (manual) |
+| LAROMET FUNES 2 | 20:00-08:00 | CORREA | programado | 19:52 | - |
+| LAROMET ROSARIO | 17:00-08:00 | BENITEZ | programado | 16:31 | - |
+| NACION SANTA FE | 19:00-07:00 | FIGGINI | programado | 18:54 | - |
+| NACION SERVICIOS E.R. | 19:00-07:00 | MARTINEZ | programado | 18:51 | - |
+| PEAJE | 18:00-08:00 | OYOLA | programado | 17:34 | - |
+| PNC | 20:00-08:00 | FERNANDEZ | programado | 19:57 | - |
+| SRT | 23:00-07:00 | FOTI | programado | 22:30 | - |
+
+### Verificado
+
+Ningun turno iniciado el 31/08 desaparecio de agosto, aparecio como horas de
+septiembre, se duplico, cambio de estado por el cambio de dia, se cerro
+artificialmente, perdio o gano horas, ni genero una falsa ausencia.
+
+**La regla se cumple: el mes lo fija la fecha de inicio y el turno completo
+queda en agosto.** Se cumple por construccion, porque todas las consultas
+mensuales filtran por `turnos.fecha` -la fecha de inicio- y nunca por la hora
+de salida.
+
+Los 14 nocturnos con fichaje GPS son **pendientes legitimos de cierre**:
+pertenecen a agosto y cierran entre las 06:00 y las 08:00 del 01/09. No son un
+problema y no deben forzarse.
