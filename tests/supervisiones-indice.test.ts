@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DIAS_SIN_OPERACION, estadoSupervisionObjetivo, indexarUltimaSupervision, objetivoEnOperacion,
+  DIAS_SIN_OPERACION, estadoSupervisionObjetivo, faseOperativa, indexarUltimaSupervision,
+  objetivoEnOperacion,
 } from '@/lib/supervisiones'
 
 // El caso real que motivó estos tests: el panel del tablero decía "6 objetivos
@@ -136,5 +137,55 @@ describe('un objetivo sin servicio no reclama visita', () => {
 
   it('acepta timestamps completos, no sólo la fecha', () => {
     expect(objetivoEnOperacion(['2026-08-30T22:00:00Z'], AHORA_D)).toBe(true)
+  })
+})
+
+// ── El objetivo que todavía no arrancó ──────────────────────────────────────
+//
+// Un objetivo dado de alta hoy, con el primer turno para dentro de dos semanas,
+// entraba al universo y salía como "Nunca supervisado": deuda de supervisión
+// por un servicio que no existe. Nadie pudo haber ido a supervisar un lugar
+// donde el servicio arranca el mes que viene.
+
+describe('fases operativas de un objetivo', () => {
+  const AHORA_D = new Date('2026-08-31T21:00:00-03:00')
+
+  it('sólo turnos futuros y nunca operó: PRÓXIMO, no genera deuda', () => {
+    expect(faseOperativa(['2026-09-15', '2026-09-16'], false, AHORA_D)).toBe('proximo')
+  })
+
+  it('ya operó y tiene próximos turnos: universo normal', () => {
+    expect(faseOperativa(['2026-09-15'], true, AHORA_D)).toBe('operando')
+  })
+
+  it('un turno viejo dentro del lote ya prueba que operó', () => {
+    // No hace falta el flag: la fecha vieja lo dice.
+    expect(faseOperativa(['2026-01-10', '2026-09-15'], false, AHORA_D)).toBe('operando')
+  })
+
+  it('turnos recientes: operando, con o sin futuros', () => {
+    expect(faseOperativa(['2026-08-30'], false, AHORA_D)).toBe('operando')
+    expect(faseOperativa(['2026-08-30', '2026-09-15'], false, AHORA_D)).toBe('operando')
+  })
+
+  it('operó y dejó de operar: sin operación', () => {
+    expect(faseOperativa(['2026-08-04'], false, AHORA_D)).toBe('sin_operacion')
+    expect(faseOperativa([], true, AHORA_D)).toBe('sin_operacion')
+  })
+
+  it('sin ningún turno: sin operación', () => {
+    expect(faseOperativa([], false, AHORA_D)).toBe('sin_operacion')
+  })
+
+  it('un turno de HOY es operando, no futuro', () => {
+    expect(faseOperativa(['2026-08-31'], false, AHORA_D)).toBe('operando')
+  })
+
+  it('el que está por comenzar nunca llega a estadoSupervisionObjetivo', () => {
+    // La defensa es sacarlo del universo ANTES de preguntar por su vigencia:
+    // si se le preguntara, sin supervisión previa diría "nunca" igual.
+    const fase = faseOperativa(['2026-09-15'], false, AHORA_D)
+    expect(fase).toBe('proximo')
+    expect(estadoSupervisionObjetivo({ id: 'o1' }, null, AHORA_D.getTime())).toBe('nunca')
   })
 })
