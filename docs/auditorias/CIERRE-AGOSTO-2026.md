@@ -223,3 +223,61 @@ programadas exigibles 13.853, reconocidas 12.870 → 983 h de hueco, pero la
 tarjeta "Diferencia pendiente" declara 258 h en 6 turnos.
 
 **Estado: 🔴 mientras la brecha siga abierta.**
+
+---
+
+## BRECHA RESUELTA — Reportes tenía razón
+
+Las 747,72 h eran **un error de mi réplica**, no del sistema.
+
+`turnosReconocidosHastaCorte` (lib/liquidacion.ts:315) excluye los turnos con
+entrada y sin salida:
+
+```js
+if (reg?.hora_entrada_real && !reg?.hora_salida_real) return false
+```
+
+Yo no estaba aplicando ese filtro. Replicando la lógica completa —recorriendo
+TURNOS, no registros, con los cuatro filtros reales—:
+
+| | horas | turnos |
+|---|---|---|
+| Réplica exacta | **12.870,22** | 1264 |
+| Reportes muestra | **12.870,00** | |
+| **Diferencia** | **0,22** | 13 minutos, redondeo por línea |
+
+**El número de Reportes es correcto.** El criterio también: un turno que empezó
+y no cerró todavía no se puede liquidar.
+
+### Filtros que aplica la pantalla
+
+1. objetivo `es_prueba` fuera
+2. estado en (`reemplazado`, `anulado`, `cancelado`) fuera
+3. `fecha > hasta` fuera
+4. **entrada real sin salida real → fuera**
+
+### Los números autoritativos de agosto
+
+| concepto | horas |
+|---|---|
+| Total programado del mes | 14.025,00 |
+| Total asignado | 13.961,00 |
+| Programadas exigibles hasta ahora | 13.853,00 |
+| **Reconocidas** | **12.870,00** |
+
+## LO QUE QUEDA ES TRABAJO HUMANO, NO UN BUG
+
+| # | caso | cantidad | horas | tipo |
+|---|---|---|---|---|
+| H1 | Turnos con entrada y **sin salida** | 82 | — | DECISIÓN HUMANA |
+| H2 | Turnos **sin ningún registro** | 19 | 199,50 | DECISIÓN HUMANA |
+
+De los 82, quince son los nocturnos que estaban corriendo al momento de la
+medición y cierran solos entre las 06:00 y las 08:00. Los otros 67 y los 19 sin
+registro necesitan que alguien decida: corregir el fichaje, cargar la cobertura
+o dejarlos sin reconocer.
+
+**No los toco.** Son horas y son criterio de negocio.
+
+**Estado: 🟡 PRECIERRE** — el sistema es coherente y los números cierran; falta
+que terminen los nocturnos y que se resuelvan los 101 casos humanos.
