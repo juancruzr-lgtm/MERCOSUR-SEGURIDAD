@@ -470,6 +470,66 @@ describe('cuando una dimensión mide sobre menos jornadas, se explica', () => {
   })
 })
 
+// ── Cobertura insuficiente: la nota y el balance dicen lo mismo ─────────────
+//
+// Caso real de agosto 2026: 29 jornadas, 20 sin registro propio. Con 31 % de
+// cobertura la nota deja Puntualidad fuera del cálculo —`puntualidadEsSostenible`,
+// REGLA 2 de `calcularCumplimiento`— y la dimensión llega como `sin_datos`.
+//
+// El balance la juzgaba igual sobre las 9 medibles. Eso castigaba dos veces el
+// mismo hecho —no fichar ya se penaliza en Registro en la app— y partía la
+// pantalla: el gráfico decía "Sin datos" y el renglón decía "Puntualidad".
+
+describe('debajo de la cobertura mínima, Puntualidad no se juzga', () => {
+  const rosón = entrada({
+    turnosTrabajados: 29,
+    dimensiones: dims({ puntualidad: 'sin_datos', rondas: 'no_aplica' }),
+    rondas: null,
+    base: base({
+      observacionesValidas: 29, jornadasAplicables: 29,
+      incidencias: { sin_registro_propio: 20, entrada_sin_salida: 0, salida_automatica: 0 },
+    }) as any,
+    puntualidad: punt({ evaluadas: 9, puntuales: 6, impuntuales: 3, sinDato: 20,
+      porBanda: { puntual: 6, leve: 1, tardanza: 1, importante: 0, grave: 1 } }) as any,
+  })
+
+  it('el bloque queda sin datos, no en "mejorar"', () => {
+    const p = generarBalance(rosón).bloques.find(x => x.clave === 'puntualidad')!
+    expect(p.estado).toBe('sin_datos')
+    expect(bloqueAmerita(p)).toBe(false)
+  })
+
+  it('dice cuántas se pudieron medir y a dónde va lo que falta', () => {
+    const p = generarBalance(rosón).bloques.find(x => x.clave === 'puntualidad')!
+    expect(p.hechos.join(' ')).toContain('Solo 9 de 29 jornadas')
+    expect(p.hechos.join(' ')).toContain('Registro en la app')
+  })
+
+  it('no acusa: sin incidencias ni recomendación sobre la hora de llegada', () => {
+    const p = generarBalance(rosón).bloques.find(x => x.clave === 'puntualidad')!
+    expect(p.incidencias).toBeUndefined()
+    expect(p.recomendacion).toBeUndefined()
+  })
+
+  it('la causa y el tipo de devolución son sólo del uso de la app', () => {
+    const b = generarBalance(rosón)
+    expect(causaPrincipal(b)).not.toContain('Puntualidad')
+    expect(b.tipoDevolucion).toBe('uso_app')
+  })
+
+  it('con cobertura suficiente sí se sigue juzgando', () => {
+    const b = generarBalance(entrada({
+      turnosTrabajados: 29,
+      base: base({ observacionesValidas: 29, jornadasAplicables: 29 }) as any,
+      puntualidad: punt({ evaluadas: 20, puntuales: 17, impuntuales: 3, sinDato: 9,
+        porBanda: { puntual: 17, leve: 1, tardanza: 1, importante: 0, grave: 1 } }) as any,
+    }))
+    const p = b.bloques.find(x => x.clave === 'puntualidad')!
+    expect(p.estado).toBe('mejorar')
+    expect(causaPrincipal(b)).toContain('Puntualidad')
+  })
+})
+
 // ── Balance disponible ≠ mensaje del Entrenador ─────────────────────────────
 
 describe('tener balance y recibir un mensaje son cosas distintas', () => {
