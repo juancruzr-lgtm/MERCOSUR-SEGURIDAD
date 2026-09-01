@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   AVISO_DIVERGENCIA_MES_ANTERIOR,
+  MENSAJE_SELECCION_VACIA,
   avisoDivergenciaMesAnterior,
   bloqueoCompletarMes,
   horasDeFranja,
   logicaHabitualDeclarada,
-  previsionPorFranja,
+  motivoBloqueoConfirmar,
+  payloadSeleccionServicios,
+  previsionPorServicio,
   resumenCompletarMes,
+  seleccionInicialCompletar,
+  totalesDeSeleccion,
 } from '@/lib/completar-mes'
 import { payloadCreacionParcial, clavePrevision } from '@/lib/programacion'
 import type { ServicioPrevision, TurnoExistentePrevision } from '@/lib/programacion'
@@ -148,13 +153,103 @@ describe('logicaHabitualDeclarada y previsionPorFranja', () => {
     ])
   })
 
-  it('agrupa la vista previa por puesto y franja con horas', () => {
+  it('agrupa la vista previa por servicio con horas', () => {
     const { resumen } = armar([turnoExistente('2026-09-02', '19:00', '07:00')])
-    const lineas = previsionPorFranja(resumen!.prevision.filas)
+    const lineas = previsionPorServicio(resumen!.prevision.filas)
     expect(lineas).toEqual([
-      { puesto: 'Principal', hora_inicio: '07:00', hora_fin: '19:00', nocturno: false, a_crear: 29, existentes: 0, fechas_pasadas: 1, conflictos: 0, horas: 29 * 12 },
-      { puesto: 'Principal', hora_inicio: '19:00', hora_fin: '07:00', nocturno: true, a_crear: 29, existentes: 1, fechas_pasadas: 0, conflictos: 0, horas: 29 * 12 },
+      { servicio_id: 'srv-d', puesto: 'Principal', hora_inicio: '07:00', hora_fin: '19:00', nocturno: false, a_crear: 29, existentes: 0, fechas_pasadas: 1, conflictos: 0, horas: 29 * 12 },
+      { servicio_id: 'srv-n', puesto: 'Principal', hora_inicio: '19:00', hora_fin: '07:00', nocturno: true, a_crear: 29, existentes: 1, fechas_pasadas: 0, conflictos: 0, horas: 29 * 12 },
     ])
+  })
+})
+
+// ── Selección por servicio: qué completar ESTE mes ──────────────────────────
+
+describe('selección de patrones del mes', () => {
+  it('excluir el nocturno genera solo el diurno, con totales recalculados', () => {
+    const { resumen } = armar()
+    const filas = resumen!.prevision.filas
+    const soloDiurno = new Set(['srv-d'])
+    const totales = totalesDeSeleccion(filas, soloDiurno)
+    expect(totales).toEqual({
+      a_crear: 29, existentes: 0, conflictos: 0, fechas_pasadas: 1,
+      nocturnos_a_crear: 0, horas_a_crear: 29 * 12,
+    })
+    const payload = payloadSeleccionServicios(filas, soloDiurno)
+    expect(payload).toHaveLength(29)
+    expect(payload.every(p => p.servicio_id === 'srv-d')).toBe(true)
+  })
+
+  it('excluir un patrón no modifica los servicios declarados', () => {
+    const antes = JSON.stringify(SERVICIOS)
+    const { resumen } = armar()
+    totalesDeSeleccion(resumen!.prevision.filas, new Set(['srv-d']))
+    payloadSeleccionServicios(resumen!.prevision.filas, new Set(['srv-d']))
+    expect(JSON.stringify(SERVICIOS)).toBe(antes)
+  })
+
+  it('otro mes arranca de nuevo con toda la estructura habitual marcada', () => {
+    // La selección no persiste: se rearma desde la lógica declarada al abrir.
+    const inicial = seleccionInicialCompletar(logicaHabitualDeclarada(SERVICIOS))
+    expect(inicial).toEqual(new Set(['srv-d', 'srv-n']))
+    // Y octubre previsualiza ambos servicios completos otra vez.
+    const octubre = resumenCompletarMes({
+      objetivo: OBJ, mes: '2026-10', servicios: SERVICIOS, puestos: PUESTOS,
+      turnosExistentes: [], fechaActual: '2026-09-01', horaActual: '12:00',
+    })
+    const porServicio = previsionPorServicio(octubre.resumen!.prevision.filas)
+    expect(porServicio.map(l => [l.servicio_id, l.a_crear])).toEqual([
+      ['srv-d', 31], ['srv-n', 31],
+    ])
+  })
+
+  it('dos puestos con el mismo horario: excluir uno no excluye el otro', () => {
+    const PUESTOS2 = clasificarPuestos([
+      { id: 'p-1', objetivo_id: OBJ.id, nombre: 'Vigilador 1', orden: 1 },
+      { id: 'p-2', objetivo_id: OBJ.id, nombre: 'Vigilador 2', orden: 2 },
+    ])
+    const dosPuestos = [
+      { ...servicio('srv-p1', '07:00', '19:00'), puesto_id: 'p-1', puesto: { nombre: 'Vigilador 1' } },
+      { ...servicio('srv-p2', '07:00', '19:00'), puesto_id: 'p-2', puesto: { nombre: 'Vigilador 2' } },
+    ]
+    const { resumen } = resumenCompletarMes({
+      objetivo: OBJ, mes: '2026-09', servicios: dosPuestos, puestos: PUESTOS2,
+      turnosExistentes: [], fechaActual: '2026-09-01', horaActual: '06:00',
+    })
+    expect(previsionPorServicio(resumen!.prevision.filas)).toHaveLength(2)
+    const soloP2 = payloadSeleccionServicios(resumen!.prevision.filas, new Set(['srv-p2']))
+    expect(soloP2).toHaveLength(30)
+    expect(soloP2.every(p => p.servicio_id === 'srv-p2')).toBe(true)
+  })
+
+  it('desmarcar todo bloquea la confirmación con el mensaje pedido', () => {
+    const { resumen } = armar()
+    expect(motivoBloqueoConfirmar(resumen!.prevision.filas, new Set())).toBe(MENSAJE_SELECCION_VACIA)
+    expect(motivoBloqueoConfirmar(resumen!.prevision.filas, new Set(['srv-d']))).toBeNull()
+  })
+
+  it('una selección sin faltantes tampoco permite confirmar', () => {
+    // Todo septiembre del diurno ya está cargado: nada que crear en esa línea.
+    const cargados = [] as ReturnType<typeof turnoExistente>[]
+    for (let d = 1; d <= 30; d++) cargados.push(turnoExistente(`2026-09-${String(d).padStart(2, '0')}`, '07:00', '19:00'))
+    const { resumen } = armar(cargados)
+    expect(motivoBloqueoConfirmar(resumen!.prevision.filas, new Set(['srv-d'])))
+      .toBe('Las líneas seleccionadas no tienen turnos faltantes.')
+  })
+
+  it('idempotencia con selección: lo existente se excluye del payload y el recálculo es estable', () => {
+    const cargados = [
+      turnoExistente('2026-09-05', '19:00', '07:00'),
+      turnoExistente('2026-09-06', '19:00', '07:00'),
+    ]
+    const a = armar(cargados)
+    const b = armar(cargados)
+    const sel = new Set(['srv-n'])
+    expect(totalesDeSeleccion(a.resumen!.prevision.filas, sel))
+      .toEqual(totalesDeSeleccion(b.resumen!.prevision.filas, sel))
+    const payload = payloadSeleccionServicios(a.resumen!.prevision.filas, sel)
+    expect(payload).toHaveLength(28) // 30 − 2 ya cargados
+    expect(payload.some(p => p.fecha === '2026-09-05' || p.fecha === '2026-09-06')).toBe(false)
   })
 })
 

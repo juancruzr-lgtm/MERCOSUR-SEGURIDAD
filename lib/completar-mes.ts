@@ -167,8 +167,21 @@ export function resumenCompletarMes(params: {
   }
 }
 
-/** Resumen por franja para el modal de vista previa (fechas ya expandidas en filas). */
-export interface LineaPrevisionFranja {
+// ── Selección por servicio: qué patrones completar ESTE mes ─────────────────
+//
+// La estructura habitual (servicios_objetivo) y lo que se completa este mes
+// son cosas distintas: una excepción de un mes —"septiembre va sin el
+// nocturno"— se resuelve desmarcando esa línea acá, sin desactivar ni
+// re-declarar nada. La selección vive solo en el modal: al abrir otro mes la
+// estructura habitual vuelve completa, marcada por defecto.
+//
+// La clave de selección es el ID del servicio (servicio_objetivo.id), nunca
+// el horario: dos puestos legítimamente simultáneos con la misma franja se
+// marcan y desmarcan por separado.
+
+/** Una línea de cobertura del mes: un servicio declarado con sus números. */
+export interface LineaPrevisionServicio {
+  servicio_id: string
   puesto: string
   hora_inicio: string
   hora_fin: string
@@ -180,11 +193,11 @@ export interface LineaPrevisionFranja {
   horas: number
 }
 
-export function previsionPorFranja(filas: FilaPrevision[]): LineaPrevisionFranja[] {
-  const mapa = new Map<string, LineaPrevisionFranja>()
+export function previsionPorServicio(filas: FilaPrevision[]): LineaPrevisionServicio[] {
+  const mapa = new Map<string, LineaPrevisionServicio>()
   for (const f of filas) {
-    const clave = `${f.puesto_nombre ?? '—'}|${f.hora_inicio}|${f.hora_fin}`
-    const linea = mapa.get(clave) ?? {
+    const linea = mapa.get(f.servicio_id) ?? {
+      servicio_id: f.servicio_id,
       puesto: f.puesto_nombre ?? '—',
       hora_inicio: f.hora_inicio,
       hora_fin: f.hora_fin,
@@ -197,22 +210,76 @@ export function previsionPorFranja(filas: FilaPrevision[]): LineaPrevisionFranja
     } else if (f.estado === 'ya_existe') linea.existentes++
     else if (f.estado === 'fecha_pasada') linea.fechas_pasadas++
     else if (f.estado === 'conflicto_horario') linea.conflictos++
-    mapa.set(clave, linea)
+    mapa.set(f.servicio_id, linea)
   }
   return Array.from(mapa.values())
     .sort((a, b) => a.puesto.localeCompare(b.puesto) || a.hora_inicio.localeCompare(b.hora_inicio))
 }
 
+/** Al abrir el modal, TODOS los patrones activos vienen marcados. */
+export function seleccionInicialCompletar(logica: LineaLogicaHabitual[]): Set<string> {
+  return new Set(logica.map(l => l.servicio_id))
+}
+
+export interface TotalesSeleccion {
+  a_crear: number
+  existentes: number
+  conflictos: number
+  fechas_pasadas: number
+  nocturnos_a_crear: number
+  horas_a_crear: number
+}
+
+/** Los números del modal, recalculados en vivo según los servicios marcados. */
+export function totalesDeSeleccion(filas: FilaPrevision[], seleccion: Set<string>): TotalesSeleccion {
+  const propias = filas.filter(f => seleccion.has(f.servicio_id))
+  const validas = propias.filter(f => f.estado === 'valido')
+  return {
+    a_crear: validas.length,
+    existentes: propias.filter(f => f.estado === 'ya_existe').length,
+    conflictos: propias.filter(f => f.estado === 'conflicto_horario').length,
+    fechas_pasadas: propias.filter(f => f.estado === 'fecha_pasada').length,
+    nocturnos_a_crear: validas.filter(f => esTurnoNocturno(f)).length,
+    horas_a_crear: validas.reduce((s, f) => s + horasDeFranja(f.hora_inicio, f.hora_fin), 0),
+  }
+}
+
+/**
+ * Payload hacia crear_turnos_programacion_parcial: SOLO las filas válidas de
+ * los servicios marcados. No muta nada: excluir un patrón acá jamás toca
+ * servicios_objetivo.
+ */
+export function payloadSeleccionServicios(
+  filas: FilaPrevision[],
+  seleccion: Set<string>,
+): { servicio_id: string; fecha: string }[] {
+  return filas
+    .filter(f => f.estado === 'valido' && seleccion.has(f.servicio_id))
+    .map(f => ({ servicio_id: f.servicio_id, fecha: f.fecha }))
+}
+
+export const MENSAJE_SELECCION_VACIA = 'Seleccioná al menos una línea de cobertura.'
+
+/** Por qué no se puede confirmar todavía, o null si se puede. */
+export function motivoBloqueoConfirmar(filas: FilaPrevision[], seleccion: Set<string>): string | null {
+  if (seleccion.size === 0) return MENSAJE_SELECCION_VACIA
+  const totales = totalesDeSeleccion(filas, seleccion)
+  if (totales.a_crear === 0) return 'Las líneas seleccionadas no tienen turnos faltantes.'
+  return null
+}
+
 // ── Aviso: lo declarado vs. lo realmente programado el mes anterior ─────────
 
 export const AVISO_DIVERGENCIA_MES_ANTERIOR =
-  'La estructura declarada difiere de lo realmente programado el mes anterior. ' +
-  'Revisala en Lógica detectada antes de completar: puede que un turno se haya agregado o quitado.'
+  'Lo programado el mes anterior difiere de la lógica habitual. ' +
+  'Revisá qué líneas querés completar este mes.'
 
 /**
  * Si el análisis del mes anterior de ESTE objetivo (motor de cobertura
  * histórica, con la configuración declarada) marca divergencia, se avisa.
- * Solo un aviso: nada se infiere ni se cambia desde la grilla.
+ * La salida normal es elegir qué líneas completar este mes en el propio
+ * modal; ir a Lógica detectada es una opción solo si la estructura HABITUAL
+ * realmente cambió. Nada se infiere ni se cambia desde la grilla.
  */
 export function avisoDivergenciaMesAnterior(analisis: AnalisisObjetivo | null): string | null {
   if (!analisis) return null

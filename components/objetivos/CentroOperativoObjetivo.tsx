@@ -31,10 +31,12 @@ import type {
   FiltroAsignacion, LegajoObjetivo, ObjetivoLegajo, PersonaLegajo,
   RondaLegajo, TurnoLegajo, TurnoMensualLegajo,
 } from '@/lib/legajo-objetivo'
-import { clavePrevision, diaSemanaCorto, payloadCreacionParcial } from '@/lib/programacion'
+import { diaSemanaCorto } from '@/lib/programacion'
 import type { ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
 import {
-  MENSAJE_BLOQUEO_COMPLETAR, avisoDivergenciaMesAnterior, previsionPorFranja, resumenCompletarMes,
+  MENSAJE_BLOQUEO_COMPLETAR, avisoDivergenciaMesAnterior, motivoBloqueoConfirmar,
+  payloadSeleccionServicios, previsionPorServicio, resumenCompletarMes,
+  seleccionInicialCompletar, totalesDeSeleccion,
 } from '@/lib/completar-mes'
 import { clasificarPuestos } from '@/lib/puestos'
 import { analizarCoberturaHistorica } from '@/lib/cobertura-historica'
@@ -184,6 +186,10 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const [serviciosDeclarados, setServiciosDeclarados] = useState<any[]>([])
   const [avisoMesAnterior, setAvisoMesAnterior] = useState<string | null>(null)
   const [completarPrevision, setCompletarPrevision] = useState<ResultadoPrevision | null>(null)
+  // Qué patrones se completan ESTE mes (por servicio_objetivo.id). Se arma al
+  // abrir el modal con todos los activos marcados y muere al cerrarlo: la
+  // estructura habitual no se toca y el mes siguiente vuelve completa.
+  const [seleccionCompletar, setSeleccionCompletar] = useState<Set<string>>(new Set())
   const [faseCompletar, setFaseCompletar] = useState<'previa' | 'creando' | 'resultado'>('previa')
   const [resultadoCompletar, setResultadoCompletar] = useState<ResultadoCreacion | null>(null)
   const [errorCompletar, setErrorCompletar] = useState('')
@@ -247,10 +253,9 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
 
   const confirmarCompletarMes = async () => {
     if (!completarPrevision || faseCompletar === 'creando') return
-    const filas = payloadCreacionParcial(
-      completarPrevision.filas,
-      new Set(completarPrevision.filas.map(clavePrevision)),
-    )
+    if (motivoBloqueoConfirmar(completarPrevision.filas, seleccionCompletar)) return
+    // Solo las filas válidas de los patrones marcados para este mes.
+    const filas = payloadSeleccionServicios(completarPrevision.filas, seleccionCompletar)
     if (filas.length === 0) return
     setFaseCompletar('creando')
     setErrorCompletar('')
@@ -272,6 +277,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
 
   const cerrarCompletar = () => {
     setCompletarPrevision(null)
+    setSeleccionCompletar(new Set())
     setFaseCompletar('previa')
     setResultadoCompletar(null)
     setErrorCompletar('')
@@ -1370,7 +1376,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                             disabled={completar.resumen!.faltantes === 0}
                             style={{ ...S.btn, ...S.btnPrimary, padding:'8px 16px', fontSize:13,
                               opacity: completar.resumen!.faltantes === 0 ? .5 : 1 }}
-                            onClick={() => { setCompletarPrevision(completar.resumen!.prevision); setFaseCompletar('previa'); setResultadoCompletar(null); setErrorCompletar('') }}>
+                            onClick={() => { setCompletarPrevision(completar.resumen!.prevision); setSeleccionCompletar(seleccionInicialCompletar(completar.logica)); setFaseCompletar('previa'); setResultadoCompletar(null); setErrorCompletar('') }}>
                             COMPLETAR MES
                           </button>
                         )}
@@ -1384,8 +1390,15 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                     </>
                   )}
                   {avisoMesAnterior && (
-                    <div style={{ marginTop:8, padding:'8px 12px', borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.35)', fontSize:12, color:'#f59e0b' }}>
-                      ⚠ {avisoMesAnterior}
+                    <div style={{ marginTop:8, padding:'8px 12px', borderRadius:8, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.35)', fontSize:12, color:'#f59e0b', display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+                      <span>⚠ {avisoMesAnterior}</span>
+                      {esAdmin && onNavigate && (
+                        <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'3px 10px', fontSize:11 }}
+                          title="Solo si la estructura habitual realmente cambió"
+                          onClick={() => onNavigate('servicios_objetivo')}>
+                          ¿Cambió la estructura habitual? Lógica detectada
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1398,23 +1411,50 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                         Completar {etiquetaMes.toLowerCase()} — {datos?.objetivo.nombre}
                       </div>
                       <div style={{ fontSize:12, color:'#64748b', marginBottom:12 }}>
-                        La vista previa no modifica nada. Se crean únicamente los turnos faltantes de este objetivo, sin vigilador asignado.
+                        La vista previa no modifica nada. Elegí qué líneas de la estructura habitual completar ESTE mes: desmarcar una línea no cambia la lógica habitual (el mes que viene vuelve completa) — solo la excluye de esta creación. Los turnos se crean sin vigilador.
                       </div>
                       {(() => {
-                        const lineas = previsionPorFranja(completarPrevision.filas)
-                        const r = completarPrevision.resumen
-                        const nocturnos = lineas.filter(l => l.nocturno).reduce((s, l) => s + l.a_crear, 0)
-                        const horas = lineas.reduce((s, l) => s + l.horas, 0)
+                        const lineas = previsionPorServicio(completarPrevision.filas)
+                        const diasPorServicio = new Map(completar.logica.map(l => [l.servicio_id, l.etiqueta_dias]))
+                        const totales = totalesDeSeleccion(completarPrevision.filas, seleccionCompletar)
+                        const bloqueoConfirmar = motivoBloqueoConfirmar(completarPrevision.filas, seleccionCompletar)
+                        const alternar = (id: string) => setSeleccionCompletar(prev => {
+                          const proxima = new Set(prev)
+                          if (proxima.has(id)) proxima.delete(id)
+                          else proxima.add(id)
+                          return proxima
+                        })
                         return (
                           <>
+                            <div style={{ marginBottom:12 }}>
+                              {lineas.map(l => {
+                                const marcada = seleccionCompletar.has(l.servicio_id)
+                                return (
+                                  <label key={l.servicio_id} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', borderRadius:8, cursor: faseCompletar === 'previa' ? 'pointer' : 'default', background: marcada ? 'rgba(16,185,129,.05)' : 'transparent', border:`1px solid ${marcada ? 'rgba(16,185,129,.25)' : '#1e2d42'}`, marginBottom:6, opacity: marcada ? 1 : .55 }}>
+                                    <input type="checkbox" checked={marcada} disabled={faseCompletar !== 'previa'} onChange={() => alternar(l.servicio_id)} />
+                                    <div style={{ flex:1 }}>
+                                      <div style={{ fontSize:13, color:'#e2e8f0' }}>
+                                        <strong>{l.puesto}</strong> · {l.hora_inicio}–{l.hora_fin}{l.nocturno ? ' 🌙' : ''} · {diasPorServicio.get(l.servicio_id) ?? ''}
+                                      </div>
+                                      <div style={{ fontSize:11, color:'#94a3b8' }}>
+                                        {l.a_crear} a crear · {l.existentes} existente{l.existentes !== 1 ? 's' : ''}
+                                        {l.fechas_pasadas > 0 ? ` · ${l.fechas_pasadas} pasada${l.fechas_pasadas !== 1 ? 's' : ''}` : ''}
+                                        {l.conflictos > 0 ? ` · ${l.conflictos} conflicto${l.conflictos !== 1 ? 's' : ''}` : ''}
+                                        {' · '}{Math.round(l.horas)} h
+                                      </div>
+                                    </div>
+                                  </label>
+                                )
+                              })}
+                            </div>
                             <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
                               {[
-                                { label:'A crear', valor: r.validos, color:'#10b981' },
-                                { label:'Ya existentes', valor: r.existentes, color:'#60a5fa' },
-                                { label:'Conflictos', valor: r.conflictos, color: r.conflictos ? '#ef4444' : '#64748b' },
-                                { label:'Fechas pasadas', valor: r.fechas_pasadas, color:'#94a3b8' },
-                                { label:'Nocturnos a crear', valor: nocturnos, color:'#a78bfa' },
-                                { label:'Horas a crear', valor: `${Math.round(horas)} h`, color:'#e2e8f0' },
+                                { label:'A crear', valor: totales.a_crear, color:'#10b981' },
+                                { label:'Ya existentes', valor: totales.existentes, color:'#60a5fa' },
+                                { label:'Conflictos', valor: totales.conflictos, color: totales.conflictos ? '#ef4444' : '#64748b' },
+                                { label:'Fechas pasadas', valor: totales.fechas_pasadas, color:'#94a3b8' },
+                                { label:'Nocturnos a crear', valor: totales.nocturnos_a_crear, color:'#a78bfa' },
+                                { label:'Horas a crear', valor: `${Math.round(totales.horas_a_crear)} h`, color:'#e2e8f0' },
                               ].map(chip => (
                                 <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'6px 12px', textAlign:'center' }}>
                                   <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700, color:chip.color }}>{chip.valor}</div>
@@ -1422,26 +1462,9 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                                 </div>
                               ))}
                             </div>
-                            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12, marginBottom:12 }}>
-                              <thead><tr>
-                                {['Posición', 'Horario', 'A crear', 'Ya existen', 'Pasadas', 'Conflictos', 'Horas'].map(h => (
-                                  <th key={h} style={{ textAlign:'left', color:'#64748b', fontSize:10, padding:'4px 8px', borderBottom:'1px solid #1e2d42' }}>{h}</th>
-                                ))}
-                              </tr></thead>
-                              <tbody>
-                                {lineas.map((l, i) => (
-                                  <tr key={i}>
-                                    <td style={{ padding:'4px 8px', borderBottom:'1px solid #131e30' }}>{l.puesto}</td>
-                                    <td style={{ padding:'4px 8px', borderBottom:'1px solid #131e30', whiteSpace:'nowrap' }}>{l.hora_inicio}–{l.hora_fin}{l.nocturno ? ' 🌙' : ''}</td>
-                                    <td style={{ padding:'4px 8px', borderBottom:'1px solid #131e30', color:'#10b981' }}>{l.a_crear}</td>
-                                    <td style={{ padding:'4px 8px', borderBottom:'1px solid #131e30', color:'#60a5fa' }}>{l.existentes}</td>
-                                    <td style={{ padding:'4px 8px', borderBottom:'1px solid #131e30', color:'#94a3b8' }}>{l.fechas_pasadas}</td>
-                                    <td style={{ padding:'4px 8px', borderBottom:'1px solid #131e30', color: l.conflictos ? '#ef4444' : '#64748b' }}>{l.conflictos}</td>
-                                    <td style={{ padding:'4px 8px', borderBottom:'1px solid #131e30' }}>{Math.round(l.horas)} h</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                            {bloqueoConfirmar && faseCompletar === 'previa' && (
+                              <div style={{ fontSize:12, color:'#f59e0b', marginBottom:10 }}>{bloqueoConfirmar}</div>
+                            )}
                           </>
                         )
                       })()}
@@ -1459,13 +1482,17 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                         <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'8px 14px' }} onClick={cerrarCompletar}>
                           {faseCompletar === 'resultado' ? 'Cerrar' : 'Cancelar'}
                         </button>
-                        {faseCompletar !== 'resultado' && (
-                          <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'8px 14px', opacity: faseCompletar === 'creando' ? .6 : 1 }}
-                            disabled={faseCompletar === 'creando'}
-                            onClick={() => void confirmarCompletarMes()}>
-                            {faseCompletar === 'creando' ? '⏳ Creando…' : 'Confirmar y completar mes'}
-                          </button>
-                        )}
+                        {faseCompletar !== 'resultado' && (() => {
+                          const bloqueado = faseCompletar === 'creando' ||
+                            motivoBloqueoConfirmar(completarPrevision.filas, seleccionCompletar) !== null
+                          return (
+                            <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'8px 14px', opacity: bloqueado ? .5 : 1 }}
+                              disabled={bloqueado}
+                              onClick={() => void confirmarCompletarMes()}>
+                              {faseCompletar === 'creando' ? '⏳ Creando…' : 'Confirmar y completar mes'}
+                            </button>
+                          )
+                        })()}
                       </div>
                     </div>
                   </div>
