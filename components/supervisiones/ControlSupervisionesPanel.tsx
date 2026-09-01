@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import { brandColors, semanticColors } from '@/lib/brand-theme'
 import TarjetaMetrica from '@/components/TarjetaMetrica'
 import {
@@ -92,11 +93,38 @@ export default function ControlSupervisionesPanel({
         .select('id, nombre, estado, es_prueba, frecuencia_supervision_horas')
         .eq('estado', 'activo'),
       // TODO el historial, sin filtro de mes. Ver la nota de arriba.
-      supabase.from('supervisiones').select('objetivo_id, created_at'),
-      supabase.from('supervisiones')
-        .select('id, estado')
-        .gte('created_at', `${desde}T00:00:00`)
-        .lte('created_at', `${hasta}T23:59:59`),
+      //
+      // PAGINADO, y no una consulta suelta: PostgREST corta en 1000 filas sin
+      // avisar. Con 1.625 supervisiones se perdían 625 y el panel mostraba como
+      // "Nunca supervisado" a objetivos visitados el día anterior —LAROMET
+      // FUNES 2 figuraba sin ninguna visita habiendo sido supervisado esa misma
+      // mañana— y "Al día" daba 0 de 39. La consulta no fallaba: devolvía menos
+      // datos y una conclusión falsa.
+      //
+      // Es el mismo helper y el mismo orden que ya usa la pantalla de
+      // Supervisiones, que resolvió esto antes. El desempate por `id` hace
+      // estable la paginación: sin él, dos filas con el mismo created_at pueden
+      // repetirse o saltearse entre páginas.
+      // `p0`/`p1` y no `desde`/`hasta`: son índices de página, y llamarlos
+      // igual que las fechas del mes que están dos líneas más abajo es pedir
+      // que alguien lea mal el próximo cambio.
+      fetchPaginadoResult((p0, p1) =>
+        supabase.from('supervisiones')
+          .select('id, objetivo_id, created_at')
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(p0, p1)),
+      // También paginada, por el mismo motivo: agosto tuvo 732 supervisiones y
+      // está por debajo del corte, pero el mes que lo pase contaría de menos
+      // sin que nadie se entere.
+      fetchPaginadoResult((p0, p1) =>
+        supabase.from('supervisiones')
+          .select('id, estado, created_at')
+          .gte('created_at', `${desde}T00:00:00`)
+          .lte('created_at', `${hasta}T23:59:59`)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(p0, p1)),
     ])
 
     if (objRes.error || ultRes.error) {
