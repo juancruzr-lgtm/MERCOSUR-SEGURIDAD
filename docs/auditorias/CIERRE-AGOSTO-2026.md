@@ -412,3 +412,292 @@ las horas**: ¿esas horas están reconocidas o no?
 **En cualquiera de los dos casos, una de las dos pantallas está mostrando un
 número que no corresponde.** Lo que no puede pasar es lo actual: que las horas
 no estén en ninguna de las dos.
+
+---
+
+## Ciclo 7 — Recorrido visual: Cumplimiento Operativo
+
+Verificado en producción sobre **agosto de 2026**, vista Administración.
+
+### Lo que está bien
+
+Las cinco tarjetas de tipo de devolución están y **suman exacto**:
+
+| Tarjeta | Cantidad |
+|---|---|
+| Sin intervención | 12 |
+| Uso de la App | 10 |
+| Prestación del Servicio | 17 |
+| App + Servicio | 24 |
+| Muestra insuficiente | 2 |
+| **Total** | **65** de 65 empleados |
+
+El filtro funciona: al tocar "Uso de la App" la tabla pasa a `10 de 65 empleados`
+y quedan exactamente esas 10 filas. La tarjeta "Todos" restituye las 65.
+
+El mini gráfico de composición está en la fila y repetido en el detalle, y
+distingue las tres cosas que antes se confundían: una nota (`3,1`), una
+dimensión que no aplica (`N/A`) y una que no se pudo medir (`Sin datos`).
+Ninguna de las dos últimas se dibuja como barra en cero.
+
+Los casos nombrados leen lo que tienen que leer:
+
+| Persona | Nota | Tipo | Causa | Coherente |
+|---|---|---|---|---|
+| PIÑERO, WALTER | 7,4 | App + Servicio | Rondas + Registro en la app | Sí — Rondas 3,6 |
+| OYOLA, JORGE MARCELO | 6,8 | Prestación del Servicio | Rondas | Sí — Rondas 0,0, Modelo C aplicado |
+| MENA, BRIAN | 6,6 | Uso de la App | Registro en la app | Sí — Registro App 2,7 |
+| OTERO, RUBÉN | 9,2 | App + Servicio | Registro en la app + Rondas | Sí — 7,0 y 9,4 |
+| MARTINEZ, SANTIAGO | 8,4 | App + Servicio | Registro en la app + Puntualidad | Sí — 23/23 jornadas medibles |
+
+### Defecto encontrado y corregido — PR #132
+
+**ROSÓN, JUAN RAMÓN** mostraba, en el mismo renglón, `Puntualidad: Sin datos` en
+el gráfico y `Registro en la app + Puntualidad` como causa. La pantalla decía dos
+cosas distintas de la misma dimensión.
+
+El detalle da el dato exacto: **20 de 29 jornadas sin registro propio**, o sea
+31 % de cobertura. `calcularCumplimiento` ya sacaba Puntualidad del cálculo por
+debajo del 50 % (`puntualidadEsSostenible`), y el motivo está escrito en el
+propio código: no fichar ya se penaliza en Registro en la app, y medir además la
+hora de llegada sobre las pocas jornadas que quedan es castigar dos veces el
+mismo hecho, la segunda sin evidencia.
+
+`bloquePuntualidad` en `lib/balance-mensual.ts` no respetaba esa regla: sólo
+cortaba con `evaluadas === 0`. Corregido para que honre el estado que ya trae la
+dimensión.
+
+Efecto secundario que también se corrige: ROSÓN pasa de **App + Servicio** a
+**Uso de la App**, que es su problema real. La clasificación existe para decidir
+a quién hablarle y de qué, y ahí decía el tema equivocado.
+
+`npx vitest run` 1941 passing (era 1936) · `npx tsc --noEmit` 142 = baseline ·
+build OK. **PR abierto, no mergeado** — el merge quedó bloqueado; hay que
+mergearlo a mano.
+
+### Para decidir, no es un bug — BENITEZ
+
+**BENITEZ, MIGUEL ANGEL** tiene `10,0 / 10 · Excelente` con todas las
+dimensiones en 10, y sin embargo la tarjeta lo pone en **Uso de la App**, con
+causa **Calidad de las fotos**.
+
+No es una contradicción: Calidad tiene peso 0, así que no baja la nota, pero sí
+es algo concreto que se puede mejorar, y la tarjeta dice explícitamente
+"dónde conviene intervenir, que es distinto de la nota". Funciona como fue
+diseñado.
+
+La pregunta es de criterio, no técnica: **¿querés que alguien con 10,0 y
+"Excelente" aparezca marcado para intervención?** Si la respuesta es no, la
+Calidad de las fotos tendría que dejar de mover el tipo de devolución mientras
+siga pesando 0. No lo toqué porque es criterio de negocio.
+
+---
+
+## Ciclo 8 — El cambio de mes, observado en vivo
+
+Medido en producción a las **06:45 del 01/09/2026**, o sea del otro lado del
+límite. Esto era lo único que no se podía verificar leyendo código.
+
+### Agosto: antes y después de la medianoche
+
+| Métrica | 31/08 (antes) | 01/09 06:45 (después) | Δ |
+|---|---:|---:|---:|
+| Total programado | 14.025,00 | **14.025,00** | **0,00** |
+| Total asignado | 13.961,00 | **13.961,00** | **0,00** |
+| Programadas exigibles | 13.853,00 | 13.948,00 | +95,00 |
+| Horas reconocidas | 12.870,00 | 12.941,00 | +71,00 |
+| Diferencia pendiente | 258,00 | 282,00 (8 turnos) | +24,00 |
+
+**Programado y asignado no se movieron ni una centésima.** Eso es exactamente lo
+que tenía que pasar: el universo de agosto lo fija la fecha de inicio del turno,
+así que los 14 turnos nocturnos que arrancaron el 31/08 a las 19:00 y a las 23:00
+y terminan el 01/09 a las 07:00 **siguen enteros en agosto**. Ninguno se partió,
+ninguno migró.
+
+Lo que sí se movió es lo que tenía que moverse, y sólo por el paso del tiempo:
+
+- **Exigibles +95,00 h** — turnos que a la hora de la primera medición estaban en
+  curso y ahora ya terminaron su horario.
+- **Reconocidas +71,00 h** — los que además ya cerraron el fichaje.
+- Quedan **77,00 h en curso**: los nocturnos que cierran entre 06:00 y 08:00.
+
+### La contraprueba
+
+Septiembre arranca en **362,00 h programadas / 362,00 asignadas / 0,00 exigibles
+/ 0,00 reconocidas**. Si algún turno nocturno del 31/08 se hubiera contado por su
+fecha de fin, tendría que haber aparecido acá y haber desaparecido de agosto.
+Agosto no bajó y septiembre no tiene nada que no le corresponda.
+
+**La regla del mes se cumple.** No hay que hacer nada.
+
+### Lo que queda para el cierre definitivo
+
+77,00 h en curso y 282,00 h pendientes en 8 turnos. Cuando cierren los nocturnos
+entre las 06:00 y las 08:00 hay que releer estos cinco números: si exigibles pasa
+a 14.025,00 − (no asignadas) y la diferencia pendiente baja sola, agosto cierra
+🟢. Si la diferencia se queda arriba de las 258 h originales, son turnos que
+nadie va a cerrar y hay que listarlos por nombre.
+
+---
+
+## Ciclo 9 — P1: encontré la causa raíz, y me corrijo
+
+Las 747,50 h que quedaban fuera de reconocidas y fuera de pendientes **no son
+una pregunta de criterio**. Son una línea de código.
+
+### Primero, la corrección
+
+Más arriba escribí que esas horas las habían **cargado los supervisores**. Es
+falso. Las cargó el **Cierre Automático**, las 68 sin excepción:
+
+| Quién cerró esos turnos | Turnos |
+|---|---:|
+| `cierre_automatico` | **68** |
+| Supervisor / carga manual | 0 |
+
+Importa porque cambia a quién hay que preguntarle: no es un tema de cómo cargan
+los supervisores, es el propio sistema el que cerró esos turnos y después la
+pantalla no los cuenta.
+
+### La causa raíz
+
+En `lib/liquidacion.ts` hay **dos definiciones distintas de "el turno tiene
+salida"**, en el mismo archivo:
+
+| Función | Cómo decide si hay salida |
+|---|---|
+| `resolverLineaLiquidacion` (P2) | `hora_salida_final ?? hora_salida_real` |
+| `estadoPlanilla` (AppClient) | `hora_salida_final ?? hora_salida_real` |
+| **`turnosReconocidosHastaCorte`** | **sólo `hora_salida_real`** |
+
+```ts
+// lib/liquidacion.ts — turnosReconocidosHastaCorte
+if (reg?.hora_entrada_real && !reg?.hora_salida_real) return false
+```
+
+El comentario que la acompaña dice que excluye *"turnos en curso — hay entrada
+pero no salida, la jornada no está cerrada"*. Pero un turno con
+`hora_salida_final` **sí está cerrado**: eso es exactamente lo que escribe el
+Cierre Automático, y es el campo que `resolverLineaLiquidacion` usa para
+calcular las horas. Se lo excluye por una condición que contradice el propósito
+que el propio comentario declara.
+
+### El reparto exacto, medido en la base
+
+De los 75 turnos de agosto con entrada y sin `hora_salida_real`:
+
+| Grupo | Turnos | Horas |
+|---|---:|---:|
+| **A** — tienen `hora_salida_final` (cerrados por el sistema) | **68** | **747,50** |
+| **B** — no tienen ninguna salida (abiertos de verdad) | 7 | 89,00 |
+
+El grupo **B** está bien excluido: son los nocturnos del 31/08 que a esta hora
+—06:45 del 01/09— seguían corriendo.
+
+| Objetivo | Horario | Vigilador |
+|---|---|---|
+| ACA | 20:00–08:00 | VIEYRA, ALBERTO GERNAN |
+| LAROMET FUNES 2 | 20:00–08:00 | CORREA, SERGIO ADRIAN |
+| LAROMET ROSARIO | 17:00–08:00 | BENITEZ, MIGUEL ANGEL |
+| NACION SANTA FE | 19:00–07:00 | FIGGINI, MAXIMILIANO |
+| NACION SERVICIOS ENTRE RIOS | 19:00–07:00 | MARTINEZ, SANTIAGO |
+| PEAJE | 18:00–08:00 | OYOLA, JORGE MARCELO |
+| PNC | 20:00–08:00 | FERNANDEZ, JONATAN |
+
+El grupo **A** son turnos del 7, del 11, del 13 de agosto. Están cerrados,
+liquidados y a tres semanas de distancia. No hay ninguna lectura en la que estén
+"en curso".
+
+### El síntoma visible, en la planilla que se exporta
+
+La misma asimetría aparece en la columna OBSERVACIONES de la planilla —y por lo
+tanto en el XLSX. `observacionesPlanilla` mira sólo `hora_salida_real` mientras
+`estadoPlanilla` mira las dos, así que el mismo renglón se contradice:
+
+```
+07/08/2026  NACION SERVICIOS ENTRE RIOS  19:00–07:00  18:56  07:00
+            HS REALES —   HS LIQUIDABLES 12.00
+            ESTADO: Cubierto     OBSERVACIONES: En curso
+```
+
+Cubierto y En curso, en la misma fila, el 1º de septiembre.
+
+### Por qué no lo corregí
+
+Mover esa línea suma **747,50 h** a las reconocidas de agosto: de 12.941,00 a
+**13.688,50**. Eso toca liquidación, y la orden es marcarlo, no tocarlo.
+
+El arreglo es de una línea y ya sé cuál es. **Lo dejo escrito y sin aplicar,
+esperando tu decisión.** Cuando la tomes, las dos cosas —el filtro y el texto de
+OBSERVACIONES— tienen que salir juntas: no toqué el "En curso" de la planilla
+justamente porque hoy es la única señal visible de que esos turnos existen, y
+taparla antes de que decidas sería esconder el problema en vez de resolverlo.
+
+Si decidís que van, el texto correcto para esa columna no es "En curso" sino
+**"Salida no fichada"**, que es lo que realmente pasó — el ORIGEN ya dice
+"Cierre automático".
+
+---
+
+## Ciclo 10 — XLSX real, y la convergencia en marcha
+
+### El XLSX existe, es válido y sus números cierran
+
+Descargada y abierta la **Planilla empleado** de MARTINEZ, SANTIAGO · agosto de
+2026. Es un XLSX real (zip OOXML, 10 partes, hoja `Planilla`, 43 filas, rango con
+autofiltro `A5:M36`), no un CSV renombrado.
+
+Los totales que trae el propio archivo cierran contra la suma de sus filas:
+
+| Total del XLSX | Valor | Verificación |
+|---|---:|---|
+| Horas liquidables totales | 264 | suma exacta de las 25 filas con turno |
+| Días trabajados | 24 | 25 turnos − 1 sin fichar |
+| Horas de capacitación | 36 | = 3 turnos de capacitación en la base |
+| Horas reales totales | 100,16 | |
+
+Y contra la base, para el mismo empleado y mes:
+
+| Concepto | Base | XLSX |
+|---|---:|---:|
+| Turnos de agosto | 24 (276,00 h programadas) | 24 días trabajados |
+| Turnos con registro | 24 | 24 |
+| Turnos de capacitación | 3 · 36,00 h | 36 h |
+| Cerrados por el sistema sin salida propia | 14 · 165,00 h | 14 filas con Horas reales 0 |
+
+276,00 programadas − 12,00 del turno del 31/08 que seguía en curso = **264,00
+liquidables**. Cierra.
+
+### Dos cosas del export que conviene mirar
+
+1. **La columna "Característica" no se exporta.** El total de capacitación sí
+   está al pie, pero en el XLSX no se puede saber *qué* filas son capacitación.
+   Como esas horas se le pagan al vigilador y no se le cobran al objetivo, quien
+   arme la factura desde el Excel no tiene cómo separarlas fila por fila.
+
+2. **"Horas reales" escribe `0` donde la pantalla escribe `—`.** Son cosas
+   distintas: `—` es "no se midió", `0` es "trabajó cero". Los 14 turnos cerrados
+   por el sistema entran al Excel como 0, así que cualquier suma de esa columna
+   da 100,16 h para un mes de 264 h liquidables. El número no está mal, pero se
+   presta a leerse como horas trabajadas.
+
+Ninguna de las dos toca un total. Las dejo señaladas, no las cambié.
+
+### La convergencia, medida tres veces
+
+| Métrica | 31/08 | 01/09 06:45 | 01/09 07:20 |
+|---|---:|---:|---:|
+| Total programado | 14.025,00 | 14.025,00 | **14.025,00** |
+| Total asignado | 13.961,00 | 13.961,00 | **13.961,00** |
+| Exigibles | 13.853,00 | 13.948,00 | 13.948,00 |
+| Reconocidas | 12.870,00 | 12.941,00 | **12.965,00** |
+| Diferencia pendiente | 258,00 | 282,00 (8) | **258,00 (6)** |
+
+Programado y asignado siguen clavados. Las reconocidas suben solas a medida que
+los nocturnos fichan la salida, y la diferencia pendiente ya volvió a las 258,00 h
+de partida, ahora en 6 turnos en vez de 8.
+
+Quedan **5 nocturnos del 31/08 abiertos (65,00 h)**, todos de turnos que terminan
+a las 08:00. El Panel Principal muestra 14 guardias en turno a las 07:15, que es
+otra vez la confirmación en vivo de PR #131: antes de ese arreglo, a esta hora
+del día siguiente habrían sido 0.

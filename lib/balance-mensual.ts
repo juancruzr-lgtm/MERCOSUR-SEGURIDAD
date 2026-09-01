@@ -331,6 +331,24 @@ function bloquePuntualidad(e: EntradaBalance): BloqueBalance | null {
   }
   if (est === 'no_aplica') return null
 
+  // Debajo de la cobertura mínima la dimensión YA salió del cálculo de la nota
+  // (`puntualidadEsSostenible`, REGLA 2 de `calcularCumplimiento`). El balance
+  // tiene que respetar esa misma decisión: juzgar igual sobre la minoría que sí
+  // se pudo medir es exactamente el doble castigo que esa regla vino a evitar
+  // —no fichar ya se penaliza en Registro en la app— y además parte la pantalla
+  // en dos: el gráfico dice "Sin datos" y el renglón dice "Puntualidad".
+  //
+  // Caso real de agosto 2026: 20 de 29 jornadas sin registro propio, 31 % de
+  // cobertura. La nota no la medía; el balance la reclamaba igual, y eso solo
+  // lo movía de "Uso de la App" a "App + Servicio".
+  if (est === 'sin_datos' || est === 'datos_insuficientes') {
+    return bloqueSinJuicio('puntualidad', 'Puntualidad', 'sin_datos',
+      `Solo ${p.evaluadas} de ${jornadas(e.base.observacionesValidas)} `
+      + `${plural(p.evaluadas, 'tuvo', 'tuvieron')} un ingreso propio registrado: son `
+      + 'muy pocas para describir la puntualidad del período, así que no se evalúa. Lo '
+      + 'que falta registrar se cuenta en Registro en la app.')
+  }
+
   // Por qué Puntualidad mide sobre menos jornadas que las trabajadas. Sin esta
   // línea, alguien con 10 turnos lee "8 jornadas evaluadas" acá y "10 jornadas"
   // en el registro, y las dos cifras correctas parecen contradecirse.
