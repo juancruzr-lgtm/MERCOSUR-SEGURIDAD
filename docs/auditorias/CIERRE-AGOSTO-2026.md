@@ -871,3 +871,51 @@ el programado quedan idénticos. Cambia de qué universo habla la tarjeta.
 El modal tenía 960 px fijos con doce columnas: en pantalla grande sobraba lugar
 al costado y la columna Acciones quedaba del otro lado del scroll. Ahora usa el
 ancho disponible y esa columna queda anclada a la derecha.
+
+---
+
+## Ciclo 13 — Recorrido de las pantallas que faltaban
+
+Turnos, Objetivos, Página GPS, Referencias IA, Revisión de fotos IA y Novedades.
+**Las seis funcionan.** Lo que apareció fue en otro lado.
+
+| Pantalla | Estado |
+|---|---|
+| Turnos | Muestra el 01/09 correctamente, con los turnos del día y sus guardias. |
+| Objetivos | 49 totales · 39 activos · 24 con turnos hoy · 0 sin cubrir. |
+| Página GPS | Carga el mapa y el selector con los 49 objetivos. |
+| Referencias IA | 4 fotos de referencia activas de 4, ninguna rota. Los 8 elementos del criterio de uniforme tienen su nombre y su nota. |
+| Revisión de fotos IA | 32 pendientes = 15 de evidencia insuficiente más las muestras de control sorteadas entre las 282 sin observaciones. La propia pantalla lo explica. |
+| Novedades | 0 en septiembre, 10 en mayo, 7 en abril. Verificado contra la base: es exacto. |
+
+### Lo que sí apareció — PR #135
+
+La consola del navegador, después de entrar, mostraba esto:
+
+```
+LOGIN EMAIL admin@mercosur.com
+LOGIN ERROR null
+LOGIN DATA {user: Object, session: Object}
+```
+
+`data` es la respuesta completa de `signInWithPassword`, y ese objeto incluye
+`session.access_token` y `session.refresh_token`. O sea: **el JWT y el token de
+refresco impresos en la consola, en producción, en cada inicio de sesión de cada
+vigilador.**
+
+Eran tres `console.log` de depuración olvidados en `login()`. El error ya se le
+muestra al usuario con `mensajeErrorAuth`, así que ninguno de los tres hacía
+falta. Corregido y desplegado.
+
+Queda sin tocar `console.log('RESET DNI usuario', usuarioId)` en la ruta de reset:
+corre en el servidor y registra un identificador, no una credencial.
+
+### Dos observaciones, ninguna es un defecto
+
+**No se carga una novedad operativa desde mayo.** Cuatro meses. La pantalla está
+bien; lo que no hay es uso.
+
+**"Cubierto" quiere decir dos cosas en la misma pantalla de Objetivos.** La
+tarjeta "SIN CUBRIR HOY" cuenta turnos sin vigilador asignado; el "0 cubiertos"
+de cada fila cuenta turnos ya cerrados. A las 08:30, con la gente trabajando, se
+lee como una contradicción. Es redacción, no cálculo.
