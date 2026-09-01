@@ -33,8 +33,9 @@ import { AYUDA_SIN_ZONAS, MENSAJE_SIN_ZONAS } from '@/lib/bandeja-planillas'
 import {
   cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
-import { guardarSnapshot } from '@/lib/evaluacion-snapshot-guardar'
+import { guardarSnapshot, marcarRevisada, publicar } from '@/lib/evaluacion-snapshot-guardar'
 import type { EntradaSnapshot } from '@/lib/evaluacion-snapshot'
+import MiDesempeno from '@/components/desempeno/MiDesempeno'
 import { ETIQUETA_TIPO_DEVOLUCION, causaPrincipal, generarBalance } from '@/lib/balance-mensual'
 import type { TipoDevolucion } from '@/lib/balance-mensual'
 import ComposicionNota from '@/components/cumplimiento/ComposicionNota'
@@ -156,6 +157,8 @@ export default function DesempenoPanel({
   const [avisoFuentes, setAvisoFuentes] = useState('')
   const [congelando, setCongelando] = useState(false)
   const [avisoSnapshot, setAvisoSnapshot] = useState('')
+  /** Empleado cuya vista de vigilador se está previsualizando. */
+  const [previsualizando, setPrevisualizando] = useState<string | null>(null)
 
   const soloUno = Boolean(empleadoId)
 
@@ -332,7 +335,7 @@ export default function DesempenoPanel({
         },
       }
     })
-    const r = await guardarSnapshot(entradas, mes, usuarioId)
+    const r = await guardarSnapshot(entradas, mes, usuarioId ?? null)
     setCongelando(false)
     setAvisoSnapshot(
       r.error
@@ -343,6 +346,28 @@ export default function DesempenoPanel({
             : ' · quedan en «calculada», todavía no las ve nadie'),
     )
   }, [lista, balances, medido, mes, usuarioId])
+
+  /** `calculada → revisada`. No abre acceso a nadie: sólo deja constancia. */
+  const revisar = useCallback(async () => {
+    setCongelando(true)
+    const r = await marcarRevisada(mes)
+    setCongelando(false)
+    setAvisoSnapshot(r.error
+      ? `No se pudo marcar como revisada: ${r.error}`
+      : `${r.afectadas} evaluaciones de ${etiquetaMes(mes)} pasaron a «revisada»`
+        + ' · todavía no las ve el vigilador')
+  }, [mes])
+
+  /** `revisada → publicada`. Es el acto que le abre la evaluación a la gente. */
+  const publicarMes = useCallback(async () => {
+    setCongelando(true)
+    const r = await publicar(mes, usuarioId ?? null)
+    setCongelando(false)
+    setAvisoSnapshot(r.error
+      ? `No se pudo publicar: ${r.error}`
+      : `${r.afectadas} evaluaciones de ${etiquetaMes(mes)} quedaron PUBLICADAS`
+        + ' · cada vigilador ya puede ver la suya')
+  }, [mes, usuarioId])
 
   if (!habilitado) return null
 
@@ -400,16 +425,57 @@ export default function DesempenoPanel({
         {/* Congelar no publica: deja la evaluación fija para poder responder por
             ella. Publicar es un acto aparte y explícito. */}
         {esAdmin && !soloUno && (
-          <button
-            style={S.btn}
-            type="button"
-            onClick={() => void congelar()}
-            disabled={cargando || congelando || lista.length === 0}
-          >
-            {congelando ? 'Congelando…' : 'Congelar evaluación del mes'}
-          </button>
+          <>
+            <button
+              style={S.btn}
+              type="button"
+              onClick={() => void congelar()}
+              disabled={cargando || congelando || lista.length === 0}
+            >
+              {congelando ? '…' : 'Congelar evaluación del mes'}
+            </button>
+            <button
+              style={S.btn} type="button"
+              onClick={() => void revisar()} disabled={cargando || congelando}
+            >
+              Marcar revisada
+            </button>
+            <button
+              style={{ ...S.btn, borderColor:'#4ade8055' }} type="button"
+              onClick={() => void publicarMes()} disabled={cargando || congelando}
+            >
+              Publicar a los vigiladores
+            </button>
+            {/* Previsualizar lo que va a leer la persona ANTES de publicarlo. Lee
+                la misma tabla y el mismo componente: no es una maqueta. */}
+            <select
+              style={S.select}
+              value={previsualizando ?? ''}
+              onChange={e => setPrevisualizando(e.target.value || null)}
+            >
+              <option value="">Vista como vigilador…</option>
+              {lista.map(d => (
+                <option key={d.empleadoId} value={d.empleadoId}>{d.empleado}</option>
+              ))}
+            </select>
+          </>
         )}
       </div>
+
+      {previsualizando && (
+        <div style={{ ...S.caja, marginBottom:12, borderColor:'#38bdf855' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+            <div style={{ ...S.tenue, letterSpacing:.5 }}>
+              VISTA COMO VIGILADOR · {lista.find(d => d.empleadoId === previsualizando)?.empleado}
+              {' '}· esto es exactamente lo que va a leer
+            </div>
+            <button style={S.btn} type="button" onClick={() => setPrevisualizando(null)}>
+              Cerrar
+            </button>
+          </div>
+          <MiDesempeno empleadoId={previsualizando} periodo={mes} />
+        </div>
+      )}
 
       {avisoSnapshot && (
         <div style={{ ...S.caja, ...S.tenue, marginBottom:12 }}>{avisoSnapshot}</div>

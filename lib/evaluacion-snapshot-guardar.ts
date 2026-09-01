@@ -92,3 +92,54 @@ export async function guardarSnapshot(
   }
   return { guardadas: aGuardar.length, publicadasPreservadas, filas, error: null }
 }
+
+export interface ResultadoTransicion {
+  afectadas: number
+  error: string | null
+}
+
+/**
+ * `calculada → revisada`.
+ *
+ * Administración miró el mes y lo da por bueno. Todavía no lo ve nadie más:
+ * revisada no abre acceso, sólo deja constancia de que alguien lo aprobó antes
+ * de publicarlo.
+ */
+export async function marcarRevisada(periodo: string): Promise<ResultadoTransicion> {
+  const { data, error } = await supabase
+    .from('evaluaciones_mensuales')
+    .update({ estado: 'revisada' })
+    .eq('periodo', periodo)
+    .eq('estado', 'calculada')
+    .select('id')
+
+  if (error) return { afectadas: 0, error: error.message }
+  return { afectadas: data?.length ?? 0, error: null }
+}
+
+/**
+ * `revisada → publicada`. El acto que le abre la evaluación al vigilador.
+ *
+ * El filtro por `estado = 'revisada'` hace dos cosas a la vez: impide publicar
+ * un mes que nadie revisó, y deja intactas las filas ya publicadas, que
+ * conservan su `publicado_at` y su `publicado_por` originales. Volver a estampar
+ * la fecha borraría cuándo se le entregó realmente la evaluación a esa persona.
+ */
+export async function publicar(
+  periodo: string,
+  publicadoPor: string | null,
+): Promise<ResultadoTransicion> {
+  const { data, error } = await supabase
+    .from('evaluaciones_mensuales')
+    .update({
+      estado: 'publicada',
+      publicado_at: new Date().toISOString(),
+      publicado_por: publicadoPor,
+    })
+    .eq('periodo', periodo)
+    .eq('estado', 'revisada')
+    .select('id')
+
+  if (error) return { afectadas: 0, error: error.message }
+  return { afectadas: data?.length ?? 0, error: null }
+}

@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { guardarSnapshot } from '@/lib/evaluacion-snapshot-guardar'
+import { guardarSnapshot, marcarRevisada, publicar } from '@/lib/evaluacion-snapshot-guardar'
 
 // El upsert reemplaza la fila entera. La regla que se prueba acá es que volver a
 // congelar un mes NO despublique lo que la gente ya vio.
 
 const estadoDeLaBase: { filas: any[] } = { filas: [] }
 const capturado: { filas: any[] | null } = { filas: null }
+
+/** Lo que pidió el ultimo update: el parche y los filtros que lo acotan. */
+const update: { parche: any; filtros: Record<string, string> } =
+  { parche: null, filtros: {} }
 
 vi.mock('@/lib/supabase', () => ({
   supabase: {
@@ -14,6 +18,15 @@ vi.mock('@/lib/supabase', () => ({
       upsert: (filas: any[]) => {
         capturado.filas = filas
         return Promise.resolve({ error: null })
+      },
+      update: (parche: any) => {
+        update.parche = parche
+        update.filtros = {}
+        const cadena: any = {
+          eq: (col: string, val: string) => { update.filtros[col] = val; return cadena },
+          select: () => Promise.resolve({ data: estadoDeLaBase.filas, error: null }),
+        }
+        return cadena
       },
     }),
   },
@@ -96,5 +109,43 @@ describe('las cuatro capas viajan separadas', () => {
     expect(f.indice).toBe(8.5)                 // capa 3
     expect(f.nota_final).toBe(8.5)             // capa 4
     expect(f.concepto).toBe('Muy bueno')
+  })
+})
+
+// ── Las transiciones de estado ──────────────────────────────────────────────
+
+describe('publicar es un cambio explicito, no un efecto secundario', () => {
+  it('revisar solo toca lo que estaba en calculada', async () => {
+    estadoDeLaBase.filas = [{ id: '1' }, { id: '2' }]
+    const r = await marcarRevisada('2026-08')
+
+    expect(r.error).toBeNull()
+    expect(r.afectadas).toBe(2)
+    expect(update.parche).toEqual({ estado: 'revisada' })
+    expect(update.filtros).toEqual({ periodo: '2026-08', estado: 'calculada' })
+  })
+
+  it('revisar no estampa fecha de publicacion: no publica', async () => {
+    await marcarRevisada('2026-08')
+    expect(update.parche.publicado_at).toBeUndefined()
+    expect(update.parche.estado).not.toBe('publicada')
+  })
+
+  it('publicar exige haber revisado, y por eso no pisa lo ya publicado', async () => {
+    estadoDeLaBase.filas = [{ id: '1' }]
+    const r = await publicar('2026-08', 'jefe')
+
+    expect(r.afectadas).toBe(1)
+    expect(update.parche.estado).toBe('publicada')
+    expect(update.parche.publicado_por).toBe('jefe')
+    expect(update.parche.publicado_at).toBeTruthy()
+    // El filtro por 'revisada' es lo que deja intactas las filas ya publicadas:
+    // volver a estampar la fecha borraria cuando se entrego la evaluacion.
+    expect(update.filtros).toEqual({ periodo: '2026-08', estado: 'revisada' })
+  })
+
+  it('publicar un mes sin revisar no afecta ninguna fila', async () => {
+    estadoDeLaBase.filas = []
+    expect((await publicar('2026-08', 'jefe')).afectadas).toBe(0)
   })
 })
