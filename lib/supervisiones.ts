@@ -192,3 +192,49 @@ function fechaISO(d: Date): string {
   const dia = String(d.getDate()).padStart(2, '0')
   return `${d.getFullYear()}-${mes}-${dia}`
 }
+
+/**
+ * En qué momento de su vida operativa está un objetivo.
+ *
+ * `objetivoEnOperacion` no alcanzaba: dejaba pasar al objetivo que TODAVÍA NO
+ * EMPEZÓ. Uno dado de alta hoy con el primer turno para dentro de dos semanas
+ * entraba al universo y salía como "Nunca supervisado" — deuda de supervisión
+ * por un servicio que no existe. Nadie puede haber ido a supervisar un lugar
+ * donde el servicio arranca el mes que viene.
+ *
+ *   proximo        tiene turnos, todos futuros, y nunca prestó servicio.
+ *                  Se puede mostrar como que viene, pero NO genera vencimiento,
+ *                  ni "nunca supervisado", ni deuda.
+ *   operando       ya prestó servicio y sigue: turnos recientes, o turnos
+ *                  futuros después de haber operado alguna vez.
+ *   sin_operacion  operó y dejó de hacerlo: nada en la ventana ni por delante.
+ */
+export type FaseOperativa = 'proximo' | 'operando' | 'sin_operacion'
+
+export function faseOperativa(
+  fechas: Array<string | null | undefined>,
+  /** ¿Tuvo algún turno anterior a la ventana? Lo sabe quien consulta. */
+  yaOperoAntes: boolean,
+  ahora: Date = new Date(),
+): FaseOperativa {
+  const hoy = fechaISO(ahora)
+  const limite = new Date(ahora)
+  limite.setDate(limite.getDate() - DIAS_SIN_OPERACION)
+  const corte = fechaISO(limite)
+
+  let recientes = false
+  let futuros = false
+  for (const f of fechas) {
+    if (!f) continue
+    const d = f.slice(0, 10)
+    if (d > hoy) futuros = true
+    else if (d >= corte) recientes = true
+    else yaOperoAntes = true   // un turno viejo dentro del lote también cuenta
+  }
+
+  // Ya prestó servicio alguna vez: universo normal mientras siga habiendo algo.
+  if (recientes || (yaOperoAntes && futuros)) return 'operando'
+  // Sólo tiene por delante y nunca arrancó.
+  if (futuros) return 'proximo'
+  return 'sin_operacion'
+}

@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
-import { DIAS_SIN_OPERACION, objetivoEnOperacion } from '@/lib/supervisiones'
+import { DIAS_SIN_OPERACION, faseOperativa } from '@/lib/supervisiones'
 import { brandColors, semanticColors } from '@/lib/brand-theme'
 import TarjetaMetrica from '@/components/TarjetaMetrica'
 import {
@@ -60,17 +60,19 @@ type Datos = {
   mesCriticas: number
   /** Activos que no reclaman visita porque no tienen servicio vigente. */
   sinOperacion: number
+  /** Dados de alta con turnos por delante que todavía no empezaron. */
+  proximos: number
 }
 
 const VACIO: Datos = {
   pendientes: [], porVencer: 0, vigentes: 0, totalObjetivos: 0,
-  mesTotal: 0, mesIncompletas: 0, mesCriticas: 0, sinOperacion: 0,
+  mesTotal: 0, mesIncompletas: 0, mesCriticas: 0, sinOperacion: 0, proximos: 0,
 }
 
 /** Desde qué fecha se piden turnos para saber quién está operando. */
-function fechaCorteOperacion(): string {
+function fechaCorteOperacion(dias: number = DIAS_SIN_OPERACION): string {
   const d = new Date()
-  d.setDate(d.getDate() - DIAS_SIN_OPERACION)
+  d.setDate(d.getDate() - dias)
   const mes = String(d.getMonth() + 1).padStart(2, '0')
   return `${d.getFullYear()}-${mes}-${String(d.getDate()).padStart(2, '0')}`
 }
@@ -166,13 +168,44 @@ export default function ControlSupervisionesPanel({
     }
 
     const todos = (objRes.data ?? []).filter((o: any) => !o.es_prueba)
+
+    // ¿Cuáles ya prestaron servicio alguna vez? Sólo hace falta preguntarlo
+    // por los que en la ventana tienen ÚNICAMENTE turnos futuros: son los
+    // candidatos a "todavía no arrancó". Para el resto ya se sabe por sus
+    // turnos recientes, y preguntar de más sería traer el histórico entero.
+    const hoyISO = fechaCorteOperacion(0)
+    const soloFuturos = todos
+      .filter((o: any) => {
+        const f = fechasPorObjetivo.get(o.id) ?? []
+        return f.length > 0 && f.every(x => (x ?? '').slice(0, 10) > hoyISO)
+      })
+      .map((o: any) => o.id)
+
+    const yaOperaron = new Set<string>()
+    if (soloFuturos.length > 0) {
+      const previos = await supabase.from('turnos')
+        .select('objetivo_id')
+        .in('objetivo_id', soloFuturos)
+        .neq('estado', 'anulado')
+        .lt('fecha', hoyISO)
+      for (const t of (previos.data ?? []) as any[]) {
+        if (t?.objetivo_id) yaOperaron.add(t.objetivo_id)
+      }
+    }
+
     // Si la consulta de turnos falla, NO se vacía la lista: sin ese dato se
     // muestran todos, que es el comportamiento anterior. Un fallo de red no
     // puede hacer desaparecer objetivos que sí hay que supervisar.
+    const fases = new Map<string, ReturnType<typeof faseOperativa>>()
+    for (const o of todos as any[]) {
+      fases.set(o.id, faseOperativa(fechasPorObjetivo.get(o.id) ?? [], yaOperaron.has(o.id)))
+    }
+
     const objetivos = turnosRes.error
       ? todos
-      : todos.filter((o: any) => objetivoEnOperacion(fechasPorObjetivo.get(o.id) ?? []))
-    const sinOperacion = todos.length - objetivos.length
+      : todos.filter((o: any) => fases.get(o.id) === 'operando')
+    const proximos = turnosRes.error ? 0 : todos.filter((o: any) => fases.get(o.id) === 'proximo').length
+    const sinOperacion = todos.length - objetivos.length - proximos
 
     const ultima = indexarUltimaSupervision(ultRes.data ?? [])
     const ahora = Date.now()
@@ -214,7 +247,7 @@ export default function ControlSupervisionesPanel({
       mesTotal: delMes.length,
       mesIncompletas: delMes.filter((s: any) => s.estado === 'incompleta').length,
       mesCriticas: delMes.filter((s: any) => s.estado === 'critico').length,
-      sinOperacion,
+      sinOperacion, proximos,
     })
     setCargando(false)
   }, [mes])
@@ -255,6 +288,14 @@ export default function ControlSupervisionesPanel({
                 <span title={`Sin ningún turno en los últimos ${DIAS_SIN_OPERACION} días ni programado a futuro`}>
                   {d.sinOperacion} activo{d.sinOperacion === 1 ? '' : 's'} sin operación,
                   fuera de la cuenta
+                </span>
+              </>
+            )}
+            {d.proximos > 0 && (
+              <>
+                {' · '}
+                <span title="Tienen turnos por delante pero todavía no prestaron servicio: no se les puede exigir una supervisión previa a su primer turno">
+                  {d.proximos} por comenzar
                 </span>
               </>
             )}
