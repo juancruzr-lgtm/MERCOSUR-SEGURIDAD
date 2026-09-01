@@ -17,12 +17,12 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import {
-  NIVEL, PLANTILLA, decidir, textoMensaje, variablesDeMensaje,
+  NIVEL, PLANTILLA, decidir, textoMensaje, variablesDeMensaje, variablesParaPlantilla,
 } from '@/lib/escalamiento-descubierto'
 import type { ClaveNivel, TurnoEscalable } from '@/lib/escalamiento-descubierto'
 import { normalizarTelefonoAr } from '@/lib/telefono-ar'
 import { configuracionMeta, proveedorPorDefecto, proveedorSimulado } from '@/lib/whatsapp'
-import { resolverResponsablesOperativos } from '@/lib/responsables-operativos'
+import { nombreResponsablesOperativos, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import { sumarDiasFecha } from '@/lib/turnos'
 
 export const runtime = 'nodejs'
@@ -223,14 +223,17 @@ export async function GET(req: Request) {
       if (destinatarios.length === 0) motivoSinDestinatario = 'SIN_LISTA_DE_ESCALAMIENTO'
     }
 
+    // El supervisor que NOMBRA el mensaje de 30 sale de la MISMA resolución
+    // que decide los destinatarios del 15: la guardia vigente al INICIO del
+    // turno, con el fallback al responsable único de zona. Si cubren varios a
+    // la vez, se nombran todos — no se elige uno.
     const supervisorNombre = nivel === NIVEL.operativo
-      ? (() => {
-        const r = resolverResponsablesOperativos({
-          zonaId: objetivo?.zona_id ?? null,
-          guardias: [], supervisorZonas, zonas, usuarios,
-        } as any)
-        return nombreDe((r.responsables ?? [])[0]) ?? null
-      })()
+      ? nombreResponsablesOperativos({
+        zonaId: objetivo?.zona_id ?? null,
+        fecha: t.fecha,
+        hora: t.hora_inicio.slice(0, 5),
+        guardias, supervisorZonas, zonas, usuarios,
+      }, nombreDe)
       : null
 
     const vars = variablesDeMensaje(t, {
@@ -278,9 +281,13 @@ export async function GET(req: Request) {
         continue
       }
 
-      const destino = { telefono: tel.e164, plantilla: PLANTILLA[nivel], variables: [
-        vars.objetivo, vars.puesto, vars.horario, vars.vigilador, vars.supervisor,
-      ] }
+      // Cada plantilla recibe exactamente las variables que su texto usa: 4 el
+      // nivel 15, 5 el 30. Meta rechaza el envío si la cantidad no coincide.
+      const destino = {
+        telefono: tel.e164,
+        plantilla: PLANTILLA[nivel],
+        variables: variablesParaPlantilla(nivel, vars),
+      }
 
       if (!enviarDeVerdad || !proveedor.configurado) {
         acciones.push({
