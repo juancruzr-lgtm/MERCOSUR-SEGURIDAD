@@ -72,20 +72,27 @@ export async function cargarFilasBandeja(p: CargaFilasParams): Promise<CargaFila
       .gte('turno.fecha', desde).lte('turno.fecha', hasta)
       .order('id')
       .range(d, h)),
+    // `empleado_id` desempata: hoy no hay dos aceptaciones del mismo turno,
+    // pero un orden que depende de que eso no pase nunca es frágil. Sin
+    // desempate, dos filas con la misma clave pueden repetirse o perderse entre
+    // páginas — es lo que ya pasó con evidencias.
     fetchPaginadoResult((d, h) => db.from('aceptaciones_planilla')
       .select('turno_id, empleado_id, turno:turnos!inner(fecha)')
       .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-      .order('turno_id')
+      .order('turno_id').order('empleado_id')
       .range(d, h)),
     fetchPaginadoResult((d, h) => db.from('solicitudes_modificacion_planilla')
       .select('id, turno_id, empleado_id, texto, estado, created_at, turno:turnos!inner(fecha)')
       .gte('turno.fecha', desde).lte('turno.fecha', hasta)
       .order('created_at', { ascending: false }).order('id')
       .range(d, h)),
+    // Acá el desempate NO es teórico: hay 13 turnos con más de una revisión.
+    // Todavía no pagina —289 filas—, pero el día que pase las 1.000 el orden
+    // por `turno_id` solo dejaría de ser determinístico.
     fetchPaginadoResult((d, h) => db.from('revisiones_planilla')
       .select('turno_id, empleado_id, solicitud_id, accion, created_at, turno:turnos!inner(fecha)')
       .gte('turno.fecha', desde).lte('turno.fecha', hasta)
-      .order('turno_id')
+      .order('turno_id').order('created_at').order('empleado_id')
       .range(d, h)),
     fetchPaginadoResult((d, h) => db.from('usuarios')
       .select('id, nombre, apellido')
