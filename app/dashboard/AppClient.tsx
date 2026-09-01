@@ -112,6 +112,8 @@ import { DETALLE_COBERTURA_EQUIVALENTE, ETIQUETA_PREVISION, MENSAJE_VACANTE_COMP
 import type { EstadoPrevision, ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
 import { ETIQUETA_CLASIFICACION, ETIQUETA_COMPARACION, NOTA_ALCANCE_MOTOR, analizarCoberturaHistorica } from '@/lib/cobertura-historica'
 import type { ClasificacionPatron, ResultadoCobertura } from '@/lib/cobertura-historica'
+import { DETALLE_ESTADO_LOGICA, ETIQUETA_ESTADO_LOGICA, armarPropuestasObjetivo, clasificarLogicaObjetivo, clavePropuesta, contarExcluidos, mesAnteriorDe, planDeclaracion, resumenPlan } from '@/lib/logica-detectada'
+import type { EstadoLogica, PlanDeclaracion, PropuestaFranja } from '@/lib/logica-detectada'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -3412,6 +3414,15 @@ function ChecklistsAdmin({ plantillas, setPlantillas, items, setItems }: any) {
 
 function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], zonasOperativas = [], filtroActivo, limpiarFiltro, guardias = [], registros = [], supervisiones = [], novedades = [], user, onNavigate }: any) {
   const [objetivoSeleccionadoId, setObjetivoSeleccionadoId] = useState<string | null>(null)
+
+  // Navegación directa al legajo de un objetivo desde otra pantalla (p. ej.
+  // "Abrir grilla del objetivo" en la lógica detectada de Programación).
+  useEffect(() => {
+    if (filtroActivo?.tipo !== 'abrir_objetivo' || !filtroActivo.objetivoId) return
+    setObjetivoSeleccionadoId(filtroActivo.objetivoId)
+    limpiarFiltro?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroActivo])
   const [modal, setModal] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -8509,7 +8520,7 @@ function ZonasOperativas({ guardias, objetivos, zonas, setZonas, supervisorZonas
 }
 
 // ── SERVICIOS OBJETIVO ────────────────────────────────────────
-function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }: any) {
+function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, onNavigate }: any) {
   const [servicios, setServicios] = useState<any[]>([])
   const [turnosBase, setTurnosBase] = useState<any[]>([])
   const [modal, setModal] = useState(false)
@@ -8548,37 +8559,126 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
   const [faseCreacion, setFaseCreacion] = useState<'seleccion' | 'confirmar' | 'creando' | 'resultado'>('seleccion')
   const [resultadoCreacion, setResultadoCreacion] = useState<ResultadoCreacion | null>(null)
   const [errorCreacion, setErrorCreacion] = useState('')
-  // Motor de cobertura histórica: analiza julio 2026 y muestra propuestas.
-  // Solo lectura; no crea turnos, no modifica servicios.
+  // Lógica detectada (Bloques 1–3): analiza el mes ANTERIOR al mes elegido
+  // para programar y deja declarar la estructura aceptada en
+  // servicios_objetivo, que sigue siendo la fuente autoritativa. La creación
+  // de turnos no vive acá: sigue en Generar mes (previsualizarMes +
+  // crear_turnos_programacion_parcial).
   const [cobertura, setCobertura] = useState<ResultadoCobertura | null>(null)
   const [analizandoCobertura, setAnalizandoCobertura] = useState(false)
   const [errorCobertura, setErrorCobertura] = useState('')
+  // Turnos del mes analizado y puestos activos por objetivo: alimentan las
+  // propuestas (puestos sugeridos) y el conteo de excepciones ignoradas.
+  const [turnosHistorico, setTurnosHistorico] = useState<any[]>([])
+  const [puestosLogica, setPuestosLogica] = useState<Map<string, EstadoPuestos> | null>(null)
+  // Selección de propuestas y puestos elegidos, por clavePropuesta.
+  const [propSeleccion, setPropSeleccion] = useState<Set<string>>(new Set())
+  const [propPuestos, setPropPuestos] = useState<Record<string, string[]>>({})
+  // Plan de escritura pendiente de confirmación (una declaración por vez).
+  const [declaracion, setDeclaracion] = useState<{ objetivoNombre: string; plan: PlanDeclaracion } | null>(null)
+  const [declarando, setDeclarando] = useState(false)
+  const [msgDeclaracion, setMsgDeclaracion] = useState('')
 
-  const MES_ANALISIS = { anio: 2026, mes: 7, desde: '2026-07-01', hasta: '2026-07-31' }
+  // Bloque 1: el mes de referencia es siempre el anterior al mes a programar.
+  const mesAnalisis = mesAnteriorDe(mesGenerar)
 
-  const analizarCobertura = async () => {
-    if (analizandoCobertura) return
+  const analizarCobertura = async (serviciosActuales?: any[]) => {
+    if (analizandoCobertura || !mesAnalisis) return
     setAnalizandoCobertura(true)
     setErrorCobertura('')
-    const { data: turnosJulio, error } = await supabase
+    const { data: turnosMes, error } = await supabase
       .from('turnos')
       .select('id, objetivo_id, puesto_id, guardia_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
-      .gte('fecha', MES_ANALISIS.desde)
-      .lte('fecha', MES_ANALISIS.hasta)
+      .gte('fecha', mesAnalisis.desde)
+      .lte('fecha', mesAnalisis.hasta)
       .limit(5000)
     if (error) {
       setErrorCobertura(error.message)
       setAnalizandoCobertura(false)
       return
     }
-    setCobertura(analizarCoberturaHistorica({
-      anio: MES_ANALISIS.anio,
-      mes: MES_ANALISIS.mes,
-      turnos: turnosJulio ?? [],
+    const resultado = analizarCoberturaHistorica({
+      anio: mesAnalisis.anio,
+      mes: mesAnalisis.mes,
+      turnos: turnosMes ?? [],
       objetivos,
-      servicios,
-    }))
+      servicios: serviciosActuales ?? servicios,
+    })
+    const { data: mapaPuestos } = await obtenerPuestosActivosDeObjetivos(resultado.objetivos.map(o => o.objetivo_id))
+    // Por defecto quedan marcadas solo las propuestas sin configuración
+    // declarada; las divergencias exigen marcado explícito (marcar una
+    // divergencia significa "usar el histórico").
+    const seleccionInicial = new Set<string>()
+    const puestosIniciales: Record<string, string[]> = {}
+    for (const obj of resultado.objetivos) {
+      const propuestas = armarPropuestasObjetivo({
+        analisis: obj,
+        turnos: turnosMes ?? [],
+        turnosBase,
+        puestos: mapaPuestos?.get(obj.objetivo_id)?.puestos ?? [],
+      })
+      for (const p of propuestas) {
+        const clave = clavePropuesta(p)
+        const elegidos = p.puestos_sugeridos.slice(0, p.posiciones).map(x => x.puesto_id)
+        while (elegidos.length < p.posiciones) elegidos.push('')
+        puestosIniciales[clave] = elegidos
+        if (p.comparacion === 'falta_configuracion') seleccionInicial.add(clave)
+      }
+    }
+    setTurnosHistorico(turnosMes ?? [])
+    setPuestosLogica(mapaPuestos)
+    setPropSeleccion(seleccionInicial)
+    setPropPuestos(puestosIniciales)
+    setDeclaracion(null)
+    setMsgDeclaracion('')
+    setCobertura(resultado)
     setAnalizandoCobertura(false)
+  }
+
+  // Bloque 3: ejecutar el plan confirmado. Escribe SOLO configuración
+  // (turnos_base faltantes y servicios_objetivo); nunca turnos. Todo lo que
+  // se escribe salió listado en el diálogo de confirmación.
+  const declararEstructura = async () => {
+    if (declarando || !declaracion) return
+    const { plan } = declaracion
+    setDeclarando(true)
+    setMsgDeclaracion('')
+    try {
+      const idPorFranja = new Map<string, string>()
+      for (const tb of plan.crear_turnos_base) {
+        const { data, error } = await supabase.from('turnos_base')
+          .insert({ nombre: tb.nombre, hora_inicio: tb.hora_inicio, hora_fin: tb.hora_fin, activo: true })
+          .select('id').single()
+        if (error || !data) throw new Error(error?.message || 'No se pudo crear el turno base')
+        idPorFranja.set(`${tb.hora_inicio}|${tb.hora_fin}`, data.id)
+      }
+      for (const s of plan.crear_servicios) {
+        const turnoBaseId = s.turno_base_id ?? idPorFranja.get(`${s.hora_inicio}|${s.hora_fin}`)
+        if (!turnoBaseId) throw new Error(`Franja ${s.hora_inicio}–${s.hora_fin} sin turno base resuelto`)
+        const { error } = await supabase.from('servicios_objetivo').insert({
+          objetivo_id: s.objetivo_id, puesto_id: s.puesto_id, turno_base_id: turnoBaseId,
+          dias_semana: s.dias_semana, guardia_habitual_id: null, activo: true,
+        })
+        if (error) throw new Error(error.message)
+      }
+      for (const u of plan.actualizar_dias) {
+        const { error } = await supabase.from('servicios_objetivo').update({ dias_semana: u.dias_semana }).eq('id', u.servicio_id)
+        if (error) throw new Error(error.message)
+      }
+      for (const id of plan.desactivar_servicios) {
+        const { error } = await supabase.from('servicios_objetivo').update({ activo: false }).eq('id', id)
+        if (error) throw new Error(error.message)
+      }
+      setDeclaracion(null)
+      // Releer la configuración y re-analizar: las propuestas declaradas
+      // pasan a "coincide" sin cerrar el modal.
+      const sv = await cargar()
+      setMsgDeclaracion(`✅ Estructura declarada (${resumenPlan(plan)}). Los turnos se crean después desde Generar mes.`)
+      await analizarCobertura(sv ?? undefined)
+    } catch (e: any) {
+      setMsgDeclaracion(`⚠ No se pudo declarar: ${e.message}`)
+    }
+    setDeclarando(false)
   }
 
   const DIAS = [
@@ -8603,6 +8703,9 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
       setPuestosReg(mapa)
     }
     setLoadingData(false)
+    // La lista fresca se devuelve para quien necesita re-analizar sin esperar
+    // el ciclo de estado (declararEstructura).
+    return sv ?? null
   }
 
   // La vinculación la confirma siempre el administrador; la RPC audita
@@ -8808,7 +8911,7 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
         <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
           <input type="month" style={{ ...S.input, width:'auto', minWidth:160 }} value={mesGenerar} onChange={e => { setMesGenerar(e.target.value); setResultadoGeneracion(null) }} />
           <button style={{ ...S.btn, ...S.btnPrimary, opacity: generando ? 0.6 : 1 }} onClick={generarMes} disabled={generando}>{generando ? '⏳ Preparando vista previa...' : '⚡ Generar mes'}</button>
-          <button style={{ ...S.btn, ...S.btnSecondary, opacity: analizandoCobertura ? 0.6 : 1 }} onClick={analizarCobertura} disabled={analizandoCobertura}>{analizandoCobertura ? '⏳ Analizando…' : '📊 Analizar cobertura de julio'}</button>
+          <button style={{ ...S.btn, ...S.btnSecondary, opacity: analizandoCobertura || !mesAnalisis ? 0.6 : 1 }} onClick={() => analizarCobertura()} disabled={analizandoCobertura || !mesAnalisis}>{analizandoCobertura ? '⏳ Analizando…' : `🧠 Lógica detectada (${mesAnalisis ? `analiza ${mesAnalisis.mesStr}` : 'elegí un mes'})`}</button>
         </div>
         {errorCobertura && <div style={{ marginTop:10, color:'#ef4444', fontSize:12 }}>{errorCobertura}</div>}
         {resultadoGeneracion && (
@@ -8972,19 +9075,56 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
           fuerte:'#10b981', probable:'#60a5fa', revision:'#f59e0b', excepcion:'#94a3b8',
           cambio_esquema:'#f59e0b', sin_informacion:'#64748b',
         }
+        const colorEstado: Record<EstadoLogica, string> = {
+          coincide:'#10b981', propuesta:'#60a5fa', divergencia:'#f59e0b', sin_logica:'#94a3b8',
+        }
+        const ordenEstado: Record<EstadoLogica, number> = { propuesta:0, divergencia:1, coincide:2, sin_logica:3 }
+        const h5 = (x?: string | null) => (x ?? '').slice(0, 5)
+        const nombrePuesto = (objetivoId: string, puestoId: string) =>
+          puestosLogica?.get(objetivoId)?.puestos.find((p: any) => p.id === puestoId)?.nombre ?? '—'
+        // Bloque 2: estado simple por objetivo + propuestas declarables.
+        const tarjetas = cobertura.objetivos.map(obj => ({
+          obj,
+          estado: clasificarLogicaObjetivo(obj),
+          propuestas: armarPropuestasObjetivo({
+            analisis: obj,
+            turnos: turnosHistorico,
+            turnosBase,
+            puestos: puestosLogica?.get(obj.objetivo_id)?.puestos ?? [],
+          }),
+          excluidos: contarExcluidos(turnosHistorico, obj.objetivo_id),
+        })).sort((a, b) => ordenEstado[a.estado] - ordenEstado[b.estado] || a.obj.objetivo_nombre.localeCompare(b.obj.objetivo_nombre))
+        const porEstado = (e: EstadoLogica) => tarjetas.filter(t => t.estado === e).length
+
+        // Bloque 3: de la selección al plan de escritura, siempre con
+        // confirmación aparte. Los errores de elección frenan acá.
+        const declararObjetivo = (objetivoNombre: string, propuestas: PropuestaFranja[]) => {
+          const elecciones = propuestas
+            .filter(p => propSeleccion.has(clavePropuesta(p)))
+            .map(p => ({ propuesta: p, puesto_ids: propPuestos[clavePropuesta(p)] ?? [] }))
+          if (elecciones.length === 0) return
+          const plan = planDeclaracion({ elecciones, serviciosExistentes: servicios, turnosBase })
+          if (plan.errores.length > 0) {
+            setMsgDeclaracion(`⚠ ${plan.errores.join(' · ')}`)
+            return
+          }
+          setMsgDeclaracion('')
+          setDeclaracion({ objetivoNombre, plan })
+        }
+
         return (
-        <Modal title={`Cobertura histórica — ${cobertura.mes}`} onClose={() => setCobertura(null)}
+        <Modal title={`Lógica detectada — mes de referencia ${cobertura.mes}`} onClose={() => setCobertura(null)}
           footer={<button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setCobertura(null)}>Cerrar</button>}>
           <div style={{ fontSize:13, color:'#64748b', marginBottom:14 }}>
-            {NOTA_ALCANCE_MOTOR} Los días sin registros se tratan como datos no registrados, no como ausencia de servicio. No crea turnos ni modifica servicios.
+            {NOTA_ALCANCE_MOTOR} Los días sin registros se tratan como datos no registrados, no como ausencia de servicio. Declarar una estructura escribe SOLO la configuración (servicios_objetivo); los turnos se crean después desde "Generar mes", con su propia vista previa y confirmación.
           </div>
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16 }}>
             {[
               { label:'Objetivos analizados', valor: cobertura.resumen.objetivos_analizados, color:'#e2e8f0' },
-              { label:'Con patrón claro', valor: cobertura.resumen.con_patron_fuerte, color:'#10b981' },
-              { label:'Con patrón probable', valor: cobertura.resumen.con_patron_probable, color:'#60a5fa' },
-              { label:'Requieren revisión', valor: cobertura.resumen.requieren_revision, color:'#f59e0b' },
-              { label:'Sin datos suficientes', valor: cobertura.resumen.sin_informacion, color:'#64748b' },
+              { label: ETIQUETA_ESTADO_LOGICA.coincide, valor: porEstado('coincide'), color: colorEstado.coincide },
+              { label: ETIQUETA_ESTADO_LOGICA.propuesta, valor: porEstado('propuesta'), color: colorEstado.propuesta },
+              { label: ETIQUETA_ESTADO_LOGICA.divergencia, valor: porEstado('divergencia'), color: colorEstado.divergencia },
+              { label: ETIQUETA_ESTADO_LOGICA.sin_logica, valor: porEstado('sin_logica'), color: colorEstado.sin_logica },
             ].map(chip => (
               <div key={chip.label} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 14px', textAlign:'center' }}>
                 <div style={{ fontFamily:'Syne,sans-serif', fontSize:18, fontWeight:700, color:chip.color }}>{chip.valor}</div>
@@ -8992,10 +9132,51 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
               </div>
             ))}
           </div>
+
+          {msgDeclaracion && (
+            <div style={{ background: msgDeclaracion.startsWith('✅') ? 'rgba(16,185,129,.07)' : 'rgba(245,158,11,.08)', border:`1px solid ${msgDeclaracion.startsWith('✅') ? 'rgba(16,185,129,.3)' : 'rgba(245,158,11,.35)'}`, borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13, color: msgDeclaracion.startsWith('✅') ? '#10b981' : '#f59e0b' }}>
+              {msgDeclaracion}
+            </div>
+          )}
+
+          {declaracion && (
+            <div style={{ background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.35)', borderRadius:8, padding:'12px 16px', marginBottom:16 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:'#f59e0b', marginBottom:8 }}>Confirmar declaración — {declaracion.objetivoNombre}</div>
+              <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:6 }}>{resumenPlan(declaracion.plan)}.</div>
+              {declaracion.plan.crear_turnos_base.map(tb => (
+                <div key={`${tb.hora_inicio}|${tb.hora_fin}`} style={{ fontSize:12, color:'#94a3b8' }}>· Nuevo turno base {tb.hora_inicio}–{tb.hora_fin}</div>
+              ))}
+              {declaracion.plan.crear_servicios.map((s, i) => (
+                <div key={`crear-${i}`} style={{ fontSize:12, color:'#94a3b8' }}>· Crear servicio: {nombrePuesto(s.objetivo_id, s.puesto_id)} · {s.hora_inicio}–{s.hora_fin} · {diasLabel(s.dias_semana)}</div>
+              ))}
+              {declaracion.plan.actualizar_dias.map(u => {
+                const srv = servicios.find((s: any) => s.id === u.servicio_id)
+                return <div key={u.servicio_id} style={{ fontSize:12, color:'#94a3b8' }}>· Actualizar días de {srv?.puesto?.nombre ?? 'servicio'}{srv?.turno_base ? ` (${h5(srv.turno_base.hora_inicio)}–${h5(srv.turno_base.hora_fin)})` : ''} → {diasLabel(u.dias_semana)}</div>
+              })}
+              {declaracion.plan.desactivar_servicios.map(id => {
+                const srv = servicios.find((s: any) => s.id === id)
+                return <div key={id} style={{ fontSize:12, color:'#ef4444' }}>· Desactivar {srv?.puesto?.nombre ?? 'servicio'}{srv?.turno_base ? ` ${h5(srv.turno_base.hora_inicio)}–${h5(srv.turno_base.hora_fin)}` : ''} (franja declarada sin registros en el mes analizado)</div>
+              })}
+              {declaracion.plan.advertencias.map((a, i) => <div key={`adv-${i}`} style={{ fontSize:12, color:'#f59e0b' }}>⚠ {a}</div>)}
+              <div style={{ fontSize:12, color:'#94a3b8', margin:'6px 0 10px' }}>En este paso no se crea ningún turno.</div>
+              <div style={{ display:'flex', gap:10 }}>
+                <button style={{ ...S.btn, ...S.btnSecondary, padding:'8px 14px' }} onClick={() => setDeclaracion(null)} disabled={declarando}>Volver</button>
+                <button style={{ ...S.btn, ...S.btnPrimary, padding:'8px 14px' }} onClick={declararEstructura} disabled={declarando}>{declarando ? '⏳ Declarando…' : 'Confirmar declaración'}</button>
+              </div>
+            </div>
+          )}
+
           <div style={{ maxHeight:460, overflowY:'auto', display:'flex', flexDirection:'column', gap:14 }}>
-            {cobertura.objetivos.map(obj => (
+            {tarjetas.map(({ obj, estado, propuestas, excluidos }) => {
+              const seleccionadasObj = propuestas.filter(p => propSeleccion.has(clavePropuesta(p))).length
+              const catalogoPuestos = puestosLogica?.get(obj.objetivo_id)?.puestos ?? []
+              return (
               <div key={obj.objetivo_id} style={{ background:'#0b1220', border:'1px solid #1e2d42', borderRadius:10, padding:14 }}>
-                <div style={{ fontFamily:'Syne,sans-serif', fontSize:14, fontWeight:700, marginBottom:8 }}>{obj.objetivo_nombre}</div>
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
+                  <div style={{ fontFamily:'Syne,sans-serif', fontSize:14, fontWeight:700, flex:1 }}>{obj.objetivo_nombre}</div>
+                  <span style={{ fontSize:11, fontWeight:700, color:colorEstado[estado], border:`1px solid ${colorEstado[estado]}55`, borderRadius:999, padding:'3px 10px', whiteSpace:'nowrap' }}>{ETIQUETA_ESTADO_LOGICA[estado]}</span>
+                </div>
+                <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>{DETALLE_ESTADO_LOGICA[estado]}</div>
                 <div style={{ overflowX:'auto' }}>
                   <table style={S.table}>
                     <thead><tr><th style={S.th}>Días</th><th style={S.th}>Horario</th><th style={S.th}>Posiciones</th><th style={S.th}>Observado</th><th style={S.th}>%</th><th style={S.th}>Clasificación</th><th style={S.th}>vs. configuración</th></tr></thead>
@@ -9005,7 +9186,7 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
                           <td style={S.td}>{p.etiqueta_dias}</td>
                           <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontSize:12 }}>{p.hora_inicio}–{p.hora_fin}{p.nocturno ? ' 🌙' : ''}</td>
                           <td style={{ ...S.td, textAlign:'center' }}>{p.posiciones}</td>
-                          <td style={S.td}>{p.dias_cumplidos} de {p.dias_observados} días</td>
+                          <td style={S.td}>{p.dias_con_registro} de {p.dias_observados} días</td>
                           <td style={S.td}>{p.porcentaje}%</td>
                           <td style={{ ...S.td, color: colorClasif[p.clasificacion], fontSize:12, whiteSpace:'nowrap' }}>{ETIQUETA_CLASIFICACION[p.clasificacion]}</td>
                           <td style={{ ...S.td, fontSize:12, color: p.comparacion === 'coincide' ? '#10b981' : '#f59e0b' }}>{p.comparacion ? ETIQUETA_COMPARACION[p.comparacion] : '—'}</td>
@@ -9014,9 +9195,12 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
                     </tbody>
                   </table>
                 </div>
-                {obj.patrones.some(p => p.excepciones.length > 0) && (
-                  <div style={{ fontSize:11, color:'#94a3b8', marginTop:8 }}>
-                    Excepciones: {obj.patrones.flatMap(p => p.excepciones).slice(0, 6).join(' · ')}
+                <div style={{ fontSize:11, color:'#94a3b8', marginTop:8 }}>
+                  Período utilizado: {cobertura.mes} · Excepciones ignoradas por el análisis: {excluidos.sin_obligacion} reemplazo(s)/anulación(es) · {excluidos.capacitaciones} capacitación(es)
+                </div>
+                {obj.patrones.some(p => p.variaciones.length > 0) && (
+                  <div style={{ fontSize:11, color:'#94a3b8', marginTop:6 }}>
+                    Variaciones observadas: {obj.patrones.flatMap(p => p.variaciones).slice(0, 6).join(' · ')}
                   </div>
                 )}
                 {obj.advertencias.length > 0 && (
@@ -9025,8 +9209,51 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro }:
                 {obj.configuracion_adicional.length > 0 && (
                   <div style={{ fontSize:11, color:'#64748b', marginTop:6 }}>Configuración adicional: {obj.configuracion_adicional.join(' · ')}</div>
                 )}
+                {estado === 'sin_logica' && onNavigate && (
+                  <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12, marginTop:10 }}
+                    onClick={() => { setCobertura(null); onNavigate('objetivos', { tipo:'abrir_objetivo', objetivoId: obj.objetivo_id, label:`Objetivo ${obj.objetivo_nombre}` }) }}>
+                    Abrir grilla del objetivo
+                  </button>
+                )}
+                {propuestas.length > 0 && (
+                  <div style={{ marginTop:10, borderTop:'1px solid #1e2d42', paddingTop:10 }}>
+                    <div style={{ fontSize:12, fontWeight:700, color:'#e2e8f0', marginBottom:6 }}>Estructura a declarar</div>
+                    {propuestas.map(p => {
+                      const clave = clavePropuesta(p)
+                      const marcada = propSeleccion.has(clave)
+                      const elegidos = propPuestos[clave] ?? []
+                      return (
+                        <div key={clave} style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:8, padding:'6px 0', borderBottom:'1px solid #131e30' }}>
+                          <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:12, color:'#e2e8f0' }}>
+                            <input type="checkbox" checked={marcada} onChange={() => setPropSeleccion(prev => { const n = new Set(prev); if (n.has(clave)) n.delete(clave); else n.add(clave); return n })} />
+                            <span><strong>{p.hora_inicio}–{p.hora_fin}</strong> · {p.etiqueta_dias} · {p.posiciones} posición(es) · {p.porcentaje}% ({p.dias_con_registro}/{p.dias_observados} días)</span>
+                          </label>
+                          <span style={{ fontSize:11, color: p.comparacion === 'falta_configuracion' ? '#60a5fa' : '#f59e0b' }}>
+                            {p.comparacion === 'falta_configuracion' ? 'sin configuración declarada' : `${p.comparacion ? ETIQUETA_COMPARACION[p.comparacion] : ''} — declararla es usar el histórico`}
+                          </span>
+                          {p.turno_base_id
+                            ? <span style={{ fontSize:11, color:'#64748b' }}>turno base: {p.turno_base_nombre}</span>
+                            : <span style={{ fontSize:11, color:'#f59e0b' }}>se creará el turno base {p.hora_inicio}–{p.hora_fin}</span>}
+                          {marcada && p.comparacion !== 'dias_diferentes' && Array.from({ length: p.posiciones }).map((_, i) => (
+                            <select key={i} style={{ ...S.input, width:'auto', minWidth:130, padding:'4px 8px', fontSize:12 }}
+                              value={elegidos[i] ?? ''}
+                              onChange={e => setPropPuestos(prev => { const arr = [...(prev[clave] ?? [])]; arr[i] = e.target.value; return { ...prev, [clave]: arr } })}>
+                              <option value="">Elegí posición…</option>
+                              {catalogoPuestos.map((pu: any) => <option key={pu.id} value={pu.id}>{pu.nombre}</option>)}
+                            </select>
+                          ))}
+                        </div>
+                      )
+                    })}
+                    <button style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, marginTop:8, opacity: seleccionadasObj === 0 || declaracion ? 0.5 : 1 }}
+                      disabled={seleccionadasObj === 0 || Boolean(declaracion)}
+                      onClick={() => declararObjetivo(obj.objetivo_nombre, propuestas)}>
+                      Declarar estructura seleccionada ({seleccionadasObj})
+                    </button>
+                  </div>
+                )}
               </div>
-            ))}
+            )})}
           </div>
         </Modal>
         )
@@ -12891,7 +13118,7 @@ const esGuardia = esRolGuardia(user.rol)
                   }
                 />
               )}
-              {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} />}
+              {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} onNavigate={navegarConFiltro} />}
               {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} zonas={zonasOperativas} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
