@@ -103,6 +103,40 @@ export function supervisionProximaAVencer(
   return restantes !== null && restantes <= frecuenciaHoras * SUPERVISION_PROXIMA_PORCENTAJE
 }
 
+/**
+ * Hace cuánto fue la última supervisión, en palabras.
+ *
+ * En una lista de vencidos la fecha sola no dice lo urgente que es: "30/08" y
+ * "12/06" se leen igual de rápido y son problemas muy distintos. El texto va
+ * al lado de la fecha, no en su lugar — la fecha exacta sigue siendo el dato
+ * que se copia a un reclamo.
+ *
+ * Devuelve null si no hay fecha o es ilegible: quien llama decide qué decir,
+ * porque "nunca supervisado" no es lo mismo que "hace 0 días".
+ */
+export function antiguedadSupervision(
+  ultimaIso: string | null | undefined,
+  ahoraMs: number = Date.now(),
+): string | null {
+  if (!ultimaIso) return null
+
+  const ultimaMs = new Date(ultimaIso).getTime()
+  if (!Number.isFinite(ultimaMs)) return null
+
+  const horas = (ahoraMs - ultimaMs) / MS_HORA
+  // Una supervisión con fecha futura (reloj corrido, carga manual adelantada)
+  // no se anuncia como "hace -3 h".
+  if (horas < 1) return 'hace menos de 1 h'
+  if (horas < 24) return `hace ${Math.floor(horas)} h`
+
+  const dias = Math.floor(horas / 24)
+  if (dias === 1) return 'hace 1 día'
+  if (dias < 30) return `hace ${dias} días`
+
+  const meses = Math.floor(dias / 30)
+  return meses === 1 ? 'hace más de 1 mes' : `hace más de ${meses} meses`
+}
+
 export const ETIQUETA_ESTADO_SUPERVISION: Record<EstadoSupervision, string> = {
   nunca:   'Nunca supervisado',
   vigente: 'Vigente',

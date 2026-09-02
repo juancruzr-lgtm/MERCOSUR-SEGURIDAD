@@ -96,7 +96,7 @@ import ControlSupervisionesPanel from '@/components/supervisiones/ControlSupervi
 import RondasNativasPanel from '@/components/rondas/RondasNativasPanel'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
-import { indexarUltimaSupervision, objetivoSupervisionVencida } from '@/lib/supervisiones'
+import { antiguedadSupervision, indexarUltimaSupervision, objetivoSupervisionVencida } from '@/lib/supervisiones'
 import {
   alertaEstaIntervenida,
   calcularMinutosTardanzaRegistro,
@@ -3026,7 +3026,13 @@ function SupervisionesAdmin({
           {objetivosSinSupervision.length === 0 ? (
             <div style={{ color:'#64748b', fontSize:13 }}>Todos los objetivos activos están dentro de frecuencia.</div>
           ) : objetivosSinSupervision.map((objetivo: Objetivo) => {
-            const ultima = ultimaIsoPorObjetivo.get(objetivo.id)
+            // `ultimaIsoPorObjetivo` guarda el ISO como texto, no la fila: leerle
+            // `.created_at` daba undefined y la tarjeta escribía '—' para TODOS
+            // los que sí tenían una supervisión previa. Los únicos que se leían
+            // bien eran los que nunca la tuvieron ('sin registros'), así que el
+            // panel decía justo lo contrario de lo que pasaba: un objetivo
+            // supervisado el mes pasado figuraba sin fecha.
+            const ultimaIso = ultimaIsoPorObjetivo.get(objetivo.id)
             return (
               <div
                 key={objetivo.id}
@@ -3039,7 +3045,9 @@ function SupervisionesAdmin({
                   <Badge type="advertencia">{objetivo.frecuencia_supervision_horas || 24} h</Badge>
                 </div>
                 <div style={{ color:'#94a3b8', fontSize:12, marginTop:4 }}>
-                  Última supervisión: {ultima ? fechaHora(ultima.created_at) : 'sin registros'}
+                  {ultimaIso
+                    ? <>Última supervisión: {fechaHora(ultimaIso)} · <span style={{ color:'#f59e0b' }}>{antiguedadSupervision(ultimaIso, ahora.getTime())}</span></>
+                    : 'Nunca supervisado'}
                 </div>
               </div>
             )
