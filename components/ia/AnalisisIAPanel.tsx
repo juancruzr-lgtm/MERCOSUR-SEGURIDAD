@@ -159,7 +159,12 @@ export default function AnalisisIAPanel({
       .limit(100)
       .then(({ data: mp }) => setMetricasPunto(mp ?? []), () => setMetricasPunto([]))
 
-    const conFoto = lista.filter(a => a.estado === 'completado').slice(0, 60)
+    // Todas las de la bandeja, no las 60 más recientes: los filtros
+    // (Pendientes, Incorrectas, Por objetivo…) muestran filas de cualquier
+    // parte de las 300, y con el corte en 60 las tarjetas filtradas quedaban
+    // casi siempre en "sin vista previa" aunque la foto existiera. Ahora que
+    // se firma en lote, pedirlas todas cuesta una sola llamada.
+    const conFoto = lista.filter(a => a.estado === 'completado')
     if (conFoto.length === 0) return
     try {
       const res = await fetch('/api/ia/evidencia/url', {
