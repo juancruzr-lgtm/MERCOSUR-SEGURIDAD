@@ -47,6 +47,11 @@ type ObjetivoEstado = {
   /** Horas de atraso. `null` si nunca se supervisó. */
   atraso: number | null
   frecuencia: number
+  /**
+   * Cuándo fue la última visita, aunque sea de meses atrás. El atraso solo no
+   * alcanza: para reclamarle a un supervisor hay que poder decir la fecha.
+   */
+  ultimaIso: string | null
 }
 
 type Datos = {
@@ -75,6 +80,22 @@ function fechaCorteOperacion(dias: number = DIAS_SIN_OPERACION): string {
   d.setDate(d.getDate() - dias)
   const mes = String(d.getMonth() + 1).padStart(2, '0')
   return `${d.getFullYear()}-${mes}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * "30/08 08:45" — la fecha de la última visita, corta porque va en una línea
+ * que ya lleva nombre, atraso y frecuencia. El año se agrega sólo cuando no es
+ * el corriente, que es cuando su ausencia se leería mal.
+ */
+function fechaCortaSupervision(iso: string, ahora: Date = new Date()): string {
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return '—'
+  const dd = String(d.getDate()).padStart(2, '0')
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  const anio = d.getFullYear() === ahora.getFullYear() ? '' : `/${d.getFullYear()}`
+  return `${dd}/${mm}${anio} ${hh}:${mi}`
 }
 
 /** "hace 3 d 4 h" — para que el atraso se lea sin hacer cuentas. */
@@ -231,6 +252,7 @@ export default function ControlSupervisionesPanel({
         estado,
         atraso: restantes === null ? null : -restantes,
         frecuencia,
+        ultimaIso: iso,
       })
     }
 
@@ -351,7 +373,7 @@ export default function ControlSupervisionesPanel({
                       : `Atrasado ${atrasoLegible(p.atraso ?? 0)}`}
                   </span>
                   <span style={{ fontSize:10.5, color:C.faint, whiteSpace:'nowrap' }}>
-                    cada {p.frecuencia} h
+                    {p.ultimaIso ? `última ${fechaCortaSupervision(p.ultimaIso)} · ` : ''}cada {p.frecuencia} h
                   </span>
                 </div>
               ))}
