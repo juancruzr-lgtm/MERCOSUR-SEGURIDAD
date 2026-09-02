@@ -278,10 +278,13 @@ export const MENSAJE_FUERA_DE_ZONA =
   'Completar mes está disponible solo para objetivos de tus zonas.'
 
 /**
- * Admin: siempre. Supervisor: solo si el objetivo tiene zona y esa zona está
- * entre las suyas (sin zonas asignadas no hay alcance, igual que en la RPC).
- * Cualquier otro rol: nunca. La declaración de estructura NO entra acá: eso
- * sigue siendo exclusivo de Administración.
+ * Admin: siempre — sin ninguna restricción de zona (no necesita
+ * supervisor_zonas, no le importa si el objetivo tiene zona ni si la zona
+ * está inactiva). Supervisor: solo si el objetivo tiene zona y esa zona está
+ * entre las suyas; `zonasSupervisor` debe contener SOLO zonas operativas
+ * ACTIVAS (así lo carga la grilla, y la RPC lo revalida igual en servidor) —
+ * sin zonas activas no hay alcance. Cualquier otro rol: nunca. La
+ * declaración de estructura NO entra acá: sigue siendo de Administración.
  */
 export function puedeUsarCompletarMes(params: {
   esAdmin?: boolean

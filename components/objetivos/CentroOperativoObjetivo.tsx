@@ -206,8 +206,12 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       const { data: yo } = await supabase.from('usuarios')
         .select('id').eq('auth_user_id', au.user.id).maybeSingle()
       if (!vivo || !yo?.id) { setZonasSupervisor(new Set()); return }
+      // Solo zonas ACTIVAS: una asignación a zona inactiva no habilita nada
+      // (misma regla que la RPC, que además la revalida en servidor).
       const { data: zs } = await supabase.from('supervisor_zonas')
-        .select('zona_id').eq('supervisor_id', yo.id)
+        .select('zona_id, zona:zonas_operativas!inner(estado)')
+        .eq('supervisor_id', yo.id)
+        .eq('zona.estado', 'activo')
       if (!vivo) return
       setZonasSupervisor(new Set((zs ?? []).map((z: any) => z.zona_id)))
     })()

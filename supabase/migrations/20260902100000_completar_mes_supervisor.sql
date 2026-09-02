@@ -6,13 +6,14 @@
 --
 --   · admin activo: igual que siempre, todos los objetivos válidos;
 --   · supervisor activo: TODAS las filas del payload deben ser de servicios
---     existentes cuyos objetivos estén activos, no sean de prueba y
---     pertenezcan a una zona asignada en supervisor_zonas. Una sola fila
---     fuera del alcance lanza excepción ANTES de crear nada: la transacción
---     entera se revierte y no queda creación parcial;
---   · supervisor sin zonas asignadas: rechazado. (Más estricto que
+--     existentes Y ACTIVOS cuyos objetivos estén activos, no sean de prueba
+--     y pertenezcan a una zona ACTIVA asignada en supervisor_zonas. Una sola
+--     fila fuera del alcance lanza excepción ANTES de crear nada: la
+--     transacción entera se revierte y no queda creación parcial;
+--   · supervisor sin zonas activas asignadas: rechazado (una asignación a
+--     una zona inactiva no habilita nada). Más estricto que
 --     crear_turnos_posicion_objetivo, donde "sin zonas" es alcance total:
---     decisión explícita del dueño para la creación mensual.)
+--     decisión explícita del dueño para la creación mensual.
 --
 -- Reutiliza la infraestructura existente de zonas (supervisor_zonas +
 -- objetivos.zona_id, el mismo modelo que crear_turnos_posicion_objetivo,
@@ -94,15 +95,21 @@ BEGIN
   END IF;
 
   -- Alcance del supervisor: se valida el payload COMPLETO antes de tocar
-  -- nada. Cualquier fila fuera (servicio inexistente, objetivo inactivo o de
-  -- prueba, zona ajena o sin zona) lanza excepcion y revierte todo: cero
-  -- creaciones parciales. No se confia en ningun dato del cliente: el
-  -- objetivo y su zona se derivan del servicio en la base.
+  -- nada. Cualquier fila fuera (servicio inexistente O INACTIVO, objetivo
+  -- inactivo o de prueba, zona ajena, inactiva o sin zona) lanza excepcion y
+  -- revierte todo: cero creaciones parciales. No se confia en ningun dato
+  -- del cliente: el objetivo y su zona se derivan del servicio en la base.
+  -- Para el admin nada cambia, y las clasificaciones POR FILA del loop
+  -- (fecha pasada, duplicado...) tampoco.
   IF v_actor.rol = 'supervisor' THEN
-    SELECT array_agg(zona_id) INTO v_zonas
-    FROM public.supervisor_zonas WHERE supervisor_id = v_actor.id;
+    -- Solo cuentan las zonas ACTIVAS: una asignacion a zona inactiva es
+    -- equivalente a no tener la zona.
+    SELECT array_agg(sz.zona_id) INTO v_zonas
+    FROM public.supervisor_zonas sz
+    JOIN public.zonas_operativas z ON z.id = sz.zona_id AND z.estado = 'activo'
+    WHERE sz.supervisor_id = v_actor.id;
     IF v_zonas IS NULL THEN
-      RAISE EXCEPTION 'No autorizado: supervisor sin zonas asignadas';
+      RAISE EXCEPTION 'No autorizado: supervisor sin zonas activas asignadas';
     END IF;
 
     SELECT count(*) INTO v_fuera
@@ -113,6 +120,7 @@ BEGIN
     LEFT JOIN public.servicios_objetivo s ON s.id = x.sid
     LEFT JOIN public.objetivos o ON o.id = s.objetivo_id
     WHERE s.id IS NULL
+       OR NOT s.activo
        OR o.id IS NULL
        OR o.estado <> 'activo'
        OR COALESCE(o.es_prueba, false)

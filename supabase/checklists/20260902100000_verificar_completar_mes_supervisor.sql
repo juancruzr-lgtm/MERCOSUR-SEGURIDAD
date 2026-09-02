@@ -15,8 +15,18 @@ select 'alcance_por_zona_en_cuerpo',
    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname = 'crear_turnos_programacion_parcial')
 union all
-select 'sin_zonas_rechazado',
-  (select (prosrc like '%supervisor sin zonas asignadas%')::text
+select 'sin_zonas_activas_rechazado',
+  (select (prosrc like '%supervisor sin zonas activas asignadas%')::text
+   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'crear_turnos_programacion_parcial')
+union all
+select 'zonas_filtradas_por_estado_activo',
+  (select (prosrc like '%zonas_operativas z ON z.id = sz.zona_id AND z.estado = ''activo''%')::text
+   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'crear_turnos_programacion_parcial')
+union all
+select 'servicio_inactivo_en_prevalidacion',
+  (select (prosrc like '%OR NOT s.activo%')::text
    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname = 'crear_turnos_programacion_parcial')
 union all
