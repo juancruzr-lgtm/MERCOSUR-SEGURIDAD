@@ -5,6 +5,7 @@ import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { MINUTOS_AVISO_SALIDA_ANTICIPADA, minutosHastaFinDeTurno } from '@/lib/salida-anticipada'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
+import AvisoEvaluacion from '@/components/desempeno/AvisoEvaluacion'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
@@ -1895,6 +1896,14 @@ export default function GuardiaMobile({ user }: { user: any }) {
         <div style={{ marginBottom: 10 }}>
           <EstadoNotificaciones />
         </div>
+
+        {/* Se muestra hasta que abra la evaluación, y ahí desaparece solo. De
+            los 63 activos con evaluación publicada, 24 no tienen suscripción
+            push: para ellos este cartel es el único aviso que existe. */}
+        <AvisoEvaluacion
+          empleadoId={user.id}
+          onIr={() => router.push(`/guardias/${user.id}?seccion=desempeno`)}
+        />
 
         {/* Sólo aparece si hay algo que hacer: un cartel permanente en cero se
             vuelve parte del fondo y deja de leerse. */}
