@@ -3,6 +3,7 @@ import {
   esAusencia, novedadDelDia, etiquetaDia, estadoFilaClasificada,
   planGuardarClasificacion, observacionReclasificacion, observacionQuitar,
   resumenClasificacionMes, labelNovedadDia, TIPOS_NOVEDAD_DIA,
+  ESTADO_CLASIFICACION_QUITADA,
 } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { clasificarDia } from '@/lib/novedades-laborales'
@@ -118,6 +119,20 @@ describe('reclasificar sin duplicar', () => {
     expect(texto).toContain('Parte médico / Enfermedad → Falta injustificada')
     expect(texto).toContain('juancruzr')
     expect(texto).toContain('dijo que traía certificado')
+  })
+
+  it('el estado para quitar es uno que la tabla admite', () => {
+    // La tabla tiene CHECK (estado IN ('pendiente','aprobada','rechazada')).
+    // 'anulada' parecía la palabra natural y la base la rechaza con 400: la
+    // corrección no se podía guardar.
+    expect(['pendiente', 'aprobada', 'rechazada']).toContain(ESTADO_CLASIFICACION_QUITADA)
+  })
+
+  it('una novedad quitada deja el día sin clasificar en todos los consumidores', () => {
+    const quitada = [nov({ estado: ESTADO_CLASIFICACION_QUITADA })]
+    expect(novedadDelDia(quitada, PEREZ, '2026-08-14')).toBeNull()
+    expect(clasificarDia(quitada, PEREZ, '2026-08-14')).toBe('sin_clasificar')
+    expect(resumenClasificacionMes(quitada, PEREZ, '2026-08').total).toBe(0)
   })
 
   it('quitar deja constancia de qué se quitó', () => {

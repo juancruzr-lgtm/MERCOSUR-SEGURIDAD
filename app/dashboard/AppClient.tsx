@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
-import { TIPOS_NOVEDAD_DIA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
+import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
@@ -6660,9 +6660,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     }
   }
 
-  // Quitar deja rastro: estado 'anulada' + auditoría en la observación. La
-  // fila no se borra, pero deja de contar en todos los consumidores (todos
-  // filtran estado 'aprobada'). Es la salida para "clasifiqué el día equivocado".
+  // Quitar deja rastro: ESTADO_CLASIFICACION_QUITADA + auditoría en la
+  // observación. La fila no se borra, pero deja de contar en todos los
+  // consumidores (todos filtran 'aprobada'). Es la salida para "clasifiqué el
+  // día equivocado".
   const quitarClasificacionDia = async () => {
     if (!clasificandoDia?.novedad?.id) return
     const existente = clasificandoDia.novedad
@@ -6670,7 +6671,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     setGuardandoNovedad(true)
     try {
       const { error } = await supabase.from('novedades_laborales').update({
-        estado: 'anulada',
+        estado: ESTADO_CLASIFICACION_QUITADA,
+        // El CHECK de la tabla exige los dos campos para un estado resuelto.
+        aprobado_por: user?.id,
+        aprobado_at: new Date().toISOString(),
         observacion: observacionQuitar(existente, user?.email || user?.id || 'admin', new Date().toISOString()),
       }).eq('id', existente.id)
       if (error) throw error

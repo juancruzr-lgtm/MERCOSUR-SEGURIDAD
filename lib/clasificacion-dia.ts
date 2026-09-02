@@ -35,6 +35,19 @@
  * lado no se pisa desde acá: partirla a ciegas es inventar historia.
  */
 
+/**
+ * El estado con el que se retira una clasificación sin borrar la fila.
+ *
+ * Es 'rechazada' y no 'anulada' porque la tabla tiene un CHECK que sólo
+ * admite pendiente | aprobada | rechazada: cualquier otro valor vuelve como
+ * 400 y la corrección no se puede guardar. 'rechazada' ya significa "esta
+ * novedad no vale" y todos los consumidores (Reportes, Cumplimiento,
+ * Mi Desempeño, el legajo) filtran por 'aprobada', así que deja de contar en
+ * todos lados. Un segundo CHECK exige aprobado_por y aprobado_at no nulos
+ * para este estado: se escriben junto con él.
+ */
+export const ESTADO_CLASIFICACION_QUITADA = 'rechazada'
+
 import { ETIQUETA_TURNO_SIN_OBLIGACION } from '@/lib/planilla-acciones'
 import type { TipoNovedad } from '@/lib/novedades-laborales'
 
