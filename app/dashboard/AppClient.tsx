@@ -5,6 +5,8 @@ import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
+import { TIPOS_NOVEDAD_DIA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
+import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
@@ -6609,46 +6611,74 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     }
   }
 
-  // ── Clasificar día sin programación ─────────────────────────────────
-  const [clasificandoDia, setClasificandoDia] = useState<{ fecha: string; empleadoId: string } | null>(null)
+  // ── Clasificar día (cualquier día: con turno, sin turno, con o sin fichaje) ──
+  // La semántica vive en lib/clasificacion-dia: reclasificar ACTUALIZA la
+  // novedad del día (insertar otra dejaría ganando a la vieja por la regla
+  // pro-empleado de lib/novedades-laborales) y quitar la pasa a 'anulada'.
+  const [clasificandoDia, setClasificandoDia] = useState<{ fecha: string; empleadoId: string; novedad: NovedadDia | null } | null>(null)
   const [tipoNovedadDia, setTipoNovedadDia] = useState('franco')
   const [observacionNovedadDia, setObservacionNovedadDia] = useState('')
   const [guardandoNovedad, setGuardandoNovedad] = useState(false)
 
-  const TIPOS_NOVEDAD = [
-    { value: 'franco', label: 'Franco' },
-    { value: 'vacaciones', label: 'Vacaciones' },
-    { value: 'licencia', label: 'Licencia' },
-    { value: 'parte_medico', label: 'Parte médico / Enfermedad' },
-    { value: 'accidente', label: 'Accidente' },
-    { value: 'falta_justificada', label: 'Falta justificada' },
-    { value: 'falta_injustificada', label: 'Falta injustificada' },
-    { value: 'dia_estudio', label: 'Día de estudio' },
-    { value: 'suspension', label: 'Suspensión' },
-    { value: 'otra', label: 'Otra novedad' },
-  ] as const
-
   const guardarClasificacionDia = async () => {
     if (!clasificandoDia) return
+    const plan = planGuardarClasificacion(clasificandoDia.novedad)
+    if (plan.accion === 'bloqueada') { alert(plan.motivo); return }
     setGuardandoNovedad(true)
     try {
-      const { data, error } = await supabase.from('novedades_laborales').insert({
-        empleado_id: clasificandoDia.empleadoId,
-        tipo: tipoNovedadDia,
-        fecha_desde: clasificandoDia.fecha,
-        fecha_hasta: clasificandoDia.fecha,
-        observacion: observacionNovedadDia.trim() || null,
-        cargado_por: user?.id,
-        estado: 'aprobada',
-        aprobado_por: user?.id,
-        aprobado_at: new Date().toISOString(),
-      }).select().single()
-      if (error) throw error
-      if (data) setNovedadesLaborales((prev: any[]) => [...prev, data])
+      if (plan.accion === 'actualizar') {
+        const existente = clasificandoDia.novedad as NovedadDia
+        const { data, error } = await supabase.from('novedades_laborales').update({
+          tipo: tipoNovedadDia,
+          observacion: observacionReclasificacion(existente, tipoNovedadDia, observacionNovedadDia, user?.email || user?.id || 'admin', new Date().toISOString()),
+          aprobado_por: user?.id,
+          aprobado_at: new Date().toISOString(),
+        }).eq('id', plan.id).select().single()
+        if (error) throw error
+        if (data) setNovedadesLaborales((prev: any[]) => prev.map((n: any) => n.id === plan.id ? data : n))
+      } else {
+        const { data, error } = await supabase.from('novedades_laborales').insert({
+          empleado_id: clasificandoDia.empleadoId,
+          tipo: tipoNovedadDia,
+          fecha_desde: clasificandoDia.fecha,
+          fecha_hasta: clasificandoDia.fecha,
+          observacion: observacionNovedadDia.trim() || null,
+          cargado_por: user?.id,
+          estado: 'aprobada',
+          aprobado_por: user?.id,
+          aprobado_at: new Date().toISOString(),
+        }).select().single()
+        if (error) throw error
+        if (data) setNovedadesLaborales((prev: any[]) => [...prev, data])
+      }
       setClasificandoDia(null)
       setObservacionNovedadDia('')
     } catch (e: any) {
       alert(e.message || 'Error al clasificar día')
+    } finally {
+      setGuardandoNovedad(false)
+    }
+  }
+
+  // Quitar deja rastro: estado 'anulada' + auditoría en la observación. La
+  // fila no se borra, pero deja de contar en todos los consumidores (todos
+  // filtran estado 'aprobada'). Es la salida para "clasifiqué el día equivocado".
+  const quitarClasificacionDia = async () => {
+    if (!clasificandoDia?.novedad?.id) return
+    const existente = clasificandoDia.novedad
+    if (!confirm(`¿Quitar la clasificación "${labelNovedadDia(existente.tipo)}" del ${clasificandoDia.fecha}? El día vuelve a quedar sin clasificar.`)) return
+    setGuardandoNovedad(true)
+    try {
+      const { error } = await supabase.from('novedades_laborales').update({
+        estado: 'anulada',
+        observacion: observacionQuitar(existente, user?.email || user?.id || 'admin', new Date().toISOString()),
+      }).eq('id', existente.id)
+      if (error) throw error
+      setNovedadesLaborales((prev: any[]) => prev.filter((n: any) => n.id !== existente.id))
+      setClasificandoDia(null)
+      setObservacionNovedadDia('')
+    } catch (e: any) {
+      alert(e.message || 'Error al quitar la clasificación')
     } finally {
       setGuardandoNovedad(false)
     }
@@ -6859,6 +6889,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     return t.guardia_id === empleadoSeleccionado.id || guardiaOriginal === empleadoSeleccionado.id || guardiaReal === empleadoSeleccionado.id || tieneRegistro
   }) : []
 
+  // Clasificación del día para las filas CON turno: el cierre mensual necesita
+  // poder decir "faltó" sobre un turno programado, no sólo sobre un día vacío.
+  const novedadDeFecha = (fecha: string): NovedadDia | null =>
+    empleadoSeleccionado ? novedadDelDia(novedadesLaborales as NovedadDia[], empleadoSeleccionado.id, fecha) : null
+
   const planillaEmpleado = turnosEmpleado.map((turno: Turno) => {
     const registro = empleadoSeleccionado ? registroPrincipal(turno, empleadoSeleccionado.id) : undefined
     const registroOtroGuardia = !registro ? registroPrincipal(turno) : undefined
@@ -6868,8 +6903,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     const extra = guardiaOtro && guardiaOtro !== empleadoSeleccionado?.id
       ? `Ficho otro guardia: ${nombreGuardia(guardiaOtro)}`
       : null
-    const estado = estadoPlanilla(turno, registro)
+    const estadoBase = estadoPlanilla(turno, registro)
     const tieneEntrada = registro ? registroTieneEntradaConfirmada(registro) : false
+    const novedadDia = novedadDeFecha(turno.fecha)
+    const tieneCoberturaFila = tieneEntrada || horasLiquidables > 0
+    const estado = estadoFilaClasificada(estadoBase, novedadDia, tieneCoberturaFila)
 
     return {
       Fecha: formatFecha(turno.fecha),
@@ -6905,10 +6943,18 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _capacitacion: esCapacitacion(turno.tipo_evento),
       _tieneEntrada: tieneEntrada,
       _tieneCobertura: tieneEntrada || horasLiquidables > 0,
-      _sinFichar: !tieneEntrada && horasLiquidables === 0 && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
+      // Un día ya clasificado no es un "sin fichar" pendiente: alguien de
+      // Administración ya dijo qué pasó, y el contador del mes mide lo que
+      // FALTA resolver antes de liquidar.
+      _sinFichar: !tieneEntrada && horasLiquidables === 0 && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno) && !novedadDia,
       _enCurso: Boolean(registro?.hora_entrada_real && !registro?.hora_salida_real),
       _tarde: tieneEntrada && calcularMinutosTardanzaRegistro(turno, registro) > 0,
       _estadoCalendario: 'trabajado' as string,
+      // El día está clasificado y no se trabajó: la fila es una ausencia
+      // (o una justificación), no un "Sin fichar" pendiente de resolver.
+      _novedadDia: novedadDia,
+      _ausencia: Boolean(novedadDia) && !tieneCoberturaFila && esAusencia(novedadDia?.tipo || ''),
+      _diaClasificado: Boolean(novedadDia) && !tieneCoberturaFila,
     }
   })
 
@@ -6918,33 +6964,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     const ultimoDiaMes = new Date(aY, aM, 0).getDate()
     const fechasConTurno = new Set(planillaEmpleado.map((row: any) => row._fecha))
 
-    const novedadesEmpleado = novedadesLaborales.filter((n: any) => n.empleado_id === empleadoSeleccionado.id)
-    const novedadParaFecha = (fechaStr: string): any | null => {
-      return novedadesEmpleado.find((n: any) => n.fecha_desde <= fechaStr && n.fecha_hasta >= fechaStr) ?? null
-    }
-    const labelNovedad = (tipo: string): string => {
-      const labels: Record<string, string> = {
-        franco: 'Franco',
-        vacaciones: 'Vacaciones',
-        licencia: 'Licencia',
-        parte_medico: 'Parte médico',
-        accidente: 'Accidente',
-        falta_justificada: 'Falta justificada',
-        falta_injustificada: 'Falta injustificada',
-        dia_estudio: 'Día de estudio',
-        suspension: 'Suspensión',
-        otra: 'Otra novedad',
-      }
-      return labels[tipo] || tipo
-    }
-
     for (let d = 1; d <= ultimoDiaMes; d++) {
       const fechaStr = `${mes}-${String(d).padStart(2, '0')}`
       if (fechasConTurno.has(fechaStr)) continue
 
-      const novedad = novedadParaFecha(fechaStr)
+      const novedad = novedadDeFecha(fechaStr)
       const estadoCal = novedad ? 'novedad' : 'sin_programacion'
-      const estadoLabel = novedad ? labelNovedad(novedad.tipo) : 'Sin programación'
+      const estadoLabel = novedad
+        ? (esAusencia(novedad.tipo) ? `Ausencia — ${labelNovedadDia(novedad.tipo)}` : labelNovedadDia(novedad.tipo))
+        : 'Sin programación'
 
       planillaEmpleado.push({
         Fecha: formatFecha(fechaStr),
@@ -6974,6 +7002,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         _enCurso: false,
         _tarde: false,
         _estadoCalendario: estadoCal,
+        _novedadDia: novedad,
+        _ausencia: Boolean(novedad) && esAusencia(novedad?.tipo || ''),
+        _diaClasificado: Boolean(novedad),
       })
     }
 
@@ -7006,6 +7037,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     feriados: resumirFeriados(planillaEmpleado.map((row: any) => ({
       fecha: row._fecha, cuenta: Boolean(row._feriadoCuenta), horas: row._horasLiquidables || 0,
     }))),
+    clasificacion: empleadoSeleccionado
+      ? resumenClasificacionMes(novedadesLaborales as NovedadDia[], empleadoSeleccionado.id, mes)
+      : { ausencias: 0, justificados: 0, total: 0 },
   }
 
   // Planilla por objetivo: una fila por registro (no por turno).
@@ -7064,7 +7098,13 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const filasVacias = turnosSinRegistroObj.map((turno: Turno) => {
     const esTransicion = turno.estado === 'cubierto' && esPeriodoTransicion(turno.fecha)
     const horasLiquidables = esTransicion ? horasProgramadasTurno(turno) : 0
-    const estado = esTransicion ? 'Cubierto' : estadoPlanilla(turno, undefined)
+    // La ausencia del vigilador asignado también se lee acá: el objetivo tuvo
+    // el puesto sin cubrir por una falta, no por un turno pendiente de resolver.
+    const novedadTurno = turno.guardia_id
+      ? novedadDelDia(novedadesLaborales as NovedadDia[], turno.guardia_id, turno.fecha)
+      : null
+    const estadoCrudo = esTransicion ? 'Cubierto' : estadoPlanilla(turno, undefined)
+    const estado = esTransicion ? 'Cubierto' : estadoFilaClasificada(estadoCrudo, novedadTurno, false)
     return {
       Fecha: formatFecha(turno.fecha),
       Día: diaSemana(turno.fecha),
@@ -7094,7 +7134,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _horasLiquidables: horasLiquidables,
       _capacitacion: esCapacitacion(turno.tipo_evento),
       _cubierto: esTransicion,
-      _sinFichar: !esTransicion && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno),
+      _novedadDia: novedadTurno,
+      _ausencia: Boolean(novedadTurno) && esAusencia(novedadTurno?.tipo || ''),
+      // Clasificado = ya resuelto: deja de contar como "sin fichar" pendiente.
+      _sinFichar: !esTransicion && Boolean(turno.guardia_id) && pasoVentanaFichaje(turno) && !novedadTurno,
       // Un objetivo pausado no genera obligacion de cobertura: no hay puesto
       // descubierto que marcar en la planilla.
       _descubierto: !esTransicion && turnoSinCoberturaOperativa(turno)
@@ -7378,6 +7421,9 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       ['Feriados nacionales cubiertos', totalesEmpleado.feriados.feriadosCubiertos],
       ['Horas trabajadas en feriados', Number(totalesEmpleado.feriados.horas.toFixed(2))],
       ['Los feriados se cuentan por la fecha de inicio del turno. Es información: no altera las horas liquidables.'],
+      ['Ausencias (falta injustificada)', totalesEmpleado.clasificacion.ausencias],
+      ['Días justificados', totalesEmpleado.clasificacion.justificados],
+      ['Las ausencias no liquidan horas. El turno programado se conserva como constancia.'],
     ]
     const nombre = `empleado_${archivoParte(`${empleadoSeleccionado.apellido}_${empleadoSeleccionado.nombre}`)}_${mesArchivo()}.xlsx`
 
@@ -7490,11 +7536,17 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         }),
       ])
 
+      // Días que Administración clasificó en el mes. Mismo tratamiento que los
+      // feriados: es conteo para el cierre, no liquidación.
+      const clasificacion = resumenClasificacionMes(novedadesLaborales as NovedadDia[], g.id, mes)
+
       return {
         Legajo: g.cuil ? formatCuil(g.cuil) : (g.legajo || '—'),
         Apellido: g.apellido,
         Nombre: g.nombre,
         'Días Trabajados': dias,
+        Ausencias: clasificacion.ausencias,
+        'Días Justificados': clasificacion.justificados,
         'Horas Totales': horasReales.toFixed(2),
         'Horas Reales': horasReales.toFixed(2),
         'Horas Liquidables': horasLiquidables.toFixed(2),
@@ -7505,9 +7557,13 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         'Horas en Feriados': feriados.horas.toFixed(2),
         _registros: regs.length,
         _fallback: turnosFallback.length,
+        _clasificados: clasificacion.total,
       }
     })
-    .filter((g: any) => verTodos || g._registros > 0 || g._fallback > 0)
+    // Un mes con ausencias y sin un solo fichaje sigue siendo información de
+    // cierre: si se filtrara por actividad, el que faltó todo el mes
+    // desaparecería justo del reporte donde hay que verlo.
+    .filter((g: any) => verTodos || g._registros > 0 || g._fallback > 0 || g._clasificados > 0)
 
   const reporteObjetivos = objetivos
     .map((o: Objetivo) => {
@@ -7575,6 +7631,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       row.Legajo || '—',
       `${row.Apellido || ''}, ${row.Nombre || ''}`.trim(),
       Number(row['Días Trabajados']) || 0,
+      Number(row.Ausencias) || 0,
+      Number(row['Días Justificados']) || 0,
       Number(row['Horas Reales']) || 0,
       Number(row['Horas Liquidables']) || 0,
       Number(row['En Curso']) || 0,
@@ -7586,25 +7644,29 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     const totales = {
       guardias: filasGuardias.length,
       dias: filasGuardias.reduce((sum: number, row: any[]) => sum + row[2], 0),
-      horasReales: filasGuardias.reduce((sum: number, row: any[]) => sum + row[3], 0),
-      horasLiquidables: filasGuardias.reduce((sum: number, row: any[]) => sum + row[4], 0),
-      enCurso: filasGuardias.reduce((sum: number, row: any[]) => sum + row[5], 0),
-      tardanzas: filasGuardias.reduce((sum: number, row: any[]) => sum + row[6], 0),
-      salidasAnticipadas: filasGuardias.reduce((sum: number, row: any[]) => sum + row[7], 0),
-      feriadosCubiertos: filasGuardias.reduce((sum: number, row: any[]) => sum + row[8], 0),
-      horasFeriados: filasGuardias.reduce((sum: number, row: any[]) => sum + row[9], 0),
+      ausencias: filasGuardias.reduce((sum: number, row: any[]) => sum + row[3], 0),
+      justificados: filasGuardias.reduce((sum: number, row: any[]) => sum + row[4], 0),
+      horasReales: filasGuardias.reduce((sum: number, row: any[]) => sum + row[5], 0),
+      horasLiquidables: filasGuardias.reduce((sum: number, row: any[]) => sum + row[6], 0),
+      enCurso: filasGuardias.reduce((sum: number, row: any[]) => sum + row[7], 0),
+      tardanzas: filasGuardias.reduce((sum: number, row: any[]) => sum + row[8], 0),
+      salidasAnticipadas: filasGuardias.reduce((sum: number, row: any[]) => sum + row[9], 0),
+      feriadosCubiertos: filasGuardias.reduce((sum: number, row: any[]) => sum + row[10], 0),
+      horasFeriados: filasGuardias.reduce((sum: number, row: any[]) => sum + row[11], 0),
     }
     const filas = [
       ['Resumen guardias'],
       [`Generado: ${formatFechaHora(new Date())}`],
       [filtrosReporte()],
       [],
-      ['Legajo', 'Guardia', 'Días trabajados', 'Horas reales', 'Horas liquidables', 'En curso', 'Tardanzas', 'Salidas anticipadas', 'Feriados cubiertos', 'Horas en feriados'],
+      ['Legajo', 'Guardia', 'Días trabajados', 'Ausencias', 'Días justificados', 'Horas reales', 'Horas liquidables', 'En curso', 'Tardanzas', 'Salidas anticipadas', 'Feriados cubiertos', 'Horas en feriados'],
       ...filasGuardias,
       [],
       ['Totales'],
       ['Guardias', totales.guardias],
       ['Días trabajados', totales.dias],
+      ['Ausencias (falta injustificada)', totales.ausencias],
+      ['Días justificados', totales.justificados],
       ['Horas reales totales', Number(totales.horasReales.toFixed(2))],
       ['Horas liquidables totales', Number(totales.horasLiquidables.toFixed(2))],
       ['Turnos en curso', totales.enCurso],
@@ -7614,7 +7676,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       ['Horas en feriados', Number(totales.horasFeriados.toFixed(2))],
     ]
 
-    await descargarXLSX(`resumen_guardias_${mesArchivo()}.xlsx`, filas, 4, filasGuardias.length, [3, 4, 1])
+    await descargarXLSX(`resumen_guardias_${mesArchivo()}.xlsx`, filas, 4, filasGuardias.length, [5, 6, 1])
   }
 
   const exportarResumenObjetivosXLSX = async () => {
@@ -7811,6 +7873,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             {totalBox('Feriados nacionales cubiertos', totalesEmpleado.feriados.feriadosCubiertos)}
             {totalBox('Horas trabajadas en feriados', totalesEmpleado.feriados.horas.toFixed(2),
               'No modifica las horas liquidables.')}
+            {totalBox('Ausencias', totalesEmpleado.clasificacion.ausencias)}
+            {totalBox('Días justificados', totalesEmpleado.clasificacion.justificados)}
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Fecha</th><th style={S.th}>Día</th><th style={S.th}>Objetivo</th><th style={S.th}>Programado</th><th style={S.th}>Entrada</th><th style={S.th}>Salida</th><th style={S.th}>Hs reales</th><th style={S.th}>Hs liquidables</th><th style={S.th}>Caract.</th><th style={S.th}>Estado</th><th style={S.th}>Origen</th><th style={S.th}>Observaciones / alertas</th><th style={S.th}>GPS ingreso</th><th style={S.th}>Distancia ingreso</th><th style={S.th}>Estado GPS ingreso</th><th style={S.th}></th></tr></thead>
@@ -7899,12 +7963,22 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         </button>
                       </div>
                     )}
-                    {row._estadoCalendario === 'sin_programacion' && empleadoSeleccionado && (
+                    {/* Disponible en TODA fila: con turno, sin turno, con o sin
+                        fichaje. Los días sin fichaje son justamente los que hay
+                        que clasificar al cierre del mes. */}
+                    {empleadoSeleccionado && (
                       <button
-                        style={{ ...S.btn, padding:'4px 8px', fontSize:11, background:'#1e3a5f', color:'#93c5fd', border:'1px solid #1e40af' }}
-                        onClick={() => { setClasificandoDia({ fecha: row._fecha, empleadoId: empleadoSeleccionado.id }); setTipoNovedadDia('franco'); setObservacionNovedadDia('') }}
+                        style={{ ...S.btn, padding:'4px 8px', fontSize:11, marginTop: row._registro || row._sinFichar || row._turno_id ? 4 : 0,
+                          background: row._novedadDia ? '#3b2f0b' : '#1e3a5f', color: row._novedadDia ? '#fcd34d' : '#93c5fd',
+                          border: `1px solid ${row._novedadDia ? '#92400e' : '#1e40af'}` }}
+                        onClick={() => {
+                          const nov = row._novedadDia as NovedadDia | null
+                          setClasificandoDia({ fecha: row._fecha, empleadoId: empleadoSeleccionado.id, novedad: nov })
+                          setTipoNovedadDia(nov?.tipo || 'franco')
+                          setObservacionNovedadDia('')
+                        }}
                       >
-                        Clasificar día
+                        {row._novedadDia ? 'Reclasificar día' : 'Clasificar día'}
                       </button>
                     )}
                   </td>
@@ -8033,13 +8107,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={exportarResumenGuardiasXLSX}>Exportar XLSX</button>
           </div>
           <table style={S.table}>
-            <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th><th style={S.th}>Feriados</th><th style={S.th}>Hs Feriados</th></tr></thead>
+            <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Ausencias</th><th style={S.th}>Días Justif.</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th><th style={S.th}>Feriados</th><th style={S.th}>Hs Feriados</th></tr></thead>
             <tbody>
               {reporteGuardias.map((g: any) => (
                 <tr key={g.Legajo}>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700, color:'#f59e0b' }}>{g.Legajo}</td>
                   <td style={S.td}><strong>{g.Apellido}, {g.Nombre}</strong></td>
                   <td style={S.td}>{g['Días Trabajados']}</td>
+                  <td style={S.td}>{g.Ausencias > 0 ? <Badge type="descubierto">{g.Ausencias}</Badge> : '—'}</td>
+                  <td style={S.td}>{g['Días Justificados'] > 0 ? <strong style={{ color:'#38bdf8' }}>{g['Días Justificados']}</strong> : '—'}</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700 }}>{g['Horas Reales']}h</td>
                   <td style={{ ...S.td, fontFamily:'Syne,sans-serif', fontWeight:700, color:'#10b981' }}>{g['Horas Liquidables']}h</td>
                   <td style={S.td}>{g['En Curso'] > 0 ? <Badge type="pendiente">{g['En Curso']}</Badge> : '—'}</td>
@@ -8328,24 +8404,37 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       {clasificandoDia && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setClasificandoDia(null)}>
           <div style={{ background:'#1e293b', borderRadius:12, padding:24, width:'100%', maxWidth:380, border:'1px solid #334155' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize:18, fontWeight:700, marginBottom:4 }}>Clasificar día</div>
-            <div style={{ fontSize:13, color:'#94a3b8', marginBottom:16 }}>{clasificandoDia.fecha}</div>
+            <div style={{ fontSize:18, fontWeight:700, marginBottom:4 }}>{clasificandoDia.novedad ? 'Reclasificar día' : 'Clasificar día'}</div>
+            <div style={{ fontSize:13, color:'#94a3b8', marginBottom:16 }}>
+              {clasificandoDia.fecha}
+              {clasificandoDia.novedad && <> · hoy figura como <strong style={{ color:'#fcd34d' }}>{labelNovedadDia(clasificandoDia.novedad.tipo)}</strong></>}
+            </div>
             <div style={{ display:'grid', gap:12 }}>
               <div>
                 <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Tipo de novedad</label>
                 <select value={tipoNovedadDia} onChange={e => setTipoNovedadDia(e.target.value)} style={{ ...S.input, width:'100%' }}>
-                  {TIPOS_NOVEDAD.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  {TIPOS_NOVEDAD_DIA.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
               <div>
                 <label style={{ display:'block', fontSize:12, color:'#94a3b8', marginBottom:4 }}>Observación (opcional)</label>
                 <textarea value={observacionNovedadDia} onChange={e => setObservacionNovedadDia(e.target.value)} style={{ ...S.input, width:'100%', minHeight:50, resize:'vertical' }} placeholder="Detalle adicional..." />
               </div>
+              {esAusencia(tipoNovedadDia) && (
+                <div style={{ fontSize:12, color:'#fca5a5', background:'#450a0a', border:'1px solid #7f1d1d', borderRadius:8, padding:'8px 10px' }}>
+                  El día queda registrado como <strong>ausencia</strong>: no liquida horas, no cuenta como cobertura y deja de figurar como pendiente. El turno programado NO se borra ni se anula: queda como constancia de que el vigilador debía presentarse.
+                </div>
+              )}
             </div>
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 }}>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16, flexWrap:'wrap' }}>
+              {clasificandoDia.novedad && (
+                <button style={{ ...S.btn, background:'#450a0a', color:'#fca5a5', border:'1px solid #7f1d1d', marginRight:'auto' }} disabled={guardandoNovedad} onClick={quitarClasificacionDia}>
+                  Quitar clasificación
+                </button>
+              )}
               <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setClasificandoDia(null)}>Cancelar</button>
               <button style={{ ...S.btn, ...S.btnPrimary }} disabled={guardandoNovedad} onClick={guardarClasificacionDia}>
-                {guardandoNovedad ? 'Guardando...' : 'Clasificar'}
+                {guardandoNovedad ? 'Guardando...' : clasificandoDia.novedad ? 'Guardar cambio' : 'Clasificar'}
               </button>
             </div>
           </div>
