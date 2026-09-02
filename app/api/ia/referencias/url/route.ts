@@ -11,10 +11,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { alcanzaObjetivo, objetivoDePunto, requireOperadorIA } from '../../_lib/auth'
 import { BUCKET_REFERENCIAS } from '@/lib/ia/referencias'
+import { firmarEnLote } from '@/lib/firmas-storage'
+import type { ItemFirma } from '@/lib/firmas-storage'
 
 export const runtime = 'nodejs'
 
-const URL_FIRMA_SEGUNDOS = 300
+/** Una hora, igual que la bandeja de evidencias: mirar referencias lleva más
+ *  de cinco minutos y las fotos desaparecían en mitad del trabajo. */
+const URL_FIRMA_SEGUNDOS = 3600
 const MAX_IDS = 60
 
 export async function POST(req: NextRequest) {
@@ -51,8 +55,19 @@ export async function POST(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const urls: Record<string, string> = {}
+  // El alcance de cada punto se resuelve una sola vez: varias referencias del
+  // mismo punto compartían las mismas dos consultas repetidas.
+  const alcancePunto = new Map<string, boolean>()
+  const puntoPermitido = async (rondaPuntoId: string): Promise<boolean> => {
+    const cacheado = alcancePunto.get(rondaPuntoId)
+    if (cacheado !== undefined) return cacheado
+    const objetivoId = await objetivoDePunto(ctx.client, rondaPuntoId)
+    const ok = objetivoId ? await alcanzaObjetivo(ctx.client, ctx.usuario, objetivoId) : false
+    alcancePunto.set(rondaPuntoId, ok)
+    return ok
+  }
 
+  const items: ItemFirma[] = []
   for (const fila of (filas ?? []) as any[]) {
     // Cinturón y tirantes: si una fila apuntara a otro bucket, no se firma.
     if (fila.bucket !== BUCKET_REFERENCIAS) continue
@@ -60,18 +75,17 @@ export async function POST(req: NextRequest) {
     // Las referencias de punto son las únicas con alcance territorial. Las de
     // uniforme y libro son globales y cualquier operador activo puede verlas
     // (necesita ver el criterio para poder juzgar una foto después).
-    if (tipo === 'punto') {
-      const objetivoId = await objetivoDePunto(ctx.client, fila.ronda_punto_id)
-      if (!objetivoId) continue
-      if (!(await alcanzaObjetivo(ctx.client, ctx.usuario, objetivoId))) continue
-    }
+    if (tipo === 'punto' && !(await puntoPermitido(fila.ronda_punto_id))) continue
 
-    const { data: firma } = await ctx.client.storage
-      .from(BUCKET_REFERENCIAS)
-      .createSignedUrl(fila.storage_path, URL_FIRMA_SEGUNDOS)
-
-    if (firma?.signedUrl) urls[fila.id] = firma.signedUrl
+    if (!fila.storage_path) continue
+    items.push({ id: fila.id, bucket: BUCKET_REFERENCIAS, path: fila.storage_path })
   }
+
+  // Firma en lote: una llamada a Storage en vez de una por imagen.
+  const urls = await firmarEnLote(items, async (bucket, paths) => {
+    const { data } = await ctx.client.storage.from(bucket).createSignedUrls(paths, URL_FIRMA_SEGUNDOS)
+    return data ?? []
+  })
 
   return NextResponse.json({ urls, expira_en_s: URL_FIRMA_SEGUNDOS })
 }
