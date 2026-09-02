@@ -37,6 +37,11 @@ import { sendWebPush } from '../../_lib/web-push'
 import type { PushPayload, PushSubscriptionRow } from '../../_lib/web-push'
 
 export const dynamic = 'force-dynamic'
+// Sin esto, la lectura de `notificaciones_enviadas` vuelve del caché de fetch de
+// Next y la deduplicación lee un estado anterior al envío: la ruta creería que
+// no avisó a nadie y volvería a escribirle a los mismos teléfonos. Es el mismo
+// defecto que ya rompió la deduplicación de push una vez.
+export const fetchCache = 'force-no-store'
 
 const TITULO = 'Mercosur · Tu evaluación'
 
