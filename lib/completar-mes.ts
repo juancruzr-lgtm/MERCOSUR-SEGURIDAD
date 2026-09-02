@@ -268,6 +268,37 @@ export function motivoBloqueoConfirmar(filas: FilaPrevision[], seleccion: Set<st
   return null
 }
 
+// ── Quién puede COMPLETAR MES en esta grilla ────────────────────────────────
+//
+// Esto solo decide qué botón ofrecer: la autorización REAL vive en la RPC
+// crear_turnos_programacion_parcial, que valida rol, estado y zona en el
+// servidor con todo-o-nada. Ocultar el botón es cortesía, no seguridad.
+
+export const MENSAJE_FUERA_DE_ZONA =
+  'Completar mes está disponible solo para objetivos de tus zonas.'
+
+/**
+ * Admin: siempre — sin ninguna restricción de zona (no necesita
+ * supervisor_zonas, no le importa si el objetivo tiene zona ni si la zona
+ * está inactiva). Supervisor: solo si el objetivo tiene zona y esa zona está
+ * entre las suyas; `zonasSupervisor` debe contener SOLO zonas operativas
+ * ACTIVAS (así lo carga la grilla, y la RPC lo revalida igual en servidor) —
+ * sin zonas activas no hay alcance. Cualquier otro rol: nunca. La
+ * declaración de estructura NO entra acá: sigue siendo de Administración.
+ */
+export function puedeUsarCompletarMes(params: {
+  esAdmin?: boolean
+  rolUsuario?: string | null
+  zonaObjetivo?: string | null
+  zonasSupervisor?: ReadonlySet<string> | null
+}): boolean {
+  const { esAdmin, rolUsuario, zonaObjetivo, zonasSupervisor } = params
+  if (esAdmin === true || rolUsuario === 'admin') return true
+  if (rolUsuario !== 'supervisor') return false
+  if (!zonaObjetivo || !zonasSupervisor || zonasSupervisor.size === 0) return false
+  return zonasSupervisor.has(zonaObjetivo)
+}
+
 // ── Aviso: lo declarado vs. lo realmente programado el mes anterior ─────────
 
 export const AVISO_DIVERGENCIA_MES_ANTERIOR =

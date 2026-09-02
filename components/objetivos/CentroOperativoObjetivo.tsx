@@ -34,9 +34,9 @@ import type {
 import { diaSemanaCorto } from '@/lib/programacion'
 import type { ResultadoCreacion, ResultadoPrevision } from '@/lib/programacion'
 import {
-  MENSAJE_BLOQUEO_COMPLETAR, avisoDivergenciaMesAnterior, motivoBloqueoConfirmar,
-  payloadSeleccionServicios, previsionPorServicio, resumenCompletarMes,
-  seleccionInicialCompletar, totalesDeSeleccion,
+  MENSAJE_BLOQUEO_COMPLETAR, MENSAJE_FUERA_DE_ZONA, avisoDivergenciaMesAnterior,
+  motivoBloqueoConfirmar, payloadSeleccionServicios, previsionPorServicio,
+  puedeUsarCompletarMes, resumenCompletarMes, seleccionInicialCompletar, totalesDeSeleccion,
 } from '@/lib/completar-mes'
 import { clasificarPuestos } from '@/lib/puestos'
 import { analizarCoberturaHistorica } from '@/lib/cobertura-historica'
@@ -193,6 +193,30 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const [faseCompletar, setFaseCompletar] = useState<'previa' | 'creando' | 'resultado'>('previa')
   const [resultadoCompletar, setResultadoCompletar] = useState<ResultadoCreacion | null>(null)
   const [errorCompletar, setErrorCompletar] = useState('')
+  // Zonas del supervisor logueado (solo cortesía de UI: la RPC revalida el
+  // alcance en servidor con todo-o-nada). null = no cargadas todavía.
+  const [zonasSupervisor, setZonasSupervisor] = useState<Set<string> | null>(null)
+
+  useEffect(() => {
+    if (rolUsuario !== 'supervisor') return
+    let vivo = true
+    void (async () => {
+      const { data: au } = await supabase.auth.getUser()
+      if (!vivo || !au?.user?.id) return
+      const { data: yo } = await supabase.from('usuarios')
+        .select('id').eq('auth_user_id', au.user.id).maybeSingle()
+      if (!vivo || !yo?.id) { setZonasSupervisor(new Set()); return }
+      // Solo zonas ACTIVAS: una asignación a zona inactiva no habilita nada
+      // (misma regla que la RPC, que además la revalida en servidor).
+      const { data: zs } = await supabase.from('supervisor_zonas')
+        .select('zona_id, zona:zonas_operativas!inner(estado)')
+        .eq('supervisor_id', yo.id)
+        .eq('zona.estado', 'activo')
+      if (!vivo) return
+      setZonasSupervisor(new Set((zs ?? []).map((z: any) => z.zona_id)))
+    })()
+    return () => { vivo = false }
+  }, [rolUsuario])
 
   const [vigiladoresActivos, setVigiladoresActivos] = useState<VigiladorGrilla[]>([])
   const [sugeridoPorPuesto, setSugeridoPorPuesto] = useState<Map<string, string>>(new Map())
@@ -1331,6 +1355,12 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             })
             const etiquetaMes = new Date(anioMensual, mesNumMensual - 1, 1)
               .toLocaleDateString('es-AR', { month: 'long', year: 'numeric' }).toUpperCase()
+            // Cortesía de UI: la RPC vuelve a validar rol y zona en servidor.
+            const puedeCompletar = puedeUsarCompletarMes({
+              esAdmin, rolUsuario,
+              zonaObjetivo: datos?.objetivo.zona_id ?? null,
+              zonasSupervisor,
+            })
             return (
               <div style={{ marginTop:12 }}>
                 {/* ── PROGRAMACIÓN — bloque Completar mes ─────────────────── */}
@@ -1371,7 +1401,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                             <div style={{ fontSize:10, color:'#64748b' }}>{chip.label}</div>
                           </div>
                         ))}
-                        {esAdmin && (
+                        {puedeCompletar && (
                           <button type="button"
                             disabled={completar.resumen!.faltantes === 0}
                             style={{ ...S.btn, ...S.btnPrimary, padding:'8px 16px', fontSize:13,
@@ -1379,6 +1409,9 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                             onClick={() => { setCompletarPrevision(completar.resumen!.prevision); setSeleccionCompletar(seleccionInicialCompletar(completar.logica)); setFaseCompletar('previa'); setResultadoCompletar(null); setErrorCompletar('') }}>
                             COMPLETAR MES
                           </button>
+                        )}
+                        {!puedeCompletar && rolUsuario === 'supervisor' && completar.resumen!.faltantes > 0 && (
+                          <span style={{ fontSize:12, color:'#94a3b8' }}>{MENSAJE_FUERA_DE_ZONA}</span>
                         )}
                         {completar.resumen!.faltantes === 0 && (
                           <span style={{ fontSize:12, color:'#10b981' }}>El mes ya está completo según la estructura declarada.</span>

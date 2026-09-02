@@ -8,6 +8,7 @@ import {
   logicaHabitualDeclarada,
   motivoBloqueoConfirmar,
   payloadSeleccionServicios,
+  puedeUsarCompletarMes,
   previsionPorServicio,
   resumenCompletarMes,
   seleccionInicialCompletar,
@@ -260,6 +261,41 @@ describe('horasDeFranja', () => {
     expect(horasDeFranja('08:45', '16:45')).toBe(8)
     expect(horasDeFranja('12:00', '19:00')).toBe(7)
     expect(horasDeFranja('22:00', '06:00')).toBe(8)
+  })
+})
+
+// ── Quién puede usar COMPLETAR MES (gate de UI; la RPC revalida en server) ──
+
+describe('puedeUsarCompletarMes', () => {
+  const ROSARIO = 'zona-rosario'
+  const RAFAELA = 'zona-rafaela'
+
+  it('admin: siempre, con o sin zonas', () => {
+    expect(puedeUsarCompletarMes({ esAdmin: true, rolUsuario: 'admin', zonaObjetivo: ROSARIO, zonasSupervisor: null })).toBe(true)
+    expect(puedeUsarCompletarMes({ rolUsuario: 'admin', zonaObjetivo: null, zonasSupervisor: null })).toBe(true)
+  })
+
+  it('supervisor con el objetivo en su zona: permitido', () => {
+    expect(puedeUsarCompletarMes({ rolUsuario: 'supervisor', zonaObjetivo: ROSARIO, zonasSupervisor: new Set([ROSARIO]) })).toBe(true)
+  })
+
+  it('supervisor con objetivo de otra zona: rechazado', () => {
+    expect(puedeUsarCompletarMes({ rolUsuario: 'supervisor', zonaObjetivo: RAFAELA, zonasSupervisor: new Set([ROSARIO]) })).toBe(false)
+  })
+
+  it('supervisor sin zonas asignadas: rechazado (misma regla que la RPC)', () => {
+    expect(puedeUsarCompletarMes({ rolUsuario: 'supervisor', zonaObjetivo: ROSARIO, zonasSupervisor: new Set() })).toBe(false)
+    expect(puedeUsarCompletarMes({ rolUsuario: 'supervisor', zonaObjetivo: ROSARIO, zonasSupervisor: null })).toBe(false)
+  })
+
+  it('objetivo sin zona: el supervisor no puede', () => {
+    expect(puedeUsarCompletarMes({ rolUsuario: 'supervisor', zonaObjetivo: null, zonasSupervisor: new Set([ROSARIO]) })).toBe(false)
+  })
+
+  it('guardia, vigilador o sin rol: nunca', () => {
+    expect(puedeUsarCompletarMes({ rolUsuario: 'guardia', zonaObjetivo: ROSARIO, zonasSupervisor: new Set([ROSARIO]) })).toBe(false)
+    expect(puedeUsarCompletarMes({ rolUsuario: 'vigilador', zonaObjetivo: ROSARIO, zonasSupervisor: new Set([ROSARIO]) })).toBe(false)
+    expect(puedeUsarCompletarMes({ rolUsuario: null, zonaObjetivo: ROSARIO, zonasSupervisor: new Set([ROSARIO]) })).toBe(false)
   })
 })
 
