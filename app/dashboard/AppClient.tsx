@@ -8,6 +8,7 @@ import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendie
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
+import { construirResumenGuardia, filasXLSXResumenGuardia } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -7691,6 +7692,25 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     await descargarXLSX(`resumen_guardias_${mesArchivo()}.xlsx`, filas, 4, filasGuardias.length, [5, 6, 1])
   }
 
+  // Resumen Guardia mensual (Fase 0B): el insumo pre-liquidación que hasta
+  // ahora se contaba a mano de las planillas. Horas canónicas vía
+  // lib/resumen-guardia (que a su vez sólo usa resolverLineaLiquidacion),
+  // jornadas con el criterio "nocturno que cruza medianoche = 1", objetivos
+  // de prueba excluidos por es_prueba, novedades sólo las cargadas en la app.
+  const exportarResumenGuardiaMensualXLSX = async () => {
+    const resumen = construirResumenGuardia({
+      mes,
+      empleados: empleados.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, cuil: g.cuil, legajo: g.legajo })),
+      turnos: turnosMes,
+      registros: registrosMes,
+      novedades: novedadesLaborales,
+      esObjetivoPrueba: (id?: string | null) => Boolean(objetivoPorIdPlanilla.get(id || '')?.es_prueba),
+      nombreObjetivo: (id?: string | null) => objetivoPorIdPlanilla.get(id || '')?.nombre ?? '',
+    })
+    if (resumen.filas.length === 0) return
+    await descargarXLSX(`resumen_guardia_${mesArchivo()}.xlsx`, filasXLSXResumenGuardia(resumen), 3, resumen.filas.length, [6, 7, 10])
+  }
+
   const exportarResumenObjetivosXLSX = async () => {
     if (reporteObjetivos.length === 0) return
 
@@ -8116,6 +8136,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         <div style={S.card}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:16 }}>
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Guardia</strong>
+            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12, marginRight:8 }} onClick={exportarResumenGuardiaMensualXLSX} title="Insumo mensual de liquidación: jornadas, horas canónicas, feriados y novedades cargadas. Sin objetivos de prueba.">Resumen Guardia (liquidación)</button>
             <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={exportarResumenGuardiasXLSX}>Exportar XLSX</button>
           </div>
           <table style={S.table}>
