@@ -63,6 +63,18 @@ export interface NovedadResumen extends NovedadLaboral {
   id?: string | null
 }
 
+/**
+ * Configuración de nocturnidad del objetivo/servicio (columnas
+ * objetivos.nocturnidad_activa/desde/hasta). Es una condición contractual del
+ * servicio: el resumen sólo la consume, nunca la decide.
+ */
+export interface ConfigNocturnidad {
+  activa: boolean
+  /** 'HH:MM' (o 'HH:MM:SS'); la franja puede cruzar la medianoche. */
+  desde: string | null
+  hasta: string | null
+}
+
 export interface ParamsResumenGuardia {
   /** Mes operativo, formato 'YYYY-MM'. */
   mes: string
@@ -77,6 +89,11 @@ export interface ParamsResumenGuardia {
   esObjetivoPrueba: (objetivoId?: string | null) => boolean
   /** Nombre visible del objetivo, para la columna Objetivo/s. */
   nombreObjetivo?: (objetivoId?: string | null) => string
+  /**
+   * Configuración de nocturnidad por objetivo. Si no se provee, la columna
+   * queda como dato no determinado (null), nunca como 0 inventado.
+   */
+  nocturnidadObjetivo?: (objetivoId?: string | null) => ConfigNocturnidad | null
 }
 
 // ── Tipos de salida ───────────────────────────────────────────────────────────
@@ -103,12 +120,15 @@ export interface FilaResumenGuardia {
   feriadosTrabajados: number
   horasEnFeriado: number
   /**
-   * Horas nocturnas: la regla de a quién corresponde es contractual por
-   * cliente/servicio y todavía no está configurada en el sistema.
-   * Siempre null en esta versión — el campo existe para que el formato del
-   * resumen ya la contemple. No confundir con 0.
+   * Subconjunto de las horas liquidables que cae dentro de la franja nocturna
+   * configurada en el objetivo (objetivos.nocturnidad_activa/desde/hasta).
+   * Es un PLUS informativo: NUNCA se resta de horasLiquidables — un turno
+   * 19:00–07:00 reconocido entero es 12 liquidables y 8 nocturnas.
+   * 0 = se pudo determinar que no corresponde (objetivo sin nocturnidad, o
+   * turno fuera de la franja). null = no se pudo determinar (sin configuración
+   * disponible) — nunca se inventa un 0.
    */
-  horasNocturnas: null
+  horasNocturnas: number | null
   licencias: DiasNovedad
   art: DiasNovedad
   vacaciones: DiasNovedad
@@ -132,6 +152,8 @@ export interface ResumenGuardiaMes {
     jornadas: number
     horasReales: number
     horasLiquidables: number
+    /** Suma de las filas con dato; las filas null (no determinado) no aportan. */
+    horasNocturnas: number
     feriadosTrabajados: number
   }
 }
@@ -149,6 +171,42 @@ function cruzaMedianoche(turno: TurnoUniverso): boolean {
   const [hi, mi] = turno.hora_inicio.split(':').map(Number)
   const [hf, mf] = turno.hora_fin.split(':').map(Number)
   return (hf * 60 + mf) <= (hi * 60 + mi)
+}
+
+function minutosDelDia(hhmm: string): number {
+  const [h, m] = hhmm.slice(0, 5).split(':').map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+
+/**
+ * Horas del tramo [entrada, salida] que caen dentro de la franja nocturna
+ * [desde, hasta]. Tanto el tramo como la franja pueden cruzar la medianoche
+ * (salida <= entrada, o hasta <= desde). Devuelve horas con decimales — los
+ * minutos no se redondean acá.
+ */
+export function horasNocturnasTramo(
+  entrada: string,
+  salida: string,
+  desde: string,
+  hasta: string,
+): number {
+  const ini = minutosDelDia(entrada)
+  let fin = minutosDelDia(salida)
+  if (fin <= ini) fin += 1440
+
+  const vDesde = minutosDelDia(desde)
+  let largo = minutosDelDia(hasta) - vDesde
+  if (largo <= 0) largo += 1440
+
+  // La franja se repite cada día; con turnos de hasta 24 h alcanza con mirar
+  // la ocurrencia del día anterior, la del día y la del siguiente.
+  let minutos = 0
+  for (const k of [-1, 0, 1]) {
+    const vIni = vDesde + k * 1440
+    const vFin = vIni + largo
+    minutos += Math.max(0, Math.min(fin, vFin) - Math.max(ini, vIni))
+  }
+  return minutos / 60
 }
 
 function ultimoDiaDelMes(mes: string): string {
@@ -286,6 +344,39 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
     const horasReales = lineas.reduce((s, l) => s + l.horasReales, 0)
     const horasLiquidables = lineas.reduce((s, l) => s + l.horasLiquidables, 0)
 
+    // Nocturnidad: subconjunto de las horas liquidables que cae en la franja
+    // configurada del objetivo. Es un plus informativo — jamás se resta del
+    // total. La distribución temporal usa la MISMA fuente que las horas:
+    // tramo corregido (_final ?? real) cuando hubo corrección explícita, y el
+    // horario programado del turno en los demás casos (el GPS crudo confirma
+    // presencia pero no determina horas, y una cobertura manual sin horario
+    // observado sólo conoce el turno). Si las horas reconocidas son menores
+    // que el tramo, la parte nocturna se topea a lo reconocido: nunca se
+    // informa más nocturno que liquidable, y no se inventa una distribución.
+    let horasNocturnas: number | null = params.nocturnidadObjetivo ? 0 : null
+    if (params.nocturnidadObjetivo) {
+      for (const l of reconocidas) {
+        const cfg = params.nocturnidadObjetivo(l.registro?.objetivo_final_id ?? l.turno.objetivo_id)
+        if (!cfg || !cfg.activa) continue
+        if (!cfg.desde || !cfg.hasta) {
+          // Configuración activa pero incompleta: dato pendiente, no 0.
+          horasNocturnas = null
+          break
+        }
+        const tieneCorreccion =
+          l.registro?.hora_entrada_final != null || l.registro?.hora_salida_final != null
+        const entrada = tieneCorreccion
+          ? (l.registro?.hora_entrada_final ?? l.registro?.hora_entrada_real ?? l.turno.hora_inicio)
+          : l.turno.hora_inicio
+        const salida = tieneCorreccion
+          ? (l.registro?.hora_salida_final ?? l.registro?.hora_salida_real ?? l.turno.hora_fin)
+          : l.turno.hora_fin
+        const enFranja = horasNocturnasTramo(entrada, salida, cfg.desde, cfg.hasta)
+        horasNocturnas = (horasNocturnas ?? 0) + Math.min(enFranja, l.horasLiquidables)
+      }
+      if (horasNocturnas != null) horasNocturnas = Math.round(horasNocturnas * 100) / 100
+    }
+
     const feriados = resumirFeriados(lineas.map(l => ({
       fecha: l.turno.fecha,
       cuenta: turnoCuentaEnFeriado(l.turno, l.horasLiquidables, ESTADOS_SIN_OBLIGACION),
@@ -314,7 +405,7 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       horasLiquidables: Math.round(horasLiquidables * 100) / 100,
       feriadosTrabajados: feriados.feriadosCubiertos,
       horasEnFeriado: feriados.horas,
-      horasNocturnas: null,
+      horasNocturnas,
       licencias: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.licencias, mes),
       art: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.art, mes),
       vacaciones: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.vacaciones, mes),
@@ -339,6 +430,7 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       jornadas: filas.reduce((s, f) => s + f.jornadas, 0),
       horasReales: Math.round(filas.reduce((s, f) => s + f.horasReales, 0) * 100) / 100,
       horasLiquidables: Math.round(filas.reduce((s, f) => s + f.horasLiquidables, 0) * 100) / 100,
+      horasNocturnas: Math.round(filas.reduce((s, f) => s + (f.horasNocturnas ?? 0), 0) * 100) / 100,
       feriadosTrabajados: filas.reduce((s, f) => s + f.feriadosTrabajados, 0),
     },
   }
@@ -362,24 +454,27 @@ function celda(v: number | null): number | '' {
   return v == null ? '' : v
 }
 
+// Columnas alineadas al insumo real de liquidación (Fase 0B, hoja mensual del
+// libro de Novedades). Fuera del XLSX quedan las métricas internas de
+// auditoría (horas reales, fechas con actividad, horas en feriado): siguen en
+// FilaResumenGuardia pero no son campos de liquidación. CUENTA va vacía hasta
+// que existan datos bancarios en el sistema (formato de transición).
 export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | number)[][] {
   const filas: (string | number)[][] = [
     [tituloResumenGuardia(resumen.mes)],
-    ['Generado desde MERCOSUR — horas canónicas de liquidación. Jornada: fechas de inicio distintas con horas reconocidas (nocturno que cruza medianoche = 1; turno cortado del mismo día = 1). Celda vacía = sin registro en la app (no es cero). Nocturnidad: regla por cliente no configurada.'],
+    ['Generado desde MERCOSUR — horas canónicas de liquidación. Jornada: fechas de inicio distintas con horas reconocidas (nocturno que cruza medianoche = 1; turno cortado del mismo día = 1). HORAS NOCTURNAS es un subconjunto de las liquidables (no se resta). FERIADOS en días. Celda vacía = sin registro en la app (no es cero).'],
     [],
-    ['CUIL', 'NOMBRE', 'NOVEDADES', 'OBJETIVO/S', 'JORNADAS', 'FECHAS CON ACTIVIDAD', 'HORAS REALES', 'HORAS LIQUIDABLES', 'HS NOCTURNAS', 'FERIADOS', 'HS EN FERIADO', 'LICENCIAS', 'ART', 'VACACIONES', 'PARTE MÉDICO', 'AUS/SUSP'],
+    ['CUIL', 'CUENTA', 'NOMBRE', 'NOVEDADES', 'OBJETIVO/S', 'JORNADAS', 'HORAS LIQUIDABLES', 'HORAS NOCTURNAS', 'FERIADOS', 'LICENCIAS', 'ART', 'VACACIONES', 'PARTE MÉDICO', 'AUS/SUSP'],
     ...resumen.filas.map(f => [
       f.cuil ?? '',
+      '', // CUENTA: sin datos bancarios en el sistema todavía
       f.nombre,
       f.notas.join(' · '),
       f.objetivos.join('/'),
       f.jornadas,
-      f.fechasConActividad,
-      f.horasReales,
       f.horasLiquidables,
-      '', // nocturnidad: sin regla configurada
+      celda(f.horasNocturnas),
       f.feriadosTrabajados,
-      f.horasEnFeriado,
       celda(f.licencias),
       celda(f.art),
       celda(f.vacaciones),
@@ -387,7 +482,7 @@ export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | n
       celda(f.ausenciasSuspensiones),
     ] as (string | number)[]),
     [],
-    ['TOTALES', '', '', '', resumen.totales.jornadas, '', resumen.totales.horasReales, resumen.totales.horasLiquidables, '', resumen.totales.feriadosTrabajados],
+    ['TOTALES', '', '', '', '', resumen.totales.jornadas, resumen.totales.horasLiquidables, resumen.totales.horasNocturnas, resumen.totales.feriadosTrabajados],
   ]
   return filas
 }

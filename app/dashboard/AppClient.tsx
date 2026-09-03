@@ -3493,6 +3493,9 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     frecuencia_supervision_horas: 24,
     zona_id: '',
     tipo_ubicacion: 'fijo',
+    nocturnidad_activa: false,
+    nocturnidad_desde: '22:00',
+    nocturnidad_hasta: '06:00',
   }
   const [form, setForm] = useState(formVacio)
 
@@ -3533,6 +3536,9 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       frecuencia_supervision_horas: o.frecuencia_supervision_horas || 24,
       zona_id: o.zona_id || '',
       tipo_ubicacion: o.tipo_ubicacion || 'fijo',
+      nocturnidad_activa: Boolean(o.nocturnidad_activa),
+      nocturnidad_desde: (o.nocturnidad_desde || '22:00').slice(0, 5),
+      nocturnidad_hasta: (o.nocturnidad_hasta || '06:00').slice(0, 5),
     })
     setEditId(o.id)
     setModal(true)
@@ -3563,6 +3569,12 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       frecuencia_supervision_horas: Math.max(1, Number(form.frecuencia_supervision_horas) || 24),
       zona_id: form.zona_id || null,
       tipo_ubicacion: form.tipo_ubicacion === 'movil' ? 'movil' : 'fijo',
+      // Nocturnidad: condición contractual del servicio. La franja sólo se
+      // persiste cuando está activa (el CHECK de la tabla exige franja
+      // completa con nocturnidad_activa = true).
+      nocturnidad_activa: Boolean(form.nocturnidad_activa),
+      nocturnidad_desde: form.nocturnidad_activa ? (form.nocturnidad_desde || '22:00') : null,
+      nocturnidad_hasta: form.nocturnidad_activa ? (form.nocturnidad_hasta || '06:00') : null,
     }
 
     if (editId) {
@@ -4034,6 +4046,50 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Liquidación / Nocturnidad. Es una condición contractual del
+              servicio: en algunos clientes las horas dentro de la franja
+              generan un adicional. Acá sólo se configura; el Resumen Guardia
+              la consume. Cambiarla queda auditado (objetivos_auditoria). */}
+          <div style={{ marginBottom:16 }}>
+            <label style={{ ...S.label, marginBottom:6 }}>Liquidación / Nocturnidad</label>
+            <label style={{ ...S.label, display:'flex', alignItems:'flex-start', gap:10, cursor:'pointer', textTransform:'none', fontWeight:400 }}>
+              <input
+                type="checkbox"
+                checked={Boolean(form.nocturnidad_activa)}
+                onChange={e => setForm({ ...form, nocturnidad_activa: e.target.checked })}
+                style={{ marginTop:2 }}
+              />
+              <span>
+                Discriminar nocturnidad
+                <span style={{ display:'block', fontSize:12, opacity:.7 }}>
+                  Las horas reconocidas dentro de la franja se informan aparte en el Resumen Guardia. No cambia las horas liquidables.
+                </span>
+              </span>
+            </label>
+            {Boolean(form.nocturnidad_activa) && (
+              <div style={{ display:'flex', gap:12, marginTop:8 }}>
+                <div style={{ flex:1 }}>
+                  <label style={S.label}>Desde</label>
+                  <input
+                    style={S.input}
+                    type="time"
+                    value={form.nocturnidad_desde}
+                    onChange={e => setForm({ ...form, nocturnidad_desde: e.target.value })}
+                  />
+                </div>
+                <div style={{ flex:1 }}>
+                  <label style={S.label}>Hasta</label>
+                  <input
+                    style={S.input}
+                    type="time"
+                    value={form.nocturnidad_hasta}
+                    onChange={e => setForm({ ...form, nocturnidad_hasta: e.target.value })}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Puesto móvil. Estaba sólo en Página GPS, donde nadie lo encontraba
@@ -7706,9 +7762,18 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       novedades: novedadesLaborales,
       esObjetivoPrueba: (id?: string | null) => Boolean(objetivoPorIdPlanilla.get(id || '')?.es_prueba),
       nombreObjetivo: (id?: string | null) => objetivoPorIdPlanilla.get(id || '')?.nombre ?? '',
+      nocturnidadObjetivo: (id?: string | null) => {
+        const o = objetivoPorIdPlanilla.get(id || '') as any
+        if (!o) return null
+        return {
+          activa: Boolean(o.nocturnidad_activa),
+          desde: o.nocturnidad_desde ?? null,
+          hasta: o.nocturnidad_hasta ?? null,
+        }
+      },
     })
     if (resumen.filas.length === 0) return
-    await descargarXLSX(`resumen_guardia_${mesArchivo()}.xlsx`, filasXLSXResumenGuardia(resumen), 3, resumen.filas.length, [6, 7, 10])
+    await descargarXLSX(`resumen_guardia_${mesArchivo()}.xlsx`, filasXLSXResumenGuardia(resumen), 3, resumen.filas.length, [6, 7])
   }
 
   const exportarResumenObjetivosXLSX = async () => {
