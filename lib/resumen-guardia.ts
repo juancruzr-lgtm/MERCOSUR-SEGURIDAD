@@ -61,6 +61,8 @@ export interface TurnoResumen extends TurnoUniverso {
 
 export interface NovedadResumen extends NovedadLaboral {
   id?: string | null
+  /** Cantidad de horas cuando el tipo la usa (ej. ajuste_nocturnidad). */
+  horas_afectadas?: number | string | null
 }
 
 /**
@@ -74,6 +76,29 @@ export interface ConfigNocturnidad {
   desde: string | null
   hasta: string | null
 }
+
+/**
+ * Excepción por empleado dentro de un objetivo
+ * (tabla nocturnidad_empleado_objetivo):
+ *   'heredar' → vale la configuración del objetivo (igual que no tener fila)
+ *   'si'      → cobra nocturnidad aunque el objetivo no la tenga activa
+ *   'no'      → no cobra aunque el objetivo la tenga activa
+ */
+export type ModoNocturnidadEmpleado = 'heredar' | 'si' | 'no'
+
+/**
+ * Franja usada cuando una excepción 'si' aplica sobre un objetivo que no tiene
+ * franja propia configurada. Es la franja vigente confirmada por la empresa;
+ * si el objetivo define la suya, la del objetivo siempre gana.
+ */
+export const FRANJA_NOCTURNA_DEFAULT = { desde: '22:00', hasta: '06:00' }
+
+/**
+ * Tipo de novedad laboral que fija las horas nocturnas FINALES de un empleado
+ * para el período (ajuste manual mensual). REEMPLAZA al cálculo automático —
+ * no se le suma — y no toca horas liquidables ni configuración permanente.
+ */
+export const TIPO_AJUSTE_NOCTURNIDAD = 'ajuste_nocturnidad'
 
 export interface ParamsResumenGuardia {
   /** Mes operativo, formato 'YYYY-MM'. */
@@ -94,6 +119,14 @@ export interface ParamsResumenGuardia {
    * queda como dato no determinado (null), nunca como 0 inventado.
    */
   nocturnidadObjetivo?: (objetivoId?: string | null) => ConfigNocturnidad | null
+  /**
+   * Excepción por empleado+objetivo. Sin fila (o sin callback) equivale a
+   * 'heredar': vale lo que diga el objetivo.
+   */
+  nocturnidadEmpleadoObjetivo?: (
+    empleadoId: string,
+    objetivoId?: string | null,
+  ) => ModoNocturnidadEmpleado | null
 }
 
 // ── Tipos de salida ───────────────────────────────────────────────────────────
@@ -120,15 +153,21 @@ export interface FilaResumenGuardia {
   feriadosTrabajados: number
   horasEnFeriado: number
   /**
-   * Subconjunto de las horas liquidables que cae dentro de la franja nocturna
-   * configurada en el objetivo (objetivos.nocturnidad_activa/desde/hasta).
+   * Horas nocturnas FINALES del período, tras resolver la precedencia:
+   *   1º ajuste manual mensual (novedad aprobada tipo 'ajuste_nocturnidad':
+   *      reemplaza al cálculo, no se le suma);
+   *   2º excepción empleado+objetivo (si / no / heredar);
+   *   3º configuración general del objetivo.
    * Es un PLUS informativo: NUNCA se resta de horasLiquidables — un turno
    * 19:00–07:00 reconocido entero es 12 liquidables y 8 nocturnas.
-   * 0 = se pudo determinar que no corresponde (objetivo sin nocturnidad, o
-   * turno fuera de la franja). null = no se pudo determinar (sin configuración
-   * disponible) — nunca se inventa un 0.
+   * 0 = se pudo determinar que no corresponde. null = no se pudo determinar
+   * (sin configuración disponible) — nunca se inventa un 0.
    */
   horasNocturnas: number | null
+  /** El resultado del cálculo automático solo (auditoría del ajuste manual). */
+  horasNocturnasCalculadas: number | null
+  /** De dónde salió el valor final. */
+  nocturnidadOrigen: 'ajuste_manual' | 'calculo' | null
   licencias: DiasNovedad
   art: DiasNovedad
   vacaciones: DiasNovedad
@@ -344,23 +383,40 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
     const horasReales = lineas.reduce((s, l) => s + l.horasReales, 0)
     const horasLiquidables = lineas.reduce((s, l) => s + l.horasLiquidables, 0)
 
-    // Nocturnidad: subconjunto de las horas liquidables que cae en la franja
-    // configurada del objetivo. Es un plus informativo — jamás se resta del
-    // total. La distribución temporal usa la MISMA fuente que las horas:
-    // tramo corregido (_final ?? real) cuando hubo corrección explícita, y el
-    // horario programado del turno en los demás casos (el GPS crudo confirma
-    // presencia pero no determina horas, y una cobertura manual sin horario
-    // observado sólo conoce el turno). Si las horas reconocidas son menores
-    // que el tramo, la parte nocturna se topea a lo reconocido: nunca se
-    // informa más nocturno que liquidable, y no se inventa una distribución.
-    let horasNocturnas: number | null = params.nocturnidadObjetivo ? 0 : null
-    if (params.nocturnidadObjetivo) {
+    const novedadesEmp = aprobadas.filter(n => n.empleado_id === emp.id)
+
+    // ── Nocturnidad — cálculo automático ──────────────────────────────────
+    // Subconjunto de las horas liquidables que cae en la franja nocturna. Es
+    // un plus informativo — jamás se resta del total. Por línea se resuelve la
+    // excepción empleado+objetivo ('si'/'no'/'heredar') y recién después la
+    // configuración general del objetivo. La distribución temporal usa la
+    // MISMA fuente que las horas: tramo corregido (_final ?? real) cuando hubo
+    // corrección explícita, y el horario programado del turno en los demás
+    // casos (el GPS crudo confirma presencia pero no determina horas, y una
+    // cobertura manual sin horario observado sólo conoce el turno). Si las
+    // horas reconocidas son menores que el tramo, la parte nocturna se topea a
+    // lo reconocido: nunca se informa más nocturno que liquidable, y no se
+    // inventa una distribución.
+    const hayConfig = params.nocturnidadObjetivo != null
+    let horasNocturnasCalculadas: number | null = hayConfig ? 0 : null
+    if (hayConfig) {
       for (const l of reconocidas) {
-        const cfg = params.nocturnidadObjetivo(l.registro?.objetivo_final_id ?? l.turno.objetivo_id)
-        if (!cfg || !cfg.activa) continue
-        if (!cfg.desde || !cfg.hasta) {
+        const objetivoLinea = l.registro?.objetivo_final_id ?? l.turno.objetivo_id
+        const cfg = params.nocturnidadObjetivo!(objetivoLinea)
+        const modo: ModoNocturnidadEmpleado =
+          params.nocturnidadEmpleadoObjetivo?.(emp.id, objetivoLinea) ?? 'heredar'
+
+        if (modo === 'no') continue
+        if (modo === 'heredar' && !cfg?.activa) continue
+        // modo 'si': cobra aunque el objetivo no tenga activa la regla.
+        // Franja: la del objetivo si la tiene definida; si no, la default de
+        // la empresa (una excepción 'si' sobre un objetivo sin franja propia
+        // no puede quedar sin franja, y la del objetivo siempre gana).
+        const desde = cfg?.desde ?? (modo === 'si' ? FRANJA_NOCTURNA_DEFAULT.desde : null)
+        const hasta = cfg?.hasta ?? (modo === 'si' ? FRANJA_NOCTURNA_DEFAULT.hasta : null)
+        if (!desde || !hasta) {
           // Configuración activa pero incompleta: dato pendiente, no 0.
-          horasNocturnas = null
+          horasNocturnasCalculadas = null
           break
         }
         const tieneCorreccion =
@@ -371,11 +427,28 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
         const salida = tieneCorreccion
           ? (l.registro?.hora_salida_final ?? l.registro?.hora_salida_real ?? l.turno.hora_fin)
           : l.turno.hora_fin
-        const enFranja = horasNocturnasTramo(entrada, salida, cfg.desde, cfg.hasta)
-        horasNocturnas = (horasNocturnas ?? 0) + Math.min(enFranja, l.horasLiquidables)
+        const enFranja = horasNocturnasTramo(entrada, salida, desde, hasta)
+        horasNocturnasCalculadas = (horasNocturnasCalculadas ?? 0) + Math.min(enFranja, l.horasLiquidables)
       }
-      if (horasNocturnas != null) horasNocturnas = Math.round(horasNocturnas * 100) / 100
+      if (horasNocturnasCalculadas != null) {
+        horasNocturnasCalculadas = Math.round(horasNocturnasCalculadas * 100) / 100
+      }
     }
+
+    // ── Nocturnidad — ajuste manual mensual (máxima precedencia) ──────────
+    // Una novedad aprobada tipo 'ajuste_nocturnidad' que toca el mes fija las
+    // horas nocturnas FINALES del empleado: REEMPLAZA al cálculo (no se suma)
+    // sin alterar horas liquidables, configuración permanente ni turnos.
+    const ajustes = novedadesEmp.filter(
+      n => n.tipo === TIPO_AJUSTE_NOCTURNIDAD && diasDeNovedadEnMes(n, mes) > 0,
+    )
+    const ajusteManual = ajustes.length > 0
+      ? Math.round(ajustes.reduce((s, n) => s + (Number(n.horas_afectadas) || 0), 0) * 100) / 100
+      : null
+
+    const horasNocturnas = ajusteManual ?? horasNocturnasCalculadas
+    const nocturnidadOrigen: 'ajuste_manual' | 'calculo' | null =
+      ajusteManual != null ? 'ajuste_manual' : (horasNocturnasCalculadas != null ? 'calculo' : null)
 
     const feriados = resumirFeriados(lineas.map(l => ({
       fecha: l.turno.fecha,
@@ -386,8 +459,6 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
     const objetivos = Array.from(new Set(
       reconocidas.map(l => nombreObjetivo(l.registro?.objetivo_final_id ?? l.turno.objetivo_id)).filter(Boolean),
     )).sort()
-
-    const novedadesEmp = aprobadas.filter(n => n.empleado_id === emp.id)
 
     // Fila sólo si hay algo que decir: actividad reconocida o novedades. Un
     // empleado sin nada en el mes no aparece — igual que en la hoja manual.
@@ -406,12 +477,16 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       feriadosTrabajados: feriados.feriadosCubiertos,
       horasEnFeriado: feriados.horas,
       horasNocturnas,
+      horasNocturnasCalculadas,
+      nocturnidadOrigen,
       licencias: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.licencias, mes),
       art: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.art, mes),
       vacaciones: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.vacaciones, mes),
       parteMedico: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.parteMedico, mes),
       ausenciasSuspensiones: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.ausenciasSuspensiones, mes),
-      notas: novedadesEmp.map(n => notaDeNovedad(n, mes)),
+      // El ajuste de nocturnidad no es una novedad de día: no va al texto
+      // libre (ya está expresado en la columna HORAS NOCTURNAS).
+      notas: novedadesEmp.filter(n => n.tipo !== TIPO_AJUSTE_NOCTURNIDAD).map(n => notaDeNovedad(n, mes)),
       origen: {
         turnoIds: lineas.map(l => l.turno.id),
         registroIds: lineas.map(l => l.registro?.id ?? null).filter((x): x is string => x != null),
@@ -459,11 +534,11 @@ function celda(v: number | null): number | '' {
 // auditoría (horas reales, fechas con actividad, horas en feriado): siguen en
 // FilaResumenGuardia pero no son campos de liquidación. CUENTA va vacía hasta
 // que existan datos bancarios en el sistema (formato de transición).
+// Archivo de trabajo plano, a pedido de Juan: encabezado en la primera fila,
+// sin texto explicativo ni celdas combinadas. Las semánticas (jornadas,
+// nocturnas finales, vacío = sin dato) viven en la documentación del módulo.
 export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | number)[][] {
   const filas: (string | number)[][] = [
-    [tituloResumenGuardia(resumen.mes)],
-    ['Generado desde MERCOSUR — horas canónicas de liquidación. Jornada: fechas de inicio distintas con horas reconocidas (nocturno que cruza medianoche = 1; turno cortado del mismo día = 1). HORAS NOCTURNAS es un subconjunto de las liquidables (no se resta). FERIADOS en días. Celda vacía = sin registro en la app (no es cero).'],
-    [],
     ['CUIL', 'CUENTA', 'NOMBRE', 'NOVEDADES', 'OBJETIVO/S', 'JORNADAS', 'HORAS LIQUIDABLES', 'HORAS NOCTURNAS', 'FERIADOS', 'LICENCIAS', 'ART', 'VACACIONES', 'PARTE MÉDICO', 'AUS/SUSP'],
     ...resumen.filas.map(f => [
       f.cuil ?? '',
