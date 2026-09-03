@@ -1,5 +1,5 @@
 -- ============================================================================
--- ROLLBACK · 20260904110000_nocturnidad_excepciones_y_ajuste
+-- ROLLBACK · 20260903180000_nocturnidad_excepciones_y_ajuste
 -- ============================================================================
 -- Deshace la tabla de excepciones y el tipo de ajuste. Las filas de auditoría
 -- ya escritas en objetivos_auditoria se CONSERVAN. OJO: si existen novedades
@@ -21,7 +21,7 @@ drop table if exists public.nocturnidad_empleado_objetivo;
 update public.novedades_laborales
 set estado = 'rechazada',
     observacion = coalesce(observacion || ' · ', '')
-      || '[rollback 20260904110000: tipo ajuste_nocturnidad retirado del sistema]',
+      || '[rollback 20260903180000: tipo ajuste_nocturnidad retirado del sistema]',
     tipo = 'otra'
 where tipo = 'ajuste_nocturnidad';
 

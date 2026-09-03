@@ -2,7 +2,7 @@
 -- NOCTURNIDAD · Excepción por empleado+objetivo y ajuste mensual manual
 -- ============================================================================
 --
--- Completa el modelo de 20260904100000 (nocturnidad general del objetivo) con
+-- Completa el modelo de 20260903170000 (nocturnidad general del objetivo) con
 -- los otros dos niveles que la operación real necesita:
 --
 --   1º  Ajuste mensual manual por empleado/período  → valor FINAL informado.
@@ -163,8 +163,15 @@ create trigger trg_nocturnidad_excepcion_zz_auditoria
   for each row execute function public.nocturnidad_excepcion_auditar();
 
 -- ── 4) RLS y grants de la tabla nueva ───────────────────────────────────────
--- `authenticated` hereda DEFAULT PRIVILEGES totales (ver M1-bis): el REVOKE
--- es imprescindible para que la tabla no nazca escribible por cualquiera.
+-- Mínimo privilegio: la configuración contiene decisiones de liquidación por
+-- empleado, y hoy la consumen únicamente funciones administrativas (el
+-- Resumen Guardia y la edición del objetivo viven en el shell de admin).
+-- Por lo tanto TODO el acceso —lectura incluida— es sólo admin. Vigilador y
+-- supervisor: sin acceso; el futuro Supervisor Operativo no asume acceso
+-- económico; Gerencia se resolverá por capacidades cuando exista (F2+).
+-- `authenticated` hereda DEFAULT PRIVILEGES totales (ver M1-bis) — y si M10
+-- de F1 ya corrió, las tablas nuevas nacen sin DELETE: el REVOKE + GRANT
+-- explícito de abajo deja el mismo resultado en cualquier orden de aplicación.
 
 alter table public.nocturnidad_empleado_objetivo enable row level security;
 
@@ -175,14 +182,9 @@ revoke all on table public.nocturnidad_empleado_objetivo from authenticated;
 grant select, insert, update, delete
   on table public.nocturnidad_empleado_objetivo to authenticated;
 
-create policy "Lectura autenticada de excepciones de nocturnidad"
-on public.nocturnidad_empleado_objetivo
-for select
-to authenticated
-using (true);
-
--- Escritura sólo admin: mismo patrón inline vigente en el resto del sistema.
-create policy "Solo admin escribe excepciones de nocturnidad"
+-- Única política: admin activo, para todos los comandos. Sin política de
+-- SELECT aparte: un vigilador o supervisor autenticado obtiene cero filas.
+create policy "Solo admin usa excepciones de nocturnidad"
 on public.nocturnidad_empleado_objetivo
 for all
 to authenticated

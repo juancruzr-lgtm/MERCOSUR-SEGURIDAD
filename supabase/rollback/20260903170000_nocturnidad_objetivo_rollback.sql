@@ -1,5 +1,5 @@
 -- ============================================================================
--- ROLLBACK · 20260904100000_nocturnidad_objetivo
+-- ROLLBACK · 20260903170000_nocturnidad_objetivo
 -- ============================================================================
 -- Restaura el trigger de auditoría a su versión previa (la de
 -- 20260814100000_objetivos_auditoria_gps.sql, sólo lat/lng/radio_metros) y
