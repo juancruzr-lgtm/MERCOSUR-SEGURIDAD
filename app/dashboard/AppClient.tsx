@@ -7897,7 +7897,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     const resumen = construirResumenGuardia({
       mes,
       // Resumen Guardia: solo vigiladores (pedido de Juan) — los supervisores no liquidan por este circuito.
-      empleados: empleados.filter((g: Usuario) => esRolGuardia(g.rol)).map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, cuil: g.cuil, legajo: g.legajo, legajoVisual: (g as any).legajo_visual ?? null })),
+      empleados: empleados.filter((g: Usuario) => esRolGuardia(g.rol)).map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, cuil: g.cuil, legajo: g.legajo, legajoVisual: (g as any).legajo_visual ?? null, cuenta: (g as any).cuenta_bancaria ?? null })),
       turnos: turnosMes,
       registros: registrosMes,
       novedades: novedadesLaborales,
