@@ -53,6 +53,12 @@ export interface EmpleadoResumen {
   apellido?: string | null
   cuil?: string | null
   legajo?: string | null
+  /**
+   * Etiqueta de Legajo que usa Visual Sueldos (usuarios.legajo_visual,
+   * alfanumérica, ej. "ALMADA", "011 Bis"). No confundir con `legajo`
+   * (histórico: contiene CUIL o DNI).
+   */
+  legajoVisual?: string | null
 }
 
 export interface TurnoResumen extends TurnoUniverso {
@@ -145,6 +151,8 @@ export interface FilaResumenGuardia {
   nombre: string
   cuil: string | null
   legajo: string | null
+  /** Legajo de Visual Sueldos: primera columna del archivo de liquidación. */
+  legajoVisual: string | null
   /** Objetivos con horas reconocidas en el mes, orden alfabético. */
   objetivos: string[]
   /**
@@ -497,6 +505,7 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       nombre: `${emp.apellido ?? ''}, ${emp.nombre ?? ''}`.replace(/^, |, $/g, '').trim(),
       cuil: emp.cuil ?? null,
       legajo: emp.legajo ?? null,
+      legajoVisual: emp.legajoVisual ?? null,
       objetivos,
       jornadas: jornadas.size,
       fechasConActividad: fechas.size,
@@ -567,8 +576,9 @@ function celda(v: number | null): number | '' {
 // nocturnas finales, vacío = sin dato) viven en la documentación del módulo.
 export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | number)[][] {
   const filas: (string | number)[][] = [
-    ['CUIL', 'CUENTA', 'NOMBRE', 'NOVEDADES', 'OBJETIVO/S', 'JORNADAS', 'HORAS LIQUIDABLES', 'HORAS NOCTURNAS', 'FERIADOS', 'LICENCIAS', 'ART', 'VACACIONES', 'PARTE MÉDICO', 'AUS/SUSP'],
+    ['LEGAJO VISUAL', 'CUIL', 'CUENTA', 'NOMBRE', 'NOVEDADES', 'OBJETIVO/S', 'JORNADAS', 'HORAS LIQUIDABLES', 'HORAS NOCTURNAS', 'FERIADOS', 'LICENCIAS', 'ART', 'VACACIONES', 'PARTE MÉDICO', 'AUS/SUSP'],
     ...resumen.filas.map(f => [
+      f.legajoVisual ?? '',
       f.cuil ?? '',
       '', // CUENTA: sin datos bancarios en el sistema todavía
       f.nombre,
@@ -585,7 +595,7 @@ export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | n
       celda(f.ausenciasSuspensiones),
     ] as (string | number)[]),
     [],
-    ['TOTALES', '', '', '', '', resumen.totales.jornadas, resumen.totales.horasLiquidables, resumen.totales.horasNocturnas, resumen.totales.feriadosTrabajados],
+    ['TOTALES', '', '', '', '', '', resumen.totales.jornadas, resumen.totales.horasLiquidables, resumen.totales.horasNocturnas, resumen.totales.feriadosTrabajados],
   ]
   return filas
 }
