@@ -686,6 +686,11 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(m.get('P6')?.v).toBe('AUS/SUSP')
     expect(m.get('AF6')?.v).toBe('004')
     expect(m.get('AO6')?.v).toBe('total')
+    // códigos de concepto SIEMPRE texto de 3 dígitos (importación de recibos)
+    expect(m.get('AC6')?.v).toBe('203')
+    expect(m.get('AG6')?.v).toBe('001')
+    expect(m.get('AV6')?.v).toBe('010')
+    expect(m.get('AX6')?.v).toBe('008')
   })
 
   it('celdas de entrada: datos consolidados de la app en A-P', () => {
@@ -764,7 +769,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(m.get('AO7')?.v).toBe(1641527) // total, igual a AO7 del ejemplo
   })
 
-  it('nocturnas null va como celda vacía (nunca un 0 inventado) y AF calcula 0', () => {
+  it('sin dato (null) la celda NO se emite: vacía de verdad, las fórmulas la toman como 0 sin #¡VALOR!', () => {
     const res = construirResumenGuardia(base({
       turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
       registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
@@ -772,8 +777,16 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     }))
     expect(fila(res)!.horasNocturnas).toBeNull()
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
-    expect(m.get('J7')?.v).toBe('')
+    // nunca un "" de texto: eso rompía L×U, el total y po hs con #¡VALOR!
+    for (const ref of ['J7', 'L7', 'M7', 'N7', 'O7', 'P7']) expect(m.get(ref)).toBeUndefined()
     expect(m.get('AF7')?.v).toBe(0)
+    // con dato, la celda sí va (aunque sea 0 determinado)
+    const res2 = construirResumenGuardia(base({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: () => ({ activa: false, desde: null, hasta: null }),
+    }))
+    expect(mapa(plantillaLiquidacionResumenGuardia(res2)).get('J7')?.v).toBe(0)
   })
 
   it('TOTALES cachea las sumas de las filas', () => {

@@ -676,17 +676,19 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
   for (const [ref, v] of fila5) put(ref, v)
 
   // Fila 6: encabezados del export de la app (A-P, H sin título: es el tope de
-  // 25 días) + códigos de concepto de la capa de liquidación. Los tipos
-  // (número vs texto) se conservan tal cual estaban en el ejemplo.
+  // 25 días) + códigos de concepto de la capa de liquidación. Los códigos van
+  // SIEMPRE como texto de 3 dígitos ('006', '010'), nunca como número: son
+  // los códigos de importación al sistema de recibos (pedido de Juan 04/09;
+  // el ejemplo los tenía mezclados: algunos número, algunos texto sin cero).
   const fila6: [string, string | number][] = [
     ['A6', 'LEGAJO VISUAL'], ['B6', 'CUIL'], ['C6', 'CUENTA'], ['D6', 'NOMBRE'],
     ['E6', 'NOVEDADES'], ['F6', 'OBJETIVO/S'], ['G6', 'JORNADAS'],
     ['I6', 'HORAS LIQUIDABLES'], ['J6', 'HORAS NOCTURNAS'], ['K6', 'FERIADOS'],
     ['L6', 'LICENCIAS'], ['M6', 'ART'], ['N6', 'VACACIONES'], ['O6', 'PARTE MÉDICO'], ['P6', 'AUS/SUSP'],
-    ['AC6', 203], ['AD6', '204'], ['AE6', 212], ['AF6', '004'], ['AG6', '1'],
-    ['AI6', 212], ['AJ6', 'hs rec'], ['AL6', 'hs extras'], ['AM6', '% ex'],
+    ['AC6', '203'], ['AD6', '204'], ['AE6', '212'], ['AF6', '004'], ['AG6', '001'],
+    ['AI6', '212'], ['AJ6', 'hs rec'], ['AL6', 'hs extras'], ['AM6', '% ex'],
     ['AO6', 'total'], ['AR6', 'adelantos'], ['AS6', 'po hs'], ['AT6', '006'],
-    ['AV6', 10], ['AW6', 205], ['AX6', '8'],
+    ['AV6', '010'], ['AW6', '205'], ['AX6', '008'],
   ]
   for (const [ref, v] of fila6) put(ref, v)
 
@@ -714,13 +716,18 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`G${r}`, G)
     put(`H${r}`, H, `MIN(G${r},25)`)
     put(`I${r}`, I)
-    put(`J${r}`, fila.horasNocturnas ?? '')
+    // Sin dato (null) → la celda NO se emite: en Excel una celda realmente
+    // vacía vale 0 en las fórmulas (L×U, el total, po hs) y se ve en blanco,
+    // así que se conserva "vacío = sin dato" sin romper el cálculo. Un ""
+    // de texto acá rompía todo con #¡VALOR!.
+    const putNum = (ref: string, v: number | null) => { if (v != null) put(ref, v) }
+    putNum(`J${r}`, fila.horasNocturnas)
     put(`K${r}`, fila.feriadosTrabajados)
-    put(`L${r}`, celda(fila.licencias))
-    put(`M${r}`, celda(fila.art))
-    put(`N${r}`, celda(fila.vacaciones))
-    put(`O${r}`, celda(fila.parteMedico))
-    put(`P${r}`, celda(fila.ausenciasSuspensiones))
+    putNum(`L${r}`, fila.licencias)
+    putNum(`M${r}`, fila.art)
+    putNum(`N${r}`, fila.vacaciones)
+    putNum(`O${r}`, fila.parteMedico)
+    putNum(`P${r}`, fila.ausenciasSuspensiones)
     // Parámetros por fila: la primera toma F2/E2/E3/E4 y las demás arrastran
     // la de arriba, igual que en el ejemplo.
     if (r === filaInicial) {
