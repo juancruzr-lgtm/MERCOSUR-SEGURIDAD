@@ -714,13 +714,18 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`G${r}`, G)
     put(`H${r}`, H, `MIN(G${r},25)`)
     put(`I${r}`, I)
-    put(`J${r}`, fila.horasNocturnas ?? '')
+    // Sin dato (null) → la celda NO se emite: en Excel una celda realmente
+    // vacía vale 0 en las fórmulas (L×U, el total, po hs) y se ve en blanco,
+    // así que se conserva "vacío = sin dato" sin romper el cálculo. Un ""
+    // de texto acá rompía todo con #¡VALOR!.
+    const putNum = (ref: string, v: number | null) => { if (v != null) put(ref, v) }
+    putNum(`J${r}`, fila.horasNocturnas)
     put(`K${r}`, fila.feriadosTrabajados)
-    put(`L${r}`, celda(fila.licencias))
-    put(`M${r}`, celda(fila.art))
-    put(`N${r}`, celda(fila.vacaciones))
-    put(`O${r}`, celda(fila.parteMedico))
-    put(`P${r}`, celda(fila.ausenciasSuspensiones))
+    putNum(`L${r}`, fila.licencias)
+    putNum(`M${r}`, fila.art)
+    putNum(`N${r}`, fila.vacaciones)
+    putNum(`O${r}`, fila.parteMedico)
+    putNum(`P${r}`, fila.ausenciasSuspensiones)
     // Parámetros por fila: la primera toma F2/E2/E3/E4 y las demás arrastran
     // la de arriba, igual que en el ejemplo.
     if (r === filaInicial) {
