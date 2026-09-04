@@ -59,6 +59,11 @@ export interface EmpleadoResumen {
    * (histórico: contiene CUIL o DNI).
    */
   legajoVisual?: string | null
+  /**
+   * Cuenta bancaria de acreditación (usuarios.cuenta_bancaria). TEXTO
+   * siempre: conserva ceros a la izquierda y admite CBU de 22 dígitos.
+   */
+  cuenta?: string | null
 }
 
 export interface TurnoResumen extends TurnoUniverso {
@@ -153,6 +158,8 @@ export interface FilaResumenGuardia {
   legajo: string | null
   /** Legajo de Visual Sueldos: primera columna del archivo de liquidación. */
   legajoVisual: string | null
+  /** Cuenta bancaria (texto, con ceros a la izquierda); null = sin dato. */
+  cuenta: string | null
   /** Objetivos con horas reconocidas en el mes, orden alfabético. */
   objetivos: string[]
   /**
@@ -506,6 +513,7 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       cuil: emp.cuil ?? null,
       legajo: emp.legajo ?? null,
       legajoVisual: emp.legajoVisual ?? null,
+      cuenta: emp.cuenta ?? null,
       objetivos,
       jornadas: jornadas.size,
       fechasConActividad: fechas.size,
@@ -580,7 +588,7 @@ export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | n
     ...resumen.filas.map(f => [
       f.legajoVisual ?? '',
       f.cuil ?? '',
-      '', // CUENTA: sin datos bancarios en el sistema todavía
+      f.cuenta ?? '',
       f.nombre,
       f.notas.join(' · '),
       f.objetivos.join('/'),
@@ -642,13 +650,17 @@ export interface PlantillaLiquidacion {
   celdas: CeldaPlantilla[]
 }
 
-/** Parámetros salariales de la plantilla; Juan los edita en Excel (todo recalcula desde E1-E4). */
+/**
+ * Parámetros salariales de la plantilla; Juan los edita en Excel (todo
+ * recalcula desde E1-E4). Valores vigentes de la versión corregida del
+ * ejemplo (04/09/2026).
+ */
 export const PARAMETROS_PLANTILLA = {
-  basico: 1001300, // E1 · hora = básico/200
+  basico: 1020300, // E1 · hora = básico/200
   presentismo: 180000, // E2
-  viatico: 505500, // E3
-  noRem: 20000, // E4
-  horaExtra: 2500, // AP5 · valor de la hora excedente
+  viatico: 514500, // E3
+  noRem: 30000, // E4
+  horaExtra: 2500, // AP6 · valor de la hora excedente
 }
 
 export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): PlantillaLiquidacion {
@@ -667,11 +679,14 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
   put('A2', 'Legajo'); put('D2', 'presentismo'); put('E2', P.presentismo); put('F2', dia8, 'E1/200*8')
   put('D3', 'viatico'); put('E3', P.viatico)
   put('D4', 'no rem'); put('E4', P.noRem)
+  // Fila 5: etiquetas humanas; fila 6: códigos de concepto (versión corregida
+  // del ejemplo, 04/09: Juan separó etiqueta arriba y código abajo).
   const fila5: [string, string | number][] = [
     ['U5', 'dia'], ['V5', 'presentismoo'], ['W5', 'viati'], ['X5', 'no remunerativo'],
     ['Y5', 'Gora'], ['Z5', 'pres por dia'], ['AA5', 'viatico por dia'], ['AB5', 'no rem por dia'],
     ['AC5', 'viaticos'], ['AD5', 'presentismo por dia'], ['AE5', 'no rem'],
-    ['AJ5', '001'], ['AP5', P.horaExtra], ['AT5', 'feriados'], ['AU5', '888'],
+    ['AF5', 'nocturnidad'], ['AI5', 'adicional'], ['AJ5', 'horas rec'], ['AP5', 'extras'],
+    ['AT5', 'feriados'], ['AU5', 'licencia'], ['AV5', 'art'], ['AW5', 'vacaciones'], ['AX5', 'parte med'],
   ]
   for (const [ref, v] of fila5) put(ref, v)
 
@@ -686,9 +701,9 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     ['I6', 'HORAS LIQUIDABLES'], ['J6', 'HORAS NOCTURNAS'], ['K6', 'FERIADOS'],
     ['L6', 'LICENCIAS'], ['M6', 'ART'], ['N6', 'VACACIONES'], ['O6', 'PARTE MÉDICO'], ['P6', 'AUS/SUSP'],
     ['AC6', '203'], ['AD6', '204'], ['AE6', '212'], ['AF6', '004'], ['AG6', '001'],
-    ['AI6', '212'], ['AJ6', 'hs rec'], ['AL6', 'hs extras'], ['AM6', '% ex'],
-    ['AO6', 'total'], ['AR6', 'adelantos'], ['AS6', 'po hs'], ['AT6', '006'],
-    ['AV6', '010'], ['AW6', '205'], ['AX6', '008'],
+    ['AI6', '212'], ['AJ6', '001'], ['AL6', 'hs extras'], ['AM6', '% ex'], ['AN6', 'hs dia'],
+    ['AO6', 'total'], ['AP6', P.horaExtra], ['AR6', 'adelantos'], ['AS6', 'po hs'],
+    ['AT6', '006'], ['AU6', '888'], ['AV6', '010'], ['AW6', '205'], ['AX6', '008'],
   ]
   for (const [ref, v] of fila6) put(ref, v)
 
@@ -705,7 +720,7 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     const r = filaInicial + i
     put(`A${r}`, fila.legajoVisual ?? '')
     put(`B${r}`, fila.cuil ?? '')
-    put(`C${r}`, '') // CUENTA: sin datos bancarios en el sistema todavía
+    put(`C${r}`, fila.cuenta ?? '') // texto: conserva ceros a la izquierda
     put(`D${r}`, fila.nombre)
     put(`E${r}`, fila.notas.join(' · '))
     put(`F${r}`, fila.objetivos.join('/'))

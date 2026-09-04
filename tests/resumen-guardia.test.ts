@@ -644,7 +644,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     const r2 = registro({ turno_id: 't2', guardia_id: 'g2', horas_liquidables: 8 })
     return construirResumenGuardia(base({
       empleados: [
-        { id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', cuil: '20144945817', legajoVisual: 'ALMADA' },
+        { id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', cuil: '20144945817', legajoVisual: 'ALMADA', cuenta: '00404906522208' },
         { id: 'g2', nombre: 'SILVIO', apellido: 'ALMARA', cuil: '20295393522', legajoVisual: 'ALMARA' },
       ],
       turnos: [t1, t2],
@@ -672,13 +672,18 @@ describe('plantillaLiquidacionResumenGuardia', () => {
   it('bloque de parámetros y encabezados, literal del ejemplo', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
     expect(m.get('A1')?.v).toBe('VisualSueldos - Planilla de importación de datos')
-    expect(m.get('E1')?.v).toBe(1001300)
+    expect(m.get('E1')?.v).toBe(1020300)
     expect(m.get('F1')?.f).toBe('E1/200')
     expect(m.get('F2')?.f).toBe('E1/200*8')
     expect(m.get('E2')?.v).toBe(180000)
-    expect(m.get('E3')?.v).toBe(505500)
-    expect(m.get('E4')?.v).toBe(20000)
-    expect(m.get('AP5')?.v).toBe(2500)
+    expect(m.get('E3')?.v).toBe(514500)
+    expect(m.get('E4')?.v).toBe(30000)
+    expect(m.get('AP5')?.v).toBe('extras')
+    expect(m.get('AP6')?.v).toBe(2500)
+    expect(m.get('AF5')?.v).toBe('nocturnidad')
+    expect(m.get('AJ6')?.v).toBe('001')
+    expect(m.get('AN6')?.v).toBe('hs dia')
+    expect(m.get('AU6')?.v).toBe('888')
     expect(m.get('A6')?.v).toBe('LEGAJO VISUAL')
     expect(m.get('G6')?.v).toBe('JORNADAS')
     expect(m.get('H6')).toBeUndefined() // H no tiene título: es el tope de 25 días
@@ -697,7 +702,8 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
     expect(m.get('A7')?.v).toBe('ALMADA')
     expect(m.get('B7')?.v).toBe('20144945817')
-    expect(m.get('C7')?.v).toBe('') // CUENTA vacía: sin datos bancarios
+    expect(m.get('C7')?.v).toBe('00404906522208') // CUENTA como texto: conserva ceros a la izquierda
+    expect(m.get('C8')?.v).toBe('') // sin cuenta cargada → vacía
     expect(m.get('D7')?.v).toBe('ALMADA, ESTANISLAO')
     expect(m.get('G7')?.v).toBe(1)
     expect(m.get('I7')?.v).toBe(12)
@@ -738,7 +744,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
     expect(m.get('AF7')?.f).toBe('(Y7/10)*J7')
     // hora/10 × hs nocturnas: 500.65 × 8 — no la variante ×200 del resto del ejemplo
-    expect(m.get('AF7')?.v).toBeCloseTo((1001300 / 200 / 10) * 8, 6)
+    expect(m.get('AF7')?.v).toBeCloseTo((1020300 / 200 / 10) * 8, 6)
   })
 
   it('caso ALMADA del ejemplo: 26 jornadas, 208 hs, 1 feriado → mismos importes que el archivo de Juan', () => {
@@ -758,15 +764,15 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     f.feriadosTrabajados = 1 // como ALMADA en agosto
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
     expect(m.get('H7')?.v).toBe(25) // MIN(26,25)
-    expect(m.get('AC7')?.v).toBe(505500) // viáticos: 20220 × 25
+    expect(m.get('AC7')?.v).toBe(514500) // viáticos: 20580 × 25
     expect(m.get('AD7')?.v).toBe(180000) // presentismo
-    expect(m.get('AE7')?.v).toBe(20000) // no rem
+    expect(m.get('AE7')?.v).toBe(30000) // no rem
     expect(m.get('AG7')?.v).toBe(150) // 208 > 150 → tope
-    expect(m.get('AJ7')?.v).toBe(750975) // 150 × hora
+    expect(m.get('AJ7')?.v).toBe(765225) // 150 × hora
     expect(m.get('AL7')?.v).toBe(58) // hs extras
     expect(m.get('AP7')?.v).toBe(145000) // 58 × 2500
-    expect(m.get('AT7')?.v).toBe(40052) // 1 feriado × valor día
-    expect(m.get('AO7')?.v).toBe(1641527) // total, igual a AO7 del ejemplo
+    expect(m.get('AT7')?.v).toBe(40812) // 1 feriado × valor día
+    expect(m.get('AO7')?.v).toBe(1675537) // total, igual a AO7 del ejemplo corregido
   })
 
   it('sin dato (null) la celda NO se emite: vacía de verdad, las fórmulas la toman como 0 sin #¡VALOR!', () => {
@@ -794,6 +800,6 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(m.get('G10')?.v).toBe(2)
     expect(m.get('I10')?.v).toBe(20)
     // AG de cada fila (H×8 = 8, sin llegar al tope) × hora, sumado
-    expect(m.get('AJ10')?.v).toBe(2 * 8 * (1001300 / 200))
+    expect(m.get('AJ10')?.v).toBe(2 * 8 * (1020300 / 200))
   })
 })
