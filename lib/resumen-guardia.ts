@@ -599,3 +599,202 @@ export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | n
   ]
   return filas
 }
+
+// ── Plantilla canónica de liquidación (ejemplo agoto app.xlsx) ────────────────
+//
+// Reproduce la planilla que Juan armó sobre el export del Resumen Guardia:
+// bloque de parámetros (filas 1-4), encabezados (filas 5-6), una fila por
+// vigilador con la capa de fórmulas de liquidación (columnas H y U-AX), una
+// fila separadora y la fila TOTALES con SUM por columna. Las únicas celdas
+// que la app rellena son las de entrada: parámetros fijos, encabezados y los
+// datos consolidados A-P de cada vigilador; todo lo demás son las fórmulas de
+// la plantilla, tal cual, con la referencia de fila ajustada.
+//
+// Columnas de carga manual que quedan vacías a propósito (Juan las completa
+// en Excel después de descargar): AH (hs a valor pleno, concepto 212),
+// AR (adelantos) y los reemplazos puntuales de AP por un importe fijo.
+//
+// Desvíos deliberados respecto del archivo de ejemplo, todos verificados con
+// Juan o neutros:
+//  · AF (nocturnidad 004) usa (Y/10)*J = hora/10 × hs nocturnas en TODAS las
+//    filas. El ejemplo tenía ((Y*200)/10)*J en las filas con J=0 (donde no
+//    afecta) y la fórmula corregida solo en FIGGINI, la única con nocturnas.
+//    Emitir la variante errada habría pagado 200 veces de más el primer mes
+//    en que otro vigilador tenga nocturnas.
+//  · G de TOTALES es SUM como sus vecinas (el ejemplo traía 1322 pegado a mano).
+//  · No se copian dos celdas sueltas del ejemplo: AO3 (cuenta borrador que
+//    apuntaba a la fila 12 de ESE mes) y X83 (un espacio perdido).
+//
+// Devuelve celdas puras (sin depender de xlsx): v = valor, f = fórmula. Las
+// fórmulas llevan además el valor calculado en `v` para que el archivo muestre
+// importes aunque el visor no recalcule al abrir.
+
+export interface CeldaPlantilla {
+  ref: string
+  v?: string | number
+  f?: string
+}
+
+export interface PlantillaLiquidacion {
+  nombreHoja: string
+  /** Rango usado de la hoja, p. ej. 'A1:AX73'. */
+  ref: string
+  celdas: CeldaPlantilla[]
+}
+
+/** Parámetros salariales de la plantilla; Juan los edita en Excel (todo recalcula desde E1-E4). */
+export const PARAMETROS_PLANTILLA = {
+  basico: 1001300, // E1 · hora = básico/200
+  presentismo: 180000, // E2
+  viatico: 505500, // E3
+  noRem: 20000, // E4
+  horaExtra: 2500, // AP5 · valor de la hora excedente
+}
+
+export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): PlantillaLiquidacion {
+  const P = PARAMETROS_PLANTILLA
+  const hora = P.basico / 200
+  const dia8 = hora * 8
+  const celdas: CeldaPlantilla[] = []
+  const put = (ref: string, v?: string | number, f?: string) => {
+    celdas.push(f !== undefined ? { ref, v, f } : { ref, v })
+  }
+  const num = (v: number | null): number => v ?? 0
+
+  // Bloque de parámetros y etiquetas (filas 1-5), literal del ejemplo.
+  put('A1', 'VisualSueldos - Planilla de importación de datos')
+  put('D1', 'hs'); put('E1', P.basico); put('F1', hora, 'E1/200'); put('U1', 'v')
+  put('A2', 'Legajo'); put('D2', 'presentismo'); put('E2', P.presentismo); put('F2', dia8, 'E1/200*8')
+  put('D3', 'viatico'); put('E3', P.viatico)
+  put('D4', 'no rem'); put('E4', P.noRem)
+  const fila5: [string, string | number][] = [
+    ['U5', 'dia'], ['V5', 'presentismoo'], ['W5', 'viati'], ['X5', 'no remunerativo'],
+    ['Y5', 'Gora'], ['Z5', 'pres por dia'], ['AA5', 'viatico por dia'], ['AB5', 'no rem por dia'],
+    ['AC5', 'viaticos'], ['AD5', 'presentismo por dia'], ['AE5', 'no rem'],
+    ['AJ5', '001'], ['AP5', P.horaExtra], ['AT5', 'feriados'], ['AU5', '888'],
+  ]
+  for (const [ref, v] of fila5) put(ref, v)
+
+  // Fila 6: encabezados del export de la app (A-P, H sin título: es el tope de
+  // 25 días) + códigos de concepto de la capa de liquidación. Los tipos
+  // (número vs texto) se conservan tal cual estaban en el ejemplo.
+  const fila6: [string, string | number][] = [
+    ['A6', 'LEGAJO VISUAL'], ['B6', 'CUIL'], ['C6', 'CUENTA'], ['D6', 'NOMBRE'],
+    ['E6', 'NOVEDADES'], ['F6', 'OBJETIVO/S'], ['G6', 'JORNADAS'],
+    ['I6', 'HORAS LIQUIDABLES'], ['J6', 'HORAS NOCTURNAS'], ['K6', 'FERIADOS'],
+    ['L6', 'LICENCIAS'], ['M6', 'ART'], ['N6', 'VACACIONES'], ['O6', 'PARTE MÉDICO'], ['P6', 'AUS/SUSP'],
+    ['AC6', 203], ['AD6', '204'], ['AE6', 212], ['AF6', '004'], ['AG6', '1'],
+    ['AI6', 212], ['AJ6', 'hs rec'], ['AL6', 'hs extras'], ['AM6', '% ex'],
+    ['AO6', 'total'], ['AR6', 'adelantos'], ['AS6', 'po hs'], ['AT6', '006'],
+    ['AV6', 10], ['AW6', 205], ['AX6', '8'],
+  ]
+  for (const [ref, v] of fila6) put(ref, v)
+
+  // Filas de datos: la primera es la 7, como en el ejemplo.
+  const filaInicial = 7
+  const filaFinal = filaInicial + resumen.filas.length - 1
+  const filaSeparadora = filaFinal + 1
+  const filaTotales = filaSeparadora + 1
+  // Acumuladores de los valores calculados, para cachear también los SUM.
+  const suma: Record<string, number> = {}
+  const acum = (col: string, v: number) => { suma[col] = (suma[col] ?? 0) + v }
+
+  resumen.filas.forEach((fila, i) => {
+    const r = filaInicial + i
+    put(`A${r}`, fila.legajoVisual ?? '')
+    put(`B${r}`, fila.cuil ?? '')
+    put(`C${r}`, '') // CUENTA: sin datos bancarios en el sistema todavía
+    put(`D${r}`, fila.nombre)
+    put(`E${r}`, fila.notas.join(' · '))
+    put(`F${r}`, fila.objetivos.join('/'))
+    const G = fila.jornadas
+    const H = Math.min(G, 25)
+    const I = fila.horasLiquidables
+    const J = num(fila.horasNocturnas)
+    put(`G${r}`, G)
+    put(`H${r}`, H, `MIN(G${r},25)`)
+    put(`I${r}`, I)
+    put(`J${r}`, fila.horasNocturnas ?? '')
+    put(`K${r}`, fila.feriadosTrabajados)
+    put(`L${r}`, celda(fila.licencias))
+    put(`M${r}`, celda(fila.art))
+    put(`N${r}`, celda(fila.vacaciones))
+    put(`O${r}`, celda(fila.parteMedico))
+    put(`P${r}`, celda(fila.ausenciasSuspensiones))
+    // Parámetros por fila: la primera toma F2/E2/E3/E4 y las demás arrastran
+    // la de arriba, igual que en el ejemplo.
+    if (r === filaInicial) {
+      put(`U${r}`, dia8, 'F2'); put(`V${r}`, P.presentismo, 'E2')
+      put(`W${r}`, P.viatico, 'E3'); put(`X${r}`, P.noRem, 'E4')
+    } else {
+      put(`U${r}`, dia8, `U${r - 1}`); put(`V${r}`, P.presentismo, `V${r - 1}`)
+      put(`W${r}`, P.viatico, `W${r - 1}`); put(`X${r}`, P.noRem, `X${r - 1}`)
+    }
+    put(`Y${r}`, hora, `U${r}/8`)
+    put(`Z${r}`, P.presentismo / 25, `V${r}/25`)
+    put(`AA${r}`, P.viatico / 25, `W${r}/25`)
+    put(`AB${r}`, P.noRem / 25, `X${r}/25`)
+    const AC = (P.viatico / 25) * H
+    const AD = (P.presentismo / 25) * H
+    const AE = (P.noRem / 25) * H
+    const AF = (hora / 10) * J
+    const AG = I <= 150 ? H * 8 : 150
+    const AI = 0 // AH (hs a valor pleno) queda vacío para carga manual
+    const AJ = AG * hora
+    const AL = I - AG
+    const AM = AL > 0 && I > 0 ? (AL * 100) / I : 0
+    const AN = G > 0 ? I / G : 0
+    const AP = AL > 0 ? AL * P.horaExtra : 0 // menos AR (adelantos), vacío acá
+    const AT = fila.feriadosTrabajados * dia8
+    const AU = num(fila.licencias) * dia8
+    const AV = num(fila.art) * dia8
+    const AW = num(fila.vacaciones) * dia8
+    const AX = num(fila.parteMedico) * dia8
+    const AO = AC + AD + AE + AF + AI + AJ + AT + AU + AV + AW + AX + AP
+    const AS = AO > 0 && I > 0 ? AO / I : 0
+    put(`AC${r}`, AC, `AA${r}*H${r}`)
+    put(`AD${r}`, AD, `Z${r}*H${r}`)
+    put(`AE${r}`, AE, `(X${r}/25)*H${r}`)
+    put(`AF${r}`, AF, `(Y${r}/10)*J${r}`)
+    put(`AG${r}`, AG, `IF(I${r}<=150,H${r}*8,150)`)
+    put(`AI${r}`, AI, `AH${r}*Y${r}`)
+    put(`AJ${r}`, AJ, `AG${r}*Y${r}`)
+    put(`AL${r}`, AL, `I${r}-AG${r}`)
+    put(`AM${r}`, AM, `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
+    put(`AN${r}`, AN, `I${r}/G${r}`)
+    put(`AO${r}`, AO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
+    put(`AP${r}`, AP, `IF(AL${r}>0,AL${r}*${P.horaExtra},0)-AR${r}`)
+    put(`AS${r}`, AS, `IF(AO${r}>0,AO${r}/I${r},0)`)
+    put(`AT${r}`, AT, `K${r}*U${r}`)
+    put(`AU${r}`, AU, `L${r}*U${r}`)
+    put(`AV${r}`, AV, `M${r}*U${r}`)
+    put(`AW${r}`, AW, `N${r}*U${r}`)
+    put(`AX${r}`, AX, `O${r}*U${r}`)
+    const cacheFila: [string, number][] = [
+      ['G', G], ['I', I], ['J', J], ['K', fila.feriadosTrabajados],
+      ['L', num(fila.licencias)], ['M', num(fila.art)], ['N', num(fila.vacaciones)],
+      ['O', num(fila.parteMedico)], ['P', num(fila.ausenciasSuspensiones)],
+      ['U', dia8], ['V', P.presentismo], ['W', P.viatico], ['X', P.noRem],
+      ['Y', hora], ['Z', P.presentismo / 25], ['AA', P.viatico / 25], ['AB', P.noRem / 25],
+      ['AC', AC], ['AD', AD], ['AE', AE], ['AF', AF], ['AG', AG], ['AH', 0],
+      ['AI', AI], ['AJ', AJ], ['AK', 0], ['AL', AL], ['AM', AM], ['AN', AN],
+      ['AO', AO], ['AP', AP], ['AQ', 0], ['AR', 0], ['AS', AS],
+      ['AT', AT], ['AU', AU], ['AV', AV], ['AW', AW], ['AX', AX],
+    ]
+    for (const [col, v] of cacheFila) acum(col, v)
+  })
+
+  // Fila TOTALES: SUM hasta la fila separadora inclusive, como el ejemplo
+  // (SUM(I7:I72) con datos hasta la 71). H no tiene total; Q-T y AH/AK/AQ/AR
+  // suman columnas vacías (dan 0) pero el ejemplo las trae y se conservan.
+  put(`A${filaTotales}`, 'TOTALES')
+  for (const col of ['B', 'C', 'D', 'E', 'F']) put(`${col}${filaTotales}`, '')
+  const colsTotales = ['G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
+    'U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI',
+    'AJ', 'AK', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR', 'AS', 'AT', 'AU', 'AV', 'AW', 'AX']
+  for (const col of colsTotales) {
+    put(`${col}${filaTotales}`, suma[col] ?? 0, `SUM(${col}${filaInicial}:${col}${filaSeparadora})`)
+  }
+
+  return { nombreHoja: 'Hoja1', ref: `A1:AX${filaTotales}`, celdas }
+}
