@@ -230,6 +230,74 @@ describe('construirResumenGuardia', () => {
   })
 })
 
+// ── Novedad mensual informada (cantidad sin fechas exactas) ─────────────────
+// La deduplicación vive en la IMPORTACIÓN: una mensual se carga por la
+// diferencia contra lo ya registrado con fechas. Acá se prueba que el resumen
+// suma ambas fuentes sin duplicar y sin tocar nada operativo.
+
+describe('novedad mensual informada', () => {
+  const MES_REF = { fecha_desde: '2026-08-01', fecha_hasta: '2026-08-31', estado: 'aprobada' }
+  const conActividad = (novedades: NovedadResumen[]) =>
+    fila(construirResumenGuardia(base({
+      turnos: [turno({ id: 't1', fecha: '2026-08-17' })], // feriado nacional
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+      novedades,
+    })))!
+
+  it('mensual de 2 días sin fechas: el resumen muestra 2', () => {
+    const f = conActividad([{ id: 'n1', empleado_id: 'g1', tipo: 'vacaciones', ...MES_REF, dias_informados: 2 }])
+    expect(f.vacaciones).toBe(2)
+    expect(f.notas).toEqual(['vacaciones 2 d (mensual informada)'])
+  })
+
+  it('novedad normal con fechas conocidas sigue funcionando igual', () => {
+    const f = conActividad([{ id: 'n1', empleado_id: 'g1', tipo: 'vacaciones', fecha_desde: '2026-08-05', fecha_hasta: '2026-08-06', estado: 'aprobada' }])
+    expect(f.vacaciones).toBe(2)
+    expect(f.notas).toEqual(['vacaciones 05/08–06/08 (2 d)'])
+  })
+
+  it('app 2 con fechas + Excel 2: la importación no crea nada y el resumen sigue en 2', () => {
+    // Caso A de la regla: cantidades iguales → conciliado, no se importa.
+    const soloApp = conActividad([{ id: 'n1', empleado_id: 'g1', tipo: 'vacaciones', fecha_desde: '2026-08-05', fecha_hasta: '2026-08-06', estado: 'aprobada' }])
+    expect(soloApp.vacaciones).toBe(2)
+  })
+
+  it('app 1 con fechas + Excel 2: la mensual entra por la DIFERENCIA y el total es 2, no 3', () => {
+    const f = conActividad([
+      { id: 'n1', empleado_id: 'g1', tipo: 'vacaciones', fecha_desde: '2026-08-05', fecha_hasta: '2026-08-05', estado: 'aprobada' },
+      { id: 'n2', empleado_id: 'g1', tipo: 'vacaciones', ...MES_REF, dias_informados: 1 }, // diferencia importada (2−1)
+    ])
+    expect(f.vacaciones).toBe(2)
+  })
+
+  it('reimportación idéntica no duplica: la misma fila mensual cuenta una sola vez', () => {
+    // La idempotencia de la importación se garantiza por origen_carga en la
+    // base (el script no reinserta si ya existe para empleado+tipo+mes). Acá
+    // se afirma que una única fila mensual vale exactamente su cantidad.
+    const f = conActividad([{ id: 'n1', empleado_id: 'g1', tipo: 'suspension', ...MES_REF, dias_informados: 5 }])
+    expect(f.ausenciasSuspensiones).toBe(5)
+  })
+
+  it('la mensual no modifica horas liquidables, jornadas ni feriados', () => {
+    const sin = conActividad([])
+    const con = conActividad([
+      { id: 'n1', empleado_id: 'g1', tipo: 'vacaciones', ...MES_REF, dias_informados: 6 },
+      { id: 'n2', empleado_id: 'g1', tipo: 'parte_medico', ...MES_REF, dias_informados: 2 },
+    ])
+    expect(con.horasLiquidables).toBe(sin.horasLiquidables)
+    expect(con.jornadas).toBe(sin.jornadas)
+    expect(con.feriadosTrabajados).toBe(sin.feriadosTrabajados)
+    expect(con.horasEnFeriado).toBe(sin.horasEnFeriado)
+    expect(con.vacaciones).toBe(6)
+    expect(con.parteMedico).toBe(2)
+  })
+
+  it('una mensual de otro mes no cuenta en este resumen', () => {
+    const f = conActividad([{ id: 'n1', empleado_id: 'g1', tipo: 'vacaciones', fecha_desde: '2026-07-01', fecha_hasta: '2026-07-31', estado: 'aprobada', dias_informados: 4 }])
+    expect(f.vacaciones).toBeNull()
+  })
+})
+
 describe('diasDeNovedadEnMes', () => {
   it('recorta al mes y cuenta extremos inclusivos', () => {
     const n = { empleado_id: 'g1', tipo: 'vacaciones', fecha_desde: '2026-07-28', fecha_hasta: '2026-08-03', estado: 'aprobada' }

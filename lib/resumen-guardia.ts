@@ -63,6 +63,12 @@ export interface NovedadResumen extends NovedadLaboral {
   id?: string | null
   /** Cantidad de horas cuando el tipo la usa (ej. ajuste_nocturnidad). */
   horas_afectadas?: number | string | null
+  /**
+   * Novedad MENSUAL INFORMADA: cantidad de días sin fechas exactas. Cuando
+   * está presente vale este número y las fechas son sólo el período de
+   * referencia. NULL = novedad normal (cantidad por fechas).
+   */
+  dias_informados?: number | string | null
 }
 
 /**
@@ -287,18 +293,40 @@ const ETIQUETA_TIPO: Record<string, string> = {
   otra: 'novedad',
 }
 
+/**
+ * Días que aporta una novedad al mes. Una novedad MENSUAL INFORMADA (con
+ * dias_informados) vale exactamente esa cantidad — sus fechas son sólo el
+ * período de referencia, no días afirmados. Una novedad normal vale los días
+ * de su rango que caen en el mes. La deduplicación pasa en la IMPORTACIÓN
+ * (las mensuales se cargan por la diferencia contra lo ya registrado con
+ * fechas), así que acá la suma de ambas fuentes nunca duplica.
+ */
+function diasQueAporta(n: NovedadResumen, mes: string): number {
+  if (n.dias_informados != null) {
+    // Sólo cuenta si su período de referencia toca el mes pedido.
+    return diasDeNovedadEnMes(n, mes) > 0 ? Number(n.dias_informados) : 0
+  }
+  return diasDeNovedadEnMes(n, mes)
+}
+
 function contarColumna(
   novedades: NovedadResumen[],
   tipos: TipoNovedad[],
   mes: string,
 ): DiasNovedad {
-  const propias = novedades.filter(n => tipos.includes(n.tipo as TipoNovedad))
+  const propias = novedades.filter(n =>
+    tipos.includes(n.tipo as TipoNovedad) && diasDeNovedadEnMes(n, mes) > 0,
+  )
   if (propias.length === 0) return null
-  return propias.reduce((s, n) => s + diasDeNovedadEnMes(n, mes), 0)
+  return propias.reduce((s, n) => s + diasQueAporta(n, mes), 0)
 }
 
 function notaDeNovedad(n: NovedadResumen, mes: string): string {
   const etiqueta = ETIQUETA_TIPO[n.tipo] ?? n.tipo
+  if (n.dias_informados != null) {
+    // Mensual informada: no afirmar fechas que no conocemos.
+    return `${etiqueta} ${Number(n.dias_informados)} d (mensual informada)`
+  }
   const dias = diasDeNovedadEnMes(n, mes)
   const rango = n.fecha_desde === n.fecha_hasta
     ? n.fecha_desde.slice(8, 10) + '/' + n.fecha_desde.slice(5, 7)
