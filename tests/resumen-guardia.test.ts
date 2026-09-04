@@ -3,6 +3,7 @@ import {
   construirResumenGuardia,
   diasDeNovedadEnMes,
   filasXLSXResumenGuardia,
+  plantillaLiquidacionResumenGuardia,
   type NovedadResumen,
   type ParamsResumenGuardia,
   type TurnoResumen,
@@ -629,5 +630,157 @@ describe('nocturnidad', () => {
     expect(f.horasNocturnas).toBe(10)
     expect(f.horasLiquidables).toBe(20)
     expect(f.jornadas).toBe(3)
+  })
+})
+
+describe('plantillaLiquidacionResumenGuardia', () => {
+  // Réplica de "ejemplo agoto app.xlsx": la app rellena las celdas de entrada
+  // y emite las fórmulas de la plantilla con la fila ajustada. Los valores
+  // esperados de ALMADA salen del archivo de Juan (fila 7 del ejemplo).
+  const dosVigiladores = () => {
+    const t1 = turno({ id: 't1' })
+    const t2 = turno({ id: 't2', fecha: '2026-08-11', guardia_id: 'g2' })
+    const r1 = registro({ turno_id: 't1', horas_liquidables: 12 })
+    const r2 = registro({ turno_id: 't2', guardia_id: 'g2', horas_liquidables: 8 })
+    return construirResumenGuardia(base({
+      empleados: [
+        { id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', cuil: '20144945817', legajoVisual: 'ALMADA' },
+        { id: 'g2', nombre: 'SILVIO', apellido: 'ALMARA', cuil: '20295393522', legajoVisual: 'ALMARA' },
+      ],
+      turnos: [t1, t2],
+      registros: [r1, r2],
+    }))
+  }
+  const mapa = (p: ReturnType<typeof plantillaLiquidacionResumenGuardia>) => {
+    const m = new Map<string, { v?: string | number; f?: string }>()
+    for (const c of p.celdas) m.set(c.ref, c)
+    return m
+  }
+
+  it('geometría: datos desde la fila 7, fila separadora vacía y TOTALES con SUM hasta la separadora', () => {
+    const p = plantillaLiquidacionResumenGuardia(dosVigiladores())
+    expect(p.nombreHoja).toBe('Hoja1')
+    expect(p.ref).toBe('A1:AX10') // 2 filas de datos (7-8), separadora 9, TOTALES 10
+    const m = mapa(p)
+    expect(m.get('A10')?.v).toBe('TOTALES')
+    expect(m.get('I10')?.f).toBe('SUM(I7:I9)')
+    expect(m.get('G10')?.f).toBe('SUM(G7:G9)')
+    expect(m.get('AX10')?.f).toBe('SUM(AX7:AX9)')
+    expect(p.celdas.filter(c => /^[A-Z]+9$/.test(c.ref)).length).toBe(0)
+  })
+
+  it('bloque de parámetros y encabezados, literal del ejemplo', () => {
+    const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
+    expect(m.get('A1')?.v).toBe('VisualSueldos - Planilla de importación de datos')
+    expect(m.get('E1')?.v).toBe(1001300)
+    expect(m.get('F1')?.f).toBe('E1/200')
+    expect(m.get('F2')?.f).toBe('E1/200*8')
+    expect(m.get('E2')?.v).toBe(180000)
+    expect(m.get('E3')?.v).toBe(505500)
+    expect(m.get('E4')?.v).toBe(20000)
+    expect(m.get('AP5')?.v).toBe(2500)
+    expect(m.get('A6')?.v).toBe('LEGAJO VISUAL')
+    expect(m.get('G6')?.v).toBe('JORNADAS')
+    expect(m.get('H6')).toBeUndefined() // H no tiene título: es el tope de 25 días
+    expect(m.get('I6')?.v).toBe('HORAS LIQUIDABLES')
+    expect(m.get('P6')?.v).toBe('AUS/SUSP')
+    expect(m.get('AF6')?.v).toBe('004')
+    expect(m.get('AO6')?.v).toBe('total')
+  })
+
+  it('celdas de entrada: datos consolidados de la app en A-P', () => {
+    const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
+    expect(m.get('A7')?.v).toBe('ALMADA')
+    expect(m.get('B7')?.v).toBe('20144945817')
+    expect(m.get('C7')?.v).toBe('') // CUENTA vacía: sin datos bancarios
+    expect(m.get('D7')?.v).toBe('ALMADA, ESTANISLAO')
+    expect(m.get('G7')?.v).toBe(1)
+    expect(m.get('I7')?.v).toBe(12)
+    expect(m.get('A8')?.v).toBe('ALMARA')
+  })
+
+  it('fórmulas por fila idénticas a la plantilla, con la fila ajustada', () => {
+    const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
+    expect(m.get('H7')?.f).toBe('MIN(G7,25)')
+    expect(m.get('U7')?.f).toBe('F2')
+    expect(m.get('V7')?.f).toBe('E2')
+    expect(m.get('U8')?.f).toBe('U7') // las siguientes arrastran la de arriba
+    expect(m.get('Y7')?.f).toBe('U7/8')
+    expect(m.get('AC8')?.f).toBe('AA8*H8')
+    expect(m.get('AG7')?.f).toBe('IF(I7<=150,H7*8,150)')
+    expect(m.get('AI7')?.f).toBe('AH7*Y7')
+    expect(m.get('AM7')?.f).toBe('IF(AL7>0,(AL7*100)/I7,0)')
+    expect(m.get('AO7')?.f).toBe('AC7+AD7+AE7+AF7+AI7+AJ7+AT7+AU7+AV7+AW7+AX7+AP7')
+    expect(m.get('AP7')?.f).toBe('IF(AL7>0,AL7*2500,0)-AR7')
+    expect(m.get('AS7')?.f).toBe('IF(AO7>0,AO7/I7,0)')
+    expect(m.get('AT7')?.f).toBe('K7*U7')
+  })
+
+  it('las columnas de carga manual (AH, AK, AQ, AR) quedan libres en las filas de datos', () => {
+    const p = plantillaLiquidacionResumenGuardia(dosVigiladores())
+    for (const c of p.celdas) {
+      expect(c.ref).not.toMatch(/^(AH|AK|AQ|AR)[78]$/)
+    }
+  })
+
+  it('nocturnidad 004: (Y/10)*J en TODAS las filas — la corrección de la fila de FIGGINI, generalizada', () => {
+    const t = turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })
+    const res = construirResumenGuardia(base({
+      turnos: [t],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: () => ({ activa: true, desde: '22:00', hasta: '06:00' }),
+    }))
+    const m = mapa(plantillaLiquidacionResumenGuardia(res))
+    expect(m.get('AF7')?.f).toBe('(Y7/10)*J7')
+    // hora/10 × hs nocturnas: 500.65 × 8 — no la variante ×200 del resto del ejemplo
+    expect(m.get('AF7')?.v).toBeCloseTo((1001300 / 200 / 10) * 8, 6)
+  })
+
+  it('caso ALMADA del ejemplo: 26 jornadas, 208 hs, 1 feriado → mismos importes que el archivo de Juan', () => {
+    // 26 turnos de 8 hs en fechas distintas: G=26, I=208; el feriado se carga
+    // como valor consolidado, así que acá se simula el resumen directo.
+    const turnos: TurnoResumen[] = []
+    const registros: RegistroUniverso[] = []
+    for (let d = 1; d <= 26; d++) {
+      const fecha = '2026-08-' + String(d).padStart(2, '0')
+      turnos.push(turno({ id: 't' + d, fecha, hora_inicio: '07:00', hora_fin: '15:00' }))
+      registros.push(registro({ turno_id: 't' + d, horas_liquidables: 8 }))
+    }
+    const res = construirResumenGuardia(base({ turnos, registros }))
+    const f = fila(res)!
+    expect(f.jornadas).toBe(26)
+    expect(f.horasLiquidables).toBe(208)
+    f.feriadosTrabajados = 1 // como ALMADA en agosto
+    const m = mapa(plantillaLiquidacionResumenGuardia(res))
+    expect(m.get('H7')?.v).toBe(25) // MIN(26,25)
+    expect(m.get('AC7')?.v).toBe(505500) // viáticos: 20220 × 25
+    expect(m.get('AD7')?.v).toBe(180000) // presentismo
+    expect(m.get('AE7')?.v).toBe(20000) // no rem
+    expect(m.get('AG7')?.v).toBe(150) // 208 > 150 → tope
+    expect(m.get('AJ7')?.v).toBe(750975) // 150 × hora
+    expect(m.get('AL7')?.v).toBe(58) // hs extras
+    expect(m.get('AP7')?.v).toBe(145000) // 58 × 2500
+    expect(m.get('AT7')?.v).toBe(40052) // 1 feriado × valor día
+    expect(m.get('AO7')?.v).toBe(1641527) // total, igual a AO7 del ejemplo
+  })
+
+  it('nocturnas null va como celda vacía (nunca un 0 inventado) y AF calcula 0', () => {
+    const res = construirResumenGuardia(base({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      // sin configuración de nocturnidad → horasNocturnas null
+    }))
+    expect(fila(res)!.horasNocturnas).toBeNull()
+    const m = mapa(plantillaLiquidacionResumenGuardia(res))
+    expect(m.get('J7')?.v).toBe('')
+    expect(m.get('AF7')?.v).toBe(0)
+  })
+
+  it('TOTALES cachea las sumas de las filas', () => {
+    const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
+    expect(m.get('G10')?.v).toBe(2)
+    expect(m.get('I10')?.v).toBe(20)
+    // AG de cada fila (H×8 = 8, sin llegar al tope) × hora, sumado
+    expect(m.get('AJ10')?.v).toBe(2 * 8 * (1001300 / 200))
   })
 })

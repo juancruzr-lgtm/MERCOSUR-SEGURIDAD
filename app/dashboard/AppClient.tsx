@@ -8,7 +8,7 @@ import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendie
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
-import { construirResumenGuardia, filasXLSXResumenGuardia, tituloResumenGuardia } from '@/lib/resumen-guardia'
+import { construirResumenGuardia, plantillaLiquidacionResumenGuardia } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -7920,23 +7920,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       },
     })
     if (resumen.filas.length === 0) return
-    // Escritor propio, plano: encabezado en la fila 1, sin celdas combinadas
-    // ni texto explicativo (pedido de Juan). descargarXLSX no sirve acá porque
-    // combina siempre las tres primeras filas como título.
-    const filasXLSX = filasXLSXResumenGuardia(resumen)
+    // Plantilla canónica de liquidación (ejemplo agoto app.xlsx de Juan):
+    // parámetros + fórmulas por fila, la app solo rellena las celdas de
+    // entrada. Sin autofiltro ni paneles fijos: la hoja replica el ejemplo.
+    const plantilla = plantillaLiquidacionResumenGuardia(resumen)
     const XLSXmod = await import('xlsx')
-    const ws = XLSXmod.utils.aoa_to_sheet(filasXLSX)
-    const colCount = Math.max(...filasXLSX.map(r => r.length))
-    ws['!autofilter'] = {
-      ref: XLSXmod.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: resumen.filas.length, c: colCount - 1 } }),
+    const ws: Record<string, any> = { '!ref': plantilla.ref }
+    for (const c of plantilla.celdas) {
+      const cell: any = typeof c.v === 'number' ? { t: 'n', v: c.v } : { t: 's', v: c.v ?? '' }
+      if (c.f) cell.f = c.f
+      ws[c.ref] = cell
     }
-    ;(ws as any)['!freeze'] = { xSplit: 0, ySplit: 1 }
-    ws['!cols'] = Array.from({ length: colCount }, (_, c) => {
-      const ancho = filasXLSX.reduce((max, row) => Math.max(max, String(row[c] ?? '').length), 8)
-      return { wch: Math.min(Math.max(ancho + 2, 10), 40) }
-    })
     const wb = XLSXmod.utils.book_new()
-    XLSXmod.utils.book_append_sheet(wb, ws, tituloResumenGuardia(mes).slice(0, 31))
+    XLSXmod.utils.book_append_sheet(wb, ws as any, plantilla.nombreHoja)
     XLSXmod.writeFile(wb, `resumen_guardia_${mesArchivo()}.xlsx`)
   }
 
