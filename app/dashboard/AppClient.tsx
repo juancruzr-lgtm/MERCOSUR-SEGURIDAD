@@ -8,7 +8,7 @@ import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendie
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
-import { construirResumenGuardia, filasXLSXResumenGuardia } from '@/lib/resumen-guardia'
+import { construirResumenGuardia, filasXLSXResumenGuardia, tituloResumenGuardia } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -3493,6 +3493,9 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
     frecuencia_supervision_horas: 24,
     zona_id: '',
     tipo_ubicacion: 'fijo',
+    nocturnidad_activa: false,
+    nocturnidad_desde: '22:00',
+    nocturnidad_hasta: '06:00',
   }
   const [form, setForm] = useState(formVacio)
 
@@ -3533,9 +3536,53 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       frecuencia_supervision_horas: o.frecuencia_supervision_horas || 24,
       zona_id: o.zona_id || '',
       tipo_ubicacion: o.tipo_ubicacion || 'fijo',
+      nocturnidad_activa: Boolean(o.nocturnidad_activa),
+      nocturnidad_desde: (o.nocturnidad_desde || '22:00').slice(0, 5),
+      nocturnidad_hasta: (o.nocturnidad_hasta || '06:00').slice(0, 5),
     })
     setEditId(o.id)
     setModal(true)
+    // Excepciones de nocturnidad de ESTE objetivo. Si la tabla aún no existe
+    // (migración sin aplicar), la lista queda vacía y no rompe nada.
+    setNoctExcepciones([])
+    supabase.from('nocturnidad_empleado_objetivo').select('*').eq('objetivo_id', o.id)
+      .then(({ data }) => setNoctExcepciones(data ?? []))
+  }
+
+  // ── Excepciones de nocturnidad por vigilador (empleado+objetivo) ──────────
+  // Sin fila = heredar del objetivo. 'si'/'no' fuerzan el resultado para esa
+  // persona en este objetivo. Elegir "heredar" borra la fila (equivalente),
+  // y el trigger de la tabla deja todo auditado en objetivos_auditoria.
+  const [noctExcepciones, setNoctExcepciones] = useState<any[]>([])
+  const [noctExcEmpleadoId, setNoctExcEmpleadoId] = useState('')
+  const [noctExcModo, setNoctExcModo] = useState<'si' | 'no'>('no')
+
+  const agregarExcepcionNocturnidad = async () => {
+    if (!editId || !noctExcEmpleadoId) return
+    const { data, error } = await supabase.from('nocturnidad_empleado_objetivo')
+      .insert({ objetivo_id: editId, empleado_id: noctExcEmpleadoId, modo: noctExcModo })
+      .select().single()
+    if (error) { alert(`No se pudo guardar la excepción: ${error.message}`); return }
+    setNoctExcepciones(prev => [...prev, data])
+    setNoctExcEmpleadoId('')
+  }
+
+  const cambiarExcepcionNocturnidad = async (fila: any, modo: string) => {
+    if (modo === 'heredar') {
+      const { error } = await supabase.from('nocturnidad_empleado_objetivo').delete().eq('id', fila.id)
+      if (error) { alert(`No se pudo quitar la excepción: ${error.message}`); return }
+      setNoctExcepciones(prev => prev.filter(e => e.id !== fila.id))
+      return
+    }
+    const { data, error } = await supabase.from('nocturnidad_empleado_objetivo')
+      .update({ modo }).eq('id', fila.id).select().single()
+    if (error) { alert(`No se pudo cambiar la excepción: ${error.message}`); return }
+    setNoctExcepciones(prev => prev.map(e => e.id === fila.id ? data : e))
+  }
+
+  const nombreGuardia = (empleadoId: string) => {
+    const g = (guardias as Usuario[]).find(x => x.id === empleadoId)
+    return g ? `${g.apellido || ''}, ${g.nombre || ''}`.replace(/^, /, '') : empleadoId
   }
 
   // TODO: al crear un objetivo nuevo debe crearse también su puesto inicial, o
@@ -3563,6 +3610,12 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
       frecuencia_supervision_horas: Math.max(1, Number(form.frecuencia_supervision_horas) || 24),
       zona_id: form.zona_id || null,
       tipo_ubicacion: form.tipo_ubicacion === 'movil' ? 'movil' : 'fijo',
+      // Nocturnidad: condición contractual del servicio. La franja sólo se
+      // persiste cuando está activa (el CHECK de la tabla exige franja
+      // completa con nocturnidad_activa = true).
+      nocturnidad_activa: Boolean(form.nocturnidad_activa),
+      nocturnidad_desde: form.nocturnidad_activa ? (form.nocturnidad_desde || '22:00') : null,
+      nocturnidad_hasta: form.nocturnidad_activa ? (form.nocturnidad_hasta || '06:00') : null,
     }
 
     if (editId) {
@@ -4034,6 +4087,90 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Liquidación / Nocturnidad. Es una condición contractual del
+              servicio: en algunos clientes las horas dentro de la franja
+              generan un adicional. Acá sólo se configura; el Resumen Guardia
+              la consume. Cambiarla queda auditado (objetivos_auditoria). */}
+          <div style={{ marginBottom:16 }}>
+            <label style={{ ...S.label, marginBottom:6 }}>Liquidación / Nocturnidad</label>
+            <label style={{ ...S.label, display:'flex', alignItems:'flex-start', gap:10, cursor:'pointer', textTransform:'none', fontWeight:400 }}>
+              <input
+                type="checkbox"
+                checked={Boolean(form.nocturnidad_activa)}
+                onChange={e => setForm({ ...form, nocturnidad_activa: e.target.checked })}
+                style={{ marginTop:2 }}
+              />
+              <span>
+                Discriminar nocturnidad
+                <span style={{ display:'block', fontSize:12, opacity:.7 }}>
+                  Las horas reconocidas dentro de la franja se informan aparte en el Resumen Guardia. No cambia las horas liquidables.
+                </span>
+              </span>
+            </label>
+            {Boolean(form.nocturnidad_activa) && (
+              <div style={{ display:'flex', gap:12, marginTop:8 }}>
+                <div style={{ flex:1 }}>
+                  <label style={S.label}>Desde</label>
+                  <input
+                    style={S.input}
+                    type="time"
+                    value={form.nocturnidad_desde}
+                    onChange={e => setForm({ ...form, nocturnidad_desde: e.target.value })}
+                  />
+                </div>
+                <div style={{ flex:1 }}>
+                  <label style={S.label}>Hasta</label>
+                  <input
+                    style={S.input}
+                    type="time"
+                    value={form.nocturnidad_hasta}
+                    onChange={e => setForm({ ...form, nocturnidad_hasta: e.target.value })}
+                  />
+                </div>
+              </div>
+            )}
+
+            {editId && (
+              <div style={{ marginTop:10, paddingTop:10, borderTop:'1px solid rgba(255,255,255,.08)' }}>
+                <label style={S.label}>Excepciones por vigilador</label>
+                <div style={{ fontSize:12, opacity:.7, marginBottom:8 }}>
+                  Sin excepción, cada vigilador hereda la regla del objetivo. "Sí" cobra nocturnidad aunque el objetivo no la tenga; "No" no cobra aunque el objetivo la tenga.
+                </div>
+                {noctExcepciones.map((e: any) => (
+                  <div key={e.id} style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
+                    <span style={{ flex:1, fontSize:13 }}>{nombreGuardia(e.empleado_id)}</span>
+                    <select
+                      style={{ ...S.select, width:150 }}
+                      value={e.modo}
+                      onChange={ev => cambiarExcepcionNocturnidad(e, ev.target.value)}
+                    >
+                      <option value="heredar">Heredar (quitar)</option>
+                      <option value="si">Sí</option>
+                      <option value="no">No</option>
+                    </select>
+                  </div>
+                ))}
+                <div style={{ display:'flex', gap:10, marginTop:6 }}>
+                  <select
+                    style={{ ...S.select, flex:1 }}
+                    value={noctExcEmpleadoId}
+                    onChange={e => setNoctExcEmpleadoId(e.target.value)}
+                  >
+                    <option value="">Agregar vigilador…</option>
+                    {(guardias as Usuario[])
+                      .filter(g => esRolGuardia(g.rol) && !noctExcepciones.some((e: any) => e.empleado_id === g.id))
+                      .map(g => <option key={g.id} value={g.id}>{`${g.apellido || ''}, ${g.nombre || ''}`}</option>)}
+                  </select>
+                  <select style={{ ...S.select, width:90 }} value={noctExcModo} onChange={e => setNoctExcModo(e.target.value as 'si' | 'no')}>
+                    <option value="no">No</option>
+                    <option value="si">Sí</option>
+                  </select>
+                  <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px' }} onClick={agregarExcepcionNocturnidad} disabled={!noctExcEmpleadoId}>Agregar</button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Puesto móvil. Estaba sólo en Página GPS, donde nadie lo encontraba
@@ -6495,6 +6632,61 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [turnosReportes, setTurnosReportes] = useState<Turno[]>([])
   const [registrosReportes, setRegistrosReportes] = useState<RegistroAsistencia[]>([])
   const [novedadesLaborales, setNovedadesLaborales] = useState<any[]>([])
+  const [nocturnidadExcepciones, setNocturnidadExcepciones] = useState<any[]>([])
+
+  // ── Ajuste mensual de nocturnidad (novedades_laborales tipo ajuste) ───────
+  // Valor FINAL informado para liquidar: reemplaza al cálculo automático del
+  // mes para ese empleado. Reutiliza el flujo de novedades (autoría y estado);
+  // quitar = marcar rechazada, nunca borrar ("las anulaciones conservan el
+  // registro").
+  const [ajusteEmpleadoId, setAjusteEmpleadoId] = useState('')
+  const [ajusteHoras, setAjusteHoras] = useState('')
+  const [ajusteObs, setAjusteObs] = useState('')
+  const [guardandoAjuste, setGuardandoAjuste] = useState(false)
+  const ajustesNocturnidadMes = novedadesLaborales.filter((n: any) => n.tipo === 'ajuste_nocturnidad')
+
+  const agregarAjusteNocturnidad = async () => {
+    const horas = Number(ajusteHoras)
+    if (!ajusteEmpleadoId || !(horas > 0)) return
+    setGuardandoAjuste(true)
+    try {
+      const [y, m] = mes.split('-').map(Number)
+      const fin = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+      const { data, error } = await supabase.from('novedades_laborales').insert({
+        empleado_id: ajusteEmpleadoId,
+        tipo: 'ajuste_nocturnidad',
+        fecha_desde: `${mes}-01`,
+        fecha_hasta: fin,
+        horas_afectadas: horas,
+        observacion: ajusteObs.trim() || null,
+        cargado_por: user?.id,
+        estado: 'aprobada',
+        aprobado_por: user?.id,
+        aprobado_at: new Date().toISOString(),
+      }).select().single()
+      if (error) throw error
+      if (data) setNovedadesLaborales((prev: any[]) => [...prev, data])
+      setAjusteEmpleadoId(''); setAjusteHoras(''); setAjusteObs('')
+    } catch (e: any) {
+      alert(e.message || 'Error al guardar el ajuste de nocturnidad')
+    } finally {
+      setGuardandoAjuste(false)
+    }
+  }
+
+  const quitarAjusteNocturnidad = async (n: any) => {
+    try {
+      const { error } = await supabase.from('novedades_laborales').update({
+        estado: 'rechazada',
+        observacion: `${n.observacion ? n.observacion + ' · ' : ''}[quitado por ${user?.email || user?.id || 'admin'} ${new Date().toISOString()}]`,
+      }).eq('id', n.id)
+      if (error) throw error
+      // La pantalla trabaja sólo con aprobadas: la rechazada sale de la lista.
+      setNovedadesLaborales((prev: any[]) => prev.filter((x: any) => x.id !== n.id))
+    } catch (e: any) {
+      alert(e.message || 'Error al quitar el ajuste')
+    }
+  }
 
   // ── Editar turno ──────────────────────────────────────────────────
   const [turnoEditando, setTurnoEditando] = useState<Turno | null>(null)
@@ -6718,10 +6910,14 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       fetchAll('aceptaciones_planilla', 'turno_id, empleado_id, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('turno_id')),
       fetchAll('solicitudes_modificacion_planilla', 'id, turno_id, empleado_id, estado, created_at, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('created_at', { ascending: false }).order('id')),
       fetchAll('revisiones_planilla', 'turno_id, empleado_id, accion, created_at, turno:turnos!inner(fecha)', q => q.gte('turno.fecha', desdeStr).lte('turno.fecha', hastaStr).order('turno_id')),
-    ]).then(([turnos, registros, nl, acept, soli, revi]) => {
+      // Excepciones de nocturnidad empleado+objetivo. Si la tabla todavía no
+      // existe en el entorno (migración sin aplicar), se sigue sin excepciones.
+      supabase.from('nocturnidad_empleado_objetivo').select('*'),
+    ]).then(([turnos, registros, nl, acept, soli, revi, noctExc]) => {
       setTurnosReportes(turnos)
       setRegistrosReportes(registros)
       setNovedadesLaborales(nl.data ?? [])
+      setNocturnidadExcepciones((noctExc as any).data ?? [])
       setRevisionMes(construirRevisionPorClave(acept, soli, revi))
     })
   }, [mes])
@@ -7700,15 +7896,48 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const exportarResumenGuardiaMensualXLSX = async () => {
     const resumen = construirResumenGuardia({
       mes,
-      empleados: empleados.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, cuil: g.cuil, legajo: g.legajo })),
+      // Resumen Guardia: solo vigiladores (pedido de Juan) — los supervisores no liquidan por este circuito.
+      empleados: empleados.filter((g: Usuario) => esRolGuardia(g.rol)).map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, cuil: g.cuil, legajo: g.legajo })),
       turnos: turnosMes,
       registros: registrosMes,
       novedades: novedadesLaborales,
       esObjetivoPrueba: (id?: string | null) => Boolean(objetivoPorIdPlanilla.get(id || '')?.es_prueba),
       nombreObjetivo: (id?: string | null) => objetivoPorIdPlanilla.get(id || '')?.nombre ?? '',
+      nocturnidadObjetivo: (id?: string | null) => {
+        const o = objetivoPorIdPlanilla.get(id || '') as any
+        if (!o) return null
+        return {
+          activa: Boolean(o.nocturnidad_activa),
+          desde: o.nocturnidad_desde ?? null,
+          hasta: o.nocturnidad_hasta ?? null,
+        }
+      },
+      nocturnidadEmpleadoObjetivo: (empleadoId: string, objetivoId?: string | null) => {
+        const fila = nocturnidadExcepciones.find(
+          (e: any) => e.empleado_id === empleadoId && e.objetivo_id === objetivoId,
+        )
+        return (fila?.modo as 'heredar' | 'si' | 'no' | undefined) ?? null
+      },
     })
     if (resumen.filas.length === 0) return
-    await descargarXLSX(`resumen_guardia_${mesArchivo()}.xlsx`, filasXLSXResumenGuardia(resumen), 3, resumen.filas.length, [6, 7, 10])
+    // Escritor propio, plano: encabezado en la fila 1, sin celdas combinadas
+    // ni texto explicativo (pedido de Juan). descargarXLSX no sirve acá porque
+    // combina siempre las tres primeras filas como título.
+    const filasXLSX = filasXLSXResumenGuardia(resumen)
+    const XLSXmod = await import('xlsx')
+    const ws = XLSXmod.utils.aoa_to_sheet(filasXLSX)
+    const colCount = Math.max(...filasXLSX.map(r => r.length))
+    ws['!autofilter'] = {
+      ref: XLSXmod.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: resumen.filas.length, c: colCount - 1 } }),
+    }
+    ;(ws as any)['!freeze'] = { xSplit: 0, ySplit: 1 }
+    ws['!cols'] = Array.from({ length: colCount }, (_, c) => {
+      const ancho = filasXLSX.reduce((max, row) => Math.max(max, String(row[c] ?? '').length), 8)
+      return { wch: Math.min(Math.max(ancho + 2, 10), 40) }
+    })
+    const wb = XLSXmod.utils.book_new()
+    XLSXmod.utils.book_append_sheet(wb, ws, tituloResumenGuardia(mes).slice(0, 31))
+    XLSXmod.writeFile(wb, `resumen_guardia_${mesArchivo()}.xlsx`)
   }
 
   const exportarResumenObjetivosXLSX = async () => {
@@ -8138,6 +8367,36 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Guardia</strong>
             <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12, marginRight:8 }} onClick={exportarResumenGuardiaMensualXLSX} title="Insumo mensual de liquidación: jornadas, horas canónicas, feriados y novedades cargadas. Sin objetivos de prueba.">Resumen Guardia (liquidación)</button>
             <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={exportarResumenGuardiasXLSX}>Exportar XLSX</button>
+          </div>
+
+          {/* Ajustes de nocturnidad del mes: el valor FINAL informado para
+              liquidar reemplaza al cálculo automático de ese empleado. */}
+          <div style={{ border:'1px solid rgba(255,255,255,.1)', borderRadius:8, padding:'10px 14px', marginBottom:16 }}>
+            <div style={{ fontSize:13, fontWeight:600, marginBottom:6 }}>Ajustes de nocturnidad · {mes}</div>
+            {ajustesNocturnidadMes.length === 0 && (
+              <div style={{ fontSize:12, opacity:.6, marginBottom:6 }}>Sin ajustes cargados este mes. El Resumen Guardia usa el cálculo automático según la configuración de cada objetivo.</div>
+            )}
+            {ajustesNocturnidadMes.map((n: any) => {
+              const e = empleados.find((x: Usuario) => x.id === n.empleado_id)
+              return (
+                <div key={n.id} style={{ display:'flex', alignItems:'center', gap:12, fontSize:13, marginBottom:4 }}>
+                  <span style={{ flex:1 }}>{e ? `${e.apellido}, ${e.nombre}` : n.empleado_id}</span>
+                  <span style={{ fontVariantNumeric:'tabular-nums' }}>{Number(n.horas_afectadas)} hs nocturnas finales</span>
+                  <button style={{ ...S.btn, ...S.btnSecondary, padding:'2px 10px', fontSize:12 }} onClick={() => quitarAjusteNocturnidad(n)}>Quitar</button>
+                </div>
+              )
+            })}
+            <div style={{ display:'flex', gap:10, marginTop:8, flexWrap:'wrap' }}>
+              <select style={{ ...S.select, minWidth:220, flex:1 }} value={ajusteEmpleadoId} onChange={e => setAjusteEmpleadoId(e.target.value)}>
+                <option value="">Agregar ajuste para…</option>
+                {empleados.filter((g: Usuario) => esRolGuardia(g.rol)).map((g: Usuario) => (
+                  <option key={g.id} value={g.id}>{`${g.apellido}, ${g.nombre}`}</option>
+                ))}
+              </select>
+              <input style={{ ...S.input, width:110 }} type="number" min={0.5} step={0.5} placeholder="Horas" value={ajusteHoras} onChange={e => setAjusteHoras(e.target.value)} />
+              <input style={{ ...S.input, flex:2, minWidth:180 }} placeholder="Motivo (opcional)" value={ajusteObs} onChange={e => setAjusteObs(e.target.value)} />
+              <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={agregarAjusteNocturnidad} disabled={guardandoAjuste || !ajusteEmpleadoId || !(Number(ajusteHoras) > 0)}>Agregar</button>
+            </div>
           </div>
           <table style={S.table}>
             <thead><tr><th style={S.th}>Legajo</th><th style={S.th}>Guardia</th><th style={S.th}>Días Trab.</th><th style={S.th}>Ausencias</th><th style={S.th}>Días Justif.</th><th style={S.th}>Horas Reales</th><th style={S.th}>Horas Liquidables</th><th style={S.th}>En Curso</th><th style={S.th}>Tardanzas</th><th style={S.th}>Sal. Anticipadas</th><th style={S.th}>Feriados</th><th style={S.th}>Hs Feriados</th></tr></thead>

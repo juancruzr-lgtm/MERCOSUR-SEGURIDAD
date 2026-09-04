@@ -240,19 +240,312 @@ describe('diasDeNovedadEnMes', () => {
 })
 
 describe('filasXLSXResumenGuardia', () => {
-  it('null va como celda vacía y el 0 real como 0', () => {
+  it('layout de liquidación: sin horas reales, sin fechas, sin hs de feriado; null vacío y 0 real como 0', () => {
     const t = turno({ id: 't1' })
     const r = registro({ turno_id: 't1', horas_liquidables: 12 })
     const nov: NovedadResumen = { id: 'n1', empleado_id: 'g1', tipo: 'accidente', fecha_desde: '2026-08-04', fecha_hasta: '2026-08-04', estado: 'aprobada' }
     const res = construirResumenGuardia(base({ turnos: [t], registros: [r], novedades: [nov] }))
     const filas = filasXLSXResumenGuardia(res)
-    const encabezado = filas[3]
-    const cuerpo = filas[4]
-    expect(encabezado[11]).toBe('LICENCIAS')
-    expect(cuerpo[11]).toBe('')       // licencias: sin dato → vacío
-    expect(encabezado[12]).toBe('ART')
-    expect(cuerpo[12]).toBe(1)        // ART: 1 día registrado
-    expect(cuerpo[8]).toBe('')        // nocturnidad: regla no configurada → vacío
-    expect(cuerpo[9]).toBe(0)         // feriados trabajados: 0 real (hubo actividad, ningún feriado)
+    // Archivo plano: encabezado directo en la primera fila, sin título ni
+    // texto explicativo (que obligaban a combinar celdas).
+    const encabezado = filas[0] as string[]
+    const cuerpo = filas[1]
+    expect(encabezado).toEqual([
+      'CUIL', 'CUENTA', 'NOMBRE', 'NOVEDADES', 'OBJETIVO/S', 'JORNADAS',
+      'HORAS LIQUIDABLES', 'HORAS NOCTURNAS', 'FERIADOS',
+      'LICENCIAS', 'ART', 'VACACIONES', 'PARTE MÉDICO', 'AUS/SUSP',
+    ])
+    // Columnas técnicas fuera del archivo de trabajo (siguen internas)
+    expect(encabezado).not.toContain('HORAS REALES')
+    expect(encabezado).not.toContain('FECHAS CON ACTIVIDAD')
+    expect(encabezado).not.toContain('HS EN FERIADO')
+    expect(cuerpo[1]).toBe('')   // CUENTA: sin datos bancarios todavía
+    expect(cuerpo[6]).toBe(12)   // horas liquidables
+    expect(cuerpo[7]).toBe('')   // nocturnas: sin configuración provista → vacío, no 0
+    expect(cuerpo[8]).toBe(0)    // feriados en días: 0 real (hubo actividad, ningún feriado)
+    expect(cuerpo[9]).toBe('')   // licencias: sin dato → vacío
+    expect(cuerpo[10]).toBe(1)   // ART: 1 día registrado
+  })
+})
+
+// ── Nocturnidad configurable por objetivo ────────────────────────────────────
+// La franja viene de la configuración del objetivo (nunca de un nombre).
+// HORAS NOCTURNAS es un subconjunto de las liquidables: no se resta nada.
+
+const NOCT_22_06 = { activa: true, desde: '22:00', hasta: '06:00' }
+const conNocturnidad = (cfg: { activa: boolean; desde: string | null; hasta: string | null } | null) =>
+  (id?: string | null) => (id === OBJ_REAL ? cfg : { activa: false, desde: null, hasta: null })
+
+describe('nocturnidad', () => {
+  const fnoct = (over: Partial<ParamsResumenGuardia>) =>
+    fila(construirResumenGuardia(base(over)))!
+
+  it('objetivo sin nocturnidad activada → 0 (determinado, no null)', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '19:00', hora_fin: '07:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+      nocturnidadObjetivo: conNocturnidad({ activa: false, desde: null, hasta: null }),
+    })
+    expect(f.horasNocturnas).toBe(0)
+  })
+
+  it('sin configuración provista → null (dato pendiente, no 0)', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '19:00', hora_fin: '07:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+    })
+    expect(f.horasNocturnas).toBeNull()
+  })
+
+  it('turno 22:00–06:00 completo → 8 nocturnas', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(8)
+  })
+
+  it('turno 19:00–07:00 → 12 liquidables y 8 nocturnas (el plus no resta)', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '19:00', hora_fin: '07:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasLiquidables).toBe(12)
+    expect(f.horasNocturnas).toBe(8)
+  })
+
+  it('turno 20:00–00:00 → 2 nocturnas', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '20:00', hora_fin: '00:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 4 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(2)
+  })
+
+  it('turno 04:00–08:00 → 2 nocturnas (cola de la franja del día anterior)', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '04:00', hora_fin: '08:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 4 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(2)
+  })
+
+  it('turno completamente diurno → 0', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '08:00', hora_fin: '16:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(0)
+  })
+
+  it('nocturno cruzando medianoche parcial (23:00–07:00) → 7', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '23:00', hora_fin: '07:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(7)
+  })
+
+  it('media hora dentro de la franja → 0.5 (sin redondear a enteros)', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '21:30', hora_fin: '22:30' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 1 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(0.5)
+  })
+
+  it('objetivo de prueba: excluido aunque tenga nocturnidad activada', () => {
+    const res = construirResumenGuardia(base({
+      turnos: [turno({ id: 't1', objetivo_id: OBJ_PRUEBA, hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: () => NOCT_22_06,
+    }))
+    expect(res.filas).toHaveLength(0)
+  })
+
+  it('turno sin horas liquidables → 0 nocturnas; y el tope: nunca más nocturno que liquidable', () => {
+    const sinHoras = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', hora_entrada_real: '22:01' })], // en curso: hl 0
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(sinHoras.horasNocturnas).toBe(0)
+
+    // Reconocidas 4 hs sobre un turno 22–06 sin tramo corregido → tope en 4.
+    const topeada = fnoct({
+      turnos: [turno({ id: 't2', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't2', horas_liquidables: 4 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(topeada.horasNocturnas).toBe(4)
+  })
+
+  it('corrección de horario final: el tramo corregido manda', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({
+        turno_id: 't1',
+        horas_liquidables: 5,
+        hora_entrada_final: '00:00',
+        hora_salida_final: '05:00',
+      })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(5)
+  })
+
+  it('cobertura reconocida por supervisor sin horario observado: usa el turno programado', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '19:00', hora_fin: '07:00' })],
+      registros: [registro({
+        turno_id: 't1',
+        horas_liquidables: 12,
+        origen_cobertura: 'confirmacion_supervisor',
+      })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(8)
+  })
+
+  it('franja configurable distinta (21:00–05:00) demuestra que nada está hardcodeado', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: conNocturnidad({ activa: true, desde: '21:00', hasta: '05:00' }),
+    })
+    expect(f.horasNocturnas).toBe(7)
+  })
+
+  it('precedencia: objetivo NO + heredar → 0; objetivo SÍ + heredar → calcula', () => {
+    const armar = (cfgActiva: boolean) => fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: conNocturnidad({ activa: cfgActiva, desde: cfgActiva ? '22:00' : null, hasta: cfgActiva ? '06:00' : null }),
+      nocturnidadEmpleadoObjetivo: () => 'heredar',
+    })
+    expect(armar(false).horasNocturnas).toBe(0)   // desactivada por defecto
+    expect(armar(true).horasNocturnas).toBe(8)
+  })
+
+  it('precedencia: objetivo NO + excepción SÍ → calcula (franja default si el objetivo no tiene)', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: conNocturnidad({ activa: false, desde: null, hasta: null }),
+      nocturnidadEmpleadoObjetivo: () => 'si',
+    })
+    expect(f.horasNocturnas).toBe(8)
+    expect(f.nocturnidadOrigen).toBe('calculo')
+  })
+
+  it('precedencia: objetivo SÍ + excepción NO → 0', () => {
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+      nocturnidadEmpleadoObjetivo: () => 'no',
+    })
+    expect(f.horasNocturnas).toBe(0)
+  })
+
+  it('mismo empleado en dos objetivos con reglas distintas: sólo suma el que corresponde', () => {
+    // Objetivo A (OBJ_REAL): nocturnidad activa. Objetivo B: activa, pero el
+    // empleado tiene excepción 'no' SOLO en B — cobra en A y no en B.
+    const tA = turno({ id: 'tA', fecha: '2026-08-10', objetivo_id: OBJ_REAL, hora_inicio: '22:00', hora_fin: '06:00' })
+    const tB = turno({ id: 'tB', fecha: '2026-08-12', objetivo_id: 'obj-b', hora_inicio: '22:00', hora_fin: '06:00' })
+    const f = fnoct({
+      turnos: [tA, tB],
+      registros: [
+        registro({ turno_id: 'tA', horas_liquidables: 8 }),
+        registro({ turno_id: 'tB', horas_liquidables: 8 }),
+      ],
+      nocturnidadObjetivo: () => NOCT_22_06,
+      nocturnidadEmpleadoObjetivo: (_emp, obj) => (obj === 'obj-b' ? 'no' : 'heredar'),
+    })
+    expect(f.horasLiquidables).toBe(16)
+    expect(f.horasNocturnas).toBe(8)
+  })
+
+  it('ajuste manual mensual reemplaza al cálculo (198 sobre 176) sin tocar liquidables', () => {
+    // 22 turnos nocturnos 19–07 reconocidos: cálculo automático = 22 × 8 = 176.
+    const turnos = Array.from({ length: 22 }, (_, i) =>
+      turno({ id: `t${i}`, fecha: `2026-08-${String(i + 1).padStart(2, '0')}`, hora_inicio: '19:00', hora_fin: '07:00' }))
+    const registros = turnos.map(t => registro({ turno_id: t.id, horas_liquidables: 12 }))
+    const ajuste: NovedadResumen = {
+      id: 'aj1', empleado_id: 'g1', tipo: 'ajuste_nocturnidad',
+      fecha_desde: '2026-08-01', fecha_hasta: '2026-08-31', estado: 'aprobada',
+      horas_afectadas: 198,
+    }
+    const sinAjuste = fnoct({ turnos, registros, nocturnidadObjetivo: conNocturnidad(NOCT_22_06) })
+    expect(sinAjuste.horasNocturnas).toBe(176)
+    expect(sinAjuste.nocturnidadOrigen).toBe('calculo')
+
+    const conAjuste = fnoct({ turnos, registros, novedades: [ajuste], nocturnidadObjetivo: conNocturnidad(NOCT_22_06) })
+    expect(conAjuste.horasNocturnas).toBe(198)          // reemplaza, no suma
+    expect(conAjuste.horasNocturnasCalculadas).toBe(176) // trazabilidad del cálculo
+    expect(conAjuste.nocturnidadOrigen).toBe('ajuste_manual')
+    expect(conAjuste.horasLiquidables).toBe(sinAjuste.horasLiquidables) // liquidables intactas
+    // El ajuste no es novedad de día: no aparece en el texto libre ni en columnas
+    expect(conAjuste.notas).toEqual([])
+    expect(conAjuste.licencias).toBeNull()
+  })
+
+  it('ajuste manual vale incluso sin reglas automáticas activas (agosto histórico)', () => {
+    const ajuste: NovedadResumen = {
+      id: 'aj1', empleado_id: 'g1', tipo: 'ajuste_nocturnidad',
+      fecha_desde: '2026-08-01', fecha_hasta: '2026-08-31', estado: 'aprobada',
+      horas_afectadas: 198,
+    }
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '19:00', hora_fin: '07:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+      novedades: [ajuste],
+      nocturnidadObjetivo: conNocturnidad({ activa: false, desde: null, hasta: null }),
+    })
+    expect(f.horasNocturnas).toBe(198)
+    expect(f.horasNocturnasCalculadas).toBe(0)
+    expect(f.nocturnidadOrigen).toBe('ajuste_manual')
+  })
+
+  it('un ajuste pendiente (no aprobado) no cuenta', () => {
+    const pendiente: NovedadResumen = {
+      id: 'aj1', empleado_id: 'g1', tipo: 'ajuste_nocturnidad',
+      fecha_desde: '2026-08-01', fecha_hasta: '2026-08-31', estado: 'pendiente',
+      horas_afectadas: 198,
+    }
+    const f = fnoct({
+      turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
+      novedades: [pendiente],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(8)
+    expect(f.nocturnidadOrigen).toBe('calculo')
+  })
+
+  it('suma mensual de nocturnas sobre múltiples turnos', () => {
+    const f = fnoct({
+      turnos: [
+        turno({ id: 't1', fecha: '2026-08-10', hora_inicio: '22:00', hora_fin: '06:00' }),
+        turno({ id: 't2', fecha: '2026-08-12', hora_inicio: '20:00', hora_fin: '00:00' }),
+        turno({ id: 't3', fecha: '2026-08-14', hora_inicio: '08:00', hora_fin: '16:00' }),
+      ],
+      registros: [
+        registro({ turno_id: 't1', horas_liquidables: 8 }),
+        registro({ turno_id: 't2', horas_liquidables: 4 }),
+        registro({ turno_id: 't3', horas_liquidables: 8 }),
+      ],
+      nocturnidadObjetivo: conNocturnidad(NOCT_22_06),
+    })
+    expect(f.horasNocturnas).toBe(10)
+    expect(f.horasLiquidables).toBe(20)
+    expect(f.jornadas).toBe(3)
   })
 })
