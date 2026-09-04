@@ -686,6 +686,11 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(m.get('P6')?.v).toBe('AUS/SUSP')
     expect(m.get('AF6')?.v).toBe('004')
     expect(m.get('AO6')?.v).toBe('total')
+    // códigos de concepto SIEMPRE texto de 3 dígitos (importación de recibos)
+    expect(m.get('AC6')?.v).toBe('203')
+    expect(m.get('AG6')?.v).toBe('001')
+    expect(m.get('AV6')?.v).toBe('010')
+    expect(m.get('AX6')?.v).toBe('008')
   })
 
   it('celdas de entrada: datos consolidados de la app en A-P', () => {

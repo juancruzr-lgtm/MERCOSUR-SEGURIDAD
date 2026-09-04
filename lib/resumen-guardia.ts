@@ -676,17 +676,19 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
   for (const [ref, v] of fila5) put(ref, v)
 
   // Fila 6: encabezados del export de la app (A-P, H sin título: es el tope de
-  // 25 días) + códigos de concepto de la capa de liquidación. Los tipos
-  // (número vs texto) se conservan tal cual estaban en el ejemplo.
+  // 25 días) + códigos de concepto de la capa de liquidación. Los códigos van
+  // SIEMPRE como texto de 3 dígitos ('006', '010'), nunca como número: son
+  // los códigos de importación al sistema de recibos (pedido de Juan 04/09;
+  // el ejemplo los tenía mezclados: algunos número, algunos texto sin cero).
   const fila6: [string, string | number][] = [
     ['A6', 'LEGAJO VISUAL'], ['B6', 'CUIL'], ['C6', 'CUENTA'], ['D6', 'NOMBRE'],
     ['E6', 'NOVEDADES'], ['F6', 'OBJETIVO/S'], ['G6', 'JORNADAS'],
     ['I6', 'HORAS LIQUIDABLES'], ['J6', 'HORAS NOCTURNAS'], ['K6', 'FERIADOS'],
     ['L6', 'LICENCIAS'], ['M6', 'ART'], ['N6', 'VACACIONES'], ['O6', 'PARTE MÉDICO'], ['P6', 'AUS/SUSP'],
-    ['AC6', 203], ['AD6', '204'], ['AE6', 212], ['AF6', '004'], ['AG6', '1'],
-    ['AI6', 212], ['AJ6', 'hs rec'], ['AL6', 'hs extras'], ['AM6', '% ex'],
+    ['AC6', '203'], ['AD6', '204'], ['AE6', '212'], ['AF6', '004'], ['AG6', '001'],
+    ['AI6', '212'], ['AJ6', 'hs rec'], ['AL6', 'hs extras'], ['AM6', '% ex'],
     ['AO6', 'total'], ['AR6', 'adelantos'], ['AS6', 'po hs'], ['AT6', '006'],
-    ['AV6', 10], ['AW6', 205], ['AX6', '8'],
+    ['AV6', '010'], ['AW6', '205'], ['AX6', '008'],
   ]
   for (const [ref, v] of fila6) put(ref, v)
 
