@@ -312,14 +312,17 @@ describe('filasXLSXResumenGuardia', () => {
     const t = turno({ id: 't1' })
     const r = registro({ turno_id: 't1', horas_liquidables: 12 })
     const nov: NovedadResumen = { id: 'n1', empleado_id: 'g1', tipo: 'accidente', fecha_desde: '2026-08-04', fecha_hasta: '2026-08-04', estado: 'aprobada' }
-    const res = construirResumenGuardia(base({ turnos: [t], registros: [r], novedades: [nov] }))
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', cuil: '20144945817', legajoVisual: 'ALMADA' }],
+      turnos: [t], registros: [r], novedades: [nov],
+    }))
     const filas = filasXLSXResumenGuardia(res)
     // Archivo plano: encabezado directo en la primera fila, sin título ni
     // texto explicativo (que obligaban a combinar celdas).
     const encabezado = filas[0] as string[]
     const cuerpo = filas[1]
     expect(encabezado).toEqual([
-      'CUIL', 'CUENTA', 'NOMBRE', 'NOVEDADES', 'OBJETIVO/S', 'JORNADAS',
+      'LEGAJO VISUAL', 'CUIL', 'CUENTA', 'NOMBRE', 'NOVEDADES', 'OBJETIVO/S', 'JORNADAS',
       'HORAS LIQUIDABLES', 'HORAS NOCTURNAS', 'FERIADOS',
       'LICENCIAS', 'ART', 'VACACIONES', 'PARTE MÉDICO', 'AUS/SUSP',
     ])
@@ -327,12 +330,23 @@ describe('filasXLSXResumenGuardia', () => {
     expect(encabezado).not.toContain('HORAS REALES')
     expect(encabezado).not.toContain('FECHAS CON ACTIVIDAD')
     expect(encabezado).not.toContain('HS EN FERIADO')
-    expect(cuerpo[1]).toBe('')   // CUENTA: sin datos bancarios todavía
-    expect(cuerpo[6]).toBe(12)   // horas liquidables
-    expect(cuerpo[7]).toBe('')   // nocturnas: sin configuración provista → vacío, no 0
-    expect(cuerpo[8]).toBe(0)    // feriados en días: 0 real (hubo actividad, ningún feriado)
-    expect(cuerpo[9]).toBe('')   // licencias: sin dato → vacío
-    expect(cuerpo[10]).toBe(1)   // ART: 1 día registrado
+    expect(cuerpo[0]).toBe('ALMADA')  // legajo Visual Sueldos: primera columna
+    expect(cuerpo[1]).toBe('20144945817')
+    expect(cuerpo[2]).toBe('')   // CUENTA: sin datos bancarios todavía
+    expect(cuerpo[7]).toBe(12)   // horas liquidables
+    expect(cuerpo[8]).toBe('')   // nocturnas: sin configuración provista → vacío, no 0
+    expect(cuerpo[9]).toBe(0)    // feriados en días: 0 real (hubo actividad, ningún feriado)
+    expect(cuerpo[10]).toBe('')  // licencias: sin dato → vacío
+    expect(cuerpo[11]).toBe(1)   // ART: 1 día registrado
+  })
+
+  it('sin legajo visual cargado, la celda queda vacía (no se inventa)', () => {
+    const res = construirResumenGuardia(base({
+      turnos: [turno({ id: 't1' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+    }))
+    expect(res.filas[0].legajoVisual).toBeNull()
+    expect(filasXLSXResumenGuardia(res)[1][0]).toBe('')
   })
 })
 
