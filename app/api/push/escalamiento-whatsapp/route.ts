@@ -36,6 +36,20 @@ import { sumarDiasFecha } from '@/lib/turnos'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+/**
+ * Sin esto la deduplicación no funciona y el mismo aviso sale dos veces.
+ *
+ * Next 14 cachea las peticiones `fetch`, y el cliente de Supabase usa `fetch`
+ * por debajo. La lectura de `notificaciones_enviadas` —que es la que evita
+ * reenviar— es un GET cacheable: la segunda corrida del cron dentro de la
+ * ventana (un turno de HH:00 cae en +15 tanto a los :15 como a los :25) leía
+ * la tabla del caché de Next, no veía el aviso que la corrida anterior acababa
+ * de escribir, y volvía a mandar el WhatsApp. Verificado en la primera noche
+ * en producción (04/09): cada objetivo se avisó a los :15 y otra vez a los :25.
+ * Mismo arreglo que ya tenía /api/push/notificaciones.
+ */
+export const fetchCache = 'force-no-store'
+
 /** Minutos transcurridos desde el inicio del turno, en hora de la operación. */
 function minutosDesdeInicio(fecha: string, horaInicio: string, ahora: Date): number {
   // Mismo criterio que el resto de las alertas: el offset se deriva con Intl,
