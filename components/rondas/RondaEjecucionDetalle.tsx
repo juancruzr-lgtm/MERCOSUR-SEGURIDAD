@@ -179,6 +179,10 @@ function PuntoDetalle({ punto }: { punto: PuntoEjecucionDetalle }) {
   const gps = siNoNa(punto.gps_ok)
   const dentro = siNoNa(punto.dentro_radio)
   const foto = siNoNa(punto.foto_ok)
+  // La visita usaba QR (snapshot) o hubo intentos: se muestra cómo terminó.
+  const qrModo = punto.qr_modo ?? 'desactivado'
+  const qrIntentos = punto.qr_intentos_invalidos ?? 0
+  const conQr = qrModo !== 'desactivado' || punto.qr_verificado_at != null || qrIntentos > 0
 
   return (
     <div style={S.punto}>
@@ -197,6 +201,17 @@ function PuntoDetalle({ punto }: { punto: PuntoEjecucionDetalle }) {
                 Foto de control GPS
               </span>
             )}
+            {conQr && (
+              punto.qr_verificado_at != null ? (
+                <span style={{ ...S.estadoChip, ...S.chipQrOk }} title={`QR verificado por el servidor: ${fechaHora(punto.qr_verificado_at)}`}>
+                  QR verificado
+                </span>
+              ) : (
+                <span style={{ ...S.estadoChip, ...S.chipQrPendiente }} title={`Validación QR del punto: ${qrModo}`}>
+                  QR {qrModo === 'obligatorio' ? 'obligatorio ' : ''}no escaneado
+                </span>
+              )
+            )}
           </div>
         </div>
       </div>
@@ -214,6 +229,17 @@ function PuntoDetalle({ punto }: { punto: PuntoEjecucionDetalle }) {
         <Mini label="Foto ok" valor={foto.texto} color={foto.color} />
         <Mini label="Política de foto" valor={punto.politica_foto} />
         <Mini label="Requiere GPS" valor={punto.requiere_gps ? 'Sí' : 'No'} />
+        {conQr && (
+          <>
+            <Mini label="QR verificado" valor={fechaHora(punto.qr_verificado_at ?? null)} />
+            {/* GPS del momento del escaneo: un QR válido con GPS lejano no se
+                oculta, se muestra para revisión. */}
+            <Mini label="Distancia al escanear" valor={numero(punto.qr_distancia_metros != null ? Math.round(punto.qr_distancia_metros) : null, ' m')} />
+            {qrIntentos > 0 && (
+              <Mini label="Escaneos rechazados" valor={String(qrIntentos)} color="#fca5a5" />
+            )}
+          </>
+        )}
       </div>
 
       {punto.comentario && (
@@ -354,6 +380,8 @@ const S: Record<string, React.CSSProperties> = {
   estadoChip: { fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999, textTransform: 'capitalize' },
   chipNovedad: { background: '#3f2d10', color: '#fbbf24', border: '1px solid #b45309' },
   chipControl: { background: '#1e293b', color: '#93c5fd', border: '1px solid #2563eb' },
+  chipQrOk: { background: '#052e16', color: '#4ade80', border: '1px solid #166534', textTransform: 'none' },
+  chipQrPendiente: { background: '#3f2d10', color: '#fde68a', border: '1px solid #92400e', textTransform: 'none' },
   puntoGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
   mini: { background: '#0b1220', border: '1px solid #1a2436', borderRadius: 6, padding: '6px 8px' },
   miniLabel: { display: 'block', fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.3 },

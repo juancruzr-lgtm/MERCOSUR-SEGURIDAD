@@ -24,8 +24,10 @@ import type {
   DiagnosticoGpsPunto, NuevoRondaPunto, OrigenPosicion, PoliticaFoto, RondaPunto,
 } from '@/lib/rondas'
 import { capturarGpsNuevo, type CapturaGpsEnCurso } from '@/lib/gps-captura'
+import type { ModoQr } from '@/lib/rondas-qr'
 import type { PuntoRondaMapa } from './RondaPuntosMap'
 import ReferenciaPuntoIA from '@/components/ia/ReferenciaPuntoIA'
+import QrPuntoAdmin from './QrPuntoAdmin'
 import styles from './Rondas.module.css'
 
 const RondaPuntosMap = dynamic(() => import('./RondaPuntosMap'), {
@@ -56,6 +58,7 @@ interface PuntoForm {
   radio_metros: string
   origen_posicion: OrigenPosicion
   posicion_capturada_at: string | null
+  qr_modo: ModoQr
   activo: boolean
 }
 
@@ -71,6 +74,7 @@ function crearFormVacio(): PuntoForm {
     radio_metros: '30',
     origen_posicion: null,
     posicion_capturada_at: null,
+    qr_modo: 'desactivado',
     activo: true,
   }
 }
@@ -87,6 +91,8 @@ function formDesdePunto(punto: RondaPunto): PuntoForm {
     radio_metros: punto.radio_metros?.toString() ?? '',
     origen_posicion: punto.origen_posicion,
     posicion_capturada_at: punto.posicion_capturada_at ?? null,
+    // Un servidor sin la migración de QR no manda la columna.
+    qr_modo: punto.qr_modo ?? 'desactivado',
     activo: punto.activo,
   }
 }
@@ -521,6 +527,9 @@ export default function RondaPuntosEditor({
       radio_metros: numeroOpcional(form.radio_metros),
       origen_posicion: sinCoordenadas ? null : form.origen_posicion,
       posicion_capturada_at: sinCoordenadas ? null : form.posicion_capturada_at,
+      // Sólo aplica al editar (grant de UPDATE por columna). agregarPunto no lo
+      // manda: todo punto nace con QR desactivado y la activación es posterior.
+      qr_modo: form.qr_modo,
       activo: form.activo,
     }
 
@@ -646,6 +655,7 @@ export default function RondaPuntosEditor({
                         </div>
                         <div className={styles.meta}>
                           {etiquetaPoliticaFoto(punto.politica_foto)} · {punto.gps_requerido ? 'GPS requerido' : 'GPS opcional'}
+                          {punto.qr_modo === 'obligatorio' ? ' · QR obligatorio' : punto.qr_modo === 'opcional' ? ' · QR opcional' : ''}
                           {punto.radio_metros !== null ? ` · radio ${punto.radio_metros} m` : ' · sin radio'}
                           {punto.latitud !== null ? ` · ${punto.latitud.toFixed(5)}, ${punto.longitud?.toFixed(5)}` : ''}
                         </div>
@@ -789,6 +799,17 @@ export default function RondaPuntosEditor({
                     <input type="checkbox" checked={form.activo} onChange={evento => setForm({ ...form, activo: evento.target.checked })} />
                     Punto activo
                   </label>
+                )}
+                {/* Validación QR: sólo sobre un punto ya existente — necesita su
+                    id. El modo se guarda con el punto; generar/regenerar la
+                    credencial es inmediato vía RPC y queda auditado. */}
+                {editandoId && editandoId !== 'nuevo' && (
+                  <QrPuntoAdmin
+                    rondaPuntoId={editandoId}
+                    modo={form.qr_modo}
+                    onModoChange={qrModo => setForm(actual => ({ ...actual, qr_modo: qrModo }))}
+                    disabled={guardando}
+                  />
                 )}
                 {/* Referencia IA: sólo sobre un punto ya existente — necesita su id.
                     Escribe únicamente en ronda_punto_referencias; no altera el punto. */}
