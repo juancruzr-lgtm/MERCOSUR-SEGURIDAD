@@ -37,6 +37,18 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 /**
+ * Sin esto la corrida se corta a los ~10 s (default de Vercel) y NUNCA llega a
+ * la sección de rondas, que va después de los +15/+30.
+ *
+ * Cada +15/+30 es un envío a Meta hecho en serie (await). Una corrida con
+ * varios puestos descubiertos —07:15 tuvo ~8— consume los 10 s mandando +15 y
+ * la función muere antes del bloque de rondas. Verificado la primera noche
+ * (04/09): 44 +15 enviados, 0 rondas, con 12 alertas de ronda pendientes que
+ * debían escalar. 60 s alcanzan con margen. Mismo criterio que push.
+ */
+export const maxDuration = 60
+
+/**
  * Sin esto la deduplicación no funciona y el mismo aviso sale dos veces.
  *
  * Next 14 cachea las peticiones `fetch`, y el cliente de Supabase usa `fetch`
