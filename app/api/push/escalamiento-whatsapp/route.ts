@@ -137,14 +137,17 @@ export async function GET(req: Request) {
     year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(ahora.getTime() - 86400000))
 
-  const [turnosRes, objetivosRes, usuariosRes, registrosRes, destinatariosRes, zonasRes, svRes, puestosRes, guardiasRes, rondaAlertasRes] =
+  const [turnosRes, objetivosRes, usuariosRes, destinatariosRes, zonasRes, svRes, puestosRes, guardiasRes, rondaAlertasRes] =
     await Promise.all([
       client.from('turnos')
         .select('id, guardia_id, objetivo_id, puesto_id, fecha, hora_inicio, hora_fin, estado')
         .in('fecha', [ayer, hoy]),
       client.from('objetivos').select('id, nombre, estado, es_prueba, zona_id'),
       client.from('usuarios').select('id, nombre, apellido, telefono, rol, estado'),
-      client.from('registros_asistencia').select('turno_id, hora_entrada_real'),
+      // registros_asistencia NO se lee acá: sin filtro, PostgREST corta a 1000
+      // filas y devuelve las más viejas, así los fichajes de HOY no vienen y
+      // todos los turnos aparecen "sin fichar" → avisos falsos masivos. Se lee
+      // más abajo, acotado a los turnos que se están evaluando.
       client.from('escalamiento_destinatarios').select('usuario_id, rol_en_escalamiento, activo'),
       // La tabla se llama zonas_operativas. Con el nombre equivocado la consulta
       // devolvía data: null SIN romper, y todos los casos habrían salido como
@@ -184,13 +187,22 @@ export async function GET(req: Request) {
   const turnos = (turnosRes.data ?? []) as TurnoEscalable[]
   const objetivos = objetivosRes.data ?? []
   const usuarios = usuariosRes.data ?? []
-  const registros = registrosRes.data ?? []
   const zonas = zonasRes.data ?? []
   const supervisorZonas = svRes.data ?? []
   const guardias = (guardiasRes.data ?? []) as any[]
   const puestos = new Map<string, string>(
     ((puestosRes.data ?? []) as any[]).map(p => [p.id, p.nombre]),
   )
+
+  // Fichajes SÓLO de los turnos evaluados. Acotar por turno_id evita el tope de
+  // 1000 filas de PostgREST: registros_asistencia crece sin límite (miles de
+  // filas) y sin filtro la página devuelta no incluye los fichajes de hoy.
+  const turnoIds = turnos.map(t => t.id)
+  const registrosRes = turnoIds.length
+    ? await client.from('registros_asistencia')
+        .select('turno_id, hora_entrada_real').in('turno_id', turnoIds)
+    : { data: [] as any[], error: null }
+  const registros = registrosRes.data ?? []
 
   // Una fuente que falla en silencio es peor que una que rompe: el dry-run
   // seguiría dando un resultado con forma correcta y contenido falso. Los
@@ -208,10 +220,16 @@ export async function GET(req: Request) {
   }
 
   // Ya avisados: se lee la MISMA tabla que usa el push, con la misma clave.
+  // Acotado a los turnos evaluados: notificaciones_enviadas crece sin límite y
+  // sin este filtro la lectura se corta en 1000 filas (las más viejas), no ve
+  // los avisos de hoy y el mismo evento se reenvía en cada corrida (duplicados).
   const yaAvisados = new Set<string>()
-  const enviadosRes = await client.from('notificaciones_enviadas')
-    .select('usuario_id, turno_id, tipo')
-    .in('tipo', [NIVEL.supervisor, NIVEL.operativo])
+  const enviadosRes = turnoIds.length
+    ? await client.from('notificaciones_enviadas')
+        .select('usuario_id, turno_id, tipo')
+        .in('tipo', [NIVEL.supervisor, NIVEL.operativo])
+        .in('turno_id', turnoIds)
+    : { data: [] as any[] }
   for (const n of (enviadosRes.data ?? []) as any[]) {
     yaAvisados.add(`${n.usuario_id}|${n.turno_id}|${n.tipo}`)
   }
