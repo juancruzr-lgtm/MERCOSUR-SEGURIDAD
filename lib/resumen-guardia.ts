@@ -1024,6 +1024,12 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     const AE = (P.noRem / 25) * H
     const AF = (hora / 10) * J
     const AG = I <= 150 ? H * 8 : 150
+    // AL (hs extras) = horas liquidables por encima de las reconocidas. Nunca
+    // negativo: con la base mensualizada (I=150, H=25 → AG=200) daría −50, un
+    // valor conceptualmente incorrecto en una planilla de sueldos. MAX(0,…) lo
+    // corrige sin tocar el pago: AM y AP ya usaban IF(AL>0,…), así que un AL
+    // negativo nunca pagaba extras — sólo se veía mal. Para vigiladores con
+    // extras reales (I>150 → AG=150 → AL>0) el valor no cambia.
     // ADICIONAL: columna AH = "hs a valor pleno" (concepto 212), INPUT manual
     // que alimenta la columna 'adicional' AI = AH*Y. Base mensualizada = 50
     // (Juan, 07/09). En vigiladores AH sigue vacía (carga manual, como hasta
@@ -1031,7 +1037,7 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     const AH = mensualizado ? 50 : 0
     const AI = AH * hora
     const AJ = AG * hora
-    const AL = I - AG
+    const AL = Math.max(0, I - AG)
     const AM = AL > 0 && I > 0 ? (AL * 100) / I : 0
     const AN = G > 0 ? I / G : 0
     const AP = AL > 0 ? AL * P.horaExtra : 0 // menos AR (adelantos), vacío acá
@@ -1052,7 +1058,7 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     if (mensualizado) put(`AH${r}`, AH)
     put(`AI${r}`, AI, `AH${r}*Y${r}`)
     put(`AJ${r}`, AJ, `AG${r}*Y${r}`)
-    put(`AL${r}`, AL, `I${r}-AG${r}`)
+    put(`AL${r}`, AL, `MAX(0,I${r}-AG${r})`)
     put(`AM${r}`, AM, `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
     put(`AN${r}`, AN, `I${r}/G${r}`)
     put(`AO${r}`, AO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)

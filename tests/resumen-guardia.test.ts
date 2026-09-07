@@ -1266,4 +1266,41 @@ describe('base de liquidación de mensualizados', () => {
     expect(m.get('AY6')?.v).toBe('SUPERVISIONES') // informativas siguen DESPUÉS de AX
     expect(m.get('BC6')?.v).toBe('HS VIGILANCIA ZONA')
   })
+
+  it('mensualizado: AL (hs extras) = 0, nunca negativo, con fórmula MAX(0,I-AG)', () => {
+    for (const rol of ['supervisor', 'admin'] as const) {
+      const { m, r } = mensualizado(rol)
+      expect(m.get(`AL${r}`)?.v).toBe(0)                       // ya no -50
+      expect(m.get(`AL${r}`)?.v as number).toBeGreaterThanOrEqual(0)
+      expect(m.get(`AL${r}`)?.f).toBe(`MAX(0,I${r}-AG${r})`)   // fórmula no negativa
+      expect(m.get(`AP${r}`)?.v).toBe(0)                       // 0 por extras
+    }
+  })
+
+  it('mensualizado: el total salarial (AO) NO cambia respecto del resultado validado', () => {
+    // AO validado previamente = 1.999.875 (AC 514500 + AD 180000 + AE 30000 +
+    // AI 255075 + AJ 1020300; AL=0 → AP=0 no aporta). El MAX no altera el total.
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get(`AO${r}`)?.v).toBe(1999875)
+  })
+
+  it('vigilador con horas > base: sigue generando extras correctamente (AL>0, AP paga)', () => {
+    // 20 jornadas de 8 h = 160 hs liquidables (>150) → AG=150, AL=10, AP=10*2500.
+    const turnos: TurnoResumen[] = []
+    const registros: RegistroUniverso[] = []
+    for (let d = 1; d <= 20; d++) {
+      const fecha = '2026-08-' + String(d).padStart(2, '0')
+      turnos.push(turno({ id: 'e' + d, fecha, hora_inicio: '08:00', hora_fin: '16:00' }))
+      registros.push(registro({ turno_id: 'e' + d, horas_liquidables: 8 }))
+    }
+    const { m, filaDe } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia' }],
+      turnos, registros,
+    })))
+    const r = filaDe('ALMADA, E')
+    expect(m.get(`I${r}`)?.v).toBe(160)
+    expect(m.get(`AL${r}`)?.v).toBe(10)                        // extras reales intactas
+    expect(m.get(`AL${r}`)?.f).toBe(`MAX(0,I${r}-AG${r})`)
+    expect(m.get(`AP${r}`)?.v).toBe(10 * PARAMETROS_PLANTILLA.horaExtra) // 25000
+  })
 })
