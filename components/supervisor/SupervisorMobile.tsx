@@ -1984,6 +1984,13 @@ export default function SupervisorMobile({ user }: any) {
     }
   }
 
+  // Id de idempotencia de la supervisión: se genera UNA vez por intento de
+  // carga y se manda a /api/save-supervision. Si la respuesta se pierde y el
+  // supervisor toca Guardar de nuevo, el servidor reconoce el mismo id y no
+  // crea una supervisión duplicada. Se renueva recién al guardar bien o al
+  // resetear el formulario.
+  const supervisionIntentoId = useRef<string | null>(null)
+
   const resetFormularioSupervision = () => {
     setSupervisionObjetivoId('')
     setSupervisionGps(null)
@@ -1991,6 +1998,7 @@ export default function SupervisorMobile({ user }: any) {
     setSupervisionRespuestas({})
     setSupervisionFotos([])
     setConfirmarGpsImpreciso(false)
+    supervisionIntentoId.current = null
   }
 
   /**
@@ -2120,10 +2128,17 @@ export default function SupervisorMobile({ user }: any) {
       const token = sessionData?.session?.access_token
       if (!token) throw new Error('Sesión expirada. Volvé a iniciar sesión.')
 
+      // Mismo id mientras sea el mismo intento: el reintento tras un timeout
+      // no debe crear una segunda supervisión.
+      if (!supervisionIntentoId.current) {
+        supervisionIntentoId.current = (globalThis.crypto?.randomUUID?.() ?? null)
+      }
+
       const saveRes = await fetch('/api/save-supervision', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
+          id: supervisionIntentoId.current,
           objetivo_id: objetivoSupervision.id,
           supervisor_id: user.id,
           plantilla_id: objetivoSupervision.checklist_plantilla_id || null,

@@ -51,6 +51,24 @@ export interface EmpleadoResumen {
   id: string
   nombre?: string | null
   apellido?: string | null
+  /**
+   * Rol del empleado: decide el bloque del archivo (vigiladores /
+   * supervisores / administrativos) y la regla de mensualizados.
+   */
+  rol?: string | null
+  /**
+   * REGLA DURA (Juan, 07/09): un empleado ACTIVO va SIEMPRE al archivo,
+   * aunque no tenga un solo dato en el mes — una fila incompleta se ve, una
+   * ausente no se nota hasta que el sueldo no se liquidó. Sin estado se
+   * asume activo: ante la duda, mejor una fila de más que una de menos.
+   */
+  estado?: string | null
+  /**
+   * Cuenta de prueba (usuarios.es_prueba): no aparece en el resumen ni en el
+   * archivo de liquidación, aunque esté activa. Mismo criterio que
+   * objetivos.es_prueba.
+   */
+  esPrueba?: boolean | null
   cuil?: string | null
   legajo?: string | null
   /**
@@ -117,6 +135,92 @@ export const FRANJA_NOCTURNA_DEFAULT = { desde: '22:00', hasta: '06:00' }
  */
 export const TIPO_AJUSTE_NOCTURNIDAD = 'ajuste_nocturnidad'
 
+// ── Bloques y mensualizados ───────────────────────────────────────────────────
+//
+// Supervisores y administrativos son MENSUALIZADOS (sueldo fijo, decisión de
+// Juan 07/09/2026). Regla general: NINGUNA columna que la liquidación
+// multiplica (JORNADAS, HORAS LIQUIDABLES, nocturnas, feriados, novedades en
+// días) puede llevar datos de un mensualizado — el archivo alimenta los
+// conceptos por jornada de Visual Sueldos y les pagaría por jornada. Sus
+// datos operativos van SOLO en las columnas informativas del final
+// (SUPERVISIONES / HORAS SUPERVISION / JORNADAS SUPERVISION) o en la
+// observación de la fila.
+
+export type GrupoResumen = 'vigiladores' | 'supervisores' | 'administrativos'
+
+export function grupoDeRol(rol?: string | null): GrupoResumen {
+  const r = String(rol ?? '').trim().toLowerCase()
+  if (r === 'admin') return 'administrativos'
+  if (r === 'supervisor') return 'supervisores'
+  return 'vigiladores'
+}
+
+/** Guardia de supervisor cargada en el mes (tabla supervisores_guardia). */
+export interface SupervisorGuardiaResumen {
+  supervisor_id?: string | null
+  fecha: string
+  hora_inicio: string
+  hora_fin: string
+  zona?: string | null
+  estado?: string | null
+}
+
+/** Supervisión registrada (tabla supervisiones); alcanza con estos campos. */
+export interface SupervisionResumen {
+  supervisor_id?: string | null
+  objetivo_id?: string | null
+  estado?: string | null
+  created_at: string
+}
+
+/**
+ * Dedup de supervisiones: dos registros del mismo supervisor sobre el mismo
+ * objetivo con ≤10 min de diferencia son UNA supervisión (reintento con la
+ * respuesta perdida, foto subida aparte). Es una red de seguridad: el arreglo
+ * de raíz es la idempotencia en /api/save-supervision.
+ */
+export const VENTANA_DEDUP_SUPERVISIONES_MIN = 10
+
+/**
+ * Cantidad de supervisiones distintas del supervisor. Las 'incompleta' NO
+ * cuentan — decisión de Juan (07/09/2026), no criterio técnico: no revertir
+ * sin preguntarle.
+ */
+export function contarSupervisiones(
+  supervisiones: SupervisionResumen[],
+  supervisorId: string,
+): number {
+  const propias = supervisiones
+    .filter(s => s.supervisor_id === supervisorId && s.estado !== 'incompleta')
+    .sort((a, b) =>
+      String(a.objetivo_id ?? '').localeCompare(String(b.objetivo_id ?? '')) ||
+      a.created_at.localeCompare(b.created_at),
+    )
+  let total = 0
+  let ultObjetivo: string | null = null
+  let ultContada = 0
+  for (const s of propias) {
+    const objetivo = String(s.objetivo_id ?? '')
+    const ts = Date.parse(s.created_at)
+    const esDuplicado = objetivo === ultObjetivo &&
+      ts - ultContada <= VENTANA_DEDUP_SUPERVISIONES_MIN * 60_000
+    if (!esDuplicado) {
+      total += 1
+      ultObjetivo = objetivo
+      ultContada = ts
+    }
+  }
+  return total
+}
+
+/** Horas de una guardia de supervisor; fin ≤ inicio = cruza la medianoche. */
+export function horasGuardiaSupervisor(g: SupervisorGuardiaResumen): number {
+  const ini = minutosDelDia(g.hora_inicio)
+  let fin = minutosDelDia(g.hora_fin)
+  if (fin <= ini) fin += 1440
+  return (fin - ini) / 60
+}
+
 export interface ParamsResumenGuardia {
   /** Mes operativo, formato 'YYYY-MM'. */
   mes: string
@@ -144,6 +248,13 @@ export interface ParamsResumenGuardia {
     empleadoId: string,
     objetivoId?: string | null,
   ) => ModoNocturnidadEmpleado | null
+  /**
+   * Guardias de supervisor del mes (supervisores_guardia, estado activo).
+   * Alimentan SOLO las columnas informativas del bloque de supervisores.
+   */
+  supervisoresGuardia?: SupervisorGuardiaResumen[]
+  /** Supervisiones del mes, para la columna SUPERVISIONES (conteo dedup). */
+  supervisiones?: SupervisionResumen[]
 }
 
 // ── Tipos de salida ───────────────────────────────────────────────────────────
@@ -153,6 +264,8 @@ export type DiasNovedad = number | null
 
 export interface FilaResumenGuardia {
   empleadoId: string
+  /** Bloque del archivo. Mensualizados: supervisores y administrativos. */
+  grupo: GrupoResumen
   nombre: string
   cuil: string | null
   legajo: string | null
@@ -196,6 +309,20 @@ export interface FilaResumenGuardia {
   ausenciasSuspensiones: DiasNovedad
   /** Novedades del mes en texto corto (tipo y rango), para la columna libre. */
   notas: string[]
+  /**
+   * Columnas informativas del final (AY-BA): SOLO llevan datos en el bloque
+   * de supervisores; en vigiladores y administrativos van en 0 (pedido de
+   * Juan 07/09). No las multiplica ninguna fórmula de liquidación.
+   */
+  supervisiones: number
+  horasSupervision: number
+  jornadasSupervision: number
+  /**
+   * Marcas visibles de la fila (columna de observación): datos de
+   * liquidación faltantes ("REVISAR: falta CUIL") y actividad de un
+   * mensualizado que NO se liquida por jornada ("cubrió N turnos").
+   */
+  observaciones: string[]
   /** Trazabilidad: qué datos de MERCOSUR originaron la fila. */
   origen: {
     turnoIds: string[]
@@ -371,6 +498,10 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
   const filas: FilaResumenGuardia[] = []
 
   for (const emp of empleados) {
+    // Cuenta de prueba: nunca entra al archivo, aunque esté activa. Mismo
+    // criterio que los objetivos es_prueba (Juan la usa para testear).
+    if (emp.esPrueba) continue
+
     // Registros del empleado sobre turnos válidos. La ausencia registrada no
     // es actividad. El guardia efectivo (final ?? original) decide de quién es
     // la línea — igual que Reportes y el Legajo.
@@ -503,35 +634,80 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       reconocidas.map(l => nombreObjetivo(l.registro?.objetivo_final_id ?? l.turno.objetivo_id)).filter(Boolean),
     )).sort()
 
-    // Fila sólo si hay algo que decir: actividad reconocida o novedades. Un
-    // empleado sin nada en el mes no aparece — igual que en la hoja manual.
-    if (reconocidas.length === 0 && lineas.length === 0 && novedadesEmp.length === 0) continue
+    const grupo = grupoDeRol(emp.rol)
+    const mensualizado = grupo !== 'vigiladores'
+    const activo = String(emp.estado ?? 'activo').trim().toLowerCase() !== 'inactivo'
+
+    // ── Columnas informativas de supervisión ──────────────────────────────
+    // Cargas propias del mes; sin cargas va igual con 0 — lo importante es
+    // que aparezca. Se computan para TODO mensualizado (supervisores y
+    // administrativos): hay admins que supervisan sin resignar su rol —
+    // cambiarles el rol les quitaría el acceso al sistema (caso MARTINEZ,
+    // Juan 07/09). Vigiladores: 0 siempre.
+    const cargas = mensualizado
+      ? (params.supervisoresGuardia ?? []).filter(
+          g => g.supervisor_id === emp.id && String(g.estado ?? 'activo') === 'activo',
+        )
+      : []
+    const horasSupervision = Math.round(cargas.reduce((s, g) => s + horasGuardiaSupervisor(g), 0) * 100) / 100
+    const jornadasSupervision = new Set(cargas.map(g => g.fecha)).size
+    const supervisionesMes = mensualizado
+      ? contarSupervisiones(params.supervisiones ?? [], emp.id)
+      : 0
+    const zonas = Array.from(new Set(cargas.map(g => (g.zona ?? '').trim()).filter(Boolean))).sort()
+
+    // REGLA DURA (Juan, 07/09): ningún ACTIVO puede faltar en el archivo.
+    // El "sin nada que decir → sin fila" queda solo para inactivos.
+    if (!activo && reconocidas.length === 0 && lineas.length === 0 && novedadesEmp.length === 0) continue
+
+    // ── Regla de MENSUALIZADOS ────────────────────────────────────────────
+    // Supervisores y administrativos cobran sueldo fijo: cero en TODAS las
+    // columnas que la liquidación multiplica, AUNQUE tengan turnos fichados.
+    // La actividad no se pierde: queda en la observación de la fila.
+    const observaciones: string[] = []
+    if (mensualizado && lineas.length > 0) {
+      observaciones.push(
+        `cubrió ${lineas.length} turno${lineas.length === 1 ? '' : 's'} (${Math.round(horasLiquidables * 100) / 100} hs) — mensualizado: no liquida por jornada`,
+      )
+    }
+    const faltantes = [
+      !emp.cuil?.trim() ? 'CUIL' : null,
+      !emp.legajoVisual?.trim() ? 'legajo Visual' : null,
+      !emp.cuenta?.trim() ? 'cuenta' : null,
+    ].filter((x): x is string => x != null)
+    if (faltantes.length > 0) observaciones.push(`REVISAR: falta ${faltantes.join(', ')}`)
 
     filas.push({
       empleadoId: emp.id,
+      grupo,
       nombre: `${emp.apellido ?? ''}, ${emp.nombre ?? ''}`.replace(/^, |, $/g, '').trim(),
       cuil: emp.cuil ?? null,
       legajo: emp.legajo ?? null,
       legajoVisual: emp.legajoVisual ?? null,
       cuenta: emp.cuenta ?? null,
-      objetivos,
-      jornadas: jornadas.size,
-      fechasConActividad: fechas.size,
-      horasReales: Math.round(horasReales * 100) / 100,
-      horasLiquidables: Math.round(horasLiquidables * 100) / 100,
-      feriadosTrabajados: feriados.feriadosCubiertos,
-      horasEnFeriado: feriados.horas,
-      horasNocturnas,
-      horasNocturnasCalculadas,
-      nocturnidadOrigen,
-      licencias: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.licencias, mes),
-      art: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.art, mes),
-      vacaciones: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.vacaciones, mes),
-      parteMedico: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.parteMedico, mes),
-      ausenciasSuspensiones: contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.ausenciasSuspensiones, mes),
+      // Mensualizados: la columna Objetivo/s informa sus zonas de recorrida.
+      objetivos: mensualizado ? zonas : objetivos,
+      jornadas: mensualizado ? 0 : jornadas.size,
+      fechasConActividad: mensualizado ? 0 : fechas.size,
+      horasReales: mensualizado ? 0 : Math.round(horasReales * 100) / 100,
+      horasLiquidables: mensualizado ? 0 : Math.round(horasLiquidables * 100) / 100,
+      feriadosTrabajados: mensualizado ? 0 : feriados.feriadosCubiertos,
+      horasEnFeriado: mensualizado ? 0 : feriados.horas,
+      horasNocturnas: mensualizado ? null : horasNocturnas,
+      horasNocturnasCalculadas: mensualizado ? null : horasNocturnasCalculadas,
+      nocturnidadOrigen: mensualizado ? null : nocturnidadOrigen,
+      licencias: mensualizado ? null : contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.licencias, mes),
+      art: mensualizado ? null : contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.art, mes),
+      vacaciones: mensualizado ? null : contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.vacaciones, mes),
+      parteMedico: mensualizado ? null : contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.parteMedico, mes),
+      ausenciasSuspensiones: mensualizado ? null : contarColumna(novedadesEmp, TIPOS_POR_COLUMNA.ausenciasSuspensiones, mes),
       // El ajuste de nocturnidad no es una novedad de día: no va al texto
       // libre (ya está expresado en la columna HORAS NOCTURNAS).
       notas: novedadesEmp.filter(n => n.tipo !== TIPO_AJUSTE_NOCTURNIDAD).map(n => notaDeNovedad(n, mes)),
+      supervisiones: supervisionesMes,
+      horasSupervision,
+      jornadasSupervision,
+      observaciones,
       origen: {
         turnoIds: lineas.map(l => l.turno.id),
         registroIds: lineas.map(l => l.registro?.id ?? null).filter((x): x is string => x != null),
@@ -540,7 +716,13 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
     })
   }
 
-  filas.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+  // Vigiladores primero, después supervisores, al final administrativos
+  // (pedido de Juan 07/09); adentro de cada bloque, apellido con la ñ y las
+  // tildes bien ubicadas.
+  const ORDEN_GRUPO: Record<GrupoResumen, number> = { vigiladores: 0, supervisores: 1, administrativos: 2 }
+  filas.sort((a, b) =>
+    ORDEN_GRUPO[a.grupo] - ORDEN_GRUPO[b.grupo] || a.nombre.localeCompare(b.nombre, 'es'),
+  )
 
   return {
     mes,
@@ -704,20 +886,25 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     ['AI6', '212'], ['AJ6', '001'], ['AL6', 'hs extras'], ['AM6', '% ex'], ['AN6', 'hs dia'],
     ['AO6', 'total'], ['AP6', P.horaExtra], ['AR6', 'adelantos'], ['AS6', 'po hs'],
     ['AT6', '006'], ['AU6', '888'], ['AV6', '010'], ['AW6', '205'], ['AX6', '008'],
+    // Columnas informativas al FINAL (pedido de Juan 07/09): no se insertan
+    // entre A y AX para no correr fórmulas ni códigos de concepto. Ninguna
+    // fórmula de liquidación las multiplica.
+    ['AY6', 'SUPERVISIONES'], ['AZ6', 'HORAS SUPERVISION'], ['BA6', 'JORNADAS SUPERVISION'],
+    ['BB6', 'OBSERVACION'],
   ]
   for (const [ref, v] of fila6) put(ref, v)
 
-  // Filas de datos: la primera es la 7, como en el ejemplo.
-  const filaInicial = 7
-  const filaFinal = filaInicial + resumen.filas.length - 1
-  const filaSeparadora = filaFinal + 1
-  const filaTotales = filaSeparadora + 1
-  // Acumuladores de los valores calculados, para cachear también los SUM.
-  const suma: Record<string, number> = {}
-  const acum = (col: string, v: number) => { suma[col] = (suma[col] ?? 0) + v }
+  // Tres bloques (pedido de Juan 07/09): vigiladores, supervisores,
+  // administrativos — mismas columnas, subtotal por bloque y TOTAL GENERAL al
+  // final, para que el archivo se procese en una sola pasada. Un bloque sin
+  // gente igual aparece, con subtotal 0: su ausencia escondería un error.
+  const grupos: { clave: GrupoResumen; titulo: string; subtotal: string }[] = [
+    { clave: 'vigiladores', titulo: 'BLOQUE 1 - VIGILADORES', subtotal: 'SUBTOTAL VIGILADORES' },
+    { clave: 'supervisores', titulo: 'BLOQUE 2 - SUPERVISORES', subtotal: 'SUBTOTAL SUPERVISORES' },
+    { clave: 'administrativos', titulo: 'BLOQUE 3 - ADMINISTRATIVOS', subtotal: 'SUBTOTAL ADMINISTRATIVOS' },
+  ]
 
-  resumen.filas.forEach((fila, i) => {
-    const r = filaInicial + i
+  const emitirFila = (fila: FilaResumenGuardia, r: number, esPrimeraDeBloque: boolean, acum: (col: string, v: number) => void) => {
     put(`A${r}`, fila.legajoVisual ?? '')
     put(`B${r}`, fila.cuil ?? '')
     put(`C${r}`, fila.cuenta ?? '') // texto: conserva ceros a la izquierda
@@ -743,9 +930,10 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     putNum(`N${r}`, fila.vacaciones)
     putNum(`O${r}`, fila.parteMedico)
     putNum(`P${r}`, fila.ausenciasSuspensiones)
-    // Parámetros por fila: la primera toma F2/E2/E3/E4 y las demás arrastran
-    // la de arriba, igual que en el ejemplo.
-    if (r === filaInicial) {
+    // Parámetros por fila: la primera de CADA bloque toma F2/E2/E3/E4 y las
+    // demás arrastran la de arriba (la fila anterior a la primera del bloque
+    // es el título, con U-X vacías: copiarla daría 0).
+    if (esPrimeraDeBloque) {
       put(`U${r}`, dia8, 'F2'); put(`V${r}`, P.presentismo, 'E2')
       put(`W${r}`, P.viatico, 'E3'); put(`X${r}`, P.noRem, 'E4')
     } else {
@@ -792,6 +980,11 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`AV${r}`, AV, `M${r}*U${r}`)
     put(`AW${r}`, AW, `N${r}*U${r}`)
     put(`AX${r}`, AX, `O${r}*U${r}`)
+    // Informativas del final: valores puros, sin fórmula que las toque.
+    put(`AY${r}`, fila.supervisiones)
+    put(`AZ${r}`, fila.horasSupervision)
+    put(`BA${r}`, fila.jornadasSupervision)
+    if (fila.observaciones.length > 0) put(`BB${r}`, fila.observaciones.join(' · '))
     const cacheFila: [string, number][] = [
       ['G', G], ['I', I], ['J', J], ['K', fila.feriadosTrabajados],
       ['L', num(fila.licencias)], ['M', num(fila.art)], ['N', num(fila.vacaciones)],
@@ -802,21 +995,55 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
       ['AI', AI], ['AJ', AJ], ['AK', 0], ['AL', AL], ['AM', AM], ['AN', AN],
       ['AO', AO], ['AP', AP], ['AQ', 0], ['AR', 0], ['AS', AS],
       ['AT', AT], ['AU', AU], ['AV', AV], ['AW', AW], ['AX', AX],
+      ['AY', fila.supervisiones], ['AZ', fila.horasSupervision], ['BA', fila.jornadasSupervision],
     ]
     for (const [col, v] of cacheFila) acum(col, v)
-  })
-
-  // Fila TOTALES: SUM hasta la fila separadora inclusive, como el ejemplo
-  // (SUM(I7:I72) con datos hasta la 71). H no tiene total; Q-T y AH/AK/AQ/AR
-  // suman columnas vacías (dan 0) pero el ejemplo las trae y se conservan.
-  put(`A${filaTotales}`, 'TOTALES')
-  for (const col of ['B', 'C', 'D', 'E', 'F']) put(`${col}${filaTotales}`, '')
-  const colsTotales = ['G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
-    'U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI',
-    'AJ', 'AK', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR', 'AS', 'AT', 'AU', 'AV', 'AW', 'AX']
-  for (const col of colsTotales) {
-    put(`${col}${filaTotales}`, suma[col] ?? 0, `SUM(${col}${filaInicial}:${col}${filaSeparadora})`)
   }
 
-  return { nombreHoja: 'Hoja1', ref: `A1:AX${filaTotales}`, celdas }
+  // H no tiene total; Q-T y AH/AK/AQ/AR suman columnas vacías (dan 0) pero el
+  // ejemplo las traía y se conservan. AY-BA (informativas) también suman.
+  const colsTotales = ['G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
+    'U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI',
+    'AJ', 'AK', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR', 'AS', 'AT', 'AU', 'AV', 'AW', 'AX',
+    'AY', 'AZ', 'BA']
+
+  let r = 7
+  const subtotales: { fila: number; suma: Record<string, number> }[] = []
+  for (const gp of grupos) {
+    const filasGrupo = resumen.filas.filter(f => f.grupo === gp.clave)
+    put(`A${r}`, gp.titulo)
+    r += 1
+    const primeraDato = r
+    const suma: Record<string, number> = {}
+    const acum = (col: string, v: number) => { suma[col] = (suma[col] ?? 0) + v }
+    for (const fila of filasGrupo) {
+      emitirFila(fila, r, r === primeraDato, acum)
+      r += 1
+    }
+    const ultimaDato = r - 1
+    const filaSubtotal = r
+    put(`A${filaSubtotal}`, gp.subtotal)
+    for (const col of ['B', 'C', 'D', 'E', 'F']) put(`${col}${filaSubtotal}`, '')
+    for (const col of colsTotales) {
+      if (filasGrupo.length > 0) {
+        put(`${col}${filaSubtotal}`, suma[col] ?? 0, `SUM(${col}${primeraDato}:${col}${ultimaDato})`)
+      } else {
+        put(`${col}${filaSubtotal}`, 0)
+      }
+    }
+    subtotales.push({ fila: filaSubtotal, suma })
+    r += 2 // subtotal + fila separadora vacía
+  }
+
+  // TOTAL GENERAL = suma de los tres subtotales (nunca SUM del rango entero,
+  // que contaría los subtotales dos veces).
+  const filaTotales = r
+  put(`A${filaTotales}`, 'TOTAL GENERAL')
+  for (const col of ['B', 'C', 'D', 'E', 'F']) put(`${col}${filaTotales}`, '')
+  for (const col of colsTotales) {
+    const v = subtotales.reduce((s, b) => s + (b.suma[col] ?? 0), 0)
+    put(`${col}${filaTotales}`, v, subtotales.map(b => `${col}${b.fila}`).join('+'))
+  }
+
+  return { nombreHoja: 'Hoja1', ref: `A1:BB${filaTotales}`, celdas }
 }

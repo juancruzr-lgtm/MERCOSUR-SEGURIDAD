@@ -41,6 +41,12 @@ export interface Usuario {
   email?: string
   telefono?: string
   legajo: string
+  /** Legajo que usa Visual Sueldos (alfanumérico). Distinto de `legajo`. */
+  legajo_visual?: string
+  /** Cuenta de acreditación. TEXTO siempre: conserva ceros a la izquierda. */
+  cuenta_bancaria?: string
+  /** Cuenta de prueba: no aparece en reportes ni en liquidación. */
+  es_prueba?: boolean
   rol: Rol
   estado: Estado
   foto_url?: string
