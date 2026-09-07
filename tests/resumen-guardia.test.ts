@@ -689,7 +689,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(p.nombreHoja).toBe('Hoja1')
     // 7 título B1 · 8-9 datos · 10 subtotal · 11 sep · 12 título B2 ·
     // 13 subtotal · 14 sep · 15 título B3 · 16 subtotal · 17 sep · 18 total
-    expect(p.ref).toBe('A1:BB18')
+    expect(p.ref).toBe('A1:BC18')
     const m = mapa(p)
     expect(m.get('A7')?.v).toBe('BLOQUE 1 - VIGILADORES')
     expect(m.get('A10')?.v).toBe('SUBTOTAL VIGILADORES')
@@ -746,6 +746,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(m.get('AZ6')?.v).toBe('HORAS SUPERVISION')
     expect(m.get('BA6')?.v).toBe('JORNADAS SUPERVISION')
     expect(m.get('BB6')?.v).toBe('OBSERVACION')
+    expect(m.get('BC6')?.v).toBe('HS VIGILANCIA ZONA') // métrica nueva al final
   })
 
   it('celdas de entrada: datos consolidados de la app en A-P', () => {
@@ -975,6 +976,23 @@ describe('bloques y mensualizados', () => {
     expect(res.filas.map(f => f.empleadoId)).toEqual(['g1'])
   })
 
+  it('dos homónimos (caso Facundo Romero): el guardia es_prueba se excluye y el admin sigue', () => {
+    // Mismo apellido y nombre: el ÚNICO discriminante es es_prueba, no el
+    // nombre. El guardia "adm 2" marcado de prueba no debe aparecer; el
+    // administrador ADM001 (es_prueba=false) tiene que seguir en el archivo.
+    const res = construirResumenGuardia(base({
+      empleados: [
+        { id: 'fac-guardia', nombre: 'facundo', apellido: 'romero', rol: 'guardia', legajo: 'adm 2', esPrueba: true },
+        { id: 'fac-admin', nombre: 'Facundo', apellido: 'Romero', rol: 'admin', legajo: 'ADM001', esPrueba: false },
+      ],
+      turnos: [turno({ id: 't1', guardia_id: 'fac-guardia' })],
+      registros: [registro({ turno_id: 't1', guardia_id: 'fac-guardia', horas_liquidables: 12 })],
+    }))
+    const ids = res.filas.map(f => f.empleadoId)
+    expect(ids).toContain('fac-admin')       // administrador: sigue incluido
+    expect(ids).not.toContain('fac-guardia') // guardia de prueba: excluido
+  })
+
   it('vigilador: informativas en 0 y sus columnas de liquidación intactas', () => {
     const res = construirResumenGuardia(base({
       turnos: [turno({ id: 't1' })],
@@ -1015,6 +1033,132 @@ describe('bloques y mensualizados', () => {
     expect(m.get('A19')?.v).toBe('TOTAL GENERAL')
     expect(m.get('I19')?.f).toBe('I9+I13+I17')
     expect(m.get('I19')?.v).toBe(12)
-    expect(p.ref).toBe('A1:BB19')
+    expect(p.ref).toBe('A1:BC19')
+  })
+})
+
+// ── HS VIGILANCIA ZONA (Juan, 07/09/2026) ────────────────────────────────────
+// Horas programadas de TODOS los turnos del mes de TODOS los objetivos de la
+// zona que el supervisor tiene a cargo. Volumen operativo bajo supervisión, no
+// horas personales. Se resuelve por asignación de zona (supervisor_zonas), no
+// por rol='supervisor': el admin que supervisa (MARTINEZ) la lleva igual.
+// Objetivos: o1 y o2 → zona Z1; o3 → zona Z2. El objetivo de prueba OBJ_PRUEBA
+// no tiene zona relevante (queda excluido por es_prueba de todos modos).
+
+describe('HS VIGILANCIA ZONA', () => {
+  const zonaObjetivo = (id?: string | null): string | null =>
+    id === 'o1' || id === 'o2' ? 'Z1' : id === 'o3' ? 'Z2' : null
+
+  // Turnos de la zona Z1: o1 cubierto 24 h (12+12) el 01/08 y o2 12 h el 02/08
+  // → Z1 = 36 h programadas. o3 (Z2) = 12 h. Sin registros a propósito: la
+  // métrica cuenta el horario PROGRAMADO, no lo fichado.
+  const turnosZona: TurnoResumen[] = [
+    turno({ id: 'z-t1', fecha: '2026-08-01', objetivo_id: 'o1', hora_inicio: '07:00', hora_fin: '19:00', guardia_id: 'x' }),
+    turno({ id: 'z-t2', fecha: '2026-08-01', objetivo_id: 'o1', hora_inicio: '19:00', hora_fin: '07:00', guardia_id: 'x' }),
+    turno({ id: 'z-t3', fecha: '2026-08-02', objetivo_id: 'o2', hora_inicio: '08:00', hora_fin: '20:00', guardia_id: 'x' }),
+    turno({ id: 'z-t4', fecha: '2026-08-03', objetivo_id: 'o3', hora_inicio: '08:00', hora_fin: '20:00', guardia_id: 'x' }),
+  ]
+
+  const conZona = (emp: any, over: Partial<ParamsResumenGuardia> = {}) =>
+    fila(construirResumenGuardia(base({
+      empleados: [emp],
+      turnos: turnosZona,
+      zonaObjetivo,
+      zonasSupervisor: (id: string) => over.zonasSupervisor?.(id) ?? [],
+      ...over,
+    })), emp.id)!
+
+  it('zona de un solo supervisor: lleva TODAS las horas programadas de sus objetivos', () => {
+    const f = conZona(
+      { id: 's1', nombre: 'C', apellido: 'ACOSTA', rol: 'supervisor' },
+      { zonasSupervisor: () => ['Z1'] },
+    )
+    expect(f.hsVigilanciaZona).toBe(36) // 24 (o1) + 12 (o2), programadas, sin fichar
+  })
+
+  it('admin que supervisa (MARTINEZ): lleva las horas de su zona aunque el rol sea admin', () => {
+    const f = conZona(
+      { id: 'a1', nombre: 'SERGIO', apellido: 'MARTINEZ', rol: 'admin' },
+      { zonasSupervisor: () => ['Z1'] },
+    )
+    expect(f.grupo).toBe('administrativos')
+    expect(f.hsVigilanciaZona).toBe(36)
+    // sigue mensualizado: nada en las columnas que se multiplican
+    expect(f.jornadas).toBe(0)
+    expect(f.horasLiquidables).toBe(0)
+  })
+
+  it('varias zonas a cargo: suma las dos', () => {
+    const f = conZona(
+      { id: 's1', nombre: 'C', apellido: 'ACOSTA', rol: 'supervisor' },
+      { zonasSupervisor: () => ['Z1', 'Z2'] },
+    )
+    expect(f.hsVigilanciaZona).toBe(48) // 36 + 12
+  })
+
+  it('Jefe de Supervisores sin fila en supervisor_zonas: 0, no se le inventa una zona', () => {
+    const f = conZona(
+      { id: 'jefe', nombre: 'ALDO', apellido: 'MONZON', rol: 'supervisor' },
+      { zonasSupervisor: () => [] },
+    )
+    expect(f.hsVigilanciaZona).toBe(0)
+  })
+
+  it('vigilador con asignación por error: 0 (un guardia no supervisa zonas)', () => {
+    const f = conZona(
+      { id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia' },
+      { zonasSupervisor: () => ['Z1'] },
+    )
+    expect(f.hsVigilanciaZona).toBe(0)
+    expect(f.horasLiquidables).toBe(0) // sus turnos son de otro guardia
+  })
+
+  it('objetivo de prueba y estados sin obligación no suman a la zona', () => {
+    const turnos: TurnoResumen[] = [
+      turno({ id: 'v1', fecha: '2026-08-01', objetivo_id: 'o1', hora_inicio: '07:00', hora_fin: '19:00', guardia_id: 'x' }), // 12 h válidas
+      turno({ id: 'v2', fecha: '2026-08-02', objetivo_id: 'o1', hora_inicio: '07:00', hora_fin: '19:00', estado: 'anulado', guardia_id: 'x' }), // fuera
+      turno({ id: 'v3', fecha: '2026-08-03', objetivo_id: OBJ_PRUEBA, hora_inicio: '07:00', hora_fin: '19:00', guardia_id: 'x' }), // fuera
+    ]
+    const f = fila(construirResumenGuardia(base({
+      empleados: [{ id: 's1', nombre: 'C', apellido: 'ACOSTA', rol: 'supervisor' }],
+      turnos,
+      // el objetivo de prueba mapea a Z1 igual: debe quedar excluido por es_prueba, no por la zona
+      zonaObjetivo: (id?: string | null) => (id === 'o1' || id === OBJ_PRUEBA ? 'Z1' : null),
+      zonasSupervisor: () => ['Z1'],
+    })), 's1')!
+    expect(f.hsVigilanciaZona).toBe(12)
+  })
+
+  it('sin zonaObjetivo provisto: la columna queda en 0 (compatibilidad hacia atrás)', () => {
+    const f = fila(construirResumenGuardia(base({
+      empleados: [{ id: 's1', nombre: 'C', apellido: 'ACOSTA', rol: 'supervisor' }],
+      turnos: turnosZona,
+      zonasSupervisor: () => ['Z1'],
+    })), 's1')!
+    expect(f.hsVigilanciaZona).toBe(0)
+  })
+
+  it('plantilla: valor por fila, y NADA de subtotal/total (zona compartida no se cuenta dos veces)', () => {
+    // Dos supervisores de la MISMA zona Z1: cada uno lleva las 36 h completas.
+    const res = construirResumenGuardia(base({
+      empleados: [
+        { id: 's1', nombre: 'C', apellido: 'AAA', rol: 'supervisor' },
+        { id: 's2', nombre: 'D', apellido: 'BBB', rol: 'supervisor' },
+      ],
+      turnos: turnosZona,
+      zonaObjetivo,
+      zonasSupervisor: () => ['Z1'],
+    }))
+    const m = new Map(plantillaLiquidacionResumenGuardia(res).celdas.map(c => [c.ref, c]))
+    // Bloque 1 vacío (7 título, 8 subtotal, 9 sep), Bloque 2 supervisores:
+    // 10 título, 11 AAA, 12 BBB, 13 subtotal, 14 sep, 15/16 admin, 17 sep, 18 total
+    expect(m.get('D11')?.v).toBe('AAA, C')
+    expect(m.get('BC11')?.v).toBe(36)
+    expect(m.get('BC12')?.v).toBe(36)
+    // NO se suma: en zona compartida sumar por supervisor contaría la zona 2 veces
+    expect(m.get('BC13')).toBeUndefined() // subtotal supervisores
+    expect(m.get('BC18')).toBeUndefined() // total general
+    // las demás informativas sí totalizan (contraste): AY13 existe
+    expect(m.get('AY13')?.f).toBe('SUM(AY11:AY12)')
   })
 })

@@ -221,6 +221,19 @@ export function horasGuardiaSupervisor(g: SupervisorGuardiaResumen): number {
   return (fin - ini) / 60
 }
 
+/**
+ * Horas PROGRAMADAS de un turno = duración de su horario (hora_fin −
+ * hora_inicio), sumando 24 h cuando cruza la medianoche (fin ≤ inicio). Es la
+ * cobertura planificada del servicio, NO las horas trabajadas/liquidables de
+ * una persona: alimenta sólo la métrica HS VIGILANCIA ZONA.
+ */
+export function horasProgramadasTurno(t: { hora_inicio: string; hora_fin: string }): number {
+  const ini = minutosDelDia(t.hora_inicio)
+  let fin = minutosDelDia(t.hora_fin)
+  if (fin <= ini) fin += 1440
+  return (fin - ini) / 60
+}
+
 export interface ParamsResumenGuardia {
   /** Mes operativo, formato 'YYYY-MM'. */
   mes: string
@@ -255,6 +268,20 @@ export interface ParamsResumenGuardia {
   supervisoresGuardia?: SupervisorGuardiaResumen[]
   /** Supervisiones del mes, para la columna SUPERVISIONES (conteo dedup). */
   supervisiones?: SupervisionResumen[]
+  /**
+   * zona_id operativa de un objetivo (objetivos.zona_id). Alimenta HS
+   * VIGILANCIA ZONA: agrupa las horas programadas de los turnos por zona. Sin
+   * callback la columna queda en 0 y nada más cambia.
+   */
+  zonaObjetivo?: (objetivoId?: string | null) => string | null
+  /**
+   * Zonas que un empleado tiene A CARGO por asignación operativa (tabla
+   * supervisor_zonas), INDEPENDIENTE del rol: un admin que supervisa (caso
+   * MARTINEZ) devuelve sus zonas igual. Sin asignación → []. Un Jefe de
+   * Supervisores con alcance total NO se resuelve acá con una zona inventada:
+   * hasta que exista su representación de "todas las zonas", devuelve [].
+   */
+  zonasSupervisor?: (empleadoId: string) => string[]
 }
 
 // ── Tipos de salida ───────────────────────────────────────────────────────────
@@ -317,6 +344,15 @@ export interface FilaResumenGuardia {
   supervisiones: number
   horasSupervision: number
   jornadasSupervision: number
+  /**
+   * HS VIGILANCIA ZONA: horas programadas de TODOS los turnos del mes de
+   * TODOS los objetivos de las zonas que el empleado tiene a cargo. Es el
+   * VOLUMEN operativo bajo supervisión (no las horas personales del
+   * supervisor) y se resuelve por asignación de zona, no por rol='supervisor'
+   * — un admin que supervisa (MARTINEZ) la lleva igual. Informativa: ninguna
+   * fórmula de liquidación la multiplica. 0 = sin zona a cargo.
+   */
+  hsVigilanciaZona: number
   /**
    * Marcas visibles de la fila (columna de observación): datos de
    * liquidación faltantes ("REVISAR: falta CUIL") y actividad de un
@@ -491,6 +527,20 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
   )
   const turnoPorId = new Map<string, TurnoResumen>(turnosValidos.map(t => [t.id, t]))
 
+  // HS VIGILANCIA ZONA — horas programadas por zona operativa, sobre el MISMO
+  // universo de turnos válidos (sin objetivos de prueba ni estados sin
+  // obligación). Se calcula una sola vez; cada supervisor toma las zonas que
+  // tiene a cargo. Suma la cobertura de TODOS los turnos de la zona, sin mirar
+  // quién los fichó: es el volumen a supervisar, no horas de una persona.
+  const horasPorZona = new Map<string, number>()
+  if (params.zonaObjetivo) {
+    for (const t of turnosValidos) {
+      const zona = params.zonaObjetivo(t.objetivo_id)
+      if (!zona) continue
+      horasPorZona.set(zona, (horasPorZona.get(zona) ?? 0) + horasProgramadasTurno(t))
+    }
+  }
+
   // Turnos que tienen algún registro (de cualquier guardia): un turno cubierto
   // por reemplazo no debe caer también como fallback de transición del titular.
   const turnosConRegistro = new Set(registros.map(r => r.turno_id))
@@ -656,6 +706,18 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       : 0
     const zonas = Array.from(new Set(cargas.map(g => (g.zona ?? '').trim()).filter(Boolean))).sort()
 
+    // HS VIGILANCIA ZONA: suma de las horas programadas de las zonas a cargo
+    // (supervisor_zonas), por asignación operativa y no por rol — incluye al
+    // admin que supervisa (MARTINEZ). Sólo para mensualizados, igual criterio
+    // que el resto de las informativas: un vigilador no supervisa zonas y, si
+    // por un error de datos tuviera asignación, no se le computa. Un empleado
+    // sin zona a cargo (incluido el Jefe de Supervisores mientras su alcance
+    // total no tenga representación) queda en 0: no se le inventa una zona.
+    const zonasACargo = mensualizado ? (params.zonasSupervisor?.(emp.id) ?? []) : []
+    const hsVigilanciaZona = Math.round(
+      zonasACargo.reduce((s, z) => s + (horasPorZona.get(z) ?? 0), 0) * 100,
+    ) / 100
+
     // REGLA DURA (Juan, 07/09): ningún ACTIVO puede faltar en el archivo.
     // El "sin nada que decir → sin fila" queda solo para inactivos.
     if (!activo && reconocidas.length === 0 && lineas.length === 0 && novedadesEmp.length === 0) continue
@@ -707,6 +769,7 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       supervisiones: supervisionesMes,
       horasSupervision,
       jornadasSupervision,
+      hsVigilanciaZona,
       observaciones,
       origen: {
         turnoIds: lineas.map(l => l.turno.id),
@@ -891,6 +954,9 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     // fórmula de liquidación las multiplica.
     ['AY6', 'SUPERVISIONES'], ['AZ6', 'HORAS SUPERVISION'], ['BA6', 'JORNADAS SUPERVISION'],
     ['BB6', 'OBSERVACION'],
+    // Métrica nueva (pedido de Juan 07/09): volumen operativo bajo supervisión.
+    // Va DESPUÉS de todo lo demás; no corre ninguna columna ni fórmula previa.
+    ['BC6', 'HS VIGILANCIA ZONA'],
   ]
   for (const [ref, v] of fila6) put(ref, v)
 
@@ -985,6 +1051,12 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`AZ${r}`, fila.horasSupervision)
     put(`BA${r}`, fila.jornadasSupervision)
     if (fila.observaciones.length > 0) put(`BB${r}`, fila.observaciones.join(' · '))
+    // HS VIGILANCIA ZONA: valor por fila, sin fórmula. NO se suma en los
+    // subtotales/TOTAL (no está en colsTotales): en una zona compartida cada
+    // supervisor lleva las horas completas de la zona, así que sumarlas entre
+    // supervisores contaría la misma zona varias veces. La métrica se lee por
+    // fila; el total por zona no es la suma de la columna.
+    put(`BC${r}`, fila.hsVigilanciaZona)
     const cacheFila: [string, number][] = [
       ['G', G], ['I', I], ['J', J], ['K', fila.feriadosTrabajados],
       ['L', num(fila.licencias)], ['M', num(fila.art)], ['N', num(fila.vacaciones)],
@@ -1045,5 +1117,5 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`${col}${filaTotales}`, v, subtotales.map(b => `${col}${b.fila}`).join('+'))
   }
 
-  return { nombreHoja: 'Hoja1', ref: `A1:BB${filaTotales}`, celdas }
+  return { nombreHoja: 'Hoja1', ref: `A1:BC${filaTotales}`, celdas }
 }
