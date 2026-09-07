@@ -8,7 +8,7 @@ import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendie
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
-import { construirResumenGuardia, plantillaLiquidacionResumenGuardia } from '@/lib/resumen-guardia'
+import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, grupoDeRol, type GrupoResumen } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -6683,6 +6683,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [registrosReportes, setRegistrosReportes] = useState<RegistroAsistencia[]>([])
   const [novedadesLaborales, setNovedadesLaborales] = useState<any[]>([])
   const [nocturnidadExcepciones, setNocturnidadExcepciones] = useState<any[]>([])
+  // Insumos del bloque de supervisores del Resumen Guardia (columnas
+  // informativas AY-BA): sus guardias cargadas y sus supervisiones del mes.
+  const [supervisoresGuardiaMes, setSupervisoresGuardiaMes] = useState<any[]>([])
+  const [supervisionesMes, setSupervisionesMes] = useState<any[]>([])
 
   // ── Ajuste mensual de nocturnidad (novedades_laborales tipo ajuste) ───────
   // Valor FINAL informado para liquidar: reemplaza al cálculo automático del
@@ -6963,11 +6967,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       // Excepciones de nocturnidad empleado+objetivo. Si la tabla todavía no
       // existe en el entorno (migración sin aplicar), se sigue sin excepciones.
       supabase.from('nocturnidad_empleado_objetivo').select('*'),
-    ]).then(([turnos, registros, nl, acept, soli, revi, noctExc]) => {
+      // Bloque de supervisores del Resumen Guardia: guardias cargadas del mes
+      // (fuente de HORAS/JORNADAS SUPERVISION) y supervisiones registradas
+      // (fuente de SUPERVISIONES). La ventana de supervisiones es por
+      // created_at en hora argentina, igual que las ve el supervisor.
+      supabase.from('supervisores_guardia').select('supervisor_id, fecha, hora_inicio, hora_fin, zona, estado').gte('fecha', desdeStr).lte('fecha', hastaStr).eq('estado', 'activo'),
+      supabase.from('supervisiones').select('supervisor_id, objetivo_id, estado, created_at').gte('created_at', `${desdeStr}T00:00:00-03:00`).lt('created_at', `${new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10)}T00:00:00-03:00`),
+    ]).then(([turnos, registros, nl, acept, soli, revi, noctExc, supGuardias, supervisionesRes]) => {
       setTurnosReportes(turnos)
       setRegistrosReportes(registros)
       setNovedadesLaborales(nl.data ?? [])
       setNocturnidadExcepciones((noctExc as any).data ?? [])
+      setSupervisoresGuardiaMes((supGuardias as any).data ?? [])
+      setSupervisionesMes((supervisionesRes as any).data ?? [])
       setRevisionMes(construirRevisionPorClave(acept, soli, revi))
     })
   }, [mes])
@@ -7817,12 +7829,20 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         _registros: regs.length,
         _fallback: turnosFallback.length,
         _clasificados: clasificacion.total,
+        _grupo: grupoDeRol(g.rol),
       }
     })
     // Un mes con ausencias y sin un solo fichaje sigue siendo información de
     // cierre: si se filtrara por actividad, el que faltó todo el mes
     // desaparecería justo del reporte donde hay que verlo.
     .filter((g: any) => verTodos || g._registros > 0 || g._fallback > 0 || g._clasificados > 0)
+    // Vigiladores primero, supervisores al final y después administración
+    // (pedido de Juan 07/09) — acá y en el export, mismo orden. Adentro de
+    // cada grupo se conserva el alfabético por apellido de la fuente.
+    .sort((a: any, b: any) => {
+      const orden: Record<GrupoResumen, number> = { vigiladores: 0, supervisores: 1, administrativos: 2 }
+      return orden[a._grupo as GrupoResumen] - orden[b._grupo as GrupoResumen]
+    })
 
   const reporteObjetivos = objetivos
     .map((o: Objetivo) => {
@@ -7946,11 +7966,16 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const exportarResumenGuardiaMensualXLSX = async () => {
     const resumen = construirResumenGuardia({
       mes,
-      // Resumen Guardia: solo vigiladores (pedido de Juan) — los supervisores no liquidan por este circuito.
-      empleados: empleados.filter((g: Usuario) => esRolGuardia(g.rol)).map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, cuil: g.cuil, legajo: g.legajo, legajoVisual: (g as any).legajo_visual ?? null, cuenta: (g as any).cuenta_bancaria ?? null })),
+      // TODO el personal (pedido de Juan 07/09): la lib arma los tres bloques
+      // (vigiladores / supervisores / administrativos) y aplica la regla de
+      // mensualizados. REGLA DURA: ningún activo puede faltar en el archivo —
+      // por eso va `guardias` completo, no el recorte de la pantalla.
+      empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, estado: g.estado, cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
       turnos: turnosMes,
       registros: registrosMes,
       novedades: novedadesLaborales,
+      supervisoresGuardia: supervisoresGuardiaMes,
+      supervisiones: supervisionesMes,
       esObjetivoPrueba: (id?: string | null) => Boolean(objetivoPorIdPlanilla.get(id || '')?.es_prueba),
       nombreObjetivo: (id?: string | null) => objetivoPorIdPlanilla.get(id || '')?.nombre ?? '',
       nocturnidadObjetivo: (id?: string | null) => {
