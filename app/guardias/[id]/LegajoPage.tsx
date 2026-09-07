@@ -18,6 +18,8 @@ interface DatosEmpleado {
   apellido: string
   legajo: string | null
   cuil?: string | null
+  legajo_visual?: string | null
+  cuenta_bancaria?: string | null
   dni?: string
   email?: string
   rol: string
@@ -533,6 +535,26 @@ function SeccionSituacion({
             <div style={S.campo}>
               <div style={S.label}>Email</div>
               <div style={{ ...S.value, wordBreak: 'break-all', fontSize: 13 }}>{empleado.email}</div>
+            </div>
+          )}
+          {empleado.cuil && (
+            <div style={S.campo}>
+              <div style={S.label}>CUIL</div>
+              <div style={S.value}>{formatCuil(empleado.cuil)}</div>
+            </div>
+          )}
+          {empleado.legajo_visual && (
+            <div style={S.campo}>
+              <div style={S.label}>Legajo Visual Sueldos</div>
+              <div style={S.value}>{empleado.legajo_visual}</div>
+            </div>
+          )}
+          {/* El empleado ve su propia cuenta (el server solo la manda a admin o
+              al titular); editarla es solo de Administración. */}
+          {empleado.cuenta_bancaria && (
+            <div style={S.campo}>
+              <div style={S.label}>Cuenta bancaria</div>
+              <div style={S.value}>{empleado.cuenta_bancaria}</div>
             </div>
           )}
           <div style={S.campo}>

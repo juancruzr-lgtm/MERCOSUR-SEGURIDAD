@@ -1555,7 +1555,7 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
 function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
-  const formVacio = { nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
+  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
   const [grupoRol, setGrupoRol] = useState<'vigiladores' | 'supervisores' | 'administracion'>('vigiladores')
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
@@ -1684,6 +1684,9 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       nombre: g.nombre || '',
       apellido: g.apellido || '',
       dni: g.dni || '',
+      cuil: g.cuil || '',
+      legajo_visual: g.legajo_visual || '',
+      cuenta_bancaria: g.cuenta_bancaria || '',
       telefono: g.telefono || '',
       legajo: g.legajo || '',
       email: g.email || '',
@@ -1747,6 +1750,11 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       nombre: form.nombre.trim(),
       apellido: form.apellido.trim(),
       dni: form.dni.trim() || null,
+      // Datos de liquidación: texto siempre (la cuenta conserva ceros a la
+      // izquierda; el CBU tiene 22 dígitos). Solo admin: el endpoint lo valida.
+      cuil: form.cuil.trim() || null,
+      legajo_visual: form.legajo_visual.trim() || null,
+      cuenta_bancaria: form.cuenta_bancaria.trim() || null,
       telefono: form.telefono.trim() || null,
       legajo: form.legajo.trim(),
       email: form.email.trim().toLowerCase() || null,
@@ -1778,20 +1786,40 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         }
       }
 
-      const { data, error } = await supabase.from('usuarios').update(payload).eq('id', editId).select().single()
-      if (error) {
-        setMensaje({ tipo:'error', texto:error.message })
-      } else if (data) {
-        setGuardias((prev: any[]) => prev.map(g => g.id === editId ? data : g))
-        setModal(false)
+      // El guardado pasa por /api/usuarios: el rol admin se valida en el
+      // servidor, no solo escondiendo el botón en la UI.
+      try {
+        const res = await fetch('/api/usuarios', {
+          method: 'PATCH',
+          headers: await headersAdmin(),
+          body: JSON.stringify({ usuario_id: editId, ...payload }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          setMensaje({ tipo:'error', texto:data.error || 'No se pudo guardar el empleado' })
+        } else if (data.usuario) {
+          setGuardias((prev: any[]) => prev.map(g => g.id === editId ? data.usuario : g))
+          setModal(false)
+        }
+      } catch (err: any) {
+        setMensaje({ tipo:'error', texto:err?.message || 'No se pudo guardar el empleado' })
       }
     } else {
-      const { data, error } = await supabase.from('usuarios').insert(payload).select().single()
-      if (error) {
-        setMensaje({ tipo:'error', texto:error.message })
-      } else if (data) {
-        setGuardias((prev: any[]) => [...prev, data])
-        setModal(false)
+      try {
+        const res = await fetch('/api/usuarios', {
+          method: 'POST',
+          headers: await headersAdmin(),
+          body: JSON.stringify(payload),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          setMensaje({ tipo:'error', texto:data.error || 'No se pudo crear el empleado' })
+        } else if (data.usuario) {
+          setGuardias((prev: any[]) => [...prev, data.usuario])
+          setModal(false)
+        }
+      } catch (err: any) {
+        setMensaje({ tipo:'error', texto:err?.message || 'No se pudo crear el empleado' })
       }
     }
     setLoading(false)
@@ -2260,6 +2288,28 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
               <label style={S.label}>DNI</label>
               <input style={S.input} value={form.dni} onChange={e => setForm({...form, dni:e.target.value})} />
             </div>
+
+            {esAdmin && (
+              <div style={{ marginBottom:16 }}>
+                <label style={S.label}>CUIL</label>
+                <input style={S.input} inputMode="numeric" value={form.cuil} onChange={e => setForm({...form, cuil:e.target.value})} />
+              </div>
+            )}
+
+            {esAdmin && (
+              <div style={{ marginBottom:16 }}>
+                <label style={S.label}>Legajo Visual Sueldos</label>
+                <input style={S.input} value={form.legajo_visual} onChange={e => setForm({...form, legajo_visual:e.target.value})} />
+              </div>
+            )}
+
+            {esAdmin && (
+              <div style={{ marginBottom:16 }}>
+                <label style={S.label}>Cuenta bancaria</label>
+                {/* Texto a propósito: el número de cuenta/CBU conserva ceros a la izquierda */}
+                <input style={S.input} inputMode="numeric" value={form.cuenta_bancaria} onChange={e => setForm({...form, cuenta_bancaria:e.target.value})} />
+              </div>
+            )}
 
             <div style={{ marginBottom:16 }}>
               <label style={S.label}>Email</label>
