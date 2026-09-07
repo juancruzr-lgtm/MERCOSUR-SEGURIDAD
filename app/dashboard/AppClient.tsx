@@ -6686,7 +6686,7 @@ function Novedades({ novedades, setNovedades, guardias, objetivos, filtroActivo,
   )
 }
 
-function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objetivos, novedades, filtroActivo, limpiarFiltro, user }: any) {
+function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objetivos, novedades, supervisorZonas = [], filtroActivo, limpiarFiltro, user }: any) {
   const [registroCorrigiendo, setRegistroCorrigiendo] = useState<RegistroAsistencia | null>(null)
   const [turnoParaCargaManual, setTurnoParaCargaManual] = useState<Turno | null>(null)
   const [agregarRegistroContexto, setAgregarRegistroContexto] = useState<{ empleadoId?: string; objetivoId?: string } | null>(null)
@@ -7996,6 +7996,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       novedades: novedadesLaborales,
       supervisoresGuardia: supervisoresGuardiaMes,
       supervisiones: supervisionesMes,
+      // HS VIGILANCIA ZONA: zona operativa del objetivo y zonas a cargo del
+      // empleado (supervisor_zonas, por asignación y no por rol — incluye a
+      // MARTINEZ, admin que supervisa Rosario). El Jefe de Supervisores sin
+      // fila en supervisor_zonas queda en 0: no se le asigna una zona ficticia.
+      zonaObjetivo: (id?: string | null) => (objetivoPorIdPlanilla.get(id || '') as any)?.zona_id ?? null,
+      zonasSupervisor: (empId: string) => (supervisorZonas || [])
+        .filter((sz: any) => sz.supervisor_id === empId)
+        .map((sz: any) => sz.zona_id)
+        .filter(Boolean),
       esObjetivoPrueba: (id?: string | null) => Boolean(objetivoPorIdPlanilla.get(id || '')?.es_prueba),
       nombreObjetivo: (id?: string | null) => objetivoPorIdPlanilla.get(id || '')?.nombre ?? '',
       nocturnidadObjetivo: (id?: string | null) => {
@@ -13677,7 +13686,7 @@ const esGuardia = esRolGuardia(user.rol)
                 />
               )}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
-              {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
+              {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
               {page === 'observacion' && <ObservacionSistema onNavigate={navegarConFiltro} />}
