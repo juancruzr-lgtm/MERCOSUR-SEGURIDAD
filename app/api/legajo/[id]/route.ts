@@ -55,7 +55,7 @@ export async function GET(
   // ── Empleado ──────────────────────────────────────────────────────────────
   const { data: empleado, error: empleadoError } = await admin.client
     .from('usuarios')
-    .select('id, nombre, apellido, legajo, cuil, dni, rol, estado, foto_url, email')
+    .select('id, nombre, apellido, legajo, cuil, legajo_visual, cuenta_bancaria, dni, rol, estado, foto_url, email')
     .eq('id', empleadoId)
     .single()
 
@@ -187,6 +187,10 @@ export async function GET(
       apellido: empleado.apellido,
       legajo: empleado.legajo,
       cuil: empleado.cuil ?? null,
+      // Quien llega acá es admin o el propio empleado (puedeVerLegajo):
+      // el empleado ve su cuenta, no la edita.
+      legajo_visual: empleado.legajo_visual ?? null,
+      cuenta_bancaria: empleado.cuenta_bancaria ?? null,
       dni: solicitante.rol === 'admin' ? empleado.dni : undefined,
       email: solicitante.rol === 'admin' ? empleado.email : undefined,
       rol: empleado.rol,
