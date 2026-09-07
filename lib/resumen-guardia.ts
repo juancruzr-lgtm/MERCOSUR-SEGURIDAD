@@ -977,9 +977,18 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`D${r}`, fila.nombre)
     put(`E${r}`, fila.notas.join(' · '))
     put(`F${r}`, fila.objetivos.join('/'))
-    const G = fila.jornadas
+    // ── Base de liquidación de MENSUALIZADOS (Juan, 07/09/2026) ───────────
+    // REVOCA la regla anterior (jornadas/horas = 0). Supervisores y
+    // administrativos cobran sueldo fijo: la plantilla necesita valores
+    // CONVENCIONALES para que sus fórmulas salariales operen. NO representan
+    // horas ni jornadas trabajadas — la operación real vive en las columnas
+    // informativas (AZ HORAS SUPERVISION, BC HS VIGILANCIA ZONA) y no se toca
+    // ninguna fuente operativa. La transformación ocurre SOLO acá, en la capa
+    // que arma la plantilla de liquidación (FilaResumenGuardia sigue con 0).
+    const mensualizado = fila.grupo !== 'vigiladores'
+    const G = mensualizado ? 25 : fila.jornadas
     const H = Math.min(G, 25)
-    const I = fila.horasLiquidables
+    const I = mensualizado ? 150 : fila.horasLiquidables
     const J = num(fila.horasNocturnas)
     put(`G${r}`, G)
     put(`H${r}`, H, `MIN(G${r},25)`)
@@ -1015,7 +1024,12 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     const AE = (P.noRem / 25) * H
     const AF = (hora / 10) * J
     const AG = I <= 150 ? H * 8 : 150
-    const AI = 0 // AH (hs a valor pleno) queda vacío para carga manual
+    // ADICIONAL: columna AH = "hs a valor pleno" (concepto 212), INPUT manual
+    // que alimenta la columna 'adicional' AI = AH*Y. Base mensualizada = 50
+    // (Juan, 07/09). En vigiladores AH sigue vacía (carga manual, como hasta
+    // ahora): 0 acá = celda sin emitir, no un 0 escrito.
+    const AH = mensualizado ? 50 : 0
+    const AI = AH * hora
     const AJ = AG * hora
     const AL = I - AG
     const AM = AL > 0 && I > 0 ? (AL * 100) / I : 0
@@ -1033,6 +1047,9 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`AE${r}`, AE, `(X${r}/25)*H${r}`)
     put(`AF${r}`, AF, `(Y${r}/10)*J${r}`)
     put(`AG${r}`, AG, `IF(I${r}<=150,H${r}*8,150)`)
+    // Mensualizado: se emite AH=50 (adicional base). Vigilador: NO se emite
+    // (queda vacía para carga manual, como el resto de las columnas manuales).
+    if (mensualizado) put(`AH${r}`, AH)
     put(`AI${r}`, AI, `AH${r}*Y${r}`)
     put(`AJ${r}`, AJ, `AG${r}*Y${r}`)
     put(`AL${r}`, AL, `I${r}-AG${r}`)
@@ -1063,7 +1080,7 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
       ['O', num(fila.parteMedico)], ['P', num(fila.ausenciasSuspensiones)],
       ['U', dia8], ['V', P.presentismo], ['W', P.viatico], ['X', P.noRem],
       ['Y', hora], ['Z', P.presentismo / 25], ['AA', P.viatico / 25], ['AB', P.noRem / 25],
-      ['AC', AC], ['AD', AD], ['AE', AE], ['AF', AF], ['AG', AG], ['AH', 0],
+      ['AC', AC], ['AD', AD], ['AE', AE], ['AF', AF], ['AG', AG], ['AH', AH],
       ['AI', AI], ['AJ', AJ], ['AK', 0], ['AL', AL], ['AM', AM], ['AN', AN],
       ['AO', AO], ['AP', AP], ['AQ', 0], ['AR', 0], ['AS', AS],
       ['AT', AT], ['AU', AU], ['AV', AV], ['AW', AW], ['AX', AX],

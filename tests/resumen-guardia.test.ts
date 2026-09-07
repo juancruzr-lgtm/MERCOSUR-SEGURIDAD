@@ -4,6 +4,7 @@ import {
   diasDeNovedadEnMes,
   filasXLSXResumenGuardia,
   plantillaLiquidacionResumenGuardia,
+  PARAMETROS_PLANTILLA,
   type NovedadResumen,
   type ParamsResumenGuardia,
   type TurnoResumen,
@@ -1025,14 +1026,16 @@ describe('bloques y mensualizados', () => {
     expect(m.get('A8')?.v).toBe('ALMADA')
     expect(m.get('A11')?.v).toBe('BLOQUE 2 - SUPERVISORES')
     expect(m.get('D12')?.v).toBe('ACOSTA, CARLOS')
-    expect(m.get('G12')?.v).toBe(0) // mensualizado: jornadas 0
-    expect(m.get('I12')?.v).toBe(0)
-    expect(m.get('AY12')?.v).toBe(0)
+    // Mensualizado: base de liquidación convencional (revoca la regla 0/0)
+    expect(m.get('G12')?.v).toBe(25)  // JORNADAS base
+    expect(m.get('I12')?.v).toBe(150) // HORAS LIQUIDABLES base
+    expect(m.get('AH12')?.v).toBe(50) // ADICIONAL (hs a valor pleno) base
+    expect(m.get('AY12')?.v).toBe(0)  // supervisiones informativas, sin datos acá
     // 13 subtotal B2 · 14 sep · 15 título B3 · 16 ROMERO · 17 subtotal · 18 sep · 19 TOTAL
     expect(m.get('D16')?.v).toBe('ROMERO, JUAN')
     expect(m.get('A19')?.v).toBe('TOTAL GENERAL')
     expect(m.get('I19')?.f).toBe('I9+I13+I17')
-    expect(m.get('I19')?.v).toBe(12)
+    expect(m.get('I19')?.v).toBe(312) // 12 vigilador + 150 supervisor + 150 admin
     expect(p.ref).toBe('A1:BC19')
   })
 })
@@ -1160,5 +1163,107 @@ describe('HS VIGILANCIA ZONA', () => {
     expect(m.get('BC18')).toBeUndefined() // total general
     // las demás informativas sí totalizan (contraste): AY13 existe
     expect(m.get('AY13')?.f).toBe('SUM(AY11:AY12)')
+  })
+})
+
+// ── Base de liquidación de MENSUALIZADOS (Juan, 07/09/2026) ──────────────────
+// REVOCA la regla anterior (JORNADAS=0, HORAS LIQUIDABLES=0). En la plantilla
+// de liquidación, supervisores y administrativos llevan valores CONVENCIONALES
+// para que las fórmulas salariales operen: JORNADAS=25, HORAS LIQUIDABLES=150,
+// ADICIONAL=50 (columna AH = "hs a valor pleno", que alimenta AI = AH*Y). No
+// son horas trabajadas y no tocan ninguna fuente operativa.
+
+describe('base de liquidación de mensualizados', () => {
+  const hora = PARAMETROS_PLANTILLA.basico / 200
+  // Localiza dinámicamente la fila de un empleado por su NOMBRE (columna D):
+  // según los bloques presentes la fila cambia de número, no la hardcodeamos.
+  const armar = (res: ReturnType<typeof construirResumenGuardia>) => {
+    const celdas = plantillaLiquidacionResumenGuardia(res).celdas
+    const m = new Map(celdas.map(c => [c.ref, c]))
+    const filaDe = (nombre: string) => {
+      const d = celdas.find(c => /^D\d+$/.test(c.ref) && c.v === nombre)
+      return d ? Number(d.ref.slice(1)) : -1
+    }
+    return { m, filaDe }
+  }
+
+  it('guardia normal: conserva JORNADAS y HORAS LIQUIDABLES de la fuente operativa; AH vacía', () => {
+    const { m, filaDe } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia', legajoVisual: 'ALMADA' }],
+      turnos: [turno({ id: 't1', fecha: '2026-08-10' }), turno({ id: 't2', fecha: '2026-08-11' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 }), registro({ turno_id: 't2', horas_liquidables: 8 })],
+    })))
+    const r = filaDe('ALMADA, E')
+    expect(m.get(`G${r}`)?.v).toBe(2)   // jornadas reales
+    expect(m.get(`I${r}`)?.v).toBe(20)  // horas liquidables reales
+    expect(m.get(`AH${r}`)).toBeUndefined() // vigilador: AH queda para carga manual
+    expect(m.get(`AI${r}`)?.v).toBe(0)      // adicional = AH(vacío)*Y = 0
+  })
+
+  const mensualizado = (rol: 'supervisor' | 'admin', over: Partial<ParamsResumenGuardia> = {}) => {
+    const { m, filaDe } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'm1', nombre: 'C', apellido: 'ACOSTA', rol }],
+      ...over,
+    })))
+    return { m, r: filaDe('ACOSTA, C') }
+  }
+
+  it('mensualizado supervisor: JORNADAS = 25', () => {
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get(`G${r}`)?.v).toBe(25)
+  })
+
+  it('mensualizado supervisor: HORAS LIQUIDABLES = 150', () => {
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get(`I${r}`)?.v).toBe(150)
+  })
+
+  it('mensualizado supervisor: ADICIONAL = 50 en AH (hs a valor pleno), y AI = 50*hora', () => {
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get(`AH${r}`)?.v).toBe(50)            // columna identificada: AH
+    expect(m.get(`AI${r}`)?.v).toBe(50 * hora)     // 'adicional' AI = AH*Y
+    expect(m.get(`AI${r}`)?.f).toBe(`AH${r}*Y${r}`) // la fórmula histórica no cambia
+  })
+
+  it('mensualizado admin (caso MARTINEZ): misma base 25/150/50 aunque el rol sea admin', () => {
+    const { m, r } = mensualizado('admin')
+    expect(m.get(`G${r}`)?.v).toBe(25)
+    expect(m.get(`I${r}`)?.v).toBe(150)
+    expect(m.get(`AH${r}`)?.v).toBe(50)
+  })
+
+  it('las horas operativas reales del mensualizado NO modifican la base convencional', () => {
+    // Supervisor con turnos fichados a su nombre: igual 25/150/50 (no lo cambian).
+    const { m, r } = mensualizado('supervisor', {
+      turnos: [turno({ id: 't1', guardia_id: 'm1' }), turno({ id: 't2', fecha: '2026-08-12', guardia_id: 'm1' })],
+      registros: [registro({ turno_id: 't1', guardia_id: 'm1', horas_liquidables: 12 }), registro({ turno_id: 't2', guardia_id: 'm1', horas_liquidables: 12 })],
+    })
+    expect(m.get(`G${r}`)?.v).toBe(25)
+    expect(m.get(`I${r}`)?.v).toBe(150)
+    expect(m.get(`AH${r}`)?.v).toBe(50)
+  })
+
+  it('HS VIGILANCIA ZONA sigue informativa e independiente de la base (150 ≠ 12.944,5)', () => {
+    // Objetivo o1 en zona Z1 con 24 h programadas; el supervisor la tiene a cargo.
+    const { m, r } = mensualizado('supervisor', {
+      turnos: [
+        turno({ id: 'z1', objetivo_id: 'o1', hora_inicio: '07:00', hora_fin: '19:00', guardia_id: 'x' }),
+        turno({ id: 'z2', objetivo_id: 'o1', hora_inicio: '19:00', hora_fin: '07:00', guardia_id: 'x' }),
+      ],
+      zonaObjetivo: (id) => (id === 'o1' ? 'Z1' : null),
+      zonasSupervisor: () => ['Z1'],
+    })
+    expect(m.get(`I${r}`)?.v).toBe(150)   // base de liquidación
+    expect(m.get(`BC${r}`)?.v).toBe(24)   // volumen de vigilancia de la zona (independiente)
+  })
+
+  it('columnas históricas no se desplazan: A:AX intactas, AI sigue "adicional"/212, informativas al final', () => {
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get('AI5')?.v).toBe('adicional')
+    expect(m.get('AI6')?.v).toBe('212')
+    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*Y${r}`)  // horas rec: fórmula intacta
+    expect(m.get('AX6')?.v).toBe('008')     // último concepto histórico, sin correr
+    expect(m.get('AY6')?.v).toBe('SUPERVISIONES') // informativas siguen DESPUÉS de AX
+    expect(m.get('BC6')?.v).toBe('HS VIGILANCIA ZONA')
   })
 })
