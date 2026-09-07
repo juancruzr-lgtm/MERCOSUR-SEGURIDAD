@@ -73,11 +73,23 @@
 -- crear tipos nuevos de alerta ni saturar supervisores. Si la operación lo
 -- pide, una etapa posterior puede agregarlos al evaluador de alertas.
 --
--- QUÉ NO TOCA: políticas de foto e IA, control por reincidencia GPS,
--- ronda_alertas, pausas, ventanas, cumplimiento, asistencia, liquidación,
--- RLS/F1 global. Ninguna migración histórica se modifica.
+-- QUÉ NO TOCA: políticas de foto e IA, ronda_alertas, pausas, ventanas,
+-- cumplimiento, asistencia, liquidación, RLS/F1 global. Ninguna migración
+-- histórica se modifica.
+--
+-- ⚠ ESTADO REAL DE PRODUCCIÓN (verificado por catálogo el 07/09/2026): la
+-- migración 20260802100000 (control de evidencias por reincidencia GPS) NUNCA
+-- se aplicó — no existen ronda_punto_control_gps ni snap_foto_control_gps, y
+-- las funciones vivas son las de 20260729120000/20260730120000 (cotejadas
+-- byte a byte contra el repo). Por eso las funciones recreadas acá PARTEN DE
+-- ESAS VERSIONES VIVAS y no mencionan el control GPS.
+--
+-- ⚠ Si algún día se decide aplicar 20260802100000, NO puede aplicarse tal
+-- cual: sus CREATE OR REPLACE pisarían el QR. Hay que refundirla con estas
+-- versiones (control GPS + QR juntos) en una migración nueva.
 --
 -- ROLLBACK      supabase/rollback/20260905100000_rondas_qr_puntos_rollback.sql
+--               (restaura exactamente las versiones vivas pre-QR)
 -- VERIFICACIÓN  supabase/verificacion/20260905100000_rondas_qr_pre_post.sql
 -- ============================================================================
 
@@ -204,8 +216,8 @@ comment on column public.ronda_ejecucion_puntos.qr_intentos_invalidos is
   'irreconocible). Auditoría liviana sin tipos nuevos de alerta.';
 
 -- ── 4. iniciar_ronda: congelar el modo QR en el snapshot ────────────────────
--- Idéntica a 20260802100000 salvo la columna snap_qr_modo en el INSERT del
--- snapshot (señalada con [QR]).
+-- Idéntica a la versión VIVA en producción (20260729120000) salvo la columna
+-- snap_qr_modo en el INSERT del snapshot (señalada con [QR]).
 
 create or replace function public.iniciar_ronda(p_ronda_base_id uuid)
 returns jsonb
@@ -334,13 +346,12 @@ begin
 
   -- Snapshot de los puntos ACTIVOS al momento de iniciar.
   -- [QR] El modo QR vigente del punto se congela acá, igual que la política de
-  -- foto y la exigencia por reincidencia GPS. Si la administración cambia el
-  -- modo después de iniciada la ronda, rige recién en la ejecución siguiente.
+  -- foto. Si la administración cambia el modo después de iniciada la ronda,
+  -- rige recién en la ejecución siguiente.
   insert into public.ronda_ejecucion_puntos (
     ronda_ejecucion_id, ronda_punto_id, orden, snap_nombre,
     snap_latitud, snap_longitud, snap_radio_metros,
     snap_foto_requerida, snap_gps_requerido, snap_politica_foto,
-    snap_foto_control_gps,
     snap_qr_modo
   )
   select
@@ -348,10 +359,8 @@ begin
     row_number() over (order by rp.orden, rp.id),
     rp.nombre, rp.latitud, rp.longitud, rp.radio_metros,
     rp.foto_requerida, rp.gps_requerido, rp.politica_foto,
-    coalesce(cg.foto_requerida_proxima_visita, false),
     rp.qr_modo
   from public.ronda_puntos rp
-  left join public.ronda_punto_control_gps cg on cg.ronda_punto_id = rp.id
   where rp.ronda_base_id = v_ronda.id
     and rp.activo = true;
 
@@ -375,7 +384,8 @@ revoke all on function public.iniciar_ronda(uuid) from anon;
 grant execute on function public.iniciar_ronda(uuid) to authenticated;
 
 -- ── 5. rondas_ejecucion_json: exponer el estado QR al vigilador ─────────────
--- Idéntica a 20260802100000 más tres claves por punto:
+-- Idéntica a la versión VIVA en producción (20260729120000) más tres claves
+-- por punto:
 --   qr_modo        modo congelado en el snapshot
 --   qr_verificado  el escaneo de esta visita ya fue validado por el servidor
 --   qr_disponible  el punto tiene una credencial activa (regla de no-bloqueo:
@@ -421,7 +431,6 @@ as $$
           'requiere_foto',     p.snap_foto_requerida,
           'politica_foto',     p.snap_politica_foto,
           'hay_novedad',       p.hay_novedad,
-          'foto_control_gps',  p.snap_foto_control_gps,
           'requiere_gps',      p.snap_gps_requerido,
           'latitud',           p.snap_latitud,
           'longitud',          p.snap_longitud,
@@ -671,8 +680,9 @@ grant execute on function public.validar_qr_ronda_punto(
 ) to authenticated;
 
 -- ── 7. registrar_punto_ronda: el QR obligatorio entra al veredicto ──────────
--- Idéntica a 20260802100000 salvo los agregados señalados con [QR]: lectura del
--- snapshot QR, la regla de veredicto y las claves nuevas en la respuesta.
+-- Idéntica a la versión VIVA en producción (20260729120000) salvo los agregados
+-- señalados con [QR]: lectura del snapshot QR, la regla de veredicto y las
+-- claves nuevas en la respuesta.
 --
 -- Regla: con snap_qr_modo = 'obligatorio' y credencial activa existente, un
 -- punto sin QR verificado se registra como 'incumplido' — misma semántica que
@@ -715,14 +725,8 @@ declare
   v_estado_nuevo         text := 'cumplido';
   v_pendientes           integer;
   v_todos_cumplidos      boolean;
-  -- [CONTROL GPS]
-  v_ronda_punto_id       uuid;
-  v_ronda_base_id        uuid;
-  v_snap_foto_control    boolean;
-  v_umbral               integer := greatest(1, coalesce((
-    select nullif(value, '')::int from public.app_config
-     where key = 'ronda_control_gps_umbral'), 2));
   -- [QR]
+  v_ronda_punto_id       uuid;
   v_qr_modo              text;
   v_qr_verificado_at     timestamptz;
   v_qr_exigible          boolean := false;
@@ -759,9 +763,7 @@ begin
     ep.snap_radio_metros,
     ep.snap_politica_foto,
     ep.snap_gps_requerido,
-    ep.ronda_punto_id,          -- [CONTROL GPS]
-    e.ronda_base_id,            -- [CONTROL GPS]
-    ep.snap_foto_control_gps,   -- [CONTROL GPS]
+    ep.ronda_punto_id,          -- [QR] resuelve la credencial activa del punto
     ep.snap_qr_modo,            -- [QR]
     ep.qr_verificado_at         -- [QR]
   into
@@ -775,8 +777,6 @@ begin
     v_politica_foto,
     v_gps_requerido,
     v_ronda_punto_id,
-    v_ronda_base_id,
-    v_snap_foto_control,
     v_qr_modo,
     v_qr_verificado_at
   from public.ronda_ejecucion_puntos ep
@@ -860,8 +860,7 @@ begin
 
   -- La política del SNAPSHOT decide, no la configuración actual del punto.
   v_foto_obligatoria := (v_politica_foto = 'obligatoria')
-                        or (v_politica_foto = 'solo_novedad' and v_novedad)
-                        or v_snap_foto_control;
+                        or (v_politica_foto = 'solo_novedad' and v_novedad);
 
   -- La foto se busca siempre: con política `opcional` el vigilador puede
   -- haberla sacado igual, y esa evidencia se registra como cumplida.
@@ -947,48 +946,6 @@ begin
    where id = p_ejecucion_punto_id
      and estado = 'pendiente';
 
-  -- ── [CONTROL GPS] Transiciones de la racha ────────────────────────────────
-  if v_snap_foto_control then
-    insert into public.ronda_punto_control_gps as cg (
-      ronda_punto_id, ronda_base_id, incumplimientos_consecutivos,
-      foto_requerida_proxima_visita, ultimo_ejecucion_punto_id
-    ) values (
-      v_ronda_punto_id, v_ronda_base_id, 0, false, p_ejecucion_punto_id
-    )
-    on conflict (ronda_punto_id) do update
-      set incumplimientos_consecutivos  = 0,
-          foto_requerida_proxima_visita = false,
-          ultimo_ejecucion_punto_id     = excluded.ultimo_ejecucion_punto_id,
-          updated_at                    = now();
-
-  elsif v_dentro_radio is true then
-    insert into public.ronda_punto_control_gps as cg (
-      ronda_punto_id, ronda_base_id, incumplimientos_consecutivos,
-      foto_requerida_proxima_visita, ultimo_ejecucion_punto_id
-    ) values (
-      v_ronda_punto_id, v_ronda_base_id, 0, false, p_ejecucion_punto_id
-    )
-    on conflict (ronda_punto_id) do update
-      set incumplimientos_consecutivos  = 0,
-          foto_requerida_proxima_visita = false,
-          ultimo_ejecucion_punto_id     = excluded.ultimo_ejecucion_punto_id,
-          updated_at                    = now();
-
-  elsif v_tiene_gps and v_dentro_radio is false then
-    insert into public.ronda_punto_control_gps as cg (
-      ronda_punto_id, ronda_base_id, incumplimientos_consecutivos,
-      foto_requerida_proxima_visita, ultimo_ejecucion_punto_id
-    ) values (
-      v_ronda_punto_id, v_ronda_base_id, 1, 1 >= v_umbral, p_ejecucion_punto_id
-    )
-    on conflict (ronda_punto_id) do update
-      set incumplimientos_consecutivos  = cg.incumplimientos_consecutivos + 1,
-          foto_requerida_proxima_visita = (cg.incumplimientos_consecutivos + 1) >= v_umbral,
-          ultimo_ejecucion_punto_id     = excluded.ultimo_ejecucion_punto_id,
-          updated_at                    = now()
-      where cg.ultimo_ejecucion_punto_id is distinct from excluded.ultimo_ejecucion_punto_id;
-  end if;
-
   select count(*)
     into v_pendientes
     from public.ronda_ejecucion_puntos ep
@@ -1020,7 +977,6 @@ begin
       'foto_ok',            v_foto_ok,
       'hay_novedad',        v_novedad,
       'politica_foto',      v_politica_foto,
-      'foto_control_gps',   v_snap_foto_control,
       'distancia_metros',   v_distancia_metros,
       'qr_modo',            v_qr_modo,
       'qr_verificado',      (v_qr_verificado_at is not null),
@@ -1032,7 +988,8 @@ end;
 $$;
 
 -- ── 8. Detalle de supervisor: cómo se acreditó el punto ─────────────────────
--- Idéntica a 20260802100000 más los hechos QR por punto: modo congelado,
+-- Idéntica a la versión VIVA en producción (20260730120000) más los hechos QR
+-- por punto: modo congelado,
 -- verificación, GPS del momento del scan e intentos inválidos. Con esto la
 -- pregunta "¿cómo se acreditó este punto?" se responde completa:
 -- QR válido + foto correcta + GPS precisión 74 m / fuera de radio.
@@ -1125,7 +1082,6 @@ begin
         'hay_novedad',         ep.hay_novedad,
         'requiere_foto',       ep.snap_foto_requerida,
         'politica_foto',       ep.snap_politica_foto,
-        'foto_control_gps',    ep.snap_foto_control_gps,
         'requiere_gps',        ep.snap_gps_requerido,
         'config_latitud',      ep.snap_latitud,
         'config_longitud',     ep.snap_longitud,

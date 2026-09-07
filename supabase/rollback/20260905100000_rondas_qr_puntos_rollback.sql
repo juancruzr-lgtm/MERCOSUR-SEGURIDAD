@@ -4,15 +4,20 @@
 --
 -- Deshace la validación física por QR:
 --   * elimina las RPC nuevas (validar/generar/obtener QR);
---   * restaura iniciar_ronda, rondas_ejecucion_json, registrar_punto_ronda y
---     rondas_ejecucion_detalle_supervisor EXACTAMENTE como quedaron en
---     20260802100000_ronda_control_gps_reincidencia.sql;
+--   * restaura iniciar_ronda, rondas_ejecucion_json y registrar_punto_ronda
+--     EXACTAMENTE como estaban vivas en producción antes del QR (versión
+--     20260729120000_ronda_puntos_politica_foto.sql — cotejada byte a byte
+--     contra producción el 07/09/2026; snapshot en poder del operador);
+--   * restaura rondas_ejecucion_detalle_supervisor como en 20260730120000;
 --   * restaura ronda_puntos_auditar_cambio como en 20260813100000;
 --   * elimina las columnas QR de ronda_ejecucion_puntos (los datos de
 --     verificaciones ya realizadas SE PIERDEN);
 --   * elimina la tabla ronda_punto_qr (las credenciales emitidas SE PIERDEN:
 --     los carteles impresos dejan de validar);
 --   * elimina ronda_puntos.qr_modo.
+--
+-- NOTA: la migración 20260802100000 (control GPS por reincidencia) NO está
+-- aplicada en producción; por eso las versiones restauradas acá NO la incluyen.
 --
 -- Las filas de ronda_puntos_auditoria con campo 'qr_credencial' / 'qr_modo' se
 -- conservan: la auditoría no se borra.
@@ -28,7 +33,7 @@ drop function if exists public.validar_qr_ronda_punto(
 drop function if exists public.generar_qr_ronda_punto(uuid, boolean);
 drop function if exists public.obtener_qr_ronda_punto(uuid);
 
--- ── 2. iniciar_ronda: versión de 20260802100000 ─────────────────────────────
+-- ── 2. iniciar_ronda: versión viva pre-QR (20260729120000) ──────────────────
 
 create or replace function public.iniciar_ronda(p_ronda_base_id uuid)
 returns jsonb
@@ -60,6 +65,10 @@ begin
     return jsonb_build_object('contexto', 'turno_sin_puesto', 'ejecucion', null);
   end if;
 
+  -- Idempotencia por lectura: si ya hay una ejecución abierta de ESTE guardia en
+  -- ESTE turno, se devuelve. Nunca se toca la de otro guardia (reemplazo).
+  -- La respuesta siempre usa el serializador contractual completo y esta rama
+  -- no toma locks ni modifica la ejecución.
   select e.id, e.ronda_base_id
     into v_ejecucion_id, v_ejecucion_ronda_base_id
     from public.ronda_ejecuciones e
@@ -79,6 +88,13 @@ begin
     );
   end if;
 
+  -- La ronda debe existir, estar activa y pertenecer al puesto del turno vigente.
+  -- Es la única validación sobre un identificador recibido del cliente.
+  --
+  -- `for update` no es decorativo: todo alta, edición o reordenamiento de puntos
+  -- dispara touch_ronda_base_desde_punto(), que actualiza esta misma fila. Tomar
+  -- el lock serializa el inicio contra una edición concurrente de los puntos y
+  -- garantiza que el conteo y el snapshot vean el mismo conjunto.
   select rb.* into v_ronda
     from public.rondas_base rb
    where rb.id = p_ronda_base_id
@@ -99,6 +115,9 @@ begin
     return jsonb_build_object('contexto', 'ronda_sin_puntos', 'ejecucion', null);
   end if;
 
+  -- Marca de inicio fuera de horario, anclada al turno y no al reloj del día.
+  -- Un turno 22:00-06:00 con ronda a las 02:00: ese instante pertenece al día
+  -- siguiente de la fecha operativa, y así se calcula.
   if v_ronda.hora_inicio is not null then
     select t.hora_inicio into v_turno from public.turnos t where t.id = v_ctx.turno_id;
     v_inicio_previsto := v_ctx.fecha_operativa + v_ronda.hora_inicio;
@@ -120,12 +139,22 @@ begin
     )
     returning id into v_ejecucion_id;
   exception when unique_violation then
+    -- Dos toques concurrentes: el índice parcial rechaza el segundo. Se relee y
+    -- se devuelve la que ganó, en lugar de propagar el error.
+    --
+    -- Sólo se absorbe LA violación esperada. Cualquier otra restricción única
+    -- que exista hoy o se agregue mañana se vuelve a lanzar: un catch amplio
+    -- convertiría un defecto nuevo en un "recuperada" silencioso.
     get stacked diagnostics v_constraint = constraint_name;
 
     if v_constraint is distinct from 'ronda_ejecuciones_turno_guardia_en_curso_unique' then
       raise;
     end if;
 
+    -- La ejecución que ganó la carrera puede pertenecer a la misma ronda o a
+    -- otra. Igual que en la lectura inicial, esta rama sólo observa y devuelve.
+    -- Esta relectura depende del aislamiento normal de PostgREST/Supabase:
+    -- READ COMMITTED permite ver la fila confirmada por la transacción ganadora.
     select e.id, e.ronda_base_id
       into v_ejecucion_id, v_ejecucion_ronda_base_id
       from public.ronda_ejecuciones e
@@ -134,6 +163,9 @@ begin
        and e.estado    = 'en_curso'
      limit 1;
 
+    -- Si la ejecución en conflicto se cerró entre la violación y esta relectura,
+    -- no hay nada que recuperar. Devolver un contexto con ejecución null sería
+    -- mentir; se propaga el error original y el cliente reintenta.
     if v_ejecucion_id is null then
       raise;
     end if;
@@ -148,25 +180,29 @@ begin
     );
   end;
 
+  -- Snapshot de los puntos ACTIVOS al momento de iniciar. Se pre-crean todos:
+  -- así 'pendiente' es un estado real, el registro posterior es siempre UPDATE
+  -- (idempotente) y la ejecución no cambia si después se edita la ronda.
   insert into public.ronda_ejecucion_puntos (
     ronda_ejecucion_id, ronda_punto_id, orden, snap_nombre,
     snap_latitud, snap_longitud, snap_radio_metros,
-    snap_foto_requerida, snap_gps_requerido, snap_politica_foto,
-    snap_foto_control_gps
+    snap_foto_requerida, snap_gps_requerido, snap_politica_foto
   )
   select
     v_ejecucion_id, rp.id,
     row_number() over (order by rp.orden, rp.id),
     rp.nombre, rp.latitud, rp.longitud, rp.radio_metros,
-    rp.foto_requerida, rp.gps_requerido, rp.politica_foto,
-    coalesce(cg.foto_requerida_proxima_visita, false)
+    rp.foto_requerida, rp.gps_requerido, rp.politica_foto
   from public.ronda_puntos rp
-  left join public.ronda_punto_control_gps cg on cg.ronda_punto_id = rp.id
   where rp.ronda_base_id = v_ronda.id
     and rp.activo = true;
 
   get diagnostics v_insertados = row_count;
 
+  -- Red de seguridad sobre el lock: si por cualquier motivo el conjunto de
+  -- puntos cambió entre el conteo y el snapshot, manda lo efectivamente
+  -- guardado. `puntos_total` es el denominador del porcentaje y no puede
+  -- discrepar de las filas existentes.
   if v_insertados <> v_total then
     update public.ronda_ejecuciones
        set puntos_total = v_insertados
@@ -184,7 +220,7 @@ revoke all on function public.iniciar_ronda(uuid) from public;
 revoke all on function public.iniciar_ronda(uuid) from anon;
 grant execute on function public.iniciar_ronda(uuid) to authenticated;
 
--- ── 3. rondas_ejecucion_json: versión de 20260802100000 ─────────────────────
+-- ── 3. rondas_ejecucion_json: versión viva pre-QR (20260729120000) ──────────
 
 create or replace function public.rondas_ejecucion_json(p_ejecucion_id uuid)
 returns jsonb
@@ -226,7 +262,6 @@ as $$
           'requiere_foto',     p.snap_foto_requerida,
           'politica_foto',     p.snap_politica_foto,
           'hay_novedad',       p.hay_novedad,
-          'foto_control_gps',  p.snap_foto_control_gps,
           'requiere_gps',      p.snap_gps_requerido,
           'latitud',           p.snap_latitud,
           'longitud',          p.snap_longitud,
@@ -245,7 +280,7 @@ $$;
 revoke all on function public.rondas_ejecucion_json(uuid) from public;
 revoke all on function public.rondas_ejecucion_json(uuid) from anon;
 
--- ── 4. registrar_punto_ronda: versión de 20260802100000 ─────────────────────
+-- ── 4. registrar_punto_ronda: versión viva pre-QR (20260729120000) ──────────
 
 create or replace function public.registrar_punto_ronda(
   p_ejecucion_punto_id uuid,
@@ -282,12 +317,6 @@ declare
   v_estado_nuevo         text := 'cumplido';
   v_pendientes           integer;
   v_todos_cumplidos      boolean;
-  v_ronda_punto_id       uuid;
-  v_ronda_base_id        uuid;
-  v_snap_foto_control    boolean;
-  v_umbral               integer := greatest(1, coalesce((
-    select nullif(value, '')::int from public.app_config
-     where key = 'ronda_control_gps_umbral'), 2));
 begin
   if auth.uid() is null then
     raise exception 'Sesión requerida';
@@ -310,6 +339,7 @@ begin
     );
   end if;
 
+  -- Bloquea ejecución y punto para serializar doble toque y llamadas paralelas.
   select
     e.id,
     e.estado,
@@ -319,10 +349,7 @@ begin
     ep.snap_longitud,
     ep.snap_radio_metros,
     ep.snap_politica_foto,
-    ep.snap_gps_requerido,
-    ep.ronda_punto_id,
-    e.ronda_base_id,
-    ep.snap_foto_control_gps
+    ep.snap_gps_requerido
   into
     v_ejecucion_id,
     v_ejecucion_estado,
@@ -332,10 +359,7 @@ begin
     v_snap_longitud,
     v_snap_radio_metros,
     v_politica_foto,
-    v_gps_requerido,
-    v_ronda_punto_id,
-    v_ronda_base_id,
-    v_snap_foto_control
+    v_gps_requerido
   from public.ronda_ejecucion_puntos ep
   join public.ronda_ejecuciones e on e.id = ep.ronda_ejecucion_id
   where ep.id          = p_ejecucion_punto_id
@@ -351,6 +375,7 @@ begin
     );
   end if;
 
+  -- Reintento luego de una respuesta perdida: no vuelve a escribir.
   if v_punto_estado <> 'pendiente' then
     return jsonb_build_object(
       'contexto', 'ya_registrado',
@@ -386,6 +411,7 @@ begin
     );
   end if;
 
+  -- Coordenadas completas o ninguna.
   if (p_latitud is null) <> (p_longitud is null)
      or (p_latitud is not null and (p_latitud < -90 or p_latitud > 90))
      or (p_longitud is not null and (p_longitud < -180 or p_longitud > 180))
@@ -398,6 +424,8 @@ begin
     );
   end if;
 
+  -- Una configuración histórica inválida nunca se interpreta como cumplimiento
+  -- ni se consume: se devuelve un contexto estable y no se modifica el punto.
   if v_gps_requerido
      and (
        v_snap_latitud is null
@@ -411,10 +439,13 @@ begin
     );
   end if;
 
+  -- La política del SNAPSHOT decide, no la configuración actual del punto: una
+  -- edición posterior no cambia las reglas de esta ejecución.
   v_foto_obligatoria := (v_politica_foto = 'obligatoria')
-                        or (v_politica_foto = 'solo_novedad' and v_novedad)
-                        or v_snap_foto_control;
+                        or (v_politica_foto = 'solo_novedad' and v_novedad);
 
+  -- La foto se busca siempre: con política `opcional` el vigilador puede
+  -- haberla sacado igual, y esa evidencia se registra como cumplida.
   select exists (
     select 1
       from public.evidencias ev
@@ -435,6 +466,7 @@ begin
     );
   end if;
 
+  -- null = no correspondía exigirla y no se sacó. Mismo criterio que gps_ok.
   v_foto_ok := case when v_foto_presente then true else null end;
 
   v_tiene_gps := p_latitud is not null;
@@ -455,6 +487,10 @@ begin
     end if;
   end if;
 
+  -- Para GPS obligatorio sólo `dentro_radio = true` permite cumplimiento.
+  -- La novedad no degrada el veredicto: es información, no un incumplimiento.
+  -- precision_metros conserva su contrato actual: se valida y almacena, pero no
+  -- participa del veredicto.
   if v_gps_requerido
      and (
        not v_tiene_gps
@@ -476,47 +512,6 @@ begin
          estado            = v_estado_nuevo
    where id = p_ejecucion_punto_id
      and estado = 'pendiente';
-
-  if v_snap_foto_control then
-    insert into public.ronda_punto_control_gps as cg (
-      ronda_punto_id, ronda_base_id, incumplimientos_consecutivos,
-      foto_requerida_proxima_visita, ultimo_ejecucion_punto_id
-    ) values (
-      v_ronda_punto_id, v_ronda_base_id, 0, false, p_ejecucion_punto_id
-    )
-    on conflict (ronda_punto_id) do update
-      set incumplimientos_consecutivos  = 0,
-          foto_requerida_proxima_visita = false,
-          ultimo_ejecucion_punto_id     = excluded.ultimo_ejecucion_punto_id,
-          updated_at                    = now();
-
-  elsif v_dentro_radio is true then
-    insert into public.ronda_punto_control_gps as cg (
-      ronda_punto_id, ronda_base_id, incumplimientos_consecutivos,
-      foto_requerida_proxima_visita, ultimo_ejecucion_punto_id
-    ) values (
-      v_ronda_punto_id, v_ronda_base_id, 0, false, p_ejecucion_punto_id
-    )
-    on conflict (ronda_punto_id) do update
-      set incumplimientos_consecutivos  = 0,
-          foto_requerida_proxima_visita = false,
-          ultimo_ejecucion_punto_id     = excluded.ultimo_ejecucion_punto_id,
-          updated_at                    = now();
-
-  elsif v_tiene_gps and v_dentro_radio is false then
-    insert into public.ronda_punto_control_gps as cg (
-      ronda_punto_id, ronda_base_id, incumplimientos_consecutivos,
-      foto_requerida_proxima_visita, ultimo_ejecucion_punto_id
-    ) values (
-      v_ronda_punto_id, v_ronda_base_id, 1, 1 >= v_umbral, p_ejecucion_punto_id
-    )
-    on conflict (ronda_punto_id) do update
-      set incumplimientos_consecutivos  = cg.incumplimientos_consecutivos + 1,
-          foto_requerida_proxima_visita = (cg.incumplimientos_consecutivos + 1) >= v_umbral,
-          ultimo_ejecucion_punto_id     = excluded.ultimo_ejecucion_punto_id,
-          updated_at                    = now()
-      where cg.ultimo_ejecucion_punto_id is distinct from excluded.ultimo_ejecucion_punto_id;
-  end if;
 
   select count(*)
     into v_pendientes
@@ -549,7 +544,6 @@ begin
       'foto_ok',            v_foto_ok,
       'hay_novedad',        v_novedad,
       'politica_foto',      v_politica_foto,
-      'foto_control_gps',   v_snap_foto_control,
       'distancia_metros',   v_distancia_metros
     ),
     'ejecucion', public.rondas_ejecucion_json(v_ejecucion_id)
@@ -567,7 +561,7 @@ grant execute on function public.registrar_punto_ronda(
   uuid, double precision, double precision, double precision, boolean
 ) to authenticated;
 
--- ── 5. rondas_ejecucion_detalle_supervisor: versión de 20260802100000 ───────
+-- ── 5. rondas_ejecucion_detalle_supervisor: versión viva pre-QR (20260730120000)
 
 create or replace function public.rondas_ejecucion_detalle_supervisor(p_ejecucion_id uuid)
 returns jsonb
@@ -583,10 +577,13 @@ declare
   v_ejecucion   jsonb;
   v_puntos      jsonb;
 begin
+  -- 1. Sesión.
   if auth.uid() is null then
     return jsonb_build_object('contexto', 'sin_usuario');
   end if;
 
+  -- 2. Localizar la ejecución solo para conocer su objetivo y poder autorizar.
+  --    Nada de la ejecución se expone antes de pasar el control de acceso.
   select e.objetivo_id, e.puntos_total
     into v_objetivo_id, v_total
   from public.ronda_ejecuciones e
@@ -596,16 +593,19 @@ begin
     return jsonb_build_object('contexto', 'no_encontrada');
   end if;
 
+  -- 3. Autorización: admin, o supervisor con la zona del objetivo asignada.
   if not public.puede_administrar_rondas_objetivo(v_objetivo_id) then
     return jsonb_build_object('contexto', 'sin_permiso');
   end if;
 
+  -- 4. Progreso (puntos resueltos sobre el total congelado en la ejecución).
   select count(*)
     into v_completados
   from public.ronda_ejecucion_puntos ep
   where ep.ronda_ejecucion_id = p_ejecucion_id
     and ep.estado <> 'pendiente';
 
+  -- 5. Cabecera de la ejecución (guardia, puesto, ronda, cierre administrativo).
   select jsonb_build_object(
     'id',                      e.id,
     'estado',                  e.estado,
@@ -629,6 +629,8 @@ begin
     'puesto_nombre',           pu.nombre,
     'guardia_id',              e.guardia_id,
     'guardia_nombre',          g.apellido || ', ' || g.nombre,
+    -- Cierre administrativo: cerrada_por IS NOT NULL lo distingue de una ronda
+    -- que el vigilador terminó con puntos incumplidos (mismo estado/resultado).
     'cerrada_por',             e.cerrada_por,
     'cerrada_por_nombre',      case when e.cerrada_por is null then null
                                     else cp.apellido || ', ' || cp.nombre end,
@@ -644,6 +646,8 @@ begin
   left join public.usuarios cp on cp.id = e.cerrada_por
   where e.id = p_ejecucion_id;
 
+  -- 6. Puntos: definición congelada (snap_*), GPS real capturado, veredictos,
+  --    novedad/comentario y referencias de evidencia (sin firmar).
   select coalesce(
     jsonb_agg(
       jsonb_build_object(
@@ -655,13 +659,14 @@ begin
         'registrado_at',       ep.registrado_at,
         'comentario',          ep.comentario,
         'hay_novedad',         ep.hay_novedad,
+        -- Reglas congeladas al iniciar la ronda.
         'requiere_foto',       ep.snap_foto_requerida,
         'politica_foto',       ep.snap_politica_foto,
-        'foto_control_gps',    ep.snap_foto_control_gps,
         'requiere_gps',        ep.snap_gps_requerido,
         'config_latitud',      ep.snap_latitud,
         'config_longitud',     ep.snap_longitud,
         'config_radio_metros', ep.snap_radio_metros,
+        -- GPS real capturado por el vigilador.
         'latitud',             ep.latitud,
         'longitud',            ep.longitud,
         'precision_metros',    ep.precision_metros,
@@ -669,6 +674,7 @@ begin
         'gps_ok',              ep.gps_ok,
         'dentro_radio',        ep.dentro_radio,
         'foto_ok',             ep.foto_ok,
+        -- Referencias de evidencia (proceso_id = id del punto de ejecución).
         'evidencias',          coalesce(ev.evidencias, jsonb_build_array())
       )
       order by ep.orden
