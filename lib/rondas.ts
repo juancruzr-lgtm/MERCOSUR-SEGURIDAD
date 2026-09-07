@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import type { CausaPausa } from '@/lib/rondas-causas'
+import type { ModoQr } from '@/lib/rondas-qr'
 
 export const RONDA_INTERVALO_MINIMO = 15
 export const RONDA_INTERVALO_MAXIMO = 10080
@@ -100,6 +101,8 @@ export interface RondaPunto {
   radio_metros: number | null
   origen_posicion: OrigenPosicion
   posicion_capturada_at: string | null
+  /** Validación física por QR del punto. Ver lib/rondas-qr.ts. */
+  qr_modo: ModoQr
   activo: boolean
   created_at: string
   updated_at: string
@@ -158,6 +161,11 @@ export interface NuevoRondaPunto {
   origen_posicion?: OrigenPosicion
   /** Fecha/hora real de captura de la posición (ISO). null si no hay posición. */
   posicion_capturada_at?: string | null
+  /**
+   * Sólo para actualizarPunto (grant de UPDATE por columna): el alta siempre
+   * nace con QR desactivado y la activación es una decisión posterior.
+   */
+  qr_modo?: ModoQr
   activo?: boolean
 }
 
@@ -210,7 +218,7 @@ interface ErrorSupabase {
 const COLS_RONDA_BASE =
   'id, objetivo_id, puesto_id, nombre, descripcion, intervalo_minutos, hora_inicio, activo, version, creado_por, actualizado_por, created_at, updated_at'
 const COLS_RONDA_PUNTO =
-  'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, politica_foto, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, posicion_capturada_at, activo, created_at, updated_at'
+  'id, ronda_base_id, nombre, descripcion, orden, foto_requerida, politica_foto, gps_requerido, latitud, longitud, precision_metros, radio_metros, origen_posicion, posicion_capturada_at, qr_modo, activo, created_at, updated_at'
 const MENSAJE_CONFIGURACION_GPS_INCOMPLETA =
   'Si el GPS es obligatorio, marcá el punto en el mapa y definí un radio válido.'
 
@@ -908,6 +916,13 @@ export interface RondaEjecucionPuntoEstado {
   latitud: number | null
   longitud: number | null
   radio_metros: number | null
+  // ── Añadidos por la validación QR (snapshot + estado de la visita) ──
+  /** Modo QR congelado al iniciar la ronda. */
+  qr_modo: ModoQr
+  /** El escaneo de esta visita ya fue validado por el servidor. */
+  qr_verificado: boolean
+  /** El punto tiene una credencial QR activa (sin ella la exigencia no aplica). */
+  qr_disponible: boolean
 }
 
 // La Etapa 3.1 — Backend define este contrato y lo expone mediante
@@ -1099,6 +1114,12 @@ export interface VeredictoPuntoRonda {
   /** La visita exigía foto de control por reincidencia GPS. */
   foto_control_gps?: boolean
   distancia_metros?: number | null
+  /** Modo QR congelado en el snapshot de la visita. */
+  qr_modo?: ModoQr
+  /** El QR fue verificado por el servidor en esta visita. */
+  qr_verificado?: boolean
+  /** La exigencia QR aplicaba (modo obligatorio + credencial activa). */
+  qr_exigible?: boolean
 }
 
 export interface RespuestaRegistrarPunto {
@@ -1115,16 +1136,23 @@ export interface EvidenciaPuntoRonda {
   created_at: string
 }
 
-function normalizarEjecucion(bruto: any): RondaEjecucionActual | null {
+export function normalizarEjecucion(bruto: any): RondaEjecucionActual | null {
   if (!bruto) return null
   const puntos: RondaEjecucionPuntoEstado[] = Array.isArray(bruto.puntos) ? bruto.puntos : []
   return {
     ...bruto,
     puntos: [...puntos]
       .sort((a, b) => a.orden - b.orden)
-      // Un servidor sin la migración de control GPS no manda la clave: se
-      // normaliza a false, que reproduce el comportamiento previo.
-      .map(p => ({ ...p, foto_control_gps: (p as any).foto_control_gps ?? false })),
+      // Un servidor sin la migración de control GPS o la de QR no manda las
+      // claves: se normalizan a los valores que reproducen el comportamiento
+      // previo (sin foto de control, sin QR).
+      .map(p => ({
+        ...p,
+        foto_control_gps: (p as any).foto_control_gps ?? false,
+        qr_modo: (p as any).qr_modo ?? 'desactivado',
+        qr_verificado: (p as any).qr_verificado ?? false,
+        qr_disponible: (p as any).qr_disponible ?? false,
+      })),
   } as RondaEjecucionActual
 }
 
@@ -1483,6 +1511,12 @@ export interface PuntoEjecucionDetalle {
   gps_ok: boolean | null
   dentro_radio: boolean | null
   foto_ok: boolean | null
+  // Hechos de la validación QR de la visita (null/0 en ejecuciones previas).
+  qr_modo?: ModoQr
+  qr_verificado_at?: string | null
+  qr_distancia_metros?: number | null
+  qr_precision_metros?: number | null
+  qr_intentos_invalidos?: number
   // Referencias de evidencia (para firmar con firmarEvidenciaRonda). Sin URL.
   evidencias: EvidenciaRefRonda[]
 }

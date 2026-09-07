@@ -19,6 +19,16 @@ import {
   type MotivoFalloGps,
   type ResultadoCapturaGps,
 } from '@/lib/gps-captura'
+import {
+  extraerTokenQr,
+  mensajeContextoValidarQr,
+  qrExigibleEnVisita,
+  qrOfrecidoEnVisita,
+  registroBloqueadoPorQr,
+  validarQrPuntoRonda,
+  MENSAJE_QR_INCUMPLIDO_SIN_SCAN,
+} from '@/lib/rondas-qr'
+import QrScanner from './QrScanner'
 
 type EstadoGps =
   | { tipo: 'sin_solicitar' }
@@ -149,6 +159,13 @@ export default function RondaGuardiaEjecucion({
   // reintento reutiliza esa evidencia en lugar de volver a subir la imagen: en un
   // celular con mala señal la subida es la parte lenta del registro.
   const [evidenciaSubidaId, setEvidenciaSubidaId] = useState<string | null>(null)
+  // Validación QR de la visita. `qr_verificado` viene del servidor (snapshot de
+  // la ejecución); acá sólo vive el estado transitorio del escaneo y la salida
+  // explícita "no puedo escanear" para QR obligatorio.
+  const [scannerAbierto, setScannerAbierto] = useState(false)
+  const [validandoQr, setValidandoQr] = useState(false)
+  const [avisoQr, setAvisoQr] = useState<string | null>(null)
+  const [continuarSinQr, setContinuarSinQr] = useState(false)
 
   const puntoActual = obtenerPuntoPendiente(ejecucion)
   const puntoActualId = puntoActual?.ejecucion_punto_id ?? null
@@ -162,6 +179,10 @@ export default function RondaGuardiaEjecucion({
     // Cambió el punto (o se registró el anterior): la evidencia subida ya no
     // aplica. También cubre volver de la ronda, porque desmonta esta pantalla.
     setEvidenciaSubidaId(null)
+    setScannerAbierto(false)
+    setValidandoQr(false)
+    setAvisoQr(null)
+    setContinuarSinQr(false)
   }, [puntoActualId])
 
   // Misma regla que aplica el servidor. Se recalcula al marcar la novedad:
@@ -172,6 +193,15 @@ export default function RondaGuardiaEjecucion({
   const fotoControlGps = puntoActual?.foto_control_gps ?? false
   const fotoObligatoria = puntoActual != null
     && fotoEsObligatoriaEnVisita(politicaFoto, hayNovedad, fotoControlGps)
+
+  // QR del punto: el modo y la disponibilidad de credencial vienen congelados/
+  // resueltos por el servidor. Sin credencial activa la exigencia no aplica
+  // (regla de no-bloqueo del servidor) y la UI ni ofrece el escaneo.
+  const qrModo = puntoActual?.qr_modo ?? 'desactivado'
+  const qrDisponible = puntoActual?.qr_disponible ?? false
+  const qrVerificado = puntoActual?.qr_verificado ?? false
+  const qrOfrecido = qrOfrecidoEnVisita(qrModo, qrDisponible)
+  const qrExigible = qrExigibleEnVisita(qrModo, qrDisponible)
 
   useEffect(() => {
     return () => {
@@ -202,6 +232,40 @@ export default function RondaGuardiaEjecucion({
     if (capturaGpsRef.current !== captura) return
     capturaGpsRef.current = null
     setEstadoGps(estadoDesdeCaptura(resultado))
+  }
+
+  // Lectura del QR: se extrae el token localmente (formato propio, nada ajeno
+  // viaja al servidor) y la RPC decide contra el punto EN CURSO. El GPS que ya
+  // esté capturado acompaña al escaneo como evidencia del momento.
+  const manejarLecturaQr = async (payload: string) => {
+    setScannerAbierto(false)
+    if (!puntoActual || validandoQr) return
+
+    const token = extraerTokenQr(payload)
+    if (!token) {
+      setAvisoQr('El código escaneado no es un QR de puntos de ronda.')
+      return
+    }
+
+    setValidandoQr(true)
+    setAvisoQr(null)
+    try {
+      const gps = estadoGps.tipo === 'disponible' ? estadoGps.gps : null
+      const resultado = await validarQrPuntoRonda(puntoActual.ejecucion_punto_id, token, gps)
+      if (resultado.error || !resultado.data) {
+        setAvisoQr(resultado.error || 'No se pudo validar el QR.')
+        return
+      }
+      const mensaje = mensajeContextoValidarQr(resultado.data.contexto)
+      if (resultado.data.ejecucion) {
+        // Trae qr_verificado actualizado; el punto sigue pendiente, así que el
+        // estado local (GPS, foto) no se resetea.
+        onEjecucionChange(resultado.data.ejecucion)
+      }
+      if (mensaje) setAvisoQr(mensaje)
+    } finally {
+      setValidandoQr(false)
+    }
   }
 
   const seleccionarFoto = async (archivo: File | undefined) => {
@@ -328,11 +392,18 @@ export default function RondaGuardiaEjecucion({
   // requiere y no se pudo obtener ninguna ubicación válida.
   const ubicacionValida = estadoGps.tipo === 'disponible'
   const bloqueoPorGps = puntoActual.requiere_gps && !ubicacionValida
+  // QR obligatorio: se pide el escaneo antes de registrar. "No puedo escanear"
+  // es la salida explícita; el servidor marcará el punto como incumplido.
+  const bloqueoPorQr = registroBloqueadoPorQr(qrModo, qrDisponible, qrVerificado, continuarSinQr)
   const puedeRegistrar = gpsIntentado
     && !bloqueoPorGps
+    && !bloqueoPorQr
     && (!fotoObligatoria || foto !== null)
     && !procesandoFoto
     && !registrando
+    && !validandoQr
+  const numeroNovedad = qrOfrecido ? 3 : 2
+  const numeroFoto = (politicaFoto === 'solo_novedad' ? 1 : 0) + (qrOfrecido ? 3 : 2)
   const porcentaje = Math.min(100, Math.max(0, ejecucion.porcentaje))
 
   return (
@@ -362,6 +433,10 @@ export default function RondaGuardiaEjecucion({
           {ultimoResultado.veredicto.distancia_metros != null
             ? ` · ${Math.round(ultimoResultado.veredicto.distancia_metros)} m`
             : ''}
+          {ultimoResultado.veredicto.qr_verificado ? ' · QR verificado' : ''}
+          {ultimoResultado.veredicto.qr_exigible && !ultimoResultado.veredicto.qr_verificado
+            ? ' · sin QR'
+            : ''}
         </div>
       )}
 
@@ -378,6 +453,11 @@ export default function RondaGuardiaEjecucion({
           <span style={{ ...S.regla, ...(puntoActual.requiere_gps ? S.reglaActiva : S.reglaOpcional) }}>
             {puntoActual.requiere_gps ? 'GPS requerido' : 'GPS opcional'}
           </span>
+          {qrOfrecido && (
+            <span style={{ ...S.regla, ...(qrExigible ? S.reglaActiva : S.reglaOpcional) }}>
+              {qrExigible ? 'QR obligatorio' : 'QR opcional'}
+            </span>
+          )}
           <span style={{ ...S.regla, ...(fotoObligatoria ? S.reglaActiva : S.reglaOpcional) }}>
             {etiquetaPoliticaFoto(politicaFoto)}
           </span>
@@ -448,9 +528,62 @@ export default function RondaGuardiaEjecucion({
           </button>
         </div>
 
+        {qrOfrecido && (
+          <div style={S.bloque}>
+            <div style={S.bloqueTitulo}>
+              2. QR del punto{qrExigible ? '' : ' (opcional)'}
+            </div>
+
+            {qrVerificado ? (
+              <div style={{ ...S.estadoInfo, ...S.estadoOk }} role="status">
+                <strong>QR verificado ✓</strong>
+              </div>
+            ) : scannerAbierto ? (
+              <QrScanner
+                onLeido={payload => void manejarLecturaQr(payload)}
+                onCancelar={() => setScannerAbierto(false)}
+              />
+            ) : (
+              <>
+                <div style={S.ayuda}>
+                  {qrExigible
+                    ? 'Escaneá el cartel QR pegado en este punto para acreditar tu presencia.'
+                    : 'Si el punto tiene su cartel QR, escanearlo suma evidencia de que estuviste ahí.'}
+                </div>
+                {validandoQr && <div style={S.estadoInfo}>Validando QR…</div>}
+                {continuarSinQr && (
+                  <div style={{ ...S.estadoInfo, ...S.estadoWarn }} role="status">
+                    {MENSAJE_QR_INCUMPLIDO_SIN_SCAN}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  style={S.secundario}
+                  onClick={() => { setAvisoQr(null); setScannerAbierto(true) }}
+                  disabled={registrando || validandoQr}
+                >
+                  Escanear QR del punto
+                </button>
+                {qrExigible && !continuarSinQr && (
+                  <button
+                    type="button"
+                    style={S.enlaceSinQr}
+                    onClick={() => setContinuarSinQr(true)}
+                    disabled={registrando || validandoQr}
+                  >
+                    No puedo escanear el QR
+                  </button>
+                )}
+              </>
+            )}
+
+            {avisoQr && <div style={S.errorBox} role="alert">{avisoQr}</div>}
+          </div>
+        )}
+
         {politicaFoto === 'solo_novedad' && (
           <div style={S.bloque}>
-            <div style={S.bloqueTitulo}>2. ¿Hay novedad?</div>
+            <div style={S.bloqueTitulo}>{numeroNovedad}. ¿Hay novedad?</div>
             <div style={S.ayuda}>
               Si marcás que hay una novedad, la foto pasa a ser obligatoria para este punto.
             </div>
@@ -468,7 +601,7 @@ export default function RondaGuardiaEjecucion({
 
         <div style={S.bloque}>
           <div style={S.bloqueTitulo}>
-            {politicaFoto === 'solo_novedad' ? '3. Foto' : '2. Foto'}
+            {numeroFoto}. Foto
             {fotoObligatoria ? ' obligatoria' : ' opcional'}
           </div>
           <input
@@ -519,7 +652,10 @@ export default function RondaGuardiaEjecucion({
         {!gpsIntentado && (
           <div style={S.pieAyuda}>Primero obtené la ubicación para habilitar el registro.</div>
         )}
-        {gpsIntentado && fotoObligatoria && !foto && (
+        {gpsIntentado && bloqueoPorQr && (
+          <div style={S.pieAyuda}>Escaneá el QR del punto para habilitar el registro.</div>
+        )}
+        {gpsIntentado && !bloqueoPorQr && fotoObligatoria && !foto && (
           <div style={S.pieAyuda}>La foto obligatoria bloquea el avance.</div>
         )}
       </div>
@@ -590,6 +726,11 @@ const S: Record<string, CSSProperties> = {
     background: '#1e293b', color: '#e2e8f0', fontSize: 13, fontWeight: 800, cursor: 'pointer',
   },
   deshabilitado: { background: '#334155', color: '#64748b', cursor: 'not-allowed' },
+  enlaceSinQr: {
+    width: '100%', marginTop: 7, padding: '7px 12px', borderRadius: 10,
+    border: 'none', background: 'transparent', color: '#94a3b8',
+    fontSize: 12, fontWeight: 700, cursor: 'pointer', textDecoration: 'underline',
+  },
   pieAyuda: { textAlign: 'center', color: '#64748b', fontSize: 11, marginTop: 7 },
   finalCard: {
     border: '1px solid #1e2d42', borderRadius: 14, background: '#111827', padding: 20,
