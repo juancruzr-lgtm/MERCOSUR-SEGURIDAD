@@ -124,7 +124,12 @@ describe('construirResumenGuardia', () => {
     const tPrueba = turno({ id: 't1', objetivo_id: OBJ_PRUEBA })
     const rPrueba = registro({ turno_id: 't1', horas_liquidables: 12 })
     const res = construirResumenGuardia(base({ turnos: [tPrueba], registros: [rPrueba] }))
-    expect(res.filas).toHaveLength(0)
+    // El empleado activo aparece igual (REGLA DURA), pero la actividad del
+    // objetivo de prueba no le acredita nada.
+    expect(res.filas).toHaveLength(1)
+    expect(res.filas[0].jornadas).toBe(0)
+    expect(res.filas[0].horasLiquidables).toBe(0)
+    expect(res.filas[0].origen.turnoIds).toEqual([])
 
     // Y con actividad mixta, sólo cuenta la del objetivo real.
     const tReal = turno({ id: 't2', fecha: '2026-08-11' })
@@ -138,13 +143,31 @@ describe('construirResumenGuardia', () => {
     expect(f.origen.turnoIds).toEqual(['t2'])
   })
 
-  it('empleado sin actividad ni novedades no genera fila', () => {
+  it('REGLA DURA: el activo sin actividad va igual con ceros; el inactivo sin nada no aparece', () => {
     const res = construirResumenGuardia(base({
-      empleados: [{ id: 'g1' }, { id: 'g2', nombre: 'OTRO', apellido: 'SIN ACTIVIDAD' }],
+      empleados: [
+        { id: 'g1' },
+        { id: 'g2', nombre: 'OTRO', apellido: 'SIN ACTIVIDAD' },              // activo (default)
+        { id: 'g3', nombre: 'VIEJO', apellido: 'INACTIVO', estado: 'inactivo' }, // sin nada: fuera
+      ],
       turnos: [turno({ id: 't1' })],
       registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
     }))
-    expect(res.filas.map(f => f.empleadoId)).toEqual(['g1'])
+    expect(res.filas.map(f => f.empleadoId).sort()).toEqual(['g1', 'g2'])
+    const sinActividad = res.filas.find(f => f.empleadoId === 'g2')!
+    expect(sinActividad.jornadas).toBe(0)
+    expect(sinActividad.horasLiquidables).toBe(0)
+    expect(sinActividad.licencias).toBeNull()
+  })
+
+  it('el inactivo CON actividad en el mes sigue entrando (se fue a mitad de mes: igual cobra)', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', estado: 'inactivo' }],
+      turnos: [turno({ id: 't1' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+    }))
+    expect(res.filas).toHaveLength(1)
+    expect(res.filas[0].horasLiquidables).toBe(12)
   })
 
   it('novedad aprobada: cuenta días del tipo; sin registro del tipo queda null (no 0)', () => {
@@ -450,7 +473,11 @@ describe('nocturnidad', () => {
       registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
       nocturnidadObjetivo: () => NOCT_22_06,
     }))
-    expect(res.filas).toHaveLength(0)
+    // La fila del activo existe (REGLA DURA) pero el objetivo de prueba no
+    // le acredita nocturnas ni horas.
+    expect(res.filas[0].horasNocturnas).toBe(0)
+    expect(res.filas[0].horasLiquidables).toBe(0)
+    expect(res.filas[0].jornadas).toBe(0)
   })
 
   it('turno sin horas liquidables → 0 nocturnas; y el tope: nunca más nocturno que liquidable', () => {
@@ -657,16 +684,34 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     return m
   }
 
-  it('geometría: datos desde la fila 7, fila separadora vacía y TOTALES con SUM hasta la separadora', () => {
+  it('geometría de bloques: título, datos, subtotal por bloque y TOTAL GENERAL al final', () => {
     const p = plantillaLiquidacionResumenGuardia(dosVigiladores())
     expect(p.nombreHoja).toBe('Hoja1')
-    expect(p.ref).toBe('A1:AX10') // 2 filas de datos (7-8), separadora 9, TOTALES 10
+    // 7 título B1 · 8-9 datos · 10 subtotal · 11 sep · 12 título B2 ·
+    // 13 subtotal · 14 sep · 15 título B3 · 16 subtotal · 17 sep · 18 total
+    expect(p.ref).toBe('A1:BB18')
     const m = mapa(p)
-    expect(m.get('A10')?.v).toBe('TOTALES')
-    expect(m.get('I10')?.f).toBe('SUM(I7:I9)')
-    expect(m.get('G10')?.f).toBe('SUM(G7:G9)')
-    expect(m.get('AX10')?.f).toBe('SUM(AX7:AX9)')
-    expect(p.celdas.filter(c => /^[A-Z]+9$/.test(c.ref)).length).toBe(0)
+    expect(m.get('A7')?.v).toBe('BLOQUE 1 - VIGILADORES')
+    expect(m.get('A10')?.v).toBe('SUBTOTAL VIGILADORES')
+    expect(m.get('I10')?.f).toBe('SUM(I8:I9)')
+    expect(m.get('G10')?.f).toBe('SUM(G8:G9)')
+    expect(m.get('AX10')?.f).toBe('SUM(AX8:AX9)')
+    // Bloques 2 y 3 sin gente: aparecen igual, con subtotal 0 y sin fórmula
+    expect(m.get('A12')?.v).toBe('BLOQUE 2 - SUPERVISORES')
+    expect(m.get('A13')?.v).toBe('SUBTOTAL SUPERVISORES')
+    expect(m.get('I13')?.v).toBe(0)
+    expect(m.get('I13')?.f).toBeUndefined()
+    expect(m.get('A15')?.v).toBe('BLOQUE 3 - ADMINISTRATIVOS')
+    expect(m.get('A16')?.v).toBe('SUBTOTAL ADMINISTRATIVOS')
+    // TOTAL GENERAL suma los subtotales, nunca el rango entero (los contaría
+    // dos veces)
+    expect(m.get('A18')?.v).toBe('TOTAL GENERAL')
+    expect(m.get('I18')?.f).toBe('I10+I13+I16')
+    expect(m.get('I18')?.v).toBe(20)
+    // Filas separadoras realmente vacías
+    for (const r of [11, 14, 17]) {
+      expect(p.celdas.filter(c => new RegExp(`^[A-Z]+${r}$`).test(c.ref)).length).toBe(0)
+    }
   })
 
   it('bloque de parámetros y encabezados, literal del ejemplo', () => {
@@ -696,41 +741,46 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(m.get('AG6')?.v).toBe('001')
     expect(m.get('AV6')?.v).toBe('010')
     expect(m.get('AX6')?.v).toBe('008')
+    // Informativas al final: nunca insertadas entre A y AX
+    expect(m.get('AY6')?.v).toBe('SUPERVISIONES')
+    expect(m.get('AZ6')?.v).toBe('HORAS SUPERVISION')
+    expect(m.get('BA6')?.v).toBe('JORNADAS SUPERVISION')
+    expect(m.get('BB6')?.v).toBe('OBSERVACION')
   })
 
   it('celdas de entrada: datos consolidados de la app en A-P', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
-    expect(m.get('A7')?.v).toBe('ALMADA')
-    expect(m.get('B7')?.v).toBe('20144945817')
-    expect(m.get('C7')?.v).toBe('00404906522208') // CUENTA como texto: conserva ceros a la izquierda
-    expect(m.get('C8')?.v).toBe('') // sin cuenta cargada → vacía
-    expect(m.get('D7')?.v).toBe('ALMADA, ESTANISLAO')
-    expect(m.get('G7')?.v).toBe(1)
-    expect(m.get('I7')?.v).toBe(12)
-    expect(m.get('A8')?.v).toBe('ALMARA')
+    expect(m.get('A8')?.v).toBe('ALMADA')
+    expect(m.get('B8')?.v).toBe('20144945817')
+    expect(m.get('C8')?.v).toBe('00404906522208') // CUENTA como texto: conserva ceros a la izquierda
+    expect(m.get('C9')?.v).toBe('') // sin cuenta cargada → vacía
+    expect(m.get('D8')?.v).toBe('ALMADA, ESTANISLAO')
+    expect(m.get('G8')?.v).toBe(1)
+    expect(m.get('I8')?.v).toBe(12)
+    expect(m.get('A9')?.v).toBe('ALMARA')
   })
 
   it('fórmulas por fila idénticas a la plantilla, con la fila ajustada', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
-    expect(m.get('H7')?.f).toBe('MIN(G7,25)')
-    expect(m.get('U7')?.f).toBe('F2')
-    expect(m.get('V7')?.f).toBe('E2')
-    expect(m.get('U8')?.f).toBe('U7') // las siguientes arrastran la de arriba
-    expect(m.get('Y7')?.f).toBe('U7/8')
-    expect(m.get('AC8')?.f).toBe('AA8*H8')
-    expect(m.get('AG7')?.f).toBe('IF(I7<=150,H7*8,150)')
-    expect(m.get('AI7')?.f).toBe('AH7*Y7')
-    expect(m.get('AM7')?.f).toBe('IF(AL7>0,(AL7*100)/I7,0)')
-    expect(m.get('AO7')?.f).toBe('AC7+AD7+AE7+AF7+AI7+AJ7+AT7+AU7+AV7+AW7+AX7+AP7')
-    expect(m.get('AP7')?.f).toBe('IF(AL7>0,AL7*2500,0)-AR7')
-    expect(m.get('AS7')?.f).toBe('IF(AO7>0,AO7/I7,0)')
-    expect(m.get('AT7')?.f).toBe('K7*U7')
+    expect(m.get('H8')?.f).toBe('MIN(G8,25)')
+    expect(m.get('U8')?.f).toBe('F2')
+    expect(m.get('V8')?.f).toBe('E2')
+    expect(m.get('U9')?.f).toBe('U8') // las siguientes arrastran la de arriba
+    expect(m.get('Y8')?.f).toBe('U8/8')
+    expect(m.get('AC9')?.f).toBe('AA9*H9')
+    expect(m.get('AG8')?.f).toBe('IF(I8<=150,H8*8,150)')
+    expect(m.get('AI8')?.f).toBe('AH8*Y8')
+    expect(m.get('AM8')?.f).toBe('IF(AL8>0,(AL8*100)/I8,0)')
+    expect(m.get('AO8')?.f).toBe('AC8+AD8+AE8+AF8+AI8+AJ8+AT8+AU8+AV8+AW8+AX8+AP8')
+    expect(m.get('AP8')?.f).toBe('IF(AL8>0,AL8*2500,0)-AR8')
+    expect(m.get('AS8')?.f).toBe('IF(AO8>0,AO8/I8,0)')
+    expect(m.get('AT8')?.f).toBe('K8*U8')
   })
 
   it('las columnas de carga manual (AH, AK, AQ, AR) quedan libres en las filas de datos', () => {
     const p = plantillaLiquidacionResumenGuardia(dosVigiladores())
     for (const c of p.celdas) {
-      expect(c.ref).not.toMatch(/^(AH|AK|AQ|AR)[78]$/)
+      expect(c.ref).not.toMatch(/^(AH|AK|AQ|AR)[89]$/)
     }
   })
 
@@ -742,9 +792,9 @@ describe('plantillaLiquidacionResumenGuardia', () => {
       nocturnidadObjetivo: () => ({ activa: true, desde: '22:00', hasta: '06:00' }),
     }))
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
-    expect(m.get('AF7')?.f).toBe('(Y7/10)*J7')
+    expect(m.get('AF8')?.f).toBe('(Y8/10)*J8')
     // hora/10 × hs nocturnas: 500.65 × 8 — no la variante ×200 del resto del ejemplo
-    expect(m.get('AF7')?.v).toBeCloseTo((1020300 / 200 / 10) * 8, 6)
+    expect(m.get('AF8')?.v).toBeCloseTo((1020300 / 200 / 10) * 8, 6)
   })
 
   it('caso ALMADA del ejemplo: 26 jornadas, 208 hs, 1 feriado → mismos importes que el archivo de Juan', () => {
@@ -763,16 +813,16 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(f.horasLiquidables).toBe(208)
     f.feriadosTrabajados = 1 // como ALMADA en agosto
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
-    expect(m.get('H7')?.v).toBe(25) // MIN(26,25)
-    expect(m.get('AC7')?.v).toBe(514500) // viáticos: 20580 × 25
-    expect(m.get('AD7')?.v).toBe(180000) // presentismo
-    expect(m.get('AE7')?.v).toBe(30000) // no rem
-    expect(m.get('AG7')?.v).toBe(150) // 208 > 150 → tope
-    expect(m.get('AJ7')?.v).toBe(765225) // 150 × hora
-    expect(m.get('AL7')?.v).toBe(58) // hs extras
-    expect(m.get('AP7')?.v).toBe(145000) // 58 × 2500
-    expect(m.get('AT7')?.v).toBe(40812) // 1 feriado × valor día
-    expect(m.get('AO7')?.v).toBe(1675537) // total, igual a AO7 del ejemplo corregido
+    expect(m.get('H8')?.v).toBe(25) // MIN(26,25)
+    expect(m.get('AC8')?.v).toBe(514500) // viáticos: 20580 × 25
+    expect(m.get('AD8')?.v).toBe(180000) // presentismo
+    expect(m.get('AE8')?.v).toBe(30000) // no rem
+    expect(m.get('AG8')?.v).toBe(150) // 208 > 150 → tope
+    expect(m.get('AJ8')?.v).toBe(765225) // 150 × hora
+    expect(m.get('AL8')?.v).toBe(58) // hs extras
+    expect(m.get('AP8')?.v).toBe(145000) // 58 × 2500
+    expect(m.get('AT8')?.v).toBe(40812) // 1 feriado × valor día
+    expect(m.get('AO8')?.v).toBe(1675537) // total, igual a AO7 del ejemplo corregido
   })
 
   it('sin dato (null) la celda NO se emite: vacía de verdad, las fórmulas la toman como 0 sin #¡VALOR!', () => {
@@ -784,22 +834,187 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(fila(res)!.horasNocturnas).toBeNull()
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
     // nunca un "" de texto: eso rompía L×U, el total y po hs con #¡VALOR!
-    for (const ref of ['J7', 'L7', 'M7', 'N7', 'O7', 'P7']) expect(m.get(ref)).toBeUndefined()
-    expect(m.get('AF7')?.v).toBe(0)
+    for (const ref of ['J8', 'L8', 'M8', 'N8', 'O8', 'P8']) expect(m.get(ref)).toBeUndefined()
+    expect(m.get('AF8')?.v).toBe(0)
     // con dato, la celda sí va (aunque sea 0 determinado)
     const res2 = construirResumenGuardia(base({
       turnos: [turno({ id: 't1', hora_inicio: '22:00', hora_fin: '06:00' })],
       registros: [registro({ turno_id: 't1', horas_liquidables: 8 })],
       nocturnidadObjetivo: () => ({ activa: false, desde: null, hasta: null }),
     }))
-    expect(mapa(plantillaLiquidacionResumenGuardia(res2)).get('J7')?.v).toBe(0)
+    expect(mapa(plantillaLiquidacionResumenGuardia(res2)).get('J8')?.v).toBe(0)
   })
 
-  it('TOTALES cachea las sumas de las filas', () => {
+  it('subtotales y TOTAL GENERAL cachean las sumas de las filas', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
     expect(m.get('G10')?.v).toBe(2)
     expect(m.get('I10')?.v).toBe(20)
     // AG de cada fila (H×8 = 8, sin llegar al tope) × hora, sumado
     expect(m.get('AJ10')?.v).toBe(2 * 8 * (1020300 / 200))
+    expect(m.get('G18')?.v).toBe(2)
+    expect(m.get('AJ18')?.v).toBe(2 * 8 * (1020300 / 200))
+  })
+})
+
+// ── Bloques por rol y regla de MENSUALIZADOS (Juan, 07/09/2026) ──────────────
+// Supervisores y administrativos cobran sueldo fijo: ninguna columna que la
+// liquidación multiplica puede llevar sus datos. Lo operativo va en las
+// columnas informativas del final (AY-BA) o en la observación (BB).
+
+describe('bloques y mensualizados', () => {
+  const personal = () => base({
+    empleados: [
+      { id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', rol: 'guardia', cuil: '20144945817', legajoVisual: 'ALMADA', cuenta: '00404906522208' },
+      { id: 's1', nombre: 'CARLOS', apellido: 'ACOSTA', rol: 'supervisor', cuil: '20222222222', legajoVisual: 'ACOSTA', cuenta: '111' },
+      { id: 'a1', nombre: 'JUAN', apellido: 'ROMERO', rol: 'admin', cuil: '20333333333', legajoVisual: 'ROMERO', cuenta: '222' },
+    ],
+    turnos: [turno({ id: 't1' })],
+    registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+  })
+
+  it('orden: vigiladores, después supervisores, al final administrativos', () => {
+    const res = construirResumenGuardia(personal())
+    expect(res.filas.map(f => f.grupo)).toEqual(['vigiladores', 'supervisores', 'administrativos'])
+    expect(res.filas.map(f => f.empleadoId)).toEqual(['g1', 's1', 'a1'])
+  })
+
+  it('supervisor con turnos fichados: JORNADAS y HORAS LIQUIDABLES en 0 igual — es mensualizado', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 's1', nombre: 'CARLOS', apellido: 'ACOSTA', rol: 'supervisor' }],
+      turnos: [turno({ id: 't1', guardia_id: 's1' })],
+      registros: [registro({ turno_id: 't1', guardia_id: 's1', horas_liquidables: 12 })],
+    }))
+    const f = res.filas[0]
+    expect(f.jornadas).toBe(0)
+    expect(f.horasLiquidables).toBe(0)
+    expect(f.feriadosTrabajados).toBe(0)
+    expect(f.licencias).toBeNull()
+    // la actividad no se pierde: queda a la vista en la observación
+    expect(f.observaciones.join(' ')).toContain('cubrió 1 turno')
+  })
+
+  it('admin con turno cubierto: misma regla que el supervisor', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 'a1', nombre: 'JUAN', apellido: 'ROMERO', rol: 'admin' }],
+      turnos: [turno({ id: 't1', guardia_id: 'a1' })],
+      registros: [registro({ turno_id: 't1', guardia_id: 'a1', horas_liquidables: 12 })],
+    }))
+    const f = res.filas[0]
+    expect(f.jornadas).toBe(0)
+    expect(f.horasLiquidables).toBe(0)
+    expect(f.observaciones.join(' ')).toContain('cubrió 1 turno')
+  })
+
+  it('horas y jornadas de supervisión salen de supervisores_guardia, con cruce de medianoche', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 's1', nombre: 'CARLOS', apellido: 'ACOSTA', rol: 'supervisor' }],
+      supervisoresGuardia: [
+        { supervisor_id: 's1', fecha: '2026-08-01', hora_inicio: '18:00', hora_fin: '06:00', zona: 'rafaela' }, // nocturna: 12 hs
+        { supervisor_id: 's1', fecha: '2026-08-02', hora_inicio: '08:00', hora_fin: '16:00', zona: 'Rosario / General' },
+        { supervisor_id: 's1', fecha: '2026-08-02', hora_inicio: '18:00', hora_fin: '22:00', zona: 'rafaela' }, // mismo día: 1 jornada
+        { supervisor_id: 'otro', fecha: '2026-08-03', hora_inicio: '08:00', hora_fin: '16:00' },
+        { supervisor_id: 's1', fecha: '2026-08-04', hora_inicio: '08:00', hora_fin: '16:00', estado: 'anulado' }, // no cuenta
+      ],
+    }))
+    const f = res.filas[0]
+    expect(f.horasSupervision).toBe(24)
+    expect(f.jornadasSupervision).toBe(2)
+    expect(f.objetivos).toEqual(['Rosario / General', 'rafaela']) // zonas, no objetivos de turnos
+    // y nada de eso toca las columnas de liquidación
+    expect(f.jornadas).toBe(0)
+    expect(f.horasLiquidables).toBe(0)
+  })
+
+  it('SUPERVISIONES cuenta distintas: dedup ≤10 min mismo objetivo; incompletas fuera (decisión de Juan)', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 's1', nombre: 'CARLOS', apellido: 'ACOSTA', rol: 'supervisor' }],
+      supervisiones: [
+        { supervisor_id: 's1', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:00:00Z' },
+        { supervisor_id: 's1', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:04:00Z' }, // reintento → 1
+        { supervisor_id: 's1', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:20:00Z' }, // visita nueva
+        { supervisor_id: 's1', objetivo_id: 'o2', estado: 'con_observacion', created_at: '2026-08-01T10:05:00Z' }, // otro objetivo
+        { supervisor_id: 's1', objetivo_id: 'o3', estado: 'incompleta', created_at: '2026-08-01T12:00:00Z' }, // no cuenta
+        { supervisor_id: 'otro', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:01:00Z' }, // de otro
+      ],
+    }))
+    expect(res.filas[0].supervisiones).toBe(3)
+  })
+
+  it('admin que supervisa (caso MARTINEZ): rol admin intacto, sus datos en las informativas del bloque 3', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 'a1', nombre: 'SERGIO', apellido: 'MARTINEZ', rol: 'admin' }],
+      supervisiones: [
+        { supervisor_id: 'a1', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:00:00Z' },
+        { supervisor_id: 'a1', objetivo_id: 'o2', estado: 'ok', created_at: '2026-08-01T11:00:00Z' },
+      ],
+      supervisoresGuardia: [
+        { supervisor_id: 'a1', fecha: '2026-08-01', hora_inicio: '08:00', hora_fin: '16:00', zona: 'Rosario / General' },
+      ],
+    }))
+    const f = res.filas[0]
+    expect(f.grupo).toBe('administrativos')
+    expect(f.supervisiones).toBe(2)
+    expect(f.horasSupervision).toBe(8)
+    expect(f.jornadasSupervision).toBe(1)
+    expect(f.objetivos).toEqual(['Rosario / General'])
+    // y sigue mensualizado: nada en las columnas que se multiplican
+    expect(f.jornadas).toBe(0)
+    expect(f.horasLiquidables).toBe(0)
+  })
+
+  it('cuenta de prueba (es_prueba): no aparece nunca, aunque esté activa y tenga datos', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [
+        { id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', rol: 'guardia' },
+        { id: 'px', nombre: 'Supervisor', apellido: 'Prueba', rol: 'supervisor', esPrueba: true },
+      ],
+      turnos: [turno({ id: 't1' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+      supervisiones: [{ supervisor_id: 'px', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:00:00Z' }],
+    }))
+    expect(res.filas.map(f => f.empleadoId)).toEqual(['g1'])
+  })
+
+  it('vigilador: informativas en 0 y sus columnas de liquidación intactas', () => {
+    const res = construirResumenGuardia(base({
+      turnos: [turno({ id: 't1' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+      // aunque por error hubiera filas suyas en estas fuentes, no se le computan
+      supervisiones: [{ supervisor_id: 'g1', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:00:00Z' }],
+      supervisoresGuardia: [{ supervisor_id: 'g1', fecha: '2026-08-01', hora_inicio: '08:00', hora_fin: '16:00' }],
+    }))
+    const f = res.filas[0]
+    expect(f.supervisiones).toBe(0)
+    expect(f.horasSupervision).toBe(0)
+    expect(f.jornadasSupervision).toBe(0)
+    expect(f.horasLiquidables).toBe(12)
+  })
+
+  it('fila incompleta se ve: la observación marca qué dato de liquidación falta', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', cuil: '20144945817' }], // sin legajoVisual ni cuenta
+      turnos: [turno({ id: 't1' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+    }))
+    expect(res.filas[0].observaciones).toEqual(['REVISAR: falta legajo Visual, cuenta'])
+  })
+
+  it('plantilla: el supervisor va al bloque 2 con AY-BA cargadas y BB con la observación', () => {
+    const res = construirResumenGuardia(personal())
+    const p = plantillaLiquidacionResumenGuardia(res)
+    const m = new Map(p.celdas.map(c => [c.ref, c]))
+    // 7 título B1 · 8 ALMADA · 9 subtotal · 10 sep · 11 título B2 · 12 ACOSTA
+    expect(m.get('A8')?.v).toBe('ALMADA')
+    expect(m.get('A11')?.v).toBe('BLOQUE 2 - SUPERVISORES')
+    expect(m.get('D12')?.v).toBe('ACOSTA, CARLOS')
+    expect(m.get('G12')?.v).toBe(0) // mensualizado: jornadas 0
+    expect(m.get('I12')?.v).toBe(0)
+    expect(m.get('AY12')?.v).toBe(0)
+    // 13 subtotal B2 · 14 sep · 15 título B3 · 16 ROMERO · 17 subtotal · 18 sep · 19 TOTAL
+    expect(m.get('D16')?.v).toBe('ROMERO, JUAN')
+    expect(m.get('A19')?.v).toBe('TOTAL GENERAL')
+    expect(m.get('I19')?.f).toBe('I9+I13+I17')
+    expect(m.get('I19')?.v).toBe(12)
+    expect(p.ref).toBe('A1:BB19')
   })
 })

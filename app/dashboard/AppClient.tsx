@@ -8,7 +8,7 @@ import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendie
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
-import { construirResumenGuardia, plantillaLiquidacionResumenGuardia } from '@/lib/resumen-guardia'
+import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, grupoDeRol, type GrupoResumen } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -1555,7 +1555,7 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
 function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
-  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
+  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'', es_prueba:false }
   const [grupoRol, setGrupoRol] = useState<'vigiladores' | 'supervisores' | 'administracion'>('vigiladores')
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
@@ -1693,6 +1693,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       estado: g.estado || 'activo',
       rol: g.rol || 'guardia',
       foto_url: g.foto_url || '',
+      es_prueba: Boolean(g.es_prueba),
     })
     setEditId(g.id)
     setMensaje(null)
@@ -1761,6 +1762,14 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       estado: form.estado,
       rol: form.rol,
       foto_url: form.foto_url.trim() || null,
+    } as Record<string, unknown>
+
+    // es_prueba viaja solo si la columna ya existe en la base (el select('*')
+    // la trae) o si se está marcando: así el guardado no depende del orden
+    // entre deploy y migración.
+    const filaOriginal = editId ? guardias.find((g: Usuario) => g.id === editId) : null
+    if (form.es_prueba || (filaOriginal && filaOriginal.es_prueba !== undefined)) {
+      payload.es_prueba = Boolean(form.es_prueba)
     }
 
     if (editId) {
@@ -2348,6 +2357,15 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
               <label style={S.label}>Foto URL</label>
               <input style={S.input} value={form.foto_url} onChange={e => setForm({...form, foto_url:e.target.value})} />
             </div>
+
+            {esAdmin && (
+              <div style={{ marginBottom:16 }}>
+                <label style={S.label}>
+                  <input type="checkbox" checked={Boolean(form.es_prueba)} onChange={e => setForm({...form, es_prueba:e.target.checked})} style={{ marginRight:8 }} />
+                  Cuenta de prueba (no aparece en reportes ni en liquidación)
+                </label>
+              </div>
+            )}
           </div>
         </Modal>
       )}
@@ -6683,6 +6701,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [registrosReportes, setRegistrosReportes] = useState<RegistroAsistencia[]>([])
   const [novedadesLaborales, setNovedadesLaborales] = useState<any[]>([])
   const [nocturnidadExcepciones, setNocturnidadExcepciones] = useState<any[]>([])
+  // Insumos del bloque de supervisores del Resumen Guardia (columnas
+  // informativas AY-BA): sus guardias cargadas y sus supervisiones del mes.
+  const [supervisoresGuardiaMes, setSupervisoresGuardiaMes] = useState<any[]>([])
+  const [supervisionesMes, setSupervisionesMes] = useState<any[]>([])
 
   // ── Ajuste mensual de nocturnidad (novedades_laborales tipo ajuste) ───────
   // Valor FINAL informado para liquidar: reemplaza al cálculo automático del
@@ -6963,11 +6985,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       // Excepciones de nocturnidad empleado+objetivo. Si la tabla todavía no
       // existe en el entorno (migración sin aplicar), se sigue sin excepciones.
       supabase.from('nocturnidad_empleado_objetivo').select('*'),
-    ]).then(([turnos, registros, nl, acept, soli, revi, noctExc]) => {
+      // Bloque de supervisores del Resumen Guardia: guardias cargadas del mes
+      // (fuente de HORAS/JORNADAS SUPERVISION) y supervisiones registradas
+      // (fuente de SUPERVISIONES). La ventana de supervisiones es por
+      // created_at en hora argentina, igual que las ve el supervisor.
+      supabase.from('supervisores_guardia').select('supervisor_id, fecha, hora_inicio, hora_fin, zona, estado').gte('fecha', desdeStr).lte('fecha', hastaStr).eq('estado', 'activo'),
+      supabase.from('supervisiones').select('supervisor_id, objetivo_id, estado, created_at').gte('created_at', `${desdeStr}T00:00:00-03:00`).lt('created_at', `${new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10)}T00:00:00-03:00`),
+    ]).then(([turnos, registros, nl, acept, soli, revi, noctExc, supGuardias, supervisionesRes]) => {
       setTurnosReportes(turnos)
       setRegistrosReportes(registros)
       setNovedadesLaborales(nl.data ?? [])
       setNocturnidadExcepciones((noctExc as any).data ?? [])
+      setSupervisoresGuardiaMes((supGuardias as any).data ?? [])
+      setSupervisionesMes((supervisionesRes as any).data ?? [])
       setRevisionMes(construirRevisionPorClave(acept, soli, revi))
     })
   }, [mes])
@@ -7742,6 +7772,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const turnosConCualquierRegistro = new Set(registrosMes.map((r: RegistroAsistencia) => r.turno_id))
 
   const reporteGuardias = guardias
+    // Cuentas de prueba fuera de todos los reportes (Juan testea con una).
+    .filter((g: Usuario) => !g.es_prueba)
     .map((g: Usuario) => {
       const regs = registrosMes.filter((r: RegistroAsistencia) => effectiveGuardia(r) === g.id)
       // Dedup: un registro principal por turno para sumar horas sin duplicar
@@ -7817,12 +7849,20 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         _registros: regs.length,
         _fallback: turnosFallback.length,
         _clasificados: clasificacion.total,
+        _grupo: grupoDeRol(g.rol),
       }
     })
     // Un mes con ausencias y sin un solo fichaje sigue siendo información de
     // cierre: si se filtrara por actividad, el que faltó todo el mes
     // desaparecería justo del reporte donde hay que verlo.
     .filter((g: any) => verTodos || g._registros > 0 || g._fallback > 0 || g._clasificados > 0)
+    // Vigiladores primero, supervisores al final y después administración
+    // (pedido de Juan 07/09) — acá y en el export, mismo orden. Adentro de
+    // cada grupo se conserva el alfabético por apellido de la fuente.
+    .sort((a: any, b: any) => {
+      const orden: Record<GrupoResumen, number> = { vigiladores: 0, supervisores: 1, administrativos: 2 }
+      return orden[a._grupo as GrupoResumen] - orden[b._grupo as GrupoResumen]
+    })
 
   const reporteObjetivos = objetivos
     .map((o: Objetivo) => {
@@ -7946,11 +7986,16 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const exportarResumenGuardiaMensualXLSX = async () => {
     const resumen = construirResumenGuardia({
       mes,
-      // Resumen Guardia: solo vigiladores (pedido de Juan) — los supervisores no liquidan por este circuito.
-      empleados: empleados.filter((g: Usuario) => esRolGuardia(g.rol)).map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, cuil: g.cuil, legajo: g.legajo, legajoVisual: (g as any).legajo_visual ?? null, cuenta: (g as any).cuenta_bancaria ?? null })),
+      // TODO el personal (pedido de Juan 07/09): la lib arma los tres bloques
+      // (vigiladores / supervisores / administrativos) y aplica la regla de
+      // mensualizados. REGLA DURA: ningún activo puede faltar en el archivo —
+      // por eso va `guardias` completo, no el recorte de la pantalla.
+      empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, estado: g.estado, esPrueba: Boolean(g.es_prueba), cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
       turnos: turnosMes,
       registros: registrosMes,
       novedades: novedadesLaborales,
+      supervisoresGuardia: supervisoresGuardiaMes,
+      supervisiones: supervisionesMes,
       esObjetivoPrueba: (id?: string | null) => Boolean(objetivoPorIdPlanilla.get(id || '')?.es_prueba),
       nombreObjetivo: (id?: string | null) => objetivoPorIdPlanilla.get(id || '')?.nombre ?? '',
       nocturnidadObjetivo: (id?: string | null) => {
