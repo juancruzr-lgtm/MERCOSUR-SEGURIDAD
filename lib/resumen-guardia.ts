@@ -63,6 +63,12 @@ export interface EmpleadoResumen {
    * asume activo: ante la duda, mejor una fila de más que una de menos.
    */
   estado?: string | null
+  /**
+   * Cuenta de prueba (usuarios.es_prueba): no aparece en el resumen ni en el
+   * archivo de liquidación, aunque esté activa. Mismo criterio que
+   * objetivos.es_prueba.
+   */
+  esPrueba?: boolean | null
   cuil?: string | null
   legajo?: string | null
   /**
@@ -492,6 +498,10 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
   const filas: FilaResumenGuardia[] = []
 
   for (const emp of empleados) {
+    // Cuenta de prueba: nunca entra al archivo, aunque esté activa. Mismo
+    // criterio que los objetivos es_prueba (Juan la usa para testear).
+    if (emp.esPrueba) continue
+
     // Registros del empleado sobre turnos válidos. La ausencia registrada no
     // es actividad. El guardia efectivo (final ?? original) decide de quién es
     // la línea — igual que Reportes y el Legajo.
@@ -628,17 +638,20 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
     const mensualizado = grupo !== 'vigiladores'
     const activo = String(emp.estado ?? 'activo').trim().toLowerCase() !== 'inactivo'
 
-    // ── Columnas informativas de supervisión (bloque supervisores) ────────
-    // Cargas del propio supervisor en el mes; sin cargas va igual con 0 —
-    // lo importante es que aparezca. Vigiladores y administrativos: 0.
-    const cargas = grupo === 'supervisores'
+    // ── Columnas informativas de supervisión ──────────────────────────────
+    // Cargas propias del mes; sin cargas va igual con 0 — lo importante es
+    // que aparezca. Se computan para TODO mensualizado (supervisores y
+    // administrativos): hay admins que supervisan sin resignar su rol —
+    // cambiarles el rol les quitaría el acceso al sistema (caso MARTINEZ,
+    // Juan 07/09). Vigiladores: 0 siempre.
+    const cargas = mensualizado
       ? (params.supervisoresGuardia ?? []).filter(
           g => g.supervisor_id === emp.id && String(g.estado ?? 'activo') === 'activo',
         )
       : []
     const horasSupervision = Math.round(cargas.reduce((s, g) => s + horasGuardiaSupervisor(g), 0) * 100) / 100
     const jornadasSupervision = new Set(cargas.map(g => g.fecha)).size
-    const supervisionesMes = grupo === 'supervisores'
+    const supervisionesMes = mensualizado
       ? contarSupervisiones(params.supervisiones ?? [], emp.id)
       : 0
     const zonas = Array.from(new Set(cargas.map(g => (g.zona ?? '').trim()).filter(Boolean))).sort()
@@ -672,8 +685,8 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       legajo: emp.legajo ?? null,
       legajoVisual: emp.legajoVisual ?? null,
       cuenta: emp.cuenta ?? null,
-      // Supervisores: la columna Objetivo/s informa sus zonas de recorrida.
-      objetivos: grupo === 'supervisores' ? zonas : (mensualizado ? [] : objetivos),
+      // Mensualizados: la columna Objetivo/s informa sus zonas de recorrida.
+      objetivos: mensualizado ? zonas : objetivos,
       jornadas: mensualizado ? 0 : jornadas.size,
       fechasConActividad: mensualizado ? 0 : fechas.size,
       horasReales: mensualizado ? 0 : Math.round(horasReales * 100) / 100,

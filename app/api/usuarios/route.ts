@@ -25,7 +25,7 @@ const CAMPOS_TEXTO_OPCIONAL = [
 const ROLES_VALIDOS = ['admin', 'supervisor', 'guardia', 'vigilador']
 const ESTADOS_VALIDOS = ['activo', 'inactivo']
 
-type PayloadUsuario = Record<string, string | null>
+type PayloadUsuario = Record<string, string | boolean | null>
 
 function armarPayload(body: any, { esAlta }: { esAlta: boolean }): { payload?: PayloadUsuario, error?: string } {
   const payload: PayloadUsuario = {}
@@ -46,7 +46,7 @@ function armarPayload(body: any, { esAlta }: { esAlta: boolean }): { payload?: P
       payload[campo] = valor || null
     }
   }
-  if (payload.email) payload.email = payload.email.toLowerCase()
+  if (typeof payload.email === 'string') payload.email = payload.email.toLowerCase()
 
   if (body.rol !== undefined) {
     if (!ROLES_VALIDOS.includes(body.rol)) return { error: 'Rol inválido' }
@@ -56,6 +56,10 @@ function armarPayload(body: any, { esAlta }: { esAlta: boolean }): { payload?: P
     if (!ESTADOS_VALIDOS.includes(body.estado)) return { error: 'Estado inválido' }
     payload.estado = body.estado
   }
+  // Cuenta de prueba: booleano; si la columna aún no existe en la base, el
+  // caller no debe mandarlo (la UI manda false por defecto y el update falla
+  // recién ahí, con mensaje claro de Postgres).
+  if (body.es_prueba !== undefined) payload.es_prueba = Boolean(body.es_prueba)
 
   return { payload }
 }

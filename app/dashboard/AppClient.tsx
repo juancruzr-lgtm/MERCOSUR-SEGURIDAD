@@ -1555,7 +1555,7 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
 function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
-  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'' }
+  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'', es_prueba:false }
   const [grupoRol, setGrupoRol] = useState<'vigiladores' | 'supervisores' | 'administracion'>('vigiladores')
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
@@ -1693,6 +1693,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       estado: g.estado || 'activo',
       rol: g.rol || 'guardia',
       foto_url: g.foto_url || '',
+      es_prueba: Boolean(g.es_prueba),
     })
     setEditId(g.id)
     setMensaje(null)
@@ -1761,6 +1762,14 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       estado: form.estado,
       rol: form.rol,
       foto_url: form.foto_url.trim() || null,
+    } as Record<string, unknown>
+
+    // es_prueba viaja solo si la columna ya existe en la base (el select('*')
+    // la trae) o si se está marcando: así el guardado no depende del orden
+    // entre deploy y migración.
+    const filaOriginal = editId ? guardias.find((g: Usuario) => g.id === editId) : null
+    if (form.es_prueba || (filaOriginal && filaOriginal.es_prueba !== undefined)) {
+      payload.es_prueba = Boolean(form.es_prueba)
     }
 
     if (editId) {
@@ -2348,6 +2357,15 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
               <label style={S.label}>Foto URL</label>
               <input style={S.input} value={form.foto_url} onChange={e => setForm({...form, foto_url:e.target.value})} />
             </div>
+
+            {esAdmin && (
+              <div style={{ marginBottom:16 }}>
+                <label style={S.label}>
+                  <input type="checkbox" checked={Boolean(form.es_prueba)} onChange={e => setForm({...form, es_prueba:e.target.checked})} style={{ marginRight:8 }} />
+                  Cuenta de prueba (no aparece en reportes ni en liquidación)
+                </label>
+              </div>
+            )}
           </div>
         </Modal>
       )}
@@ -7754,6 +7772,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const turnosConCualquierRegistro = new Set(registrosMes.map((r: RegistroAsistencia) => r.turno_id))
 
   const reporteGuardias = guardias
+    // Cuentas de prueba fuera de todos los reportes (Juan testea con una).
+    .filter((g: Usuario) => !g.es_prueba)
     .map((g: Usuario) => {
       const regs = registrosMes.filter((r: RegistroAsistencia) => effectiveGuardia(r) === g.id)
       // Dedup: un registro principal por turno para sumar horas sin duplicar
@@ -7970,7 +7990,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       // (vigiladores / supervisores / administrativos) y aplica la regla de
       // mensualizados. REGLA DURA: ningún activo puede faltar en el archivo —
       // por eso va `guardias` completo, no el recorte de la pantalla.
-      empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, estado: g.estado, cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
+      empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, estado: g.estado, esPrueba: Boolean(g.es_prueba), cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
       turnos: turnosMes,
       registros: registrosMes,
       novedades: novedadesLaborales,

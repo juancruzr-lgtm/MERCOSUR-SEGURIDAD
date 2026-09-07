@@ -940,6 +940,41 @@ describe('bloques y mensualizados', () => {
     expect(res.filas[0].supervisiones).toBe(3)
   })
 
+  it('admin que supervisa (caso MARTINEZ): rol admin intacto, sus datos en las informativas del bloque 3', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [{ id: 'a1', nombre: 'SERGIO', apellido: 'MARTINEZ', rol: 'admin' }],
+      supervisiones: [
+        { supervisor_id: 'a1', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:00:00Z' },
+        { supervisor_id: 'a1', objetivo_id: 'o2', estado: 'ok', created_at: '2026-08-01T11:00:00Z' },
+      ],
+      supervisoresGuardia: [
+        { supervisor_id: 'a1', fecha: '2026-08-01', hora_inicio: '08:00', hora_fin: '16:00', zona: 'Rosario / General' },
+      ],
+    }))
+    const f = res.filas[0]
+    expect(f.grupo).toBe('administrativos')
+    expect(f.supervisiones).toBe(2)
+    expect(f.horasSupervision).toBe(8)
+    expect(f.jornadasSupervision).toBe(1)
+    expect(f.objetivos).toEqual(['Rosario / General'])
+    // y sigue mensualizado: nada en las columnas que se multiplican
+    expect(f.jornadas).toBe(0)
+    expect(f.horasLiquidables).toBe(0)
+  })
+
+  it('cuenta de prueba (es_prueba): no aparece nunca, aunque esté activa y tenga datos', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [
+        { id: 'g1', nombre: 'ESTANISLAO', apellido: 'ALMADA', rol: 'guardia' },
+        { id: 'px', nombre: 'Supervisor', apellido: 'Prueba', rol: 'supervisor', esPrueba: true },
+      ],
+      turnos: [turno({ id: 't1' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+      supervisiones: [{ supervisor_id: 'px', objetivo_id: 'o1', estado: 'ok', created_at: '2026-08-01T10:00:00Z' }],
+    }))
+    expect(res.filas.map(f => f.empleadoId)).toEqual(['g1'])
+  })
+
   it('vigilador: informativas en 0 y sus columnas de liquidación intactas', () => {
     const res = construirResumenGuardia(base({
       turnos: [turno({ id: 't1' })],
