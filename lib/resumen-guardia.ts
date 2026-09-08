@@ -51,11 +51,15 @@ export interface EmpleadoResumen {
   id: string
   nombre?: string | null
   apellido?: string | null
-  /**
-   * Rol del empleado: decide el bloque del archivo (vigiladores /
-   * supervisores / administrativos) y la regla de mensualizados.
-   */
+  /** Rol heredado (identidad). Sólo fallback de clasificación si falta puesto. */
   rol?: string | null
+  /**
+   * PUESTO organizacional: clasificador CANÓNICO del bloque (vigiladores /
+   * supervisores / administrativos) y de la regla de mensualizados. Reemplaza a
+   * `rol` para que, p.ej., Sergio (rol=admin heredado, puesto=supervisor) caiga
+   * en supervisores y no en administrativos.
+   */
+  puesto_organizacional?: string | null
   /**
    * REGLA DURA (Juan, 07/09): un empleado ACTIVO va SIEMPRE al archivo,
    * aunque no tenga un solo dato en el mes — una fila incompleta se ve, una
@@ -148,11 +152,26 @@ export const TIPO_AJUSTE_NOCTURNIDAD = 'ajuste_nocturnidad'
 
 export type GrupoResumen = 'vigiladores' | 'supervisores' | 'administrativos'
 
-export function grupoDeRol(rol?: string | null): GrupoResumen {
-  const r = String(rol ?? '').trim().toLowerCase()
+/**
+ * Clasificación del bloque por PUESTO (canónico), con fallback por rol viejo
+ * cuando el puesto es null (p.ej. cuentas es_prueba). Operación que supervisa
+ * (supervisor/jefe/dirección operativa) → supervisores; administración/gerencia
+ * → administrativos; vigilador → vigiladores.
+ */
+export function grupoDeResumen(sujeto?: { rol?: string | null; puesto_organizacional?: string | null } | null): GrupoResumen {
+  const p = String(sujeto?.puesto_organizacional ?? '').trim().toLowerCase()
+  if (p === 'vigilador') return 'vigiladores'
+  if (p === 'supervisor' || p === 'jefe_supervisores' || p === 'direccion_operativa') return 'supervisores'
+  if (p === 'administracion' || p === 'gerencia') return 'administrativos'
+  const r = String(sujeto?.rol ?? '').trim().toLowerCase()
   if (r === 'admin') return 'administrativos'
   if (r === 'supervisor') return 'supervisores'
   return 'vigiladores'
+}
+
+/** @deprecated Usar grupoDeResumen (por puesto). Se conserva por compatibilidad. */
+export function grupoDeRol(rol?: string | null): GrupoResumen {
+  return grupoDeResumen({ rol })
 }
 
 /** Guardia de supervisor cargada en el mes (tabla supervisores_guardia). */
@@ -684,7 +703,7 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       reconocidas.map(l => nombreObjetivo(l.registro?.objetivo_final_id ?? l.turno.objetivo_id)).filter(Boolean),
     )).sort()
 
-    const grupo = grupoDeRol(emp.rol)
+    const grupo = grupoDeResumen(emp)
     const mensualizado = grupo !== 'vigiladores'
     const activo = String(emp.estado ?? 'activo').trim().toLowerCase() !== 'inactivo'
 

@@ -9,7 +9,7 @@ import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendie
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
-import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, grupoDeRol, type GrupoResumen } from '@/lib/resumen-guardia'
+import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, grupoDeResumen, type GrupoResumen } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -7850,7 +7850,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         _registros: regs.length,
         _fallback: turnosFallback.length,
         _clasificados: clasificacion.total,
-        _grupo: grupoDeRol(g.rol),
+        _grupo: grupoDeResumen(g),
       }
     })
     // Un mes con ausencias y sin un solo fichaje sigue siendo información de
@@ -7991,7 +7991,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       // (vigiladores / supervisores / administrativos) y aplica la regla de
       // mensualizados. REGLA DURA: ningún activo puede faltar en el archivo —
       // por eso va `guardias` completo, no el recorte de la pantalla.
-      empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, estado: g.estado, esPrueba: Boolean(g.es_prueba), cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
+      empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, puesto_organizacional: (g as any).puesto_organizacional ?? null, estado: g.estado, esPrueba: Boolean(g.es_prueba), cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
       turnos: turnosMes,
       registros: registrosMes,
       novedades: novedadesLaborales,

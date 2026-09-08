@@ -885,6 +885,22 @@ describe('bloques y mensualizados', () => {
     expect(res.filas.map(f => f.empleadoId)).toEqual(['g1', 's1', 'a1'])
   })
 
+  it('clasifica por PUESTO, no por rol: Sergio (rol admin / puesto supervisor) va a supervisores', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [
+        { id: 'serg', nombre: 'SERGIO', apellido: 'MARTINEZ', rol: 'admin', puesto_organizacional: 'supervisor', cuil: '20260157400', legajoVisual: 'MARTINEZ', cuenta: '1' },
+        { id: 'aldo', nombre: 'ALDO', apellido: 'MONZON', rol: 'supervisor', puesto_organizacional: 'jefe_supervisores', cuil: '20111111111', legajoVisual: 'MONZON', cuenta: '2' },
+        { id: 'joel', nombre: 'JOEL', apellido: 'JUAREZ', rol: 'admin', puesto_organizacional: 'administracion', cuil: '20444444444', legajoVisual: 'JUAREZ', cuenta: '3' },
+        { id: 'vig', nombre: 'X', apellido: 'VIG', rol: 'guardia', puesto_organizacional: 'vigilador', cuil: '20555555555', legajoVisual: 'VIG', cuenta: '4' },
+      ],
+    }))
+    const porId = new Map(res.filas.map(f => [f.empleadoId, f.grupo]))
+    expect(porId.get('serg')).toBe('supervisores')    // NO administrativos, pese a rol=admin heredado
+    expect(porId.get('aldo')).toBe('supervisores')     // jefe_supervisores
+    expect(porId.get('joel')).toBe('administrativos')  // administracion
+    expect(porId.get('vig')).toBe('vigiladores')
+  })
+
   it('supervisor con turnos fichados: JORNADAS y HORAS LIQUIDABLES en 0 igual — es mensualizado', () => {
     const res = construirResumenGuardia(base({
       empleados: [{ id: 's1', nombre: 'CARLOS', apellido: 'ACOSTA', rol: 'supervisor' }],
