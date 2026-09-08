@@ -52,13 +52,12 @@ describe('capacidades — DEBE / NO DEBE por puesto', () => {
     expect(tieneCapacidad(P.administracion, 'ver_dashboard_gerencial')).toBe(false)
     expect(tieneCapacidad(P.administracion, 'gestionar_turnos')).toBe(true)
   })
-  it('direccion_operativa: OPERACIÓN global; NO administrativas (sin herencia) ni económico', () => {
-    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_turnos')).toBe(true)   // operativo
+  it('direccion_operativa: OPERACIÓN global (turnos+objetivos+supervisión); NO personal-administrativo ni económico', () => {
+    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_turnos')).toBe(true)      // operativo
+    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_objetivos')).toBe(true)   // dimensión operativa de objetivos
     expect(tieneCapacidad(P.direccion_operativa, 'supervisar_todas_zonas')).toBe(true)
-    // NO hereda administrativas de Administración:
+    // NO administrativo de personal ni económico (no hereda Administración):
     expect(tieneCapacidad(P.direccion_operativa, 'gestionar_personal')).toBe(false)
-    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_objetivos')).toBe(false)
-    // NO económico ni gestión de usuarios/roles:
     expect(tieneCapacidad(P.direccion_operativa, 'ver_liquidacion')).toBe(false)
     expect(tieneCapacidad(P.direccion_operativa, 'ver_finanzas')).toBe(false)
     expect(tieneCapacidad(P.direccion_operativa, 'gestionar_usuarios_roles')).toBe(false)

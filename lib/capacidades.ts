@@ -103,7 +103,9 @@ const CAPACIDADES_POR_PUESTO: Record<PuestoOrganizacional, Capacidad[]> = {
   vigilador: [], // sólo su propia operación (se resuelve por alcance 'propio')
   supervisor: [...OPERACION_SUPERVISOR, 'gestionar_turnos'],
   jefe_supervisores: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'supervisar_todas_zonas'],
-  direccion_operativa: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'supervisar_todas_zonas', 'configurar_sistema'],
+  // Dir. Operativa dirige la OPERACIÓN global: turnos + objetivos en su dimensión
+  // operativa + supervisión. NO gestiona personal (administrativo) ni económico.
+  direccion_operativa: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'gestionar_objetivos', 'supervisar_todas_zonas', 'configurar_sistema'],
   administracion: ['ver_operacion', 'revisar_operativa', 'revisar_planillas', 'gestionar_turnos', ...ADMINISTRATIVO, 'configurar_sistema'],
   gerencia: [
     'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO, 'supervisar_todas_zonas',
