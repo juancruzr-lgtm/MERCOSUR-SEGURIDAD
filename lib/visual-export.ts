@@ -49,43 +49,50 @@ export type Politica = 'valor' | 'linea_cero' | 'individual' | 'no'
 export type Entrada = 'IMP' | 'CAN' | 'CANIMP' | 'CALCULADO'
 
 export interface ConceptoCfg { politica: Politica; entrada: Entrada; nombre?: string }
-export interface EmpleadoPadron {
-  empleado_id: string
+// Persona liquidable (padrón canónico), no necesariamente un usuario de la app.
+export interface PersonaPadron {
+  persona_id: string
   cod_interno: string | null
   cuil: string | null
   nombre: string
   esPrueba?: boolean
-  mensualizado?: boolean
+  tieneUsuario?: boolean
 }
 export interface HaberLinea { codigo: string; cantidad: number | null; importe: number | null }
-export interface PermanenteLinea { codigo: string; importe: number | null }
+export interface PermanenteLinea { codigo: string; importe: number | null }   // calculados 104/977/48410
+export interface ExpedienteLinea { referencia?: string | null; importe: number | null; slot_preferido?: '111' | '993' | null }
 
-export interface Hallazgo { empleado_id: string | null; cuil: string | null; codigo?: string; tipo: string; detalle: string }
+export interface Hallazgo { persona_id: string | null; cuil: string | null; codigo?: string; tipo: string; detalle: string }
 export type EstadoPadron = 'exporta' | 'no_corresponde' | 'falta_info'
-export interface PadronEstado { empleado_id: string; cuil: string | null; nombre: string; estado: EstadoPadron; filas: number; motivo?: string }
+export interface PadronEstado { persona_id: string; cuil: string | null; nombre: string; estado: EstadoPadron; filas: number; motivo?: string }
 
 export interface ResultadoLineas {
   lineas: FilaVisual[]
   criticos: Hallazgo[]        // estructurales/config: bloquean TODO el export
-  bloqueados: Hallazgo[]      // identidad por empleado: se excluye ese empleado, NO el archivo
+  bloqueados: Hallazgo[]      // por persona (identidad, 000 pendiente, >2 exp): se excluye esa persona, NO el archivo
   advertencias: Hallazgo[]    // visibles, no bloquean
   padron: PadronEstado[]
 }
 
+const SLOTS_EXPEDIENTE = ['111', '993'] as const
 const soloDigitos = (s?: string | null) => String(s ?? '').replace(/\D/g, '')
 
 /**
- * Construye las líneas del archivo Visual a partir del padrón del período y de
- * las fuentes ya resueltas. PURO. Aplica la política por concepto y corre la
- * validación pre-export (críticos bloquean; advertencias quedan visibles).
- * NO calcula fórmulas legales: los conceptos 'linea_cero'/'individual' calculados
- * salen en 0/0 para que Visual los calcule.
+ * Construye las líneas del archivo Visual desde el PADRÓN DE LIQUIDACIÓN (personas,
+ * con o sin usuario). PURO. Aplica la política por concepto y valida:
+ *  - críticos estructurales/config → bloquean TODO el archivo;
+ *  - bloqueos por persona (falta COD_INTERNO/CUIL, 000 pendiente, >2 expedientes)
+ *    → excluyen a esa persona y se reportan, sin frenar el resto.
+ * NO calcula fórmulas legales: 'linea_cero' e individuales calculados salen 0/0.
+ * `000` NO se deriva de jornadas: viene de `dias` (editable); si falta, es pendiente.
  */
 export function construirLineasVisual(p: {
-  padron: EmpleadoPadron[]
+  padron: PersonaPadron[]
   catalogo: Map<string, ConceptoCfg>
-  haberes: Map<string, HaberLinea[]>
-  permanentes: Map<string, PermanenteLinea[]>
+  haberes: Map<string, HaberLinea[]>          // por persona_id (usuario-linkeadas)
+  dias: Map<string, number | null>            // 000 por persona_id (editable)
+  permanentes: Map<string, PermanenteLinea[]> // calculados individuales por persona_id
+  expedientes: Map<string, ExpedienteLinea[]> // expedientes de importe vigentes por persona_id
   lineaCero: string[]
 }): ResultadoLineas {
   const lineas: FilaVisual[] = []
@@ -96,60 +103,62 @@ export function construirLineasVisual(p: {
 
   for (const e of p.padron) {
     const cuil = soloDigitos(e.cuil)
-    const base = { empleado_id: e.empleado_id, cuil: cuil || null }
-    // Cuentas de prueba: no corresponde exportar (no van a Visual). No es exclusión silenciosa.
+    const base = { persona_id: e.persona_id, cuil: cuil || null }
     if (e.esPrueba) { padron.push({ ...base, nombre: e.nombre, estado: 'no_corresponde', filas: 0, motivo: 'cuenta de prueba' } as any); continue }
 
-    // Bloqueo POR EMPLEADO (identidad): se excluye ese empleado y se reporta, pero
-    // NO frena todo el archivo (típico: empleado de MERCOSUR que no está en Visual).
     const errsEmp: string[] = []
+    // Identidad
     if (!e.cod_interno || !String(e.cod_interno).trim()) { bloqueados.push({ ...base, tipo: 'falta_cod_interno', detalle: `${e.nombre}: sin COD_INTERNO (no está en Visual; no se exporta)` }); errsEmp.push('falta COD_INTERNO') }
     if (cuil.length !== 11) { bloqueados.push({ ...base, tipo: 'cuil_invalido', detalle: `${e.nombre}: CUIL inválido "${e.cuil}"` }); errsEmp.push('CUIL inválido') }
+    // 000 DÍAS pendiente: sin valor no se puede exportar el recibo de la persona.
+    const dias = p.dias.get(e.persona_id)
+    if (dias === null || dias === undefined) { bloqueados.push({ ...base, codigo: '000', tipo: 'dias_pendiente', detalle: `${e.nombre}: 000 DÍAS TRABAJADOS pendiente (cargar el valor del período)` }); errsEmp.push('000 pendiente') }
 
     const filasEmp: FilaVisual[] = []
     const emitir = (codigo: string, cantidad: number | null, importe: number | null) => {
       filasEmp.push({ legajo: String(e.cod_interno ?? '').trim(), cuil, codigo: String(codigo), cantidad, importe, nombre: e.nombre })
     }
 
-    // 1) Haberes (política 'valor') + 000 días.
-    for (const h of p.haberes.get(e.empleado_id) ?? []) {
+    // 1) Haberes (política 'valor').
+    for (const h of p.haberes.get(e.persona_id) ?? []) {
       const cfg = p.catalogo.get(h.codigo)
       if (!cfg) { criticos.push({ ...base, codigo: h.codigo, tipo: 'concepto_sin_config', detalle: `código ${h.codigo} sin configuración en el catálogo Visual` }); continue }
       if (cfg.politica !== 'valor') { advertencias.push({ ...base, codigo: h.codigo, tipo: 'haber_politica_incorrecta', detalle: `código ${h.codigo} no es política 'valor' (${cfg.politica}); se omite` }); continue }
-      // Contrato CAN/IMP/CANIMP. Práctica confirmada: Cantidad=1 + Importe=total,
-      // salvo 000 (CAN) que lleva la cantidad real de días y sin importe.
-      if (cfg.entrada === 'CAN') {
-        if (h.cantidad === null || h.cantidad === undefined) { criticos.push({ ...base, codigo: h.codigo, tipo: 'cantidad_faltante', detalle: `${e.nombre}: ${h.codigo} (CAN) sin cantidad` }); continue }
-        emitir(h.codigo, h.cantidad, null)
-      } else if (cfg.entrada === 'IMP') {
-        emitir(h.codigo, 1, h.importe ?? 0)
-      } else { // CANIMP
-        emitir(h.codigo, h.cantidad ?? 1, h.importe ?? 0)
-      }
+      if (cfg.entrada === 'CAN') { if (h.cantidad == null) continue; emitir(h.codigo, h.cantidad, null) }
+      else if (cfg.entrada === 'IMP') emitir(h.codigo, 1, h.importe ?? 0)
+      else emitir(h.codigo, h.cantidad ?? 1, h.importe ?? 0)
     }
 
-    // Ambigüedad declarada (JC): el 000 de un mensualizado no sale de turnos reales
-    // sino de la convención de 25 de la plantilla. Se reporta, no se inventa otra regla.
-    if (e.mensualizado && (p.haberes.get(e.empleado_id) ?? []).some(h => h.codigo === '000')) {
-      advertencias.push({ ...base, codigo: '000', tipo: 'dias_mensualizado_convencion', detalle: `${e.nombre}: 000 días de mensualizado por convención (no días reales de turnos) — confirmar fuente` })
-    }
+    // 2) 000 DÍAS (CAN): dato editable de la persona.
+    if (dias != null) emitir('000', dias, null)
 
-    // 2) Líneas 0/0 estructurales para TODOS (Visual calcula).
+    // 3) Líneas 0/0 estructurales para TODOS (Visual calcula).
     for (const codigo of p.lineaCero) {
-      const cfg = p.catalogo.get(codigo)
-      if (!cfg) { advertencias.push({ ...base, codigo, tipo: 'linea_cero_sin_config', detalle: `estructural ${codigo} sin config; se omite` }); continue }
+      if (!p.catalogo.get(codigo)) { advertencias.push({ ...base, codigo, tipo: 'linea_cero_sin_config', detalle: `estructural ${codigo} sin config; se omite` }); continue }
       emitir(codigo, 0, 0)
     }
 
-    // 3) Individuales vigentes (permanentes): calculados 0/0; IMP con importe real.
-    for (const perm of p.permanentes.get(e.empleado_id) ?? []) {
+    // 4) Individuales calculados vigentes (permanentes 104/977/48410): línea 0/0.
+    for (const perm of p.permanentes.get(e.persona_id) ?? []) {
       const cfg = p.catalogo.get(perm.codigo)
       if (!cfg) { criticos.push({ ...base, codigo: perm.codigo, tipo: 'concepto_sin_config', detalle: `individual ${perm.codigo} sin config` }); continue }
-      if (cfg.entrada === 'IMP') {
-        if (perm.importe === null || perm.importe === undefined) { advertencias.push({ ...base, codigo: perm.codigo, tipo: 'individual_imp_sin_importe', detalle: `${e.nombre}: ${perm.codigo} (IMP individual) sin importe; Visual mantiene el del mes anterior` }); emitir(perm.codigo, 1, 0) }
-        else emitir(perm.codigo, 1, perm.importe)
-      } else { // CALCULADO (104/977/48410): línea 0/0
-        emitir(perm.codigo, 0, 0)
+      if (cfg.entrada === 'CALCULADO') emitir(perm.codigo, 0, 0)
+      else { advertencias.push({ ...base, codigo: perm.codigo, tipo: 'permanente_no_calculado', detalle: `${perm.codigo} no es calculado; revisar` }) }
+    }
+
+    // 5) Expedientes de importe vigentes → slots 111/993 (preservando el previo).
+    const exps = (p.expedientes.get(e.persona_id) ?? [])
+    if (exps.length > SLOTS_EXPEDIENTE.length) {
+      bloqueados.push({ ...base, tipo: 'expedientes_exceden_slots', detalle: `${e.nombre}: ${exps.length} expedientes de importe simultáneos y sólo hay 2 slots (111/993). Resolver: no se descarta ni se pisa ninguno.` })
+      errsEmp.push('expedientes > 2 slots')
+    } else {
+      const asignados = new Map<string, ExpedienteLinea>()
+      for (const ex of exps) if (ex.slot_preferido && !asignados.has(ex.slot_preferido)) asignados.set(ex.slot_preferido, ex)
+      for (const ex of exps) { if (Array.from(asignados.values()).includes(ex)) continue; const libre = SLOTS_EXPEDIENTE.find(s => !asignados.has(s)); if (libre) asignados.set(libre, ex) }
+      for (const slot of SLOTS_EXPEDIENTE) {
+        const ex = asignados.get(slot); if (!ex) continue
+        if (ex.importe == null) { advertencias.push({ ...base, codigo: slot, tipo: 'expediente_sin_importe', detalle: `${e.nombre}: expediente en slot ${slot} sin importe; Visual mantiene el anterior` }); emitir(slot, 1, 0) }
+        else emitir(slot, 1, ex.importe)
       }
     }
 
@@ -162,8 +171,7 @@ export function construirLineasVisual(p: {
     }
 
     const estado: EstadoPadron = errsEmp.length > 0 ? 'falta_info' : (filasEmp.length > 0 ? 'exporta' : 'no_corresponde')
-    padron.push({ empleado_id: e.empleado_id, cuil: cuil || null, nombre: e.nombre, estado, filas: filasEmp.length, motivo: errsEmp.join(' · ') || (filasEmp.length === 0 ? 'sin conceptos' : undefined) })
-    // Sólo se agregan al archivo si el empleado no tiene bloqueos de identidad.
+    padron.push({ persona_id: e.persona_id, cuil: cuil || null, nombre: e.nombre, estado, filas: filasEmp.length, motivo: errsEmp.join(' · ') || (filasEmp.length === 0 ? 'sin conceptos' : undefined) })
     if (errsEmp.length === 0) lineas.push(...filasEmp)
   }
 

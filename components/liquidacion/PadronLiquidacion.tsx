@@ -1,0 +1,134 @@
+'use client'
+import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+
+// LIQ2G — Padrón de liquidación del período: carga de 000 DÍAS por persona
+// (editable; sin valor = pendiente que bloquea el XLS) y gestión de expedientes
+// de importe (se mapean a slots 111/993 al exportar).
+
+type Persona = { id: string; cuil: string | null; nombre: string; cod_interno: string | null; usuario_id: string | null; estado_liquidable: string }
+type Periodo = { id: string; mes: string; estado: string }
+
+const S: Record<string, React.CSSProperties> = {
+  card: { background: '#0f1629', border: '1px solid #1e293b', borderRadius: 10, padding: 14, marginTop: 12 },
+  th: { textAlign: 'left', fontSize: 11, color: '#64748b', padding: '5px 7px', borderBottom: '1px solid #1e293b' },
+  td: { fontSize: 12, padding: '4px 7px', borderBottom: '1px solid #131c2e' },
+  inp: { width: 70, padding: '3px 6px', background: '#0a0e1a', border: '1px solid #334155', borderRadius: 5, color: '#e2e8f0', fontSize: 12 },
+  inpTxt: { padding: '5px 7px', background: '#0a0e1a', border: '1px solid #334155', borderRadius: 5, color: '#e2e8f0', fontSize: 12 },
+  btn: { padding: '5px 10px', background: '#2563eb', color: '#fff', border: 0, borderRadius: 5, cursor: 'pointer', fontSize: 12, fontWeight: 600 },
+}
+
+export default function PadronLiquidacion({ periodo }: { periodo: Periodo }) {
+  const [tab, setTab] = useState<'dias' | 'expedientes'>('dias')
+  const [personas, setPersonas] = useState<Persona[]>([])
+  const [dias, setDias] = useState<Record<string, string>>({})   // persona_id -> días (string editable)
+  const [expedientes, setExpedientes] = useState<any[]>([])
+  const [expForm, setExpForm] = useState({ persona_id: '', referencia: '', importe: '' })
+  const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null)
+  const editable = periodo.estado === 'borrador' || periodo.estado === 'revision'
+
+  async function cargar() {
+    const [{ data: pers }, { data: dd }, { data: exp }] = await Promise.all([
+      supabase.from('liquidacion_persona').select('id, cuil, nombre, cod_interno, usuario_id, estado_liquidable').eq('estado_liquidable', 'activo').order('nombre'),
+      supabase.from('liquidacion_dias').select('persona_id, dias').eq('periodo_id', periodo.id),
+      supabase.from('liquidacion_expediente').select('id, persona_id, referencia, importe, slot_preferido, estado, vigencia_desde, vigencia_hasta').eq('estado', 'activo'),
+    ])
+    setPersonas((pers as Persona[]) ?? [])
+    const d: Record<string, string> = {}
+    for (const x of (dd ?? []) as any[]) d[x.persona_id] = x.dias == null ? '' : String(x.dias)
+    setDias(d)
+    setExpedientes((exp as any[]) ?? [])
+  }
+  useEffect(() => { void cargar() }, [periodo.id])
+
+  async function guardarDias(persona_id: string) {
+    const raw = dias[persona_id]
+    const val = raw === '' || raw === undefined ? null : Number(raw)
+    if (val !== null && !Number.isFinite(val)) { setMsg({ ok: false, t: 'Días inválido.' }); return }
+    const { error } = await supabase.from('liquidacion_dias')
+      .upsert({ periodo_id: periodo.id, persona_id, dias: val, origen: 'manual' }, { onConflict: 'periodo_id,persona_id' })
+    setMsg(error ? { ok: false, t: 'No se pudo guardar: ' + error.message } : { ok: true, t: 'Días guardados.' })
+  }
+
+  async function agregarExpediente() {
+    if (!expForm.persona_id || !expForm.importe) { setMsg({ ok: false, t: 'Persona e importe requeridos.' }); return }
+    const vigentes = expedientes.filter(e => e.persona_id === expForm.persona_id)
+    if (vigentes.length >= 2) { setMsg({ ok: false, t: 'Ya hay 2 expedientes vigentes (slots 111/993). Dá de baja uno primero.' }); return }
+    const slot = vigentes.some(e => e.slot_preferido === '111') ? '993' : '111'
+    const { error } = await supabase.from('liquidacion_expediente').insert({
+      persona_id: expForm.persona_id, referencia: expForm.referencia || null, importe: Number(expForm.importe),
+      vigencia_desde: `${periodo.mes}-01`, estado: 'activo', slot_preferido: slot, origen: 'manual',
+    })
+    if (error) { setMsg({ ok: false, t: 'No se pudo: ' + error.message }); return }
+    setExpForm({ persona_id: '', referencia: '', importe: '' }); setMsg({ ok: true, t: `Expediente agregado (slot ${slot}).` }); void cargar()
+  }
+  async function bajaExpediente(id: string) {
+    const { error } = await supabase.from('liquidacion_expediente').update({ estado: 'baja', vigencia_hasta: `${periodo.mes}-01` }).eq('id', id)
+    if (!error) { setMsg({ ok: true, t: 'Expediente dado de baja.' }); void cargar() }
+  }
+
+  const nombrePersona = (id: string) => personas.find(p => p.id === id)?.nombre ?? id
+  const pendientes = personas.filter(p => !(p.id in dias) || dias[p.id] === '').length
+
+  return (
+    <div style={S.card}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+        <button style={{ ...S.btn, background: tab === 'dias' ? '#1e293b' : 'transparent', color: tab === 'dias' ? '#fff' : '#94a3b8' }} onClick={() => setTab('dias')}>000 Días trabajados {pendientes > 0 && <span style={{ color: '#f87171' }}>({pendientes} pendientes)</span>}</button>
+        <button style={{ ...S.btn, background: tab === 'expedientes' ? '#1e293b' : 'transparent', color: tab === 'expedientes' ? '#fff' : '#94a3b8' }} onClick={() => setTab('expedientes')}>Expedientes / embargos (111/993)</button>
+      </div>
+      {msg && <div style={{ color: msg.ok ? '#4ade80' : '#f87171', fontSize: 12, marginBottom: 8 }}>{msg.t}</div>}
+
+      {tab === 'dias' && (
+        <>
+          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>
+            El <b>000</b> es un dato mensual explícito por persona. Sin valor queda <b style={{ color: '#f87171' }}>pendiente</b> y bloquea el XLS de esa persona (no se inventa). {personas.length} personas liquidables.
+          </div>
+          <div style={{ maxHeight: 340, overflow: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr><th style={S.th}>Persona</th><th style={S.th}>COD_INT.</th><th style={S.th}>Días (000)</th><th style={S.th}></th></tr></thead>
+              <tbody>{personas.map(p => (
+                <tr key={p.id} style={{ background: (dias[p.id] === '' || !(p.id in dias)) ? '#1a0f0f' : 'transparent' }}>
+                  <td style={S.td}>{p.nombre}{!p.usuario_id && <span style={{ color: '#fbbf24' }}> · sólo Visual</span>}</td>
+                  <td style={S.td}>{p.cod_interno || <span style={{ color: '#f87171' }}>falta</span>}</td>
+                  <td style={S.td}><input style={S.inp} disabled={!editable} value={dias[p.id] ?? ''} onChange={e => setDias({ ...dias, [p.id]: e.target.value })} placeholder="—" /></td>
+                  <td style={S.td}>{editable && <button style={S.btn} onClick={() => void guardarDias(p.id)}>Guardar</button>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {tab === 'expedientes' && (
+        <>
+          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>
+            Expedientes/embargos de importe. Máximo 2 vigentes por persona → slots <b>111</b> y <b>993</b>. Los importes NO son eternos (tienen vigencia).
+          </div>
+          {editable && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              <select style={S.inpTxt} value={expForm.persona_id} onChange={e => setExpForm({ ...expForm, persona_id: e.target.value })}>
+                <option value="">— Persona —</option>{personas.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
+              <input style={{ ...S.inpTxt, flex: '1 1 160px' }} placeholder="Referencia/expediente" value={expForm.referencia} onChange={e => setExpForm({ ...expForm, referencia: e.target.value })} />
+              <input style={S.inpTxt} placeholder="Importe" value={expForm.importe} onChange={e => setExpForm({ ...expForm, importe: e.target.value })} />
+              <button style={S.btn} onClick={() => void agregarExpediente()}>Agregar</button>
+            </div>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={S.th}>Persona</th><th style={S.th}>Referencia</th><th style={S.th}>Slot</th><th style={S.th}>Importe</th><th style={S.th}>Vigencia</th><th style={S.th}></th></tr></thead>
+            <tbody>{expedientes.map(e => (
+              <tr key={e.id}>
+                <td style={S.td}>{nombrePersona(e.persona_id)}</td><td style={S.td}>{e.referencia || '—'}</td>
+                <td style={S.td}>{e.slot_preferido || '—'}</td><td style={S.td}>{e.importe ?? '—'}</td>
+                <td style={S.td}>{e.vigencia_desde} → {e.vigencia_hasta || '∞'}</td>
+                <td style={S.td}>{editable && <button style={{ ...S.btn, background: '#7f1d1d' }} onClick={() => void bajaExpediente(e.id)}>Baja</button>}</td>
+              </tr>
+            ))}
+              {expedientes.length === 0 && <tr><td style={S.td} colSpan={6}>Sin expedientes vigentes.</td></tr>}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  )
+}

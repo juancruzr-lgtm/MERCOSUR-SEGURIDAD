@@ -218,16 +218,11 @@ export async function snapshotConsolidadoDelMes(
     const cuil = String(porRef.get(`B${r}`) ?? '') || null
     const nombre = String(porRef.get(`D${r}`) ?? '') || null
     // Haberes (política 'valor'): Cantidad=1 + Importe=total (práctica confirmada
-    // contra las planillas históricas de Visual).
+    // contra las planillas históricas de Visual). El 000 DÍAS TRABAJADAS NO se
+    // deriva acá: es un dato mensual editable por persona (liquidacion_dias),
+    // porque no está demostrado que sea igual a las jornadas operativas.
     for (const [codigo, importe] of Array.from(porCodigo.entries())) {
       filas.push({ empleado_id: empleadoId, legajo_visual: legajoVisual, cuil, nombre, codigo, cantidad: 1, importe: Math.round(importe * 100) / 100 })
-    }
-    // 000 DIAS TRABAJADAS: Cantidad = días reales del período (columna G = jornadas
-    // del Resumen Guardia). Importe 0 (concepto CAN). Los mensualizados llevan la
-    // convención de 25 de la plantilla (se marca como ambigüedad en el generador).
-    const dias = Number(porRef.get(`G${r}`) ?? 0)
-    if (Number.isFinite(dias) && dias > 0) {
-      filas.push({ empleado_id: empleadoId, legajo_visual: legajoVisual, cuil, nombre, codigo: '000', cantidad: dias, importe: 0 })
     }
   }
   return { filas, error: null }

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import ImportarLiquidacion from '@/components/liquidacion/ImportarLiquidacion'
 import ReimportarExcelTrabajo from '@/components/liquidacion/ReimportarExcelTrabajo'
+import PadronLiquidacion from '@/components/liquidacion/PadronLiquidacion'
 
 // GERENCIA → GESTIÓN ECONÓMICA → LIQUIDACIÓN (LIQ1A).
 // Principio: cada período NACE LIMPIO (padrón generado, conceptos desde cero;
@@ -305,6 +306,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     onDone={() => { void abrirPeriodo(sel); void cargarCatalogo() }} />
                 </div>
               )}
+
+              {/* LIQ2G: padrón de liquidación — 000 días editable + expedientes 111/993. */}
+              <PadronLiquidacion periodo={sel} />
 
               {/* Novedades laborales del mes: control de alimentación (referencia). */}
               <div style={{ marginTop: 12, fontSize: 13 }}>
