@@ -9,14 +9,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
+import { alcanceDe, tieneCapacidad, type Capacidad } from '@/lib/capacidades'
 
-export type UsuarioIA = { id: string, rol: string, estado: string }
+export type UsuarioIA = { id: string, rol: string, estado: string, puesto_organizacional: string | null }
 
 export type ContextoIA =
   | { ok: true, client: SupabaseClient, usuario: UsuarioIA }
   | { ok: false, respuesta: NextResponse }
 
-async function resolverContexto(req: NextRequest, rolesPermitidos: string[]): Promise<ContextoIA> {
+async function resolverContexto(req: NextRequest, capacidad: Capacidad): Promise<ContextoIA> {
   const admin = getSupabaseAdmin()
   if (admin.error) {
     return { ok: false, respuesta: NextResponse.json({ error: admin.error }, { status: 500 }) }
@@ -34,45 +35,51 @@ async function resolverContexto(req: NextRequest, rolesPermitidos: string[]): Pr
 
   const { data: usuario, error: usuarioError } = await admin.client
     .from('usuarios')
-    .select('id, rol, estado')
+    .select('id, rol, estado, puesto_organizacional')
     .eq('auth_user_id', authData.user.id)
     .maybeSingle()
 
   if (usuarioError) {
     return { ok: false, respuesta: NextResponse.json({ error: 'No se pudo resolver el usuario' }, { status: 500 }) }
   }
-  if (!usuario || usuario.estado !== 'activo' || !rolesPermitidos.includes(usuario.rol ?? '')) {
+  if (!usuario || usuario.estado !== 'activo' || !tieneCapacidad(usuario, capacidad)) {
     return { ok: false, respuesta: NextResponse.json({ error: 'No autorizado' }, { status: 403 }) }
   }
 
   return { ok: true, client: admin.client, usuario: usuario as UsuarioIA }
 }
 
-/** Sólo administración. Toda escritura de referencias pasa por acá. */
+/** Configuración/escritura de referencias IA: capacidad `configurar_sistema`. */
 export function requireAdminIA(req: NextRequest): Promise<ContextoIA> {
-  return resolverContexto(req, ['admin'])
+  return resolverContexto(req, 'configurar_sistema')
 }
 
-/** Administración o supervisor. Lectura y firma de URLs. */
+/** Lectura/firma de URLs de IA: capacidad operativa `ver_operacion`. */
 export function requireOperadorIA(req: NextRequest): Promise<ContextoIA> {
-  return resolverContexto(req, ['admin', 'supervisor'])
+  return resolverContexto(req, 'ver_operacion')
 }
 
 /**
  * ¿Este usuario alcanza a este objetivo?
  *
- * Réplica en TypeScript de public.puede_administrar_rondas_objetivo(uuid):
- * admin ve todo; supervisor sólo objetivos de sus zonas asignadas. Se duplica
- * la lógica porque estas rutas corren con service_role y la función SQL, al
- * ejecutarse sin sesión de usuario, devolvería false para todos.
+ * Réplica en TypeScript de public.alcanza_objetivo(usuario, objetivo): el
+ * alcance lo define el PUESTO (con fallback por rol viejo mientras el puesto sea
+ * null), vía lib/capacidades.alcanceDe — la MISMA tabla de decisión que la
+ * función SQL. Se duplica porque estas rutas corren con service_role y la
+ * función SQL, al ejecutarse sin sesión de usuario, devolvería false para todos.
+ *   · 'todas'           → ve todo (gerencia/dir_op/jefe/administracion, o admin viejo).
+ *   · 'zonas_asignadas' → sólo objetivos de sus zonas (supervisor; incl. Sergio,
+ *                         admin de identidad pero supervisor de puesto).
+ *   · 'propio'/otro     → no alcanza objetivos por zona.
  */
 export async function alcanzaObjetivo(
   client: SupabaseClient,
   usuario: UsuarioIA,
   objetivoId: string,
 ): Promise<boolean> {
-  if (usuario.rol === 'admin') return true
-  if (usuario.rol !== 'supervisor') return false
+  const alcance = alcanceDe(usuario)
+  if (alcance === 'todas') return true
+  if (alcance !== 'zonas_asignadas') return false
 
   const { data: objetivo } = await client
     .from('objetivos')

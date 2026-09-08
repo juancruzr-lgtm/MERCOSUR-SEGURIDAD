@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
+import { alcanceDe, shellDeUsuario, tieneCapacidad } from '@/lib/capacidades'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
@@ -11508,8 +11509,9 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const usuarios = guardias as Usuario[]
   const guardiasActivos = usuarios.filter((g: Usuario) => esRolGuardia(g.rol) && g.estado === 'activo')
 
-  // Etapa 5: filtrado por zona del supervisor
-  const esAdmin = esRolAdmin(user?.rol)
+  // Alcance canónico por puesto (no por rol): 'todas' ve todo; en otro caso, sólo
+  // sus zonas — sin zonas, nada (fail-closed; un permiso que falta no abre acceso).
+  const esAdmin = alcanceDe(user) === 'todas'
   const misZonaIds = new Set<string>(
     esAdmin
       ? []
@@ -11518,7 +11520,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
           .map((sz: any) => sz.zona_id as string)
   )
   const turnosHoyAll = (turnos as Turno[]).filter((t: Turno) => t.fecha === hoy)
-  const turnosHoy = (esAdmin || misZonaIds.size === 0)
+  const turnosHoy = esAdmin
     ? turnosHoyAll
     : turnosHoyAll.filter((t: Turno) => {
         const obj = (objetivos as Objetivo[]).find((o: Objetivo) => o.id === t.objetivo_id)
@@ -13337,8 +13339,11 @@ export default function AppPage() {
   const [esPantallaChicaAdmin, setEsPantallaChicaAdmin] = useState(false)
   const [adminDataLoaded, setAdminDataLoaded] = useState(false)
 
-  const cargarDatosAdmin = useCallback(async () => {
+  const cargarDatosAdmin = useCallback(async (sujeto?: { rol?: string | null; puesto_organizacional?: string | null } | null) => {
     setLoading(true)
+    // Sólo quien tiene capacidad económica (gerencia) recibe cuenta_bancaria en el
+    // navegador. El resto del shell admin (dir_op/administración/jefe) NO la carga.
+    const puedeEconomico = tieneCapacidad(sujeto ?? null, 'ver_finanzas')
     const ahora = new Date()
     const inicioMes = inicioMesArgISO(ahora)
     const inicioMesSiguiente = inicioMesSiguienteArgISO(ahora)
@@ -13360,7 +13365,8 @@ export default function AppPage() {
     const hastaISO = new Date(Date.UTC(fdY, fdM, 1, 3, 0, 0)).toISOString()
     const hastaStr = hastaISO.slice(0, 10)
     const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
-      supabase.from('usuarios').select('*').order('apellido'),
+      // Sin cuenta_bancaria (económico): se carga aparte sólo si puedeEconomico.
+      supabase.from('usuarios').select('id, nombre, apellido, dni, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at, email, cuil, legajo_visual, es_prueba, puesto_organizacional').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
       // Turnos y asistencia del mes se paginan: superan las 1000 filas que
       // PostgREST devuelve como máximo, y el recorte es silencioso. Sin paginar,
@@ -13408,7 +13414,18 @@ export default function AppPage() {
       supabase.from('zonas_operativas').select('*').order('nombre'),
       supabase.from('supervisor_zonas').select('*'),
     ])
-    if (g.data) setGuardias(g.data)
+    if (g.data) {
+      let filas = g.data as any[]
+      // Merge de cuenta_bancaria SÓLO para capacidad económica (gerencia).
+      if (puedeEconomico) {
+        const { data: cuentas } = await supabase.from('usuarios').select('id, cuenta_bancaria')
+        if (cuentas) {
+          const porId = new Map((cuentas as any[]).map(c => [c.id, c.cuenta_bancaria]))
+          filas = filas.map(u => ({ ...u, cuenta_bancaria: porId.get(u.id) ?? null }))
+        }
+      }
+      setGuardias(filas)
+    }
     if (o.data) setObjetivos(o.data)
     if (t.data) setTurnos(t.data)
     if (r.data) setRegistros(r.data)
@@ -13425,7 +13442,7 @@ export default function AppPage() {
   }, [])
 
   const cargarSesionPorRol = useCallback(async (perfil: Usuario) => {
-    if (esRolAdmin(perfil.rol)) {
+    if (shellDeUsuario(perfil) === 'admin') {
       const pantallaChica = detectarPantallaChicaAdmin()
       const preferencia = leerPreferenciaVistaAdmin()
       const vistaInicial: AdminMobileView = preferencia === 'supervisor'
@@ -13439,7 +13456,7 @@ export default function AppPage() {
       setUser(perfil)
 
       if (vistaInicial === 'admin') {
-        await cargarDatosAdmin()
+        await cargarDatosAdmin(perfil)
       } else {
         setLoading(false)
       }
@@ -13451,14 +13468,14 @@ export default function AppPage() {
   }, [cargarDatosAdmin])
 
   const seleccionarVistaAdmin = useCallback((vista: AdminMobileView) => {
-    if (!esRolAdmin(user?.rol)) return
+    if (shellDeUsuario(user) !== 'admin') return
 
     guardarPreferenciaVistaAdmin(vista)
     setAdminMobileView(vista)
 
     if (vista === 'admin') {
       if (!adminDataLoaded) {
-        void cargarDatosAdmin()
+        void cargarDatosAdmin(user)
       } else {
         setLoading(false)
       }
@@ -13466,7 +13483,7 @@ export default function AppPage() {
     }
 
     setLoading(false)
-  }, [adminDataLoaded, cargarDatosAdmin, user?.rol])
+  }, [adminDataLoaded, cargarDatosAdmin, user])
 
   useEffect(() => {
     const actualizarPantalla = () => setEsPantallaChicaAdmin(detectarPantallaChicaAdmin())
@@ -13517,17 +13534,29 @@ if (loading && !user) return <div style={{ minHeight:'100vh', display:'flex', al
 
 if (!user) return <Login onLogin={u => { void cargarSesionPorRol(u) }} />
 
-if (esRolGuardia(user.rol)) {
+const shellApp = shellDeUsuario(user)
+
+if (shellApp === 'denegado') {
+  return (
+    <div style={{ minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, color:'#64748b', background:'#0a0e1a', padding:24, textAlign:'center' }}>
+      <div style={{ fontSize:40 }}>🔒</div>
+      <div style={{ fontSize:18, color:'#e2e8f0' }}>Tu cuenta no tiene un puesto operativo asignado.</div>
+      <div style={{ maxWidth:420 }}>Pedile a Administración que te asigne un puesto para poder usar el sistema.</div>
+    </div>
+  )
+}
+
+if (shellApp === 'guardia') {
   return <GuardiaMobile user={user} />
 }
 
-if (user.rol === 'supervisor') {
+if (shellApp === 'supervisor') {
   return <SupervisorMobile user={user} />
 }
 
 const adminShellPaddingTop = esPantallaChicaAdmin ? 106 : 76
 
-if (esRolAdmin(user.rol) && adminMobileView === 'supervisor') {
+if (shellApp === 'admin' && adminMobileView === 'supervisor') {
   return (
     <div style={{ minHeight:'100vh', background:'#0a0e1a', paddingTop:adminShellPaddingTop }}>
       <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />
@@ -13582,8 +13611,8 @@ const esGuardia = esRolGuardia(user.rol)
 
   return (
     <>
-      {esRolAdmin(user.rol) && <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />}
-      <div style={{ ...S.app, paddingTop:esRolAdmin(user.rol) ? adminShellPaddingTop : 0 }}>
+      {shellApp === 'admin' && <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />}
+      <div style={{ ...S.app, paddingTop:shellApp === 'admin' ? adminShellPaddingTop : 0 }}>
       <div style={S.sidebar}>
         <div style={S.sidebarLogo}>
           <div style={{ display:'flex', alignItems:'center', gap:12 }}>
@@ -13623,7 +13652,7 @@ const esGuardia = esRolGuardia(user.rol)
           ) : (
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
-              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={esRolAdmin(user?.rol)} usuarioId={user?.id ?? null} rol={user?.rol ?? null} />}
+              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
@@ -13652,7 +13681,7 @@ const esGuardia = esRolGuardia(user.rol)
                   guardia. Las decisiones se siguen tomando con las mismas RPC. */}
               {page === 'cierre_operativo' && (
                 <CierreOperativoPanel
-                  esAdmin={esRolAdmin(user?.rol)}
+                  esAdmin={alcanceDe(user) === 'todas'}
                   usuarioId={user?.id ?? null}
                 />
               )}

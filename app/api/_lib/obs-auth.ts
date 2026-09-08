@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from './employee-auth'
+import { tieneCapacidad } from '@/lib/capacidades'
 
 export interface ObsAuthOk {
   client: ReturnType<typeof getSupabaseAdmin>['client']
@@ -18,8 +19,8 @@ export function isObsAuthErr(r: ObsAuthResult): r is ObsAuthErr {
 }
 
 /**
- * Verifica Bearer token y rol admin.
- * Compartido por todas las rutas de /api/obs/*.
+ * Verifica Bearer token y capacidad `configurar_sistema` (ROLES 4).
+ * Observabilidad del sistema: capacidad técnica, no rol. Compartido por /api/obs/*.
  */
 export async function requireAdmin(req: NextRequest): Promise<ObsAuthResult> {
   const admin = getSupabaseAdmin()
@@ -33,11 +34,12 @@ export async function requireAdmin(req: NextRequest): Promise<ObsAuthResult> {
 
   const { data: usuario } = await admin.client
     .from('usuarios')
-    .select('id, rol')
+    .select('id, rol, estado, puesto_organizacional')
     .eq('auth_user_id', authData.user.id)
-    .eq('rol', 'admin')
-    .single()
+    .maybeSingle()
 
-  if (!usuario) return { error: 'No autorizado', status: 403 }
+  if (!usuario || usuario.estado !== 'activo' || !tieneCapacidad(usuario, 'configurar_sistema')) {
+    return { error: 'No autorizado', status: 403 }
+  }
   return { client: admin.client, userId: usuario.id }
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureEmployeeAuth, getSupabaseAdmin, nombreEmpleado, requireRole, type UsuarioEmpleado } from '../_lib/employee-auth'
+import { ensureEmployeeAuth, getSupabaseAdmin, nombreEmpleado, requireCapacidad, type UsuarioEmpleado } from '../_lib/employee-auth'
 
 type Omitido = { usuario_id: string, empleado: string, motivo: string }
 type ErrorSync = { usuario_id: string, empleado: string, error: string }
@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const adminError = await requireRole(req, admin.client, ['admin'], 'Sesion de administrador requerida')
+  const adminError = await requireCapacidad(req, admin.client, 'gestionar_personal', 'Sesion de administrador requerida')
   if (adminError) return adminError
 
   const { data: usuarios, error: usuariosError } = await admin.client

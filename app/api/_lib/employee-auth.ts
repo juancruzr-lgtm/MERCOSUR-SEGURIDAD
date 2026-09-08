@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import { tieneCapacidad, type Capacidad } from '@/lib/capacidades'
 
 export type UsuarioEmpleado = {
   id: string
@@ -77,6 +78,64 @@ export async function requireRole(
   if (perfilError) return NextResponse.json({ error: perfilError.message }, { status: 500 })
   if (!perfil || !roles.includes(perfil.rol)) {
     return NextResponse.json({ error: `Acceso restringido a: ${roles.join(', ')}` }, { status: 403 })
+  }
+
+  return null
+}
+
+/** Sujeto con puesto para chequear capacidades finas dentro de una ruta. */
+export type PerfilAcceso = { id: string; rol: string | null; estado: string | null; puesto_organizacional: string | null }
+
+/**
+ * Resuelve el perfil (con puesto) del token, para chequear capacidades finas en
+ * la ruta (p.ej. gatear campos económicos/rol). Devuelve el perfil o un
+ * NextResponse de error.
+ */
+export async function resolverPerfil(
+  req: NextRequest,
+  supabaseAdmin: SupabaseClient,
+): Promise<{ perfil: PerfilAcceso } | { respuesta: NextResponse }> {
+  const token = getBearerToken(req)
+  if (!token) return { respuesta: NextResponse.json({ error: 'Sesion requerida' }, { status: 401 }) }
+  const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token)
+  if (authError || !authData.user) return { respuesta: NextResponse.json({ error: 'Sesion invalida' }, { status: 401 }) }
+  const { data: perfil, error } = await supabaseAdmin
+    .from('usuarios')
+    .select('id, rol, estado, puesto_organizacional')
+    .eq('auth_user_id', authData.user.id)
+    .maybeSingle()
+  if (error) return { respuesta: NextResponse.json({ error: error.message }, { status: 500 }) }
+  if (!perfil || perfil.estado !== 'activo') return { respuesta: NextResponse.json({ error: 'No autorizado' }, { status: 403 }) }
+  return { perfil: perfil as PerfilAcceso }
+}
+
+/**
+ * Gate por CAPACIDAD (ROLES 4). Verifica en el SERVIDOR que el usuario tenga la
+ * capacidad, resolviendo por PUESTO (con fallback por rol viejo). Reemplaza a
+ * `requireRole` para separar identidad de permiso: el endpoint valida la
+ * capacidad, no el rol ni el menú. Devuelve null si pasa, o NextResponse 4xx.
+ */
+export async function requireCapacidad(
+  req: NextRequest,
+  supabaseAdmin: SupabaseClient,
+  capacidad: Capacidad,
+  message = 'Sesion requerida',
+) {
+  const token = getBearerToken(req)
+  if (!token) return NextResponse.json({ error: message }, { status: 401 })
+
+  const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token)
+  if (authError || !authData.user) return NextResponse.json({ error: 'Sesion invalida' }, { status: 401 })
+
+  const { data: perfil, error: perfilError } = await supabaseAdmin
+    .from('usuarios')
+    .select('id, rol, estado, puesto_organizacional')
+    .eq('auth_user_id', authData.user.id)
+    .maybeSingle()
+
+  if (perfilError) return NextResponse.json({ error: perfilError.message }, { status: 500 })
+  if (!perfil || perfil.estado !== 'activo' || !tieneCapacidad(perfil, capacidad)) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
   }
 
   return null
