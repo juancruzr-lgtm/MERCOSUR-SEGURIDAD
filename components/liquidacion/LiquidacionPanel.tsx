@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import ImportarLiquidacion from '@/components/liquidacion/ImportarLiquidacion'
 
 // GERENCIA → GESTIÓN ECONÓMICA → LIQUIDACIÓN (LIQ1A).
 // Principio: cada período NACE LIMPIO (padrón generado, conceptos desde cero;
@@ -167,6 +168,10 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     <tr key={c.id}><td style={S.td}>{c.empleado_id ? nombreEmp(c.empleado_id) : '(general)'}</td><td style={S.td}>{nombreConcepto(c.concepto_id)}</td><td style={S.td}>{c.cantidad ?? '—'}</td><td style={S.td}>{c.importe ?? '—'}</td><td style={S.td}>{c.origen}</td></tr>
                   ))}</tbody>
                 </table>
+              )}
+              {(sel.estado === 'borrador' || sel.estado === 'revision') && (
+                <ImportarLiquidacion periodo={sel} empleados={activos as any} catalogo={catalogo as any}
+                  onDone={() => { void abrirPeriodo(sel); void cargarCatalogo() }} />
               )}
             </div>
           )}
