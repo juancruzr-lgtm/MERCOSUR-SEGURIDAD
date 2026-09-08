@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { alcanceDe, shellDeUsuario } from '@/lib/capacidades'
+import { alcanceDe, shellDeUsuario, tieneCapacidad } from '@/lib/capacidades'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
@@ -13336,8 +13336,11 @@ export default function AppPage() {
   const [esPantallaChicaAdmin, setEsPantallaChicaAdmin] = useState(false)
   const [adminDataLoaded, setAdminDataLoaded] = useState(false)
 
-  const cargarDatosAdmin = useCallback(async () => {
+  const cargarDatosAdmin = useCallback(async (sujeto?: { rol?: string | null; puesto_organizacional?: string | null } | null) => {
     setLoading(true)
+    // Sólo quien tiene capacidad económica (gerencia) recibe cuenta_bancaria en el
+    // navegador. El resto del shell admin (dir_op/administración/jefe) NO la carga.
+    const puedeEconomico = tieneCapacidad(sujeto ?? null, 'ver_finanzas')
     const ahora = new Date()
     const inicioMes = inicioMesArgISO(ahora)
     const inicioMesSiguiente = inicioMesSiguienteArgISO(ahora)
@@ -13359,7 +13362,8 @@ export default function AppPage() {
     const hastaISO = new Date(Date.UTC(fdY, fdM, 1, 3, 0, 0)).toISOString()
     const hastaStr = hastaISO.slice(0, 10)
     const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
-      supabase.from('usuarios').select('*').order('apellido'),
+      // Sin cuenta_bancaria (económico): se carga aparte sólo si puedeEconomico.
+      supabase.from('usuarios').select('id, nombre, apellido, dni, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at, email, cuil, legajo_visual, es_prueba, puesto_organizacional').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
       // Turnos y asistencia del mes se paginan: superan las 1000 filas que
       // PostgREST devuelve como máximo, y el recorte es silencioso. Sin paginar,
@@ -13407,7 +13411,18 @@ export default function AppPage() {
       supabase.from('zonas_operativas').select('*').order('nombre'),
       supabase.from('supervisor_zonas').select('*'),
     ])
-    if (g.data) setGuardias(g.data)
+    if (g.data) {
+      let filas = g.data as any[]
+      // Merge de cuenta_bancaria SÓLO para capacidad económica (gerencia).
+      if (puedeEconomico) {
+        const { data: cuentas } = await supabase.from('usuarios').select('id, cuenta_bancaria')
+        if (cuentas) {
+          const porId = new Map((cuentas as any[]).map(c => [c.id, c.cuenta_bancaria]))
+          filas = filas.map(u => ({ ...u, cuenta_bancaria: porId.get(u.id) ?? null }))
+        }
+      }
+      setGuardias(filas)
+    }
     if (o.data) setObjetivos(o.data)
     if (t.data) setTurnos(t.data)
     if (r.data) setRegistros(r.data)
@@ -13438,7 +13453,7 @@ export default function AppPage() {
       setUser(perfil)
 
       if (vistaInicial === 'admin') {
-        await cargarDatosAdmin()
+        await cargarDatosAdmin(perfil)
       } else {
         setLoading(false)
       }
@@ -13457,7 +13472,7 @@ export default function AppPage() {
 
     if (vista === 'admin') {
       if (!adminDataLoaded) {
-        void cargarDatosAdmin()
+        void cargarDatosAdmin(user)
       } else {
         setLoading(false)
       }
