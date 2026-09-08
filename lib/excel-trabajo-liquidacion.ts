@@ -199,6 +199,9 @@ export async function snapshotConsolidadoDelMes(
   for (const c of plantilla.celdas) {
     const mm = c.ref.match(/^BD(\d+)$/)
     if (!mm) continue
+    // La fila de encabezado también tiene BD ('usuario_id') y en las columnas de
+    // concepto lleva los CÓDIGOS como texto: NO es un empleado, se saltea.
+    if (Number(mm[1]) === plantilla.estilos.encabezado) continue
     const empleadoId = String(c.v ?? '').trim()
     if (!empleadoId) continue
     const r = mm[1]
