@@ -64,6 +64,8 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // LIQ2C: consolidación
   const [consolidando, setConsolidando] = useState(false)
   const [consolidadaN, setConsolidadaN] = useState(0)
+  // LIQ2D: export a Visual
+  const [genVisual, setGenVisual] = useState(false)
   // Permanentes
   const [permanentes, setPermanentes] = useState<Permanente[]>([])
   const [pForm, setPForm] = useState({ empleado_id: '', concepto_id: '', importe: '', cantidad: '', vigencia_desde: new Date().toISOString().slice(0, 10), vigencia_hasta: '', motivo: '' })
@@ -160,6 +162,44 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     } catch (e: any) {
       setMsg({ ok: false, t: 'No se pudo consolidar: ' + (e?.message || e) })
     } finally { setConsolidando(false) }
+  }
+
+  // LIQ2D: genera el .xls de importación a Visual desde el consolidado + config
+  // por concepto, lo descarga y marca el período EXPORTADA. No recalcula.
+  async function generarVisual() {
+    if (!sel) return
+    setGenVisual(true); setMsg(null)
+    try {
+      const [{ data: cons, error: e1 }, { data: cfg, error: e2 }] = await Promise.all([
+        supabase.from('liquidacion_consolidada').select('empleado_id, legajo_visual, cuil, nombre, codigo, cantidad, importe').eq('periodo_id', sel.id),
+        supabase.from('liquidacion_concepto_catalogo').select('codigo_visual, exporta_visual, manda_cantidad, manda_importe'),
+      ])
+      if (e1 || e2) { setMsg({ ok: false, t: 'No se pudo leer el consolidado: ' + ((e1 || e2) as any).message }); return }
+      if (!cons || cons.length === 0) { setMsg({ ok: false, t: 'No hay filas consolidadas. Consolidá primero.' }); return }
+      const configPorCodigo = new Map<string, any>()
+      for (const c of (cfg ?? []) as any[]) if (c.codigo_visual) configPorCodigo.set(String(c.codigo_visual), { exporta_visual: c.exporta_visual, manda_cantidad: c.manda_cantidad, manda_importe: c.manda_importe })
+      const { filasVisual, escribirLibroVisualXls } = await import('@/lib/visual-export')
+      const filas = filasVisual(cons as any, configPorCodigo)
+      if (filas.length === 0) { setMsg({ ok: false, t: 'La configuración de conceptos dejó 0 filas para exportar.' }); return }
+      const bytes = await escribirLibroVisualXls(filas)
+      const blob = new Blob([bytes as BlobPart], { type: 'application/vnd.ms-excel' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `visual_importacion_${sel.mes}.xls`
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+      // Sólo la PRIMERA exportación (desde consolidada) marca el estado; una
+      // regeneración posterior sólo vuelve a bajar el archivo.
+      if (sel.estado === 'consolidada') {
+        const { error } = await supabase.rpc('marcar_exportada_visual', { p_periodo_id: sel.id })
+        if (error) { setMsg({ ok: false, t: `Archivo generado (${filas.length} filas), pero no se pudo marcar exportado: ${error.message}` }); return }
+        setMsg({ ok: true, t: `Archivo Visual generado (${filas.length} filas) y período marcado EXPORTADA. Importalo en Visual Sueldos para calcular los recibos.` })
+        await cargarPeriodos(); const upd = { ...sel, estado: 'exportada' }; setSel(upd); void abrirPeriodo(upd)
+      } else {
+        setMsg({ ok: true, t: `Archivo Visual regenerado (${filas.length} filas).` })
+      }
+    } catch (e: any) {
+      setMsg({ ok: false, t: 'No se pudo generar el archivo Visual: ' + (e?.message || e) })
+    } finally { setGenVisual(false) }
   }
 
   async function agregarConcepto() {
@@ -322,11 +362,23 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   </div>
                 ) : sel.estado === 'consolidada' ? (
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button style={{ ...S.btn, background: '#059669', opacity: genVisual ? 0.6 : 1 }} disabled={genVisual} onClick={() => void generarVisual()}>
+                      {genVisual ? 'Generando…' : 'Generar archivo Visual Sueldos'}
+                    </button>
                     <button style={{ ...S.btn, background: '#475569', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>
                       Re-consolidar
                     </button>
+                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 100%' }}>
+                      PASO 7 · Genera el .xls de importación a Visual desde el consolidado (config por concepto). Marca el período EXPORTADA. La liquidación final la calcula Visual.
+                    </span>
+                  </div>
+                ) : sel.estado === 'exportada' || sel.estado === 'liquidada' ? (
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button style={{ ...S.btn, background: '#059669', opacity: genVisual ? 0.6 : 1 }} disabled={genVisual} onClick={() => void generarVisual()}>
+                      {genVisual ? 'Generando…' : 'Regenerar archivo Visual'}
+                    </button>
                     <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
-                      El export a Visual (LIQ2D) parte de este consolidado.
+                      Período {sel.estado}. Podés volver a bajar el archivo de importación.
                     </span>
                   </div>
                 ) : null}
