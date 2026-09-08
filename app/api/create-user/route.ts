@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { repairEmployeeAuthUser } from '../_lib/auth-repair'
-import { getSupabaseAdmin, requireRole } from '../_lib/employee-auth'
+import { getSupabaseAdmin, requireCapacidad } from '../_lib/employee-auth'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const adminError = await requireRole(req, admin.client, ['admin'], 'Sesion de administrador requerida')
+  const adminError = await requireCapacidad(req, admin.client, 'gestionar_personal', 'Sesion de administrador requerida')
   if (adminError) return adminError
 
   try {

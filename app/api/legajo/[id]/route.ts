@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { puedeVerLegajo } from '@/lib/legajo'
+import { tieneCapacidad } from '@/lib/capacidades'
 import { rangoTurno, esTurnoNocturno } from '@/lib/turnos'
 
 export const runtime = 'nodejs'
@@ -40,7 +41,7 @@ export async function GET(
 
   const { data: solicitante } = await admin.client
     .from('usuarios')
-    .select('id, rol')
+    .select('id, rol, puesto_organizacional')
     .eq('auth_user_id', authData.user.id)
     .single()
 
@@ -190,7 +191,12 @@ export async function GET(
       // Quien llega acá es admin o el propio empleado (puedeVerLegajo):
       // el empleado ve su cuenta, no la edita.
       legajo_visual: empleado.legajo_visual ?? null,
-      cuenta_bancaria: empleado.cuenta_bancaria ?? null,
+      // CBU es dato ECONÓMICO (columna CUENTA del export de sueldos): sólo lo ve
+      // quien tiene capacidad económica (gerencia) o el propio empleado. Administración
+      // y Dirección Operativa NO acceden a lo económico (ROLES 4).
+      cuenta_bancaria: (tieneCapacidad(solicitante, 'ver_finanzas') || solicitante.id === empleadoId)
+        ? (empleado.cuenta_bancaria ?? null)
+        : undefined,
       dni: solicitante.rol === 'admin' ? empleado.dni : undefined,
       email: solicitante.rol === 'admin' ? empleado.email : undefined,
       rol: empleado.rol,

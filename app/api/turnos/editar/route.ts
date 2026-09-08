@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
+import { alcanceDe, tieneCapacidad } from '@/lib/capacidades'
 
 export const runtime = 'nodejs'
 
@@ -23,13 +24,13 @@ export async function POST(req: NextRequest) {
 
   const { data: perfil, error: perfilError } = await admin.client
     .from('usuarios')
-    .select('id, rol')
+    .select('id, rol, estado, puesto_organizacional')
     .eq('auth_user_id', authData.user.id)
     .maybeSingle()
 
   if (perfilError) return NextResponse.json({ error: perfilError.message }, { status: 500 })
-  if (!perfil || !['admin', 'supervisor'].includes(perfil.rol ?? '')) {
-    return NextResponse.json({ error: 'Acceso restringido a: admin, supervisor' }, { status: 403 })
+  if (!perfil || perfil.estado !== 'activo' || !tieneCapacidad(perfil, 'gestionar_turnos')) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
   }
   const usuarioId: string = perfil.id
 
@@ -65,6 +66,26 @@ export async function POST(req: NextRequest) {
 
   if (turnoError || !turno) {
     return NextResponse.json({ error: 'Turno no encontrado' }, { status: 404 })
+  }
+
+  // ── Alcance por zona (canónico) ───────────────────────────────────────────────
+  // gestionar_turnos dice QUÉ; el alcance dice DÓNDE. Quien no tiene alcance 'todas'
+  // sólo puede editar turnos de objetivos de sus zonas — y no puede MOVER un turno
+  // a un objetivo fuera de su alcance. Cierra el hueco de escribir fuera de zona
+  // llamando la API directo.
+  if (alcanceDe(perfil) !== 'todas') {
+    const objetivosACheck = [turno.objetivo_id, (cambios as Record<string, unknown>)?.objetivo_id]
+      .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    const { data: misZonas } = await admin.client
+      .from('supervisor_zonas').select('zona_id').eq('supervisor_id', perfil.id)
+    const zonaIds = new Set((misZonas ?? []).map((z: any) => z.zona_id as string))
+    for (const objId of objetivosACheck) {
+      const { data: obj } = await admin.client
+        .from('objetivos').select('zona_id').eq('id', objId).maybeSingle()
+      if (!obj?.zona_id || !zonaIds.has(obj.zona_id)) {
+        return NextResponse.json({ error: 'Objetivo fuera de tu alcance' }, { status: 403 })
+      }
+    }
   }
 
   // ── Detección de concurrencia ───────────────────────────────────────────────
