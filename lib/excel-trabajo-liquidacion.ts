@@ -21,10 +21,17 @@ import {
   construirResumenGuardia,
   plantillaLiquidacionResumenGuardia,
   type EmpleadoResumen,
+  type PlantillaLiquidacion,
 } from '@/lib/resumen-guardia'
 
 export interface GenerarExcelTrabajoResultado {
   buf: ArrayBuffer | null
+  filas: number
+  error: string | null
+}
+
+export interface PlantillaTrabajoResultado {
+  plantilla: PlantillaLiquidacion | null
   filas: number
   error: string | null
 }
@@ -45,7 +52,24 @@ export async function generarExcelTrabajoLiquidacion(
   client: any,
   mes: string,
 ): Promise<GenerarExcelTrabajoResultado> {
-  if (!/^\d{4}-\d{2}$/.test(mes)) return { buf: null, filas: 0, error: 'Mes inválido (esperado YYYY-MM).' }
+  const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, mes)
+  if (error || !plantilla) return { buf: null, filas, error }
+  const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
+  const buf = await escribirPlantillaLiquidacionXLSX(plantilla)
+  return { buf, filas, error: null }
+}
+
+/**
+ * Arma la PlantillaLiquidacion del mes (padrón + resumen + fórmulas) SIN
+ * escribirla a bytes. Es la fuente única del "baseline MERCOSUR" que consumen
+ * tanto el generador (LIQ2A) como el reimport/comparación (LIQ2B): así el valor
+ * contra el que se compara es exactamente el que se generó.
+ */
+export async function plantillaTrabajoDelMes(
+  client: any,
+  mes: string,
+): Promise<PlantillaTrabajoResultado> {
+  if (!/^\d{4}-\d{2}$/.test(mes)) return { plantilla: null, filas: 0, error: 'Mes inválido (esperado YYYY-MM).' }
   const { desde, hasta, y, m } = limitesDelMes(mes)
   const finExclusivo = `${new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10)}T00:00:00-03:00`
 
@@ -81,7 +105,7 @@ export async function generarExcelTrabajoLiquidacion(
   ])
 
   const err = usuariosR.error || turnosR.error || registrosR.error || novedadesR.error
-  if (err) return { buf: null, filas: 0, error: err.message || String(err) }
+  if (err) return { plantilla: null, filas: 0, error: err.message || String(err) }
 
   const usuarios = (usuariosR.data ?? []) as any[]
   const objetivos = (objetivosR.data ?? []) as any[]
@@ -120,10 +144,8 @@ export async function generarExcelTrabajoLiquidacion(
     },
   })
 
-  if (resumen.filas.length === 0) return { buf: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
+  if (resumen.filas.length === 0) return { plantilla: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
 
   const plantilla = plantillaLiquidacionResumenGuardia(resumen)
-  const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
-  const buf = await escribirPlantillaLiquidacionXLSX(plantilla)
-  return { buf, filas: resumen.filas.length, error: null }
+  return { plantilla, filas: resumen.filas.length, error: null }
 }
