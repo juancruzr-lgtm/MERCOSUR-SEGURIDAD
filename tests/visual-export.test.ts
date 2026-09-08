@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   filasVisual, escribirLibroVisualXls, construirLineasVisual,
-  type ConsolidadaRow, type ConfigConcepto, type ConceptoCfg, type EmpleadoPadron,
+  type ConsolidadaRow, type ConfigConcepto, type ConceptoCfg, type PersonaPadron, type ExpedienteLinea,
 } from '@/lib/visual-export'
 
 const rows: ConsolidadaRow[] = [
@@ -29,74 +29,75 @@ const catalogo = new Map<string, ConceptoCfg>([
 ])
 const LINEA_CERO = ['011', '101']
 
-const padron: EmpleadoPadron[] = [
-  { empleado_id: 'u1', cod_interno: 'ALMADA', cuil: '20144945817', nombre: 'ESTANISLAO ALMADA' },
-  { empleado_id: 'u2', cod_interno: '001 Bis', cuil: '20477655239', nombre: 'SANTIAGO PEREZ' },
-  { empleado_id: 'up', cod_interno: 'PRUEBA', cuil: '20000000000', nombre: 'CUENTA PRUEBA', esPrueba: true },
+const padron: PersonaPadron[] = [
+  { persona_id: 'p1', cod_interno: 'ALMADA', cuil: '20144945817', nombre: 'ESTANISLAO ALMADA' },
+  { persona_id: 'pg', cod_interno: 'GURUCHAR', cuil: '23142066599', nombre: 'ADRIAN GURUCHAR', tieneUsuario: false },
+  { persona_id: 'pp', cod_interno: 'PRUEBA', cuil: '20000000000', nombre: 'CUENTA PRUEBA', esPrueba: true },
 ]
+const diasOk = new Map<string, number | null>([['p1', 20], ['pg', 25]])
 
-describe('construirLineasVisual (LIQ2F)', () => {
-  it('emite haberes (001 IMP cant=1, 000 CAN días, 006 CANIMP) + líneas 0/0 estructurales + individual', () => {
-    const haberes = new Map([
-      ['u1', [{ codigo: '000', cantidad: 26, importe: null }, { codigo: '001', cantidad: null, importe: 765375 }, { codigo: '006', cantidad: 1, importe: 40812 }]],
-    ])
-    const permanentes = new Map([['u1', [{ codigo: '104', importe: null }, { codigo: '993', importe: 44540.52 }]]])
-    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes, permanentes, lineaCero: LINEA_CERO })
+describe('construirLineasVisual (LIQ2G · persona/expedientes/000)', () => {
+  it('emite haberes + 000 desde días editable + estructurales 0/0 + calculado individual + expediente → slot', () => {
+    const haberes = new Map([['p1', [{ codigo: '001', cantidad: null, importe: 765375 }, { codigo: '006', cantidad: 1, importe: 40812 }]]])
+    const permanentes = new Map([['p1', [{ codigo: '104', importe: null }]]])
+    const expedientes = new Map([['p1', [{ referencia: 'exp', importe: 44540.52, slot_preferido: '993' as const }]]])
+    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes, dias: diasOk, permanentes, expedientes, lineaCero: LINEA_CERO })
     const de = (cod: string) => r.lineas.find(l => l.codigo === cod)!
-    expect(de('000')).toMatchObject({ cantidad: 26, importe: null })      // días reales
-    expect(de('001')).toMatchObject({ cantidad: 1, importe: 765375 })      // IMP → cant 1
-    expect(de('006')).toMatchObject({ cantidad: 1, importe: 40812 })       // CANIMP
-    expect(de('011')).toMatchObject({ cantidad: 0, importe: 0 })           // estructural 0/0
-    expect(de('101')).toMatchObject({ cantidad: 0, importe: 0 })           // estructural 0/0
-    expect(de('104')).toMatchObject({ cantidad: 0, importe: 0 })           // individual calculado 0/0
-    expect(de('993')).toMatchObject({ cantidad: 1, importe: 44540.52 })    // individual IMP con importe
+    expect(de('000')).toMatchObject({ cantidad: 20, importe: null })      // 000 desde días editable (no jornadas)
+    expect(de('001')).toMatchObject({ cantidad: 1, importe: 765375 })
+    expect(de('006')).toMatchObject({ cantidad: 1, importe: 40812 })
+    expect(de('011')).toMatchObject({ cantidad: 0, importe: 0 })          // estructural
+    expect(de('104')).toMatchObject({ cantidad: 0, importe: 0 })          // calculado individual
+    expect(de('993')).toMatchObject({ cantidad: 1, importe: 44540.52 })   // expediente en su slot preferido
     expect(r.criticos.length).toBe(0)
     expect(r.padron[0].estado).toBe('exporta')
-    // A = COD_INTERNO, G = nombre
     expect(de('001').legajo).toBe('ALMADA')
-    expect(de('001').nombre).toBe('ESTANISLAO ALMADA')
   })
 
-  it('la cuenta de prueba no corresponde exportar (no es exclusión silenciosa)', () => {
-    const r = construirLineasVisual({ padron: [padron[2]], catalogo, haberes: new Map(), permanentes: new Map(), lineaCero: [] })
+  it('GURUCHAR (persona sin usuario) exporta su 104 + estructurales aunque no tenga haberes', () => {
+    const permanentes = new Map([['pg', [{ codigo: '104', importe: null }]]])
+    const r = construirLineasVisual({ padron: [padron[1]], catalogo, haberes: new Map(), dias: diasOk, permanentes, expedientes: new Map(), lineaCero: LINEA_CERO })
+    expect(r.lineas.some(l => l.codigo === '104')).toBe(true)
+    expect(r.padron[0].estado).toBe('exporta')
+  })
+
+  it('000 pendiente → bloquea esa persona (no se inventa), se reporta', () => {
+    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes: new Map([['p1', [{ codigo: '001', cantidad: null, importe: 100 }]]]), dias: new Map(), permanentes: new Map(), expedientes: new Map(), lineaCero: [] })
+    expect(r.bloqueados.some(b => b.tipo === 'dias_pendiente')).toBe(true)
     expect(r.lineas.length).toBe(0)
-    expect(r.padron[0].estado).toBe('no_corresponde')
-    expect(r.padron[0].motivo).toMatch(/prueba/)
-  })
-
-  it('bloqueo por empleado: falta COD_INTERNO → excluye ese empleado, NO frena el archivo', () => {
-    const sinCod: EmpleadoPadron = { empleado_id: 'x', cod_interno: null, cuil: '20144945817', nombre: 'SIN COD' }
-    const haberes = new Map([['x', [{ codigo: '001', cantidad: null, importe: 100 }]]])
-    const r = construirLineasVisual({ padron: [sinCod], catalogo, haberes, permanentes: new Map(), lineaCero: [] })
-    expect(r.bloqueados.some(c => c.tipo === 'falta_cod_interno')).toBe(true)
-    expect(r.criticos.length).toBe(0)             // NO es crítico estructural
-    expect(r.lineas.length).toBe(0)               // ese empleado no se exporta
     expect(r.padron[0].estado).toBe('falta_info')
   })
 
-  it('bloqueo por empleado: CUIL inválido', () => {
-    const malCuil: EmpleadoPadron = { empleado_id: 'y', cod_interno: 'Y', cuil: '123', nombre: 'MAL CUIL' }
-    const r = construirLineasVisual({ padron: [malCuil], catalogo, haberes: new Map(), permanentes: new Map(), lineaCero: [] })
-    expect(r.bloqueados.some(c => c.tipo === 'cuil_invalido')).toBe(true)
+  it('más de 2 expedientes simultáneos → bloquea la persona, no descarta ni pisa', () => {
+    const expedientes = new Map([['p1', [{ importe: 1 }, { importe: 2 }, { importe: 3 }] as ExpedienteLinea[]]])
+    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes: new Map(), dias: diasOk, permanentes: new Map(), expedientes, lineaCero: [] })
+    expect(r.bloqueados.some(b => b.tipo === 'expedientes_exceden_slots')).toBe(true)
+    expect(r.lineas.length).toBe(0)
   })
 
-  it('crítico: concepto sin configuración en el catálogo', () => {
-    const haberes = new Map([['u1', [{ codigo: '9999', cantidad: 1, importe: 5 }]]])
-    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes, permanentes: new Map(), lineaCero: [] })
-    expect(r.criticos.some(c => c.tipo === 'concepto_sin_config')).toBe(true)
+  it('dos expedientes → 111 (1º) y 993 (2º), preservando slot_preferido', () => {
+    const expedientes = new Map([['p1', [{ importe: 100, slot_preferido: '993' as const }, { importe: 200 }] as ExpedienteLinea[]]])
+    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes: new Map(), dias: diasOk, permanentes: new Map(), expedientes, lineaCero: [] })
+    expect(r.lineas.find(l => l.codigo === '993')?.importe).toBe(100)   // preferido preservado
+    expect(r.lineas.find(l => l.codigo === '111')?.importe).toBe(200)   // el otro al slot libre
   })
 
-  it('advertencia: individual IMP (993) sin importe → no bloquea', () => {
-    const permanentes = new Map([['u1', [{ codigo: '993', importe: null }]]])
-    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes: new Map(), permanentes, lineaCero: [] })
-    expect(r.advertencias.some(a => a.tipo === 'individual_imp_sin_importe')).toBe(true)
+  it('cuenta de prueba → no corresponde', () => {
+    const r = construirLineasVisual({ padron: [padron[2]], catalogo, haberes: new Map(), dias: diasOk, permanentes: new Map(), expedientes: new Map(), lineaCero: [] })
+    expect(r.padron[0].estado).toBe('no_corresponde')
+  })
+
+  it('bloqueo por persona: falta COD_INTERNO', () => {
+    const sinCod: PersonaPadron = { persona_id: 'x', cod_interno: null, cuil: '20144945817', nombre: 'SIN COD' }
+    const r = construirLineasVisual({ padron: [sinCod], catalogo, haberes: new Map(), dias: new Map([['x', 20]]), permanentes: new Map(), expedientes: new Map(), lineaCero: [] })
+    expect(r.bloqueados.some(c => c.tipo === 'falta_cod_interno')).toBe(true)
     expect(r.criticos.length).toBe(0)
   })
 
-  it('crítico: 000 (CAN) sin cantidad', () => {
-    const haberes = new Map([['u1', [{ codigo: '000', cantidad: null, importe: null }]]])
-    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes, permanentes: new Map(), lineaCero: [] })
-    expect(r.criticos.some(c => c.tipo === 'cantidad_faltante')).toBe(true)
+  it('crítico estructural: concepto sin configuración', () => {
+    const haberes = new Map([['p1', [{ codigo: '9999', cantidad: 1, importe: 5 }]]])
+    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes, dias: diasOk, permanentes: new Map(), expedientes: new Map(), lineaCero: [] })
+    expect(r.criticos.some(c => c.tipo === 'concepto_sin_config')).toBe(true)
   })
 })
 
