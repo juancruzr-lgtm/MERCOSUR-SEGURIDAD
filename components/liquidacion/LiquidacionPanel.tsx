@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import ImportarLiquidacion from '@/components/liquidacion/ImportarLiquidacion'
+import ReimportarExcelTrabajo from '@/components/liquidacion/ReimportarExcelTrabajo'
 
 // GERENCIA → GESTIÓN ECONÓMICA → LIQUIDACIÓN (LIQ1A).
 // Principio: cada período NACE LIMPIO (padrón generado, conceptos desde cero;
@@ -224,6 +225,11 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     PASO 1 · MERCOSUR arma el Excel del mes (padrón, jornadas, novedades, conceptos y fórmulas). Lo editás en Excel y lo volvés a subir para ver las diferencias.
                   </span>
                 </div>
+              )}
+
+              {/* LIQ2B · PASO 3: subir el Excel revisado → preview de diferencias. */}
+              {(sel.estado === 'borrador' || sel.estado === 'revision') && (
+                <ReimportarExcelTrabajo periodo={sel} onDone={() => { void abrirPeriodo(sel) }} />
               )}
 
               {/* Importación del RESULTADO de Visual (conciliación) — NO es el
