@@ -28,6 +28,13 @@ const S: Record<string, React.CSSProperties> = {
   err: { color: '#f87171', fontSize: 13 }, ok: { color: '#4ade80', fontSize: 13 },
 }
 const tabStyle = (a: boolean): React.CSSProperties => ({ padding: '8px 14px', background: a ? '#1e293b' : 'transparent', color: a ? '#fff' : '#94a3b8', border: '1px solid #1e293b', borderRadius: 6, cursor: 'pointer', fontSize: 13 })
+// Límites [desde, hasta] del mes 'YYYY-MM' (para cruzar novedades del mes con el período).
+function limitesDelMes(mes: string): { desde: string; hasta: string } {
+  const desde = `${mes}-01`
+  const [y, m] = mes.split('-').map(Number)
+  const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return { desde, hasta: `${mes}-${String(ultimo).padStart(2, '0')}` }
+}
 
 export default function LiquidacionPanel({ user, empleados }: { user: any; empleados: Empleado[] }) {
   const [tab, setTab] = useState<'periodos' | 'catalogo' | 'permanentes'>('periodos')
@@ -45,6 +52,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // Catálogo
   const [catalogo, setCatalogo] = useState<Concepto[]>([])
   const [cForm, setCForm] = useState({ codigo_visual: '', nombre: '', categoria: 'imponible', origen: 'mercosur' })
+  // Comparación con período anterior + novedades del mes (LIQ1C)
+  const [comparacion, setComparacion] = useState<any[] | null>(null)
+  const [novedadesMes, setNovedadesMes] = useState<any[]>([])
   // Permanentes
   const [permanentes, setPermanentes] = useState<Permanente[]>([])
   const [pForm, setPForm] = useState({ empleado_id: '', concepto_id: '', importe: '', cantidad: '', vigencia_desde: new Date().toISOString().slice(0, 10), vigencia_hasta: '', motivo: '' })
@@ -65,12 +75,24 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
 
   async function abrirPeriodo(p: Periodo) {
     setSel(p)
-    const [{ count }, { data: cp }] = await Promise.all([
+    setComparacion(null)
+    const { desde, hasta } = limitesDelMes(p.mes)
+    const [{ count }, { data: cp }, { data: nov }] = await Promise.all([
       supabase.from('liquidacion_periodo_empleado').select('*', { count: 'exact', head: true }).eq('periodo_id', p.id),
       supabase.from('liquidacion_concepto_periodo').select('id, empleado_id, concepto_id, cantidad, importe, origen').eq('periodo_id', p.id),
+      supabase.from('novedades_laborales').select('empleado_id, tipo, fecha_desde, fecha_hasta, dias_informados, cantidad_dias')
+        .eq('estado', 'aprobada').lte('fecha_desde', hasta).gte('fecha_hasta', desde),
     ])
     setPadronN(count ?? 0)
     setConceptosP((cp as ConceptoPeriodo[]) ?? [])
+    setNovedadesMes((nov as any[]) ?? [])
+  }
+
+  async function comparar() {
+    if (!sel) return
+    const { data, error } = await supabase.rpc('comparar_liquidacion_anterior', { p_periodo_id: sel.id })
+    if (error) { setMsg({ ok: false, t: 'No se pudo comparar: ' + error.message }); return }
+    setComparacion((data as any[]) ?? [])
   }
 
   async function crearPeriodo() {
@@ -173,6 +195,38 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                 <ImportarLiquidacion periodo={sel} empleados={activos as any} catalogo={catalogo as any}
                   onDone={() => { void abrirPeriodo(sel); void cargarCatalogo() }} />
               )}
+
+              {/* Novedades laborales del mes: control de alimentación (referencia). */}
+              <div style={{ marginTop: 12, fontSize: 13 }}>
+                <b>Novedades del mes (aprobadas):</b> {novedadesMes.length}
+                {novedadesMes.length > 0 && <span style={{ color: '#64748b' }}> — control para cruzar contra los conceptos cargados.</span>}
+              </div>
+
+              {/* LIQ1C: comparación con el período anterior (control de omisiones, no copia). */}
+              <div style={{ marginTop: 12 }}>
+                <button style={{ ...S.btn, background: '#334155' }} onClick={() => void comparar()}>Comparar con período anterior</button>
+                {comparacion && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
+                      El mes anterior es sólo control de omisiones: <b>desaparecido</b> = estaba antes y ahora no (¿falta cargar o terminó?). Nunca se copia automáticamente.
+                    </div>
+                    {comparacion.length === 0 ? <div style={{ color: '#64748b', fontSize: 13 }}>Sin diferencias con el período anterior (o no hay anterior).</div> : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead><tr><th style={S.th}>Empleado</th><th style={S.th}>Concepto</th><th style={S.th}>Estado</th><th style={S.th}>Actual</th><th style={S.th}>Anterior</th></tr></thead>
+                        <tbody>{comparacion.slice(0, 200).map((c, i) => (
+                          <tr key={i} style={{ color: c.estado === 'desaparecido' ? '#fbbf24' : c.estado === 'nuevo' ? '#4ade80' : '#e2e8f0' }}>
+                            <td style={S.td}>{nombreEmp(c.empleado_id)}</td>
+                            <td style={S.td}>{c.codigo ? c.codigo + ' · ' : ''}{c.concepto || '—'}</td>
+                            <td style={S.td}>{c.estado}</td>
+                            <td style={S.td}>{c.importe_actual ?? '—'}</td>
+                            <td style={S.td}>{c.importe_anterior ?? '—'}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </>
