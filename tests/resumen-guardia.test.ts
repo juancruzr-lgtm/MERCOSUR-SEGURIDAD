@@ -4,6 +4,7 @@ import {
   diasDeNovedadEnMes,
   filasXLSXResumenGuardia,
   plantillaLiquidacionResumenGuardia,
+  PARAMETROS_PLANTILLA,
   type NovedadResumen,
   type ParamsResumenGuardia,
   type TurnoResumen,
@@ -686,10 +687,11 @@ describe('plantillaLiquidacionResumenGuardia', () => {
 
   it('geometría de bloques: título, datos, subtotal por bloque y TOTAL GENERAL al final', () => {
     const p = plantillaLiquidacionResumenGuardia(dosVigiladores())
-    expect(p.nombreHoja).toBe('Hoja1')
+    expect(p.nombreHoja).toBe('Liquidación')
     // 7 título B1 · 8-9 datos · 10 subtotal · 11 sep · 12 título B2 ·
     // 13 subtotal · 14 sep · 15 título B3 · 16 subtotal · 17 sep · 18 total
-    expect(p.ref).toBe('A1:BC18')
+    // BD/BE = columnas técnicas ocultas (usuario_id, período)
+    expect(p.ref).toBe('A1:BE18')
     const m = mapa(p)
     expect(m.get('A7')?.v).toBe('BLOQUE 1 - VIGILADORES')
     expect(m.get('A10')?.v).toBe('SUBTOTAL VIGILADORES')
@@ -763,19 +765,23 @@ describe('plantillaLiquidacionResumenGuardia', () => {
 
   it('fórmulas por fila idénticas a la plantilla, con la fila ajustada', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
+    // Parámetros con $ absoluto (arrastrables), fila del empleado relativa.
     expect(m.get('H8')?.f).toBe('MIN(G8,25)')
-    expect(m.get('U8')?.f).toBe('F2')
-    expect(m.get('V8')?.f).toBe('E2')
-    expect(m.get('U9')?.f).toBe('U8') // las siguientes arrastran la de arriba
-    expect(m.get('Y8')?.f).toBe('U8/8')
-    expect(m.get('AC9')?.f).toBe('AA9*H9')
+    expect(m.get('AC9')?.f).toBe('($E$3/25)*H9')       // viáticos: $E$3 fijo, H9 relativo
+    expect(m.get('AD8')?.f).toBe('($E$2/25)*H8')
+    expect(m.get('AE8')?.f).toBe('($E$4/25)*H8')
     expect(m.get('AG8')?.f).toBe('IF(I8<=150,H8*8,150)')
-    expect(m.get('AI8')?.f).toBe('AH8*Y8')
+    expect(m.get('AI8')?.f).toBe('AH8*$F$1')            // adicional = AH × hora ($F$1)
+    expect(m.get('AJ8')?.f).toBe('AG8*$F$1')
     expect(m.get('AM8')?.f).toBe('IF(AL8>0,(AL8*100)/I8,0)')
     expect(m.get('AO8')?.f).toBe('AC8+AD8+AE8+AF8+AI8+AJ8+AT8+AU8+AV8+AW8+AX8+AP8')
-    expect(m.get('AP8')?.f).toBe('IF(AL8>0,AL8*2500,0)-AR8')
+    expect(m.get('AP8')?.f).toBe('IF(AL8>0,AL8*$AP$6,0)-AR8') // extra = $AP$6 fijo
     expect(m.get('AS8')?.f).toBe('IF(AO8>0,AO8/I8,0)')
-    expect(m.get('AT8')?.f).toBe('K8*U8')
+    expect(m.get('AT8')?.f).toBe('K8*$F$2')             // feriados × día ($F$2)
+    // Ya no hay columnas de parámetros repetidas por fila (U-AB)
+    expect(m.get('U8')).toBeUndefined()
+    expect(m.get('Y8')).toBeUndefined()
+    expect(m.get('AA9')).toBeUndefined()
   })
 
   it('las columnas de carga manual (AH, AK, AQ, AR) quedan libres en las filas de datos', () => {
@@ -793,7 +799,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
       nocturnidadObjetivo: () => ({ activa: true, desde: '22:00', hasta: '06:00' }),
     }))
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
-    expect(m.get('AF8')?.f).toBe('(Y8/10)*J8')
+    expect(m.get('AF8')?.f).toBe('($F$1/10)*J8')
     // hora/10 × hs nocturnas: 500.65 × 8 — no la variante ×200 del resto del ejemplo
     expect(m.get('AF8')?.v).toBeCloseTo((1020300 / 200 / 10) * 8, 6)
   })
@@ -877,6 +883,22 @@ describe('bloques y mensualizados', () => {
     const res = construirResumenGuardia(personal())
     expect(res.filas.map(f => f.grupo)).toEqual(['vigiladores', 'supervisores', 'administrativos'])
     expect(res.filas.map(f => f.empleadoId)).toEqual(['g1', 's1', 'a1'])
+  })
+
+  it('clasifica por PUESTO, no por rol: Sergio (rol admin / puesto supervisor) va a supervisores', () => {
+    const res = construirResumenGuardia(base({
+      empleados: [
+        { id: 'serg', nombre: 'SERGIO', apellido: 'MARTINEZ', rol: 'admin', puesto_organizacional: 'supervisor', cuil: '20260157400', legajoVisual: 'MARTINEZ', cuenta: '1' },
+        { id: 'aldo', nombre: 'ALDO', apellido: 'MONZON', rol: 'supervisor', puesto_organizacional: 'jefe_supervisores', cuil: '20111111111', legajoVisual: 'MONZON', cuenta: '2' },
+        { id: 'joel', nombre: 'JOEL', apellido: 'JUAREZ', rol: 'admin', puesto_organizacional: 'administracion', cuil: '20444444444', legajoVisual: 'JUAREZ', cuenta: '3' },
+        { id: 'vig', nombre: 'X', apellido: 'VIG', rol: 'guardia', puesto_organizacional: 'vigilador', cuil: '20555555555', legajoVisual: 'VIG', cuenta: '4' },
+      ],
+    }))
+    const porId = new Map(res.filas.map(f => [f.empleadoId, f.grupo]))
+    expect(porId.get('serg')).toBe('supervisores')    // NO administrativos, pese a rol=admin heredado
+    expect(porId.get('aldo')).toBe('supervisores')     // jefe_supervisores
+    expect(porId.get('joel')).toBe('administrativos')  // administracion
+    expect(porId.get('vig')).toBe('vigiladores')
   })
 
   it('supervisor con turnos fichados: JORNADAS y HORAS LIQUIDABLES en 0 igual — es mensualizado', () => {
@@ -1025,15 +1047,17 @@ describe('bloques y mensualizados', () => {
     expect(m.get('A8')?.v).toBe('ALMADA')
     expect(m.get('A11')?.v).toBe('BLOQUE 2 - SUPERVISORES')
     expect(m.get('D12')?.v).toBe('ACOSTA, CARLOS')
-    expect(m.get('G12')?.v).toBe(0) // mensualizado: jornadas 0
-    expect(m.get('I12')?.v).toBe(0)
-    expect(m.get('AY12')?.v).toBe(0)
+    // Mensualizado: base de liquidación convencional (revoca la regla 0/0)
+    expect(m.get('G12')?.v).toBe(25)  // JORNADAS base
+    expect(m.get('I12')?.v).toBe(150) // HORAS LIQUIDABLES base
+    expect(m.get('AH12')?.v).toBe(50) // ADICIONAL (hs a valor pleno) base
+    expect(m.get('AY12')?.v).toBe(0)  // supervisiones informativas, sin datos acá
     // 13 subtotal B2 · 14 sep · 15 título B3 · 16 ROMERO · 17 subtotal · 18 sep · 19 TOTAL
     expect(m.get('D16')?.v).toBe('ROMERO, JUAN')
     expect(m.get('A19')?.v).toBe('TOTAL GENERAL')
     expect(m.get('I19')?.f).toBe('I9+I13+I17')
-    expect(m.get('I19')?.v).toBe(12)
-    expect(p.ref).toBe('A1:BC19')
+    expect(m.get('I19')?.v).toBe(312) // 12 vigilador + 150 supervisor + 150 admin
+    expect(p.ref).toBe('A1:BE19')
   })
 })
 
@@ -1160,5 +1184,214 @@ describe('HS VIGILANCIA ZONA', () => {
     expect(m.get('BC18')).toBeUndefined() // total general
     // las demás informativas sí totalizan (contraste): AY13 existe
     expect(m.get('AY13')?.f).toBe('SUM(AY11:AY12)')
+  })
+})
+
+// ── Base de liquidación de MENSUALIZADOS (Juan, 07/09/2026) ──────────────────
+// REVOCA la regla anterior (JORNADAS=0, HORAS LIQUIDABLES=0). En la plantilla
+// de liquidación, supervisores y administrativos llevan valores CONVENCIONALES
+// para que las fórmulas salariales operen: JORNADAS=25, HORAS LIQUIDABLES=150,
+// ADICIONAL=50 (columna AH = "hs a valor pleno", que alimenta AI = AH*Y). No
+// son horas trabajadas y no tocan ninguna fuente operativa.
+
+describe('base de liquidación de mensualizados', () => {
+  const hora = PARAMETROS_PLANTILLA.basico / 200
+  // Localiza dinámicamente la fila de un empleado por su NOMBRE (columna D):
+  // según los bloques presentes la fila cambia de número, no la hardcodeamos.
+  const armar = (res: ReturnType<typeof construirResumenGuardia>) => {
+    const celdas = plantillaLiquidacionResumenGuardia(res).celdas
+    const m = new Map(celdas.map(c => [c.ref, c]))
+    const filaDe = (nombre: string) => {
+      const d = celdas.find(c => /^D\d+$/.test(c.ref) && c.v === nombre)
+      return d ? Number(d.ref.slice(1)) : -1
+    }
+    return { m, filaDe }
+  }
+
+  it('guardia normal: conserva JORNADAS y HORAS LIQUIDABLES de la fuente operativa; AH vacía', () => {
+    const { m, filaDe } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia', legajoVisual: 'ALMADA' }],
+      turnos: [turno({ id: 't1', fecha: '2026-08-10' }), turno({ id: 't2', fecha: '2026-08-11' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 }), registro({ turno_id: 't2', horas_liquidables: 8 })],
+    })))
+    const r = filaDe('ALMADA, E')
+    expect(m.get(`G${r}`)?.v).toBe(2)   // jornadas reales
+    expect(m.get(`I${r}`)?.v).toBe(20)  // horas liquidables reales
+    expect(m.get(`AH${r}`)).toBeUndefined() // vigilador: AH queda para carga manual
+    expect(m.get(`AI${r}`)?.v).toBe(0)      // adicional = AH(vacío)*Y = 0
+  })
+
+  const mensualizado = (rol: 'supervisor' | 'admin', over: Partial<ParamsResumenGuardia> = {}) => {
+    const { m, filaDe } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'm1', nombre: 'C', apellido: 'ACOSTA', rol }],
+      ...over,
+    })))
+    return { m, r: filaDe('ACOSTA, C') }
+  }
+
+  it('mensualizado supervisor: JORNADAS = 25', () => {
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get(`G${r}`)?.v).toBe(25)
+  })
+
+  it('mensualizado supervisor: HORAS LIQUIDABLES = 150', () => {
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get(`I${r}`)?.v).toBe(150)
+  })
+
+  it('mensualizado supervisor: ADICIONAL = 50 en AH (hs a valor pleno), y AI = 50*hora', () => {
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get(`AH${r}`)?.v).toBe(50)            // columna identificada: AH
+    expect(m.get(`AI${r}`)?.v).toBe(50 * hora)     // 'adicional' AI = AH*Y
+    expect(m.get(`AI${r}`)?.f).toBe(`AH${r}*$F$1`) // adicional = AH × hora ($F$1 absoluto)
+  })
+
+  it('mensualizado admin (caso MARTINEZ): misma base 25/150/50 aunque el rol sea admin', () => {
+    const { m, r } = mensualizado('admin')
+    expect(m.get(`G${r}`)?.v).toBe(25)
+    expect(m.get(`I${r}`)?.v).toBe(150)
+    expect(m.get(`AH${r}`)?.v).toBe(50)
+  })
+
+  it('las horas operativas reales del mensualizado NO modifican la base convencional', () => {
+    // Supervisor con turnos fichados a su nombre: igual 25/150/50 (no lo cambian).
+    const { m, r } = mensualizado('supervisor', {
+      turnos: [turno({ id: 't1', guardia_id: 'm1' }), turno({ id: 't2', fecha: '2026-08-12', guardia_id: 'm1' })],
+      registros: [registro({ turno_id: 't1', guardia_id: 'm1', horas_liquidables: 12 }), registro({ turno_id: 't2', guardia_id: 'm1', horas_liquidables: 12 })],
+    })
+    expect(m.get(`G${r}`)?.v).toBe(25)
+    expect(m.get(`I${r}`)?.v).toBe(150)
+    expect(m.get(`AH${r}`)?.v).toBe(50)
+  })
+
+  it('HS VIGILANCIA ZONA sigue informativa e independiente de la base (150 ≠ 12.944,5)', () => {
+    // Objetivo o1 en zona Z1 con 24 h programadas; el supervisor la tiene a cargo.
+    const { m, r } = mensualizado('supervisor', {
+      turnos: [
+        turno({ id: 'z1', objetivo_id: 'o1', hora_inicio: '07:00', hora_fin: '19:00', guardia_id: 'x' }),
+        turno({ id: 'z2', objetivo_id: 'o1', hora_inicio: '19:00', hora_fin: '07:00', guardia_id: 'x' }),
+      ],
+      zonaObjetivo: (id) => (id === 'o1' ? 'Z1' : null),
+      zonasSupervisor: () => ['Z1'],
+    })
+    expect(m.get(`I${r}`)?.v).toBe(150)   // base de liquidación
+    expect(m.get(`BC${r}`)?.v).toBe(24)   // volumen de vigilancia de la zona (independiente)
+  })
+
+  it('columnas históricas no se desplazan: A:AX intactas, AI sigue "adicional"/212, informativas al final', () => {
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get('AI5')?.v).toBe('adicional')
+    expect(m.get('AI6')?.v).toBe('212')
+    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$F$1`)  // horas rec × hora ($F$1 absoluto)
+    expect(m.get('AX6')?.v).toBe('008')     // último concepto histórico, sin correr
+    expect(m.get('AY6')?.v).toBe('SUPERVISIONES') // informativas siguen DESPUÉS de AX
+    expect(m.get('BC6')?.v).toBe('HS VIGILANCIA ZONA')
+  })
+
+  it('mensualizado: AL (hs extras) = 0, nunca negativo, con fórmula MAX(0,I-AG)', () => {
+    for (const rol of ['supervisor', 'admin'] as const) {
+      const { m, r } = mensualizado(rol)
+      expect(m.get(`AL${r}`)?.v).toBe(0)                       // ya no -50
+      expect(m.get(`AL${r}`)?.v as number).toBeGreaterThanOrEqual(0)
+      expect(m.get(`AL${r}`)?.f).toBe(`MAX(0,I${r}-AG${r})`)   // fórmula no negativa
+      expect(m.get(`AP${r}`)?.v).toBe(0)                       // 0 por extras
+    }
+  })
+
+  it('mensualizado: el total salarial (AO) NO cambia respecto del resultado validado', () => {
+    // AO validado previamente = 1.999.875 (AC 514500 + AD 180000 + AE 30000 +
+    // AI 255075 + AJ 1020300; AL=0 → AP=0 no aporta). El MAX no altera el total.
+    const { m, r } = mensualizado('supervisor')
+    expect(m.get(`AO${r}`)?.v).toBe(1999875)
+  })
+
+  it('vigilador con horas > base: sigue generando extras correctamente (AL>0, AP paga)', () => {
+    // 20 jornadas de 8 h = 160 hs liquidables (>150) → AG=150, AL=10, AP=10*2500.
+    const turnos: TurnoResumen[] = []
+    const registros: RegistroUniverso[] = []
+    for (let d = 1; d <= 20; d++) {
+      const fecha = '2026-08-' + String(d).padStart(2, '0')
+      turnos.push(turno({ id: 'e' + d, fecha, hora_inicio: '08:00', hora_fin: '16:00' }))
+      registros.push(registro({ turno_id: 'e' + d, horas_liquidables: 8 }))
+    }
+    const { m, filaDe } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia' }],
+      turnos, registros,
+    })))
+    const r = filaDe('ALMADA, E')
+    expect(m.get(`I${r}`)?.v).toBe(160)
+    expect(m.get(`AL${r}`)?.v).toBe(10)                        // extras reales intactas
+    expect(m.get(`AL${r}`)?.f).toBe(`MAX(0,I${r}-AG${r})`)
+    expect(m.get(`AP${r}`)?.v).toBe(10 * PARAMETROS_PLANTILLA.horaExtra) // 25000
+  })
+})
+
+// ── Prolijidad, identidad oculta y metadatos para el escritor (Juan 12/13/16) ─
+// La plantilla ahora expone columnas (ancho/oculto/formato), estilos (filas por
+// categoría) y secciones (bordes), y lleva identidad técnica oculta para el
+// futuro reimport MERCOSUR ↔ Excel. Nada de esto cambia importes ni códigos.
+
+describe('plantilla: prolijidad e identidad', () => {
+  const armar = (res: ReturnType<typeof construirResumenGuardia>) => {
+    const p = plantillaLiquidacionResumenGuardia(res)
+    const m = new Map(p.celdas.map(c => [c.ref, c]))
+    const filaDe = (nombre: string) => {
+      const d = p.celdas.find(c => /^D\d+$/.test(c.ref) && c.v === nombre)
+      return d ? Number(d.ref.slice(1)) : -1
+    }
+    return { p, m, filaDe }
+  }
+
+  it('identidad técnica oculta: usuario_id y período por fila; CUIL visible', () => {
+    const { p, m, filaDe } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'emp-123', nombre: 'C', apellido: 'ACOSTA', rol: 'supervisor', cuil: '20222222222' }],
+    })))
+    const r = filaDe('ACOSTA, C')
+    expect(m.get(`BD${r}`)?.v).toBe('emp-123')  // usuario_id interno
+    expect(m.get(`BE${r}`)?.v).toBe('2026-08')  // período
+    expect(m.get(`B${r}`)?.v).toBe('20222222222') // CUIL visible
+    expect(m.get('BD6')?.v).toBe('usuario_id')
+    expect(m.get('BE6')?.v).toBe('periodo')
+    // BD/BE ocultas; CUIL (B) visible
+    const bd = p.columnas.find(c => c.col === 'BD')
+    const be = p.columnas.find(c => c.col === 'BE')
+    const b = p.columnas.find(c => c.col === 'B')
+    expect(bd?.hidden).toBe(true)
+    expect(be?.hidden).toBe(true)
+    expect(b?.hidden).toBeFalsy()
+  })
+
+  it('columnas: anchos, formatos y ocultamiento de las auxiliares repetitivas (U-AB)', () => {
+    const { p } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia' }],
+    })))
+    const col = (c: string) => p.columnas.find(x => x.col === c)
+    expect(col('AO')?.numFmt).toBe('money')   // total: moneda
+    expect(col('I')?.numFmt).toBe('hours')    // horas liquidables
+    expect(col('G')?.numFmt).toBe('int')      // jornadas
+    expect(col('BC')?.numFmt).toBe('hours')   // hs vigilancia zona
+    // Las columnas de parámetros repetidos del ejemplo viejo quedan ocultas
+    for (const c of ['U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB']) {
+      expect(col(c)?.hidden).toBe(true)
+    }
+    expect(typeof col('D')?.width).toBe('number')
+  })
+
+  it('estilos y secciones expuestos para el escritor (bordes/negritas)', () => {
+    const { p } = armar(construirResumenGuardia(base({
+      empleados: [
+        { id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia' },
+        { id: 's1', nombre: 'C', apellido: 'ACOSTA', rol: 'supervisor' },
+      ],
+      turnos: [turno({ id: 't1' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+    })))
+    expect(p.estilos.encabezado).toBe(6)
+    expect(p.estilos.titulos.length).toBe(3)       // 3 bloques
+    expect(p.estilos.subtotales.length).toBe(3)
+    expect(p.estilos.total).toBeGreaterThan(0)
+    expect(p.estilos.filasDatos.length).toBe(2)    // 1 vigilador + 1 supervisor
+    expect(p.secciones).toContain('AC')            // arranque de cálculos salariales
+    expect(p.secciones).toContain('AY')            // arranque de supervisión
   })
 })

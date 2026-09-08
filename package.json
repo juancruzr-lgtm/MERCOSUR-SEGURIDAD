@@ -12,6 +12,7 @@
     "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/supabase-js": "^2.43.1",
     "date-fns": "^3.6.0",
+    "exceljs": "^4.4.0",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.2",
     "jsqr": "^1.4.0",

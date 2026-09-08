@@ -9,7 +9,7 @@ import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendie
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
-import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, grupoDeRol, type GrupoResumen } from '@/lib/resumen-guardia'
+import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, grupoDeResumen, type GrupoResumen } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -7850,7 +7850,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         _registros: regs.length,
         _fallback: turnosFallback.length,
         _clasificados: clasificacion.total,
-        _grupo: grupoDeRol(g.rol),
+        _grupo: grupoDeResumen(g),
       }
     })
     // Un mes con ausencias y sin un solo fichaje sigue siendo información de
@@ -7991,7 +7991,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       // (vigiladores / supervisores / administrativos) y aplica la regla de
       // mensualizados. REGLA DURA: ningún activo puede faltar en el archivo —
       // por eso va `guardias` completo, no el recorte de la pantalla.
-      empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, estado: g.estado, esPrueba: Boolean(g.es_prueba), cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
+      empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, puesto_organizacional: (g as any).puesto_organizacional ?? null, estado: g.estado, esPrueba: Boolean(g.es_prueba), cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
       turnos: turnosMes,
       registros: registrosMes,
       novedades: novedadesLaborales,
@@ -8029,16 +8029,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     // parámetros + fórmulas por fila, la app solo rellena las celdas de
     // entrada. Sin autofiltro ni paneles fijos: la hoja replica el ejemplo.
     const plantilla = plantillaLiquidacionResumenGuardia(resumen)
-    const XLSXmod = await import('xlsx')
-    const ws: Record<string, any> = { '!ref': plantilla.ref }
-    for (const c of plantilla.celdas) {
-      const cell: any = typeof c.v === 'number' ? { t: 'n', v: c.v } : { t: 's', v: c.v ?? '' }
-      if (c.f) cell.f = c.f
-      ws[c.ref] = cell
-    }
-    const wb = XLSXmod.utils.book_new()
-    XLSXmod.utils.book_append_sheet(wb, ws as any, plantilla.nombreHoja)
-    XLSXmod.writeFile(wb, `resumen_guardia_${mesArchivo()}.xlsx`)
+    // Escritor con formato (bordes/moneda/anchos/identidad oculta) en lib
+    // aparte: la comunidad de SheetJS no escribe estilos, así que usa exceljs.
+    const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
+    const buf = await escribirPlantillaLiquidacionXLSX(plantilla)
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `resumen_guardia_${mesArchivo()}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
   }
 
   const exportarResumenObjetivosXLSX = async () => {
