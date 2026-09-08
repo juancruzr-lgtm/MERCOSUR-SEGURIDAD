@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { generarExcelTrabajoLiquidacion } from '@/lib/excel-trabajo-liquidacion'
+import { generarExcelTrabajoLiquidacion, snapshotConsolidadoDelMes } from '@/lib/excel-trabajo-liquidacion'
 
 // Cliente Supabase falso: cada método de filtro/orden devuelve el mismo builder
 // (encadenable); el builder es thenable (consultas directas) y además expone
@@ -88,5 +88,18 @@ describe('generarExcelTrabajoLiquidacion (LIQ2A)', () => {
     const r = await generarExcelTrabajoLiquidacion(fakeClient(tablasVacias, { errorEn: 'turnos' }), '2026-08')
     expect(r.buf).toBeNull()
     expect(r.error).toMatch(/falla turnos/)
+  }, 60000)
+
+  it('snapshotConsolidadoDelMes NO emite la fila de encabezado como empleado (bug LIQ2C)', async () => {
+    const tablas = { ...tablasVacias, liquidacion_ajuste: [] as any[] }
+    const r = await snapshotConsolidadoDelMes(fakeClient(tablas), 'periodo-x', '2026-08')
+    expect(r.error).toBeNull()
+    // Nunca el literal 'usuario_id' (fila 6) ni códigos con importe == código.
+    expect(r.filas.every(f => f.empleado_id !== 'usuario_id')).toBe(true)
+    expect(r.filas.every(f => f.empleado_id === 'u1' || f.empleado_id === 'u2')).toBe(true)
+    // El supervisor mensualizado (u2) sí aporta conceptos; el importe de 203 no
+    // puede ser 203 (eso sería la contaminación del encabezado).
+    const c203 = r.filas.find(f => f.codigo === '203')
+    if (c203) expect(c203.importe).not.toBe(203)
   }, 60000)
 })
