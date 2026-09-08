@@ -1003,7 +1003,16 @@ const COLUMNAS_PLANTILLA: ColumnaPlantilla[] = [
 // identidad | operativo | novedades | cálculos salariales | conceptos | supervisión.
 const SECCIONES_PLANTILLA = ['A', 'G', 'L', 'AC', 'AT', 'AY']
 
-export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): PlantillaLiquidacion {
+export function plantillaLiquidacionResumenGuardia(
+  resumen: ResumenGuardiaMes,
+  /**
+   * Ajustes de liquidación por empleado (LIQ2C): { empleadoId → { clave → valor } }
+   * sobre las columnas de entrada (jornadas, horas_liquidables, horas_nocturnas,
+   * feriados, licencias, art, vacaciones, parte_medico, aus_susp, adicional_hs).
+   * Sin este argumento el archivo es idéntico al de #170.
+   */
+  ajustesPorEmpleado?: Map<string, Record<string, number | null>>,
+): PlantillaLiquidacion {
   const P = PARAMETROS_PLANTILLA
   const hora = P.basico / 200
   const dia8 = hora * 8
@@ -1067,25 +1076,43 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`D${r}`, fila.nombre)
     put(`E${r}`, fila.notas.join(' · '))
     put(`F${r}`, fila.objetivos.join('/'))
+    // Ajustes de liquidación (LIQ2C): overrides por empleado sobre las columnas
+    // de ENTRADA. Sin ajuste → valor base idéntico al de siempre (el archivo de
+    // #170 no cambia). Con ajuste → recalculan los conceptos derivados, porque
+    // Visual necesita el valor de liquidación, no el operativo.
+    const ov = ajustesPorEmpleado?.get(fila.empleadoId) ?? {}
+    const ovNum = (clave: string, base: number): number => {
+      const o = ov[clave]; return (o === undefined || o === null) ? base : o
+    }
+    const ovNullable = (clave: string, base: number | null): number | null => {
+      const o = ov[clave]; return (o === undefined) ? base : o
+    }
     // Base de liquidación de MENSUALIZADOS (Juan, 07/09): valores convencionales
     // para que operen las fórmulas — NO son horas trabajadas. Sólo en esta capa.
     const mensualizado = fila.grupo !== 'vigiladores'
-    const G = mensualizado ? 25 : fila.jornadas
+    const G = ovNum('jornadas', mensualizado ? 25 : fila.jornadas)
     const H = Math.min(G, 25)
-    const I = mensualizado ? 150 : fila.horasLiquidables
-    const J = num(fila.horasNocturnas)
+    const I = ovNum('horas_liquidables', mensualizado ? 150 : fila.horasLiquidables)
+    const Jval = ovNullable('horas_nocturnas', fila.horasNocturnas)
+    const J = num(Jval)
+    const Kv = ovNum('feriados', fila.feriadosTrabajados)
+    const Lval = ovNullable('licencias', fila.licencias)
+    const Mval = ovNullable('art', fila.art)
+    const Nval = ovNullable('vacaciones', fila.vacaciones)
+    const Oval = ovNullable('parte_medico', fila.parteMedico)
+    const Pval = ovNullable('aus_susp', fila.ausenciasSuspensiones)
     put(`G${r}`, G)
     put(`H${r}`, H, `MIN(G${r},25)`)
     put(`I${r}`, I)
     // null → celda sin emitir (vacía real = 0 en fórmulas, sin #¡VALOR!).
     const putNum = (ref: string, v: number | null) => { if (v != null) put(ref, v) }
-    putNum(`J${r}`, fila.horasNocturnas)
-    put(`K${r}`, fila.feriadosTrabajados)
-    putNum(`L${r}`, fila.licencias)
-    putNum(`M${r}`, fila.art)
-    putNum(`N${r}`, fila.vacaciones)
-    putNum(`O${r}`, fila.parteMedico)
-    putNum(`P${r}`, fila.ausenciasSuspensiones)
+    putNum(`J${r}`, Jval)
+    put(`K${r}`, Kv)
+    putNum(`L${r}`, Lval)
+    putNum(`M${r}`, Mval)
+    putNum(`N${r}`, Nval)
+    putNum(`O${r}`, Oval)
+    putNum(`P${r}`, Pval)
     const AC = (P.viatico / 25) * H
     const AD = (P.presentismo / 25) * H
     const AE = (P.noRem / 25) * H
@@ -1093,7 +1120,7 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     const AG = I <= 150 ? H * 8 : 150
     // ADICIONAL: AH = "hs a valor pleno" (concepto 212), input que alimenta la
     // columna 'adicional' AI = AH*hora. Base mensualizada = 50; vigilador vacío.
-    const AH = mensualizado ? 50 : 0
+    const AH = ovNum('adicional_hs', mensualizado ? 50 : 0)
     const AI = AH * hora
     const AJ = AG * hora
     // AL (hs extras) nunca negativo: MAX(0, I-AG). No cambia el pago (AM/AP ya
@@ -1102,11 +1129,11 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     const AM = AL > 0 && I > 0 ? (AL * 100) / I : 0
     const AN = G > 0 ? I / G : 0
     const AP = AL > 0 ? AL * P.horaExtra : 0 // menos AR (adelantos), manual
-    const AT = fila.feriadosTrabajados * dia8
-    const AU = num(fila.licencias) * dia8
-    const AV = num(fila.art) * dia8
-    const AW = num(fila.vacaciones) * dia8
-    const AX = num(fila.parteMedico) * dia8
+    const AT = Kv * dia8
+    const AU = num(Lval) * dia8
+    const AV = num(Mval) * dia8
+    const AW = num(Nval) * dia8
+    const AX = num(Oval) * dia8
     const AO = AC + AD + AE + AF + AI + AJ + AT + AU + AV + AW + AX + AP
     const AS = AO > 0 && I > 0 ? AO / I : 0
     // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias
@@ -1116,8 +1143,9 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`AE${r}`, AE, `($E$4/25)*H${r}`)
     put(`AF${r}`, AF, `($F$1/10)*J${r}`)
     put(`AG${r}`, AG, `IF(I${r}<=150,H${r}*8,150)`)
-    // Mensualizado: AH=50 (adicional base). Vigilador: NO se emite (carga manual).
-    if (mensualizado) put(`AH${r}`, AH)
+    // Mensualizado: AH=50 (adicional base). Vigilador: NO se emite (carga manual)
+    // salvo que un ajuste de liquidación le fije un adicional > 0.
+    if (AH !== 0) put(`AH${r}`, AH)
     put(`AI${r}`, AI, `AH${r}*$F$1`)
     put(`AJ${r}`, AJ, `AG${r}*$F$1`)
     put(`AL${r}`, AL, `MAX(0,I${r}-AG${r})`)
@@ -1143,9 +1171,9 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`BD${r}`, fila.empleadoId)
     put(`BE${r}`, resumen.mes)
     const cacheFila: [string, number][] = [
-      ['G', G], ['I', I], ['J', J], ['K', fila.feriadosTrabajados],
-      ['L', num(fila.licencias)], ['M', num(fila.art)], ['N', num(fila.vacaciones)],
-      ['O', num(fila.parteMedico)], ['P', num(fila.ausenciasSuspensiones)],
+      ['G', G], ['I', I], ['J', J], ['K', Kv],
+      ['L', num(Lval)], ['M', num(Mval)], ['N', num(Nval)],
+      ['O', num(Oval)], ['P', num(Pval)],
       ['AC', AC], ['AD', AD], ['AE', AE], ['AF', AF], ['AG', AG], ['AH', AH],
       ['AI', AI], ['AJ', AJ], ['AL', AL], ['AO', AO], ['AP', AP],
       ['AT', AT], ['AU', AU], ['AV', AV], ['AW', AW], ['AX', AX],

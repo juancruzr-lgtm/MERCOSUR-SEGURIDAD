@@ -685,6 +685,38 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     return m
   }
 
+  // LIQ2C — overrides de ajuste. Sin ajuste el archivo es idéntico (lo cubren
+  // los 89 tests previos); acá se verifica que un ajuste recalcula el concepto
+  // derivado del empleado ajustado, y sólo de ese. Fila 8 = ALMADA (g1),
+  // fila 9 = ALMARA (g2). hora = 1020300/200 = 5101.5; día = hora*8 = 40812.
+  it('un ajuste de feriados recalcula AT (006) del empleado, sin tocar al otro', () => {
+    const mb = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
+    expect(mb.get('K8')?.v).toBe(0)
+    expect(mb.get('AT8')?.v).toBe(0)
+    const ma = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores(), new Map([['g1', { feriados: 2 }]])))
+    expect(ma.get('K8')?.v).toBe(2)
+    expect(ma.get('AT8')?.v).toBe(2 * (1020300 / 200 * 8)) // 81624
+    // g2 (sin ajuste) intacto
+    expect(ma.get('K9')?.v).toBe(mb.get('K9')?.v)
+    expect(ma.get('AT9')?.v).toBe(mb.get('AT9')?.v)
+  })
+
+  it('un ajuste de adicional_hs a un vigilador emite AH y recalcula AI (adicional)', () => {
+    const mb = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
+    expect(mb.get('AH8')).toBeUndefined() // vigilador sin adicional: no se emite
+    const ma = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores(), new Map([['g1', { adicional_hs: 50 }]])))
+    expect(ma.get('AH8')?.v).toBe(50)
+    expect(ma.get('AI8')?.v).toBe(50 * (1020300 / 200)) // AH*hora = 255075
+  })
+
+  it('un ajuste de horas_liquidables recalcula extras (AL) del empleado', () => {
+    const ma = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores(), new Map([['g1', { horas_liquidables: 160 }]])))
+    expect(ma.get('I8')?.v).toBe(160)
+    // AG = IF(160<=150,H*8,150) = 150 ; AL = MAX(0,160-150) = 10
+    expect(ma.get('AG8')?.v).toBe(150)
+    expect(ma.get('AL8')?.v).toBe(10)
+  })
+
   it('geometría de bloques: título, datos, subtotal por bloque y TOTAL GENERAL al final', () => {
     const p = plantillaLiquidacionResumenGuardia(dosVigiladores())
     expect(p.nombreHoja).toBe('Liquidación')
