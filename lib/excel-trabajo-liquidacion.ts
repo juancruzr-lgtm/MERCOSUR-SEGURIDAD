@@ -68,6 +68,7 @@ export async function generarExcelTrabajoLiquidacion(
 export async function plantillaTrabajoDelMes(
   client: any,
   mes: string,
+  ajustesPorEmpleado?: Map<string, Record<string, number | null>>,
 ): Promise<PlantillaTrabajoResultado> {
   if (!/^\d{4}-\d{2}$/.test(mes)) return { plantilla: null, filas: 0, error: 'Mes inválido (esperado YYYY-MM).' }
   const { desde, hasta, y, m } = limitesDelMes(mes)
@@ -146,6 +147,75 @@ export async function plantillaTrabajoDelMes(
 
   if (resumen.filas.length === 0) return { plantilla: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
 
-  const plantilla = plantillaLiquidacionResumenGuardia(resumen)
+  const plantilla = plantillaLiquidacionResumenGuardia(resumen, ajustesPorEmpleado)
   return { plantilla, filas: resumen.filas.length, error: null }
+}
+
+// Columnas de concepto del Excel de trabajo (layout de #170) y su código de
+// Visual: el código NO se hardcodea acá, se lee de la fila 6 del archivo (viene
+// de la plantilla de Juan). Estas letras sí son fijas: definen NUESTRO layout.
+const COLS_CONCEPTO = ['AC', 'AD', 'AE', 'AF', 'AG', 'AI', 'AJ', 'AT', 'AU', 'AV', 'AW', 'AX']
+
+export interface FilaConsolidada {
+  empleado_id: string
+  legajo_visual: string | null
+  cuil: string | null
+  nombre: string | null
+  codigo: string
+  importe: number
+}
+
+/**
+ * Arma el snapshot consolidado del período (LIQ2C): por (empleado, código de
+ * Visual) el importe final, tomando el baseline + los ajustes de liquidación
+ * guardados. Suma los importes de columnas que comparten código (212 = AE+AI,
+ * 001 = AG+AJ). Los códigos se leen de la fila 6 de la plantilla. Es la versión
+ * concreta y auditable que después consume el export a Visual (LIQ2D).
+ */
+export async function snapshotConsolidadoDelMes(
+  client: any,
+  periodoId: string,
+  mes: string,
+): Promise<{ filas: FilaConsolidada[]; error: string | null }> {
+  const { data: aj, error: eAj } = await client.from('liquidacion_ajuste')
+    .select('empleado_id, clave, valor_liquidacion').eq('periodo_id', periodoId)
+  if (eAj) return { filas: [], error: eAj.message }
+  const ajustes = new Map<string, Record<string, number | null>>()
+  for (const a of (aj ?? []) as any[]) {
+    const m = ajustes.get(a.empleado_id) ?? {}
+    m[a.clave] = a.valor_liquidacion === null ? null : Number(a.valor_liquidacion)
+    ajustes.set(a.empleado_id, m)
+  }
+
+  const { plantilla, error } = await plantillaTrabajoDelMes(client, mes, ajustes)
+  if (error || !plantilla) return { filas: [], error: error || 'sin plantilla' }
+
+  const porRef = new Map<string, string | number | undefined>()
+  for (const c of plantilla.celdas) porRef.set(c.ref, c.v)
+  const codigoDeCol: Record<string, string> = {}
+  for (const col of COLS_CONCEPTO) codigoDeCol[col] = String(porRef.get(`${col}6`) ?? '').trim()
+
+  const filas: FilaConsolidada[] = []
+  for (const c of plantilla.celdas) {
+    const mm = c.ref.match(/^BD(\d+)$/)
+    if (!mm) continue
+    const empleadoId = String(c.v ?? '').trim()
+    if (!empleadoId) continue
+    const r = mm[1]
+    const porCodigo = new Map<string, number>()
+    for (const col of COLS_CONCEPTO) {
+      const cod = codigoDeCol[col]
+      if (!cod) continue
+      const v = Number(porRef.get(`${col}${r}`) ?? 0)
+      if (!Number.isFinite(v) || v === 0) continue
+      porCodigo.set(cod, (porCodigo.get(cod) ?? 0) + v)
+    }
+    const legajoVisual = String(porRef.get(`A${r}`) ?? '') || null
+    const cuil = String(porRef.get(`B${r}`) ?? '') || null
+    const nombre = String(porRef.get(`D${r}`) ?? '') || null
+    for (const [codigo, importe] of Array.from(porCodigo.entries())) {
+      filas.push({ empleado_id: empleadoId, legajo_visual: legajoVisual, cuil, nombre, codigo, importe: Math.round(importe * 100) / 100 })
+    }
+  }
+  return { filas, error: null }
 }

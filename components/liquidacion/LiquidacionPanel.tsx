@@ -17,7 +17,10 @@ type ConceptoPeriodo = { id: string; empleado_id: string | null; concepto_id: st
 
 const CATEGORIAS = ['imponible', 'no_imponible', 'asignacion', 'descuento', 'base_auxiliar']
 const ORIGENES = ['mercosur', 'novedad_laboral', 'regla', 'permanente_individual', 'manual_periodo', 'importado', 'calculado_visual']
-const ESTADOS_SIG: Record<string, string | null> = { borrador: 'revision', revision: 'cerrado', cerrado: 'exportado', exportado: null }
+// Transiciones "simples" (botón → siguiente). revision→consolidada va por el
+// botón Consolidar (RPC + snapshot); consolidada→exportada por LIQ2D.
+const ESTADOS_SIG: Record<string, string | null> = { borrador: 'revision', exportada: 'liquidada' }
+const EDITABLE = (estado: string) => estado === 'borrador' || estado === 'revision'
 
 const S: Record<string, React.CSSProperties> = {
   wrap: { padding: 16, color: '#e2e8f0', maxWidth: 1000 },
@@ -58,6 +61,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   const [novedadesMes, setNovedadesMes] = useState<any[]>([])
   // LIQ2A: generación del Excel de trabajo
   const [genExcel, setGenExcel] = useState(false)
+  // LIQ2C: consolidación
+  const [consolidando, setConsolidando] = useState(false)
+  const [consolidadaN, setConsolidadaN] = useState(0)
   // Permanentes
   const [permanentes, setPermanentes] = useState<Permanente[]>([])
   const [pForm, setPForm] = useState({ empleado_id: '', concepto_id: '', importe: '', cantidad: '', vigencia_desde: new Date().toISOString().slice(0, 10), vigencia_hasta: '', motivo: '' })
@@ -80,15 +86,17 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     setSel(p)
     setComparacion(null)
     const { desde, hasta } = limitesDelMes(p.mes)
-    const [{ count }, { data: cp }, { data: nov }] = await Promise.all([
+    const [{ count }, { data: cp }, { data: nov }, { count: consN }] = await Promise.all([
       supabase.from('liquidacion_periodo_empleado').select('*', { count: 'exact', head: true }).eq('periodo_id', p.id),
       supabase.from('liquidacion_concepto_periodo').select('id, empleado_id, concepto_id, cantidad, importe, origen').eq('periodo_id', p.id),
       supabase.from('novedades_laborales').select('empleado_id, tipo, fecha_desde, fecha_hasta, dias_informados, cantidad_dias')
         .eq('estado', 'aprobada').lte('fecha_desde', hasta).gte('fecha_hasta', desde),
+      supabase.from('liquidacion_consolidada').select('*', { count: 'exact', head: true }).eq('periodo_id', p.id),
     ])
     setPadronN(count ?? 0)
     setConceptosP((cp as ConceptoPeriodo[]) ?? [])
     setNovedadesMes((nov as any[]) ?? [])
+    setConsolidadaN(consN ?? 0)
   }
 
   async function comparar() {
@@ -130,10 +138,28 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
 
   async function cambiarEstado(p: Periodo) {
     const sig = ESTADOS_SIG[p.estado]; if (!sig) return
-    const patch: any = { estado: sig, updated_at: new Date().toISOString() }
-    if (sig === 'cerrado') { patch.cerrado_at = new Date().toISOString(); patch.cerrado_por = user?.id ?? null }
-    const { error } = await supabase.from('liquidacion_periodo').update(patch).eq('id', p.id)
+    const { error } = await supabase.from('liquidacion_periodo').update({ estado: sig, updated_at: new Date().toISOString() }).eq('id', p.id)
     if (!error) { await cargarPeriodos(); if (sel?.id === p.id) setSel({ ...p, estado: sig }) }
+  }
+
+  // LIQ2C: consolidar = congelar snapshot (baseline + ajustes) por empleado×código
+  // y pasar el período a 'consolidada'. El cálculo vive en el cliente (fuente
+  // única); la RPC sólo persiste atómico.
+  async function consolidar() {
+    if (!sel) return
+    setConsolidando(true); setMsg(null)
+    try {
+      const { snapshotConsolidadoDelMes } = await import('@/lib/excel-trabajo-liquidacion')
+      const snap = await snapshotConsolidadoDelMes(supabase, sel.id, sel.mes)
+      if (snap.error) { setMsg({ ok: false, t: 'No se pudo armar el consolidado: ' + snap.error }); return }
+      const { data, error } = await supabase.rpc('consolidar_periodo', { p_periodo_id: sel.id, p_filas: snap.filas })
+      if (error) { setMsg({ ok: false, t: 'No se pudo consolidar: ' + error.message }); return }
+      const r = data as any
+      setMsg({ ok: true, t: `Consolidado: ${r.filas} filas (empleado × código). El período quedó CONSOLIDADO.` })
+      await cargarPeriodos(); const actualizado = { ...sel, estado: 'consolidada' }; setSel(actualizado); void abrirPeriodo(actualizado)
+    } catch (e: any) {
+      setMsg({ ok: false, t: 'No se pudo consolidar: ' + (e?.message || e) })
+    } finally { setConsolidando(false) }
   }
 
   async function agregarConcepto() {
@@ -216,7 +242,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                 </table>
               )}
               {/* LIQ2A · PASO 1: MERCOSUR genera el Excel de trabajo del mes. */}
-              {(sel.estado === 'borrador' || sel.estado === 'revision') && (
+              {EDITABLE(sel.estado) && (
                 <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button style={{ ...S.btn, opacity: genExcel ? 0.6 : 1 }} disabled={genExcel} onClick={() => void descargarExcelTrabajo()}>
                     {genExcel ? 'Generando…' : 'Descargar Excel de trabajo'}
@@ -228,14 +254,14 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
               )}
 
               {/* LIQ2B · PASO 3: subir el Excel revisado → preview de diferencias. */}
-              {(sel.estado === 'borrador' || sel.estado === 'revision') && (
+              {EDITABLE(sel.estado) && (
                 <ReimportarExcelTrabajo periodo={sel} onDone={() => { void abrirPeriodo(sel) }} />
               )}
 
               {/* Importación del RESULTADO de Visual (conciliación) — NO es el
                   flujo principal de preparación. Queda para traer/contrastar lo
                   que Visual devolvió. */}
-              {(sel.estado === 'borrador' || sel.estado === 'revision') && (
+              {EDITABLE(sel.estado) && (
                 <div style={{ marginTop: 8 }}>
                   <div style={{ fontSize: 12, color: '#64748b', margin: '6px 0' }}>
                     Conciliación (opcional): importar un resultado/planilla de Visual para contrastar. No reemplaza al Excel de trabajo.
@@ -275,6 +301,35 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     )}
                   </div>
                 )}
+              </div>
+
+              {/* LIQ2C · PASO 6: consolidar (congela snapshot por empleado×código). */}
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #1e293b' }}>
+                {consolidadaN > 0 && (
+                  <div style={{ fontSize: 13, marginBottom: 8 }}>
+                    Consolidado: <b>{consolidadaN}</b> filas (empleado × código) congeladas
+                    {sel.estado === 'consolidada' && <span style={{ color: '#4ade80' }}> · período CONSOLIDADO</span>}.
+                  </div>
+                )}
+                {EDITABLE(sel.estado) ? (
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button style={{ ...S.btn, background: '#7c3aed', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>
+                      {consolidando ? 'Consolidando…' : 'Consolidar liquidación'}
+                    </button>
+                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
+                      PASO 6 · Congela una versión concreta y auditable (baseline + ajustes) para exportar a Visual. Podés re-consolidar mientras no esté exportada.
+                    </span>
+                  </div>
+                ) : sel.estado === 'consolidada' ? (
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button style={{ ...S.btn, background: '#475569', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>
+                      Re-consolidar
+                    </button>
+                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
+                      El export a Visual (LIQ2D) parte de este consolidado.
+                    </span>
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
