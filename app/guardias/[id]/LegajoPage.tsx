@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import { alcanceDe } from '@/lib/capacidades'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { registroTieneEntradaConfirmada } from '@/lib/turnos'
@@ -244,6 +245,7 @@ export default function LegajoPage() {
   const [error, setError] = useState<string | null>(null)
   const [seccion, setSeccion] = useState<SeccionId>(() => seccionInicial(searchParams.get('seccion')))
   const [rolUsuario, setRolUsuario] = useState<string | null>(null)
+  const [puestoUsuario, setPuestoUsuario] = useState<string | null>(null)
   // Id del usuario que MIRA, no del legajo. Lo necesita cargarFilasBandeja
   // para resolver su alcance por zona.
   const [usuarioId, setUsuarioId] = useState<string | null>(null)
@@ -266,14 +268,17 @@ export default function LegajoPage() {
 
       supabase
         .from('usuarios')
-        .select('id, rol')
+        .select('id, rol, puesto_organizacional')
         .eq('auth_user_id', session.user.id)
         .single()
         .then(({ data: perfil }) => {
           if (!perfil) { router.push('/dashboard'); return }
 
-          const rol = perfil.rol ?? 'admin'
+          // Fail-closed: sin rol NI puesto no se asume admin; se sale.
+          const rol = perfil.rol ?? null
+          if (!rol && !perfil.puesto_organizacional) { router.push('/dashboard'); return }
           setRolUsuario(rol)
+          setPuestoUsuario(perfil.puesto_organizacional ?? null)
           setUsuarioId(perfil.id)
           void initTelemetry(perfil.id, rol as any)
           track('legajo_abierto', {
@@ -393,13 +398,16 @@ export default function LegajoPage() {
 
   const { empleado, turno_actual, registro_actual, proximo_turno, novedad_vigente } = datos
   const asistencia = estadoAsistencia(turno_actual, registro_actual)
-  const esAdmin = rolUsuario === 'admin'
+  // Alcance canónico por puesto (con fallback por rol viejo). 'todas' = ve todo;
+  // 'zonas_asignadas' = sólo sus zonas; 'propio' = no es superficie de supervisión.
+  const alcanceUsuario = alcanceDe({ rol: rolUsuario, puesto_organizacional: puestoUsuario })
+  const esAdmin = alcanceUsuario === 'todas'
   // Supervisión también usa el Cumplimiento —es un usuario interno del puntaje—
   // pero sólo ve a los empleados de sus zonas. El recorte no se decide acá: lo
   // aplica cargarFilasBandeja con el mismo objetivoEnAlcance que usa toda la app,
   // así que no hay una segunda regla de autorización que pueda contradecir a la
   // primera. Un supervisor sin zonas no ve a nadie.
-  const esSupervision = esAdmin || rolUsuario === 'supervisor'
+  const esSupervision = alcanceUsuario !== 'propio'
 
   // ── Render: encabezado ────────────────────────────────────────────────────
   return (
