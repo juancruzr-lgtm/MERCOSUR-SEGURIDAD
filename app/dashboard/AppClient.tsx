@@ -77,6 +77,7 @@ import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
+import NovedadesPersonalPanel from '@/components/novedades/NovedadesPersonalPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
@@ -13589,6 +13590,9 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
       { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
       { id:'novedades', icon:'📋', label:'Novedades' },
+      // Novedades del Personal: gestión de novedades laborales por rango/cantidad.
+      // Gateado por capacidad gestionar_personal (Administración/Gerencia).
+      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'novedades_personal', icon:'🧑‍💼', label:'Novedades del Personal' }] : []),
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
@@ -13719,6 +13723,7 @@ const esGuardia = esRolGuardia(user.rol)
               )}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
+              {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
               {page === 'observacion' && <ObservacionSistema onNavigate={navegarConFiltro} />}
