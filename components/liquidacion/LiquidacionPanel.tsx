@@ -55,6 +55,8 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // Comparación con período anterior + novedades del mes (LIQ1C)
   const [comparacion, setComparacion] = useState<any[] | null>(null)
   const [novedadesMes, setNovedadesMes] = useState<any[]>([])
+  // LIQ2A: generación del Excel de trabajo
+  const [genExcel, setGenExcel] = useState(false)
   // Permanentes
   const [permanentes, setPermanentes] = useState<Permanente[]>([])
   const [pForm, setPForm] = useState({ empleado_id: '', concepto_id: '', importe: '', cantidad: '', vigencia_desde: new Date().toISOString().slice(0, 10), vigencia_hasta: '', motivo: '' })
@@ -93,6 +95,27 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     const { data, error } = await supabase.rpc('comparar_liquidacion_anterior', { p_periodo_id: sel.id })
     if (error) { setMsg({ ok: false, t: 'No se pudo comparar: ' + error.message }); return }
     setComparacion((data as any[]) ?? [])
+  }
+
+  // LIQ2A: MERCOSUR genera el Excel de trabajo del mes del período (mismo
+  // archivo que #170, con identidad oculta para el reimport). Juan lo edita y
+  // lo vuelve a subir (LIQ2B). No depende del mes cargado en Reportes.
+  async function descargarExcelTrabajo() {
+    if (!sel) return
+    setGenExcel(true); setMsg(null)
+    try {
+      const { generarExcelTrabajoLiquidacion } = await import('@/lib/excel-trabajo-liquidacion')
+      const r = await generarExcelTrabajoLiquidacion(supabase, sel.mes)
+      if (r.error || !r.buf) { setMsg({ ok: false, t: 'No se pudo generar el Excel de trabajo: ' + (r.error || 'sin datos') }); return }
+      const blob = new Blob([r.buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `liquidacion_trabajo_${sel.mes}.xlsx`
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+      setMsg({ ok: true, t: `Excel de trabajo generado (${r.filas} empleados). Editalo y volvé a subirlo para ver las diferencias.` })
+    } catch (e: any) {
+      setMsg({ ok: false, t: 'No se pudo generar el Excel de trabajo: ' + (e?.message || e) })
+    } finally { setGenExcel(false) }
   }
 
   async function crearPeriodo() {
@@ -191,9 +214,29 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   ))}</tbody>
                 </table>
               )}
+              {/* LIQ2A · PASO 1: MERCOSUR genera el Excel de trabajo del mes. */}
               {(sel.estado === 'borrador' || sel.estado === 'revision') && (
-                <ImportarLiquidacion periodo={sel} empleados={activos as any} catalogo={catalogo as any}
-                  onDone={() => { void abrirPeriodo(sel); void cargarCatalogo() }} />
+                <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button style={{ ...S.btn, opacity: genExcel ? 0.6 : 1 }} disabled={genExcel} onClick={() => void descargarExcelTrabajo()}>
+                    {genExcel ? 'Generando…' : 'Descargar Excel de trabajo'}
+                  </button>
+                  <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
+                    PASO 1 · MERCOSUR arma el Excel del mes (padrón, jornadas, novedades, conceptos y fórmulas). Lo editás en Excel y lo volvés a subir para ver las diferencias.
+                  </span>
+                </div>
+              )}
+
+              {/* Importación del RESULTADO de Visual (conciliación) — NO es el
+                  flujo principal de preparación. Queda para traer/contrastar lo
+                  que Visual devolvió. */}
+              {(sel.estado === 'borrador' || sel.estado === 'revision') && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 12, color: '#64748b', margin: '6px 0' }}>
+                    Conciliación (opcional): importar un resultado/planilla de Visual para contrastar. No reemplaza al Excel de trabajo.
+                  </div>
+                  <ImportarLiquidacion periodo={sel} empleados={activos as any} catalogo={catalogo as any}
+                    onDone={() => { void abrirPeriodo(sel); void cargarCatalogo() }} />
+                </div>
               )}
 
               {/* Novedades laborales del mes: control de alimentación (referencia). */}
