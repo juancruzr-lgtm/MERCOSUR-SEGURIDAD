@@ -65,13 +65,22 @@ export type Capacidad =
 
 export type AlcanceOperativo = 'propio' | 'zonas_asignadas' | 'todas'
 
-// Conjuntos reutilizables.
+// ── Clasificación EXPLÍCITA por rama (ROLES 4, aclaración de JC 08/09) ────────
+// Regla: capacidades explícitas, SIN herencia por jerarquía. Estar arriba de
+// alguien NO concede sus permisos. Administración PUEDE intervenir sobre objetos
+// operativos (asimetría deliberada); Operaciones NO hereda lo administrativo;
+// Dirección Operativa tiene alcance operativo global pero NO capacidades
+// administrativas/económicas.
+
+// OPERACIÓN — ver/supervisar/ejecutar la operación (rama Operaciones).
+// `revisar_planillas` y `gestionar_turnos` también las tiene Administración
+// (intervención administrativa sobre la operación): capacidad compartida, no herencia.
 const OPERACION_SUPERVISOR: Capacidad[] = [
   'ver_operacion', 'supervisar_zona', 'revisar_planillas', 'revisar_operativa', 'ver_desempeno',
 ]
-const OPERACION_GESTION: Capacidad[] = [
-  'gestionar_turnos', 'gestionar_personal', 'gestionar_objetivos',
-]
+// ADMINISTRATIVO — gestión administrativa de objetos operativos (rama Administración).
+const ADMINISTRATIVO: Capacidad[] = ['gestionar_personal', 'gestionar_objetivos']
+// GERENCIAL/ECONÓMICO — sensible; SOLO gerencia (incl. gestión de usuarios/roles).
 const GERENCIAL_ECONOMICO: Capacidad[] = [
   'ver_dashboard_gerencial', 'ver_liquidacion', 'editar_liquidacion',
   'exportar_visual', 'exportar_banco', 'ver_finanzas', 'gestionar_facturacion',
@@ -79,20 +88,25 @@ const GERENCIAL_ECONOMICO: Capacidad[] = [
 ]
 
 /**
- * Mapa CANÓNICO puesto → capacidades. Borrador inicial de ROLES 1; el set fino
- * por módulo se termina de validar en ROLES 3/4. Reglas fijas ya decididas:
- *  · direccion_operativa: operación global + gestión + desempeño, SIN económico.
- *  · administracion: rama administrativa/operativa, SIN gerencial/económico.
- *  · gerencia: única con lo económico/sensible.
+ * Mapa CANÓNICO puesto → capacidades (explícito, sin herencia por jerarquía).
+ *  · supervisor/jefe: OPERACIÓN + programación de turnos de SU alcance (zona/todas
+ *    lo acota `alcanceDe`; la capacidad dice QUÉ, el alcance dice DÓNDE).
+ *  · direccion_operativa: OPERACIÓN con alcance global; dirige supervisión.
+ *    NO administrativo (gestionar_personal/objetivos) ni económico.
+ *  · administracion: rama administrativa; interviene sobre la operación
+ *    (personal, objetivos, turnos, planillas) pero NO supervisa zonas ni tiene económico.
+ *  · gerencia: transversal + económico/sensible.
+ * configurar_sistema (obs/IA/técnico): provisional en dir_op+administracion+gerencia
+ *   para preservar el acceso actual; pendiente de confirmar si debe angostarse.
  */
 const CAPACIDADES_POR_PUESTO: Record<PuestoOrganizacional, Capacidad[]> = {
   vigilador: [], // sólo su propia operación (se resuelve por alcance 'propio')
-  supervisor: [...OPERACION_SUPERVISOR],
-  jefe_supervisores: [...OPERACION_SUPERVISOR, 'supervisar_todas_zonas'],
-  direccion_operativa: [...OPERACION_SUPERVISOR, ...OPERACION_GESTION, 'supervisar_todas_zonas', 'configurar_sistema'],
-  administracion: ['ver_operacion', ...OPERACION_GESTION, 'revisar_planillas', 'revisar_operativa', 'configurar_sistema'],
+  supervisor: [...OPERACION_SUPERVISOR, 'gestionar_turnos'],
+  jefe_supervisores: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'supervisar_todas_zonas'],
+  direccion_operativa: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'supervisar_todas_zonas', 'configurar_sistema'],
+  administracion: ['ver_operacion', 'revisar_operativa', 'revisar_planillas', 'gestionar_turnos', ...ADMINISTRATIVO, 'configurar_sistema'],
   gerencia: [
-    'ver_operacion', ...OPERACION_SUPERVISOR, ...OPERACION_GESTION, 'supervisar_todas_zonas',
+    'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO, 'supervisar_todas_zonas',
     'configurar_sistema', ...GERENCIAL_ECONOMICO,
   ],
 }
@@ -115,13 +129,14 @@ const ALCANCE_POR_PUESTO: Record<PuestoOrganizacional, AlcanceOperativo> = {
 function capacidadesLegadasPorRol(rol?: string | null): Capacidad[] {
   const r = String(rol ?? '').trim().toLowerCase()
   if (r === 'admin') {
-    // Hoy un admin ve/hace todo. Se conserva idéntico durante la transición.
+    // Hoy un admin ve/hace todo. Se conserva idéntico durante la transición
+    // (sólo aplica a cuentas sin puesto seteado, p.ej. es_prueba).
     return [
-      'ver_operacion', ...OPERACION_SUPERVISOR, ...OPERACION_GESTION, 'supervisar_todas_zonas',
-      'configurar_sistema', ...GERENCIAL_ECONOMICO,
+      'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO,
+      'supervisar_todas_zonas', 'configurar_sistema', ...GERENCIAL_ECONOMICO,
     ]
   }
-  if (r === 'supervisor') return [...OPERACION_SUPERVISOR]
+  if (r === 'supervisor') return [...OPERACION_SUPERVISOR, 'gestionar_turnos']
   return [] // guardia / vigilador
 }
 

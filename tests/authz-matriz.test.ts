@@ -52,24 +52,46 @@ describe('capacidades — DEBE / NO DEBE por puesto', () => {
     expect(tieneCapacidad(P.administracion, 'ver_dashboard_gerencial')).toBe(false)
     expect(tieneCapacidad(P.administracion, 'gestionar_turnos')).toBe(true)
   })
-  it('direccion_operativa DEBE gestión operativa, NO DEBE económico', () => {
-    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_turnos')).toBe(true)
+  it('direccion_operativa: OPERACIÓN global; NO administrativas (sin herencia) ni económico', () => {
+    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_turnos')).toBe(true)   // operativo
     expect(tieneCapacidad(P.direccion_operativa, 'supervisar_todas_zonas')).toBe(true)
+    // NO hereda administrativas de Administración:
+    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_personal')).toBe(false)
+    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_objetivos')).toBe(false)
+    // NO económico ni gestión de usuarios/roles:
     expect(tieneCapacidad(P.direccion_operativa, 'ver_liquidacion')).toBe(false)
     expect(tieneCapacidad(P.direccion_operativa, 'ver_finanzas')).toBe(false)
+    expect(tieneCapacidad(P.direccion_operativa, 'gestionar_usuarios_roles')).toBe(false)
   })
-  it('supervisor DEBE supervisar su zona, NO DEBE gestionar turnos ni gerencial', () => {
+  it('administracion: administrativas sobre la operación; NO supervisa zonas ni económico', () => {
+    expect(tieneCapacidad(P.administracion, 'gestionar_personal')).toBe(true)
+    expect(tieneCapacidad(P.administracion, 'gestionar_objetivos')).toBe(true)
+    expect(tieneCapacidad(P.administracion, 'gestionar_turnos')).toBe(true)
+    expect(tieneCapacidad(P.administracion, 'supervisar_zona')).toBe(false)
+    expect(tieneCapacidad(P.administracion, 'gestionar_usuarios_roles')).toBe(false)
+  })
+  it('gestionar_usuarios_roles y económico: SOLO gerencia', () => {
+    for (const k of ['supervisor','sergio','jefe','direccion_operativa','administracion','vigilador'] as const) {
+      expect(tieneCapacidad((P as any)[k], 'gestionar_usuarios_roles')).toBe(false)
+      expect(tieneCapacidad((P as any)[k], 'ver_finanzas')).toBe(false)
+    }
+    expect(tieneCapacidad(P.gerencia, 'gestionar_usuarios_roles')).toBe(true)
+    expect(tieneCapacidad(P.gerencia, 'ver_finanzas')).toBe(true)
+  })
+  it('supervisor DEBE supervisar y gestionar turnos de su zona; NO gerencial', () => {
     expect(tieneCapacidad(P.supervisor, 'supervisar_zona')).toBe(true)
     expect(tieneCapacidad(P.supervisor, 'revisar_planillas')).toBe(true)
-    expect(tieneCapacidad(P.supervisor, 'gestionar_turnos')).toBe(false)
+    expect(tieneCapacidad(P.supervisor, 'gestionar_turnos')).toBe(true)   // gestiona turnos de su zona
     expect(tieneCapacidad(P.supervisor, 'supervisar_todas_zonas')).toBe(false)
     expect(tieneCapacidad(P.supervisor, 'ver_dashboard_gerencial')).toBe(false)
+    expect(tieneCapacidad(P.supervisor, 'gestionar_personal')).toBe(false)  // administrativa, no la tiene
   })
-  it('Sergio tiene EXACTAMENTE las capacidades de supervisor (no de admin)', () => {
+  it('Sergio tiene las capacidades de supervisor (no las gerenciales), aunque legacy rol=admin', () => {
     expect(tieneCapacidad(P.sergio, 'supervisar_zona')).toBe(true)
-    expect(tieneCapacidad(P.sergio, 'gestionar_turnos')).toBe(false)
+    expect(tieneCapacidad(P.sergio, 'gestionar_turnos')).toBe(true)   // opera su zona
     expect(tieneCapacidad(P.sergio, 'ver_liquidacion')).toBe(false)
     expect(tieneCapacidad(P.sergio, 'configurar_sistema')).toBe(false)
+    expect(tieneCapacidad(P.sergio, 'gestionar_usuarios_roles')).toBe(false)
   })
   it('jefe_supervisores DEBE todas las zonas, NO DEBE económico', () => {
     expect(tieneCapacidad(P.jefe, 'supervisar_todas_zonas')).toBe(true)

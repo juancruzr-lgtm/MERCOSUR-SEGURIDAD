@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
-import { alcanceDe } from '@/lib/capacidades'
+import { alcanceDe, tieneCapacidad, type Capacidad } from '@/lib/capacidades'
 
 export type UsuarioIA = { id: string, rol: string, estado: string, puesto_organizacional: string | null }
 
@@ -17,7 +17,7 @@ export type ContextoIA =
   | { ok: true, client: SupabaseClient, usuario: UsuarioIA }
   | { ok: false, respuesta: NextResponse }
 
-async function resolverContexto(req: NextRequest, rolesPermitidos: string[]): Promise<ContextoIA> {
+async function resolverContexto(req: NextRequest, capacidad: Capacidad): Promise<ContextoIA> {
   const admin = getSupabaseAdmin()
   if (admin.error) {
     return { ok: false, respuesta: NextResponse.json({ error: admin.error }, { status: 500 }) }
@@ -42,21 +42,21 @@ async function resolverContexto(req: NextRequest, rolesPermitidos: string[]): Pr
   if (usuarioError) {
     return { ok: false, respuesta: NextResponse.json({ error: 'No se pudo resolver el usuario' }, { status: 500 }) }
   }
-  if (!usuario || usuario.estado !== 'activo' || !rolesPermitidos.includes(usuario.rol ?? '')) {
+  if (!usuario || usuario.estado !== 'activo' || !tieneCapacidad(usuario, capacidad)) {
     return { ok: false, respuesta: NextResponse.json({ error: 'No autorizado' }, { status: 403 }) }
   }
 
   return { ok: true, client: admin.client, usuario: usuario as UsuarioIA }
 }
 
-/** Sólo administración. Toda escritura de referencias pasa por acá. */
+/** Configuración/escritura de referencias IA: capacidad `configurar_sistema`. */
 export function requireAdminIA(req: NextRequest): Promise<ContextoIA> {
-  return resolverContexto(req, ['admin'])
+  return resolverContexto(req, 'configurar_sistema')
 }
 
-/** Administración o supervisor. Lectura y firma de URLs. */
+/** Lectura/firma de URLs de IA: capacidad operativa `ver_operacion`. */
 export function requireOperadorIA(req: NextRequest): Promise<ContextoIA> {
-  return resolverContexto(req, ['admin', 'supervisor'])
+  return resolverContexto(req, 'ver_operacion')
 }
 
 /**

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabaseAdmin, requireRole } from '../_lib/employee-auth'
+import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
+import { tieneCapacidad } from '@/lib/capacidades'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -27,7 +28,10 @@ const ESTADOS_VALIDOS = ['activo', 'inactivo']
 
 type PayloadUsuario = Record<string, string | boolean | null>
 
-function armarPayload(body: any, { esAlta }: { esAlta: boolean }): { payload?: PayloadUsuario, error?: string } {
+function armarPayload(
+  body: any,
+  { esAlta, puedeRol, puedeEconomico }: { esAlta: boolean; puedeRol: boolean; puedeEconomico: boolean },
+): { payload?: PayloadUsuario, error?: string } {
   const payload: PayloadUsuario = {}
 
   for (const campo of ['nombre', 'apellido', 'legajo'] as const) {
@@ -41,6 +45,10 @@ function armarPayload(body: any, { esAlta }: { esAlta: boolean }): { payload?: P
   }
 
   for (const campo of CAMPOS_TEXTO_OPCIONAL) {
+    // cuenta_bancaria es ECONÓMICO (columna CUENTA del export de sueldos): sólo
+    // lo escribe quien tiene capacidad económica (gerencia). Administración
+    // gestiona el resto del personal, no lo bancario/salarial (ROLES 4).
+    if (campo === 'cuenta_bancaria' && !puedeEconomico) continue
     if (body[campo] !== undefined) {
       const valor = String(body[campo] ?? '').trim()
       payload[campo] = valor || null
@@ -48,7 +56,9 @@ function armarPayload(body: any, { esAlta }: { esAlta: boolean }): { payload?: P
   }
   if (typeof payload.email === 'string') payload.email = payload.email.toLowerCase()
 
-  if (body.rol !== undefined) {
+  // Asignar/cambiar rol es sensible (gestión de usuarios/roles = gerencia): sin
+  // esa capacidad el campo se ignora (no se escala rol desde Administración).
+  if (body.rol !== undefined && puedeRol) {
     if (!ROLES_VALIDOS.includes(body.rol)) return { error: 'Rol inválido' }
     payload.rol = body.rol
   }
@@ -68,12 +78,18 @@ export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const adminError = await requireRole(req, admin.client, ['admin'], 'Sesion de administrador requerida')
-  if (adminError) return adminError
+  const acceso = await resolverPerfil(req, admin.client)
+  if ('respuesta' in acceso) return acceso.respuesta
+  const { perfil } = acceso
+  if (!tieneCapacidad(perfil, 'gestionar_personal')) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+  }
+  const puedeRol = tieneCapacidad(perfil, 'gestionar_usuarios_roles')
+  const puedeEconomico = tieneCapacidad(perfil, 'ver_finanzas')
 
   try {
     const body = await req.json()
-    const { payload, error } = armarPayload(body, { esAlta: true })
+    const { payload, error } = armarPayload(body, { esAlta: true, puedeRol, puedeEconomico })
     if (error || !payload) return NextResponse.json({ error: error ?? 'Datos inválidos' }, { status: 400 })
 
     const { data, error: dbError } = await admin.client
@@ -94,15 +110,21 @@ export async function PATCH(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const adminError = await requireRole(req, admin.client, ['admin'], 'Sesion de administrador requerida')
-  if (adminError) return adminError
+  const acceso = await resolverPerfil(req, admin.client)
+  if ('respuesta' in acceso) return acceso.respuesta
+  const { perfil } = acceso
+  if (!tieneCapacidad(perfil, 'gestionar_personal')) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+  }
+  const puedeRol = tieneCapacidad(perfil, 'gestionar_usuarios_roles')
+  const puedeEconomico = tieneCapacidad(perfil, 'ver_finanzas')
 
   try {
     const body = await req.json()
     const usuarioId = body?.usuario_id
     if (!usuarioId) return NextResponse.json({ error: 'usuario_id es obligatorio' }, { status: 400 })
 
-    const { payload, error } = armarPayload(body, { esAlta: false })
+    const { payload, error } = armarPayload(body, { esAlta: false, puedeRol, puedeEconomico })
     if (error || !payload) return NextResponse.json({ error: error ?? 'Datos inválidos' }, { status: 400 })
     if (Object.keys(payload).length === 0) {
       return NextResponse.json({ error: 'Sin campos para actualizar' }, { status: 400 })
