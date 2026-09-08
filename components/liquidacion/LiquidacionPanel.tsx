@@ -64,8 +64,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // LIQ2C: consolidación
   const [consolidando, setConsolidando] = useState(false)
   const [consolidadaN, setConsolidadaN] = useState(0)
-  // LIQ2D: export a Visual
+  // LIQ2D/F: export a Visual + validación pre-export
   const [genVisual, setGenVisual] = useState(false)
+  const [validacion, setValidacion] = useState<any>(null)
   // Permanentes
   const [permanentes, setPermanentes] = useState<Permanente[]>([])
   const [pForm, setPForm] = useState({ empleado_id: '', concepto_id: '', importe: '', cantidad: '', vigencia_desde: new Date().toISOString().slice(0, 10), vigencia_hasta: '', motivo: '' })
@@ -164,38 +165,32 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     } finally { setConsolidando(false) }
   }
 
-  // LIQ2D: genera el .xls de importación a Visual desde el consolidado + config
-  // por concepto, lo descarga y marca el período EXPORTADA. No recalcula.
+  // LIQ2F: genera el .xls Visual COMPLETO (haberes + 000 días + estructurales 0/0
+  // + individuales) desde el padrón del período, con validación pre-export. Los
+  // críticos bloquean; las advertencias quedan visibles. Visual calcula las
+  // fórmulas con "Recalc. Todos".
   async function generarVisual() {
     if (!sel) return
-    setGenVisual(true); setMsg(null)
+    setGenVisual(true); setMsg(null); setValidacion(null)
     try {
-      const [{ data: cons, error: e1 }, { data: cfg, error: e2 }] = await Promise.all([
-        supabase.from('liquidacion_consolidada').select('empleado_id, legajo_visual, cuil, nombre, codigo, cantidad, importe').eq('periodo_id', sel.id),
-        supabase.from('liquidacion_concepto_catalogo').select('codigo_visual, exporta_visual, manda_cantidad, manda_importe'),
-      ])
-      if (e1 || e2) { setMsg({ ok: false, t: 'No se pudo leer el consolidado: ' + ((e1 || e2) as any).message }); return }
-      if (!cons || cons.length === 0) { setMsg({ ok: false, t: 'No hay filas consolidadas. Consolidá primero.' }); return }
-      const configPorCodigo = new Map<string, any>()
-      for (const c of (cfg ?? []) as any[]) if (c.codigo_visual) configPorCodigo.set(String(c.codigo_visual), { exporta_visual: c.exporta_visual, manda_cantidad: c.manda_cantidad, manda_importe: c.manda_importe })
-      const { filasVisual, escribirLibroVisualXls } = await import('@/lib/visual-export')
-      const filas = filasVisual(cons as any, configPorCodigo)
-      if (filas.length === 0) { setMsg({ ok: false, t: 'La configuración de conceptos dejó 0 filas para exportar.' }); return }
-      const bytes = await escribirLibroVisualXls(filas)
-      const blob = new Blob([bytes as BlobPart], { type: 'application/vnd.ms-excel' })
+      const { generarVisualCompleto } = await import('@/lib/visual-generar')
+      const r = await generarVisualCompleto(supabase, { id: sel.id, mes: sel.mes })
+      if (r.resultado) setValidacion(r.resultado)
+      if (r.error || !r.bytes) { setMsg({ ok: false, t: 'No se pudo generar: ' + (r.error || 'sin datos') }); return }
+      const blob = new Blob([r.bytes as BlobPart], { type: 'application/vnd.ms-excel' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url; a.download = `visual_importacion_${sel.mes}.xls`
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
-      // Sólo la PRIMERA exportación (desde consolidada) marca el estado; una
-      // regeneración posterior sólo vuelve a bajar el archivo.
+      const nFilas = r.resultado?.lineas.length ?? 0
+      const nAdv = r.resultado?.advertencias.length ?? 0
       if (sel.estado === 'consolidada') {
         const { error } = await supabase.rpc('marcar_exportada_visual', { p_periodo_id: sel.id })
-        if (error) { setMsg({ ok: false, t: `Archivo generado (${filas.length} filas), pero no se pudo marcar exportado: ${error.message}` }); return }
-        setMsg({ ok: true, t: `Archivo Visual generado (${filas.length} filas) y período marcado EXPORTADA. Importalo en Visual Sueldos para calcular los recibos.` })
+        if (error) { setMsg({ ok: false, t: `Archivo generado (${nFilas} líneas), pero no se pudo marcar exportado: ${error.message}` }); return }
+        setMsg({ ok: true, t: `Archivo Visual generado (${nFilas} líneas${nAdv ? `, ${nAdv} advertencia(s)` : ''}) y período EXPORTADA. Importalo y corré "Recalc. Todos" en Visual.` })
         await cargarPeriodos(); const upd = { ...sel, estado: 'exportada' }; setSel(upd); void abrirPeriodo(upd)
       } else {
-        setMsg({ ok: true, t: `Archivo Visual regenerado (${filas.length} filas).` })
+        setMsg({ ok: true, t: `Archivo Visual regenerado (${nFilas} líneas${nAdv ? `, ${nAdv} advertencia(s)` : ''}).` })
       }
     } catch (e: any) {
       setMsg({ ok: false, t: 'No se pudo generar el archivo Visual: ' + (e?.message || e) })
@@ -382,6 +377,39 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     </span>
                   </div>
                 ) : null}
+
+                {/* LIQ2F: validación pre-export. Críticos bloquean; advertencias visibles. */}
+                {validacion && (
+                  <div style={{ marginTop: 12, fontSize: 12 }}>
+                    {(() => { const p = validacion.padron || []
+                      const exporta = p.filter((x: any) => x.estado === 'exporta').length
+                      const noCorr = p.filter((x: any) => x.estado === 'no_corresponde').length
+                      const falta = p.filter((x: any) => x.estado === 'falta_info').length
+                      return <div style={{ color: '#94a3b8', marginBottom: 6 }}>Padrón: <b style={{ color: '#4ade80' }}>{exporta} exportan</b> · {noCorr} no corresponde · <b style={{ color: falta ? '#f87171' : '#64748b' }}>{falta} bloqueados</b></div>
+                    })()}
+                    {validacion.criticos?.length > 0 && (
+                      <div style={{ padding: 8, background: '#2a0f0f', border: '1px solid #7f1d1d', borderRadius: 6, marginBottom: 6 }}>
+                        <b style={{ color: '#f87171' }}>Errores críticos ({validacion.criticos.length}) — impiden exportar:</b>
+                        {validacion.criticos.slice(0, 12).map((c: any, i: number) => <div key={i} style={{ color: '#fca5a5' }}>• {c.detalle}</div>)}
+                        {validacion.criticos.length > 12 && <div style={{ color: '#64748b' }}>… y {validacion.criticos.length - 12} más</div>}
+                      </div>
+                    )}
+                    {validacion.bloqueados?.length > 0 && (
+                      <div style={{ padding: 8, background: '#1a1206', border: '1px solid #7c5510', borderRadius: 6, marginBottom: 6 }}>
+                        <b style={{ color: '#fbbf24' }}>No exportados ({validacion.bloqueados.length}) — falta identidad (no están en Visual):</b>
+                        {validacion.bloqueados.slice(0, 10).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}
+                        {validacion.bloqueados.length > 10 && <div style={{ color: '#64748b' }}>… y {validacion.bloqueados.length - 10} más</div>}
+                      </div>
+                    )}
+                    {validacion.advertencias?.length > 0 && (
+                      <div style={{ padding: 8, background: '#0f1a2e', border: '1px solid #1e3a5f', borderRadius: 6 }}>
+                        <b style={{ color: '#60a5fa' }}>Advertencias ({validacion.advertencias.length}):</b>
+                        {validacion.advertencias.slice(0, 8).map((c: any, i: number) => <div key={i} style={{ color: '#93c5fd' }}>• {c.detalle}</div>)}
+                        {validacion.advertencias.length > 8 && <div style={{ color: '#64748b' }}>… y {validacion.advertencias.length - 8} más</div>}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
