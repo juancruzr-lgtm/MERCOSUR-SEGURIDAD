@@ -78,6 +78,7 @@ import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import NovedadesPersonalPanel from '@/components/novedades/NovedadesPersonalPanel'
+import LiquidacionPanel from '@/components/liquidacion/LiquidacionPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
@@ -13597,6 +13598,11 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
     ]},
+    // GESTIÓN ECONÓMICA: sólo Gerencia (capacidad económica). Administración y
+    // Dirección Operativa NO acceden. Liquidación + (futuro) Facturación/Pagos/Finanzas.
+    ...(tieneCapacidad(user, 'ver_liquidacion') ? [{ section:'GESTIÓN ECONÓMICA', items:[
+      { id:'liquidacion', icon:'💵', label:'Liquidación' },
+    ]}] : []),
     { section:'CONFIGURACIÓN', items:[
       { id:'servicios_objetivo', icon:'📅', label:'Programación' },
       { id:'checklists', icon:'☑️', label:'Checklists' },
@@ -13724,6 +13730,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
+              {page === 'liquidacion' && tieneCapacidad(user, 'ver_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && <TurnosBase />}
               {page === 'observacion' && <ObservacionSistema onNavigate={navegarConFiltro} />}
