@@ -8028,16 +8028,19 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     // parámetros + fórmulas por fila, la app solo rellena las celdas de
     // entrada. Sin autofiltro ni paneles fijos: la hoja replica el ejemplo.
     const plantilla = plantillaLiquidacionResumenGuardia(resumen)
-    const XLSXmod = await import('xlsx')
-    const ws: Record<string, any> = { '!ref': plantilla.ref }
-    for (const c of plantilla.celdas) {
-      const cell: any = typeof c.v === 'number' ? { t: 'n', v: c.v } : { t: 's', v: c.v ?? '' }
-      if (c.f) cell.f = c.f
-      ws[c.ref] = cell
-    }
-    const wb = XLSXmod.utils.book_new()
-    XLSXmod.utils.book_append_sheet(wb, ws as any, plantilla.nombreHoja)
-    XLSXmod.writeFile(wb, `resumen_guardia_${mesArchivo()}.xlsx`)
+    // Escritor con formato (bordes/moneda/anchos/identidad oculta) en lib
+    // aparte: la comunidad de SheetJS no escribe estilos, así que usa exceljs.
+    const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
+    const buf = await escribirPlantillaLiquidacionXLSX(plantilla)
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `resumen_guardia_${mesArchivo()}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
   }
 
   const exportarResumenObjetivosXLSX = async () => {

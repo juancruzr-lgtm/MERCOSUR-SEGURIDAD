@@ -687,10 +687,11 @@ describe('plantillaLiquidacionResumenGuardia', () => {
 
   it('geometría de bloques: título, datos, subtotal por bloque y TOTAL GENERAL al final', () => {
     const p = plantillaLiquidacionResumenGuardia(dosVigiladores())
-    expect(p.nombreHoja).toBe('Hoja1')
+    expect(p.nombreHoja).toBe('Liquidación')
     // 7 título B1 · 8-9 datos · 10 subtotal · 11 sep · 12 título B2 ·
     // 13 subtotal · 14 sep · 15 título B3 · 16 subtotal · 17 sep · 18 total
-    expect(p.ref).toBe('A1:BC18')
+    // BD/BE = columnas técnicas ocultas (usuario_id, período)
+    expect(p.ref).toBe('A1:BE18')
     const m = mapa(p)
     expect(m.get('A7')?.v).toBe('BLOQUE 1 - VIGILADORES')
     expect(m.get('A10')?.v).toBe('SUBTOTAL VIGILADORES')
@@ -764,19 +765,23 @@ describe('plantillaLiquidacionResumenGuardia', () => {
 
   it('fórmulas por fila idénticas a la plantilla, con la fila ajustada', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
+    // Parámetros con $ absoluto (arrastrables), fila del empleado relativa.
     expect(m.get('H8')?.f).toBe('MIN(G8,25)')
-    expect(m.get('U8')?.f).toBe('F2')
-    expect(m.get('V8')?.f).toBe('E2')
-    expect(m.get('U9')?.f).toBe('U8') // las siguientes arrastran la de arriba
-    expect(m.get('Y8')?.f).toBe('U8/8')
-    expect(m.get('AC9')?.f).toBe('AA9*H9')
+    expect(m.get('AC9')?.f).toBe('($E$3/25)*H9')       // viáticos: $E$3 fijo, H9 relativo
+    expect(m.get('AD8')?.f).toBe('($E$2/25)*H8')
+    expect(m.get('AE8')?.f).toBe('($E$4/25)*H8')
     expect(m.get('AG8')?.f).toBe('IF(I8<=150,H8*8,150)')
-    expect(m.get('AI8')?.f).toBe('AH8*Y8')
+    expect(m.get('AI8')?.f).toBe('AH8*$F$1')            // adicional = AH × hora ($F$1)
+    expect(m.get('AJ8')?.f).toBe('AG8*$F$1')
     expect(m.get('AM8')?.f).toBe('IF(AL8>0,(AL8*100)/I8,0)')
     expect(m.get('AO8')?.f).toBe('AC8+AD8+AE8+AF8+AI8+AJ8+AT8+AU8+AV8+AW8+AX8+AP8')
-    expect(m.get('AP8')?.f).toBe('IF(AL8>0,AL8*2500,0)-AR8')
+    expect(m.get('AP8')?.f).toBe('IF(AL8>0,AL8*$AP$6,0)-AR8') // extra = $AP$6 fijo
     expect(m.get('AS8')?.f).toBe('IF(AO8>0,AO8/I8,0)')
-    expect(m.get('AT8')?.f).toBe('K8*U8')
+    expect(m.get('AT8')?.f).toBe('K8*$F$2')             // feriados × día ($F$2)
+    // Ya no hay columnas de parámetros repetidas por fila (U-AB)
+    expect(m.get('U8')).toBeUndefined()
+    expect(m.get('Y8')).toBeUndefined()
+    expect(m.get('AA9')).toBeUndefined()
   })
 
   it('las columnas de carga manual (AH, AK, AQ, AR) quedan libres en las filas de datos', () => {
@@ -794,7 +799,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
       nocturnidadObjetivo: () => ({ activa: true, desde: '22:00', hasta: '06:00' }),
     }))
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
-    expect(m.get('AF8')?.f).toBe('(Y8/10)*J8')
+    expect(m.get('AF8')?.f).toBe('($F$1/10)*J8')
     // hora/10 × hs nocturnas: 500.65 × 8 — no la variante ×200 del resto del ejemplo
     expect(m.get('AF8')?.v).toBeCloseTo((1020300 / 200 / 10) * 8, 6)
   })
@@ -1036,7 +1041,7 @@ describe('bloques y mensualizados', () => {
     expect(m.get('A19')?.v).toBe('TOTAL GENERAL')
     expect(m.get('I19')?.f).toBe('I9+I13+I17')
     expect(m.get('I19')?.v).toBe(312) // 12 vigilador + 150 supervisor + 150 admin
-    expect(p.ref).toBe('A1:BC19')
+    expect(p.ref).toBe('A1:BE19')
   })
 })
 
@@ -1222,7 +1227,7 @@ describe('base de liquidación de mensualizados', () => {
     const { m, r } = mensualizado('supervisor')
     expect(m.get(`AH${r}`)?.v).toBe(50)            // columna identificada: AH
     expect(m.get(`AI${r}`)?.v).toBe(50 * hora)     // 'adicional' AI = AH*Y
-    expect(m.get(`AI${r}`)?.f).toBe(`AH${r}*Y${r}`) // la fórmula histórica no cambia
+    expect(m.get(`AI${r}`)?.f).toBe(`AH${r}*$F$1`) // adicional = AH × hora ($F$1 absoluto)
   })
 
   it('mensualizado admin (caso MARTINEZ): misma base 25/150/50 aunque el rol sea admin', () => {
@@ -1261,7 +1266,7 @@ describe('base de liquidación de mensualizados', () => {
     const { m, r } = mensualizado('supervisor')
     expect(m.get('AI5')?.v).toBe('adicional')
     expect(m.get('AI6')?.v).toBe('212')
-    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*Y${r}`)  // horas rec: fórmula intacta
+    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$F$1`)  // horas rec × hora ($F$1 absoluto)
     expect(m.get('AX6')?.v).toBe('008')     // último concepto histórico, sin correr
     expect(m.get('AY6')?.v).toBe('SUPERVISIONES') // informativas siguen DESPUÉS de AX
     expect(m.get('BC6')?.v).toBe('HS VIGILANCIA ZONA')
@@ -1302,5 +1307,75 @@ describe('base de liquidación de mensualizados', () => {
     expect(m.get(`AL${r}`)?.v).toBe(10)                        // extras reales intactas
     expect(m.get(`AL${r}`)?.f).toBe(`MAX(0,I${r}-AG${r})`)
     expect(m.get(`AP${r}`)?.v).toBe(10 * PARAMETROS_PLANTILLA.horaExtra) // 25000
+  })
+})
+
+// ── Prolijidad, identidad oculta y metadatos para el escritor (Juan 12/13/16) ─
+// La plantilla ahora expone columnas (ancho/oculto/formato), estilos (filas por
+// categoría) y secciones (bordes), y lleva identidad técnica oculta para el
+// futuro reimport MERCOSUR ↔ Excel. Nada de esto cambia importes ni códigos.
+
+describe('plantilla: prolijidad e identidad', () => {
+  const armar = (res: ReturnType<typeof construirResumenGuardia>) => {
+    const p = plantillaLiquidacionResumenGuardia(res)
+    const m = new Map(p.celdas.map(c => [c.ref, c]))
+    const filaDe = (nombre: string) => {
+      const d = p.celdas.find(c => /^D\d+$/.test(c.ref) && c.v === nombre)
+      return d ? Number(d.ref.slice(1)) : -1
+    }
+    return { p, m, filaDe }
+  }
+
+  it('identidad técnica oculta: usuario_id y período por fila; CUIL visible', () => {
+    const { p, m, filaDe } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'emp-123', nombre: 'C', apellido: 'ACOSTA', rol: 'supervisor', cuil: '20222222222' }],
+    })))
+    const r = filaDe('ACOSTA, C')
+    expect(m.get(`BD${r}`)?.v).toBe('emp-123')  // usuario_id interno
+    expect(m.get(`BE${r}`)?.v).toBe('2026-08')  // período
+    expect(m.get(`B${r}`)?.v).toBe('20222222222') // CUIL visible
+    expect(m.get('BD6')?.v).toBe('usuario_id')
+    expect(m.get('BE6')?.v).toBe('periodo')
+    // BD/BE ocultas; CUIL (B) visible
+    const bd = p.columnas.find(c => c.col === 'BD')
+    const be = p.columnas.find(c => c.col === 'BE')
+    const b = p.columnas.find(c => c.col === 'B')
+    expect(bd?.hidden).toBe(true)
+    expect(be?.hidden).toBe(true)
+    expect(b?.hidden).toBeFalsy()
+  })
+
+  it('columnas: anchos, formatos y ocultamiento de las auxiliares repetitivas (U-AB)', () => {
+    const { p } = armar(construirResumenGuardia(base({
+      empleados: [{ id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia' }],
+    })))
+    const col = (c: string) => p.columnas.find(x => x.col === c)
+    expect(col('AO')?.numFmt).toBe('money')   // total: moneda
+    expect(col('I')?.numFmt).toBe('hours')    // horas liquidables
+    expect(col('G')?.numFmt).toBe('int')      // jornadas
+    expect(col('BC')?.numFmt).toBe('hours')   // hs vigilancia zona
+    // Las columnas de parámetros repetidos del ejemplo viejo quedan ocultas
+    for (const c of ['U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB']) {
+      expect(col(c)?.hidden).toBe(true)
+    }
+    expect(typeof col('D')?.width).toBe('number')
+  })
+
+  it('estilos y secciones expuestos para el escritor (bordes/negritas)', () => {
+    const { p } = armar(construirResumenGuardia(base({
+      empleados: [
+        { id: 'g1', nombre: 'E', apellido: 'ALMADA', rol: 'guardia' },
+        { id: 's1', nombre: 'C', apellido: 'ACOSTA', rol: 'supervisor' },
+      ],
+      turnos: [turno({ id: 't1' })],
+      registros: [registro({ turno_id: 't1', horas_liquidables: 12 })],
+    })))
+    expect(p.estilos.encabezado).toBe(6)
+    expect(p.estilos.titulos.length).toBe(3)       // 3 bloques
+    expect(p.estilos.subtotales.length).toBe(3)
+    expect(p.estilos.total).toBeGreaterThan(0)
+    expect(p.estilos.filasDatos.length).toBe(2)    // 1 vigilador + 1 supervisor
+    expect(p.secciones).toContain('AC')            // arranque de cálculos salariales
+    expect(p.secciones).toContain('AY')            // arranque de supervisión
   })
 })

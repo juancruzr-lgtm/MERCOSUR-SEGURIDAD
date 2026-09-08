@@ -888,11 +888,43 @@ export interface CeldaPlantilla {
   f?: string
 }
 
+/** Formato numérico de una columna (lo aplica el escritor exceljs). */
+export type FmtColumna = 'money' | 'hours' | 'int' | 'pct' | 'text'
+
+export interface ColumnaPlantilla {
+  col: string
+  width: number
+  hidden?: boolean
+  numFmt?: FmtColumna
+}
+
+/**
+ * Metadatos de estilo para el escritor (lib/liquidacion-xlsx): qué filas son
+ * parámetros, etiquetas, encabezado, títulos de bloque, subtotales y total, y
+ * qué filas llevan datos de empleados. El escritor los usa para bordes,
+ * negritas y rellenos sin re-derivar la geometría.
+ */
+export interface EstilosPlantilla {
+  parametros: number[]
+  etiquetas: number
+  encabezado: number
+  titulos: number[]
+  subtotales: number[]
+  total: number
+  filasDatos: number[]
+}
+
 export interface PlantillaLiquidacion {
   nombreHoja: string
-  /** Rango usado de la hoja, p. ej. 'A1:AX73'. */
+  /** Rango usado de la hoja, p. ej. 'A1:BE73'. */
   ref: string
   celdas: CeldaPlantilla[]
+  /** Ancho / oculto / formato por columna. */
+  columnas: ColumnaPlantilla[]
+  /** Filas por categoría, para el escritor. */
+  estilos: EstilosPlantilla
+  /** Columnas donde empieza una sección visual (borde vertical izquierdo). */
+  secciones: string[]
 }
 
 /**
@@ -908,6 +940,50 @@ export const PARAMETROS_PLANTILLA = {
   horaExtra: 2500, // AP6 · valor de la hora excedente
 }
 
+// Especificación de columnas: ancho, formato y visibilidad. Las columnas de
+// parámetros por fila del ejemplo viejo (U-AB) desaparecen: ahora las fórmulas
+// leen los parámetros de arriba con referencias absolutas ($E$2…), así no se
+// repiten valores por fila (pedido de Juan 12/13). Q-AB quedan ocultas (hueco
+// heredado). BD/BE son técnicas ocultas: identidad para el futuro reimport.
+const COLUMNAS_PLANTILLA: ColumnaPlantilla[] = [
+  { col: 'A', width: 12, numFmt: 'text' }, { col: 'B', width: 14, numFmt: 'text' },
+  { col: 'C', width: 18, numFmt: 'text' }, { col: 'D', width: 26, numFmt: 'text' },
+  { col: 'E', width: 24, numFmt: 'text' }, { col: 'F', width: 20, numFmt: 'text' },
+  { col: 'G', width: 9, numFmt: 'int' }, { col: 'H', width: 7, numFmt: 'int' },
+  { col: 'I', width: 12, numFmt: 'hours' }, { col: 'J', width: 12, numFmt: 'hours' },
+  { col: 'K', width: 9, numFmt: 'int' }, { col: 'L', width: 9, numFmt: 'int' },
+  { col: 'M', width: 7, numFmt: 'int' }, { col: 'N', width: 10, numFmt: 'int' },
+  { col: 'O', width: 11, numFmt: 'int' }, { col: 'P', width: 9, numFmt: 'int' },
+  { col: 'Q', width: 3, hidden: true }, { col: 'R', width: 3, hidden: true },
+  { col: 'S', width: 3, hidden: true }, { col: 'T', width: 3, hidden: true },
+  { col: 'U', width: 3, hidden: true }, { col: 'V', width: 3, hidden: true },
+  { col: 'W', width: 3, hidden: true }, { col: 'X', width: 3, hidden: true },
+  { col: 'Y', width: 3, hidden: true }, { col: 'Z', width: 3, hidden: true },
+  { col: 'AA', width: 3, hidden: true }, { col: 'AB', width: 3, hidden: true },
+  { col: 'AC', width: 12, numFmt: 'money' }, { col: 'AD', width: 12, numFmt: 'money' },
+  { col: 'AE', width: 12, numFmt: 'money' }, { col: 'AF', width: 12, numFmt: 'money' },
+  { col: 'AG', width: 9, numFmt: 'hours' }, { col: 'AH', width: 9, numFmt: 'hours' },
+  { col: 'AI', width: 12, numFmt: 'money' }, { col: 'AJ', width: 13, numFmt: 'money' },
+  { col: 'AK', width: 3, hidden: true },
+  { col: 'AL', width: 9, numFmt: 'hours' }, { col: 'AM', width: 8, numFmt: 'pct' },
+  { col: 'AN', width: 8, numFmt: 'hours' }, { col: 'AO', width: 14, numFmt: 'money' },
+  { col: 'AP', width: 12, numFmt: 'money' }, { col: 'AQ', width: 3, hidden: true },
+  { col: 'AR', width: 12, numFmt: 'money' }, { col: 'AS', width: 10, numFmt: 'money' },
+  { col: 'AT', width: 12, numFmt: 'money' }, { col: 'AU', width: 12, numFmt: 'money' },
+  { col: 'AV', width: 12, numFmt: 'money' }, { col: 'AW', width: 12, numFmt: 'money' },
+  { col: 'AX', width: 12, numFmt: 'money' },
+  { col: 'AY', width: 12, numFmt: 'int' }, { col: 'AZ', width: 16, numFmt: 'hours' },
+  { col: 'BA', width: 18, numFmt: 'int' }, { col: 'BB', width: 30, numFmt: 'text' },
+  { col: 'BC', width: 16, numFmt: 'hours' },
+  // Técnicas ocultas: identidad estable para el ida y vuelta (Juan 15/16).
+  { col: 'BD', width: 3, hidden: true, numFmt: 'text' },
+  { col: 'BE', width: 3, hidden: true, numFmt: 'text' },
+]
+
+// Columnas donde empieza una sección visual (borde vertical izquierdo):
+// identidad | operativo | novedades | cálculos salariales | conceptos | supervisión.
+const SECCIONES_PLANTILLA = ['A', 'G', 'L', 'AC', 'AT', 'AY']
+
 export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): PlantillaLiquidacion {
   const P = PARAMETROS_PLANTILLA
   const hora = P.basico / 200
@@ -918,28 +994,29 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
   }
   const num = (v: number | null): number => v ?? 0
 
-  // Bloque de parámetros y etiquetas (filas 1-5), literal del ejemplo.
+  // ── Bloque de PARÁMETROS (filas 1-4): una sola vez arriba ────────────────
+  // Juan edita E1-E4; F1 (hora) y F2 (día de 8 h) se derivan. TODAS las
+  // fórmulas por fila referencian estos con $ absoluto para poder arrastrarse
+  // sin reescribir (pedido de Juan 13): $E$2/$E$3/$E$4, $F$1, $F$2, $AP$6.
   put('A1', 'VisualSueldos - Planilla de importación de datos')
-  put('D1', 'hs'); put('E1', P.basico); put('F1', hora, 'E1/200'); put('U1', 'v')
-  put('A2', 'Legajo'); put('D2', 'presentismo'); put('E2', P.presentismo); put('F2', dia8, 'E1/200*8')
-  put('D3', 'viatico'); put('E3', P.viatico)
-  put('D4', 'no rem'); put('E4', P.noRem)
-  // Fila 5: etiquetas humanas; fila 6: códigos de concepto (versión corregida
-  // del ejemplo, 04/09: Juan separó etiqueta arriba y código abajo).
+  put('D1', 'Básico'); put('E1', P.basico); put('F1', hora, 'E1/200'); put('G1', 'hora = básico/200')
+  put('D2', 'Presentismo'); put('E2', P.presentismo); put('F2', dia8, 'E1/200*8'); put('G2', 'día = hora*8')
+  put('D3', 'Viático'); put('E3', P.viatico)
+  put('D4', 'No rem.'); put('E4', P.noRem)
+
+  // Fila 5: etiquetas humanas de la capa de cálculo. Ya no hay U-AB (params por
+  // fila): las etiquetas repetidas de esos parámetros desaparecen.
   const fila5: [string, string | number][] = [
-    ['U5', 'dia'], ['V5', 'presentismoo'], ['W5', 'viati'], ['X5', 'no remunerativo'],
-    ['Y5', 'Gora'], ['Z5', 'pres por dia'], ['AA5', 'viatico por dia'], ['AB5', 'no rem por dia'],
-    ['AC5', 'viaticos'], ['AD5', 'presentismo por dia'], ['AE5', 'no rem'],
-    ['AF5', 'nocturnidad'], ['AI5', 'adicional'], ['AJ5', 'horas rec'], ['AP5', 'extras'],
+    ['AC5', 'viáticos'], ['AD5', 'presentismo'], ['AE5', 'no rem'],
+    ['AF5', 'nocturnidad'], ['AG5', 'horas rec'], ['AH5', 'adic. (hs)'], ['AI5', 'adicional'],
+    ['AJ5', 'horas rec $'], ['AP5', 'extras'],
     ['AT5', 'feriados'], ['AU5', 'licencia'], ['AV5', 'art'], ['AW5', 'vacaciones'], ['AX5', 'parte med'],
   ]
   for (const [ref, v] of fila5) put(ref, v)
 
-  // Fila 6: encabezados del export de la app (A-P, H sin título: es el tope de
-  // 25 días) + códigos de concepto de la capa de liquidación. Los códigos van
-  // SIEMPRE como texto de 3 dígitos ('006', '010'), nunca como número: son
-  // los códigos de importación al sistema de recibos (pedido de Juan 04/09;
-  // el ejemplo los tenía mezclados: algunos número, algunos texto sin cero).
+  // Fila 6: encabezados del export (A-P) + códigos de concepto de la capa de
+  // liquidación. Los códigos van SIEMPRE como texto de 3 dígitos ('006') — son
+  // los códigos de importación de recibos y NO cambian (semántica de Visual).
   const fila6: [string, string | number][] = [
     ['A6', 'LEGAJO VISUAL'], ['B6', 'CUIL'], ['C6', 'CUENTA'], ['D6', 'NOMBRE'],
     ['E6', 'NOVEDADES'], ['F6', 'OBJETIVO/S'], ['G6', 'JORNADAS'],
@@ -949,42 +1026,30 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     ['AI6', '212'], ['AJ6', '001'], ['AL6', 'hs extras'], ['AM6', '% ex'], ['AN6', 'hs dia'],
     ['AO6', 'total'], ['AP6', P.horaExtra], ['AR6', 'adelantos'], ['AS6', 'po hs'],
     ['AT6', '006'], ['AU6', '888'], ['AV6', '010'], ['AW6', '205'], ['AX6', '008'],
-    // Columnas informativas al FINAL (pedido de Juan 07/09): no se insertan
-    // entre A y AX para no correr fórmulas ni códigos de concepto. Ninguna
-    // fórmula de liquidación las multiplica.
+    // Informativas al FINAL: no se insertan entre A y AX (no corren fórmulas
+    // ni códigos). Ninguna fórmula de liquidación las multiplica.
     ['AY6', 'SUPERVISIONES'], ['AZ6', 'HORAS SUPERVISION'], ['BA6', 'JORNADAS SUPERVISION'],
-    ['BB6', 'OBSERVACION'],
-    // Métrica nueva (pedido de Juan 07/09): volumen operativo bajo supervisión.
-    // Va DESPUÉS de todo lo demás; no corre ninguna columna ni fórmula previa.
-    ['BC6', 'HS VIGILANCIA ZONA'],
+    ['BB6', 'OBSERVACION'], ['BC6', 'HS VIGILANCIA ZONA'],
+    // Técnicas ocultas: identidad para el reimport (no depender de nombre ni fila).
+    ['BD6', 'usuario_id'], ['BE6', 'periodo'],
   ]
   for (const [ref, v] of fila6) put(ref, v)
 
-  // Tres bloques (pedido de Juan 07/09): vigiladores, supervisores,
-  // administrativos — mismas columnas, subtotal por bloque y TOTAL GENERAL al
-  // final, para que el archivo se procese en una sola pasada. Un bloque sin
-  // gente igual aparece, con subtotal 0: su ausencia escondería un error.
   const grupos: { clave: GrupoResumen; titulo: string; subtotal: string }[] = [
     { clave: 'vigiladores', titulo: 'BLOQUE 1 - VIGILADORES', subtotal: 'SUBTOTAL VIGILADORES' },
     { clave: 'supervisores', titulo: 'BLOQUE 2 - SUPERVISORES', subtotal: 'SUBTOTAL SUPERVISORES' },
     { clave: 'administrativos', titulo: 'BLOQUE 3 - ADMINISTRATIVOS', subtotal: 'SUBTOTAL ADMINISTRATIVOS' },
   ]
 
-  const emitirFila = (fila: FilaResumenGuardia, r: number, esPrimeraDeBloque: boolean, acum: (col: string, v: number) => void) => {
+  const emitirFila = (fila: FilaResumenGuardia, r: number, acum: (col: string, v: number) => void) => {
     put(`A${r}`, fila.legajoVisual ?? '')
-    put(`B${r}`, fila.cuil ?? '')
+    put(`B${r}`, fila.cuil ?? '') // CUIL visible: parte de la identidad
     put(`C${r}`, fila.cuenta ?? '') // texto: conserva ceros a la izquierda
     put(`D${r}`, fila.nombre)
     put(`E${r}`, fila.notas.join(' · '))
     put(`F${r}`, fila.objetivos.join('/'))
-    // ── Base de liquidación de MENSUALIZADOS (Juan, 07/09/2026) ───────────
-    // REVOCA la regla anterior (jornadas/horas = 0). Supervisores y
-    // administrativos cobran sueldo fijo: la plantilla necesita valores
-    // CONVENCIONALES para que sus fórmulas salariales operen. NO representan
-    // horas ni jornadas trabajadas — la operación real vive en las columnas
-    // informativas (AZ HORAS SUPERVISION, BC HS VIGILANCIA ZONA) y no se toca
-    // ninguna fuente operativa. La transformación ocurre SOLO acá, en la capa
-    // que arma la plantilla de liquidación (FilaResumenGuardia sigue con 0).
+    // Base de liquidación de MENSUALIZADOS (Juan, 07/09): valores convencionales
+    // para que operen las fórmulas — NO son horas trabajadas. Sólo en esta capa.
     const mensualizado = fila.grupo !== 'vigiladores'
     const G = mensualizado ? 25 : fila.jornadas
     const H = Math.min(G, 25)
@@ -993,10 +1058,7 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     put(`G${r}`, G)
     put(`H${r}`, H, `MIN(G${r},25)`)
     put(`I${r}`, I)
-    // Sin dato (null) → la celda NO se emite: en Excel una celda realmente
-    // vacía vale 0 en las fórmulas (L×U, el total, po hs) y se ve en blanco,
-    // así que se conserva "vacío = sin dato" sin romper el cálculo. Un ""
-    // de texto acá rompía todo con #¡VALOR!.
+    // null → celda sin emitir (vacía real = 0 en fórmulas, sin #¡VALOR!).
     const putNum = (ref: string, v: number | null) => { if (v != null) put(ref, v) }
     putNum(`J${r}`, fila.horasNocturnas)
     put(`K${r}`, fila.feriadosTrabajados)
@@ -1005,42 +1067,22 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     putNum(`N${r}`, fila.vacaciones)
     putNum(`O${r}`, fila.parteMedico)
     putNum(`P${r}`, fila.ausenciasSuspensiones)
-    // Parámetros por fila: la primera de CADA bloque toma F2/E2/E3/E4 y las
-    // demás arrastran la de arriba (la fila anterior a la primera del bloque
-    // es el título, con U-X vacías: copiarla daría 0).
-    if (esPrimeraDeBloque) {
-      put(`U${r}`, dia8, 'F2'); put(`V${r}`, P.presentismo, 'E2')
-      put(`W${r}`, P.viatico, 'E3'); put(`X${r}`, P.noRem, 'E4')
-    } else {
-      put(`U${r}`, dia8, `U${r - 1}`); put(`V${r}`, P.presentismo, `V${r - 1}`)
-      put(`W${r}`, P.viatico, `W${r - 1}`); put(`X${r}`, P.noRem, `X${r - 1}`)
-    }
-    put(`Y${r}`, hora, `U${r}/8`)
-    put(`Z${r}`, P.presentismo / 25, `V${r}/25`)
-    put(`AA${r}`, P.viatico / 25, `W${r}/25`)
-    put(`AB${r}`, P.noRem / 25, `X${r}/25`)
     const AC = (P.viatico / 25) * H
     const AD = (P.presentismo / 25) * H
     const AE = (P.noRem / 25) * H
     const AF = (hora / 10) * J
     const AG = I <= 150 ? H * 8 : 150
-    // AL (hs extras) = horas liquidables por encima de las reconocidas. Nunca
-    // negativo: con la base mensualizada (I=150, H=25 → AG=200) daría −50, un
-    // valor conceptualmente incorrecto en una planilla de sueldos. MAX(0,…) lo
-    // corrige sin tocar el pago: AM y AP ya usaban IF(AL>0,…), así que un AL
-    // negativo nunca pagaba extras — sólo se veía mal. Para vigiladores con
-    // extras reales (I>150 → AG=150 → AL>0) el valor no cambia.
-    // ADICIONAL: columna AH = "hs a valor pleno" (concepto 212), INPUT manual
-    // que alimenta la columna 'adicional' AI = AH*Y. Base mensualizada = 50
-    // (Juan, 07/09). En vigiladores AH sigue vacía (carga manual, como hasta
-    // ahora): 0 acá = celda sin emitir, no un 0 escrito.
+    // ADICIONAL: AH = "hs a valor pleno" (concepto 212), input que alimenta la
+    // columna 'adicional' AI = AH*hora. Base mensualizada = 50; vigilador vacío.
     const AH = mensualizado ? 50 : 0
     const AI = AH * hora
     const AJ = AG * hora
+    // AL (hs extras) nunca negativo: MAX(0, I-AG). No cambia el pago (AM/AP ya
+    // usan IF(AL>0,…)); evita el −50 conceptualmente incorrecto de mensualizados.
     const AL = Math.max(0, I - AG)
     const AM = AL > 0 && I > 0 ? (AL * 100) / I : 0
     const AN = G > 0 ? I / G : 0
-    const AP = AL > 0 ? AL * P.horaExtra : 0 // menos AR (adelantos), vacío acá
+    const AP = AL > 0 ? AL * P.horaExtra : 0 // menos AR (adelantos), manual
     const AT = fila.feriadosTrabajados * dia8
     const AU = num(fila.licencias) * dia8
     const AV = num(fila.art) * dia8
@@ -1048,77 +1090,78 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
     const AX = num(fila.parteMedico) * dia8
     const AO = AC + AD + AE + AF + AI + AJ + AT + AU + AV + AW + AX + AP
     const AS = AO > 0 && I > 0 ? AO / I : 0
-    put(`AC${r}`, AC, `AA${r}*H${r}`)
-    put(`AD${r}`, AD, `Z${r}*H${r}`)
-    put(`AE${r}`, AE, `(X${r}/25)*H${r}`)
-    put(`AF${r}`, AF, `(Y${r}/10)*J${r}`)
+    // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias
+    // de la fila del empleado relativas (H8→H9 al arrastrar).
+    put(`AC${r}`, AC, `($E$3/25)*H${r}`)
+    put(`AD${r}`, AD, `($E$2/25)*H${r}`)
+    put(`AE${r}`, AE, `($E$4/25)*H${r}`)
+    put(`AF${r}`, AF, `($F$1/10)*J${r}`)
     put(`AG${r}`, AG, `IF(I${r}<=150,H${r}*8,150)`)
-    // Mensualizado: se emite AH=50 (adicional base). Vigilador: NO se emite
-    // (queda vacía para carga manual, como el resto de las columnas manuales).
+    // Mensualizado: AH=50 (adicional base). Vigilador: NO se emite (carga manual).
     if (mensualizado) put(`AH${r}`, AH)
-    put(`AI${r}`, AI, `AH${r}*Y${r}`)
-    put(`AJ${r}`, AJ, `AG${r}*Y${r}`)
+    put(`AI${r}`, AI, `AH${r}*$F$1`)
+    put(`AJ${r}`, AJ, `AG${r}*$F$1`)
     put(`AL${r}`, AL, `MAX(0,I${r}-AG${r})`)
     put(`AM${r}`, AM, `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
     put(`AN${r}`, AN, `I${r}/G${r}`)
     put(`AO${r}`, AO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
-    put(`AP${r}`, AP, `IF(AL${r}>0,AL${r}*${P.horaExtra},0)-AR${r}`)
+    put(`AP${r}`, AP, `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
     put(`AS${r}`, AS, `IF(AO${r}>0,AO${r}/I${r},0)`)
-    put(`AT${r}`, AT, `K${r}*U${r}`)
-    put(`AU${r}`, AU, `L${r}*U${r}`)
-    put(`AV${r}`, AV, `M${r}*U${r}`)
-    put(`AW${r}`, AW, `N${r}*U${r}`)
-    put(`AX${r}`, AX, `O${r}*U${r}`)
-    // Informativas del final: valores puros, sin fórmula que las toque.
+    put(`AT${r}`, AT, `K${r}*$F$2`)
+    put(`AU${r}`, AU, `L${r}*$F$2`)
+    put(`AV${r}`, AV, `M${r}*$F$2`)
+    put(`AW${r}`, AW, `N${r}*$F$2`)
+    put(`AX${r}`, AX, `O${r}*$F$2`)
+    // Informativas del final: valores puros.
     put(`AY${r}`, fila.supervisiones)
     put(`AZ${r}`, fila.horasSupervision)
     put(`BA${r}`, fila.jornadasSupervision)
     if (fila.observaciones.length > 0) put(`BB${r}`, fila.observaciones.join(' · '))
-    // HS VIGILANCIA ZONA: valor por fila, sin fórmula. NO se suma en los
-    // subtotales/TOTAL (no está en colsTotales): en una zona compartida cada
-    // supervisor lleva las horas completas de la zona, así que sumarlas entre
-    // supervisores contaría la misma zona varias veces. La métrica se lee por
-    // fila; el total por zona no es la suma de la columna.
+    // HS VIGILANCIA ZONA: por fila, informativa; NO se totaliza (zona compartida).
     put(`BC${r}`, fila.hsVigilanciaZona)
+    // Identidad técnica oculta (Juan 16): usuario_id interno + período. MERCOSUR
+    // reconoce la fila por esto (más CUIL en B), nunca por nombre ni nº de fila.
+    put(`BD${r}`, fila.empleadoId)
+    put(`BE${r}`, resumen.mes)
     const cacheFila: [string, number][] = [
       ['G', G], ['I', I], ['J', J], ['K', fila.feriadosTrabajados],
       ['L', num(fila.licencias)], ['M', num(fila.art)], ['N', num(fila.vacaciones)],
       ['O', num(fila.parteMedico)], ['P', num(fila.ausenciasSuspensiones)],
-      ['U', dia8], ['V', P.presentismo], ['W', P.viatico], ['X', P.noRem],
-      ['Y', hora], ['Z', P.presentismo / 25], ['AA', P.viatico / 25], ['AB', P.noRem / 25],
       ['AC', AC], ['AD', AD], ['AE', AE], ['AF', AF], ['AG', AG], ['AH', AH],
-      ['AI', AI], ['AJ', AJ], ['AK', 0], ['AL', AL], ['AM', AM], ['AN', AN],
-      ['AO', AO], ['AP', AP], ['AQ', 0], ['AR', 0], ['AS', AS],
+      ['AI', AI], ['AJ', AJ], ['AL', AL], ['AO', AO], ['AP', AP],
       ['AT', AT], ['AU', AU], ['AV', AV], ['AW', AW], ['AX', AX],
       ['AY', fila.supervisiones], ['AZ', fila.horasSupervision], ['BA', fila.jornadasSupervision],
     ]
     for (const [col, v] of cacheFila) acum(col, v)
   }
 
-  // H no tiene total; Q-T y AH/AK/AQ/AR suman columnas vacías (dan 0) pero el
-  // ejemplo las traía y se conservan. AY-BA (informativas) también suman.
-  const colsTotales = ['G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
-    'U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI',
-    'AJ', 'AK', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR', 'AS', 'AT', 'AU', 'AV', 'AW', 'AX',
-    'AY', 'AZ', 'BA']
+  // Sólo se totalizan cantidades e importes; NO los ratios (AM %, AN hs/día,
+  // AS $/hora) ni HS VIGILANCIA ZONA (BC). H no tiene total (es un tope).
+  const colsTotales = ['G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
+    'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI', 'AJ', 'AL', 'AO', 'AP',
+    'AT', 'AU', 'AV', 'AW', 'AX', 'AY', 'AZ', 'BA']
 
   let r = 7
+  const titulos: number[] = []
+  const subtotalesFilas: number[] = []
+  const filasDatos: number[] = []
   const subtotales: { fila: number; suma: Record<string, number> }[] = []
   for (const gp of grupos) {
     const filasGrupo = resumen.filas.filter(f => f.grupo === gp.clave)
     put(`A${r}`, gp.titulo)
+    titulos.push(r)
     r += 1
     const primeraDato = r
     const suma: Record<string, number> = {}
     const acum = (col: string, v: number) => { suma[col] = (suma[col] ?? 0) + v }
     for (const fila of filasGrupo) {
-      emitirFila(fila, r, r === primeraDato, acum)
+      emitirFila(fila, r, acum)
+      filasDatos.push(r)
       r += 1
     }
     const ultimaDato = r - 1
     const filaSubtotal = r
     put(`A${filaSubtotal}`, gp.subtotal)
-    for (const col of ['B', 'C', 'D', 'E', 'F']) put(`${col}${filaSubtotal}`, '')
     for (const col of colsTotales) {
       if (filasGrupo.length > 0) {
         put(`${col}${filaSubtotal}`, suma[col] ?? 0, `SUM(${col}${primeraDato}:${col}${ultimaDato})`)
@@ -1126,19 +1169,33 @@ export function plantillaLiquidacionResumenGuardia(resumen: ResumenGuardiaMes): 
         put(`${col}${filaSubtotal}`, 0)
       }
     }
+    subtotalesFilas.push(filaSubtotal)
     subtotales.push({ fila: filaSubtotal, suma })
     r += 2 // subtotal + fila separadora vacía
   }
 
-  // TOTAL GENERAL = suma de los tres subtotales (nunca SUM del rango entero,
-  // que contaría los subtotales dos veces).
+  // TOTAL GENERAL = suma de los tres subtotales (nunca SUM del rango entero).
   const filaTotales = r
   put(`A${filaTotales}`, 'TOTAL GENERAL')
-  for (const col of ['B', 'C', 'D', 'E', 'F']) put(`${col}${filaTotales}`, '')
   for (const col of colsTotales) {
     const v = subtotales.reduce((s, b) => s + (b.suma[col] ?? 0), 0)
     put(`${col}${filaTotales}`, v, subtotales.map(b => `${col}${b.fila}`).join('+'))
   }
 
-  return { nombreHoja: 'Hoja1', ref: `A1:BC${filaTotales}`, celdas }
+  return {
+    nombreHoja: 'Liquidación',
+    ref: `A1:BE${filaTotales}`,
+    celdas,
+    columnas: COLUMNAS_PLANTILLA,
+    secciones: SECCIONES_PLANTILLA,
+    estilos: {
+      parametros: [1, 2, 3, 4],
+      etiquetas: 5,
+      encabezado: 6,
+      titulos,
+      subtotales: subtotalesFilas,
+      total: filaTotales,
+      filasDatos,
+    },
+  }
 }
