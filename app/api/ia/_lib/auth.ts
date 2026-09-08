@@ -9,8 +9,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
+import { alcanceDe } from '@/lib/capacidades'
 
-export type UsuarioIA = { id: string, rol: string, estado: string }
+export type UsuarioIA = { id: string, rol: string, estado: string, puesto_organizacional: string | null }
 
 export type ContextoIA =
   | { ok: true, client: SupabaseClient, usuario: UsuarioIA }
@@ -34,7 +35,7 @@ async function resolverContexto(req: NextRequest, rolesPermitidos: string[]): Pr
 
   const { data: usuario, error: usuarioError } = await admin.client
     .from('usuarios')
-    .select('id, rol, estado')
+    .select('id, rol, estado, puesto_organizacional')
     .eq('auth_user_id', authData.user.id)
     .maybeSingle()
 
@@ -61,18 +62,24 @@ export function requireOperadorIA(req: NextRequest): Promise<ContextoIA> {
 /**
  * ¿Este usuario alcanza a este objetivo?
  *
- * Réplica en TypeScript de public.puede_administrar_rondas_objetivo(uuid):
- * admin ve todo; supervisor sólo objetivos de sus zonas asignadas. Se duplica
- * la lógica porque estas rutas corren con service_role y la función SQL, al
- * ejecutarse sin sesión de usuario, devolvería false para todos.
+ * Réplica en TypeScript de public.alcanza_objetivo(usuario, objetivo): el
+ * alcance lo define el PUESTO (con fallback por rol viejo mientras el puesto sea
+ * null), vía lib/capacidades.alcanceDe — la MISMA tabla de decisión que la
+ * función SQL. Se duplica porque estas rutas corren con service_role y la
+ * función SQL, al ejecutarse sin sesión de usuario, devolvería false para todos.
+ *   · 'todas'           → ve todo (gerencia/dir_op/jefe/administracion, o admin viejo).
+ *   · 'zonas_asignadas' → sólo objetivos de sus zonas (supervisor; incl. Sergio,
+ *                         admin de identidad pero supervisor de puesto).
+ *   · 'propio'/otro     → no alcanza objetivos por zona.
  */
 export async function alcanzaObjetivo(
   client: SupabaseClient,
   usuario: UsuarioIA,
   objetivoId: string,
 ): Promise<boolean> {
-  if (usuario.rol === 'admin') return true
-  if (usuario.rol !== 'supervisor') return false
+  const alcance = alcanceDe(usuario)
+  if (alcance === 'todas') return true
+  if (alcance !== 'zonas_asignadas') return false
 
   const { data: objetivo } = await client
     .from('objetivos')

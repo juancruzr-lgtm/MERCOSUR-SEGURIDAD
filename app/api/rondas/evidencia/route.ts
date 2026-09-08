@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
+import { alcanceDe } from '@/lib/capacidades'
 
 export const runtime = 'nodejs'
 
@@ -234,7 +235,7 @@ export async function GET(req: NextRequest) {
   // 2. Rol: admin o supervisor, activo. (Vigilador no visualiza por esta vía.)
   const { data: usuario, error: usuarioError } = await admin.client
     .from('usuarios')
-    .select('id, rol, estado')
+    .select('id, rol, estado, puesto_organizacional')
     .eq('auth_user_id', authData.user.id)
     .maybeSingle()
 
@@ -289,8 +290,11 @@ export async function GET(req: NextRequest) {
   if (ejecucionError) return respuestaEvidencia('error_firma', 500)
   if (!ejecucion) return respuestaEvidencia('evidencia_no_encontrada', 404)
 
-  // 6. Alcance por objetivo. Admin ve todo; supervisor solo su zona asignada.
-  if (usuario.rol === 'supervisor') {
+  // 6. Alcance por objetivo (canónico por puesto, espejo de alcanza_objetivo):
+  //    'todas' ve todo; 'zonas_asignadas' sólo su zona; 'propio' no accede.
+  const alcance = alcanceDe(usuario)
+  if (alcance === 'propio') return respuestaEvidencia('sin_permiso', 403)
+  if (alcance === 'zonas_asignadas') {
     const { data: objetivo, error: objetivoError } = await admin.client
       .from('objetivos')
       .select('zona_id')
