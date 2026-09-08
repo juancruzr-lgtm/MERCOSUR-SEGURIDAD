@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { alcanceDe } from '@/lib/capacidades'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { comprimirImagen, superaElLimite } from '@/lib/comprimir-imagen'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
@@ -1106,11 +1107,15 @@ export default function SupervisorMobile({ user }: any) {
   )
   const nombreZona = (zonaId?: string | null) => zonasOperativas.find(z => z.id === zonaId)?.nombre || 'Sin zona'
 
+  // Alcance canónico por puesto: 'todas' (p.ej. admin viendo la vista supervisor)
+  // ve todos los objetivos; 'zonas_asignadas' (supervisor, incl. Sergio) sólo los
+  // de sus zonas — sin zonas asignadas, ninguno (fail-closed).
+  const alcanceTotal = alcanceDe(user) === 'todas'
   const objetivosDeMiZona = useMemo(
-    () => zonasIdsAsignadas.size > 0
-      ? objetivosActivos.filter(o => o.zona_id && zonasIdsAsignadas.has(o.zona_id))
-      : objetivosActivos,
-    [objetivosActivos, zonasIdsAsignadas],
+    () => alcanceTotal
+      ? objetivosActivos
+      : objetivosActivos.filter(o => o.zona_id && zonasIdsAsignadas.has(o.zona_id)),
+    [objetivosActivos, zonasIdsAsignadas, alcanceTotal],
   )
 
   const agendaSupervisiones = useMemo(() => {
@@ -3485,7 +3490,7 @@ export default function SupervisorMobile({ user }: any) {
                 </button>
                 <div style={dateText}>Las solicitudes de alta se envían a aprobación administrativa.</div>
 
-                {objetivos.map(objetivo => (
+                {objetivosDeMiZona.map(objetivo => (
                   <div key={objetivo.id} style={card}>
                     <div style={objetivoName}>{objetivo.nombre}</div>
                     <div style={muted}>{objetivo.direccion || 'Sin dirección'}</div>

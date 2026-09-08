@@ -165,3 +165,28 @@ export function alcanceDe(u: SujetoAcceso | null | undefined): AlcanceOperativo 
 /** Helpers de lectura para los consumidores (evitan comparar strings sueltos). */
 export const CAPACIDADES_POR_PUESTO_LECTURA = CAPACIDADES_POR_PUESTO
 export const ALCANCE_POR_PUESTO_LECTURA = ALCANCE_POR_PUESTO
+
+/**
+ * Shell de la app por PUESTO (política de navegación). Fail-closed: puesto/rol
+ * desconocido NO cae al shell admin, devuelve 'denegado'.
+ *   vigilador → guardia; supervisor → supervisor (incluye a Sergio: admin de
+ *   identidad, supervisor de puesto ⇒ su alcance queda zonificado en ese shell);
+ *   jefe_supervisores/direccion_operativa/administracion/gerencia → admin
+ *   (todos con alcance 'todas'). Con puesto null (transición, sólo es_prueba) se
+ *   cae al rol viejo; un rol desconocido queda 'denegado'.
+ */
+export type ShellApp = 'guardia' | 'supervisor' | 'admin' | 'denegado'
+export function shellDeUsuario(u: SujetoAcceso | null | undefined): ShellApp {
+  if (!u) return 'denegado'
+  const puesto = puestoDe(u)
+  if (puesto) {
+    if (puesto === 'vigilador') return 'guardia'
+    if (puesto === 'supervisor') return 'supervisor'
+    return 'admin'
+  }
+  const rol = String(u.rol ?? '').trim().toLowerCase()
+  if (rol === 'guardia' || rol === 'vigilador') return 'guardia'
+  if (rol === 'supervisor') return 'supervisor'
+  if (rol === 'admin') return 'admin'
+  return 'denegado'
+}
