@@ -153,6 +153,12 @@ function alcanceLegadoPorRol(rol?: string | null): AlcanceOperativo {
 export interface SujetoAcceso {
   rol?: string | null
   puesto_organizacional?: string | null
+  /**
+   * Acceso EXPLÍCITO a la interfaz de Administración (config por usuario), aparte
+   * del puesto. Abre la VISTA admin; NO concede capacidades: cada módulo sigue
+   * gateado por capability + RLS (ver `shellDeUsuario` y `esAdminPleno`).
+   */
+  acceso_interfaz_admin?: boolean | null
 }
 
 /** Puesto canónico si está seteado y es válido; null durante la transición. */
@@ -195,6 +201,10 @@ export const ALCANCE_POR_PUESTO_LECTURA = ALCANCE_POR_PUESTO
 export type ShellApp = 'guardia' | 'supervisor' | 'admin' | 'denegado'
 export function shellDeUsuario(u: SujetoAcceso | null | undefined): ShellApp {
   if (!u) return 'denegado'
+  // Acceso explícito a la interfaz admin (config por usuario). Sólo cambia el
+  // SHELL; capacidades y alcance siguen siendo los del puesto (p.ej. Sergio:
+  // supervisor, Rosario). La vista queda LIMITADA por `esAdminPleno`.
+  if (u.acceso_interfaz_admin === true) return 'admin'
   const puesto = puestoDe(u)
   if (puesto) {
     if (puesto === 'vigilador') return 'guardia'
@@ -206,4 +216,18 @@ export function shellDeUsuario(u: SujetoAcceso | null | undefined): ShellApp {
   if (rol === 'supervisor') return 'supervisor'
   if (rol === 'admin') return 'admin'
   return 'denegado'
+}
+
+/**
+ * ADMIN PLENO: puestos que legítimamente ven TODA la interfaz administrativa
+ * (incluida Configuración/Sistema). Un usuario que llega al shell admin sólo por
+ * `acceso_interfaz_admin` (p.ej. un supervisor) NO es admin pleno: su vista se
+ * limita a lo operativo y las secciones sensibles quedan ocultas. Preserva
+ * exactamente a jefe/dirección operativa/administración/gerencia (y al admin
+ * legado sin puesto), que ya veían todo.
+ */
+export function esAdminPleno(u: SujetoAcceso | null | undefined): boolean {
+  const puesto = puestoDe(u)
+  if (puesto) return puesto === 'jefe_supervisores' || puesto === 'direccion_operativa' || puesto === 'administracion' || puesto === 'gerencia'
+  return String(u?.rol ?? '').trim().toLowerCase() === 'admin'
 }
