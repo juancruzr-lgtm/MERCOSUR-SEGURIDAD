@@ -39,6 +39,19 @@ create policy "Supervisor CRUD turnos"
 
 -- ── 2. REGISTROS_ASISTENCIA ─────────────────────────────────────────────────
 drop policy if exists registros_asistencia_select_alcance on public.registros_asistencia;
+drop policy if exists registros_asistencia_alcance_total on public.registros_asistencia;
+
+drop policy if exists "Admin CRUD registros_asistencia" on public.registros_asistencia;
+create policy "Admin CRUD registros_asistencia"
+  on public.registros_asistencia
+  for all
+  to authenticated
+  using (exists (select 1 from usuarios
+                 where usuarios.auth_user_id = auth.uid()
+                   and usuarios.rol = 'admin'::text))
+  with check (exists (select 1 from usuarios
+                      where usuarios.auth_user_id = auth.uid()
+                        and usuarios.rol = 'admin'::text));
 
 drop policy if exists "Supervisor lee registros_asistencia" on public.registros_asistencia;
 create policy "Supervisor lee registros_asistencia"

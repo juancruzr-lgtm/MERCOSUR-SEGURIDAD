@@ -49,10 +49,19 @@ select 'registros: select por alcance (alcanza_turno_actual)',
                           and qual like '%alcanza_turno_actual%')
             then 'OK' else 'FALLO' end
 union all
-select 'registros: admin y guardia intactos',
+select 'registros: sin CRUD por rol admin legacy',
+       case when not exists (select 1 from pg_policies where tablename='registros_asistencia'
+                              and policyname='Admin CRUD registros_asistencia')
+            then 'OK' else 'FALLO' end
+union all
+select 'registros: escritura por alcance total (por puesto)',
        case when exists (select 1 from pg_policies where tablename='registros_asistencia'
-                          and policyname='Admin CRUD registros_asistencia')
-             and exists (select 1 from pg_policies where tablename='registros_asistencia'
+                          and policyname='registros_asistencia_alcance_total' and cmd='ALL'
+                          and qual like '%alcance_operativo_de%')
+            then 'OK' else 'FALLO' end
+union all
+select 'registros: guardia intacto',
+       case when exists (select 1 from pg_policies where tablename='registros_asistencia'
                           and policyname='Guardia gestiona sus registros')
             then 'OK' else 'FALLO' end
 union all
@@ -96,5 +105,20 @@ select 'semántica: gerencia alcanza todo (incl. sin zona)',
        case when public.alcanza_objetivo(
               (select id from public.usuarios where puesto_organizacional='gerencia' and estado='activo' limit 1),
               (select id from public.objetivos where zona_id is null limit 1)) = true
+            then 'OK' else 'FALLO' end
+union all
+select 'semántica: jefe_supervisores alcanza Rafaela Y Rosario (por puesto)',
+       case when public.alcanza_objetivo(
+              (select id from public.usuarios where puesto_organizacional='jefe_supervisores' and estado='activo' limit 1),
+              (select id from public.objetivos where nombre ilike '%CYE%' limit 1)) = true
+             and public.alcanza_objetivo(
+              (select id from public.usuarios where puesto_organizacional='jefe_supervisores' and estado='activo' limit 1),
+              (select id from public.objetivos where nombre='ANTENA' limit 1)) = true
+            then 'OK' else 'FALLO' end
+union all
+select 'semántica: rol admin legacy con puesto supervisor NO es global',
+       case when (select public.alcance_operativo_de(id) from public.usuarios
+                   where rol='admin' and puesto_organizacional='supervisor' limit 1)
+                 is distinct from 'todas'
             then 'OK' else 'FALLO' end
 order by 1;

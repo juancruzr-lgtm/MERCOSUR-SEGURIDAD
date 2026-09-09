@@ -34,9 +34,20 @@
 --   * jefe_supervisores (rol='supervisor', alcance 'todas'): sigue viendo
 --     todo — antes dependía de la policy por rol, ahora del alcance canónico.
 --   * administracion/direccion/gerencia y admin legado: sin cambios ('todas').
---   * Sergio (rol='admin', puesto='supervisor'): en TURNOS queda zonificado a
---     sus zonas, como documenta el diseño de #189 ("su alcance queda
---     zonificado"). En registros_asistencia conserva el CRUD de rol admin.
+--   * REGLA (JC, 10/09): el acceso global NUNCA se justifica por
+--     usuarios.rol='admin'. Un rol legacy admin con puesto 'supervisor' queda
+--     zonificado; el alcance general deriva del PUESTO (jefe_supervisores,
+--     administracion, direccion_operativa, gerencia) o del fallback legacy
+--     SOLO cuando puesto es null (transición). Por eso acá también se
+--     reemplaza "Admin CRUD registros_asistencia" (rol='admin') por una
+--     policy de alcance total por puesto.
+--   * Sergio (hoy rol='admin', puesto='supervisor'): con estos datos queda
+--     ZONIFICADO en todo. Para que tenga alcance general como Jefe de
+--     Supervisores, su puesto_organizacional debe pasar a
+--     'jefe_supervisores' (cambio de DATOS, fuera de esta migración, con
+--     efectos de UI por capacidades — decisión aparte de JC).
+--   * jefe_supervisores: alcance 'todas' POR PUESTO; una zona propia
+--     asignada no lo limita ('todas' corta antes del chequeo de zona).
 --   * vigilador: sin cambios (sólo lo propio); pierde el acceso abierto a
 --     borrar/insertar objetivos que dejaba la policy `true`.
 --
@@ -96,11 +107,15 @@ create policy turnos_alcance_operativo
   with check (public.alcanza_objetivo_actual(objetivo_id));
 
 -- ── 2. REGISTROS_ASISTENCIA ─────────────────────────────────────────────────
--- El supervisor pasa de "lee todo" a "lee lo de su alcance". Sus escrituras
--- nunca fueron por policy de supervisor (van por RPC o rol admin): no se
--- agregan. "Admin CRUD registros_asistencia" y las policies propias del
--- guardia se conservan tal cual.
+-- Lectura: el supervisor pasa de "lee todo" a "lee lo de su alcance"; el
+-- jefe de supervisores y los puestos administrativos leen todo (alcance
+-- 'todas' por puesto). Escritura: deja de depender de rol='admin' y pasa al
+-- alcance total por puesto (administracion/direccion/gerencia/jefe y admin
+-- legado sin puesto). El supervisor común NO gana escritura (igual que hoy:
+-- sus correcciones van por RPC). Las policies propias del guardia (gestionar
+-- e insertar su propia asistencia) se conservan tal cual.
 drop policy if exists "Supervisor lee registros_asistencia" on public.registros_asistencia;
+drop policy if exists "Admin CRUD registros_asistencia" on public.registros_asistencia;
 
 drop policy if exists registros_asistencia_select_alcance on public.registros_asistencia;
 create policy registros_asistencia_select_alcance
@@ -108,6 +123,14 @@ create policy registros_asistencia_select_alcance
   for select
   to authenticated
   using (public.alcanza_turno_actual(turno_id));
+
+drop policy if exists registros_asistencia_alcance_total on public.registros_asistencia;
+create policy registros_asistencia_alcance_total
+  on public.registros_asistencia
+  for all
+  to authenticated
+  using (public.alcance_operativo_de(public.rondas_usuario_actual_id()) = 'todas')
+  with check (public.alcance_operativo_de(public.rondas_usuario_actual_id()) = 'todas');
 
 -- ── 3. SUPERVISOR_ZONAS ─────────────────────────────────────────────────────
 -- Lectura (SÓLO SELECT) de todas las asignaciones para el personal operativo:
