@@ -156,22 +156,39 @@ export async function plantillaTrabajoDelMes(
 
 /**
  * Jornadas reales por usuario del mes (para el concepto 000 DÍAS TRABAJADAS):
- * fechas distintas trabajadas/liquidables (múltiples turnos el mismo día = 1
- * jornada; lo resuelve `construirResumenGuardia`). Se lee la columna G de la
- * plantilla. Los mensualizados/sin actividad devuelven 0 (no se autocompletan).
- * NO copia el mes anterior ni usa la programación contractual.
+ * FECHAS DISTINTAS EFECTIVAMENTE TRABAJADAS de la planilla liquidable — la misma
+ * verdad con la que se liquida, no los turnos crudos. Una fecha = 1 jornada;
+ * dos turnos el mismo día = 1 (lo resuelve `construirResumenGuardia`, que sólo
+ * cuenta líneas con horas reconocidas: excluye ausencias y días programados-no-
+ * trabajados, y aplica las correcciones de horas). SIN tope de 25 (si trabajó 27
+ * fechas, son 27). Los mensualizados/sin actividad devuelven 0 (no se
+ * autocompletan). NO copia el mes anterior ni usa valores históricos de Visual.
+ *
+ * La planilla YA REVISADA manda: si Juan corrigió las jornadas en el Excel de
+ * trabajo antes de consolidar (queda en `liquidacion_ajuste`, clave 'jornadas'),
+ * ese valor corregido pisa el conteo automático. Trazabilidad:
+ * calculado desde planilla → corrección → valor a Visual.
  */
 export async function jornadasPorUsuarioDelMes(
   client: any,
-  mes: string,
-): Promise<{ jornadas: Map<string, number>; error: string | null }> {
-  const { resumen, error } = await plantillaTrabajoDelMes(client, mes)
-  if (error || !resumen) return { jornadas: new Map(), error: error || 'sin resumen' }
+  periodo: { id: string; mes: string },
+): Promise<{ jornadas: Map<string, number>; corregidos: number; error: string | null }> {
+  const { resumen, error } = await plantillaTrabajoDelMes(client, periodo.mes)
+  if (error || !resumen) return { jornadas: new Map(), corregidos: 0, error: error || 'sin resumen' }
   const out = new Map<string, number>()
   // fila.jornadas = fechas distintas trabajadas (0 para mensualizados / sin
   // actividad operativa: esos NO se autocompletan, se reportan aparte).
   for (const f of resumen.filas) out.set(f.empleadoId, Number(f.jornadas ?? 0))
-  return { jornadas: out, error: null }
+  // Overlay de la planilla revisada: una corrección manual de jornadas hecha en
+  // el Excel de trabajo pisa el conteo (es la verdad que se va a liquidar).
+  let corregidos = 0
+  const { data: aj } = await client.from('liquidacion_ajuste')
+    .select('empleado_id, valor_liquidacion').eq('periodo_id', periodo.id).eq('tipo', 'variable').eq('clave', 'jornadas')
+  for (const a of (aj ?? []) as any[]) {
+    if (a.valor_liquidacion == null) continue
+    out.set(a.empleado_id, Number(a.valor_liquidacion)); corregidos++
+  }
+  return { jornadas: out, corregidos, error: null }
 }
 
 // Columnas de concepto del Excel de trabajo (layout de #170) y su código de
