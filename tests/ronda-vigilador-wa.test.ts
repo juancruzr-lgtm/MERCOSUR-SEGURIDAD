@@ -75,4 +75,43 @@ describe('selección del WhatsApp de refuerzo al vigilador', () => {
     expect(horaDeMinutosAbs(minutosAbs('2026-09-09', '06:00'))).toBe('06:00')
     expect(horaDeMinutosAbs(minutosAbs('2026-09-09', '23:45'))).toBe('23:45')
   })
+
+  it('ronda suspendida por el vigilador → jamás se manda (aunque no haya pausa)', () => {
+    const c = sel({ suspendidasClaves: new Set(['r1:t1']) })
+    expect(c).toHaveLength(0)
+    // otra ronda/turno no queda excluida por una suspensión ajena
+    expect(sel({ suspendidasClaves: new Set(['otra:t1', 'r1:otro']) })).toHaveLength(1)
+  })
+})
+
+describe('turno nocturno que cruza medianoche', () => {
+  const TURNO_NOC: TurnoVigente = {
+    id: 'tn', guardia_id: 'g1', puesto_id: 'p1', objetivo_id: 'o1',
+    fecha: '2026-09-09', hora_inicio: '22:00', hora_fin: '06:00',
+  }
+  const RONDA_NOC: RondaBaseVig = {
+    id: 'rn', puesto_id: 'p1', nombre: 'Nocturna', hora_inicio: null, intervalo_minutos: 120,
+  }
+  const base = {
+    turnosVigentes: [TURNO_NOC], rondasBase: [RONDA_NOC], ejecuciones: [], pausas: [],
+    objetivos: [OBJ_OK], avisoMin: 10,
+  }
+
+  it('la ventana 00:00–02:00 (día siguiente) dispara a las 00:10', () => {
+    const c = seleccionarCandidatosRondaVigilador({ ...base, ahoraMin: minutosAbs('2026-09-10', '00:10') })
+    expect(c).toHaveLength(1)
+    expect(c[0].horario).toBe('00:00')
+    expect(c[0].ventana_inicio_min).toBe(minutosAbs('2026-09-10', '00:00'))
+  })
+
+  it('la primera ventana 22:00–00:00 dispara a las 22:10 del día del turno', () => {
+    const c = seleccionarCandidatosRondaVigilador({ ...base, ahoraMin: minutosAbs('2026-09-09', '22:10') })
+    expect(c).toHaveLength(1)
+    expect(c[0].horario).toBe('22:00')
+  })
+
+  it('pasado el fin del turno (06:00) ya no hay obligación', () => {
+    const c = seleccionarCandidatosRondaVigilador({ ...base, ahoraMin: minutosAbs('2026-09-10', '06:30') })
+    expect(c).toHaveLength(0)
+  })
 })
