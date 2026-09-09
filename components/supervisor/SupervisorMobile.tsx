@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { alcanceDe } from '@/lib/capacidades'
+import { filtrarTurnosParaAlertas, objetivoIdsParaAlertas } from '@/lib/alertas-alcance'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { comprimirImagen, superaElLimite } from '@/lib/comprimir-imagen'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
@@ -1118,6 +1119,19 @@ export default function SupervisorMobile({ user }: any) {
     [objetivosActivos, zonasIdsAsignadas, alcanceTotal],
   )
 
+  // Alcance de las alertas de asistencia: mismo criterio canónico que la
+  // agenda, pero sobre TODOS los objetivos (un objetivo pausado de mi zona
+  // sigue mostrando sus alertas). Se filtra la base de turnos UNA sola vez y
+  // de ahí derivan las cuatro categorías, las intervenidas y los contadores.
+  const objetivoIdsAlertas = useMemo(
+    () => objetivoIdsParaAlertas(alcanceDe(user), objetivos, zonasIdsAsignadas),
+    [user, objetivos, zonasIdsAsignadas],
+  )
+  const turnosAlcanceAlertas = useMemo(
+    () => filtrarTurnosParaAlertas(turnos, objetivoIdsAlertas),
+    [turnos, objetivoIdsAlertas],
+  )
+
   const agendaSupervisiones = useMemo(() => {
     const ahoraMs = Date.now()
     const base = agendaZonaFiltro === 'todas'
@@ -1198,30 +1212,30 @@ export default function SupervisorMobile({ user }: any) {
   }, [checklistItems, detalleSupervision, detalleRespuestas])
 
   const turnosDescubiertosOperativos = useMemo(
-    () => turnos.filter(t => esDescubiertoOperativo(t)),
-    [turnos, registros],
+    () => turnosAlcanceAlertas.filter(t => esDescubiertoOperativo(t)),
+    [turnosAlcanceAlertas, registros],
   )
 
   const turnosSinIngreso = useMemo(
-    () => turnos.filter(t => esSinIngreso(t)),
-    [turnos, registros],
+    () => turnosAlcanceAlertas.filter(t => esSinIngreso(t)),
+    [turnosAlcanceAlertas, registros],
   )
 
   const ocurrenciasTardanza = useMemo(
     () => registros.flatMap(registro => {
-      const turno = turnos.find(item => item.id === registro.turno_id)
+      const turno = turnosAlcanceAlertas.find(item => item.id === registro.turno_id)
       if (!turno || (!registro.hora_entrada_final && !registro.hora_entrada_real) || calcularMinutosTardanzaRegistro(turno, registro) <= 0) return []
       return [{ turno, registro }]
     }),
-    [turnos, registros],
+    [turnosAlcanceAlertas, registros],
   )
 
   const ocurrenciasGpsFueraRadio = useMemo(
     () => registros.flatMap(registro => {
-      const turno = turnos.find(item => item.id === registro.turno_id)
+      const turno = turnosAlcanceAlertas.find(item => item.id === registro.turno_id)
       return turno && registro.gps_ingreso_estado === 'fuera_radio' ? [{ turno, registro }] : []
     }),
-    [turnos, registros],
+    [turnosAlcanceAlertas, registros],
   )
 
   const turnosDescubiertosPendientes = useMemo(
@@ -1259,7 +1273,7 @@ export default function SupervisorMobile({ user }: any) {
     intervenciones.forEach(intervencion => {
       if (intervencion.accion === 'comentario' || !esTipoAlertaOperativa(intervencion.tipo_alerta)) return
 
-      const turno = turnos.find(t => t.id === intervencion.turno_id)
+      const turno = turnosAlcanceAlertas.find(t => t.id === intervencion.turno_id)
       if (!turno) return
       const registro = intervencion.registro_asistencia_id
         ? registros.find(item => item.id === intervencion.registro_asistencia_id)
@@ -1275,7 +1289,7 @@ export default function SupervisorMobile({ user }: any) {
     return Array.from(porAlerta.values())
       .filter(item => alertaIntervenida(item.turno.id, item.tipoAlerta, item.registro?.id || item.intervencion.registro_asistencia_id))
       .sort((a, b) => compararIntervencionesMasReciente(a.intervencion, b.intervencion))
-  }, [intervenciones, turnos, registros])
+  }, [intervenciones, turnosAlcanceAlertas, registros])
 
   const guardiaTieneTurnoSuperpuesto = async (
     candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>,
