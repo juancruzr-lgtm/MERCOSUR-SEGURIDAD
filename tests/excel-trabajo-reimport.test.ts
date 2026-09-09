@@ -81,3 +81,59 @@ describe('reimport del Excel de trabajo (LIQ2B)', () => {
     expect(r.periodoDelArchivo).toBe('2026-08')
   })
 })
+
+// ── Bug E: la fila de ENCABEZADO no es un empleado ───────────────────────────
+// La fila 6 lleva rótulos: BD6='usuario_id', BE6='periodo'. Antes se colaba como
+// empleado y periodoDelArchivo quedaba en el literal 'periodo'. Se excluye por
+// centinela en ambos parsers, sin registro fantasma, y el período sale sólo de
+// filas de persona con 'YYYY-MM' válido.
+describe('bug E — encabezado excluido, sin registro fantasma', () => {
+  const filaVacia = () => new Array(57).fill(null) as CeldaVisual[]
+  const filaEncabezado = () => { const r = filaVacia(); r[55] = 'usuario_id'; r[56] = 'periodo'; r[6] = 'JORNADAS'; return r }
+  const filaPersona = (uid: string, periodo: string, jornadas: number) => { const r = filaVacia(); r[55] = uid; r[56] = periodo; r[1] = '20144945817'; r[3] = 'ALMADA'; r[6] = jornadas; return r }
+
+  it('parseGridReimport ignora la fila de encabezado (no crea usuario_id fantasma)', () => {
+    const grid = [filaVacia(), filaEncabezado(), filaPersona('u1', '2026-08', 20)]
+    const m = parseGridReimport(grid)
+    expect(m.has('usuario_id')).toBe(false)
+    expect(m.has('u1')).toBe(true)
+    expect(m.size).toBe(1)
+  })
+
+  it('baselineDesdePlantilla ignora la celda de encabezado BD6=usuario_id', () => {
+    const pl: PlantillaLiquidacion = {
+      nombreHoja: 'L', ref: 'A1:BE8',
+      celdas: [
+        { ref: 'BD6', v: 'usuario_id' }, { ref: 'BE6', v: 'periodo' },
+        { ref: 'BD7', v: 'u1' }, { ref: 'BE7', v: '2026-08' }, { ref: 'B7', v: '20144945817' }, { ref: 'G7', v: 20 },
+      ],
+      columnas: [], secciones: [], estilos: { parametros: [], etiquetas: 5, encabezado: 6, titulos: [], subtotales: [], total: 8, filasDatos: [7] },
+    }
+    const base = baselineDesdePlantilla(pl)
+    expect(base.has('usuario_id')).toBe(false)
+    expect(base.has('u1')).toBe(true)
+  })
+
+  it('periodoDelArchivo sale de la persona (2026-08), nunca del rótulo "periodo"', () => {
+    const pl: PlantillaLiquidacion = {
+      nombreHoja: 'L', ref: 'A1:BE8',
+      celdas: [{ ref: 'BD6', v: 'usuario_id' }, { ref: 'BE6', v: 'periodo' }, { ref: 'BD7', v: 'u1' }, { ref: 'BE7', v: '2026-08' }, { ref: 'G7', v: 20 }],
+      columnas: [], secciones: [], estilos: { parametros: [], etiquetas: 5, encabezado: 6, titulos: [], subtotales: [], total: 8, filasDatos: [7] },
+    }
+    const grid = [filaVacia(), filaEncabezado(), filaPersona('u1', '2026-08', 20)]
+    const r = compararReimport(pl, grid)
+    expect(r.periodoDelArchivo).toBe('2026-08')
+    expect(r.fueraDePadron).not.toContain('usuario_id')
+    expect(r.personasEnArchivo).toBe(1)
+  })
+
+  it('falla seguro: archivo sólo con encabezado → 0 personas y período null (no se asume nada)', () => {
+    const pl: PlantillaLiquidacion = {
+      nombreHoja: 'L', ref: 'A1:BE8', celdas: [{ ref: 'BD6', v: 'usuario_id' }, { ref: 'BE6', v: 'periodo' }],
+      columnas: [], secciones: [], estilos: { parametros: [], etiquetas: 5, encabezado: 6, titulos: [], subtotales: [], total: 8, filasDatos: [] },
+    }
+    const r = compararReimport(pl, [filaVacia(), filaEncabezado()])
+    expect(r.personasEnArchivo).toBe(0)
+    expect(r.periodoDelArchivo).toBeNull()
+  })
+})

@@ -56,7 +56,15 @@ export default function ReimportarExcelTrabajo({ periodo, onDone }: { periodo: P
         grid.push(cells)
       })
       const r = compararReimport(base.plantilla, grid)
-      if (r.periodoDelArchivo && r.periodoDelArchivo !== periodo.mes) {
+      // Falla segura: si no se reconoció ninguna fila de empleado o no hay un
+      // período válido en el archivo, NO se asume nada.
+      if (r.personasEnArchivo === 0) {
+        setMsg({ ok: false, t: 'No se reconoció ninguna fila de empleado en el archivo. ¿Es el Excel de trabajo generado por MERCOSUR?' }); return
+      }
+      if (!r.periodoDelArchivo) {
+        setMsg({ ok: false, t: 'No se pudo determinar el período del archivo (falta la columna oculta de período). Regenerá el Excel de trabajo y volvé a subirlo.' }); return
+      }
+      if (r.periodoDelArchivo !== periodo.mes) {
         setMsg({ ok: false, t: `El archivo es del período ${r.periodoDelArchivo}, no de ${periodo.mes}. Verificá que subís el Excel correcto.` }); return
       }
       setArchivo(f.name); setHash(h); setDiffs(r.diffs); setFuera(r.fueraDePadron)

@@ -45,6 +45,17 @@ const IDX_NOMBRE = 3   // D
 const IDX_BD = 55      // usuario_id oculto
 const IDX_BE = 56      // periodo oculto
 
+// La fila 6 del Excel es el ENCABEZADO: BD6 y BE6 llevan los rótulos literales de
+// esas columnas ('usuario_id' y 'periodo'). No es un empleado. Se los excluye por
+// su valor centinela para que NO entren como persona ni generen un registro
+// fantasma. (Los usuario_id reales son uuid; nunca son estos literales.)
+const BD_ENCABEZADO = 'usuario_id'
+const BE_ENCABEZADO = 'periodo'
+const esFilaEncabezado = (bd: string, be?: string): boolean =>
+  bd === BD_ENCABEZADO || be === BE_ENCABEZADO
+// Período válido del archivo: 'YYYY-MM'. Nunca el rótulo 'periodo' ni vacío.
+const esPeriodoValido = (p?: string | null): p is string => /^\d{4}-\d{2}$/.test(String(p ?? ''))
+
 const num = (v: CeldaVisual): number | null => {
   if (v === null || v === undefined || v === '') return null
   const n = typeof v === 'number' ? v : Number(String(v).replace(/\./g, '').replace(',', '.'))
@@ -74,12 +85,13 @@ export function baselineDesdePlantilla(plantilla: PlantillaLiquidacion): Map<str
   const colLetter = (idx: number): string => { let n = idx + 1, s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26) } return s }
 
   const out = new Map<string, EmpleadoValores>()
-  // Filas de empleado = las que tienen usuario_id en BD.
+  // Filas de empleado = las que tienen usuario_id en BD. La fila de encabezado
+  // (BD='usuario_id') NO es empleado: se excluye para no crear un registro fantasma.
   for (const c of plantilla.celdas) {
     const p = parseRef(c.ref)
     if (!p || p.col !== 'BD') continue
     const usuarioId = norm(c.v as any)
-    if (!usuarioId) continue
+    if (!usuarioId || esFilaEncabezado(usuarioId)) continue
     const r = p.row
     const valores: Record<string, number | null> = {}
     for (const v of VARIABLES_REIMPORT) valores[v.clave] = num(porRef.get(`${colLetter(v.idx)}${r}`) as any)
@@ -100,7 +112,9 @@ export function parseGridReimport(grid: CeldaVisual[][]): Map<string, EmpleadoVa
   for (const fila of grid) {
     if (!fila) continue
     const usuarioId = norm(fila[IDX_BD])
-    if (!usuarioId) continue
+    // Sin identidad → no es empleado. La fila de encabezado (BD='usuario_id',
+    // BE='periodo') tampoco: se excluye para no crear un registro fantasma.
+    if (!usuarioId || esFilaEncabezado(usuarioId, norm(fila[IDX_BE]))) continue
     const valores: Record<string, number | null> = {}
     for (const v of VARIABLES_REIMPORT) valores[v.clave] = num(fila[v.idx])
     out.set(usuarioId, {
@@ -134,6 +148,9 @@ export interface ResultadoComparacion {
   fueraDePadron: string[]
   /** filas del archivo sin usuario_id (no se pueden identificar). */
   sinIdentidad: number
+  /** Filas de EMPLEADO reconocidas en el archivo (excluye encabezado/totales). */
+  personasEnArchivo: number
+  /** Período leído del archivo ('YYYY-MM'), sólo de filas de persona válidas. */
   periodoDelArchivo: string | null
 }
 
@@ -152,7 +169,9 @@ export function compararReimport(
   let periodoDelArchivo: string | null = null
 
   for (const [usuarioId, emp] of Array.from(subido.entries())) {
-    if (emp.periodo && !periodoDelArchivo) periodoDelArchivo = emp.periodo
+    // El período sale SÓLO de filas de persona con período válido 'YYYY-MM'
+    // (nunca el rótulo 'periodo' del encabezado, ya excluido en el parse).
+    if (!periodoDelArchivo && esPeriodoValido(emp.periodo)) periodoDelArchivo = emp.periodo
     const base = baseline.get(usuarioId)
     if (!base) { fueraDePadron.push(usuarioId); continue }
     for (const v of VARIABLES_REIMPORT) {
@@ -170,5 +189,5 @@ export function compararReimport(
   let sinIdentidad = 0
   for (const fila of grid) if (fila && norm(fila[IDX_BD]) === '' && num(fila[6]) !== null) sinIdentidad++
 
-  return { diffs, fueraDePadron, sinIdentidad, periodoDelArchivo }
+  return { diffs, fueraDePadron, sinIdentidad, personasEnArchivo: subido.size, periodoDelArchivo }
 }
