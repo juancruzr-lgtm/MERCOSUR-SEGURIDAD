@@ -22,6 +22,7 @@ import {
   plantillaLiquidacionResumenGuardia,
   type EmpleadoResumen,
   type PlantillaLiquidacion,
+  type ResumenGuardiaMes,
 } from '@/lib/resumen-guardia'
 
 export interface GenerarExcelTrabajoResultado {
@@ -34,6 +35,8 @@ export interface PlantillaTrabajoResultado {
   plantilla: PlantillaLiquidacion | null
   filas: number
   error: string | null
+  /** Resumen crudo (para leer jornadas reales por empleado, etc.). */
+  resumen?: ResumenGuardiaMes | null
 }
 
 /** Límites [desde, hasta] (inclusive, formato YYYY-MM-DD) del mes 'YYYY-MM'. */
@@ -148,7 +151,27 @@ export async function plantillaTrabajoDelMes(
   if (resumen.filas.length === 0) return { plantilla: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
 
   const plantilla = plantillaLiquidacionResumenGuardia(resumen, ajustesPorEmpleado)
-  return { plantilla, filas: resumen.filas.length, error: null }
+  return { plantilla, filas: resumen.filas.length, error: null, resumen }
+}
+
+/**
+ * Jornadas reales por usuario del mes (para el concepto 000 DÍAS TRABAJADAS):
+ * fechas distintas trabajadas/liquidables (múltiples turnos el mismo día = 1
+ * jornada; lo resuelve `construirResumenGuardia`). Se lee la columna G de la
+ * plantilla. Los mensualizados/sin actividad devuelven 0 (no se autocompletan).
+ * NO copia el mes anterior ni usa la programación contractual.
+ */
+export async function jornadasPorUsuarioDelMes(
+  client: any,
+  mes: string,
+): Promise<{ jornadas: Map<string, number>; error: string | null }> {
+  const { resumen, error } = await plantillaTrabajoDelMes(client, mes)
+  if (error || !resumen) return { jornadas: new Map(), error: error || 'sin resumen' }
+  const out = new Map<string, number>()
+  // fila.jornadas = fechas distintas trabajadas (0 para mensualizados / sin
+  // actividad operativa: esos NO se autocompletan, se reportan aparte).
+  for (const f of resumen.filas) out.set(f.empleadoId, Number(f.jornadas ?? 0))
+  return { jornadas: out, error: null }
 }
 
 // Columnas de concepto del Excel de trabajo (layout de #170) y su código de

@@ -41,6 +41,33 @@ export default function PadronLiquidacion({ periodo }: { periodo: Periodo }) {
   }
   useEffect(() => { void cargar() }, [periodo.id])
 
+  const [calculando, setCalculando] = useState(false)
+  // Decisión de negocio: 000 = jornadas reales del período (fechas distintas
+  // trabajadas). Sólo para quien tiene actividad operativa liquidable; los
+  // socios/administrativos sin actividad NO se autocompletan (carga manual).
+  async function calcularDias() {
+    setCalculando(true); setMsg(null)
+    try {
+      const { jornadasPorUsuarioDelMes } = await import('@/lib/excel-trabajo-liquidacion')
+      const { jornadas, error } = await jornadasPorUsuarioDelMes(supabase, periodo.mes)
+      if (error) { setMsg({ ok: false, t: 'No se pudo calcular: ' + error }); return }
+      let n = 0, sinActividad = 0
+      const upserts: any[] = []
+      for (const p of personas) {
+        const j = p.usuario_id ? (jornadas.get(p.usuario_id) ?? 0) : 0
+        if (j > 0) { upserts.push({ periodo_id: periodo.id, persona_id: p.id, dias: j, dias_calculado: j, origen: 'calculado_planilla' }); n++ }
+        else sinActividad++
+      }
+      if (upserts.length > 0) {
+        const { error: e2 } = await supabase.from('liquidacion_dias').upsert(upserts, { onConflict: 'periodo_id,persona_id' })
+        if (e2) { setMsg({ ok: false, t: 'No se pudo guardar: ' + e2.message }); return }
+      }
+      setMsg({ ok: true, t: `000 calculado desde jornadas reales para ${n} persona(s). ${sinActividad} sin actividad operativa quedan para carga manual (no se autocompletan). Podés ajustar antes de exportar.` })
+      void cargar()
+    } catch (e: any) { setMsg({ ok: false, t: 'No se pudo calcular: ' + (e?.message || e) }) }
+    finally { setCalculando(false) }
+  }
+
   async function guardarDias(persona_id: string) {
     const raw = dias[persona_id]
     const val = raw === '' || raw === undefined ? null : Number(raw)
@@ -83,6 +110,16 @@ export default function PadronLiquidacion({ periodo }: { periodo: Periodo }) {
           <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>
             El <b>000</b> es un dato mensual explícito por persona. Sin valor queda <b style={{ color: '#f87171' }}>pendiente</b> y bloquea el XLS de esa persona (no se inventa). {personas.length} personas liquidables.
           </div>
+          {editable && (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <button style={{ ...S.btn, opacity: calculando ? 0.6 : 1 }} disabled={calculando} onClick={() => void calcularDias()}>
+                {calculando ? 'Calculando…' : 'Calcular 000 desde planilla real'}
+              </button>
+              <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 260px' }}>
+                Usa las <b>jornadas reales</b> (fechas distintas trabajadas; varios turnos el mismo día = 1). Mínimo 1 para quien tiene actividad. Los <b>sin actividad</b> (socios/administrativos) NO se autocompletan. Podés ajustar antes de exportar.
+              </span>
+            </div>
+          )}
           <div style={{ maxHeight: 340, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr><th style={S.th}>Persona</th><th style={S.th}>COD_INT.</th><th style={S.th}>Días (000)</th><th style={S.th}></th></tr></thead>

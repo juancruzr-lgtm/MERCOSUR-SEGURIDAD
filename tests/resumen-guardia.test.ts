@@ -717,6 +717,24 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(ma.get('AL8')?.v).toBe(10)
   })
 
+  // Tope de 25 (contrato): viáticos/presentismo/no-rem se prorratean por
+  // MIN(jornadas,25). Trabajar >25 días NO incrementa el importe por encima del
+  // tope. La jornada real puede seguir siendo 26; el multiplicador se limita a 25.
+  it('viáticos (203) topea en 25: 26 días = 100%, no 26/25; extras no se topean', () => {
+    const via = 514500 // E3 viático mensual (tope 25 jornadas)
+    const m20 = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores(), new Map([['g1', { jornadas: 20 }]])))
+    const m26 = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores(), new Map([['g1', { jornadas: 26 }]])))
+    const m30 = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores(), new Map([['g1', { jornadas: 30 }]])))
+    expect(m20.get('AC8')?.v).toBeCloseTo((via / 25) * 20, 2) // 20/25 del valor
+    expect(m26.get('AC8')?.v).toBeCloseTo(via, 2)             // 26 días → 100%, NO 26/25
+    expect(m30.get('AC8')?.v).toBeCloseTo(via, 2)             // 30 días → 100%
+    // presentismo (204) y no-rem (212) también topean por H
+    expect(m26.get('AD8')?.v).toBeCloseTo(180000, 2)
+    expect(m26.get('AE8')?.v).toBeCloseTo(30000, 2)
+    // la jornada real (G) NO se topea; sigue siendo 26
+    expect(m26.get('G8')?.v).toBe(26)
+  })
+
   it('geometría de bloques: título, datos, subtotal por bloque y TOTAL GENERAL al final', () => {
     const p = plantillaLiquidacionResumenGuardia(dosVigiladores())
     expect(p.nombreHoja).toBe('Liquidación')
