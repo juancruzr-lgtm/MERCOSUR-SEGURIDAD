@@ -49,7 +49,7 @@ export default function PadronLiquidacion({ periodo }: { periodo: Periodo }) {
     setCalculando(true); setMsg(null)
     try {
       const { jornadasPorUsuarioDelMes } = await import('@/lib/excel-trabajo-liquidacion')
-      const { jornadas, error } = await jornadasPorUsuarioDelMes(supabase, periodo.mes)
+      const { jornadas, corregidos, error } = await jornadasPorUsuarioDelMes(supabase, { id: periodo.id, mes: periodo.mes })
       if (error) { setMsg({ ok: false, t: 'No se pudo calcular: ' + error }); return }
       let n = 0, sinActividad = 0
       const upserts: any[] = []
@@ -62,7 +62,7 @@ export default function PadronLiquidacion({ periodo }: { periodo: Periodo }) {
         const { error: e2 } = await supabase.from('liquidacion_dias').upsert(upserts, { onConflict: 'periodo_id,persona_id' })
         if (e2) { setMsg({ ok: false, t: 'No se pudo guardar: ' + e2.message }); return }
       }
-      setMsg({ ok: true, t: `000 calculado desde jornadas reales para ${n} persona(s). ${sinActividad} sin actividad operativa quedan para carga manual (no se autocompletan). Podés ajustar antes de exportar.` })
+      setMsg({ ok: true, t: `000 calculado desde la planilla del mes (fechas distintas trabajadas, sin tope) para ${n} persona(s)${corregidos ? `, ${corregidos} con jornadas corregidas en el Excel` : ''}. ${sinActividad} sin actividad operativa quedan para carga manual (no se autocompletan). Podés ajustar antes de exportar.` })
       void cargar()
     } catch (e: any) { setMsg({ ok: false, t: 'No se pudo calcular: ' + (e?.message || e) }) }
     finally { setCalculando(false) }

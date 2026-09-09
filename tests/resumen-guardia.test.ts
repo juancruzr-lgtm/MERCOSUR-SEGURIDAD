@@ -1445,3 +1445,74 @@ describe('plantilla: prolijidad e identidad', () => {
     expect(p.secciones).toContain('AY')            // arranque de supervisión
   })
 })
+
+// ── 000 DÍAS TRABAJADOS: fuente y reglas (corrección definitiva 09/09/2026) ──
+// El 000 = fechas distintas EFECTIVAMENTE trabajadas de la planilla liquidable
+// (no turnos crudos, no programados, no históricos de Visual). Una fecha = 1 día,
+// sin tope de 25. `fila.jornadas` es exactamente lo que `jornadasPorUsuarioDelMes`
+// envía como 000 (para vigiladores; los mensualizados y sin actividad van a 0).
+describe('000 DÍAS TRABAJADOS — jornadas para Visual', () => {
+  const dia = (n: number) => `2026-08-${String(n).padStart(2, '0')}`
+  const trabajadas = (fechas: string[]) => {
+    const turnos = fechas.map((f, i) => turno({ id: `t${i}`, fecha: f }))
+    const registros = turnos.map(t => registro({ turno_id: t.id, horas_liquidables: 12 }))
+    return construirResumenGuardia(base({ turnos, registros }))
+  }
+
+  it('26 fechas distintas trabajadas → 000 = 26', () => {
+    const fechas = Array.from({ length: 26 }, (_, i) => dia(i + 1))
+    expect(fila(trabajadas(fechas))!.jornadas).toBe(26)
+  })
+
+  it('sin tope de 25: 27 fechas distintas → 000 = 27', () => {
+    const fechas = Array.from({ length: 27 }, (_, i) => dia(i + 1))
+    expect(fila(trabajadas(fechas))!.jornadas).toBe(27)
+  })
+
+  it('una fecha trabajada → 000 = 1', () => {
+    expect(fila(trabajadas([dia(3)]))!.jornadas).toBe(1)
+  })
+
+  it('dos turnos la MISMA fecha → 1 día', () => {
+    const manana = turno({ id: 't1', fecha: dia(10), hora_inicio: '09:00', hora_fin: '16:00' })
+    const tarde = turno({ id: 't2', fecha: dia(10), hora_inicio: '18:00', hora_fin: '23:00' })
+    const rs = [registro({ turno_id: 't1', horas_liquidables: 7 }), registro({ turno_id: 't2', horas_liquidables: 5 })]
+    expect(fila(construirResumenGuardia(base({ turnos: [manana, tarde], registros: rs })))!.jornadas).toBe(1)
+  })
+
+  it('programado pero NO trabajado (turno cubierto sin registro, fuera de transición) → 0', () => {
+    const t = turno({ id: 't1', fecha: dia(12), estado: 'cubierto' })
+    const f = fila(construirResumenGuardia(base({ turnos: [t], registros: [] })))!
+    expect(f.jornadas).toBe(0)
+  })
+
+  it('jornada reconocida en la planilla (con horas liquidables) → incluida', () => {
+    const t = turno({ id: 't1', fecha: dia(5) })
+    const r = registro({ turno_id: 't1', horas_liquidables: 8 })
+    expect(fila(construirResumenGuardia(base({ turnos: [t], registros: [r] })))!.jornadas).toBe(1)
+  })
+
+  it('día NO reconocido (ausencia registrada) → excluido del 000', () => {
+    const t = turno({ id: 't1', fecha: dia(6) })
+    const r = registro({ turno_id: 't1', tipo_registro: 'ausencia', horas_liquidables: 0 })
+    expect(fila(construirResumenGuardia(base({ turnos: [t], registros: [r] })))!.jornadas).toBe(0)
+  })
+
+  it('día sin horas reconocidas (horas liquidables 0) → excluido del 000', () => {
+    const t = turno({ id: 't1', fecha: dia(7) })
+    const r = registro({ turno_id: 't1', horas_liquidables: 0 })
+    expect(fila(construirResumenGuardia(base({ turnos: [t], registros: [r] })))!.jornadas).toBe(0)
+  })
+
+  it('mezcla: 3 fechas trabajadas + 1 ausencia + 1 programado-no-trabajado → 000 = 3', () => {
+    const trabajos = [dia(1), dia(2), dia(3)].map((f, i) => turno({ id: `w${i}`, fecha: f }))
+    const regsTrabajo = trabajos.map(t => registro({ turno_id: t.id, horas_liquidables: 12 }))
+    const ausente = turno({ id: 'a1', fecha: dia(4) })
+    const programado = turno({ id: 'p1', fecha: dia(5), estado: 'cubierto' })
+    const res = construirResumenGuardia(base({
+      turnos: [...trabajos, ausente, programado],
+      registros: [...regsTrabajo, registro({ turno_id: 'a1', tipo_registro: 'ausencia', horas_liquidables: 0 })],
+    }))
+    expect(fila(res)!.jornadas).toBe(3)
+  })
+})
