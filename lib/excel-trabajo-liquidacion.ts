@@ -161,8 +161,15 @@ export async function plantillaTrabajoDelMes(
  * dos turnos el mismo día = 1 (lo resuelve `construirResumenGuardia`, que sólo
  * cuenta líneas con horas reconocidas: excluye ausencias y días programados-no-
  * trabajados, y aplica las correcciones de horas). SIN tope de 25 (si trabajó 27
- * fechas, son 27). Los mensualizados/sin actividad devuelven 0 (no se
- * autocompletan). NO copia el mes anterior ni usa valores históricos de Visual.
+ * fechas, son 27). NO copia el mes anterior ni usa valores históricos de Visual.
+ *
+ * OPERATIVO vs MENSUALIZADO (regla JC): el 000 se DERIVA de la actividad real
+ * SÓLO para personal operativo — vigiladores y SUPERVISORES (un supervisor que
+ * hace guardias tiene 000 de sus fechas reales). Los ADMINISTRATIVOS/jerárquicos
+ * (BLOQUE 3, mensualizados) NO derivan jornadas de turnos: devuelven 0 → quedan
+ * pendientes de carga manual (no se inventan fichajes). Un operativo sin
+ * actividad también da 0 (pendiente). Se usa `jornadasReales` (conteo real, sin
+ * el 0 de mensualizados), no `jornadas` (que va en 0 para el sueldo mensualizado).
  *
  * La planilla YA REVISADA manda: si Juan corrigió las jornadas en el Excel de
  * trabajo antes de consolidar (queda en `liquidacion_ajuste`, clave 'jornadas'),
@@ -176,9 +183,12 @@ export async function jornadasPorUsuarioDelMes(
   const { resumen, error } = await plantillaTrabajoDelMes(client, periodo.mes)
   if (error || !resumen) return { jornadas: new Map(), corregidos: 0, error: error || 'sin resumen' }
   const out = new Map<string, number>()
-  // fila.jornadas = fechas distintas trabajadas (0 para mensualizados / sin
-  // actividad operativa: esos NO se autocompletan, se reportan aparte).
-  for (const f of resumen.filas) out.set(f.empleadoId, Number(f.jornadas ?? 0))
+  // Operativos (vigiladores + supervisores) → jornadas reales trabajadas.
+  // Administrativos (mensualizados) → 0 (no se derivan de turnos; carga manual).
+  for (const f of resumen.filas) {
+    const operativo = f.grupo === 'vigiladores' || f.grupo === 'supervisores'
+    out.set(f.empleadoId, operativo ? Number(f.jornadasReales ?? 0) : 0)
+  }
   // Overlay de la planilla revisada: una corrección manual de jornadas hecha en
   // el Excel de trabajo pisa el conteo (es la verdad que se va a liquidar).
   let corregidos = 0
