@@ -1,9 +1,9 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import ImportarLiquidacion from '@/components/liquidacion/ImportarLiquidacion'
 import ReimportarExcelTrabajo from '@/components/liquidacion/ReimportarExcelTrabajo'
 import PadronLiquidacion from '@/components/liquidacion/PadronLiquidacion'
+import ImportarResultadoVisual from '@/components/liquidacion/ImportarResultadoVisual'
 
 // GERENCIA → GESTIÓN ECONÓMICA → LIQUIDACIÓN (LIQ1A).
 // Principio: cada período NACE LIMPIO (padrón generado, conceptos desde cero;
@@ -33,6 +33,15 @@ const S: Record<string, React.CSSProperties> = {
   err: { color: '#f87171', fontSize: 13 }, ok: { color: '#4ade80', fontSize: 13 },
 }
 const tabStyle = (a: boolean): React.CSSProperties => ({ padding: '8px 14px', background: a ? '#1e293b' : 'transparent', color: a ? '#fff' : '#94a3b8', border: '1px solid #1e293b', borderRadius: 6, cursor: 'pointer', fontSize: 13 })
+// F2: encabezado de paso del circuito (secuencia guía, no wizard rígido).
+function PasoHeader({ n, titulo, sub, activo }: { n: number; titulo: string; sub?: string; activo: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '18px 0 8px', paddingTop: 12, borderTop: '1px solid #1e293b' }}>
+      <span style={{ width: 24, height: 24, borderRadius: '50%', background: activo ? '#2563eb' : '#334155', color: '#fff', fontSize: 13, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>{n}</span>
+      <div><span style={{ fontWeight: 700, fontSize: 15, color: activo ? '#e2e8f0' : '#94a3b8' }}>{titulo}</span>{sub && <span style={{ color: '#64748b', fontSize: 12, marginLeft: 8 }}>{sub}</span>}</div>
+    </div>
+  )
+}
 // Límites [desde, hasta] del mes 'YYYY-MM' (para cruzar novedades del mes con el período).
 function limitesDelMes(mes: string): { desde: string; hasta: string } {
   const desde = `${mes}-01`
@@ -178,6 +187,14 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       const r = await generarVisualCompleto(supabase, { id: sel.id, mes: sel.mes })
       if (r.resultado) setValidacion(r.resultado)
       if (r.error || !r.bytes) { setMsg({ ok: false, t: 'No se pudo generar: ' + (r.error || 'sin datos') }); return }
+      // LIQ3/F3: registrar lo ENVIADO a Visual (para conciliar contra el resultado).
+      if (r.resultado?.lineas?.length) {
+        const enviado = r.resultado.lineas.map((l: any) => ({
+          cuil: String(l.cuil ?? ''), cod_interno: String(l.legajo ?? ''), codigo: String(l.codigo),
+          cantidad: l.cantidad ?? null, importe: l.importe ?? null,
+        }))
+        await supabase.rpc('registrar_enviado_visual', { p_periodo_id: sel.id, p_lineas: enviado })
+      }
       const blob = new Blob([r.bytes as BlobPart], { type: 'application/vnd.ms-excel' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -267,7 +284,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
           </div>
           {sel && (
             <div style={S.card}>
-              <strong>Período {sel.mes} · {sel.estado}</strong>
+              <strong>Circuito de liquidación · Período {sel.mes} · <span style={{ color: '#60a5fa' }}>{sel.estado}</span></strong>
               <div style={{ fontSize: 13, marginTop: 6 }}>Padrón: <b>{padronN}</b> empleados · Conceptos cargados: <b>{conceptosP.length}</b> {conceptosP.length === 0 && <span style={{ color: '#64748b' }}>(nace vacío)</span>}</div>
               {conceptosP.length > 0 && (
                 <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
@@ -277,46 +294,33 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   ))}</tbody>
                 </table>
               )}
-              {/* LIQ2A · PASO 1: MERCOSUR genera el Excel de trabajo del mes. */}
-              {EDITABLE(sel.estado) && (
-                <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+
+              {/* ═══ PASO 1 · PREPARAR — MERCOSUR arma el Excel de trabajo del mes ═══ */}
+              <PasoHeader n={1} titulo="Preparar" sub="MERCOSUR arma el Excel de trabajo del mes" activo={EDITABLE(sel.estado)} />
+              {EDITABLE(sel.estado) ? (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button style={{ ...S.btn, opacity: genExcel ? 0.6 : 1 }} disabled={genExcel} onClick={() => void descargarExcelTrabajo()}>
                     {genExcel ? 'Generando…' : 'Descargar Excel de trabajo'}
                   </button>
                   <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
-                    PASO 1 · MERCOSUR arma el Excel del mes (padrón, jornadas, novedades, conceptos y fórmulas). Lo editás en Excel y lo volvés a subir para ver las diferencias.
+                    Padrón, jornadas, novedades y fórmulas del mes. Lo editás en Excel (descuentos, días, embargos) y lo volvés a subir en el paso 2. El 000 de días se ajusta en el padrón (paso 2).
                   </span>
                 </div>
-              )}
+              ) : <div style={{ color: '#64748b', fontSize: 12 }}>El período ya no está en edición; el Excel de trabajo se prepara mientras está en borrador/revisión.</div>}
 
-              {/* LIQ2B · PASO 3: subir el Excel revisado → preview de diferencias. */}
+              {/* ═══ PASO 2 · REVISAR — subir Excel corregido, padrón (000/expedientes), controles ═══ */}
+              <PasoHeader n={2} titulo="Revisar y corregir" sub="Subir el Excel editado, ver diferencias, ajustar padrón" activo={EDITABLE(sel.estado)} />
               {EDITABLE(sel.estado) && (
                 <ReimportarExcelTrabajo periodo={sel} onDone={() => { void abrirPeriodo(sel) }} />
               )}
-
-              {/* Importación del RESULTADO de Visual (conciliación) — NO es el
-                  flujo principal de preparación. Queda para traer/contrastar lo
-                  que Visual devolvió. */}
-              {EDITABLE(sel.estado) && (
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 12, color: '#64748b', margin: '6px 0' }}>
-                    Conciliación (opcional): importar un resultado/planilla de Visual para contrastar. No reemplaza al Excel de trabajo.
-                  </div>
-                  <ImportarLiquidacion periodo={sel} empleados={activos as any} catalogo={catalogo as any}
-                    onDone={() => { void abrirPeriodo(sel); void cargarCatalogo() }} />
-                </div>
-              )}
-
-              {/* LIQ2G: padrón de liquidación — 000 días editable + expedientes 111/993. */}
+              {/* Padrón de liquidación — 000 días editable/calculado + expedientes 111/993. */}
               <PadronLiquidacion periodo={sel} />
-
               {/* Novedades laborales del mes: control de alimentación (referencia). */}
               <div style={{ marginTop: 12, fontSize: 13 }}>
                 <b>Novedades del mes (aprobadas):</b> {novedadesMes.length}
                 {novedadesMes.length > 0 && <span style={{ color: '#64748b' }}> — control para cruzar contra los conceptos cargados.</span>}
               </div>
-
-              {/* LIQ1C: comparación con el período anterior (control de omisiones, no copia). */}
+              {/* Comparación con el período anterior (control de omisiones, no copia). */}
               <div style={{ marginTop: 12 }}>
                 <button style={{ ...S.btn, background: '#334155' }} onClick={() => void comparar()}>Comparar con período anterior</button>
                 {comparacion && (
@@ -342,8 +346,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                 )}
               </div>
 
-              {/* LIQ2C · PASO 6: consolidar (congela snapshot por empleado×código). */}
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #1e293b' }}>
+              {/* ═══ PASO 3 · VISUAL — consolidar y generar el .xls de importación ═══ */}
+              <PasoHeader n={3} titulo="Generar para Visual" sub="Consolidar y bajar el .xls que Visual calcula" activo={EDITABLE(sel.estado) || sel.estado === 'consolidada'} />
+              <div>
                 {consolidadaN > 0 && (
                   <div style={{ fontSize: 13, marginBottom: 8 }}>
                     Consolidado: <b>{consolidadaN}</b> filas (empleado × código) congeladas
@@ -356,7 +361,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                       {consolidando ? 'Consolidando…' : 'Consolidar liquidación'}
                     </button>
                     <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
-                      PASO 6 · Congela una versión concreta y auditable (baseline + ajustes) para exportar a Visual. Podés re-consolidar mientras no esté exportada.
+                      Consolidar congela una versión auditable (baseline + ajustes) para exportar a Visual. Podés re-consolidar mientras no esté exportada.
                     </span>
                   </div>
                 ) : sel.estado === 'consolidada' ? (
@@ -368,7 +373,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                       Re-consolidar
                     </button>
                     <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 100%' }}>
-                      PASO 7 · Genera el .xls de importación a Visual desde el consolidado (config por concepto). Marca el período EXPORTADA. La liquidación final la calcula Visual.
+                      Genera el .xls de importación a Visual desde el consolidado (config por concepto). Marca el período EXPORTADA y registra lo enviado para conciliar. La liquidación final la calcula Visual.
                     </span>
                   </div>
                 ) : sel.estado === 'exportada' || sel.estado === 'liquidada' ? (
@@ -414,6 +419,22 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     )}
                   </div>
                 )}
+              </div>
+
+              {/* ═══ PASO 4 · RESULTADO — importar lo que Visual devolvió + conciliación ═══ */}
+              <PasoHeader n={4} titulo="Resultado de Visual" sub="Importar la planilla final y conciliar contra lo enviado" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
+              <ImportarResultadoVisual periodo={sel} />
+
+              {/* ═══ PASO 5 · PAGOS — acreditaciones (bloqueado hasta el archivo real Galicia) ═══ */}
+              <PasoHeader n={5} titulo="Pagos" sub="Acreditación de sueldos y extras" activo={false} />
+              <div style={{ padding: 10, background: '#0f1a2e', border: '1px dashed #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd' }}>
+                Pendiente: el formato de acreditación bancaria (Galicia) se implementa cuando llegue el archivo real. Sueldo y extras van en acreditaciones separadas. No se inventa el layout.
+              </div>
+
+              {/* ═══ PASO 6 · LIBRO DIGITAL — LSD / ARCA (futuro) ═══ */}
+              <PasoHeader n={6} titulo="Libro de Sueldos Digital" sub="LSD / ARCA" activo={false} />
+              <div style={{ padding: 10, background: '#1a1206', border: '1px dashed #7c5510', borderRadius: 8, fontSize: 12, color: '#fcd34d' }}>
+                Pendiente: generación del Libro de Sueldos Digital y presentación ARCA/AFIP. Fase futura, no incluida en este circuito.
               </div>
             </div>
           )}
