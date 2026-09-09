@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  grupoDeResumen, construirResumenGuardia,
+  grupoDeResumen, construirResumenGuardia, construirResumenGuardiaVigiladores,
   type ParamsResumenGuardia, type TurnoResumen, type EmpleadoResumen,
 } from '@/lib/resumen-guardia'
 import {
@@ -70,6 +70,18 @@ describe('construirResumenGuardia · gruposIncluidos (desacople)', () => {
     expect(fila(r, 's1'), 'supervisor NO aparece').toBeUndefined()
     expect(fila(r, 'd1'), 'Rodolfo (direccion_operativa) NO aparece').toBeUndefined()
     expect(fila(r, 'a1'), 'administrativo NO aparece').toBeUndefined()
+  })
+
+  // CONSUMIDOR REAL: es la función que llama el botón "Resumen Guardia" en
+  // AppClient (exportarResumenGuardiaMensualXLSX). Debe dar SOLO vigiladores.
+  it('construirResumenGuardiaVigiladores (consumidor real) → sólo vigiladores', () => {
+    const r = construirResumenGuardiaVigiladores(base({ empleados, turnos, registros }))
+    expect(fila(r, 'v1'), 'vigilador aparece').toBeTruthy()
+    expect(fila(r, 's1'), 'supervisor NO aparece').toBeUndefined()
+    expect(fila(r, 'd1'), 'Rodolfo NO aparece').toBeUndefined()
+    expect(fila(r, 'a1'), 'administrativo NO aparece').toBeUndefined()
+    // y sólo quedan filas del grupo vigiladores (ningún dato salarial de otros)
+    expect(r.filas.every(f => f.grupo === 'vigiladores')).toBe(true)
   })
 })
 
