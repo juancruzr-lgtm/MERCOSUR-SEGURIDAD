@@ -5,7 +5,7 @@ import {
   type ParamsResumenGuardia, type TurnoResumen,
 } from '@/lib/resumen-guardia'
 import { escribirPlantillaLiquidacionXLSX } from '@/lib/liquidacion-xlsx'
-import { compararReimport, type CeldaVisual } from '@/lib/excel-trabajo-reimport'
+import { compararReimport, baselineDesdePlantilla, parseGridReimport, type CeldaVisual } from '@/lib/excel-trabajo-reimport'
 import type { RegistroUniverso } from '@/lib/liquidacion'
 
 // Decoraciones recuperadas del Excel original (auditado): escala de color en AM
@@ -102,5 +102,21 @@ describe('decoraciones del Excel de trabajo (gráfico REC/Extras + semáforos)',
     expect(filaG1, 'fila de g1 con identidad').toBeTruthy()
     expect(filaG2, 'fila de g2 con identidad').toBeTruthy()
     expect(filaG1![56]).toBe('2026-08')
+  })
+
+  // Bug E (causa): la fila de encabezado (BD6='usuario_id', BE6='periodo') se
+  // interpretaba como empleado y periodoDelArchivo quedaba en el literal 'periodo'.
+  it('END-TO-END: generar 2026-08 → releer → período 2026-08, 0 diffs, 0 fuera de padrón, sin usuario_id fantasma', async () => {
+    const pl = plantillaReal() // mes '2026-08'
+    const buf = await escribirPlantillaLiquidacionXLSX(pl)
+    const { grid } = await leerGrid(buf)
+    const r = compararReimport(pl, grid)
+    expect(r.periodoDelArchivo, 'período real, no el rótulo "periodo"').toBe('2026-08')
+    expect(r.diffs.length).toBe(0)
+    expect(r.fueraDePadron.length).toBe(0)
+    expect(r.personasEnArchivo, 'reconoce sólo empleados reales (g1, g2)').toBe(2)
+    // El registro fantasma 'usuario_id' NO debe existir ni en baseline ni en subido.
+    expect(baselineDesdePlantilla(pl).has('usuario_id')).toBe(false)
+    expect(parseGridReimport(grid).has('usuario_id')).toBe(false)
   })
 })

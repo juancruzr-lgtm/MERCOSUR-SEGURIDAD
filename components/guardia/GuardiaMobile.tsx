@@ -599,8 +599,16 @@ export default function GuardiaMobile({ user }: { user: any }) {
     } catch { return null }
   })
 
-  // Captura de teléfono del vigilador (para avisos por WhatsApp). Se pide sólo
-  // si no hay número válido y no está "recordado más tarde". Nunca bloquea.
+  // Captura de teléfono del vigilador (para avisos por WhatsApp). Decisión de
+  // Juan (09/2026): es OBLIGATORIO y funciona como COMPUERTA. Si no hay número
+  // válido, el modal se muestra y no se puede saltear —sin "más tarde", sin
+  // snooze, sin cerrar. Lo ÚNICO que lo apaga es guardar un número válido
+  // (`telValido`). La única excepción es AUTOMÁTICA: no se muestra mientras hay
+  // un flujo crítico en curso (fichaje: `ingresoFase`/`fichando`), para no
+  // interrumpirlo; al terminar, vuelve a exigirse (ver el render).
+  const [telValido, setTelValido] = useState<boolean>(() => {
+    try { return Boolean(normalizarTelefonoAr(user.telefono).e164) } catch { return true }
+  })
   const [telModalAbierto, setTelModalAbierto] = useState(false)
   const [telInput, setTelInput] = useState('')
   const [telPreview, setTelPreview] = useState<string | null>(null)
@@ -608,16 +616,11 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [telGuardando, setTelGuardando] = useState(false)
   const [telListo, setTelListo] = useState(false)
 
-  // Pedir el teléfono sólo si el guardado no es válido y no fue pospuesto hace
-  // poco. No bloquea nada: el modal siempre ofrece "Ahora no".
+  // Al entrar, si falta el número válido, se abre el pedido. Sin snooze: sólo
+  // deja de pedirse cuando se guardó un número válido (telValido === true).
   useEffect(() => {
-    try {
-      if (normalizarTelefonoAr(user.telefono).e164) return
-      const snooze = Number(localStorage.getItem(`tel_snooze_${user.id}`) || '0')
-      if (Date.now() < snooze) return
-      setTelModalAbierto(true)
-    } catch {}
-  }, [user.telefono, user.id])
+    if (!telValido) setTelModalAbierto(true)
+  }, [telValido])
 
   const previsualizarTel = () => {
     const n = normalizarTelefonoAr(telInput)
@@ -637,7 +640,8 @@ export default function GuardiaMobile({ user }: { user: any }) {
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) { setTelError(json?.error || 'No se pudo guardar.'); return }
-      user.telefono = json.telefono   // reflejar en memoria: no volver a pedir esta sesión
+      user.telefono = json.telefono   // reflejar en memoria
+      setTelValido(true)              // ÚNICO modo de apagar el pedido persistente
       setTelListo(true)
       setTimeout(() => setTelModalAbierto(false), 1200)
     } catch {
@@ -645,10 +649,6 @@ export default function GuardiaMobile({ user }: { user: any }) {
     } finally {
       setTelGuardando(false)
     }
-  }
-  const posponerTel = () => {
-    try { localStorage.setItem(`tel_snooze_${user.id}`, String(Date.now() + 3 * 24 * 3600 * 1000)) } catch {}
-    setTelModalAbierto(false)
   }
   // Impide recargas superpuestas: intervalo, focus y online pueden dispararse juntos.
   const cargaEnCursoRef = useRef(false)
@@ -2275,14 +2275,18 @@ export default function GuardiaMobile({ user }: { user: any }) {
         )
       })()}
 
-      {/* Captura de teléfono del vigilador (avisos por WhatsApp). No bloquea:
-          siempre se puede "Ahora no". */}
-      {telModalAbierto && (
+      {/* Captura de teléfono del vigilador (avisos por WhatsApp). COMPUERTA dura
+          y obligatoria: sin "Ahora no", sin snooze, sin cerrar ni saltear. La
+          ÚNICA salida es guardar un número válido. Excepción SÓLO automática: se
+          suprime mientras hay un flujo crítico en curso (fichaje: ingresoFase o
+          fichando) para no interrumpirlo; al terminar, vuelve a exigirse. No hay
+          deadlock: el input/confirmar/guardar del propio modal siempre funciona. */}
+      {telModalAbierto && ingresoFase === 'idle' && fichando === null && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
           <div style={{ background: '#0f172a', border: '1px solid #1e2d42', borderRadius: 14, padding: 22, maxWidth: 380, width: '100%', color: '#e2e8f0' }}>
             <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>Tu número de celular</div>
             <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 14 }}>
-              Lo usamos para enviarte avisos operativos por WhatsApp (por ejemplo, una ronda pendiente). Podés cargarlo ahora o más tarde.
+              Lo necesitamos para enviarte avisos operativos por WhatsApp (por ejemplo, una ronda pendiente). Es obligatorio: cargalo para continuar.
             </div>
 
             {telListo ? (
@@ -2315,10 +2319,6 @@ export default function GuardiaMobile({ user }: { user: any }) {
                       {telGuardando ? 'Guardando…' : 'Confirmar y guardar'}
                     </button>
                   )}
-                  <button onClick={posponerTel} disabled={telGuardando}
-                    style={{ background: 'none', border: '1px solid #1e2d42', color: '#94a3b8', borderRadius: 8, padding: '10px 14px', fontSize: 14, cursor: 'pointer' }}>
-                    Ahora no
-                  </button>
                 </div>
               </>
             )}
