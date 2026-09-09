@@ -9,6 +9,7 @@ import AvisoEvaluacion from '@/components/desempeno/AvisoEvaluacion'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
+import { normalizarTelefonoAr, mostrarTelefono } from '@/lib/telefono-ar'
 
 // ── CONSTANTES ────────────────────────────────────────────────
 const INGRESO_PENDIENTE_KEY = 'mercosur_ingreso_pendiente'
@@ -586,6 +587,69 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [refrescando, setRefrescando] = useState(false)
   const [errorCarga, setErrorCarga] = useState<string | null>(null)
   const [ultimaActualizacion, setUltimaActualizacion] = useState<Date | null>(null)
+
+  // Deep link de ronda (WhatsApp/push → /dashboard?ronda=<id>…). El destino
+  // sobrevive por el propio query param; sessionStorage es sólo respaldo por si
+  // el flujo de login lo perdiera. Se lee una vez al montar.
+  const [deepLinkRonda] = useState<string | null>(() => {
+    try {
+      const r = new URLSearchParams(window.location.search).get('ronda')
+      if (r) { try { sessionStorage.setItem('deeplink_ronda', r) } catch {} ; return r }
+      return sessionStorage.getItem('deeplink_ronda')
+    } catch { return null }
+  })
+
+  // Captura de teléfono del vigilador (para avisos por WhatsApp). Se pide sólo
+  // si no hay número válido y no está "recordado más tarde". Nunca bloquea.
+  const [telModalAbierto, setTelModalAbierto] = useState(false)
+  const [telInput, setTelInput] = useState('')
+  const [telPreview, setTelPreview] = useState<string | null>(null)
+  const [telError, setTelError] = useState<string | null>(null)
+  const [telGuardando, setTelGuardando] = useState(false)
+  const [telListo, setTelListo] = useState(false)
+
+  // Pedir el teléfono sólo si el guardado no es válido y no fue pospuesto hace
+  // poco. No bloquea nada: el modal siempre ofrece "Ahora no".
+  useEffect(() => {
+    try {
+      if (normalizarTelefonoAr(user.telefono).e164) return
+      const snooze = Number(localStorage.getItem(`tel_snooze_${user.id}`) || '0')
+      if (Date.now() < snooze) return
+      setTelModalAbierto(true)
+    } catch {}
+  }, [user.telefono, user.id])
+
+  const previsualizarTel = () => {
+    const n = normalizarTelefonoAr(telInput)
+    if (!n.e164) { setTelError('Número inválido, revisalo.'); setTelPreview(null); return }
+    setTelError(null); setTelPreview(mostrarTelefono(n.e164))
+  }
+  const guardarTel = async () => {
+    const n = normalizarTelefonoAr(telInput)
+    if (!n.e164) { setTelError('Número inválido, revisalo.'); return }
+    setTelGuardando(true); setTelError(null)
+    try {
+      const { data } = await supabase.auth.getSession()
+      const res = await fetch('/api/perfil/telefono', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}` },
+        body: JSON.stringify({ telefono: telInput }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) { setTelError(json?.error || 'No se pudo guardar.'); return }
+      user.telefono = json.telefono   // reflejar en memoria: no volver a pedir esta sesión
+      setTelListo(true)
+      setTimeout(() => setTelModalAbierto(false), 1200)
+    } catch {
+      setTelError('No se pudo guardar. Probá de nuevo.')
+    } finally {
+      setTelGuardando(false)
+    }
+  }
+  const posponerTel = () => {
+    try { localStorage.setItem(`tel_snooze_${user.id}`, String(Date.now() + 3 * 24 * 3600 * 1000)) } catch {}
+    setTelModalAbierto(false)
+  }
   // Impide recargas superpuestas: intervalo, focus y online pueden dispararse juntos.
   const cargaEnCursoRef = useRef(false)
   // Un refresco de fondo no debe pisar el estado optimista durante un fichaje.
@@ -2162,7 +2226,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
         {/* Rondas del puesto (Etapa 2 — solo lectura). Se resuelve por turno
             vigente desde el servidor; no se asigna manualmente. */}
         {!loading && (
-          <RondasGuardiaPanel objetivos={objetivos} ahora={ahora} recargaSolicitada={rondasRecarga} />
+          <RondasGuardiaPanel objetivos={objetivos} ahora={ahora} recargaSolicitada={rondasRecarga} abrirRondaId={deepLinkRonda} />
         )}
 
         {/* Cerrar sesión */}
@@ -2210,6 +2274,57 @@ export default function GuardiaMobile({ user }: { user: any }) {
           />
         )
       })()}
+
+      {/* Captura de teléfono del vigilador (avisos por WhatsApp). No bloquea:
+          siempre se puede "Ahora no". */}
+      {telModalAbierto && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+          <div style={{ background: '#0f172a', border: '1px solid #1e2d42', borderRadius: 14, padding: 22, maxWidth: 380, width: '100%', color: '#e2e8f0' }}>
+            <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>Tu número de celular</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 14 }}>
+              Lo usamos para enviarte avisos operativos por WhatsApp (por ejemplo, una ronda pendiente). Podés cargarlo ahora o más tarde.
+            </div>
+
+            {telListo ? (
+              <div style={{ color: '#4ade80', fontSize: 14, padding: '8px 0' }}>✓ Número guardado. ¡Gracias!</div>
+            ) : (
+              <>
+                <input
+                  value={telInput}
+                  onChange={e => { setTelInput(e.target.value); setTelPreview(null); setTelError(null) }}
+                  placeholder="Ej: 0341 15 6123456"
+                  inputMode="tel"
+                  style={{ width: '100%', boxSizing: 'border-box', background: '#0a0e1a', border: '1px solid #1e2d42', color: '#e2e8f0', borderRadius: 8, padding: '10px 12px', fontSize: 15 }}
+                />
+                {telPreview && (
+                  <div style={{ fontSize: 13, color: '#93c5fd', marginTop: 10 }}>
+                    Vamos a guardar: <strong>{telPreview}</strong> — ¿es correcto?
+                  </div>
+                )}
+                {telError && <div style={{ fontSize: 13, color: '#f87171', marginTop: 10 }}>{telError}</div>}
+
+                <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                  {!telPreview ? (
+                    <button onClick={previsualizarTel} disabled={!telInput.trim()}
+                      style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '10px', fontSize: 14, cursor: 'pointer', opacity: telInput.trim() ? 1 : 0.5 }}>
+                      Continuar
+                    </button>
+                  ) : (
+                    <button onClick={guardarTel} disabled={telGuardando}
+                      style={{ flex: 1, background: '#16a34a', color: '#fff', border: 'none', borderRadius: 8, padding: '10px', fontSize: 14, cursor: 'pointer', opacity: telGuardando ? 0.6 : 1 }}>
+                      {telGuardando ? 'Guardando…' : 'Confirmar y guardar'}
+                    </button>
+                  )}
+                  <button onClick={posponerTel} disabled={telGuardando}
+                    style={{ background: 'none', border: '1px solid #1e2d42', color: '#94a3b8', borderRadius: 8, padding: '10px 14px', fontSize: 14, cursor: 'pointer' }}>
+                    Ahora no
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

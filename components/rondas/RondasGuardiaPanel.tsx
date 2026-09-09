@@ -36,6 +36,13 @@ interface Props {
    * recarga; el valor inicial no dispara nada, porque el montaje ya carga solo.
    */
   recargaSolicitada?: number
+  /**
+   * Deep link: id de la ronda a abrir automáticamente al montar (viene del
+   * WhatsApp/push: /dashboard?ronda=<id>…). Se abre una sola vez, sólo si la
+   * ronda está en la lista y no hay ya una ejecución en curso. Sin match, no
+   * hace nada (el panel queda como siempre).
+   */
+  abrirRondaId?: string | null
 }
 
 // Refresco del turno vigente desde el servidor. El estado temporal por ronda se
@@ -49,7 +56,7 @@ const ESTADO_META: Record<EstadoTemporalRonda, { texto: string; fondo: string; t
   sin_horario:   { texto: 'Sin configuración horaria', fondo: '#334155', texto_color: '#e2e8f0' },
 }
 
-export default function RondasGuardiaPanel({ objetivos, ahora, recargaSolicitada = 0 }: Props) {
+export default function RondasGuardiaPanel({ objetivos, ahora, recargaSolicitada = 0, abrirRondaId = null }: Props) {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<RondasGuardiaActual | null>(null)
@@ -121,6 +128,19 @@ export default function RondasGuardiaPanel({ objetivos, ahora, recargaSolicitada
       window.removeEventListener('online', refrescarSiVisible)
     }
   }, [cargar])
+
+  // Deep link: abrir la ronda indicada una sola vez, cuando ya cargó la lista y
+  // no hay una ejecución en curso (en ese caso el detalle de la ejecución manda).
+  const deepLinkAtendidoRef = useRef(false)
+  useEffect(() => {
+    if (deepLinkAtendidoRef.current || !abrirRondaId) return
+    if (!data || rondaAbierta || ejecucionActual?.estado === 'en_curso') return
+    const objetivo = data.rondas.find(r => r.ronda_id === abrirRondaId)
+    if (objetivo) {
+      deepLinkAtendidoRef.current = true
+      setRondaAbierta(objetivo)
+    }
+  }, [abrirRondaId, data, rondaAbierta, ejecucionActual])
 
   // Recarga puntual pedida por el contenedor. Arranca ya atendido para que el
   // montaje no dispare una segunda carga sobre la del efecto de arriba.
