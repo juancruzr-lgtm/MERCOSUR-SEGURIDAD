@@ -13598,9 +13598,10 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
     ]},
-    // GESTIÓN ECONÓMICA: sólo Gerencia (capacidad económica). Administración y
-    // Dirección Operativa NO acceden. Liquidación + (futuro) Facturación/Pagos/Finanzas.
-    ...(tieneCapacidad(user, 'ver_liquidacion') ? [{ section:'GESTIÓN ECONÓMICA', items:[
+    // GESTIÓN ECONÓMICA → Liquidación: Gerencia + Administración (capacidad
+    // preparar_liquidacion). NO Dirección Operativa/Jefe/supervisores/vigiladores.
+    // El acceso a Liquidación NO abre banco/Finanzas (capacidad económica aparte).
+    ...(tieneCapacidad(user, 'preparar_liquidacion') ? [{ section:'GESTIÓN ECONÓMICA', items:[
       { id:'liquidacion', icon:'💵', label:'Liquidación' },
     ]}] : []),
     // CONFIGURACIÓN y SISTEMA: sólo ADMIN PLENO (jefe/dir. operativa/administración/
@@ -13733,7 +13734,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
-              {page === 'liquidacion' && tieneCapacidad(user, 'ver_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
+              {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}
               {page === 'observacion' && esAdminPleno(user) && <ObservacionSistema onNavigate={navegarConFiltro} />}

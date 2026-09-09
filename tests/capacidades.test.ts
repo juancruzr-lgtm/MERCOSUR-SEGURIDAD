@@ -10,6 +10,31 @@ import {
   esAdminPleno,
 } from '@/lib/capacidades'
 
+describe('permisos de Liquidación (preparar vs económico/banco)', () => {
+  it('Administración PREPARA liquidación pero NO tiene económico/banco', () => {
+    const a = { puesto_organizacional: 'administracion' }
+    expect(tieneCapacidad(a, 'preparar_liquidacion')).toBe(true)
+    expect(tieneCapacidad(a, 'ver_finanzas')).toBe(false)
+    expect(tieneCapacidad(a, 'exportar_banco')).toBe(false)
+    expect(tieneCapacidad(a, 'ver_liquidacion')).toBe(false)     // vista económica gerencial
+    expect(tieneCapacidad(a, 'gestionar_usuarios_roles')).toBe(false)
+  })
+  it('Gerencia mantiene todo (prepara + económico)', () => {
+    const g = { puesto_organizacional: 'gerencia' }
+    expect(tieneCapacidad(g, 'preparar_liquidacion')).toBe(true)
+    expect(tieneCapacidad(g, 'ver_finanzas')).toBe(true)
+    expect(tieneCapacidad(g, 'exportar_banco')).toBe(true)
+  })
+  it('NO preparan liquidación: supervisor, jefe, dirección operativa, vigilador', () => {
+    for (const p of ['supervisor', 'jefe_supervisores', 'direccion_operativa', 'vigilador'] as const) {
+      expect(tieneCapacidad({ puesto_organizacional: p }, 'preparar_liquidacion')).toBe(false)
+    }
+  })
+  it('Sergio (supervisor + Vista Admin) tampoco prepara liquidación', () => {
+    expect(tieneCapacidad({ rol: 'admin', puesto_organizacional: 'supervisor', acceso_interfaz_admin: true }, 'preparar_liquidacion')).toBe(false)
+  })
+})
+
 describe('acceso a interfaz admin (flag por usuario, sin tocar rol/puesto)', () => {
   const sergio = { rol: 'admin', puesto_organizacional: 'supervisor', acceso_interfaz_admin: true }
   it('Sergio (supervisor + flag) obtiene el SHELL admin', () => {
