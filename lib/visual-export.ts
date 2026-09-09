@@ -57,6 +57,9 @@ export interface PersonaPadron {
   nombre: string
   esPrueba?: boolean
   tieneUsuario?: boolean
+  /** Excluido de Liquidación por decisión explícita (no se exporta a Visual). */
+  excluido?: boolean
+  motivoExcluido?: string | null
 }
 export interface HaberLinea { codigo: string; cantidad: number | null; importe: number | null }
 export interface PermanenteLinea { codigo: string; importe: number | null }   // calculados 104/977/48410
@@ -105,6 +108,9 @@ export function construirLineasVisual(p: {
     const cuil = soloDigitos(e.cuil)
     const base = { persona_id: e.persona_id, cuil: cuil || null }
     if (e.esPrueba) { padron.push({ ...base, nombre: e.nombre, estado: 'no_corresponde', filas: 0, motivo: 'cuenta de prueba' } as any); continue }
+    // Excluido de Liquidación por decisión explícita y trazable: NO se exporta,
+    // pero se REPORTA (no es exclusión silenciosa).
+    if (e.excluido) { padron.push({ ...base, nombre: e.nombre, estado: 'no_corresponde', filas: 0, motivo: `excluido de liquidación${e.motivoExcluido ? ': ' + e.motivoExcluido : ''}` } as any); continue }
 
     const errsEmp: string[] = []
     // Identidad

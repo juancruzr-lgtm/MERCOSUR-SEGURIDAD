@@ -28,7 +28,7 @@ export async function generarVisualCompleto(
 ): Promise<GenerarVisualResultado> {
   const { desde, hasta } = limitesMes(periodo.mes)
   const [personasR, consR, catR, permR, expR, diasR] = await Promise.all([
-    client.from('liquidacion_persona').select('id, usuario_id, cuil, nombre, cod_interno, estado_liquidable').eq('estado_liquidable', 'activo'),
+    client.from('liquidacion_persona').select('id, usuario_id, cuil, nombre, cod_interno, estado_liquidable, motivo').in('estado_liquidable', ['activo', 'excluido']),
     client.from('liquidacion_consolidada').select('empleado_id, codigo, cantidad, importe').eq('periodo_id', periodo.id),
     client.from('liquidacion_concepto_catalogo').select('codigo_visual, politica, entrada'),
     client.from('liquidacion_concepto_permanente').select('empleado_id, persona_id, importe, activo, vigencia_desde, vigencia_hasta, concepto:concepto_id(codigo_visual)').eq('activo', true),
@@ -48,6 +48,7 @@ export async function generarVisualCompleto(
   const padron: PersonaPadron[] = personas.map(p => ({
     persona_id: p.id, cod_interno: p.cod_interno ?? null, cuil: p.cuil ?? null,
     nombre: p.nombre ?? '', esPrueba: false, tieneUsuario: Boolean(p.usuario_id),
+    excluido: p.estado_liquidable === 'excluido', motivoExcluido: p.motivo ?? null,
   }))
 
   const catalogo = new Map<string, ConceptoCfg>(); const lineaCero: string[] = []
