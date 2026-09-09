@@ -56,14 +56,47 @@ describe('acceso a interfaz admin (flag por usuario, sin tocar rol/puesto)', () 
   it('un supervisor SIN flag sigue en el shell supervisor', () => {
     expect(shellDeUsuario({ rol: 'admin', puesto_organizacional: 'supervisor' })).toBe('supervisor')
   })
-  it('los puestos admin siguen siendo admin pleno (sin cambios)', () => {
+  it('los puestos con Config/Sistema siguen en el shell admin', () => {
     for (const p of ['jefe_supervisores', 'direccion_operativa', 'administracion', 'gerencia'] as const) {
       expect(shellDeUsuario({ puesto_organizacional: p })).toBe('admin')
+    }
+  })
+})
+
+describe('esAdminPleno se decide por la capability configurar_sistema, no por el puesto', () => {
+  // REGLA JC 10/09: jefe_supervisores es jerarquía/alcance operativo; NO da
+  // administración plena. Config/Sistema depende de `configurar_sistema`.
+  it('admin pleno == tiene configurar_sistema', () => {
+    for (const p of ['direccion_operativa', 'administracion', 'gerencia'] as const) {
+      expect(tieneCapacidad({ puesto_organizacional: p }, 'configurar_sistema')).toBe(true)
       expect(esAdminPleno({ puesto_organizacional: p })).toBe(true)
     }
-    // supervisor y vigilador NO son admin pleno
+  })
+  it('jefe_supervisores NO es admin pleno (no tiene configurar_sistema)', () => {
+    expect(tieneCapacidad({ puesto_organizacional: 'jefe_supervisores' }, 'configurar_sistema')).toBe(false)
+    expect(esAdminPleno({ puesto_organizacional: 'jefe_supervisores' })).toBe(false)
+  })
+  it('Sergio como jefe_supervisores: alcance todas pero SIN Config ni económico', () => {
+    const sergioJefe = { rol: 'admin', puesto_organizacional: 'jefe_supervisores', acceso_interfaz_admin: true }
+    expect(alcanceDe(sergioJefe)).toBe('todas')
+    expect(shellDeUsuario(sergioJefe)).toBe('admin')
+    expect(esAdminPleno(sergioJefe)).toBe(false)       // no ve Configuración/Sistema
+    expect(tieneCapacidad(sergioJefe, 'configurar_sistema')).toBe(false)
+    expect(tieneCapacidad(sergioJefe, 'ver_liquidacion')).toBe(false)
+    expect(tieneCapacidad(sergioJefe, 'editar_liquidacion')).toBe(false)
+    expect(tieneCapacidad(sergioJefe, 'ver_finanzas')).toBe(false)
+    expect(tieneCapacidad(sergioJefe, 'preparar_liquidacion')).toBe(false)
+    expect(tieneCapacidad(sergioJefe, 'gestionar_usuarios_roles')).toBe(false)
+    // conserva lo operativo de jefe
+    expect(tieneCapacidad(sergioJefe, 'ver_operacion')).toBe(true)
+    expect(tieneCapacidad(sergioJefe, 'supervisar_todas_zonas')).toBe(true)
+  })
+  it('supervisor común y vigilador tampoco son admin pleno', () => {
     expect(esAdminPleno({ puesto_organizacional: 'supervisor' })).toBe(false)
     expect(esAdminPleno({ puesto_organizacional: 'vigilador' })).toBe(false)
+  })
+  it('admin legado sin puesto conserva admin pleno (fallback por rol)', () => {
+    expect(esAdminPleno({ rol: 'admin' })).toBe(true)
   })
 })
 

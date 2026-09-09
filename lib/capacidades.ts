@@ -223,15 +223,20 @@ export function shellDeUsuario(u: SujetoAcceso | null | undefined): ShellApp {
 }
 
 /**
- * ADMIN PLENO: puestos que legítimamente ven TODA la interfaz administrativa
- * (incluida Configuración/Sistema). Un usuario que llega al shell admin sólo por
- * `acceso_interfaz_admin` (p.ej. un supervisor) NO es admin pleno: su vista se
- * limita a lo operativo y las secciones sensibles quedan ocultas. Preserva
- * exactamente a jefe/dirección operativa/administración/gerencia (y al admin
- * legado sin puesto), que ya veían todo.
+ * ADMIN PLENO: quién ve TODA la interfaz administrativa (Configuración/Sistema:
+ * zonas operativas, servicios, checklists, turnos base, observación, referencias
+ * IA). Se decide por la CAPACIDAD `configurar_sistema`, NO por el puesto.
+ *
+ * REGLA (JC, 10/09): `jefe_supervisores` es jerarquía/alcance OPERATIVO; NO
+ * concede administración plena del sistema. Config/Sistema depende de la
+ * capability específica. Hoy tienen `configurar_sistema`: direccion_operativa,
+ * administracion, gerencia y el admin legado sin puesto (fallback por rol). NO
+ * la tienen supervisor NI jefe_supervisores → no son admin pleno. Un supervisor
+ * que llega al shell admin por `acceso_interfaz_admin` (Sergio) tampoco.
+ *
+ * Cada módulo sensible sigue además con su propio gate (Liquidación/Finanzas por
+ * capacidades económicas, RLS en la base): esto sólo gobierna la VISTA de config.
  */
 export function esAdminPleno(u: SujetoAcceso | null | undefined): boolean {
-  const puesto = puestoDe(u)
-  if (puesto) return puesto === 'jefe_supervisores' || puesto === 'direccion_operativa' || puesto === 'administracion' || puesto === 'gerencia'
-  return String(u?.rol ?? '').trim().toLowerCase() === 'admin'
+  return tieneCapacidad(u, 'configurar_sistema')
 }
