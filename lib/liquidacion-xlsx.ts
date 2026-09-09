@@ -163,10 +163,11 @@ export async function escribirPlantillaLiquidacionXLSX(
       } as any],
     })
 
-    // Bloque REC vs Extras + gráfico, debajo del TOTAL GENERAL. Referencia a las
-    // celdas de total (AG=horas rec, AL=hs extras) para que sea siempre en vivo.
-    const t = estilos.total
-    const base = t + 2
+    // Indicador REC vs Extras = SÓLO VIGILANCIA (BLOQUE 1). El total (AG=horas
+    // rec, AL=hs extras) se toma del SUBTOTAL VIGILADORES, NO del total general
+    // (que mezcla las horas artificiales de los mensualizados). Fórmulas en vivo.
+    const t = estilos.subtotalVigiladores || estilos.total
+    const base = estilos.total + 2
     const g = (ref: string) => plantilla.celdas.find(c => c.ref === ref)
     const recTotal = Number(g(`AG${t}`)?.v ?? 0)
     const extTotal = Number(g(`AL${t}`)?.v ?? 0)
@@ -177,9 +178,9 @@ export async function escribirPlantillaLiquidacionXLSX(
       if (fmt) c.numFmt = fmt
       if (opts?.bold) c.font = { bold: true }
     }
-    put2(`AC${base}`, 'INDICADORES DEL MES', undefined, { bold: true })
-    put2(`AC${base + 1}`, 'Horas REC'); put2(`AD${base + 1}`, recTotal, NUM_FMT.hours, { f: `AG${t}` })
-    put2(`AC${base + 2}`, 'Horas Extras'); put2(`AD${base + 2}`, extTotal, NUM_FMT.hours, { f: `AL${t}` })
+    put2(`AC${base}`, 'INDICADORES DEL MES (sólo vigilancia)', undefined, { bold: true })
+    put2(`AC${base + 1}`, 'Horas REC Vigiladores'); put2(`AD${base + 1}`, recTotal, NUM_FMT.hours, { f: `AG${t}` })
+    put2(`AC${base + 2}`, 'Horas Extras Vigiladores'); put2(`AD${base + 2}`, extTotal, NUM_FMT.hours, { f: `AL${t}` })
     put2(`AC${base + 3}`, '% REC'); put2(`AD${base + 3}`, den > 0 ? recTotal / den : 0, '0.0%', { f: `IF((AG${t}+AL${t})>0,AG${t}/(AG${t}+AL${t}),0)` })
     put2(`AC${base + 4}`, '% Extras'); put2(`AD${base + 4}`, den > 0 ? extTotal / den : 0, '0.0%', { f: `IF((AG${t}+AL${t})>0,AL${t}/(AG${t}+AL${t}),0)` })
     ws.getCell(`AC${base}`).fill = fillOf(COLOR.labelBg)

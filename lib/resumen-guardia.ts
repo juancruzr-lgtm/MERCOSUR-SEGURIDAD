@@ -969,6 +969,13 @@ export interface EstilosPlantilla {
   subtotales: number[]
   total: number
   filasDatos: number[]
+  /**
+   * Fila del SUBTOTAL de VIGILADORES (BLOQUE 1). El indicador REC vs Extras
+   * se construye SÓLO con vigiladores (horas de vigilancia), no con el total
+   * general (que mezcla las horas artificiales de los mensualizados). Opcional
+   * para no romper fixtures mínimos; el escritor cae a `total` si falta.
+   */
+  subtotalVigiladores?: number
 }
 
 export interface PlantillaLiquidacion {
@@ -1230,6 +1237,7 @@ export function plantillaLiquidacionResumenGuardia(
   const titulos: number[] = []
   const subtotalesFilas: number[] = []
   const filasDatos: number[] = []
+  let subtotalVigiladores = 0  // fila del SUBTOTAL VIGILADORES (para REC/Extras)
   const subtotales: { fila: number; suma: Record<string, number> }[] = []
   for (const gp of grupos) {
     const filasGrupo = resumen.filas.filter(f => f.grupo === gp.clave)
@@ -1256,6 +1264,7 @@ export function plantillaLiquidacionResumenGuardia(
     }
     subtotalesFilas.push(filaSubtotal)
     subtotales.push({ fila: filaSubtotal, suma })
+    if (gp.clave === 'vigiladores') subtotalVigiladores = filaSubtotal
     r += 2 // subtotal + fila separadora vacía
   }
 
@@ -1281,6 +1290,7 @@ export function plantillaLiquidacionResumenGuardia(
       subtotales: subtotalesFilas,
       total: filaTotales,
       filasDatos,
+      subtotalVigiladores,
     },
   }
 }
