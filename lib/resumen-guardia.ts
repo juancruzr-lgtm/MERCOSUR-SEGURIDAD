@@ -161,8 +161,11 @@ export type GrupoResumen = 'vigiladores' | 'supervisores' | 'administrativos'
 export function grupoDeResumen(sujeto?: { rol?: string | null; puesto_organizacional?: string | null } | null): GrupoResumen {
   const p = String(sujeto?.puesto_organizacional ?? '').trim().toLowerCase()
   if (p === 'vigilador') return 'vigiladores'
-  if (p === 'supervisor' || p === 'jefe_supervisores' || p === 'direccion_operativa') return 'supervisores'
-  if (p === 'administracion' || p === 'gerencia') return 'administrativos'
+  // Supervisión operativa de calle: supervisor y jefe de supervisores → BLOQUE 2.
+  if (p === 'supervisor' || p === 'jefe_supervisores') return 'supervisores'
+  // Jerárquicos/mensualizados → BLOQUE 3. Dirección operativa es jerárquica
+  // (Rodolfo): NO va con los supervisores de calle.
+  if (p === 'direccion_operativa' || p === 'administracion' || p === 'gerencia') return 'administrativos'
   const r = String(sujeto?.rol ?? '').trim().toLowerCase()
   if (r === 'admin') return 'administrativos'
   if (r === 'supervisor') return 'supervisores'
@@ -257,6 +260,14 @@ export interface ParamsResumenGuardia {
   /** Mes operativo, formato 'YYYY-MM'. */
   mes: string
   empleados: EmpleadoResumen[]
+  /**
+   * Grupos organizacionales a incluir. Sin pasar (undefined) = TODOS (los 3
+   * bloques) → comportamiento histórico, el que usa el Excel de Liquidación.
+   * Resumen Guardia (reporte operativo de vigilancia) pasa ['vigiladores'] para
+   * NO mostrar supervisores/jerárquicos/administrativos ni sus datos salariales.
+   * Es un filtro de alcance; no cambia el cálculo por empleado.
+   */
+  gruposIncluidos?: GrupoResumen[]
   /** Turnos del mes (con estado y objetivo_id). */
   turnos: TurnoResumen[]
   /** Registros de asistencia de esos turnos. */
@@ -326,6 +337,15 @@ export interface FilaResumenGuardia {
    * Nocturno que cruza medianoche = 1; turno cortado del mismo día = 1.
    */
   jornadas: number
+  /**
+   * Jornadas REALES trabajadas (fechas distintas con horas reconocidas), SIN el
+   * cero de mensualizados: acá siempre es el conteo real, tenga o no actividad,
+   * sea vigilador, supervisor o administrativo. Es la fuente del 000 DÍAS para
+   * el personal OPERATIVO (vigiladores + supervisores con actividad). El campo
+   * `jornadas` de arriba mantiene el 0 de mensualizados para las columnas de
+   * sueldo; este NO.
+   */
+  jornadasReales: number
   /** Fechas calendario tocadas por esos turnos (auditoría). */
   fechasConActividad: number
   horasReales: number
@@ -533,6 +553,19 @@ function notaDeNovedad(n: NovedadResumen, mes: string): string {
 
 // ── Construcción del resumen ──────────────────────────────────────────────────
 
+/**
+ * RESUMEN GUARDIA (reporte operativo de vigilancia) = SOLAMENTE VIGILADORES.
+ * Fuerza `gruposIncluidos: ['vigiladores']` para que NO aparezcan supervisores,
+ * jerárquicos (Rodolfo/dirección operativa) ni administrativos, ni sus datos
+ * salariales. Comparte el motor con Liquidación pero no su alcance: el Excel de
+ * Liquidación sigue llamando a `construirResumenGuardia` con los 3 bloques.
+ */
+export function construirResumenGuardiaVigiladores(
+  params: Omit<ParamsResumenGuardia, 'gruposIncluidos'>,
+): ResumenGuardiaMes {
+  return construirResumenGuardia({ ...params, gruposIncluidos: ['vigiladores'] })
+}
+
 export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGuardiaMes {
   const { mes, empleados, turnos, registros, esObjetivoPrueba } = params
   const nombreObjetivo = params.nombreObjetivo ?? ((id?: string | null) => id ?? '')
@@ -570,6 +603,9 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
     // Cuenta de prueba: nunca entra al archivo, aunque esté activa. Mismo
     // criterio que los objetivos es_prueba (Juan la usa para testear).
     if (emp.esPrueba) continue
+    // Filtro de alcance por grupo (desacople): Resumen Guardia pide sólo
+    // vigiladores; Liquidación no pasa nada e incluye los 3 bloques.
+    if (params.gruposIncluidos && !params.gruposIncluidos.includes(grupoDeResumen(emp))) continue
 
     // Registros del empleado sobre turnos válidos. La ausencia registrada no
     // es actividad. El guardia efectivo (final ?? original) decide de quién es
@@ -769,6 +805,8 @@ export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGu
       // Mensualizados: la columna Objetivo/s informa sus zonas de recorrida.
       objetivos: mensualizado ? zonas : objetivos,
       jornadas: mensualizado ? 0 : jornadas.size,
+      // Real siempre (para el 000 de operativos); no se pisa con 0 en mensualizados.
+      jornadasReales: jornadas.size,
       fechasConActividad: mensualizado ? 0 : fechas.size,
       horasReales: mensualizado ? 0 : Math.round(horasReales * 100) / 100,
       horasLiquidables: mensualizado ? 0 : Math.round(horasLiquidables * 100) / 100,

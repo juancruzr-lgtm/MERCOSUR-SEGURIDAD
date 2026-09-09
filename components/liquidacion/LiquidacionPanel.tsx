@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import ReimportarExcelTrabajo from '@/components/liquidacion/ReimportarExcelTrabajo'
 import PadronLiquidacion from '@/components/liquidacion/PadronLiquidacion'
 import ImportarResultadoVisual from '@/components/liquidacion/ImportarResultadoVisual'
+import { clasificarBloqueados } from '@/lib/visual-export'
 
 // GERENCIA → GESTIÓN ECONÓMICA → LIQUIDACIÓN (LIQ1A).
 // Principio: cada período NACE LIMPIO (padrón generado, conceptos desde cero;
@@ -443,7 +444,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                       const exporta = p.filter((x: any) => x.estado === 'exporta').length
                       const noCorr = p.filter((x: any) => x.estado === 'no_corresponde').length
                       const falta = p.filter((x: any) => x.estado === 'falta_info').length
-                      return <div style={{ color: '#94a3b8', marginBottom: 6 }}>Padrón: <b style={{ color: '#4ade80' }}>{exporta} exportan</b> · {noCorr} no corresponde · <b style={{ color: falta ? '#f87171' : '#64748b' }}>{falta} PENDIENTE (000 sin actividad / falta identidad)</b></div>
+                      return <div style={{ color: '#94a3b8', marginBottom: 6 }}>Padrón: <b style={{ color: '#4ade80' }}>{exporta} exportan</b> · {noCorr} no corresponde · <b style={{ color: falta ? '#f87171' : '#64748b' }}>{falta} pendientes (ver detalle abajo)</b></div>
                     })()}
                     {validacion.criticos?.length > 0 && (
                       <div style={{ padding: 8, background: '#2a0f0f', border: '1px solid #7f1d1d', borderRadius: 6, marginBottom: 6 }}>
@@ -452,13 +453,22 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                         {validacion.criticos.length > 12 && <div style={{ color: '#64748b' }}>… y {validacion.criticos.length - 12} más</div>}
                       </div>
                     )}
-                    {validacion.bloqueados?.length > 0 && (
-                      <div style={{ padding: 8, background: '#1a1206', border: '1px solid #7c5510', borderRadius: 6, marginBottom: 6 }}>
-                        <b style={{ color: '#fbbf24' }}>PENDIENTE ({validacion.bloqueados.length}) — 000 sin actividad o sin identidad en Visual (no se inventa):</b>
-                        {validacion.bloqueados.slice(0, 10).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}
-                        {validacion.bloqueados.length > 10 && <div style={{ color: '#64748b' }}>… y {validacion.bloqueados.length - 10} más</div>}
-                      </div>
-                    )}
+                    {validacion.bloqueados?.length > 0 && (() => {
+                      // Causas separadas (no mezclar): identidad Visual faltante ≠ 000 requerido.
+                      const bl = clasificarBloqueados(validacion.bloqueados)
+                      const bloque = (titulo: string, items: any[]) => items.length > 0 && (
+                        <div style={{ padding: 8, background: '#1a1206', border: '1px solid #7c5510', borderRadius: 6, marginBottom: 6 }}>
+                          <b style={{ color: '#fbbf24' }}>{titulo} ({items.length}):</b>
+                          {items.slice(0, 10).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}
+                          {items.length > 10 && <div style={{ color: '#64748b' }}>… y {items.length - 10} más</div>}
+                        </div>
+                      )
+                      return <>
+                        {bloque('Identidad Visual faltante (sin COD_INTERNO / CUIL inválido)', bl.identidadFaltante)}
+                        {bloque('000 DÍAS requerido (cargar el valor; manual si es mensualizado)', bl.diasRequerido)}
+                        {bloque('Otros pendientes', bl.otros)}
+                      </>
+                    })()}
                     {validacion.advertencias?.length > 0 && (
                       <div style={{ padding: 8, background: '#0f1a2e', border: '1px solid #1e3a5f', borderRadius: 6 }}>
                         <b style={{ color: '#60a5fa' }}>Advertencias ({validacion.advertencias.length}):</b>

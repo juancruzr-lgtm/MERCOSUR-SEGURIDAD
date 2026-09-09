@@ -80,6 +80,25 @@ export interface ResultadoLineas {
 const SLOTS_EXPEDIENTE = ['111', '993'] as const
 const soloDigitos = (s?: string | null) => String(s ?? '').replace(/\D/g, '')
 
+// Bloqueos por persona clasificados por CAUSA, para no mezclarlas en un solo
+// cartel confuso (pedido JC): identidad Visual faltante ≠ 000 requerido.
+export interface BloqueosClasificados {
+  identidadFaltante: Hallazgo[]  // sin COD_INTERNO o CUIL inválido → no está en Visual
+  diasRequerido: Hallazgo[]      // 000 pendiente → cargar el valor (manual si es mensualizado)
+  otros: Hallazgo[]              // p.ej. >2 expedientes
+}
+export function clasificarBloqueados(bloqueados: Hallazgo[]): BloqueosClasificados {
+  const identidadFaltante: Hallazgo[] = []
+  const diasRequerido: Hallazgo[] = []
+  const otros: Hallazgo[] = []
+  for (const b of bloqueados) {
+    if (b.tipo === 'falta_cod_interno' || b.tipo === 'cuil_invalido') identidadFaltante.push(b)
+    else if (b.tipo === 'dias_pendiente') diasRequerido.push(b)
+    else otros.push(b)
+  }
+  return { identidadFaltante, diasRequerido, otros }
+}
+
 /**
  * Construye las líneas del archivo Visual desde el PADRÓN DE LIQUIDACIÓN (personas,
  * con o sin usuario). PURO. Aplica la política por concepto y valida:
