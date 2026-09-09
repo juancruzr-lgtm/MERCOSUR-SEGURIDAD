@@ -553,6 +553,19 @@ function notaDeNovedad(n: NovedadResumen, mes: string): string {
 
 // ── Construcción del resumen ──────────────────────────────────────────────────
 
+/**
+ * RESUMEN GUARDIA (reporte operativo de vigilancia) = SOLAMENTE VIGILADORES.
+ * Fuerza `gruposIncluidos: ['vigiladores']` para que NO aparezcan supervisores,
+ * jerárquicos (Rodolfo/dirección operativa) ni administrativos, ni sus datos
+ * salariales. Comparte el motor con Liquidación pero no su alcance: el Excel de
+ * Liquidación sigue llamando a `construirResumenGuardia` con los 3 bloques.
+ */
+export function construirResumenGuardiaVigiladores(
+  params: Omit<ParamsResumenGuardia, 'gruposIncluidos'>,
+): ResumenGuardiaMes {
+  return construirResumenGuardia({ ...params, gruposIncluidos: ['vigiladores'] })
+}
+
 export function construirResumenGuardia(params: ParamsResumenGuardia): ResumenGuardiaMes {
   const { mes, empleados, turnos, registros, esObjetivoPrueba } = params
   const nombreObjetivo = params.nombreObjetivo ?? ((id?: string | null) => id ?? '')

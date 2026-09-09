@@ -9,7 +9,7 @@ import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendie
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
 import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
-import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, grupoDeResumen, type GrupoResumen } from '@/lib/resumen-guardia'
+import { construirResumenGuardiaVigiladores, plantillaLiquidacionResumenGuardia, grupoDeResumen, type GrupoResumen } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -7987,12 +7987,12 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   // jornadas con el criterio "nocturno que cruza medianoche = 1", objetivos
   // de prueba excluidos por es_prueba, novedades sólo las cargadas en la app.
   const exportarResumenGuardiaMensualXLSX = async () => {
-    const resumen = construirResumenGuardia({
+    // RESUMEN GUARDIA = SOLAMENTE VIGILADORES (decisión de negocio). Se pasa el
+    // personal completo, pero el wrapper fuerza gruposIncluidos:['vigiladores'],
+    // así NO entran supervisores, Rodolfo (dirección operativa) ni administrativos.
+    // El Excel de Liquidación (LiquidacionPanel) es otro flujo y conserva 3 bloques.
+    const resumen = construirResumenGuardiaVigiladores({
       mes,
-      // TODO el personal (pedido de Juan 07/09): la lib arma los tres bloques
-      // (vigiladores / supervisores / administrativos) y aplica la regla de
-      // mensualizados. REGLA DURA: ningún activo puede faltar en el archivo —
-      // por eso va `guardias` completo, no el recorte de la pantalla.
       empleados: guardias.map((g: Usuario) => ({ id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol, puesto_organizacional: (g as any).puesto_organizacional ?? null, estado: g.estado, esPrueba: Boolean(g.es_prueba), cuil: g.cuil, legajo: g.legajo, legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null })),
       turnos: turnosMes,
       registros: registrosMes,
@@ -8471,7 +8471,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         <div style={S.card}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:16 }}>
             <strong style={{ flex:1, fontFamily:'Syne,sans-serif' }}>Reporte por Guardia</strong>
-            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12, marginRight:8 }} onClick={exportarResumenGuardiaMensualXLSX} title="Insumo mensual de liquidación: jornadas, horas canónicas, feriados y novedades cargadas. Sin objetivos de prueba.">Resumen Guardia (liquidación)</button>
+            <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12, marginRight:8 }} onClick={exportarResumenGuardiaMensualXLSX} title="Reporte operativo de vigilancia (SÓLO vigiladores): jornadas, horas canónicas, feriados y novedades cargadas. Sin objetivos de prueba. El Excel de Liquidación (Gerencia → Liquidación) mantiene los 3 bloques.">Resumen Guardia (vigiladores)</button>
             <button style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12 }} onClick={exportarResumenGuardiasXLSX}>Exportar XLSX</button>
           </div>
 
