@@ -99,6 +99,13 @@ export interface ParametrosSeleccion {
   avisoMin: number
   /** created_at de la ronda_base en minutos abs, para no exigir antes de existir. */
   rondaCreadaMin?: Record<string, number>
+  /**
+   * Claves `${ronda_base_id}:${turno_id}` con una suspensión declarada por el
+   * vigilador (alerta ronda_alertas tipo 'suspendida' pendiente). El vigilador
+   * ya informó que no puede hacerla: no se le manda WhatsApp. La suspensión NO
+   * crea pausa, así que hay que pasarla explícitamente.
+   */
+  suspendidasClaves?: Set<string>
 }
 
 const objetivoOperativo = (o?: ObjetivoVig | null): boolean =>
@@ -121,6 +128,9 @@ export function seleccionarCandidatosRondaVigilador(p: ParametrosSeleccion): Can
     for (const rb of rondasBase.filter(r => r.puesto_id === t.puesto_id)) {
       const interv = rb.intervalo_minutos
       if (!interv || interv <= 0) continue
+
+      // El vigilador ya declaró que no puede hacer esta ronda en este turno.
+      if (p.suspendidasClaves?.has(`${rb.id}:${t.id}`)) continue
 
       let base = rb.hora_inicio ? minutosAbs(t.fecha, rb.hora_inicio) : tIni
       while (base < tIni) base += 1440

@@ -1,4 +1,4 @@
--- Rollback de 20260909120000_escalamiento_nivel_ronda_vigilador.sql
+-- Rollback de 20260909130000_escalamiento_nivel_ronda_vigilador.sql
 -- Vuelve el check de `nivel` a los tres valores previos (sin el refuerzo al
 -- vigilador). Ejecutar SOLO manualmente si se decide revertir; requiere que no
 -- queden filas con nivel = 'wa_ronda_pendiente_vigilador' (si las hay, borrarlas

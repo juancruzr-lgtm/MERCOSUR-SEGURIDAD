@@ -36,10 +36,15 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // El usuario propio, por su vínculo de auth. Sólo se actualiza esa fila.
+  // El usuario propio, por su vínculo de auth. Sólo se actualiza esa fila:
+  // el número a guardar es el del dueño de la sesión, nunca el de otro usuario.
   const { data: usuario, error: uErr } = await client.from('usuarios')
     .select('id, estado').eq('auth_user_id', authData.user.id).maybeSingle()
   if (uErr || !usuario) return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 404 })
+  // Fail closed: una cuenta inactiva no carga su teléfono.
+  if (usuario.estado !== 'activo') {
+    return NextResponse.json({ error: 'Usuario inactivo' }, { status: 403 })
+  }
 
   const { error: updErr } = await client.from('usuarios')
     .update({ telefono: tel.e164 }).eq('id', usuario.id)

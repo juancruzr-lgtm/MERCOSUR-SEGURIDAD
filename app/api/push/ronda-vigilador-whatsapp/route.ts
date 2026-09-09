@@ -110,6 +110,16 @@ export async function GET(req: Request) {
     .in('fecha', [ayer, hoy])
     .not('guardia_id', 'is', null)
     .not('puesto_id', 'is', null)
+  // FAIL CLOSED también acá: si la consulta de turnos falló, `data` viene vacío y
+  // sería indistinguible de "no hay turnos" → devolvería 200 sin señal. Un error
+  // de la fuente base se reporta y aborta antes del early-return.
+  if (turnosRes.error) {
+    return NextResponse.json({
+      modo: enviarDeVerdad ? 'ABORTADO_POR_ERROR_DE_FUENTE' : 'SIMULACION_CON_ERROR',
+      FUENTES_CON_ERROR: [`turnos: ${turnosRes.error.message}`],
+      turnosEvaluados: 0, candidatos: 0, enviados: 0, acciones: [], descartes: {},
+    }, { status: enviarDeVerdad ? 502 : 200 })
+  }
   const turnos = (turnosRes.data ?? []) as TurnoVigente[]
 
   if (turnos.length === 0) {
@@ -133,7 +143,7 @@ export async function GET(req: Request) {
   const rondaIdsArr = Array.from(new Set(((rondasRes.data ?? []) as any[]).map(r => r.id)))
 
   // 3) Resto acotado por ids.
-  const [puntosRes, ejecRes, pausasRes, objRes, usuariosRes] = await Promise.all([
+  const [puntosRes, ejecRes, pausasRes, objRes, usuariosRes, suspRes] = await Promise.all([
     rondaIdsArr.length
       ? client.from('ronda_puntos').select('ronda_base_id').eq('activo', true).in('ronda_base_id', rondaIdsArr)
       : Promise.resolve({ data: [] as any[], error: null }),
@@ -145,13 +155,32 @@ export async function GET(req: Request) {
       : Promise.resolve({ data: [] as any[], error: null }),
     client.from('objetivos').select('id, nombre, estado, es_prueba').in('id', objetivoIds),
     client.from('usuarios').select('id, nombre, apellido, telefono, estado').in('id', guardiaIds),
+    // Suspensiones declaradas por el vigilador (no crean pausa): si hay una
+    // pendiente para (ronda, turno), NO se manda WhatsApp de esa ronda.
+    client.from('ronda_alertas').select('ronda_base_id, turno_id')
+      .in('turno_id', turnoIds).eq('tipo', 'suspendida').eq('estado', 'pendiente'),
   ])
 
   const fuentesConError = [
     ['turnos', turnosRes], ['rondas_base', rondasRes], ['ronda_puntos', puntosRes],
     ['ronda_ejecuciones', ejecRes], ['ronda_pausas', pausasRes], ['objetivos', objRes],
-    ['usuarios', usuariosRes],
+    ['usuarios', usuariosRes], ['ronda_alertas_suspendida', suspRes],
   ].filter(([, r]: any) => r?.error).map(([n, r]: any) => `${n}: ${r.error.message}`)
+
+  // FAIL CLOSED: si una fuente crítica falló, la foto está incompleta y podría
+  // hacernos mandar por una ronda ya iniciada/suspendida (o a un objetivo que no
+  // corresponde). Ante error, NO se envía nada.
+  if (fuentesConError.length > 0) {
+    return NextResponse.json({
+      modo: enviarDeVerdad ? 'ABORTADO_POR_ERROR_DE_FUENTE' : 'SIMULACION_CON_ERROR',
+      FUENTES_CON_ERROR: fuentesConError,
+      turnosEvaluados: turnos.length, candidatos: 0, enviados: 0, acciones: [], descartes: {},
+    }, { status: enviarDeVerdad ? 502 : 200 })
+  }
+
+  const suspendidasClaves = new Set(
+    ((suspRes.data ?? []) as any[]).map(a => `${a.ronda_base_id}:${a.turno_id}`),
+  )
 
   // ronda_puntos puede acercarse a muchas filas, pero acá sólo interesa el
   // conjunto de ronda_base con al menos un punto activo (bounded por rondas).
@@ -187,50 +216,46 @@ export async function GET(req: Request) {
   // ── Selección pura de candidatos a +10 min ────────────────────────────────
   const candidatos = seleccionarCandidatosRondaVigilador({
     ahoraMin, turnosVigentes: turnos, rondasBase, ejecuciones, pausas, objetivos,
-    avisoMin: AVISO_MIN, rondaCreadaMin,
+    avisoMin: AVISO_MIN, rondaCreadaMin, suspendidasClaves,
   })
 
   const descartes: Record<string, number> = {}
   const acciones: any[] = []
   const filasAuditoria: any[] = []
 
-  // ── Deduplicación persistente (acotada a las claves candidatas) ────────────
-  const yaAvisados = new Set<string>()
-  if (candidatos.length > 0) {
-    const enviadosRes = await client.from('notificaciones_enviadas')
-      .select('tipo').in('tipo', candidatos.map(c => c.clave_dedup))
-    for (const n of (enviadosRes.data ?? []) as any[]) yaAvisados.add(n.tipo)
-  }
-
   const proveedor = enviarDeVerdad ? proveedorPorDefecto() : proveedorSimulado()
 
-  for (const c of candidatos) {
-    if (yaAvisados.has(c.clave_dedup)) { descartes.ya_avisada = (descartes.ya_avisada ?? 0) + 1; continue }
+  // En dry-run no se reclama nada: sólo se lee qué claves ya están avisadas para
+  // reportarlas. En envío real la deduplicación es ATÓMICA (ver abajo).
+  const yaAvisadosDry = new Set<string>()
+  if (!enviarDeVerdad && candidatos.length > 0) {
+    const enviadosRes = await client.from('notificaciones_enviadas')
+      .select('tipo').in('tipo', candidatos.map(c => c.clave_dedup))
+    for (const n of (enviadosRes.data ?? []) as any[]) yaAvisadosDry.add(n.tipo)
+  }
 
+  for (const c of candidatos) {
     const u = userDe(c.guardia_id)
     if (!u || u.estado !== 'activo') { descartes.vigilador_invalido = (descartes.vigilador_invalido ?? 0) + 1; continue }
 
     const tel = normalizarTelefonoAr(u.telefono)
     if (!tel.e164) {
-      descartes[tel.motivo === 'vacio' ? 'sin_telefono' : 'telefono_invalido'] =
-        (descartes[tel.motivo === 'vacio' ? 'sin_telefono' : 'telefono_invalido'] ?? 0) + 1
+      // No se reclama la clave: si más tarde carga el teléfono, el próximo ciclo
+      // dentro de la misma ventana todavía puede avisar.
+      const clave = tel.motivo === 'vacio' ? 'sin_telefono' : 'telefono_invalido'
+      descartes[clave] = (descartes[clave] ?? 0) + 1
       acciones.push({
         ronda: c.ronda_nombre, objetivo: c.objetivo_nombre,
-        vigilador: u ? `${u.apellido}, ${u.nombre}` : c.guardia_id,
+        vigilador: `${u.apellido}, ${u.nombre}`,
         descartado: tel.motivo === 'vacio' ? 'SIN_TELEFONO' : 'TELEFONO_INVALIDO',
       })
       continue
     }
 
     const urlSuffix = `ronda=${c.ronda_base_id}&turno=${c.turno_id}&objetivo=${c.objetivo_id}&ventana=${c.ventana_inicio_min}`
-    const destino = {
-      telefono: tel.e164,
-      plantilla: PLANTILLA,
-      variables: [c.objetivo_nombre, c.ronda_nombre, c.horario],
-      boton: { urlSuffix },
-    }
 
     if (!enviarDeVerdad || !proveedor.configurado) {
+      if (yaAvisadosDry.has(c.clave_dedup)) { descartes.ya_avisada = (descartes.ya_avisada ?? 0) + 1; continue }
       acciones.push({
         ronda: c.ronda_nombre, objetivo: c.objetivo_nombre, horario: c.horario,
         vigilador: `${u.apellido}, ${u.nombre}`, telefono: tel.e164,
@@ -239,7 +264,25 @@ export async function GET(req: Request) {
       continue
     }
 
-    const r = await proveedor.enviar(destino)
+    // ── Deduplicación ATÓMICA (claim-first) ──────────────────────────────────
+    // Insertar la fila de dedup ANTES de enviar. La constraint única
+    // (usuario_id, turno_id, tipo) hace que dos corridas simultáneas del cron no
+    // puedan reclamar la misma ventana: la segunda choca (23505) y se saltea.
+    // Un select-then-insert no alcanzaría porque ambas leerían "no enviado".
+    const claim = await client.from('notificaciones_enviadas')
+      .insert({ usuario_id: c.guardia_id, turno_id: c.turno_id, tipo: c.clave_dedup })
+    if (claim.error) {
+      // 23505 = ya reclamada por otra corrida / ya enviada. Cualquier otro error
+      // de escritura: no arriesgamos un doble envío, se saltea.
+      descartes.ya_avisada = (descartes.ya_avisada ?? 0) + 1
+      continue
+    }
+
+    const r = await proveedor.enviar({
+      telefono: tel.e164, plantilla: PLANTILLA,
+      variables: [c.objetivo_nombre, c.ronda_nombre, c.horario],
+      boton: { urlSuffix },
+    })
     acciones.push({
       ronda: c.ronda_nombre, objetivo: c.objetivo_nombre,
       vigilador: `${u.apellido}, ${u.nombre}`, telefono: tel.e164,
@@ -252,10 +295,11 @@ export async function GET(req: Request) {
       id_proveedor: r.idProveedor, proveedor: proveedor.nombre, error: r.error,
     })
 
-    // Sólo se marca avisado si el proveedor aceptó: un rechazo se reintenta.
-    if (r.ok) {
+    // Si el proveedor rechazó, se LIBERA la reserva para que la próxima corrida
+    // reintente (mismo criterio de reintento que el resto del canal).
+    if (!r.ok) {
       await client.from('notificaciones_enviadas')
-        .insert({ usuario_id: c.guardia_id, turno_id: c.turno_id, tipo: c.clave_dedup })
+        .delete().eq('usuario_id', c.guardia_id).eq('turno_id', c.turno_id).eq('tipo', c.clave_dedup)
         .then(() => {}, () => {})
     }
   }
