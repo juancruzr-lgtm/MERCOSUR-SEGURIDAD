@@ -188,7 +188,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       const a = document.createElement('a')
       a.href = url; a.download = `liquidacion_trabajo_${sel.mes}.xlsx`
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
-      setMsg({ ok: true, t: `Excel de trabajo generado (${r.filas} empleados). Trae padrón, jornadas reales (000), horas, conceptos, permanentes y fórmulas. Editalo (podés corregir el 000) y volvé a subirlo. PENDIENTE: los gráficos Horas REC vs Extras y costo de hora todavía NO se incluyen (falta el Excel original con esas escalas).` })
+      setMsg({ ok: true, t: `Excel de trabajo generado (${r.filas} empleados). Trae padrón, jornadas reales (000), horas, conceptos, permanentes, fórmulas, el gráfico Horas REC vs Extras (torta + % reales) y los semáforos de % extras y costo por hora (mismas escalas del archivo original). Editalo (podés corregir el 000) y volvé a subirlo.` })
     } catch (e: any) {
       setMsg({ ok: false, t: 'No se pudo generar el Excel de trabajo: ' + (e?.message || e) })
     } finally { setGenExcel(false) }
@@ -382,9 +382,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   </span>
                 </div>
               ) : <div style={{ color: '#64748b', fontSize: 12 }}>El período ya no está en edición; el Excel de trabajo se prepara mientras está en borrador/revisión.</div>}
-              {/* Ítem 3: los gráficos todavía NO están — el Excel no es el final. */}
-              <div style={{ marginTop: 8, padding: 10, background: '#1a1206', border: '1px dashed #7c5510', borderRadius: 8, fontSize: 12, color: '#fcd34d' }}>
-                <b>PENDIENTE de insumo — este Excel todavía NO es el final.</b> Faltan los gráficos: <b>(A)</b> Horas REC vs Extras (horas REC, horas extras, %REC, %extras) y <b>(B)</b> costo de hora con tu escala de colores. Para no inventar límites/colores, necesito que me pases <b>el Excel original que usabas con esos dos gráficos</b> (con la escala de colores y los cortes reales). Hasta entonces el archivo trae toda la lógica pero sin esa presentación.
+              {/* Gráficos recuperados del Excel original (auditado). */}
+              <div style={{ marginTop: 8, padding: 10, background: '#0f1a2e', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd' }}>
+                Incluye, reproducidos del Excel original: <b>gráfico Horas REC vs Extras</b> (torta con % reales, debajo del total) + las celdas <b>Horas REC / Horas Extras / % REC / % Extras</b>, el <b>semáforo de % extras</b> (escala rojo→amarillo→verde en la columna «% ex») y la <b>barra de costo por hora</b> («po hs»), con los mismos límites y colores del archivo original. La torta se inserta como imagen (Excel/exceljs no escribe gráficos nativos) junto a las celdas que la alimentan.
               </div>
 
               {/* ═══ PASO 2 · SUBIR EXCEL REVISADO → preview de diferencias → confirmar ═══ */}

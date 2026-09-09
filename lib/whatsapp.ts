@@ -27,6 +27,15 @@ export interface DestinoWhatsApp {
   plantilla: string
   /** Las variables, en el orden en que la plantilla las numera. */
   variables: string[]
+  /**
+   * Sólo para plantillas con un botón de URL DINÁMICA (índice 0): el sufijo que
+   * Meta concatena a la URL base del botón. Ej.: la plantilla del vigilador
+   * define el botón como `https://…/dashboard?{{1}}` y acá va
+   * `ronda=…&turno=…&objetivo=…&ventana=…`. Las plantillas de supervisores NO
+   * lo usan y quedan exactamente igual: si `boton` viene undefined, no se
+   * agrega ningún componente de botón.
+   */
+  boton?: { urlSuffix: string }
 }
 
 export interface ResultadoEnvio {
@@ -154,10 +163,21 @@ export function proveedorMeta(): ProveedorWhatsApp {
             template: {
               name: destino.plantilla,
               language: { code: idioma },
-              components: [{
-                type: 'body',
-                parameters: destino.variables.map(text => ({ type: 'text', text })),
-              }],
+              components: [
+                {
+                  type: 'body',
+                  parameters: destino.variables.map(text => ({ type: 'text', text })),
+                },
+                // Botón de URL dinámica (índice 0). Sólo si la plantilla lo tiene
+                // y el llamador lo pide; si no, no se agrega y las plantillas sin
+                // botón (supervisores) viajan igual que siempre.
+                ...(destino.boton ? [{
+                  type: 'button',
+                  sub_type: 'url',
+                  index: 0,
+                  parameters: [{ type: 'text', text: destino.boton.urlSuffix }],
+                }] : []),
+              ],
             },
           }),
         })
