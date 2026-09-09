@@ -134,8 +134,108 @@ export async function escribirPlantillaLiquidacionXLSX(
 
   ws.views = [{ state: 'frozen', xSplit: 4, ySplit: 6 }] // fija nombre + encabezado
 
+  // 7) Indicadores recuperados del Excel original de Juan (auditado, no inventado):
+  //    - AM (% ex): escala de color 3 pasos rojo→amarillo→verde (semáforo del % de
+  //      extras). Límites y colores EXACTOS del archivo original.
+  //    - AS (po hs = costo por hora = total/horas): barra de datos magenta.
+  //    - Bloque REC vs Extras (horas y %) + gráfico de torta (imagen) debajo del total.
+  //    Nada de esto toca valores/fórmulas ni la identidad oculta: el parser de
+  //    reimportación lee por BD (usuario_id) e índices de columna, intactos.
+  if (estilos.filasDatos.length > 0) {
+    const r0 = Math.min(...estilos.filasDatos)
+    const r1 = Math.max(...estilos.filasDatos)
+    // Semáforo del % de extras (AM). cfvo/colores idénticos al original.
+    ws.addConditionalFormatting({
+      ref: `AM${r0}:AM${r1}`,
+      rules: [{
+        type: 'colorScale', priority: 1,
+        cfvo: [{ type: 'percent', value: 10 }, { type: 'percentile', value: 30 }, { type: 'percent', value: 40 }],
+        color: [{ argb: 'FFFF0000' }, { argb: 'FFFFEB84' }, { argb: 'FFA9D18E' }],
+      } as any],
+    })
+    // Barra de datos del costo por hora (AS). Color magenta original.
+    ws.addConditionalFormatting({
+      ref: `AS${r0}:AS${r1}`,
+      rules: [{
+        type: 'dataBar', priority: 2,
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        color: { argb: 'FFD6007B' },
+      } as any],
+    })
+
+    // Bloque REC vs Extras + gráfico, debajo del TOTAL GENERAL. Referencia a las
+    // celdas de total (AG=horas rec, AL=hs extras) para que sea siempre en vivo.
+    const t = estilos.total
+    const base = t + 2
+    const g = (ref: string) => plantilla.celdas.find(c => c.ref === ref)
+    const recTotal = Number(g(`AG${t}`)?.v ?? 0)
+    const extTotal = Number(g(`AL${t}`)?.v ?? 0)
+    const den = recTotal + extTotal
+    const put2 = (ref: string, v: any, fmt?: string, opts?: { bold?: boolean; f?: string }) => {
+      const c = ws.getCell(ref)
+      c.value = opts?.f ? ({ formula: opts.f, result: v } as any) : v
+      if (fmt) c.numFmt = fmt
+      if (opts?.bold) c.font = { bold: true }
+    }
+    put2(`AC${base}`, 'INDICADORES DEL MES', undefined, { bold: true })
+    put2(`AC${base + 1}`, 'Horas REC'); put2(`AD${base + 1}`, recTotal, NUM_FMT.hours, { f: `AG${t}` })
+    put2(`AC${base + 2}`, 'Horas Extras'); put2(`AD${base + 2}`, extTotal, NUM_FMT.hours, { f: `AL${t}` })
+    put2(`AC${base + 3}`, '% REC'); put2(`AD${base + 3}`, den > 0 ? recTotal / den : 0, '0.0%', { f: `IF((AG${t}+AL${t})>0,AG${t}/(AG${t}+AL${t}),0)` })
+    put2(`AC${base + 4}`, '% Extras'); put2(`AD${base + 4}`, den > 0 ? extTotal / den : 0, '0.0%', { f: `IF((AG${t}+AL${t})>0,AL${t}/(AG${t}+AL${t}),0)` })
+    ws.getCell(`AC${base}`).fill = fillOf(COLOR.labelBg)
+
+    // Gráfico de torta REC vs Extras como IMAGEN (exceljs community no escribe
+    // gráficos nativos; se inserta PNG generado en el navegador — acompañado por
+    // las celdas reales de arriba). En entornos sin canvas (tests/SSR) se omite
+    // la imagen: los indicadores en celdas quedan igual.
+    const b64 = pngTortaRecExtras(recTotal, extTotal)
+    if (b64) {
+      const imgId = wb.addImage({ base64: b64, extension: 'png' })
+      ws.addImage(imgId, { tl: { col: 31, row: base - 1 }, br: { col: 38, row: base + 12 }, editAs: 'oneCell' } as any)
+    }
+  }
+
   const buf = await wb.xlsx.writeBuffer()
   return buf as ArrayBuffer
+}
+
+// Dibuja la torta REC vs Extras en un canvas y devuelve el PNG en base64 (sin
+// prefijo data:). Sólo en navegador; en Node/SSR devuelve null (sin canvas) y el
+// Excel sale con los indicadores en celdas pero sin la imagen. Colores = accent1
+// (REC) y accent2 (Extras) del tema Office del archivo original.
+function pngTortaRecExtras(rec: number, ext: number): string | null {
+  if (typeof document === 'undefined') return null
+  try {
+    const W = 380, H = 240
+    const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H
+    const ctx = canvas.getContext('2d'); if (!ctx) return null
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, W, H)
+    ctx.fillStyle = '#1F3A5F'; ctx.font = 'bold 15px Calibri, Arial, sans-serif'
+    ctx.fillText('Horas REC vs Extras', 12, 24)
+    const total = rec + ext
+    const cx = 110, cy = 140, rad = 82
+    const colors = ['#4472C4', '#ED7D31']; const vals = [rec, ext]; const labels = ['REC', 'Extras']
+    let ang = -Math.PI / 2
+    if (total > 0) {
+      for (let i = 0; i < 2; i++) {
+        const frac = vals[i] / total; const a2 = ang + frac * 2 * Math.PI
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, rad, ang, a2); ctx.closePath()
+        ctx.fillStyle = colors[i]; ctx.fill()
+        const mid = (ang + a2) / 2; const lx = cx + Math.cos(mid) * rad * 0.6, ly = cy + Math.sin(mid) * rad * 0.6
+        if (frac > 0.03) { ctx.fillStyle = '#FFFFFF'; ctx.font = 'bold 13px Calibri, Arial, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(`${(frac * 100).toFixed(1)}%`, lx, ly) }
+        ang = a2
+      }
+    } else {
+      ctx.strokeStyle = '#9AAABF'; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI); ctx.stroke()
+    }
+    ctx.textAlign = 'left'; ctx.font = '12px Calibri, Arial, sans-serif'
+    for (let i = 0; i < 2; i++) {
+      const ly = 118 + i * 26
+      ctx.fillStyle = colors[i]; ctx.fillRect(224, ly - 11, 14, 14)
+      ctx.fillStyle = '#333333'; ctx.fillText(`${labels[i]}: ${Math.round(vals[i])} h`, 244, ly)
+    }
+    return canvas.toDataURL('image/png').split(',')[1] ?? null
+  } catch { return null }
 }
 
 function fillOf(argb: string) {
