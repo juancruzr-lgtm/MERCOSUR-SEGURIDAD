@@ -80,6 +80,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // LIQ2C: consolidación
   const [consolidando, setConsolidando] = useState(false)
   const [consolidadaN, setConsolidadaN] = useState(0)
+  // ETAPA 1: prevalidación antes de consolidar (reutiliza la regla real de Visual).
+  const [preval, setPreval] = useState<any>(null)
+  const [prevalidando, setPrevalidando] = useState(false)
   // LIQ2D/F: export a Visual + validación pre-export
   const [genVisual, setGenVisual] = useState(false)
   const [validacion, setValidacion] = useState<any>(null)
@@ -153,6 +156,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   async function abrirPeriodo(p: Periodo) {
     setSel(p)
     setComparacion(null)
+    setPreval(null)
     const { desde, hasta } = limitesDelMes(p.mes)
     const [{ count }, { data: cp }, { data: nov }, { count: consN }] = await Promise.all([
       supabase.from('liquidacion_periodo_empleado').select('*', { count: 'exact', head: true }).eq('periodo_id', p.id),
@@ -213,10 +217,35 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // LIQ2C: consolidar = congelar snapshot (baseline + ajustes) por empleado×código
   // y pasar el período a 'consolidada'. El cálculo vive en el cliente (fuente
   // única); la RPC sólo persiste atómico.
+  // ETAPA 1: prevalida con la MISMA regla que después bloquea la generación
+  // Visual (construirLineasVisual sobre el snapshot en vivo). Devuelve el
+  // resultado y lo deja en estado para la UI.
+  async function prevalidar(): Promise<any> {
+    if (!sel) return null
+    setPrevalidando(true)
+    try {
+      const { prevalidarVisual } = await import('@/lib/visual-generar')
+      const r = await prevalidarVisual(supabase, { id: sel.id, mes: sel.mes })
+      setPreval(r)
+      return r
+    } catch (e: any) {
+      const r = { listo: false, error: e?.message || String(e), criticos: [], identidadFaltante: [], diasRequerido: [], otros: [], advertencias: [], totalPersonas: 0, exportan: 0 }
+      setPreval(r); return r
+    } finally { setPrevalidando(false) }
+  }
+
   async function consolidar() {
     if (!sel) return
     setConsolidando(true); setMsg(null)
     try {
+      // No consolidar con sorpresas: se prevalida con la regla real ANTES.
+      const pv = await prevalidar()
+      if (!pv || pv.error) { setMsg({ ok: false, t: 'No se pudo prevalidar: ' + (pv?.error || 'sin datos') }); return }
+      if (!pv.listo) {
+        const nId = pv.identidadFaltante.length, nDias = pv.diasRequerido.length, nCrit = pv.criticos.length, nOtros = pv.otros.length
+        setMsg({ ok: false, t: `FALTAN DATOS: no se consolida. Identidad Visual: ${nId} · 000 requerido: ${nDias}${nOtros ? ` · otros: ${nOtros}` : ''}${nCrit ? ` · críticos: ${nCrit}` : ''}. Resolvé los faltantes (detalle abajo) y volvé a intentar.` })
+        return
+      }
       const { snapshotConsolidadoDelMes } = await import('@/lib/excel-trabajo-liquidacion')
       const snap = await snapshotConsolidadoDelMes(supabase, sel.id, sel.mes)
       if (snap.error) { setMsg({ ok: false, t: 'No se pudo armar el consolidado: ' + snap.error }); return }
@@ -404,12 +433,36 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   </div>
                 )}
                 {EDITABLE(sel.estado) ? (
-                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <button style={{ ...S.btn, background: '#7c3aed', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>
-                      {consolidando ? 'Consolidando…' : 'Consolidar liquidación'}
-                    </button>
-                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>Podés re-consolidar mientras no esté exportada.</span>
-                  </div>
+                  <>
+                    {/* Prevalidación ANTES de consolidar: misma regla que bloquea Visual. */}
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                      <button style={{ ...S.btn, background: '#334155', opacity: prevalidando ? 0.6 : 1 }} disabled={prevalidando} onClick={() => void prevalidar()}>
+                        {prevalidando ? 'Prevalidando…' : 'Prevalidar para consolidar'}
+                      </button>
+                      <button style={{ ...S.btn, background: preval && !preval.listo ? '#475569' : '#7c3aed', opacity: (consolidando || prevalidando || (preval && !preval.listo)) ? 0.5 : 1 }}
+                        disabled={consolidando || prevalidando || (preval && !preval.listo)}
+                        onClick={() => void consolidar()}>
+                        {consolidando ? 'Consolidando…' : 'Consolidar liquidación'}
+                      </button>
+                      <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 200px' }}>Consolidar sólo se habilita si la prevalidación está LISTO.</span>
+                    </div>
+                    {preval && !preval.error && (
+                      preval.listo ? (
+                        <div style={{ padding: 8, background: '#0e2a16', border: '1px solid #14532d', borderRadius: 6, marginBottom: 6, color: '#4ade80', fontWeight: 700 }}>
+                          ✓ LISTO PARA CONSOLIDAR — {preval.exportan} de {preval.totalPersonas} personas exportan; sin faltantes.
+                        </div>
+                      ) : (
+                        <div style={{ padding: 8, background: '#2a1206', border: '1px solid #7c5510', borderRadius: 6, marginBottom: 6, fontSize: 12 }}>
+                          <b style={{ color: '#fbbf24' }}>FALTAN DATOS — no se puede consolidar todavía.</b>
+                          {preval.criticos.length > 0 && (<div style={{ marginTop: 4 }}><b style={{ color: '#f87171' }}>Críticos ({preval.criticos.length}):</b>{preval.criticos.slice(0, 8).map((c: any, i: number) => <div key={i} style={{ color: '#fca5a5' }}>• {c.detalle}</div>)}</div>)}
+                          {preval.identidadFaltante.length > 0 && (<div style={{ marginTop: 4 }}><b style={{ color: '#fbbf24' }}>Identidad Visual faltante ({preval.identidadFaltante.length}) — sin COD_INTERNO / CUIL:</b>{preval.identidadFaltante.slice(0, 10).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}{preval.identidadFaltante.length > 10 && <div style={{ color: '#64748b' }}>… y {preval.identidadFaltante.length - 10} más</div>}</div>)}
+                          {preval.diasRequerido.length > 0 && (<div style={{ marginTop: 4 }}><b style={{ color: '#fbbf24' }}>000 requerido ({preval.diasRequerido.length}) — cargar el valor (manual si es mensualizado):</b>{preval.diasRequerido.slice(0, 10).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}{preval.diasRequerido.length > 10 && <div style={{ color: '#64748b' }}>… y {preval.diasRequerido.length - 10} más</div>}</div>)}
+                          {preval.otros.length > 0 && (<div style={{ marginTop: 4 }}><b style={{ color: '#fbbf24' }}>Otros pendientes ({preval.otros.length}):</b>{preval.otros.slice(0, 8).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}</div>)}
+                        </div>
+                      )
+                    )}
+                    {preval?.error && <div style={{ ...S.err, marginBottom: 6 }}>No se pudo prevalidar: {preval.error}</div>}
+                  </>
                 ) : sel.estado === 'consolidada' ? (
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                     <button style={{ ...S.btn, background: '#475569', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>Re-consolidar</button>
