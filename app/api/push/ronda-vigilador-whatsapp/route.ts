@@ -110,6 +110,16 @@ export async function GET(req: Request) {
     .in('fecha', [ayer, hoy])
     .not('guardia_id', 'is', null)
     .not('puesto_id', 'is', null)
+  // FAIL CLOSED también acá: si la consulta de turnos falló, `data` viene vacío y
+  // sería indistinguible de "no hay turnos" → devolvería 200 sin señal. Un error
+  // de la fuente base se reporta y aborta antes del early-return.
+  if (turnosRes.error) {
+    return NextResponse.json({
+      modo: enviarDeVerdad ? 'ABORTADO_POR_ERROR_DE_FUENTE' : 'SIMULACION_CON_ERROR',
+      FUENTES_CON_ERROR: [`turnos: ${turnosRes.error.message}`],
+      turnosEvaluados: 0, candidatos: 0, enviados: 0, acciones: [], descartes: {},
+    }, { status: enviarDeVerdad ? 502 : 200 })
+  }
   const turnos = (turnosRes.data ?? []) as TurnoVigente[]
 
   if (turnos.length === 0) {

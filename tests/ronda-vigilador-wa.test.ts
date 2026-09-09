@@ -115,3 +115,51 @@ describe('turno nocturno que cruza medianoche', () => {
     expect(c).toHaveLength(0)
   })
 })
+
+// ── Robustez del disparo respecto del reloj del cron (Issue #5) ──────────────
+describe('el cron no corre exacto en el minuto +10', () => {
+  // Ventana 06:00–08:00, aviso a +10 (06:10). El cron puede correr tarde: mientras
+  // siga DENTRO de la ventana y sin iniciar, el refuerzo debe salir igual.
+  it('cron atrasado (06:45, muy pasado el +10 pero en ventana) → sigue disparando', () => {
+    const c = sel({ ahoraMin: minutosAbs('2026-09-09', '06:45') })
+    expect(c).toHaveLength(1)
+    expect(c[0].horario).toBe('06:00')
+  })
+  it('justo en el borde del cierre (08:00): la de 06:00 cerró y la de 08:00 aún no llegó a +10 → nada', () => {
+    // vf es EXCLUSIVO (ahora < vf) y la nueva ventana exige +10: en el minuto
+    // exacto del cambio no dispara ninguna. La de 08:00 recién dispara a las 08:10.
+    expect(sel({ ahoraMin: minutosAbs('2026-09-09', '08:00') })).toHaveLength(0)
+    const c = sel({ ahoraMin: minutosAbs('2026-09-09', '08:10') })
+    expect(c).toHaveLength(1)
+    expect(c[0].horario).toBe('08:00')
+  })
+  it('un minuto antes del cierre (07:59) todavía es la ventana de 06:00', () => {
+    const c = sel({ ahoraMin: minutosAbs('2026-09-09', '07:59') })
+    expect(c).toHaveLength(1)
+    expect(c[0].horario).toBe('06:00')
+  })
+  it('intervalo inválido (0 o negativo) → nunca dispara', () => {
+    expect(sel({ rondasBase: [{ ...RONDA, intervalo_minutos: 0 }] })).toHaveLength(0)
+    expect(sel({ rondasBase: [{ ...RONDA, intervalo_minutos: -30 }] })).toHaveLength(0)
+  })
+})
+
+// ── Dedup por ronda + turno + ventana (Issue #4) ─────────────────────────────
+describe('deduplicación distingue por turno además de ronda+ventana', () => {
+  // Dos turnos distintos, MISMO puesto, MISMA ronda anclada a hora fija: comparten
+  // la ventana (misma clave_dedup por ronda+ventana), pero son turnos distintos.
+  // La unicidad real del claim es (usuario_id, turno_id, tipo): por eso el
+  // candidato lleva turno_id/guardia_id propios y el endpoint reclama por turno,
+  // de modo que dos vigiladores distintos del mismo puesto sí reciben cada uno.
+  const T1: TurnoVigente = { ...TURNO, id: 't1', guardia_id: 'g1' }
+  const T2: TurnoVigente = { ...TURNO, id: 't2', guardia_id: 'g2' }
+  it('dos turnos del mismo puesto/ventana → dos candidatos con turno/guardia propios', () => {
+    const c = sel({ turnosVigentes: [T1, T2] })
+    expect(c).toHaveLength(2)
+    const porTurno = Object.fromEntries(c.map(x => [x.turno_id, x]))
+    expect(porTurno['t1'].guardia_id).toBe('g1')
+    expect(porTurno['t2'].guardia_id).toBe('g2')
+    // misma clave_dedup por ronda+ventana (la unicidad la completa turno_id en el claim)
+    expect(porTurno['t1'].clave_dedup).toBe(porTurno['t2'].clave_dedup)
+  })
+})
