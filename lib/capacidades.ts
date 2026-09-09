@@ -52,6 +52,10 @@ export type Capacidad =
   | 'revisar_operativa'
   | 'ver_desempeno'
   | 'configurar_sistema'
+  // Preparación de Liquidación (padrón, Excel, 000, expedientes, consolidar,
+  // generar Visual). NO es económico/banco: Administración la tiene; el acceso
+  // al banco/Finanzas queda bajo capacidades económicas separadas (Gerencia).
+  | 'preparar_liquidacion'
   // Gerencial / económico (sensible)
   | 'ver_dashboard_gerencial'
   | 'ver_liquidacion'
@@ -106,10 +110,10 @@ const CAPACIDADES_POR_PUESTO: Record<PuestoOrganizacional, Capacidad[]> = {
   // Dir. Operativa dirige la OPERACIÓN global: turnos + objetivos en su dimensión
   // operativa + supervisión. NO gestiona personal (administrativo) ni económico.
   direccion_operativa: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'gestionar_objetivos', 'supervisar_todas_zonas', 'configurar_sistema'],
-  administracion: ['ver_operacion', 'revisar_operativa', 'revisar_planillas', 'gestionar_turnos', ...ADMINISTRATIVO, 'configurar_sistema'],
+  administracion: ['ver_operacion', 'revisar_operativa', 'revisar_planillas', 'gestionar_turnos', ...ADMINISTRATIVO, 'configurar_sistema', 'preparar_liquidacion'],
   gerencia: [
     'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO, 'supervisar_todas_zonas',
-    'configurar_sistema', ...GERENCIAL_ECONOMICO,
+    'configurar_sistema', 'preparar_liquidacion', ...GERENCIAL_ECONOMICO,
   ],
 }
 
@@ -135,7 +139,7 @@ function capacidadesLegadasPorRol(rol?: string | null): Capacidad[] {
     // (sólo aplica a cuentas sin puesto seteado, p.ej. es_prueba).
     return [
       'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO,
-      'supervisar_todas_zonas', 'configurar_sistema', ...GERENCIAL_ECONOMICO,
+      'supervisar_todas_zonas', 'configurar_sistema', 'preparar_liquidacion', ...GERENCIAL_ECONOMICO,
     ]
   }
   if (r === 'supervisor') return [...OPERACION_SUPERVISOR, 'gestionar_turnos']
