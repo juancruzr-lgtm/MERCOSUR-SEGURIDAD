@@ -11,7 +11,8 @@ import ImportarResultadoVisual from '@/components/liquidacion/ImportarResultadoV
 // siendo el motor salarial; acá se preparan/controlan conceptos.
 
 type Empleado = { id: string; nombre?: string | null; apellido?: string | null; legajo?: string | null; estado?: string | null }
-type Periodo = { id: string; mes: string; estado: string; created_at: string }
+type Periodo = { id: string; mes: string; estado: string; created_at: string; creado_por?: string | null }
+type PeriodoFlags = { reimport: boolean; consolidada: boolean; resultado: boolean }
 type Concepto = { id: string; codigo_visual: string | null; nombre: string; categoria: string; origen: string; ambito: string; activo: boolean }
 type Permanente = { id: string; empleado_id: string; concepto_id: string; cantidad: number | null; importe: number | null; vigencia_desde: string; vigencia_hasta: string | null; motivo: string | null; activo: boolean }
 type ConceptoPeriodo = { id: string; empleado_id: string | null; concepto_id: string; cantidad: number | null; importe: number | null; origen: string }
@@ -59,6 +60,10 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
 
   // Períodos
   const [periodos, setPeriodos] = useState<Periodo[]>([])
+  const [flags, setFlags] = useState<Record<string, PeriodoFlags>>({})
+  const [creadores, setCreadores] = useState<Record<string, string>>({})
+  const [verAnulados, setVerAnulados] = useState(false)
+  const [borrando, setBorrando] = useState<string | null>(null)
   const [nuevoMes, setNuevoMes] = useState(new Date().toISOString().slice(0, 7))
   const [sel, setSel] = useState<Periodo | null>(null)
   const [padronN, setPadronN] = useState(0)
@@ -82,8 +87,57 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   const [pForm, setPForm] = useState({ empleado_id: '', concepto_id: '', importe: '', cantidad: '', vigencia_desde: new Date().toISOString().slice(0, 10), vigencia_hasta: '', motivo: '' })
 
   async function cargarPeriodos() {
-    const { data } = await supabase.from('liquidacion_periodo').select('id, mes, estado, created_at').order('mes', { ascending: false })
-    if (data) setPeriodos(data as Periodo[])
+    const { data } = await supabase.from('liquidacion_periodo').select('id, mes, estado, created_at, creado_por').order('mes', { ascending: false })
+    const ps = (data as Periodo[]) ?? []
+    setPeriodos(ps)
+    // Flags por período (reimport/consolidada/resultado) para la lista.
+    const [{ data: aj }, { data: cons }, { data: res }] = await Promise.all([
+      supabase.from('liquidacion_ajuste').select('periodo_id'),
+      supabase.from('liquidacion_consolidada').select('periodo_id'),
+      supabase.from('liquidacion_resultado_visual').select('periodo_id'),
+    ])
+    const setDe = (rows: any[] | null) => new Set((rows ?? []).map(r => r.periodo_id))
+    const sAj = setDe(aj), sCons = setDe(cons), sRes = setDe(res)
+    const f: Record<string, PeriodoFlags> = {}
+    for (const p of ps) f[p.id] = { reimport: sAj.has(p.id), consolidada: sCons.has(p.id), resultado: sRes.has(p.id) }
+    setFlags(f)
+    // Nombres de los creadores.
+    const ids = Array.from(new Set(ps.map(p => p.creado_por).filter(Boolean))) as string[]
+    if (ids.length) {
+      const { data: us } = await supabase.from('usuarios').select('id, nombre, apellido').in('id', ids)
+      const m: Record<string, string> = {}
+      for (const u of (us ?? []) as any[]) m[u.id] = `${u.apellido ?? ''}, ${u.nombre ?? ''}`.replace(/^,\s*|,\s*$/g, '') || u.id
+      setCreadores(m)
+    }
+  }
+
+  // Eliminar (si vacío) o anular (si tiene historia) un período. Muestra el
+  // contenido y pide confirmación fuerte antes de anular; nunca borra historia.
+  async function eliminarPeriodo(p: Periodo) {
+    setBorrando(p.id); setMsg(null)
+    try {
+      const { data: cont, error: e1 } = await supabase.rpc('contenido_periodo_liquidacion', { p_periodo_id: p.id })
+      if (e1) { setMsg({ ok: false, t: 'No se pudo leer el contenido: ' + e1.message }); return }
+      const c = cont as any
+      const tieneHistoria = Boolean(c?.tiene_historia)
+      const detalle = `Padrón ${c.padron} · conceptos ${c.conceptos} · días ${c.dias} · ajustes ${c.ajustes} · importaciones ${c.importaciones} · consolidada ${c.consolidada} · enviado ${c.enviado} · resultado ${c.resultado}`
+      if (!tieneHistoria) {
+        if (!window.confirm(`Eliminar definitivamente el período ${p.mes}?\n(${detalle})\nNo tiene historia relevante: se borra físicamente.`)) return
+        const { data, error } = await supabase.rpc('eliminar_periodo_liquidacion', { p_periodo_id: p.id, p_forzar: false })
+        if (error) { setMsg({ ok: false, t: 'No se pudo eliminar: ' + error.message }); return }
+        setMsg({ ok: true, t: `Período ${p.mes} eliminado.` })
+      } else {
+        if (!window.confirm(`El período ${p.mes} TIENE datos:\n${detalle}\n\nNo se puede borrar la historia. ¿Anularlo (queda archivado, oculto por defecto)?`)) return
+        const motivo = window.prompt('Motivo de la anulación (opcional):', 'período de prueba') || null
+        const { data, error } = await supabase.rpc('eliminar_periodo_liquidacion', { p_periodo_id: p.id, p_forzar: true, p_motivo: motivo })
+        if (error) { setMsg({ ok: false, t: 'No se pudo anular: ' + error.message }); return }
+        setMsg({ ok: true, t: `Período ${p.mes} anulado (archivado). Activá "ver anulados" para verlo.` })
+      }
+      if (sel?.id === p.id) setSel(null)
+      await cargarPeriodos()
+    } catch (e: any) {
+      setMsg({ ok: false, t: 'No se pudo: ' + (e?.message || e) })
+    } finally { setBorrando(null) }
   }
   async function cargarCatalogo() {
     const { data } = await supabase.from('liquidacion_concepto_catalogo').select('id, codigo_visual, nombre, categoria, origen, ambito, activo').order('nombre')
@@ -134,7 +188,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       const a = document.createElement('a')
       a.href = url; a.download = `liquidacion_trabajo_${sel.mes}.xlsx`
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
-      setMsg({ ok: true, t: `Excel de trabajo generado (${r.filas} empleados). Editalo y volvé a subirlo para ver las diferencias.` })
+      setMsg({ ok: true, t: `Excel de trabajo generado (${r.filas} empleados). Trae padrón, jornadas reales (000), horas, conceptos, permanentes y fórmulas. Editalo (podés corregir el 000) y volvé a subirlo. PENDIENTE: los gráficos Horas REC vs Extras y costo de hora todavía NO se incluyen (falta el Excel original con esas escalas).` })
     } catch (e: any) {
       setMsg({ ok: false, t: 'No se pudo generar el Excel de trabajo: ' + (e?.message || e) })
     } finally { setGenExcel(false) }
@@ -267,20 +321,41 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
             </div>
           </div>
           <div style={S.card}>
-            <strong>Períodos</strong>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong>Períodos</strong>
+              <label style={{ fontSize: 12, color: '#94a3b8', cursor: 'pointer' }}>
+                <input type="checkbox" checked={verAnulados} onChange={e => setVerAnulados(e.target.checked)} style={{ marginRight: 6 }} />
+                ver anulados
+              </label>
+            </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
-              <thead><tr><th style={S.th}>Mes</th><th style={S.th}>Estado</th><th style={S.th}></th></tr></thead>
-              <tbody>{periodos.map(p => (
-                <tr key={p.id}>
-                  <td style={S.td}>{p.mes}</td><td style={S.td}>{p.estado}</td>
+              <thead><tr>
+                <th style={S.th}>Mes</th><th style={S.th}>Estado</th><th style={S.th}>Creado</th><th style={S.th}>Por</th>
+                <th style={S.th}>Excel rev.</th><th style={S.th}>Consol.</th><th style={S.th}>Result. Visual</th><th style={S.th}></th>
+              </tr></thead>
+              <tbody>{periodos.filter(p => verAnulados || p.estado !== 'anulado').map(p => {
+                const f = flags[p.id] || { reimport: false, consolidada: false, resultado: false }
+                const anulado = p.estado === 'anulado'
+                const si = (b: boolean) => b ? <span style={{ color: '#4ade80' }}>sí</span> : <span style={{ color: '#475569' }}>—</span>
+                return (
+                <tr key={p.id} style={{ opacity: anulado ? 0.5 : 1, background: sel?.id === p.id ? '#111a2e' : 'transparent' }}>
+                  <td style={S.td}><b>{p.mes}</b>{sel?.id === p.id && !anulado && <span style={{ color: '#60a5fa', fontSize: 10, marginLeft: 6 }}>● vigente</span>}</td>
+                  <td style={S.td}>{p.estado}</td>
+                  <td style={S.td}>{p.created_at ? new Date(p.created_at).toLocaleDateString('es-AR') : '—'}</td>
+                  <td style={S.td}>{p.creado_por ? (creadores[p.creado_por] || '—') : '—'}</td>
+                  <td style={S.td}>{si(f.reimport)}</td><td style={S.td}>{si(f.consolidada)}</td><td style={S.td}>{si(f.resultado)}</td>
                   <td style={S.td}>
-                    <button style={{ ...S.btn, background: '#334155', marginRight: 6 }} onClick={() => void abrirPeriodo(p)}>Ver</button>
-                    {ESTADOS_SIG[p.estado] && <button style={{ ...S.btn, background: '#475569' }} onClick={() => void cambiarEstado(p)}>→ {ESTADOS_SIG[p.estado]}</button>}
+                    {!anulado && <button style={{ ...S.btn, background: '#334155', marginRight: 6 }} onClick={() => void abrirPeriodo(p)}>Ver</button>}
+                    {!anulado && ESTADOS_SIG[p.estado] && <button style={{ ...S.btn, background: '#475569', marginRight: 6 }} onClick={() => void cambiarEstado(p)}>→ {ESTADOS_SIG[p.estado]}</button>}
+                    {!anulado && <button style={{ ...S.btn, background: '#7f1d1d', opacity: borrando === p.id ? 0.6 : 1 }} disabled={borrando === p.id} onClick={() => void eliminarPeriodo(p)}>{borrando === p.id ? '…' : 'Eliminar'}</button>}
                   </td>
-                </tr>))}
-                {periodos.length === 0 && <tr><td style={S.td} colSpan={3}>Sin períodos.</td></tr>}
+                </tr>)})}
+                {periodos.filter(p => verAnulados || p.estado !== 'anulado').length === 0 && <tr><td style={S.td} colSpan={8}>Sin períodos.</td></tr>}
               </tbody>
             </table>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 6 }}>
+              Vacío/de prueba → se elimina físicamente. Con historia (ajustes, importaciones, consolidación, envío o resultado) → se anula (queda archivado, oculto por defecto), nunca se borra.
+            </div>
           </div>
           {sel && (
             <div style={S.card}>
@@ -295,59 +370,31 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                 </table>
               )}
 
-              {/* ═══ PASO 1 · PREPARAR — MERCOSUR arma el Excel de trabajo del mes ═══ */}
-              <PasoHeader n={1} titulo="Preparar" sub="MERCOSUR arma el Excel de trabajo del mes" activo={EDITABLE(sel.estado)} />
+              {/* ═══ PASO 1 · DESCARGAR EXCEL DE TRABAJO (con 000 ya calculado) ═══ */}
+              <PasoHeader n={1} titulo="Descargar Excel de trabajo" sub="Ya trae padrón, 000 real, horas, conceptos, permanentes y fórmulas" activo={EDITABLE(sel.estado)} />
               {EDITABLE(sel.estado) ? (
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button style={{ ...S.btn, opacity: genExcel ? 0.6 : 1 }} disabled={genExcel} onClick={() => void descargarExcelTrabajo()}>
                     {genExcel ? 'Generando…' : 'Descargar Excel de trabajo'}
                   </button>
                   <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
-                    Padrón, jornadas, novedades y fórmulas del mes. Lo editás en Excel (descuentos, días, embargos) y lo volvés a subir en el paso 2. El 000 de días se ajusta en el padrón (paso 2).
+                    El <b>000 (días trabajados)</b> ya viene calculado desde la planilla real (fechas distintas trabajadas). Corregí en Excel lo que haga falta y subilo en el paso 2.
                   </span>
                 </div>
               ) : <div style={{ color: '#64748b', fontSize: 12 }}>El período ya no está en edición; el Excel de trabajo se prepara mientras está en borrador/revisión.</div>}
+              {/* Ítem 3: los gráficos todavía NO están — el Excel no es el final. */}
+              <div style={{ marginTop: 8, padding: 10, background: '#1a1206', border: '1px dashed #7c5510', borderRadius: 8, fontSize: 12, color: '#fcd34d' }}>
+                <b>PENDIENTE de insumo — este Excel todavía NO es el final.</b> Faltan los gráficos: <b>(A)</b> Horas REC vs Extras (horas REC, horas extras, %REC, %extras) y <b>(B)</b> costo de hora con tu escala de colores. Para no inventar límites/colores, necesito que me pases <b>el Excel original que usabas con esos dos gráficos</b> (con la escala de colores y los cortes reales). Hasta entonces el archivo trae toda la lógica pero sin esa presentación.
+              </div>
 
-              {/* ═══ PASO 2 · REVISAR — subir Excel corregido, padrón (000/expedientes), controles ═══ */}
-              <PasoHeader n={2} titulo="Revisar y corregir" sub="Subir el Excel editado, ver diferencias, ajustar padrón" activo={EDITABLE(sel.estado)} />
-              {EDITABLE(sel.estado) && (
+              {/* ═══ PASO 2 · SUBIR EXCEL REVISADO → preview de diferencias → confirmar ═══ */}
+              <PasoHeader n={2} titulo="Subir Excel revisado" sub="Preview de diferencias y confirmación (incluye el 000 corregido)" activo={EDITABLE(sel.estado)} />
+              {EDITABLE(sel.estado) ? (
                 <ReimportarExcelTrabajo periodo={sel} onDone={() => { void abrirPeriodo(sel) }} />
-              )}
-              {/* Padrón de liquidación — 000 días editable/calculado + expedientes 111/993. */}
-              <PadronLiquidacion periodo={sel} />
-              {/* Novedades laborales del mes: control de alimentación (referencia). */}
-              <div style={{ marginTop: 12, fontSize: 13 }}>
-                <b>Novedades del mes (aprobadas):</b> {novedadesMes.length}
-                {novedadesMes.length > 0 && <span style={{ color: '#64748b' }}> — control para cruzar contra los conceptos cargados.</span>}
-              </div>
-              {/* Comparación con el período anterior (control de omisiones, no copia). */}
-              <div style={{ marginTop: 12 }}>
-                <button style={{ ...S.btn, background: '#334155' }} onClick={() => void comparar()}>Comparar con período anterior</button>
-                {comparacion && (
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
-                      El mes anterior es sólo control de omisiones: <b>desaparecido</b> = estaba antes y ahora no (¿falta cargar o terminó?). Nunca se copia automáticamente.
-                    </div>
-                    {comparacion.length === 0 ? <div style={{ color: '#64748b', fontSize: 13 }}>Sin diferencias con el período anterior (o no hay anterior).</div> : (
-                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead><tr><th style={S.th}>Empleado</th><th style={S.th}>Concepto</th><th style={S.th}>Estado</th><th style={S.th}>Actual</th><th style={S.th}>Anterior</th></tr></thead>
-                        <tbody>{comparacion.slice(0, 200).map((c, i) => (
-                          <tr key={i} style={{ color: c.estado === 'desaparecido' ? '#fbbf24' : c.estado === 'nuevo' ? '#4ade80' : '#e2e8f0' }}>
-                            <td style={S.td}>{nombreEmp(c.empleado_id)}</td>
-                            <td style={S.td}>{c.codigo ? c.codigo + ' · ' : ''}{c.concepto || '—'}</td>
-                            <td style={S.td}>{c.estado}</td>
-                            <td style={S.td}>{c.importe_actual ?? '—'}</td>
-                            <td style={S.td}>{c.importe_anterior ?? '—'}</td>
-                          </tr>
-                        ))}</tbody>
-                      </table>
-                    )}
-                  </div>
-                )}
-              </div>
+              ) : <div style={{ color: '#64748b', fontSize: 12 }}>Sólo se reimporta mientras el período está en borrador/revisión.</div>}
 
-              {/* ═══ PASO 3 · VISUAL — consolidar y generar el .xls de importación ═══ */}
-              <PasoHeader n={3} titulo="Generar para Visual" sub="Consolidar y bajar el .xls que Visual calcula" activo={EDITABLE(sel.estado) || sel.estado === 'consolidada'} />
+              {/* ═══ PASO 3 · CONSOLIDAR ═══ */}
+              <PasoHeader n={3} titulo="Consolidar" sub="Congela una versión auditable (baseline + ajustes)" activo={EDITABLE(sel.estado) || sel.estado === 'consolidada'} />
               <div>
                 {consolidadaN > 0 && (
                   <div style={{ fontSize: 13, marginBottom: 8 }}>
@@ -360,41 +407,43 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     <button style={{ ...S.btn, background: '#7c3aed', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>
                       {consolidando ? 'Consolidando…' : 'Consolidar liquidación'}
                     </button>
-                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
-                      Consolidar congela una versión auditable (baseline + ajustes) para exportar a Visual. Podés re-consolidar mientras no esté exportada.
-                    </span>
+                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>Podés re-consolidar mientras no esté exportada.</span>
                   </div>
                 ) : sel.estado === 'consolidada' ? (
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button style={{ ...S.btn, background: '#475569', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>Re-consolidar</button>
+                    <span style={{ color: '#4ade80', fontSize: 12 }}>Consolidado. Generá el archivo para Visual en el paso 4.</span>
+                  </div>
+                ) : <div style={{ color: '#64748b', fontSize: 12 }}>Período {sel.estado}.</div>}
+              </div>
+
+              {/* ═══ PASO 4 · GENERAR ARCHIVO PARA VISUAL ═══ */}
+              <PasoHeader n={4} titulo="Generar archivo para Visual" sub="Baja el .xls y registra lo enviado; Visual calcula el recibo" activo={sel.estado === 'consolidada' || sel.estado === 'exportada' || sel.estado === 'liquidada'} />
+              <div>
+                {sel.estado === 'consolidada' ? (
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                     <button style={{ ...S.btn, background: '#059669', opacity: genVisual ? 0.6 : 1 }} disabled={genVisual} onClick={() => void generarVisual()}>
                       {genVisual ? 'Generando…' : 'Generar archivo Visual Sueldos'}
                     </button>
-                    <button style={{ ...S.btn, background: '#475569', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>
-                      Re-consolidar
-                    </button>
-                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 100%' }}>
-                      Genera el .xls de importación a Visual desde el consolidado (config por concepto). Marca el período EXPORTADA y registra lo enviado para conciliar. La liquidación final la calcula Visual.
-                    </span>
+                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 100%' }}>El 000 sale de la planilla real (con tu corrección del Excel). Marca el período EXPORTADA y registra lo enviado para conciliar.</span>
                   </div>
                 ) : sel.estado === 'exportada' || sel.estado === 'liquidada' ? (
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                     <button style={{ ...S.btn, background: '#059669', opacity: genVisual ? 0.6 : 1 }} disabled={genVisual} onClick={() => void generarVisual()}>
                       {genVisual ? 'Generando…' : 'Regenerar archivo Visual'}
                     </button>
-                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
-                      Período {sel.estado}. Podés volver a bajar el archivo de importación.
-                    </span>
+                    <span style={{ color: '#64748b', fontSize: 12 }}>Período {sel.estado}. Podés volver a bajar el archivo.</span>
                   </div>
-                ) : null}
+                ) : <div style={{ color: '#64748b', fontSize: 12 }}>Consolidá primero (paso 3) para habilitar la generación.</div>}
 
-                {/* LIQ2F: validación pre-export. Críticos bloquean; advertencias visibles. */}
+                {/* Validación pre-export. Críticos bloquean; advertencias visibles. */}
                 {validacion && (
                   <div style={{ marginTop: 12, fontSize: 12 }}>
                     {(() => { const p = validacion.padron || []
                       const exporta = p.filter((x: any) => x.estado === 'exporta').length
                       const noCorr = p.filter((x: any) => x.estado === 'no_corresponde').length
                       const falta = p.filter((x: any) => x.estado === 'falta_info').length
-                      return <div style={{ color: '#94a3b8', marginBottom: 6 }}>Padrón: <b style={{ color: '#4ade80' }}>{exporta} exportan</b> · {noCorr} no corresponde · <b style={{ color: falta ? '#f87171' : '#64748b' }}>{falta} bloqueados</b></div>
+                      return <div style={{ color: '#94a3b8', marginBottom: 6 }}>Padrón: <b style={{ color: '#4ade80' }}>{exporta} exportan</b> · {noCorr} no corresponde · <b style={{ color: falta ? '#f87171' : '#64748b' }}>{falta} PENDIENTE (000 sin actividad / falta identidad)</b></div>
                     })()}
                     {validacion.criticos?.length > 0 && (
                       <div style={{ padding: 8, background: '#2a0f0f', border: '1px solid #7f1d1d', borderRadius: 6, marginBottom: 6 }}>
@@ -405,7 +454,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     )}
                     {validacion.bloqueados?.length > 0 && (
                       <div style={{ padding: 8, background: '#1a1206', border: '1px solid #7c5510', borderRadius: 6, marginBottom: 6 }}>
-                        <b style={{ color: '#fbbf24' }}>No exportados ({validacion.bloqueados.length}) — falta identidad (no están en Visual):</b>
+                        <b style={{ color: '#fbbf24' }}>PENDIENTE ({validacion.bloqueados.length}) — 000 sin actividad o sin identidad en Visual (no se inventa):</b>
                         {validacion.bloqueados.slice(0, 10).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}
                         {validacion.bloqueados.length > 10 && <div style={{ color: '#64748b' }}>… y {validacion.bloqueados.length - 10} más</div>}
                       </div>
@@ -421,20 +470,53 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                 )}
               </div>
 
-              {/* ═══ PASO 4 · RESULTADO — importar lo que Visual devolvió + conciliación ═══ */}
-              <PasoHeader n={4} titulo="Resultado de Visual" sub="Importar la planilla final y conciliar contra lo enviado" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
+              {/* ═══ PASO 5 · RESULTADO DE VISUAL — importar + conciliación ═══ */}
+              <PasoHeader n={5} titulo="Resultado de Visual" sub="Importar la planilla final y conciliar contra lo enviado" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
               <ImportarResultadoVisual periodo={sel} />
 
-              {/* ═══ PASO 5 · PAGOS — acreditaciones (bloqueado hasta el archivo real Galicia) ═══ */}
-              <PasoHeader n={5} titulo="Pagos" sub="Acreditación de sueldos y extras" activo={false} />
-              <div style={{ padding: 10, background: '#0f1a2e', border: '1px dashed #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd' }}>
-                Pendiente: el formato de acreditación bancaria (Galicia) se implementa cuando llegue el archivo real. Sueldo y extras van en acreditaciones separadas. No se inventa el layout.
+              {/* ─── Herramientas de revisión (auxiliares, no dominan el flujo) ─── */}
+              <div style={{ marginTop: 22, paddingTop: 12, borderTop: '2px solid #1e293b' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>Herramientas de revisión (auxiliares)</div>
+                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>
+                  Auditoría del 000, expedientes, novedades y comparación. No hace falta cargar nada acá para el flujo principal: el 000 ya viaja en el Excel y en la generación a Visual.
+                </div>
+                {/* Padrón — 000 (auditoría/override) + expedientes 111/993. */}
+                <PadronLiquidacion periodo={sel} />
+                {/* Novedades laborales del mes: control (referencia). */}
+                <div style={{ marginTop: 12, fontSize: 13 }}>
+                  <b>Novedades del mes (aprobadas):</b> {novedadesMes.length}
+                  {novedadesMes.length > 0 && <span style={{ color: '#64748b' }}> — control para cruzar contra los conceptos cargados.</span>}
+                </div>
+                {/* Comparación con el período anterior (control de omisiones, no copia). */}
+                <div style={{ marginTop: 12 }}>
+                  <button style={{ ...S.btn, background: '#334155' }} onClick={() => void comparar()}>Comparar con período anterior</button>
+                  {comparacion && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
+                        El mes anterior es sólo control de omisiones: <b>desaparecido</b> = estaba antes y ahora no. Nunca se copia automáticamente.
+                      </div>
+                      {comparacion.length === 0 ? <div style={{ color: '#64748b', fontSize: 13 }}>Sin diferencias con el período anterior (o no hay anterior).</div> : (
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                          <thead><tr><th style={S.th}>Empleado</th><th style={S.th}>Concepto</th><th style={S.th}>Estado</th><th style={S.th}>Actual</th><th style={S.th}>Anterior</th></tr></thead>
+                          <tbody>{comparacion.slice(0, 200).map((c, i) => (
+                            <tr key={i} style={{ color: c.estado === 'desaparecido' ? '#fbbf24' : c.estado === 'nuevo' ? '#4ade80' : '#e2e8f0' }}>
+                              <td style={S.td}>{nombreEmp(c.empleado_id)}</td>
+                              <td style={S.td}>{c.codigo ? c.codigo + ' · ' : ''}{c.concepto || '—'}</td>
+                              <td style={S.td}>{c.estado}</td>
+                              <td style={S.td}>{c.importe_actual ?? '—'}</td>
+                              <td style={S.td}>{c.importe_anterior ?? '—'}</td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* ═══ PASO 6 · LIBRO DIGITAL — LSD / ARCA (futuro) ═══ */}
-              <PasoHeader n={6} titulo="Libro de Sueldos Digital" sub="LSD / ARCA" activo={false} />
-              <div style={{ padding: 10, background: '#1a1206', border: '1px dashed #7c5510', borderRadius: 8, fontSize: 12, color: '#fcd34d' }}>
-                Pendiente: generación del Libro de Sueldos Digital y presentación ARCA/AFIP. Fase futura, no incluida en este circuito.
+              {/* ─── Próximas fases (pendientes, NO implementadas todavía) ─── */}
+              <div style={{ marginTop: 18, padding: 10, background: '#0f1a2e', border: '1px dashed #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd' }}>
+                <b>Próximas fases (pendientes, aún no implementadas):</b> Pagos / acreditación bancaria Galicia (espera el archivo real), Libro de Sueldos Digital, ARCA/AFIP y Facturación. No se avanza hasta cerrar el flujo actual.
               </div>
             </div>
           )}
