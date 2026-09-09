@@ -119,4 +119,40 @@ describe('decoraciones del Excel de trabajo (gráfico REC/Extras + semáforos)',
     expect(baselineDesdePlantilla(pl).has('usuario_id')).toBe(false)
     expect(parseGridReimport(grid).has('usuario_id')).toBe(false)
   })
+
+  // ETAPA 3 — sin torta PNG: sólo celdas dinámicas.
+  it('ETAPA 3: no queda PNG/imagen ni media/drawings huérfanos en el ZIP', async () => {
+    const pl = plantillaReal()
+    const buf = await escribirPlantillaLiquidacionXLSX(pl)
+    // API exceljs: sin imágenes ni media
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf)
+    const ws = wb.worksheets[0]
+    expect((ws.getImages?.() ?? []).length).toBe(0)
+    expect(((wb as any).model?.media ?? []).length).toBe(0)
+    // ZIP crudo: sin xl/media, sin xl/drawings, sin binarios de imagen
+    const JSZip = (await import('jszip')).default
+    const zip = await JSZip.loadAsync(buf)
+    const paths = Object.keys(zip.files)
+    expect(paths.some(p => p.startsWith('xl/media/'))).toBe(false)
+    expect(paths.some(p => p.startsWith('xl/drawings/'))).toBe(false)
+    expect(paths.some(p => /\.(png|jpe?g|gif|emf)$/i.test(p))).toBe(false)
+  })
+
+  it('ETAPA 3: quedan las 4 celdas dinámicas y %REC + %Extras = 100% (con horas)', async () => {
+    const pl = plantillaReal()
+    const buf = await escribirPlantillaLiquidacionXLSX(pl)
+    const { grid } = await leerGrid(buf)
+    const texto = grid.flat().map(c => String(c ?? ''))
+    for (const et of ['Horas REC Vigiladores', 'Horas Extras Vigiladores', '% REC', '% Extras']) expect(texto).toContain(et)
+    // %REC / %Extras (resultados cacheados) suman 100% (plantillaReal tiene vigiladores con horas)
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf)
+    const ws = wb.worksheets[0]
+    const base = pl.estilos.total + 2
+    const num = (ref: string) => { const v: any = ws.getCell(ref).value; return Number((v && typeof v === 'object' && 'result' in v) ? v.result : v) }
+    const pctRec = num(`AD${base + 3}`), pctExt = num(`AD${base + 4}`)
+    expect(pctRec + pctExt).toBeCloseTo(1, 6)
+    // y las fórmulas siguen apuntando al SUBTOTAL VIGILADORES, no al total general
+    const f: any = ws.getCell(`AD${base + 1}`).value
+    expect(String(f?.formula)).toBe(`AG${pl.estilos.subtotalVigiladores}`)
+  })
 })
