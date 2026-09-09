@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { alcanceDe, shellDeUsuario, tieneCapacidad } from '@/lib/capacidades'
+import { alcanceDe, shellDeUsuario, tieneCapacidad, esAdminPleno } from '@/lib/capacidades'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
@@ -12698,7 +12698,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 //   { id: 'turnos_base', icon: '🧱', label: 'Turnos Base' }
 //
 // PASO 2: Agregar al render admin:
-//   {page === 'turnos_base' && <TurnosBase />}
+//   {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}
 //
 // ============================================================
 
@@ -13603,16 +13603,19 @@ const esGuardia = esRolGuardia(user.rol)
     ...(tieneCapacidad(user, 'ver_liquidacion') ? [{ section:'GESTIÓN ECONÓMICA', items:[
       { id:'liquidacion', icon:'💵', label:'Liquidación' },
     ]}] : []),
-    { section:'CONFIGURACIÓN', items:[
+    // CONFIGURACIÓN y SISTEMA: sólo ADMIN PLENO (jefe/dir. operativa/administración/
+    // gerencia + admin legado). Un supervisor con acceso a la interfaz admin
+    // (p.ej. Sergio) NO las ve: su vista queda operativa. No cambia a nadie que
+    // ya las veía.
+    ...(esAdminPleno(user) ? [{ section:'CONFIGURACIÓN', items:[
       { id:'servicios_objetivo', icon:'📅', label:'Programación' },
       { id:'checklists', icon:'☑️', label:'Checklists' },
       { id:'turnos_base', icon:'⏰', label:'Turnos Base' },
       { id:'zonas_operativas', icon:'🗺️', label:'Zonas operativas' },
       { id:'referencias_ia', icon:'🖼️', label:'Referencias IA' },
-    ]},
-    { section:'SISTEMA', items:[
+    ]}, { section:'SISTEMA', items:[
       { id:'observacion', icon:'🔭', label:'Observación del Sistema' },
-    ]},
+    ]}] : []),
   ]
 
   const novedadesUrgentes = novedades.filter(n => n.prioridad === 'urgente' && n.estado !== 'resuelta').length
@@ -13681,8 +13684,8 @@ const esGuardia = esRolGuardia(user.rol)
                   }
                 />
               )}
-              {page === 'servicios_objetivo' && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} onNavigate={navegarConFiltro} />}
-              {page === 'zonas_operativas' && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
+              {page === 'servicios_objetivo' && esAdminPleno(user) && <ServiciosObjetivo guardias={guardias} objetivos={objetivos} filtroActivo={filtros.servicios_objetivo} limpiarFiltro={() => limpiarFiltro('servicios_objetivo')} onNavigate={navegarConFiltro} />}
+              {page === 'zonas_operativas' && esAdminPleno(user) && <ZonasOperativas guardias={guardias} objetivos={objetivos} zonas={zonasOperativas} setZonas={setZonasOperativas} supervisorZonas={supervisorZonas} setSupervisorZonas={setSupervisorZonas} />}
               {page === 'supervisores_guardia' && <SupervisoresGuardia guardias={guardias} user={user} zonas={zonasOperativas} />}
               {page === 'solicitudes_admin' && <SolicitudesAdmin user={user} guardias={guardias} setGuardias={setGuardias} objetivos={objetivos} setObjetivos={setObjetivos} />}
               {/* El cierre no es un módulo nuevo: agrega lo que ya detectan
@@ -13731,10 +13734,10 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
               {page === 'liquidacion' && tieneCapacidad(user, 'ver_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
-              {page === 'checklists' && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
-              {page === 'turnos_base' && <TurnosBase />}
-              {page === 'observacion' && <ObservacionSistema onNavigate={navegarConFiltro} />}
-              {page === 'referencias_ia' && <ReferenciasIAPanel user={user} />}
+              {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
+              {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}
+              {page === 'observacion' && esAdminPleno(user) && <ObservacionSistema onNavigate={navegarConFiltro} />}
+              {page === 'referencias_ia' && esAdminPleno(user) && <ReferenciasIAPanel user={user} />}
               {page === 'revision_fotos_ia' && <AnalisisIAPanel user={user} objetivos={objetivos} guardias={guardias} />}
             </>
           )
