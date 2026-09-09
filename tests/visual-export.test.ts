@@ -87,6 +87,15 @@ describe('construirLineasVisual (LIQ2G · persona/expedientes/000)', () => {
     expect(r.padron[0].estado).toBe('no_corresponde')
   })
 
+  it('persona excluida (Acosta/Monzón/Wilhjelm) → no se exporta pero se REPORTA (no silenciosa)', () => {
+    const excl: PersonaPadron = { persona_id: 'ex', cod_interno: null, cuil: null, nombre: 'CARLOS ACOSTA', excluido: true, motivoExcluido: 'no tiene recibo' }
+    const r = construirLineasVisual({ padron: [excl], catalogo, haberes: new Map([['ex', [{ codigo: '001', cantidad: null, importe: 100 }]]]), dias: new Map([['ex', 20]]), permanentes: new Map(), expedientes: new Map(), lineaCero: LINEA_CERO })
+    expect(r.lineas.length).toBe(0)                        // no exporta, aunque tenga datos
+    expect(r.padron[0].estado).toBe('no_corresponde')
+    expect(r.padron[0].motivo).toMatch(/excluido de liquidación/)
+    expect(r.bloqueados.length).toBe(0)                    // no es bloqueo, es decisión
+  })
+
   it('bloqueo por persona: falta COD_INTERNO', () => {
     const sinCod: PersonaPadron = { persona_id: 'x', cod_interno: null, cuil: '20144945817', nombre: 'SIN COD' }
     const r = construirLineasVisual({ padron: [sinCod], catalogo, haberes: new Map(), dias: new Map([['x', 20]]), permanentes: new Map(), expedientes: new Map(), lineaCero: [] })
