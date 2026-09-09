@@ -22,21 +22,31 @@ export default function PadronLiquidacion({ periodo }: { periodo: Periodo }) {
   const [tab, setTab] = useState<'dias' | 'expedientes'>('dias')
   const [personas, setPersonas] = useState<Persona[]>([])
   const [dias, setDias] = useState<Record<string, string>>({})   // persona_id -> días (string editable)
+  const [meta, setMeta] = useState<Record<string, { calc: number | null; origen: string | null }>>({})
+  const [excelCorr, setExcelCorr] = useState<Record<string, { orig: number | null; corr: number | null }>>({}) // por usuario_id
   const [expedientes, setExpedientes] = useState<any[]>([])
   const [expForm, setExpForm] = useState({ persona_id: '', referencia: '', importe: '' })
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null)
   const editable = periodo.estado === 'borrador' || periodo.estado === 'revision'
 
   async function cargar() {
-    const [{ data: pers }, { data: dd }, { data: exp }] = await Promise.all([
+    const [{ data: pers }, { data: dd }, { data: exp }, { data: aj }] = await Promise.all([
       supabase.from('liquidacion_persona').select('id, cuil, nombre, cod_interno, usuario_id, estado_liquidable').eq('estado_liquidable', 'activo').order('nombre'),
-      supabase.from('liquidacion_dias').select('persona_id, dias').eq('periodo_id', periodo.id),
+      supabase.from('liquidacion_dias').select('persona_id, dias, dias_calculado, origen').eq('periodo_id', periodo.id),
       supabase.from('liquidacion_expediente').select('id, persona_id, referencia, importe, slot_preferido, estado, vigencia_desde, vigencia_hasta').eq('estado', 'activo'),
+      supabase.from('liquidacion_ajuste').select('empleado_id, valor_operativo, valor_liquidacion').eq('periodo_id', periodo.id).eq('tipo', 'variable').eq('clave', 'jornadas'),
     ])
     setPersonas((pers as Persona[]) ?? [])
     const d: Record<string, string> = {}
-    for (const x of (dd ?? []) as any[]) d[x.persona_id] = x.dias == null ? '' : String(x.dias)
-    setDias(d)
+    const m: Record<string, { calc: number | null; origen: string | null }> = {}
+    for (const x of (dd ?? []) as any[]) {
+      d[x.persona_id] = x.dias == null ? '' : String(x.dias)
+      m[x.persona_id] = { calc: x.dias_calculado == null ? null : Number(x.dias_calculado), origen: x.origen ?? null }
+    }
+    setDias(d); setMeta(m)
+    const ec: Record<string, { orig: number | null; corr: number | null }> = {}
+    for (const a of (aj ?? []) as any[]) ec[a.empleado_id] = { orig: a.valor_operativo == null ? null : Number(a.valor_operativo), corr: a.valor_liquidacion == null ? null : Number(a.valor_liquidacion) }
+    setExcelCorr(ec)
     setExpedientes((exp as any[]) ?? [])
   }
   useEffect(() => { void cargar() }, [periodo.id])
@@ -108,29 +118,36 @@ export default function PadronLiquidacion({ periodo }: { periodo: Periodo }) {
       {tab === 'dias' && (
         <>
           <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>
-            El <b>000</b> es un dato mensual explícito por persona. Sin valor queda <b style={{ color: '#f87171' }}>pendiente</b> y bloquea el XLS de esa persona (no se inventa). {personas.length} personas liquidables.
+            <b>Auditoría del 000</b> (no es carga obligatoria): el 000 ya viaja en el Excel de trabajo y en la generación a Visual, calculado desde la planilla real. Acá ves <b>calculado</b> vs <b>corregido en el Excel</b>, y podés forzar un valor manual si hace falta. Sin actividad = <b style={{ color: '#fbbf24' }}>PENDIENTE</b> (no se inventa). {personas.length} personas liquidables.
           </div>
           {editable && (
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
               <button style={{ ...S.btn, opacity: calculando ? 0.6 : 1 }} disabled={calculando} onClick={() => void calcularDias()}>
-                {calculando ? 'Calculando…' : 'Calcular 000 desde planilla real'}
+                {calculando ? 'Calculando…' : 'Recalcular 000 (diagnóstico)'}
               </button>
               <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 260px' }}>
-                Usa las <b>jornadas reales</b> (fechas distintas trabajadas; varios turnos el mismo día = 1). Mínimo 1 para quien tiene actividad. Los <b>sin actividad</b> (socios/administrativos) NO se autocompletan. Podés ajustar antes de exportar.
+                Recalcula desde las <b>jornadas reales</b> (fechas distintas; varios turnos el mismo día = 1; sin tope) e incorpora la corrección del Excel. Los <b>sin actividad</b> NO se autocompletan.
               </span>
             </div>
           )}
           <div style={{ maxHeight: 340, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr><th style={S.th}>Persona</th><th style={S.th}>COD_INT.</th><th style={S.th}>Días (000)</th><th style={S.th}></th></tr></thead>
-              <tbody>{personas.map(p => (
-                <tr key={p.id} style={{ background: (dias[p.id] === '' || !(p.id in dias)) ? '#1a0f0f' : 'transparent' }}>
+              <thead><tr><th style={S.th}>Persona</th><th style={S.th}>COD_INT.</th><th style={S.th}>Calc. planilla</th><th style={S.th}>Corregido Excel</th><th style={S.th}>000 (final)</th><th style={S.th}>Origen</th><th style={S.th}></th></tr></thead>
+              <tbody>{personas.map(p => {
+                const mm = meta[p.id]
+                const ec = p.usuario_id ? excelCorr[p.usuario_id] : undefined
+                const pendiente = dias[p.id] === '' || !(p.id in dias)
+                return (
+                <tr key={p.id} style={{ background: pendiente ? '#1a0f0f' : 'transparent' }}>
                   <td style={S.td}>{p.nombre}{!p.usuario_id && <span style={{ color: '#fbbf24' }}> · sólo Visual</span>}</td>
                   <td style={S.td}>{p.cod_interno || <span style={{ color: '#f87171' }}>falta</span>}</td>
-                  <td style={S.td}><input style={S.inp} disabled={!editable} value={dias[p.id] ?? ''} onChange={e => setDias({ ...dias, [p.id]: e.target.value })} placeholder="—" /></td>
+                  <td style={S.td}>{mm?.calc ?? '—'}</td>
+                  <td style={S.td}>{ec && ec.corr != null ? <span style={{ color: '#fbbf24' }}>{ec.corr}{ec.orig != null && ec.orig !== ec.corr ? ` (era ${ec.orig})` : ''}</span> : '—'}</td>
+                  <td style={S.td}><input style={S.inp} disabled={!editable} value={dias[p.id] ?? ''} onChange={e => setDias({ ...dias, [p.id]: e.target.value })} placeholder={pendiente ? 'PEND.' : '—'} /></td>
+                  <td style={S.td}>{mm?.origen ?? '—'}</td>
                   <td style={S.td}>{editable && <button style={S.btn} onClick={() => void guardarDias(p.id)}>Guardar</button>}</td>
                 </tr>
-              ))}</tbody>
+              )})}</tbody>
             </table>
           </div>
         </>

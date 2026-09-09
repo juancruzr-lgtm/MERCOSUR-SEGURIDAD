@@ -11,6 +11,7 @@ import {
   construirLineasVisual, escribirLibroVisualXls,
   type ConceptoCfg, type PersonaPadron, type HaberLinea, type PermanenteLinea, type ExpedienteLinea, type ResultadoLineas,
 } from '@/lib/visual-export'
+import { jornadasPorUsuarioDelMes } from '@/lib/excel-trabajo-liquidacion'
 
 function limitesMes(mes: string): { desde: string; hasta: string } {
   const [y, m] = mes.split('-').map(Number)
@@ -33,7 +34,7 @@ export async function generarVisualCompleto(
     client.from('liquidacion_concepto_catalogo').select('codigo_visual, politica, entrada'),
     client.from('liquidacion_concepto_permanente').select('empleado_id, persona_id, importe, activo, vigencia_desde, vigencia_hasta, concepto:concepto_id(codigo_visual)').eq('activo', true),
     client.from('liquidacion_expediente').select('persona_id, referencia, importe, slot_preferido, estado, vigencia_desde, vigencia_hasta').eq('estado', 'activo'),
-    client.from('liquidacion_dias').select('persona_id, dias').eq('periodo_id', periodo.id),
+    client.from('liquidacion_dias').select('persona_id, dias, origen').eq('periodo_id', periodo.id),
   ])
   const err = personasR.error || consR.error || catR.error || permR.error || expR.error || diasR.error
   if (err) return { bytes: null, resultado: null, error: err.message || String(err) }
@@ -87,9 +88,24 @@ export async function generarVisualCompleto(
     expedientes.set(e.persona_id, arr)
   }
 
-  // 000 días por persona (editable). Sin fila -> pendiente (bloquea esa persona).
+  // 000 DÍAS por persona — NO depende de la grilla manual. Prioridad:
+  //   1) override MANUAL de la grilla (decisión humana explícita en el panel);
+  //   2) jornadas reales de la planilla del mes (con la corrección del Excel de
+  //      trabajo ya superpuesta por jornadasPorUsuarioDelMes) — vía usuario_id;
+  //   3) sin actividad / mensualizado / socio sin usuario -> null = PENDIENTE
+  //      (no se inventa; bloquea esa persona hasta carga manual).
+  const jornadasR = await jornadasPorUsuarioDelMes(client, { id: periodo.id, mes: periodo.mes })
+  const jornadasPorUsuario = jornadasR.jornadas
+  const manual = new Map<string, number | null>()
+  for (const d of (diasR.data ?? []) as any[]) {
+    if (d.origen === 'manual' && d.dias != null) manual.set(d.persona_id, Number(d.dias))
+  }
   const dias = new Map<string, number | null>()
-  for (const d of (diasR.data ?? []) as any[]) dias.set(d.persona_id, d.dias == null ? null : Number(d.dias))
+  for (const p of personas) {
+    if (manual.has(p.id)) { dias.set(p.id, manual.get(p.id)!); continue }
+    const j = p.usuario_id ? (jornadasPorUsuario.get(p.usuario_id) ?? 0) : 0
+    dias.set(p.id, j > 0 ? j : null)   // 0/sin actividad -> pendiente
+  }
 
   const resultado = construirLineasVisual({ padron, catalogo, haberes, dias, permanentes, expedientes, lineaCero })
   if (resultado.criticos.length > 0) return { bytes: null, resultado, error: `Hay ${resultado.criticos.length} error(es) crítico(s) estructural(es): corregilos antes de exportar.` }
