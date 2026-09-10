@@ -1151,7 +1151,13 @@ export function plantillaLiquidacionResumenGuardia(
     //  · GRUPO B (supervisores operativos): convención 25 días / 150 horas / 50 adic.
     //  · GRUPO C (vigiladores): por horas reales.
     const esGrupoA = fila.grupo === 'administrativos'
-    const mensualizado = fila.grupo === 'supervisores'  // sólo B usa la convención de 25/150/50
+    const tieneSM = sueldoMensualPorEmpleado?.has(fila.empleadoId) ?? false
+    // SUELDO FIJO (001 = SUELDO MENSUAL, sin extras ni 25/150): todos los
+    // administrativos (grupo A) y los supervisores CON un SUELDO MENSUAL cargado
+    // (p.ej. Acosta/Monzón/Wilhjelm). Los supervisores operativos SIN sueldo
+    // mensual (Sergio/Sabino/Fulla) mantienen la convención 25/150/50.
+    const esSueldoFijo = esGrupoA || (fila.grupo === 'supervisores' && tieneSM)
+    const mensualizado = fila.grupo === 'supervisores' && !esSueldoFijo
     const G = ovNum('jornadas', mensualizado ? 25 : fila.jornadas)
     const H = Math.min(G, 25)
     const I = ovNum('horas_liquidables', mensualizado ? 150 : fila.horasLiquidables)
@@ -1165,9 +1171,9 @@ export function plantillaLiquidacionResumenGuardia(
     const Pval = ovNullable('aus_susp', fila.ausenciasSuspensiones)
     // null → celda sin emitir (vacía real = 0 en fórmulas, sin #¡VALOR!).
     const putNum = (ref: string, v: number | null) => { if (v != null) put(ref, v) }
-    // GRUPO A (mensualizado fijo): NO se completan jornadas/horas/novedades — quedan
-    // VACÍAS (no se inventa 25/150 ni nada). Sólo lleva el SUELDO MENSUAL (001).
-    if (!esGrupoA) {
+    // SUELDO FIJO: NO se completan jornadas/horas/novedades — quedan VACÍAS (no se
+    // inventa 25/150 ni nada). Sólo lleva el SUELDO MENSUAL (001).
+    if (!esSueldoFijo) {
       put(`G${r}`, G)
       put(`H${r}`, H, `MIN(G${r},25)`)
       put(`I${r}`, I)
@@ -1208,46 +1214,46 @@ export function plantillaLiquidacionResumenGuardia(
     // SUELDO MENSUAL cargado, cae al básico general (fallback). Supervisores (B) y
     // vigiladores (C) NO se tocan: siguen exactamente como antes. (esGrupoA ya
     // está definido arriba.)
-    const sueldoMensual = esGrupoA ? (sueldoMensualPorEmpleado?.get(fila.empleadoId) ?? P.basico) : null
-    const gAC = esGrupoA ? 0 : AC
-    const gAD = esGrupoA ? 0 : AD
-    const gAE = esGrupoA ? 0 : AE
-    const gAF = esGrupoA ? 0 : AF
-    const gAG = esGrupoA ? 0 : AG
-    const gAH = esGrupoA ? 0 : AH
-    const gAI = esGrupoA ? 0 : AI
-    const gAJ = esGrupoA ? (sueldoMensual as number) : AJ
-    const gAL = esGrupoA ? 0 : AL
-    const gAM = esGrupoA ? 0 : AM
-    const gAN = esGrupoA ? 0 : AN
-    const gAP = esGrupoA ? 0 : AP
+    const sueldoMensual = esSueldoFijo ? (sueldoMensualPorEmpleado?.get(fila.empleadoId) ?? P.basico) : null
+    const gAC = esSueldoFijo ? 0 : AC
+    const gAD = esSueldoFijo ? 0 : AD
+    const gAE = esSueldoFijo ? 0 : AE
+    const gAF = esSueldoFijo ? 0 : AF
+    const gAG = esSueldoFijo ? 0 : AG
+    const gAH = esSueldoFijo ? 0 : AH
+    const gAI = esSueldoFijo ? 0 : AI
+    const gAJ = esSueldoFijo ? (sueldoMensual as number) : AJ
+    const gAL = esSueldoFijo ? 0 : AL
+    const gAM = esSueldoFijo ? 0 : AM
+    const gAN = esSueldoFijo ? 0 : AN
+    const gAP = esSueldoFijo ? 0 : AP
     const gAO = gAC + gAD + gAE + gAF + gAI + gAJ + AT + AU + AV + AW + AX + gAP
     const gAS = gAO > 0 && I > 0 ? gAO / I : 0
-    // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias
-    // de la fila del empleado relativas (H8→H9 al arrastrar). Grupo A: 001 = SUELDO
-    // MENSUAL (columna BF, editable); el resto de la convención va en 0 (literal).
-    put(`AC${r}`, gAC, esGrupoA ? undefined : `($E$3/25)*H${r}`)
-    put(`AD${r}`, gAD, esGrupoA ? undefined : `($E$2/25)*H${r}`)
-    put(`AE${r}`, gAE, esGrupoA ? undefined : `($E$4/25)*H${r}`)
-    put(`AF${r}`, gAF, esGrupoA ? undefined : `($F$1/10)*J${r}`)
-    put(`AG${r}`, gAG, esGrupoA ? undefined : `IF(I${r}<=150,H${r}*8,150)`)
-    // Mensualizado (B): AH=50 (adicional base). Vigilador/Grupo A: NO se emite.
+    // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias de la
+    // fila relativas. Sueldo FIJO: 001 = SUELDO MENSUAL (columna BF, editable); el
+    // resto de la convención va en 0 (literal).
+    put(`AC${r}`, gAC, esSueldoFijo ? undefined : `($E$3/25)*H${r}`)
+    put(`AD${r}`, gAD, esSueldoFijo ? undefined : `($E$2/25)*H${r}`)
+    put(`AE${r}`, gAE, esSueldoFijo ? undefined : `($E$4/25)*H${r}`)
+    put(`AF${r}`, gAF, esSueldoFijo ? undefined : `($F$1/10)*J${r}`)
+    put(`AG${r}`, gAG, esSueldoFijo ? undefined : `IF(I${r}<=150,H${r}*8,150)`)
+    // Convención (B sin sueldo fijo): AH=50. Vigilador/sueldo fijo: NO se emite.
     if (gAH !== 0) put(`AH${r}`, gAH)
-    put(`AI${r}`, gAI, esGrupoA ? undefined : `AH${r}*$F$1`)
-    put(`AJ${r}`, gAJ, esGrupoA ? `BF${r}` : `AG${r}*$F$1`)
-    put(`AL${r}`, gAL, esGrupoA ? undefined : `MAX(0,I${r}-AG${r})`)
-    put(`AM${r}`, gAM, esGrupoA ? undefined : `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
-    put(`AN${r}`, gAN, esGrupoA ? undefined : `I${r}/G${r}`)
+    put(`AI${r}`, gAI, esSueldoFijo ? undefined : `AH${r}*$F$1`)
+    put(`AJ${r}`, gAJ, esSueldoFijo ? `BF${r}` : `AG${r}*$F$1`)
+    put(`AL${r}`, gAL, esSueldoFijo ? undefined : `MAX(0,I${r}-AG${r})`)
+    put(`AM${r}`, gAM, esSueldoFijo ? undefined : `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
+    put(`AN${r}`, gAN, esSueldoFijo ? undefined : `I${r}/G${r}`)
     put(`AO${r}`, gAO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
-    put(`AP${r}`, gAP, esGrupoA ? undefined : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
-    put(`AS${r}`, gAS, esGrupoA ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`)
+    put(`AP${r}`, gAP, esSueldoFijo ? undefined : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
+    put(`AS${r}`, gAS, esSueldoFijo ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`)
     put(`AT${r}`, AT, `K${r}*$F$2`)
     put(`AU${r}`, AU, `L${r}*$F$2`)
     put(`AV${r}`, AV, `M${r}*$F$2`)
     put(`AW${r}`, AW, `N${r}*$F$2`)
     put(`AX${r}`, AX, `O${r}*$F$2`)
-    // SUELDO MENSUAL editable: sólo grupo A lleva la celda.
-    if (esGrupoA) put(`BF${r}`, sueldoMensual as number)
+    // SUELDO MENSUAL editable: lo lleva quien cobra sueldo fijo.
+    if (esSueldoFijo) put(`BF${r}`, sueldoMensual as number)
     // Informativas del final: valores puros.
     put(`AY${r}`, fila.supervisiones)
     put(`AZ${r}`, fila.horasSupervision)
