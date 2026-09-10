@@ -54,8 +54,14 @@ function limitesDelMes(mes: string): { desde: string; hasta: string; y: number; 
 export async function generarExcelTrabajoLiquidacion(
   client: any,
   mes: string,
+  opts?: { periodoId?: string },
 ): Promise<GenerarExcelTrabajoResultado> {
-  const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, mes)
+  // El Excel de trabajo EDITABLE refleja el estado ACTUAL de la liquidación: si
+  // el período ya tiene ajustes/reimportaciones cargados, se aplican, para que
+  // una nueva descarga no represente el estado previo a las correcciones (JC).
+  // Sin periodoId (uso genérico por mes) sale el baseline, como antes.
+  const ajustes = opts?.periodoId ? await cargarAjustes(client, opts.periodoId) : undefined
+  const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, mes, ajustes)
   if (error || !plantilla) return { buf: null, filas, error }
   const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
   const buf = await escribirPlantillaLiquidacionXLSX(plantilla)
@@ -216,35 +222,36 @@ export interface FilaConsolidada {
   importe: number
 }
 
-/**
- * Arma el snapshot consolidado del período (LIQ2C): por (empleado, código de
- * Visual) el importe final, tomando el baseline + los ajustes de liquidación
- * guardados. Suma los importes de columnas que comparten código (212 = AE+AI,
- * 001 = AG+AJ). Los códigos se leen de la fila 6 de la plantilla. Es la versión
- * concreta y auditable que después consume el export a Visual (LIQ2D).
- */
-export async function snapshotConsolidadoDelMes(
+/** Ajustes de liquidación (LIQ2C) por empleado_id: { clave → valor_liquidacion }. */
+export async function cargarAjustes(
   client: any,
   periodoId: string,
-  mes: string,
-): Promise<{ filas: FilaConsolidada[]; error: string | null }> {
-  const { data: aj, error: eAj } = await client.from('liquidacion_ajuste')
-    .select('empleado_id, clave, valor_liquidacion').eq('periodo_id', periodoId)
-  if (eAj) return { filas: [], error: eAj.message }
+): Promise<Map<string, Record<string, number | null>>> {
   const ajustes = new Map<string, Record<string, number | null>>()
+  const { data: aj } = await client.from('liquidacion_ajuste')
+    .select('empleado_id, clave, valor_liquidacion').eq('periodo_id', periodoId)
   for (const a of (aj ?? []) as any[]) {
     const m = ajustes.get(a.empleado_id) ?? {}
     m[a.clave] = a.valor_liquidacion === null ? null : Number(a.valor_liquidacion)
     ajustes.set(a.empleado_id, m)
   }
+  return ajustes
+}
 
-  const { plantilla, error } = await plantillaTrabajoDelMes(client, mes, ajustes)
-  if (error || !plantilla) return { filas: [], error: error || 'sin plantilla' }
-
+/**
+ * Deriva las filas consolidadas (empleado × código de Visual, importe final) de
+ * una PlantillaLiquidacion YA CONSTRUIDA. NO lee nada: opera sobre la misma
+ * plantilla que después escribe el .xlsx, así el snapshot y el archivo salen de
+ * UNA sola preparación. Suma importes de columnas que comparten código (212 =
+ * AE+AI, 001 = AG+AJ). Los códigos y la fila de encabezado se toman de la propia
+ * plantilla (estilos.encabezado), no hardcodeados.
+ */
+export function filasConsolidadasDePlantilla(plantilla: PlantillaLiquidacion): FilaConsolidada[] {
+  const encab = plantilla.estilos.encabezado
   const porRef = new Map<string, string | number | undefined>()
   for (const c of plantilla.celdas) porRef.set(c.ref, c.v)
   const codigoDeCol: Record<string, string> = {}
-  for (const col of COLS_CONCEPTO) codigoDeCol[col] = String(porRef.get(`${col}6`) ?? '').trim()
+  for (const col of COLS_CONCEPTO) codigoDeCol[col] = String(porRef.get(`${col}${encab}`) ?? '').trim()
 
   const filas: FilaConsolidada[] = []
   for (const c of plantilla.celdas) {
@@ -252,7 +259,7 @@ export async function snapshotConsolidadoDelMes(
     if (!mm) continue
     // La fila de encabezado también tiene BD ('usuario_id') y en las columnas de
     // concepto lleva los CÓDIGOS como texto: NO es un empleado, se saltea.
-    if (Number(mm[1]) === plantilla.estilos.encabezado) continue
+    if (Number(mm[1]) === encab) continue
     const empleadoId = String(c.v ?? '').trim()
     if (!empleadoId) continue
     const r = mm[1]
@@ -269,11 +276,72 @@ export async function snapshotConsolidadoDelMes(
     const nombre = String(porRef.get(`D${r}`) ?? '') || null
     // Haberes (política 'valor'): Cantidad=1 + Importe=total (práctica confirmada
     // contra las planillas históricas de Visual). El 000 DÍAS TRABAJADAS NO se
-    // deriva acá: es un dato mensual editable por persona (liquidacion_dias),
-    // porque no está demostrado que sea igual a las jornadas operativas.
+    // deriva acá: es un dato mensual editable por persona (liquidacion_dias).
     for (const [codigo, importe] of Array.from(porCodigo.entries())) {
       filas.push({ empleado_id: empleadoId, legajo_visual: legajoVisual, cuil, nombre, codigo, cantidad: 1, importe: Math.round(importe * 100) / 100 })
     }
   }
-  return { filas, error: null }
+  return filas
+}
+
+/**
+ * 000/jornadas por empleado a partir de un resumen YA CONSTRUIDO (sin releer):
+ * operativos (vigiladores + supervisores) → jornadas reales trabajadas;
+ * mensualizados (administrativos) → 0 (carga manual). Misma regla que
+ * jornadasPorUsuarioDelMes, pero sin volver a leer turnos/planillas.
+ */
+export function jornadasDeResumen(resumen: ResumenGuardiaMes): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const f of resumen.filas) {
+    const operativo = f.grupo === 'vigiladores' || f.grupo === 'supervisores'
+    out.set(f.empleadoId, operativo ? Number(f.jornadasReales ?? 0) : 0)
+  }
+  return out
+}
+
+export interface PreparacionLiquidacion {
+  plantilla: PlantillaLiquidacion | null
+  resumen: ResumenGuardiaMes | null
+  snapshotFilas: FilaConsolidada[]
+  jornadas: Map<string, number>   // 000 por empleado (operativos) con ajuste 'jornadas' aplicado
+  error: string | null
+}
+
+/**
+ * PREPARACIÓN ÚNICA de la liquidación final (pedido de JC): UNA sola lectura
+ * operativa (plantillaTrabajoDelMes con ajustes) de la que salen A) el snapshot
+ * consolidado (haberes) y B) las jornadas/000. Quien exporta usa ESTA misma
+ * preparación para construir el .xls Visual, sin volver a leer datos operativos
+ * entre el snapshot y el archivo. Elimina el doble read que había hoy
+ * (consolidar + jornadasPorUsuarioDelMes).
+ */
+export async function prepararLiquidacionDelMes(
+  client: any,
+  periodo: { id: string; mes: string },
+): Promise<PreparacionLiquidacion> {
+  const vacio = { plantilla: null, resumen: null, snapshotFilas: [], jornadas: new Map<string, number>() }
+  const ajustes = await cargarAjustes(client, periodo.id)
+  const { plantilla, resumen, error } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes)
+  if (error || !plantilla || !resumen) return { ...vacio, error: error || 'sin plantilla' }
+  const snapshotFilas = filasConsolidadasDePlantilla(plantilla)
+  const jornadas = jornadasDeResumen(resumen)
+  // Overlay de la planilla revisada: un ajuste manual de 'jornadas' pisa el conteo.
+  for (const [emp, campos] of Array.from(ajustes.entries())) {
+    const j = campos['jornadas']
+    if (j != null) jornadas.set(emp, Number(j))
+  }
+  return { plantilla, resumen, snapshotFilas, jornadas, error: null }
+}
+
+/**
+ * Snapshot consolidado (empleado × código, importe final). Wrapper delgado sobre
+ * la preparación única, mantenido por compatibilidad con la prevalidación.
+ */
+export async function snapshotConsolidadoDelMes(
+  client: any,
+  periodoId: string,
+  mes: string,
+): Promise<{ filas: FilaConsolidada[]; error: string | null }> {
+  const prep = await prepararLiquidacionDelMes(client, { id: periodoId, mes })
+  return { filas: prep.snapshotFilas, error: prep.error }
 }
