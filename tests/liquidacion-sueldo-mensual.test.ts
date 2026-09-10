@@ -8,12 +8,12 @@ import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, PARAMETROS
 const basico = PARAMETROS_PLANTILLA.basico
 const hora = basico / 200
 
-function plantilla(empleados: any[], sueldoMensual?: Map<string, number>) {
+function plantilla(empleados: any[], sueldoMensual?: Map<string, number>, extra?: Map<string, number>) {
   const resumen = construirResumenGuardia({
     mes: '2026-08', empleados, turnos: [], registros: [], novedades: [],
     esObjetivoPrueba: () => false, nombreObjetivo: () => '',
   } as any)
-  const pl = plantillaLiquidacionResumenGuardia(resumen, undefined, sueldoMensual)
+  const pl = plantillaLiquidacionResumenGuardia(resumen, undefined, sueldoMensual, extra)
   const m = new Map(pl.celdas.map(c => [c.ref, c]))
   const filaDe = (empId: string) => {
     const bd = pl.celdas.find(c => /^BD\d+$/.test(c.ref) && c.v === empId)
@@ -68,6 +68,47 @@ describe('SUELDO MENSUAL — grupo A (mensualizados fijos)', () => {
     const { m, filaDe } = plantilla([ADM], sm)
     const r = filaDe('a1')
     expect(m.get(`AO${r}`)?.v).toBe(500000)   // sin viáticos/presentismo/adicional sumados
+  })
+})
+
+describe('EXTRA fija (AP/BG) — mensualizados fijos', () => {
+  it('grupo A con EXTRA cargada → AP = extra (fórmula =BG), BG = importe, AO = SM + extra', () => {
+    const sm = new Map([['a1', 500000]])
+    const ex = new Map([['a1', 115389.1]])
+    const { m, filaDe } = plantilla([ADM], sm, ex)
+    const r = filaDe('a1')
+    expect(m.get(`BG${r}`)?.v).toBe(115389.1)          // columna EXTRA editable
+    expect(m.get(`AP${r}`)?.v).toBe(115389.1)          // extras
+    expect(m.get(`AP${r}`)?.f).toBe(`BG${r}`)          // AP sigue la columna editable
+    expect(m.get(`AO${r}`)?.v).toBe(500000 + 115389.1) // total = SM + extra
+    expect(m.get(`AJ${r}`)?.v).toBe(500000)            // 001 intacto (no lo toca la extra)
+  })
+
+  it('supervisor con SUELDO MENSUAL + EXTRA → 001 = SM, AP = extra, sin 25/150', () => {
+    const sm = new Map([['s1', 600000]])
+    const ex = new Map([['s1', 30000]])
+    const { m, filaDe } = plantilla([SUP], sm, ex)
+    const r = filaDe('s1')
+    expect(m.get(`AJ${r}`)?.v).toBe(600000)
+    expect(m.get(`BG${r}`)?.v).toBe(30000)
+    expect(m.get(`AP${r}`)?.v).toBe(30000)
+    expect(m.get(`G${r}`)).toBeUndefined()   // sin 25 días
+  })
+
+  it('sueldo fijo SIN extra cargada → AP = 0, BG = 0 (no arrastra basura)', () => {
+    const sm = new Map([['a1', 500000]])
+    const { m, filaDe } = plantilla([ADM], sm)  // sin mapa de extra
+    const r = filaDe('a1')
+    expect(m.get(`BG${r}`)?.v).toBe(0)
+    expect(m.get(`AP${r}`)?.v).toBe(0)
+    expect(m.get(`AO${r}`)?.v).toBe(500000)
+  })
+
+  it('vigilador → sin BG (la EXTRA fija no aplica al personal por horas)', () => {
+    const ex = new Map([['v1', 99999]])
+    const { m, filaDe } = plantilla([VIG], undefined, ex)
+    const r = filaDe('v1')
+    expect(m.get(`BG${r}`)).toBeUndefined()
   })
 })
 

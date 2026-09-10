@@ -43,12 +43,21 @@ export const VARIABLES_REIMPORT: VariableReimport[] = [
   // set_sueldo_mensual (se arrastra a los meses siguientes). Sólo lleva valor en
   // las filas de mensualizados fijos; en el resto la celda va vacía → sin diff.
   { clave: 'sueldo_mensual', col: 'BF', idx: 57, etiqueta: 'SUELDO MENSUAL' },
+  // EXTRA fija (concepto "extras" AP). Igual que SUELDO MENSUAL: al confirmar se
+  // persiste con VIGENCIA vía set_extra_mensual (se arrastra al mes siguiente),
+  // no a liquidacion_ajuste. Sólo en filas de sueldo fijo.
+  { clave: 'extra_mensual', col: 'BG', idx: 58, etiqueta: 'EXTRA' },
 ]
 
-/** Clave de la variable que se persiste con vigencia (no como ajuste de mes). */
+/** Claves que se persisten con vigencia (legajo, no ajuste de mes). */
 export const CLAVE_SUELDO_MENSUAL = 'sueldo_mensual'
+export const CLAVE_EXTRA_MENSUAL = 'extra_mensual'
+/** Claves de legajo con vigencia (arrastre): NO van a liquidacion_ajuste. */
+export const CLAVES_LEGAJO_VIGENCIA = new Set([CLAVE_SUELDO_MENSUAL, CLAVE_EXTRA_MENSUAL])
 
+const IDX_LEGAJO = 0   // A · LEGAJO VISUAL (COD_INTERNO)
 const IDX_CUIL = 1     // B
+const IDX_CUENTA = 2   // C · CUENTA bancaria
 const IDX_NOMBRE = 3   // D
 const IDX_BD = 55      // usuario_id oculto
 const IDX_BE = 56      // periodo oculto
@@ -82,6 +91,9 @@ export interface EmpleadoValores {
   cuil: string | null
   nombre: string | null
   periodo: string | null
+  // Identidad editable en el Excel (se guarda al reimportar): legajo/cuenta.
+  legajo: string | null
+  cuenta: string | null
   valores: Record<string, number | null>
 }
 
@@ -108,6 +120,8 @@ export function baselineDesdePlantilla(plantilla: PlantillaLiquidacion): Map<str
       cuil: norm(porRef.get(`${colLetter(IDX_CUIL)}${r}`) as any) || null,
       nombre: norm(porRef.get(`${colLetter(IDX_NOMBRE)}${r}`) as any) || null,
       periodo: norm(porRef.get(`${colLetter(IDX_BE)}${r}`) as any) || null,
+      legajo: norm(porRef.get(`${colLetter(IDX_LEGAJO)}${r}`) as any) || null,
+      cuenta: norm(porRef.get(`${colLetter(IDX_CUENTA)}${r}`) as any) || null,
       valores,
     })
   }
@@ -130,6 +144,8 @@ export function parseGridReimport(grid: CeldaVisual[][]): Map<string, EmpleadoVa
       cuil: norm(fila[IDX_CUIL]) || null,
       nombre: norm(fila[IDX_NOMBRE]) || null,
       periodo: norm(fila[IDX_BE]) || null,
+      legajo: norm(fila[IDX_LEGAJO]) || null,
+      cuenta: norm(fila[IDX_CUENTA]) || null,
       valores,
     })
   }
@@ -150,8 +166,20 @@ export interface FilaDiff {
   estado: EstadoDiff
 }
 
+/** Cambio de IDENTIDAD (texto) editado en el Excel: legajo / CUIL / cuenta. */
+export interface FilaIdentidadDiff {
+  usuarioId: string
+  nombre: string | null
+  campo: 'legajo_visual' | 'cuil' | 'cuenta'
+  etiqueta: string
+  mercosur: string | null   // lo que tenía el usuario
+  excel: string | null      // lo que dejó Juan en el Excel
+}
+
 export interface ResultadoComparacion {
   diffs: FilaDiff[]
+  /** Cambios de identidad (legajo/CUIL/cuenta) a persistir en `usuarios`. */
+  identidad: FilaIdentidadDiff[]
   /** usuario_id del archivo que no está en el padrón del período. */
   fueraDePadron: string[]
   /** filas del archivo sin usuario_id (no se pueden identificar). */
@@ -173,6 +201,7 @@ export function compararReimport(
   const baseline = baselineDesdePlantilla(plantilla)
   const subido = parseGridReimport(grid)
   const diffs: FilaDiff[] = []
+  const identidad: FilaIdentidadDiff[] = []
   const fueraDePadron: string[] = []
   let periodoDelArchivo: string | null = null
 
@@ -192,10 +221,23 @@ export function compararReimport(
         diferencia: (excel ?? 0) - (mercosur ?? 0), estado: 'ajuste',
       })
     }
+    // IDENTIDAD (texto): sólo se registra cambio cuando el Excel trae un valor NO
+    // vacío distinto del actual. Vacío = "no lo tocó" → nunca borra lo existente.
+    const campos: Array<{ campo: FilaIdentidadDiff['campo']; etiqueta: string; base: string | null; excel: string | null }> = [
+      { campo: 'legajo_visual', etiqueta: 'Legajo (COD_INTERNO)', base: base.legajo, excel: emp.legajo },
+      { campo: 'cuil', etiqueta: 'CUIL', base: base.cuil, excel: emp.cuil },
+      { campo: 'cuenta', etiqueta: 'Cuenta', base: base.cuenta, excel: emp.cuenta },
+    ]
+    for (const c of campos) {
+      const nuevo = norm(c.excel)
+      if (!nuevo) continue                       // vacío en el Excel → no se toca
+      if (nuevo === norm(c.base)) continue       // sin cambio
+      identidad.push({ usuarioId, nombre: emp.nombre ?? base.nombre, campo: c.campo, etiqueta: c.etiqueta, mercosur: c.base, excel: nuevo })
+    }
   }
   // Filas sin identidad en el archivo (BD vacío) = no eran filas de empleado.
   let sinIdentidad = 0
   for (const fila of grid) if (fila && norm(fila[IDX_BD]) === '' && num(fila[6]) !== null) sinIdentidad++
 
-  return { diffs, fueraDePadron, sinIdentidad, personasEnArchivo: subido.size, periodoDelArchivo }
+  return { diffs, identidad, fueraDePadron, sinIdentidad, personasEnArchivo: subido.size, periodoDelArchivo }
 }

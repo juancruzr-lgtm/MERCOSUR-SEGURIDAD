@@ -1042,9 +1042,10 @@ const COLUMNAS_PLANTILLA: ColumnaPlantilla[] = [
   // Técnicas ocultas: identidad estable para el ida y vuelta (Juan 15/16).
   { col: 'BD', width: 3, hidden: true, numFmt: 'text' },
   { col: 'BE', width: 3, hidden: true, numFmt: 'text' },
-  // SUELDO MENSUAL (grupo A · mensualizados fijos): importe base individual,
-  // editable; en vigiladores/supervisores va vacío. Se reimporta con vigencia.
+  // SUELDO MENSUAL (mensualizados fijos): importe base individual (001), editable.
   { col: 'BF', width: 16, numFmt: 'money' },
+  // EXTRA fija (mensualizados fijos): importe extra individual (AP), editable.
+  { col: 'BG', width: 16, numFmt: 'money' },
 ]
 
 // Columnas donde empieza una sección visual (borde vertical izquierdo):
@@ -1068,6 +1069,14 @@ export function plantillaLiquidacionResumenGuardia(
    * argumento, el comportamiento es idéntico al anterior.
    */
   sueldoMensualPorEmpleado?: Map<string, number>,
+  /**
+   * EXTRA fija individual por empleado (mensualizados fijos): { empleadoId →
+   * importe }. Va en la columna "extras" (AP) y suma al total del Excel, sin
+   * tocar 001. Editable/arrastrable igual que el SUELDO MENSUAL. DECISIÓN JC
+   * 10/09: AP es INFORMATIVA — NO tiene código Visual, así que la extra NO se
+   * liquida en Visual (no está en COLS_CONCEPTO de excel-trabajo-liquidacion).
+   */
+  extraPorEmpleado?: Map<string, number>,
 ): PlantillaLiquidacion {
   const P = PARAMETROS_PLANTILLA
   const hora = P.basico / 200
@@ -1116,8 +1125,8 @@ export function plantillaLiquidacionResumenGuardia(
     ['BB6', 'OBSERVACION'], ['BC6', 'HS VIGILANCIA ZONA'],
     // Técnicas ocultas: identidad para el reimport (no depender de nombre ni fila).
     ['BD6', 'usuario_id'], ['BE6', 'periodo'],
-    // SUELDO MENSUAL editable (grupo A). Se reimporta con vigencia.
-    ['BF6', 'SUELDO MENSUAL'],
+    // SUELDO MENSUAL (001) y EXTRA (AP) editables. Se reimportan con vigencia.
+    ['BF6', 'SUELDO MENSUAL'], ['BG6', 'EXTRA'],
   ]
   for (const [ref, v] of fila6) put(ref, v)
 
@@ -1215,6 +1224,7 @@ export function plantillaLiquidacionResumenGuardia(
     // vigiladores (C) NO se tocan: siguen exactamente como antes. (esGrupoA ya
     // está definido arriba.)
     const sueldoMensual = esSueldoFijo ? (sueldoMensualPorEmpleado?.get(fila.empleadoId) ?? P.basico) : null
+    const extraFija = esSueldoFijo ? (extraPorEmpleado?.get(fila.empleadoId) ?? 0) : 0
     const gAC = esSueldoFijo ? 0 : AC
     const gAD = esSueldoFijo ? 0 : AD
     const gAE = esSueldoFijo ? 0 : AE
@@ -1226,7 +1236,7 @@ export function plantillaLiquidacionResumenGuardia(
     const gAL = esSueldoFijo ? 0 : AL
     const gAM = esSueldoFijo ? 0 : AM
     const gAN = esSueldoFijo ? 0 : AN
-    const gAP = esSueldoFijo ? 0 : AP
+    const gAP = esSueldoFijo ? extraFija : AP
     const gAO = gAC + gAD + gAE + gAF + gAI + gAJ + AT + AU + AV + AW + AX + gAP
     const gAS = gAO > 0 && I > 0 ? gAO / I : 0
     // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias de la
@@ -1245,7 +1255,7 @@ export function plantillaLiquidacionResumenGuardia(
     put(`AM${r}`, gAM, esSueldoFijo ? undefined : `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
     put(`AN${r}`, gAN, esSueldoFijo ? undefined : `I${r}/G${r}`)
     put(`AO${r}`, gAO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
-    put(`AP${r}`, gAP, esSueldoFijo ? undefined : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
+    put(`AP${r}`, gAP, esSueldoFijo ? `BG${r}` : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
     put(`AS${r}`, gAS, esSueldoFijo ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`)
     put(`AT${r}`, AT, `K${r}*$F$2`)
     put(`AU${r}`, AU, `L${r}*$F$2`)
@@ -1254,6 +1264,8 @@ export function plantillaLiquidacionResumenGuardia(
     put(`AX${r}`, AX, `O${r}*$F$2`)
     // SUELDO MENSUAL editable: lo lleva quien cobra sueldo fijo.
     if (esSueldoFijo) put(`BF${r}`, sueldoMensual as number)
+    // EXTRA fija editable (concepto "extras" AP): la lleva quien cobra sueldo fijo.
+    if (esSueldoFijo) put(`BG${r}`, extraFija)
     // Informativas del final: valores puros.
     put(`AY${r}`, fila.supervisiones)
     put(`AZ${r}`, fila.horasSupervision)

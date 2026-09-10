@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   compararReimport, baselineDesdePlantilla, parseGridReimport, VARIABLES_REIMPORT,
+  CLAVE_EXTRA_MENSUAL, CLAVE_SUELDO_MENSUAL,
   type CeldaVisual,
 } from '@/lib/excel-trabajo-reimport'
 import type { PlantillaLiquidacion } from '@/lib/resumen-guardia'
@@ -19,13 +20,16 @@ function plantillaBase(): PlantillaLiquidacion {
 
 // Construye una grilla 0-based con una fila por empleado. Coloca cada variable
 // en su índice y la identidad en BD (55) / BE (56).
-function gridDe(filas: { usuarioId: string; periodo?: string; cuil?: string; nombre?: string; vals: Record<string, number> }[]): CeldaVisual[][] {
+function gridDe(filas: { usuarioId: string; periodo?: string; cuil?: string; nombre?: string; legajo?: string; cuenta?: string; vals: Record<string, number> }[]): CeldaVisual[][] {
   const grid: CeldaVisual[][] = []
   // fila 0 y 1: título/encabezado ficticio (se ignoran: sin BD)
   grid.push(['VisualSueldos']); grid.push(['LEGAJO'])
   for (const f of filas) {
-    const row: CeldaVisual[] = new Array(57).fill(null)
-    row[1] = f.cuil ?? null; row[3] = f.nombre ?? null
+    const row: CeldaVisual[] = new Array(59).fill(null)
+    if (f.legajo !== undefined) row[0] = f.legajo
+    row[1] = f.cuil ?? null
+    if (f.cuenta !== undefined) row[2] = f.cuenta
+    row[3] = f.nombre ?? null
     row[55] = f.usuarioId; row[56] = f.periodo ?? '2026-08'
     for (const v of VARIABLES_REIMPORT) if (f.vals[v.clave] !== undefined) row[v.idx] = f.vals[v.clave]
     grid.push(row)
@@ -79,6 +83,58 @@ describe('reimport del Excel de trabajo (LIQ2B)', () => {
     const grid = gridDe([{ usuarioId: 'u1', periodo: '2026-08', vals: { jornadas: 20 } }])
     const r = compararReimport(plantillaBase(), grid)
     expect(r.periodoDelArchivo).toBe('2026-08')
+  })
+})
+
+// ── EXTRA fija (BG) + SUELDO MENSUAL (BF): variables con vigencia ────────────
+// Se detectan como cualquier variable (para el preview de diffs); el ruteo a
+// set_extra_mensual / set_sueldo_mensual (en vez de liquidacion_ajuste) lo hace
+// el componente por la CLAVE. Acá se prueba que la diferencia se detecta bien.
+describe('EXTRA fija y SUELDO MENSUAL como variables (BG/BF)', () => {
+  it('un importe de EXTRA en el Excel (baseline sin BG) se marca como diff clave=extra_mensual', () => {
+    const grid = gridDe([{ usuarioId: 'u1', cuil: '20144945817', vals: { jornadas: 20, horas_liquidables: 160, extra_mensual: 30000 } }])
+    const r = compararReimport(plantillaBase(), grid)
+    const ex = r.diffs.find(d => d.clave === CLAVE_EXTRA_MENSUAL)
+    expect(ex).toBeTruthy()
+    expect(ex!.mercosur).toBeNull()   // el baseline no tenía BG
+    expect(ex!.excel).toBe(30000)
+  })
+
+  it('EXTRA sin cambios (ausente en ambos) no genera diff', () => {
+    const grid = gridDe([{ usuarioId: 'u1', cuil: '20144945817', vals: { jornadas: 20, horas_liquidables: 160 } }])
+    const r = compararReimport(plantillaBase(), grid)
+    expect(r.diffs.find(d => d.clave === CLAVE_EXTRA_MENSUAL)).toBeUndefined()
+    expect(r.diffs.find(d => d.clave === CLAVE_SUELDO_MENSUAL)).toBeUndefined()
+  })
+})
+
+// ── IDENTIDAD (texto): legajo / CUIL / cuenta editables en el Excel ──────────
+// Se guardan en `usuarios` al reimportar. Nunca se borra lo existente con vacío.
+describe('identidad editable (legajo/CUIL/cuenta) → usuarios', () => {
+  it('CUIL nuevo, legajo y cuenta cargados en el Excel se listan como cambios de identidad', () => {
+    const grid = gridDe([{ usuarioId: 'u1', cuil: '20999999993', legajo: '1234', cuenta: '00011122233', vals: { jornadas: 20, horas_liquidables: 160 } }])
+    const r = compararReimport(plantillaBase(), grid)
+    const campos = r.identidad.map(i => i.campo).sort()
+    expect(campos).toEqual(['cuenta', 'cuil', 'legajo_visual'])
+    const cuil = r.identidad.find(i => i.campo === 'cuil')!
+    expect(cuil.mercosur).toBe('20144945817')
+    expect(cuil.excel).toBe('20999999993')
+    expect(r.identidad.find(i => i.campo === 'legajo_visual')!.excel).toBe('1234')
+  })
+
+  it('un campo de identidad VACÍO en el Excel no se registra (no pisa lo existente)', () => {
+    // u1 mantiene su CUIL; no trae legajo ni cuenta → sin cambios de identidad.
+    const grid = gridDe([{ usuarioId: 'u1', cuil: '20144945817', vals: { jornadas: 20, horas_liquidables: 160 } }])
+    const r = compararReimport(plantillaBase(), grid)
+    expect(r.identidad.length).toBe(0)
+  })
+
+  it('CUIL sin cambios no genera diff de identidad', () => {
+    const grid = gridDe([{ usuarioId: 'u1', cuil: '20144945817', legajo: 'ALMADA', vals: { jornadas: 20, horas_liquidables: 160 } }])
+    const r = compararReimport(plantillaBase(), grid)
+    // legajo 'ALMADA' es nuevo (baseline no tenía A) → 1 cambio; el CUIL igual, 0.
+    expect(r.identidad.find(i => i.campo === 'cuil')).toBeUndefined()
+    expect(r.identidad.find(i => i.campo === 'legajo_visual')?.excel).toBe('ALMADA')
   })
 })
 
