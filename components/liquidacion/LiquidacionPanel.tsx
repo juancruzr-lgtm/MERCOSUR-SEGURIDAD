@@ -24,6 +24,19 @@ const ORIGENES = ['mercosur', 'novedad_laboral', 'regla', 'permanente_individual
 // botón Consolidar (RPC + snapshot); consolidada→exportada por LIQ2D.
 const ESTADOS_SIG: Record<string, string | null> = { borrador: 'revision', exportada: 'liquidada' }
 const EDITABLE = (estado: string) => estado === 'borrador' || estado === 'revision'
+// Mientras la liquidación NO fue enviada a Visual: se puede descargar el Excel de
+// trabajo, reimportar y prevalidar. Incluye períodos legacy en 'consolidada'
+// (ese paso manual se eliminó; ahora consolidar ocurre dentro de Generar Visual).
+const ANTES_VISUAL = (estado: string) => estado !== 'exportada' && estado !== 'liquidada'
+
+/** Dispara la descarga de un archivo en el navegador (Blob + ancla efímera). */
+function descargarArchivo(bytes: BlobPart, filename: string, mime: string) {
+  const blob = new Blob([bytes], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = filename
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+}
 
 const S: Record<string, React.CSSProperties> = {
   wrap: { padding: 16, color: '#e2e8f0', maxWidth: 1000 },
@@ -77,15 +90,18 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   const [novedadesMes, setNovedadesMes] = useState<any[]>([])
   // LIQ2A: generación del Excel de trabajo
   const [genExcel, setGenExcel] = useState(false)
-  // LIQ2C: consolidación
-  const [consolidando, setConsolidando] = useState(false)
+  // Snapshot consolidado (informativo). La consolidación dejó de ser un paso
+  // manual: ocurre dentro de "Generar archivo Visual" (export atómico).
   const [consolidadaN, setConsolidadaN] = useState(0)
-  // ETAPA 1: prevalidación antes de consolidar (reutiliza la regla real de Visual).
+  // Prevalidación (PREVIEW): reutiliza la regla real de Visual. Generar Visual la
+  // vuelve a correr de forma autoritativa antes de escribir nada.
   const [preval, setPreval] = useState<any>(null)
   const [prevalidando, setPrevalidando] = useState(false)
-  // LIQ2D/F: export a Visual + validación pre-export
+  // Export a Visual + validación pre-export
   const [genVisual, setGenVisual] = useState(false)
   const [validacion, setValidacion] = useState<any>(null)
+  // Banner READ-ONLY: cambios operativos posteriores al archivo enviado a Visual.
+  const [cambiosPost, setCambiosPost] = useState<any>(null)
   // Permanentes
   const [permanentes, setPermanentes] = useState<Permanente[]>([])
   const [pForm, setPForm] = useState({ empleado_id: '', concepto_id: '', importe: '', cantidad: '', vigencia_desde: new Date().toISOString().slice(0, 10), vigencia_hasta: '', motivo: '' })
@@ -157,6 +173,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     setSel(p)
     setComparacion(null)
     setPreval(null)
+    setCambiosPost(null)
     const { desde, hasta } = limitesDelMes(p.mes)
     const [{ count }, { data: cp }, { data: nov }, { count: consN }] = await Promise.all([
       supabase.from('liquidacion_periodo_empleado').select('*', { count: 'exact', head: true }).eq('periodo_id', p.id),
@@ -169,6 +186,14 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     setConceptosP((cp as ConceptoPeriodo[]) ?? [])
     setNovedadesMes((nov as any[]) ?? [])
     setConsolidadaN(consN ?? 0)
+    // Período ya enviado a Visual: chequear (read-only) si cambió lo operativo.
+    if (p.estado === 'exportada' || p.estado === 'liquidada') {
+      try {
+        const { detectarCambiosPosteriores } = await import('@/lib/liquidacion-cambios')
+        const d = await detectarCambiosPosteriores(supabase, { id: p.id, mes: p.mes })
+        setCambiosPost(d.error ? null : d)
+      } catch { setCambiosPost(null) }
+    }
   }
 
   async function comparar() {
@@ -186,14 +211,12 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     setGenExcel(true); setMsg(null)
     try {
       const { generarExcelTrabajoLiquidacion } = await import('@/lib/excel-trabajo-liquidacion')
-      const r = await generarExcelTrabajoLiquidacion(supabase, sel.mes)
+      // Editable = estado ACTUAL: se pasa periodoId para que aplique los
+      // ajustes/reimportaciones ya cargados (no el estado previo a las correcciones).
+      const r = await generarExcelTrabajoLiquidacion(supabase, sel.mes, { periodoId: sel.id })
       if (r.error || !r.buf) { setMsg({ ok: false, t: 'No se pudo generar el Excel de trabajo: ' + (r.error || 'sin datos') }); return }
-      const blob = new Blob([r.buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = `liquidacion_trabajo_${sel.mes}.xlsx`
-      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
-      setMsg({ ok: true, t: `Excel de trabajo generado (${r.filas} empleados). Trae padrón, jornadas reales (000), horas, conceptos, permanentes, fórmulas, el gráfico Horas REC vs Extras (torta + % reales) y los semáforos de % extras y costo por hora (mismas escalas del archivo original). Editalo (podés corregir el 000) y volvé a subirlo.` })
+      descargarArchivo(r.buf, `liquidacion_trabajo_${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      setMsg({ ok: true, t: `Excel de trabajo generado (${r.filas} empleados) con los ajustes actuales. Trae padrón, jornadas reales (000), horas, conceptos, permanentes, fórmulas, las celdas dinámicas Horas REC Vigiladores / Horas Extras Vigiladores / % REC / % Extras y los semáforos de % extras y costo por hora (mismas escalas del archivo original). Editalo (podés corregir el 000) y volvé a subirlo.` })
     } catch (e: any) {
       setMsg({ ok: false, t: 'No se pudo generar el Excel de trabajo: ' + (e?.message || e) })
     } finally { setGenExcel(false) }
@@ -234,66 +257,50 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     } finally { setPrevalidando(false) }
   }
 
-  async function consolidar() {
-    if (!sel) return
-    setConsolidando(true); setMsg(null)
-    try {
-      // No consolidar con sorpresas: se prevalida con la regla real ANTES.
-      const pv = await prevalidar()
-      if (!pv || pv.error) { setMsg({ ok: false, t: 'No se pudo prevalidar: ' + (pv?.error || 'sin datos') }); return }
-      if (!pv.listo) {
-        const nId = pv.identidadFaltante.length, nDias = pv.diasRequerido.length, nCrit = pv.criticos.length, nOtros = pv.otros.length
-        setMsg({ ok: false, t: `FALTAN DATOS: no se consolida. Identidad Visual: ${nId} · 000 requerido: ${nDias}${nOtros ? ` · otros: ${nOtros}` : ''}${nCrit ? ` · críticos: ${nCrit}` : ''}. Resolvé los faltantes (detalle abajo) y volvé a intentar.` })
-        return
-      }
-      const { snapshotConsolidadoDelMes } = await import('@/lib/excel-trabajo-liquidacion')
-      const snap = await snapshotConsolidadoDelMes(supabase, sel.id, sel.mes)
-      if (snap.error) { setMsg({ ok: false, t: 'No se pudo armar el consolidado: ' + snap.error }); return }
-      const { data, error } = await supabase.rpc('consolidar_periodo', { p_periodo_id: sel.id, p_filas: snap.filas })
-      if (error) { setMsg({ ok: false, t: 'No se pudo consolidar: ' + error.message }); return }
-      const r = data as any
-      setMsg({ ok: true, t: `Consolidado: ${r.filas} filas (empleado × código). El período quedó CONSOLIDADO.` })
-      await cargarPeriodos(); const actualizado = { ...sel, estado: 'consolidada' }; setSel(actualizado); void abrirPeriodo(actualizado)
-    } catch (e: any) {
-      setMsg({ ok: false, t: 'No se pudo consolidar: ' + (e?.message || e) })
-    } finally { setConsolidando(false) }
-  }
-
-  // LIQ2F: genera el .xls Visual COMPLETO (haberes + 000 días + estructurales 0/0
-  // + individuales) desde el padrón del período, con validación pre-export. Los
-  // críticos bloquean; las advertencias quedan visibles. Visual calcula las
-  // fórmulas con "Recalc. Todos".
+  // "Generar archivo Visual" = exportación ATÓMICA (reemplaza el paso manual de
+  // Consolidar). UNA preparación → snapshot + líneas Visual; bytes EN MEMORIA (si
+  // fallan, cero escrituras); prevalidación autoritativa (críticos/bloqueados
+  // abortan); si OK, una sola RPC transaccional (consolidada + enviado +
+  // exportada) y recién después se descarga el archivo ya generado.
+  // En período ya exportado/liquidado: reconstruye el .xls DESDE lo enviado
+  // (liquidacion_enviado_visual), sin releer operativo ni recalcular.
   async function generarVisual() {
     if (!sel) return
     setGenVisual(true); setMsg(null); setValidacion(null)
     try {
-      const { generarVisualCompleto } = await import('@/lib/visual-generar')
-      const r = await generarVisualCompleto(supabase, { id: sel.id, mes: sel.mes })
-      if (r.resultado) setValidacion(r.resultado)
-      if (r.error || !r.bytes) { setMsg({ ok: false, t: 'No se pudo generar: ' + (r.error || 'sin datos') }); return }
-      // LIQ3/F3: registrar lo ENVIADO a Visual (para conciliar contra el resultado).
-      if (r.resultado?.lineas?.length) {
-        const enviado = r.resultado.lineas.map((l: any) => ({
-          cuil: String(l.cuil ?? ''), cod_interno: String(l.legajo ?? ''), codigo: String(l.codigo),
-          cantidad: l.cantidad ?? null, importe: l.importe ?? null,
-        }))
-        await supabase.rpc('registrar_enviado_visual', { p_periodo_id: sel.id, p_lineas: enviado })
+      if (sel.estado === 'exportada' || sel.estado === 'liquidada') {
+        const { regenerarVisualDesdeEnviado } = await import('@/lib/visual-generar')
+        const r = await regenerarVisualDesdeEnviado(supabase, sel.id)
+        if (r.error || !r.bytes) { setMsg({ ok: false, t: 'No se pudo reconstruir desde lo enviado: ' + (r.error || 'sin datos') }); return }
+        descargarArchivo(r.bytes as BlobPart, `visual_importacion_${sel.mes}.xls`, 'application/vnd.ms-excel')
+        setMsg({ ok: true, t: `Archivo Visual reconstruido desde lo enviado (${r.lineas} líneas). No recalcula: son exactamente las líneas registradas como enviadas a Visual.` })
+        return
       }
-      const blob = new Blob([r.bytes as BlobPart], { type: 'application/vnd.ms-excel' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = `visual_importacion_${sel.mes}.xls`
-      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+
+      const { exportarVisualCompleto } = await import('@/lib/visual-generar')
+      const r = await exportarVisualCompleto(supabase, { id: sel.id, mes: sel.mes })
+      if (r.resultado) setValidacion(r.resultado)
+
+      // Prevalidación autoritativa: críticos o bloqueados abortan SIN escribir nada.
+      if (r.bloqueado) {
+        const b = r.resultado ? clasificarBloqueados(r.resultado.bloqueados) : { identidadFaltante: [], diasRequerido: [], otros: [] }
+        const nCrit = r.resultado?.criticos.length ?? 0
+        setMsg({ ok: false, t: `FALTAN DATOS: no se generó nada. Identidad Visual: ${b.identidadFaltante.length} · 000 requerido: ${b.diasRequerido.length}${b.otros.length ? ` · otros: ${b.otros.length}` : ''}${nCrit ? ` · críticos: ${nCrit}` : ''}. Resolvé los faltantes (detalle abajo) y reintentá.` })
+        return
+      }
+      if (r.error || !r.bytes) { setMsg({ ok: false, t: 'No se pudo generar: ' + (r.error || 'sin datos') }); return }
+
+      // Bytes ya generados: recién ahora se persiste, en una sola transacción.
+      const { error } = await supabase.rpc('exportar_liquidacion_periodo', {
+        p_periodo_id: sel.id, p_consolidada: r.consolidada, p_enviado: r.enviado,
+      })
+      if (error) { setMsg({ ok: false, t: `Archivo generado, pero la exportación atómica falló (no se guardó nada): ${error.message}` }); return }
+
+      descargarArchivo(r.bytes as BlobPart, `visual_importacion_${sel.mes}.xls`, 'application/vnd.ms-excel')
       const nFilas = r.resultado?.lineas.length ?? 0
       const nAdv = r.resultado?.advertencias.length ?? 0
-      if (sel.estado === 'consolidada') {
-        const { error } = await supabase.rpc('marcar_exportada_visual', { p_periodo_id: sel.id })
-        if (error) { setMsg({ ok: false, t: `Archivo generado (${nFilas} líneas), pero no se pudo marcar exportado: ${error.message}` }); return }
-        setMsg({ ok: true, t: `Archivo Visual generado (${nFilas} líneas${nAdv ? `, ${nAdv} advertencia(s)` : ''}) y período EXPORTADA. Importalo y corré "Recalc. Todos" en Visual.` })
-        await cargarPeriodos(); const upd = { ...sel, estado: 'exportada' }; setSel(upd); void abrirPeriodo(upd)
-      } else {
-        setMsg({ ok: true, t: `Archivo Visual regenerado (${nFilas} líneas${nAdv ? `, ${nAdv} advertencia(s)` : ''}).` })
-      }
+      setMsg({ ok: true, t: `Archivo Visual generado (${nFilas} líneas${nAdv ? `, ${nAdv} advertencia(s)` : ''}) y período EXPORTADA (consolidado + enviado registrados en un solo acto). Importalo y corré "Recalc. Todos" en Visual.` })
+      await cargarPeriodos(); const upd = { ...sel, estado: 'exportada' }; setSel(upd); void abrirPeriodo(upd)
     } catch (e: any) {
       setMsg({ ok: false, t: 'No se pudo generar el archivo Visual: ' + (e?.message || e) })
     } finally { setGenVisual(false) }
@@ -401,59 +408,49 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
               )}
 
               {/* ═══ PASO 1 · DESCARGAR EXCEL DE TRABAJO (con 000 ya calculado) ═══ */}
-              <PasoHeader n={1} titulo="Descargar Excel de trabajo" sub="Ya trae padrón, 000 real, horas, conceptos, permanentes y fórmulas" activo={EDITABLE(sel.estado)} />
-              {EDITABLE(sel.estado) ? (
+              <PasoHeader n={1} titulo="Descargar Excel de trabajo" sub="Ya trae padrón, 000 real, horas, conceptos, permanentes y fórmulas" activo={ANTES_VISUAL(sel.estado)} />
+              {ANTES_VISUAL(sel.estado) ? (
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button style={{ ...S.btn, opacity: genExcel ? 0.6 : 1 }} disabled={genExcel} onClick={() => void descargarExcelTrabajo()}>
                     {genExcel ? 'Generando…' : 'Descargar Excel de trabajo'}
                   </button>
                   <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
-                    El <b>000 (días trabajados)</b> ya viene calculado desde la planilla real (fechas distintas trabajadas). Corregí en Excel lo que haga falta y subilo en el paso 2.
+                    Descargalo las veces que necesites: sale siempre del <b>estado actual</b> (datos operativos + ajustes/reimportaciones ya cargados). El <b>000</b> viene calculado desde la planilla real. Corregí lo que haga falta y subilo en el paso 2.
                   </span>
                 </div>
-              ) : <div style={{ color: '#64748b', fontSize: 12 }}>El período ya no está en edición; el Excel de trabajo se prepara mientras está en borrador/revisión.</div>}
-              {/* Gráficos recuperados del Excel original (auditado). */}
+              ) : <div style={{ color: '#64748b', fontSize: 12 }}>El período ya fue enviado a Visual: el Excel de trabajo no se regenera. Descargá el archivo enviado en el paso 4.</div>}
+              {/* Indicadores recuperados del Excel original (auditado). El gráfico
+                  de torta se eliminó en #205: quedan sólo las celdas dinámicas. */}
               <div style={{ marginTop: 8, padding: 10, background: '#0f1a2e', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd' }}>
-                Incluye, reproducidos del Excel original: <b>gráfico Horas REC vs Extras</b> (torta con % reales, debajo del total) + las celdas <b>Horas REC / Horas Extras / % REC / % Extras</b>, el <b>semáforo de % extras</b> (escala rojo→amarillo→verde en la columna «% ex») y la <b>barra de costo por hora</b> («po hs»), con los mismos límites y colores del archivo original. La torta se inserta como imagen (Excel/exceljs no escribe gráficos nativos) junto a las celdas que la alimentan.
+                Incluye, reproducidos del Excel original: las celdas dinámicas <b>Horas REC Vigiladores / Horas Extras Vigiladores / % REC / % Extras</b> (sólo vigilancia, debajo del total), el <b>semáforo de % extras</b> (formato condicional rojo→amarillo→verde en la columna «% ex») y la <b>barra de costo por hora</b> («po hs»), con los mismos límites y colores del archivo original.
               </div>
 
               {/* ═══ PASO 2 · SUBIR EXCEL REVISADO → preview de diferencias → confirmar ═══ */}
-              <PasoHeader n={2} titulo="Subir Excel revisado" sub="Preview de diferencias y confirmación (incluye el 000 corregido)" activo={EDITABLE(sel.estado)} />
-              {EDITABLE(sel.estado) ? (
+              <PasoHeader n={2} titulo="Subir Excel revisado" sub="Preview de diferencias y confirmación (incluye el 000 corregido)" activo={ANTES_VISUAL(sel.estado)} />
+              {ANTES_VISUAL(sel.estado) ? (
                 <ReimportarExcelTrabajo periodo={sel} onDone={() => { void abrirPeriodo(sel) }} />
-              ) : <div style={{ color: '#64748b', fontSize: 12 }}>Sólo se reimporta mientras el período está en borrador/revisión.</div>}
+              ) : <div style={{ color: '#64748b', fontSize: 12 }}>El período ya fue enviado a Visual: no se reimporta.</div>}
 
-              {/* ═══ PASO 3 · CONSOLIDAR ═══ */}
-              <PasoHeader n={3} titulo="Consolidar" sub="Congela una versión auditable (baseline + ajustes)" activo={EDITABLE(sel.estado) || sel.estado === 'consolidada'} />
+              {/* ═══ PASO 3 · PREVALIDAR (preview) ═══ */}
+              <PasoHeader n={3} titulo="Prevalidar" sub="Preview: LISTO / FALTAN DATOS antes de generar el archivo Visual" activo={ANTES_VISUAL(sel.estado)} />
               <div>
-                {consolidadaN > 0 && (
-                  <div style={{ fontSize: 13, marginBottom: 8 }}>
-                    Consolidado: <b>{consolidadaN}</b> filas (empleado × código) congeladas
-                    {sel.estado === 'consolidada' && <span style={{ color: '#4ade80' }}> · período CONSOLIDADO</span>}.
-                  </div>
-                )}
-                {EDITABLE(sel.estado) ? (
+                {ANTES_VISUAL(sel.estado) ? (
                   <>
-                    {/* Prevalidación ANTES de consolidar: misma regla que bloquea Visual. */}
+                    {/* Preview: misma regla que después bloquea la generación Visual. */}
                     <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
                       <button style={{ ...S.btn, background: '#334155', opacity: prevalidando ? 0.6 : 1 }} disabled={prevalidando} onClick={() => void prevalidar()}>
-                        {prevalidando ? 'Prevalidando…' : 'Prevalidar para consolidar'}
+                        {prevalidando ? 'Prevalidando…' : 'Prevalidar'}
                       </button>
-                      <button style={{ ...S.btn, background: preval && !preval.listo ? '#475569' : '#7c3aed', opacity: (consolidando || prevalidando || (preval && !preval.listo)) ? 0.5 : 1 }}
-                        disabled={consolidando || prevalidando || (preval && !preval.listo)}
-                        onClick={() => void consolidar()}>
-                        {consolidando ? 'Consolidando…' : 'Consolidar liquidación'}
-                      </button>
-                      <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 200px' }}>Consolidar sólo se habilita si la prevalidación está LISTO.</span>
+                      <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 200px' }}>Preview de lo que falta. Al <b>Generar archivo Visual</b> se vuelve a validar de forma autoritativa: si falta algo, no se genera ni se guarda nada.</span>
                     </div>
                     {preval && !preval.error && (
                       preval.listo ? (
                         <div style={{ padding: 8, background: '#0e2a16', border: '1px solid #14532d', borderRadius: 6, marginBottom: 6, color: '#4ade80', fontWeight: 700 }}>
-                          ✓ LISTO PARA CONSOLIDAR — {preval.exportan} de {preval.totalPersonas} personas exportan; sin faltantes.
+                          ✓ LISTO — {preval.exportan} de {preval.totalPersonas} personas exportan; sin faltantes.
                         </div>
                       ) : (
                         <div style={{ padding: 8, background: '#2a1206', border: '1px solid #7c5510', borderRadius: 6, marginBottom: 6, fontSize: 12 }}>
-                          <b style={{ color: '#fbbf24' }}>FALTAN DATOS — no se puede consolidar todavía.</b>
+                          <b style={{ color: '#fbbf24' }}>FALTAN DATOS — todavía no se puede generar el archivo Visual.</b>
                           {preval.criticos.length > 0 && (<div style={{ marginTop: 4 }}><b style={{ color: '#f87171' }}>Críticos ({preval.criticos.length}):</b>{preval.criticos.slice(0, 8).map((c: any, i: number) => <div key={i} style={{ color: '#fca5a5' }}>• {c.detalle}</div>)}</div>)}
                           {preval.identidadFaltante.length > 0 && (<div style={{ marginTop: 4 }}><b style={{ color: '#fbbf24' }}>Identidad Visual faltante ({preval.identidadFaltante.length}) — sin COD_INTERNO / CUIL:</b>{preval.identidadFaltante.slice(0, 10).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}{preval.identidadFaltante.length > 10 && <div style={{ color: '#64748b' }}>… y {preval.identidadFaltante.length - 10} más</div>}</div>)}
                           {preval.diasRequerido.length > 0 && (<div style={{ marginTop: 4 }}><b style={{ color: '#fbbf24' }}>000 requerido ({preval.diasRequerido.length}) — cargar el valor (manual si es mensualizado):</b>{preval.diasRequerido.slice(0, 10).map((c: any, i: number) => <div key={i} style={{ color: '#fcd34d' }}>• {c.detalle}</div>)}{preval.diasRequerido.length > 10 && <div style={{ color: '#64748b' }}>… y {preval.diasRequerido.length - 10} más</div>}</div>)}
@@ -463,32 +460,42 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     )}
                     {preval?.error && <div style={{ ...S.err, marginBottom: 6 }}>No se pudo prevalidar: {preval.error}</div>}
                   </>
-                ) : sel.estado === 'consolidada' ? (
-                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <button style={{ ...S.btn, background: '#475569', opacity: consolidando ? 0.6 : 1 }} disabled={consolidando} onClick={() => void consolidar()}>Re-consolidar</button>
-                    <span style={{ color: '#4ade80', fontSize: 12 }}>Consolidado. Generá el archivo para Visual en el paso 4.</span>
-                  </div>
-                ) : <div style={{ color: '#64748b', fontSize: 12 }}>Período {sel.estado}.</div>}
+                ) : <div style={{ color: '#64748b', fontSize: 12 }}>Período {sel.estado}: ya prevalidado y enviado a Visual.</div>}
               </div>
 
-              {/* ═══ PASO 4 · GENERAR ARCHIVO PARA VISUAL ═══ */}
-              <PasoHeader n={4} titulo="Generar archivo para Visual" sub="Baja el .xls y registra lo enviado; Visual calcula el recibo" activo={sel.estado === 'consolidada' || sel.estado === 'exportada' || sel.estado === 'liquidada'} />
+              {/* ═══ PASO 4 · GENERAR ARCHIVO PARA VISUAL (consolida internamente) ═══ */}
+              <PasoHeader n={4} titulo="Generar archivo para Visual" sub="Congela + registra + exporta en un solo acto; Visual calcula el recibo" activo={true} />
               <div>
-                {sel.estado === 'consolidada' ? (
+                {/* Banner READ-ONLY: cambios operativos posteriores al envío a Visual. */}
+                {(sel.estado === 'exportada' || sel.estado === 'liquidada') && cambiosPost?.hayCambios && (
+                  <div style={{ padding: 10, background: '#2a1206', border: '1px solid #b45309', borderRadius: 8, marginBottom: 10, fontSize: 12 }}>
+                    <b style={{ color: '#fbbf24' }}>⚠ HAY CAMBIOS OPERATIVOS POSTERIORES AL ARCHIVO ENVIADO A VISUAL</b>
+                    <div style={{ color: '#fcd34d', marginTop: 4 }}>
+                      {cambiosPost.cantidad} diferencia(s) en {cambiosPost.personas} persona(s). Sólo aviso: NO se reabre ni se regenera; la re-descarga sigue saliendo de lo enviado.
+                    </div>
+                    {cambiosPost.detalle?.slice(0, 8).map((d: any, i: number) => (
+                      <div key={i} style={{ color: '#fcd34d' }}>• CUIL {d.cuil} · cód {d.codigo} · {d.tipo}{d.campo ? ` (${d.campo}: ${d.antes ?? '—'} → ${d.ahora ?? '—'})` : ''}</div>
+                    ))}
+                    {cambiosPost.detalle?.length > 8 && <div style={{ color: '#64748b' }}>… y {cambiosPost.detalle.length - 8} más</div>}
+                  </div>
+                )}
+                {ANTES_VISUAL(sel.estado) ? (
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                     <button style={{ ...S.btn, background: '#059669', opacity: genVisual ? 0.6 : 1 }} disabled={genVisual} onClick={() => void generarVisual()}>
                       {genVisual ? 'Generando…' : 'Generar archivo Visual Sueldos'}
                     </button>
-                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 100%' }}>El 000 sale de la planilla real (con tu corrección del Excel). Marca el período EXPORTADA y registra lo enviado para conciliar.</span>
+                    <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 100%' }}>
+                      Prevalida, congela la versión (consolidada + enviado) y marca EXPORTADA <b>en un solo acto atómico</b>, desde una única preparación de datos. El 000 sale de la planilla real (con tus correcciones). {consolidadaN > 0 && <span>Este período ya tenía {consolidadaN} filas consolidadas (legacy); se reemplazan al generar.</span>}
+                    </span>
                   </div>
-                ) : sel.estado === 'exportada' || sel.estado === 'liquidada' ? (
+                ) : (
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                     <button style={{ ...S.btn, background: '#059669', opacity: genVisual ? 0.6 : 1 }} disabled={genVisual} onClick={() => void generarVisual()}>
-                      {genVisual ? 'Generando…' : 'Regenerar archivo Visual'}
+                      {genVisual ? 'Generando…' : 'Regenerar / Descargar archivo Visual'}
                     </button>
-                    <span style={{ color: '#64748b', fontSize: 12 }}>Período {sel.estado}. Podés volver a bajar el archivo.</span>
+                    <span style={{ color: '#64748b', fontSize: 12 }}>Período {sel.estado}. Se reconstruye <b>exactamente desde lo enviado</b> (no recalcula ni relee datos operativos).</span>
                   </div>
-                ) : <div style={{ color: '#64748b', fontSize: 12 }}>Consolidá primero (paso 3) para habilitar la generación.</div>}
+                )}
 
                 {/* Validación pre-export. Críticos bloquean; advertencias visibles. */}
                 {validacion && (
