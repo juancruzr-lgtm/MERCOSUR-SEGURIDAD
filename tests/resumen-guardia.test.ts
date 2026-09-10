@@ -1340,7 +1340,8 @@ describe('base de liquidación de mensualizados', () => {
   it('columnas históricas no se desplazan: A:AX intactas, AI sigue "adicional"/212, informativas al final', () => {
     const { m, r } = mensualizado('supervisor')
     expect(m.get('AI5')?.v).toBe('adicional')
-    expect(m.get('AI6')?.v).toBe('212')
+    expect(m.get('AI6')?.v).toBe('212')      // adicional remunerativo (sin cambio)
+    expect(m.get('AE6')?.v).toBe('214')      // no remunerativo = 214 (no 212)
     expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$F$1`)  // horas rec × hora ($F$1 absoluto)
     expect(m.get('AX6')?.v).toBe('008')     // último concepto histórico, sin correr
     expect(m.get('AY6')?.v).toBe('SUPERVISIONES') // informativas siguen DESPUÉS de AX
