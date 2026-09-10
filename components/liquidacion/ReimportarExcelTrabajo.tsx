@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { compararReimport, type FilaDiff, type CeldaVisual } from '@/lib/excel-trabajo-reimport'
+import { compararReimport, CLAVE_SUELDO_MENSUAL, type FilaDiff, type CeldaVisual } from '@/lib/excel-trabajo-reimport'
 
 type Periodo = { id: string; mes: string; estado: string }
 
@@ -77,19 +77,54 @@ export default function ReimportarExcelTrabajo({ periodo, onDone }: { periodo: P
 
   async function confirmar() {
     setConfirmando(true); setMsg(null)
-    const ajustes = diffs.filter((_, i) => incorporar[i]).map(d => ({
-      empleado_id: d.usuarioId, tipo: 'variable', clave: d.clave, etiqueta: d.etiqueta,
-      valor_operativo: d.mercosur, valor_liquidacion: d.excel, motivo: motivo || null,
-    }))
-    if (ajustes.length === 0) { setMsg({ ok: false, t: 'No hay ajustes seleccionados para incorporar.' }); setConfirmando(false); return }
-    const { data, error } = await supabase.rpc('aplicar_ajustes_liquidacion', {
-      p_periodo_id: periodo.id, p_archivo: archivo, p_hash: hash, p_motivo: motivo || `Reimport ${archivo}`, p_ajustes: ajustes,
-    })
-    setConfirmando(false)
-    if (error) { setMsg({ ok: false, t: 'No se pudo aplicar: ' + error.message }); return }
-    const r = data as any
-    setMsg({ ok: true, t: `Ajustes aplicados: ${r.altas} altas · ${r.cambios} cambios · ${r.errores} errores (lote ${String(r.lote).slice(0, 8)}).` })
-    setDiffs([]); onDone()
+    try {
+      const seleccion = diffs.filter((_, i) => incorporar[i])
+      // SUELDO MENSUAL se guarda con VIGENCIA (set_sueldo_mensual), NO como ajuste
+      // de mes: se arrastra a los meses siguientes. El resto va a liquidacion_ajuste.
+      const smDiffs = seleccion.filter(d => d.clave === CLAVE_SUELDO_MENSUAL && d.excel != null)
+      const ajustes = seleccion.filter(d => d.clave !== CLAVE_SUELDO_MENSUAL).map(d => ({
+        empleado_id: d.usuarioId, tipo: 'variable', clave: d.clave, etiqueta: d.etiqueta,
+        valor_operativo: d.mercosur, valor_liquidacion: d.excel, motivo: motivo || null,
+      }))
+      if (ajustes.length === 0 && smDiffs.length === 0) { setMsg({ ok: false, t: 'No hay cambios seleccionados para incorporar.' }); return }
+
+      let resumenAjustes = ''
+      if (ajustes.length > 0) {
+        const { data, error } = await supabase.rpc('aplicar_ajustes_liquidacion', {
+          p_periodo_id: periodo.id, p_archivo: archivo, p_hash: hash, p_motivo: motivo || `Reimport ${archivo}`, p_ajustes: ajustes,
+        })
+        if (error) { setMsg({ ok: false, t: 'No se pudo aplicar: ' + error.message }); return }
+        const r = data as any
+        resumenAjustes = `Ajustes: ${r.altas} altas · ${r.cambios} cambios · ${r.errores} errores.`
+      }
+
+      let smOk = 0
+      if (smDiffs.length > 0) {
+        // Resolver persona_id desde el BD del Excel (usuario_id o persona_id).
+        const bds = Array.from(new Set(smDiffs.map(d => d.usuarioId).filter(Boolean))) as string[]
+        const [{ data: p1 }, { data: p2 }] = await Promise.all([
+          supabase.from('liquidacion_persona').select('id, usuario_id').in('usuario_id', bds),
+          supabase.from('liquidacion_persona').select('id, usuario_id').in('id', bds),
+        ])
+        const personaPorBd = new Map<string, string>()
+        for (const p of ([...(p1 ?? []), ...(p2 ?? [])] as any[])) {
+          if (p.usuario_id) personaPorBd.set(p.usuario_id, p.id)
+          personaPorBd.set(p.id, p.id)
+        }
+        for (const d of smDiffs) {
+          const pid = d.usuarioId ? personaPorBd.get(d.usuarioId) : null
+          if (!pid) continue
+          const { error } = await supabase.rpc('set_sueldo_mensual', { p_persona_id: pid, p_importe: d.excel, p_mes: periodo.mes })
+          if (!error) smOk++
+        }
+      }
+
+      const partes = [resumenAjustes, smDiffs.length ? `SUELDO MENSUAL: ${smOk}/${smDiffs.length} guardado(s) desde ${periodo.mes} (se arrastra a los meses siguientes).` : ''].filter(Boolean)
+      setMsg({ ok: true, t: partes.join(' · ') || 'Aplicado.' })
+      setDiffs([]); onDone()
+    } catch (e: any) {
+      setMsg({ ok: false, t: 'No se pudo aplicar: ' + (e?.message || e) })
+    } finally { setConfirmando(false) }
   }
 
   const seleccionados = diffs.filter((_, i) => incorporar[i]).length

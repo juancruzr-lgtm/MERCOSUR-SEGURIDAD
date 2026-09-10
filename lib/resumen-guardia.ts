@@ -1042,6 +1042,9 @@ const COLUMNAS_PLANTILLA: ColumnaPlantilla[] = [
   // Técnicas ocultas: identidad estable para el ida y vuelta (Juan 15/16).
   { col: 'BD', width: 3, hidden: true, numFmt: 'text' },
   { col: 'BE', width: 3, hidden: true, numFmt: 'text' },
+  // SUELDO MENSUAL (grupo A · mensualizados fijos): importe base individual,
+  // editable; en vigiladores/supervisores va vacío. Se reimporta con vigencia.
+  { col: 'BF', width: 16, numFmt: 'money' },
 ]
 
 // Columnas donde empieza una sección visual (borde vertical izquierdo):
@@ -1057,6 +1060,14 @@ export function plantillaLiquidacionResumenGuardia(
    * Sin este argumento el archivo es idéntico al de #170.
    */
   ajustesPorEmpleado?: Map<string, Record<string, number | null>>,
+  /**
+   * SUELDO MENSUAL individual por empleado (grupo A · mensualizados fijos):
+   * { empleadoId → importe }. Si está seteado, es el ÚNICO haber base del grupo A
+   * (concepto 001), y NO se le suman 203/204/212 de la convención de 25 días.
+   * Si un grupo A no tiene valor, cae al básico general (fallback). Sin este
+   * argumento, el comportamiento es idéntico al anterior.
+   */
+  sueldoMensualPorEmpleado?: Map<string, number>,
 ): PlantillaLiquidacion {
   const P = PARAMETROS_PLANTILLA
   const hora = P.basico / 200
@@ -1105,6 +1116,8 @@ export function plantillaLiquidacionResumenGuardia(
     ['BB6', 'OBSERVACION'], ['BC6', 'HS VIGILANCIA ZONA'],
     // Técnicas ocultas: identidad para el reimport (no depender de nombre ni fila).
     ['BD6', 'usuario_id'], ['BE6', 'periodo'],
+    // SUELDO MENSUAL editable (grupo A). Se reimporta con vigencia.
+    ['BF6', 'SUELDO MENSUAL'],
   ]
   for (const [ref, v] of fila6) put(ref, v)
 
@@ -1181,29 +1194,52 @@ export function plantillaLiquidacionResumenGuardia(
     const AX = num(Oval) * dia8
     const AO = AC + AD + AE + AF + AI + AJ + AT + AU + AV + AW + AX + AP
     const AS = AO > 0 && I > 0 ? AO / I : 0
+    // GRUPO A · mensualizado FIJO (administrativos: dir. operativa / administración
+    // / gerencia, con o sin usuario). Cobra SÓLO el SUELDO MENSUAL en el concepto
+    // 001; NO se le suman 203/204/212 de la convención de 25 días. Si aún no tiene
+    // SUELDO MENSUAL cargado, cae al básico general (fallback). Supervisores (B) y
+    // vigiladores (C) NO se tocan: siguen exactamente como antes.
+    const esGrupoA = fila.grupo === 'administrativos'
+    const sueldoMensual = esGrupoA ? (sueldoMensualPorEmpleado?.get(fila.empleadoId) ?? P.basico) : null
+    const gAC = esGrupoA ? 0 : AC
+    const gAD = esGrupoA ? 0 : AD
+    const gAE = esGrupoA ? 0 : AE
+    const gAF = esGrupoA ? 0 : AF
+    const gAG = esGrupoA ? 0 : AG
+    const gAH = esGrupoA ? 0 : AH
+    const gAI = esGrupoA ? 0 : AI
+    const gAJ = esGrupoA ? (sueldoMensual as number) : AJ
+    const gAL = esGrupoA ? 0 : AL
+    const gAM = esGrupoA ? 0 : AM
+    const gAN = esGrupoA ? 0 : AN
+    const gAP = esGrupoA ? 0 : AP
+    const gAO = gAC + gAD + gAE + gAF + gAI + gAJ + AT + AU + AV + AW + AX + gAP
+    const gAS = gAO > 0 && I > 0 ? gAO / I : 0
     // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias
-    // de la fila del empleado relativas (H8→H9 al arrastrar).
-    put(`AC${r}`, AC, `($E$3/25)*H${r}`)
-    put(`AD${r}`, AD, `($E$2/25)*H${r}`)
-    put(`AE${r}`, AE, `($E$4/25)*H${r}`)
-    put(`AF${r}`, AF, `($F$1/10)*J${r}`)
-    put(`AG${r}`, AG, `IF(I${r}<=150,H${r}*8,150)`)
-    // Mensualizado: AH=50 (adicional base). Vigilador: NO se emite (carga manual)
-    // salvo que un ajuste de liquidación le fije un adicional > 0.
-    if (AH !== 0) put(`AH${r}`, AH)
-    put(`AI${r}`, AI, `AH${r}*$F$1`)
-    put(`AJ${r}`, AJ, `AG${r}*$F$1`)
-    put(`AL${r}`, AL, `MAX(0,I${r}-AG${r})`)
-    put(`AM${r}`, AM, `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
-    put(`AN${r}`, AN, `I${r}/G${r}`)
-    put(`AO${r}`, AO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
-    put(`AP${r}`, AP, `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
-    put(`AS${r}`, AS, `IF(AO${r}>0,AO${r}/I${r},0)`)
+    // de la fila del empleado relativas (H8→H9 al arrastrar). Grupo A: 001 = SUELDO
+    // MENSUAL (columna BF, editable); el resto de la convención va en 0 (literal).
+    put(`AC${r}`, gAC, esGrupoA ? undefined : `($E$3/25)*H${r}`)
+    put(`AD${r}`, gAD, esGrupoA ? undefined : `($E$2/25)*H${r}`)
+    put(`AE${r}`, gAE, esGrupoA ? undefined : `($E$4/25)*H${r}`)
+    put(`AF${r}`, gAF, esGrupoA ? undefined : `($F$1/10)*J${r}`)
+    put(`AG${r}`, gAG, esGrupoA ? undefined : `IF(I${r}<=150,H${r}*8,150)`)
+    // Mensualizado (B): AH=50 (adicional base). Vigilador/Grupo A: NO se emite.
+    if (gAH !== 0) put(`AH${r}`, gAH)
+    put(`AI${r}`, gAI, esGrupoA ? undefined : `AH${r}*$F$1`)
+    put(`AJ${r}`, gAJ, esGrupoA ? `BF${r}` : `AG${r}*$F$1`)
+    put(`AL${r}`, gAL, esGrupoA ? undefined : `MAX(0,I${r}-AG${r})`)
+    put(`AM${r}`, gAM, esGrupoA ? undefined : `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
+    put(`AN${r}`, gAN, esGrupoA ? undefined : `I${r}/G${r}`)
+    put(`AO${r}`, gAO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
+    put(`AP${r}`, gAP, esGrupoA ? undefined : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
+    put(`AS${r}`, gAS, esGrupoA ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`)
     put(`AT${r}`, AT, `K${r}*$F$2`)
     put(`AU${r}`, AU, `L${r}*$F$2`)
     put(`AV${r}`, AV, `M${r}*$F$2`)
     put(`AW${r}`, AW, `N${r}*$F$2`)
     put(`AX${r}`, AX, `O${r}*$F$2`)
+    // SUELDO MENSUAL editable: sólo grupo A lleva la celda.
+    if (esGrupoA) put(`BF${r}`, sueldoMensual as number)
     // Informativas del final: valores puros.
     put(`AY${r}`, fila.supervisiones)
     put(`AZ${r}`, fila.horasSupervision)
@@ -1219,8 +1255,9 @@ export function plantillaLiquidacionResumenGuardia(
       ['G', G], ['I', I], ['J', J], ['K', Kv],
       ['L', num(Lval)], ['M', num(Mval)], ['N', num(Nval)],
       ['O', num(Oval)], ['P', num(Pval)],
-      ['AC', AC], ['AD', AD], ['AE', AE], ['AF', AF], ['AG', AG], ['AH', AH],
-      ['AI', AI], ['AJ', AJ], ['AL', AL], ['AO', AO], ['AP', AP],
+      // Grupo A ya viene con los conceptos de convención en 0 y 001 = SUELDO MENSUAL.
+      ['AC', gAC], ['AD', gAD], ['AE', gAE], ['AF', gAF], ['AG', gAG], ['AH', gAH],
+      ['AI', gAI], ['AJ', gAJ], ['AL', gAL], ['AO', gAO], ['AP', gAP],
       ['AT', AT], ['AU', AU], ['AV', AV], ['AW', AW], ['AX', AX],
       ['AY', fila.supervisiones], ['AZ', fila.horasSupervision], ['BA', fila.jornadasSupervision],
     ]
