@@ -1115,7 +1115,9 @@ export function plantillaLiquidacionResumenGuardia(
     ['E6', 'NOVEDADES'], ['F6', 'OBJETIVO/S'], ['G6', 'JORNADAS'],
     ['I6', 'HORAS LIQUIDABLES'], ['J6', 'HORAS NOCTURNAS'], ['K6', 'FERIADOS'],
     ['L6', 'LICENCIAS'], ['M6', 'ART'], ['N6', 'VACACIONES'], ['O6', 'PARTE MÉDICO'], ['P6', 'AUS/SUSP'],
-    ['AC6', '203'], ['AD6', '204'], ['AE6', '212'], ['AF6', '004'], ['AG6', '001'],
+    // AE = SUMA NO REMUNERATIVA → código 214 (no imponible, "Acuerdo 2025").
+    // Antes iba mal como 212 (ADICIONAL, remunerativo). Corrección JC 10/09.
+    ['AC6', '203'], ['AD6', '204'], ['AE6', '214'], ['AF6', '004'], ['AG6', '001'],
     ['AI6', '212'], ['AJ6', '001'], ['AL6', 'hs extras'], ['AM6', '% ex'], ['AN6', 'hs dia'],
     ['AO6', 'total'], ['AP6', P.horaExtra], ['AR6', 'adelantos'], ['AS6', 'po hs'],
     ['AT6', '006'], ['AU6', '888'], ['AV6', '010'], ['AW6', '205'], ['AX6', '008'],
