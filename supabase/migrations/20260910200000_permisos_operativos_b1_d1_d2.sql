@@ -43,41 +43,50 @@ as $$
   )
 $$;
 
--- ¿El actor puede dar de BAJA a este vigilador según su alcance operativo?
--- Jefe/'todas' => sí. Supervisor => sólo si el vigilador tiene actividad
--- (turnos) en su alcance Y ninguna fuera de él (ni en objetivos sin zona).
--- Un vigilador sin turnos => queda para 'todas' (fail-closed para el supervisor).
+-- ¿El actor puede dar de BAJA a este vigilador según su alcance OPERATIVO VIGENTE?
+-- Jefe/'todas' => sí, siempre.
+-- Supervisor => sólo si la operación VIGENTE del vigilador pertenece a sus zonas.
+-- La historia vieja NO veta (un turno de hace meses en otra zona no bloquea).
+-- "Operación vigente" (mismo criterio que usa la app: la actividad, no una
+-- tabla de asignación —`asignaciones` está en desuso):
+--   1) zonas de turnos de HOY en adelante (fecha >= current_date); si no hay,
+--   2) la zona del ÚLTIMO turno (última operación activa).
+-- El supervisor puede si TODAS esas zonas vigentes están en su alcance (así no
+-- inactiva a alguien que HOY también trabaja en una zona que no controla). Sin
+-- turnos, o última zona nula => sólo 'todas' (fail-closed para el supervisor).
 create or replace function public.alcanza_baja_vigilador_actual(p_target uuid)
 returns boolean
 language sql stable security definer set search_path to 'public','pg_catalog'
 as $$
+  with actor as (
+    select id from public.usuarios where auth_user_id = auth.uid() and estado='activo' limit 1
+  ),
+  vigentes as (
+    select distinct o.zona_id
+    from public.turnos t join public.objetivos o on o.id = t.objetivo_id
+    where t.guardia_id = p_target and t.fecha >= current_date
+  ),
+  ultima as (
+    select o.zona_id
+    from public.turnos t join public.objetivos o on o.id = t.objetivo_id
+    where t.guardia_id = p_target
+    order by t.fecha desc limit 1
+  ),
+  ambito as (
+    select zona_id from vigentes
+    union
+    select zona_id from ultima where not exists (select 1 from vigentes)
+  )
   select case
-    when not exists (select 1 from public.usuarios u
-                     where u.auth_user_id = auth.uid() and u.estado='activo')
-      then false
-    when public.alcance_operativo_de(
-           (select id from public.usuarios where auth_user_id = auth.uid() and estado='activo' limit 1)
-         ) = 'todas'
-      then true
-    else (
-      -- al menos un turno del vigilador en una zona del actor …
-      exists (
-        select 1 from public.turnos t
-        join public.objetivos o on o.id = t.objetivo_id
-        join public.supervisor_zonas sz on sz.zona_id = o.zona_id
-        where t.guardia_id = p_target
-          and sz.supervisor_id = (select id from public.usuarios where auth_user_id=auth.uid() and estado='activo' limit 1)
-      )
-      -- … y NINGÚN turno fuera del alcance del actor (o en objetivo sin zona)
-      and not exists (
-        select 1 from public.turnos t
-        join public.objetivos o on o.id = t.objetivo_id
-        where t.guardia_id = p_target
-          and (o.zona_id is null or not exists (
-                select 1 from public.supervisor_zonas sz
-                where sz.zona_id = o.zona_id
-                  and sz.supervisor_id = (select id from public.usuarios where auth_user_id=auth.uid() and estado='activo' limit 1)
-              ))
+    when not exists (select 1 from actor) then false
+    when (select public.alcance_operativo_de(id) from actor) = 'todas' then true
+    when not exists (select 1 from ambito) then false                    -- sin operación determinable
+    when exists (select 1 from ambito where zona_id is null) then false  -- objetivo sin zona: fail-closed
+    else not exists (
+      select 1 from ambito a
+      where not exists (
+        select 1 from public.supervisor_zonas sz
+        where sz.zona_id = a.zona_id and sz.supervisor_id = (select id from actor)
       )
     )
   end
