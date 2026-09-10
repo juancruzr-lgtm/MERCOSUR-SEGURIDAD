@@ -1106,7 +1106,8 @@ describe('bloques y mensualizados', () => {
     expect(m.get('D16')?.v).toBe('ROMERO, JUAN')
     expect(m.get('A19')?.v).toBe('TOTAL GENERAL')
     expect(m.get('I19')?.f).toBe('I9+I13+I17')
-    expect(m.get('I19')?.v).toBe(312) // 12 vigilador + 150 supervisor + 150 admin
+    // Admin (grupo A) NO tiene horas inventadas: 12 vigilador + 150 supervisor + 0 admin.
+    expect(m.get('I19')?.v).toBe(162)
     expect(p.ref).toBe('A1:BE19')
   })
 })

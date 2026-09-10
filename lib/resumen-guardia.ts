@@ -1145,9 +1145,13 @@ export function plantillaLiquidacionResumenGuardia(
     const ovNullable = (clave: string, base: number | null): number | null => {
       const o = ov[clave]; return (o === undefined) ? base : o
     }
-    // Base de liquidación de MENSUALIZADOS (Juan, 07/09): valores convencionales
-    // para que operen las fórmulas — NO son horas trabajadas. Sólo en esta capa.
-    const mensualizado = fila.grupo !== 'vigiladores'
+    // Modelos por grupo:
+    //  · GRUPO A (administrativos): mensualizado FIJO → cobra SÓLO el SUELDO
+    //    MENSUAL en 001. NO se le inventan jornadas/horas/viáticos/presentismo.
+    //  · GRUPO B (supervisores operativos): convención 25 días / 150 horas / 50 adic.
+    //  · GRUPO C (vigiladores): por horas reales.
+    const esGrupoA = fila.grupo === 'administrativos'
+    const mensualizado = fila.grupo === 'supervisores'  // sólo B usa la convención de 25/150/50
     const G = ovNum('jornadas', mensualizado ? 25 : fila.jornadas)
     const H = Math.min(G, 25)
     const I = ovNum('horas_liquidables', mensualizado ? 150 : fila.horasLiquidables)
@@ -1159,18 +1163,22 @@ export function plantillaLiquidacionResumenGuardia(
     const Nval = ovNullable('vacaciones', fila.vacaciones)
     const Oval = ovNullable('parte_medico', fila.parteMedico)
     const Pval = ovNullable('aus_susp', fila.ausenciasSuspensiones)
-    put(`G${r}`, G)
-    put(`H${r}`, H, `MIN(G${r},25)`)
-    put(`I${r}`, I)
     // null → celda sin emitir (vacía real = 0 en fórmulas, sin #¡VALOR!).
     const putNum = (ref: string, v: number | null) => { if (v != null) put(ref, v) }
-    putNum(`J${r}`, Jval)
-    put(`K${r}`, Kv)
-    putNum(`L${r}`, Lval)
-    putNum(`M${r}`, Mval)
-    putNum(`N${r}`, Nval)
-    putNum(`O${r}`, Oval)
-    putNum(`P${r}`, Pval)
+    // GRUPO A (mensualizado fijo): NO se completan jornadas/horas/novedades — quedan
+    // VACÍAS (no se inventa 25/150 ni nada). Sólo lleva el SUELDO MENSUAL (001).
+    if (!esGrupoA) {
+      put(`G${r}`, G)
+      put(`H${r}`, H, `MIN(G${r},25)`)
+      put(`I${r}`, I)
+      putNum(`J${r}`, Jval)
+      put(`K${r}`, Kv)
+      putNum(`L${r}`, Lval)
+      putNum(`M${r}`, Mval)
+      putNum(`N${r}`, Nval)
+      putNum(`O${r}`, Oval)
+      putNum(`P${r}`, Pval)
+    }
     const AC = (P.viatico / 25) * H
     const AD = (P.presentismo / 25) * H
     const AE = (P.noRem / 25) * H
@@ -1198,8 +1206,8 @@ export function plantillaLiquidacionResumenGuardia(
     // / gerencia, con o sin usuario). Cobra SÓLO el SUELDO MENSUAL en el concepto
     // 001; NO se le suman 203/204/212 de la convención de 25 días. Si aún no tiene
     // SUELDO MENSUAL cargado, cae al básico general (fallback). Supervisores (B) y
-    // vigiladores (C) NO se tocan: siguen exactamente como antes.
-    const esGrupoA = fila.grupo === 'administrativos'
+    // vigiladores (C) NO se tocan: siguen exactamente como antes. (esGrupoA ya
+    // está definido arriba.)
     const sueldoMensual = esGrupoA ? (sueldoMensualPorEmpleado?.get(fila.empleadoId) ?? P.basico) : null
     const gAC = esGrupoA ? 0 : AC
     const gAD = esGrupoA ? 0 : AD

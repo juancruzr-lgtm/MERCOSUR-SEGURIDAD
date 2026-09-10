@@ -57,13 +57,8 @@ async function cargarYConstruirVisual(
   const personas = (personasR.data ?? []) as any[]
   if (personas.length === 0) return { resultado: null, personas: 0, error: 'No hay personas liquidables (padrón vacío).' }
 
-  // Clave del haber = valor de la columna oculta BD del Excel: usuario_id para
-  // los que tienen usuario, o persona_id para los mensualizados fijos SIN usuario.
   const personaPorUsuario = new Map<string, any>()
-  for (const p of personas) {
-    if (p.usuario_id) personaPorUsuario.set(p.usuario_id, p)
-    personaPorUsuario.set(p.id, p) // sin-usuario: la fila del Excel lleva persona_id en BD
-  }
+  for (const p of personas) if (p.usuario_id) personaPorUsuario.set(p.usuario_id, p)
 
   const padron: PersonaPadron[] = personas.map(p => ({
     persona_id: p.id, cod_interno: p.cod_interno ?? null, cuil: p.cuil ?? null,

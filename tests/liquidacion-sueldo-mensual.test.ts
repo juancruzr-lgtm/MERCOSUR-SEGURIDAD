@@ -28,7 +28,7 @@ const ADM = { id: 'a1', apellido: 'ROMERO', nombre: '', rol: 'admin', puesto_org
 const GER = { id: 'g1', apellido: 'GERENTE', nombre: '', rol: 'admin', puesto_organizacional: 'gerencia', cuil: '20222222229', legajoVisual: 'GER' }
 
 describe('SUELDO MENSUAL — grupo A (mensualizados fijos)', () => {
-  it('administrativo con SUELDO MENSUAL → usa el importe individual en 001; sin 203/204/212', () => {
+  it('administrativo con SUELDO MENSUAL → usa el importe individual en 001; sin 203/204/212; SIN 25/150 inventado', () => {
     const sm = new Map([['a1', 777000]])
     const { m, filaDe } = plantilla([ADM], sm)
     const r = filaDe('a1')
@@ -40,6 +40,10 @@ describe('SUELDO MENSUAL — grupo A (mensualizados fijos)', () => {
     expect(m.get(`AD${r}`)?.v).toBe(0)           // sin presentismo 204
     expect(m.get(`AE${r}`)?.v).toBe(0)           // sin 212
     expect(m.get(`AH${r}`)).toBeUndefined()      // sin adicional de convención
+    // NO se inventan jornadas/horas: G, H, I quedan VACÍAS (regresión del bug #211).
+    expect(m.get(`G${r}`)).toBeUndefined()
+    expect(m.get(`H${r}`)).toBeUndefined()
+    expect(m.get(`I${r}`)).toBeUndefined()
   })
 
   it('gerencia con SUELDO MENSUAL → usa el importe individual', () => {

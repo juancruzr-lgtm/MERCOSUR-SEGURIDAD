@@ -100,21 +100,10 @@ export default function ReimportarExcelTrabajo({ periodo, onDone }: { periodo: P
 
       let smOk = 0
       if (smDiffs.length > 0) {
-        // Resolver persona_id desde el BD del Excel (usuario_id o persona_id).
-        const bds = Array.from(new Set(smDiffs.map(d => d.usuarioId).filter(Boolean))) as string[]
-        const [{ data: p1 }, { data: p2 }] = await Promise.all([
-          supabase.from('liquidacion_persona').select('id, usuario_id').in('usuario_id', bds),
-          supabase.from('liquidacion_persona').select('id, usuario_id').in('id', bds),
-        ])
-        const personaPorBd = new Map<string, string>()
-        for (const p of ([...(p1 ?? []), ...(p2 ?? [])] as any[])) {
-          if (p.usuario_id) personaPorBd.set(p.usuario_id, p.id)
-          personaPorBd.set(p.id, p.id)
-        }
+        // El BD (columna oculta) de un mensualizado fijo ES su usuario_id.
         for (const d of smDiffs) {
-          const pid = d.usuarioId ? personaPorBd.get(d.usuarioId) : null
-          if (!pid) continue
-          const { error } = await supabase.rpc('set_sueldo_mensual', { p_persona_id: pid, p_importe: d.excel, p_mes: periodo.mes })
+          if (!d.usuarioId) continue
+          const { error } = await supabase.rpc('set_sueldo_mensual', { p_usuario_id: d.usuarioId, p_importe: d.excel, p_mes: periodo.mes })
           if (!error) smOk++
         }
       }
