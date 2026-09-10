@@ -28,6 +28,10 @@ const EDITABLE = (estado: string) => estado === 'borrador' || estado === 'revisi
 // trabajo, reimportar y prevalidar. Incluye períodos legacy en 'consolidada'
 // (ese paso manual se eliminó; ahora consolidar ocurre dentro de Generar Visual).
 const ANTES_VISUAL = (estado: string) => estado !== 'exportada' && estado !== 'liquidada'
+// UX (JC): las herramientas de revisión auxiliares (000 / expedientes / novedades /
+// comparación) se OCULTAN del panel hasta tener el editable real por empleado.
+// No se borra código ni datos ni RPCs: sólo no se renderiza la sección.
+const MOSTRAR_HERRAMIENTAS_REVISION = false
 
 /** Dispara la descarga de un archivo en el navegador (Blob + ancla efímera). */
 function descargarArchivo(bytes: BlobPart, filename: string, mime: string) {
@@ -415,10 +419,10 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                     {genExcel ? 'Generando…' : 'Descargar Excel de trabajo'}
                   </button>
                   <span style={{ color: '#64748b', fontSize: 12, flex: '1 1 240px' }}>
-                    Descargalo las veces que necesites: sale siempre del <b>estado actual</b> (datos operativos + ajustes/reimportaciones ya cargados). El <b>000</b> viene calculado desde la planilla real. Corregí lo que haga falta y subilo en el paso 2.
+                    <b>Excel de trabajo editable.</b> Descargalo las veces que necesites: sale siempre del <b>estado actual</b> (datos operativos + ajustes/reimportaciones ya cargados). El <b>000</b> viene calculado desde la planilla real. Corregí lo que haga falta y subilo en el paso 2.
                   </span>
                 </div>
-              ) : <div style={{ color: '#64748b', fontSize: 12 }}>El período ya fue enviado a Visual: el Excel de trabajo no se regenera. Descargá el archivo enviado en el paso 4.</div>}
+              ) : <div style={{ color: '#64748b', fontSize: 12 }}>El período ya fue enviado a Visual. Podés volver a descargar el <b>archivo Visual enviado</b> (paso 4).</div>}
               {/* Indicadores recuperados del Excel original (auditado). El gráfico
                   de torta se eliminó en #205: quedan sólo las celdas dinámicas. */}
               <div style={{ marginTop: 8, padding: 10, background: '#0f1a2e', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd' }}>
@@ -544,7 +548,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
               <PasoHeader n={5} titulo="Resultado de Visual" sub="Importar la planilla final y conciliar contra lo enviado" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
               <ImportarResultadoVisual periodo={sel} />
 
-              {/* ─── Herramientas de revisión (auxiliares, no dominan el flujo) ─── */}
+              {/* ─── Herramientas de revisión (auxiliares): OCULTAS (JC) hasta tener
+                   el editable real por empleado. Código, datos y RPCs intactos. ─── */}
+              {MOSTRAR_HERRAMIENTAS_REVISION && (
               <div style={{ marginTop: 22, paddingTop: 12, borderTop: '2px solid #1e293b' }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>Herramientas de revisión (auxiliares)</div>
                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>
@@ -583,6 +589,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   )}
                 </div>
               </div>
+              )}
 
               {/* ─── Próximas fases (pendientes, NO implementadas todavía) ─── */}
               <div style={{ marginTop: 18, padding: 10, background: '#0f1a2e', border: '1px dashed #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd' }}>
