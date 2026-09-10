@@ -20,6 +20,7 @@ import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   construirResumenGuardia,
   plantillaLiquidacionResumenGuardia,
+  grupoDeResumen,
   type EmpleadoResumen,
   type PlantillaLiquidacion,
   type ResumenGuardiaMes,
@@ -130,9 +131,54 @@ export async function plantillaTrabajoDelMes(
     legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null,
   }))
 
+  // ── SUELDO MENSUAL (grupo A · mensualizados fijos) ────────────────────────
+  // Padrón liquidable + su SUELDO MENSUAL vigente del mes. Los mensualizados
+  // fijos SIN usuario en la app se agregan como filas del bloque 3 para poder
+  // verlos/editarlos en el mismo Excel.
+  const [personasR, sueldosR] = await Promise.all([
+    client.from('liquidacion_persona').select('id, usuario_id, cuil, nombre, cod_interno').eq('estado_liquidable', 'activo'),
+    client.from('liquidacion_sueldo_mensual').select('persona_id, importe, vigencia_desde, vigencia_hasta'),
+  ])
+  const personas = (personasR.data ?? []) as any[]
+  const usuarioPorId = new Map<string, any>(usuarios.map(u => [u.id, u]))
+  // SUELDO MENSUAL vigente por persona para el mes (la vigencia_desde más alta
+  // que abarca el mes; una sola fila abierta por persona garantizada por la DB).
+  const finMes = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+  const inicioMes = `${mes}-01`
+  const sueldoVigentePorPersona = new Map<string, number>()
+  const mejorDesde = new Map<string, string>()
+  for (const s of (sueldosR.data ?? []) as any[]) {
+    const d = String(s.vigencia_desde); const h = s.vigencia_hasta ? String(s.vigencia_hasta) : null
+    if (d <= finMes && (!h || h >= inicioMes)) {
+      const cur = mejorDesde.get(s.persona_id)
+      if (!cur || d > cur) { mejorDesde.set(s.persona_id, d); sueldoVigentePorPersona.set(s.persona_id, Number(s.importe)) }
+    }
+  }
+  // Grupo A = administrativos con usuario (por puesto) o cualquiera SIN usuario.
+  const esGrupoAPersona = (p: any): boolean =>
+    p.usuario_id ? grupoDeResumen(usuarioPorId.get(p.usuario_id)) === 'administrativos' : true
+  // SUELDO MENSUAL keyed por el empleadoId del resumen (usuario_id, o persona_id
+  // si no tiene usuario). Sólo se setea si la persona tiene valor cargado; si no,
+  // la plantilla cae al básico general (fallback).
+  const sueldoMensualPorEmpleado = new Map<string, number>()
+  for (const p of personas) {
+    if (!esGrupoAPersona(p)) continue
+    const v = sueldoVigentePorPersona.get(p.id)
+    if (v != null) sueldoMensualPorEmpleado.set(p.usuario_id ?? p.id, v)
+  }
+  // Filas de bloque 3 para los mensualizados fijos SIN usuario (no están en `usuarios`).
+  const empleadosSinUsuario: EmpleadoResumen[] = personas
+    .filter(p => !p.usuario_id)
+    .map(p => ({
+      id: p.id, apellido: p.nombre ?? '', nombre: '', rol: 'admin',
+      puesto_organizacional: 'administracion', estado: 'activo', esPrueba: false,
+      cuil: p.cuil ?? null, legajo: p.cod_interno ?? null, legajoVisual: p.cod_interno ?? null, cuenta: null,
+    }))
+  const empleadosTodos = [...empleados, ...empleadosSinUsuario]
+
   const resumen = construirResumenGuardia({
     mes,
-    empleados,
+    empleados: empleadosTodos,
     turnos: (turnosR.data ?? []) as any[],
     registros: (registrosR.data ?? []) as any[],
     novedades: (novedadesR.data ?? []) as any[],
@@ -156,7 +202,7 @@ export async function plantillaTrabajoDelMes(
 
   if (resumen.filas.length === 0) return { plantilla: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
 
-  const plantilla = plantillaLiquidacionResumenGuardia(resumen, ajustesPorEmpleado)
+  const plantilla = plantillaLiquidacionResumenGuardia(resumen, ajustesPorEmpleado, sueldoMensualPorEmpleado)
   return { plantilla, filas: resumen.filas.length, error: null, resumen }
 }
 

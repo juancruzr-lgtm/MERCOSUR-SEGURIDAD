@@ -38,7 +38,15 @@ export const VARIABLES_REIMPORT: VariableReimport[] = [
   { clave: 'aus_susp', col: 'P', idx: 15, etiqueta: 'Aus/Susp' },
   { clave: 'adicional_hs', col: 'AH', idx: 33, etiqueta: 'Adicional (hs)' },
   { clave: 'adelantos', col: 'AR', idx: 43, etiqueta: 'Adelantos' },
+  // SUELDO MENSUAL (grupo A). Se detecta como cualquier variable, pero al
+  // confirmar NO va a liquidacion_ajuste: se guarda con VIGENCIA vía
+  // set_sueldo_mensual (se arrastra a los meses siguientes). Sólo lleva valor en
+  // las filas de mensualizados fijos; en el resto la celda va vacía → sin diff.
+  { clave: 'sueldo_mensual', col: 'BF', idx: 57, etiqueta: 'SUELDO MENSUAL' },
 ]
+
+/** Clave de la variable que se persiste con vigencia (no como ajuste de mes). */
+export const CLAVE_SUELDO_MENSUAL = 'sueldo_mensual'
 
 const IDX_CUIL = 1     // B
 const IDX_NOMBRE = 3   // D

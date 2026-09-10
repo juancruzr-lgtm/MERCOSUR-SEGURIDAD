@@ -1296,11 +1296,19 @@ describe('base de liquidación de mensualizados', () => {
     expect(m.get(`AI${r}`)?.f).toBe(`AH${r}*$F$1`) // adicional = AH × hora ($F$1 absoluto)
   })
 
-  it('mensualizado admin (caso MARTINEZ): misma base 25/150/50 aunque el rol sea admin', () => {
+  it('mensualizado ADMIN = grupo A (SUELDO MENSUAL): sin adicional/viáticos/presentismo de convención; 001 = básico (fallback)', () => {
+    // rol admin sin puesto → grupo A. NO lleva AH (212) ni la convención de 25
+    // días; cobra SÓLO el SUELDO MENSUAL en 001 (acá cae al básico general porque
+    // no se pasó un valor). El Sergio Martínez REAL es jefe_supervisores → grupo B,
+    // que mantiene la convención (test de supervisor arriba).
     const { m, r } = mensualizado('admin')
-    expect(m.get(`G${r}`)?.v).toBe(25)
-    expect(m.get(`I${r}`)?.v).toBe(150)
-    expect(m.get(`AH${r}`)?.v).toBe(50)
+    expect(m.get(`AH${r}`)).toBeUndefined()          // sin adicional de convención
+    expect(m.get(`AC${r}`)?.v).toBe(0)               // sin viáticos (203) automáticos
+    expect(m.get(`AD${r}`)?.v).toBe(0)               // sin presentismo (204)
+    expect(m.get(`AE${r}`)?.v).toBe(0)               // sin 212 de convención
+    expect(m.get(`AJ${r}`)?.v).toBe(hora * 200)      // 001 = SUELDO MENSUAL (fallback = básico)
+    expect(m.get(`AJ${r}`)?.f).toBe(`BF${r}`)        // 001 sigue la columna SUELDO MENSUAL
+    expect(m.get(`BF${r}`)?.v).toBe(hora * 200)      // columna SUELDO MENSUAL editable
   })
 
   it('las horas operativas reales del mensualizado NO modifican la base convencional', () => {
@@ -1338,14 +1346,17 @@ describe('base de liquidación de mensualizados', () => {
     expect(m.get('BC6')?.v).toBe('HS VIGILANCIA ZONA')
   })
 
-  it('mensualizado: AL (hs extras) = 0, nunca negativo, con fórmula MAX(0,I-AG)', () => {
-    for (const rol of ['supervisor', 'admin'] as const) {
-      const { m, r } = mensualizado(rol)
-      expect(m.get(`AL${r}`)?.v).toBe(0)                       // ya no -50
-      expect(m.get(`AL${r}`)?.v as number).toBeGreaterThanOrEqual(0)
-      expect(m.get(`AL${r}`)?.f).toBe(`MAX(0,I${r}-AG${r})`)   // fórmula no negativa
-      expect(m.get(`AP${r}`)?.v).toBe(0)                       // 0 por extras
-    }
+  it('mensualizado supervisor (grupo B): AL (hs extras) = 0, con fórmula MAX(0,I-AG); admin (grupo A) = 0 literal', () => {
+    // Grupo B (supervisor operativo) mantiene la convención y la fórmula de extras.
+    const sup = mensualizado('supervisor')
+    expect(sup.m.get(`AL${sup.r}`)?.v).toBe(0)                          // ya no -50
+    expect(sup.m.get(`AL${sup.r}`)?.v as number).toBeGreaterThanOrEqual(0)
+    expect(sup.m.get(`AL${sup.r}`)?.f).toBe(`MAX(0,I${sup.r}-AG${sup.r})`)
+    expect(sup.m.get(`AP${sup.r}`)?.v).toBe(0)
+    // Grupo A (admin) cobra sólo SUELDO MENSUAL: sin extras, celda literal en 0.
+    const adm = mensualizado('admin')
+    expect(adm.m.get(`AL${adm.r}`)?.v).toBe(0)
+    expect(adm.m.get(`AL${adm.r}`)?.f).toBeUndefined()
   })
 
   it('mensualizado: el total salarial (AO) NO cambia respecto del resultado validado', () => {
