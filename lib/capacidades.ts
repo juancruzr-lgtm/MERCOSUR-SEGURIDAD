@@ -52,6 +52,16 @@ export type Capacidad =
   | 'revisar_operativa'
   | 'ver_desempeno'
   | 'configurar_sistema'
+  // Capacidades OPERATIVAS estrechas (JC 10/09): habilitan la administración de
+  // la operación dentro del ALCANCE (supervisor: sus zonas; jefe: todas). NO
+  // implican configurar_sistema, económico ni gestión de roles. La autorización
+  // real la hace la base (alcance + RPC SECURITY DEFINER); acá gobiernan la UI.
+  //  · gestionar_objetivos_operativos: crear objetivo (con zona en alcance) y
+  //    crear/editar puestos de trabajo de objetivos del alcance.
+  //  · gestionar_personal_operativo: alta/baja de VIGILADORES (no supervisores
+  //    ni jerárquicos) dentro del ámbito operativo.
+  | 'gestionar_objetivos_operativos'
+  | 'gestionar_personal_operativo'
   // Preparación de Liquidación (padrón, Excel, 000, expedientes, consolidar,
   // generar Visual). NO es económico/banco: Administración la tiene; el acceso
   // al banco/Finanzas queda bajo capacidades económicas separadas (Gerencia).
@@ -84,6 +94,9 @@ const OPERACION_SUPERVISOR: Capacidad[] = [
 ]
 // ADMINISTRATIVO — gestión administrativa de objetos operativos (rama Administración).
 const ADMINISTRATIVO: Capacidad[] = ['gestionar_personal', 'gestionar_objetivos']
+// OPERATIVO ACOTADO — administración de la operación dentro del alcance, sin ser
+// administración general. supervisor + jefe (jefe = alcance 'todas').
+const OPERATIVO_ALCANCE: Capacidad[] = ['gestionar_objetivos_operativos', 'gestionar_personal_operativo']
 // GERENCIAL/ECONÓMICO — sensible; SOLO gerencia (incl. gestión de usuarios/roles).
 const GERENCIAL_ECONOMICO: Capacidad[] = [
   'ver_dashboard_gerencial', 'ver_liquidacion', 'editar_liquidacion',
@@ -105,14 +118,15 @@ const GERENCIAL_ECONOMICO: Capacidad[] = [
  */
 const CAPACIDADES_POR_PUESTO: Record<PuestoOrganizacional, Capacidad[]> = {
   vigilador: [], // sólo su propia operación (se resuelve por alcance 'propio')
-  supervisor: [...OPERACION_SUPERVISOR, 'gestionar_turnos'],
-  jefe_supervisores: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'supervisar_todas_zonas'],
+  supervisor: [...OPERACION_SUPERVISOR, 'gestionar_turnos', ...OPERATIVO_ALCANCE],
+  jefe_supervisores: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'supervisar_todas_zonas', ...OPERATIVO_ALCANCE],
   // Dir. Operativa dirige la OPERACIÓN global: turnos + objetivos en su dimensión
   // operativa + supervisión. NO gestiona personal (administrativo) ni económico.
-  direccion_operativa: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'gestionar_objetivos', 'supervisar_todas_zonas', 'configurar_sistema'],
-  administracion: ['ver_operacion', 'revisar_operativa', 'revisar_planillas', 'gestionar_turnos', ...ADMINISTRATIVO, 'configurar_sistema', 'preparar_liquidacion'],
+  // Suma gestionar_objetivos_operativos para poder crear objetivos por alcance.
+  direccion_operativa: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'gestionar_objetivos', 'gestionar_objetivos_operativos', 'supervisar_todas_zonas', 'configurar_sistema'],
+  administracion: ['ver_operacion', 'revisar_operativa', 'revisar_planillas', 'gestionar_turnos', ...ADMINISTRATIVO, 'gestionar_objetivos_operativos', 'gestionar_personal_operativo', 'configurar_sistema', 'preparar_liquidacion'],
   gerencia: [
-    'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO, 'supervisar_todas_zonas',
+    'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO, ...OPERATIVO_ALCANCE, 'supervisar_todas_zonas',
     'configurar_sistema', 'preparar_liquidacion', ...GERENCIAL_ECONOMICO,
   ],
 }

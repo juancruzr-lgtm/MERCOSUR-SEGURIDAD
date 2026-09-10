@@ -10,6 +10,47 @@ import {
   esAdminPleno,
 } from '@/lib/capacidades'
 
+describe('capacidades operativas acotadas (B1/D1/D2 — JC 10/09)', () => {
+  it('supervisor gana gestionar_objetivos_operativos y gestionar_personal_operativo', () => {
+    const s = { puesto_organizacional: 'supervisor' }
+    expect(tieneCapacidad(s, 'gestionar_objetivos_operativos')).toBe(true)
+    expect(tieneCapacidad(s, 'gestionar_personal_operativo')).toBe(true)
+    expect(alcanceDe(s)).toBe('zonas_asignadas')
+  })
+  it('jefe_supervisores tiene ambas con alcance todas', () => {
+    const j = { puesto_organizacional: 'jefe_supervisores' }
+    expect(tieneCapacidad(j, 'gestionar_objetivos_operativos')).toBe(true)
+    expect(tieneCapacidad(j, 'gestionar_personal_operativo')).toBe(true)
+    expect(alcanceDe(j)).toBe('todas')
+  })
+  it('vigilador NO gana ninguna capacidad operativa', () => {
+    const v = { puesto_organizacional: 'vigilador' }
+    expect(tieneCapacidad(v, 'gestionar_objetivos_operativos')).toBe(false)
+    expect(tieneCapacidad(v, 'gestionar_personal_operativo')).toBe(false)
+    expect(capacidadesDe(v).size).toBe(0)
+  })
+  it('las capacidades operativas NO implican config/liquidación/económico/roles', () => {
+    for (const p of ['supervisor', 'jefe_supervisores'] as const) {
+      const u = { puesto_organizacional: p }
+      expect(tieneCapacidad(u, 'configurar_sistema')).toBe(false)
+      expect(tieneCapacidad(u, 'preparar_liquidacion')).toBe(false)
+      expect(tieneCapacidad(u, 'ver_liquidacion')).toBe(false)
+      expect(tieneCapacidad(u, 'ver_finanzas')).toBe(false)
+      expect(tieneCapacidad(u, 'gestionar_usuarios_roles')).toBe(false)
+      expect(tieneCapacidad(u, 'gestionar_personal')).toBe(false)   // no es gestión de personal COMPLETA
+      expect(esAdminPleno(u)).toBe(p === 'jefe_supervisores' ? false : false)
+    }
+  })
+  it('Sergio (jefe + Vista Admin) gana operativas pero sigue sin Config/económico', () => {
+    const sergio = { rol: 'admin', puesto_organizacional: 'jefe_supervisores', acceso_interfaz_admin: true }
+    expect(tieneCapacidad(sergio, 'gestionar_objetivos_operativos')).toBe(true)
+    expect(tieneCapacidad(sergio, 'gestionar_personal_operativo')).toBe(true)
+    expect(esAdminPleno(sergio)).toBe(false)
+    expect(tieneCapacidad(sergio, 'preparar_liquidacion')).toBe(false)
+    expect(tieneCapacidad(sergio, 'ver_finanzas')).toBe(false)
+  })
+})
+
 describe('permisos de Liquidación (preparar vs económico/banco)', () => {
   it('Administración PREPARA liquidación pero NO tiene económico/banco', () => {
     const a = { puesto_organizacional: 'administracion' }
