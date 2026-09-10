@@ -3,6 +3,7 @@ import {
   grupoDeResumen, construirResumenGuardia, construirResumenGuardiaVigiladores,
   type ParamsResumenGuardia, type TurnoResumen, type EmpleadoResumen,
 } from '@/lib/resumen-guardia'
+import { jornadasDeResumen } from '@/lib/excel-trabajo-liquidacion'
 import {
   construirLineasVisual, clasificarBloqueados,
   type ConceptoCfg, type PersonaPadron, type Hallazgo,
@@ -105,14 +106,15 @@ describe('jornadasReales real siempre, jornadas=0 para mensualizados', () => {
   })
 })
 
-// ── 4. 000: reglas de conteo + operativo vs mensualizado ─────────────────────
-// La derivación real del 000 la hace jornadasPorUsuarioDelMes:
-//   dias000 = (grupo vigiladores|supervisores) ? jornadasReales : 0
-// Acá se prueba la fuente (jornadasReales) y esa regla de mapeo.
+// ── 4. 000: reglas de conteo (vigilador real, mensualizado 25) ───────────────
+// La derivación real del 000 la hace jornadasDeResumen/jornadasPorUsuarioDelMes:
+//   dias000 = (grupo vigiladores) ? jornadasReales : 25   (regla JC 10/09)
+// Vigiladores por fechas reales; supervisores y administrativos (mensualizados)
+// = 25 fijas. Acá se prueba la fuente (jornadasReales) y ese mapeo.
 const dias000 = (grupo: string, jornadasReales: number) =>
-  (grupo === 'vigiladores' || grupo === 'supervisores') ? jornadasReales : 0
+  grupo === 'vigiladores' ? jornadasReales : 25
 
-describe('000 DÍAS: conteo y operativo vs mensualizado', () => {
+describe('000 DÍAS: conteo (vigilador real) y mensualizado (25 fijas)', () => {
   it('vigilador 26 fechas → 000 = 26', () => {
     const turnos: TurnoResumen[] = []; const registros: RegistroUniverso[] = []
     for (let d = 1; d <= 26; d++) { const id = `v${d}`; turnos.push(turno({ id, fecha: dia(d) })); registros.push(registro({ turno_id: id, horas_liquidables: 12 })) }
@@ -133,18 +135,34 @@ describe('000 DÍAS: conteo y operativo vs mensualizado', () => {
     const f = fila(construirResumenGuardia(base({ empleados: [emp('v1', 'vigilador')], turnos: [turno({ id: 't', fecha: dia(6) })], registros: [registro({ turno_id: 't', tipo_registro: 'ausencia', horas_liquidables: 0 })] })), 'v1')!
     expect(dias000(f.grupo, f.jornadasReales)).toBe(0)
   })
-  it('supervisor operativo con actividad → 000 automático', () => {
+  it('supervisor (mensualizado) → 000 = 25 fijas, sin importar la actividad real', () => {
     const turnos: TurnoResumen[] = []; const registros: RegistroUniverso[] = []
     for (let d = 1; d <= 8; d++) { const id = `s${d}`; turnos.push(turno({ id, fecha: dia(d), guardia_id: 'sup' })); registros.push(registro({ turno_id: id, guardia_id: 'sup', horas_liquidables: 12 })) }
     const f = fila(construirResumenGuardia(base({ empleados: [emp('sup', 'supervisor')], turnos, registros })), 'sup')!
-    expect(dias000(f.grupo, f.jornadasReales)).toBe(8)
+    expect(f.jornadasReales).toBe(8)               // el conteo real sigue disponible
+    expect(dias000(f.grupo, f.jornadasReales)).toBe(25)  // pero el 000 va 25
   })
-  it('administrativo aunque tuviera actividad → NO deriva de turnos (000 manual)', () => {
+  it('administrativo (mensualizado) → 000 = 25 fijas', () => {
     const turnos = [turno({ id: 't', fecha: dia(3), guardia_id: 'adm' })]
     const registros = [registro({ turno_id: 't', guardia_id: 'adm', horas_liquidables: 12 })]
     const f = fila(construirResumenGuardia(base({ empleados: [emp('adm', 'administracion')], turnos, registros })), 'adm')!
     expect(f.grupo).toBe('administrativos')
-    expect(dias000(f.grupo, f.jornadasReales)).toBe(0) // mensualizado: manual
+    expect(dias000(f.grupo, f.jornadasReales)).toBe(25)
+  })
+
+  // Test de la FUNCIÓN real (no un re-implemento): jornadasDeResumen.
+  it('jornadasDeResumen: vigilador por fechas reales, supervisor y admin = 25', () => {
+    const turnos: TurnoResumen[] = []; const registros: RegistroUniverso[] = []
+    for (let d = 1; d <= 12; d++) { const id = `v${d}`; turnos.push(turno({ id, fecha: dia(d), guardia_id: 'v1' })); registros.push(registro({ turno_id: id, guardia_id: 'v1', horas_liquidables: 12 })) }
+    for (let d = 1; d <= 8; d++) { const id = `s${d}`; turnos.push(turno({ id, fecha: dia(d), guardia_id: 'sup' })); registros.push(registro({ turno_id: id, guardia_id: 'sup', horas_liquidables: 12 })) }
+    const resumen = construirResumenGuardia(base({
+      empleados: [emp('v1', 'vigilador'), emp('sup', 'supervisor'), emp('adm', 'administracion')],
+      turnos, registros,
+    }))
+    const j = jornadasDeResumen(resumen)
+    expect(j.get('v1')).toBe(12)   // vigilador: 12 fechas reales
+    expect(j.get('sup')).toBe(25)  // supervisor mensualizado: 25 fijas
+    expect(j.get('adm')).toBe(25)  // administrativo mensualizado: 25 fijas
   })
 })
 

@@ -149,6 +149,21 @@ export async function plantillaTrabajoDelMes(
     }
   }
 
+  // ── EXTRA fija mensual (concepto "extras" AP) ─────────────────────────────
+  // Misma mecánica que SUELDO MENSUAL: por usuario_id, vigencia, arrastre. La
+  // celda AP del grupo fijo la resuelve emitirFila con este valor (editable).
+  const { data: extrasData } = await client.from('liquidacion_extra_mensual')
+    .select('usuario_id, importe, vigencia_desde, vigencia_hasta')
+  const extraPorEmpleado = new Map<string, number>()
+  const mejorDesdeExtra = new Map<string, string>()
+  for (const e of (extrasData ?? []) as any[]) {
+    const d = String(e.vigencia_desde); const h = e.vigencia_hasta ? String(e.vigencia_hasta) : null
+    if (d <= finMes && (!h || h >= inicioMes)) {
+      const cur = mejorDesdeExtra.get(e.usuario_id)
+      if (!cur || d > cur) { mejorDesdeExtra.set(e.usuario_id, d); extraPorEmpleado.set(e.usuario_id, Number(e.importe)) }
+    }
+  }
+
   const resumen = construirResumenGuardia({
     mes,
     empleados,
@@ -175,7 +190,7 @@ export async function plantillaTrabajoDelMes(
 
   if (resumen.filas.length === 0) return { plantilla: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
 
-  const plantilla = plantillaLiquidacionResumenGuardia(resumen, ajustesPorEmpleado, sueldoMensualPorEmpleado)
+  const plantilla = plantillaLiquidacionResumenGuardia(resumen, ajustesPorEmpleado, sueldoMensualPorEmpleado, extraPorEmpleado)
   return { plantilla, filas: resumen.filas.length, error: null, resumen }
 }
 
@@ -188,13 +203,10 @@ export async function plantillaTrabajoDelMes(
  * trabajados, y aplica las correcciones de horas). SIN tope de 25 (si trabajó 27
  * fechas, son 27). NO copia el mes anterior ni usa valores históricos de Visual.
  *
- * OPERATIVO vs MENSUALIZADO (regla JC): el 000 se DERIVA de la actividad real
- * SÓLO para personal operativo — vigiladores y SUPERVISORES (un supervisor que
- * hace guardias tiene 000 de sus fechas reales). Los ADMINISTRATIVOS/jerárquicos
- * (BLOQUE 3, mensualizados) NO derivan jornadas de turnos: devuelven 0 → quedan
- * pendientes de carga manual (no se inventan fichajes). Un operativo sin
- * actividad también da 0 (pendiente). Se usa `jornadasReales` (conteo real, sin
- * el 0 de mensualizados), no `jornadas` (que va en 0 para el sueldo mensualizado).
+ * VIGILADOR vs MENSUALIZADO (regla JC 10/09): el 000 se DERIVA de la actividad
+ * real SÓLO para VIGILADORES (sus fechas efectivamente trabajadas). Supervisores
+ * y ADMINISTRATIVOS/jerárquicos (mensualizados) NO derivan jornadas de turnos:
+ * devuelven 25 fijas. Se usa `jornadasReales` para el vigilador (conteo real).
  *
  * La planilla YA REVISADA manda: si Juan corrigió las jornadas en el Excel de
  * trabajo antes de consolidar (queda en `liquidacion_ajuste`, clave 'jornadas'),
@@ -208,11 +220,11 @@ export async function jornadasPorUsuarioDelMes(
   const { resumen, error } = await plantillaTrabajoDelMes(client, periodo.mes)
   if (error || !resumen) return { jornadas: new Map(), corregidos: 0, error: error || 'sin resumen' }
   const out = new Map<string, number>()
-  // Operativos (vigiladores + supervisores) → jornadas reales trabajadas.
-  // Administrativos (mensualizados) → 0 (no se derivan de turnos; carga manual).
+  // Vigiladores → jornadas reales trabajadas. El resto (supervisores +
+  // administrativos = mensualizados) → 25 fijas (pedido de JC 10/09).
   for (const f of resumen.filas) {
-    const operativo = f.grupo === 'vigiladores' || f.grupo === 'supervisores'
-    out.set(f.empleadoId, operativo ? Number(f.jornadasReales ?? 0) : 0)
+    const esVigilador = f.grupo === 'vigiladores'
+    out.set(f.empleadoId, esVigilador ? Number(f.jornadasReales ?? 0) : 25)
   }
   // Overlay de la planilla revisada: una corrección manual de jornadas hecha en
   // el Excel de trabajo pisa el conteo (es la verdad que se va a liquidar).
@@ -305,15 +317,15 @@ export function filasConsolidadasDePlantilla(plantilla: PlantillaLiquidacion): F
 
 /**
  * 000/jornadas por empleado a partir de un resumen YA CONSTRUIDO (sin releer):
- * operativos (vigiladores + supervisores) → jornadas reales trabajadas;
- * mensualizados (administrativos) → 0 (carga manual). Misma regla que
- * jornadasPorUsuarioDelMes, pero sin volver a leer turnos/planillas.
+ * vigiladores → jornadas reales trabajadas; el resto (supervisores +
+ * administrativos = mensualizados) → 25 fijas (pedido de JC 10/09). Un ajuste
+ * manual de 'jornadas' desde el Excel sigue pisando este valor aguas arriba.
  */
 export function jornadasDeResumen(resumen: ResumenGuardiaMes): Map<string, number> {
   const out = new Map<string, number>()
   for (const f of resumen.filas) {
-    const operativo = f.grupo === 'vigiladores' || f.grupo === 'supervisores'
-    out.set(f.empleadoId, operativo ? Number(f.jornadasReales ?? 0) : 0)
+    const esVigilador = f.grupo === 'vigiladores'
+    out.set(f.empleadoId, esVigilador ? Number(f.jornadasReales ?? 0) : 25)
   }
   return out
 }
