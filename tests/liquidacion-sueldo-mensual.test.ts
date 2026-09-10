@@ -72,15 +72,26 @@ describe('SUELDO MENSUAL — grupo A (mensualizados fijos)', () => {
 })
 
 describe('SUELDO MENSUAL — grupos B y C no cambian', () => {
-  it('supervisor operativo (Martínez, jefe_supervisores) → 25 días + convención, SIN SUELDO MENSUAL', () => {
-    const sm = new Map([['s1', 999999]])  // aunque haya un valor, a grupo B NO se le aplica
-    const { m, filaDe } = plantilla([SUP], sm)
+  it('supervisor operativo SIN sueldo mensual (Sergio/Sabino/Fulla) → 25 días + convención', () => {
+    const { m, filaDe } = plantilla([SUP])   // sin sueldo mensual cargado
     const r = filaDe('s1')
     expect(m.get(`G${r}`)?.v).toBe(25)
     expect(m.get(`AH${r}`)?.v).toBe(50)                 // adicional de convención
     expect(m.get(`AC${r}`)?.v).toBe(PARAMETROS_PLANTILLA.viatico)  // viáticos por convención
     expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$F$1`)      // 001 por fórmula de horas rec
-    expect(m.get(`BF${r}`)).toBeUndefined()             // NO lleva columna SUELDO MENSUAL
+    expect(m.get(`BF${r}`)).toBeUndefined()             // sin SUELDO MENSUAL cargado
+  })
+
+  it('supervisor CON sueldo mensual (Acosta/Monzón/Wilhjelm) → 001 = sueldo fijo, SIN 25/150 ni extras', () => {
+    const sm = new Map([['s1', 600000]])
+    const { m, filaDe } = plantilla([SUP], sm)
+    const r = filaDe('s1')
+    expect(m.get(`AJ${r}`)?.v).toBe(600000)   // 001 = SUELDO MENSUAL
+    expect(m.get(`BF${r}`)?.v).toBe(600000)
+    expect(m.get(`G${r}`)).toBeUndefined()    // sin 25 días inventados
+    expect(m.get(`I${r}`)).toBeUndefined()    // sin 150 horas
+    expect(m.get(`AC${r}`)?.v).toBe(0)        // sin viáticos
+    expect(m.get(`AH${r}`)).toBeUndefined()   // sin adicional de convención
   })
 
   it('vigilador → por horas reales, sin SUELDO MENSUAL', () => {
