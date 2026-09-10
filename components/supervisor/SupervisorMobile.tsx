@@ -516,7 +516,7 @@ export default function SupervisorMobile({ user }: any) {
   const [modalNuevoGuardia, setModalNuevoGuardia] = useState(false)
   const [modalNuevoObjetivo, setModalNuevoObjetivo] = useState(false)
   const [formNuevoGuardia, setFormNuevoGuardia] = useState({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', rol:'guardia', foto_url:'' })
-  const [formNuevoObjetivo, setFormNuevoObjetivo] = useState({ nombre:'', cliente:'', direccion:'', lat:'', lng:'', radio_metros:'200' })
+  const [formNuevoObjetivo, setFormNuevoObjetivo] = useState({ nombre:'', cliente:'', direccion:'', lat:'', lng:'', radio_metros:'200', zona_id:'' })
   const [accionAlerta, setAccionAlerta] = useState<AccionAlertaActiva | null>(null)
   const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const operacionesAlertaEnCurso = useRef<Set<string>>(new Set())
@@ -1485,7 +1485,7 @@ export default function SupervisorMobile({ user }: any) {
   }
 
   const resetFormNuevoObjetivo = () => {
-    setFormNuevoObjetivo({ nombre:'', cliente:'', direccion:'', lat:'', lng:'', radio_metros:'200' })
+    setFormNuevoObjetivo({ nombre:'', cliente:'', direccion:'', lat:'', lng:'', radio_metros:'200', zona_id:'' })
   }
 
   const tipoSolicitudLabel = (tipo: TipoSolicitudAdmin) => {
@@ -1559,6 +1559,12 @@ export default function SupervisorMobile({ user }: any) {
       setError('El nombre del objetivo es obligatorio.')
       return
     }
+    // Regla única: todo objetivo nace con zona válida. La solicitud debe llevar
+    // una zona del alcance del supervisor (o de todas, si es jefe).
+    if (!formNuevoObjetivo.zona_id) {
+      setError('Elegí la zona del objetivo.')
+      return
+    }
 
     const lat = formNuevoObjetivo.lat.trim() ? Number(formNuevoObjetivo.lat) : null
     const lng = formNuevoObjetivo.lng.trim() ? Number(formNuevoObjetivo.lng) : null
@@ -1580,6 +1586,7 @@ export default function SupervisorMobile({ user }: any) {
         lat,
         lng,
         radio_metros: radio,
+        zona_id: formNuevoObjetivo.zona_id,
         estado: 'activo',
       })
       setMensaje('Solicitud enviada: crear objetivo.')
@@ -4349,6 +4356,13 @@ export default function SupervisorMobile({ user }: any) {
             {error && <div style={{ ...errorBox, marginTop:12 }}>{error}</div>}
             <label style={label}>Nombre *</label>
             <input style={input} value={formNuevoObjetivo.nombre} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, nombre:e.target.value })} />
+            <label style={label}>Zona *</label>
+            <select style={input} value={formNuevoObjetivo.zona_id} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, zona_id:e.target.value })}>
+              <option value="">Seleccionar zona...</option>
+              {(alcanceTotal ? zonasOperativas : zonasOperativas.filter(z => zonasIdsAsignadas.has(z.id))).map(z => (
+                <option key={z.id} value={z.id}>{z.nombre}</option>
+              ))}
+            </select>
             <label style={label}>Cliente</label>
             <input style={input} value={formNuevoObjetivo.cliente} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, cliente:e.target.value })} />
             <label style={label}>Dirección</label>

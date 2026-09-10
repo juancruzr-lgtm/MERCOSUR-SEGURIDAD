@@ -3720,13 +3720,34 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
         alert('El radio no se guardó: primero hay que cargarle una ubicación al objetivo.')
       }
     } else {
-      // El alta sigue siendo un INSERT normal, con su radio. El trigger
-      // trg_objetivos_vigencia_alta abre la primera vigencia solo.
-      const { data } = await supabase
-        .from('objetivos')
-        .insert({ ...payload, radio_metros: radioNuevo })
-        .select()
-        .single()
+      // El alta NO es un INSERT directo: todo objetivo nace con zona válida en
+      // el alcance del que lo crea. La RPC crear_objetivo_operativo valida
+      // puesto + alcance de la zona y hace el INSERT (dispara el trigger que
+      // abre la primera vigencia y crea el puesto principal).
+      if (!payload.zona_id) {
+        alert('Elegí una zona para el objetivo: todo objetivo nuevo nace asociado a una zona.')
+        setLoading(false)
+        return
+      }
+      const { data, error } = await supabase.rpc('crear_objetivo_operativo', {
+        p_zona_id: payload.zona_id,
+        p_nombre: payload.nombre,
+        p_cliente: payload.cliente,
+        p_direccion: payload.direccion,
+        p_estado: payload.estado,
+        p_checklist_plantilla_id: payload.checklist_plantilla_id,
+        p_frecuencia_supervision_horas: payload.frecuencia_supervision_horas,
+        p_tipo_ubicacion: payload.tipo_ubicacion,
+        p_radio_metros: radioNuevo,
+        p_nocturnidad_activa: payload.nocturnidad_activa,
+        p_nocturnidad_desde: payload.nocturnidad_desde,
+        p_nocturnidad_hasta: payload.nocturnidad_hasta,
+      })
+      if (error) {
+        alert(`No se pudo crear el objetivo: ${error.message}`)
+        setLoading(false)
+        return
+      }
       if (data) setObjetivos((prev: any[]) => [...prev, data])
     }
 
@@ -9938,13 +9959,17 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
   const [accionLoading, setAccionLoading] = useState<string | null>(null)
   const [comentarios, setComentarios] = useState<Record<string, string>>({})
   const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error', texto: string } | null>(null)
+  // Zona que el aprobador elige para una solicitud crear_objetivo que no la
+  // traiga: todo objetivo nace con zona válida (regla única).
+  const [zonaSolicitud, setZonaSolicitud] = useState<Record<string, string>>({})
+  const [zonas, setZonas] = useState<{ id: string, nombre: string }[]>([])
 
   const cargar = async () => {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('solicitudes_admin')
-      .select('*')
-      .order('created_at', { ascending: false })
+    const [{ data, error }, zonasRes] = await Promise.all([
+      supabase.from('solicitudes_admin').select('*').order('created_at', { ascending: false }),
+      supabase.from('zonas_operativas').select('id, nombre').order('nombre'),
+    ])
 
     if (error) {
       setMensaje({ tipo:'error', texto:error.message })
@@ -9952,6 +9977,7 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
     } else {
       setSolicitudes((data || []) as SolicitudAdmin[])
     }
+    setZonas((zonasRes.data || []) as { id: string, nombre: string }[])
 
     setLoading(false)
   }
@@ -9981,53 +10007,29 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
     return String(value)
   }
 
-  const crearObjetivoDesdeSolicitud = async (datos: Record<string, any>) => {
-    const lat = datos.lat === null || datos.lat === undefined || datos.lat === '' ? null : Number(datos.lat)
-    const lng = datos.lng === null || datos.lng === undefined || datos.lng === '' ? null : Number(datos.lng)
-
+  const crearObjetivoDesdeSolicitud = async (datos: Record<string, any>, zonaId?: string | null) => {
     if (!String(datos.nombre || '').trim()) throw new Error('La solicitud no tiene nombre de objetivo.')
-    if ((lat !== null && !Number.isFinite(lat)) || (lng !== null && !Number.isFinite(lng))) throw new Error('La solicitud tiene GPS inválido.')
+    // Regla única: todo objetivo nace con zona válida. Si la solicitud no la
+    // trae, el aprobador la eligió recién (zonaId). Nunca INSERT con zona null.
+    const zona = zonaId || datos.zona_id || null
+    if (!zona) throw new Error('Elegí la zona del objetivo antes de aprobar: todo objetivo nace con zona.')
 
-    const payload = {
-      nombre: String(datos.nombre).trim(),
-      cliente: String(datos.cliente || '').trim() || null,
-      direccion: String(datos.direccion || '').trim() || null,
-      lat,
-      lng,
-      radio_metros: Number(datos.radio_metros) || 200,
-      estado: 'activo',
-    }
-
-    const { data, error } = await supabase.from('objetivos').insert(payload).select().single()
+    // La RPC revalida el alcance del APROBADOR sobre la zona (no confía en el JSON).
+    const { data, error } = await supabase.rpc('crear_objetivo_operativo', {
+      p_zona_id: zona,
+      p_nombre: String(datos.nombre).trim(),
+      p_cliente: String(datos.cliente || '').trim() || null,
+      p_direccion: String(datos.direccion || '').trim() || null,
+      p_radio_metros: Number(datos.radio_metros) || 300,
+    })
     if (error) throw error
     if (data) setObjetivos((prev: Objetivo[]) => [...prev, data])
-    return data?.id || null
+    return (data as any)?.id || null
   }
 
-  const crearGuardiaDesdeSolicitud = async (datos: Record<string, any>) => {
-    const rol = datos.rol === 'vigilador' ? 'vigilador' : 'guardia'
-
-    if (!String(datos.nombre || '').trim()) throw new Error('La solicitud no tiene nombre.')
-    if (!String(datos.apellido || '').trim()) throw new Error('La solicitud no tiene apellido.')
-    if (!String(datos.legajo || '').trim()) throw new Error('La solicitud no tiene legajo.')
-
-    const payload = {
-      nombre: String(datos.nombre).trim(),
-      apellido: String(datos.apellido).trim(),
-      dni: String(datos.dni || '').trim() || null,
-      telefono: String(datos.telefono || '').trim() || null,
-      legajo: String(datos.legajo).trim(),
-      email: String(datos.email || '').trim().toLowerCase() || null,
-      estado: 'activo',
-      rol,
-      foto_url: String(datos.foto_url || '').trim() || null,
-    }
-
-    const { data, error } = await supabase.from('usuarios').insert(payload).select().single()
-    if (error) throw error
-    if (data) setGuardias((prev: Usuario[]) => [...prev, data])
-    return data?.id || null
-  }
+  // Alta/baja de vigiladores ya NO pasan por INSERT/UPDATE directo sobre
+  // usuarios: se resuelven en resolver_solicitud_personal_operativo (RPC
+  // SECURITY DEFINER) desde aprobar(). Ver migración permisos_operativos.
 
   const inactivarObjetivo = async (id?: string | null) => {
     if (!id) throw new Error('La solicitud no tiene objetivo asociado.')
@@ -10085,12 +10087,28 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
     setMensaje(null)
 
     try {
+      // Alta/baja de vigiladores: por RPC de negocio SECURITY DEFINER. Valida
+      // actor, tipo, rol destino (guardia/vigilador) y alcance en la baja, y
+      // cierra la solicitud en la misma transacción. usuarios sigue cerrado.
+      if (solicitud.tipo === 'crear_vigilador' || solicitud.tipo === 'baja_vigilador') {
+        const { data, error } = await supabase.rpc('resolver_solicitud_personal_operativo', { p_solicitud_id: solicitud.id })
+        if (error) throw error
+        const resuelta = data as SolicitudAdmin
+        setSolicitudes(prev => prev.map(item => item.id === solicitud.id ? resuelta : item))
+        if (solicitud.tipo === 'crear_vigilador' && resuelta?.entidad_id) {
+          const { data: nuevo } = await supabase.from('usuarios').select('*').eq('id', resuelta.entidad_id).single()
+          if (nuevo) setGuardias((prev: Usuario[]) => [...prev, nuevo as Usuario])
+        } else if (solicitud.tipo === 'baja_vigilador' && resuelta?.entidad_id) {
+          setGuardias((prev: Usuario[]) => prev.map(g => g.id === resuelta.entidad_id ? { ...g, estado: 'inactivo' } : g))
+        }
+        setMensaje({ tipo:'ok', texto:'Solicitud aprobada correctamente.' })
+        return
+      }
+
       let entidadId = solicitud.entidad_id || null
 
-      if (solicitud.tipo === 'crear_objetivo') entidadId = await crearObjetivoDesdeSolicitud(datos)
+      if (solicitud.tipo === 'crear_objetivo') entidadId = await crearObjetivoDesdeSolicitud(datos, zonaSolicitud[solicitud.id])
       if (solicitud.tipo === 'baja_objetivo') await inactivarObjetivo(solicitud.entidad_id)
-      if (solicitud.tipo === 'crear_vigilador') entidadId = await crearGuardiaDesdeSolicitud(datos)
-      if (solicitud.tipo === 'baja_vigilador') await inactivarGuardia(solicitud.entidad_id)
 
       await cerrarSolicitud(solicitud, 'aprobado', entidadId)
       setMensaje({ tipo:'ok', texto:'Solicitud aprobada correctamente.' })
@@ -10147,6 +10165,24 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
 
         {resoluble && (
           <>
+            {/* Todo objetivo nace con zona. Si la solicitud no la trae, el
+                aprobador la elige acá antes de poder aprobar. */}
+            {solicitud.tipo === 'crear_objetivo' && !datos.zona_id && (
+              <div style={{ marginBottom:12 }}>
+                <label style={S.label}>Zona del objetivo *</label>
+                <select
+                  style={S.select}
+                  value={zonaSolicitud[solicitud.id] || ''}
+                  onChange={e => setZonaSolicitud(prev => ({ ...prev, [solicitud.id]: e.target.value }))}
+                >
+                  <option value="">Seleccionar zona...</option>
+                  {zonas.map(z => <option key={z.id} value={z.id}>{z.nombre}</option>)}
+                </select>
+                {!zonaSolicitud[solicitud.id] && (
+                  <div style={{ fontSize:11, color:'#f59e0b', marginTop:6 }}>Elegí una zona: el objetivo no puede crearse sin zona.</div>
+                )}
+              </div>
+            )}
             <label style={S.label}>Comentario administrativo</label>
             <textarea
               style={{ ...S.input, resize:'vertical', minHeight:68, marginBottom:12 }}
@@ -10165,7 +10201,10 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
               <button
                 style={{ ...S.btn, background:'rgba(16,185,129,.16)', color:'#86efac', border:'1px solid rgba(16,185,129,.35)' }}
                 onClick={() => aprobar(solicitud)}
-                disabled={accionLoading === `rechazar-${solicitud.id}` || accionLoading === `aprobar-${solicitud.id}`}
+                disabled={
+                  accionLoading === `rechazar-${solicitud.id}` || accionLoading === `aprobar-${solicitud.id}`
+                  || (solicitud.tipo === 'crear_objetivo' && !datos.zona_id && !zonaSolicitud[solicitud.id])
+                }
               >
                 {accionLoading === `aprobar-${solicitud.id}` ? 'Aprobando...' : 'Aprobar'}
               </button>
