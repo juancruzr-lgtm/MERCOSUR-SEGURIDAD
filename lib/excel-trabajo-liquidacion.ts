@@ -98,6 +98,27 @@ export async function generarLibroGeneralTrabajo(
 }
 
 /**
+ * Excel COMPLETO del mes = el Excel de trabajo (con los ajustes cargados) MÁS una
+ * solapa "NETO A PAGAR" con lo que recibe cada empleado (neto de Visual + sueldo
+ * mensual de los que no pasan por Visual). El neto sólo existe si el período ya
+ * tiene resultado de Visual importado; si no, la solapa sale vacía (aviso).
+ */
+export async function generarExcelCompletoConNeto(
+  client: any,
+  periodo: { id: string; mes: string },
+): Promise<{ buf: ArrayBuffer | null; filas: number; netos: number; error: string | null }> {
+  const ajustes = await cargarAjustes(client, periodo.id)
+  const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes)
+  if (error || !plantilla) return { buf: null, filas: 0, netos: 0, error: error || 'sin plantilla' }
+  const { filasSueldosBanco } = await import('@/lib/pagos-banco')
+  const neto = await filasSueldosBanco(client, periodo.id)
+  const netos = (neto.rows ?? []).map(r => ({ nombre: r.nombre, importe: r.importe }))
+  const { escribirExcelConNeto } = await import('@/lib/liquidacion-xlsx')
+  const buf = await escribirExcelConNeto(plantilla, netos)
+  return { buf, filas, netos: netos.length, error: null }
+}
+
+/**
  * Arma la PlantillaLiquidacion del mes (padrón + resumen + fórmulas) SIN
  * escribirla a bytes. Es la fuente única del "baseline MERCOSUR" que consumen
  * tanto el generador (LIQ2A) como el reimport/comparación (LIQ2B): así el valor

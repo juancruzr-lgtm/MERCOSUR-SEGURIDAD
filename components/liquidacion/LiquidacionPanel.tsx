@@ -254,11 +254,11 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     if (!sel) return
     setGenBanco('completo'); setMsgBanco(null)
     try {
-      const { generarExcelTrabajoLiquidacion } = await import('@/lib/excel-trabajo-liquidacion')
-      const r = await generarExcelTrabajoLiquidacion(supabase, sel.mes, { periodoId: sel.id })
+      const { generarExcelCompletoConNeto } = await import('@/lib/excel-trabajo-liquidacion')
+      const r = await generarExcelCompletoConNeto(supabase, { id: sel.id, mes: sel.mes })
       if (r.error || !r.buf) { setMsgBanco({ ok: false, t: 'No se pudo generar el Excel completo: ' + (r.error || 'sin datos') }); return }
       descargarArchivo(r.buf, `liquidacion_completa_${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      setMsgBanco({ ok: true, t: `Excel completo del mes generado (${r.filas} empleados) con tus cambios y los totales.` })
+      setMsgBanco({ ok: true, t: `Excel completo del mes generado (${r.filas} empleados) con tus cambios, los totales y la solapa NETO A PAGAR (${r.netos} persona(s) — lo que recibe cada uno).` })
     } catch (e: any) {
       setMsgBanco({ ok: false, t: 'No se pudo generar el Excel completo: ' + (e?.message || e) })
     } finally { setGenBanco('') }
