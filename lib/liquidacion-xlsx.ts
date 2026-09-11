@@ -54,6 +54,42 @@ export async function escribirPlantillaLiquidacionXLSX(
   // AL=MAX(0,…) de mensualizados) se refrescan en Excel/LibreOffice al abrir.
   wb.calcProperties.fullCalcOnLoad = true
   const ws = wb.addWorksheet(plantilla.nombreHoja)
+  escribirHojaDePlantilla(ws, plantilla)
+  const buf = await wb.xlsx.writeBuffer()
+  return buf as ArrayBuffer
+}
+
+/**
+ * Libro GENERAL con todos los meses: una SOLAPA por mes (mismo formato que el
+ * Excel de trabajo de cada mes). El orden lo decide quien llama (JC: el último
+ * adelante). Reutiliza `escribirHojaDePlantilla` para que cada solapa salga
+ * idéntica al Excel de trabajo individual.
+ */
+export async function escribirLibroMultiMes(
+  hojas: { nombre: string; plantilla: PlantillaLiquidacion }[],
+): Promise<ArrayBuffer> {
+  const ExcelJS = (await import('exceljs')).default
+  const wb = new ExcelJS.Workbook()
+  wb.calcProperties.fullCalcOnLoad = true
+  const usados = new Set<string>()
+  for (const h of hojas) {
+    // Excel: nombre de hoja ≤ 31 chars, único, sin caracteres prohibidos.
+    let nombre = (h.nombre || 'Mes').replace(/[\\/?*[\]:]/g, '-').slice(0, 31)
+    let i = 2
+    while (usados.has(nombre)) { nombre = `${nombre.slice(0, 28)}-${i++}` }
+    usados.add(nombre)
+    const ws = wb.addWorksheet(nombre)
+    escribirHojaDePlantilla(ws, h.plantilla)
+  }
+  const buf = await wb.xlsx.writeBuffer()
+  return buf as ArrayBuffer
+}
+
+/** Escribe una plantilla YA construida en un worksheet dado (formato completo). */
+function escribirHojaDePlantilla(ws: any, plantilla: PlantillaLiquidacion): void {
+  const thin = { style: 'thin' as const, color: { argb: COLOR.linea } }
+  const medium = { style: 'medium' as const, color: { argb: COLOR.lineaFuerte } }
+  void thin
 
   // 1) Columnas: ancho, oculto y formato numérico.
   for (const c of plantilla.columnas) {
@@ -75,9 +111,6 @@ export async function escribirPlantillaLiquidacionXLSX(
   const primeraCol = visibles[0]
   const ultimaCol = visibles[visibles.length - 1]
   const { estilos } = plantilla
-
-  const thin = { style: 'thin' as const, color: { argb: COLOR.linea } }
-  const medium = { style: 'medium' as const, color: { argb: COLOR.lineaFuerte } }
 
   // 3) Bloque de parámetros (D1:E4 + F1/F2/G1/G2): caja + moneda + negrita.
   for (const r of estilos.parametros) {
@@ -189,9 +222,6 @@ export async function escribirPlantillaLiquidacionXLSX(
     // frágiles/riesgo de corromper el XLSX. Quedan sólo las celdas dinámicas de
     // arriba (Horas REC/Extras Vigiladores + %), vinculadas al subtotal vigiladores.
   }
-
-  const buf = await wb.xlsx.writeBuffer()
-  return buf as ArrayBuffer
 }
 
 
