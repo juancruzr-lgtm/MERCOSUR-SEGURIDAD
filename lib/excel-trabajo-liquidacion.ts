@@ -69,6 +69,35 @@ export async function generarExcelTrabajoLiquidacion(
 }
 
 /**
+ * LIBRO GENERAL: un solo .xlsx con TODOS los meses, una SOLAPA por período (el
+ * último adelante, pedido de JC). Cada solapa = el Excel de trabajo completo de
+ * ese mes (con sus ajustes/reimportaciones aplicados). Excluye los períodos
+ * anulados. Se arma en el momento desde los datos guardados: nunca depende de
+ * tener a mano el archivo de un mes anterior.
+ */
+export async function generarLibroGeneralTrabajo(
+  client: any,
+): Promise<{ buf: ArrayBuffer | null; meses: number; error: string | null }> {
+  const { data: periodos, error } = await client.from('liquidacion_periodo')
+    .select('id, mes, estado').neq('estado', 'anulado').order('mes', { ascending: false })
+  if (error) return { buf: null, meses: 0, error: error.message || String(error) }
+  const lista = (periodos ?? []) as Array<{ id: string; mes: string }>
+  if (lista.length === 0) return { buf: null, meses: 0, error: 'No hay períodos para el libro general.' }
+
+  const hojas: { nombre: string; plantilla: PlantillaLiquidacion }[] = []
+  for (const p of lista) {
+    const ajustes = await cargarAjustes(client, p.id)
+    const { plantilla } = await plantillaTrabajoDelMes(client, p.mes, ajustes)
+    if (plantilla) hojas.push({ nombre: p.mes, plantilla })
+  }
+  if (hojas.length === 0) return { buf: null, meses: 0, error: 'No se pudo construir ningún mes.' }
+
+  const { escribirLibroMultiMes } = await import('@/lib/liquidacion-xlsx')
+  const buf = await escribirLibroMultiMes(hojas)
+  return { buf, meses: hojas.length, error: null }
+}
+
+/**
  * Arma la PlantillaLiquidacion del mes (padrón + resumen + fórmulas) SIN
  * escribirla a bytes. Es la fuente única del "baseline MERCOSUR" que consumen
  * tanto el generador (LIQ2A) como el reimport/comparación (LIQ2B): así el valor

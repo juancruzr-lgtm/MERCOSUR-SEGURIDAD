@@ -104,6 +104,8 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // Export a Visual + validación pre-export
   const [genVisual, setGenVisual] = useState(false)
   const [validacion, setValidacion] = useState<any>(null)
+  const [genBanco, setGenBanco] = useState<'' | 'sueldos' | 'extras' | 'completo' | 'general'>('')
+  const [msgBanco, setMsgBanco] = useState<{ ok: boolean; t: string } | null>(null)
   // Banner READ-ONLY: cambios operativos posteriores al archivo enviado a Visual.
   const [cambiosPost, setCambiosPost] = useState<any>(null)
   // Permanentes
@@ -224,6 +226,57 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     } catch (e: any) {
       setMsg({ ok: false, t: 'No se pudo generar el Excel de trabajo: ' + (e?.message || e) })
     } finally { setGenExcel(false) }
+  }
+
+  const money = (n: number) => n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+  // PAGOS (banco Galicia): sueldos = neto de Visual + sueldo mensual de excluidos;
+  // extras = extra fija del mes. Formato Cuenta | Nombre | Importe (hoja Empleados).
+  async function descargarBanco(tipo: 'sueldos' | 'extras') {
+    if (!sel) return
+    setGenBanco(tipo); setMsgBanco(null)
+    try {
+      const { filasSueldosBanco, filasExtrasBanco, escribirBancoXLSX } = await import('@/lib/pagos-banco')
+      const r = tipo === 'sueldos' ? await filasSueldosBanco(supabase, sel.id) : await filasExtrasBanco(supabase, sel.id)
+      if (r.error) { setMsgBanco({ ok: false, t: `No se pudo generar el archivo de ${tipo}: ${r.error}` }); return }
+      if (r.rows.length === 0) { setMsgBanco({ ok: false, t: `No hay filas para ${tipo} (¿faltan cuentas o el resultado de Visual?).` }); return }
+      const buf = await escribirBancoXLSX(r.rows)
+      descargarArchivo(buf, `GALICIA ${tipo} ${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      setMsgBanco({ ok: true, t: `Archivo de ${tipo}: ${r.rows.length} persona(s), total $${money(r.total)}.` })
+    } catch (e: any) {
+      setMsgBanco({ ok: false, t: `No se pudo generar el archivo de ${tipo}: ${e?.message || e}` })
+    } finally { setGenBanco('') }
+  }
+
+  // Excel completo del mes (con los cambios/ajustes ya cargados) — disponible en
+  // cualquier estado (también después de exportar), para archivo/control.
+  async function descargarExcelCompleto() {
+    if (!sel) return
+    setGenBanco('completo'); setMsgBanco(null)
+    try {
+      const { generarExcelTrabajoLiquidacion } = await import('@/lib/excel-trabajo-liquidacion')
+      const r = await generarExcelTrabajoLiquidacion(supabase, sel.mes, { periodoId: sel.id })
+      if (r.error || !r.buf) { setMsgBanco({ ok: false, t: 'No se pudo generar el Excel completo: ' + (r.error || 'sin datos') }); return }
+      descargarArchivo(r.buf, `liquidacion_completa_${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      setMsgBanco({ ok: true, t: `Excel completo del mes generado (${r.filas} empleados) con tus cambios y los totales.` })
+    } catch (e: any) {
+      setMsgBanco({ ok: false, t: 'No se pudo generar el Excel completo: ' + (e?.message || e) })
+    } finally { setGenBanco('') }
+  }
+
+  // Libro GENERAL: un .xlsx con TODOS los meses, una solapa por período (último
+  // adelante). Se arma en el momento desde lo guardado (no necesita archivos viejos).
+  async function descargarLibroGeneral() {
+    setGenBanco('general'); setMsgBanco(null)
+    try {
+      const { generarLibroGeneralTrabajo } = await import('@/lib/excel-trabajo-liquidacion')
+      const r = await generarLibroGeneralTrabajo(supabase)
+      if (r.error || !r.buf) { setMsgBanco({ ok: false, t: 'No se pudo generar el libro general: ' + (r.error || 'sin datos') }); return }
+      descargarArchivo(r.buf, `liquidaciones_todos_los_meses.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      setMsgBanco({ ok: true, t: `Libro general generado: ${r.meses} mes(es), una solapa por mes (el último adelante).` })
+    } catch (e: any) {
+      setMsgBanco({ ok: false, t: 'No se pudo generar el libro general: ' + (e?.message || e) })
+    } finally { setGenBanco('') }
   }
 
   async function crearPeriodo() {
@@ -548,6 +601,29 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
               <PasoHeader n={5} titulo="Resultado de Visual" sub="Importar la planilla final y conciliar contra lo enviado" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
               <ImportarResultadoVisual periodo={sel} />
 
+              {/* ═══ PASO 6 · PAGOS (banco Galicia) — descargas ═══ */}
+              <PasoHeader n={6} titulo="Pagos — archivos para el banco" sub="Sueldos (neto) y extras a acreditar (formato Galicia: Cuenta | Nombre | Importe)" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
+              <div style={{ ...S.card, marginTop: 8 }}>
+                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
+                  <b>Sueldos</b> = neto que devolvió Visual por persona + el sueldo mensual de los de nómina que no pasan por Visual (todos con cuenta). <b>Extras</b> = la extra fija del mes por persona con cuenta. El <b>Excel completo</b> trae tus cambios y los totales. El <b>libro general</b> junta todos los meses, una solapa por mes (el último adelante).
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button style={{ ...S.btn, opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarBanco('sueldos')}>
+                    {genBanco === 'sueldos' ? 'Generando…' : '📄 Descargar Galicia — Sueldos'}
+                  </button>
+                  <button style={{ ...S.btn, opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarBanco('extras')}>
+                    {genBanco === 'extras' ? 'Generando…' : '📄 Descargar Galicia — Extras'}
+                  </button>
+                  <button style={{ ...S.btn, background: '#334155', opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarExcelCompleto()}>
+                    {genBanco === 'completo' ? 'Generando…' : '📊 Descargar Excel completo (con totales)'}
+                  </button>
+                  <button style={{ ...S.btn, background: '#334155', opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarLibroGeneral()}>
+                    {genBanco === 'general' ? 'Generando…' : '📚 Descargar libro general (todos los meses)'}
+                  </button>
+                </div>
+                {msgBanco && <div style={{ color: msgBanco.ok ? '#4ade80' : '#f87171', fontSize: 13, marginTop: 10 }}>{msgBanco.t}</div>}
+              </div>
+
               {/* ─── Herramientas de revisión (auxiliares): OCULTAS (JC) hasta tener
                    el editable real por empleado. Código, datos y RPCs intactos. ─── */}
               {MOSTRAR_HERRAMIENTAS_REVISION && (
@@ -593,7 +669,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
 
               {/* ─── Próximas fases (pendientes, NO implementadas todavía) ─── */}
               <div style={{ marginTop: 18, padding: 10, background: '#0f1a2e', border: '1px dashed #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd' }}>
-                <b>Próximas fases (pendientes, aún no implementadas):</b> Pagos / acreditación bancaria Galicia (espera el archivo real), Libro de Sueldos Digital, ARCA/AFIP y Facturación. No se avanza hasta cerrar el flujo actual.
+                <b>Próximas fases (pendientes, aún no implementadas):</b> Libro de Sueldos Digital, ARCA/AFIP y Facturación. (Los archivos de acreditación Galicia — sueldos y extras — ya se generan en el paso 6.)
               </div>
             </div>
           )}
