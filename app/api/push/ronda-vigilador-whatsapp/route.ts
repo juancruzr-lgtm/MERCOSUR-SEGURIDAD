@@ -281,7 +281,10 @@ export async function GET(req: Request) {
     const r = await proveedor.enviar({
       telefono: tel.e164, plantilla: PLANTILLA,
       variables: [c.objetivo_nombre, c.ronda_nombre, c.horario],
-      boton: { urlSuffix },
+      // DEUDA: el botón del template quedó como `.../dashboard{{1}}` (sin `?`), así
+      // que el `?` lo agrega el sufijo acá para que la URL final sea válida. Cuando
+      // se corrija el template a `.../dashboard?{{1}}`, QUITAR este `?` (si no, `??`).
+      boton: { urlSuffix: `?${urlSuffix}` },
     })
     acciones.push({
       ronda: c.ronda_nombre, objetivo: c.objetivo_nombre,
