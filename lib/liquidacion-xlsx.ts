@@ -85,46 +85,6 @@ export async function escribirLibroMultiMes(
   return buf as ArrayBuffer
 }
 
-/**
- * Excel completo del mes: la hoja de trabajo (mismo formato) MÁS una solapa
- * "NETO A PAGAR" con lo que efectivamente recibe cada empleado (Nombre | Neto),
- * ordenado por nombre, con total al pie. El neto lo provee quien llama (sale del
- * resultado de Visual + sueldo mensual de los que no pasan por Visual).
- */
-export async function escribirExcelConNeto(
-  plantilla: PlantillaLiquidacion,
-  netos: { nombre: string; importe: number }[],
-): Promise<ArrayBuffer> {
-  const ExcelJS = (await import('exceljs')).default
-  const wb = new ExcelJS.Workbook()
-  wb.calcProperties.fullCalcOnLoad = true
-  escribirHojaDePlantilla(wb.addWorksheet(plantilla.nombreHoja), plantilla)
-
-  const ws = wb.addWorksheet('NETO A PAGAR')
-  ws.getColumn(1).width = 36
-  ws.getColumn(2).width = 16
-  ws.getColumn(2).numFmt = NUM_FMT.money
-  const h1 = ws.getCell('A1'); h1.value = 'Empleado'
-  const h2 = ws.getCell('B1'); h2.value = 'Neto a pagar'
-  for (const c of [h1, h2]) { c.font = { bold: true, color: { argb: COLOR.headerFg } }; c.fill = fillOf(COLOR.headerBg) }
-  let total = 0
-  netos.forEach((n, i) => {
-    const r = i + 2
-    ws.getCell(`A${r}`).value = n.nombre
-    ws.getCell(`B${r}`).value = Math.round(n.importe * 100) / 100
-    total += n.importe
-  })
-  const tr = netos.length + 2
-  const tA = ws.getCell(`A${tr}`); tA.value = `TOTAL (${netos.length})`; tA.font = { bold: true }
-  const tB = ws.getCell(`B${tr}`); tB.value = Math.round(total * 100) / 100; tB.font = { bold: true }
-  tB.numFmt = NUM_FMT.money
-  for (const c of [tA, tB]) c.fill = fillOf(COLOR.subtotalBg)
-  ws.views = [{ state: 'frozen', ySplit: 1 }]
-
-  const buf = await wb.xlsx.writeBuffer()
-  return buf as ArrayBuffer
-}
-
 /** Escribe una plantilla YA construida en un worksheet dado (formato completo). */
 function escribirHojaDePlantilla(ws: any, plantilla: PlantillaLiquidacion): void {
   const thin = { style: 'thin' as const, color: { argb: COLOR.linea } }

@@ -97,11 +97,35 @@ export async function generarLibroGeneralTrabajo(
   return { buf, meses: hojas.length, error: null }
 }
 
+const COL_A_NUM = (col: string): number => { let n = 0; for (const ch of col) n = n * 26 + (ch.charCodeAt(0) - 64); return n }
+const NUM_A_COL = (n: number): string => { let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26) } return s }
+
+/** Neto de RECIBO (Visual) por usuario_id: sólo los que tienen recibo en Visual. */
+async function netoReciboPorUsuario(client: any, periodoId: string): Promise<Map<string, number>> {
+  const map = new Map<string, number>()
+  const { data: rv } = await client.from('liquidacion_resultado_visual')
+    .select('id').eq('periodo_id', periodoId).eq('vigente', true).limit(1)
+  const resId = ((rv ?? []) as any[])[0]?.id
+  if (!resId) return map
+  const [{ data: filas }, { data: personas }] = await Promise.all([
+    client.from('liquidacion_resultado_fila').select('cuil, neto').eq('resultado_id', resId),
+    client.from('liquidacion_persona').select('cuil, usuario_id'),
+  ])
+  const usuarioPorCuil = new Map<string, string>()
+  for (const p of (personas ?? []) as any[]) if (p.cuil && p.usuario_id) usuarioPorCuil.set(String(p.cuil), String(p.usuario_id))
+  for (const f of (filas ?? []) as any[]) {
+    if (!f.cuil || f.neto == null) continue
+    const uid = usuarioPorCuil.get(String(f.cuil))
+    if (uid) map.set(uid, Number(f.neto))
+  }
+  return map
+}
+
 /**
- * Excel COMPLETO del mes = el Excel de trabajo (con los ajustes cargados) MÁS una
- * solapa "NETO A PAGAR" con lo que recibe cada empleado (neto de Visual + sueldo
- * mensual de los que no pasan por Visual). El neto sólo existe si el período ya
- * tiene resultado de Visual importado; si no, la solapa sale vacía (aviso).
+ * Excel COMPLETO del mes = el Excel de trabajo (con los ajustes cargados) con una
+ * columna "NETO A PAGAR" AL FINAL: el neto de recibo (Visual) de cada empleado
+ * que tiene recibo, más el total al pie. Sólo se llena si el período ya tiene el
+ * resultado de Visual importado; el resto de las filas queda en blanco.
  */
 export async function generarExcelCompletoConNeto(
   client: any,
@@ -110,12 +134,26 @@ export async function generarExcelCompletoConNeto(
   const ajustes = await cargarAjustes(client, periodo.id)
   const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes)
   if (error || !plantilla) return { buf: null, filas: 0, netos: 0, error: error || 'sin plantilla' }
-  const { filasSueldosBanco } = await import('@/lib/pagos-banco')
-  const neto = await filasSueldosBanco(client, periodo.id)
-  const netos = (neto.rows ?? []).map(r => ({ nombre: r.nombre, importe: r.importe }))
-  const { escribirExcelConNeto } = await import('@/lib/liquidacion-xlsx')
-  const buf = await escribirExcelConNeto(plantilla, netos)
-  return { buf, filas, netos: netos.length, error: null }
+
+  const netoMap = await netoReciboPorUsuario(client, periodo.id)
+  const nextCol = NUM_A_COL(Math.max(...plantilla.columnas.map(c => COL_A_NUM(c.col))) + 1)
+  const enc = plantilla.estilos.encabezado
+  const celdas = [...plantilla.celdas, { ref: `${nextCol}${enc}`, v: 'NETO A PAGAR' }]
+  const bdRow = new Map<number, string>()
+  for (const c of plantilla.celdas) { const m = c.ref.match(/^BD(\d+)$/); if (m) bdRow.set(Number(m[1]), String(c.v ?? '')) }
+  let total = 0, netos = 0
+  for (const r of plantilla.estilos.filasDatos) {
+    const uid = bdRow.get(r); if (!uid) continue
+    const neto = netoMap.get(uid)
+    if (neto != null) { celdas.push({ ref: `${nextCol}${r}`, v: Math.round(neto * 100) / 100 }); total += neto; netos++ }
+  }
+  celdas.push({ ref: `${nextCol}${plantilla.estilos.total}`, v: Math.round(total * 100) / 100 })
+  const columnas = [...plantilla.columnas, { col: nextCol, width: 16, numFmt: 'money' as const }]
+  const plant2 = { ...plantilla, celdas, columnas }
+
+  const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
+  const buf = await escribirPlantillaLiquidacionXLSX(plant2)
+  return { buf, filas, netos, error: null }
 }
 
 /**
