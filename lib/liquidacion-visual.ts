@@ -54,6 +54,12 @@ const num = (v: CeldaVisual): number | null => {
 const RE_CODIGO = /^\s*"?(\d+)\s+(.+?)\s*$/
 const COLS_TOTALES = new Set(['imponible', 'no imponible', 'descuentos', 'asignaciones', 'neto'])
 const esCant = (h: string) => /^cant\.?$/i.test(h)
+// Renglón de pie de la planilla ("Totales Liquidación", "TOTALES", subtotales):
+// no representa a una persona. Visual lo emite SIN CUIL y con una etiqueta de
+// total en LEGAJO o NOMBRE. Hay que excluirlo o se cuela como "persona fantasma"
+// en liquidacion_resultado_fila e infla el neto_total (agosto 2026: duplicaba el
+// total real ~93,9M → ~187,8M).
+const RE_TOTALES_PIE = /total(es)?/i
 
 /** Encuentra la fila de encabezados (la que tiene LEGAJO y CUIL). */
 function detectarEncabezado(filas: CeldaVisual[][]): number {
@@ -106,11 +112,16 @@ export function parsearPlanillaVisual(filas: CeldaVisual[][]): PlanillaVisualPar
     const cuil = iCuil >= 0 ? norm(fila[iCuil]) : ''
     const legajo = iLegajo >= 0 ? norm(fila[iLegajo]) : ''
     const nombre = iNombre >= 0 ? norm(fila[iNombre]) : ''
-    // Fin de datos: fila sin CUIL ni legajo (totales/pie).
-    if (!cuil && !legajo) continue
-    // CUIL válido = 11 dígitos; si no, se marca (empleado se resolverá igual por otras claves).
     const cuilLimpio = cuil.replace(/\D/g, '')
-    const cuilOut = cuilLimpio.length === 11 ? cuilLimpio : (cuil || null)
+    const cuilValido = cuilLimpio.length === 11
+    // Fin de datos / pie de planilla: se descarta la fila cuando NO trae CUIL
+    // válido y además (a) no identifica a nadie o (b) su LEGAJO/NOMBRE es una
+    // etiqueta de totales. Un empleado real siempre trae CUIL de 11 dígitos, así
+    // que esto nunca descarta personas; y se conservan las filas de empleados con
+    // CUIL malformado pero legajo/nombre propios (se resuelven por otras claves).
+    if (!cuilValido && ((!legajo && !nombre) || RE_TOTALES_PIE.test(legajo) || RE_TOTALES_PIE.test(nombre))) continue
+    // CUIL válido = 11 dígitos; si no, se marca (empleado se resolverá igual por otras claves).
+    const cuilOut = cuilValido ? cuilLimpio : (cuil || null)
     for (const cp of conceptos) {
       const importe = num(fila[cp.col])
       const cantidad = cp.colCant >= 0 ? num(fila[cp.colCant]) : null
