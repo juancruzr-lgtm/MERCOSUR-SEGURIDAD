@@ -23,6 +23,28 @@ function grillaBase(): CeldaVisual[][] {
   ]
 }
 
+// Grilla que reproduce el pie REAL de Visual: el renglón de totales trae la
+// etiqueta "Totales Liquidación" en la columna LEGAJO (no en NOMBRE) y los
+// importes en las columnas calculadas. Antes se colaba como una "persona"
+// (cuil=null) e inflaba el neto_total (agosto 2026: ~93,9M → ~187,8M).
+function grillaConPieTotales(): CeldaVisual[][] {
+  return [
+    ['MERCOSUR SEGURIDAD SRL', ' - Planilla de Sueldos'],
+    ['Fecha de Emisión: 08/09/2026'],
+    [],
+    ['LEGAJO', 'NOMBRE', 'CUIL', 'FEC.INGRESO', 'CTRO.CTO.', 'O.SOCIAL', 'FECHA NAC.', 'CATEGORIA',
+      '000 DIAS TRABAJADAS', 'Cant.', '050 dif', 'Cant.', '977 EXPEDIENTE ALIMENTOS', 'Cant.',
+      'Imponible', 'No Imponible', 'Descuentos', 'Asignaciones', 'Neto'],
+    ['ALMADA', 'ALMADA  ESTANISLAO', '20144945817', '01/02/2023', '', 'OS', '', 'CAT',
+      20, 20, 100, 0, 5000, 1, 900000, 0, 5000, 0, 895000],
+    ['NARVARTE', 'NARVARTE  MARIA', '23174138664', '', '', '', '', '',
+      20, 20, 0, 0, 0, 0, 500000, 0, 3000, 0, 497000],
+    // Pie real: etiqueta en LEGAJO, sin CUIL, con importes de totales.
+    ['Totales Liquidación', null, null, '', '', '', '', '',
+      null, null, null, null, null, null, 1400000, 0, 8000, 0, 1392000],
+  ]
+}
+
 describe('parsearPlanillaVisual', () => {
   it('detecta encabezado, conceptos por código y excluye columnas de totales', () => {
     const p = parsearPlanillaVisual(grillaBase())
@@ -55,6 +77,19 @@ describe('parsearPlanillaVisual', () => {
     const p = parsearPlanillaVisual(grillaBase())
     expect(p.totales.some(t => t.cuil === null)).toBe(false)
     expect(p.totales.length).toBe(2) // ALMADA + CERO (la de pie no)
+  })
+
+  it('excluye el renglón de pie "Totales Liquidación" (legajo con etiqueta, sin CUIL)', () => {
+    const p = parsearPlanillaVisual(grillaConPieTotales())
+    // Sólo las 2 personas reales, nunca el pie.
+    expect(p.totales.length).toBe(2)
+    expect(p.totales.every(t => t.cuil !== null)).toBe(true)
+    expect(p.totales.map(t => t.cuil).sort()).toEqual(['20144945817', '23174138664'])
+    // El neto suma sólo las personas (895000 + 497000), no el total del pie.
+    const netoTotal = p.totales.reduce((a, t) => a + (t.neto ?? 0), 0)
+    expect(netoTotal).toBe(1392000)
+    // Y el pie no debe generar conceptos.
+    expect(p.lineas.every(l => l.cuil !== null)).toBe(true)
   })
 
   it('categoriaSugerida: 050 dif = base_auxiliar; embargo/aliment = descuento; presentismo = asignacion', () => {
