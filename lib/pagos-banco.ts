@@ -7,7 +7,17 @@
 // = extra fija vigente del mes. Toda la lógica vive en las RPC pagos_*_banco.
 
 export interface FilaBanco { cuenta: string; nombre: string; importe: number }
-export interface ArchivoBanco { rows: FilaBanco[]; total: number; error: string | null }
+export interface ArchivoBanco {
+  rows: FilaBanco[]              // cuentas de Galicia (van al archivo)
+  excluidos: FilaBanco[]         // CBU/cuenta de otro banco: NO entran (pagar aparte)
+  total: number
+  error: string | null
+}
+
+// El batch de Galicia acredita a CUENTAS de Galicia (numéricas, hasta ~14 dígitos).
+// Un CBU (22 dígitos) o cuenta de otro banco NO se puede acreditar por este archivo
+// → se deja afuera y se avisa para pagarla por separado. (Caso ALMARA: CBU 072…)
+const esCuentaGalicia = (c: string): boolean => /^\d{6,18}$/.test(c) && c.length !== 22
 
 function mapRows(data: any[]): FilaBanco[] {
   return (data ?? []).map((r) => ({
@@ -17,18 +27,22 @@ function mapRows(data: any[]): FilaBanco[] {
   }))
 }
 
+function partir(rows: FilaBanco[]): ArchivoBanco {
+  const galicia = rows.filter(r => esCuentaGalicia(r.cuenta))
+  const excluidos = rows.filter(r => !esCuentaGalicia(r.cuenta))
+  return { rows: galicia, excluidos, total: Math.round(galicia.reduce((a, b) => a + b.importe, 0) * 100) / 100, error: null }
+}
+
 export async function filasSueldosBanco(client: any, periodoId: string): Promise<ArchivoBanco> {
   const { data, error } = await client.rpc('pagos_sueldos_banco', { p_periodo_id: periodoId })
-  if (error) return { rows: [], total: 0, error: error.message || String(error) }
-  const rows = mapRows(data)
-  return { rows, total: Math.round(rows.reduce((a, b) => a + b.importe, 0) * 100) / 100, error: null }
+  if (error) return { rows: [], excluidos: [], total: 0, error: error.message || String(error) }
+  return partir(mapRows(data))
 }
 
 export async function filasExtrasBanco(client: any, periodoId: string): Promise<ArchivoBanco> {
   const { data, error } = await client.rpc('pagos_extras_banco', { p_periodo_id: periodoId })
-  if (error) return { rows: [], total: 0, error: error.message || String(error) }
-  const rows = mapRows(data)
-  return { rows, total: Math.round(rows.reduce((a, b) => a + b.importe, 0) * 100) / 100, error: null }
+  if (error) return { rows: [], excluidos: [], total: 0, error: error.message || String(error) }
+  return partir(mapRows(data))
 }
 
 /**
