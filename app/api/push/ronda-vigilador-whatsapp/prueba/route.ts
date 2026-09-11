@@ -39,12 +39,15 @@ export async function POST(req: Request) {
   // Mismo contrato que el endpoint real: 3 variables de cuerpo + botón de URL
   // dinámica (índice 0). Valores de ejemplo; el deep link va a un id inexistente
   // (TEST) a propósito: la app abre el dashboard y no encuentra ronda, inocuo.
+  // El sufijo arranca con `?` porque el template quedó con la URL base sin `?`
+  // (`.../dashboard{{1}}`). Cuando se corrija el template, quitar el `?` (ver el
+  // endpoint real).
   const plantilla = process.env.WHATSAPP_PLANTILLA_RONDA_VIGILADOR || 'ronda_pendiente_vigilador'
   const resultado = await proveedor.enviar({
     telefono: tel.e164,
     plantilla,
     variables: ['DEPOSITO CENTRAL', 'Ronda perimetral', '06:00'],
-    boton: { urlSuffix: 'ronda=TEST&turno=TEST&objetivo=TEST&ventana=0' },
+    boton: { urlSuffix: '?ronda=TEST&turno=TEST&objetivo=TEST&ventana=0' },
   })
 
   return NextResponse.json({
