@@ -13,7 +13,7 @@
 
 import {
   construirLineasVisual, escribirLibroVisualXls, clasificarBloqueados,
-  CODIGO_DIF_OS, BASICO_VIGILANCIA_133,
+  CODIGOS_SOBRE_BASICO, BASICO_VIGILANCIA_133,
   type ConceptoCfg, type PersonaPadron, type HaberLinea, type PermanenteLinea, type ExpedienteLinea,
   type ResultadoLineas, type Hallazgo,
 } from '@/lib/visual-export'
@@ -223,7 +223,7 @@ export async function regenerarVisualDesdeEnviado(
     for (const f of (fr ?? []) as any[]) { const c = String(f.cuil ?? '').replace(/\D/g, ''); if (c && f.imponible != null) imp.set(c, Number(f.imponible)) }
   }
   const filas = ((r.data ?? []) as any[])
-    .filter(x => !(String(x.codigo) === CODIGO_DIF_OS && (imp.get(String(x.cuil ?? '').replace(/\D/g, '')) ?? 0) >= BASICO_VIGILANCIA_133))
+    .filter(x => !(CODIGOS_SOBRE_BASICO.has(String(x.codigo)) && (imp.get(String(x.cuil ?? '').replace(/\D/g, '')) ?? 0) >= BASICO_VIGILANCIA_133))
     .map(x => ({
       legajo: String(x.cod_interno ?? ''), cuil: String(x.cuil ?? ''), codigo: String(x.codigo),
       cantidad: x.cantidad == null ? null : Number(x.cantidad),

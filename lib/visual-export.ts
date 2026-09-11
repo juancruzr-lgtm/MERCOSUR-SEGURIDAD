@@ -50,13 +50,15 @@ export type Entrada = 'IMP' | 'CAN' | 'CANIMP' | 'CALCULADO'
 
 export interface ConceptoCfg { politica: Politica; entrada: Entrada; nombre?: string; categoria?: string }
 
-// Diferencia de O.S. (133): la calcula Visual = 3% * (BÁSICO DE VIGILANCIA − IMPONIBLE).
-// Da NEGATIVO cuando el imponible ≥ básico (911650). El imponible incluye la
-// ANTIGÜEDAD (011), que la calcula Visual — MERCOSUR NO la computa —, así que la
-// decisión de mandar o no el 133 se toma con el IMPONIBLE que devolvió Visual (del
-// resultado importado). Si imponible ≥ básico → NO se manda el 133 (regla JC 11/09).
-export const CODIGO_DIF_OS = '133'
+// AJUSTE al básico (050) y DIFERENCIA de O.S. (133): sólo corresponden cuando el
+// remunerativo está POR DEBAJO del básico de vigilancia (911650): el 050 ajusta la
+// base hasta el básico y el 133 ajusta la O.S. a ese básico. Si el IMPONIBLE de la
+// persona ≥ básico, NINGUNO de los dos corresponde (el 050 declararía una base
+// 911650 menor que la real y el 133 daría negativo) → NO se mandan (regla JC 11/09).
+// El imponible incluye la ANTIGÜEDAD (011) que calcula Visual (MERCOSUR no), por eso
+// la decisión usa el IMPONIBLE del resultado importado.
 export const BASICO_VIGILANCIA_133 = 911650
+export const CODIGOS_SOBRE_BASICO = new Set(['050', '133'])
 // Persona liquidable (padrón canónico), no necesariamente un usuario de la app.
 export interface PersonaPadron {
   persona_id: string
@@ -166,16 +168,17 @@ export function construirLineasVisual(p: {
     // 2) 000 DÍAS (CAN): dato editable de la persona.
     if (dias != null) emitir('000', dias, null)
 
-    // 133 (diferencia O.S.): se omite si el imponible que devolvió Visual ≥ básico
-    // (daría negativo). El imponible incluye la antigüedad que MERCOSUR no calcula,
+    // 050 (ajuste) y 133 (dif. O.S.): se omiten si el imponible que devolvió Visual
+    // ≥ básico (no corresponden; el 050 declararía una base menor a la real y el 133
+    // daría negativo). El imponible incluye la antigüedad que MERCOSUR no calcula,
     // por eso se toma del resultado importado (imponiblePorCuil). Sin resultado aún
-    // (1er export), se manda como siempre y se corrige al regenerar tras importar.
+    // (1er export) se mandan como siempre y se corrige al regenerar tras importar.
     const impon = p.imponiblePorCuil?.get(cuil)
-    const omitir133 = impon != null && impon >= BASICO_VIGILANCIA_133
+    const sobreBasico = impon != null && impon >= BASICO_VIGILANCIA_133
 
-    // 3) Líneas 0/0 estructurales para TODOS (Visual calcula). EXCEPCIÓN: el 133.
+    // 3) Líneas 0/0 estructurales para TODOS (Visual calcula). EXCEPCIÓN: 050 y 133.
     for (const codigo of p.lineaCero) {
-      if (codigo === CODIGO_DIF_OS && omitir133) continue
+      if (sobreBasico && CODIGOS_SOBRE_BASICO.has(codigo)) continue
       if (!p.catalogo.get(codigo)) { advertencias.push({ ...base, codigo, tipo: 'linea_cero_sin_config', detalle: `estructural ${codigo} sin config; se omite` }); continue }
       emitir(codigo, 0, 0)
     }
