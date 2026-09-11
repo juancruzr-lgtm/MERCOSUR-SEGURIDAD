@@ -1200,7 +1200,12 @@ export function plantillaLiquidacionResumenGuardia(
     const AD = (P.presentismo / 25) * H
     const AE = (P.noRem / 25) * H
     const AF = (hora / 10) * J
-    const AG = I <= 150 ? H * 8 : 150
+    // AG "horas rec" = horas reconocidas que se pagan en el 001. Por defecto sale
+    // de la fórmula (I<=150? H*8 : 150), pero es EDITABLE: si Juan la corrige en el
+    // Excel, ese valor manda (se reimporta como 'horas_rec') y el 001 lo refleja.
+    const ovHorasRec = ov['horas_rec']
+    const tieneOvHorasRec = ovHorasRec !== undefined && ovHorasRec !== null
+    const AG = ovNum('horas_rec', I <= 150 ? H * 8 : 150)
     // ADICIONAL: AH = "hs a valor pleno" (concepto 212), input que alimenta la
     // columna 'adicional' AI = AH*hora. Base mensualizada = 50; vigilador vacío.
     const AH = ovNum('adicional_hs', mensualizado ? 50 : 0)
@@ -1248,7 +1253,8 @@ export function plantillaLiquidacionResumenGuardia(
     put(`AD${r}`, gAD, esSueldoFijo ? undefined : `($E$2/25)*H${r}`)
     put(`AE${r}`, gAE, esSueldoFijo ? undefined : `($E$4/25)*H${r}`)
     put(`AF${r}`, gAF, esSueldoFijo ? undefined : `($F$1/10)*J${r}`)
-    put(`AG${r}`, gAG, esSueldoFijo ? undefined : `IF(I${r}<=150,H${r}*8,150)`)
+    // Si Juan editó "horas rec", va como VALOR (su número manda); si no, la fórmula.
+    put(`AG${r}`, gAG, esSueldoFijo || tieneOvHorasRec ? undefined : `IF(I${r}<=150,H${r}*8,150)`)
     // Convención (B sin sueldo fijo): AH=50. Vigilador/sueldo fijo: NO se emite.
     if (gAH !== 0) put(`AH${r}`, gAH)
     put(`AI${r}`, gAI, esSueldoFijo ? undefined : `AH${r}*$F$1`)

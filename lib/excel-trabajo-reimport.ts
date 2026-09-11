@@ -36,6 +36,10 @@ export const VARIABLES_REIMPORT: VariableReimport[] = [
   { clave: 'vacaciones', col: 'N', idx: 13, etiqueta: 'Vacaciones' },
   { clave: 'parte_medico', col: 'O', idx: 14, etiqueta: 'Parte médico' },
   { clave: 'aus_susp', col: 'P', idx: 15, etiqueta: 'Aus/Susp' },
+  // "Horas rec" (AG): horas reconocidas que se pagan en el 001. Por defecto es
+  // fórmula, pero Juan la puede corregir a mano en el Excel y acá se captura para
+  // que el 001 la refleje (va a liquidacion_ajuste como el resto de las variables).
+  { clave: 'horas_rec', col: 'AG', idx: 32, etiqueta: 'Horas rec (001)' },
   { clave: 'adicional_hs', col: 'AH', idx: 33, etiqueta: 'Adicional (hs)' },
   { clave: 'adelantos', col: 'AR', idx: 43, etiqueta: 'Adelantos' },
   // SUELDO MENSUAL (grupo A). Se detecta como cualquier variable, pero al
