@@ -13,7 +13,7 @@ function fakeClient(tablas: Record<string, any[]>, opts: { errorEn?: string; con
       ? { data: null, error: { message: `falla ${name}` } }
       : { data: rows, error: null }
     const builder: any = {
-      select: () => builder, order: () => builder, eq: () => builder,
+      select: () => builder, order: () => builder, eq: () => builder, limit: () => builder,
       lte: () => builder, gte: () => builder, lt: () => builder, gt: () => builder, in: () => builder,
       range: (d: number, h: number) => opts.errorEn === name
         ? Promise.resolve({ data: null, error: { message: `falla ${name}` } })

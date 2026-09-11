@@ -48,7 +48,15 @@ const HDR_NOMBRE = 'Nombre y Apellido (solo como referencia, no se importa)'
 export type Politica = 'valor' | 'linea_cero' | 'individual' | 'no'
 export type Entrada = 'IMP' | 'CAN' | 'CANIMP' | 'CALCULADO'
 
-export interface ConceptoCfg { politica: Politica; entrada: Entrada; nombre?: string }
+export interface ConceptoCfg { politica: Politica; entrada: Entrada; nombre?: string; categoria?: string }
+
+// Diferencia de O.S. (133): la calcula Visual = 3% * (BÁSICO DE VIGILANCIA − IMPONIBLE).
+// Da NEGATIVO cuando el imponible ≥ básico (911650). El imponible incluye la
+// ANTIGÜEDAD (011), que la calcula Visual — MERCOSUR NO la computa —, así que la
+// decisión de mandar o no el 133 se toma con el IMPONIBLE que devolvió Visual (del
+// resultado importado). Si imponible ≥ básico → NO se manda el 133 (regla JC 11/09).
+export const CODIGO_DIF_OS = '133'
+export const BASICO_VIGILANCIA_133 = 911650
 // Persona liquidable (padrón canónico), no necesariamente un usuario de la app.
 export interface PersonaPadron {
   persona_id: string
@@ -116,6 +124,7 @@ export function construirLineasVisual(p: {
   permanentes: Map<string, PermanenteLinea[]> // calculados individuales por persona_id
   expedientes: Map<string, ExpedienteLinea[]> // expedientes de importe vigentes por persona_id
   lineaCero: string[]
+  imponiblePorCuil?: Map<string, number>      // imponible de Visual por CUIL (para el 133)
 }): ResultadoLineas {
   const lineas: FilaVisual[] = []
   const criticos: Hallazgo[] = []
@@ -157,8 +166,16 @@ export function construirLineasVisual(p: {
     // 2) 000 DÍAS (CAN): dato editable de la persona.
     if (dias != null) emitir('000', dias, null)
 
-    // 3) Líneas 0/0 estructurales para TODOS (Visual calcula).
+    // 133 (diferencia O.S.): se omite si el imponible que devolvió Visual ≥ básico
+    // (daría negativo). El imponible incluye la antigüedad que MERCOSUR no calcula,
+    // por eso se toma del resultado importado (imponiblePorCuil). Sin resultado aún
+    // (1er export), se manda como siempre y se corrige al regenerar tras importar.
+    const impon = p.imponiblePorCuil?.get(cuil)
+    const omitir133 = impon != null && impon >= BASICO_VIGILANCIA_133
+
+    // 3) Líneas 0/0 estructurales para TODOS (Visual calcula). EXCEPCIÓN: el 133.
     for (const codigo of p.lineaCero) {
+      if (codigo === CODIGO_DIF_OS && omitir133) continue
       if (!p.catalogo.get(codigo)) { advertencias.push({ ...base, codigo, tipo: 'linea_cero_sin_config', detalle: `estructural ${codigo} sin config; se omite` }); continue }
       emitir(codigo, 0, 0)
     }

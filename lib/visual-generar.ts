@@ -13,6 +13,7 @@
 
 import {
   construirLineasVisual, escribirLibroVisualXls, clasificarBloqueados,
+  CODIGO_DIF_OS, BASICO_VIGILANCIA_133,
   type ConceptoCfg, type PersonaPadron, type HaberLinea, type PermanenteLinea, type ExpedienteLinea,
   type ResultadoLineas, type Hallazgo,
 } from '@/lib/visual-export'
@@ -46,7 +47,7 @@ async function cargarYConstruirVisual(
   const { desde, hasta } = limitesMes(periodo.mes)
   const [personasR, catR, permR, expR, diasR] = await Promise.all([
     client.from('liquidacion_persona').select('id, usuario_id, cuil, nombre, cod_interno, estado_liquidable, motivo').in('estado_liquidable', ['activo', 'excluido']),
-    client.from('liquidacion_concepto_catalogo').select('codigo_visual, politica, entrada'),
+    client.from('liquidacion_concepto_catalogo').select('codigo_visual, politica, entrada, categoria'),
     client.from('liquidacion_concepto_permanente').select('empleado_id, persona_id, importe, activo, vigencia_desde, vigencia_hasta, concepto:concepto_id(codigo_visual)').eq('activo', true),
     client.from('liquidacion_expediente').select('persona_id, referencia, importe, slot_preferido, estado, vigencia_desde, vigencia_hasta').eq('estado', 'activo'),
     client.from('liquidacion_dias').select('persona_id, dias, origen').eq('periodo_id', periodo.id),
@@ -69,7 +70,7 @@ async function cargarYConstruirVisual(
   const catalogo = new Map<string, ConceptoCfg>(); const lineaCero: string[] = []
   for (const c of (catR.data ?? []) as any[]) {
     if (!c.codigo_visual) continue
-    catalogo.set(String(c.codigo_visual), { politica: c.politica, entrada: c.entrada })
+    catalogo.set(String(c.codigo_visual), { politica: c.politica, entrada: c.entrada, categoria: c.categoria })
     if (c.politica === 'linea_cero') lineaCero.push(String(c.codigo_visual))
   }
 
@@ -117,7 +118,24 @@ async function cargarYConstruirVisual(
     dias.set(p.id, j > 0 ? j : null)
   }
 
-  const resultado = construirLineasVisual({ padron, catalogo, haberes, dias, permanentes, expedientes, lineaCero })
+  // Imponible por CUIL del resultado de Visual VIGENTE (si ya se importó): decide
+  // el 133 (diferencia O.S.) — se omite cuando el imponible ≥ básico de vigilancia,
+  // porque ahí Visual lo calcularía negativo (el imponible incluye la antigüedad
+  // que MERCOSUR no computa). Sin resultado aún, el 133 sale como siempre.
+  const imponiblePorCuil = new Map<string, number>()
+  const { data: rv } = await client.from('liquidacion_resultado_visual')
+    .select('id').eq('periodo_id', periodo.id).eq('vigente', true).limit(1)
+  const resId = ((rv ?? []) as any[])[0]?.id
+  if (resId) {
+    const { data: filasRes } = await client.from('liquidacion_resultado_fila')
+      .select('cuil, imponible').eq('resultado_id', resId)
+    for (const f of (filasRes ?? []) as any[]) {
+      const c = String(f.cuil ?? '').replace(/\D/g, '')
+      if (c && f.imponible != null) imponiblePorCuil.set(c, Number(f.imponible))
+    }
+  }
+
+  const resultado = construirLineasVisual({ padron, catalogo, haberes, dias, permanentes, expedientes, lineaCero, imponiblePorCuil })
   return { resultado, personas: personas.length, error: null }
 }
 
@@ -193,12 +211,25 @@ export async function regenerarVisualDesdeEnviado(
   const r = await client.from('liquidacion_enviado_visual')
     .select('cod_interno, cuil, codigo, cantidad, importe').eq('periodo_id', periodoId)
   if (r.error) return { bytes: null, lineas: 0, error: r.error.message }
-  const filas = ((r.data ?? []) as any[]).map(x => ({
-    legajo: String(x.cod_interno ?? ''), cuil: String(x.cuil ?? ''), codigo: String(x.codigo),
-    cantidad: x.cantidad == null ? null : Number(x.cantidad),
-    importe: x.importe == null ? null : Number(x.importe),
-    nombre: '',
-  }))
+  // Imponible del resultado importado, para omitir el 133 donde ≥ básico (daría
+  // negativo). El enviado se congeló con 133 para todos; acá se depura con el
+  // imponible real de Visual (que ya conocemos tras importar el resultado).
+  const imp = new Map<string, number>()
+  const { data: rvE } = await client.from('liquidacion_resultado_visual')
+    .select('id').eq('periodo_id', periodoId).eq('vigente', true).limit(1)
+  const resIdE = ((rvE ?? []) as any[])[0]?.id
+  if (resIdE) {
+    const { data: fr } = await client.from('liquidacion_resultado_fila').select('cuil, imponible').eq('resultado_id', resIdE)
+    for (const f of (fr ?? []) as any[]) { const c = String(f.cuil ?? '').replace(/\D/g, ''); if (c && f.imponible != null) imp.set(c, Number(f.imponible)) }
+  }
+  const filas = ((r.data ?? []) as any[])
+    .filter(x => !(String(x.codigo) === CODIGO_DIF_OS && (imp.get(String(x.cuil ?? '').replace(/\D/g, '')) ?? 0) >= BASICO_VIGILANCIA_133))
+    .map(x => ({
+      legajo: String(x.cod_interno ?? ''), cuil: String(x.cuil ?? ''), codigo: String(x.codigo),
+      cantidad: x.cantidad == null ? null : Number(x.cantidad),
+      importe: x.importe == null ? null : Number(x.importe),
+      nombre: '',
+    }))
   if (filas.length === 0) return { bytes: null, lineas: 0, error: 'No hay líneas registradas como enviadas a Visual.' }
   const bytes = await escribirLibroVisualXls(filas)
   return { bytes, lineas: filas.length, error: null }
