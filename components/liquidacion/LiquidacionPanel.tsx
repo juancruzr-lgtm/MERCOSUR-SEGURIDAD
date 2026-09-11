@@ -242,7 +242,10 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       if (r.rows.length === 0) { setMsgBanco({ ok: false, t: `No hay filas para ${tipo} (¿faltan cuentas o el resultado de Visual?).` }); return }
       const buf = await escribirBancoXLSX(r.rows)
       descargarArchivo(buf, `GALICIA ${tipo} ${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      setMsgBanco({ ok: true, t: `Archivo de ${tipo}: ${r.rows.length} persona(s), total $${money(r.total)}.` })
+      const avisoExc = r.excluidos.length
+        ? ` · ⚠️ ${r.excluidos.length} con CBU/cuenta de otro banco NO entran al archivo (pagar aparte): ${r.excluidos.map(e => e.nombre).join('; ')}`
+        : ''
+      setMsgBanco({ ok: true, t: `Archivo de ${tipo}: ${r.rows.length} persona(s), total $${money(r.total)}.${avisoExc}` })
     } catch (e: any) {
       setMsgBanco({ ok: false, t: `No se pudo generar el archivo de ${tipo}: ${e?.message || e}` })
     } finally { setGenBanco('') }
