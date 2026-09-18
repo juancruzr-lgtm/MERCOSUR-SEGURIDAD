@@ -105,6 +105,11 @@ function agruparAlertas(alertas: RondaAlerta[]): GrupoAlerta[] {
       grupo.ultimaAlerta = a
     }
   }
+  // Dentro de cada grupo, las ventanas más NUEVAS primero (antes iban en el
+  // orden de la consulta, ascendente = vieja→nueva).
+  for (const grupo of mapa.values()) {
+    grupo.alertas.sort((x, y) => msAlerta(y.detectada_at) - msAlerta(x.detectada_at))
+  }
   return Array.from(mapa.values()).sort((a, b) => {
     if (a.pendientes !== b.pendientes) return b.pendientes - a.pendientes
     return msAlerta(b.ultimaAlerta.detectada_at) - msAlerta(a.ultimaAlerta.detectada_at)
