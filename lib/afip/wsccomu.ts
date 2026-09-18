@@ -17,6 +17,13 @@ import type { AfipTA } from '@/lib/afip/wsaa'
 
 export const SERVICIO_WSCCOMU = 'veconsumerws'
 
+/**
+ * Sistema publicador de Ventanilla Electrónica confirmado en PRODUCCIÓN para
+ * Simplificación Registral (id=25, "Simplificación Registral"). Se usa sólo como
+ * dato para filtrar/buscar comunicaciones; NO se infiere alta/baja acá.
+ */
+export const PUBLICADOR_SIMPLIFICACION_REGISTRAL = 25
+
 const ENDPOINT = 'https://infraestructura.afip.gob.ar/ve-ws/services/veconsumer'
 
 const NS_TYPES = 'http://ve.tecno.afip.gov.ar/domain/service/ws/types'
