@@ -73,6 +73,7 @@ interface Usuario {
   telefono?: string
   rol: string
   estado: string
+  auth_user_id?: string | null
 }
 
 interface Objetivo {
@@ -622,7 +623,7 @@ export default function SupervisorMobile({ user }: any) {
         .order('nombre'),
       supabase
         .from('usuarios')
-        .select('id, nombre, apellido, legajo, rol, estado, email, telefono, foto_url')
+        .select('id, nombre, apellido, legajo, rol, estado, email, telefono, foto_url, auth_user_id')
         .in('rol', ['guardia', 'vigilador'])
         .order('apellido'),
       supabase
@@ -705,11 +706,11 @@ export default function SupervisorMobile({ user }: any) {
     if (guardiasError?.message?.includes('usuarios.email') || guardiasError?.message?.includes('usuarios.telefono') || guardiasError?.message?.includes('usuarios.foto_url')) {
       const retry = await supabase
         .from('usuarios')
-        .select('id, nombre, apellido, legajo, rol, estado')
+        .select('id, nombre, apellido, legajo, rol, estado, auth_user_id')
         .in('rol', ['guardia', 'vigilador'])
         .order('apellido')
 
-      guardiasData = retry.data
+      guardiasData = retry.data as typeof guardiasData
       guardiasError = retry.error
     }
 
@@ -1636,6 +1637,36 @@ export default function SupervisorMobile({ user }: any) {
       setGuardiaEditando(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo dar de baja el vigilador.')
+    } finally {
+      setAsignando(null)
+    }
+  }
+
+  const crearAccesoGuardia = async (guardia: Usuario) => {
+    setAsignando(`acceso-guardia-${guardia.id}`)
+    setError('')
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData?.session?.access_token
+      if (!token) throw new Error('Sesión de supervisor no disponible.')
+
+      // El servidor valida la capacidad operativa y que la cuenta sea de un
+      // vigilador (necesita email y DNI cargados; la contraseña inicial es el DNI).
+      const res = await fetch('/api/create-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ usuario_id: guardia.id }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'No se pudo crear el acceso.')
+
+      setGuardias(prev => prev.map(g => g.id === guardia.id
+        ? { ...g, auth_user_id: data?.user?.auth_user_id || g.auth_user_id || 'creado', email: data?.user?.email ?? g.email }
+        : g))
+      setMensaje(`Acceso creado: ${guardia.apellido}, ${guardia.nombre} entra con su email y su DNI como contraseña.`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo crear el acceso.')
     } finally {
       setAsignando(null)
     }
@@ -3427,6 +3458,15 @@ export default function SupervisorMobile({ user }: any) {
                       >
                         {asignando === `baja-guardia-${g.id}` ? 'Dando de baja...' : 'Dar de baja vigilador'}
                       </button>
+                      {!g.auth_user_id && (
+                        <button
+                          style={{ ...refreshButton, gridColumn:'1 / -1', opacity: asignando === `acceso-guardia-${g.id}` ? 0.65 : 1 }}
+                          onClick={() => crearAccesoGuardia(g)}
+                          disabled={asignando === `acceso-guardia-${g.id}`}
+                        >
+                          {asignando === `acceso-guardia-${g.id}` ? 'Creando acceso...' : 'Crear acceso a la app'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
