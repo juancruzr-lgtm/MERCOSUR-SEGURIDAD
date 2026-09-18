@@ -91,15 +91,19 @@ function sobre(operacion: string, cuerpoInterno: string): string {
     `</soap:Body></soap:Envelope>`
 }
 
-/** POST del sobre. Devuelve la respuesta cruda (texto y, si es MTOM, binario). */
-async function postSoap(soap: string): Promise<{ res: Response; buf: ArrayBuffer }> {
+/**
+ * POST del sobre. AFIP responde SIEMPRE en MTOM/multipart (aun sin adjuntos), así
+ * que desenvolvemos acá: devolvemos el XML raíz (SOAP) ya limpio y el mapa de
+ * partes binarias (Content-ID → base64) para los adjuntos.
+ */
+async function postSoap(soap: string): Promise<{ xml: string; partes: Map<string, string> }> {
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
     body: soap,
   })
   const buf = await res.arrayBuffer()
-  return { res, buf }
+  return separarMtom(buf, res.headers.get('content-type') || '')
 }
 
 /** Busca recursivamente el primer nodo cuya clave (sin prefijo) sea `nombre`. */
@@ -128,37 +132,35 @@ function faultDe(doc: any): WsccomuError | null {
   return null
 }
 
-const dec = new TextDecoder('utf-8')
-
 /**
  * Separa un cuerpo MTOM/XOP (multipart/related): devuelve el XML raíz (SOAP) y
- * un mapa de Content-ID → contenido base64 de cada parte binaria. Si la respuesta
- * no es multipart, `partes` queda vacío y `xml` es el cuerpo completo.
+ * un mapa de Content-ID → contenido base64 de cada parte binaria. Trabaja a nivel
+ * de bytes (latin1) para no corromper los adjuntos; el XML raíz se re-decodifica
+ * como UTF-8. Si la respuesta no es multipart, `partes` queda vacío.
  */
 function separarMtom(buf: ArrayBuffer, contentType: string): { xml: string; partes: Map<string, string> } {
   const partes = new Map<string, string>()
+  const raw = Buffer.from(buf)
   const m = /boundary="?([^";]+)"?/i.exec(contentType || '')
-  if (!contentType?.includes('multipart') || !m) {
-    return { xml: dec.decode(buf), partes }
+  if (!/multipart/i.test(contentType || '') || !m) {
+    return { xml: raw.toString('utf8'), partes }
   }
-  const boundary = m[1]
-  const bytes = new Uint8Array(buf)
-  const full = dec.decode(bytes) // latin1 sería más fiel para binario; para base64/CID alcanza
-  const bloques = full.split('--' + boundary)
+  const boundary = '--' + m[1]
+  const bloques = raw.toString('latin1').split(boundary)
   let xml = ''
   for (const bloque of bloques) {
     const sep = bloque.indexOf('\r\n\r\n')
     if (sep < 0) continue
     const headers = bloque.slice(0, sep)
-    const cuerpo = bloque.slice(sep + 4).replace(/\r\n$/, '')
-    if (/application\/xop\+xml|type="application\/soap/i.test(headers) || /<.*Envelope/i.test(cuerpo.slice(0, 200))) {
-      if (!xml) xml = cuerpo
+    const cuerpoBytes = Buffer.from(bloque.slice(sep + 4).replace(/\r\n$/, ''), 'latin1')
+    if (/application\/xop\+xml|type="application\/soap/i.test(headers)) {
+      if (!xml) xml = cuerpoBytes.toString('utf8')
     } else {
       const cid = /Content-ID:\s*<?([^>\r\n]+)>?/i.exec(headers)?.[1]
-      if (cid) partes.set(cid.trim(), Buffer.from(cuerpo, 'binary').toString('base64'))
+      if (cid) partes.set(cid.trim(), cuerpoBytes.toString('base64'))
     }
   }
-  return { xml: xml || dec.decode(bytes), partes }
+  return { xml: xml || raw.toString('utf8'), partes }
 }
 
 // ---------------------------------------------------------------------------
@@ -167,8 +169,8 @@ function separarMtom(buf: ArrayBuffer, contentType: string): { xml: string; part
 
 export async function dummy(): Promise<{ ok: true; dbserver: string; appserver: string; authserver: string } | WsccomuError> {
   const soap = `<soap:Envelope xmlns:soap="${NS_SOAP}"><soap:Body><tns:dummy xmlns:tns="http://ve.tecno.afip.gov.ar/domain/service/ws"/></soap:Body></soap:Envelope>`
-  const { buf } = await postSoap(soap)
-  const doc = parser.parse(dec.decode(buf))
+  const { xml } = await postSoap(soap)
+  const doc = parser.parse(xml)
   const f = faultDe(doc); if (f) return f
   const r = buscar(doc, 'DummyResult') || {}
   return { ok: true, dbserver: r.dbserver, appserver: r.appserver, authserver: r.authserver }
@@ -180,8 +182,8 @@ export async function consultarSistemasPublicadores(
   cuitRepresentada: string,
 ): Promise<{ ok: true; sistemas: SistemaPublicador[] } | WsccomuError> {
   const soap = sobre('consultarSistemasPublicadores', authXml(ta, cuitRepresentada))
-  const { buf } = await postSoap(soap)
-  const doc = parser.parse(dec.decode(buf))
+  const { xml } = await postSoap(soap)
+  const doc = parser.parse(xml)
   const f = faultDe(doc); if (f) return f
   const sistemas = asArray(buscar(doc, 'Sistema')).map((s: any) => ({
     id: String(s.id),
@@ -206,8 +208,8 @@ export async function consultarComunicaciones(
   if (filtro.resultadosPorPagina) f.push(`<resultadosPorPagina>${filtro.resultadosPorPagina}</resultadosPorPagina>`)
 
   const soap = sobre('consultarComunicaciones', authXml(ta, cuitRepresentada) + `<filter>${f.join('')}</filter>`)
-  const { buf } = await postSoap(soap)
-  const doc = parser.parse(dec.decode(buf))
+  const { xml } = await postSoap(soap)
+  const doc = parser.parse(xml)
   const fault = faultDe(doc); if (fault) return fault
   const rp = buscar(doc, 'RespuestaPaginada') || {}
   const comunicaciones = asArray(buscar(rp, 'ComunicacionSimplificada')).map(mapResumen)
@@ -231,8 +233,7 @@ export async function consumirComunicacion(
     'consumirComunicacion',
     authXml(ta, cuitRepresentada) + `<idComunicacion>${idComunicacion}</idComunicacion><incluirAdjuntos>${incluirAdjuntos}</incluirAdjuntos>`,
   )
-  const { res, buf } = await postSoap(soap)
-  const { xml, partes } = separarMtom(buf, res.headers.get('content-type') || '')
+  const { xml, partes } = await postSoap(soap)
   const doc = parser.parse(xml)
   const fault = faultDe(doc); if (fault) return fault
 
