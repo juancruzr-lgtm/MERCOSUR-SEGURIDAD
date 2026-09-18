@@ -1556,7 +1556,7 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
   )
 }
 
-function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol }: any) {
+function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol, puedePleno, puedeOperativo }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
   const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'', es_prueba:false }
@@ -1750,6 +1750,59 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     if (!form.apellido.trim()) { setMensaje({ tipo:'error', texto:'El apellido es obligatorio' }); return }
     if (!form.legajo.trim()) { setMensaje({ tipo:'error', texto:'El legajo es obligatorio' }); return }
 
+    // ── Ruta OPERATIVA (supervisor/jefe sin gestión de personal plena) ────────
+    // El alta de vigilador NO pasa por /api/usuarios (que exige gestionar_personal).
+    // Va por la RPC segura resolver_solicitud_personal_operativo: crea la
+    // solicitud y la resuelve en el acto. La RPC fija rol guardia/vigilador,
+    // whitelist de campos y valida alcance; el supervisor no puede crear
+    // supervisores/admins ni tocar datos sensibles. La edición no está soportada
+    // por esta vía; la baja va por activarInactivar.
+    if (puedeOperativo && !puedePleno) {
+      if (editId) {
+        setMensaje({ tipo:'error', texto:'Como supervisor podés dar de alta o baja vigiladores, pero no editar sus datos. Eso lo hace Administración.' })
+        return
+      }
+      setLoading(true)
+      try {
+        const rolVig = form.rol === 'vigilador' ? 'vigilador' : 'guardia'
+        const { data: sol, error: eSol } = await supabase
+          .from('solicitudes_admin')
+          .insert({
+            solicitante_id: usuarioId,
+            tipo: 'crear_vigilador',
+            entidad: 'usuarios',
+            entidad_id: null,
+            datos_json: {
+              nombre: form.nombre.trim(),
+              apellido: form.apellido.trim(),
+              dni: form.dni.trim() || null,
+              telefono: form.telefono.trim() || null,
+              legajo: form.legajo.trim(),
+              email: form.email.trim().toLowerCase() || null,
+              rol: rolVig,
+              foto_url: form.foto_url.trim() || null,
+            },
+            estado: 'pendiente',
+          })
+          .select()
+          .single()
+        if (eSol) { setMensaje({ tipo:'error', texto: eSol.message }); setLoading(false); return }
+        const { data: res, error: eRpc } = await supabase.rpc('resolver_solicitud_personal_operativo', { p_solicitud_id: sol.id })
+        if (eRpc) { setMensaje({ tipo:'error', texto: eRpc.message }); setLoading(false); return }
+        const entId = (res as any)?.entidad_id
+        if (entId) {
+          const { data: nuevo } = await supabase.from('usuarios').select('*').eq('id', entId).single()
+          if (nuevo) setGuardias((prev: any[]) => [...prev, nuevo])
+        }
+        setModal(false)
+        setMensaje({ tipo:'ok', texto:'Vigilador creado correctamente.' })
+      } catch (err: any) {
+        setMensaje({ tipo:'error', texto: err?.message || 'No se pudo crear el vigilador' })
+      }
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
     const payload = {
       nombre: form.nombre.trim(),
@@ -1842,6 +1895,37 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     const nuevoEstado = g.estado === 'activo' ? 'inactivo' : 'activo'
     setAccionLoading(`estado-${g.id}`)
     setMensaje(null)
+
+    // Ruta OPERATIVA: el supervisor sólo da de BAJA vigiladores, por la RPC
+    // segura (valida alcance). La reactivación la hace Administración.
+    if (puedeOperativo && !puedePleno) {
+      const esVig = ['guardia', 'vigilador'].includes(g.rol || 'guardia')
+      if (!esVig) { setMensaje({ tipo:'error', texto:'Sólo podés dar de baja vigiladores.' }); setAccionLoading(null); return }
+      if (nuevoEstado === 'activo') { setMensaje({ tipo:'error', texto:'La reactivación de un vigilador la hace Administración.' }); setAccionLoading(null); return }
+      try {
+        const { data: sol, error: eSol } = await supabase
+          .from('solicitudes_admin')
+          .insert({
+            solicitante_id: usuarioId,
+            tipo: 'baja_vigilador',
+            entidad: 'usuarios',
+            entidad_id: g.id,
+            datos_json: { nombre: g.nombre, apellido: g.apellido, legajo: g.legajo || null, email: g.email || null, estado_actual: g.estado },
+            estado: 'pendiente',
+          })
+          .select()
+          .single()
+        if (eSol) { setMensaje({ tipo:'error', texto: eSol.message }); setAccionLoading(null); return }
+        const { error: eRpc } = await supabase.rpc('resolver_solicitud_personal_operativo', { p_solicitud_id: sol.id })
+        if (eRpc) { setMensaje({ tipo:'error', texto: eRpc.message }); setAccionLoading(null); return }
+        setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? { ...x, estado: 'inactivo' } : x))
+        setMensaje({ tipo:'ok', texto:'Vigilador dado de baja correctamente.' })
+      } catch (err: any) {
+        setMensaje({ tipo:'error', texto: err?.message || 'No se pudo dar de baja el vigilador' })
+      }
+      setAccionLoading(null)
+      return
+    }
 
     const { data, error } = await supabase
       .from('usuarios')
@@ -2118,12 +2202,14 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
             {accionLoading === 'repair-auth' ? 'Reparando...' : 'Reparar accesos Auth'}
           </button>
 
+          {(puedePleno || puedeOperativo) && (
           <button
             style={{ ...S.btn, ...S.btnPrimary }}
             onClick={abrirNuevo}
           >
             + Nuevo empleado
           </button>
+          )}
         </div>
       </div>
 
@@ -2224,12 +2310,15 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                         Ver legajo
                       </button>
                     )}
+                    {puedePleno && (
                     <button
                       style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
                       onClick={() => abrirEdicion(g)}
                     >
                       Editar
                     </button>
+                    )}
+                    {(puedePleno || (puedeOperativo && ['guardia','vigilador'].includes(g.rol || 'guardia') && g.estado === 'activo')) && (
                     <button
                       style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
                       onClick={() => activarInactivar(g)}
@@ -2237,7 +2326,8 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                     >
                       {g.estado === 'activo' ? 'Inactivar' : 'Activar'}
                     </button>
-                    {!g.auth_user_id && (
+                    )}
+                    {puedePleno && !g.auth_user_id && (
                       <button
                         style={{ ...S.btn, ...S.btnPrimary, padding:'6px 10px', fontSize:12 }}
                         onClick={() => crearAuth(g)}
@@ -2246,7 +2336,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                         {accionLoading === `auth-${g.id}` ? 'Creando acceso...' : 'Crear acceso'}
                       </button>
                     )}
-                    {g.auth_user_id && (
+                    {puedePleno && g.auth_user_id && (
                       <button
                         style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12, opacity: accionLoading === `reset-${g.id}` ? 0.65 : 1 }}
                         onClick={() => resetPassword(g)}
@@ -2344,8 +2434,8 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
               <select style={S.select} value={form.rol} onChange={e => setForm({...form, rol:e.target.value})}>
                 <option value="guardia">Guardia</option>
                 <option value="vigilador">Vigilador</option>
-                <option value="supervisor">Supervisor</option>
-                <option value="admin">Admin</option>
+                {puedePleno && <option value="supervisor">Supervisor</option>}
+                {puedePleno && <option value="admin">Admin</option>}
               </select>
             </div>
 
@@ -13708,7 +13798,7 @@ const esGuardia = esRolGuardia(user.rol)
           ) : (
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
-              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} />}
+              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} puedePleno={tieneCapacidad(user, 'gestionar_personal')} puedeOperativo={tieneCapacidad(user, 'gestionar_personal_operativo')} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
