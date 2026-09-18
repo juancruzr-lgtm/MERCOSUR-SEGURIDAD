@@ -2327,7 +2327,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                       {g.estado === 'activo' ? 'Inactivar' : 'Activar'}
                     </button>
                     )}
-                    {puedePleno && !g.auth_user_id && (
+                    {(puedePleno || (puedeOperativo && ['guardia','vigilador'].includes(g.rol || 'guardia'))) && !g.auth_user_id && (
                       <button
                         style={{ ...S.btn, ...S.btnPrimary, padding:'6px 10px', fontSize:12 }}
                         onClick={() => crearAuth(g)}
