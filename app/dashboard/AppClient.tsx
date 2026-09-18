@@ -79,6 +79,7 @@ import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import NovedadesPersonalPanel from '@/components/novedades/NovedadesPersonalPanel'
 import LiquidacionPanel from '@/components/liquidacion/LiquidacionPanel'
+import CorroboracionAfip from '@/components/afip/CorroboracionAfip'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
@@ -13633,6 +13634,8 @@ const esGuardia = esRolGuardia(user.rol)
       // Novedades del Personal: gestión de novedades laborales por rango/cantidad.
       // Gateado por capacidad gestionar_personal (Administración/Gerencia).
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'novedades_personal', icon:'🧑‍💼', label:'Novedades del Personal' }] : []),
+      // AFIP · Corroboración de empleados contra el Padrón A13 (misma capacidad).
+      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'afip_empleados', icon:'🏛️', label:'AFIP · Empleados' }] : []),
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
@@ -13773,6 +13776,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
+              {page === 'afip_empleados' && tieneCapacidad(user, 'gestionar_personal') && <CorroboracionAfip />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}
