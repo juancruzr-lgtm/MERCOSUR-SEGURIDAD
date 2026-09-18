@@ -1533,22 +1533,33 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
 
     try {
-      await crearSolicitudAdmin('crear_vigilador', 'usuarios', null, {
-        nombre: formNuevoGuardia.nombre.trim(),
-        apellido: formNuevoGuardia.apellido.trim(),
-        dni: formNuevoGuardia.dni.trim() || null,
-        telefono: formNuevoGuardia.telefono.trim() || null,
-        legajo: formNuevoGuardia.legajo.trim(),
-        email: formNuevoGuardia.email.trim().toLowerCase() || null,
-        rol: formNuevoGuardia.rol === 'vigilador' ? 'vigilador' : 'guardia',
-        foto_url: formNuevoGuardia.foto_url.trim() || null,
+      // Alta DIRECTA (sin aprobación): la RPC valida capacidad y deja auditoría
+      // (crea la solicitud a nombre del supervisor y la resuelve en el acto).
+      const { data: sol, error } = await supabase.rpc('autoservicio_solicitud_personal_operativo', {
+        p_tipo: 'crear_vigilador',
+        p_entidad_id: null,
+        p_datos: {
+          nombre: formNuevoGuardia.nombre.trim(),
+          apellido: formNuevoGuardia.apellido.trim(),
+          dni: formNuevoGuardia.dni.trim() || null,
+          telefono: formNuevoGuardia.telefono.trim() || null,
+          legajo: formNuevoGuardia.legajo.trim(),
+          email: formNuevoGuardia.email.trim().toLowerCase() || null,
+          rol: formNuevoGuardia.rol === 'vigilador' ? 'vigilador' : 'guardia',
+          foto_url: formNuevoGuardia.foto_url.trim() || null,
+        },
       })
-      setMensaje('Solicitud enviada: crear vigilador.')
+      if (error) throw error
+      const nuevoId = (sol as any)?.entidad_id
+      if (nuevoId) {
+        const { data: nuevo } = await supabase.from('usuarios').select('*').eq('id', nuevoId).single()
+        if (nuevo) setGuardias(prev => [...prev, nuevo as Usuario])
+      }
+      setMensaje(`Vigilador dado de alta: ${formNuevoGuardia.apellido.trim()}, ${formNuevoGuardia.nombre.trim()}.`)
       resetFormNuevoGuardia()
       setModalNuevoGuardia(false)
-      setTab('alertas')
-    } catch (solicitudError) {
-      setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo dar de alta el vigilador.')
     } finally {
       setAsignando(null)
     }
@@ -1579,22 +1590,23 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
 
     try {
-      await crearSolicitudAdmin('crear_objetivo', 'objetivos', null, {
-        nombre: formNuevoObjetivo.nombre.trim(),
-        cliente: formNuevoObjetivo.cliente.trim() || null,
-        direccion: formNuevoObjetivo.direccion.trim() || null,
-        lat,
-        lng,
-        radio_metros: radio,
-        zona_id: formNuevoObjetivo.zona_id,
-        estado: 'activo',
+      // Alta DIRECTA (sin aprobación): la RPC valida que la zona esté en el
+      // alcance del supervisor. (El GPS se carga luego al editar el objetivo,
+      // igual que en el flujo anterior de aprobación.)
+      const { data: obj, error } = await supabase.rpc('crear_objetivo_operativo', {
+        p_zona_id: formNuevoObjetivo.zona_id,
+        p_nombre: formNuevoObjetivo.nombre.trim(),
+        p_cliente: formNuevoObjetivo.cliente.trim() || null,
+        p_direccion: formNuevoObjetivo.direccion.trim() || null,
+        p_radio_metros: radio,
       })
-      setMensaje('Solicitud enviada: crear objetivo.')
+      if (error) throw error
+      if (obj) setObjetivos(prev => [...prev, obj as Objetivo])
+      setMensaje(`Objetivo creado: ${formNuevoObjetivo.nombre.trim()}.`)
       resetFormNuevoObjetivo()
       setModalNuevoObjetivo(false)
-      setTab('alertas')
-    } catch (solicitudError) {
-      setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo crear el objetivo.')
     } finally {
       setAsignando(null)
     }
@@ -1605,18 +1617,25 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
 
     try {
-      await crearSolicitudAdmin('baja_vigilador', 'usuarios', guardia.id, {
-        nombre: guardia.nombre,
-        apellido: guardia.apellido,
-        legajo: guardia.legajo || null,
-        email: guardia.email || null,
-        estado_actual: guardia.estado,
+      // Baja DIRECTA (sin aprobación): la RPC valida el ALCANCE (Sergio/jefe =
+      // todas; supervisor = sólo vigiladores de sus zonas) y deja auditoría.
+      const { error } = await supabase.rpc('autoservicio_solicitud_personal_operativo', {
+        p_tipo: 'baja_vigilador',
+        p_entidad_id: guardia.id,
+        p_datos: {
+          nombre: guardia.nombre,
+          apellido: guardia.apellido,
+          legajo: guardia.legajo || null,
+          email: guardia.email || null,
+          estado_actual: guardia.estado,
+        },
       })
-      setMensaje(`Solicitud enviada: baja de ${guardia.apellido}, ${guardia.nombre}.`)
+      if (error) throw error
+      setGuardias(prev => prev.map(g => g.id === guardia.id ? { ...g, estado: 'inactivo' } : g))
+      setMensaje(`Baja de ${guardia.apellido}, ${guardia.nombre}.`)
       setGuardiaEditando(null)
-      setTab('alertas')
-    } catch (solicitudError) {
-      setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo dar de baja el vigilador.')
     } finally {
       setAsignando(null)
     }
@@ -1627,17 +1646,16 @@ export default function SupervisorMobile({ user }: any) {
     setError('')
 
     try {
-      await crearSolicitudAdmin('baja_objetivo', 'objetivos', objetivo.id, {
-        nombre: objetivo.nombre,
-        cliente: objetivo.cliente || null,
-        direccion: objetivo.direccion || null,
-        estado_actual: objetivo.estado || 'activo',
+      // Baja DIRECTA (sin aprobación): la RPC valida el ALCANCE del objetivo.
+      const { data: obj, error } = await supabase.rpc('dar_baja_objetivo_operativo', {
+        p_objetivo_id: objetivo.id,
       })
-      setMensaje(`Solicitud enviada: baja de ${objetivo.nombre}.`)
+      if (error) throw error
+      setObjetivos(prev => prev.map(o => o.id === objetivo.id ? { ...o, ...(obj as Objetivo), estado: 'inactivo' } : o))
+      setMensaje(`Baja de ${objetivo.nombre}.`)
       setObjetivoEditando(null)
-      setTab('alertas')
-    } catch (solicitudError) {
-      setError(solicitudError instanceof Error ? solicitudError.message : 'No se pudo crear la solicitud.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo dar de baja el objetivo.')
     } finally {
       setAsignando(null)
     }
@@ -3387,9 +3405,9 @@ export default function SupervisorMobile({ user }: any) {
                 {vistaGuardias === 'lista' && (<>
                 <div style={{ ...card, borderColor:'rgba(59,130,246,.35)', background:'rgba(59,130,246,.08)' }}>
                   <div style={objetivoName}>Solicitudes de vigiladores</div>
-                  <div style={{ ...muted, marginBottom:12 }}>Crear una solicitud pendiente para que administración apruebe el alta.</div>
+                  <div style={{ ...muted, marginBottom:12 }}>Dar de alta un vigilador: queda activo al instante, sin aprobación.</div>
                   <button style={refreshButton} onClick={() => { setError(''); resetFormNuevoGuardia(); setModalNuevoGuardia(true) }}>
-                    Solicitar alta de vigilador
+                    Dar de alta vigilador
                   </button>
                 </div>
 
@@ -3407,7 +3425,7 @@ export default function SupervisorMobile({ user }: any) {
                         onClick={() => solicitarBajaGuardia(g)}
                         disabled={asignando === `baja-guardia-${g.id}`}
                       >
-                        {asignando === `baja-guardia-${g.id}` ? 'Enviando...' : 'Solicitar baja de vigilador'}
+                        {asignando === `baja-guardia-${g.id}` ? 'Dando de baja...' : 'Dar de baja vigilador'}
                       </button>
                     </div>
                   </div>
@@ -3540,7 +3558,7 @@ export default function SupervisorMobile({ user }: any) {
                         onClick={() => solicitarBajaObjetivo(objetivo)}
                         disabled={asignando === `baja-objetivo-${objetivo.id}` || objetivo.estado === 'inactivo'}
                       >
-                        {asignando === `baja-objetivo-${objetivo.id}` ? 'Enviando...' : objetivo.estado === 'inactivo' ? 'Objetivo inactivo' : 'Solicitar baja de objetivo'}
+                        {asignando === `baja-objetivo-${objetivo.id}` ? 'Dando de baja...' : objetivo.estado === 'inactivo' ? 'Objetivo inactivo' : 'Dar de baja objetivo'}
                       </button>
                     </div>
                   </div>
@@ -4316,8 +4334,8 @@ export default function SupervisorMobile({ user }: any) {
       {modalNuevoGuardia && (
         <div style={modalOverlay}>
           <div style={modalCard}>
-            <div style={screenTitle}>Solicitar nuevo vigilador</div>
-            <div style={muted}>La creación queda pendiente de aprobación administrativa.</div>
+            <div style={screenTitle}>Nuevo vigilador</div>
+            <div style={muted}>Se da de alta al instante, sin aprobación.</div>
             {error && <div style={{ ...errorBox, marginTop:12 }}>{error}</div>}
             <label style={label}>Nombre *</label>
             <input style={input} value={formNuevoGuardia.nombre} onChange={e => setFormNuevoGuardia({ ...formNuevoGuardia, nombre:e.target.value })} />
@@ -4341,7 +4359,7 @@ export default function SupervisorMobile({ user }: any) {
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
               <button style={secondaryButton} onClick={() => { setModalNuevoGuardia(false); resetFormNuevoGuardia() }}>Cancelar</button>
               <button style={refreshButton} onClick={solicitarCrearGuardia} disabled={asignando === 'solicitud-crear-guardia'}>
-                {asignando === 'solicitud-crear-guardia' ? 'Enviando...' : 'Enviar solicitud'}
+                {asignando === 'solicitud-crear-guardia' ? 'Dando de alta...' : 'Dar de alta'}
               </button>
             </div>
           </div>
@@ -4351,8 +4369,8 @@ export default function SupervisorMobile({ user }: any) {
       {modalNuevoObjetivo && (
         <div style={modalOverlay}>
           <div style={modalCard}>
-            <div style={screenTitle}>Solicitar nuevo objetivo</div>
-            <div style={muted}>La creación queda pendiente de aprobación administrativa.</div>
+            <div style={screenTitle}>Nuevo objetivo</div>
+            <div style={muted}>Se crea al instante en tu zona, sin aprobación.</div>
             {error && <div style={{ ...errorBox, marginTop:12 }}>{error}</div>}
             <label style={label}>Nombre *</label>
             <input style={input} value={formNuevoObjetivo.nombre} onChange={e => setFormNuevoObjetivo({ ...formNuevoObjetivo, nombre:e.target.value })} />
@@ -4376,7 +4394,7 @@ export default function SupervisorMobile({ user }: any) {
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
               <button style={secondaryButton} onClick={() => { setModalNuevoObjetivo(false); resetFormNuevoObjetivo() }}>Cancelar</button>
               <button style={refreshButton} onClick={solicitarCrearObjetivo} disabled={asignando === 'solicitud-crear-objetivo'}>
-                {asignando === 'solicitud-crear-objetivo' ? 'Enviando...' : 'Enviar solicitud'}
+                {asignando === 'solicitud-crear-objetivo' ? 'Creando...' : 'Crear objetivo'}
               </button>
             </div>
           </div>
