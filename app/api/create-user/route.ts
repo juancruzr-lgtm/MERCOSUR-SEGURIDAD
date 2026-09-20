@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { repairEmployeeAuthUser } from '../_lib/auth-repair'
-import { getSupabaseAdmin, requireCapacidad } from '../_lib/employee-auth'
+import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
+import { tieneCapacidad, alcanceDe } from '@/lib/capacidades'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const adminError = await requireCapacidad(req, admin.client, 'gestionar_personal', 'Sesion de administrador requerida')
-  if (adminError) return adminError
+  // gestionar_personal (Administración) crea acceso a cualquier empleado; el
+  // gate OPERATIVO (supervisor/jefe) sólo alcanza cuentas guardia/vigilador,
+  // espejando la whitelist de resolver_solicitud_personal_operativo.
+  const acceso = await resolverPerfil(req, admin.client)
+  if ('respuesta' in acceso) return acceso.respuesta
+  const pleno = tieneCapacidad(acceso.perfil, 'gestionar_personal')
+  const operativo = tieneCapacidad(acceso.perfil, 'gestionar_personal_operativo')
+  if (!pleno && !operativo) return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
 
   try {
     const body = await req.json()
@@ -23,6 +30,31 @@ export async function POST(req: NextRequest) {
 
     if (usuarioError) return NextResponse.json({ error: usuarioError.message }, { status: 500 })
     if (!usuario) return NextResponse.json({ error: 'Empleado no encontrado' }, { status: 404 })
+
+    if (!pleno && !['guardia', 'vigilador'].includes(usuario.rol || 'guardia')) {
+      return NextResponse.json({ error: 'Solo podes crear acceso a vigiladores' }, { status: 403 })
+    }
+
+    // Alcance por ZONA (JC): el gate operativo (supervisor) sólo crea acceso a
+    // vigiladores de SU alcance. COMPATIBLE CON VIGILADORES NUEVOS: si el
+    // vigilador todavía no tiene turnos/zona operativa (recién creado), se
+    // permite (no pertenece a otra zona); si ya tiene turnos, TODAS sus zonas
+    // deben estar en las del supervisor. Jefe/alcance 'todas' → sin límite.
+    if (!pleno && alcanceDe(acceso.perfil) !== 'todas') {
+      const { data: sz } = await admin.client
+        .from('supervisor_zonas').select('zona_id').eq('supervisor_id', acceso.perfil.id)
+      const zonasSup = new Set((sz || []).map((r: any) => r.zona_id))
+      const { data: ts } = await admin.client
+        .from('turnos').select('objetivo_id').eq('guardia_id', usuario.id)
+      const objIds = (ts || []).map((r: any) => r.objetivo_id).filter(Boolean)
+      if (objIds.length) {
+        const { data: objs } = await admin.client.from('objetivos').select('zona_id').in('id', objIds)
+        const fueraDeAlcance = (objs || []).some((o: any) => o.zona_id && !zonasSup.has(o.zona_id))
+        if (fueraDeAlcance) {
+          return NextResponse.json({ error: 'Ese vigilador está fuera de tu alcance de zona' }, { status: 403 })
+        }
+      }
+    }
 
     const resultado = await repairEmployeeAuthUser(admin.client, usuario)
 
