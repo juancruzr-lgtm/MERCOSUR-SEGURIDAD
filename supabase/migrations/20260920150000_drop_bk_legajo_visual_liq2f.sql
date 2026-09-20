@@ -1,0 +1,24 @@
+-- ============================================================================
+-- Eliminar tabla backup huérfana public._bk_legajo_visual_liq2f
+-- ============================================================================
+--
+-- Origen: 20260908221000_liq2f_backfill_cod_interno.sql la creó SÓLO como respaldo
+-- de `usuarios.legajo_visual` (valor viejo) para poder deshacer ese backfill. La
+-- migración ya está aplicada hace tiempo y validada.
+--
+-- Auditoría (20/09) en PRODUCCIÓN: la tabla tiene 68 filas (id, legajo_visual_old)
+-- y NO tiene consumidores activos — ninguna vista, función/RPC, FK entrante ni
+-- trigger la referencia, ni código de la app. La única referencia es el archivo
+-- de ROLLBACK de aquella migración (break-glass no operativo). Además dispara el
+-- advisory de seguridad "RLS Disabled in Public" (tabla pública sin RLS).
+--
+-- Decisión (JC): eliminar el backup muerto en vez de mantenerlo con RLS.
+-- No toca datos productivos, permisos, roles ni ninguna otra tabla.
+--
+-- ROLLBACK: supabase/rollback/20260920150000_drop_bk_legajo_visual_liq2f_rollback.sql
+--   (recrea la estructura vacía; el contenido del backup NO es recuperable — es
+--    justamente lo que se decide descartar).
+-- Idempotente: sí.
+-- ============================================================================
+
+drop table if exists public._bk_legajo_visual_liq2f;
