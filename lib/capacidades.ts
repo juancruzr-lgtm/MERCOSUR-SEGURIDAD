@@ -104,6 +104,15 @@ const GERENCIAL_ECONOMICO: Capacidad[] = [
   'configurar_economico', 'gestionar_usuarios_roles',
 ]
 
+// ADMIN PLENO — el conjunto COMPLETO (lo que un rol=admin veía/hacía antes de
+// ROLES). Es el mismo set del fallback legacy. Se usa: (1) como fallback por rol
+// cuando no hay puesto; (2) como OVERRIDE per-usuario (columna acceso_admin_pleno)
+// que se SUMA a las capacidades del puesto sin cambiarlo (ver capacidadesDe).
+const ADMIN_PLENO: Capacidad[] = [
+  'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO,
+  'supervisar_todas_zonas', 'configurar_sistema', 'preparar_liquidacion', ...GERENCIAL_ECONOMICO,
+]
+
 /**
  * Mapa CANÓNICO puesto → capacidades (explícito, sin herencia por jerarquía).
  *  · supervisor/jefe: OPERACIÓN + programación de turnos de SU alcance (zona/todas
@@ -151,10 +160,7 @@ function capacidadesLegadasPorRol(rol?: string | null): Capacidad[] {
   if (r === 'admin') {
     // Hoy un admin ve/hace todo. Se conserva idéntico durante la transición
     // (sólo aplica a cuentas sin puesto seteado, p.ej. es_prueba).
-    return [
-      'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO,
-      'supervisar_todas_zonas', 'configurar_sistema', 'preparar_liquidacion', ...GERENCIAL_ECONOMICO,
-    ]
+    return [...ADMIN_PLENO]
   }
   if (r === 'supervisor') return [...OPERACION_SUPERVISOR, 'gestionar_turnos']
   return [] // guardia / vigilador
@@ -177,6 +183,15 @@ export interface SujetoAcceso {
    * gateado por capability + RLS (ver `shellDeUsuario` y `esAdminPleno`).
    */
   acceso_interfaz_admin?: boolean | null
+  /**
+   * OVERRIDE individual de ACCESO ADMIN PLENO (columna `acceso_admin_pleno`).
+   * Cuando es true, se SUMAN las capacidades de ADMIN_PLENO a las del puesto,
+   * SIN cambiar el puesto ni el alcance (clasificación intacta). Es la palanca
+   * per-usuario para casos como Sergio (jefe_supervisores + admin pleno). El
+   * espejo en la base son las funciones `tiene_acceso_admin_pleno_actual()` y su
+   * OR en los gates de acceso (personal, roles, liquidación).
+   */
+  acceso_admin_pleno?: boolean | null
 }
 
 /** Puesto canónico si está seteado y es válido; null durante la transición. */
@@ -190,7 +205,11 @@ export function puestoDe(u: SujetoAcceso | null | undefined): PuestoOrganizacion
  */
 export function capacidadesDe(u: SujetoAcceso | null | undefined): Set<Capacidad> {
   const puesto = puestoDe(u)
-  return new Set(puesto ? CAPACIDADES_POR_PUESTO[puesto] : capacidadesLegadasPorRol(u?.rol))
+  const base = puesto ? CAPACIDADES_POR_PUESTO[puesto] : capacidadesLegadasPorRol(u?.rol)
+  const set = new Set(base)
+  // Override per-usuario: suma el set admin pleno SIN cambiar puesto/alcance.
+  if (u?.acceso_admin_pleno === true) for (const c of ADMIN_PLENO) set.add(c)
+  return set
 }
 
 export function tieneCapacidad(u: SujetoAcceso | null | undefined, cap: Capacidad): boolean {
