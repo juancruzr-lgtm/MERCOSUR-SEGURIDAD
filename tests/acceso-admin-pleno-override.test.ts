@@ -7,11 +7,15 @@ import { tieneCapacidad, alcanceDe, shellDeUsuario, esAdminPleno, puestoDe } fro
 const SERGIO_SIN_FLAG = { rol: 'admin', puesto_organizacional: 'jefe_supervisores', acceso_interfaz_admin: true }
 const SERGIO_CON_FLAG = { rol: 'admin', puesto_organizacional: 'jefe_supervisores', acceso_interfaz_admin: true, acceso_admin_pleno: true }
 
+// Lo que el override SÍ da (todo lo amplio MENOS liquidación).
 const ADMIN = [
-  'configurar_sistema', 'gestionar_personal', 'gestionar_objetivos', 'preparar_liquidacion',
-  'ver_dashboard_gerencial', 'ver_liquidacion', 'editar_liquidacion', 'exportar_visual',
-  'exportar_banco', 'ver_finanzas', 'gestionar_facturacion', 'configurar_economico',
+  'configurar_sistema', 'gestionar_personal', 'gestionar_objetivos',
+  'ver_dashboard_gerencial', 'ver_finanzas', 'gestionar_facturacion', 'configurar_economico',
   'gestionar_usuarios_roles',
+] as const
+// Lo que el override NO da (EXCLUSIÓN: liquidaciones).
+const LIQUIDACION = [
+  'preparar_liquidacion', 'ver_liquidacion', 'editar_liquidacion', 'exportar_visual', 'exportar_banco',
 ] as const
 
 describe('Sergio SIN flag (estado actual): jefe_supervisores acotado', () => {
@@ -29,10 +33,13 @@ describe('Sergio CON flag: acceso admin pleno, conservando el puesto', () => {
     expect(alcanceDe(SERGIO_CON_FLAG)).toBe('todas')
     expect(shellDeUsuario(SERGIO_CON_FLAG)).toBe('admin')
   })
-  it('gana admin pleno: todas las capacidades administrativas/económicas', () => {
+  it('gana acceso amplio (admin/económico) pero NO liquidación', () => {
     expect(esAdminPleno(SERGIO_CON_FLAG)).toBe(true)
     for (const cap of ADMIN) {
       expect(tieneCapacidad(SERGIO_CON_FLAG, cap as any), `debería tener ${cap}`).toBe(true)
+    }
+    for (const cap of LIQUIDACION) {
+      expect(tieneCapacidad(SERGIO_CON_FLAG, cap as any), `NO debería tener ${cap}`).toBe(false)
     }
   })
   it('conserva lo operativo del puesto', () => {

@@ -113,6 +113,15 @@ const ADMIN_PLENO: Capacidad[] = [
   'supervisar_todas_zonas', 'configurar_sistema', 'preparar_liquidacion', ...GERENCIAL_ECONOMICO,
 ]
 
+// Capacidades de LIQUIDACIÓN. El override per-usuario (acceso_admin_pleno) da
+// acceso amplio PERO NO liquidaciones (JC 20/09): ver/preparar/consolidar/generar
+// Excel-Visual/reimportar/exportar banco quedan SÓLO para Administración/Gerencia.
+const LIQUIDACION_CAPS: Capacidad[] = [
+  'preparar_liquidacion', 'ver_liquidacion', 'editar_liquidacion', 'exportar_visual', 'exportar_banco',
+]
+// Set efectivo del override acceso_admin_pleno = ADMIN_PLENO menos liquidación.
+const ADMIN_PLENO_OVERRIDE: Capacidad[] = ADMIN_PLENO.filter(c => !LIQUIDACION_CAPS.includes(c))
+
 /**
  * Mapa CANÓNICO puesto → capacidades (explícito, sin herencia por jerarquía).
  *  · supervisor/jefe: OPERACIÓN + programación de turnos de SU alcance (zona/todas
@@ -207,8 +216,9 @@ export function capacidadesDe(u: SujetoAcceso | null | undefined): Set<Capacidad
   const puesto = puestoDe(u)
   const base = puesto ? CAPACIDADES_POR_PUESTO[puesto] : capacidadesLegadasPorRol(u?.rol)
   const set = new Set(base)
-  // Override per-usuario: suma el set admin pleno SIN cambiar puesto/alcance.
-  if (u?.acceso_admin_pleno === true) for (const c of ADMIN_PLENO) set.add(c)
+  // Override per-usuario: suma el set admin pleno SIN cambiar puesto/alcance,
+  // EXCLUYENDO liquidación (acceso_admin_pleno NO habilita liquidaciones).
+  if (u?.acceso_admin_pleno === true) for (const c of ADMIN_PLENO_OVERRIDE) set.add(c)
   return set
 }
 
