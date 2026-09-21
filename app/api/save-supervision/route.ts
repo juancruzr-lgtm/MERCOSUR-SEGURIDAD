@@ -13,12 +13,11 @@ export async function POST(req: NextRequest) {
 
   const { data: usuario } = await admin.client
     .from('usuarios')
-    .select('id, rol')
+    .select('id, rol, estado')
     .eq('auth_user_id', authData.user.id)
-    .in('rol', ['supervisor', 'admin'])
-    .single()
+    .maybeSingle()
 
-  if (!usuario) return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+  if (!usuario || usuario.estado !== 'activo') return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
 
   const body = await req.json().catch(() => null)
   if (!body) return NextResponse.json({ error: 'Body invalido' }, { status: 400 })
@@ -27,6 +26,18 @@ export async function POST(req: NextRequest) {
 
   if (!objetivo_id || !supervisor_id || !estado) {
     return NextResponse.json({ error: 'Faltan campos: objetivo_id, supervisor_id, estado' }, { status: 400 })
+  }
+
+  // Autorización por ALCANCE real del actor sobre el objetivo (Fase 2C), NO por
+  // el rol legacy ni por el supervisor_id del body: vigilador NO; supervisor sólo
+  // objetivos de sus zonas; jefe/dir_operativa/administración/gerencia global.
+  // Misma fuente de verdad que la RLS (alcanza_objetivo_actual), variante con
+  // usuario explícito porque acá corre service_role (sin auth.uid()).
+  const { data: alcanzaObjetivo, error: alcanceError } = await admin.client
+    .rpc('alcanza_objetivo', { p_usuario_id: usuario.id, p_objetivo_id: objetivo_id })
+  if (alcanceError) return NextResponse.json({ error: alcanceError.message }, { status: 500 })
+  if (alcanzaObjetivo !== true) {
+    return NextResponse.json({ error: 'El objetivo esta fuera de tu alcance' }, { status: 403 })
   }
 
   // Idempotencia: el cliente genera el id UNA vez por intento de carga. Si la

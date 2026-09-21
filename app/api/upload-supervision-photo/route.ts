@@ -24,12 +24,12 @@ export async function POST(req: NextRequest) {
 
   const { data: usuario } = await admin.client
     .from('usuarios')
-    .select('id, rol')
+    .select('id, rol, estado')
     .eq('auth_user_id', authData.user.id)
     .maybeSingle()
 
-  if (!usuario || !['supervisor', 'admin'].includes(usuario.rol ?? '')) {
-    return NextResponse.json({ error: 'Acceso restringido a: supervisor, admin' }, { status: 403 })
+  if (!usuario || usuario.estado !== 'activo') {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
   }
 
   // ── Body (multipart) ─────────────────────────────────────────────────────────
@@ -51,10 +51,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'foto requerida' }, { status: 400 })
   }
 
-  // ── Verificar que la supervisión pertenezca al usuario o sea admin ────────────
+  // ── Autorización por ALCANCE del objetivo de la supervisión padre (Fase 2C) ───
+  // Las fotos heredan el alcance de la supervisión: vigilador NO; supervisor sólo
+  // supervisiones de sus zonas; jefe/dir_operativa/administración/gerencia global.
+  // Misma fuente de verdad que la RLS; variante con usuario explícito (service_role).
   const { data: supervision, error: supervisionError } = await admin.client
     .from('supervisiones')
-    .select('id, supervisor_id')
+    .select('id, objetivo_id')
     .eq('id', supervisionId)
     .single()
 
@@ -62,8 +65,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Supervisión no encontrada' }, { status: 404 })
   }
 
-  if (usuario.rol !== 'admin' && supervision.supervisor_id !== usuario.id) {
-    return NextResponse.json({ error: 'No tenés permiso para subir fotos a esta supervisión' }, { status: 403 })
+  const { data: alcanzaObjetivo, error: alcanceError } = await admin.client
+    .rpc('alcanza_objetivo', { p_usuario_id: usuario.id, p_objetivo_id: supervision.objetivo_id })
+  if (alcanceError) return NextResponse.json({ error: alcanceError.message }, { status: 500 })
+  if (alcanzaObjetivo !== true) {
+    return NextResponse.json({ error: 'La supervisión está fuera de tu alcance' }, { status: 403 })
   }
 
   // ── Subir al bucket usando service role ───────────────────────────────────────
