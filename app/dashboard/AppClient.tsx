@@ -3949,6 +3949,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
         onNavigate={onNavigate}
         esAdmin={user?.rol === 'admin'}
         rolUsuario={user?.rol}
+        puedeGestionarPuestos={tieneCapacidad(user, 'gestionar_objetivos_operativos')}
       />
     )
   }

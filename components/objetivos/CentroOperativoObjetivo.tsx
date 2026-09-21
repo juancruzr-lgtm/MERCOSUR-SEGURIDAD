@@ -80,7 +80,7 @@ import {
   cargarPosicionesOperativas, cargarDependenciasPosicion, cargarDependenciasEliminacion,
   crearPosicionOperativa, editarPosicionOperativa, duplicarPosicionOperativa, eliminarPosicionOperativa,
   construirCambiosEdicion, sugerirNombreDuplicado, motivoBloqueoDesactivar, motivoBloqueoEliminar,
-  puedeEscribirPosiciones, filtroConfigurarCobertura,
+  filtroConfigurarCobertura,
 } from '@/lib/puestos'
 import type { PosicionOperativa, DependenciasPosicion, DependenciasEliminacion } from '@/lib/puestos'
 
@@ -96,12 +96,16 @@ const JWM_RONDAS_URL: Record<string, string> = {
 }
 
 // ── CENTRO OPERATIVO DEL OBJETIVO ────────────────────────────────────
-function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, rolUsuario }: {
+function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, rolUsuario, puedeGestionarPuestos }: {
   objetivoId: string
   onVolver: () => void
   onNavigate?: (destino: string, filtro?: any) => void
   esAdmin?: boolean
   rolUsuario?: 'admin' | 'supervisor' | 'guardia' | 'vigilador'
+  // Capacidad moderna (gestionar_objetivos_operativos): habilita escribir puestos.
+  // La AUTORIZACIÓN real la hacen las RPC SECURITY DEFINER (es_operador + alcance)
+  // y la RLS de puestos; esto sólo evita ofrecer una acción que va a fallar.
+  puedeGestionarPuestos?: boolean
 }) {
   const hoy = fechaHoyLocal()
 
@@ -824,10 +828,12 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   }
 
   // ── Posiciones operativas: alta, edición, duplicación, desactivación ──
-  // Preferencia de este bloque: admin escribe, supervisor solo lee (no se
-  // amplían permisos silenciosamente). El servidor (RPC) vuelve a validar
-  // todo — este flag solo gobierna qué botones se muestran.
-  const puedeEscribirPos = puedeEscribirPosiciones(rolUsuario) || esAdmin === true
+  // Gate por CAPACIDAD moderna `gestionar_objetivos_operativos` (supervisor/jefe/
+  // dir_op/administración/gerencia; NO vigilador), reemplaza el legacy rol='admin'.
+  // El servidor (RPC SECURITY DEFINER: es_operador_actual + alcanza_objetivo_actual)
+  // y la RLS de puestos vuelven a validar TODO, incluido el recorte por zona del
+  // supervisor — este flag solo gobierna qué botones se muestran.
+  const puedeEscribirPos = puedeGestionarPuestos === true
   const [posicionesOp, setPosicionesOp] = useState<PosicionOperativa[]>([])
   const [coberturaPorPosicion, setCoberturaPorPosicion] = useState<Set<string>>(new Set())
   const [cargandoPosiciones, setCargandoPosiciones] = useState(true)
