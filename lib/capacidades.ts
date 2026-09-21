@@ -119,8 +119,18 @@ const ADMIN_PLENO: Capacidad[] = [
 const LIQUIDACION_CAPS: Capacidad[] = [
   'preparar_liquidacion', 'ver_liquidacion', 'editar_liquidacion', 'exportar_visual', 'exportar_banco',
 ]
-// Set efectivo del override acceso_admin_pleno = ADMIN_PLENO menos liquidación.
-const ADMIN_PLENO_OVERRIDE: Capacidad[] = ADMIN_PLENO.filter(c => !LIQUIDACION_CAPS.includes(c))
+// Económico/gerencial sensible (JC 21/09): el override acceso_admin_pleno TAMPOCO
+// lo concede. Sergio conserva gestión de roles, configuración y operación, pero NO
+// finanzas/dashboard económico/facturación/económico. El acceso económico pleno se
+// obtiene por clasificación Gerencia o por DELEGACIÓN gerencial (acceso_gerencia_delegado).
+const ECONOMICO_GERENCIAL_SENSIBLE: Capacidad[] = [
+  'ver_finanzas', 'ver_dashboard_gerencial', 'configurar_economico', 'gestionar_facturacion',
+]
+// Set efectivo del override acceso_admin_pleno = ADMIN_PLENO menos liquidación y
+// menos económico/gerencial sensible.
+const ADMIN_PLENO_OVERRIDE: Capacidad[] = ADMIN_PLENO.filter(
+  c => !LIQUIDACION_CAPS.includes(c) && !ECONOMICO_GERENCIAL_SENSIBLE.includes(c),
+)
 
 /**
  * Mapa CANÓNICO puesto → capacidades (explícito, sin herencia por jerarquía).
@@ -201,6 +211,15 @@ export interface SujetoAcceso {
    * OR en los gates de acceso (personal, roles, liquidación).
    */
   acceso_admin_pleno?: boolean | null
+  /**
+   * DELEGACIÓN GERENCIAL temporal (Fase 2D). Booleano YA RESUELTO por vigencia
+   * (activo && desde<=now && (hasta null || hasta>now) && sin revocar) al cargar
+   * el perfil, desde la tabla `gerencia_delegaciones`. Cuando es true, se SUMAN
+   * TODAS las capacidades de Gerencia (incluye Liquidaciones y económico) SIN
+   * cambiar puesto ni clasificación. El espejo en la base es
+   * `puede_acceder_gerencia_actual()` (para RLS/RPC) y `tiene_delegacion_gerencia`.
+   */
+  acceso_gerencia_delegado?: boolean | null
 }
 
 /** Puesto canónico si está seteado y es válido; null durante la transición. */
@@ -217,8 +236,12 @@ export function capacidadesDe(u: SujetoAcceso | null | undefined): Set<Capacidad
   const base = puesto ? CAPACIDADES_POR_PUESTO[puesto] : capacidadesLegadasPorRol(u?.rol)
   const set = new Set(base)
   // Override per-usuario: suma el set admin pleno SIN cambiar puesto/alcance,
-  // EXCLUYENDO liquidación (acceso_admin_pleno NO habilita liquidaciones).
+  // EXCLUYENDO liquidación y económico/gerencial sensible.
   if (u?.acceso_admin_pleno === true) for (const c of ADMIN_PLENO_OVERRIDE) set.add(c)
+  // Delegación gerencial temporal (Fase 2D): acceso funcional COMPLETO a Gerencia
+  // (incluye Liquidaciones y económico) mientras la delegación esté vigente. SUMA
+  // acceso; NO cambia puesto ni clasificación (alcanceDe/puestoDe siguen igual).
+  if (u?.acceso_gerencia_delegado === true) for (const c of ADMIN_PLENO) set.add(c)
   return set
 }
 
@@ -282,4 +305,16 @@ export function shellDeUsuario(u: SujetoAcceso | null | undefined): ShellApp {
  */
 export function esAdminPleno(u: SujetoAcceso | null | undefined): boolean {
   return tieneCapacidad(u, 'configurar_sistema')
+}
+
+/**
+ * Clasificación GERENCIA REAL (no acceso delegado ni admin_pleno): puesto
+ * `gerencia`, o admin sin puesto (transición). SÓLO Gerencia real otorga/revoca
+ * delegaciones gerenciales y hace escaladas privilegiadas (asignar gerencia,
+ * acceso_admin_pleno). El espejo en la base es `es_gerencia_actual()`.
+ */
+export function esGerenciaReal(u: SujetoAcceso | null | undefined): boolean {
+  const puesto = puestoDe(u)
+  if (puesto) return puesto === 'gerencia'
+  return String(u?.rol ?? '').trim().toLowerCase() === 'admin'
 }
