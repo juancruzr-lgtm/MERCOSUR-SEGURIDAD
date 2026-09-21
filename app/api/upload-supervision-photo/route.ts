@@ -51,13 +51,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'foto requerida' }, { status: 400 })
   }
 
-  // ── Autorización por ALCANCE del objetivo de la supervisión padre (Fase 2C) ───
-  // Las fotos heredan el alcance de la supervisión: vigilador NO; supervisor sólo
-  // supervisiones de sus zonas; jefe/dir_operativa/administración/gerencia global.
-  // Misma fuente de verdad que la RLS; variante con usuario explícito (service_role).
+  // ── Autorización (Fase 2C + ajuste JC 21/09) ──────────────────────────────────
+  // Las fotos heredan el alcance de la supervisión padre; además el supervisor puede
+  // subir fotos a su PROPIA supervisión aunque el objetivo esté fuera de su zona (es
+  // el registro de su visita; a veces se supervisan entre ellos). Regla: objetivo en
+  // alcance (zona/global) O supervisión propia (supervisor_id = el actor). Vigilador NO.
   const { data: supervision, error: supervisionError } = await admin.client
     .from('supervisiones')
-    .select('id, objetivo_id')
+    .select('id, objetivo_id, supervisor_id')
     .eq('id', supervisionId)
     .single()
 
@@ -68,7 +69,8 @@ export async function POST(req: NextRequest) {
   const { data: alcanzaObjetivo, error: alcanceError } = await admin.client
     .rpc('alcanza_objetivo', { p_usuario_id: usuario.id, p_objetivo_id: supervision.objetivo_id })
   if (alcanceError) return NextResponse.json({ error: alcanceError.message }, { status: 500 })
-  if (alcanzaObjetivo !== true) {
+  const esPropia = supervision.supervisor_id === usuario.id
+  if (alcanzaObjetivo !== true && !esPropia) {
     return NextResponse.json({ error: 'La supervisión está fuera de tu alcance' }, { status: 403 })
   }
 

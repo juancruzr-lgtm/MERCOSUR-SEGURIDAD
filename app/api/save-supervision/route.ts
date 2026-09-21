@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../_lib/employee-auth'
+import { alcanceDe } from '@/lib/capacidades'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -13,7 +14,7 @@ export async function POST(req: NextRequest) {
 
   const { data: usuario } = await admin.client
     .from('usuarios')
-    .select('id, rol, estado')
+    .select('id, rol, estado, puesto_organizacional')
     .eq('auth_user_id', authData.user.id)
     .maybeSingle()
 
@@ -28,15 +29,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Faltan campos: objetivo_id, supervisor_id, estado' }, { status: 400 })
   }
 
-  // Autorización por ALCANCE real del actor sobre el objetivo (Fase 2C), NO por
-  // el rol legacy ni por el supervisor_id del body: vigilador NO; supervisor sólo
-  // objetivos de sus zonas; jefe/dir_operativa/administración/gerencia global.
-  // Misma fuente de verdad que la RLS (alcanza_objetivo_actual), variante con
-  // usuario explícito porque acá corre service_role (sin auth.uid()).
+  // Autorización (Fase 2C + ajuste JC 21/09): la supervisión es un REGISTRO de una
+  // visita; un supervisor puede guardar la SUYA aunque el objetivo esté fuera de su
+  // zona (a veces se supervisan entre ellos). Regla: el actor debe ser OPERADOR
+  // (vigilador NO) y, o bien el objetivo está en su alcance (zona/global), o bien
+  // registra su PROPIA supervisión (supervisor_id = el actor). No permite atribuir
+  // supervisiones de terceros fuera de tu alcance.
+  const esOperador = alcanceDe(usuario) !== 'propio'
+  if (!esOperador) {
+    return NextResponse.json({ error: 'No autorizado a registrar supervisiones' }, { status: 403 })
+  }
   const { data: alcanzaObjetivo, error: alcanceError } = await admin.client
     .rpc('alcanza_objetivo', { p_usuario_id: usuario.id, p_objetivo_id: objetivo_id })
   if (alcanceError) return NextResponse.json({ error: alcanceError.message }, { status: 500 })
-  if (alcanzaObjetivo !== true) {
+  const esPropia = supervisor_id === usuario.id
+  if (alcanzaObjetivo !== true && !esPropia) {
     return NextResponse.json({ error: 'El objetivo esta fuera de tu alcance' }, { status: 403 })
   }
 
