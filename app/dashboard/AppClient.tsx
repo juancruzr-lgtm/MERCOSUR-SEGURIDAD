@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { alcanceDe, shellDeUsuario, tieneCapacidad, esAdminPleno } from '@/lib/capacidades'
+import { alcanceDe, shellDeUsuario, tieneCapacidad, esAdminPleno, esGerenciaReal } from '@/lib/capacidades'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
@@ -1556,10 +1556,92 @@ function TablaBalancesPreview({ cumplimiento, guardias, cargando, mes }: any) {
   )
 }
 
-function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol, puedePleno, puedeOperativo }: any) {
+// ── Delegación de acceso Gerencia (Fase 2D) ──────────────────────────────────
+// Sólo Gerencia real la ve/usa (la RLS de gerencia_delegaciones lo vuelve a
+// exigir). Otorga acceso funcional COMPLETO a Gerencia (Liquidaciones/Finanzas)
+// a una persona de Administración, con vencimiento opcional, sin cambiar su
+// puesto. Revocar o vencer corta el acceso (el gate evalúa hasta > now()).
+function DelegacionGerenciaControl({ usuarioId, otorganteId, guardias }: { usuarioId: string; otorganteId: string | null; guardias: any[] }) {
+  const [deleg, setDeleg] = useState<any | null>(null)
+  const [cargando, setCargando] = useState(true)
+  const [hasta, setHasta] = useState('')
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const nombreDe = (id?: string | null) => {
+    const u = guardias.find((g: any) => g.id === id)
+    return u ? `${u.nombre} ${u.apellido || ''}`.trim() : (id || '—')
+  }
+
+  const recargar = async () => {
+    setCargando(true)
+    const { data } = await supabase
+      .from('gerencia_delegaciones')
+      .select('*')
+      .eq('usuario_id', usuarioId)
+      .order('otorgado_at', { ascending: false })
+      .limit(1)
+    const d = (data && data[0]) || null
+    const vigente = d && d.activo && !d.revocado_at && (!d.hasta || new Date(d.hasta) > new Date())
+    setDeleg(vigente ? d : null)
+    setCargando(false)
+  }
+  useEffect(() => { void recargar() }, [usuarioId])
+
+  const otorgar = async () => {
+    setMsg(null)
+    const { error } = await supabase.from('gerencia_delegaciones').insert({
+      usuario_id: usuarioId,
+      otorgado_por: otorganteId,
+      hasta: hasta ? new Date(hasta).toISOString() : null,
+      activo: true,
+    })
+    if (error) { setMsg(error.message); return }
+    setHasta(''); await recargar()
+  }
+  const revocar = async () => {
+    if (!deleg) return
+    setMsg(null)
+    const { error } = await supabase.from('gerencia_delegaciones')
+      .update({ activo: false, revocado_por: otorganteId, revocado_at: new Date().toISOString() })
+      .eq('id', deleg.id)
+    if (error) { setMsg(error.message); return }
+    await recargar()
+  }
+
+  return (
+    <div style={{ marginBottom:16, padding:12, border:'1px solid #334155', borderRadius:8, background:'#0f172a' }}>
+      <label style={S.label}>Acceso Gerencia delegado</label>
+      {cargando ? <div style={{ fontSize:12, color:'#64748b' }}>Cargando…</div> : deleg ? (
+        <div style={{ fontSize:12.5, color:'#e2e8f0' }}>
+          <div><b style={{ color:'#22c55e' }}>ACTIVO</b> · otorgó {nombreDe(deleg.otorgado_por)}</div>
+          <div>Desde {new Date(deleg.desde).toLocaleString('es-AR')}</div>
+          <div>Hasta {deleg.hasta ? new Date(deleg.hasta).toLocaleString('es-AR') : 'sin vencimiento'}</div>
+          <button type="button" style={{ ...S.btn, ...S.btnSecondary, marginTop:8 }} onClick={revocar}>Revocar</button>
+        </div>
+      ) : (
+        <div style={{ fontSize:12.5, color:'#94a3b8' }}>
+          <div>Sin delegación activa.</div>
+          <div style={{ display:'flex', gap:8, alignItems:'center', marginTop:8, flexWrap:'wrap' }}>
+            <label style={{ fontSize:11, color:'#64748b' }}>Vence (opcional):</label>
+            <input type="datetime-local" value={hasta} onChange={e => setHasta(e.target.value)} style={{ ...S.input, width:'auto', padding:'6px 8px' }} />
+            <button type="button" style={{ ...S.btn, ...S.btnPrimary }} onClick={otorgar}>Delegar acceso Gerencia</button>
+          </div>
+        </div>
+      )}
+      {msg && <div style={{ fontSize:11, color:'#f87171', marginTop:6 }}>{msg}</div>}
+      <div style={{ fontSize:11, color:'#64748b', marginTop:6 }}>Incluye Liquidaciones, Finanzas y funciones de Gerencia. No cambia el puesto (sigue Administración).</div>
+    </div>
+  )
+}
+
+function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol, puedePleno, puedeOperativo, user }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
-  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', foto_url:'', es_prueba:false }
+  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', puesto_organizacional:'', foto_url:'', es_prueba:false }
+  // Fase 2D: quién puede asignar niveles privilegiados. Administración gestiona
+  // rol/puesto NORMALES; 'admin'/'gerencia'/delegación quedan para Gerencia real.
+  const esGerReal = esGerenciaReal(user)
+  const puedeRolPrivilegiado = tieneCapacidad(user, 'gestionar_usuarios_roles')
   const [grupoRol, setGrupoRol] = useState<'vigiladores' | 'supervisores' | 'administracion'>('vigiladores')
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
@@ -1696,6 +1778,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       email: g.email || '',
       estado: g.estado || 'activo',
       rol: g.rol || 'guardia',
+      puesto_organizacional: (g as any).puesto_organizacional || '',
       foto_url: g.foto_url || '',
       es_prueba: Boolean(g.es_prueba),
     })
@@ -1819,6 +1902,10 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       estado: form.estado,
       rol: form.rol,
       foto_url: form.foto_url.trim() || null,
+      // Puesto organizacional (Fase 2D): sólo se envía si se eligió uno. El
+      // endpoint valida alcance (Administración: puestos normales; 'gerencia'
+      // reservado a Gerencia real).
+      ...(form.puesto_organizacional ? { puesto_organizacional: form.puesto_organizacional } : {}),
     } as Record<string, unknown>
 
     // es_prueba viaja solo si la columna ya existe en la base (el select('*')
@@ -2435,9 +2522,36 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                 <option value="guardia">Guardia</option>
                 <option value="vigilador">Vigilador</option>
                 {puedePleno && <option value="supervisor">Supervisor</option>}
-                {puedePleno && <option value="admin">Admin</option>}
+                {/* 'admin' es privilegiado: sólo Gerencia real / admin pleno. */}
+                {puedeRolPrivilegiado && <option value="admin">Admin</option>}
               </select>
             </div>
+
+            {/* Puesto organizacional (Fase 2D): Administración gestiona puestos
+                normales; 'gerencia' queda reservado a Gerencia real. "" = no cambiar. */}
+            {puedePleno && (
+              <div style={{ marginBottom:16 }}>
+                <label style={S.label}>Puesto organizacional</label>
+                <select style={S.select} value={form.puesto_organizacional} onChange={e => setForm({...form, puesto_organizacional:e.target.value})}>
+                  <option value="">— (sin cambiar)</option>
+                  <option value="vigilador">Vigilador</option>
+                  <option value="supervisor">Supervisor</option>
+                  <option value="jefe_supervisores">Jefe de Supervisores</option>
+                  <option value="direccion_operativa">Dirección Operativa</option>
+                  <option value="administracion">Administración</option>
+                  {esGerReal && <option value="gerencia">Gerencia</option>}
+                </select>
+                <div style={{ fontSize:11, color:'#64748b', marginTop:4 }}>
+                  {esGerReal ? 'Gerencia puede asignar cualquier puesto.' : 'Administración: puestos normales. “Gerencia” lo asigna sólo Gerencia.'}
+                </div>
+              </div>
+            )}
+
+            {/* Delegación de acceso Gerencia (Fase 2D): sólo Gerencia real, sólo
+                sobre usuarios de Administración. Suma acceso temporal, no cambia puesto. */}
+            {esGerReal && editId && guardias.find((x: Usuario) => x.id === editId)?.puesto_organizacional === 'administracion' && (
+              <DelegacionGerenciaControl usuarioId={editId} otorganteId={usuarioId} guardias={guardias} />
+            )}
 
             <div style={{ marginBottom:16 }}>
               <label style={S.label}>Estado</label>
@@ -13574,7 +13688,15 @@ export default function AppPage() {
     setLoading(false)
   }, [])
 
-  const cargarSesionPorRol = useCallback(async (perfil: Usuario) => {
+  const cargarSesionPorRol = useCallback(async (perfilBase: Usuario) => {
+    // Delegación gerencial (Fase 2D): resuelve la vigencia (desde/hasta/revocada)
+    // en la base y la adjunta como booleano al perfil, para que capacidadesDe sume
+    // el acceso gerencial completo mientras esté activa. No cambia puesto/rol.
+    let perfil = perfilBase
+    try {
+      const { data: delegado } = await supabase.rpc('tiene_delegacion_gerencia_actual')
+      perfil = { ...perfilBase, acceso_gerencia_delegado: delegado === true } as Usuario
+    } catch { /* si falla, queda sin delegación (fail-closed) */ }
     if (shellDeUsuario(perfil) === 'admin') {
       const pantallaChica = detectarPantallaChicaAdmin()
       const preferencia = leerPreferenciaVistaAdmin()
@@ -13799,7 +13921,7 @@ const esGuardia = esRolGuardia(user.rol)
           ) : (
             <>
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
-              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} puedePleno={tieneCapacidad(user, 'gestionar_personal')} puedeOperativo={tieneCapacidad(user, 'gestionar_personal_operativo')} />}
+              {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} puedePleno={tieneCapacidad(user, 'gestionar_personal')} puedeOperativo={tieneCapacidad(user, 'gestionar_personal_operativo')} user={user} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}

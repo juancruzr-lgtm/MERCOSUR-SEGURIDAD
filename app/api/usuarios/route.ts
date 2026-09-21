@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
-import { tieneCapacidad } from '@/lib/capacidades'
+import { tieneCapacidad, esGerenciaReal } from '@/lib/capacidades'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,13 +24,17 @@ const CAMPOS_TEXTO_OPCIONAL = [
 ] as const
 
 const ROLES_VALIDOS = ['admin', 'supervisor', 'guardia', 'vigilador']
+// Puestos NORMALES que Administración puede asignar. 'gerencia' es privilegiado y
+// queda reservado a Gerencia real (se valida aparte).
+const PUESTOS_NORMALES = ['vigilador', 'supervisor', 'jefe_supervisores', 'direccion_operativa', 'administracion']
 const ESTADOS_VALIDOS = ['activo', 'inactivo']
 
 type PayloadUsuario = Record<string, string | boolean | null>
 
 function armarPayload(
   body: any,
-  { esAlta, puedeRol, puedeEconomico }: { esAlta: boolean; puedeRol: boolean; puedeEconomico: boolean },
+  { esAlta, puedeRolPrivilegiado, puedeEconomico, esGerReal }:
+    { esAlta: boolean; puedeRolPrivilegiado: boolean; puedeEconomico: boolean; esGerReal: boolean },
 ): { payload?: PayloadUsuario, error?: string } {
   const payload: PayloadUsuario = {}
 
@@ -56,11 +60,24 @@ function armarPayload(
   }
   if (typeof payload.email === 'string') payload.email = payload.email.toLowerCase()
 
-  // Asignar/cambiar rol es sensible (gestión de usuarios/roles = gerencia): sin
-  // esa capacidad el campo se ignora (no se escala rol desde Administración).
-  if (body.rol !== undefined && puedeRol) {
+  // Rol/puesto NORMALES: Administración puede gestionarlos (entra por
+  // gestionar_personal). PRIVILEGIADO reservado a Gerencia real: rol 'admin' y
+  // puesto 'gerencia' (anti-escalada; el trigger no aplica bajo service_role).
+  if (body.rol !== undefined) {
     if (!ROLES_VALIDOS.includes(body.rol)) return { error: 'Rol inválido' }
+    if (body.rol === 'admin' && !puedeRolPrivilegiado) {
+      return { error: 'Sólo Gerencia puede asignar el rol admin' }
+    }
     payload.rol = body.rol
+  }
+  if (body.puesto_organizacional !== undefined && body.puesto_organizacional !== null && body.puesto_organizacional !== '') {
+    const puesto = String(body.puesto_organizacional)
+    if (puesto === 'gerencia') {
+      if (!esGerReal) return { error: 'Sólo Gerencia puede asignar el puesto gerencia' }
+    } else if (!PUESTOS_NORMALES.includes(puesto)) {
+      return { error: 'Puesto inválido' }
+    }
+    payload.puesto_organizacional = puesto
   }
   if (body.estado !== undefined) {
     if (!ESTADOS_VALIDOS.includes(body.estado)) return { error: 'Estado inválido' }
@@ -84,12 +101,13 @@ export async function POST(req: NextRequest) {
   if (!tieneCapacidad(perfil, 'gestionar_personal')) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
   }
-  const puedeRol = tieneCapacidad(perfil, 'gestionar_usuarios_roles')
+  const puedeRolPrivilegiado = tieneCapacidad(perfil, 'gestionar_usuarios_roles')
   const puedeEconomico = tieneCapacidad(perfil, 'ver_finanzas')
+  const esGerReal = esGerenciaReal(perfil)
 
   try {
     const body = await req.json()
-    const { payload, error } = armarPayload(body, { esAlta: true, puedeRol, puedeEconomico })
+    const { payload, error } = armarPayload(body, { esAlta: true, puedeRolPrivilegiado, puedeEconomico, esGerReal })
     if (error || !payload) return NextResponse.json({ error: error ?? 'Datos inválidos' }, { status: 400 })
 
     const { data, error: dbError } = await admin.client
@@ -116,15 +134,16 @@ export async function PATCH(req: NextRequest) {
   if (!tieneCapacidad(perfil, 'gestionar_personal')) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
   }
-  const puedeRol = tieneCapacidad(perfil, 'gestionar_usuarios_roles')
+  const puedeRolPrivilegiado = tieneCapacidad(perfil, 'gestionar_usuarios_roles')
   const puedeEconomico = tieneCapacidad(perfil, 'ver_finanzas')
+  const esGerReal = esGerenciaReal(perfil)
 
   try {
     const body = await req.json()
     const usuarioId = body?.usuario_id
     if (!usuarioId) return NextResponse.json({ error: 'usuario_id es obligatorio' }, { status: 400 })
 
-    const { payload, error } = armarPayload(body, { esAlta: false, puedeRol, puedeEconomico })
+    const { payload, error } = armarPayload(body, { esAlta: false, puedeRolPrivilegiado, puedeEconomico, esGerReal })
     if (error || !payload) return NextResponse.json({ error: error ?? 'Datos inválidos' }, { status: 400 })
     if (Object.keys(payload).length === 0) {
       return NextResponse.json({ error: 'Sin campos para actualizar' }, { status: 400 })
