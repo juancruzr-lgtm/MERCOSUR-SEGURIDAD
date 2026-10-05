@@ -63,9 +63,46 @@ export async function generarExcelTrabajoLiquidacion(
   const ajustes = opts?.periodoId ? await cargarAjustes(client, opts.periodoId) : undefined
   const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, mes, ajustes)
   if (error || !plantilla) return { buf: null, filas, error }
+  const plant2 = await anexarColumnaSindicato(client, plantilla, mes)
   const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
-  const buf = await escribirPlantillaLiquidacionXLSX(plantilla)
+  const buf = await escribirPlantillaLiquidacionXLSX(plant2)
   return { buf, filas, error: null }
+}
+
+/**
+ * Anexa al FINAL del Excel de trabajo una columna "SINDICATO" (marca específica,
+ * NO texto libre): "X" para los empleados que ya tienen el permanente 104
+ * (Sindicato) activo y vigente en el mes. El liquidador marca "X" en los que se
+ * afilian; al reimportar, la marca da de alta el permanente (ver RPC
+ * afiliar_sindicato_permanente). La columna va DESPUÉS de todas las existentes
+ * (hoy BG → cae en BH), para no correr los índices fijos del reimport
+ * (IDX_SINDICATO en lib/excel-trabajo-reimport.ts debe coincidir con esa posición).
+ */
+async function anexarColumnaSindicato(
+  client: any, plantilla: PlantillaLiquidacion, mes: string,
+): Promise<PlantillaLiquidacion> {
+  const { desde, hasta } = limitesDelMes(mes)
+  const { data } = await client.from('liquidacion_concepto_permanente')
+    .select('empleado_id, vigencia_desde, vigencia_hasta, activo, concepto:concepto_id(codigo_visual)')
+    .eq('activo', true)
+  const afiliados = new Set<string>()
+  for (const p of (data ?? []) as any[]) {
+    if (p?.concepto?.codigo_visual !== '104' || !p.empleado_id) continue
+    const vd = String(p.vigencia_desde ?? '')
+    const vh = p.vigencia_hasta ? String(p.vigencia_hasta) : null
+    if (vd && vd <= hasta && (!vh || vh >= desde)) afiliados.add(String(p.empleado_id))
+  }
+  const nextCol = NUM_A_COL(Math.max(...plantilla.columnas.map(c => COL_A_NUM(c.col))) + 1)
+  const enc = plantilla.estilos.encabezado
+  const celdas = [...plantilla.celdas, { ref: `${nextCol}${enc}`, v: 'SINDICATO' }]
+  const bdRow = new Map<number, string>()
+  for (const c of plantilla.celdas) { const m = c.ref.match(/^BD(\d+)$/); if (m) bdRow.set(Number(m[1]), String(c.v ?? '')) }
+  for (const r of plantilla.estilos.filasDatos) {
+    const uid = bdRow.get(r); if (!uid) continue
+    if (afiliados.has(uid)) celdas.push({ ref: `${nextCol}${r}`, v: 'X' })
+  }
+  const columnas = [...plantilla.columnas, { col: nextCol, width: 12 }]
+  return { ...plantilla, celdas, columnas }
 }
 
 /**

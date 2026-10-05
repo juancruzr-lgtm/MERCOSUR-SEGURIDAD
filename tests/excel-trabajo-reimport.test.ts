@@ -37,6 +37,23 @@ function gridDe(filas: { usuarioId: string; periodo?: string; cuil?: string; nom
   return grid
 }
 
+describe('marca de Sindicato (columna dedicada, no texto libre)', () => {
+  it('detecta la marca "X" en la columna dedicada (índice 59) y su ausencia', () => {
+    const grid = gridDe([{ usuarioId: 'u1', vals: {} }, { usuarioId: 'u2', vals: {} }])
+    grid[2][59] = 'X'   // u1 marcado; u2 sin marca
+    const m = parseGridReimport(grid)
+    expect(m.get('u1')?.sindicato).toBe(true)
+    expect(m.get('u2')?.sindicato).toBe(false)
+  })
+  it('0/no/vacío no afilian; X/SI/1 sí', () => {
+    const g = gridDe([{ usuarioId: 'u3', vals: {} }])
+    g[2][59] = '0'; expect(parseGridReimport(g).get('u3')?.sindicato).toBe(false)
+    g[2][59] = 'no'; expect(parseGridReimport(g).get('u3')?.sindicato).toBe(false)
+    g[2][59] = 'SI'; expect(parseGridReimport(g).get('u3')?.sindicato).toBe(true)
+    g[2][59] = 1 as unknown as CeldaVisual; expect(parseGridReimport(g).get('u3')?.sindicato).toBe(true)
+  })
+})
+
 describe('reimport del Excel de trabajo (LIQ2B)', () => {
   it('baseline y parse resuelven por usuario_id (BD), no por fila ni nombre', () => {
     const base = baselineDesdePlantilla(plantillaBase())

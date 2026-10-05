@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { compararReimport, CLAVE_SUELDO_MENSUAL, CLAVE_EXTRA_MENSUAL, type FilaDiff, type FilaIdentidadDiff, type CeldaVisual } from '@/lib/excel-trabajo-reimport'
+import { compararReimport, parseGridReimport, CLAVE_SUELDO_MENSUAL, CLAVE_EXTRA_MENSUAL, type FilaDiff, type FilaIdentidadDiff, type CeldaVisual } from '@/lib/excel-trabajo-reimport'
 
 type Periodo = { id: string; mes: string; estado: string }
 
@@ -27,6 +27,8 @@ export default function ReimportarExcelTrabajo({ periodo, onDone }: { periodo: P
   const [incorporar, setIncorporar] = useState<Record<number, boolean>>({})
   const [incorporarId, setIncorporarId] = useState<Record<number, boolean>>({})
   const [fuera, setFuera] = useState<string[]>([])
+  // usuario_id marcados con Sindicato en el Excel → se afilian (permanente 104) al confirmar.
+  const [sindUsuarios, setSindUsuarios] = useState<string[]>([])
   const [motivo, setMotivo] = useState('')
   const [parsing, setParsing] = useState(false)
   const [confirmando, setConfirmando] = useState(false)
@@ -34,7 +36,7 @@ export default function ReimportarExcelTrabajo({ periodo, onDone }: { periodo: P
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]; if (!f) return
-    setParsing(true); setMsg(null); setDiffs([]); setIdentidad([]); setFuera([])
+    setParsing(true); setMsg(null); setDiffs([]); setIdentidad([]); setFuera([]); setSindUsuarios([])
     try {
       const buf = await f.arrayBuffer()
       const h = await sha256(buf)
@@ -69,12 +71,18 @@ export default function ReimportarExcelTrabajo({ periodo, onDone }: { periodo: P
       if (r.periodoDelArchivo !== periodo.mes) {
         setMsg({ ok: false, t: `El archivo es del período ${r.periodoDelArchivo}, no de ${periodo.mes}. Verificá que subís el Excel correcto.` }); return
       }
+      // Marca de Sindicato: usuarios marcados en el archivo. La afiliación (alta del
+      // permanente 104) se hace al CONFIRMAR, reconciliando en la base (no duplica).
+      const arch = parseGridReimport(grid)
+      const sind = Array.from(arch.values()).filter(ev => ev.sindicato).map(ev => ev.usuarioId)
+      setSindUsuarios(sind)
       setArchivo(f.name); setHash(h); setDiffs(r.diffs); setIdentidad(r.identidad); setFuera(r.fueraDePadron)
       setIncorporar(Object.fromEntries(r.diffs.map((_, i) => [i, true])))
       setIncorporarId(Object.fromEntries(r.identidad.map((_, i) => [i, true])))
       const partesMsg = [
         `${r.diffs.length} ajuste(s)`,
         r.identidad.length ? `${r.identidad.length} cambio(s) de legajo` : '',
+        sind.length ? `${sind.length} marca(s) de sindicato` : '',
         r.fueraDePadron.length ? `${r.fueraDePadron.length} fuera del padrón (ignorados)` : '',
       ].filter(Boolean)
       setMsg({ ok: true, t: `${partesMsg.join(' · ')}. Revisá y confirmá.` })
@@ -98,7 +106,7 @@ export default function ReimportarExcelTrabajo({ periodo, onDone }: { periodo: P
           empleado_id: d.usuarioId, tipo: 'variable', clave: d.clave, etiqueta: d.etiqueta,
           valor_operativo: d.mercosur, valor_liquidacion: d.excel, motivo: motivo || null,
         }))
-      if (ajustes.length === 0 && smDiffs.length === 0 && exDiffs.length === 0 && idSeleccion.length === 0) {
+      if (ajustes.length === 0 && smDiffs.length === 0 && exDiffs.length === 0 && idSeleccion.length === 0 && sindUsuarios.length === 0) {
         setMsg({ ok: false, t: 'No hay cambios seleccionados para incorporar.' }); return
       }
 
@@ -151,11 +159,24 @@ export default function ReimportarExcelTrabajo({ periodo, onDone }: { periodo: P
         }
       }
 
+      // SINDICATO: la marca del Excel da de alta el permanente 104 desde este
+      // período (reconcilia en la base: no duplica; si estaba de baja, nueva
+      // afiliación conservando el histórico). La baja se hace desde el botón de
+      // Conceptos Permanentes, no por desmarcar.
+      let sindMsg = ''
+      if (sindUsuarios.length > 0) {
+        const { data, error } = await supabase.rpc('afiliar_sindicato_permanente', { p_usuarios: sindUsuarios, p_mes: periodo.mes })
+        if (error) { setMsg({ ok: false, t: 'Ajustes OK, pero falló la afiliación de sindicato: ' + error.message }); return }
+        const rs = data as any
+        sindMsg = `Sindicato: ${rs?.creados ?? 0} afiliación(es) nueva(s), ${rs?.ya_vigentes ?? 0} ya vigente(s).`
+      }
+
       const partes = [
         resumenAjustes,
         smDiffs.length ? `SUELDO MENSUAL: ${smOk}/${smDiffs.length} guardado(s) desde ${periodo.mes} (se arrastra).` : '',
         exDiffs.length ? `EXTRA: ${exOk}/${exDiffs.length} guardado(s) desde ${periodo.mes} (se arrastra).` : '',
         idSeleccion.length ? `Legajo: ${idOk} persona(s) actualizada(s) en usuarios.` : '',
+        sindMsg,
       ].filter(Boolean)
       setMsg({ ok: true, t: partes.join(' · ') || 'Aplicado.' })
       setDiffs([]); setIdentidad([]); onDone()
