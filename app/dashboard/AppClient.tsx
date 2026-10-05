@@ -1207,17 +1207,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         />
       </div>
 
-      {/* ── 3. CUMPLIMIENTO DEL MES ──────────────────────────────────────────
-          Cómo terminó la evaluación publicada, en tres lecturas. El detalle
-          —distribución, dimensiones y uso de la app— se abre al tocarlo: acá
-          entra lo que se mira de reojo, no lo que se estudia. */}
-      <div style={{ ...alertBox, marginBottom:28 }}>
-        <ResumenEvaluacionPanel
-          onVerDetalle={() => onNavigate?.('guardias', { tipo:'evaluacion', label:'Cumplimiento del mes' })}
-        />
-      </div>
-
-      {/* ── 4. ATENCIÓN OPERATIVA ────────────────────────────────────────── */}
+      {/* ── 3. ATENCIÓN OPERATIVA ────────────────────────────────────────── */}
       <div style={seccionTitulo}>
         Atención operativa
         <span style={{ marginLeft:8, color:brandColors.muted, fontWeight:700, letterSpacing:0 }}>
@@ -1293,15 +1283,28 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         })}
       </div>
 
-      {/* ── 4. CONTROL DE PLANILLAS ─────────────────────────────────────── */}
+      {/* ── 4. CUMPLIMIENTO DEL MES ──────────────────────────────────────────
+          Cómo terminó la evaluación publicada, en tres lecturas. El detalle
+          —distribución, dimensiones y uso de la app— se abre al tocarlo: acá
+          entra lo que se mira de reojo, no lo que se estudia. Va DEBAJO de
+          Atención Operativa (pedido de JC, 05/10): es la foto del período
+          cerrado, no lo urgente de hoy — arriba quedaba con un protagonismo
+          que no le corresponde. */}
       <div style={{ ...alertBox, marginTop:28 }}>
+        <ResumenEvaluacionPanel
+          onVerDetalle={() => onNavigate?.('guardias', { tipo:'evaluacion', label:'Cumplimiento del mes' })}
+        />
+      </div>
+
+      {/* ── 5. CONTROL DE PLANILLAS ─────────────────────────────────────── */}
+      <div style={{ ...alertBox, marginTop:16 }}>
         <ControlPlanillasPanel
           mes={mesActual}
           onVerBandeja={() => onNavigate?.('revision_planillas')}
         />
       </div>
 
-      {/* ── 5. CONTROL DE SUPERVISIONES ─────────────────────────────────── */}
+      {/* ── 6. CONTROL DE SUPERVISIONES ─────────────────────────────────── */}
       {/* Va antes de Imágenes IA a propósito: una supervisión crítica o
           incompleta reclama una decisión, y la calidad de las fotos no. */}
       <div style={{ ...alertBox, marginTop:16 }}>
@@ -1311,7 +1314,7 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         />
       </div>
 
-      {/* ── 6. CONTROL DE IMÁGENES IA ───────────────────────────────────── */}
+      {/* ── 7. CONTROL DE IMÁGENES IA ───────────────────────────────────── */}
       <div style={{ ...alertBox, marginTop:16 }}>
         <ControlImagenesIAPanel onVerTodas={() => onNavigate?.('revision_fotos_ia')} />
       </div>
