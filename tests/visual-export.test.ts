@@ -61,11 +61,27 @@ describe('construirLineasVisual (LIQ2G · persona/expedientes/000)', () => {
     expect(r.padron[0].estado).toBe('exporta')
   })
 
-  it('000 pendiente → bloquea esa persona (no se inventa), se reporta', () => {
+  it('B · 0 días pero con concepto (haber) → exporta el concepto SIN inventar 000 y NO bloquea', () => {
     const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes: new Map([['p1', [{ codigo: '001', cantidad: null, importe: 100 }]]]), dias: new Map(), permanentes: new Map(), expedientes: new Map(), lineaCero: [] })
-    expect(r.bloqueados.some(b => b.tipo === 'dias_pendiente')).toBe(true)
+    expect(r.bloqueados.length).toBe(0)
+    expect(r.lineas.some(l => l.codigo === '001')).toBe(true)
+    expect(r.lineas.some(l => l.codigo === '000')).toBe(false)
+    expect(r.padron[0].estado).toBe('exporta')
+  })
+  it('C · 0 días y sin conceptos (operativo) → EXCLUIDO del período, sin bloquear ni inventar 000', () => {
+    const r = construirLineasVisual({ padron: [padron[0]], catalogo, haberes: new Map(), dias: new Map(), permanentes: new Map(), expedientes: new Map(), lineaCero: LINEA_CERO })
     expect(r.lineas.length).toBe(0)
-    expect(r.padron[0].estado).toBe('falta_info')
+    expect(r.bloqueados.length).toBe(0)
+    expect(r.padron[0].estado).toBe('no_corresponde')
+    expect(r.padron[0].motivo).toMatch(/sin jornadas ni conceptos/)
+  })
+  it('D · 0 días y sin conceptos (mensualizado) → PENDIENTE de 000 manual, sin bloquear el archivo', () => {
+    const mens: PersonaPadron = { persona_id: 'pm', cod_interno: 'MENS', cuil: '20111111112', nombre: 'MENSUAL', mensualizado: true }
+    const r = construirLineasVisual({ padron: [mens], catalogo, haberes: new Map(), dias: new Map(), permanentes: new Map(), expedientes: new Map(), lineaCero: LINEA_CERO })
+    expect(r.lineas.length).toBe(0)
+    expect(r.bloqueados.length).toBe(0)
+    expect(r.advertencias.some(a => a.tipo === 'dias_pendiente_mensualizado')).toBe(true)
+    expect(r.padron[0].estado).toBe('no_corresponde')
   })
 
   it('más de 2 expedientes simultáneos → bloquea la persona, no descarta ni pisa', () => {

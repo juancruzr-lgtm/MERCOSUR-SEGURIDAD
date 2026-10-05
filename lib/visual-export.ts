@@ -70,6 +70,10 @@ export interface PersonaPadron {
   /** Excluido de Liquidación por decisión explícita (no se exporta a Visual). */
   excluido?: boolean
   motivoExcluido?: string | null
+  /** Mensualizado (supervisor/jefe/dir.op/administración/gerencia). Para la regla
+   * 000: un mensualizado sin jornadas ni conceptos queda PENDIENTE de 000 manual
+   * (D); un operativo en esa situación se EXCLUYE del período (C). */
+  mensualizado?: boolean
 }
 export interface HaberLinea { codigo: string; cantidad: number | null; importe: number | null }
 export interface PermanenteLinea { codigo: string; importe: number | null }   // calculados 104/977/48410
@@ -146,27 +150,46 @@ export function construirLineasVisual(p: {
     // Identidad
     if (!e.cod_interno || !String(e.cod_interno).trim()) { bloqueados.push({ ...base, tipo: 'falta_cod_interno', detalle: `${e.nombre}: sin COD_INTERNO (no está en Visual; no se exporta)` }); errsEmp.push('falta COD_INTERNO') }
     if (cuil.length !== 11) { bloqueados.push({ ...base, tipo: 'cuil_invalido', detalle: `${e.nombre}: CUIL inválido "${e.cuil}"` }); errsEmp.push('CUIL inválido') }
-    // 000 DÍAS pendiente: sin valor no se puede exportar el recibo de la persona.
+    // Regla 000 (JC 05/10): 000 NO es condición para exportar. Es sólo el registro
+    // de los días REALMENTE trabajados; no se inventa, no se pide, no bloquea.
     const dias = p.dias.get(e.persona_id)
-    if (dias === null || dias === undefined) { bloqueados.push({ ...base, codigo: '000', tipo: 'dias_pendiente', detalle: `${e.nombre}: 000 DÍAS TRABAJADOS pendiente (cargar el valor del período)` }); errsEmp.push('000 pendiente') }
+    const diasReal = dias != null && dias > 0
 
     const filasEmp: FilaVisual[] = []
     const emitir = (codigo: string, cantidad: number | null, importe: number | null) => {
       filasEmp.push({ legajo: String(e.cod_interno ?? '').trim(), cuil, codigo: String(codigo), cantidad, importe, nombre: e.nombre })
     }
 
-    // 1) Haberes (política 'valor').
+    // 1) Haberes del período (política 'valor'): licencia, vacaciones, ART, etc.
+    let haberReal = 0
     for (const h of p.haberes.get(e.persona_id) ?? []) {
       const cfg = p.catalogo.get(h.codigo)
       if (!cfg) { criticos.push({ ...base, codigo: h.codigo, tipo: 'concepto_sin_config', detalle: `código ${h.codigo} sin configuración en el catálogo Visual` }); continue }
       if (cfg.politica !== 'valor') { advertencias.push({ ...base, codigo: h.codigo, tipo: 'haber_politica_incorrecta', detalle: `código ${h.codigo} no es política 'valor' (${cfg.politica}); se omite` }); continue }
-      if (cfg.entrada === 'CAN') { if (h.cantidad == null) continue; emitir(h.codigo, h.cantidad, null) }
-      else if (cfg.entrada === 'IMP') emitir(h.codigo, 1, h.importe ?? 0)
-      else emitir(h.codigo, h.cantidad ?? 1, h.importe ?? 0)
+      if (cfg.entrada === 'CAN') { if (h.cantidad == null) continue; emitir(h.codigo, h.cantidad, null); haberReal++ }
+      else if (cfg.entrada === 'IMP') { emitir(h.codigo, 1, h.importe ?? 0); haberReal++ }
+      else { emitir(h.codigo, h.cantidad ?? 1, h.importe ?? 0); haberReal++ }
     }
 
-    // 2) 000 DÍAS (CAN): dato editable de la persona.
-    if (dias != null) emitir('000', dias, null)
+    // Regla 000 (JC): exporta quien TRABAJÓ (000 real) o tiene algún concepto
+    // liquidable del período (licencia/vacaciones/ART/…). Si NO trabajó y NO tiene
+    // conceptos: operativo → se EXCLUYE del período (C); mensualizado → queda
+    // PENDIENTE de 000 manual (D), informativo, sin bloquear el archivo.
+    const tieneReal = diasReal || haberReal > 0
+    if (!tieneReal) {
+      if (errsEmp.length > 0) {
+        padron.push({ persona_id: e.persona_id, cuil: cuil || null, nombre: e.nombre, estado: 'falta_info', filas: 0, motivo: errsEmp.join(' · ') })
+      } else if (e.mensualizado) {
+        advertencias.push({ ...base, codigo: '000', tipo: 'dias_pendiente_mensualizado', detalle: `${e.nombre}: mensualizado sin jornadas — cargar 000 manual del período` })
+        padron.push({ persona_id: e.persona_id, cuil: cuil || null, nombre: e.nombre, estado: 'no_corresponde', filas: 0, motivo: 'mensualizado: 000 pendiente de carga manual' })
+      } else {
+        padron.push({ persona_id: e.persona_id, cuil: cuil || null, nombre: e.nombre, estado: 'no_corresponde', filas: 0, motivo: 'sin jornadas ni conceptos liquidables en el período' })
+      }
+      continue
+    }
+
+    // 2) 000 DÍAS (CAN): sólo si trabajó jornadas reales. 0 jornadas → sin 000.
+    if (diasReal) emitir('000', dias!, null)
 
     // 050 (ajuste) y 133 (dif. O.S.): se omiten si el imponible que devolvió Visual
     // ≥ básico (no corresponden; el 050 declararía una base menor a la real y el 133
