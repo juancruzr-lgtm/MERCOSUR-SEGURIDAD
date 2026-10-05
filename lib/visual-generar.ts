@@ -61,10 +61,23 @@ async function cargarYConstruirVisual(
   const personaPorUsuario = new Map<string, any>()
   for (const p of personas) if (p.usuario_id) personaPorUsuario.set(p.usuario_id, p)
 
+  // Mensualizado por usuario (regla 000, caso D): supervisor/jefe/dir.operativa/
+  // administración/gerencia. Operativo (vigilador) o persona sin usuario = false.
+  const MENSUALIZADOS = ['supervisor', 'jefe_supervisores', 'direccion_operativa', 'administracion', 'gerencia']
+  const mensualizadoPorUsuario = new Map<string, boolean>()
+  const usuarioIds = personas.map(p => p.usuario_id).filter(Boolean)
+  if (usuarioIds.length > 0) {
+    const { data: us } = await client.from('usuarios').select('id, puesto_organizacional').in('id', usuarioIds)
+    for (const u of (us ?? []) as any[]) {
+      mensualizadoPorUsuario.set(String(u.id), MENSUALIZADOS.includes(String(u.puesto_organizacional ?? '')))
+    }
+  }
+
   const padron: PersonaPadron[] = personas.map(p => ({
     persona_id: p.id, cod_interno: p.cod_interno ?? null, cuil: p.cuil ?? null,
     nombre: p.nombre ?? '', esPrueba: false, tieneUsuario: Boolean(p.usuario_id),
     excluido: p.estado_liquidable === 'excluido', motivoExcluido: p.motivo ?? null,
+    mensualizado: p.usuario_id ? (mensualizadoPorUsuario.get(String(p.usuario_id)) ?? false) : false,
   }))
 
   const catalogo = new Map<string, ConceptoCfg>(); const lineaCero: string[] = []
@@ -294,14 +307,18 @@ export async function prevalidarVisual(
 
   const b = clasificarBloqueados(resultado.bloqueados)
   const exportan = resultado.padron.filter(x => x.estado === 'exporta').length
+  // 000 ya NO bloquea (regla JC 05/10). `listo` sólo mira críticos e identidad/
+  // expedientes. Los mensualizados sin 000 son PENDIENTES informativos (D), no
+  // frenan el archivo: se listan en diasRequerido desde las advertencias.
+  const diasRequerido = resultado.advertencias.filter(a => a.tipo === 'dias_pendiente_mensualizado')
   const listo = resultado.criticos.length === 0 && resultado.bloqueados.length === 0
   return {
     listo, totalPersonas: personas, exportan,
     criticos: resultado.criticos,
     identidadFaltante: b.identidadFaltante,
-    diasRequerido: b.diasRequerido,
+    diasRequerido,
     otros: b.otros,
-    advertencias: resultado.advertencias,
+    advertencias: resultado.advertencias.filter(a => a.tipo !== 'dias_pendiente_mensualizado'),
     error: null,
   }
 }

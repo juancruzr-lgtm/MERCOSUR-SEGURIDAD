@@ -44,11 +44,25 @@ describe('prevalidación de consolidación (regla real de Visual)', () => {
     expect(listo).toBe(true)
   })
 
-  it('000 faltante → FALTAN DATOS, causa "000 requerido" (no identidad)', () => {
-    const { listo, cl } = correr({ padron: [persona()], dias: new Map() }) // p1 sin días
-    expect(listo).toBe(false)
-    expect(cl.diasRequerido.length).toBe(1)
-    expect(cl.identidadFaltante.length).toBe(0)
+  it('0 días pero con concepto del período → exporta SIN 000, NO bloquea (regla JC 05/10)', () => {
+    const { listo, r } = correr({ padron: [persona()], dias: new Map() }) // sin días, pero con haber 001 por defecto
+    expect(listo).toBe(true)
+    expect(r.lineas.some(l => l.codigo === '000')).toBe(false)   // 000 no se inventa
+    expect(r.padron[0].estado).toBe('exporta')
+  })
+
+  it('0 días y sin conceptos (operativo) → EXCLUIDO del período, no bloquea (C)', () => {
+    const { listo, r } = correr({ padron: [persona()], dias: new Map(), haberes: new Map() })
+    expect(listo).toBe(true)
+    expect(r.padron[0].estado).toBe('no_corresponde')
+    expect(r.lineas.length).toBe(0)
+  })
+
+  it('0 días y sin conceptos (mensualizado) → PENDIENTE de 000 manual, no bloquea (D)', () => {
+    const { listo, r } = correr({ padron: [persona({ mensualizado: true })], dias: new Map(), haberes: new Map() })
+    expect(listo).toBe(true)
+    expect(r.advertencias.some(a => a.tipo === 'dias_pendiente_mensualizado')).toBe(true)
+    expect(r.padron[0].estado).toBe('no_corresponde')
   })
 
   it('identidad Visual faltante (sin COD_INTERNO) → causa identidad (no 000)', () => {
@@ -63,10 +77,10 @@ describe('prevalidación de consolidación (regla real de Visual)', () => {
     expect(cl.identidadFaltante.some(h => h.tipo === 'cuil_invalido')).toBe(true)
   })
 
-  it('ambas causas (sin COD_INTERNO + sin 000) se reportan SEPARADAS', () => {
+  it('sin COD_INTERNO → identidad faltante (000 ya NO es causa de bloqueo)', () => {
     const { cl } = correr({ padron: [persona({ cod_interno: null })], dias: new Map() })
     expect(cl.identidadFaltante.length).toBe(1)
-    expect(cl.diasRequerido.length).toBe(1)
+    expect(cl.diasRequerido.length).toBe(0)
   })
 
   it('>2 expedientes simultáneos → bloquea (causa "otros"), no se descarta ninguno', () => {
@@ -95,10 +109,9 @@ describe('prevalidación de consolidación (regla real de Visual)', () => {
     expect(r.criticos.some(c => c.tipo === 'concepto_sin_config')).toBe(true)
   })
 
-  it('Consolidar bloqueado si existe cualquier bloqueante (identidad, 000 o expedientes)', () => {
+  it('Consolidar bloqueado si existe bloqueante (identidad o >2 expedientes) — 000 NO bloquea', () => {
     for (const caso of [
       { padron: [persona({ cod_interno: null })] },                                   // identidad
-      { padron: [persona()], dias: new Map() },                                        // 000
       { padron: [persona()], expedientes: new Map([['p1', [{ importe: 1, slot_preferido: '111' }, { importe: 2, slot_preferido: '993' }, { importe: 3, slot_preferido: null }]]]) }, // >2 exp
     ]) {
       expect(correr(caso as any).listo).toBe(false)
