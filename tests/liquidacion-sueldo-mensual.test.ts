@@ -46,6 +46,24 @@ describe('SUELDO MENSUAL — grupo A (mensualizados fijos)', () => {
     expect(m.get(`I${r}`)).toBeUndefined()
   })
 
+  it('supervisor operativo con EXTRA fija → la lleva en AP/BG, manteniendo 25/150/50 (JC 05/10)', () => {
+    const extra = new Map([['s1', 300000]])
+    const { m, filaDe } = plantilla([SUP], undefined, extra)   // SUP = jefe_supervisores → supervisor operativo (sin sueldo mensual)
+    const r = filaDe('s1')
+    expect(m.get(`BG${r}`)?.v).toBe(300000)       // columna EXTRA cargada
+    expect(m.get(`AP${r}`)?.v).toBe(300000)       // AP = extra fija
+    expect(m.get(`AP${r}`)?.f).toBe(`BG${r}`)     // AP sigue la columna editable
+    expect(m.get(`BF${r}`)).toBeUndefined()       // NO se vuelve sueldo fijo (sin SUELDO MENSUAL)
+    expect(m.get(`AD${r}`)?.f).toBe(`($B$2/25)*H${r}`) // mantiene presentismo de convención
+  })
+
+  it('supervisor operativo SIN extra fija → AP por fórmula de horas (sin cambios)', () => {
+    const { m, filaDe } = plantilla([SUP])        // sin mapa de extra
+    const r = filaDe('s1')
+    expect(m.get(`BG${r}`)).toBeUndefined()
+    expect(m.get(`AP${r}`)?.f).toBe(`IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
+  })
+
   it('gerencia con SUELDO MENSUAL → usa el importe individual', () => {
     const sm = new Map([['g1', 1500000]])
     const { m, filaDe } = plantilla([GER], sm)
