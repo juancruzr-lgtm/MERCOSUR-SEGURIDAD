@@ -65,6 +65,15 @@ const IDX_CUENTA = 2   // C · CUENTA bancaria
 const IDX_NOMBRE = 3   // D
 const IDX_BD = 55      // usuario_id oculto
 const IDX_BE = 56      // periodo oculto
+// Marca específica de Sindicato, anexada al FINAL del Excel (col BH, índice 59).
+// Debe coincidir con la posición que usa anexarColumnaSindicato en
+// lib/excel-trabajo-liquidacion.ts (hoy: después de EXTRA/BG).
+const IDX_SINDICATO = 59
+// "Marcado" = cualquier valor no vacío que no sea 0/no/false (X, SI, 1, etc.).
+const marcado = (v: CeldaVisual): boolean => {
+  const s = String(v ?? '').trim().toLowerCase()
+  return s !== '' && s !== '0' && s !== 'no' && s !== 'false'
+}
 
 // La fila 6 del Excel es el ENCABEZADO: BD6 y BE6 llevan los rótulos literales de
 // esas columnas ('usuario_id' y 'periodo'). No es un empleado. Se los excluye por
@@ -98,6 +107,8 @@ export interface EmpleadoValores {
   // Identidad editable en el Excel (se guarda al reimportar): legajo/cuenta.
   legajo: string | null
   cuenta: string | null
+  // Marca específica de Sindicato en el Excel (columna dedicada). true = afiliar.
+  sindicato: boolean
   valores: Record<string, number | null>
 }
 
@@ -126,6 +137,7 @@ export function baselineDesdePlantilla(plantilla: PlantillaLiquidacion): Map<str
       periodo: norm(porRef.get(`${colLetter(IDX_BE)}${r}`) as any) || null,
       legajo: norm(porRef.get(`${colLetter(IDX_LEGAJO)}${r}`) as any) || null,
       cuenta: norm(porRef.get(`${colLetter(IDX_CUENTA)}${r}`) as any) || null,
+      sindicato: marcado(porRef.get(`${colLetter(IDX_SINDICATO)}${r}`) as any),
       valores,
     })
   }
@@ -150,6 +162,7 @@ export function parseGridReimport(grid: CeldaVisual[][]): Map<string, EmpleadoVa
       periodo: norm(fila[IDX_BE]) || null,
       legajo: norm(fila[IDX_LEGAJO]) || null,
       cuenta: norm(fila[IDX_CUENTA]) || null,
+      sindicato: marcado(fila[IDX_SINDICATO]),
       valores,
     })
   }
