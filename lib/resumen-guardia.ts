@@ -1175,6 +1175,13 @@ export function plantillaLiquidacionResumenGuardia(
     // mensual (Sergio/Sabino/Fulla) mantienen la convención 25/150/50.
     const esSueldoFijo = esGrupoA || (fila.grupo === 'supervisores' && tieneSM)
     const mensualizado = fila.grupo === 'supervisores' && !esSueldoFijo
+    // EXTRA fija (columna BG → AP): aplica SIEMPRE a sueldo fijo (administrativos +
+    // supervisores con sueldo mensual) y, desde JC 05/10, TAMBIÉN a los supervisores
+    // operativos a los que se les cargó una extra fija (su AP por horas da 0). Se
+    // mantiene su esquema 25/150/50: la extra sólo se suma en AP. Vigiladores nunca.
+    // Es informativa: NO tiene código Visual, no se exporta al recibo.
+    const tieneExtraFija = extraPorEmpleado?.has(fila.empleadoId) ?? false
+    const usaExtraFija = esSueldoFijo || (fila.grupo === 'supervisores' && tieneExtraFija)
     const G = ovNum('jornadas', mensualizado ? 25 : fila.jornadas)
     const H = Math.min(G, 25)
     const I = ovNum('horas_liquidables', mensualizado ? 150 : fila.horasLiquidables)
@@ -1237,7 +1244,7 @@ export function plantillaLiquidacionResumenGuardia(
     // vigiladores (C) NO se tocan: siguen exactamente como antes. (esGrupoA ya
     // está definido arriba.)
     const sueldoMensual = esSueldoFijo ? (sueldoMensualPorEmpleado?.get(fila.empleadoId) ?? P.basico) : null
-    const extraFija = esSueldoFijo ? (extraPorEmpleado?.get(fila.empleadoId) ?? 0) : 0
+    const extraFija = usaExtraFija ? (extraPorEmpleado?.get(fila.empleadoId) ?? 0) : 0
     const gAC = esSueldoFijo ? 0 : AC
     const gAD = esSueldoFijo ? 0 : AD
     const gAE = esSueldoFijo ? 0 : AE
@@ -1249,7 +1256,7 @@ export function plantillaLiquidacionResumenGuardia(
     const gAL = esSueldoFijo ? 0 : AL
     const gAM = esSueldoFijo ? 0 : AM
     const gAN = esSueldoFijo ? 0 : AN
-    const gAP = esSueldoFijo ? extraFija : AP
+    const gAP = usaExtraFija ? extraFija : AP
     const gAO = gAC + gAD + gAE + gAF + gAI + gAJ + AT + AU + AV + AW + AX + gAP
     const gAS = gAO > 0 && I > 0 ? gAO / I : 0
     // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias de la
@@ -1272,7 +1279,7 @@ export function plantillaLiquidacionResumenGuardia(
     if (fila.grupo === 'vigiladores') put(`AM${r}`, gAM, `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
     put(`AN${r}`, gAN, esSueldoFijo ? undefined : `I${r}/G${r}`)
     put(`AO${r}`, gAO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
-    put(`AP${r}`, gAP, esSueldoFijo ? `BG${r}` : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
+    put(`AP${r}`, gAP, usaExtraFija ? `BG${r}` : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
     put(`AS${r}`, gAS, esSueldoFijo ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`)
     put(`AT${r}`, AT, `K${r}*$C$3`)
     put(`AU${r}`, AU, `L${r}*$C$3`)
@@ -1281,8 +1288,9 @@ export function plantillaLiquidacionResumenGuardia(
     put(`AX${r}`, AX, `O${r}*$C$3`)
     // SUELDO MENSUAL editable: lo lleva quien cobra sueldo fijo.
     if (esSueldoFijo) put(`BF${r}`, sueldoMensual as number)
-    // EXTRA fija editable (concepto "extras" AP): la lleva quien cobra sueldo fijo.
-    if (esSueldoFijo) put(`BG${r}`, extraFija)
+    // EXTRA fija editable (concepto "extras" AP): sueldo fijo + supervisores
+    // operativos con extra fija cargada (JC 05/10).
+    if (usaExtraFija) put(`BG${r}`, extraFija)
     // Informativas del final: valores puros.
     put(`AY${r}`, fila.supervisiones)
     put(`AZ${r}`, fila.horasSupervision)
