@@ -50,15 +50,21 @@ export type Entrada = 'IMP' | 'CAN' | 'CANIMP' | 'CALCULADO'
 
 export interface ConceptoCfg { politica: Politica; entrada: Entrada; nombre?: string; categoria?: string }
 
-// AJUSTE al básico (050) y DIFERENCIA de O.S. (133): sólo corresponden cuando el
-// remunerativo está POR DEBAJO del básico de vigilancia (911650): el 050 ajusta la
-// base hasta el básico y el 133 ajusta la O.S. a ese básico. Si el IMPONIBLE de la
-// persona ≥ básico, NINGUNO de los dos corresponde (el 050 declararía una base
-// 911650 menor que la real y el 133 daría negativo) → NO se mandan (regla JC 11/09).
-// El imponible incluye la ANTIGÜEDAD (011) que calcula Visual (MERCOSUR no), por eso
-// la decisión usa el IMPONIBLE del resultado importado.
-export const BASICO_VIGILANCIA_133 = 911650
+// AJUSTE al básico (050) y DIFERENCIA de O.S. (133 = "diferencias O.S."): sólo
+// corresponden cuando el REMUNERATIVO del empleado está POR DEBAJO del Básico de la
+// liquidación. El 050 ajusta la base hasta el básico y el 133 ajusta la O.S. a ese
+// básico; si el remunerativo YA supera el Básico, ninguno corresponde (el 133 daría
+// NEGATIVO en Visual). Regla JC 05/10 (reemplaza la corrección al importar): la
+// decisión se toma ANTES de exportar, con el REMUNERATIVO PREVISTO de los conceptos
+// que efectivamente se van a exportar (incluidas las correcciones manuales),
+// comparado contra el Básico de esa liquidación. El 133 NO se manda en cero: su sola
+// presencia dispara el cálculo en Visual, así que cuando no corresponde se OMITE.
 export const CODIGOS_SOBRE_BASICO = new Set(['050', '133'])
+// Categorías del catálogo que integran el REMUNERATIVO (base que Visual usa para la
+// O.S.): imponibles + asignaciones remuneratorias. Se EXCLUYEN los no remunerativos
+// ('no_imponible', p.ej. 214/008), los descuentos ('descuento', incluido el propio
+// 133) y las bases auxiliares ('base_auxiliar', p.ej. 000/050/213).
+export const CATEGORIAS_REMUNERATIVAS = new Set(['imponible', 'asignacion'])
 // Persona liquidable (padrón canónico), no necesariamente un usuario de la app.
 export interface PersonaPadron {
   persona_id: string
@@ -130,7 +136,8 @@ export function construirLineasVisual(p: {
   permanentes: Map<string, PermanenteLinea[]> // calculados individuales por persona_id
   expedientes: Map<string, ExpedienteLinea[]> // expedientes de importe vigentes por persona_id
   lineaCero: string[]
-  imponiblePorCuil?: Map<string, number>      // imponible de Visual por CUIL (para el 133)
+  /** Básico de la liquidación: si el remunerativo previsto lo supera, se omiten 050/133. */
+  basicoLiquidacion?: number
 }): ResultadoLineas {
   const lineas: FilaVisual[] = []
   const criticos: Hallazgo[] = []
@@ -161,14 +168,21 @@ export function construirLineasVisual(p: {
     }
 
     // 1) Haberes del período (política 'valor'): licencia, vacaciones, ART, etc.
+    // En paralelo se acumula el REMUNERATIVO PREVISTO (Σ importe de los conceptos
+    // remunerativos que se exportan), que decide 050/133 (ver más abajo).
     let haberReal = 0
+    let remunerativoPrevisto = 0
     for (const h of p.haberes.get(e.persona_id) ?? []) {
       const cfg = p.catalogo.get(h.codigo)
       if (!cfg) { criticos.push({ ...base, codigo: h.codigo, tipo: 'concepto_sin_config', detalle: `código ${h.codigo} sin configuración en el catálogo Visual` }); continue }
       if (cfg.politica !== 'valor') { advertencias.push({ ...base, codigo: h.codigo, tipo: 'haber_politica_incorrecta', detalle: `código ${h.codigo} no es política 'valor' (${cfg.politica}); se omite` }); continue }
+      let impEmitido = 0
       if (cfg.entrada === 'CAN') { if (h.cantidad == null) continue; emitir(h.codigo, h.cantidad, null); haberReal++ }
-      else if (cfg.entrada === 'IMP') { emitir(h.codigo, 1, h.importe ?? 0); haberReal++ }
-      else { emitir(h.codigo, h.cantidad ?? 1, h.importe ?? 0); haberReal++ }
+      else if (cfg.entrada === 'IMP') { impEmitido = h.importe ?? 0; emitir(h.codigo, 1, impEmitido); haberReal++ }
+      else { impEmitido = h.importe ?? 0; emitir(h.codigo, h.cantidad ?? 1, impEmitido); haberReal++ }
+      // Sólo los remunerativos (imponible/asignación) suman al remunerativo previsto;
+      // los no remunerativos (214/008…) y el propio 133 quedan fuera por su categoría.
+      if (CATEGORIAS_REMUNERATIVAS.has(String(cfg.categoria ?? ''))) remunerativoPrevisto += impEmitido
     }
 
     // Regla 000 (JC): exporta quien TRABAJÓ (000 real) o tiene algún concepto
@@ -191,17 +205,15 @@ export function construirLineasVisual(p: {
     // 2) 000 DÍAS (CAN): sólo si trabajó jornadas reales. 0 jornadas → sin 000.
     if (diasReal) emitir('000', dias!, null)
 
-    // 050 (ajuste) y 133 (dif. O.S.): se omiten si el imponible que devolvió Visual
-    // ≥ básico (no corresponden; el 050 declararía una base menor a la real y el 133
-    // daría negativo). El imponible incluye la antigüedad que MERCOSUR no calcula,
-    // por eso se toma del resultado importado (imponiblePorCuil). Sin resultado aún
-    // (1er export) se mandan como siempre y se corrige al regenerar tras importar.
-    const impon = p.imponiblePorCuil?.get(cuil)
-    const sobreBasico = impon != null && impon >= BASICO_VIGILANCIA_133
+    // 050 (ajuste) y 133 (diferencia O.S.): se OMITEN cuando el REMUNERATIVO PREVISTO
+    // (de los conceptos que se exportan, con correcciones manuales) SUPERA el Básico
+    // de la liquidación — ahí el 133 daría negativo en Visual. Igual o menor → se
+    // conservan (comportamiento existente). Comparación por IMPORTES, no por horas.
+    const omitirSobreBasico = p.basicoLiquidacion != null && remunerativoPrevisto > p.basicoLiquidacion
 
     // 3) Líneas 0/0 estructurales para TODOS (Visual calcula). EXCEPCIÓN: 050 y 133.
     for (const codigo of p.lineaCero) {
-      if (sobreBasico && CODIGOS_SOBRE_BASICO.has(codigo)) continue
+      if (omitirSobreBasico && CODIGOS_SOBRE_BASICO.has(codigo)) continue
       if (!p.catalogo.get(codigo)) { advertencias.push({ ...base, codigo, tipo: 'linea_cero_sin_config', detalle: `estructural ${codigo} sin config; se omite` }); continue }
       emitir(codigo, 0, 0)
     }
