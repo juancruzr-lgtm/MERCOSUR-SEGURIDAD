@@ -392,6 +392,24 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     setMsg({ ok: true, t: 'Concepto permanente agregado (entrará en cada período vigente).' }); void cargarPermanentes()
   }
 
+  // Baja / desafiliación: corta el descuento sin borrar el histórico. Setea
+  // `vigencia_hasta` al último día del mes en curso → se descuenta hasta este mes
+  // inclusive y deja de tomarse desde el siguiente (el export de Visual sólo toma
+  // permanentes vigentes en el período). Ej. de uso real: desafiliación del sindicato.
+  async function darDeBajaPermanente(p: Permanente) {
+    setMsg(null)
+    const hoy = new Date()
+    const fin = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0)
+    const finStr = `${fin.getFullYear()}-${String(fin.getMonth() + 1).padStart(2, '0')}-${String(fin.getDate()).padStart(2, '0')}`
+    if (!window.confirm(`Dar de baja "${nombreConcepto(p.concepto_id)}" de ${nombreEmp(p.empleado_id)}?\nSe descuenta hasta ${finStr} (este mes) inclusive y deja de descontarse desde el mes siguiente.`)) return
+    const { error } = await supabase.from('liquidacion_concepto_permanente').update({ vigencia_hasta: finStr }).eq('id', p.id)
+    if (error) { setMsg({ ok: false, t: 'No se pudo dar de baja: ' + error.message }); return }
+    setMsg({ ok: true, t: `Baja registrada (vigencia hasta ${finStr}). Deja de descontarse desde el mes siguiente.` }); void cargarPermanentes()
+  }
+
+  // ¿Está vigente hoy? (activo y sin vigencia_hasta pasada). Decide si se puede dar de baja.
+  const permanenteVigente = (p: Permanente) => p.activo && (!p.vigencia_hasta || p.vigencia_hasta >= new Date().toISOString().slice(0, 10))
+
   const nombreConcepto = (id: string) => { const c = catalogo.find(x => x.id === id); return c ? `${c.codigo_visual ? c.codigo_visual + ' · ' : ''}${c.nombre}` : id }
 
   return (
@@ -717,9 +735,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
             <button style={S.btn} onClick={() => void agregarPermanente()}>Agregar</button>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={S.th}>Empleado</th><th style={S.th}>Concepto</th><th style={S.th}>Importe</th><th style={S.th}>Vigencia</th><th style={S.th}>Motivo</th></tr></thead>
-            <tbody>{permanentes.map(p => (<tr key={p.id} style={{ opacity: p.activo ? 1 : 0.5 }}><td style={S.td}>{nombreEmp(p.empleado_id)}</td><td style={S.td}>{nombreConcepto(p.concepto_id)}</td><td style={S.td}>{p.importe ?? '—'}</td><td style={S.td}>{p.vigencia_desde} → {p.vigencia_hasta || '∞'}</td><td style={S.td}>{p.motivo || '—'}</td></tr>))}
-              {permanentes.length === 0 && <tr><td style={S.td} colSpan={5}>Sin conceptos permanentes.</td></tr>}
+            <thead><tr><th style={S.th}>Empleado</th><th style={S.th}>Concepto</th><th style={S.th}>Importe</th><th style={S.th}>Vigencia</th><th style={S.th}>Motivo</th><th style={S.th}>Acción</th></tr></thead>
+            <tbody>{permanentes.map(p => (<tr key={p.id} style={{ opacity: permanenteVigente(p) ? 1 : 0.5 }}><td style={S.td}>{nombreEmp(p.empleado_id)}</td><td style={S.td}>{nombreConcepto(p.concepto_id)}</td><td style={S.td}>{p.importe ?? '—'}</td><td style={S.td}>{p.vigencia_desde} → {p.vigencia_hasta || '∞'}</td><td style={S.td}>{p.motivo || '—'}</td><td style={S.td}>{permanenteVigente(p) ? <button style={{ ...S.btn, padding: '4px 10px', background: '#7f1d1d' }} onClick={() => void darDeBajaPermanente(p)}>Dar de baja</button> : <span style={{ color: '#94a3b8', fontSize: 12 }}>baja {p.vigencia_hasta || ''}</span>}</td></tr>))}
+              {permanentes.length === 0 && <tr><td style={S.td} colSpan={6}>Sin conceptos permanentes.</td></tr>}
             </tbody>
           </table>
         </div>
