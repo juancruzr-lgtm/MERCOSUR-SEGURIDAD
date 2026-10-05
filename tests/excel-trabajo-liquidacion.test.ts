@@ -56,7 +56,7 @@ describe('generarExcelTrabajoLiquidacion (LIQ2A)', () => {
   it('el archivo lleva el título de Visual y la identidad técnica oculta (usuario_id/periodo) para el reimport', async () => {
     const r = await generarExcelTrabajoLiquidacion(fakeClient(tablasVacias), '2026-08')
     const ws = await leerHoja(r.buf!)
-    expect(String(ws.getCell('A1').value)).toContain('VisualSueldos')
+    expect(String(ws.getCell('C1').value)).toContain('VisualSueldos') // título reubicado a C1 (params en A1:B4)
     // Encabezados de identidad oculta en fila 6.
     expect(String(ws.getCell('BD6').value)).toBe('usuario_id')
     expect(String(ws.getCell('BE6').value)).toBe('periodo')

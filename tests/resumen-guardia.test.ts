@@ -768,13 +768,19 @@ describe('plantillaLiquidacionResumenGuardia', () => {
 
   it('bloque de parámetros y encabezados, literal del ejemplo', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
-    expect(m.get('A1')?.v).toBe('VisualSueldos - Planilla de importación de datos')
-    expect(m.get('E1')?.v).toBe(1020300)
-    expect(m.get('F1')?.f).toBe('E1/200')
-    expect(m.get('F2')?.f).toBe('E1/200*8')
-    expect(m.get('E2')?.v).toBe(180000)
-    expect(m.get('E3')?.v).toBe(514500)
-    expect(m.get('E4')?.v).toBe(30000)
+    // Caja de parámetros al INICIO: etiquetas A1:A4, importes B1:B4 (JC 05/10).
+    expect(m.get('A1')?.v).toBe('Básico')
+    expect(m.get('B1')?.v).toBe(1020300)
+    expect(m.get('A2')?.v).toBe('Presentismo')
+    expect(m.get('B2')?.v).toBe(180000)
+    expect(m.get('A3')?.v).toBe('Viático')
+    expect(m.get('B3')?.v).toBe(514500)
+    expect(m.get('A4')?.v).toBe('No remunerativo')
+    expect(m.get('B4')?.v).toBe(30000)
+    // Título reubicado a C1; auxiliares hora/día a C2/C3 (derivados del básico B1).
+    expect(m.get('C1')?.v).toBe('VisualSueldos - Planilla de importación de datos')
+    expect(m.get('C2')?.f).toBe('B1/200')
+    expect(m.get('C3')?.f).toBe('B1/200*8')
     expect(m.get('AP5')?.v).toBe('extras')
     expect(m.get('AP6')?.v).toBe(2500)
     expect(m.get('AF5')?.v).toBe('nocturnidad')
@@ -817,17 +823,17 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     const m = mapa(plantillaLiquidacionResumenGuardia(dosVigiladores()))
     // Parámetros con $ absoluto (arrastrables), fila del empleado relativa.
     expect(m.get('H8')?.f).toBe('MIN(G8,25)')
-    expect(m.get('AC9')?.f).toBe('($E$3/25)*H9')       // viáticos: $E$3 fijo, H9 relativo
-    expect(m.get('AD8')?.f).toBe('($E$2/25)*H8')
-    expect(m.get('AE8')?.f).toBe('($E$4/25)*H8')
+    expect(m.get('AC9')?.f).toBe('($B$3/25)*H9')       // viáticos: $B$3 fijo, H9 relativo
+    expect(m.get('AD8')?.f).toBe('($B$2/25)*H8')
+    expect(m.get('AE8')?.f).toBe('($B$4/25)*H8')
     expect(m.get('AG8')?.f).toBe('IF(I8<=150,H8*8,150)')
-    expect(m.get('AI8')?.f).toBe('AH8*$F$1')            // adicional = AH × hora ($F$1)
-    expect(m.get('AJ8')?.f).toBe('AG8*$F$1')
+    expect(m.get('AI8')?.f).toBe('AH8*$C$2')            // adicional = AH × hora ($C$2)
+    expect(m.get('AJ8')?.f).toBe('AG8*$C$2')
     expect(m.get('AM8')?.f).toBe('IF(AL8>0,(AL8*100)/I8,0)')
     expect(m.get('AO8')?.f).toBe('AC8+AD8+AE8+AF8+AI8+AJ8+AT8+AU8+AV8+AW8+AX8+AP8')
     expect(m.get('AP8')?.f).toBe('IF(AL8>0,AL8*$AP$6,0)-AR8') // extra = $AP$6 fijo
     expect(m.get('AS8')?.f).toBe('IF(AO8>0,AO8/I8,0)')
-    expect(m.get('AT8')?.f).toBe('K8*$F$2')             // feriados × día ($F$2)
+    expect(m.get('AT8')?.f).toBe('K8*$C$3')             // feriados × día ($C$3)
     // Ya no hay columnas de parámetros repetidas por fila (U-AB)
     expect(m.get('U8')).toBeUndefined()
     expect(m.get('Y8')).toBeUndefined()
@@ -849,7 +855,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
       nocturnidadObjetivo: () => ({ activa: true, desde: '22:00', hasta: '06:00' }),
     }))
     const m = mapa(plantillaLiquidacionResumenGuardia(res))
-    expect(m.get('AF8')?.f).toBe('($F$1/10)*J8')
+    expect(m.get('AF8')?.f).toBe('($C$2/10)*J8')
     // hora/10 × hs nocturnas: 500.65 × 8 — no la variante ×200 del resto del ejemplo
     expect(m.get('AF8')?.v).toBeCloseTo((1020300 / 200 / 10) * 8, 6)
   })
@@ -1294,7 +1300,7 @@ describe('base de liquidación de mensualizados', () => {
     const { m, r } = mensualizado('supervisor')
     expect(m.get(`AH${r}`)?.v).toBe(50)            // columna identificada: AH
     expect(m.get(`AI${r}`)?.v).toBe(50 * hora)     // 'adicional' AI = AH*Y
-    expect(m.get(`AI${r}`)?.f).toBe(`AH${r}*$F$1`) // adicional = AH × hora ($F$1 absoluto)
+    expect(m.get(`AI${r}`)?.f).toBe(`AH${r}*$C$2`) // adicional = AH × hora ($C$2 absoluto)
   })
 
   it('mensualizado ADMIN = grupo A (SUELDO MENSUAL): sin adicional/viáticos/presentismo de convención; 001 = básico (fallback)', () => {
@@ -1342,7 +1348,7 @@ describe('base de liquidación de mensualizados', () => {
     expect(m.get('AI5')?.v).toBe('adicional')
     expect(m.get('AI6')?.v).toBe('212')      // adicional remunerativo (sin cambio)
     expect(m.get('AE6')?.v).toBe('214')      // no remunerativo = 214 (no 212)
-    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$F$1`)  // horas rec × hora ($F$1 absoluto)
+    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$C$2`)  // horas rec × hora ($C$2 absoluto)
     expect(m.get('AX6')?.v).toBe('008')     // último concepto histórico, sin correr
     expect(m.get('AY6')?.v).toBe('SUPERVISIONES') // informativas siguen DESPUÉS de AX
     expect(m.get('BC6')?.v).toBe('HS VIGILANCIA ZONA')
