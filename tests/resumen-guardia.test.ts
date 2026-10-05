@@ -1367,11 +1367,19 @@ describe('base de liquidación de mensualizados', () => {
     expect(adm.m.get(`AL${adm.r}`)?.f).toBeUndefined()
   })
 
-  it('mensualizado: el total salarial (AO) NO cambia respecto del resultado validado', () => {
-    // AO validado previamente = 1.999.875 (AC 514500 + AD 180000 + AE 30000 +
-    // AI 255075 + AJ 1020300; AL=0 → AP=0 no aporta). El MAX no altera el total.
+  it('mensualizado supervisor: 150 hs en 001 + 50 en adicional = básico (JC 05/10)', () => {
+    // Corrección JC 05/10: el supervisor carga 150 hs en "horas rec" (001), NO 200.
+    // AG = I = 150 → AJ (001) = 150*hora = 765.225; AH=50 → AI (212) = 50*hora =
+    // 255.075. 001 + 212 = 1.020.300 = BÁSICO (que es por 200 hs). AO total:
+    // AC 514500 + AD 180000 + AE 30000 + AI 255075 + AJ 765225 = 1.744.800.
     const { m, r } = mensualizado('supervisor')
-    expect(m.get(`AO${r}`)?.v).toBe(1999875)
+    const hora = PARAMETROS_PLANTILLA.basico / 200
+    expect(m.get(`AG${r}`)?.v).toBe(150)                 // horas rec = 150, no 200
+    expect(m.get(`AG${r}`)?.f).toBe(`I${r}`)             // sigue a horas liquidables
+    expect(m.get(`AJ${r}`)?.v).toBe(150 * hora)          // 001 = 765.225
+    expect(m.get(`AI${r}`)?.v).toBe(50 * hora)           // adicional 212 = 255.075
+    expect((m.get(`AJ${r}`)?.v as number) + (m.get(`AI${r}`)?.v as number)).toBe(PARAMETROS_PLANTILLA.basico)
+    expect(m.get(`AO${r}`)?.v).toBe(1744800)
   })
 
   it('vigilador con horas > base: sigue generando extras correctamente (AL>0, AP paga)', () => {
