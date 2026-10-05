@@ -119,7 +119,7 @@ describe('SUELDO MENSUAL — grupos B y C no cambian', () => {
     expect(m.get(`G${r}`)?.v).toBe(25)
     expect(m.get(`AH${r}`)?.v).toBe(50)                 // adicional de convención
     expect(m.get(`AC${r}`)?.v).toBe(PARAMETROS_PLANTILLA.viatico)  // viáticos por convención
-    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$F$1`)      // 001 por fórmula de horas rec
+    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$C$2`)      // 001 por fórmula de horas rec
     expect(m.get(`BF${r}`)).toBeUndefined()             // sin SUELDO MENSUAL cargado
   })
 
@@ -140,7 +140,7 @@ describe('SUELDO MENSUAL — grupos B y C no cambian', () => {
     const r = filaDe('v1')
     expect(m.get(`AH${r}`)).toBeUndefined()   // vigilador: adicional manual
     expect(m.get(`BF${r}`)).toBeUndefined()   // sin SUELDO MENSUAL
-    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$F$1`)
+    expect(m.get(`AJ${r}`)?.f).toBe(`AG${r}*$C$2`)
   })
 
   it('los tres grupos conviven en la misma plantilla con su modelo propio', () => {

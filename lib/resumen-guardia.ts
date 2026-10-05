@@ -1006,7 +1006,7 @@ export const PARAMETROS_PLANTILLA = {
 
 // Especificación de columnas: ancho, formato y visibilidad. Las columnas de
 // parámetros por fila del ejemplo viejo (U-AB) desaparecen: ahora las fórmulas
-// leen los parámetros de arriba con referencias absolutas ($E$2…), así no se
+// leen los parámetros de arriba con referencias absolutas ($B$2…), así no se
 // repiten valores por fila (pedido de Juan 12/13). Q-AB quedan ocultas (hueco
 // heredado). BD/BE son técnicas ocultas: identidad para el futuro reimport.
 const COLUMNAS_PLANTILLA: ColumnaPlantilla[] = [
@@ -1088,14 +1088,20 @@ export function plantillaLiquidacionResumenGuardia(
   const num = (v: number | null): number => v ?? 0
 
   // ── Bloque de PARÁMETROS (filas 1-4): una sola vez arriba ────────────────
-  // Juan edita E1-E4; F1 (hora) y F2 (día de 8 h) se derivan. TODAS las
-  // fórmulas por fila referencian estos con $ absoluto para poder arrastrarse
-  // sin reescribir (pedido de Juan 13): $E$2/$E$3/$E$4, $F$1, $F$2, $AP$6.
-  put('A1', 'VisualSueldos - Planilla de importación de datos')
-  put('D1', 'Básico'); put('E1', P.basico); put('F1', hora, 'E1/200'); put('G1', 'hora = básico/200')
-  put('D2', 'Presentismo'); put('E2', P.presentismo); put('F2', dia8, 'E1/200*8'); put('G2', 'día = hora*8')
-  put('D3', 'Viático'); put('E3', P.viatico)
-  put('D4', 'No rem.'); put('E4', P.noRem)
+  // Caja de parámetros al INICIO de la hoja: etiquetas en A1:A4 e importes en
+  // B1:B4 (Básico, Presentismo, Viático, No remunerativo). Antes iba en D1:F4; se
+  // movió a pedido de JC. El título y los cálculos auxiliares (hora/día) se
+  // reubican a la derecha (C1 / C2:D2 / C3:D3) para no superponerse con la caja.
+  // TODAS las fórmulas por fila referencian estos con $ absoluto para poder
+  // arrastrarse sin reescribir: $B$2/$B$3/$B$4, $C$2 (hora=básico/200), $C$3
+  // (día=hora*8), $AP$6 (hora extra).
+  put('A1', 'Básico'); put('B1', P.basico)
+  put('A2', 'Presentismo'); put('B2', P.presentismo)
+  put('A3', 'Viático'); put('B3', P.viatico)
+  put('A4', 'No remunerativo'); put('B4', P.noRem)
+  put('C1', 'VisualSueldos - Planilla de importación de datos')
+  put('C2', hora, 'B1/200'); put('D2', 'hora = básico/200')
+  put('C3', dia8, 'B1/200*8'); put('D3', 'día = hora*8')
 
   // Fila 5: etiquetas humanas de la capa de cálculo. Ya no hay U-AB (params por
   // fila): las etiquetas repetidas de esos parámetros desaparecen.
@@ -1249,27 +1255,30 @@ export function plantillaLiquidacionResumenGuardia(
     // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias de la
     // fila relativas. Sueldo FIJO: 001 = SUELDO MENSUAL (columna BF, editable); el
     // resto de la convención va en 0 (literal).
-    put(`AC${r}`, gAC, esSueldoFijo ? undefined : `($E$3/25)*H${r}`)
-    put(`AD${r}`, gAD, esSueldoFijo ? undefined : `($E$2/25)*H${r}`)
-    put(`AE${r}`, gAE, esSueldoFijo ? undefined : `($E$4/25)*H${r}`)
-    put(`AF${r}`, gAF, esSueldoFijo ? undefined : `($F$1/10)*J${r}`)
+    put(`AC${r}`, gAC, esSueldoFijo ? undefined : `($B$3/25)*H${r}`)
+    put(`AD${r}`, gAD, esSueldoFijo ? undefined : `($B$2/25)*H${r}`)
+    put(`AE${r}`, gAE, esSueldoFijo ? undefined : `($B$4/25)*H${r}`)
+    put(`AF${r}`, gAF, esSueldoFijo ? undefined : `($C$2/10)*J${r}`)
     // Si Juan editó "horas rec", va como VALOR (su número manda); si no, la fórmula.
     put(`AG${r}`, gAG, esSueldoFijo || tieneOvHorasRec ? undefined : `IF(I${r}<=150,H${r}*8,150)`)
     // Convención (B sin sueldo fijo): AH=50. Vigilador/sueldo fijo: NO se emite.
     if (gAH !== 0) put(`AH${r}`, gAH)
-    put(`AI${r}`, gAI, esSueldoFijo ? undefined : `AH${r}*$F$1`)
-    put(`AJ${r}`, gAJ, esSueldoFijo ? `BF${r}` : `AG${r}*$F$1`)
+    put(`AI${r}`, gAI, esSueldoFijo ? undefined : `AH${r}*$C$2`)
+    put(`AJ${r}`, gAJ, esSueldoFijo ? `BF${r}` : `AG${r}*$C$2`)
     put(`AL${r}`, gAL, esSueldoFijo ? undefined : `MAX(0,I${r}-AG${r})`)
-    put(`AM${r}`, gAM, esSueldoFijo ? undefined : `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
+    // % extras (AM): SÓLO vigiladores (JC 05/10). Supervisores y administrativos
+    // quedan visualmente en blanco (su % de extras no es relevante): NO se emite la
+    // celda. AM no lo consume ninguna fórmula/total ni la reimportación → seguro.
+    if (fila.grupo === 'vigiladores') put(`AM${r}`, gAM, `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
     put(`AN${r}`, gAN, esSueldoFijo ? undefined : `I${r}/G${r}`)
     put(`AO${r}`, gAO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
     put(`AP${r}`, gAP, esSueldoFijo ? `BG${r}` : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
     put(`AS${r}`, gAS, esSueldoFijo ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`)
-    put(`AT${r}`, AT, `K${r}*$F$2`)
-    put(`AU${r}`, AU, `L${r}*$F$2`)
-    put(`AV${r}`, AV, `M${r}*$F$2`)
-    put(`AW${r}`, AW, `N${r}*$F$2`)
-    put(`AX${r}`, AX, `O${r}*$F$2`)
+    put(`AT${r}`, AT, `K${r}*$C$3`)
+    put(`AU${r}`, AU, `L${r}*$C$3`)
+    put(`AV${r}`, AV, `M${r}*$C$3`)
+    put(`AW${r}`, AW, `N${r}*$C$3`)
+    put(`AX${r}`, AX, `O${r}*$C$3`)
     // SUELDO MENSUAL editable: lo lleva quien cobra sueldo fijo.
     if (esSueldoFijo) put(`BF${r}`, sueldoMensual as number)
     // EXTRA fija editable (concepto "extras" AP): la lleva quien cobra sueldo fijo.
