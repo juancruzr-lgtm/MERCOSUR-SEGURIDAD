@@ -43,7 +43,11 @@ async function abrirImpresion(estado: EstadoQrPunto): Promise<string | null> {
     errorCorrectionLevel: 'M',
   })
 
-  const ventana = window.open('', '_blank', 'noopener,width=480,height=700')
+  // Sin 'noopener': con esa feature Chrome devuelve null a propósito y nunca
+  // se puede escribir el cartel (la ventana queda en about:blank, visto en
+  // producción el 06/10). No hace falta: la ventana sólo muestra contenido
+  // propio escrito acá; jamás navega a un origen ajeno.
+  const ventana = window.open('', '_blank', 'width=480,height=700')
   if (!ventana) return 'El navegador bloqueó la ventana de impresión. Habilitá los pop-ups.'
 
   const esc = (texto: string) =>
