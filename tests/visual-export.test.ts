@@ -155,6 +155,7 @@ describe('construirLineasVisual · 133/050 por remunerativo vs Básico', () => {
     ['001', { politica: 'valor', entrada: 'IMP', categoria: 'imponible' }],     // remunerativo
     ['204', { politica: 'valor', entrada: 'IMP', categoria: 'asignacion' }],    // remunerativo
     ['212', { politica: 'valor', entrada: 'IMP', categoria: 'asignacion' }],    // adicional (remunerativo)
+    ['203', { politica: 'valor', entrada: 'IMP', categoria: 'asignacion' }],    // viáticos (asignación pero NO remunerativo)
     ['214', { politica: 'valor', entrada: 'IMP', categoria: 'no_imponible' }],  // NO remunerativo
     ['011', { politica: 'linea_cero', entrada: 'CALCULADO', categoria: 'imponible' }],
     ['050', { politica: 'linea_cero', entrada: 'CALCULADO', categoria: 'base_auxiliar' }],
@@ -189,6 +190,13 @@ describe('construirLineasVisual · 133/050 por remunerativo vs Básico', () => {
     expect(tiene(r, '204')).toBe(true)
     expect(tiene(r, '011')).toBe(true)  // estructural remunerativo sigue
     expect(tiene(r, '000')).toBe(true)  // días
+  })
+
+  it('los VIÁTICOS (203) NO suman al remunerativo (no son remunerativos) → 133 se conserva', () => {
+    // importe total 1.400.000 pero remunerativo real 500.000 (viáticos excluidos) < Básico
+    const r = correr([{ codigo: '001', cantidad: null, importe: 500_000 }, { codigo: '203', cantidad: null, importe: 900_000 }], BASICO)
+    expect(tiene(r, '133')).toBe(true)
+    expect(tiene(r, '203')).toBe(true)  // los viáticos sí se exportan, sólo no cuentan para el umbral
   })
 
   it('los NO remunerativos (214) no suman al remunerativo → 133 se conserva', () => {
