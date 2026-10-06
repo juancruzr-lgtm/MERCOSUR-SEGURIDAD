@@ -236,11 +236,11 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
     if (!sel) return
     setGenBanco(tipo); setMsgBanco(null)
     try {
-      const { filasSueldosBanco, filasExtrasBanco, escribirBancoXLSX } = await import('@/lib/pagos-banco')
+      const { filasSueldosBanco, filasExtrasBanco, escribirBancoXLSX, CONCEPTO_BANCO } = await import('@/lib/pagos-banco')
       const r = tipo === 'sueldos' ? await filasSueldosBanco(supabase, sel.id) : await filasExtrasBanco(supabase, sel.id)
       if (r.error) { setMsgBanco({ ok: false, t: `No se pudo generar el archivo de ${tipo}: ${r.error}` }); return }
       if (r.rows.length === 0) { setMsgBanco({ ok: false, t: `No hay filas para ${tipo} (¿faltan cuentas o el resultado de Visual?).` }); return }
-      const buf = await escribirBancoXLSX(r.rows)
+      const buf = await escribirBancoXLSX(r.rows, tipo === 'sueldos' ? CONCEPTO_BANCO.sueldos : CONCEPTO_BANCO.extras)
       descargarArchivo(buf, `GALICIA ${tipo} ${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       const avisoExc = r.excluidos.length
         ? ` · ⚠️ ${r.excluidos.length} con CBU/cuenta de otro banco NO entran al archivo (pagar aparte): ${r.excluidos.map(e => e.nombre).join('; ')}`
@@ -623,7 +623,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
               <ImportarResultadoVisual periodo={sel} />
 
               {/* ═══ PASO 6 · PAGOS (banco Galicia) — descargas ═══ */}
-              <PasoHeader n={6} titulo="Pagos — archivos para el banco" sub="Sueldos (neto) y extras a acreditar (formato Galicia: Cuenta | Nombre | Importe)" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
+              <PasoHeader n={6} titulo="Pagos — archivos para el banco" sub="Sueldos (neto) y extras a acreditar (formato Galicia: Cuenta | Nombre | Importe | Concepto — 1 sueldos, 11 extras)" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
               <div style={{ ...S.card, marginTop: 8 }}>
                 <div style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
                   <b>Sueldos</b> = neto que devolvió Visual por persona + el sueldo mensual de los de nómina que no pasan por Visual (todos con cuenta). <b>Extras</b> = la extra fija del mes por persona con cuenta. El <b>Excel completo</b> trae tus cambios y los totales. El <b>libro general</b> junta todos los meses, una solapa por mes (el último adelante).
