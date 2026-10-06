@@ -153,3 +153,42 @@ export function evolucionMensual(filas: readonly FilaPublicada[]): PuntoEvolucio
 }
 
 export const hayTendencia = (serie: readonly PuntoEvolucion[]): boolean => serie.length >= 2
+
+// ── Período y estado de publicación ─────────────────────────────────────────
+//
+// El tablero abría siempre en '2026-08' (valor fijo en el código) y leía todas
+// las filas sin mirar `estado`: una evaluación sólo calculada aparecía bajo el
+// texto "Evaluación publicada". Estas dos funciones deciden qué período se
+// muestra por defecto y cómo se rotula, sin depender del calendario: cuando
+// se publique un mes nuevo, el tablero pasa solo a ese mes.
+
+export type EstadoPeriodo = 'publicada' | 'pendiente' | 'parcial' | 'sin_datos'
+
+export const ETIQUETA_PENDIENTE_PUBLICACION = 'Calculada — pendiente de publicación'
+
+/** Estado de publicación de un período, mirando todas sus filas. */
+export function estadoDelPeriodo(filas: readonly FilaPublicada[], periodo: string): EstadoPeriodo {
+  const del = filas.filter(f => f.periodo === periodo)
+  if (del.length === 0) return 'sin_datos'
+  const publicadas = del.filter(f => f.estado === 'publicada').length
+  if (publicadas === del.length) return 'publicada'
+  if (publicadas === 0) return 'pendiente'
+  return 'parcial'
+}
+
+/**
+ * Período que el tablero muestra al abrir: el último con evaluación
+ * PUBLICADA. Si todavía no se publicó ninguno, el último calculado (que se
+ * rotula como pendiente). Null si no hay filas.
+ */
+export function periodoPorDefecto(filas: readonly FilaPublicada[]): string | null {
+  const publicados = filas.filter(f => f.estado === 'publicada').map(f => f.periodo).sort()
+  if (publicados.length > 0) return publicados[publicados.length - 1]
+  const todos = filas.map(f => f.periodo).sort()
+  return todos.length > 0 ? todos[todos.length - 1] : null
+}
+
+/** La evolución mensual sólo con lo publicado: un mes calculado no es un resultado. */
+export function soloPublicadas(filas: readonly FilaPublicada[]): FilaPublicada[] {
+  return filas.filter(f => f.estado === 'publicada')
+}

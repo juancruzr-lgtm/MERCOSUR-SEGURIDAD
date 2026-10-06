@@ -5,6 +5,7 @@
 // de planillas. Este archivo sólo traduce y agrupa.
 
 import { calcularDesempeno, hechoDeJornada } from '@/lib/desempeno'
+import { mesArgentina, mesesHastaActual } from '@/lib/periodo-argentina'
 import type { JornadaDesempeno, ResultadoDesempeno } from '@/lib/desempeno'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 import { PESOS, calcularCumplimiento } from '@/lib/cumplimiento'
@@ -222,7 +223,9 @@ export function jornadasDelMotivo(
  * Eso es correcto y esta explicado en pantalla, con el selector de mes al lado.
  */
 export function mesPorDefecto(hoy: Date = new Date()): string {
-  return hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0')
+  // Mes de Argentina, no el del reloj del dispositivo: un navegador en otra
+  // zona horaria (o el servidor en UTC) no debe cambiar de período antes.
+  return mesArgentina(hoy)
 }
 
 /** "2026-08" → "agosto de 2026". */
@@ -239,15 +242,5 @@ export function etiquetaMes(mes: string): string {
 
 /** Meses seleccionables, del más reciente hacia atrás. */
 export function mesesDisponibles(desde: string, hoy: Date = new Date()): string[] {
-  const [dy, dm] = desde.split('-').map(Number)
-  const out: string[] = []
-  let y = hoy.getFullYear()
-  let m = hoy.getMonth() + 1
-  while (y > dy || (y === dy && m >= dm)) {
-    out.push(`${y}-${String(m).padStart(2, '0')}`)
-    m -= 1
-    if (m === 0) { m = 12; y -= 1 }
-    if (out.length > 60) break
-  }
-  return out
+  return mesesHastaActual(desde, hoy)
 }

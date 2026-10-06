@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { fechaArgentina, rangoFechasMes } from '@/lib/periodo-argentina'
 
 // Novedades del Personal (Administración). CRUD de la tabla EXISTENTE
 // novedades_laborales por RANGO (fecha_desde/hasta) o CANTIDAD MENSUAL
@@ -33,9 +34,8 @@ interface NovedadFila {
 }
 
 function limitesDelMes(mes: string): { desde: string; hasta: string } {
-  const [y, m] = mes.split('-').map(Number)
-  const ultimo = new Date(y, m, 0).getDate()
-  return { desde: `${mes}-01`, hasta: `${mes}-${String(ultimo).padStart(2, '0')}` }
+  const r = rangoFechasMes(mes)
+  return { desde: r.desde, hasta: r.ultimoDia }
 }
 
 const S: Record<string, React.CSSProperties> = {
@@ -53,7 +53,8 @@ const S: Record<string, React.CSSProperties> = {
 }
 
 export default function NovedadesPersonalPanel({ user, empleados }: { user: any; empleados: Empleado[] }) {
-  const hoy = new Date().toISOString().slice(0, 10)
+  // Día y mes de Argentina: toISOString() pasaba al día/mes siguiente a las 21:00.
+  const hoy = fechaArgentina(new Date())
   const mesActual = hoy.slice(0, 7)
   const activos = useMemo(
     () => (empleados || []).filter(e => String(e.estado ?? 'activo').toLowerCase() !== 'inactivo')

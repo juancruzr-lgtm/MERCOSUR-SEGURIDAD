@@ -25,6 +25,7 @@ import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Objetivo, RegistroAsistencia, Turno, Usuario } from '@/lib/supabase'
 import { formatFechaHora } from '@/lib/formato'
+import { fechaArgentina, mesArgentina, rangoFechasMes, sumarDias } from '@/lib/periodo-argentina'
 import {
   GPS_PRECISION_MAX_METROS,
   auditoriaSupervisionGps,
@@ -81,14 +82,25 @@ const CAPAS: { id: string; label: string }[] = [
   { id: 'puntos_ronda', label: 'Puntos de ronda' },
 ]
 
+// Días de Argentina: con toISOString() el "hoy" pasaba a mañana a las 21:00.
 function hoyISO(): string {
-  return new Date().toISOString().slice(0, 10)
+  return fechaArgentina(new Date())
 }
 
+/**
+ * Primer día con fichajes cargados. La página no consulta: usa lo que el
+ * dashboard ya trajo, y el dashboard trae el mes en curso desde el día
+ * anterior al 1 (por los nocturnos). Más atrás no hay datos en memoria.
+ */
+function primerDiaCargado(): string {
+  return sumarDias(rangoFechasMes(mesArgentina(new Date())).desde, -1)
+}
+
+/** Hace n días, sin ir antes de lo que está cargado (si no, el rango mostraría días vacíos). */
 function haceDiasISO(dias: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() - dias)
-  return d.toISOString().slice(0, 10)
+  const pedido = sumarDias(hoyISO(), -dias)
+  const minimo = primerDiaCargado()
+  return pedido < minimo ? minimo : pedido
 }
 
 function iniciales(texto: string): string {
@@ -200,7 +212,7 @@ export default function PaginaGps({
       // La fecha operativa del fichaje es la del turno. Si un registro no tiene
       // turno ni fecha resoluble, queda fuera de una vista acotada por fechas:
       // mostrarlo siempre haría que el filtro mienta.
-      const fechaBase = (turno as any)?.fecha ?? (r as any).created_at?.slice(0, 10) ?? ''
+      const fechaBase = (turno as any)?.fecha ?? ((r as any).created_at ? fechaArgentina((r as any).created_at) : '')
       if (!fechaBase || fechaBase < desde || fechaBase > hasta) continue
 
       const guardia = guardias.find(g => g.id === r.guardia_id)
@@ -271,7 +283,7 @@ export default function PaginaGps({
   const supervisionesCapa = useMemo<SupervisionCGO[]>(() => {
     if (!capasActivas.has('supervisiones') || rangoExcesivo) return []
     return (supervisiones ?? []).flatMap((s: any) => {
-      const fecha = s.created_at?.slice(0, 10) ?? ''
+      const fecha = s.created_at ? fechaArgentina(s.created_at) : ''
       if (fecha && (fecha < desde || fecha > hasta)) return []
       if (objetivoId && s.objetivo_id !== objetivoId) return []
 
@@ -746,6 +758,11 @@ export default function PaginaGps({
           <div className={styles.campo}>
             <label className={styles.label} htmlFor="gps-desde">Desde</label>
             <input id="gps-desde" className={styles.input} type="date" value={desde} onChange={e => setDesde(e.target.value)} />
+            {desde < primerDiaCargado() && (
+              <span style={{ fontSize: 11, color: '#f59e0b' }}>
+                Fichajes cargados desde {primerDiaCargado()}: antes de esa fecha el mapa no muestra marcaciones.
+              </span>
+            )}
           </div>
           <div className={styles.campo}>
             <label className={styles.label} htmlFor="gps-hasta">Hasta</label>

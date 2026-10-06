@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
+import { fechaArgentina, rangoInstantesMesArgentina, sumarDias } from '@/lib/periodo-argentina'
 import { DIAS_SIN_OPERACION, faseOperativa } from '@/lib/supervisiones'
 import { brandColors, semanticColors } from '@/lib/brand-theme'
 import TarjetaMetrica from '@/components/TarjetaMetrica'
@@ -76,10 +77,7 @@ const VACIO: Datos = {
 
 /** Desde qué fecha se piden turnos para saber quién está operando. */
 function fechaCorteOperacion(dias: number = DIAS_SIN_OPERACION): string {
-  const d = new Date()
-  d.setDate(d.getDate() - dias)
-  const mes = String(d.getMonth() + 1).padStart(2, '0')
-  return `${d.getFullYear()}-${mes}-${String(d.getDate()).padStart(2, '0')}`
+  return sumarDias(fechaArgentina(new Date()), -dias)
 }
 
 /**
@@ -117,9 +115,10 @@ export default function ControlSupervisionesPanel({
 
   const cargar = useCallback(async () => {
     setCargando(true); setError(null)
-    const [y, m] = mes.split('-').map(Number)
-    const desde = `${mes}-01`
-    const hasta = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+    // El mes en hora argentina: [00:00 ART del día 1, 00:00 ART del mes
+    // siguiente). Con fechas sin zona PostgREST usaba UTC y las visitas de la
+    // última noche del mes (21:00-23:59) caían en el mes siguiente.
+    const ventanaMes = rangoInstantesMesArgentina(mes)
 
     const [objRes, ultRes, mesRes, turnosRes] = await Promise.all([
       // Sólo lo que se supervisa de verdad: activos y fuera de prueba.
@@ -154,8 +153,8 @@ export default function ControlSupervisionesPanel({
       fetchPaginadoResult((p0, p1) =>
         supabase.from('supervisiones')
           .select('id, estado, created_at')
-          .gte('created_at', `${desde}T00:00:00`)
-          .lte('created_at', `${hasta}T23:59:59`)
+          .gte('created_at', ventanaMes.desde)
+          .lt('created_at', ventanaMes.hasta)
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(p0, p1)),

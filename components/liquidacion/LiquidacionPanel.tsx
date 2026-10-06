@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mesArgentina } from '@/lib/periodo-argentina'
 import ReimportarExcelTrabajo from '@/components/liquidacion/ReimportarExcelTrabajo'
 import PadronLiquidacion from '@/components/liquidacion/PadronLiquidacion'
 import ImportarResultadoVisual from '@/components/liquidacion/ImportarResultadoVisual'
@@ -82,7 +83,8 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   const [creadores, setCreadores] = useState<Record<string, string>>({})
   const [verAnulados, setVerAnulados] = useState(false)
   const [borrando, setBorrando] = useState<string | null>(null)
-  const [nuevoMes, setNuevoMes] = useState(new Date().toISOString().slice(0, 7))
+  // Mes argentino: con toISOString() el último día del mes, desde las 21:00, ya proponía el siguiente.
+  const [nuevoMes, setNuevoMes] = useState(() => mesArgentina(new Date()))
   const [sel, setSel] = useState<Periodo | null>(null)
   const [padronN, setPadronN] = useState(0)
   const [conceptosP, setConceptosP] = useState<ConceptoPeriodo[]>([])
