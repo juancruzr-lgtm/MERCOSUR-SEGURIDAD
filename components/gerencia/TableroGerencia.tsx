@@ -28,9 +28,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { etiquetaDePeriodo, type FilaPublicada } from '@/lib/mi-desempeno'
 import {
-  evolucionMensual, hayTendencia, resumirGerencia,
+  ETIQUETA_PENDIENTE_PUBLICACION, estadoDelPeriodo, evolucionMensual, hayTendencia,
+  periodoPorDefecto, resumirGerencia, soloPublicadas,
   type ResumenGerencia,
 } from '@/lib/gerencia'
+import { mesArgentina } from '@/lib/periodo-argentina'
 import {
   ETIQUETA_ADOPCION, adopcionDeFila, resumirAdopcion,
   type AdopcionEmpleado, type ClaseAdopcion,
@@ -97,8 +99,13 @@ function Titular({ rotulo, valor, sufijo, nota, color }: {
 }
 
 export default function TableroGerencia({
-  mesInicial = '2026-08', onAbrirEmpleado, esAdmin = false, usuarioId = null,
+  mesInicial, onAbrirEmpleado, esAdmin = false, usuarioId = null,
 }: {
+  /**
+   * Sin valor, abre en el último período PUBLICADO (ver periodoPorDefecto).
+   * Antes el default era '2026-08' fijo en el código y el tablero se quedaba
+   * en agosto aunque hubiera meses posteriores.
+   */
   mesInicial?: string
   /** Para entrar al detalle individual. Los permisos los sigue aplicando RLS. */
   onAbrirEmpleado?: (empleadoId: string) => void
@@ -109,7 +116,7 @@ export default function TableroGerencia({
   const [error, setError] = useState('')
   const [filas, setFilas] = useState<FilaPublicada[]>([])
   const [nombres, setNombres] = useState<Map<string, string>>(new Map())
-  const [mes, setMes] = useState(mesInicial)
+  const [mes, setMes] = useState(mesInicial ?? '')
   const [previas, setPrevias] = useState<Map<string, Intervencion[]>>(new Map())
   const [registrando, setRegistrando] = useState('')
   const [pestana, setPestana] = useState<Pestana>('distribucion')
@@ -120,7 +127,8 @@ export default function TableroGerencia({
   /** Grupo de entrega abierto, para ver los nombres. */
   const [grupo, setGrupo] = useState<'vistas' | 'no_vistas' | 'observaciones' | null>(null)
 
-  const cargar = useCallback(async () => {
+  // Las filas se leen una vez; cambiar de mes no vuelve a pedirlas.
+  const cargarFilas = useCallback(async () => {
     setCargando(true)
     setError('')
     const { data, error: err } = await supabase
@@ -131,6 +139,9 @@ export default function TableroGerencia({
     if (err) { setError(err.message); setCargando(false); return }
     const todas = (data ?? []) as FilaPublicada[]
     setFilas(todas)
+    // Período por defecto: el último publicado. Si el usuario ya eligió uno,
+    // se respeta.
+    setMes(prev => prev || periodoPorDefecto(todas) || mesArgentina(new Date()))
 
     // Sólo para poder nombrar a la gente. Los números salen del snapshot.
     const ids = Array.from(new Set(todas.map(f => f.empleado_id)))
@@ -140,14 +151,25 @@ export default function TableroGerencia({
       setNombres(new Map((us ?? []).map((u: any) =>
         [u.id, `${u.apellido ?? ''}, ${u.nombre ?? ''}`.replace(/^, |, $/, '')])))
     }
-    setPrevias(await intervencionesDe(mes))
-    const entrega = await cargarEntrega(mes)
-    setLecturas(entrega.lecturas)
-    setObservaciones(entrega.observaciones)
     setCargando(false)
-  }, [mes])
+  }, [])
 
-  useEffect(() => { void cargar() }, [cargar])
+  useEffect(() => { void cargarFilas() }, [cargarFilas])
+
+  // Lo que depende del período elegido: intervenciones y entrega.
+  useEffect(() => {
+    if (!mes) return
+    let vigente = true
+    ;(async () => {
+      const previasMes = await intervencionesDe(mes)
+      const entregaMes = await cargarEntrega(mes)
+      if (!vigente) return
+      setPrevias(previasMes)
+      setLecturas(entregaMes.lecturas)
+      setObservaciones(entregaMes.observaciones)
+    })()
+    return () => { vigente = false }
+  }, [mes])
 
   const periodos = useMemo(
     () => Array.from(new Set(filas.map(f => f.periodo))).sort().reverse(),
@@ -155,7 +177,10 @@ export default function TableroGerencia({
   )
   const delMes = useMemo(() => filas.filter(f => f.periodo === mes), [filas, mes])
   const r: ResumenGerencia = useMemo(() => resumirGerencia(delMes, mes), [delMes, mes])
-  const serie = useMemo(() => evolucionMensual(filas), [filas])
+  // La evolución sólo con meses publicados: un mes calculado no es un resultado.
+  const serie = useMemo(() => evolucionMensual(soloPublicadas(filas)), [filas])
+  const estadoMes = useMemo(() => estadoDelPeriodo(filas, mes), [filas, mes])
+  const mesEnCurso = mes !== '' && mes >= mesArgentina(new Date())
 
   const adopciones = useMemo(
     () => delMes.map(adopcionDeFila).filter((a): a is AdopcionEmpleado => a !== null),
@@ -192,12 +217,26 @@ export default function TableroGerencia({
       <div style={{ display:'flex', gap:10, alignItems:'flex-start', flexWrap:'wrap' }}>
         <div>
           <div style={S.titulo}>Cumplimiento de {etiquetaDePeriodo(mes)}</div>
-          <div style={S.tenue}>
-            Evaluación publicada, la misma que ve cada vigilador. No se recalcula.
-          </div>
+          {estadoMes === 'publicada' ? (
+            <div style={S.tenue}>
+              Evaluación publicada, la misma que ve cada vigilador. No se recalcula.
+            </div>
+          ) : (
+            <div style={{ ...S.tenue, color: AMARILLO, fontWeight: 700 }}>
+              {estadoMes === 'parcial'
+                ? `${ETIQUETA_PENDIENTE_PUBLICACION} (sólo una parte está publicada)`
+                : ETIQUETA_PENDIENTE_PUBLICACION}
+              {mesEnCurso && ' · mes en curso, todavía no cerrado'}
+              . Los vigiladores todavía no la ven.
+            </div>
+          )}
         </div>
         <select style={{ ...S.select, marginLeft:'auto' }} value={mes} onChange={e => setMes(e.target.value)}>
-          {periodos.map(p => <option key={p} value={p}>{etiquetaDePeriodo(p)}</option>)}
+          {periodos.map(p => (
+            <option key={p} value={p}>
+              {etiquetaDePeriodo(p)}{estadoDelPeriodo(filas, p) === 'publicada' ? '' : ' · pendiente de publicación'}
+            </option>
+          ))}
         </select>
       </div>
 

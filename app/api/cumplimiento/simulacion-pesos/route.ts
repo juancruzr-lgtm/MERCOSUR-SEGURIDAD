@@ -35,6 +35,7 @@ import {
   cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
 import { CURVAS } from '@/lib/cumplimiento-medicion'
+import { mesArgentina } from '@/lib/periodo-argentina'
 import type { CurvaNota } from '@/lib/cumplimiento-medicion'
 
 export const runtime = 'nodejs'
@@ -55,7 +56,8 @@ export async function GET(req: NextRequest) {
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
   const client = admin.client
 
-  const mes = req.nextUrl.searchParams.get('mes') || new Date().toISOString().slice(0, 7)
+  // El servidor corre en UTC: el mes por defecto es el de Argentina.
+  const mes = req.nextUrl.searchParams.get('mes') || mesArgentina(new Date())
   const curva = (req.nextUrl.searchParams.get('curva') || 'proporcional') as CurvaNota
   if (CURVAS.indexOf(curva) < 0) {
     return NextResponse.json({ error: `Curva desconocida. Válidas: ${CURVAS.join(', ')}` }, { status: 400 })

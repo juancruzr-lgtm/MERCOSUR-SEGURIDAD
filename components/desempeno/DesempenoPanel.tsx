@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { supabase } from '@/lib/supabase'
+import { cargarNovedadesAprobadasDelMes } from '@/lib/novedades-laborales-mes'
 import { INASISTENCIA_ACTIVA } from '@/lib/evaluacion-final'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { MedidasCriticas } from '@/lib/desempeno-datos'
@@ -178,13 +179,16 @@ export default function DesempenoPanel({
       cargarEvidenciasDelMes(mes),
       // Lo mismo que consulta la ficha, pero del mes entero: una sola vez para
       // toda la lista. Sólo aprobadas — pendiente y rechazada no afirman nada.
-      supabase.from('novedades_laborales')
-        .select('empleado_id, tipo, fecha_desde, fecha_hasta, estado')
-        .eq('estado', 'aprobada')
-        .lte('fecha_desde', `${mes}-31`)
-        .gte('fecha_hasta', `${mes}-01`),
+      cargarNovedadesAprobadasDelMes(supabase, mes),
     ])
-    const nov = (nv.data ?? []) as any[]
+    // Sin novedades no se puede calcular: una vacación o un parte médico se
+    // contarían como inasistencia injustificada, y esta lista es la que se
+    // congela como evaluación. Se corta acá con el error a la vista.
+    if (nv.error) {
+      setError(`No se pudieron leer las novedades laborales del mes; no se calcula para no contar ausencias justificadas como faltas. (${nv.error})`)
+      setLista([]); setCargando(false); return
+    }
+    const nov = nv.data as any[]
     const porRondas = new Map(rr.datos.map(d => [d.guardiaId, d]))
     const porEvidencia = evidenciasPorEmpleado(ee.evidencias)
     const fuentes = new Map(

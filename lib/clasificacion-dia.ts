@@ -50,6 +50,7 @@ export const ESTADO_CLASIFICACION_QUITADA = 'rechazada'
 
 import { ETIQUETA_TURNO_SIN_OBLIGACION } from '@/lib/planilla-acciones'
 import type { TipoNovedad } from '@/lib/novedades-laborales'
+import { rangoFechasMes } from '@/lib/periodo-argentina'
 
 export const TIPOS_NOVEDAD_DIA: ReadonlyArray<{ value: TipoNovedad; label: string }> = [
   { value: 'franco', label: 'Franco' },
@@ -173,8 +174,9 @@ export function resumenClasificacionMes(
   const ausentes = new Set<string>()
   for (const n of novedades) {
     if (n.estado !== 'aprobada' || n.empleado_id !== empleadoId) continue
-    const desde = n.fecha_desde > `${mes}-01` ? n.fecha_desde : `${mes}-01`
-    const hasta = n.fecha_hasta < `${mes}-31` ? n.fecha_hasta : `${mes}-31`
+    const rango = rangoFechasMes(mes)
+    const desde = n.fecha_desde > rango.desde ? n.fecha_desde : rango.desde
+    const hasta = n.fecha_hasta < rango.ultimoDia ? n.fecha_hasta : rango.ultimoDia
     for (let f = desde; f <= hasta; f = sumarUnDia(f)) {
       if (!f.startsWith(mes)) continue
       dias.add(f)

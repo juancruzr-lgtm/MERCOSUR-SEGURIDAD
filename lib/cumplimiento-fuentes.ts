@@ -12,6 +12,7 @@
 // Supervisión.
 
 import { supabase } from '@/lib/supabase'
+import { rangoInstantesMesArgentina } from '@/lib/periodo-argentina'
 import { TIPOS_EVIDENCIA_IA } from '@/lib/cierre-datos'
 import { esDecisionHumana, esSaneada, esperaRevision } from '@/lib/ia/revision'
 import { detalleMedicion, medir } from '@/lib/cumplimiento-medicion'
@@ -436,8 +437,8 @@ function esProductiva(e: any, prueba: Set<string>): boolean {
 export async function cargarEvidenciasEmpleado(
   mes: string, empleadoId: string, client: any = supabase,
 ): Promise<{ evidencias: EvidenciaCumplimiento[]; error: string | null }> {
-  const [y, m] = mes.split('-').map(Number)
-  const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  // Ventana del mes en hora argentina (ver cargarEvidenciasDelMes).
+  const ventanaMes = rangoInstantesMesArgentina(mes)
   const [prueba, { data, error }] = await Promise.all([
     objetivosDePrueba(client),
     client
@@ -445,8 +446,8 @@ export async function cargarEvidenciasEmpleado(
       .select('analisis_tipo, clasificacion_efectiva, revision_estado, motivos, guardia_id, objetivo_id')
       .eq('guardia_id', empleadoId)
       .eq('estado', 'completado')
-      .gte('evidencia_created_at', `${mes}-01T00:00:00`)
-      .lte('evidencia_created_at', `${mes}-${String(ultimo).padStart(2, '0')}T23:59:59`),
+      .gte('evidencia_created_at', ventanaMes.desde)
+      .lt('evidencia_created_at', ventanaMes.hasta),
   ])
   if (error) return { evidencias: [], error: error.message }
   return {
@@ -610,8 +611,9 @@ export function fuentesDeEmpleado(
 export async function cargarEvidenciasDelMes(
   mes: string, client: any = supabase,
 ): Promise<{ evidencias: EvidenciaCumplimiento[]; error: string | null }> {
-  const [y, m] = mes.split('-').map(Number)
-  const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  // Ventana del mes en hora argentina: [00:00 ART del día 1, 00:00 ART del mes
+  // siguiente). Sin zona, PostgREST la tomaba como UTC y corría el borde 3 h.
+  const ventanaMes = rangoInstantesMesArgentina(mes)
   const prueba = await objetivosDePrueba(client)
   const salida: EvidenciaCumplimiento[] = []
   // Paginado: el mes entero pasa holgadamente el límite de 1000 filas de
@@ -632,8 +634,8 @@ export async function cargarEvidenciasDelMes(
       .from('evidencia_analisis')
       .select('id, analisis_tipo, clasificacion_efectiva, revision_estado, motivos, guardia_id, objetivo_id')
       .eq('estado', 'completado')
-      .gte('evidencia_created_at', `${mes}-01T00:00:00`)
-      .lte('evidencia_created_at', `${mes}-${String(ultimo).padStart(2, '0')}T23:59:59`)
+      .gte('evidencia_created_at', ventanaMes.desde)
+      .lt('evidencia_created_at', ventanaMes.hasta)
       .order('evidencia_created_at', { ascending: true })
       .order('id', { ascending: true })
       .range(desde, desde + TAM - 1)

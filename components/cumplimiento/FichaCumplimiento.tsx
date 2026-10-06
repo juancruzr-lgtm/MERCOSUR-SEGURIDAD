@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { supabase } from '@/lib/supabase'
+import { cargarNovedadesAprobadasDelMes } from '@/lib/novedades-laborales-mes'
 import {
   BANDAS_PUNTUALIDAD, ETIQUETA_ESTADO, PESOS, calcularCumplimiento,
   patronesDeHorarioSospechoso,
@@ -219,18 +220,17 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
       cargarEvidenciasEmpleado(mes, empleadoId),
       // Lo que Administración clasificó en Reportes para esta persona. Sólo
       // aprobadas: pendiente y rechazada no afirman nada.
-      supabase.from('novedades_laborales')
-        .select('empleado_id, tipo, fecha_desde, fecha_hasta, estado')
-        .eq('empleado_id', empleadoId)
-        .eq('estado', 'aprobada')
-        .lte('fecha_desde', `${mes}-31`)
-        .gte('fecha_hasta', `${mes}-01`),
+      cargarNovedadesAprobadasDelMes(supabase, mes, empleadoId),
     ])
     setRondas(rr.dato)
     setEvidencias(ee.evidencias)
-    // Si falla, se sigue sin ellas: nunca se inventa una falta por un error de
-    // lectura.
-    setNovedades((nov?.data ?? []) as any[])
+    // Sin novedades no hay nota confiable: una ausencia justificada se leería
+    // como falta. El error se muestra; no se confunde con "no hay novedades".
+    if (nov.error) {
+      setError(`No se pudieron leer las novedades laborales del mes; la nota no se muestra para no contar ausencias justificadas como faltas. (${nov.error})`)
+      setFilas([])
+    }
+    setNovedades(nov.data as any[])
     setAvisoFuentes([rr.error, ee.error].filter(Boolean).join(' · '))
   }, [mes, esAdmin, usuarioId, empleadoId])
 

@@ -86,6 +86,15 @@ import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
+import { cargarNovedadesAprobadasDelMes } from '@/lib/novedades-laborales-mes'
+import {
+  fechaArgentina, mesArgentina, mesesHastaActual, rangoInstantesMesArgentina, mesAnterior,
+} from '@/lib/periodo-argentina'
+import {
+  PRIMER_PERIODO_SUPERVISIONES, SELECT_SUPERVISION_DETALLE, cargarSupervisionesDelPeriodo,
+  cargarTurnosDelPeriodo, supervisionesDelDia, supervisionesDelPeriodo, unirPorId,
+} from '@/lib/supervisiones-periodo'
+import { etiquetaMes as etiquetaMesLargo } from '@/lib/desempeno-datos'
 import {
   cargarEvidenciasDelMes, cargarRondasDelMes, evidenciasPorEmpleado, fuentesDeEmpleado,
 } from '@/lib/cumplimiento-fuentes'
@@ -1669,6 +1678,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   const mesCumplimiento = mesPorDefecto()
   const [cumplimiento, setCumplimiento] = useState<Map<string, any>>(new Map())
   const [cargandoCumplimiento, setCargandoCumplimiento] = useState(false)
+  const [errorCumplimiento, setErrorCumplimiento] = useState('')
 
   useEffect(() => {
     // Solo Administracion. El vigilador no ve puntajes en ningun lado.
@@ -1681,16 +1691,19 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       cargarEvidenciasDelMes(mesCumplimiento),
       // Lo que Administracion clasifico en Reportes. Solo aprobadas y solo las
       // que solapan el mes: pendientes y rechazadas no afirman nada.
-      supabase.from('novedades_laborales')
-        .select('empleado_id, tipo, fecha_desde, fecha_hasta, estado')
-        .eq('estado', 'aprobada')
-        .lte('fecha_desde', `${mesCumplimiento}-31`)
-        .gte('fecha_hasta', `${mesCumplimiento}-01`),
+      cargarNovedadesAprobadasDelMes(supabase, mesCumplimiento),
     ])
       .then(([bandeja, rr, ee, nov]) => {
         if (!vigente) return
-        // Si las novedades fallan, NO se inventa una falta: se sigue sin ellas.
-        const nn = (nov?.data ?? []) as any[]
+        // Sin novedades no se muestra ninguna nota: seguir sin ellas convertía
+        // vacaciones y partes médicos en inasistencias injustificadas.
+        if (nov.error) {
+          setErrorCumplimiento(`No se pudieron leer las novedades laborales del mes: ${nov.error}`)
+          setCumplimiento(new Map())
+          return
+        }
+        setErrorCumplimiento('')
+        const nn = nov.data as any[]
         const porRondas = new Map(rr.datos.map(d => [d.guardiaId, d]))
         const porEvidencia = evidenciasPorEmpleado(ee.evidencias)
         const ids: string[] = []
@@ -2252,6 +2265,9 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         </div>
         {conmutadorVista}
         <DesempenoPanel esAdmin={Boolean(esAdmin)} usuarioId={usuarioId ?? null} rol={rol ?? null} />
+        {esAdmin && errorCumplimiento && (
+          <div style={{ ...S.card, color:'#fca5a5', borderColor:'rgba(239,68,68,.35)', marginTop:12 }}>{errorCumplimiento}</div>
+        )}
         {esAdmin && (
           <TablaBalancesPreview
             cumplimiento={cumplimiento}
@@ -2596,9 +2612,50 @@ function SupervisionesAdmin({
   supervisionesMesOperativas = [],
   ultimasSupervisionesObjetivos = [],
   filtroInicial = null,
+  errorCarga = '',
 }: any) {
-  const hoy = new Date().toLocaleDateString('sv-SE')
+  // "Hoy" y "este mes" en hora argentina, no la del navegador ni UTC.
+  const hoy = fechaArgentina(new Date())
   const mesActual = hoy.slice(0, 7)
+
+  // ── Período consultado ────────────────────────────────────────────────────
+  // Ranking, carga por zona, "por supervisor/por objetivo" del mes y la tabla
+  // usan el período elegido. Las tarjetas de HOY y los vencimientos son del
+  // momento actual y no cambian con el selector.
+  const [periodo, setPeriodo] = useState(mesActual)
+  const esPeriodoActual = periodo === mesActual
+  const periodosDisponibles = useMemo(() => mesesHastaActual(PRIMER_PERIODO_SUPERVISIONES), [])
+  const [periodoCargado, setPeriodoCargado] = useState<{ periodo: string; supervisiones: SupervisionAdmin[]; turnos: Turno[] } | null>(null)
+  const [cargandoPeriodo, setCargandoPeriodo] = useState(false)
+  const [errorPeriodo, setErrorPeriodo] = useState('')
+  useEffect(() => {
+    if (esPeriodoActual) { setErrorPeriodo(''); return }
+    let vigente = true
+    setCargandoPeriodo(true)
+    setErrorPeriodo('')
+    ;(async () => {
+      const [sp, tp] = await Promise.all([
+        cargarSupervisionesDelPeriodo<SupervisionAdmin>(supabase, periodo),
+        cargarTurnosDelPeriodo<Turno>(supabase, periodo),
+      ])
+      if (!vigente) return
+      const falla = [sp.error, tp.error].filter(Boolean).join(' · ')
+      setErrorPeriodo(falla)
+      setPeriodoCargado(falla ? null : { periodo, supervisiones: sp.data, turnos: tp.data })
+      setCargandoPeriodo(false)
+    })()
+    return () => { vigente = false }
+  }, [periodo, esPeriodoActual])
+  const datosPeriodoListos = esPeriodoActual || periodoCargado?.periodo === periodo
+  // Las del período elegido. Para el mes en curso salen de la carga común.
+  const supervisionesPeriodo: SupervisionAdmin[] = esPeriodoActual
+    ? supervisionesDelPeriodo(supervisiones as SupervisionAdmin[], periodo)
+    : (periodoCargado?.periodo === periodo ? periodoCargado.supervisiones : [])
+  const turnosPeriodo: Turno[] = esPeriodoActual
+    ? (turnos || []).filter((turno: Turno) => turno.fecha?.slice(0, 7) === periodo)
+    : (periodoCargado?.periodo === periodo ? periodoCargado.turnos : [])
+  // Para nombres y para el mapa: todo lo que hay en memoria, sin repetir.
+  const supervisionesConocidas: SupervisionAdmin[] = unirPorId(supervisiones as SupervisionAdmin[], supervisionesPeriodo)
   const [detalleSupervision, setDetalleSupervision] = useState<SupervisionAdmin | null>(null)
   const [detalleRespuestas, setDetalleRespuestas] = useState<SupervisionRespuestaAdmin[]>([])
   const [detalleFotos, setDetalleFotos] = useState<SupervisionFotoAdmin[]>([])
@@ -2630,7 +2687,7 @@ function SupervisionesAdmin({
       const [anio, mes, dia] = fecha.split('-').map(Number)
       return new Date(anio, mes - 1, dia + dias).toLocaleDateString('sv-SE')
     }
-    const rango = rangoDelMes(mesActual)
+    const rango = rangoDelMes(periodo)
     ;(async () => {
       const { data, error } = await supabase
         .from('supervisores_guardia')
@@ -2648,19 +2705,19 @@ function SupervisionesAdmin({
       setGuardiasCargaMes(data || [])
     })()
     return () => { vigente = false }
-  }, [mesActual])
+  }, [periodo])
   const ahora = new Date()
-  const fechaLocal = (fecha?: string | null) => fecha ? new Date(fecha).toLocaleDateString('sv-SE') : ''
+  const fechaLocal = (fecha?: string | null) => fecha ? fechaArgentina(fecha) : ''
   const fechaHora = (fecha?: string | null) => fecha ? formatFechaHora(fecha) : '—'
   const mapasUrl = (supervision: SupervisionAdmin) => `https://www.google.com/maps?q=${supervision.lat},${supervision.lng}`
   const observados = (supervision: SupervisionAdmin) => supervision.respuestas?.filter(r => r.resultado === 'observado').length || 0
   const fotosCount = (supervision: SupervisionAdmin) => supervision.fotos?.length || 0
   const nombreObjetivo = (id?: string | null) =>
-    supervisiones.find((s: SupervisionAdmin) => s.objetivo_id === id)?.objetivo?.nombre ||
+    supervisionesConocidas.find((s: SupervisionAdmin) => s.objetivo_id === id)?.objetivo?.nombre ||
     objetivos.find((o: Objetivo) => o.id === id)?.nombre ||
     'Objetivo sin nombre'
   const nombreSupervisor = (id?: string | null) => {
-    const desdeSupervision = supervisiones.find((s: SupervisionAdmin) => s.supervisor_id === id)?.supervisor
+    const desdeSupervision = supervisionesConocidas.find((s: SupervisionAdmin) => s.supervisor_id === id)?.supervisor
     const desdeUsuarios = guardias.find((g: Usuario) => g.id === id)
     const usuario = desdeSupervision || desdeUsuarios
     return usuario ? `${usuario.apellido}, ${usuario.nombre}` : 'Supervisor sin nombre'
@@ -2670,7 +2727,8 @@ function SupervisionesAdmin({
   const auditoriaMapa = (supervision: SupervisionAdmin) =>
     auditoriaSupervisionGps(supervision, objetivoDeSupervision(supervision))
 
-  const supervisionesHoy = supervisiones.filter((s: SupervisionAdmin) => fechaLocal(s.created_at) === hoy)
+  // HOY: siempre el día argentino actual, independiente del período elegido.
+  const supervisionesHoy = supervisionesDelDia(supervisiones as SupervisionAdmin[], hoy)
   const porSupervisor = Array.from(supervisionesHoy.reduce((map: Map<string, any>, supervision: SupervisionAdmin) => {
     const item = map.get(supervision.supervisor_id) || { supervisor_id:supervision.supervisor_id, total:0, observadas:0, criticas:0 }
     item.total += 1
@@ -2680,7 +2738,8 @@ function SupervisionesAdmin({
     return map
   }, new Map()).values()).sort((a: any, b: any) => b.total - a.total)
 
-  const porObjetivo = Array.from(supervisiones.reduce((map: Map<string, any>, supervision: SupervisionAdmin) => {
+  // Por objetivo: del PERÍODO elegido (antes eran "las últimas 500", sin mes).
+  const porObjetivo = Array.from(supervisionesPeriodo.reduce((map: Map<string, any>, supervision: SupervisionAdmin) => {
     const item = map.get(supervision.objetivo_id) || { objetivo_id:supervision.objetivo_id, total:0, observadas:0, criticas:0, ultima:null as SupervisionAdmin | null }
     item.total += 1
     if (supervision.estado === 'con_observacion') item.observadas += 1
@@ -2708,15 +2767,12 @@ function SupervisionesAdmin({
     .filter((objetivo: Objetivo) =>
       objetivoSupervisionVencida(objetivo, ultimaIsoPorObjetivo.get(objetivo.id) ?? null, ahora.getTime()),
     )
-  const ultimasSupervisiones = [...supervisiones]
-    .sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 30)
   const supervisoresMapa = Array.from(guardias.reduce((map: Map<string, Usuario>, usuario: Usuario) => {
     if (usuario.rol === 'supervisor' && usuario.estado === 'activo') map.set(usuario.id, usuario)
     return map
   }, new Map()))
   const objetivosActivosMapa = objetivos.filter((objetivo: Objetivo) => objetivo.estado === 'activo')
-  const supervisionesFiltradasMapa = supervisiones
+  const supervisionesFiltradasMapa = supervisionesConocidas
     .filter((supervision: SupervisionAdmin) => {
       const fecha = fechaLocal(supervision.created_at)
       if (mapaFiltros.desde && fecha < mapaFiltros.desde) return false
@@ -2818,10 +2874,14 @@ function SupervisionesAdmin({
     .sort((a: Usuario, b: Usuario) => `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`))
   const objetivosActivosRanking = (objetivos || []).filter((objetivo: Objetivo) => objetivo.estado === 'activo')
   const objetivosActivosSinZona = objetivosActivosRanking.filter((objetivo: Objetivo) => !objetivo.zona_id)
-  const turnosMesRanking = (turnos || []).filter((turno: Turno) => turno.fecha?.slice(0, 7) === mesActual)
-  const novedadesMesRanking = (novedades || []).filter((novedad: Novedad) => novedad.created_at?.slice(0, 7) === mesActual)
-  const supervisionesMesRanking = ((supervisionesMesOperativas || []).length > 0 ? supervisionesMesOperativas : supervisiones)
-    .filter((supervision: SupervisionRankingAdmin) => supervision.created_at?.slice(0, 7) === mesActual)
+  // Todo lo mensual del ranking sale del período elegido, cortado en hora
+  // argentina (antes `created_at.slice(0,7)`, que es UTC).
+  const turnosMesRanking = turnosPeriodo
+  const novedadesMesRanking = (novedades || []).filter((novedad: Novedad) =>
+    Boolean(novedad.created_at) && mesArgentina(novedad.created_at as string) === periodo)
+  const supervisionesMesRanking: SupervisionRankingAdmin[] = esPeriodoActual && (supervisionesMesOperativas || []).length > 0
+    ? supervisionesDelPeriodo(supervisionesMesOperativas as SupervisionRankingAdmin[], periodo)
+    : (supervisionesPeriodo as unknown as SupervisionRankingAdmin[])
   // Mismo índice y mismo cálculo que `objetivosSinSupervision`: antes el ranking
   // leía otra fuente y podía contradecir al panel sobre el mismo objetivo.
   const objetivoVencidoRanking = (objetivo: Objetivo) =>
@@ -2905,15 +2965,20 @@ function SupervisionesAdmin({
   }, [filtroInicial])
 
   const supervisionesTabla: SupervisionAdmin[] = (() => {
-    const base = [...supervisiones].sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    const recientes = (lista: SupervisionAdmin[]) =>
+      [...lista].sort((a: SupervisionAdmin, b: SupervisionAdmin) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    // La tabla muestra el PERÍODO elegido; los filtros que nacen de las
+    // tarjetas de hoy usan el día de hoy, que es lo que esas tarjetas cuentan.
+    const base = recientes(supervisionesPeriodo)
+    const deHoy = recientes(supervisionesHoy)
     const idsFiltroSupervisiones = new Set((filtroTabla?.ids ?? []) as string[])
-    if (idsFiltroSupervisiones.size > 0) return base.filter((s: SupervisionAdmin) => idsFiltroSupervisiones.has(s.id))
+    if (idsFiltroSupervisiones.size > 0) return recientes(supervisionesConocidas).filter((s: SupervisionAdmin) => idsFiltroSupervisiones.has(s.id))
     if (!filtroTabla) return base.slice(0, 30)
-    if (filtroTabla.tipo === 'hoy') return base.filter((s: SupervisionAdmin) => fechaLocal(s.created_at) === hoy)
-    if (filtroTabla.tipo === 'con_observacion') return base.filter((s: SupervisionAdmin) => s.estado === 'con_observacion')
-    if (filtroTabla.tipo === 'critico') return base.filter((s: SupervisionAdmin) => s.estado === 'critico')
+    if (filtroTabla.tipo === 'hoy') return deHoy
+    if (filtroTabla.tipo === 'con_observacion') return deHoy.filter((s: SupervisionAdmin) => s.estado === 'con_observacion')
+    if (filtroTabla.tipo === 'critico') return deHoy.filter((s: SupervisionAdmin) => s.estado === 'critico')
     if (filtroTabla.tipo === 'supervisor') return base.filter((s: SupervisionAdmin) => s.supervisor_id === filtroTabla.supervisor_id)
-    if (filtroTabla.tipo === 'supervisor_hoy') return base.filter((s: SupervisionAdmin) => s.supervisor_id === filtroTabla.supervisor_id && fechaLocal(s.created_at) === hoy)
+    if (filtroTabla.tipo === 'supervisor_hoy') return deHoy.filter((s: SupervisionAdmin) => s.supervisor_id === filtroTabla.supervisor_id)
     if (filtroTabla.tipo === 'objetivo') return base.filter((s: SupervisionAdmin) => s.objetivo_id === filtroTabla.objetivo_id)
     if (filtroTabla.tipo === 'objetivos_vencidos') {
       const idsVencidos = new Set(objetivosSinSupervision.map((o: Objetivo) => o.id))
@@ -3132,11 +3197,59 @@ function SupervisionesAdmin({
         </div>
       ) : (
         <>
+      {errorCarga && (
+        <div style={{ ...S.card, color:'#fca5a5', borderColor:'rgba(239,68,68,.35)', marginBottom:16 }}>
+          No se pudieron cargar las supervisiones ({errorCarga}). Los contadores de abajo pueden estar incompletos: recargá la página.
+        </div>
+      )}
+
+      {/* ── HOY ─────────────────────────────────────────────────────────────
+          Del día argentino actual. No cambian con el selector de período. */}
+      <div style={{ display:'flex', alignItems:'baseline', gap:10, margin:'4px 0 10px' }}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, fontSize:16 }}>Hoy</div>
+        <div style={{ color:'#64748b', fontSize:13 }}>{hoy.split('-').reverse().join('/')} · hora de Argentina</div>
+      </div>
+      <div style={S.statGrid}>
+        <StatCard label="Supervisiones hoy" value={supervisionesHoy.length} sub="Registradas hoy (hora Argentina)" color={semanticColors.info} onClick={() => aplicarFiltro({ tipo: 'hoy', label: 'Supervisiones hoy' })} />
+        <StatCard label="Con observación" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length} sub="Observadas hoy" color={semanticColors.warning} onClick={() => aplicarFiltro({ tipo: 'con_observacion', label: 'Con observación · hoy' })} />
+        <StatCard label="Críticas" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'critico').length} sub="Críticas hoy" color={semanticColors.error} onClick={() => aplicarFiltro({ tipo: 'critico', label: 'Críticas · hoy' })} />
+        <StatCard label="Objetivos vencidos" value={objetivosSinSupervision.length} sub="Ahora, según frecuencia" color={brandColors.yellow} onClick={() => aplicarFiltro({ tipo: 'objetivos_vencidos', label: 'Objetivos vencidos' })} />
+      </div>
+
+      {/* ── PERÍODO ─────────────────────────────────────────────────────────
+          Ranking, carga por zona, por objetivo y la tabla usan el mes elegido. */}
+      <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:12, margin:'8px 0 10px' }}>
+        <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, fontSize:16 }}>Período</div>
+        <select
+          aria-label="Período de supervisiones"
+          style={{ ...S.select, width:'auto', minWidth:200 }}
+          value={periodo}
+          onChange={e => { setPeriodo(e.target.value); setFiltroTabla(null) }}
+        >
+          {periodosDisponibles.map(p => (
+            <option key={p} value={p}>{etiquetaMesLargo(p)}{p === mesActual ? ' (en curso)' : ''}</option>
+          ))}
+        </select>
+        <div style={{ color:'#64748b', fontSize:13 }}>
+          {datosPeriodoListos ? `${supervisionesPeriodo.length} supervisión(es) en ${etiquetaMesLargo(periodo)}` : 'Cargando el período…'}
+        </div>
+      </div>
+      {errorPeriodo && (
+        <div style={{ ...S.card, color:'#fca5a5', borderColor:'rgba(239,68,68,.35)', marginBottom:16 }}>
+          No se pudo cargar {etiquetaMesLargo(periodo)}: {errorPeriodo}
+        </div>
+      )}
+      {cargandoPeriodo && !datosPeriodoListos && (
+        <div style={{ ...S.card, color:'#94a3b8', marginBottom:16 }}>Cargando {etiquetaMesLargo(periodo)}…</div>
+      )}
+
       <div style={S.card}>
         <div style={{ display:'flex', flexWrap:'wrap', justifyContent:'space-between', gap:12, alignItems:'flex-start', marginBottom:14 }}>
           <div>
             <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800 }}>Ranking operativo de supervisores</div>
-            <div style={{ color:'#64748b', fontSize:13 }}>Mes actual {mesActual}. Horas programadas, sin costos ni facturación.</div>
+            <div style={{ color:'#64748b', fontSize:13 }}>
+              {etiquetaMesLargo(periodo)}{esPeriodoActual ? ' (en curso)' : ''}. Horas programadas, sin costos ni facturación. La columna Vencidas es el estado actual, no el del período.
+            </div>
           </div>
           <Badge type="activo">{rankingSupervisores.length} supervisor(es)</Badge>
         </div>
@@ -3251,16 +3364,9 @@ function SupervisionesAdmin({
         )}
       </div>
 
-      <div style={S.statGrid}>
-        <StatCard label="Supervisiones hoy" value={supervisionesHoy.length} sub="Registros propios de la fecha local" color={semanticColors.info} onClick={() => aplicarFiltro({ tipo: 'hoy', label: 'Supervisiones hoy' })} />
-        <StatCard label="Con observación" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'con_observacion').length} sub="Observadas hoy" color={semanticColors.warning} onClick={() => aplicarFiltro({ tipo: 'con_observacion', label: 'Con observación' })} />
-        <StatCard label="Críticas" value={supervisionesHoy.filter((s: SupervisionAdmin) => s.estado === 'critico').length} sub="Críticas hoy" color={semanticColors.error} onClick={() => aplicarFiltro({ tipo: 'critico', label: 'Críticas' })} />
-        <StatCard label="Objetivos vencidos" value={objetivosSinSupervision.length} sub="Sin supervisión según frecuencia" color={brandColors.yellow} onClick={() => aplicarFiltro({ tipo: 'objetivos_vencidos', label: 'Objetivos vencidos' })} />
-      </div>
-
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))', gap:20 }}>
         <div style={S.card}>
-          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Por supervisor hoy</div>
+          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Por supervisor · hoy</div>
           {porSupervisor.length === 0 ? (
             <div style={{ color:'#64748b', fontSize:13 }}>Sin supervisiones registradas hoy.</div>
           ) : porSupervisor.map((item: any) => (
@@ -3280,9 +3386,9 @@ function SupervisionesAdmin({
         </div>
 
         <div style={S.card}>
-          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Por objetivo</div>
+          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Por objetivo · {etiquetaMesLargo(periodo)}</div>
           {porObjetivo.length === 0 ? (
-            <div style={{ color:'#64748b', fontSize:13 }}>Sin historial de supervisiones.</div>
+            <div style={{ color:'#64748b', fontSize:13 }}>{datosPeriodoListos ? 'Sin supervisiones en el período.' : 'Cargando…'}</div>
           ) : porObjetivo.slice(0, 12).map((item: any) => (
             <div
               key={item.objetivo_id}
@@ -3302,7 +3408,7 @@ function SupervisionesAdmin({
         </div>
 
         <div style={S.card}>
-          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Objetivos sin supervisión vigente</div>
+          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800, marginBottom:12 }}>Objetivos sin supervisión vigente · ahora</div>
           {objetivosSinSupervision.length === 0 ? (
             <div style={{ color:'#64748b', fontSize:13 }}>Todos los objetivos activos están dentro de frecuencia.</div>
           ) : objetivosSinSupervision.map((objetivo: Objetivo) => {
@@ -3339,12 +3445,12 @@ function SupervisionesAdmin({
         <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginBottom:12 }}>
           <div>
             <div style={{ fontFamily:'Syne,sans-serif', fontWeight:800 }}>
-              {filtroTabla ? `Filtro: ${filtroTabla.label}` : 'Últimas supervisiones'}
+              {filtroTabla ? `Filtro: ${filtroTabla.label}` : `Últimas supervisiones · ${etiquetaMesLargo(periodo)}`}
             </div>
             <div style={{ color:'#64748b', fontSize:13 }}>
               {filtroTabla
                 ? `${supervisionesTabla.length} resultado(s) para este filtro`
-                : `${supervisionesTabla.length} registro(s) recientes`}
+                : `${supervisionesTabla.length} de ${supervisionesPeriodo.length} registro(s) del período (las 30 más recientes)`}
             </div>
           </div>
           {filtroTabla && (
@@ -13563,6 +13669,7 @@ export default function AppPage() {
   const [checklistItems, setChecklistItems] = useState<ChecklistItemAdmin[]>([])
   const [supervisionesAdmin, setSupervisionesAdmin] = useState<SupervisionAdmin[]>([])
   const [supervisionesMesAdmin, setSupervisionesMesAdmin] = useState<SupervisionRankingAdmin[]>([])
+  const [errorSupervisionesAdmin, setErrorSupervisionesAdmin] = useState('')
   const [ultimasSupervisionesObjetivosAdmin, setUltimasSupervisionesObjetivosAdmin] = useState<UltimaSupervisionObjetivoAdmin[]>([])
   const [zonasOperativas, setZonasOperativas] = useState<any[]>([])
   const [supervisorZonas, setSupervisorZonas] = useState<any[]>([])
@@ -13633,11 +13740,28 @@ export default function AppPage() {
       supabase.from('novedades').select('*').order('created_at', { ascending: false }),
       supabase.from('checklist_plantillas').select('*').order('nombre'),
       supabase.from('checklist_items').select('*').order('orden', { ascending: true }),
-      supabase
-        .from('supervisiones')
-        .select('*, objetivo:objetivos(nombre), supervisor:usuarios(nombre, apellido), respuestas:supervision_respuestas(resultado), fotos:supervision_fotos(id, storage_path)')
-        .order('created_at', { ascending: false })
-        .limit(500),
+      // Supervisiones con detalle (objetivo, supervisor, ítems observados y
+      // fotos) del mes anterior y el actual, en hora argentina.
+      //
+      // Antes eran "las últimas 500" con TODAS las respuestas embebidas. Desde
+      // la Fase 2C (#241, 21/09) cada fila de supervision_respuestas pasa por
+      // alcanza_supervision_actual() en RLS; con ~6 respuestas por visita eso
+      // son miles de evaluaciones y la consulta superaba el statement_timeout
+      // de 8 s (57014). El error se descartaba y Supervisiones, Objetivos,
+      // Asistencia y GPS quedaban con cero visitas aunque hubiera 121 en
+      // octubre. Ahora: ventana acotada por fecha (no un recorte sobre toda
+      // la tabla), respuestas filtradas a 'observado' —lo único que se cuenta—
+      // y el error se muestra.
+      fetchPaginadoResult<SupervisionAdmin>((desde, hasta) =>
+        supabase
+          .from('supervisiones')
+          .select(SELECT_SUPERVISION_DETALLE)
+          .eq('respuestas.resultado', 'observado')
+          .gte('created_at', rangoInstantesMesArgentina(mesAnterior(mesActual)).desde)
+          .lt('created_at', inicioMesSiguiente)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(desde, hasta)),
       supabase
         .from('supervisiones')
         .select('id, objetivo_id, supervisor_id, estado, created_at')
@@ -13682,7 +13806,15 @@ export default function AppPage() {
     if (n.data) setNovedades(n.data)
     if (cp.data) setChecklistPlantillas(cp.data)
     if (ci.data) setChecklistItems(ci.data)
-    if (s.data) setSupervisionesAdmin(s.data)
+    // Supervisiones: un error no es "no hubo visitas". Se guarda y se muestra.
+    const fallasSupervisiones = [
+      s.error && `detalle: ${s.error.message ?? s.error}`,
+      sm.error && `mes: ${sm.error.message ?? sm.error}`,
+      su.error && `historial: ${su.error.message ?? su.error}`,
+    ].filter(Boolean)
+    if (fallasSupervisiones.length > 0) console.error('[supervisiones] carga:', fallasSupervisiones.join(' · '))
+    setErrorSupervisionesAdmin(fallasSupervisiones.join(' · '))
+    if (!s.error) setSupervisionesAdmin(s.data as SupervisionAdmin[])
     if (sm.data) setSupervisionesMesAdmin(sm.data as SupervisionRankingAdmin[])
     if (su.data) setUltimasSupervisionesObjetivosAdmin(su.data as UltimaSupervisionObjetivoAdmin[])
     if (z.data) setZonasOperativas(z.data)
@@ -13987,6 +14119,7 @@ const esGuardia = esRolGuardia(user.rol)
                   supervisionesMesOperativas={supervisionesMesAdmin}
                   ultimasSupervisionesObjetivos={ultimasSupervisionesObjetivosAdmin}
                   filtroInicial={filtros.supervisiones}
+                  errorCarga={errorSupervisionesAdmin}
                 />
               )}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}

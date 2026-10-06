@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { rangoFechasMes } from '@/lib/periodo-argentina'
 import {
   ETIQUETA_CATEGORIA_CIERRE, agruparPorCategoria, construirCierreOperativo,
   detalleCierre, responsablesDeItem,
@@ -106,16 +107,26 @@ export default function CierreOperativoPanel({ esAdmin, usuarioId, nombreUsuario
   const cargar = useCallback(async () => {
     setCargando(true)
     setError('')
+    const rangoMes = rangoFechasMes(mes)
     const [cierre, guardiasR, zonasR, supZonasR, usuariosR] = await Promise.all([
       cargarItemsCierre({ mes, fechaOperativa: fecha, esAdmin, usuarioId }),
       supabase.from('supervisores_guardia')
         .select('supervisor_id, zona, fecha, hora_inicio, hora_fin, estado, tipo_evento, rol_operativo')
-        .gte('fecha', `${mes}-01`).lte('fecha', `${mes}-31`),
+        .gte('fecha', rangoMes.desde).lt('fecha', rangoMes.hastaExclusivo),
       supabase.from('zonas_operativas').select('id, nombre'),
       supabase.from('supervisor_zonas').select('supervisor_id, zona_id'),
       supabase.from('usuarios').select('id, nombre, apellido, estado'),
     ])
     if (cierre.error) { setError(cierre.error); setItems([]); setCargando(false); return }
+    // Sin guardias, zonas o usuarios no se puede decir a quién le toca cada
+    // pendiente: mostrarlo como "nadie de guardia" sería falso.
+    const fallaCatalogo = [
+      guardiasR.error && `guardias de supervisores: ${guardiasR.error.message}`,
+      zonasR.error && `zonas: ${zonasR.error.message}`,
+      supZonasR.error && `zonas por supervisor: ${supZonasR.error.message}`,
+      usuariosR.error && `usuarios: ${usuariosR.error.message}`,
+    ].filter(Boolean).join(' · ')
+    if (fallaCatalogo) { setError(`No se pudo cargar el cierre: ${fallaCatalogo}`); setItems([]); setCargando(false); return }
     setItems(cierre.items)
     setCatalogos({
       guardias:        (guardiasR.data ?? []) as any[],

@@ -10,6 +10,7 @@
 
 import { supabase } from '@/lib/supabase'
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
+import { rangoFechasMes } from '@/lib/periodo-argentina'
 import {
   construirFilasBandeja, objetivoEnAlcance,
 } from '@/lib/bandeja-planillas'
@@ -20,9 +21,8 @@ import {
 import { etiquetaCaracteristica } from '@/lib/caracteristica-turno'
 
 export function limitesDelMesDesempeno(mes: string): { desde: string; hasta: string } {
-  const [y, m] = mes.split('-').map(Number)
-  const ultimo = new Date(y, m, 0).getDate()
-  return { desde: `${mes}-01`, hasta: `${mes}-${String(ultimo).padStart(2, '0')}` }
+  const r = rangoFechasMes(mes)
+  return { desde: r.desde, hasta: r.ultimoDia }
 }
 
 export interface CargaFilasParams {

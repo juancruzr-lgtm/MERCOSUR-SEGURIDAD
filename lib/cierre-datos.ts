@@ -11,6 +11,7 @@
 //   Operación   detectarAlertasOperativas               (Revisión Operativa)
 
 import { supabase } from '@/lib/supabase'
+import { inicioDiaArgentinaISO, sumarDias } from '@/lib/periodo-argentina'
 import { cargarFilasBandeja, limitesDelMesDesempeno } from '@/lib/bandeja-datos'
 import { requiereRevision } from '@/lib/bandeja-planillas'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
@@ -341,6 +342,9 @@ function primerError(pares: Array<[string, any]>): string | null {
 export async function cargarItemsCierre(p: CargaCierreParams): Promise<CargaCierreResultado> {
   const { desde, hasta } = limitesDelMesDesempeno(p.mes)
   const diaDesde = diaAnterior(p.fechaOperativa)
+  // Ventana de instantes en hora argentina: del 00:00 ART de `desde` al 00:00
+  // ART del día siguiente a `hasta`. Sin zona, PostgREST la leía como UTC.
+  const ventana = { desde: inicioDiaArgentinaISO(desde), hasta: inicioDiaArgentinaISO(sumarDias(hasta, 1)) }
   const db = p.client ?? supabase
 
   // Sin embeds de PostgREST en ronda_alertas ni evidencia_analisis.
@@ -365,14 +369,14 @@ export async function cargarItemsCierre(p: CargaCierreParams): Promise<CargaCier
     db
       .from('ronda_alertas')
       .select('id, objetivo_id, ronda_base_id, guardia_id, tipo, estado, ventana_inicio, comentario')
-      .gte('ventana_inicio', `${desde}T00:00:00`)
-      .lte('ventana_inicio', `${hasta}T23:59:59`)
+      .gte('ventana_inicio', ventana.desde)
+      .lt('ventana_inicio', ventana.hasta)
       .eq('estado', 'pendiente'),
     db
       .from('evidencia_analisis')
       .select('id, analisis_tipo, objetivo_id, guardia_id, revision_estado, clasificacion_efectiva, evidencia_created_at, motivos, resumen')
-      .gte('evidencia_created_at', `${desde}T00:00:00`)
-      .lte('evidencia_created_at', `${hasta}T23:59:59`)
+      .gte('evidencia_created_at', ventana.desde)
+      .lt('evidencia_created_at', ventana.hasta)
       .eq('revision_estado', 'PENDIENTE')
       .eq('clasificacion_efectiva', 'REVISAR'),
     db

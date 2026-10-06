@@ -47,6 +47,7 @@ import {
 } from '@/lib/cierre-datos'
 import { cierreDeResponsable, detalleCierre, textoPushCierre } from '@/lib/cierre-operativo'
 import { responsablesQueCierran, zonasConGuardiaCargada } from '@/lib/cierre-aviso'
+import { rangoFechasMes } from '@/lib/periodo-argentina'
 
 export const runtime = 'nodejs'
 
@@ -146,16 +147,27 @@ export async function GET(req: NextRequest) {
   })
   if (cierre.error) return NextResponse.json({ error: cierre.error }, { status: 500 })
 
+  const rangoMes = rangoFechasMes(mes)
   const [usuariosR, guardiasR, zonasR, supZonasR, subsR] = await Promise.all([
     client.from('usuarios').select('id, nombre, apellido, rol, estado').eq('estado', 'activo'),
     client.from('supervisores_guardia')
       .select('supervisor_id, zona, fecha, hora_inicio, hora_fin, estado, tipo_evento, rol_operativo')
-      .gte('fecha', `${mes}-01`).lte('fecha', `${mes}-31`),
+      .gte('fecha', rangoMes.desde).lt('fecha', rangoMes.hastaExclusivo),
     client.from('zonas_operativas').select('id, nombre'),
     client.from('supervisor_zonas').select('supervisor_id, zona_id'),
     client.from('push_subscriptions')
       .select('id, usuario_id, endpoint, p256dh, auth').eq('activo', true),
   ])
+  // Cualquiera de estas lecturas vacía por error hace que el aviso diga algo
+  // falso ("nadie cierra", "sin responsable"). Se corta con el error.
+  const fallaLectura = [
+    usuariosR.error && `usuarios: ${usuariosR.error.message}`,
+    guardiasR.error && `supervisores_guardia: ${guardiasR.error.message}`,
+    zonasR.error && `zonas_operativas: ${zonasR.error.message}`,
+    supZonasR.error && `supervisor_zonas: ${supZonasR.error.message}`,
+    subsR.error && `push_subscriptions: ${subsR.error.message}`,
+  ].filter(Boolean).join(' · ')
+  if (fallaLectura) return NextResponse.json({ error: fallaLectura }, { status: 500 })
 
   const usuarios = (usuariosR.data ?? []) as any[]
   const guardias = (guardiasR.data ?? []) as any[]
