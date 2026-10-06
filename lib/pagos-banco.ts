@@ -1,10 +1,14 @@
 // lib/pagos-banco.ts
 //
 // PAGOS — archivos de acreditación para el banco (Galicia). Formato auditado
-// (JC 11/09): hoja "Empleados" con 3 columnas → Cuenta | Nombre | Importe.
-// La CUENTA va como TEXTO (conserva ceros a la izquierda). El importe NO se
-// recalcula: sueldos = neto de Visual + sueldo mensual de los excluidos; extras
-// = extra fija vigente del mes. Toda la lógica vive en las RPC pagos_*_banco.
+// (JC 06/10): hoja "Empleados" con 4 columnas → Cuenta | Nombre | Importe |
+// Concepto. La CUENTA va como TEXTO (conserva ceros a la izquierda). El importe
+// NO se recalcula: sueldos = neto de Visual + sueldo mensual de los excluidos;
+// extras = extra fija vigente del mes. El CONCEPTO lo pide Galicia: 1 = sueldos,
+// 11 = extras. Toda la lógica de importes vive en las RPC pagos_*_banco.
+
+// Código de concepto de Galicia por tipo de archivo.
+export const CONCEPTO_BANCO = { sueldos: 1, extras: 11 } as const
 
 export interface FilaBanco { cuenta: string; nombre: string; importe: number }
 export interface ArchivoBanco {
@@ -47,19 +51,20 @@ export async function filasExtrasBanco(client: any, periodoId: string): Promise<
 
 /**
  * Escribe el .xlsx del banco (SheetJS). Hoja "Empleados", encabezado
- * Cuenta|Nombre|Importe. La cuenta se fuerza como celda de TEXTO.
+ * Cuenta|Nombre|Importe|Concepto. La cuenta se fuerza como celda de TEXTO.
+ * `concepto` = código de Galicia del archivo (1 sueldos, 11 extras).
  */
-export async function escribirBancoXLSX(rows: FilaBanco[]): Promise<ArrayBuffer> {
+export async function escribirBancoXLSX(rows: FilaBanco[], concepto: number): Promise<ArrayBuffer> {
   const XLSX = await import('xlsx')
-  const aoa: any[][] = [['Cuenta', 'Nombre', 'Importe']]
-  for (const r of rows) aoa.push([r.cuenta, r.nombre, r.importe])
+  const aoa: any[][] = [['Cuenta', 'Nombre', 'Importe', 'Concepto']]
+  for (const r of rows) aoa.push([r.cuenta, r.nombre, r.importe, concepto])
   const ws = XLSX.utils.aoa_to_sheet(aoa)
   // Cuenta como texto (ceros a la izquierda). Fila 1 es encabezado.
   for (let i = 2; i <= aoa.length; i++) {
     const ref = `A${i}`
     if (ws[ref]) { ws[ref].t = 's'; ws[ref].z = '@' }
   }
-  ws['!cols'] = [{ wch: 24 }, { wch: 34 }, { wch: 14 }]
+  ws['!cols'] = [{ wch: 24 }, { wch: 34 }, { wch: 14 }, { wch: 10 }]
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Empleados')
   const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
