@@ -13,7 +13,7 @@
 
 import {
   construirLineasVisual, escribirLibroVisualXls, clasificarBloqueados,
-  CODIGOS_SOBRE_BASICO, CATEGORIAS_REMUNERATIVAS, CODIGOS_NO_REMUNERATIVOS_OS,
+  CODIGOS_SOBRE_BASICO, CODIGOS_REMUNERATIVO_OS,
   type ConceptoCfg, type PersonaPadron, type HaberLinea, type PermanenteLinea, type ExpedienteLinea,
   type ResultadoLineas, type Hallazgo,
 } from '@/lib/visual-export'
@@ -215,20 +215,14 @@ export async function regenerarVisualDesdeEnviado(
   const r = await client.from('liquidacion_enviado_visual')
     .select('cod_interno, cuil, codigo, cantidad, importe').eq('periodo_id', periodoId)
   if (r.error) return { bytes: null, lineas: 0, error: r.error.message }
-  // Depuración del 050/133 con la MISMA regla que la exportación (JC 05/10): se
-  // omiten donde el REMUNERATIVO de lo enviado supera el Básico de la liquidación
-  // (ahí el 133 daría negativo). El enviado histórico puede traer el 133 para todos;
-  // acá se re-aplica la regla para que la re-descarga también salga depurada.
-  // Remunerativo por CUIL = Σ importe de las líneas enviadas cuyo concepto es
-  // remunerativo (categoría imponible/asignación) según el catálogo.
-  const { data: catRows } = await client.from('liquidacion_concepto_catalogo').select('codigo_visual, categoria')
-  const categoriaPorCodigo = new Map<string, string>()
-  for (const c of (catRows ?? []) as any[]) if (c.codigo_visual) categoriaPorCodigo.set(String(c.codigo_visual), String(c.categoria ?? ''))
+  // Depuración del 050/133 con la MISMA regla que la exportación (JC 06/10): se
+  // omiten donde el REMUNERATIVO (sólo las horas, 001) supera el Básico. El enviado
+  // histórico puede traer el 133 para todos; acá se re-aplica la regla para que la
+  // re-descarga también salga depurada.
   const soloDig = (v: any) => String(v ?? '').replace(/\D/g, '')
   const remunerativoPorCuil = new Map<string, number>()
   for (const x of (r.data ?? []) as any[]) {
-    if (!CATEGORIAS_REMUNERATIVAS.has(categoriaPorCodigo.get(String(x.codigo)) ?? '')) continue
-    if (CODIGOS_NO_REMUNERATIVOS_OS.has(String(x.codigo))) continue   // viáticos (203) no cuentan
+    if (!CODIGOS_REMUNERATIVO_OS.has(String(x.codigo))) continue   // sólo horas (001)
     const c = soloDig(x.cuil)
     remunerativoPorCuil.set(c, (remunerativoPorCuil.get(c) ?? 0) + Number(x.importe ?? 0))
   }
