@@ -145,21 +145,20 @@ describe('escribirLibroVisualXls (contrato nativo)', () => {
   })
 })
 
-// ── Diferencia de Obra Social (133) + ajuste (050): omitir si remunerativo > Básico ──
-// Regla JC 05/10: la app decide ANTES de exportar, por IMPORTES (no horas): suma el
-// remunerativo previsto de los conceptos a exportar (categorías imponible/asignación,
-// excluyendo no remunerativos y el propio 133) y lo compara con el Básico de la
-// liquidación. Mayor → se OMITE el 133 (y el 050). Igual o menor → se conserva.
-describe('construirLineasVisual · 133/050 por remunerativo vs Básico', () => {
+// ── Diferencia de Obra Social (133) + ajuste (050): omitir si el 001 > Básico ──
+// Regla JC 06/10: el remunerativo que decide el 133 se calcula SÓLO sobre las HORAS
+// (001). Si el 001 supera el Básico → se OMITE el 133 (y el 050). Igual o menor →
+// se conserva. Ningún otro concepto (presentismo/viáticos/adicional/no rem) cuenta.
+describe('construirLineasVisual · 133/050: remunerativo = sólo horas (001) vs Básico', () => {
   const catOS = new Map<string, ConceptoCfg>([
-    ['001', { politica: 'valor', entrada: 'IMP', categoria: 'imponible' }],     // remunerativo
-    ['204', { politica: 'valor', entrada: 'IMP', categoria: 'asignacion' }],    // remunerativo
-    ['212', { politica: 'valor', entrada: 'IMP', categoria: 'asignacion' }],    // adicional (remunerativo)
-    ['203', { politica: 'valor', entrada: 'IMP', categoria: 'asignacion' }],    // viáticos (asignación pero NO remunerativo)
-    ['214', { politica: 'valor', entrada: 'IMP', categoria: 'no_imponible' }],  // NO remunerativo
-    ['011', { politica: 'linea_cero', entrada: 'CALCULADO', categoria: 'imponible' }],
-    ['050', { politica: 'linea_cero', entrada: 'CALCULADO', categoria: 'base_auxiliar' }],
-    ['133', { politica: 'linea_cero', entrada: 'CALCULADO', categoria: 'descuento' }],
+    ['001', { politica: 'valor', entrada: 'IMP' }],
+    ['204', { politica: 'valor', entrada: 'IMP' }],
+    ['212', { politica: 'valor', entrada: 'IMP' }],
+    ['203', { politica: 'valor', entrada: 'IMP' }],
+    ['214', { politica: 'valor', entrada: 'IMP' }],
+    ['011', { politica: 'linea_cero', entrada: 'CALCULADO' }],
+    ['050', { politica: 'linea_cero', entrada: 'CALCULADO' }],
+    ['133', { politica: 'linea_cero', entrada: 'CALCULADO' }],
   ])
   const LC = ['011', '050', '133']
   const per: PersonaPadron = { persona_id: 'p', cod_interno: 'X', cuil: '20144945817', nombre: 'TEST' }
@@ -169,73 +168,54 @@ describe('construirLineasVisual · 133/050 por remunerativo vs Básico', () => {
     construirLineasVisual({ padron: [per], catalogo: catOS, haberes: new Map([['p', haberes]]), dias, permanentes: new Map(), expedientes: new Map(), lineaCero: LC, basicoLiquidacion })
   const tiene = (r: ReturnType<typeof correr>, cod: string) => r.lineas.some(l => l.codigo === cod)
 
-  it('remunerativo < Básico → 133 y 050 PRESENTES (0/0)', () => {
+  it('001 < Básico → 133 y 050 PRESENTES (0/0)', () => {
     const r = correr([{ codigo: '001', cantidad: null, importe: 500_000 }], BASICO)
     expect(tiene(r, '133')).toBe(true)
     expect(tiene(r, '050')).toBe(true)
     expect(r.lineas.find(l => l.codigo === '133')).toMatchObject({ cantidad: 0, importe: 0 })
   })
 
-  it('remunerativo = Básico → se conserva el 133 (igual o menor)', () => {
+  it('001 = Básico → se conserva el 133 (igual o menor)', () => {
     const r = correr([{ codigo: '001', cantidad: null, importe: 1_000_000 }], BASICO)
     expect(tiene(r, '133')).toBe(true)
   })
 
-  it('remunerativo > Básico → 133 y 050 OMITIDOS; el resto intacto', () => {
-    const r = correr([{ codigo: '001', cantidad: null, importe: 900_000 }, { codigo: '204', cantidad: null, importe: 200_000 }], BASICO)
+  it('001 > Básico → 133 y 050 OMITIDOS; el resto intacto', () => {
+    const r = correr([{ codigo: '001', cantidad: null, importe: 1_200_000 }], BASICO)
     expect(tiene(r, '133')).toBe(false)
     expect(tiene(r, '050')).toBe(false)
-    // los demás conceptos permanecen intactos
     expect(tiene(r, '001')).toBe(true)
-    expect(tiene(r, '204')).toBe(true)
-    expect(tiene(r, '011')).toBe(true)  // estructural remunerativo sigue
+    expect(tiene(r, '011')).toBe(true)  // estructural sigue
     expect(tiene(r, '000')).toBe(true)  // días
   })
 
-  it('los VIÁTICOS (203) NO suman al remunerativo (no son remunerativos) → 133 se conserva', () => {
-    // importe total 1.400.000 pero remunerativo real 500.000 (viáticos excluidos) < Básico
-    const r = correr([{ codigo: '001', cantidad: null, importe: 500_000 }, { codigo: '203', cantidad: null, importe: 900_000 }], BASICO)
+  it('SÓLO cuenta el 001: con 001 bajo, aunque haya presentismo/viáticos/adicional/no-rem grandes → 133 se conserva', () => {
+    const r = correr([
+      { codigo: '001', cantidad: null, importe: 500_000 },   // < Básico (lo único que cuenta)
+      { codigo: '204', cantidad: null, importe: 900_000 },   // presentismo (NO cuenta)
+      { codigo: '203', cantidad: null, importe: 900_000 },   // viáticos (NO cuenta)
+      { codigo: '212', cantidad: null, importe: 900_000 },   // adicional (NO cuenta)
+      { codigo: '214', cantidad: null, importe: 900_000 },   // no remunerativo (NO cuenta)
+    ], BASICO)
     expect(tiene(r, '133')).toBe(true)
-    expect(tiene(r, '203')).toBe(true)  // los viáticos sí se exportan, sólo no cuentan para el umbral
+    for (const c of ['204', '203', '212', '214']) expect(tiene(r, c)).toBe(true) // se exportan igual
   })
 
-  it('los NO remunerativos (214) no suman al remunerativo → 133 se conserva', () => {
-    // importe total 1.400.000 pero remunerativo real 500.000 (214 excluido) < Básico
-    const r = correr([{ codigo: '001', cantidad: null, importe: 500_000 }, { codigo: '214', cantidad: null, importe: 900_000 }], BASICO)
-    expect(tiene(r, '133')).toBe(true)
-    expect(tiene(r, '214')).toBe(true)  // el no remunerativo sí se exporta, sólo no cuenta para el umbral
+  it('supervisor (001 = 150 hs = 765.225 < Básico) → 133 PRESENTE aunque tenga adicional', () => {
+    const r = correr([
+      { codigo: '001', cantidad: null, importe: 765_225 },  // 150 hs
+      { codigo: '212', cantidad: null, importe: 255_075 },  // adicional (NO cuenta para el 133)
+    ], BASICO)
+    expect(tiene(r, '133')).toBe(true)   // 765.225 < 1.000.000 → conserva
   })
 
-  it('con correcciones manuales que elevan el remunerativo por encima del Básico → 133 omitido', () => {
-    // el importe ya viene corregido en el snapshot; basta con que supere el Básico
-    const r = correr([{ codigo: '001', cantidad: null, importe: 1_200_000 }], BASICO)
+  it('administrativo con 001 (sueldo mensual) > Básico → 133 omitido', () => {
+    const r = correr([{ codigo: '001', cantidad: null, importe: 2_400_000 }], BASICO)
     expect(tiene(r, '133')).toBe(false)
   })
 
   it('sin Básico (no se pasa) → comportamiento previo: 133 presente', () => {
     const r = correr([{ codigo: '001', cantidad: null, importe: 9_000_000 }])
     expect(tiene(r, '133')).toBe(true)
-  })
-
-  // Supervisores (JC): el Básico es por 200 hs; su concepto HORAS (001) lleva 150 hs
-  // y las 50 hs restantes van en ADICIONAL (212). El remunerativo debe sumar 001+212
-  // (no comparar 001 solo), así alcanzan el básico; con presentismo/viáticos quedan
-  // por encima. 150 hs = 0.75·básico = 750.000; 50 hs = 0.25·básico = 250.000.
-  it('supervisor: 001 (150 hs) + adicional 212 (50 hs) = básico exacto → se conserva (igual)', () => {
-    const r = correr([
-      { codigo: '001', cantidad: null, importe: 750_000 },  // 150 hs
-      { codigo: '212', cantidad: null, importe: 250_000 },  // 50 hs → completa el básico
-    ], BASICO)
-    expect(tiene(r, '133')).toBe(true)   // remunerativo = básico → igual → conserva
-    expect(tiene(r, '212')).toBe(true)
-  })
-
-  it('supervisor con presentismo encima del básico (001 150h + 212 50h + 204) → 133 omitido', () => {
-    const r = correr([
-      { codigo: '001', cantidad: null, importe: 750_000 },  // 150 hs
-      { codigo: '212', cantidad: null, importe: 250_000 },  // 50 hs
-      { codigo: '204', cantidad: null, importe: 180_000 },  // presentismo → supera el básico
-    ], BASICO)
-    expect(tiene(r, '133')).toBe(false)
   })
 })
