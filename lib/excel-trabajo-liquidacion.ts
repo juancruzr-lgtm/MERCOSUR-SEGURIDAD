@@ -366,7 +366,11 @@ export async function jornadasPorUsuarioDelMes(
 // Columnas de concepto del Excel de trabajo (layout de #170) y su código de
 // Visual: el código NO se hardcodea acá, se lee de la fila 6 del archivo (viene
 // de la plantilla de Juan). Estas letras sí son fijas: definen NUESTRO layout.
-const COLS_CONCEPTO = ['AC', 'AD', 'AE', 'AF', 'AG', 'AI', 'AJ', 'AT', 'AU', 'AV', 'AW', 'AX']
+// El 001 se EXPORTA desde AJ (horas rec $ = importe en pesos). La columna AG
+// ("horas rec") es la CANTIDAD de horas y NO se incluye acá: antes se sumaba al
+// 001 e inflaba el importe con el número de horas (JC 05/10: el 001 va con
+// cantidad 1 y el importe total, sin sumar las horas).
+const COLS_CONCEPTO = ['AC', 'AD', 'AE', 'AF', 'AI', 'AJ', 'AT', 'AU', 'AV', 'AW', 'AX']
 
 export interface FilaConsolidada {
   empleado_id: string
@@ -398,9 +402,10 @@ export async function cargarAjustes(
  * Deriva las filas consolidadas (empleado × código de Visual, importe final) de
  * una PlantillaLiquidacion YA CONSTRUIDA. NO lee nada: opera sobre la misma
  * plantilla que después escribe el .xlsx, así el snapshot y el archivo salen de
- * UNA sola preparación. Suma importes de columnas que comparten código (212 =
- * AE+AI, 001 = AG+AJ). Los códigos y la fila de encabezado se toman de la propia
- * plantilla (estilos.encabezado), no hardcodeados.
+ * UNA sola preparación. Suma importes de columnas que comparten código. El 001 se
+ * toma SÓLO de AJ (horas rec $): la columna AG (cantidad de horas) ya no se incluye
+ * en COLS_CONCEPTO, así el 001 no infla el importe con el número de horas. Los
+ * códigos y la fila de encabezado se toman de la plantilla, no hardcodeados.
  */
 export function filasConsolidadasDePlantilla(plantilla: PlantillaLiquidacion): FilaConsolidada[] {
   const encab = plantilla.estilos.encabezado
