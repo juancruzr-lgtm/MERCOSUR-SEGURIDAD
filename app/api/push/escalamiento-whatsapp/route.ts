@@ -234,6 +234,34 @@ export async function GET(req: Request) {
     yaAvisados.add(`${n.usuario_id}|${n.turno_id}|${n.tipo}`)
   }
 
+  // Fallidos "sin destinatario" de la última hora. Sin esto, un evento que no
+  // resuelve destinatario escribe LA MISMA fila de auditoría en cada corrida
+  // (~cada 10 min) mientras dure el problema: entre el 01 y el 03/10 un hueco
+  // en la programación de octubre dejó 5.575 filas por 34 alertas reales. Una
+  // fila por hora y por evento alcanza para ver que el problema sigue.
+  const haceUnaHora = new Date(ahora.getTime() - 60 * 60000).toISOString()
+  const fallidosRecientesRes = await client.from('escalamiento_whatsapp_envios')
+    .select('turno_id, ronda_alerta_id, nivel, resultado')
+    .gte('created_at', haceUnaHora)
+    .neq('resultado', 'enviado')
+  const fallidosRecientes = new Set<string>()
+  for (const f of (fallidosRecientesRes.data ?? []) as any[]) {
+    const evento = f.ronda_alerta_id ?? f.turno_id
+    if (evento) fallidosRecientes.add(`${evento}|${f.nivel}|${f.resultado}`)
+  }
+
+  // Respaldo cuando NADIE está de guardia en la zona: la lista configurada de
+  // escalamiento (el jefe de supervisores; si no hay jefe activo, dirección).
+  // Antes la alerta quedaba muda hasta que alguien entrara de guardia — las 6
+  // alertas de la madrugada del 03/10 esperaron hasta 18 horas.
+  const listaEscalamiento = ((destinatariosRes.data ?? []) as any[]).filter((x: any) => x.activo)
+  const jefesActivos = listaEscalamiento
+    .filter((x: any) => x.rol_en_escalamiento === 'jefe_supervisores')
+    .map((x: any) => x.usuario_id)
+  const fallbackJefes: string[] = jefesActivos.length > 0
+    ? jefesActivos
+    : listaEscalamiento.map((x: any) => x.usuario_id)
+
   const proveedor = enviarDeVerdad ? proveedorPorDefecto() : proveedorSimulado()
   const acciones: any[] = []
   const descartes: Record<string, number> = {}
@@ -320,6 +348,12 @@ export async function GET(req: Request) {
 
     if (motivoSinDestinatario) {
       // Se registra y se sigue. El caso sin supervisor llega igual al nivel 30.
+      // Con una fila fresca (<1 h) del mismo evento no se vuelve a escribir:
+      // el reintento queda, la auditoría no se infla.
+      if (fallidosRecientes.has(`${t.id}|${nivel}|${motivoSinDestinatario.toLowerCase()}`)) {
+        descartes.fallido_reciente_ya_auditado = (descartes.fallido_reciente_ya_auditado ?? 0) + 1
+        continue
+      }
       acciones.push({
         turno: t.id, nivel, descartado: motivoSinDestinatario, objetivo: vars.objetivo,
         puesto: vars.puesto, horario: vars.horario, vigilador: vars.vigilador,
@@ -461,10 +495,26 @@ export async function GET(req: Request) {
     })
     const texto = textoMensajeRonda(vars)
 
-    if ((r.responsables ?? []).length === 0) {
+    // Si NADIE está de guardia en este momento (hueco en la programación), la
+    // alerta no se calla: sube a la lista de escalamiento (jefe de
+    // supervisores; sin jefe activo, dirección). Mismo espíritu que el +30 de
+    // puestos descubiertos — alguien con poder de actuar se tiene que enterar.
+    let responsables = Array.from(new Set(r.responsables ?? []))
+    let origenRonda: string = r.origen
+    if (responsables.length === 0 && fallbackJefes.length > 0) {
+      responsables = Array.from(new Set(fallbackJefes))
+      origenRonda = 'fallback_jefes'
+    }
+
+    if (responsables.length === 0) {
       const motivo = r.origen === 'multiples_sin_guardia'
         ? 'VARIOS_RESPONSABLES_SIN_GUARDIA_DEFINIDA'
         : 'SIN_SUPERVISOR_RESPONSABLE'
+      // Misma fila fresca (<1 h) → no se re-audita el mismo fallido.
+      if (fallidosRecientes.has(`${alerta.id}|${NIVEL_RONDA}|${motivo.toLowerCase()}`)) {
+        descartesRonda.fallido_reciente_ya_auditado = (descartesRonda.fallido_reciente_ya_auditado ?? 0) + 1
+        continue
+      }
       acciones.push({
         alerta: alerta.id, nivel: NIVEL_RONDA, descartado: motivo,
         objetivo: vars.objetivo, ronda: vars.ronda, horario: vars.horario,
@@ -480,7 +530,7 @@ export async function GET(req: Request) {
       continue
     }
 
-    for (const usuarioId of Array.from(new Set(r.responsables))) {
+    for (const usuarioId of responsables) {
       const u = usuarios.find((x: any) => x.id === usuarioId)
       const tel = normalizarTelefonoAr(u?.telefono)
 
@@ -512,7 +562,7 @@ export async function GET(req: Request) {
           alerta: alerta.id, nivel: NIVEL_RONDA, objetivo: vars.objetivo,
           ronda: vars.ronda, horario: vars.horario, vigilador: vars.vigilador,
           destinatario: nombreDe(usuarioId), telefono: tel.e164,
-          plantilla: destino.plantilla, origenResolucion: r.origen,
+          plantilla: destino.plantilla, origenResolucion: origenRonda,
           enviaria: true, texto,
         })
         continue
