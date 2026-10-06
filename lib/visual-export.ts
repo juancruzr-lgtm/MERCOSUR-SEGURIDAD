@@ -65,6 +65,11 @@ export const CODIGOS_SOBRE_BASICO = new Set(['050', '133'])
 // ('no_imponible', p.ej. 214/008), los descuentos ('descuento', incluido el propio
 // 133) y las bases auxiliares ('base_auxiliar', p.ej. 000/050/213).
 export const CATEGORIAS_REMUNERATIVAS = new Set(['imponible', 'asignacion'])
+// Conceptos que NO integran el remunerativo para la O.S. aunque el catálogo los
+// marque como asignación: VIÁTICOS (203) son NO remunerativos (JC 06/10). Si se
+// contaran, inflan el remunerativo y dejan sin Diferencia de O.S. (133) a gente
+// que remunerativamente está por debajo del Básico.
+export const CODIGOS_NO_REMUNERATIVOS_OS = new Set(['203'])
 // Persona liquidable (padrón canónico), no necesariamente un usuario de la app.
 export interface PersonaPadron {
   persona_id: string
@@ -182,7 +187,8 @@ export function construirLineasVisual(p: {
       else { impEmitido = h.importe ?? 0; emitir(h.codigo, h.cantidad ?? 1, impEmitido); haberReal++ }
       // Sólo los remunerativos (imponible/asignación) suman al remunerativo previsto;
       // los no remunerativos (214/008…) y el propio 133 quedan fuera por su categoría.
-      if (CATEGORIAS_REMUNERATIVAS.has(String(cfg.categoria ?? ''))) remunerativoPrevisto += impEmitido
+      // Los viáticos (203) son asignación pero NO remunerativos → se excluyen.
+      if (CATEGORIAS_REMUNERATIVAS.has(String(cfg.categoria ?? '')) && !CODIGOS_NO_REMUNERATIVOS_OS.has(String(h.codigo))) remunerativoPrevisto += impEmitido
     }
 
     // Regla 000 (JC): exporta quien TRABAJÓ (000 real) o tiene algún concepto

@@ -13,7 +13,7 @@
 
 import {
   construirLineasVisual, escribirLibroVisualXls, clasificarBloqueados,
-  CODIGOS_SOBRE_BASICO, CATEGORIAS_REMUNERATIVAS,
+  CODIGOS_SOBRE_BASICO, CATEGORIAS_REMUNERATIVAS, CODIGOS_NO_REMUNERATIVOS_OS,
   type ConceptoCfg, type PersonaPadron, type HaberLinea, type PermanenteLinea, type ExpedienteLinea,
   type ResultadoLineas, type Hallazgo,
 } from '@/lib/visual-export'
@@ -228,6 +228,7 @@ export async function regenerarVisualDesdeEnviado(
   const remunerativoPorCuil = new Map<string, number>()
   for (const x of (r.data ?? []) as any[]) {
     if (!CATEGORIAS_REMUNERATIVAS.has(categoriaPorCodigo.get(String(x.codigo)) ?? '')) continue
+    if (CODIGOS_NO_REMUNERATIVOS_OS.has(String(x.codigo))) continue   // viáticos (203) no cuentan
     const c = soloDig(x.cuil)
     remunerativoPorCuil.set(c, (remunerativoPorCuil.get(c) ?? 0) + Number(x.importe ?? 0))
   }
