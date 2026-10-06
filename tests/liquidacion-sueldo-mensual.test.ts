@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { construirResumenGuardia, plantillaLiquidacionResumenGuardia, PARAMETROS_PLANTILLA } from '@/lib/resumen-guardia'
+import { filasConsolidadasDePlantilla } from '@/lib/excel-trabajo-liquidacion'
 
 // SUELDO MENSUAL (grupo A · mensualizados fijos): concepto 001 individual, sin
 // 203/204/212 de convención. Grupo B (supervisores operativos) y C (vigiladores)
@@ -35,7 +36,7 @@ describe('SUELDO MENSUAL — grupo A (mensualizados fijos)', () => {
     expect(m.get(`AJ${r}`)?.v).toBe(777000)      // 001 = SUELDO MENSUAL
     expect(m.get(`AJ${r}`)?.f).toBe(`BF${r}`)    // 001 sigue la columna editable
     expect(m.get(`BF${r}`)?.v).toBe(777000)      // columna SUELDO MENSUAL
-    expect(m.get(`AG${r}`)?.v).toBe(0)           // sin "horas rec" (así 001 = AG+AJ = SM)
+    expect(m.get(`AG${r}`)?.v).toBe(0)           // sin "horas rec" (así 001 = AJ = SM)
     expect(m.get(`AC${r}`)?.v).toBe(0)           // sin viáticos 203
     expect(m.get(`AD${r}`)?.v).toBe(0)           // sin presentismo 204
     expect(m.get(`AE${r}`)?.v).toBe(0)           // sin 212
@@ -62,6 +63,18 @@ describe('SUELDO MENSUAL — grupo A (mensualizados fijos)', () => {
     const r = filaDe('s1')
     expect(m.get(`BG${r}`)).toBeUndefined()
     expect(m.get(`AP${r}`)?.f).toBe(`IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
+  })
+
+  it('consolidación 001: cantidad 1 e importe = AJ, SIN sumar las horas de AG (JC 05/10)', () => {
+    // SUP = supervisor operativo → AG (horas rec) = 150, AJ (001 $) = 150*hora.
+    // El 001 consolidado para Visual debe ser SÓLO AJ (765.225), no AG+AJ (765.375).
+    const resumen = construirResumenGuardia({ mes: '2026-09', empleados: [SUP], turnos: [], registros: [], novedades: [], esObjetivoPrueba: () => false, nombreObjetivo: () => '' } as any)
+    const pl = plantillaLiquidacionResumenGuardia(resumen)
+    const cons = filasConsolidadasDePlantilla(pl)
+    const c001 = cons.find(f => f.empleado_id === 's1' && f.codigo === '001')!
+    const hora = PARAMETROS_PLANTILLA.basico / 200
+    expect(c001.cantidad).toBe(1)
+    expect(c001.importe).toBe(150 * hora)   // 765.225 exacto, sin los +150 de la cantidad de horas
   })
 
   it('gerencia con SUELDO MENSUAL → usa el importe individual', () => {
