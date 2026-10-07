@@ -17,7 +17,7 @@ import {
   type ConceptoCfg, type PersonaPadron, type HaberLinea, type PermanenteLinea, type ExpedienteLinea,
   type ResultadoLineas, type Hallazgo,
 } from '@/lib/visual-export'
-import { jornadasPorUsuarioDelMes, prepararLiquidacionDelMes, type FilaConsolidada } from '@/lib/excel-trabajo-liquidacion'
+import { cargarParametrosDelMes, jornadasPorUsuarioDelMes, prepararLiquidacionDelMes, type FilaConsolidada } from '@/lib/excel-trabajo-liquidacion'
 import { PARAMETROS_PLANTILLA } from '@/lib/resumen-guardia'
 
 function limitesMes(mes: string): { desde: string; hasta: string } {
@@ -137,7 +137,8 @@ async function cargarYConstruirVisual(
   // calcularía la diferencia de O.S. en negativo, así que el 133 se omite por
   // completo (no se manda en cero). La comparación es por IMPORTES (ver
   // construirLineasVisual), no usa horas ni el imponible de un resultado importado.
-  const basicoLiquidacion = PARAMETROS_PLANTILLA.basico
+  // Es el Básico DEL MES (el que Juan dejó en B1 del Excel de trabajo), no un fijo.
+  const basicoLiquidacion = (await cargarParametrosDelMes(client, periodo.mes)).basico
 
   const resultado = construirLineasVisual({ padron, catalogo, haberes, dias, permanentes, expedientes, lineaCero, basicoLiquidacion })
   return { resultado, personas: personas.length, error: null }
@@ -226,7 +227,10 @@ export async function regenerarVisualDesdeEnviado(
     const c = soloDig(x.cuil)
     remunerativoPorCuil.set(c, (remunerativoPorCuil.get(c) ?? 0) + Number(x.importe ?? 0))
   }
-  const basicoLiquidacion = PARAMETROS_PLANTILLA.basico
+  // Básico del mes del período (el guardado desde el Excel de trabajo).
+  const { data: perRows } = await client.from('liquidacion_periodo').select('mes').eq('id', periodoId).limit(1)
+  const per = ((perRows ?? []) as any[])[0]
+  const basicoLiquidacion = per?.mes ? (await cargarParametrosDelMes(client, String(per.mes))).basico : PARAMETROS_PLANTILLA.basico
   const filas = ((r.data ?? []) as any[])
     .filter(x => !(CODIGOS_SOBRE_BASICO.has(String(x.codigo)) && (remunerativoPorCuil.get(soloDig(x.cuil)) ?? 0) > basicoLiquidacion))
     .map(x => ({
