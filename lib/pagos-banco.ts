@@ -3,7 +3,8 @@
 // PAGOS — archivos de acreditación para el banco (Galicia). Formato auditado
 // (JC 06/10): hoja "Empleados" con 4 columnas → Cuenta | Nombre | Importe |
 // Concepto. La CUENTA va como TEXTO (conserva ceros a la izquierda). El importe
-// NO se recalcula: sueldos = neto de Visual + sueldo mensual de los excluidos;
+// NO se recalcula: sueldos = SUELDO MENSUAL fijo para quien lo tiene (JC 07/10,
+// aunque Visual devuelva otro neto) y neto de Visual para el resto;
 // extras = extra fija vigente del mes. El CONCEPTO lo pide Galicia: 1 = sueldos,
 // 11 = extras. Toda la lógica de importes vive en las RPC pagos_*_banco.
 

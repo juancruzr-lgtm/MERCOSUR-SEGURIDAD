@@ -38,7 +38,37 @@ function fakeClient(tablas: Record<string, any[]>) {
     }
     return b
   }
-  return { from: (name: string) => make(name) }
+  return { from: (name: string) => make(name), rpc: (fn: string, args: any) => Promise.resolve(rpcFalsa(tablas, fn, args)) }
+}
+
+// Réplica en JS de pagos_banco_por_usuario (migración 20261007130000): quien tiene
+// SUELDO MENSUAL vigente cobra ese importe; el resto, el neto de Visual vigente.
+function rpcFalsa(t: Record<string, any[]>, fn: string, args: any) {
+  const per = (t.liquidacion_periodo ?? []).find(p => p.id === args.p_periodo_id)
+  if (!per) return { data: null, error: { message: 'Período inexistente' } }
+  const ini = `${per.mes}-01`, fin = `${per.mes}-31`
+  const vig = (tabla: string, uid: string) => {
+    const v = (t[tabla] ?? []).filter(s => s.usuario_id === uid && s.vigencia_desde <= fin && (!s.vigencia_hasta || s.vigencia_hasta >= ini))
+      .sort((a, b) => String(b.vigencia_desde).localeCompare(String(a.vigencia_desde)))[0]
+    return v ? Number(v.importe) : null
+  }
+  const rv = (t.liquidacion_resultado_visual ?? []).find(r => r.periodo_id === per.id && r.vigente)
+  const netoPorUid = new Map<string, number>()
+  for (const f of (t.liquidacion_resultado_fila ?? []).filter(f => rv && f.resultado_id === rv.id)) {
+    const p = (t.liquidacion_persona ?? []).find(x => x.cuil === f.cuil)
+    if (p?.usuario_id) netoPorUid.set(p.usuario_id, Number(f.neto))
+  }
+  const detalle = (t.usuarios ?? [])
+    .filter(u => u.estado === 'activo' && !u.excluir_pago_banco && String(u.cuenta_bancaria ?? '').trim())
+    .map(u => {
+      const sm = vig('liquidacion_sueldo_mensual', u.id), ex = vig('liquidacion_extra_mensual', u.id)
+      return { usuario_id: u.id, cuenta: u.cuenta_bancaria, nombre: `${u.apellido}, ${u.nombre}`, sueldo: sm ?? netoPorUid.get(u.id) ?? null, extras: ex && ex > 0 ? ex : null, sueldo_fijo: sm != null }
+    })
+    .filter(d => d.sueldo != null || d.extras != null)
+  if (fn === 'pagos_banco_por_usuario') return { data: detalle, error: null }
+  if (fn === 'pagos_sueldos_banco') return { data: detalle.filter(d => d.sueldo).map(d => ({ cuenta: d.cuenta, nombre: d.nombre, importe: d.sueldo })), error: null }
+  if (fn === 'pagos_extras_banco') return { data: detalle.filter(d => d.extras).map(d => ({ cuenta: d.cuenta, nombre: d.nombre, importe: d.extras })), error: null }
+  return { data: null, error: { message: `rpc ${fn} inexistente` } }
 }
 
 const usuarios = [
@@ -105,6 +135,8 @@ function tablasBase(): Record<string, any[]> {
       { resultado_id: 'rv08', cuil: '20144945817', neto: 950000.5 },
       { resultado_id: 'rv08', cuil: '20295393522', neto: 720000.25 },
       { resultado_id: 'rv08', cuil: '27111111112', neto: 1300000 },
+      // El administrativo también figura en Visual con descuentos: se le paga el fijo.
+      { resultado_id: 'rv08', cuil: '20222222223', neto: 812000.4 },
     ],
     liquidacion_persona: usuarios.map(u => ({ cuil: u.cuil, usuario_id: u.id })),
     liquidacion_consolidada: [],
@@ -173,25 +205,64 @@ describe('Libro general = Excel completo de cada mes', () => {
     }
   }, 180000)
 
-  it('NETO A PAGAR: netos de Visual vigente con su total; mes sin Visual → PENDIENTE (no $0)', async () => {
+  // Valores numéricos de una columna (por encabezado de fila 6) por usuario_id, y su total.
+  function columna(ws: ExcelJS.Worksheet, titulo: string) {
+    const col = celdaPorTexto(ws, 6, titulo); expect(col, titulo).toBeGreaterThan(0)
+    const porUid = new Map<string, number>()
+    let total: any
+    ws.eachRow((row, n) => {
+      if (n <= 6) return
+      const v = row.getCell(col).value
+      if (String(row.getCell(1).value ?? '').toUpperCase().startsWith('TOTAL GENERAL')) total = v
+      const uid = row.getCell('BD').value
+      if (uid && typeof v === 'number') porUid.set(String(uid), v)
+    })
+    return { porUid, total }
+  }
+
+  it('NETO A PAGAR: sueldo mensual FIJO para quien lo tiene (aunque Visual traiga otro neto); el resto, Visual vigente', async () => {
     const libro = await cargar((await generarLibroGeneralTrabajo(fakeClient(tablasBase()))).buf!)
-    const total = (ws: ExcelJS.Worksheet) => {
-      const col = celdaPorTexto(ws, 6, 'NETO A PAGAR'); expect(col).toBeGreaterThan(0)
-      let fTotal = -1
-      ws.eachRow((row, n) => { if (String(row.getCell(1).value ?? '').toUpperCase().startsWith('TOTAL')) fTotal = n })
-      const nums: number[] = []
-      ws.eachRow((row, n) => { if (n > 6 && n !== fTotal && typeof row.getCell(col).value === 'number') nums.push(row.getCell(col).value as number) })
-      return { col, fTotal, nums, valorTotal: fTotal > 0 ? ws.getRow(fTotal).getCell(col).value : ws.getCell(`C4`).value }
-    }
-    const ago = total(libro.getWorksheet('2026-08')!)
-    // Sólo el resultado VIGENTE (el viejo con neto 1 no cuenta).
-    expect(ago.nums.sort()).toEqual([1300000, 720000.25, 950000.5].sort())
-    const sep = libro.getWorksheet('2026-09')!
-    const s = total(sep)
-    expect(s.nums).toEqual([])
-    expect(String(sep.getCell('C4').value)).toMatch(/pendiente/i)
+    const ago = columna(libro.getWorksheet('2026-08')!, 'NETO A PAGAR')
+    // a1 (administrativo) figura en Visual con 812.000,40 pero cobra su fijo 1.100.000.
+    expect(Object.fromEntries(ago.porUid)).toEqual({ v1: 950000.5, v2: 720000.25, s1: 1300000, a1: 1100000 })
+    expect(ago.total).toBe(950000.5 + 720000.25 + 1300000 + 1100000)
+    // Sin Visual (septiembre): el fijo figura; los que dependen de Visual no; total PENDIENTE.
+    const sepWs = libro.getWorksheet('2026-09')!
+    const sep = columna(sepWs, 'NETO A PAGAR')
+    expect(Object.fromEntries(sep.porUid)).toEqual({ a1: 1100000 })
+    expect(sep.total).toBe('PENDIENTE')
+    expect(String(sepWs.getCell('C4').value)).toMatch(/pendiente/i)
     const r = await generarLibroGeneralTrabajo(fakeClient(tablasBase()))
     expect(r.visualPendiente).toEqual(['2026-09'])
+  }, 120000)
+
+  it('PAGO SUELDO / PAGO EXTRAS / TOTAL PAGADO por persona = lo que sale en los archivos del banco', async () => {
+    const t = tablasBase()
+    t.usuarios = t.usuarios.map(u => u.id === 'v2' ? { ...u, excluir_pago_banco: true } : u)   // baja: fuera del banco
+    const client = fakeClient(t)
+    const ws = (await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-08')!
+    const sueldo = columna(ws, 'PAGO SUELDO'), extras = columna(ws, 'PAGO EXTRAS'), total = columna(ws, 'TOTAL PAGADO')
+    expect(Object.fromEntries(sueldo.porUid)).toEqual({ v1: 950000.5, s1: 1300000, a1: 1100000 })
+    expect(Object.fromEntries(extras.porUid)).toEqual({ a1: 50000 })
+    expect(total.porUid.get('a1')).toBe(1150000)
+    expect(total.porUid.has('v2')).toBe(false)
+    // Mismos importes que los archivos del banco (sueldos y extras).
+    const { filasSueldosBanco, filasExtrasBanco } = await import('@/lib/pagos-banco')
+    const bs = await filasSueldosBanco(client, 'p08'), be = await filasExtrasBanco(client, 'p08')
+    const sum = (rows: { importe: number }[]) => Math.round(rows.reduce((a, b) => a + b.importe, 0) * 100) / 100
+    expect(sueldo.total).toBe(sum([...bs.rows, ...bs.excluidos]))
+    expect(extras.total).toBe(sum([...be.rows, ...be.excluidos]))
+    expect(total.total).toBe(Math.round(((sueldo.total as number) + (extras.total as number)) * 100) / 100)
+    // Orden: los pagos van antes y NETO A PAGAR sigue siendo la última columna.
+    expect(celdaPorTexto(ws, 6, 'NETO A PAGAR')).toBe(celdaPorTexto(ws, 6, 'TOTAL PAGADO') + 1)
+  }, 120000)
+
+  it('sin la función de pagos (migración sin aplicar) las columnas avisan NO DISPONIBLE', async () => {
+    const c: any = fakeClient(tablasBase())
+    c.rpc = () => Promise.resolve({ data: null, error: { message: 'function pagos_banco_por_usuario does not exist' } })
+    const ws = (await cargar((await generarLibroGeneralTrabajo(c)).buf!)).getWorksheet('2026-08')!
+    expect(columna(ws, 'PAGO SUELDO').total).toBe('NO DISPONIBLE')
+    expect(String(ws.getCell('C4').value)).toMatch(/Pagos por banco no disponibles/)
   }, 120000)
 
   it('cada mes usa SUS datos guardados: ajuste de agosto no se filtra a julio; sueldo mensual por vigencia', async () => {
