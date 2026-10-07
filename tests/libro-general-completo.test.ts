@@ -162,15 +162,15 @@ describe('Libro general = Excel completo de cada mes', () => {
     return { porUid, total }
   }
 
-  it('NETO A PAGAR: sueldo mensual FIJO para quien lo tiene (aunque Visual traiga otro neto); el resto, Visual vigente', async () => {
+  it('SUELDO DEL MES: sueldo mensual FIJO para quien lo tiene (aunque Visual traiga otro neto); el resto, Visual vigente', async () => {
     const libro = await cargar((await generarLibroGeneralTrabajo(fakeClient(tablasBase()))).buf!)
-    const ago = columna(libro.getWorksheet('2026-08')!, 'NETO A PAGAR')
-    // a1 (administrativo) figura en Visual con 812.000,40 pero cobra su fijo 1.100.000.
+    const ago = columna(libro.getWorksheet('2026-08')!, 'SUELDO DEL MES')
+    // a1 (administrativo) figura en Visual con 812.000,40 pero su sueldo es el fijo 1.100.000.
     expect(Object.fromEntries(ago.porUid)).toEqual({ v1: 950000.5, v2: 720000.25, s1: 1300000, a1: 1100000 })
     expect(ago.total).toBe(950000.5 + 720000.25 + 1300000 + 1100000)
     // Sin Visual (septiembre): el fijo figura; los que dependen de Visual no; total PENDIENTE.
     const sepWs = libro.getWorksheet('2026-09')!
-    const sep = columna(sepWs, 'NETO A PAGAR')
+    const sep = columna(sepWs, 'SUELDO DEL MES')
     expect(Object.fromEntries(sep.porUid)).toEqual({ a1: 1100000 })
     expect(sep.total).toBe('PENDIENTE')
     expect(String(sepWs.getCell('C4').value)).toMatch(/pendiente/i)
@@ -178,28 +178,69 @@ describe('Libro general = Excel completo de cada mes', () => {
     expect(r.visualPendiente).toEqual(['2026-09'])
   }, 120000)
 
-  it('SUELDO A DEPOSITAR / EXTRAS A DEPOSITAR / TOTAL A DEPOSITAR por persona = lo que sale en los archivos del banco', async () => {
-    const t = tablasBase()
-    t.usuarios = t.usuarios.map(u => u.id === 'v2' ? { ...u, excluir_pago_banco: true } : u)   // baja: fuera del banco
-    const client = fakeClient(t)
-    const ws = (await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-08')!
-    const sueldo = columna(ws, 'SUELDO A DEPOSITAR'), extras = columna(ws, 'EXTRAS A DEPOSITAR'), total = columna(ws, 'TOTAL A DEPOSITAR')
-    expect(Object.fromEntries(sueldo.porUid)).toEqual({ v1: 950000.5, s1: 1300000, a1: 1100000 })
-    expect(Object.fromEntries(extras.porUid)).toEqual({ a1: 50000 })
-    expect(total.porUid.get('a1')).toBe(1150000)
-    expect(total.porUid.has('v2')).toBe(false)
-    // Mismos importes que los archivos del banco (sueldos y extras).
-    const { filasSueldosBanco, filasExtrasBanco } = await import('@/lib/pagos-banco')
-    const bs = await filasSueldosBanco(client, 'p08'), be = await filasExtrasBanco(client, 'p08')
-    const sum = (rows: { importe: number }[]) => Math.round(rows.reduce((a, b) => a + b.importe, 0) * 100) / 100
-    expect(sueldo.total).toBe(sum([...bs.rows, ...bs.excluidos]))
-    expect(extras.total).toBe(sum([...be.rows, ...be.excluidos]))
-    expect(total.total).toBe(Math.round(((sueldo.total as number) + (extras.total as number)) * 100) / 100)
-    // Orden: los pagos van antes y NETO A PAGAR sigue siendo la última columna.
-    expect(celdaPorTexto(ws, 6, 'NETO A PAGAR')).toBe(celdaPorTexto(ws, 6, 'TOTAL A DEPOSITAR') + 1)
+  it('EXTRAS DEL MES = columna AP (por horas de vigiladores + extra fija una sola vez); pendientes = todo si no hay pago registrado', async () => {
+    const ws = (await cargar((await generarLibroGeneralTrabajo(fakeClient(tablasBase()))).buf!)).getWorksheet('2026-08')!
+    // AP (su encabezado es el valor de la hora extra): valor final por usuario.
+    const ap = new Map<string, number>()
+    ws.eachRow((row, n) => { const uid = row.getCell('BD').value; const v: any = row.getCell('AP').value; if (n > 6 && uid) ap.set(String(uid), typeof v === 'number' ? v : Number(v?.result ?? 0)) })
+    const extras = columna(ws, 'EXTRAS DEL MES'), pend = columna(ws, 'EXTRAS PENDIENTES DE PAGO')
+    // v1: 288 hs − 150 = 138 hs × 2.500; v2: 200 hs (corrección guardada) − 150 = 50 × 2.500; a1: extra fija 50.000.
+    expect(Object.fromEntries(extras.porUid)).toEqual({ v1: 345000, v2: 125000, a1: 50000 })
+    for (const [uid, v] of Array.from(extras.porUid.entries())) expect(v, `AP ${uid}`).toBe(ap.get(uid))
+    expect(Object.fromEntries(pend.porUid)).toEqual(Object.fromEntries(extras.porUid))
+    expect(extras.total).toBe(520000)
+    expect(String(ws.getCell('C4').value)).toMatch(/Extras: \$520000 del mes; \$520000 pendientes/)
   }, 120000)
 
-  it('ADELANTOS: se descuentan una sola vez del sueldo a depositar (NETO A PAGAR y SUELDO A DEPOSITAR), nunca negativo', async () => {
+  it('Galicia — Extras = pendientes por persona; cada exclusión con su motivo; importe a mano respetado', async () => {
+    const t = tablasBase()
+    t.usuarios = t.usuarios.map(u =>
+      u.id === 'v2' ? { ...u, excluir_pago_banco: true }                                  // baja: fuera del banco
+        : u.id === 's1' ? { ...u, cuenta_bancaria: '0720237988000004763790' } : u)     // CBU de otro banco
+    t.liquidacion_ajuste.push({ periodo_id: 'p08', empleado_id: 'v1', clave: 'celda:AP', valor_liquidacion: 400000, tipo: 'variable' })
+    // s1 con extra fija para que tenga extras.
+    t.liquidacion_extra_mensual.push({ usuario_id: 's1', importe: 70000, vigencia_desde: '2026-01-01', vigencia_hasta: null })
+    const client = fakeClient(t)
+    const { filasExtrasBanco } = await import('@/lib/pagos-banco')
+    const r = await filasExtrasBanco(client, 'p08')
+    expect(r.error).toBeNull()
+    expect(r.rows.map(x => [x.nombre, x.importe])).toEqual([['GOMEZ, PEDRO', 50000], ['ALMADA, ESTANISLAO', 400000]].sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
+    expect(r.excluidos.map(x => [x.nombre, x.importe, x.motivo])).toEqual([
+      ['ROSALES, JUAN', 125000, 'excluido del pago por banco (baja)'],
+      ['SUAREZ, MARIA', 70000, 'cuenta de otro banco (0720237988000004763790): pagar aparte'],
+    ])
+    expect(r.total).toBe(450000)
+    expect(r.extrasMes).toBe(645000)
+    // El Excel muestra lo mismo y explica la exclusión.
+    const ws = (await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-08')!
+    expect(columna(ws, 'EXTRAS DEL MES').porUid.get('v1')).toBe(400000)
+    const obs = new Map<string, string>()
+    ws.eachRow((row, n) => { const uid = row.getCell('BD').value; const c = celdaPorTexto(ws, 6, 'OBSERVACIÓN BANCO'); if (n > 6 && uid && row.getCell(c).value) obs.set(String(uid), String(row.getCell(c).value)) })
+    expect(Object.fromEntries(obs)).toEqual({ v2: 'excluido del pago por banco (baja)', s1: 'cuenta de otro banco (0720237988000004763790): pagar aparte' })
+  }, 120000)
+
+  it('registrar el pago de extras: deja de figurar pendiente y no se vuelve a pagar (idempotente)', async () => {
+    const t = tablasBase()
+    const client = fakeClient(t)
+    const { filasExtrasBanco, registrarPagoBanco, escribirBancoXLSX, CONCEPTO_BANCO } = await import('@/lib/pagos-banco')
+    const r1 = await filasExtrasBanco(client, 'p08')
+    const buf = await escribirBancoXLSX(r1.rows, CONCEPTO_BANCO.extras)
+    const reg = await registrarPagoBanco(client, 'p08', 'extras', 'GALICIA extras 2026-08.xlsx', buf, r1.rows)
+    expect(reg).toMatchObject({ ok: true, yaRegistrado: false, filas: 3, total: 520000 })
+    expect((await registrarPagoBanco(client, 'p08', 'extras', 'GALICIA extras 2026-08.xlsx', buf, r1.rows)).yaRegistrado).toBe(true)
+    const r2 = await filasExtrasBanco(client, 'p08')
+    expect(r2.rows).toEqual([])
+    expect(r2.registrado).toBe(520000)
+    const ws = (await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-08')!
+    expect(columna(ws, 'EXTRAS DEL MES').total).toBe(520000)
+    expect(columna(ws, 'EXTRAS PENDIENTES DE PAGO').total).toBe(0)
+    // Si después sube la extra de una persona, sólo la diferencia queda pendiente.
+    t.liquidacion_ajuste.push({ periodo_id: 'p08', empleado_id: 'v1', clave: 'celda:AP', valor_liquidacion: 360000, tipo: 'variable' })
+    const r3 = await filasExtrasBanco(client, 'p08')
+    expect(r3.rows.map(x => [x.nombre, x.importe])).toEqual([['ALMADA, ESTANISLAO', 15000]])
+  }, 120000)
+
+  it('ADELANTOS: se descuentan una sola vez del SUELDO DEL MES, nunca negativo; las extras no se tocan', async () => {
     const t = tablasBase()
     t.liquidacion_ajuste.push(
       { periodo_id: 'p08', empleado_id: 'v1', clave: 'adelantos', valor_liquidacion: 50000, tipo: 'variable' },
@@ -207,25 +248,23 @@ describe('Libro general = Excel completo de cada mes', () => {
     )
     const client = fakeClient(t)
     const ws = (await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-08')!
-    const neto = columna(ws, 'NETO A PAGAR'), sueldo = columna(ws, 'SUELDO A DEPOSITAR')
-    expect(neto.porUid.get('v1')).toBe(900000.5)          // 950.000,50 − 50.000
-    expect(sueldo.porUid.get('v1')).toBe(900000.5)        // el banco deposita lo mismo
-    expect(neto.porUid.get('a1')).toBe(0)                 // adelanto > sueldo fijo → 0, no negativo
+    const sueldo = columna(ws, 'SUELDO DEL MES')
+    expect(sueldo.porUid.get('v1')).toBe(900000.5)          // 950.000,50 − 50.000
+    expect(sueldo.porUid.get('a1')).toBe(0)                 // adelanto > sueldo fijo → 0, no negativo
+    expect(columna(ws, 'EXTRAS DEL MES').porUid.get('v1')).toBe(345000)
     expect(String(ws.getCell('C4').value)).toMatch(/superan el sueldo/)
-    // Julio no tiene adelantos: no se descuenta nada (no se arrastra de agosto).
-    const jul = columna((await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-07')!, 'NETO A PAGAR')
-    expect(jul.porUid.get('v1')).toBe(812345.67)
     const { filasSueldosBanco } = await import('@/lib/pagos-banco')
     const bs = await filasSueldosBanco(client, 'p08')
     expect(bs.rows.find(r => r.nombre.startsWith('ALMADA'))?.importe).toBe(900000.5)
   }, 120000)
 
-  it('sin la función de pagos (migración sin aplicar) las columnas avisan NO DISPONIBLE', async () => {
+  it('sin la función de destinatarios (migración sin aplicar) las pendientes avisan NO DISPONIBLE', async () => {
     const c: any = fakeClient(tablasBase())
-    c.rpc = () => Promise.resolve({ data: null, error: { message: 'function pagos_banco_por_usuario does not exist' } })
+    c.rpc = () => Promise.resolve({ data: null, error: { message: 'function pagos_banco_destinatarios does not exist' } })
     const ws = (await cargar((await generarLibroGeneralTrabajo(c)).buf!)).getWorksheet('2026-08')!
-    expect(columna(ws, 'SUELDO A DEPOSITAR').total).toBe('NO DISPONIBLE')
-    expect(String(ws.getCell('C4').value)).toMatch(/Importes a depositar no disponibles/)
+    expect(columna(ws, 'EXTRAS PENDIENTES DE PAGO').total).toBe('NO DISPONIBLE')
+    expect(columna(ws, 'EXTRAS DEL MES').total).toBe(520000)   // las extras del mes salen igual de AP
+    expect(String(ws.getCell('C4').value)).toMatch(/Destino bancario de las extras no disponible/)
   }, 120000)
 
   it('cada mes usa SUS datos guardados: ajuste de agosto no se filtra a julio; sueldo mensual por vigencia', async () => {
@@ -250,7 +289,7 @@ describe('Libro general = Excel completo de cada mes', () => {
     await congelar(tablas, { id: 'p07', mes: '2026-07' })
     const ok = await generarLibroGeneralTrabajo(fakeClient(tablas))
     expect(ok.difierenDeConsolidada).toEqual([])
-    expect((await cargar(ok.buf!)).getWorksheet('2026-07')!.getCell('C4').value).toBeNull()
+    expect(String((await cargar(ok.buf!)).getWorksheet('2026-07')!.getCell('C4').value)).not.toMatch(/difieren de lo consolidado/)
 
     tablas.liquidacion_consolidada[0].importe += 1000
     const mal = await generarLibroGeneralTrabajo(fakeClient(tablas))
