@@ -226,7 +226,7 @@ async function diferenciasConConsolidada(
 }
 
 /**
- * Pagos por banco del período por usuario_id (RPC pagos_banco_por_usuario: la
+ * Importes A DEPOSITAR por banco del período por usuario_id (RPC pagos_banco_por_usuario: la
  * MISMA regla que arma los archivos de Galicia). Sin la RPC (migración sin
  * aplicar) devuelve el error para avisarlo en la hoja.
  */
@@ -285,13 +285,13 @@ export async function plantillaCompletaConNeto(
   ])
   const sueldoFijo = sueldoMensual ?? new Map<string, number>()
   const base = COL_A_NUM(plantilla.columnas.reduce((m, c) => (COL_A_NUM(c.col) > COL_A_NUM(m) ? c.col : m), 'A'))
-  // Al final: PAGO SUELDO | PAGO EXTRAS | TOTAL PAGADO | NETO A PAGAR (última).
+  // Al final: SUELDO A DEPOSITAR | EXTRAS A DEPOSITAR | TOTAL A DEPOSITAR | NETO A PAGAR (última).
   const cSueldo = NUM_A_COL(base + 1), cExtras = NUM_A_COL(base + 2), cTotal = NUM_A_COL(base + 3), cNeto = NUM_A_COL(base + 4)
   const enc = plantilla.estilos.encabezado
   const filaTotal = plantilla.estilos.total
   const celdas: CeldaPlantilla[] = [...plantilla.celdas,
-    { ref: `${cSueldo}${enc}`, v: 'PAGO SUELDO' }, { ref: `${cExtras}${enc}`, v: 'PAGO EXTRAS' },
-    { ref: `${cTotal}${enc}`, v: 'TOTAL PAGADO' }, { ref: `${cNeto}${enc}`, v: 'NETO A PAGAR' },
+    { ref: `${cSueldo}${enc}`, v: 'SUELDO A DEPOSITAR' }, { ref: `${cExtras}${enc}`, v: 'EXTRAS A DEPOSITAR' },
+    { ref: `${cTotal}${enc}`, v: 'TOTAL A DEPOSITAR' }, { ref: `${cNeto}${enc}`, v: 'NETO A PAGAR' },
   ]
   const bdRow = new Map<number, string>()
   for (const c of plantilla.celdas) { const m = c.ref.match(/^BD(\d+)$/); if (m) bdRow.set(Number(m[1]), String(c.v ?? '')) }
@@ -308,7 +308,7 @@ export async function plantillaCompletaConNeto(
     if (bruto != null && adel > bruto) adelantoExcede.push(uid)
     const neto = bruto == null ? null : Math.max(0, bruto - adel)
     if (neto != null) { celdas.push({ ref: `${cNeto}${r}`, v: r2(neto) }); total += neto; netos++ }
-    // Pagos por banco (misma regla que los archivos de Galicia).
+    // A depositar por banco (misma regla que los archivos de Galicia; no es un pago registrado).
     const p = pagos.porUsuario.get(uid)
     if (p?.sueldo != null) { celdas.push({ ref: `${cSueldo}${r}`, v: r2(p.sueldo) }); totSueldo += p.sueldo }
     if (p?.extras != null) { celdas.push({ ref: `${cExtras}${r}`, v: r2(p.extras) }); totExtras += p.extras }
@@ -326,12 +326,12 @@ export async function plantillaCompletaConNeto(
   if (!hayResultado) avisos.push('NETO A PAGAR pendiente: el período todavía no tiene resultado de Visual importado (los sueldos fijos sí figuran).')
   if (difs) avisos.push(`ATENCIÓN: ${difs} importe(s) difieren de lo consolidado al exportar a Visual.`)
   if (adelantoExcede.length) avisos.push(`ATENCIÓN: ${adelantoExcede.length} adelanto(s) superan el sueldo: se deposita 0 y queda saldo a descontar.`)
-  if (pagos.error) avisos.push('Pagos por banco no disponibles: ' + pagos.error)
+  if (pagos.error) avisos.push('Importes a depositar no disponibles: ' + pagos.error)
   if (avisos.length) celdas.push({ ref: 'C4', v: avisos.join(' ') })
 
   const columnas = [...plantilla.columnas,
-    { col: cSueldo, width: 16, numFmt: 'money' as const }, { col: cExtras, width: 14, numFmt: 'money' as const },
-    { col: cTotal, width: 16, numFmt: 'money' as const }, { col: cNeto, width: 16, numFmt: 'money' as const },
+    { col: cSueldo, width: 18, numFmt: 'money' as const }, { col: cExtras, width: 18, numFmt: 'money' as const },
+    { col: cTotal, width: 18, numFmt: 'money' as const }, { col: cNeto, width: 16, numFmt: 'money' as const },
   ]
   return {
     plantilla: { ...plantilla, celdas, columnas },

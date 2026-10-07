@@ -178,12 +178,12 @@ describe('Libro general = Excel completo de cada mes', () => {
     expect(r.visualPendiente).toEqual(['2026-09'])
   }, 120000)
 
-  it('PAGO SUELDO / PAGO EXTRAS / TOTAL PAGADO por persona = lo que sale en los archivos del banco', async () => {
+  it('SUELDO A DEPOSITAR / EXTRAS A DEPOSITAR / TOTAL A DEPOSITAR por persona = lo que sale en los archivos del banco', async () => {
     const t = tablasBase()
     t.usuarios = t.usuarios.map(u => u.id === 'v2' ? { ...u, excluir_pago_banco: true } : u)   // baja: fuera del banco
     const client = fakeClient(t)
     const ws = (await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-08')!
-    const sueldo = columna(ws, 'PAGO SUELDO'), extras = columna(ws, 'PAGO EXTRAS'), total = columna(ws, 'TOTAL PAGADO')
+    const sueldo = columna(ws, 'SUELDO A DEPOSITAR'), extras = columna(ws, 'EXTRAS A DEPOSITAR'), total = columna(ws, 'TOTAL A DEPOSITAR')
     expect(Object.fromEntries(sueldo.porUid)).toEqual({ v1: 950000.5, s1: 1300000, a1: 1100000 })
     expect(Object.fromEntries(extras.porUid)).toEqual({ a1: 50000 })
     expect(total.porUid.get('a1')).toBe(1150000)
@@ -196,10 +196,10 @@ describe('Libro general = Excel completo de cada mes', () => {
     expect(extras.total).toBe(sum([...be.rows, ...be.excluidos]))
     expect(total.total).toBe(Math.round(((sueldo.total as number) + (extras.total as number)) * 100) / 100)
     // Orden: los pagos van antes y NETO A PAGAR sigue siendo la última columna.
-    expect(celdaPorTexto(ws, 6, 'NETO A PAGAR')).toBe(celdaPorTexto(ws, 6, 'TOTAL PAGADO') + 1)
+    expect(celdaPorTexto(ws, 6, 'NETO A PAGAR')).toBe(celdaPorTexto(ws, 6, 'TOTAL A DEPOSITAR') + 1)
   }, 120000)
 
-  it('ADELANTOS: se descuentan una sola vez del sueldo a depositar (NETO A PAGAR y PAGO SUELDO), nunca negativo', async () => {
+  it('ADELANTOS: se descuentan una sola vez del sueldo a depositar (NETO A PAGAR y SUELDO A DEPOSITAR), nunca negativo', async () => {
     const t = tablasBase()
     t.liquidacion_ajuste.push(
       { periodo_id: 'p08', empleado_id: 'v1', clave: 'adelantos', valor_liquidacion: 50000, tipo: 'variable' },
@@ -207,7 +207,7 @@ describe('Libro general = Excel completo de cada mes', () => {
     )
     const client = fakeClient(t)
     const ws = (await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-08')!
-    const neto = columna(ws, 'NETO A PAGAR'), sueldo = columna(ws, 'PAGO SUELDO')
+    const neto = columna(ws, 'NETO A PAGAR'), sueldo = columna(ws, 'SUELDO A DEPOSITAR')
     expect(neto.porUid.get('v1')).toBe(900000.5)          // 950.000,50 − 50.000
     expect(sueldo.porUid.get('v1')).toBe(900000.5)        // el banco deposita lo mismo
     expect(neto.porUid.get('a1')).toBe(0)                 // adelanto > sueldo fijo → 0, no negativo
@@ -224,8 +224,8 @@ describe('Libro general = Excel completo de cada mes', () => {
     const c: any = fakeClient(tablasBase())
     c.rpc = () => Promise.resolve({ data: null, error: { message: 'function pagos_banco_por_usuario does not exist' } })
     const ws = (await cargar((await generarLibroGeneralTrabajo(c)).buf!)).getWorksheet('2026-08')!
-    expect(columna(ws, 'PAGO SUELDO').total).toBe('NO DISPONIBLE')
-    expect(String(ws.getCell('C4').value)).toMatch(/Pagos por banco no disponibles/)
+    expect(columna(ws, 'SUELDO A DEPOSITAR').total).toBe('NO DISPONIBLE')
+    expect(String(ws.getCell('C4').value)).toMatch(/Importes a depositar no disponibles/)
   }, 120000)
 
   it('cada mes usa SUS datos guardados: ajuste de agosto no se filtra a julio; sueldo mensual por vigencia', async () => {
