@@ -922,7 +922,8 @@ export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | n
 //
 // Columnas de carga manual que quedan vacías a propósito (Juan las completa
 // en Excel después de descargar): AH (hs a valor pleno, concepto 212),
-// AR (adelantos) y los reemplazos puntuales de AP por un importe fijo.
+// AR (adelantos: informativo; se descuenta del sueldo a depositar) y los
+// reemplazos puntuales de AP por un importe fijo.
 //
 // Desvíos deliberados respecto del archivo de ejemplo, todos verificados con
 // Juan o neutros:
@@ -1004,6 +1005,59 @@ export const PARAMETROS_PLANTILLA = {
   horaExtra: 2500, // AP6 · valor de la hora excedente
 }
 
+/**
+ * Parámetros salariales de UN mes. Juan los edita en el Excel de trabajo (B1:B4,
+ * C2:C3, AP6) cuando cambia el convenio; al reimportar se guardan por mes
+ * (liquidacion_parametro_mes) y los meses siguientes los heredan.
+ */
+export interface ParametrosLiquidacion {
+  basico: number
+  presentismo: number
+  viatico: number
+  noRem: number
+  horaExtra: number
+  /** Valor hora (C2) fijado a mano; sin valor = básico/200. Sólo de ese mes. */
+  hora?: number | null
+  /** Valor día (C3) fijado a mano; sin valor = hora*8. Sólo de ese mes. */
+  dia?: number | null
+}
+
+/** Prefijos de clave en liquidacion_ajuste para lo editado a mano en el Excel. */
+export const CLAVE_CELDA = 'celda:'   // celda calculada pisada a mano (numérica)
+export const CLAVE_TEXTO = 'texto:'   // texto editado (NOMBRE, NOVEDADES, OBJETIVO/S, OBSERVACION)
+
+/** Clave guardada ↔ campo de ParametrosLiquidacion ↔ celda del Excel de trabajo. */
+export const PARAMETROS_CELDAS: { clave: string; campo: keyof ParametrosLiquidacion; ref: string; etiqueta: string; arrastra: boolean }[] = [
+  { clave: 'basico', campo: 'basico', ref: 'B1', etiqueta: 'Básico', arrastra: true },
+  { clave: 'presentismo', campo: 'presentismo', ref: 'B2', etiqueta: 'Presentismo', arrastra: true },
+  { clave: 'viatico', campo: 'viatico', ref: 'B3', etiqueta: 'Viático', arrastra: true },
+  { clave: 'no_rem', campo: 'noRem', ref: 'B4', etiqueta: 'No remunerativo', arrastra: true },
+  { clave: 'hora_extra', campo: 'horaExtra', ref: 'AP6', etiqueta: 'Valor hora extra', arrastra: true },
+  // Hora/día fijados a mano: valen SÓLO para ese mes (si el mes siguiente cambia
+  // el básico, la hora vuelve a ser básico/200).
+  { clave: 'hora', campo: 'hora', ref: 'C2', etiqueta: 'Valor hora', arrastra: false },
+  { clave: 'dia', campo: 'dia', ref: 'C3', etiqueta: 'Valor día', arrastra: false },
+]
+
+/**
+ * Resuelve los parámetros de `mes` a partir de lo guardado: cada parámetro que
+ * arrastra toma el valor del mes más reciente ≤ `mes` que lo tenga; hora/día
+ * sólo valen en su propio mes. Lo que no tenga nada guardado usa el default.
+ */
+export function resolverParametrosDelMes(
+  mes: string,
+  guardados: { mes: string; clave: string; valor: number | string | null }[],
+): ParametrosLiquidacion {
+  const out: ParametrosLiquidacion = { ...PARAMETROS_PLANTILLA, hora: null, dia: null }
+  for (const p of PARAMETROS_CELDAS) {
+    const candidatos = guardados
+      .filter(g => g.clave === p.clave && g.valor != null && (p.arrastra ? g.mes <= mes : g.mes === mes))
+      .sort((a, b) => b.mes.localeCompare(a.mes))
+    if (candidatos.length) (out as any)[p.campo] = Number(candidatos[0].valor)
+  }
+  return out
+}
+
 // Especificación de columnas: ancho, formato y visibilidad. Las columnas de
 // parámetros por fila del ejemplo viejo (U-AB) desaparecen: ahora las fórmulas
 // leen los parámetros de arriba con referencias absolutas ($B$2…), así no se
@@ -1077,10 +1131,23 @@ export function plantillaLiquidacionResumenGuardia(
    * liquida en Visual (no está en COLS_CONCEPTO de excel-trabajo-liquidacion).
    */
   extraPorEmpleado?: Map<string, number>,
+  /**
+   * Parámetros salariales DEL MES (los que Juan deja en A1:B4, C2:C3 y AP6 del
+   * Excel de trabajo, guardados por mes). Sin este argumento se usan los
+   * valores por defecto de PARAMETROS_PLANTILLA.
+   */
+  parametros?: ParametrosLiquidacion,
+  /**
+   * Textos editados en el Excel por empleado: { empleadoId → { 'texto:D' → valor } }
+   * para NOMBRE (D), NOVEDADES (E), OBJETIVO/S (F) y OBSERVACION (BB).
+   */
+  textosPorEmpleado?: Map<string, Record<string, string | null>>,
 ): PlantillaLiquidacion {
-  const P = PARAMETROS_PLANTILLA
-  const hora = P.basico / 200
-  const dia8 = hora * 8
+  const P: ParametrosLiquidacion = parametros ?? PARAMETROS_PLANTILLA
+  const horaManual = P.hora != null
+  const diaManual = P.dia != null
+  const hora = horaManual ? Number(P.hora) : P.basico / 200
+  const dia8 = diaManual ? Number(P.dia) : hora * 8
   const celdas: CeldaPlantilla[] = []
   const put = (ref: string, v?: string | number, f?: string) => {
     celdas.push(f !== undefined ? { ref, v, f } : { ref, v })
@@ -1100,8 +1167,9 @@ export function plantillaLiquidacionResumenGuardia(
   put('A3', 'Viático'); put('B3', P.viatico)
   put('A4', 'No remunerativo'); put('B4', P.noRem)
   put('C1', 'VisualSueldos - Planilla de importación de datos')
-  put('C2', hora, 'B1/200'); put('D2', 'hora = básico/200')
-  put('C3', dia8, 'B1/200*8'); put('D3', 'día = hora*8')
+  // Valor hora / día: fórmula por defecto; si Juan los fijó a mano, va su valor.
+  put('C2', hora, horaManual ? undefined : 'B1/200'); put('D2', 'hora = básico/200')
+  put('C3', dia8, diaManual ? undefined : (horaManual ? 'C2*8' : 'B1/200*8')); put('D3', 'día = hora*8')
 
   // Fila 5: etiquetas humanas de la capa de cálculo. Ya no hay U-AB (params por
   // fila): las etiquetas repetidas de esos parámetros desaparecen.
@@ -1148,9 +1216,14 @@ export function plantillaLiquidacionResumenGuardia(
     put(`A${r}`, fila.legajoVisual ?? '')
     put(`B${r}`, fila.cuil ?? '') // CUIL visible: parte de la identidad
     put(`C${r}`, fila.cuenta ?? '') // texto: conserva ceros a la izquierda
-    put(`D${r}`, fila.nombre)
-    put(`E${r}`, fila.notas.join(' · '))
-    put(`F${r}`, fila.objetivos.join('/'))
+    // Textos editados en el Excel (guardados por período) pisan el texto armado.
+    const tx = textosPorEmpleado?.get(fila.empleadoId) ?? {}
+    const texto = (col: string, base: string): string => {
+      const t = tx[`${CLAVE_TEXTO}${col}`]; return t === undefined ? base : (t ?? '')
+    }
+    put(`D${r}`, texto('D', fila.nombre))
+    put(`E${r}`, texto('E', fila.notas.join(' · ')))
+    put(`F${r}`, texto('F', fila.objetivos.join('/')))
     // Ajustes de liquidación (LIQ2C): overrides por empleado sobre las columnas
     // de ENTRADA. Sin ajuste → valor base idéntico al de siempre (el archivo de
     // #170 no cambia). Con ajuste → recalculan los conceptos derivados, porque
@@ -1162,6 +1235,14 @@ export function plantillaLiquidacionResumenGuardia(
     const ovNullable = (clave: string, base: number | null): number | null => {
       const o = ov[clave]; return (o === undefined) ? base : o
     }
+    // Celdas CALCULADAS que Juan pisó a mano en el Excel (clave 'celda:AC', …):
+    // su valor manda sobre la fórmula y los dependientes se recalculan con él,
+    // igual que haría Excel con la celda escrita a mano.
+    const ovCelda = (col: string, base: number): number => {
+      const o = ov[`${CLAVE_CELDA}${col}`]; return (o === undefined || o === null) ? base : o
+    }
+    const pisada = (col: string): boolean => ov[`${CLAVE_CELDA}${col}`] != null
+    const fx = (col: string, f: string | undefined): string | undefined => (pisada(col) ? undefined : f)
     // Modelos por grupo:
     //  · GRUPO A (administrativos): mensualizado FIJO → cobra SÓLO el SUELDO
     //    MENSUAL en 001. NO se le inventan jornadas/horas/viáticos/presentismo.
@@ -1183,7 +1264,7 @@ export function plantillaLiquidacionResumenGuardia(
     const tieneExtraFija = extraPorEmpleado?.has(fila.empleadoId) ?? false
     const usaExtraFija = esSueldoFijo || (fila.grupo === 'supervisores' && tieneExtraFija)
     const G = ovNum('jornadas', mensualizado ? 25 : fila.jornadas)
-    const H = Math.min(G, 25)
+    const H = ovCelda('H', Math.min(G, 25))
     const I = ovNum('horas_liquidables', mensualizado ? 150 : fila.horasLiquidables)
     const Jval = ovNullable('horas_nocturnas', fila.horasNocturnas)
     const J = num(Jval)
@@ -1199,7 +1280,7 @@ export function plantillaLiquidacionResumenGuardia(
     // inventa 25/150 ni nada). Sólo lleva el SUELDO MENSUAL (001).
     if (!esSueldoFijo) {
       put(`G${r}`, G)
-      put(`H${r}`, H, `MIN(G${r},25)`)
+      put(`H${r}`, H, fx('H', `MIN(G${r},25)`))
       put(`I${r}`, I)
       putNum(`J${r}`, Jval)
       put(`K${r}`, Kv)
@@ -1232,7 +1313,7 @@ export function plantillaLiquidacionResumenGuardia(
     const AL = Math.max(0, I - AG)
     const AM = AL > 0 && I > 0 ? (AL * 100) / I : 0
     const AN = G > 0 ? I / G : 0
-    const AP = AL > 0 ? AL * P.horaExtra : 0 // menos AR (adelantos), manual
+    const AP = AL > 0 ? AL * P.horaExtra : 0
     const AT = Kv * dia8
     const AU = num(Lval) * dia8
     const AV = num(Mval) * dia8
@@ -1246,8 +1327,10 @@ export function plantillaLiquidacionResumenGuardia(
     // SUELDO MENSUAL cargado, cae al básico general (fallback). Supervisores (B) y
     // vigiladores (C) NO se tocan: siguen exactamente como antes. (esGrupoA ya
     // está definido arriba.)
-    const sueldoMensual = esSueldoFijo ? (sueldoMensualPorEmpleado?.get(fila.empleadoId) ?? P.basico) : null
-    const extraFija = usaExtraFija ? (extraPorEmpleado?.get(fila.empleadoId) ?? 0) : 0
+    // ov['sueldo_mensual'|'extra_mensual']: sólo los trae la comparación del reimport
+    // (lo que dice el archivo); lo guardado vive en sus tablas con vigencia.
+    const sueldoMensual = esSueldoFijo ? (ov['sueldo_mensual'] ?? sueldoMensualPorEmpleado?.get(fila.empleadoId) ?? P.basico) : null
+    const extraFija = usaExtraFija ? (ov['extra_mensual'] ?? extraPorEmpleado?.get(fila.empleadoId) ?? 0) : 0
     const gAC = esSueldoFijo ? 0 : AC
     const gAD = esSueldoFijo ? 0 : AD
     const gAE = esSueldoFijo ? 0 : AE
@@ -1257,50 +1340,75 @@ export function plantillaLiquidacionResumenGuardia(
     const gAI = esSueldoFijo ? 0 : AI
     const gAJ = esSueldoFijo ? (sueldoMensual as number) : AJ
     const gAL = esSueldoFijo ? 0 : AL
-    const gAM = esSueldoFijo ? 0 : AM
-    const gAN = esSueldoFijo ? 0 : AN
-    const gAP = usaExtraFija ? extraFija : AP
-    const gAO = gAC + gAD + gAE + gAF + gAI + gAJ + AT + AU + AV + AW + AX + gAP
-    const gAS = gAO > 0 && I > 0 ? gAO / I : 0
+    // Valores FINALES de la fila: el calculado, o el que Juan escribió a mano en
+    // esa celda (ovCelda). Los dependientes usan el final, como en Excel.
+    // AR (adelantos): carga manual reimportada. Se muestra acá y se descuenta UNA
+    // sola vez, del SUELDO A DEPOSITAR (NETO A PAGAR / archivo del banco), no de AP
+    // (JC 07/10): restarlo también en AP lo descontaba dos veces en el total.
+    const AR = ov['adelantos'] ?? null
+    const fAC = ovCelda('AC', gAC)
+    const fAD = ovCelda('AD', gAD)
+    const fAE = ovCelda('AE', gAE)
+    const fAF = ovCelda('AF', gAF)
+    const fAI = ovCelda('AI', gAI)
+    const fAJ = ovCelda('AJ', gAJ)
+    const fAL = ovCelda('AL', gAL)
+    const fAM = ovCelda('AM', esSueldoFijo ? 0 : (fAL > 0 && I > 0 ? (fAL * 100) / I : 0))
+    const fAN = ovCelda('AN', esSueldoFijo ? 0 : AN)
+    const fAP = ovCelda('AP', usaExtraFija ? extraFija : (fAL > 0 ? fAL * P.horaExtra : 0))
+    const fAT = ovCelda('AT', AT)
+    const fAU = ovCelda('AU', AU)
+    const fAV = ovCelda('AV', AV)
+    const fAW = ovCelda('AW', AW)
+    const fAX = ovCelda('AX', AX)
+    const fAO = ovCelda('AO', fAC + fAD + fAE + fAF + fAI + fAJ + fAT + fAU + fAV + fAW + fAX + fAP)
+    const fAS = ovCelda('AS', fAO > 0 && I > 0 ? fAO / I : 0)
+    const fAY = ovCelda('AY', fila.supervisiones)
+    const fAZ = ovCelda('AZ', fila.horasSupervision)
+    const fBA = ovCelda('BA', fila.jornadasSupervision)
+    const fBC = ovCelda('BC', fila.hsVigilanciaZona)
     // Fórmulas ARRASTRABLES (Juan 13): parámetros con $ absoluto, referencias de la
     // fila relativas. Sueldo FIJO: 001 = SUELDO MENSUAL (columna BF, editable); el
-    // resto de la convención va en 0 (literal).
-    put(`AC${r}`, gAC, esSueldoFijo ? undefined : `($B$3/25)*H${r}`)
-    put(`AD${r}`, gAD, esSueldoFijo ? undefined : `($B$2/25)*H${r}`)
-    put(`AE${r}`, gAE, esSueldoFijo ? undefined : `($B$4/25)*H${r}`)
-    put(`AF${r}`, gAF, esSueldoFijo ? undefined : `($C$2/10)*J${r}`)
+    // resto de la convención va en 0 (literal). Celda pisada a mano → va su valor.
+    put(`AC${r}`, fAC, fx('AC', esSueldoFijo ? undefined : `($B$3/25)*H${r}`))
+    put(`AD${r}`, fAD, fx('AD', esSueldoFijo ? undefined : `($B$2/25)*H${r}`))
+    put(`AE${r}`, fAE, fx('AE', esSueldoFijo ? undefined : `($B$4/25)*H${r}`))
+    put(`AF${r}`, fAF, fx('AF', esSueldoFijo ? undefined : `($C$2/10)*J${r}`))
     // Si Juan editó "horas rec", va como VALOR (su número manda); si no, la fórmula.
     put(`AG${r}`, gAG, esSueldoFijo || tieneOvHorasRec ? undefined : (mensualizado ? `I${r}` : `IF(I${r}<=150,H${r}*8,150)`))
     // Convención (B sin sueldo fijo): AH=50. Vigilador/sueldo fijo: NO se emite.
     if (gAH !== 0) put(`AH${r}`, gAH)
-    put(`AI${r}`, gAI, esSueldoFijo ? undefined : `AH${r}*$C$2`)
-    put(`AJ${r}`, gAJ, esSueldoFijo ? `BF${r}` : `AG${r}*$C$2`)
-    put(`AL${r}`, gAL, esSueldoFijo ? undefined : `MAX(0,I${r}-AG${r})`)
+    put(`AI${r}`, fAI, fx('AI', esSueldoFijo ? undefined : `AH${r}*$C$2`))
+    put(`AJ${r}`, fAJ, fx('AJ', esSueldoFijo ? `BF${r}` : `AG${r}*$C$2`))
+    put(`AL${r}`, fAL, fx('AL', esSueldoFijo ? undefined : `MAX(0,I${r}-AG${r})`))
     // % extras (AM): SÓLO vigiladores (JC 05/10). Supervisores y administrativos
     // quedan visualmente en blanco (su % de extras no es relevante): NO se emite la
-    // celda. AM no lo consume ninguna fórmula/total ni la reimportación → seguro.
-    if (fila.grupo === 'vigiladores') put(`AM${r}`, gAM, `IF(AL${r}>0,(AL${r}*100)/I${r},0)`)
-    put(`AN${r}`, gAN, esSueldoFijo ? undefined : `I${r}/G${r}`)
-    put(`AO${r}`, gAO, `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`)
-    put(`AP${r}`, gAP, usaExtraFija ? `BG${r}` : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
-    put(`AS${r}`, gAS, esSueldoFijo ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`)
-    put(`AT${r}`, AT, `K${r}*$C$3`)
-    put(`AU${r}`, AU, `L${r}*$C$3`)
-    put(`AV${r}`, AV, `M${r}*$C$3`)
-    put(`AW${r}`, AW, `N${r}*$C$3`)
-    put(`AX${r}`, AX, `O${r}*$C$3`)
+    // celda (salvo que Juan la haya escrito a mano). AM no lo consume ninguna
+    // fórmula/total ni la reimportación → seguro.
+    if (fila.grupo === 'vigiladores' || pisada('AM')) put(`AM${r}`, fAM, fx('AM', `IF(AL${r}>0,(AL${r}*100)/I${r},0)`))
+    put(`AN${r}`, fAN, fx('AN', esSueldoFijo ? undefined : `I${r}/G${r}`))
+    put(`AO${r}`, fAO, fx('AO', `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`))
+    put(`AP${r}`, fAP, fx('AP', usaExtraFija ? `BG${r}` : `IF(AL${r}>0,AL${r}*$AP$6,0)`))
+    if (AR != null) put(`AR${r}`, AR)
+    put(`AS${r}`, fAS, fx('AS', esSueldoFijo ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`))
+    put(`AT${r}`, fAT, fx('AT', `K${r}*$C$3`))
+    put(`AU${r}`, fAU, fx('AU', `L${r}*$C$3`))
+    put(`AV${r}`, fAV, fx('AV', `M${r}*$C$3`))
+    put(`AW${r}`, fAW, fx('AW', `N${r}*$C$3`))
+    put(`AX${r}`, fAX, fx('AX', `O${r}*$C$3`))
     // SUELDO MENSUAL editable: lo lleva quien cobra sueldo fijo.
     if (esSueldoFijo) put(`BF${r}`, sueldoMensual as number)
     // EXTRA fija editable (concepto "extras" AP): sueldo fijo + supervisores
     // operativos con extra fija cargada (JC 05/10).
     if (usaExtraFija) put(`BG${r}`, extraFija)
-    // Informativas del final: valores puros.
-    put(`AY${r}`, fila.supervisiones)
-    put(`AZ${r}`, fila.horasSupervision)
-    put(`BA${r}`, fila.jornadasSupervision)
-    if (fila.observaciones.length > 0) put(`BB${r}`, fila.observaciones.join(' · '))
+    // Informativas del final: valores puros (o el que Juan haya escrito).
+    put(`AY${r}`, fAY)
+    put(`AZ${r}`, fAZ)
+    put(`BA${r}`, fBA)
+    const obs = texto('BB', fila.observaciones.join(' · '))
+    if (obs) put(`BB${r}`, obs)
     // HS VIGILANCIA ZONA: por fila, informativa; NO se totaliza (zona compartida).
-    put(`BC${r}`, fila.hsVigilanciaZona)
+    put(`BC${r}`, fBC)
     // Identidad técnica oculta (Juan 16): usuario_id interno + período. MERCOSUR
     // reconoce la fila por esto (más CUIL en B), nunca por nombre ni nº de fila.
     put(`BD${r}`, fila.empleadoId)
@@ -1310,10 +1418,10 @@ export function plantillaLiquidacionResumenGuardia(
       ['L', num(Lval)], ['M', num(Mval)], ['N', num(Nval)],
       ['O', num(Oval)], ['P', num(Pval)],
       // Grupo A ya viene con los conceptos de convención en 0 y 001 = SUELDO MENSUAL.
-      ['AC', gAC], ['AD', gAD], ['AE', gAE], ['AF', gAF], ['AG', gAG], ['AH', gAH],
-      ['AI', gAI], ['AJ', gAJ], ['AL', gAL], ['AO', gAO], ['AP', gAP],
-      ['AT', AT], ['AU', AU], ['AV', AV], ['AW', AW], ['AX', AX],
-      ['AY', fila.supervisiones], ['AZ', fila.horasSupervision], ['BA', fila.jornadasSupervision],
+      ['AC', fAC], ['AD', fAD], ['AE', fAE], ['AF', fAF], ['AG', gAG], ['AH', gAH],
+      ['AI', fAI], ['AJ', fAJ], ['AL', fAL], ['AO', fAO], ['AP', fAP],
+      ['AT', fAT], ['AU', fAU], ['AV', fAV], ['AW', fAW], ['AX', fAX],
+      ['AY', fAY], ['AZ', fAZ], ['BA', fBA],
     ]
     for (const [col, v] of cacheFila) acum(col, v)
   }

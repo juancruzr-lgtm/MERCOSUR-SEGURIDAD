@@ -20,7 +20,10 @@ import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
   construirResumenGuardia,
   plantillaLiquidacionResumenGuardia,
+  resolverParametrosDelMes,
+  CLAVE_TEXTO,
   type EmpleadoResumen,
+  type ParametrosLiquidacion,
   type PlantillaLiquidacion,
   type CeldaPlantilla,
   type ResumenGuardiaMes,
@@ -38,6 +41,11 @@ export interface PlantillaTrabajoResultado {
   error: string | null
   /** Resumen crudo (para leer jornadas reales por empleado, etc.). */
   resumen?: ResumenGuardiaMes | null
+  /**
+   * Rearma la MISMA planilla (sin releer la base) sumando correcciones por
+   * empleado a las ya aplicadas. Lo usa el reimport para recalcular como Excel.
+   */
+  rearmar?: (extra: Map<string, Record<string, number | null>>) => PlantillaLiquidacion
   /** SUELDO MENSUAL vigente del mes por usuario_id (quien lo tiene cobra fijo). */
   sueldoMensual?: Map<string, number>
 }
@@ -64,7 +72,7 @@ export async function generarExcelTrabajoLiquidacion(
   // una nueva descarga no represente el estado previo a las correcciones (JC).
   // Sin periodoId (uso genérico por mes) sale el baseline, como antes.
   const ajustes = opts?.periodoId ? await cargarAjustes(client, opts.periodoId) : undefined
-  const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, mes, ajustes)
+  const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, mes, ajustes, { periodoId: opts?.periodoId })
   if (error || !plantilla) return { buf: null, filas, error }
   const plant2 = await anexarColumnaSindicato(client, plantilla, mes)
   const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
@@ -81,7 +89,7 @@ export async function generarExcelTrabajoLiquidacion(
  * (hoy BG → cae en BH), para no correr los índices fijos del reimport
  * (IDX_SINDICATO en lib/excel-trabajo-reimport.ts debe coincidir con esa posición).
  */
-async function anexarColumnaSindicato(
+export async function anexarColumnaSindicato(
   client: any, plantilla: PlantillaLiquidacion, mes: string,
 ): Promise<PlantillaLiquidacion> {
   const { desde, hasta } = limitesDelMes(mes)
@@ -265,7 +273,7 @@ export async function plantillaCompletaConNeto(
   periodo: { id: string; mes: string },
 ): Promise<PlantillaCompletaResultado> {
   const ajustes = await cargarAjustes(client, periodo.id)
-  const { plantilla, filas, error, sueldoMensual } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes)
+  const { plantilla, filas, error, sueldoMensual } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes, { periodoId: periodo.id })
   if (error || !plantilla) {
     return { plantilla: null, filas: 0, netos: 0, visualPendiente: false, difiereDeConsolidada: null, error: error || 'sin plantilla' }
   }
@@ -358,6 +366,14 @@ export async function plantillaTrabajoDelMes(
   client: any,
   mes: string,
   ajustesPorEmpleado?: Map<string, Record<string, number | null>>,
+  opts?: {
+    /** Período: para leer los textos editados guardados (NOMBRE, NOVEDADES…). */
+    periodoId?: string
+    /** Parámetros a usar en vez de los guardados del mes (reimport: los del archivo). */
+    parametros?: ParametrosLiquidacion
+    /** Textos a usar en vez de los guardados del período. */
+    textos?: Map<string, Record<string, string | null>>
+  },
 ): Promise<PlantillaTrabajoResultado> {
   if (!/^\d{4}-\d{2}$/.test(mes)) return { plantilla: null, filas: 0, error: 'Mes inválido (esperado YYYY-MM).' }
   const { desde, hasta, y, m } = limitesDelMes(mes)
@@ -470,8 +486,17 @@ export async function plantillaTrabajoDelMes(
 
   if (resumen.filas.length === 0) return { plantilla: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
 
-  const plantilla = plantillaLiquidacionResumenGuardia(resumen, ajustesPorEmpleado, sueldoMensualPorEmpleado, extraPorEmpleado)
-  return { plantilla, filas: resumen.filas.length, error: null, resumen, sueldoMensual: sueldoMensualPorEmpleado }
+  // Parámetros salariales DEL MES (guardados al reimportar el Excel de trabajo) y
+  // textos editados del período: lo que Juan dejó en el archivo no se pierde.
+  const parametros = opts?.parametros ?? await cargarParametrosDelMes(client, mes)
+  const textos = opts?.textos ?? (opts?.periodoId ? await cargarTextos(client, opts.periodoId) : undefined)
+  const plantilla = plantillaLiquidacionResumenGuardia(resumen, ajustesPorEmpleado, sueldoMensualPorEmpleado, extraPorEmpleado, parametros, textos)
+  const rearmar = (extra: Map<string, Record<string, number | null>>) => {
+    const unidos = new Map(ajustesPorEmpleado ?? [])
+    for (const [emp, m] of Array.from(extra.entries())) unidos.set(emp, { ...(unidos.get(emp) ?? {}), ...m })
+    return plantillaLiquidacionResumenGuardia(resumen, unidos, sueldoMensualPorEmpleado, extraPorEmpleado, parametros, textos)
+  }
+  return { plantilla, filas: resumen.filas.length, error: null, resumen, rearmar, sueldoMensual: sueldoMensualPorEmpleado }
 }
 
 /**
@@ -551,6 +576,40 @@ export async function cargarAjustes(
     ajustes.set(a.empleado_id, m)
   }
   return ajustes
+}
+
+/**
+ * Textos editados en el Excel de trabajo (claves 'texto:D', 'texto:E', …) por
+ * empleado_id. Si la columna valor_texto todavía no existe (migración sin
+ * aplicar) no hay textos guardados: devuelve vacío.
+ */
+export async function cargarTextos(
+  client: any,
+  periodoId: string,
+): Promise<Map<string, Record<string, string | null>>> {
+  const out = new Map<string, Record<string, string | null>>()
+  const { data, error } = await client.from('liquidacion_ajuste')
+    .select('empleado_id, clave, valor_texto').eq('periodo_id', periodoId)
+  if (error) return out
+  for (const a of (data ?? []) as any[]) {
+    if (!String(a.clave ?? '').startsWith(CLAVE_TEXTO)) continue
+    const m = out.get(a.empleado_id) ?? {}
+    m[a.clave] = a.valor_texto ?? null
+    out.set(a.empleado_id, m)
+  }
+  return out
+}
+
+/**
+ * Parámetros salariales vigentes para `mes` (Básico, Presentismo, Viático, No rem.,
+ * hora extra y, si se fijaron a mano ese mes, valor hora/día). Se heredan del mes
+ * guardado más reciente ≤ `mes`; sin nada guardado (o sin la tabla todavía) se
+ * usan los valores por defecto de la plantilla.
+ */
+export async function cargarParametrosDelMes(client: any, mes: string): Promise<ParametrosLiquidacion> {
+  const { data, error } = await client.from('liquidacion_parametro_mes')
+    .select('mes, clave, valor').lte('mes', mes)
+  return resolverParametrosDelMes(mes, error ? [] : ((data ?? []) as any[]))
 }
 
 /**
@@ -637,7 +696,7 @@ export async function prepararLiquidacionDelMes(
 ): Promise<PreparacionLiquidacion> {
   const vacio = { plantilla: null, resumen: null, snapshotFilas: [], jornadas: new Map<string, number>() }
   const ajustes = await cargarAjustes(client, periodo.id)
-  const { plantilla, resumen, error } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes)
+  const { plantilla, resumen, error } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes, { periodoId: periodo.id })
   if (error || !plantilla || !resumen) return { ...vacio, error: error || 'sin plantilla' }
   const snapshotFilas = filasConsolidadasDePlantilla(plantilla)
   const jornadas = jornadasDeResumen(resumen)

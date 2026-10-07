@@ -258,3 +258,256 @@ export function compararReimport(
 
   return { diffs, identidad, fueraDePadron, sinIdentidad, personasEnArchivo: subido.size, periodoDelArchivo }
 }
+
+// ── TODO lo editado en el Excel de trabajo se guarda (JC 07/10) ─────────────
+// Además de las variables de entrada, el archivo puede traer: parámetros del mes
+// (B1:B4, C2:C3, AP6), celdas CALCULADAS pisadas a mano (un importe escrito
+// sobre la fórmula) y textos editados (NOMBRE, NOVEDADES, OBJETIVO/S,
+// OBSERVACION). Todo eso se detecta acá y se guarda al confirmar. Lo que no se
+// puede guardar (fila agregada sin identidad, total escrito a mano, celda fuera
+// de la estructura…) NO se ignora en silencio: vuelve como advertencia.
+
+/** Celdas calculadas que, si Juan las pisa a mano, se guardan como 'celda:<COL>'. */
+export const COLUMNAS_CELDA: { col: string; etiqueta: string }[] = [
+  { col: 'H', etiqueta: 'Días (tope 25)' },
+  { col: 'AC', etiqueta: 'Viáticos (203)' }, { col: 'AD', etiqueta: 'Presentismo (204)' },
+  { col: 'AE', etiqueta: 'No rem. (214)' }, { col: 'AF', etiqueta: 'Nocturnidad (004)' },
+  { col: 'AI', etiqueta: 'Adicional (212)' }, { col: 'AJ', etiqueta: 'Horas rec $ (001)' },
+  { col: 'AL', etiqueta: 'Hs extras' }, { col: 'AM', etiqueta: '% extras' }, { col: 'AN', etiqueta: 'Hs por día' },
+  { col: 'AO', etiqueta: 'Total' }, { col: 'AP', etiqueta: 'Extras' }, { col: 'AS', etiqueta: 'Costo por hora' },
+  { col: 'AT', etiqueta: 'Feriados (006)' }, { col: 'AU', etiqueta: 'Licencia (888)' }, { col: 'AV', etiqueta: 'ART (010)' },
+  { col: 'AW', etiqueta: 'Vacaciones (205)' }, { col: 'AX', etiqueta: 'Parte médico (008)' },
+  { col: 'AY', etiqueta: 'Supervisiones' }, { col: 'AZ', etiqueta: 'Horas supervisión' },
+  { col: 'BA', etiqueta: 'Jornadas supervisión' }, { col: 'BC', etiqueta: 'Hs vigilancia zona' },
+]
+/** Textos editables que se guardan como 'texto:<COL>'. */
+export const COLUMNAS_TEXTO: { col: string; etiqueta: string }[] = [
+  { col: 'D', etiqueta: 'Nombre' }, { col: 'E', etiqueta: 'Novedades' },
+  { col: 'F', etiqueta: 'Objetivo/s' }, { col: 'BB', etiqueta: 'Observación' },
+]
+// Columnas que se leen por otra vía (identidad, variables, legajo, técnicas) o
+// que se recalculan: un valor ahí no es "fuera de estructura".
+const COLS_CONOCIDAS = new Set([
+  'A', 'B', 'C', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'AG', 'AH', 'AR', 'BD', 'BE', 'BF', 'BG', 'BH',
+  ...COLUMNAS_CELDA.map(c => c.col), ...COLUMNAS_TEXTO.map(c => c.col),
+])
+// Columnas que se totalizan en subtotales/total (mismo criterio que la plantilla).
+const COLS_TOTALES = ['G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
+  'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI', 'AJ', 'AL', 'AO', 'AP',
+  'AT', 'AU', 'AV', 'AW', 'AX', 'AY', 'AZ', 'BA']
+
+const colANum = (col: string): number => { let n = 0; for (const ch of col) n = n * 26 + (ch.charCodeAt(0) - 64); return n }
+const numALetra = (n: number): string => { let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26) } return s }
+/** Valor de la grilla (0-based) en una referencia A1 de Excel. */
+const enGrid = (grid: CeldaVisual[][], col: string, fila: number): CeldaVisual => grid[fila - 1]?.[colANum(col) - 1]
+// Para celdas calculadas: vacío ≈ 0 (una celda sin emitir y un 0 son lo mismo).
+const igualCalc = (a: number | null, b: number | null) => Math.abs((a ?? 0) - (b ?? 0)) < 0.005
+
+export interface CambioParametro {
+  clave: string
+  etiqueta: string
+  ref: string
+  mercosur: number | null
+  excel: number | null
+}
+
+export interface CambioCelda {
+  usuarioId: string
+  cuil: string | null
+  nombre: string | null
+  /** 'celda:AC' / 'texto:D' */
+  clave: string
+  etiqueta: string
+  tipo: 'numero' | 'texto'
+  mercosur: number | string | null
+  excel: number | string | null
+}
+
+export type TipoAdvertencia =
+  | 'fila_sin_identidad' | 'persona_ausente' | 'total_editado'
+  | 'celda_fuera_de_estructura' | 'identidad_vaciada' | 'sindicato_desmarcado'
+
+export interface AdvertenciaReimport { tipo: TipoAdvertencia; detalle: string }
+
+/**
+ * Parámetros del mes que dejó Juan en el archivo vs los de la plantilla base.
+ * Hora (C2) y día (C3) cuentan como cambio SÓLO si se escribieron a mano: si
+ * siguen siendo básico/200 y hora×8 (aunque el básico haya cambiado), no.
+ */
+export function compararParametros(
+  base: PlantillaLiquidacion,
+  grid: CeldaVisual[][],
+  definiciones: { clave: string; ref: string; etiqueta: string }[],
+): CambioParametro[] {
+  const celda = new Map(base.celdas.map(c => [c.ref, c]))
+  const baseNum = (ref: string) => num(celda.get(ref)?.v as any)
+  const archNum = (ref: string) => { const m = ref.match(/^([A-Z]+)(\d+)$/)!; return num(enGrid(grid, m[1], Number(m[2]))) }
+  const out: CambioParametro[] = []
+  const b1 = archNum('B1'), c2 = archNum('C2')
+  for (const d of definiciones) {
+    let mercosur: number | null, excel: number | null
+    if (d.clave === 'hora' || d.clave === 'dia') {
+      // Valor "manual" = el que no sale de la fórmula. Base: manual si la celda no
+      // trae fórmula. Archivo: manual si difiere de lo que daría la fórmula.
+      mercosur = celda.get(d.ref)?.f === undefined ? baseNum(d.ref) : null
+      const v = archNum(d.ref)
+      const formula = d.clave === 'hora' ? (b1 == null ? null : b1 / 200) : (c2 == null ? null : c2 * 8)
+      excel = v != null && formula != null && !igual(v, formula) ? v : null
+    } else {
+      mercosur = baseNum(d.ref)
+      excel = archNum(d.ref)
+      if (excel == null) continue   // vacío = no lo tocó: se conserva el guardado
+    }
+    if (!igual(mercosur, excel)) out.push({ clave: d.clave, etiqueta: d.etiqueta, ref: d.ref, mercosur, excel })
+  }
+  return out
+}
+
+/**
+ * Orden de dependencia de las celdas calculadas de una fila (como recalcula
+ * Excel): un valor escrito a mano en un nivel cambia los niveles siguientes,
+ * que NO deben confundirse con ediciones manuales.
+ */
+const NIVELES_CELDA: string[][] = [
+  ['H'],
+  ['AC', 'AD', 'AE', 'AF', 'AI', 'AJ', 'AL', 'AT', 'AU', 'AV', 'AW', 'AX', 'AY', 'AZ', 'BA', 'BC'],
+  ['AM', 'AN', 'AP'],
+  ['AO'],
+  ['AS'],
+]
+
+/**
+ * Celdas calculadas pisadas a mano y textos editados. `armar(manuales)` devuelve
+ * la planilla con los parámetros y las variables DEL ARCHIVO más los valores
+ * manuales ya detectados: lo que daría cada fórmula con lo que Juan dejó. Se
+ * recorre por niveles de dependencia: lo que difiere en un nivel (habiendo
+ * aplicado los manuales de los anteriores) lo escribió Juan → se guarda.
+ * Devuelve el conjunto COMPLETO de valores manuales del archivo (no sólo los
+ * nuevos): quien confirma compara contra lo guardado.
+ */
+export function compararCeldasEditadas(
+  armar: (manuales: Map<string, Record<string, number | null>>) => PlantillaLiquidacion,
+  grid: CeldaVisual[][],
+): CambioCelda[] {
+  const etiqueta = new Map(COLUMNAS_CELDA.map(c => [c.col, c.etiqueta]))
+  const manuales = new Map<string, Record<string, number | null>>()
+  const out: CambioCelda[] = []
+  const filasArchivo: { uid: string; r: number; cuil: string | null; nombre: string | null }[] = []
+  grid.forEach((fila, i) => {
+    const uid = norm(fila?.[IDX_BD])
+    if (!uid || esFilaEncabezado(uid, norm(fila?.[IDX_BE]))) return
+    filasArchivo.push({ uid, r: i + 1, cuil: norm(fila[IDX_CUIL]) || null, nombre: norm(fila[IDX_NOMBRE]) || null })
+  })
+
+  NIVELES_CELDA.forEach((nivel, k) => {
+    const esperada = armar(manuales)
+    const celda = new Map(esperada.celdas.map(c => [c.ref, c]))
+    const filaEsperada = new Map<string, number>()
+    for (const c of esperada.celdas) {
+      const m = c.ref.match(/^BD(\d+)$/)
+      if (m && !esFilaEncabezado(norm(c.v as any))) filaEsperada.set(norm(c.v as any), Number(m[1]))
+    }
+    for (const f of filasArchivo) {
+      const re = filaEsperada.get(f.uid); if (re == null) continue
+      for (const col of nivel) {
+        const esp = num(celda.get(`${col}${re}`)?.v as any)
+        const arch = num(enGrid(grid, col, f.r))
+        if (igualCalc(esp, arch)) continue
+        out.push({ usuarioId: f.uid, cuil: f.cuil, nombre: f.nombre, clave: `celda:${col}`, etiqueta: etiqueta.get(col) ?? col, tipo: 'numero', mercosur: esp, excel: arch ?? 0 })
+        const m = manuales.get(f.uid) ?? {}
+        m[`celda:${col}`] = arch ?? 0
+        manuales.set(f.uid, m)
+      }
+      if (k > 0) continue
+      for (const c of COLUMNAS_TEXTO) {
+        const esp = norm(celda.get(`${c.col}${re}`)?.v as any)
+        const arch = norm(enGrid(grid, c.col, f.r))
+        if (esp === arch) continue
+        out.push({ usuarioId: f.uid, cuil: f.cuil, nombre: f.nombre, clave: `texto:${c.col}`, etiqueta: c.etiqueta, tipo: 'texto', mercosur: esp || null, excel: arch })
+      }
+    }
+  })
+  return out
+}
+
+/**
+ * Lo que el archivo trae y NO se puede guardar tal cual: se informa en vez de
+ * ignorarse. `base` = plantilla del período (para personas e identidad).
+ */
+export function advertenciasReimport(
+  base: PlantillaLiquidacion,
+  grid: CeldaVisual[][],
+  opts: { sindicatoBase?: Set<string> } = {},
+): AdvertenciaReimport[] {
+  const out: AdvertenciaReimport[] = []
+  const baseline = baselineDesdePlantilla(base)
+  const subido = parseGridReimport(grid)
+
+  // 1) Filas con persona pero sin identidad (agregadas a mano en el Excel).
+  grid.forEach((fila, i) => {
+    if (!fila || i < 6) return
+    const bd = norm(fila[IDX_BD])
+    if (bd) return
+    const cuil = norm(fila[IDX_CUIL]), nombre = norm(fila[IDX_NOMBRE])
+    if (cuil || nombre) out.push({ tipo: 'fila_sin_identidad', detalle: `Fila ${i + 1}: ${nombre || '(sin nombre)'}${cuil ? ` · CUIL ${cuil}` : ''} no tiene identidad del sistema: no se puede guardar. Dala de alta en el padrón y regenerá el Excel.` })
+  })
+
+  // 2) Personas del período que no están en el archivo (fila borrada).
+  for (const [uid, b] of Array.from(baseline.entries())) {
+    if (!subido.has(uid)) out.push({ tipo: 'persona_ausente', detalle: `${b.nombre ?? uid}: no está en el archivo. Se mantiene en la liquidación con sus valores actuales (para excluirlo, usá el padrón del período).` })
+  }
+
+  // 3) Subtotales / total escritos a mano (no coinciden con la suma de sus filas).
+  let desde = -1
+  const sumas: Record<string, number>[] = []
+  grid.forEach((fila, i) => {
+    const a = norm(fila?.[0]).toUpperCase()
+    if (a.startsWith('BLOQUE')) { desde = i; return }
+    const esSub = a.startsWith('SUBTOTAL'), esTot = a.startsWith('TOTAL GENERAL')
+    if (!esSub && !esTot) return
+    const suma: Record<string, number> = {}
+    if (esSub) {
+      for (let k = desde + 1; k < i; k++) {
+        if (!norm(grid[k]?.[IDX_BD])) continue
+        for (const col of COLS_TOTALES) suma[col] = (suma[col] ?? 0) + (num(enGrid(grid, col, k + 1)) ?? 0)
+      }
+      sumas.push(suma)
+    } else {
+      for (const col of COLS_TOTALES) suma[col] = sumas.reduce((s, x) => s + (x[col] ?? 0), 0)
+    }
+    for (const col of COLS_TOTALES) {
+      const v = num(enGrid(grid, col, i + 1))
+      if (v == null) continue
+      if (Math.abs(v - (suma[col] ?? 0)) > 0.01) out.push({ tipo: 'total_editado', detalle: `${col}${i + 1} (${norm(fila[0])}): ${v} no es la suma de sus filas (${Math.round((suma[col] ?? 0) * 100) / 100}). Los totales se recalculan: corregí el valor en las filas de cada persona.` })
+    }
+  })
+
+  // 4) Valores en filas de persona fuera de las columnas que se leen.
+  grid.forEach((fila, i) => {
+    const uid = norm(fila?.[IDX_BD])
+    if (!uid || esFilaEncabezado(uid, norm(fila?.[IDX_BE]))) return
+    fila.forEach((v, j) => {
+      if (v === null || v === undefined || norm(v) === '') return
+      const col = numALetra(j + 1)
+      if (!COLS_CONOCIDAS.has(col)) out.push({ tipo: 'celda_fuera_de_estructura', detalle: `${col}${i + 1} (${norm(fila[IDX_NOMBRE]) || uid}): "${norm(v)}" está en una columna que no forma parte de la liquidación y no se guarda.` })
+    })
+  })
+
+  // 5) Identidad borrada: vacío no borra lo existente (se avisa).
+  for (const [uid, e] of Array.from(subido.entries())) {
+    const b = baseline.get(uid); if (!b) continue
+    const campos: [string, string | null, string | null][] = [['Legajo', b.legajo, e.legajo], ['CUIL', b.cuil, e.cuil], ['Cuenta', b.cuenta, e.cuenta]]
+    for (const [et, antes, ahora] of campos) {
+      if (norm(antes) && !norm(ahora)) out.push({ tipo: 'identidad_vaciada', detalle: `${e.nombre ?? uid}: ${et} quedó vacío en el Excel; se conserva "${antes}" (un vacío no borra datos).` })
+    }
+  }
+
+  // 6) Sindicato desmarcado: la baja no se hace desde el Excel.
+  if (opts.sindicatoBase) {
+    for (const uid of Array.from(opts.sindicatoBase)) {
+      const e = subido.get(uid)
+      if (e && !e.sindicato) out.push({ tipo: 'sindicato_desmarcado', detalle: `${e.nombre ?? uid}: se quitó la marca de SINDICATO. La baja del sindicato se hace desde Conceptos permanentes (no se da de baja desde el Excel).` })
+    }
+  }
+  return out
+}

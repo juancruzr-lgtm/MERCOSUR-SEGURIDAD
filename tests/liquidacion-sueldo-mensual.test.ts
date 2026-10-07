@@ -62,7 +62,7 @@ describe('SUELDO MENSUAL — grupo A (mensualizados fijos)', () => {
     const { m, filaDe } = plantilla([SUP])        // sin mapa de extra
     const r = filaDe('s1')
     expect(m.get(`BG${r}`)).toBeUndefined()
-    expect(m.get(`AP${r}`)?.f).toBe(`IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`)
+    expect(m.get(`AP${r}`)?.f).toBe(`IF(AL${r}>0,AL${r}*$AP$6,0)`) // adelantos: se descuentan del sueldo a depositar, no de AP
   })
 
   it('consolidación 001: cantidad 1 e importe = AJ, SIN sumar las horas de AG (JC 05/10)', () => {
