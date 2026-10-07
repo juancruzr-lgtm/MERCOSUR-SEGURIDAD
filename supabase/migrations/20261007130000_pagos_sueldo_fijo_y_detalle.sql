@@ -11,7 +11,7 @@
 -- (ajuste 'adelantos' del período, cargado desde el Excel de trabajo). Si el
 -- adelanto supera el sueldo, se deposita 0 (nunca un importe negativo).
 --
--- Además, el libro general muestra los pagos por persona (PAGO SUELDO / PAGO
+-- Además, el libro general muestra lo que se deposita por persona (SUELDO A DEPOSITAR / PAGO
 -- EXTRAS). Para que esas columnas y los archivos del banco NO puedan diferir,
 -- la regla vive en UNA función, pagos_banco_por_usuario(), y los dos archivos
 -- del banco salen de ella.

@@ -265,7 +265,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       descargarArchivo(r.buf, `liquidacion_completa_${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       const avisoNeto = r.visualPendiente
         ? 'la columna NETO A PAGAR queda PENDIENTE (todavía no hay resultado de Visual)'
-        : `la columna NETO A PAGAR al final (${r.netos} persona(s): neto de Visual o sueldo mensual fijo) y las columnas de pagos por banco`
+        : `la columna NETO A PAGAR al final (${r.netos} persona(s): neto de Visual o sueldo mensual fijo) y las columnas de lo que se deposita por banco`
       const avisoDif = r.difiereDeConsolidada ? ` ⚠️ ${r.difiereDeConsolidada} importe(s) difieren de lo consolidado al exportar a Visual.` : ''
       setMsgBanco({ ok: !r.difiereDeConsolidada, t: `Excel completo del mes generado (${r.filas} empleados) con tus cambios, los totales y ${avisoNeto}.${avisoDif}` })
     } catch (e: any) {
@@ -640,7 +640,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
               <PasoHeader n={6} titulo="Pagos — archivos para el banco" sub="Sueldos (neto) y extras a acreditar (formato Galicia: Cuenta | Nombre | Importe | Concepto — 1 sueldos, 11 extras)" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
               <div style={{ ...S.card, marginTop: 8 }}>
                 <div style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
-                  <b>Sueldos</b> = quien tiene SUELDO MENSUAL cobra ese importe fijo (aunque Visual devuelva otro neto); el resto, el neto que devolvió Visual (todos con cuenta). <b>Extras</b> = la extra fija del mes por persona con cuenta. El <b>Excel completo</b> trae tus cambios y los totales. El <b>libro general</b> junta todos los meses, una solapa por mes con el mismo Excel completo de cada mes (el último adelante), con PAGO SUELDO, PAGO EXTRAS y TOTAL PAGADO por persona.
+                  <b>Sueldos</b> = quien tiene SUELDO MENSUAL cobra ese importe fijo (aunque Visual devuelva otro neto); el resto, el neto que devolvió Visual (todos con cuenta). <b>Extras</b> = la extra fija del mes por persona con cuenta. El <b>Excel completo</b> trae tus cambios y los totales. El <b>libro general</b> junta todos los meses, una solapa por mes con el mismo Excel completo de cada mes (el último adelante), con SUELDO A DEPOSITAR, EXTRAS A DEPOSITAR y TOTAL A DEPOSITAR por persona.
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button style={{ ...S.btn, opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarBanco('sueldos')}>
