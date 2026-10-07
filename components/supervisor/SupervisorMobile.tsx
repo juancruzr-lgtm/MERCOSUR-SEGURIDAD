@@ -3195,6 +3195,38 @@ export default function SupervisorMobile({ user }: any) {
           </div>
         )}
 
+        {/* Cartel de intervención (pedido JC 07/10): las alertas de ronda se
+            LEEN pero no se interviene ninguna — de 166 alertas en dos semanas
+            se atendieron 8, y el backlog sin intervenir llegó a 337 y rompió
+            el canal de WhatsApp. El cartel acompaña en TODAS las pestañas
+            (salvo Rondas, donde ya está el panel) hasta que las atienda:
+            avisar ya avisamos; esto pide la ACCIÓN. */}
+        {!loading && rondaAlertas.length > 0 && tab !== 'rondas' && (
+          <button
+            type="button"
+            onClick={() => { setTab('rondas'); window.setTimeout(() => irAPanelRondas('incumplidas'), 150) }}
+            style={{
+              width:'100%', textAlign:'left', cursor:'pointer', font:'inherit',
+              display:'flex', alignItems:'center', gap:12,
+              background:'rgba(239,68,68,.14)', border:'1px solid rgba(239,68,68,.45)',
+              borderLeft:'4px solid #ef4444', borderRadius:10,
+              padding:'12px 14px', marginBottom:12, color:'#fecaca',
+            }}
+          >
+            <span style={{ fontSize:22, flex:'none' }}>⚠️</span>
+            <span style={{ minWidth:0 }}>
+              <span style={{ display:'block', fontWeight:800, color:'#f8fafc', fontSize:14 }}>
+                {rondaAlertas.length === 1
+                  ? 'Hay 1 alerta de ronda esperando tu intervención'
+                  : `Hay ${rondaAlertas.length} alertas de ronda esperando tu intervención`}
+              </span>
+              <span style={{ display:'block', fontSize:12.5, marginTop:2 }}>
+                Tocá acá para verlas y registrar qué hiciste (llamada, justificación o resolución).
+              </span>
+            </span>
+          </button>
+        )}
+
         {loading ? (
           <div style={empty}>Cargando operación...</div>
         ) : (
