@@ -121,7 +121,7 @@ describe('Liquidación de punta a punta (Excel de trabajo → libro general → 
     expect(columna(ago, '203').get('v2')).toBe(300000)   // AC (viáticos 203): valor, no fórmula
 
     // Adelanto: figura en AR, NO se resta de AP, y se descuenta UNA vez del depósito.
-    const ar = columna(ago, 'adelantos'), neto = columna(ago, 'NETO A PAGAR'), pago = columna(ago, 'PAGO SUELDO')
+    const ar = columna(ago, 'adelantos'), neto = columna(ago, 'NETO A PAGAR'), pago = columna(ago, 'SUELDO A DEPOSITAR')
     expect(ar.get('v1')).toBe(50000)
     expect(neto.get('v1')).toBe(900000.5)
     expect(pago.get('v1')).toBe(900000.5)
@@ -130,8 +130,8 @@ describe('Liquidación de punta a punta (Excel de trabajo → libro general → 
     // Sueldo mensual FIJO aunque Visual devuelva otro neto; extras aparte.
     expect(neto.get('a1')).toBe(2550000)
     expect(pago.get('a1')).toBe(2550000)
-    expect(columna(ago, 'PAGO EXTRAS').get('a1')).toBe(50000)
-    expect(columna(ago, 'TOTAL PAGADO').get('a1')).toBe(2600000)
+    expect(columna(ago, 'EXTRAS A DEPOSITAR').get('a1')).toBe(50000)
+    expect(columna(ago, 'TOTAL A DEPOSITAR').get('a1')).toBe(2600000)
   }, 180000)
 
   it('AP (extras por horas) no descuenta el adelanto: sólo una vez, en el sueldo a depositar', async () => {
