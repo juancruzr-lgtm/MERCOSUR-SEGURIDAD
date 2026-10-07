@@ -25,6 +25,7 @@ import {
   type EmpleadoResumen,
   type ParametrosLiquidacion,
   type PlantillaLiquidacion,
+  type CeldaPlantilla,
   type ResumenGuardiaMes,
 } from '@/lib/resumen-guardia'
 
@@ -45,6 +46,8 @@ export interface PlantillaTrabajoResultado {
    * empleado a las ya aplicadas. Lo usa el reimport para recalcular como Excel.
    */
   rearmar?: (extra: Map<string, Record<string, number | null>>) => PlantillaLiquidacion
+  /** SUELDO MENSUAL vigente del mes por usuario_id (quien lo tiene cobra fijo). */
+  sueldoMensual?: Map<string, number>
 }
 
 /** Límites [desde, hasta] (inclusive, formato YYYY-MM-DD) del mes 'YYYY-MM'. */
@@ -115,43 +118,74 @@ export async function anexarColumnaSindicato(
 
 /**
  * LIBRO GENERAL: un solo .xlsx con TODOS los meses, una SOLAPA por período (el
- * último adelante, pedido de JC). Cada solapa = el Excel de trabajo completo de
- * ese mes (con sus ajustes/reimportaciones aplicados). Excluye los períodos
- * anulados. Se arma en el momento desde los datos guardados: nunca depende de
- * tener a mano el archivo de un mes anterior.
+ * último adelante, pedido de JC). Cada solapa = el Excel COMPLETO de ese mes
+ * (`plantillaCompletaConNeto`, la MISMA preparación que el botón "Excel completo
+ * (con totales)": ajustes guardados, NETO A PAGAR de Visual, totales, formato y
+ * gráfico). Excluye los períodos anulados. Se arma en el momento desde los datos
+ * guardados de cada período: nunca depende de tener a mano el archivo de un mes
+ * anterior. Un mes que no se pudo armar NO se omite en silencio: vuelve en
+ * `omitidos` con su motivo.
  */
 export async function generarLibroGeneralTrabajo(
   client: any,
-): Promise<{ buf: ArrayBuffer | null; meses: number; error: string | null }> {
+): Promise<LibroGeneralResultado> {
+  const out: LibroGeneralResultado = {
+    buf: null, meses: 0, periodos: [], omitidos: [], visualPendiente: [], difierenDeConsolidada: [], error: null,
+  }
   const { data: periodos, error } = await client.from('liquidacion_periodo')
     .select('id, mes, estado').neq('estado', 'anulado').order('mes', { ascending: false })
-  if (error) return { buf: null, meses: 0, error: error.message || String(error) }
-  const lista = (periodos ?? []) as Array<{ id: string; mes: string }>
-  if (lista.length === 0) return { buf: null, meses: 0, error: 'No hay períodos para el libro general.' }
+  if (error) return { ...out, error: error.message || String(error) }
+  // Orden explícito (más reciente primero) aunque la consulta ya lo pida: el
+  // orden de las solapas es parte del contrato del libro.
+  const lista = ((periodos ?? []) as Array<{ id: string; mes: string; estado?: string }>)
+    .filter(p => p.estado !== 'anulado')
+    .sort((a, b) => String(b.mes).localeCompare(String(a.mes)))
+  if (lista.length === 0) return { ...out, error: 'No hay períodos para el libro general.' }
 
   const hojas: { nombre: string; plantilla: PlantillaLiquidacion }[] = []
   for (const p of lista) {
-    const ajustes = await cargarAjustes(client, p.id)
-    const { plantilla } = await plantillaTrabajoDelMes(client, p.mes, ajustes, { periodoId: p.id })
-    if (plantilla) hojas.push({ nombre: p.mes, plantilla })
+    const r = await plantillaCompletaConNeto(client, { id: p.id, mes: p.mes })
+    if (r.error || !r.plantilla) { out.omitidos.push({ mes: p.mes, error: r.error || 'sin plantilla' }); continue }
+    hojas.push({ nombre: p.mes, plantilla: r.plantilla })
+    out.periodos.push(p.mes)
+    if (r.visualPendiente) out.visualPendiente.push(p.mes)
+    if (r.difiereDeConsolidada) out.difierenDeConsolidada.push(p.mes)
   }
-  if (hojas.length === 0) return { buf: null, meses: 0, error: 'No se pudo construir ningún mes.' }
+  if (hojas.length === 0) return { ...out, error: 'No se pudo construir ningún mes.' }
 
   const { escribirLibroMultiMes } = await import('@/lib/liquidacion-xlsx')
   const buf = await escribirLibroMultiMes(hojas)
-  return { buf, meses: hojas.length, error: null }
+  return { ...out, buf, meses: hojas.length }
+}
+
+export interface LibroGeneralResultado {
+  buf: ArrayBuffer | null
+  meses: number
+  /** Meses incluidos, en el orden de las solapas (más reciente primero). */
+  periodos: string[]
+  /** Meses que no se pudieron armar, con el motivo. */
+  omitidos: { mes: string; error: string }[]
+  /** Meses sin resultado de Visual: su NETO A PAGAR figura PENDIENTE. */
+  visualPendiente: string[]
+  /** Meses cuyos importes regenerados difieren del snapshot consolidado. */
+  difierenDeConsolidada: string[]
+  error: string | null
 }
 
 const COL_A_NUM = (col: string): number => { let n = 0; for (const ch of col) n = n * 26 + (ch.charCodeAt(0) - 64); return n }
 const NUM_A_COL = (n: number): string => { let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26) } return s }
 
-/** Neto de RECIBO (Visual) por usuario_id: sólo los que tienen recibo en Visual. */
-async function netoReciboPorUsuario(client: any, periodoId: string): Promise<Map<string, number>> {
+/**
+ * Neto de RECIBO (Visual) por usuario_id: sólo los que tienen recibo en Visual.
+ * `hayResultado` distingue "el período todavía no tiene resultado de Visual"
+ * (neto pendiente) de "tiene resultado pero esta persona no figura".
+ */
+async function netoReciboPorUsuario(client: any, periodoId: string): Promise<{ map: Map<string, number>; hayResultado: boolean }> {
   const map = new Map<string, number>()
   const { data: rv } = await client.from('liquidacion_resultado_visual')
     .select('id').eq('periodo_id', periodoId).eq('vigente', true).limit(1)
   const resId = ((rv ?? []) as any[])[0]?.id
-  if (!resId) return map
+  if (!resId) return { map, hayResultado: false }
   const [{ data: filas }, { data: personas }] = await Promise.all([
     client.from('liquidacion_resultado_fila').select('cuil, neto').eq('resultado_id', resId),
     client.from('liquidacion_persona').select('cuil, usuario_id'),
@@ -163,42 +197,163 @@ async function netoReciboPorUsuario(client: any, periodoId: string): Promise<Map
     const uid = usuarioPorCuil.get(String(f.cuil))
     if (uid) map.set(uid, Number(f.neto))
   }
-  return map
+  return { map, hayResultado: true }
 }
 
 /**
- * Excel COMPLETO del mes = el Excel de trabajo (con los ajustes cargados) con una
- * columna "NETO A PAGAR" AL FINAL: el neto de recibo (Visual) de cada empleado
- * que tiene recibo, más el total al pie. Sólo se llena si el período ya tiene el
- * resultado de Visual importado; el resto de las filas queda en blanco.
+ * Cuántos importes (empleado × código) del mes regenerado difieren del snapshot
+ * CONGELADO en `liquidacion_consolidada` al exportar a Visual. null = el período
+ * no tiene snapshot (todavía no se exportó). Verifica que la hoja de un mes
+ * histórico coincide con lo que realmente se liquidó ese mes.
  */
+async function diferenciasConConsolidada(
+  client: any, periodoId: string, plantilla: PlantillaLiquidacion,
+): Promise<number | null> {
+  const { data } = await client.from('liquidacion_consolidada')
+    .select('empleado_id, codigo, importe').eq('periodo_id', periodoId)
+  const guardadas = (data ?? []) as any[]
+  if (guardadas.length === 0) return null
+  const key = (e: string, c: string) => `${e}|${c}`
+  const antes = new Map<string, number>()
+  for (const g of guardadas) antes.set(key(String(g.empleado_id), String(g.codigo)), Number(g.importe ?? 0))
+  const ahora = new Map<string, number>()
+  for (const f of filasConsolidadasDePlantilla(plantilla)) ahora.set(key(f.empleado_id, f.codigo), f.importe)
+  let difs = 0
+  for (const k of Array.from(new Set([...Array.from(antes.keys()), ...Array.from(ahora.keys())]))) {
+    if (Math.abs((antes.get(k) ?? 0) - (ahora.get(k) ?? 0)) > 0.005) difs++
+  }
+  return difs
+}
+
+/**
+ * Pagos por banco del período por usuario_id (RPC pagos_banco_por_usuario: la
+ * MISMA regla que arma los archivos de Galicia). Sin la RPC (migración sin
+ * aplicar) devuelve el error para avisarlo en la hoja.
+ */
+async function pagosBancoPorUsuario(client: any, periodoId: string): Promise<{ porUsuario: Map<string, { sueldo: number | null; extras: number | null }>; error: string | null }> {
+  const porUsuario = new Map<string, { sueldo: number | null; extras: number | null }>()
+  if (typeof client.rpc !== 'function') return { porUsuario, error: 'sin acceso a pagos' }
+  const { data, error } = await client.rpc('pagos_banco_por_usuario', { p_periodo_id: periodoId })
+  if (error) return { porUsuario, error: error.message || String(error) }
+  for (const d of (data ?? []) as any[]) {
+    porUsuario.set(String(d.usuario_id), {
+      sueldo: d.sueldo == null ? null : Number(d.sueldo),
+      extras: d.extras == null ? null : Number(d.extras),
+    })
+  }
+  return { porUsuario, error: null }
+}
+
+export interface PlantillaCompletaResultado {
+  plantilla: PlantillaLiquidacion | null
+  filas: number
+  netos: number
+  /** El período no tiene resultado de Visual vigente: el NETO A PAGAR queda PENDIENTE. */
+  visualPendiente: boolean
+  /** Importes que difieren del snapshot consolidado (null = sin snapshot). */
+  difiereDeConsolidada: number | null
+  error: string | null
+}
+
+/**
+ * Plantilla del Excel COMPLETO de un período = el Excel de trabajo (con los
+ * ajustes guardados del período) + columna "NETO A PAGAR" AL FINAL con el neto
+ * de recibo (Visual) de cada empleado que lo tiene, y el total al pie. FUENTE
+ * ÚNICA de los dos botones de Pagos: el Excel completo individual y cada solapa
+ * del libro general salen de acá, así no pueden diferir.
+ *
+ * - Sin resultado de Visual importado: las celdas de neto quedan vacías y el
+ *   total dice PENDIENTE (un neto faltante no se presenta como $0 confirmado).
+ * - Si el período ya se exportó a Visual, se compara contra el snapshot
+ *   congelado (`liquidacion_consolidada`) y una diferencia se avisa en la hoja.
+ * Sólo lee: no escribe nada en la base.
+ */
+export async function plantillaCompletaConNeto(
+  client: any,
+  periodo: { id: string; mes: string },
+): Promise<PlantillaCompletaResultado> {
+  const ajustes = await cargarAjustes(client, periodo.id)
+  const { plantilla, filas, error, sueldoMensual } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes, { periodoId: periodo.id })
+  if (error || !plantilla) {
+    return { plantilla: null, filas: 0, netos: 0, visualPendiente: false, difiereDeConsolidada: null, error: error || 'sin plantilla' }
+  }
+
+  const [{ map: netoMap, hayResultado }, difs, pagos] = await Promise.all([
+    netoReciboPorUsuario(client, periodo.id),
+    diferenciasConConsolidada(client, periodo.id, plantilla),
+    pagosBancoPorUsuario(client, periodo.id),
+  ])
+  const sueldoFijo = sueldoMensual ?? new Map<string, number>()
+  const base = COL_A_NUM(plantilla.columnas.reduce((m, c) => (COL_A_NUM(c.col) > COL_A_NUM(m) ? c.col : m), 'A'))
+  // Al final: PAGO SUELDO | PAGO EXTRAS | TOTAL PAGADO | NETO A PAGAR (última).
+  const cSueldo = NUM_A_COL(base + 1), cExtras = NUM_A_COL(base + 2), cTotal = NUM_A_COL(base + 3), cNeto = NUM_A_COL(base + 4)
+  const enc = plantilla.estilos.encabezado
+  const filaTotal = plantilla.estilos.total
+  const celdas: CeldaPlantilla[] = [...plantilla.celdas,
+    { ref: `${cSueldo}${enc}`, v: 'PAGO SUELDO' }, { ref: `${cExtras}${enc}`, v: 'PAGO EXTRAS' },
+    { ref: `${cTotal}${enc}`, v: 'TOTAL PAGADO' }, { ref: `${cNeto}${enc}`, v: 'NETO A PAGAR' },
+  ]
+  const bdRow = new Map<number, string>()
+  for (const c of plantilla.celdas) { const m = c.ref.match(/^BD(\d+)$/); if (m) bdRow.set(Number(m[1]), String(c.v ?? '')) }
+  const r2 = (n: number) => Math.round(n * 100) / 100
+  let total = 0, netos = 0, totSueldo = 0, totExtras = 0
+  const adelantoExcede: string[] = []
+  for (const r of plantilla.estilos.filasDatos) {
+    const uid = bdRow.get(r); if (!uid) continue
+    // NETO A PAGAR: quien tiene SUELDO MENSUAL cobra ese importe fijo (JC 07/10),
+    // aunque Visual devuelva otro neto; el resto, el neto de recibo de Visual.
+    const bruto = sueldoFijo.has(uid) ? sueldoFijo.get(uid)! : netoMap.get(uid)
+    // Adelantos: se descuentan UNA sola vez, acá (sueldo a depositar), nunca < 0.
+    const adel = Number(ajustes.get(uid)?.['adelantos'] ?? 0) || 0
+    if (bruto != null && adel > bruto) adelantoExcede.push(uid)
+    const neto = bruto == null ? null : Math.max(0, bruto - adel)
+    if (neto != null) { celdas.push({ ref: `${cNeto}${r}`, v: r2(neto) }); total += neto; netos++ }
+    // Pagos por banco (misma regla que los archivos de Galicia).
+    const p = pagos.porUsuario.get(uid)
+    if (p?.sueldo != null) { celdas.push({ ref: `${cSueldo}${r}`, v: r2(p.sueldo) }); totSueldo += p.sueldo }
+    if (p?.extras != null) { celdas.push({ ref: `${cExtras}${r}`, v: r2(p.extras) }); totExtras += p.extras }
+    if (p && (p.sueldo != null || p.extras != null)) celdas.push({ ref: `${cTotal}${r}`, v: r2((p.sueldo ?? 0) + (p.extras ?? 0)) })
+  }
+  // Totales: sin Visual, lo que depende de Visual queda PENDIENTE (no $0).
+  const pend = 'PENDIENTE', nd = 'NO DISPONIBLE'
+  celdas.push({ ref: `${cNeto}${filaTotal}`, v: hayResultado ? r2(total) : pend })
+  celdas.push({ ref: `${cSueldo}${filaTotal}`, v: pagos.error ? nd : (hayResultado ? r2(totSueldo) : pend) })
+  celdas.push({ ref: `${cExtras}${filaTotal}`, v: pagos.error ? nd : r2(totExtras) })
+  celdas.push({ ref: `${cTotal}${filaTotal}`, v: pagos.error ? nd : (hayResultado ? r2(totSueldo + totExtras) : pend) })
+
+  // Avisos del período en C4 (libre: A1:B4 parámetros, C1 título, C2:D3 auxiliares).
+  const avisos: string[] = []
+  if (!hayResultado) avisos.push('NETO A PAGAR pendiente: el período todavía no tiene resultado de Visual importado (los sueldos fijos sí figuran).')
+  if (difs) avisos.push(`ATENCIÓN: ${difs} importe(s) difieren de lo consolidado al exportar a Visual.`)
+  if (adelantoExcede.length) avisos.push(`ATENCIÓN: ${adelantoExcede.length} adelanto(s) superan el sueldo: se deposita 0 y queda saldo a descontar.`)
+  if (pagos.error) avisos.push('Pagos por banco no disponibles: ' + pagos.error)
+  if (avisos.length) celdas.push({ ref: 'C4', v: avisos.join(' ') })
+
+  const columnas = [...plantilla.columnas,
+    { col: cSueldo, width: 16, numFmt: 'money' as const }, { col: cExtras, width: 14, numFmt: 'money' as const },
+    { col: cTotal, width: 16, numFmt: 'money' as const }, { col: cNeto, width: 16, numFmt: 'money' as const },
+  ]
+  return {
+    plantilla: { ...plantilla, celdas, columnas },
+    filas, netos, visualPendiente: !hayResultado, difiereDeConsolidada: difs, error: null,
+  }
+}
+
+/** Excel COMPLETO del mes (una hoja): `plantillaCompletaConNeto` escrita a .xlsx. */
 export async function generarExcelCompletoConNeto(
   client: any,
   periodo: { id: string; mes: string },
-): Promise<{ buf: ArrayBuffer | null; filas: number; netos: number; error: string | null }> {
-  const ajustes = await cargarAjustes(client, periodo.id)
-  const { plantilla, filas, error } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes, { periodoId: periodo.id })
-  if (error || !plantilla) return { buf: null, filas: 0, netos: 0, error: error || 'sin plantilla' }
-
-  const netoMap = await netoReciboPorUsuario(client, periodo.id)
-  const nextCol = NUM_A_COL(Math.max(...plantilla.columnas.map(c => COL_A_NUM(c.col))) + 1)
-  const enc = plantilla.estilos.encabezado
-  const celdas = [...plantilla.celdas, { ref: `${nextCol}${enc}`, v: 'NETO A PAGAR' }]
-  const bdRow = new Map<number, string>()
-  for (const c of plantilla.celdas) { const m = c.ref.match(/^BD(\d+)$/); if (m) bdRow.set(Number(m[1]), String(c.v ?? '')) }
-  let total = 0, netos = 0
-  for (const r of plantilla.estilos.filasDatos) {
-    const uid = bdRow.get(r); if (!uid) continue
-    const neto = netoMap.get(uid)
-    if (neto != null) { celdas.push({ ref: `${nextCol}${r}`, v: Math.round(neto * 100) / 100 }); total += neto; netos++ }
+): Promise<{
+  buf: ArrayBuffer | null; filas: number; netos: number
+  visualPendiente: boolean; difiereDeConsolidada: number | null; error: string | null
+}> {
+  const r = await plantillaCompletaConNeto(client, periodo)
+  if (r.error || !r.plantilla) {
+    return { buf: null, filas: 0, netos: 0, visualPendiente: false, difiereDeConsolidada: null, error: r.error || 'sin plantilla' }
   }
-  celdas.push({ ref: `${nextCol}${plantilla.estilos.total}`, v: Math.round(total * 100) / 100 })
-  const columnas = [...plantilla.columnas, { col: nextCol, width: 16, numFmt: 'money' as const }]
-  const plant2 = { ...plantilla, celdas, columnas }
-
   const { escribirPlantillaLiquidacionXLSX } = await import('@/lib/liquidacion-xlsx')
-  const buf = await escribirPlantillaLiquidacionXLSX(plant2)
-  return { buf, filas, netos, error: null }
+  const buf = await escribirPlantillaLiquidacionXLSX(r.plantilla)
+  return { buf, filas: r.filas, netos: r.netos, visualPendiente: r.visualPendiente, difiereDeConsolidada: r.difiereDeConsolidada, error: null }
 }
 
 /**
@@ -341,7 +496,7 @@ export async function plantillaTrabajoDelMes(
     for (const [emp, m] of Array.from(extra.entries())) unidos.set(emp, { ...(unidos.get(emp) ?? {}), ...m })
     return plantillaLiquidacionResumenGuardia(resumen, unidos, sueldoMensualPorEmpleado, extraPorEmpleado, parametros, textos)
   }
-  return { plantilla, filas: resumen.filas.length, error: null, resumen, rearmar }
+  return { plantilla, filas: resumen.filas.length, error: null, resumen, rearmar, sueldoMensual: sueldoMensualPorEmpleado }
 }
 
 /**

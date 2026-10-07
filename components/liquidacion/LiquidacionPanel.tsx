@@ -263,7 +263,11 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       const r = await generarExcelCompletoConNeto(supabase, { id: sel.id, mes: sel.mes })
       if (r.error || !r.buf) { setMsgBanco({ ok: false, t: 'No se pudo generar el Excel completo: ' + (r.error || 'sin datos') }); return }
       descargarArchivo(r.buf, `liquidacion_completa_${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      setMsgBanco({ ok: true, t: `Excel completo del mes generado (${r.filas} empleados) con tus cambios, los totales y la columna NETO A PAGAR al final (${r.netos} recibo(s) de Visual).` })
+      const avisoNeto = r.visualPendiente
+        ? 'la columna NETO A PAGAR queda PENDIENTE (todavía no hay resultado de Visual)'
+        : `la columna NETO A PAGAR al final (${r.netos} persona(s): neto de Visual o sueldo mensual fijo) y las columnas de pagos por banco`
+      const avisoDif = r.difiereDeConsolidada ? ` ⚠️ ${r.difiereDeConsolidada} importe(s) difieren de lo consolidado al exportar a Visual.` : ''
+      setMsgBanco({ ok: !r.difiereDeConsolidada, t: `Excel completo del mes generado (${r.filas} empleados) con tus cambios, los totales y ${avisoNeto}.${avisoDif}` })
     } catch (e: any) {
       setMsgBanco({ ok: false, t: 'No se pudo generar el Excel completo: ' + (e?.message || e) })
     } finally { setGenBanco('') }
@@ -278,7 +282,15 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       const r = await generarLibroGeneralTrabajo(supabase)
       if (r.error || !r.buf) { setMsgBanco({ ok: false, t: 'No se pudo generar el libro general: ' + (r.error || 'sin datos') }); return }
       descargarArchivo(r.buf, `liquidaciones_todos_los_meses.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      setMsgBanco({ ok: true, t: `Libro general generado: ${r.meses} mes(es), una solapa por mes (el último adelante).` })
+      const avisos = [
+        r.visualPendiente.length ? `NETO A PAGAR pendiente de Visual en: ${r.visualPendiente.join(', ')}.` : '',
+        r.difierenDeConsolidada.length ? `⚠️ Difieren de lo consolidado: ${r.difierenDeConsolidada.join(', ')}.` : '',
+        r.omitidos.length ? `⚠️ No se pudieron armar: ${r.omitidos.map(o => `${o.mes} (${o.error})`).join('; ')}.` : '',
+      ].filter(Boolean).join(' ')
+      setMsgBanco({
+        ok: r.omitidos.length === 0 && r.difierenDeConsolidada.length === 0,
+        t: `Libro general generado: ${r.meses} mes(es) (${r.periodos.join(', ')}), una solapa por mes con el Excel completo (el último adelante).${avisos ? ' ' + avisos : ''}`,
+      })
     } catch (e: any) {
       setMsgBanco({ ok: false, t: 'No se pudo generar el libro general: ' + (e?.message || e) })
     } finally { setGenBanco('') }
@@ -628,7 +640,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
               <PasoHeader n={6} titulo="Pagos — archivos para el banco" sub="Sueldos (neto) y extras a acreditar (formato Galicia: Cuenta | Nombre | Importe | Concepto — 1 sueldos, 11 extras)" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
               <div style={{ ...S.card, marginTop: 8 }}>
                 <div style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
-                  <b>Sueldos</b> = neto que devolvió Visual por persona + el sueldo mensual de los de nómina que no pasan por Visual (todos con cuenta). <b>Extras</b> = la extra fija del mes por persona con cuenta. El <b>Excel completo</b> trae tus cambios y los totales. El <b>libro general</b> junta todos los meses, una solapa por mes (el último adelante).
+                  <b>Sueldos</b> = quien tiene SUELDO MENSUAL cobra ese importe fijo (aunque Visual devuelva otro neto); el resto, el neto que devolvió Visual (todos con cuenta). <b>Extras</b> = la extra fija del mes por persona con cuenta. El <b>Excel completo</b> trae tus cambios y los totales. El <b>libro general</b> junta todos los meses, una solapa por mes con el mismo Excel completo de cada mes (el último adelante), con PAGO SUELDO, PAGO EXTRAS y TOTAL PAGADO por persona.
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button style={{ ...S.btn, opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarBanco('sueldos')}>
