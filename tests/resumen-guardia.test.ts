@@ -831,7 +831,7 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     expect(m.get('AJ8')?.f).toBe('AG8*$C$2')
     expect(m.get('AM8')?.f).toBe('IF(AL8>0,(AL8*100)/I8,0)')
     expect(m.get('AO8')?.f).toBe('AC8+AD8+AE8+AF8+AI8+AJ8+AT8+AU8+AV8+AW8+AX8+AP8')
-    expect(m.get('AP8')?.f).toBe('IF(AL8>0,AL8*$AP$6,0)-AR8') // extra = $AP$6 fijo
+    expect(m.get('AP8')?.f).toBe('IF(AL8>0,AL8*$AP$6,0)') // extra = $AP$6 fijo; adelantos se descuentan del sueldo a depositar
     expect(m.get('AS8')?.f).toBe('IF(AO8>0,AO8/I8,0)')
     expect(m.get('AT8')?.f).toBe('K8*$C$3')             // feriados × día ($C$3)
     // Ya no hay columnas de parámetros repetidas por fila (U-AB)

@@ -922,7 +922,8 @@ export function filasXLSXResumenGuardia(resumen: ResumenGuardiaMes): (string | n
 //
 // Columnas de carga manual que quedan vacías a propósito (Juan las completa
 // en Excel después de descargar): AH (hs a valor pleno, concepto 212),
-// AR (adelantos) y los reemplazos puntuales de AP por un importe fijo.
+// AR (adelantos: informativo; se descuenta del sueldo a depositar) y los
+// reemplazos puntuales de AP por un importe fijo.
 //
 // Desvíos deliberados respecto del archivo de ejemplo, todos verificados con
 // Juan o neutros:
@@ -1312,7 +1313,7 @@ export function plantillaLiquidacionResumenGuardia(
     const AL = Math.max(0, I - AG)
     const AM = AL > 0 && I > 0 ? (AL * 100) / I : 0
     const AN = G > 0 ? I / G : 0
-    const AP = AL > 0 ? AL * P.horaExtra : 0 // menos AR (adelantos), manual
+    const AP = AL > 0 ? AL * P.horaExtra : 0
     const AT = Kv * dia8
     const AU = num(Lval) * dia8
     const AV = num(Mval) * dia8
@@ -1341,7 +1342,9 @@ export function plantillaLiquidacionResumenGuardia(
     const gAL = esSueldoFijo ? 0 : AL
     // Valores FINALES de la fila: el calculado, o el que Juan escribió a mano en
     // esa celda (ovCelda). Los dependientes usan el final, como en Excel.
-    // AR (adelantos): carga manual reimportada; se descuenta del AP por horas.
+    // AR (adelantos): carga manual reimportada. Se muestra acá y se descuenta UNA
+    // sola vez, del SUELDO A DEPOSITAR (NETO A PAGAR / archivo del banco), no de AP
+    // (JC 07/10): restarlo también en AP lo descontaba dos veces en el total.
     const AR = ov['adelantos'] ?? null
     const fAC = ovCelda('AC', gAC)
     const fAD = ovCelda('AD', gAD)
@@ -1352,7 +1355,7 @@ export function plantillaLiquidacionResumenGuardia(
     const fAL = ovCelda('AL', gAL)
     const fAM = ovCelda('AM', esSueldoFijo ? 0 : (fAL > 0 && I > 0 ? (fAL * 100) / I : 0))
     const fAN = ovCelda('AN', esSueldoFijo ? 0 : AN)
-    const fAP = ovCelda('AP', usaExtraFija ? extraFija : (fAL > 0 ? fAL * P.horaExtra : 0) - num(AR))
+    const fAP = ovCelda('AP', usaExtraFija ? extraFija : (fAL > 0 ? fAL * P.horaExtra : 0))
     const fAT = ovCelda('AT', AT)
     const fAU = ovCelda('AU', AU)
     const fAV = ovCelda('AV', AV)
@@ -1385,7 +1388,7 @@ export function plantillaLiquidacionResumenGuardia(
     if (fila.grupo === 'vigiladores' || pisada('AM')) put(`AM${r}`, fAM, fx('AM', `IF(AL${r}>0,(AL${r}*100)/I${r},0)`))
     put(`AN${r}`, fAN, fx('AN', esSueldoFijo ? undefined : `I${r}/G${r}`))
     put(`AO${r}`, fAO, fx('AO', `AC${r}+AD${r}+AE${r}+AF${r}+AI${r}+AJ${r}+AT${r}+AU${r}+AV${r}+AW${r}+AX${r}+AP${r}`))
-    put(`AP${r}`, fAP, fx('AP', usaExtraFija ? `BG${r}` : `IF(AL${r}>0,AL${r}*$AP$6,0)-AR${r}`))
+    put(`AP${r}`, fAP, fx('AP', usaExtraFija ? `BG${r}` : `IF(AL${r}>0,AL${r}*$AP$6,0)`))
     if (AR != null) put(`AR${r}`, AR)
     put(`AS${r}`, fAS, fx('AS', esSueldoFijo ? undefined : `IF(AO${r}>0,AO${r}/I${r},0)`))
     put(`AT${r}`, fAT, fx('AT', `K${r}*$C$3`))
