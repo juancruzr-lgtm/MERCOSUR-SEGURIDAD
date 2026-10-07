@@ -17,6 +17,7 @@
 // (Gerencia). Las consultas usan el cliente que se le pase (navegador o server).
 
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
+import { esCuentaGalicia } from '@/lib/cuenta-banco'
 import {
   construirResumenGuardia,
   plantillaLiquidacionResumenGuardia,
@@ -225,47 +226,136 @@ async function diferenciasConConsolidada(
   return difs
 }
 
-/**
- * Importes A DEPOSITAR por banco del período por usuario_id (RPC pagos_banco_por_usuario: la
- * MISMA regla que arma los archivos de Galicia). Sin la RPC (migración sin
- * aplicar) devuelve el error para avisarlo en la hoja.
- */
-async function pagosBancoPorUsuario(client: any, periodoId: string): Promise<{ porUsuario: Map<string, { sueldo: number | null; extras: number | null }>; error: string | null }> {
-  const porUsuario = new Map<string, { sueldo: number | null; extras: number | null }>()
-  if (typeof client.rpc !== 'function') return { porUsuario, error: 'sin acceso a pagos' }
-  const { data, error } = await client.rpc('pagos_banco_por_usuario', { p_periodo_id: periodoId })
+/** Destinatario del banco (RPC pagos_banco_destinatarios: una sola regla). */
+interface Destinatario { cuenta: string | null; nombre: string; orden: number; habilitado: boolean; motivo: string | null }
+
+async function destinatariosBanco(client: any): Promise<{ porUsuario: Map<string, Destinatario>; error: string | null }> {
+  const porUsuario = new Map<string, Destinatario>()
+  if (typeof client.rpc !== 'function') return { porUsuario, error: 'sin acceso a los destinatarios del banco' }
+  const { data, error } = await client.rpc('pagos_banco_destinatarios', {})
   if (error) return { porUsuario, error: error.message || String(error) }
   for (const d of (data ?? []) as any[]) {
     porUsuario.set(String(d.usuario_id), {
-      sueldo: d.sueldo == null ? null : Number(d.sueldo),
-      extras: d.extras == null ? null : Number(d.extras),
+      cuenta: d.cuenta ?? null, nombre: String(d.nombre ?? ''), orden: Number(d.orden ?? 0),
+      habilitado: Boolean(d.habilitado), motivo: d.motivo ?? null,
     })
   }
   return { porUsuario, error: null }
 }
 
+/** Pagos REGISTRADOS (confirmados) del período por usuario_id; lotes anulados no cuentan. */
+async function pagosRegistrados(client: any, periodoId: string, tipo: 'sueldos' | 'extras'): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  const [{ data: filas, error }, { data: lotes }] = await Promise.all([
+    client.from('liquidacion_pago_registrado').select('lote_id, usuario_id, importe').eq('periodo_id', periodoId).eq('tipo', tipo),
+    client.from('liquidacion_pago_lote').select('id, anulado_at').eq('periodo_id', periodoId).eq('tipo', tipo),
+  ])
+  if (error) return out
+  const anulados = new Set(((lotes ?? []) as any[]).filter(l => l.anulado_at).map(l => String(l.id)))
+  for (const f of (filas ?? []) as any[]) {
+    if (anulados.has(String(f.lote_id))) continue
+    out.set(String(f.usuario_id), (out.get(String(f.usuario_id)) ?? 0) + Number(f.importe ?? 0))
+  }
+  return out
+}
+
+/** Extras del mes por usuario_id = columna AP FINAL de la planilla (por horas, fija vía BG o a mano). */
+export function extrasDePlantilla(plantilla: PlantillaLiquidacion): Map<string, number> {
+  const v = new Map(plantilla.celdas.map(c => [c.ref, c.v]))
+  const out = new Map<string, number>()
+  for (const r of plantilla.estilos.filasDatos) {
+    const uid = String(v.get(`BD${r}`) ?? '')
+    if (!uid) continue
+    const ap = Number(v.get(`AP${r}`) ?? 0)
+    if (Number.isFinite(ap) && Math.abs(ap) >= 0.005) out.set(uid, Math.round(ap * 100) / 100)
+  }
+  return out
+}
+
+export type DestinoExtra = 'galicia' | 'aparte' | 'excluido'
+export interface ExtraPersona {
+  usuarioId: string
+  nombre: string
+  cuenta: string | null
+  orden: number
+  /** Extras del mes (columna AP). */
+  extrasMes: number
+  /** Ya registradas como pagadas. */
+  registrado: number
+  /** extrasMes − registrado (nunca < 0). */
+  pendiente: number
+  /** galicia = va en el archivo; aparte = cuenta de otro banco; excluido = no se deposita. */
+  destino: DestinoExtra
+  motivo: string | null
+}
+
+/**
+ * Concilia las extras del mes persona por persona: importe (AP), lo ya pagado
+ * (registrado) y el destino bancario con su motivo. FUENTE ÚNICA del Excel
+ * completo, del libro general y del archivo "Galicia — Extras".
+ */
+export function conciliarExtras(
+  plantilla: PlantillaLiquidacion,
+  destinatarios: Map<string, Destinatario>,
+  registrado: Map<string, number>,
+): ExtraPersona[] {
+  const v = new Map(plantilla.celdas.map(c => [c.ref, c.v]))
+  const nombreFila = new Map<string, string>()
+  for (const r of plantilla.estilos.filasDatos) nombreFila.set(String(v.get(`BD${r}`) ?? ''), String(v.get(`D${r}`) ?? ''))
+  const out: ExtraPersona[] = []
+  for (const [uid, extrasMes] of Array.from(extrasDePlantilla(plantilla).entries())) {
+    const d = destinatarios.get(uid)
+    const reg = Math.round((registrado.get(uid) ?? 0) * 100) / 100
+    const pendiente = Math.max(0, Math.round((extrasMes - reg) * 100) / 100)
+    let destino: DestinoExtra = 'galicia', motivo: string | null = null
+    if (!d) { destino = 'excluido'; motivo = 'sin datos de destinatario' }
+    else if (!d.habilitado) { destino = 'excluido'; motivo = d.motivo }
+    else if (!esCuentaGalicia(d.cuenta ?? '')) { destino = 'aparte'; motivo = `cuenta de otro banco (${d.cuenta}): pagar aparte` }
+    out.push({ usuarioId: uid, nombre: d?.nombre || nombreFila.get(uid) || uid, cuenta: d?.cuenta ?? null, orden: d?.orden ?? 0, extrasMes, registrado: reg, pendiente, destino, motivo })
+  }
+  return out.sort((a, b) => a.orden - b.orden || a.nombre.localeCompare(b.nombre))
+}
+
+/** Extras conciliadas de un período (arma la planilla con sus ajustes guardados). */
+export async function extrasDelPeriodo(
+  client: any,
+  periodo: { id: string; mes: string },
+): Promise<{ extras: ExtraPersona[]; error: string | null }> {
+  const ajustes = await cargarAjustes(client, periodo.id)
+  const { plantilla, error } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes, { periodoId: periodo.id })
+  if (error || !plantilla) return { extras: [], error: error || 'sin plantilla' }
+  const [dest, reg] = await Promise.all([destinatariosBanco(client), pagosRegistrados(client, periodo.id, 'extras')])
+  if (dest.error) return { extras: [], error: dest.error }
+  return { extras: conciliarExtras(plantilla, dest.porUsuario, reg), error: null }
+}
+
 export interface PlantillaCompletaResultado {
   plantilla: PlantillaLiquidacion | null
   filas: number
+  /** Personas con SUELDO DEL MES calculado. */
   netos: number
-  /** El período no tiene resultado de Visual vigente: el NETO A PAGAR queda PENDIENTE. */
+  /** El período no tiene resultado de Visual vigente: el SUELDO DEL MES queda PENDIENTE. */
   visualPendiente: boolean
   /** Importes que difieren del snapshot consolidado (null = sin snapshot). */
   difiereDeConsolidada: number | null
+  /** Conciliación de extras (misma que el archivo Galicia — Extras). */
+  extras: ExtraPersona[]
   error: string | null
 }
 
 /**
  * Plantilla del Excel COMPLETO de un período = el Excel de trabajo (con los
- * ajustes guardados del período) + columna "NETO A PAGAR" AL FINAL con el neto
- * de recibo (Visual) de cada empleado que lo tiene, y el total al pie. FUENTE
- * ÚNICA de los dos botones de Pagos: el Excel completo individual y cada solapa
- * del libro general salen de acá, así no pueden diferir.
+ * ajustes guardados del período) + columnas finales:
+ *   SUELDO DEL MES | EXTRAS DEL MES | EXTRAS PENDIENTES DE PAGO | OBSERVACIÓN BANCO
+ * FUENTE ÚNICA de los botones de Pagos: el Excel completo individual y cada
+ * solapa del libro general salen de acá, así no pueden diferir.
  *
- * - Sin resultado de Visual importado: las celdas de neto quedan vacías y el
- *   total dice PENDIENTE (un neto faltante no se presenta como $0 confirmado).
- * - Si el período ya se exportó a Visual, se compara contra el snapshot
- *   congelado (`liquidacion_consolidada`) y una diferencia se avisa en la hoja.
+ * - SUELDO DEL MES: SUELDO MENSUAL fijo si lo tiene, si no el neto de recibo de
+ *   Visual; menos los adelantos (una sola vez). Es lo que corresponde al mes, NO
+ *   un pago registrado. Sin resultado de Visual: vacío y total PENDIENTE.
+ * - EXTRAS DEL MES: columna AP final (por horas, fija vía BG o a mano).
+ * - EXTRAS PENDIENTES DE PAGO: extras del mes − extras registradas como pagadas.
+ * - OBSERVACIÓN BANCO: por qué una persona no entra al archivo de Galicia.
  * Sólo lee: no escribe nada en la base.
  */
 export async function plantillaCompletaConNeto(
@@ -275,67 +365,69 @@ export async function plantillaCompletaConNeto(
   const ajustes = await cargarAjustes(client, periodo.id)
   const { plantilla, filas, error, sueldoMensual } = await plantillaTrabajoDelMes(client, periodo.mes, ajustes, { periodoId: periodo.id })
   if (error || !plantilla) {
-    return { plantilla: null, filas: 0, netos: 0, visualPendiente: false, difiereDeConsolidada: null, error: error || 'sin plantilla' }
+    return { plantilla: null, filas: 0, netos: 0, visualPendiente: false, difiereDeConsolidada: null, extras: [], error: error || 'sin plantilla' }
   }
 
-  const [{ map: netoMap, hayResultado }, difs, pagos] = await Promise.all([
+  const [{ map: netoMap, hayResultado }, difs, dest, reg] = await Promise.all([
     netoReciboPorUsuario(client, periodo.id),
     diferenciasConConsolidada(client, periodo.id, plantilla),
-    pagosBancoPorUsuario(client, periodo.id),
+    destinatariosBanco(client),
+    pagosRegistrados(client, periodo.id, 'extras'),
   ])
+  const extras = conciliarExtras(plantilla, dest.porUsuario, reg)
+  const extraDe = new Map(extras.map(e => [e.usuarioId, e]))
   const sueldoFijo = sueldoMensual ?? new Map<string, number>()
   const base = COL_A_NUM(plantilla.columnas.reduce((m, c) => (COL_A_NUM(c.col) > COL_A_NUM(m) ? c.col : m), 'A'))
-  // Al final: SUELDO A DEPOSITAR | EXTRAS A DEPOSITAR | TOTAL A DEPOSITAR | NETO A PAGAR (última).
-  const cSueldo = NUM_A_COL(base + 1), cExtras = NUM_A_COL(base + 2), cTotal = NUM_A_COL(base + 3), cNeto = NUM_A_COL(base + 4)
+  const cSueldo = NUM_A_COL(base + 1), cExtras = NUM_A_COL(base + 2), cPend = NUM_A_COL(base + 3), cObs = NUM_A_COL(base + 4)
   const enc = plantilla.estilos.encabezado
   const filaTotal = plantilla.estilos.total
   const celdas: CeldaPlantilla[] = [...plantilla.celdas,
-    { ref: `${cSueldo}${enc}`, v: 'SUELDO A DEPOSITAR' }, { ref: `${cExtras}${enc}`, v: 'EXTRAS A DEPOSITAR' },
-    { ref: `${cTotal}${enc}`, v: 'TOTAL A DEPOSITAR' }, { ref: `${cNeto}${enc}`, v: 'NETO A PAGAR' },
+    { ref: `${cSueldo}${enc}`, v: 'SUELDO DEL MES' }, { ref: `${cExtras}${enc}`, v: 'EXTRAS DEL MES' },
+    { ref: `${cPend}${enc}`, v: 'EXTRAS PENDIENTES DE PAGO' }, { ref: `${cObs}${enc}`, v: 'OBSERVACIÓN BANCO' },
   ]
   const bdRow = new Map<number, string>()
   for (const c of plantilla.celdas) { const m = c.ref.match(/^BD(\d+)$/); if (m) bdRow.set(Number(m[1]), String(c.v ?? '')) }
   const r2 = (n: number) => Math.round(n * 100) / 100
-  let total = 0, netos = 0, totSueldo = 0, totExtras = 0
+  let totSueldo = 0, netos = 0, totExtras = 0, totPend = 0
   const adelantoExcede: string[] = []
   for (const r of plantilla.estilos.filasDatos) {
     const uid = bdRow.get(r); if (!uid) continue
-    // NETO A PAGAR: quien tiene SUELDO MENSUAL cobra ese importe fijo (JC 07/10),
+    // SUELDO DEL MES: quien tiene SUELDO MENSUAL cobra ese importe fijo (JC 07/10),
     // aunque Visual devuelva otro neto; el resto, el neto de recibo de Visual.
     const bruto = sueldoFijo.has(uid) ? sueldoFijo.get(uid)! : netoMap.get(uid)
-    // Adelantos: se descuentan UNA sola vez, acá (sueldo a depositar), nunca < 0.
+    // Adelantos: se descuentan UNA sola vez, del sueldo, nunca < 0.
     const adel = Number(ajustes.get(uid)?.['adelantos'] ?? 0) || 0
     if (bruto != null && adel > bruto) adelantoExcede.push(uid)
-    const neto = bruto == null ? null : Math.max(0, bruto - adel)
-    if (neto != null) { celdas.push({ ref: `${cNeto}${r}`, v: r2(neto) }); total += neto; netos++ }
-    // A depositar por banco (misma regla que los archivos de Galicia; no es un pago registrado).
-    const p = pagos.porUsuario.get(uid)
-    if (p?.sueldo != null) { celdas.push({ ref: `${cSueldo}${r}`, v: r2(p.sueldo) }); totSueldo += p.sueldo }
-    if (p?.extras != null) { celdas.push({ ref: `${cExtras}${r}`, v: r2(p.extras) }); totExtras += p.extras }
-    if (p && (p.sueldo != null || p.extras != null)) celdas.push({ ref: `${cTotal}${r}`, v: r2((p.sueldo ?? 0) + (p.extras ?? 0)) })
+    const sueldo = bruto == null ? null : Math.max(0, bruto - adel)
+    if (sueldo != null) { celdas.push({ ref: `${cSueldo}${r}`, v: r2(sueldo) }); totSueldo += sueldo; netos++ }
+    const e = extraDe.get(uid)
+    if (e) {
+      celdas.push({ ref: `${cExtras}${r}`, v: e.extrasMes }); totExtras += e.extrasMes
+      celdas.push({ ref: `${cPend}${r}`, v: e.pendiente }); totPend += e.pendiente
+      if (e.motivo && e.pendiente > 0) celdas.push({ ref: `${cObs}${r}`, v: e.motivo })
+    }
   }
-  // Totales: sin Visual, lo que depende de Visual queda PENDIENTE (no $0).
-  const pend = 'PENDIENTE', nd = 'NO DISPONIBLE'
-  celdas.push({ ref: `${cNeto}${filaTotal}`, v: hayResultado ? r2(total) : pend })
-  celdas.push({ ref: `${cSueldo}${filaTotal}`, v: pagos.error ? nd : (hayResultado ? r2(totSueldo) : pend) })
-  celdas.push({ ref: `${cExtras}${filaTotal}`, v: pagos.error ? nd : r2(totExtras) })
-  celdas.push({ ref: `${cTotal}${filaTotal}`, v: pagos.error ? nd : (hayResultado ? r2(totSueldo + totExtras) : pend) })
+  celdas.push({ ref: `${cSueldo}${filaTotal}`, v: hayResultado ? r2(totSueldo) : 'PENDIENTE' })
+  celdas.push({ ref: `${cExtras}${filaTotal}`, v: r2(totExtras) })
+  celdas.push({ ref: `${cPend}${filaTotal}`, v: dest.error ? 'NO DISPONIBLE' : r2(totPend) })
 
   // Avisos del período en C4 (libre: A1:B4 parámetros, C1 título, C2:D3 auxiliares).
+  const sum = (f: (e: ExtraPersona) => boolean) => r2(extras.filter(f).reduce((s, e) => s + e.pendiente, 0))
   const avisos: string[] = []
-  if (!hayResultado) avisos.push('NETO A PAGAR pendiente: el período todavía no tiene resultado de Visual importado (los sueldos fijos sí figuran).')
+  if (!hayResultado) avisos.push('SUELDO DEL MES pendiente: el período todavía no tiene resultado de Visual importado (los sueldos fijos sí figuran).')
   if (difs) avisos.push(`ATENCIÓN: ${difs} importe(s) difieren de lo consolidado al exportar a Visual.`)
-  if (adelantoExcede.length) avisos.push(`ATENCIÓN: ${adelantoExcede.length} adelanto(s) superan el sueldo: se deposita 0 y queda saldo a descontar.`)
-  if (pagos.error) avisos.push('Importes a depositar no disponibles: ' + pagos.error)
-  if (avisos.length) celdas.push({ ref: 'C4', v: avisos.join(' ') })
+  if (adelantoExcede.length) avisos.push(`ATENCIÓN: ${adelantoExcede.length} adelanto(s) superan el sueldo: queda saldo a descontar.`)
+  if (dest.error) avisos.push('Destino bancario de las extras no disponible: ' + dest.error)
+  else avisos.push(`Extras: $${r2(totExtras)} del mes; $${r2(totPend)} pendientes de pago ($${sum(e => e.destino === 'galicia')} en el archivo Galicia, $${sum(e => e.destino === 'aparte')} a pagar aparte, $${sum(e => e.destino === 'excluido')} sin depósito; ver OBSERVACIÓN BANCO).`)
+  celdas.push({ ref: 'C4', v: avisos.join(' ') })
 
   const columnas = [...plantilla.columnas,
-    { col: cSueldo, width: 18, numFmt: 'money' as const }, { col: cExtras, width: 18, numFmt: 'money' as const },
-    { col: cTotal, width: 18, numFmt: 'money' as const }, { col: cNeto, width: 16, numFmt: 'money' as const },
+    { col: cSueldo, width: 16, numFmt: 'money' as const }, { col: cExtras, width: 16, numFmt: 'money' as const },
+    { col: cPend, width: 18, numFmt: 'money' as const }, { col: cObs, width: 40, numFmt: 'text' as const },
   ]
   return {
     plantilla: { ...plantilla, celdas, columnas },
-    filas, netos, visualPendiente: !hayResultado, difiereDeConsolidada: difs, error: null,
+    filas, netos, visualPendiente: !hayResultado, difiereDeConsolidada: difs, extras, error: null,
   }
 }
 

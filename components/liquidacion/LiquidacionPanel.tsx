@@ -108,6 +108,8 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   const [validacion, setValidacion] = useState<any>(null)
   const [genBanco, setGenBanco] = useState<'' | 'sueldos' | 'extras' | 'completo' | 'general'>('')
   const [msgBanco, setMsgBanco] = useState<{ ok: boolean; t: string } | null>(null)
+  // Último archivo de extras descargado (para registrarlo como pagado tras acreditarlo).
+  const [ultimoExtras, setUltimoExtras] = useState<{ periodoId: string; nombre: string; buf: ArrayBuffer; rows: { cuenta: string; nombre: string; importe: number; usuarioId?: string }[]; total: number } | null>(null)
   // Banner READ-ONLY: cambios operativos posteriores al archivo enviado a Visual.
   const [cambiosPost, setCambiosPost] = useState<any>(null)
   // Permanentes
@@ -232,24 +234,48 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
 
   const money = (n: number) => n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-  // PAGOS (banco Galicia): sueldos = neto de Visual + sueldo mensual de excluidos;
-  // extras = extra fija del mes. Formato Cuenta | Nombre | Importe (hoja Empleados).
+  // PAGOS (banco Galicia): sueldos = sueldo mensual fijo o neto de Visual, menos
+  // adelantos; extras = EXTRAS PENDIENTES (columna AP de la planilla − lo ya
+  // registrado como pagado). Formato Cuenta | Nombre | Importe (hoja Empleados).
   async function descargarBanco(tipo: 'sueldos' | 'extras') {
     if (!sel) return
-    setGenBanco(tipo); setMsgBanco(null)
+    setGenBanco(tipo); setMsgBanco(null); setUltimoExtras(null)
     try {
       const { filasSueldosBanco, filasExtrasBanco, escribirBancoXLSX, CONCEPTO_BANCO } = await import('@/lib/pagos-banco')
       const r = tipo === 'sueldos' ? await filasSueldosBanco(supabase, sel.id) : await filasExtrasBanco(supabase, sel.id)
       if (r.error) { setMsgBanco({ ok: false, t: `No se pudo generar el archivo de ${tipo}: ${r.error}` }); return }
-      if (r.rows.length === 0) { setMsgBanco({ ok: false, t: `No hay filas para ${tipo} (¿faltan cuentas o el resultado de Visual?).` }); return }
-      const buf = await escribirBancoXLSX(r.rows, tipo === 'sueldos' ? CONCEPTO_BANCO.sueldos : CONCEPTO_BANCO.extras)
-      descargarArchivo(buf, `GALICIA ${tipo} ${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      const avisoExc = r.excluidos.length
-        ? ` · ⚠️ ${r.excluidos.length} con CBU/cuenta de otro banco NO entran al archivo (pagar aparte): ${r.excluidos.map(e => e.nombre).join('; ')}`
+      // Exclusiones explicadas persona por persona (motivo e importe).
+      const detalleExc = r.excluidos.length
+        ? ` · ⚠️ ${r.excluidos.length} NO entran al archivo (total $${money(r.excluidos.reduce((a, b) => a + b.importe, 0))}): `
+          + r.excluidos.map(e => `${e.nombre} $${money(e.importe)} — ${e.motivo ?? 'cuenta de otro banco: pagar aparte'}`).join('; ')
         : ''
-      setMsgBanco({ ok: true, t: `Archivo de ${tipo}: ${r.rows.length} persona(s), total $${money(r.total)}.${avisoExc}` })
+      const resumenExtras = tipo === 'extras' && 'extrasMes' in r
+        ? `Extras del mes $${money((r as any).extrasMes)}; ya registradas como pagadas $${money((r as any).registrado)}. `
+        : ''
+      if (r.rows.length === 0) { setMsgBanco({ ok: false, t: `${resumenExtras}No hay filas para el archivo de ${tipo}.${detalleExc}` }); return }
+      const buf = await escribirBancoXLSX(r.rows, tipo === 'sueldos' ? CONCEPTO_BANCO.sueldos : CONCEPTO_BANCO.extras)
+      const nombre = `GALICIA ${tipo} ${sel.mes}.xlsx`
+      descargarArchivo(buf, nombre, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      if (tipo === 'extras') setUltimoExtras({ periodoId: sel.id, nombre, buf, rows: r.rows, total: r.total })
+      setMsgBanco({ ok: true, t: `${resumenExtras}Archivo de ${tipo}: ${r.rows.length} persona(s), total $${money(r.total)}.${detalleExc}` })
     } catch (e: any) {
       setMsgBanco({ ok: false, t: `No se pudo generar el archivo de ${tipo}: ${e?.message || e}` })
+    } finally { setGenBanco('') }
+  }
+
+  // Registrar como PAGADAS las extras del último archivo descargado: sólo después
+  // de acreditarlo en el banco. Deja de figurar como pendiente (no se paga dos veces).
+  async function registrarExtrasPagadas() {
+    if (!ultimoExtras) return
+    const ok = window.confirm(`¿Confirmás que el banco ya acreditó el archivo "${ultimoExtras.nombre}" (${ultimoExtras.rows.length} persona(s), $${money(ultimoExtras.total)})? Se registra como PAGADO y deja de figurar como pendiente.`)
+    if (!ok) return
+    setGenBanco('extras')
+    try {
+      const { registrarPagoBanco } = await import('@/lib/pagos-banco')
+      const r = await registrarPagoBanco(supabase, ultimoExtras.periodoId, 'extras', ultimoExtras.nombre, ultimoExtras.buf, ultimoExtras.rows)
+      if (!r.ok) { setMsgBanco({ ok: false, t: 'No se pudo registrar el pago: ' + r.error }); return }
+      setMsgBanco({ ok: true, t: r.yaRegistrado ? 'Ese archivo ya estaba registrado como pagado (no se duplicó).' : `Pago de extras registrado: ${r.filas} persona(s), $${money(r.total ?? 0)}. Quedan pendientes sólo las extras sin pagar (otro banco, sin cuenta o cambios posteriores).` })
+      setUltimoExtras(null)
     } finally { setGenBanco('') }
   }
 
@@ -264,8 +290,8 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       if (r.error || !r.buf) { setMsgBanco({ ok: false, t: 'No se pudo generar el Excel completo: ' + (r.error || 'sin datos') }); return }
       descargarArchivo(r.buf, `liquidacion_completa_${sel.mes}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       const avisoNeto = r.visualPendiente
-        ? 'la columna NETO A PAGAR queda PENDIENTE (todavía no hay resultado de Visual)'
-        : `la columna NETO A PAGAR al final (${r.netos} persona(s): neto de Visual o sueldo mensual fijo) y las columnas de lo que se deposita por banco`
+        ? 'SUELDO DEL MES queda PENDIENTE (todavía no hay resultado de Visual)'
+        : `SUELDO DEL MES (${r.netos} persona(s): neto de Visual o sueldo mensual fijo, menos adelantos), EXTRAS DEL MES, EXTRAS PENDIENTES DE PAGO y OBSERVACIÓN BANCO`
       const avisoDif = r.difiereDeConsolidada ? ` ⚠️ ${r.difiereDeConsolidada} importe(s) difieren de lo consolidado al exportar a Visual.` : ''
       setMsgBanco({ ok: !r.difiereDeConsolidada, t: `Excel completo del mes generado (${r.filas} empleados) con tus cambios, los totales y ${avisoNeto}.${avisoDif}` })
     } catch (e: any) {
@@ -283,7 +309,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       if (r.error || !r.buf) { setMsgBanco({ ok: false, t: 'No se pudo generar el libro general: ' + (r.error || 'sin datos') }); return }
       descargarArchivo(r.buf, `liquidaciones_todos_los_meses.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       const avisos = [
-        r.visualPendiente.length ? `NETO A PAGAR pendiente de Visual en: ${r.visualPendiente.join(', ')}.` : '',
+        r.visualPendiente.length ? `SUELDO DEL MES pendiente de Visual en: ${r.visualPendiente.join(', ')}.` : '',
         r.difierenDeConsolidada.length ? `⚠️ Difieren de lo consolidado: ${r.difierenDeConsolidada.join(', ')}.` : '',
         r.omitidos.length ? `⚠️ No se pudieron armar: ${r.omitidos.map(o => `${o.mes} (${o.error})`).join('; ')}.` : '',
       ].filter(Boolean).join(' ')
@@ -640,7 +666,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
               <PasoHeader n={6} titulo="Pagos — archivos para el banco" sub="Sueldos (neto) y extras a acreditar (formato Galicia: Cuenta | Nombre | Importe | Concepto — 1 sueldos, 11 extras)" activo={sel.estado === 'exportada' || sel.estado === 'liquidada'} />
               <div style={{ ...S.card, marginTop: 8 }}>
                 <div style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
-                  <b>Sueldos</b> = quien tiene SUELDO MENSUAL cobra ese importe fijo (aunque Visual devuelva otro neto); el resto, el neto que devolvió Visual (todos con cuenta). <b>Extras</b> = la extra fija del mes por persona con cuenta. El <b>Excel completo</b> trae tus cambios y los totales. El <b>libro general</b> junta todos los meses, una solapa por mes con el mismo Excel completo de cada mes (el último adelante), con SUELDO A DEPOSITAR, EXTRAS A DEPOSITAR y TOTAL A DEPOSITAR por persona.
+                  <b>Sueldos</b> = quien tiene SUELDO MENSUAL cobra ese importe fijo (aunque Visual devuelva otro neto); el resto, el neto que devolvió Visual (todos con cuenta). <b>Extras</b> = las EXTRAS PENDIENTES de cada persona: columna AP de la planilla (por horas, fija o escrita a mano) menos lo ya registrado como pagado; el mensaje explica quién no entra al archivo y por qué. Después de que el banco acredite el archivo de extras, usá <b>Registrar extras como pagadas</b>. El <b>Excel completo</b> y el <b>libro general</b> (una solapa por mes, el último adelante) muestran SUELDO DEL MES, EXTRAS DEL MES, EXTRAS PENDIENTES DE PAGO y OBSERVACIÓN BANCO.
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button style={{ ...S.btn, opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarBanco('sueldos')}>
@@ -649,6 +675,11 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   <button style={{ ...S.btn, opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarBanco('extras')}>
                     {genBanco === 'extras' ? 'Generando…' : '📄 Descargar Galicia — Extras'}
                   </button>
+                  {ultimoExtras && ultimoExtras.periodoId === sel.id && (
+                    <button style={{ ...S.btn, background: '#15803d', opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void registrarExtrasPagadas()}>
+                      ✅ Registrar extras como pagadas
+                    </button>
+                  )}
                   <button style={{ ...S.btn, background: '#334155', opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarExcelCompleto()}>
                     {genBanco === 'completo' ? 'Generando…' : '📊 Descargar Excel completo (con totales)'}
                   </button>

@@ -121,17 +121,20 @@ describe('Liquidación de punta a punta (Excel de trabajo → libro general → 
     expect(columna(ago, '203').get('v2')).toBe(300000)   // AC (viáticos 203): valor, no fórmula
 
     // Adelanto: figura en AR, NO se resta de AP, y se descuenta UNA vez del depósito.
-    const ar = columna(ago, 'adelantos'), neto = columna(ago, 'NETO A PAGAR'), pago = columna(ago, 'SUELDO A DEPOSITAR')
+    const ar = columna(ago, 'adelantos'), sueldo = columna(ago, 'SUELDO DEL MES')
     expect(ar.get('v1')).toBe(50000)
-    expect(neto.get('v1')).toBe(900000.5)
-    expect(pago.get('v1')).toBe(900000.5)
+    expect(sueldo.get('v1')).toBe(900000.5)
     const bs = await filasSueldosBanco(fakeClient(t), 'p08')
     expect(bs.rows.find(x => x.nombre.startsWith('ALMADA'))?.importe).toBe(900000.5)
     // Sueldo mensual FIJO aunque Visual devuelva otro neto; extras aparte.
-    expect(neto.get('a1')).toBe(2550000)
-    expect(pago.get('a1')).toBe(2550000)
-    expect(columna(ago, 'EXTRAS A DEPOSITAR').get('a1')).toBe(50000)
-    expect(columna(ago, 'TOTAL A DEPOSITAR').get('a1')).toBe(2600000)
+    expect(sueldo.get('a1')).toBe(2550000)
+    const extras = columna(ago, 'EXTRAS DEL MES'), pend = columna(ago, 'EXTRAS PENDIENTES DE PAGO')
+    expect(extras.get('a1')).toBe(50000)                  // extra fija una sola vez (AP = BG)
+    expect(extras.get('v1')).toBeGreaterThan(0)           // extras por horas del vigilador
+    expect(pend.get('v1')).toBe(extras.get('v1'))         // sin pago registrado: todo pendiente
+    const { filasExtrasBanco } = await import('@/lib/pagos-banco')
+    const be = await filasExtrasBanco(fakeClient(t), 'p08')
+    expect(be.rows.find(x => x.nombre.startsWith('ALMADA'))?.importe).toBe(extras.get('v1'))
   }, 180000)
 
   it('AP (extras por horas) no descuenta el adelanto: sólo una vez, en el sueldo a depositar', async () => {
