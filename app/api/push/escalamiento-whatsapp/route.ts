@@ -170,10 +170,18 @@ export async function GET(req: Request) {
       // queda en ronda_alertas. Acá SOLO se leen las pendientes de tipo
       // no_iniciada: pausas, capacitación, objetivos de prueba y demás
       // exclusiones ya actuaron al momento de crear (o no crear) la alerta.
+      //
+      // ACOTADO a 48 horas: una ronda no iniciada de hace una semana ya no se
+      // interviene, y el backlog sin tope fue lo que rompió la deduplicación el
+      // 07/10/2026 (337 pendientes → la lectura del IN superó el límite de URL
+      // → 400 silencioso → reenvío del backlog entero cada 10 minutos: 4.600
+      // WhatsApp en un día). El tope es estructural: aunque nadie resuelva las
+      // alertas, lo que se evalúa acá no crece.
       client.from('ronda_alertas')
         .select('id, tipo, estado, objetivo_id, puesto_id, turno_id, guardia_id, ventana_inicio, ventana_fin, detectada_at, ronda:rondas_base(nombre)')
         .eq('estado', 'pendiente')
-        .eq('tipo', 'no_iniciada'),
+        .eq('tipo', 'no_iniciada')
+        .gte('detectada_at', new Date(ahora.getTime() - 48 * 3600 * 1000).toISOString()),
     ])
 
   // El punto de corte del canal: sin la clave configurada, WhatsApp no está
@@ -223,13 +231,23 @@ export async function GET(req: Request) {
   // Acotado a los turnos evaluados: notificaciones_enviadas crece sin límite y
   // sin este filtro la lectura se corta en 1000 filas (las más viejas), no ve
   // los avisos de hoy y el mismo evento se reenvía en cada corrida (duplicados).
+  // FAIL-CLOSED: si esta lectura falla, NO se envía nada. Asumir "no avisé
+  // ninguno" ante un error fue exactamente el loop del 07/10/2026 (la lectura
+  // de rondas devolvía 400, el código la ignoraba y reenvió el backlog entero
+  // cada 10 minutos). No poder leer qué se avisó == no poder enviar.
   const yaAvisados = new Set<string>()
   const enviadosRes = turnoIds.length
     ? await client.from('notificaciones_enviadas')
         .select('usuario_id, turno_id, tipo')
         .in('tipo', [NIVEL.supervisor, NIVEL.operativo])
         .in('turno_id', turnoIds)
-    : { data: [] as any[] }
+    : { data: [] as any[], error: null }
+  if (enviadosRes.error) {
+    return NextResponse.json(
+      { error: `No se pudo leer la deduplicación de turnos: ${enviadosRes.error.message}. No se envió nada (fail-closed).` },
+      { status: 500 },
+    )
+  }
   for (const n of (enviadosRes.data ?? []) as any[]) {
     yaAvisados.add(`${n.usuario_id}|${n.turno_id}|${n.tipo}`)
   }
@@ -410,6 +428,20 @@ export async function GET(req: Request) {
         continue
       }
 
+      // Dedup ATÓMICA (claim-first), como ronda-vigilador: la marca se reclama
+      // ANTES de enviar y un insert fallido (23505 = ya reclamada por otra
+      // corrida, o cualquier otro error de escritura) significa NO enviar.
+      // El orden viejo (enviar y marcar después) dejaba el loop abierto: si la
+      // marca no se podía escribir/leer, el mismo WhatsApp salía en cada
+      // corrida. Trade-off asumido: un rechazo del proveedor después del claim
+      // ya no se reintenta — preferimos perder un aviso a repetir mil.
+      const claim = await client.from('notificaciones_enviadas')
+        .insert({ usuario_id: usuarioId, turno_id: t.id, tipo: nivel })
+      if (claim.error) {
+        descartes.ya_reclamada = (descartes.ya_reclamada ?? 0) + 1
+        continue
+      }
+
       const r = await proveedor.enviar(destino)
       acciones.push({
         turno: t.id, nivel, destinatario: nombreDe(usuarioId),
@@ -422,14 +454,6 @@ export async function GET(req: Request) {
         resultado: r.ok ? 'enviado' : 'fallido', id_proveedor: r.idProveedor,
         proveedor: proveedor.nombre, error: r.error,
       })
-
-      // Sólo se marca como avisado si el proveedor lo aceptó: un rechazo se
-      // reintenta en la próxima corrida, igual que hace el push.
-      if (r.ok) {
-        await client.from('notificaciones_enviadas')
-          .insert({ usuario_id: usuarioId, turno_id: t.id, tipo: nivel })
-          .then(() => {}, () => {})
-      }
     }
   }
 
@@ -445,12 +469,30 @@ export async function GET(req: Request) {
   // semántica que el push de rondas (verificado en producción el 18/08/2026:
   // reavisar en cada cambio de guardia acumulaba 10 push de la madrugada).
   // Si algún destinatario ya la recibió, la alerta no se vuelve a escalar.
+  // En LOTES de 100 claves: con el backlog de octubre (337 pendientes) el IN
+  // en un solo GET superó el límite de URL y PostgREST devolvió 400. Y
+  // FAIL-CLOSED: si un lote falla, no se escala NINGUNA ronda en esta corrida
+  // — ignorar ese error fue el loop de 4.600 WhatsApp del 07/10/2026.
   const avisadasRonda = new Set<string>()
-  if (rondasNoIniciadas.length > 0) {
-    const enviadasRondaRes = await client.from('notificaciones_enviadas')
-      .select('tipo')
-      .in('tipo', rondasNoIniciadas.map(claveDedupRonda))
-    for (const fila of (enviadasRondaRes.data ?? []) as any[]) avisadasRonda.add(fila.tipo)
+  {
+    const claves = rondasNoIniciadas.map(claveDedupRonda)
+    for (let i = 0; i < claves.length; i += 100) {
+      const enviadasRondaRes = await client.from('notificaciones_enviadas')
+        .select('tipo')
+        .in('tipo', claves.slice(i, i + 100))
+      if (enviadasRondaRes.error) {
+        // Los +15/+30 de arriba ya salieron: su auditoría no se pierde.
+        if (enviarDeVerdad && filasAuditoria.length > 0) {
+          await client.from('escalamiento_whatsapp_envios').insert(filasAuditoria)
+            .then(() => {}, (e: any) => console.error('[escalamiento] auditoría', e?.message))
+        }
+        return NextResponse.json(
+          { error: `No se pudo leer la deduplicación de rondas: ${enviadasRondaRes.error.message}. No se envió nada de rondas (fail-closed).`, parcial: { acciones } },
+          { status: 500 },
+        )
+      }
+      for (const fila of (enviadasRondaRes.data ?? []) as any[]) avisadasRonda.add(fila.tipo)
+    }
   }
 
   const ahoraLocal = instanteLocal(ahora)
@@ -568,6 +610,19 @@ export async function GET(req: Request) {
         continue
       }
 
+      // Dedup ATÓMICA (claim-first), igual que arriba y que ronda-vigilador:
+      // reclamar la marca ANTES de enviar; cualquier error del insert (23505
+      // incluido) significa NO enviar. Es la vacuna contra el loop del 07/10.
+      const claim = await client.from('notificaciones_enviadas')
+        .insert({
+          usuario_id: usuarioId, objetivo_id: alerta.objetivo_id,
+          turno_id: null, tipo: claveDedupRonda(alerta),
+        })
+      if (claim.error) {
+        descartesRonda.ya_reclamada = (descartesRonda.ya_reclamada ?? 0) + 1
+        continue
+      }
+
       const envio = await proveedor.enviar(destino)
       acciones.push({
         alerta: alerta.id, nivel: NIVEL_RONDA, destinatario: nombreDe(usuarioId),
@@ -581,17 +636,6 @@ export async function GET(req: Request) {
         resultado: envio.ok ? 'enviado' : 'fallido', id_proveedor: envio.idProveedor,
         proveedor: proveedor.nombre, error: envio.error,
       })
-
-      // Igual que en puestos: un rechazo del proveedor no se marca como
-      // avisado y la próxima corrida reintenta.
-      if (envio.ok) {
-        await client.from('notificaciones_enviadas')
-          .insert({
-            usuario_id: usuarioId, objetivo_id: alerta.objetivo_id,
-            turno_id: null, tipo: claveDedupRonda(alerta),
-          })
-          .then(() => {}, () => {})
-      }
     }
   }
 
