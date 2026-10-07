@@ -3200,8 +3200,18 @@ export default function SupervisorMobile({ user }: any) {
             se atendieron 8, y el backlog sin intervenir llegó a 337 y rompió
             el canal de WhatsApp. El cartel acompaña en TODAS las pestañas
             (salvo Rondas, donde ya está el panel) hasta que las atienda:
-            avisar ya avisamos; esto pide la ACCIÓN. */}
-        {!loading && rondaAlertas.length > 0 && tab !== 'rondas' && (
+            avisar ya avisamos; esto pide la ACCIÓN.
+
+            CORTE (JC 07/10): cuenta sólo alertas detectadas DESPUÉS del
+            estreno del cartel. El stock previo (33 pendientes compartidas por
+            los cuatro supervisores de Rosario) saldría como una deuda enorme
+            el primer día y el cartel nacería ignorado — "sino le van a salir
+            cientos". Las viejas siguen visibles en la pestaña Rondas. */}
+        {(() => {
+          const CORTE_CARTEL_INTERVENCION = Date.parse('2026-10-08T00:00:00Z')
+          const alertasNuevas = rondaAlertas.filter(a => Date.parse(a.detectada_at) >= CORTE_CARTEL_INTERVENCION)
+          if (loading || alertasNuevas.length === 0 || tab === 'rondas') return null
+          return (
           <button
             type="button"
             onClick={() => { setTab('rondas'); window.setTimeout(() => irAPanelRondas('incumplidas'), 150) }}
@@ -3216,16 +3226,17 @@ export default function SupervisorMobile({ user }: any) {
             <span style={{ fontSize:22, flex:'none' }}>⚠️</span>
             <span style={{ minWidth:0 }}>
               <span style={{ display:'block', fontWeight:800, color:'#f8fafc', fontSize:14 }}>
-                {rondaAlertas.length === 1
+                {alertasNuevas.length === 1
                   ? 'Hay 1 alerta de ronda esperando tu intervención'
-                  : `Hay ${rondaAlertas.length} alertas de ronda esperando tu intervención`}
+                  : `Hay ${alertasNuevas.length} alertas de ronda esperando tu intervención`}
               </span>
               <span style={{ display:'block', fontSize:12.5, marginTop:2 }}>
                 Tocá acá para verlas y registrar qué hiciste (llamada, justificación o resolución).
               </span>
             </span>
           </button>
-        )}
+          )
+        })()}
 
         {loading ? (
           <div style={empty}>Cargando operación...</div>
