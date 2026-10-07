@@ -7,6 +7,10 @@
 -- mensual): se le paga ese importe, NO el neto de Visual. El resto sigue
 -- cobrando el neto de recibo de Visual.
 --
+-- ADELANTOS (JC 07/10): se descuentan UNA sola vez, del sueldo a depositar
+-- (ajuste 'adelantos' del período, cargado desde el Excel de trabajo). Si el
+-- adelanto supera el sueldo, se deposita 0 (nunca un importe negativo).
+--
 -- Además, el libro general muestra los pagos por persona (PAGO SUELDO / PAGO
 -- EXTRAS). Para que esas columnas y los archivos del banco NO puedan diferir,
 -- la regla vive en UNA función, pagos_banco_por_usuario(), y los dos archivos
@@ -31,9 +35,10 @@ end $$;
 --   sueldo = SUELDO MENSUAL vigente si lo tiene (fijo, sin importar Visual);
 --            si no, neto de recibo del resultado de Visual vigente;
 --            null si todavía no hay resultado de Visual (pendiente).
+--   sueldo se informa YA NETO de adelantos (adelantos = lo descontado).
 --   extras = extra fija vigente del mes (> 0).
 create or replace function public.pagos_banco_por_usuario(p_periodo_id uuid)
- returns table(usuario_id uuid, cuenta text, nombre text, sueldo numeric, extras numeric, sueldo_fijo boolean, orden int)
+ returns table(usuario_id uuid, cuenta text, nombre text, sueldo numeric, extras numeric, adelantos numeric, sueldo_fijo boolean, orden int)
  language plpgsql stable security definer set search_path to 'public', 'pg_catalog'
 as $function$
 declare v_mes text;
@@ -52,6 +57,12 @@ begin
     where rv.periodo_id = p_periodo_id and rv.vigente and f.cuil is not null and p.usuario_id is not null
     group by p.usuario_id
   ),
+  adel as (
+    select a.empleado_id uid, round(sum(a.valor_liquidacion), 2) adel
+    from public.liquidacion_ajuste a
+    where a.periodo_id = p_periodo_id and a.clave = 'adelantos' and a.valor_liquidacion is not null
+    group by a.empleado_id
+  ),
   base as (
     select u.id, u.cuenta_bancaria cta, u.apellido, coalesce(u.nombre, '') nom,
            round(public.sueldo_mensual_vigente(u.id, v_mes), 2) sm,
@@ -62,11 +73,13 @@ begin
       and nullif(btrim(u.cuenta_bancaria), '') is not null
   )
   select b.id, b.cta, b.apellido || ', ' || b.nom,
-         case when b.sm is not null then b.sm else v.neto end,
+         case when coalesce(b.sm, v.neto) is null then null
+              else greatest(coalesce(b.sm, v.neto) - coalesce(a.adel, 0), 0) end,
          case when b.ex is not null and b.ex > 0 then b.ex else null end,
+         nullif(coalesce(a.adel, 0), 0),
          b.sm is not null,
          b.ord
-  from base b left join visual v on v.uid = b.id
+  from base b left join visual v on v.uid = b.id left join adel a on a.uid = b.id
   where b.sm is not null or v.neto is not null or (b.ex is not null and b.ex > 0)
   order by b.ord, b.apellido, b.nom;
 end;

@@ -62,7 +62,9 @@ function rpcFalsa(t: Record<string, any[]>, fn: string, args: any) {
     .filter(u => u.estado === 'activo' && !u.excluir_pago_banco && String(u.cuenta_bancaria ?? '').trim())
     .map(u => {
       const sm = vig('liquidacion_sueldo_mensual', u.id), ex = vig('liquidacion_extra_mensual', u.id)
-      return { usuario_id: u.id, cuenta: u.cuenta_bancaria, nombre: `${u.apellido}, ${u.nombre}`, sueldo: sm ?? netoPorUid.get(u.id) ?? null, extras: ex && ex > 0 ? ex : null, sueldo_fijo: sm != null }
+      const adel = (t.liquidacion_ajuste ?? []).filter(a => a.periodo_id === per.id && a.empleado_id === u.id && a.clave === 'adelantos').reduce((s, a) => s + Number(a.valor_liquidacion ?? 0), 0)
+      const bruto = sm ?? netoPorUid.get(u.id) ?? null
+      return { usuario_id: u.id, cuenta: u.cuenta_bancaria, nombre: `${u.apellido}, ${u.nombre}`, sueldo: bruto == null ? null : Math.max(0, bruto - adel), extras: ex && ex > 0 ? ex : null, adelantos: adel || null, sueldo_fijo: sm != null }
     })
     .filter(d => d.sueldo != null || d.extras != null)
   if (fn === 'pagos_banco_por_usuario') return { data: detalle, error: null }
@@ -255,6 +257,27 @@ describe('Libro general = Excel completo de cada mes', () => {
     expect(total.total).toBe(Math.round(((sueldo.total as number) + (extras.total as number)) * 100) / 100)
     // Orden: los pagos van antes y NETO A PAGAR sigue siendo la última columna.
     expect(celdaPorTexto(ws, 6, 'NETO A PAGAR')).toBe(celdaPorTexto(ws, 6, 'TOTAL PAGADO') + 1)
+  }, 120000)
+
+  it('ADELANTOS: se descuentan una sola vez del sueldo a depositar (NETO A PAGAR y PAGO SUELDO), nunca negativo', async () => {
+    const t = tablasBase()
+    t.liquidacion_ajuste.push(
+      { periodo_id: 'p08', empleado_id: 'v1', clave: 'adelantos', valor_liquidacion: 50000, tipo: 'variable' },
+      { periodo_id: 'p08', empleado_id: 'a1', clave: 'adelantos', valor_liquidacion: 2000000, tipo: 'variable' },
+    )
+    const client = fakeClient(t)
+    const ws = (await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-08')!
+    const neto = columna(ws, 'NETO A PAGAR'), sueldo = columna(ws, 'PAGO SUELDO')
+    expect(neto.porUid.get('v1')).toBe(900000.5)          // 950.000,50 − 50.000
+    expect(sueldo.porUid.get('v1')).toBe(900000.5)        // el banco deposita lo mismo
+    expect(neto.porUid.get('a1')).toBe(0)                 // adelanto > sueldo fijo → 0, no negativo
+    expect(String(ws.getCell('C4').value)).toMatch(/superan el sueldo/)
+    // Julio no tiene adelantos: no se descuenta nada (no se arrastra de agosto).
+    const jul = columna((await cargar((await generarLibroGeneralTrabajo(client)).buf!)).getWorksheet('2026-07')!, 'NETO A PAGAR')
+    expect(jul.porUid.get('v1')).toBe(812345.67)
+    const { filasSueldosBanco } = await import('@/lib/pagos-banco')
+    const bs = await filasSueldosBanco(client, 'p08')
+    expect(bs.rows.find(r => r.nombre.startsWith('ALMADA'))?.importe).toBe(900000.5)
   }, 120000)
 
   it('sin la función de pagos (migración sin aplicar) las columnas avisan NO DISPONIBLE', async () => {

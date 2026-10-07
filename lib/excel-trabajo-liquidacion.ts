@@ -289,11 +289,16 @@ export async function plantillaCompletaConNeto(
   for (const c of plantilla.celdas) { const m = c.ref.match(/^BD(\d+)$/); if (m) bdRow.set(Number(m[1]), String(c.v ?? '')) }
   const r2 = (n: number) => Math.round(n * 100) / 100
   let total = 0, netos = 0, totSueldo = 0, totExtras = 0
+  const adelantoExcede: string[] = []
   for (const r of plantilla.estilos.filasDatos) {
     const uid = bdRow.get(r); if (!uid) continue
     // NETO A PAGAR: quien tiene SUELDO MENSUAL cobra ese importe fijo (JC 07/10),
     // aunque Visual devuelva otro neto; el resto, el neto de recibo de Visual.
-    const neto = sueldoFijo.has(uid) ? sueldoFijo.get(uid)! : netoMap.get(uid)
+    const bruto = sueldoFijo.has(uid) ? sueldoFijo.get(uid)! : netoMap.get(uid)
+    // Adelantos: se descuentan UNA sola vez, acá (sueldo a depositar), nunca < 0.
+    const adel = Number(ajustes.get(uid)?.['adelantos'] ?? 0) || 0
+    if (bruto != null && adel > bruto) adelantoExcede.push(uid)
+    const neto = bruto == null ? null : Math.max(0, bruto - adel)
     if (neto != null) { celdas.push({ ref: `${cNeto}${r}`, v: r2(neto) }); total += neto; netos++ }
     // Pagos por banco (misma regla que los archivos de Galicia).
     const p = pagos.porUsuario.get(uid)
@@ -312,6 +317,7 @@ export async function plantillaCompletaConNeto(
   const avisos: string[] = []
   if (!hayResultado) avisos.push('NETO A PAGAR pendiente: el período todavía no tiene resultado de Visual importado (los sueldos fijos sí figuran).')
   if (difs) avisos.push(`ATENCIÓN: ${difs} importe(s) difieren de lo consolidado al exportar a Visual.`)
+  if (adelantoExcede.length) avisos.push(`ATENCIÓN: ${adelantoExcede.length} adelanto(s) superan el sueldo: se deposita 0 y queda saldo a descontar.`)
   if (pagos.error) avisos.push('Pagos por banco no disponibles: ' + pagos.error)
   if (avisos.length) celdas.push({ ref: 'C4', v: avisos.join(' ') })
 
