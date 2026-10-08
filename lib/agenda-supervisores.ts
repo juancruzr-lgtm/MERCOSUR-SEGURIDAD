@@ -20,6 +20,10 @@ export type GuardiaProgramada = {
   hora_inicio: string
   hora_fin: string
   estado?: string | null
+  /** Nombre de zona tal como lo guarda supervisores_guardia. */
+  zona?: string | null
+  /** Un franco o una ausencia NO es cobertura efectiva (orden JC 08/10). */
+  tipo_evento?: string | null
 }
 
 /** Franja en minutos del día: [desde, hasta). 1440 = medianoche siguiente. */
@@ -44,6 +48,8 @@ export function franjasDescubiertas(
 
   for (const g of filas) {
     if ((g.estado ?? 'activo') !== 'activo') continue
+    // Un franco/ausencia cargado como excepción del día no cubre nada.
+    if ((g.tipo_evento ?? 'normal') !== 'normal') continue
     const ini = minutosDe(g.hora_inicio)
     const fin = minutosDe(g.hora_fin)
 
@@ -78,4 +84,37 @@ export function horaTexto(min: number): string {
 /** "00:00–07:00, 19:00–24:00" — para el cuerpo del aviso. */
 export function textoFranjas(franjas: Franja[]): string {
   return franjas.map(f => `${horaTexto(f.desde)}–${horaTexto(f.hasta)}`).join(', ')
+}
+
+const normalizarZona = (z?: string | null) => (z ?? '').trim().toLowerCase()
+
+/**
+ * Huecos POR ZONA (orden JC 08/10): la cobertura se evalúa por zona y franja.
+ * Una guardia de otra zona no cubre, y un franco tampoco. `zonasRequeridas`
+ * son los nombres de zona que exigen cobertura (las que tienen reglas activas:
+ * si una zona no se programa nunca, no se la reclama).
+ */
+export function franjasDescubiertasPorZona(
+  filas: GuardiaProgramada[],
+  zonasRequeridas: string[],
+  fecha: string,
+  fechaAnterior: string,
+  minimoMin = 15,
+): Array<{ zona: string; franjas: Franja[] }> {
+  const out: Array<{ zona: string; franjas: Franja[] }> = []
+  const vistas = new Set<string>()
+  for (const zona of zonasRequeridas) {
+    const clave = normalizarZona(zona)
+    if (!clave || vistas.has(clave)) continue
+    vistas.add(clave)
+    const deLaZona = filas.filter(g => normalizarZona(g.zona) === clave)
+    const franjas = franjasDescubiertas(deLaZona, fecha, fechaAnterior, minimoMin)
+    if (franjas.length > 0) out.push({ zona: zona.trim(), franjas })
+  }
+  return out
+}
+
+/** "Rosario: 07:00–19:00 · Reconquista: 00:00–24:00" */
+export function textoPorZona(huecos: Array<{ zona: string; franjas: Franja[] }>): string {
+  return huecos.map(h => `${h.zona}: ${textoFranjas(h.franjas)}`).join(' · ')
 }

@@ -28,7 +28,7 @@ import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import { requireAdminIA } from '../../ia/_lib/auth'
 import { sendWebPush } from '../../_lib/web-push'
 import type { PushPayload, PushSubscriptionRow } from '../../_lib/web-push'
-import { franjasDescubiertas, textoFranjas } from '@/lib/agenda-supervisores'
+import { franjasDescubiertasPorZona, textoPorZona } from '@/lib/agenda-supervisores'
 import { sumarDiasFecha } from '@/lib/turnos'
 
 export const runtime = 'nodejs'
@@ -72,16 +72,33 @@ export async function GET(req: NextRequest) {
   const fecha = (simular && fechaPedida) ? fechaPedida : sumarDiasFecha(hoy, 1)
   const fechaAnterior = sumarDiasFecha(fecha, -1)
 
-  const guardiasRes = await client.from('supervisores_guardia')
-    .select('fecha, hora_inicio, hora_fin, estado')
-    .in('fecha', [fechaAnterior, fecha])
+  // POR ZONA (orden JC 08/10): la cobertura se exige en cada zona que tiene
+  // programación (reglas activas). Una guardia de otra zona no cubre, y un
+  // franco tampoco (lo filtra la lib por tipo_evento).
+  const [guardiasRes, reglasRes] = await Promise.all([
+    client.from('supervisores_guardia')
+      .select('fecha, hora_inicio, hora_fin, estado, zona, tipo_evento')
+      .in('fecha', [fechaAnterior, fecha]),
+    client.from('supervisor_guardia_reglas')
+      .select('activo, zona:zonas_operativas(nombre)')
+      .eq('activo', true),
+  ])
   if (guardiasRes.error) {
     return NextResponse.json({ error: guardiasRes.error.message }, { status: 500 })
   }
+  if (reglasRes.error) {
+    return NextResponse.json({ error: reglasRes.error.message }, { status: 500 })
+  }
 
-  const franjas = franjasDescubiertas((guardiasRes.data ?? []) as any[], fecha, fechaAnterior)
-  if (franjas.length === 0) {
-    return NextResponse.json({ fecha, cubierto: true, enviados: 0 })
+  const zonasRequeridas = Array.from(new Set(
+    ((reglasRes.data ?? []) as any[])
+      .map(r => (Array.isArray(r.zona) ? r.zona[0]?.nombre : r.zona?.nombre))
+      .filter((n: any) => typeof n === 'string' && n.trim() !== ''),
+  )) as string[]
+
+  const huecos = franjasDescubiertasPorZona((guardiasRes.data ?? []) as any[], zonasRequeridas, fecha, fechaAnterior)
+  if (huecos.length === 0) {
+    return NextResponse.json({ fecha, cubierto: true, zonas: zonasRequeridas, enviados: 0 })
   }
 
   // A quién: la lista de escalamiento (jefe de supervisores + dirección), la
@@ -93,11 +110,11 @@ export async function GET(req: NextRequest) {
     ((destRes.data ?? []) as any[]).map(d => d.usuario_id).filter(Boolean),
   ))
   if (destinatarios.length === 0) {
-    return NextResponse.json({ fecha, franjas, error: 'SIN_LISTA_DE_ESCALAMIENTO' }, { status: 200 })
+    return NextResponse.json({ fecha, huecos, error: 'SIN_LISTA_DE_ESCALAMIENTO' }, { status: 200 })
   }
 
   const clave = `agenda_supervisores:${fecha}`
-  const detalle = textoFranjas(franjas)
+  const detalle = textoPorZona(huecos)
   const payload: PushPayload = {
     title: 'Guardia de supervisores incompleta',
     body: `El ${fecha} queda sin supervisor de guardia: ${detalle}. Completar la programación.`,
@@ -113,7 +130,7 @@ export async function GET(req: NextRequest) {
 
   if (!esCron) {
     return NextResponse.json({
-      modo: 'SIMULACION', fecha, franjas, detalle,
+      modo: 'SIMULACION', fecha, huecos, detalle,
       avisaria_a: pendientes, ya_avisados: Array.from(yaAvisados),
     })
   }
@@ -161,7 +178,7 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    modo: 'ENVIO_REAL', fecha, franjas, detalle,
+    modo: 'ENVIO_REAL', fecha, huecos, detalle,
     destinatarios: destinatarios.length, enviados, sinSuscripcion,
     yaAvisados: yaAvisados.size,
   })

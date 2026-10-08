@@ -621,11 +621,18 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   // 06:00 le corresponde a quien cubre las 06:00, aunque la alerta salga a las
   // 06:20. Se llama sólo cuando hay alerta que mandar, para no llenar el log
   // con turnos que no alertan.
+  // RESPONSABLE DE INTERVENCIÓN, no del hecho (orden JC 08/10, Etapa 3): la
+  // alerta pide actuar AHORA, así que se resuelve con la guardia vigente al
+  // momento del aviso. Antes se usaba la hora de inicio del turno y un cambio
+  // de guardia a las 19:00 dejaba la alerta de las 19:05 en manos del saliente.
+  // El responsable del hecho queda reconstruible por auditoría (calendario +
+  // hora del turno); la dedup por (usuario, turno, tipo) hace que el entrante
+  // reciba su propio aviso sin duplicar el del saliente.
   const destinatariosParaTurno = (turno: TurnoPush, contexto: string) =>
     destinatariosOperativos(
       zonaPorObjetivo.get(turno.objetivo_id),
-      turno.fecha,
-      turno.hora_inicio.slice(0, 5),
+      hoy,
+      horaAhora,
       `${contexto} (turno ${turno.fecha} ${turno.hora_inicio.slice(0, 5)})`,
     )
 
