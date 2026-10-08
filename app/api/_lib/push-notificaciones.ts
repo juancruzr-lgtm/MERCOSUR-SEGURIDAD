@@ -21,6 +21,8 @@ import { sendWebPush, type PushPayload, type PushSubscriptionRow } from './web-p
 import {
   TEXTO_EGRESO_PENDIENTE,
   TIPO_EGRESO_PENDIENTE,
+  avisoPrepararIngreso,
+  avisoTurnoProximo,
   debeAvisarEgresoPendiente,
 } from '@/lib/notificaciones-push'
 import { calcularMinutosTardanzaRegistro } from '@/lib/revision-operativa'
@@ -1031,8 +1033,9 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     if (turno.guardia_id && minutosHastaInicio >= 20 && minutosHastaInicio <= 35) {
       candidatos30 += 1
       sumarResultado(await sendToUsers(admin.client, subscriptions, [turno.guardia_id], turno.id, 'guardia_turno_30', {
-        title: 'Turno próximo',
-        body: `Tiene turno en ${objetivoNombre} a las ${turno.hora_inicio.slice(0, 5)}`,
+        // Pide presentarse 15 minutos antes. Es un recordatorio: Puntualidad
+        // sigue midiendo contra la hora de inicio (ver lib/notificaciones-push).
+        ...avisoTurnoProximo(objetivoNombre, turno.hora_inicio),
         url: '/dashboard',
         tag: `turno-${turno.id}-30`,
       }))
@@ -1041,8 +1044,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     if (turno.guardia_id && minutosHastaInicio >= 5 && minutosHastaInicio <= 20) {
       candidatos15 += 1
       sumarResultado(await sendToUsers(admin.client, subscriptions, [turno.guardia_id], turno.id, 'guardia_turno_15', {
-        title: 'Preparar ingreso',
-        body: `Recuerde preparar el ingreso y fichar en ${objetivoNombre}`,
+        ...avisoPrepararIngreso(objetivoNombre, turno.hora_inicio),
         url: '/dashboard',
         tag: `turno-${turno.id}-15`,
       }))
