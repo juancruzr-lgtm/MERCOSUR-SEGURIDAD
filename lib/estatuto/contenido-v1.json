@@ -1,0 +1,404 @@
+{
+  "version": "1",
+  "fuente": {
+    "archivo_original": "/documentos/estatuto/v1/estatuto-interno.doc",
+    "sha256_original": "5feb70d22a7b5fffe100eb56304654678c73328117ecc4de25b8c5db4c46228c",
+    "bytes_original": 90624,
+    "copia_pdf": "/documentos/estatuto/v1/estatuto-interno.pdf",
+    "sha256_pdf": "b4f17d96131ab1046842f703a5be2a09293a265850dee526514597d3a8a3035a",
+    "conversion": "Microsoft Word (COM, sólo lectura): texto de cada párrafo + numeración automática (ListString) + negritas. Verificado contra antiword y contra la tabla de piezas del .doc."
+  },
+  "conteos": {
+    "parrafos": 63,
+    "numerados": 42,
+    "secciones": 4
+  },
+  "texto_sha256": "b84a4047754434d1f8c111d820a23d2d36d972b060874b8795268961a567c832",
+  "parrafos": [
+    {
+      "parrafo_word": 4,
+      "numero": null,
+      "tipo": "titulo",
+      "texto": "ESTATUTO INTERNO"
+    },
+    {
+      "parrafo_word": 5,
+      "numero": null,
+      "tipo": "titulo",
+      "texto": "MERCOSUR SEGURIDAD S.R.L."
+    },
+    {
+      "parrafo_word": 7,
+      "numero": null,
+      "tipo": "seccion",
+      "texto": "CONSIDERACIONES GENERALES:"
+    },
+    {
+      "parrafo_word": 9,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "El personal ingresante será sometido a un plan de instrucción en seguridad privada, adecuado a la actual situación social, y relacionado a Derechos Humanos, convivencia social, primeros auxilios, legítima defensa, art. 34 inciso 6to. C.P.A. aprehensión privada (art. 305. C.P.P.P.S.A.).-"
+    },
+    {
+      "parrafo_word": 10,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "Este plan de instrucción será desarrollado por el Director Técnico, Comisario            General ®     RODOLDO FEDERICO ROMERO, como así por profesionales del medio local a designar"
+    },
+    {
+      "parrafo_word": 12,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "El agente vigilador. Cuando cumpla cualquiera de las funciones encomendadas, deberá caracterizarse por:"
+    },
+    {
+      "parrafo_word": 14,
+      "numero": "1)",
+      "tipo": "parrafo",
+      "texto": "La forma en que cumpla su misión, es decir, el alerta permanente para llevar a cabo  el cumplimiento de su consigna en un determinado puesto u objetivo."
+    },
+    {
+      "parrafo_word": 16,
+      "numero": "2)",
+      "tipo": "parrafo",
+      "texto": "Su pulcritud, aseo personal y correcta vestimenta, ya sea que vista uniforme de la empresa o ropa civil. El agente deberá estar correctamente afeitado y con el cabello corto, no permitiéndose cabello largo ni barba."
+    },
+    {
+      "parrafo_word": 19,
+      "numero": "3)",
+      "tipo": "parrafo",
+      "texto": "Guardar el secreto y observar la máxima discreción para los asuntos relativos a la empresa que pertenece y a la contratante de los servicios."
+    },
+    {
+      "parrafo_word": 21,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "Todo integrante de la agencia para desempeñarse efectivamente debe conocer como primera medida, los siguientes puntos:"
+    },
+    {
+      "parrafo_word": 23,
+      "numero": "4)",
+      "tipo": "parrafo",
+      "texto": "Estructura de los edificios, con formación del área a custodiar. Conocimiento de los elementos que se comercializan depositan o transportan."
+    },
+    {
+      "parrafo_word": 25,
+      "numero": "5)",
+      "tipo": "parrafo",
+      "texto": "Poner identificar visualmente y conocer los nombres y apellidos de los directivos o  personal jerárquico con poder de resolución de los distintos objetivos."
+    },
+    {
+      "parrafo_word": 27,
+      "numero": "6)",
+      "tipo": "parrafo",
+      "texto": "Programa del personal. Horarios de trabajo, turnos y descansos."
+    },
+    {
+      "parrafo_word": 29,
+      "numero": "7)",
+      "tipo": "parrafo",
+      "texto": "Normas y disposiciones especiales  puestas en vigencia para el correcto y eficiente cumplimiento  del servicio."
+    },
+    {
+      "parrafo_word": 37,
+      "numero": "8)",
+      "tipo": "parrafo",
+      "texto": "Se prestara especial atención a las  relaciones y tratos que se deben mantener  con el personal y el público en general, manejándose con seriedad. Circunscripción y amabilidad, procurando solucionar inconvenientes que no contravengan normas y o disposiciones."
+    },
+    {
+      "parrafo_word": 40,
+      "numero": "9)",
+      "tipo": "parrafo",
+      "texto": "Está terminantemente PROHIBIDO  consumir bebidas alcohólicas durante el servicio o presentarse a él con síntomas de haberlas ingerido y o en estado de  ebriedad. Tal trasgresión es considerada FALTA GRAVE y es causal de despido.",
+      "negritas": [
+        "PROHIBIDO",
+        "FALTA GRAVE"
+      ]
+    },
+    {
+      "parrafo_word": 43,
+      "numero": "10)",
+      "tipo": "parrafo",
+      "texto": "Queda así mismo prohibido:"
+    },
+    {
+      "parrafo_word": 45,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "a) Pedir  o prestar dinero a empleados u obreros  del establecimiento y a los   agentes de la dotación de la agencia, debiendo canalizar estas necesidades  por la vía jerárquica correspondiente."
+    },
+    {
+      "parrafo_word": 46,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "b)  Aceptar propinas o dádivas."
+    },
+    {
+      "parrafo_word": 47,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "c) Hacer uso de las instalaciones y ocupar lugares que no estén destinados al       servicio, exceptuando las consideradas por la superioridad."
+    },
+    {
+      "parrafo_word": 48,
+      "numero": "d)",
+      "tipo": "parrafo",
+      "texto": "Usar teléfonos del lugar de destinos para asuntos ajenos al servicio."
+    },
+    {
+      "parrafo_word": 49,
+      "numero": "e)",
+      "tipo": "parrafo",
+      "texto": "Portar o tener consigo revistas, diarios, libros, radios portátiles o algún otro tipo de entretenimiento que desvíe su atención específica."
+    },
+    {
+      "parrafo_word": 50,
+      "numero": "f)",
+      "tipo": "parrafo",
+      "texto": "Hacer uso de terminales móviles de telefonía ajenas a la empresa, ya sea de titularidad del vigilador o de terceras personas, con la finalidad de llevar a cabo comunicaciones, transmitir mensajes, emitir imágenes, sonidos o desarrollar actividades de entretenimiento con las mismas. A estos efectos, está prohibida la portación de terminales móviles de telefonía ajenas a Mercosur Seguridad."
+    },
+    {
+      "parrafo_word": 53,
+      "numero": null,
+      "tipo": "seccion",
+      "texto": "OBLIGACIONES EN EL PUESTO DE TRABAJO"
+    },
+    {
+      "parrafo_word": 55,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "1 )  Es obligación ineludible observar puntualidad para tomar servicio, debiendo hacerse presente en su lugar de trabajo con una antelación de no menos quince minutos, a efectos de imponerse de las actividades que hayan ocurrido con anterioridad, percibir  las complementarias con relacional mismo, manteniendo actualizada la planilla de asistencia diaria de acuerdo con las ordenes que se hallan impartido. El incumplimiento de este requisito será considerado falta grave y sancionable de acuerdo al régimen de sanciones vigente."
+    },
+    {
+      "parrafo_word": 64,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "2) El agente al entrar de servicio deberá tomar conocimiento escrito y verbal de las novedades acaecidas, para lo cual dispone en cada objetivo de un LIBRO DE NOVEDADES donde serán expuestas todas las cuestiones  concernientes para luego dar las novedades de forma oral cuando se encuentre presente el supervisor o directivo de la agencia.",
+      "negritas": [
+        "LIBRO DE NOVEDADES"
+      ]
+    },
+    {
+      "parrafo_word": 66,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "3) Se trabajará en equipo,  siendo necesario y muy importante que entra los integrante del plantel del objetivo se mantenga una fluida y permanente información, manteniéndose al tanto de lo sucedido en los distintos turnos"
+    },
+    {
+      "parrafo_word": 68,
+      "numero": "4)",
+      "tipo": "parrafo",
+      "texto": "debe tener presente que como integrante del personal y vigilancia. La disposición y el trabajo entre los componentes del servicio debe ser sobre la base de un respeto reciproco y el acatamiento de las órdenes impartidas por la superioridad."
+    },
+    {
+      "parrafo_word": 71,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "5)  Es obligación del agente observar corrección en el trato con las personas que a el se dirijan, empleando el termino SEÑOR en el trato con superiores, directivos, empleados, obreros, público, etc..."
+    },
+    {
+      "parrafo_word": 73,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "6)  Mantener en  su trato con todo el personal la correcta distancia que exige su función, no debe dar ni permitir confianza, evitando las amistades en el trabajo ya que su aceptación suele traer aparejado inhibiciones para el  cumplimiento y aplicación de medidas inherentes a las tareas de vigilancia."
+    },
+    {
+      "parrafo_word": 75,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "7)  La lealtad para con su jefe inmediato y directivos del establecimiento, son cualidades imprescindibles, así como el trato y la prudencia en el  manejo de asuntos reservados o confidenciales serán una garantía y un respaldo hacia los mismos."
+    },
+    {
+      "parrafo_word": 77,
+      "numero": null,
+      "tipo": "parrafo",
+      "texto": "8)  Guardar el secreto y observar la máxima discreción para con los asuntos relativas a la agencia y superiores de quien depende, al establecimiento  objetivo donde presta servicio o a la persona y o vehículos cuya custodia le haya sido encomendada. Quedando terminantemente prohibido suministrar y o facilitar cualquier tipo de información a toda persona ajena a la agencia aun siendo numerario  de la misma que no corresponda  su relevo de guardia, vigilancia o custodia de su mismo objetivo."
+    },
+    {
+      "parrafo_word": 79,
+      "numero": "9)",
+      "tipo": "parrafo",
+      "texto": "Sin perjuicio de las tareas específicas que se le asignen al agente, es obligación primordial de este, cuidar los bienes que se pongan bajo su custodia, manteniéndose siempre atento para evitar deforma eficaz posibles robos hurtos o daños."
+    },
+    {
+      "parrafo_word": 87,
+      "numero": "11)",
+      "tipo": "parrafo",
+      "texto": "Reviste carácter grave que el agente abandone su puesto de vigilancia aun  cuando no hubiese sido relevado a la finalización de su turno, debiendo hacer saber esta novedad a su superior, requiriendo las instrucciones necesarias , permaneciendo en su puesto de trabajo hasta nueva orden."
+    },
+    {
+      "parrafo_word": 90,
+      "numero": "12)",
+      "tipo": "parrafo",
+      "texto": "Cuando algún personal perteneciente al a empresa contratante o ajeno al mismo cometa alguna infracción que se contraponga con sus consignas, identificara a dicho personal e informará a su supervisor para que este lo ponga en conocimiento de la empresa, este paso quedara obviado si el superior no está presente, debiendo hacer comparecer al infractor ante la empresa, dejando debidamente asentado el proceder en el libro de novedades. Asimismo deberá informar al supervisor toda noticia de hechos que puedan perjudicar a la empresa contratante o a la agencia a la que pertenece."
+    },
+    {
+      "parrafo_word": 93,
+      "numero": "13)",
+      "tipo": "parrafo",
+      "texto": "Si se trata de un delito (robos, hurtos, etc.), se procederá a la detención de los intervinientes, para ponerlos a disposición del encargado del servicio, quien, en su caso, anoticiará a las fuerzas policiales correspondientes. En caso de verse imposibilitado de detener a los autores, tomará las medidas para recabar cualquier dato, información o elemento que sirva a su identificación o al esclarecimiento del hecho"
+    },
+    {
+      "parrafo_word": 95,
+      "numero": "14)",
+      "tipo": "parrafo",
+      "texto": "Es su responsabilidad mantener el orden dentro de la propiedad de la empresa basado en métodos de razonabilidad y en los términos del presente. En caso de conflictos laborales se actuara respondiendo a las directivas de la empresa contratante y de la agencia. Cooperando con las fuerzas de seguridad oficiales en la tarea de individualizar de a los autores de cualquier ilícito como pillaje, sabotaje, etc. y en el caso de los instigadores de tales hechos."
+    },
+    {
+      "parrafo_word": 97,
+      "numero": "15)",
+      "tipo": "parrafo",
+      "texto": "Deberá actuar en represión con energía, pero también con mensura, de acuerdo con las instrucciones recibidas y lo que aconsejen las circunstancias, deberá estar permanentemente atento a los hechos que se produzcan y proceder de forma tal que su sola presencia obre como elemento disuasivo de delitos o desordenes. En toda situación anormal que se presente, procure prevenir primero, disuadir en segundo término y reprimir como última y única alternativa."
+    },
+    {
+      "parrafo_word": 99,
+      "numero": "16)",
+      "tipo": "parrafo",
+      "texto": "No tomara parte de los conflictos que se susciten en la empresa u objetivo donde presta servicios, si estos fueren de orden laboral, como así tampoco en paros o huelgas de conformidad con lo establecido en la convención colectiva del sector."
+    },
+    {
+      "parrafo_word": 103,
+      "numero": "17)",
+      "tipo": "parrafo",
+      "texto": "Se respetará el orden jerárquico, se deberá abstener de realizar gestiones en forma directo y o personal con los directivos del objetivo, todo reclamo o petición deberá canalizarse por intermedio del supervisor, toda sugerencia para mejorar el servicio será escuchada, pero siempre que se siga la vía jerárquica."
+    },
+    {
+      "parrafo_word": 105,
+      "numero": "18)",
+      "tipo": "parrafo",
+      "texto": "Observar en sus funciones  o fuera de ellas una conducta que no ofenda ni afecte la moral y buenas costumbres."
+    },
+    {
+      "parrafo_word": 107,
+      "numero": "19)",
+      "tipo": "parrafo",
+      "texto": "Se deberá vestir correctamente el uniforme que le sea provisto, mantenerlo en perfectas condiciones, sin agregar ni quitar prenda alguna, ni otros elementos no autorizados. El uniforme lo destaca entre el resto del personal y es por ello que debe cuidar el aspecto físico, la pulcritud y los ademanes y gestos, siendo mesurado al hablar , limitándose a hacer las preguntas estrictamente necesarias y suministrar la información en forma concisa."
+    },
+    {
+      "parrafo_word": 109,
+      "numero": "20)",
+      "tipo": "parrafo",
+      "texto": "Deberá conocer al detalle las consignas generales y particulares de cada puesto, así como las órdenes especiales y transitorias que exigieren. Una vez ingresado al servicio, tomará conocimiento inmediato de dichas consignas. Se considerará falta grave su desconocimiento debiendo en  consecuencia, cumplir con las mismas con ton toda eficacia y serenidad."
+    },
+    {
+      "parrafo_word": 113,
+      "numero": "21)",
+      "tipo": "parrafo",
+      "texto": "Conocer el funcionamiento y emplazamiento de llaves maestras de cortes de gas, interruptores de energía bombas de agua , bombas de aires, cantidad y ubicación de las bombas de incendio, mangueras, matafuegos, canillas, equipo de primeros auxilios, etc."
+    },
+    {
+      "parrafo_word": 115,
+      "numero": "22)",
+      "tipo": "parrafo",
+      "texto": "no se aceptaran regalos ni dádivas, debiendo tener presente que los mismos comprometen e inhibe al que los recibe."
+    },
+    {
+      "parrafo_word": 117,
+      "numero": "23)",
+      "tipo": "parrafo",
+      "texto": "Mantendrá y hará mantener en forma higiénica el sector de vigilancia que le corresponda y muy especialmente si está en una casilla o puesto de permanencia."
+    },
+    {
+      "parrafo_word": 129,
+      "numero": null,
+      "tipo": "seccion",
+      "texto": "RELACION CON LOS SUPERIORES Y DIRECTIVOS DE LOS OBJETIVOS"
+    },
+    {
+      "parrafo_word": 133,
+      "numero": "1)",
+      "tipo": "parrafo",
+      "texto": "Cuando se reciban indicaciones o directivas de personal autorizado de la empresa contratante, en primer término consultará con el superior de la agencia, siendo este el encargado de arbitrar los medios necesarios para su mejor desenvolvimiento en las tareas, si ello no fuere posible por ausencia del mismo, aplicará su mejor criterio para la ejecución de las tareas, y elevará la novedad con posterioridad al superior."
+    },
+    {
+      "parrafo_word": 135,
+      "numero": "2)",
+      "tipo": "parrafo",
+      "texto": "La relación con los directivos del objetivo en que realiza sus tareas, se limitará a las cuestiones del servicio, quedando terminantemente prohibido efectuar cualquier  reclamo sin seguir la vía jerárquica."
+    },
+    {
+      "parrafo_word": 149,
+      "numero": null,
+      "tipo": "seccion",
+      "texto": "OBLIGACIONES DEL PERSONAL PARA CON  LA AGENCIA"
+    },
+    {
+      "parrafo_word": 151,
+      "numero": "1)",
+      "tipo": "parrafo",
+      "texto": "Prestará personalmente el servicio con responsabilidad, eficacia, capacidad y diligencia en el lugar, hora y forma determinada."
+    },
+    {
+      "parrafo_word": 153,
+      "numero": "2)",
+      "tipo": "parrafo",
+      "texto": "Dará cumplimiento estricto a las órdenes impartidas por superiores, con atribuciones y competencias que tengan por objeto la realización de los actos del servicio."
+    },
+    {
+      "parrafo_word": 155,
+      "numero": "3)",
+      "tipo": "parrafo",
+      "texto": "Una vez que le fue provisto en uniforme tendrá la obligación de usarlo en forma completa, con todos sus componentes. La indumentaria es entregada con cargo, debiendo devolverse en perfecto estado de conservación a solicitud de la agencia, cuando deje el agente de pertenecer a la misma, cualquiera sea el motivo de ello."
+    },
+    {
+      "parrafo_word": 157,
+      "numero": "4)",
+      "tipo": "parrafo",
+      "texto": "Solicitar con cuarenta y ocho horas de anticipación el correspondiente permiso para faltar a sus tareas habituales y siempre que ello sea justificado"
+    },
+    {
+      "parrafo_word": 159,
+      "numero": "5)",
+      "tipo": "parrafo",
+      "texto": "Se exceptúa de lo anterior los  casos de enfermedad o muerte de los familiares a cargo, respecto de los cuales efectuará directa o indirectamente la comunicación al Supervisor con el tiempo necesario para disponer la cobertura del servicio."
+    },
+    {
+      "parrafo_word": 161,
+      "numero": "6)",
+      "tipo": "parrafo",
+      "texto": "Para el caso anterior, el agente suministrará  los datos correspondientes."
+    },
+    {
+      "parrafo_word": 163,
+      "numero": "7)",
+      "tipo": "parrafo",
+      "texto": "Mantener actualizado el domicilio real en el legajo con los datos correspondientes."
+    },
+    {
+      "parrafo_word": 165,
+      "numero": "8)",
+      "tipo": "parrafo",
+      "texto": "Portar credencial provista y devolverla al cesar la relación con la agencia."
+    },
+    {
+      "parrafo_word": 167,
+      "numero": "9)",
+      "tipo": "parrafo",
+      "texto": "Someterse al control médico correspondiente, con los tratamientos prescriptos, aun encontrándose fuera de sus funciones o de licencia."
+    },
+    {
+      "parrafo_word": 169,
+      "numero": "10)",
+      "tipo": "parrafo",
+      "texto": "Obligación de concurrir a la agencia cuando fuera citado, aun fuera de los horarios    de servicio."
+    },
+    {
+      "parrafo_word": 171,
+      "numero": "11)",
+      "tipo": "parrafo",
+      "texto": "Será responsable ante la agencia de los daños que eventualmente causare a esta, ya sea por culpa o dolo en sus funciones."
+    },
+    {
+      "parrafo_word": 185,
+      "numero": "12)",
+      "tipo": "parrafo",
+      "texto": "Se notificará de las presentes disposiciones del servicio, como así también de las  órdenes o consignas que deberán ser cumplidas durante su representación, tomando conocimiento y conciencia muy especialmente del régimen disciplinario y de aquellas faltas calificadas graves que son las que desprestigian a la agencia y al agente."
+    },
+    {
+      "parrafo_word": 189,
+      "numero": null,
+      "tipo": "cierre",
+      "texto": "EL CONTENIDO DEL PRESENTE SE ENCUENTRA SUJETO A MODIFICACIONES QUE PUEDA PRODUCIR LA EMPRESA, EL DIRECTOR TÉCNICO, O EL GOBIERNO DE LA PROVINCIA DE SANTA FE."
+    }
+  ]
+}

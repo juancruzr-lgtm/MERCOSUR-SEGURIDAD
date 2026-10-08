@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { alcanceDe } from '@/lib/capacidades'
+import { alcanceDe, tieneCapacidad } from '@/lib/capacidades'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { registroTieneEntradaConfirmada } from '@/lib/turnos'
@@ -10,6 +10,7 @@ import SeccionTurnos from './SeccionTurnos'
 import SeccionPlanilla from './SeccionPlanilla'
 import FichaCumplimiento from '@/components/cumplimiento/FichaCumplimiento'
 import MiDesempeno from '@/components/desempeno/MiDesempeno'
+import EstatutoInterno from '@/components/estatuto/EstatutoInterno'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,7 @@ const SECCIONES = [
   { id: 'cumplimiento', label: 'Cumplimiento operativo' },
   { id: 'novedades', label: 'Novedades laborales' },
   { id: 'desempeno', label: 'Mi Desempeño' },
+  { id: 'estatuto', label: 'Estatuto Interno' },
   { id: 'documentacion', label: 'Documentación' },
   { id: 'historial', label: 'Historial' },
   { id: 'indicadores', label: 'Indicadores' },
@@ -246,6 +248,9 @@ export default function LegajoPage() {
   const [seccion, setSeccion] = useState<SeccionId>(() => seccionInicial(searchParams.get('seccion')))
   const [rolUsuario, setRolUsuario] = useState<string | null>(null)
   const [puestoUsuario, setPuestoUsuario] = useState<string | null>(null)
+  // Override per-usuario de acceso admin pleno: también concede gestionar_personal
+  // (ver lib/capacidades). Hace falta para decidir quién ve constancias ajenas.
+  const [adminPlenoUsuario, setAdminPlenoUsuario] = useState(false)
   // Id del usuario que MIRA, no del legajo. Lo necesita cargarFilasBandeja
   // para resolver su alcance por zona.
   const [usuarioId, setUsuarioId] = useState<string | null>(null)
@@ -268,7 +273,7 @@ export default function LegajoPage() {
 
       supabase
         .from('usuarios')
-        .select('id, rol, puesto_organizacional')
+        .select('id, rol, puesto_organizacional, acceso_admin_pleno')
         .eq('auth_user_id', session.user.id)
         .single()
         .then(({ data: perfil }) => {
@@ -279,6 +284,7 @@ export default function LegajoPage() {
           if (!rol && !perfil.puesto_organizacional) { router.push('/dashboard'); return }
           setRolUsuario(rol)
           setPuestoUsuario(perfil.puesto_organizacional ?? null)
+          setAdminPlenoUsuario((perfil as any).acceso_admin_pleno === true)
           setUsuarioId(perfil.id)
           void initTelemetry(perfil.id, rol as any)
           track('legajo_abierto', {
@@ -494,8 +500,24 @@ export default function LegajoPage() {
           <MiDesempeno empleadoId={empleadoId} />
         )}
 
+        {/* Estatuto Interno. Quien mira su propio legajo lo lee, lo descarga y
+            lo acepta. Mirando el legajo de otro sólo se consulta la constancia,
+            y sólo Administración/Gerencia (gestionar_personal): es
+            documentación laboral y Supervisión no la recorre. La regla que
+            manda es la RLS de estatuto_aceptaciones; esto evita mostrar una
+            pantalla vacía que parezca "no aceptó". */}
+        {seccion === 'estatuto' && (
+          usuarioId === null
+            ? <div style={S.placeholder}>Cargando…</div>
+            : usuarioId === empleadoId
+            ? <EstatutoInterno empleadoId={empleadoId} esPropio />
+            : tieneCapacidad({ rol: rolUsuario, puesto_organizacional: puestoUsuario, acceso_admin_pleno: adminPlenoUsuario }, 'gestionar_personal')
+              ? <EstatutoInterno empleadoId={empleadoId} esPropio={false} />
+              : <div style={S.placeholder}>La constancia del Estatuto Interno es documentación laboral: la consultan Administración y Gerencia.</div>
+        )}
+
         {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla'
-          && seccion !== 'cumplimiento' && seccion !== 'desempeno' && (
+          && seccion !== 'cumplimiento' && seccion !== 'desempeno' && seccion !== 'estatuto' && (
           <div style={S.placeholder}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
             <div>Esta sección está disponible en una próxima etapa.</div>

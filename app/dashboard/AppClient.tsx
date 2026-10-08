@@ -133,6 +133,8 @@ import { ETIQUETA_CLASIFICACION, ETIQUETA_COMPARACION, NOTA_ALCANCE_MOTOR, anali
 import type { ClasificacionPatron, ResultadoCobertura } from '@/lib/cobertura-historica'
 import { DETALLE_ESTADO_LOGICA, ETIQUETA_ESTADO_LOGICA, armarPropuestasObjetivo, clasificarLogicaObjetivo, clavePropuesta, contarExcluidos, mesAnteriorDe, planDeclaracion, resumenPlan } from '@/lib/logica-detectada'
 import type { EstadoLogica, PlanDeclaracion, PropuestaFranja } from '@/lib/logica-detectada'
+import ControlEstatuto from '@/components/estatuto/ControlEstatuto'
+import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -13989,6 +13991,9 @@ const esGuardia = esRolGuardia(user.rol)
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'novedades_personal', icon:'🧑‍💼', label:'Novedades del Personal' }] : []),
       // AFIP · Corroboración de empleados contra el Padrón A13 (misma capacidad).
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'afip_empleados', icon:'🏛️', label:'AFIP · Empleados' }] : []),
+      // Estatuto Interno: versiones, aceptaciones y pendientes. Documentación
+      // laboral → Administración/Gerencia (gestionar_personal), no Supervisión.
+      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'estatuto_interno', icon:'📜', label:'Estatuto Interno' }] : []),
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
@@ -14060,6 +14065,9 @@ const esGuardia = esRolGuardia(user.rol)
             </>
           ) : (
             <>
+              {/* Estatuto pendiente del propio usuario del shell admin: tarjeta, no
+                  modal. Lleva a /estatuto (el shell admin no tiene Mi Legajo). */}
+              {user?.id && <AvisoEstatuto empleadoId={user.id} destino="/estatuto" />}
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} puedePleno={tieneCapacidad(user, 'gestionar_personal')} puedeOperativo={tieneCapacidad(user, 'gestionar_personal_operativo')} user={user} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
@@ -14134,6 +14142,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
               {page === 'afip_empleados' && tieneCapacidad(user, 'gestionar_personal') && <CorroboracionAfip />}
+              {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}
