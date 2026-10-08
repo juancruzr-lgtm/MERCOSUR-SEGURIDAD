@@ -518,3 +518,122 @@ export function etiquetaDias(dias: number[]): string {
   if (consecutivos && ordenados.length > 2) return `${nombres[ordenados[0]]} a ${nombres[ordenados[ordenados.length - 1]]}`
   return ordenados.map(d => nombres[d]).join(' · ')
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sincronización controlada regla ↔ calendario (Orden JC 08/10/2026, Etapa 2)
+//
+// La idempotencia de "Generar mes" es deliberada: editar una regla NO toca los
+// días ya generados. El incidente de octubre mostró el costo: la plantilla
+// decía una cosa y el calendario otra, en silencio. Esta función calcula las
+// DIFERENCIAS entre una regla y sus filas futuras ya generadas para que la
+// pantalla muestre una vista previa y la aplicación sea explícita — nunca
+// automática y nunca sobre excepciones.
+//
+// Protecciones (quedan en `conflictos`, jamás se tocan solas):
+//   · filas con tipo_evento distinto de 'normal' (francos, ausencias);
+//   · filas reasignadas a mano (supervisor distinto del de la regla, o con
+//     supervisor_original_id);
+//   · filas con intervenciones operativas asociadas (las pasa el llamador);
+//   · todo lo de hoy para atrás (pasado o en curso) directamente no entra.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface FilaCalendario extends GuardiaExistente {
+  id: string
+  estado?: string | null
+  tipo_evento?: string | null
+  supervisor_original_id?: string | null
+}
+
+export interface DiferenciasRegla {
+  /** Filas activas de la regla cuyo horario quedó viejo → horario de la regla. */
+  actualizar: Array<{ fila: FilaCalendario; horaInicio: string; horaFin: string }>
+  /** Fechas futuras que la regla pide y no tienen ninguna fila de la regla. */
+  crear: FilaGuardiaGenerada[]
+  /** Filas activas de la regla en días que la regla ya no incluye. */
+  desactivar: FilaCalendario[]
+  /** Filas inactivas de la regla en días vigentes (vuelven con el horario de la regla). */
+  reactivar: FilaCalendario[]
+  /** Excepciones protegidas: se muestran y sólo las resuelve jefatura a mano. */
+  conflictos: Array<{ fila: FilaCalendario; motivo: string }>
+}
+
+export function diferenciasReglaCalendario(
+  regla: ReglaSemanal,
+  filasDeLaRegla: FilaCalendario[],
+  hoy: string,
+  conIntervenciones: Set<string> = new Set(),
+): DiferenciasRegla {
+  const out: DiferenciasRegla = { actualizar: [], crear: [], desactivar: [], reactivar: [], conflictos: [] }
+  if (!regla?.id || regla.activo === false) return out
+
+  const hi = hora5(regla.hora_inicio)
+  const hf = hora5(regla.hora_fin)
+  const dias = new Set(regla.dias_semana ?? [])
+  const dowDe = (fecha: string) => {
+    const d = new Date(`${fecha}T00:00:00Z`).getUTCDay() // 0=Dom
+    return d === 0 ? 7 : d
+  }
+
+  const futuras = filasDeLaRegla.filter(f => String(f.fecha ?? '') > hoy)
+  const fechasConFila = new Set<string>()
+
+  for (const fila of futuras) {
+    const fecha = String(fila.fecha)
+    fechasConFila.add(fecha)
+
+    if (conIntervenciones.has(fila.id)) {
+      out.conflictos.push({ fila, motivo: 'Tiene intervenciones operativas asociadas' })
+      continue
+    }
+    if ((fila.tipo_evento ?? 'normal') !== 'normal') {
+      out.conflictos.push({ fila, motivo: `Excepción del día (${fila.tipo_evento})` })
+      continue
+    }
+    if (fila.supervisor_original_id || fila.supervisor_id !== regla.supervisor_id) {
+      out.conflictos.push({ fila, motivo: 'Reasignada a mano a otro supervisor' })
+      continue
+    }
+
+    const diaVigente = dias.has(dowDe(fecha))
+    const activa = (fila.estado ?? 'activo') === 'activo'
+    const horasIguales = hora5(fila.hora_inicio) === hi && hora5(fila.hora_fin) === hf
+
+    if (!diaVigente) {
+      if (activa) out.desactivar.push(fila)
+      continue
+    }
+    if (!activa) { out.reactivar.push(fila); continue }
+    if (!horasIguales) out.actualizar.push({ fila, horaInicio: hi, horaFin: hf })
+  }
+
+  // Crear: sólo dentro del horizonte YA generado para esta regla (la
+  // sincronización corrige, no extiende el mes: eso sigue siendo Generar mes).
+  const horizonte = futuras.reduce((max, f) => (String(f.fecha) > max ? String(f.fecha) : max), '')
+  if (horizonte) {
+    const desde = regla.vigencia_desde && regla.vigencia_desde > hoy ? regla.vigencia_desde : hoy
+    const hasta = regla.vigencia_hasta && regla.vigencia_hasta < horizonte ? regla.vigencia_hasta : horizonte
+    for (const fecha of fechasEnRango(desde, hasta, regla.dias_semana ?? [])) {
+      if (fecha <= hoy || fechasConFila.has(fecha)) continue
+      out.crear.push({
+        supervisor_id: regla.supervisor_id,
+        fecha,
+        hora_inicio: hi,
+        hora_fin: hf,
+        zona: regla.zona_nombre.trim(),
+        rol_operativo: regla.rol_operativo || 'supervisor',
+        estado: 'activo',
+        observacion: null,
+        regla_id: regla.id,
+        origen: 'regla',
+        tipo_evento: 'normal',
+      })
+    }
+  }
+
+  return out
+}
+
+/** ¿Cuántos días futuros difieren entre la regla y el calendario? (para el aviso) */
+export function totalDiferencias(d: DiferenciasRegla): number {
+  return d.actualizar.length + d.crear.length + d.desactivar.length + d.reactivar.length
+}
