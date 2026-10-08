@@ -187,15 +187,15 @@ describe('control de Administración / Gerencia', () => {
 describe('documento (versión 1): el original y su conversión', () => {
   const c = contenidoDeVersion('1')!
 
-  it('el archivo publicado es el original, byte a byte (SHA-256)', () => {
-    const original = readFileSync(join(RAIZ, 'public/documentos/estatuto/v1/estatuto-interno.doc'))
+  it('el original guardado es el recibido, byte a byte (SHA-256), y fuera de /public', () => {
+    const original = readFileSync(join(RAIZ, 'privado/estatuto/v1/estatuto-interno.doc'))
     expect(original.length).toBe(90624)
     expect(sha256(original)).toBe('5feb70d22a7b5fffe100eb56304654678c73328117ecc4de25b8c5db4c46228c')
     expect(c.fuente.sha256_original).toBe(sha256(original))
   })
 
-  it('la copia PDF es la registrada', () => {
-    const pdf = readFileSync(join(RAIZ, 'public/documentos/estatuto/v1/estatuto-interno.pdf'))
+  it('la copia PDF guardada es la registrada (no se sirve)', () => {
+    const pdf = readFileSync(join(RAIZ, 'privado/estatuto/v1/estatuto-interno.pdf'))
     expect(sha256(pdf)).toBe(c.fuente.sha256_pdf)
   })
 
@@ -217,7 +217,8 @@ describe('documento (versión 1): el original y su conversión', () => {
     expect(sql).not.toMatch(fecha)
     expect(sql).not.toContain('fecha_documento')
     expect(JSON.stringify(c)).not.toMatch(fecha)
-    expect(readdirSync(join(RAIZ, 'public/documentos/estatuto/v1')).sort())
+    // Ni el Word ni el PDF están en /public (Gerencia 08/10): se lee en la app.
+    expect(readdirSync(join(RAIZ, 'privado/estatuto/v1')).sort())
       .toEqual(['estatuto-interno.doc', 'estatuto-interno.pdf'])
     for (const archivo of ['lib/estatuto.ts', 'components/estatuto/EstatutoInterno.tsx',
       'components/estatuto/ControlEstatuto.tsx', 'components/estatuto/AvisoEstatuto.tsx',

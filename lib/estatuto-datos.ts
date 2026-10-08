@@ -12,6 +12,7 @@
  */
 
 import { supabase } from '@/lib/supabase'
+import { urlOriginal } from '@/lib/estatuto-original'
 import type {
   AceptacionEstatuto, AperturaEstatuto, PersonaControl, VersionEstatuto,
 } from '@/lib/estatuto'
@@ -84,6 +85,44 @@ export async function cargarControl(versionId: string | null): Promise<{
   const { data, error } = await supabase.rpc('estatuto_control', { p_version_id: versionId })
   if (error) return { personas: [], error: error.message }
   return { personas: ((data as any)?.personas ?? []) as PersonaControl[], error: null }
+}
+
+/**
+ * ¿Quien mira puede bajar el Word original? Administración o Gerencia, según
+ * la base (las mismas funciones que usa /api/estatuto/original). Sólo decide
+ * si se muestra el botón: aunque alguien lo fuerce, la API vuelve a validar.
+ */
+export async function puedeVerOriginal(): Promise<boolean> {
+  const [personal, gerencia] = await Promise.all([
+    supabase.rpc('puede_gestionar_personal_actual'),
+    supabase.rpc('puede_acceder_gerencia_actual'),
+  ])
+  return personal.data === true || gerencia.data === true
+}
+
+/**
+ * Baja el original con la sesión de quien llama. Un enlace común no sirve: la
+ * API exige el token, y el archivo ya no está en una dirección pública.
+ */
+export async function descargarOriginal(identificador: string, nombre: string): Promise<{ error: string | null }> {
+  const { data } = await supabase.auth.getSession()
+  const token = data?.session?.access_token
+  if (!token) return { error: 'Sesión vencida: volvé a ingresar.' }
+  const res = await fetch(urlOriginal(identificador), { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const cuerpo = await res.json().catch(() => null)
+    return { error: cuerpo?.error ?? `No se pudo descargar (${res.status})` }
+  }
+  const blob = await res.blob()
+  const href = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = href
+  a.download = nombre
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(href), 10_000)
+  return { error: null }
 }
 
 /** Sólo Gerencia; la RPC lo valida. */

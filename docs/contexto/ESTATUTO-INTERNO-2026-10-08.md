@@ -10,8 +10,8 @@ no se aplicó en producción y la **versión 1** se carga como BORRADOR.
 | Archivo recibido (sólo para trazabilidad; no se muestra ni se descarga con ese nombre) | `ESTATUTO INTERNO MODIFICADO el  21-04-26.doc` |
 | Formato | Word 97-2003 binario (OLE/CFB), 90.624 bytes, 8 páginas |
 | SHA-256 | `5feb70d22a7b5fffe100eb56304654678c73328117ecc4de25b8c5db4c46228c` |
-| Copia en el repo | `public/documentos/estatuto/v1/estatuto-interno.doc` (byte a byte: sólo cambió el nombre, mismo hash) |
-| Copia PDF (derivada) | `public/documentos/estatuto/v1/estatuto-interno.pdf`, exportada por Microsoft Word desde el original abierto en sólo lectura. SHA-256 `b4f17d96131ab1046842f703a5be2a09293a265850dee526514597d3a8a3035a` |
+| Copia en el repo | `privado/estatuto/v1/estatuto-interno.doc` (byte a byte: sólo cambió el nombre, mismo hash). NO está en /public: sólo lo baja Administración/Gerencia por `/api/estatuto/original?version=1` (valida el permiso en la base y la huella) |
+| Copia PDF (derivada) | `privado/estatuto/v1/estatuto-interno.pdf` (registro; no se sirve), exportada por Microsoft Word desde el original abierto en sólo lectura. SHA-256 `b4f17d96131ab1046842f703a5be2a09293a265850dee526514597d3a8a3035a` |
 | Texto que muestra la app | `lib/estatuto/contenido-v1.json` — `texto_sha256` `b84a4047754434d1f8c111d820a23d2d36d972b060874b8795268961a567c832` |
 
 **Sin fecha, por decisión de Gerencia (JC, 08/10/2026):** "El archivo se llama
@@ -230,3 +230,20 @@ otra sesión (rama `salidas-anticipadas`).
 - El original vive en `public/`: cualquiera con la URL exacta puede descargarlo sin
   sesión. Si el Estatuto se considera confidencial, moverlo a Storage privado con URL
   firmada (requiere subir el archivo en producción).
+
+## Cambio 08/10/2026 (tarde) — lectura sólo dentro de la app
+
+Por pedido de Gerencia, después de publicar la Versión 1:
+
+- El vigilador tiene una sola opción: **Leer Estatuto Interno**, dentro de la app,
+  con desplazamiento vertical y botones A−/A+ para el tamaño de letra (además del
+  zoom con dos dedos). Puede leerlo las veces que quiera desde Mi Legajo.
+- Se quitaron "Descargar el original (Word)" y "Abrir copia en PDF" de la sección
+  (también del legajo de cada empleado visto por Administración).
+- El Word y el PDF salieron de `/public`: antes cualquiera con la dirección los
+  bajaba sin sesión. El Word lo bajan Administración y Gerencia desde
+  Estatuto Interno → Versiones, por `/api/estatuto/original` (401 sin sesión, 403
+  para vigiladores y supervisores; verifica la huella antes de entregarlo).
+- No cambió el contenido, la versión registrada, la huella ni ninguna aceptación.
+  `estatuto_versiones.archivo_ruta` conserva la dirección histórica: la versión
+  ya estaba publicada y la base no permite modificarla; la app no la usa.

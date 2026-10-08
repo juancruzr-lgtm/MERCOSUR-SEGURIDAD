@@ -1,10 +1,10 @@
 {
   "version": "1",
   "fuente": {
-    "archivo_original": "/documentos/estatuto/v1/estatuto-interno.doc",
+    "archivo_original": "privado/estatuto/v1/estatuto-interno.doc (sólo Administración y Gerencia, por /api/estatuto/original)",
     "sha256_original": "5feb70d22a7b5fffe100eb56304654678c73328117ecc4de25b8c5db4c46228c",
     "bytes_original": 90624,
-    "copia_pdf": "/documentos/estatuto/v1/estatuto-interno.pdf",
+    "copia_pdf": "privado/estatuto/v1/estatuto-interno.pdf (registro; no se sirve)",
     "sha256_pdf": "b4f17d96131ab1046842f703a5be2a09293a265850dee526514597d3a8a3035a",
     "conversion": "Microsoft Word (COM, sólo lectura): texto de cada párrafo + numeración automática (ListString) + negritas. Verificado contra antiword y contra la tabla de piezas del .doc."
   },
