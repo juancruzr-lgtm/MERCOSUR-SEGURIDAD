@@ -21,6 +21,7 @@ import { MENSAJE_SIN_PUESTOS_ACTIVOS, obtenerPuestosActivos, resolverPuestoTurno
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA } from '@/lib/caracteristica-turno'
 import type { EstadoPuestos } from '@/lib/puestos'
 import BandejaPlanillas from '@/components/supervisor/BandejaPlanillas'
+import SalidasAnticipadasPanel from '@/components/supervisiones/SalidasAnticipadasPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import CentroOperativoObjetivo from '@/components/objetivos/CentroOperativoObjetivo'
@@ -2413,6 +2414,9 @@ export default function SupervisorMobile({ user }: any) {
     { id: 'supervisiones', label: 'Supervisiones', icon: '☑️' },
     { id: 'turnos', label: 'Turnos', icon: '📅' },
     { id: 'planillas', label: 'Planillas', icon: '📋' },
+    // Salidas anticipadas: la revisión es de Supervisión y se hace desde acá,
+    // sin pasar por Administración. El alcance por zona lo aplica la base.
+    { id: 'salidas', label: 'Salidas', icon: '🚪' },
     { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
     { id: 'guardias', label: 'Guardias', icon: '👮' },
     { id: 'rondas', label: 'Rondas', icon: '🔁' },
@@ -4179,6 +4183,16 @@ export default function SupervisorMobile({ user }: any) {
             {tab === 'planillas' && (
               <section>
                 <BandejaPlanillas user={user} />
+              </section>
+            )}
+
+            {/* La misma bandeja que en Administración. Qué ve y qué puede
+                resolver cada supervisor lo decide la base por zona; acá no
+                hay una segunda regla. La corrección de evaluaciones es de
+                Gerencia y no se ofrece en este shell. */}
+            {tab === 'salidas' && (
+              <section>
+                <SalidasAnticipadasPanel />
               </section>
             )}
 

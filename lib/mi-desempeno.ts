@@ -23,6 +23,8 @@
  *     merece.
  */
 
+import { MENSAJE_HORARIO_SALIDA, faltasDeSalida } from '@/lib/entrenador-desde-snapshot'
+
 /** La fila tal cual viene de `evaluaciones_mensuales`. */
 export interface FilaPublicada {
   /** Necesario para registrar la lectura y para colgarle una observación. */
@@ -40,6 +42,8 @@ export interface FilaPublicada {
   dimensiones: unknown
   faltas: unknown
   explicacion: string | null
+  /** Cuándo se recalculó por última vez después de publicada (salidas confirmadas). */
+  corregida_at?: string | null
   balance: unknown
   contexto: unknown
   estado: string
@@ -85,6 +89,8 @@ export interface VistaDesempeno {
   avisoDeCobertura: string | null
   /** Sólo cuando un tope efectivamente bajó la nota. */
   topeAplicado: { hecho: string; texto: string } | null
+  /** "La evaluación se actualizó el 09/10/2026", si se recalculó después de publicada. */
+  actualizacion: string | null
   /** Lo que hay que corregir aunque no haya bajado la nota. */
   aTenerEnCuenta: string[]
   dimensiones: DimensionVista[]
@@ -204,6 +210,7 @@ export function vistaDeEvaluacion(fila: FilaPublicada): VistaDesempeno {
       hechosSinMuestra: hechos,
       avisoDeCobertura: null,
       topeAplicado: null,
+      actualizacion: null,
       aTenerEnCuenta: [],
       // Vacías a propósito: la pantalla no tiene qué puntaje mostrar.
       dimensiones: [],
@@ -255,11 +262,27 @@ export function vistaDeEvaluacion(fila: FilaPublicada): VistaDesempeno {
         + 'midió, no todo el mes.'
       : (typeof bal.notaDeCobertura === 'string' ? bal.notaDeCobertura : null),
     topeAplicado,
+    actualizacion: fila.corregida_at
+      ? `Esta evaluación se actualizó el ${String(fila.corregida_at).slice(8, 10)}/${String(fila.corregida_at).slice(5, 7)}/${String(fila.corregida_at).slice(0, 4)} `
+        + 'por una falta confirmada después de publicada.'
+      : null,
     aTenerEnCuenta,
     dimensiones: dims,
     informativas,
     loQueSalioBien: bloques.filter(b => b?.estado === 'bien').map(mapear),
-    loQueConvieneMejorar: bloques.filter(b => b?.estado === 'mejorar').map(mapear),
+    // Una falta de horario de salida agregada después de congelar el mes (p. ej.
+    // corrección de Gerencia) no está en el balance; se suma acá, primero, para
+    // que "lo que conviene mejorar" no omita justamente lo que bajó la nota.
+    loQueConvieneMejorar: [
+      ...faltasDeSalida(fila.faltas).map(f => ({
+        etiqueta: f.clave === 'abandono_de_puesto' ? 'Permanencia en el puesto' : 'Horario de salida',
+        hechos: [f.clave === 'abandono_de_puesto'
+          ? 'Dejaste el puesto sin relevo, y quedó comprobado.'
+          : 'Te retiraste antes del horario de finalización del servicio sin autorización.'],
+        recomendacion: MENSAJE_HORARIO_SALIDA,
+      })),
+      ...bloques.filter(b => b?.estado === 'mejorar').map(mapear),
+    ],
     encabezadoDelBalance: typeof bal.encabezado === 'string' ? bal.encabezado : null,
   }
 }

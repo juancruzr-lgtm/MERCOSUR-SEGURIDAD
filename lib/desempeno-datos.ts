@@ -9,7 +9,10 @@ import { mesArgentina, mesesHastaActual } from '@/lib/periodo-argentina'
 import type { JornadaDesempeno, ResultadoDesempeno } from '@/lib/desempeno'
 import type { FilaBandejaMensual } from '@/lib/bandeja-planillas'
 import { PESOS, calcularCumplimiento } from '@/lib/cumplimiento'
-import { INASISTENCIA_ACTIVA, evaluar, faltaPorInasistencia, faltaPorRondas } from '@/lib/evaluacion-final'
+import {
+  INASISTENCIA_ACTIVA, evaluar, faltaPorAbandono, faltaPorInasistencia, faltaPorRondas,
+  faltaPorSalidaAnticipada,
+} from '@/lib/evaluacion-final'
 import type { Evaluacion } from '@/lib/evaluacion-final'
 import type { FuentesCumplimiento, JornadaCumplimiento, ResultadoCumplimiento } from '@/lib/cumplimiento'
 
@@ -93,6 +96,12 @@ export interface MedidasCriticas {
    * `lib/novedades-laborales.ts`. Nunca se deduce acá: llega contada.
    */
   inasistenciasInjustificadas?: number
+  /**
+   * Salidas anticipadas CONFIRMADAS por una persona en un período donde la
+   * regla rige (`salidaAnticipadaVigente`). Las sólo detectadas no llegan acá.
+   */
+  salidasInjustificadas?: number
+  abandonosComprobados?: number
 }
 
 /**
@@ -136,6 +145,10 @@ export function desempenoPorEmpleado(
         // Sólo lo que Administración clasificó explícitamente en Reportes. Sin
         // el dato no hay falta: la ausencia de una novedad no es una falta.
         INASISTENCIA_ACTIVA ? faltaPorInasistencia(m?.inasistenciasInjustificadas ?? 0) : null,
+        // Sólo lo confirmado por Supervisión, y sólo si la regla rige para el
+        // período: quien arma `medidas` no las carga en un mes anterior.
+        faltaPorSalidaAnticipada(m?.salidasInjustificadas ?? 0),
+        faltaPorAbandono(m?.abandonosComprobados ?? 0),
       ],
     )
 

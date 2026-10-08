@@ -20,6 +20,10 @@ import { cargarNovedadesAprobadasDelMes } from '@/lib/novedades-laborales-mes'
 import { INASISTENCIA_ACTIVA } from '@/lib/evaluacion-final'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { MedidasCriticas } from '@/lib/desempeno-datos'
+import { salidaAnticipadaVigente } from '@/lib/evaluacion-final'
+import { confirmadasPorEmpleado } from '@/lib/salidas-anticipadas'
+import { cargarNotasPublicadasDelMes, cargarSalidasDelMes } from '@/lib/salidas-anticipadas-datos'
+import { esOficial, relacionConCalculo, type EvaluacionOficial } from '@/lib/nota-oficial'
 import {
   ETIQUETA_ESTADO, MIN_COBERTURA, MIN_OBSERVACIONES, faltanteParaMuestra,
 } from '@/lib/desempeno'
@@ -100,8 +104,33 @@ function Chip({ estado }: { estado: EstadoDesempeno }) {
  * El ponderado sigue estando a la vista, pero debajo y dicho como lo que es:
  * un porcentaje de cumplimiento, no una nota.
  */
-function Puntaje({ d }: { d: DesempenoEmpleado }) {
+function Puntaje({ d, oficial }: { d: DesempenoEmpleado; oficial?: EvaluacionOficial }) {
   const r = d.cumplimiento
+  // Con evaluación publicada manda la PUBLICADA: es la que ven Mi Desempeño,
+  // la ficha y Gerencia. El cálculo de esta lista queda debajo, nombrado.
+  if (esOficial(oficial)) {
+    const n = Number(oficial.nota_final)
+    const calc = d.evaluacion?.notaFinal ?? null
+    const rel = relacionConCalculo(oficial, calc)
+    return (
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:1 }}>
+        <span style={{ fontSize:17, fontWeight:800, color: n < 5 ? '#ef4444' : n < 6 ? '#f59e0b' : '#e2e8f0', fontFamily:'Syne,sans-serif' }}
+              title="Nota oficial publicada">
+          {coma(n)}
+          <span style={{ fontSize:11, fontWeight:600, color:'#64748b' }}> / 10</span>
+        </span>
+        <span style={{ fontSize:10, color: rel.relacion === 'igual' ? '#64748b' : '#f59e0b', whiteSpace:'nowrap' }}
+              title={rel.texto ?? undefined}>
+          {rel.relacion === 'igual' || rel.relacion === 'sin_calculo'
+            ? 'publicada'
+            : rel.relacion === 'antes_del_tope'
+              ? `publicada · ${coma(calc as number)} antes del tope`
+              : `publicada · cálculo ${coma(calc as number)}`}
+          {oficial.corregida_at ? ' · corregida' : ''}
+        </span>
+      </div>
+    )
+  }
   if (r.puntaje === null || !d.evaluacion) {
     return <span style={{ ...S.tenue, fontWeight:600 }}>—</span>
   }
@@ -156,6 +185,8 @@ export default function DesempenoPanel({
   const [abierto, setAbierto] = useState<string | null>(null)
   const [medido, setMedido] = useState<Map<string, ReturnType<typeof fuentesDeEmpleado>>>(new Map())
   const [avisoFuentes, setAvisoFuentes] = useState('')
+  /** Notas oficiales (publicadas) del mes. Mandan sobre el cálculo de esta lista. */
+  const [oficiales, setOficiales] = useState<Map<string, EvaluacionOficial>>(new Map())
   const [congelando, setCongelando] = useState(false)
   const [avisoSnapshot, setAvisoSnapshot] = useState('')
   /** Empleado cuya vista de vigilador se está previsualizando. */
@@ -174,13 +205,27 @@ export default function DesempenoPanel({
     // Rondas y evidencias del mes entero: dos consultas para toda la lista, no
     // dos por persona. Si fallan, la lista sale igual —esas cuatro dimensiones
     // pesan 0— y el aviso lo dice en vez de esconderlo.
-    const [rr, ee, nv] = await Promise.all([
+    const rigeSalidas = salidaAnticipadaVigente(mes)
+    const [rr, ee, nv, sa] = await Promise.all([
       cargarRondasDelMes(mes),
       cargarEvidenciasDelMes(mes),
       // Lo mismo que consulta la ficha, pero del mes entero: una sola vez para
       // toda la lista. Sólo aprobadas — pendiente y rechazada no afirman nada.
       cargarNovedadesAprobadasDelMes(supabase, mes),
+      // Sólo en períodos donde la regla rige. En los anteriores no se lee:
+      // la regla es prospectiva y no puede colarse en un recongelado.
+      rigeSalidas ? cargarSalidasDelMes(mes) : Promise.resolve({ data: [], error: null }),
     ])
+    // No corta la lista si falla: sin ellas se ve el cálculo, y el aviso lo dice.
+    const pub = await cargarNotasPublicadasDelMes(mes)
+    setOficiales(pub.data)
+    // Igual que con las novedades: si rige y no se pudo leer, no se calcula.
+    // Una lista vacía por error dejaría sin tope una salida ya confirmada.
+    if (sa.error) {
+      setError(`No se pudieron leer las salidas anticipadas del mes; no se calcula para no omitir faltas confirmadas. (${sa.error})`)
+      setLista([]); setCargando(false); return
+    }
+    const confirmadas = confirmadasPorEmpleado(sa.data)
     // Sin novedades no se puede calcular: una vacación o un parte médico se
     // contarían como inasistencia injustificada, y esta lista es la que se
     // congela como evaluación. Se corta acá con el error a la vista.
@@ -198,7 +243,10 @@ export default function DesempenoPanel({
       ]),
     )
 
-    setAvisoFuentes([rr.error, ee.error].filter(Boolean).join(' · '))
+    setAvisoFuentes([
+      rr.error, ee.error,
+      pub.error ? `No se pudieron leer las notas publicadas (${pub.error}); lo que se ve es cálculo, no la nota oficial.` : '',
+    ].filter(Boolean).join(' · '))
     setMedido(fuentes)
 
     /**
@@ -231,6 +279,8 @@ export default function DesempenoPanel({
         inasistenciasInjustificadas: INASISTENCIA_ACTIVA
           ? inasistenciasInjustificadas(nov, id, fechasPorEmpleado.get(id) ?? [])
           : 0,
+        salidasInjustificadas: confirmadas.get(id)?.injustificadas ?? 0,
+        abandonosComprobados: confirmadas.get(id)?.abandonos ?? 0,
       })
     })
 
@@ -347,7 +397,7 @@ export default function DesempenoPanel({
         : `Congeladas ${r.guardadas} evaluaciones de ${etiquetaMes(mes)}`
           + (r.publicadasPreservadas > 0
             ? ` · ${r.publicadasPreservadas} ya publicadas se mantuvieron publicadas`
-            : ' · quedan en «calculada», todavía no las ve nadie'),
+            : ' · quedan en «calculada», todavía no las ve nadie'),
     )
   }, [lista, balances, medido, mes, usuarioId])
 
@@ -558,6 +608,7 @@ export default function DesempenoPanel({
             <Empleado
               key={d.empleadoId}
               d={d}
+              oficial={oficiales.get(d.empleadoId)}
               soloUno={soloUno}
               mes={mes}
               abierto={soloUno || abierto === d.empleadoId}
@@ -599,8 +650,10 @@ function TarjetaTipo({ activo, n, etiqueta, color, onClick }: {
   )
 }
 
-function Empleado({ d, abierto, onAbrir, soloUno, mes, balance }: {
+function Empleado({ d, abierto, onAbrir, soloUno, mes, balance, oficial }: {
   d: DesempenoEmpleado
+  /** La evaluación publicada del mes, si existe: es la nota oficial. */
+  oficial?: EvaluacionOficial
   abierto: boolean
   onAbrir: () => void
   soloUno: boolean
@@ -642,7 +695,7 @@ function Empleado({ d, abierto, onAbrir, soloUno, mes, balance }: {
         )}
 
         <Chip estado={r.estado} />
-        <div style={{ minWidth:72, textAlign:'right' }}><Puntaje d={d} /></div>
+        <div style={{ minWidth:72, textAlign:'right' }}><Puntaje d={d} oficial={oficial} /></div>
 
         {/* La composición, al lado del número: hace evidente si baja por el
             servicio o por el registro sin tener que abrir el detalle. */}

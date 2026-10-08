@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
-import { MINUTOS_AVISO_SALIDA_ANTICIPADA, minutosHastaFinDeTurno } from '@/lib/salida-anticipada'
+import { MINUTOS_AVISO_SALIDA_ANTICIPADA, minutosHastaFinDeTurno, textoAvisoSalidaAnticipada } from '@/lib/salida-anticipada'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import AvisoEvaluacion from '@/components/desempeno/AvisoEvaluacion'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
@@ -1512,6 +1512,27 @@ export default function GuardiaMobile({ user }: { user: any }) {
         return
       }
       track('egreso_anticipado_confirmado', {
+        screen: 'egreso_flow',
+        turno_id: turno.id,
+        registro_id: registro.id,
+        value_json: { minutos_restantes: faltan },
+      })
+    } else if (faltan !== null && faltan > 0) {
+      // ── Salida antes del fin, aunque sea por un minuto ──────────────────────
+      // Llegar antes no autoriza a irse antes y la tolerancia de 15 minutos no
+      // es un permiso (Gerencia, 08/10/2026). No bloquea: avisa, y si confirma
+      // la salida queda registrada tal cual y pasa a revisión de Supervisión.
+      const aviso = textoAvisoSalidaAnticipada(turno)
+      if (aviso && !window.confirm(aviso)) {
+        track('egreso_antes_de_fin_cancelado', {
+          screen: 'egreso_flow',
+          turno_id: turno.id,
+          registro_id: registro.id,
+          value_json: { minutos_restantes: faltan },
+        })
+        return
+      }
+      track('egreso_antes_de_fin_confirmado', {
         screen: 'egreso_flow',
         turno_id: turno.id,
         registro_id: registro.id,

@@ -149,7 +149,11 @@ export function alcanceDe(c: Cobertura): Alcance {
 
 // ── Faltas críticas ─────────────────────────────────────────────────────────
 
-export type ClaveFalta = 'inasistencia_injustificada' | 'rondas_incumplidas'
+export type ClaveFalta =
+  | 'inasistencia_injustificada'
+  | 'rondas_incumplidas'
+  | 'salida_anticipada_injustificada'
+  | 'abandono_de_puesto'
 
 export interface FaltaCritica {
   clave: ClaveFalta
@@ -274,6 +278,147 @@ export function faltaPorInasistencia(injustificadasConfirmadas: number): FaltaCr
  */
 export const INASISTENCIA_ACTIVA = true
 
+// ── Salidas anticipadas ─────────────────────────────────────────────────────
+//
+// Decisión de Gerencia del 08/10/2026. El vigilador permanece hasta el fin
+// programado del servicio: llegar antes NO autoriza a irse antes, la llegada
+// anticipada del relevo no corre el horario y la tolerancia administrativa de
+// 15 minutos no es un permiso. Sólo una autorización expresa de Supervisión o
+// de un superior habilita una salida anticipada.
+//
+// Puntualidad sigue midiendo el ingreso y no se toca: la salida injustificada
+// no es "una demora de pocos minutos" sino una falta crítica, y por eso vive
+// acá, como tope sobre la nota final, y no como descuento en una dimensión.
+//
+// El dato llega CONFIRMADO por una persona (`salidas_anticipadas`, estados
+// 'injustificada' y 'abandono', con responsable, fecha y motivo). Lo que el
+// sistema sólo detectó no se cuenta: la detección abre una revisión, nunca una
+// sanción.
+
+/**
+ * Desde qué período ('YYYY-MM') rige la regla.
+ *
+ * Orden definitiva de Gerencia (08/10/2026): septiembre de 2026 es el período
+ * de revisión inicial y la regla sigue igual para los meses siguientes, sin
+ * reactivarla mes a mes. Los períodos anteriores no se recalculan. Es la misma
+ * constante que `salida_anticipada_vigente` en la base.
+ */
+export const SALIDA_ANTICIPADA_VIGENTE_DESDE: string | null = '2026-09'
+
+export function salidaAnticipadaVigente(
+  periodo: string,
+  desde: string | null = SALIDA_ANTICIPADA_VIGENTE_DESDE,
+): boolean {
+  return desde !== null && /^\d{4}-\d{2}$/.test(periodo) && periodo >= desde
+}
+
+/**
+ * Salida anticipada injustificada CONFIRMADA. Tope 4.
+ *
+ * Igual que la inasistencia, no escalona: una alcanza. La cantidad se dice,
+ * porque una no es lo mismo que veinte para quien tiene que decidir.
+ */
+export function faltaPorSalidaAnticipada(injustificadasConfirmadas: number): FaltaCritica | null {
+  if (injustificadasConfirmadas < 1) return null
+  return {
+    clave: 'salida_anticipada_injustificada',
+    hecho: injustificadasConfirmadas === 1
+      ? '1 salida anticipada injustificada confirmada: retiro antes del horario de '
+        + 'finalización del servicio, sin autorización'
+      : `${injustificadasConfirmadas} salidas anticipadas injustificadas confirmadas: `
+        + 'incumplimiento reiterado del horario de finalización del servicio, sin autorización',
+    tope: 4,
+  }
+}
+
+/**
+ * Abandono efectivo del puesto sin relevo, COMPROBADO. Tope 2.
+ *
+ * Nunca se deduce de una salida anticipada: lo confirma jefe de supervisores,
+ * dirección operativa o Gerencia, con motivo. Que el relevo haya llegado tarde
+ * es contexto para quien revisa, no una clasificación automática.
+ */
+export function faltaPorAbandono(abandonosComprobados: number): FaltaCritica | null {
+  if (abandonosComprobados < 1) return null
+  return {
+    clave: 'abandono_de_puesto',
+    hecho: abandonosComprobados === 1
+      ? '1 abandono del puesto sin relevo comprobado'
+      : `${abandonosComprobados} abandonos del puesto sin relevo comprobados`,
+    tope: 2,
+  }
+}
+
+/**
+ * La capa 4 de una evaluación ya congelada, recalculada con las salidas
+ * confirmadas del período.
+ *
+ * Es la cuenta que hace la base en `recalcular_evaluacion_por_salidas` cada vez
+ * que Supervisión confirma (o deshace) una salida injustificada o un abandono:
+ * parte del desempeño publicado (`indice`), conserva las faltas que no son de
+ * salida (rondas, inasistencia) y vuelve a componer como `evaluar`:
+ * tope = el más restrictivo, nota = min(desempeño, tope). Las dimensiones, el
+ * cumplimiento ponderado y el índice no cambian. Los textos tienen que ser los
+ * mismos que arma la base: hay un test que lo verifica.
+ */
+export interface FilaCapa4 {
+  indice: number | null
+  nota_final: number | null
+  alcance: string | null
+  cobertura: number | null
+  faltas: unknown
+}
+
+export interface Capa4 {
+  nota_final: number
+  concepto: string
+  faltas: FaltaCritica[]
+  explicacion: string
+}
+
+const CLAVES_SALIDA: ClaveFalta[] = ['salida_anticipada_injustificada', 'abandono_de_puesto']
+
+export function recalcularCapa4(
+  fila: FilaCapa4,
+  confirmadas: { injustificadas: number; abandonos: number },
+): Capa4 | null {
+  if (fila.indice === null || fila.nota_final === null) return null
+  const previas = ((Array.isArray(fila.faltas) ? fila.faltas : []) as FaltaCritica[])
+    .filter(f => !CLAVES_SALIDA.includes(f.clave))
+  const nuevas = [
+    faltaPorSalidaAnticipada(confirmadas.injustificadas),
+    faltaPorAbandono(confirmadas.abandonos),
+  ].filter((f): f is FaltaCritica => f !== null)
+  // Primero la que decide la nota: es la que Mi Desempeño nombra como tope.
+  const faltas = [...previas, ...nuevas]
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => Number(a.f.tope) - Number(b.f.tope) || a.i - b.i)
+    .map(x => x.f)
+
+  const desempeno = Number(fila.indice)
+  const tope = faltas.reduce((min, f) => Math.min(min, Number(f.tope)), Infinity)
+  const notaFinal = Math.min(desempeno, tope)
+
+  const partes: string[] = []
+  if (notaFinal < desempeno) {
+    partes.push(`${desempeno} de desempeño · ${notaFinal} final por `
+      + faltas.map(f => f.hecho.toLowerCase()).join(' y '))
+  } else {
+    partes.push(`${desempeno} de desempeño`)
+  }
+  if (fila.alcance === 'parcial') {
+    partes.push(`Evaluación parcial: se pudo evaluar el ${Number(fila.cobertura ?? 0)} % `
+      + 'de los requerimientos aplicables')
+  }
+
+  return {
+    nota_final: notaFinal,
+    concepto: fila.alcance === 'parcial' ? 'Evaluación parcial' : conceptoDe(notaFinal),
+    faltas,
+    explicacion: partes.join(' · '),
+  }
+}
+
 // ── La composición, en orden ────────────────────────────────────────────────
 
 export interface Evaluacion {
@@ -311,7 +456,14 @@ export function evaluar(
 ): Evaluacion {
   const cobertura = coberturaDe(dimensiones, pesos)
   const alcance = alcanceDe(cobertura)
-  const activas = faltas.filter((f): f is FaltaCritica => f !== null)
+  // Primero la que decide la nota (orden estable por tope): es la que Mi
+  // Desempeño nombra como tope, y es el mismo orden que usa el recálculo por
+  // salidas en la base. Sin esto, recongelar y recalcular darían textos distintos.
+  const activas = faltas
+    .filter((f): f is FaltaCritica => f !== null)
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => a.f.tope - b.f.tope || a.i - b.i)
+    .map(x => x.f)
   const desempeno = notaEscolar(indice)
   const tope = activas.reduce((min, f) => Math.min(min, f.tope), Infinity)
   const notaFinal = Math.min(desempeno, tope)

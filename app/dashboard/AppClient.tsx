@@ -104,6 +104,7 @@ import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
 import ControlImagenesIAPanel from '@/components/ia/ControlImagenesIAPanel'
 import ControlSupervisionesPanel from '@/components/supervisiones/ControlSupervisionesPanel'
+import SalidasAnticipadasPanel from '@/components/supervisiones/SalidasAnticipadasPanel'
 // Mismo panel de configuración que usa el legajo del objetivo. Se monta también
 // en la solapa Rondas para poder editar rondas y puntos sin entrar objetivo por
 // objetivo. No es un editor nuevo: es el que ya existía.
@@ -13978,6 +13979,10 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'revision_fotos_ia', icon:'🤖', label:'Revisión de fotos IA' },
       { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
       { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
+      // Salidas anticipadas: la resuelve Supervisión (su zona) o un superior.
+      // Administración la ve; quién puede resolver lo decide la base.
+      ...(tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas')
+        ? [{ id:'salidas_anticipadas', icon:'🚪', label:'Salidas anticipadas' }] : []),
       { id:'novedades', icon:'📋', label:'Novedades' },
       // Novedades del Personal: gestión de novedades laborales por rango/cantidad.
       // Gateado por capacidad gestionar_personal (Administración/Gerencia).
@@ -14121,6 +14126,9 @@ const esGuardia = esRolGuardia(user.rol)
                   filtroInicial={filtros.supervisiones}
                   errorCarga={errorSupervisionesAdmin}
                 />
+              )}
+              {page === 'salidas_anticipadas' && (
+                <SalidasAnticipadasPanel />
               )}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}

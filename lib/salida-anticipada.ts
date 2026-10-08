@@ -59,6 +59,36 @@ export function minutosHastaFinDeTurno(
   return ahoraMin >= inicio ? fin + 24 * 60 - ahoraMin : fin - ahoraMin
 }
 
+/**
+ * El aviso de cualquier salida anterior al fin del servicio, aunque falte un
+ * minuto.
+ *
+ * Decisión de Gerencia del 08/10/2026: llegar antes no autoriza a irse antes y
+ * la tolerancia administrativa de 15 minutos no es un permiso. El aviso NO
+ * bloquea —una salida autorizada o una emergencia tienen que poder
+ * registrarse, y el registro tiene que reflejar lo que pasó—, pero tampoco deja
+ * que alguien se vaya creyendo que la app lo habilitó.
+ *
+ * `null` cuando no falta nada o el horario no se puede leer.
+ */
+export function textoAvisoSalidaAnticipada(
+  turno: TurnoConHorario,
+  ahora: Date = new Date(),
+): string | null {
+  const faltan = minutosHastaFinDeTurno(turno, ahora)
+  if (faltan === null || faltan <= 0) return null
+  const fin = (turno.hora_fin || '').slice(0, 5)
+  const h = Math.floor(faltan / 60)
+  const m = faltan % 60
+  const cuanto = h > 0 ? `${h} h ${m} min` : `${m} min`
+  return `Tu servicio termina a las ${fin} y todavía faltan ${cuanto}.\n\n`
+    + 'Llegar antes no te autoriza a retirarte antes. Sólo podés retirarte antes '
+    + 'con autorización expresa de tu supervisor o de un superior.\n\n'
+    + 'Si registrás la salida ahora, quedará como salida anticipada y Supervisión la va a revisar. '
+    + 'Retirarse antes sin autorización es una falta grave.\n\n'
+    + '¿Registrar la salida igual?'
+}
+
 /** ¿Corresponde preguntar antes de registrar esta salida? */
 export function esSalidaMuyAnticipada(
   turno: TurnoConHorario,
