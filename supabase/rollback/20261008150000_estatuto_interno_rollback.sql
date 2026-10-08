@@ -16,7 +16,7 @@ drop function if exists public.estatuto_control(uuid);
 drop function if exists public.estatuto_publicar_version(uuid);
 drop function if exists public.estatuto_aceptar(uuid);
 drop function if exists public.estatuto_registrar_apertura(uuid);
-drop function if exists public.estatuto_texto_declaracion(date);
+drop function if exists public.estatuto_texto_declaracion();
 drop function if exists public.estatuto_version_vigente_id();
 
 drop table if exists public.estatuto_aceptaciones;

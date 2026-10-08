@@ -20,7 +20,7 @@
  * documento identificado por su hash. La UI lo aclara (ACLARACION_PAPEL).
  */
 
-import contenido20260421 from '@/lib/estatuto/contenido-2026-04-21.json'
+import contenidoV1 from '@/lib/estatuto/contenido-v1.json'
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -28,10 +28,12 @@ export type EstadoVersion = 'borrador' | 'publicado'
 
 export interface VersionEstatuto {
   id: string
+  /**
+   * Número de versión ('1', '2', …). El documento NO se identifica por fecha:
+   * por decisión de Gerencia (08/10) se llama "Estatuto Interno", sin fecha.
+   */
   identificador: string
   titulo: string
-  /** 'YYYY-MM-DD' — la fecha que figura en la declaración. */
-  fecha_documento: string
   archivo_ruta: string
   archivo_nombre: string
   archivo_sha256: string
@@ -48,7 +50,6 @@ export interface AceptacionEstatuto {
   empleado_id: string
   auth_user_id: string
   version_identificador: string
-  fecha_documento: string
   archivo_sha256: string
   texto_sha256: string | null
   declaracion: string
@@ -80,7 +81,6 @@ export interface ContenidoEstatuto {
   version: string
   fuente: {
     archivo_original: string
-    nombre_original: string
     sha256_original: string
     bytes_original: number
     copia_pdf: string
@@ -112,26 +112,26 @@ export const ACLARACION_PAPEL =
   'desde la app. No reemplaza las constancias firmadas en papel que la ' +
   'empresa te solicite.'
 
-// ── Fechas ───────────────────────────────────────────────────────────────────
+// ── Versión y declaración ────────────────────────────────────────────────────
 
-/** '2026-04-21' → '21/04/2026'. Sin Date: una fecha sin hora no tiene huso. */
-export function fechaLegible(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ''))
-  if (!m) return String(iso ?? '')
-  return `${m[3]}/${m[2]}/${m[1]}`
+/**
+ * "Versión 1". Sin fecha: Gerencia pidió (08/10) que el documento se llame
+ * "Estatuto Interno" a secas. Las fechas que sí se muestran son las de la
+ * constancia (publicación, apertura, aceptación), que no son del documento.
+ */
+export function etiquetaVersion(identificador: string | null | undefined): string {
+  return `Versión ${identificador ?? '—'}`
 }
 
 /**
- * El texto de la declaración. La fecha sale de la versión, nunca fija: si
- * mañana se publica otra, la declaración nombra la otra.
+ * El texto de la declaración. Sin fecha ni número de versión: la constancia
+ * guarda aparte qué versión y qué archivo (hash) se aceptó.
  *
  * Es el mismo texto que arma `estatuto_texto_declaracion()` en la base; el que
  * queda en la constancia es el del servidor.
  */
-export function textoDeclaracion(fechaDocumento: string): string {
-  return 'Declaro haber leído y tomado conocimiento del Estatuto Interno de ' +
-    `Mercosur Seguridad SRL, versión ${fechaLegible(fechaDocumento)}.`
-}
+export const TEXTO_DECLARACION =
+  'Declaro haber leído y tomado conocimiento del Estatuto Interno de Mercosur Seguridad SRL.'
 
 /** Fecha y hora de Argentina para mostrar una constancia. */
 export function fechaHoraArgentina(iso: string | null | undefined): string {
@@ -161,7 +161,7 @@ export function versionVigente(
   return [...publicadas].sort((a, b) => {
     const t = Date.parse(b.publicado_at as string) - Date.parse(a.publicado_at as string)
     if (t !== 0) return t
-    return b.fecha_documento.localeCompare(a.fecha_documento)
+    return Number(b.identificador) - Number(a.identificador)
   })[0]
 }
 
@@ -304,7 +304,7 @@ export function resumenControl(personas: readonly PersonaControl[]): ResumenCont
  * archivo acá y su fila en estatuto_versiones, con el mismo texto_sha256.
  */
 const CONTENIDOS: Record<string, ContenidoEstatuto> = {
-  '2026-04-21': contenido20260421 as ContenidoEstatuto,
+  '1': contenidoV1 as ContenidoEstatuto,
 }
 
 export function contenidoDeVersion(identificador: string | null | undefined): ContenidoEstatuto | null {

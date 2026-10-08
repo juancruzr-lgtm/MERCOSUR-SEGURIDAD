@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'crypto'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 
 import {
-  TEXTO_CARTEL, TITULO_CARTEL, contenidoDeVersion, declaracionHabilitada,
-  estadoAceptacion, fechaLegible, mostrarCartel, puedeAceptar, resumenControl,
-  textoCanonico, textoDeclaracion, tramosConNegrita, versionVigente,
+  TEXTO_CARTEL, TEXTO_DECLARACION, TITULO_CARTEL, contenidoDeVersion, declaracionHabilitada,
+  estadoAceptacion, etiquetaVersion, mostrarCartel, puedeAceptar, resumenControl,
+  textoCanonico, tramosConNegrita, versionVigente,
 } from '@/lib/estatuto'
 import type { AceptacionEstatuto, PersonaControl, VersionEstatuto } from '@/lib/estatuto'
 
@@ -14,7 +14,7 @@ const RAIZ = join(__dirname, '..')
 const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
 
 const version = (id: string, over: Partial<VersionEstatuto> = {}): VersionEstatuto => ({
-  id, identificador: id, titulo: 'Estatuto Interno', fecha_documento: '2026-04-21',
+  id, identificador: id, titulo: 'Estatuto Interno',
   archivo_ruta: '/x.doc', archivo_nombre: 'x.doc', archivo_sha256: 'a'.repeat(64),
   archivo_bytes: 1, texto_sha256: null, estado: 'borrador', publicado_at: null,
   publicado_por: null, ...over,
@@ -23,7 +23,7 @@ const version = (id: string, over: Partial<VersionEstatuto> = {}): VersionEstatu
 const aceptacion = (versionId: string, empleadoId: string): AceptacionEstatuto => ({
   id: `${versionId}-${empleadoId}`, version_id: versionId, empleado_id: empleadoId,
   auth_user_id: 'auth-' + empleadoId, version_identificador: versionId,
-  fecha_documento: '2026-04-21', archivo_sha256: 'a'.repeat(64), texto_sha256: null,
+  archivo_sha256: 'a'.repeat(64), texto_sha256: null,
   declaracion: 'x', abierto_at: '2026-10-08T12:00:00Z', aceptado_at: '2026-10-08T12:05:00Z',
 })
 
@@ -31,13 +31,13 @@ const aceptacion = (versionId: string, empleadoId: string): AceptacionEstatuto =
 
 describe('versión vigente', () => {
   it('sin versiones publicadas no hay vigente (el borrador no rige)', () => {
-    expect(versionVigente([version('2026-04-21')])).toBeNull()
+    expect(versionVigente([version('1')])).toBeNull()
   })
 
   it('es la publicada más reciente, aunque haya un borrador más nuevo', () => {
     const v1 = version('v1', { estado: 'publicado', publicado_at: '2026-05-01T10:00:00Z' })
-    const v2 = version('v2', { estado: 'publicado', publicado_at: '2026-09-01T10:00:00Z', fecha_documento: '2026-08-30' })
-    const borrador = version('v3', { fecha_documento: '2026-12-01' })
+    const v2 = version('v2', { estado: 'publicado', publicado_at: '2026-09-01T10:00:00Z' })
+    const borrador = version('v3')
     expect(versionVigente([v1, borrador, v2])?.id).toBe('v2')
   })
 
@@ -112,25 +112,25 @@ describe('la declaración se habilita sólo después de abrir el documento', () 
 
 // ── Textos ───────────────────────────────────────────────────────────────────
 
-describe('texto de la declaración', () => {
-  it('lleva la fecha de la versión', () => {
-    expect(textoDeclaracion('2026-04-21')).toBe(
-      'Declaro haber leído y tomado conocimiento del Estatuto Interno de Mercosur Seguridad SRL, versión 21/04/2026.',
+describe('texto de la declaración y versión, sin fecha (Gerencia 08/10)', () => {
+  it('la declaración es exactamente la pedida', () => {
+    expect(TEXTO_DECLARACION).toBe(
+      'Declaro haber leído y tomado conocimiento del Estatuto Interno de Mercosur Seguridad SRL.',
     )
   })
 
-  it('cambia con la versión (no está fija)', () => {
-    expect(textoDeclaracion('2027-01-05')).toContain('versión 05/01/2027.')
+  it('no lleva ninguna fecha', () => {
+    expect(TEXTO_DECLARACION).not.toMatch(/\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|2026|versión/)
   })
 
   it('es el mismo texto que arma la base (estatuto_texto_declaracion)', () => {
     const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261008150000_estatuto_interno.sql'), 'utf8')
-    expect(sql).toContain("'Declaro haber leído y tomado conocimiento del Estatuto Interno de '")
-    expect(sql).toContain("|| 'Mercosur Seguridad SRL, versión ' || to_char(p_fecha, 'DD/MM/YYYY') || '.'")
+    expect(sql).toContain("'Declaro haber leído y tomado conocimiento del Estatuto Interno de '\n      || 'Mercosur Seguridad SRL.'")
+    expect(sql).not.toContain('to_char(p_fecha')
   })
 
-  it('fecha legible sin corrimiento de huso', () => {
-    expect(fechaLegible('2026-04-21')).toBe('21/04/2026')
+  it('la versión se muestra como número', () => {
+    expect(etiquetaVersion('1')).toBe('Versión 1')
   })
 
   it('el cartel dice lo que pidió la Gerencia', () => {
@@ -165,7 +165,7 @@ describe('control de Administración / Gerencia', () => {
   const p = (id: string, apellido: string, aceptado: boolean, abierto = aceptado): PersonaControl => ({
     empleado_id: id, nombre: 'N', apellido, legajo: null, cuil: null, rol: 'guardia', puesto: 'vigilador',
     abierto_at: abierto ? '2026-10-08T12:00:00Z' : null, aceptado_at: aceptado ? '2026-10-08T12:05:00Z' : null,
-    ultima_version_aceptada: aceptado ? '2026-04-21' : null, ultima_aceptacion_at: null,
+    ultima_version_aceptada: aceptado ? '1' : null, ultima_aceptacion_at: null,
   })
 
   it('pendientes por diferencia sobre el universo', () => {
@@ -184,18 +184,18 @@ describe('control de Administración / Gerencia', () => {
 
 // ── Integridad del documento ─────────────────────────────────────────────────
 
-describe('documento 21/04/2026: el original y su conversión', () => {
-  const c = contenidoDeVersion('2026-04-21')!
+describe('documento (versión 1): el original y su conversión', () => {
+  const c = contenidoDeVersion('1')!
 
   it('el archivo publicado es el original, byte a byte (SHA-256)', () => {
-    const original = readFileSync(join(RAIZ, 'public/documentos/estatuto/2026-04-21/estatuto-interno-2026-04-21.doc'))
+    const original = readFileSync(join(RAIZ, 'public/documentos/estatuto/v1/estatuto-interno.doc'))
     expect(original.length).toBe(90624)
     expect(sha256(original)).toBe('5feb70d22a7b5fffe100eb56304654678c73328117ecc4de25b8c5db4c46228c')
     expect(c.fuente.sha256_original).toBe(sha256(original))
   })
 
   it('la copia PDF es la registrada', () => {
-    const pdf = readFileSync(join(RAIZ, 'public/documentos/estatuto/2026-04-21/estatuto-interno-2026-04-21.pdf'))
+    const pdf = readFileSync(join(RAIZ, 'public/documentos/estatuto/v1/estatuto-interno.pdf'))
     expect(sha256(pdf)).toBe(c.fuente.sha256_pdf)
   })
 
@@ -208,6 +208,22 @@ describe('documento 21/04/2026: el original y su conversión', () => {
     expect(sql).toContain(`'${c.fuente.sha256_original}'`)
     expect(sql).toContain(`'${c.texto_sha256}'`)
     expect(sql).toMatch(/'b84a4047[0-9a-f]+',\s*'borrador',/)
+    expect(sql).toContain("'1',\n  '/documentos/estatuto/v1/estatuto-interno.doc',\n  'estatuto-interno.doc',")
+  })
+
+  it('sin la fecha del documento en lo que se muestra o se descarga (Gerencia 08/10)', () => {
+    const fecha = /21[-/]04[-/](20)?26|2026-04-21|MODIFICADO el/i
+    const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261008150000_estatuto_interno.sql'), 'utf8')
+    expect(sql).not.toMatch(fecha)
+    expect(sql).not.toContain('fecha_documento')
+    expect(JSON.stringify(c)).not.toMatch(fecha)
+    expect(readdirSync(join(RAIZ, 'public/documentos/estatuto/v1')).sort())
+      .toEqual(['estatuto-interno.doc', 'estatuto-interno.pdf'])
+    for (const archivo of ['lib/estatuto.ts', 'components/estatuto/EstatutoInterno.tsx',
+      'components/estatuto/ControlEstatuto.tsx', 'components/estatuto/AvisoEstatuto.tsx',
+      'components/estatuto/DocumentoEstatuto.tsx']) {
+      expect(readFileSync(join(RAIZ, archivo), 'utf8')).not.toMatch(fecha)
+    }
     expect(sql).not.toMatch(/insert into public\.estatuto_versiones[\s\S]*'publicado'[\s\S]*on conflict \(identificador\)/)
   })
 

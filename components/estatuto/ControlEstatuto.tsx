@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import DocumentoEstatuto from '@/components/estatuto/DocumentoEstatuto'
 import EstatutoInterno from '@/components/estatuto/EstatutoInterno'
 import {
-  contenidoDeVersion, fechaHoraArgentina, fechaLegible, resumenControl, versionVigente,
+  contenidoDeVersion, etiquetaVersion, fechaHoraArgentina, resumenControl, versionVigente,
 } from '@/lib/estatuto'
 import type { PersonaControl, VersionEstatuto } from '@/lib/estatuto'
 import { cargarControl, cargarVersiones, publicarVersion } from '@/lib/estatuto-datos'
@@ -36,46 +36,56 @@ import type { SujetoAcceso } from '@/lib/capacidades'
 const card: React.CSSProperties = {
   background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 16, marginBottom: 14,
 }
-const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em', borderBottom: '1px solid #1e2d42' }
-const td: React.CSSProperties = { padding: '8px 10px', fontSize: 13.5, color: '#e2e8f0', borderBottom: '1px solid #1e2d42', verticalAlign: 'top' }
 const pestaña = (activa: boolean): React.CSSProperties => ({
   background: 'none', border: 'none', borderBottom: activa ? '2px solid #f59e0b' : '2px solid transparent',
-  color: activa ? '#f59e0b' : '#94a3b8', padding: '10px 14px', fontSize: 13.5, fontWeight: activa ? 700 : 400, cursor: 'pointer',
+  color: activa ? '#f59e0b' : '#94a3b8', padding: '10px 12px', fontSize: 13.5, fontWeight: activa ? 700 : 400,
+  cursor: 'pointer', flex: 'none',
 })
+const dato: React.CSSProperties = { minWidth: 0 }
+const datoEtiqueta: React.CSSProperties = {
+  fontSize: 10.5, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em',
+}
 
-function Tabla({ personas, conFecha }: { personas: PersonaControl[]; conFecha: boolean }) {
+/**
+ * El listado nominal como TARJETAS apiladas, no como tabla.
+ *
+ * A 390 px la tabla de cuatro columnas cortaba la última ("Última versión
+ * aceptada") y obligaba a desplazar de costado. Cada persona es un bloque con
+ * su nombre arriba y los datos debajo en una grilla que se reacomoda sola
+ * (`minmax(min(100%, …), 1fr)`): en el celular quedan uno o dos por fila, en
+ * la computadora los cuatro en línea. Nada puede ser más ancho que la pantalla.
+ */
+function Listado({ personas, conFecha }: { personas: PersonaControl[]; conFecha: boolean }) {
   if (personas.length === 0) return <div style={{ color: '#64748b', fontSize: 13.5, padding: 8 }}>Nadie.</div>
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr>
-            <th style={th}>Persona</th>
-            <th style={th}>Puesto</th>
-            <th style={th}>{conFecha ? 'Aceptó' : 'Abrió el documento'}</th>
-            <th style={th}>Última versión aceptada</th>
-          </tr>
-        </thead>
-        <tbody>
-          {personas.map(p => (
-            <tr key={p.empleado_id}>
-              <td style={td}>
-                <a href={`/guardias/${p.empleado_id}?seccion=estatuto`} style={{ color: '#e2e8f0' }}>
-                  {p.apellido}, {p.nombre}
-                </a>
-                <div style={{ fontSize: 12, color: '#64748b' }}>{p.legajo ? `Legajo ${p.legajo}` : ''}</div>
-              </td>
-              <td style={td}>{p.puesto ?? p.rol ?? '—'}</td>
-              <td style={td}>{conFecha ? fechaHoraArgentina(p.aceptado_at) : (p.abierto_at ? fechaHoraArgentina(p.abierto_at) : 'No')}</td>
-              <td style={td}>
-                {p.ultima_version_aceptada
-                  ? <>{fechaLegible(p.ultima_version_aceptada)}<div style={{ fontSize: 12, color: '#64748b' }}>{fechaHoraArgentina(p.ultima_aceptacion_at)}</div></>
-                  : '—'}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div style={{ display: 'grid', gap: 8 }}>
+      {personas.map(p => (
+        <div key={p.empleado_id} style={{
+          border: '1px solid #1e2d42', borderRadius: 8, padding: '10px 12px', background: '#0f172a', minWidth: 0,
+        }}>
+          <a href={`/guardias/${p.empleado_id}?seccion=estatuto`}
+            style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 14, overflowWrap: 'anywhere' }}>
+            {p.apellido}, {p.nombre}
+          </a>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))',
+            gap: '6px 12px', marginTop: 6, fontSize: 13, color: '#cbd5e1',
+          }}>
+            <div style={dato}><div style={datoEtiqueta}>Legajo</div>{p.legajo ?? '—'}</div>
+            <div style={dato}><div style={datoEtiqueta}>Puesto</div>{p.puesto ?? p.rol ?? '—'}</div>
+            <div style={dato}>
+              <div style={datoEtiqueta}>{conFecha ? 'Aceptó' : 'Abrió el documento'}</div>
+              {conFecha ? fechaHoraArgentina(p.aceptado_at) : (p.abierto_at ? fechaHoraArgentina(p.abierto_at) : 'No')}
+            </div>
+            <div style={dato}>
+              <div style={datoEtiqueta}>Última versión aceptada</div>
+              {p.ultima_version_aceptada
+                ? <>{etiquetaVersion(p.ultima_version_aceptada)} · {fechaHoraArgentina(p.ultima_aceptacion_at)}</>
+                : '—'}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -117,7 +127,7 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
 
   const publicar = async (v: VersionEstatuto) => {
     const ok = window.confirm(
-      `¿Publicar el Estatuto Interno versión ${fechaLegible(v.fecha_documento)}?\n\n` +
+      `¿Publicar el Estatuto Interno (${etiquetaVersion(v.identificador).toLowerCase()})?\n\n` +
       'Pasa a ser la versión vigente: se le pedirá la aceptación a todo el personal activo. ' +
       'Una vez publicada, el documento no se puede modificar ni despublicar.',
     )
@@ -130,7 +140,7 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
   }
 
   return (
-    <div style={{ maxWidth: 1000 }}>
+    <div style={{ maxWidth: 1000, minWidth: 0, width: '100%', boxSizing: 'border-box' }}>
       <div style={{ fontWeight: 800, fontSize: 20, color: '#f8fafc', marginBottom: 4 }}>Estatuto Interno</div>
       <div style={{ fontSize: 13.5, color: '#94a3b8', marginBottom: 12, lineHeight: 1.5 }}>
         Versiones, aceptaciones y pendientes. Las constancias son inmutables y no
@@ -151,7 +161,7 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
           {!vigente && (
             <div style={{ ...card, borderColor: 'rgba(245,158,11,.45)', color: '#fbbf24', fontSize: 13.5, lineHeight: 1.5 }}>
               No hay ninguna versión publicada: todavía no se le pide la aceptación a nadie.
-              {elegida && <> Se muestra el estado de la versión {fechaLegible(elegida.fecha_documento)} ({elegida.estado}).</>}
+              {elegida && <> Se muestra el estado de la {etiquetaVersion(elegida.identificador).toLowerCase()} ({elegida.estado}).</>}
             </div>
           )}
           {versiones.length > 1 && (
@@ -159,17 +169,17 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
               <select
                 value={seleccion ?? ''}
                 onChange={e => setSeleccion(e.target.value || null)}
-                style={{ background: '#0f172a', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px' }}
+                style={{ background: '#0f172a', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', maxWidth: '100%', boxSizing: 'border-box' }}
               >
                 {versiones.map(v => (
                   <option key={v.id} value={v.id}>
-                    Versión {fechaLegible(v.fecha_documento)} · {v.estado}{v.id === vigente?.id ? ' (vigente)' : ''}
+                    {etiquetaVersion(v.identificador)} · {v.estado}{v.id === vigente?.id ? ' (vigente)' : ''}
                   </option>
                 ))}
               </select>
             </div>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 10, marginBottom: 14 }}>
             {[
               { l: 'Activos alcanzados', v: resumen.alcanzados, c: '#e2e8f0' },
               { l: 'Aceptaron', v: resumen.aceptaron, c: '#86efac' },
@@ -184,11 +194,11 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
           </div>
           <div style={card}>
             <div style={{ fontWeight: 700, color: '#fbbf24', marginBottom: 8 }}>Pendientes ({resumen.pendientes})</div>
-            <Tabla personas={resumen.listaPendientes} conFecha={false} />
+            <Listado personas={resumen.listaPendientes} conFecha={false} />
           </div>
           <div style={card}>
             <div style={{ fontWeight: 700, color: '#86efac', marginBottom: 8 }}>Aceptaron ({resumen.aceptaron})</div>
-            <Tabla personas={resumen.listaAceptaron} conFecha />
+            <Listado personas={resumen.listaAceptaron} conFecha />
           </div>
         </>
       )}
@@ -201,16 +211,16 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
             return (
               <div key={v.id} style={card}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                  <div>
+                  <div style={{ flex: '1 1 220px', minWidth: 0 }}>
                     <div style={{ fontWeight: 800, color: '#f8fafc' }}>
-                      Versión {fechaLegible(v.fecha_documento)}
+                      {etiquetaVersion(v.identificador)}
                       {v.id === vigente?.id && <span style={{ color: '#86efac', fontSize: 12.5, marginLeft: 8 }}>VIGENTE</span>}
                     </div>
                     <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6, marginTop: 4 }}>
-                      Identificador {v.identificador} · {v.estado === 'publicado'
+                      {v.estado === 'publicado'
                         ? `publicada el ${fechaHoraArgentina(v.publicado_at)}`
                         : 'BORRADOR (no se le muestra al personal)'}
-                      <br />Archivo: <a href={v.archivo_ruta} download={v.archivo_nombre} style={{ color: '#cbd5e1' }}>{v.archivo_nombre}</a> ({v.archivo_bytes.toLocaleString('es-AR')} bytes)
+                      <br />Archivo: <a href={v.archivo_ruta} download={v.archivo_nombre} style={{ color: '#cbd5e1', overflowWrap: 'anywhere' }}>{v.archivo_nombre}</a> ({v.archivo_bytes.toLocaleString('es-AR')} bytes)
                       <br />SHA-256: <span style={{ fontFamily: 'monospace', fontSize: 12, overflowWrap: 'anywhere' }}>{v.archivo_sha256}</span>
                       {contenido && contenido.texto_sha256 !== v.texto_sha256 && (
                         <><br /><span style={{ color: '#fca5a5' }}>El texto empaquetado en la app no coincide con el registrado para esta versión.</span></>

@@ -1,23 +1,29 @@
 # Estatuto Interno en la app — contexto, conversión y revisión previa (08/10/2026)
 
 Rama `estatuto-interno`. **Nada de esto está publicado ni activado**: la migración
-no se aplicó en producción y la versión 21/04/2026 se carga como BORRADOR.
+no se aplicó en producción y la **versión 1** se carga como BORRADOR.
 
 ## 1. Documento fuente
 
 | Dato | Valor |
 |---|---|
-| Archivo recibido | `ESTATUTO INTERNO MODIFICADO el  21-04-26.doc` (dos espacios antes de "21") |
+| Archivo recibido (sólo para trazabilidad; no se muestra ni se descarga con ese nombre) | `ESTATUTO INTERNO MODIFICADO el  21-04-26.doc` |
 | Formato | Word 97-2003 binario (OLE/CFB), 90.624 bytes, 8 páginas |
 | SHA-256 | `5feb70d22a7b5fffe100eb56304654678c73328117ecc4de25b8c5db4c46228c` |
-| Copia en el repo | `public/documentos/estatuto/2026-04-21/estatuto-interno-2026-04-21.doc` (byte a byte, mismo hash) |
-| Copia PDF (derivada) | `public/documentos/estatuto/2026-04-21/estatuto-interno-2026-04-21.pdf`, exportada por Microsoft Word desde el original abierto en sólo lectura. SHA-256 `b4f17d96131ab1046842f703a5be2a09293a265850dee526514597d3a8a3035a` |
-| Texto que muestra la app | `lib/estatuto/contenido-2026-04-21.json` — `texto_sha256` `b84a4047754434d1f8c111d820a23d2d36d972b060874b8795268961a567c832` |
+| Copia en el repo | `public/documentos/estatuto/v1/estatuto-interno.doc` (byte a byte: sólo cambió el nombre, mismo hash) |
+| Copia PDF (derivada) | `public/documentos/estatuto/v1/estatuto-interno.pdf`, exportada por Microsoft Word desde el original abierto en sólo lectura. SHA-256 `b4f17d96131ab1046842f703a5be2a09293a265850dee526514597d3a8a3035a` |
+| Texto que muestra la app | `lib/estatuto/contenido-v1.json` — `texto_sha256` `b84a4047754434d1f8c111d820a23d2d36d972b060874b8795268961a567c832` |
 
-**El documento no tiene fecha en su texto.** La fecha 21/04/2026 sale del nombre del
-archivo ("21-04-26") y de la fecha de modificación del archivo (21/04/2026 15:01). Si
-la Gerencia quiere que la versión se identifique por otra fecha, hay que cambiarla
-ANTES de publicar (después, la base no deja cambiar la versión).
+**Sin fecha, por decisión de Gerencia (JC, 08/10/2026):** "El archivo se llama
+Estatuto Interno". La fecha del nombre del archivo recibido (21-04-26) se quitó de todo
+lo que se muestra o se descarga: título y etiqueta de versión ("Versión 1"), texto de
+la declaración, nombres de los archivos (`estatuto-interno.doc` / `.pdf`, carpeta
+`v1/`) y la base (se eliminó la columna `fecha_documento`; la versión se identifica
+por `identificador = '1'`, que la base sólo acepta numérico). El texto del documento
+nunca tuvo fecha, así que el contenido y su hash no cambiaron. Tampoco la tienen las
+propiedades internas del .doc (título "ESTATUTO INTERNO") ni la copia PDF. Sí se
+muestran las fechas de publicación, apertura y aceptación: son datos de la constancia,
+no del documento.
 
 El encabezado de página tiene el logo (imagen) y el texto "S.R.L"; el pie, el número
 de página. No son disposiciones y no se reproducen en el texto en pantalla (sí están
@@ -74,12 +80,13 @@ palabras y la numeración no cambian.
 
 ## 3. Modelo y reglas
 
-- `estatuto_versiones` (borrador/publicado, ruta + hash + bytes del original, hash del
+- `estatuto_versiones` (identificador numérico — '1' —, sin fecha; borrador/publicado,
+  ruta + hash + bytes del original, hash del
   texto, publicado_at/publicado_por). Vigente = publicada más reciente. Trigger: una
   versión publicada o con aperturas/aceptaciones no cambia su documento, no vuelve a
   borrador y no se borra.
 - `estatuto_aperturas`: primera apertura del texto de una versión publicada.
-- `estatuto_aceptaciones`: la constancia (empleado, auth_user_id, versión, fecha, hash
+- `estatuto_aceptaciones`: la constancia (empleado, auth_user_id, versión, hash
   del archivo y del texto, declaración armada en el servidor, abierto_at, aceptado_at).
   Unique (versión, empleado). Sin UPDATE/DELETE/TRUNCATE para nadie (permisos
   revocados + trigger, que también frena a service_role). FKs RESTRICT.
@@ -179,7 +186,8 @@ otros entretenimientos).
   mismo" (puesto 1), "deforma eficaz" (9), "con ton toda eficacia" (20), "al a empresa"
   (12), "individualizar de a los autores" (14), "se hallan impartido" (1), "en forma
   directo" (17), "Circunscripción" por "circunspección" (Consid. 8).
-- El documento no tiene fecha ni número de versión en el cuerpo (ver §1).
+- El documento no tiene fecha ni número de versión en el cuerpo (ver §1); en la app se
+  identifica como "Versión 1".
 
 ## 5. Salidas anticipadas y Puntualidad: Estatuto vs. app
 
@@ -213,7 +221,7 @@ otra sesión (rama `salidas-anticipadas`).
 
 ## 6. Pendientes
 
-- Revisión de §4 por Gerencia/asesoría; confirmar la fecha/identificador de versión.
+- Revisión de §4 por Gerencia/asesoría.
 - Aplicar la migración `20261008150000_estatuto_interno.sql` (con OK expreso) y
   verificar en el editor; recién después publicar desde **Estatuto Interno →
   Versiones → Publicar** (sólo Gerencia).

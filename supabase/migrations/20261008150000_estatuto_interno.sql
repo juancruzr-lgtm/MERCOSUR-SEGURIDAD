@@ -38,7 +38,7 @@
 --
 -- ── Publicar ─────────────────────────────────────────────────────────────────
 -- Sólo Gerencia (`puede_acceder_gerencia_actual()`, que incluye la delegación
--- gerencial vigente), por RPC. La versión 21/04/2026 se carga como BORRADOR: no
+-- gerencial vigente), por RPC. La versión 1 se carga como BORRADOR: no
 -- se publica en esta migración. Mientras no haya ninguna versión publicada, el
 -- cartel no aparece para nadie.
 --
@@ -62,11 +62,12 @@ begin;
 
 create table if not exists public.estatuto_versiones (
   id               uuid primary key default gen_random_uuid(),
-  -- Identificador estable y legible: la fecha del documento ('2026-04-21').
-  identificador    text not null unique check (length(btrim(identificador)) > 0),
-  titulo           text not null default 'Estatuto Interno — Mercosur Seguridad SRL',
-  -- La fecha que figura en la declaración ("versión 21/04/2026").
-  fecha_documento  date not null,
+  -- Identificador estable y legible: el número de versión ('1', '2', …). La
+  -- versión NO se identifica por una fecha: por decisión de Gerencia (08/10)
+  -- el documento se llama "Estatuto Interno", sin fecha, en pantalla, en la
+  -- declaración y en el archivo que se descarga.
+  identificador    text not null unique check (identificador ~ '^[1-9][0-9]*$'),
+  titulo           text not null default 'Estatuto Interno',
   -- El ORIGINAL tal cual se recibió (Word 97). La ruta es pública dentro de la
   -- app (/public) y el hash es lo que ata la constancia a ese archivo exacto.
   archivo_ruta     text not null,
@@ -124,7 +125,6 @@ create table if not exists public.estatuto_aceptaciones (
   -- Copia de lo aceptado: aunque la tabla de versiones no deja cambiar el
   -- documento, la constancia se sostiene sola.
   version_identificador text not null,
-  fecha_documento       date not null,
   archivo_sha256        text not null check (archivo_sha256 ~ '^[0-9a-f]{64}$'),
   texto_sha256          text,
   -- El texto exacto de la declaración, armado en el servidor.
@@ -210,7 +210,6 @@ begin
 
   if v_con_rastro and (
        new.identificador   is distinct from old.identificador
-    or new.fecha_documento is distinct from old.fecha_documento
     or new.archivo_ruta    is distinct from old.archivo_ruta
     or new.archivo_nombre  is distinct from old.archivo_nombre
     or new.archivo_sha256  is distinct from old.archivo_sha256
@@ -306,7 +305,7 @@ as $fn$
   select v.id
   from public.estatuto_versiones v
   where v.estado = 'publicado'
-  order by v.publicado_at desc, v.fecha_documento desc
+  order by v.publicado_at desc, v.creado_at desc
   limit 1
 $fn$;
 
@@ -316,18 +315,20 @@ grant execute on function public.estatuto_version_vigente_id() to authenticated;
 -- El texto de la declaración. La UI arma el mismo texto (lib/estatuto.ts) para
 -- mostrarlo, pero el que queda en la constancia es éste, armado en el servidor:
 -- el cliente no elige qué declaró.
-create or replace function public.estatuto_texto_declaracion(p_fecha date)
+-- Sin fecha ni número de versión en el texto (Gerencia, 08/10): la constancia
+-- ya guarda aparte la versión y el hash del archivo aceptado.
+create or replace function public.estatuto_texto_declaracion()
 returns text
 language sql
 immutable
 set search_path = public, pg_catalog
 as $fn$
   select 'Declaro haber leído y tomado conocimiento del Estatuto Interno de '
-      || 'Mercosur Seguridad SRL, versión ' || to_char(p_fecha, 'DD/MM/YYYY') || '.'
+      || 'Mercosur Seguridad SRL.'
 $fn$;
 
-revoke all on function public.estatuto_texto_declaracion(date) from public, anon;
-grant execute on function public.estatuto_texto_declaracion(date) to authenticated;
+revoke all on function public.estatuto_texto_declaracion() from public, anon;
+grant execute on function public.estatuto_texto_declaracion() to authenticated;
 
 -- ============================================================================
 -- 7. RPC: registrar la apertura
@@ -461,12 +462,12 @@ begin
 
   insert into public.estatuto_aceptaciones (
     version_id, empleado_id, auth_user_id,
-    version_identificador, fecha_documento, archivo_sha256, texto_sha256,
+    version_identificador, archivo_sha256, texto_sha256,
     declaracion, abierto_at
   ) values (
     v_ver.id, v_empleado, v_uid,
-    v_ver.identificador, v_ver.fecha_documento, v_ver.archivo_sha256, v_ver.texto_sha256,
-    public.estatuto_texto_declaracion(v_ver.fecha_documento), v_abierto
+    v_ver.identificador, v_ver.archivo_sha256, v_ver.texto_sha256,
+    public.estatuto_texto_declaracion(), v_abierto
   )
   on conflict on constraint estatuto_aceptacion_unica do nothing;
 
@@ -606,21 +607,21 @@ comment on function public.estatuto_control(uuid) is
   'de la version pedida (o la vigente). Solo Administracion y Gerencia.';
 
 -- ============================================================================
--- 11. VERSIÓN 21/04/2026 — BORRADOR
+-- 11. VERSIÓN 1 — BORRADOR
 -- ============================================================================
 --
--- Archivo: public/documentos/estatuto/2026-04-21/estatuto-interno-2026-04-21.doc
--- (copia byte a byte de "ESTATUTO INTERNO MODIFICADO el  21-04-26.doc").
--- texto_sha256: hash del texto que muestra la app (lib/estatuto/contenido-2026-04-21.json).
+-- Archivo: public/documentos/estatuto/v1/estatuto-interno.doc (copia byte a
+-- byte del original recibido; sólo cambió el nombre, el hash es el mismo).
+-- texto_sha256: hash del texto que muestra la app (lib/estatuto/contenido-v1.json).
 -- NO se publica acá: publicar es decisión de Gerencia, por la RPC.
 
 insert into public.estatuto_versiones (
-  identificador, fecha_documento, archivo_ruta, archivo_nombre,
+  identificador, archivo_ruta, archivo_nombre,
   archivo_sha256, archivo_bytes, texto_sha256, estado, notas
 ) values (
-  '2026-04-21', date '2026-04-21',
-  '/documentos/estatuto/2026-04-21/estatuto-interno-2026-04-21.doc',
-  'ESTATUTO INTERNO MODIFICADO el  21-04-26.doc',
+  '1',
+  '/documentos/estatuto/v1/estatuto-interno.doc',
+  'estatuto-interno.doc',
   '5feb70d22a7b5fffe100eb56304654678c73328117ecc4de25b8c5db4c46228c',
   90624,
   'b84a4047754434d1f8c111d820a23d2d36d972b060874b8795268961a567c832',

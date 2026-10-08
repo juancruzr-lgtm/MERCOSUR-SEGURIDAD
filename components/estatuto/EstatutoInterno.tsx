@@ -24,8 +24,8 @@ import { useCallback, useEffect, useState } from 'react'
 import DocumentoEstatuto from '@/components/estatuto/DocumentoEstatuto'
 import {
   ACLARACION_PAPEL, aceptacionDe, contenidoDeVersion, declaracionHabilitada,
-  estadoAceptacion, fechaHoraArgentina, fechaLegible, puedeAceptar,
-  textoDeclaracion, versionVigente,
+  TEXTO_DECLARACION, estadoAceptacion, etiquetaVersion, fechaHoraArgentina, puedeAceptar,
+  versionVigente,
 } from '@/lib/estatuto'
 import type { AceptacionEstatuto, AperturaEstatuto, VersionEstatuto } from '@/lib/estatuto'
 import {
@@ -60,7 +60,7 @@ function Constancia({ a, titulo }: { a: AceptacionEstatuto; titulo: string }) {
         “{a.declaracion}”
       </div>
       <div style={{ fontSize: 12.5, color: '#94a3b8', lineHeight: 1.6 }}>
-        Versión {fechaLegible(a.fecha_documento)} · aceptada el {fechaHoraArgentina(a.aceptado_at)}
+        {etiquetaVersion(a.version_identificador)} · aceptada el {fechaHoraArgentina(a.aceptado_at)}
         <br />Documento abierto el {fechaHoraArgentina(a.abierto_at)}
         <br />Huella del archivo (SHA-256): <span style={{ fontFamily: 'monospace' }}>{hashCorto(a.archivo_sha256)}</span>
       </div>
@@ -131,7 +131,7 @@ export default function EstatutoInterno({ empleadoId, esPropio }: {
   }
 
   return (
-    <div style={{ maxWidth: 760, margin: '0 auto' }}>
+    <div style={{ maxWidth: 760, margin: '0 auto', minWidth: 0, width: '100%', boxSizing: 'border-box', overflowWrap: 'anywhere' }}>
       {error && (
         <div style={{ ...card, borderColor: 'rgba(239,68,68,.45)', color: '#fca5a5', fontSize: 13.5 }}>
           No se pudo leer el Estatuto: {error}
@@ -146,7 +146,7 @@ export default function EstatutoInterno({ empleadoId, esPropio }: {
         {vigente ? (
           <>
             <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.6 }}>
-              Versión {fechaLegible(vigente.fecha_documento)}
+              {etiquetaVersion(vigente.identificador)}
               {vigente.publicado_at && <> · vigente desde el {fechaHoraArgentina(vigente.publicado_at)}</>}
             </div>
             <div style={{ marginTop: 10 }}>
@@ -243,7 +243,7 @@ export default function EstatutoInterno({ empleadoId, esPropio }: {
                   style={{ width: 22, height: 22, flex: 'none', marginTop: 2 }}
                 />
                 <span style={{ fontSize: 15, color: '#e2e8f0', lineHeight: 1.55 }}>
-                  {textoDeclaracion(vigente.fecha_documento)}
+                  {TEXTO_DECLARACION}
                 </span>
               </label>
               <button
@@ -269,7 +269,7 @@ export default function EstatutoInterno({ empleadoId, esPropio }: {
           <div style={{ ...etiqueta, marginBottom: 10 }}>Versiones anteriores aceptadas</div>
           {anteriores.map(a => (
             <div key={a.id} style={{ fontSize: 13.5, color: '#cbd5e1', lineHeight: 1.6, marginBottom: 6 }}>
-              Versión {fechaLegible(a.fecha_documento)} · aceptada el {fechaHoraArgentina(a.aceptado_at)}
+              {etiquetaVersion(a.version_identificador)} · aceptada el {fechaHoraArgentina(a.aceptado_at)}
             </div>
           ))}
         </div>

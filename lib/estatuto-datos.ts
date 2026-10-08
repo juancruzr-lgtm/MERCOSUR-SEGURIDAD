@@ -17,7 +17,7 @@ import type {
 } from '@/lib/estatuto'
 
 const COLUMNAS_VERSION =
-  'id, identificador, titulo, fecha_documento, archivo_ruta, archivo_nombre, ' +
+  'id, identificador, titulo, archivo_ruta, archivo_nombre, ' +
   'archivo_sha256, archivo_bytes, texto_sha256, estado, publicado_at, publicado_por'
 
 /**
@@ -29,7 +29,7 @@ export async function cargarVersiones(): Promise<{ versiones: VersionEstatuto[];
   const { data, error } = await supabase
     .from('estatuto_versiones')
     .select(COLUMNAS_VERSION)
-    .order('fecha_documento', { ascending: false })
+    .order('creado_at', { ascending: false })
     .limit(200)
   return { versiones: (data ?? []) as unknown as VersionEstatuto[], error: error ? error.message : null }
 }
