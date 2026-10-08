@@ -69,7 +69,7 @@ describe('el Word original no está en ninguna dirección pública', () => {
     for (const malo of ['', '0', '../1', '1/../../.env', '1.doc', 'v1', '%2e%2e', '99999']) {
       expect(rutaOriginal(malo)).toBeNull()
     }
-    expect(nombreDescarga('1')).toBe('estatuto-interno.doc')
+    expect(nombreDescarga('1')).toBe('Estatuto Interno Mercosur Seguridad SRL 2026.doc')
   })
 })
 
@@ -99,7 +99,7 @@ describe('GET /api/estatuto/original', () => {
     rol = 'administracion'
     const r = await pedir('1')
     expect(r.status).toBe(200)
-    expect(r.headers.get('content-disposition')).toBe('attachment; filename="estatuto-interno.doc"')
+    expect(r.headers.get('content-disposition')).toBe('attachment; filename="Estatuto Interno Mercosur Seguridad SRL 2026.doc"')
     expect(r.headers.get('cache-control')).toMatch(/no-store/)
     const bytes = Buffer.from(await r.arrayBuffer())
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(HASH)
