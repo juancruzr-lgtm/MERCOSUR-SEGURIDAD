@@ -315,13 +315,20 @@ export async function GET(req: Request) {
     let candidatosZona: string[] = []
 
     if (nivel === NIVEL.supervisor) {
+      // RESPONSABLE DE INTERVENCIÓN (orden JC 08/10, Etapa 3): decide la
+      // guardia vigente AHORA, no la del inicio del turno. El puesto sigue
+      // descubierto en este momento y el que puede actuar es el que está de
+      // guardia; con el criterio viejo, un turno de las 18:50 escalado a las
+      // 19:05 le avisaba al saliente del cambio de guardia de las 19:00. El
+      // responsable del hecho (inicio del turno) sigue siendo el que NOMBRA
+      // el mensaje del +30 y queda reconstruible por calendario. Mismo
+      // criterio que ya usaban las rondas. Ventana +15/+25: el corrimiento
+      // máximo entre hecho y aviso es de ~25 minutos.
+      const ia = instanteLocal(ahora)
       const r = resolverResponsablesOperativos({
         zonaId: objetivo?.zona_id ?? null,
-        // El instante que decide es el INICIO del turno, no "ahora": es el
-        // momento en que el puesto tenía que estar cubierto, y es el que hace
-        // que a un turno nocturno le responda quien estaba de guardia esa noche.
-        fecha: t.fecha,
-        hora: t.hora_inicio.slice(0, 5),
+        fecha: ia.fecha,
+        hora: ia.hora,
         guardias, supervisorZonas, zonas, usuarios,
       })
       // Si cubren varios a la vez, son TODOS responsables: se le manda a cada

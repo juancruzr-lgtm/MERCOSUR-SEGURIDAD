@@ -49,6 +49,7 @@ import type { EstadoPuestos } from '@/lib/puestos'
 import {
   TIPOS_EVENTO_GUARDIA,
   TIPOS_SIN_COBERTURA,
+  diferenciasReglaCalendario,
   etiquetaDias,
   normalizarTextoGuardia,
   previsualizarDesdeReglas,
@@ -56,8 +57,9 @@ import {
   rangoDelMes,
   resumenGeneracion,
   resumenMes,
+  totalDiferencias,
 } from '@/lib/guardias-supervisor'
-import type { PrevisionGeneracion, PrevisionMes, ReglaSemanal } from '@/lib/guardias-supervisor'
+import type { DiferenciasRegla, PrevisionGeneracion, PrevisionMes, ReglaSemanal } from '@/lib/guardias-supervisor'
 // LA resolución de responsables operativos (guardia efectiva → único
 // responsable de zona → nadie). Compartida con SupervisorMobile y push:
 // ninguna pantalla vuelve a calcular esto por su cuenta.
@@ -10663,6 +10665,18 @@ function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
   const [previsionMesLoading, setPrevisionMesLoading] = useState(false)
   const [generandoMes, setGenerandoMes] = useState(false)
 
+  // Sincronización regla ↔ calendario (Etapa 2, orden JC 08/10). La plantilla
+  // manda pero nunca en silencio: las diferencias se muestran y se aplican con
+  // confirmación; las excepciones (francos, reasignaciones, intervenidas)
+  // quedan como conflictos que sólo se resuelven a mano.
+  const [sync, setSync] = useState<{ regla: any; dif: DiferenciasRegla } | null>(null)
+  const [syncLoading, setSyncLoading] = useState(false)
+  const [aplicandoSync, setAplicandoSync] = useState(false)
+  // Vista "Cambios de guardia" (auditoría): quién tocó qué, cuándo y por qué.
+  const [auditoriaVisible, setAuditoriaVisible] = useState(false)
+  const [auditoria, setAuditoria] = useState<any[] | null>(null)
+  const [auditoriaError, setAuditoriaError] = useState<string | null>(null)
+
   const supervisoresDisponibles = guardias
     .filter((g: any) => ['supervisor', 'admin'].includes(g.rol))
     .sort((a: any, b: any) => `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`))
@@ -11036,11 +11050,156 @@ function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
       setReglas(prev => editReglaId ? prev.map(r => r.id === editReglaId ? data : r) : [...prev, data])
       setMensaje({ tipo:'ok', texto: editReglaId ? 'Regla actualizada.' : 'Regla semanal creada.' })
       setModalRegla(false)
+      const eraEdicion = Boolean(editReglaId)
       setEditReglaId(null)
       setFormRegla(formReglaInicial())
+      // Al EDITAR una regla con días ya generados, el calendario no cambia
+      // solo (idempotencia de Generar mes). Acá mismo se calculan las
+      // diferencias y se ofrece sincronizar con vista previa — así no se
+      // repite octubre: plantilla nueva, calendario viejo, y nadie avisó.
+      if (eraEdicion) void revisarSincronizacion(data, { silencioso: true })
     }
 
     setLoading(false)
+  }
+
+  /** La regla cruda de la base, en la forma que consume la lógica pura. */
+  const aReglaSemanal = (r: any): ReglaSemanal => ({
+    id: r.id,
+    supervisor_id: r.supervisor_id,
+    zona_id: r.zona_id,
+    zona_nombre: nombreZona(r.zona_id),
+    dias_semana: r.dias_semana || [],
+    hora_inicio: r.hora_inicio,
+    hora_fin: r.hora_fin,
+    rol_operativo: r.rol_operativo,
+    observacion: r.observacion,
+    activo: r.activo,
+    vigencia_desde: r.vigencia_desde,
+    vigencia_hasta: r.vigencia_hasta,
+  })
+
+  const calcularDiferenciasDeRegla = async (r: any): Promise<DiferenciasRegla | null> => {
+    const { data: filas, error } = await supabase
+      .from('supervisores_guardia')
+      .select('id, supervisor_id, zona, fecha, hora_inicio, hora_fin, regla_id, estado, tipo_evento, supervisor_original_id')
+      .eq('regla_id', r.id)
+      .gt('fecha', hoy)
+    if (error) { setMensaje({ tipo:'error', texto:error.message }); return null }
+
+    // Guardias con intervenciones operativas: protegidas, van a "conflictos".
+    const ids = (filas || []).map((f: any) => f.id)
+    let intervenidas = new Set<string>()
+    if (ids.length > 0) {
+      const { data: inter } = await supabase
+        .from('supervisor_intervenciones')
+        .select('supervisor_guardia_id')
+        .in('supervisor_guardia_id', ids)
+      intervenidas = new Set(((inter || []) as any[]).map(i => i.supervisor_guardia_id).filter(Boolean))
+    }
+    return diferenciasReglaCalendario(aReglaSemanal(r), (filas || []) as any, hoy, intervenidas, contextoDeRegla(r))
+  }
+
+  // Contexto anti-falsos-positivos (hallazgo de la revisión del 08/10): en
+  // producción hay filas correctas vinculadas a la regla equivocada (las
+  // nocturnas de octubre apuntan a la regla dominical). Sin este contexto, la
+  // sincronización propondría desactivarlas y crear duplicados que chocan con
+  // el índice único.
+  const contextoDeRegla = (r: any) => ({
+    otrasReglas: reglas.filter(x => x.id !== r.id).map(aReglaSemanal),
+    slotsExistentes: new Set<string>(
+      guardiasSupervisor
+        .filter((g: any) => g.supervisor_id === r.supervisor_id && g.estado === 'activo' && String(g.fecha) > hoy)
+        .map((g: any) => `${g.fecha}|${String(g.hora_inicio).slice(0, 5)}|${String(g.hora_fin).slice(0, 5)}`),
+    ),
+  })
+
+  const revisarSincronizacion = async (r: any, opts: { silencioso?: boolean } = {}) => {
+    setSyncLoading(true)
+    const dif = await calcularDiferenciasDeRegla(r)
+    setSyncLoading(false)
+    if (!dif) return
+    if (totalDiferencias(dif) === 0 && dif.conflictos.length === 0) {
+      if (!opts.silencioso) setMensaje({ tipo:'ok', texto:'El calendario futuro ya coincide con esta regla.' })
+      return
+    }
+    setSync({ regla: r, dif })
+  }
+
+  const aplicarSincronizacion = async () => {
+    if (!sync) return
+    setAplicandoSync(true)
+    const { regla, dif } = sync
+    const errores: string[] = []
+
+    for (const a of dif.actualizar) {
+      const { error } = await supabase.from('supervisores_guardia')
+        .update({ hora_inicio: a.horaInicio, hora_fin: a.horaFin }).eq('id', a.fila.id)
+      if (error) errores.push(error.message)
+    }
+    for (const f of dif.desactivar) {
+      const { error } = await supabase.from('supervisores_guardia')
+        .update({ estado: 'inactivo' }).eq('id', f.id)
+      if (error) errores.push(error.message)
+    }
+    for (const f of dif.reactivar) {
+      const { error } = await supabase.from('supervisores_guardia')
+        .update({ estado: 'activo', hora_inicio: (regla.hora_inicio || '').slice(0, 5), hora_fin: (regla.hora_fin || '').slice(0, 5) })
+        .eq('id', f.id)
+      if (error) errores.push(error.message)
+    }
+    if (dif.crear.length > 0) {
+      const { error } = await supabase.from('supervisores_guardia')
+        .insert(dif.crear.map(f => ({ ...f, creado_por: user?.id || null })))
+      if (error) errores.push(error.message)
+    }
+
+    setAplicandoSync(false)
+    setSync(null)
+    if (errores.length > 0) {
+      setMensaje({ tipo:'error', texto:`Sincronización incompleta: ${errores[0]}` })
+    } else {
+      setMensaje({ tipo:'ok', texto:`Calendario sincronizado con la regla (${totalDiferencias(dif)} día(s)).${dif.conflictos.length > 0 ? ` ${dif.conflictos.length} excepción(es) protegida(s) quedaron sin tocar.` : ''}` })
+    }
+    void cargar()
+  }
+
+  // Aviso permanente: reglas activas cuyo calendario futuro no las refleja.
+  // Se calcula con las filas ya cargadas (sin consultas extra); el detalle fino
+  // —incluidas las protecciones por intervención— lo trae el modal al revisar.
+  const difPendientesPorRegla = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const r of reglas) {
+      if (r.activo === false) continue
+      const filas = guardiasSupervisor.filter((g: any) => g.regla_id === r.id)
+      if (filas.length === 0) continue
+      const n = totalDiferencias(diferenciasReglaCalendario(aReglaSemanal(r), filas as any, hoy, new Set(), contextoDeRegla(r)))
+      if (n > 0) m[r.id] = n
+    }
+    return m
+  }, [reglas, guardiasSupervisor])
+
+  // Vista "Cambios de guardia" (dentro del módulo, pedido expreso de la orden).
+  const cargarAuditoria = async () => {
+    setAuditoriaError(null)
+    const { data, error } = await supabase
+      .from('supervisores_guardia_auditoria')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(120)
+    if (error) {
+      setAuditoria([])
+      setAuditoriaError(/does not exist|schema cache/i.test(error.message)
+        ? 'La auditoría de cambios se habilita al aplicar la migración 20261008190000.'
+        : error.message)
+      return
+    }
+    setAuditoria(data || [])
+  }
+
+  const toggleAuditoria = () => {
+    setAuditoriaVisible(v => !v)
+    if (auditoria === null) void cargarAuditoria()
   }
 
   // Desactivar una regla no borra las guardias que ya generó: deja de producir
@@ -11137,11 +11296,142 @@ function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
           <div style={S.sub2}>Jefe operativo {JEFE_OPERATIVO_GUARDIA} · Director técnico {DIRECTOR_TECNICO_GUARDIA}</div>
         </div>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+          <button style={{ ...S.btn, ...S.btnSecondary }} onClick={toggleAuditoria}>🧾 Cambios de guardia</button>
           {reglasDisponibles && <button style={{ ...S.btn, ...S.btnSecondary }} onClick={abrirGenerarMes}>🗓️ Generar mes</button>}
           <button style={{ ...S.btn, ...S.btnSecondary }} onClick={abrirGenerar}>📅 Generar por rango</button>
           <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>+ Nueva guardia</button>
         </div>
       </div>
+
+      {/* La plantilla manda, pero nunca en silencio: si una regla activa no se
+          refleja en el calendario futuro, se avisa acá hasta sincronizar. */}
+      {reglasDisponibles && Object.keys(difPendientesPorRegla).length > 0 && (
+        <div style={{ background:'rgba(245,158,11,.1)', border:'1px solid rgba(245,158,11,.35)', borderLeft:'4px solid #f59e0b', borderRadius:8, padding:'12px 16px', marginBottom:16 }}>
+          <div style={{ fontWeight:700, marginBottom:8 }}>⚠️ La programación semanal difiere del calendario generado</div>
+          {reglas.filter(r => difPendientesPorRegla[r.id]).map(r => (
+            <div key={r.id} style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', fontSize:13, marginBottom:6 }}>
+              <span>
+                {nombreUsuario(r.supervisor_id)} · {etiquetaDias(r.dias_semana || [])} · {formatHoraTurno(r.hora_inicio)} a {formatHoraTurno(r.hora_fin)}:{' '}
+                <b>{difPendientesPorRegla[r.id]} día(s) futuro(s)</b> sin reflejar la regla
+              </span>
+              <button style={{ ...S.btn, ...S.btnSecondary, padding:'4px 10px', fontSize:12 }} disabled={syncLoading} onClick={() => revisarSincronizacion(r)}>
+                {syncLoading ? 'Calculando…' : 'Revisar y sincronizar'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {auditoriaVisible && (
+        <div style={{ ...S.card, marginBottom:16 }}>
+          <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700, marginBottom:4 }}>Cambios de guardia</div>
+          <div style={{ fontSize:13, color:'#64748b', marginBottom:12 }}>
+            Toda modificación del calendario queda registrada: quién, cuándo, qué cambió y con qué motivo.
+            Las <b>excepciones de supervisores</b> se distinguen de los cambios de jefatura.
+          </div>
+          {auditoriaError ? (
+            <div style={{ color:'#f59e0b', fontSize:13 }}>{auditoriaError}</div>
+          ) : auditoria === null ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>Cargando…</div>
+          ) : auditoria.length === 0 ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>Sin cambios registrados todavía.</div>
+          ) : (
+            <div style={{ overflowX:'auto' }}>
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>Cuándo</th><th style={S.th}>Quién</th><th style={S.th}>Origen</th>
+                  <th style={S.th}>Acción</th><th style={S.th}>Guardia</th><th style={S.th}>Cambio</th><th style={S.th}>Motivo</th>
+                </tr></thead>
+                <tbody>
+                  {auditoria.map((a: any) => {
+                    const d = a.despues || {}
+                    const antes = a.antes || null
+                    const resumen = antes
+                      ? ['supervisor_id','fecha','hora_inicio','hora_fin','estado','tipo_evento']
+                          .filter(k => JSON.stringify(antes[k]) !== JSON.stringify(d[k]))
+                          .map(k => `${k === 'supervisor_id' ? 'supervisor' : k}: ${k === 'supervisor_id' ? nombreUsuario(antes[k]) : String(antes[k] ?? '—')} → ${k === 'supervisor_id' ? nombreUsuario(d[k]) : String(d[k] ?? '—')}`)
+                          .join(' · ')
+                      : 'alta'
+                    return (
+                      <tr key={a.id}>
+                        <td style={{ ...S.td, whiteSpace:'nowrap' }}>{new Date(a.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</td>
+                        <td style={S.td}>{nombreUsuario(a.usuario_id) || 'sistema'}</td>
+                        <td style={S.td}>
+                          <Badge type={a.origen === 'excepcion_supervisor' ? 'pendiente' : 'activo'}>
+                            {a.origen === 'excepcion_supervisor' ? 'excepción' : a.origen}
+                          </Badge>
+                        </td>
+                        <td style={S.td}>{a.accion}</td>
+                        <td style={{ ...S.td, whiteSpace:'nowrap' }}>{nombreUsuario(d.supervisor_id)} · {formatFecha(d.fecha)} {formatHoraTurno(d.hora_inicio)}–{formatHoraTurno(d.hora_fin)}</td>
+                        <td style={{ ...S.td, fontSize:12, color:'#94a3b8' }}>{resumen || '—'}</td>
+                        <td style={{ ...S.td, fontSize:12 }}>{a.motivo || '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {sync && (
+        <Modal
+          title="Sincronizar calendario con la regla"
+          onClose={() => setSync(null)}
+          footer={
+            <>
+              <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setSync(null)}>Ahora no</button>
+              <button style={{ ...S.btn, ...S.btnPrimary, opacity: aplicandoSync ? 0.6 : 1 }} disabled={aplicandoSync || totalDiferencias(sync.dif) === 0} onClick={aplicarSincronizacion}>
+                {aplicandoSync ? 'Aplicando…' : `Aplicar ${totalDiferencias(sync.dif)} cambio(s)`}
+              </button>
+            </>
+          }
+        >
+          <div style={{ fontSize:13, color:'#94a3b8', marginBottom:12 }}>
+            Regla: <b style={{ color:'#e2e8f0' }}>{nombreUsuario(sync.regla.supervisor_id)}</b> · {etiquetaDias(sync.regla.dias_semana || [])} · {formatHoraTurno(sync.regla.hora_inicio)} a {formatHoraTurno(sync.regla.hora_fin)}.
+            Sólo días <b>futuros</b>; lo pasado y lo de hoy no se toca.
+          </div>
+          {sync.dif.actualizar.length > 0 && (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontWeight:700, fontSize:13, marginBottom:4 }}>🕐 Actualizar horario ({sync.dif.actualizar.length})</div>
+              {sync.dif.actualizar.map(a => (
+                <div key={a.fila.id} style={{ fontSize:12.5, color:'#cbd5e1' }}>
+                  {formatFecha(String(a.fila.fecha))}: {formatHoraTurno(String(a.fila.hora_inicio))}–{formatHoraTurno(String(a.fila.hora_fin))} → <b>{a.horaInicio}–{a.horaFin}</b>
+                </div>
+              ))}
+            </div>
+          )}
+          {sync.dif.crear.length > 0 && (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontWeight:700, fontSize:13, marginBottom:4 }}>➕ Crear ({sync.dif.crear.length})</div>
+              <div style={{ fontSize:12.5, color:'#cbd5e1' }}>{sync.dif.crear.map(c => formatFecha(c.fecha)).join(' · ')}</div>
+            </div>
+          )}
+          {sync.dif.desactivar.length > 0 && (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontWeight:700, fontSize:13, marginBottom:4 }}>🚫 Desactivar — la regla ya no incluye ese día ({sync.dif.desactivar.length})</div>
+              <div style={{ fontSize:12.5, color:'#cbd5e1' }}>{sync.dif.desactivar.map(f => formatFecha(String(f.fecha))).join(' · ')}</div>
+            </div>
+          )}
+          {sync.dif.reactivar.length > 0 && (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontWeight:700, fontSize:13, marginBottom:4 }}>♻️ Reactivar ({sync.dif.reactivar.length})</div>
+              <div style={{ fontSize:12.5, color:'#cbd5e1' }}>{sync.dif.reactivar.map(f => formatFecha(String(f.fecha))).join(' · ')}</div>
+            </div>
+          )}
+          {sync.dif.conflictos.length > 0 && (
+            <div style={{ background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, padding:'8px 12px' }}>
+              <div style={{ fontWeight:700, fontSize:13, marginBottom:4, color:'#f87171' }}>🛡️ Protegidas — no se tocan ({sync.dif.conflictos.length})</div>
+              {sync.dif.conflictos.map(c => (
+                <div key={c.fila.id} style={{ fontSize:12.5, color:'#fca5a5' }}>
+                  {formatFecha(String(c.fila.fecha))}: {c.motivo}. Se resuelve a mano desde el calendario.
+                </div>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
 
       {reglasDisponibles && (
         <div style={S.card}>

@@ -234,6 +234,7 @@ interface SupervisorGuardia {
   zona: string
   rol_operativo: string
   estado: string
+  tipo_evento?: string | null
   observacion?: string | null
   creado_por?: string | null
   created_at?: string
@@ -532,6 +533,14 @@ export default function SupervisorMobile({ user }: any) {
   const [supervisiones, setSupervisiones] = useState<Supervision[]>([])
   const [zonasOperativas, setZonasOperativas] = useState<ZonaOperativa[]>([])
   const [supervisorZonas, setSupervisorZonas] = useState<SupervisorZona[]>([])
+  // Modificación EXCEPCIONAL de guardias (orden JC 08/10): cuando el jefe no
+  // está, el supervisor sostiene la continuidad — en su zona, con motivo
+  // obligatorio y auditado por la RPC guardia_excepcion_supervisor. Sin
+  // aprobación previa: la operación no se paraliza por una ausencia.
+  const [verGuardiasZona, setVerGuardiasZona] = useState(false)
+  const [guardiaExc, setGuardiaExc] = useState<{ modo: 'crear' | 'modificar' | 'desactivar'; fila: SupervisorGuardia | null } | null>(null)
+  const [formExc, setFormExc] = useState({ supervisor_id: '', fecha: '', hora_inicio: '', hora_fin: '', zona: '', motivo: '' })
+  const [guardandoExc, setGuardandoExc] = useState(false)
   const [ultimaSupervisionPorObjetivo, setUltimaSupervisionPorObjetivo] = useState<Record<string, string>>({})
   const [agendaZonaFiltro, setAgendaZonaFiltro] = useState('todas')
   const [agendaEstadoFiltro, setAgendaEstadoFiltro] = useState<'todos'|'vencido'|'proximo'>('todos')
@@ -1672,6 +1681,71 @@ export default function SupervisorMobile({ user }: any) {
     } finally {
       setAsignando(null)
     }
+  }
+
+  const abrirGuardiaExc = (modo: 'crear' | 'modificar' | 'desactivar', fila: SupervisorGuardia | null) => {
+    setError('')
+    const misZonas = supervisorZonas
+      .filter(sz => sz.supervisor_id === user?.id)
+      .map(sz => zonasOperativas.find(z => z.id === sz.zona_id)?.nombre)
+      .filter(Boolean) as string[]
+    setFormExc({
+      supervisor_id: fila?.supervisor_id || user?.id || '',
+      fecha: fila?.fecha || new Date().toLocaleDateString('sv-SE'),
+      hora_inicio: (fila?.hora_inicio || '07:00').slice(0, 5),
+      hora_fin: (fila?.hora_fin || '19:00').slice(0, 5),
+      zona: fila?.zona || misZonas[0] || '',
+      motivo: '',
+    })
+    setGuardiaExc({ modo, fila })
+  }
+
+  const guardarGuardiaExc = async () => {
+    if (!guardiaExc) return
+    if (formExc.motivo.trim().length < 5) {
+      setError('Contá el motivo de la modificación (mínimo 5 caracteres): queda registrado para el jefe.')
+      return
+    }
+    setGuardandoExc(true)
+    setError('')
+    try {
+      const { modo, fila } = guardiaExc
+      const datos = modo === 'desactivar' ? {} : {
+        supervisor_id: formExc.supervisor_id || null,
+        fecha: formExc.fecha,
+        hora_inicio: formExc.hora_inicio,
+        hora_fin: formExc.hora_fin,
+        ...(modo === 'crear' ? { zona: formExc.zona } : {}),
+      }
+      const { data, error } = await supabase.rpc('guardia_excepcion_supervisor', {
+        p_accion: modo,
+        p_guardia_id: fila?.id ?? null,
+        p_datos: datos,
+        p_motivo: formExc.motivo.trim(),
+      })
+      if (error) {
+        throw new Error(/does not exist|schema cache/i.test(error.message)
+          ? 'La modificación excepcional se habilita al aplicar la migración 20261008190000.'
+          : error.message)
+      }
+      const nueva = data as SupervisorGuardia
+      setSupervisoresGuardia(prev => {
+        const sin = prev.filter(g => g.id !== nueva.id)
+        return [...sin, nueva].sort((a, b) => `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`))
+      })
+      setMensaje(`Guardia ${modo === 'crear' ? 'creada' : modo === 'desactivar' ? 'desactivada' : 'modificada'} como excepción. Quedó auditada con tu motivo.`)
+      setGuardiaExc(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo guardar la excepción.')
+    } finally {
+      setGuardandoExc(false)
+    }
+  }
+
+  const nombreSupervisorDe = (id?: string | null) => {
+    if (id === user?.id) return `${user?.apellido ?? ''}, ${user?.nombre ?? ''} (vos)`
+    const s = supervisores.find(x => x.id === id)
+    return s ? `${s.apellido}, ${s.nombre}` : '—'
   }
 
   const solicitarBajaObjetivo = async (objetivo: Objetivo) => {
@@ -3414,6 +3488,43 @@ export default function SupervisorMobile({ user }: any) {
             {tab === 'turnos' && (
               <section>
                 <div style={screenTitle}>Turnos por objetivo</div>
+
+                {/* Guardias de supervisores de la zona: consulta siempre;
+                    modificación sólo como EXCEPCIÓN con motivo (queda
+                    auditada y visible para el jefe). */}
+                <div style={{ ...card, marginBottom: 12 }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
+                    <div>
+                      <div style={objetivoName}>Supervisores de guardia</div>
+                      <div style={muted}>Tu zona, en el rango elegido. Cambios sólo por excepción, con motivo.</div>
+                    </div>
+                    <button style={secondaryButton} onClick={() => setVerGuardiasZona(v => !v)}>
+                      {verGuardiasZona ? 'Ocultar' : 'Ver'}
+                    </button>
+                  </div>
+                  {verGuardiasZona && (
+                    <div style={{ marginTop: 10 }}>
+                      {supervisoresGuardia.filter(g => g.estado === 'activo').length === 0 ? (
+                        <div style={muted}>Sin guardias cargadas en el rango.</div>
+                      ) : supervisoresGuardia.filter(g => g.estado === 'activo').map(g => (
+                        <div key={g.id} style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', padding:'6px 0', borderBottom:'1px solid #1e293b', fontSize:13 }}>
+                          <span style={{ minWidth: 0 }}>
+                            <b>{fechaDDMMYYYY(g.fecha)}</b> · {g.hora_inicio.slice(0,5)}–{g.hora_fin.slice(0,5)} · {nombreSupervisorDe(g.supervisor_id)} · {g.zona}
+                            {(g.tipo_evento ?? 'normal') !== 'normal' && <span style={{ color:'#f59e0b' }}> · {g.tipo_evento}</span>}
+                          </span>
+                          <span style={{ marginLeft:'auto', display:'flex', gap:6 }}>
+                            <button style={{ ...secondaryButton, padding:'4px 10px', fontSize:12 }} onClick={() => abrirGuardiaExc('modificar', g)}>Cambiar</button>
+                            <button style={{ ...dangerButton, padding:'4px 10px', fontSize:12 }} onClick={() => abrirGuardiaExc('desactivar', g)}>Baja</button>
+                          </span>
+                        </div>
+                      ))}
+                      <button style={{ ...refreshButton, marginTop: 10 }} onClick={() => abrirGuardiaExc('crear', null)}>
+                        + Guardia excepcional
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <button
                   style={{ ...refreshButton, minHeight: 46, marginBottom: 12, textAlign: 'center' }}
                   onClick={() => { setError(''); setMensaje(''); setModalTurno(true) }}
@@ -4431,6 +4542,66 @@ export default function SupervisorMobile({ user }: any) {
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
               <button style={secondaryButton} onClick={() => setModalTurno(false)}>Cancelar</button>
               <button style={refreshButton} onClick={crearTurno} disabled={asignando === 'crear-turno'}>{asignando === 'crear-turno' ? 'Creando...' : 'Crear turno'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {guardiaExc && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <div style={screenTitle}>
+              {guardiaExc.modo === 'crear' ? 'Guardia excepcional' : guardiaExc.modo === 'desactivar' ? 'Dar de baja la guardia' : 'Cambiar guardia'}
+            </div>
+            <div style={muted}>
+              Modificación excepcional: sale al instante, queda auditada con tu nombre y el jefe la ve en "Cambios de guardia".
+            </div>
+            {error && <div style={{ ...errorBox, marginTop:12 }}>{error}</div>}
+            {guardiaExc.modo !== 'desactivar' && (
+              <>
+                <label style={label}>Supervisor</label>
+                <select style={select} value={formExc.supervisor_id} onChange={e => setFormExc({ ...formExc, supervisor_id: e.target.value })}>
+                  {[user, ...supervisores.filter(s => s.id !== user?.id && s.estado === 'activo')].filter(Boolean).map((s: any) => (
+                    <option key={s.id} value={s.id}>{s.apellido}, {s.nombre}</option>
+                  ))}
+                </select>
+                <label style={label}>Fecha</label>
+                <input style={input} type="date" value={formExc.fecha} onChange={e => setFormExc({ ...formExc, fecha: e.target.value })} />
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                  <div>
+                    <label style={label}>Desde</label>
+                    <input style={input} type="time" value={formExc.hora_inicio} onChange={e => setFormExc({ ...formExc, hora_inicio: e.target.value })} />
+                  </div>
+                  <div>
+                    <label style={label}>Hasta</label>
+                    <input style={input} type="time" value={formExc.hora_fin} onChange={e => setFormExc({ ...formExc, hora_fin: e.target.value })} />
+                  </div>
+                </div>
+                {guardiaExc.modo === 'crear' && (
+                  <>
+                    <label style={label}>Zona</label>
+                    <select style={select} value={formExc.zona} onChange={e => setFormExc({ ...formExc, zona: e.target.value })}>
+                      {supervisorZonas.filter(sz => sz.supervisor_id === user?.id)
+                        .map(sz => zonasOperativas.find(z => z.id === sz.zona_id)?.nombre)
+                        .filter(Boolean)
+                        .map(n => <option key={String(n)} value={String(n)}>{String(n)}</option>)}
+                    </select>
+                  </>
+                )}
+              </>
+            )}
+            {guardiaExc.modo === 'desactivar' && guardiaExc.fila && (
+              <div style={{ ...muted, marginTop: 10 }}>
+                {fechaDDMMYYYY(guardiaExc.fila.fecha)} · {guardiaExc.fila.hora_inicio.slice(0,5)}–{guardiaExc.fila.hora_fin.slice(0,5)} · {nombreSupervisorDe(guardiaExc.fila.supervisor_id)}
+              </div>
+            )}
+            <label style={label}>Motivo (obligatorio)</label>
+            <input style={input} placeholder="Por qué hace falta el cambio" value={formExc.motivo} onChange={e => setFormExc({ ...formExc, motivo: e.target.value })} />
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:14 }}>
+              <button style={secondaryButton} onClick={() => { setGuardiaExc(null); setError('') }}>Cancelar</button>
+              <button style={{ ...refreshButton, opacity: guardandoExc ? 0.65 : 1 }} disabled={guardandoExc} onClick={guardarGuardiaExc}>
+                {guardandoExc ? 'Guardando…' : 'Confirmar'}
+              </button>
             </div>
           </div>
         </div>
