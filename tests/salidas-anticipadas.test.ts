@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import {
-  corregirCapa4, evaluar, faltaPorAbandono, faltaPorInasistencia, faltaPorRondas,
+  recalcularCapa4, evaluar, faltaPorAbandono, faltaPorInasistencia, faltaPorRondas,
   faltaPorSalidaAnticipada, salidaAnticipadaVigente, SALIDA_ANTICIPADA_VIGENTE_DESDE,
 } from '@/lib/evaluacion-final'
 import {
@@ -17,18 +17,17 @@ const a = (hhmm: string) => {
   return new Date(2026, 9, 8, h, m, 0)
 }
 
-describe('vigencia de la regla general', () => {
-  it('no rige para nadie hasta que Gerencia fije el período', () => {
-    expect(SALIDA_ANTICIPADA_VIGENTE_DESDE).toBeNull()
-    expect(salidaAnticipadaVigente('2026-09')).toBe(false)
-    expect(salidaAnticipadaVigente('2026-11')).toBe(false)
+describe('vigencia de la regla', () => {
+  it('rige desde septiembre de 2026 (orden definitiva de Gerencia) y sigue después', () => {
+    expect(SALIDA_ANTICIPADA_VIGENTE_DESDE).toBe('2026-09')
+    expect(salidaAnticipadaVigente('2026-09')).toBe(true)
+    expect(salidaAnticipadaVigente('2026-10')).toBe(true)
+    expect(salidaAnticipadaVigente('2027-03')).toBe(true)
   })
 
-  it('es prospectiva: rige desde el período fijado, nunca antes', () => {
-    expect(salidaAnticipadaVigente('2026-10', '2026-11')).toBe(false)
-    expect(salidaAnticipadaVigente('2026-11', '2026-11')).toBe(true)
-    expect(salidaAnticipadaVigente('2027-01', '2026-11')).toBe(true)
-    expect(salidaAnticipadaVigente('basura', '2026-11')).toBe(false)
+  it('no toca períodos anteriores', () => {
+    expect(salidaAnticipadaVigente('2026-08')).toBe(false)
+    expect(salidaAnticipadaVigente('basura')).toBe(false)
   })
 })
 
@@ -73,56 +72,74 @@ describe('faltas críticas por salida', () => {
   })
 })
 
-describe('corrección individual de una evaluación publicada', () => {
+describe('recálculo de la evaluación por salidas confirmadas (misma cuenta que la base)', () => {
   // Fila real de MENA, septiembre 2026, tal como está publicada.
-  const mena = {
-    indice: 10, nota_final: 10, alcance: 'integral', cobertura: 100, faltas: [],
-  }
+  const mena = { indice: 10, nota_final: 10, alcance: 'integral', cobertura: 100, faltas: [] }
+  const conf = (injustificadas: number, abandonos = 0) => ({ injustificadas, abandonos })
 
-  it('MENA: 10 publicado → 4 con 21 salidas injustificadas confirmadas', () => {
-    const c = corregirCapa4(mena, [faltaPorSalidaAnticipada(21)])!
+  it('una salida confirmada con nota previa 10 → 4, Aplazado', () => {
+    const c = recalcularCapa4(mena, conf(1))!
     expect(c.nota_final).toBe(4)
     expect(c.concepto).toBe('Aplazado')
-    expect(c.faltas).toHaveLength(1)
-    expect(c.faltas[0].clave).toBe('salida_anticipada_injustificada')
-    expect(c.explicacion).toMatch(/^10 de desempeño · 4 final por 21 salidas anticipadas injustificadas/)
+    expect(c.explicacion).toBe('10 de desempeño · 4 final por 1 salida anticipada injustificada confirmada: '
+      + 'retiro antes del horario de finalización del servicio, sin autorización')
   })
 
-  it('MENA según la decisión de Gerencia: 19 confirmadas (las 2 de segundos quedan pendientes) → 4, Aplazado', () => {
-    const c = corregirCapa4(mena, [faltaPorSalidaAnticipada(19)])!
+  it('MENA si se confirman 19: el texto dice incumplimiento reiterado', () => {
+    const c = recalcularCapa4(mena, conf(19))!
     expect(c.nota_final).toBe(4)
-    expect(c.concepto).toBe('Aplazado')
     expect(c.explicacion).toBe(
       '10 de desempeño · 4 final por 19 salidas anticipadas injustificadas confirmadas: '
       + 'incumplimiento reiterado del horario de finalización del servicio, sin autorización')
   })
 
-  it('no toca lo que no es capa 4: devuelve sólo nota, concepto, faltas y explicación', () => {
-    const c = corregirCapa4(mena, [faltaPorSalidaAnticipada(1)])!
-    expect(Object.keys(c).sort()).toEqual(['concepto', 'explicacion', 'faltas', 'nota_final'])
+  it('abandono comprobado → 2, y manda sobre la salida injustificada', () => {
+    const c = recalcularCapa4(mena, conf(3, 1))!
+    expect(c.nota_final).toBe(2)
+    expect(c.faltas.map(f => f.clave)).toEqual(['abandono_de_puesto', 'salida_anticipada_injustificada'])
   })
 
   it('conserva las faltas previas y pone primero la que decide la nota', () => {
     const conRondas = { ...mena, nota_final: 6, faltas: [{ clave: 'rondas_incumplidas', hecho: 'Realizó 5 de 10 rondas', tope: 6 }] }
-    const c = corregirCapa4(conRondas, [faltaPorSalidaAnticipada(3)])!
+    const c = recalcularCapa4(conRondas, conf(3))!
     expect(c.nota_final).toBe(4)
     expect(c.faltas.map(f => f.clave)).toEqual(['salida_anticipada_injustificada', 'rondas_incumplidas'])
   })
 
-  it('nunca sube una nota que ya estaba por debajo del tope', () => {
-    const c = corregirCapa4({ ...mena, indice: 3.5, nota_final: 3.5 }, [faltaPorSalidaAnticipada(1)])!
-    expect(c.nota_final).toBe(3.5)
+  it('deshacer la confirmación devuelve la nota que corresponde (sin inventar topes)', () => {
+    const topeada = { ...mena, nota_final: 4, faltas: recalcularCapa4(mena, conf(19))!.faltas }
+    const c = recalcularCapa4(topeada, conf(0))!
+    expect(c.nota_final).toBe(10)
+    expect(c.faltas).toEqual([])
+    expect(c.explicacion).toBe('10 de desempeño')
+    expect(c.concepto).toBe('Sobresaliente')
+  })
+
+  it('un tope nunca sube una nota que ya estaba por debajo', () => {
+    expect(recalcularCapa4({ ...mena, indice: 3.5, nota_final: 3.5 }, conf(1))!.nota_final).toBe(3.5)
+  })
+
+  it('autorizada o error de registro (cero confirmadas) no cambia una nota sin topes', () => {
+    const c = recalcularCapa4({ ...mena, indice: 8.88, nota_final: 8.88 }, conf(0))!
+    expect(c.nota_final).toBe(8.88)
+    expect(c.explicacion).toBe('8.88 de desempeño')
   })
 
   it('con cobertura parcial el concepto sigue siendo «Evaluación parcial»', () => {
-    const c = corregirCapa4({ ...mena, alcance: 'parcial', cobertura: 60 }, [faltaPorSalidaAnticipada(1)])!
+    const c = recalcularCapa4({ ...mena, alcance: 'parcial', cobertura: 60 }, conf(1))!
     expect(c.concepto).toBe('Evaluación parcial')
-    expect(c.explicacion).toMatch(/Evaluación parcial: se pudo evaluar el 60 %/)
+    expect(c.explicacion).toMatch(/· Evaluación parcial: se pudo evaluar el 60 % de los requerimientos aplicables$/)
   })
 
-  it('sin falta nueva no hay corrección', () => {
-    expect(corregirCapa4(mena, [faltaPorSalidaAnticipada(0)])).toBeNull()
-    expect(corregirCapa4({ ...mena, nota_final: null }, [faltaPorSalidaAnticipada(1)])).toBeNull()
+  it('sin evaluación no hay nada que recalcular', () => {
+    expect(recalcularCapa4({ ...mena, nota_final: null }, conf(1))).toBeNull()
+  })
+
+  it('evaluar ordena las faltas igual que el recálculo (recongelar no cambia el texto)', () => {
+    const e = evaluar(100, [], {} as any, [faltaPorRondas(5, 10, 3), faltaPorSalidaAnticipada(2), faltaPorAbandono(1)])
+    const r = recalcularCapa4({ indice: e.desempeno, nota_final: e.notaFinal, alcance: e.alcance, cobertura: e.cobertura.ajustada,
+      faltas: [faltaPorRondas(5, 10, 3)] }, conf(2, 1))!
+    expect(e.faltas.map(f => f.clave)).toEqual(r.faltas.map(f => f.clave))
   })
 })
 

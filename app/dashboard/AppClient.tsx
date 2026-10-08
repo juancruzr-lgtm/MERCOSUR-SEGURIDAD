@@ -14128,9 +14128,7 @@ const esGuardia = esRolGuardia(user.rol)
                 />
               )}
               {page === 'salidas_anticipadas' && (
-                <SalidasAnticipadasPanel
-                  esGerencia={esGerenciaReal(user) || user.acceso_gerencia_delegado === true}
-                />
+                <SalidasAnticipadasPanel />
               )}
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}

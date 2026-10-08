@@ -219,6 +219,10 @@ export default function MiDesempeno({
             </div>
           )}
 
+          {vista.actualizacion && (
+            <div style={{ ...S.tenue, padding:'0 4px' }}>{vista.actualizacion}</div>
+          )}
+
           {vista.aTenerEnCuenta.length > 0 && (
             <div style={{ ...S.caja }}>
               <div style={{ ...S.rotulo, marginBottom:6 }}>A tener en cuenta</div>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { vistaDeEvaluacion } from '@/lib/mi-desempeno'
 import { entrenamientoDeEvaluacion, MENSAJE_POSITIVO } from '@/lib/entrenador-desde-snapshot'
-import { corregirCapa4, faltaPorSalidaAnticipada } from '@/lib/evaluacion-final'
+import { recalcularCapa4 } from '@/lib/evaluacion-final'
 
 // MENA, septiembre 2026: balance congelado ANTES de la corrección (todo "bien").
 const publicada: any = {
@@ -14,7 +14,7 @@ const publicada: any = {
     { clave: 'puntualidad', estado: 'bien', etiqueta: 'Puntualidad', hechos: ['Llegaste dentro del horario.'] },
   ] },
 }
-const corregida = { ...publicada, ...corregirCapa4(publicada, [faltaPorSalidaAnticipada(19)]) }
+const corregida = { ...publicada, ...recalcularCapa4(publicada, { injustificadas: 19, abandonos: 0 }) }
 
 describe('Mi Desempeño no se contradice con una falta de salida', () => {
   it('sin falta: se felicita como siempre', () => {

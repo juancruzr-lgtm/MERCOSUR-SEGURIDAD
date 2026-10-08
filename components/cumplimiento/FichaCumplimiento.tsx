@@ -402,7 +402,7 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
 
         {hayOficial && oficial!.corregida_at && (
           <div style={{ ...S.tenue, marginTop:8, color:'#fcd34d' }}>
-            Corregida por Gerencia el {oficial!.corregida_at.slice(8, 10)}/{oficial!.corregida_at.slice(5, 7)}/{oficial!.corregida_at.slice(0, 4)}
+            Actualizada el {oficial!.corregida_at.slice(8, 10)}/{oficial!.corregida_at.slice(5, 7)}/{oficial!.corregida_at.slice(0, 4)}
             {oficial!.motivo_correccion ? ` · ${oficial!.motivo_correccion}` : ''}
           </div>
         )}

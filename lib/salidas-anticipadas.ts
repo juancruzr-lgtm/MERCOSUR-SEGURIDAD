@@ -25,7 +25,10 @@ export interface SalidaAnticipada {
   objetivo_id: string | null
   objetivo: string | null
   fecha: string
+  inicio_programado?: string | null
   fin_programado: string
+  /** Fichaje de entrada de esa jornada. */
+  entrada_registrada?: string | null
   salida_registrada: string
   segundos_antes: number
   minutos_antes: number

@@ -32,10 +32,10 @@ describe('la nota oficial es la publicada', () => {
     expect(r.texto).toMatch(/volver a congelar y publicar/)
   })
 
-  it('una corrección de Gerencia se nombra como tal', () => {
+  it('una evaluación actualizada por una falta confirmada se nombra como tal', () => {
     const r = relacionConCalculo(menaCorregida, 9.5)
     expect(r.relacion).toBe('distinto')
-    expect(r.texto).toMatch(/corregida por Gerencia/)
+    expect(r.texto).toMatch(/actualizada por una falta confirmada/)
   })
 
   it('sin cálculo no se inventa nada', () => {

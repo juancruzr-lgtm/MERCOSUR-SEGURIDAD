@@ -42,6 +42,8 @@ export interface FilaPublicada {
   dimensiones: unknown
   faltas: unknown
   explicacion: string | null
+  /** Cuándo se recalculó por última vez después de publicada (salidas confirmadas). */
+  corregida_at?: string | null
   balance: unknown
   contexto: unknown
   estado: string
@@ -87,6 +89,8 @@ export interface VistaDesempeno {
   avisoDeCobertura: string | null
   /** Sólo cuando un tope efectivamente bajó la nota. */
   topeAplicado: { hecho: string; texto: string } | null
+  /** "La evaluación se actualizó el 09/10/2026", si se recalculó después de publicada. */
+  actualizacion: string | null
   /** Lo que hay que corregir aunque no haya bajado la nota. */
   aTenerEnCuenta: string[]
   dimensiones: DimensionVista[]
@@ -206,6 +210,7 @@ export function vistaDeEvaluacion(fila: FilaPublicada): VistaDesempeno {
       hechosSinMuestra: hechos,
       avisoDeCobertura: null,
       topeAplicado: null,
+      actualizacion: null,
       aTenerEnCuenta: [],
       // Vacías a propósito: la pantalla no tiene qué puntaje mostrar.
       dimensiones: [],
@@ -257,6 +262,10 @@ export function vistaDeEvaluacion(fila: FilaPublicada): VistaDesempeno {
         + 'midió, no todo el mes.'
       : (typeof bal.notaDeCobertura === 'string' ? bal.notaDeCobertura : null),
     topeAplicado,
+    actualizacion: fila.corregida_at
+      ? `Esta evaluación se actualizó el ${String(fila.corregida_at).slice(8, 10)}/${String(fila.corregida_at).slice(5, 7)}/${String(fila.corregida_at).slice(0, 4)} `
+        + 'por una falta confirmada después de publicada.'
+      : null,
     aTenerEnCuenta,
     dimensiones: dims,
     informativas,

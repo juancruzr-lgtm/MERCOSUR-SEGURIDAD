@@ -20,6 +20,11 @@
  * se vio, y la persona tiene que poder encontrarlo mañana. No hay un "no
  * mostrar más", porque sería un tercer estado encubierto.
  *
+ * ── Si la evaluación se corrige ───────────────────────────────────────────────
+ * Una salida injustificada confirmada recalcula la evaluación publicada (orden
+ * de Gerencia del 08/10/2026). Si la versión que vio es anterior a la
+ * corrección, el cartel vuelve —una vez por versión— y dice que fue corregida.
+ *
  * ── Qué no dice ──────────────────────────────────────────────────────────────
  * La nota. Avisa que está disponible; la calificación se ve adentro.
  */
@@ -35,39 +40,55 @@ export default function AvisoEvaluacion({ empleadoId, onIr }: {
   /** Lleva a Mi Legajo → Mi Desempeño. */
   onIr?: () => void
 }) {
-  const [pendiente, setPendiente] = useState<{ id: string; periodo: string } | null>(null)
+  const [pendiente, setPendiente] = useState<{ id: string; periodo: string; version: number; corregida: boolean } | null>(null)
   const [pospuesto, setPospuesto] = useState(true)
 
   const cargar = useCallback(async () => {
     // RLS ya recorta a lo propio y publicado: esta consulta no puede traer la
     // evaluación de otro aunque se le pase otro id.
-    const { data } = await supabase
+    let ev: { data: any[] | null; error: any } = await supabase
       .from('evaluaciones_mensuales')
-      .select('id, periodo')
+      .select('id, periodo, version, corregida_at')
       .eq('empleado_id', empleadoId)
       .eq('estado', 'publicada')
       .order('periodo', { ascending: false })
       .limit(1)
+    // Sin la migración de salidas anticipadas esas columnas no existen.
+    if (ev.error) {
+      ev = await supabase
+        .from('evaluaciones_mensuales')
+        .select('id, periodo')
+        .eq('empleado_id', empleadoId)
+        .eq('estado', 'publicada')
+        .order('periodo', { ascending: false })
+        .limit(1)
+    }
 
-    const ultima = data?.[0]
+    const ultima = ev.data?.[0]
     if (!ultima) { setPendiente(null); return }
 
-    const { data: leida } = await supabase
+    let lect: { data: any[] | null; error: any } = await supabase
       .from('lecturas_evaluacion')
-      .select('id')
+      .select('id, version_vista')
       .eq('evaluacion_id', ultima.id)
       .limit(1)
-
-    if (leida && leida.length > 0) { setPendiente(null); return }
+    if (lect.error) {
+      lect = await supabase.from('lecturas_evaluacion').select('id').eq('evaluacion_id', ultima.id).limit(1)
+    }
+    const leida = lect.data?.[0]
+    const version = Number(ultima.version ?? 1)
+    // Vista, y no corregida después: nada que avisar.
+    const corregidaSinVer = Boolean(ultima.corregida_at) && Number(leida?.version_vista ?? 0) < version
+    if (leida && !corregidaSinVer) { setPendiente(null); return }
 
     // El "Después" vale por esta sesión. Si se cierra la app, vuelve.
     let yaPospuesto = false
     try {
-      yaPospuesto = sessionStorage.getItem(CLAVE_SESION) === ultima.id
+      yaPospuesto = sessionStorage.getItem(CLAVE_SESION) === `${ultima.id}:${version}`
     } catch { /* sin sessionStorage el cartel simplemente aparece */ }
 
     setPospuesto(yaPospuesto)
-    setPendiente(ultima)
+    setPendiente({ id: ultima.id, periodo: ultima.periodo, version, corregida: Boolean(leida) && corregidaSinVer })
   }, [empleadoId])
 
   useEffect(() => { void cargar() }, [cargar])
@@ -90,12 +111,15 @@ export default function AvisoEvaluacion({ empleadoId, onIr }: {
           fontSize:17, fontWeight:800, color:'#e2e8f0', lineHeight:1.35,
           fontFamily:'Syne,sans-serif',
         }}>
-          Tu evaluación de {etiquetaDePeriodo(pendiente.periodo)} ya está disponible
+          {pendiente.corregida
+            ? `Tu evaluación de ${etiquetaDePeriodo(pendiente.periodo)} fue corregida`
+            : `Tu evaluación de ${etiquetaDePeriodo(pendiente.periodo)} ya está disponible`}
         </div>
 
         <div style={{ fontSize:13.5, color:'#94a3b8', lineHeight:1.6, marginTop:10 }}>
-          Entrá a Mi Legajo → Mi Desempeño para consultar tu calificación y las
-          recomendaciones del Entrenador Operativo.
+          {pendiente.corregida
+            ? 'Se actualizó por una falta confirmada. Entrá a Mi Legajo → Mi Desempeño para ver tu nota y la explicación.'
+            : 'Entrá a Mi Legajo → Mi Desempeño para consultar tu calificación y las recomendaciones del Entrenador Operativo.'}
         </div>
 
         <div style={{ display:'flex', gap:10, marginTop:18 }}>
@@ -113,7 +137,7 @@ export default function AvisoEvaluacion({ empleadoId, onIr }: {
           <button
             type="button"
             onClick={() => {
-              try { sessionStorage.setItem(CLAVE_SESION, pendiente.id) } catch { /* da igual */ }
+              try { sessionStorage.setItem(CLAVE_SESION, `${pendiente.id}:${pendiente.version}`) } catch { /* da igual */ }
               setPospuesto(true)
             }}
             style={{

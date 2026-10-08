@@ -35,8 +35,8 @@ const mismo = (a: number, b: number) => Math.abs(a - b) < 0.005
  *
  *   igual           no se dice nada: no hay dos números.
  *   antes_del_tope  el cálculo es el desempeño publicado y la oficial quedó
- *                   limitada por una falta crítica (p. ej. la corrección de
- *                   Gerencia): "resultado anterior al tope crítico".
+ *                   limitada por una falta crítica (p. ej. salidas
+ *                   injustificadas confirmadas): "resultado anterior al tope crítico".
  *   distinto        los datos cambiaron después de publicar, o el motor ya no
  *                   aplica la misma regla: se dice que no es la oficial.
  */
@@ -64,7 +64,7 @@ export function relacionConCalculo(
     relacion: 'distinto',
     texto: `Cálculo con los datos actuales: ${coma(notaCalculada)}. No es la nota oficial: `
       + (oficial.corregida_at
-        ? 'la oficial es la publicada y corregida por Gerencia.'
+        ? 'la oficial es la publicada, actualizada por una falta confirmada.'
         : 'la oficial es la publicada. Si los datos del mes cambiaron, hay que volver a congelar y publicar.'),
   }
 }

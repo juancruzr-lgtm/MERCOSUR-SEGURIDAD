@@ -27,15 +27,22 @@
 --      autorizada / injustificada / abandono / descartada (error de dato).
 --   4. Una evaluación PUBLICADA ya no se puede pisar en silencio: toda
 --      modificación de su contenido deja la versión anterior en
---      `evaluaciones_mensuales_historial`, y la corrección individual que ordena
---      Gerencia pasa por `corregir_evaluacion_publicada`, con motivo y autor.
+--      `evaluaciones_mensuales_historial`.
+--   5. Orden definitiva de Gerencia (08/10/2026): cuando una persona habilitada
+--      confirma (o deshace) una salida injustificada o un abandono, la
+--      evaluación oficial de ese período se RECALCULA SOLA —capa 4: nota final,
+--      concepto, faltas y explicación—, sin una segunda aprobación, para todos
+--      los vigiladores por igual. Rige desde septiembre de 2026 (VIGENCIA) y
+--      nunca toca períodos anteriores. El vigilador vuelve a ver el aviso de su
+--      evaluación cuando se corrige (`lecturas_evaluacion.version_vista`).
 --
 -- ── Lo que NO hace ───────────────────────────────────────────────────────────
 --   · No bloquea ni demora el fichaje: los triggers atrapan cualquier error.
 --   · No toca horas liquidables, liquidación ni la tolerancia de 15 minutos.
 --   · No declara injustificado nada: 'detectada' no tiene efecto en la nota.
---   · No hace backfill. La regla es prospectiva; la detección arranca cuando
---     se aplica esta migración.
+--   · No cambia dimensiones, pesos, escala ni Modelo C: sólo agrega topes.
+--   · La detección de lo ya fichado desde septiembre va en un archivo aparte
+--     (20261008160100); acá sólo la detección de lo que se fiche de ahora en más.
 --
 -- Rollback: archivo aparte (supabase/rollback/20261008160000_salidas_anticipadas_rollback.sql).
 
@@ -511,8 +518,9 @@ $fn$;
 revoke all on function public.resolver_salidas_anticipadas(uuid[], text, text, text, text) from public, anon;
 grant execute on function public.resolver_salidas_anticipadas(uuid[], text, text, text, text) to authenticated;
 
+
 -- ============================================================================
--- 6. Bandeja del mes, con la situación del relevo
+-- 6. Bandeja del mes, con horario, fichajes y situación del relevo
 -- ============================================================================
 --
 -- La situación del relevo se calcula al leer, no al detectar: cuando el
@@ -523,11 +531,13 @@ grant execute on function public.resolver_salidas_anticipadas(uuid[], text, text
 --   sin_relevo_programado  el servicio termina ahí (no hay turno siguiente)
 -- Es contexto para quien revisa. No clasifica a nadie como abandono.
 
-create or replace function public.salidas_anticipadas_del_mes(p_periodo text)
+drop function if exists public.salidas_anticipadas_del_mes(text);
+create function public.salidas_anticipadas_del_mes(p_periodo text)
 returns table (
   id uuid, registro_id uuid, turno_id uuid, empleado_id uuid, empleado text,
   objetivo_id uuid, objetivo text, fecha date,
-  fin_programado timestamp, salida_registrada timestamp,
+  inicio_programado timestamp, fin_programado timestamp,
+  entrada_registrada timestamp, salida_registrada timestamp,
   segundos_antes integer, minutos_antes integer,
   estado text, motivo_codigo text, motivo text, evidencia text,
   resuelto_por uuid, resuelto_por_nombre text, resuelto_at timestamptz,
@@ -542,7 +552,15 @@ as $fn$
   select s.id, s.registro_id, s.turno_id, s.empleado_id,
          trim(coalesce(u.apellido,'') || ' ' || coalesce(u.nombre,'')),
          s.objetivo_id, o.nombre, s.fecha,
-         s.fin_programado, s.salida_registrada, s.segundos_antes, s.minutos_antes,
+         (t.fecha + t.hora_inicio),
+         s.fin_programado,
+         -- La entrada, en el día que la deja más cerca del inicio (nocturnos).
+         case when ra.hora_entrada_real is null then null
+              when abs(extract(epoch from (t.fecha + ra.hora_entrada_real + interval '1 day' - (t.fecha + t.hora_inicio))))
+                 < abs(extract(epoch from (t.fecha + ra.hora_entrada_real - (t.fecha + t.hora_inicio))))
+              then t.fecha + ra.hora_entrada_real + interval '1 day'
+              else t.fecha + ra.hora_entrada_real end,
+         s.salida_registrada, s.segundos_antes, s.minutos_antes,
          s.estado, s.motivo_codigo, s.motivo, s.evidencia,
          s.resuelto_por, trim(coalesce(ur.apellido,'') || ' ' || coalesce(ur.nombre,'')), s.resuelto_at,
          case when rel.turno_id is null then 'sin_relevo_programado'
@@ -554,6 +572,7 @@ as $fn$
          public.puede_resolver_salida_anticipada(s.turno_id, 'abandono')
     from public.salidas_anticipadas s
     join public.turnos t           on t.id = s.turno_id
+    left join public.registros_asistencia ra on ra.id = s.registro_id
     left join public.usuarios u    on u.id = s.empleado_id
     left join public.usuarios ur   on ur.id = s.resuelto_por
     left join public.objetivos o   on o.id = s.objetivo_id
@@ -587,17 +606,43 @@ $fn$;
 revoke all on function public.salidas_anticipadas_del_mes(text) from public, anon;
 grant execute on function public.salidas_anticipadas_del_mes(text) to authenticated;
 
+-- Historial de una salida, con el nombre de quien hizo cada cambio. Lo ve quien
+-- la puede ver en la bandeja, y el propio vigilador.
+create or replace function public.salida_anticipada_historial(p_salida_id uuid)
+returns table (
+  estado_anterior text, estado_nuevo text, motivo_codigo text, motivo text,
+  evidencia text, segundos_antes integer, actor text, registrado_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public, pg_catalog
+as $fn$
+  select h.estado_anterior, h.estado_nuevo, h.motivo_codigo, h.motivo, h.evidencia,
+         h.segundos_antes,
+         coalesce(nullif(trim(coalesce(u.apellido,'') || ' ' || coalesce(u.nombre,'')), ''), 'Sistema'),
+         h.registrado_at
+    from public.salidas_anticipadas_historial h
+    join public.salidas_anticipadas s on s.id = h.salida_id
+    left join public.usuarios u on u.id = h.actor_id
+   where h.salida_id = p_salida_id
+     and (public.salida_anticipada_en_alcance(s.turno_id)
+          or s.empleado_id = public.rondas_usuario_actual_id())
+   order by h.registrado_at, h.id
+$fn$;
+
+revoke all on function public.salida_anticipada_historial(uuid) from public, anon;
+grant execute on function public.salida_anticipada_historial(uuid) to authenticated;
+
 -- ============================================================================
 -- 7. Una evaluación publicada no se pisa en silencio
 -- ============================================================================
 --
 -- Hasta hoy, volver a congelar un mes publicado reemplazaba el contenido de la
 -- fila (sólo se preservaban estado y fecha de publicación) y no quedaba rastro
--- de lo que se le había mostrado a la persona. Desde acá:
---   · todo cambio de contenido de una fila publicada guarda la versión
---     anterior en el historial;
---   · una fila CORREGIDA por Gerencia no se puede pisar por un recongelado: el
---     cliente las saltea y, si alguien lo intenta igual, la base lo rechaza.
+-- de lo que se le había mostrado a la persona. Desde acá todo cambio de
+-- contenido de una fila publicada —recongelado o recálculo por salidas— guarda
+-- la versión anterior en el historial, con motivo y autor, y sube la versión.
 
 create or replace function public.trg_evaluacion_publicada_historial()
 returns trigger
@@ -605,8 +650,6 @@ language plpgsql
 security definer
 set search_path = public, pg_catalog
 as $fn$
-declare
-  v_correccion boolean := coalesce(current_setting('app.correccion_evaluacion', true), '') = 'on';
 begin
   if old.estado <> 'publicada' then
     return new;
@@ -620,11 +663,6 @@ begin
       old.dimensiones, old.faltas, old.explicacion, old.balance, old.contexto,
       old.cobertura, old.alcance, old.datos_insuficientes, old.estado_desempeno) then
     return new;
-  end if;
-
-  if old.corregida_at is not null and not v_correccion then
-    raise exception 'La evaluación % de % fue corregida por Gerencia; no se recalcula. Usar corregir_evaluacion_publicada.',
-      old.id, old.periodo;
   end if;
 
   insert into public.evaluaciones_mensuales_historial
@@ -646,21 +684,46 @@ create trigger evaluacion_publicada_historial
   for each row execute function public.trg_evaluacion_publicada_historial();
 
 -- ============================================================================
--- 8. Corrección individual de una evaluación publicada (sólo Gerencia)
+-- 8. Recálculo automático de la evaluación por salidas confirmadas
 -- ============================================================================
 --
--- Cambia la CAPA 4 (nota final, concepto, faltas, explicación). Las
--- dimensiones, el cumplimiento ponderado y el índice quedan como estaban: la
--- corrección no maquilla los porcentajes, agrega un tope. La versión anterior
--- queda en el historial y la fila se republica con fecha y autor nuevos.
+-- Orden definitiva de Gerencia (08/10/2026): confirmada la salida por quien
+-- está habilitado, la nota oficial se actualiza sola —sin segunda aprobación—
+-- y con la misma regla para todos. Rige desde septiembre de 2026.
+--
+-- Sólo la CAPA 4. Parte del desempeño ya publicado (`indice`), conserva las
+-- faltas que no son de salida (rondas, inasistencia) y vuelve a componer:
+--   nota final = min(desempeño, tope más restrictivo)
+-- Es la misma cuenta que `evaluar` y `recalcularCapa4` en lib/evaluacion-final.ts;
+-- los textos (hecho, concepto, explicación) también son los mismos y un test lo
+-- verifica. Si se deshace la confirmación (autorizada, descartada, reabierta),
+-- la falta se quita y la nota vuelve a la que corresponda.
+--
+-- Si el período todavía no tiene evaluación, no hace nada: el congelado del mes
+-- ya lee las salidas confirmadas del período.
 
-create or replace function public.corregir_evaluacion_publicada(
-  p_evaluacion_id uuid,
-  p_nota_final    numeric,
-  p_concepto      text,
-  p_faltas        jsonb,
-  p_explicacion   text,
-  p_motivo        text
+create or replace function public.salida_anticipada_vigente(p_periodo text)
+returns boolean
+language sql
+immutable
+as $fn$
+  select p_periodo ~ '^\d{4}-\d{2}$' and p_periodo >= '2026-09'
+$fn$;
+
+create or replace function public.evaluacion_numero_texto(p numeric)
+returns text
+language sql
+immutable
+as $fn$
+  -- Como `${n}` en JavaScript: 10.00 → "10", 8.80 → "8.8", 8.88 → "8.88".
+  select case when p is null then '0'
+              when position('.' in p::text) > 0 then rtrim(rtrim(p::text, '0'), '.')
+              else p::text end
+$fn$;
+
+create or replace function public.recalcular_evaluacion_por_salidas(
+  p_empleado_id uuid,
+  p_periodo     text
 )
 returns jsonb
 language plpgsql
@@ -668,66 +731,214 @@ security definer
 set search_path = public, pg_catalog
 as $fn$
 declare
-  v_actor uuid;
-  v_ev    public.evaluaciones_mensuales;
+  v_ev        public.evaluaciones_mensuales;
+  v_inj       integer;
+  v_ab        integer;
+  v_faltas    jsonb;
+  v_tope      numeric;
+  v_nota      numeric(4,2);
+  v_concepto  text;
+  v_expl      text;
+  v_actor     uuid;
+  v_nombre    text;
+  v_motivo    text;
 begin
+  if not public.salida_anticipada_vigente(p_periodo) then
+    return jsonb_build_object('ok', true, 'cambio', false, 'motivo', 'periodo_no_vigente');
+  end if;
+
+  v_ev := (select e from public.evaluaciones_mensuales e
+            where e.empleado_id = p_empleado_id and e.periodo = p_periodo);
+  if v_ev.id is null or v_ev.indice is null or v_ev.nota_final is null then
+    return jsonb_build_object('ok', true, 'cambio', false, 'motivo', 'sin_evaluacion');
+  end if;
+
+  v_inj := (select count(*) from public.salidas_anticipadas
+             where empleado_id = p_empleado_id and periodo = p_periodo and estado = 'injustificada');
+  v_ab  := (select count(*) from public.salidas_anticipadas
+             where empleado_id = p_empleado_id and periodo = p_periodo and estado = 'abandono');
+
+  -- Faltas que no son de salida, en su orden.
+  v_faltas := coalesce((
+    select jsonb_agg(x.f order by x.n)
+      from jsonb_array_elements(case when jsonb_typeof(v_ev.faltas) = 'array' then v_ev.faltas else '[]'::jsonb end)
+           with ordinality as x(f, n)
+     where x.f->>'clave' not in ('salida_anticipada_injustificada', 'abandono_de_puesto')
+  ), '[]'::jsonb);
+
+  -- Mismos textos que faltaPorSalidaAnticipada / faltaPorAbandono.
+  if v_inj > 0 then
+    v_faltas := v_faltas || jsonb_build_array(jsonb_build_object(
+      'clave', 'salida_anticipada_injustificada',
+      'hecho', case when v_inj = 1
+        then '1 salida anticipada injustificada confirmada: retiro antes del horario de finalización del servicio, sin autorización'
+        else v_inj || ' salidas anticipadas injustificadas confirmadas: incumplimiento reiterado del horario de finalización del servicio, sin autorización'
+      end,
+      'tope', 4));
+  end if;
+  if v_ab > 0 then
+    v_faltas := v_faltas || jsonb_build_array(jsonb_build_object(
+      'clave', 'abandono_de_puesto',
+      'hecho', case when v_ab = 1
+        then '1 abandono del puesto sin relevo comprobado'
+        else v_ab || ' abandonos del puesto sin relevo comprobados'
+      end,
+      'tope', 2));
+  end if;
+
+  -- Primero la que decide la nota (orden estable por tope).
+  v_faltas := coalesce((
+    select jsonb_agg(x.f order by (x.f->>'tope')::numeric, x.n)
+      from jsonb_array_elements(v_faltas) with ordinality as x(f, n)
+  ), '[]'::jsonb);
+
+  v_tope := (select min((f->>'tope')::numeric) from jsonb_array_elements(v_faltas) f);
+  v_nota := least(v_ev.indice, coalesce(v_tope, v_ev.indice));
+
+  v_concepto := case
+    when v_ev.alcance = 'parcial' then 'Evaluación parcial'
+    else (array['Aplazado','Aplazado','Aplazado','Aplazado','Insuficiente','Aprobado',
+                'Bueno','Muy bueno','Excelente','Sobresaliente'])[greatest(1, least(10, floor(v_nota)::int))]
+  end;
+
+  if v_nota < v_ev.indice then
+    v_expl := public.evaluacion_numero_texto(v_ev.indice) || ' de desempeño · '
+      || public.evaluacion_numero_texto(v_nota) || ' final por '
+      || (select string_agg(lower(x.f->>'hecho'), ' y ' order by x.n)
+            from jsonb_array_elements(v_faltas) with ordinality as x(f, n));
+  else
+    v_expl := public.evaluacion_numero_texto(v_ev.indice) || ' de desempeño';
+  end if;
+  if v_ev.alcance = 'parcial' then
+    v_expl := v_expl || ' · Evaluación parcial: se pudo evaluar el '
+      || public.evaluacion_numero_texto(coalesce(v_ev.cobertura, 0)) || ' % de los requerimientos aplicables';
+  end if;
+
+  -- Idempotente: si no cambia nada, no se toca la fila ni la versión.
+  if v_ev.nota_final = v_nota and v_ev.concepto is not distinct from v_concepto
+     and v_ev.faltas = v_faltas and v_ev.explicacion is not distinct from v_expl then
+    return jsonb_build_object('ok', true, 'cambio', false, 'motivo', 'sin_cambios', 'nota', v_nota);
+  end if;
+
   v_actor := public.rondas_usuario_actual_id();
-  if v_actor is null or not public.puede_acceder_gerencia_actual() then
-    raise exception 'Sólo Gerencia puede corregir una evaluación publicada.';
-  end if;
-  if length(trim(coalesce(p_motivo, ''))) < 20 then
-    raise exception 'El motivo de la corrección es obligatorio (al menos 20 caracteres).';
-  end if;
-  if p_nota_final is null or p_nota_final < 0 or p_nota_final > 10 then
-    raise exception 'Nota final fuera de rango.';
-  end if;
-  if p_faltas is null or jsonb_typeof(p_faltas) <> 'array' then
-    raise exception 'Las faltas deben ser una lista.';
-  end if;
+  v_nombre := (select trim(coalesce(apellido,'') || ' ' || coalesce(nombre,'')) from public.usuarios where id = v_actor);
+  v_motivo := 'Recálculo automático por salidas anticipadas confirmadas en ' || p_periodo || ': '
+    || v_inj || ' injustificada(s), ' || v_ab || ' abandono(s). Registró: '
+    || coalesce(nullif(v_nombre, ''), 'sistema') || '.';
 
-  v_ev := (select e from public.evaluaciones_mensuales e where e.id = p_evaluacion_id);
-  if v_ev.id is null then
-    raise exception 'Evaluación inexistente.';
-  end if;
-  if v_ev.estado <> 'publicada' then
-    raise exception 'Sólo se corrigen evaluaciones publicadas; ésta está %.', v_ev.estado;
-  end if;
-  -- Un tope nunca sube una nota: la corrección no puede quedar por encima del
-  -- desempeño calculado.
-  if v_ev.indice is not null and p_nota_final > v_ev.indice then
-    raise exception 'La nota corregida (%) no puede superar el desempeño calculado (%).', p_nota_final, v_ev.indice;
-  end if;
-
-  perform set_config('app.correccion_evaluacion', 'on', true);
-  perform set_config('app.motivo_correccion', trim(p_motivo), true);
-
+  perform set_config('app.motivo_correccion', v_motivo, true);
   update public.evaluaciones_mensuales
-     set nota_final        = p_nota_final,
-         concepto          = p_concepto,
-         faltas            = p_faltas,
-         explicacion       = p_explicacion,
+     set nota_final        = v_nota,
+         concepto          = v_concepto,
+         faltas            = v_faltas,
+         explicacion       = v_expl,
          corregida_at      = now(),
          corregida_por     = v_actor,
-         motivo_correccion = trim(p_motivo),
-         publicado_at      = now(),
-         publicado_por     = v_actor
-   where id = p_evaluacion_id;
-
-  perform set_config('app.correccion_evaluacion', '', true);
+         motivo_correccion = v_motivo
+   where id = v_ev.id;
   perform set_config('app.motivo_correccion', '', true);
 
-  return jsonb_build_object(
-    'ok', true,
-    'evaluacion_id', p_evaluacion_id,
-    'nota_anterior', v_ev.nota_final,
-    'nota_nueva', p_nota_final,
-    'version', v_ev.version + 1
-  );
+  return jsonb_build_object('ok', true, 'cambio', true,
+    'nota_anterior', v_ev.nota_final, 'nota_nueva', v_nota, 'version', v_ev.version + 1);
 end;
 $fn$;
 
-revoke all on function public.corregir_evaluacion_publicada(uuid, numeric, text, jsonb, text, text) from public, anon;
-grant execute on function public.corregir_evaluacion_publicada(uuid, numeric, text, jsonb, text, text) to authenticated;
+revoke all on function public.recalcular_evaluacion_por_salidas(uuid, text) from public, anon, authenticated;
+
+-- Una vez por SENTENCIA y por persona/período: resolver 19 salidas en bloque
+-- genera UNA versión nueva, no diecinueve.
+create or replace function public.trg_salidas_anticipadas_recalcular()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $fn$
+declare
+  r record;
+begin
+  for r in
+    select distinct n.empleado_id, n.periodo
+      from nuevas n
+      left join viejas o on o.id = n.id
+     where (o.id is null and n.estado in ('injustificada', 'abandono'))
+        or (o.estado is distinct from n.estado
+            and (n.estado in ('injustificada', 'abandono') or o.estado in ('injustificada', 'abandono')))
+  loop
+    perform public.recalcular_evaluacion_por_salidas(r.empleado_id, r.periodo);
+  end loop;
+  return null;
+end;
+$fn$;
+
+drop trigger if exists salidas_anticipadas_recalcular on public.salidas_anticipadas;
+create trigger salidas_anticipadas_recalcular
+  after update on public.salidas_anticipadas
+  referencing old table as viejas new table as nuevas
+  for each statement execute function public.trg_salidas_anticipadas_recalcular();
+
+-- ============================================================================
+-- 9. El vigilador se entera de la corrección
+-- ============================================================================
+--
+-- `lecturas_evaluacion` guardaba sólo la primera lectura. Ahora también qué
+-- versión vio: si la evaluación se corrigió después (`corregida_at`) y la
+-- versión vista es anterior, el aviso de Mi Desempeño vuelve a aparecer. La
+-- fecha de la primera lectura (`visto_at`) no se toca: es la de la entrega.
+
+alter table public.lecturas_evaluacion
+  add column if not exists version_vista integer;
+
+create or replace function public.registrar_lectura_evaluacion(p_evaluacion_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $fn$
+declare
+  v_uid      uuid;
+  v_empleado uuid;
+  v_eval     public.evaluaciones_mensuales;
+  v_ya       boolean;
+begin
+  v_uid := auth.uid();
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'motivo', 'no_autenticado');
+  end if;
+
+  v_empleado := (select id from public.usuarios where auth_user_id = v_uid and estado = 'activo' limit 1);
+  if v_empleado is null then
+    return jsonb_build_object('ok', false, 'motivo', 'usuario_inactivo');
+  end if;
+
+  v_eval := (select e from public.evaluaciones_mensuales e where e.id = p_evaluacion_id);
+  if v_eval.id is null then
+    return jsonb_build_object('ok', false, 'motivo', 'inexistente');
+  end if;
+  if v_eval.empleado_id <> v_empleado then
+    return jsonb_build_object('ok', false, 'motivo', 'no_es_suya');
+  end if;
+  if v_eval.estado <> 'publicada' then
+    return jsonb_build_object('ok', false, 'motivo', 'no_publicada');
+  end if;
+
+  v_ya := exists (
+    select 1 from public.lecturas_evaluacion
+     where evaluacion_id = p_evaluacion_id and empleado_id = v_empleado
+  );
+
+  insert into public.lecturas_evaluacion
+    (evaluacion_id, empleado_id, periodo, auth_user_id, version_vista)
+  values (p_evaluacion_id, v_empleado, v_eval.periodo, v_uid, v_eval.version)
+  on conflict on constraint lectura_evaluacion_unica
+  do update set version_vista = greatest(coalesce(lecturas_evaluacion.version_vista, 0), excluded.version_vista);
+
+  return jsonb_build_object('ok', true, 'primera_vez', not v_ya);
+end;
+$fn$;
+
+revoke all on function public.registrar_lectura_evaluacion(uuid) from public;
+revoke all on function public.registrar_lectura_evaluacion(uuid) from anon;
+grant execute on function public.registrar_lectura_evaluacion(uuid) to authenticated;
 
 notify pgrst, 'reload schema';
 

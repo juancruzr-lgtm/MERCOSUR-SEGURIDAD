@@ -4192,7 +4192,7 @@ export default function SupervisorMobile({ user }: any) {
                 Gerencia y no se ofrece en este shell. */}
             {tab === 'salidas' && (
               <section>
-                <SalidasAnticipadasPanel esGerencia={false} />
+                <SalidasAnticipadasPanel />
               </section>
             )}
 

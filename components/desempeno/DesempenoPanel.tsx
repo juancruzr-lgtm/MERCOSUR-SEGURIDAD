@@ -397,10 +397,7 @@ export default function DesempenoPanel({
         : `Congeladas ${r.guardadas} evaluaciones de ${etiquetaMes(mes)}`
           + (r.publicadasPreservadas > 0
             ? ` · ${r.publicadasPreservadas} ya publicadas se mantuvieron publicadas`
-            : ' · quedan en «calculada», todavía no las ve nadie')
-          + (r.corregidasPreservadas > 0
-            ? ` · ${r.corregidasPreservadas} corregidas por Gerencia no se tocaron`
-            : ''),
+            : ' · quedan en «calculada», todavía no las ve nadie'),
     )
   }, [lista, balances, medido, mes, usuarioId])
 

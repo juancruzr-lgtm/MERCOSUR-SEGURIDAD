@@ -296,14 +296,14 @@ export const INASISTENCIA_ACTIVA = true
 // sanción.
 
 /**
- * Desde qué período ('YYYY-MM') rige la regla general.
+ * Desde qué período ('YYYY-MM') rige la regla.
  *
- * `null` = todavía no rige para nadie. Gerencia la activa después de aprobar y
- * comunicar el criterio; es prospectiva y no recalcula meses ya publicados.
- * La corrección individual de MENA (septiembre 2026) NO pasa por acá: es una
- * corrección de Gerencia sobre su evaluación publicada, con historial.
+ * Orden definitiva de Gerencia (08/10/2026): septiembre de 2026 es el período
+ * de revisión inicial y la regla sigue igual para los meses siguientes, sin
+ * reactivarla mes a mes. Los períodos anteriores no se recalculan. Es la misma
+ * constante que `salida_anticipada_vigente` en la base.
  */
-export const SALIDA_ANTICIPADA_VIGENTE_DESDE: string | null = null
+export const SALIDA_ANTICIPADA_VIGENTE_DESDE: string | null = '2026-09'
 
 export function salidaAnticipadaVigente(
   periodo: string,
@@ -350,16 +350,18 @@ export function faltaPorAbandono(abandonosComprobados: number): FaltaCritica | n
 }
 
 /**
- * Lo que cambia en una evaluación PUBLICADA cuando Gerencia le agrega una
- * falta crítica después de publicada.
+ * La capa 4 de una evaluación ya congelada, recalculada con las salidas
+ * confirmadas del período.
  *
- * Sólo la CAPA 4: nota final, concepto, faltas y explicación. Las dimensiones,
- * el cumplimiento ponderado y el índice quedan como se publicaron —la
- * corrección no maquilla porcentajes, agrega un tope—, y se usa la misma
- * composición que `evaluar`: tope = el más restrictivo, nota = min(desempeño,
- * tope), un tope nunca sube una nota.
+ * Es la cuenta que hace la base en `recalcular_evaluacion_por_salidas` cada vez
+ * que Supervisión confirma (o deshace) una salida injustificada o un abandono:
+ * parte del desempeño publicado (`indice`), conserva las faltas que no son de
+ * salida (rondas, inasistencia) y vuelve a componer como `evaluar`:
+ * tope = el más restrictivo, nota = min(desempeño, tope). Las dimensiones, el
+ * cumplimiento ponderado y el índice no cambian. Los textos tienen que ser los
+ * mismos que arma la base: hay un test que lo verifica.
  */
-export interface FilaPublicadaParaCorregir {
+export interface FilaCapa4 {
   indice: number | null
   nota_final: number | null
   alcance: string | null
@@ -367,47 +369,52 @@ export interface FilaPublicadaParaCorregir {
   faltas: unknown
 }
 
-export interface CorreccionCapa4 {
+export interface Capa4 {
   nota_final: number
   concepto: string
   faltas: FaltaCritica[]
   explicacion: string
 }
 
-export function corregirCapa4(
-  fila: FilaPublicadaParaCorregir,
-  nuevas: Array<FaltaCritica | null>,
-): CorreccionCapa4 | null {
+const CLAVES_SALIDA: ClaveFalta[] = ['salida_anticipada_injustificada', 'abandono_de_puesto']
+
+export function recalcularCapa4(
+  fila: FilaCapa4,
+  confirmadas: { injustificadas: number; abandonos: number },
+): Capa4 | null {
   if (fila.indice === null || fila.nota_final === null) return null
-  const previas = (Array.isArray(fila.faltas) ? fila.faltas : []) as FaltaCritica[]
-  const agregadas = nuevas.filter((f): f is FaltaCritica => f !== null)
-  // La misma clave no se acumula: si ya estaba, manda la nueva redacción.
-  const claves = new Set(agregadas.map(f => f.clave))
-  const faltas = [...previas.filter(f => !claves.has(f.clave)), ...agregadas]
-  if (agregadas.length === 0) return null
+  const previas = ((Array.isArray(fila.faltas) ? fila.faltas : []) as FaltaCritica[])
+    .filter(f => !CLAVES_SALIDA.includes(f.clave))
+  const nuevas = [
+    faltaPorSalidaAnticipada(confirmadas.injustificadas),
+    faltaPorAbandono(confirmadas.abandonos),
+  ].filter((f): f is FaltaCritica => f !== null)
+  // Primero la que decide la nota: es la que Mi Desempeño nombra como tope.
+  const faltas = [...previas, ...nuevas]
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => Number(a.f.tope) - Number(b.f.tope) || a.i - b.i)
+    .map(x => x.f)
 
   const desempeno = Number(fila.indice)
   const tope = faltas.reduce((min, f) => Math.min(min, Number(f.tope)), Infinity)
-  const notaFinal = Math.min(desempeno, tope, Number(fila.nota_final))
-  // Primero la que decide la nota: es la que Mi Desempeño nombra como tope.
-  const ordenadas = [...faltas].sort((a, b) => Number(a.tope) - Number(b.tope))
+  const notaFinal = Math.min(desempeno, tope)
 
   const partes: string[] = []
   if (notaFinal < desempeno) {
     partes.push(`${desempeno} de desempeño · ${notaFinal} final por `
-      + ordenadas.map(f => f.hecho.toLowerCase()).join(' y '))
+      + faltas.map(f => f.hecho.toLowerCase()).join(' y '))
   } else {
     partes.push(`${desempeno} de desempeño`)
   }
   if (fila.alcance === 'parcial') {
-    partes.push(`Evaluación parcial: se pudo evaluar el ${fila.cobertura ?? 0} % `
+    partes.push(`Evaluación parcial: se pudo evaluar el ${Number(fila.cobertura ?? 0)} % `
       + 'de los requerimientos aplicables')
   }
 
   return {
     nota_final: notaFinal,
     concepto: fila.alcance === 'parcial' ? 'Evaluación parcial' : conceptoDe(notaFinal),
-    faltas: ordenadas,
+    faltas,
     explicacion: partes.join(' · '),
   }
 }
@@ -449,7 +456,14 @@ export function evaluar(
 ): Evaluacion {
   const cobertura = coberturaDe(dimensiones, pesos)
   const alcance = alcanceDe(cobertura)
-  const activas = faltas.filter((f): f is FaltaCritica => f !== null)
+  // Primero la que decide la nota (orden estable por tope): es la que Mi
+  // Desempeño nombra como tope, y es el mismo orden que usa el recálculo por
+  // salidas en la base. Sin esto, recongelar y recalcular darían textos distintos.
+  const activas = faltas
+    .filter((f): f is FaltaCritica => f !== null)
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => a.f.tope - b.f.tope || a.i - b.i)
+    .map(x => x.f)
   const desempeno = notaEscolar(indice)
   const tope = activas.reduce((min, f) => Math.min(min, f.tope), Infinity)
   const notaFinal = Math.min(desempeno, tope)

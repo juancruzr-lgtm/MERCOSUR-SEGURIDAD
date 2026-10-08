@@ -118,22 +118,22 @@ export async function cargarNotasPublicadasDelMes(
   }
 }
 
-export async function corregirEvaluacionPublicada(args: {
-  evaluacionId: string
-  notaFinal: number
-  concepto: string
-  faltas: unknown[]
-  explicacion: string
-  motivo: string
-}): Promise<{ ok: boolean; error: string | null }> {
-  const { error } = await supabase.rpc('corregir_evaluacion_publicada', {
-    p_evaluacion_id: args.evaluacionId,
-    p_nota_final: args.notaFinal,
-    p_concepto: args.concepto,
-    p_faltas: args.faltas,
-    p_explicacion: args.explicacion,
-    p_motivo: args.motivo,
-  })
-  if (error) return { ok: false, error: error.message ?? String(error) }
-  return { ok: true, error: null }
+export interface CambioSalida {
+  estado_anterior: string | null
+  estado_nuevo: string
+  motivo_codigo: string | null
+  motivo: string | null
+  evidencia: string | null
+  segundos_antes: number | null
+  actor: string
+  registrado_at: string
+}
+
+/** Historial completo de una salida: detección, resoluciones y cambios. */
+export async function cargarHistorialSalida(
+  salidaId: string,
+): Promise<{ data: CambioSalida[]; error: string | null }> {
+  const { data, error } = await supabase.rpc('salida_anticipada_historial', { p_salida_id: salidaId })
+  if (error) return { data: [], error: error.message ?? String(error) }
+  return { data: (data ?? []) as CambioSalida[], error: null }
 }
