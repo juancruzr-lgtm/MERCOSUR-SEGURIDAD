@@ -92,8 +92,11 @@ create policy sga_select_operador on public.supervisores_guardia_auditoria
   for select to authenticated using (public.es_operador_actual());
 
 -- Escritura SOLO por el trigger (security definer). Los DEFAULT PRIVILEGES
--- conceden INSERT/DELETE/TRUNCATE solos: se revocan explícitos.
+-- conceden INSERT/DELETE/TRUNCATE solos: se revocan explícitos. El SELECT se
+-- concede explícito (no confiar en defaults: la validación en base aislada
+-- demostró que sin esta línea la vista "Cambios de guardia" quedaría ciega).
 revoke insert, update, delete, truncate on public.supervisores_guardia_auditoria from authenticated, anon;
+grant select on public.supervisores_guardia_auditoria to authenticated;
 
 -- Trigger: registra toda escritura con el actor y los valores antes/después.
 -- El motivo y el origen "excepción" llegan por GUC locales de la transacción
@@ -252,6 +255,11 @@ begin
        'activo', coalesce(nullif(p_datos->>'tipo_evento',''),'normal'),
        nullif(btrim(coalesce(p_datos->>'observacion','')),''), 'manual', v_actor.id)
     returning * into v_fila;
+    -- Limpiar los GUC: son de alcance TRANSACCIÓN, no de llamada — sin esto,
+    -- otra escritura posterior en la misma transacción heredaría el origen y
+    -- el motivo de esta excepción (lo detectó la validación en base aislada).
+    perform set_config('app.guardia_motivo', '', true);
+    perform set_config('app.guardia_origen', '', true);
     return v_fila;
   end if;
 
@@ -295,6 +303,9 @@ begin
     returning * into v_fila;
   end if;
 
+  -- Mismo saneo de GUC que en el camino de 'crear' (ver comentario arriba).
+  perform set_config('app.guardia_motivo', '', true);
+  perform set_config('app.guardia_origen', '', true);
   return v_fila;
 end $$;
 revoke all on function public.guardia_excepcion_supervisor(text, uuid, jsonb, text) from public, anon;
