@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../_lib/employee-auth'
+import { validarFotoOperativa } from '../_lib/validar-foto'
 
 export const runtime = 'nodejs'
 
@@ -69,13 +70,19 @@ export async function POST(req: NextRequest) {
     uniforme.arrayBuffer().then(ab => Buffer.from(ab)),
   ])
 
+  // Control común: que sea una foto de verdad, de tamaño razonable, y su huella.
+  const vLibro = validarFotoOperativa(bufLibro)
+  if (!vLibro.ok) return NextResponse.json({ error: `Libro de guardia: ${vLibro.error}` }, { status: vLibro.status })
+  const vUniforme = validarFotoOperativa(bufUniforme)
+  if (!vUniforme.ok) return NextResponse.json({ error: `Uniforme: ${vUniforme.error}` }, { status: vUniforme.status })
+
   const [upLibro, upUniforme] = await Promise.all([
     admin.client.storage
       .from('ingreso-evidencias')
-      .upload(pathLibro, bufLibro, { upsert: true, contentType: 'image/jpeg' }),
+      .upload(pathLibro, bufLibro, { upsert: true, contentType: vLibro.mime }),
     admin.client.storage
       .from('ingreso-evidencias')
-      .upload(pathUniforme, bufUniforme, { upsert: true, contentType: 'image/jpeg' }),
+      .upload(pathUniforme, bufUniforme, { upsert: true, contentType: vUniforme.mime }),
   ])
 
   if (upLibro.error)    return NextResponse.json({ error: upLibro.error.message },    { status: 500 })
@@ -96,6 +103,10 @@ export async function POST(req: NextRequest) {
           tipo_evidencia:  'libro_guardia',
           bucket:          'ingreso-evidencias',
           storage_path:    pathLibro,
+          // Huella del archivo subido: el análisis IA la compara (integridad).
+          contenido_sha256: vLibro.sha256,
+          bytes:           vLibro.bytes,
+          content_type:    vLibro.mime,
         },
         {
           proceso_tipo:    'ingreso',
@@ -106,6 +117,9 @@ export async function POST(req: NextRequest) {
           tipo_evidencia:  'uniforme',
           bucket:          'ingreso-evidencias',
           storage_path:    pathUniforme,
+          contenido_sha256: vUniforme.sha256,
+          bytes:           vUniforme.bytes,
+          content_type:    vUniforme.mime,
         },
       ],
       { onConflict: 'proceso_tipo,proceso_id,tipo_evidencia' },

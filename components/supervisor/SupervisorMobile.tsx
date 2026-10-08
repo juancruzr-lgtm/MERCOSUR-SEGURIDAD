@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { alcanceDe } from '@/lib/capacidades'
 import { filtrarTurnosParaAlertas, objetivoIdsParaAlertas } from '@/lib/alertas-alcance'
 import { activarNotificacionesPush } from '@/lib/push-client'
-import { comprimirImagen, superaElLimite } from '@/lib/comprimir-imagen'
+import { comprimirFotoOperativa, originalSubible } from '@/lib/comprimir-imagen'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, objetivoEstaOperativo, registroTieneEntradaConfirmada, idsObjetivosPausados } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -2175,11 +2175,12 @@ export default function SupervisorMobile({ user }: any) {
 
     for (const original of nuevasFotos) {
       try {
-        listas.push(await comprimirImagen(original))
+        listas.push(await comprimirFotoOperativa(original, 'operativa'))
       } catch {
-        // Si no se pudo comprimir pero el original ya entra, se usa igual: es
-        // preferible una foto grande subida a ninguna foto.
-        if (!superaElLimite(original)) listas.push(original)
+        // Si no se pudo comprimir, el original sólo se usa si es JPG/PNG/WEBP y
+        // entra en el límite. Antes se subía cualquier cosa ≤ 4 MB (p. ej. un
+        // HEIC elegido de la galería), que después no se veía ni lo leía la IA.
+        if (originalSubible(original)) listas.push(original)
         else fallidas.push(original.name)
       }
     }
