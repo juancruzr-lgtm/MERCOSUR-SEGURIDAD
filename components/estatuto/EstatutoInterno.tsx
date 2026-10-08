@@ -6,7 +6,7 @@
  * La sección "Estatuto Interno" de Mi Legajo (y de /estatuto).
  *
  * ── Dos modos ────────────────────────────────────────────────────────────────
- *   propio   la persona lee su Estatuto, lo descarga y lo acepta
+ *   propio   la persona lee su Estatuto (las veces que quiera) y lo acepta
  *   ajeno    Administración/Gerencia mira la constancia de otro desde su legajo
  *
  * En modo ajeno no hay botón de aceptar ni se registra apertura: la RPC lo
@@ -18,6 +18,13 @@
  * 2. recién ahí se habilita la casilla con la declaración
  * 3. "Aceptar estatuto"   → constancia (estatuto_aceptaciones)
  * La base exige el paso 1 antes del 3: saltear la pantalla no saltea la regla.
+ *
+ * ── Sin el Word original ─────────────────────────────────────────────────────
+ * Decisión de Gerencia (08/10/2026): acá no se ofrece el archivo editable a
+ * nadie —ni al vigilador ni en el legajo de cada empleado—. Se lee en la app
+ * (o en la copia PDF). El original lo bajan Administración y Gerencia desde
+ * Estatuto Interno → Versiones, por /api/estatuto/original, que valida el
+ * permiso: el archivo ya no está en una dirección pública.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -170,36 +177,18 @@ export default function EstatutoInterno({ empleadoId, esPropio }: {
 
       {vigente && (
         <>
-          {/* Leer y descargar */}
+          {/* Una sola opción: leer dentro de la app, las veces que quiera.
+              Sin Word ni PDF (Gerencia, 08/10/2026). */}
           <div style={card}>
             <div style={{ ...etiqueta, marginBottom: 10 }}>Documento</div>
             {contenido ? (
               <button type="button" style={boton(!abierto)} onClick={() => abierto ? setAbierto(false) : void abrir()}>
-                {abierto ? 'Ocultar el documento' : 'Leer el documento completo'}
+                {abierto ? 'Ocultar Estatuto Interno' : 'Leer Estatuto Interno'}
               </button>
             ) : (
               <div style={{ fontSize: 13.5, color: '#94a3b8', marginBottom: 10, lineHeight: 1.5 }}>
-                Esta versión se consulta descargando el archivo.
+                Esta versión todavía no se puede leer en la app. Consultá con Administración.
               </div>
-            )}
-            <a
-              href={vigente.archivo_ruta}
-              download={vigente.archivo_nombre}
-              onClick={() => { void abrir() }}
-              style={boton(false)}
-            >
-              Descargar el original (Word)
-            </a>
-            {contenido?.fuente.copia_pdf && (
-              <a
-                href={contenido.fuente.copia_pdf}
-                target="_blank"
-                rel="noopener"
-                onClick={() => { void abrir() }}
-                style={boton(false)}
-              >
-                Abrir copia en PDF
-              </a>
             )}
             <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
               Huella del original (SHA-256): <span style={{ fontFamily: 'monospace' }}>{hashCorto(vigente.archivo_sha256)}</span>
