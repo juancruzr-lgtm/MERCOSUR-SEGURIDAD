@@ -37,7 +37,15 @@ export function rutaOriginal(identificador: string | null | undefined): string |
   return `${CARPETA_ORIGINALES}/v${identificador}/estatuto-interno.doc`
 }
 
-/** Nombre con el que se descarga. Sin fecha, como pidió Gerencia. */
+/**
+ * Nombre del documento, como lo pidió Gerencia (08/10/2026). Es el que se ve
+ * en Versiones y el del archivo que se descarga.
+ */
+export const NOMBRE_DOCUMENTO = 'Estatuto Interno Mercosur Seguridad SRL 2026'
+
+/** Nombre del archivo que se descarga. */
 export function nombreDescarga(identificador: string): string {
-  return identificador === '1' ? 'estatuto-interno.doc' : `estatuto-interno-v${identificador}.doc`
+  return identificador === '1'
+    ? `${NOMBRE_DOCUMENTO}.doc`
+    : `${NOMBRE_DOCUMENTO} - versión ${identificador}.doc`
 }

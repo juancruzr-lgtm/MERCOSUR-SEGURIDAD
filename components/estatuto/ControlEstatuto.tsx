@@ -30,7 +30,7 @@ import {
 } from '@/lib/estatuto'
 import type { PersonaControl, VersionEstatuto } from '@/lib/estatuto'
 import { cargarControl, cargarVersiones, descargarOriginal, publicarVersion } from '@/lib/estatuto-datos'
-import { nombreDescarga } from '@/lib/estatuto-original'
+import { NOMBRE_DOCUMENTO, nombreDescarga } from '@/lib/estatuto-original'
 import { esGerenciaReal } from '@/lib/capacidades'
 import type { SujetoAcceso } from '@/lib/capacidades'
 
@@ -224,15 +224,16 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
                         : 'BORRADOR (no se le muestra al personal)'}
                       {/* El original (Word) sólo sale por /api/estatuto/original, que valida que
                           quien lo pide sea Administración o Gerencia. Ya no hay enlace público. */}
-                      <br />Original: <button type="button"
+                      <br />Documento: <button type="button"
+                        title="Descargar el original en Word"
                         onClick={async () => {
                           setErrorOriginal(null)
                           const r = await descargarOriginal(v.identificador, nombreDescarga(v.identificador))
                           if (r.error) setErrorOriginal(r.error)
                         }}
-                        style={{ background: 'none', border: 'none', padding: 0, color: '#38bdf8', cursor: 'pointer', fontSize: 13, textDecoration: 'underline' }}>
-                        descargar Word ({nombreDescarga(v.identificador)})
-                      </button> ({v.archivo_bytes.toLocaleString('es-AR')} bytes)
+                        style={{ background: 'none', border: 'none', padding: 0, color: '#38bdf8', cursor: 'pointer', fontSize: 13, textDecoration: 'underline', textAlign: 'left' }}>
+                        {NOMBRE_DOCUMENTO}
+                      </button> (original en Word, {v.archivo_bytes.toLocaleString('es-AR')} bytes)
                       {errorOriginal && <><br /><span style={{ color: '#fca5a5' }}>{errorOriginal}</span></>}
                       <br />SHA-256: <span style={{ fontFamily: 'monospace', fontSize: 12, overflowWrap: 'anywhere' }}>{v.archivo_sha256}</span>
                       {contenido && contenido.texto_sha256 !== v.texto_sha256 && (
