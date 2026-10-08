@@ -74,3 +74,34 @@ describe('diferenciasReglaCalendario', () => {
     expect(totalDiferencias(d)).toBe(0)
   })
 })
+
+describe('contexto anti-falsos-positivos (hallazgo de la revisión 08/10)', () => {
+  const reglaNocturna: ReglaSemanal = {
+    id: 'regla-noche', supervisor_id: 'aranda', zona_id: 'z1', zona_nombre: 'Rosario',
+    dias_semana: [1, 2, 3, 4, 5, 6], hora_inicio: '19:00:00', hora_fin: '07:00:00', activo: true,
+  }
+  const reglaDomingo: ReglaSemanal = {
+    id: 'regla-dom', supervisor_id: 'aranda', zona_id: 'z1', zona_nombre: 'Rosario',
+    dias_semana: [7], hora_inicio: '19:00:00', hora_fin: '07:00:00', activo: true,
+  }
+
+  it('una fila correcta vinculada a la regla EQUIVOCADA no se desactiva (el caso real de producción)', () => {
+    // Nocturna de un lunes, pero regla_id apunta a la regla dominical.
+    const malVinculada = {
+      id: 'x1', supervisor_id: 'aranda', zona: 'Rosario', fecha: '2026-10-12',
+      hora_inicio: '19:00:00', hora_fin: '07:00:00', regla_id: 'regla-dom',
+      estado: 'activo', tipo_evento: 'normal', supervisor_original_id: null,
+    }
+    const sinContexto = diferenciasReglaCalendario(reglaDomingo, [malVinculada], HOY)
+    expect(sinContexto.desactivar).toHaveLength(1) // el falso positivo que detectó el dry-run
+    const conContexto = diferenciasReglaCalendario(reglaDomingo, [malVinculada], HOY, new Set(), { otrasReglas: [reglaNocturna] })
+    expect(conContexto.desactivar).toEqual([])    // con contexto, no se toca
+  })
+
+  it('no propone crear un slot que ya existe por otra vía (chocaría con el índice único)', () => {
+    const horizonte = fila({ fecha: '2026-10-12' })
+    const slots = new Set(['2026-10-09|07:00|19:00'])
+    const d = diferenciasReglaCalendario(regla, [horizonte], HOY, new Set(), { slotsExistentes: slots })
+    expect(d.crear.map(c => c.fecha)).not.toContain('2026-10-09')
+  })
+})

@@ -562,6 +562,15 @@ export function diferenciasReglaCalendario(
   filasDeLaRegla: FilaCalendario[],
   hoy: string,
   conIntervenciones: Set<string> = new Set(),
+  /**
+   * Contexto del MISMO supervisor, para no proponer disparates cuando una fila
+   * quedó vinculada a la regla equivocada (pasa en producción: las nocturnas
+   * de octubre apuntan a la regla dominical). Con `otrasReglas`, una fila cuyo
+   * slot coincide con OTRA regla activa del supervisor no se desactiva; con
+   * `slotsExistentes` (fecha|hi|hf de TODAS sus filas activas), no se propone
+   * crear un duplicado que chocaría con el índice único.
+   */
+  contexto: { otrasReglas?: ReglaSemanal[]; slotsExistentes?: Set<string> } = {},
 ): DiferenciasRegla {
   const out: DiferenciasRegla = { actualizar: [], crear: [], desactivar: [], reactivar: [], conflictos: [] }
   if (!regla?.id || regla.activo === false) return out
@@ -573,6 +582,14 @@ export function diferenciasReglaCalendario(
     const d = new Date(`${fecha}T00:00:00Z`).getUTCDay() // 0=Dom
     return d === 0 ? 7 : d
   }
+  const claveSlot = (fecha: string, h1?: string | null, h2?: string | null) =>
+    `${fecha}|${hora5(h1)}|${hora5(h2)}`
+  const otraReglaCubre = (fila: FilaCalendario) =>
+    (contexto.otrasReglas ?? []).some(o =>
+      o.id !== regla.id && o.activo !== false && o.supervisor_id === regla.supervisor_id
+      && (o.dias_semana ?? []).includes(dowDe(String(fila.fecha)))
+      && hora5(o.hora_inicio) === hora5(fila.hora_inicio)
+      && hora5(o.hora_fin) === hora5(fila.hora_fin))
 
   const futuras = filasDeLaRegla.filter(f => String(f.fecha ?? '') > hoy)
   const fechasConFila = new Set<string>()
@@ -599,11 +616,13 @@ export function diferenciasReglaCalendario(
     const horasIguales = hora5(fila.hora_inicio) === hi && hora5(fila.hora_fin) === hf
 
     if (!diaVigente) {
-      if (activa) out.desactivar.push(fila)
+      // Si el slot coincide con OTRA regla activa del supervisor, la fila es
+      // correcta aunque apunte a la regla equivocada: no se toca.
+      if (activa && !otraReglaCubre(fila)) out.desactivar.push(fila)
       continue
     }
     if (!activa) { out.reactivar.push(fila); continue }
-    if (!horasIguales) out.actualizar.push({ fila, horaInicio: hi, horaFin: hf })
+    if (!horasIguales && !otraReglaCubre(fila)) out.actualizar.push({ fila, horaInicio: hi, horaFin: hf })
   }
 
   // Crear: sólo dentro del horizonte YA generado para esta regla (la
@@ -614,6 +633,9 @@ export function diferenciasReglaCalendario(
     const hasta = regla.vigencia_hasta && regla.vigencia_hasta < horizonte ? regla.vigencia_hasta : horizonte
     for (const fecha of fechasEnRango(desde, hasta, regla.dias_semana ?? [])) {
       if (fecha <= hoy || fechasConFila.has(fecha)) continue
+      // Un slot idéntico ya cargado (por otra regla o a mano) cubre el día:
+      // crear el duplicado chocaría con el índice único del calendario.
+      if (contexto.slotsExistentes?.has(claveSlot(fecha, hi, hf))) continue
       out.crear.push({
         supervisor_id: regla.supervisor_id,
         fecha,

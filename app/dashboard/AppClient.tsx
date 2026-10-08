@@ -11097,8 +11097,22 @@ function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
         .in('supervisor_guardia_id', ids)
       intervenidas = new Set(((inter || []) as any[]).map(i => i.supervisor_guardia_id).filter(Boolean))
     }
-    return diferenciasReglaCalendario(aReglaSemanal(r), (filas || []) as any, hoy, intervenidas)
+    return diferenciasReglaCalendario(aReglaSemanal(r), (filas || []) as any, hoy, intervenidas, contextoDeRegla(r))
   }
+
+  // Contexto anti-falsos-positivos (hallazgo de la revisión del 08/10): en
+  // producción hay filas correctas vinculadas a la regla equivocada (las
+  // nocturnas de octubre apuntan a la regla dominical). Sin este contexto, la
+  // sincronización propondría desactivarlas y crear duplicados que chocan con
+  // el índice único.
+  const contextoDeRegla = (r: any) => ({
+    otrasReglas: reglas.filter(x => x.id !== r.id).map(aReglaSemanal),
+    slotsExistentes: new Set<string>(
+      guardiasSupervisor
+        .filter((g: any) => g.supervisor_id === r.supervisor_id && g.estado === 'activo' && String(g.fecha) > hoy)
+        .map((g: any) => `${g.fecha}|${String(g.hora_inicio).slice(0, 5)}|${String(g.hora_fin).slice(0, 5)}`),
+    ),
+  })
 
   const revisarSincronizacion = async (r: any, opts: { silencioso?: boolean } = {}) => {
     setSyncLoading(true)
@@ -11159,7 +11173,7 @@ function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
       if (r.activo === false) continue
       const filas = guardiasSupervisor.filter((g: any) => g.regla_id === r.id)
       if (filas.length === 0) continue
-      const n = totalDiferencias(diferenciasReglaCalendario(aReglaSemanal(r), filas as any, hoy))
+      const n = totalDiferencias(diferenciasReglaCalendario(aReglaSemanal(r), filas as any, hoy, new Set(), contextoDeRegla(r)))
       if (n > 0) m[r.id] = n
     }
     return m
