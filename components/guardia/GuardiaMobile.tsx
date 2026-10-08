@@ -6,6 +6,7 @@ import { activarNotificacionesPush } from '@/lib/push-client'
 import { MINUTOS_AVISO_SALIDA_ANTICIPADA, minutosHastaFinDeTurno } from '@/lib/salida-anticipada'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import AvisoEvaluacion from '@/components/desempeno/AvisoEvaluacion'
+import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
@@ -1967,6 +1968,16 @@ export default function GuardiaMobile({ user }: { user: any }) {
         <AvisoEvaluacion
           empleadoId={user.id}
           onIr={() => router.push(`/guardias/${user.id}?seccion=desempeno`)}
+        />
+
+        {/* Estatuto Interno pendiente de aceptación. Es una TARJETA en el flujo,
+            no un modal: no tapa el botón de fichar ni la lista de turnos (pedido
+            expreso de Gerencia). Va debajo de "Mis Turnos" y de las
+            notificaciones, así lo urgente queda arriba. Sin versión publicada
+            no aparece. */}
+        <AvisoEstatuto
+          empleadoId={user.id}
+          destino={`/guardias/${user.id}?seccion=estatuto`}
         />
 
         {/* Sólo aparece si hay algo que hacer: un cartel permanente en cero se

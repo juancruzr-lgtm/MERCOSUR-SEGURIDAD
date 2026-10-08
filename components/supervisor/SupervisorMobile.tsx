@@ -34,6 +34,7 @@ import { TEXTO_ORIGEN, guardiaCubreInstante, resolverResponsablesOperativos } fr
 import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import { alertaEstaIntervenida, calcularMinutosTardanzaRegistro, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, evaluarSinFichar, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOperativaCompartida } from '@/lib/revision-operativa'
+import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 // Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
@@ -3237,6 +3238,13 @@ export default function SupervisorMobile({ user }: any) {
           </button>
           )
         })()}
+
+        {/* Estatuto Interno pendiente (tarjeta, no modal: no bloquea alertas
+            ni turnos). El supervisor no tiene Mi Legajo, así que lo lleva a
+            /estatuto, que es la misma sección. */}
+        {!loading && user?.id && (
+          <AvisoEstatuto empleadoId={user.id} destino="/estatuto" />
+        )}
 
         {loading ? (
           <div style={empty}>Cargando operación...</div>
