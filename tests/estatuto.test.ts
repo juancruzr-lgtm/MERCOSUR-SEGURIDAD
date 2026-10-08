@@ -124,7 +124,7 @@ describe('texto de la declaración y versión, sin fecha (Gerencia 08/10)', () =
   })
 
   it('es el mismo texto que arma la base (estatuto_texto_declaracion)', () => {
-    const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261008150000_estatuto_interno.sql'), 'utf8')
+    const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261008150000_estatuto_interno.sql'), 'utf8').replace(/\r\n/g, '\n')
     expect(sql).toContain("'Declaro haber leído y tomado conocimiento del Estatuto Interno de '\n      || 'Mercosur Seguridad SRL.'")
     expect(sql).not.toContain('to_char(p_fecha')
   })
@@ -204,7 +204,7 @@ describe('documento (versión 1): el original y su conversión', () => {
   })
 
   it('la migración registra los mismos hashes y la carga como BORRADOR', () => {
-    const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261008150000_estatuto_interno.sql'), 'utf8')
+    const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261008150000_estatuto_interno.sql'), 'utf8').replace(/\r\n/g, '\n')
     expect(sql).toContain(`'${c.fuente.sha256_original}'`)
     expect(sql).toContain(`'${c.texto_sha256}'`)
     expect(sql).toMatch(/'b84a4047[0-9a-f]+',\s*'borrador',/)
@@ -213,7 +213,7 @@ describe('documento (versión 1): el original y su conversión', () => {
 
   it('sin la fecha del documento en lo que se muestra o se descarga (Gerencia 08/10)', () => {
     const fecha = /21[-/]04[-/](20)?26|2026-04-21|MODIFICADO el/i
-    const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261008150000_estatuto_interno.sql'), 'utf8')
+    const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261008150000_estatuto_interno.sql'), 'utf8').replace(/\r\n/g, '\n')
     expect(sql).not.toMatch(fecha)
     expect(sql).not.toContain('fecha_documento')
     expect(JSON.stringify(c)).not.toMatch(fecha)
