@@ -20,6 +20,9 @@ import { cargarNovedadesAprobadasDelMes } from '@/lib/novedades-laborales-mes'
 import { INASISTENCIA_ACTIVA } from '@/lib/evaluacion-final'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { MedidasCriticas } from '@/lib/desempeno-datos'
+import { salidaAnticipadaVigente } from '@/lib/evaluacion-final'
+import { confirmadasPorEmpleado } from '@/lib/salidas-anticipadas'
+import { cargarSalidasDelMes } from '@/lib/salidas-anticipadas-datos'
 import {
   ETIQUETA_ESTADO, MIN_COBERTURA, MIN_OBSERVACIONES, faltanteParaMuestra,
 } from '@/lib/desempeno'
@@ -174,13 +177,24 @@ export default function DesempenoPanel({
     // Rondas y evidencias del mes entero: dos consultas para toda la lista, no
     // dos por persona. Si fallan, la lista sale igual —esas cuatro dimensiones
     // pesan 0— y el aviso lo dice en vez de esconderlo.
-    const [rr, ee, nv] = await Promise.all([
+    const rigeSalidas = salidaAnticipadaVigente(mes)
+    const [rr, ee, nv, sa] = await Promise.all([
       cargarRondasDelMes(mes),
       cargarEvidenciasDelMes(mes),
       // Lo mismo que consulta la ficha, pero del mes entero: una sola vez para
       // toda la lista. Sólo aprobadas — pendiente y rechazada no afirman nada.
       cargarNovedadesAprobadasDelMes(supabase, mes),
+      // Sólo en períodos donde la regla rige. En los anteriores no se lee:
+      // la regla es prospectiva y no puede colarse en un recongelado.
+      rigeSalidas ? cargarSalidasDelMes(mes) : Promise.resolve({ data: [], error: null }),
     ])
+    // Igual que con las novedades: si rige y no se pudo leer, no se calcula.
+    // Una lista vacía por error dejaría sin tope una salida ya confirmada.
+    if (sa.error) {
+      setError(`No se pudieron leer las salidas anticipadas del mes; no se calcula para no omitir faltas confirmadas. (${sa.error})`)
+      setLista([]); setCargando(false); return
+    }
+    const confirmadas = confirmadasPorEmpleado(sa.data)
     // Sin novedades no se puede calcular: una vacación o un parte médico se
     // contarían como inasistencia injustificada, y esta lista es la que se
     // congela como evaluación. Se corta acá con el error a la vista.
@@ -231,6 +245,8 @@ export default function DesempenoPanel({
         inasistenciasInjustificadas: INASISTENCIA_ACTIVA
           ? inasistenciasInjustificadas(nov, id, fechasPorEmpleado.get(id) ?? [])
           : 0,
+        salidasInjustificadas: confirmadas.get(id)?.injustificadas ?? 0,
+        abandonosComprobados: confirmadas.get(id)?.abandonos ?? 0,
       })
     })
 
@@ -347,7 +363,10 @@ export default function DesempenoPanel({
         : `Congeladas ${r.guardadas} evaluaciones de ${etiquetaMes(mes)}`
           + (r.publicadasPreservadas > 0
             ? ` · ${r.publicadasPreservadas} ya publicadas se mantuvieron publicadas`
-            : ' · quedan en «calculada», todavía no las ve nadie'),
+            : ' · quedan en «calculada», todavía no las ve nadie')
+          + (r.corregidasPreservadas > 0
+            ? ` · ${r.corregidasPreservadas} corregidas por Gerencia no se tocaron`
+            : ''),
     )
   }, [lista, balances, medido, mes, usuarioId])
 

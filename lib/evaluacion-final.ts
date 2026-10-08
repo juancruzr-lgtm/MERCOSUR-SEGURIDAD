@@ -149,7 +149,11 @@ export function alcanceDe(c: Cobertura): Alcance {
 
 // ── Faltas críticas ─────────────────────────────────────────────────────────
 
-export type ClaveFalta = 'inasistencia_injustificada' | 'rondas_incumplidas'
+export type ClaveFalta =
+  | 'inasistencia_injustificada'
+  | 'rondas_incumplidas'
+  | 'salida_anticipada_injustificada'
+  | 'abandono_de_puesto'
 
 export interface FaltaCritica {
   clave: ClaveFalta
@@ -273,6 +277,139 @@ export function faltaPorInasistencia(injustificadasConfirmadas: number): FaltaCr
  * denominador de mucha gente a la vez y no se pudo medir contra producción.
  */
 export const INASISTENCIA_ACTIVA = true
+
+// ── Salidas anticipadas ─────────────────────────────────────────────────────
+//
+// Decisión de Gerencia del 08/10/2026. El vigilador permanece hasta el fin
+// programado del servicio: llegar antes NO autoriza a irse antes, la llegada
+// anticipada del relevo no corre el horario y la tolerancia administrativa de
+// 15 minutos no es un permiso. Sólo una autorización expresa de Supervisión o
+// de un superior habilita una salida anticipada.
+//
+// Puntualidad sigue midiendo el ingreso y no se toca: la salida injustificada
+// no es "una demora de pocos minutos" sino una falta crítica, y por eso vive
+// acá, como tope sobre la nota final, y no como descuento en una dimensión.
+//
+// El dato llega CONFIRMADO por una persona (`salidas_anticipadas`, estados
+// 'injustificada' y 'abandono', con responsable, fecha y motivo). Lo que el
+// sistema sólo detectó no se cuenta: la detección abre una revisión, nunca una
+// sanción.
+
+/**
+ * Desde qué período ('YYYY-MM') rige la regla general.
+ *
+ * `null` = todavía no rige para nadie. Gerencia la activa después de aprobar y
+ * comunicar el criterio; es prospectiva y no recalcula meses ya publicados.
+ * La corrección individual de MENA (septiembre 2026) NO pasa por acá: es una
+ * corrección de Gerencia sobre su evaluación publicada, con historial.
+ */
+export const SALIDA_ANTICIPADA_VIGENTE_DESDE: string | null = null
+
+export function salidaAnticipadaVigente(
+  periodo: string,
+  desde: string | null = SALIDA_ANTICIPADA_VIGENTE_DESDE,
+): boolean {
+  return desde !== null && /^\d{4}-\d{2}$/.test(periodo) && periodo >= desde
+}
+
+/**
+ * Salida anticipada injustificada CONFIRMADA. Tope 4.
+ *
+ * Igual que la inasistencia, no escalona: una alcanza. La cantidad se dice,
+ * porque una no es lo mismo que veinte para quien tiene que decidir.
+ */
+export function faltaPorSalidaAnticipada(injustificadasConfirmadas: number): FaltaCritica | null {
+  if (injustificadasConfirmadas < 1) return null
+  const cuantas = injustificadasConfirmadas === 1
+    ? '1 salida anticipada injustificada confirmada'
+    : `${injustificadasConfirmadas} salidas anticipadas injustificadas confirmadas`
+  return {
+    clave: 'salida_anticipada_injustificada',
+    hecho: `${cuantas}: retiro antes del horario de finalización del servicio, sin autorización`,
+    tope: 4,
+  }
+}
+
+/**
+ * Abandono efectivo del puesto sin relevo, COMPROBADO. Tope 2.
+ *
+ * Nunca se deduce de una salida anticipada: lo confirma jefe de supervisores,
+ * dirección operativa o Gerencia, con motivo. Que el relevo haya llegado tarde
+ * es contexto para quien revisa, no una clasificación automática.
+ */
+export function faltaPorAbandono(abandonosComprobados: number): FaltaCritica | null {
+  if (abandonosComprobados < 1) return null
+  return {
+    clave: 'abandono_de_puesto',
+    hecho: abandonosComprobados === 1
+      ? '1 abandono del puesto sin relevo comprobado'
+      : `${abandonosComprobados} abandonos del puesto sin relevo comprobados`,
+    tope: 2,
+  }
+}
+
+/**
+ * Lo que cambia en una evaluación PUBLICADA cuando Gerencia le agrega una
+ * falta crítica después de publicada.
+ *
+ * Sólo la CAPA 4: nota final, concepto, faltas y explicación. Las dimensiones,
+ * el cumplimiento ponderado y el índice quedan como se publicaron —la
+ * corrección no maquilla porcentajes, agrega un tope—, y se usa la misma
+ * composición que `evaluar`: tope = el más restrictivo, nota = min(desempeño,
+ * tope), un tope nunca sube una nota.
+ */
+export interface FilaPublicadaParaCorregir {
+  indice: number | null
+  nota_final: number | null
+  alcance: string | null
+  cobertura: number | null
+  faltas: unknown
+}
+
+export interface CorreccionCapa4 {
+  nota_final: number
+  concepto: string
+  faltas: FaltaCritica[]
+  explicacion: string
+}
+
+export function corregirCapa4(
+  fila: FilaPublicadaParaCorregir,
+  nuevas: Array<FaltaCritica | null>,
+): CorreccionCapa4 | null {
+  if (fila.indice === null || fila.nota_final === null) return null
+  const previas = (Array.isArray(fila.faltas) ? fila.faltas : []) as FaltaCritica[]
+  const agregadas = nuevas.filter((f): f is FaltaCritica => f !== null)
+  // La misma clave no se acumula: si ya estaba, manda la nueva redacción.
+  const claves = new Set(agregadas.map(f => f.clave))
+  const faltas = [...previas.filter(f => !claves.has(f.clave)), ...agregadas]
+  if (agregadas.length === 0) return null
+
+  const desempeno = Number(fila.indice)
+  const tope = faltas.reduce((min, f) => Math.min(min, Number(f.tope)), Infinity)
+  const notaFinal = Math.min(desempeno, tope, Number(fila.nota_final))
+  // Primero la que decide la nota: es la que Mi Desempeño nombra como tope.
+  const ordenadas = [...faltas].sort((a, b) => Number(a.tope) - Number(b.tope))
+
+  const partes: string[] = []
+  if (notaFinal < desempeno) {
+    partes.push(`${desempeno} de desempeño · ${notaFinal} final por `
+      + ordenadas.map(f => f.hecho.toLowerCase()).join(' y '))
+  } else {
+    partes.push(`${desempeno} de desempeño`)
+  }
+  if (fila.alcance === 'parcial') {
+    partes.push(`Evaluación parcial: se pudo evaluar el ${fila.cobertura ?? 0} % `
+      + 'de los requerimientos aplicables')
+  }
+
+  return {
+    nota_final: notaFinal,
+    concepto: fila.alcance === 'parcial' ? 'Evaluación parcial' : conceptoDe(notaFinal),
+    faltas: ordenadas,
+    explicacion: partes.join(' · '),
+  }
+}
 
 // ── La composición, en orden ────────────────────────────────────────────────
 

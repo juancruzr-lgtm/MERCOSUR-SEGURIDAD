@@ -135,8 +135,18 @@ export default function MiDesempeno({
           </div>
           <div style={{ ...S.tenue, marginTop:6 }}>
             No es una calificación de todo tu trabajo: mide procedimiento —presencia,
-            horario, rondas y registro—, no tu trato con el cliente ni tu oficio. Tampoco
-            modifica tus horas.
+            horario de ingreso, rondas y registro—, no tu trato con el cliente ni tu oficio.
+            Tampoco modifica tus horas.
+          </div>
+          {/* Auditoría 08/10/2026: un 10 en Puntualidad se leía como "cumplí el
+              horario entero", y el motor sólo mide el ingreso. Se dice acá,
+              para todos los meses, sin tocar ninguna evaluación publicada. */}
+          <div style={{ ...S.tenue, marginTop:6, color:'#fcd34d' }}>
+            Puntualidad mide la hora de ingreso. Tenés que permanecer en el puesto hasta
+            el horario de finalización del servicio: llegar antes no te autoriza a
+            retirarte antes, y la tolerancia de fichaje no es un permiso. Retirarte antes
+            sin autorización expresa de tu supervisor es una falta grave y puede limitar
+            tu nota final.
           </div>
         </div>
       )}
@@ -251,6 +261,12 @@ export default function MiDesempeno({
             <div style={{ ...S.tenue, marginTop:10 }}>
               {vista.informativas.join(' y ')} se mide y se te informa, pero todavía no
               pesa en la nota.
+            </div>
+          )}
+          {vista.dimensiones.some(d => d.etiqueta === 'Puntualidad') && (
+            <div style={{ ...S.tenue, marginTop:10 }}>
+              Puntualidad: hora de ingreso. Un 10 acá no significa haber cumplido el
+              horario de salida; la salida se controla aparte.
             </div>
           )}
         </div>

@@ -19,7 +19,12 @@ import {
   BANDAS_PUNTUALIDAD, ETIQUETA_ESTADO, PESOS, calcularCumplimiento,
   patronesDeHorarioSospechoso,
 } from '@/lib/cumplimiento'
-import { INASISTENCIA_ACTIVA, evaluar, faltaPorInasistencia, faltaPorRondas } from '@/lib/evaluacion-final'
+import {
+  INASISTENCIA_ACTIVA, evaluar, faltaPorAbandono, faltaPorInasistencia, faltaPorRondas,
+  faltaPorSalidaAnticipada, salidaAnticipadaVigente,
+} from '@/lib/evaluacion-final'
+import { confirmadasPorEmpleado } from '@/lib/salidas-anticipadas'
+import { cargarSalidasDelMes } from '@/lib/salidas-anticipadas-datos'
 import { ETIQUETA_TIPO_DEVOLUCION, balanceATexto, generarBalance, resumenBalance } from '@/lib/balance-mensual'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
@@ -201,6 +206,7 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   const [rondas, setRondas] = useState<RondasEmpleado | null>(null)
   const [evidencias, setEvidencias] = useState<EvidenciaCumplimiento[]>([])
   const [novedades, setNovedades] = useState<any[]>([])
+  const [salidasConfirmadas, setSalidasConfirmadas] = useState({ injustificadas: 0, abandonos: 0 })
   // Estas dos fuentes no cortan la pantalla si fallan: son descriptivas y de
   // peso 0. El aviso se muestra en su dimensión, no como error general.
   const [avisoFuentes, setAvisoFuentes] = useState('')
@@ -215,13 +221,22 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
     setFilas(todas.filter(f => f.empleadoId === empleadoId))
     setCargando(false)
 
-    const [rr, ee, nov] = await Promise.all([
+    const [rr, ee, nov, sa] = await Promise.all([
       cargarRondasEmpleado(mes, empleadoId),
       cargarEvidenciasEmpleado(mes, empleadoId),
       // Lo que Administración clasificó en Reportes para esta persona. Sólo
       // aprobadas: pendiente y rechazada no afirman nada.
       cargarNovedadesAprobadasDelMes(supabase, mes, empleadoId),
+      // Mismo criterio que la lista: sólo donde la regla rige.
+      salidaAnticipadaVigente(mes) ? cargarSalidasDelMes(mes) : Promise.resolve({ data: [], error: null }),
     ])
+    if (sa.error) {
+      setError(`No se pudieron leer las salidas anticipadas del mes; la nota no se muestra para no omitir faltas confirmadas. (${sa.error})`)
+      setFilas([])
+    }
+    setSalidasConfirmadas(
+      confirmadasPorEmpleado(sa.data).get(empleadoId) ?? { injustificadas: 0, abandonos: 0 },
+    )
     setRondas(rr.dato)
     setEvidencias(ee.evidencias)
     // Sin novedades no hay nota confiable: una ausencia justificada se leería
@@ -294,8 +309,10 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         ? faltaPorRondas(m.cumplidos, m.validos, resRondas.turnosConIncumplimiento)
         : null,
       faltaPorInasistencia(inasistencias),
+      faltaPorSalidaAnticipada(salidasConfirmadas.injustificadas),
+      faltaPorAbandono(salidasConfirmadas.abandonos),
     ])
-  }, [r, resRondas, novedades, empleadoId, filas])
+  }, [r, resRondas, novedades, empleadoId, filas, salidasConfirmadas])
 
   const patrones = useMemo(() => {
     const suyos = new Set(r.puntualidad.tardanzas.map(t => `${t.objetivo}@${t.horaInicioProg}`))

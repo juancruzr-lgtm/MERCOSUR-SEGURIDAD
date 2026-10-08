@@ -26,6 +26,12 @@ export interface ResultadoGuardado {
   guardadas: number
   /** Cuántas ya estaban publicadas y se dejaron publicadas. */
   publicadasPreservadas: number
+  /**
+   * Cuántas NO se tocaron porque Gerencia las corrigió después de publicarlas.
+   * Una corrección individual no la deshace un recongelado: la base lo
+   * rechazaría, y además partiría el upsert del mes entero.
+   */
+  corregidasPreservadas: number
   filas: FilaEvaluacion[]
   error: string | null
 }
@@ -35,17 +41,26 @@ interface FilaVigente {
   estado: EstadoPublicacion
   publicado_at: string | null
   publicado_por: string | null
+  corregida_at?: string | null
 }
 
 /** Lo que ya hay guardado del período, para no pisarlo a ciegas. */
 export async function estadosVigentes(periodo: string): Promise<Map<string, FilaVigente>> {
   const { data, error } = await supabase
     .from('evaluaciones_mensuales')
-    .select('empleado_id, estado, publicado_at, publicado_por')
+    .select('empleado_id, estado, publicado_at, publicado_por, corregida_at')
     .eq('periodo', periodo)
 
-  if (error || !data) return new Map()
-  return new Map((data as FilaVigente[]).map(f => [f.empleado_id, f]))
+  if (!error && data) return new Map((data as FilaVigente[]).map(f => [f.empleado_id, f]))
+
+  // Antes de aplicar la migración de salidas anticipadas la columna no existe.
+  // Se reintenta sin ella para no romper el congelado mientras tanto.
+  const viejo = await supabase
+    .from('evaluaciones_mensuales')
+    .select('empleado_id, estado, publicado_at, publicado_por')
+    .eq('periodo', periodo)
+  if (viejo.error || !viejo.data) return new Map()
+  return new Map((viejo.data as FilaVigente[]).map(f => [f.empleado_id, f]))
 }
 
 /**
@@ -63,13 +78,17 @@ export async function guardarSnapshot(
 ): Promise<ResultadoGuardado> {
   const filas = filasDeSnapshot(entradas, periodo, estado)
   if (filas.length === 0) {
-    return { guardadas: 0, publicadasPreservadas: 0, filas: [], error: null }
+    return { guardadas: 0, publicadasPreservadas: 0, corregidasPreservadas: 0, filas: [], error: null }
   }
 
   const vigentes = await estadosVigentes(periodo)
   let publicadasPreservadas = 0
+  let corregidasPreservadas = 0
 
-  const aGuardar = filas.map(f => {
+  const aGuardar = filas.filter(f => {
+    if (vigentes.get(f.empleado_id)?.corregida_at) { corregidasPreservadas += 1; return false }
+    return true
+  }).map(f => {
     const previo = vigentes.get(f.empleado_id)
     const yaPublicada = previo?.estado === 'publicada'
     if (yaPublicada) publicadasPreservadas += 1
@@ -88,9 +107,9 @@ export async function guardarSnapshot(
     .upsert(aGuardar, { onConflict: 'empleado_id,periodo' })
 
   if (error) {
-    return { guardadas: 0, publicadasPreservadas: 0, filas, error: error.message }
+    return { guardadas: 0, publicadasPreservadas: 0, corregidasPreservadas, filas, error: error.message }
   }
-  return { guardadas: aGuardar.length, publicadasPreservadas, filas, error: null }
+  return { guardadas: aGuardar.length, publicadasPreservadas, corregidasPreservadas, filas, error: null }
 }
 
 export interface ResultadoTransicion {
