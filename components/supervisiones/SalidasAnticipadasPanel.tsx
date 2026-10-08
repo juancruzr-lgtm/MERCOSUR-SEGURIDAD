@@ -122,12 +122,12 @@ export default function SalidasAnticipadasPanel({ esGerencia }: Props) {
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <select value={mes} onChange={e => setMes(e.target.value)} style={{ ...campo, width: 190 }}>
+        <select value={mes} onChange={e => setMes(e.target.value)} style={{ ...campo, flex: '1 1 170px', width: 'auto' }}>
           {mesesDisponibles('2026-08').map(m => <option key={m} value={m}>{etiquetaMes(m)}</option>)}
         </select>
         <input
           value={busqueda} onChange={e => setBusqueda(e.target.value)}
-          placeholder="Buscar persona u objetivo" style={{ ...campo, width: 240 }}
+          placeholder="Buscar persona u objetivo" style={{ ...campo, flex: '2 1 200px', width: 'auto' }}
         />
         <label style={{ fontSize: 13, color: C.tenue, display: 'flex', gap: 6, alignItems: 'center' }}>
           <input type="checkbox" checked={soloPendientes} onChange={e => setSoloPendientes(e.target.checked)} />
@@ -235,53 +235,68 @@ function GrupoSalidas({
 
       {abierto && (
         <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, color: C.texto }}>
-              <thead>
-                <tr style={{ color: C.apagado, textAlign: 'left' }}>
-                  <th style={{ padding: 6 }}>
-                    {resolubles.length > 0 && <input type="checkbox" checked={todasElegidas} onChange={alternarTodas} />}
-                  </th>
-                  <th style={{ padding: 6 }}>Fecha</th>
-                  <th style={{ padding: 6 }}>Objetivo</th>
-                  <th style={{ padding: 6 }}>Fin</th>
-                  <th style={{ padding: 6 }}>Salida</th>
-                  <th style={{ padding: 6 }}>Antes</th>
-                  <th style={{ padding: 6 }}>Relevo</th>
-                  <th style={{ padding: 6 }}>Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {grupo.salidas.map(s => (
-                  <tr key={s.id} style={{ borderTop: `1px solid ${C.borde}`, verticalAlign: 'top' }}>
-                    <td style={{ padding: 6 }}>
-                      {s.puede_resolver && <input type="checkbox" checked={seleccion.has(s.id)} onChange={() => alternar(s.id)} />}
-                    </td>
-                    <td style={{ padding: 6 }}>{fechaCorta(s.fecha)}</td>
-                    <td style={{ padding: 6 }}>{s.objetivo ?? '—'}</td>
-                    <td style={{ padding: 6 }}>{hora(s.fin_programado)}</td>
-                    <td style={{ padding: 6 }}>{hora(s.salida_registrada)}</td>
-                    <td style={{ padding: 6, fontWeight: 700 }}>{textoAnticipacion(s.segundos_antes)}</td>
-                    <td style={{ padding: 6, color: C.tenue, maxWidth: 220 }}>
-                      {ETIQUETA_SITUACION_RELEVO[s.situacion_relevo]}
-                      {s.relevo ? ` · ${s.relevo}${s.relevo_entrada ? ` (${hora(s.relevo_entrada)})` : ''}` : ''}
-                    </td>
-                    <td style={{ padding: 6 }}>
-                      <span style={{ color: COLOR_ESTADO[s.estado] ?? C.tenue, fontWeight: 700 }}>
-                        {ETIQUETA_ESTADO_SALIDA[s.estado]}
-                      </span>
-                      {s.motivo && (
-                        <div style={{ color: C.tenue, marginTop: 2 }}>
-                          {s.motivo}
-                          {s.resuelto_por_nombre ? ` — ${s.resuelto_por_nombre}` : ''}
-                          {s.resuelto_at ? `, ${s.resuelto_at.slice(8, 10)}/${s.resuelto_at.slice(5, 7)} ${s.resuelto_at.slice(11, 16)}` : ''}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {resolubles.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: C.tenue }}>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input type="checkbox" checked={todasElegidas} onChange={alternarTodas} />
+                Seleccionar todas
+              </label>
+              {/* Las de segundos se pueden querer dejar para revisión aparte
+                  (decisión de Gerencia para MENA, septiembre 2026). */}
+              <button
+                onClick={() => {
+                  const n = new Set(seleccion)
+                  resolubles.forEach(s => { if (s.estado === 'detectada' && s.segundos_antes >= 60) n.add(s.id); else n.delete(s.id) })
+                  setSeleccion(n)
+                }}
+                style={{ ...boton(C.celeste), padding: '4px 8px', fontSize: 12 }}
+              >
+                Pendientes de 1 min o más
+              </button>
+            </div>
+          )}
+
+          {/* Tarjetas y no tabla: tiene que leerse en el celular del supervisor. */}
+          <div style={{ display: 'grid', gap: 6 }}>
+            {grupo.salidas.map(s => (
+              <label key={s.id} style={{
+                display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 10px',
+                border: `1px solid ${seleccion.has(s.id) ? '#38bdf855' : C.borde}`, borderRadius: 8,
+                background: seleccion.has(s.id) ? '#38bdf811' : 'transparent', fontSize: 13, color: C.texto,
+                cursor: s.puede_resolver ? 'pointer' : 'default',
+              }}>
+                <input
+                  type="checkbox" disabled={!s.puede_resolver}
+                  checked={seleccion.has(s.id)} onChange={() => alternar(s.id)}
+                  style={{ marginTop: 3, visibility: s.puede_resolver ? 'visible' : 'hidden' }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                    <span>
+                      <b>{fechaCorta(s.fecha)}</b> · {s.objetivo ?? '—'}
+                    </span>
+                    <span style={{ color: COLOR_ESTADO[s.estado] ?? C.tenue, fontWeight: 700, fontSize: 12 }}>
+                      {ETIQUETA_ESTADO_SALIDA[s.estado]}
+                    </span>
+                  </div>
+                  <div style={{ marginTop: 2 }}>
+                    Fin {hora(s.fin_programado)} · salió {hora(s.salida_registrada)} ·{' '}
+                    <b>{textoAnticipacion(s.segundos_antes)} antes</b>
+                  </div>
+                  <div style={{ color: C.tenue, fontSize: 12, marginTop: 2 }}>
+                    {ETIQUETA_SITUACION_RELEVO[s.situacion_relevo]}
+                    {s.relevo ? ` · ${s.relevo}${s.relevo_entrada ? ` (${hora(s.relevo_entrada)})` : ''}` : ''}
+                  </div>
+                  {s.motivo && (
+                    <div style={{ color: C.tenue, fontSize: 12, marginTop: 2 }}>
+                      {s.motivo}
+                      {s.resuelto_por_nombre ? ` — ${s.resuelto_por_nombre}` : ''}
+                      {s.resuelto_at ? `, ${s.resuelto_at.slice(8, 10)}/${s.resuelto_at.slice(5, 7)} ${s.resuelto_at.slice(11, 16)}` : ''}
+                    </div>
+                  )}
+                </div>
+              </label>
+            ))}
           </div>
 
           {elegidas.length > 0 && (
@@ -337,11 +352,11 @@ function FormResolucion({ salidas, onListo }: { salidas: SalidaAnticipada[]; onL
             const v = e.target.value as EstadoResolucion
             setEstado(v); setCodigo(MOTIVOS_POR_ESTADO[v][0].codigo)
           }}
-          style={{ ...campo, width: 260 }}
+          style={{ ...campo, flex: '1 1 220px', width: 'auto' }}
         >
           {estados.map(e => <option key={e} value={e}>{e === 'detectada' ? 'Volver a pendiente' : ETIQUETA_ESTADO_SALIDA[e]}</option>)}
         </select>
-        <select value={codigo} onChange={e => setCodigo(e.target.value)} style={{ ...campo, width: 360 }}>
+        <select value={codigo} onChange={e => setCodigo(e.target.value)} style={{ ...campo, flex: '2 1 260px', width: 'auto' }}>
           {MOTIVOS_POR_ESTADO[estado].map(m => <option key={m.codigo} value={m.codigo}>{m.etiqueta}</option>)}
         </select>
       </div>

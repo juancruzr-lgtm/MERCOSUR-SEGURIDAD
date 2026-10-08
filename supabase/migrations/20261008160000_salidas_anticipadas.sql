@@ -37,7 +37,7 @@
 --   · No hace backfill. La regla es prospectiva; la detección arranca cuando
 --     se aplica esta migración.
 --
--- Rollback: archivo aparte (supabase/rollback/20261008150000_salidas_anticipadas_rollback.sql).
+-- Rollback: archivo aparte (supabase/rollback/20261008160000_salidas_anticipadas_rollback.sql).
 
 begin;
 

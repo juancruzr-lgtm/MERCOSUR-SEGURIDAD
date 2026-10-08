@@ -320,12 +320,13 @@ export function salidaAnticipadaVigente(
  */
 export function faltaPorSalidaAnticipada(injustificadasConfirmadas: number): FaltaCritica | null {
   if (injustificadasConfirmadas < 1) return null
-  const cuantas = injustificadasConfirmadas === 1
-    ? '1 salida anticipada injustificada confirmada'
-    : `${injustificadasConfirmadas} salidas anticipadas injustificadas confirmadas`
   return {
     clave: 'salida_anticipada_injustificada',
-    hecho: `${cuantas}: retiro antes del horario de finalización del servicio, sin autorización`,
+    hecho: injustificadasConfirmadas === 1
+      ? '1 salida anticipada injustificada confirmada: retiro antes del horario de '
+        + 'finalización del servicio, sin autorización'
+      : `${injustificadasConfirmadas} salidas anticipadas injustificadas confirmadas: `
+        + 'incumplimiento reiterado del horario de finalización del servicio, sin autorización',
     tope: 4,
   }
 }

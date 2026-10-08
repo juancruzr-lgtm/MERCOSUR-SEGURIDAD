@@ -24,7 +24,13 @@ import {
   faltaPorSalidaAnticipada, salidaAnticipadaVigente,
 } from '@/lib/evaluacion-final'
 import { confirmadasPorEmpleado } from '@/lib/salidas-anticipadas'
-import { cargarSalidasDelMes } from '@/lib/salidas-anticipadas-datos'
+import { cargarEvaluacionPublicada, cargarSalidasDelMes } from '@/lib/salidas-anticipadas-datos'
+import type { EvaluacionPublicadaResumen } from '@/lib/salidas-anticipadas-datos'
+import { esOficial, relacionConCalculo } from '@/lib/nota-oficial'
+
+/** Color de una nota oficial, por su concepto: aplazado, insuficiente, aprobado, muy bueno. */
+const colorNotaOficial = (n: number) =>
+  n < 5 ? '#ef4444' : n < 6 ? '#f59e0b' : n < 8 ? '#38bdf8' : '#10b981'
 import { ETIQUETA_TIPO_DEVOLUCION, balanceATexto, generarBalance, resumenBalance } from '@/lib/balance-mensual'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
 import type { Dimension, EstadoDesempeno, ResumenPuntualidad } from '@/lib/cumplimiento'
@@ -207,13 +213,19 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
   const [evidencias, setEvidencias] = useState<EvidenciaCumplimiento[]>([])
   const [novedades, setNovedades] = useState<any[]>([])
   const [salidasConfirmadas, setSalidasConfirmadas] = useState({ injustificadas: 0, abandonos: 0 })
+  /**
+   * La evaluación publicada del mes, si existe. Es LA nota: la misma que leen
+   * Mi Desempeño y Gerencia. El cálculo en vivo de abajo sólo se muestra como
+   * dato secundario y con su nombre.
+   */
+  const [oficial, setOficial] = useState<EvaluacionPublicadaResumen | null>(null)
   // Estas dos fuentes no cortan la pantalla si fallan: son descriptivas y de
   // peso 0. El aviso se muestra en su dimensión, no como error general.
   const [avisoFuentes, setAvisoFuentes] = useState('')
   const [sinZonas, setSinZonas] = useState(false)
 
   const cargar = useCallback(async () => {
-    setCargando(true); setError('')
+    setCargando(true); setError(''); setOficial(null)
     const { filas: todas, error: err, sinZonas: sz } = await cargarFilasBandeja({ mes, esAdmin, usuarioId })
     setSinZonas(sz)
     if (err) { setError(err); setFilas([]); setCargando(false); return }
@@ -221,7 +233,7 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
     setFilas(todas.filter(f => f.empleadoId === empleadoId))
     setCargando(false)
 
-    const [rr, ee, nov, sa] = await Promise.all([
+    const [rr, ee, nov, sa, ev] = await Promise.all([
       cargarRondasEmpleado(mes, empleadoId),
       cargarEvidenciasEmpleado(mes, empleadoId),
       // Lo que Administración clasificó en Reportes para esta persona. Sólo
@@ -229,7 +241,14 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
       cargarNovedadesAprobadasDelMes(supabase, mes, empleadoId),
       // Mismo criterio que la lista: sólo donde la regla rige.
       salidaAnticipadaVigente(mes) ? cargarSalidasDelMes(mes) : Promise.resolve({ data: [], error: null }),
+      cargarEvaluacionPublicada(empleadoId, mes),
     ])
+    // Si no se puede leer la oficial, se dice: mostrar el cálculo como si fuera
+    // la nota es exactamente la contradicción que esto vino a evitar.
+    setOficial(ev.data)
+    if (ev.error) {
+      setAvisoFuentes(prev => [prev, `No se pudo leer la evaluación publicada (${ev.error}); lo que se ve es cálculo, no la nota oficial.`].filter(Boolean).join(' · '))
+    }
     if (sa.error) {
       setError(`No se pudieron leer las salidas anticipadas del mes; la nota no se muestra para no omitir faltas confirmadas. (${sa.error})`)
       setFilas([])
@@ -331,7 +350,22 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
     )
   }
 
-  const color = COLOR_ESTADO[r.estado]
+  // ── Nota oficial vs. cálculo ───────────────────────────────────────────────
+  // Con evaluación publicada, el número grande es el PUBLICADO —el mismo que
+  // ven Mi Desempeño y Gerencia— con sus faltas críticas. El cálculo en vivo
+  // queda abajo, nombrado, y sólo si difiere.
+  const hayOficial = esOficial(oficial)
+  const notaOficial = hayOficial ? Number(oficial!.nota_final) : null
+  const faltasOficiales = hayOficial && Array.isArray(oficial!.faltas)
+    ? (oficial!.faltas as Array<{ clave?: string; hecho?: string; tope?: number }>)
+    : []
+  const relacion = hayOficial
+    ? relacionConCalculo(oficial!, evaluacion ? evaluacion.notaFinal : null)
+    : null
+  const color = notaOficial !== null ? colorNotaOficial(notaOficial) : COLOR_ESTADO[r.estado]
+  const faltasMostradas = hayOficial
+    ? faltasOficiales.map(f => ({ clave: String(f.clave ?? f.hecho), hecho: String(f.hecho ?? ''), tope: Number(f.tope) }))
+    : (evaluacion?.faltas ?? [])
 
   return (
     <div>
@@ -350,22 +384,45 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
 
       <div style={S.caja}>
         <div style={{ ...S.tenue, letterSpacing:.5 }}>
-          {evaluacion ? 'NOTA FINAL' : 'CUMPLIMIENTO OPERATIVO'}
+          {hayOficial
+            ? 'NOTA FINAL OFICIAL · PUBLICADA'
+            : evaluacion ? 'NOTA FINAL · CÁLCULO EN CURSO, SIN PUBLICAR' : 'CUMPLIMIENTO OPERATIVO'}
         </div>
         <div style={{ display:'flex', alignItems:'baseline', gap:12, marginTop:6, flexWrap:'wrap' }}>
           <span style={{ fontSize:38, fontWeight:800, color, fontFamily:'Syne,sans-serif' }}>
-            {evaluacion ? coma(evaluacion.notaFinal) : r.puntaje === null ? '—' : coma(r.puntaje)}
-            {(evaluacion || r.puntaje !== null) && <span style={{ fontSize:15, fontWeight:600, color:'#64748b' }}> / 10</span>}
+            {notaOficial !== null
+              ? coma(notaOficial)
+              : evaluacion ? coma(evaluacion.notaFinal) : r.puntaje === null ? '—' : coma(r.puntaje)}
+            {(notaOficial !== null || evaluacion || r.puntaje !== null) && <span style={{ fontSize:15, fontWeight:600, color:'#64748b' }}> / 10</span>}
           </span>
           <span style={{ ...S.chip, color, background:color + '1a', border:`1px solid ${color}55` }}>
-            {evaluacion ? evaluacion.concepto : ETIQUETA_ESTADO[r.estado]}
+            {hayOficial ? (oficial!.concepto ?? '—') : evaluacion ? evaluacion.concepto : ETIQUETA_ESTADO[r.estado]}
           </span>
         </div>
+
+        {hayOficial && oficial!.corregida_at && (
+          <div style={{ ...S.tenue, marginTop:8, color:'#fcd34d' }}>
+            Corregida por Gerencia el {oficial!.corregida_at.slice(8, 10)}/{oficial!.corregida_at.slice(5, 7)}/{oficial!.corregida_at.slice(0, 4)}
+            {oficial!.motivo_correccion ? ` · ${oficial!.motivo_correccion}` : ''}
+          </div>
+        )}
+
+        {/* El cálculo en vivo, sólo si difiere, y con su nombre. Nunca con el
+            formato grande de la nota: dos números iguales de tamaño se leen
+            como dos notas. */}
+        {relacion?.texto && (
+          <div style={{
+            marginTop:10, padding:'8px 12px', borderRadius:8,
+            background:'#1e293b', border:'1px solid #334155', ...S.tenue,
+          }}>
+            {relacion.texto}
+          </div>
+        )}
 
         {/* La falta crítica va ARRIBA del desempeño y con el hecho a la vista.
             Sin esto, una nota de 4 al lado de un 9,1 de desempeño se lee como
             un error de cuentas. */}
-        {evaluacion?.faltas.map(f => (
+        {faltasMostradas.map(f => (
           <div key={f.clave} style={{
             marginTop:12, padding:'10px 12px', borderRadius:8,
             background:'#ef44441a', border:'1px solid #ef444455',
@@ -381,7 +438,10 @@ export default function FichaCumplimiento({ empleadoId, esAdmin, usuarioId }: Pr
         {evaluacion && (
           <div style={{ ...S.tenue, marginTop:10, lineHeight:1.7 }}>
             <div>
-              Índice de desempeño <b style={{ color:'#e2e8f0' }}>{coma(evaluacion.desempeno)} / 10</b>
+              Índice de desempeño <b style={{ color:'#e2e8f0' }}>
+                {coma(hayOficial && oficial!.indice !== null ? Number(oficial!.indice) : evaluacion.desempeno)} / 10
+              </b>
+              {hayOficial && ' (publicado)'}
               {' '}· {coma(r.puntaje as number)} de cumplimiento ponderado
             </div>
             <div>

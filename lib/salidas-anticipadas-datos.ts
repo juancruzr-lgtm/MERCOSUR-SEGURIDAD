@@ -12,6 +12,7 @@
 
 import { supabase } from '@/lib/supabase'
 import type { EstadoResolucion, SalidaAnticipada } from '@/lib/salidas-anticipadas'
+import type { EvaluacionOficial } from '@/lib/nota-oficial'
 
 export async function cargarSalidasDelMes(
   mes: string,
@@ -51,22 +52,34 @@ export interface EvaluacionPublicadaResumen {
   faltas: unknown
   explicacion: string | null
   estado: string
-  version: number | null
-  corregida_at: string | null
-  motivo_correccion: string | null
+  publicado_at: string | null
+  version?: number | null
+  corregida_at?: string | null
+  motivo_correccion?: string | null
 }
 
 export async function cargarEvaluacionPublicada(
   empleadoId: string, periodo: string,
 ): Promise<{ data: EvaluacionPublicadaResumen | null; error: string | null }> {
-  const { data, error } = await supabase
+  const base = 'id, empleado_id, periodo, indice, nota_final, concepto, alcance, cobertura, faltas, explicacion, estado, publicado_at'
+  let r: { data: any; error: any } = await supabase
     .from('evaluaciones_mensuales')
-    .select('id, empleado_id, periodo, indice, nota_final, concepto, alcance, cobertura, faltas, explicacion, estado, version, corregida_at, motivo_correccion')
+    .select(`${base}, version, corregida_at, motivo_correccion`)
     .eq('empleado_id', empleadoId)
     .eq('periodo', periodo)
     .maybeSingle()
-  if (error) return { data: null, error: error.message }
-  const d = data as any
+  // Antes de aplicar la migración de salidas anticipadas esas tres columnas no
+  // existen. La nota oficial se tiene que poder leer igual.
+  if (r.error && /column/i.test(String(r.error.message))) {
+    r = await supabase
+      .from('evaluaciones_mensuales')
+      .select(base)
+      .eq('empleado_id', empleadoId)
+      .eq('periodo', periodo)
+      .maybeSingle()
+  }
+  if (r.error) return { data: null, error: r.error.message }
+  const d = r.data as any
   return {
     data: d ? {
       ...d,
@@ -74,6 +87,33 @@ export async function cargarEvaluacionPublicada(
       nota_final: d.nota_final === null ? null : Number(d.nota_final),
       cobertura: d.cobertura === null ? null : Number(d.cobertura),
     } : null,
+    error: null,
+  }
+}
+
+/**
+ * Las notas oficiales (publicadas) del período, por empleado. Una consulta para
+ * toda la lista; son ~65 filas por mes, lejos del tope de 1000 de PostgREST.
+ */
+export async function cargarNotasPublicadasDelMes(
+  mes: string,
+): Promise<{ data: Map<string, EvaluacionOficial>; error: string | null }> {
+  const base = 'empleado_id, estado, nota_final, indice, faltas'
+  let r: { data: any; error: any } = await supabase
+    .from('evaluaciones_mensuales')
+    .select(`${base}, corregida_at`)
+    .eq('periodo', mes)
+    .eq('estado', 'publicada')
+  if (r.error && /column/i.test(String(r.error.message))) {
+    r = await supabase.from('evaluaciones_mensuales').select(base).eq('periodo', mes).eq('estado', 'publicada')
+  }
+  if (r.error) return { data: new Map(), error: r.error.message }
+  return {
+    data: new Map((r.data ?? []).map((f: any) => [f.empleado_id, {
+      ...f,
+      nota_final: f.nota_final === null ? null : Number(f.nota_final),
+      indice: f.indice === null ? null : Number(f.indice),
+    }])),
     error: null,
   }
 }

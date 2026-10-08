@@ -1,4 +1,4 @@
--- ROLLBACK de 20261008150000_salidas_anticipadas.sql
+-- ROLLBACK de 20261008160000_salidas_anticipadas.sql
 -- NO se ejecuta junto con la migración. Sólo si hay que deshacerla.
 --
 -- ⚠️ Borra las salidas detectadas y sus resoluciones, y el historial de

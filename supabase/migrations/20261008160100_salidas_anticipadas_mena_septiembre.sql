@@ -11,7 +11,7 @@
 -- evaluación publicada la aplica Gerencia (corregir_evaluacion_publicada).
 -- Ninguno de esos dos pasos ocurre acá.
 --
--- Requiere 20261008150000_salidas_anticipadas.sql. Idempotente.
+-- Requiere 20261008160000_salidas_anticipadas.sql. Idempotente.
 --
 -- Verificado el 08/10/2026 antes de escribirlo: 21 jornadas, todas con salida
 -- antes del fin programado; sin autorizaciones, observaciones, novedades

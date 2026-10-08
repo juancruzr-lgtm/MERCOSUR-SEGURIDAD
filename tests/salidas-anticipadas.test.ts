@@ -88,6 +88,15 @@ describe('corrección individual de una evaluación publicada', () => {
     expect(c.explicacion).toMatch(/^10 de desempeño · 4 final por 21 salidas anticipadas injustificadas/)
   })
 
+  it('MENA según la decisión de Gerencia: 19 confirmadas (las 2 de segundos quedan pendientes) → 4, Aplazado', () => {
+    const c = corregirCapa4(mena, [faltaPorSalidaAnticipada(19)])!
+    expect(c.nota_final).toBe(4)
+    expect(c.concepto).toBe('Aplazado')
+    expect(c.explicacion).toBe(
+      '10 de desempeño · 4 final por 19 salidas anticipadas injustificadas confirmadas: '
+      + 'incumplimiento reiterado del horario de finalización del servicio, sin autorización')
+  })
+
   it('no toca lo que no es capa 4: devuelve sólo nota, concepto, faltas y explicación', () => {
     const c = corregirCapa4(mena, [faltaPorSalidaAnticipada(1)])!
     expect(Object.keys(c).sort()).toEqual(['concepto', 'explicacion', 'faltas', 'nota_final'])
@@ -186,7 +195,7 @@ describe('aviso al registrar la salida', () => {
 
 describe('los motivos de la pantalla son los que acepta la base', () => {
   const sql = readFileSync(
-    join(__dirname, '..', 'supabase', 'migrations', '20261008150000_salidas_anticipadas.sql'), 'utf8')
+    join(__dirname, '..', 'supabase', 'migrations', '20261008160000_salidas_anticipadas.sql'), 'utf8')
 
   it.each(Object.entries(MOTIVOS_POR_ESTADO))('estado %s', (estado, motivos) => {
     const linea = sql.split('\n').find(l => l.includes(`p_estado = '${estado}'`) && l.includes('p_motivo_codigo in'))
