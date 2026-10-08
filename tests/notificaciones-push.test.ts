@@ -6,6 +6,9 @@ import {
   esNocturno,
   minutosDesdeFinDeTurno,
   recordatorioDeTurno,
+  horaDePresentacion,
+  avisoTurnoProximo,
+  avisoPrepararIngreso,
 } from '@/lib/notificaciones-push'
 
 // Reglas de cuándo corresponde cada aviso. Ninguna de estas funciones envía
@@ -101,4 +104,29 @@ describe('recordatorioDeTurno', () => {
   it('en el solape de 20 gana el de 30', () => expect(recordatorioDeTurno(20)).toBe('30'))
   it('muy lejos no corresponde', () => expect(recordatorioDeTurno(120)).toBeNull())
   it('ya empezo no corresponde', () => expect(recordatorioDeTurno(-5)).toBeNull())
+})
+
+describe('presentación 15 minutos antes (recordatorio, no medición)', () => {
+  it('calcula la hora de presentación', () => {
+    expect(horaDePresentacion('07:00')).toBe('06:45')
+    expect(horaDePresentacion('13:00:00')).toBe('12:45')
+  })
+  it('cruza medianoche', () => expect(horaDePresentacion('00:10')).toBe('23:55'))
+  it('hora ilegible no inventa nada', () => expect(horaDePresentacion('')).toBeNull())
+
+  it('el primer aviso dice a qué hora presentarse y para qué', () => {
+    const a = avisoTurnoProximo('MUSEO MACRO', '13:00:00')
+    expect(a.title).toBe('Turno próximo')
+    expect(a.body).toBe('Tiene turno en MUSEO MACRO a las 13:00. Preséntese a las 12:45 para recibir el puesto y las novedades del servicio.')
+  })
+
+  it('el segundo aviso recuerda estar en el puesto y fichar', () => {
+    expect(avisoPrepararIngreso('MUSEO MACRO', '13:00:00').body)
+      .toBe('Su turno en MUSEO MACRO empieza a las 13:00. Es momento de estar en el puesto para recibir las novedades y fichar el ingreso.')
+  })
+
+  it('no habla de faltas ni sanciones: la cláusula del Estatuto está en revisión legal', () => {
+    const textos = [avisoTurnoProximo('X', '07:00').body, avisoPrepararIngreso('X', '07:00').body].join(' ')
+    expect(textos).not.toMatch(/falta|sanci|grave|impuntual|tarde/i)
+  })
 })

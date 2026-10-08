@@ -255,12 +255,12 @@ describe('18. la IA sola no genera un mensaje acusatorio', () => {
 })
 
 describe('19. el mensaje de puntualidad usa el horario real', () => {
-  it('dice la hora del turno y desde cuándo puede fichar', () => {
+  it('dice la hora del turno y a qué hora presentarse (15 minutos antes)', () => {
     const e = soloDe(entrada({
       puntualidad: { impuntuales: 4, evaluadas: 20, horaInicio: '07:00', objetivo: 'PLANTA NORTE' },
     }), 'puntualidad')
     expect(e?.texto).toContain('comienza a las 07:00')
-    expect(e?.texto).toContain('desde las 06:45')
+    expect(e?.texto).toContain('Presentate a las 06:45 para recibir el puesto')
     expect(e?.texto).toContain('PLANTA NORTE')
   })
 
@@ -268,7 +268,7 @@ describe('19. el mensaje de puntualidad usa el horario real', () => {
     const e = soloDe(entrada({
       puntualidad: { impuntuales: 4, evaluadas: 20, horaInicio: '00:10' },
     }), 'puntualidad')
-    expect(e?.texto).toContain('desde las 23:55')
+    expect(e?.texto).toContain('Presentate a las 23:55')
   })
 
   it('sin horario conocido no inventa uno', () => {

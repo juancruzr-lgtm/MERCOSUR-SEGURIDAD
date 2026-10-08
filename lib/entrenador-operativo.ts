@@ -232,10 +232,13 @@ export function ensenanzasDeCumplimiento(e: EntradaEntrenador): Ensenanza[] {
     const hora = p.horaInicio ?? null
     const donde = p.objetivo ? ` en ${p.objetivo}` : ''
     const cuando = hora
-      ? `Tu turno${donde} comienza a las ${hora}. Podés fichar desde las ${restarMinutos(hora, HORA_PREVIA_MIN)}. `
+      // Alineado con los avisos de turno: se pide presentarse 15 minutos antes
+      // para recibir el puesto, pero la medición no cambia (puntual = hasta el inicio).
+      ? `Tu turno${donde} comienza a las ${hora}. Presentate a las ${restarMinutos(hora, HORA_PREVIA_MIN)} `
+        + 'para recibir el puesto y las novedades, y registrá el ingreso al llegar. '
         + `Las entradas posteriores a las ${hora} cuentan como ingreso fuera de horario.`
       : 'Varios de tus ingresos quedaron registrados después de la hora de inicio del turno. '
-        + `Podés fichar desde ${HORA_PREVIA_MIN} minutos antes del inicio.`
+        + `Presentate ${HORA_PREVIA_MIN} minutos antes del inicio para recibir el puesto y las novedades.`
     agregar(
       'puntualidad', p.impuntuales, p.evaluadas,
       `${p.impuntuales} de ${p.evaluadas} ingresos posteriores al horario programado`

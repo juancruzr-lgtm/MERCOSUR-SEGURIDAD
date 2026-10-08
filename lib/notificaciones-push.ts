@@ -122,3 +122,50 @@ export function recordatorioDeTurno(minutosHastaInicio: number): '30' | '15' | n
   if (minutosHastaInicio >= 5 && minutosHastaInicio <= 20) return '15'
   return null
 }
+
+/**
+ * Con cuánta anticipación se pide presentarse al puesto: el tiempo de recibir
+ * el puesto y las novedades del servicio con el relevo.
+ *
+ * ── Es un recordatorio, NO una medición ──────────────────────────────────────
+ * Gerencia (08/10/2026): no se puede contar como impuntualidad llegar dentro de
+ * esos 15 minutos, aunque el Estatuto Interno pida la presentación anticipada.
+ * Puntualidad sigue midiendo contra la hora de inicio (lib/cumplimiento.ts) y
+ * esto no lo toca: sólo cambia lo que dicen los avisos previos al turno.
+ *
+ * Por la misma razón el texto no habla de faltas ni de sanciones: la cláusula
+ * del Estatuto está pendiente de revisión legal.
+ */
+export const MINUTOS_PRESENTACION_SUGERIDA = 15
+
+/** "07:00" → "06:45". Cruza medianoche: "00:10" → "23:55". */
+export function horaDePresentacion(horaInicio: string, anticipacion = MINUTOS_PRESENTACION_SUGERIDA): string | null {
+  const m = minutosDeHora(horaInicio)
+  if (m === null) return null
+  const t = (((m - anticipacion) % 1440) + 1440) % 1440
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`
+}
+
+export interface AvisoPush { title: string; body: string }
+
+/** Primer aviso (entre 35 y 20 minutos antes): cuándo presentarse. */
+export function avisoTurnoProximo(objetivo: string, horaInicio: string): AvisoPush {
+  const inicio = horaInicio.slice(0, 5)
+  const presentarse = horaDePresentacion(inicio)
+  return {
+    title: 'Turno próximo',
+    body: presentarse
+      ? `Tiene turno en ${objetivo} a las ${inicio}. Preséntese a las ${presentarse} para recibir `
+        + 'el puesto y las novedades del servicio.'
+      : `Tiene turno en ${objetivo} a las ${inicio}`,
+  }
+}
+
+/** Segundo aviso (entre 20 y 5 minutos antes): ya es el momento de estar ahí. */
+export function avisoPrepararIngreso(objetivo: string, horaInicio: string): AvisoPush {
+  return {
+    title: 'Preparar ingreso',
+    body: `Su turno en ${objetivo} empieza a las ${horaInicio.slice(0, 5)}. Es momento de estar `
+      + 'en el puesto para recibir las novedades y fichar el ingreso.',
+  }
+}

@@ -377,8 +377,10 @@ function bloquePuntualidad(e: EntradaBalance): BloqueBalance | null {
   return {
     clave: 'puntualidad', etiqueta: 'Puntualidad', grupo: 'servicio', estado: 'mejorar', hechos,
     incidencias: p.impuntuales, requeridos: p.evaluadas,
-    recomendacion: 'Registrá el ingreso al llegar, dentro del horario programado. '
-      + 'Podés fichar desde 15 minutos antes del inicio del turno.',
+    // Mismo mensaje que los avisos de turno (lib/notificaciones-push): pedir la
+    // presentación anticipada no cambia la medición, que sigue contra el inicio.
+    recomendacion: 'Presentate 15 minutos antes del inicio del turno para recibir el puesto y '
+      + 'las novedades, y registrá el ingreso al llegar.',
   }
 }
 
