@@ -25,7 +25,11 @@ import {
 import type { FilaPublicada } from '@/lib/mi-desempeno'
 
 export interface Recomendacion {
-  clave: ClaveEntrenamiento
+  /**
+   * `horario_salida` no es una dimensión: sale de una falta crítica confirmada
+   * (salida anticipada injustificada o abandono). Ver `recomendacionesDeFaltas`.
+   */
+  clave: ClaveEntrenamiento | 'horario_salida'
   etiqueta: string
   /** El mensaje accionable, tal como lo lee el vigilador. */
   texto: string
@@ -72,10 +76,43 @@ const CLAVE_POR_DIMENSION = Object.fromEntries(
 const lista = (v: unknown): any[] => (Array.isArray(v) ? v : [])
 const objeto = (v: unknown): any => (v && typeof v === 'object' ? (v as any) : {})
 
+// ── Faltas críticas de horario de salida ────────────────────────────────────
+//
+// El balance se congela con el mes; una corrección de Gerencia posterior (caso
+// MENA, septiembre 2026) agrega la falta pero no reescribe el balance. Sin
+// esto, la misma pantalla decía "Tu nota quedó limitada a 4" arriba y "Buen
+// trabajo este mes. Cumpliste correctamente los controles evaluados" abajo.
+// Se deriva de `faltas`, que es la fuente de la nota, sin tocar lo guardado.
+
+export const CLAVES_FALTA_SALIDA = ['salida_anticipada_injustificada', 'abandono_de_puesto'] as const
+
+export const MENSAJE_HORARIO_SALIDA =
+  'Permanecé en el puesto hasta el horario de finalización del servicio. Llegar antes '
+  + 'no te autoriza a retirarte antes. Si necesitás retirarte, pedí autorización expresa '
+  + 'a tu supervisor antes de irte.'
+
+export function faltasDeSalida(faltas: unknown): Array<{ clave: string; hecho: string }> {
+  return lista(faltas)
+    .filter(f => (CLAVES_FALTA_SALIDA as readonly string[]).includes(String(f?.clave)))
+    .map(f => ({ clave: String(f.clave), hecho: String(f.hecho ?? '') }))
+}
+
+function recomendacionesDeFaltas(faltas: unknown): Recomendacion[] {
+  return faltasDeSalida(faltas).map(f => ({
+    clave: 'horario_salida',
+    etiqueta: f.clave === 'abandono_de_puesto' ? 'Permanencia en el puesto' : 'Horario de salida',
+    texto: MENSAJE_HORARIO_SALIDA,
+    hechos: [f.hecho],
+    severidad: 'patron',
+    incidencias: 0,
+    requeridos: 0,
+  }))
+}
+
 export function entrenamientoDeEvaluacion(fila: FilaPublicada): EntrenamientoDelMes {
   const bloques = lista(objeto(fila.balance).bloques)
 
-  const recomendaciones: Recomendacion[] = bloques
+  const deDimensiones: Recomendacion[] = bloques
     .filter(b => b?.estado === 'mejorar' && typeof b?.recomendacion === 'string')
     .map(b => {
       const incidencias = Number(b.incidencias ?? 0)
@@ -91,7 +128,11 @@ export function entrenamientoDeEvaluacion(fila: FilaPublicada): EntrenamientoDel
       }
     })
     // El mismo orden que ya usa el Entrenador para decidir qué enseñar primero.
-    .sort((a, b) => (PRIORIDAD[a.clave] ?? 99) - (PRIORIDAD[b.clave] ?? 99))
+    .sort((a, b) => (PRIORIDAD[a.clave as ClaveEntrenamiento] ?? 99) - (PRIORIDAD[b.clave as ClaveEntrenamiento] ?? 99))
+
+  // Primero la falta crítica: es el lugar 1 que PRIORIDAD deja libre a
+  // propósito para un incumplimiento crítico.
+  const recomendaciones = [...recomendacionesDeFaltas(fila.faltas), ...deDimensiones]
 
   const sinMuestra = fila.datos_insuficientes || fila.nota_final === null
 
@@ -103,7 +144,10 @@ export function entrenamientoDeEvaluacion(fila: FilaPublicada): EntrenamientoDel
   return {
     periodo: fila.periodo,
     felicitacion: !sinMuestra && recomendaciones.length === 0 ? MENSAJE_POSITIVO : null,
-    servicioReconocido: asistenciaBien && registroFallo ? MENSAJE_SERVICIO_RECONOCIDO : null,
+    // Con una salida injustificada confirmada el servicio NO se cumplió entero:
+    // decir "el servicio fue reconocido" lo contradiría.
+    servicioReconocido: asistenciaBien && registroFallo && faltasDeSalida(fila.faltas).length === 0
+      ? MENSAJE_SERVICIO_RECONOCIDO : null,
     recomendaciones,
     sinMuestra,
   }

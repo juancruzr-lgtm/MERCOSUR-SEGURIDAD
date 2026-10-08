@@ -23,6 +23,8 @@
  *     merece.
  */
 
+import { MENSAJE_HORARIO_SALIDA, faltasDeSalida } from '@/lib/entrenador-desde-snapshot'
+
 /** La fila tal cual viene de `evaluaciones_mensuales`. */
 export interface FilaPublicada {
   /** Necesario para registrar la lectura y para colgarle una observación. */
@@ -259,7 +261,19 @@ export function vistaDeEvaluacion(fila: FilaPublicada): VistaDesempeno {
     dimensiones: dims,
     informativas,
     loQueSalioBien: bloques.filter(b => b?.estado === 'bien').map(mapear),
-    loQueConvieneMejorar: bloques.filter(b => b?.estado === 'mejorar').map(mapear),
+    // Una falta de horario de salida agregada después de congelar el mes (p. ej.
+    // corrección de Gerencia) no está en el balance; se suma acá, primero, para
+    // que "lo que conviene mejorar" no omita justamente lo que bajó la nota.
+    loQueConvieneMejorar: [
+      ...faltasDeSalida(fila.faltas).map(f => ({
+        etiqueta: f.clave === 'abandono_de_puesto' ? 'Permanencia en el puesto' : 'Horario de salida',
+        hechos: [f.clave === 'abandono_de_puesto'
+          ? 'Dejaste el puesto sin relevo, y quedó comprobado.'
+          : 'Te retiraste antes del horario de finalización del servicio sin autorización.'],
+        recomendacion: MENSAJE_HORARIO_SALIDA,
+      })),
+      ...bloques.filter(b => b?.estado === 'mejorar').map(mapear),
+    ],
     encabezadoDelBalance: typeof bal.encabezado === 'string' ? bal.encabezado : null,
   }
 }

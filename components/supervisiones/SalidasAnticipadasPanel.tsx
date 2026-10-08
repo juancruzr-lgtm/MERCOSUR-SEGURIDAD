@@ -50,11 +50,12 @@ const COLOR_ESTADO: Record<string, string> = {
 }
 
 const caja: React.CSSProperties = {
+  minWidth: 0, boxSizing: 'border-box',
   background: C.bg, border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14,
 }
 const campo: React.CSSProperties = {
   background: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: C.texto,
-  padding: '8px 10px', fontSize: 13, width: '100%',
+  padding: '8px 10px', fontSize: 13, width: '100%', boxSizing: 'border-box', minWidth: 0, maxWidth: '100%',
 }
 const boton = (color: string, deshabilitado = false): React.CSSProperties => ({
   background: deshabilitado ? '#1e293b' : `${color}22`, color: deshabilitado ? C.apagado : color,
@@ -110,7 +111,7 @@ export default function SalidasAnticipadasPanel({ esGerencia }: Props) {
   const rige = salidaAnticipadaVigente(mes)
 
   return (
-    <div style={{ display: 'grid', gap: 12 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12 }}>
       <div>
         <div style={{ fontSize: 20, fontWeight: 800, color: C.texto }}>Salidas anticipadas</div>
         <div style={{ fontSize: 13, color: C.tenue, marginTop: 4, lineHeight: 1.5 }}>
@@ -234,7 +235,7 @@ function GrupoSalidas({
       </div>
 
       {abierto && (
-        <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+        <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 }}>
           {resolubles.length > 0 && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: C.tenue }}>
               <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -257,7 +258,7 @@ function GrupoSalidas({
           )}
 
           {/* Tarjetas y no tabla: tiene que leerse en el celular del supervisor. */}
-          <div style={{ display: 'grid', gap: 6 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 6 }}>
             {grupo.salidas.map(s => (
               <label key={s.id} style={{
                 display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 10px',
@@ -341,7 +342,7 @@ function FormResolucion({ salidas, onListo }: { salidas: SalidaAnticipada[]; onL
   }
 
   return (
-    <div style={{ ...caja, background: '#111827', display: 'grid', gap: 8 }}>
+    <div style={{ ...caja, background: '#111827', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8 }}>
       <div style={{ fontSize: 13, fontWeight: 800, color: C.texto }}>
         Resolver {salidas.length} {salidas.length === 1 ? 'salida seleccionada' : 'salidas seleccionadas'}
       </div>
@@ -466,7 +467,7 @@ function CorreccionEvaluacion({ grupo, mes }: { grupo: GrupoPersona; mes: string
   }
 
   return (
-    <div style={{ ...caja, background: '#111827', display: 'grid', gap: 8 }}>
+    <div style={{ ...caja, background: '#111827', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8 }}>
       <div style={{ fontSize: 13, fontWeight: 800, color: C.texto }}>
         Corrección individual de la evaluación publicada · sólo Gerencia
       </div>
