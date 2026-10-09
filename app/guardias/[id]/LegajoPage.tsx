@@ -12,6 +12,7 @@ import FichaCumplimiento from '@/components/cumplimiento/FichaCumplimiento'
 import MiDesempeno from '@/components/desempeno/MiDesempeno'
 import EstatutoInterno from '@/components/estatuto/EstatutoInterno'
 import DatosPersonales from '@/components/legajo/DatosPersonales'
+import { gestionaDatosSensibles } from '@/lib/legajo'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -524,8 +525,7 @@ export default function LegajoPage() {
         {seccion === 'datos' && (
           usuarioId === null
             ? <div style={S.placeholder}>Cargando…</div>
-            : usuarioId === empleadoId
-              || tieneCapacidad({ rol: rolUsuario, puesto_organizacional: puestoUsuario, acceso_admin_pleno: adminPlenoUsuario }, 'gestionar_personal')
+            : usuarioId === empleadoId || gestionaDatosSensibles({ puesto_organizacional: puestoUsuario })
               ? <DatosPersonales empleadoId={empleadoId} />
               : <div style={S.placeholder}>Los datos personales los consultan la persona, Administración y Gerencia.</div>
         )}
