@@ -3,7 +3,7 @@
 // lote APROBADO por Gerencia (storage_recompresion_aprobar).
 //
 // Uso (desde SRV02 o una PC de Administración, con service_role en el entorno):
-//   node scripts/recomprimir-historico.mjs simular  [--min-kb 900] [--limite 2000] [--muestra 20 --carpeta <fuera del repo>]
+//   node scripts/recomprimir-historico.mjs simular  [--min-kb 900] [--min-dias 90] [--limite 2000] [--muestra 20 --carpeta <fuera del repo>]
 //   node scripts/recomprimir-historico.mjs proponer [--min-kb 900] --limite 10 --piloto      (escribe el lote propuesto)
 //   node scripts/recomprimir-historico.mjs ejecutar --lote <uuid> [--max 50]
 //   node scripts/recomprimir-historico.mjs revertir --lote <uuid> [--ruta <ruta>]
@@ -81,8 +81,8 @@ export async function recomprimir(buf) {
   return { buf: out.data, dimsAntes: `${meta.width}x${meta.height}`, dimsDespues: `${control.width ?? 0}x${control.height ?? 0}` }
 }
 
-async function candidatos(db, minBytes, limite) {
-  const { data, error } = await db.rpc('storage_recompresion_candidatos', { p_min_bytes: minBytes, p_limite: limite })
+async function candidatos(db, minBytes, limite, minDias = 90) {
+  const { data, error } = await db.rpc('storage_recompresion_candidatos', { p_min_bytes: minBytes, p_limite: limite, p_min_dias: minDias })
   if (error) throw new Error(error.message)
   return data ?? []
 }
@@ -95,7 +95,7 @@ async function bajar(db, bucket, ruta) {
 
 async function simular() {
   const db = await cliente()
-  const lista = await candidatos(db, Number(args['min-kb'] ?? 900) * 1024, Number(args.limite ?? 2000))
+  const lista = await candidatos(db, Number(args['min-kb'] ?? 900) * 1024, Number(args.limite ?? 2000), Number(args['min-dias'] ?? 90))
   const lote = armarLote(lista)
   const informe = { modo: 'SIMULACIÓN (no escribe nada)', candidatos: lote.candidatos, gb_antes: +(lote.bytes_antes / 1e9).toFixed(2),
     gb_despues_estimado: +(lote.bytes_despues_estimado / 1e9).toFixed(2), muestra: null }
@@ -125,7 +125,7 @@ async function simular() {
 async function proponer() {
   exigirConfirmacion()
   const db = await cliente()
-  const lista = await candidatos(db, Number(args['min-kb'] ?? 900) * 1024, Number(args.limite ?? 10))
+  const lista = await candidatos(db, Number(args['min-kb'] ?? 900) * 1024, Number(args.limite ?? 10), Number(args['min-dias'] ?? 90))
   if (!lista.length) { console.log('No hay candidatos.'); return }
   const { data, error } = await db.from('storage_recompresion_lote').insert(armarLote(lista, { piloto: !!args.piloto })).select('id, candidatos, bytes_antes').single()
   if (error) throw new Error(error.message)

@@ -152,16 +152,27 @@ $fn$;
 revoke all on function public.storage_recompresion_aprobar(uuid) from public, anon;
 grant execute on function public.storage_recompresion_aprobar(uuid) to authenticated;
 
--- Candidatos: fotos de supervisión grandes que todavía no se recomprimieron,
--- sin hash registrado en evidencias y sin análisis de IA en curso. Sólo
--- service_role (lo llama el script, no la app). Devuelve como mucho p_limite.
-create or replace function public.storage_recompresion_candidatos(p_min_bytes bigint, p_limite integer)
+-- Candidatos: criterio POSITIVO y conservador. Una foto entra sólo si se
+-- puede afirmar que es de rutina; ante cualquier duda queda afuera:
+--   * pertenece a una supervisión identificada (las fotos huérfanas no entran);
+--   * esa supervisión terminó 'ok', no tiene NINGÚN texto de observación (no se
+--     interpretan palabras: una nota escrita, diga lo que diga, la excluye) y
+--     ninguna respuesta quedó observada ni comentada;
+--   * todas las supervisiones que usan esa foto cumplen lo anterior;
+--   * no hubo novedades del objetivo en ±2 días (posible incidente);
+--   * tiene más de p_min_dias días (por defecto 90, nunca menos de 30): fuera de
+--     cierres, revisiones y auditorías en curso. La antigüedad la decide Gerencia;
+--   * no está en evidencias con huella ni con análisis de IA en curso;
+--   * todavía no se recomprimió ni se omitió.
+-- Sólo service_role (lo llama el script, no la app). Devuelve como mucho p_limite.
+create or replace function public.storage_recompresion_candidatos(p_min_bytes bigint, p_limite integer, p_min_dias integer default 90)
 returns table (name text, bytes bigint, etag text)
 language sql stable security definer set search_path = public, storage, pg_catalog as $fn$
   select o.name, (o.metadata->>'size')::bigint, o.metadata->>'eTag'
   from storage.objects o
   where o.bucket_id = 'supervision-fotos'
     and (o.metadata->>'size')::bigint >= p_min_bytes
+    and o.created_at < now() - make_interval(days => greatest(30, coalesce(p_min_dias, 90)))
     and not exists (select 1 from public.storage_recompresion r
                     where r.bucket = o.bucket_id and r.ruta = o.name and r.estado in ('reemplazado','omitido'))
     and not exists (select 1 from public.evidencias e
@@ -169,24 +180,30 @@ language sql stable security definer set search_path = public, storage, pg_catal
                       and (e.contenido_sha256 is not null
                            or exists (select 1 from public.evidencia_analisis a
                                       where a.evidencia_id = e.id and a.estado in ('pendiente','procesando'))))
-    -- Evidencia necesaria para auditoría: supervisiones que no terminaron OK,
-    -- con algún ítem observado o con observación escrita. No se tocan.
+    -- Identificada: al menos una supervisión la usa…
+    and exists (select 1 from public.supervision_fotos f where f.storage_path = o.name)
+    -- …y ninguna de las que la usan tiene algo que la vuelva evidencia.
     and not exists (select 1 from public.supervision_fotos f
                     join public.supervisiones sv on sv.id = f.supervision_id
                     where f.storage_path = o.name
                       and (sv.estado is distinct from 'ok'
-                           -- Una nota general cuenta como incidencia salvo que sea de rutina
-                           -- ("vig X sin novedad"): medido el 09/10.
-                           or (nullif(btrim(coalesce(sv.observaciones, '')), '') is not null
-                               and lower(sv.observaciones) !~ '(sin novedad|sin novedades|s/ ?n\y|sin observaciones|todo (ok|bien|en orden)|normal)')
+                           or nullif(btrim(coalesce(sv.observaciones, '')), '') is not null
+                           or sv.created_at >= now() - make_interval(days => greatest(30, coalesce(p_min_dias, 90)))
                            or exists (select 1 from public.supervision_respuestas r
                                       where r.supervision_id = sv.id
-                                        and (r.resultado = 'observado' or nullif(btrim(coalesce(r.observacion, '')), '') is not null))))
+                                        and (r.resultado is null or r.resultado not in ('correcto','no_aplica')
+                                             or nullif(btrim(coalesce(r.observacion, '')), '') is not null))
+                           or exists (select 1 from public.novedades n
+                                      where n.objetivo_id = sv.objetivo_id
+                                        and n.created_at between sv.created_at - interval '2 days' and sv.created_at + interval '2 days')))
+    -- Una foto suelta (sin supervisión que la use) es un caso dudoso: no entra.
+    and not exists (select 1 from public.supervision_fotos f
+                    where f.storage_path = o.name and f.supervision_id is null)
   order by (o.metadata->>'size')::bigint desc
   limit greatest(1, least(p_limite, 2000))
 $fn$;
-revoke all on function public.storage_recompresion_candidatos(bigint, integer) from public, anon, authenticated;
-grant execute on function public.storage_recompresion_candidatos(bigint, integer) to service_role;
+revoke all on function public.storage_recompresion_candidatos(bigint, integer, integer) from public, anon, authenticated;
+grant execute on function public.storage_recompresion_candidatos(bigint, integer, integer) to service_role;
 
 notify pgrst, 'reload schema';
 commit;
