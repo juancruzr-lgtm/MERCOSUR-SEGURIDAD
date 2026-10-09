@@ -16,9 +16,10 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import {
-  buscarPersona, cargarBandeja, leerRangos, resolverPropuesta,
+  EVENTO_HISTORICO, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe, filtrarHistorico, leerRangos, nivelHistorico,
+  resolverPropuesta, tienePersona,
 } from '@/lib/legajo-historico'
-import type { Bandeja, EstadoPropuesta, PersonaBuscada, PropuestaHistorica, TipoBandeja } from '@/lib/legajo-historico'
+import type { Bandeja, EstadoPropuesta, EventoHistorico, PersonaBuscada, PropuestaHistorica, TipoBandeja } from '@/lib/legajo-historico'
 
 const card: React.CSSProperties = { background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 14, marginBottom: 10, minWidth: 0, boxSizing: 'border-box' }
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '9px 10px', fontSize: 14 }
@@ -29,8 +30,8 @@ const boton = (t: 'ok' | 'sec' | 'peligro', hab = true): React.CSSProperties => 
   borderRadius: 8, padding: '8px 14px', fontWeight: t === 'ok' ? 800 : 600, cursor: hab ? 'pointer' : 'not-allowed', fontSize: 13.5,
 })
 const PESTAÑAS: [EstadoPropuesta, string][] = [
-  ['pendiente', 'Para revisar'], ['conflicto', 'Con conflicto'], ['aceptada', 'Aceptadas (por importar)'],
-  ['importada', 'Importadas'], ['descartada', 'Descartadas'],
+  ['pendiente', 'Para revisar'], ['conflicto', 'Con conflicto'], ['aceptada', 'Asociadas (sin validar)'],
+  ['importada', 'Copiadas al legajo'], ['descartada', 'Descartadas'],
 ]
 const ETIQUETA_REVISAR: Record<string, string> = {
   varias_personas: 'varias personas', compilado_varios_documentos: 'PDF compilado', persona_distinta_a_carpeta: 'DNI ≠ carpeta',
@@ -136,8 +137,27 @@ function ConTexto({ etiquetaBoton, placeholder, onConfirmar, onCancelar }: { eti
   )
 }
 
+function Historial({ id }: { id: string }) {
+  const [r, setR] = useState<{ eventos: EventoHistorico[]; error: string | null } | null>(null)
+  useEffect(() => { void cargarEventosHistorico(id).then(setR) }, [id])
+  if (!r) return <div style={{ fontSize: 12.5, color: '#64748b', marginTop: 6 }}>Cargando historial…</div>
+  if (r.error) return <div role="alert" style={{ fontSize: 12.5, color: '#fca5a5', marginTop: 6 }}>{r.error}</div>
+  return (
+    <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12.5, color: '#94a3b8' }}>
+      {r.eventos.map((e, i) => (
+        <li key={i}>
+          {new Date(e.at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })} · {EVENTO_HISTORICO[e.evento] ?? e.evento}
+          {e.quien ? ` · ${e.quien}` : ' · sistema'}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBandeja[]; onCambio: () => void }) {
   const [modo, setModo] = useState<null | 'aceptar' | 'descartar' | 'separar'>(null)
+  const [verHistorial, setVerHistorial] = useState(false)
+  const nivel = nivelHistorico(p.estado)
   const nombreTipo = (c: string | null) => tipos.find(t => t.codigo === c)?.nombre ?? c ?? 'a definir'
   const revisar = (p.senales?.revisar ?? []).map(r => ETIQUETA_REVISAR[r.split(':')[0]] ?? r)
   const abierta = p.estado === 'pendiente' || p.estado === 'conflicto'
@@ -147,16 +167,26 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
         <b style={{ color: '#e2e8f0', fontSize: 14.5, overflowWrap: 'anywhere' }}>{nombreArchivo(p.ruta_origen)}</b>
         <span style={{ fontSize: 12, color: p.confianza === 'alta' ? '#86efac' : p.confianza === 'media' ? '#fbbf24' : '#94a3b8' }}>confianza {p.confianza}</span>
       </div>
+      <div style={{ fontSize: 12, color: nivel.color, marginTop: 2 }}>
+        {nivel.texto}{!tienePersona(p) && p.estado !== 'conflicto' ? ' · sin persona asociada' : ''}
+      </div>
       <div style={{ fontSize: 12, color: '#64748b', overflowWrap: 'anywhere', marginTop: 2 }}>MEGA: {p.ruta_origen}{p.pagina_desde ? ` · páginas ${p.pagina_desde}–${p.pagina_hasta}` : p.paginas ? ` · ${p.paginas} pág.` : ''}</div>
       <div style={{ fontSize: 13.5, color: '#cbd5e1', marginTop: 6 }}>
         {p.estado === 'aceptada' || p.estado === 'importada'
           ? <>Aceptado como <b>{nombreTipo(p.tipo)}</b></>
           : <>Sugerido: <b>{nombreTipo(p.tipo_sugerido)}</b> de <b>{p.sugerido ? `${p.sugerido.apellido}, ${p.sugerido.nombre}` : 'persona a definir'}</b></>}
       </div>
+      {p.tipo_sugerido && !p.tipo && !tipos.some(t => t.codigo === p.tipo_sugerido) && (
+        <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 4 }}>La categoría sugerida hoy no se exige en el legajo: al aceptar, elegí otra categoría o descartalo.</div>
+      )}
       {p.motivo_conflicto && <div style={{ fontSize: 13, color: '#fbbf24', marginTop: 4 }}>⚠ {p.motivo_conflicto}</div>}
       {revisar.length > 0 && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>Señales: {revisar.join(' · ')}</div>}
       {!p.indexado && <div style={{ fontSize: 12, color: '#fca5a5', marginTop: 4 }}>El archivo no está en el índice del agente: no se puede aceptar hasta reindexar.</div>}
       {p.motivo && <div style={{ fontSize: 12.5, color: '#94a3b8', marginTop: 4 }}>Motivo: {p.motivo}</div>}
+      <button type="button" onClick={() => setVerHistorial(v => !v)} style={{ background: 'none', border: 'none', color: '#93c5fd', padding: 0, marginTop: 6, fontSize: 12.5, cursor: 'pointer' }}>
+        {verHistorial ? 'Ocultar historial' : 'Ver historial'}
+      </button>
+      {verHistorial && <Historial id={p.id} />}
 
       {abierta && modo === null && (
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
@@ -184,6 +214,8 @@ export default function BandejaHistorico() {
   const [buscar, setBuscar] = useState('')
   const [datos, setDatos] = useState<Bandeja | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [categoria, setCategoria] = useState('')
+  const [soloSinPersona, setSoloSinPersona] = useState(false)
   const cargar = useCallback(async () => { const r = await cargarBandeja(estado, buscar); setDatos(r.datos); setError(r.error) }, [estado, buscar])
   useEffect(() => { void cargar() }, [cargar])
   useEffect(() => { const t = setTimeout(() => setBuscar(texto), 350); return () => clearTimeout(t) }, [texto])
@@ -191,10 +223,11 @@ export default function BandejaHistorico() {
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', minWidth: 0 }}>
-      <div style={{ fontSize: 20, fontWeight: 800, color: '#e2e8f0' }}>Archivo histórico → legajo</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: '#e2e8f0' }}>Archivo histórico (MEGA)</div>
       <div style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 12px', lineHeight: 1.5 }}>
-        Archivos de MEGA ya clasificados, con la persona y el tipo que sugiere el sistema. Nada entra al legajo sin que alguien lo acepte acá,
-        y la copia se hace aparte, verificando que el archivo no haya cambiado. Abrí el archivo en MEGA con la ruta de cada tarjeta.
+        Referencias a archivos de MEGA, con la persona y la categoría que sugiere el sistema. El archivo no se copia: se abre en MEGA con la ruta de cada tarjeta.
+        <b style={{ color: '#cbd5e1' }}> Localizar</b> o <b style={{ color: '#cbd5e1' }}>asociar</b> un archivo a una persona no lo vuelve documentación válida:
+        sólo cuenta como presentado y aprobado lo que se revisa en la sección Documentación.
       </div>
       <input value={texto} onChange={e => setTexto(e.target.value)} placeholder="Buscar por apellido, legajo o nombre del archivo (en todos los estados)"
         style={{ width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '10px 12px', fontSize: 14, marginBottom: 10 }} />
@@ -210,7 +243,21 @@ export default function BandejaHistorico() {
       {error && <div style={{ ...card, color: '#fca5a5' }}>{error}</div>}
       {!datos && !error && <div style={{ color: '#64748b', padding: 24 }}>Cargando…</div>}
       {datos && datos.propuestas.length === 0 && <div style={{ ...card, color: '#94a3b8' }}>No hay propuestas en este estado.</div>}
-      {datos?.propuestas.map(p => <Tarjeta key={p.id} p={p} tipos={datos.tipos} onCambio={() => void cargar()} />)}
+      {datos && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+          <select value={categoria} onChange={e => setCategoria(e.target.value)} aria-label="Categoría"
+            style={{ background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '7px 8px', fontSize: 13, minWidth: 0 }}>
+            <option value="">Todas las categorías</option>
+            <option value="(sin)">Sin categoría</option>
+            <option value="(fuera)">Categoría que hoy no se exige</option>
+            {datos.tipos.filter(t => datos.propuestas.some(p => categoriaDe(p) === t.codigo)).map(t => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
+          </select>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, color: '#94a3b8' }}>
+            <input type="checkbox" checked={soloSinPersona} onChange={e => setSoloSinPersona(e.target.checked)} /> Sólo sin persona asociada
+          </label>
+        </div>
+      )}
+      {datos && filtrarHistorico(datos.propuestas, { categoria, soloSinPersona, activas: datos.tipos.map(t => t.codigo) }).map(p => <Tarjeta key={p.id} p={p} tipos={datos.tipos} onCambio={() => void cargar()} />)}
     </div>
   )
 }
