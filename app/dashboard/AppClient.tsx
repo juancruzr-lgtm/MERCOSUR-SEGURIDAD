@@ -14279,7 +14279,9 @@ const esGuardia = esRolGuardia(user.rol)
       // Administración la ve; quién puede resolver lo decide la base.
       ...(tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas')
         ? [{ id:'salidas_anticipadas', icon:'🚪', label:'Salidas anticipadas' }] : []),
-      { id:'novedades', icon:'📋', label:'Novedades' },
+      // «Novedades» (novedades operativas agrupadas por mes) salió del menú:
+      // no se usaba. La página sigue existiendo para los accesos desde el Panel
+      // y el Centro Operativo («Ver todas»). No es Novedades del Personal.
       // Novedades del Personal: gestión de novedades laborales por rango/cantidad.
       // Gateado por capacidad gestionar_personal (Administración/Gerencia).
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'novedades_personal', icon:'🧑‍💼', label:'Novedades del Personal' }] : []),
