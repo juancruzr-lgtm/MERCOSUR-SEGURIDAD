@@ -164,6 +164,60 @@ $fn$;
 revoke all on function public.legajo_puede_gestionar() from public, anon;
 grant execute on function public.legajo_puede_gestionar() to authenticated;
 
+-- ── Habilitación progresiva ───────────────────────────────────────────────────
+-- Cada módulo nuevo del legajo arranca CERRADO para el personal: lo usan
+-- Administración/Gerencia y las cuentas de prueba (usuarios.es_prueba) hasta
+-- que Gerencia lo abre. Así se despliega, se prueba con datos reales y recién
+-- después se habilita a los empleados.
+create table if not exists public.legajo_habilitacion (
+  modulo          text primary key,
+  empleados       boolean not null default false,
+  actualizado_por uuid references public.usuarios(id) on delete restrict,
+  actualizado_at  timestamptz not null default now()
+);
+insert into public.legajo_habilitacion (modulo) values ('datos_personales') on conflict (modulo) do nothing;
+alter table public.legajo_habilitacion enable row level security;
+revoke all on public.legajo_habilitacion from anon, authenticated;
+grant select on public.legajo_habilitacion to authenticated;
+drop policy if exists "Legajo habilitacion: lectura" on public.legajo_habilitacion;
+create policy "Legajo habilitacion: lectura" on public.legajo_habilitacion for select to authenticated using (true);
+
+create or replace function public.legajo_modulo_habilitado(p_modulo text)
+returns boolean language sql stable security definer set search_path = public, pg_catalog as $fn$
+  select public.legajo_puede_gestionar()
+      or exists (select 1 from public.usuarios u where u.auth_user_id = auth.uid() and u.estado = 'activo' and coalesce(u.es_prueba, false))
+      or coalesce((select h.empleados from public.legajo_habilitacion h where h.modulo = p_modulo), false)
+$fn$;
+revoke all on function public.legajo_modulo_habilitado(text) from public, anon;
+grant execute on function public.legajo_modulo_habilitado(text) to authenticated;
+
+create or replace function public.legajo_exigir_habilitado(p_modulo text)
+returns void language plpgsql stable security definer set search_path = public, pg_catalog as $fn$
+begin
+  if not public.legajo_modulo_habilitado(p_modulo) then
+    raise exception 'Esta sección del legajo todavía no está habilitada' using errcode = '42501';
+  end if;
+end;
+$fn$;
+revoke all on function public.legajo_exigir_habilitado(text) from public, anon, authenticated;
+
+-- Abrir o cerrar un módulo al personal: sólo Gerencia (puesto o delegación).
+create or replace function public.legajo_habilitar(p_modulo text, p_empleados boolean)
+returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
+begin
+  if not (exists (select 1 from public.usuarios u where u.auth_user_id = auth.uid() and u.estado = 'activo' and u.puesto_organizacional = 'gerencia')
+          or coalesce(public.tiene_delegacion_gerencia_actual(), false)) then
+    raise exception 'Sólo Gerencia habilita módulos del legajo' using errcode = '42501';
+  end if;
+  update public.legajo_habilitacion
+     set empleados = p_empleados, actualizado_por = public.legajo_usuario_actual(), actualizado_at = now()
+   where modulo = p_modulo;
+  if not found then raise exception 'Módulo inexistente'; end if;
+end;
+$fn$;
+revoke all on function public.legajo_habilitar(text, boolean) from public, anon;
+grant execute on function public.legajo_habilitar(text, boolean) to authenticated;
+
 drop policy if exists "Legajo campos: catalogo" on public.legajo_campos;
 create policy "Legajo campos: catalogo" on public.legajo_campos for select to authenticated using (true);
 
@@ -240,6 +294,7 @@ declare
 begin
   v_actor := public.legajo_usuario_actual();
   if v_actor is null then raise exception 'Sesión requerida' using errcode = '42501'; end if;
+  perform public.legajo_exigir_habilitado('datos_personales');
   v_gestiona := public.legajo_puede_gestionar();
   v_c := (select c from public.legajo_campos c where c.campo = p_campo);
   if v_c.campo is null then raise exception 'Campo inexistente'; end if;
@@ -306,6 +361,7 @@ begin
   v := (select c from public.legajo_cambios_datos c where c.id = p_cambio_id);
   if v.id is null or v_actor is null or v.empleado_id <> v_actor then raise exception 'Cambio inexistente' using errcode = '42501'; end if;
   if v.estado <> 'pendiente_confirmacion' then raise exception 'Este dato ya no está para confirmar'; end if;
+  perform public.legajo_exigir_habilitado('datos_personales');
   if p_decision = 'confirmar' then
     update public.legajo_cambios_datos set estado = 'pendiente' where id = v.id;
     return jsonb_build_object('estado', 'pendiente');
@@ -333,6 +389,7 @@ begin
   if not (v_gestiona or (v_actor is not null and v_actor = p_empleado_id)) then
     raise exception 'Los datos personales los consultan la persona, Administración y Gerencia' using errcode = '42501';
   end if;
+  perform public.legajo_exigir_habilitado('datos_personales');
   return jsonb_build_object(
     'empleado_id', p_empleado_id,
     'es_propio', v_actor = p_empleado_id,
