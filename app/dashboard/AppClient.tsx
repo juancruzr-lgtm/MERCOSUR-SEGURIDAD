@@ -136,6 +136,9 @@ import type { ClasificacionPatron, ResultadoCobertura } from '@/lib/cobertura-hi
 import { DETALLE_ESTADO_LOGICA, ETIQUETA_ESTADO_LOGICA, armarPropuestasObjetivo, clasificarLogicaObjetivo, clavePropuesta, contarExcluidos, mesAnteriorDe, planDeclaracion, resumenPlan } from '@/lib/logica-detectada'
 import type { EstadoLogica, PlanDeclaracion, PropuestaFranja } from '@/lib/logica-detectada'
 import ControlEstatuto from '@/components/estatuto/ControlEstatuto'
+import ControlCambiosDatos from '@/components/legajo/ControlCambiosDatos'
+import ControlDocumentacion from '@/components/documentacion/ControlDocumentacion'
+import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
@@ -14284,6 +14287,11 @@ const esGuardia = esRolGuardia(user.rol)
       // Estatuto Interno: versiones, aceptaciones y pendientes. Documentación
       // laboral → Administración/Gerencia (gestionar_personal), no Supervisión.
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'estatuto_interno', icon:'📜', label:'Estatuto Interno' }] : []),
+      // Legajo Digital: cambios de datos personales propuestos por el personal.
+      ...(gestionaDatosSensibles(user) ? [{ id:'legajo_cambios_datos', icon:'🪪', label:'Cambios de datos' }] : []),
+      // Datos personales y documentación: sólo puesto Administración o Gerencia (sin overrides).
+      // Documentación del legajo: revisar lo presentado y ver qué falta. No Supervisión.
+      ...(gestionaDatosSensibles(user) ? [{ id:'documentacion_legajo', icon:'🗂️', label:'Documentación' }] : []),
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
@@ -14433,6 +14441,8 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
               {page === 'afip_empleados' && tieneCapacidad(user, 'gestionar_personal') && <CorroboracionAfip />}
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
+              {page === 'legajo_cambios_datos' && gestionaDatosSensibles(user) && <ControlCambiosDatos />}
+              {page === 'documentacion_legajo' && gestionaDatosSensibles(user) && <ControlDocumentacion />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}
