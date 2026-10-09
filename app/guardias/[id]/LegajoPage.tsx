@@ -11,6 +11,8 @@ import SeccionPlanilla from './SeccionPlanilla'
 import FichaCumplimiento from '@/components/cumplimiento/FichaCumplimiento'
 import MiDesempeno from '@/components/desempeno/MiDesempeno'
 import EstatutoInterno from '@/components/estatuto/EstatutoInterno'
+import DatosPersonales from '@/components/legajo/DatosPersonales'
+import { gestionaDatosSensibles } from '@/lib/legajo'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -72,6 +74,7 @@ interface DatosLegajo {
 
 const SECCIONES = [
   { id: 'situacion', label: 'Situación actual' },
+  { id: 'datos', label: 'Datos personales' },
   { id: 'turnos', label: 'Turnos' },
   { id: 'planilla', label: 'Mi Planilla' },
   { id: 'cumplimiento', label: 'Cumplimiento operativo' },
@@ -516,8 +519,20 @@ export default function LegajoPage() {
               : <div style={S.placeholder}>La constancia del Estatuto Interno es documentación laboral: la consultan Administración y Gerencia.</div>
         )}
 
+        {/* Datos personales (Legajo Digital, Etapa 1). La persona los ve y propone
+            cambios; Administración/Gerencia valida. Supervisión no: la regla que
+            manda es la de la base (legajo_datos_de_empleado + RLS). */}
+        {seccion === 'datos' && (
+          usuarioId === null
+            ? <div style={S.placeholder}>Cargando…</div>
+            : usuarioId === empleadoId || gestionaDatosSensibles({ puesto_organizacional: puestoUsuario })
+              ? <DatosPersonales empleadoId={empleadoId} />
+              : <div style={S.placeholder}>Los datos personales los consultan la persona, Administración y Gerencia.</div>
+        )}
+
         {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla'
-          && seccion !== 'cumplimiento' && seccion !== 'desempeno' && seccion !== 'estatuto' && (
+          && seccion !== 'cumplimiento' && seccion !== 'desempeno' && seccion !== 'estatuto'
+          && seccion !== 'datos' && (
           <div style={S.placeholder}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
             <div>Esta sección está disponible en una próxima etapa.</div>
