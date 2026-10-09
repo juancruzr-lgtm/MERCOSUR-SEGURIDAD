@@ -4,6 +4,7 @@
 
 begin;
 
+drop function if exists public.documentacion_auditoria(integer);
 drop function if exists public.documentacion_alerta_vista(bigint);
 drop function if exists public.documentacion_mis_alertas();
 drop function if exists public.documentacion_alertas_generar();

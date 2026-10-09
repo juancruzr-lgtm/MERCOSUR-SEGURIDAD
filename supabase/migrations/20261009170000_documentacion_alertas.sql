@@ -325,6 +325,66 @@ $fn$;
 revoke all on function public.documentacion_alerta_vista(bigint) from public, anon;
 grant execute on function public.documentacion_alerta_vista(bigint) to authenticated;
 
+-- ============================================================================
+-- 7. AUDITORÍA PARA GERENCIA: accesos, intervenciones y cambios de datos
+-- ============================================================================
+-- Un jsonb con lo último (hasta 500 de cada cosa en los últimos p_dias). Sólo
+-- Gerencia (puesto o delegación). No muestra contenidos de documentos ni datos
+-- personales: quién, sobre quién, qué tipo y cuándo.
+
+create or replace function public.documentacion_auditoria(p_dias integer default 30)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_catalog
+as $fn$
+declare
+  v_desde timestamptz := now() - make_interval(days => greatest(1, least(coalesce(p_dias, 30), 365)));
+begin
+  if not public.documentacion_es_gerencia() then
+    raise exception 'La auditoría la consulta Gerencia' using errcode = '42501';
+  end if;
+  return jsonb_build_object(
+    'desde', v_desde,
+    'accesos', (
+      select coalesce(jsonb_agg(x.j order by x.at desc), '[]'::jsonb) from (
+        select jsonb_build_object('at', a.at, 'modo', a.modo, 'tipo', d.tipo,
+                 'quien', nullif(trim(coalesce(u.nombre,'') || ' ' || coalesce(u.apellido,'')), ''),
+                 'de', nullif(trim(coalesce(e.nombre,'') || ' ' || coalesce(e.apellido,'')), ''),
+                 'propio', a.usuario_id = a.empleado_id) j, a.at
+        from public.documentacion_accesos a
+        join public.documentacion_documentos d on d.id = a.documento_id
+        left join public.usuarios u on u.id = a.usuario_id
+        left join public.usuarios e on e.id = a.empleado_id
+        where a.at >= v_desde order by a.at desc limit 500) x),
+    'intervenciones', (
+      select coalesce(jsonb_agg(x.j order by x.at desc), '[]'::jsonb) from (
+        select jsonb_build_object('at', ev.at, 'evento', ev.evento, 'tipo', d.tipo,
+                 'quien', nullif(trim(coalesce(u.nombre,'') || ' ' || coalesce(u.apellido,'')), ''),
+                 'de', nullif(trim(coalesce(e.nombre,'') || ' ' || coalesce(e.apellido,'')), '')) j, ev.at
+        from public.documentacion_eventos ev
+        join public.documentacion_documentos d on d.id = ev.documento_id
+        left join public.usuarios u on u.id = ev.usuario_id
+        left join public.usuarios e on e.id = d.empleado_id
+        where ev.at >= v_desde and ev.evento <> 'preparado' order by ev.at desc limit 500) x),
+    'cambios_datos', (
+      select coalesce(jsonb_agg(x.j order by x.at desc), '[]'::jsonb) from (
+        select jsonb_build_object('at', coalesce(c.revisado_at, c.creado_at), 'campo', c.campo, 'origen', c.origen, 'estado', c.estado,
+                 'quien', nullif(trim(coalesce(r.nombre,'') || ' ' || coalesce(r.apellido,'')), ''),
+                 'de', nullif(trim(coalesce(e.nombre,'') || ' ' || coalesce(e.apellido,'')), '')) j,
+               coalesce(c.revisado_at, c.creado_at) at
+        from public.legajo_cambios_datos c
+        left join public.usuarios r on r.id = coalesce(c.revisado_por, c.creado_por)
+        left join public.usuarios e on e.id = c.empleado_id
+        where coalesce(c.revisado_at, c.creado_at) >= v_desde order by 2 desc limit 500) x)
+  );
+end;
+$fn$;
+
+revoke all on function public.documentacion_auditoria(integer) from public, anon;
+grant execute on function public.documentacion_auditoria(integer) to authenticated;
+
 notify pgrst, 'reload schema';
 
 commit;
