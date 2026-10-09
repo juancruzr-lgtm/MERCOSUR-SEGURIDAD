@@ -23,6 +23,7 @@ drop function if exists public.documentacion_confirmar(uuid);
 drop function if exists public.documentacion_registrar_verificacion(uuid, text, text, integer);
 drop function if exists public.documentacion_preparar(uuid, text, date, date, text, jsonb);
 
+delete from public.legajo_habilitacion where modulo = 'documentacion';
 drop table if exists public.documentacion_situaciones;
 drop table if exists public.documentacion_accesos;
 drop table if exists public.documentacion_constancias;

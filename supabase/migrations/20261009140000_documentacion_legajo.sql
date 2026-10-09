@@ -434,6 +434,11 @@ create policy "Documentacion: situaciones"
   using (exists (select 1 from public.documentacion_tipos t where t.codigo = tipo)
          and (public.documentacion_puede_gestionar() or empleado_id = public.rondas_usuario_actual_id()));
 
+-- Habilitación progresiva (ver legajo_habilitacion, Etapa 1): el módulo
+-- arranca cerrado para el personal; Administración, Gerencia y cuentas de
+-- prueba lo usan igual.
+insert into public.legajo_habilitacion (modulo) values ('documentacion') on conflict (modulo) do nothing;
+
 -- ============================================================================
 -- 6. STORAGE
 -- ============================================================================
@@ -673,6 +678,7 @@ begin
     if not v_tipo.sube_vigilador then
       raise exception 'Este documento lo carga Administración' using errcode = '42501';
     end if;
+    perform public.legajo_exigir_habilitado('documentacion');
     v_origen := 'vigilador';
   else
     raise exception 'Sólo podés cargar tu propia documentación' using errcode = '42501';
@@ -1014,6 +1020,7 @@ begin
   if v_doc.estado <> 'pendiente_aceptacion' then
     raise exception 'Este documento ya no está para responder';
   end if;
+  perform public.legajo_exigir_habilitado('documentacion');
   v_tipo := (select t from public.documentacion_tipos t where t.codigo = v_doc.tipo);
   if v_comentario is not null and char_length(v_comentario) > 500 then
     raise exception 'El comentario es demasiado largo (máximo 500 caracteres)';
@@ -1105,6 +1112,7 @@ begin
      or not public.documentacion_puede_ver(v_doc.empleado_id, v_doc.sensibilidad, v_doc.estado) then
     raise exception 'Archivo inexistente' using errcode = '42501';
   end if;
+  perform public.legajo_exigir_habilitado('documentacion');
   if p_modo = 'descargar' and not public.documentacion_puede_gestionar() then
     raise exception 'La descarga es sólo para Administración y Gerencia' using errcode = '42501';
   end if;
@@ -1243,6 +1251,7 @@ begin
     raise exception 'La documentación del legajo la consultan la persona, Administración y Gerencia'
       using errcode = '42501';
   end if;
+  perform public.legajo_exigir_habilitado('documentacion');
 
   return jsonb_build_object(
     'empleado_id', p_empleado_id,
