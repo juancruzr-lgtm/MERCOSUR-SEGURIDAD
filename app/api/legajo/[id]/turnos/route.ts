@@ -94,11 +94,11 @@ export async function GET(
   }
 
   const { data: solicitante } = await admin.client
-    .from('usuarios').select('id, rol').eq('auth_user_id', authData.user.id).single()
+    .from('usuarios').select('id, rol, puesto_organizacional, acceso_admin_pleno').eq('auth_user_id', authData.user.id).single()
   if (!solicitante) return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 403 })
 
   const empleadoId = params.id
-  if (!puedeVerLegajo({ id: solicitante.id, rol: solicitante.rol }, empleadoId)) {
+  if (!puedeVerLegajo(solicitante, empleadoId)) {
     return NextResponse.json({ error: 'Sin acceso a este legajo' }, { status: 403 })
   }
 

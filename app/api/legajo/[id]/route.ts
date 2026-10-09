@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
-import { puedeVerLegajo } from '@/lib/legajo'
+import { gestionaLegajos, puedeVerLegajo } from '@/lib/legajo'
 import { tieneCapacidad } from '@/lib/capacidades'
 import { rangoTurno, esTurnoNocturno } from '@/lib/turnos'
 
@@ -41,7 +41,7 @@ export async function GET(
 
   const { data: solicitante } = await admin.client
     .from('usuarios')
-    .select('id, rol, puesto_organizacional')
+    .select('id, rol, puesto_organizacional, acceso_admin_pleno')
     .eq('auth_user_id', authData.user.id)
     .single()
 
@@ -49,7 +49,7 @@ export async function GET(
 
   const empleadoId = params.id
 
-  if (!puedeVerLegajo({ id: solicitante.id, rol: solicitante.rol }, empleadoId)) {
+  if (!puedeVerLegajo(solicitante, empleadoId)) {
     return NextResponse.json({ error: 'Sin acceso a este legajo' }, { status: 403 })
   }
 
@@ -197,8 +197,8 @@ export async function GET(
       cuenta_bancaria: (tieneCapacidad(solicitante, 'ver_finanzas') || solicitante.id === empleadoId)
         ? (empleado.cuenta_bancaria ?? null)
         : undefined,
-      dni: solicitante.rol === 'admin' ? empleado.dni : undefined,
-      email: solicitante.rol === 'admin' ? empleado.email : undefined,
+      dni: gestionaLegajos(solicitante) ? empleado.dni : undefined,
+      email: gestionaLegajos(solicitante) ? empleado.email : undefined,
       rol: empleado.rol,
       estado: empleado.estado,
       foto_url: empleado.foto_url,
