@@ -30,6 +30,8 @@ import {
   abrirArchivo, anularDocumento, cargarDocumentacion, marcarSituacion, responderDocumento, revisarDocumento,
   subirDocumento,
 } from '@/lib/documentacion-datos'
+import { ETIQUETA_FUENTE, cargarIndicios } from '@/lib/legajo-historico'
+import type { Indicio } from '@/lib/legajo-historico'
 
 // ── Estilos ──────────────────────────────────────────────────────────────────
 
@@ -465,11 +467,12 @@ function MarcaAdministracion({ tipo, s, empleadoId, onCambio }: {
 
 // ── Tarjeta de un tipo ───────────────────────────────────────────────────────
 
-function TarjetaTipo({ tipo, s, datos, nombrePersona, onCambio }: {
+function TarjetaTipo({ tipo, s, datos, nombrePersona, indicios = [], onCambio }: {
   tipo: TipoDocumento
   s: SituacionTipo
   datos: DocumentacionEmpleado
   nombrePersona?: string
+  indicios?: Indicio[]
   onCambio: () => void
 }) {
   const [subiendo, setSubiendo] = useState(false)
@@ -516,6 +519,17 @@ function TarjetaTipo({ tipo, s, datos, nombrePersona, onCambio }: {
               {datos.puede_gestionar ? 'Falta cargar el documento.' : 'Todavía no está el documento en tu legajo.'}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Planillas viejas: sólo indicio, nunca validan nada. */}
+      {indicios.length > 0 && s.vigentes.length === 0 && (
+        <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(148,163,184,.07)', border: '1px dashed #334155' }}>
+          {indicios.map((i, k) => (
+            <div key={k} style={{ fontSize: 12.5, color: '#94a3b8', lineHeight: 1.45 }}>
+              Según la {ETIQUETA_FUENTE[i.fuente] ?? i.fuente}: {i.valor ?? '—'}{i.fecha ? ` (${fechaCorta(i.fecha)})` : ''} · <i>pendiente de corroboración</i>
+            </div>
+          ))}
         </div>
       )}
 
@@ -595,10 +609,11 @@ export default function DocumentacionLegajo({ empleadoId, nombrePersona }: {
   const [datos, setDatos] = useState<DocumentacionEmpleado | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(true)
+  const [indicios, setIndicios] = useState<Indicio[]>([])
 
   const cargar = useCallback(async () => {
-    const r = await cargarDocumentacion(empleadoId)
-    setDatos(r.datos); setError(r.error); setCargando(false)
+    const [r, ind] = await Promise.all([cargarDocumentacion(empleadoId), cargarIndicios(empleadoId)])
+    setDatos(r.datos); setError(r.error); setIndicios(ind); setCargando(false)
   }, [empleadoId])
 
   useEffect(() => { void cargar() }, [cargar])
@@ -667,12 +682,14 @@ export default function DocumentacionLegajo({ empleadoId, nombrePersona }: {
 
       <div style={titulo}>Obligatorios</div>
       {obligatorios.map(({ tipo, s }) => (
-        <TarjetaTipo key={tipo.codigo} tipo={tipo} s={s} datos={datos} nombrePersona={nombrePersona} onCambio={() => void cargar()} />
+        <TarjetaTipo key={tipo.codigo} tipo={tipo} s={s} datos={datos} nombrePersona={nombrePersona}
+          indicios={indicios.filter(i => i.tipo === tipo.codigo)} onCambio={() => void cargar()} />
       ))}
 
       <div style={titulo}>Si corresponde</div>
       {otros.map(({ tipo, s }) => (
-        <TarjetaTipo key={tipo.codigo} tipo={tipo} s={s} datos={datos} nombrePersona={nombrePersona} onCambio={() => void cargar()} />
+        <TarjetaTipo key={tipo.codigo} tipo={tipo} s={s} datos={datos} nombrePersona={nombrePersona}
+          indicios={indicios.filter(i => i.tipo === tipo.codigo)} onCambio={() => void cargar()} />
       ))}
 
       {datos.puede_gestionar && datos.accesos && <Accesos datos={datos} />}

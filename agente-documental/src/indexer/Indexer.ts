@@ -2,6 +2,7 @@ import * as crypto from 'crypto'
 import { AgentConfig, DocumentRecord, FileInfo, ScanSummary } from '../core/types'
 import { IRepository } from '../repository/IRepository'
 import { Logger } from '../logger/Logger'
+import { OpcionesReconciliacion, PlanReconciliacion, planReconciliacion } from './Reconciliacion'
 
 export class Indexer {
   constructor(
@@ -61,23 +62,36 @@ export class Indexer {
   }
 
   /**
-   * Compara los archivos encontrados en disco contra los conocidos en la base.
-   * Marca como no disponibles los que desaparecieron.
+   * Compara los archivos encontrados en disco contra los conocidos en la base
+   * y marca como no disponibles los que desaparecieron, con las protecciones
+   * de planReconciliacion (carpetas ilegibles, papelera, umbral).
    */
   async reconcileDeleted(
     foundPaths: Set<string>,
     summary: Pick<ScanSummary, 'marcadosNoDisponibles'>,
-  ): Promise<void> {
+    opciones: Omit<OpcionesReconciliacion, 'umbralFaltantes' | 'forzar'>,
+  ): Promise<PlanReconciliacion> {
     const knownPaths = await this.repo.findAllRelativePathsByAgent(this.config.agenteId)
     this.logger.debug(`reconcileDeleted: ${knownPaths.length} rutas conocidas recuperadas de la base`)
 
-    for (const knownPath of knownPaths) {
-      if (!foundPaths.has(knownPath)) {
-        await this.repo.markUnavailable(this.config.agenteId, knownPath)
-        this.logger.eliminado(knownPath)
-        summary.marcadosNoDisponibles++
-      }
+    const plan = planReconciliacion(knownPaths, foundPaths, {
+      ...opciones,
+      umbralFaltantes: this.config.umbralFaltantes,
+      forzar: this.config.forzarReconciliacion,
+    })
+    if (plan.abortada) {
+      this.logger.warn(`Reconciliación NO aplicada: ${plan.abortada}`)
+      return plan
     }
+    if (plan.protegidas) this.logger.warn(`${plan.protegidas} archivo(s) no se marcaron eliminados porque su carpeta o el archivo no se pudieron leer`)
+    if (plan.excluidas) this.logger.info(`${plan.excluidas} ruta(s) en carpetas excluidas (papelera) quedan como estaban`)
+
+    for (const knownPath of plan.marcar) {
+      await this.repo.markUnavailable(this.config.agenteId, knownPath)
+      this.logger.eliminado(knownPath)
+      summary.marcadosNoDisponibles++
+    }
+    return plan
   }
 
   private buildNewRecord(info: FileInfo): DocumentRecord {

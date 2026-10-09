@@ -59,5 +59,11 @@ export function loadConfig(): AgentConfig {
     maxSizeMb: isNaN(maxSizeMb) ? 50 : maxSizeMb,
     ignoredDirectories,
     logLevel,
+    umbralFaltantes: umbralValido(parseFloat(optionalEnv('DOCUMENT_RECONCILE_MAX_MISSING', '0.2'))),
+    forzarReconciliacion: process.argv.includes('--forzar-reconciliacion'),
   }
+}
+
+function umbralValido(n: number): number {
+  return Number.isFinite(n) && n > 0 && n <= 1 ? n : 0.2
 }

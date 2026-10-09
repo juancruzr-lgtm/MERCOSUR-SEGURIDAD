@@ -87,7 +87,8 @@ export interface ScanSummary {
 
 // ─── Modo de ejecución ───────────────────────────────────────
 
-export type AgentMode = 'scan' | 'watch' | 'test-connection'
+// simular: escanea y compara contra la base SIN escribir nada.
+export type AgentMode = 'scan' | 'watch' | 'test-connection' | 'simular'
 
 // ─── Configuración del agente ────────────────────────────────
 
@@ -101,4 +102,8 @@ export interface AgentConfig {
   maxSizeMb: number
   ignoredDirectories: string[]
   logLevel: 'debug' | 'info' | 'warn' | 'error'
+  /** Proporción de faltantes (0..1) por encima de la cual no se marca nada eliminado. */
+  umbralFaltantes: number
+  /** --forzar-reconciliacion: marcar aunque se supere el umbral. */
+  forzarReconciliacion: boolean
 }

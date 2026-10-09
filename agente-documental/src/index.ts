@@ -10,11 +10,11 @@ function parseMode(): AgentMode {
     ? modeArg.split('=')[1]
     : process.argv[process.argv.indexOf('--mode') + 1]
 
-  if (value === 'watch' || value === 'scan' || value === 'test-connection') {
+  if (value === 'watch' || value === 'scan' || value === 'test-connection' || value === 'simular') {
     return value
   }
 
-  console.error(`Modo desconocido: ${value}. Usar: scan | watch | test-connection`)
+  console.error(`Modo desconocido: ${value}. Usar: simular | scan | watch | test-connection`)
   process.exit(1)
 }
 
@@ -36,6 +36,9 @@ async function main(): Promise<void> {
     switch (mode) {
       case 'test-connection':
         await agent.testConnection()
+        break
+      case 'simular':
+        await agent.simular()
         break
       case 'scan':
         await agent.scan()
