@@ -148,10 +148,18 @@ revoke all on public.legajo_cambios_datos from anon, authenticated;
 revoke all on public.legajo_campos from anon, authenticated;
 grant select on public.legajo_datos_personales, public.legajo_cambios_datos, public.legajo_campos to authenticated;
 
+-- Datos personales sensibles: SÓLO puesto Administración o Gerencia (o una
+-- delegación de Gerencia vigente). A propósito NO se usa
+-- puede_gestionar_personal_actual(): incluye el acceso_admin_pleno (un jefe de
+-- supervisores lo tiene) y el rol admin sin puesto. Ni Supervisión ni
+-- Dirección Operativa ven estos datos, con o sin overrides.
 create or replace function public.legajo_puede_gestionar()
 returns boolean language sql stable security definer set search_path = public, pg_catalog as $fn$
   select auth.uid() is not null
-     and (public.puede_gestionar_personal_actual() or public.puede_acceder_gerencia_actual())
+     and (exists (select 1 from public.usuarios u
+                  where u.auth_user_id = auth.uid() and u.estado = 'activo'
+                    and u.puesto_organizacional in ('administracion','gerencia'))
+          or coalesce(public.tiene_delegacion_gerencia_actual(), false))
 $fn$;
 revoke all on function public.legajo_puede_gestionar() from public, anon;
 grant execute on function public.legajo_puede_gestionar() to authenticated;

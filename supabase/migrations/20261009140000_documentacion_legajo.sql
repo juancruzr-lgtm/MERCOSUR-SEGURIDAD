@@ -350,7 +350,11 @@ stable
 security definer
 set search_path = public, pg_catalog
 as $fn$
-  select auth.uid() is not null and coalesce(public.puede_acceder_gerencia_actual(), false)
+  -- Puesto Gerencia o delegación vigente. Sin el comodín "rol admin sin puesto".
+  select auth.uid() is not null
+     and (exists (select 1 from public.usuarios u
+                  where u.auth_user_id = auth.uid() and u.estado = 'activo' and u.puesto_organizacional = 'gerencia')
+          or coalesce(public.tiene_delegacion_gerencia_actual(), false))
 $fn$;
 
 create or replace function public.documentacion_puede_gestionar()
@@ -360,9 +364,10 @@ stable
 security definer
 set search_path = public, pg_catalog
 as $fn$
-  select auth.uid() is not null
-     and (coalesce(public.puede_gestionar_personal_actual(), false)
-          or coalesce(public.puede_acceder_gerencia_actual(), false))
+  -- La misma regla que los datos personales (legajo_puede_gestionar): sólo
+  -- puesto Administración o Gerencia, o delegación de Gerencia. Sin overrides
+  -- (acceso_admin_pleno): Supervisión y Dirección Operativa no acceden.
+  select public.legajo_puede_gestionar()
 $fn$;
 
 -- La regla única de lectura de un documento.
