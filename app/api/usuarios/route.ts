@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
 import { tieneCapacidad, esGerenciaReal } from '@/lib/capacidades'
 import { afipConfigDesdeEnv } from '@/lib/afip/config'
-import { corroborarEmpleado } from '@/lib/afip/corroborar'
+import { corroborarEmpleado, esperarConTope } from '@/lib/afip/corroborar'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -16,11 +16,7 @@ export const maxDuration = 30
 async function corroborarAlAlta(admin: Parameters<typeof corroborarEmpleado>[0], usuarioId: string, solicitadoPor: string) {
   const cfg = afipConfigDesdeEnv()
   if (cfg.error || !cfg.config) return
-  const tope = new Promise<void>(r => setTimeout(r, 8000))
-  await Promise.race([
-    corroborarEmpleado(admin, cfg.config, usuarioId, { tipo: 'alta', solicitadoPor }).catch(() => undefined),
-    tope,
-  ])
+  await esperarConTope(corroborarEmpleado(admin, cfg.config, usuarioId, { tipo: 'alta', solicitadoPor }), 8000)
 }
 
 // Alta y edición del empleado pasan por acá, con rol validado en servidor.

@@ -9,7 +9,8 @@
     "watch": "ts-node src/index.ts --mode watch",
     "test-connection": "ts-node src/index.ts --mode test-connection",
     "visor": "ts-node src/visor/index.ts",
-    "visor:piloto": "ts-node src/visor/piloto.ts"
+    "visor:piloto": "ts-node src/visor/piloto.ts",
+    "visor:verificar": "ts-node src/visor/verificar.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.43.1",

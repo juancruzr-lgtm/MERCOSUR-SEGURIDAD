@@ -381,3 +381,30 @@ export function validarRangos(rangos: { desde: number; hasta: number; tipo: stri
   }
   return null
 }
+
+/**
+ * Qué hacer mientras se espera al lector de SRV02. Nunca se espera para
+ * siempre: si nadie toma el pedido en 1 minuto, el lector no está andando;
+ * si lo tomó pero no terminó en 2, algo falló. Las consultas se espacian
+ * (2 s al principio, después 5 s): a lo sumo unas 30 por pedido.
+ */
+export const ESPERA_SIN_LECTOR_MS = 60_000
+export const ESPERA_LECTURA_MS = 120_000
+
+export type DecisionEspera = { tipo: 'seguir'; en: number } | { tipo: 'lista' } | { tipo: 'error'; texto: string }
+
+export function decidirEspera(estado: EstadoVista | null, error: string | null, transcurrido: number): DecisionEspera {
+  if (estado === 'lista') return { tipo: 'lista' }
+  if (estado === 'error') return { tipo: 'error', texto: error || 'No se pudo leer el archivo en SRV02' }
+  if (estado === 'vencida' || estado === 'eliminada') {
+    return { tipo: 'error', texto: error && !/no respondió/.test(error) ? error : 'El lector de SRV02 no está funcionando en este momento. Probá más tarde.' }
+  }
+  if (estado === 'pendiente' && transcurrido > ESPERA_SIN_LECTOR_MS) {
+    return { tipo: 'error', texto: 'El lector de SRV02 no está funcionando en este momento: el archivo no se pudo traer. Probá más tarde.' }
+  }
+  if (estado === 'tomada' && transcurrido > ESPERA_LECTURA_MS) {
+    return { tipo: 'error', texto: 'SRV02 tomó el pedido pero no terminó de prepararlo. Probá de nuevo en unos minutos.' }
+  }
+  if (!estado) return { tipo: 'error', texto: error || 'No se pudo consultar el pedido' }
+  return { tipo: 'seguir', en: transcurrido < 10_000 ? 2000 : 5000 }
+}

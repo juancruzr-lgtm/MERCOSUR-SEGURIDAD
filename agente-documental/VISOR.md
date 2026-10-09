@@ -25,6 +25,9 @@ No es el agente de indexación: **no escanea, no observa carpetas y no escribe e
    el de la copia son controles separados. Las borran este lector (cada minuto)
    y la app (en cada apertura).
 
+> **Para activarlo en SRV02, seguir [ACTIVACION-SRV02.md](ACTIVACION-SRV02.md)**
+> (paso a paso: verificar con `npm run visor:verificar`, piloto, auditoría y cómo detenerlo).
+
 ## Instalación en SRV02
 
 En la carpeta del agente, donde ya está su `.env`, agregar:
