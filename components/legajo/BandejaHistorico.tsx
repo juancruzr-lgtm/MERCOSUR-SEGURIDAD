@@ -116,7 +116,7 @@ function Aceptar({ p, tipos, onListo, onCancelar }: { p: PropuestaHistorica; tip
         </button>
         <button type="button" style={boton('sec')} onClick={onCancelar}>Cancelar</button>
       </div>
-      <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Aceptar no importa el archivo: queda listo para la importación, que se hace aparte y con autorización.</div>
+      <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Aceptar vincula el archivo de MEGA al legajo de la persona, sin copiarlo. No lo da por válido: queda como referencia histórica.</div>
     </div>
   )
 }
@@ -180,10 +180,14 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
 
 export default function BandejaHistorico() {
   const [estado, setEstado] = useState<EstadoPropuesta>('pendiente')
+  const [texto, setTexto] = useState('')
+  const [buscar, setBuscar] = useState('')
   const [datos, setDatos] = useState<Bandeja | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const cargar = useCallback(async () => { const r = await cargarBandeja(estado); setDatos(r.datos); setError(r.error) }, [estado])
+  const cargar = useCallback(async () => { const r = await cargarBandeja(estado, buscar); setDatos(r.datos); setError(r.error) }, [estado, buscar])
   useEffect(() => { void cargar() }, [cargar])
+  useEffect(() => { const t = setTimeout(() => setBuscar(texto), 350); return () => clearTimeout(t) }, [texto])
+  const buscando = buscar.trim().length >= 3
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', minWidth: 0 }}>
@@ -192,7 +196,10 @@ export default function BandejaHistorico() {
         Archivos de MEGA ya clasificados, con la persona y el tipo que sugiere el sistema. Nada entra al legajo sin que alguien lo acepte acá,
         y la copia se hace aparte, verificando que el archivo no haya cambiado. Abrí el archivo en MEGA con la ruta de cada tarjeta.
       </div>
-      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #1e2d42', marginBottom: 12, overflowX: 'auto' }}>
+      <input value={texto} onChange={e => setTexto(e.target.value)} placeholder="Buscar por apellido, legajo o nombre del archivo (en todos los estados)"
+        style={{ width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '10px 12px', fontSize: 14, marginBottom: 10 }} />
+      {buscando && <div style={{ fontSize: 13, color: '#94a3b8', margin: '0 2px 10px' }}>{datos?.propuestas.length ?? 0} resultado(s) para “{buscar.trim()}”</div>}
+      <div style={{ display: buscando ? 'none' : 'flex', gap: 4, borderBottom: '1px solid #1e2d42', marginBottom: 12, overflowX: 'auto' }}>
         {PESTAÑAS.map(([k, t]) => (
           <button key={k} type="button" onClick={() => setEstado(k)} style={{
             background: 'none', border: 'none', borderBottom: estado === k ? '2px solid #f59e0b' : '2px solid transparent',
