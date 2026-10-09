@@ -25,10 +25,16 @@ export interface PropuestaHistorica {
   senales: { revisar?: string[]; tipos?: string[]; tipos_por_pagina?: unknown } & Record<string, unknown>
   estado: EstadoPropuesta
   motivo_conflicto: string | null
+  /** DNI leído del documento o de su ruta (normalizado). */
+  dni_sugerido?: string | null
   sugerido: { id: string; nombre: string; apellido: string; legajo: string | null; estado: string } | null
   empleado_id: string | null
   tipo: string | null
   motivo: string | null
+  revisado_at?: string | null
+  documento_id?: string | null
+  /** Estado del documento del legajo, si ya se copió (importada). */
+  documento_estado?: string | null
 }
 
 export interface TipoBandeja {
@@ -42,6 +48,8 @@ export interface TipoBandeja {
 
 export interface Bandeja {
   conteo: Partial<Record<EstadoPropuesta, number>>
+  /** Total del filtro (estado o búsqueda), para paginar. */
+  total?: number
   tipos: TipoBandeja[]
   propuestas: PropuestaHistorica[]
 }
@@ -65,11 +73,13 @@ export const ETIQUETA_FUENTE: Record<string, string> = {
 
 const mensaje = (e: { message?: string } | null, d: string) => (e?.message ?? '').trim() || d
 
-/** Con texto (≥ 3 letras) busca por archivo o persona en todos los estados. */
-export async function cargarBandeja(estado: EstadoPropuesta, texto = ''): Promise<{ datos: Bandeja | null; error: string | null }> {
+export const TAMAÑO_PAGINA_HISTORICO = 200
+
+/** Con texto (≥ 3 letras) busca por archivo, persona, legajo o DNI en todos los estados. */
+export async function cargarBandeja(estado: EstadoPropuesta, texto = '', desde = 0): Promise<{ datos: Bandeja | null; error: string | null }> {
   const buscando = texto.trim().length >= 3
   const { data, error } = await supabase.rpc('legajo_historico_bandeja', {
-    p_estado: buscando ? null : estado, p_limite: 200, p_texto: buscando ? texto.trim() : null,
+    p_estado: buscando ? null : estado, p_limite: TAMAÑO_PAGINA_HISTORICO, p_texto: buscando ? texto.trim() : null, p_desde: desde,
   })
   if (error) return { datos: null, error: mensaje(error, 'No se pudo cargar la bandeja') }
   return { datos: data as Bandeja, error: null }
@@ -142,18 +152,136 @@ export async function cargarIndicios(empleadoId: string): Promise<Indicio[]> {
  * '' = todas · '(sin)' = sin categoría · '(fuera)' = categoría que hoy no está en el
  * catálogo vigente (hay que elegir otra o descartar) · código = esa categoría.
  */
-export type FiltroHistorico = { categoria?: string; soloSinPersona?: boolean; activas?: string[] }
+export type FiltroHistorico = {
+  categoria?: string; soloSinPersona?: boolean; activas?: string[]
+  nivel?: NivelIdentificacion | ''; soloConflictos?: boolean; estadoVisual?: EstadoVisual | ''
+}
 
 export const categoriaDe = (p: Pick<PropuestaHistorica, 'tipo' | 'tipo_sugerido'>) => p.tipo ?? p.tipo_sugerido ?? null
 export const tienePersona = (p: Pick<PropuestaHistorica, 'empleado_id' | 'sugerido'>) => !!(p.empleado_id ?? p.sugerido)
 
-export function filtrarHistorico<T extends Pick<PropuestaHistorica, 'tipo' | 'tipo_sugerido' | 'empleado_id' | 'sugerido'>>(lista: T[], f: FiltroHistorico): T[] {
+type ParaFiltrar = Pick<PropuestaHistorica, 'tipo' | 'tipo_sugerido' | 'empleado_id' | 'sugerido'>
+  & Partial<Pick<PropuestaHistorica, 'estado' | 'senales' | 'dni_sugerido' | 'documento_estado'>>
+
+export function filtrarHistorico<T extends ParaFiltrar>(lista: T[], f: FiltroHistorico): T[] {
   return lista.filter(p =>
     (!f.categoria
       || (f.categoria === '(sin)' ? categoriaDe(p) === null
         : f.categoria === '(fuera)' ? categoriaDe(p) !== null && !(f.activas ?? []).includes(categoriaDe(p) as string)
         : categoriaDe(p) === f.categoria))
-    && (!f.soloSinPersona || !tienePersona(p)))
+    && (!f.soloSinPersona || !tienePersona(p))
+    && (!f.soloConflictos || p.estado === 'conflicto')
+    && (!f.nivel || nivelIdentificacion(p) === f.nivel)
+    && (!f.estadoVisual || (!!p.estado && estadoVisual({ ...p, estado: p.estado }).clave === f.estadoVisual)))
+}
+
+// ── Nivel de identificación y estado visual ─────────────────────────────────
+
+export type NivelIdentificacion = 'inequivoca' | 'probable' | 'dudosa' | 'sin_identificar'
+
+export const NIVELES_IDENTIFICACION: [NivelIdentificacion, string][] = [
+  ['inequivoca', 'Inequívoca'], ['probable', 'Probable'], ['dudosa', 'Dudosa'], ['sin_identificar', 'Sin identificar'],
+]
+
+/**
+ * Qué tan verificable es la persona propuesta. Las cargadas desde el índice
+ * traen el nivel en las señales; las de la carga MEGA se asociaron sólo por un
+ * DNI que figura en UNA persona (inequívoca); con conflicto, el DNI no alcanzó.
+ */
+export function nivelIdentificacion(p: Partial<Pick<PropuestaHistorica, 'senales' | 'sugerido' | 'empleado_id' | 'dni_sugerido' | 'estado'>>): NivelIdentificacion {
+  const n = p.senales?.nivel
+  if (n === 'inequivoca' || n === 'probable' || n === 'dudosa' || n === 'sin_identificar') return n
+  if (p.sugerido) return 'inequivoca'
+  if (p.estado === 'conflicto' && p.dni_sugerido) return 'dudosa'
+  return 'sin_identificar'
+}
+
+export type EstadoVisual =
+  | 'localizado' | 'identificacion_propuesta' | 'asociacion_confirmada' | 'pendiente_validacion'
+  | 'documento_validado' | 'conflicto' | 'descartado' | 'separado'
+
+export const ESTADOS_VISUALES: [EstadoVisual, string][] = [
+  ['localizado', 'Localizado'], ['identificacion_propuesta', 'Identificación propuesta'],
+  ['asociacion_confirmada', 'Asociación confirmada'], ['pendiente_validacion', 'Pendiente de validación documental'],
+  ['documento_validado', 'Documento validado'], ['conflicto', 'Conflicto'], ['descartado', 'Descartado'],
+]
+
+/**
+ * Los 7 estados que ve Administración, armados con los estados de la base
+ * (propuesta + documento del legajo). Sólo «Documento validado» viene de una
+ * revisión en Documentación; nada anterior lo vuelve válido.
+ */
+export function estadoVisual(p: Pick<PropuestaHistorica, 'estado' | 'empleado_id' | 'sugerido'> & { documento_estado?: string | null }): { clave: EstadoVisual; texto: string; color: string } {
+  switch (p.estado) {
+    case 'pendiente': return tienePersona(p)
+      ? { clave: 'identificacion_propuesta', texto: 'Identificación propuesta · falta confirmar', color: '#93c5fd' }
+      : { clave: 'localizado', texto: 'Localizado en MEGA · sin persona', color: '#94a3b8' }
+    case 'conflicto': return { clave: 'conflicto', texto: 'Conflicto · sin persona asociada', color: '#fbbf24' }
+    case 'aceptada': return { clave: 'asociacion_confirmada', texto: 'Asociación confirmada · referencia sin validar', color: '#86efac' }
+    case 'importada': return p.documento_estado === 'aprobado' || p.documento_estado === 'aceptado'
+      ? { clave: 'documento_validado', texto: 'Documento validado en Documentación', color: '#22c55e' }
+      : { clave: 'pendiente_validacion', texto: 'Copiado al legajo · pendiente de validación documental', color: '#86efac' }
+    case 'descartada': return { clave: 'descartado', texto: 'Descartado', color: '#94a3b8' }
+    case 'separada': return { clave: 'separado', texto: 'Separado en partes (se revisa cada parte)', color: '#94a3b8' }
+  }
+}
+
+// ── Confirmación en lote ────────────────────────────────────────────────────
+
+/**
+ * Sólo entran al lote las propuestas que no necesitan ningún dato de una
+ * persona: identificación inequívoca, categoría vigente con confianza alta,
+ * sin fecha obligatoria, sin vencimiento escrito ni detalle exigido, sin
+ * señales de revisión y con el archivo en el índice. Los conflictos nunca.
+ * Confirmar asocia; no valida el documento.
+ */
+export function motivoFueraDeLote(p: PropuestaHistorica, tipos: TipoBandeja[]): string | null {
+  if (p.estado !== 'pendiente') return p.estado === 'conflicto' ? 'tiene conflicto' : 'ya resuelta'
+  if (p.motivo_conflicto) return 'tiene conflicto'
+  if (!p.sugerido) return 'sin persona'
+  if (nivelIdentificacion(p) !== 'inequivoca') return 'identificación no inequívoca'
+  if (!p.indexado) return 'no está en el índice'
+  if (p.confianza !== 'alta') return `categoría con confianza ${p.confianza}`
+  const t = tipos.find(x => x.codigo === p.tipo_sugerido)
+  if (!t) return p.tipo_sugerido ? 'categoría que hoy no se exige' : 'sin categoría'
+  if (t.campo_fecha === 'obligatoria') return 'pide fecha'
+  if (t.campo_vencimiento === 'declarado') return 'pide vencimiento'
+  if (t.etiqueta_detalle && t.multiple) return `pide ${t.etiqueta_detalle.toLowerCase()}`
+  if ((p.senales?.revisar ?? []).length) return 'tiene señales para revisar'
+  return null
+}
+
+export const MOTIVO_LOTE = 'Confirmación en lote: identificación inequívoca y categoría sugerida'
+
+/** Una por una, con el mismo control de la base que la confirmación manual. */
+export async function confirmarEnLote(lista: PropuestaHistorica[], alAvanzar?: (hechas: number) => void): Promise<{ ok: string[]; errores: { id: string; error: string }[] }> {
+  const ok: string[] = [], errores: { id: string; error: string }[] = []
+  for (const p of lista) {
+    const e = await resolverPropuesta(p.id, 'aceptar', { empleadoId: p.sugerido?.id, tipo: p.tipo_sugerido, motivo: MOTIVO_LOTE })
+    if (e) errores.push({ id: p.id, error: e }); else ok.push(p.id)
+    alAvanzar?.(ok.length + errores.length)
+  }
+  return { ok, errores }
+}
+
+// ── Pista para la matriz documental ─────────────────────────────────────────
+
+export type NivelPista = 'localizada' | 'asociacion_pendiente' | 'confirmada'
+export interface PistaHistorica { empleado_id: string; tipo: string; nivel: NivelPista; referencias: number }
+
+export const TEXTO_PISTA: Record<NivelPista, { corto: string; texto: string }> = {
+  localizada: { corto: 'H?', texto: 'referencia histórica localizada (con conflicto)' },
+  asociacion_pendiente: { corto: 'H', texto: 'referencia histórica con asociación pendiente' },
+  confirmada: { corto: 'H✓', texto: 'referencia histórica asociada (sin validar)' },
+}
+
+/** Mapa empleado|tipo → pista. Sólo informa: no cambia estados ni indicadores. */
+export async function cargarPistasMatriz(): Promise<Map<string, PistaHistorica>> {
+  const { data, error } = await supabase.rpc('legajo_historico_matriz')
+  const m = new Map<string, PistaHistorica>()
+  if (error) return m
+  for (const r of (data as PistaHistorica[] | null) ?? []) m.set(`${r.empleado_id}|${r.tipo}`, r)
+  return m
 }
 
 /**

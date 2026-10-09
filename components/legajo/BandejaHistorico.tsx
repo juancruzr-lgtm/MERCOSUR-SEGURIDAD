@@ -16,10 +16,12 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import {
-  EVENTO_HISTORICO, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe, filtrarHistorico, leerRangos, nivelHistorico,
-  resolverPropuesta, tienePersona,
+  ESTADOS_VISUALES, EVENTO_HISTORICO, NIVELES_IDENTIFICACION, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe,
+  confirmarEnLote, estadoVisual, filtrarHistorico, leerRangos, motivoFueraDeLote, nivelIdentificacion, resolverPropuesta, tienePersona,
 } from '@/lib/legajo-historico'
-import type { Bandeja, EstadoPropuesta, EventoHistorico, PersonaBuscada, PropuestaHistorica, TipoBandeja } from '@/lib/legajo-historico'
+import type {
+  Bandeja, EstadoPropuesta, EstadoVisual, EventoHistorico, NivelIdentificacion, PersonaBuscada, PropuestaHistorica, TipoBandeja,
+} from '@/lib/legajo-historico'
 
 const card: React.CSSProperties = { background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 14, marginBottom: 10, minWidth: 0, boxSizing: 'border-box' }
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '9px 10px', fontSize: 14 }
@@ -154,10 +156,81 @@ function Historial({ id }: { id: string }) {
   )
 }
 
+/**
+ * Confirmación en lote: vista previa, selección y confirmación expresa. Sólo
+ * entran las inequívocas que no piden ningún dato (motivoFueraDeLote); la base
+ * vuelve a controlar cada una y registra quién confirmó. Asocia, no valida.
+ */
+function ConfirmarLote({ propuestas, tipos, onListo }: { propuestas: PropuestaHistorica[]; tipos: TipoBandeja[]; onListo: () => void }) {
+  const aptas = propuestas.filter(p => motivoFueraDeLote(p, tipos) === null)
+  const fuera = propuestas.length - aptas.length
+  const [abierto, setAbierto] = useState(false)
+  const [elegidas, setElegidas] = useState<Set<string>>(new Set())
+  const [entiendo, setEntiendo] = useState(false)
+  const [avance, setAvance] = useState<number | null>(null)
+  const [resultado, setResultado] = useState<{ ok: number; errores: { archivo: string; error: string }[] } | null>(null)
+  if (!aptas.length && !resultado) return null
+  const abrir = () => { setElegidas(new Set(aptas.map(p => p.id))); setEntiendo(false); setResultado(null); setAbierto(true) }
+  const confirmar = async () => {
+    const lista = aptas.filter(p => elegidas.has(p.id))
+    setAvance(0)
+    const r = await confirmarEnLote(lista, setAvance)
+    setAvance(null); setAbierto(false)
+    setResultado({ ok: r.ok.length, errores: r.errores.map(e => ({ archivo: nombreArchivo(lista.find(p => p.id === e.id)?.ruta_origen ?? ''), error: e.error })) })
+    onListo()
+  }
+  return (
+    <div style={{ ...card, borderColor: 'rgba(34,197,94,.35)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ fontSize: 13.5, color: '#cbd5e1' }}>
+          <b>{aptas.length}</b> propuesta(s) inequívocas se pueden confirmar en lote{fuera ? ` · ${fuera} necesitan revisión una por una` : ''}.
+        </div>
+        {!abierto && aptas.length > 0 && <button type="button" style={boton('sec')} onClick={abrir}>Revisar lote</button>}
+      </div>
+      {resultado && (
+        <div style={{ fontSize: 13, color: resultado.errores.length ? '#fbbf24' : '#86efac', marginTop: 6 }}>
+          Confirmadas {resultado.ok}.{resultado.errores.length ? ` No se pudieron confirmar ${resultado.errores.length}:` : ''}
+          {resultado.errores.map((e, i) => <div key={i} style={{ color: '#fca5a5', fontSize: 12.5 }}>{e.archivo}: {e.error}</div>)}
+        </div>
+      )}
+      {abierto && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12.5, color: '#94a3b8', marginBottom: 6 }}>Vista previa. Destildá lo que no quieras confirmar.</div>
+          <div style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid #1e2d42', borderRadius: 8 }}>
+            {aptas.map(p => (
+              <label key={p.id} style={{ display: 'flex', gap: 8, padding: '6px 8px', borderBottom: '1px solid #1e293b', fontSize: 13, color: '#cbd5e1', alignItems: 'flex-start' }}>
+                <input type="checkbox" checked={elegidas.has(p.id)} onChange={e => setElegidas(prev => { const n = new Set(prev); if (e.target.checked) n.add(p.id); else n.delete(p.id); return n })} />
+                <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                  <b>{nombreArchivo(p.ruta_origen)}</b> → {tipos.find(t => t.codigo === p.tipo_sugerido)?.nombre} de {p.sugerido?.apellido}, {p.sugerido?.nombre}
+                </span>
+              </label>
+            ))}
+          </div>
+          <label style={{ display: 'flex', gap: 8, fontSize: 13, color: '#fbbf24', marginTop: 8 }}>
+            <input type="checkbox" checked={entiendo} onChange={e => setEntiendo(e.target.checked)} />
+            Confirmo la asociación de estas {elegidas.size} referencias. Entiendo que no valida los documentos: siguen sin validar hasta su revisión en Documentación.
+          </label>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <button type="button" style={boton('ok', entiendo && elegidas.size > 0 && avance === null)} disabled={!entiendo || !elegidas.size || avance !== null} onClick={() => void confirmar()}>
+              {avance !== null ? `Confirmando… ${avance}/${elegidas.size}` : `Confirmar ${elegidas.size}`}
+            </button>
+            <button type="button" style={boton('sec')} disabled={avance !== null} onClick={() => setAbierto(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBandeja[]; onCambio: () => void }) {
   const [modo, setModo] = useState<null | 'aceptar' | 'descartar' | 'separar'>(null)
   const [verHistorial, setVerHistorial] = useState(false)
-  const nivel = nivelHistorico(p.estado)
+  const nivel = estadoVisual(p)
+  const ident = NIVELES_IDENTIFICACION.find(([k]) => k === nivelIdentificacion(p))?.[1] ?? ''
+  const evidencia = [
+    typeof p.senales?.identidad === 'string' ? p.senales.identidad : p.dni_sugerido ? `DNI ${p.dni_sugerido} (único en la app)` : null,
+    typeof p.senales?.categoria === 'string' ? `categoría por ${p.senales.categoria}` : p.criterio,
+  ].filter(Boolean).join(' · ')
   const nombreTipo = (c: string | null) => tipos.find(t => t.codigo === c)?.nombre ?? c ?? 'a definir'
   const revisar = (p.senales?.revisar ?? []).map(r => ETIQUETA_REVISAR[r.split(':')[0]] ?? r)
   const abierta = p.estado === 'pendiente' || p.estado === 'conflicto'
@@ -168,8 +241,9 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
         <span style={{ fontSize: 12, color: p.confianza === 'alta' ? '#86efac' : p.confianza === 'media' ? '#fbbf24' : '#94a3b8' }}>confianza {p.confianza}</span>
       </div>
       <div style={{ fontSize: 12, color: nivel.color, marginTop: 2 }}>
-        {nivel.texto}{!tienePersona(p) && p.estado !== 'conflicto' ? ' · sin persona asociada' : ''}
+        {nivel.texto} · identificación {ident.toLowerCase()}
       </div>
+      {evidencia && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2, overflowWrap: 'anywhere' }}>Evidencia: {evidencia}</div>}
       <div style={{ fontSize: 12, color: '#64748b', overflowWrap: 'anywhere', marginTop: 2 }}>MEGA: {p.ruta_origen}{p.pagina_desde ? ` · páginas ${p.pagina_desde}–${p.pagina_hasta}` : p.paginas ? ` · ${p.paginas} pág.` : ''}</div>
       <div style={{ fontSize: 13.5, color: '#cbd5e1', marginTop: 6 }}>
         {p.estado === 'aceptada' || p.estado === 'importada'
@@ -214,12 +288,30 @@ export default function BandejaHistorico() {
   const [buscar, setBuscar] = useState('')
   const [datos, setDatos] = useState<Bandeja | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [cargandoMas, setCargandoMas] = useState(false)
   const [categoria, setCategoria] = useState('')
+  const [nivel, setNivel] = useState<NivelIdentificacion | ''>('')
+  const [visual, setVisual] = useState<EstadoVisual | ''>('')
   const [soloSinPersona, setSoloSinPersona] = useState(false)
+  const [soloConflictos, setSoloConflictos] = useState(false)
   const cargar = useCallback(async () => { const r = await cargarBandeja(estado, buscar); setDatos(r.datos); setError(r.error) }, [estado, buscar])
   useEffect(() => { void cargar() }, [cargar])
   useEffect(() => { const t = setTimeout(() => setBuscar(texto), 350); return () => clearTimeout(t) }, [texto])
   const buscando = buscar.trim().length >= 3
+  const cargarMas = async () => {
+    if (!datos) return
+    setCargandoMas(true)
+    const r = await cargarBandeja(estado, buscar, datos.propuestas.length)
+    setCargandoMas(false)
+    if (r.error || !r.datos) { setError(r.error); return }
+    const vistos = new Set(datos.propuestas.map(p => p.id))
+    setDatos({ ...r.datos, propuestas: [...datos.propuestas, ...r.datos.propuestas.filter(p => !vistos.has(p.id))] })
+  }
+  const total = datos?.total ?? datos?.propuestas.length ?? 0
+  const visibles = datos ? filtrarHistorico(datos.propuestas, {
+    categoria, soloSinPersona, soloConflictos, nivel, estadoVisual: visual, activas: datos.tipos.map(t => t.codigo),
+  }) : []
+  const control: React.CSSProperties = { background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '7px 8px', fontSize: 13, minWidth: 0, maxWidth: '100%' }
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', minWidth: 0 }}>
@@ -229,9 +321,9 @@ export default function BandejaHistorico() {
         <b style={{ color: '#cbd5e1' }}> Localizar</b> o <b style={{ color: '#cbd5e1' }}>asociar</b> un archivo a una persona no lo vuelve documentación válida:
         sólo cuenta como presentado y aprobado lo que se revisa en la sección Documentación.
       </div>
-      <input value={texto} onChange={e => setTexto(e.target.value)} placeholder="Buscar por apellido, legajo o nombre del archivo (en todos los estados)"
+      <input value={texto} onChange={e => setTexto(e.target.value)} placeholder="Buscar por apellido, DNI, legajo o nombre del archivo (en todos los estados)"
         style={{ width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '10px 12px', fontSize: 14, marginBottom: 10 }} />
-      {buscando && <div style={{ fontSize: 13, color: '#94a3b8', margin: '0 2px 10px' }}>{datos?.propuestas.length ?? 0} resultado(s) para “{buscar.trim()}”</div>}
+      {buscando && <div style={{ fontSize: 13, color: '#94a3b8', margin: '0 2px 10px' }}>{total} resultado(s) para “{buscar.trim()}”</div>}
       <div style={{ display: buscando ? 'none' : 'flex', gap: 4, borderBottom: '1px solid #1e2d42', marginBottom: 12, overflowX: 'auto' }}>
         {PESTAÑAS.map(([k, t]) => (
           <button key={k} type="button" onClick={() => setEstado(k)} style={{
@@ -242,22 +334,43 @@ export default function BandejaHistorico() {
       </div>
       {error && <div style={{ ...card, color: '#fca5a5' }}>{error}</div>}
       {!datos && !error && <div style={{ color: '#64748b', padding: 24 }}>Cargando…</div>}
-      {datos && datos.propuestas.length === 0 && <div style={{ ...card, color: '#94a3b8' }}>No hay propuestas en este estado.</div>}
       {datos && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-          <select value={categoria} onChange={e => setCategoria(e.target.value)} aria-label="Categoría"
-            style={{ background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '7px 8px', fontSize: 13, minWidth: 0 }}>
+          <select value={categoria} onChange={e => setCategoria(e.target.value)} aria-label="Categoría" style={control}>
             <option value="">Todas las categorías</option>
             <option value="(sin)">Sin categoría</option>
             <option value="(fuera)">Categoría que hoy no se exige</option>
             {datos.tipos.filter(t => datos.propuestas.some(p => categoriaDe(p) === t.codigo)).map(t => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
           </select>
+          <select value={nivel} onChange={e => setNivel(e.target.value as NivelIdentificacion | '')} aria-label="Nivel de identificación" style={control}>
+            <option value="">Cualquier identificación</option>
+            {NIVELES_IDENTIFICACION.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+          </select>
+          {buscando && (
+            <select value={visual} onChange={e => setVisual(e.target.value as EstadoVisual | '')} aria-label="Estado" style={control}>
+              <option value="">Todos los estados</option>
+              {ESTADOS_VISUALES.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+            </select>
+          )}
           <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, color: '#94a3b8' }}>
             <input type="checkbox" checked={soloSinPersona} onChange={e => setSoloSinPersona(e.target.checked)} /> Sólo sin persona asociada
           </label>
+          {buscando && (
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, color: '#94a3b8' }}>
+              <input type="checkbox" checked={soloConflictos} onChange={e => setSoloConflictos(e.target.checked)} /> Sólo conflictivos
+            </label>
+          )}
+          <span style={{ fontSize: 12, color: '#64748b' }}>{visibles.length} de {datos.propuestas.length}{total > datos.propuestas.length ? ` (cargadas; hay ${total})` : ''}</span>
         </div>
       )}
-      {datos && filtrarHistorico(datos.propuestas, { categoria, soloSinPersona, activas: datos.tipos.map(t => t.codigo) }).map(p => <Tarjeta key={p.id} p={p} tipos={datos.tipos} onCambio={() => void cargar()} />)}
+      {datos && !buscando && estado === 'pendiente' && <ConfirmarLote propuestas={visibles} tipos={datos.tipos} onListo={() => void cargar()} />}
+      {datos && visibles.length === 0 && <div style={{ ...card, color: '#94a3b8' }}>No hay propuestas con estos filtros.</div>}
+      {visibles.map(p => <Tarjeta key={p.id} p={p} tipos={datos?.tipos ?? []} onCambio={() => void cargar()} />)}
+      {datos && total > datos.propuestas.length && (
+        <button type="button" style={{ ...boton('sec', !cargandoMas), width: '100%' }} disabled={cargandoMas} onClick={() => void cargarMas()}>
+          {cargandoMas ? 'Cargando…' : `Cargar más (${datos.propuestas.length} de ${total})`}
+        </button>
+      )}
     </div>
   )
 }

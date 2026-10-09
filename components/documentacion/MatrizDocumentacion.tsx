@@ -7,13 +7,19 @@
  * por documento del catálogo, con el estado de cada uno. Arriba, el avance
  * general de regularización. Usa los mismos datos y reglas que el legajo
  * (documentacion_control + situacionDeTipo): no hay un segundo cálculo.
+ *
+ * Las referencias del archivo histórico (MEGA) se muestran como una PISTA
+ * aparte (H / H? / H✓) para Administración: no cambian la celda, los
+ * indicadores ni el cumplimiento.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { situacionDeTipo } from '@/lib/documentacion'
 import type { ControlDocumentacionDatos, PersonaControl, TipoDocumento } from '@/lib/documentacion'
 import { ESTADOS_MATRIZ, celdaDe, filtrarMatriz, indicadoresMatriz } from '@/lib/documentacion-situacion'
 import type { FilaMatriz } from '@/lib/documentacion-situacion'
+import { TEXTO_PISTA, cargarPistasMatriz } from '@/lib/legajo-historico'
+import type { PistaHistorica } from '@/lib/legajo-historico'
 
 const CORTO: Record<string, string> = {
   dni: 'DNI', cuil: 'CUIL', domicilio: 'Domicilio', antecedentes_provincia: 'Antec. prov.', antecedentes_rnr: 'RNR',
@@ -28,6 +34,8 @@ export default function MatrizDocumentacion({ datos, personas }: { datos: Contro
   const [texto, setTexto] = useState('')
   const [estado, setEstado] = useState('')
   const [tipo, setTipo] = useState('')
+  const [pistas, setPistas] = useState<Map<string, PistaHistorica>>(new Map())
+  useEffect(() => { void cargarPistasMatriz().then(setPistas) }, [])
   const tipos: TipoDocumento[] = useMemo(() => datos.tipos.filter(t => t.requisito !== 'opcional'), [datos.tipos])
 
   const filas: FilaMatriz[] = useMemo(() => personas.map(p => {
@@ -94,7 +102,13 @@ export default function MatrizDocumentacion({ datos, personas }: { datos: Contro
                 <td style={{ textAlign: 'center', color: validadas === obligatorias ? '#86efac' : '#cbd5e1' }}>{validadas}/{obligatorias}</td>
                 {celdas.map(({ t, s }) => {
                   const c = celdaDe(s)
-                  return <td key={t.codigo} title={`${t.nombre}: ${c.titulo}`} style={{ textAlign: 'center', color: c.color, background: c.fondo, padding: '5px 3px', fontWeight: 700 }}>{c.corto}</td>
+                  const h = s.base === 'validado' || s.base === 'por_vencer' ? undefined : pistas.get(`${p.empleado_id}|${t.codigo}`)
+                  return (
+                    <td key={t.codigo} title={`${t.nombre}: ${c.titulo}${h ? ` · ${TEXTO_PISTA[h.nivel].texto} (${h.referencias})` : ''}`}
+                      style={{ textAlign: 'center', color: c.color, background: c.fondo, padding: '5px 3px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                      {c.corto}{h && <sup style={{ color: '#93c5fd', fontWeight: 600, marginLeft: 2 }}>{TEXTO_PISTA[h.nivel].corto}</sup>}
+                    </td>
+                  )
                 })}
               </tr>
             ))}
@@ -103,6 +117,10 @@ export default function MatrizDocumentacion({ datos, personas }: { datos: Contro
       </div>
       <div style={{ fontSize: 11.5, color: '#64748b', marginTop: 6 }}>
         OK validado · Rev presentado en revisión · Conf espera constancia · Rech rechazado · Obs error avisado · Venc vencido · xVen por vencer · Sol solicitado · Falta pendiente · N/C no corresponde
+      </div>
+      <div style={{ fontSize: 11.5, color: '#64748b', marginTop: 2 }}>
+        Archivo histórico (sólo pista, no cuenta como presentado): <span style={{ color: '#93c5fd' }}>H?</span> localizada con conflicto ·{' '}
+        <span style={{ color: '#93c5fd' }}>H</span> asociación pendiente · <span style={{ color: '#93c5fd' }}>H✓</span> asociada sin validar. Sin marca: no localizada.
       </div>
     </div>
   )
