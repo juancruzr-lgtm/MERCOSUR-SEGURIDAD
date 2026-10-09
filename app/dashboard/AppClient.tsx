@@ -14441,11 +14441,11 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
               {page === 'afip_empleados' && tieneCapacidad(user, 'gestionar_personal') && <CorroboracionAfip />}
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
-              {page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital />}
+              {page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital user={user} />}
               {/* Accesos anteriores (enlaces guardados): abren la misma pantalla en su sección. */}
-              {page === 'legajo_cambios_datos' && gestionaDatosSensibles(user) && <LegajoDigital inicial="datos" />}
-              {page === 'documentacion_legajo' && gestionaDatosSensibles(user) && <LegajoDigital inicial="documentacion" />}
-              {page === 'legajo_historico' && gestionaDatosSensibles(user) && <LegajoDigital inicial="historico" />}
+              {page === 'legajo_cambios_datos' && gestionaDatosSensibles(user) && <LegajoDigital inicial="datos" user={user} />}
+              {page === 'documentacion_legajo' && gestionaDatosSensibles(user) && <LegajoDigital inicial="documentacion" user={user} />}
+              {page === 'legajo_historico' && gestionaDatosSensibles(user) && <LegajoDigital inicial="historico" user={user} />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}

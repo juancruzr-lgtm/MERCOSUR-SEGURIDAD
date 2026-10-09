@@ -35,8 +35,18 @@ describe('Legajo Digital: una sola entrada', () => {
   })
   it('los accesos anteriores siguen abriendo la misma pantalla, con el mismo permiso', () => {
     for (const [id, s] of [['legajo_cambios_datos', 'datos'], ['documentacion_legajo', 'documentacion'], ['legajo_historico', 'historico']]) {
-      expect(app).toContain(`page === '${id}' && gestionaDatosSensibles(user) && <LegajoDigital inicial="${s}" />`)
+      expect(app).toContain(`page === '${id}' && gestionaDatosSensibles(user) && <LegajoDigital inicial="${s}" user={user} />`)
     }
-    expect(app).toContain(`page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital />`)
+    expect(app).toContain(`page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital user={user} />`)
+  })
+})
+
+describe('Habilitación al personal', () => {
+  const c = readFileSync(join(__dirname, '..', 'components', 'legajo', 'LegajoDigital.tsx'), 'utf8')
+  it('la pestaña sólo aparece para Gerencia y no abre nada sola', () => {
+    expect(c).toMatch(/controlaHabilitacion\(user\) \? \[\.\.\.SECCIONES, \['habilitacion'/)
+    expect(c).toMatch(/seccion === 'habilitacion' && controlaHabilitacion\(user\) && <HabilitacionLegajo \/>/)
+    const h = readFileSync(join(__dirname, '..', 'components', 'legajo', 'HabilitacionLegajo.tsx'), 'utf8')
+    expect(h).toMatch(/disabled=\{!entiendo \|\| ocupado\}/) // abrir exige confirmación expresa
   })
 })
