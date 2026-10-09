@@ -26,3 +26,17 @@ describe('Menú de Administración', () => {
     expect(app).toMatch(/id:'novedades', icon:'📋', label:'Mis Novedades'/)
   })
 })
+
+describe('Legajo Digital: una sola entrada', () => {
+  const admin = seccion('ADMINISTRACIÓN')
+  it('el menú tiene «Legajo Digital» y no las tres entradas sueltas', () => {
+    expect(admin).toMatch(/gestionaDatosSensibles\(user\) \? \[\{ id:'legajo_digital', icon:'[^']+', label:'Legajo Digital' \}\]/)
+    expect(admin).not.toMatch(/id:'legajo_cambios_datos', icon|id:'documentacion_legajo', icon|id:'legajo_historico', icon/)
+  })
+  it('los accesos anteriores siguen abriendo la misma pantalla, con el mismo permiso', () => {
+    for (const [id, s] of [['legajo_cambios_datos', 'datos'], ['documentacion_legajo', 'documentacion'], ['legajo_historico', 'historico']]) {
+      expect(app).toContain(`page === '${id}' && gestionaDatosSensibles(user) && <LegajoDigital inicial="${s}" />`)
+    }
+    expect(app).toContain(`page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital />`)
+  })
+})

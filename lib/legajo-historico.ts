@@ -135,3 +135,57 @@ export async function cargarIndicios(empleadoId: string): Promise<Indicio[]> {
   const { data, error } = await supabase.rpc('legajo_historico_indicios_de', { p_empleado_id: empleadoId })
   return error ? [] : ((data as Indicio[] | null) ?? [])
 }
+
+// ── Filtros de la bandeja y nivel de cada referencia ────────────────────────
+
+/** '' = todas · '(sin)' = sin categoría · código = esa categoría (asignada o sugerida). */
+export type FiltroHistorico = { categoria?: string; soloSinPersona?: boolean }
+
+export const categoriaDe = (p: Pick<PropuestaHistorica, 'tipo' | 'tipo_sugerido'>) => p.tipo ?? p.tipo_sugerido ?? null
+export const tienePersona = (p: Pick<PropuestaHistorica, 'empleado_id' | 'sugerido'>) => !!(p.empleado_id ?? p.sugerido)
+
+export function filtrarHistorico<T extends Pick<PropuestaHistorica, 'tipo' | 'tipo_sugerido' | 'empleado_id' | 'sugerido'>>(lista: T[], f: FiltroHistorico): T[] {
+  return lista.filter(p =>
+    (!f.categoria || (f.categoria === '(sin)' ? categoriaDe(p) === null : categoriaDe(p) === f.categoria))
+    && (!f.soloSinPersona || !tienePersona(p)))
+}
+
+/**
+ * Qué es cada referencia para el legajo. Encontrarla en MEGA o asociarla a una
+ * persona NO la vuelve documentación válida: eso sólo pasa con un documento del
+ * legajo revisado y aprobado (sección Documentación).
+ */
+export function nivelHistorico(estado: EstadoPropuesta): { texto: string; color: string } {
+  switch (estado) {
+    case 'pendiente': return { texto: 'Localizado en MEGA · asociación por revisar', color: '#93c5fd' }
+    case 'conflicto': return { texto: 'Localizado en MEGA · con conflicto, sin persona asociada', color: '#fbbf24' }
+    case 'aceptada': return { texto: 'Asociado a la persona · referencia sin validar', color: '#86efac' }
+    case 'importada': return { texto: 'Copiado al legajo · sigue la revisión de Documentación', color: '#86efac' }
+    case 'descartada': return { texto: 'Descartado', color: '#94a3b8' }
+    case 'separada': return { texto: 'Separado en partes', color: '#94a3b8' }
+  }
+}
+
+export const EVENTO_HISTORICO: Record<string, string> = {
+  cargada: 'Localizado en MEGA (carga de referencias)', aceptada: 'Asociación aceptada', descartada: 'Descartado',
+  separada: 'Separado por páginas', reabierta: 'Reabierto', importada: 'Copiado al legajo',
+}
+
+export interface EventoHistorico { evento: string; at: string; quien: string | null; detalle: Record<string, unknown> | null }
+
+/** Historial de intervenciones de una referencia (RLS: Administración/Gerencia). */
+export async function cargarEventosHistorico(propuestaId: string): Promise<{ eventos: EventoHistorico[]; error: string | null }> {
+  const { data, error } = await supabase.from('legajo_historico_eventos')
+    .select('evento, at, usuario_id, detalle').eq('propuesta_id', propuestaId).order('at').limit(200)
+  if (error) return { eventos: [], error: mensaje(error, 'No se pudo leer el historial') }
+  const ids = Array.from(new Set((data ?? []).map(e => e.usuario_id).filter((x): x is string => !!x)))
+  const nombres = new Map<string, string>()
+  if (ids.length) {
+    const { data: us } = await supabase.from('usuarios').select('id, nombre, apellido').in('id', ids)
+    for (const u of us ?? []) nombres.set(u.id, `${u.nombre ?? ''} ${u.apellido ?? ''}`.trim())
+  }
+  return {
+    eventos: (data ?? []).map(e => ({ evento: e.evento, at: e.at, quien: e.usuario_id ? nombres.get(e.usuario_id) ?? null : null, detalle: e.detalle as Record<string, unknown> | null })),
+    error: null,
+  }
+}
