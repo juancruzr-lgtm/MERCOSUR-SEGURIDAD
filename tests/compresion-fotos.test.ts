@@ -14,8 +14,8 @@ describe('dimensiones: se limita el lado mayor, nunca se agranda', () => {
   it('apaisada 4000×3000 queda en 1600×1200', () => {
     expect(dimensionesDestino(4000, 3000, PERFILES_FOTO.operativa)).toEqual({ ancho: 1600, alto: 1200 })
   })
-  it('libro de guardia conserva más resolución (2000 px)', () => {
-    expect(dimensionesDestino(3000, 4000, PERFILES_FOTO.libro_guardia)).toEqual({ ancho: 1500, alto: 2000 })
+  it('libro de guardia conserva algo más de resolución (1800 px)', () => {
+    expect(dimensionesDestino(3000, 4000, PERFILES_FOTO.libro_guardia)).toEqual({ ancho: 1350, alto: 1800 })
   })
   it('una foto chica no se agranda', () => {
     expect(dimensionesDestino(800, 600, PERFILES_FOTO.operativa)).toEqual({ ancho: 800, alto: 600 })

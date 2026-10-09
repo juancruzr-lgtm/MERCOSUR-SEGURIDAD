@@ -19,7 +19,10 @@
 // hay UNA función con perfiles por uso, que limitan el LADO MAYOR:
 //
 //   operativa       1600 px, q 0,75  rondas, supervisión, uniforme
-//   libro_guardia   2000 px, q 0,82  manuscrito: necesita más resolución
+//   libro_guardia   1800 px, q 0,78  manuscrito: algo más de resolución
+//                                    (vertical 1350×1800 contra 1280×1707 de hoy;
+//                                    prueba local oct-2026: legible a 1280 y 1600,
+//                                    2000 px sumaba ~50% de peso sin ganar lectura)
 //   referencia_ia   1600 px, q 0,82  imágenes contra las que compara la IA
 //
 // 1600 px de lado mayor deja una vertical en 1200×1600 (≈ los mismos píxeles
@@ -47,7 +50,7 @@ export type PerfilFoto = 'operativa' | 'libro_guardia' | 'referencia_ia'
 
 export const PERFILES_FOTO: Record<PerfilFoto, Required<Pick<OpcionesCompresion, 'ladoMayor' | 'quality' | 'timeoutMs'>>> = {
   operativa: { ladoMayor: 1600, quality: 0.75, timeoutMs: 10_000 },
-  libro_guardia: { ladoMayor: 2000, quality: 0.82, timeoutMs: 15_000 },
+  libro_guardia: { ladoMayor: 1800, quality: 0.78, timeoutMs: 15_000 },
   referencia_ia: { ladoMayor: 1600, quality: 0.82, timeoutMs: 15_000 },
 }
 
