@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { alcanceDe } from '@/lib/capacidades'
+import { firmaImagenValida, validarFotoOperativa } from '../../_lib/validar-foto'
 
 export const runtime = 'nodejs'
 
@@ -13,21 +14,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 // Duración corta de la URL firmada de visualización (supervisión).
 const URL_FIRMA_SEGUNDOS = 60
 
-function firmaImagenValida(buffer: Buffer, mime: string): boolean {
-  if (mime === 'image/jpeg') {
-    return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
-  }
-  if (mime === 'image/png') {
-    return buffer.length >= 8
-      && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  }
-  if (mime === 'image/webp') {
-    return buffer.length >= 12
-      && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
-      && buffer.subarray(8, 12).toString('ascii') === 'WEBP'
-  }
-  return false
-}
+// firmaImagenValida: app/api/_lib/validar-foto (compartida con fichaje y supervisión).
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -161,6 +148,9 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  const huella = validarFotoOperativa(buffer, MAX_FOTO_BYTES)
+  if (!huella.ok) return NextResponse.json({ error: huella.error }, { status: huella.status })
+
   const { error: uploadError } = await admin.client.storage
     .from(BUCKET)
     .upload(storagePath, buffer, {
@@ -187,6 +177,10 @@ export async function POST(req: NextRequest) {
         tipo_evidencia: 'punto_control',
         bucket: BUCKET,
         storage_path: storagePath,
+        // Huella del archivo subido: el análisis IA la compara (integridad).
+        contenido_sha256: huella.sha256,
+        bytes: huella.bytes,
+        content_type: huella.mime,
       },
       { onConflict: 'proceso_tipo,proceso_id,tipo_evidencia' },
     )

@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
@@ -1125,33 +1126,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
     setIngresoFase('foto_libro')
   }
 
-  const comprimirFoto = (file: File, maxWidth = 1280, quality = 0.75): Promise<File> =>
-    new Promise((resolve, reject) => {
-      const TIMEOUT_MS = 8000
-      let urlRevoked = false
-      const url = URL.createObjectURL(file)
-      const revokeUrl = () => { if (!urlRevoked) { urlRevoked = true; URL.revokeObjectURL(url) } }
-      const timer = setTimeout(() => { revokeUrl(); reject(new Error('compresion_timeout')) }, TIMEOUT_MS)
-
-      const img = new Image()
-      img.onload = () => {
-        revokeUrl()
-        const scale = Math.min(1, maxWidth / img.width)
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.round(img.width * scale)
-        canvas.height = Math.round(img.height * scale)
-        const ctx = canvas.getContext('2d')
-        if (!ctx) { clearTimeout(timer); return reject(new Error('canvas_no_disponible')) }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-        canvas.toBlob(blob => {
-          clearTimeout(timer)
-          if (!blob) return reject(new Error('compresion_blob_fallo'))
-          resolve(new File([blob], file.name, { type: 'image/jpeg' }))
-        }, 'image/jpeg', quality)
-      }
-      img.onerror = () => { clearTimeout(timer); revokeUrl(); reject(new Error('imagen_carga_fallo')) }
-      img.src = url
-    })
+  // La compresión vive en lib/comprimir-imagen (una sola, con perfiles por uso).
 
   // Confirmar ingreso: INSERT registro → compresión → upload → UPDATE turno
   // Cada paso emite su propio evento con err_code específico para diagnóstico.
@@ -1292,10 +1267,13 @@ export default function GuardiaMobile({ user }: { user: any }) {
     })
 
     try {
-      ;[libroComprimido, uniformeComprimido] = await Promise.all([
-        comprimirFoto(fotoLibro.file),
-        comprimirFoto(fotoUniforme.file),
-      ])
+      // Cada foto por separado, para decir cuál falló. Si el celular no puede
+      // comprimir pero la original es una foto válida, se usa la original (el
+      // servidor la controla): un problema de cámara no debe impedir fichar.
+      const libro = await prepararFotoOperativa(fotoLibro.file, 'libro_guardia').catch(e => { throw new Error('libro:' + (e instanceof Error ? e.message : '')) })
+      const uniforme = await prepararFotoOperativa(fotoUniforme.file, 'operativa').catch(e => { throw new Error('uniforme:' + (e instanceof Error ? e.message : '')) })
+      libroComprimido = libro.file
+      uniformeComprimido = uniforme.file
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'compresion_desconocido'
       track('compresion_error', {
@@ -1303,7 +1281,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
         turno_id: ingresoTurno.id,
         registro_id: registroId,
         err_code: errMsg,
-        err_function: 'comprimirFoto',
+        err_function: 'comprimirFotoOperativa',
         duration_ms: Date.now() - compresionStart,
         value_json: { intento_id: intentoId },
       })
@@ -1313,12 +1291,15 @@ export default function GuardiaMobile({ user }: { user: any }) {
         registro_id: registroId,
         err_code: 'compresion_fallo',
         err_message: errMsg,
-        err_function: 'comprimirFoto',
+        err_function: 'comprimirFotoOperativa',
         duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
         value_json: { intento_id: intentoId },
       })
-      setMensaje({ texto: 'Error al procesar las fotos. Intentá de nuevo.', tipo: 'error' })
-      setTimeout(() => setMensaje(null), 5000)
+      const [cual, codigo] = errMsg.includes(':') ? errMsg.split(':') : ['', errMsg]
+      const que = cual === 'libro' ? 'la foto del libro de guardia' : cual === 'uniforme' ? 'la foto del uniforme' : 'la foto'
+      // Vuelve a la vista previa: ahí está "Retomar" para sacar de nuevo la que falló.
+      setMensaje({ texto: mensajeErrorFoto(codigo, que), tipo: 'error' })
+      setTimeout(() => setMensaje(null), 8000)
       setIngresoFase('preview')
       return
     }
