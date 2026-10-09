@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../_lib/employee-auth'
+import { validarFotoOperativa } from '../_lib/validar-foto'
 
 export const runtime = 'nodejs'
 
@@ -80,7 +81,12 @@ export async function POST(req: NextRequest) {
   const path = `${supervisionId}/${Date.now()}-${index}-${storageFileName(nombre)}`
 
   const buffer = Buffer.from(await foto.arrayBuffer())
-  const contentType = foto.type || 'image/jpeg'
+  // Antes se guardaba cualquier archivo con el tipo que declaraba el navegador
+  // (un HEIC quedaba como image/heic y no se veía). Ahora: sólo fotos reales,
+  // con el tipo detectado por los bytes y un tope de tamaño.
+  const validacion = validarFotoOperativa(buffer)
+  if (!validacion.ok) return NextResponse.json({ error: validacion.error }, { status: validacion.status })
+  const contentType = validacion.mime
 
   const { error: uploadError } = await admin.client.storage
     .from('supervision-fotos')

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import {
   etiquetaPoliticaFoto,
   fotoEsObligatoriaEnVisita,
@@ -53,9 +54,6 @@ interface Props {
   onVolver: () => void
 }
 
-const FOTO_MAX_WIDTH = 1280
-const FOTO_QUALITY = 0.76
-
 export function obtenerPuntoPendiente(
   ejecucion: RondaEjecucionActual,
 ): RondaEjecucionPuntoEstado | null {
@@ -92,52 +90,16 @@ function estadoDesdeCaptura(resultado: ResultadoCapturaGps): EstadoGps {
   }
 }
 
-function comprimirFoto(file: File): Promise<File> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const imagen = new Image()
-    const timer = window.setTimeout(() => {
-      URL.revokeObjectURL(url)
-      reject(new Error('La imagen tardó demasiado en procesarse.'))
-    }, 10_000)
-
-    imagen.onload = () => {
-      window.clearTimeout(timer)
-      URL.revokeObjectURL(url)
-
-      const escala = Math.min(1, FOTO_MAX_WIDTH / imagen.width)
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.max(1, Math.round(imagen.width * escala))
-      canvas.height = Math.max(1, Math.round(imagen.height * escala))
-      const contexto = canvas.getContext('2d')
-
-      if (!contexto) {
-        reject(new Error('El dispositivo no pudo preparar la foto.'))
-        return
-      }
-
-      contexto.drawImage(imagen, 0, 0, canvas.width, canvas.height)
-      canvas.toBlob(
-        blob => {
-          if (!blob) {
-            reject(new Error('El dispositivo no pudo comprimir la foto.'))
-            return
-          }
-          resolve(new File([blob], 'punto-ronda.jpg', { type: 'image/jpeg' }))
-        },
-        'image/jpeg',
-        FOTO_QUALITY,
-      )
-    }
-
-    imagen.onerror = () => {
-      window.clearTimeout(timer)
-      URL.revokeObjectURL(url)
-      reject(new Error('El archivo seleccionado no es una imagen válida.'))
-    }
-
-    imagen.src = url
-  })
+// Compresión: lib/comprimir-imagen, perfil 'operativa'. Si el celular no puede
+// comprimir pero la original es una foto válida, se usa la original (el
+// servidor la controla): un problema de cámara no debe impedir la ronda.
+async function comprimirFoto(file: File): Promise<File> {
+  try {
+    const { file: lista } = await prepararFotoOperativa(file, 'operativa')
+    return new File([lista], 'punto-ronda.jpg', { type: lista.type || 'image/jpeg' })
+  } catch (e) {
+    throw new Error(mensajeErrorFoto(e instanceof Error ? e.message : ''))
+  }
 }
 
 export default function RondaGuardiaEjecucion({
