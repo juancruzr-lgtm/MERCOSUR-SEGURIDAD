@@ -21,5 +21,6 @@ drop function if exists public.legajo_modulo_habilitado(text);
 drop table if exists public.legajo_habilitacion;
 drop function if exists public.legajo_puede_gestionar();
 drop function if exists public.legajo_cambio_proteger();
+drop function if exists public.legajo_cambios_bloquear_truncate();
 notify pgrst, 'reload schema';
 commit;
