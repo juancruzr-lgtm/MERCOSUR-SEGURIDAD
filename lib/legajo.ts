@@ -31,6 +31,18 @@ export function gestionaLegajos(solicitante: SolicitanteLegajo): boolean {
 }
 
 /**
+ * ¿Ve y valida DATOS PERSONALES y DOCUMENTACIÓN sensibles de otros? Sólo el
+ * PUESTO Administración o Gerencia. A propósito no mira capacidades ni
+ * overrides (acceso_admin_pleno, rol admin): Supervisión y Dirección
+ * Operativa no acceden, aunque sí abren el legajo para lo operativo. La base
+ * aplica la misma regla (legajo_puede_gestionar); esto sólo evita mostrar
+ * pantallas que la base va a rechazar.
+ */
+export function gestionaDatosSensibles(s: { puesto_organizacional?: string | null } | null | undefined): boolean {
+  return s?.puesto_organizacional === 'administracion' || s?.puesto_organizacional === 'gerencia'
+}
+
+/**
  * Determina si un usuario puede ver el legajo de un empleado: el propio, o
  * quien gestiona legajos. Supervisión no entra a legajos ajenos.
  *

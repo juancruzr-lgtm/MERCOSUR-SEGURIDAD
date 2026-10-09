@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { gestionaLegajos, puedeVerLegajo } from '@/lib/legajo'
+import { gestionaDatosSensibles, gestionaLegajos, puedeVerLegajo } from '@/lib/legajo'
 import { mostrarValor, pendienteDe } from '@/lib/datos-personales'
 import type { CambioDato, CampoLegajo } from '@/lib/datos-personales'
 
@@ -30,6 +30,25 @@ describe('Legajo — quién gestiona legajos ajenos', () => {
     expect(puedeVerLegajo(persona('guardia', 'vigilador'), 'u-2')).toBe(false)
     expect(puedeVerLegajo(persona('supervisor', 'supervisor'), 'u-2')).toBe(false)
     expect(puedeVerLegajo(persona('supervisor', 'administracion'), 'u-2')).toBe(true)
+  })
+})
+
+describe('Datos personales sensibles — sólo Administración y Gerencia', () => {
+  it('Administración y Gerencia sí', () => {
+    expect(gestionaDatosSensibles(persona('supervisor', 'administracion'))).toBe(true)
+    expect(gestionaDatosSensibles(persona('admin', 'gerencia'))).toBe(true)
+  })
+  it('Dirección Operativa y Supervisión no, aunque abran el legajo para lo operativo', () => {
+    const dirOp = persona('admin', 'direccion_operativa')
+    expect(gestionaLegajos(dirOp)).toBe(true)
+    expect(gestionaDatosSensibles(dirOp)).toBe(false)
+    expect(gestionaDatosSensibles(persona('supervisor', 'supervisor'))).toBe(false)
+  })
+  it('el override de admin pleno no abre datos sensibles', () => {
+    const jefe = persona('admin', 'jefe_supervisores', { acceso_admin_pleno: true })
+    expect(gestionaLegajos(jefe)).toBe(true)
+    expect(gestionaDatosSensibles(jefe)).toBe(false)
+    expect(gestionaDatosSensibles(persona('admin', null))).toBe(false)
   })
 })
 
