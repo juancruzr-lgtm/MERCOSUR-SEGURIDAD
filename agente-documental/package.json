@@ -4,6 +4,7 @@
   "description": "Agente documental del Sistema Operativo Mercosur Seguridad",
   "private": true,
   "scripts": {
+    "simular": "ts-node src/index.ts --mode simular",
     "scan": "ts-node src/index.ts --mode scan",
     "watch": "ts-node src/index.ts --mode watch",
     "test-connection": "ts-node src/index.ts --mode test-connection"

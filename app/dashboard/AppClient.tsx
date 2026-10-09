@@ -138,6 +138,7 @@ import type { EstadoLogica, PlanDeclaracion, PropuestaFranja } from '@/lib/logic
 import ControlEstatuto from '@/components/estatuto/ControlEstatuto'
 import ControlCambiosDatos from '@/components/legajo/ControlCambiosDatos'
 import ControlDocumentacion from '@/components/documentacion/ControlDocumentacion'
+import BandejaHistorico from '@/components/legajo/BandejaHistorico'
 import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 
@@ -14278,7 +14279,9 @@ const esGuardia = esRolGuardia(user.rol)
       // Administración la ve; quién puede resolver lo decide la base.
       ...(tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas')
         ? [{ id:'salidas_anticipadas', icon:'🚪', label:'Salidas anticipadas' }] : []),
-      { id:'novedades', icon:'📋', label:'Novedades' },
+      // «Novedades» (novedades operativas agrupadas por mes) salió del menú:
+      // no se usaba. La página sigue existiendo para los accesos desde el Panel
+      // y el Centro Operativo («Ver todas»). No es Novedades del Personal.
       // Novedades del Personal: gestión de novedades laborales por rango/cantidad.
       // Gateado por capacidad gestionar_personal (Administración/Gerencia).
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'novedades_personal', icon:'🧑‍💼', label:'Novedades del Personal' }] : []),
@@ -14292,6 +14295,8 @@ const esGuardia = esRolGuardia(user.rol)
       // Datos personales y documentación: sólo puesto Administración o Gerencia (sin overrides).
       // Documentación del legajo: revisar lo presentado y ver qué falta. No Supervisión.
       ...(gestionaDatosSensibles(user) ? [{ id:'documentacion_legajo', icon:'🗂️', label:'Documentación' }] : []),
+      // Archivo histórico (MEGA): propuestas para revisar antes de importar.
+      ...(gestionaDatosSensibles(user) ? [{ id:'legajo_historico', icon:'🗄️', label:'Archivo histórico' }] : []),
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
@@ -14443,6 +14448,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
               {page === 'legajo_cambios_datos' && gestionaDatosSensibles(user) && <ControlCambiosDatos />}
               {page === 'documentacion_legajo' && gestionaDatosSensibles(user) && <ControlDocumentacion />}
+              {page === 'legajo_historico' && gestionaDatosSensibles(user) && <BandejaHistorico />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}

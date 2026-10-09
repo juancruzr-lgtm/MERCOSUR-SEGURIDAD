@@ -41,6 +41,12 @@ export interface IRepository {
   findAllRelativePathsByAgent(agenteId: string): Promise<string[]>
 
   /**
+   * Sólo lectura: ruta → hash de todo lo indexado (disponible o no) para un
+   * agente. Lo usa el modo `simular`, que no escribe nada.
+   */
+  findIndexByAgent(agenteId: string): Promise<Map<string, { hash: string; disponible: boolean }>>
+
+  /**
    * Indexa un documento de forma atómica mediante la función SQL repdoc_upsert_atomico.
    * La decisión de versionar (incrementar version_actual) ocurre íntegramente en
    * PostgreSQL comparando el hash recibido contra el valor almacenado en ese instante,

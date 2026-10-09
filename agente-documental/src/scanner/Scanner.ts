@@ -6,6 +6,10 @@ import { hashFile } from './Hasher'
 import { Logger } from '../logger/Logger'
 
 export class Scanner {
+  /** Del último escaneo: carpetas y archivos que no se pudieron leer (rutas relativas). */
+  dirsIlegibles: string[] = []
+  archivosIlegibles = new Set<string>()
+
   constructor(
     private readonly filter: FileFilter,
     private readonly logger: Logger,
@@ -17,6 +21,8 @@ export class Scanner {
    */
   async scanDirectory(rootPath: string): Promise<FileInfo[]> {
     const results: FileInfo[] = []
+    this.dirsIlegibles = []
+    this.archivosIlegibles = new Set()
     await this.walk(rootPath, rootPath, results)
     return results
   }
@@ -49,6 +55,8 @@ export class Scanner {
       entries = await fs.promises.readdir(currentPath, { withFileTypes: true })
     } catch (err) {
       this.logger.warn(`No se puede leer directorio: ${currentPath} — ${String(err)}`)
+      // Lo que hay debajo queda protegido: no se sabe si existe.
+      this.dirsIlegibles.push(path.relative(rootPath, currentPath).replace(/\\/g, '/'))
       return
     }
 
@@ -68,6 +76,7 @@ export class Scanner {
         stats = await fs.promises.stat(fullPath)
       } catch (err) {
         this.logger.warn(`No se puede leer archivo: ${fullPath} — ${String(err)}`)
+        this.archivosIlegibles.add(path.relative(rootPath, fullPath).replace(/\\/g, '/'))
         continue
       }
 
@@ -77,6 +86,7 @@ export class Scanner {
         const info = await this.buildFileInfo(fullPath, rootPath, stats)
         results.push(info)
       } catch (err) {
+        this.archivosIlegibles.add(path.relative(rootPath, fullPath).replace(/\\/g, '/'))
         this.logger.archivoError(
           path.relative(rootPath, fullPath),
           String(err),
