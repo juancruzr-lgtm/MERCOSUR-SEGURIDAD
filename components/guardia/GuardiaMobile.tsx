@@ -8,6 +8,7 @@ import { MINUTOS_AVISO_SALIDA_ANTICIPADA, minutosHastaFinDeTurno, textoAvisoSali
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import AvisoEvaluacion from '@/components/desempeno/AvisoEvaluacion'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
+import AvisoDocumentacion from '@/components/documentacion/AvisoDocumentacion'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
@@ -1981,6 +1982,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
           empleadoId={user.id}
           destino={`/guardias/${user.id}?seccion=estatuto`}
         />
+
+        {/* Documentación del legajo: sólo aparece si Gerencia prendió el aviso
+            a la persona (apagado por defecto) y hay algo que hacer. */}
+        <AvisoDocumentacion destino={`/guardias/${user.id}?seccion=documentacion`} />
 
         {/* Sólo aparece si hay algo que hacer: un cartel permanente en cero se
             vuelve parte del fondo y deja de leerse. */}
