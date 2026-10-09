@@ -30,8 +30,8 @@ import {
   abrirArchivo, anularDocumento, cargarDocumentacion, marcarSituacion, responderDocumento, revisarDocumento,
   subirDocumento,
 } from '@/lib/documentacion-datos'
-import { ETIQUETA_FUENTE, cargarIndicios } from '@/lib/legajo-historico'
-import type { Indicio } from '@/lib/legajo-historico'
+import { ETIQUETA_FUENTE, cargarHistoricoDeEmpleado, cargarIndicios } from '@/lib/legajo-historico'
+import type { Indicio, ReferenciaHistorica } from '@/lib/legajo-historico'
 
 // ── Estilos ──────────────────────────────────────────────────────────────────
 
@@ -467,12 +467,34 @@ function MarcaAdministracion({ tipo, s, empleadoId, onCambio }: {
 
 // ── Tarjeta de un tipo ───────────────────────────────────────────────────────
 
-function TarjetaTipo({ tipo, s, datos, nombrePersona, indicios = [], onCambio }: {
+function ArchivoHistorico({ refs }: { refs: ReferenciaHistorica[] }) {
+  const [copiada, setCopiada] = useState<string | null>(null)
+  if (!refs.length) return null
+  return (
+    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(168,85,247,.07)', border: '1px solid rgba(168,85,247,.3)' }}>
+      <div style={{ fontSize: 11, color: '#c4b5fd', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em' }}>Archivo histórico (MEGA) · referencia, sin validar</div>
+      {refs.map(r => (
+        <div key={r.id} style={{ fontSize: 12.5, color: '#cbd5e1', marginTop: 4, overflowWrap: 'anywhere', lineHeight: 1.45 }}>
+          {r.ruta_origen}{r.paginas ? ` · págs. ${r.paginas[0]}–${r.paginas[1]}` : ''}{r.fecha_emision ? ` · ${fechaCorta(r.fecha_emision)}` : ''}
+          {!r.disponible && <span style={{ color: '#fca5a5' }}> · no figura disponible en el índice</span>}
+          <button type="button" onClick={() => { void navigator.clipboard?.writeText(r.ruta_origen); setCopiada(r.id) }}
+            style={{ marginLeft: 8, background: 'none', border: 'none', color: '#93c5fd', fontSize: 12, cursor: 'pointer', padding: 0 }}>
+            {copiada === r.id ? 'Ruta copiada' : 'Copiar ruta'}
+          </button>
+          <div style={{ fontSize: 11.5, color: '#64748b' }}>Asociado {r.revisado_por ? `por ${r.revisado_por} ` : ''}el {fechaHora(r.revisado_at)}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TarjetaTipo({ tipo, s, datos, nombrePersona, indicios = [], historicos = [], onCambio }: {
   tipo: TipoDocumento
   s: SituacionTipo
   datos: DocumentacionEmpleado
   nombrePersona?: string
   indicios?: Indicio[]
+  historicos?: ReferenciaHistorica[]
   onCambio: () => void
 }) {
   const [subiendo, setSubiendo] = useState(false)
@@ -532,6 +554,8 @@ function TarjetaTipo({ tipo, s, datos, nombrePersona, indicios = [], onCambio }:
           ))}
         </div>
       )}
+
+      {datos.puede_gestionar && <ArchivoHistorico refs={historicos} />}
 
       {visibles.map(d => (
         <Documento key={d.id} doc={d} tipo={tipo} esPropio={datos.es_propio} puedeGestionar={datos.puede_gestionar}
@@ -610,10 +634,13 @@ export default function DocumentacionLegajo({ empleadoId, nombrePersona }: {
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(true)
   const [indicios, setIndicios] = useState<Indicio[]>([])
+  const [historicos, setHistoricos] = useState<ReferenciaHistorica[]>([])
 
   const cargar = useCallback(async () => {
     const [r, ind] = await Promise.all([cargarDocumentacion(empleadoId), cargarIndicios(empleadoId)])
     setDatos(r.datos); setError(r.error); setIndicios(ind); setCargando(false)
+    // Sólo Administración/Gerencia: la base rechaza a cualquier otro.
+    if (r.datos?.puede_gestionar) setHistoricos(await cargarHistoricoDeEmpleado(empleadoId))
   }, [empleadoId])
 
   useEffect(() => { void cargar() }, [cargar])
@@ -683,13 +710,13 @@ export default function DocumentacionLegajo({ empleadoId, nombrePersona }: {
       <div style={titulo}>Obligatorios</div>
       {obligatorios.map(({ tipo, s }) => (
         <TarjetaTipo key={tipo.codigo} tipo={tipo} s={s} datos={datos} nombrePersona={nombrePersona}
-          indicios={indicios.filter(i => i.tipo === tipo.codigo)} onCambio={() => void cargar()} />
+          indicios={indicios.filter(i => i.tipo === tipo.codigo)} historicos={historicos.filter(h => h.tipo === tipo.codigo)} onCambio={() => void cargar()} />
       ))}
 
       <div style={titulo}>Si corresponde</div>
       {otros.map(({ tipo, s }) => (
         <TarjetaTipo key={tipo.codigo} tipo={tipo} s={s} datos={datos} nombrePersona={nombrePersona}
-          indicios={indicios.filter(i => i.tipo === tipo.codigo)} onCambio={() => void cargar()} />
+          indicios={indicios.filter(i => i.tipo === tipo.codigo)} historicos={historicos.filter(h => h.tipo === tipo.codigo)} onCambio={() => void cargar()} />
       ))}
 
       {datos.puede_gestionar && datos.accesos && <Accesos datos={datos} />}

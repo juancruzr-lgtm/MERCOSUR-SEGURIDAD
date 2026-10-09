@@ -7,11 +7,13 @@
 
 begin;
 
+drop function if exists public.legajo_historico_buscar(text);
+drop function if exists public.legajo_historico_de_empleado(uuid);
 drop function if exists public.legajo_historico_indicios_de(uuid);
 drop function if exists public.documentacion_importar_historico(uuid, uuid, text, jsonb);
 drop function if exists public.legajo_historico_resolver(uuid, text, uuid, text, date, date, text, text, jsonb, boolean);
 drop function if exists public.legajo_historico_buscar_persona(text);
-drop function if exists public.legajo_historico_bandeja(text, integer);
+drop function if exists public.legajo_historico_bandeja(text, integer, text);
 drop function if exists public.legajo_historico_cargar_indicio(jsonb);
 drop function if exists public.legajo_cargar_dato_planilla(jsonb);
 drop function if exists public.legajo_historico_cargar_propuesta(jsonb);

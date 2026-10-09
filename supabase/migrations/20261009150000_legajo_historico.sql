@@ -366,7 +366,7 @@ grant execute on function public.legajo_cargar_dato_planilla(jsonb) to service_r
 -- 4. BANDEJA Y DECISIÓN (Administración y Gerencia)
 -- ============================================================================
 
-create or replace function public.legajo_historico_bandeja(p_estado text default 'pendiente', p_limite integer default 200)
+create or replace function public.legajo_historico_bandeja(p_estado text default 'pendiente', p_limite integer default 200, p_texto text default null)
 returns jsonb
 language plpgsql
 stable
@@ -401,6 +401,9 @@ begin
       from (
         select * from public.legajo_historico_propuestas x
         where (p_estado is null or x.estado = p_estado)
+          -- Búsqueda: archivo o persona (sugerida o asignada); con texto, todos los estados.
+          and (char_length(btrim(coalesce(p_texto, ''))) < 3
+               or x.id in (select (jsonb_array_elements_text(public.legajo_historico_buscar(p_texto)))::uuid))
         order by x.creado_at
         limit greatest(1, least(coalesce(p_limite, 200), 500))
       ) p
@@ -410,8 +413,8 @@ begin
 end;
 $fn$;
 
-revoke all on function public.legajo_historico_bandeja(text, integer) from public, anon;
-grant execute on function public.legajo_historico_bandeja(text, integer) to authenticated;
+revoke all on function public.legajo_historico_bandeja(text, integer, text) from public, anon;
+grant execute on function public.legajo_historico_bandeja(text, integer, text) to authenticated;
 
 -- Buscar a quién asociar (Administración elige a mano).
 create or replace function public.legajo_historico_buscar_persona(p_texto text)
@@ -731,6 +734,87 @@ $fn$;
 
 revoke all on function public.legajo_historico_indicios_de(uuid) from public, anon;
 grant execute on function public.legajo_historico_indicios_de(uuid) to authenticated;
+
+-- ============================================================================
+-- 7. ARCHIVO HISTÓRICO DE UNA PERSONA Y BÚSQUEDA (sin copiar archivos)
+-- ============================================================================
+-- Lo aceptado por Administración se muestra en el legajo como REFERENCIA al
+-- archivo de MEGA (ruta, tipo, hash de origen): no se duplica el archivo y no
+-- cuenta como documento validado. La copia al legajo (documentacion_importar_
+-- historico) queda como paso opcional y aparte.
+
+create or replace function public.legajo_historico_de_empleado(p_empleado_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_catalog
+as $fn$
+declare
+  v_gerencia boolean;
+begin
+  if not public.documentacion_puede_gestionar() then
+    raise exception 'Sólo Administración o Gerencia' using errcode = '42501';
+  end if;
+  v_gerencia := public.documentacion_es_gerencia();
+  return (
+    select coalesce(jsonb_agg(jsonb_build_object(
+        'id', p.id, 'tipo', p.tipo, 'tipo_nombre', t.nombre, 'ruta_origen', p.ruta_origen,
+        'hash_origen', p.hash_origen, 'paginas', case when p.pagina_desde is null then null else jsonb_build_array(p.pagina_desde, p.pagina_hasta) end,
+        'fecha_emision', p.fecha_emision, 'vence_el', p.vence_el, 'detalle', p.detalle, 'estado', p.estado,
+        'documento_id', p.documento_id, 'revisado_at', p.revisado_at,
+        'revisado_por', nullif(trim(coalesce(r.nombre, '') || ' ' || coalesce(r.apellido, '')), ''),
+        'disponible', coalesce(rd.disponible, false)
+      ) order by t.orden, p.fecha_emision desc nulls last), '[]'::jsonb)
+    from public.legajo_historico_propuestas p
+    join public.documentacion_tipos t on t.codigo = p.tipo
+    left join public.usuarios r on r.id = p.revisado_por
+    left join public.repositorio_documental rd on rd.id = p.repositorio_id
+    where p.empleado_id = p_empleado_id
+      and p.estado in ('aceptada', 'importada')
+      and (t.sensibilidad <> 'reservado_gerencia' or v_gerencia)
+  );
+end;
+$fn$;
+
+revoke all on function public.legajo_historico_de_empleado(uuid) from public, anon;
+grant execute on function public.legajo_historico_de_empleado(uuid) to authenticated;
+
+-- Búsqueda en la bandeja: por apellido/nombre/legajo de la persona (sugerida o
+-- asignada) o por nombre del archivo. Hasta 200 resultados, cualquier estado.
+create or replace function public.legajo_historico_buscar(p_texto text)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_catalog
+as $fn$
+declare
+  v_t text := lower(btrim(coalesce(p_texto, '')));
+begin
+  if not public.documentacion_puede_gestionar() then
+    raise exception 'Sólo Administración o Gerencia' using errcode = '42501';
+  end if;
+  if char_length(v_t) < 3 then
+    return '[]'::jsonb;
+  end if;
+  return (
+    select coalesce(jsonb_agg(x.id), '[]'::jsonb)
+    from (
+      select p.id from public.legajo_historico_propuestas p
+      left join public.usuarios s on s.id = coalesce(p.empleado_id, p.empleado_id_sugerido)
+      where lower(p.ruta_origen) like '%' || v_t || '%'
+         or lower(coalesce(s.apellido, '') || ' ' || coalesce(s.nombre, '')) like '%' || v_t || '%'
+         or lower(coalesce(s.legajo, '')) = v_t
+      order by p.creado_at
+      limit 200
+    ) x
+  );
+end;
+$fn$;
+
+revoke all on function public.legajo_historico_buscar(text) from public, anon;
+grant execute on function public.legajo_historico_buscar(text) to authenticated;
 
 notify pgrst, 'reload schema';
 

@@ -65,8 +65,12 @@ export const ETIQUETA_FUENTE: Record<string, string> = {
 
 const mensaje = (e: { message?: string } | null, d: string) => (e?.message ?? '').trim() || d
 
-export async function cargarBandeja(estado: EstadoPropuesta): Promise<{ datos: Bandeja | null; error: string | null }> {
-  const { data, error } = await supabase.rpc('legajo_historico_bandeja', { p_estado: estado, p_limite: 200 })
+/** Con texto (≥ 3 letras) busca por archivo o persona en todos los estados. */
+export async function cargarBandeja(estado: EstadoPropuesta, texto = ''): Promise<{ datos: Bandeja | null; error: string | null }> {
+  const buscando = texto.trim().length >= 3
+  const { data, error } = await supabase.rpc('legajo_historico_bandeja', {
+    p_estado: buscando ? null : estado, p_limite: 200, p_texto: buscando ? texto.trim() : null,
+  })
   if (error) return { datos: null, error: mensaje(error, 'No se pudo cargar la bandeja') }
   return { datos: data as Bandeja, error: null }
 }
@@ -103,6 +107,28 @@ export function leerRangos(texto: string, paginas: number | null): { rangos: { d
   }
   if (!rangos.length) return { rangos, error: 'Indicá al menos un rango' }
   return { rangos, error: null }
+}
+
+/** Archivos de MEGA ya asociados a la persona por Administración (referencias, no copias). */
+export interface ReferenciaHistorica {
+  id: string
+  tipo: string
+  tipo_nombre: string
+  ruta_origen: string
+  hash_origen: string
+  paginas: [number, number] | null
+  fecha_emision: string | null
+  vence_el: string | null
+  detalle: string | null
+  estado: 'aceptada' | 'importada'
+  revisado_at: string | null
+  revisado_por: string | null
+  disponible: boolean
+}
+
+export async function cargarHistoricoDeEmpleado(empleadoId: string): Promise<ReferenciaHistorica[]> {
+  const { data, error } = await supabase.rpc('legajo_historico_de_empleado', { p_empleado_id: empleadoId })
+  return error ? [] : ((data as ReferenciaHistorica[] | null) ?? [])
 }
 
 export async function cargarIndicios(empleadoId: string): Promise<Indicio[]> {
