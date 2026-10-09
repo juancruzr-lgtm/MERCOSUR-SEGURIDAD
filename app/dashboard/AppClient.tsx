@@ -137,6 +137,7 @@ import { DETALLE_ESTADO_LOGICA, ETIQUETA_ESTADO_LOGICA, armarPropuestasObjetivo,
 import type { EstadoLogica, PlanDeclaracion, PropuestaFranja } from '@/lib/logica-detectada'
 import ControlEstatuto from '@/components/estatuto/ControlEstatuto'
 import ControlCambiosDatos from '@/components/legajo/ControlCambiosDatos'
+import ControlDocumentacion from '@/components/documentacion/ControlDocumentacion'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
@@ -14287,6 +14288,8 @@ const esGuardia = esRolGuardia(user.rol)
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'estatuto_interno', icon:'📜', label:'Estatuto Interno' }] : []),
       // Legajo Digital: cambios de datos personales propuestos por el personal.
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'legajo_cambios_datos', icon:'🪪', label:'Cambios de datos' }] : []),
+      // Documentación del legajo: revisar lo presentado y ver qué falta. No Supervisión.
+      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'documentacion_legajo', icon:'🗂️', label:'Documentación' }] : []),
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
@@ -14437,6 +14440,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'afip_empleados' && tieneCapacidad(user, 'gestionar_personal') && <CorroboracionAfip />}
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
               {page === 'legajo_cambios_datos' && tieneCapacidad(user, 'gestionar_personal') && <ControlCambiosDatos />}
+              {page === 'documentacion_legajo' && tieneCapacidad(user, 'gestionar_personal') && <ControlDocumentacion />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}

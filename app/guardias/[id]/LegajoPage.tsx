@@ -12,6 +12,7 @@ import FichaCumplimiento from '@/components/cumplimiento/FichaCumplimiento'
 import MiDesempeno from '@/components/desempeno/MiDesempeno'
 import EstatutoInterno from '@/components/estatuto/EstatutoInterno'
 import DatosPersonales from '@/components/legajo/DatosPersonales'
+import DocumentacionLegajo from '@/components/documentacion/DocumentacionLegajo'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -530,9 +531,23 @@ export default function LegajoPage() {
               : <div style={S.placeholder}>Los datos personales los consultan la persona, Administración y Gerencia.</div>
         )}
 
+        {/* Documentación (DNI, antecedentes, ARCA…). La persona sube la suya y
+            deja constancia de la que le carga Administración. Supervisión no:
+            hay antecedentes penales y estudios médicos. La regla que manda es
+            la de la base (documentacion_de_empleado) y los archivos sólo se
+            abren por /api/documentacion/archivo, que registra cada acceso. */}
+        {seccion === 'documentacion' && (
+          usuarioId === null
+            ? <div style={S.placeholder}>Cargando…</div>
+            : usuarioId === empleadoId
+              || tieneCapacidad({ rol: rolUsuario, puesto_organizacional: puestoUsuario, acceso_admin_pleno: adminPlenoUsuario }, 'gestionar_personal')
+              ? <DocumentacionLegajo empleadoId={empleadoId} nombrePersona={`${empleado.nombre} ${empleado.apellido}`} />
+              : <div style={S.placeholder}>La documentación del legajo la consultan la persona, Administración y Gerencia.</div>
+        )}
+
         {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla'
           && seccion !== 'cumplimiento' && seccion !== 'desempeno' && seccion !== 'estatuto'
-          && seccion !== 'datos' && (
+          && seccion !== 'datos' && seccion !== 'documentacion' && (
           <div style={S.placeholder}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
             <div>Esta sección está disponible en una próxima etapa.</div>
