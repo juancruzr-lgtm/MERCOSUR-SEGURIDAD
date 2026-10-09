@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Legajo Digital — importación SELECTIVA del archivo histórico.
 //
 // Toma las propuestas que Administración ACEPTÓ en la bandeja y, por cada una:

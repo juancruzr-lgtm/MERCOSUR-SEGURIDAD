@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Legajo Digital — carga de PROPUESTAS del archivo histórico (MEGA).
 //
 // Lee la clasificación local (documentos.json, generada fuera del repo) y

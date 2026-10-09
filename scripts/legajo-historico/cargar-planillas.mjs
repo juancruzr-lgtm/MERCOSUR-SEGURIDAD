@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Legajo Digital — planillas viejas → indicios y propuestas "a confirmar".
 //
 //   --modo=indicios  planillas de documentación (ART.51, reincidencia,
