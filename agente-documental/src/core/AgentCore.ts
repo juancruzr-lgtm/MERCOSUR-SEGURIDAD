@@ -7,12 +7,28 @@ import { FileFilter } from '../scanner/FileFilter'
 import { Scanner } from '../scanner/Scanner'
 import { SupabaseRepository } from '../repository/SupabaseRepository'
 import { Indexer } from '../indexer/Indexer'
+import { planReconciliacion } from '../indexer/Reconciliacion'
 import { PluginRegistry } from '../plugins/PluginRegistry'
 import { PdfPlugin } from '../plugins/pdf/PdfPlugin'
 import { WordPlugin } from '../plugins/word/WordPlugin'
 import { ExcelPlugin } from '../plugins/excel/ExcelPlugin'
 import { ImagesPlugin } from '../plugins/images/ImagesPlugin'
 import { TxtPlugin } from '../plugins/txt/TxtPlugin'
+
+const ESPERA_ANTES_DE_MARCAR_MS = 15_000
+
+export interface ResumenSimulacion {
+  totalArchivos: number
+  nuevos: number
+  cambiados: number
+  sinCambios: number
+  reaparecidos: number
+  marcariaNoDisponibles: number
+  protegidas: number
+  excluidasEnIndice: number
+  ilegibles: number
+  reconciliacionAbortada: string | null
+}
 
 export class AgentCore {
   private readonly logger: Logger
@@ -101,7 +117,12 @@ export class AgentCore {
               resultado === 'actualizado'  ? 'actualizados' : 'errores']++
     }
 
-    await this.indexer.reconcileDeleted(foundPaths, summary)
+    // Lo que no se pudo leer también cuenta como "visto": no se marca eliminado.
+    await this.indexer.reconcileDeleted(foundPaths, summary, {
+      dirsIlegibles: this.scanner.dirsIlegibles,
+      archivosIlegibles: this.scanner.archivosIlegibles,
+      excluida: ruta => this.filter.isInIgnoredPath(ruta),
+    })
 
     summary.finalizadoAt = new Date()
     const duracionSeg = ((summary.finalizadoAt.getTime() - iniciadoAt.getTime()) / 1000).toFixed(1)
@@ -117,6 +138,58 @@ export class AgentCore {
 
     await this.plugins.unloadAll()
     return summary
+  }
+
+  /**
+   * Simulación: escanea la carpeta y la compara contra el índice, SIN
+   * escribir nada en la base (ni altas, ni cambios, ni eliminados). Sirve
+   * para ver qué haría un `scan` antes de autorizarlo.
+   */
+  async simular(): Promise<ResumenSimulacion> {
+    const rootPath = this.config.documentRootPath
+    this.logger.info(`SIMULACIÓN (no escribe nada): ${rootPath}`)
+    const archivos = await this.scanner.scanDirectory(rootPath)
+    const indice = await this.repo.findIndexByAgent(this.config.agenteId)
+
+    const r: ResumenSimulacion = {
+      totalArchivos: archivos.length, nuevos: 0, cambiados: 0, sinCambios: 0, reaparecidos: 0,
+      marcariaNoDisponibles: 0, protegidas: 0, excluidasEnIndice: 0,
+      ilegibles: this.scanner.archivosIlegibles.size + this.scanner.dirsIlegibles.length,
+      reconciliacionAbortada: null,
+    }
+    const encontradas = new Set<string>()
+    for (const a of archivos) {
+      encontradas.add(a.rutaRelativa)
+      const previo = indice.get(a.rutaRelativa)
+      if (!previo) r.nuevos++
+      else if (previo.hash !== a.hashSha256) r.cambiados++
+      else if (!previo.disponible) r.reaparecidos++
+      else r.sinCambios++
+    }
+    const disponibles = Array.from(indice.entries()).filter(([, v]) => v.disponible).map(([k]) => k)
+    const plan = planReconciliacion(disponibles, encontradas, {
+      dirsIlegibles: this.scanner.dirsIlegibles,
+      archivosIlegibles: this.scanner.archivosIlegibles,
+      excluida: ruta => this.filter.isInIgnoredPath(ruta),
+      umbralFaltantes: this.config.umbralFaltantes,
+    })
+    r.marcariaNoDisponibles = plan.marcar.length
+    r.protegidas = plan.protegidas
+    r.excluidasEnIndice = plan.excluidas
+    r.reconciliacionAbortada = plan.abortada
+
+    this.logger.info('─────────────── SIMULACIÓN ───────────────')
+    this.logger.info(`  Archivos en disco:           ${r.totalArchivos}`)
+    this.logger.info(`  Nuevos (se darían de alta):  ${r.nuevos}`)
+    this.logger.info(`  Con contenido distinto:      ${r.cambiados}`)
+    this.logger.info(`  Reaparecidos:                ${r.reaparecidos}`)
+    this.logger.info(`  Sin cambios:                 ${r.sinCambios}`)
+    this.logger.info(`  Se marcarían no disponibles: ${r.marcariaNoDisponibles}`)
+    this.logger.info(`  Protegidos (no legibles):    ${r.protegidas}`)
+    this.logger.info(`  En papelera (no se tocan):   ${r.excluidasEnIndice}`)
+    if (r.reconciliacionAbortada) this.logger.warn(`  ${r.reconciliacionAbortada}`)
+    this.logger.info('No se escribió nada en la base.')
+    return r
   }
 
   async watch(): Promise<void> {
@@ -146,8 +219,18 @@ export class AgentCore {
       await this.indexer.processFile(info)
     }
 
+    // Un "unlink" de MEGA puede ser un reemplazo en curso (borra y vuelve a
+    // escribir) o la unidad que se desmonta. Se espera y se vuelve a mirar:
+    // sólo se marca si la raíz sigue accesible y el archivo sigue sin estar.
     const handleUnlink = async (filePath: string) => {
       const rutaRelativa = path.relative(rootPath, filePath).replace(/\\/g, '/')
+      if (this.filter.isInIgnoredPath(rutaRelativa)) return
+      await new Promise(r => setTimeout(r, ESPERA_ANTES_DE_MARCAR_MS))
+      if (!fs.existsSync(rootPath)) {
+        this.logger.warn(`La carpeta raíz no está accesible: no se marca ${rutaRelativa}`)
+        return
+      }
+      if (fs.existsSync(filePath)) return
       await this.repo.markUnavailable(this.config.agenteId, rutaRelativa)
       this.logger.eliminado(rutaRelativa)
     }

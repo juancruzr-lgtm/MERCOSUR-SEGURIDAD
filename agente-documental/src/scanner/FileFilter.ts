@@ -23,6 +23,13 @@ const ALWAYS_IGNORED_DIRS = new Set([
   '.git',
   '.next',
   'dist',
+  // Papeleras (H-13): la de sincronización de MEGA era el 64% del índice y
+  // duplicaba documentos ya borrados de la carpeta viva.
+  'syncdebris',
+  '.debris',
+  'rubbish',
+  '$recycle.bin',
+  'system volume information',
 ])
 
 export const MIME_MAP: Record<string, string> = {
@@ -43,15 +50,19 @@ export class FileFilter {
   private maxSizeBytes: number
 
   constructor(ignoredDirectories: string[], maxSizeMb: number) {
-    this.ignoredDirectories = new Set([
-      ...ALWAYS_IGNORED_DIRS,
-      ...ignoredDirectories.map(d => d.toLowerCase()),
-    ])
+    this.ignoredDirectories = new Set(
+      Array.from(ALWAYS_IGNORED_DIRS).concat(ignoredDirectories.map(d => d.toLowerCase())),
+    )
     this.maxSizeBytes = maxSizeMb * 1024 * 1024
   }
 
   shouldIgnoreDirectory(dirName: string): boolean {
     return this.ignoredDirectories.has(dirName.toLowerCase())
+  }
+
+  /** ¿Alguna carpeta de la ruta relativa está excluida? (para lo ya indexado) */
+  isInIgnoredPath(rutaRelativa: string): boolean {
+    return rutaRelativa.split(/[\\/]/).slice(0, -1).some(p => this.shouldIgnoreDirectory(p))
   }
 
   shouldIgnoreFile(filePath: string, sizeBytes: number): boolean {

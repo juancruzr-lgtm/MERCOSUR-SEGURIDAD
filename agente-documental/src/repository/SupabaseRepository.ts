@@ -144,6 +144,29 @@ export class SupabaseRepository implements IRepository {
     return paths
   }
 
+  async findIndexByAgent(agenteId: string): Promise<Map<string, { hash: string; disponible: boolean }>> {
+    // Paginado: PostgREST corta en 1.000 filas sin avisar.
+    const PAGE_SIZE = 1000
+    const MAX_PAGES = 500
+    const indice = new Map<string, { hash: string; disponible: boolean }>()
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const from = page * PAGE_SIZE
+      const { data, error } = await this.client
+        .from(TABLE)
+        .select('ruta_relativa, hash_sha256, disponible')
+        .eq('agente_id', agenteId)
+        .order('ruta_relativa')
+        .range(from, from + PAGE_SIZE - 1)
+      if (error) throw new Error(`findIndexByAgent (página ${page}): ${error.message}`)
+      const rows = (data ?? []) as Record<string, unknown>[]
+      for (const r of rows) {
+        indice.set(r['ruta_relativa'] as string, { hash: r['hash_sha256'] as string, disponible: r['disponible'] as boolean })
+      }
+      if (rows.length < PAGE_SIZE) break
+    }
+    return indice
+  }
+
   async saveIndexedDocument(
     info: FileInfo,
     documentoUid: string,

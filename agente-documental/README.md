@@ -84,6 +84,25 @@ Verifica que Supabase responde, que la tabla existe y que la carpeta es accesibl
 
 ---
 
+## Simulación (no escribe nada)
+
+```
+npm run simular
+```
+
+Recorre la carpeta y la compara contra el índice **sin escribir nada en la base**: cuántos archivos serían nuevos, cuáles cambiaron de contenido y cuántos se marcarían no disponibles. Correrla siempre antes de un `scan` sobre producción.
+
+---
+
+## Protecciones (desde oct-2026, decisión H-13)
+
+- **Papeleras excluidas**: `SyncDebris`, `.debris`, `Rubbish`, `$RECYCLE.BIN` no se indexan. Lo que ya estaba indexado de esas carpetas queda como estaba (no se marca eliminado).
+- **Sin eliminaciones falsas**: un archivo o una carpeta que no se pudo leer **no** se marca no disponible. Si el escaneo no encuentra nada, o faltan más del 20% de los archivos conocidos (`DOCUMENT_RECONCILE_MAX_MISSING`), **no se marca nada** y se avisa; sólo con `--forzar-reconciliacion` se aplica.
+- **watch**: ante un borrado espera 15 s y vuelve a mirar; si la raíz no está accesible o el archivo volvió, no marca nada.
+- **Historial de hashes**: cada contenido nuevo de un archivo queda en `repositorio_documental_hash_historial` (migración `20261009160000_repdoc_hash_historial.sql`, trigger en la base).
+
+---
+
 ## Escaneo único
 
 ```
