@@ -77,6 +77,15 @@ begin
     insert into verif_legajo (control, esperado, obtenido, ok) values ('sólo servidor: ' || r.f, 'authenticated sin EXECUTE', v_bool::text, not v_bool);
   end loop;
 
+  -- TRUNCATE: el trigger de sentencia tiene que usar una función que rechace
+  -- siempre (OLD/NEW llegan nulos; ver 20261009130100).
+  insert into verif_legajo (control, esperado, obtenido, ok)
+  select 'TRUNCATE bloqueado: ' || c.relname, 'función que rechaza siempre', p.proname,
+         p.proname in ('legajo_cambios_bloquear_truncate', 'documentacion_inmutable')
+  from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_proc p on p.oid = t.tgfoid
+  where c.relnamespace = 'public'::regnamespace and not t.tgisinternal and (t.tgtype & 32) <> 0
+    and (c.relname like 'legajo\_%' or c.relname like 'documentacion\_%');
+
   insert into verif_legajo (control, esperado, obtenido, ok)
   select 'módulo ' || h.modulo || ' cerrado al personal', 'false', h.empleados::text, not h.empleados
   from public.legajo_habilitacion h;
