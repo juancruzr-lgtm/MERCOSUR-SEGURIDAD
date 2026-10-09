@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { estadoVista, resolverPropuesta, solicitarVista, traerVista, validarRangos } from '@/lib/legajo-historico'
+import { decidirEspera, estadoVista, resolverPropuesta, solicitarVista, traerVista, validarRangos } from '@/lib/legajo-historico'
 import type { PropuestaHistorica, TipoBandeja } from '@/lib/legajo-historico'
 
 const boton = (on = true): React.CSSProperties => ({
@@ -37,11 +37,13 @@ export default function VisorHistorico({ p, tipos, onCerrar, onCambio }: {
   const [aviso, setAviso] = useState<string | null>(null)
   const [guardando, setGuardando] = useState(false)
   const urlRef = useRef<string | null>(null)
+  const [intento, setIntento] = useState(0)
   const total = p.paginas ?? null
   const puedeSeparar = !p.padre_id && (p.paginas ?? 0) > 1 && (p.estado === 'pendiente' || p.estado === 'conflicto')
 
   useEffect(() => {
     let vivo = true
+    setFase({ tipo: 'pidiendo' })
     const correr = async () => {
       const s = await solicitarVista(p.id)
       if (!vivo) return
@@ -51,13 +53,11 @@ export default function VisorHistorico({ p, tipos, onCerrar, onCambio }: {
       for (;;) {
         const e = await estadoVista(s.id)
         if (!vivo) return
-        if (e.error && !e.estado) { setFase({ tipo: 'error', texto: e.error }); return }
-        if (e.estado === 'lista') break
-        if (e.estado === 'error' || e.estado === 'vencida' || e.estado === 'eliminada') {
-          setFase({ tipo: 'error', texto: e.error || 'El archivo no está disponible' }); return
-        }
-        if (Date.now() - inicio > 5 * 60_000) { setFase({ tipo: 'error', texto: 'El lector de SRV02 no respondió' }); return }
-        await new Promise(r => setTimeout(r, 2000))
+        const d = decidirEspera(e.estado, e.error, Date.now() - inicio)
+        if (d.tipo === 'lista') break
+        if (d.tipo === 'error') { setFase({ tipo: 'error', texto: d.texto }); return }
+        await new Promise(r => setTimeout(r, d.en))
+        if (!vivo) return
       }
       setFase({ tipo: 'trayendo' })
       const t = await traerVista(s.id)
@@ -68,7 +68,7 @@ export default function VisorHistorico({ p, tipos, onCerrar, onCambio }: {
     }
     void correr()
     return () => { vivo = false; if (urlRef.current) URL.revokeObjectURL(urlRef.current) }
-  }, [p.id])
+  }, [p.id, intento])
 
   const agregar = () => {
     const d = Number(desde || pagina), h = Number(hasta || desde || pagina)
@@ -94,9 +94,14 @@ export default function VisorHistorico({ p, tipos, onCerrar, onCambio }: {
         <button type="button" style={boton()} onClick={onCerrar}>Cerrar</button>
       </div>
       {fase.tipo === 'pidiendo' && <div style={{ fontSize: 13, color: '#94a3b8', padding: 10 }}>Pidiendo el archivo…</div>}
-      {fase.tipo === 'esperando' && <div style={{ fontSize: 13, color: '#94a3b8', padding: 10 }}>Esperando que SRV02 lo prepare y verifique…</div>}
+      {fase.tipo === 'esperando' && <div style={{ fontSize: 13, color: '#94a3b8', padding: 10 }}>Esperando que SRV02 lo prepare y verifique… (si el lector no está andando, en 1 minuto se avisa)</div>}
       {fase.tipo === 'trayendo' && <div style={{ fontSize: 13, color: '#94a3b8', padding: 10 }}>Abriendo…</div>}
-      {fase.tipo === 'error' && <div role="alert" style={{ fontSize: 13, color: '#fca5a5', padding: 10 }}>{fase.texto}</div>}
+      {fase.tipo === 'error' && (
+        <div style={{ padding: 10 }}>
+          <div role="alert" style={{ fontSize: 13, color: '#fca5a5' }}>{fase.texto}</div>
+          <button type="button" style={{ ...boton(), marginTop: 8 }} onClick={() => setIntento(i => i + 1)}>Reintentar</button>
+        </div>
+      )}
       {fase.tipo === 'listo' && (
         <>
           {fase.mime === 'application/pdf' ? (

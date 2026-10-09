@@ -91,6 +91,21 @@ export function snapshotDesdePadron(u: EmpleadoACorroborar, r: ResultadoPadron |
   return snap
 }
 
+/**
+ * Espera una tarea hasta `ms`; pasado ese tiempo sigue sin ella (devuelve
+ * undefined). Los errores de la tarea no se propagan: el alta de un empleado
+ * nunca se traba ni falla por ARCA.
+ */
+export async function esperarConTope<T>(tarea: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const tope = new Promise<undefined>(r => { timer = setTimeout(() => r(undefined), ms) })
+  try {
+    return await Promise.race([tarea.catch(() => undefined), tope])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export interface ResultadoIndividual { ok: boolean; novedades?: string[]; error?: string }
 
 /**

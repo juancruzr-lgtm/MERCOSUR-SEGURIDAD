@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
-import { ESTADOS_VISUALES, estadoVisual, filtrarHistorico, motivoFueraDeLote, nivelHistorico, nivelIdentificacion, validarRangos } from '@/lib/legajo-historico'
+import { ESTADOS_VISUALES, estadoVisual, filtrarHistorico, motivoFueraDeLote, nivelHistorico, nivelIdentificacion, validarRangos, decidirEspera } from '@/lib/legajo-historico'
 import type { PropuestaHistorica, TipoBandeja } from '@/lib/legajo-historico'
 
 const ref = (x: { tipo?: string | null; tipo_sugerido?: string | null; empleado_id?: string | null; sugerido?: boolean }) => ({
@@ -122,5 +122,38 @@ describe('Archivo histórico: documento rechazado', () => {
     const e = estadoVisual({ estado: 'importada', empleado_id: 'x', sugerido: null, documento_estado: 'rechazado' })
     expect(e.clave).toBe('descartado')
     expect(e.texto).toMatch(/rechazado/)
+  })
+})
+
+describe('Visor: espera del lector de SRV02', () => {
+  it('lista solamente cuando el lector la dejó lista', () => {
+    expect(decidirEspera('lista', null, 1000).tipo).toBe('lista')
+    expect(decidirEspera('pendiente', null, 1000).tipo).toBe('seguir')
+    expect(decidirEspera('tomada', null, 30_000).tipo).toBe('seguir')
+  })
+  it('sin lector: avisa al minuto y no queda esperando', () => {
+    const d = decidirEspera('pendiente', null, 61_000)
+    expect(d.tipo).toBe('error')
+    expect(d.tipo === 'error' && d.texto).toMatch(/no está funcionando/)
+  })
+  it('tomada pero sin terminar: avisa a los 2 minutos', () => {
+    expect(decidirEspera('tomada', null, 121_000).tipo).toBe('error')
+  })
+  it('hash incorrecto, archivo inexistente, error de lectura: muestra el motivo', () => {
+    const d = decidirEspera('error', 'El archivo de MEGA no coincide con el índice (hash distinto)', 5000)
+    expect(d.tipo === 'error' && d.texto).toMatch(/hash/)
+    expect(decidirEspera('error', null, 5000).tipo).toBe('error')
+  })
+  it('vencida o eliminada: avisa sin decir que está disponible', () => {
+    for (const e of ['vencida', 'eliminada'] as const) {
+      const d = decidirEspera(e, null, 5000)
+      expect(d.tipo).toBe('error')
+      expect(d.tipo === 'error' && d.texto).not.toMatch(/disponible para ver|listo/i)
+    }
+  })
+  it('consultas acotadas: a lo sumo ~20 por pedido sin lector', () => {
+    let t = 0, n = 0
+    for (;;) { n++; const d = decidirEspera('pendiente', null, t); if (d.tipo !== 'seguir') break; t += d.en }
+    expect(n).toBeLessThanOrEqual(20)
   })
 })

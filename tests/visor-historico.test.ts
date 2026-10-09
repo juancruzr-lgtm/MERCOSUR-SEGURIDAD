@@ -24,4 +24,9 @@ describe('Lector del archivo histórico: rutas', () => {
     const r = leerRaices(`ADMINISTRACION/=${path.resolve('/a')};ADMINISTRACION/CARTAS/=${path.resolve('/c')}`)
     expect(resolverRuta('ADMINISTRACION/CARTAS/x.pdf', r)).toBe(path.join(path.resolve('/c'), 'x.pdf'))
   })
+  it('prefijo vacío: toda la raíz indexada (igual que DOCUMENT_ROOT_PATH), sin salir de ella', () => {
+    const r = leerRaices(`=${raiz}`)
+    expect(resolverRuta('EMPLEADOS/a.pdf', r)).toBe(path.join(raiz, 'EMPLEADOS', 'a.pdf'))
+    expect(resolverRuta('../a.pdf', r)).toBeNull()
+  })
 })
