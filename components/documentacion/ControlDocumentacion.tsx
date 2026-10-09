@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Documento } from '@/components/documentacion/DocumentacionLegajo'
+import VencimientosDocumentacion from '@/components/documentacion/VencimientosDocumentacion'
 import {
   esVigilador, fechaHora, resumenDocumentacion, situacionDeTipo,
 } from '@/lib/documentacion'
@@ -52,7 +53,7 @@ export default function ControlDocumentacion() {
   const [datos, setDatos] = useState<ControlDocumentacionDatos | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(true)
-  const [vista, setVista] = useState<'revisar' | 'personas'>('revisar')
+  const [vista, setVista] = useState<'revisar' | 'personas' | 'vencimientos'>('revisar')
   const [soloVigiladores, setSoloVigiladores] = useState(true)
   const [filtro, setFiltro] = useState<Filtro>('todos')
   const [buscar, setBuscar] = useState('')
@@ -149,6 +150,7 @@ export default function ControlDocumentacion() {
           Para revisar ({aRevisar.length + observados.length})
         </button>
         <button type="button" style={pestaña(vista === 'personas')} onClick={() => setVista('personas')}>Personas</button>
+        <button type="button" style={pestaña(vista === 'vencimientos')} onClick={() => setVista('vencimientos')}>Vencimientos</button>
         <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#94a3b8', padding: '0 8px', whiteSpace: 'nowrap' }}>
           <input type="checkbox" checked={soloVigiladores} onChange={e => setSoloVigiladores(e.target.checked)} />
           Sólo vigiladores
@@ -194,6 +196,8 @@ export default function ControlDocumentacion() {
           ))}
         </>
       )}
+
+      {vista === 'vencimientos' && <VencimientosDocumentacion />}
 
       {vista === 'personas' && (
         <>
