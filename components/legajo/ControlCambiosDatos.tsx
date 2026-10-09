@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ETIQUETA_ORIGEN, cargarCambiosPendientes, resolverCambio } from '@/lib/datos-personales'
 import type { CambioPendiente } from '@/lib/datos-personales'
+import PlanillaHistorica from '@/components/legajo/PlanillaHistorica'
 
 // Fechas AAAA-MM-DD → DD/MM/AAAA (el resto tal cual)
 const fmt = (v: string | null) => !v ? '—' : /^\d{4}-\d{2}-\d{2}$/.test(v) ? v.split('-').reverse().join('/') : v
@@ -65,15 +66,16 @@ export default function ControlCambiosDatos() {
   useEffect(() => { void cargar() }, [cargar])
   if (error) return <div style={{ ...card, color: '#fca5a5' }}>{error}</div>
   if (!filas) return <div style={{ color: '#64748b', padding: 24 }}>Cargando…</div>
-  const pend = filas.filter(f => f.estado === 'pendiente'), conf = filas.filter(f => f.estado === 'pendiente_confirmacion')
+  // Lo que espera la confirmación de la persona (planilla histórica) se ve
+  // agrupado por persona en PlanillaHistorica, no como una tarjeta por dato.
+  const pend = filas.filter(f => f.estado === 'pendiente')
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
       <div style={{ fontSize: 20, fontWeight: 800, color: '#e2e8f0' }}>Cambios de datos del personal</div>
       <div style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 14px' }}>Lo que propuso cada persona desde su legajo. Los datos sensibles cambian recién cuando se aprueban.</div>
       {pend.length === 0 && <div style={{ ...card, color: '#94a3b8' }}>No hay cambios para validar.</div>}
       {pend.map(f => <Fila key={f.id} f={f} onCambio={() => void cargar()} />)}
-      {conf.length > 0 && <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700, margin: '18px 2px 8px' }}>Datos de la planilla histórica esperando confirmación ({conf.length})</div>}
-      {conf.map(f => <Fila key={f.id} f={f} onCambio={() => void cargar()} />)}
+      <PlanillaHistorica />
     </div>
   )
 }
