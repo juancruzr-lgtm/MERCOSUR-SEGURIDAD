@@ -1,9 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
 import { tieneCapacidad, esGerenciaReal } from '@/lib/capacidades'
+import { afipConfigDesdeEnv } from '@/lib/afip/config'
+import { corroborarEmpleado } from '@/lib/afip/corroborar'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 30
+
+/**
+ * Corroboración ARCA al incorporar al empleado (reemplaza a la corrida diaria).
+ * Acotada en tiempo y sin efecto sobre el alta: si ARCA no responde, el alta
+ * igual queda hecha y se corrobora después desde el legajo.
+ */
+async function corroborarAlAlta(admin: Parameters<typeof corroborarEmpleado>[0], usuarioId: string, solicitadoPor: string) {
+  const cfg = afipConfigDesdeEnv()
+  if (cfg.error || !cfg.config) return
+  const tope = new Promise<void>(r => setTimeout(r, 8000))
+  await Promise.race([
+    corroborarEmpleado(admin, cfg.config, usuarioId, { tipo: 'alta', solicitadoPor }).catch(() => undefined),
+    tope,
+  ])
+}
 
 // Alta y edición del empleado pasan por acá, con rol validado en servidor.
 // Antes el modal escribía directo a `usuarios` con la anon key: el permiso
@@ -117,6 +135,7 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
+    if (data?.id && String(data.cuil ?? '').replace(/\D/g, '').length === 11) await corroborarAlAlta(admin.client, data.id, perfil.id)
     return NextResponse.json({ ok: true, usuario: data })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error interno del servidor'

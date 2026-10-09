@@ -51,7 +51,7 @@ interface Fila {
   faltantes: string[]
 }
 
-export default function ControlDocumentacion() {
+export default function ControlDocumentacion({ onVerHistorico }: { onVerHistorico?: (texto: string, categoria: string) => void } = {}) {
   const [datos, setDatos] = useState<ControlDocumentacionDatos | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(true)
@@ -202,7 +202,7 @@ export default function ControlDocumentacion() {
       )}
 
       {vista === 'vencimientos' && <VencimientosDocumentacion />}
-      {vista === 'situacion' && <MatrizDocumentacion datos={datos} personas={filas.map(f => f.p)} />}
+      {vista === 'situacion' && <MatrizDocumentacion datos={datos} personas={filas.map(f => f.p)} onVerHistorico={onVerHistorico} />}
       {vista === 'auditoria' && <AuditoriaDocumentacion />}
 
       {vista === 'personas' && (

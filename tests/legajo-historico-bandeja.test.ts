@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
-import { ESTADOS_VISUALES, estadoVisual, filtrarHistorico, motivoFueraDeLote, nivelHistorico, nivelIdentificacion } from '@/lib/legajo-historico'
+import { ESTADOS_VISUALES, estadoVisual, filtrarHistorico, motivoFueraDeLote, nivelHistorico, nivelIdentificacion, validarRangos } from '@/lib/legajo-historico'
 import type { PropuestaHistorica, TipoBandeja } from '@/lib/legajo-historico'
 
 const ref = (x: { tipo?: string | null; tipo_sugerido?: string | null; empleado_id?: string | null; sugerido?: boolean }) => ({
@@ -103,5 +103,24 @@ describe('Archivo histórico: confirmación en lote', () => {
     expect(motivoFueraDeLote(prop({ tipo_sugerido: 'cursos' }), tipos)).toMatch(/curso/)
     expect(motivoFueraDeLote(prop({ tipo_sugerido: 'cred' }), tipos)).toMatch(/vencimiento/)
     expect(motivoFueraDeLote(prop({ senales: { revisar: ['compilado_varios_documentos'] } }), tipos)).toMatch(/señales/)
+  })
+})
+
+describe('Archivo histórico: asignar páginas de un PDF compilado', () => {
+  it('rangos válidos, sin superposición, dentro del PDF y con categoría', () => {
+    expect(validarRangos([{ desde: 1, hasta: 2, tipo: 'dni' }, { desde: 3, hasta: 3, tipo: 'cuil' }], 3)).toBeNull()
+    expect(validarRangos([], 3)).toMatch(/al menos/)
+    expect(validarRangos([{ desde: 1, hasta: 2, tipo: 'dni' }, { desde: 2, hasta: 3, tipo: 'cuil' }], 3)).toMatch(/dos rangos/)
+    expect(validarRangos([{ desde: 1, hasta: 4, tipo: 'dni' }], 3)).toMatch(/3 páginas/)
+    expect(validarRangos([{ desde: 2, hasta: 1, tipo: 'dni' }], 3)).toMatch(/inválido/)
+    expect(validarRangos([{ desde: 1, hasta: 1, tipo: null }], 3)).toMatch(/categoría/)
+  })
+})
+
+describe('Archivo histórico: documento rechazado', () => {
+  it('copiado y rechazado en Documentación no figura como pendiente ni validado', () => {
+    const e = estadoVisual({ estado: 'importada', empleado_id: 'x', sugerido: null, documento_estado: 'rechazado' })
+    expect(e.clave).toBe('descartado')
+    expect(e.texto).toMatch(/rechazado/)
   })
 })

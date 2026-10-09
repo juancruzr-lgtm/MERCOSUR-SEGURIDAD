@@ -34,6 +34,8 @@ const pestaña = (activa: boolean): React.CSSProperties => ({
 
 export default function LegajoDigital({ inicial = 'datos', user }: { inicial?: SeccionLegajo; user?: { puesto_organizacional?: string | null } | null }) {
   const [seccion, setSeccion] = useState<SeccionLegajo>(inicial)
+  // Desde la marca histórica de la matriz: abrir el archivo histórico ya filtrado.
+  const [filtroHistorico, setFiltroHistorico] = useState<{ texto: string; categoria: string } | null>(null)
   const secciones = controlaHabilitacion(user) ? [...SECCIONES, ['habilitacion', 'Habilitación'] as [SeccionLegajo, string]] : SECCIONES
   return (
     <div>
@@ -43,12 +45,12 @@ export default function LegajoDigital({ inicial = 'datos', user }: { inicial?: S
       </div>
       <div role="tablist" aria-label="Secciones del Legajo Digital" style={{ display: 'flex', gap: 6, overflowX: 'auto', marginBottom: 16, paddingBottom: 2 }}>
         {secciones.map(([id, texto]) => (
-          <button key={id} type="button" role="tab" aria-selected={seccion === id} style={pestaña(seccion === id)} onClick={() => setSeccion(id)}>{texto}</button>
+          <button key={id} type="button" role="tab" aria-selected={seccion === id} style={pestaña(seccion === id)} onClick={() => { setSeccion(id); setFiltroHistorico(null) }}>{texto}</button>
         ))}
       </div>
       {seccion === 'datos' && <ControlCambiosDatos />}
-      {seccion === 'documentacion' && <ControlDocumentacion />}
-      {seccion === 'historico' && <BandejaHistorico />}
+      {seccion === 'documentacion' && <ControlDocumentacion onVerHistorico={(texto, categoria) => { setFiltroHistorico({ texto, categoria }); setSeccion('historico') }} />}
+      {seccion === 'historico' && <BandejaHistorico key={filtroHistorico ? filtroHistorico.texto + filtroHistorico.categoria : 'todo'} busquedaInicial={filtroHistorico?.texto} categoriaInicial={filtroHistorico?.categoria} />}
       {seccion === 'habilitacion' && controlaHabilitacion(user) && <HabilitacionLegajo />}
     </div>
   )

@@ -21,6 +21,7 @@ import {
   mostrarValor, pendienteDe, proponerCambio, resolverCambio,
 } from '@/lib/datos-personales'
 import type { CampoLegajo, CambioDato, DatosLegajo } from '@/lib/datos-personales'
+import CorroboracionArca from '@/components/legajo/CorroboracionArca'
 
 const card: React.CSSProperties = { background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 14, marginBottom: 12, minWidth: 0, boxSizing: 'border-box' }
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '10px 11px', fontSize: 15 }
@@ -204,6 +205,7 @@ export default function DatosPersonales({ empleadoId }: { empleadoId: string }) 
           {cs.map(c => <Campo key={c.campo} c={c} datos={datos} onCambio={() => void cargar()} />)}
         </div>
       ))}
+      {!datos.es_propio && <CorroboracionArca empleadoId={empleadoId} />}
       <div style={{ ...card, padding: '10px 14px' }}>
         <button type="button" onClick={() => setVerHistorial(!verHistorial)} style={{ background: 'none', border: 'none', color: '#93c5fd', fontSize: 13.5, cursor: 'pointer', padding: 0 }}>
           {verHistorial ? 'Ocultar historial' : `Ver historial de cambios (${resueltos.length})`}
