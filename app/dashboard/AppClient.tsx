@@ -139,6 +139,7 @@ import ControlEstatuto from '@/components/estatuto/ControlEstatuto'
 import ControlCambiosDatos from '@/components/legajo/ControlCambiosDatos'
 import ControlDocumentacion from '@/components/documentacion/ControlDocumentacion'
 import BandejaHistorico from '@/components/legajo/BandejaHistorico'
+import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
@@ -14288,11 +14289,12 @@ const esGuardia = esRolGuardia(user.rol)
       // laboral → Administración/Gerencia (gestionar_personal), no Supervisión.
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'estatuto_interno', icon:'📜', label:'Estatuto Interno' }] : []),
       // Legajo Digital: cambios de datos personales propuestos por el personal.
-      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'legajo_cambios_datos', icon:'🪪', label:'Cambios de datos' }] : []),
+      ...(gestionaDatosSensibles(user) ? [{ id:'legajo_cambios_datos', icon:'🪪', label:'Cambios de datos' }] : []),
+      // Datos personales y documentación: sólo puesto Administración o Gerencia (sin overrides).
       // Documentación del legajo: revisar lo presentado y ver qué falta. No Supervisión.
-      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'documentacion_legajo', icon:'🗂️', label:'Documentación' }] : []),
+      ...(gestionaDatosSensibles(user) ? [{ id:'documentacion_legajo', icon:'🗂️', label:'Documentación' }] : []),
       // Archivo histórico (MEGA): propuestas para revisar antes de importar.
-      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'legajo_historico', icon:'🗄️', label:'Archivo histórico' }] : []),
+      ...(gestionaDatosSensibles(user) ? [{ id:'legajo_historico', icon:'🗄️', label:'Archivo histórico' }] : []),
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
@@ -14442,9 +14444,9 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
               {page === 'afip_empleados' && tieneCapacidad(user, 'gestionar_personal') && <CorroboracionAfip />}
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
-              {page === 'legajo_cambios_datos' && tieneCapacidad(user, 'gestionar_personal') && <ControlCambiosDatos />}
-              {page === 'documentacion_legajo' && tieneCapacidad(user, 'gestionar_personal') && <ControlDocumentacion />}
-              {page === 'legajo_historico' && tieneCapacidad(user, 'gestionar_personal') && <BandejaHistorico />}
+              {page === 'legajo_cambios_datos' && gestionaDatosSensibles(user) && <ControlCambiosDatos />}
+              {page === 'documentacion_legajo' && gestionaDatosSensibles(user) && <ControlDocumentacion />}
+              {page === 'legajo_historico' && gestionaDatosSensibles(user) && <BandejaHistorico />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}
