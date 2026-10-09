@@ -16,7 +16,10 @@
 --
 -- ── Cómo, sin romper nada (12 pasos) ────────────────────────────────────────
 --  1. candidatos   storage_recompresion_candidatos (sólo service_role)
---  2. exclusiones  ya recomprimidas/omitidas; con hash o análisis en curso
+--  2. exclusiones  ya recomprimidas/omitidas; con hash o análisis en curso;
+--                  supervisiones no OK, con ítems observados u observación que no
+--                  sea de rutina (29 fotos protegidas al 09/10;
+--                  2.079 candidatas, 5,54 GB → ~0,64 GB)
 --  3. simulación   el script en modo `simular` NO escribe nada
 --  4. aprobación   el lote PROPUESTO guarda la lista exacta de rutas (con eTag);
 --                  sólo Gerencia lo aprueba (storage_recompresion_aprobar)
@@ -166,6 +169,19 @@ language sql stable security definer set search_path = public, storage, pg_catal
                       and (e.contenido_sha256 is not null
                            or exists (select 1 from public.evidencia_analisis a
                                       where a.evidencia_id = e.id and a.estado in ('pendiente','procesando'))))
+    -- Evidencia necesaria para auditoría: supervisiones que no terminaron OK,
+    -- con algún ítem observado o con observación escrita. No se tocan.
+    and not exists (select 1 from public.supervision_fotos f
+                    join public.supervisiones sv on sv.id = f.supervision_id
+                    where f.storage_path = o.name
+                      and (sv.estado is distinct from 'ok'
+                           -- Una nota general cuenta como incidencia salvo que sea de rutina
+                           -- ("vig X sin novedad"): medido el 09/10.
+                           or (nullif(btrim(coalesce(sv.observaciones, '')), '') is not null
+                               and lower(sv.observaciones) !~ '(sin novedad|sin novedades|s/ ?n\y|sin observaciones|todo (ok|bien|en orden)|normal)')
+                           or exists (select 1 from public.supervision_respuestas r
+                                      where r.supervision_id = sv.id
+                                        and (r.resultado = 'observado' or nullif(btrim(coalesce(r.observacion, '')), '') is not null))))
   order by (o.metadata->>'size')::bigint desc
   limit greatest(1, least(p_limite, 2000))
 $fn$;
