@@ -220,7 +220,9 @@ export function estadoVisual(p: Pick<PropuestaHistorica, 'estado' | 'empleado_id
     case 'aceptada': return { clave: 'asociacion_confirmada', texto: 'Asociación confirmada · referencia sin validar', color: '#86efac' }
     case 'importada': return p.documento_estado === 'aprobado' || p.documento_estado === 'aceptado'
       ? { clave: 'documento_validado', texto: 'Documento validado en Documentación', color: '#22c55e' }
-      : { clave: 'pendiente_validacion', texto: 'Copiado al legajo · pendiente de validación documental', color: '#86efac' }
+      : p.documento_estado === 'rechazado' || p.documento_estado === 'anulado'
+        ? { clave: 'descartado', texto: 'Documento rechazado en Documentación', color: '#fca5a5' }
+        : { clave: 'pendiente_validacion', texto: 'Copiado al legajo · pendiente de validación documental', color: '#86efac' }
     case 'descartada': return { clave: 'descartado', texto: 'Descartado', color: '#94a3b8' }
     case 'separada': return { clave: 'separado', texto: 'Separado en partes (se revisa cada parte)', color: '#94a3b8' }
   }
@@ -322,4 +324,60 @@ export async function cargarEventosHistorico(propuestaId: string): Promise<{ eve
     eventos: (data ?? []).map(e => ({ evento: e.evento, at: e.at, quien: e.usuario_id ? nombres.get(e.usuario_id) ?? null : null, detalle: e.detalle as Record<string, unknown> | null })),
     error: null,
   }
+}
+
+// ── Ver el archivo de MEGA (copia temporal, sin modificar el original) ──────
+
+export type EstadoVista = 'pendiente' | 'tomada' | 'lista' | 'error' | 'vencida' | 'eliminada'
+
+export async function solicitarVista(propuestaId: string): Promise<{ id: string | null; error: string | null }> {
+  const { data, error } = await supabase.rpc('legajo_historico_solicitar_vista', { p_propuesta_id: propuestaId })
+  if (error) return { id: null, error: mensaje(error, 'No se pudo pedir el archivo') }
+  return { id: (data as { id: string }).id, error: null }
+}
+
+export async function estadoVista(id: string): Promise<{ estado: EstadoVista | null; error: string | null }> {
+  const { data, error } = await supabase.rpc('legajo_historico_estado_vista', { p_id: id })
+  if (error) return { estado: null, error: mensaje(error, 'No se pudo consultar el pedido') }
+  const d = data as { estado: EstadoVista; error: string | null }
+  return { estado: d.estado, error: d.error }
+}
+
+/**
+ * Trae la copia temporal con un enlace de 60 s y la deja en memoria de esta
+ * pestaña (blob:). Así se puede navegar el PDF sin volver a pedir el archivo;
+ * al cerrar el visor, la memoria se libera.
+ */
+export async function traerVista(id: string): Promise<{ url: string | null; mime: string | null; error: string | null }> {
+  const { data } = await supabase.auth.getSession()
+  const token = data.session?.access_token
+  if (!token) return { url: null, mime: null, error: 'Sesión vencida: volvé a ingresar' }
+  try {
+    const res = await fetch(`/api/legajo/historico/vista/${id}`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
+    const j = await res.json().catch(() => ({}))
+    if (!res.ok || !j.url) return { url: null, mime: null, error: j.error || 'No se pudo abrir el archivo' }
+    const arch = await fetch(j.url, { cache: 'no-store' })
+    if (!arch.ok) return { url: null, mime: null, error: 'El enlace venció: abrilo de nuevo' }
+    const blob = await arch.blob()
+    return { url: URL.createObjectURL(new Blob([blob], { type: j.mime })), mime: j.mime, error: null }
+  } catch {
+    return { url: null, mime: null, error: 'No hay conexión' }
+  }
+}
+
+/**
+ * Rangos marcados en el visor → rangos para «Separar». Ordena, valida contra
+ * la cantidad de páginas y rechaza superposiciones (una página, un documento).
+ */
+export function validarRangos(rangos: { desde: number; hasta: number; tipo: string | null }[], paginas: number | null): string | null {
+  if (!rangos.length) return 'Marcá al menos un rango de páginas'
+  const ord = [...rangos].sort((a, b) => a.desde - b.desde)
+  for (let i = 0; i < ord.length; i++) {
+    const r = ord[i]
+    if (!Number.isInteger(r.desde) || !Number.isInteger(r.hasta) || r.desde < 1 || r.hasta < r.desde) return `Rango inválido: ${r.desde}–${r.hasta}`
+    if (paginas && r.hasta > paginas) return `El PDF tiene ${paginas} páginas`
+    if (i > 0 && r.desde <= ord[i - 1].hasta) return `Las páginas ${r.desde}–${ord[i - 1].hasta} están en dos rangos`
+    if (!r.tipo) return `Elegí la categoría de las páginas ${r.desde}–${r.hasta}`
+  }
+  return null
 }

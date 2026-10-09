@@ -7,7 +7,9 @@
     "simular": "ts-node src/index.ts --mode simular",
     "scan": "ts-node src/index.ts --mode scan",
     "watch": "ts-node src/index.ts --mode watch",
-    "test-connection": "ts-node src/index.ts --mode test-connection"
+    "test-connection": "ts-node src/index.ts --mode test-connection",
+    "visor": "ts-node src/visor/index.ts",
+    "visor:piloto": "ts-node src/visor/piloto.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.43.1",

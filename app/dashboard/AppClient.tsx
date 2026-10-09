@@ -81,7 +81,6 @@ import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import NovedadesPersonalPanel from '@/components/novedades/NovedadesPersonalPanel'
 import LiquidacionPanel from '@/components/liquidacion/LiquidacionPanel'
-import CorroboracionAfip from '@/components/afip/CorroboracionAfip'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
@@ -14283,8 +14282,8 @@ const esGuardia = esRolGuardia(user.rol)
       // Novedades del Personal: gestión de novedades laborales por rango/cantidad.
       // Gateado por capacidad gestionar_personal (Administración/Gerencia).
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'novedades_personal', icon:'🧑‍💼', label:'Novedades del Personal' }] : []),
-      // AFIP · Corroboración de empleados contra el Padrón A13 (misma capacidad).
-      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'afip_empleados', icon:'🏛️', label:'AFIP · Empleados' }] : []),
+      // «AFIP · Empleados» salió del menú: la corroboración ARCA vive en el
+      // legajo de cada persona (Legajo Digital → Datos personales).
       // Estatuto Interno: versiones, aceptaciones y pendientes. Documentación
       // laboral → Administración/Gerencia (gestionar_personal), no Supervisión.
       ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'estatuto_interno', icon:'📜', label:'Estatuto Interno' }] : []),
@@ -14439,7 +14438,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'novedades' && <Novedades novedades={novedades} setNovedades={setNovedades} guardias={guardias} objetivos={objetivos} filtroActivo={filtros.novedades} limpiarFiltro={() => limpiarFiltro('novedades')} />}
               {page === 'reportes' && <Reportes registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} novedades={novedades} supervisorZonas={supervisorZonas} filtroActivo={filtros.reportes} limpiarFiltro={() => limpiarFiltro('reportes')} user={user} />}
               {page === 'novedades_personal' && tieneCapacidad(user, 'gestionar_personal') && <NovedadesPersonalPanel user={user} empleados={guardias} />}
-              {page === 'afip_empleados' && tieneCapacidad(user, 'gestionar_personal') && <CorroboracionAfip />}
+              {page === 'afip_empleados' && gestionaDatosSensibles(user) && <LegajoDigital inicial="datos" user={user} />}
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
               {page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital user={user} />}
               {/* Accesos anteriores (enlaces guardados): abren la misma pantalla en su sección. */}

@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import VisorHistorico from '@/components/legajo/VisorHistorico'
 import {
   ESTADOS_VISUALES, EVENTO_HISTORICO, NIVELES_IDENTIFICACION, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe,
   confirmarEnLote, estadoVisual, filtrarHistorico, leerRangos, motivoFueraDeLote, nivelIdentificacion, resolverPropuesta, tienePersona,
@@ -225,6 +226,7 @@ function ConfirmarLote({ propuestas, tipos, onListo }: { propuestas: PropuestaHi
 function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBandeja[]; onCambio: () => void }) {
   const [modo, setModo] = useState<null | 'aceptar' | 'descartar' | 'separar'>(null)
   const [verHistorial, setVerHistorial] = useState(false)
+  const [verDoc, setVerDoc] = useState(false)
   const nivel = estadoVisual(p)
   const ident = NIVELES_IDENTIFICACION.find(([k]) => k === nivelIdentificacion(p))?.[1] ?? ''
   const evidencia = [
@@ -261,6 +263,12 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
         {verHistorial ? 'Ocultar historial' : 'Ver historial'}
       </button>
       {verHistorial && <Historial id={p.id} />}
+      {p.indexado && !verDoc && (
+        <button type="button" onClick={() => setVerDoc(true)} style={{ display: 'block', background: 'none', border: 'none', color: '#93c5fd', padding: 0, marginTop: 6, fontSize: 12.5, cursor: 'pointer' }}>
+          Ver documento{(p.paginas ?? 0) > 1 && !p.padre_id ? ' y asignar páginas' : ''}
+        </button>
+      )}
+      {verDoc && <VisorHistorico p={p} tipos={tipos} onCerrar={() => setVerDoc(false)} onCambio={onCambio} />}
 
       {abierta && modo === null && (
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
@@ -282,14 +290,14 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
   )
 }
 
-export default function BandejaHistorico() {
+export default function BandejaHistorico({ busquedaInicial, categoriaInicial }: { busquedaInicial?: string; categoriaInicial?: string } = {}) {
   const [estado, setEstado] = useState<EstadoPropuesta>('pendiente')
-  const [texto, setTexto] = useState('')
-  const [buscar, setBuscar] = useState('')
+  const [texto, setTexto] = useState(busquedaInicial ?? '')
+  const [buscar, setBuscar] = useState(busquedaInicial ?? '')
   const [datos, setDatos] = useState<Bandeja | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargandoMas, setCargandoMas] = useState(false)
-  const [categoria, setCategoria] = useState('')
+  const [categoria, setCategoria] = useState(categoriaInicial ?? '')
   const [nivel, setNivel] = useState<NivelIdentificacion | ''>('')
   const [visual, setVisual] = useState<EstadoVisual | ''>('')
   const [soloSinPersona, setSoloSinPersona] = useState(false)

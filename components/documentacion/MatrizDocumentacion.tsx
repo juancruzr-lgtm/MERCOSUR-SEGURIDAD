@@ -29,7 +29,11 @@ const CORTO: Record<string, string> = {
 }
 const abreviar = (t: TipoDocumento) => CORTO[t.codigo] ?? t.nombre.slice(0, 12)
 
-export default function MatrizDocumentacion({ datos, personas }: { datos: ControlDocumentacionDatos; personas: PersonaControl[] }) {
+export default function MatrizDocumentacion({ datos, personas, onVerHistorico }: {
+  datos: ControlDocumentacionDatos; personas: PersonaControl[]
+  /** Abre el archivo histórico filtrado por la persona y la categoría. */
+  onVerHistorico?: (texto: string, categoria: string) => void
+}) {
   const [soloFaltantes, setSoloFaltantes] = useState(false)
   const [texto, setTexto] = useState('')
   const [estado, setEstado] = useState('')
@@ -106,7 +110,10 @@ export default function MatrizDocumentacion({ datos, personas }: { datos: Contro
                   return (
                     <td key={t.codigo} title={`${t.nombre}: ${c.titulo}${h ? ` · ${TEXTO_PISTA[h.nivel].texto} (${h.referencias})` : ''}`}
                       style={{ textAlign: 'center', color: c.color, background: c.fondo, padding: '5px 3px', fontWeight: 700, whiteSpace: 'nowrap' }}>
-                      {c.corto}{h && <sup style={{ color: '#93c5fd', fontWeight: 600, marginLeft: 2 }}>{TEXTO_PISTA[h.nivel].corto}</sup>}
+                      {c.corto}{h && (onVerHistorico
+                        ? <button type="button" onClick={() => onVerHistorico(`${p.apellido} ${p.nombre}`, t.codigo)} aria-label={`Ver en el archivo histórico: ${TEXTO_PISTA[h.nivel].texto}`}
+                            style={{ background: 'none', border: 'none', padding: 0, marginLeft: 2, color: '#93c5fd', fontWeight: 600, fontSize: '0.75em', verticalAlign: 'super', cursor: 'pointer', textDecoration: 'underline' }}>{TEXTO_PISTA[h.nivel].corto}</button>
+                        : <sup style={{ color: '#93c5fd', fontWeight: 600, marginLeft: 2 }}>{TEXTO_PISTA[h.nivel].corto}</sup>)}
                     </td>
                   )
                 })}
@@ -120,7 +127,7 @@ export default function MatrizDocumentacion({ datos, personas }: { datos: Contro
       </div>
       <div style={{ fontSize: 11.5, color: '#64748b', marginTop: 2 }}>
         Archivo histórico (sólo pista, no cuenta como presentado): <span style={{ color: '#93c5fd' }}>H?</span> localizada con conflicto ·{' '}
-        <span style={{ color: '#93c5fd' }}>H</span> asociación pendiente · <span style={{ color: '#93c5fd' }}>H✓</span> asociada sin validar. Sin marca: no localizada.
+        <span style={{ color: '#93c5fd' }}>H</span> asociación pendiente · <span style={{ color: '#93c5fd' }}>H✓</span> asociada sin validar. Sin marca: no localizada.{onVerHistorico ? ' Tocá la marca para ver esos archivos.' : ''}
       </div>
     </div>
   )
