@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { comprimirFotoOperativa } from '@/lib/comprimir-imagen'
+import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import {
   etiquetaPoliticaFoto,
   fotoEsObligatoriaEnVisita,
@@ -90,18 +90,15 @@ function estadoDesdeCaptura(resultado: ResultadoCapturaGps): EstadoGps {
   }
 }
 
-// Compresión: lib/comprimir-imagen, perfil 'operativa'. Los mensajes de error
-// siguen siendo los de esta pantalla.
+// Compresión: lib/comprimir-imagen, perfil 'operativa'. Si el celular no puede
+// comprimir pero la original es una foto válida, se usa la original (el
+// servidor la controla): un problema de cámara no debe impedir la ronda.
 async function comprimirFoto(file: File): Promise<File> {
   try {
-    const f = await comprimirFotoOperativa(file, 'operativa')
-    return new File([f], 'punto-ronda.jpg', { type: 'image/jpeg' })
+    const { file: lista } = await prepararFotoOperativa(file, 'operativa')
+    return new File([lista], 'punto-ronda.jpg', { type: lista.type || 'image/jpeg' })
   } catch (e) {
-    const codigo = e instanceof Error ? e.message : ''
-    if (codigo === 'compresion_timeout') throw new Error('La imagen tardó demasiado en procesarse.')
-    if (codigo === 'imagen_carga_fallo') throw new Error('El archivo seleccionado no es una imagen válida.')
-    if (codigo === 'canvas_no_disponible') throw new Error('El dispositivo no pudo preparar la foto.')
-    throw new Error('El dispositivo no pudo comprimir la foto.')
+    throw new Error(mensajeErrorFoto(e instanceof Error ? e.message : ''))
   }
 }
 

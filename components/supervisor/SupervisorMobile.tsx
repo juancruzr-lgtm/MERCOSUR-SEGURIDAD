@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { alcanceDe } from '@/lib/capacidades'
 import { filtrarTurnosParaAlertas, objetivoIdsParaAlertas } from '@/lib/alertas-alcance'
 import { activarNotificacionesPush } from '@/lib/push-client'
-import { comprimirFotoOperativa, originalSubible } from '@/lib/comprimir-imagen'
+import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, objetivoEstaOperativo, registroTieneEntradaConfirmada, idsObjetivosPausados } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
@@ -2171,24 +2171,25 @@ export default function SupervisorMobile({ user }: any) {
     setComprimiendoFotos(true)
     setError('')
     const listas: File[] = []
-    const fallidas: string[] = []
+    const fallidas: { nombre: string; codigo: string }[] = []
 
     for (const original of nuevasFotos) {
       try {
-        listas.push(await comprimirFotoOperativa(original, 'operativa'))
-      } catch {
         // Si no se pudo comprimir, el original sólo se usa si es JPG/PNG/WEBP y
         // entra en el límite. Antes se subía cualquier cosa ≤ 4 MB (p. ej. un
         // HEIC elegido de la galería), que después no se veía ni lo leía la IA.
-        if (originalSubible(original)) listas.push(original)
-        else fallidas.push(original.name)
+        listas.push((await prepararFotoOperativa(original, 'operativa')).file)
+      } catch (e) {
+        fallidas.push({ nombre: original.name, codigo: e instanceof Error ? e.message : '' })
       }
     }
 
     if (listas.length > 0) setSupervisionFotos(prev => [...prev, ...listas])
     if (fallidas.length > 0) {
-      setError(`No se pudo procesar ${fallidas.length === 1 ? 'la foto' : 'las fotos'} `
-        + `${fallidas.join(', ')}. Probá sacarla de nuevo con menos resolución.`)
+      setError(fallidas.length === 1
+        ? mensajeErrorFoto(fallidas[0].codigo, `la foto ${fallidas[0].nombre}`)
+        : `No se pudieron usar ${fallidas.length} fotos (${fallidas.map(x => x.nombre).join(', ')}). `
+          + 'Sacalas de nuevo con la cámara; las demás quedaron agregadas.')
     }
     setComprimiendoFotos(false)
   }

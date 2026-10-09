@@ -130,6 +130,48 @@ export function originalSubible(file: { type: string; size: number }): boolean {
   return (TIPOS_ORIGINAL_ACEPTABLE as readonly string[]).includes(file.type) && !superaElLimite(file)
 }
 
+/** Mensaje para la persona según por qué no se pudo preparar la foto. */
+export function mensajeErrorFoto(codigo: string, que = 'la foto'): string {
+  if (codigo === 'imagen_carga_fallo') return `No se pudo abrir ${que}: ese formato no se puede usar (por ejemplo, HEIC de la galería). Sacala de nuevo con la cámara.`
+  if (codigo === 'compresion_timeout') return `${que[0].toUpperCase() + que.slice(1)} tardó demasiado en procesarse. Probá de nuevo o sacala otra vez.`
+  if (codigo === 'demasiado_grande') return `${que[0].toUpperCase() + que.slice(1)} es demasiado pesada y no se pudo achicar. Sacala de nuevo con la cámara.`
+  return `No se pudo preparar ${que}. Sacala de nuevo con la cámara.`
+}
+
+/**
+ * Deja la foto lista para subir: la comprime con el perfil; si el celular no
+ * puede comprimirla pero la original es JPG/PNG/WEBP y entra en el límite, usa
+ * la original (el servidor la vuelve a controlar). Si tampoco, rechaza con un
+ * Error cuyo message es un código de ErrorCompresion o 'demasiado_grande': la
+ * pantalla muestra mensajeErrorFoto() y deja volver a sacarla.
+ *
+ * Así un problema de cámara no impide fichar ni registrar una ronda, y nunca se
+ * sube un archivo que el servidor o la IA no puedan leer.
+ */
+export async function prepararFotoOperativa(file: File, perfil: PerfilFoto): Promise<{ file: File; comprimida: boolean; error?: string }> {
+  try {
+    return { file: await comprimirFotoOperativa(file, perfil), comprimida: true }
+  } catch (e) {
+    const codigo = e instanceof Error ? e.message : 'compresion_blob_fallo'
+    // La original sólo sirve si además sus primeros bytes son de verdad una
+    // foto JPG/PNG/WEBP (un archivo dañado puede declararse image/jpeg).
+    if (originalSubible(file) && await firmaDeFotoValida(file)) return { file, comprimida: false, error: codigo }
+    throw new Error(superaElLimite(file) ? 'demasiado_grande' : codigo)
+  }
+}
+
+/** Primeros bytes de JPG, PNG o WEBP (mismo criterio que app/api/_lib/validar-foto). */
+export async function firmaDeFotoValida(file: Blob): Promise<boolean> {
+  try {
+    const b = new Uint8Array(await file.slice(0, 12).arrayBuffer())
+    const ascii = (i: number, n: number) => String.fromCharCode(...Array.from(b.slice(i, i + n)))
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true
+    if (b[0] === 0x89 && ascii(1, 3) === 'PNG') return true
+    if (ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') return true
+    return false
+  } catch { return false }
+}
+
 /** Un archivo que supera esto no entra en una función de Vercel. */
 export const LIMITE_SUBIDA_BYTES = 4 * 1024 * 1024
 

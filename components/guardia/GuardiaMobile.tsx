@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { comprimirFotoOperativa } from '@/lib/comprimir-imagen'
+import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import { activarNotificacionesPush } from '@/lib/push-client'
@@ -1266,10 +1266,13 @@ export default function GuardiaMobile({ user }: { user: any }) {
     })
 
     try {
-      ;[libroComprimido, uniformeComprimido] = await Promise.all([
-        comprimirFotoOperativa(fotoLibro.file, 'libro_guardia'),
-        comprimirFotoOperativa(fotoUniforme.file, 'operativa'),
-      ])
+      // Cada foto por separado, para decir cuál falló. Si el celular no puede
+      // comprimir pero la original es una foto válida, se usa la original (el
+      // servidor la controla): un problema de cámara no debe impedir fichar.
+      const libro = await prepararFotoOperativa(fotoLibro.file, 'libro_guardia').catch(e => { throw new Error('libro:' + (e instanceof Error ? e.message : '')) })
+      const uniforme = await prepararFotoOperativa(fotoUniforme.file, 'operativa').catch(e => { throw new Error('uniforme:' + (e instanceof Error ? e.message : '')) })
+      libroComprimido = libro.file
+      uniformeComprimido = uniforme.file
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'compresion_desconocido'
       track('compresion_error', {
@@ -1291,8 +1294,11 @@ export default function GuardiaMobile({ user }: { user: any }) {
         duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
         value_json: { intento_id: intentoId },
       })
-      setMensaje({ texto: 'Error al procesar las fotos. Intentá de nuevo.', tipo: 'error' })
-      setTimeout(() => setMensaje(null), 5000)
+      const [cual, codigo] = errMsg.includes(':') ? errMsg.split(':') : ['', errMsg]
+      const que = cual === 'libro' ? 'la foto del libro de guardia' : cual === 'uniforme' ? 'la foto del uniforme' : 'la foto'
+      // Vuelve a la vista previa: ahí está "Retomar" para sacar de nuevo la que falló.
+      setMensaje({ texto: mensajeErrorFoto(codigo, que), tipo: 'error' })
+      setTimeout(() => setMensaje(null), 8000)
       setIngresoFase('preview')
       return
     }

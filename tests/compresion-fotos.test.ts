@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { describe, expect, it } from 'vitest'
-import { PERFILES_FOTO, dimensionesDestino, originalSubible } from '@/lib/comprimir-imagen'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { PERFILES_FOTO, dimensionesDestino, mensajeErrorFoto, originalSubible, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import { detectarMimeFoto, validarFotoOperativa } from '@/app/api/_lib/validar-foto'
 
 const RAIZ = join(__dirname, '..')
@@ -58,17 +58,52 @@ describe('una sola compresión en toda la app', () => {
   it('fichaje, rondas y supervisión usan comprimirFotoOperativa', () => {
     for (const f of ['components/guardia/GuardiaMobile.tsx', 'components/rondas/RondaGuardiaEjecucion.tsx', 'components/supervisor/SupervisorMobile.tsx']) {
       const s = leer(f)
-      expect(s).toContain('comprimirFotoOperativa')
+      expect(s).toContain('prepararFotoOperativa')
       expect(s).not.toMatch(/canvas\.toBlob/)
     }
   })
   it('el libro de guardia usa el perfil de documento', () => {
-    expect(leer('components/guardia/GuardiaMobile.tsx')).toContain("comprimirFotoOperativa(fotoLibro.file, 'libro_guardia')")
+    expect(leer('components/guardia/GuardiaMobile.tsx')).toContain("prepararFotoOperativa(fotoLibro.file, 'libro_guardia')")
   })
   it('las tres rutas de subida registran la huella', () => {
     for (const f of ['app/api/upload-evidence/route.ts', 'app/api/rondas/evidencia/route.ts']) {
       expect(leer(f)).toContain('contenido_sha256')
     }
     expect(leer('app/api/upload-supervision-photo/route.ts')).toContain('validarFotoOperativa')
+  })
+})
+
+describe('si el celular no puede leer la foto (cámara incompatible, HEIC)', () => {
+  // Simula un navegador que no logra decodificar la imagen.
+  const ImageOriginal = (globalThis as any).Image
+  const urlOriginal = { create: URL.createObjectURL, revoke: URL.revokeObjectURL }
+  beforeAll(() => {
+    ;(globalThis as any).Image = class { onload?: () => void; onerror?: () => void; set src(_v: string) { setTimeout(() => this.onerror?.(), 0) } }
+    URL.createObjectURL = () => 'blob:prueba'
+    URL.revokeObjectURL = () => {}
+  })
+  afterAll(() => {
+    ;(globalThis as any).Image = ImageOriginal
+    URL.createObjectURL = urlOriginal.create; URL.revokeObjectURL = urlOriginal.revoke
+  })
+
+  it('un JPG que no se pudo comprimir se usa tal cual (no traba el fichaje ni la ronda)', async () => {
+    const f = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(996).fill(1)])], 'foto.jpg', { type: 'image/jpeg' })
+    const r = await prepararFotoOperativa(f, 'operativa')
+    expect(r.comprimida).toBe(false)
+    expect(r.file).toBe(f)
+  })
+  it('un HEIC no se sube: error con mensaje para volver a sacarla', async () => {
+    const f = new File([new Uint8Array(1000)], 'IMG_0001.HEIC', { type: 'image/heic' })
+    await expect(prepararFotoOperativa(f, 'operativa')).rejects.toThrow('imagen_carga_fallo')
+    expect(mensajeErrorFoto('imagen_carga_fallo', 'la foto del uniforme')).toMatch(/HEIC.*Sacala de nuevo con la cámara/)
+  })
+  it('un archivo dañado que dice ser JPG tampoco se sube', async () => {
+    const f = new File([new Uint8Array(1000)], 'foto.jpg', { type: 'image/jpeg' })
+    await expect(prepararFotoOperativa(f, 'operativa')).rejects.toThrow('imagen_carga_fallo')
+  })
+  it('un JPG enorme que no se pudo achicar tampoco', async () => {
+    const f = new File([new Uint8Array(5 * 1024 * 1024)], 'foto.jpg', { type: 'image/jpeg' })
+    await expect(prepararFotoOperativa(f, 'operativa')).rejects.toThrow('demasiado_grande')
   })
 })
