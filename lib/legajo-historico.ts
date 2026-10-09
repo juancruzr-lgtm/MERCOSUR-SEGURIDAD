@@ -138,15 +138,21 @@ export async function cargarIndicios(empleadoId: string): Promise<Indicio[]> {
 
 // ── Filtros de la bandeja y nivel de cada referencia ────────────────────────
 
-/** '' = todas · '(sin)' = sin categoría · código = esa categoría (asignada o sugerida). */
-export type FiltroHistorico = { categoria?: string; soloSinPersona?: boolean }
+/**
+ * '' = todas · '(sin)' = sin categoría · '(fuera)' = categoría que hoy no está en el
+ * catálogo vigente (hay que elegir otra o descartar) · código = esa categoría.
+ */
+export type FiltroHistorico = { categoria?: string; soloSinPersona?: boolean; activas?: string[] }
 
 export const categoriaDe = (p: Pick<PropuestaHistorica, 'tipo' | 'tipo_sugerido'>) => p.tipo ?? p.tipo_sugerido ?? null
 export const tienePersona = (p: Pick<PropuestaHistorica, 'empleado_id' | 'sugerido'>) => !!(p.empleado_id ?? p.sugerido)
 
 export function filtrarHistorico<T extends Pick<PropuestaHistorica, 'tipo' | 'tipo_sugerido' | 'empleado_id' | 'sugerido'>>(lista: T[], f: FiltroHistorico): T[] {
   return lista.filter(p =>
-    (!f.categoria || (f.categoria === '(sin)' ? categoriaDe(p) === null : categoriaDe(p) === f.categoria))
+    (!f.categoria
+      || (f.categoria === '(sin)' ? categoriaDe(p) === null
+        : f.categoria === '(fuera)' ? categoriaDe(p) !== null && !(f.activas ?? []).includes(categoriaDe(p) as string)
+        : categoriaDe(p) === f.categoria))
     && (!f.soloSinPersona || !tienePersona(p)))
 }
 

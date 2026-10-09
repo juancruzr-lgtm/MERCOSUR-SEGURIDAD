@@ -176,6 +176,9 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
           ? <>Aceptado como <b>{nombreTipo(p.tipo)}</b></>
           : <>Sugerido: <b>{nombreTipo(p.tipo_sugerido)}</b> de <b>{p.sugerido ? `${p.sugerido.apellido}, ${p.sugerido.nombre}` : 'persona a definir'}</b></>}
       </div>
+      {p.tipo_sugerido && !p.tipo && !tipos.some(t => t.codigo === p.tipo_sugerido) && (
+        <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 4 }}>La categoría sugerida hoy no se exige en el legajo: al aceptar, elegí otra categoría o descartalo.</div>
+      )}
       {p.motivo_conflicto && <div style={{ fontSize: 13, color: '#fbbf24', marginTop: 4 }}>⚠ {p.motivo_conflicto}</div>}
       {revisar.length > 0 && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>Señales: {revisar.join(' · ')}</div>}
       {!p.indexado && <div style={{ fontSize: 12, color: '#fca5a5', marginTop: 4 }}>El archivo no está en el índice del agente: no se puede aceptar hasta reindexar.</div>}
@@ -246,6 +249,7 @@ export default function BandejaHistorico() {
             style={{ background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '7px 8px', fontSize: 13, minWidth: 0 }}>
             <option value="">Todas las categorías</option>
             <option value="(sin)">Sin categoría</option>
+            <option value="(fuera)">Categoría que hoy no se exige</option>
             {datos.tipos.filter(t => datos.propuestas.some(p => categoriaDe(p) === t.codigo)).map(t => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
           </select>
           <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, color: '#94a3b8' }}>
@@ -253,7 +257,7 @@ export default function BandejaHistorico() {
           </label>
         </div>
       )}
-      {datos && filtrarHistorico(datos.propuestas, { categoria, soloSinPersona }).map(p => <Tarjeta key={p.id} p={p} tipos={datos.tipos} onCambio={() => void cargar()} />)}
+      {datos && filtrarHistorico(datos.propuestas, { categoria, soloSinPersona, activas: datos.tipos.map(t => t.codigo) }).map(p => <Tarjeta key={p.id} p={p} tipos={datos.tipos} onCambio={() => void cargar()} />)}
     </div>
   )
 }

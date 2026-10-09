@@ -32,3 +32,11 @@ describe('Archivo histórico: localizar o asociar no es validar', () => {
     expect(matriz).not.toMatch(/historic|legajo_historico/i)
   })
 })
+
+describe('Archivo histórico: categoría fuera del catálogo vigente', () => {
+  it('se puede filtrar y no se confunde con «sin categoría»', () => {
+    const lista = [ref({ tipo_sugerido: 'alta_art' }), ref({ tipo_sugerido: 'dni' }), ref({})]
+    expect(filtrarHistorico(lista, { categoria: '(fuera)', activas: ['dni'] }).map(p => p.tipo_sugerido)).toEqual(['alta_art'])
+    expect(filtrarHistorico(lista, { categoria: '(sin)', activas: ['dni'] })).toHaveLength(1)
+  })
+})
