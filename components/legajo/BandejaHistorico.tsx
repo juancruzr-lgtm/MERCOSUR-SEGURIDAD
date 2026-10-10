@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import VisorHistorico from '@/components/legajo/VisorHistorico'
 import {
-  ESTADOS_VISUALES, EVENTO_HISTORICO, NIVELES_IDENTIFICACION, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe,
+  ESTADOS_VISUALES, EVENTO_HISTORICO, esIdPersona, nombrePersona, NIVELES_IDENTIFICACION, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe,
   confirmarEnLote, estadoVisual, filtrarHistorico, leerRangos, motivoFueraDeLote, nivelIdentificacion, resolverPropuesta, tienePersona,
 } from '@/lib/legajo-historico'
 import type {
@@ -292,8 +292,14 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
 
 export default function BandejaHistorico({ busquedaInicial, categoriaInicial }: { busquedaInicial?: string; categoriaInicial?: string } = {}) {
   const [estado, setEstado] = useState<EstadoPropuesta>('pendiente')
-  const [texto, setTexto] = useState(busquedaInicial ?? '')
-  const [buscar, setBuscar] = useState(busquedaInicial ?? '')
+  // Desde el legajo de una persona o la matriz llega su id: se filtra por persona
+  // (sin poner nombre ni DNI en la dirección) y se muestra su nombre.
+  const [persona, setPersona] = useState<{ id: string; nombre: string | null } | null>(
+    busquedaInicial && esIdPersona(busquedaInicial) ? { id: busquedaInicial.toLowerCase(), nombre: null } : null)
+  const [texto, setTexto] = useState(busquedaInicial && !esIdPersona(busquedaInicial) ? busquedaInicial : '')
+  const [buscarTexto, setBuscarTexto] = useState(texto)
+  const buscar = buscarTexto.trim().length >= 3 ? buscarTexto : (persona?.id ?? buscarTexto)
+  useEffect(() => { if (persona && !persona.nombre) void nombrePersona(persona.id).then(n => setPersona(p => (p && p.id === persona.id ? { ...p, nombre: n } : p))) }, [persona])
   const [datos, setDatos] = useState<Bandeja | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargandoMas, setCargandoMas] = useState(false)
@@ -304,7 +310,7 @@ export default function BandejaHistorico({ busquedaInicial, categoriaInicial }: 
   const [soloConflictos, setSoloConflictos] = useState(false)
   const cargar = useCallback(async () => { const r = await cargarBandeja(estado, buscar); setDatos(r.datos); setError(r.error) }, [estado, buscar])
   useEffect(() => { void cargar() }, [cargar])
-  useEffect(() => { const t = setTimeout(() => setBuscar(texto), 350); return () => clearTimeout(t) }, [texto])
+  useEffect(() => { const t = setTimeout(() => setBuscarTexto(texto), 350); return () => clearTimeout(t) }, [texto])
   const buscando = buscar.trim().length >= 3
   const cargarMas = async () => {
     if (!datos) return
@@ -331,7 +337,13 @@ export default function BandejaHistorico({ busquedaInicial, categoriaInicial }: 
       </div>
       <input value={texto} onChange={e => setTexto(e.target.value)} placeholder="Buscar por apellido, DNI, legajo o nombre del archivo (en todos los estados)"
         style={{ width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '10px 12px', fontSize: 14, marginBottom: 10 }} />
-      {buscando && <div style={{ fontSize: 13, color: '#94a3b8', margin: '0 2px 10px' }}>{total} resultado(s) para “{buscar.trim()}”</div>}
+      {persona && buscar === persona.id && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 13, color: '#cbd5e1', margin: '0 2px 10px' }}>
+          <span>Referencias de <b>{persona.nombre ?? 'la persona elegida'}</b>: {total}</span>
+          <button type="button" onClick={() => setPersona(null)} style={{ background: 'none', border: '1px solid #334155', borderRadius: 8, color: '#93c5fd', padding: '3px 8px', fontSize: 12, cursor: 'pointer' }}>Quitar filtro</button>
+        </div>
+      )}
+      {buscando && !(persona && buscar === persona.id) && <div style={{ fontSize: 13, color: '#94a3b8', margin: '0 2px 10px' }}>{total} resultado(s) para “{buscar.trim()}”</div>}
       <div style={{ display: buscando ? 'none' : 'flex', gap: 4, borderBottom: '1px solid #1e2d42', marginBottom: 12, overflowX: 'auto' }}>
         {PESTAÑAS.map(([k, t]) => (
           <button key={k} type="button" onClick={() => setEstado(k)} style={{

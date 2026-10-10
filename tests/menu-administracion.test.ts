@@ -35,7 +35,7 @@ describe('Legajo Digital: una sola entrada', () => {
   })
   it('los accesos anteriores siguen abriendo la misma pantalla, con el mismo permiso', () => {
     for (const [id, s] of [['legajo_cambios_datos', 'datos'], ['documentacion_legajo', 'documentacion'], ['legajo_historico', 'historico']]) {
-      expect(app).toContain(`page === '${id}' && gestionaDatosSensibles(user) && <LegajoDigital inicial="${s}" user={user} />`)
+      expect(app).toContain(`page === '${id}' && gestionaDatosSensibles(user) && <LegajoDigital inicial="${s}" user={user}`)
     }
     expect(app).toContain(`page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital user={user} />`)
   })
