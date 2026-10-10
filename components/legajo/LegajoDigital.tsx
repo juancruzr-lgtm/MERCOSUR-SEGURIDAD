@@ -32,10 +32,14 @@ const pestaña = (activa: boolean): React.CSSProperties => ({
   fontWeight: activa ? 800 : 600, fontSize: 14, cursor: 'pointer', whiteSpace: 'nowrap',
 })
 
-export default function LegajoDigital({ inicial = 'datos', user }: { inicial?: SeccionLegajo; user?: { puesto_organizacional?: string | null } | null }) {
+export default function LegajoDigital({ inicial = 'datos', user, empleadoHistorico }: {
+  inicial?: SeccionLegajo; user?: { puesto_organizacional?: string | null } | null
+  /** Abre el archivo histórico filtrado por esta persona (desde su legajo). */
+  empleadoHistorico?: string
+}) {
   const [seccion, setSeccion] = useState<SeccionLegajo>(inicial)
   // Desde la marca histórica de la matriz: abrir el archivo histórico ya filtrado.
-  const [filtroHistorico, setFiltroHistorico] = useState<{ texto: string; categoria: string } | null>(null)
+  const [filtroHistorico, setFiltroHistorico] = useState<{ texto: string; categoria: string } | null>(empleadoHistorico ? { texto: empleadoHistorico, categoria: '' } : null)
   const secciones = controlaHabilitacion(user) ? [...SECCIONES, ['habilitacion', 'Habilitación'] as [SeccionLegajo, string]] : SECCIONES
   return (
     <div>

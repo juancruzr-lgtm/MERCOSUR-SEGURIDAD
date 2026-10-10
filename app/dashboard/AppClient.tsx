@@ -13976,6 +13976,12 @@ export default function AppPage() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search)
     const destino = q.get('page')
+    // Desde el legajo individual: Archivo histórico filtrado por la persona (id).
+    if (destino === 'legajo_historico') {
+      setPage(destino)
+      setFiltros(prev => ({ ...prev, legajo_historico: { empleado: q.get('empleado') || null } }))
+      return
+    }
     if (destino !== 'revision_planillas') return
     setPage(destino)
     setFiltros(prev => ({
@@ -14444,7 +14450,7 @@ const esGuardia = esRolGuardia(user.rol)
               {/* Accesos anteriores (enlaces guardados): abren la misma pantalla en su sección. */}
               {page === 'legajo_cambios_datos' && gestionaDatosSensibles(user) && <LegajoDigital inicial="datos" user={user} />}
               {page === 'documentacion_legajo' && gestionaDatosSensibles(user) && <LegajoDigital inicial="documentacion" user={user} />}
-              {page === 'legajo_historico' && gestionaDatosSensibles(user) && <LegajoDigital inicial="historico" user={user} />}
+              {page === 'legajo_historico' && gestionaDatosSensibles(user) && <LegajoDigital inicial="historico" user={user} empleadoHistorico={filtros.legajo_historico?.empleado ?? undefined} />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}

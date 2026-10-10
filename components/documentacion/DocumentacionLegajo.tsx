@@ -30,8 +30,8 @@ import {
   abrirArchivo, anularDocumento, cargarDocumentacion, marcarSituacion, responderDocumento, revisarDocumento,
   subirDocumento,
 } from '@/lib/documentacion-datos'
-import { ETIQUETA_FUENTE, cargarHistoricoDeEmpleado, cargarIndicios } from '@/lib/legajo-historico'
-import type { Indicio, ReferenciaHistorica } from '@/lib/legajo-historico'
+import { ETIQUETA_FUENTE, cargarHistoricoDeEmpleado, cargarIndicios, cargarResumenHistorico, enlaceArchivoHistorico, porRevisar } from '@/lib/legajo-historico'
+import type { Indicio, ReferenciaHistorica, ResumenHistorico } from '@/lib/legajo-historico'
 
 // ── Estilos ──────────────────────────────────────────────────────────────────
 
@@ -488,6 +488,41 @@ function ArchivoHistorico({ refs }: { refs: ReferenciaHistorica[] }) {
   )
 }
 
+/**
+ * Para Administración/Gerencia: qué hay de esta persona, separado en tres
+ * situaciones. Sólo lo validado en Documentación cuenta para el cumplimiento;
+ * lo de MEGA es una pista para revisar, y se revisa a mano en la bandeja.
+ */
+function SituacionDocumental({ validados, obligatorios, resumen, empleadoId }: {
+  validados: number; obligatorios: number; resumen: ResumenHistorico; empleadoId: string
+}) {
+  const pendientes = porRevisar(resumen)
+  const asociadas = resumen.asociadas + resumen.copiadas
+  const fila = (color: string, n: number, textoFila: string, detalle: string) => (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 0', borderTop: '1px solid #1e293b' }}>
+      <b style={{ color, fontSize: 17, minWidth: 28, textAlign: 'right' }}>{n}</b>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, color: '#e2e8f0' }}>{textoFila}</div>
+        <div style={{ fontSize: 12, color: '#64748b' }}>{detalle}</div>
+      </div>
+    </div>
+  )
+  return (
+    <div style={card}>
+      <div style={{ fontSize: 13, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: 700, marginBottom: 4 }}>Qué hay de esta persona</div>
+      {fila('#22c55e', validados, `Documentos validados en Documentación (de ${obligatorios} obligatorios)`, 'Son los únicos que cuentan para el cumplimiento.')}
+      {fila('#c4b5fd', asociadas, 'Referencias de MEGA asociadas, sin validar', 'Revisadas y asociadas por Administración; figuran en cada documento. No cuentan para el cumplimiento.')}
+      {fila('#93c5fd', pendientes, 'Referencias de MEGA detectadas, pendientes de revisión',
+        `Sugeridas por el sistema; nadie las revisó todavía${resumen.conflictos ? ` (${resumen.conflictos} con conflicto)` : ''}. No están incorporadas al legajo.`)}
+      {pendientes + asociadas > 0 && (
+        <a href={enlaceArchivoHistorico(empleadoId)} style={{ display: 'inline-block', marginTop: 8, color: '#93c5fd', fontSize: 13.5, fontWeight: 600 }}>
+          {pendientes > 0 ? `Revisar ${pendientes === 1 ? 'la referencia' : `las ${pendientes} referencias`} en Archivo histórico →` : 'Ver en Archivo histórico →'}
+        </a>
+      )}
+    </div>
+  )
+}
+
 function TarjetaTipo({ tipo, s, datos, nombrePersona, indicios = [], historicos = [], onCambio }: {
   tipo: TipoDocumento
   s: SituacionTipo
@@ -635,12 +670,16 @@ export default function DocumentacionLegajo({ empleadoId, nombrePersona }: {
   const [cargando, setCargando] = useState(true)
   const [indicios, setIndicios] = useState<Indicio[]>([])
   const [historicos, setHistoricos] = useState<ReferenciaHistorica[]>([])
+  const [resumenMega, setResumenMega] = useState<ResumenHistorico | null>(null)
 
   const cargar = useCallback(async () => {
     const [r, ind] = await Promise.all([cargarDocumentacion(empleadoId), cargarIndicios(empleadoId)])
     setDatos(r.datos); setError(r.error); setIndicios(ind); setCargando(false)
     // Sólo Administración/Gerencia: la base rechaza a cualquier otro.
-    if (r.datos?.puede_gestionar) setHistoricos(await cargarHistoricoDeEmpleado(empleadoId))
+    if (r.datos?.puede_gestionar) {
+      const [h, rm] = await Promise.all([cargarHistoricoDeEmpleado(empleadoId), cargarResumenHistorico(empleadoId)])
+      setHistoricos(h); setResumenMega(rm)
+    }
   }, [empleadoId])
 
   useEffect(() => { void cargar() }, [cargar])
@@ -692,6 +731,10 @@ export default function DocumentacionLegajo({ empleadoId, nombrePersona }: {
           </div>
         )}
       </div>
+
+      {datos.puede_gestionar && resumenMega && (
+        <SituacionDocumental validados={r.validados} obligatorios={r.obligatorios} resumen={resumenMega} empleadoId={empleadoId} />
+      )}
 
       {paraConfirmar.length > 0 && (
         <>

@@ -408,3 +408,33 @@ export function decidirEspera(estado: EstadoVista | null, error: string | null, 
   if (!estado) return { tipo: 'error', texto: error || 'No se pudo consultar el pedido' }
   return { tipo: 'seguir', en: transcurrido < 10_000 ? 2000 : 5000 }
 }
+
+// ── Referencias de MEGA de una persona (legajo individual) ──────────────────
+
+const RE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const esIdPersona = (t: string) => RE_ID.test(t.trim())
+
+/**
+ * Lo que hay en MEGA para una persona, separado por situación. Nada de esto
+ * cuenta como documento incorporado ni suma al cumplimiento:
+ *   pendientes  detectadas con la persona sugerida, sin revisar
+ *   conflictos  detectadas con su DNI pero sin persona asociada (conflicto)
+ *   asociadas   aceptadas por Administración: referencia, sin validar
+ *   copiadas    copiadas al legajo: siguen en revisión en Documentación
+ */
+export interface ResumenHistorico { pendientes: number; conflictos: number; asociadas: number; copiadas: number }
+
+export async function cargarResumenHistorico(empleadoId: string): Promise<ResumenHistorico | null> {
+  const { data, error } = await supabase.rpc('legajo_historico_resumen_empleado', { p_empleado_id: empleadoId })
+  return error ? null : (data as ResumenHistorico)
+}
+
+export const porRevisar = (r: ResumenHistorico | null) => (r ? r.pendientes + r.conflictos : 0)
+
+/** Archivo histórico filtrado por la persona (por id: sin nombre ni DNI en la dirección). */
+export const enlaceArchivoHistorico = (empleadoId: string) => `/dashboard?page=legajo_historico&empleado=${encodeURIComponent(empleadoId)}`
+
+export async function nombrePersona(id: string): Promise<string | null> {
+  const { data } = await supabase.from('usuarios').select('nombre, apellido').eq('id', id).maybeSingle()
+  return data ? `${data.apellido ?? ''}, ${data.nombre ?? ''}`.replace(/^, |, $/g, '') || null : null
+}

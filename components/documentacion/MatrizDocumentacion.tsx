@@ -111,7 +111,7 @@ export default function MatrizDocumentacion({ datos, personas, onVerHistorico }:
                     <td key={t.codigo} title={`${t.nombre}: ${c.titulo}${h ? ` · ${TEXTO_PISTA[h.nivel].texto} (${h.referencias})` : ''}`}
                       style={{ textAlign: 'center', color: c.color, background: c.fondo, padding: '5px 3px', fontWeight: 700, whiteSpace: 'nowrap' }}>
                       {c.corto}{h && (onVerHistorico
-                        ? <button type="button" onClick={() => onVerHistorico(`${p.apellido} ${p.nombre}`, t.codigo)} aria-label={`Ver en el archivo histórico: ${TEXTO_PISTA[h.nivel].texto}`}
+                        ? <button type="button" onClick={() => onVerHistorico(p.empleado_id, t.codigo)} aria-label={`Ver en el archivo histórico: ${TEXTO_PISTA[h.nivel].texto}`}
                             style={{ background: 'none', border: 'none', padding: 0, marginLeft: 2, color: '#93c5fd', fontWeight: 600, fontSize: '0.75em', verticalAlign: 'super', cursor: 'pointer', textDecoration: 'underline' }}>{TEXTO_PISTA[h.nivel].corto}</button>
                         : <sup style={{ color: '#93c5fd', fontWeight: 600, marginLeft: 2 }}>{TEXTO_PISTA[h.nivel].corto}</sup>)}
                     </td>
