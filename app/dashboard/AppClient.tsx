@@ -11037,28 +11037,55 @@ function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
       vigencia_hasta: formRegla.vigencia_hasta || null,
     }
 
-    if (!editReglaId) payload.creado_por = user?.id || null
+    // DECISIÓN DE GERENCIA (orden 13/10): la programación se carga UNA vez.
+    // Guardar la regla y actualizar el calendario futuro es UNA transacción
+    // (RPC guardar_regla_sincronizada): sin segunda operación manual, sin
+    // titulares viejos colgados — el incidente de octubre no puede repetirse
+    // por olvido. Las excepciones (francos, reemplazos, intervenidas) vuelven
+    // como "conflictos" sin tocarse; el botón de revisión queda para eso.
+    const { data: rpcData, error: rpcError } = await supabase.rpc('guardar_regla_sincronizada', {
+      p_regla_id: editReglaId,
+      p_datos: payload,
+    })
 
-    const query = editReglaId
-      ? supabase.from('supervisor_guardia_reglas').update(payload).eq('id', editReglaId)
-      : supabase.from('supervisor_guardia_reglas').insert(payload)
-
-    const { data, error } = await query.select('*').single()
-
-    if (error) {
-      setMensaje({ tipo:'error', texto:error.message })
-    } else if (data) {
-      setReglas(prev => editReglaId ? prev.map(r => r.id === editReglaId ? data : r) : [...prev, data])
-      setMensaje({ tipo:'ok', texto: editReglaId ? 'Regla actualizada.' : 'Regla semanal creada.' })
+    if (rpcError && /does not exist|schema cache/i.test(rpcError.message)) {
+      // Compatibilidad: migración 20261013120000 aún no aplicada → flujo
+      // anterior (escritura directa + revisión manual de diferencias).
+      if (!editReglaId) payload.creado_por = user?.id || null
+      const query = editReglaId
+        ? supabase.from('supervisor_guardia_reglas').update(payload).eq('id', editReglaId)
+        : supabase.from('supervisor_guardia_reglas').insert(payload)
+      const { data, error } = await query.select('*').single()
+      if (error) {
+        setMensaje({ tipo:'error', texto:error.message })
+      } else if (data) {
+        setReglas(prev => editReglaId ? prev.map(r => r.id === editReglaId ? data : r) : [...prev, data])
+        setMensaje({ tipo:'ok', texto: editReglaId ? 'Regla actualizada (sincronización automática pendiente de migración).' : 'Regla semanal creada.' })
+        setModalRegla(false)
+        const eraEdicion = Boolean(editReglaId)
+        setEditReglaId(null)
+        setFormRegla(formReglaInicial())
+        if (eraEdicion) void revisarSincronizacion(data, { silencioso: true })
+      }
+    } else if (rpcError) {
+      setMensaje({ tipo:'error', texto:rpcError.message })
+    } else if (rpcData) {
+      const regla = (rpcData as any).regla
+      const sync = (rpcData as any).sync || {}
+      setReglas(prev => editReglaId ? prev.map(r => r.id === editReglaId ? regla : r) : [...prev, regla])
+      const conflictos = Array.isArray(sync.conflictos) ? sync.conflictos.length : 0
+      const resumen = sync.omitida
+        ? String(sync.omitida)
+        : `${sync.transferidas || 0} transferida(s) · ${sync.creadas || 0} creada(s) · ${sync.actualizadas || 0} actualizada(s) · ${sync.desactivadas || 0} desactivada(s) · ${sync.revinculadas || 0} re-vinculada(s)`
+      setMensaje({
+        tipo: conflictos > 0 ? 'error' : 'ok',
+        texto: `${editReglaId ? 'Regla actualizada' : 'Regla creada'} y calendario sincronizado: ${resumen}.`
+          + (conflictos > 0 ? ` ⚠️ ${conflictos} excepción(es) protegida(s) quedaron pendientes — revisarlas en el calendario.` : ''),
+      })
       setModalRegla(false)
-      const eraEdicion = Boolean(editReglaId)
       setEditReglaId(null)
       setFormRegla(formReglaInicial())
-      // Al EDITAR una regla con días ya generados, el calendario no cambia
-      // solo (idempotencia de Generar mes). Acá mismo se calculan las
-      // diferencias y se ofrece sincronizar con vista previa — así no se
-      // repite octubre: plantilla nueva, calendario viejo, y nadie avisó.
-      if (eraEdicion) void revisarSincronizacion(data, { silencioso: true })
+      void cargar()
     }
 
     setLoading(false)
@@ -11203,26 +11230,44 @@ function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
     if (auditoria === null) void cargarAuditoria()
   }
 
-  // Desactivar una regla no borra las guardias que ya generó: deja de producir
-  // filas nuevas de acá en adelante. El calendario ya publicado se corrige día
-  // por día, que es donde vive la excepción.
+  // Activar/desactivar una regla TAMBIÉN sincroniza el calendario (revisión
+  // JC 13/10): al desactivarla, sus días futuros normales se desactivan (o se
+  // re-vinculan si otra regla del titular los respalda); las excepciones y el
+  // historial quedan intactos y los conflictos se informan.
   const toggleRegla = async (r: any) => {
-    const { data, error } = await supabase
-      .from('supervisor_guardia_reglas')
-      .update({ activo: !(r.activo !== false) })
-      .eq('id', r.id)
-      .select('*')
-      .single()
+    const activar = !(r.activo !== false)
+    const { data: rpcData, error: rpcError } = await supabase.rpc('guardar_regla_sincronizada', {
+      p_regla_id: r.id,
+      p_datos: { activo: activar },
+    })
 
-    if (error) {
-      setMensaje({ tipo:'error', texto:error.message })
+    if (rpcError && /does not exist|schema cache/i.test(rpcError.message)) {
+      // Compatibilidad pre-migración: comportamiento anterior (sólo la regla).
+      const { data, error } = await supabase
+        .from('supervisor_guardia_reglas')
+        .update({ activo: activar })
+        .eq('id', r.id)
+        .select('*')
+        .single()
+      if (error) { setMensaje({ tipo:'error', texto:error.message }); return }
+      if (data) { setReglas(prev => prev.map(x => x.id === r.id ? data : x)); setPrevisionMes(null) }
       return
     }
+    if (rpcError) { setMensaje({ tipo:'error', texto:rpcError.message }); return }
 
-    if (data) {
-      setReglas(prev => prev.map(x => x.id === r.id ? data : x))
-      setPrevisionMes(null)
-    }
+    const regla = (rpcData as any)?.regla
+    const sync = (rpcData as any)?.sync || {}
+    if (regla) setReglas(prev => prev.map(x => x.id === r.id ? regla : x))
+    setPrevisionMes(null)
+    const conflictos = Array.isArray(sync.conflictos) ? sync.conflictos.length : 0
+    setMensaje({
+      tipo: conflictos > 0 ? 'error' : 'ok',
+      texto: activar
+        ? `Regla activada y calendario sincronizado (${sync.creadas || 0} creada(s) · ${sync.transferidas || 0} transferida(s)).`
+        : `Regla desactivada: ${sync.desactivadas || 0} guardia(s) futuras dadas de baja · ${sync.revinculadas || 0} re-vinculada(s) a otra regla.`
+          + (conflictos > 0 ? ` ⚠️ ${conflictos} excepción(es) quedaron pendientes.` : ''),
+    })
+    void cargar()
   }
 
   const abrirGenerarMes = () => {
