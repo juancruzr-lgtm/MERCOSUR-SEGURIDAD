@@ -48,6 +48,8 @@ $config = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -RestartCoun
 Register-ScheduledTask -TaskPath $Carpeta -TaskName $Tarea -Action $accion -Trigger $disparador -Principal $principal -Settings $config `
   -Description 'Lector documental de MEGA para la app de Mercosur (lectura a pedido, sin scan ni watch).' | Out-Null
 
+Add-VigilanciaTarea | Out-Null
+
 Remove-Item (Join-Path $Base 'DETENER') -Force -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskPath $Carpeta -TaskName $Tarea
 Write-Host 'Instalado e iniciado. Ver estado con: powershell -ExecutionPolicy Bypass -File .\servicio\estado.ps1'

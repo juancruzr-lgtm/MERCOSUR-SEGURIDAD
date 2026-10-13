@@ -6,6 +6,7 @@ $Logs = Join-Path $Base 'logs'
 $t = Get-TareaLector
 if (-not $t) { Write-Host 'Tarea: NO instalada'; exit 1 }
 Write-Host ('Tarea: ' + (Get-EstadoTareaTexto $t.State) + ' | habilitada: ' + $t.Enabled + ' | ultima ejecucion: ' + $t.LastRunTime + ' | resultado: ' + $t.LastTaskResult)
+Write-Host ('Vigilancia cada 5 min: ' + (Test-VigilanciaTarea))
 Write-Host ('Marca DETENER: ' + (Test-Path (Join-Path $Base 'DETENER')))
 $sup = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'visor-servicio\.ps1' }
 $lec = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'visor[\\/]index\.ts' }
