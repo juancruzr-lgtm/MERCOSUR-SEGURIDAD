@@ -11230,26 +11230,44 @@ function SupervisoresGuardia({ guardias, user, zonas = [] }: any) {
     if (auditoria === null) void cargarAuditoria()
   }
 
-  // Desactivar una regla no borra las guardias que ya generó: deja de producir
-  // filas nuevas de acá en adelante. El calendario ya publicado se corrige día
-  // por día, que es donde vive la excepción.
+  // Activar/desactivar una regla TAMBIÉN sincroniza el calendario (revisión
+  // JC 13/10): al desactivarla, sus días futuros normales se desactivan (o se
+  // re-vinculan si otra regla del titular los respalda); las excepciones y el
+  // historial quedan intactos y los conflictos se informan.
   const toggleRegla = async (r: any) => {
-    const { data, error } = await supabase
-      .from('supervisor_guardia_reglas')
-      .update({ activo: !(r.activo !== false) })
-      .eq('id', r.id)
-      .select('*')
-      .single()
+    const activar = !(r.activo !== false)
+    const { data: rpcData, error: rpcError } = await supabase.rpc('guardar_regla_sincronizada', {
+      p_regla_id: r.id,
+      p_datos: { activo: activar },
+    })
 
-    if (error) {
-      setMensaje({ tipo:'error', texto:error.message })
+    if (rpcError && /does not exist|schema cache/i.test(rpcError.message)) {
+      // Compatibilidad pre-migración: comportamiento anterior (sólo la regla).
+      const { data, error } = await supabase
+        .from('supervisor_guardia_reglas')
+        .update({ activo: activar })
+        .eq('id', r.id)
+        .select('*')
+        .single()
+      if (error) { setMensaje({ tipo:'error', texto:error.message }); return }
+      if (data) { setReglas(prev => prev.map(x => x.id === r.id ? data : x)); setPrevisionMes(null) }
       return
     }
+    if (rpcError) { setMensaje({ tipo:'error', texto:rpcError.message }); return }
 
-    if (data) {
-      setReglas(prev => prev.map(x => x.id === r.id ? data : x))
-      setPrevisionMes(null)
-    }
+    const regla = (rpcData as any)?.regla
+    const sync = (rpcData as any)?.sync || {}
+    if (regla) setReglas(prev => prev.map(x => x.id === r.id ? regla : x))
+    setPrevisionMes(null)
+    const conflictos = Array.isArray(sync.conflictos) ? sync.conflictos.length : 0
+    setMensaje({
+      tipo: conflictos > 0 ? 'error' : 'ok',
+      texto: activar
+        ? `Regla activada y calendario sincronizado (${sync.creadas || 0} creada(s) · ${sync.transferidas || 0} transferida(s)).`
+        : `Regla desactivada: ${sync.desactivadas || 0} guardia(s) futuras dadas de baja · ${sync.revinculadas || 0} re-vinculada(s) a otra regla.`
+          + (conflictos > 0 ? ` ⚠️ ${conflictos} excepción(es) quedaron pendientes.` : ''),
+    })
+    void cargar()
   }
 
   const abrirGenerarMes = () => {
