@@ -251,7 +251,7 @@ export function responsableTexto(r: Pick<ResumenHabilitacion, 'responsable_rol' 
 
 export const EVENTO: Record<string, string> = {
   tramite_iniciado: 'Inició el trámite', gestion: 'Actualizó una gestión', credencial_registrada: 'Registró una credencial',
-  credencial_anulada: 'Anuló una credencial', tramite_cancelado: 'Cerró el trámite sin credencial', verificacion: 'Registró una verificación',
+  credencial_anulada: 'Anuló una credencial', credencial_verificada: 'Confirmó la credencial (verificada)', tramite_cancelado: 'Cerró el trámite sin credencial', verificacion: 'Registró una verificación',
   responsable_habitual: 'Cambió un responsable habitual',
 }
 
@@ -288,6 +288,10 @@ export const registrarCredencial = (empleadoId: string, v: { numero?: string; em
     p_empleado_id: empleadoId, p_numero: v.numero || null, p_fecha_emision: v.emision || null, p_vence_el: v.vence || null,
     p_documento_id: v.documentoId || null, p_verificada: v.verificada, p_observacion: v.observacion || null,
   }, 'No se pudo registrar la credencial')
+
+/** Confirma una credencial informada (sin verificar) sin volver a cargarla; las fechas sólo se corrigen si no coinciden. */
+export const confirmarCredencial = (id: string, v: { observacion: string; numero?: string; vence?: string | null; emision?: string | null }) =>
+  llamar('habilitacion_confirmar_credencial', { p_id: id, p_observacion: v.observacion, p_numero: v.numero || null, p_vence_el: v.vence || null, p_fecha_emision: v.emision || null }, 'No se pudo confirmar la credencial')
 
 export const anularCredencial = (id: string, motivo: string) => llamar('habilitacion_anular_credencial', { p_id: id, p_motivo: motivo }, 'No se pudo anular')
 export const cerrarTramite = (id: string, motivo: string) => llamar('habilitacion_cerrar_tramite', { p_tramite_id: id, p_motivo: motivo }, 'No se pudo cerrar el trámite')
