@@ -27,10 +27,11 @@ if (Select-String -Path $envPath -Pattern '^\s*VISOR_RAICES\s*=' -Quiet) {
 }
 
 # No duplicar: si ya existe una tarea o un servicio equivalente, no se instala otro.
-$existente = Get-ScheduledTask -TaskPath $Carpeta -TaskName $Tarea -ErrorAction SilentlyContinue
-if ($existente) { throw ('Ya existe la tarea ' + $Carpeta + $Tarea + ': usar estado.ps1 / iniciar.ps1, o desinstalar.ps1 antes de reinstalar.') }
-$otros = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.Actions.Arguments -match 'visor-servicio\.ps1|visor[\\/]index\.ts' }
-if ($otros) { throw ('Hay otra tarea que ya ejecuta el lector: ' + (($otros | ForEach-Object { $_.TaskPath + $_.TaskName }) -join ', ')) }
+# (API COM: Get-ScheduledTask falla en SRV02, ver tarea.ps1)
+. (Join-Path $PSScriptRoot 'tarea.ps1')
+if (Get-TareaLector) { throw ('Ya existe la tarea ' + $Carpeta + $Tarea + ': usar estado.ps1 / iniciar.ps1, o desinstalar.ps1 antes de reinstalar.') }
+$otros = @(Get-OtrasTareasLector)
+if ($otros.Count -gt 0) { throw ('Hay otra tarea que ya ejecuta el lector: ' + ($otros -join ', ')) }
 
 # Carpeta de registros: solo SYSTEM y Administradores escriben (la marca DETENER vive aca).
 $Base = Join-Path $env:ProgramData 'MercosurLectorDocumental'
