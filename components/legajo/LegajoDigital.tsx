@@ -8,7 +8,8 @@
  *   - Datos personales: cambios propuestos y datos de la planilla histórica.
  *   - Documentación: revisar, personas, situación (matriz), vencimientos y
  *     auditoría (ésta, sólo Gerencia; la base vuelve a controlar).
- *   - Archivo histórico: referencias de MEGA para asociar o descartar.
+ *   - Revisión de MEGA (archivo histórico): bandeja central para revisar las
+ *     referencias de MEGA sin entrar a cada legajo.
  *   - Habilitación (sólo Gerencia): abrir o cerrar cada módulo al personal.
  * El legajo individual de cada persona sigue en /guardias/<id>.
  */
@@ -19,11 +20,12 @@ import ControlDocumentacion from '@/components/documentacion/ControlDocumentacio
 import BandejaHistorico from '@/components/legajo/BandejaHistorico'
 import HabilitacionLegajo from '@/components/legajo/HabilitacionLegajo'
 import { controlaHabilitacion } from '@/lib/legajo-habilitacion'
+import { esFiltroRevision } from '@/lib/legajo-historico'
 
 export type SeccionLegajo = 'datos' | 'documentacion' | 'historico' | 'habilitacion'
 
 const SECCIONES: [SeccionLegajo, string][] = [
-  ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Archivo histórico'],
+  ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'],
 ]
 
 const pestaña = (activa: boolean): React.CSSProperties => ({
@@ -32,11 +34,14 @@ const pestaña = (activa: boolean): React.CSSProperties => ({
   fontWeight: activa ? 800 : 600, fontSize: 14, cursor: 'pointer', whiteSpace: 'nowrap',
 })
 
-export default function LegajoDigital({ inicial = 'datos', user, empleadoHistorico }: {
+export default function LegajoDigital({ inicial = 'datos', user, empleadoHistorico, verHistorico }: {
   inicial?: SeccionLegajo; user?: { puesto_organizacional?: string | null } | null
   /** Abre el archivo histórico filtrado por esta persona (desde su legajo). */
   empleadoHistorico?: string
+  /** …y en esta lista (pendientes, conflictos, para investigar, revisadas). */
+  verHistorico?: string
 }) {
+  const verInicial = esFiltroRevision(verHistorico) ? verHistorico : undefined
   const [seccion, setSeccion] = useState<SeccionLegajo>(inicial)
   // Desde la marca histórica de la matriz: abrir el archivo histórico ya filtrado.
   const [filtroHistorico, setFiltroHistorico] = useState<{ texto: string; categoria: string } | null>(empleadoHistorico ? { texto: empleadoHistorico, categoria: '' } : null)
@@ -54,7 +59,7 @@ export default function LegajoDigital({ inicial = 'datos', user, empleadoHistori
       </div>
       {seccion === 'datos' && <ControlCambiosDatos />}
       {seccion === 'documentacion' && <ControlDocumentacion onVerHistorico={(texto, categoria) => { setFiltroHistorico({ texto, categoria }); setSeccion('historico') }} />}
-      {seccion === 'historico' && <BandejaHistorico key={filtroHistorico ? filtroHistorico.texto + filtroHistorico.categoria : 'todo'} busquedaInicial={filtroHistorico?.texto} categoriaInicial={filtroHistorico?.categoria} />}
+      {seccion === 'historico' && <BandejaHistorico key={filtroHistorico ? filtroHistorico.texto + filtroHistorico.categoria : 'todo'} busquedaInicial={filtroHistorico?.texto} categoriaInicial={filtroHistorico?.categoria} verInicial={filtroHistorico?.texto === empleadoHistorico ? verInicial : undefined} />}
       {seccion === 'habilitacion' && controlaHabilitacion(user) && <HabilitacionLegajo />}
     </div>
   )
