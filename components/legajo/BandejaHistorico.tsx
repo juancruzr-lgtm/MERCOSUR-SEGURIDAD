@@ -406,7 +406,7 @@ function Tarjeta({ p, tipos, onCambio, onResuelto, enRevision = false, autoAbrir
             {p.sugerido || p.empleado ? 'Confirmar persona y tipo' : 'Asignar persona y tipo'}
           </button>
           {!investigar && <button type="button" style={boton('sec')} onClick={() => setModo('investigar')}>Dejar pendiente para investigar</button>}
-          {investigar && <button type="button" style={boton('sec')} onClick={async () => { setError(null); const e = await resolverPropuesta(p.id, 'quitar_investigacion'); if (e) setError(e); else onCambio() }}>Quitar marca de investigación</button>}
+          {investigar && <button type="button" style={boton('sec')} onClick={async () => { setError(null); const e = await resolverPropuesta(p.id, 'quitar_investigacion'); if (e) setError(e); else resuelto() }}>Quitar marca de investigación</button>}
           <button type="button" style={boton('sec')} onClick={() => setModo('recategorizar')}>Cambiar categoría sugerida</button>
           {!p.padre_id && (p.paginas ?? 0) > 1 && <button type="button" style={boton('sec')} onClick={() => setModo('separar')}>Separar páginas</button>}
           <button type="button" style={boton('peligro')} onClick={() => setModo('descartar')}>Descartar</button>
