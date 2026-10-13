@@ -23,9 +23,15 @@
 --     excepciones e historial intactos.
 --   · p_solo_vista=true devuelve el listado completo de acciones SIN
 --     escribir nada: ninguna sincronización global corre a ciegas.
---   · Concurrencia: advisory lock transaccional global — dos ediciones
---     simultáneas de reglas se serializan; el índice único de slot es la
---     segunda barrera.
+--   · Concurrencia: advisory lock transaccional global tomado ANTES de
+--     escribir la regla — dos guardados simultáneos quedan serializados
+--     COMPLETOS (regla + calendario) y el calendario final coincide con la
+--     última programación guardada; el índice único de slot es la segunda
+--     barrera.
+--   · Cambio de ZONA de una regla: sus filas sólo se trasladan cuando el
+--     origen es la propia programación (origen='regla'), ninguna otra regla
+--     activa las respalda en su zona actual y el slot de destino está libre;
+--     una asignación excepcional o un caso ambiguo queda como CONFLICTO.
 --
 -- ROLLBACK: supabase/rollback/20261013120000_guardias_sync_automatica_rollback.sql
 --   (quita las RPC; los permisos restrictivos de reglas SE CONSERVAN: un
@@ -171,8 +177,39 @@ begin
         v_conflictos := v_conflictos || jsonb_build_object('fecha', f.fecha, 'motivo', 'Excepción protegida (franco/reemplazo/intervención)');
       elsif v_fila.estado = 'inactivo' then
         v_conflictos := v_conflictos || jsonb_build_object('fecha', f.fecha, 'motivo', 'Estaba desactivada a mano: revisar');
-      elsif v_fila.supervisor_id is distinct from r.supervisor_id
-            or lower(btrim(v_fila.zona)) is distinct from lower(v_zona) then
+      elsif lower(btrim(v_fila.zona)) is distinct from lower(v_zona) then
+        -- CAMBIO DE ZONA (ajuste JC 13/10, punto 2): la fila sólo se traslada
+        -- cuando es inequívocamente de esta programación: origen='regla',
+        -- ninguna OTRA regla activa la respalda en su zona actual y el slot
+        -- de destino está libre. Asignación excepcional o ambigüedad →
+        -- conflicto pendiente, jamás traslado automático.
+        if coalesce(v_fila.origen,'') = 'regla'
+           and not exists (
+             select 1 from public.supervisor_guardia_reglas r2
+             join public.zonas_operativas z2 on z2.id = r2.zona_id
+             where r2.activo and r2.id <> r.id and r2.supervisor_id = v_fila.supervisor_id
+               and lower(btrim(z2.nombre)) = lower(btrim(v_fila.zona))
+               and extract(isodow from v_fila.fecha)::int = any(r2.dias_semana)
+               and r2.hora_inicio = v_fila.hora_inicio and r2.hora_fin = v_fila.hora_fin
+               and v_fila.fecha >= coalesce(r2.vigencia_desde, v_fila.fecha)
+               and v_fila.fecha <= coalesce(r2.vigencia_hasta, v_fila.fecha))
+           and not exists (
+             select 1 from public.supervisores_guardia sg2
+             where sg2.id <> v_fila.id and sg2.supervisor_id = r.supervisor_id
+               and sg2.fecha = f.fecha and sg2.hora_inicio = r.hora_inicio
+               and sg2.hora_fin = r.hora_fin and lower(btrim(sg2.zona)) = lower(v_zona)) then
+          v_acciones := v_acciones || jsonb_build_object('fecha', f.fecha, 'accion', 'transferir_zona', 'de_zona', v_fila.zona);
+          if not p_solo_vista then
+            update public.supervisores_guardia
+               set supervisor_id = r.supervisor_id, hora_inicio = r.hora_inicio,
+                   hora_fin = r.hora_fin, zona = v_zona
+             where id = v_fila.id;
+          end if;
+          v_transferidas := v_transferidas + 1;
+        else
+          v_conflictos := v_conflictos || jsonb_build_object('fecha', f.fecha, 'motivo', 'Cambio de zona ambiguo o asignación excepcional: revisar');
+        end if;
+      elsif v_fila.supervisor_id is distinct from r.supervisor_id then
         v_acciones := v_acciones || jsonb_build_object('fecha', f.fecha, 'accion', 'transferir');
         if not p_solo_vista then
           update public.supervisores_guardia
@@ -339,6 +376,15 @@ begin
   if not public.puede_gestionar_guardias_actual() then
     raise exception 'Sólo jefatura modifica la programación semanal';
   end if;
+
+  -- Ajuste JC 13/10 (punto 1): el candado se toma ANTES de cualquier INSERT o
+  -- UPDATE de la regla. Dos guardados simultáneos de reglas relacionadas
+  -- quedan serializados completos (regla + sincronización): el segundo recién
+  -- escribe cuando el primero ya comprometió, y el calendario final coincide
+  -- con la última programación guardada. (Re-tomarlo dentro de
+  -- sincronizar_regla_guardias es inocuo: la transacción ya lo posee.)
+  perform pg_advisory_xact_lock(hashtext('supervisores_guardia_sync'));
+
   select id into v_actor from public.usuarios where auth_user_id = auth.uid() limit 1;
 
   if v_id is null then
@@ -364,10 +410,18 @@ begin
       hora_inicio = coalesce(nullif(p_datos->>'hora_inicio','')::time, hora_inicio),
       hora_fin = coalesce(nullif(p_datos->>'hora_fin','')::time, hora_fin),
       rol_operativo = coalesce(nullif(p_datos->>'rol_operativo',''), rol_operativo),
-      observacion = nullif(btrim(coalesce(p_datos->>'observacion','')),''),
+      -- Una clave AUSENTE en p_datos conserva el valor (el toggle manda sólo
+      -- 'activo'); una clave presente vacía sí limpia el campo.
+      observacion = case when p_datos ? 'observacion'
+                         then nullif(btrim(coalesce(p_datos->>'observacion','')),'')
+                         else observacion end,
       activo = coalesce((p_datos->>'activo')::boolean, activo),
-      vigencia_desde = nullif(p_datos->>'vigencia_desde','')::date,
-      vigencia_hasta = nullif(p_datos->>'vigencia_hasta','')::date
+      vigencia_desde = case when p_datos ? 'vigencia_desde'
+                            then nullif(p_datos->>'vigencia_desde','')::date
+                            else vigencia_desde end,
+      vigencia_hasta = case when p_datos ? 'vigencia_hasta'
+                            then nullif(p_datos->>'vigencia_hasta','')::date
+                            else vigencia_hasta end
     where id = v_id
     returning * into v_regla;
     if v_regla.id is null then raise exception 'La regla no existe'; end if;
