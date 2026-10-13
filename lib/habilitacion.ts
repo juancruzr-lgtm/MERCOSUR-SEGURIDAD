@@ -234,6 +234,8 @@ export function antiguedadTexto(dias: number | null): string {
 export function seisMesesTexto(r: Pick<ResumenHabilitacion, 'dias_para_6_meses' | 'credencial'>): { texto: string; color: string } | null {
   if (r.dias_para_6_meses === null || (r.credencial && r.credencial.verificada)) return null
   const d = r.dias_para_6_meses
+  // Referencia del período de prueba: sólo para ingresos recientes (hasta un año).
+  if (d < -183) return null
   if (d < 0) return { texto: `6 meses cumplidos hace ${-d} día${d === -1 ? '' : 's'}`, color: '#ef4444' }
   if (d <= 30) return { texto: `faltan ${d} día${d === 1 ? '' : 's'} para los 6 meses`, color: '#f87171' }
   if (d <= 60) return { texto: `faltan ${d} días para los 6 meses`, color: '#fbbf24' }
