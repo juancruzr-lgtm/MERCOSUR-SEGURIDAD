@@ -2,10 +2,10 @@
 #   powershell -ExecutionPolicy Bypass -File .\servicio\estado.ps1
 $Base = Join-Path $env:ProgramData 'MercosurLectorDocumental'
 $Logs = Join-Path $Base 'logs'
-$t = Get-ScheduledTask -TaskPath '\Mercosur\' -TaskName 'Lector documental' -ErrorAction SilentlyContinue
+. (Join-Path $PSScriptRoot 'tarea.ps1')
+$t = Get-TareaLector
 if (-not $t) { Write-Host 'Tarea: NO instalada'; exit 1 }
-$i = $t | Get-ScheduledTaskInfo
-Write-Host ('Tarea: ' + $t.State + ' | ultima ejecucion: ' + $i.LastRunTime + ' | resultado: ' + $i.LastTaskResult)
+Write-Host ('Tarea: ' + (Get-EstadoTareaTexto $t.State) + ' | habilitada: ' + $t.Enabled + ' | ultima ejecucion: ' + $t.LastRunTime + ' | resultado: ' + $t.LastTaskResult)
 Write-Host ('Marca DETENER: ' + (Test-Path (Join-Path $Base 'DETENER')))
 $sup = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'visor-servicio\.ps1' }
 $lec = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'visor[\\/]index\.ts' }

@@ -45,7 +45,7 @@ describe('Lector: carpetas a partir de las áreas habilitadas', () => {
 
 describe('Servicio de SRV02: sin credenciales en scripts', () => {
   const dir = join(__dirname, '..', 'agente-documental', 'servicio')
-  for (const f of ['instalar.ps1', 'visor-servicio.ps1', 'estado.ps1', 'detener.ps1', 'iniciar.ps1', 'desinstalar.ps1']) {
+  for (const f of ['instalar.ps1', 'visor-servicio.ps1', 'estado.ps1', 'detener.ps1', 'iniciar.ps1', 'desinstalar.ps1', 'tarea.ps1']) {
     it(f, () => {
       const s = readFileSync(join(dir, f), 'utf8')
       expect(s).not.toMatch(/SERVICE_ROLE_KEY\s*=|eyJ[A-Za-z0-9_-]{20,}|sb_secret/)
