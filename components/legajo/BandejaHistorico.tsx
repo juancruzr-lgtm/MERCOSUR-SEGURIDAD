@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import VisorHistorico from '@/components/legajo/VisorHistorico'
+import { TIPOS_HABILITACION } from '@/lib/habilitacion'
 import {
   EVENTO_HISTORICO, FILTROS_REVISION, METODOS_VERIFICACION, NIVELES_IDENTIFICACION, agruparPorEmpleado, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe,
   confirmarEnLote, contarRevision, enFiltroRevision, esIdPersona, estadoVisual, faltaVerificacion, filtrarHistorico, leerRangos, marcaInvestigacion, motivoFueraDeLote,
@@ -473,6 +474,7 @@ function Fila({ p, tipos, mostrarPersona, onRevisar }: { p: PropuestaHistorica; 
 }
 
 const LS_AUTOABRIR = 'mercosur.revision.autoAbrir'
+const CREDENCIAL = '(credencial)'
 
 export default function BandejaHistorico({ busquedaInicial, categoriaInicial, verInicial }: { busquedaInicial?: string; categoriaInicial?: string; verInicial?: FiltroRevision } = {}) {
   const [filtro, setFiltro] = useState<FiltroRevision>(verInicial ?? 'pendientes')
@@ -487,7 +489,9 @@ export default function BandejaHistorico({ busquedaInicial, categoriaInicial, ve
   const [datos, setDatos] = useState<Bandeja | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargandoMas, setCargandoMas] = useState(false)
-  const [categoria, setCategoria] = useState(categoriaInicial ?? '')
+  // Desde el menú se empieza por lo que hace falta para la credencial (no por
+  // cartas documento, sanciones o expedientes); con «Todos los tipos» se ve el resto.
+  const [categoria, setCategoria] = useState(categoriaInicial ?? CREDENCIAL)
   const [nivel, setNivel] = useState<NivelIdentificacion | ''>('')
   const [agrupar, setAgrupar] = useState(true)
   const [revision, setRevision] = useState<{ cola: string[]; actual: string } | null>(null)
@@ -528,8 +532,9 @@ export default function BandejaHistorico({ busquedaInicial, categoriaInicial, ve
     setDatos({ ...r.datos, propuestas: [...datos.propuestas, ...r.datos.propuestas.filter(p => !vistos.has(p.id))] })
   }
   const total = datos?.total ?? datos?.propuestas.length ?? 0
-  const filtrar = (lista: PropuestaHistorica[]) => filtrarHistorico(lista.filter(p => enFiltroRevision(p, filtro)), {
-    categoria, nivel, activas: datos?.tipos.map(t => t.codigo) ?? [],
+  const filtrar = (lista: PropuestaHistorica[]) => filtrarHistorico(lista.filter(p => enFiltroRevision(p, filtro)
+    && (categoria !== CREDENCIAL || (TIPOS_HABILITACION as readonly string[]).includes(categoriaDe(p) ?? ''))), {
+    categoria: categoria === CREDENCIAL ? '' : categoria, nivel, activas: datos?.tipos.map(t => t.codigo) ?? [],
   })
   const visibles = datos ? filtrar(datos.propuestas) : []
   const grupos = agrupar ? agruparPorEmpleado(visibles) : [{ clave: 'todo', nombre: '', items: visibles }]
@@ -622,6 +627,7 @@ export default function BandejaHistorico({ busquedaInicial, categoriaInicial, ve
             <input type="checkbox" checked={agrupar} onChange={e => setAgrupar(e.target.checked)} /> Agrupar por empleado
           </label>
           <select value={categoria} onChange={e => setCategoria(e.target.value)} aria-label="Tipo de documento" style={control}>
+            <option value={CREDENCIAL}>Requisitos de la credencial</option>
             <option value="">Todos los tipos</option>
             <option value="(sin)">Sin tipo</option>
             <option value="(fuera)">Tipo que hoy no se exige</option>
@@ -634,6 +640,12 @@ export default function BandejaHistorico({ busquedaInicial, categoriaInicial, ve
         </div>
       )}
       {datos && !buscando && filtro === 'pendientes' && <ConfirmarLote propuestas={visibles} tipos={datos.tipos} onListo={() => void cargar()} />}
+      {datos && categoria === CREDENCIAL && (
+        <div style={{ fontSize: 12.5, color: '#94a3b8', margin: '0 2px 10px' }}>
+          Mostrando los requisitos de la credencial (DNI, alta ARCA, antecedentes, estudios médicos, credencial).{' '}
+          <button type="button" onClick={() => setCategoria('')} style={{ background: 'none', border: 'none', color: '#93c5fd', padding: 0, fontSize: 12.5, cursor: 'pointer' }}>Ver todos los tipos</button>
+        </div>
+      )}
       {datos && visibles.length === 0 && <div style={{ ...card, color: '#94a3b8' }}>No hay documentos en esta lista{categoria || nivel ? ' con estos filtros' : ''}.</div>}
       {grupos.map(g => (
         <div key={g.clave} style={{ marginBottom: agrupar ? 14 : 0 }}>
