@@ -2,13 +2,18 @@
 -- SANEAMIENTO PUNTUAL — viernes 16, 23 y 30/10/2026 (Rosario, diurnas)
 -- *** NO EJECUTAR SIN AUTORIZACIÓN EXPRESA DE JC ***
 --
--- ORIGEN (investigado 13/10): el 03/10 a las 12:51 se cargaron a mano
--- guardias de ARANDA para los viernes (una 07-13 y una 07-19 por viernes,
--- autor: romero) y luego se desactivaron, antes de que existiera la
--- auditoría del #279 (por eso no tienen traza). Esas filas INACTIVAS 07-19
--- ocupan el slot de destino y bloquean la transferencia automática
--- JL → ARANDA de la diurna de esos tres viernes (conflicto reportado por la
--- sincronización, por diseño: nunca se pisa ni se reactiva solo).
+-- ORIGEN (investigado y DOCUMENTADO, 13/10): el 03/10 a las 12:51 se cargaron
+-- a mano guardias de ARANDA para los viernes (una 07-13 y una 07-19 por
+-- viernes, autor: romero). El 08/10 la resincronización con la plantilla
+-- VIGENTE EN ESE MOMENTO (José Luis de día) las desactivó, y lo dejó anotado
+-- en la observación de cada fila: "[08/10: desactivada por resincronización
+-- con la plantilla vigente]". Esa razón quedó OBSOLETA con las reglas
+-- actuales (Aranda de día L-V+dom, decisión de Gerencia): hoy esas 07-19 son
+-- exactamente lo que la programación pide. Aranda no tiene ninguna novedad
+-- laboral (ausencia/licencia) entre el 14 y el 31/10, ni intervenciones en
+-- esas filas. Las 07-19 INACTIVAS ocupan el slot de destino y bloquean la
+-- transferencia automática JL → ARANDA (conflicto reportado por diseño:
+-- nunca se pisa ni se reactiva solo).
 --
 -- QUÉ HACE (2 UPDATEs por viernes, 6 en total, TODOS auditados por el
 -- trigger de #279 — no se borra nada, porque el trigger no audita DELETE):
@@ -50,9 +55,14 @@ begin
     if exists (select 1 from public.supervisor_intervenciones i where i.supervisor_guardia_id in (v_jl, v_ar)) then
       raise exception 'ABORTADO (todo revertido): % tiene intervenciones', v_fecha;
     end if;
-    update public.supervisores_guardia set estado = 'inactivo', regla_id = null where id = v_jl;
-    update public.supervisores_guardia set estado = 'activo',
-           regla_id = '806467fa-faba-45dd-9394-1ab2a98e1524' where id = v_ar;
+    update public.supervisores_guardia
+       set estado = 'inactivo', regla_id = null,
+           observacion = trim(coalesce(observacion,'') || ' [13/10: desactivada por saneamiento autorizado: la titularidad diurna pasó a ARANDA]')
+     where id = v_jl;
+    update public.supervisores_guardia
+       set estado = 'activo', regla_id = '806467fa-faba-45dd-9394-1ab2a98e1524',
+           observacion = trim(coalesce(observacion,'') || ' [13/10: reactivada por saneamiento autorizado: titular correcto según la programación vigente]')
+     where id = v_ar;
   end loop;
 
   -- Verificación interna: no queda ninguna diurna 07-19 activa de José Luis
