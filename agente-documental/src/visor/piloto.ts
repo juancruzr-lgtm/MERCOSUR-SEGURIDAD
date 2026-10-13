@@ -24,7 +24,7 @@ import 'dotenv/config'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import { createClient } from '@supabase/supabase-js'
-import { BUCKET, Visor, leerRaices, resolverRuta } from './Visor'
+import { BUCKET, Visor, leerRaices, raicesDeAreas, resolverRuta } from './Visor'
 
 const sha = (b: Buffer | Uint8Array) => crypto.createHash('sha256').update(b).digest('hex')
 const esperar = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -35,8 +35,11 @@ async function main() {
   const ids = process.argv.slice(2).filter(a => /^[0-9a-f-]{36}$/i.test(a)).slice(0, 2)
   if (!ids.length) { console.error('Indicá 1 o 2 repositorio_id'); process.exit(1) }
   const url = process.env.SUPABASE_URL!, clave = process.env.SUPABASE_SERVICE_ROLE_KEY!
-  const raices = leerRaices(process.env.VISOR_RAICES ?? '')
   const sb = createClient(url, clave, { auth: { persistSession: false, autoRefreshToken: false } })
+  const { data: areas } = await sb.rpc('documental_areas_lector')
+  const raices = process.env.VISOR_RAICES
+    ? leerRaices(process.env.VISOR_RAICES)
+    : raicesDeAreas((areas as { prefijo: string }[] | null) ?? [], process.env.DOCUMENT_ROOT_PATH ?? '')
   const visor = new Visor(sb, raices, `${process.env.VISOR_AGENTE_ID || 'visor'}-piloto`, {
     info: m => console.log(`  [visor] ${m}`), warn: m => console.log(`  [visor] AVISO ${m}`), error: m => console.log(`  [visor] ERROR ${m}`),
   })

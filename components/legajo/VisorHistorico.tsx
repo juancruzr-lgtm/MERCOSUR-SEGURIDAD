@@ -27,8 +27,10 @@ const control: React.CSSProperties = { background: '#0b1220', border: '1px solid
 
 type Fase = { tipo: 'pidiendo' } | { tipo: 'esperando' } | { tipo: 'trayendo' } | { tipo: 'listo'; url: string; mime: string } | { tipo: 'error'; texto: string }
 
-export default function VisorHistorico({ p, tipos, onCerrar, onCambio }: {
+export default function VisorHistorico({ p, tipos, onCerrar, onCambio, onAbierto }: {
   p: PropuestaHistorica; tipos: TipoBandeja[]; onCerrar: () => void; onCambio: () => void
+  /** Se llama cuando el archivo se abrió (queda registrada la apertura). */
+  onAbierto?: () => void
 }) {
   const [fase, setFase] = useState<Fase>({ tipo: 'pidiendo' })
   const [pagina, setPagina] = useState(p.pagina_desde ?? 1)
@@ -65,6 +67,7 @@ export default function VisorHistorico({ p, tipos, onCerrar, onCambio }: {
       if (t.error || !t.url || !t.mime) { setFase({ tipo: 'error', texto: t.error ?? 'No se pudo abrir' }); return }
       urlRef.current = t.url
       setFase({ tipo: 'listo', url: t.url, mime: t.mime })
+      onAbierto?.()
     }
     void correr()
     return () => { vivo = false; if (urlRef.current) URL.revokeObjectURL(urlRef.current) }

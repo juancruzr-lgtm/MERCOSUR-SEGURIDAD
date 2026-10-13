@@ -17,11 +17,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import VisorHistorico from '@/components/legajo/VisorHistorico'
 import {
-  ESTADOS_VISUALES, EVENTO_HISTORICO, esIdPersona, nombrePersona, NIVELES_IDENTIFICACION, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe,
+  ESTADOS_VISUALES, EVENTO_HISTORICO, METODOS_VERIFICACION, esIdPersona, faltaVerificacion, nombrePersona, NIVELES_IDENTIFICACION, buscarPersona, cargarBandeja, cargarEventosHistorico, categoriaDe,
   confirmarEnLote, estadoVisual, filtrarHistorico, leerRangos, motivoFueraDeLote, nivelIdentificacion, resolverPropuesta, tienePersona,
 } from '@/lib/legajo-historico'
 import type {
-  Bandeja, EstadoPropuesta, EstadoVisual, EventoHistorico, NivelIdentificacion, PersonaBuscada, PropuestaHistorica, TipoBandeja,
+  Bandeja, EstadoPropuesta, EstadoVisual, EventoHistorico, MetodoVerificacion, NivelIdentificacion, PersonaBuscada, PropuestaHistorica, TipoBandeja,
 } from '@/lib/legajo-historico'
 
 const card: React.CSSProperties = { background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 14, marginBottom: 10, minWidth: 0, boxSizing: 'border-box' }
@@ -43,7 +43,43 @@ const ETIQUETA_REVISAR: Record<string, string> = {
 
 function nombreArchivo(ruta: string) { return ruta.split('/').pop() ?? ruta }
 
-function Aceptar({ p, tipos, onListo, onCancelar }: { p: PropuestaHistorica; tipos: TipoBandeja[]; onListo: () => void; onCancelar: () => void }) {
+/**
+ * Verificación del documento ORIGINAL: obligatoria para aceptar. Si no se abrió
+ * en el visor de la app, se avisa y hay que explicar cómo se revisó (por
+ * ejemplo, en MEGA). No bloquea una revisión legítima hecha por otro medio.
+ */
+function Verificacion({ vistoEnApp, valor, onCambio }: {
+  vistoEnApp: boolean
+  valor: { confirmado: boolean; metodo: MetodoVerificacion | ''; observacion: string }
+  onCambio: (v: { confirmado: boolean; metodo: MetodoVerificacion | ''; observacion: string }) => void
+}) {
+  return (
+    <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: 'rgba(59,130,246,.07)', border: '1px solid rgba(59,130,246,.3)' }}>
+      <div style={{ fontSize: 12.5, color: '#93c5fd', fontWeight: 700 }}>Verificación del documento original</div>
+      {!vistoEnApp && (
+        <div role="note" style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 4 }}>
+          ⚠ No abriste este archivo en el visor de la app. Si lo revisaste en MEGA u otro medio, indicalo y explicá cómo lo verificaste.
+        </div>
+      )}
+      <select style={{ ...input, marginTop: 6 }} value={valor.metodo} aria-label="Método de verificación"
+        onChange={e => onCambio({ ...valor, metodo: e.target.value as MetodoVerificacion | '' })}>
+        <option value="">¿Cómo lo verificaste?</option>
+        {METODOS_VERIFICACION.map(([k, t]) => <option key={k} value={k} disabled={k === 'visor_app' && !vistoEnApp}>{t}</option>)}
+      </select>
+      {(!vistoEnApp || valor.metodo !== 'visor_app') && (
+        <input style={{ ...input, marginTop: 6 }} maxLength={500} value={valor.observacion}
+          placeholder={vistoEnApp ? 'Observación (opcional)' : 'Cómo lo verificaste (obligatorio, mín. 10 caracteres)'}
+          onChange={e => onCambio({ ...valor, observacion: e.target.value })} />
+      )}
+      <label style={{ display: 'flex', gap: 8, fontSize: 13, color: '#cbd5e1', marginTop: 6 }}>
+        <input type="checkbox" checked={valor.confirmado} onChange={e => onCambio({ ...valor, confirmado: e.target.checked })} />
+        Comprobé el contenido del documento original (no alcanza con el nombre del archivo).
+      </label>
+    </div>
+  )
+}
+
+function Aceptar({ p, tipos, vistoEnApp, onListo, onCancelar }: { p: PropuestaHistorica; tipos: TipoBandeja[]; vistoEnApp: boolean; onListo: () => void; onCancelar: () => void }) {
   const [persona, setPersona] = useState<{ id: string; texto: string; dniRepetido: boolean } | null>(
     p.sugerido ? { id: p.sugerido.id, texto: `${p.sugerido.apellido}, ${p.sugerido.nombre}${p.sugerido.legajo ? ` · ${p.sugerido.legajo}` : ''}`, dniRepetido: false } : null)
   const [busqueda, setBusqueda] = useState('')
@@ -56,6 +92,9 @@ function Aceptar({ p, tipos, onListo, onCancelar }: { p: PropuestaHistorica; tip
   const [motivo, setMotivo] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [ocupado, setOcupado] = useState(false)
+  const [verif, setVerif] = useState<{ confirmado: boolean; metodo: MetodoVerificacion | ''; observacion: string }>(
+    { confirmado: false, metodo: vistoEnApp ? 'visor_app' : '', observacion: '' })
+  const faltaVerif = faltaVerificacion({ ...verif, vistoEnApp })
   const t = tipos.find(x => x.codigo === tipo)
   const exigeConfirmacion = p.estado === 'conflicto' || (persona && persona.id !== p.sugerido?.id) || persona?.dniRepetido
 
@@ -70,6 +109,7 @@ function Aceptar({ p, tipos, onListo, onCancelar }: { p: PropuestaHistorica; tip
     const e = await resolverPropuesta(p.id, 'aceptar', {
       empleadoId: persona?.id, tipo, fechaEmision: fecha, venceEl: t?.campo_vencimiento === 'declarado' ? vence : null,
       detalle, motivo, confirmoDniDistinto: confirmo,
+      verificacion: verif.metodo || null, observacion: verif.observacion,
     })
     setOcupado(false)
     if (e) setError(e); else onListo()
@@ -113,9 +153,11 @@ function Aceptar({ p, tipos, onListo, onCancelar }: { p: PropuestaHistorica; tip
           <input style={{ ...input, marginTop: 6 }} placeholder="Cómo lo verificaste" value={motivo} maxLength={300} onChange={e => setMotivo(e.target.value)} />
         </div>
       )}
+      <Verificacion vistoEnApp={vistoEnApp} valor={verif} onCambio={setVerif} />
+      {faltaVerif && verif.confirmado && <div style={{ color: '#fbbf24', fontSize: 12.5, marginTop: 6 }}>{faltaVerif}</div>}
       {error && <div role="alert" style={{ color: '#fca5a5', fontSize: 13, marginTop: 6 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-        <button type="button" style={boton('ok', !ocupado && !!persona && !!tipo)} disabled={ocupado || !persona || !tipo} onClick={() => void guardar()}>
+        <button type="button" style={boton('ok', !ocupado && !!persona && !!tipo && !faltaVerif)} disabled={ocupado || !persona || !tipo || !!faltaVerif} onClick={() => void guardar()}>
           {ocupado ? 'Guardando…' : 'Aceptar'}
         </button>
         <button type="button" style={boton('sec')} onClick={onCancelar}>Cancelar</button>
@@ -168,6 +210,8 @@ function ConfirmarLote({ propuestas, tipos, onListo }: { propuestas: PropuestaHi
   const [abierto, setAbierto] = useState(false)
   const [elegidas, setElegidas] = useState<Set<string>>(new Set())
   const [entiendo, setEntiendo] = useState(false)
+  const [metodo, setMetodo] = useState<MetodoVerificacion | ''>('')
+  const [observacion, setObservacion] = useState('')
   const [avance, setAvance] = useState<number | null>(null)
   const [resultado, setResultado] = useState<{ ok: number; errores: { archivo: string; error: string }[] } | null>(null)
   if (!aptas.length && !resultado) return null
@@ -175,7 +219,8 @@ function ConfirmarLote({ propuestas, tipos, onListo }: { propuestas: PropuestaHi
   const confirmar = async () => {
     const lista = aptas.filter(p => elegidas.has(p.id))
     setAvance(0)
-    const r = await confirmarEnLote(lista, setAvance)
+    if (!metodo) return
+    const r = await confirmarEnLote(lista, { metodo, observacion }, setAvance)
     setAvance(null); setAbierto(false)
     setResultado({ ok: r.ok.length, errores: r.errores.map(e => ({ archivo: nombreArchivo(lista.find(p => p.id === e.id)?.ruta_origen ?? ''), error: e.error })) })
     onListo()
@@ -207,12 +252,23 @@ function ConfirmarLote({ propuestas, tipos, onListo }: { propuestas: PropuestaHi
               </label>
             ))}
           </div>
+          <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: 'rgba(59,130,246,.07)', border: '1px solid rgba(59,130,246,.3)' }}>
+            <div style={{ fontSize: 12.5, color: '#93c5fd', fontWeight: 700 }}>Verificación de los documentos originales</div>
+            <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 4 }}>⚠ En lote no se registra el visor de la app: indicá cómo revisaste los originales y explicalo.</div>
+            <select style={{ ...input, marginTop: 6 }} value={metodo} aria-label="Método de verificación del lote" onChange={e => setMetodo(e.target.value as MetodoVerificacion | '')}>
+              <option value="">¿Cómo los verificaste?</option>
+              {METODOS_VERIFICACION.filter(([k]) => k !== 'visor_app').map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+            </select>
+            <input style={{ ...input, marginTop: 6 }} maxLength={500} value={observacion} onChange={e => setObservacion(e.target.value)}
+              placeholder="Cómo los verificaste (obligatorio, mín. 10 caracteres)" />
+          </div>
           <label style={{ display: 'flex', gap: 8, fontSize: 13, color: '#fbbf24', marginTop: 8 }}>
             <input type="checkbox" checked={entiendo} onChange={e => setEntiendo(e.target.checked)} />
-            Confirmo la asociación de estas {elegidas.size} referencias. Entiendo que no valida los documentos: siguen sin validar hasta su revisión en Documentación.
+            Comprobé el contenido de los {elegidas.size} documentos originales y confirmo su asociación. Entiendo que no valida los documentos: siguen sin validar hasta su revisión en Documentación.
           </label>
           <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <button type="button" style={boton('ok', entiendo && elegidas.size > 0 && avance === null)} disabled={!entiendo || !elegidas.size || avance !== null} onClick={() => void confirmar()}>
+            <button type="button" style={boton('ok', entiendo && !!metodo && observacion.trim().length >= 10 && elegidas.size > 0 && avance === null)}
+              disabled={!entiendo || !metodo || observacion.trim().length < 10 || !elegidas.size || avance !== null} onClick={() => void confirmar()}>
               {avance !== null ? `Confirmando… ${avance}/${elegidas.size}` : `Confirmar ${elegidas.size}`}
             </button>
             <button type="button" style={boton('sec')} disabled={avance !== null} onClick={() => setAbierto(false)}>Cancelar</button>
@@ -223,10 +279,38 @@ function ConfirmarLote({ propuestas, tipos, onListo }: { propuestas: PropuestaHi
   )
 }
 
+/** Corregir o quitar la categoría SUGERIDA (no acepta nada; queda en el historial). */
+function Recategorizar({ p, tipos, onListo, onCancelar }: { p: PropuestaHistorica; tipos: TipoBandeja[]; onListo: () => void; onCancelar: () => void }) {
+  const [tipo, setTipo] = useState(p.tipo_sugerido ?? '')
+  const [motivo, setMotivo] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const guardar = async () => {
+    const e = await resolverPropuesta(p.id, 'recategorizar', { tipo: tipo || null, motivo })
+    if (e) setError(e); else onListo()
+  }
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed #334155' }}>
+      <span style={etiqueta}>Categoría sugerida</span>
+      <select style={input} value={tipo} onChange={e => setTipo(e.target.value)} aria-label="Categoría sugerida">
+        <option value="">Sin categoría (revisar más adelante)</option>
+        {tipos.map(x => <option key={x.codigo} value={x.codigo}>{x.nombre}</option>)}
+      </select>
+      <input style={{ ...input, marginTop: 6 }} placeholder="Por qué (p. ej.: es una solicitud de empleo, no un embargo)" value={motivo} maxLength={300} onChange={e => setMotivo(e.target.value)} />
+      {error && <div role="alert" style={{ color: '#fca5a5', fontSize: 13, marginTop: 6 }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button type="button" style={boton('sec', motivo.trim().length >= 3)} disabled={motivo.trim().length < 3} onClick={() => void guardar()}>Guardar categoría</button>
+        <button type="button" style={boton('sec')} onClick={onCancelar}>Cancelar</button>
+      </div>
+      <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Cambia sólo la sugerencia: la referencia sigue pendiente de revisión.</div>
+    </div>
+  )
+}
+
 function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBandeja[]; onCambio: () => void }) {
-  const [modo, setModo] = useState<null | 'aceptar' | 'descartar' | 'separar'>(null)
+  const [modo, setModo] = useState<null | 'aceptar' | 'descartar' | 'separar' | 'recategorizar'>(null)
   const [verHistorial, setVerHistorial] = useState(false)
   const [verDoc, setVerDoc] = useState(false)
+  const [vistoEnApp, setVistoEnApp] = useState(false)
   const nivel = estadoVisual(p)
   const ident = NIVELES_IDENTIFICACION.find(([k]) => k === nivelIdentificacion(p))?.[1] ?? ''
   const evidencia = [
@@ -240,7 +324,7 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
     <div style={{ ...card, borderColor: p.estado === 'conflicto' ? 'rgba(245,158,11,.4)' : '#1e2d42' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
         <b style={{ color: '#e2e8f0', fontSize: 14.5, overflowWrap: 'anywhere' }}>{nombreArchivo(p.ruta_origen)}</b>
-        <span style={{ fontSize: 12, color: p.confianza === 'alta' ? '#86efac' : p.confianza === 'media' ? '#fbbf24' : '#94a3b8' }}>confianza {p.confianza}</span>
+        <span title="Qué tan segura es la categoría sugerida (la identidad se evalúa aparte)" style={{ fontSize: 12, color: p.confianza === 'alta' ? '#86efac' : p.confianza === 'media' ? '#fbbf24' : '#94a3b8' }}>categoría: confianza {p.confianza}</span>
       </div>
       <div style={{ fontSize: 12, color: nivel.color, marginTop: 2 }}>
         {nivel.texto} · identificación {ident.toLowerCase()}
@@ -268,19 +352,21 @@ function Tarjeta({ p, tipos, onCambio }: { p: PropuestaHistorica; tipos: TipoBan
           Ver documento{(p.paginas ?? 0) > 1 && !p.padre_id ? ' y asignar páginas' : ''}
         </button>
       )}
-      {verDoc && <VisorHistorico p={p} tipos={tipos} onCerrar={() => setVerDoc(false)} onCambio={onCambio} />}
+      {verDoc && <VisorHistorico p={p} tipos={tipos} onCerrar={() => setVerDoc(false)} onCambio={onCambio} onAbierto={() => setVistoEnApp(true)} />}
 
       {abierta && modo === null && (
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <button type="button" style={boton('ok', p.indexado)} disabled={!p.indexado} onClick={() => setModo('aceptar')}>Revisar y aceptar</button>
           {!p.padre_id && (p.paginas ?? 0) > 1 && <button type="button" style={boton('sec')} onClick={() => setModo('separar')}>Separar páginas</button>}
+          <button type="button" style={boton('sec')} onClick={() => setModo('recategorizar')}>Cambiar categoría sugerida</button>
           <button type="button" style={boton('peligro')} onClick={() => setModo('descartar')}>Descartar</button>
         </div>
       )}
       {(p.estado === 'aceptada' || p.estado === 'descartada') && modo === null && (
         <button type="button" style={{ ...boton('sec'), marginTop: 10 }} onClick={async () => { const e = await resolverPropuesta(p.id, 'reabrir'); if (!e) onCambio() }}>Reabrir</button>
       )}
-      {modo === 'aceptar' && <Aceptar p={p} tipos={tipos} onListo={() => { setModo(null); onCambio() }} onCancelar={() => setModo(null)} />}
+      {modo === 'aceptar' && <Aceptar p={p} tipos={tipos} vistoEnApp={vistoEnApp} onListo={() => { setModo(null); onCambio() }} onCancelar={() => setModo(null)} />}
+      {modo === 'recategorizar' && <Recategorizar p={p} tipos={tipos} onListo={() => { setModo(null); onCambio() }} onCancelar={() => setModo(null)} />}
       {modo === 'descartar' && <ConTexto etiquetaBoton="Descartar" placeholder="Por qué (p. ej.: no es documentación del legajo)"
         onConfirmar={t => resolverPropuesta(p.id, 'descartar', { motivo: t }).then(e => { if (!e) { setModo(null); onCambio() } return e })} onCancelar={() => setModo(null)} />}
       {modo === 'separar' && <ConTexto etiquetaBoton="Separar" placeholder={`Rangos y tipo, p. ej.: 1-2 dni, 3 cuil (tiene ${p.paginas} páginas)`}
