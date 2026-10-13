@@ -13,6 +13,7 @@ import MiDesempeno from '@/components/desempeno/MiDesempeno'
 import EstatutoInterno from '@/components/estatuto/EstatutoInterno'
 import DatosPersonales from '@/components/legajo/DatosPersonales'
 import DocumentacionLegajo from '@/components/documentacion/DocumentacionLegajo'
+import PanelHabilitacion from '@/components/habilitacion/PanelHabilitacion'
 import { gestionaDatosSensibles } from '@/lib/legajo'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
@@ -445,6 +446,12 @@ export default function LegajoPage() {
           </div>
         </div>
       </div>
+
+      {/* Credencial y Habilitación: lo primero que se ve del legajo de un vigilador
+          (sólo Administración y Gerencia; la base vuelve a controlar). */}
+      {empleado.rol === 'guardia' && usuarioId !== null && usuarioId !== empleadoId && gestionaDatosSensibles({ puesto_organizacional: puestoUsuario }) && (
+        <div style={{ padding: '12px 16px 0' }}><PanelHabilitacion empleadoId={empleadoId} /></div>
+      )}
 
       {/* Navegación */}
       <nav style={S.nav}>
