@@ -158,6 +158,15 @@ drop trigger if exists trg_habilitacion_tramites_sin_delete on public.habilitaci
 create trigger trg_habilitacion_tramites_sin_delete before delete on public.habilitacion_tramites
   for each row execute function public.habilitacion_eventos_inmutable();
 
+-- Origen de los datos personales recuperados de fuentes existentes, para que
+-- cada fecha de ingreso diga de dónde sale (y no figure como cargada a mano):
+--   arca_relaciones_laborales  Consulta de Relaciones Laborales de ARCA (por CUIL)
+--   arca_constancia_alta       constancia de alta de ARCA en MEGA (CUIL leído del documento)
+--   planillas_historicas       planillas de personal (sugerencia: la confirma Administración)
+alter table public.legajo_cambios_datos drop constraint if exists legajo_cambios_datos_origen_check;
+alter table public.legajo_cambios_datos add constraint legajo_cambios_datos_origen_check
+  check (origen in ('vigilador','administracion','planilla_legajos_2024-08','arca_relaciones_laborales','arca_constancia_alta','planillas_historicas'));
+
 -- Los documentos del legajo que respaldan la habilitación (para orientar la
 -- revisión de Documentación y de MEGA a lo que hace falta para la credencial).
 alter table public.documentacion_tipos add column if not exists para_habilitacion boolean not null default false;
@@ -297,11 +306,17 @@ begin
   end if;
 
   -- ¿Qué está pasando y qué hay que hacer ahora?
-  if cr.id is not null and v_cred_estado = 'vigente' then
-    v_codigo := case when cr.verificada then 'vigente' else 'sin_verificar' end;
-    v_titulo := case when cr.verificada then 'Credencial vigente' else 'Credencial informada, sin verificar' end;
+  if cr.id is not null and not cr.verificada and t.id is null then
+    -- Dato informado (p. ej., de una planilla), sin verificar: no es «tiene credencial».
+    v_codigo := 'sin_verificar';
+    v_titulo := 'Credencial informada, sin verificar';
+    v_detalle := case when v_dias_venc < 0 then 'Según lo informado venció el ' else 'Según lo informado vence el ' end
+                 || to_char(cr.vence_el, 'DD/MM/YYYY') || ' — verificar la credencial';
+    v_resp_rol := 'administracion';
+  elsif cr.id is not null and v_cred_estado = 'vigente' then
+    v_codigo := 'vigente';
+    v_titulo := 'Credencial vigente';
     v_detalle := 'Vence el ' || to_char(cr.vence_el, 'DD/MM/YYYY');
-    if not cr.verificada then v_resp_rol := 'administracion'; v_detalle := v_detalle || ' — verificar la credencial'; end if;
   elsif cr.id is not null and t.id is null then
     v_codigo := v_cred_estado;
     v_titulo := case when v_cred_estado = 'vencida' then 'Credencial vencida' else 'Credencial próxima a vencer' end;

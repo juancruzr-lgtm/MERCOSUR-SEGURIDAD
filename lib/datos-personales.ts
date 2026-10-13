@@ -26,7 +26,7 @@ export interface CambioDato {
   campo: string
   valor_anterior: string | null
   valor_nuevo: string | null
-  origen: 'vigilador' | 'administracion' | 'planilla_legajos_2024-08'
+  origen: 'vigilador' | 'administracion' | 'planilla_legajos_2024-08' | 'arca_relaciones_laborales' | 'arca_constancia_alta' | 'planillas_historicas'
   estado: EstadoCambio
   motivo: string | null
   motivo_rechazo: string | null
@@ -73,6 +73,9 @@ export const ETIQUETA_ORIGEN: Record<CambioDato['origen'], string> = {
   vigilador: 'la persona',
   administracion: 'Administración',
   'planilla_legajos_2024-08': 'planilla histórica (ago-2024)',
+  arca_relaciones_laborales: 'ARCA (relaciones laborales)',
+  arca_constancia_alta: 'constancia de alta de ARCA',
+  planillas_historicas: 'planillas de personal',
 }
 
 const msj = (e: { message?: string } | null, d: string) => (e?.message ?? '').trim() || d

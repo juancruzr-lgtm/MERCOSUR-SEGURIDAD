@@ -27,6 +27,18 @@ drop function if exists public.habilitacion_eventos_inmutable();
 
 alter table public.documentacion_tipos drop column if exists para_habilitacion;
 
+-- Orígenes de datos personales: sólo se puede volver atrás si no se usaron los nuevos.
+do $$
+begin
+  if exists (select 1 from public.legajo_cambios_datos where origen in ('arca_relaciones_laborales','arca_constancia_alta','planillas_historicas')) then
+    raise notice 'Hay cambios de datos con los orígenes nuevos: se conserva la restricción ampliada';
+  else
+    alter table public.legajo_cambios_datos drop constraint if exists legajo_cambios_datos_origen_check;
+    alter table public.legajo_cambios_datos add constraint legajo_cambios_datos_origen_check
+      check (origen in ('vigilador','administracion','planilla_legajos_2024-08'));
+  end if;
+end $$;
+
 notify pgrst, 'reload schema';
 
 commit;
