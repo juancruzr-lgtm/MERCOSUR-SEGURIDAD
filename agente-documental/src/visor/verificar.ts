@@ -8,7 +8,8 @@
  *   1. que el .env tenga las variables (sin mostrar sus valores);
  *   2. que la clave sea de servicio (puede usar las funciones del lector);
  *   3. que el bucket temporal exista y sea privado;
- *   4. que VISOR_RAICES lleve a los 2 PDF del piloto y que su hash local sea
+ *   4. que las áreas habilitadas (o VISOR_RAICES, en modo prueba) lleven a los
+ *      2 PDF del piloto y que su hash local sea
  *      el del índice (lectura);
  *   5. cuántos pedidos hay en cola.
  */
@@ -17,7 +18,7 @@ import 'dotenv/config'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import { createClient } from '@supabase/supabase-js'
-import { BUCKET, leerRaices, resolverRuta } from './Visor'
+import { BUCKET, leerRaices, raicesDeAreas, resolverRuta } from './Visor'
 
 export const PILOTO = [
   { id: '7cc0f6e4-8e0a-40d3-9346-87f95df16506', nombre: 'Anexo CCT 507' },
@@ -28,9 +29,10 @@ let fallas = 0
 const ok = (c: boolean, m: string) => { console.log(`${c ? 'OK   ' : 'FALLA'} ${m}`); if (!c) fallas++ }
 
 async function main() {
-  const vars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'VISOR_RAICES', 'VISOR_AGENTE_ID']
+  const vars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'DOCUMENT_ROOT_PATH', 'VISOR_AGENTE_ID']
   for (const v of vars) ok(!!process.env[v], `1. variable ${v} ${process.env[v] ? 'presente' : 'FALTA'}`)
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.VISOR_RAICES) return fin()
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.DOCUMENT_ROOT_PATH) return fin()
+  if (process.env.VISOR_RAICES) console.log('AVISO VISOR_RAICES está definida: el lector corre en MODO PRUEBA (no usa las áreas de la base)')
 
   const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
   const { error: eRpc } = await sb.rpc('legajo_historico_vistas_a_borrar')
@@ -40,13 +42,19 @@ async function main() {
   ok(!eB && !!bucket && bucket.public === false, `3. bucket ${BUCKET} ${bucket ? (bucket.public ? 'PÚBLICO' : 'privado') : 'inexistente'}`)
 
   let raices: [string, string][] = []
-  try { raices = leerRaices(process.env.VISOR_RAICES) } catch (e) { ok(false, `4. VISOR_RAICES: ${(e as Error).message}`) }
+  if (process.env.VISOR_RAICES) {
+    try { raices = leerRaices(process.env.VISOR_RAICES) } catch (e) { ok(false, `4. VISOR_RAICES: ${(e as Error).message}`) }
+  } else {
+    const { data: areas, error: eA } = await sb.rpc('documental_areas_lector')
+    ok(!eA && !!areas?.length, `4. áreas habilitadas en la base: ${(areas as { codigo: string }[] | null)?.map(a => a.codigo).join(', ') || 'ninguna'}`)
+    raices = raicesDeAreas((areas as { prefijo: string }[] | null) ?? [], process.env.DOCUMENT_ROOT_PATH!)
+  }
   for (const [prefijo, ruta] of raices) ok(fs.existsSync(ruta), `4. carpeta para «${prefijo}» ${fs.existsSync(ruta) ? 'existe' : 'NO existe'}`)
   for (const p of PILOTO) {
     const { data: r } = await sb.from('repositorio_documental').select('ruta_relativa, hash_sha256').eq('id', p.id).maybeSingle()
     if (!r) { ok(false, `4. ${p.nombre}: no está en el índice`); continue }
     const local = resolverRuta(r.ruta_relativa, raices)
-    if (!local) { ok(false, `4. ${p.nombre}: ningún prefijo de VISOR_RAICES corresponde a su ruta del índice`); continue }
+    if (!local) { ok(false, `4. ${p.nombre}: ningún área habilitada corresponde a su ruta del índice`); continue }
     if (!fs.existsSync(local)) { ok(false, `4. ${p.nombre}: no está en la carpeta configurada`); continue }
     const hash = crypto.createHash('sha256').update(fs.readFileSync(local)).digest('hex')
     ok(hash === String(r.hash_sha256).toLowerCase(), `4. ${p.nombre}: ${hash === String(r.hash_sha256).toLowerCase() ? 'hash igual al índice' : 'HASH DISTINTO al índice'}`)

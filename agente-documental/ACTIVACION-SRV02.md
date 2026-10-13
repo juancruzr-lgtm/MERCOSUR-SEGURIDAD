@@ -1,133 +1,86 @@
-# Activación del lector en SRV02 — piloto
+# Lector documental en SRV02 — instalación y operación
 
-Procedimiento de unos 20 minutos. Se hace con acceso a SRV02 y no requiere
-programar. **No activa scan ni watch, no toca el índice y no aplica la migración
-20261009160000.** Este documento no contiene claves.
+Agente en SRV02: `C:\Mercosur\MERCOSUR-SEGURIDAD\agente-documental`.
+**No activa scan ni watch, no toca el índice y no aplica la migración
+20261009160000.** Este documento no contiene claves: el lector usa el `.env`
+que el agente ya tiene (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`DOCUMENT_ROOT_PATH`, `VISOR_AGENTE_ID`).
 
-> Antes de empezar: en la app, `main` tiene que estar en a89cd89 o posterior, y
-> las migraciones 20261011130000 (visor) y 20261011120000 (ARCA) aplicadas. Ya lo están.
+Qué carpetas lee el lector lo decide la base (`documental_areas`, ver
+[INFRAESTRUCTURA-DOCUMENTAL.md](INFRAESTRUCTURA-DOCUMENTAL.md)). `VISOR_RAICES`
+es sólo para pruebas aisladas y **no** debe quedar en el `.env`.
 
-## 1. Localizar el agente en SRV02
+## 1. Actualizar el código del visor (sin tocar el resto del agente)
 
-En PowerShell:
-
-```powershell
-Get-ChildItem C:\,D:\ -Filter package.json -Recurse -ErrorAction SilentlyContinue |
-  Where-Object { Select-String -Path $_.FullName -Pattern '"agente-mercosur"' -Quiet } |
-  Select-Object DirectoryName
-```
-
-La carpeta encontrada es la del agente. En ella el `.env` tiene `DOCUMENT_AGENT_ID=srv02-mega`.
-
-Actualizar el código del agente con la versión de `main`:
-- **Si la carpeta es un clon de Git:** ejecutar `git pull`.
-- **Si no lo es:** copiar `agente-documental/src/visor/`, `package.json` y `VISOR.md` desde el repositorio.
-
-Después, en esa carpeta:
+En la carpeta del agente, PowerShell normal:
 
 ```powershell
-npm install
+git -C .. fetch origin main
+git -C .. archive --format=tar -o "$env:TEMP\visor.tar" origin/main agente-documental/src/visor agente-documental/servicio
+tar -xf "$env:TEMP\visor.tar" --strip-components=1; Remove-Item "$env:TEMP\visor.tar"
 ```
 
-## 2. Comprobar el entorno existente
-
-El `.env` del agente ya tiene `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`, porque el
-agente indexó con clave de servicio. No hace falta pedir claves nuevas.
-
-## 3. Configurar `VISOR_RAICES`
-
-Agregar al `.env`. **Sólo agregar: no cambiar las variables del agente.**
-
-```
-VISOR_AGENTE_ID=srv02-visor
-VISOR_RAICES=EMPLEADOS/=<DOCUMENT_ROOT_PATH>\EMPLEADOS
-```
-
-- `<DOCUMENT_ROOT_PATH>` es el valor que ya figura en ese mismo `.env`. Las rutas del índice son relativas a esa carpeta.
-- Para el piloto alcanza con `EMPLEADOS/`, porque ahí están los 2 PDF.
-- Para habilitar más áreas después, agregarlas separadas por `;`. Por ejemplo: `;ADMINISTRACION/=<DOCUMENT_ROOT_PATH>\ADMINISTRACION`.
-- Lo que no esté configurado no se puede leer.
-
-## 4. Verificar que las rutas corresponden al índice
-
-Este paso sólo lee: no escribe nada.
+## 2. Verificar (sólo lectura)
 
 ```powershell
-npm run visor:verificar
+npx ts-node src/visor/verificar.ts
 ```
 
-Tiene que terminar en **LISTO PARA EL PILOTO**:
-- variables presentes;
-- la clave es de servicio;
-- el bucket es privado;
-- la carpeta existe;
-- los 2 PDF tienen el hash igual al índice.
+Tiene que terminar en **LISTO PARA EL PILOTO**: variables, clave de servicio,
+bucket privado, áreas habilitadas y los 2 PDF del piloto con el hash del índice.
 
-Si dice «HASH DISTINTO» o «no está en la carpeta configurada», revisar
-`VISOR_RAICES` (paso 3) antes de seguir.
-
-## 5. Ejecutar el piloto
+## 3. Instalar como tarea permanente (una vez, PowerShell COMO ADMINISTRADOR)
 
 ```powershell
-npm run visor:piloto -- 7cc0f6e4-8e0a-40d3-9346-87f95df16506 ec57ca0e-aad6-48f2-88d2-13a73f7847ec
+cd C:\Mercosur\MERCOSUR-SEGURIDAD\agente-documental
+powershell -ExecutionPolicy Bypass -File .\servicio\instalar.ps1
 ```
 
-Tarda unos 3 minutos: espera 65 s por archivo para probar el vencimiento del enlace.
+- Tarea `\Mercosur\Lector documental`, cuenta SYSTEM, arranca 1 minuto después
+  de iniciar el servidor, sin sesión iniciada.
+- Una sola instancia. Si el lector se cae, el supervisor lo reinicia (10 s, 20 s,
+  40 s… hasta 5 min); si el supervisor falla, Windows lo reinicia (cada 1 min).
+- No guarda credenciales ni las pasa como argumento. Prioridad baja: no compite
+  con MEGAsync.
+- Si ya hay una tarea o servicio equivalente, no instala otro.
 
-## 6 a 8. Qué tiene que mostrar
+## 4. Operación (PowerShell como administrador, en la carpeta del agente)
 
-| Línea | Qué comprueba |
+| Acción | Comando |
 |---|---|
-| `2. el lector lo dejó listo con el hash verificado` | Se recuperó el PDF (paso 6). |
-| `3. sin firma no se descarga` | El bucket es privado. |
-| `4. con enlace de 60 s se descarga y el hash coincide` | El enlace firmado funciona. |
-| `5. el mismo enlace a los 65 s ya no sirve` | **El enlace vence** (paso 7). |
-| `6. la copia sigue hasta su retención` | Vencer el enlace no borra la copia. |
-| `7. vencida la retención, la limpieza la borra` | **Se eliminan los archivos temporales** (paso 8). |
-| `8. el original no cambió` | MEGA queda intacto. |
+| Ver estado | `powershell -ExecutionPolicy Bypass -File .\servicio\estado.ps1` |
+| Detener (queda detenido, también tras reiniciar el servidor) | `powershell -ExecutionPolicy Bypass -File .\servicio\detener.ps1` |
+| Iniciar / reiniciar | `powershell -ExecutionPolicy Bypass -File .\servicio\iniciar.ps1` |
+| Quitar la tarea | `powershell -ExecutionPolicy Bypass -File .\servicio\desinstalar.ps1` |
 
-Tiene que terminar en **PILOTO OK**, una vez por cada archivo.
+Registros: `C:\ProgramData\MercosurLectorDocumental\logs` (30 días):
+`servicio-AAAAMMDD.log` (inicio, detención, fallas y recuperación),
+`lector-actual.log` (el lector en curso) y `lector-AAAAMMDD.log`. Sin rutas,
+nombres ni secretos: sólo ids de pedido.
 
-## 9. Consultar la auditoría
-
-En el editor SQL de Supabase:
+Desde la base (editor SQL de Supabase):
 
 ```sql
--- Pedidos del piloto y su recorrido
-select id, estado, motivo, agente_id, hash_esperado = hash_leido as hash_ok,
-       creado_at, tomada_at, lista_at, expira_at, eliminada_at, error
+-- ¿Está andando? (latido cada minuto)
+select agente_id, estado, ultimo_latido, info from documental_lectores;
+
+-- Pedidos y aperturas recientes
+select left(id::text,8) id, estado, area_codigo, agente_id, hash_esperado = hash_leido hash_ok,
+       creado_at, lista_at, eliminada_at, error
 from legajo_historico_vistas order by creado_at desc limit 20;
-
--- Aperturas desde la app (vacío en el piloto, que firma desde SRV02)
-select a.at, a.vista_id, u.apellido, u.nombre, a.ip
-from legajo_historico_vista_aperturas a left join usuarios u on u.id = a.usuario_id
-order by a.at desc limit 20;
-
--- Pedidos y aperturas hechos desde la bandeja (historial de cada referencia)
-select propuesta_id, evento, at, usuario_id
-from legajo_historico_eventos where evento like 'vista_%' order by at desc limit 20;
+select a.at, a.vista_id, u.apellido, u.nombre from legajo_historico_vista_aperturas a
+  left join usuarios u on u.id = a.usuario_id order by a.at desc limit 20;
 
 -- No debe quedar ninguna copia viva vencida
 select count(*) from legajo_historico_vistas
-where objeto is not null and eliminada_at is null and expira_at < now();
+ where objeto is not null and eliminada_at is null and expira_at < now();
 ```
 
-## 10. Detener el lector ante un error
+Ante un problema: `detener.ps1`. Los pedidos en cola vencen solos a los 5
+minutos y las copias temporales se borran solas (también desde la app).
 
-- Ctrl+C en la consola donde corre `npm run visor`. No hay servicio instalado
-  ni tarea programada: si se cierra la consola, se detiene.
-- Si quedaron pedidos colgados (la app avisa sola al minuto), se pueden cerrar así:
+## 5. Piloto (ya realizado el 13/10/2026; repetir sólo si cambia el lector)
 
-  ```sql
-  update legajo_historico_vistas set estado = 'error', error = 'Lector detenido'
-  where estado in ('pendiente','tomada');
-  ```
-
-- Las copias temporales vencen solas: la app también las borra en cada apertura.
-
-## Después del piloto
-
-1. Dejar andando `npm run visor` en una consola de SRV02. Más adelante se puede instalar como tarea, con autorización.
-2. Probar desde la app con una sesión de Administración: Legajo Digital →
-   Archivo histórico → una referencia → «Ver documento».
-3. Ampliar `VISOR_RAICES` sólo a las áreas autorizadas.
+```powershell
+npx ts-node src/visor/piloto.ts 7cc0f6e4-8e0a-40d3-9346-87f95df16506 ec57ca0e-aad6-48f2-88d2-13a73f7847ec
+```

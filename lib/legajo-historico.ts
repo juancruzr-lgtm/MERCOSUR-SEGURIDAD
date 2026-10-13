@@ -90,15 +90,37 @@ export async function buscarPersona(texto: string): Promise<PersonaBuscada[]> {
   return (data as PersonaBuscada[] | null) ?? []
 }
 
-export async function resolverPropuesta(id: string, decision: 'aceptar' | 'descartar' | 'separar' | 'reabrir', p: {
+/**
+ * Cómo se comprobó el documento ORIGINAL antes de aceptar la referencia.
+ * Aceptar asocia la referencia a la persona: no valida el documento.
+ */
+export type MetodoVerificacion = 'visor_app' | 'mega_directo' | 'otro'
+export const METODOS_VERIFICACION: [MetodoVerificacion, string][] = [
+  ['visor_app', 'Lo abrí en el visor de la app'], ['mega_directo', 'Lo abrí directamente en MEGA'], ['otro', 'Otro medio'],
+]
+
+/**
+ * Qué falta para poder aceptar. Sin haberlo visto en el visor, hace falta
+ * explicar cómo se verificó (la base lo vuelve a controlar).
+ */
+export function faltaVerificacion(v: { confirmado: boolean; metodo: MetodoVerificacion | ''; observacion: string; vistoEnApp: boolean }): string | null {
+  if (!v.confirmado) return 'Confirmá que comprobaste el contenido del documento original'
+  if (!v.metodo) return 'Indicá cómo lo verificaste'
+  if (v.metodo === 'visor_app' && !v.vistoEnApp) return 'No abriste este archivo en el visor: elegí otro método y explicá cómo lo verificaste'
+  if (!v.vistoEnApp && v.observacion.trim().length < 10) return 'Escribí cómo verificaste el documento (al menos 10 caracteres)'
+  return null
+}
+
+export async function resolverPropuesta(id: string, decision: 'aceptar' | 'descartar' | 'separar' | 'reabrir' | 'recategorizar', p: {
   empleadoId?: string | null; tipo?: string | null; fechaEmision?: string | null; venceEl?: string | null
   detalle?: string | null; motivo?: string | null; rangos?: { desde: number; hasta: number; tipo: string | null }[]
-  confirmoDniDistinto?: boolean
+  confirmoDniDistinto?: boolean; verificacion?: MetodoVerificacion | null; observacion?: string | null
 } = {}): Promise<string | null> {
   const { error } = await supabase.rpc('legajo_historico_resolver', {
     p_id: id, p_decision: decision, p_empleado_id: p.empleadoId ?? null, p_tipo: p.tipo ?? null,
     p_fecha_emision: p.fechaEmision || null, p_vence_el: p.venceEl || null, p_detalle: p.detalle || null,
     p_motivo: p.motivo || null, p_rangos: p.rangos ?? null, p_confirmo_dni_distinto: !!p.confirmoDniDistinto,
+    p_verificacion: p.verificacion ?? null, p_observacion: p.observacion || null,
   })
   return error ? mensaje(error, 'No se pudo guardar') : null
 }
@@ -256,10 +278,14 @@ export function motivoFueraDeLote(p: PropuestaHistorica, tipos: TipoBandeja[]): 
 export const MOTIVO_LOTE = 'Confirmación en lote: identificación inequívoca y categoría sugerida'
 
 /** Una por una, con el mismo control de la base que la confirmación manual. */
-export async function confirmarEnLote(lista: PropuestaHistorica[], alAvanzar?: (hechas: number) => void): Promise<{ ok: string[]; errores: { id: string; error: string }[] }> {
+export async function confirmarEnLote(lista: PropuestaHistorica[], verificacion: { metodo: MetodoVerificacion; observacion: string },
+  alAvanzar?: (hechas: number) => void): Promise<{ ok: string[]; errores: { id: string; error: string }[] }> {
   const ok: string[] = [], errores: { id: string; error: string }[] = []
   for (const p of lista) {
-    const e = await resolverPropuesta(p.id, 'aceptar', { empleadoId: p.sugerido?.id, tipo: p.tipo_sugerido, motivo: MOTIVO_LOTE })
+    const e = await resolverPropuesta(p.id, 'aceptar', {
+      empleadoId: p.sugerido?.id, tipo: p.tipo_sugerido, motivo: MOTIVO_LOTE,
+      verificacion: verificacion.metodo, observacion: verificacion.observacion,
+    })
     if (e) errores.push({ id: p.id, error: e }); else ok.push(p.id)
     alAvanzar?.(ok.length + errores.length)
   }

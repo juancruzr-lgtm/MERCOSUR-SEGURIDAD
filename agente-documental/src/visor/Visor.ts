@@ -38,6 +38,17 @@ export function tipoReal(b: Uint8Array): string | null {
   return null
 }
 
+/**
+ * Áreas habilitadas (de la base) → raíces locales: cada prefijo del índice es
+ * una carpeta dentro de la raíz de MEGA (DOCUMENT_ROOT_PATH).
+ */
+export function raicesDeAreas(areas: { prefijo: string }[], base: string): [string, string][] {
+  return areas
+    .filter(a => a.prefijo.endsWith('/') &&!a.prefijo.split('/').some(p => p === '..') && !path.isAbsolute(a.prefijo))
+    .map(a => [a.prefijo, path.join(base, ...a.prefijo.split('/').filter(Boolean))] as [string, string])
+    .sort((x, y) => y[0].length - x[0].length)
+}
+
 /** "EMPLEADOS/=C:\\MEGA\\mercosur mega;ADMINISTRACION/=D:\\Admin" → [[prefijo, raíz]] (el más largo primero). */
 export function leerRaices(texto: string): [string, string][] {
   return texto.split(';').map(s => s.trim()).filter(Boolean).map(par => {
@@ -75,6 +86,9 @@ export class Visor {
     private agenteId: string,
     private log: Registro,
   ) {}
+
+  /** Cambia las carpetas habilitadas (se recargan desde la base). */
+  usarRaices(raices: [string, string][]) { this.raices = raices }
 
   /** Atiende un pedido. Devuelve true si hubo uno. */
   async atenderUno(): Promise<boolean> {
