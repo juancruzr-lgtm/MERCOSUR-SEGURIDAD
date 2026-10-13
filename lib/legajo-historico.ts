@@ -35,6 +35,9 @@ export interface PropuestaHistorica {
   documento_id?: string | null
   /** Estado del documento del legajo, si ya se copió (importada). */
   documento_estado?: string | null
+  /** Persona efectivamente asociada (al aceptar; puede diferir de la sugerida). */
+  empleado?: { id: string; nombre: string; apellido: string; legajo: string | null; estado: string } | null
+  revisado_por_nombre?: string | null
 }
 
 export interface TipoBandeja {
@@ -75,8 +78,11 @@ const mensaje = (e: { message?: string } | null, d: string) => (e?.message ?? ''
 
 export const TAMAÑO_PAGINA_HISTORICO = 200
 
-/** Con texto (≥ 3 letras) busca por archivo, persona, legajo o DNI en todos los estados. */
-export async function cargarBandeja(estado: EstadoPropuesta, texto = '', desde = 0): Promise<{ datos: Bandeja | null; error: string | null }> {
+/**
+ * Con texto (≥ 3 letras) busca por archivo, persona, legajo o DNI en todos los estados.
+ * 'abiertas' = pendientes + conflictos; 'revisadas' = aceptadas + copiadas + descartadas.
+ */
+export async function cargarBandeja(estado: EstadoPropuesta | 'abiertas' | 'revisadas', texto = '', desde = 0): Promise<{ datos: Bandeja | null; error: string | null }> {
   const buscando = texto.trim().length >= 3
   const { data, error } = await supabase.rpc('legajo_historico_bandeja', {
     p_estado: buscando ? null : estado, p_limite: TAMAÑO_PAGINA_HISTORICO, p_texto: buscando ? texto.trim() : null, p_desde: desde,
@@ -111,7 +117,7 @@ export function faltaVerificacion(v: { confirmado: boolean; metodo: MetodoVerifi
   return null
 }
 
-export async function resolverPropuesta(id: string, decision: 'aceptar' | 'descartar' | 'separar' | 'reabrir' | 'recategorizar', p: {
+export async function resolverPropuesta(id: string, decision: 'aceptar' | 'descartar' | 'separar' | 'reabrir' | 'recategorizar' | 'investigar' | 'quitar_investigacion', p: {
   empleadoId?: string | null; tipo?: string | null; fechaEmision?: string | null; venceEl?: string | null
   detalle?: string | null; motivo?: string | null; rangos?: { desde: number; hasta: number; tipo: string | null }[]
   confirmoDniDistinto?: boolean; verificacion?: MetodoVerificacion | null; observacion?: string | null
@@ -331,6 +337,78 @@ export function nivelHistorico(estado: EstadoPropuesta): { texto: string; color:
 export const EVENTO_HISTORICO: Record<string, string> = {
   cargada: 'Localizado en MEGA (carga de referencias)', aceptada: 'Asociación aceptada', descartada: 'Descartado',
   separada: 'Separado por páginas', reabierta: 'Reabierto', importada: 'Copiado al legajo',
+  categoria_corregida: 'Categoría sugerida corregida', vista_solicitada: 'Original pedido a SRV02', vista_abierta: 'Original abierto en el visor',
+  en_investigacion: 'Dejado pendiente para investigar', investigacion_quitada: 'Se quitó la marca de investigación',
+}
+
+// ── Bandeja central de revisión ─────────────────────────────────────────────
+
+/** Qué lista se revisa. «Revisadas» = asociadas, copiadas al legajo o descartadas. */
+export type FiltroRevision = 'pendientes' | 'conflictos' | 'investigar' | 'revisadas'
+
+export const FILTROS_REVISION: [FiltroRevision, string][] = [
+  ['pendientes', 'Pendientes'], ['conflictos', 'Con conflicto'], ['investigar', 'Para investigar'], ['revisadas', 'Revisadas'],
+]
+
+export const esFiltroRevision = (x: unknown): x is FiltroRevision => FILTROS_REVISION.some(([k]) => k === x)
+
+/** Marca «dejar pendiente para investigar» (motivo y fecha), si la tiene. */
+export function marcaInvestigacion(p: Pick<PropuestaHistorica, 'senales'>): { motivo: string; at: string | null } | null {
+  const m = p.senales?.investigar as { motivo?: unknown; at?: unknown } | undefined
+  return m && typeof m.motivo === 'string' ? { motivo: m.motivo, at: typeof m.at === 'string' ? m.at : null } : null
+}
+
+const ABIERTAS: EstadoPropuesta[] = ['pendiente', 'conflicto']
+const REVISADAS: EstadoPropuesta[] = ['aceptada', 'importada', 'descartada']
+
+export function enFiltroRevision(p: Pick<PropuestaHistorica, 'estado' | 'senales'>, f: FiltroRevision): boolean {
+  const abierta = ABIERTAS.includes(p.estado)
+  const investigar = abierta && !!marcaInvestigacion(p)
+  switch (f) {
+    case 'pendientes': return p.estado === 'pendiente' && !investigar
+    case 'conflictos': return p.estado === 'conflicto' && !investigar
+    case 'investigar': return investigar
+    case 'revisadas': return REVISADAS.includes(p.estado)
+  }
+}
+
+export function contarRevision(lista: Pick<PropuestaHistorica, 'estado' | 'senales'>[]): Record<FiltroRevision, number> {
+  const c: Record<FiltroRevision, number> = { pendientes: 0, conflictos: 0, investigar: 0, revisadas: 0 }
+  for (const p of lista) for (const [k] of FILTROS_REVISION) if (enFiltroRevision(p, k)) c[k]++
+  return c
+}
+
+/** La persona de la referencia: la asociada si ya se aceptó; si no, la sugerida. */
+export function personaDe(p: Pick<PropuestaHistorica, 'empleado' | 'sugerido'>) {
+  return p.empleado ?? p.sugerido ?? null
+}
+
+export interface GrupoEmpleado<T> { clave: string; nombre: string; items: T[] }
+
+/** Agrupa por persona (alfabético); lo que no tiene persona va al final. */
+export function agruparPorEmpleado<T extends Pick<PropuestaHistorica, 'empleado' | 'sugerido'>>(lista: T[]): GrupoEmpleado<T>[] {
+  const grupos = new Map<string, GrupoEmpleado<T>>()
+  for (const p of lista) {
+    const per = personaDe(p)
+    const clave = per?.id ?? '(sin)'
+    const nombre = per ? `${per.apellido}, ${per.nombre}${per.legajo ? ` · ${per.legajo}` : ''}` : 'Sin persona identificada'
+    const g = grupos.get(clave) ?? { clave, nombre, items: [] }
+    g.items.push(p)
+    grupos.set(clave, g)
+  }
+  return Array.from(grupos.values()).sort((a, b) =>
+    a.clave === '(sin)' ? 1 : b.clave === '(sin)' ? -1 : a.nombre.localeCompare(b.nombre, 'es'))
+}
+
+/**
+ * Próximo documento de la cola de revisión: el siguiente que sigue en la lista
+ * actual (los ya resueltos salen solos). null = no queda ninguno.
+ */
+export function siguienteEnCola(cola: string[], actual: string, vigentes: Set<string>): string | null {
+  const i = cola.indexOf(actual)
+  for (let j = i + 1; j < cola.length; j++) if (vigentes.has(cola[j])) return cola[j]
+  for (let j = 0; j < i; j++) if (vigentes.has(cola[j])) return cola[j]
+  return null
 }
 
 export interface EventoHistorico { evento: string; at: string; quien: string | null; detalle: Record<string, unknown> | null }
@@ -457,8 +535,16 @@ export async function cargarResumenHistorico(empleadoId: string): Promise<Resume
 
 export const porRevisar = (r: ResumenHistorico | null) => (r ? r.pendientes + r.conflictos : 0)
 
-/** Archivo histórico filtrado por la persona (por id: sin nombre ni DNI en la dirección). */
-export const enlaceArchivoHistorico = (empleadoId: string) => `/dashboard?page=legajo_historico&empleado=${encodeURIComponent(empleadoId)}`
+/**
+ * Bandeja de revisión filtrada por la persona (por id: sin nombre ni DNI en la
+ * dirección) y, si se indica, por lista (pendientes, conflictos, revisadas…).
+ */
+export const enlaceArchivoHistorico = (empleadoId: string, ver?: FiltroRevision) =>
+  `/dashboard?page=legajo_historico&empleado=${encodeURIComponent(empleadoId)}${ver ? `&ver=${ver}` : ''}`
+
+/** A qué lista lleva el legajo: pendientes primero; si no hay, conflictos. */
+export const listaDeResumen = (r: ResumenHistorico): FiltroRevision =>
+  r.pendientes > 0 ? 'pendientes' : r.conflictos > 0 ? 'conflictos' : 'revisadas'
 
 export async function nombrePersona(id: string): Promise<string | null> {
   const { data } = await supabase.from('usuarios').select('nombre, apellido').eq('id', id).maybeSingle()

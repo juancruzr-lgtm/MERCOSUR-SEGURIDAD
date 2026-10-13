@@ -30,7 +30,7 @@ import {
   abrirArchivo, anularDocumento, cargarDocumentacion, marcarSituacion, responderDocumento, revisarDocumento,
   subirDocumento,
 } from '@/lib/documentacion-datos'
-import { ETIQUETA_FUENTE, cargarHistoricoDeEmpleado, cargarIndicios, cargarResumenHistorico, enlaceArchivoHistorico, porRevisar } from '@/lib/legajo-historico'
+import { ETIQUETA_FUENTE, cargarHistoricoDeEmpleado, cargarIndicios, cargarResumenHistorico, enlaceArchivoHistorico, listaDeResumen, porRevisar } from '@/lib/legajo-historico'
 import type { Indicio, ReferenciaHistorica, ResumenHistorico } from '@/lib/legajo-historico'
 
 // ── Estilos ──────────────────────────────────────────────────────────────────
@@ -498,25 +498,39 @@ function SituacionDocumental({ validados, obligatorios, resumen, empleadoId }: {
 }) {
   const pendientes = porRevisar(resumen)
   const asociadas = resumen.asociadas + resumen.copiadas
-  const fila = (color: string, n: number, textoFila: string, detalle: string) => (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 0', borderTop: '1px solid #1e293b' }}>
-      <b style={{ color, fontSize: 17, minWidth: 28, textAlign: 'right' }}>{n}</b>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, color: '#e2e8f0' }}>{textoFila}</div>
-        <div style={{ fontSize: 12, color: '#64748b' }}>{detalle}</div>
-      </div>
-    </div>
-  )
+  // Cada fila de MEGA lleva directo a la bandeja de revisión, filtrada por esta
+  // persona y por esa lista (sin buscar ni navegar por los legajos).
+  const fila = (color: string, n: number, textoFila: string, detalle: string, href?: string) => {
+    const contenido = (
+      <>
+        <b style={{ color, fontSize: 17, minWidth: 28, textAlign: 'right' }}>{n}</b>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 13.5, color: '#e2e8f0' }}>{textoFila}</div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>{detalle}</div>
+        </div>
+        {href && <span style={{ color: '#93c5fd', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>Ver →</span>}
+      </>
+    )
+    const estilo: React.CSSProperties = { display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 0', borderTop: '1px solid #1e293b', textDecoration: 'none' }
+    return href && n > 0 ? <a href={href} style={estilo}>{contenido}</a> : <div style={estilo}>{contenido}</div>
+  }
   return (
     <div style={card}>
       <div style={{ fontSize: 13, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: 700, marginBottom: 4 }}>Qué hay de esta persona</div>
       {fila('#22c55e', validados, `Documentos validados en Documentación (de ${obligatorios} obligatorios)`, 'Son los únicos que cuentan para el cumplimiento.')}
-      {fila('#c4b5fd', asociadas, 'Referencias de MEGA asociadas, sin validar', 'Revisadas y asociadas por Administración; figuran en cada documento. No cuentan para el cumplimiento.')}
-      {fila('#93c5fd', pendientes, 'Referencias de MEGA detectadas, pendientes de revisión',
-        `Sugeridas por el sistema; nadie las revisó todavía${resumen.conflictos ? ` (${resumen.conflictos} con conflicto)` : ''}. No están incorporadas al legajo.`)}
-      {pendientes + asociadas > 0 && (
-        <a href={enlaceArchivoHistorico(empleadoId)} style={{ display: 'inline-block', marginTop: 8, color: '#93c5fd', fontSize: 13.5, fontWeight: 600 }}>
-          {pendientes > 0 ? `Revisar ${pendientes === 1 ? 'la referencia' : `las ${pendientes} referencias`} en Archivo histórico →` : 'Ver en Archivo histórico →'}
+      {fila('#c4b5fd', asociadas, 'Referencias de MEGA asociadas, sin validar', 'Revisadas y asociadas por Administración; figuran en cada documento. No cuentan para el cumplimiento.',
+        enlaceArchivoHistorico(empleadoId, 'revisadas'))}
+      {fila('#93c5fd', pendientes, 'Referencias de MEGA esperando que alguien las confirme',
+        `Sugeridas por el sistema; nadie las revisó todavía${resumen.conflictos ? ` (${resumen.conflictos} con conflicto)` : ''}. No están incorporadas al legajo.`,
+        enlaceArchivoHistorico(empleadoId, listaDeResumen(resumen)))}
+      {pendientes > 0 && (
+        <a href={enlaceArchivoHistorico(empleadoId, listaDeResumen(resumen))} style={{ display: 'inline-block', marginTop: 8, background: '#16a34a', color: '#fff', borderRadius: 8, padding: '8px 14px', fontSize: 13.5, fontWeight: 800, textDecoration: 'none' }}>
+          {(() => {
+            // El número es el de la lista que se abre (pendientes; si no hay, conflictos).
+            const n = resumen.pendientes > 0 ? resumen.pendientes : resumen.conflictos
+            const que = resumen.pendientes > 0 ? (n === 1 ? 'pendiente' : 'pendientes') : 'con conflicto'
+            return `Revisar ${n} ${que} →`
+          })()}
         </a>
       )}
     </div>

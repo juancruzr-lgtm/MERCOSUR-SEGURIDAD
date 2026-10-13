@@ -28,7 +28,7 @@ describe('Legajo individual: referencias de MEGA de la persona', () => {
     const doc = leer('components', 'documentacion', 'DocumentacionLegajo.tsx')
     expect(doc).toMatch(/Documentos validados en Documentación/)
     expect(doc).toMatch(/Referencias de MEGA asociadas, sin validar/)
-    expect(doc).toMatch(/Referencias de MEGA detectadas, pendientes de revisión/)
+    expect(doc).toMatch(/Referencias de MEGA esperando que alguien las confirme/)
     expect(doc).toMatch(/No están incorporadas al legajo/)
   })
   it('el bloque no acepta ni cambia categorías: sólo lleva a la bandeja', () => {
