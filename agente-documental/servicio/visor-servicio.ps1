@@ -23,6 +23,9 @@ function Log([string]$m) {
   Add-Content -Path $archivo -Value ((Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK') + ' ' + $m) -Encoding UTF8
 }
 
+# Detenido a pedido: la vigilancia (cada 5 min) lo lanza igual; sale sin registrar.
+if (Test-Path $Flag) { exit 0 }
+
 $mutex = New-Object System.Threading.Mutex($false, 'Global\MercosurLectorDocumental')
 if (-not $mutex.WaitOne(0)) { Log 'Ya hay una instancia del servicio corriendo: esta termina.'; exit 0 }
 

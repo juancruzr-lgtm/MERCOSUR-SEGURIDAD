@@ -39,7 +39,12 @@ powershell -ExecutionPolicy Bypass -File .\servicio\instalar.ps1
 - Tarea `\Mercosur\Lector documental`, cuenta SYSTEM, arranca 1 minuto después
   de iniciar el servidor, sin sesión iniciada.
 - Una sola instancia. Si el lector se cae, el supervisor lo reinicia (10 s, 20 s,
-  40 s… hasta 5 min); si el supervisor falla, Windows lo reinicia (cada 1 min).
+  40 s… hasta 5 min); si muere el supervisor, la vigilancia de la tarea lo
+  vuelve a lanzar en 5 minutos como máximo (el «reiniciar si falla» de Windows
+  sólo actúa si la tarea no logra arrancar).
+- La tarea se maneja por la API COM del Programador de tareas: en SRV02
+  `Get-ScheduledTask` falla («El sistema no puede encontrar el archivo
+  especificado»). Para ver la tarea sin los scripts: `schtasks /query /tn "\Mercosur\Lector documental"`.
 - No guarda credenciales ni las pasa como argumento. Prioridad baja: no compite
   con MEGAsync.
 - Si ya hay una tarea o servicio equivalente, no instala otro.
@@ -52,6 +57,7 @@ powershell -ExecutionPolicy Bypass -File .\servicio\instalar.ps1
 | Detener (queda detenido, también tras reiniciar el servidor) | `powershell -ExecutionPolicy Bypass -File .\servicio\detener.ps1` |
 | Iniciar / reiniciar | `powershell -ExecutionPolicy Bypass -File .\servicio\iniciar.ps1` |
 | Quitar la tarea | `powershell -ExecutionPolicy Bypass -File .\servicio\desinstalar.ps1` |
+| Agregar la vigilancia a una tarea instalada antes del 13/10 (sin detener nada) | `powershell -ExecutionPolicy Bypass -File .\servicio\actualizar-tarea.ps1` |
 
 Registros: `C:\ProgramData\MercosurLectorDocumental\logs` (30 días):
 `servicio-AAAAMMDD.log` (inicio, detención, fallas y recuperación),
