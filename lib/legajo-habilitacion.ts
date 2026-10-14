@@ -16,6 +16,10 @@ export const MODULOS_LEGAJO: Record<string, { nombre: string; que_ve: string }> 
     nombre: 'Datos personales',
     que_ve: 'Cada persona ve sus datos, propone cambios y confirma o corrige lo que vino de la planilla histórica.',
   },
+  pedido_credencial: {
+    nombre: 'Pedido de credencial',
+    que_ve: 'Al entrar a la app (nunca durante un fichaje), cada vigilador responde una sola vez: sube la foto de su credencial (frente y dorso), avisa que está en trámite o dice por qué no la tiene. Sólo abre la credencial; el resto de Documentación sigue cerrado.',
+  },
   documentacion: {
     nombre: 'Documentación',
     que_ve: 'Cada persona sube su documentación, ve en qué estado está y deja constancia de lo que le entrega Administración.',

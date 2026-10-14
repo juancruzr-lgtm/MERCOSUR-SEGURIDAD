@@ -31,7 +31,7 @@ import { esFiltroRevision } from '@/lib/legajo-historico'
 export type SeccionLegajo = 'credenciales' | 'arca' | 'datos' | 'documentacion' | 'historico' | 'habilitacion'
 
 const SECCIONES: [SeccionLegajo, string][] = [
-  ['credenciales', 'Credenciales'], ['arca', 'Diferencias con ARCA'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'],
+  ['credenciales', 'Credenciales'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'], ['arca', 'Diferencias con ARCA'],
 ]
 
 const pestaña = (activa: boolean): React.CSSProperties => ({
