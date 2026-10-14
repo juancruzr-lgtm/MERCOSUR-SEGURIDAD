@@ -32,6 +32,9 @@ import {
 } from '@/lib/documentacion-datos'
 import { ETIQUETA_FUENTE, cargarHistoricoDeEmpleado, cargarIndicios, cargarResumenHistorico, enlaceArchivoHistorico, listaDeResumen, porRevisar } from '@/lib/legajo-historico'
 import type { Indicio, ReferenciaHistorica, ResumenHistorico } from '@/lib/legajo-historico'
+import { aprobarFotoCredencial, avisoVencimiento } from '@/lib/credencial-pedido'
+
+const hoyAr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())
 
 // ── Estilos ──────────────────────────────────────────────────────────────────
 
@@ -300,6 +303,8 @@ export function Documento({ doc, tipo, esPropio, puedeGestionar, nombrePersona, 
   const [modo, setModo] = useState<null | 'rechazar' | 'observar' | 'con_comentario' | 'anular'>(null)
   const [ocupado, setOcupado] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Credencial: el vencimiento se puede corregir al validar (el documento guarda lo que declaró la persona).
+  const [venceRevision, setVenceRevision] = useState(doc.vence_el ?? '')
   const tono = TONO_ESTADO[doc.estado]
   const constancia = tipo.constancia === 'ninguna' ? null : tipo.constancia
   const hecho = (e: string | null) => { if (!e) { setModo(null); onCambio() } return e }
@@ -388,10 +393,23 @@ export function Documento({ doc, tipo, esPropio, puedeGestionar, nombrePersona, 
       )}
 
       {/* Administración revisa lo que subió la persona */}
+      {puedeGestionar && doc.estado === 'pendiente_revision' && modo === null && tipo.codigo === 'credencial' && (
+        <div style={{ marginTop: 12 }}>
+          <label style={{ display: 'block', fontSize: 13, color: '#cbd5e1' }}>
+            Vence el (como se lee en la tarjeta)
+            <input type="date" value={venceRevision} onChange={e => setVenceRevision(e.target.value)}
+              style={{ display: 'block', marginTop: 4, background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '8px 10px', fontSize: 14 }} />
+          </label>
+          {avisoVencimiento(venceRevision, hoyAr()) && <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 4 }}>{avisoVencimiento(venceRevision, hoyAr())}</div>}
+          {venceRevision !== (doc.vence_el ?? '') && <div style={{ fontSize: 12.5, color: '#93c5fd', marginTop: 4 }}>Se corrige el vencimiento que puso el vigilador ({doc.vence_el ? doc.vence_el.split('-').reverse().join('/') : '—'}); queda registrado.</div>}
+        </div>
+      )}
       {puedeGestionar && doc.estado === 'pendiente_revision' && modo === null && (
         <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
           <button type="button" style={boton('ok', !ocupado)} disabled={ocupado}
-            onClick={() => void accion(() => revisarDocumento(doc.id, 'aprobar'))}>{ocupado ? 'Guardando…' : 'Validar'}</button>
+            onClick={() => void accion(() => tipo.codigo === 'credencial'
+              ? aprobarFotoCredencial(doc.id, venceRevision)
+              : revisarDocumento(doc.id, 'aprobar'))}>{ocupado ? 'Guardando…' : 'Validar'}</button>
           <button type="button" style={{ ...boton('peligro'), flex: '0 1 auto' }} onClick={() => setModo('rechazar')}>Rechazar</button>
         </div>
       )}

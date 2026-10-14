@@ -58,6 +58,7 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
   // Si las fotos ya subieron y falló sólo la respuesta, no se vuelven a subir.
   const [subido, setSubido] = useState(false)
   const [rechazo, setRechazo] = useState<string | null>(null)
+  const [confirmaVencida, setConfirmaVencida] = useState(false)
 
   useEffect(() => {
     let vivo = true
@@ -73,6 +74,12 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
   const enviarFotos = async () => {
     const inval = validarPedido({ frente, dorso, venceEl: vence, hoy: hoyAr() })
     if (inval) { setError(inval); return }
+    // La fecha de hoy o una pasada casi siempre es la que quedó sin cambiar: se pide confirmarla una vez.
+    if (vence <= hoyAr() && !confirmaVencida) {
+      setConfirmaVencida(true)
+      setError('La fecha que pusiste es hoy o ya pasó: ¿tu credencial está vencida? Si no, corregí la fecha. Si es correcta, tocá «Enviar fotos» otra vez.')
+      return
+    }
     setError(null)
     if (!subido) {
       const r = await subirDocumento({ empleadoId, tipo: TIPO_CREDENCIAL, fechaEmision: null, venceEl: vence, detalle: null, archivos: [frente!, dorso!], onProgreso: setOcupado })
@@ -130,7 +137,7 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
             </div>
             <label style={{ display: 'block', fontSize: 14, color: '#cbd5e1', marginTop: 14 }}>
               Vence el (como figura en la credencial)
-              <input type="date" value={vence} onChange={e => setVence(e.target.value)} style={{ ...input, marginTop: 6 }} />
+              <input type="date" value={vence} onChange={e => { setVence(e.target.value); setConfirmaVencida(false) }} style={{ ...input, marginTop: 6 }} />
             </label>
           </>
         )}
