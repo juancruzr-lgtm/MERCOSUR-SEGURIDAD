@@ -106,3 +106,44 @@ export function validarPedido(p: { frente: File | null; dorso: File | null; venc
   if (p.venceEl > `${y + 20}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`) return 'La fecha de vencimiento no es válida.'
   return null
 }
+
+// ── Gestiones personales del trámite (migración 20261020120000) ─────────────
+
+export interface PasoPersonal {
+  codigo: string
+  nombre: string
+  ayuda: string | null
+  tipo_documento: string | null
+  estado: 'pendiente' | 'en_curso' | 'recibido' | 'vencido' | 'hecho' | 'no_corresponde'
+  puede_subir: boolean
+}
+
+export interface MisPendientes { tramite: { tipo: 'primera' | 'renovacion'; abierto_at: string } | null; pasos: PasoPersonal[] }
+
+const tipoBase = (t: Partial<TipoDocumento> & Pick<TipoDocumento, 'codigo' | 'nombre'>): TipoDocumento => ({
+  ayuda: null, orden: 0, requisito: 'obligatorio', etapa: 'ingreso', caras: null, multiple: false, campo_fecha: 'no',
+  etiqueta_fecha: 'Fecha de emisión', campo_vencimiento: 'no', vigencia_meses: null, etiqueta_detalle: null, sube_vigilador: true,
+  sensibilidad: 'comun', constancia: 'conformidad', texto_constancia: 'Confirmo que este documento es mío y que sus datos son correctos.',
+  referencia: null, ...t,
+})
+
+/** Los documentos que el vigilador sube para su trámite, igual que en documentacion_tipos. */
+export const TIPOS_TRAMITE: Record<string, TipoDocumento> = {
+  dni: tipoBase({ codigo: 'dni', nombre: 'DNI', caras: ['Frente', 'Dorso'] }),
+  antecedentes_rnr: tipoBase({ codigo: 'antecedentes_rnr', nombre: 'Certificado de antecedentes RNR (nacional)', campo_fecha: 'obligatoria', campo_vencimiento: 'calculado', vigencia_meses: 6, sensibilidad: 'sensible', etapa: 'permanencia' }),
+  antecedentes_provincia: tipoBase({ codigo: 'antecedentes_provincia', nombre: 'Certificado de antecedentes penales (Provincia de Santa Fe)', campo_fecha: 'obligatoria', sensibilidad: 'sensible' }),
+}
+
+/** Texto para el vigilador de cada gestión pendiente. */
+export function textoPaso(p: Pick<PasoPersonal, 'estado' | 'tipo_documento'>): string | null {
+  if (p.estado === 'recibido') return 'Lo recibimos: Administración lo está revisando.'
+  if (p.estado === 'vencido') return 'El que tenemos está vencido: hace falta uno nuevo.'
+  if (p.tipo_documento) return 'Cuando lo tengas, subilo desde acá (foto o PDF).'
+  return null
+}
+
+export async function cargarMisPendientes(): Promise<MisPendientes> {
+  const { data, error } = await supabase.rpc('habilitacion_mis_pendientes')
+  if (error || !data) return { tramite: null, pasos: [] }
+  return data as MisPendientes
+}

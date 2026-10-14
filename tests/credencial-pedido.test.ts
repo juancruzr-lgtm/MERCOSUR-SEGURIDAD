@@ -1,7 +1,7 @@
 import * as path from 'path'
 import { describe, expect, it } from 'vitest'
-import { TIPO_CREDENCIAL, declaracionTexto, validarPedido } from '@/lib/credencial-pedido'
-import { validarArchivos } from '@/lib/documentacion'
+import { TIPOS_TRAMITE, TIPO_CREDENCIAL, declaracionTexto, textoPaso, validarPedido } from '@/lib/credencial-pedido'
+import { validarArchivos, validarFechas } from '@/lib/documentacion'
 import { enGrupo } from '@/lib/habilitacion'
 import type { ResumenHabilitacion } from '@/lib/habilitacion'
 import { rutaDestino } from '../agente-documental/src/visor/Exportador'
@@ -27,6 +27,28 @@ describe('pedido de credencial al vigilador', () => {
       .toBe('Dice que está en trámite (14/10/2026): presenté en septiembre')
     expect(declaracionTexto({ respuesta: 'no_tiene', detalle: 'nunca la tramité', at: '2026-10-14T12:00:00Z' })).toMatch(/^Dice que no tiene credencial/)
     expect(declaracionTexto(null)).toBeNull()
+  })
+})
+
+describe('gestiones personales del trámite', () => {
+  it('los tipos que sube el vigilador coinciden con documentacion_tipos', () => {
+    expect(TIPOS_TRAMITE.dni.caras).toEqual(['Frente', 'Dorso'])
+    expect(TIPOS_TRAMITE.antecedentes_rnr.campo_vencimiento).toBe('calculado')
+    expect(TIPOS_TRAMITE.antecedentes_rnr.vigencia_meses).toBe(6)
+    expect(TIPOS_TRAMITE.antecedentes_provincia.campo_fecha).toBe('obligatoria')
+    expect(Object.keys(TIPOS_TRAMITE).sort()).toEqual(['antecedentes_provincia', 'antecedentes_rnr', 'dni'])
+  })
+  it('exigen la fecha del certificado', () => {
+    expect(validarFechas(TIPOS_TRAMITE.antecedentes_rnr, '', '', '2026-10-14')).toMatch(/Falta la fecha/)
+    expect(validarFechas(TIPOS_TRAMITE.antecedentes_rnr, '2026-10-20', '', '2026-10-14')).toMatch(/futura/)
+    expect(validarFechas(TIPOS_TRAMITE.antecedentes_provincia, '2026-10-01', '', '2026-10-14')).toBeNull()
+    expect(validarFechas(TIPOS_TRAMITE.dni, '', '', '2026-10-14')).toBeNull()
+  })
+  it('texto de cada gestión', () => {
+    expect(textoPaso({ estado: 'recibido', tipo_documento: 'antecedentes_rnr' })).toMatch(/revisando/)
+    expect(textoPaso({ estado: 'vencido', tipo_documento: 'antecedentes_rnr' })).toMatch(/vencido/)
+    expect(textoPaso({ estado: 'pendiente', tipo_documento: 'dni' })).toMatch(/subilo/)
+    expect(textoPaso({ estado: 'pendiente', tipo_documento: null })).toBeNull()
   })
 })
 

@@ -213,7 +213,7 @@ function Pasos({ datos, onCambio }: { datos: HabilitacionEmpleado; onCambio: () 
                 {(() => {
                   const partes: React.ReactNode[] = [
                     p.fecha ? (p.codigo.startsWith('turno') && p.registrado === 'en_curso' ? `turno: ${fechaCorta(p.fecha)}` : fechaCorta(p.fecha)) : null,
-                    p.documento ? (p.documento.estado === 'validado' ? `documento validado${p.documento.vence_el ? `, vence ${fechaCorta(p.documento.vence_el)}` : ''}` : 'archivo cargado, sin validar en Documentación') : null,
+                    p.documento ? (p.documento.estado === 'validado' ? `documento validado${p.documento.vence_el ? `, vence ${fechaCorta(p.documento.vence_el)}` : ''}` : <a key="revisar" href={`/guardias/${datos.empleado_id}?seccion=documentacion`} style={{ color: '#fbbf24', fontWeight: 700 }}>archivo cargado: revisarlo en Documentación</a>) : null,
                     p.observacion,
                     p.mega_referencias > 0 && !p.resuelto && p.tipo_documento
                       ? <a key="mega" href={enlaceMega(datos.empleado_id, p.tipo_documento)} style={{ color: '#93c5fd' }}>hay {p.mega_referencias} en MEGA para revisar</a> : null,
