@@ -37,6 +37,7 @@ Devolvé SOLO lo que se lee con claridad; si un dato no se lee o no está, devol
 - numero: el número de credencial, sólo dígitos.
 - emision y vencimiento: en formato AAAA-MM-DD (en la tarjeta están como DD/MM/AAAA).
 - caja: el contorno de la tarjeta en la foto como [ymin, xmin, ymax, xmax] en milésimas (0 a 1000) del alto y ancho de la imagen tal como está.
+- titulo: el contorno, con el mismo formato, de la franja del encabezado impreso de la tarjeta (la que dice «MINISTERIO DE …»); null si no se ve.
 - rotacion: cuántos grados en sentido horario está girada la tarjeta en la foto respecto de su posición normal de lectura (0 si el texto se lee derecho; 90 si está girada un cuarto de vuelta en sentido horario; 180 si está cabeza abajo; 270 si está girada un cuarto de vuelta en sentido antihorario).`
 
 const nulo = (type: string) => ({ type, nullable: true })
@@ -49,6 +50,7 @@ export const SCHEMA_CREDENCIAL: Record<string, unknown> = {
     apellido: nulo('string'), nombre: nulo('string'), dni: nulo('string'), numero: nulo('string'),
     emision: nulo('string'), vencimiento: nulo('string'),
     caja: { type: 'array', items: { type: 'integer' }, nullable: true },
+    titulo: { type: 'array', items: { type: 'integer' }, nullable: true },
     rotacion: { type: 'integer' },
   },
   required: ['es_credencial', 'rotacion'],
@@ -65,16 +67,38 @@ const fechaValida = (s: unknown): string | null => {
 const texto = (s: unknown, max = 60): string | null => (typeof s === 'string' && s.trim() ? s.trim().slice(0, max) : null)
 const digitos = (s: unknown): string | null => { const d = typeof s === 'string' ? s.replace(/\D/g, '') : ''; return d ? d.slice(0, 15) : null }
 
+type Caja = [number, number, number, number]
+function leerCaja(v: unknown, min: number): Caja | null {
+  if (!Array.isArray(v) || v.length !== 4 || !v.every(n => typeof n === 'number' && isFinite(n))) return null
+  const [y0, x0, y1, x1] = (v as number[]).map(n => Math.max(0, Math.min(1000, Math.round(n))))
+  return y1 - y0 >= min && x1 - x0 >= min ? [y0, x0, y1, x1] : null
+}
+
+/**
+ * Cuánto está girada la tarjeta (sentido horario) según dónde quedó el encabezado:
+ * arriba → 0; a la derecha → 90; abajo → 180; a la izquierda → 270.
+ */
+export function orientacionPorTitulo(caja: Caja | null, titulo: Caja | null): LecturaCredencial['rotacion'] | null {
+  if (!caja || !titulo) return null
+  const cy = (caja[0] + caja[2]) / 2, cx = (caja[1] + caja[3]) / 2
+  const ty = (titulo[0] + titulo[2]) / 2, tx = (titulo[1] + titulo[3]) / 2
+  const dy = (ty - cy) / Math.max(1, caja[2] - caja[0]), dx = (tx - cx) / Math.max(1, caja[3] - caja[1])
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 0.15) return null
+  if (Math.abs(dy) >= Math.abs(dx)) return dy < 0 ? 0 : 180
+  return dx > 0 ? 90 : 270
+}
+
 /** Normaliza lo que respondió la IA: fechas válidas, dígitos, caja dentro de la imagen. */
 export function interpretarLectura(json: unknown): LecturaCredencial | null {
   if (!json || typeof json !== 'object') return null
   const j = json as Record<string, unknown>
   let caja: LecturaCredencial['caja'] = null
-  if (Array.isArray(j.caja) && j.caja.length === 4 && j.caja.every(n => typeof n === 'number' && isFinite(n))) {
-    const [y0, x0, y1, x1] = (j.caja as number[]).map(n => Math.max(0, Math.min(1000, Math.round(n))))
-    if (y1 - y0 >= 50 && x1 - x0 >= 50) caja = [y0, x0, y1, x1]
-  }
-  const rot = [0, 90, 180, 270].includes(j.rotacion as number) ? (j.rotacion as LecturaCredencial['rotacion']) : 0
+  caja = leerCaja(j.caja, 50)
+  const titulo = leerCaja(j.titulo, 5)
+  // El giro se deduce de dónde está el encabezado dentro de la tarjeta (más confiable
+  // que el número que informa el modelo); si no hay encabezado, se usa el del modelo.
+  const rot = orientacionPorTitulo(caja, titulo)
+    ?? ([0, 90, 180, 270].includes(j.rotacion as number) ? (j.rotacion as LecturaCredencial['rotacion']) : 0)
   return {
     es_credencial: j.es_credencial === true,
     cara: j.cara === 'frente' || j.cara === 'dorso' ? j.cara : null,
