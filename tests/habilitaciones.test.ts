@@ -61,6 +61,10 @@ describe('Seis meses: sólo seguimiento, mientras no tenga credencial', () => {
     expect(seisMesesTexto(r({ dias_para_6_meses: 20 }))?.color).toBe('#f87171')
     expect(seisMesesTexto(r({ dias_para_6_meses: 45 }))?.color).toBe('#fbbf24')
   })
+  it('con más de un año de antigüedad no se muestra (no es un ingreso reciente)', () => {
+    expect(seisMesesTexto(r({ dias_para_6_meses: -3432 }))).toBeNull()
+    expect(seisMesesTexto(r({ dias_para_6_meses: -100 }))?.texto).toBe('6 meses cumplidos hace 100 días')
+  })
   it('con credencial verificada no se muestra', () => {
     expect(seisMesesTexto(r({ dias_para_6_meses: 10, credencial: cred('vigente') }))).toBeNull()
     expect(seisMesesTexto(r({ dias_para_6_meses: 10, credencial: cred('vigente', false) }))).not.toBeNull()

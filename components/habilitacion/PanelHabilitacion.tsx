@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import {
-  ESTADO_PASO, ETAPA, EVENTO, RESPONSABLE, SITUACION, actualizarPaso, anularCredencial, antiguedadTexto, cargarFechaIngreso,
+  ESTADO_PASO, ETAPA, EVENTO, RESPONSABLE, SITUACION, actualizarPaso, anularCredencial, antiguedadTexto, cargarFechaIngreso, confirmarCredencial,
   cargarHabilitacion, cerrarTramite, enlaceMega, fechaCorta, iniciarTramite, registrarCredencial, responsableTexto,
   seisMesesTexto, verificar,
 } from '@/lib/habilitacion'
@@ -27,7 +27,7 @@ const boton = (t: 'ok' | 'sec' | 'peligro', hab = true): React.CSSProperties => 
 })
 const hoy = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())
 
-type Accion = null | 'ingreso' | 'credencial' | 'verificar' | 'consulta' | 'cerrar' | { anular: string }
+type Accion = null | 'ingreso' | 'credencial' | 'confirmar' | 'verificar' | 'consulta' | 'cerrar' | { anular: string }
 
 function MensajeError({ e }: { e: string | null }) {
   return e ? <div role="alert" style={{ color: '#fca5a5', fontSize: 13, marginTop: 6 }}>{e}</div> : null
@@ -90,6 +90,35 @@ function FormCredencial({ datos, onListo, onCancelar }: { datos: HabilitacionEmp
           const e = await registrarCredencial(datos.empleado_id, { numero, emision: emision || null, vence: vence || null, documentoId: usarDoc ? doc?.id : null, verificada, observacion: obs })
           if (e) setError(e); else onListo()
         }}>Registrar credencial</button>
+        <button type="button" style={boton('sec')} onClick={onCancelar}>Cancelar</button>
+      </div>
+    </div>
+  )
+}
+
+/** Confirmar la credencial informada: sin retipear; número opcional y fechas sólo si no coinciden. */
+function FormConfirmar({ cred, onListo, onCancelar }: { cred: NonNullable<HabilitacionEmpleado['credencial']>; onListo: () => void; onCancelar: () => void }) {
+  const [obs, setObs] = useState('')
+  const [numero, setNumero] = useState(cred.numero ?? '')
+  const [corregir, setCorregir] = useState(false)
+  const [vence, setVence] = useState(cred.vence_el)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <div style={{ marginTop: 8, padding: 10, borderRadius: 8, border: '1px solid #1e2d42', background: '#0f172a' }}>
+      <div style={{ fontSize: 13.5, color: '#e2e8f0', fontWeight: 700 }}>Confirmar la credencial informada</div>
+      <div style={{ fontSize: 12.5, color: '#94a3b8', marginTop: 4 }}>Vencimiento informado: <b style={{ color: '#e2e8f0' }}>{fechaCorta(cred.vence_el)}</b>. Si coincide con la credencial, no hace falta volver a cargarlo.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 8 }}>
+        <div><span style={etiqueta}>Número de credencial (si lo tenés)</span><input style={input} value={numero} maxLength={40} onChange={e => setNumero(e.target.value)} /></div>
+        {corregir && <div><span style={etiqueta}>Vencimiento correcto</span><input type="date" style={input} value={vence} onChange={e => setVence(e.target.value)} /></div>}
+      </div>
+      {!corregir && <button type="button" style={{ background: 'none', border: 'none', color: '#93c5fd', padding: 0, marginTop: 6, fontSize: 12.5, cursor: 'pointer' }} onClick={() => setCorregir(true)}>El vencimiento no coincide: corregirlo</button>}
+      <input style={{ ...input, marginTop: 8 }} placeholder="Cómo la verificaste (p. ej.: vi la credencial; consulta en Control de Agencias por CUIL)" value={obs} maxLength={500} onChange={e => setObs(e.target.value)} />
+      <MensajeError e={error} />
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button type="button" style={boton('ok', obs.trim().length >= 5)} disabled={obs.trim().length < 5} onClick={async () => {
+          const e = await confirmarCredencial(cred.id, { observacion: obs, numero, vence: corregir && vence !== cred.vence_el ? vence : null })
+          if (e) setError(e); else onListo()
+        }}>Confirmar credencial</button>
         <button type="button" style={boton('sec')} onClick={onCancelar}>Cancelar</button>
       </div>
     </div>
@@ -260,6 +289,7 @@ export default function PanelHabilitacion({ empleadoId }: { empleadoId: string }
 
       {accion === 'ingreso' && <FormIngreso empleadoId={empleadoId} primerTurno={datos.primer_turno} onListo={listo} onCancelar={() => setAccion(null)} />}
       {accion === 'credencial' && <FormCredencial datos={datos} onListo={listo} onCancelar={() => setAccion(null)} />}
+      {accion === 'confirmar' && cred && <FormConfirmar cred={cred} onListo={listo} onCancelar={() => setAccion(null)} />}
       {accion === 'verificar' && <ConMotivo titulo="¿Cómo lo verificaste? (opcional)" boton="No tiene credencial" placeholder="P. ej.: consultado en Control de Agencias por CUIL" minimo={0}
         onConfirmar={o => verificar(empleadoId, 'sin_credencial', o).then(e => { if (!e) listo(); return e })} onCancelar={() => setAccion(null)} />}
       {accion === 'consulta' && <ConMotivo titulo="Qué informó Control de Agencias (consulta por nombre, apellido y CUIL)" boton="Registrar consulta" placeholder="P. ej.: en trámite, sin observaciones"
@@ -272,10 +302,11 @@ export default function PanelHabilitacion({ empleadoId }: { empleadoId: string }
 
       {accion === null && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+          {cred && !cred.verificada && <button type="button" style={boton('ok')} onClick={() => setAccion('confirmar')}>Confirmar esta credencial</button>}
           {!t && sinCredencialVerificada && !cred && <button type="button" style={boton('ok')} onClick={() => void hacer(() => iniciarTramite(empleadoId, 'primera'))}>Iniciar trámite de credencial</button>}
-          {!t && cred && cred.verificada && cred.estado !== 'vigente' && <button type="button" style={boton('ok')} onClick={() => void hacer(() => iniciarTramite(empleadoId, 'renovacion'))}>Iniciar renovación</button>}
+          {!t && cred && cred.estado !== 'vigente' && <button type="button" style={boton('ok')} onClick={() => void hacer(() => iniciarTramite(empleadoId, 'renovacion'))}>Iniciar renovación</button>}
           {t && <button type="button" style={boton(verTramite ? 'sec' : 'ok')} onClick={() => setVerTramite(v => !v)}>{verTramite ? 'Ocultar el trámite' : 'Ver y actualizar el trámite'}</button>}
-          {(!cred || t || cred.estado !== 'vigente' || !cred.verificada) && <button type="button" style={boton('sec')} onClick={() => setAccion('credencial')}>Registrar credencial</button>}
+          {(!cred || t || (cred.verificada && cred.estado !== 'vigente')) && <button type="button" style={boton('sec')} onClick={() => setAccion('credencial')}>Registrar credencial{cred ? ' nueva' : ''}</button>}
           {datos.codigo === 'desconocida' && <button type="button" style={boton('sec')} onClick={() => setAccion('verificar')}>No tiene credencial (verificado)</button>}
           {(t || datos.codigo === 'desconocida') && <button type="button" style={boton('sec')} onClick={() => setAccion('consulta')}>Registrar consulta en Control de Agencias</button>}
           {t && <button type="button" style={boton('peligro')} onClick={() => setAccion('cerrar')}>Cerrar trámite</button>}
