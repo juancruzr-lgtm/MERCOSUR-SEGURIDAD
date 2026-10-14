@@ -7,6 +7,8 @@
  * pantallas que ya existían, sin duplicarlas ni cambiar sus permisos:
  *   - Credenciales: tablero de credenciales y habilitaciones de los vigiladores
  *     (la prioridad del legajo: quién tiene credencial, qué falta y a quién le toca).
+ *   - Diferencias con ARCA: la consulta de relaciones laborales de ARCA contra los
+ *     usuarios activos y el legajo (contratos con fin, no figura, CUIL, identidad).
  *   - Datos personales: cambios propuestos y datos de la planilla histórica.
  *   - Documentación: revisar, personas, situación (matriz), vencimientos y
  *     auditoría (ésta, sólo Gerencia; la base vuelve a controlar).
@@ -21,14 +23,15 @@ import ControlCambiosDatos from '@/components/legajo/ControlCambiosDatos'
 import ControlDocumentacion from '@/components/documentacion/ControlDocumentacion'
 import BandejaHistorico from '@/components/legajo/BandejaHistorico'
 import HabilitacionLegajo from '@/components/legajo/HabilitacionLegajo'
+import DiferenciasArca from '@/components/legajo/DiferenciasArca'
 import TableroHabilitaciones from '@/components/habilitacion/TableroHabilitaciones'
 import { controlaHabilitacion } from '@/lib/legajo-habilitacion'
 import { esFiltroRevision } from '@/lib/legajo-historico'
 
-export type SeccionLegajo = 'credenciales' | 'datos' | 'documentacion' | 'historico' | 'habilitacion'
+export type SeccionLegajo = 'credenciales' | 'arca' | 'datos' | 'documentacion' | 'historico' | 'habilitacion'
 
 const SECCIONES: [SeccionLegajo, string][] = [
-  ['credenciales', 'Credenciales'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'],
+  ['credenciales', 'Credenciales'], ['arca', 'Diferencias con ARCA'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'],
 ]
 
 const pestaña = (activa: boolean): React.CSSProperties => ({
@@ -63,6 +66,7 @@ export default function LegajoDigital({ inicial = 'credenciales', user, empleado
         ))}
       </div>
       {seccion === 'credenciales' && <TableroHabilitaciones />}
+      {seccion === 'arca' && <DiferenciasArca />}
       {seccion === 'datos' && <ControlCambiosDatos />}
       {seccion === 'documentacion' && <ControlDocumentacion onVerHistorico={(texto, categoria) => { setFiltroHistorico({ texto, categoria }); setSeccion('historico') }} />}
       {seccion === 'historico' && <BandejaHistorico key={filtroHistorico ? filtroHistorico.texto + filtroHistorico.categoria : 'todo'} busquedaInicial={filtroHistorico?.texto} categoriaInicial={filtroHistorico?.categoria} verInicial={filtroHistorico?.texto === empleadoHistorico ? verInicial : undefined} />}
