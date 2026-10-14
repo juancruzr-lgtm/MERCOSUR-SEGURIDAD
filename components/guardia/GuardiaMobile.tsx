@@ -10,6 +10,7 @@ import AvisoEvaluacion from '@/components/desempeno/AvisoEvaluacion'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import AvisoDocumentacion from '@/components/documentacion/AvisoDocumentacion'
 import PedidoCredencial from '@/components/guardia/PedidoCredencial'
+import AvisoTramite from '@/components/guardia/AvisoTramite'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
@@ -1983,6 +1984,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
           empleadoId={user.id}
           destino={`/guardias/${user.id}?seccion=estatuto`}
         />
+
+        {/* Trámite de credencial en curso: las gestiones personales que le faltan
+            (DNI, antecedentes, fotos, Medicina Legal…). Tarjeta, no modal. */}
+        <AvisoTramite empleadoId={user.id} />
 
         {/* Documentación del legajo: sólo aparece si Gerencia prendió el aviso
             a la persona (apagado por defecto) y hay algo que hacer. */}
