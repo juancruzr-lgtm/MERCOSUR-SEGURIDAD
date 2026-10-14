@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SCHEMA_CREDENCIAL, dniCoincide, interpretarLectura, rectRecorte, resumenLectura } from '@/lib/credencial-lectura'
+import { SCHEMA_CREDENCIAL, dniCoincide, interpretarLectura, orientacionPorTitulo, rectRecorte, resumenLectura } from '@/lib/credencial-lectura'
 
 describe('interpretar lo que leyó la IA', () => {
   it('normaliza dígitos, fechas y caja', () => {
@@ -22,6 +22,24 @@ describe('interpretar lo que leyó la IA', () => {
   })
   it('el schema pide lo necesario', () => {
     expect(Object.keys((SCHEMA_CREDENCIAL as any).properties)).toEqual(expect.arrayContaining(['vencimiento', 'dni', 'numero', 'caja', 'rotacion']))
+  })
+})
+
+describe('giro según el encabezado', () => {
+  const caja: [number, number, number, number] = [200, 200, 800, 800]
+  it('encabezado arriba, derecha, abajo, izquierda', () => {
+    expect(orientacionPorTitulo(caja, [210, 250, 280, 750])).toBe(0)
+    expect(orientacionPorTitulo(caja, [250, 720, 750, 790])).toBe(90)
+    expect(orientacionPorTitulo(caja, [720, 250, 790, 750])).toBe(180)
+    expect(orientacionPorTitulo(caja, [250, 210, 750, 280])).toBe(270)
+  })
+  it('sin encabezado o en el centro: no decide', () => {
+    expect(orientacionPorTitulo(caja, null)).toBeNull()
+    expect(orientacionPorTitulo(caja, [480, 480, 520, 520])).toBeNull()
+  })
+  it('el encabezado manda sobre el número que dice el modelo', () => {
+    const l = interpretarLectura({ es_credencial: true, caja: [200, 200, 800, 800], titulo: [250, 210, 750, 280], rotacion: 90 })!
+    expect(l.rotacion).toBe(270)
   })
 })
 
