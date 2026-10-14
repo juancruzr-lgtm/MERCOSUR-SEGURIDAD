@@ -2,9 +2,9 @@
  * Copia al servidor de las fotos de credenciales aprobadas.
  *
  * La base encola cada cara aprobada (documental_exportaciones) con su destino
- * relativo a la raíz de MEGA: EMPLEADOS/CREDENCIALES/«APELLIDO NOMBRE - AAAA-MM-DD - Frente.jpg».
+ * relativo a la raíz de MEGA: ADMINISTRACION/POLICIA/CREDENCIALES/«APELLIDO NOMBRE - AAAA-MM-DD - Frente.jpg».
  * Este proceso la baja del bucket privado y la escribe en el disco de SRV02.
- *   - Sólo escribe dentro de EMPLEADOS/CREDENCIALES (nunca en otra carpeta de MEGA).
+ *   - Sólo escribe dentro de ADMINISTRACION/POLICIA/CREDENCIALES (nunca en otra carpeta de MEGA).
  *   - Nunca pisa un archivo: si ya existe uno con ese nombre, no lo toca y lo da por hecho.
  *   - No borra nada.
  */
@@ -13,9 +13,9 @@ import * as fs from 'fs'
 import * as path from 'path'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-export const CARPETA_PERMITIDA = 'EMPLEADOS/CREDENCIALES/'
+export const CARPETA_PERMITIDA = 'ADMINISTRACION/POLICIA/CREDENCIALES/'
 
-/** Ruta absoluta del destino, o null si sale de EMPLEADOS/CREDENCIALES o de la raíz. */
+/** Ruta absoluta del destino, o null si sale de ADMINISTRACION/POLICIA/CREDENCIALES o de la raíz. */
 export function rutaDestino(base: string, destino: string): string | null {
   const rel = destino.replace(/\\/g, '/')
   if (!rel.startsWith(CARPETA_PERMITIDA) || rel.includes('..') || path.isAbsolute(rel)) return null
@@ -49,7 +49,7 @@ export class Exportador {
 
   private async copiar(p: Pendiente): Promise<string | null> {
     const destino = rutaDestino(this.base, p.destino)
-    if (!destino) return 'Destino fuera de EMPLEADOS/CREDENCIALES'
+    if (!destino) return 'Destino fuera de ADMINISTRACION/POLICIA/CREDENCIALES'
     if (fs.existsSync(destino)) return null
     const { data, error } = await this.supabase.storage.from(p.bucket).download(p.ruta_origen)
     if (error || !data) return `No se pudo bajar el archivo: ${error?.message ?? 'vacío'}`

@@ -45,17 +45,17 @@ describe('tablero: grupos nuevos', () => {
 
 describe('copia al servidor (lector de SRV02)', () => {
   const base = path.resolve('/mega')
-  it('escribe sólo en EMPLEADOS/CREDENCIALES', () => {
-    expect(rutaDestino(base, 'EMPLEADOS/CREDENCIALES/PÉREZ JUAN - 2026-10-14 - Frente.jpg'))
-      .toBe(path.join(base, 'EMPLEADOS', 'CREDENCIALES', 'PÉREZ JUAN - 2026-10-14 - Frente.jpg'))
+  it('escribe sólo en ADMINISTRACION/POLICIA/CREDENCIALES', () => {
+    expect(rutaDestino(base, 'ADMINISTRACION/POLICIA/CREDENCIALES/PÉREZ JUAN - 2026-10-14 - Frente.jpg'))
+      .toBe(path.join(base, 'ADMINISTRACION', 'POLICIA', 'CREDENCIALES', 'PÉREZ JUAN - 2026-10-14 - Frente.jpg'))
   })
   it('rechaza cualquier otra carpeta, subcarpetas, «..» y nombres inválidos', () => {
     expect(rutaDestino(base, 'EMPLEADOS/SUELDOS/x.jpg')).toBeNull()
-    expect(rutaDestino(base, 'ADMINISTRACION/POLICIA/CREDENCIALES/x.jpg')).toBeNull()
-    expect(rutaDestino(base, 'EMPLEADOS/CREDENCIALES/../SUELDOS/x.jpg')).toBeNull()
-    expect(rutaDestino(base, 'EMPLEADOS/CREDENCIALES/sub/x.jpg')).toBeNull()
-    expect(rutaDestino(base, 'EMPLEADOS/CREDENCIALES/')).toBeNull()
-    expect(rutaDestino(base, 'EMPLEADOS/CREDENCIALES/a:b.jpg')).toBeNull()
-    expect(rutaDestino(base, '/EMPLEADOS/CREDENCIALES/x.jpg')).toBeNull()
+    expect(rutaDestino(base, 'EMPLEADOS/CREDENCIALES/x.jpg')).toBeNull()
+    expect(rutaDestino(base, 'ADMINISTRACION/POLICIA/CREDENCIALES/../SUELDOS/x.jpg')).toBeNull()
+    expect(rutaDestino(base, 'ADMINISTRACION/POLICIA/CREDENCIALES/sub/x.jpg')).toBeNull()
+    expect(rutaDestino(base, 'ADMINISTRACION/POLICIA/CREDENCIALES/')).toBeNull()
+    expect(rutaDestino(base, 'ADMINISTRACION/POLICIA/CREDENCIALES/a:b.jpg')).toBeNull()
+    expect(rutaDestino(base, '/ADMINISTRACION/POLICIA/CREDENCIALES/x.jpg')).toBeNull()
   })
 })

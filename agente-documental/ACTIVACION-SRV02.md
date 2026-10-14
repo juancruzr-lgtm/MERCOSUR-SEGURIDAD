@@ -94,10 +94,11 @@ npx ts-node src/visor/piloto.ts 7cc0f6e4-8e0a-40d3-9346-87f95df16506 ec57ca0e-aa
 ## Copia de fotos de credenciales (desde 2026-10-18)
 
 El lector también copia al disco de SRV02 las fotos de credenciales **aprobadas** en el Legajo Digital
-(cola `documental_exportaciones`, migración 20261018120000):
+(cola `documental_exportaciones`, migraciones 20261018120000 y 20261019120000):
 
-- Destino: `<DOCUMENT_ROOT_PATH>\EMPLEADOS\CREDENCIALES\APELLIDO NOMBRE - AAAA-MM-DD - Frente.jpg` (y `Dorso`).
-- Sólo escribe en `EMPLEADOS\CREDENCIALES` (crea la carpeta si falta). Nunca pisa ni borra archivos.
+- Destino: `<DOCUMENT_ROOT_PATH>\ADMINISTRACION\POLICIA\CREDENCIALES\APELLIDO NOMBRE - AAAA-MM-DD - Frente.jpg` (y `Dorso`),
+  la carpeta de credenciales que usa la empresa.
+- Sólo escribe en `ADMINISTRACION\POLICIA\CREDENCIALES` (crea la carpeta si falta). Nunca pisa ni borra archivos.
 - Corre una vez por minuto dentro del mismo proceso del lector. Se apaga con `EXPORTAR_CREDENCIALES=0` en el `.env`.
 - Para activarlo hay que actualizar el código en SRV02 y reiniciar la tarea (lo hace JC, con permisos de administrador):
   `git pull` en `C:\Mercosur\MERCOSUR-SEGURIDAD`, después `servicio\detener.ps1` y `servicio\iniciar.ps1`.
