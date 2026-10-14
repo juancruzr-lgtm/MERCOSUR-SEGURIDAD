@@ -1,0 +1,6 @@
+# Fuentes originales de protocolos: se guardan byte a byte (el hash es la
+# constancia de que no se modificaron). Sin conversión de fin de línea.
+docs/protocolos/**/*.txt -text
+# La carga inicial lleva esos textos entre $txt$: con CRLF el texto insertado
+# tendría retornos de carro y el hash no coincidiría con la fuente.
+supabase/migrations/20261022130000_protocolos_carga_inicial.sql text eol=lf

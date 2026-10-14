@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase, headersSesion } from '@/lib/supabase'
 import { Badge, btn, btnPrimary, btnSecondary } from '@/components/ui/base'
 import RondasSupervisionPanel from '@/components/rondas/RondasSupervisionPanel'
+import ProtocoloObjetivoPanel from '@/components/protocolos/ProtocoloObjetivoPanel'
 import SelectorDiasMes from './SelectorDiasMes'
 import { fechasDeAtajo, rangoDeSeleccion } from '@/lib/calendario-mes'
 import styles from './CentroOperativoObjetivo.module.css'
@@ -2506,6 +2507,11 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         </div>
       )}
 
+      {/* Protocolo del objetivo: versiones, lecturas y diferencias. La base decide
+          quién lo ve (Administración, Gerencia, supervisores de la zona) y quién
+          prepara o publica; sin permiso, el panel lo dice y no muestra nada. */}
+      <ProtocoloObjetivoPanel objetivoId={objetivoId} />
+
       {/* Admin: accesos rápidos */}
       {esAdmin && (
         <div style={card}>
@@ -2517,8 +2523,11 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             >
               📊 Reportes
             </button>
-            <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
-              📋 Protocolos <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
+            <button
+              style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
+              onClick={() => document.getElementById('protocolo-objetivo')?.scrollIntoView({ behavior:'smooth', block:'start' })}
+            >
+              📋 Protocolo
             </button>
             <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
               📁 Documentación <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
