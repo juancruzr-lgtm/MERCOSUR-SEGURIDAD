@@ -1,6 +1,6 @@
 import * as path from 'path'
 import { describe, expect, it } from 'vitest'
-import { TIPOS_TRAMITE, TIPO_CREDENCIAL, declaracionTexto, textoPaso, validarPedido } from '@/lib/credencial-pedido'
+import { TIPOS_TRAMITE, TIPO_CREDENCIAL, avisoVencimiento, declaracionTexto, textoPaso, validarPedido } from '@/lib/credencial-pedido'
 import { validarArchivos, validarFechas } from '@/lib/documentacion'
 import { enGrupo } from '@/lib/habilitacion'
 import type { ResumenHabilitacion } from '@/lib/habilitacion'
@@ -79,5 +79,14 @@ describe('copia al servidor (lector de SRV02)', () => {
     expect(rutaDestino(base, 'ADMINISTRACION/POLICIA/CREDENCIALES/')).toBeNull()
     expect(rutaDestino(base, 'ADMINISTRACION/POLICIA/CREDENCIALES/a:b.jpg')).toBeNull()
     expect(rutaDestino(base, '/ADMINISTRACION/POLICIA/CREDENCIALES/x.jpg')).toBeNull()
+  })
+})
+
+describe('aviso de vencimiento al revisar', () => {
+  it('avisa si es hoy o ya pasó', () => {
+    expect(avisoVencimiento('2026-10-14', '2026-10-14')).toMatch(/sin cambiar/)
+    expect(avisoVencimiento('2026-09-01', '2026-10-14')).toMatch(/vencida/)
+    expect(avisoVencimiento('2027-06-01', '2026-10-14')).toBeNull()
+    expect(avisoVencimiento(null, '2026-10-14')).toBeNull()
   })
 })

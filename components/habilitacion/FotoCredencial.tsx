@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { abrirArchivo, revisarDocumento } from '@/lib/documentacion-datos'
-import { cargarCredencialDeEmpleado, declaracionTexto } from '@/lib/credencial-pedido'
+import { aprobarFotoCredencial, avisoVencimiento, cargarCredencialDeEmpleado, declaracionTexto } from '@/lib/credencial-pedido'
 import type { CredencialDeEmpleado } from '@/lib/credencial-pedido'
 import { fechaCorta } from '@/lib/habilitacion'
 
@@ -49,7 +49,8 @@ export default function FotoCredencial({ empleadoId, onCambio }: { empleadoId: s
   const [motivo, setMotivo] = useState('')
   const [ocupado, setOcupado] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const cargar = useCallback(async () => { const r = await cargarCredencialDeEmpleado(empleadoId); setDatos(r.datos); setError(r.error) }, [empleadoId])
+  const [vence, setVence] = useState('')
+  const cargar = useCallback(async () => { const r = await cargarCredencialDeEmpleado(empleadoId); setDatos(r.datos); setError(r.error); setVence(r.datos?.foto?.vence_el ?? '') }, [empleadoId])
   useEffect(() => { void cargar() }, [cargar])
 
   if (!datos) return error ? <div style={{ color: '#fca5a5', fontSize: 13, marginTop: 8 }}>Foto de la credencial: {error}</div> : null
@@ -59,7 +60,7 @@ export default function FotoCredencial({ empleadoId, onCambio }: { empleadoId: s
 
   const revisar = async (d: 'aprobar' | 'rechazar') => {
     setOcupado(true); setError(null)
-    const e = await revisarDocumento(f!.documento_id, d, d === 'rechazar' ? motivo : undefined)
+    const e = d === 'aprobar' ? await aprobarFotoCredencial(f!.documento_id, vence) : await revisarDocumento(f!.documento_id, d, motivo)
     setOcupado(false)
     if (e) { setError(e); return }
     setRechazando(false); setMotivo(''); void cargar(); onCambio?.()
@@ -93,7 +94,12 @@ export default function FotoCredencial({ empleadoId, onCambio }: { empleadoId: s
       {servidor && <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{servidor}</div>}
       {pendiente && !rechazando && (
         <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 12.5, color: '#cbd5e1', marginBottom: 6 }}>Mirá que sea legible, que sea de esta persona y que el vencimiento coincida con el de la foto ({f.vence_el ? fechaCorta(f.vence_el) : '—'}).</div>
+          <div style={{ fontSize: 12.5, color: '#cbd5e1', marginBottom: 6 }}>Mirá que sea legible y que sea de esta persona. Si el vencimiento no coincide con el de la tarjeta, corregilo acá.</div>
+          <label style={{ display: 'block', fontSize: 13, color: '#cbd5e1', marginBottom: 6 }}>
+            Vence el (como se lee en la tarjeta)
+            <input type="date" value={vence} onChange={e => setVence(e.target.value)} style={{ display: 'block', marginTop: 4, background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '7px 10px', fontSize: 14 }} />
+          </label>
+          {avisoVencimiento(vence, new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())) && <div style={{ fontSize: 12.5, color: '#fbbf24', marginBottom: 6 }}>{avisoVencimiento(vence, new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date()))}</div>}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" disabled={ocupado} style={boton(true)} onClick={() => void revisar('aprobar')}>Aprobar: tiene credencial</button>
             <button type="button" disabled={ocupado} style={boton(false)} onClick={() => setRechazando(true)}>Rechazar</button>

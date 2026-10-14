@@ -88,6 +88,20 @@ export async function declarar(respuesta: RespuestaCredencial, detalle?: string)
   return mensaje(error, 'No se pudo guardar la respuesta')
 }
 
+/** Aprueba la foto de la credencial con el vencimiento que se lee en la tarjeta (puede corregir el declarado). */
+export async function aprobarFotoCredencial(documentoId: string, venceEl: string, numero?: string): Promise<string | null> {
+  const { error } = await supabase.rpc('credencial_aprobar_foto', { p_documento_id: documentoId, p_vence_el: venceEl, p_numero: numero?.trim() || null })
+  return mensaje(error, 'No se pudo aprobar la foto')
+}
+
+/** Aviso cuando el vencimiento que puso el vigilador es hoy o ya pasó (suele ser la fecha que dejó sin cambiar). */
+export function avisoVencimiento(venceEl: string | null | undefined, hoy: string): string | null {
+  if (!venceEl) return null
+  if (venceEl === hoy) return 'El vencimiento es hoy: puede que el vigilador haya dejado la fecha sin cambiar. Corregila con la que se lee en la tarjeta.'
+  if (venceEl < hoy) return 'Según esta fecha la credencial ya está vencida. Revisá que coincida con la tarjeta.'
+  return null
+}
+
 export async function cargarCredencialDeEmpleado(empleadoId: string): Promise<{ datos: CredencialDeEmpleado | null; denegado: boolean; error: string | null }> {
   const { data, error } = await supabase.rpc('credencial_de_empleado', { p_empleado_id: empleadoId })
   if (error) {
