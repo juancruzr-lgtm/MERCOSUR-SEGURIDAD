@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SCHEMA_CREDENCIAL, dniCoincide, interpretarLectura, orientacionPorTitulo, rectRecorte, resumenLectura } from '@/lib/credencial-lectura'
+import { SCHEMA_CREDENCIAL, dniCoincide, interpretarLectura, giroParaEnderezar, orientacionPorTitulo, rectRecorte, resumenLectura } from '@/lib/credencial-lectura'
 
 describe('interpretar lo que leyó la IA', () => {
   it('normaliza dígitos, fechas y caja', () => {
@@ -70,5 +70,18 @@ describe('resumen para Administración', () => {
       vencimiento: '2026-09-01', caja: null, rotacion: 0, dni_coincide: false }))
       .toBe('Leído por IA: N° 32722 · DNI 1 (no coincide) · vence 01/09/2026')
     expect(resumenLectura(null)).toBeNull()
+  })
+})
+
+describe('giro final por la forma de la tarjeta', () => {
+  it('recorte vertical: siempre un cuarto de vuelta', () => {
+    expect(giroParaEnderezar({ w: 500, h: 800 }, 90)).toBe(270)
+    expect(giroParaEnderezar({ w: 500, h: 800 }, 270)).toBe(90)
+    expect(giroParaEnderezar({ w: 500, h: 800 }, 0)).toBe(90)
+  })
+  it('recorte apaisado: nunca un cuarto de vuelta', () => {
+    expect(giroParaEnderezar({ w: 900, h: 560 }, 0)).toBe(0)
+    expect(giroParaEnderezar({ w: 900, h: 560 }, 180)).toBe(180)
+    expect(giroParaEnderezar({ w: 900, h: 560 }, 90)).toBe(0)
   })
 })
