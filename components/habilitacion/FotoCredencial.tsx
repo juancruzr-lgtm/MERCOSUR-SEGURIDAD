@@ -74,7 +74,7 @@ export default function FotoCredencial({ empleadoId, onCambio }: { empleadoId: s
     )
   }
 
-  const servidor = f.servidor.length && f.servidor.every(s => s.estado === 'hecha') ? 'Copiada al servidor (EMPLEADOS/CREDENCIALES)'
+  const servidor = f.servidor.length && f.servidor.every(s => s.estado === 'hecha') ? 'Copiada al servidor (ADMINISTRACION/POLICIA/CREDENCIALES)'
     : f.servidor.some(s => s.estado === 'error') ? 'No se pudo copiar al servidor (se reintenta)'
     : f.servidor.length ? 'Se está copiando al servidor' : null
   return (

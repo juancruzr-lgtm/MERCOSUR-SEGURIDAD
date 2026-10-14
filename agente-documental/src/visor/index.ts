@@ -16,7 +16,7 @@
  *   VISOR_RAICES        SÓLO PARA PRUEBAS: PREFIJO=RUTA;... reemplaza a las
  *                       áreas de la base (por ejemplo, una carpeta aislada).
  *   EXPORTAR_CREDENCIALES  0 apaga la copia de las fotos de credenciales aprobadas
- *                       a EMPLEADOS/CREDENCIALES (encendida por defecto; apagada en modo prueba).
+ *                       a ADMINISTRACION/POLICIA/CREDENCIALES (encendida por defecto; apagada en modo prueba).
  */
 
 import 'dotenv/config'

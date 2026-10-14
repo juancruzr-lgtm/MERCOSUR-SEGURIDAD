@@ -6,7 +6,7 @@
  * (nunca durante un fichaje): sube la foto de su credencial (frente y dorso, con el
  * vencimiento), avisa que está en trámite o dice por qué no la tiene. La foto va a
  * Documentación; cuando Administración la aprueba, cuenta como «tiene credencial»
- * y se copia al servidor (EMPLEADOS/CREDENCIALES).
+ * y se copia al servidor (ADMINISTRACION/POLICIA/CREDENCIALES).
  */
 
 import { supabase } from '@/lib/supabase'
