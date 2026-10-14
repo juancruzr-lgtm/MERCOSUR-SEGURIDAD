@@ -22,7 +22,7 @@ export interface LecturaCredencial {
   vencimiento: string | null  // AAAA-MM-DD
   /** Contorno de la tarjeta en milésimas de la imagen: [ymin, xmin, ymax, xmax]. */
   caja: [number, number, number, number] | null
-  /** Grados (sentido horario) que hay que girar para que el texto quede derecho. */
+  /** Grados (sentido horario) que está girada la tarjeta en la foto; para enderezarla se gira lo inverso. */
   rotacion: 0 | 90 | 180 | 270
   /** Lo calcula el servidor: el DNI leído es el de la persona que sube. */
   dni_coincide?: boolean | null
@@ -37,7 +37,7 @@ Devolvé SOLO lo que se lee con claridad; si un dato no se lee o no está, devol
 - numero: el número de credencial, sólo dígitos.
 - emision y vencimiento: en formato AAAA-MM-DD (en la tarjeta están como DD/MM/AAAA).
 - caja: el contorno de la tarjeta en la foto como [ymin, xmin, ymax, xmax] en milésimas (0 a 1000) del alto y ancho de la imagen tal como está.
-- rotacion: cuántos grados en sentido horario hay que girar la imagen para que el texto de la tarjeta quede derecho (0, 90, 180 o 270).`
+- rotacion: cuántos grados en sentido horario está girada la tarjeta en la foto respecto de su posición normal de lectura (0 si el texto se lee derecho; 90 si está girada un cuarto de vuelta en sentido horario; 180 si está cabeza abajo; 270 si está girada un cuarto de vuelta en sentido antihorario).`
 
 const nulo = (type: string) => ({ type, nullable: true })
 

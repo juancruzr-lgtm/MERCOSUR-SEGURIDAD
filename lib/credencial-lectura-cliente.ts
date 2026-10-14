@@ -32,14 +32,16 @@ export async function recortarCredencial(foto: File, l: LecturaCredencial): Prom
   const r = rectRecorte(l.caja, img.naturalWidth, img.naturalHeight)
   if (!r && !l.rotacion) return foto
   const { x, y, w, h } = r ?? { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight }
-  const girada = l.rotacion === 90 || l.rotacion === 270
+  // La IA dice cuánto está girada la tarjeta: para enderezarla se gira lo inverso.
+  const giro = (360 - l.rotacion) % 360
+  const girada = giro === 90 || giro === 270
   const c = document.createElement('canvas')
   c.width = girada ? h : w
   c.height = girada ? w : h
   const ctx = c.getContext('2d')
   if (!ctx) return foto
   ctx.translate(c.width / 2, c.height / 2)
-  ctx.rotate((l.rotacion * Math.PI) / 180)
+  ctx.rotate((giro * Math.PI) / 180)
   ctx.drawImage(img, x, y, w, h, -w / 2, -h / 2, w, h)
   const blob = await new Promise<Blob | null>(ok => c.toBlob(ok, 'image/jpeg', 0.9))
   return blob ? new File([blob], foto.name.replace(/\.\w+$/, '') + '-recortada.jpg', { type: 'image/jpeg' }) : foto
