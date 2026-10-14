@@ -282,7 +282,7 @@ export default function PanelHabilitacion({ empleadoId }: { empleadoId: string }
         {seis && dato('Seis meses', <span style={{ color: seis.color }}>{seis.texto}</span>)}
         {cred && dato('Credencial', <>{cred.numero ? `N° ${cred.numero} · ` : ''}vence {fechaCorta(cred.vence_el)}{!cred.verificada && <span style={{ color: '#fbbf24' }}> · sin verificar</span>}</>)}
         {t && dato(t.tipo === 'renovacion' ? 'Renovación' : 'Trámite', <>
-          {t.estado === 'presentado' ? `presentado el ${fechaCorta(t.presentado_at)}` : `${t.pendientes} gestión${t.pendientes === 1 ? '' : 'es'} pendiente${t.pendientes === 1 ? '' : 's'}`}
+          {t.estado === 'presentado' ? `presentado el ${fechaCorta(t.presentado_at)}` : `${t.pendientes} ${t.pendientes === 1 ? 'gestión pendiente' : 'gestiones pendientes'}`}
           {t.demorado && <span style={{ color: '#f87171' }}> · sin movimiento hace {t.dias_sin_movimiento} días</span>}
         </>)}
       </div>
