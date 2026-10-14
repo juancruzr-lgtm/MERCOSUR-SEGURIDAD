@@ -8,7 +8,7 @@
 
 import { supabase } from '@/lib/supabase'
 import { comprimirImagen } from '@/lib/comprimir-imagen'
-import { rectRecorte } from '@/lib/credencial-lectura'
+import { giroParaEnderezar, rectRecorte } from '@/lib/credencial-lectura'
 import type { LecturaCredencial } from '@/lib/credencial-lectura'
 
 const aBase64 = (f: Blob) => new Promise<string>((ok, mal) => {
@@ -30,10 +30,9 @@ const cargarImagen = (f: Blob) => new Promise<HTMLImageElement>((ok, mal) => {
 export async function recortarCredencial(foto: File, l: LecturaCredencial): Promise<File> {
   const img = await cargarImagen(foto)
   const r = rectRecorte(l.caja, img.naturalWidth, img.naturalHeight)
-  if (!r && !l.rotacion) return foto
   const { x, y, w, h } = r ?? { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight }
-  // La IA dice cuánto está girada la tarjeta: para enderezarla se gira lo inverso.
-  const giro = (360 - l.rotacion) % 360
+  const giro = giroParaEnderezar({ w, h }, l.rotacion)
+  if (!r && !giro) return foto
   const girada = giro === 90 || giro === 270
   const c = document.createElement('canvas')
   c.width = girada ? h : w
@@ -71,4 +70,19 @@ export async function leerYRecortar(original: File): Promise<{ foto: File; lectu
   } catch {
     return { foto, lectura: null }
   }
+}
+
+/** Gira la foto un cuarto de vuelta en sentido horario (botón «Girar»). */
+export async function girarFoto(foto: File): Promise<File> {
+  const img = await cargarImagen(foto)
+  const c = document.createElement('canvas')
+  c.width = img.naturalHeight
+  c.height = img.naturalWidth
+  const ctx = c.getContext('2d')
+  if (!ctx) return foto
+  ctx.translate(c.width / 2, c.height / 2)
+  ctx.rotate(Math.PI / 2)
+  ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2)
+  const blob = await new Promise<Blob | null>(ok => c.toBlob(ok, 'image/jpeg', 0.9))
+  return blob ? new File([blob], foto.name, { type: 'image/jpeg' }) : foto
 }

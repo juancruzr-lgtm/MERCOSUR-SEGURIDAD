@@ -133,6 +133,19 @@ export function rectRecorte(caja: LecturaCredencial['caja'], ancho: number, alto
   return { x, y, w, h }
 }
 
+/**
+ * Giro final para enderezar la tarjeta recortada. La forma manda: una tarjeta es
+ * apaisada, así que si el recorte sale vertical hay que girarla un cuarto de vuelta,
+ * y si sale apaisado, no (o media vuelta). Entre las dos opciones válidas se usa lo
+ * que dijo la IA; si quedó cabeza abajo, el vigilador la gira con el botón.
+ * Devuelve los grados (horario) que hay que girar la imagen recortada.
+ */
+export function giroParaEnderezar(rect: { w: number; h: number }, rotacionIA: LecturaCredencial['rotacion']): 0 | 90 | 180 | 270 {
+  const correccion = ((360 - rotacionIA) % 360) as 0 | 90 | 180 | 270
+  if (rect.h > rect.w) return correccion === 90 || correccion === 270 ? correccion : 90
+  return correccion === 0 || correccion === 180 ? correccion : 0
+}
+
 /** Texto que se guarda con el documento para que Administración vea lo que leyó la IA. */
 export function resumenLectura(l: LecturaCredencial | null): string | null {
   if (!l || !l.es_credencial) return null

@@ -18,7 +18,7 @@ import { subirDocumento } from '@/lib/documentacion-datos'
 import { TIPO_CREDENCIAL, cargarMiEstado, declarar, posponer, pospuesto, validarPedido } from '@/lib/credencial-pedido'
 import { resumenLectura } from '@/lib/credencial-lectura'
 import type { LecturaCredencial } from '@/lib/credencial-lectura'
-import { leerYRecortar } from '@/lib/credencial-lectura-cliente'
+import { girarFoto, leerYRecortar } from '@/lib/credencial-lectura-cliente'
 
 type Paso = 'elegir' | 'tiene' | 'en_tramite' | 'no_tiene' | 'listo'
 
@@ -30,7 +30,7 @@ const primario = (activo: boolean): React.CSSProperties => ({ flex: 1, backgroun
 const secundario: React.CSSProperties = { background: 'transparent', color: '#94a3b8', border: '1px solid #334155', borderRadius: 8, padding: '11px 14px', fontSize: 14, cursor: 'pointer' }
 const hoyAr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())
 
-function Foto({ cara, archivo, leyendo, onElegir }: { cara: string; archivo: File | null; leyendo: boolean; onElegir: (f: File | null) => void }) {
+function Foto({ cara, archivo, leyendo, onElegir, onGirar }: { cara: string; archivo: File | null; leyendo: boolean; onElegir: (f: File | null) => void; onGirar: () => void }) {
   const [vista, setVista] = useState<string | null>(null)
   useEffect(() => {
     if (!archivo) { setVista(null); return }
@@ -45,6 +45,10 @@ function Foto({ cara, archivo, leyendo, onElegir }: { cara: string; archivo: Fil
         : <div style={{ height: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30 }}>📷</div>}
       <div style={{ fontSize: 13.5, fontWeight: 700, marginTop: 6, color: leyendo ? '#93c5fd' : archivo ? '#86efac' : '#cbd5e1' }}>{leyendo ? 'Leyendo…' : archivo ? `✓ ${cara}` : `Foto del ${cara.toLowerCase()}`}</div>
       <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { onElegir(e.target.files?.[0] ?? null); e.target.value = '' }} />
+      {archivo && !leyendo && (
+        <button type="button" onClick={e => { e.preventDefault(); onGirar() }}
+          style={{ marginTop: 6, background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 8, padding: '4px 10px', fontSize: 13, cursor: 'pointer' }}>↻ Girar</button>
+      )}
     </label>
   )
 }
@@ -150,9 +154,10 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
           <>
             <div style={{ fontSize: 14, color: '#94a3b8', marginBottom: 12, lineHeight: 1.45 }}>Sacá las fotos con buena luz, que se lean los datos.</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <Foto cara="Frente" archivo={frente} leyendo={leyendo === 'Frente'} onElegir={f => void elegirFoto('Frente', f)} />
-              <Foto cara="Dorso" archivo={dorso} leyendo={leyendo === 'Dorso'} onElegir={f => void elegirFoto('Dorso', f)} />
+              <Foto cara="Frente" archivo={frente} leyendo={leyendo === 'Frente'} onElegir={f => void elegirFoto('Frente', f)} onGirar={() => { if (frente) void girarFoto(frente).then(setFrente) }} />
+              <Foto cara="Dorso" archivo={dorso} leyendo={leyendo === 'Dorso'} onElegir={f => void elegirFoto('Dorso', f)} onGirar={() => { if (dorso) void girarFoto(dorso).then(setDorso) }} />
             </div>
+            {(frente || dorso) && !leyendo && <div style={{ fontSize: 12.5, color: '#94a3b8', marginTop: 6 }}>Si alguna quedó de costado o cabeza abajo, tocá «↻ Girar».</div>}
             {lectura && !lectura.es_credencial && (
               <div style={{ fontSize: 13, color: '#fbbf24', marginTop: 8 }}>La foto del frente no parece una credencial de vigilador. Revisala antes de enviar.</div>
             )}
