@@ -15,14 +15,17 @@
  *   VISOR_INTERVALO_MS  espera entre consultas a la cola (default 3000)
  *   VISOR_RAICES        SÓLO PARA PRUEBAS: PREFIJO=RUTA;... reemplaza a las
  *                       áreas de la base (por ejemplo, una carpeta aislada).
+ *   EXPORTAR_CREDENCIALES  0 apaga la copia de las fotos de credenciales aprobadas
+ *                       a EMPLEADOS/CREDENCIALES (encendida por defecto; apagada en modo prueba).
  */
 
 import 'dotenv/config'
 import * as os from 'os'
 import { createClient } from '@supabase/supabase-js'
 import { Visor, leerRaices, raicesDeAreas } from './Visor'
+import { Exportador } from './Exportador'
 
-const VERSION = '2026-10-13'
+const VERSION = '2026-10-18'
 const log = {
   info: (m: string) => console.log(`[visor] ${new Date().toISOString()} ${m}`),
   warn: (m: string) => console.warn(`[visor] ${new Date().toISOString()} AVISO ${m}`),
@@ -40,6 +43,8 @@ async function main() {
   const agente = process.env.VISOR_AGENTE_ID || 'visor'
   const supabase = createClient(url, clave, { auth: { persistSession: false, autoRefreshToken: false } })
   const visor = new Visor(supabase, [], agente, log)
+  const exportar = !prueba && process.env.EXPORTAR_CREDENCIALES !== '0'
+  const exportador = new Exportador(supabase, base, agente, log)
   const unaVez = process.argv.includes('--una-vez')
   const espera = Math.max(1000, Number(process.env.VISOR_INTERVALO_MS) || 3000)
 
@@ -62,7 +67,7 @@ async function main() {
   }
   const latido = (estado: 'activo' | 'detenido') => supabase.rpc('documental_lector_latido', {
     p_agente: agente, p_estado: estado,
-    p_info: { version: VERSION, areas, pid: process.pid, host: os.hostname(), modo: prueba ? 'prueba' : 'normal' },
+    p_info: { version: VERSION, areas, pid: process.pid, host: os.hostname(), modo: prueba ? 'prueba' : 'normal', exporta_credenciales: exportar },
   }).then(({ error }) => { if (error) log.warn(`No se pudo registrar el latido: ${error.message}`) })
 
   let deteniendo = false
@@ -87,6 +92,8 @@ async function main() {
     while (!deteniendo && await visor.atenderUno()) atendio = true
     if (unaVez || Date.now() - ultimoMinuto > 60_000) {
       await visor.limpiar()
+      // Copias de credenciales aprobadas: una vez por minuto alcanza.
+      if (exportar) await exportador.atender()
       await cargarAreas()
       await latido('activo')
       ultimoMinuto = Date.now()

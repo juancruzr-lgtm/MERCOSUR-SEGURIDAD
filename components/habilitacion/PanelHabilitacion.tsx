@@ -17,6 +17,7 @@ import {
   seisMesesTexto, verificar,
 } from '@/lib/habilitacion'
 import type { EstadoRegistrable, EtapaHabilitacion, HabilitacionEmpleado, PasoHabilitacion, Persona } from '@/lib/habilitacion'
+import FotoCredencial from '@/components/habilitacion/FotoCredencial'
 
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '8px 10px', fontSize: 14 }
 const etiqueta: React.CSSProperties = { fontSize: 12, color: '#94a3b8', display: 'block', margin: '8px 0 4px' }
@@ -275,6 +276,8 @@ export default function PanelHabilitacion({ empleadoId }: { empleadoId: string }
         </div>
       </div>
 
+      <FotoCredencial empleadoId={empleadoId} onCambio={() => void cargar()} />
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginTop: 10 }}>
         {dato('Ingreso', datos.ingreso
           ? <>{fechaCorta(datos.ingreso)} <span style={{ color: '#94a3b8' }}>({antiguedadTexto(datos.antiguedad_dias)})</span></>
@@ -302,7 +305,7 @@ export default function PanelHabilitacion({ empleadoId }: { empleadoId: string }
 
       {accion === null && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-          {cred && !cred.verificada && <button type="button" style={boton('ok')} onClick={() => setAccion('confirmar')}>Confirmar esta credencial</button>}
+          {cred && !cred.verificada && <button type="button" style={boton('ok')} onClick={() => setAccion('confirmar')}>La vi (credencial o Control de Agencias): confirmar</button>}
           {!t && sinCredencialVerificada && !cred && <button type="button" style={boton('ok')} onClick={() => void hacer(() => iniciarTramite(empleadoId, 'primera'))}>Iniciar trámite de credencial</button>}
           {!t && cred && cred.estado !== 'vigente' && <button type="button" style={boton('ok')} onClick={() => void hacer(() => iniciarTramite(empleadoId, 'renovacion'))}>Iniciar renovación</button>}
           {t && <button type="button" style={boton(verTramite ? 'sec' : 'ok')} onClick={() => setVerTramite(v => !v)}>{verTramite ? 'Ocultar el trámite' : 'Ver y actualizar el trámite'}</button>}

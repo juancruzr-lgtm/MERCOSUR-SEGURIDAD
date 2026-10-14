@@ -102,6 +102,10 @@ export interface FilaTablero extends ResumenHabilitacion {
   cuil: string | null
   objetivo: string | null
   primer_turno: string | null
+  /** Lo que respondió el vigilador al pedido de credencial (si respondió). */
+  declaracion?: { respuesta: 'tiene' | 'en_tramite' | 'no_tiene'; detalle: string | null; at: string } | null
+  /** Su foto de la credencial más reciente (para revisar o aceptada). */
+  foto?: { documento_id: string; estado: 'pendiente_revision' | 'aprobado' | 'aceptado'; vence_el: string | null; at: string } | null
 }
 
 export interface Tablero {
@@ -159,18 +163,18 @@ export const tieneCredencial = (r: Pick<ResumenHabilitacion, 'credencial'>) => !
 
 export type GrupoTablero =
   | 'todos' | 'urgentes' | 'vigentes' | 'por_vencer' | 'vencidas' | 'sin_credencial'
-  | 'en_tramite' | 'demorados' | 'sin_verificar' | 'sin_ingreso'
+  | 'en_tramite' | 'demorados' | 'sin_verificar' | 'sin_ingreso' | 'foto_revisar' | 'sin_respuesta'
 
 export const GRUPOS: [GrupoTablero, string][] = [
-  ['urgentes', 'Urgentes'], ['vigentes', 'Vigentes'], ['por_vencer', 'Próximas a vencer'], ['vencidas', 'Vencidas'],
+  ['foto_revisar', 'Fotos para revisar'], ['urgentes', 'Urgentes'], ['vigentes', 'Vigentes'], ['por_vencer', 'Próximas a vencer'], ['vencidas', 'Vencidas'],
   ['sin_credencial', 'Sin credencial'], ['en_tramite', 'Trámites en curso'], ['demorados', 'Demorados'],
-  ['sin_verificar', 'Sin verificar'], ['sin_ingreso', 'Sin fecha de ingreso'], ['todos', 'Todos'],
+  ['sin_verificar', 'Sin verificar'], ['sin_respuesta', 'No respondieron el pedido'], ['sin_ingreso', 'Sin fecha de ingreso'], ['todos', 'Todos'],
 ]
 
 /** Urgencia desde la que un caso va a «Urgentes» (la calcula la base). */
 export const URGENCIA_ALTA = 75
 
-export function enGrupo(f: ResumenHabilitacion, g: GrupoTablero): boolean {
+export function enGrupo(f: ResumenHabilitacion & { declaracion?: FilaTablero['declaracion']; foto?: FilaTablero['foto'] }, g: GrupoTablero): boolean {
   const cred = f.credencial
   switch (g) {
     case 'todos': return true
@@ -183,6 +187,8 @@ export function enGrupo(f: ResumenHabilitacion, g: GrupoTablero): boolean {
     case 'demorados': return !!f.tramite?.demorado
     case 'sin_verificar': return f.codigo === 'desconocida' || f.codigo === 'sin_verificar'
     case 'sin_ingreso': return !f.ingreso
+    case 'foto_revisar': return f.foto?.estado === 'pendiente_revision'
+    case 'sin_respuesta': return !f.foto && !f.declaracion && !(cred && cred.verificada)
   }
 }
 

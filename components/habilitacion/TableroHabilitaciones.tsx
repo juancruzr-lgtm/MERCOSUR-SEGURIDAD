@@ -16,6 +16,7 @@ import {
   ordenar, responsableHabitual, responsableTexto, seisMesesTexto,
 } from '@/lib/habilitacion'
 import type { EtapaHabilitacion, FilaTablero, GrupoTablero, OrdenTablero, RolResponsable, Tablero } from '@/lib/habilitacion'
+import { declaracionTexto } from '@/lib/credencial-pedido'
 
 const control: React.CSSProperties = { background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '7px 8px', fontSize: 13, minWidth: 0, maxWidth: '100%' }
 const LS = 'mercosur.habilitaciones.grupo'
@@ -40,6 +41,8 @@ function Fila({ f }: { f: FilaTablero }) {
       <span style={{ minWidth: 0 }}>
         <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: s.color }}>{s.icono} {f.titulo}</span>
         <span style={{ display: 'block', fontSize: 12.5, color: '#cbd5e1', overflowWrap: 'anywhere' }}>{f.detalle}</span>
+        {f.foto?.estado === 'pendiente_revision' && <span style={{ display: 'block', fontSize: 12.5, color: '#fbbf24', fontWeight: 700 }}>📷 Subió la foto de la credencial: revisarla</span>}
+        {!f.foto && f.declaracion && f.declaracion.respuesta !== 'tiene' && <span style={{ display: 'block', fontSize: 12.5, color: '#93c5fd', overflowWrap: 'anywhere' }}>{declaracionTexto(f.declaracion)}</span>}
       </span>
       <span style={{ minWidth: 0, fontSize: 12.5 }}>
         {resp && f.codigo !== 'vigente' && <span style={{ display: 'block', color: '#cbd5e1' }}>Le toca a: <b>{resp}</b></span>}

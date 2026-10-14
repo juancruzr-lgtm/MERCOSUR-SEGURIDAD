@@ -90,3 +90,14 @@ minutos y las copias temporales se borran solas (también desde la app).
 ```powershell
 npx ts-node src/visor/piloto.ts 7cc0f6e4-8e0a-40d3-9346-87f95df16506 ec57ca0e-aad6-48f2-88d2-13a73f7847ec
 ```
+
+## Copia de fotos de credenciales (desde 2026-10-18)
+
+El lector también copia al disco de SRV02 las fotos de credenciales **aprobadas** en el Legajo Digital
+(cola `documental_exportaciones`, migración 20261018120000):
+
+- Destino: `<DOCUMENT_ROOT_PATH>\EMPLEADOS\CREDENCIALES\APELLIDO NOMBRE - AAAA-MM-DD - Frente.jpg` (y `Dorso`).
+- Sólo escribe en `EMPLEADOS\CREDENCIALES` (crea la carpeta si falta). Nunca pisa ni borra archivos.
+- Corre una vez por minuto dentro del mismo proceso del lector. Se apaga con `EXPORTAR_CREDENCIALES=0` en el `.env`.
+- Para activarlo hay que actualizar el código en SRV02 y reiniciar la tarea (lo hace JC, con permisos de administrador):
+  `git pull` en `C:\Mercosur\MERCOSUR-SEGURIDAD`, después `servicio\detener.ps1` y `servicio\iniciar.ps1`.
