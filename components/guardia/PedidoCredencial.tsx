@@ -16,6 +16,9 @@
 import { useEffect, useState } from 'react'
 import { subirDocumento } from '@/lib/documentacion-datos'
 import { TIPO_CREDENCIAL, cargarMiEstado, declarar, posponer, pospuesto, validarPedido } from '@/lib/credencial-pedido'
+import { resumenLectura } from '@/lib/credencial-lectura'
+import type { LecturaCredencial } from '@/lib/credencial-lectura'
+import { leerYRecortar } from '@/lib/credencial-lectura-cliente'
 
 type Paso = 'elegir' | 'tiene' | 'en_tramite' | 'no_tiene' | 'listo'
 
@@ -27,7 +30,7 @@ const primario = (activo: boolean): React.CSSProperties => ({ flex: 1, backgroun
 const secundario: React.CSSProperties = { background: 'transparent', color: '#94a3b8', border: '1px solid #334155', borderRadius: 8, padding: '11px 14px', fontSize: 14, cursor: 'pointer' }
 const hoyAr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())
 
-function Foto({ cara, archivo, onElegir }: { cara: string; archivo: File | null; onElegir: (f: File | null) => void }) {
+function Foto({ cara, archivo, leyendo, onElegir }: { cara: string; archivo: File | null; leyendo: boolean; onElegir: (f: File | null) => void }) {
   const [vista, setVista] = useState<string | null>(null)
   useEffect(() => {
     if (!archivo) { setVista(null); return }
@@ -38,9 +41,9 @@ function Foto({ cara, archivo, onElegir }: { cara: string; archivo: File | null;
     <label style={{ display: 'block', flex: 1, minWidth: 0, border: `1px dashed ${archivo ? '#16a34a' : '#334155'}`, borderRadius: 10, padding: 8, textAlign: 'center', cursor: 'pointer' }}>
       {vista
         // eslint-disable-next-line @next/next/no-img-element
-        ? <img src={vista} alt={cara} style={{ width: '100%', height: 90, objectFit: 'cover', borderRadius: 6 }} />
+        ? <img src={vista} alt={cara} style={{ width: '100%', height: 90, objectFit: 'contain', borderRadius: 6, opacity: leyendo ? 0.4 : 1 }} />
         : <div style={{ height: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30 }}>📷</div>}
-      <div style={{ fontSize: 13.5, fontWeight: 700, marginTop: 6, color: archivo ? '#86efac' : '#cbd5e1' }}>{archivo ? `✓ ${cara}` : `Foto del ${cara.toLowerCase()}`}</div>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginTop: 6, color: leyendo ? '#93c5fd' : archivo ? '#86efac' : '#cbd5e1' }}>{leyendo ? 'Leyendo…' : archivo ? `✓ ${cara}` : `Foto del ${cara.toLowerCase()}`}</div>
       <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { onElegir(e.target.files?.[0] ?? null); e.target.value = '' }} />
     </label>
   )
@@ -59,6 +62,10 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
   const [subido, setSubido] = useState(false)
   const [rechazo, setRechazo] = useState<string | null>(null)
   const [confirmaVencida, setConfirmaVencida] = useState(false)
+  // Lectura con IA del frente: recorta la tarjeta y completa el vencimiento (se puede cambiar).
+  const [lectura, setLectura] = useState<LecturaCredencial | null>(null)
+  const [leyendo, setLeyendo] = useState<'Frente' | 'Dorso' | null>(null)
+  const [venceDeIA, setVenceDeIA] = useState(false)
 
   useEffect(() => {
     let vivo = true
@@ -71,6 +78,17 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
 
   const volver = () => { setPaso('elegir'); setError(null); setTexto('') }
 
+  const elegirFoto = async (cara: 'Frente' | 'Dorso', original: File | null) => {
+    const poner = cara === 'Frente' ? setFrente : setDorso
+    if (!original) { poner(null); return }
+    poner(original); setLeyendo(cara)
+    const r = await leerYRecortar(original)
+    poner(r.foto); setLeyendo(null)
+    if (cara !== 'Frente') return
+    setLectura(r.lectura)
+    if (r.lectura?.vencimiento && (!vence || venceDeIA)) { setVence(r.lectura.vencimiento); setVenceDeIA(true); setConfirmaVencida(false) }
+  }
+
   const enviarFotos = async () => {
     const inval = validarPedido({ frente, dorso, venceEl: vence, hoy: hoyAr() })
     if (inval) { setError(inval); return }
@@ -82,7 +100,7 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
     }
     setError(null)
     if (!subido) {
-      const r = await subirDocumento({ empleadoId, tipo: TIPO_CREDENCIAL, fechaEmision: null, venceEl: vence, detalle: null, archivos: [frente!, dorso!], onProgreso: setOcupado })
+      const r = await subirDocumento({ empleadoId, tipo: TIPO_CREDENCIAL, fechaEmision: null, venceEl: vence, detalle: resumenLectura(lectura), archivos: [frente!, dorso!], onProgreso: setOcupado })
       if (r.error) { setOcupado(null); setError(r.error); return }
       setSubido(true)
     }
@@ -132,12 +150,23 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
           <>
             <div style={{ fontSize: 14, color: '#94a3b8', marginBottom: 12, lineHeight: 1.45 }}>Sacá las fotos con buena luz, que se lean los datos.</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <Foto cara="Frente" archivo={frente} onElegir={setFrente} />
-              <Foto cara="Dorso" archivo={dorso} onElegir={setDorso} />
+              <Foto cara="Frente" archivo={frente} leyendo={leyendo === 'Frente'} onElegir={f => void elegirFoto('Frente', f)} />
+              <Foto cara="Dorso" archivo={dorso} leyendo={leyendo === 'Dorso'} onElegir={f => void elegirFoto('Dorso', f)} />
             </div>
+            {lectura && !lectura.es_credencial && (
+              <div style={{ fontSize: 13, color: '#fbbf24', marginTop: 8 }}>La foto del frente no parece una credencial de vigilador. Revisala antes de enviar.</div>
+            )}
+            {lectura?.es_credencial && (
+              <div style={{ fontSize: 13, color: '#93c5fd', marginTop: 8, lineHeight: 1.45 }}>
+                Leímos tu credencial{lectura.numero ? ` N° ${lectura.numero}` : ''}{lectura.vencimiento ? `: vence el ${lectura.vencimiento.split('-').reverse().join('/')}` : ''}. Revisá que la fecha sea la correcta.
+              </div>
+            )}
+            {lectura?.dni_coincide === false && (
+              <div style={{ fontSize: 13, color: '#fbbf24', marginTop: 4 }}>El DNI de la credencial no coincide con el tuyo: fijate que sea tu credencial.</div>
+            )}
             <label style={{ display: 'block', fontSize: 14, color: '#cbd5e1', marginTop: 14 }}>
               Vence el (como figura en la credencial)
-              <input type="date" value={vence} onChange={e => { setVence(e.target.value); setConfirmaVencida(false) }} style={{ ...input, marginTop: 6 }} />
+              <input type="date" value={vence} onChange={e => { setVence(e.target.value); setVenceDeIA(false); setConfirmaVencida(false) }} style={{ ...input, marginTop: 6 }} />
             </label>
           </>
         )}
@@ -164,7 +193,7 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button type="button" style={secundario} disabled={!!ocupado} onClick={volver}>Volver</button>
             {paso === 'tiene'
-              ? <button type="button" style={primario(!ocupado && !!frente && !!dorso && !!vence)} disabled={!!ocupado} onClick={() => void enviarFotos()}>Enviar fotos</button>
+              ? <button type="button" style={primario(!ocupado && !leyendo && !!frente && !!dorso && !!vence)} disabled={!!ocupado || !!leyendo} onClick={() => void enviarFotos()}>Enviar fotos</button>
               : <button type="button" style={primario(!ocupado && (paso === 'en_tramite' || texto.trim().length >= 3))} disabled={!!ocupado} onClick={() => void enviarDeclaracion(paso)}>Enviar</button>}
           </div>
         )}
