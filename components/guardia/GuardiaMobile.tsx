@@ -14,6 +14,10 @@ import AvisoTramite from '@/components/guardia/AvisoTramite'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
+import LectorProtocolo from '@/components/protocolos/LectorProtocolo'
+import AvisoProtocoloIngreso from '@/components/protocolos/AvisoProtocoloIngreso'
+import { limpiarProtocolosLocales, useProtocolosVigilador } from '@/components/protocolos/useProtocolosVigilador'
+import { documentosDeTurno } from '@/lib/protocolos'
 import { normalizarTelefonoAr, mostrarTelefono } from '@/lib/telefono-ar'
 
 // ── CONSTANTES ────────────────────────────────────────────────
@@ -560,6 +564,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [objetivos, setObjetivos] = useState<Objetivo[]>([])
   const [registros, setRegistros] = useState<Registro[]>([])
   const [puestos, setPuestos]     = useState<Puesto[]>([])
+  // Protocolo del objetivo (Etapa 1): lectura y confirmación por versión.
+  // Nunca bloquea el fichaje; la base decide qué le corresponde a cada uno.
+  const protocolos = useProtocolosVigilador(turnos.map(t => t.id).join(','))
   // Resumen post-egreso (continuidad): se abre solo, apenas se registra la
   // salida. Si no se responde y se cierra la app, sigue disponible en Mi
   // Planilla — no hay otro lugar donde vivan estos datos.
@@ -1459,7 +1466,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
       tipo: auditoria.estado === 'fuera_radio' ? 'warn' : 'ok',
     })
     setTimeout(() => setMensaje(null), 5000)
+    const turnoIngresadoId = ingresoTurno.id
     resetIngresoFlow()
+    // Aviso NO bloqueante del protocolo: aparece recién con el ingreso ya registrado.
+    void protocolos.avisarTrasIngreso(turnoIngresadoId)
   }
 
   // Marcar salida — instrumentado con el mismo nivel que el ingreso
@@ -2200,6 +2210,27 @@ export default function GuardiaMobile({ user }: { user: any }) {
                 </span>
               </div>
 
+              {/* Protocolo del objetivo: lectura completa, siempre disponible
+                  durante el turno. No reemplaza ni condiciona el fichaje. */}
+              {documentosDeTurno(protocolos.documentos, turno.id).map(doc => (
+                <button
+                  key={doc.version_id}
+                  type="button"
+                  onClick={() => { void protocolos.abrir(doc, turno.id) }}
+                  style={{
+                    ...S.btn, marginBottom: 12, fontSize: 14, lineHeight: 1.35,
+                    background: doc.confirmado_at ? 'transparent' : 'rgba(59,130,246,.12)',
+                    border: doc.confirmado_at ? '1px solid #334155' : '1px solid rgba(59,130,246,.5)',
+                    color: doc.confirmado_at ? '#94a3b8' : '#93c5fd',
+                  }}
+                >
+                  📋 Protocolo del objetivo{doc.puesto_nombre ? ` · ${doc.puesto_nombre}` : ''}
+                  <div style={{ fontSize: 12, marginTop: 2, color: doc.confirmado_at ? '#64748b' : '#60a5fa' }}>
+                    {doc.confirmado_at ? '✓ Leído · tocá para volver a verlo' : doc.abierto_at ? 'Falta confirmar la lectura' : 'Sin leer · tocá para abrirlo'}
+                  </div>
+                </button>
+              ))}
+
               {/* Botón acción */}
               {!reg && (
                 <>
@@ -2256,7 +2287,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
         {/* Cerrar sesión */}
         <div style={{ textAlign: 'center', marginTop: 24 }}>
           <button
-            onClick={async () => { await supabase.auth.signOut(); window.location.reload() }}
+            onClick={async () => { limpiarProtocolosLocales(); await supabase.auth.signOut(); window.location.reload() }}
             style={{ background: 'none', border: '1px solid #1e2d42', color: '#64748b', padding: '8px 20px', borderRadius: 8, cursor: 'pointer', fontSize: 13 }}>
             Cerrar sesión
           </button>
@@ -2298,6 +2329,26 @@ export default function GuardiaMobile({ user }: { user: any }) {
           />
         )
       })()}
+
+      {/* Protocolo: el lector se abre sólo por un toque de la persona. El aviso
+          posterior al ingreso no aparece durante un fichaje, sobre el resumen
+          de la jornada ni sobre la compuerta del teléfono (que tiene prioridad). */}
+      {protocolos.abierto && (
+        <LectorProtocolo
+          doc={protocolos.abierto.doc}
+          desdeCopia={protocolos.desdeCopia}
+          guardadoAt={protocolos.guardadoAt}
+          onCerrar={protocolos.cerrar}
+          onConfirmar={() => protocolos.confirmar(protocolos.abierto!.doc, protocolos.abierto!.turnoId)}
+        />
+      )}
+      {protocolos.aviso && !protocolos.abierto && !telModalAbierto && ingresoFase === 'idle' && fichando === null && !resumenTurnoId && (
+        <AvisoProtocoloIngreso
+          doc={protocolos.aviso.doc}
+          onLeer={() => { void protocolos.abrir(protocolos.aviso!.doc, protocolos.aviso!.turnoId) }}
+          onDespues={protocolos.posponerAviso}
+        />
+      )}
 
       {/* Pedido único de la credencial (frente y dorso, «en trámite» o «no tengo»).
           Nunca durante un fichaje y siempre después del teléfono; si el pedido está

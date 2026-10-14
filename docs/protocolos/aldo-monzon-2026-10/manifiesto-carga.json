@@ -1,0 +1,205 @@
+{
+  "fuente": "docs/protocolos/aldo-monzon-2026-10/chat-original.txt (chat.txt de «Aldo Monzón.zip»)",
+  "fuente_sha256": "334bd80983d1945ba11b6d38f4dd24c6f3eada52d075e0e2e0f6284105bc6687",
+  "versiones": [
+    {
+      "objetivo_id": "ac273ff2-71f6-4de2-ae4e-c0d518795dad",
+      "objetivo": "RANDSTAD",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 4,
+      "texto_sha256": "19a47d236be5d75376f8ff8943f057e80c2d910e47259d10cb6b7e9e8b26e3fe",
+      "titulo": "FUNCIONES Y PROCEDIMIENTOS DE ACTUACIÓN EN RANDSTAD"
+    },
+    {
+      "objetivo_id": "335179ef-af0e-41e7-9a38-66a2da661f48",
+      "objetivo": "LA CASONA",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 14,
+      "texto_sha256": "d0a64953fef52eb83bc3fb04d883b7fe592c7fbd5d748e716e88c180e1ecfd96",
+      "titulo": "LA CASONA ALBERGUE MUNICIPAL"
+    },
+    {
+      "objetivo_id": "874fcb68-07ff-4de8-a48c-3405c932a20b",
+      "objetivo": "SKATEPARK",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 26,
+      "texto_sha256": "994675cb3190139410a0136587e7ec66921e5dfbc7d9f47b3dded2c1523c5799",
+      "titulo": "SKATEPARK ROSARIO NORTE"
+    },
+    {
+      "objetivo_id": "790807dd-8283-4e6e-90bc-832226d016df",
+      "objetivo": "NACION SERVICIOS ENTRE RIOS",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 37,
+      "texto_sha256": "4f5cf8eaa7ae94cb6465c123719a0abe27e5a3a1a66d8eb1db914ddf08235622",
+      "titulo": "NACION SERVICIOS — UBICACIÓN ENTRE RIOS 864 ROSARIO"
+    },
+    {
+      "objetivo_id": "946a50ec-e6cf-4995-80dc-6586178f9e3a",
+      "objetivo": "NACION SANTA FE",
+      "numero": 1,
+      "asociacion": "pendiente_validacion",
+      "linea": 47,
+      "texto_sha256": "dcaa21acd8464b4e6a1b66e2c2707d04fc28cd1f25806627ba3be980be4a5685",
+      "titulo": "NACION SERVICIOS — UBICACIÓN SANTA FE 1345 ROSARIO"
+    },
+    {
+      "objetivo_id": "7109a4cf-0f39-4f1f-8c23-6976bb98838c",
+      "objetivo": "RAPSODIA",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 56,
+      "texto_sha256": "62fd8ebcde0ed3339ea5e55851a5b96286290fff696e0dbbca327c49d983f736",
+      "titulo": "RAPSODIA"
+    },
+    {
+      "objetivo_id": "7109a4cf-0f39-4f1f-8c23-6976bb98838c",
+      "objetivo": "RAPSODIA",
+      "numero": 2,
+      "asociacion": "confirmada",
+      "linea": 74,
+      "texto_sha256": "cd73c7c4676b147d87f632fc662d131a11f91b66ce687549d8857f00ae3d2fdf",
+      "titulo": "RAPSODIA"
+    },
+    {
+      "objetivo_id": "2ff263d8-a74e-4e36-914f-215b54510a4b",
+      "objetivo": "TEATRO LA COMEDIA",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 66,
+      "texto_sha256": "831a605ac729ba65959a833fcb561943a6cdd89974aa777ad855a256f5bb51d5",
+      "titulo": "TEATRO LA COMEDIA"
+    },
+    {
+      "objetivo_id": "66b1b991-8045-4883-86b9-3d2be32914a5",
+      "objetivo": "LA CAJA",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 84,
+      "texto_sha256": "3f42918640d106e294495e8742515ffaea91cf48cdc304b8db2d8745519a35fe",
+      "titulo": "LA CAJA COMPAÑÍA DE SEGUROS"
+    },
+    {
+      "objetivo_id": "29fee8f6-493b-4e68-a09d-44808728a319",
+      "objetivo": "PSA",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 92,
+      "texto_sha256": "d13d5ba5c422e1881bcb15ace4933fc727d6353194f28d5cd430a87ea4553e27",
+      "titulo": "PSA PURIFICADORES DE AGUA"
+    },
+    {
+      "objetivo_id": "722723eb-543a-4a46-b1c3-b87f00c794ca",
+      "objetivo": "CIRSE",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 100,
+      "texto_sha256": "02e8011c11224b2bc610a33564e7f6d19a390f14e194561835dd16a9569c5d89",
+      "titulo": "CIRSE CLUB DE NAVEGACION"
+    },
+    {
+      "objetivo_id": "a006b949-4b99-41a6-951c-22a6be1f7d92",
+      "objetivo": "PNC",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 108,
+      "texto_sha256": "4894fa4a85919ce1fe6a6feec040a5ac196013138a8484f0ae28963ee6307bf4",
+      "titulo": "PNC REMOLQUES"
+    },
+    {
+      "objetivo_id": "8f1e4b3c-23bc-464a-a2d3-66de8eb8d545",
+      "objetivo": "ACA",
+      "numero": 1,
+      "asociacion": "pendiente_validacion",
+      "linea": 116,
+      "texto_sha256": "fb1ae4c54b0ee8cbd3b6185c771347cd8abd825a7360ed698360d9b68348a469",
+      "titulo": "AUTOMOVIL CLUB ARGENTINO (ACA)"
+    },
+    {
+      "objetivo_id": "cb86521d-2ca2-4095-9110-394b3077d271",
+      "objetivo": "ANTENA",
+      "numero": 1,
+      "asociacion": "pendiente_validacion",
+      "linea": 126,
+      "texto_sha256": "18d99b04522e5682f504c8385043800a85f00e03a0f75a96347d65bb547d2dd9",
+      "titulo": "ANTENA RADIO NACIONAL"
+    },
+    {
+      "objetivo_id": "76ef2bd4-38aa-45c2-b103-41997e7f77ad",
+      "objetivo": "CLUB",
+      "numero": 1,
+      "asociacion": "pendiente_validacion",
+      "linea": 130,
+      "texto_sha256": "bf106fcd0addd0411c0f6b675d4279dbc3b28056eb00adbb5115ccf5b77358da",
+      "titulo": "CLUB UNIVERSITARIO (UNINORTE)"
+    },
+    {
+      "objetivo_id": "8a6b4a85-5276-4c77-921f-b30c64166ad6",
+      "objetivo": "jardin de los niños",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 135,
+      "texto_sha256": "c2f093a4a24cfc42c886a2fdfa303703f1e231d8b083662dcee19911574e847a",
+      "titulo": "JARDIN DE LOS NIÑOS (PARQUE INDEPENDENCIA)"
+    },
+    {
+      "objetivo_id": "59b65c62-9a57-4119-84ed-bc4cedf915d2",
+      "objetivo": "MUSEO MACRO",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 139,
+      "texto_sha256": "04178c361070d5d3c69f2316739fae5d117d5196fa845699170942fd4e662457",
+      "titulo": "MUSEO MACRO FUNCIONES Y PROCEDIMIENTOS"
+    },
+    {
+      "objetivo_id": "78350006-6fcf-43dc-9457-447aa9fba71e",
+      "objetivo": "MUSEO CASTAGNINO",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 142,
+      "texto_sha256": "da16c9083ce27807511776cd9ef3c62596c29f1a51e2c36e590832139a26154c",
+      "titulo": "MUSEO CASTAGNINO FUNCIONES Y PROCEDIMIENTOS"
+    },
+    {
+      "objetivo_id": "0f0f4940-dcfa-4fd4-9d48-071429fa0da1",
+      "objetivo": "Polideportivo Lotuf",
+      "numero": 1,
+      "asociacion": "confirmada",
+      "linea": 145,
+      "texto_sha256": "d133121526abf287337610cffe9323fcef1442fcef0f6e513ea96c3384ca3db9",
+      "titulo": "POLIDEPORTIVO LOTUF"
+    },
+    {
+      "objetivo_id": "6fa49177-49ac-464e-99f5-333fdfd05d00",
+      "objetivo": "PLAZA DE LA COOPERACIÓN",
+      "numero": 1,
+      "asociacion": "pendiente_validacion",
+      "linea": 152,
+      "texto_sha256": "b1fef3a8a2ebb50373ba8f241bd46bafdd8adc4869b6dbb28886b346940b082c",
+      "titulo": "PAZA DE LA COOPERACION"
+    },
+    {
+      "objetivo_id": "af0341a8-3c4e-4542-88eb-103e71aef693",
+      "objetivo": "PLAZA DE LAS CIENCIAS",
+      "numero": 1,
+      "asociacion": "pendiente_validacion",
+      "linea": 157,
+      "texto_sha256": "819bab4f98318d53b55f1da2feb375afe29b8a0738f5fd4636a4e5fd57fe9a6a",
+      "titulo": "PLAZA DE LA CIENCIA"
+    },
+    {
+      "objetivo_id": "900056c3-1e35-4b72-8683-498c9c60fa14",
+      "objetivo": "Obrador Baigorria",
+      "numero": 1,
+      "asociacion": "pendiente_validacion",
+      "linea": 162,
+      "texto_sha256": "d69fea0013cff675edfd32ad33900828084fae18cf4e59ed8e912e032640407c",
+      "titulo": "LAROMET BAIGORRIA"
+    }
+  ],
+  "diferencias": 38
+}
