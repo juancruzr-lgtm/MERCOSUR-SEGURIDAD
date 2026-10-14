@@ -17,11 +17,13 @@ import { ErrorProveedor } from '@/lib/ia/proveedor'
 import { PROMPT_CREDENCIAL, SCHEMA_CREDENCIAL, dniCoincide, interpretarLectura } from '@/lib/credencial-lectura'
 
 export const runtime = 'nodejs'
-export const maxDuration = 30
+export const maxDuration = 45
 export const fetchCache = 'force-no-store'
 export const dynamic = 'force-dynamic'
 
 const MAX_BYTES = 6 * 1024 * 1024
+/** Modelo principal y respaldos (el lite es el que usa la revisión de fotos). */
+const MODELOS: [string, number][] = [[MODELO_GEMINI_DEFECTO, 12_000], ['gemini-3.5-flash-lite', 12_000], ['gemini-2.5-flash', 10_000]]
 const responder = (cuerpo: unknown, status = 200) => NextResponse.json(cuerpo, { status, headers: SIN_CACHE })
 
 export async function POST(req: NextRequest) {
@@ -46,10 +48,21 @@ export async function POST(req: NextRequest) {
   if (!mime) return responder({ error: 'Formato no admitido' }, 400)
 
   try {
-    const r = await new GeminiVision().analizar({
-      imagen: { bytes, mime }, prompt: PROMPT_CREDENCIAL, schema: SCHEMA_CREDENCIAL,
-      modelo: MODELO_GEMINI_DEFECTO, timeoutMs: 20_000,
-    })
+    // Si un modelo está saturado (503/429/timeout) se prueba el siguiente: la lectura es una
+    // ayuda en el momento, no puede esperar a que se libere.
+    const ia = new GeminiVision()
+    let r: Awaited<ReturnType<GeminiVision['analizar']>> | null = null
+    let ultimo: unknown = null
+    for (const [modelo, timeoutMs] of MODELOS) {
+      try {
+        r = await ia.analizar({ imagen: { bytes, mime }, prompt: PROMPT_CREDENCIAL, schema: SCHEMA_CREDENCIAL, modelo, timeoutMs })
+        break
+      } catch (e) {
+        ultimo = e
+        if (!(e instanceof ErrorProveedor) || e.clase !== 'transitorio') break
+      }
+    }
+    if (!r) throw ultimo
     const lectura = interpretarLectura(r.json)
     if (!lectura) return responder({ error: 'No se pudo leer la credencial' }, 502)
     const { data: yo } = await c.admin.from('usuarios').select('dni').eq('auth_user_id', c.authUserId).maybeSingle()
