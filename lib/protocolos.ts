@@ -299,27 +299,6 @@ export function separarLecturas(lecturas: LecturaProtocolo[], versionId: string)
   }
 }
 
-/** Qué acciones mostrar para una versión, según el estado y los permisos que
- *  devolvió la base. La base vuelve a validar cada una. */
-export function accionesDeVersion(v: Pick<VersionProtocolo, 'estado' | 'asociacion' | 'fuente_tipo'>, p: PanelObjetivo['permisos']): {
-  editar: boolean
-  enviar: boolean
-  devolver: boolean
-  confirmarAsociacion: boolean
-  publicar: boolean
-  descartar: boolean
-} {
-  const abierta = v.estado === 'borrador' || v.estado === 'pendiente_aprobacion'
-  return {
-    editar: p.preparar && v.estado === 'borrador',
-    enviar: p.preparar && v.estado === 'borrador',
-    devolver: p.publicar && v.estado === 'pendiente_aprobacion',
-    confirmarAsociacion: p.publicar && abierta && v.asociacion === 'pendiente_validacion',
-    publicar: p.publicar && v.estado === 'pendiente_aprobacion' && v.asociacion === 'confirmada',
-    descartar: p.publicar && abierta,
-  }
-}
-
 // ── Vista principal de la ficha (protocolo primero) ─────────────────────────
 
 /**
@@ -361,30 +340,6 @@ export function vistaProtocolo(versiones: VersionProtocolo[]): AlcanceProtocolo[
     })
   })
   return alcances.sort((a, b) => (a.puesto_id ? 1 : 0) - (b.puesto_id ? 1 : 0) || (a.puesto_nombre ?? '').localeCompare(b.puesto_nombre ?? ''))
-}
-
-/**
- * Cómo se edita una versión desde la ficha:
- *  · 'en_lugar': borrador redactado en la app → se guarda sobre el mismo.
- *  · 'version_nueva': texto de una fuente original (WhatsApp de Aldo), o una
- *    versión ya enviada, vigente o reemplazada → se crea un borrador NUEVO con
- *    ese texto para modificarlo. El original queda intacto en el historial
- *    (la base no deja reescribirlo) y lo nuevo vuelve a pasar por Gerencia.
- *  · null: sin permiso para preparar, versión descartada, o texto cuya
- *    correspondencia con el objetivo todavía no confirmó Gerencia (un
- *    borrador nuevo nace con el objetivo confirmado: editarlo antes saltearía
- *    esa validación).
- */
-export function modoEdicion(v: Pick<VersionProtocolo, 'estado' | 'fuente_tipo' | 'asociacion'>, p: PanelObjetivo['permisos']): 'en_lugar' | 'version_nueva' | null {
-  if (!p.preparar || v.estado === 'descartado') return null
-  if (v.asociacion === 'pendiente_validacion') return null
-  if (v.estado === 'borrador' && v.fuente_tipo !== 'whatsapp') return 'en_lugar'
-  return 'version_nueva'
-}
-
-/** Procedencia que queda registrada en un borrador creado al editar otra versión. */
-export function fuenteDeEdicion(v: Pick<VersionProtocolo, 'numero' | 'fuente_descripcion'>): string {
-  return `Edición en la app sobre la versión ${v.numero}. Fuente de esa versión: ${v.fuente_descripcion}`
 }
 
 // ── Comparación de versiones ────────────────────────────────────────────────

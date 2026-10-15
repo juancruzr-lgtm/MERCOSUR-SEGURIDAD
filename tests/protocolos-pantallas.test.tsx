@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import LectorProtocolo from '@/components/protocolos/LectorProtocolo'
 import AvisoProtocoloIngreso from '@/components/protocolos/AvisoProtocoloIngreso'
-import { DocumentoPrincipal } from '@/components/protocolos/ProtocoloObjetivoPanel'
+import { Documento } from '@/components/protocolos/ProtocoloObjetivoPanel'
 import { vistaProtocolo } from '@/lib/protocolos'
 import type { DocumentoVigilador } from '@/lib/protocolos'
 
@@ -57,7 +57,7 @@ describe('aviso posterior al ingreso', () => {
   })
 })
 
-describe('ficha del objetivo: protocolo primero', () => {
+describe('ficha del objetivo: la última guardada rige', () => {
   const base = {
     objetivo_id: 'o1', puesto_id: null, puesto_nombre: null, texto_sha256: 'a'.repeat(64),
     fuente_descripcion: 'WhatsApp de Aldo Monzón, mensaje del 30/09/2026 14:16:16', fuente_fecha: null, fuente_archivo: null, fuente_archivo_sha256: null,
@@ -66,49 +66,46 @@ describe('ficha del objetivo: protocolo primero', () => {
     motivo_descarte: null, devuelto_motivo: null, notas: null, aperturas: 0, confirmaciones: 0,
   }
   const original = { ...base, id: 'v1', numero: 1, titulo: 'LA CASONA ALBERGUE MUNICIPAL', texto: TEXTO, fuente_tipo: 'whatsapp' as const, estado: 'borrador' as const, creado_at: '2026-10-14T22:30:00Z', aprobado_at: null }
-  const prep = { ver: true, preparar: true, publicar: false, registrar_diferencias: true }
-  const render = (versiones: any[], permisos = prep) => {
-    const [alcance] = vistaProtocolo(versiones)
-    return renderToStaticMarkup(
-      <DocumentoPrincipal objetivoId="o1" alcance={alcance} versionSel={null} setVersionSel={() => {}}
-        permisos={permisos} ejecutar={async () => true} onError={() => {}} onCreado={async () => {}} />,
-    )
-  }
+  const render = (versiones: any[], puedeCambiar = true) => renderToStaticMarkup(
+    <Documento objetivoId="o1" alcance={vistaProtocolo(versiones)[0]} versiones={versiones}
+      puedeCambiar={puedeCambiar} onError={() => {}} onGuardado={async () => {}} />,
+  )
 
-  it('sólo borrador: texto completo a la vista, marcado como borrador que el personal no ve', () => {
+  it('sin versión vigente: texto completo, marcado como borrador, con «Que rija este texto»', () => {
     const html = render([original])
     expect(html).toContain('Realizará recorridas con marcación de puntos por el predio cada 2 horas')
-    expect(html).toContain('Borrador: todavía no lo ve el personal')
-    expect(html).toContain('Ningún vigilador ve todavía un protocolo')
-    expect(html).not.toContain('Ver texto completo')
+    expect(html).toContain('Borrador: todavía no rige ninguna versión')
+    expect(html).toContain('Que rija este texto')
+    expect(html).toContain('Editar')
   })
 
-  it('el original de Aldo se edita como borrador nuevo, nunca sobre sí mismo', () => {
-    const html = render([original])
-    expect(html).toContain('Editar (crea un borrador nuevo)')
-    expect(html).not.toContain('Editar borrador')
-  })
-
-  it('vigente + borrador: pestañas separadas y aclaración de lo que ve el personal', () => {
-    const vigente = { ...original, id: 'v0', numero: 1, estado: 'vigente' as const, aprobado_at: '2026-10-15T12:00:00Z', creado_at: '2026-10-14T22:30:00Z' }
-    const nuevo = { ...original, id: 'v2', numero: 2, fuente_tipo: 'manual' as const, texto: TEXTO + '\nNueva instrucción', creado_at: '2026-10-16T10:00:00Z' }
-    const html = render([vigente, nuevo])
-    expect(html).toContain('Vigente · v1 · lo que ve el vigilador')
-    expect(html).toContain('Borrador · v2')
-    expect(html).toContain('El personal sigue viendo la versión vigente (v1)')
+  it('con vigente: muestra la que rige, sin pasos de aprobación ni diferencias', () => {
+    const vigente = { ...original, id: 'v2', numero: 2, estado: 'vigente' as const, aprobado_at: '2026-10-15T12:00:00Z', aprobado_por_nombre: 'Aldo Monzón', texto: TEXTO + '\nNueva instrucción' }
+    const anterior = { ...original, estado: 'reemplazado' as const, reemplazado_at: '2026-10-15T12:00:00Z' }
+    const html = render([anterior, vigente])
+    expect(html).toContain('Rige desde el')
+    expect(html).toContain('Aldo Monzón')
     expect(html).toContain('Nueva instrucción')
+    expect(html).toContain('Historial de versiones (2)')
+    expect(html).toContain('Volver a esta versión')
     expect(html).toContain('Comparar con')
+    for (const viejo of ['Enviar a aprobación', 'Publicar', 'Devolver', 'Confirmar objetivo', 'Diferencias', 'Que rija este texto</button']) {
+      expect(html).not.toContain(viejo)
+    }
   })
 
-  it('objetivo sin confirmar: no ofrece editar y lo explica', () => {
-    const html = render([{ ...original, asociacion: 'pendiente_validacion' }])
-    expect(html).not.toContain('Editar (crea un borrador nuevo)')
-    expect(html).toContain('Se puede editar una vez confirmado el objetivo')
+  it('dos borradores (Rapsodia): se elige cuál mirar y cuál rige', () => {
+    const otro = { ...original, id: 'v2', numero: 2, texto: 'otro texto' }
+    const html = render([original, otro])
+    expect(html).toContain('Hay más de un borrador: elegí cuál rige')
+    expect(html).toContain('v1 · borrador')
+    expect(html).toContain('v2 · borrador')
   })
 
-  it('sin permiso de preparar: se lee, no se edita', () => {
-    const html = render([original], { ...prep, preparar: false })
+  it('sin permiso para cambiarlo: se lee, no se edita', () => {
+    const html = render([original], false)
     expect(html).toContain('Realizará recorridas')
     expect(html).not.toContain('Editar')
+    expect(html).not.toContain('Que rija este texto')
   })
 })

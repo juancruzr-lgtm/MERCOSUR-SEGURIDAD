@@ -8,7 +8,7 @@
  */
 
 import { supabase } from '@/lib/supabase'
-import type { DocumentoVigilador, PanelObjetivo, ResumenObjetivo, TipoDiferencia } from '@/lib/protocolos'
+import type { DocumentoVigilador, PanelObjetivo, ResumenObjetivo } from '@/lib/protocolos'
 
 type Res<T> = { data: T | null; error: string | null }
 
@@ -60,47 +60,17 @@ export async function cargarResumenGeneral(): Promise<Res<ResumenObjetivo[]>> {
   return { data: r.data?.objetivos ?? null, error: r.error }
 }
 
-export async function crearBorrador(a: {
-  objetivoId: string; puestoId: string | null; titulo: string; texto: string
-  fuenteTipo: 'documento' | 'manual'; fuenteDescripcion: string; notas: string | null
-}): Promise<Res<{ id: string; numero: number }>> {
-  return rpc('protocolo_crear_borrador', {
+/** Guarda un texto como versión nueva y la deja vigente (la anterior queda en el historial). */
+export async function guardarProtocolo(a: {
+  objetivoId: string; puestoId: string | null; titulo: string; texto: string; baseVersionId: string | null
+}): Promise<Res<{ ok: boolean; id: string; numero?: number; ya_vigente: boolean }>> {
+  return rpc('protocolo_guardar', {
     p_objetivo_id: a.objetivoId, p_puesto_id: a.puestoId, p_titulo: a.titulo, p_texto: a.texto,
-    p_fuente_tipo: a.fuenteTipo, p_fuente_descripcion: a.fuenteDescripcion, p_fuente_fecha: null, p_notas: a.notas,
+    p_base_version_id: a.baseVersionId,
   })
 }
 
-export async function editarBorrador(versionId: string, titulo: string, texto: string, notas: string | null) {
-  return rpc('protocolo_editar_borrador', { p_version_id: versionId, p_titulo: titulo, p_texto: texto, p_notas: notas })
-}
-export async function enviarAprobacion(versionId: string) {
-  return rpc('protocolo_enviar_aprobacion', { p_version_id: versionId })
-}
-export async function devolverBorrador(versionId: string, motivo: string) {
-  return rpc('protocolo_devolver_borrador', { p_version_id: versionId, p_motivo: motivo })
-}
-export async function confirmarAsociacion(versionId: string, nota: string | null) {
-  return rpc('protocolo_confirmar_asociacion', { p_version_id: versionId, p_nota: nota })
-}
-export async function publicarVersion(versionId: string) {
-  return rpc('protocolo_publicar', { p_version_id: versionId })
-}
-export async function descartarVersion(versionId: string, motivo: string) {
-  return rpc('protocolo_descartar', { p_version_id: versionId, p_motivo: motivo })
-}
-
-export async function registrarDiferencia(a: {
-  objetivoId: string; versionId: string | null; tipo: TipoDiferencia; origen: string
-  referenciaOriginal: string | null; descripcion: string; responsable: string | null
-}) {
-  return rpc('protocolo_registrar_diferencia', {
-    p_objetivo_id: a.objetivoId, p_version_id: a.versionId, p_tipo: a.tipo, p_origen: a.origen,
-    p_referencia_original: a.referenciaOriginal, p_descripcion: a.descripcion, p_responsable: a.responsable,
-  })
-}
-export async function asignarResponsable(diferenciaId: string, responsable: string) {
-  return rpc('protocolo_asignar_responsable', { p_diferencia_id: diferenciaId, p_responsable: responsable })
-}
-export async function resolverDiferencia(diferenciaId: string, resolucion: string) {
-  return rpc('protocolo_resolver_diferencia', { p_diferencia_id: diferenciaId, p_resolucion: resolucion })
+/** Hace regir una versión que todavía es borrador. */
+export async function hacerVigente(versionId: string) {
+  return rpc<{ ok: boolean; id: string; ya_vigente: boolean }>('protocolo_hacer_vigente', { p_version_id: versionId })
 }

@@ -51,8 +51,6 @@ import {
 import type { CaracteristicaTurno } from '@/lib/caracteristica-turno'
 import { etiquetaTipoRondaAlerta, listarRondaAlertasObjetivo } from '@/lib/rondas'
 import type { RondaAlerta } from '@/lib/rondas'
-import { ETIQUETA_TIPO_DIFERENCIA } from '@/lib/protocolos'
-import type { DiferenciaProtocolo, PanelObjetivo } from '@/lib/protocolos'
 import { TEXTO_ORIGEN, instanteLocal, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import { formatFechaHora } from '@/lib/formato'
@@ -1154,14 +1152,6 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     return () => { vivo = false }
   }, [plantillaChecklistId])
 
-  // ── Diferencias de protocolo pendientes (bloque «Requiere intervención») ──
-  // Las informa el propio panel de Protocolo cada vez que se recarga: así no
-  // se pide el panel dos veces y el conteo se actualiza al resolver una.
-  const [diferenciasProtocolo, setDiferenciasProtocolo] = useState<DiferenciaProtocolo[]>([])
-  const alCargarProtocolo = useCallback((panel: PanelObjetivo) => {
-    setDiferenciasProtocolo((panel.diferencias ?? []).filter(d => d.estado === 'pendiente'))
-  }, [])
-
   // ── Pestañas de «Controles» y bloques plegados ──
   // Las dos pestañas quedan montadas (la inactiva sólo se oculta): cambiar a
   // Checklist no debe perder cambios de rondas sin guardar.
@@ -1200,7 +1190,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const sinFicharNoDescubiertos = turnosSinFichar.filter(t => !turnosDescubiertos.some(x => x.id === t.id))
   const totalIntervencion = rondasPendientes === null ? null
     : turnosDescubiertos.length + sinFicharNoDescubiertos.length + alertas.length
-      + rondasPendientes + diferenciasProtocolo.length
+      + rondasPendientes
 
   const { color: semaforoColor, label: semaforoLabel } = presentacionSemaforo(semaforo)
 
@@ -1279,13 +1269,10 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       </div>
 
       {/* ── B. Protocolo del servicio ── */}
-      {/* Protocolo del servicio: lo PRIMERO que se ve. El texto completo de la
-          última versión escrita, distinguiendo la vigente (lo que lee el
-          vigilador) de la que está en preparación; editar desde acá. Versiones,
-          lecturas y diferencias quedan debajo, plegadas. La base decide quién
-          lo ve (Administración, Gerencia, supervisores de la zona) y quién
-          prepara o publica; sin permiso, el panel lo dice y no muestra nada. */}
-      <ProtocoloObjetivoPanel objetivoId={objetivoId} onCargado={alCargarProtocolo} />
+      {/* Protocolo del servicio: lo PRIMERO que se ve, el texto que rige. Se
+          edita desde acá y lo guardado pasa a regir (la versión anterior queda
+          en el historial). La base decide quién lo ve y quién lo cambia. */}
+      <ProtocoloObjetivoPanel objetivoId={objetivoId} />
 
       {/* ── C. Hoy en el objetivo: quién está y quién responde ── */}
       <div style={tituloBloque}>Hoy en el objetivo</div>
@@ -1557,29 +1544,6 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
               </div>
             )}
 
-            {diferenciasProtocolo.length > 0 && (
-              <div>
-                <div style={subTituloIntervencion}>Protocolo</div>
-                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                  {diferenciasProtocolo.slice(0, 3).map(d => (
-                    <div key={d.id} style={filaIntervencion('#a78bfa')}>
-                      <span style={{ flex:'1 1 200px', minWidth:0, color:'#e2e8f0' }}>{d.descripcion}</span>
-                      {pill('#a78bfa', ETIQUETA_TIPO_DIFERENCIA[d.tipo] ?? d.tipo)}
-                    </div>
-                  ))}
-                  {diferenciasProtocolo.length > 3 && (
-                    <div style={{ fontSize:12, color:'#64748b' }}>y {diferenciasProtocolo.length - 3} más.</div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12, marginTop:8 }}
-                  onClick={() => document.getElementById('protocolo-objetivo')?.scrollIntoView({ behavior:'smooth', block:'start' })}
-                >
-                  Validar en Protocolo ↑
-                </button>
-              </div>
-            )}
           </div>
         )}
       </div>

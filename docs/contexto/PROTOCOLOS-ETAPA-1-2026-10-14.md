@@ -92,3 +92,19 @@ liquidación, WhatsApp, contratos, motor documental, informes a clientes.
 - Contratos y motor documental: `fuente_tipo = 'documento'` y la referencia a
   la fuente ya existen; falta vincular con `repositorio_documental`.
 - Informes a clientes: las lecturas por versión ya son agregables.
+
+## Cambio de criterio (15/10/2026): la última versión guardada rige
+
+Decisión de Gerencia: el circuito borrador → aprobación → publicación y el
+registro de diferencias trababan el uso (las diferencias eran de redacción).
+Desde `20261025120000_protocolos_ultima_rige.sql`:
+
+- Guardar en la ficha del objetivo deja el texto **vigente** en el acto
+  (`protocolo_guardar`); la versión anterior queda reemplazada en el historial
+  y se puede volver a ella.
+- Un borrador existente (la carga de Aldo) rige con «Que rija este texto»
+  (`protocolo_hacer_vigente`), que además confirma el objetivo.
+- Lo pueden hacer quienes preparan protocolos (Administración, Gerencia,
+  jefatura de supervisores, dirección operativa), dentro de su alcance.
+- La pantalla ya no muestra diferencias ni pasos de aprobación; las tablas
+  quedan como están.
