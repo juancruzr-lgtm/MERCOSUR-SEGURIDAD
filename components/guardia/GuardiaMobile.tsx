@@ -18,6 +18,10 @@ import LectorProtocolo from '@/components/protocolos/LectorProtocolo'
 import AvisoProtocoloIngreso from '@/components/protocolos/AvisoProtocoloIngreso'
 import { limpiarProtocolosLocales, useProtocolosVigilador } from '@/components/protocolos/useProtocolosVigilador'
 import { documentosDeTurno } from '@/lib/protocolos'
+import TareasTurnoVigilador from '@/components/tareas/TareasTurnoVigilador'
+import { progreso as progresoTareas } from '@/lib/tareas-turno'
+import type { TareaDelTurno } from '@/lib/tareas-turno'
+import { cargarMisTareas } from '@/lib/tareas-turno-datos'
 import { normalizarTelefonoAr, mostrarTelefono } from '@/lib/telefono-ar'
 
 // ── CONSTANTES ────────────────────────────────────────────────
@@ -567,6 +571,17 @@ export default function GuardiaMobile({ user }: { user: any }) {
   // Protocolo del objetivo (Etapa 1): lectura y confirmación por versión.
   // Nunca bloquea el fichaje; la base decide qué le corresponde a cada uno.
   const protocolos = useProtocolosVigilador(turnos.map(t => t.id).join(','))
+  // Tareas del turno (desde el protocolo, activadas por Gerencia). Requieren
+  // conexión; si fallan, no aparecen y el resto de la pantalla sigue igual.
+  const [tareasPorTurno, setTareasPorTurno] = useState<Record<string, TareaDelTurno[]>>({})
+  const [tareasAbiertas, setTareasAbiertas] = useState<string | null>(null)
+  const recargarTareas = useCallback(async () => {
+    const r = await cargarMisTareas()
+    if (r.error || !r.data) return
+    setTareasPorTurno(Object.fromEntries(r.data.map(t => [t.turno_id, t.tareas])))
+  }, [])
+  const claveTurnosTareas = turnos.map(t => t.id).join(',')
+  useEffect(() => { void recargarTareas() }, [claveTurnosTareas, recargarTareas])
   // Resumen post-egreso (continuidad): se abre solo, apenas se registra la
   // salida. Si no se responde y se cierra la app, sigue disponible en Mi
   // Planilla — no hay otro lugar donde vivan estos datos.
@@ -2210,6 +2225,27 @@ export default function GuardiaMobile({ user }: { user: any }) {
                 </span>
               </div>
 
+              {/* Tareas del turno: se marcan desde acá; nunca condicionan el fichaje. */}
+              {(tareasPorTurno[turno.id]?.length ?? 0) > 0 && (() => {
+                const pt = progresoTareas(tareasPorTurno[turno.id])
+                const completas = pt.marcadas === pt.total && pt.falta_foto === 0
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setTareasAbiertas(turno.id)}
+                    style={{
+                      ...S.btn, marginBottom: 12, fontSize: 14, lineHeight: 1.35,
+                      background: completas ? 'transparent' : 'rgba(34,197,94,.10)',
+                      border: completas ? '1px solid #334155' : '1px solid rgba(34,197,94,.45)',
+                      color: completas ? '#94a3b8' : '#86efac',
+                    }}
+                  >
+                    ✅ Tareas del turno · {pt.marcadas} de {pt.total}
+                    {pt.falta_foto > 0 && <div style={{ fontSize: 12, marginTop: 2, color: '#fbbf24' }}>Falta {pt.falta_foto} foto{pt.falta_foto === 1 ? '' : 's'}</div>}
+                  </button>
+                )
+              })()}
+
               {/* Protocolo del objetivo: lectura completa, siempre disponible
                   durante el turno. No reemplaza ni condiciona el fichaje. */}
               {documentosDeTurno(protocolos.documentos, turno.id).map(doc => (
@@ -2333,6 +2369,15 @@ export default function GuardiaMobile({ user }: { user: any }) {
       {/* Protocolo: el lector se abre sólo por un toque de la persona. El aviso
           posterior al ingreso no aparece durante un fichaje, sobre el resumen
           de la jornada ni sobre la compuerta del teléfono (que tiene prioridad). */}
+      {tareasAbiertas && tareasPorTurno[tareasAbiertas] && (
+        <TareasTurnoVigilador
+          turnoId={tareasAbiertas}
+          objetivoNombre={getObjetivo(turnos.find(t => t.id === tareasAbiertas)?.objetivo_id ?? '')?.nombre ?? null}
+          tareas={tareasPorTurno[tareasAbiertas]}
+          onCerrar={() => setTareasAbiertas(null)}
+          onCambio={recargarTareas}
+        />
+      )}
       {protocolos.abierto && (
         <LectorProtocolo
           doc={protocolos.abierto.doc}
