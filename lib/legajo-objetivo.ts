@@ -39,6 +39,8 @@ export interface ObjetivoLegajo {
   frecuencia_supervision_horas: number | null
   /** Objetivo de prueba: excluido de la programación (Completar mes lo bloquea). */
   es_prueba?: boolean | null
+  /** Plantilla de checklist de supervisión asignada en el formulario de Objetivos. */
+  checklist_plantilla_id?: string | null
 }
 
 export interface PuestoLegajo {
@@ -125,7 +127,7 @@ export const fechaHoyLocal = () => new Date().toLocaleDateString('sv-SE')
 // ── Carga ───────────────────────────────────────────────────────────────────
 
 const COLS_OBJETIVO =
-  'id, nombre, cliente, direccion, lat, lng, radio_metros, estado, zona_id, frecuencia_supervision_horas, tipo_ubicacion, es_prueba'
+  'id, nombre, cliente, direccion, lat, lng, radio_metros, estado, zona_id, frecuencia_supervision_horas, tipo_ubicacion, es_prueba, checklist_plantilla_id'
 const COLS_PUESTO   = 'id, nombre, activo, orden'
 const COLS_TURNO    = 'id, objetivo_id, puesto_id, guardia_id, guardia_original_id, fecha, hora_inicio, hora_fin, estado'
 const COLS_REGISTRO = 'id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, tipo_registro'
@@ -488,6 +490,8 @@ export interface EstadoObjetivo {
   turnosActivos: TurnoLegajo[]
   turnosProximos: TurnoLegajo[]
   turnosSinFichar: TurnoLegajo[]
+  /** Sin vigilador o marcados descubiertos: lo que pone el semáforo en crítico. */
+  turnosDescubiertos: TurnoLegajo[]
   alertas: NovedadLegajo[]
   semaforo: SemaforoObjetivo
 }
@@ -541,14 +545,14 @@ export function derivarEstadoObjetivo(
 
   const alertas = novedadesActivas.filter(n => n.prioridad === 'urgente')
 
-  const hayDescubierto = turnosHoy.some(t => !t.guardia_id || t.estado === 'descubierto')
+  const turnosDescubiertos = turnosHoy.filter(t => !t.guardia_id || t.estado === 'descubierto')
   const semaforo: SemaforoObjetivo =
-    hayDescubierto || alertas.length > 0 ? 'critico'
+    turnosDescubiertos.length > 0 || alertas.length > 0 ? 'critico'
       : turnosSinFichar.length > 0 ? 'atencion'
         : turnosHoy.length === 0 ? 'sin_turnos'
           : 'operativo'
 
-  return { turnosActivos, turnosProximos, turnosSinFichar, alertas, semaforo }
+  return { turnosActivos, turnosProximos, turnosSinFichar, turnosDescubiertos, alertas, semaforo }
 }
 
 /** Color y etiqueta del semáforo. Único lugar donde se define esta correspondencia. */

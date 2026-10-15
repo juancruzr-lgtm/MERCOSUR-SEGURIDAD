@@ -8,6 +8,7 @@ import {
   PUESTOS,
   shellDeUsuario,
   esAdminPleno,
+  puedeAdministrarRondas,
 } from '@/lib/capacidades'
 
 describe('capacidades operativas acotadas (B1/D1/D2 — JC 10/09)', () => {
@@ -238,5 +239,21 @@ describe('capacidades — utilidades', () => {
     const u = { rol: 'supervisor', puesto_organizacional: 'basura' }
     expect(puestoDe(u)).toBeNull()
     expect(alcanceDe(u)).toBe('zonas_asignadas') // fallback supervisor
+  })
+})
+describe('puedeAdministrarRondas — ficha del objetivo por capacidades, no por rol', () => {
+  it('operación y administración con alcance: sí', () => {
+    for (const p of ['supervisor', 'jefe_supervisores', 'direccion_operativa', 'administracion', 'gerencia']) {
+      expect(puedeAdministrarRondas({ puesto_organizacional: p })).toBe(true)
+    }
+  })
+  it('vigilador (alcance propio) y nadie: no', () => {
+    expect(puedeAdministrarRondas({ puesto_organizacional: 'vigilador' })).toBe(false)
+    expect(puedeAdministrarRondas({ rol: 'guardia' })).toBe(false)
+    expect(puedeAdministrarRondas(null)).toBe(false)
+  })
+  it('fallback por rol viejo mientras no haya puesto: admin y supervisor sí', () => {
+    expect(puedeAdministrarRondas({ rol: 'admin' })).toBe(true)
+    expect(puedeAdministrarRondas({ rol: 'supervisor' })).toBe(true)
   })
 })

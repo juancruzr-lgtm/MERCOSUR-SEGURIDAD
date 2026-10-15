@@ -75,7 +75,10 @@ const resumenDesplegable: React.CSSProperties = { cursor: 'pointer', fontSize: 1
 type Puesto = { id: string; nombre: string }
 type Ejecutar = (fn: () => Promise<{ error: string | null }>, ok: string) => Promise<boolean>
 
-export default function ProtocoloObjetivoPanel({ objetivoId }: { objetivoId: string }) {
+// `onCargado` avisa a la ficha del objetivo cada vez que el panel se recarga,
+// para que «Requiere intervención» cuente las diferencias pendientes sin pedir
+// el panel dos veces ni quedar desfasado después de resolver una.
+export default function ProtocoloObjetivoPanel({ objetivoId, onCargado }: { objetivoId: string; onCargado?: (panel: PanelObjetivo) => void }) {
   const [panel, setPanel] = useState<PanelObjetivo | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(true)
@@ -93,7 +96,8 @@ export default function ProtocoloObjetivoPanel({ objetivoId }: { objetivoId: str
     if (r.error) { setError(r.error); setPanel(null); return }
     setError(null)
     setPanel(r.data)
-  }, [objetivoId])
+    if (r.data) onCargado?.(r.data)
+  }, [objetivoId, onCargado])
 
   useEffect(() => { void cargar() }, [cargar])
   useEffect(() => {

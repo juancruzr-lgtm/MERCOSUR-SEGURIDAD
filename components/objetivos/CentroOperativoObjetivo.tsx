@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase, headersSesion } from '@/lib/supabase'
 import { Badge, btn, btnPrimary, btnSecondary } from '@/components/ui/base'
 import RondasSupervisionPanel from '@/components/rondas/RondasSupervisionPanel'
+import type { SeccionRondasPanel } from '@/components/rondas/RondasSupervisionPanel'
 import ProtocoloObjetivoPanel from '@/components/protocolos/ProtocoloObjetivoPanel'
 import SelectorDiasMes from './SelectorDiasMes'
 import { fechasDeAtajo, rangoDeSeleccion } from '@/lib/calendario-mes'
@@ -48,7 +49,12 @@ import {
   caracteristicaTurno, esCapacitacion, etiquetaCaracteristica,
 } from '@/lib/caracteristica-turno'
 import type { CaracteristicaTurno } from '@/lib/caracteristica-turno'
-import { listarRondaAlertasObjetivo } from '@/lib/rondas'
+import { etiquetaTipoRondaAlerta, listarRondaAlertasObjetivo } from '@/lib/rondas'
+import type { RondaAlerta } from '@/lib/rondas'
+import { ETIQUETA_TIPO_DIFERENCIA } from '@/lib/protocolos'
+import type { DiferenciaProtocolo, PanelObjetivo } from '@/lib/protocolos'
+import { TEXTO_ORIGEN, instanteLocal, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
+import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import { formatFechaHora } from '@/lib/formato'
 import {
   ETIQUETA_ESTADO_ASIGNACION, ETIQUETA_MOTIVO_OMISION,
@@ -96,8 +102,34 @@ const JWM_RONDAS_URL: Record<string, string> = {
   'PNC Remolques':      'https://overseas.jwmyun.com/setup/dept',
 }
 
+// Bloque plegable de la ficha (F y G). A nivel de módulo: definido dentro del
+// componente se recrearía en cada render y desmontaría lo que contiene.
+function Plegable({ titulo, resumen, abierto, onToggle, children }: {
+  titulo: string
+  resumen?: string
+  abierto: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div style={{ marginBottom:16 }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={abierto}
+        style={{ width:'100%', display:'flex', alignItems:'center', flexWrap:'wrap', columnGap:10, rowGap:4, background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:'12px 16px', cursor:'pointer', textAlign:'left', marginBottom: abierto ? 12 : 0 }}
+      >
+        <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:14, color:'#e2e8f0', textTransform:'uppercase', letterSpacing:1 }}>{titulo}</span>
+        {resumen && <span style={{ flex:'1 1 220px', fontSize:12, color:'#64748b' }}>{resumen}</span>}
+        <span style={{ marginLeft:'auto', color:'#64748b', fontSize:12 }}>{abierto ? '▲' : '▼'}</span>
+      </button>
+      {abierto && children}
+    </div>
+  )
+}
+
 // ── CENTRO OPERATIVO DEL OBJETIVO ────────────────────────────────────
-function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, rolUsuario, puedeGestionarPuestos }: {
+function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, rolUsuario, puedeGestionarPuestos, puedeAdministrarRondas = false }: {
   objetivoId: string
   onVolver: () => void
   onNavigate?: (destino: string, filtro?: any) => void
@@ -107,6 +139,9 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // La AUTORIZACIÓN real la hacen las RPC SECURITY DEFINER (es_operador + alcance)
   // y la RLS de puestos; esto sólo evita ofrecer una acción que va a fallar.
   puedeGestionarPuestos?: boolean
+  // Capacidades (lib/capacidades: puedeAdministrarRondas), no el rol viejo:
+  // ofrece la administración nativa de rondas. La base revalida el alcance.
+  puedeAdministrarRondas?: boolean
 }) {
   const hoy = fechaHoyLocal()
 
@@ -135,18 +170,18 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const puedeEditarUbicacion = rolUsuario === 'admin' || rolUsuario === 'supervisor' || esAdmin === true
 
   // ── Rondas nativas pendientes ──
-  // Solo el contador para el resumen de arriba: el detalle y la intervención
-  // viven en la pestaña Alertas de RondasSupervisionPanel, más abajo. Sin esto
-  // el resumen del objetivo no decía nada de rondas nativas —su única métrica
-  // de rondas era "Checkpoints JWM hoy", del sistema importado.
-  const [rondasPendientes, setRondasPendientes] = useState<number | null>(null)
+  // La lista alimenta el contador de arriba y el bloque «Requiere
+  // intervención»; la intervención en sí sigue en la pestaña Alertas de
+  // RondasSupervisionPanel (Controles → Rondas). Sin permiso, lista vacía.
+  const [alertasRonda, setAlertasRonda] = useState<RondaAlerta[] | null>(null)
+  const rondasPendientes = alertasRonda?.length ?? null
 
   useEffect(() => {
     let vivo = true
-    setRondasPendientes(null)
+    setAlertasRonda(null)
     void listarRondaAlertasObjetivo(objetivoId, 'pendiente').then(({ data }) => {
       if (!vivo) return
-      setRondasPendientes(data?.contexto === 'ok' ? data.alertas.length : 0)
+      setAlertasRonda(data?.contexto === 'ok' ? data.alertas : [])
     })
     return () => { vivo = false }
   }, [objetivoId])
@@ -974,7 +1009,6 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     setHistLoading(false)
   }
 
-  useEffect(() => { void cargarHistorial(histDesde, histHasta) }, [objetivoId])
 
   // ── Modal importación de rondas JWM ──
   const [showModal, setShowModal] = useState(false)
@@ -1017,16 +1051,156 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     setJwmToken(''); setModalMsg('')
   }
 
+  // ── Responsable operativo de ahora (bloque «Hoy en el objetivo») ──
+  // LA resolución compartida (lib/responsables-operativos), la misma de
+  // AppClient, SupervisorMobile y push: acá sólo se traen sus filas, acotadas
+  // a la zona del objetivo y a hoy/ayer (las guardias nocturnas de ayer
+  // pueden cubrir la madrugada de hoy).
+  const zonaObjetivo = datos?.objetivo?.zona_id ?? null
+  const [responsableAhora, setResponsableAhora] = useState<{
+    nombres: string[]
+    origen: OrigenResolucion
+    candidatos: string[]
+    error: string | null
+  } | null>(null)
+
+  useEffect(() => {
+    if (!datos?.objetivo) return
+    let vivo = true
+    setResponsableAhora(null)
+    if (!zonaObjetivo) {
+      setResponsableAhora({ nombres: [], origen: 'sin_zona', candidatos: [], error: null })
+      return
+    }
+    void (async () => {
+      const { fecha, hora } = instanteLocal()
+      const ayer = new Date(`${fecha}T12:00:00Z`)
+      ayer.setUTCDate(ayer.getUTCDate() - 1)
+      const [g, sz, z] = await Promise.all([
+        supabase.from('supervisores_guardia')
+          .select('supervisor_id, fecha, hora_inicio, hora_fin, zona, rol_operativo, estado, tipo_evento')
+          .gte('fecha', ayer.toISOString().slice(0, 10)).lte('fecha', fecha),
+        supabase.from('supervisor_zonas').select('supervisor_id, zona_id').eq('zona_id', zonaObjetivo),
+        supabase.from('zonas_operativas').select('id, nombre').eq('id', zonaObjetivo),
+      ])
+      if (!vivo) return
+      const errorCarga = g.error ?? sz.error ?? z.error
+      if (errorCarga) {
+        setResponsableAhora({ nombres: [], origen: 'sin_responsable', candidatos: [], error: errorCarga.message })
+        return
+      }
+      const ids = Array.from(new Set([
+        ...(g.data ?? []).map((x: any) => x.supervisor_id),
+        ...(sz.data ?? []).map((x: any) => x.supervisor_id),
+      ].filter(Boolean)))
+      const u = ids.length > 0
+        ? await supabase.from('usuarios').select('id, nombre, apellido, estado').in('id', ids)
+        : { data: [], error: null }
+      if (!vivo) return
+      if (u.error) {
+        setResponsableAhora({ nombres: [], origen: 'sin_responsable', candidatos: [], error: u.error.message })
+        return
+      }
+      const usuarios = (u.data ?? []) as Array<{ id: string; nombre: string; apellido: string; estado: string | null }>
+      const resolucion = resolverResponsablesOperativos({
+        zonaId: zonaObjetivo, fecha, hora,
+        guardias: (g.data ?? []) as any[],
+        supervisorZonas: (sz.data ?? []) as any[],
+        zonas: (z.data ?? []) as any[],
+        usuarios,
+      })
+      const nombre = (id: string) => {
+        const x = usuarios.find(v => v.id === id)
+        return x ? `${x.apellido}, ${x.nombre}` : '—'
+      }
+      setResponsableAhora({
+        nombres: resolucion.responsables.map(nombre),
+        origen: resolucion.origen,
+        candidatos: resolucion.candidatosZona.map(nombre),
+        error: null,
+      })
+    })()
+    return () => { vivo = false }
+  }, [datos?.objetivo, zonaObjetivo])
+
+  // ── Checklist de supervisión asignado (pestaña de «Controles») ──
+  // Se asigna en el formulario de Objetivos y se edita en el menú Checklists;
+  // acá sólo se muestra cuál es y qué pide, para no tener que ir a buscarlo.
+  const plantillaChecklistId = datos?.objetivo?.checklist_plantilla_id ?? null
+  const [checklistAsignado, setChecklistAsignado] = useState<{
+    plantilla: { id: string; nombre: string; descripcion: string | null; activo: boolean } | null
+    items: Array<{ id: string; texto: string; orden: number | null; obligatorio: boolean | null; criticidad: string | null; foto_obligatoria: boolean | null }>
+    error: string | null
+  } | null>(null)
+
+  useEffect(() => {
+    let vivo = true
+    setChecklistAsignado(null)
+    if (!plantillaChecklistId) return
+    void Promise.all([
+      supabase.from('checklist_plantillas').select('id, nombre, descripcion, activo').eq('id', plantillaChecklistId).maybeSingle(),
+      supabase.from('checklist_items')
+        .select('id, texto, orden, obligatorio, criticidad, foto_obligatoria')
+        .eq('plantilla_id', plantillaChecklistId).eq('activo', true)
+        .order('orden', { ascending: true }),
+    ]).then(([p, i]) => {
+      if (!vivo) return
+      setChecklistAsignado({
+        plantilla: (p.data ?? null) as any,
+        items: (i.data ?? []) as any[],
+        error: p.error?.message ?? i.error?.message ?? null,
+      })
+    })
+    return () => { vivo = false }
+  }, [plantillaChecklistId])
+
+  // ── Diferencias de protocolo pendientes (bloque «Requiere intervención») ──
+  // Las informa el propio panel de Protocolo cada vez que se recarga: así no
+  // se pide el panel dos veces y el conteo se actualiza al resolver una.
+  const [diferenciasProtocolo, setDiferenciasProtocolo] = useState<DiferenciaProtocolo[]>([])
+  const alCargarProtocolo = useCallback((panel: PanelObjetivo) => {
+    setDiferenciasProtocolo((panel.diferencias ?? []).filter(d => d.estado === 'pendiente'))
+  }, [])
+
+  // ── Pestañas de «Controles» y bloques plegados ──
+  // Las dos pestañas quedan montadas (la inactiva sólo se oculta): cambiar a
+  // Checklist no debe perder cambios de rondas sin guardar.
+  const [tabControles, setTabControles] = useState<'rondas' | 'checklist'>('rondas')
+  const [pedidoRondas, setPedidoRondas] = useState<{ seccion: SeccionRondasPanel; vez: number } | null>(null)
+  const [planificacionAbierta, setPlanificacionAbierta] = useState(false)
+  const [legadoAbierto, setLegadoAbierto] = useState(false)
+
+  // Cada pedido lleva la vista al panel de rondas. Después del render: con la
+  // pestaña recién mostrada, desplazar en el mismo clic calculaba mal el destino.
+  useEffect(() => {
+    if (pedidoRondas) document.getElementById('sec-rondas-nativas')?.scrollIntoView({ behavior:'smooth', block:'start' })
+  }, [pedidoRondas])
+
+  // El historial JWM se pide recién al abrir el bloque de legado, y sólo en
+  // los objetivos que tienen JWM: antes se pedía siempre para un mosaico.
+  const nombreObjetivo = datos?.objetivo?.nombre ?? null
+  useEffect(() => {
+    if (!legadoAbierto || !nombreObjetivo || !JWM_RONDAS_URL[nombreObjetivo]) return
+    void cargarHistorial(histDesde, histHasta)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legadoAbierto, nombreObjetivo, objetivoId])
+
   // Todas las derivaciones salen del servicio: no se recalcula nada acá.
   const objetivo          = datos?.objetivo ?? null
   const turnosHoy         = datos?.turnosHoy ?? []
   const registros         = datos?.registros ?? []
-  const ultimaSupervision = datos?.ultimaSupervision ?? null
   const novedadesObj      = datos?.novedadesActivas ?? []
   const personas          = datos?.personas ?? []
 
-  const { turnosActivos, turnosProximos, turnosSinFichar, alertas, semaforo } =
+  const { turnosActivos, turnosProximos, turnosSinFichar, turnosDescubiertos, alertas, semaforo } =
     derivarEstadoObjetivo(turnosHoy, registros, novedadesObj)
+
+  // «Requiere intervención»: un turno descubierto no se cuenta además como
+  // sin fichar. null mientras no llegan las alertas de rondas.
+  const sinFicharNoDescubiertos = turnosSinFichar.filter(t => !turnosDescubiertos.some(x => x.id === t.id))
+  const totalIntervencion = rondasPendientes === null ? null
+    : turnosDescubiertos.length + sinFicharNoDescubiertos.length + alertas.length
+      + rondasPendientes + diferenciasProtocolo.length
 
   const { color: semaforoColor, label: semaforoLabel } = presentacionSemaforo(semaforo)
 
@@ -1076,13 +1250,22 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
 
   const card: React.CSSProperties = { background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:16, marginBottom:16 }
   const secTitle: React.CSSProperties = { fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:14, color:'#e2e8f0', marginBottom:10, textTransform:'uppercase', letterSpacing:1 }
+  const tituloBloque: React.CSSProperties = { fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1.5, fontWeight:700, margin:'8px 0 10px' }
+  const subTituloIntervencion: React.CSSProperties = { fontSize:11, color:'#94a3b8', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }
+  const filaIntervencion = (color: string): React.CSSProperties => ({ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', padding:'7px 10px', background:'#0f172a', borderRadius:8, borderLeft:`3px solid ${color}`, fontSize:13 })
   const pill = (color: string, text: string) => (
     <span style={{ background: color + '22', color, border:`1px solid ${color}44`, borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:600 }}>{text}</span>
   )
 
   return (
     <div className={styles.root}>
-      {/* Header */}
+      {/* Orden de la ficha (docs/contexto/CENTRO-OPERATIVO-OBJETIVO-2026-10-14.md, sección 3):
+          A encabezado y semáforo · B protocolo · C hoy en el objetivo ·
+          D controles · E requiere intervención · F planificación (plegado) ·
+          G legado JWM y novedades (plegado). Sólo se reordena: los datos y
+          las acciones son los mismos de siempre. */}
+
+      {/* ── A. Encabezado + semáforo ── */}
       <div className={styles.header} style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
         <button type="button" style={{ ...S.btn, ...S.btnSecondary, minHeight:44, padding:'6px 12px', fontSize:12 }} onClick={onVolver}>← Volver</button>
         <div style={{ flex:1, minWidth:0 }}>
@@ -1095,24 +1278,26 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         </div>
       </div>
 
+      {/* ── B. Protocolo del servicio ── */}
       {/* Protocolo del servicio: lo PRIMERO que se ve. El texto completo de la
           última versión escrita, distinguiendo la vigente (lo que lee el
           vigilador) de la que está en preparación; editar desde acá. Versiones,
           lecturas y diferencias quedan debajo, plegadas. La base decide quién
           lo ve (Administración, Gerencia, supervisores de la zona) y quién
           prepara o publica; sin permiso, el panel lo dice y no muestra nada. */}
-      <ProtocoloObjetivoPanel objetivoId={objetivoId} />
+      <ProtocoloObjetivoPanel objetivoId={objetivoId} onCargado={alCargarProtocolo} />
 
-      {/* Estado general */}
+      {/* ── C. Hoy en el objetivo: quién está y quién responde ── */}
+      <div style={tituloBloque}>Hoy en el objetivo</div>
       <div className={styles.summaryGrid} style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:10, marginBottom:16 }}>
         {[
           { label:'Turnos hoy',   value:turnosHoy.length,   color:'#3b82f6', anchor:'sec-turnos' },
           { label:'Activos ahora',value:turnosActivos.length,color:'#10b981', anchor:'sec-turnos' },
           { label:'Sin fichar',   value:turnosSinFichar.length, color:'#f59e0b', anchor:'sec-turnos' },
-          { label:'Alertas',      value:alertas.length,     color: alertas.length > 0 ? '#ef4444' : '#64748b', anchor:'sec-alertas' },
-          { label:'Novedades',    value:novedadesObj.length, color: novedadesObj.length > 0 ? '#f59e0b' : '#64748b', anchor:'sec-alertas' },
-          { label:'Rondas pendientes', value: rondasPendientes ?? '…', color: (rondasPendientes ?? 0) > 0 ? '#ef4444' : '#64748b', anchor:'sec-rondas-nativas' },
-          { label:'Checkpoints JWM hoy', value:historial.length, color:'#a78bfa', anchor:'sec-historial' },
+          // «Alertas» lleva a lo que cuenta: el bloque «Requiere intervención».
+          // Antes apuntaba a una sección que sólo listaba novedades.
+          { label:'Alertas',      value:totalIntervencion ?? '…', color: (totalIntervencion ?? 0) > 0 ? '#ef4444' : '#64748b', anchor:'sec-intervencion' },
+          { label:'Rondas pendientes', value: rondasPendientes ?? '…', color: (rondasPendientes ?? 0) > 0 ? '#ef4444' : '#64748b', anchor:'sec-intervencion' },
         ].map(({ label, value, color, anchor }) => (
           <div
             key={label}
@@ -1128,148 +1313,27 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         ))}
       </div>
 
-      {/* Posiciones operativas: alta/edición/duplicación/desactivación desde el
-          legajo. El horario y los días de cada posición no viven acá — son de
-          servicios_objetivo; "Configurar cobertura" abre ese formulario. */}
-      <div style={card}>
-        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
-          <div style={{ ...secTitle, flex:1, marginBottom:0 }}>Posiciones operativas</div>
-          {puedeEscribirPos && (
-            <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 12px', fontSize:12 }} onClick={abrirCrearPosicion}>
-              + Agregar posición operativa
-            </button>
-          )}
-        </div>
-        {errorPosicion && !modalPosicion && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorPosicion}</div>}
-        {cargandoPosiciones ? (
-          <div style={{ color:'#64748b', fontSize:13 }}>Cargando…</div>
-        ) : posicionesOp.length === 0 ? (
-          <div style={{ color:'#64748b', fontSize:13 }}>Sin posiciones operativas todavía.</div>
+      {/* Quién responde ahora, con la resolución única de responsables. */}
+      <div style={{ ...card, padding:'12px 16px' }}>
+        <div style={{ fontSize:11, color:'#64748b', textTransform:'uppercase', letterSpacing:1, marginBottom:4 }}>Responsable ahora</div>
+        {!responsableAhora ? (
+          <div style={{ color:'#64748b', fontSize:13 }}>Buscando…</div>
+        ) : responsableAhora.error ? (
+          <div style={{ color:'#ef4444', fontSize:13 }}>No se pudo resolver el responsable: {responsableAhora.error}</div>
         ) : (
-          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            {posicionesOp.map(p => {
-              const sinCobertura = p.activo && !coberturaPorPosicion.has(p.id)
-              return (
-                <div key={p.id} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px', opacity: p.activo ? 1 : 0.65 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                    <span style={{ color:'#e2e8f0', fontWeight:600, fontSize:13 }}>{p.nombre}</span>
-                    {p.orden != null && <span style={{ color:'#475569', fontSize:11 }}>#{p.orden}</span>}
-                    <Badge type={p.activo ? 'activo' : 'inactivo'}>{p.activo ? 'Activa' : 'Inactiva'}</Badge>
-                    {sinCobertura && <Badge type="advertencia">Sin cobertura configurada</Badge>}
-                  </div>
-                  {p.observacion && <div style={{ fontSize:12, color:'#64748b', marginTop:4 }}>{p.observacion}</div>}
-                  <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:8 }}>
-                    <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => irAConfigurarCobertura(p)}>Configurar cobertura</button>
-                    {puedeEscribirPos && <>
-                      <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirEditarPosicion(p)}>Editar</button>
-                      <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirDuplicarPosicion(p)}>Duplicar</button>
-                      {p.activo ? (
-                        <button type="button" style={{ ...S.btn, padding:'5px 10px', fontSize:11, background:'rgba(239,68,68,.1)', color:'#ef4444', border:'1px solid rgba(239,68,68,.3)' }} onClick={() => abrirDesactivar(p)}>Desactivar</button>
-                      ) : (
-                        <>
-                          <button type="button" style={{ ...S.btn, padding:'5px 10px', fontSize:11, background:'rgba(16,185,129,.1)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }} onClick={() => activarPosicion(p)}>Activar</button>
-                          <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirEliminar(p)}>Eliminar…</button>
-                        </>
-                      )}
-                    </>}
-                  </div>
-                </div>
-              )
-            })}
+          <div style={{ display:'flex', alignItems:'baseline', gap:10, flexWrap:'wrap' }}>
+            {responsableAhora.nombres.length > 0 && (
+              <span style={{ color:'#e2e8f0', fontSize:14, fontWeight:600 }}>{responsableAhora.nombres.join(' + ')}</span>
+            )}
+            <span style={{ color: responsableAhora.nombres.length > 0 ? '#94a3b8' : '#f59e0b', fontSize:12 }}>{TEXTO_ORIGEN[responsableAhora.origen]}</span>
+            {responsableAhora.candidatos.length > 0 && responsableAhora.nombres.length === 0 && (
+              <span style={{ color:'#94a3b8', fontSize:12 }}>Posibles: {responsableAhora.candidatos.join(', ')}</span>
+            )}
           </div>
         )}
       </div>
 
-      {/* Modal: crear / editar / duplicar posición operativa */}
-      {modalPosicion && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setModalPosicion(null)}>
-          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:380, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:12 }}>
-              {modalPosicion.modo === 'crear' ? 'Agregar posición operativa' : modalPosicion.modo === 'duplicar' ? `Duplicar "${modalPosicion.base?.nombre}"` : `Editar "${modalPosicion.base?.nombre}"`}
-            </div>
-            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Nombre *</label>
-            <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10 }} value={formPosicion.nombre} onChange={e => setFormPosicion({ ...formPosicion, nombre: e.target.value })} placeholder="Vigilador 1, Recepción, Garita norte…" />
-            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Orden (vacío = automático)</label>
-            <input type="number" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10 }} value={formPosicion.orden} onChange={e => setFormPosicion({ ...formPosicion, orden: e.target.value })} />
-            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Observación (opcional)</label>
-            <textarea style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10, minHeight:60 }} value={formPosicion.observacion} onChange={e => setFormPosicion({ ...formPosicion, observacion: e.target.value })} />
-            {errorPosicion && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorPosicion}</div>}
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
-              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setModalPosicion(null)}>Cancelar</button>
-              <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !formPosicion.nombre.trim() || guardandoPosicion ? 0.5 : 1 }} disabled={!formPosicion.nombre.trim() || guardandoPosicion} onClick={guardarPosicion}>
-                {guardandoPosicion ? 'Guardando…' : modalPosicion.modo === 'crear' ? 'Crear' : modalPosicion.modo === 'duplicar' ? 'Duplicar' : 'Guardar cambios'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: desactivar (muestra qué la bloquea antes de confirmar) */}
-      {desactivando && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setDesactivando(null)}>
-          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:400, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:8 }}>Desactivar "{desactivando.nombre}"</div>
-            {cargandoDepDesactivar || !depDesactivar ? (
-              <div style={{ color:'#64748b', fontSize:13 }}>Revisando dependencias…</div>
-            ) : motivoBloqueoDesactivar(depDesactivar) ? (
-              <div style={{ fontSize:13, color:'#f59e0b', background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', borderRadius:8, padding:10 }}>
-                {motivoBloqueoDesactivar(depDesactivar)}
-              </div>
-            ) : (
-              <>
-                <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:8 }}>Sin turnos futuros vigentes ni servicios activos vinculados. No aparecerá en nuevas altas; los históricos siguen visibles.</div>
-                {errorDesactivar && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorDesactivar}</div>}
-              </>
-            )}
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:14 }}>
-              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setDesactivando(null)}>Cancelar</button>
-              {depDesactivar && !motivoBloqueoDesactivar(depDesactivar) && (
-                <button type="button" style={{ ...S.btn, padding:'6px 14px', fontSize:12, background:'rgba(239,68,68,.15)', color:'#fecaca', border:'1px solid rgba(239,68,68,.45)', opacity: confirmandoDesactivar ? 0.5 : 1 }} disabled={confirmandoDesactivar} onClick={confirmarDesactivar}>
-                  {confirmandoDesactivar ? 'Desactivando…' : 'Confirmar desactivación'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: eliminación excepcional (solo sin referencias) */}
-      {eliminando && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setEliminando(null)}>
-          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:400, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:8 }}>Eliminar "{eliminando.p.nombre}"</div>
-            {motivoBloqueoEliminar(eliminando.dep) ? (
-              <div style={{ fontSize:13, color:'#f59e0b', background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', borderRadius:8, padding:10 }}>
-                {motivoBloqueoEliminar(eliminando.dep)}
-              </div>
-            ) : (
-              <>
-                <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:8 }}>Nunca tuvo turnos, servicios ni historial más allá de su creación. La eliminación es física (no se puede deshacer) y queda auditada.</div>
-                <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Motivo</label>
-                <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={motivoEliminar} onChange={e => setMotivoEliminar(e.target.value)} placeholder="Creada por error…" />
-                {errorEliminar && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorEliminar}</div>}
-              </>
-            )}
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
-              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setEliminando(null)}>Cancelar</button>
-              {!motivoBloqueoEliminar(eliminando.dep) && (
-                <button type="button" style={{ ...S.btn, padding:'6px 14px', fontSize:12, background:'rgba(239,68,68,.15)', color:'#fecaca', border:'1px solid rgba(239,68,68,.45)', opacity: confirmandoEliminar ? 0.5 : 1 }} disabled={confirmandoEliminar} onClick={confirmarEliminar}>
-                  {confirmandoEliminar ? 'Eliminando…' : 'Eliminar definitivamente'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 2. Ubicación */}
-      <SeccionUbicacion
-        objetivo={objetivo}
-        puedeEditar={puedeEditarUbicacion}
-        onActualizado={aplicarObjetivo}
-      />
-
-      {/* 3. Turnos del día */}
+      {/* Turnos del día */}
       <div id="sec-turnos" style={card}>
         <div style={secTitle}>Turnos hoy</div>
         {turnosHoy.length === 0 ? (
@@ -1310,12 +1374,227 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             ))}
           </div>
         )}
+      </div>
 
-        {/* Programación mensual: el mes completo del objetivo, sin ocultar
-            turnos sin vigilador ni limitar a hoy/próximos. Prototipo
-            funcional de asignación (Bloque E): Programado → Asignado.
-            No publica, no notifica. */}
-        <div style={{ marginTop:12, paddingTop:12, borderTop:'1px solid #1e2d42' }}>
+      {/* Asistencias recientes: carga al desplegarse. */}
+      <SeccionAsistencias
+        objetivoId={objetivoId}
+        onVerTodas={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('asistencia', { tipo:'objetivo', objetivoId })) : undefined}
+      />
+
+      {/* ── D. Controles: cómo se verifica el servicio ── */}
+      <div style={tituloBloque}>Controles</div>
+      <div id="sec-controles" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }} role="tablist" aria-label="Controles del objetivo">
+        {([['rondas', 'Rondas'], ['checklist', 'Checklist de supervisión']] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tabControles === id}
+            style={{
+              borderWidth:1, borderStyle:'solid', borderColor: tabControles === id ? '#f59e0b' : '#1e2d42',
+              background: tabControles === id ? '#f59e0b' : '#0f172a', color: tabControles === id ? '#111827' : '#94a3b8',
+              borderRadius:999, padding:'6px 14px', fontSize:13, fontWeight:700, cursor:'pointer',
+            }}
+            onClick={() => setTabControles(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Rondas: lo programado (SeccionRondas) y la administración nativa. */}
+      <div role="tabpanel" style={{ display: tabControles === 'rondas' ? 'block' : 'none' }}>
+        <SeccionRondas
+          objetivoId={objetivoId}
+          onVerHistorial={puedeAdministrarRondas ? () => ejecutarConConfirmacionRondas(() => {
+            setPedidoRondas(p => ({ seccion: 'historial', vez: (p?.vez ?? 0) + 1 }))
+          }) : undefined}
+        />
+        {/* Configuración nativa por CAPACIDADES (puedeAdministrarRondas), ya no
+            por el rol viejo. La base vuelve a validar el alcance del objetivo. */}
+        {puedeAdministrarRondas && (
+          <div id="sec-rondas-nativas" style={card}>
+            {objetivo.zona_id === null && (
+              <div style={{ color:'#fbbf24', background:'rgba(245,158,11,.1)', border:'1px solid rgba(245,158,11,.35)', borderRadius:8, padding:10, marginBottom:12, fontSize:13 }}>
+                Objetivo sin zona operativa asignada.
+              </div>
+            )}
+            <RondasSupervisionPanel
+              objetivoId={objetivoId}
+              centroObjetivo={
+                objetivo.lat !== null && objetivo.lng !== null
+                  ? [objetivo.lat, objetivo.lng]
+                  : null
+              }
+              onRondasDirtyChange={setRondasDirty}
+              seccionSolicitada={pedidoRondas}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Checklist de supervisión: la plantilla asignada y lo que se respondió. */}
+      <div role="tabpanel" style={{ display: tabControles === 'checklist' ? 'block' : 'none' }}>
+        <div style={card}>
+          <div style={secTitle}>Checklist asignado</div>
+          {!plantillaChecklistId ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>
+              Este objetivo no tiene checklist de supervisión asignado. Se asigna desde el formulario del objetivo (menú Objetivos).
+            </div>
+          ) : !checklistAsignado ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>Cargando…</div>
+          ) : checklistAsignado.error ? (
+            <div style={{ color:'#ef4444', fontSize:13 }}>{checklistAsignado.error}</div>
+          ) : !checklistAsignado.plantilla ? (
+            <div style={{ color:'#f59e0b', fontSize:13 }}>La plantilla asignada no existe o no está a tu alcance.</div>
+          ) : (
+            <>
+              <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:6 }}>
+                <span style={{ color:'#e2e8f0', fontWeight:600, fontSize:14 }}>{checklistAsignado.plantilla.nombre}</span>
+                {!checklistAsignado.plantilla.activo && <Badge type="advertencia">Plantilla inactiva</Badge>}
+                <span style={{ color:'#64748b', fontSize:12 }}>{checklistAsignado.items.length} ítem(s)</span>
+              </div>
+              {checklistAsignado.plantilla.descripcion && (
+                <div style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>{checklistAsignado.plantilla.descripcion}</div>
+              )}
+              {checklistAsignado.items.length === 0 ? (
+                <div style={{ color:'#64748b', fontSize:13 }}>La plantilla no tiene ítems activos.</div>
+              ) : (
+                <ol style={{ margin:0, paddingLeft:20, display:'flex', flexDirection:'column', gap:4 }}>
+                  {checklistAsignado.items.map(it => (
+                    <li key={it.id} style={{ fontSize:13, color:'#cbd5e1' }}>
+                      {it.texto}
+                      {it.obligatorio && <span style={{ color:'#f59e0b', fontSize:11 }}> · obligatorio</span>}
+                      {it.foto_obligatoria && <span style={{ color:'#60a5fa', fontSize:11 }}> · con foto</span>}
+                      {it.criticidad && it.criticidad !== 'normal' && <span style={{ color:'#ef4444', fontSize:11 }}> · {it.criticidad}</span>}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </>
+          )}
+        </div>
+        <SeccionSupervisiones
+          objetivoId={objetivoId}
+          onVerDetalle={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('supervisiones', { tipo:'objetivo', objetivoId })) : undefined}
+        />
+      </div>
+
+      {/* ── E. Requiere intervención: lo que no se hizo o espera a alguien ── */}
+      <div style={tituloBloque}>Requiere intervención</div>
+      <div id="sec-intervencion" style={card}>
+        {totalIntervencion === 0 ? (
+          <div style={{ color:'#10b981', fontSize:13 }}>Nada pendiente en este momento.</div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            {(turnosDescubiertos.length > 0 || sinFicharNoDescubiertos.length > 0) && (
+              <div>
+                <div style={subTituloIntervencion}>Asistencia de hoy</div>
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  {turnosDescubiertos.map(t => (
+                    <div key={t.id} style={filaIntervencion('#ef4444')}>
+                      <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#e2e8f0', minWidth:90 }}>{hora(t.hora_inicio)} – {hora(t.hora_fin)}</span>
+                      <span style={{ flex:1, color:'#94a3b8' }}>{nombreGuardia(t.guardia_id)}</span>
+                      {pill('#ef4444', t.guardia_id ? 'Descubierto' : 'Sin guardia')}
+                    </div>
+                  ))}
+                  {sinFicharNoDescubiertos.map(t => (
+                    <div key={t.id} style={filaIntervencion('#f59e0b')}>
+                      <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, color:'#e2e8f0', minWidth:90 }}>{hora(t.hora_inicio)} – {hora(t.hora_fin)}</span>
+                      <span style={{ flex:1, color:'#94a3b8' }}>{nombreGuardia(t.guardia_id)}</span>
+                      {pill('#f59e0b', 'Sin fichar')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(alertasRonda?.length ?? 0) > 0 && (
+              <div>
+                <div style={subTituloIntervencion}>Rondas</div>
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  {alertasRonda!.slice(0, 5).map(a => (
+                    <div key={a.id} style={filaIntervencion('#ef4444')}>
+                      <span style={{ flex:'1 1 200px', minWidth:0, color:'#e2e8f0' }}>
+                        {a.ronda_nombre}
+                        <span style={{ color:'#64748b' }}> · {a.puesto_nombre} · {a.guardia_nombre || 'sin vigilador'}</span>
+                      </span>
+                      <span style={{ color:'#64748b', fontSize:11 }}>vence {fechaCorta(a.vencimiento_at)}</span>
+                      {pill(a.tipo === 'suspendida' ? '#f59e0b' : '#ef4444', etiquetaTipoRondaAlerta(a.tipo))}
+                    </div>
+                  ))}
+                  {alertasRonda!.length > 5 && (
+                    <div style={{ fontSize:12, color:'#64748b' }}>y {alertasRonda!.length - 5} más.</div>
+                  )}
+                </div>
+                {puedeAdministrarRondas && (
+                  <button
+                    type="button"
+                    style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12, marginTop:8 }}
+                    onClick={() => ejecutarConConfirmacionRondas(() => {
+                      setTabControles('rondas')
+                      setPedidoRondas(p => ({ seccion: 'alertas', vez: (p?.vez ?? 0) + 1 }))
+                    })}
+                  >
+                    Intervenir en Controles → Rondas
+                  </button>
+                )}
+              </div>
+            )}
+
+            {alertas.length > 0 && (
+              <div>
+                <div style={subTituloIntervencion}>Novedades urgentes</div>
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  {alertas.slice(0, 5).map((n: any) => (
+                    <div key={n.id} style={filaIntervencion('#ef4444')}>
+                      <span style={{ flex:'1 1 200px', minWidth:0, color:'#e2e8f0' }}>{n.descripcion}</span>
+                      <span style={{ color:'#64748b', fontSize:11 }}>{n.tipo} · {fechaCorta(n.created_at)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {diferenciasProtocolo.length > 0 && (
+              <div>
+                <div style={subTituloIntervencion}>Protocolo</div>
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  {diferenciasProtocolo.slice(0, 3).map(d => (
+                    <div key={d.id} style={filaIntervencion('#a78bfa')}>
+                      <span style={{ flex:'1 1 200px', minWidth:0, color:'#e2e8f0' }}>{d.descripcion}</span>
+                      {pill('#a78bfa', ETIQUETA_TIPO_DIFERENCIA[d.tipo] ?? d.tipo)}
+                    </div>
+                  ))}
+                  {diferenciasProtocolo.length > 3 && (
+                    <div style={{ fontSize:12, color:'#64748b' }}>y {diferenciasProtocolo.length - 3} más.</div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  style={{ ...S.btn, ...S.btnSecondary, padding:'6px 12px', fontSize:12, marginTop:8 }}
+                  onClick={() => document.getElementById('protocolo-objetivo')?.scrollIntoView({ behavior:'smooth', block:'start' })}
+                >
+                  Validar en Protocolo ↑
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── F. Documentación y planificación (plegado) ── */}
+      <Plegable
+        titulo="Planificación y configuración"
+        resumen="Programación del mes, posiciones, ubicación y accesos"
+        abierto={planificacionAbierta}
+        onToggle={() => setPlanificacionAbierta(v => !v)}
+      >
+        {/* Programación mensual: el mes completo del objetivo, con la grilla
+            de asignación. Antes vivía dentro de «Turnos hoy». */}
+        <div style={card}>
+          <div style={secTitle}>Programación mensual</div>
           <button
             type="button"
             style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }}
@@ -1867,7 +2146,173 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             )
           })()}
         </div>
-      </div>
+
+        {/* Posiciones operativas: alta/edición/duplicación/desactivación desde el
+            legajo. El horario y los días de cada posición no viven acá — son de
+            servicios_objetivo; "Configurar cobertura" abre ese formulario. */}
+        <div style={card}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
+            <div style={{ ...secTitle, flex:1, marginBottom:0 }}>Posiciones operativas</div>
+            {puedeEscribirPos && (
+              <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 12px', fontSize:12 }} onClick={abrirCrearPosicion}>
+                + Agregar posición operativa
+              </button>
+            )}
+          </div>
+          {errorPosicion && !modalPosicion && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorPosicion}</div>}
+          {cargandoPosiciones ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>Cargando…</div>
+          ) : posicionesOp.length === 0 ? (
+            <div style={{ color:'#64748b', fontSize:13 }}>Sin posiciones operativas todavía.</div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              {posicionesOp.map(p => {
+                const sinCobertura = p.activo && !coberturaPorPosicion.has(p.id)
+                return (
+                  <div key={p.id} style={{ background:'#1a2235', border:'1px solid #1e2d42', borderRadius:8, padding:'10px 14px', opacity: p.activo ? 1 : 0.65 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                      <span style={{ color:'#e2e8f0', fontWeight:600, fontSize:13 }}>{p.nombre}</span>
+                      {p.orden != null && <span style={{ color:'#475569', fontSize:11 }}>#{p.orden}</span>}
+                      <Badge type={p.activo ? 'activo' : 'inactivo'}>{p.activo ? 'Activa' : 'Inactiva'}</Badge>
+                      {sinCobertura && <Badge type="advertencia">Sin cobertura configurada</Badge>}
+                    </div>
+                    {p.observacion && <div style={{ fontSize:12, color:'#64748b', marginTop:4 }}>{p.observacion}</div>}
+                    <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:8 }}>
+                      <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => irAConfigurarCobertura(p)}>Configurar cobertura</button>
+                      {puedeEscribirPos && <>
+                        <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirEditarPosicion(p)}>Editar</button>
+                        <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirDuplicarPosicion(p)}>Duplicar</button>
+                        {p.activo ? (
+                          <button type="button" style={{ ...S.btn, padding:'5px 10px', fontSize:11, background:'rgba(239,68,68,.1)', color:'#ef4444', border:'1px solid rgba(239,68,68,.3)' }} onClick={() => abrirDesactivar(p)}>Desactivar</button>
+                        ) : (
+                          <>
+                            <button type="button" style={{ ...S.btn, padding:'5px 10px', fontSize:11, background:'rgba(16,185,129,.1)', color:'#10b981', border:'1px solid rgba(16,185,129,.3)' }} onClick={() => activarPosicion(p)}>Activar</button>
+                            <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'5px 10px', fontSize:11 }} onClick={() => abrirEliminar(p)}>Eliminar…</button>
+                          </>
+                        )}
+                      </>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* 2. Ubicación */}
+        <SeccionUbicacion
+          objetivo={objetivo}
+          puedeEditar={puedeEditarUbicacion}
+          onActualizado={aplicarObjetivo}
+        />
+
+        {/* Admin: accesos rápidos */}
+        {esAdmin && (
+          <div style={card}>
+            <div style={secTitle}>Accesos rápidos</div>
+            <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
+                onClick={() => ejecutarConConfirmacionRondas(() => onNavigate?.('reportes', { tipo:'objetivo', objetivoId }))}
+              >
+                📊 Reportes
+              </button>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
+                onClick={() => document.getElementById('protocolo-objetivo')?.scrollIntoView({ behavior:'smooth', block:'start' })}
+              >
+                📋 Protocolo
+              </button>
+              <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
+                📁 Documentación <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </Plegable>
+
+      {/* Modales de la planificación: se abren desde el bloque F. */}
+      {/* Modal: crear / editar / duplicar posición operativa */}
+      {modalPosicion && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setModalPosicion(null)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:380, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:12 }}>
+              {modalPosicion.modo === 'crear' ? 'Agregar posición operativa' : modalPosicion.modo === 'duplicar' ? `Duplicar "${modalPosicion.base?.nombre}"` : `Editar "${modalPosicion.base?.nombre}"`}
+            </div>
+            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Nombre *</label>
+            <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10 }} value={formPosicion.nombre} onChange={e => setFormPosicion({ ...formPosicion, nombre: e.target.value })} placeholder="Vigilador 1, Recepción, Garita norte…" />
+            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Orden (vacío = automático)</label>
+            <input type="number" style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10 }} value={formPosicion.orden} onChange={e => setFormPosicion({ ...formPosicion, orden: e.target.value })} />
+            <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Observación (opcional)</label>
+            <textarea style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:10, minHeight:60 }} value={formPosicion.observacion} onChange={e => setFormPosicion({ ...formPosicion, observacion: e.target.value })} />
+            {errorPosicion && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorPosicion}</div>}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setModalPosicion(null)}>Cancelar</button>
+              <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !formPosicion.nombre.trim() || guardandoPosicion ? 0.5 : 1 }} disabled={!formPosicion.nombre.trim() || guardandoPosicion} onClick={guardarPosicion}>
+                {guardandoPosicion ? 'Guardando…' : modalPosicion.modo === 'crear' ? 'Crear' : modalPosicion.modo === 'duplicar' ? 'Duplicar' : 'Guardar cambios'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: desactivar (muestra qué la bloquea antes de confirmar) */}
+      {desactivando && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setDesactivando(null)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:400, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:8 }}>Desactivar "{desactivando.nombre}"</div>
+            {cargandoDepDesactivar || !depDesactivar ? (
+              <div style={{ color:'#64748b', fontSize:13 }}>Revisando dependencias…</div>
+            ) : motivoBloqueoDesactivar(depDesactivar) ? (
+              <div style={{ fontSize:13, color:'#f59e0b', background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', borderRadius:8, padding:10 }}>
+                {motivoBloqueoDesactivar(depDesactivar)}
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:8 }}>Sin turnos futuros vigentes ni servicios activos vinculados. No aparecerá en nuevas altas; los históricos siguen visibles.</div>
+                {errorDesactivar && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorDesactivar}</div>}
+              </>
+            )}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:14 }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setDesactivando(null)}>Cancelar</button>
+              {depDesactivar && !motivoBloqueoDesactivar(depDesactivar) && (
+                <button type="button" style={{ ...S.btn, padding:'6px 14px', fontSize:12, background:'rgba(239,68,68,.15)', color:'#fecaca', border:'1px solid rgba(239,68,68,.45)', opacity: confirmandoDesactivar ? 0.5 : 1 }} disabled={confirmandoDesactivar} onClick={confirmarDesactivar}>
+                  {confirmandoDesactivar ? 'Desactivando…' : 'Confirmar desactivación'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: eliminación excepcional (solo sin referencias) */}
+      {eliminando && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }} onClick={() => setEliminando(null)}>
+          <div style={{ background:'#111827', border:'1px solid #1e2d42', borderRadius:12, padding:20, width:400, maxWidth:'90vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:8 }}>Eliminar "{eliminando.p.nombre}"</div>
+            {motivoBloqueoEliminar(eliminando.dep) ? (
+              <div style={{ fontSize:13, color:'#f59e0b', background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.3)', borderRadius:8, padding:10 }}>
+                {motivoBloqueoEliminar(eliminando.dep)}
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize:13, color:'#e2e8f0', marginBottom:8 }}>Nunca tuvo turnos, servicios ni historial más allá de su creación. La eliminación es física (no se puede deshacer) y queda auditada.</div>
+                <label style={{ fontSize:11, color:'#64748b', textTransform:'uppercase' }}>Motivo</label>
+                <input style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'8px 10px', fontSize:13, marginTop:4, marginBottom:8 }} value={motivoEliminar} onChange={e => setMotivoEliminar(e.target.value)} placeholder="Creada por error…" />
+                {errorEliminar && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorEliminar}</div>}
+              </>
+            )}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
+              <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }} onClick={() => setEliminando(null)}>Cancelar</button>
+              {!motivoBloqueoEliminar(eliminando.dep) && (
+                <button type="button" style={{ ...S.btn, padding:'6px 14px', fontSize:12, background:'rgba(239,68,68,.15)', color:'#fecaca', border:'1px solid rgba(239,68,68,.45)', opacity: confirmandoEliminar ? 0.5 : 1 }} disabled={confirmandoEliminar} onClick={confirmarEliminar}>
+                  {confirmandoEliminar ? 'Eliminando…' : 'Eliminar definitivamente'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: acciones sobre un turno (clic en celda de la grilla) */}
       {/* Confirmación del lote. Muestra qué va a pasar ANTES de aplicarlo:
@@ -2268,176 +2713,110 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         </div>
       )}
 
-      {/* 4. Asistencias y 5. Rondas. Ambas cargan al desplegarse. */}
-      <SeccionAsistencias
-        objetivoId={objetivoId}
-        onVerTodas={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('asistencia', { tipo:'objetivo', objetivoId })) : undefined}
-      />
-      <SeccionRondas
-        objetivoId={objetivoId}
-        onVerHistorial={() => ejecutarConConfirmacionRondas(() =>
-          document.getElementById('sec-rondas-nativas')?.scrollIntoView({ behavior:'smooth', block:'start' }),
-        )}
-      />
-
-      {/* Última supervisión */}
-      <div style={card}>
-        <div style={secTitle}>Última supervisión</div>
-        {!ultimaSupervision ? (
-          <div style={{ color:'#64748b', fontSize:13 }}>Sin supervisiones registradas.</div>
-        ) : (
-          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-            <div style={{ display:'flex', gap:12, alignItems:'center' }}>
-              <div style={{ fontSize:13, color:'#94a3b8' }}>{fechaCorta(ultimaSupervision.created_at)}</div>
-              <Badge type={ultimaSupervision.estado}>{ultimaSupervision.estado?.replace('_',' ') || '—'}</Badge>
+      {/* ── G. Legado: JWM y novedades (plegado, al final) ──
+          Sin importaciones JWM desde el 01/07 ni novedades desde el 13/05.
+          Se conserva para consulta; no compite con lo operativo. */}
+      <Plegable
+        titulo="Legado: JWM y novedades"
+        resumen="Historial importado y novedades antiguas"
+        abierto={legadoAbierto}
+        onToggle={() => setLegadoAbierto(v => !v)}
+      >
+        {/* Integraciones — Rondas y Cámaras */}
+        {JWM_RONDAS_URL[objetivo.nombre] && (
+          <div style={card}>
+            <div style={secTitle}>Integraciones</div>
+            <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+              <a
+                href={JWM_RONDAS_URL[objetivo.nombre]}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ ...S.btn, ...S.btnSecondary, fontSize:13, textDecoration:'none', display:'inline-flex', alignItems:'center', gap:6 }}
+              >
+                🔄 Rondas JWM
+              </a>
+              {esAdmin && (
+                <button
+                  style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
+                  onClick={() => { setShowModal(true); setModalStep('form') }}
+                >
+                  📥 Recopilar datos de rondas
+                </button>
+              )}
+              <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
+                📷 Cámaras <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
+              </button>
             </div>
-            <div style={{ fontSize:13, color:'#64748b' }}>
-              Supervisor: <span style={{ color:'#e2e8f0' }}>{ultimaSupervision.supervisor?.apellido}, {ultimaSupervision.supervisor?.nombre}</span>
-            </div>
-            {ultimaSupervision.observaciones && (
-              <div style={{ fontSize:12, color:'#94a3b8', background:'#0f172a', borderRadius:6, padding:'6px 10px', marginTop:4 }}>{ultimaSupervision.observaciones}</div>
-            )}
           </div>
         )}
-      </div>
 
-      {/* Alertas y novedades */}
-      {(alertas.length > 0 || novedadesObj.length > 0) && (
-        <div id="sec-alertas" style={card}>
-          <div style={secTitle}>Alertas y novedades activas</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            {novedadesObj.slice(0, 5).map((n: any) => (
-              <div key={n.id} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'8px 10px', background:'#0f172a', borderRadius:8, borderLeft:`3px solid ${n.prioridad==='urgente'?'#ef4444':n.prioridad==='importante'?'#f59e0b':'#3b82f6'}` }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:13, color:'#e2e8f0' }}>{n.descripcion}</div>
-                  <div style={{ fontSize:11, color:'#64748b', marginTop:2 }}>{n.tipo} · {fechaCorta(n.created_at)}</div>
-                </div>
-                <Badge type={n.prioridad}>{n.prioridad}</Badge>
+        {/* Historial legado de checkpoints JWM */}
+        {JWM_RONDAS_URL[objetivo.nombre] && (
+          <div id="sec-historial" style={card}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, marginBottom:12 }}>
+              <div style={secTitle}>Historial JWM</div>
+              <div className={styles.historyControls} style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                <input className={styles.dateInput} type="date" value={histDesde} onChange={e => setHistDesde(e.target.value)}
+                  style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'5px 8px', color:'#e2e8f0', fontSize:12 }} />
+                <span style={{ color:'#475569', fontSize:12 }}>→</span>
+                <input className={styles.dateInput} type="date" value={histHasta} onChange={e => setHistHasta(e.target.value)}
+                  style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'5px 8px', color:'#e2e8f0', fontSize:12 }} />
+                <button
+                  style={{ ...S.btn, ...S.btnSecondary, fontSize:12, padding:'5px 10px' }}
+                  onClick={() => cargarHistorial(histDesde, histHasta)}
+                >
+                  Buscar
+                </button>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 6-7. Supervisiones con su checklist. 8. Novedades. */}
-      <SeccionSupervisiones
-        objetivoId={objetivoId}
-        onVerDetalle={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('supervisiones', { tipo:'objetivo', objetivoId })) : undefined}
-      />
-      <SeccionNovedades
-        objetivoId={objetivoId}
-        onVerTodas={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('novedades', { tipo:'objetivo', objetivoId })) : undefined}
-      />
-
-      {/* Configuración nativa, independiente del historial importado de JWM. */}
-      {(rolUsuario === 'admin' || rolUsuario === 'supervisor') && (
-        <div id="sec-rondas-nativas" style={card}>
-          {objetivo.zona_id === null && (
-            <div style={{ color:'#fbbf24', background:'rgba(245,158,11,.1)', border:'1px solid rgba(245,158,11,.35)', borderRadius:8, padding:10, marginBottom:12, fontSize:13 }}>
-              Objetivo sin zona operativa asignada.
             </div>
-          )}
-          <RondasSupervisionPanel
-            objetivoId={objetivoId}
-            centroObjetivo={
-              objetivo.lat !== null && objetivo.lng !== null
-                ? [objetivo.lat, objetivo.lng]
-                : null
-            }
-            onRondasDirtyChange={setRondasDirty}
-          />
-        </div>
-      )}
 
-      {/* Integraciones — Rondas y Cámaras */}
-      {JWM_RONDAS_URL[objetivo.nombre] && (
-        <div style={card}>
-          <div style={secTitle}>Integraciones</div>
-          <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-            <a
-              href={JWM_RONDAS_URL[objetivo.nombre]}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ ...S.btn, ...S.btnSecondary, fontSize:13, textDecoration:'none', display:'inline-flex', alignItems:'center', gap:6 }}
-            >
-              🔄 Rondas JWM
-            </a>
-            {esAdmin && (
-              <button
-                style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
-                onClick={() => { setShowModal(true); setModalStep('form') }}
-              >
-                📥 Recopilar datos de rondas
-              </button>
-            )}
-            <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
-              📷 Cámaras <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Historial legado de checkpoints JWM */}
-      {JWM_RONDAS_URL[objetivo.nombre] && (
-        <div id="sec-historial" style={card}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, marginBottom:12 }}>
-            <div style={secTitle}>Historial JWM</div>
-            <div className={styles.historyControls} style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-              <input className={styles.dateInput} type="date" value={histDesde} onChange={e => setHistDesde(e.target.value)}
-                style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'5px 8px', color:'#e2e8f0', fontSize:12 }} />
-              <span style={{ color:'#475569', fontSize:12 }}>→</span>
-              <input className={styles.dateInput} type="date" value={histHasta} onChange={e => setHistHasta(e.target.value)}
-                style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:6, padding:'5px 8px', color:'#e2e8f0', fontSize:12 }} />
-              <button
-                style={{ ...S.btn, ...S.btnSecondary, fontSize:12, padding:'5px 10px' }}
-                onClick={() => cargarHistorial(histDesde, histHasta)}
-              >
-                Buscar
-              </button>
-            </div>
-          </div>
-
-          {histLoading ? (
-            <div style={{ color:'#475569', fontSize:13 }}>Cargando…</div>
-          ) : historial.length === 0 ? (
-            <div style={{ color:'#475569', fontSize:13 }}>Sin controles importados para el período seleccionado.</div>
-          ) : (
-            <div>
-              <div style={{ fontSize:11, color:'#64748b', marginBottom:8 }}>{historial.length} controles</div>
-              <div style={{ overflowX:'auto' }}>
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
-                  <thead>
-                    <tr style={{ borderBottom:'1px solid #1e2d42' }}>
-                      {['Fecha y hora','Checkpoint','Dispositivo','Estado','Observación'].map(h => (
-                        <th key={h} style={{ padding:'6px 10px', textAlign:'left', color:'#64748b', fontWeight:600, fontSize:11, textTransform:'uppercase', letterSpacing:0.5, whiteSpace:'nowrap' }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {historial.map((r: any) => (
-                      <tr key={r.id} style={{ borderBottom:'1px solid #0f172a' }}>
-                        <td style={{ padding:'7px 10px', color:'#93c5fd', whiteSpace:'nowrap', fontFamily:'Syne,sans-serif', fontWeight:600 }}>
-                          {formatFechaHora(r.fecha_hora)}
-                        </td>
-                        <td style={{ padding:'7px 10px', color:'#e2e8f0' }}>{r.checkpoint || '—'}</td>
-                        <td style={{ padding:'7px 10px', color:'#94a3b8', whiteSpace:'nowrap' }}>{r.dispositivo_id || '—'}</td>
-                        <td style={{ padding:'7px 10px' }}>
-                          <span style={{ background:'#052e1688', color:'#4ade80', border:'1px solid #166534', borderRadius:4, padding:'2px 7px', fontSize:11 }}>
-                            {r.estado || 'ok'}
-                          </span>
-                        </td>
-                        <td style={{ padding:'7px 10px', color:'#64748b', fontSize:11 }}>
-                          {r.raw_data?.observacion || '—'}
-                        </td>
+            {histLoading ? (
+              <div style={{ color:'#475569', fontSize:13 }}>Cargando…</div>
+            ) : historial.length === 0 ? (
+              <div style={{ color:'#475569', fontSize:13 }}>Sin controles importados para el período seleccionado.</div>
+            ) : (
+              <div>
+                <div style={{ fontSize:11, color:'#64748b', marginBottom:8 }}>{historial.length} controles</div>
+                <div style={{ overflowX:'auto' }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                    <thead>
+                      <tr style={{ borderBottom:'1px solid #1e2d42' }}>
+                        {['Fecha y hora','Checkpoint','Dispositivo','Estado','Observación'].map(h => (
+                          <th key={h} style={{ padding:'6px 10px', textAlign:'left', color:'#64748b', fontWeight:600, fontSize:11, textTransform:'uppercase', letterSpacing:0.5, whiteSpace:'nowrap' }}>{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {historial.map((r: any) => (
+                        <tr key={r.id} style={{ borderBottom:'1px solid #0f172a' }}>
+                          <td style={{ padding:'7px 10px', color:'#93c5fd', whiteSpace:'nowrap', fontFamily:'Syne,sans-serif', fontWeight:600 }}>
+                            {formatFechaHora(r.fecha_hora)}
+                          </td>
+                          <td style={{ padding:'7px 10px', color:'#e2e8f0' }}>{r.checkpoint || '—'}</td>
+                          <td style={{ padding:'7px 10px', color:'#94a3b8', whiteSpace:'nowrap' }}>{r.dispositivo_id || '—'}</td>
+                          <td style={{ padding:'7px 10px' }}>
+                            <span style={{ background:'#052e1688', color:'#4ade80', border:'1px solid #166534', borderRadius:4, padding:'2px 7px', fontSize:11 }}>
+                              {r.estado || 'ok'}
+                            </span>
+                          </td>
+                          <td style={{ padding:'7px 10px', color:'#64748b', fontSize:11 }}>
+                            {r.raw_data?.observacion || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+
+        <SeccionNovedades
+          objetivoId={objetivoId}
+          onVerTodas={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('novedades', { tipo:'objetivo', objetivoId })) : undefined}
+        />
+      </Plegable>
 
       {/* Modal importación de rondas JWM */}
       {showModal && (
@@ -2511,30 +2890,6 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                 </div>
               </>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Admin: accesos rápidos */}
-      {esAdmin && (
-        <div style={card}>
-          <div style={secTitle}>Accesos rápidos</div>
-          <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-            <button
-              style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
-              onClick={() => ejecutarConConfirmacionRondas(() => onNavigate?.('reportes', { tipo:'objetivo', objetivoId }))}
-            >
-              📊 Reportes
-            </button>
-            <button
-              style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
-              onClick={() => document.getElementById('protocolo-objetivo')?.scrollIntoView({ behavior:'smooth', block:'start' })}
-            >
-              📋 Protocolo
-            </button>
-            <button style={{ ...S.btn, ...S.btnSecondary, fontSize:13, opacity:0.45, cursor:'not-allowed' }} disabled>
-              📁 Documentación <span style={{ fontSize:10, color:'#475569' }}>(próximamente)</span>
-            </button>
           </div>
         </div>
       )}
