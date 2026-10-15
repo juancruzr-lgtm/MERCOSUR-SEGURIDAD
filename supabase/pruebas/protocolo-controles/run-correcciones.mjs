@@ -176,6 +176,21 @@ await como(JEFE, async () => {
   ok('Re-identificación: marca obsoletas las anteriores y registra la nueva (una instrucción de dos renglones)', r.creadas === 1 && r.obsoletas === 2)
 })
 
+// ── Protocolo cambiado: la versión que ya no rige sigue visible si dejó controles activos
+// (preparación directa: en producción el cambio lo hace protocolo_hacer_vigente de #321)
+await db.exec(`set session_replication_role = replica`)
+await sql(`update protocolo_versiones set estado = 'reemplazado', reemplazado_at = now(), aprobado_at = coalesce(aprobado_at, now()), asociacion = 'confirmada' where id in ($1, $2)`, [vRand.id, vManual])
+await db.exec(`set session_replication_role = origin`)
+await como(JEFE, async () => {
+  const p = await rpc('protocolo_controles_panel', [RANDSTAD])
+  const vr = p.versiones.find(v => v.id === vRand.id)
+  ok('Versión reemplazada con controles activos: sigue en el panel para revisarlos', vr?.estado === 'reemplazado')
+  ok('Versión reemplazada sin controles activos: no aparece', !p.versiones.some(v => v.id === vManual))
+  ok('El control activado sigue activado (nada cambia solo)', p.controles.some(c => c.id === ctrl && c.estado === 'activado'))
+})
+const itemSigue = (await sql(`select count(*)::int n from checklist_items ci join protocolo_controles_propuestos c on c.checklist_item_id = ci.id where c.id = $1 and ci.activo`, [ctrl]))[0].n
+ok('El ítem del checklist sigue activo', itemSigue === 1)
+
 // ── Verificación posterior y rollback ───────────────────────────────────────
 const verif = await db.exec(readFileSync(`${REPO}/supabase/verificacion/protocolo_controles_correcciones_post_migracion.sql`, "utf8"))
 // «Nada activado» describe producción al aplicar; acá se activó un control a propósito.
