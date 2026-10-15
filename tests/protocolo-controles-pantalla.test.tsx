@@ -73,12 +73,21 @@ describe('instrucción con propuesta', () => {
 })
 
 describe('versión', () => {
-  it('borrador: avisa que se activa recién al publicarse', () => {
+  it('borrador: avisa que se activa recién cuando rija', () => {
     const p = panel()
     const html = renderToStaticMarkup(<Version version={p.versiones[0]} panel={p} porInstruccion={controlesPorInstruccion(p.controles)}
       ocupado={false} ocultarInformativas setOcultarInformativas={() => {}} ejecutar={ejecutar} />)
-    expect(html).toContain('se activa recién cuando Gerencia la publique')
+    expect(html).toContain('se activa recién cuando rija')
     expect(html).toContain('Proponer controles con IA')
+  })
+
+  it('versión que ya no rige: pide revisar sus controles activos y no ofrece la IA', () => {
+    const p = panel()
+    const html = renderToStaticMarkup(<Version version={{ ...p.versiones[0], estado: 'reemplazado' }} panel={p} porInstruccion={controlesPorInstruccion(p.controles)}
+      ocupado={false} ocultarInformativas setOcultarInformativas={() => {}} ejecutar={ejecutar} />)
+    expect(html).toContain('ya no rige')
+    expect(html).toContain('siguen en el checklist sin cambios')
+    expect(html).not.toContain('Proponer controles con IA')
   })
 })
 

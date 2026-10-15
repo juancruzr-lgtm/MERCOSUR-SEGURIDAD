@@ -213,13 +213,17 @@ export function Version({ version, panel, porInstruccion, ocupado, ocultarInform
       <div style={sub}>
         Versión {version.numero}{version.puesto_nombre ? ` · ${version.puesto_nombre}` : ''} · {ETIQUETA_ESTADO[version.estado]}
       </div>
-      {version.estado !== 'vigente' && (
+      {version.estado === 'reemplazado' ? (
+        <div style={{ ...nota, marginBottom: 8, color: '#fbbf24' }}>
+          Esta versión del protocolo ya no rige. Los controles que se activaron desde ella siguen en el checklist sin cambios: revisá si todavía corresponden.
+        </div>
+      ) : version.estado !== 'vigente' && (
         <div style={{ ...nota, marginBottom: 8 }}>
-          Esta versión todavía no está publicada: se puede preparar el checklist, pero se activa recién cuando Gerencia la publique.
+          Esta versión todavía no rige: se puede preparar el checklist, pero se activa recién cuando rija.
         </div>
       )}
 
-      {p.preparar && (
+      {p.preparar && version.estado !== 'reemplazado' && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
           <button type="button" style={boton('primario')} disabled={ocupado} onClick={pedirIA}>
             {ocupado ? 'Trabajando…'

@@ -44,7 +44,8 @@ export interface VersionControles {
   id: string
   numero: number
   titulo: string
-  estado: 'borrador' | 'pendiente_aprobacion' | 'vigente'
+  /** 'reemplazado' sólo aparece si dejó controles activados (para revisarlos). */
+  estado: 'borrador' | 'pendiente_aprobacion' | 'vigente' | 'reemplazado'
   puesto_id: string | null
   puesto_nombre: string | null
   instrucciones: InstruccionPanel[]
