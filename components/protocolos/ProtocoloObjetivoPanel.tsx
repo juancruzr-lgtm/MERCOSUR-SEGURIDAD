@@ -3,35 +3,43 @@
 /**
  * components/protocolos/ProtocoloObjetivoPanel.tsx
  *
- * Sección «Protocolo» de la ficha del objetivo (CentroOperativoObjetivo).
+ * Protocolo del servicio, arriba de todo en la ficha del objetivo
+ * (CentroOperativoObjetivo) y en el control general (ControlProtocolos).
  *
- * ── Qué muestra ──────────────────────────────────────────────────────────────
- *  · El protocolo vigente (por objetivo y, si hay, por puesto) con su texto.
- *  · Todas las versiones: borradores, pendientes de aprobación, reemplazadas y
- *    descartadas, con su fuente y su estado de asociación con el objetivo.
- *  · Quién abrió y quién confirmó cada versión vigente, y quién falta.
- *  · Las diferencias pendientes de validación (protocolo vs otros documentos
- *    vs configuración operativa).
+ * ── Qué se ve primero ────────────────────────────────────────────────────────
+ * El TEXTO COMPLETO de la última versión escrita, sin botones intermedios.
+ * Arriba del texto, una franja dice sin ambigüedad qué es:
+ *  · Vigente: lo que hoy leen los vigiladores.
+ *  · Borrador / pendiente de aprobación: todavía no lo ve el personal (y
+ *    cuál es, si hay, la versión que sí ven).
+ * Si hay vigente y además una versión en trabajo, se pasa de una a otra con
+ * pestañas; nunca se muestran mezcladas.
+ *
+ * ── Editar ───────────────────────────────────────────────────────────────────
+ * Desde el mismo lugar. Un borrador redactado en la app se guarda sobre sí
+ * mismo. El texto original de Aldo (fuente WhatsApp) y toda versión ya
+ * enviada o vigente NO se reescriben: «Editar» crea un borrador nuevo con ese
+ * texto y el original queda intacto en el historial (lo exige la base). Todo
+ * cambio vuelve a pasar por Gerencia antes de llegar al personal.
+ *
+ * ── En segundo plano ─────────────────────────────────────────────────────────
+ * Lecturas del personal, historial de versiones y diferencias pendientes:
+ * desplegables debajo del texto.
  *
  * ── Quién hace qué ───────────────────────────────────────────────────────────
  * Los botones salen de los permisos que devuelve la base
- * (protocolo_panel_objetivo.permisos), y cada RPC los vuelve a validar:
- * preparar = Administración, Gerencia, jefatura y dirección operativa;
- * publicar, devolver, descartar, confirmar asociación y resolver = Gerencia.
- * Un supervisor de la zona ve todo y puede registrar diferencias.
- *
- * ── Qué NO hace ──────────────────────────────────────────────────────────────
- * No cambia rondas, alertas ni nada de la configuración que una diferencia
- * menciona: la diferencia se documenta y la resuelve una persona.
+ * (protocolo_panel_objetivo.permisos) y cada RPC los vuelve a validar.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import {
   COLOR_ESTADO, ETIQUETA_ESTADO, ETIQUETA_TIPO_DIFERENCIA, TIPOS_DIFERENCIA,
-  accionesDeVersion, fechaHoraAR, separarLecturas,
+  accionesDeVersion, compararLineas, fechaHoraAR, fuenteDeEdicion, modoEdicion, separarLecturas, vistaProtocolo,
 } from '@/lib/protocolos'
-import type { DiferenciaProtocolo, LecturaProtocolo, PanelObjetivo, TipoDiferencia, VersionProtocolo } from '@/lib/protocolos'
+import type {
+  AlcanceProtocolo, DiferenciaProtocolo, LecturaProtocolo, PanelObjetivo, TipoDiferencia, VersionProtocolo,
+} from '@/lib/protocolos'
 import {
   asignarResponsable, cargarPanelObjetivo, confirmarAsociacion, crearBorrador, descartarVersion,
   devolverBorrador, editarBorrador, enviarAprobacion, publicarVersion, registrarDiferencia, resolverDiferencia,
@@ -40,7 +48,6 @@ import {
 const card: React.CSSProperties = {
   background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 16, marginBottom: 14,
 }
-const sub: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#e2e8f0', margin: '16px 0 8px' }
 const etiqueta: React.CSSProperties = { fontSize: 10.5, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em' }
 const input: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box', background: '#0a0e1a', border: '1px solid #1e2d42',
@@ -57,11 +64,16 @@ const pill = (color: string): React.CSSProperties => ({
   border: `1px solid ${color}`, color, whiteSpace: 'nowrap',
 })
 const textoDoc: React.CSSProperties = {
-  whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13.5, lineHeight: 1.6, color: '#e2e8f0',
-  background: '#0a0e1a', border: '1px solid #1e2d42', borderRadius: 8, padding: 12, maxHeight: 420, overflowY: 'auto',
+  whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 14.5, lineHeight: 1.65, color: '#e2e8f0',
+  background: '#0a0e1a', border: '1px solid #1e2d42', borderRadius: 8, padding: '14px 16px',
 }
+const desplegable: React.CSSProperties = {
+  border: '1px solid #1e2d42', borderRadius: 8, padding: '10px 12px', marginTop: 10, background: '#0f172a',
+}
+const resumenDesplegable: React.CSSProperties = { cursor: 'pointer', fontSize: 13.5, fontWeight: 700, color: '#cbd5e1' }
 
 type Puesto = { id: string; nombre: string }
+type Ejecutar = (fn: () => Promise<{ error: string | null }>, ok: string) => Promise<boolean>
 
 export default function ProtocoloObjetivoPanel({ objetivoId }: { objetivoId: string }) {
   const [panel, setPanel] = useState<PanelObjetivo | null>(null)
@@ -69,6 +81,8 @@ export default function ProtocoloObjetivoPanel({ objetivoId }: { objetivoId: str
   const [cargando, setCargando] = useState(true)
   const [puestos, setPuestos] = useState<Puesto[]>([])
   const [mensaje, setMensaje] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null)
+  const [alcanceSel, setAlcanceSel] = useState<string | null>(null)
+  const [versionSel, setVersionSel] = useState<string | null>(null)
   const [verTexto, setVerTexto] = useState<Record<string, boolean>>({})
   const [nueva, setNueva] = useState(false)
 
@@ -89,7 +103,7 @@ export default function ProtocoloObjetivoPanel({ objetivoId }: { objetivoId: str
   }, [objetivoId])
 
   /** Ejecuta una acción, muestra el resultado y recarga. */
-  const ejecutar = useCallback(async (fn: () => Promise<{ error: string | null }>, ok: string) => {
+  const ejecutar: Ejecutar = useCallback(async (fn, ok) => {
     const r = await fn()
     if (r.error) { setMensaje({ texto: r.error, tipo: 'error' }); return false }
     setMensaje({ texto: ok, tipo: 'ok' })
@@ -97,14 +111,17 @@ export default function ProtocoloObjetivoPanel({ objetivoId }: { objetivoId: str
     return true
   }, [cargar])
 
+  const alcances = useMemo(() => vistaProtocolo(panel?.versiones ?? []), [panel])
+  const alcance: AlcanceProtocolo | null = alcances.find(a => a.clave === alcanceSel) ?? alcances[0] ?? null
+  const historial = useMemo(() => (panel?.versiones ?? []).filter(v => v.estado === 'reemplazado' || v.estado === 'descartado' || v.estado === 'borrador' || v.estado === 'pendiente_aprobacion'), [panel])
   const vigentes = useMemo(() => (panel?.versiones ?? []).filter(v => v.estado === 'vigente'), [panel])
-  const otras = useMemo(() => (panel?.versiones ?? []).filter(v => v.estado !== 'vigente'), [panel])
+  const pendientesDif = (panel?.diferencias ?? []).filter(d => d.estado === 'pendiente').length
 
-  if (cargando && !panel) return <div style={card}><div style={{ color: '#64748b', fontSize: 13 }}>Cargando protocolo…</div></div>
+  if (cargando && !panel) return <div style={card} id="protocolo-objetivo"><div style={{ color: '#64748b', fontSize: 13 }}>Cargando protocolo…</div></div>
   if (error) {
     return (
-      <div style={card}>
-        <div style={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0', marginBottom: 6 }}>📋 Protocolo</div>
+      <div style={card} id="protocolo-objetivo">
+        <div style={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0', marginBottom: 6 }}>📋 Protocolo del servicio</div>
         <div style={{ color: /permiso/i.test(error) ? '#94a3b8' : '#f87171', fontSize: 13 }}>
           {/permiso/i.test(error) ? 'No tenés acceso al protocolo de este objetivo.' : `No se pudo cargar: ${error}`}
         </div>
@@ -117,77 +134,384 @@ export default function ProtocoloObjetivoPanel({ objetivoId }: { objetivoId: str
   return (
     <div style={card} id="protocolo-objetivo">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0', flex: 1 }}>📋 Protocolo</div>
-        {p.preparar && !nueva && <button type="button" style={boton('primario')} onClick={() => setNueva(true)}>Preparar nueva versión</button>}
+        <div style={{ fontSize: 16, fontWeight: 800, color: '#e2e8f0', flex: 1 }}>📋 Protocolo del servicio</div>
         <button type="button" style={boton()} onClick={() => void cargar()}>Actualizar</button>
-      </div>
-      <div style={{ fontSize: 12, color: '#64748b', marginTop: 4, lineHeight: 1.5 }}>
-        Lo que el vigilador lee desde la tarjeta de su turno. Confirmar la lectura no acredita cumplimiento ni cuenta para Mi Desempeño.
       </div>
 
       {mensaje && (
-        <div style={{
+        <div role="status" style={{
           marginTop: 10, fontSize: 13, padding: '8px 10px', borderRadius: 8,
           background: mensaje.tipo === 'ok' ? 'rgba(16,185,129,.1)' : 'rgba(239,68,68,.1)',
           color: mensaje.tipo === 'ok' ? '#4ade80' : '#f87171',
         }}>{mensaje.texto}</div>
       )}
 
-      {nueva && (
-        <NuevaVersion
-          puestos={puestos}
-          onCancelar={() => setNueva(false)}
-          onGuardar={async (d) => {
-            const ok = await ejecutar(() => crearBorrador({ objetivoId, ...d }), 'Borrador creado. Queda sin publicar hasta que Gerencia lo apruebe.')
-            if (ok) setNueva(false)
-          }}
+      {alcances.length === 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 13.5, color: '#94a3b8' }}>Este objetivo todavía no tiene protocolo escrito.</div>
+          {p.preparar && !nueva && (
+            <button type="button" style={{ ...boton('primario'), marginTop: 10 }} onClick={() => setNueva(true)}>Escribir el protocolo</button>
+          )}
+        </div>
+      )}
+
+      {alcances.length > 1 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }} role="tablist" aria-label="Alcance del protocolo">
+          {alcances.map(a => {
+            const activo = a.clave === alcance?.clave
+            return (
+              <button
+                key={a.clave} type="button" role="tab" aria-selected={activo}
+                onClick={() => { setAlcanceSel(a.clave); setVersionSel(null) }}
+                style={{
+                  ...boton(), borderColor: activo ? '#f59e0b' : '#334155', color: activo ? '#fbbf24' : '#94a3b8',
+                }}
+              >
+                {a.puesto_id ? `Puesto ${a.puesto_nombre ?? ''}` : 'Todo el objetivo'}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {alcance && (
+        <DocumentoPrincipal
+          key={alcance.clave}
+          objetivoId={objetivoId}
+          alcance={alcance}
+          versionSel={versionSel}
+          setVersionSel={setVersionSel}
+          permisos={p}
+          ejecutar={ejecutar}
+          onError={texto => setMensaje({ texto, tipo: 'error' })}
+          onCreado={async (id) => { setMensaje({ texto: 'Se guardó como borrador nuevo. El original queda intacto en el historial; para entregarlo al personal, enviarlo a aprobación de Gerencia.', tipo: 'ok' }); await cargar(); setVersionSel(id) }}
         />
       )}
 
-      <div style={sub}>Vigente</div>
-      {vigentes.length === 0 && (
-        <div style={{ fontSize: 13, color: '#94a3b8' }}>
-          No hay protocolo publicado: los vigiladores todavía no ven nada.
-        </div>
+      {/* ── En segundo plano ───────────────────────────────────────────────── */}
+      {vigentes.length > 0 && (
+        <details style={desplegable}>
+          <summary style={resumenDesplegable}>Lecturas del personal</summary>
+          {vigentes.map(v => (
+            <div key={v.id} style={{ marginTop: 8 }}>
+              {vigentes.length > 1 && <div style={{ fontSize: 12.5, color: '#94a3b8' }}>v{v.numero}{v.puesto_nombre ? ` · ${v.puesto_nombre}` : ' · todo el objetivo'}</div>}
+              <Lecturas lecturas={panel.lecturas} versionId={v.id} />
+            </div>
+          ))}
+        </details>
       )}
-      {vigentes.map(v => (
-        <div key={v.id} style={{ border: '1px solid #14532d', borderRadius: 8, padding: 12, marginBottom: 10 }}>
-          <CabeceraVersion v={v} />
-          <div style={{ marginTop: 8 }}><div style={textoDoc}>{v.texto}</div></div>
-          <Lecturas lecturas={panel.lecturas} versionId={v.id} />
-        </div>
-      ))}
 
-      <div style={sub}>Versiones ({otras.length})</div>
-      {otras.length === 0 && <div style={{ fontSize: 13, color: '#64748b' }}>Ninguna.</div>}
-      <div style={{ display: 'grid', gap: 10 }}>
-        {otras.map(v => (
-          <TarjetaVersion
-            key={v.id} v={v} permisos={p}
-            verTexto={!!verTexto[v.id]}
-            alternarTexto={() => setVerTexto(s => ({ ...s, [v.id]: !s[v.id] }))}
-            ejecutar={ejecutar}
-          />
-        ))}
-      </div>
+      {(historial.length > 0 || p.preparar) && (
+        <details style={desplegable} open={nueva || undefined}>
+          <summary style={resumenDesplegable}>Historial de versiones ({panel.versiones.length})</summary>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            {p.preparar && !nueva && <button type="button" style={boton()} onClick={() => setNueva(true)}>Escribir una versión desde cero</button>}
+          </div>
+          {nueva && (
+            <NuevaVersion
+              puestos={puestos}
+              onCancelar={() => setNueva(false)}
+              onGuardar={async (d) => {
+                const ok = await ejecutar(() => crearBorrador({ objetivoId, ...d }), 'Borrador creado. Queda sin publicar hasta que Gerencia lo apruebe.')
+                if (ok) setNueva(false)
+              }}
+            />
+          )}
+          <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
+            {panel.versiones.map(v => (
+              <TarjetaVersion
+                key={v.id} v={v} permisos={p}
+                verTexto={!!verTexto[v.id]}
+                alternarTexto={() => setVerTexto(s => ({ ...s, [v.id]: !s[v.id] }))}
+                ejecutar={ejecutar}
+              />
+            ))}
+          </div>
+        </details>
+      )}
 
-      <Diferencias
-        objetivoId={objetivoId}
-        diferencias={panel.diferencias}
-        versiones={panel.versiones}
-        permisos={p}
-        ejecutar={ejecutar}
-      />
+      <details style={desplegable}>
+        <summary style={resumenDesplegable}>Diferencias pendientes de validación ({pendientesDif})</summary>
+        <Diferencias
+          objetivoId={objetivoId}
+          diferencias={panel.diferencias}
+          versiones={panel.versiones}
+          permisos={p}
+          ejecutar={ejecutar}
+        />
+      </details>
     </div>
   )
 }
+
+// ── Documento principal ─────────────────────────────────────────────────────
+
+function etiquetaPestaña(v: VersionProtocolo): string {
+  if (v.estado === 'vigente') return `Vigente · v${v.numero} · lo que ve el vigilador`
+  if (v.estado === 'pendiente_aprobacion') return `Pendiente de aprobación · v${v.numero}`
+  return `Borrador · v${v.numero}`
+}
+
+// Exportado para las pruebas de pantalla.
+export function DocumentoPrincipal({ objetivoId, alcance, versionSel, setVersionSel, permisos, ejecutar, onError, onCreado }: {
+  objetivoId: string
+  alcance: AlcanceProtocolo
+  versionSel: string | null
+  setVersionSel: (id: string | null) => void
+  permisos: PanelObjetivo['permisos']
+  ejecutar: Ejecutar
+  onError: (texto: string) => void
+  onCreado: (id: string) => Promise<void>
+}) {
+  // Pestañas: lo que está en trabajo (más reciente primero) y la vigente al final.
+  const opciones = useMemo(() => {
+    const lista = [...alcance.trabajo]
+    if (alcance.vigente) lista.push(alcance.vigente)
+    return lista
+  }, [alcance])
+  const v = opciones.find(o => o.id === versionSel) ?? alcance.ultima ?? opciones[0]
+  const [editando, setEditando] = useState(false)
+  const [titulo, setTitulo] = useState('')
+  const [texto, setTexto] = useState('')
+  const [guardando, setGuardando] = useState(false)
+  const [completo, setCompleto] = useState(false)
+  const [compararCon, setCompararCon] = useState<string | null>(null)
+
+  // Al cambiar de versión se cierra la edición y la comparación.
+  useEffect(() => { setEditando(false); setCompararCon(null) }, [v?.id])
+  if (!v) return null
+
+  const modo = modoEdicion(v, permisos)
+  const otras = opciones.filter(o => o.id !== v.id)
+  const contra = otras.find(o => o.id === compararCon) ?? null
+  const lineas = contra ? compararLineas(contra.texto, v.texto) : null
+  const sinCambios = titulo.trim() === v.titulo && texto === v.texto
+
+  const franja = (() => {
+    if (v.estado === 'vigente') {
+      return { color: '#10b981', fondo: 'rgba(16,185,129,.08)', texto: `Vigente desde el ${fechaHoraAR(v.aprobado_at)}${v.aprobado_por_nombre ? ` (aprobó ${v.aprobado_por_nombre})` : ''}. Es lo que leen los vigiladores desde la tarjeta de su turno.` }
+    }
+    const loQueVen = alcance.vigente
+      ? `El personal sigue viendo la versión vigente (v${alcance.vigente.numero}).`
+      : 'Ningún vigilador ve todavía un protocolo para este objetivo.'
+    if (v.estado === 'pendiente_aprobacion') {
+      return { color: '#f59e0b', fondo: 'rgba(245,158,11,.08)', texto: `Pendiente de aprobación de Gerencia: todavía no lo ve el personal. ${loQueVen}` }
+    }
+    return { color: '#94a3b8', fondo: 'rgba(148,163,184,.08)', texto: `Borrador: todavía no lo ve el personal. ${loQueVen} Para entregarlo, enviarlo a aprobación de Gerencia.` }
+  })()
+
+  const guardar = async () => {
+    if (!modo) return
+    setGuardando(true)
+    if (modo === 'en_lugar') {
+      const ok = await ejecutar(() => editarBorrador(v.id, titulo.trim(), texto, v.notas), 'Borrador guardado.')
+      if (ok) setEditando(false)
+    } else {
+      const r = await crearBorrador({
+        objetivoId, puestoId: v.puesto_id, titulo: titulo.trim(), texto,
+        fuenteTipo: 'manual', fuenteDescripcion: fuenteDeEdicion(v), notas: null,
+      })
+      if (r.error || !r.data) onError(r.error ?? 'No se pudo guardar.')
+      else { setEditando(false); await onCreado(r.data.id) }
+    }
+    setGuardando(false)
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      {opciones.length > 1 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }} role="tablist" aria-label="Versión que se muestra">
+          {opciones.map(o => {
+            const activo = o.id === v.id
+            const color = COLOR_ESTADO[o.estado]
+            return (
+              <button
+                key={o.id} type="button" role="tab" aria-selected={activo}
+                onClick={() => setVersionSel(o.id)}
+                style={{
+                  borderRadius: 8, padding: '7px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+                  background: activo ? `${color}22` : 'transparent', border: `1px solid ${activo ? color : '#334155'}`,
+                  color: activo ? color : '#94a3b8',
+                }}
+              >
+                {etiquetaPestaña(o)}
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {alcance.trabajo.length > 1 && (
+        <div style={{ fontSize: 12.5, color: '#fbbf24', marginBottom: 8 }}>
+          Hay {alcance.trabajo.length} versiones en preparación para este alcance: Gerencia tiene que elegir cuál publicar.
+        </div>
+      )}
+
+      <div style={{ border: `1px solid ${franja.color}`, background: franja.fondo, borderRadius: 8, padding: '10px 12px', fontSize: 13, color: '#e2e8f0', lineHeight: 1.5 }}>
+        <span style={{ ...pill(franja.color), marginRight: 8 }}>{ETIQUETA_ESTADO[v.estado]}</span>
+        {franja.texto}
+      </div>
+      {v.asociacion === 'pendiente_validacion' && (
+        <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 6 }}>
+          Falta que Gerencia confirme que este texto corresponde a este objetivo.{v.asociacion_nota ? ` ${v.asociacion_nota}` : ''}
+        </div>
+      )}
+      {v.asociacion === 'pendiente_validacion' && permisos.preparar && (
+        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+          Se puede editar una vez confirmado el objetivo.
+        </div>
+      )}
+      {v.devuelto_motivo && v.estado === 'borrador' && <div style={{ fontSize: 12.5, color: '#f87171', marginTop: 6 }}>Devuelto por Gerencia: {v.devuelto_motivo}</div>}
+
+      <div style={{ display: 'flex', gap: '4px 14px', flexWrap: 'wrap', fontSize: 12, color: '#94a3b8', margin: '10px 0 8px' }}>
+        <span><strong style={{ color: '#e2e8f0' }}>v{v.numero} · {v.titulo}</strong>{v.puesto_nombre ? ` · sólo ${v.puesto_nombre}` : ''}</span>
+        <span style={{ overflowWrap: 'anywhere' }}>Fuente: {v.fuente_descripcion}</span>
+      </div>
+
+      {editando ? (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {modo === 'version_nueva' && (
+            <div style={{ fontSize: 12.5, color: '#93c5fd', lineHeight: 1.5 }}>
+              {v.fuente_tipo === 'whatsapp' ? 'Este es el texto original de la fuente: no se modifica. ' : ''}
+              Lo que guardes queda como un borrador nuevo; la versión v{v.numero} se conserva tal cual en el historial.
+              El personal no ve el cambio hasta que Gerencia lo apruebe.
+            </div>
+          )}
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={etiqueta}>Título</span>
+            <input id="protocolo-editar-titulo" style={input} value={titulo} onChange={e => setTitulo(e.target.value)} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={etiqueta}>Texto completo</span>
+            <textarea
+              id="protocolo-editar-texto"
+              style={{ ...input, minHeight: 360, lineHeight: 1.6, fontSize: 14 }}
+              value={texto} onChange={e => setTexto(e.target.value)}
+            />
+          </label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button" style={{ ...boton('primario'), opacity: !guardando && !sinCambios && titulo.trim() && texto.trim() ? 1 : 0.5 }}
+              disabled={guardando || sinCambios || !titulo.trim() || !texto.trim()}
+              onClick={() => void guardar()}
+            >
+              {guardando ? 'Guardando…' : modo === 'en_lugar' ? 'Guardar borrador' : 'Guardar como borrador nuevo'}
+            </button>
+            <button type="button" style={boton()} onClick={() => setEditando(false)}>Cancelar</button>
+          </div>
+        </div>
+      ) : lineas ? (
+        <div style={{ ...textoDoc, padding: 0, overflow: 'hidden' }} aria-label={`Cambios entre v${contra!.numero} y v${v.numero}`}>
+          {lineas.map((l, i) => (
+            <div key={i} style={{
+              padding: '1px 16px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+              background: l.tipo === 'agregada' ? 'rgba(16,185,129,.14)' : l.tipo === 'quitada' ? 'rgba(239,68,68,.14)' : 'transparent',
+              color: l.tipo === 'quitada' ? '#fca5a5' : l.tipo === 'agregada' ? '#86efac' : '#cbd5e1',
+              textDecoration: l.tipo === 'quitada' ? 'line-through' : 'none',
+            }}>
+              <span aria-hidden style={{ display: 'inline-block', width: 14, color: '#64748b' }}>{l.tipo === 'agregada' ? '+' : l.tipo === 'quitada' ? '−' : ''}</span>
+              {l.texto || ' '}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ position: 'relative' }}>
+          <div style={{ ...textoDoc, maxHeight: completo ? 'none' : '60vh', overflowY: completo ? 'visible' : 'auto' }}>{v.texto}</div>
+        </div>
+      )}
+
+      {!editando && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+          {modo && (
+            <button type="button" style={boton('primario')} onClick={() => { setTitulo(v.titulo); setTexto(v.texto); setEditando(true); setCompararCon(null) }}>
+              {modo === 'en_lugar' ? 'Editar borrador' : 'Editar (crea un borrador nuevo)'}
+            </button>
+          )}
+          {!lineas && <button type="button" style={boton()} onClick={() => setCompleto(c => !c)}>{completo ? 'Ver en recuadro' : 'Ver todo sin recuadro'}</button>}
+          {otras.length > 0 && (
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5, color: '#94a3b8' }}>
+              Comparar con
+              <select
+                id="protocolo-comparar" style={{ ...input, width: 'auto', padding: '6px 8px', fontSize: 12.5 }}
+                value={compararCon ?? ''} onChange={e => setCompararCon(e.target.value || null)}
+              >
+                <option value="">—</option>
+                {otras.map(o => <option key={o.id} value={o.id}>{etiquetaPestaña(o)}</option>)}
+              </select>
+            </label>
+          )}
+          <AccionesVersion v={v} permisos={permisos} ejecutar={ejecutar} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Envío, aprobación, devolución, descarte y confirmación de objetivo. */
+function AccionesVersion({ v, permisos, ejecutar }: { v: VersionProtocolo; permisos: PanelObjetivo['permisos']; ejecutar: Ejecutar }) {
+  const a = accionesDeVersion(v, permisos)
+  const [paso, setPaso] = useState<null | 'publicar' | 'devolver' | 'descartar' | 'asociacion'>(null)
+  const [motivo, setMotivo] = useState('')
+  const cerrar = () => { setPaso(null); setMotivo('') }
+  if (!a.enviar && !a.confirmarAsociacion && !a.publicar && !a.devolver && !a.descartar) return null
+
+  return (
+    <>
+      {a.enviar && <button type="button" style={boton()} onClick={() => void ejecutar(() => enviarAprobacion(v.id), 'Enviado a aprobación de Gerencia.')}>Enviar a aprobación</button>}
+      {a.confirmarAsociacion && <button type="button" style={boton()} onClick={() => setPaso('asociacion')}>Confirmar objetivo</button>}
+      {a.publicar && <button type="button" style={boton('ok')} onClick={() => setPaso('publicar')}>Publicar</button>}
+      {a.devolver && <button type="button" style={boton()} onClick={() => setPaso('devolver')}>Devolver</button>}
+      {a.descartar && <button type="button" style={boton('peligro')} onClick={() => setPaso('descartar')}>Descartar</button>}
+      {v.estado === 'pendiente_aprobacion' && v.asociacion === 'pendiente_validacion' && permisos.publicar && (
+        <div style={{ fontSize: 12, color: '#fbbf24', flexBasis: '100%' }}>Para publicar, primero confirmá que este texto corresponde a este objetivo.</div>
+      )}
+      {paso && (
+        <div style={{ flexBasis: '100%', borderTop: '1px solid #1e2d42', paddingTop: 10, marginTop: 4, display: 'grid', gap: 8 }}>
+          {paso === 'publicar' && (
+            <div style={{ fontSize: 13, color: '#e2e8f0', lineHeight: 1.5 }}>
+              Al publicar, esta versión pasa a ser la que ven los vigiladores de este objetivo{v.puesto_nombre ? ` (puesto ${v.puesto_nombre})` : ''} y
+              se les pide confirmar la lectura. La vigente anterior, si hay, queda reemplazada. No se puede deshacer ni cambiar el texto después.
+            </div>
+          )}
+          {paso === 'asociacion' && <div style={{ fontSize: 13, color: '#e2e8f0' }}>¿Confirmás que este texto corresponde a este objetivo?</div>}
+          {paso !== 'publicar' && (
+            <textarea
+              style={{ ...input, minHeight: 60 }} value={motivo} onChange={e => setMotivo(e.target.value)}
+              placeholder={paso === 'asociacion' ? 'Nota (opcional)' : 'Motivo (obligatorio)'}
+              aria-label={paso === 'asociacion' ? 'Nota' : 'Motivo'}
+            />
+          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              style={boton(paso === 'descartar' ? 'peligro' : paso === 'publicar' ? 'ok' : 'primario')}
+              disabled={(paso === 'devolver' || paso === 'descartar') && !motivo.trim()}
+              onClick={async () => {
+                let ok = false
+                if (paso === 'publicar') ok = await ejecutar(() => publicarVersion(v.id), 'Publicado. Los vigiladores del objetivo ya lo ven.')
+                if (paso === 'devolver') ok = await ejecutar(() => devolverBorrador(v.id, motivo), 'Devuelto a borrador.')
+                if (paso === 'descartar') ok = await ejecutar(() => descartarVersion(v.id, motivo), 'Versión descartada (queda guardada en el historial).')
+                if (paso === 'asociacion') ok = await ejecutar(() => confirmarAsociacion(v.id, motivo || null), 'Coincidencia con el objetivo confirmada.')
+                if (ok) cerrar()
+              }}
+            >
+              {paso === 'publicar' ? 'Sí, publicar' : paso === 'devolver' ? 'Devolver a borrador' : paso === 'descartar' ? 'Descartar versión' : 'Confirmar objetivo'}
+            </button>
+            <button type="button" style={boton()} onClick={cerrar}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ── Historial ───────────────────────────────────────────────────────────────
 
 function CabeceraVersion({ v }: { v: VersionProtocolo }) {
   return (
     <div style={{ minWidth: 0 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={pill(COLOR_ESTADO[v.estado])}>{ETIQUETA_ESTADO[v.estado]}</span>
-        {v.asociacion === 'pendiente_validacion' && <span style={pill('#f59e0b')}>Coincidencia con el objetivo sin confirmar</span>}
+        {v.asociacion === 'pendiente_validacion' && <span style={pill('#f59e0b')}>Objetivo sin confirmar</span>}
         <span style={{ fontSize: 13.5, fontWeight: 700, color: '#e2e8f0', overflowWrap: 'anywhere' }}>
           v{v.numero} · {v.titulo}{v.puesto_nombre ? ` · sólo ${v.puesto_nombre}` : ''}
         </span>
@@ -201,9 +525,7 @@ function CabeceraVersion({ v }: { v: VersionProtocolo }) {
           ? <div><div style={etiqueta}>Lecturas</div>{v.aperturas} abrieron · {v.confirmaciones} confirmaron</div>
           : <div><div style={etiqueta}>Creada</div>{fechaHoraAR(v.creado_at)}</div>}
       </div>
-      {v.asociacion_nota && <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 6 }}>{v.asociacion_nota}</div>}
       {v.notas && <div style={{ fontSize: 12.5, color: '#94a3b8', marginTop: 6, lineHeight: 1.5 }}>{v.notas}</div>}
-      {v.devuelto_motivo && v.estado === 'borrador' && <div style={{ fontSize: 12.5, color: '#f87171', marginTop: 6 }}>Devuelta por Gerencia: {v.devuelto_motivo}</div>}
       {v.motivo_descarte && <div style={{ fontSize: 12.5, color: '#f87171', marginTop: 6 }}>Descartada: {v.motivo_descarte}</div>}
     </div>
   )
@@ -214,80 +536,16 @@ function TarjetaVersion({ v, permisos, verTexto, alternarTexto, ejecutar }: {
   permisos: PanelObjetivo['permisos']
   verTexto: boolean
   alternarTexto: () => void
-  ejecutar: (fn: () => Promise<{ error: string | null }>, ok: string) => Promise<boolean>
+  ejecutar: Ejecutar
 }) {
-  const a = accionesDeVersion(v, permisos)
-  // Acción que pide un segundo paso (motivo o confirmación).
-  const [paso, setPaso] = useState<null | 'publicar' | 'devolver' | 'descartar' | 'asociacion' | 'editar'>(null)
-  const [motivo, setMotivo] = useState('')
-  const [titulo, setTitulo] = useState(v.titulo)
-  const [texto, setTexto] = useState(v.texto)
-  const cerrarPaso = () => { setPaso(null); setMotivo('') }
-
   return (
-    <div style={{ border: '1px solid #1e2d42', borderRadius: 8, padding: 12, background: '#0f172a', minWidth: 0 }}>
+    <div style={{ border: '1px solid #1e2d42', borderRadius: 8, padding: 12, background: '#0b1220', minWidth: 0 }}>
       <CabeceraVersion v={v} />
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
-        <button type="button" style={boton()} onClick={alternarTexto}>{verTexto ? 'Ocultar texto' : 'Ver texto completo'}</button>
-        {a.editar && v.fuente_tipo !== 'whatsapp' && <button type="button" style={boton()} onClick={() => setPaso('editar')}>Editar borrador</button>}
-        {a.enviar && <button type="button" style={boton('primario')} onClick={() => void ejecutar(() => enviarAprobacion(v.id), 'Enviada a aprobación de Gerencia.')}>Enviar a aprobación</button>}
-        {a.confirmarAsociacion && <button type="button" style={boton()} onClick={() => setPaso('asociacion')}>Confirmar objetivo</button>}
-        {a.publicar && <button type="button" style={boton('ok')} onClick={() => setPaso('publicar')}>Publicar</button>}
-        {a.devolver && <button type="button" style={boton()} onClick={() => setPaso('devolver')}>Devolver</button>}
-        {a.descartar && <button type="button" style={boton('peligro')} onClick={() => setPaso('descartar')}>Descartar</button>}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+        <button type="button" style={boton()} onClick={alternarTexto}>{verTexto ? 'Ocultar texto' : 'Ver texto'}</button>
+        <AccionesVersion v={v} permisos={permisos} ejecutar={ejecutar} />
       </div>
-      {v.estado === 'pendiente_aprobacion' && v.asociacion === 'pendiente_validacion' && permisos.publicar && (
-        <div style={{ fontSize: 12, color: '#fbbf24', marginTop: 6 }}>Para publicar, primero confirmá que este texto corresponde a este objetivo.</div>
-      )}
-
-      {paso && (
-        <div style={{ marginTop: 10, borderTop: '1px solid #1e2d42', paddingTop: 10, display: 'grid', gap: 8 }}>
-          {paso === 'publicar' && (
-            <div style={{ fontSize: 13, color: '#e2e8f0', lineHeight: 1.5 }}>
-              Al publicar, esta versión pasa a ser la que ven los vigiladores de este objetivo{v.puesto_nombre ? ` (puesto ${v.puesto_nombre})` : ''} y
-              se les pide confirmar la lectura. La vigente anterior, si hay, queda reemplazada. No se puede deshacer ni cambiar el texto después.
-            </div>
-          )}
-          {paso === 'asociacion' && (
-            <div style={{ fontSize: 13, color: '#e2e8f0' }}>¿Confirmás que este texto corresponde a este objetivo?</div>
-          )}
-          {(paso === 'devolver' || paso === 'descartar' || paso === 'asociacion') && (
-            <textarea
-              style={{ ...input, minHeight: 60 }} value={motivo} onChange={e => setMotivo(e.target.value)}
-              placeholder={paso === 'asociacion' ? 'Nota (opcional)' : 'Motivo (obligatorio)'}
-              aria-label={paso === 'asociacion' ? 'Nota' : 'Motivo'}
-            />
-          )}
-          {paso === 'editar' && (
-            <>
-              <input style={input} value={titulo} onChange={e => setTitulo(e.target.value)} aria-label="Título" />
-              <textarea style={{ ...input, minHeight: 220, fontFamily: 'inherit' }} value={texto} onChange={e => setTexto(e.target.value)} aria-label="Texto del protocolo" />
-            </>
-          )}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              style={boton(paso === 'descartar' ? 'peligro' : paso === 'publicar' ? 'ok' : 'primario')}
-              disabled={(paso === 'devolver' || paso === 'descartar') && !motivo.trim()}
-              onClick={async () => {
-                let ok = false
-                if (paso === 'publicar') ok = await ejecutar(() => publicarVersion(v.id), 'Publicada. Los vigiladores del objetivo ya la ven.')
-                if (paso === 'devolver') ok = await ejecutar(() => devolverBorrador(v.id, motivo), 'Devuelta a borrador.')
-                if (paso === 'descartar') ok = await ejecutar(() => descartarVersion(v.id, motivo), 'Versión descartada (queda guardada).')
-                if (paso === 'asociacion') ok = await ejecutar(() => confirmarAsociacion(v.id, motivo || null), 'Coincidencia con el objetivo confirmada.')
-                if (paso === 'editar') ok = await ejecutar(() => editarBorrador(v.id, titulo, texto, v.notas), 'Borrador guardado.')
-                if (ok) cerrarPaso()
-              }}
-            >
-              {paso === 'publicar' ? 'Sí, publicar' : paso === 'devolver' ? 'Devolver a borrador' : paso === 'descartar' ? 'Descartar versión'
-                : paso === 'asociacion' ? 'Confirmar objetivo' : 'Guardar borrador'}
-            </button>
-            <button type="button" style={boton()} onClick={cerrarPaso}>Cancelar</button>
-          </div>
-        </div>
-      )}
-
-      {verTexto && <div style={{ marginTop: 10 }}><div style={textoDoc}>{v.texto}</div></div>}
+      {verTexto && <div style={{ marginTop: 10 }}><div style={{ ...textoDoc, maxHeight: 420, overflowY: 'auto' }}>{v.texto}</div></div>}
     </div>
   )
 }
@@ -302,21 +560,18 @@ function Lecturas({ lecturas, versionId }: { lecturas: LecturaProtocolo[]; versi
     </div>
   )
   return (
-    <div style={{ marginTop: 12 }}>
+    <div style={{ marginTop: 6 }}>
       <div style={{ fontSize: 12.5, color: '#94a3b8', marginBottom: 6 }}>
         Vigiladores con turnos en los últimos 30 días o los próximos 7: <strong style={{ color: '#e2e8f0' }}>{total}</strong> ·
         confirmaron <strong style={{ color: '#4ade80' }}>{confirmaron.length}</strong> ·
         faltan <strong style={{ color: '#fbbf24' }}>{abrieronSinConfirmar.length + sinAbrir.length}</strong>
       </div>
       {total > 0 && (
-        <details>
-          <summary style={{ cursor: 'pointer', fontSize: 12.5, color: '#93c5fd' }}>Ver quiénes</summary>
-          <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
-            {sinAbrir.map(l => fila(l, `sin abrir · último turno ${l.ultimo_turno ?? '—'}`))}
-            {abrieronSinConfirmar.map(l => fila(l, `abrió ${fechaHoraAR(l.abierto_at)} · sin confirmar`))}
-            {confirmaron.map(l => fila(l, `confirmó ${fechaHoraAR(l.confirmado_at)}`))}
-          </div>
-        </details>
+        <div style={{ display: 'grid', gap: 4 }}>
+          {sinAbrir.map(l => fila(l, `sin abrir · último turno ${l.ultimo_turno ?? '—'}`))}
+          {abrieronSinConfirmar.map(l => fila(l, `abrió ${fechaHoraAR(l.abierto_at)} · sin confirmar`))}
+          {confirmaron.map(l => fila(l, `confirmó ${fechaHoraAR(l.confirmado_at)}`))}
+        </div>
       )}
     </div>
   )
@@ -390,12 +645,14 @@ function NuevaVersion({ puestos, onCancelar, onGuardar }: {
   )
 }
 
+// ── Diferencias ─────────────────────────────────────────────────────────────
+
 function Diferencias({ objetivoId, diferencias, versiones, permisos, ejecutar }: {
   objetivoId: string
   diferencias: DiferenciaProtocolo[]
   versiones: VersionProtocolo[]
   permisos: PanelObjetivo['permisos']
-  ejecutar: (fn: () => Promise<{ error: string | null }>, ok: string) => Promise<boolean>
+  ejecutar: Ejecutar
 }) {
   const pendientes = diferencias.filter(d => d.estado === 'pendiente')
   const resueltas = diferencias.filter(d => d.estado === 'resuelta')
@@ -408,13 +665,12 @@ function Diferencias({ objetivoId, diferencias, versiones, permisos, ejecutar }:
   const [responsable, setResponsable] = useState('')
 
   return (
-    <>
-      <div style={{ ...sub, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ flex: 1 }}>Diferencias pendientes de validación ({pendientes.length})</span>
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <span style={{ flex: 1, fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+          Lo que no coincide entre el protocolo, otros documentos y la configuración de la app. Registrar o resolver una diferencia no cambia rondas, alertas ni horarios.
+        </span>
         {permisos.registrar_diferencias && !nueva && <button type="button" style={boton()} onClick={() => setNueva(true)}>Registrar diferencia</button>}
-      </div>
-      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8, lineHeight: 1.5 }}>
-        Lo que no coincide entre el protocolo, otros documentos y la configuración de la app. Registrar o resolver una diferencia no cambia rondas, alertas ni horarios.
       </div>
 
       {nueva && (
@@ -468,19 +724,19 @@ function Diferencias({ objetivoId, diferencias, versiones, permisos, ejecutar }:
           </div>
         </details>
       )}
-    </>
+    </div>
   )
 }
 
 function TarjetaDiferencia({ d, permisos, ejecutar }: {
   d: DiferenciaProtocolo
   permisos: PanelObjetivo['permisos']
-  ejecutar: (fn: () => Promise<{ error: string | null }>, ok: string) => Promise<boolean>
+  ejecutar: Ejecutar
 }) {
   const [paso, setPaso] = useState<null | 'responsable' | 'resolver'>(null)
   const [valor, setValor] = useState('')
   return (
-    <div style={{ border: '1px solid #1e2d42', borderRadius: 8, padding: 10, background: '#0f172a', minWidth: 0 }}>
+    <div style={{ border: '1px solid #1e2d42', borderRadius: 8, padding: 10, background: '#0b1220', minWidth: 0 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={pill(d.estado === 'pendiente' ? '#f59e0b' : '#10b981')}>{d.estado === 'pendiente' ? 'Pendiente' : 'Resuelta'}</span>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: '#e2e8f0' }}>{ETIQUETA_TIPO_DIFERENCIA[d.tipo]}</span>

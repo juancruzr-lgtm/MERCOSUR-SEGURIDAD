@@ -1095,6 +1095,14 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         </div>
       </div>
 
+      {/* Protocolo del servicio: lo PRIMERO que se ve. El texto completo de la
+          última versión escrita, distinguiendo la vigente (lo que lee el
+          vigilador) de la que está en preparación; editar desde acá. Versiones,
+          lecturas y diferencias quedan debajo, plegadas. La base decide quién
+          lo ve (Administración, Gerencia, supervisores de la zona) y quién
+          prepara o publica; sin permiso, el panel lo dice y no muestra nada. */}
+      <ProtocoloObjetivoPanel objetivoId={objetivoId} />
+
       {/* Estado general */}
       <div className={styles.summaryGrid} style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:10, marginBottom:16 }}>
         {[
@@ -2506,11 +2514,6 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
           </div>
         </div>
       )}
-
-      {/* Protocolo del objetivo: versiones, lecturas y diferencias. La base decide
-          quién lo ve (Administración, Gerencia, supervisores de la zona) y quién
-          prepara o publica; sin permiso, el panel lo dice y no muestra nada. */}
-      <ProtocoloObjetivoPanel objetivoId={objetivoId} />
 
       {/* Admin: accesos rápidos */}
       {esAdmin && (

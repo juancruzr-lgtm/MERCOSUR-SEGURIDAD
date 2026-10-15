@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  VIGENCIA_CACHE_MS, accionesDeVersion, aplicarAperturasLocales, armarCache, documentoParaAviso,
-  documentosDeTurno, encolarApertura, leerCache, leerCola, separarLecturas,
+  VIGENCIA_CACHE_MS, accionesDeVersion, aplicarAperturasLocales, armarCache, compararLineas, documentoParaAviso,
+  documentosDeTurno, encolarApertura, fuenteDeEdicion, leerCache, leerCola, modoEdicion, separarLecturas, vistaProtocolo,
 } from '@/lib/protocolos'
 import type { DocumentoVigilador, LecturaProtocolo } from '@/lib/protocolos'
 
@@ -122,5 +122,80 @@ describe('administración', () => {
       .toMatchObject({ publicar: false, confirmarAsociacion: true })
     expect(Object.values(accionesDeVersion(borrador, sup)).some(Boolean)).toBe(false)
     expect(Object.values(accionesDeVersion({ ...borrador, estado: 'vigente' }, gerencia)).some(Boolean)).toBe(false)
+  })
+})
+
+describe('vista principal: el protocolo primero', () => {
+  const base = {
+    objetivo_id: 'o1', puesto_id: null, puesto_nombre: null, titulo: 't', texto: 'x', texto_sha256: 'a'.repeat(64),
+    fuente_tipo: 'whatsapp' as const, fuente_descripcion: 'f', fuente_fecha: null, fuente_archivo: null, fuente_archivo_sha256: null,
+    asociacion: 'confirmada' as const, asociacion_nota: null, asociacion_confirmada_at: null,
+    enviado_aprobacion_at: null, aprobado_at: null, aprobado_por_nombre: null, reemplazado_at: null, descartado_at: null,
+    motivo_descarte: null, devuelto_motivo: null, notas: null, aperturas: 0, confirmaciones: 0,
+  }
+  const v = (id: string, numero: number, estado: any, creado_at: string, extra: any = {}) =>
+    ({ ...base, id, numero, estado, creado_at, ...extra })
+
+  it('sólo borrador: la última escrita es el borrador y no hay vigente', () => {
+    const [a] = vistaProtocolo([v('b1', 1, 'borrador', '2026-10-14T10:00:00Z')])
+    expect(a.vigente).toBeNull()
+    expect(a.ultima?.id).toBe('b1')
+  })
+
+  it('vigente + borrador más nuevo: muestra el borrador de entrada sin confundirlo con la vigente', () => {
+    const [a] = vistaProtocolo([
+      v('vig', 1, 'vigente', '2026-10-14T10:00:00Z'),
+      v('b2', 2, 'borrador', '2026-10-20T10:00:00Z'),
+      v('old', 0, 'reemplazado', '2026-10-01T10:00:00Z'),
+      v('desc', 3, 'descartado', '2026-10-21T10:00:00Z'),
+    ])
+    expect(a.vigente?.id).toBe('vig')
+    expect(a.ultima?.id).toBe('b2')
+    expect(a.trabajo.map(x => x.id)).toEqual(['b2'])
+  })
+
+  it('dos borradores con la misma fecha (Rapsodia): el de número mayor primero, ambos en trabajo', () => {
+    const [a] = vistaProtocolo([v('r1', 1, 'borrador', '2026-10-14T10:00:00Z'), v('r2', 2, 'borrador', '2026-10-14T10:00:00Z')])
+    expect(a.trabajo.map(x => x.id)).toEqual(['r2', 'r1'])
+  })
+
+  it('separa por puesto, con todo el objetivo primero', () => {
+    const al = vistaProtocolo([
+      v('p', 1, 'borrador', '2026-10-14T10:00:00Z', { puesto_id: 'pu1', puesto_nombre: 'Vigilador 1' }),
+      v('g', 1, 'vigente', '2026-10-14T10:00:00Z'),
+    ])
+    expect(al.map(a => a.clave)).toEqual(['objetivo', 'pu1'])
+  })
+
+  it('edición: el original de WhatsApp nunca se reescribe; sin objetivo confirmado no se edita', () => {
+    const prep = { ver: true, preparar: true, publicar: false, registrar_diferencias: true }
+    const sinPrep = { ...prep, preparar: false }
+    expect(modoEdicion({ estado: 'borrador', fuente_tipo: 'whatsapp', asociacion: 'confirmada' }, prep)).toBe('version_nueva')
+    expect(modoEdicion({ estado: 'borrador', fuente_tipo: 'manual', asociacion: 'confirmada' }, prep)).toBe('en_lugar')
+    expect(modoEdicion({ estado: 'vigente', fuente_tipo: 'manual', asociacion: 'confirmada' }, prep)).toBe('version_nueva')
+    expect(modoEdicion({ estado: 'pendiente_aprobacion', fuente_tipo: 'manual', asociacion: 'confirmada' }, prep)).toBe('version_nueva')
+    expect(modoEdicion({ estado: 'borrador', fuente_tipo: 'whatsapp', asociacion: 'pendiente_validacion' }, prep)).toBeNull()
+    expect(modoEdicion({ estado: 'descartado', fuente_tipo: 'manual', asociacion: 'confirmada' }, prep)).toBeNull()
+    expect(modoEdicion({ estado: 'borrador', fuente_tipo: 'manual', asociacion: 'confirmada' }, sinPrep)).toBeNull()
+    expect(fuenteDeEdicion({ numero: 1, fuente_descripcion: 'WhatsApp de Aldo' })).toBe('Edición en la app sobre la versión 1. Fuente de esa versión: WhatsApp de Aldo')
+  })
+})
+
+describe('comparar versiones', () => {
+  it('marca líneas agregadas y quitadas, conserva las iguales', () => {
+    const r = compararLineas('A\nB\nC', 'A\nB2\nC\nD')!
+    expect(r).toEqual([
+      { tipo: 'igual', texto: 'A' },
+      { tipo: 'quitada', texto: 'B' },
+      { tipo: 'agregada', texto: 'B2' },
+      { tipo: 'igual', texto: 'C' },
+      { tipo: 'agregada', texto: 'D' },
+    ])
+  })
+  it('textos iguales: todo igual', () => {
+    expect(compararLineas('x\ny', 'x\ny')!.every(l => l.tipo === 'igual')).toBe(true)
+  })
+  it('no compara textos enormes', () => {
+    expect(compararLineas('a\n'.repeat(2500), 'b')).toBeNull()
   })
 })
