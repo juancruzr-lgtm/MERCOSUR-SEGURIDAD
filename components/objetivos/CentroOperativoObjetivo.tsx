@@ -20,6 +20,7 @@ import RondasSupervisionPanel from '@/components/rondas/RondasSupervisionPanel'
 import type { SeccionRondasPanel } from '@/components/rondas/RondasSupervisionPanel'
 import ProtocoloObjetivoPanel from '@/components/protocolos/ProtocoloObjetivoPanel'
 import ControlesProtocoloPanel from '@/components/protocolos/ControlesProtocoloPanel'
+import TareasTurnoPanel from '@/components/tareas/TareasTurnoPanel'
 import SelectorDiasMes from './SelectorDiasMes'
 import { fechasDeAtajo, rangoDeSeleccion } from '@/lib/calendario-mes'
 import styles from './CentroOperativoObjetivo.module.css'
@@ -1166,7 +1167,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // ── Pestañas de «Controles» y bloques plegados ──
   // Las dos pestañas quedan montadas (la inactiva sólo se oculta): cambiar a
   // Checklist no debe perder cambios de rondas sin guardar.
-  const [tabControles, setTabControles] = useState<'rondas' | 'checklist'>('rondas')
+  const [tabControles, setTabControles] = useState<'rondas' | 'checklist' | 'tareas'>('rondas')
   const [pedidoRondas, setPedidoRondas] = useState<{ seccion: SeccionRondasPanel; vez: number } | null>(null)
   const [planificacionAbierta, setPlanificacionAbierta] = useState(false)
   const [legadoAbierto, setLegadoAbierto] = useState(false)
@@ -1386,7 +1387,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       {/* ── D. Controles: cómo se verifica el servicio ── */}
       <div style={tituloBloque}>Controles</div>
       <div id="sec-controles" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }} role="tablist" aria-label="Controles del objetivo">
-        {([['rondas', 'Rondas'], ['checklist', 'Checklist de supervisión']] as const).map(([id, label]) => (
+        {([['rondas', 'Rondas'], ['checklist', 'Checklist de supervisión'], ['tareas', 'Tareas del turno']] as const).map(([id, label]) => (
           <button
             key={id}
             type="button"
@@ -1436,6 +1437,11 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
       </div>
 
       {/* Checklist de supervisión: la plantilla asignada y lo que se respondió. */}
+      {/* Tareas del vigilador por turno, generadas desde el protocolo. Se monta
+          al abrir la pestaña (no se consulta si nadie la mira). */}
+      <div role="tabpanel" style={{ display: tabControles === 'tareas' ? 'block' : 'none' }}>
+        {tabControles === 'tareas' && <TareasTurnoPanel objetivoId={objetivoId} />}
+      </div>
       <div role="tabpanel" style={{ display: tabControles === 'checklist' ? 'block' : 'none' }}>
         <div style={card}>
           <div style={secTitle}>Checklist asignado</div>
