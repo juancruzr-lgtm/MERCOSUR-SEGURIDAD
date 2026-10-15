@@ -23,6 +23,14 @@ export type PedidoVision = {
   timeoutMs?: number
 }
 
+/** Pedido sólo de texto: mismo contrato de salida (JSON con schema). */
+export type PedidoTexto = {
+  prompt: string
+  schema: Record<string, unknown>
+  modelo: string
+  timeoutMs?: number
+}
+
 export type RespuestaVision = {
   json: unknown
   modelo: string
