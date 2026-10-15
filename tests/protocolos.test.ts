@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  VIGENCIA_CACHE_MS, accionesDeVersion, aplicarAperturasLocales, armarCache, compararLineas, documentoParaAviso,
-  documentosDeTurno, encolarApertura, fuenteDeEdicion, leerCache, leerCola, modoEdicion, separarLecturas, vistaProtocolo,
+  VIGENCIA_CACHE_MS, aplicarAperturasLocales, armarCache, compararLineas, documentoCambiado, documentoParaAviso,
+  documentosDeTurno, encolarApertura, leerCache, leerCola, separarLecturas, vistaProtocolo,
 } from '@/lib/protocolos'
 import type { DocumentoVigilador, LecturaProtocolo } from '@/lib/protocolos'
 
@@ -90,6 +90,15 @@ describe('selección por turno y aviso posterior al ingreso', () => {
     expect(documentoParaAviso(docs, 't1', ['general', 'puesto'])).toBeNull()
   })
 
+  it('protocolo cambiado: avisa al cargar, una vez, sólo si no confirmó la versión nueva', () => {
+    const conCambio = [...docs.slice(0, 1), { ...docs[1], cambio: true }]
+    expect(documentoCambiado(docs, [])).toBeNull()
+    expect(documentoCambiado(conCambio, [])?.version_id).toBe('general')
+    expect(documentoCambiado(conCambio, ['general'])).toBeNull()
+    expect(documentoCambiado([{ ...conCambio[1], confirmado_at: '2026-10-15T10:00:00Z' }], [])).toBeNull()
+    expect(documentoCambiado([{ ...conCambio[1], turnos: [] }], [])).toBeNull()
+  })
+
   it('no avisa si ya confirmó', () => {
     const confirmados = docs.map(d => ({ ...d, confirmado_at: '2026-10-15T10:00:00Z' }))
     expect(documentoParaAviso(confirmados, 't1', [])).toBeNull()
@@ -109,20 +118,6 @@ describe('administración', () => {
     expect([r.confirmaron.length, r.abrieronSinConfirmar.length, r.sinAbrir.length]).toEqual([1, 1, 1])
   })
 
-  it('las acciones dependen del estado y de los permisos de la base', () => {
-    const admin = { ver: true, preparar: true, publicar: false, registrar_diferencias: true }
-    const gerencia = { ver: true, preparar: true, publicar: true, registrar_diferencias: true }
-    const sup = { ver: true, preparar: false, publicar: false, registrar_diferencias: true }
-    const borrador = { estado: 'borrador' as const, asociacion: 'confirmada' as const, fuente_tipo: 'whatsapp' as const }
-    const pendiente = { ...borrador, estado: 'pendiente_aprobacion' as const }
-    expect(accionesDeVersion(borrador, admin)).toMatchObject({ enviar: true, publicar: false, descartar: false })
-    expect(accionesDeVersion(pendiente, admin)).toMatchObject({ publicar: false, devolver: false })
-    expect(accionesDeVersion(pendiente, gerencia)).toMatchObject({ publicar: true, devolver: true, descartar: true })
-    expect(accionesDeVersion({ ...pendiente, asociacion: 'pendiente_validacion' }, gerencia))
-      .toMatchObject({ publicar: false, confirmarAsociacion: true })
-    expect(Object.values(accionesDeVersion(borrador, sup)).some(Boolean)).toBe(false)
-    expect(Object.values(accionesDeVersion({ ...borrador, estado: 'vigente' }, gerencia)).some(Boolean)).toBe(false)
-  })
 })
 
 describe('vista principal: el protocolo primero', () => {
@@ -165,19 +160,6 @@ describe('vista principal: el protocolo primero', () => {
       v('g', 1, 'vigente', '2026-10-14T10:00:00Z'),
     ])
     expect(al.map(a => a.clave)).toEqual(['objetivo', 'pu1'])
-  })
-
-  it('edición: el original de WhatsApp nunca se reescribe; sin objetivo confirmado no se edita', () => {
-    const prep = { ver: true, preparar: true, publicar: false, registrar_diferencias: true }
-    const sinPrep = { ...prep, preparar: false }
-    expect(modoEdicion({ estado: 'borrador', fuente_tipo: 'whatsapp', asociacion: 'confirmada' }, prep)).toBe('version_nueva')
-    expect(modoEdicion({ estado: 'borrador', fuente_tipo: 'manual', asociacion: 'confirmada' }, prep)).toBe('en_lugar')
-    expect(modoEdicion({ estado: 'vigente', fuente_tipo: 'manual', asociacion: 'confirmada' }, prep)).toBe('version_nueva')
-    expect(modoEdicion({ estado: 'pendiente_aprobacion', fuente_tipo: 'manual', asociacion: 'confirmada' }, prep)).toBe('version_nueva')
-    expect(modoEdicion({ estado: 'borrador', fuente_tipo: 'whatsapp', asociacion: 'pendiente_validacion' }, prep)).toBeNull()
-    expect(modoEdicion({ estado: 'descartado', fuente_tipo: 'manual', asociacion: 'confirmada' }, prep)).toBeNull()
-    expect(modoEdicion({ estado: 'borrador', fuente_tipo: 'manual', asociacion: 'confirmada' }, sinPrep)).toBeNull()
-    expect(fuenteDeEdicion({ numero: 1, fuente_descripcion: 'WhatsApp de Aldo' })).toBe('Edición en la app sobre la versión 1. Fuente de esa versión: WhatsApp de Aldo')
   })
 })
 

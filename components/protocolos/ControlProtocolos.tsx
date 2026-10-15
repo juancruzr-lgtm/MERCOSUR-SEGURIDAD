@@ -4,10 +4,9 @@
  * components/protocolos/ControlProtocolos.tsx
  *
  * Control general de protocolos para Administración y Gerencia: por objetivo,
- * si hay protocolo vigente, qué espera aprobación, qué asociaciones faltan
- * confirmar, cuántas diferencias siguen pendientes y cuántos vigiladores
+ * si rige un protocolo, si sólo hay borrador, y cuántos vigiladores
  * confirmaron la lectura. Cada fila abre el mismo panel de la ficha del
- * objetivo (versiones, lecturas, diferencias).
+ * objetivo (texto, edición, historial, lecturas).
  *
  * La lista la arma protocolo_resumen_general: sólo objetivos activos, no de
  * prueba, dentro del alcance de quien mira.
@@ -18,7 +17,7 @@ import ProtocoloObjetivoPanel from '@/components/protocolos/ProtocoloObjetivoPan
 import type { ResumenObjetivo } from '@/lib/protocolos'
 import { cargarResumenGeneral } from '@/lib/protocolos-datos'
 
-type Filtro = 'todos' | 'aprobacion' | 'sin_vigente' | 'diferencias'
+type Filtro = 'todos' | 'sin_vigente'
 
 const card: React.CSSProperties = {
   background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 16, marginBottom: 14,
@@ -47,31 +46,25 @@ export default function ControlProtocolos() {
 
   const totales = useMemo(() => ({
     conVigente: filas.filter(f => f.vigentes > 0).length,
-    aprobacion: filas.filter(f => f.pendientes_aprobacion > 0).length,
-    asociacion: filas.reduce((a, f) => a + f.asociacion_pendiente, 0),
-    diferencias: filas.reduce((a, f) => a + f.diferencias_pendientes, 0),
+    soloBorrador: filas.filter(f => f.vigentes === 0 && f.borradores + f.pendientes_aprobacion > 0).length,
+    sinNada: filas.filter(f => f.vigentes + f.borradores + f.pendientes_aprobacion === 0).length,
   }), [filas])
 
-  const visibles = filas.filter(f =>
-    filtro === 'todos' ? true
-      : filtro === 'aprobacion' ? f.pendientes_aprobacion > 0 || f.asociacion_pendiente > 0
-      : filtro === 'sin_vigente' ? f.vigentes === 0
-      : f.diferencias_pendientes > 0)
+  const visibles = filas.filter(f => filtro === 'todos' || f.vigentes === 0)
 
   return (
     <div style={{ maxWidth: 1100 }}>
       <div style={card}>
         <div style={{ fontSize: 18, fontWeight: 800, color: '#e2e8f0' }}>📋 Protocolos por objetivo</div>
         <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4, lineHeight: 1.5 }}>
-          Lo que cada vigilador lee desde la tarjeta de su turno. Prepara Administración; publica sólo Gerencia.
+          Lo que cada vigilador lee desde la tarjeta de su turno. La última versión guardada en la ficha del objetivo es la que rige.
           La confirmación de lectura no acredita cumplimiento ni cuenta para Mi Desempeño.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))', gap: 10, marginTop: 14 }}>
           {[
-            ['Con protocolo vigente', `${totales.conVigente} de ${filas.length}`],
-            ['Esperan aprobación', String(totales.aprobacion)],
-            ['Objetivo sin confirmar', String(totales.asociacion)],
-            ['Diferencias pendientes', String(totales.diferencias)],
+            ['Con protocolo que rige', `${totales.conVigente} de ${filas.length}`],
+            ['Sólo borrador', String(totales.soloBorrador)],
+            ['Sin protocolo', String(totales.sinNada)],
           ].map(([e, v]) => (
             <div key={e} style={{ border: '1px solid #1e2d42', borderRadius: 8, padding: '10px 12px' }}>
               <div style={{ fontSize: 10.5, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em' }}>{e}</div>
@@ -80,7 +73,7 @@ export default function ControlProtocolos() {
           ))}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 14 }}>
-          {([['todos', 'Todos'], ['aprobacion', 'Para decidir'], ['sin_vigente', 'Sin vigente'], ['diferencias', 'Con diferencias']] as [Filtro, string][]).map(([k, t]) => (
+          {([['todos', 'Todos'], ['sin_vigente', 'Sin protocolo que rija']] as [Filtro, string][]).map(([k, t]) => (
             <button key={k} type="button" style={chip(filtro === k)} onClick={() => setFiltro(k)}>{t}</button>
           ))}
           <button type="button" style={{ ...chip(false), marginLeft: 'auto' }} onClick={() => void cargar()}>Actualizar</button>
@@ -105,14 +98,10 @@ export default function ControlProtocolos() {
             >
               <span style={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{f.objetivo_nombre}</span>
               <span style={{ fontSize: 12.5, color: f.vigentes ? '#4ade80' : '#94a3b8' }}>
-                {f.vigentes ? 'Vigente' : f.pendientes_aprobacion ? 'Espera aprobación' : f.borradores ? 'Borrador' : 'Sin protocolo'}
-                {f.asociacion_pendiente ? ' · objetivo sin confirmar' : ''}
+                {f.vigentes ? 'Rige' : f.borradores + f.pendientes_aprobacion ? 'Sólo borrador' : 'Sin protocolo'}
               </span>
               <span style={{ fontSize: 12.5, color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
                 {f.vigentes ? `Confirmaron ${f.vigiladores_confirmaron} de ${f.vigiladores_esperados}` : '—'}
-              </span>
-              <span style={{ fontSize: 12.5, color: f.diferencias_pendientes ? '#fbbf24' : '#64748b' }}>
-                {f.diferencias_pendientes ? `${f.diferencias_pendientes} diferencia${f.diferencias_pendientes === 1 ? '' : 's'} pendiente${f.diferencias_pendientes === 1 ? '' : 's'}` : 'Sin diferencias'}
               </span>
             </button>
             {abierto === f.objetivo_id && (

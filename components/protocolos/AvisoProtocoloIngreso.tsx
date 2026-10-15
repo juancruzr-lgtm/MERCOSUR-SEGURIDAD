@@ -36,7 +36,9 @@ export default function AvisoProtocoloIngreso({ doc, onLeer, onDespues }: {
           Protocolo de {doc.objetivo_nombre ?? 'este objetivo'}
         </div>
         <div style={{ fontSize: 13.5, color: '#cbd5e1', lineHeight: 1.5 }}>
-          {doc.abierto_at
+          {doc.cambio
+            ? 'Tu protocolo cambió. Leé la versión nueva y confirmá la lectura.'
+            : doc.abierto_at
             ? 'Todavía no confirmaste que leíste esta versión.'
             : 'Hay un protocolo de funciones y procedimientos para este objetivo. Leelo durante el turno.'}
         </div>

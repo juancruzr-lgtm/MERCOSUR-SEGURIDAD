@@ -2262,7 +2262,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
                 >
                   📋 Protocolo del objetivo{doc.puesto_nombre ? ` · ${doc.puesto_nombre}` : ''}
                   <div style={{ fontSize: 12, marginTop: 2, color: doc.confirmado_at ? '#64748b' : '#60a5fa' }}>
-                    {doc.confirmado_at ? '✓ Leído · tocá para volver a verlo' : doc.abierto_at ? 'Falta confirmar la lectura' : 'Sin leer · tocá para abrirlo'}
+                    {doc.confirmado_at ? '✓ Leído · tocá para volver a verlo' : doc.cambio ? 'Cambió · volvé a leerlo' : doc.abierto_at ? 'Falta confirmar la lectura' : 'Sin leer · tocá para abrirlo'}
                   </div>
                 </button>
               ))}

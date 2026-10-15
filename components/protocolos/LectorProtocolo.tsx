@@ -95,6 +95,14 @@ export default function LectorProtocolo({ doc, desdeCopia, guardadoAt, onCerrar,
       )}
 
       <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '16px 16px 24px' }}>
+        {doc.cambio && !doc.confirmado_at && (
+          <div role="status" style={{
+            maxWidth: 680, margin: '0 auto 12px', fontSize: 13.5, lineHeight: 1.5, color: '#fbbf24',
+            background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.4)', borderRadius: 8, padding: '8px 10px',
+          }}>
+            Tu protocolo cambió desde la última vez que confirmaste la lectura. Esta es la versión que rige ahora.
+          </div>
+        )}
         <div style={{
           whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 15.5, lineHeight: 1.6,
           maxWidth: 680, margin: '0 auto', color: '#e2e8f0',

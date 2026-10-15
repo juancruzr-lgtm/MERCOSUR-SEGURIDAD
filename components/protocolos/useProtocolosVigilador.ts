@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import {
   CLAVE_CACHE, CLAVE_PENDIENTES, CLAVE_SESION_AVISO, aplicarAperturasLocales, armarCache,
-  documentoParaAviso, encolarApertura, leerCache, leerCola, leerPospuestos,
+  documentoCambiado, documentoParaAviso, encolarApertura, leerCache, leerCola, leerPospuestos,
 } from '@/lib/protocolos'
 import type { DocumentoVigilador } from '@/lib/protocolos'
 import { cargarMisDocumentos, confirmarLectura, registrarApertura } from '@/lib/protocolos-datos'
@@ -208,6 +208,19 @@ export function useProtocolosVigilador(claveTurnos: string) {
     const d = documentoParaAviso(actuales, turnoId, pospuestos)
     if (d) setAviso({ doc: d, turnoId })
   }, [recargar])
+
+  // Protocolo cambiado (ya había confirmado otra versión): aviso al cargar, sin
+  // esperar al ingreso. Una vez por versión mientras la app está abierta.
+  const avisados = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (aviso || abierto) return
+    let pospuestos: string[] = []
+    try { pospuestos = leerPospuestos(sessionStorage.getItem(CLAVE_SESION_AVISO)) } catch { /* nada */ }
+    const d = documentoCambiado(documentos, [...pospuestos, ...Array.from(avisados.current)])
+    if (!d) return
+    avisados.current.add(d.version_id)
+    setAviso({ doc: d, turnoId: d.turnos[0] })
+  }, [documentos, aviso, abierto])
 
   const posponerAviso = useCallback(() => {
     setAviso(a => {

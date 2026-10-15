@@ -8,7 +8,7 @@
  */
 
 import { supabase } from '@/lib/supabase'
-import type { DocumentoVigilador, PanelObjetivo, ResumenObjetivo, TipoDiferencia } from '@/lib/protocolos'
+import type { DocumentoVigilador, PanelObjetivo, ResumenObjetivo } from '@/lib/protocolos'
 
 type Res<T> = { data: T | null; error: string | null }
 
@@ -60,47 +60,52 @@ export async function cargarResumenGeneral(): Promise<Res<ResumenObjetivo[]>> {
   return { data: r.data?.objetivos ?? null, error: r.error }
 }
 
-export async function crearBorrador(a: {
+/** Resultado de guardar o hacer regir. */
+export interface ResultadoVigencia {
+  ok: boolean
+  id: string
+  numero?: number
+  ya_vigente: boolean
+  /** Controles activos (checklist, tareas) que salían de la versión reemplazada. */
+  controles_version_anterior?: number
+}
+
+/**
+ * Traduce los rechazos de la base a lo que la persona tiene que hacer.
+ * `conflicto`: otra persona guardó antes; `confirmarObjetivo`: texto dudoso.
+ */
+function leerRechazo(error: string | null): { error: string | null; conflicto: boolean; confirmarObjetivo: boolean } {
+  if (!error) return { error: null, conflicto: false, confirmarObjetivo: false }
+  if (error.includes('conflicto_version')) {
+    return { error: 'Otra persona guardó una versión más nueva mientras editabas. Copiá tu texto, actualizá y volvé a aplicar tus cambios.', conflicto: true, confirmarObjetivo: false }
+  }
+  if (error.includes('requiere_confirmar_objetivo')) {
+    return { error: 'Falta confirmar que este protocolo corresponde a este objetivo.', conflicto: false, confirmarObjetivo: true }
+  }
+  return { error, conflicto: false, confirmarObjetivo: false }
+}
+
+/**
+ * Guarda un texto como versión nueva y la deja vigente (la anterior queda en
+ * el historial). `vigenteEsperada`: la vigente que había en pantalla al
+ * empezar a editar; si otra persona guardó antes, la base lo rechaza.
+ */
+export async function guardarProtocolo(a: {
   objetivoId: string; puestoId: string | null; titulo: string; texto: string
-  fuenteTipo: 'documento' | 'manual'; fuenteDescripcion: string; notas: string | null
-}): Promise<Res<{ id: string; numero: number }>> {
-  return rpc('protocolo_crear_borrador', {
-    p_objetivo_id: a.objetivoId, p_puesto_id: a.puestoId, p_titulo: a.titulo, p_texto: a.texto,
-    p_fuente_tipo: a.fuenteTipo, p_fuente_descripcion: a.fuenteDescripcion, p_fuente_fecha: null, p_notas: a.notas,
-  })
-}
-
-export async function editarBorrador(versionId: string, titulo: string, texto: string, notas: string | null) {
-  return rpc('protocolo_editar_borrador', { p_version_id: versionId, p_titulo: titulo, p_texto: texto, p_notas: notas })
-}
-export async function enviarAprobacion(versionId: string) {
-  return rpc('protocolo_enviar_aprobacion', { p_version_id: versionId })
-}
-export async function devolverBorrador(versionId: string, motivo: string) {
-  return rpc('protocolo_devolver_borrador', { p_version_id: versionId, p_motivo: motivo })
-}
-export async function confirmarAsociacion(versionId: string, nota: string | null) {
-  return rpc('protocolo_confirmar_asociacion', { p_version_id: versionId, p_nota: nota })
-}
-export async function publicarVersion(versionId: string) {
-  return rpc('protocolo_publicar', { p_version_id: versionId })
-}
-export async function descartarVersion(versionId: string, motivo: string) {
-  return rpc('protocolo_descartar', { p_version_id: versionId, p_motivo: motivo })
-}
-
-export async function registrarDiferencia(a: {
-  objetivoId: string; versionId: string | null; tipo: TipoDiferencia; origen: string
-  referenciaOriginal: string | null; descripcion: string; responsable: string | null
+  baseVersionId: string | null; vigenteEsperada: string | null; confirmarObjetivo?: boolean
 }) {
-  return rpc('protocolo_registrar_diferencia', {
-    p_objetivo_id: a.objetivoId, p_version_id: a.versionId, p_tipo: a.tipo, p_origen: a.origen,
-    p_referencia_original: a.referenciaOriginal, p_descripcion: a.descripcion, p_responsable: a.responsable,
+  const r = await rpc<ResultadoVigencia>('protocolo_guardar', {
+    p_objetivo_id: a.objetivoId, p_puesto_id: a.puestoId, p_titulo: a.titulo, p_texto: a.texto,
+    p_base_version_id: a.baseVersionId, p_vigente_esperada: a.vigenteEsperada,
+    p_confirmar_objetivo: a.confirmarObjetivo ?? false,
   })
+  return { data: r.data, ...leerRechazo(r.error) }
 }
-export async function asignarResponsable(diferenciaId: string, responsable: string) {
-  return rpc('protocolo_asignar_responsable', { p_diferencia_id: diferenciaId, p_responsable: responsable })
-}
-export async function resolverDiferencia(diferenciaId: string, resolucion: string) {
-  return rpc('protocolo_resolver_diferencia', { p_diferencia_id: diferenciaId, p_resolucion: resolucion })
+
+/** Hace regir una versión que todavía es borrador. */
+export async function hacerVigente(versionId: string, vigenteEsperada: string | null, confirmarObjetivo = false) {
+  const r = await rpc<ResultadoVigencia>('protocolo_hacer_vigente', {
+    p_version_id: versionId, p_vigente_esperada: vigenteEsperada, p_confirmar_objetivo: confirmarObjetivo,
+  })
+  return { data: r.data, ...leerRechazo(r.error) }
 }
