@@ -293,7 +293,7 @@ begin
         and v.estado = 'vigente' and i.obsoleta_at is null
         and i.texto_sha256 = encode(sha256(convert_to(public.protocolo_fragmento(v.texto, i.inicio, i.fin), 'UTF8')), 'hex')
     ) then
-      raise exception 'La tarea «%» no sale de una version vigente del protocolo: publicar la version primero', v_c.texto_item
+      raise exception 'La tarea «%» no sale de la version del protocolo que rige: guardala primero para que rija', v_c.texto_item
         using errcode = '22023';
     end if;
     v_momento := coalesce(v_item->>'momento', '');

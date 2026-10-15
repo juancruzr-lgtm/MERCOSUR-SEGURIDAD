@@ -127,7 +127,7 @@ export default function TareasTurnoPanel({ objetivoId }: { objetivoId: string })
                   <div style={{ fontSize: 13.5, color: '#e2e8f0' }}>{t.texto}</div>
                   <div style={{ ...nota, fontSize: 11.5 }}>
                     {t.cuando ? `Cuándo (según el protocolo): ${t.cuando}` : 'El protocolo no dice cuándo.'}
-                    {!vigente && ` · La versión v${t.version_numero} todavía no está publicada: se activa cuando Gerencia la publique.`}
+                    {!vigente && ` · La versión v${t.version_numero} todavía no rige: se activa cuando se guarde y rija.`}
                   </div>
                   {panel.permisos.activar && e && vigente && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
