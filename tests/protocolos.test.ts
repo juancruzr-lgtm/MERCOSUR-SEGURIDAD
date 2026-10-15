@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  VIGENCIA_CACHE_MS, aplicarAperturasLocales, armarCache, compararLineas, documentoParaAviso,
+  VIGENCIA_CACHE_MS, aplicarAperturasLocales, armarCache, compararLineas, documentoCambiado, documentoParaAviso,
   documentosDeTurno, encolarApertura, leerCache, leerCola, separarLecturas, vistaProtocolo,
 } from '@/lib/protocolos'
 import type { DocumentoVigilador, LecturaProtocolo } from '@/lib/protocolos'
@@ -88,6 +88,15 @@ describe('selección por turno y aviso posterior al ingreso', () => {
     expect(documentoParaAviso(docs, 't1', [])?.version_id).toBe('general')
     expect(documentoParaAviso(docs, 't1', ['general'])?.version_id).toBe('puesto')
     expect(documentoParaAviso(docs, 't1', ['general', 'puesto'])).toBeNull()
+  })
+
+  it('protocolo cambiado: avisa al cargar, una vez, sólo si no confirmó la versión nueva', () => {
+    const conCambio = [...docs.slice(0, 1), { ...docs[1], cambio: true }]
+    expect(documentoCambiado(docs, [])).toBeNull()
+    expect(documentoCambiado(conCambio, [])?.version_id).toBe('general')
+    expect(documentoCambiado(conCambio, ['general'])).toBeNull()
+    expect(documentoCambiado([{ ...conCambio[1], confirmado_at: '2026-10-15T10:00:00Z' }], [])).toBeNull()
+    expect(documentoCambiado([{ ...conCambio[1], turnos: [] }], [])).toBeNull()
   })
 
   it('no avisa si ya confirmó', () => {

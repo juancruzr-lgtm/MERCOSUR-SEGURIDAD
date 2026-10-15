@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import LectorProtocolo from '@/components/protocolos/LectorProtocolo'
 import AvisoProtocoloIngreso from '@/components/protocolos/AvisoProtocoloIngreso'
-import { Documento } from '@/components/protocolos/ProtocoloObjetivoPanel'
+import { ConfirmarObjetivo, Documento, mensajeVigencia } from '@/components/protocolos/ProtocoloObjetivoPanel'
 import { vistaProtocolo } from '@/lib/protocolos'
 import type { DocumentoVigilador } from '@/lib/protocolos'
 
@@ -48,6 +48,13 @@ describe('lector del protocolo', () => {
 })
 
 describe('aviso posterior al ingreso', () => {
+  it('protocolo cambiado: lo dice en el aviso y en el lector', () => {
+    const cambiado = { ...doc, cambio: true, numero: 2 }
+    expect(renderToStaticMarkup(<AvisoProtocoloIngreso doc={cambiado} onLeer={() => {}} onDespues={() => {}} />)).toContain('Tu protocolo cambió')
+    expect(renderToStaticMarkup(<LectorProtocolo doc={cambiado} desdeCopia={false} guardadoAt={null} onCerrar={() => {}} onConfirmar={nada} />)).toContain('Tu protocolo cambió')
+    expect(renderToStaticMarkup(<LectorProtocolo doc={{ ...cambiado, confirmado_at: '2026-10-21T10:00:00Z' }} desdeCopia={false} guardadoAt={null} onCerrar={() => {}} onConfirmar={nada} />)).not.toContain('Tu protocolo cambió')
+  })
+
   it('es una franja con «Leer ahora» y «Después», no una compuerta', () => {
     const html = renderToStaticMarkup(<AvisoProtocoloIngreso doc={doc} onLeer={() => {}} onDespues={() => {}} />)
     expect(html).toContain('Leer ahora')
@@ -67,8 +74,8 @@ describe('ficha del objetivo: la última guardada rige', () => {
   }
   const original = { ...base, id: 'v1', numero: 1, titulo: 'LA CASONA ALBERGUE MUNICIPAL', texto: TEXTO, fuente_tipo: 'whatsapp' as const, estado: 'borrador' as const, creado_at: '2026-10-14T22:30:00Z', aprobado_at: null }
   const render = (versiones: any[], puedeCambiar = true) => renderToStaticMarkup(
-    <Documento objetivoId="o1" alcance={vistaProtocolo(versiones)[0]} versiones={versiones}
-      puedeCambiar={puedeCambiar} onError={() => {}} onGuardado={async () => {}} />,
+    <Documento objetivoId="o1" objetivoNombre="LA CASONA" alcance={vistaProtocolo(versiones)[0]} versiones={versiones}
+      puedeCambiar={puedeCambiar} onMensaje={() => {}} onCambio={async () => {}} />,
   )
 
   it('sin versión vigente: texto completo, marcado como borrador, con «Que rija este texto»', () => {
@@ -100,6 +107,29 @@ describe('ficha del objetivo: la última guardada rige', () => {
     expect(html).toContain('Hay más de un borrador: elegí cuál rige')
     expect(html).toContain('v1 · borrador')
     expect(html).toContain('v2 · borrador')
+  })
+
+  it('historial: quién la puso en vigencia, con fecha y hora', () => {
+    const vigente = { ...original, id: 'v2', numero: 2, estado: 'vigente' as const, aprobado_at: '2026-10-15T12:00:00Z', aprobado_por_nombre: 'Aldo Monzón' }
+    const anterior = { ...original, estado: 'reemplazado' as const, aprobado_at: '2026-10-14T23:00:00Z', aprobado_por_nombre: 'Juan Cruz', reemplazado_at: '2026-10-15T12:00:00Z' }
+    const html = render([anterior, vigente])
+    expect(html).toContain('Puesta en vigencia por Aldo Monzón · 15/10/2026')
+    expect(html).toContain('Puesta en vigencia por Juan Cruz')
+  })
+
+  it('aviso de controles de la versión anterior: sólo si hay', () => {
+    expect(mensajeVigencia({ controles_version_anterior: 0 } as any, 'Guardado.')).toBe('Guardado.')
+    expect(mensajeVigencia(null, 'Guardado.')).toBe('Guardado.')
+    expect(mensajeVigencia({ controles_version_anterior: 2 } as any, 'Guardado.')).toContain('2 controles activos')
+    expect(mensajeVigencia({ controles_version_anterior: 2 } as any, 'Guardado.')).toContain('no se modificaron')
+  })
+
+  it('texto dudoso: la confirmación muestra objetivo y título', () => {
+    const html = renderToStaticMarkup(<ConfirmarObjetivo objetivoNombre="ACA SALUD" titulo="Protocolo ACA" ocupado={false} onSi={() => {}} onNo={() => {}} />)
+    expect(html).toContain('¿Confirmás que este protocolo corresponde a este objetivo?')
+    expect(html).toContain('ACA SALUD')
+    expect(html).toContain('Protocolo ACA')
+    expect(html).toContain('Cancelar')
   })
 
   it('sin permiso para cambiarlo: se lee, no se edita', () => {

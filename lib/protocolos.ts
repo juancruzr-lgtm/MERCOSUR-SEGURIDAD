@@ -53,6 +53,8 @@ export interface DocumentoVigilador {
   turnos: string[]
   abierto_at: string | null
   confirmado_at: string | null
+  /** Confirmó una versión anterior de este protocolo y la vigente es otra. */
+  cambio?: boolean
 }
 
 export interface VersionProtocolo {
@@ -276,6 +278,14 @@ export function documentoParaAviso(
   docs: DocumentoVigilador[], turnoId: string, pospuestos: string[],
 ): DocumentoVigilador | null {
   return documentosDeTurno(docs, turnoId).find(d => !d.confirmado_at && !pospuestos.includes(d.version_id)) ?? null
+}
+
+/**
+ * El protocolo cambió desde la última lectura confirmada: se avisa al abrir la
+ * app (sin esperar al ingreso), una vez por versión y por sesión.
+ */
+export function documentoCambiado(docs: DocumentoVigilador[], pospuestos: string[]): DocumentoVigilador | null {
+  return docs.find(d => d.cambio && !d.confirmado_at && d.turnos.length > 0 && !pospuestos.includes(d.version_id)) ?? null
 }
 
 export function leerPospuestos(raw: string | null): string[] {
