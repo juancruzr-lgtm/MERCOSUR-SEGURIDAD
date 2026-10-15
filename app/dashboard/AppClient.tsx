@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'rea
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { alcanceDe, shellDeUsuario, tieneCapacidad, esAdminPleno, esGerenciaReal } from '@/lib/capacidades'
+import { alcanceDe, shellDeUsuario, tieneCapacidad, esAdminPleno, esGerenciaReal, puedeAdministrarRondas } from '@/lib/capacidades'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
 import { TIPOS_NOVEDAD_DIA, ESTADO_CLASIFICACION_QUITADA, labelNovedadDia, esAusencia, novedadDelDia, estadoFilaClasificada, planGuardarClasificacion, observacionReclasificacion, observacionQuitar, resumenClasificacionMes } from '@/lib/clasificacion-dia'
@@ -4180,6 +4180,7 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
         esAdmin={user?.rol === 'admin'}
         rolUsuario={user?.rol}
         puedeGestionarPuestos={tieneCapacidad(user, 'gestionar_objetivos_operativos')}
+        puedeAdministrarRondas={puedeAdministrarRondas(user)}
       />
     )
   }

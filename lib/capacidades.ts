@@ -308,6 +308,20 @@ export function esAdminPleno(u: SujetoAcceso | null | undefined): boolean {
 }
 
 /**
+ * ¿Se le ofrece administrar las rondas nativas de un objetivo (configuración,
+ * alertas, historial)? Espejo de UI de `puede_administrar_rondas_objetivo`, que
+ * decide por ALCANCE (zona del supervisor, o todas): sin alcance propio de la
+ * operación no se ofrece. Reemplaza el viejo `rol === 'admin' || 'supervisor'`
+ * de la ficha del objetivo. La base revalida objetivo por objetivo.
+ */
+export function puedeAdministrarRondas(u: SujetoAcceso | null | undefined): boolean {
+  if (alcanceDe(u) === 'propio') return false
+  return tieneCapacidad(u, 'supervisar_zona')
+    || tieneCapacidad(u, 'supervisar_todas_zonas')
+    || tieneCapacidad(u, 'gestionar_objetivos_operativos')
+}
+
+/**
  * Clasificación GERENCIA REAL (no acceso delegado ni admin_pleno): puesto
  * `gerencia`, o admin sin puesto (transición). SÓLO Gerencia real otorga/revoca
  * delegaciones gerenciales y hace escaladas privilegiadas (asignar gerencia,

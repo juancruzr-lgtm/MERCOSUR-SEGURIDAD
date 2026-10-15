@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { alcanceDe } from '@/lib/capacidades'
+import { alcanceDe, puedeAdministrarRondas } from '@/lib/capacidades'
 import { filtrarTurnosParaAlertas, objetivoIdsParaAlertas } from '@/lib/alertas-alcance'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
@@ -3648,6 +3648,7 @@ export default function SupervisorMobile({ user }: any) {
                   objetivoId={objetivoLegajoId}
                   onVolver={() => setObjetivoLegajoId(null)}
                   rolUsuario={user?.rol}
+                  puedeAdministrarRondas={puedeAdministrarRondas(user)}
                 />
               </section>
             )}

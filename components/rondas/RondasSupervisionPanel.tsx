@@ -51,7 +51,8 @@ const RondaEjecucionMapa = dynamic(() => import('./RondaEjecucionMapa'), {
   loading: () => <div style={{ padding: 16, color: '#94a3b8', fontSize: 13 }}>Cargando mapa…</div>,
 })
 
-type Seccion = 'mapa' | 'en_curso' | 'alertas' | 'historial' | 'config'
+export type SeccionRondasPanel = 'mapa' | 'en_curso' | 'alertas' | 'historial' | 'config'
+type Seccion = SeccionRondasPanel
 
 interface Props {
   objetivoId: string
@@ -59,6 +60,10 @@ interface Props {
   // que preservan el comportamiento actual cuando se haga el wiring en B7.
   centroObjetivo?: [number, number] | null
   onRondasDirtyChange?: (dirty: boolean) => void
+  // La ficha del objetivo pide abrir una pestaña (p. ej. «Alertas» desde
+  // «Requiere intervención»). `vez` cambia en cada pedido, aunque se repita
+  // la pestaña, para que el segundo clic también la abra.
+  seccionSolicitada?: { seccion: SeccionRondasPanel; vez: number } | null
 }
 
 const SECCIONES: { id: Seccion; label: string }[] = [
@@ -86,8 +91,12 @@ export default function RondasSupervisionPanel({
   objetivoId,
   centroObjetivo = null,
   onRondasDirtyChange,
+  seccionSolicitada = null,
 }: Props) {
-  const [seccion, setSeccion] = useState<Seccion>('en_curso')
+  const [seccion, setSeccion] = useState<Seccion>(seccionSolicitada?.seccion ?? 'en_curso')
+  useEffect(() => {
+    if (seccionSolicitada) setSeccion(seccionSolicitada.seccion)
+  }, [seccionSolicitada])
   const [detalleId, setDetalleId] = useState<string | null>(null)
 
   return (
