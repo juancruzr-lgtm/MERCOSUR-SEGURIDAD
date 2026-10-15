@@ -19,6 +19,7 @@ import { Badge, btn, btnPrimary, btnSecondary } from '@/components/ui/base'
 import RondasSupervisionPanel from '@/components/rondas/RondasSupervisionPanel'
 import type { SeccionRondasPanel } from '@/components/rondas/RondasSupervisionPanel'
 import ProtocoloObjetivoPanel from '@/components/protocolos/ProtocoloObjetivoPanel'
+import ControlesProtocoloPanel from '@/components/protocolos/ControlesProtocoloPanel'
 import SelectorDiasMes from './SelectorDiasMes'
 import { fechasDeAtajo, rangoDeSeleccion } from '@/lib/calendario-mes'
 import styles from './CentroOperativoObjetivo.module.css'
@@ -1475,6 +1476,9 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             </>
           )}
         </div>
+        {/* Checklist desde el protocolo: instrucciones → controles propuestos →
+            aprobación → activación por Gerencia. Sin acceso, no aparece. */}
+        <ControlesProtocoloPanel objetivoId={objetivoId} />
         <SeccionSupervisiones
           objetivoId={objetivoId}
           onVerDetalle={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('supervisiones', { tipo:'objetivo', objetivoId })) : undefined}

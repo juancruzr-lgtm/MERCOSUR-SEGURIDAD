@@ -8,7 +8,7 @@
 // La clave se lee de process.env.GEMINI_API_KEY. Server-side únicamente:
 // este módulo sólo se importa desde route handlers con runtime = 'nodejs'.
 
-import { ErrorProveedor, type PedidoVision, type ProveedorVision, type RespuestaVision } from './proveedor'
+import { ErrorProveedor, type PedidoTexto, type PedidoVision, type ProveedorVision, type RespuestaVision } from './proveedor'
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 const TIMEOUT_DEFECTO_MS = 60_000
@@ -103,6 +103,19 @@ export class GeminiVision implements ProveedorVision {
     partes.push({ inline_data: { mime_type: pedido.imagen.mime, data: pedido.imagen.bytes.toString('base64') } })
     partes.push({ text: pedido.prompt })
 
+    return this.generar(partes, pedido)
+  }
+
+  /**
+   * Pedido sólo de texto (sin imagen): mismo endpoint, mismo manejo de errores
+   * y la misma salida JSON con schema. Lo usa la propuesta de controles desde
+   * el texto del protocolo.
+   */
+  async analizarTexto(pedido: PedidoTexto): Promise<RespuestaVision> {
+    return this.generar([{ text: pedido.prompt }], pedido)
+  }
+
+  private async generar(partes: unknown[], pedido: PedidoTexto): Promise<RespuestaVision> {
     const cuerpo = {
       contents: [{ role: 'user', parts: partes }],
       generationConfig: {
@@ -149,7 +162,7 @@ export class GeminiVision implements ProveedorVision {
 
     const candidato = sobre?.candidates?.[0]
 
-    // Un bloqueo por filtros de seguridad es definitivo para esta imagen:
+    // Un bloqueo por filtros de seguridad es definitivo para este pedido:
     // reintentar da lo mismo.
     if (!candidato || candidato.finishReason === 'SAFETY' || candidato.finishReason === 'PROHIBITED_CONTENT') {
       throw new ErrorProveedor(
