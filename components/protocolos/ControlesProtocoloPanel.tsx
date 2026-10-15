@@ -25,7 +25,7 @@ import {
 } from '@/lib/protocolo-controles'
 import type { Clasificacion, ControlPropuesto, Destino, InstruccionPanel, PanelControles, VersionControles } from '@/lib/protocolo-controles'
 import {
-  activarControles, aprobarControl, cargarPanelControles, dividirInstrucciones, editarControl,
+  activarControles, aprobarControl, cargarPanelControles, editarControl,
   proponerConIA, proponerControl, rechazarControl, validarInstruccion,
 } from '@/lib/protocolo-controles-datos'
 import { ETIQUETA_ESTADO, fechaHoraAR } from '@/lib/protocolos'
@@ -200,7 +200,11 @@ export function Version({ version, panel, porInstruccion, ocupado, ocultarInform
   const pedirIA = () => ejecutar(async () => {
     const r = await proponerConIA(version.id)
     if (r.error) return { error: r.error }
-    setResultadoIA(r.data?.mensaje ?? `La IA propuso ${r.data?.creadas ?? 0} controles (${r.data?.omitidas ?? 0} omitidos). Revisalos abajo.`)
+    const d = r.data
+    setResultadoIA(d?.mensaje ?? [
+      d?.identificadas != null ? `La IA identificó ${d.identificadas} instrucciones${d.descartadas ? ` (${d.descartadas} citas no coincidían con el texto y se descartaron)` : ''}.` : null,
+      `Propuso ${d?.creadas ?? 0} controles (${d?.omitidas ?? 0} omitidos). Revisalos abajo.`,
+    ].filter(Boolean).join(' '))
     return { error: null }
   })
 
@@ -217,21 +221,18 @@ export function Version({ version, panel, porInstruccion, ocupado, ocultarInform
 
       {p.preparar && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-          {(version.instrucciones.length === 0 || desactualizadas) && (
-            <button type="button" style={boton()} disabled={ocupado}
-              onClick={() => ejecutar(async () => dividirInstrucciones(version.id), 'Instrucciones actualizadas')}>
-              {desactualizadas ? 'El texto cambió: volver a dividir' : 'Dividir en instrucciones'}
-            </button>
-          )}
           <button type="button" style={boton('primario')} disabled={ocupado} onClick={pedirIA}>
-            {ocupado ? 'Trabajando…' : 'Proponer controles con IA'}
+            {ocupado ? 'Trabajando…'
+              : version.instrucciones.length === 0 || desactualizadas ? 'Identificar instrucciones y proponer controles con IA'
+              : 'Proponer controles con IA'}
           </button>
+          {desactualizadas && <span style={nota}>El texto cambió: la IA vuelve a identificar las instrucciones.</span>}
           {resultadoIA && <span style={{ ...nota, color: '#4ade80' }}>{resultadoIA}</span>}
         </div>
       )}
 
       {version.instrucciones.length === 0 ? (
-        <div style={nota}>Todavía no se dividió en instrucciones.</div>
+        <div style={nota}>Todavía no se identificaron las instrucciones. La IA lee el protocolo completo y cita cada instrucción tal como está escrita.</div>
       ) : (
         <>
           <label style={{ ...nota, display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>

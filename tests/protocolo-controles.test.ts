@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   armarPrompt, controlesPorInstruccion, destinoActivable, instruccionesPendientes, interpretarPropuestas,
   schemaPropuestas, type ContextoIA, type ControlPropuesto,
+  UMBRAL_DUPLICADO, buscarExistente, completarDuplicados, interpretarIdentificacion, similitud, ubicarCitas,
 } from '../lib/protocolo-controles'
 
 const A = '11111111-1111-4111-8111-111111111111'
@@ -110,5 +111,66 @@ describe('controlesPorInstruccion y destinoActivable', () => {
   it('sólo el checklist de supervisión se activa', () => {
     expect(destinoActivable('checklist_supervision')).toBe(true)
     expect(destinoActivable('punto_ronda')).toBe(false)
+  })
+})
+
+describe('instrucciones completas desde citas literales', () => {
+  const TEXTO = 'RANDSTAD\nEl vigilador registrará los datos\nen el libro de novedades. Luego llamará al sector.\n\nSi a las 19,30 hs todo el personal se retiró, puede irse.'
+
+  it('ubica una cita exacta que cruza un renglón (no corta por línea)', () => {
+    const [r] = ubicarCitas(TEXTO, ['El vigilador registrará los datos\nen el libro de novedades.'])
+    expect(Array.from(TEXTO).slice(r.inicio, r.fin).join('')).toBe('El vigilador registrará los datos\nen el libro de novedades.')
+  })
+
+  it('acepta la misma cita con otros espacios, nunca con otras palabras', () => {
+    const r = ubicarCitas(TEXTO, ['El vigilador registrará los datos en el libro de novedades.', 'El guardia registrará los datos'])
+    expect(r).toHaveLength(1)
+    expect(Array.from(TEXTO).slice(r[0].inicio, r[0].fin).join('')).toBe('El vigilador registrará los datos\nen el libro de novedades.')
+  })
+
+  it('en orden y sin superponerse: una cita repetida o anterior se descarta', () => {
+    const r = ubicarCitas(TEXTO, ['Luego llamará al sector.', 'RANDSTAD', 'Si a las 19,30 hs todo el personal se retiró, puede irse.'])
+    expect(r.map(x => x.indice)).toEqual([0, 2])
+    expect(r[1].inicio).toBeGreaterThanOrEqual(r[0].fin)
+  })
+
+  it('cuenta caracteres como Postgres (no unidades UTF-16)', () => {
+    const t = '🚨 Alarma\nActivar la alarma al cierre.'
+    const [r] = ubicarCitas(t, ['Activar la alarma al cierre.'])
+    expect(r.inicio).toBe(Array.from('🚨 Alarma\n').length)
+    expect(Array.from(t).slice(r.inicio, r.fin).join('')).toBe('Activar la alarma al cierre.')
+  })
+
+  it('lee la respuesta sin confiar: descarta citas vacías e informativas sin control', () => {
+    const r = interpretarIdentificacion({ instrucciones: [
+      { cita: '', clasificacion: 'obligacion', destino: 'tarea_turno', texto_item: 'x', criticidad: 'normal', foto_obligatoria: false, existente_tipo: 'ninguno' },
+      { cita: 'RANDSTAD', clasificacion: 'informativa', destino: 'checklist_supervision', texto_item: 'x', criticidad: 'normal', foto_obligatoria: false, existente_tipo: 'ninguno' },
+      { cita: 'Luego llamará al sector.', clasificacion: 'obligacion', destino: 'tarea_turno', texto_item: 'Anunciar visitas al sector', criticidad: 'alta', foto_obligatoria: false, existente_tipo: 'ninguno' },
+    ] })
+    expect(r).toHaveLength(2)
+    expect(r[0].propuesta.destino).toBeNull()
+    expect(r[1].propuesta).toMatchObject({ destino: 'tarea_turno', criticidad: 'alta' })
+  })
+})
+
+describe('deduplicación tolerante', () => {
+  const ctx = {
+    checklist: [{ id: '11111111-1111-1111-1111-111111111111', texto: 'Libro de novedades al día' }],
+    rondas: [{ id: '22222222-2222-2222-2222-222222222222', nombre: 'Recorrida de pisos', descripcion: null, intervalo_minutos: 120,
+      puntos: [{ id: '33333333-3333-3333-3333-333333333333', nombre: 'Puerta del piso 7', descripcion: null }] }],
+  }
+  it('detecta lo mismo dicho con otras palabras menores', () => {
+    expect(similitud('Libro de novedades al día', 'El libro de novedades está al día')).toBeGreaterThanOrEqual(UMBRAL_DUPLICADO)
+    expect(buscarExistente('Libro de novedades al dia', ctx)?.tipo).toBe('checklist_item')
+  })
+  it('no confunde controles distintos', () => {
+    expect(buscarExistente('Alarma activada al cierre', ctx)).toBeNull()
+  })
+  it('completa la referencia sólo si la IA no la marcó', () => {
+    const base = { destino: 'checklist_supervision' as const, texto_item: 'Libro de novedades al día', existente_tipo: null, existente_id: null }
+    expect(completarDuplicados([base], ctx)[0].existente_id).toBe('11111111-1111-1111-1111-111111111111')
+    const marcada = { ...base, existente_tipo: 'ronda' as const, existente_id: '22222222-2222-2222-2222-222222222222' }
+    expect(completarDuplicados([marcada], ctx)[0].existente_tipo).toBe('ronda')
+    expect(completarDuplicados([{ ...base, destino: null }], ctx)[0].existente_id).toBeNull()
   })
 })

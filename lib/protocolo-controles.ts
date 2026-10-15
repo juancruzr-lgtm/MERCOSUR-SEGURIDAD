@@ -153,6 +153,9 @@ export interface ContextoIA {
   objetivo_id: string
   objetivo_nombre: string | null
   titulo: string
+  /** Texto completo de la versión y si hace falta identificar instrucciones (corrección 20261023130000). */
+  texto?: string
+  requiere_identificar?: boolean
   instrucciones: { id: string; orden: number; texto: string; clasificacion: Clasificacion | null; tiene_control: boolean }[]
   checklist: { id: string; texto: string }[]
   rondas: { id: string; nombre: string; descripcion: string | null; intervalo_minutos: number; puntos: { id: string; nombre: string; descripcion: string | null }[] }[]
@@ -329,4 +332,186 @@ export function controlesPorInstruccion(controles: ControlPropuesto[]): Map<stri
     l.sort((a, b) => Number(a.estado === 'rechazado') - Number(b.estado === 'rechazado') || b.creado_at.localeCompare(a.creado_at))
   }
   return m
+}
+
+// ── Identificar instrucciones completas (en lugar de dividir por renglones) ──
+//
+// La IA lee el texto completo y devuelve cada instrucción como una CITA
+// LITERAL. Una instrucción puede ocupar varias oraciones o renglones; un
+// renglón con varias obligaciones distintas se cita en partes. La aplicación
+// ubica cada cita en el texto original (ubicarCitas) y la base verifica el
+// rango y guarda el hash: la referencia al original es exacta.
+
+export const MAX_CITAS = 120
+
+export function armarPromptIdentificar(ctx: ContextoIA & { texto: string }): string {
+  const checklist = ctx.checklist.length
+    ? ctx.checklist.map(i => `- [checklist_item ${i.id}] ${i.texto}`).join('\n')
+    : '(sin checklist asignado)'
+  const rondas = ctx.rondas.length
+    ? ctx.rondas.map(r => [
+        `- [ronda ${r.id}] ${r.nombre}${r.descripcion ? ` — ${r.descripcion}` : ''} (cada ${r.intervalo_minutos} min)`,
+        ...r.puntos.map(p => `  - [ronda_punto ${p.id}] ${p.nombre}${p.descripcion ? ` — ${p.descripcion}` : ''}`),
+      ].join('\n')).join('\n')
+    : '(sin rondas activas)'
+
+  return `Sos analista de operaciones de una empresa de seguridad privada en Argentina.
+Leés el protocolo de funciones y procedimientos del objetivo «${ctx.objetivo_nombre ?? ''}» («${ctx.titulo}»).
+
+Tarea 1 — identificar las instrucciones. Recorré el texto en orden y devolvé en "instrucciones" cada instrucción COMPLETA:
+- cita: el fragmento COPIADO LITERALMENTE del texto, carácter por carácter (mismas palabras, tildes, comas y mayúsculas). No resumas, no corrijas errores, no agregues nada.
+- Una instrucción es una unidad de sentido: lo que hay que hacer (o un dato de contexto) con sus condiciones. Puede ocupar varias oraciones o renglones: no la cortes por el salto de línea.
+- Si una oración contiene varias obligaciones distintas que se verificarían por separado, citalas por separado.
+- Los títulos y encabezados también van, como informativos.
+- Respetá el orden del texto y no repitas fragmentos.
+
+Tarea 2 — para cada instrucción, completá además:
+- clasificacion: "informativa" (contexto, descripción o título; no pide hacer nada), "obligacion" (algo que hay que hacer), "frecuencia" (con periodicidad u horario), "excepcion" (qué hacer ante una situación particular).
+- quien y cuando: sólo si el texto lo dice; si no, "".
+- destino: "checklist_supervision" (un supervisor lo comprueba en la visita), "punto_ronda" (pasar por un lugar periódicamente), "tarea_turno" (el vigilador lo hace en su turno: al ingresar, durante o al egresar), "orden_puntual" (una sola vez), "alerta" (el sistema debería avisar si no ocurre) o "ninguno".
+- texto_item: si el destino no es "ninguno", el punto a controlar como verificación breve (hasta 120 caracteres, sin inventar); si no, "".
+- criticidad ("normal" o "alta"), foto_obligatoria (true/false), motivo (una oración).
+- existente_tipo / existente_id: si ya lo cubre un control de la lista de abajo, su tipo y su identificador exacto; si no, "ninguno" y "".
+
+No inventes obligaciones, horarios ni personas que el texto no diga.
+
+CONTROLES EXISTENTES DEL OBJETIVO
+Checklist de supervisión:
+${checklist}
+Rondas:
+${rondas}
+
+TEXTO DEL PROTOCOLO
+<<<
+${ctx.texto}
+>>>`
+}
+
+export function schemaIdentificar(): Record<string, unknown> {
+  const items = (schemaPropuestas() as { properties: { propuestas: { items: { properties: Record<string, unknown> } } } })
+    .properties.propuestas.items
+  const props: Record<string, unknown> = { ...items.properties }
+  delete props.instruccion_id
+  return {
+    type: 'object',
+    properties: {
+      instrucciones: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { cita: { type: 'string' }, ...props },
+          required: ['cita', 'clasificacion', 'destino', 'texto_item', 'criticidad', 'foto_obligatoria', 'existente_tipo'],
+        },
+      },
+    },
+    required: ['instrucciones'],
+  }
+}
+
+/** Posición en caracteres (code points), como la cuenta Postgres. */
+const enCaracteres = (s: string, idxUtf16: number) => Array.from(s.slice(0, idxUtf16)).length
+const escaparRegex = (p: string) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Ubica cada cita en el texto original, en orden y sin superponerse.
+ * Primero busca la cita exacta; si la IA alteró espacios o saltos de línea,
+ * acepta la misma secuencia de palabras con cualquier separación de espacios.
+ * Nunca acepta palabras distintas: si no aparece literal, la cita se descarta.
+ * Devuelve rangos en caracteres (0-based, fin exclusivo) y el índice de la cita.
+ */
+export function ubicarCitas(texto: string, citas: string[]): { indice: number; inicio: number; fin: number }[] {
+  const salida: { indice: number; inicio: number; fin: number }[] = []
+  let cursor = 0 // índice UTF-16
+  citas.forEach((citaCruda, indice) => {
+    const cita = (citaCruda ?? '').trim()
+    if (!cita) return
+    let ini = texto.indexOf(cita, cursor)
+    let fin = ini >= 0 ? ini + cita.length : -1
+    if (ini < 0) {
+      const palabras = cita.split(/\s+/).filter(Boolean).map(escaparRegex)
+      if (palabras.length === 0) return
+      const re = new RegExp(palabras.join('\\s+'), 'g')
+      re.lastIndex = cursor
+      const m = re.exec(texto)
+      if (!m) return
+      ini = m.index
+      fin = m.index + m[0].length
+    }
+    salida.push({ indice, inicio: enCaracteres(texto, ini), fin: enCaracteres(texto, fin) })
+    cursor = fin
+  })
+  return salida
+}
+
+/** Lee la respuesta de identificación sin confiar en ella. */
+export function interpretarIdentificacion(json: unknown): { cita: string; propuesta: Omit<PropuestaNormalizada, 'instruccion_id'> }[] {
+  const lista = Array.isArray((json as { instrucciones?: unknown })?.instrucciones)
+    ? (json as { instrucciones: unknown[] }).instrucciones.slice(0, MAX_CITAS) : []
+  const salida: { cita: string; propuesta: Omit<PropuestaNormalizada, 'instruccion_id'> }[] = []
+  lista.forEach((crudo, i) => {
+    const cita = typeof (crudo as { cita?: unknown })?.cita === 'string' ? (crudo as { cita: string }).cita : ''
+    if (!cita.trim()) return
+    // Se reutiliza la misma lectura defensiva de las propuestas.
+    const [p] = interpretarPropuestas({ propuestas: [{ ...(crudo as object), instruccion_id: `cita-${i}` }] }, [`cita-${i}`])
+    if (!p) return
+    const { instruccion_id: _id, ...propuesta } = p
+    salida.push({ cita, propuesta })
+  })
+  return salida
+}
+
+// ── Deduplicación tolerante ─────────────────────────────────────────────────
+
+const VACIAS = new Set(['de', 'la', 'el', 'los', 'las', 'del', 'y', 'o', 'a', 'en', 'con', 'por', 'para', 'que', 'se', 'un', 'una', 'al', 'su', 'sus', 'lo'])
+
+/** Palabras con contenido, sin tildes ni signos. */
+export function palabrasClave(t: string): Set<string> {
+  return new Set(
+    t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ\s]/g, ' ')
+      .split(/\s+/).filter(p => p.length > 2 && !VACIAS.has(p)),
+  )
+}
+
+/** Coincidencia de palabras clave (Jaccard), de 0 a 1. */
+export function similitud(a: string, b: string): number {
+  const A = palabrasClave(a), B = palabrasClave(b)
+  if (A.size === 0 || B.size === 0) return 0
+  let comunes = 0
+  A.forEach(p => { if (B.has(p)) comunes++ })
+  return comunes / (A.size + B.size - comunes)
+}
+
+export const UMBRAL_DUPLICADO = 0.6
+
+type Existente = { tipo: 'checklist_item' | 'ronda' | 'ronda_punto'; id: string; puntaje: number }
+
+/**
+ * Lo que ya existe en el objetivo y se parece lo suficiente a un control
+ * propuesto: ítem del checklist, punto o ronda. La IA puede no haberlo visto;
+ * la base valida después que la referencia sea de ese objetivo.
+ */
+export function buscarExistente(textoItem: string, ctx: Pick<ContextoIA, 'checklist' | 'rondas'>): Existente | null {
+  const candidatos: Existente[] = []
+  const probar = (tipo: Existente['tipo'], id: string, texto: string) => {
+    const s = similitud(textoItem, texto)
+    if (s >= UMBRAL_DUPLICADO) candidatos.push({ tipo, id, puntaje: s })
+  }
+  ctx.checklist.forEach(i => probar('checklist_item', i.id, i.texto))
+  ctx.rondas.forEach(r => {
+    probar('ronda', r.id, [r.nombre, r.descripcion].filter(Boolean).join(' '))
+    r.puntos.forEach(p => probar('ronda_punto', p.id, [p.nombre, p.descripcion].filter(Boolean).join(' ')))
+  })
+  candidatos.sort((a, b) => b.puntaje - a.puntaje)
+  return candidatos[0] ?? null
+}
+
+/** Completa la referencia a lo existente cuando la IA no la marcó. */
+export function completarDuplicados<T extends Pick<PropuestaNormalizada, 'destino' | 'texto_item' | 'existente_tipo' | 'existente_id'>>(
+  props: T[], ctx: Pick<ContextoIA, 'checklist' | 'rondas'>,
+): T[] {
+  return props.map(p => {
+    if (!p.destino || !p.texto_item || p.existente_id) return p
+    const e = buscarExistente(p.texto_item, ctx)
+    return e ? { ...p, existente_tipo: e.tipo, existente_id: e.id } : p
+  })
 }

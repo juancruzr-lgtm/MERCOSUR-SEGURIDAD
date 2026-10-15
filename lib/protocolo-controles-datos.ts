@@ -21,11 +21,6 @@ export function cargarPanelControles(objetivoId: string) {
   return rpc<PanelControles>('protocolo_controles_panel', { p_objetivo_id: objetivoId })
 }
 
-export function dividirInstrucciones(versionId: string) {
-  return rpc<{ ok: boolean; creadas: number; obsoletas: number; total: number }>(
-    'protocolo_instrucciones_segmentar', { p_version_id: versionId })
-}
-
 export function validarInstruccion(instruccionId: string, clasificacion: Clasificacion, quien: string | null, cuando: string | null) {
   return rpc<{ ok: boolean }>('protocolo_instruccion_validar', {
     p_instruccion_id: instruccionId, p_clasificacion: clasificacion, p_quien: quien, p_cuando: cuando,
@@ -60,7 +55,7 @@ export function activarControles(objetivoId: string, controlIds: string[]) {
 }
 
 /** Pide a la IA clasificar y proponer. La ruta divide primero si hace falta. */
-export async function proponerConIA(versionId: string): Promise<Res<{ creadas: number; omitidas: number; enviadas: number; mensaje?: string }>> {
+export async function proponerConIA(versionId: string): Promise<Res<{ creadas: number; omitidas: number; enviadas: number; identificadas?: number; descartadas?: number; mensaje?: string }>> {
   const { data } = await supabase.auth.getSession()
   const token = data.session?.access_token
   if (!token) return { data: null, error: 'Sesión requerida' }

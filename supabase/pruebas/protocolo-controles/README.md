@@ -29,3 +29,16 @@ npm i --no-save @electric-sql/pglite@0.2.17
 node supabase/pruebas/protocolo-controles/run.mjs
 node supabase/pruebas/protocolo-controles/verif.mjs
 ```
+
+## Correcciones (20261023130000)
+
+`run-correcciones.mjs` carga la base de producción, la migración 20261023120000
+tal como quedó aplicada y la corrección encima. Prueba: instrucciones completas
+desde citas (rangos verificados en la base, hash del fragmento), fin de la
+división por renglones para usuarios, supervisiones en curso al cambiar la
+plantilla (24 h de tolerancia, UPDATE sin bloqueo), verificación posterior,
+rollback y reaplicación.
+
+```
+node supabase/pruebas/protocolo-controles/run-correcciones.mjs
+```
