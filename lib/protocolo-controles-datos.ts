@@ -54,6 +54,20 @@ export function activarControles(objetivoId: string, controlIds: string[]) {
     'protocolo_controles_activar', { p_objetivo_id: objetivoId, p_control_ids: controlIds })
 }
 
+/**
+ * Agrega un punto propuesto al checklist del supervisor en un paso (crea o
+ * reutiliza la plantilla propia del objetivo). texto = corrección opcional.
+ */
+export async function agregarAlChecklist(controlId: string, texto: string | null): Promise<Res<{ plantilla_creada: boolean }>> {
+  const r = await rpc<{ ok: boolean; motivo?: string; existente?: string; plantilla_creada?: boolean }>(
+    'protocolo_control_agregar_checklist', { p_control_id: controlId, p_texto: texto })
+  if (r.error) return { data: null, error: r.error }
+  if (r.data && r.data.ok === false) {
+    return { data: null, error: r.data.motivo === 'ya_existe' ? `Ya está en el checklist: «${r.data.existente}»` : 'No se pudo agregar' }
+  }
+  return { data: { plantilla_creada: Boolean(r.data?.plantilla_creada) }, error: null }
+}
+
 /** Pide a la IA clasificar y proponer. La ruta divide primero si hace falta. */
 export async function proponerConIA(versionId: string): Promise<Res<{ creadas: number; omitidas: number; enviadas: number; identificadas?: number; descartadas?: number; mensaje?: string }>> {
   const { data } = await supabase.auth.getSession()

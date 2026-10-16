@@ -42,3 +42,5 @@ rollback y reaplicación.
 ```
 node supabase/pruebas/protocolo-controles/run-correcciones.mjs
 ```
+
+- `run-solo-supervisor.mjs` — 27 controles de `20261026120000_checklist_solo_supervisor.sql`: agregar al checklist en un paso (quién puede, sólo desde el protocolo que rige, texto corregido, duplicados, descartados), cierre de propuestas que no son del checklist del supervisor, rollback.

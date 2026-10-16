@@ -199,14 +199,8 @@ Para CADA instrucción devolvé una entrada en "propuestas" con:
   · "excepcion": qué hacer ante una situación particular (alarma, ausencia, emergencia, reemplazo).
 - quien: quién lo hace, sólo si el texto lo dice (p. ej. "vigilador", "vigilador nocturno"); si no, "".
 - cuando: cuándo o cada cuánto, sólo si el texto lo dice; si no, "".
-- destino: cómo se verificaría que se cumple:
-  · "checklist_supervision": un supervisor lo puede comprobar en su visita (mirando, preguntando, revisando el libro).
-  · "punto_ronda": el vigilador tiene que pasar por un lugar con una periodicidad.
-  · "tarea_turno": el vigilador lo hace una vez por turno y no lo puede comprobar un supervisor después.
-  · "orden_puntual": algo que se hace una sola vez.
-  · "alerta": algo que el sistema debería avisar si no ocurre.
-  · "ninguno": la instrucción es informativa o no es verificable.
-- texto_item: si el destino no es "ninguno", el punto a controlar redactado como verificación breve (hasta 120 caracteres, en español rioplatense, sin inventar nada que el texto no diga). Ej.: "Libro de novedades con datos de identidad de personal externo". Si es "ninguno", "".
+- destino: "checklist_supervision" SÓLO si es algo que el SUPERVISOR puede comprobar cuando visita el objetivo: mirando (el puesto, el uniforme, una puerta, el estado del lugar), preguntándole al vigilador si conoce el procedimiento, o revisando un registro (libro de novedades, planilla). Todo lo demás es "ninguno": títulos, descripción del lugar, tareas que el vigilador hace solo y nadie puede comprobar después, recorridas que ya marca con la ronda.
+- texto_item: si el destino es "checklist_supervision", lo que el supervisor verifica en la visita, redactado como un punto de checklist breve (hasta 120 caracteres, en español rioplatense, sin inventar nada que el texto no diga). Ej.: "Libro de novedades con datos de identidad de personal externo", "El vigilador sabe a quién llamar ante una alarma". Si es "ninguno", "".
 - criticidad: "alta" sólo si incumplirlo pone en riesgo personas o bienes; si no, "normal".
 - foto_obligatoria: true sólo si una foto es la forma razonable de comprobarlo.
 - motivo: una oración que explique por qué ese destino.
@@ -214,8 +208,8 @@ Para CADA instrucción devolvé una entrada en "propuestas" con:
 
 Reglas:
 - No inventes obligaciones, horarios ni personas que el texto no diga.
-- Una instrucción, una propuesta. Si una instrucción pide varias cosas, proponé la más importante para un supervisor.
-- Preferí "checklist_supervision" cuando un supervisor lo pueda comprobar en la visita.
+- Una instrucción, una propuesta. Si una instrucción pide varias cosas, proponé la más importante para el supervisor.
+- El objetivo es el checklist que completa el supervisor en su visita: si no lo puede comprobar él, es "ninguno".
 
 CONTROLES EXISTENTES DEL OBJETIVO
 Checklist de supervisión:
@@ -240,7 +234,8 @@ export function schemaPropuestas(): Record<string, unknown> {
             clasificacion: { type: 'string', enum: [...CLASIFICACIONES] },
             quien: { type: 'string' },
             cuando: { type: 'string' },
-            destino: { type: 'string', enum: [...DESTINOS, 'ninguno'] },
+            // Sólo el checklist del supervisor (pedido de JC, 16/10/2026).
+            destino: { type: 'string', enum: ['checklist_supervision', 'ninguno'] },
             texto_item: { type: 'string' },
             criticidad: { type: 'string', enum: ['normal', 'alta'] },
             foto_obligatoria: { type: 'boolean' },
@@ -295,7 +290,8 @@ export function interpretarPropuestas(json: unknown, idsEnviados: Iterable<strin
     vistos.add(id)
 
     const clasificacion = (CLASIFICACIONES as readonly string[]).includes(p.clasificacion as string) ? p.clasificacion as Clasificacion : null
-    let destino = (DESTINOS as readonly string[]).includes(p.destino as string) ? p.destino as Destino : null
+    // Desde el protocolo sólo se proponen puntos del checklist del supervisor.
+    let destino: Destino | null = p.destino === 'checklist_supervision' ? 'checklist_supervision' : null
     let textoItem = texto(p.texto_item, 500)
     if (clasificacion === 'informativa' || !textoItem) { destino = null; textoItem = null }
     if (!destino) textoItem = null
@@ -369,8 +365,8 @@ Tarea 1 — identificar las instrucciones. Recorré el texto en orden y devolvé
 Tarea 2 — para cada instrucción, completá además:
 - clasificacion: "informativa" (contexto, descripción o título; no pide hacer nada), "obligacion" (algo que hay que hacer), "frecuencia" (con periodicidad u horario), "excepcion" (qué hacer ante una situación particular).
 - quien y cuando: sólo si el texto lo dice; si no, "".
-- destino: "checklist_supervision" (un supervisor lo comprueba en la visita), "punto_ronda" (pasar por un lugar periódicamente), "tarea_turno" (el vigilador lo hace en su turno: al ingresar, durante o al egresar), "orden_puntual" (una sola vez), "alerta" (el sistema debería avisar si no ocurre) o "ninguno".
-- texto_item: si el destino no es "ninguno", el punto a controlar como verificación breve (hasta 120 caracteres, sin inventar); si no, "".
+- destino: "checklist_supervision" SÓLO si es algo que el SUPERVISOR puede comprobar cuando visita el objetivo: mirando (el puesto, el uniforme, una puerta, el estado del lugar), preguntándole al vigilador si conoce el procedimiento, o revisando un registro (libro de novedades, planilla). Todo lo demás es "ninguno": títulos, descripción del lugar, tareas que el vigilador hace solo y nadie puede comprobar después, recorridas que ya marca con la ronda.
+- texto_item: si el destino es "checklist_supervision", lo que el supervisor verifica en la visita, redactado como un punto de checklist breve (hasta 120 caracteres, en español rioplatense, sin inventar nada que el texto no diga). Ej.: "Libro de novedades con datos de identidad de personal externo", "El vigilador sabe a quién llamar ante una alarma". Si es "ninguno", "".
 - criticidad ("normal" o "alta"), foto_obligatoria (true/false), motivo (una oración).
 - existente_tipo / existente_id: si ya lo cubre un control de la lista de abajo, su tipo y su identificador exacto; si no, "ninguno" y "".
 
