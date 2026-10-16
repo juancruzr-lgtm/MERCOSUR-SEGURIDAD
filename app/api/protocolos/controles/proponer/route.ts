@@ -39,8 +39,12 @@ export const maxDuration = 120
 export const fetchCache = 'force-no-store'
 export const dynamic = 'force-dynamic'
 
-/** Modelo principal y respaldos si está saturado (429/5xx/timeout). */
-const MODELOS: [string, number][] = [[MODELO_GEMINI_DEFECTO, 60_000], ['gemini-2.5-flash', 50_000]]
+/**
+ * Modelo principal y respaldos si está saturado (429/5xx/timeout). El lite es
+ * el que usa la revisión de fotos todos los días; gemini-2.5-flash ya no está
+ * disponible para cuentas nuevas (404 desde el 16/10/2026).
+ */
+const MODELOS_PROTOCOLO: [string, number][] = [[MODELO_GEMINI_DEFECTO, 45_000], ['gemini-3.5-flash-lite', 30_000], ['gemini-3.8-flash', 30_000]]
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const responder = (cuerpo: unknown, status = 200) => NextResponse.json(cuerpo, { status, headers: SIN_CACHE })
 
@@ -48,24 +52,29 @@ type Cliente = { rpc: (fn: string, args?: Record<string, unknown>) => PromiseLik
 
 /** Pide a la IA probando el modelo siguiente sólo ante errores transitorios. */
 async function pedirIA(prompt: string, schema: Record<string, unknown>): Promise<{ respuesta: RespuestaVision | null; modelo: string; error: unknown }> {
-  let modelo = MODELOS[0][0]
+  let modelo = MODELOS_PROTOCOLO[0][0]
   let ia: GeminiVision
   try {
     ia = new GeminiVision()
   } catch (e) {
     return { respuesta: null, modelo, error: e } // falta la clave: se registra como corrida fallida
   }
-  let ultimo: unknown = null
-  for (const [m, timeoutMs] of MODELOS) {
+  // Se informa el error de CADA modelo probado: antes quedaba sólo el último y
+  // un 404 del respaldo tapaba el 503 del principal, que era la causa real.
+  const errores: string[] = []
+  for (const [m, timeoutMs] of MODELOS_PROTOCOLO) {
     modelo = m
     try {
       return { respuesta: await ia.analizarTexto({ prompt, schema, modelo: m, timeoutMs }), modelo: m, error: null }
     } catch (e) {
-      ultimo = e
-      if (e instanceof ErrorProveedor && e.clase === 'permanente') break
+      errores.push(`${m}: ${String((e as Error)?.message ?? e).slice(0, 160)}`)
+      // Un modelo inexistente (404) no corta: se prueba el siguiente. Otro error
+      // permanente (clave, pedido mal armado) sí: reintentar da lo mismo.
+      const noExiste = /HTTP 404/.test(String((e as Error)?.message ?? ''))
+      if (e instanceof ErrorProveedor && e.clase === 'permanente' && !noExiste) break
     }
   }
-  return { respuesta: null, modelo, error: ultimo }
+  return { respuesta: null, modelo, error: errores.join(' · ') }
 }
 
 async function registrarFalla(cliente: Cliente, versionId: string, modelo: string, error: unknown) {

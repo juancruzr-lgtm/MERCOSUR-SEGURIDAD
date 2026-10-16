@@ -28,6 +28,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import ControlesProtocoloPanel from '@/components/protocolos/ControlesProtocoloPanel'
 import { compararLineas, fechaHoraAR, separarLecturas, vistaProtocolo } from '@/lib/protocolos'
 import type { AlcanceProtocolo, LecturaProtocolo, PanelObjetivo, VersionProtocolo } from '@/lib/protocolos'
 import { cargarPanelObjetivo, guardarProtocolo, hacerVigente } from '@/lib/protocolos-datos'
@@ -174,6 +175,16 @@ export default function ProtocoloObjetivoPanel({ objetivoId }: { objetivoId: str
           puedeCambiar={puedeCambiar}
           onMensaje={avisar}
           onCambio={cargar}
+        />
+      )}
+
+      {/* Lo que se controla de este texto, debajo del texto. Se vuelve a montar
+          cuando cambia la versión que rige (guardar crea una nueva). */}
+      {alcances.length > 0 && (
+        <ControlesProtocoloPanel
+          key={panel.versiones.map(v => `${v.id}:${v.estado}`).join(',')}
+          objetivoId={objetivoId}
+          embebido
         />
       )}
 

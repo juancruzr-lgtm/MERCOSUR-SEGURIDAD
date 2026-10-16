@@ -3,8 +3,9 @@
 /**
  * components/protocolos/ControlesProtocoloPanel.tsx
  *
- * Sección «Checklist desde el protocolo» de la ficha del objetivo, debajo del
- * protocolo. Convierte instrucciones del protocolo en puntos del checklist de
+ * «Controles que salen de este protocolo»: va DENTRO de la tarjeta del
+ * protocolo (ProtocoloObjetivoPanel, prop embebido), debajo del texto, para
+ * que el texto y lo que se controla de él se lean juntos. Convierte instrucciones del protocolo en puntos del checklist de
  * supervisión del objetivo, en modo propuesta:
  *
  *   dividir en instrucciones → la IA clasifica y propone → una persona valida
@@ -52,7 +53,9 @@ const pill = (color: string): React.CSSProperties => ({
 
 type Ejecutar = (fn: () => Promise<{ error: string | null }>, ok?: string) => Promise<boolean>
 
-export default function ControlesProtocoloPanel({ objetivoId }: { objetivoId: string }) {
+const embebidoEstilo: React.CSSProperties = { marginTop: 18, paddingTop: 14, borderTop: '1px solid #1e2d42' }
+
+export default function ControlesProtocoloPanel({ objetivoId, embebido = false }: { objetivoId: string; embebido?: boolean }) {
   const [panel, setPanel] = useState<PanelControles | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(true)
@@ -60,7 +63,8 @@ export default function ControlesProtocoloPanel({ objetivoId }: { objetivoId: st
   const [mensaje, setMensaje] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null)
   const [versionId, setVersionId] = useState<string | null>(null)
   const [ocultarInformativas, setOcultarInformativas] = useState(true)
-  const [abierto, setAbierto] = useState(false)
+  // Dentro del protocolo se ve abierto: es la continuación del texto.
+  const [abierto, setAbierto] = useState(embebido)
 
   const cargar = useCallback(async () => {
     setCargando(true)
@@ -97,7 +101,7 @@ export default function ControlesProtocoloPanel({ objetivoId }: { objetivoId: st
   // dice). Tampoco si la migración todavía no se aplicó (la RPC no existe).
   if (error && /permiso|could not find the function|does not exist/i.test(error)) return null
   if (cargando && !panel) return null
-  if (error) return <div style={card}><div style={{ color: '#f87171', fontSize: 13 }}>Checklist desde el protocolo: {error}</div></div>
+  if (error) return <div style={embebido ? embebidoEstilo : card}><div style={{ color: '#f87171', fontSize: 13 }}>Controles del protocolo: {error}</div></div>
   if (!panel) return null
 
   const version = panel.versiones.find(v => v.id === versionId) ?? null
@@ -107,10 +111,10 @@ export default function ControlesProtocoloPanel({ objetivoId }: { objetivoId: st
   const pendientes = panel.controles.filter(c => c.estado === 'propuesto').length
 
   return (
-    <div style={card}>
+    <div style={embebido ? embebidoEstilo : card} id="controles-protocolo">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: '#f1f5f9' }}>Checklist desde el protocolo</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#f1f5f9' }}>{embebido ? '✅ Controles que salen de este protocolo' : 'Checklist desde el protocolo'}</div>
           <div style={nota}>
             Propuestas de puntos de control a partir de las instrucciones del protocolo. Nada cambia el checklist del
             supervisor hasta que Gerencia lo activa.
