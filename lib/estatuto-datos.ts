@@ -14,7 +14,7 @@
 import { supabase } from '@/lib/supabase'
 import { urlOriginal } from '@/lib/estatuto-original'
 import type {
-  AceptacionEstatuto, AperturaEstatuto, PersonaControl, VersionEstatuto,
+  AceptacionEstatuto, AperturaEstatuto, PersonaControl, VersionEstatuto, ZonaControl,
 } from '@/lib/estatuto'
 
 const COLUMNAS_VERSION =
@@ -80,11 +80,17 @@ export async function aceptarEstatuto(versionId: string): Promise<{
 
 export async function cargarControl(versionId: string | null): Promise<{
   personas: PersonaControl[]
+  /** Catálogo de zonas para el filtro. Vacío sin la migración 20261027120000. */
+  zonas: ZonaControl[]
   error: string | null
 }> {
   const { data, error } = await supabase.rpc('estatuto_control', { p_version_id: versionId })
-  if (error) return { personas: [], error: error.message }
-  return { personas: ((data as any)?.personas ?? []) as PersonaControl[], error: null }
+  if (error) return { personas: [], zonas: [], error: error.message }
+  return {
+    personas: ((data as any)?.personas ?? []) as PersonaControl[],
+    zonas: ((data as any)?.zonas ?? []) as ZonaControl[],
+    error: null,
+  }
 }
 
 /**

@@ -2000,9 +2000,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
           onIr={() => router.push(`/guardias/${user.id}?seccion=desempeno`)}
         />
 
-        {/* Estatuto Interno pendiente de aceptación. Es una TARJETA en el flujo,
-            no un modal: no tapa el botón de fichar ni la lista de turnos (pedido
-            expreso de Gerencia). Va debajo de "Mis Turnos" y de las
+        {/* Estatuto Interno pendiente de aceptación: una tarjeta en el flujo que
+            no se esconde mientras esté pendiente, y un cartel que se cierra con
+            "Después" y vuelve al abrir la app y cada 4 horas (JC, 16/10). Nunca
+            bloquea el fichaje ni los turnos. Va debajo de "Mis Turnos" y de las
             notificaciones, así lo urgente queda arriba. Sin versión publicada
             no aparece. */}
         <AvisoEstatuto

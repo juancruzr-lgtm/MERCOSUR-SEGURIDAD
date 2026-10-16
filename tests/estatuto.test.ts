@@ -5,8 +5,8 @@ import { join } from 'path'
 
 import {
   TEXTO_CARTEL, TEXTO_DECLARACION, TITULO_CARTEL, contenidoDeVersion, declaracionHabilitada,
-  estadoAceptacion, etiquetaVersion, mostrarCartel, puedeAceptar, resumenControl,
-  textoCanonico, tramosConNegrita, versionVigente,
+  REINSISTIR_MS, SIN_ZONA, TODAS_LAS_ZONAS, estadoAceptacion, etiquetaVersion, filtrarPorZona,
+  mostrarCartel, puedeAceptar, resumenControl, textoCanonico, valorPospuesto, tramosConNegrita, versionVigente,
 } from '@/lib/estatuto'
 import type { AceptacionEstatuto, PersonaControl, VersionEstatuto } from '@/lib/estatuto'
 
@@ -145,17 +145,31 @@ describe('texto de la declaración y versión, sin fecha (Gerencia 08/10)', () =
 
 // ── Cartel ───────────────────────────────────────────────────────────────────
 
-describe('cartel', () => {
+describe('cartel (insiste sin bloquear)', () => {
+  const T = Date.UTC(2026, 9, 16, 12, 0, 0)
   it('aparece mientras esté pendiente', () => {
-    expect(mostrarCartel('pendiente', 'v1', null)).toBe(true)
+    expect(mostrarCartel('pendiente', 'v1', null, T)).toBe(true)
   })
   it('"Después" lo esconde sólo para esa versión', () => {
-    expect(mostrarCartel('pendiente', 'v1', 'v1')).toBe(false)
-    expect(mostrarCartel('pendiente', 'v2', 'v1')).toBe(true)
+    expect(mostrarCartel('pendiente', 'v1', valorPospuesto('v1', T), T + 1000)).toBe(false)
+    expect(mostrarCartel('pendiente', 'v2', valorPospuesto('v1', T), T + 1000)).toBe(true)
+  })
+  it('vuelve a las 4 horas aunque la app siga abierta', () => {
+    expect(REINSISTIR_MS).toBe(4 * 60 * 60 * 1000)
+    expect(mostrarCartel('pendiente', 'v1', valorPospuesto('v1', T), T + REINSISTIR_MS - 1)).toBe(false)
+    expect(mostrarCartel('pendiente', 'v1', valorPospuesto('v1', T), T + REINSISTIR_MS)).toBe(true)
+  })
+  it('un valor viejo o ilegible no lo esconde: ante la duda, insiste', () => {
+    expect(mostrarCartel('pendiente', 'v1', 'v1', T)).toBe(true)
+    expect(mostrarCartel('pendiente', 'v1', '{"v":"v1"}', T)).toBe(true)
+    expect(mostrarCartel('pendiente', 'v1', 'null', T)).toBe(true)
+  })
+  it('un reloj que retrocede no lo esconde para siempre', () => {
+    expect(mostrarCartel('pendiente', 'v1', valorPospuesto('v1', T), T - 60_000)).toBe(true)
   })
   it('no aparece aceptado ni sin versión', () => {
-    expect(mostrarCartel('aceptado', 'v1', null)).toBe(false)
-    expect(mostrarCartel('sin_version', null, null)).toBe(false)
+    expect(mostrarCartel('aceptado', 'v1', null, T)).toBe(false)
+    expect(mostrarCartel('sin_version', null, null, T)).toBe(false)
   })
 })
 
@@ -179,6 +193,46 @@ describe('control de Administración / Gerencia', () => {
 
   it('universo vacío: cero, no error', () => {
     expect(resumenControl([]).pendientes).toBe(0)
+  })
+
+  describe('filtro por zona', () => {
+    const ros = { id: 'z-ros', nombre: 'Rosario' }
+    const raf = { id: 'z-raf', nombre: 'Rafaela' }
+    const con = (x: PersonaControl, zonas: { id: string; nombre: string }[]): PersonaControl => ({ ...x, zonas })
+    const gente = [
+      con(p('1', 'Uno', true), [ros]),
+      con(p('2', 'Dos', false), [ros, raf]),
+      con(p('3', 'Tres', false), [raf]),
+      con(p('4', 'Admin', false), []),
+    ]
+    it('todas: no recorta', () => {
+      expect(filtrarPorZona(gente, TODAS_LAS_ZONAS)).toHaveLength(4)
+    })
+    it('quien trabaja en dos zonas aparece en las dos', () => {
+      expect(filtrarPorZona(gente, 'z-ros').map(x => x.apellido)).toEqual(['Uno', 'Dos'])
+      expect(filtrarPorZona(gente, 'z-raf').map(x => x.apellido)).toEqual(['Dos', 'Tres'])
+    })
+    it('"Sin zona" junta a quien no tiene ninguna', () => {
+      expect(filtrarPorZona(gente, SIN_ZONA).map(x => x.apellido)).toEqual(['Admin'])
+    })
+    it('los totales son los de la zona', () => {
+      const r = resumenControl(filtrarPorZona(gente, 'z-ros'))
+      expect([r.alcanzados, r.aceptaron, r.pendientes]).toEqual([2, 1, 1])
+    })
+    it('sin la migración (zonas ausente) nadie desaparece de "Sin zona"', () => {
+      const viejos = [p('1', 'Uno', true), p('2', 'Dos', false)]
+      expect(filtrarPorZona(viejos, SIN_ZONA)).toHaveLength(2)
+      expect(filtrarPorZona(viejos, 'z-ros')).toHaveLength(0)
+    })
+  })
+
+  it('la migración de zonas no cambia la firma ni trae revoke/drop (va por apply_migration)', () => {
+    const m = readFileSync(join(RAIZ, 'supabase/migrations/20261027120000_estatuto_control_zonas.sql'), 'utf8')
+    const sinComentarios = m.split(/\r?\n/).filter(l => !l.trim().startsWith('--')).join('\n')
+    expect(sinComentarios).toMatch(/create or replace function public\.estatuto_control\(p_version_id uuid default null\)/)
+    expect(sinComentarios).not.toMatch(/\b(drop|revoke|truncate)\b/i)
+    expect(sinComentarios).not.toMatch(/select\s+[\w.]+\s+into\s/i)
+    expect(sinComentarios).toMatch(/puede_gestionar_personal_actual\(\) or public\.puede_acceder_gerencia_actual\(\)/)
   })
 })
 
