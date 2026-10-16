@@ -45,6 +45,9 @@ export const dynamic = 'force-dynamic'
  * disponible para cuentas nuevas (404 desde el 16/10/2026).
  */
 const MODELOS_PROTOCOLO: [string, number][] = [[MODELO_GEMINI_DEFECTO, 45_000], ['gemini-3.5-flash-lite', 30_000], ['gemini-3.8-flash', 30_000]]
+/** Esperas entre vueltas y tiempo total para la IA (la ruta corta a los 120 s). */
+const ESPERAS_MS = [4_000, 12_000]
+const PRESUPUESTO_MS = 100_000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const responder = (cuerpo: unknown, status = 200) => NextResponse.json(cuerpo, { status, headers: SIN_CACHE })
 
@@ -59,22 +62,50 @@ async function pedirIA(prompt: string, schema: Record<string, unknown>): Promise
   } catch (e) {
     return { respuesta: null, modelo, error: e } // falta la clave: se registra como corrida fallida
   }
-  // Se informa el error de CADA modelo probado: antes quedaba sólo el último y
+  // Google responde 503 («high demand») en picos que duran segundos o minutos
+  // y afectan a todos los modelos a la vez (16/10: 3 de 3). Se dan hasta 3
+  // vueltas por la lista con espera creciente, sin pasar el tope de la ruta.
+  // Se informa el último error de CADA modelo: antes quedaba sólo el último y
   // un 404 del respaldo tapaba el 503 del principal, que era la causa real.
-  const errores: string[] = []
-  for (const [m, timeoutMs] of MODELOS_PROTOCOLO) {
-    modelo = m
-    try {
-      return { respuesta: await ia.analizarTexto({ prompt, schema, modelo: m, timeoutMs }), modelo: m, error: null }
-    } catch (e) {
-      errores.push(`${m}: ${String((e as Error)?.message ?? e).slice(0, 160)}`)
-      // Un modelo inexistente (404) no corta: se prueba el siguiente. Otro error
-      // permanente (clave, pedido mal armado) sí: reintentar da lo mismo.
-      const noExiste = /HTTP 404/.test(String((e as Error)?.message ?? ''))
-      if (e instanceof ErrorProveedor && e.clase === 'permanente' && !noExiste) break
+  const limite = Date.now() + PRESUPUESTO_MS
+  const ultimoError = new Map<string, string>()
+  const descartados = new Set<string>()
+  let intentos = 0
+  for (let vuelta = 0; vuelta < ESPERAS_MS.length + 1; vuelta++) {
+    if (vuelta > 0) {
+      if (Date.now() + ESPERAS_MS[vuelta - 1] + 5_000 > limite) break
+      await new Promise(r => setTimeout(r, ESPERAS_MS[vuelta - 1]))
     }
+    for (const [m, timeoutMs] of MODELOS_PROTOCOLO) {
+      if (descartados.has(m)) continue
+      const resta = limite - Date.now()
+      if (resta < 5_000) break
+      modelo = m
+      intentos++
+      try {
+        return { respuesta: await ia.analizarTexto({ prompt, schema, modelo: m, timeoutMs: Math.min(timeoutMs, resta) }), modelo: m, error: null }
+      } catch (e) {
+        const msg = String((e as Error)?.message ?? e)
+        ultimoError.set(m, msg.slice(0, 160))
+        if (e instanceof ErrorProveedor && e.clase === 'permanente') {
+          // Un modelo inexistente (404) sólo se saltea. Otro error permanente
+          // (clave, pedido mal armado) corta todo: reintentar da lo mismo.
+          if (/HTTP 404/.test(msg)) { descartados.add(m); continue }
+          return { respuesta: null, modelo, error: resumen(ultimoError, intentos) }
+        }
+      }
+    }
+    if (descartados.size === MODELOS_PROTOCOLO.length) break
   }
-  return { respuesta: null, modelo, error: errores.join(' · ') }
+  return { respuesta: null, modelo, error: resumen(ultimoError, intentos) }
+}
+
+function resumen(errores: Map<string, string>, intentos: number): string {
+  const saturado = Array.from(errores.values()).every(e => /HTTP (503|429)/.test(e))
+  const detalle = Array.from(errores, ([m, e]) => `${m}: ${e}`).join(' · ')
+  return saturado
+    ? `Google está saturado (${intentos} intentos en todos los modelos). Probá de nuevo en unos minutos. ${detalle}`
+    : detalle
 }
 
 async function registrarFalla(cliente: Cliente, versionId: string, modelo: string, error: unknown) {
