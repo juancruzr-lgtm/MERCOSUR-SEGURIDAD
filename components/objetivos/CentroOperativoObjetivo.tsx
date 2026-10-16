@@ -1471,13 +1471,13 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
         {/* Las propuestas desde el protocolo viven junto al texto del protocolo
             (ProtocoloObjetivoPanel); acá sólo el acceso. */}
         <div style={{ ...card, display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
-          <span style={{ fontSize:13, color:'#94a3b8' }}>Los puntos que salen del protocolo se proponen, aprueban y activan junto al texto del protocolo.</span>
+          <span style={{ fontSize:13, color:'#94a3b8' }}>Los puntos que salen del protocolo se proponen y se agregan junto al texto del protocolo.</span>
           <button
             type="button"
             style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
             onClick={() => document.getElementById('controles-protocolo')?.scrollIntoView({ behavior:'smooth', block:'start' })}
           >
-            Ir a los controles del protocolo ↑
+            Ir a los puntos del protocolo ↑
           </button>
         </div>
         <SeccionSupervisiones

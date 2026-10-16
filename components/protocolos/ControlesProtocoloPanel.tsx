@@ -3,68 +3,68 @@
 /**
  * components/protocolos/ControlesProtocoloPanel.tsx
  *
- * «Controles que salen de este protocolo»: va DENTRO de la tarjeta del
- * protocolo (ProtocoloObjetivoPanel, prop embebido), debajo del texto, para
- * que el texto y lo que se controla de él se lean juntos. Convierte instrucciones del protocolo en puntos del checklist de
- * supervisión del objetivo, en modo propuesta:
+ * «Qué controla el supervisor en la visita»: va dentro de la tarjeta del
+ * protocolo (ProtocoloObjetivoPanel), debajo del texto.
  *
- *   dividir en instrucciones → la IA clasifica y propone → una persona valida
- *   la clasificación y aprueba o rechaza → Gerencia activa lo aprobado (sólo
- *   desde la versión vigente) en la plantilla propia del objetivo.
+ * Simple a propósito (pedido de JC, 16/10/2026): la IA lee el protocolo y
+ * propone SÓLO puntos que el supervisor puede comprobar en su visita, cada uno
+ * con la frase del protocolo de donde sale. Por cada punto: «Agregar al
+ * checklist», «Corregir» (y agregar) o «Descartar». Sin clasificaciones, sin
+ * validar, sin aprobar y activar por separado: agregar lo hace la base en un
+ * paso (protocolo_control_agregar_checklist), que crea o reutiliza la
+ * plantilla propia del objetivo y deja quién y cuándo.
  *
- * Los botones salen de protocolo_controles_panel.permisos y cada RPC vuelve a
- * validar: preparar (validar, proponer, aprobar, rechazar) = Administración,
- * Gerencia, jefatura de supervisores y dirección operativa; activar = Gerencia.
- * Un supervisor de la zona ve todo sin botones. Puntos de ronda, tareas,
- * órdenes y alertas se pueden aprobar como decisión pero no se activan.
+ * Quién: agrega quien puede editar el protocolo; un supervisor de la zona ve
+ * los puntos sin botones. Sólo desde el protocolo que rige.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ControlPropuesto, InstruccionPanel, PanelControles, VersionControles } from '@/lib/protocolo-controles'
 import {
-  CLASIFICACIONES, COLOR_ESTADO_CONTROL, DESTINOS, ETIQUETA_CLASIFICACION, ETIQUETA_DESTINO,
-  ETIQUETA_ESTADO_CONTROL, ETIQUETA_EXISTENTE, controlesPorInstruccion, destinoActivable,
-} from '@/lib/protocolo-controles'
-import type { Clasificacion, ControlPropuesto, Destino, InstruccionPanel, PanelControles, VersionControles } from '@/lib/protocolo-controles'
-import {
-  activarControles, aprobarControl, cargarPanelControles, editarControl,
-  proponerConIA, proponerControl, rechazarControl, validarInstruccion,
+  agregarAlChecklist, cargarPanelControles, proponerConIA, rechazarControl, validarInstruccion,
 } from '@/lib/protocolo-controles-datos'
-import { ETIQUETA_ESTADO, fechaHoraAR } from '@/lib/protocolos'
+import { fechaHoraAR } from '@/lib/protocolos'
 
-const card: React.CSSProperties = {
-  background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 16, marginBottom: 14,
-}
-const sub: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#e2e8f0', margin: '16px 0 8px' }
-const nota: React.CSSProperties = { fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }
+const contenedor: React.CSSProperties = { marginTop: 18, paddingTop: 14, borderTop: '1px solid #1e2d42' }
+const nota: React.CSSProperties = { fontSize: 12.5, color: '#94a3b8', lineHeight: 1.5 }
 const input: React.CSSProperties = {
-  boxSizing: 'border-box', background: '#0a0e1a', border: '1px solid #1e2d42',
-  color: '#e2e8f0', borderRadius: 8, padding: '6px 8px', fontSize: 13, fontFamily: 'inherit',
+  width: '100%', boxSizing: 'border-box', background: '#0a0e1a', border: '1px solid #1e2d42',
+  color: '#e2e8f0', borderRadius: 8, padding: '7px 9px', fontSize: 13.5, fontFamily: 'inherit',
 }
-const boton = (tono: 'primario' | 'secundario' | 'peligro' | 'ok' = 'secundario'): React.CSSProperties => ({
-  border: tono === 'secundario' ? '1px solid #334155' : 'none', borderRadius: 8, padding: '6px 11px',
+const boton = (tono: 'primario' | 'secundario' | 'ok' = 'secundario'): React.CSSProperties => ({
+  border: tono === 'secundario' ? '1px solid #334155' : 'none', borderRadius: 8, padding: '7px 12px',
   fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
-  background: tono === 'primario' ? '#f59e0b' : tono === 'peligro' ? '#b91c1c' : tono === 'ok' ? '#15803d' : 'transparent',
+  background: tono === 'primario' ? '#f59e0b' : tono === 'ok' ? '#15803d' : 'transparent',
   color: tono === 'primario' ? '#1a1205' : tono === 'secundario' ? '#cbd5e1' : '#fff',
 })
-const pill = (color: string): React.CSSProperties => ({
-  display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 99,
-  border: `1px solid ${color}`, color, whiteSpace: 'nowrap',
-})
+const cita: React.CSSProperties = {
+  fontSize: 12.5, color: '#94a3b8', borderLeft: '3px solid #334155', paddingLeft: 8, marginTop: 6,
+  whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.5,
+}
 
 type Ejecutar = (fn: () => Promise<{ error: string | null }>, ok?: string) => Promise<boolean>
 
-const embebidoEstilo: React.CSSProperties = { marginTop: 18, paddingTop: 14, borderTop: '1px solid #1e2d42' }
+/** La versión sobre la que se trabaja: la que rige para todo el objetivo, o la primera que rige. */
+export function versionDeTrabajo(versiones: VersionControles[]): VersionControles | null {
+  const vigentes = versiones.filter(v => v.estado === 'vigente')
+  return vigentes.find(v => !v.puesto_id) ?? vigentes[0] ?? null
+}
 
-export default function ControlesProtocoloPanel({ objetivoId, embebido = false }: { objetivoId: string; embebido?: boolean }) {
+/** Puntos para revisar y puntos ya agregados, sólo del checklist del supervisor. */
+export function separarPuntos(controles: ControlPropuesto[], versionId: string | null) {
+  const delChecklist = controles.filter(c => c.destino === 'checklist_supervision')
+  return {
+    paraRevisar: delChecklist.filter(c => (c.estado === 'propuesto' || c.estado === 'aprobado') && c.version_id === versionId),
+    agregados: delChecklist.filter(c => c.estado === 'activado'),
+  }
+}
+
+export default function ControlesProtocoloPanel({ objetivoId }: { objetivoId: string; embebido?: boolean }) {
   const [panel, setPanel] = useState<PanelControles | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(true)
   const [ocupado, setOcupado] = useState(false)
   const [mensaje, setMensaje] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null)
-  const [versionId, setVersionId] = useState<string | null>(null)
-  const [ocultarInformativas, setOcultarInformativas] = useState(true)
-  // Dentro del protocolo se ve abierto: es la continuación del texto.
-  const [abierto, setAbierto] = useState(embebido)
 
   const cargar = useCallback(async () => {
     setCargando(true)
@@ -75,14 +75,6 @@ export default function ControlesProtocoloPanel({ objetivoId, embebido = false }
   }, [objetivoId])
 
   useEffect(() => { void cargar() }, [cargar])
-
-  // Por defecto, la vigente; si no hay, la última en preparación.
-  useEffect(() => {
-    if (!panel) return
-    if (versionId && panel.versiones.some(v => v.id === versionId)) return
-    const v = panel.versiones.find(x => x.estado === 'vigente') ?? panel.versiones[0]
-    setVersionId(v?.id ?? null)
-  }, [panel, versionId])
 
   const ejecutar: Ejecutar = useCallback(async (fn, ok) => {
     setOcupado(true)
@@ -95,400 +87,140 @@ export default function ControlesProtocoloPanel({ objetivoId, embebido = false }
     return true
   }, [cargar])
 
-  const porInstruccion = useMemo(() => controlesPorInstruccion(panel?.controles ?? []), [panel])
+  const instrucciones = useMemo(() => {
+    const m = new Map<string, InstruccionPanel>()
+    for (const v of panel?.versiones ?? []) for (const i of v.instrucciones) m.set(i.id, i)
+    return m
+  }, [panel])
 
-  // Sin acceso al protocolo, la sección no aparece (el panel del protocolo ya lo
-  // dice). Tampoco si la migración todavía no se aplicó (la RPC no existe).
+  // Sin acceso al protocolo, la sección no aparece (el protocolo ya lo dice).
+  // Tampoco si la migración todavía no se aplicó (la RPC no existe).
   if (error && /permiso|could not find the function|does not exist/i.test(error)) return null
   if (cargando && !panel) return null
-  if (error) return <div style={embebido ? embebidoEstilo : card}><div style={{ color: '#f87171', fontSize: 13 }}>Controles del protocolo: {error}</div></div>
+  if (error) return <div style={contenedor}><div style={{ color: '#f87171', fontSize: 13 }}>Checklist del supervisor: {error}</div></div>
   if (!panel) return null
 
-  const version = panel.versiones.find(v => v.id === versionId) ?? null
-  const p = panel.permisos
-  const aprobadosActivables = panel.controles.filter(c =>
-    c.estado === 'aprobado' && destinoActivable(c.destino) && c.version_id === version?.id)
-  const pendientes = panel.controles.filter(c => c.estado === 'propuesto').length
+  const version = versionDeTrabajo(panel.versiones)
+  const { paraRevisar, agregados } = separarPuntos(panel.controles, version?.id ?? null)
+  const puede = panel.permisos.preparar
+  const yaLeyo = (version?.instrucciones.length ?? 0) > 0
 
-  return (
-    <div style={embebido ? embebidoEstilo : card} id="controles-protocolo">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: '#f1f5f9' }}>{embebido ? '✅ Controles que salen de este protocolo' : 'Checklist desde el protocolo'}</div>
-          <div style={nota}>
-            Propuestas de puntos de control a partir de las instrucciones del protocolo. Nada cambia el checklist del
-            supervisor hasta que Gerencia lo activa.
-          </div>
-        </div>
-        <button type="button" style={boton()} onClick={() => setAbierto(a => !a)}>
-          {abierto ? 'Ocultar' : `Ver${pendientes ? ` · ${pendientes} por revisar` : ''}`}
-        </button>
-      </div>
-
-      <div style={{ ...nota, marginTop: 10 }}>
-        Checklist que usa hoy el supervisor:{' '}
-        {panel.plantilla
-          ? <><b style={{ color: '#e2e8f0' }}>{panel.plantilla.nombre}</b> · {panel.plantilla.items.length} puntos ·{' '}
-              {panel.plantilla.propia ? 'propia de este objetivo' : 'plantilla general (compartida con otros objetivos)'}
-              {' · '}{panel.plantilla.items.filter(i => i.origen_instruccion_id).length} salen del protocolo</>
-          : 'ninguno asignado'}
-      </div>
-
-      {abierto && (
-        <>
-          {mensaje && (
-            <div style={{ marginTop: 10, fontSize: 13, color: mensaje.tipo === 'ok' ? '#4ade80' : '#f87171' }}>{mensaje.texto}</div>
-          )}
-
-          {panel.versiones.length === 0 && <div style={{ ...nota, marginTop: 12 }}>El objetivo no tiene protocolo vigente ni en preparación.</div>}
-
-          {panel.versiones.length > 1 && (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
-              {panel.versiones.map(v => (
-                <button key={v.id} type="button" onClick={() => setVersionId(v.id)}
-                  style={{ ...boton(v.id === versionId ? 'primario' : 'secundario') }}>
-                  v{v.numero}{v.puesto_nombre ? ` · ${v.puesto_nombre}` : ''} · {ETIQUETA_ESTADO[v.estado]}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {version && (
-            <Version
-              version={version} panel={panel} porInstruccion={porInstruccion} ocupado={ocupado}
-              ocultarInformativas={ocultarInformativas} setOcultarInformativas={setOcultarInformativas}
-              ejecutar={ejecutar}
-            />
-          )}
-
-          {version && p.activar && (
-            <Activacion objetivoId={objetivoId} version={version} panel={panel} aprobados={aprobadosActivables} ocupado={ocupado} ejecutar={ejecutar} />
-          )}
-
-          {panel.corridas.length > 0 && (
-            <details style={{ marginTop: 14 }}>
-              <summary style={{ ...nota, cursor: 'pointer' }}>Pedidos a la IA ({panel.corridas.length})</summary>
-              <div style={{ marginTop: 8, display: 'grid', gap: 4 }}>
-                {panel.corridas.map(r => (
-                  <div key={r.id} style={nota}>
-                    {fechaHoraAR(r.creado_at)} · {r.modelo} · {r.instrucciones_enviadas} instrucciones · {r.propuestas} propuestas ·
-                    tokens {r.tokens_entrada ?? '—'} entrada / {r.tokens_salida ?? '—'} salida
-                    {r.estado === 'error' && <span style={{ color: '#f87171' }}> · error: {r.error}</span>}
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-        </>
-      )}
-    </div>
-  )
-}
-
-export function Version({ version, panel, porInstruccion, ocupado, ocultarInformativas, setOcultarInformativas, ejecutar }: {
-  version: VersionControles
-  panel: PanelControles
-  porInstruccion: Map<string, ControlPropuesto[]>
-  ocupado: boolean
-  ocultarInformativas: boolean
-  setOcultarInformativas: (v: boolean) => void
-  ejecutar: Ejecutar
-}) {
-  const p = panel.permisos
-  const desactualizadas = version.instrucciones.some(i => !i.coincide)
-  const visibles = version.instrucciones.filter(i =>
-    !ocultarInformativas || (i.clasificacion ?? i.clasificacion_ia) !== 'informativa' || (porInstruccion.get(i.id)?.length ?? 0) > 0)
-  const sinValidar = version.instrucciones.filter(i => !i.validada_at).length
-
-  const [resultadoIA, setResultadoIA] = useState<string | null>(null)
-  const pedirIA = () => ejecutar(async () => {
+  const pedirIA = () => version && ejecutar(async () => {
     const r = await proponerConIA(version.id)
     if (r.error) return { error: r.error }
-    const d = r.data
-    setResultadoIA(d?.mensaje ?? [
-      d?.identificadas != null ? `La IA identificó ${d.identificadas} instrucciones${d.descartadas ? ` (${d.descartadas} citas no coincidían con el texto y se descartaron)` : ''}.` : null,
-      `Propuso ${d?.creadas ?? 0} controles (${d?.omitidas ?? 0} omitidos). Revisalos abajo.`,
-    ].filter(Boolean).join(' '))
+    const n = r.data?.creadas ?? 0
+    setMensaje({ texto: r.data?.mensaje ?? (n ? `La IA propuso ${n} punto${n === 1 ? '' : 's'}. Revisalos abajo.` : 'La IA no encontró más cosas para controlar en la visita.'), tipo: 'ok' })
     return { error: null }
   })
 
   return (
-    <div>
-      <div style={sub}>
-        Versión {version.numero}{version.puesto_nombre ? ` · ${version.puesto_nombre}` : ''} · {ETIQUETA_ESTADO[version.estado]}
+    <div style={contenedor} id="controles-protocolo">
+      <div style={{ fontSize: 15, fontWeight: 800, color: '#f1f5f9' }}>✅ Qué controla el supervisor en la visita</div>
+      <div style={nota}>
+        La IA lee este protocolo y propone puntos para el checklist que completa el supervisor. Vos elegís cuáles se agregan.
       </div>
-      {version.estado === 'reemplazado' ? (
-        <div style={{ ...nota, marginBottom: 8, color: '#fbbf24' }}>
-          Esta versión del protocolo ya no rige. Los controles que se activaron desde ella siguen en el checklist sin cambios: revisá si todavía corresponden.
-        </div>
-      ) : version.estado !== 'vigente' && (
-        <div style={{ ...nota, marginBottom: 8 }}>
-          Esta versión todavía no rige: se puede preparar el checklist, pero se activa recién cuando rija.
-        </div>
+      <div style={{ ...nota, marginTop: 6 }}>
+        Checklist del supervisor hoy:{' '}
+        {panel.plantilla
+          ? <><b style={{ color: '#e2e8f0' }}>{panel.plantilla.nombre}</b> · {panel.plantilla.items.length} puntos{panel.plantilla.propia ? ' · propio de este objetivo' : ' · general, compartido con otros objetivos (al agregar se hace una copia para éste)'}</>
+          : 'ninguno asignado (al agregar se crea uno para este objetivo)'}
+      </div>
+
+      {mensaje && (
+        <div role="status" style={{ marginTop: 10, fontSize: 13, color: mensaje.tipo === 'ok' ? '#4ade80' : '#f87171' }}>{mensaje.texto}</div>
       )}
 
-      {p.preparar && version.estado !== 'reemplazado' && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-          <button type="button" style={boton('primario')} disabled={ocupado} onClick={pedirIA}>
-            {ocupado ? 'Trabajando…'
-              : version.instrucciones.length === 0 || desactualizadas ? 'Identificar instrucciones y proponer controles con IA'
-              : 'Proponer controles con IA'}
-          </button>
-          {desactualizadas && <span style={nota}>El texto cambió: la IA vuelve a identificar las instrucciones.</span>}
-          {resultadoIA && <span style={{ ...nota, color: '#4ade80' }}>{resultadoIA}</span>}
-        </div>
-      )}
-
-      {version.instrucciones.length === 0 ? (
-        <div style={nota}>Todavía no se identificaron las instrucciones. La IA lee el protocolo completo y cita cada instrucción tal como está escrita.</div>
+      {!version ? (
+        <div style={{ ...nota, marginTop: 10 }}>Guardá el protocolo para que rija; después se proponen los puntos.</div>
       ) : (
         <>
-          <label style={{ ...nota, display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
-            <input type="checkbox" checked={ocultarInformativas} onChange={e => setOcultarInformativas(e.target.checked)} />
-            Ocultar las informativas sin propuesta · {version.instrucciones.length} instrucciones, {sinValidar} sin validar
-          </label>
-          <div style={{ display: 'grid', gap: 8 }}>
-            {visibles.map(i => (
-              <Instruccion key={i.id} ins={i} controles={porInstruccion.get(i.id) ?? []} preparar={p.preparar} ocupado={ocupado} ejecutar={ejecutar} />
-            ))}
-          </div>
+          {puede && (
+            <button type="button" style={{ ...boton('primario'), marginTop: 10 }} disabled={ocupado} onClick={() => void pedirIA()}>
+              {ocupado ? 'Trabajando… (puede tardar hasta un minuto)' : yaLeyo ? 'Buscar más puntos con IA' : 'Proponer puntos con IA'}
+            </button>
+          )}
+
+          {paraRevisar.length > 0 && (
+            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+              {paraRevisar.map(c => (
+                <Punto key={c.id} c={c} ins={instrucciones.get(c.instruccion_id) ?? null} puede={puede} ocupado={ocupado} ejecutar={ejecutar} />
+              ))}
+            </div>
+          )}
+          {yaLeyo && paraRevisar.length === 0 && (
+            <div style={{ ...nota, marginTop: 10 }}>No quedan puntos para revisar.</div>
+          )}
         </>
       )}
-    </div>
-  )
-}
 
-export function Instruccion({ ins, controles, preparar, ocupado, ejecutar }: {
-  ins: InstruccionPanel
-  controles: ControlPropuesto[]
-  preparar: boolean
-  ocupado: boolean
-  ejecutar: Ejecutar
-}) {
-  const [clas, setClas] = useState<Clasificacion>(ins.clasificacion ?? ins.clasificacion_ia ?? 'obligacion')
-  const [quien, setQuien] = useState(ins.quien ?? ins.quien_ia ?? '')
-  const [cuando, setCuando] = useState(ins.cuando ?? ins.cuando_ia ?? '')
-  const [validando, setValidando] = useState(false)
-  const [manual, setManual] = useState(false)
-  const enCurso = controles.find(c => c.estado !== 'rechazado') ?? null
-  const rechazados = controles.filter(c => c.estado === 'rechazado')
-  const efectiva = ins.clasificacion ?? null
-
-  return (
-    <div style={{ border: '1px solid #1e2d42', borderRadius: 8, padding: 10, background: '#0b1220' }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-        <span style={{ fontSize: 11, color: '#64748b', minWidth: 22 }}>{ins.orden}.</span>
-        <div style={{ fontSize: 13.5, color: ins.coincide ? '#e2e8f0' : '#f87171', lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-          {ins.texto}
-          {!ins.coincide && <div style={{ fontSize: 11.5 }}>El texto del protocolo cambió: volver a dividir.</div>}
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', margin: '6px 0 0 30px' }}>
-        {efectiva ? (
-          <span style={pill('#22c55e')} title={`Validada${ins.validada_por_nombre ? ` por ${ins.validada_por_nombre}` : ''} ${ins.validada_at ? fechaHoraAR(ins.validada_at) : ''}`}>
-            {ETIQUETA_CLASIFICACION[efectiva]}{ins.quien ? ` · ${ins.quien}` : ''}{ins.cuando ? ` · ${ins.cuando}` : ''} ✓
-          </span>
-        ) : ins.clasificacion_ia ? (
-          <span style={pill('#94a3b8')}>
-            IA: {ETIQUETA_CLASIFICACION[ins.clasificacion_ia]}{ins.quien_ia ? ` · ${ins.quien_ia}` : ''}{ins.cuando_ia ? ` · ${ins.cuando_ia}` : ''} · sin validar
-          </span>
-        ) : (
-          <span style={pill('#475569')}>Sin clasificar</span>
-        )}
-        {preparar && ins.coincide && !validando && (
-          <button type="button" style={{ ...boton(), padding: '3px 9px' }} onClick={() => setValidando(true)}>
-            {efectiva ? 'Corregir' : 'Validar'}
-          </button>
-        )}
-      </div>
-
-      {validando && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 0 30px' }}>
-          <select style={input} value={clas} onChange={e => setClas(e.target.value as Clasificacion)}>
-            {CLASIFICACIONES.map(c => <option key={c} value={c}>{ETIQUETA_CLASIFICACION[c]}</option>)}
-          </select>
-          <input style={{ ...input, width: 150 }} placeholder="Quién" value={quien} maxLength={200} onChange={e => setQuien(e.target.value)} />
-          <input style={{ ...input, width: 170 }} placeholder="Cuándo" value={cuando} maxLength={200} onChange={e => setCuando(e.target.value)} />
-          <button type="button" style={boton('ok')} disabled={ocupado} onClick={async () => {
-            if (await ejecutar(() => validarInstruccion(ins.id, clas, quien || null, cuando || null), 'Clasificación validada')) setValidando(false)
-          }}>Guardar</button>
-          <button type="button" style={boton()} onClick={() => setValidando(false)}>Cancelar</button>
-        </div>
-      )}
-
-      {enCurso && <Control c={enCurso} preparar={preparar} validada={!!efectiva && efectiva !== 'informativa'} ocupado={ocupado} ejecutar={ejecutar} />}
-
-      {!enCurso && preparar && ins.coincide && efectiva !== 'informativa' && (
-        manual
-          ? <FormControl
-              inicial={{ destino: 'checklist_supervision', texto: '', criticidad: 'normal', foto: false }}
-              ocupado={ocupado}
-              onCancelar={() => setManual(false)}
-              onGuardar={async v => { if (await ejecutar(() => proponerControl(ins.id, v.destino, v.texto, v.criticidad, v.foto), 'Propuesta cargada')) setManual(false) }}
-            />
-          : <div style={{ margin: '6px 0 0 30px' }}>
-              <button type="button" style={{ ...boton(), padding: '3px 9px' }} onClick={() => setManual(true)}>Proponer control a mano</button>
-            </div>
-      )}
-
-      {rechazados.length > 0 && (
-        <details style={{ margin: '6px 0 0 30px' }}>
-          <summary style={{ ...nota, cursor: 'pointer' }}>{rechazados.length} propuesta{rechazados.length > 1 ? 's' : ''} rechazada{rechazados.length > 1 ? 's' : ''}</summary>
-          {rechazados.map(r => (
-            <div key={r.id} style={{ ...nota, marginTop: 4 }}>«{r.texto_item}» — {r.motivo_rechazo}</div>
-          ))}
+      {agregados.length > 0 && (
+        <details style={{ marginTop: 14 }} open={paraRevisar.length === 0}>
+          <summary style={{ ...nota, cursor: 'pointer', color: '#cbd5e1' }}>Ya en el checklist del supervisor ({agregados.length})</summary>
+          <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+            {agregados.map(c => (
+              <div key={c.id} style={{ fontSize: 13, color: '#e2e8f0' }}>
+                ✓ {c.texto_item}
+                <span style={{ ...nota, fontSize: 11.5 }}> · {c.activado_por_nombre ? `${c.activado_por_nombre}, ` : ''}{c.activado_at ? fechaHoraAR(c.activado_at) : ''}</span>
+                {instrucciones.get(c.instruccion_id) && <div style={cita}>{instrucciones.get(c.instruccion_id)!.texto}</div>}
+              </div>
+            ))}
+          </div>
         </details>
       )}
     </div>
   )
 }
 
-function Control({ c, preparar, validada, ocupado, ejecutar }: {
+export function Punto({ c, ins, puede, ocupado, ejecutar }: {
   c: ControlPropuesto
-  preparar: boolean
-  validada: boolean
+  ins: InstruccionPanel | null
+  puede: boolean
   ocupado: boolean
   ejecutar: Ejecutar
 }) {
-  const [editando, setEditando] = useState(false)
-  const [rechazando, setRechazando] = useState(false)
-  const [motivo, setMotivo] = useState('')
+  const [corrigiendo, setCorrigiendo] = useState(false)
+  const [texto, setTexto] = useState(c.texto_item)
+  const yaEsta = c.existente_tipo === 'checklist_item' || c.existente_tipo === 'control_propuesto'
+
+  const agregar = (t: string | null) => ejecutar(async () => {
+    const r = await agregarAlChecklist(c.id, t)
+    return { error: r.error }
+  }, 'Agregado: el supervisor lo ve en su próxima visita.')
+
+  const descartar = () => ejecutar(async () => {
+    const r = await rechazarControl(c.id, 'Descartado desde la ficha')
+    if (r.error) return r
+    // Que la IA no lo vuelva a proponer: la instrucción no tiene nada para la visita.
+    if (ins && !ins.validada_at) await validarInstruccion(ins.id, 'informativa', null, null)
+    return { error: null }
+  }, 'Descartado.')
 
   return (
-    <div style={{ margin: '8px 0 0 30px', borderLeft: `3px solid ${COLOR_ESTADO_CONTROL[c.estado]}`, paddingLeft: 10 }}>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={pill(COLOR_ESTADO_CONTROL[c.estado])}>{ETIQUETA_ESTADO_CONTROL[c.estado]}</span>
-        <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
-          {ETIQUETA_DESTINO[c.destino]}{c.origen === 'ia' ? ' · propuesto por IA' : ' · propuesto a mano'}
-          {c.criticidad === 'alta' ? ' · criticidad alta' : ''}{c.foto_obligatoria ? ' · con foto' : ''}
-        </span>
-      </div>
-      {editando ? (
-        <FormControl
-          inicial={{ destino: c.destino, texto: c.texto_item, criticidad: c.criticidad, foto: c.foto_obligatoria }}
-          ocupado={ocupado}
-          onCancelar={() => setEditando(false)}
-          onGuardar={async v => { if (await ejecutar(() => editarControl(c.id, v.destino, v.texto, v.criticidad, v.foto), 'Propuesta corregida')) setEditando(false) }}
-        />
+    <div style={{ border: '1px solid #1e2d42', borderRadius: 8, padding: 10, background: '#0b1220' }}>
+      {corrigiendo ? (
+        <input style={input} value={texto} maxLength={500} autoFocus onChange={e => setTexto(e.target.value)} aria-label="Texto del punto" />
       ) : (
-        <div style={{ fontSize: 13.5, color: '#f1f5f9', fontWeight: 600, marginTop: 4 }}>{c.texto_item}</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>{c.texto_item}</div>
       )}
-      {c.texto_item !== c.texto_original && <div style={nota}>Original: «{c.texto_original}»</div>}
-      {c.motivo && <div style={nota}>{c.motivo}</div>}
-      {c.existente_tipo && (
-        <div style={{ fontSize: 12, color: '#fbbf24', marginTop: 4 }}>
-          Ya cubierto por {ETIQUETA_EXISTENTE[c.existente_tipo]}: «{c.existente_texto}». No se aprueba: rechazala como duplicada o corregí el texto.
-        </div>
-      )}
-      {!destinoActivable(c.destino) && c.estado !== 'rechazado' && (
-        <div style={nota}>En esta etapa sólo se activan puntos del checklist de supervisión: esto queda como propuesta documentada.</div>
-      )}
-      {c.estado === 'aprobado' && <div style={nota}>Aprobado{c.aprobado_por_nombre ? ` por ${c.aprobado_por_nombre}` : ''} {c.aprobado_at ? fechaHoraAR(c.aprobado_at) : ''}</div>}
-      {c.estado === 'activado' && <div style={nota}>Activado{c.activado_por_nombre ? ` por ${c.activado_por_nombre}` : ''} {c.activado_at ? fechaHoraAR(c.activado_at) : ''} · ya está en el checklist del supervisor</div>}
+      {ins && <div style={cita}>Del protocolo: «{ins.texto}»</div>}
+      {yaEsta && <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 6 }}>Ya está en el checklist: «{c.existente_texto}»</div>}
 
-      {preparar && !editando && (c.estado === 'propuesto' || c.estado === 'aprobado') && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-          {c.estado === 'propuesto' && (
-            <button type="button" style={boton('ok')} disabled={ocupado || !validada || !!c.existente_tipo}
-              title={!validada ? 'Primero validá la clasificación de la instrucción' : undefined}
-              onClick={() => ejecutar(() => aprobarControl(c.id), 'Propuesta aprobada')}>Aprobar</button>
-          )}
-          {c.estado === 'propuesto' && <button type="button" style={boton()} onClick={() => setEditando(true)}>Corregir</button>}
-          {!rechazando && <button type="button" style={boton('peligro')} onClick={() => setRechazando(true)}>Rechazar</button>}
-          {rechazando && (
+      {puede && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          {corrigiendo ? (
             <>
-              <input style={{ ...input, minWidth: 220 }} placeholder="Motivo del rechazo" value={motivo} onChange={e => setMotivo(e.target.value)} />
-              <button type="button" style={boton('peligro')} disabled={ocupado || !motivo.trim()}
-                onClick={() => ejecutar(() => rechazarControl(c.id, motivo.trim()), 'Propuesta rechazada')}>Confirmar rechazo</button>
-              <button type="button" style={boton()} onClick={() => { setRechazando(false); setMotivo('') }}>Cancelar</button>
+              <button type="button" style={boton('ok')} disabled={ocupado || !texto.trim()} onClick={() => void agregar(texto.trim())}>Agregar con este texto</button>
+              <button type="button" style={boton()} onClick={() => { setCorrigiendo(false); setTexto(c.texto_item) }}>Cancelar</button>
+            </>
+          ) : (
+            <>
+              <button type="button" style={boton('ok')} disabled={ocupado || yaEsta} onClick={() => void agregar(null)}>Agregar al checklist</button>
+              <button type="button" style={boton()} disabled={ocupado || c.estado !== 'propuesto'} onClick={() => setCorrigiendo(true)}>Corregir</button>
+              <button type="button" style={boton()} disabled={ocupado} onClick={() => void descartar()}>Descartar</button>
             </>
           )}
-          {c.estado === 'propuesto' && !validada && <span style={nota}>Para aprobar, validá antes la clasificación.</span>}
         </div>
       )}
-    </div>
-  )
-}
-
-function FormControl({ inicial, ocupado, onGuardar, onCancelar }: {
-  inicial: { destino: Destino; texto: string; criticidad: 'normal' | 'alta'; foto: boolean }
-  ocupado: boolean
-  onGuardar: (v: { destino: Destino; texto: string; criticidad: 'normal' | 'alta'; foto: boolean }) => void
-  onCancelar: () => void
-}) {
-  const [v, setV] = useState(inicial)
-  return (
-    <div style={{ display: 'grid', gap: 6, margin: '6px 0 0 30px', maxWidth: 560 }}>
-      <select style={input} value={v.destino} onChange={e => setV({ ...v, destino: e.target.value as Destino })}>
-        {DESTINOS.map(d => <option key={d} value={d}>{ETIQUETA_DESTINO[d]}</option>)}
-      </select>
-      <input style={input} placeholder="Qué tiene que verificar el supervisor" value={v.texto} maxLength={500}
-        onChange={e => setV({ ...v, texto: e.target.value })} />
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={nota}>
-          <input type="checkbox" checked={v.criticidad === 'alta'} onChange={e => setV({ ...v, criticidad: e.target.checked ? 'alta' : 'normal' })} /> Criticidad alta
-        </label>
-        <label style={nota}>
-          <input type="checkbox" checked={v.foto} onChange={e => setV({ ...v, foto: e.target.checked })} /> Foto obligatoria
-        </label>
-        <button type="button" style={boton('ok')} disabled={ocupado || !v.texto.trim()} onClick={() => onGuardar({ ...v, texto: v.texto.trim() })}>Guardar</button>
-        <button type="button" style={boton()} onClick={onCancelar}>Cancelar</button>
-      </div>
-    </div>
-  )
-}
-
-export function Activacion({ objetivoId, version, panel, aprobados, ocupado, ejecutar }: {
-  objetivoId: string
-  version: VersionControles
-  panel: PanelControles
-  aprobados: ControlPropuesto[]
-  ocupado: boolean
-  ejecutar: Ejecutar
-}) {
-  const [elegidos, setElegidos] = useState<Set<string>>(new Set())
-  useEffect(() => { setElegidos(new Set(aprobados.map(c => c.id))) }, [aprobados.map(c => c.id).join(',')])
-
-  if (aprobados.length === 0) return null
-  const vigente = version.estado === 'vigente'
-  const plantilla = panel.plantilla
-  const efecto = plantilla?.propia
-    ? `Se agregan a «${plantilla.nombre}», la plantilla propia del objetivo.`
-    : plantilla
-      ? `Se crea una plantilla propia del objetivo: copia de «${plantilla.nombre}» (${plantilla.items.length} puntos) más estos. La plantilla general no cambia para los demás objetivos.`
-      : 'Se crea una plantilla propia del objetivo con estos puntos.'
-
-  return (
-    <div style={{ marginTop: 16, border: '1px solid #14532d', borderRadius: 8, padding: 12, background: '#052e16' }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: '#bbf7d0' }}>Activar en el checklist del supervisor</div>
-      <div style={{ ...nota, color: '#a7f3d0', margin: '4px 0 8px' }}>
-        {vigente ? efecto : 'Se activa recién cuando esta versión del protocolo esté publicada (vigente).'}
-        {' '}Los supervisores lo van a ver en su próxima supervisión del objetivo.
-      </div>
-      <div style={{ display: 'grid', gap: 4 }}>
-        {aprobados.map(c => (
-          <label key={c.id} style={{ fontSize: 13, color: '#e2e8f0', display: 'flex', gap: 6 }}>
-            <input type="checkbox" checked={elegidos.has(c.id)} disabled={!vigente}
-              onChange={e => {
-                const s = new Set(elegidos)
-                if (e.target.checked) s.add(c.id); else s.delete(c.id)
-                setElegidos(s)
-              }} />
-            {c.texto_item}{c.criticidad === 'alta' ? ' · alta' : ''}{c.foto_obligatoria ? ' · con foto' : ''}
-          </label>
-        ))}
-      </div>
-      <button type="button" style={{ ...boton('ok'), marginTop: 10 }} disabled={!vigente || ocupado || elegidos.size === 0}
-        onClick={() => {
-          if (!window.confirm(`${efecto}\n\n¿Activar ${elegidos.size} punto${elegidos.size > 1 ? 's' : ''}?`)) return
-          void ejecutar(async () => {
-            const r = await activarControles(objetivoId, Array.from(elegidos))
-            return { error: r.error }
-          }, 'Activado: ya está en el checklist del supervisor')
-        }}>
-        Activar {elegidos.size} punto{elegidos.size === 1 ? '' : 's'}
-      </button>
     </div>
   )
 }

@@ -145,11 +145,14 @@ describe('instrucciones completas desde citas literales', () => {
     const r = interpretarIdentificacion({ instrucciones: [
       { cita: '', clasificacion: 'obligacion', destino: 'tarea_turno', texto_item: 'x', criticidad: 'normal', foto_obligatoria: false, existente_tipo: 'ninguno' },
       { cita: 'RANDSTAD', clasificacion: 'informativa', destino: 'checklist_supervision', texto_item: 'x', criticidad: 'normal', foto_obligatoria: false, existente_tipo: 'ninguno' },
-      { cita: 'Luego llamará al sector.', clasificacion: 'obligacion', destino: 'tarea_turno', texto_item: 'Anunciar visitas al sector', criticidad: 'alta', foto_obligatoria: false, existente_tipo: 'ninguno' },
+      { cita: 'Luego llamará al sector.', clasificacion: 'obligacion', destino: 'checklist_supervision', texto_item: 'El vigilador anuncia las visitas al sector', criticidad: 'alta', foto_obligatoria: false, existente_tipo: 'ninguno' },
+      // Desde el 16/10 sólo puntos del checklist del supervisor: una tarea del turno no trae control.
+      { cita: 'Al ingresar firma el libro.', clasificacion: 'obligacion', destino: 'tarea_turno', texto_item: 'Firmar el libro', criticidad: 'normal', foto_obligatoria: false, existente_tipo: 'ninguno' },
     ] })
-    expect(r).toHaveLength(2)
+    expect(r).toHaveLength(3)
     expect(r[0].propuesta.destino).toBeNull()
-    expect(r[1].propuesta).toMatchObject({ destino: 'tarea_turno', criticidad: 'alta' })
+    expect(r[1].propuesta).toMatchObject({ destino: 'checklist_supervision', criticidad: 'alta' })
+    expect(r[2].propuesta).toMatchObject({ destino: null, texto_item: null })
   })
 })
 
