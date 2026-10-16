@@ -8,6 +8,7 @@
 
 import { supabase } from '@/lib/supabase'
 import { comprimirImagen } from '@/lib/comprimir-imagen'
+import { esPdf, pdfAFoto } from '@/lib/pdf-imagen'
 import { giroParaEnderezar, rectRecorte } from '@/lib/credencial-lectura'
 import type { LecturaCredencial } from '@/lib/credencial-lectura'
 
@@ -49,8 +50,13 @@ export async function recortarCredencial(foto: File, l: LecturaCredencial): Prom
 /**
  * Lee la credencial con IA y devuelve la foto lista para subir (recortada si se
  * pudo) y la lectura. Sin conexión, sin IA o con error: la foto comprimida y null.
+ * Un PDF (escaneo de Administración) se convierte antes en foto (primera página).
+ * `empleadoId`: Administración carga para otra persona; el DNI se compara con el de ella.
  */
-export async function leerYRecortar(original: File): Promise<{ foto: File; lectura: LecturaCredencial | null }> {
+export async function leerYRecortar(original: File, empleadoId?: string): Promise<{ foto: File; lectura: LecturaCredencial | null }> {
+  if (esPdf(original)) {
+    try { original = await pdfAFoto(original) } catch { return { foto: original, lectura: null } }
+  }
   let foto = original
   try { foto = await comprimirImagen(original, { maxWidth: 1800, quality: 0.85, timeoutMs: 15000 }) } catch { /* se usa la original */ }
   try {
@@ -60,7 +66,7 @@ export async function leerYRecortar(original: File): Promise<{ foto: File; lectu
     const res = await fetch('/api/credencial/leer', {
       method: 'POST', cache: 'no-store',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ imagen: await aBase64(foto) }),
+      body: JSON.stringify({ imagen: await aBase64(foto), empleado_id: empleadoId ?? null }),
     })
     if (!res.ok) return { foto, lectura: null }
     const { lectura } = await res.json() as { lectura?: LecturaCredencial }

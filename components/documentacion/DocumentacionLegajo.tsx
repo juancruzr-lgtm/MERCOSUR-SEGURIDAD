@@ -33,6 +33,8 @@ import {
 import { ETIQUETA_FUENTE, cargarHistoricoDeEmpleado, cargarIndicios, cargarResumenHistorico, enlaceArchivoHistorico, listaDeResumen, porRevisar } from '@/lib/legajo-historico'
 import type { Indicio, ReferenciaHistorica, ResumenHistorico } from '@/lib/legajo-historico'
 import { aprobarFotoCredencial, avisoVencimiento } from '@/lib/credencial-pedido'
+import { pdfAImagenes } from '@/lib/pdf-imagen'
+import CargaCredencialAdmin from '@/components/habilitacion/CargaCredencialAdmin'
 
 const hoyAr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())
 
@@ -85,6 +87,32 @@ function kb(bytes: number): string {
 
 // ── Archivos: se abren de a uno, por el servidor (queda registrado) ─────────
 
+/** Las páginas de un PDF como imágenes, para verlo sin descargarlo. */
+function VistaPdf({ url, etiqueta }: { url: string; etiqueta: string }) {
+  const [paginas, setPaginas] = useState<string[] | null>(null)
+  const [fallo, setFallo] = useState(false)
+  useEffect(() => {
+    let vivo = true
+    let urls: string[] = []
+    void fetch(url).then(r => { if (!r.ok) throw new Error(); return r.blob() })
+      .then(b => pdfAImagenes(b, { maxPaginas: 4, ladoMax: 1400 }))
+      .then(imgs => { urls = imgs.map(i => URL.createObjectURL(i)); if (vivo) setPaginas(urls) })
+      .catch(() => { if (vivo) setFallo(true) })
+    return () => { vivo = false; urls.forEach(u => URL.revokeObjectURL(u)) }
+  }, [url])
+  if (fallo) return <div style={{ fontSize: 12.5, color: '#fca5a5', margin: '4px 0' }}>No se pudo mostrar el PDF acá: abrilo con el botón.</div>
+  if (!paginas) return <div style={{ fontSize: 12.5, color: '#64748b', margin: '4px 0' }}>Mostrando el PDF…</div>
+  return (
+    <>
+      {paginas.map((u, i) => (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img key={u} src={u} alt={`${etiqueta}${paginas.length > 1 ? ` · página ${i + 1}` : ''}`}
+          style={{ display: 'block', width: '100%', maxHeight: 320, objectFit: 'contain', borderRadius: 8, border: '1px solid #334155', background: '#0b1220', marginBottom: 4 }} />
+      ))}
+    </>
+  )
+}
+
 function Archivo({ a, total, descargar, onAbierto }: {
   a: ArchivoDocumento; total: number; descargar: boolean; onAbierto: () => void
 }) {
@@ -105,7 +133,7 @@ function Archivo({ a, total, descargar, onAbierto }: {
   }
 
   return (
-    <div style={{ width: esPdf || !url ? 'auto' : '100%', maxWidth: 360 }}>
+    <div style={{ width: !url ? 'auto' : '100%', maxWidth: 360 }}>
       {!url && (
         <button type="button" style={{ ...boton('secundario', !ocupado), flex: '0 1 auto', fontSize: 13 }} disabled={ocupado}
           onClick={() => void abrir('ver')}>
@@ -119,6 +147,7 @@ function Archivo({ a, total, descargar, onAbierto }: {
           <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 3 }}>{etiqueta}</div>
         </a>
       )}
+      {url && esPdf && <VistaPdf url={url} etiqueta={etiqueta} />}
       {url && esPdf && (
         <a href={url} target="_blank" rel="noreferrer" style={{ ...boton('secundario'), flex: '0 1 auto', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', fontSize: 13 }}>
           📄 Abrir {etiqueta.toLowerCase()} (PDF)
@@ -401,7 +430,7 @@ export function Documento({ doc, tipo, esPropio, puedeGestionar, nombrePersona, 
               style={{ display: 'block', marginTop: 4, background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '8px 10px', fontSize: 14 }} />
           </label>
           {avisoVencimiento(venceRevision, hoyAr()) && <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 4 }}>{avisoVencimiento(venceRevision, hoyAr())}</div>}
-          {venceRevision !== (doc.vence_el ?? '') && <div style={{ fontSize: 12.5, color: '#93c5fd', marginTop: 4 }}>Se corrige el vencimiento que puso el vigilador ({doc.vence_el ? doc.vence_el.split('-').reverse().join('/') : '—'}); queda registrado.</div>}
+          {venceRevision !== (doc.vence_el ?? '') && <div style={{ fontSize: 12.5, color: '#93c5fd', marginTop: 4 }}>Se corrige el vencimiento cargado ({doc.vence_el ? doc.vence_el.split('-').reverse().join('/') : '—'}); queda registrado.</div>}
         </div>
       )}
       {puedeGestionar && doc.estado === 'pendiente_revision' && modo === null && (
@@ -644,7 +673,13 @@ function TarjetaTipo({ tipo, s, datos, nombrePersona, indicios = [], historicos 
       {!habilitado && datos.es_propio && s.vigentes.length === 0 && s.pendientes.length === 0 && s.base !== 'no_corresponde' && (
         <div style={{ ...texto, fontSize: 12.5, marginTop: 8 }}>Lo carga Administración.</div>
       )}
-      {subiendo && (
+      {subiendo && tipo.codigo === 'credencial' && datos.puede_gestionar && (
+        // La credencial que carga Administración pasa por la lectura y el recorte con IA
+        // y queda para revisar (no la acepta el vigilador).
+        <CargaCredencialAdmin empleadoId={datos.empleado_id}
+          onCancelar={() => setSubiendo(false)} onListo={() => { setSubiendo(false); onCambio() }} />
+      )}
+      {subiendo && !(tipo.codigo === 'credencial' && datos.puede_gestionar) && (
         <FormSubida tipo={tipo} empleadoId={datos.empleado_id} origenAdministracion={datos.puede_gestionar}
           onCancelar={() => setSubiendo(false)} onListo={() => { setSubiendo(false); onCambio() }} />
       )}

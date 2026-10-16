@@ -9,6 +9,11 @@
  * «tiene credencial» (lo registra la base) y se copia al servidor. Si no hay
  * foto, muestra lo que respondió el vigilador (en trámite / no tiene y por qué).
  * Cada apertura de una foto queda registrada (documentacion_abrir).
+ *
+ * Administración también carga acá la credencial (escaneo o foto, por ejemplo la
+ * renovada que llega a la oficina): pasa por la misma lectura y recorte con IA y
+ * queda para revisar, sin esperar que el vigilador la acepte. Una carga pendiente
+ * (por ejemplo, un PDF sin recortar) se puede volver a procesar con IA.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -16,21 +21,36 @@ import { abrirArchivo, revisarDocumento } from '@/lib/documentacion-datos'
 import { aprobarFotoCredencial, avisoVencimiento, cargarCredencialDeEmpleado, declaracionTexto } from '@/lib/credencial-pedido'
 import type { CredencialDeEmpleado } from '@/lib/credencial-pedido'
 import { fechaCorta } from '@/lib/habilitacion'
+import { pdfAImagenes } from '@/lib/pdf-imagen'
+import CargaCredencialAdmin from '@/components/habilitacion/CargaCredencialAdmin'
 
 const boton = (ok: boolean): React.CSSProperties => ({
   background: ok ? '#16a34a' : 'transparent', color: ok ? '#fff' : '#fca5a5', border: ok ? 'none' : '1px solid rgba(239,68,68,.5)',
   borderRadius: 8, padding: '8px 13px', fontWeight: 800, fontSize: 13.5, cursor: 'pointer',
 })
 
-function Imagen({ id, cara }: { id: string; cara: string | null }) {
+/** Abre el archivo y, si es PDF, lo muestra como imagen (primera página). */
+function Imagen({ id, cara, mime }: { id: string; cara: string | null; mime: string }) {
   const [url, setUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [grande, setGrande] = useState(false)
   useEffect(() => {
     let vivo = true
-    void abrirArchivo(id, 'ver').then(r => { if (vivo) { setUrl(r.url); setError(r.error) } })
-    return () => { vivo = false }
-  }, [id])
+    let local: string | null = null
+    void (async () => {
+      const r = await abrirArchivo(id, 'ver')
+      if (!r.url || mime !== 'application/pdf') { if (vivo) { setUrl(r.url); setError(r.error) } return }
+      try {
+        const pdf = await fetch(r.url).then(x => { if (!x.ok) throw new Error(); return x.blob() })
+        const [img] = await pdfAImagenes(pdf, { maxPaginas: 1, ladoMax: 1400 })
+        local = URL.createObjectURL(img)
+        if (vivo) setUrl(local)
+      } catch {
+        if (vivo) setError('No se pudo mostrar el PDF')
+      }
+    })()
+    return () => { vivo = false; if (local) URL.revokeObjectURL(local) }
+  }, [id, mime])
   return (
     <figure style={{ margin: 0, flex: '1 1 160px', minWidth: 0, maxWidth: 320 }}>
       {url
@@ -50,6 +70,9 @@ export default function FotoCredencial({ empleadoId, onCambio }: { empleadoId: s
   const [ocupado, setOcupado] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [vence, setVence] = useState('')
+  // Carga de Administración: nueva, o reprocesar la pendiente con sus archivos.
+  const [cargando, setCargando] = useState<null | { iniciales?: Partial<Record<'Frente' | 'Dorso', File>> }>(null)
+  const [preparando, setPreparando] = useState(false)
   const cargar = useCallback(async () => { const r = await cargarCredencialDeEmpleado(empleadoId); setDatos(r.datos); setError(r.error); setVence(r.datos?.foto?.vence_el ?? '') }, [empleadoId])
   useEffect(() => { void cargar() }, [cargar])
 
@@ -57,6 +80,36 @@ export default function FotoCredencial({ empleadoId, onCambio }: { empleadoId: s
   const f = datos.foto
   const pendiente = f?.estado === 'pendiente_revision'
   const decl = declaracionTexto(datos.declaracion)
+  const listo = () => { setCargando(null); void cargar(); onCambio?.() }
+
+  // Baja los archivos de la carga pendiente para que la IA los lea y recorte (la nueva la reemplaza).
+  const reprocesar = async () => {
+    if (!f) return
+    setPreparando(true); setError(null)
+    try {
+      const iniciales: Partial<Record<'Frente' | 'Dorso', File>> = {}
+      for (const a of f.archivos) {
+        const cara = a.cara === 'Dorso' ? 'Dorso' : 'Frente'
+        const r = await abrirArchivo(a.id, 'ver')
+        if (!r.url) throw new Error(r.error ?? 'No se pudo abrir el archivo')
+        const b = await fetch(r.url).then(x => { if (!x.ok) throw new Error('No se pudo bajar el archivo'); return x.blob() })
+        iniciales[cara] = new File([b], `${cara.toLowerCase()}.${a.mime === 'application/pdf' ? 'pdf' : 'jpg'}`, { type: a.mime })
+      }
+      setCargando({ iniciales })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudieron preparar los archivos')
+    }
+    setPreparando(false)
+  }
+  const formulario = cargando && (
+    <CargaCredencialAdmin empleadoId={empleadoId} iniciales={cargando.iniciales} onListo={listo} onCancelar={() => setCargando(null)} />
+  )
+  const botonCargar = (texto: string) => !cargando && (
+    <button type="button" onClick={() => setCargando({})}
+      style={{ marginTop: 8, background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+      {texto}
+    </button>
+  )
 
   const revisar = async (d: 'aprobar' | 'rechazar') => {
     setOcupado(true); setError(null)
@@ -71,6 +124,8 @@ export default function FotoCredencial({ empleadoId, onCambio }: { empleadoId: s
       <div style={{ marginTop: 10, padding: '9px 12px', borderRadius: 10, border: '1px dashed #334155', fontSize: 13.5, color: '#cbd5e1' }}>
         <b>Foto de la credencial:</b> no hay.{' '}
         {decl ? <span style={{ color: '#fbbf24' }}>{decl}</span> : <span style={{ color: '#94a3b8' }}>El vigilador todavía no respondió el pedido de credencial.</span>}
+        <div>{botonCargar('📄 Cargar la credencial (escaneo o foto)')}</div>
+        {formulario}
       </div>
     )
   }
@@ -85,14 +140,22 @@ export default function FotoCredencial({ empleadoId, onCambio }: { empleadoId: s
           {pendiente ? 'Foto de la credencial para revisar' : 'Foto de la credencial aceptada'}
         </div>
         <div style={{ fontSize: 12.5, color: '#94a3b8' }}>
-          {f.vence_el ? `vence ${fechaCorta(f.vence_el)}` : 'sin vencimiento'} · subida el {fechaCorta(f.subido_at)}{f.origen === 'vigilador' ? ' por el vigilador' : ''}
+          {f.vence_el ? `vence ${fechaCorta(f.vence_el)}` : 'sin vencimiento'} · subida el {fechaCorta(f.subido_at)}{f.origen === 'vigilador' ? ' por el vigilador' : ' por Administración'}
         </div>
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
-        {f.archivos.map(a => <Imagen key={a.id} id={a.id} cara={a.cara} />)}
+        {f.archivos.map(a => <Imagen key={a.id} id={a.id} cara={a.cara} mime={a.mime} />)}
       </div>
       {servidor && <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{servidor}</div>}
-      {pendiente && !rechazando && (
+      {pendiente && !rechazando && !cargando && (
+        <button type="button" disabled={preparando} onClick={() => void reprocesar()}
+          style={{ marginTop: 8, background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+          {preparando ? 'Preparando…' : '✂️ Recortar y leer con IA'}
+        </button>
+      )}
+      {!pendiente && botonCargar('📄 Cargar la credencial renovada (escaneo o foto)')}
+      {formulario}
+      {pendiente && !rechazando && !cargando && (
         <div style={{ marginTop: 8 }}>
           <div style={{ fontSize: 12.5, color: '#cbd5e1', marginBottom: 6 }}>Mirá que sea legible y que sea de esta persona. Si el vencimiento no coincide con el de la tarjeta, corregilo acá.</div>
           <label style={{ display: 'block', fontSize: 13, color: '#cbd5e1', marginBottom: 6 }}>
