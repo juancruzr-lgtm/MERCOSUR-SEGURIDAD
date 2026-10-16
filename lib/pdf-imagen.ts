@@ -18,7 +18,7 @@ interface PdfJs {
 interface PdfDoc { numPages: number; getPage: (n: number) => Promise<PdfPagina>; destroy: () => Promise<void> }
 interface PdfPagina {
   getViewport: (p: { scale: number }) => { width: number; height: number }
-  render: (p: { canvasContext: CanvasRenderingContext2D; viewport: unknown }) => { promise: Promise<void> }
+  render: (p: { canvasContext: CanvasRenderingContext2D; viewport: unknown; intent?: string }) => { promise: Promise<void> }
 }
 
 let cargando: Promise<PdfJs> | null = null
@@ -64,7 +64,8 @@ export async function pdfAImagenes(pdf: Blob, opciones: { maxPaginas?: number; l
       const ctx = c.getContext('2d')
       if (!ctx) throw new Error('canvas')
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height)
-      await pagina.render({ canvasContext: ctx, viewport: vista }).promise
+      // 'print' dibuja de una vez (sin requestAnimationFrame): no se frena si la pestaña queda en segundo plano.
+      await pagina.render({ canvasContext: ctx, viewport: vista, intent: 'print' }).promise
       const b = await new Promise<Blob | null>(ok => c.toBlob(ok, 'image/jpeg', 0.9))
       if (b) salida.push(b)
     }
