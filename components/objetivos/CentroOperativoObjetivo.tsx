@@ -19,7 +19,6 @@ import { Badge, btn, btnPrimary, btnSecondary } from '@/components/ui/base'
 import RondasSupervisionPanel from '@/components/rondas/RondasSupervisionPanel'
 import type { SeccionRondasPanel } from '@/components/rondas/RondasSupervisionPanel'
 import ProtocoloObjetivoPanel from '@/components/protocolos/ProtocoloObjetivoPanel'
-import ControlesProtocoloPanel from '@/components/protocolos/ControlesProtocoloPanel'
 import TareasTurnoPanel from '@/components/tareas/TareasTurnoPanel'
 import SelectorDiasMes from './SelectorDiasMes'
 import { fechasDeAtajo, rangoDeSeleccion } from '@/lib/calendario-mes'
@@ -1469,9 +1468,18 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             </>
           )}
         </div>
-        {/* Checklist desde el protocolo: instrucciones → controles propuestos →
-            aprobación → activación por Gerencia. Sin acceso, no aparece. */}
-        <ControlesProtocoloPanel objetivoId={objetivoId} />
+        {/* Las propuestas desde el protocolo viven junto al texto del protocolo
+            (ProtocoloObjetivoPanel); acá sólo el acceso. */}
+        <div style={{ ...card, display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+          <span style={{ fontSize:13, color:'#94a3b8' }}>Los puntos que salen del protocolo se proponen, aprueban y activan junto al texto del protocolo.</span>
+          <button
+            type="button"
+            style={{ ...S.btn, ...S.btnSecondary, fontSize:13 }}
+            onClick={() => document.getElementById('controles-protocolo')?.scrollIntoView({ behavior:'smooth', block:'start' })}
+          >
+            Ir a los controles del protocolo ↑
+          </button>
+        </div>
         <SeccionSupervisiones
           objetivoId={objetivoId}
           onVerDetalle={onNavigate ? () => ejecutarConConfirmacionRondas(() => onNavigate('supervisiones', { tipo:'objetivo', objetivoId })) : undefined}
