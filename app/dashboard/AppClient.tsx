@@ -14419,8 +14419,9 @@ const esGuardia = esRolGuardia(user.rol)
             </>
           ) : (
             <>
-              {/* Estatuto pendiente del propio usuario del shell admin: tarjeta, no
-                  modal. Lleva a /estatuto (el shell admin no tiene Mi Legajo). */}
+              {/* Estatuto pendiente del propio usuario del shell admin: tarjeta fija
+                  + cartel que vuelve, sin bloquear. Lleva a /estatuto (el shell
+                  admin no tiene Mi Legajo). */}
               {user?.id && <AvisoEstatuto empleadoId={user.id} destino="/estatuto" />}
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} puedePleno={tieneCapacidad(user, 'gestionar_personal')} puedeOperativo={tieneCapacidad(user, 'gestionar_personal_operativo')} user={user} />}
