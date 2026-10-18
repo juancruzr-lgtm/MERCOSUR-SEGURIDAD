@@ -3,7 +3,7 @@
  *
  * Evaluación de supervisores — Etapa 1 (sólo lectura).
  *
- * El cálculo vive en la base (migración 20261026120000): acá están los tipos
+ * El cálculo vive en la base (migración 20261028120000): acá están los tipos
  * de lo que devuelven las RPC, el período por defecto, quién la ve y las tasas
  * que muestra la pantalla. Nada de esto escribe.
  *

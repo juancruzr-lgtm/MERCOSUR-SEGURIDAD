@@ -31,7 +31,7 @@
 -- STABLE. No mide «visto» (no existe hasta la Etapa 2) ni fallas de asistencia
 -- persistidas (Etapa 3): de asistencia da avisos recibidos y acciones hechas.
 --
--- Rollback: supabase/rollback/20261026120000_evaluacion_supervisores_e1_rollback.sql
+-- Rollback: supabase/rollback/20261028120000_evaluacion_supervisores_e1_rollback.sql
 
 begin;
 

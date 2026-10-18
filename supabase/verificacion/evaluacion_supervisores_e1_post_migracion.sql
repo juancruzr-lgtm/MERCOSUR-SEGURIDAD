@@ -1,4 +1,4 @@
--- Verificación posterior a aplicar 20261026120000 (evaluación de supervisores E1).
+-- Verificación posterior a aplicar 20261028120000 (evaluación de supervisores E1).
 -- Correr en el editor de Supabase ANTES de desplegar. Sólo lee. Si algo da false, NO desplegar.
 
 create temp table if not exists verif_evalsup (orden timestamptz default clock_timestamp(), control text, esperado text, obtenido text, ok boolean);

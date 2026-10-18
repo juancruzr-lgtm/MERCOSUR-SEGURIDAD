@@ -1,4 +1,4 @@
--- Rollback de 20261026120000_evaluacion_supervisores_e1.sql. Correr por separado.
+-- Rollback de 20261028120000_evaluacion_supervisores_e1.sql. Correr por separado.
 -- Sólo borra funciones de lectura: no hay datos que perder.
 
 begin;
