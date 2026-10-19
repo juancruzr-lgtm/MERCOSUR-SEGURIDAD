@@ -20,15 +20,23 @@
  * ── Universo ─────────────────────────────────────────────────────────────────
  * Usuarios activos, sin cuentas de prueba: vigiladores, supervisores y
  * personal administrativo. Lo define la RPC, no esta pantalla.
+ *
+ * ── Filtro por zona ──────────────────────────────────────────────────────────
+ * Decisión de JC (16/10/2026): sólo un filtro para Administración y Gerencia,
+ * que igual ven a todos. La zona de cada persona la calcula la RPC (dónde
+ * tuvo o tiene turnos, y las zonas asignadas a cada supervisor). Quien
+ * trabaja en dos zonas aparece en las dos; quien no tiene ninguna, en "Sin
+ * zona". Los totales de arriba son los de la zona elegida.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import DocumentoEstatuto from '@/components/estatuto/DocumentoEstatuto'
 import EstatutoInterno from '@/components/estatuto/EstatutoInterno'
 import {
-  contenidoDeVersion, etiquetaVersion, fechaHoraArgentina, resumenControl, versionVigente,
+  SIN_ZONA, TODAS_LAS_ZONAS, contenidoDeVersion, etiquetaVersion, fechaHoraArgentina, filtrarPorZona,
+  resumenControl, versionVigente,
 } from '@/lib/estatuto'
-import type { PersonaControl, VersionEstatuto } from '@/lib/estatuto'
+import type { PersonaControl, VersionEstatuto, ZonaControl } from '@/lib/estatuto'
 import { cargarControl, cargarVersiones, descargarOriginal, publicarVersion } from '@/lib/estatuto-datos'
 import { NOMBRE_DOCUMENTO, nombreDescarga } from '@/lib/estatuto-original'
 import { esGerenciaReal } from '@/lib/capacidades'
@@ -74,6 +82,12 @@ function Listado({ personas, conFecha }: { personas: PersonaControl[]; conFecha:
           }}>
             <div style={dato}><div style={datoEtiqueta}>Legajo</div>{p.legajo ?? '—'}</div>
             <div style={dato}><div style={datoEtiqueta}>Puesto</div>{p.puesto ?? p.rol ?? '—'}</div>
+            {p.zonas && (
+              <div style={dato}>
+                <div style={datoEtiqueta}>Zona</div>
+                {p.zonas.length ? p.zonas.map(z => z.nombre).join(', ') : 'Sin zona'}
+              </div>
+            )}
             <div style={dato}>
               <div style={datoEtiqueta}>{conFecha ? 'Aceptó' : 'Abrió el documento'}</div>
               {conFecha ? fechaHoraArgentina(p.aceptado_at) : (p.abierto_at ? fechaHoraArgentina(p.abierto_at) : 'No')}
@@ -96,6 +110,8 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
   const [versiones, setVersiones] = useState<VersionEstatuto[]>([])
   const [seleccion, setSeleccion] = useState<string | null>(null)
   const [personas, setPersonas] = useState<PersonaControl[]>([])
+  const [zonas, setZonas] = useState<ZonaControl[]>([])
+  const [zona, setZona] = useState<string>(TODAS_LAS_ZONAS)
   const [error, setError] = useState<string | null>(null)
   const [cargando, setCargando] = useState(true)
   const [publicando, setPublicando] = useState(false)
@@ -113,6 +129,7 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
     if (elegida) {
       const c = await cargarControl(elegida)
       setPersonas(c.personas)
+      setZonas(c.zonas)
       setError(v.error ?? c.error)
     } else {
       setPersonas([])
@@ -125,7 +142,12 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
 
   const vigente = useMemo(() => versionVigente(versiones), [versiones])
   const elegida = versiones.find(v => v.id === seleccion) ?? null
-  const resumen = useMemo(() => resumenControl(personas), [personas])
+  // Sin la migración de zonas no hay catálogo: el filtro no se muestra.
+  const conZonas = zonas.length > 0 && personas.some(p => p.zonas !== undefined)
+  const resumen = useMemo(
+    () => resumenControl(conZonas ? filtrarPorZona(personas, zona) : personas),
+    [personas, zona, conZonas],
+  )
 
   const publicar = async (v: VersionEstatuto) => {
     const ok = window.confirm(
@@ -166,6 +188,23 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
               {elegida && <> Se muestra el estado de la {etiquetaVersion(elegida.identificador).toLowerCase()} ({elegida.estado}).</>}
             </div>
           )}
+          {conZonas && (
+            <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label htmlFor="estatuto-zona" style={{ fontSize: 13, color: '#94a3b8' }}>Zona</label>
+              <select
+                id="estatuto-zona"
+                value={zona}
+                onChange={e => setZona(e.target.value)}
+                style={{ background: '#0f172a', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', maxWidth: '100%', boxSizing: 'border-box' }}
+              >
+                <option value={TODAS_LAS_ZONAS}>Todas las zonas ({personas.length})</option>
+                {zonas.map(z => (
+                  <option key={z.id} value={z.id}>{z.nombre} ({filtrarPorZona(personas, z.id).length})</option>
+                ))}
+                <option value={SIN_ZONA}>Sin zona ({filtrarPorZona(personas, SIN_ZONA).length})</option>
+              </select>
+            </div>
+          )}
           {versiones.length > 1 && (
             <div style={{ marginBottom: 12 }}>
               <select
@@ -183,7 +222,7 @@ export default function ControlEstatuto({ user }: { user: SujetoAcceso & { id: s
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 10, marginBottom: 14 }}>
             {[
-              { l: 'Activos alcanzados', v: resumen.alcanzados, c: '#e2e8f0' },
+              { l: zona === TODAS_LAS_ZONAS || !conZonas ? 'Activos alcanzados' : 'Activos en la zona', v: resumen.alcanzados, c: '#e2e8f0' },
               { l: 'Aceptaron', v: resumen.aceptaron, c: '#86efac' },
               { l: 'Pendientes', v: resumen.pendientes, c: '#fbbf24' },
               { l: 'Abrieron sin aceptar', v: resumen.abrieronSinAceptar, c: '#94a3b8' },
