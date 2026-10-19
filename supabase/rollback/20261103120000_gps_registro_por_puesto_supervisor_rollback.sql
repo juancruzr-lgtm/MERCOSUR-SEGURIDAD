@@ -4,10 +4,8 @@
 
 begin;
 
-drop policy if exists "Supervisor inserta sus propios puntos GPS" on public.supervisor_route_points;
-
-create policy "Supervisor inserta sus propios puntos GPS"
-on public.supervisor_route_points for insert to authenticated
+alter policy "Supervisor inserta sus propios puntos GPS"
+on public.supervisor_route_points
 with check (
   exists (
     select 1 from public.usuarios

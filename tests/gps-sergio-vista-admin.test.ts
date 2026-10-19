@@ -63,14 +63,15 @@ describe('cableado: un solo GPS a la vez, el mismo para todos', () => {
 
 describe('la migración', () => {
   const sentencia = MIG.slice(MIG.indexOf('begin;'), MIG.indexOf('commit;'))
-  it('recrea la MISMA política de INSERT: punto propio y (rol supervisor o puesto supervisor/jefe)', () => {
-    expect(sentencia).toContain('create policy "Supervisor inserta sus propios puntos GPS"')
+  it('cambia la MISMA política de INSERT (alter, sin borrarla): punto propio y (rol supervisor o puesto supervisor/jefe)', () => {
+    expect(sentencia).toContain('alter policy "Supervisor inserta sus propios puntos GPS"')
+    expect(sentencia).not.toMatch(/drop policy|create policy/)
     expect(sentencia).toContain('usuarios.id           = supervisor_route_points.supervisor_id')
     expect(sentencia).toMatch(/usuarios\.rol = 'supervisor'\s*or usuarios\.puesto_organizacional in \('supervisor', 'jefe_supervisores'\)/)
   })
   it('no toca lecturas, grants ni otras tablas', () => {
     expect(sentencia).not.toMatch(/lee todos|lee sus propios|\bgrant\b|\brevoke\b|for select/i)
-    expect(sentencia.match(/on public\.\w+/g)).toEqual(['on public.supervisor_route_points', 'on public.supervisor_route_points'])
+    expect(sentencia.match(/on public\.\w+/g)).toEqual(['on public.supervisor_route_points'])
   })
   it('la verificación espera que se sume sólo Sergio y que nadie pierda el permiso', () => {
     expect(VERIF).toContain("'Se suma sólo Sergio Martínez', '69493cc2-15d6-4618-893e-4a9b1d044df8'")

@@ -7,7 +7,8 @@
 -- silencio todos sus puntos: nunca tuvo recorridos registrados.
 --
 -- ── Qué hace ─────────────────────────────────────────────────────────────────
--- Recrea la MISMA política (mismo nombre) con una condición más:
+-- Cambia la condición de la MISMA política (alter policy: no se borra ni se
+-- recrea, el resto de la política queda igual) con una condición más:
 --   antes:   el punto es propio  Y rol = 'supervisor'
 --   ahora:   el punto es propio  Y (rol = 'supervisor'
 --                                   O puesto en ('supervisor', 'jefe_supervisores'))
@@ -28,10 +29,8 @@
 
 begin;
 
-drop policy if exists "Supervisor inserta sus propios puntos GPS" on public.supervisor_route_points;
-
-create policy "Supervisor inserta sus propios puntos GPS"
-on public.supervisor_route_points for insert to authenticated
+alter policy "Supervisor inserta sus propios puntos GPS"
+on public.supervisor_route_points
 with check (
   exists (
     select 1 from public.usuarios
