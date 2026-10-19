@@ -53,6 +53,31 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
+/**
+ * session_id del punto: la sesión de telemetría si existe (SupervisorMobile la
+ * inicia: así registran todos los supervisores, sin cambios). Si no existe
+ * —vista de Administración—, un id propio por recorrido, generado una vez.
+ */
+export function idSesionPunto(
+  sesionTelemetria: string | null | undefined,
+  respaldo: { current: string | null },
+): string {
+  if (sesionTelemetria) return sesionTelemetria
+  if (!respaldo.current) respaldo.current = crypto.randomUUID()
+  return respaldo.current
+}
+
+/**
+ * ¿Registrar el GPS mientras usa la vista de Administración? Sólo quien
+ * además es supervisor (puesto supervisor o jefe de supervisores): hoy, Sergio
+ * Martínez. En la vista Supervisor ya registra SupervisorMobile (no se duplica).
+ * El recorrido arranca y para con su guardia programada, igual que los demás.
+ */
+export function registraGpsEnVistaAdmin(u: { puesto_organizacional?: string | null } | null | undefined): boolean {
+  const p = u?.puesto_organizacional
+  return p === 'supervisor' || p === 'jefe_supervisores'
+}
+
 // Returns the supervisor's own active shift for userId, or null.
 // Handles night shifts that cross midnight (same logic as fechaHoraEnRango in SupervisorMobile).
 function turnoActivoSupervisor(
@@ -91,6 +116,9 @@ export function useSupervisorGps(
   const wasHiddenRef    = useRef(false)
   const gpsEnabledRef   = useRef(true)
   const objetivosRef    = useRef(objetivos)
+  // Respaldo de session_id (NOT NULL) para cuando no hay sesión de telemetría:
+  // la vista de Administración no la inicia (Sergio). Con sesión, no se usa.
+  const sesionRespaldoRef = useRef<string | null>(null)
 
   useEffect(() => { objetivosRef.current = objetivos }, [objetivos])
 
@@ -138,7 +166,7 @@ export function useSupervisorGps(
 
       const row = {
         id:                         rowId,
-        session_id:                 session?.session_id ?? null,
+        session_id:                 idSesionPunto(session?.session_id, sesionRespaldoRef),
         supervisor_id:              userId,
         client_ts:                  new Date(ts).toISOString(),
         latitud:                    lat,
@@ -301,6 +329,7 @@ export function useSupervisorGps(
 
     trackingRef.current    = true
     turnoIdRef.current     = turno.id
+    sesionRespaldoRef.current = null   // un id de respaldo por recorrido (sólo si no hay telemetría)
     seqRef.current         = 0
     estadoRef.current      = 'UNKNOWN'
     ultimoPuntoRef.current = null

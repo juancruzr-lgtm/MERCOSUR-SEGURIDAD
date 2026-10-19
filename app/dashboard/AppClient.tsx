@@ -70,6 +70,8 @@ import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import { LEYENDA_CARGA, cargaDeSupervisor, clasificarCargaZonas } from '@/lib/carga-operativa'
 import type { CargaZona } from '@/lib/carga-operativa'
 import SupervisorMobile from '@/components/supervisor/SupervisorMobile'
+import RastreoGpsVistaAdmin from '@/components/supervisor/RastreoGpsVistaAdmin'
+import { registraGpsEnVistaAdmin } from '@/lib/supervisor-gps'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import ReferenciasIAPanel from '@/components/ia/ReferenciasIAPanel'
@@ -14388,6 +14390,10 @@ const esGuardia = esRolGuardia(user.rol)
   return (
     <>
       {shellApp === 'admin' && <AdminViewHeader currentView={adminMobileView} onChange={seleccionarVistaAdmin} compact={esPantallaChicaAdmin} />}
+      {/* GPS del supervisor que trabaja desde la vista de Administración (Sergio):
+          mismo registro que SupervisorMobile, atado a su guardia. En la vista
+          Supervisor no se monta (ahí registra SupervisorMobile). */}
+      {shellApp === 'admin' && user?.id && registraGpsEnVistaAdmin(user) && <RastreoGpsVistaAdmin userId={user.id} />}
       <div style={{ ...S.app, paddingTop:shellApp === 'admin' ? adminShellPaddingTop : 0 }}>
       <div style={S.sidebar}>
         <div style={S.sidebarLogo}>
@@ -14427,8 +14433,9 @@ const esGuardia = esRolGuardia(user.rol)
             </>
           ) : (
             <>
-              {/* Estatuto pendiente del propio usuario del shell admin: tarjeta, no
-                  modal. Lleva a /estatuto (el shell admin no tiene Mi Legajo). */}
+              {/* Estatuto pendiente del propio usuario del shell admin: tarjeta fija
+                  + cartel que vuelve, sin bloquear. Lleva a /estatuto (el shell
+                  admin no tiene Mi Legajo). */}
               {user?.id && <AvisoEstatuto empleadoId={user.id} destino="/estatuto" />}
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} puedePleno={tieneCapacidad(user, 'gestionar_personal')} puedeOperativo={tieneCapacidad(user, 'gestionar_personal_operativo')} user={user} />}

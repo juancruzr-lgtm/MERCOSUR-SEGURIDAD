@@ -232,24 +232,54 @@ export function puedeAceptar(s: SituacionDeclaracion & { casillaMarcada: boolean
 }
 
 // ── Cartel ───────────────────────────────────────────────────────────────────
+//
+// Decisión de JC (16/10/2026): un aviso que INSISTE pero no bloquea. Son dos
+// piezas:
+//   · la tarjeta en el flujo de la pantalla, que mientras esté pendiente no se
+//     puede esconder (no tapa nada, así que no necesita "Después");
+//   · el cartel a pantalla completa, que se cierra con "Después" y vuelve cada
+//     vez que se abre la app (sessionStorage) y, con la app abierta, cada
+//     REINSISTIR_MS.
+// Nunca bloquea el fichaje: el cartel se cierra con un toque, y la base no ata
+// el fichaje al Estatuto en ningún lado.
 
-export const CLAVE_SESION_CARTEL = 'mercosur_aviso_estatuto_pospuesto'
+/** Clave nueva: la anterior guardaba sólo el id y escondía el cartel toda la sesión. */
+export const CLAVE_SESION_CARTEL = 'mercosur_aviso_estatuto_pospuesto_v2'
+
+/** Cada cuánto vuelve el cartel si la app queda abierta. */
+export const REINSISTIR_MS = 4 * 60 * 60 * 1000
+
+/** Lo que se guarda al tocar "Después": para qué versión y cuándo. */
+export function valorPospuesto(versionId: string, ahoraMs: number): string {
+  return JSON.stringify({ v: versionId, at: ahoraMs })
+}
 
 /**
- * El cartel aparece mientras esté pendiente. "Después" lo esconde sólo por la
- * sesión y sólo para ESA versión (si se publica otra, vuelve aunque se haya
- * pospuesto la anterior). No hay "no mostrar más".
+ * ¿Se muestra el cartel? Mientras esté pendiente, salvo que "Después" se haya
+ * tocado para ESA versión hace menos de REINSISTIR_MS. Un valor ilegible
+ * cuenta como no pospuesto: ante la duda, insistir. No hay "no mostrar más".
  */
 export function mostrarCartel(
   estado: EstadoAceptacion,
   vigenteId: string | null,
-  pospuestoParaVersion: string | null,
+  pospuesto: string | null,
+  ahoraMs: number,
 ): boolean {
   if (estado !== 'pendiente' || !vigenteId) return false
-  return pospuestoParaVersion !== vigenteId
+  if (!pospuesto) return true
+  let p: { v?: unknown; at?: unknown } | null
+  try { p = JSON.parse(pospuesto) } catch { return true }
+  if (!p || p.v !== vigenteId || typeof p.at !== 'number') return true
+  // Un reloj que va para atrás (at en el futuro) tampoco lo esconde para siempre.
+  return ahoraMs - p.at >= REINSISTIR_MS || ahoraMs < p.at
 }
 
 // ── Control de Administración / Gerencia ─────────────────────────────────────
+
+export interface ZonaControl {
+  id: string
+  nombre: string
+}
 
 export interface PersonaControl {
   empleado_id: string
@@ -259,10 +289,31 @@ export interface PersonaControl {
   cuil: string | null
   rol: string | null
   puesto: string | null
+  /**
+   * Zonas donde trabaja: objetivos de sus turnos no anulados entre hoy-60 y
+   * hoy+30, y las asignadas si es supervisor. Vacía = sin zona. Ausente si la
+   * migración 20261027120000 no está aplicada.
+   */
+  zonas?: ZonaControl[]
   abierto_at: string | null
   aceptado_at: string | null
   ultima_version_aceptada: string | null
   ultima_aceptacion_at: string | null
+}
+
+/** Valores especiales del filtro de zona. */
+export const TODAS_LAS_ZONAS = ''
+export const SIN_ZONA = 'sin_zona'
+
+/**
+ * Filtra el control por zona. Quien trabaja en dos zonas aparece en las dos.
+ * Sin la migración (`zonas` ausente) todos cuentan como "Sin zona": nadie
+ * desaparece de la lista de pendientes por un filtro.
+ */
+export function filtrarPorZona(personas: readonly PersonaControl[], zona: string): PersonaControl[] {
+  if (zona === TODAS_LAS_ZONAS) return [...personas]
+  if (zona === SIN_ZONA) return personas.filter(p => !p.zonas || p.zonas.length === 0)
+  return personas.filter(p => (p.zonas ?? []).some(z => z.id === zona))
 }
 
 export interface ResumenControl {
