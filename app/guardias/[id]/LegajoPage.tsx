@@ -85,8 +85,8 @@ const SECCIONES = [
   { id: 'novedades', label: 'Novedades laborales' },
   { id: 'desempeno', label: 'Mi Desempeño' },
   // Legajo operativo de supervisores (Etapa 2A): guardias, supervisiones,
-  // horarios y recorridos. Sólo lo ven Gerencia, Dirección y las personas
-  // autorizadas nominalmente (la base decide); a los demás no les aparece.
+  // horarios y recorridos. Sólo lo ven las personas de la lista de
+  // autorizaciones individuales (la base decide); a los demás no les aparece.
   { id: 'operativo', label: 'Legajo operativo' },
   { id: 'estatuto', label: 'Estatuto Interno' },
   { id: 'documentacion', label: 'Documentación' },
@@ -265,8 +265,8 @@ export default function LegajoPage() {
   // Id del usuario que MIRA, no del legajo. Lo necesita cargarFilasBandeja
   // para resolver su alcance por zona.
   const [usuarioId, setUsuarioId] = useState<string | null>(null)
-  // Legajo operativo de supervisores: Gerencia/Dirección por puesto; Jefe y
-  // Administración sólo con autorización nominal (lo responde la base).
+  // Legajos y evaluaciones de supervisores: sólo la lista de autorizaciones
+  // individuales de la base, independiente del cargo (JC 19/10).
   const veLegajoOperativo = useAccesoLegajoSupervisores(
     usuarioId ? { id: usuarioId, rol: rolUsuario, puesto_organizacional: puestoUsuario } : null)
 
@@ -564,7 +564,7 @@ export default function LegajoPage() {
         {seccion === 'operativo' && (
           veLegajoOperativo
             ? <LegajoOperativoSupervisor supervisorId={empleadoId} />
-            : <div style={S.placeholder}>El legajo operativo de supervisores lo consultan Gerencia, Dirección Operativa y las personas autorizadas.</div>
+            : <div style={S.placeholder}>El legajo operativo de supervisores lo consultan sólo las personas autorizadas.</div>
         )}
 
         {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla' && seccion !== 'operativo'

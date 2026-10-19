@@ -109,7 +109,6 @@ import ControlImagenesIAPanel from '@/components/ia/ControlImagenesIAPanel'
 import ControlSupervisionesPanel from '@/components/supervisiones/ControlSupervisionesPanel'
 import SalidasAnticipadasPanel from '@/components/supervisiones/SalidasAnticipadasPanel'
 import EvaluacionSupervisoresPanel from '@/components/supervisiones/EvaluacionSupervisoresPanel'
-import { puedeVerEvaluacionSupervisores } from '@/lib/evaluacion-supervisores'
 import { useAccesoLegajoSupervisores } from '@/components/supervisiones/useAccesoLegajoSupervisores'
 // Mismo panel de configuración que usa el legajo del objetivo. Se monta también
 // en la solapa Rondas para poder editar rondas y puntos sin entrar objetivo por
@@ -14047,8 +14046,8 @@ export default function AppPage() {
   const [adminMobileView, setAdminMobileView] = useState<AdminMobileView>('admin')
   const [esPantallaChicaAdmin, setEsPantallaChicaAdmin] = useState(false)
   const [adminDataLoaded, setAdminDataLoaded] = useState(false)
-  // Legajo operativo de supervisores: Gerencia/Dirección por puesto; Jefe y
-  // Administración sólo con autorización nominal (lo responde la base).
+  // Legajos y evaluaciones de supervisores: sólo la lista de autorizaciones
+  // individuales de la base, independiente del cargo (JC 19/10).
   const veLegajoSupervisores = useAccesoLegajoSupervisores(user)
 
   const cargarDatosAdmin = useCallback(async (sujeto?: { rol?: string | null; puesto_organizacional?: string | null } | null) => {
@@ -14333,8 +14332,8 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'revision_fotos_ia', icon:'🤖', label:'Revisión de fotos IA' },
       { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
       { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
-      // Evaluación de supervisores: ranking sólo Dirección Operativa y Gerencia (o
-      // delegación); «Horarios y legajos» también los autorizados nominalmente.
+      // Evaluación de supervisores (ranking, horarios y legajos): sólo la lista
+      // de autorizaciones individuales de la base, igual para todo (JC 19/10).
       ...(veLegajoSupervisores ? [{ id:'evaluacion_supervisores', icon:'🎯', label:'Evaluación de supervisores' }] : []),
       // Salidas anticipadas: la resuelve Supervisión (su zona) o un superior.
       // Administración la ve; quién puede resolver lo decide la base.
@@ -14505,7 +14504,7 @@ const esGuardia = esRolGuardia(user.rol)
                   errorCarga={errorSupervisionesAdmin}
                 />
               )}
-              {page === 'evaluacion_supervisores' && veLegajoSupervisores && <EvaluacionSupervisoresPanel verRanking={puedeVerEvaluacionSupervisores(user)} />}
+              {page === 'evaluacion_supervisores' && veLegajoSupervisores && <EvaluacionSupervisoresPanel verRanking={veLegajoSupervisores} />}
               {page === 'salidas_anticipadas' && (
                 <SalidasAnticipadasPanel />
               )}

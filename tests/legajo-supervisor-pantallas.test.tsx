@@ -39,10 +39,11 @@ describe('matriz y posición en turno', () => {
 describe('cableado (sobre el código fuente)', () => {
   const app = readFileSync(join(__dirname, '..', 'app', 'dashboard', 'AppClient.tsx'), 'utf8')
   const legajo = readFileSync(join(__dirname, '..', 'app', 'guardias', '[id]', 'LegajoPage.tsx'), 'utf8')
-  it('el menú abre la pantalla a quien ve legajos; el ranking sigue sólo para Dirección y Gerencia', () => {
+  it('menú, horarios y ranking usan el mismo permiso (la lista de la base)', () => {
     expect(app).toContain("const veLegajoSupervisores = useAccesoLegajoSupervisores(user)")
     expect(app).toContain("...(veLegajoSupervisores ? [{ id:'evaluacion_supervisores'")
-    expect(app).toContain("page === 'evaluacion_supervisores' && veLegajoSupervisores && <EvaluacionSupervisoresPanel verRanking={puedeVerEvaluacionSupervisores(user)} />")
+    expect(app).toContain("page === 'evaluacion_supervisores' && veLegajoSupervisores && <EvaluacionSupervisoresPanel verRanking={veLegajoSupervisores} />")
+    expect(app).not.toContain('puedeVerEvaluacionSupervisores')
     expect(app).not.toContain('puedeVerLegajoSupervisores')
   })
   it('la pestaña «Legajo operativo» sólo aparece a quien la base autoriza', () => {
