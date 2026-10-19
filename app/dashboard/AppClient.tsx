@@ -108,6 +108,7 @@ import ControlSupervisionesPanel from '@/components/supervisiones/ControlSupervi
 import SalidasAnticipadasPanel from '@/components/supervisiones/SalidasAnticipadasPanel'
 import EvaluacionSupervisoresPanel from '@/components/supervisiones/EvaluacionSupervisoresPanel'
 import { puedeVerEvaluacionSupervisores } from '@/lib/evaluacion-supervisores'
+import { puedeVerLegajoSupervisores } from '@/lib/legajo-supervisor'
 // Mismo panel de configuración que usa el legajo del objetivo. Se monta también
 // en la solapa Rondas para poder editar rondas y puntos sin entrar objetivo por
 // objetivo. No es un editor nuevo: es el que ya existía.
@@ -14327,9 +14328,9 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'revision_fotos_ia', icon:'🤖', label:'Revisión de fotos IA' },
       { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
       { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
-      // Evaluación de supervisores: sólo Dirección Operativa y Gerencia (o
-      // delegación gerencial). No alcanza con admin pleno: Sergio no la ve.
-      ...(puedeVerEvaluacionSupervisores(user) ? [{ id:'evaluacion_supervisores', icon:'🎯', label:'Evaluación de supervisores' }] : []),
+      // Evaluación de supervisores: ranking sólo Dirección Operativa y Gerencia (o
+      // delegación); «Horarios y legajos» también el Jefe de supervisores.
+      ...(puedeVerLegajoSupervisores(user) ? [{ id:'evaluacion_supervisores', icon:'🎯', label:'Evaluación de supervisores' }] : []),
       // Salidas anticipadas: la resuelve Supervisión (su zona) o un superior.
       // Administración la ve; quién puede resolver lo decide la base.
       ...(tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas')
@@ -14494,7 +14495,7 @@ const esGuardia = esRolGuardia(user.rol)
                   errorCarga={errorSupervisionesAdmin}
                 />
               )}
-              {page === 'evaluacion_supervisores' && puedeVerEvaluacionSupervisores(user) && <EvaluacionSupervisoresPanel />}
+              {page === 'evaluacion_supervisores' && puedeVerLegajoSupervisores(user) && <EvaluacionSupervisoresPanel verRanking={puedeVerEvaluacionSupervisores(user)} />}
               {page === 'salidas_anticipadas' && (
                 <SalidasAnticipadasPanel />
               )}

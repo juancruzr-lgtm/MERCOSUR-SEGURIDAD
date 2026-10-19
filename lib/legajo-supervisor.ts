@@ -251,7 +251,7 @@ export function objetivosVisitados(supervisiones: readonly SupervisionLegajo[]):
     if (s.created_at > o.ultima) o.ultima = s.created_at
     m.set(s.objetivo_id, o)
   }
-  return [...m.values()].sort((a, b) => a.visitas - b.visitas || a.objetivo.localeCompare(b.objetivo, 'es'))
+  return Array.from(m.values()).sort((a, b) => a.visitas - b.visitas || a.objetivo.localeCompare(b.objetivo, 'es'))
 }
 
 // ── Recorrido ────────────────────────────────────────────────────────────────

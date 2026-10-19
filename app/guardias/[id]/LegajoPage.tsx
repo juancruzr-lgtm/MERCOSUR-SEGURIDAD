@@ -15,6 +15,8 @@ import DatosPersonales from '@/components/legajo/DatosPersonales'
 import DocumentacionLegajo from '@/components/documentacion/DocumentacionLegajo'
 import PanelHabilitacion from '@/components/habilitacion/PanelHabilitacion'
 import { gestionaDatosSensibles } from '@/lib/legajo'
+import { puedeVerLegajoSupervisores } from '@/lib/legajo-supervisor'
+import LegajoOperativoSupervisor from '@/components/supervisiones/LegajoOperativoSupervisor'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -82,6 +84,10 @@ const SECCIONES = [
   { id: 'cumplimiento', label: 'Cumplimiento operativo' },
   { id: 'novedades', label: 'Novedades laborales' },
   { id: 'desempeno', label: 'Mi Desempeño' },
+  // Legajo operativo de supervisores (Etapa 2A): guardias, supervisiones,
+  // horarios y recorridos. Sólo lo ven Dirección, Gerencia y Jefe de
+  // supervisores (la base lo revalida); para los demás la pestaña no aparece.
+  { id: 'operativo', label: 'Legajo operativo' },
   { id: 'estatuto', label: 'Estatuto Interno' },
   { id: 'documentacion', label: 'Documentación' },
   { id: 'historial', label: 'Historial' },
@@ -419,6 +425,7 @@ export default function LegajoPage() {
   // así que no hay una segunda regla de autorización que pueda contradecir a la
   // primera. Un supervisor sin zonas no ve a nadie.
   const esSupervision = alcanceUsuario !== 'propio'
+  const veLegajoOperativo = puedeVerLegajoSupervisores({ rol: rolUsuario, puesto_organizacional: puestoUsuario })
 
   // ── Render: encabezado ────────────────────────────────────────────────────
   return (
@@ -455,7 +462,7 @@ export default function LegajoPage() {
 
       {/* Navegación */}
       <nav style={S.nav}>
-        {SECCIONES.map(s => (
+        {SECCIONES.filter(s => s.id !== 'operativo' || veLegajoOperativo).map(s => (
           <button
             key={s.id}
             style={S.navBtn(seccion === s.id)}
@@ -551,7 +558,13 @@ export default function LegajoPage() {
               : <div style={S.placeholder}>La documentación del legajo la consultan la persona, Administración y Gerencia.</div>
         )}
 
-        {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla'
+        {seccion === 'operativo' && (
+          veLegajoOperativo
+            ? <LegajoOperativoSupervisor supervisorId={empleadoId} />
+            : <div style={S.placeholder}>El legajo operativo de supervisores lo consultan Dirección Operativa, Gerencia y el Jefe de supervisores.</div>
+        )}
+
+        {seccion !== 'situacion' && seccion !== 'turnos' && seccion !== 'planilla' && seccion !== 'operativo'
           && seccion !== 'cumplimiento' && seccion !== 'desempeno' && seccion !== 'estatuto'
           && seccion !== 'datos' && seccion !== 'documentacion' && (
           <div style={S.placeholder}>
