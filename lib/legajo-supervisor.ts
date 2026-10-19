@@ -88,10 +88,42 @@ export const ETIQUETA_SITUACION: Record<SituacionTurno, string> = {
   sin_calendario: 'Sin guardia cargada',
 }
 
-/** Espejo de `puede_ver_legajo_supervisores_actual()`: evaluación + Jefe de supervisores. */
-export function puedeVerLegajoSupervisores(u: SujetoAcceso | null | undefined): boolean {
-  if (!u) return false
-  return puedeVerEvaluacionSupervisores(u) || puestoDe(u) === 'jefe_supervisores'
+/**
+ * Acceso al legajo operativo de supervisores (JC 19/10), en dos pasos:
+ *  · 'si': Gerencia, Dirección Operativa o delegación gerencial (por puesto,
+ *    como el ranking de la Etapa 1);
+ *  · 'consultar': Jefe de supervisores o Administración. Su acceso es
+ *    NOMINAL (tabla legajo_supervisores_accesos en la base): el puesto no
+ *    alcanza, hay que preguntarle a la base (consultarAccesoLegajo);
+ *  · 'no': cualquier otro (supervisores, vigiladores). Sin consulta.
+ * La base es la que decide siempre; esto sólo evita mostrar algo que igual
+ * respondería «sin permiso» y ahorra la consulta a quien no puede tenerlo.
+ */
+export type AccesoPorPuesto = 'si' | 'consultar' | 'no'
+
+export function accesoLegajoPorPuesto(u: SujetoAcceso | null | undefined): AccesoPorPuesto {
+  if (!u) return 'no'
+  if (puedeVerEvaluacionSupervisores(u)) return 'si'
+  const puesto = puestoDe(u)
+  return puesto === 'jefe_supervisores' || puesto === 'administracion' ? 'consultar' : 'no'
+}
+
+/** Pregunta a la base (`puede_ver_legajo_supervisores_actual`). Ante error, no. */
+export async function consultarAccesoLegajo(db: any): Promise<boolean> {
+  try {
+    const { data, error } = await db.rpc('puede_ver_legajo_supervisores_actual')
+    return !error && data === true
+  } catch {
+    return false
+  }
+}
+
+/** Resolución completa: puesto primero y, si hace falta, la base. */
+export async function resolverAccesoLegajo(db: any, u: SujetoAcceso | null | undefined): Promise<boolean> {
+  const p = accesoLegajoPorPuesto(u)
+  if (p === 'si') return true
+  if (p === 'no') return false
+  return consultarAccesoLegajo(db)
 }
 
 export function situacionTurno(s: Pick<SupervisionLegajo, 'guardia_id' | 'hay_guardia_cerca'>): SituacionTurno {

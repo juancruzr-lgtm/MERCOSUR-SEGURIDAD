@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   cargarLegajoSupervisores, cargarRecorridoGuardia, distribucionHoraria, franjasSinSupervision,
-  horaYDiaArgentina, matrizDiaHora, objetivosVisitados, posicionEnTurno, puedeVerLegajoSupervisores,
+  horaYDiaArgentina, matrizDiaHora, objetivosVisitados, posicionEnTurno,
   resumenLegajo, situacionTurno, tramosConEvidencia,
 } from '@/lib/legajo-supervisor'
 import type { GuardiaLegajo, PuntoRecorrido, SupervisionLegajo } from '@/lib/legajo-supervisor'
@@ -25,20 +25,6 @@ function sup(created_at: string, p: Partial<SupervisionLegajo> = {}): Supervisio
   }
 }
 
-describe('quién ve el legajo operativo', () => {
-  it('Dirección, Gerencia, delegación y Jefe de supervisores (Aldo), sí', () => {
-    expect(puedeVerLegajoSupervisores({ puesto_organizacional: 'direccion_operativa' })).toBe(true)
-    expect(puedeVerLegajoSupervisores({ puesto_organizacional: 'gerencia' })).toBe(true)
-    expect(puedeVerLegajoSupervisores({ puesto_organizacional: 'administracion', acceso_gerencia_delegado: true })).toBe(true)
-    expect(puedeVerLegajoSupervisores({ puesto_organizacional: 'jefe_supervisores', rol: 'supervisor' })).toBe(true)
-  })
-  it('supervisor, administración y vigilador, NO', () => {
-    expect(puedeVerLegajoSupervisores({ puesto_organizacional: 'supervisor' })).toBe(false)
-    expect(puedeVerLegajoSupervisores({ puesto_organizacional: 'administracion', rol: 'admin' })).toBe(false)
-    expect(puedeVerLegajoSupervisores({ puesto_organizacional: 'vigilador' })).toBe(false)
-    expect(puedeVerLegajoSupervisores(null)).toBe(false)
-  })
-})
 
 describe('situación respecto del turno', () => {
   it('con guardia = en turno; sin guardia pero con calendario ese día = fuera; sin calendario = sin guardia cargada', () => {
