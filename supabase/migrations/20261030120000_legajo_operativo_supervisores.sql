@@ -16,17 +16,27 @@
 -- puntos no hay evidencia, que no es lo mismo que «no trabajó» (app cerrada,
 -- sin señal, otro teléfono). La pantalla lo dice así.
 --
--- No crea tablas, no escribe datos, no agrega triggers ni crons. No cambia
--- las funciones de la Etapa 1 ni su permiso (ranking: Dirección y Gerencia).
+-- Crea UNA tabla chica de autorizaciones (legajo_supervisores_accesos, 4
+-- filas) y nada más: no escribe datos operativos, no agrega triggers ni crons.
+-- No cambia las funciones de la Etapa 1 ni su permiso (ranking: Dirección y
+-- Gerencia) ni ningún permiso operativo existente.
 --
 -- ── Quién lo ve ──────────────────────────────────────────────────────────────
--- Dirección Operativa, Gerencia, delegación gerencial y el Jefe de
--- supervisores que NO tiene zona asignada (JC 19/10: Aldo Monzón evalúa a sus
--- supervisores; Sergio Martínez, jefe pero que supervisa Rosario y es
--- evaluado, no ve los legajos de sus pares). Sin nombres fijos: si mañana un
--- jefe toma una zona, deja de ver; si la suelta, vuelve a ver. La tabla
--- supervisor_route_points sigue con su RLS (cada uno lo suyo + admin): acá se
--- lee por funciones SECURITY DEFINER con este permiso, sin abrir la tabla.
+-- Decisión de JC (19/10), siete personas:
+--  · por PUESTO: Gerencia (Juan Cruz y Facundo Romero) y Dirección Operativa
+--    (Rodolfo Romero), más la delegación gerencial vigente, igual que la
+--    Etapa 1;
+--  · por AUTORIZACIÓN NOMINAL (tabla legajo_supervisores_accesos): Aldo Monzón
+--    (jefe de supervisores) y las tres personas de Administración: Laura M.,
+--    Joel Juárez y Andrea Narvarte. Ser de Administración NO alcanza: hace
+--    falta estar en la lista. La lista se carga acá verificando id, email,
+--    puesto y estado de cada uno; si algo no coincide, la migración aborta.
+--  · Sergio Martínez y los supervisores NO ven legajos ajenos. Además, una
+--    autorización nominal no vale para quien tiene zona asignada (es
+--    supervisor y es evaluado), aunque alguien lo cargue por error.
+-- No cambia ningún otro permiso. La tabla supervisor_route_points sigue con su
+-- RLS (cada uno lo suyo + admin): acá se lee por funciones SECURITY DEFINER
+-- con este permiso, sin abrir la tabla.
 --
 -- Rollback: supabase/rollback/20261030120000_legajo_operativo_supervisores_rollback.sql
 
@@ -35,17 +45,66 @@ begin;
 -- ============================================================================
 -- 1. QUIÉN VE EL LEGAJO OPERATIVO
 -- ============================================================================
+
+-- 1.a Autorizaciones nominales. Sin políticas: nadie la lee ni la escribe
+--     desde la app (los DEFAULT PRIVILEGES conceden solos: se revoca todo).
+create table if not exists public.legajo_supervisores_accesos (
+  usuario_id  uuid primary key references public.usuarios(id) on delete cascade,
+  motivo      text not null,
+  otorgado_por text not null,
+  created_at  timestamptz not null default now()
+);
+alter table public.legajo_supervisores_accesos enable row level security;
+revoke all on public.legajo_supervisores_accesos from public, anon, authenticated;
+
+-- 1.b Carga verificada: id + email + puesto + estado. Si no coinciden, aborta.
+do $carga$
+declare
+  r record;
+begin
+  for r in
+    select * from (values
+      ('023769de-9e99-481a-9caa-c604ef56b14b'::uuid, 'aldomonzon@hotmail.com',          'jefe_supervisores', 'Jefe de supervisores: evalúa a sus supervisores'),
+      ('1384746c-0520-4ebe-8d7b-17788d833cba'::uuid, 'lauram@mercosurseguridad.com.ar', 'administracion',    'Administración: consulta de legajos operativos'),
+      ('a2cd1908-7e9d-4bf4-8407-ecf644e1f351'::uuid, 'joelajuarez23@gmail.com',         'administracion',    'Administración: consulta de legajos operativos'),
+      ('eecd4b5c-095d-4062-be10-25e78ea9f499'::uuid, 'cvman64@hotmail.com',             'administracion',    'Administración: consulta de legajos operativos')
+    ) as t(id, email, puesto, motivo)
+  loop
+    if not exists (
+      select 1 from public.usuarios u
+       where u.id = r.id and lower(u.email) = r.email and u.puesto_organizacional = r.puesto
+         and u.estado = 'activo' and coalesce(u.es_prueba, false) = false
+         and not exists (select 1 from public.supervisor_zonas sz where sz.supervisor_id = u.id)
+    ) then
+      raise exception 'legajo_supervisores_accesos: % (%) no coincide con usuarios; no se carga nada', r.email, r.id;
+    end if;
+    insert into public.legajo_supervisores_accesos (usuario_id, motivo, otorgado_por)
+    values (r.id, r.motivo, 'JC 19/10/2026 (PR #328)')
+    on conflict (usuario_id) do nothing;
+  end loop;
+end
+$carga$;
+
+-- 1.c Permiso por usuario (interno: también lo usa la verificación).
+create or replace function public.puede_ver_legajo_supervisores(p_usuario_id uuid)
+returns boolean language sql stable security definer
+set search_path = public, pg_catalog as $$
+  select exists (
+    select 1 from public.usuarios u
+     where u.id = p_usuario_id and u.estado = 'activo'
+       and ( u.puesto_organizacional in ('direccion_operativa', 'gerencia')
+             or public.tiene_delegacion_gerencia(u.id)
+             or ( exists (select 1 from public.legajo_supervisores_accesos a where a.usuario_id = u.id)
+                  and not exists (select 1 from public.supervisor_zonas sz where sz.supervisor_id = u.id) ) )
+  )
+$$;
+
+-- 1.d Permiso de quien llama (lo usan las funciones y la pantalla).
 create or replace function public.puede_ver_legajo_supervisores_actual()
 returns boolean language sql stable security definer
 set search_path = public, pg_catalog as $$
-  select public.puede_evaluar_supervisores_actual()
-      or exists (
-           select 1 from public.usuarios u
-            where u.auth_user_id = auth.uid() and u.estado = 'activo'
-              and u.puesto_organizacional = 'jefe_supervisores'
-              -- Un jefe que también supervisa una zona es evaluado como uno
-              -- más (P2): no ve los legajos de sus pares (JC 19/10).
-              and not exists (select 1 from public.supervisor_zonas sz where sz.supervisor_id = u.id))
+  select coalesce(public.puede_ver_legajo_supervisores(
+    (select u.id from public.usuarios u where u.auth_user_id = auth.uid() and u.estado = 'activo' limit 1)), false)
 $$;
 
 -- ============================================================================
@@ -252,6 +311,7 @@ $$;
 -- ============================================================================
 -- 5. PERMISOS
 -- ============================================================================
+revoke all on function public.puede_ver_legajo_supervisores(uuid)                           from public, anon, authenticated;
 revoke all on function public.puede_ver_legajo_supervisores_actual()                        from public, anon;
 revoke all on function public.legajo_supervisores_guardias(uuid, date, date)                 from public, anon;
 revoke all on function public.legajo_supervisores_supervisiones(uuid, date, date)            from public, anon;
