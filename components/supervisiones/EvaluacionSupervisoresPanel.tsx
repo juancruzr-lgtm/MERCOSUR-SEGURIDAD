@@ -8,9 +8,9 @@
  * una, y objetivos de su zona que se le vencieron.
  *
  * Todo el cálculo está en la base (evaluacion_supervisores_periodo y sus
- * detalles); acá sólo se muestra. El ranking lo ven Dirección Operativa y
- * Gerencia; la vista «Horarios y legajos» (Etapa 2A) también el Jefe de
- * supervisores. La base lo revalida y, si no corresponde, devuelve el error.
+ * detalles); acá sólo se muestra. Ranking y «Horarios y legajos» los ven sólo
+ * las personas de la lista de autorizaciones individuales (JC 19/10). La base
+ * lo revalida y, si no corresponde, devuelve el error.
  *
  * Lo que todavía NO mide (etapas siguientes): si el supervisor ABRIÓ la alerta
  * («visto») y las fallas de asistencia como eventos propios. De asistencia se
@@ -79,10 +79,10 @@ type Vista = 'ranking' | 'horarios'
 
 /**
  * Pantalla «Evaluación de supervisores». Dos vistas:
- *  · Ranking (Etapa 1): sólo Dirección Operativa y Gerencia (P5, 16/10).
- *  · Horarios y legajos (Etapa 2A): también el Jefe de supervisores.
- * Quién ve cada una lo decide la base; `verRanking` sólo evita mostrar una
- * pestaña que igual daría «sin permiso».
+ *  · Ranking (Etapa 1) y Horarios y legajos (Etapa 2A): la misma lista de
+ *    autorizaciones individuales (JC 19/10).
+ * Lo decide la base; `verRanking` sólo evita mostrar una pestaña que igual
+ * daría «sin permiso».
  */
 export default function EvaluacionSupervisoresPanel({ verRanking }: { verRanking: boolean }) {
   const [vista, setVista] = useState<Vista>(verRanking ? 'ranking' : 'horarios')

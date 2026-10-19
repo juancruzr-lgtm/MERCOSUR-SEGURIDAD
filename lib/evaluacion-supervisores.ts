@@ -12,11 +12,10 @@
  *    interviene, al otro le figura «intervenida por otro» y no le resta.
  *  · Los jefes de supervisores entran en el ranking como uno más.
  *  · La evaluación arranca el 08/10/2026; un período anterior es referencia.
- *  · La ven sólo Dirección Operativa y Gerencia (o delegación gerencial).
- *    NO alcanza con acceso_admin_pleno ni acceso_interfaz_admin.
+ *  · La ven sólo las personas de la lista de autorizaciones individuales
+ *    (JC 19/10): ningún cargo alcanza solo. Ver lib/legajo-supervisor.ts.
  */
 
-import { puestoDe, type SujetoAcceso } from './capacidades'
 import { fechaArgentina, sumarDias } from './periodo-argentina'
 
 /** Primer día evaluable (antes: sólo referencia, por el cierre masivo del 07/10). */
@@ -85,12 +84,6 @@ export const ETIQUETA_ORIGEN: Record<string, string> = {
   unico_responsable_zona: 'Único de la zona',
 }
 
-/** Espejo de `puede_evaluar_supervisores_actual()` en la base. */
-export function puedeVerEvaluacionSupervisores(u: SujetoAcceso | null | undefined): boolean {
-  if (!u) return false
-  const puesto = puestoDe(u)
-  return puesto === 'direccion_operativa' || puesto === 'gerencia' || u.acceso_gerencia_delegado === true
-}
 
 /** Período por defecto: del 1º del mes (o del 08/10/2026, si es posterior) a hoy. */
 export function periodoPorDefecto(ahora: Date = new Date()): { desde: string; hasta: string } {

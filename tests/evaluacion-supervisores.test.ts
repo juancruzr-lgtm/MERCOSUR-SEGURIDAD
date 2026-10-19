@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  duracionLegible, ordenarRanking, periodoPorDefecto, puedeVerEvaluacionSupervisores, tasas, validarRango,
+  duracionLegible, ordenarRanking, periodoPorDefecto, tasas, validarRango,
   cargarEvaluacionSupervisores, cargarDetalleSupervisor,
 } from '@/lib/evaluacion-supervisores'
 import type { FilaEvaluacionSupervisor } from '@/lib/evaluacion-supervisores'
@@ -16,26 +16,6 @@ function fila(p: Partial<FilaEvaluacionSupervisor>): FilaEvaluacionSupervisor {
   }
 }
 
-describe('quién ve la evaluación (P5: sólo Dirección Operativa y Gerencia)', () => {
-  it('Dirección Operativa y Gerencia, sí', () => {
-    expect(puedeVerEvaluacionSupervisores({ puesto_organizacional: 'direccion_operativa' })).toBe(true)
-    expect(puedeVerEvaluacionSupervisores({ puesto_organizacional: 'gerencia' })).toBe(true)
-  })
-  it('delegación gerencial vigente, sí', () => {
-    expect(puedeVerEvaluacionSupervisores({ puesto_organizacional: 'administracion', acceso_gerencia_delegado: true })).toBe(true)
-  })
-  it('jefe de supervisores con admin pleno e interfaz admin (Sergio), NO', () => {
-    expect(puedeVerEvaluacionSupervisores({
-      puesto_organizacional: 'jefe_supervisores', rol: 'admin', acceso_admin_pleno: true, acceso_interfaz_admin: true,
-    })).toBe(false)
-  })
-  it('supervisor, administración, rol admin sin puesto y nadie, NO', () => {
-    expect(puedeVerEvaluacionSupervisores({ puesto_organizacional: 'supervisor' })).toBe(false)
-    expect(puedeVerEvaluacionSupervisores({ puesto_organizacional: 'administracion', rol: 'admin' })).toBe(false)
-    expect(puedeVerEvaluacionSupervisores({ rol: 'admin' })).toBe(false)
-    expect(puedeVerEvaluacionSupervisores(null)).toBe(false)
-  })
-})
 
 describe('período por defecto (P3: arranca el 08/10/2026)', () => {
   it('en octubre 2026 arranca el 08/10, no el 01/10', () => {
