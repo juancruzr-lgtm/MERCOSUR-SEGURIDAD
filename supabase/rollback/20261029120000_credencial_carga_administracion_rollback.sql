@@ -1,4 +1,4 @@
--- Rollback de 20261026120000: la credencial cargada por Administración vuelve a esperar la aceptación del vigilador.
+-- Rollback de 20261029120000: la credencial cargada por Administración vuelve a esperar la aceptación del vigilador.
 -- (Los documentos ya movidos a «para revisar» no se tocan.)
 
 create or replace function public.documentacion_confirmar(p_documento_id uuid)
