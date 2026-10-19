@@ -20,8 +20,11 @@
 -- las funciones de la Etapa 1 ni su permiso (ranking: Dirección y Gerencia).
 --
 -- ── Quién lo ve ──────────────────────────────────────────────────────────────
--- Dirección Operativa, Gerencia, delegación gerencial y Jefe de supervisores
--- (pedido de JC 19/10: Aldo Monzón evalúa a sus supervisores). La tabla
+-- Dirección Operativa, Gerencia, delegación gerencial y el Jefe de
+-- supervisores que NO tiene zona asignada (JC 19/10: Aldo Monzón evalúa a sus
+-- supervisores; Sergio Martínez, jefe pero que supervisa Rosario y es
+-- evaluado, no ve los legajos de sus pares). Sin nombres fijos: si mañana un
+-- jefe toma una zona, deja de ver; si la suelta, vuelve a ver. La tabla
 -- supervisor_route_points sigue con su RLS (cada uno lo suyo + admin): acá se
 -- lee por funciones SECURITY DEFINER con este permiso, sin abrir la tabla.
 --
@@ -39,7 +42,10 @@ set search_path = public, pg_catalog as $$
       or exists (
            select 1 from public.usuarios u
             where u.auth_user_id = auth.uid() and u.estado = 'activo'
-              and u.puesto_organizacional = 'jefe_supervisores')
+              and u.puesto_organizacional = 'jefe_supervisores'
+              -- Un jefe que también supervisa una zona es evaluado como uno
+              -- más (P2): no ve los legajos de sus pares (JC 19/10).
+              and not exists (select 1 from public.supervisor_zonas sz where sz.supervisor_id = u.id))
 $$;
 
 -- ============================================================================
