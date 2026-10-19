@@ -11,6 +11,7 @@ import { motivoRondaSinVentanas, ventanasRondaEnTurno } from '@/lib/rondas'
 import type { PuestoRonda, RondaBase, RondaBaseResumen, TurnoVentanaRonda } from '@/lib/rondas'
 import { supabase } from '@/lib/supabase'
 import RondaPuntosEditor from './RondaPuntosEditor'
+import RondaHorariosSinExigencia from './RondaHorariosSinExigencia'
 import styles from './Rondas.module.css'
 
 interface Props {
@@ -364,6 +365,8 @@ export default function RondaBaseEditor({
           onDirtyChange={setPuntosDirty}
         />
       )}
+
+      {ronda && <RondaHorariosSinExigencia rondaBaseId={ronda.id} />}
     </div>
   )
 }

@@ -26,6 +26,7 @@ import {
   debeAvisarEgresoPendiente,
 } from '@/lib/notificaciones-push'
 import { calcularMinutosTardanzaRegistro } from '@/lib/revision-operativa'
+import { ventanaSinExigencia, type HorarioSinExigencia } from '@/lib/ronda-vigilador-wa'
 import { objetivoEstaOperativo, turnoSinCoberturaOperativa } from '@/lib/turnos'
 // LA resolución de responsables operativos: guardia efectiva → responsable
 // único de zona → nadie (sin elegir arbitrariamente). La misma que usan las
@@ -875,7 +876,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       const puestoIds = Array.from(new Set(turnosVigentes.map(t => t.puesto_id).filter(Boolean)))
       const turnoIdsVig = turnosVigentes.map(t => t.id)
 
-      const [rondasVigRes, ejecVigRes, pausasRes] = await Promise.all([
+      const [rondasVigRes, ejecVigRes, pausasRes, horariosRes] = await Promise.all([
         admin.client.from('rondas_base')
           .select('id, puesto_id, nombre, hora_inicio, intervalo_minutos')
           .in('puesto_id', puestoIds as string[]).eq('activo', true),
@@ -885,7 +886,12 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
         admin.client.from('ronda_pausas')
           .select('ronda_base_id, pausada_at, hasta_at')
           .eq('activa', true),
+        // Horarios en que la ronda no se exige (mismo criterio que la base).
+        admin.client.from('ronda_horarios_sin_exigencia')
+          .select('ronda_base_id, dia_semana, desde, hasta')
+          .eq('activo', true),
       ])
+      const horariosSinExigencia = (horariosRes.data || []) as HorarioSinExigencia[]
 
       const rondasVig = (rondasVigRes.data || []) as Array<{ id: string; puesto_id: string; nombre: string; hora_inicio: string | null; intervalo_minutos: number }>
       const ejecMin = ((ejecVigRes.data || []) as Array<{ ronda_base_id: string; turno_id: string; iniciada_at: string }>)
@@ -931,6 +937,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
               && e.ini_min < vi + interv - RONDA_AVISO_GRACIA_MIN)
             if (yaIniciada) continue
             if (ventanaPausada(rb.id, vi)) { avisosOmitidosPorPausa += 1; continue }
+            if (ventanaSinExigencia(horariosSinExigencia, rb.id, vi)) continue
 
             const clave = `${rb.id}:${vi}`
             const horaVentana = horaDeMin(vi)

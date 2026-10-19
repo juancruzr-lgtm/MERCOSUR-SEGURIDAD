@@ -83,6 +83,37 @@ export function horaDeMinutosAbs(min: number): string {
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
 }
 
+/**
+ * Horario en que una ronda no se exige (ronda_horarios_sin_exigencia): día ISO
+ * (1 = lunes … 7 = domingo) y desde/hasta en hora argentina, mismo día.
+ */
+export interface HorarioSinExigencia {
+  ronda_base_id: string
+  dia_semana: number
+  desde: string
+  hasta: string
+}
+
+const hhmmAMin = (h: string): number => {
+  const [hh, mm] = String(h).slice(0, 5).split(':').map(Number)
+  return (hh || 0) * 60 + (mm || 0)
+}
+
+/**
+ * ¿La ventana que empieza en `ventanaInicioMin` (minutos absolutos con
+ * componentes locales, como minutosAbs) cae en un horario sin exigencia de esa
+ * ronda? Mismo criterio que rondas_ventanas_programadas: el INICIO de la
+ * ventana dentro de [desde, hasta) del día.
+ */
+export function ventanaSinExigencia(horarios: HorarioSinExigencia[] | undefined, rondaBaseId: string, ventanaInicioMin: number): boolean {
+  if (!horarios || horarios.length === 0) return false
+  const d = new Date(ventanaInicioMin * 60000)
+  const dia = d.getUTCDay() === 0 ? 7 : d.getUTCDay()
+  const min = d.getUTCHours() * 60 + d.getUTCMinutes()
+  return horarios.some(h => h.ronda_base_id === rondaBaseId && Number(h.dia_semana) === dia
+    && min >= hhmmAMin(h.desde) && min < hhmmAMin(h.hasta))
+}
+
 /** La clave de dedup, ligada a la ventana programada concreta. */
 export function claveDedupRondaVig(rondaBaseId: string, ventanaInicioMin: number): string {
   return `wa_ronda_pendiente:${rondaBaseId}:${ventanaInicioMin}`
@@ -106,6 +137,8 @@ export interface ParametrosSeleccion {
    * crea pausa, así que hay que pasarla explícitamente.
    */
   suspendidasClaves?: Set<string>
+  /** Horarios en que la ronda no se exige: esa ventana no existe como obligación. */
+  horariosSinExigencia?: HorarioSinExigencia[]
 }
 
 const objetivoOperativo = (o?: ObjetivoVig | null): boolean =>
@@ -163,6 +196,9 @@ export function seleccionarCandidatosRondaVigilador(p: ParametrosSeleccion): Can
           && pa.desdeMin <= vi
           && (pa.hastaMin === null || vi < pa.hastaMin))
         if (pausada) continue
+
+        // Horario declarado sin exigencia (p. ej. Laromet, domingo desde las 06).
+        if (ventanaSinExigencia(p.horariosSinExigencia, rb.id, vi)) continue
 
         salida.push({
           turno_id: t.id,
