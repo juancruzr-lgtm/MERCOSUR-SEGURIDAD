@@ -20,7 +20,7 @@ import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import { normalizarTelefonoAr } from '@/lib/telefono-ar'
 import { configuracionMeta, proveedorPorDefecto, proveedorSimulado } from '@/lib/whatsapp'
 import {
-  seleccionarCandidatosRondaVigilador, minutosAbs,
+  seleccionarCandidatosRondaVigilador, minutosAbs, type HorarioSinExigencia,
 } from '@/lib/ronda-vigilador-wa'
 import type {
   TurnoVigente, RondaBaseVig, EjecucionMin, PausaMin, ObjetivoVig,
@@ -143,7 +143,7 @@ export async function GET(req: Request) {
   const rondaIdsArr = Array.from(new Set(((rondasRes.data ?? []) as any[]).map(r => r.id)))
 
   // 3) Resto acotado por ids.
-  const [puntosRes, ejecRes, pausasRes, objRes, usuariosRes, suspRes] = await Promise.all([
+  const [puntosRes, ejecRes, pausasRes, objRes, usuariosRes, suspRes, horariosRes] = await Promise.all([
     rondaIdsArr.length
       ? client.from('ronda_puntos').select('ronda_base_id').eq('activo', true).in('ronda_base_id', rondaIdsArr)
       : Promise.resolve({ data: [] as any[], error: null }),
@@ -159,12 +159,17 @@ export async function GET(req: Request) {
     // pendiente para (ronda, turno), NO se manda WhatsApp de esa ronda.
     client.from('ronda_alertas').select('ronda_base_id, turno_id')
       .in('turno_id', turnoIds).eq('tipo', 'suspendida').eq('estado', 'pendiente'),
+    // Horarios en que la ronda no se exige (mismo criterio que la base).
+    rondaIdsArr.length
+      ? client.from('ronda_horarios_sin_exigencia').select('ronda_base_id, dia_semana, desde, hasta').eq('activo', true).in('ronda_base_id', rondaIdsArr)
+      : Promise.resolve({ data: [] as any[], error: null }),
   ])
 
   const fuentesConError = [
     ['turnos', turnosRes], ['rondas_base', rondasRes], ['ronda_puntos', puntosRes],
     ['ronda_ejecuciones', ejecRes], ['ronda_pausas', pausasRes], ['objetivos', objRes],
     ['usuarios', usuariosRes], ['ronda_alertas_suspendida', suspRes],
+    ['ronda_horarios_sin_exigencia', horariosRes],
   ].filter(([, r]: any) => r?.error).map(([n, r]: any) => `${n}: ${r.error.message}`)
 
   // FAIL CLOSED: si una fuente crítica falló, la foto está incompleta y podría
@@ -217,6 +222,7 @@ export async function GET(req: Request) {
   const candidatos = seleccionarCandidatosRondaVigilador({
     ahoraMin, turnosVigentes: turnos, rondasBase, ejecuciones, pausas, objetivos,
     avisoMin: AVISO_MIN, rondaCreadaMin, suspendidasClaves,
+    horariosSinExigencia: (horariosRes.data ?? []) as HorarioSinExigencia[],
   })
 
   const descartes: Record<string, number> = {}
