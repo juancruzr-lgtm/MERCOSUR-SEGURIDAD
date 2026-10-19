@@ -8,8 +8,9 @@
  * una, y objetivos de su zona que se le vencieron.
  *
  * Todo el cálculo está en la base (evaluacion_supervisores_periodo y sus
- * detalles); acá sólo se muestra. La ven Dirección Operativa y Gerencia: la
- * base lo revalida y, si no corresponde, devuelve el error y se muestra.
+ * detalles); acá sólo se muestra. El ranking lo ven Dirección Operativa y
+ * Gerencia; la vista «Horarios y legajos» (Etapa 2A) también el Jefe de
+ * supervisores. La base lo revalida y, si no corresponde, devuelve el error.
  *
  * Lo que todavía NO mide (etapas siguientes): si el supervisor ABRIÓ la alerta
  * («visto») y las fallas de asistencia como eventos propios. De asistencia se
@@ -27,6 +28,7 @@ import {
 import type {
   AlertaRondaAtribuida, EstadoAtencion, FilaEvaluacionSupervisor, VencimientoSupervision,
 } from '@/lib/evaluacion-supervisores'
+import HorariosSupervisores from './HorariosSupervisores'
 
 const C = {
   bg: '#0f172a', borde: '#1e293b', texto: '#e2e8f0', tenue: '#94a3b8', apagado: '#64748b',
@@ -73,7 +75,40 @@ const TIPO_ALERTA: Record<string, string> = {
   no_iniciada: 'No iniciada', no_finalizada: 'No finalizada', suspendida: 'Suspendida',
 }
 
-export default function EvaluacionSupervisoresPanel() {
+type Vista = 'ranking' | 'horarios'
+
+/**
+ * Pantalla «Evaluación de supervisores». Dos vistas:
+ *  · Ranking (Etapa 1): sólo Dirección Operativa y Gerencia (P5, 16/10).
+ *  · Horarios y legajos (Etapa 2A): también el Jefe de supervisores.
+ * Quién ve cada una lo decide la base; `verRanking` sólo evita mostrar una
+ * pestaña que igual daría «sin permiso».
+ */
+export default function EvaluacionSupervisoresPanel({ verRanking }: { verRanking: boolean }) {
+  const [vista, setVista] = useState<Vista>(verRanking ? 'ranking' : 'horarios')
+  const pestanas: [Vista, string][] = [
+    ...(verRanking ? [['ranking', 'Ranking de alertas'] as [Vista, string]] : []),
+    ['horarios', 'Horarios y legajos'],
+  ]
+  return (
+    <div style={{ display: 'grid', gap: 14, minWidth: 0 }}>
+      <div style={{ fontSize: 20, fontWeight: 800, color: C.texto }}>Evaluación de supervisores</div>
+      {pestanas.length > 1 && (
+        <div role="tablist" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {pestanas.map(([id, t]) => (
+            <button key={id} type="button" role="tab" aria-selected={vista === id} onClick={() => setVista(id)}
+                    style={{ ...boton(vista === id ? C.amarillo : C.tenue), opacity: vista === id ? 1 : 0.7 }}>
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
+      {vista === 'ranking' && verRanking ? <RankingSupervisores /> : <HorariosSupervisores />}
+    </div>
+  )
+}
+
+function RankingSupervisores() {
   const inicial = periodoPorDefecto()
   const [desde, setDesde] = useState(inicial.desde)
   const [hasta, setHasta] = useState(inicial.hasta)
@@ -106,8 +141,7 @@ export default function EvaluacionSupervisoresPanel() {
   return (
     <div style={{ display: 'grid', gap: 14, minWidth: 0 }}>
       <div>
-        <div style={{ fontSize: 20, fontWeight: 800, color: C.texto }}>Evaluación de supervisores</div>
-        <div style={{ fontSize: 13, color: C.tenue, marginTop: 4, lineHeight: 1.5 }}>
+        <div style={{ fontSize: 13, color: C.tenue, lineHeight: 1.5 }}>
           Qué pasó con las alertas de ronda que le tocaron a cada supervisor y cuántos objetivos de su zona
           se le vencieron. Una alerta con dos supervisores de guardia es de los dos: si la atendió el otro,
           figura como «intervino otro». Todavía no se mide si el supervisor abrió la alerta.
@@ -246,7 +280,11 @@ function DetalleSupervisor({ fila, desde, hasta, onCerrar }: {
     <div style={{ ...caja, display: 'grid', gap: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ fontSize: 16, fontWeight: 800, color: C.texto }}>{fila.supervisor}</div>
-        <button type="button" onClick={onCerrar} style={boton(C.apagado)}>Cerrar</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <a href={`/guardias/${fila.supervisor_id}?seccion=operativo`}
+             style={{ ...boton(C.celeste), textDecoration: 'none' }}>Ver legajo operativo</a>
+          <button type="button" onClick={onCerrar} style={boton(C.apagado)}>Cerrar</button>
+        </div>
       </div>
       {error && <div style={{ fontSize: 13, color: '#fca5a5' }}>No se pudo cargar todo: {error}</div>}
       {cargando && <div style={{ fontSize: 13, color: C.tenue }}>Cargando…</div>}
