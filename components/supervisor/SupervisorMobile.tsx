@@ -3319,9 +3319,10 @@ export default function SupervisorMobile({ user }: any) {
           )
         })()}
 
-        {/* Estatuto Interno pendiente (tarjeta, no modal: no bloquea alertas
-            ni turnos). El supervisor no tiene Mi Legajo, así que lo lleva a
-            /estatuto, que es la misma sección. */}
+        {/* Estatuto Interno pendiente (tarjeta fija + cartel que se cierra con
+            "Después" y vuelve: insiste sin bloquear alertas ni turnos). El
+            supervisor no tiene Mi Legajo, así que lo lleva a /estatuto, que es
+            la misma sección. */}
         {!loading && user?.id && (
           <AvisoEstatuto empleadoId={user.id} destino="/estatuto" />
         )}
