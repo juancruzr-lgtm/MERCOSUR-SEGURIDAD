@@ -188,10 +188,34 @@ async function guardarVinculoEmpleado(
     .single()
 }
 
-function authPayload(usuario: UsuarioEmpleado, email: string, dni: string) {
+/**
+ * Baja laboral: una persona desvinculada o con el acceso bloqueado no recibe
+ * cuenta, reparación ni contraseña nueva por ningún camino (Sincronizar accesos,
+ * Reset DNI, Crear acceso, Reparar). Devuelve el motivo, o null si puede.
+ * Si la columna acceso_bloqueado todavía no existe (migración sin aplicar) no
+ * bloquea; cualquier otro error de lectura bloquea (no se abre una cuenta a ciegas).
+ */
+export async function motivoSinAcceso(supabaseAdmin: SupabaseClient, usuario: UsuarioEmpleado): Promise<string | null> {
+  if (usuario.estado && usuario.estado !== 'activo') return 'omitido: empleado inactivo o desvinculado'
+  const { data, error } = await supabaseAdmin.from('usuarios').select('acceso_bloqueado').eq('id', usuario.id).maybeSingle()
+  if (error) return /acceso_bloqueado/.test(error.message) ? null : 'omitido: no se pudo verificar el acceso'
+  return (data as { acceso_bloqueado?: boolean } | null)?.acceso_bloqueado ? 'omitido: acceso bloqueado por baja laboral' : null
+}
+
+/** Bloquea el ingreso en Supabase Auth (ban): no inicia sesión ni renueva tokens. */
+export async function bloquearAccesoAuth(supabaseAdmin: SupabaseClient, authUserId: string) {
+  return supabaseAdmin.auth.admin.updateUserById(authUserId, { ban_duration: '876000h' } as any)
+}
+
+/** Quita el ban de Auth (sólo desde la rehabilitación autorizada por Gerencia). */
+export async function desbloquearAccesoAuth(supabaseAdmin: SupabaseClient, authUserId: string) {
+  return supabaseAdmin.auth.admin.updateUserById(authUserId, { ban_duration: 'none' } as any)
+}
+
+function authPayload(usuario: UsuarioEmpleado, email: string, dni: string, conPassword = true) {
   return {
     email,
-    password: dni,
+    ...(conPassword ? { password: dni } : {}),
     email_confirm: true,
     user_metadata: {
       usuario_id: usuario.id,
@@ -205,11 +229,16 @@ function authPayload(usuario: UsuarioEmpleado, email: string, dni: string) {
 export async function ensureEmployeeAuth(
   supabaseAdmin: SupabaseClient,
   usuario: UsuarioEmpleado,
-  options: { allowAdmin?: boolean } = {},
+  options: { allowAdmin?: boolean; conservarPassword?: boolean } = {},
 ): Promise<EmployeeAuthResult> {
   if (usuario.rol === 'admin' && !options.allowAdmin) {
     return { action: 'omitido', reason: 'omitido: admin' }
   }
+  const sinAcceso = await motivoSinAcceso(supabaseAdmin, usuario)
+  if (sinAcceso) return { action: 'omitido', reason: sinAcceso }
+  // conservarPassword: una cuenta que ya existe no vuelve a la contraseña DNI
+  // (Sincronizar accesos ya no resetea contraseñas; SEG-01 de la auditoría).
+  const conPassword = !options.conservarPassword
 
   const dni = normalizeDni(usuario.dni)
   const email = normalizeEmail(usuario.email)
@@ -223,7 +252,7 @@ export async function ensureEmployeeAuth(
   if (authUserId) {
     const { error: updateAuthError } = await supabaseAdmin.auth.admin.updateUserById(
       authUserId,
-      authPayload(usuario, email, dni),
+      authPayload(usuario, email, dni, conPassword),
     )
 
     if (!updateAuthError) {
@@ -256,7 +285,7 @@ export async function ensureEmployeeAuth(
 
     const { error: updateAuthError } = await supabaseAdmin.auth.admin.updateUserById(
       user.id,
-      authPayload(usuario, email, dni),
+      authPayload(usuario, email, dni, conPassword),
     )
 
     if (updateAuthError) {

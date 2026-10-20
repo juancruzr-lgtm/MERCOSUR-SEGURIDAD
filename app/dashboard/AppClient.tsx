@@ -143,6 +143,17 @@ import type { EstadoLogica, PlanDeclaracion, PropuestaFranja } from '@/lib/logic
 import ControlEstatuto from '@/components/estatuto/ControlEstatuto'
 import ControlProtocolos from '@/components/protocolos/ControlProtocolos'
 import LegajoDigital from '@/components/legajo/LegajoDigital'
+import RegistrarBaja from '@/components/bajas/RegistrarBaja'
+
+// Baja laboral confirmada = acceso bloqueado (migración 20261110120000). La base
+// ya no le deja leer ni escribir nada; esto sólo muestra un mensaje claro y
+// cierra la sesión. Si la función todavía no existe (migración sin aplicar), no bloquea.
+async function accesoBloqueadoPorBaja(): Promise<boolean> {
+  const { data, error } = await supabase.rpc('mi_acceso_estado')
+  if (error) return false
+  return Boolean((data as { bloqueado?: boolean } | null)?.bloqueado)
+}
+const MENSAJE_ACCESO_BLOQUEADO = 'Tu acceso a la app está deshabilitado por una baja laboral. Si es un error, consultá con Administración.'
 import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 
@@ -622,6 +633,13 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
 
     if (err) {
       setError(mensajeErrorAuth(err, 'inicio de sesión'))
+      setLoading(false)
+      return
+    }
+
+    if (await accesoBloqueadoPorBaja()) {
+      await supabase.auth.signOut()
+      setError(MENSAJE_ACCESO_BLOQUEADO)
       setLoading(false)
       return
     }
@@ -1647,6 +1665,8 @@ function DelegacionGerenciaControl({ usuarioId, otorganteId, guardias }: { usuar
 function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin, usuarioId, rol, puedePleno, puedeOperativo, user }: any) {
   const router = useRouter()
   const [modal, setModal] = useState(false)
+  // Registrar baja: el mismo procedimiento que el Legajo (components/bajas/RegistrarBaja).
+  const [bajaDe, setBajaDe] = useState<string | null>(null)
   const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', puesto_organizacional:'', foto_url:'', es_prueba:false }
   // Fase 2D: quién puede asignar niveles privilegiados. Administración gestiona
   // rol/puesto NORMALES; 'admin'/'gerencia'/delegación quedan para Gerencia real.
@@ -2422,7 +2442,18 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                       Editar
                     </button>
                     )}
-                    {(puedePleno || (puedeOperativo && ['guardia','vigilador'].includes(g.rol || 'guardia') && g.estado === 'activo')) && (
+                    {/* Administración/Gerencia: la baja se registra con el procedimiento
+                        completo (motivo, fechas, telegrama, vacaciones, confirmación).
+                        El supervisor mantiene su pedido operativo, que abre un borrador. */}
+                    {puedePleno && (
+                    <button
+                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12, color: g.estado === 'activo' ? '#fca5a5' : undefined }}
+                      onClick={() => setBajaDe(g.id)}
+                    >
+                      {g.estado === 'activo' ? 'Registrar baja' : 'Ver baja'}
+                    </button>
+                    )}
+                    {((puedePleno && g.estado !== 'activo') || (!puedePleno && puedeOperativo && ['guardia','vigilador'].includes(g.rol || 'guardia') && g.estado === 'activo')) && (
                     <button
                       style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
                       onClick={() => activarInactivar(g)}
@@ -2456,6 +2487,24 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           </tbody>
         </table>
       </div>
+
+      {bajaDe && (
+        <div role="dialog" aria-modal="true" style={{ position:'fixed', inset:0, background:'rgba(2,6,23,.75)', zIndex:60, overflowY:'auto', padding:'16px 12px' }}>
+          <div style={{ maxWidth:860, margin:'0 auto', background:'#0f1629', border:'1px solid #1e293b', borderRadius:12, padding:14 }}>
+            <RegistrarBaja
+              empleadoId={bajaDe}
+              origen="guardias"
+              puedeGerencia={esGerenciaReal(user)}
+              onCerrar={() => setBajaDe(null)}
+              onCambio={async () => {
+                // Sólo la fila de la persona (estado/situación laboral); igual que Activar/Inactivar.
+                const { data } = await supabase.from('usuarios').select('*').eq('id', bajaDe).maybeSingle()
+                if (data) setGuardias((prev: any[]) => prev.map(x => x.id === bajaDe ? data : x))
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {modal && (
         <Modal
@@ -14235,6 +14284,13 @@ export default function AppPage() {
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
       if (!data.session) {
+        setLoading(false)
+        return
+      }
+
+      if (await accesoBloqueadoPorBaja()) {
+        await supabase.auth.signOut()
+        setUser(null)
         setLoading(false)
         return
       }

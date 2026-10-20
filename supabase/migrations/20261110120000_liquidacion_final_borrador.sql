@@ -1,73 +1,167 @@
 -- ============================================================================
--- Liquidación final por baja: BORRADOR automático (sin pagar, exportar ni cerrar)
+-- Desvinculación laboral: registro de baja único, bloqueo de acceso y
+-- borrador de liquidación final (orden de desarrollo JC 20/10/2026)
 -- ============================================================================
--- Cuando la app detecta una baja CONFIRMADA (registrada en la app o incorporada
--- por la consulta de ARCA que Administración carga a mano en Legajo Digital →
--- Diferencias con ARCA) se prepara UN borrador de liquidación final. NO existe
--- consulta automática a ARCA: la única fuente ARCA es el .txt que se carga a mano.
+-- Administración registra la baja UNA vez (desde Guardias o desde el Legajo;
+-- mismo procedimiento, misma tabla). Al CONFIRMARLA la app:
+--   1. registra la desvinculación con su fecha efectiva, motivo y documentación;
+--   2. pasa la situación laboral a desvinculado (usuarios.estado = 'inactivo');
+--   3. bloquea el acceso (usuarios.acceso_bloqueado) — efectivo en la BASE con una
+--      política RESTRICTIVA en todas las tablas con RLS: aunque conserve una sesión
+--      o una contraseña, no lee ni escribe nada. El bloqueo en Auth (ban) lo hace
+--      la ruta /api/bajas/confirmar; si fallara, la base ya está bloqueada;
+--   4. impide que «Sincronizar accesos» o un cambio de estado lo reactive
+--      (trigger de guarda: sólo Gerencia rehabilita, con motivo);
+--   5. conserva todo el historial (nada se borra);
+--   6. genera el borrador de liquidación final;
+--   7. informa los turnos asignados posteriores a la baja.
+-- Mientras la baja es BORRADOR no cambia la situación laboral ni el acceso.
 --
--- Separación pedida por JC (punto 1): la BAJA LABORAL (liquidacion_baja) es un
--- registro propio. Nada de esta migración toca usuarios.estado, el acceso a la
--- app (auth), usuarios.excluir_pago_banco ni liquidacion_persona.estado_liquidable.
--- Baja laboral, acceso y posibilidad de liquidar siguen siendo independientes.
+-- Estados separados: situación laboral (usuarios.estado), acceso
+-- (usuarios.acceso_bloqueado + ban en Auth) y situación administrativa
+-- (liquidacion_final.estado). Un desvinculado sin acceso puede tener la
+-- liquidación pendiente.
 --
--- 1) liquidacion_baja: fecha efectiva, fuente (app|arca), persona y quién la
---    registró; las confirmaciones posteriores (otra fuente, otra consulta) se
---    suman a `confirmaciones` sin crear otra baja. Fechas distintas entre fuentes
---    NO se pisan: quedan en `discrepancia` y bloquean la exportación.
--- 2) liquidacion_final: UN borrador por baja (unique baja_id). El cálculo lo hace
---    la app (lib/liquidacion-final.ts) con los mismos datos y fórmulas del Excel
---    de trabajo y lo guarda versionado (control de versión: reintentos seguros).
--- 3) liquidacion_final_linea: líneas Legajo|CUIL|Código|Cantidad|Importe que
---    alimentan el Excel de trabajo final y el .xls de Visual (mismo cálculo).
--- 4) liquidacion_final_historial: append-only (cada cálculo, entrada manual,
---    corrección, exportación, resultado y conciliación).
--- 5) Resultado de Visual reimportado: versiones por hash (sin duplicados) y
---    conciliación al centavo contra lo exportado.
--- 6) Detección: trigger en usuarios (estado activo → otro) y en
---    arca_relaciones_laborales (fila con fecha de fin vencida o situación de
---    baja). Una persona que simplemente DESAPARECE de la consulta de ARCA no trae
---    fecha: no se inventa; Administración la confirma con fecha desde Diferencias.
--- 7) Doble pago: la exportación final se rechaza si cambió lo ya liquidado en el
---    mes (enviado a Visual en un período exportado) o los pagos de extras
---    registrados respecto de lo que consideró el cálculo; y un período mensual no
---    puede volver a mandar a Visual un código que ya salió en una liquidación
---    final exportada del mismo mes y CUIL.
+-- ARCA (Diferencias con ARCA, #305) NO crea ni confirma bajas: sólo controla
+-- diferencias y desde ahí se inicia este mismo procedimiento.
 --
 -- Rollback: supabase/rollback/20261110120000_liquidacion_final_borrador_rollback.sql
 -- ============================================================================
 
 begin;
 
--- ── 1) Baja laboral ──────────────────────────────────────────────────────────
-create table if not exists public.liquidacion_baja (
-  id                    uuid primary key default gen_random_uuid(),
-  -- Identidad estable para no duplicar: CUIL; si la persona no tiene CUIL, 'emp:<usuario_id>'.
-  clave_persona         text not null check (char_length(clave_persona) between 11 and 60),
-  empleado_id           uuid references public.usuarios(id) on delete set null,
-  cuil                  text check (cuil is null or cuil ~ '^\d{11}$'),
-  nombre                text check (char_length(nombre) <= 160),
-  fecha_baja            date,           -- fecha efectiva (último día de la relación). NULL = falta dato.
-  fecha_inicio_relacion date,           -- ingreso conocido al registrar (legajo o ARCA)
-  causa                 text check (causa in ('renuncia','despido_sin_causa','despido_con_causa','mutuo_acuerdo',
-                                              'fin_contrato','periodo_prueba','fallecimiento','jubilacion','abandono','otra')),
-  fuente                text not null check (fuente in ('app','arca')),
-  confirmaciones        jsonb not null default '[]'::jsonb check (jsonb_typeof(confirmaciones) = 'array'),
-  discrepancia          text check (char_length(discrepancia) <= 400),
-  estado                text not null default 'confirmada' check (estado in ('confirmada','anulada')),
-  registrada_por        uuid references public.usuarios(id) on delete set null,
-  registrada_at         timestamptz not null default now(),
-  anulada_por           uuid references public.usuarios(id) on delete set null,
-  anulada_at            timestamptz,
-  motivo_anulacion      text check (char_length(motivo_anulacion) <= 300)
-);
-create index if not exists ix_liq_baja_clave on public.liquidacion_baja (clave_persona, registrada_at desc);
-create index if not exists ix_liq_baja_empleado on public.liquidacion_baja (empleado_id);
+-- ── 0) Acceso: columnas en usuarios ──────────────────────────────────────────
+alter table public.usuarios add column if not exists acceso_bloqueado boolean not null default false;
+alter table public.usuarios add column if not exists acceso_bloqueado_motivo text;
+alter table public.usuarios add column if not exists acceso_bloqueado_at timestamptz;
+alter table public.usuarios add column if not exists acceso_bloqueado_por uuid references public.usuarios(id) on delete set null;
+-- Cuándo se aplicó el bloqueo en Supabase Auth (ban). NULL con acceso_bloqueado = pendiente de aplicar.
+alter table public.usuarios add column if not exists acceso_auth_bloqueado_at timestamptz;
 
--- ── 2) Borrador de liquidación final (uno por baja) ──────────────────────────
+-- ── 1) Catálogo de causales (ampliable sin tocar la arquitectura) ────────────
+-- evaluar: conceptos que la liquidación final debe EVALUAR para esa causal
+-- (quedan pendientes de revisión: nunca se calculan solos).
+-- presentismo: 'cero_si_no_completa_mes' (renuncia, regla JC caso Paniagua) o 'formula'.
+create table if not exists public.baja_causa (
+  codigo      text primary key check (codigo ~ '^[a-z_]{3,40}$'),
+  nombre      text not null check (char_length(nombre) between 3 and 80),
+  orden       integer not null,
+  evaluar     text[] not null default '{}',
+  presentismo text not null default 'formula' check (presentismo in ('formula','cero_si_no_completa_mes')),
+  ayuda       text,
+  activo      boolean not null default true
+);
+insert into public.baja_causa (codigo, nombre, orden, evaluar, presentismo, ayuda) values
+  ('renuncia', 'Renuncia', 10, '{}', 'cero_si_no_completa_mes', 'Sin indemnizaciones de despido.'),
+  ('despido_sin_causa', 'Despido sin causa', 20, '{indemnizacion_antiguedad,preaviso,integracion_mes}', 'formula', 'Evaluar arts. 231, 232, 233 y 245 LCT y el convenio.'),
+  ('despido_con_causa', 'Despido con causa', 30, '{}', 'formula', 'No asume indemnizaciones de despido sin causa.'),
+  ('fin_contrato', 'Finalización de contrato', 40, '{}', 'formula', 'Evaluar según la modalidad del contrato.'),
+  ('mutuo_acuerdo', 'Mutuo acuerdo', 50, '{gratificacion_acuerdo}', 'formula', 'Lo que fije el acuerdo (art. 241 LCT).'),
+  ('fallecimiento', 'Fallecimiento', 60, '{indemnizacion_fallecimiento}', 'formula', 'Evaluar art. 248 LCT.'),
+  ('jubilacion', 'Jubilación', 70, '{}', 'formula', 'Evaluar art. 252 LCT.'),
+  ('abandono', 'Abandono de trabajo', 80, '{}', 'formula', 'Sólo con intimación previa (art. 244 LCT).'),
+  ('otra', 'Otra causal', 90, '{}', 'formula', 'Describir en observaciones.')
+on conflict (codigo) do nothing;
+
+-- ── 2) Registro de baja (uno por desvinculación) ─────────────────────────────
+create table if not exists public.baja_laboral (
+  id                 uuid primary key default gen_random_uuid(),
+  empleado_id        uuid not null references public.usuarios(id) on delete restrict,
+  -- Copia al registrar (identificación del formulario; el legajo puede cambiar después).
+  nombre             text check (char_length(nombre) <= 160),
+  dni                text,
+  cuil               text check (cuil is null or cuil ~ '^\d{11}$'),
+  legajo             text,
+  fecha_ingreso      date,
+  causa              text references public.baja_causa(codigo),
+  fecha_notificacion date,
+  fecha_baja         date,        -- fecha EFECTIVA de desvinculación (nunca inferida)
+  observaciones      text check (char_length(observaciones) <= 1000),
+  estado             text not null default 'borrador' check (estado in ('borrador','confirmada','anulada')),
+  origen             text not null default 'guardias' check (origen in ('guardias','legajo','arca','cambio_estado')),
+  -- Vacaciones confirmadas por Administración al confirmar (devengadas, tomadas, pendientes, método).
+  vacaciones         jsonb,
+  -- Turnos asignados después de la fecha de baja, al confirmar (para reasignar).
+  turnos_futuros     jsonb not null default '[]'::jsonb,
+  registrada_por     uuid references public.usuarios(id) on delete set null,
+  registrada_at      timestamptz not null default now(),
+  confirmada_por     uuid references public.usuarios(id) on delete set null,
+  confirmada_at      timestamptz,
+  anulada_por        uuid references public.usuarios(id) on delete set null,
+  anulada_at         timestamptz,
+  motivo_anulacion   text check (char_length(motivo_anulacion) <= 300),
+  actualizado_at     timestamptz not null default now(),
+  constraint baja_confirmada_completa check (estado <> 'confirmada' or (causa is not null and fecha_baja is not null and confirmada_at is not null))
+);
+-- Una sola baja abierta (borrador) por persona; las confirmadas se conservan todas (reingresos).
+create unique index if not exists ux_baja_laboral_borrador on public.baja_laboral (empleado_id) where estado = 'borrador';
+create index if not exists ix_baja_laboral_empleado on public.baja_laboral (empleado_id, registrada_at desc);
+create index if not exists ix_baja_laboral_cuil on public.baja_laboral (cuil);
+
+-- Documentos: viven en la documentación del legajo (documentacion_documentos);
+-- acá sólo el vínculo con la baja y la lectura de la IA (que nunca confirma nada).
+create table if not exists public.baja_laboral_documento (
+  baja_id       uuid not null references public.baja_laboral(id) on delete restrict,
+  documento_id  uuid not null references public.documentacion_documentos(id) on delete restrict,
+  ia_estado     text not null default 'sin_leer' check (ia_estado in ('sin_leer','leido','ilegible','error')),
+  ia_datos      jsonb,
+  ia_at         timestamptz,
+  vinculado_por uuid references public.usuarios(id) on delete set null,
+  vinculado_at  timestamptz not null default now(),
+  primary key (baja_id, documento_id)
+);
+
+create table if not exists public.baja_laboral_historial (
+  id       bigserial primary key,
+  baja_id  uuid not null references public.baja_laboral(id) on delete restrict,
+  accion   text not null check (accion in ('creada','editada','documento','lectura_ia','confirmada','rectificada',
+                                           'anulada','acceso_bloqueado_auth','acceso_rehabilitado')),
+  datos    jsonb not null default '{}'::jsonb,
+  por      uuid references public.usuarios(id) on delete set null,
+  at       timestamptz not null default now()
+);
+create index if not exists ix_baja_historial on public.baja_laboral_historial (baja_id, id);
+
+-- Tipos de documento de egreso en el catálogo del legajo (reutiliza la carga existente).
+insert into public.documentacion_tipos (codigo, nombre, ayuda, orden, requisito, etapa, caras, multiple, campo_fecha,
+  etiqueta_fecha, campo_vencimiento, vigencia_meses, etiqueta_detalle, sube_vigilador, sensibilidad, constancia,
+  texto_constancia, referencia, activo) values
+  ('telegrama_renuncia', 'Telegrama de renuncia', 'Baja laboral.', 172, 'si_corresponde', 'egreso', null, true, 'opcional',
+   'Fecha del telegrama', 'no', null, 'Referencia', false, 'sensible', 'ninguna', null, null, true),
+  ('telegrama_despido', 'Telegrama de despido', 'Baja laboral.', 173, 'si_corresponde', 'egreso', null, true, 'opcional',
+   'Fecha del telegrama', 'no', null, 'Referencia', false, 'sensible', 'ninguna', null, null, true),
+  ('acuerdo_desvinculacion', 'Acuerdo de desvinculación', 'Baja laboral.', 174, 'si_corresponde', 'egreso', null, true, 'opcional',
+   'Fecha del acuerdo', 'no', null, 'Referencia', false, 'sensible', 'ninguna', null, null, true),
+  ('documentacion_baja', 'Documentación de la baja', 'Complementaria de la baja.', 175, 'si_corresponde', 'egreso', null, true, 'opcional',
+   'Fecha', 'no', null, 'Descripción', false, 'sensible', 'ninguna', null, null, true)
+on conflict (codigo) do nothing;
+
+-- ── 3) Vacaciones tomadas fuera de la app (o no cargadas) ────────────────────
+-- Las novedades de vacaciones APROBADAS ya cuentan; esto registra las demás. Un
+-- registro que se superpone en fechas con otro (manual o novedad) se rechaza: no
+-- se descuenta dos veces. Sin fechas, se exige que el período no tenga otro registro.
+create table if not exists public.legajo_vacaciones_tomadas (
+  id                uuid primary key default gen_random_uuid(),
+  empleado_id       uuid not null references public.usuarios(id) on delete restrict,
+  periodo           integer not null check (periodo between 1990 and 2100),
+  dias              numeric not null check (dias > 0 and dias <= 60),
+  desde             date,
+  hasta             date,
+  observacion       text check (char_length(observacion) <= 300),
+  respaldo_documento_id uuid references public.documentacion_documentos(id) on delete restrict,
+  cargado_por       uuid references public.usuarios(id) on delete set null,
+  cargado_at        timestamptz not null default now(),
+  anulado_por       uuid references public.usuarios(id) on delete set null,
+  anulado_at        timestamptz,
+  motivo_anulacion  text,
+  constraint vacaciones_rango check ((desde is null) = (hasta is null) and (desde is null or desde <= hasta))
+);
+create index if not exists ix_vacaciones_tomadas_empleado on public.legajo_vacaciones_tomadas (empleado_id, periodo);
+
+-- ── 4) Liquidación final (una por baja confirmada) ───────────────────────────
 create table if not exists public.liquidacion_final (
   id                 uuid primary key default gen_random_uuid(),
-  baja_id            uuid not null unique references public.liquidacion_baja(id) on delete restrict,
+  baja_id            uuid not null unique references public.baja_laboral(id) on delete restrict,
   mes                text check (mes ~ '^\d{4}-\d{2}$'),   -- mes de la baja (YYYY-MM)
   estado             text not null default 'pendiente_calculo'
                      check (estado in ('pendiente_calculo','borrador','lista','exportada','conciliada','anulada')),
@@ -101,7 +195,7 @@ create table if not exists public.liquidacion_final_linea (
   concepto  text check (char_length(concepto) <= 120),
   entrada   text not null check (entrada in ('CAN','IMP','CANIMP')),
   cantidad  numeric,
-  importe   numeric,          -- lo que va en la columna Importe de Visual (unitario si CANIMP)
+  importe   numeric,          -- columna Importe de Visual (unitario si la cantidad es real)
   total     numeric not null, -- importe final esperado del concepto
   detalle   jsonb not null default '{}'::jsonb,
   primary key (final_id, codigo)
@@ -111,8 +205,7 @@ create table if not exists public.liquidacion_final_historial (
   id        bigserial primary key,
   final_id  uuid not null references public.liquidacion_final(id) on delete restrict,
   version   integer not null,
-  accion    text not null check (accion in ('creado','confirmacion','calculo','entradas','correccion','lista',
-                                            'exportada','resultado','conciliacion','anulada')),
+  accion    text not null check (accion in ('creado','calculo','entradas','lista','exportada','resultado','conciliacion','anulada','baja_rectificada')),
   datos     jsonb not null default '{}'::jsonb,
   por       uuid references public.usuarios(id) on delete set null,
   at        timestamptz not null default now()
@@ -140,22 +233,38 @@ create table if not exists public.liquidacion_final_resultado_concepto (
   primary key (resultado_id, codigo)   -- un concepto repetido en el resultado se rechaza, no se suma
 );
 
--- Lectura sólo Gerencia/Administración (puede_liquidar_actual); escritura sólo por RPC.
-alter table public.liquidacion_baja                     enable row level security;
+-- ── 5) Permisos de lectura (escritura sólo por RPC) ──────────────────────────
+alter table public.baja_causa                           enable row level security;
+alter table public.baja_laboral                         enable row level security;
+alter table public.baja_laboral_documento               enable row level security;
+alter table public.baja_laboral_historial               enable row level security;
+alter table public.legajo_vacaciones_tomadas            enable row level security;
 alter table public.liquidacion_final                    enable row level security;
 alter table public.liquidacion_final_linea              enable row level security;
 alter table public.liquidacion_final_historial          enable row level security;
 alter table public.liquidacion_final_resultado          enable row level security;
 alter table public.liquidacion_final_resultado_concepto enable row level security;
-revoke all on public.liquidacion_baja, public.liquidacion_final, public.liquidacion_final_linea,
+revoke all on public.baja_causa, public.baja_laboral, public.baja_laboral_documento, public.baja_laboral_historial,
+              public.legajo_vacaciones_tomadas, public.liquidacion_final, public.liquidacion_final_linea,
               public.liquidacion_final_historial, public.liquidacion_final_resultado,
               public.liquidacion_final_resultado_concepto from public, anon, authenticated;
-revoke all on sequence public.liquidacion_final_historial_id_seq from public, anon, authenticated;
-grant select on public.liquidacion_baja, public.liquidacion_final, public.liquidacion_final_linea,
+revoke all on sequence public.baja_laboral_historial_id_seq, public.liquidacion_final_historial_id_seq from public, anon, authenticated;
+grant select on public.baja_causa, public.baja_laboral, public.baja_laboral_documento, public.baja_laboral_historial,
+                public.legajo_vacaciones_tomadas, public.liquidacion_final, public.liquidacion_final_linea,
                 public.liquidacion_final_historial, public.liquidacion_final_resultado,
                 public.liquidacion_final_resultado_concepto to authenticated;
-drop policy if exists liq_baja_lectura on public.liquidacion_baja;
-create policy liq_baja_lectura on public.liquidacion_baja for select to authenticated using (public.puede_liquidar_actual());
+-- Bajas, documentos y vacaciones: Administración/Gerencia (legajo_puede_gestionar). Ni supervisores ni vigiladores.
+drop policy if exists baja_causa_lectura on public.baja_causa;
+create policy baja_causa_lectura on public.baja_causa for select to authenticated using (public.legajo_puede_gestionar());
+drop policy if exists baja_laboral_lectura on public.baja_laboral;
+create policy baja_laboral_lectura on public.baja_laboral for select to authenticated using (public.legajo_puede_gestionar() or public.puede_liquidar_actual());
+drop policy if exists baja_documento_lectura on public.baja_laboral_documento;
+create policy baja_documento_lectura on public.baja_laboral_documento for select to authenticated using (public.legajo_puede_gestionar());
+drop policy if exists baja_historial_lectura on public.baja_laboral_historial;
+create policy baja_historial_lectura on public.baja_laboral_historial for select to authenticated using (public.legajo_puede_gestionar());
+drop policy if exists vacaciones_tomadas_lectura on public.legajo_vacaciones_tomadas;
+create policy vacaciones_tomadas_lectura on public.legajo_vacaciones_tomadas for select to authenticated using (public.legajo_puede_gestionar());
+-- Liquidación final: permisos del módulo Liquidaciones (Gerencia/Administración).
 drop policy if exists liq_final_lectura on public.liquidacion_final;
 create policy liq_final_lectura on public.liquidacion_final for select to authenticated using (public.puede_liquidar_actual());
 drop policy if exists liq_final_linea_lectura on public.liquidacion_final_linea;
@@ -167,15 +276,14 @@ create policy liq_final_res_lectura on public.liquidacion_final_resultado for se
 drop policy if exists liq_final_res_conc_lectura on public.liquidacion_final_resultado_concepto;
 create policy liq_final_res_conc_lectura on public.liquidacion_final_resultado_concepto for select to authenticated using (public.puede_liquidar_actual());
 
--- ── Auxiliares ───────────────────────────────────────────────────────────────
+-- ── 6) Auxiliares ────────────────────────────────────────────────────────────
 create or replace function public.liquidacion_final_actor()
 returns uuid language sql stable security definer set search_path = public, pg_catalog as $fn$
   select u.id from public.usuarios u where u.auth_user_id = auth.uid() limit 1
 $fn$;
 revoke all on function public.liquidacion_final_actor() from public, anon, authenticated;
 
--- Gate: Gerencia/Administración. Con service_role (auth.uid() NULL) no hay usuario
--- y las RPC públicas se rechazan: el sistema sólo entra por los triggers.
+-- Liquidaciones: Gerencia/Administración con sesión (service_role no entra por las RPC públicas).
 create or replace function public.liquidacion_final_gate()
 returns void language plpgsql stable security definer set search_path = public, pg_catalog as $fn$
 begin
@@ -186,218 +294,433 @@ end;
 $fn$;
 revoke all on function public.liquidacion_final_gate() from public, anon, authenticated;
 
--- ── Registro interno de una baja (lo usan triggers y RPC) ────────────────────
--- Idempotente: la misma persona + misma relación devuelve la baja existente.
---   * Misma fuente y misma referencia (p. ej. la misma consulta de ARCA) → nada.
---   * Otra fuente/consulta → se agrega a `confirmaciones`.
---   * La existente sin fecha y llega una fecha → se completa (recalcular).
---   * Fechas distintas → `discrepancia` (no se pisa; bloquea exportar).
--- Relación: una baja anterior a la fecha de inicio de la relación actual es de
--- otra relación (reingreso) y no se reutiliza.
-create or replace function public.liquidacion_baja_registrar_interno(
-  p_empleado_id uuid, p_cuil text, p_fecha_baja date, p_causa text, p_fuente text,
-  p_referencia text, p_detalle jsonb, p_actor uuid, p_inicio date default null
-) returns jsonb
-language plpgsql security definer set search_path = public, pg_catalog as $fn$
-declare
-  v_cuil text := nullif(regexp_replace(coalesce(p_cuil, ''), '\D', '', 'g'), '');
-  v_nombre text;
-  v_clave text;
-  v_inicio date := p_inicio;
-  v_baja uuid;
-  v_final uuid;
-  v_fecha_ex date;
-  v_conf jsonb;
-  v_estado_final text;
-  v_item jsonb;
-  v_disc text;
+-- Bajas: Administración/Gerencia (o delegación de Gerencia), igual que el legajo.
+create or replace function public.baja_gate()
+returns void language plpgsql stable security definer set search_path = public, pg_catalog as $fn$
 begin
-  if p_fuente not in ('app','arca') then raise exception 'Fuente de baja inválida'; end if;
-  if p_causa is not null and p_causa not in ('renuncia','despido_sin_causa','despido_con_causa','mutuo_acuerdo',
-       'fin_contrato','periodo_prueba','fallecimiento','jubilacion','abandono','otra') then
-    raise exception 'Causa de baja inválida';
+  if auth.uid() is null or not public.legajo_puede_gestionar() then
+    raise exception 'Sólo Administración o Gerencia' using errcode = '42501';
   end if;
-  if p_fecha_baja is not null and (p_fecha_baja < date '2000-01-01' or p_fecha_baja > current_date + 60) then
-    raise exception 'La fecha de baja no es válida';
-  end if;
-  if p_empleado_id is not null then
-    v_cuil := coalesce(v_cuil, nullif(regexp_replace(coalesce((select u.cuil from public.usuarios u where u.id = p_empleado_id), ''), '\D', '', 'g'), ''));
-    v_nombre := (select btrim(coalesce(u.apellido, '') || ' ' || coalesce(u.nombre, '')) from public.usuarios u where u.id = p_empleado_id);
-  end if;
-  if v_cuil is not null and v_cuil !~ '^\d{11}$' then v_cuil := null; end if;
-  if v_cuil is null and p_empleado_id is null then raise exception 'La baja necesita CUIL o empleado'; end if;
-  if p_empleado_id is null and v_cuil is not null then
-    p_empleado_id := (select u.id from public.usuarios u where regexp_replace(coalesce(u.cuil, ''), '\D', '', 'g') = v_cuil
-                      order by (u.estado = 'activo') desc, u.id limit 1);
-    if p_empleado_id is not null then
-      v_nombre := (select btrim(coalesce(u.apellido, '') || ' ' || coalesce(u.nombre, '')) from public.usuarios u where u.id = p_empleado_id);
-    end if;
-  end if;
-  if v_nombre is null and v_cuil is not null then
-    v_nombre := (select a.apellido_nombre from public.arca_relaciones_laborales a where a.cuil = v_cuil order by a.consulta_fecha desc limit 1);
-  end if;
-  v_clave := coalesce(v_cuil, 'emp:' || p_empleado_id::text);
-
-  -- Inicio de la relación: el informado, si no el legajo, si no la última relación en ARCA.
-  if v_inicio is null and p_empleado_id is not null then
-    v_inicio := (select l.fecha_ingreso from public.legajo_datos_personales l where l.empleado_id = p_empleado_id);
-  end if;
-  if v_inicio is null and v_cuil is not null then
-    v_inicio := (select a.fecha_inicio from public.arca_relaciones_laborales a
-                 where a.cuil = v_cuil and (p_fecha_baja is null or a.fecha_inicio <= p_fecha_baja)
-                 order by a.consulta_fecha desc, a.fecha_inicio desc limit 1);
-  end if;
-
-  -- Serializa por persona: dos detecciones simultáneas no crean dos bajas.
-  perform pg_advisory_xact_lock(hashtext('liquidacion_baja:' || v_clave));
-
-  v_baja := (select b.id from public.liquidacion_baja b
-             where b.estado = 'confirmada'
-               and (b.clave_persona = v_clave or (p_empleado_id is not null and b.empleado_id = p_empleado_id)
-                    or (v_cuil is not null and b.cuil = v_cuil))
-               and (v_inicio is null or b.fecha_baja is null or b.fecha_baja >= v_inicio)
-             order by b.registrada_at desc limit 1);
-
-  v_item := jsonb_build_object('fuente', p_fuente, 'ref', coalesce(p_referencia, p_fuente), 'fecha_baja', p_fecha_baja,
-                               'causa', p_causa, 'detalle', coalesce(p_detalle, '{}'::jsonb), 'por', p_actor, 'at', now());
-
-  if v_baja is null then
-    insert into public.liquidacion_baja (clave_persona, empleado_id, cuil, nombre, fecha_baja, fecha_inicio_relacion, causa,
-                                         fuente, confirmaciones, registrada_por)
-    values (v_clave, p_empleado_id, v_cuil, left(v_nombre, 160), p_fecha_baja, v_inicio, p_causa, p_fuente,
-            jsonb_build_array(v_item), p_actor)
-    returning id into v_baja;
-    insert into public.liquidacion_final (baja_id, mes) values (v_baja, to_char(p_fecha_baja, 'YYYY-MM'))
-    returning id into v_final;
-    insert into public.liquidacion_final_historial (final_id, version, accion, datos, por)
-    values (v_final, 0, 'creado', v_item, p_actor);
-    return jsonb_build_object('baja_id', v_baja, 'final_id', v_final, 'nueva', true);
-  end if;
-
-  perform 1 from public.liquidacion_baja b where b.id = v_baja for update;
-  v_final := (select f.id from public.liquidacion_final f where f.baja_id = v_baja);
-  v_estado_final := (select f.estado from public.liquidacion_final f where f.id = v_final);
-  v_fecha_ex := (select b.fecha_baja from public.liquidacion_baja b where b.id = v_baja);
-  v_conf := (select b.confirmaciones from public.liquidacion_baja b where b.id = v_baja);
-
-  -- Releer el mismo dato (misma fuente + referencia + fecha) no hace nada.
-  if exists (select 1 from jsonb_array_elements(v_conf) c
-             where c->>'fuente' = p_fuente and c->>'ref' = coalesce(p_referencia, p_fuente)
-               and (c->>'fecha_baja') is not distinct from (p_fecha_baja::text)) then
-    return jsonb_build_object('baja_id', v_baja, 'final_id', v_final, 'nueva', false, 'repetida', true);
-  end if;
-
-  update public.liquidacion_baja set confirmaciones = confirmaciones || jsonb_build_array(v_item) where id = v_baja;
-
-  if p_fecha_baja is not null and v_fecha_ex is null then
-    if v_estado_final in ('exportada','conciliada') then
-      v_disc := format('Llegó la fecha %s (%s) con la liquidación final ya exportada.', p_fecha_baja, p_fuente);
-      update public.liquidacion_baja set discrepancia = left(v_disc, 400) where id = v_baja;
-    else
-      update public.liquidacion_baja set fecha_baja = p_fecha_baja,
-             fecha_inicio_relacion = coalesce(fecha_inicio_relacion, v_inicio),
-             causa = coalesce(causa, p_causa) where id = v_baja;
-      update public.liquidacion_final set mes = to_char(p_fecha_baja, 'YYYY-MM'), requiere_recalculo = true,
-             estado = case when estado = 'lista' then 'borrador' else estado end, updated_at = now() where id = v_final;
-    end if;
-  elsif p_fecha_baja is not null and v_fecha_ex is distinct from p_fecha_baja then
-    v_disc := format('Fechas de baja distintas: registrada %s, %s informa %s. Corregir la fecha antes de exportar.',
-                     v_fecha_ex, case p_fuente when 'arca' then 'ARCA' else 'la app' end, p_fecha_baja);
-    update public.liquidacion_baja set discrepancia = left(v_disc, 400) where id = v_baja;
-    if v_estado_final in ('borrador','lista','pendiente_calculo') then
-      update public.liquidacion_final set requiere_recalculo = true,
-             estado = case when estado = 'lista' then 'borrador' else estado end, updated_at = now() where id = v_final;
-    end if;
-  elsif p_causa is not null then
-    update public.liquidacion_baja set causa = coalesce(causa, p_causa) where id = v_baja;
-  end if;
-
-  insert into public.liquidacion_final_historial (final_id, version, accion, datos, por)
-  values (v_final, (select f.version from public.liquidacion_final f where f.id = v_final), 'confirmacion', v_item, p_actor);
-  return jsonb_build_object('baja_id', v_baja, 'final_id', v_final, 'nueva', false, 'repetida', false);
 end;
 $fn$;
-revoke all on function public.liquidacion_baja_registrar_interno(uuid, text, date, text, text, text, jsonb, uuid, date) from public, anon, authenticated;
+revoke all on function public.baja_gate() from public, anon, authenticated;
 
--- ── RPC: registrar una baja confirmada a mano ────────────────────────────────
--- fuente 'app' = baja decidida en la empresa; 'arca' = Administración confirma
--- con fecha una baja que vio en ARCA (p. ej. la persona dejó de figurar en la
--- consulta). La referencia identifica la confirmación (p. ej. 'consulta:2026-10-13').
-create or replace function public.liquidacion_baja_registrar(
-  p_empleado_id uuid, p_cuil text, p_fecha_baja date, p_causa text, p_fuente text default 'app', p_referencia text default null
-) returns jsonb
-language plpgsql security definer set search_path = public, pg_catalog as $fn$
+-- ── 7) Bloqueo de acceso efectivo en la base ─────────────────────────────────
+-- ¿El usuario de la sesión tiene el acceso habilitado? (anon / sin fila = sí: lo
+-- resuelven las demás políticas). SECURITY DEFINER para no depender de la RLS.
+create or replace function public.acceso_habilitado_actual()
+returns boolean language sql stable security definer set search_path = public, pg_catalog as $fn$
+  select not exists (select 1 from public.usuarios u where u.auth_user_id = auth.uid() and u.acceso_bloqueado)
+$fn$;
+revoke all on function public.acceso_habilitado_actual() from public;
+grant execute on function public.acceso_habilitado_actual() to anon, authenticated;
+
+-- Para que la app muestre un mensaje claro al iniciar sesión (la RLS ya no le
+-- deja leer su propia fila).
+create or replace function public.mi_acceso_estado()
+returns jsonb language sql stable security definer set search_path = public, pg_catalog as $fn$
+  select coalesce((select jsonb_build_object('bloqueado', u.acceso_bloqueado, 'motivo', case when u.acceso_bloqueado then 'baja_laboral' end)
+                     from public.usuarios u where u.auth_user_id = auth.uid() limit 1),
+                  jsonb_build_object('bloqueado', false, 'motivo', null))
+$fn$;
+revoke all on function public.mi_acceso_estado() from public, anon;
+grant execute on function public.mi_acceso_estado() to authenticated;
+
+-- Política RESTRICTIVA en TODAS las tablas públicas con RLS: se suma (AND) a las
+-- existentes. Con acceso bloqueado no se lee ni se escribe nada, aunque la sesión
+-- o el token sigan vivos. Se evalúa una vez por consulta (initplan).
+do $do$
+declare t record;
 begin
-  perform public.liquidacion_final_gate();
-  if p_fecha_baja is null then raise exception 'Indicá la fecha efectiva de la baja'; end if;
-  return public.liquidacion_baja_registrar_interno(p_empleado_id, p_cuil, p_fecha_baja, p_causa, coalesce(p_fuente, 'app'),
-    coalesce(nullif(btrim(p_referencia), ''), 'manual:' || p_fecha_baja::text), jsonb_build_object('manual', true),
-    public.liquidacion_final_actor(), null);
+  for t in select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity loop
+    execute format('drop policy if exists acceso_bloqueado_baja on public.%I', t.relname);
+    execute format('create policy acceso_bloqueado_baja on public.%I as restrictive for all to authenticated using ((select public.acceso_habilitado_actual())) with check ((select public.acceso_habilitado_actual()))', t.relname);
+  end loop;
+end
+$do$;
+-- Storage (archivos del legajo, fotos, evidencias): mismo bloqueo, si el esquema existe.
+do $do$
+begin
+  if to_regclass('storage.objects') is not null then
+    execute 'drop policy if exists acceso_bloqueado_baja on storage.objects';
+    execute 'create policy acceso_bloqueado_baja on storage.objects as restrictive for all to authenticated using ((select public.acceso_habilitado_actual())) with check ((select public.acceso_habilitado_actual()))';
+  end if;
+exception when insufficient_privilege then
+  raise warning 'storage.objects: sin permiso para crear la política de bloqueo; aplicarla desde el panel';
+end
+$do$;
+
+-- Guarda: acceso_bloqueado sólo cambia por las RPC de baja (marca de transacción),
+-- y nadie reactiva (estado = 'activo') a quien tiene el acceso bloqueado.
+create or replace function public.usuarios_guarda_acceso_bloqueado()
+returns trigger language plpgsql set search_path = public, pg_catalog as $fn$
+begin
+  if (new.acceso_bloqueado is distinct from old.acceso_bloqueado
+      or new.acceso_bloqueado_motivo is distinct from old.acceso_bloqueado_motivo)
+     and coalesce(current_setting('mercosur.baja_rpc', true), '') <> '1' then
+    raise exception 'El acceso bloqueado por una baja sólo se cambia desde el procedimiento de baja' using errcode = '42501';
+  end if;
+  if new.acceso_bloqueado and new.estado = 'activo' and old.estado is distinct from 'activo' then
+    raise exception 'Tiene una baja confirmada con el acceso bloqueado: Gerencia debe rehabilitar el acceso primero' using errcode = '42501';
+  end if;
+  return new;
 end;
 $fn$;
-revoke all on function public.liquidacion_baja_registrar(uuid, text, date, text, text, text) from public, anon;
-grant execute on function public.liquidacion_baja_registrar(uuid, text, date, text, text, text) to authenticated;
+drop trigger if exists trg_usuarios_guarda_acceso on public.usuarios;
+create trigger trg_usuarios_guarda_acceso before update on public.usuarios
+  for each row execute function public.usuarios_guarda_acceso_bloqueado();
 
--- ── RPC: corregir fecha/causa (resuelve la discrepancia) ─────────────────────
-create or replace function public.liquidacion_baja_corregir(p_baja_id uuid, p_fecha_baja date, p_causa text, p_motivo text)
+-- ── 8) RPC del procedimiento de baja ─────────────────────────────────────────
+-- Guardar borrador (crea o actualiza). p_datos: {causa, fecha_notificacion,
+-- fecha_baja, observaciones, origen}. No toca estado ni acceso.
+create or replace function public.baja_guardar_borrador(p_baja_id uuid, p_empleado_id uuid, p_datos jsonb)
 returns jsonb
 language plpgsql security definer set search_path = public, pg_catalog as $fn$
-declare v_final uuid; v_estado text; v_antes jsonb; v_actor uuid := public.liquidacion_final_actor();
+declare
+  v_id uuid := p_baja_id; v_actor uuid := public.liquidacion_final_actor(); v_emp uuid; v_estado text;
+  v_causa text := nullif(p_datos->>'causa', ''); v_fb date := nullif(p_datos->>'fecha_baja', '')::date;
+  v_fn date := nullif(p_datos->>'fecha_notificacion', '')::date; v_origen text := coalesce(nullif(p_datos->>'origen', ''), 'guardias');
 begin
-  perform public.liquidacion_final_gate();
-  if p_motivo is null or char_length(btrim(p_motivo)) < 3 then raise exception 'Indicá el motivo de la corrección'; end if;
-  if p_fecha_baja is null then raise exception 'Indicá la fecha efectiva de la baja'; end if;
-  if p_causa is not null and p_causa not in ('renuncia','despido_sin_causa','despido_con_causa','mutuo_acuerdo',
-       'fin_contrato','periodo_prueba','fallecimiento','jubilacion','abandono','otra') then
-    raise exception 'Causa de baja inválida';
+  perform public.baja_gate();
+  if v_causa is not null and not exists (select 1 from public.baja_causa c where c.codigo = v_causa and c.activo) then
+    raise exception 'Causal inválida';
   end if;
-  perform 1 from public.liquidacion_baja b where b.id = p_baja_id and b.estado = 'confirmada' for update;
-  if not found then raise exception 'Baja inexistente o anulada'; end if;
-  v_final := (select f.id from public.liquidacion_final f where f.baja_id = p_baja_id);
-  perform 1 from public.liquidacion_final f where f.id = v_final for update;
-  v_estado := (select f.estado from public.liquidacion_final f where f.id = v_final);
-  if v_estado in ('exportada','conciliada','anulada') then raise exception 'La liquidación final ya fue exportada: no se puede corregir la baja'; end if;
-  v_antes := (select jsonb_build_object('fecha_baja', b.fecha_baja, 'causa', b.causa, 'discrepancia', b.discrepancia)
-              from public.liquidacion_baja b where b.id = p_baja_id);
-  update public.liquidacion_baja set fecha_baja = p_fecha_baja, causa = p_causa, discrepancia = null where id = p_baja_id;
-  update public.liquidacion_final set mes = to_char(p_fecha_baja, 'YYYY-MM'), requiere_recalculo = true,
-         estado = case when estado = 'lista' then 'borrador' else estado end, updated_at = now() where id = v_final;
+  if v_fb is not null and (v_fb < date '2000-01-01' or v_fb > current_date + 90) then raise exception 'La fecha efectiva no es válida'; end if;
+  if v_fn is not null and (v_fn < date '2000-01-01' or v_fn > current_date + 1) then raise exception 'La fecha de notificación no es válida'; end if;
+  if v_origen not in ('guardias','legajo','arca','cambio_estado') then raise exception 'Origen inválido'; end if;
+
+  if v_id is null then
+    if p_empleado_id is null or not exists (select 1 from public.usuarios u where u.id = p_empleado_id) then raise exception 'Empleado inexistente'; end if;
+    -- Ya hay un borrador abierto: se continúa ese (no se crea otro).
+    v_id := (select b.id from public.baja_laboral b where b.empleado_id = p_empleado_id and b.estado = 'borrador');
+    if v_id is null then
+      if exists (select 1 from public.usuarios u where u.id = p_empleado_id and u.acceso_bloqueado)
+         and exists (select 1 from public.baja_laboral b where b.empleado_id = p_empleado_id and b.estado = 'confirmada') then
+        raise exception 'La persona ya tiene una baja confirmada. Para corregirla usá Rectificar.';
+      end if;
+      insert into public.baja_laboral (empleado_id, nombre, dni, cuil, legajo, fecha_ingreso, origen, registrada_por)
+      select u.id, btrim(coalesce(u.apellido, '') || ', ' || coalesce(u.nombre, '')), u.dni,
+             nullif(regexp_replace(coalesce(u.cuil, ''), '\D', '', 'g'), ''), coalesce(u.legajo_visual, u.legajo),
+             (select l.fecha_ingreso from public.legajo_datos_personales l where l.empleado_id = u.id), v_origen, v_actor
+        from public.usuarios u where u.id = p_empleado_id
+      returning id into v_id;
+      insert into public.baja_laboral_historial (baja_id, accion, datos, por) values (v_id, 'creada', jsonb_build_object('origen', v_origen), v_actor);
+    end if;
+  end if;
+
+  perform 1 from public.baja_laboral b where b.id = v_id for update;
+  v_estado := (select b.estado from public.baja_laboral b where b.id = v_id);
+  if v_estado is null then raise exception 'Baja inexistente'; end if;
+  if v_estado <> 'borrador' then raise exception 'La baja ya está %: usá Rectificar.', v_estado; end if;
+  update public.baja_laboral set
+    causa = coalesce(v_causa, causa),
+    fecha_baja = case when p_datos ? 'fecha_baja' then v_fb else fecha_baja end,
+    fecha_notificacion = case when p_datos ? 'fecha_notificacion' then v_fn else fecha_notificacion end,
+    observaciones = case when p_datos ? 'observaciones' then left(nullif(btrim(p_datos->>'observaciones'), ''), 1000) else observaciones end,
+    actualizado_at = now()
+  where id = v_id;
+  insert into public.baja_laboral_historial (baja_id, accion, datos, por) values (v_id, 'editada', p_datos, v_actor);
+  return jsonb_build_object('baja_id', v_id);
+end;
+$fn$;
+revoke all on function public.baja_guardar_borrador(uuid, uuid, jsonb) from public, anon;
+grant execute on function public.baja_guardar_borrador(uuid, uuid, jsonb) to authenticated;
+
+-- Vincular un documento ya subido al legajo (telegrama, carta documento…).
+create or replace function public.baja_vincular_documento(p_baja_id uuid, p_documento_id uuid)
+returns void
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+declare v_actor uuid := public.liquidacion_final_actor();
+begin
+  perform public.baja_gate();
+  if not exists (select 1 from public.baja_laboral b join public.documentacion_documentos d on d.empleado_id = b.empleado_id
+                  where b.id = p_baja_id and d.id = p_documento_id and b.estado <> 'anulada') then
+    raise exception 'El documento no es del legajo de esta persona';
+  end if;
+  insert into public.baja_laboral_documento (baja_id, documento_id, vinculado_por) values (p_baja_id, p_documento_id, v_actor)
+  on conflict do nothing;
+  insert into public.baja_laboral_historial (baja_id, accion, datos, por) values (p_baja_id, 'documento', jsonb_build_object('documento_id', p_documento_id), v_actor);
+end;
+$fn$;
+revoke all on function public.baja_vincular_documento(uuid, uuid) from public, anon;
+grant execute on function public.baja_vincular_documento(uuid, uuid) to authenticated;
+
+-- Guardar lo que leyó la IA de un documento (sólo sugerencia; no cambia la baja).
+create or replace function public.baja_guardar_lectura(p_baja_id uuid, p_documento_id uuid, p_estado text, p_datos jsonb)
+returns void
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+declare v_actor uuid := public.liquidacion_final_actor();
+begin
+  perform public.baja_gate();
+  if p_estado not in ('leido','ilegible','error') then raise exception 'Estado de lectura inválido'; end if;
+  update public.baja_laboral_documento set ia_estado = p_estado, ia_datos = p_datos, ia_at = now()
+   where baja_id = p_baja_id and documento_id = p_documento_id;
+  if not found then raise exception 'Documento no vinculado a la baja'; end if;
+  insert into public.baja_laboral_historial (baja_id, accion, datos, por)
+  values (p_baja_id, 'lectura_ia', jsonb_build_object('documento_id', p_documento_id, 'estado', p_estado, 'datos', p_datos), v_actor);
+end;
+$fn$;
+revoke all on function public.baja_guardar_lectura(uuid, uuid, text, jsonb) from public, anon;
+grant execute on function public.baja_guardar_lectura(uuid, uuid, text, jsonb) to authenticated;
+
+-- Vacaciones tomadas no registradas en la app (con control de superposición).
+create or replace function public.vacaciones_registrar_tomadas(
+  p_empleado_id uuid, p_periodo integer, p_dias numeric, p_desde date, p_hasta date, p_observacion text, p_respaldo uuid default null
+) returns uuid
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+declare v_id uuid; v_actor uuid := public.liquidacion_final_actor();
+begin
+  perform public.baja_gate();
+  if (p_desde is null) <> (p_hasta is null) or (p_desde is not null and p_desde > p_hasta) then raise exception 'Rango de fechas inválido'; end if;
+  if p_dias is null or p_dias <= 0 or p_dias > 60 then raise exception 'Cantidad de días inválida'; end if;
+  perform pg_advisory_xact_lock(hashtext('vacaciones:' || p_empleado_id::text));
+  if p_desde is not null then
+    if exists (select 1 from public.legajo_vacaciones_tomadas v where v.empleado_id = p_empleado_id and v.anulado_at is null
+                and v.desde is not null and v.desde <= p_hasta and p_desde <= v.hasta) then
+      raise exception 'Ya hay vacaciones registradas que se superponen con esas fechas';
+    end if;
+    if exists (select 1 from public.novedades_laborales n where n.empleado_id = p_empleado_id and n.tipo = 'vacaciones'
+                and n.estado = 'aprobada' and n.fecha_desde <= p_hasta and p_desde <= n.fecha_hasta) then
+      raise exception 'Esas fechas ya están cargadas como novedad de vacaciones en la app';
+    end if;
+  else
+    if exists (select 1 from public.legajo_vacaciones_tomadas v where v.empleado_id = p_empleado_id and v.anulado_at is null and v.periodo = p_periodo)
+       or exists (select 1 from public.novedades_laborales n where n.empleado_id = p_empleado_id and n.tipo = 'vacaciones'
+                   and n.estado = 'aprobada' and extract(year from n.fecha_desde)::int = p_periodo) then
+      raise exception 'El período % ya tiene vacaciones registradas: indicá las fechas para no descontarlas dos veces', p_periodo;
+    end if;
+  end if;
+  insert into public.legajo_vacaciones_tomadas (empleado_id, periodo, dias, desde, hasta, observacion, respaldo_documento_id, cargado_por)
+  values (p_empleado_id, p_periodo, p_dias, p_desde, p_hasta, left(nullif(btrim(p_observacion), ''), 300), p_respaldo, v_actor)
+  returning id into v_id;
+  return v_id;
+end;
+$fn$;
+revoke all on function public.vacaciones_registrar_tomadas(uuid, integer, numeric, date, date, text, uuid) from public, anon;
+grant execute on function public.vacaciones_registrar_tomadas(uuid, integer, numeric, date, date, text, uuid) to authenticated;
+
+create or replace function public.vacaciones_anular_tomadas(p_id uuid, p_motivo text)
+returns void
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+begin
+  perform public.baja_gate();
+  if p_motivo is null or char_length(btrim(p_motivo)) < 3 then raise exception 'Indicá el motivo'; end if;
+  update public.legajo_vacaciones_tomadas set anulado_at = now(), anulado_por = public.liquidacion_final_actor(), motivo_anulacion = left(btrim(p_motivo), 300)
+   where id = p_id and anulado_at is null;
+  if not found then raise exception 'Registro inexistente o ya anulado'; end if;
+end;
+$fn$;
+revoke all on function public.vacaciones_anular_tomadas(uuid, text) from public, anon;
+grant execute on function public.vacaciones_anular_tomadas(uuid, text) to authenticated;
+
+-- Turnos asignados después de una fecha (los que hay que reasignar).
+create or replace function public.baja_turnos_posteriores(p_empleado_id uuid, p_fecha date)
+returns jsonb language sql stable security definer set search_path = public, pg_catalog as $fn$
+  select coalesce(jsonb_agg(jsonb_build_object('turno_id', t.id, 'fecha', t.fecha, 'hora_inicio', t.hora_inicio, 'hora_fin', t.hora_fin,
+                                               'objetivo_id', t.objetivo_id, 'objetivo', o.nombre, 'puesto_id', t.puesto_id, 'estado', t.estado)
+                            order by t.fecha, t.hora_inicio), '[]'::jsonb)
+    from public.turnos t left join public.objetivos o on o.id = t.objetivo_id
+   where t.guardia_id = p_empleado_id and t.fecha > p_fecha
+     and coalesce(t.estado, '') not in ('cancelado','reemplazado','anulado')
+$fn$;
+revoke all on function public.baja_turnos_posteriores(uuid, date) from public, anon, authenticated;
+
+-- CONFIRMAR BAJA: todo en una transacción. Si algo falla no queda nada a medias
+-- (ni baja confirmada con acceso habilitado ni acceso bloqueado sin baja).
+-- p_vacaciones: {devengadas, tomadas, pendientes, metodo, verificadas, nota} o null
+-- (sin confirmar: la liquidación las deja pendientes).
+create or replace function public.baja_confirmar(p_baja_id uuid, p_vacaciones jsonb)
+returns jsonb
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+declare
+  v_actor uuid := public.liquidacion_final_actor(); v_emp uuid; v_estado text; v_fb date; v_fi date; v_causa text;
+  v_turnos jsonb; v_final uuid; v_auth uuid;
+begin
+  perform public.baja_gate();
+  perform 1 from public.baja_laboral b where b.id = p_baja_id for update;
+  if not found then raise exception 'Baja inexistente'; end if;
+  v_estado := (select b.estado from public.baja_laboral b where b.id = p_baja_id);
+  v_emp := (select b.empleado_id from public.baja_laboral b where b.id = p_baja_id);
+  v_fb := (select b.fecha_baja from public.baja_laboral b where b.id = p_baja_id);
+  v_fi := (select b.fecha_ingreso from public.baja_laboral b where b.id = p_baja_id);
+  v_causa := (select b.causa from public.baja_laboral b where b.id = p_baja_id);
+  if v_estado = 'confirmada' then
+    return jsonb_build_object('baja_id', p_baja_id, 'final_id', (select f.id from public.liquidacion_final f where f.baja_id = p_baja_id),
+                              'repetida', true, 'auth_user_id', (select u.auth_user_id from public.usuarios u where u.id = v_emp),
+                              'turnos_futuros', (select b.turnos_futuros from public.baja_laboral b where b.id = p_baja_id));
+  end if;
+  if v_estado <> 'borrador' then raise exception 'La baja está anulada'; end if;
+  if v_causa is null then raise exception 'Falta el motivo de la baja'; end if;
+  if v_fb is null then raise exception 'Falta la fecha efectiva de la baja'; end if;
+  if v_fi is not null and v_fb < v_fi then raise exception 'La fecha de baja es anterior al ingreso'; end if;
+  if p_vacaciones is not null and jsonb_typeof(p_vacaciones) <> 'object' then raise exception 'Vacaciones inválidas'; end if;
+
+  v_turnos := public.baja_turnos_posteriores(v_emp, v_fb);
+  update public.baja_laboral set estado = 'confirmada', confirmada_por = v_actor, confirmada_at = now(),
+         vacaciones = p_vacaciones, turnos_futuros = v_turnos, actualizado_at = now()
+   where id = p_baja_id;
+
+  -- Situación laboral + acceso, en la misma transacción.
+  perform set_config('mercosur.baja_rpc', '1', true);
+  update public.usuarios set estado = 'inactivo', acceso_bloqueado = true, acceso_bloqueado_motivo = 'baja_laboral',
+         acceso_bloqueado_at = now(), acceso_bloqueado_por = v_actor, acceso_auth_bloqueado_at = null
+   where id = v_emp;
+  perform set_config('mercosur.baja_rpc', '', true);
+
+  insert into public.liquidacion_final (baja_id, mes) values (p_baja_id, to_char(v_fb, 'YYYY-MM')) returning id into v_final;
   insert into public.liquidacion_final_historial (final_id, version, accion, datos, por)
-  values (v_final, (select f.version from public.liquidacion_final f where f.id = v_final), 'correccion',
-          jsonb_build_object('antes', v_antes, 'fecha_baja', p_fecha_baja, 'causa', p_causa, 'motivo', btrim(p_motivo)), v_actor);
+  values (v_final, 0, 'creado', jsonb_build_object('baja_id', p_baja_id), v_actor);
+  insert into public.baja_laboral_historial (baja_id, accion, datos, por)
+  values (p_baja_id, 'confirmada', jsonb_build_object('fecha_baja', v_fb, 'causa', v_causa, 'vacaciones', p_vacaciones,
+          'turnos_futuros', jsonb_array_length(v_turnos), 'final_id', v_final), v_actor);
+  v_auth := (select u.auth_user_id from public.usuarios u where u.id = v_emp);
+  return jsonb_build_object('baja_id', p_baja_id, 'final_id', v_final, 'repetida', false, 'auth_user_id', v_auth, 'turnos_futuros', v_turnos);
+end;
+$fn$;
+revoke all on function public.baja_confirmar(uuid, jsonb) from public, anon;
+grant execute on function public.baja_confirmar(uuid, jsonb) to authenticated;
+
+-- Lo llama el servidor (service_role) cuando aplicó el ban en Auth.
+create or replace function public.baja_registrar_bloqueo_auth(p_empleado_id uuid, p_bloqueado boolean)
+returns void
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+begin
+  if auth.uid() is not null then raise exception 'Sólo el servidor' using errcode = '42501'; end if;
+  update public.usuarios set acceso_auth_bloqueado_at = case when p_bloqueado then now() else null end where id = p_empleado_id;
+  insert into public.baja_laboral_historial (baja_id, accion, datos)
+  select b.id, case when p_bloqueado then 'acceso_bloqueado_auth' else 'acceso_rehabilitado' end, jsonb_build_object('auth', p_bloqueado)
+    from public.baja_laboral b where b.empleado_id = p_empleado_id and b.estado = 'confirmada'
+   order by b.confirmada_at desc limit 1;
+end;
+$fn$;
+revoke all on function public.baja_registrar_bloqueo_auth(uuid, boolean) from public, anon, authenticated;
+
+-- RECTIFICAR una baja confirmada (fecha, causa, notificación) con motivo. No toca
+-- el acceso. No se puede si la liquidación final ya se exportó.
+create or replace function public.baja_rectificar(p_baja_id uuid, p_datos jsonb, p_motivo text)
+returns jsonb
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+declare v_actor uuid := public.liquidacion_final_actor(); v_final uuid; v_antes jsonb; v_fb date; v_causa text; v_fn date;
+begin
+  perform public.baja_gate();
+  if p_motivo is null or char_length(btrim(p_motivo)) < 3 then raise exception 'Indicá el motivo de la rectificación'; end if;
+  perform 1 from public.baja_laboral b where b.id = p_baja_id and b.estado = 'confirmada' for update;
+  if not found then raise exception 'Sólo se rectifica una baja confirmada'; end if;
+  v_final := (select f.id from public.liquidacion_final f where f.baja_id = p_baja_id);
+  if (select f.estado from public.liquidacion_final f where f.id = v_final) in ('exportada','conciliada') then
+    raise exception 'La liquidación final ya fue exportada: la rectificación la autoriza Gerencia por fuera de este circuito';
+  end if;
+  v_fb := coalesce(nullif(p_datos->>'fecha_baja', '')::date, (select b.fecha_baja from public.baja_laboral b where b.id = p_baja_id));
+  v_causa := coalesce(nullif(p_datos->>'causa', ''), (select b.causa from public.baja_laboral b where b.id = p_baja_id));
+  v_fn := case when p_datos ? 'fecha_notificacion' then nullif(p_datos->>'fecha_notificacion', '')::date
+               else (select b.fecha_notificacion from public.baja_laboral b where b.id = p_baja_id) end;
+  if not exists (select 1 from public.baja_causa c where c.codigo = v_causa) then raise exception 'Causal inválida'; end if;
+  v_antes := (select jsonb_build_object('fecha_baja', b.fecha_baja, 'causa', b.causa, 'fecha_notificacion', b.fecha_notificacion)
+              from public.baja_laboral b where b.id = p_baja_id);
+  update public.baja_laboral set fecha_baja = v_fb, causa = v_causa, fecha_notificacion = v_fn,
+         turnos_futuros = public.baja_turnos_posteriores(empleado_id, v_fb), actualizado_at = now() where id = p_baja_id;
+  update public.liquidacion_final set mes = to_char(v_fb, 'YYYY-MM'), requiere_recalculo = true,
+         estado = case when estado = 'lista' then 'borrador' else estado end, updated_at = now() where id = v_final;
+  insert into public.baja_laboral_historial (baja_id, accion, datos, por)
+  values (p_baja_id, 'rectificada', jsonb_build_object('antes', v_antes, 'despues', jsonb_build_object('fecha_baja', v_fb, 'causa', v_causa, 'fecha_notificacion', v_fn), 'motivo', btrim(p_motivo)), v_actor);
+  insert into public.liquidacion_final_historial (final_id, version, accion, datos, por)
+  values (v_final, (select f.version from public.liquidacion_final f where f.id = v_final), 'baja_rectificada', jsonb_build_object('motivo', btrim(p_motivo)), v_actor);
   return jsonb_build_object('baja_id', p_baja_id, 'final_id', v_final);
 end;
 $fn$;
-revoke all on function public.liquidacion_baja_corregir(uuid, date, text, text) from public, anon;
-grant execute on function public.liquidacion_baja_corregir(uuid, date, text, text) to authenticated;
+revoke all on function public.baja_rectificar(uuid, jsonb, text) from public, anon;
+grant execute on function public.baja_rectificar(uuid, jsonb, text) to authenticated;
 
--- ── RPC: anular una baja registrada por error (conserva todo) ────────────────
-create or replace function public.liquidacion_baja_anular(p_baja_id uuid, p_motivo text)
+-- ANULAR: un borrador lo anula Administración; una baja confirmada, sólo Gerencia.
+-- Se conserva todo. NO rehabilita el acceso (eso es una acción aparte de Gerencia).
+create or replace function public.baja_anular(p_baja_id uuid, p_motivo text)
 returns void
 language plpgsql security definer set search_path = public, pg_catalog as $fn$
-declare v_final uuid; v_actor uuid := public.liquidacion_final_actor();
+declare v_actor uuid := public.liquidacion_final_actor(); v_estado text; v_final uuid;
 begin
-  perform public.liquidacion_final_gate();
+  perform public.baja_gate();
   if p_motivo is null or char_length(btrim(p_motivo)) < 3 then raise exception 'Indicá el motivo'; end if;
-  perform 1 from public.liquidacion_baja b where b.id = p_baja_id and b.estado = 'confirmada' for update;
-  if not found then raise exception 'Baja inexistente o ya anulada'; end if;
+  perform 1 from public.baja_laboral b where b.id = p_baja_id for update;
+  v_estado := (select b.estado from public.baja_laboral b where b.id = p_baja_id);
+  if v_estado is null or v_estado = 'anulada' then raise exception 'Baja inexistente o ya anulada'; end if;
+  if v_estado = 'confirmada' and not public.puede_acceder_gerencia_actual() then
+    raise exception 'Una baja confirmada sólo la anula Gerencia' using errcode = '42501';
+  end if;
   v_final := (select f.id from public.liquidacion_final f where f.baja_id = p_baja_id);
   if (select f.estado from public.liquidacion_final f where f.id = v_final) in ('exportada','conciliada') then
     raise exception 'La liquidación final ya fue exportada: no se puede anular la baja';
   end if;
-  update public.liquidacion_baja set estado = 'anulada', anulada_por = v_actor, anulada_at = now(), motivo_anulacion = left(btrim(p_motivo), 300)
-   where id = p_baja_id;
-  update public.liquidacion_final set estado = 'anulada', anulada_por = v_actor, anulada_at = now(), updated_at = now() where id = v_final;
-  insert into public.liquidacion_final_historial (final_id, version, accion, datos, por)
-  values (v_final, (select f.version from public.liquidacion_final f where f.id = v_final), 'anulada', jsonb_build_object('motivo', btrim(p_motivo)), v_actor);
+  update public.baja_laboral set estado = 'anulada', anulada_por = v_actor, anulada_at = now(), motivo_anulacion = left(btrim(p_motivo), 300),
+         actualizado_at = now() where id = p_baja_id;
+  if v_final is not null then
+    update public.liquidacion_final set estado = 'anulada', anulada_por = v_actor, anulada_at = now(), updated_at = now() where id = v_final;
+    insert into public.liquidacion_final_historial (final_id, version, accion, datos, por)
+    values (v_final, (select f.version from public.liquidacion_final f where f.id = v_final), 'anulada', jsonb_build_object('motivo', btrim(p_motivo)), v_actor);
+  end if;
+  insert into public.baja_laboral_historial (baja_id, accion, datos, por) values (p_baja_id, 'anulada', jsonb_build_object('motivo', btrim(p_motivo), 'estado_anterior', v_estado), v_actor);
 end;
 $fn$;
-revoke all on function public.liquidacion_baja_anular(uuid, text) from public, anon;
-grant execute on function public.liquidacion_baja_anular(uuid, text) to authenticated;
+revoke all on function public.baja_anular(uuid, text) from public, anon;
+grant execute on function public.baja_anular(uuid, text) to authenticated;
 
--- ── RPC: datos manuales del borrador (vacaciones, causa, ajustes con motivo) ─
--- Las entradas se reemplazan completas; cada ajuste manual exige motivo. Marca
--- el borrador para recalcular; no calcula nada acá.
+-- REHABILITAR el acceso: sólo Gerencia, con motivo. No reactiva la situación
+-- laboral (eso es otro paso). El desbloqueo en Auth lo hace la ruta del servidor.
+create or replace function public.acceso_rehabilitar(p_empleado_id uuid, p_motivo text)
+returns jsonb
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+declare v_actor uuid := public.liquidacion_final_actor(); v_baja uuid;
+begin
+  if auth.uid() is null or not public.puede_acceder_gerencia_actual() then raise exception 'Sólo Gerencia' using errcode = '42501'; end if;
+  if p_motivo is null or char_length(btrim(p_motivo)) < 3 then raise exception 'Indicá el motivo'; end if;
+  if not exists (select 1 from public.usuarios u where u.id = p_empleado_id and u.acceso_bloqueado) then raise exception 'El acceso no está bloqueado'; end if;
+  perform set_config('mercosur.baja_rpc', '1', true);
+  update public.usuarios set acceso_bloqueado = false, acceso_bloqueado_motivo = null, acceso_bloqueado_at = null, acceso_bloqueado_por = null
+   where id = p_empleado_id;
+  perform set_config('mercosur.baja_rpc', '', true);
+  v_baja := (select b.id from public.baja_laboral b where b.empleado_id = p_empleado_id and b.estado in ('confirmada','anulada')
+             order by b.registrada_at desc limit 1);
+  if v_baja is not null then
+    insert into public.baja_laboral_historial (baja_id, accion, datos, por) values (v_baja, 'acceso_rehabilitado', jsonb_build_object('motivo', btrim(p_motivo)), v_actor);
+  end if;
+  return jsonb_build_object('auth_user_id', (select u.auth_user_id from public.usuarios u where u.id = p_empleado_id));
+end;
+$fn$;
+revoke all on function public.acceso_rehabilitar(uuid, text) from public, anon;
+grant execute on function public.acceso_rehabilitar(uuid, text) to authenticated;
+
+-- Un cambio de estado hecho por otro camino (botón Inactivar, pedido del
+-- supervisor) no queda suelto: abre un BORRADOR de baja para que Administración
+-- lo complete. No crea liquidación ni bloquea nada por sí solo.
+create or replace function public.baja_desde_cambio_estado()
+returns trigger
+language plpgsql security definer set search_path = public, pg_catalog as $fn$
+begin
+  if old.estado = 'activo' and new.estado is distinct from 'activo' and not coalesce(new.es_prueba, false)
+     and coalesce(current_setting('mercosur.baja_rpc', true), '') <> '1'
+     and not exists (select 1 from public.baja_laboral b where b.empleado_id = new.id and b.estado = 'borrador')
+     and not exists (select 1 from public.baja_laboral b where b.empleado_id = new.id and b.estado = 'confirmada' and new.acceso_bloqueado) then
+    begin
+      insert into public.baja_laboral (empleado_id, nombre, dni, cuil, legajo, fecha_ingreso, origen, registrada_por)
+      values (new.id, btrim(coalesce(new.apellido, '') || ', ' || coalesce(new.nombre, '')), new.dni,
+              nullif(regexp_replace(coalesce(new.cuil, ''), '\D', '', 'g'), ''), coalesce(new.legajo_visual, new.legajo),
+              (select l.fecha_ingreso from public.legajo_datos_personales l where l.empleado_id = new.id), 'cambio_estado',
+              public.liquidacion_final_actor());
+    exception when others then
+      raise warning 'baja_laboral: no se pudo abrir el borrador de %: %', new.id, sqlerrm;
+    end;
+  end if;
+  return null;
+end;
+$fn$;
+revoke all on function public.baja_desde_cambio_estado() from public, anon, authenticated;
+drop trigger if exists trg_baja_desde_cambio_estado on public.usuarios;
+create trigger trg_baja_desde_cambio_estado after update of estado on public.usuarios
+  for each row execute function public.baja_desde_cambio_estado();
+
+-- ── 9) RPC de la liquidación final ───────────────────────────────────────────
+-- Datos manuales del borrador (ajustes con motivo, evaluaciones de la causal,
+-- período de Visual). Las vacaciones vienen de la baja confirmada.
 create or replace function public.liquidacion_final_guardar_entradas(p_final_id uuid, p_entradas jsonb, p_version integer)
 returns jsonb
 language plpgsql security definer set search_path = public, pg_catalog as $fn$
@@ -410,6 +733,12 @@ begin
     for a in select * from jsonb_array_elements(p_entradas->'ajustes') loop
       if char_length(btrim(coalesce(a->>'motivo', ''))) < 3 then raise exception 'Cada ajuste manual necesita un motivo'; end if;
       if coalesce(a->>'codigo', '') !~ '^\d{3,9}$' then raise exception 'Ajuste con código inválido'; end if;
+    end loop;
+  end if;
+  if p_entradas ? 'evaluaciones' then
+    if jsonb_typeof(p_entradas->'evaluaciones') <> 'array' then raise exception 'Evaluaciones inválidas'; end if;
+    for a in select * from jsonb_array_elements(p_entradas->'evaluaciones') loop
+      if char_length(btrim(coalesce(a->>'motivo', ''))) < 3 then raise exception 'Cada concepto evaluado necesita un motivo'; end if;
     end loop;
   end if;
   perform 1 from public.liquidacion_final f where f.id = p_final_id for update;
@@ -431,10 +760,8 @@ $fn$;
 revoke all on function public.liquidacion_final_guardar_entradas(uuid, jsonb, integer) from public, anon;
 grant execute on function public.liquidacion_final_guardar_entradas(uuid, jsonb, integer) to authenticated;
 
--- ── RPC: guardar el cálculo (lo hace la app; versionado e idempotente) ───────
--- p_version = versión sobre la que se calculó. Si el mismo cálculo (hash) ya está
--- guardado, devuelve sin cambios (un reintento no crea versiones). Si otra
--- persona guardó antes, rechaza: no se pisan cálculos.
+-- Guardar el cálculo (lo hace la app; versionado e idempotente). Un reintento con
+-- el mismo hash no crea versión; un cálculo sobre una versión vieja se rechaza.
 create or replace function public.liquidacion_final_guardar_calculo(
   p_final_id uuid, p_version integer, p_hash text, p_calculo jsonb, p_lineas jsonb, p_faltantes jsonb, p_advertencias jsonb
 ) returns jsonb
@@ -475,7 +802,7 @@ $fn$;
 revoke all on function public.liquidacion_final_guardar_calculo(uuid, integer, text, jsonb, jsonb, jsonb, jsonb) from public, anon;
 grant execute on function public.liquidacion_final_guardar_calculo(uuid, integer, text, jsonb, jsonb, jsonb, jsonb) to authenticated;
 
--- ── RPC: marcar lista para exportar (paso humano; no exporta) ────────────────
+-- Marcar lista para exportar (paso humano de revisión; no exporta).
 create or replace function public.liquidacion_final_marcar_lista(p_final_id uuid, p_version integer)
 returns void
 language plpgsql security definer set search_path = public, pg_catalog as $fn$
@@ -490,8 +817,7 @@ begin
   if jsonb_array_length((select f.faltantes from public.liquidacion_final f where f.id = p_final_id)) > 0 then raise exception 'Hay datos faltantes: completalos antes'; end if;
   if not exists (select 1 from public.liquidacion_final_linea l where l.final_id = p_final_id) then raise exception 'El borrador no tiene conceptos'; end if;
   v_baja := (select f.baja_id from public.liquidacion_final f where f.id = p_final_id);
-  if (select b.fecha_baja from public.liquidacion_baja b where b.id = v_baja) is null then raise exception 'Falta la fecha de baja'; end if;
-  if (select b.discrepancia from public.liquidacion_baja b where b.id = v_baja) is not null then raise exception 'La baja tiene una discrepancia sin resolver'; end if;
+  if (select b.estado from public.baja_laboral b where b.id = v_baja) <> 'confirmada' then raise exception 'La baja no está confirmada'; end if;
   update public.liquidacion_final set estado = 'lista', lista_por = v_actor, lista_at = now(), updated_at = now() where id = p_final_id;
   insert into public.liquidacion_final_historial (final_id, version, accion, datos, por) values (p_final_id, p_version, 'lista', '{}'::jsonb, v_actor);
 end;
@@ -499,8 +825,7 @@ $fn$;
 revoke all on function public.liquidacion_final_marcar_lista(uuid, integer) from public, anon;
 grant execute on function public.liquidacion_final_marcar_lista(uuid, integer) to authenticated;
 
--- Lo ya liquidado en el mes para el CUIL (enviado a Visual en períodos exportados):
--- [{codigo, cantidad, importe}] ordenado. Es lo que el cálculo tuvo que descontar.
+-- Lo ya liquidado en el mes para el CUIL (enviado a Visual en períodos exportados).
 create or replace function public.liquidacion_final_ya_liquidado(p_cuil text, p_mes text)
 returns jsonb language sql stable security definer set search_path = public, pg_catalog as $fn$
   select coalesce(jsonb_agg(jsonb_build_object('codigo', x.codigo, 'cantidad', x.cantidad, 'importe', x.importe) order by x.codigo), '[]'::jsonb)
@@ -526,16 +851,15 @@ $fn$;
 revoke all on function public.liquidacion_final_extras_pagadas(uuid, text) from public, anon;
 grant execute on function public.liquidacion_final_extras_pagadas(uuid, text) to authenticated;
 
--- ── RPC: registrar la exportación (el archivo lo genera la app) ──────────────
--- Exportar NO paga ni cierra. Reintento con el mismo hash = sin cambios.
--- Doble pago: rechaza si lo ya liquidado en el mes o las extras pagadas
--- cambiaron respecto de lo que consideró el cálculo, o si ya hay otra final
--- exportada de la misma persona en el mismo mes.
+-- Registrar la exportación (el archivo lo genera la app). No paga ni cierra.
+-- Reintento con el mismo hash = sin cambios. Doble pago: rechaza si cambió lo
+-- ya liquidado o las extras pagadas desde el cálculo, o si hay otra final
+-- exportada de la persona en el mismo mes.
 create or replace function public.liquidacion_final_exportar(p_final_id uuid, p_version integer, p_archivo text, p_hash text)
 returns jsonb
 language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare
-  v_estado text; v_baja uuid; v_cuil text; v_emp uuid; v_mes text; v_clave text; v_calc jsonb;
+  v_estado text; v_baja uuid; v_cuil text; v_emp uuid; v_mes text; v_calc jsonb;
   v_ya jsonb; v_pag numeric; v_actor uuid := public.liquidacion_final_actor();
 begin
   perform public.liquidacion_final_gate();
@@ -556,25 +880,21 @@ begin
   v_baja := (select f.baja_id from public.liquidacion_final f where f.id = p_final_id);
   v_mes := (select f.mes from public.liquidacion_final f where f.id = p_final_id);
   v_calc := (select f.calculo from public.liquidacion_final f where f.id = p_final_id);
-  v_cuil := (select b.cuil from public.liquidacion_baja b where b.id = v_baja);
-  v_emp := (select b.empleado_id from public.liquidacion_baja b where b.id = v_baja);
-  v_clave := (select b.clave_persona from public.liquidacion_baja b where b.id = v_baja);
+  v_cuil := (select b.cuil from public.baja_laboral b where b.id = v_baja);
+  v_emp := (select b.empleado_id from public.baja_laboral b where b.id = v_baja);
   if v_cuil is null then raise exception 'Sin CUIL no se puede exportar a Visual'; end if;
-  if (select b.discrepancia from public.liquidacion_baja b where b.id = v_baja) is not null then raise exception 'La baja tiene una discrepancia sin resolver'; end if;
 
-  if exists (select 1 from public.liquidacion_final f join public.liquidacion_baja b on b.id = f.baja_id
-              where f.id <> p_final_id and b.clave_persona = v_clave and f.mes = v_mes and f.estado in ('exportada','conciliada')) then
+  if exists (select 1 from public.liquidacion_final f join public.baja_laboral b on b.id = f.baja_id
+              where f.id <> p_final_id and b.empleado_id = v_emp and f.mes = v_mes and f.estado in ('exportada','conciliada')) then
     raise exception 'Doble pago: ya hay otra liquidación final exportada de esta persona en %', v_mes;
   end if;
   v_ya := public.liquidacion_final_ya_liquidado(v_cuil, v_mes);
   if v_ya is distinct from coalesce(v_calc->'ya_liquidado', '[]'::jsonb) then
     raise exception 'Doble pago: cambió lo liquidado en % para este CUIL desde el cálculo. Recalculá el borrador.', v_mes;
   end if;
-  if v_emp is not null then
-    v_pag := public.liquidacion_final_extras_pagadas(v_emp, v_mes);
-    if v_pag is distinct from coalesce((v_calc->'extras'->>'pagado')::numeric, 0) then
-      raise exception 'Doble pago: cambiaron las extras pagadas en % desde el cálculo. Recalculá el borrador.', v_mes;
-    end if;
+  v_pag := public.liquidacion_final_extras_pagadas(v_emp, v_mes);
+  if v_pag is distinct from coalesce((v_calc->'extras'->>'pagado')::numeric, 0) then
+    raise exception 'Doble pago: cambiaron las extras pagadas en % desde el cálculo. Recalculá el borrador.', v_mes;
   end if;
 
   update public.liquidacion_final set estado = 'exportada', exportada_por = v_actor, exportada_at = now(),
@@ -589,8 +909,7 @@ $fn$;
 revoke all on function public.liquidacion_final_exportar(uuid, integer, text, text) from public, anon;
 grant execute on function public.liquidacion_final_exportar(uuid, integer, text, text) to authenticated;
 
--- ── RPC: reimportar el resultado de Visual (versionado, sin duplicados) ──────
--- p_conceptos: [{codigo, nombre, cantidad, importe}] de la persona (CUIL de la baja).
+-- Reimportar el resultado de Visual (versionado, sin duplicados).
 create or replace function public.liquidacion_final_importar_resultado(p_final_id uuid, p_archivo text, p_hash text, p_conceptos jsonb)
 returns jsonb
 language plpgsql security definer set search_path = public, pg_catalog as $fn$
@@ -629,12 +948,11 @@ $fn$;
 revoke all on function public.liquidacion_final_importar_resultado(uuid, text, text, jsonb) from public, anon;
 grant execute on function public.liquidacion_final_importar_resultado(uuid, text, text, jsonb) to authenticated;
 
--- ── Conciliación al centavo: exportado vs resultado vigente ──────────────────
--- Por código enviado: total vs importe de Visual (|dif| < 0,005) y, si el concepto
--- lleva cantidad (CAN/CANIMP), cantidad vs cantidad. Los CAN (000 días) sólo por
--- cantidad: la Planilla de Visual repite los días en la columna del importe. Un código enviado que no
--- vuelve es diferencia. Lo que Visual calcula solo (jubilación, O.S., etc.) se
--- informa pero no se concilia.
+-- Conciliación al centavo: lo exportado contra el resultado vigente. Por código:
+-- total contra importe de Visual (|dif| < 0,005) y, si lleva cantidad, cantidad
+-- contra cantidad. Los CAN (000 días) sólo por cantidad: la Planilla de Visual
+-- repite los días en la columna del importe. Lo que Visual calcula solo
+-- (jubilación, O.S.…) se informa sin conciliar.
 create or replace function public.liquidacion_final_conciliacion(p_final_id uuid)
 returns table (codigo text, entrada text, cantidad_enviada numeric, total_enviado numeric,
                cantidad_visual numeric, importe_visual numeric, estado text)
@@ -660,8 +978,7 @@ $fn$;
 revoke all on function public.liquidacion_final_conciliacion(uuid) from public, anon;
 grant execute on function public.liquidacion_final_conciliacion(uuid) to authenticated;
 
--- Confirma la conciliación SÓLO si todo lo enviado coincide al centavo. No paga ni
--- cierra el período: deja constancia de que Visual liquidó exactamente el borrador.
+-- Confirma la conciliación SÓLO si todo coincide al centavo. No paga ni cierra.
 create or replace function public.liquidacion_final_conciliar(p_final_id uuid)
 returns jsonb
 language plpgsql security definer set search_path = public, pg_catalog as $fn$
@@ -691,62 +1008,9 @@ $fn$;
 revoke all on function public.liquidacion_final_conciliar(uuid) from public, anon;
 grant execute on function public.liquidacion_final_conciliar(uuid) to authenticated;
 
--- ── Detección 1: baja en la app (usuarios.estado deja de ser 'activo') ───────
--- La app no guarda fecha de baja: el borrador nace SIN fecha (faltante) y
--- Administración la completa. Un error acá no impide dar la baja en la app.
-create or replace function public.liquidacion_final_detectar_baja_app()
-returns trigger
-language plpgsql security definer set search_path = public, pg_catalog as $fn$
-begin
-  if old.estado = 'activo' and new.estado is distinct from 'activo' and not coalesce(new.es_prueba, false) then
-    begin
-      perform public.liquidacion_baja_registrar_interno(new.id, new.cuil, null, null, 'app', 'usuario_inactivo',
-        jsonb_build_object('estado', new.estado), public.liquidacion_final_actor(), null);
-    exception when others then
-      raise warning 'liquidacion_final: no se pudo registrar la baja de %: %', new.id, sqlerrm;
-    end;
-  end if;
-  return null;
-end;
-$fn$;
-revoke all on function public.liquidacion_final_detectar_baja_app() from public, anon, authenticated;
-drop trigger if exists trg_liquidacion_final_baja_app on public.usuarios;
-create trigger trg_liquidacion_final_baja_app after update of estado on public.usuarios
-  for each row execute function public.liquidacion_final_detectar_baja_app();
-
--- ── Detección 2: consulta de ARCA cargada a mano ─────────────────────────────
--- Sólo cuando ARCA trae una baja CONFIRMADA: fecha de fin ya cumplida a la fecha
--- de la consulta, o situación de baja informada. Volver a cargar la misma
--- consulta no inserta filas (on conflict do nothing) y una consulta nueva con el
--- mismo dato se suma como confirmación de la misma baja.
-create or replace function public.liquidacion_final_detectar_baja_arca()
-returns trigger
-language plpgsql security definer set search_path = public, pg_catalog as $fn$
-begin
-  if (new.fecha_fin is not null and new.fecha_fin <= new.consulta_fecha) or nullif(btrim(coalesce(new.situacion_baja, '')), '') is not null then
-    begin
-      perform public.liquidacion_baja_registrar_interno(null, new.cuil, new.fecha_fin, null, 'arca',
-        'consulta:' || new.consulta_fecha::text,
-        jsonb_build_object('consulta', new.consulta_fecha, 'inicio', new.fecha_inicio, 'fin', new.fecha_fin,
-                           'situacion_baja', new.situacion_baja, 'modalidad', new.modalidad, 'archivo', new.archivo),
-        new.cargado_por, new.fecha_inicio);
-    exception when others then
-      raise warning 'liquidacion_final: no se pudo registrar la baja ARCA de %: %', new.cuil, sqlerrm;
-    end;
-  end if;
-  return null;
-end;
-$fn$;
-revoke all on function public.liquidacion_final_detectar_baja_arca() from public, anon, authenticated;
-drop trigger if exists trg_liquidacion_final_baja_arca on public.arca_relaciones_laborales;
-create trigger trg_liquidacion_final_baja_arca after insert on public.arca_relaciones_laborales
-  for each row execute function public.liquidacion_final_detectar_baja_arca();
-
--- ── Doble pago desde el circuito mensual ─────────────────────────────────────
--- Un período mensual no puede mandar a Visual un concepto con importe/cantidad que
--- ya salió en una liquidación final EXPORTADA del mismo mes y CUIL. Las líneas
--- 0/0 (Visual calcula) no cuentan. Bloquea el export del período con un mensaje
--- claro: hay que sacar a la persona del período o los conceptos repetidos.
+-- Doble pago desde el circuito mensual: un período no puede mandar a Visual un
+-- concepto con valor que ya salió en una liquidación final EXPORTADA del mismo
+-- mes y CUIL. Las líneas 0/0 (Visual calcula) no cuentan.
 create or replace function public.liquidacion_final_bloquear_doble_envio()
 returns trigger
 language plpgsql security definer set search_path = public, pg_catalog as $fn$
@@ -755,7 +1019,7 @@ begin
   if coalesce(new.importe, 0) = 0 and coalesce(new.cantidad, 0) = 0 then return new; end if;
   v_mes := (select p.mes from public.liquidacion_periodo p where p.id = new.periodo_id);
   if exists (select 1 from public.liquidacion_final f
-               join public.liquidacion_baja b on b.id = f.baja_id
+               join public.baja_laboral b on b.id = f.baja_id
                join public.liquidacion_final_linea l on l.final_id = f.id and l.codigo = new.codigo
               where f.estado in ('exportada','conciliada') and f.mes = v_mes
                 and b.cuil = regexp_replace(coalesce(new.cuil, ''), '\D', '', 'g') and l.total <> 0) then

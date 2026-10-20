@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { nombreEmpleado, normalizeDni, normalizeEmail, type UsuarioEmpleado } from './employee-auth'
+import { motivoSinAcceso, nombreEmpleado, normalizeDni, normalizeEmail, type UsuarioEmpleado } from './employee-auth'
 
 const AUTH_PAGE_SIZE = 100
 const MAX_AUTH_PAGES = 100
@@ -295,6 +295,8 @@ export async function repairEmployeeAuthUser(
   }
 
   if (isProtectedEmail(email)) return { ...base, action: 'omitido', motivo: 'Email protegido: no se modifica' }
+  const sinAcceso = await motivoSinAcceso(supabaseAdmin, usuario)
+  if (sinAcceso) return { ...base, action: 'omitido', motivo: sinAcceso.replace(/^omitido: /, 'No se puede: ') }
   if (!email) return { ...base, action: 'omitido', motivo: 'Falta email real' }
   if (!dni) return { ...base, action: 'omitido', motivo: 'Falta DNI' }
   if (dni.length < 6) return { ...base, action: 'omitido', motivo: 'DNI con menos de 6 caracteres' }

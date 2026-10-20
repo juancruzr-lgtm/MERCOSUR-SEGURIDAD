@@ -9,16 +9,23 @@
 //    conceptos y fórmulas del Excel de trabajo mensual, recortados al empleado y
 //    hasta la fecha de baja. Se descuenta lo ya liquidado en el mes con registro
 //    verificable (lo enviado a Visual en un período exportado/liquidado).
-//  · 208 Vacaciones no gozadas: días = saldo − tomadas (datos manuales del caso;
-//    si falta alguno queda PENDIENTE, nunca se asume cero) × valor día del Excel de
-//    trabajo (C3 = básico/200×8). Recibos de Fulla y Paniagua: 40.812 por día.
-//  · 120003 SAC proporcional: (básico/200×150)/365 × días computables. La regla
-//    de CONTEO de días (exclusivo/inclusivo) la confirma JC: hasta entonces
-//    CONTEO_SAC_CONFIRMADO es null y el 120003 queda PENDIENTE con las dos
-//    variantes a la vista (no se elige una en silencio).
-//  · 217 SAC sobre vacaciones no gozadas: básico/365 × días de 208.
-//  · 204 Presentismo: en una RENUNCIA que no completa el mes, cero con motivo.
-//    Para las demás causas se mantiene la fórmula mensual (no se generaliza).
+//  · 208 Vacaciones no gozadas: días pendientes que Administración confirma en el
+//    registro de baja (devengadas − tomadas; lib/baja-vacaciones.ts) × valor día
+//    del Excel de trabajo (C3 = básico/200×8). Recibos de Fulla y Paniagua: 40.812
+//    por día. Sin vacaciones confirmadas queda PENDIENTE (nunca se asume cero).
+//  · 120003 SAC proporcional: (básico/200×150)/365 × días computables, con la
+//    regla de conteo de la planilla de JC («calculo liq»: días = baja − 01/07).
+//    Se muestra al lado el control con la mejor remuneración del semestre según
+//    Visual (base legal), sin reemplazar la regla: la diferencia queda a revisión.
+//  · 217 SAC sobre vacaciones no gozadas: NO se agrega solo (no figura en los
+//    recibos 15263/15264). Se calcula como SUGERENCIA (básico/365 × días) y entra
+//    sólo si Administración lo incorpora con un ajuste y motivo.
+//  · 204 Presentismo: según la causal (catálogo baja_causa). En una RENUNCIA que
+//    no completa el mes, cero con motivo; las demás mantienen la fórmula mensual.
+//  · Conceptos propios de la causal (indemnización, preaviso, integración…): se
+//    listan para EVALUAR y bloquean la exportación hasta que Administración los
+//    resuelva (incluido con un ajuste, o «no corresponde» con motivo). Nunca se
+//    calculan solos.
 //  · 212 Gratificación extraordinaria: las extras pendientes del mes de la baja
 //    (horas excedentes × valor hora extra) menos lo ya pagado por banco. Sólo en
 //    la final; el tratamiento mensual (columna AP, sin código Visual) no cambia.
@@ -28,31 +35,47 @@
 //    120003 CAN*IMP → Cantidad 1 · Importe = total   (así salió en ambos recibos)
 //    208    CAN*IMP → Cantidad = días · Importe = valor día (14 × 40.812; 3 × 40.812)
 //    212    CAN*IMP → Cantidad 1 · Importe = total   (Paniagua 1 × 35.000)
-//    217    IMP     → Importe = total (Visual multiplica nada)
+//    217    IMP     → Importe = total (sólo si se incorpora con un ajuste)
 //    ordinarios     → la práctica mensual vigente: Cantidad 1 · Importe = total
 //                     (000 DÍAS va como cantidad).
 
-export type CausaBaja =
-  | 'renuncia' | 'despido_sin_causa' | 'despido_con_causa' | 'mutuo_acuerdo' | 'fin_contrato'
-  | 'periodo_prueba' | 'fallecimiento' | 'jubilacion' | 'abandono' | 'otra'
+/** Código de causal (catálogo baja_causa; ampliable sin tocar la arquitectura). */
+export type CausaBaja = string
 
+/** Respaldo para mostrar nombres si el catálogo todavía no cargó (el catálogo manda). */
 export const CAUSAS_BAJA: { valor: CausaBaja; texto: string }[] = [
   { valor: 'renuncia', texto: 'Renuncia' },
   { valor: 'despido_sin_causa', texto: 'Despido sin causa' },
   { valor: 'despido_con_causa', texto: 'Despido con causa' },
+  { valor: 'fin_contrato', texto: 'Finalización de contrato' },
   { valor: 'mutuo_acuerdo', texto: 'Mutuo acuerdo' },
-  { valor: 'fin_contrato', texto: 'Fin de contrato' },
-  { valor: 'periodo_prueba', texto: 'Período de prueba' },
   { valor: 'fallecimiento', texto: 'Fallecimiento' },
   { valor: 'jubilacion', texto: 'Jubilación' },
   { valor: 'abandono', texto: 'Abandono de trabajo' },
-  { valor: 'otra', texto: 'Otra' },
+  { valor: 'otra', texto: 'Otra causal' },
 ]
+
+/** Regla de la causal (fila de baja_causa). */
+export interface ReglaCausal {
+  codigo: string
+  nombre: string
+  presentismo: 'formula' | 'cero_si_no_completa_mes'
+  evaluar: string[]
+}
+
+/** Conceptos a evaluar por causal y el código de Visual con que se incorporarían (si existe). */
+export const CONCEPTOS_A_EVALUAR: Record<string, { texto: string; codigo: string | null }> = {
+  indemnizacion_antiguedad: { texto: 'Indemnización por antigüedad (art. 245 LCT)', codigo: '207' },
+  preaviso: { texto: 'Indemnización sustitutiva de preaviso (arts. 231/232 LCT)', codigo: '252' },
+  integracion_mes: { texto: 'Integración del mes de despido (art. 233 LCT)', codigo: null },
+  gratificacion_acuerdo: { texto: 'Suma acordada en la desvinculación (art. 241 LCT)', codigo: null },
+  indemnizacion_fallecimiento: { texto: 'Indemnización por fallecimiento (art. 248 LCT)', codigo: '248' },
+}
 
 export type Entrada = 'CAN' | 'IMP' | 'CANIMP'
 
 /** Concepto del catálogo Visual (liquidacion_concepto_catalogo). */
-export interface ConceptoCatalogo { politica: string | null; entrada: string | null; nombre: string | null }
+export interface ConceptoCatalogo { politica: string | null; entrada: string | null; nombre: string | null; tipo_visual?: string | null }
 
 /** Concepto ordinario del mes de la baja (de la planilla recortada). */
 export interface OrdinarioMes {
@@ -86,14 +109,31 @@ export interface AjusteManual {
   motivo: string
 }
 
+export interface EvaluacionConcepto {
+  clave: string
+  resolucion: 'incluido' | 'no_corresponde'
+  motivo: string
+}
+
 export interface EntradasFinal {
+  /** Vacaciones confirmadas en el registro de baja (saldo = devengadas). */
   vacaciones?: { saldoDias?: number | null; tomadasDias?: number | null; nota?: string | null }
   ajustes?: AjusteManual[]
+  /** Resolución de cada concepto a evaluar de la causal. */
+  evaluaciones?: EvaluacionConcepto[]
+  /** Período / tipo con que se importa en Visual (ej. «Liq. Especial OCTUBRE 2026»). */
+  visualPeriodo?: string | null
 }
 
 export interface DatosLiquidacionFinal {
   persona: { cuil: string | null; legajoVisual: string | null; nombre: string; empleadoId: string | null }
-  baja: { fecha: string | null; causa: CausaBaja | null; fechaIngreso: string | null; discrepancia?: string | null }
+  baja: {
+    fecha: string | null; causa: CausaBaja | null; fechaIngreso: string | null; discrepancia?: string | null
+    /** Regla de la causal (catálogo). Sin ella, la renuncia aplica la regla de presentismo por compatibilidad. */
+    causal?: ReglaCausal | null
+  }
+  /** Control del SAC con la base legal: mejor remuneración imponible del semestre según Visual. */
+  controlSAC?: { mejorRemuneracion: number; mes: string } | null
   parametros: {
     basico: number; horaExtra: number; valorDia: number
     /** Regla de conteo del SAC. null/ausente = sin confirmar → 120003 pendiente. */
@@ -126,6 +166,8 @@ export interface LineaFinal {
     calculado?: { cantidad: number | null; importe: number | null; total: number } | null
     ajuste?: { motivo: string } | null
     yaLiquidado?: number | null
+    /** Remunerativo / No Remunerativo / Asignacion/Creditos / Para Calculos (catálogo de Visual). */
+    tipo?: string | null
   }
 }
 
@@ -146,6 +188,11 @@ export interface ResultadoLiquidacionFinal {
     bases: { basico: number; valorDia: number; horaExtra: number; unitarioSAC: number | null }
     vacaciones: { saldo: number | null; tomadas: number | null; noGozadas: number | null; nota: string | null }
     presentismo: { calculado: number | null; aplicado: number | null; motivo: string | null }
+    causal: { codigo: string | null; nombre: string | null; evaluar: { clave: string; texto: string; resolucion: string | null; motivo: string | null }[] }
+    /** Conceptos que no se agregan solos (p. ej. 217): se incorporan con un ajuste. */
+    sugerencias: { codigo: string; concepto: string; total: number; formula: string; motivo: string }[]
+    controlSAC: { mejorRemuneracion: number; mes: string; diasSAC: number; totalLegal: number; diferencia: number } | null
+    visualPeriodo: string | null
     extras: { horas: number; valorHora: number; bruto: number; pagado: number; pendiente: number }
     ya_liquidado: { codigo: string; cantidad: number | null; importe: number | null }[]
     total: number
@@ -174,7 +221,11 @@ export type ConteoSAC = 'exclusivo' | 'inclusivo'
  * Regla confirmada por JC. null = TODAVÍA SIN CONFIRMAR: el 120003 queda pendiente
  * y el borrador muestra las dos variantes. Al confirmarla, cambiar sólo esta línea.
  */
-export const CONTEO_SAC_CONFIRMADO: ConteoSAC | null = null
+export const CONTEO_SAC_CONFIRMADO: ConteoSAC | null = 'exclusivo'
+// Evidencia (20/10/2026): 2026 sueldos.xlsx, hoja «calculo liq», columna «dias sac»
+// = S − T (fecha de baja − 01/07/2025), 91 días para bajas del 30/09/2025. Con
+// Fulla (renuncia 30/09/2026) da los 91 días de la referencia. El conteo
+// inclusivo sigue implementado y probado por si Gerencia lo cambia.
 
 export const REGLAS_CONTEO_SAC: Record<ConteoSAC, string> = {
   exclusivo: 'días = fecha de baja − inicio (días corridos); inicio = 1/1 o 1/7 del semestre de la baja, o el ingreso si es posterior',
@@ -210,6 +261,7 @@ const TOL = 0.005
  */
 export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiquidacionFinal {
   const faltantes: Faltante[] = []
+  const sugerencias: ResultadoLiquidacionFinal['calculo']['sugerencias'] = []
   const advertencias: string[] = []
   const lineas: LineaFinal[] = []
   const { basico, horaExtra, valorDia } = d.parametros
@@ -254,8 +306,9 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
         presentismoCalculado = importe
         if (importe > 0) {
           if (!d.baja.causa) falta('causa', 'Falta la causa de la baja: define si corresponde el presentismo del mes.')
-          else if (d.baja.causa === 'renuncia' && fechaBaja && fechaBaja < ultimoDiaDelMes(fechaBaja)) {
-            presentismoMotivo = 'Renuncia que no completa la condición mensual: presentismo en cero (regla JC, caso Paniagua).'
+          else if ((d.baja.causal ? d.baja.causal.presentismo === 'cero_si_no_completa_mes' : d.baja.causa === 'renuncia')
+                   && fechaBaja && fechaBaja < ultimoDiaDelMes(fechaBaja)) {
+            presentismoMotivo = `${d.baja.causal?.nombre ?? 'Renuncia'} que no completa la condición mensual: presentismo en cero (regla JC, caso Paniagua).`
             importe = 0
           }
         }
@@ -308,8 +361,8 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
   const tomadas = vac.tomadasDias ?? null
   let noGozadas: number | null = null
   if (!sueldoFijo) {
-    if (saldo == null) falta('vacaciones_saldo', 'Falta el saldo de vacaciones (dato manual; no se asume cero).')
-    if (tomadas == null) falta('vacaciones_tomadas', 'Faltan las vacaciones tomadas (dato manual; no se asume cero).')
+    if (saldo == null) falta('vacaciones_saldo', 'Faltan las vacaciones devengadas confirmadas en el registro de baja (no se asume cero).')
+    if (tomadas == null) falta('vacaciones_tomadas', 'Faltan las vacaciones tomadas confirmadas en el registro de baja (no se asume cero).')
     if (saldo != null && tomadas != null) {
       noGozadas = redondear(saldo - tomadas, 4)
       if (noGozadas < 0) falta('vacaciones_negativas', `Las vacaciones tomadas (${tomadas}) superan el saldo (${saldo}).`)
@@ -319,10 +372,10 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
           codigo: '208', concepto: NOMBRES['208'], entrada: 'CANIMP', cantidad: noGozadas, importe: redondear(valorDia), total: t208,
           detalle: { origen: 'final', formula: '(saldo − tomadas) × valor día (C3 = básico/200×8)', base: { saldo, tomadas, valorDia: redondear(valorDia) } },
         })
-        const t217 = totalSACVacaciones(basico, noGozadas)
-        lineas.push({
-          codigo: '217', concepto: NOMBRES['217'], entrada: 'IMP', cantidad: 1, importe: t217, total: t217,
-          detalle: { origen: 'final', formula: 'básico/365 × días de vacaciones no gozadas', base: { basico, dias: noGozadas } },
+        sugerencias.push({
+          codigo: '217', concepto: NOMBRES['217'], total: totalSACVacaciones(basico, noGozadas),
+          formula: `básico/365 × ${noGozadas} días de vacaciones no gozadas`,
+          motivo: 'No figura en los recibos de referencia: se incorpora sólo con un ajuste aprobado.',
         })
       }
     }
@@ -376,9 +429,36 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
     advertencias.push(`Ajuste manual ${codigo}: ${a.motivo.trim()}`)
   }
 
+  // ── Conceptos propios de la causal: se evalúan, nunca se calculan solos ──
+  const evaluacionesPorClave = new Map((d.entradas.evaluaciones ?? []).map(e => [e.clave, e]))
+  const evaluar = (d.baja.causal?.evaluar ?? []).map(clave => {
+    const def = CONCEPTOS_A_EVALUAR[clave] ?? { texto: clave, codigo: null }
+    const ev = evaluacionesPorClave.get(clave)
+    if (!ev || !ev.motivo || ev.motivo.trim().length < 3) {
+      falta(`evaluar:${clave}`, `Evaluar: ${def.texto}. Requiere revisión administrativa (incluir con un ajuste o marcar «no corresponde» con motivo).`)
+    } else if (ev.resolucion === 'incluido' && def.codigo && !lineas.some(l => l.codigo === def.codigo)) {
+      falta(`evaluar:${clave}`, `${def.texto}: se marcó como incluido pero falta el ajuste con el código ${def.codigo}.`)
+    } else if (ev.resolucion === 'incluido' && !def.codigo) {
+      advertencias.push(`${def.texto}: incluido; no tiene código de Visual configurado (cargalo con el código que corresponda).`)
+    }
+    return { clave, texto: def.texto, resolucion: ev?.resolucion ?? null, motivo: ev?.motivo ?? null }
+  })
+
+  // ── Control del SAC con la base legal (no reemplaza la regla operativa) ──
+  let controlSAC: ResultadoLiquidacionFinal['calculo']['controlSAC'] = null
+  const linea120003 = lineas.find(l => l.codigo === '120003')
+  if (d.controlSAC && diasSAC != null && d.controlSAC.mejorRemuneracion > 0) {
+    const totalLegal = redondear(d.controlSAC.mejorRemuneracion / 365 * diasSAC)
+    const diferencia = redondear(totalLegal - (linea120003?.total ?? 0))
+    controlSAC = { mejorRemuneracion: d.controlSAC.mejorRemuneracion, mes: d.controlSAC.mes, diasSAC, totalLegal, diferencia }
+    if (Math.abs(diferencia) >= 1) advertencias.push(`Control SAC: con la mejor remuneración imponible del semestre según Visual (${d.controlSAC.mes}: ${d.controlSAC.mejorRemuneracion}) daría ${totalLegal}, ${diferencia} distinto de la regla operativa. Revisar antes de exportar.`)
+  }
+
   // ── Catálogo: todo lo que se manda tiene que ser política 'valor' ──
+  if (!d.entradas.visualPeriodo?.trim()) falta('visual_periodo', 'Indicá el período / tipo de liquidación con que se importa en Visual (ej. «Liq. Especial OCTUBRE 2026»).')
   for (const l of lineas) {
     const cfg = d.catalogo.get(l.codigo)
+    l.detalle.tipo = cfg?.tipo_visual ?? null
     if (!cfg) falta(`catalogo:${l.codigo}`, `El código ${l.codigo} no está en el catálogo de Visual.`)
     else if (cfg.politica !== 'valor') falta(`catalogo:${l.codigo}`, `El código ${l.codigo} tiene $${l.total} pendientes pero el catálogo no lo exporta (política «${cfg.politica}»). Resolver antes de exportar.`)
   }
@@ -400,6 +480,10 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
       bases: { basico, valorDia: redondear(valorDia, 6), horaExtra, unitarioSAC: redondear(unitarioSAC(basico), 6) },
       vacaciones: { saldo, tomadas, noGozadas, nota: vac.nota ?? null },
       presentismo: { calculado: presentismoCalculado, aplicado: presentismoAplicado, motivo: presentismoMotivo },
+      causal: { codigo: d.baja.causa ?? null, nombre: d.baja.causal?.nombre ?? null, evaluar },
+      sugerencias,
+      controlSAC,
+      visualPeriodo: d.entradas.visualPeriodo?.trim() || null,
       extras: { horas, valorHora: horaExtra, bruto, pagado, pendiente },
       ya_liquidado: [...d.yaLiquidado].map(y => ({ codigo: String(y.codigo), cantidad: y.cantidad, importe: y.importe }))
         .sort((a, b) => a.codigo.localeCompare(b.codigo)),

@@ -9,24 +9,30 @@
 import {
   CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
   type CausaBaja, type ConceptoCatalogo, type DatosLiquidacionFinal, type EntradasFinal,
-  type OrdinariosHastaBaja, type ResultadoLiquidacionFinal,
+  type OrdinariosHastaBaja, type ReglaCausal, type ResultadoLiquidacionFinal,
 } from '@/lib/liquidacion-final'
 import { cargarParametrosDelMes, plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
 import { parsearPlanillaVisual, type CeldaVisual } from '@/lib/liquidacion-visual'
 
+/** Fila de baja_laboral (el registro de baja único). */
 export interface BajaFila {
   id: string
-  empleado_id: string | null
-  cuil: string | null
+  empleado_id: string
   nombre: string | null
-  fecha_baja: string | null
-  fecha_inicio_relacion: string | null
+  dni: string | null
+  cuil: string | null
+  legajo: string | null
+  fecha_ingreso: string | null
   causa: CausaBaja | null
-  fuente: 'app' | 'arca'
-  confirmaciones: any[]
-  discrepancia: string | null
-  estado: 'confirmada' | 'anulada'
+  fecha_notificacion: string | null
+  fecha_baja: string | null
+  observaciones: string | null
+  estado: 'borrador' | 'confirmada' | 'anulada'
+  origen: 'guardias' | 'legajo' | 'arca' | 'cambio_estado'
+  vacaciones: { devengadas?: number | null; tomadas?: number | null; pendientes?: number | null; metodo?: string | null; verificadas?: boolean; nota?: string | null } | null
+  turnos_futuros: { turno_id: string; fecha: string; hora_inicio: string | null; hora_fin: string | null; objetivo: string | null; estado: string | null }[]
   registrada_at: string
+  confirmada_at: string | null
 }
 
 export interface FinalFila {
@@ -47,7 +53,7 @@ export interface FinalFila {
   baja: BajaFila
 }
 
-const SEL_FINAL = 'id, baja_id, mes, estado, version, requiere_recalculo, entradas, calculo, faltantes, advertencias, calculado_at, exportada_at, export_archivo, conciliada_at, baja:liquidacion_baja(*)'
+const SEL_FINAL = 'id, baja_id, mes, estado, version, requiere_recalculo, entradas, calculo, faltantes, advertencias, calculado_at, exportada_at, export_archivo, conciliada_at, baja:baja_laboral(*)'
 
 export async function listarFinales(client: any, verAnuladas = false): Promise<{ data: FinalFila[]; error: string | null }> {
   let q = client.from('liquidacion_final').select(SEL_FINAL).order('created_at', { ascending: false }).limit(200)
@@ -86,7 +92,7 @@ interface Persona { cuil: string | null; legajoVisual: string | null; nombre: st
 async function persona(client: any, baja: BajaFila): Promise<Persona> {
   const digitos = (s: any) => String(s ?? '').replace(/\D/g, '') || null
   let cuil = digitos(baja.cuil)
-  let nombre = baja.nombre ?? ''
+  let nombre = (baja.nombre ?? '').replace(/,\s*/, ' ')
   let legajoVisual: string | null = null
   if (baja.empleado_id) {
     const { data: u } = await client.from('usuarios').select('nombre, apellido, cuil, legajo_visual').eq('id', baja.empleado_id).maybeSingle()
@@ -137,7 +143,7 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
   const avisos: string[] = []
   const b = f.baja
   const p = await persona(client, b)
-  let ingreso = b.fecha_inicio_relacion
+  let ingreso = b.fecha_ingreso
   if (!ingreso && b.empleado_id) {
     const { data: l } = await client.from('legajo_datos_personales').select('fecha_ingreso').eq('empleado_id', b.empleado_id).maybeSingle()
     ingreso = l?.fecha_ingreso ?? null
@@ -166,23 +172,66 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
     if (error) return { datos: null, avisos, error: 'No se pudieron leer las extras pagadas: ' + error.message }
     extrasPagadas = Number(data ?? 0)
   }
-  const { data: cat, error: catErr } = await client.from('liquidacion_concepto_catalogo').select('codigo_visual, politica, entrada, nombre')
+  const { data: cat, error: catErr } = await client.from('liquidacion_concepto_catalogo').select('codigo_visual, politica, entrada, nombre, tipo_visual')
   if (catErr) return { datos: null, avisos, error: 'No se pudo leer el catálogo de Visual: ' + catErr.message }
-  const catalogo = new Map<string, ConceptoCatalogo>(((cat ?? []) as any[]).map(c => [String(c.codigo_visual), { politica: c.politica, entrada: c.entrada, nombre: c.nombre }]))
+  const catalogo = new Map<string, ConceptoCatalogo>(((cat ?? []) as any[]).map(c => [String(c.codigo_visual), { politica: c.politica, entrada: c.entrada, nombre: c.nombre, tipo_visual: c.tipo_visual }]))
+
+  // Regla de la causal (catálogo baja_causa).
+  let causal: ReglaCausal | null = null
+  if (b.causa) {
+    const { data: c } = await client.from('baja_causa').select('codigo, nombre, presentismo, evaluar').eq('codigo', b.causa).maybeSingle()
+    if (c) causal = { codigo: c.codigo, nombre: c.nombre, presentismo: c.presentismo, evaluar: c.evaluar ?? [] }
+  }
+
+  // Vacaciones: las confirmadas en el registro de baja (no se piden de nuevo acá).
+  const v = b.vacaciones
+  const vacaciones = v && v.verificadas
+    ? { saldoDias: v.devengadas ?? null, tomadasDias: v.tomadas ?? null, nota: v.nota ?? `método ${v.metodo ?? 'empresa'}` }
+    : undefined
+  if (!vacaciones) avisos.push('Las vacaciones no se confirmaron en el registro de baja: 208 queda pendiente.')
+
+  const controlSAC = b.fecha_baja && p.cuil ? await mejorRemuneracionSemestre(client, p.cuil, b.fecha_baja) : null
 
   return {
     datos: {
       persona: p,
-      baja: { fecha: b.fecha_baja, causa: b.causa, fechaIngreso: ingreso, discrepancia: b.discrepancia },
+      baja: { fecha: b.fecha_baja, causa: b.causa, fechaIngreso: ingreso, causal },
+      controlSAC,
       parametros: { basico: P.basico, horaExtra: P.horaExtra, valorDia, conteoSAC: CONTEO_SAC_CONFIRMADO },
       ordinarios: ord,
       yaLiquidado,
       extrasPagadas,
       catalogo,
-      entradas: f.entradas ?? {},
+      entradas: { ...(f.entradas ?? {}), vacaciones },
     },
     avisos,
     error: null,
+  }
+}
+
+/**
+ * Mejor remuneración imponible del semestre de la baja según los resultados de
+ * Visual importados (base legal del SAC). Sólo control: si no hay datos, null.
+ */
+async function mejorRemuneracionSemestre(client: any, cuil: string, fechaBaja: string): Promise<{ mejorRemuneracion: number; mes: string } | null> {
+  try {
+    const anio = fechaBaja.slice(0, 4)
+    const desde = Number(fechaBaja.slice(5, 7)) <= 6 ? `${anio}-01` : `${anio}-07`
+    const hasta = fechaBaja.slice(0, 7)
+    const { data, error } = await client.from('liquidacion_resultado_fila')
+      .select('imponible, resultado:liquidacion_resultado_visual!inner(vigente, periodo:liquidacion_periodo!inner(mes))')
+      .eq('cuil', cuil).eq('resultado.vigente', true)
+    if (error || !data) return null
+    let mejor: { mejorRemuneracion: number; mes: string } | null = null
+    for (const r of data as any[]) {
+      const mes = r?.resultado?.periodo?.mes
+      const imp = Number(r?.imponible ?? 0)
+      if (!mes || mes < desde || mes > hasta || !(imp > 0)) continue
+      if (!mejor || imp > mejor.mejorRemuneracion) mejor = { mejorRemuneracion: imp, mes }
+    }
+    return mejor
+  } catch {
+    return null
   }
 }
 
@@ -209,7 +258,7 @@ export async function excelDeFinal(client: any, f: FinalFila): Promise<{ buf: Ar
   const p = await persona(client, f.baja)
   const { escribirExcelLiquidacionFinal } = await import('@/lib/liquidacion-final-excel')
   const buf = await escribirExcelLiquidacionFinal(
-    { finalId: f.id, version: f.version, nombre: p.nombre, cuil: p.cuil, legajoVisual: p.legajoVisual, causa: f.baja.causa, fuente: f.baja.fuente },
+    { finalId: f.id, version: f.version, nombre: p.nombre, cuil: p.cuil, legajoVisual: p.legajoVisual, causa: f.calculo.causal?.nombre ?? f.baja.causa, fuente: f.baja.origen, visualPeriodo: f.calculo.visualPeriodo },
     { lineas: lineas as any, faltantes: f.faltantes, advertencias: f.advertencias, calculo: f.calculo },
   )
   return { buf, nombre: `liquidacion_final_${(p.nombre || 'persona').replace(/\W+/g, '_')}_v${f.version}.xlsx`, error: null }
@@ -227,7 +276,8 @@ export async function exportarFinal(client: any, f: FinalFila): Promise<{ bytes:
   if (!p.cuil || !p.legajoVisual) return { bytes: null, nombre: '', repetida: false, error: 'Falta CUIL o legajo de Visual.' }
   const filas = filasVisualFinal(lineas as any, p)
   const hash = await sha256Hex(jsonEstable(filas))
-  const nombre = `visual_liquidacion_final_${p.legajoVisual.replace(/\W+/g, '_')}_${f.mes ?? ''}.xls`
+  const periodo = (f.calculo?.visualPeriodo ?? f.mes ?? '').replace(/[^\w]+/g, '_')
+  const nombre = `visual_liquidacion_final_${p.legajoVisual.replace(/\W+/g, '_')}_${periodo}.xls`
   const { escribirLibroVisualXls } = await import('@/lib/visual-export')
   const bytes = await escribirLibroVisualXls(filas)
   const { data, error: e2 } = await client.rpc('liquidacion_final_exportar', { p_final_id: f.id, p_version: f.version, p_archivo: nombre, p_hash: hash })

@@ -744,7 +744,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
         </>
       )}
 
-      {tab === 'finales' && <LiquidacionFinalPanel empleados={empleados} />}
+      {tab === 'finales' && <LiquidacionFinalPanel />}
 
       {tab === 'catalogo' && (
         <div style={S.card}>

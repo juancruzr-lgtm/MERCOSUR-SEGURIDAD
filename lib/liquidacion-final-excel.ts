@@ -17,6 +17,7 @@ export interface CabeceraExcelFinal {
   legajoVisual: string | null
   causa: string | null
   fuente: string | null
+  visualPeriodo?: string | null
 }
 
 const FMT_MONEY = '#,##0.00'
@@ -47,7 +48,7 @@ export async function escribirExcelLiquidacionFinal(
   const ws = wb.addWorksheet('Liquidación final')
   ws.columns = [
     { width: 30 }, { width: 34 }, { width: 12 }, { width: 16 }, { width: 16 }, { width: 46 }, { width: 12 }, { width: 40 },
-    { width: 3 }, { width: 38, hidden: true },
+    { width: 22 }, { width: 38, hidden: true },
   ]
   const c = res.calculo
   const set = (ref: string, v: any, numFmt?: string) => { const x = ws.getCell(ref); x.value = v; if (numFmt) x.numFmt = numFmt; return x }
@@ -56,7 +57,7 @@ export async function escribirExcelLiquidacionFinal(
 
   set('A1', `Liquidación final — ${cab.nombre}`).font = { bold: true, size: 13 }
   set('D1', `CUIL ${cab.cuil ?? '—'} · Legajo Visual ${cab.legajoVisual ?? '—'}`)
-  set('D2', `Borrador v${cab.version} · causa: ${cab.causa ?? 'sin dato'} · fuente: ${cab.fuente ?? '—'}`)
+  set('D2', `Borrador v${cab.version} · causa: ${cab.causa ?? 'sin dato'} · origen: ${cab.fuente ?? '—'} · Visual: ${cab.visualPeriodo ?? 'período sin indicar'}`)
   set('J1', cab.finalId); set('J2', cab.version)   // identidad técnica (oculta)
 
   // ── Datos (B3:B18) ──
@@ -87,7 +88,7 @@ export async function escribirExcelLiquidacionFinal(
   for (let r = 3; r <= 18; r++) ws.getCell(`A${r}`).font = { bold: true }
 
   // ── Líneas ──
-  const enc = ['Código', 'Concepto', 'Cantidad', 'Importe a Visual', 'Total', 'Fórmula / base', 'Origen', 'Ajuste manual (motivo)']
+  const enc = ['Código', 'Concepto', 'Cantidad', 'Importe a Visual', 'Total', 'Fórmula / base', 'Origen', 'Ajuste manual (motivo)', 'Tipo (Visual)']
   enc.forEach((t, i) => { const x = ws.getCell(FILA_ENCABEZADO, i + 1); x.value = t; x.font = { bold: true }; x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } } })
   let r = FILA_ENCABEZADO + 1
   const primera = r
@@ -101,6 +102,7 @@ export async function escribirExcelLiquidacionFinal(
     const base = l.detalle.base ? ' · ' + Object.entries(l.detalle.base).map(([k, v]) => `${k}: ${v}`).join(', ') : ''
     set(`F${r}`, `${l.detalle.formula}${base}${l.detalle.yaLiquidado ? ` · ya liquidado: ${l.detalle.yaLiquidado}` : ''}`)
     set(`G${r}`, l.detalle.origen)
+    set(`I${r}`, l.detalle.tipo ?? '')
     if (l.detalle.ajuste) {
       const calc = l.detalle.calculado
       set(`H${r}`, `${l.detalle.ajuste.motivo}${calc ? ` (calculado: ${calc.cantidad ?? ''} × ${calc.importe ?? ''} = ${calc.total})` : ' (línea agregada a mano)'}`)
@@ -119,6 +121,9 @@ export async function escribirExcelLiquidacionFinal(
     r++
   }
   lista('FALTANTES (bloquean marcar como lista)', res.faltantes.map(f => f.detalle))
+  lista('CONCEPTOS A EVALUAR POR LA CAUSAL', (c.causal?.evaluar ?? []).map(e => `${e.texto}: ${e.resolucion ?? 'SIN RESOLVER'}${e.motivo ? ' — ' + e.motivo : ''}`))
+  lista('SUGERENCIAS (no incluidas; se incorporan con un ajuste)', (c.sugerencias ?? []).map(s => `${s.codigo} ${s.concepto}: ${s.total} — ${s.formula}. ${s.motivo}`))
+  if (c.controlSAC) lista('CONTROL SAC (base legal según Visual)', [`Mejor remuneración imponible del semestre (${c.controlSAC.mes}): ${c.controlSAC.mejorRemuneracion} → ${c.controlSAC.totalLegal} (diferencia ${c.controlSAC.diferencia})`])
   lista('ADVERTENCIAS Y AJUSTES', res.advertencias)
   lista('YA LIQUIDADO EN EL MES (enviado a Visual)', c.ya_liquidado.map(y => `${y.codigo}: cantidad ${y.cantidad ?? '—'} · importe ${y.importe ?? '—'}`))
 

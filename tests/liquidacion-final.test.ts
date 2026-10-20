@@ -43,8 +43,10 @@ const VARIANTES: { conteo: ConteoSAC; fulla: string; paniagua: string }[] = [
   { conteo: 'inclusivo', fulla: '2026-09-29', paniagua: '2026-10-02' },
 ]
 
+const VP = 'Liq. Especial SEPTIEMBRE 2026'
+
 function datos(over: Over = {}, conteo: ConteoSAC | null = 'exclusivo'): DatosLiquidacionFinal {
-  const { baja, ...resto } = over
+  const { baja, entradas, ...resto } = over
   return {
     persona: { cuil: '20285365814', legajoVisual: 'FULLA w', nombre: 'FULLA WALTER DARIO', empleadoId: 'u-fulla' },
     baja: { fecha: '2026-09-30', causa: 'renuncia', fechaIngreso: '2023-03-01', discrepancia: null, ...(baja ?? {}) },
@@ -53,8 +55,8 @@ function datos(over: Over = {}, conteo: ConteoSAC | null = 'exclusivo'): DatosLi
     yaLiquidado: [],
     extrasPagadas: 0,
     catalogo: CATALOGO,
-    entradas: { vacaciones: { saldoDias: 14, tomadasDias: 0, nota: 'Fulla: 14 días, dato manual del caso' } },
     ...resto,
+    entradas: { visualPeriodo: VP, ...(entradas ?? { vacaciones: { saldoDias: 14, tomadasDias: 0, nota: 'Fulla: 14 días, dato manual del caso' } }) },
   }
 }
 const linea = (r: ReturnType<typeof calcularLiquidacionFinal>, cod: string) => r.lineas.find(l => l.codigo === cod)
@@ -82,8 +84,8 @@ const paniagua = (over: Over = {}, conteo: ConteoSAC | null = 'exclusivo') => da
 }, conteo)
 
 describe('SAC proporcional: regla de días (parametrizable, sin confirmar)', () => {
-  it('la app NO fija la regla: CONTEO_SAC_CONFIRMADO es null hasta que JC la confirme', () => {
-    expect(CONTEO_SAC_CONFIRMADO).toBeNull()
+  it('regla confirmada por la planilla de JC («calculo liq»: días sac = baja − 01/07): exclusivo', () => {
+    expect(CONTEO_SAC_CONFIRMADO).toBe('exclusivo')
   })
   it.each(VARIANTES)('$conteo — Fulla: baja $fulla, semestre desde 01/07 → 91 días, $190.782,12', ({ conteo, fulla }) => {
     expect(diasComputablesSAC(fulla, '2023-03-01', conteo)).toEqual({ inicioSemestre: '2026-07-01', inicioComputo: '2026-07-01', dias: 91 })
@@ -133,7 +135,7 @@ describe.each(VARIANTES)('calcularLiquidacionFinal — caso Fulla ($conteo, baja
   const r = calcularLiquidacionFinal(datos({ baja: { fecha: fulla } }, conteo))
   it('sin faltantes y con los conceptos finales', () => {
     expect(r.faltantes).toEqual([])
-    expect(r.lineas.map(l => l.codigo)).toEqual(['120003', '208', '217'])
+    expect(r.lineas.map(l => l.codigo)).toEqual(['120003', '208'])
   })
   it('120003 va como Cantidad 1 × total (así salió en el recibo) con 91 días en el detalle', () => {
     expect(linea(r, '120003')).toMatchObject({ cantidad: 1, importe: 190782.12, total: 190782.12 })
@@ -143,8 +145,14 @@ describe.each(VARIANTES)('calcularLiquidacionFinal — caso Fulla ($conteo, baja
   it('208 va como Cantidad = días × Importe = valor día (14 × 40.812 = 571.368, igual al recibo)', () => {
     expect(linea(r, '208')).toMatchObject({ cantidad: 14, importe: 40812, total: 571368 })
   })
-  it('217 va como importe total', () => {
-    expect(linea(r, '217')).toMatchObject({ entrada: 'IMP', cantidad: 1, importe: 39134.79, total: 39134.79 })
+  it('217 NO se agrega solo (no figura en los recibos): queda como sugerencia de $39.134,79', () => {
+    expect(linea(r, '217')).toBeUndefined()
+    expect(r.calculo.sugerencias).toEqual([expect.objectContaining({ codigo: '217', total: 39134.79 })])
+  })
+  it('217 entra sólo si se incorpora con un ajuste y motivo', () => {
+    const d = calcularLiquidacionFinal(datos({ baja: { fecha: fulla }, entradas: { vacaciones: { saldoDias: 14, tomadasDias: 0 }, ajustes: [{ codigo: '217', cantidad: 1, importe: 39134.79, motivo: 'Aprobado por Gerencia' }] } }, conteo))
+    expect(linea(d, '217')).toMatchObject({ entrada: 'IMP', cantidad: 1, importe: 39134.79, total: 39134.79 })
+    expect(linea(d, '217')!.detalle.ajuste?.motivo).toBe('Aprobado por Gerencia')
   })
   it('sin jornadas en el mes: no inventa 000 ni ordinarios y lo avisa', () => {
     expect(linea(r, '000')).toBeUndefined()
@@ -166,7 +174,6 @@ describe.each(VARIANTES)('calcularLiquidacionFinal — caso Paniagua ($conteo, b
       '208': [3, 40812, 122436],
       '212': [1, 35000, 35000],
       '214': [1, 7200, 7200],
-      '217': [1, 8386.03, 8386.03],
     })
   })
   it('presentismo en cero por renuncia que no completa el mes, con motivo registrado', () => {
@@ -285,8 +292,8 @@ describe('ajustes manuales', () => {
     expect(r.faltantes.map(f => f.clave)).toContain('ajuste:208')
   })
   it('importe 0 quita la línea', () => {
-    const r = calcularLiquidacionFinal(datos({ entradas: { vacaciones: { saldoDias: 14, tomadasDias: 0 }, ajustes: [{ codigo: '217', importe: 0, motivo: 'no corresponde en este caso' }] } }))
-    expect(linea(r, '217')).toBeUndefined()
+    const r = calcularLiquidacionFinal(datos({ entradas: { vacaciones: { saldoDias: 14, tomadasDias: 0 }, ajustes: [{ codigo: '208', importe: 0, motivo: 'no corresponde en este caso' }] } }))
+    expect(linea(r, '208')).toBeUndefined()
   })
 })
 
@@ -372,7 +379,7 @@ describe('archivos: Excel de trabajo y .xls de Visual desde el mismo cálculo', 
     const ws = wb.Sheets.Hoja1
     const filas: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null }).slice(2)
     const porCodigo = Object.fromEntries(filas.map(f => [f[2], f]))
-    expect(Object.keys(porCodigo).sort()).toEqual(['000', '001', '120003', '203', '208', '212', '214', '217'])
+    expect(Object.keys(porCodigo).sort()).toEqual(['000', '001', '120003', '203', '208', '212', '214'])
     expect(porCodigo['000']).toEqual(['010 Bis', '20441767871', '000', 6, null, null, 'PANIAGUA EDGAR IVAN'])
     expect(porCodigo['208'].slice(3, 5)).toEqual([3, 40812])
     expect(porCodigo['120003'].slice(3, 5)).toEqual([1, 129983.42])
