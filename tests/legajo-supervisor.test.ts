@@ -21,16 +21,18 @@ function sup(created_at: string, p: Partial<SupervisionLegajo> = {}): Supervisio
     objetivo_id: 'o1', objetivo: 'Objetivo 1', zona_id: 'z', zona: 'Rosario', estado: 'ok',
     observaciones: null, items_total: 5, items_observados: 0, novedades_items: null, fotos: 1,
     lat: -32.9, lng: -60.6, distancia_objetivo_m: 10, radio_m: 100,
-    guardia_id: 'g1', hay_guardia_cerca: true, ...p,
+    guardia_id: 'g1', situacion: 'en_turno', cobertura: null, programado: null, ...p,
   }
 }
 
 
-describe('situación respecto del turno', () => {
-  it('con guardia = en turno; sin guardia pero con calendario ese día = fuera; sin calendario = sin guardia cargada', () => {
-    expect(situacionTurno({ guardia_id: 'g', hay_guardia_cerca: true })).toBe('en_turno')
-    expect(situacionTurno({ guardia_id: null, hay_guardia_cerca: true })).toBe('fuera_turno')
-    expect(situacionTurno({ guardia_id: null, hay_guardia_cerca: false })).toBe('sin_calendario')
+describe('situación respecto del turno (la calcula la base, por franja)', () => {
+  it('se usa tal cual llega; un valor desconocido no se inventa como falta', () => {
+    expect(situacionTurno({ situacion: 'en_turno' })).toBe('en_turno')
+    expect(situacionTurno({ situacion: 'cubrio_otro' })).toBe('cubrio_otro')
+    expect(situacionTurno({ situacion: 'sin_programacion' })).toBe('sin_programacion')
+    expect(situacionTurno({ situacion: 'fuera_turno' })).toBe('fuera_turno')
+    expect(situacionTurno({ situacion: 'otra_cosa' as any })).toBe('sin_programacion')
   })
 })
 
@@ -45,11 +47,11 @@ describe('hora argentina (no la del proceso)', () => {
 describe('distribución horaria', () => {
   it('cuenta supervisiones por hora y situación, con los minutos de servicio al lado', () => {
     const f = distribucionHoraria(
-      [sup('2026-10-13T11:15:00Z'), sup('2026-10-13T11:45:00Z', { guardia_id: null }), sup('2026-10-13T05:00:00Z', { guardia_id: null, hay_guardia_cerca: false })],
+      [sup('2026-10-13T11:15:00Z'), sup('2026-10-13T11:45:00Z', { guardia_id: null, situacion: 'fuera_turno' }), sup('2026-10-13T05:00:00Z', { guardia_id: null, situacion: 'sin_programacion' }), sup('2026-10-13T11:50:00Z', { guardia_id: null, situacion: 'cubrio_otro', cobertura: 'probable' })],
       [guardia()],
     )
-    expect(f[8]).toMatchObject({ enTurno: 1, fueraTurno: 1, minutosServicio: 60 })
-    expect(f[2]).toMatchObject({ sinCalendario: 1, minutosServicio: 0 })
+    expect(f[8]).toMatchObject({ enTurno: 1, fueraTurno: 1, cubrioOtro: 1, sinProgramacion: 0, minutosServicio: 60 })
+    expect(f[2]).toMatchObject({ sinProgramacion: 1, minutosServicio: 0 })
     expect(f.reduce((a, x) => a + x.minutosServicio, 0)).toBe(12 * 60)
     expect(f[19].minutosServicio).toBe(0)
   })
@@ -157,11 +159,11 @@ describe('resumen', () => {
   it('horas de servicio sin francos, y supervisiones en turno por hora de servicio', () => {
     const r = resumenLegajo(
       [guardia({ gps_puntos: 30 }), guardia({ guardia_id: 'g2', cubre: false, horas_programadas: 12 })],
-      [sup('2026-10-13T11:00:00Z'), sup('2026-10-13T12:00:00Z'), sup('2026-10-13T23:00:00Z', { guardia_id: null }), sup('2026-10-12T23:00:00Z', { guardia_id: null, hay_guardia_cerca: false, items_observados: 1 })],
+      [sup('2026-10-13T11:00:00Z'), sup('2026-10-13T12:00:00Z'), sup('2026-10-13T23:00:00Z', { guardia_id: null, situacion: 'fuera_turno' }), sup('2026-10-12T23:00:00Z', { guardia_id: null, situacion: 'sin_programacion', items_observados: 1 })],
     )
     expect(r).toMatchObject({
       guardiasServicio: 1, horasProgramadas: 12, guardiasConGps: 1, supervisiones: 4,
-      enTurno: 2, fueraTurno: 1, sinCalendario: 1, conItemsObservados: 1, porHoraServicio: 0.17,
+      enTurno: 2, cubrioOtro: 0, coberturasProbables: 0, sinProgramacion: 1, fueraTurno: 1, conItemsObservados: 1, porHoraServicio: 0.17,
     })
   })
   it('sin guardias de servicio no hay tasa (null, no 0)', () => {
