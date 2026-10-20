@@ -4,7 +4,7 @@
  *   POST { imagen: base64 (JPEG/PNG/WebP, ya comprimida en el celular) }
  *   → { lectura: LecturaCredencial } con dónde está la tarjeta (para recortar) y lo
  *     que se lee (apellido, DNI, número, emisión, vencimiento). dni_coincide compara
- *     con el DNI de quien sube.
+ *     con el DNI de quien sube (o, si carga Administración, con el de empleado_id).
  *
  * No guarda nada: la foto todavía no se subió. Es una ayuda para completar el
  * formulario; si falla, la app sigue sin IA. Sólo para usuarios activos con el
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
   ])
   if (!(estado as { abierto?: boolean } | null)?.abierto && gestiona !== true) return responder({ error: 'No autorizado' }, 403)
 
-  const body = await req.json().catch(() => null) as { imagen?: string } | null
+  const body = await req.json().catch(() => null) as { imagen?: string; empleado_id?: string | null } | null
   const b64 = typeof body?.imagen === 'string' ? body.imagen.replace(/^data:[^,]+,/, '') : ''
   if (!b64) return responder({ error: 'Falta la imagen' }, 400)
   const bytes = Buffer.from(b64, 'base64')
@@ -65,8 +65,12 @@ export async function POST(req: NextRequest) {
     if (!r) throw ultimo
     const lectura = interpretarLectura(r.json)
     if (!lectura) return responder({ error: 'No se pudo leer la credencial' }, 502)
-    const { data: yo } = await c.admin.from('usuarios').select('dni').eq('auth_user_id', c.authUserId).maybeSingle()
-    lectura.dni_coincide = gestiona === true ? null : dniCoincide(lectura.dni, (yo as { dni?: string } | null)?.dni)
+    // El vigilador sube la suya; Administración carga la de la persona del legajo (empleado_id).
+    const otro = gestiona === true && typeof body?.empleado_id === 'string' && /^[0-9a-f-]{36}$/i.test(body.empleado_id) ? body.empleado_id : null
+    const { data: persona } = otro
+      ? await c.admin.from('usuarios').select('dni').eq('id', otro).maybeSingle()
+      : await c.admin.from('usuarios').select('dni').eq('auth_user_id', c.authUserId).maybeSingle()
+    lectura.dni_coincide = gestiona === true && !otro ? null : dniCoincide(lectura.dni, (persona as { dni?: string } | null)?.dni)
     return responder({ lectura })
   } catch (e) {
     const msg = e instanceof ErrorProveedor ? e.message : 'Error al leer la credencial'
