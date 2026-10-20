@@ -5,6 +5,7 @@
  *
  * Legajo Digital → Diferencias con ARCA (Administración/Gerencia).
  *   - Cargar la «Consulta de Relaciones Laborales» de ARCA (uno o varios .txt).
+ *   - Generar el mismo .txt sólo con las personas elegidas, para Visual (Importar AFIP).
  *   - Contratos con fecha de fin (eventuales): inicio, fin, días y situación en la app.
  *   - Lo demás que requiere una decisión: activos que no figuran en ARCA, relaciones
  *     vigentes sin usuario activo, CUIL faltante, identidad distinta, DNI repetido…
@@ -16,9 +17,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ORDEN_TIPOS, TEXTO_TIPO, corregirIdentidad, cargarDiferencias, cargarResumen, detalleTexto, diasTexto, fechaCorta,
-  bajaRegistradaPorCuil, fechaDeArchivo, importarConsulta, leerConsultaArca, reabrirDiferencia, revisarDiferencia, situacionTexto, unirRelaciones,
+  bajaRegistradaPorCuil, fechaDeArchivo, importarConsulta, leerConsultaArca, reabrirDiferencia, relacionesParaVisual, revisarDiferencia, situacionTexto, unirRelaciones,
 } from '@/lib/legajo-diferencias'
-import type { Diferencia, RelacionArca, ResumenDiferencias, TipoDiferencia } from '@/lib/legajo-diferencias'
+import type { Diferencia, RelacionArca, RelacionCargada, ResumenDiferencias, TipoDiferencia } from '@/lib/legajo-diferencias'
+import { desdeGuardada, generarConsultaArcaTxt, nombreArchivoConsulta, sugeridaParaVisual } from '@/lib/arca-txt-visual'
 
 export const card: React.CSSProperties = { background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 14, marginBottom: 10, minWidth: 0, boxSizing: 'border-box' }
 const boton = (color = '#cbd5e1'): React.CSSProperties => ({ background: 'transparent', color, border: '1px solid #334155', borderRadius: 8, padding: '7px 12px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', minHeight: 36 })
@@ -183,6 +185,104 @@ function TablaContratos({ filas, onCambio }: { filas: Diferencia[]; onCambio: ()
   )
 }
 
+/**
+ * Archivo para Visual (Importar AFIP): el mismo .txt de la consulta de ARCA, sólo
+ * con las personas elegidas (p. ej. eventuales que se dan de baja y no están en
+ * Visual). Se marcan de entrada los eventuales sin legajo de Visual. Sólo descarga:
+ * no cambia nada en la app ni en ARCA.
+ */
+function ArchivoParaVisual() {
+  const [abierto, setAbierto] = useState(false)
+  const [filas, setFilas] = useState<RelacionCargada[] | null>(null)
+  const [elegidas, setElegidas] = useState<Set<string>>(new Set())
+  const [buscar, setBuscar] = useState('')
+  const [todas, setTodas] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const abrir = async () => {
+    setAbierto(true); setError(null)
+    const r = await relacionesParaVisual()
+    if (r.error) { setError(/arca_relaciones_para_visual/.test(r.error) ? 'Falta aplicar la migración 20261111120000 en la base.' : r.error); return }
+    setFilas(r.filas)
+    setElegidas(new Set(r.filas.filter(sugeridaParaVisual).map(f => f.cuil)))
+  }
+  const q = buscar.trim().toLowerCase()
+  const visibles = (filas ?? []).filter(f => (todas || elegidas.has(f.cuil) || !String(f.legajo_visual ?? '').trim())
+    && (!q || f.apellido_nombre.toLowerCase().includes(q) || f.cuil.includes(q.replace(/\D/g, '') || q)))
+  const cambiar = (cuil: string) => setElegidas(prev => { const s = new Set(prev); if (s.has(cuil)) s.delete(cuil); else s.add(cuil); return s })
+  const descargar = () => {
+    const sel = (filas ?? []).filter(f => elegidas.has(f.cuil))
+    const txt = generarConsultaArcaTxt(sel.map(desdeGuardada))
+    const url = URL.createObjectURL(new Blob([txt], { type: 'text/plain;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = nombreArchivoConsulta(new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }))
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+  if (!abierto) {
+    return (
+      <div style={{ marginTop: 10 }}>
+        <button type="button" style={boton('#fbbf24')} onClick={() => void abrir()}>Generar archivo para Visual (Importar AFIP)</button>
+        <div style={{ fontSize: 12.5, color: '#64748b', marginTop: 6, lineHeight: 1.45 }}>
+          Un .txt con el formato de la consulta de ARCA, sólo con las personas que elijas, para darlas de alta en Visual Sueldos con «Importar AFIP» (p. ej. eventuales que se dan de baja y no están en Visual).
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div style={{ ...card, marginTop: 10, background: '#0b1220' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+        <div style={{ fontSize: 14.5, fontWeight: 800, color: '#e2e8f0' }}>Archivo para Visual (Importar AFIP)</div>
+        <button type="button" style={boton()} onClick={() => setAbierto(false)}>Cerrar</button>
+      </div>
+      {error && <div role="alert" style={{ color: '#fca5a5', fontSize: 13, marginTop: 6 }}>{error}</div>}
+      {!filas && !error && <div style={{ color: '#64748b', marginTop: 6 }}>Cargando…</div>}
+      {filas && (
+        <>
+          <div style={{ fontSize: 12.5, color: '#94a3b8', margin: '4px 0 8px', lineHeight: 1.45 }}>
+            Última relación de cada CUIL en las consultas cargadas. Marcados de entrada: contratos eventuales sin legajo en Visual. Cada persona sale con la línea tal cual vino de ARCA. Si a alguien le falta, cargá en esta pantalla la consulta de ARCA más nueva donde figure.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input value={buscar} onChange={e => setBuscar(e.target.value)} placeholder="Buscar por nombre o CUIL" style={{ ...input, maxWidth: 280 }} />
+            <label style={{ fontSize: 13, color: '#94a3b8', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <input type="checkbox" checked={todas} onChange={e => setTodas(e.target.checked)} /> Ver también los que ya tienen legajo en Visual
+            </label>
+          </div>
+          <div style={{ overflowX: 'auto', marginTop: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+              <thead>
+                <tr style={{ fontSize: 12, color: '#64748b', textAlign: 'left' }}>
+                  <th></th><th style={{ padding: '0 6px' }}>Persona</th><th style={{ padding: '0 6px' }}>Modalidad</th><th style={{ padding: '0 6px' }}>Inicio</th>
+                  <th style={{ padding: '0 6px' }}>Fin</th><th style={{ padding: '0 6px' }}>En la app</th><th style={{ padding: '0 6px' }}>Legajo Visual</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibles.map(f => (
+                  <tr key={f.cuil} onClick={() => cambiar(f.cuil)} style={{ cursor: 'pointer' }}>
+                    <td style={celda}><input type="checkbox" checked={elegidas.has(f.cuil)} onChange={() => cambiar(f.cuil)} onClick={e => e.stopPropagation()} aria-label={`Incluir a ${f.apellido_nombre}`} /></td>
+                    <td style={celda}><b>{f.apellido_nombre}</b><div style={{ fontSize: 12, color: '#94a3b8' }}>CUIL {f.cuil}</div>{!f.linea_original && <div style={{ fontSize: 12, color: '#fbbf24' }}>Sin la línea original de ARCA: se arma con los datos guardados (sin retribución pactada). Volvé a cargar la consulta del {fechaCorta(f.consulta_fecha)} para que salga idéntica.</div>}</td>
+                    <td style={celda}>{f.modalidad ?? '—'}</td>
+                    <td style={celda}>{fechaCorta(f.fecha_inicio)}</td>
+                    <td style={celda}>{fechaCorta(f.fecha_fin)}</td>
+                    <td style={{ ...celda, color: '#94a3b8' }}>{f.empleado_id ? (f.estado_app ?? '—') : 'sin usuario'}</td>
+                    <td style={{ ...celda, color: f.legajo_visual ? '#e2e8f0' : '#fbbf24' }}>{f.legajo_visual || 'no tiene'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!visibles.length && <div style={{ color: '#94a3b8', fontSize: 13, padding: 8 }}>Nadie para mostrar.</div>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button type="button" disabled={!elegidas.size} onClick={descargar}
+              style={{ ...boton(), background: elegidas.size ? '#2563eb' : '#1e293b', border: 'none', color: '#fff', fontWeight: 800 }}>
+              Descargar .txt ({elegidas.size} {elegidas.size === 1 ? 'persona' : 'personas'})
+            </button>
+            {elegidas.size > 0 && <button type="button" style={boton()} onClick={() => setElegidas(new Set())}>Desmarcar todas</button>}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function DiferenciasArca() {
   const [filas, setFilas] = useState<Diferencia[] | null>(null)
   const [resumen, setResumen] = useState<ResumenDiferencias | null>(null)
@@ -217,6 +317,7 @@ export default function DiferenciasArca() {
           <div style={{ fontSize: 12.5, color: '#64748b', marginTop: 2 }}>Anteriores: {resumen.consultas.slice(1).map(c => `${fechaCorta(c.fecha)} (${c.relaciones})`).join(' · ')}</div>
         )}
         <CargarConsulta onCargada={() => void cargar()} />
+        <ArchivoParaVisual key={`${resumen?.consulta ?? ''}:${resumen?.relaciones ?? 0}`} />
       </div>
 
       <div style={{ fontSize: 16, fontWeight: 800, color: '#e2e8f0', margin: '16px 0 6px' }}>Contratos con fecha de fin ({cuenta('contrato_con_fin')})</div>

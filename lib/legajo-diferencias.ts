@@ -11,6 +11,7 @@
  */
 
 import { supabase } from '@/lib/supabase'
+import type { RelacionGuardada } from '@/lib/arca-txt-visual'
 
 export type TipoDiferencia =
   | 'contrato_con_fin' | 'activo_sin_relacion' | 'relacion_sin_usuario' | 'sin_cuil'
@@ -53,7 +54,11 @@ export const ORDEN_TIPOS: TipoDiferencia[] = [
 ]
 
 // ── Lectura del archivo de ARCA (ancho fijo) ─────────────────────────────────
-export interface RelacionArca { cuil: string; nombre: string; modalidad: string | null; inicio: string; fin: string | null; baja: string | null; obra_social: string | null }
+export interface RelacionArca {
+  cuil: string; nombre: string; modalidad: string | null; inicio: string; fin: string | null; baja: string | null; obra_social: string | null
+  /** La línea tal cual vino de ARCA: se guarda para regenerar el .txt idéntico (Importar AFIP de Visual). */
+  linea?: string
+}
 
 const COLUMNAS = ['CUIL', 'APELLIDO Y NOMBRE', 'OBRA SOCIAL', 'MODAL. CONTRATO', 'ACTIVIDAD LABORAL', 'PUESTO DESEMP.', 'RETRIB. PACTADA', 'MOD. LIQ.',
   'TRAB. AGROP.', 'FECHA INICIO', 'FECHA DE FIN', 'SITUACION De BAJA', 'CONVENIO COLECTIVO', 'CATEGORIA', 'TIPO SERVICIO'] as const
@@ -78,7 +83,7 @@ export function leerConsultaArca(texto: string): { filas: RelacionArca[]; error:
     if (!/^\d{11}$/.test(cuil) || !inicio) return { filas: [], error: `Fila ilegible: ${l.slice(0, 40)}…` }
     filas.push({
       cuil, nombre: col(1).replace(/\s+/g, ' '), modalidad: col(3) || null, inicio, fin: fechaIso(col(10)),
-      baja: col(11) || null, obra_social: col(2) || null,
+      baja: col(11) || null, obra_social: col(2) || null, linea: l,
     })
   }
   if (!filas.length) return { filas: [], error: 'El archivo no tiene relaciones laborales' }
@@ -173,6 +178,18 @@ export async function cargarResumen(): Promise<{ resumen: ResumenDiferencias | n
 export async function revisarDiferencia(clave: string, nota: string): Promise<string | null> {
   const { error } = await supabase.rpc('legajo_diferencia_revisar', { p_clave: clave, p_nota: nota })
   return errorTexto(error)
+}
+
+/** Última relación de cada CUIL en las consultas de ARCA cargadas (para generar el .txt de Visual). */
+export interface RelacionCargada extends RelacionGuardada {
+  cuil: string; apellido_nombre: string; obra_social: string | null; modalidad: string | null; fecha_inicio: string; fecha_fin: string | null
+  situacion_baja: string | null; consulta_fecha: string; linea_original: string | null
+  empleado_id: string | null; estado_app: string | null; legajo_visual: string | null
+}
+
+export async function relacionesParaVisual(): Promise<{ filas: RelacionCargada[]; error: string | null }> {
+  const { data, error } = await supabase.rpc('arca_relaciones_para_visual')
+  return { filas: (data ?? []) as RelacionCargada[], error: errorTexto(error) }
 }
 
 /**
