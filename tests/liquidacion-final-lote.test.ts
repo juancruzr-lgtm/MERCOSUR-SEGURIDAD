@@ -99,12 +99,12 @@ describe('Excel de trabajo de todas las finales', () => {
 
     ws.getCell(`H${fila(ws, '203')}`).value = 'Viático acordado'
     const libre = fila(ws, 'TOTAL') - 1
-    ws.getCell(`A${libre}`).value = '217'; ws.getCell(`D${libre}`).value = 8386.03; ws.getCell(`H${libre}`).value = 'Aprobado por Gerencia'
+    ws.getCell(`A${libre}`).value = '204'; ws.getCell(`D${libre}`).value = 1000; ws.getCell(`H${libre}`).value = 'Aprobado por Gerencia'
     d = diferenciasDeHoja(leerHojasLiquidacionFinal(wb)[1], guardado(paniagua), paniagua.lineas)
     expect(d.errores).toEqual([])
     expect(d.entradas!.ajustes).toEqual([
       { codigo: '203', cantidad: null, importe: 100000, motivo: 'Viático acordado' },
-      { codigo: '217', cantidad: 1, importe: 8386.03, motivo: 'Aprobado por Gerencia' },
+      { codigo: '204', cantidad: 1, importe: 1000, motivo: 'Aprobado por Gerencia' },
     ])
   }, 60000)
 
@@ -182,7 +182,7 @@ describe('EXPORTAR LIQUIDACIONES FINALES', () => {
     const XLSX: any = await import('xlsx')
     const filas: any[][] = XLSX.utils.sheet_to_json(XLSX.read(r.bytes, { type: 'array' }).Sheets.Hoja1, { header: 1, raw: true, defval: null }).slice(2)
     expect(new Set(filas.map(f => f[1]))).toEqual(new Set(['20441767871']))
-    expect(filas.map(f => f[2])).toEqual(['000', '001', '120003', '203', '208', '212', '214'])
+    expect(filas.map(f => f[2])).toEqual(['000', '001', '120003', '203', '208', '212', '214', '217'])
   }, 60000)
 
   it('importa el resultado de Visual para todas las exportadas que figuran en la planilla', async () => {

@@ -19,9 +19,9 @@
 //    regla de conteo de la planilla de JC («calculo liq»: días = baja − 01/07).
 //    Se muestra al lado el control con la mejor remuneración del semestre según
 //    Visual (base legal), sin reemplazar la regla: la diferencia queda a revisión.
-//  · 217 SAC sobre vacaciones no gozadas: NO se agrega solo (no figura en los
-//    recibos 15263/15264). Se calcula como SUGERENCIA (básico/365 × días) y entra
-//    sólo si Administración lo incorpora con un ajuste y motivo.
+//  · 217 SAC sobre vacaciones no gozadas: básico/365 × días de 208. Va SIEMPRE que
+//    haya vacaciones no gozadas (decisión JC 20/10, como su planilla); si en un caso
+//    no corresponde, se quita con un ajuste (importe 0 y motivo).
 //  · 204 Presentismo: según la causal (catálogo baja_causa). En una RENUNCIA que
 //    no completa el mes, cero con motivo; las demás mantienen la fórmula mensual.
 //  · Conceptos propios de la causal (indemnización, preaviso, integración…): se
@@ -37,7 +37,7 @@
 //    120003 CAN*IMP → Cantidad 1 · Importe = total   (así salió en ambos recibos)
 //    208    CAN*IMP → Cantidad = días · Importe = valor día (14 × 40.812; 3 × 40.812)
 //    212    CAN*IMP → Cantidad 1 · Importe = total   (Paniagua 1 × 35.000)
-//    217    IMP     → Importe = total (sólo si se incorpora con un ajuste)
+//    217    IMP     → Cantidad 1 · Importe = total
 //    ordinarios     → la práctica mensual vigente: Cantidad 1 · Importe = total
 //                     (000 DÍAS va como cantidad).
 
@@ -374,10 +374,11 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
           codigo: '208', concepto: NOMBRES['208'], entrada: 'CANIMP', cantidad: noGozadas, importe: redondear(valorDia), total: t208,
           detalle: { origen: 'final', formula: '(saldo − tomadas) × valor día (C3 = básico/200×8)', base: { saldo, tomadas, valorDia: redondear(valorDia) } },
         })
-        sugerencias.push({
-          codigo: '217', concepto: NOMBRES['217'], total: totalSACVacaciones(basico, noGozadas),
-          formula: `básico/365 × ${noGozadas} días de vacaciones no gozadas`,
-          motivo: 'No figura en los recibos de referencia: se incorpora sólo con un ajuste aprobado.',
+        // 217 siempre (decisión JC 20/10); si no corresponde, se quita con un ajuste (importe 0 y motivo).
+        const t217 = totalSACVacaciones(basico, noGozadas)
+        lineas.push({
+          codigo: '217', concepto: NOMBRES['217'], entrada: 'IMP', cantidad: 1, importe: t217, total: t217,
+          detalle: { origen: 'final', formula: 'básico/365 × días de vacaciones no gozadas', base: { basico, dias: noGozadas } },
         })
       }
     }

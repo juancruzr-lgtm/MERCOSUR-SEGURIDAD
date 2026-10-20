@@ -135,7 +135,7 @@ describe.each(VARIANTES)('calcularLiquidacionFinal — caso Fulla ($conteo, baja
   const r = calcularLiquidacionFinal(datos({ baja: { fecha: fulla } }, conteo))
   it('sin faltantes y con los conceptos finales', () => {
     expect(r.faltantes).toEqual([])
-    expect(r.lineas.map(l => l.codigo)).toEqual(['120003', '208'])
+    expect(r.lineas.map(l => l.codigo)).toEqual(['120003', '208', '217'])
   })
   it('120003 va como Cantidad 1 × total (así salió en el recibo) con 91 días en el detalle', () => {
     expect(linea(r, '120003')).toMatchObject({ cantidad: 1, importe: 190782.12, total: 190782.12 })
@@ -145,14 +145,14 @@ describe.each(VARIANTES)('calcularLiquidacionFinal — caso Fulla ($conteo, baja
   it('208 va como Cantidad = días × Importe = valor día (14 × 40.812 = 571.368, igual al recibo)', () => {
     expect(linea(r, '208')).toMatchObject({ cantidad: 14, importe: 40812, total: 571368 })
   })
-  it('217 NO se agrega solo (no figura en los recibos): queda como sugerencia de $39.134,79', () => {
-    expect(linea(r, '217')).toBeUndefined()
-    expect(r.calculo.sugerencias).toEqual([expect.objectContaining({ codigo: '217', total: 39134.79 })])
+  it('217 va siempre (decisión JC 20/10): básico/365 × 14 = $39.134,79, como importe total', () => {
+    expect(linea(r, '217')).toMatchObject({ entrada: 'IMP', cantidad: 1, importe: 39134.79, total: 39134.79 })
+    expect(r.calculo.sugerencias).toEqual([])
   })
-  it('217 entra sólo si se incorpora con un ajuste y motivo', () => {
-    const d = calcularLiquidacionFinal(datos({ baja: { fecha: fulla }, entradas: { vacaciones: { saldoDias: 14, tomadasDias: 0 }, ajustes: [{ codigo: '217', cantidad: 1, importe: 39134.79, motivo: 'Aprobado por Gerencia' }] } }, conteo))
-    expect(linea(d, '217')).toMatchObject({ entrada: 'IMP', cantidad: 1, importe: 39134.79, total: 39134.79 })
-    expect(linea(d, '217')!.detalle.ajuste?.motivo).toBe('Aprobado por Gerencia')
+  it('217 se quita con un ajuste (importe 0 y motivo), que queda registrado', () => {
+    const d = calcularLiquidacionFinal(datos({ baja: { fecha: fulla }, entradas: { vacaciones: { saldoDias: 14, tomadasDias: 0 }, ajustes: [{ codigo: '217', importe: 0, motivo: 'No corresponde en este caso' }] } }, conteo))
+    expect(linea(d, '217')).toBeUndefined()
+    expect(d.advertencias.join(' ')).toMatch(/Ajuste manual 217: No corresponde en este caso/)
   })
   it('sin jornadas en el mes: no inventa 000 ni ordinarios y lo avisa', () => {
     expect(linea(r, '000')).toBeUndefined()
@@ -174,6 +174,7 @@ describe.each(VARIANTES)('calcularLiquidacionFinal — caso Paniagua ($conteo, b
       '208': [3, 40812, 122436],
       '212': [1, 35000, 35000],
       '214': [1, 7200, 7200],
+      '217': [1, 8386.03, 8386.03],
     })
   })
   it('presentismo en cero por renuncia que no completa el mes, con motivo registrado', () => {
@@ -379,7 +380,7 @@ describe('archivos: Excel de trabajo y .xls de Visual desde el mismo cálculo', 
     const ws = wb.Sheets.Hoja1
     const filas: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null }).slice(2)
     const porCodigo = Object.fromEntries(filas.map(f => [f[2], f]))
-    expect(Object.keys(porCodigo).sort()).toEqual(['000', '001', '120003', '203', '208', '212', '214'])
+    expect(Object.keys(porCodigo).sort()).toEqual(['000', '001', '120003', '203', '208', '212', '214', '217'])
     expect(porCodigo['000']).toEqual(['010 Bis', '20441767871', '000', 6, null, null, 'PANIAGUA EDGAR IVAN'])
     expect(porCodigo['208'].slice(3, 5)).toEqual([3, 40812])
     expect(porCodigo['120003'].slice(3, 5)).toEqual([1, 129983.42])
@@ -487,7 +488,7 @@ describe('jornadas efectivamente trabajadas (Paniagua: baja 03/10, trabajó hast
     expect(r.faltantes).toEqual([])
     expect(r.calculo.fechas.diasSAC).toBe(62)
     expect(Object.fromEntries(r.lineas.map(l => [l.codigo, l.total]))).toEqual({
-      '000': 0, '001': 244872, '120003': 129983.42, '203': 123480, '208': 122436, '212': 35000, '214': 7200,
+      '000': 0, '001': 244872, '120003': 129983.42, '203': 123480, '208': 122436, '212': 35000, '214': 7200, '217': 8386.03,
     })
     expect(r.lineas.find(l => l.codigo === '000')!.cantidad).toBe(6)
   })

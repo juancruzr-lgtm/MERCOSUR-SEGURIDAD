@@ -97,7 +97,7 @@ Básico 1.020.300 · valor día C3 = básico/200×8 = 40.812 · hora extra 2.500
 | 120003 | (básico/200×150)/365 × días. Días = baja − inicio, con inicio = 1/1 o 1/7, o el ingreso si es posterior. Regla de la hoja «calculo liq». | 1 × total (como en los recibos). |
 | 208 | (devengadas − tomadas confirmadas en la baja) × valor día. | Días × 40.812. |
 | 212 | Horas excedentes × hora extra − extras ya pagadas por banco. | 1 × total. |
-| 217 | **No se agrega solo** (no figura en los recibos). Se calcula como sugerencia (básico/365 × días) y entra sólo con un ajuste con motivo. | Importe. |
+| 217 | básico/365 × días de 208. **Va siempre** que haya vacaciones no gozadas (decisión JC 20/10). Si no corresponde, se quita con un ajuste: importe 0 y motivo. | 1 × total. |
 | Causal | Despido sin causa: indemnización (207), preaviso (252) e integración del mes quedan **a evaluar**: bloquean hasta resolverlos («incluido» con un ajuste, o «no corresponde» con motivo). | |
 
 Control del SAC con la base legal: la mejor remuneración imponible del semestre según los resultados de Visual importados. Se muestra al lado y avisa la diferencia, sin reemplazar la regla.

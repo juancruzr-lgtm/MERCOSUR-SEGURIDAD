@@ -48,6 +48,7 @@ const CATALOGO = new Map<string, ConceptoCatalogo>([
   ['208', { politica: 'valor', entrada: 'CANIMP', nombre: 'Vac No Goz', tipo_visual: 'Asignacion/Creditos' }],
   ['204', { politica: 'valor', entrada: 'IMP', nombre: 'presentismo', tipo_visual: 'Asignacion/Creditos' }],
   ['207', { politica: 'valor', entrada: 'IMP', nombre: 'Indem por Antig', tipo_visual: 'Asignacion/Creditos' }],
+  ['217', { politica: 'valor', entrada: 'IMP', nombre: 'sac sobre vacaciones no goz', tipo_visual: 'No Remunerativo' }],
 ])
 const CAUSALES: Record<string, ReglaCausal> = {
   renuncia: { codigo: 'renuncia', nombre: 'Renuncia', presentismo: 'cero_si_no_completa_mes', evaluar: [] },
