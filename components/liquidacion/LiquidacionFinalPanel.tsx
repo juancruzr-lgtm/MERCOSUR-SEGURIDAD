@@ -11,6 +11,7 @@ import {
   calcularYGuardar, conciliacionFinal, excelDeFinal, exportarFinal, historialDeFinal, importarResultadoFinal,
   leerFinal, lineasDeFinal, listarFinales, type FinalFila,
 } from '@/lib/liquidacion-final-datos'
+import LoteLiquidacionesFinales from '@/components/liquidacion/LoteLiquidacionesFinales'
 
 const S: Record<string, React.CSSProperties> = {
   card: { background: '#0f1629', border: '1px solid #1e293b', borderRadius: 10, padding: 16, marginBottom: 16 },
@@ -79,6 +80,8 @@ export default function LiquidacionFinalPanel() {
           Revisalo, resolvé los pendientes, marcalo como listo y generá el archivo de Visual. Nada se paga, exporta ni cierra solo.
         </div>
       </div>
+
+      <LoteLiquidacionesFinales finales={finales} onCambio={() => void cargar()} />
 
       {msg && <div style={{ ...(msg.ok ? S.ok : S.err), marginBottom: 10 }}>{msg.t}</div>}
       {ocupado === 'calculo' && <div style={{ ...S.sub, marginBottom: 10 }}>Calculando borradores nuevos…</div>}

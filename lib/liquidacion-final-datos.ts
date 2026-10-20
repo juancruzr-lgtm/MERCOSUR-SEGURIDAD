@@ -13,6 +13,7 @@ import {
 } from '@/lib/liquidacion-final'
 import { cargarParametrosDelMes, plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
 import { parsearPlanillaVisual, type CeldaVisual } from '@/lib/liquidacion-visual'
+import { diferenciasDeHoja, leerHojasLiquidacionFinal, type DiferenciasHoja } from '@/lib/liquidacion-final-lote'
 
 /** Fila de baja_laboral (el registro de baja único). */
 export interface BajaFila {
@@ -202,10 +203,15 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
 
   // Vacaciones: las confirmadas en el registro de baja (no se piden de nuevo acá).
   const v = b.vacaciones
-  const vacaciones = v && v.verificadas
-    ? { saldoDias: v.devengadas ?? null, tomadasDias: v.tomadas ?? null, nota: v.nota ?? `método ${v.metodo ?? 'empresa'}` }
-    : undefined
-  if (!vacaciones) avisos.push('Las vacaciones no se confirmaron en el registro de baja: 208 queda pendiente.')
+  // Si se completaron después (Excel de trabajo o pantalla), mandan esas; si no, las
+  // confirmadas en la baja. Sin ninguna, 208 queda pendiente (nunca se asume cero).
+  const e = f.entradas?.vacaciones
+  const vacaciones = e && e.saldoDias != null && e.tomadasDias != null
+    ? { saldoDias: e.saldoDias, tomadasDias: e.tomadasDias, nota: e.nota ?? 'cargadas después de la baja' }
+    : v && v.verificadas
+      ? { saldoDias: v.devengadas ?? null, tomadasDias: v.tomadas ?? null, nota: v.nota ?? `método ${v.metodo ?? 'empresa'}` }
+      : undefined
+  if (!vacaciones) avisos.push('Faltan las vacaciones (no se confirmaron en la baja ni se cargaron después): 208 queda pendiente.')
 
   const controlSAC = b.fecha_baja && p.cuil ? await mejorRemuneracionSemestre(client, p.cuil, b.fecha_baja) : null
 
@@ -345,4 +351,124 @@ export async function importarResultadoFinal(client: any, f: FinalFila, archivo:
 export async function conciliacionFinal(client: any, finalId: string) {
   const { data, error } = await client.rpc('liquidacion_final_conciliacion', { p_final_id: finalId })
   return { data: (data ?? []) as { codigo: string; entrada: string | null; cantidad_enviada: number | null; total_enviado: number | null; cantidad_visual: number | null; importe_visual: number | null; estado: string }[], error: error?.message ?? null }
+}
+
+// ── Lote: todas las finales a la vez (Excel de trabajo ida y vuelta + Visual) ──
+
+/** Excel de trabajo con todas las finales indicadas (una hoja por persona). */
+export async function excelDeLote(client: any, finales: FinalFila[]): Promise<{ buf: ArrayBuffer | null; nombre: string; error: string | null }> {
+  const items = []
+  for (const f of finales) {
+    if (!f.calculo) continue
+    const { data: lineas, error } = await lineasDeFinal(client, f.id)
+    if (error) return { buf: null, nombre: '', error }
+    const p = await persona(client, f.baja)
+    items.push({
+      cab: { finalId: f.id, version: f.version, nombre: p.nombre, cuil: p.cuil, legajoVisual: p.legajoVisual, causa: f.calculo.causal?.nombre ?? f.baja.causa, fuente: f.baja.origen, visualPeriodo: f.calculo.visualPeriodo },
+      res: { lineas: lineas as any, faltantes: f.faltantes, advertencias: f.advertencias, calculo: f.calculo },
+      estado: f.estado, fechaBaja: f.baja.fecha_baja,
+    })
+  }
+  if (!items.length) return { buf: null, nombre: '', error: 'No hay liquidaciones finales calculadas para bajar.' }
+  const { escribirLibroLiquidacionesFinales } = await import('@/lib/liquidacion-final-excel')
+  const hoy = new Date().toISOString().slice(0, 10)
+  return { buf: await escribirLibroLiquidacionesFinales(items), nombre: `liquidaciones_finales_${hoy}.xlsx`, error: null }
+}
+
+export type DiferenciaLote = DiferenciasHoja & { persona?: string | null }
+
+/** Lee el Excel de trabajo devuelto y arma las diferencias por persona (no guarda nada). */
+export async function analizarExcelLote(client: any, buf: ArrayBuffer): Promise<{ diferencias: DiferenciaLote[]; error: string | null }> {
+  const ExcelJS = (await import('exceljs')).default
+  const wb = new ExcelJS.Workbook()
+  await wb.xlsx.load(buf)
+  const hojas = leerHojasLiquidacionFinal(wb)
+  if (!hojas.length) return { diferencias: [], error: 'El archivo no tiene hojas de liquidación final (bajalo desde Liquidaciones finales).' }
+  const diferencias: DiferenciaLote[] = []
+  for (const h of hojas) {
+    const { data: f } = await leerFinal(client, h.finalId)
+    if (!f) { diferencias.push({ hoja: h.hoja, finalId: h.finalId, version: h.version, cambios: [], errores: ['No se encontró esa liquidación final (¿anulada?).'], entradas: null }); continue }
+    const { data: lineas } = await lineasDeFinal(client, f.id)
+    diferencias.push({
+      ...diferenciasDeHoja(h, {
+        version: f.version, estado: f.estado, entradas: f.entradas ?? {},
+        vacaciones: { saldo: f.calculo?.vacaciones.saldo ?? null, tomadas: f.calculo?.vacaciones.tomadas ?? null },
+        visualPeriodo: f.calculo?.visualPeriodo ?? f.entradas?.visualPeriodo ?? null,
+      }, lineas as any),
+      persona: f.baja.nombre,
+    })
+  }
+  return { diferencias, error: null }
+}
+
+/** Aplica las diferencias sin errores: guarda entradas (con control de versión) y recalcula. */
+export async function aplicarDiferenciasLote(client: any, diferencias: { finalId: string; version: number; entradas: EntradasFinal | null }[]) {
+  const resultado: { finalId: string; ok: boolean; error: string | null }[] = []
+  for (const d of diferencias) {
+    if (!d.entradas) continue
+    const { error } = await client.rpc('liquidacion_final_guardar_entradas', { p_final_id: d.finalId, p_entradas: d.entradas, p_version: d.version })
+    if (error) { resultado.push({ finalId: d.finalId, ok: false, error: error.message }); continue }
+    const { data: f } = await leerFinal(client, d.finalId)
+    const r = f ? await calcularYGuardar(client, f) : { error: 'No se pudo releer' }
+    resultado.push({ finalId: d.finalId, ok: !r.error, error: r.error ?? null })
+  }
+  return resultado
+}
+
+/** Aprueba (marca lista) los borradores calculados sin pendientes. */
+export async function aprobarSinPendientes(client: any, finales: FinalFila[]) {
+  const out: { finalId: string; ok: boolean; error: string | null }[] = []
+  for (const f of finales.filter(x => x.estado === 'borrador' && !x.requiere_recalculo && (x.faltantes?.length ?? 0) === 0)) {
+    const { error } = await client.rpc('liquidacion_final_marcar_lista', { p_final_id: f.id, p_version: f.version })
+    out.push({ finalId: f.id, ok: !error, error: error?.message ?? null })
+  }
+  return out
+}
+
+/**
+ * EXPORTAR LIQUIDACIONES FINALES: un solo .xls de Visual con las personas
+ * indicadas (aprobadas, o ya exportadas para volver a bajarlo). Cada una se
+ * registra con su hash de contenido (las mismas reglas de doble pago que el
+ * individual); las rechazadas no entran al archivo y se informan.
+ */
+export async function exportarLote(client: any, finales: FinalFila[]): Promise<{ bytes: Uint8Array | null; nombre: string; incluidas: string[]; rechazadas: { persona: string; error: string }[] }> {
+  const hoy = new Date().toISOString().slice(0, 10)
+  const nombre = `visual_liquidaciones_finales_${hoy}.xls`
+  const incluidas: string[] = []
+  const rechazadas: { persona: string; error: string }[] = []
+  const filas: ReturnType<typeof filasVisualFinal> = []
+  for (const f of finales.filter(x => ['lista', 'exportada'].includes(x.estado))) {
+    const quien = f.baja.nombre ?? f.baja.cuil ?? f.id
+    const { data: lineas, error } = await lineasDeFinal(client, f.id)
+    if (error || !lineas.length) { rechazadas.push({ persona: quien, error: error ?? 'sin conceptos' }); continue }
+    const p = await persona(client, f.baja)
+    if (!p.cuil || !p.legajoVisual) { rechazadas.push({ persona: quien, error: 'falta CUIL o legajo de Visual' }); continue }
+    const propias = filasVisualFinal(lineas as any, p)
+    const hash = await sha256Hex(jsonEstable(propias))
+    const { error: e } = await client.rpc('liquidacion_final_exportar', { p_final_id: f.id, p_version: f.version, p_archivo: nombre, p_hash: hash })
+    if (e) { rechazadas.push({ persona: quien, error: e.message }); continue }
+    filas.push(...propias)
+    incluidas.push(quien)
+  }
+  if (!filas.length) return { bytes: null, nombre, incluidas, rechazadas }
+  const { escribirLibroVisualXls } = await import('@/lib/visual-export')
+  return { bytes: await escribirLibroVisualXls(filas), nombre, incluidas, rechazadas }
+}
+
+/** Reimporta la Planilla de Sueldos de Visual para todas las finales exportadas que figuran en el archivo. */
+export async function importarResultadoLote(client: any, finales: FinalFila[], archivo: string, buf: ArrayBuffer) {
+  const XLSX: any = await import('xlsx')
+  const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
+  const grid: CeldaVisual[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null })
+  const hash = await sha256Hex(buf)
+  const out: { persona: string; ok: boolean; detalle: string }[] = []
+  for (const f of finales.filter(x => x.estado === 'exportada')) {
+    const p = await persona(client, f.baja)
+    if (!p.cuil) continue
+    const r = conceptosDePersona(grid, p.cuil)
+    if (r.error) { if (!/no trae/.test(r.error)) out.push({ persona: p.nombre, ok: false, detalle: r.error }); continue }
+    const { data, error } = await client.rpc('liquidacion_final_importar_resultado', { p_final_id: f.id, p_archivo: archivo, p_hash: hash, p_conceptos: r.conceptos })
+    out.push({ persona: p.nombre, ok: !error, detalle: error ? error.message : (data as any)?.repetido ? 'ya estaba importado' : `versión ${(data as any)?.version}` })
+  }
+  return out
 }

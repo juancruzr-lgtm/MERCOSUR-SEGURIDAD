@@ -5,7 +5,11 @@
 // líneas de 120003/208/217/212 (revisables y editables en Excel), ordinarios con
 // su base, ajustes manuales con motivo y la lista de faltantes. Cada fórmula
 // lleva el resultado calculado, así el archivo muestra importes sin recalcular.
-// Es para revisar: Visual se alimenta con el .xls que genera la app.
+// Es para revisar y COMPLETAR: se puede bajar una o todas las finales (una hoja
+// por persona), cargar lo que falte y volver a subirlo (lib/liquidacion-final-lote).
+// Celdas editables: B12/B13 (vacaciones), B19 (período de Visual) y, en las
+// líneas, Cantidad/Importe con el motivo en la columna H. Visual se alimenta con
+// el .xls que genera la app desde el mismo cálculo.
 
 import type { ResultadoLiquidacionFinal, LineaFinal } from '@/lib/liquidacion-final'
 
@@ -22,7 +26,9 @@ export interface CabeceraExcelFinal {
 
 const FMT_MONEY = '#,##0.00'
 const FMT_FECHA = 'dd/mm/yyyy'
-const FILA_ENCABEZADO = 21
+export const FILA_ENCABEZADO = 21
+/** Filas vacías antes de TOTAL para agregar conceptos a mano (código + cantidad/importe + motivo). */
+export const FILAS_LIBRES = 3
 
 const fechaUTC = (iso: string | null) => (iso ? new Date(`${iso}T00:00:00Z`) : null)
 
@@ -45,7 +51,52 @@ export async function escribirExcelLiquidacionFinal(
   const ExcelJS = (await import('exceljs')).default
   const wb = new ExcelJS.Workbook()
   wb.calcProperties.fullCalcOnLoad = true
-  const ws = wb.addWorksheet('Liquidación final')
+  agregarHojaLiquidacionFinal(wb.addWorksheet('Liquidación final'), cab, res)
+  return (await wb.xlsx.writeBuffer()) as ArrayBuffer
+}
+
+/** Nombre de hoja válido y único (Excel: máx. 31 caracteres, sin []:*?/\). */
+export function nombreHoja(base: string, usados: Set<string>): string {
+  const limpio = (base.replace(/[\[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim() || 'Persona').slice(0, 28)
+  let n = limpio, i = 2
+  while (usados.has(n.toLowerCase())) n = `${limpio.slice(0, 25)} (${i++})`
+  usados.add(n.toLowerCase())
+  return n
+}
+
+/**
+ * Excel de trabajo con TODAS las finales indicadas: una hoja «Índice» y una hoja
+ * por persona con el mismo formato que el Excel individual.
+ */
+export async function escribirLibroLiquidacionesFinales(
+  items: { cab: CabeceraExcelFinal; res: ResultadoLiquidacionFinal; estado: string; fechaBaja: string | null }[],
+): Promise<ArrayBuffer> {
+  const ExcelJS = (await import('exceljs')).default
+  const wb = new ExcelJS.Workbook()
+  wb.calcProperties.fullCalcOnLoad = true
+  const indice = wb.addWorksheet('Índice')
+  indice.columns = [{ width: 34 }, { width: 14 }, { width: 12 }, { width: 18 }, { width: 12 }, { width: 16 }, { width: 30 }]
+  ;['Persona', 'CUIL', 'Baja', 'Estado', 'Pendientes', 'Total', 'Hoja'].forEach((t, i) => { const c = indice.getCell(1, i + 1); c.value = t; c.font = { bold: true } })
+  indice.getCell('I1').value = 'Completá en cada hoja lo que falte (vacaciones B12/B13, período B19, o Cantidad/Importe con motivo en H) y volvé a subir este archivo en Liquidaciones finales.'
+  const usados = new Set<string>(['índice'])
+  items.forEach((it, i) => {
+    const hoja = nombreHoja(it.cab.nombre, usados)
+    agregarHojaLiquidacionFinal(wb.addWorksheet(hoja), it.cab, it.res)
+    const r = i + 2
+    indice.getCell(r, 1).value = it.cab.nombre
+    const cuil = indice.getCell(r, 2); cuil.value = it.cab.cuil ?? ''; cuil.numFmt = '@'
+    indice.getCell(r, 3).value = it.fechaBaja ? new Date(`${it.fechaBaja}T00:00:00Z`) : null
+    indice.getCell(r, 3).numFmt = FMT_FECHA
+    indice.getCell(r, 4).value = it.estado
+    indice.getCell(r, 5).value = it.res.faltantes.length
+    indice.getCell(r, 6).value = it.res.calculo.total; indice.getCell(r, 6).numFmt = FMT_MONEY
+    indice.getCell(r, 7).value = { text: hoja, hyperlink: `#'${hoja}'!A1` } as any
+  })
+  return (await wb.xlsx.writeBuffer()) as ArrayBuffer
+}
+
+/** Escribe una liquidación final en una hoja (mismo formato para el individual y el lote). */
+export function agregarHojaLiquidacionFinal(ws: any, cab: CabeceraExcelFinal, res: ResultadoLiquidacionFinal): void {
   ws.columns = [
     { width: 30 }, { width: 34 }, { width: 12 }, { width: 16 }, { width: 16 }, { width: 46 }, { width: 12 }, { width: 40 },
     { width: 22 }, { width: 38, hidden: true },
@@ -85,7 +136,10 @@ export async function escribirExcelLiquidacionFinal(
   set('A17', 'Presentismo del mes (fórmula)'); set('B17', c.presentismo.calculado, FMT_MONEY)
   if (c.presentismo.motivo) set('C17', c.presentismo.motivo)
   set('A18', 'Mes de la baja'); set('B18', c.mes ?? '—')
-  for (let r = 3; r <= 18; r++) ws.getCell(`A${r}`).font = { bold: true }
+  set('A19', 'Período / tipo en Visual'); set('B19', c.visualPeriodo ?? null)
+  set('C19', 'Editables: B12, B13, B19 y Cantidad/Importe de las líneas (con motivo en H). Filas vacías antes de TOTAL: conceptos nuevos.')
+  for (let r = 3; r <= 19; r++) ws.getCell(`A${r}`).font = { bold: true }
+  for (const ref of ['B12', 'B13', 'B19']) ws.getCell(ref).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF7D6' } }
 
   // ── Líneas ──
   const enc = ['Código', 'Concepto', 'Cantidad', 'Importe a Visual', 'Total', 'Fórmula / base', 'Origen', 'Ajuste manual (motivo)', 'Tipo (Visual)']
@@ -109,8 +163,15 @@ export async function escribirExcelLiquidacionFinal(
     }
     r++
   }
+  // Filas libres para agregar conceptos a mano (se leen al volver a subir el archivo).
+  for (let i = 0; i < FILAS_LIBRES; i++, r++) {
+    ws.getCell(`A${r}`).numFmt = '@'
+    fx(`E${r}`, `IF(A${r}="","",ROUND(IF(C${r}="",1,C${r})*D${r},2))`, null, FMT_MONEY)
+    ws.getCell(`F${r}`).value = '(libre: código, cantidad, importe y motivo en H)'
+    ws.getCell(`F${r}`).font = { italic: true, color: { argb: 'FF94A3B8' } }
+  }
   set(`A${r}`, 'TOTAL').font = { bold: true }
-  fx(`E${r}`, res.lineas.length ? `SUM(E${primera}:E${r - 1})` : '0', c.total, FMT_MONEY).font = { bold: true }
+  fx(`E${r}`, `SUM(E${primera}:E${r - 1})`, c.total, FMT_MONEY).font = { bold: true }
   r += 2
 
   const lista = (titulo: string, items: string[]) => {
@@ -126,6 +187,4 @@ export async function escribirExcelLiquidacionFinal(
   if (c.controlSAC) lista('CONTROL SAC (base legal según Visual)', [`Mejor remuneración imponible del semestre (${c.controlSAC.mes}): ${c.controlSAC.mejorRemuneracion} → ${c.controlSAC.totalLegal} (diferencia ${c.controlSAC.diferencia})`])
   lista('ADVERTENCIAS Y AJUSTES', res.advertencias)
   lista('YA LIQUIDADO EN EL MES (enviado a Visual)', c.ya_liquidado.map(y => `${y.codigo}: cantidad ${y.cantidad ?? '—'} · importe ${y.importe ?? '—'}`))
-
-  return (await wb.xlsx.writeBuffer()) as ArrayBuffer
 }

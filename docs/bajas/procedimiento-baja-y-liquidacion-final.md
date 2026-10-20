@@ -41,6 +41,25 @@ Orden de desarrollo de JC del 20/10/2026. Migración `20261110120000_liquidacion
 
 Mientras la baja es **borrador**, el empleado no cambia de situación ni pierde el acceso.
 
+## Todas las finales juntas (lote)
+
+**Liquidación → Liquidaciones finales → «Todas las liquidaciones finales»** (`components/liquidacion/LoteLiquidacionesFinales.tsx`, `lib/liquidacion-final-lote.ts`):
+
+1. **Bajar Excel de trabajo**: un libro con un «Índice» y una hoja por persona, con las mismas fórmulas que el Excel individual.
+2. **Completar en Excel**:
+   - vacaciones (B12 devengadas, B13 tomadas: las dos o ninguna; vacías no se asumen cero);
+   - período de Visual (B19);
+   - cambios de Cantidad o Importe, con el motivo en la columna H;
+   - conceptos nuevos en las filas libres antes de TOTAL.
+3. **Subir Excel de trabajo**: la app muestra sólo lo que cambió y los problemas (falta motivo, código repetido, borrador que cambió después de bajarlo, liquidación ya exportada). Nada se guarda hasta **Aplicar cambios**; después recalcula cada borrador.
+4. **Aprobar sin pendientes**: marca listas las que quedaron completas.
+5. **EXPORTAR LIQUIDACIONES FINALES**:
+   - elegís a quiénes y sale un solo `.xls` de Visual con esos empleados de baja;
+   - cada uno se registra con las mismas reglas que el individual (sin duplicar; doble pago);
+   - el que no pasa queda afuera del archivo y se informa;
+   - volver a exportar una ya exportada sólo vuelve a bajar el archivo.
+6. **Importar resultado de Visual**: la Planilla de Sueldos se reimporta una vez y se carga a cada persona exportada que figure en ella. Después se concilia cada una.
+
 ## Estados separados
 
 | | Dónde | Valores |
