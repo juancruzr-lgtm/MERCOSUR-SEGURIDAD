@@ -466,11 +466,12 @@ export async function plantillaTrabajoDelMes(
     /** Textos a usar en vez de los guardados del período. */
     textos?: Map<string, Record<string, string | null>>
     /**
-     * Liquidación final por baja: sólo ese empleado y sólo hasta la fecha de baja
-     * (inclusive). Turnos, asistencias, guardias y supervisiones posteriores se
-     * descartan y las novedades se cortan en esa fecha. Mismas fórmulas del mes.
+     * Liquidación final por baja: sólo ese empleado. Turnos, asistencias, guardias
+     * y supervisiones se toman hasta `hasta` (inclusive); las novedades se cortan
+     * en `hastaNovedades` (o en `hasta`). Mismas fórmulas del mes: sólo suman
+     * las horas reconocidas, así que lo programado y no trabajado no cuenta.
      */
-    recorte?: { empleadoId: string; hasta: string }
+    recorte?: { empleadoId: string; hasta: string; hastaNovedades?: string }
   },
 ): Promise<PlantillaTrabajoResultado> {
   if (!/^\d{4}-\d{2}$/.test(mes)) return { plantilla: null, filas: 0, error: 'Mes inválido (esperado YYYY-MM).' }
@@ -519,9 +520,10 @@ export async function plantillaTrabajoDelMes(
     : null
   const turnosSrc = ((turnosR.data ?? []) as any[]).filter(t => !hastaRec || String(t.fecha) <= hastaRec)
   const registrosSrc = ((registrosR.data ?? []) as any[]).filter(r => !hastaRec || String(r.turno?.fecha ?? '') <= hastaRec)
+  const hastaNov = rec?.hastaNovedades ?? hastaRec
   const novedadesSrc = ((novedadesR.data ?? []) as any[])
-    .filter(n => !hastaRec || String(n.fecha_desde) <= hastaRec)
-    .map(n => (hastaRec && String(n.fecha_hasta) > hastaRec ? { ...n, fecha_hasta: hastaRec } : n))
+    .filter(n => !hastaNov || String(n.fecha_desde) <= hastaNov)
+    .map(n => (hastaNov && String(n.fecha_hasta) > hastaNov ? { ...n, fecha_hasta: hastaNov } : n))
   const supGuardiasSrc = ((supGuardiasR.data ?? []) as any[]).filter(g => !hastaRec || String(g.fecha) <= hastaRec)
   const supervisionesSrc = ((supervisionesR.data ?? []) as any[])
     .filter(sv => !finRecExclusivo || new Date(sv.created_at).getTime() < new Date(finRecExclusivo).getTime())

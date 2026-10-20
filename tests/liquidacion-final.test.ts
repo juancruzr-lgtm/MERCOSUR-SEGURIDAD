@@ -6,7 +6,7 @@ import {
 import { plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
 import { escribirExcelLiquidacionFinal } from '@/lib/liquidacion-final-excel'
 import { escribirLibroVisualXls } from '@/lib/visual-export'
-import { conceptosDePersona } from '@/lib/liquidacion-final-datos'
+import { conceptosDePersona, contextoDeFinal } from '@/lib/liquidacion-final-datos'
 
 // Referencias: recibos 15263 (Fulla) y 15264 (Paniagua) de la «Liq. Especial
 // SEPTIEMBRE 2026» y la Planilla de Sueldos de Visual que JC adjuntó (20/10).
@@ -423,5 +423,72 @@ describe('resultado de Visual (Planilla de Sueldos real de JC)', () => {
   })
   it('CUIL que no está en el archivo → error', () => {
     expect(conceptosDePersona(grid as any, '20285365814').error).toMatch(/no trae/)
+  })
+})
+
+// ── Regla JC 20/10: se liquidan las jornadas EFECTIVAMENTE trabajadas ─────────
+describe('jornadas efectivamente trabajadas (Paniagua: baja 03/10, trabajó hasta el 08/10)', () => {
+  const pan = { id: 'u-pan', nombre: 'EDGAR', apellido: 'PANIAGUA', rol: 'guardia', puesto_organizacional: 'vigilador', estado: 'activo', es_prueba: false, cuil: '20441767871', legajo: '44176787', legajo_visual: '010 Bis', cuenta_bancaria: null }
+  // Trabajadas: 01, 02, 04, 05, 07, 08 (62 h). El 10/10 estaba programado y NO se trabajó (sin registro).
+  const trabajadas = ['2026-10-01', '2026-10-02', '2026-10-04', '2026-10-05', '2026-10-07', '2026-10-08']
+  const horas = [12, 10, 10, 10, 10, 10]
+  const turnos = [...trabajadas, '2026-10-10'].map((f, i) => ({ id: `t${i}`, fecha: f, hora_inicio: '07:00', hora_fin: '19:00', objetivo_id: 'obj', estado: i < 6 ? 'cubierto' : 'programado', guardia_id: 'u-pan' }))
+  const registros = trabajadas.map((f, i) => ({ id: `r${i}`, turno_id: `t${i}`, guardia_id: 'u-pan', horas_liquidables: horas[i], turno: { fecha: f } }))
+  const licencia = { id: 'n1', empleado_id: 'u-pan', tipo: 'licencia', fecha_desde: '2026-10-12', fecha_hasta: '2026-10-14', estado: 'aprobada' }
+  const base = {
+    usuarios: [pan], objetivos: [{ id: 'obj', nombre: 'CLUB', es_prueba: false }], supervisor_zonas: [], nocturnidad_empleado_objetivo: [],
+    turnos, registros_asistencia: registros, supervisores_guardia: [], supervisiones: [],
+    liquidacion_sueldo_mensual: [], liquidacion_extra_mensual: [], liquidacion_parametro_mes: [],
+  }
+
+  it('la planilla del mes cuenta las 6 trabajadas (no el turno programado) y corta las novedades en la fecha efectiva', async () => {
+    const r = await plantillaTrabajoDelMes(fakeClient({ ...base, novedades_laborales: [licencia] }), '2026-10', undefined,
+      { recorte: { empleadoId: 'u-pan', hasta: '2026-10-31', hastaNovedades: '2026-10-03' } })
+    expect(r.resumen!.filas[0].jornadasReales).toBe(6)
+    const o = ordinariosDePlantilla(r.plantilla!, 'u-pan')!
+    const imp = Object.fromEntries(o.conceptos.map(c => [c.codigo, Math.round(c.importe * 100) / 100]))
+    expect(imp).toMatchObject({ '001': 244872, '203': 123480, '214': 7200, '204': 43200 })
+    expect(imp['888']).toBeUndefined()   // la licencia del 12/10 es posterior a la baja: no suma
+    expect(o.horasExtra).toBe(14)
+  })
+
+  it('de punta a punta: contexto + cálculo reproducen el recibo 15264 y avisan las jornadas posteriores', async () => {
+    const tablas: Record<string, any[]> = {
+      ...base, novedades_laborales: [], liquidacion_persona: [{ cod_interno: '010 Bis', nombre: 'PANIAGUA EDGAR IVAN' }],
+      liquidacion_periodo: [], liquidacion_ajuste: [],
+      baja_causa: [{ codigo: 'renuncia', nombre: 'Renuncia', presentismo: 'cero_si_no_completa_mes', evaluar: [] }],
+      liquidacion_concepto_catalogo: Array.from(CATALOGO.entries()).map(([codigo_visual, c]) => ({ codigo_visual, ...c })),
+      liquidacion_resultado_fila: [],
+    }
+    const b: any = (rows: any[]) => {
+      const q: any = {
+        select: () => q, order: () => q, eq: () => q, lte: () => q, gte: () => q, lt: () => q, gt: () => q, in: () => q, not: () => q, neq: () => q, limit: () => q,
+        range: (d: number, h: number) => Promise.resolve({ data: rows.slice(d, h + 1), error: null }),
+        maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+        then: (ok: any) => ok({ data: rows, error: null }),
+      }
+      return q
+    }
+    const client = {
+      from: (t: string) => b(tablas[t] ?? []),
+      rpc: (fn: string) => Promise.resolve({ data: fn === 'liquidacion_final_ya_liquidado' ? [] : 0, error: null }),
+    }
+    const f: any = {
+      id: 'f1', baja_id: 'b1', mes: '2026-10', estado: 'pendiente_calculo', version: 0, requiere_recalculo: true,
+      entradas: { visualPeriodo: 'Liq. Especial SEPTIEMBRE 2026' }, calculo: null, faltantes: [], advertencias: [],
+      baja: { id: 'b1', empleado_id: 'u-pan', nombre: 'PANIAGUA, EDGAR IVAN', cuil: '20441767871', fecha_ingreso: '2026-08-02', causa: 'renuncia',
+        fecha_baja: '2026-10-03', estado: 'confirmada', origen: 'legajo', vacaciones: { devengadas: 3, tomadas: 0, pendientes: 3, verificadas: true }, turnos_futuros: [] },
+    }
+    const ctx = await contextoDeFinal(client, f)
+    expect(ctx.error).toBeNull()
+    expect(ctx.datos!.ordinarios!.jornadas).toBe(6)
+    expect(ctx.avisos.join(' ')).toMatch(/Trabajó 4 jornadas después de la fecha efectiva \(03\/10\/2026\)/)
+    const r = calcularLiquidacionFinal(ctx.datos!)
+    expect(r.faltantes).toEqual([])
+    expect(r.calculo.fechas.diasSAC).toBe(62)
+    expect(Object.fromEntries(r.lineas.map(l => [l.codigo, l.total]))).toEqual({
+      '000': 0, '001': 244872, '120003': 129983.42, '203': 123480, '208': 122436, '212': 35000, '214': 7200,
+    })
+    expect(r.lineas.find(l => l.codigo === '000')!.cantidad).toBe(6)
   })
 })

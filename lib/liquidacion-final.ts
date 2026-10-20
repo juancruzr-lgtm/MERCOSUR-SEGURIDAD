@@ -6,9 +6,11 @@
 // armar el borrador, NO una validación normativa:
 //
 //  · Ordinarios pendientes (días, horas, feriados, licencias…): los mismos
-//    conceptos y fórmulas del Excel de trabajo mensual, recortados al empleado y
-//    hasta la fecha de baja. Se descuenta lo ya liquidado en el mes con registro
-//    verificable (lo enviado a Visual en un período exportado/liquidado).
+//    conceptos y fórmulas del Excel de trabajo mensual, sólo de esa persona. Se
+//    liquidan las jornadas EFECTIVAMENTE trabajadas del mes de la baja, aunque
+//    sean posteriores a la fecha efectiva (regla JC 20/10); las novedades se
+//    cortan en la fecha efectiva. Se descuenta lo ya liquidado en el mes con
+//    registro verificable (lo enviado a Visual en un período exportado/liquidado).
 //  · 208 Vacaciones no gozadas: días pendientes que Administración confirma en el
 //    registro de baja (devengadas − tomadas; lib/baja-vacaciones.ts) × valor día
 //    del Excel de trabajo (C3 = básico/200×8). Recibos de Fulla y Paniagua: 40.812
@@ -88,10 +90,10 @@ export interface OrdinarioMes {
 }
 
 export interface OrdinariosHastaBaja {
-  /** Fechas distintas trabajadas en el mes hasta la baja (000). */
+  /** Fechas distintas efectivamente trabajadas en el mes de la baja (000). */
   jornadas: number
   conceptos: OrdinarioMes[]
-  /** Horas excedentes del mes hasta la baja (columna AL). */
+  /** Horas excedentes del mes de la baja (columna AL). */
   horasExtra: number
   /** Extra fija mensual (BG) de un mensualizado; no se liquida sola. */
   extraFija?: number | null
@@ -296,7 +298,7 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
       if (ya > 0) advertencias.push(`000: ${ya} días ya enviados a Visual en el mes; quedan ${Math.max(0, pend)}.`)
       if (pend > 0) lineas.push({
         codigo: '000', concepto: NOMBRES['000'], entrada: 'CAN', cantidad: pend, importe: null, total: 0,
-        detalle: { origen: 'ordinario', formula: 'fechas distintas trabajadas hasta la baja', base: { jornadas: o.jornadas }, yaLiquidado: ya || null },
+        detalle: { origen: 'ordinario', formula: 'fechas distintas efectivamente trabajadas en el mes', base: { jornadas: o.jornadas }, yaLiquidado: ya || null },
       })
     }
     for (const c of o.conceptos) {
@@ -317,11 +319,11 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
       }
       const ya = Number(yaPorCodigo.get(codigo)?.importe ?? 0)
       const pend = redondear(importe - ya)
-      if (ya > 0 && pend < -TOL) advertencias.push(`${codigo}: ya se liquidaron $${ya} en el mes, más que lo que da la planilla hasta la baja ($${importe}). No se descuenta solo: revisar.`)
+      if (ya > 0 && pend < -TOL) advertencias.push(`${codigo}: ya se liquidaron $${ya} en el mes, más que lo que da la planilla del mes ($${importe}). No se descuenta solo: revisar.`)
       if (pend <= TOL) continue
       lineas.push({
         codigo, concepto: d.catalogo.get(codigo)?.nombre ?? codigo, entrada: 'IMP', cantidad: 1, importe: pend, total: pend,
-        detalle: { origen: 'ordinario', formula: c.base ?? 'Excel de trabajo del mes, hasta la baja', base: { calculado: importe, cantidad: c.cantidad ?? null }, yaLiquidado: ya || null },
+        detalle: { origen: 'ordinario', formula: c.base ?? 'Excel de trabajo del mes, jornadas trabajadas', base: { calculado: importe, cantidad: c.cantidad ?? null }, yaLiquidado: ya || null },
       })
     }
   }
@@ -389,7 +391,7 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
   if (d.ordinarios?.extraFija && d.ordinarios.extraFija > 0) {
     falta('extra_fija', `Tiene una extra fija mensual de $${d.ordinarios.extraFija}: definir con un ajuste si va en la final.`)
   }
-  if (pagado > bruto + TOL) advertencias.push(`Extras: ya se pagaron $${pagado} por banco, más que las ${horas} h del mes hasta la baja ($${bruto}).`)
+  if (pagado > bruto + TOL) advertencias.push(`Extras: ya se pagaron $${pagado} por banco, más que las ${horas} h del mes ($${bruto}).`)
   if (pendiente > 0) {
     if (lineas.some(l => l.codigo === '212')) {
       falta('conflicto_212', 'El 212 ya lleva el adicional mensual: las extras pendientes no pueden ir en la misma línea. Resolver con un ajuste.')

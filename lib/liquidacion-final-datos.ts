@@ -111,12 +111,29 @@ async function persona(client: any, baja: BajaFila): Promise<Persona> {
   return { cuil, legajoVisual, nombre: nombre || cuil || 'sin nombre', empleadoId: baja.empleado_id }
 }
 
-/** Ordinarios del mes hasta la baja: misma planilla del Excel de trabajo, recortada. */
+/** Último día del mes de una fecha ISO. */
+export const finDelMes = (iso: string) => new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)), 0)).toISOString().slice(0, 10)
+
+/**
+ * Ordinarios del mes de la baja: misma planilla del Excel de trabajo, sólo de esa
+ * persona. REGLA JC (20/10/2026): se liquidan las jornadas EFECTIVAMENTE
+ * trabajadas del mes, aunque sean posteriores a la fecha efectiva (caso
+ * Paniagua: baja 03/10, trabajó hasta el 08/10 y se pagan las 6 jornadas). Sólo
+ * cuentan las horas reconocidas: lo programado y no trabajado no suma. Las
+ * novedades (licencias, vacaciones, ART) se cortan en la fecha efectiva. SAC y
+ * vacaciones siguen usando la fecha efectiva.
+ */
 async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[]): Promise<OrdinariosHastaBaja | null> {
   const mes = fechaBaja.slice(0, 7)
-  const r = await plantillaTrabajoDelMes(client, mes, undefined, { recorte: { empleadoId, hasta: fechaBaja } })
+  const r = await plantillaTrabajoDelMes(client, mes, undefined, { recorte: { empleadoId, hasta: finDelMes(fechaBaja), hastaNovedades: fechaBaja } })
   if (r.error) { advertencias.push(`No se pudo armar la planilla del mes: ${r.error}`); return null }
   const fila = r.resumen?.filas.find(f => f.empleadoId === empleadoId)
+  if (fila && fechaBaja < finDelMes(fechaBaja)) {
+    const hastaBaja = await plantillaTrabajoDelMes(client, mes, undefined, { recorte: { empleadoId, hasta: fechaBaja } })
+    const antes = Number(hastaBaja.resumen?.filas.find(f => f.empleadoId === empleadoId)?.jornadasReales ?? 0)
+    const despues = Number(fila.jornadasReales ?? 0) - antes
+    if (despues > 0) advertencias.push(`Trabajó ${despues} jornada${despues === 1 ? '' : 's'} después de la fecha efectiva (${fechaBaja.split('-').reverse().join('/')}): se liquidan porque fueron efectivamente trabajadas. Verificar la fecha de baja.`)
+  }
   let base = { conceptos: [] as any[], horasExtra: 0, extraFija: null as number | null, sueldoFijo: false }
   if (r.plantilla) base = ordinariosDePlantilla(r.plantilla, empleadoId) ?? base
   const { data: inf } = await client.from('novedades_laborales').select('id')

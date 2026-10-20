@@ -73,7 +73,7 @@ Básico 1.020.300 · valor día C3 = básico/200×8 = 40.812 · hora extra 2.500
 
 | Código | Regla | A Visual |
 |---|---|---|
-| Ordinarios (000, 001, 203, 204, 214, 004, 006, 010, 205, 008…) | La misma planilla del Excel de trabajo mensual, recortada a la persona y hasta la fecha efectiva. Se descuenta lo ya enviado a Visual en períodos exportados. | Práctica mensual: 1 × total; 000 como cantidad. |
+| Ordinarios (000, 001, 203, 204, 214, 004, 006, 010, 205, 008…) | La misma planilla del Excel de trabajo mensual, sólo de la persona. **Sólo las jornadas efectivamente trabajadas** del mes de la baja, aunque sean posteriores a la fecha efectiva (regla JC 20/10; avisa para verificar la fecha). Las novedades se cortan en la fecha efectiva. Se descuenta lo ya enviado a Visual en períodos exportados. | Práctica mensual: 1 × total; 000 como cantidad. |
 | 204 | Según la causal. Renuncia que no completa el mes: 0, con motivo. | |
 | 120003 | (básico/200×150)/365 × días. Días = baja − inicio, con inicio = 1/1 o 1/7, o el ingreso si es posterior. Regla de la hoja «calculo liq». | 1 × total (como en los recibos). |
 | 208 | (devengadas − tomadas confirmadas en la baja) × valor día. | Días × 40.812. |
@@ -94,7 +94,7 @@ Recibos 15263/15264 y Planilla de Sueldos de Visual:
   - 001 $244.872 · 120003 $129.983,42 (62 días) · 203 $123.480;
   - 208 3 × 40.812 · 212 $35.000 · 214 $7.200 · 204 en 0.
 
-  **Pendiente de validación**: 62 días exigen la baja el 03/10, pero la app tiene turnos hasta el 08/10.
+  Baja efectiva 03/10 (62 días de SAC) y 6 jornadas trabajadas hasta el 08/10: se liquidan las trabajadas (regla JC 20/10), igual que su planilla.
 
 ## Doble pago
 
