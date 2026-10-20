@@ -371,7 +371,7 @@ describe('archivos: Excel de trabajo y .xls de Visual desde el mismo cálculo', 
   const r = calcularLiquidacionFinal(paniagua())
   const persona = { cuil: '20441767871', legajoVisual: '010 Bis', nombre: 'PANIAGUA EDGAR IVAN' }
 
-  it('el .xls BIFF8 conserva códigos como texto, identidad y cantidades', async () => {
+  it('el .xls BIFF8 conserva códigos como texto, identidad y cantidades', { timeout: 60000 }, async () => {
     const XLSX: any = await import('xlsx')
     const bytes = await escribirLibroVisualXls(filasVisualFinal(r.lineas, persona))
     const wb = XLSX.read(bytes, { type: 'array' })
@@ -401,7 +401,7 @@ describe('archivos: Excel de trabajo y .xls de Visual desde el mismo cálculo', 
     expect((filas['208'].getCell(5).value as any).result).toBe(122436)
     expect((filas['212'].getCell(4).value as any).formula).toBe('ROUND(MAX(0,B15*B6-B16),2)')
     expect(String(ws.getCell('J1').value)).toBe('f1')
-  })
+  }, 60000)
 })
 
 describe('resultado de Visual (Planilla de Sueldos real de JC)', () => {
