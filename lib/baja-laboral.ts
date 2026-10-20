@@ -26,7 +26,9 @@ export interface DocumentoBaja {
   documento: { id: string; tipo: string; estado: string; fecha_emision: string | null; detalle: string | null } | null
 }
 
-export const TIPOS_DOCUMENTO_BAJA = ['telegrama_renuncia', 'telegrama_despido', 'cartas_documento', 'acuerdo_desvinculacion', 'documentacion_baja'] as const
+// 'baja_arca': constancia de baja de ARCA/AFIP (Simplificación Registral), para
+// contratos eventuales o a plazo fijo que terminan sin telegrama.
+export const TIPOS_DOCUMENTO_BAJA = ['telegrama_renuncia', 'telegrama_despido', 'baja_arca', 'cartas_documento', 'acuerdo_desvinculacion', 'documentacion_baja'] as const
 
 const errorTexto = (e: { message?: string } | null | undefined) => (e ? (e.message || 'Error') : null)
 

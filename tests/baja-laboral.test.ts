@@ -242,3 +242,18 @@ describe('accesos y bajas (Sincronizar, Reset DNI, Crear acceso)', () => {
     expect(await motivoSinAcceso(a.client, empleado)).toMatch(/no se pudo verificar/)
   })
 })
+
+describe('constancia de baja de ARCA (contratos eventuales / plazo fijo, sin telegrama)', () => {
+  it('se lee como un documento de baja válido: fecha de baja = efectiva, fin de contrato', () => {
+    const l = interpretarLecturaBaja({
+      es_documento_laboral: true, tipo_documento: 'constancia_baja_arca', legible: true, nombre: 'RENUNCIA UNO', cuil: '20-30111222-3',
+      fecha_documento: '2026-10-19', fecha_efectiva: '2026-10-18', motivo: 'fin_contrato', motivo_textual: 'Fin de contrato eventual', alertas: [],
+    }, { nombre: 'RENUNCIA, UNO', dni: '30111222', fechaIngreso: '2026-10-08', hoy: '2026-10-20' })!
+    expect(l).toMatchObject({ tipo_documento: 'constancia_baja_arca', fecha_efectiva: '2026-10-18', motivo: 'fin_contrato', cuil: '20301112223' })
+    expect(l.alertas).toEqual([])   // en la constancia de ARCA la baja es anterior a la emisión: no es alerta
+  })
+  it('el formulario ofrece la constancia de ARCA entre los documentos de la baja', async () => {
+    const { TIPOS_DOCUMENTO_BAJA } = await import('@/lib/baja-laboral')
+    expect(TIPOS_DOCUMENTO_BAJA).toContain('baja_arca')
+  })
+})

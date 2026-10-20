@@ -266,7 +266,7 @@ export default function RegistrarBaja({ empleadoId, origen, puedeGerencia = fals
       {/* Documentación */}
       <div style={card}>
         <strong>Telegramas y documentación</strong>
-        <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>Se guardan en el legajo. La IA lee el documento y sugiere datos: vos los confirmás o corregís.</div>
+        <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>Se guardan en el legajo. Si no hay telegrama (contrato eventual o a plazo fijo), adjuntá la constancia de baja de ARCA. La IA lee el documento y sugiere datos: vos los confirmás o corregís.</div>
         {docs.map(d => {
           const l = lecturas[d.documento_id] ?? (d.ia_datos && 'alertas' in (d.ia_datos as any) ? d.ia_datos as LecturaBaja : null)
           return (

@@ -1,8 +1,9 @@
 /**
  * lib/baja-lectura.ts
  *
- * Lectura con IA de un telegrama / carta documento / acuerdo de desvinculación
- * adjunto al registro de baja. Es una AYUDA: muestra lo que se lee para que
+ * Lectura con IA de un telegrama / carta documento / acuerdo de desvinculación /
+ * constancia de baja de ARCA (contratos eventuales o a plazo fijo) adjunto al
+ * registro de baja. Es una AYUDA: muestra lo que se lee para que
  * Administración lo confirme o corrija. La IA nunca confirma una baja, no decide
  * cuestiones jurídicas y no completa datos que no estén escritos. Si el documento
  * es ilegible, ambiguo o tiene fechas contradictorias, lo señala.
@@ -14,7 +15,7 @@
 
 export interface LecturaBaja {
   es_documento_laboral: boolean
-  tipo_documento: 'telegrama_renuncia' | 'telegrama_despido' | 'carta_documento' | 'acuerdo' | 'otro' | null
+  tipo_documento: 'telegrama_renuncia' | 'telegrama_despido' | 'carta_documento' | 'acuerdo' | 'constancia_baja_arca' | 'otro' | null
   legible: boolean
   nombre: string | null
   dni: string | null
@@ -33,10 +34,11 @@ export interface LecturaBaja {
 
 export const MOTIVOS_LECTURA = ['renuncia', 'despido_sin_causa', 'despido_con_causa', 'fin_contrato', 'mutuo_acuerdo', 'fallecimiento', 'jubilacion', 'abandono', 'otra'] as const
 
-export const PROMPT_BAJA = `Esta imagen debería ser un documento de desvinculación laboral argentino: telegrama laboral (Ley 23.789) de renuncia o de despido, carta documento o acuerdo de desvinculación.
+export const PROMPT_BAJA = `Esta imagen debería ser un documento de desvinculación laboral argentino: telegrama laboral (Ley 23.789) de renuncia o de despido, carta documento, acuerdo de desvinculación, o constancia de baja de ARCA/AFIP (Simplificación Registral, «Mi Simplificación»), que se usa en contratos eventuales o a plazo fijo.
 Devolvé SOLO lo que está escrito con claridad. Si un dato no está o no se lee, devolvé null. No inventes, no deduzcas ni completes datos, y no hagas valoraciones jurídicas.
 - es_documento_laboral: true si es uno de esos documentos.
-- tipo_documento: telegrama_renuncia, telegrama_despido, carta_documento, acuerdo u otro.
+- tipo_documento: telegrama_renuncia, telegrama_despido, carta_documento, acuerdo, constancia_baja_arca u otro.
+- En una constancia de baja de ARCA: fecha_efectiva es la «fecha de baja» o «fecha de fin de la relación»; fecha_documento es la fecha de emisión o de la transacción; motivo sale del «motivo de baja» informado (p. ej. fin de contrato a plazo fijo o eventual = fin_contrato; renuncia = renuncia).
 - legible: false si no se puede leer con seguridad.
 - nombre y dni / cuil del trabajador (sólo dígitos en dni y cuil).
 - fecha_documento: la fecha de emisión o de imposición (AAAA-MM-DD).
@@ -53,7 +55,7 @@ export const SCHEMA_BAJA: Record<string, unknown> = {
   type: 'object',
   properties: {
     es_documento_laboral: { type: 'boolean' },
-    tipo_documento: { type: 'string', enum: ['telegrama_renuncia', 'telegrama_despido', 'carta_documento', 'acuerdo', 'otro'], nullable: true },
+    tipo_documento: { type: 'string', enum: ['telegrama_renuncia', 'telegrama_despido', 'carta_documento', 'acuerdo', 'constancia_baja_arca', 'otro'], nullable: true },
     legible: { type: 'boolean' },
     nombre: nulo('string'), dni: nulo('string'), cuil: nulo('string'),
     fecha_documento: nulo('string'), fecha_notificacion: nulo('string'), fecha_efectiva: nulo('string'),
@@ -92,7 +94,7 @@ export function interpretarLecturaBaja(json: unknown, contexto: { nombre?: strin
   if (!json || typeof json !== 'object') return null
   const j = json as Record<string, unknown>
   const alertas = Array.isArray(j.alertas) ? (j.alertas as unknown[]).map(a => texto(a, 200)).filter((a): a is string => Boolean(a)) : []
-  const tipos = ['telegrama_renuncia', 'telegrama_despido', 'carta_documento', 'acuerdo', 'otro']
+  const tipos = ['telegrama_renuncia', 'telegrama_despido', 'carta_documento', 'acuerdo', 'constancia_baja_arca', 'otro']
   const r: LecturaBaja = {
     es_documento_laboral: j.es_documento_laboral === true,
     tipo_documento: tipos.includes(String(j.tipo_documento)) ? j.tipo_documento as LecturaBaja['tipo_documento'] : null,
@@ -112,7 +114,8 @@ export function interpretarLecturaBaja(json: unknown, contexto: { nombre?: strin
   if (!r.legible) r.alertas.push('El documento no se lee con seguridad: verificar a mano.')
   if (!r.fecha_efectiva && !r.fecha_documento) r.alertas.push('No se encontró ninguna fecha: la fecha efectiva la carga Administración.')
   else if (!r.fecha_efectiva) r.alertas.push('El documento no fija una fecha efectiva distinta: confirmarla a mano.')
-  if (r.fecha_efectiva && r.fecha_documento && r.fecha_efectiva < r.fecha_documento) r.alertas.push('La fecha efectiva es anterior a la fecha del documento.')
+  // La constancia de ARCA se emite después de la baja: ahí es normal que la fecha efectiva sea anterior.
+  if (r.fecha_efectiva && r.fecha_documento && r.fecha_efectiva < r.fecha_documento && r.tipo_documento !== 'constancia_baja_arca') r.alertas.push('La fecha efectiva es anterior a la fecha del documento.')
   if (r.fecha_notificacion && r.fecha_documento && r.fecha_notificacion < r.fecha_documento) r.alertas.push('La notificación es anterior a la fecha del documento.')
   if (r.fecha_efectiva && contexto.fechaIngreso && r.fecha_efectiva < contexto.fechaIngreso) r.alertas.push('La fecha efectiva es anterior al ingreso del legajo.')
   const hoy = contexto.hoy ?? new Date().toISOString().slice(0, 10)
