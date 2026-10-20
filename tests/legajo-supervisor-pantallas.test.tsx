@@ -6,15 +6,18 @@ import { BarraPosicionTurno, GraficoPorHora, MatrizDiaHora } from '@/components/
 import type { FranjaHoraria } from '@/lib/legajo-supervisor'
 
 const filas = (p: Partial<FranjaHoraria>[] = []): FranjaHoraria[] =>
-  Array.from({ length: 24 }, (_, hora) => ({ hora, enTurno: 0, fueraTurno: 0, sinCalendario: 0, minutosServicio: 0, ...(p[hora] ?? {}) }))
+  Array.from({ length: 24 }, (_, hora) => ({ hora, enTurno: 0, cubrioOtro: 0, sinProgramacion: 0, fueraTurno: 0, minutosServicio: 0, ...(p[hora] ?? {}) }))
 
 describe('gráfico por hora', () => {
   it('24 columnas con la hora y el detalle en el título (en turno / fuera / servicio)', () => {
     const f = filas()
-    f[8] = { hora: 8, enTurno: 3, fueraTurno: 1, sinCalendario: 0, minutosServicio: 600 }
+    f[8] = { hora: 8, enTurno: 3, cubrioOtro: 2, sinProgramacion: 0, fueraTurno: 1, minutosServicio: 600 }
     const html = renderToStaticMarkup(<GraficoPorHora filas={f} />)
     expect(html.match(/>\d\d<\/div>/g)).toHaveLength(24)
-    expect(html).toContain('08 h · 4 supervisiones (3 en turno, 1 fuera, 0 sin guardia cargada) · 10 h de servicio')
+    expect(html).toContain('08 h · 6 supervisiones (3 en su turno, 2 cubrió guardia de otro, 0 sin programación, 1 fuera de turno) · 10 h de servicio')
+    // colores neutros: ni ámbar ni rojo (ninguna categoría es una falta)
+    expect(html).not.toMatch(/#f59e0b|#ef4444|#f97316/i)
+    for (const t of ['En su turno', 'Cubrió guardia de otro', 'Sin programación', 'Fuera de turno']) expect(html).toContain(t)
     expect(html).toContain('Horas de servicio programado')
   })
   it('sin supervisiones lo dice, no dibuja ceros como si fueran datos', () => {
