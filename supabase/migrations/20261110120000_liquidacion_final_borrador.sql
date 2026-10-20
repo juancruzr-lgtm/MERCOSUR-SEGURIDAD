@@ -134,7 +134,8 @@ insert into public.documentacion_tipos (codigo, nombre, ayuda, orden, requisito,
    'Fecha del acuerdo', 'no', null, 'Referencia', false, 'sensible', 'ninguna', null, null, true),
   ('documentacion_baja', 'Documentación de la baja', 'Complementaria de la baja.', 175, 'si_corresponde', 'egreso', null, true, 'opcional',
    'Fecha', 'no', null, 'Descripción', false, 'sensible', 'ninguna', null, null, true)
-on conflict (codigo) do nothing;
+-- Si ya existían (p. ej. desactivados por el rollback), se vuelven a activar.
+on conflict (codigo) do update set activo = true;
 
 -- ── 3) Vacaciones tomadas fuera de la app (o no cargadas) ────────────────────
 -- Las novedades de vacaciones APROBADAS ya cuentan; esto registra las demás. Un

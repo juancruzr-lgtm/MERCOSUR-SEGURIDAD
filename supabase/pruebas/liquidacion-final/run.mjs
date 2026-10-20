@@ -225,11 +225,13 @@ void B_DES2
 
 // ── 9) Rollback y re-aplicación ──────────────────────────────────────────────
 await db.exec(readFileSync(RB, 'utf8'))
+ok('el rollback desactiva los tipos de documento de baja', (await sql(`select count(*)::int n from documentacion_tipos where activo and codigo in ('telegrama_renuncia','telegrama_despido','acuerdo_desvinculacion','documentacion_baja')`))[0].n === 0)
 ok('rollback quita tablas, triggers y la política restrictiva', (await sql(`select count(*)::int n from pg_tables where tablename like 'liquidacion_final%' or tablename like 'baja_%'`))[0].n === 0
   && (await sql(`select count(*)::int n from pg_policies where policyname = 'acceso_bloqueado_baja'`))[0].n === 0)
 ok('tras el rollback el ex bloqueado vuelve a leer (estado sigue inactivo)', (await como(A_REN, () => sql(`select count(*)::int n from registros_asistencia`)))[0].n === 1)
 await db.exec(readFileSync(MIG, 'utf8'))
 ok('la migración se puede volver a aplicar', (await sql(`select count(*)::int n from pg_tables where tablename = 'baja_laboral'`))[0].n === 1)
+ok('al volver a aplicarla, los tipos de documento de baja quedan activos', (await sql(`select count(*)::int n from documentacion_tipos where activo and codigo in ('telegrama_renuncia','telegrama_despido','acuerdo_desvinculacion','documentacion_baja')`))[0].n === 4)
 
 const fallas = resultados.filter(x => x[0] === 'FALLA')
 for (const [e, n, x] of resultados) console.log(e, n, x && e === 'FALLA' ? `→ ${x}` : '')
