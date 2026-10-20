@@ -21,7 +21,7 @@ describe('leerConsultaArca', () => {
       fila('20222222223', 'GOMEZ ANA', 'Nuevo período de prueba', '31/07/2026', '03/08/2026', 'Renuncia del trabajador'), ''].join('\r\n')
     const r = leerConsultaArca('﻿' + txt)
     expect(r.error).toBeNull()
-    expect(r.filas).toEqual([
+    expect(r.filas.map(({ linea, ...x }) => x)).toEqual([
       { cuil: '20111111112', nombre: 'PEREZ JUAN', modalidad: 'Trabajo eventual', inicio: '2026-10-08', fin: '2026-10-18', baja: null, obra_social: 'O.S. FICTICIA' },
       { cuil: '20222222223', nombre: 'GOMEZ ANA', modalidad: 'Nuevo período de prueba', inicio: '2026-07-31', fin: '2026-08-03', baja: 'Renuncia del trabajador', obra_social: 'O.S. FICTICIA' },
     ])
