@@ -18,7 +18,8 @@ import { supabase } from '@/lib/supabase'
 import { fechaArgentina, sumarDias } from '@/lib/periodo-argentina'
 import { validarRango } from '@/lib/evaluacion-supervisores'
 import {
-  cargarLegajoSupervisores, distribucionHoraria, matrizDiaHora, objetivosVisitados, posicionEnTurno, resumenLegajo,
+  ACLARACION_CATEGORIAS, ETIQUETA_SITUACION, cargarLegajoSupervisores, distribucionHoraria, matrizDiaHora,
+  objetivosVisitados, posicionEnTurno, resumenLegajo, ventanaPeriodo,
 } from '@/lib/legajo-supervisor'
 import type { GuardiaLegajo, SupervisionLegajo } from '@/lib/legajo-supervisor'
 import { BarraPosicionTurno, GraficoPorHora, MatrizDiaHora } from './GraficosHorarioSupervision'
@@ -41,6 +42,8 @@ export default function HorariosSupervisores() {
   const [fSup, setFSup] = useState('')
   const [fZona, setFZona] = useState('')
   const [fObj, setFObj] = useState('')
+  // Ventana del período cargado: recorta la noche que empezó el día anterior.
+  const [ventana, setVentana] = useState(() => ventanaPeriodo(sumarDias(hoy, -29), hoy))
 
   const cargar = useCallback(async () => {
     const inv = validarRango(desde, hasta)
@@ -50,6 +53,7 @@ export default function HorariosSupervisores() {
     const r = await cargarLegajoSupervisores(supabase, null, desde, hasta)
     setGuardias(r.guardias)
     setSups(r.supervisiones)
+    setVentana(ventanaPeriodo(desde, hasta))
     setError(r.error)
     setCargando(false)
   }, [desde, hasta])
@@ -77,7 +81,7 @@ export default function HorariosSupervisores() {
   const guardiasF = useMemo(() => guardias.filter(g =>
     (!fSup || g.supervisor_id === fSup) && (!fZona || (g.zona ?? '').trim().toLowerCase() === fZona.trim().toLowerCase())), [guardias, fSup, fZona])
 
-  const horas = useMemo(() => distribucionHoraria(supsF, guardiasF), [supsF, guardiasF])
+  const horas = useMemo(() => distribucionHoraria(supsF, guardiasF, ventana), [supsF, guardiasF, ventana])
   const matriz = useMemo(() => matrizDiaHora(supsF), [supsF])
   const posicion = useMemo(() => posicionEnTurno(supsF, guardiasF), [supsF, guardiasF])
   const pocoVisitados = useMemo(() => objetivosVisitados(supsF).slice(0, 12), [supsF])
@@ -85,8 +89,8 @@ export default function HorariosSupervisores() {
     .filter(([id]) => !fSup || id === fSup)
     .map(([id, nombre]) => ({
       id, nombre,
-      r: resumenLegajo(guardiasF.filter(g => g.supervisor_id === id), supsF.filter(s => s.supervisor_id === id)),
-    })), [opciones.sups, fSup, guardiasF, supsF])
+      r: resumenLegajo(guardiasF.filter(g => g.supervisor_id === id), supsF.filter(s => s.supervisor_id === id), ventana),
+    })), [opciones.sups, fSup, guardiasF, supsF, ventana])
 
   return (
     <div style={{ display: 'grid', gap: 14, minWidth: 0 }}>
@@ -147,13 +151,16 @@ export default function HorariosSupervisores() {
 
           <div style={caja}>
             <div style={titulo}>Por supervisor</div>
+            <div style={{ fontSize: 12, color: C.apagado, marginBottom: 8 }}>{ACLARACION_CATEGORIAS}</div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>
                   <th style={{ ...th, textAlign: 'left' }}>Supervisor</th>
                   <th style={th}>Guardias de servicio</th><th style={th}>Hs programadas</th><th style={th}>Con GPS</th>
-                  <th style={th}>Supervisiones</th><th style={th}>En turno</th><th style={th}>Fuera de turno</th>
-                  <th style={th}>Sin guardia cargada</th><th style={th}>Por hora de servicio</th><th style={th} />
+                  <th style={th}>Supervisiones</th><th style={th}>{ETIQUETA_SITUACION.en_turno}</th>
+                  <th style={th} title="Entre paréntesis, las probables a revisar">{ETIQUETA_SITUACION.cubrio_otro}</th>
+                  <th style={th}>{ETIQUETA_SITUACION.sin_programacion}</th><th style={th}>{ETIQUETA_SITUACION.fuera_turno}</th>
+                  <th style={th}>Por hora de servicio</th><th style={th} />
                 </tr></thead>
                 <tbody>
                   {porSupervisor.map(({ id, nombre, r }) => (
@@ -163,14 +170,15 @@ export default function HorariosSupervisores() {
                       <td style={td}>{r.horasProgramadas}</td>
                       <td style={td}>{r.guardiasConGps}</td>
                       <td style={td}>{r.supervisiones}</td>
-                      <td style={{ ...td, color: C.verde }}>{r.enTurno}</td>
-                      <td style={{ ...td, color: r.fueraTurno ? C.amarillo : C.texto }}>{r.fueraTurno}</td>
-                      <td style={td}>{r.sinCalendario}</td>
+                      <td style={td}>{r.enTurno}</td>
+                      <td style={td}>{r.cubrioOtro}{r.coberturasProbables ? <span style={{ color: C.apagado }}> ({r.coberturasProbables})</span> : null}</td>
+                      <td style={td}>{r.sinProgramacion}</td>
+                      <td style={td}>{r.fueraTurno}</td>
                       <td style={td}>{r.porHoraServicio ?? '—'}</td>
                       <td style={td}><a href={`/guardias/${id}?seccion=operativo`} style={{ color: C.celeste, fontWeight: 700, textDecoration: 'none' }}>Legajo</a></td>
                     </tr>
                   ))}
-                  {!cargando && porSupervisor.length === 0 && <tr><td colSpan={10} style={{ ...td, textAlign: 'left', color: C.apagado }}>Sin datos para el período.</td></tr>}
+                  {!cargando && porSupervisor.length === 0 && <tr><td colSpan={11} style={{ ...td, textAlign: 'left', color: C.apagado }}>Sin datos para el período.</td></tr>}
                 </tbody>
               </table>
             </div>

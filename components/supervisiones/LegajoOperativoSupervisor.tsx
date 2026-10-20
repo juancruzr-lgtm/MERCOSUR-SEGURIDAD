@@ -25,8 +25,9 @@ import { supabase } from '@/lib/supabase'
 import { fechaArgentina, ZONA_ARGENTINA } from '@/lib/periodo-argentina'
 import { validarRango } from '@/lib/evaluacion-supervisores'
 import {
-  ETIQUETA_SITUACION, cargarLegajoSupervisores, cargarRecorridoGuardia, distribucionHoraria,
-  franjasSinSupervision, matrizDiaHora, objetivosVisitados, posicionEnTurno, resumenLegajo, situacionTurno,
+  ACLARACION_CATEGORIAS, ETIQUETA_COBERTURA, ETIQUETA_SITUACION, SITUACIONES, cargarLegajoSupervisores,
+  cargarRecorridoGuardia, distribucionHoraria, franjasSinSupervision, matrizDiaHora, objetivosVisitados,
+  posicionEnTurno, resumenLegajo, situacionTurno, ventanaPeriodo,
 } from '@/lib/legajo-supervisor'
 import type { GuardiaLegajo, PuntoRecorrido, SituacionTurno, SupervisionLegajo } from '@/lib/legajo-supervisor'
 import { BarraPosicionTurno, COLOR_SITUACION, GraficoPorHora, MatrizDiaHora } from './GraficosHorarioSupervision'
@@ -53,7 +54,8 @@ const hm = (ts: string | null) => (ts ? FMT_HM.format(new Date(ts)) : '—')
 const dh = (ts: string | null) => (ts ? FMT_DH.format(new Date(ts)) : '—')
 const fechaCorta = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`
 const COLOR_SIT: Record<SituacionTurno, string> = {
-  en_turno: COLOR_SITUACION.en_turno, fuera_turno: COLOR_SITUACION.fuera_turno, sin_calendario: COLOR_SITUACION.sin_calendario,
+  en_turno: COLOR_SITUACION.en_turno, cubrio_otro: COLOR_SITUACION.cubrio_otro,
+  sin_programacion: COLOR_SITUACION.sin_programacion, fuera_turno: COLOR_SITUACION.fuera_turno,
 }
 
 function periodoInicial(): { desde: string; hasta: string } {
@@ -90,6 +92,7 @@ export default function LegajoOperativoSupervisor({ supervisorId }: { supervisor
     const r = await cargarLegajoSupervisores(supabase, supervisorId, desde, hasta)
     setGuardias(r.guardias)
     setSups(r.supervisiones)
+    setVentana(ventanaPeriodo(desde, hasta))
     setError(r.error)
     setGuardiaMapa(null)
     setCargando(false)
@@ -97,8 +100,10 @@ export default function LegajoOperativoSupervisor({ supervisorId }: { supervisor
 
   useEffect(() => { void cargar() }, [supervisorId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const resumen = useMemo(() => resumenLegajo(guardias, sups), [guardias, sups])
-  const horas = useMemo(() => distribucionHoraria(sups, guardias), [sups, guardias])
+  // Ventana del período cargado: recorta la noche que empezó el día anterior.
+  const [ventana, setVentana] = useState(() => ventanaPeriodo(inicial.desde, inicial.hasta))
+  const resumen = useMemo(() => resumenLegajo(guardias, sups, ventana), [guardias, sups, ventana])
+  const horas = useMemo(() => distribucionHoraria(sups, guardias, ventana), [sups, guardias, ventana])
   const matriz = useMemo(() => matrizDiaHora(sups), [sups])
   const posicion = useMemo(() => posicionEnTurno(sups, guardias), [sups, guardias])
   const objetivos = useMemo(() => objetivosVisitados(sups), [sups])
@@ -130,13 +135,15 @@ export default function LegajoOperativoSupervisor({ supervisorId }: { supervisor
             <Tarjeta t="Guardias de servicio" v={resumen.guardiasServicio} ayuda={`${resumen.horasProgramadas} h programadas`} />
             <Tarjeta t="Guardias con actividad GPS" v={`${resumen.guardiasConGps} / ${resumen.guardiasServicio}`} />
             <Tarjeta t="Supervisiones" v={resumen.supervisiones} ayuda={`${resumen.objetivosDistintos} objetivos distintos`} />
-            <Tarjeta t="En su turno" v={resumen.enTurno} color={C.verde}
+            <Tarjeta t={ETIQUETA_SITUACION.en_turno} v={resumen.enTurno}
                      ayuda={resumen.porHoraServicio === null ? undefined : `${resumen.porHoraServicio} por hora de servicio`} />
-            <Tarjeta t="Fuera de su turno" v={resumen.fueraTurno} color={resumen.fueraTurno ? C.amarillo : C.texto} />
-            <Tarjeta t="Sin guardia cargada" v={resumen.sinCalendario} color={resumen.sinCalendario ? C.apagado : C.texto}
-                     ayuda="Puede faltar cargar el calendario" />
+            <Tarjeta t={ETIQUETA_SITUACION.cubrio_otro} v={resumen.cubrioOtro}
+                     ayuda={resumen.coberturasProbables ? `${resumen.coberturasProbables} probables a revisar` : undefined} />
+            <Tarjeta t={ETIQUETA_SITUACION.sin_programacion} v={resumen.sinProgramacion} ayuda="Nadie programado en esa franja" />
+            <Tarjeta t={ETIQUETA_SITUACION.fuera_turno} v={resumen.fueraTurno} ayuda="Había otro programado y activo" />
             <Tarjeta t="Con ítems observados" v={resumen.conItemsObservados} ayuda="En el checklist" />
           </div>
+          <div style={{ fontSize: 12, color: C.apagado, marginTop: -6 }}>{ACLARACION_CATEGORIAS}</div>
 
           <div style={caja}>
             <div style={titulo}>Supervisiones por hora del día</div>
@@ -164,7 +171,7 @@ export default function LegajoOperativoSupervisor({ supervisorId }: { supervisor
                 </tr></thead>
                 <tbody>
                   {guardias.map(g => {
-                    const huecos = franjasSinSupervision(g, sups)
+                    const huecos = franjasSinSupervision(g, sups, 120, new Date(), ventana)
                     return (
                       <tr key={g.guardia_id} style={{ opacity: g.cubre ? 1 : 0.55, background: guardiaMapa?.guardia_id === g.guardia_id ? '#38bdf811' : 'transparent' }}>
                         <td style={td}>{fechaCorta(g.fecha)}{g.zona ? <div style={{ color: C.apagado, fontSize: 11 }}>{g.zona}</div> : null}</td>
@@ -220,7 +227,7 @@ export default function LegajoOperativoSupervisor({ supervisorId }: { supervisor
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
               <div style={{ ...titulo, marginBottom: 0 }}>Supervisiones, checklist y novedades anotadas</div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {(['todas', 'en_turno', 'fuera_turno', 'sin_calendario'] as const).map(f => (
+                {(['todas', ...SITUACIONES] as const).map(f => (
                   <button key={f} type="button" onClick={() => setFiltroSit(f)}
                           style={{ ...boton(f === 'todas' ? C.tenue : COLOR_SIT[f]), opacity: filtroSit === f ? 1 : 0.55 }}>
                     {f === 'todas' ? `Todas (${sups.length})` : `${ETIQUETA_SITUACION[f]} (${sups.filter(s => situacionTurno(s) === f).length})`}
@@ -242,7 +249,13 @@ export default function LegajoOperativoSupervisor({ supervisorId }: { supervisor
                       <tr key={s.supervision_id}>
                         <td style={{ ...td, whiteSpace: 'nowrap' }}>{dh(s.created_at)}</td>
                         <td style={td}>{s.objetivo ?? '—'}{s.zona ? <div style={{ color: C.apagado, fontSize: 11 }}>{s.zona}</div> : null}</td>
-                        <td style={{ ...td, color: COLOR_SIT[sit], fontWeight: 700, whiteSpace: 'nowrap' }}>{ETIQUETA_SITUACION[sit]}</td>
+                        <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                          <span style={{ color: COLOR_SIT[sit], fontWeight: 700 }}>{ETIQUETA_SITUACION[sit]}</span>
+                          {s.cobertura && <div style={{ color: C.tenue, fontSize: 11 }}>{ETIQUETA_COBERTURA[s.cobertura]}</div>}
+                          {s.programado && sit !== 'en_turno' && (
+                            <div style={{ color: C.apagado, fontSize: 11 }}>Programado: {s.programado} · Hizo la visita: {s.supervisor}</div>
+                          )}
+                        </td>
                         <td style={td}>
                           {s.items_total ? `${s.items_total - s.items_observados}/${s.items_total} correctos` : 'Sin checklist'}
                           {s.estado !== 'ok' && <div style={{ color: s.estado === 'critico' ? C.rojo : C.amarillo, fontSize: 11 }}>{s.estado}</div>}
