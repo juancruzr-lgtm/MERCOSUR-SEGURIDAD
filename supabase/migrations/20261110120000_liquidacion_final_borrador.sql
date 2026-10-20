@@ -399,12 +399,13 @@ begin
          and exists (select 1 from public.baja_laboral b where b.empleado_id = p_empleado_id and b.estado = 'confirmada') then
         raise exception 'La persona ya tiene una baja confirmada. Para corregirla usá Rectificar.';
       end if;
-      insert into public.baja_laboral (empleado_id, nombre, dni, cuil, legajo, fecha_ingreso, origen, registrada_por)
-      select u.id, btrim(coalesce(u.apellido, '') || ', ' || coalesce(u.nombre, '')), u.dni,
+      -- id generado antes (sin INSERT … SELECT … RETURNING INTO: el editor de Supabase lo confunde con SELECT INTO).
+      v_id := gen_random_uuid();
+      insert into public.baja_laboral (id, empleado_id, nombre, dni, cuil, legajo, fecha_ingreso, origen, registrada_por)
+      select v_id, u.id, btrim(coalesce(u.apellido, '') || ', ' || coalesce(u.nombre, '')), u.dni,
              nullif(regexp_replace(coalesce(u.cuil, ''), '\D', '', 'g'), ''), coalesce(u.legajo_visual, u.legajo),
              (select l.fecha_ingreso from public.legajo_datos_personales l where l.empleado_id = u.id), v_origen, v_actor
-        from public.usuarios u where u.id = p_empleado_id
-      returning id into v_id;
+        from public.usuarios u where u.id = p_empleado_id;
       insert into public.baja_laboral_historial (baja_id, accion, datos, por) values (v_id, 'creada', jsonb_build_object('origen', v_origen), v_actor);
     end if;
   end if;
