@@ -30,7 +30,9 @@ export async function POST(req: NextRequest) {
   }
 
   for (const usuario of (usuarios || []) as UsuarioEmpleado[]) {
-    const resultado = await ensureEmployeeAuth(admin.client, usuario)
+    // Sólo crea las cuentas que faltan y vincula: NO resetea contraseñas existentes
+    // ni toca a desvinculados o bloqueados por baja (ver motivoSinAcceso).
+    const resultado = await ensureEmployeeAuth(admin.client, usuario, { conservarPassword: true })
 
     if (resultado.action === 'creado') summary.creados += 1
     if (resultado.action === 'actualizado') summary.actualizados += 1

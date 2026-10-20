@@ -82,7 +82,7 @@ export async function subirDocumento(p: {
   detalle: string | null
   archivos: File[]
   onProgreso?: (texto: string) => void
-}): Promise<{ estado: EstadoDocumento | null; error: string | null }> {
+}): Promise<{ estado: EstadoDocumento | null; error: string | null; documentoId?: string }> {
   try {
     p.onProgreso?.('Preparando…')
     const listos: File[] = []
@@ -118,7 +118,7 @@ export async function subirDocumento(p: {
     })
     const cuerpo = await resp.json().catch(() => ({})) as { estado?: EstadoDocumento; error?: string }
     if (!resp.ok) return { estado: null, error: cuerpo.error || 'No se pudo guardar el documento' }
-    return { estado: cuerpo.estado ?? null, error: null }
+    return { estado: cuerpo.estado ?? null, error: null, documentoId: r.documento_id }
   } catch (e) {
     return { estado: null, error: e instanceof Error ? e.message : 'No se pudo subir el documento' }
   }

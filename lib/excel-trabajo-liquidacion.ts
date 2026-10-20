@@ -465,6 +465,13 @@ export async function plantillaTrabajoDelMes(
     parametros?: ParametrosLiquidacion
     /** Textos a usar en vez de los guardados del período. */
     textos?: Map<string, Record<string, string | null>>
+    /**
+     * Liquidación final por baja: sólo ese empleado. Turnos, asistencias, guardias
+     * y supervisiones se toman hasta `hasta` (inclusive); las novedades se cortan
+     * en `hastaNovedades` (o en `hasta`). Mismas fórmulas del mes: sólo suman
+     * las horas reconocidas, así que lo programado y no trabajado no cuenta.
+     */
+    recorte?: { empleadoId: string; hasta: string; hastaNovedades?: string }
   },
 ): Promise<PlantillaTrabajoResultado> {
   if (!/^\d{4}-\d{2}$/.test(mes)) return { plantilla: null, filas: 0, error: 'Mes inválido (esperado YYYY-MM).' }
@@ -505,7 +512,21 @@ export async function plantillaTrabajoDelMes(
   const err = usuariosR.error || turnosR.error || registrosR.error || novedadesR.error
   if (err) return { plantilla: null, filas: 0, error: err.message || String(err) }
 
-  const usuarios = (usuariosR.data ?? []) as any[]
+  const rec = opts?.recorte
+  const hastaRec = rec?.hasta ?? null
+  const usuarios = ((usuariosR.data ?? []) as any[]).filter(u => !rec || u.id === rec.empleadoId)
+  const finRecExclusivo = hastaRec
+    ? `${new Date(Date.UTC(Number(hastaRec.slice(0, 4)), Number(hastaRec.slice(5, 7)) - 1, Number(hastaRec.slice(8, 10)) + 1)).toISOString().slice(0, 10)}T00:00:00-03:00`
+    : null
+  const turnosSrc = ((turnosR.data ?? []) as any[]).filter(t => !hastaRec || String(t.fecha) <= hastaRec)
+  const registrosSrc = ((registrosR.data ?? []) as any[]).filter(r => !hastaRec || String(r.turno?.fecha ?? '') <= hastaRec)
+  const hastaNov = rec?.hastaNovedades ?? hastaRec
+  const novedadesSrc = ((novedadesR.data ?? []) as any[])
+    .filter(n => !hastaNov || String(n.fecha_desde) <= hastaNov)
+    .map(n => (hastaNov && String(n.fecha_hasta) > hastaNov ? { ...n, fecha_hasta: hastaNov } : n))
+  const supGuardiasSrc = ((supGuardiasR.data ?? []) as any[]).filter(g => !hastaRec || String(g.fecha) <= hastaRec)
+  const supervisionesSrc = ((supervisionesR.data ?? []) as any[])
+    .filter(sv => !finRecExclusivo || new Date(sv.created_at).getTime() < new Date(finRecExclusivo).getTime())
   const objetivos = (objetivosR.data ?? []) as any[]
   const supervisorZonas = (zonasR.data ?? []) as any[]
   const nocturnidadExcepciones = (noctExcR.data ?? []) as any[]
@@ -555,11 +576,11 @@ export async function plantillaTrabajoDelMes(
   const resumen = construirResumenGuardia({
     mes,
     empleados,
-    turnos: (turnosR.data ?? []) as any[],
-    registros: (registrosR.data ?? []) as any[],
-    novedades: (novedadesR.data ?? []) as any[],
-    supervisoresGuardia: (supGuardiasR.data ?? []) as any[],
-    supervisiones: (supervisionesR.data ?? []) as any[],
+    turnos: turnosSrc,
+    registros: registrosSrc,
+    novedades: novedadesSrc,
+    supervisoresGuardia: supGuardiasSrc,
+    supervisiones: supervisionesSrc,
     zonaObjetivo: (id?: string | null) => (objetivoPorId.get(id || '') as any)?.zona_id ?? null,
     zonasSupervisor: (empId: string) => supervisorZonas
       .filter(sz => sz.supervisor_id === empId).map(sz => sz.zona_id).filter(Boolean),
@@ -576,6 +597,8 @@ export async function plantillaTrabajoDelMes(
     },
   })
 
+  // Recorte de una baja sin actividad en el mes: no es un error (no hay ordinarios).
+  if (resumen.filas.length === 0 && rec) return { plantilla: null, filas: 0, error: null, resumen }
   if (resumen.filas.length === 0) return { plantilla: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
 
   // Parámetros salariales DEL MES (guardados al reimportar el Excel de trabajo) y

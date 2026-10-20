@@ -5,6 +5,7 @@ import { mesArgentina } from '@/lib/periodo-argentina'
 import ReimportarExcelTrabajo from '@/components/liquidacion/ReimportarExcelTrabajo'
 import PadronLiquidacion from '@/components/liquidacion/PadronLiquidacion'
 import ImportarResultadoVisual from '@/components/liquidacion/ImportarResultadoVisual'
+import LiquidacionFinalPanel from '@/components/liquidacion/LiquidacionFinalPanel'
 import { clasificarBloqueados } from '@/lib/visual-export'
 
 // GERENCIA → GESTIÓN ECONÓMICA → LIQUIDACIÓN (LIQ1A).
@@ -71,7 +72,7 @@ function limitesDelMes(mes: string): { desde: string; hasta: string } {
 }
 
 export default function LiquidacionPanel({ user, empleados }: { user: any; empleados: Empleado[] }) {
-  const [tab, setTab] = useState<'periodos' | 'catalogo' | 'permanentes'>('periodos')
+  const [tab, setTab] = useState<'periodos' | 'finales' | 'catalogo' | 'permanentes'>('periodos')
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null)
   const activos = useMemo(() => (empleados || []).filter(e => String(e.estado ?? 'activo').toLowerCase() !== 'inactivo')
     .sort((a, b) => `${a.apellido}`.localeCompare(`${b.apellido}`, 'es')), [empleados])
@@ -459,8 +460,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
         Cada período nace limpio: se genera el padrón pero los conceptos se construyen desde cero.
         El mes anterior sirve de control, nunca como plantilla. Visual Sueldos calcula el recibo.
       </div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
         <button style={tabStyle(tab === 'periodos')} onClick={() => setTab('periodos')}>Períodos</button>
+        <button style={tabStyle(tab === 'finales')} onClick={() => setTab('finales')}>Liquidaciones finales</button>
         <button style={tabStyle(tab === 'catalogo')} onClick={() => setTab('catalogo')}>Catálogo de conceptos</button>
         <button style={tabStyle(tab === 'permanentes')} onClick={() => setTab('permanentes')}>Permanentes</button>
       </div>
@@ -741,6 +743,8 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
           )}
         </>
       )}
+
+      {tab === 'finales' && <LiquidacionFinalPanel />}
 
       {tab === 'catalogo' && (
         <div style={S.card}>

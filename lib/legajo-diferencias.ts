@@ -175,6 +175,17 @@ export async function revisarDiferencia(clave: string, nota: string): Promise<st
   return errorTexto(error)
 }
 
+/**
+ * Baja registrada en la app para un CUIL (la más reciente, no anulada). Sirve para
+ * marcar las relaciones que siguen vigentes en ARCA aunque la app ya las dio de baja.
+ */
+export async function bajaRegistradaPorCuil(cuil: string): Promise<{ fecha_baja: string | null; estado: string } | null> {
+  const { data, error } = await supabase.from('baja_laboral').select('fecha_baja, estado')
+    .eq('cuil', cuil.replace(/\D/g, '')).neq('estado', 'anulada').order('registrada_at', { ascending: false }).limit(1)
+  if (error || !data?.length) return null
+  return data[0] as { fecha_baja: string | null; estado: string }
+}
+
 export async function reabrirDiferencia(clave: string): Promise<string | null> {
   const { error } = await supabase.rpc('legajo_diferencia_reabrir', { p_clave: clave })
   return errorTexto(error)

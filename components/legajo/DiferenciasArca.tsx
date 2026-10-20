@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ORDEN_TIPOS, TEXTO_TIPO, corregirIdentidad, cargarDiferencias, cargarResumen, detalleTexto, diasTexto, fechaCorta,
-  fechaDeArchivo, importarConsulta, leerConsultaArca, reabrirDiferencia, revisarDiferencia, situacionTexto, unirRelaciones,
+  bajaRegistradaPorCuil, fechaDeArchivo, importarConsulta, leerConsultaArca, reabrirDiferencia, revisarDiferencia, situacionTexto, unirRelaciones,
 } from '@/lib/legajo-diferencias'
 import type { Diferencia, RelacionArca, ResumenDiferencias, TipoDiferencia } from '@/lib/legajo-diferencias'
 
@@ -28,11 +28,23 @@ const celda: React.CSSProperties = { padding: '7px 6px', borderTop: '1px solid #
 
 export function DiferenciaItem({ d, onCambio, conPersona = true }: { d: Diferencia; onCambio: () => void; conPersona?: boolean }) {
   const [revisando, setRevisando] = useState(false)
+  const [bajaApp, setBajaApp] = useState<{ fecha_baja: string | null; estado: string } | null>(null)
   const [nota, setNota] = useState('')
   const [ocupado, setOcupado] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const x = d.detalle as Record<string, any>
   const hacer = async (f: () => Promise<string | null>) => { setOcupado(true); setError(null); const e = await f(); setOcupado(false); if (e) setError(e); else { setRevisando(false); setNota(''); onCambio() } }
+  // ARCA no da de baja a nadie: si la persona dejó de figurar (o su contrato
+  // terminó), se inicia el MISMO procedimiento de baja del legajo (fecha, motivo,
+  // telegrama, vacaciones, confirmación). Nada se confirma sólo por el archivo.
+  const puedeRegistrarBaja = (d.tipo === 'activo_sin_relacion' || d.tipo === 'contrato_con_fin') && Boolean(d.empleado_id)
+  // Al revés: baja registrada en la app y la relación sigue vigente en ARCA.
+  useEffect(() => {
+    if (d.tipo !== 'relacion_sin_usuario' || !d.cuil) return
+    let vivo = true
+    void bajaRegistradaPorCuil(d.cuil).then(b => { if (vivo) setBajaApp(b) })
+    return () => { vivo = false }
+  }, [d.tipo, d.cuil])
   const situacion = situacionTexto(d)
   const puedeCargarCuil = d.tipo === 'sin_cuil' && d.empleado_id && typeof x.cuil_arca === 'string' && x.nombre_coincide === true
   return (
@@ -54,9 +66,17 @@ export function DiferenciaItem({ d, onCambio, conPersona = true }: { d: Diferenc
               Cargar CUIL {String(x.cuil_arca)} de ARCA
             </button>
           )}
+          {puedeRegistrarBaja && !d.revisada && (
+            <a href={`/guardias/${d.empleado_id}?seccion=situacion&baja=1&origen=arca`} style={{ ...boton('#fca5a5'), textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>Registrar baja</a>
+          )}
           {d.revisada
             ? <button type="button" disabled={ocupado} style={boton()} onClick={() => void hacer(() => reabrirDiferencia(d.clave))}>Reabrir</button>
             : <button type="button" style={boton()} onClick={() => setRevisando(true)}>Marcar revisada</button>}
+        </div>
+      )}
+      {bajaApp && (
+        <div style={{ fontSize: 13, color: '#fbbf24', marginTop: 4 }}>
+          Baja {bajaApp.estado === 'confirmada' ? 'confirmada' : 'en borrador'} en la app{bajaApp.fecha_baja ? ` desde el ${fechaCorta(bajaApp.fecha_baja)}` : ''}: verificar que se registró la baja en ARCA.
         </div>
       )}
       {revisando && (

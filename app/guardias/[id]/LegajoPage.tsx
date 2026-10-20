@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { alcanceDe, tieneCapacidad } from '@/lib/capacidades'
+import { alcanceDe, esGerenciaReal, tieneCapacidad } from '@/lib/capacidades'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { registroTieneEntradaConfirmada } from '@/lib/turnos'
@@ -14,6 +14,7 @@ import EstatutoInterno from '@/components/estatuto/EstatutoInterno'
 import DatosPersonales from '@/components/legajo/DatosPersonales'
 import DocumentacionLegajo from '@/components/documentacion/DocumentacionLegajo'
 import PanelHabilitacion from '@/components/habilitacion/PanelHabilitacion'
+import SituacionLaboral from '@/components/bajas/SituacionLaboral'
 import { gestionaDatosSensibles } from '@/lib/legajo'
 import { useAccesoLegajoSupervisores } from '@/components/supervisiones/useAccesoLegajoSupervisores'
 import LegajoOperativoSupervisor from '@/components/supervisiones/LegajoOperativoSupervisor'
@@ -461,6 +462,20 @@ export default function LegajoPage() {
           (sólo Administración y Gerencia; la base vuelve a controlar). */}
       {empleado.rol === 'guardia' && usuarioId !== null && usuarioId !== empleadoId && gestionaDatosSensibles({ puesto_organizacional: puestoUsuario }) && (
         <div style={{ padding: '12px 16px 0' }}><PanelHabilitacion empleadoId={empleadoId} /></div>
+      )}
+
+      {/* Situación laboral y REGISTRAR BAJA (sólo Administración y Gerencia; la base
+          vuelve a controlar). ?baja=1 lo abre directo (p. ej. desde Diferencias con ARCA). */}
+      {usuarioId !== null && usuarioId !== empleadoId && gestionaDatosSensibles({ puesto_organizacional: puestoUsuario }) && (
+        <div style={{ padding: '12px 16px 0' }}>
+          <SituacionLaboral
+            empleadoId={empleadoId}
+            estado={empleado.estado ?? null}
+            puedeGerencia={esGerenciaReal({ puesto_organizacional: puestoUsuario, rol: rolUsuario } as any)}
+            abrirAlCargar={searchParams.get('baja') === '1'}
+            origen={searchParams.get('origen') === 'arca' ? 'arca' : 'legajo'}
+          />
+        </div>
       )}
 
       {/* Navegación */}
