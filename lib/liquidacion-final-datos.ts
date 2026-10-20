@@ -7,7 +7,7 @@
 // ni cierra por su cuenta: cada paso lo dispara una persona desde la pantalla.
 
 import {
-  calcularLiquidacionFinal, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
+  CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
   type CausaBaja, type ConceptoCatalogo, type DatosLiquidacionFinal, type EntradasFinal,
   type OrdinariosHastaBaja, type ResultadoLiquidacionFinal,
 } from '@/lib/liquidacion-final'
@@ -174,7 +174,7 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
     datos: {
       persona: p,
       baja: { fecha: b.fecha_baja, causa: b.causa, fechaIngreso: ingreso, discrepancia: b.discrepancia },
-      parametros: { basico: P.basico, horaExtra: P.horaExtra, valorDia },
+      parametros: { basico: P.basico, horaExtra: P.horaExtra, valorDia, conteoSAC: CONTEO_SAC_CONFIRMADO },
       ordinarios: ord,
       yaLiquidado,
       extrasPagadas,

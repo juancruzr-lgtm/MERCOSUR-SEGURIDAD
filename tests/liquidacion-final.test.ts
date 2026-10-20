@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  calcularLiquidacionFinal, diasComputablesSAC, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
-  totalSAC, totalSACVacaciones, type DatosLiquidacionFinal, type ConceptoCatalogo,
+  CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, diasComputablesSAC, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
+  totalSAC, totalSACVacaciones, type DatosLiquidacionFinal, type ConceptoCatalogo, type ConteoSAC,
 } from '@/lib/liquidacion-final'
 import { plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
 import { escribirExcelLiquidacionFinal } from '@/lib/liquidacion-final-excel'
@@ -34,12 +34,21 @@ const CATALOGO = new Map<string, ConceptoCatalogo>([
 
 type Over = Omit<Partial<DatosLiquidacionFinal>, 'baja'> & { baja?: Partial<DatosLiquidacionFinal['baja']> }
 
-function datos(over: Over = {}): DatosLiquidacionFinal {
+// La regla de conteo del SAC NO está confirmada (CONTEO_SAC_CONFIRMADO = null).
+// Los casos de referencia se prueban con las DOS variantes, cada una con la fecha
+// de baja que reproduce 91 (Fulla) y 62 (Paniagua). El resto de los tests usa la
+// variante exclusiva sólo como dato del test (no fija la regla de la app).
+const VARIANTES: { conteo: ConteoSAC; fulla: string; paniagua: string }[] = [
+  { conteo: 'exclusivo', fulla: '2026-09-30', paniagua: '2026-10-03' },
+  { conteo: 'inclusivo', fulla: '2026-09-29', paniagua: '2026-10-02' },
+]
+
+function datos(over: Over = {}, conteo: ConteoSAC | null = 'exclusivo'): DatosLiquidacionFinal {
   const { baja, ...resto } = over
   return {
     persona: { cuil: '20285365814', legajoVisual: 'FULLA w', nombre: 'FULLA WALTER DARIO', empleadoId: 'u-fulla' },
     baja: { fecha: '2026-09-30', causa: 'renuncia', fechaIngreso: '2023-03-01', discrepancia: null, ...(baja ?? {}) },
-    parametros: { basico: BASICO, horaExtra: HORA_EXTRA, valorDia: VALOR_DIA },
+    parametros: { basico: BASICO, horaExtra: HORA_EXTRA, valorDia: VALOR_DIA, conteoSAC: conteo },
     ordinarios: { jornadas: 0, conceptos: [], horasExtra: 0 },
     yaLiquidado: [],
     extrasPagadas: 0,
@@ -62,37 +71,57 @@ const ORDINARIOS_PANIAGUA = {
     { codigo: '001', importe: 244872, cantidad: 48 },
   ],
 }
-const paniagua = (over: Over = {}) => datos({
+const paniagua = (over: Over = {}, conteo: ConteoSAC | null = 'exclusivo') => datos({
   persona: { cuil: '20441767871', legajoVisual: '010 Bis', nombre: 'PANIAGUA EDGAR IVAN', empleadoId: 'u-pan' },
-  // 62 días de SAC desde el ingreso (02/08) con la regla baja − inicio → 03/10.
-  // PENDIENTE JC: los turnos de producción llegan al 08/10 (eso daría 67 días).
-  baja: { fecha: '2026-10-03', causa: 'renuncia', fechaIngreso: '2026-08-02' },
+  // 62 días de SAC desde el ingreso (02/08): 03/10 (exclusivo) o 02/10 (inclusivo).
+  // PENDIENTE JC: los turnos de producción llegan al 08/10 (eso daría 67/68 días).
   ordinarios: ORDINARIOS_PANIAGUA,
   entradas: { vacaciones: { saldoDias: 3, tomadasDias: 0 } },
   ...over,
-})
+  baja: { fecha: '2026-10-03', causa: 'renuncia', fechaIngreso: '2026-08-02', ...(over.baja ?? {}) },
+}, conteo)
 
-describe('SAC proporcional: regla de días', () => {
-  it('Fulla: semestre desde 01/07, baja 30/09 → 91 días, $190.782,12', () => {
-    const s = diasComputablesSAC('2026-09-30', '2023-03-01')
-    expect(s).toEqual({ inicioSemestre: '2026-07-01', inicioComputo: '2026-07-01', dias: 91 })
+describe('SAC proporcional: regla de días (parametrizable, sin confirmar)', () => {
+  it('la app NO fija la regla: CONTEO_SAC_CONFIRMADO es null hasta que JC la confirme', () => {
+    expect(CONTEO_SAC_CONFIRMADO).toBeNull()
+  })
+  it.each(VARIANTES)('$conteo — Fulla: baja $fulla, semestre desde 01/07 → 91 días, $190.782,12', ({ conteo, fulla }) => {
+    expect(diasComputablesSAC(fulla, '2023-03-01', conteo)).toEqual({ inicioSemestre: '2026-07-01', inicioComputo: '2026-07-01', dias: 91 })
     expect(totalSAC(BASICO, 91)).toBe(190782.12)
   })
-  it('Paniagua: ingreso 02/08 posterior al semestre → cuenta desde el ingreso; 62 días = $129.983,42', () => {
-    const s = diasComputablesSAC('2026-10-03', '2026-08-02')
+  it.each(VARIANTES)('$conteo — Paniagua: baja $paniagua, desde el ingreso 02/08 → 62 días, $129.983,42', ({ conteo, paniagua: baja }) => {
+    const s = diasComputablesSAC(baja, '2026-08-02', conteo)
     expect(s.inicioComputo).toBe('2026-08-02')
     expect(s.dias).toBe(62)
     expect(totalSAC(BASICO, 62)).toBe(129983.42)
   })
-  it('límites de semestre: 30/06 cuenta desde 01/01; 01/07 empieza el segundo semestre con 0 días', () => {
-    expect(diasComputablesSAC('2026-06-30', '2020-01-01')).toMatchObject({ inicioSemestre: '2026-01-01', dias: 180 })
-    expect(diasComputablesSAC('2026-07-01', '2020-01-01')).toMatchObject({ inicioSemestre: '2026-07-01', dias: 0 })
-    expect(diasComputablesSAC('2026-12-31', '2020-01-01')).toMatchObject({ inicioSemestre: '2026-07-01', dias: 183 })
-    expect(diasComputablesSAC('2026-01-01', '2020-01-01')).toMatchObject({ inicioSemestre: '2026-01-01', dias: 0 })
-    // Ingreso dentro del semestre de la baja manda; ingreso el mismo día de la baja → 0.
-    expect(diasComputablesSAC('2026-03-15', '2026-03-15').dias).toBe(0)
-    // Año bisiesto (2028): 01/01 → 30/06 = 181.
-    expect(diasComputablesSAC('2028-06-30', '2027-01-01').dias).toBe(181)
+  it('la misma fecha difiere en un día entre variantes', () => {
+    expect(diasComputablesSAC('2026-09-30', '2023-03-01', 'exclusivo').dias).toBe(91)
+    expect(diasComputablesSAC('2026-09-30', '2023-03-01', 'inclusivo').dias).toBe(92)
+  })
+  it('límites de semestre (exclusivo / inclusivo)', () => {
+    const d = (baja: string, ing: string) => [diasComputablesSAC(baja, ing, 'exclusivo').dias, diasComputablesSAC(baja, ing, 'inclusivo').dias]
+    expect(diasComputablesSAC('2026-06-30', '2020-01-01', 'exclusivo').inicioSemestre).toBe('2026-01-01')
+    expect(diasComputablesSAC('2026-07-01', '2020-01-01', 'exclusivo').inicioSemestre).toBe('2026-07-01')
+    expect(d('2026-06-30', '2020-01-01')).toEqual([180, 181])
+    expect(d('2026-07-01', '2020-01-01')).toEqual([0, 1])
+    expect(d('2026-12-31', '2020-01-01')).toEqual([183, 184])
+    expect(d('2026-01-01', '2020-01-01')).toEqual([0, 1])
+    // Ingreso dentro del semestre de la baja manda; ingreso el mismo día de la baja.
+    expect(d('2026-03-15', '2026-03-15')).toEqual([0, 1])
+    // Año bisiesto (2028): 01/01 → 30/06.
+    expect(d('2028-06-30', '2027-01-01')).toEqual([181, 182])
+  })
+  it('regla sin confirmar → 120003 pendiente, con las dos variantes a la vista', () => {
+    const r = calcularLiquidacionFinal(datos({}, null))
+    expect(linea(r, '120003')).toBeUndefined()
+    expect(r.faltantes.map(f => f.clave)).toEqual(['regla_conteo_sac'])
+    expect(r.calculo.fechas.variantes).toEqual([
+      { conteo: 'exclusivo', dias: 91, total: 190782.12 },
+      { conteo: 'inclusivo', dias: 92, total: 192878.63 },
+    ])
+    // Lo demás se calcula igual: 208 y 217 no dependen del conteo.
+    expect(linea(r, '208')).toMatchObject({ total: 571368 })
   })
   it('SAC sobre vacaciones no gozadas (217): Fulla 14 días $39.134,79; Paniagua 3 días $8.386,03', () => {
     expect(totalSACVacaciones(BASICO, 14)).toBe(39134.79)
@@ -100,16 +129,16 @@ describe('SAC proporcional: regla de días', () => {
   })
 })
 
-describe('calcularLiquidacionFinal — caso Fulla', () => {
-  const r = calcularLiquidacionFinal(datos())
+describe.each(VARIANTES)('calcularLiquidacionFinal — caso Fulla ($conteo, baja $fulla)', ({ conteo, fulla }) => {
+  const r = calcularLiquidacionFinal(datos({ baja: { fecha: fulla } }, conteo))
   it('sin faltantes y con los conceptos finales', () => {
     expect(r.faltantes).toEqual([])
     expect(r.lineas.map(l => l.codigo)).toEqual(['120003', '208', '217'])
   })
   it('120003 va como Cantidad 1 × total (así salió en el recibo) con 91 días en el detalle', () => {
     expect(linea(r, '120003')).toMatchObject({ cantidad: 1, importe: 190782.12, total: 190782.12 })
-    expect(linea(r, '120003')!.detalle.base).toMatchObject({ dias: 91, inicio: '2026-07-01', baja: '2026-09-30' })
-    expect(r.calculo.fechas.diasSAC).toBe(91)
+    expect(linea(r, '120003')!.detalle.base).toMatchObject({ dias: 91, conteo, inicio: '2026-07-01', baja: fulla })
+    expect(r.calculo.fechas).toMatchObject({ diasSAC: 91, conteo, variantes: null })
   })
   it('208 va como Cantidad = días × Importe = valor día (14 × 40.812 = 571.368, igual al recibo)', () => {
     expect(linea(r, '208')).toMatchObject({ cantidad: 14, importe: 40812, total: 571368 })
@@ -123,10 +152,11 @@ describe('calcularLiquidacionFinal — caso Fulla', () => {
   })
 })
 
-describe('calcularLiquidacionFinal — caso Paniagua', () => {
-  const r = calcularLiquidacionFinal(paniagua())
+describe.each(VARIANTES)('calcularLiquidacionFinal — caso Paniagua ($conteo, baja $paniagua)', ({ conteo, paniagua: baja }) => {
+  const r = calcularLiquidacionFinal(paniagua({ baja: { fecha: baja } }, conteo))
   it('reproduce el recibo 15264 concepto por concepto', () => {
     expect(r.faltantes).toEqual([])
+    expect(r.calculo.fechas.diasSAC).toBe(62)
     const tabla = Object.fromEntries(r.lineas.map(l => [l.codigo, [l.cantidad, l.importe, l.total]]))
     expect(tabla).toEqual({
       '000': [6, null, 0],
@@ -147,6 +177,9 @@ describe('calcularLiquidacionFinal — caso Paniagua', () => {
   it('212: 14 h × $2.500 = $35.000, con la base en el detalle', () => {
     expect(linea(r, '212')!.detalle.base).toMatchObject({ horas: 14, valorHora: 2500, bruto: 35000, pagado: 0 })
   })
+})
+
+describe('presentismo (Paniagua)', () => {
   it('la regla de presentismo no se generaliza: despido sin causa conserva la fórmula mensual', () => {
     const d = calcularLiquidacionFinal(paniagua({ baja: { causa: 'despido_sin_causa' } }))
     expect(linea(d, '204')).toMatchObject({ total: 43200 })
@@ -160,6 +193,7 @@ describe('calcularLiquidacionFinal — caso Paniagua', () => {
     expect(d.faltantes.map(f => f.clave)).toContain('causa')
   })
 })
+
 
 describe('datos incompletos: marca pendiente, no asume cero', () => {
   it('sin saldo o sin tomadas de vacaciones → faltante y sin 208/217', () => {

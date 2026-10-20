@@ -12,7 +12,10 @@
 //  · 208 Vacaciones no gozadas: días = saldo − tomadas (datos manuales del caso;
 //    si falta alguno queda PENDIENTE, nunca se asume cero) × valor día del Excel de
 //    trabajo (C3 = básico/200×8). Recibos de Fulla y Paniagua: 40.812 por día.
-//  · 120003 SAC proporcional: (básico/200×150)/365 × días computables.
+//  · 120003 SAC proporcional: (básico/200×150)/365 × días computables. La regla
+//    de CONTEO de días (exclusivo/inclusivo) la confirma JC: hasta entonces
+//    CONTEO_SAC_CONFIRMADO es null y el 120003 queda PENDIENTE con las dos
+//    variantes a la vista (no se elige una en silencio).
 //  · 217 SAC sobre vacaciones no gozadas: básico/365 × días de 208.
 //  · 204 Presentismo: en una RENUNCIA que no completa el mes, cero con motivo.
 //    Para las demás causas se mantiene la fórmula mensual (no se generaliza).
@@ -91,7 +94,11 @@ export interface EntradasFinal {
 export interface DatosLiquidacionFinal {
   persona: { cuil: string | null; legajoVisual: string | null; nombre: string; empleadoId: string | null }
   baja: { fecha: string | null; causa: CausaBaja | null; fechaIngreso: string | null; discrepancia?: string | null }
-  parametros: { basico: number; horaExtra: number; valorDia: number }
+  parametros: {
+    basico: number; horaExtra: number; valorDia: number
+    /** Regla de conteo del SAC. null/ausente = sin confirmar → 120003 pendiente. */
+    conteoSAC?: ConteoSAC | null
+  }
   /** null = no se pudieron leer los datos operativos del mes (faltante). */
   ordinarios: OrdinariosHastaBaja | null
   /** Lo ya enviado a Visual en el mes de la baja (períodos exportados/liquidados). */
@@ -130,7 +137,12 @@ export interface ResultadoLiquidacionFinal {
   advertencias: string[]
   calculo: {
     mes: string | null
-    fechas: { baja: string | null; ingreso: string | null; inicioSemestre: string | null; inicioComputo: string | null; diasSAC: number | null; regla: string }
+    fechas: {
+      baja: string | null; ingreso: string | null; inicioSemestre: string | null; inicioComputo: string | null
+      diasSAC: number | null; conteo: ConteoSAC | null; regla: string
+      /** Con la regla sin confirmar: días y total de cada variante, para decidir. */
+      variantes: { conteo: ConteoSAC; dias: number; total: number }[] | null
+    }
     bases: { basico: number; valorDia: number; horaExtra: number; unitarioSAC: number | null }
     vacaciones: { saldo: number | null; tomadas: number | null; noGozadas: number | null; nota: string | null }
     presentismo: { calculado: number | null; aplicado: number | null; motivo: string | null }
@@ -148,22 +160,34 @@ export const redondear = (n: number, d = 2) => { const f = 10 ** d; return Math.
 const ultimoDiaDelMes = (iso: string) => new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)), 0)).toISOString().slice(0, 10)
 
 /**
- * Días computables del SAC proporcional.
- *
- * REGLA DE CONTEO (explícita): días = fecha de baja − inicio, en días corridos,
- * como la resta de fechas del Excel (=BAJA-INICIO). El inicio es el 1/1 o el 1/7
- * del semestre de la baja, o la fecha de ingreso si es posterior.
- * Fulla: 30/09/2026 − 01/07/2026 = 91.
+ * Días computables del SAC proporcional. El inicio es el 1/1 o el 1/7 del
+ * semestre de la baja, o la fecha de ingreso si es posterior. Dos reglas de
+ * conteo posibles (las dos en días corridos):
+ *   'exclusivo' → días = baja − inicio        (resta de fechas del Excel: =BAJA-INICIO)
+ *   'inclusivo' → días = baja − inicio + 1    (cuenta el día de inicio y el de la baja)
+ * Fulla (91): exclusivo con baja 30/09 · inclusivo con baja 29/09.
+ * Paniagua (62, ingreso 02/08): exclusivo con baja 03/10 · inclusivo con baja 02/10.
  */
-export const REGLA_DIAS_SAC = 'días = fecha de baja − inicio (resta de fechas, días corridos); inicio = 1/1 o 1/7 del semestre de la baja, o el ingreso si es posterior'
+export type ConteoSAC = 'exclusivo' | 'inclusivo'
 
-export function diasComputablesSAC(fechaBaja: string, fechaIngreso: string | null): {
+/**
+ * Regla confirmada por JC. null = TODAVÍA SIN CONFIRMAR: el 120003 queda pendiente
+ * y el borrador muestra las dos variantes. Al confirmarla, cambiar sólo esta línea.
+ */
+export const CONTEO_SAC_CONFIRMADO: ConteoSAC | null = null
+
+export const REGLAS_CONTEO_SAC: Record<ConteoSAC, string> = {
+  exclusivo: 'días = fecha de baja − inicio (días corridos); inicio = 1/1 o 1/7 del semestre de la baja, o el ingreso si es posterior',
+  inclusivo: 'días = fecha de baja − inicio + 1 (días corridos, cuenta inicio y baja); inicio = 1/1 o 1/7 del semestre de la baja, o el ingreso si es posterior',
+}
+
+export function diasComputablesSAC(fechaBaja: string, fechaIngreso: string | null, conteo: ConteoSAC): {
   inicioSemestre: string; inicioComputo: string; dias: number
 } {
   const anio = fechaBaja.slice(0, 4)
   const inicioSemestre = Number(fechaBaja.slice(5, 7)) <= 6 ? `${anio}-01-01` : `${anio}-07-01`
   const inicioComputo = fechaIngreso && fechaIngreso > inicioSemestre ? fechaIngreso : inicioSemestre
-  return { inicioSemestre, inicioComputo, dias: diferenciaDias(inicioComputo, fechaBaja) }
+  return { inicioSemestre, inicioComputo, dias: diferenciaDias(inicioComputo, fechaBaja) + (conteo === 'inclusivo' ? 1 : 0) }
 }
 
 /** (básico/200×150)/365: valor diario del SAC proporcional (sin redondear). */
@@ -253,18 +277,27 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
   let diasSAC: number | null = null
   let inicioSemestre: string | null = null
   let inicioComputo: string | null = null
+  let variantes: { conteo: ConteoSAC; dias: number; total: number }[] | null = null
+  const conteo = d.parametros.conteoSAC ?? null
   if (sueldoFijo) falta('regla_sueldo_fijo', 'Mensualizado con sueldo fijo: la regla pedida (básico de convenio) no aplica. Definir SAC y vacaciones a mano con ajustes.')
   else if (fechaBaja) {
     if (!ingreso) falta('fecha_ingreso', 'Falta la fecha de ingreso: no se sabe si el SAC empieza en el semestre o en el ingreso.')
-    else if (ingreso <= fechaBaja) {
-      const s = diasComputablesSAC(fechaBaja, ingreso)
+    else if (ingreso <= fechaBaja && !conteo) {
+      variantes = (['exclusivo', 'inclusivo'] as ConteoSAC[]).map(v => {
+        const s = diasComputablesSAC(fechaBaja, ingreso, v)
+        inicioSemestre = s.inicioSemestre; inicioComputo = s.inicioComputo
+        return { conteo: v, dias: s.dias, total: totalSAC(basico, s.dias) }
+      })
+      falta('regla_conteo_sac', `Falta confirmar la regla de conteo de días del SAC: exclusivo ${variantes[0].dias} días (${variantes[0].total}) · inclusivo ${variantes[1].dias} días (${variantes[1].total}).`)
+    } else if (ingreso <= fechaBaja && conteo) {
+      const s = diasComputablesSAC(fechaBaja, ingreso, conteo)
       diasSAC = s.dias; inicioSemestre = s.inicioSemestre; inicioComputo = s.inicioComputo
       const total = totalSAC(basico, s.dias)
       const ya = Number(yaPorCodigo.get('120003')?.importe ?? 0)
       if (ya > 0) falta('sac_ya_liquidado', `Ya se enviaron $${ya} de 120003 en el mes: revisar antes de liquidar el SAC proporcional.`)
       else if (total > 0) lineas.push({
         codigo: '120003', concepto: NOMBRES['120003'], entrada: 'CANIMP', cantidad: 1, importe: total, total,
-        detalle: { origen: 'final', formula: '(básico/200×150)/365 × días', base: { basico, dias: s.dias, inicio: s.inicioComputo, baja: fechaBaja, unitario: redondear(unitarioSAC(basico), 6) } },
+        detalle: { origen: 'final', formula: '(básico/200×150)/365 × días', base: { basico, dias: s.dias, conteo, inicio: s.inicioComputo, baja: fechaBaja, unitario: redondear(unitarioSAC(basico), 6) } },
       })
     }
   }
@@ -359,7 +392,11 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
     advertencias,
     calculo: {
       mes,
-      fechas: { baja: fechaBaja, ingreso, inicioSemestre, inicioComputo, diasSAC, regla: REGLA_DIAS_SAC },
+      fechas: {
+        baja: fechaBaja, ingreso, inicioSemestre, inicioComputo, diasSAC, conteo,
+        regla: conteo ? REGLAS_CONTEO_SAC[conteo] : 'regla de conteo SIN CONFIRMAR (exclusivo: baja − inicio · inclusivo: baja − inicio + 1)',
+        variantes,
+      },
       bases: { basico, valorDia: redondear(valorDia, 6), horaExtra, unitarioSAC: redondear(unitarioSAC(basico), 6) },
       vacaciones: { saldo, tomadas, noGozadas, nota: vac.nota ?? null },
       presentismo: { calculado: presentismoCalculado, aplicado: presentismoAplicado, motivo: presentismoMotivo },

@@ -70,7 +70,10 @@ export async function escribirExcelLiquidacionFinal(
   set('A8', 'Fecha de baja'); set('B8', fechaUTC(c.fechas.baja), FMT_FECHA)
   set('A9', 'Inicio del semestre'); set('B9', fechaUTC(c.fechas.inicioSemestre), FMT_FECHA)
   set('A10', 'Inicio del cómputo SAC'); fx('B10', 'IF(B7="",B9,MAX(B7,B9))', fechaUTC(c.fechas.inicioComputo), FMT_FECHA)
-  set('A11', 'Días computables SAC'); fx('B11', 'B8-B10', c.fechas.diasSAC, '0')
+  set('A11', 'Días computables SAC')
+  if (c.fechas.conteo) fx('B11', c.fechas.conteo === 'inclusivo' ? 'B8-B10+1' : 'B8-B10', c.fechas.diasSAC, '0')
+  else set('B11', null)   // regla sin confirmar: el 120003 queda pendiente
+  if (c.fechas.variantes) set('D11', c.fechas.variantes.map(v => `${v.conteo}: ${v.dias} días = ${v.total}`).join(' · '))
   set('C11', c.fechas.regla)
   set('A12', 'Saldo de vacaciones (días)'); set('B12', c.vacaciones.saldo)
   set('A13', 'Vacaciones tomadas (días)'); set('B13', c.vacaciones.tomadas)

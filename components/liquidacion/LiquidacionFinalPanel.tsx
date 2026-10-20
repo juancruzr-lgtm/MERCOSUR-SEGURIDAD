@@ -254,7 +254,7 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
       {c && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginTop: 12, fontSize: 13 }}>
           <div><div style={S.sub}>Bases</div>Básico {pesos(c.bases.basico)} · día {pesos(c.bases.valorDia)} · hora extra {pesos(c.bases.horaExtra)}</div>
-          <div><div style={S.sub}>SAC</div>{c.fechas.diasSAC != null ? `${c.fechas.diasSAC} días desde ${fecha(c.fechas.inicioComputo)}` : '—'}<div style={S.sub}>{c.fechas.regla}</div></div>
+          <div><div style={S.sub}>SAC</div>{c.fechas.diasSAC != null ? `${c.fechas.diasSAC} días desde ${fecha(c.fechas.inicioComputo)}` : c.fechas.variantes ? c.fechas.variantes.map(v => `${v.conteo}: ${v.dias} d = ${pesos(v.total)}`).join(' · ') : '—'}<div style={S.sub}>{c.fechas.regla}</div></div>
           <div><div style={S.sub}>Vacaciones</div>saldo {c.vacaciones.saldo ?? '—'} − tomadas {c.vacaciones.tomadas ?? '—'} = {c.vacaciones.noGozadas ?? '—'}</div>
           <div><div style={S.sub}>Extras</div>{c.extras.horas} h × {pesos(c.extras.valorHora)} − pagado {pesos(c.extras.pagado)} = {pesos(c.extras.pendiente)}</div>
           {c.presentismo.motivo && <div><div style={S.sub}>Presentismo</div>{pesos(c.presentismo.calculado)} → {pesos(c.presentismo.aplicado)}<div style={S.sub}>{c.presentismo.motivo}</div></div>}
