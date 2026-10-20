@@ -175,6 +175,20 @@ export async function revisarDiferencia(clave: string, nota: string): Promise<st
   return errorTexto(error)
 }
 
+/**
+ * Confirma con fecha una baja que se ve en ARCA (p. ej. la persona dejó de figurar
+ * en la consulta). Registra la baja laboral (fuente ARCA) y prepara el borrador de
+ * liquidación final (migración 20261110120000). No corta el acceso a la app ni
+ * cambia el pago por banco. Sólo Gerencia/Administración.
+ */
+export async function confirmarBajaArca(empleadoId: string | null, cuil: string | null, fechaBaja: string, causa: string | null, consulta: string | null): Promise<string | null> {
+  const { error } = await supabase.rpc('liquidacion_baja_registrar', {
+    p_empleado_id: empleadoId, p_cuil: cuil, p_fecha_baja: fechaBaja, p_causa: causa || null, p_fuente: 'arca',
+    p_referencia: consulta ? `consulta:${consulta}` : null,
+  })
+  return errorTexto(error)
+}
+
 export async function reabrirDiferencia(clave: string): Promise<string | null> {
   const { error } = await supabase.rpc('legajo_diferencia_reabrir', { p_clave: clave })
   return errorTexto(error)
