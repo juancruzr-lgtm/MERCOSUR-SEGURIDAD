@@ -5,21 +5,31 @@
  * la app: barras de div). Presentación pura: los números salen de
  * lib/legajo-supervisor.ts.
  *
- * Cada hora muestra las supervisiones apiladas por situación (en turno, fuera
- * de turno, sin guardia cargada) y, debajo, una franja con las horas de
- * SERVICIO programado: una hora sin barras y con franja llena es una hora de
- * guardia sin supervisiones; sin franja, no estaba de servicio y no se le
- * reclama nada.
+ * Cada hora muestra las supervisiones apiladas por situación (en su turno,
+ * cubrió guardia de otro, sin programación, fuera de turno) y, debajo, una
+ * franja con las horas de SERVICIO programado: una hora sin barras y con
+ * franja llena es una hora de guardia sin supervisiones; sin franja, no estaba
+ * de servicio y no se le reclama nada.
+ *
+ * Colores NEUTROS a propósito (auditoría del 20/10): ninguna categoría es una
+ * falta ni se pinta como alerta; sólo se distinguen entre sí.
  */
 
-import type { FranjaHoraria } from '@/lib/legajo-supervisor'
+import { ETIQUETA_SITUACION, SITUACIONES } from '@/lib/legajo-supervisor'
+import type { FranjaHoraria, SituacionTurno } from '@/lib/legajo-supervisor'
 
-export const COLOR_SITUACION = {
-  en_turno: '#10b981',
-  fuera_turno: '#f59e0b',
-  sin_calendario: '#64748b',
+export const COLOR_SITUACION: Record<SituacionTurno | 'servicio', string> = {
+  en_turno: '#5eead4',
+  cubrio_otro: '#a5b4fc',
+  sin_programacion: '#94a3b8',
+  fuera_turno: '#d6d3d1',
   servicio: '#38bdf8',
-} as const
+}
+
+const CAMPO: Record<SituacionTurno, 'enTurno' | 'cubrioOtro' | 'sinProgramacion' | 'fueraTurno'> = {
+  en_turno: 'enTurno', cubrio_otro: 'cubrioOtro', sin_programacion: 'sinProgramacion', fuera_turno: 'fueraTurno',
+}
+const totalFila = (f: FranjaHoraria) => f.enTurno + f.cubrioOtro + f.sinProgramacion + f.fueraTurno
 
 const C = { texto: '#e2e8f0', tenue: '#94a3b8', apagado: '#64748b', borde: '#1e293b' }
 const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
@@ -34,15 +44,13 @@ function Leyenda({ color, texto }: { color: string; texto: string }) {
 }
 
 export function GraficoPorHora({ filas }: { filas: FranjaHoraria[] }) {
-  const maxSup = Math.max(1, ...filas.map(f => f.enTurno + f.fueraTurno + f.sinCalendario))
+  const maxSup = Math.max(1, ...filas.map(totalFila))
   const maxServ = Math.max(1, ...filas.map(f => f.minutosServicio))
-  const total = filas.reduce((a, f) => a + f.enTurno + f.fueraTurno + f.sinCalendario, 0)
+  const total = filas.reduce((a, f) => a + totalFila(f), 0)
   return (
     <div style={{ minWidth: 0 }}>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
-        <Leyenda color={COLOR_SITUACION.en_turno} texto="En su turno" />
-        <Leyenda color={COLOR_SITUACION.fuera_turno} texto="Fuera de su turno" />
-        <Leyenda color={COLOR_SITUACION.sin_calendario} texto="Sin guardia cargada" />
+        {SITUACIONES.map(s => <Leyenda key={s} color={COLOR_SITUACION[s]} texto={ETIQUETA_SITUACION[s]} />)}
         <Leyenda color={COLOR_SITUACION.servicio} texto="Horas de servicio programado" />
       </div>
       {total === 0 && <div style={{ fontSize: 12, color: C.apagado, marginBottom: 6 }}>Sin supervisiones en el período.</div>}
@@ -50,15 +58,13 @@ export function GraficoPorHora({ filas }: { filas: FranjaHoraria[] }) {
         <div role="img" aria-label="Supervisiones por hora del día"
              style={{ display: 'grid', gridTemplateColumns: 'repeat(24, minmax(18px, 1fr))', gap: 3, minWidth: 480 }}>
           {filas.map(f => {
-            const n = f.enTurno + f.fueraTurno + f.sinCalendario
             const alto = (v: number) => `${(v / maxSup) * 100}%`
+            const detalle = SITUACIONES.map(s => `${f[CAMPO[s]]} ${ETIQUETA_SITUACION[s].toLowerCase()}`).join(', ')
             return (
-              <div key={f.hora} title={`${String(f.hora).padStart(2, '0')} h · ${n} supervisiones (${f.enTurno} en turno, ${f.fueraTurno} fuera, ${f.sinCalendario} sin guardia cargada) · ${Math.round(f.minutosServicio / 60)} h de servicio`}
+              <div key={f.hora} title={`${String(f.hora).padStart(2, '0')} h · ${totalFila(f)} supervisiones (${detalle}) · ${Math.round(f.minutosServicio / 60)} h de servicio`}
                    style={{ display: 'grid', gridTemplateRows: '120px 8px 16px', gap: 3 }}>
                 <div style={{ display: 'flex', flexDirection: 'column-reverse', background: '#0b1220', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{ height: alto(f.enTurno), background: COLOR_SITUACION.en_turno }} />
-                  <div style={{ height: alto(f.fueraTurno), background: COLOR_SITUACION.fuera_turno }} />
-                  <div style={{ height: alto(f.sinCalendario), background: COLOR_SITUACION.sin_calendario }} />
+                  {SITUACIONES.map(s => <div key={s} style={{ height: alto(f[CAMPO[s]]), background: COLOR_SITUACION[s] }} />)}
                 </div>
                 <div style={{ background: COLOR_SITUACION.servicio, opacity: f.minutosServicio > 0 ? 0.25 + 0.75 * (f.minutosServicio / maxServ) : 0.06, borderRadius: 2 }} />
                 <div style={{ fontSize: 10, color: C.apagado, textAlign: 'center' }}>{String(f.hora).padStart(2, '0')}</div>
