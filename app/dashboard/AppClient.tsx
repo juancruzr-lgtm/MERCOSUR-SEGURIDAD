@@ -604,6 +604,8 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
         : String(authError || '')
 
     if (/invalid login credentials/i.test(raw)) return 'Email o contraseña/DNI incorrectos.'
+    // Baja laboral confirmada: la cuenta queda con ban en Supabase Auth.
+    if (/banned/i.test(raw)) return MENSAJE_ACCESO_BLOQUEADO
     if (/email not confirmed/i.test(raw)) return 'El email todavía no fue confirmado. Usá Magic Link o pedí un nuevo enlace.'
     if (/rate limit|too many requests|too many/i.test(raw)) return `Supabase limitó temporalmente los envíos de email. Esperá unos minutos y volvé a intentar. Detalle: ${raw}`
     if (/smtp|email|mail|send|provider/i.test(raw)) return `No se pudo enviar el email de ${accion}. Revisá la configuración SMTP en Supabase. Detalle: ${raw}`
