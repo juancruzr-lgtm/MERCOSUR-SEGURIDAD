@@ -13,6 +13,7 @@ import {
 } from '@/lib/liquidacion-final'
 import { cargarParametrosDelMes, plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
 import { parsearPlanillaVisual, type CeldaVisual } from '@/lib/liquidacion-visual'
+import { construirLineasVisual, type ConceptoCfg, type ExpedienteLinea, type FilaVisual, type PermanenteLinea } from '@/lib/visual-export'
 import { diferenciasDeHoja, leerHojasLiquidacionFinal, type DiferenciasHoja } from '@/lib/liquidacion-final-lote'
 import { plantillaLiquidacionResumenGuardia, type FilaResumenGuardia, type ParametrosLiquidacion, type PlantillaLiquidacion } from '@/lib/resumen-guardia'
 
@@ -338,8 +339,11 @@ export async function exportarFinal(client: any, f: FinalFila): Promise<{ bytes:
   if (!lineas.length) return { bytes: null, nombre: '', repetida: false, error: 'El borrador no tiene conceptos.' }
   const p = await persona(client, f.baja)
   if (!p.cuil || !p.legajoVisual) return { bytes: null, nombre: '', repetida: false, error: 'Falta CUIL o legajo de Visual.' }
-  const filas = filasVisualFinal(lineas as any, p)
-  const hash = await sha256Hex(jsonEstable(filas))
+  const propias = filasVisualFinal(lineas as any, p)
+  const hash = await sha256Hex(jsonEstable(propias))
+  const desc = await descuentosDeFinal(client, f, p, lineas as any)
+  if (desc.error) return { bytes: null, nombre: '', repetida: false, error: 'Descuentos: ' + desc.error }
+  const filas = [...propias, ...desc.filas]
   const periodo = (f.calculo?.visualPeriodo ?? f.mes ?? '').replace(/[^\w]+/g, '_')
   const nombre = `visual_liquidacion_final_${p.legajoVisual.replace(/\W+/g, '_')}_${periodo}.xls`
   const { escribirLibroVisualXls } = await import('@/lib/visual-export')
@@ -347,6 +351,70 @@ export async function exportarFinal(client: any, f: FinalFila): Promise<{ bytes:
   const { data, error: e2 } = await client.rpc('liquidacion_final_exportar', { p_final_id: f.id, p_version: f.version, p_archivo: nombre, p_hash: hash })
   if (e2) return { bytes: null, nombre, repetida: false, error: e2.message }
   return { bytes, nombre, repetida: Boolean((data as any)?.repetida), error: null }
+}
+
+/**
+ * DESCUENTOS y líneas estructurales, igual que la exportación mensual (JC 21/10):
+ * las líneas 0/0 que Visual calcula (011, 050, 101, 102, 103, 133 — con la regla
+ * 050/133 contra el Básico), los permanentes vigentes en el mes de la baja (104
+ * Sindicato, 977, 48410 embargo… en 0/0) y los expedientes/embargos de importe
+ * (slots 111/993). Usa la MISMA función del mensual (construirLineasVisual) y
+ * devuelve sólo lo que no está ya en las líneas de la final.
+ */
+export async function descuentosDeFinal(
+  client: any, f: FinalFila, p: Persona, propias: { codigo: string; cantidad: number | null; importe: number | null }[],
+): Promise<{ filas: FilaVisual[]; avisos: string[]; error: string | null }> {
+  const mes = (f.baja.fecha_baja ?? '').slice(0, 7) || f.mes
+  if (!mes) return { filas: [], avisos: [], error: 'Sin mes de baja' }
+  const desde = `${mes}-01`, hasta = finDelMes(`${mes}-01`)
+  const vigente = (d: string | null, h: string | null) => (!d || String(d) <= hasta) && (!h || String(h) >= desde)
+  const [catR, lpR, permR] = await Promise.all([
+    client.from('liquidacion_concepto_catalogo').select('codigo_visual, politica, entrada, categoria'),
+    p.cuil ? client.from('liquidacion_persona').select('id').eq('cuil', p.cuil).maybeSingle() : Promise.resolve({ data: null, error: null }),
+    client.from('liquidacion_concepto_permanente').select('empleado_id, persona_id, importe, activo, vigencia_desde, vigencia_hasta, concepto:concepto_id(codigo_visual)').eq('activo', true),
+  ])
+  const err = catR.error || lpR.error || permR.error
+  if (err) return { filas: [], avisos: [], error: err.message || String(err) }
+  const personaId: string | null = (lpR.data as any)?.id ?? null
+  const pid = personaId ?? `final:${f.id}`
+  const catalogo = new Map<string, ConceptoCfg>(); const lineaCero: string[] = []
+  for (const c of (catR.data ?? []) as any[]) {
+    if (!c.codigo_visual) continue
+    catalogo.set(String(c.codigo_visual), { politica: c.politica, entrada: c.entrada, categoria: c.categoria })
+    if (c.politica === 'linea_cero') lineaCero.push(String(c.codigo_visual))
+  }
+  const permanentes: PermanenteLinea[] = []
+  for (const x of (permR.data ?? []) as any[]) {
+    const deLaPersona = (personaId && x.persona_id === personaId) || (f.baja.empleado_id && x.empleado_id === f.baja.empleado_id)
+    if (!deLaPersona || !vigente(x.vigencia_desde, x.vigencia_hasta) || !x.concepto?.codigo_visual) continue
+    permanentes.push({ codigo: String(x.concepto.codigo_visual), importe: x.importe == null ? null : Number(x.importe) })
+  }
+  const expedientes: ExpedienteLinea[] = []
+  if (personaId) {
+    const { data: ex, error: ee } = await client.from('liquidacion_expediente').select('persona_id, referencia, importe, slot_preferido, estado, vigencia_desde, vigencia_hasta').eq('estado', 'activo').eq('persona_id', personaId)
+    if (ee) return { filas: [], avisos: [], error: ee.message }
+    for (const e of (ex ?? []) as any[]) if (vigente(e.vigencia_desde, e.vigencia_hasta)) expedientes.push({ referencia: e.referencia ?? null, importe: e.importe == null ? null : Number(e.importe), slot_preferido: e.slot_preferido ?? null })
+  }
+  const basico = conParametros(await cargarParametrosDelMes(client, mes), f.entradas?.parametros).basico
+  const dias000 = propias.find(l => l.codigo === '000')?.cantidad ?? null
+  const r = construirLineasVisual({
+    padron: [{ persona_id: pid, cod_interno: p.legajoVisual, cuil: p.cuil, nombre: p.nombre, tieneUsuario: Boolean(f.baja.empleado_id), mensualizado: false }],
+    catalogo,
+    haberes: new Map([[pid, propias.filter(l => l.codigo !== '000').map(l => ({ codigo: l.codigo, cantidad: l.cantidad, importe: l.importe }))]]),
+    dias: new Map([[pid, dias000]]),
+    permanentes: new Map([[pid, permanentes]]),
+    expedientes: new Map([[pid, expedientes]]),
+    lineaCero, basicoLiquidacion: basico,
+  })
+  const problemas = [...r.criticos, ...r.bloqueados].map(h => h.detalle)
+  if (problemas.length) return { filas: [], avisos: [], error: problemas.join(' · ') }
+  const ya = new Set(propias.map(l => l.codigo))
+  const filas = r.lineas.filter(l => !ya.has(l.codigo))
+  const avisos = r.advertencias.map(h => h.detalle)
+  if ((f.calculo?.ya_liquidado ?? []).some(y => y.codigo === '111' || y.codigo === '993') && filas.some(l => l.codigo === '111' || l.codigo === '993')) {
+    avisos.push('El expediente/embargo ya se envió en la liquidación del mes: revisar que no se descuente dos veces.')
+  }
+  return { filas, avisos, error: null }
 }
 
 /**
@@ -494,10 +562,14 @@ export async function exportarLote(client: any, finales: FinalFila[]): Promise<{
     const p = await persona(client, f.baja)
     if (!p.cuil || !p.legajoVisual) { rechazadas.push({ persona: quien, error: 'falta CUIL o legajo de Visual' }); continue }
     const propias = filasVisualFinal(lineas as any, p)
+    // El hash es de las líneas de la final (así se puede volver a bajar el archivo);
+    // los descuentos se agregan igual que en la exportación mensual.
     const hash = await sha256Hex(jsonEstable(propias))
+    const desc = await descuentosDeFinal(client, f, p, lineas as any)
+    if (desc.error) { rechazadas.push({ persona: quien, error: 'descuentos: ' + desc.error }); continue }
     const { error: e } = await client.rpc('liquidacion_final_exportar', { p_final_id: f.id, p_version: f.version, p_archivo: nombre, p_hash: hash })
     if (e) { rechazadas.push({ persona: quien, error: e.message }); continue }
-    filas.push(...propias)
+    filas.push(...propias, ...desc.filas)
     incluidas.push(quien)
   }
   if (!filas.length) return { bytes: null, nombre, incluidas, rechazadas }
