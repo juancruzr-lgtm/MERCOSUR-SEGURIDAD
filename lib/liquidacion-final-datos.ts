@@ -233,12 +233,15 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
   if (!vacaciones) avisos.push('Faltan las vacaciones (no se confirmaron en la baja ni se cargaron después): 208 queda pendiente.')
 
   const controlSAC = b.fecha_baja && p.cuil ? await mejorRemuneracionSemestre(client, p.cuil, b.fecha_baja) : null
+  const eventual = await esEventual(client, p.cuil, b, ingreso)
+  if (eventual) { const i = avisos.findIndex(a => a.startsWith('Faltan las vacaciones')); if (i >= 0) avisos.splice(i, 1) }
 
   return {
     datos: {
       persona: p,
       baja: { fecha: b.fecha_baja, causa: b.causa, fechaIngreso: ingreso, causal },
       controlSAC,
+      eventual,
       parametros: { basico: P.basico, horaExtra: P.horaExtra, valorDia, conteoSAC: CONTEO_SAC_CONFIRMADO },
       ordinarios: ord,
       yaLiquidado,
@@ -249,6 +252,25 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
     avisos,
     error: null,
   }
+}
+
+/**
+ * Contrato eventual: la modalidad de su última relación en ARCA dice «eventual»;
+ * sin dato de ARCA, fin de contrato con menos de un mes de antigüedad.
+ */
+async function esEventual(client: any, cuil: string | null, b: BajaFila, ingreso: string | null): Promise<boolean> {
+  if (cuil) {
+    try {
+      const { data } = await client.rpc('arca_relaciones_para_visual')
+      const r = ((data ?? []) as any[]).find(x => x.cuil === cuil)
+      if (r?.modalidad) return /eventual/i.test(String(r.modalidad))
+    } catch { /* sin acceso a ARCA: se usa la antigüedad */ }
+  }
+  if (b.causa === 'fin_contrato' && ingreso && b.fecha_baja) {
+    const dias = (Date.parse(b.fecha_baja) - Date.parse(ingreso)) / 86400000
+    return dias >= 0 && dias < 31
+  }
+  return false
 }
 
 /**

@@ -153,6 +153,11 @@ export interface DatosLiquidacionFinal {
   }
   /** null = no se pudieron leer los datos operativos del mes (faltante). */
   ordinarios: OrdinariosHastaBaja | null
+  /**
+   * Contrato eventual (modalidad de ARCA «eventual»): no se liquidan vacaciones
+   * (JC 21/10: son eventuales de menos de un mes). Se pueden agregar con un ajuste.
+   */
+  eventual?: boolean
   /** Lo ya enviado a Visual en el mes de la baja (períodos exportados/liquidados). */
   yaLiquidado: { codigo: string; cantidad: number | null; importe: number | null }[]
   /** Extras del mes ya pagadas por banco (lotes no anulados). */
@@ -267,6 +272,11 @@ const NOMBRES: Record<string, string> = {
 }
 const TOL = 0.005
 
+const MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE']
+/** Período de Visual por defecto: el mes de la desvinculación (JC 21/10), p. ej. «Liq. Final OCTUBRE 2026». */
+export const periodoVisualDeBaja = (fechaBaja: string | null): string | null =>
+  fechaBaja && /^\d{4}-\d{2}/.test(fechaBaja) ? `Liq. Final ${MESES[Number(fechaBaja.slice(5, 7)) - 1]} ${fechaBaja.slice(0, 4)}` : null
+
 /**
  * Calcula el borrador. PURO: no lee nada. Lo que falta queda en `faltantes`
  * (bloquean «lista»); lo que hay que mirar queda en `advertencias`.
@@ -373,9 +383,12 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
   // ── Vacaciones no gozadas (208) y SAC sobre vacaciones (217) ──
   const vac = d.entradas.vacaciones ?? {}
   const saldo = vac.saldoDias ?? null
-  const tomadas = vac.tomadasDias ?? null
+  // Sin tomadas cargadas, son cero (JC 21/10); el saldo sí hace falta.
+  const tomadas = vac.tomadasDias ?? (saldo != null ? 0 : null)
+  if (saldo != null && vac.tomadasDias == null) advertencias.push('Vacaciones tomadas sin cargar: se toman como 0.')
   let noGozadas: number | null = null
-  if (!sueldoFijo) {
+  if (d.eventual && !sueldoFijo) advertencias.push('Contrato eventual: no se liquidan vacaciones (208/217). Si correspondieran, agregalas con un ajuste.')
+  if (!sueldoFijo && !d.eventual) {
     if (saldo == null) falta('vacaciones_saldo', 'Faltan las vacaciones devengadas confirmadas en el registro de baja (no se asume cero).')
     if (tomadas == null) falta('vacaciones_tomadas', 'Faltan las vacaciones tomadas confirmadas en el registro de baja (no se asume cero).')
     if (saldo != null && tomadas != null) {
@@ -471,7 +484,9 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
   }
 
   // ── Catálogo: todo lo que se manda tiene que ser política 'valor' ──
-  if (!d.entradas.visualPeriodo?.trim()) falta('visual_periodo', 'Indicá el período / tipo de liquidación con que se importa en Visual (ej. «Liq. Especial OCTUBRE 2026»).')
+  // Período de Visual: el cargado, o el mes de la desvinculación.
+  const visualPeriodo = d.entradas.visualPeriodo?.trim() || periodoVisualDeBaja(fechaBaja)
+  if (!visualPeriodo) falta('visual_periodo', 'Indicá el período / tipo de liquidación con que se importa en Visual (ej. «Liq. Final OCTUBRE 2026»).')
   for (const l of lineas) {
     const cfg = d.catalogo.get(l.codigo)
     l.detalle.tipo = cfg?.tipo_visual ?? null
@@ -499,7 +514,7 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
       causal: { codigo: d.baja.causa ?? null, nombre: d.baja.causal?.nombre ?? null, evaluar },
       sugerencias,
       controlSAC,
-      visualPeriodo: d.entradas.visualPeriodo?.trim() || null,
+      visualPeriodo,
       extras: { horas, valorHora: horaExtra, bruto, pagado, pendiente },
       ya_liquidado: [...d.yaLiquidado].map(y => ({ codigo: String(y.codigo), cantidad: y.cantidad, importe: y.importe }))
         .sort((a, b) => a.codigo.localeCompare(b.codigo)),

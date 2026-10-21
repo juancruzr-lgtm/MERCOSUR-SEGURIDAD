@@ -104,9 +104,10 @@ describe('conceptos según la causal', () => {
     expect(claves(r)).toEqual([])
     expect(r.calculo.causal.evaluar).toEqual([])
   })
-  it('sin período/tipo de Visual → pendiente', () => {
+  it('sin período/tipo de Visual → sale del mes de la baja (sin pendiente)', () => {
     const r = calcularLiquidacionFinal(base('renuncia', { entradas: { vacaciones: { saldoDias: 2, tomadasDias: 0 } } }))
-    expect(claves(r)).toEqual(['visual_periodo'])
+    expect(claves(r)).toEqual([])
+    expect(r.calculo.visualPeriodo).toMatch(/^Liq. Final /)
   })
   it('cada línea lleva si es remunerativa o no (catálogo de Visual)', () => {
     const r = calcularLiquidacionFinal(base('renuncia'))
