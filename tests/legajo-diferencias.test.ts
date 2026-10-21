@@ -84,6 +84,10 @@ describe('textos', () => {
     expect(detalleTexto(d)).toBe('No figura en la consulta del 13/10/2026. Figuraba en la consulta del 05/10/2026 (inicio 31/07/2026, fin 03/08/2026, baja: Renuncia del trabajador).')
     expect(situacionTexto(d)).toMatch(/^nunca fichó/)
   })
+  it('activo con baja en ARCA (consultas de movimientos acumuladas)', () => {
+    const d = { tipo: 'activo_sin_relacion' as const, detalle: { consulta: '2026-10-21', baja: 'Renuncia del trabajador', inicio: '2024-01-01', fin: '2026-10-20', tiene_cuil: true } }
+    expect(detalleTexto(d)).toBe('ARCA informó la baja en la consulta del 21/10/2026: Renuncia del trabajador (inicio 01/01/2024, fin 20/10/2026).')
+  })
   it('sin CUIL, identidad y DNI repetido', () => {
     expect(detalleTexto({ tipo: 'sin_cuil', detalle: { cuil_arca: '20111111112', nombre_arca: 'PEREZ JUAN' } })).toMatch(/CUIL 20111111112/)
     expect(detalleTexto({ tipo: 'sin_cuil', detalle: { cuil_arca: null } })).toMatch(/no trae/)
