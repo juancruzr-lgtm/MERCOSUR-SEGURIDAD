@@ -398,6 +398,12 @@ export interface FilaResumenGuardia {
    * mensualizado que NO se liquida por jornada ("cubrió N turnos").
    */
   observaciones: string[]
+  /**
+   * Baja con liquidación final del mes (JC 21/10): la fila sale igual en el Excel
+   * de trabajo (en el bloque de bajas, sumando horas y días al total), pero sus
+   * conceptos ya los paga la final: no entran al consolidado ni a las extras.
+   */
+  bajaConFinal?: boolean
   /** Trazabilidad: qué datos de MERCOSUR originaron la fila. */
   origen: {
     turnoIds: string[]
@@ -977,6 +983,8 @@ export interface EstilosPlantilla {
    * para no romper fixtures mínimos; el escritor cae a `total` si falta.
    */
   subtotalVigiladores?: number
+  /** Filas de bajas con liquidación final (bloque aparte; no se consolidan ni pagan en el mensual). */
+  filasBajaFinal?: number[]
 }
 
 export interface PlantillaLiquidacion {
@@ -1439,7 +1447,7 @@ export function plantillaLiquidacionResumenGuardia(
   let subtotalVigiladores = 0  // fila del SUBTOTAL VIGILADORES (para REC/Extras)
   const subtotales: { fila: number; suma: Record<string, number> }[] = []
   for (const gp of grupos) {
-    const filasGrupo = resumen.filas.filter(f => f.grupo === gp.clave)
+    const filasGrupo = resumen.filas.filter(f => f.grupo === gp.clave && !f.bajaConFinal)
     put(`A${r}`, gp.titulo)
     titulos.push(r)
     r += 1
@@ -1467,7 +1475,31 @@ export function plantillaLiquidacionResumenGuardia(
     r += 2 // subtotal + fila separadora vacía
   }
 
-  // TOTAL GENERAL = suma de los tres subtotales (nunca SUM del rango entero).
+  // BLOQUE 4 — bajas con liquidación final del mes (JC 21/10): salen todos los que
+  // trabajaron, juntos, y suman horas y días al TOTAL GENERAL. Sólo si hay alguna.
+  const filasBajaFinal: number[] = []
+  const bajas = resumen.filas.filter(f => f.bajaConFinal)
+  if (bajas.length) {
+    put(`A${r}`, 'BLOQUE 4 - BAJAS CON LIQUIDACIÓN FINAL (ya liquidadas: no se exportan en el mensual)')
+    titulos.push(r)
+    r += 1
+    const primeraDato = r
+    const suma: Record<string, number> = {}
+    const acum = (col: string, v: number) => { suma[col] = (suma[col] ?? 0) + v }
+    for (const fila of bajas) {
+      emitirFila(fila, r, acum)
+      filasDatos.push(r); filasBajaFinal.push(r)
+      r += 1
+    }
+    const filaSubtotal = r
+    put(`A${filaSubtotal}`, 'SUBTOTAL BAJAS')
+    for (const col of colsTotales) put(`${col}${filaSubtotal}`, suma[col] ?? 0, `SUM(${col}${primeraDato}:${col}${r - 1})`)
+    subtotalesFilas.push(filaSubtotal)
+    subtotales.push({ fila: filaSubtotal, suma })
+    r += 2
+  }
+
+  // TOTAL GENERAL = suma de los subtotales (nunca SUM del rango entero).
   const filaTotales = r
   put(`A${filaTotales}`, 'TOTAL GENERAL')
   for (const col of colsTotales) {
@@ -1490,6 +1522,7 @@ export function plantillaLiquidacionResumenGuardia(
       total: filaTotales,
       filasDatos,
       subtotalVigiladores,
+      ...(filasBajaFinal.length ? { filasBajaFinal } : {}),
     },
   }
 }

@@ -267,7 +267,9 @@ async function pagosRegistrados(client: any, periodoId: string, tipo: 'sueldos' 
 export function extrasDePlantilla(plantilla: PlantillaLiquidacion): Map<string, number> {
   const v = new Map(plantilla.celdas.map(c => [c.ref, c.v]))
   const out = new Map<string, number>()
+  const bajas = new Set(plantilla.estilos.filasBajaFinal ?? [])
   for (const r of plantilla.estilos.filasDatos) {
+    if (bajas.has(r)) continue   // las extras de una baja las paga la liquidación final
     const uid = String(v.get(`BD${r}`) ?? '')
     if (!uid) continue
     const ap = Number(v.get(`AP${r}`) ?? 0)
@@ -601,6 +603,16 @@ export async function plantillaTrabajoDelMes(
     },
   })
 
+  // Bajas con liquidación final del mes: siguen en el Excel (bloque aparte, suman
+  // horas y días), pero sus conceptos los paga la final (JC 21/10).
+  if (!rec) {
+    try {
+      const { data: finales } = await client.from('liquidacion_final').select('estado, mes, baja:baja_laboral(empleado_id)').eq('mes', mes).neq('estado', 'anulada')
+      const conFinal = new Set(((finales ?? []) as any[]).map(x => x?.baja?.empleado_id).filter(Boolean).map(String))
+      for (const f of resumen.filas) if (conFinal.has(f.empleadoId)) f.bajaConFinal = true
+    } catch { /* sin acceso a las finales: quedan en su bloque de siempre */ }
+  }
+
   // Recorte de una baja sin actividad en el mes: no es un error (no hay ordinarios).
   if (resumen.filas.length === 0 && rec) return { plantilla: null, filas: 0, error: null, resumen }
   if (resumen.filas.length === 0) return { plantilla: null, filas: 0, error: 'No hay empleados activos para el período (padrón vacío).' }
@@ -748,9 +760,12 @@ export function filasConsolidadasDePlantilla(plantilla: PlantillaLiquidacion): F
   for (const col of COLS_CONCEPTO) codigoDeCol[col] = String(porRef.get(`${col}${encab}`) ?? '').trim()
 
   const filas: FilaConsolidada[] = []
+  const bajas = new Set(plantilla.estilos.filasBajaFinal ?? [])
   for (const c of plantilla.celdas) {
     const mm = c.ref.match(/^BD(\d+)$/)
     if (!mm) continue
+    // Bajas con liquidación final: sus conceptos ya van en la final (no se consolidan).
+    if (bajas.has(Number(mm[1]))) continue
     // La fila de encabezado también tiene BD ('usuario_id') y en las columnas de
     // concepto lleva los CÓDIGOS como texto: NO es un empleado, se saltea.
     if (Number(mm[1]) === encab) continue
