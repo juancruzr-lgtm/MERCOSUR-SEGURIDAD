@@ -120,7 +120,7 @@ export function diferenciasDeHoja(
     if (vistos.has(l.codigo)) { errores.push(`El código ${l.codigo} está dos veces en la hoja.`); continue }
     vistos.add(l.codigo)
     const g = porCodigo.get(l.codigo)
-    const ajuste: AjusteManual = { codigo: l.codigo, cantidad: null, importe: null, motivo: l.motivo ?? '' }
+    const ajuste: AjusteManual = { codigo: l.codigo, cantidad: null, importe: null, motivo: l.motivo && l.motivo.length >= 3 ? l.motivo : 'Editado en el Excel de trabajo' }
     let cambio = false
     if (!g) {
       if (l.importe == null && l.cantidad == null) continue
@@ -134,7 +134,6 @@ export function diferenciasDeHoja(
       if (cambio) cambios.push(`${l.codigo}: ${g.cantidad ?? '—'} × ${g.importe ?? '—'} → ${ajuste.cantidad ?? g.cantidad ?? '—'} × ${ajuste.importe ?? g.importe ?? '—'}.`)
     }
     if (!cambio) continue
-    if (!l.motivo || l.motivo.length < 3) { errores.push(`${l.codigo}: falta el motivo del cambio en la columna H.`); continue }
     entradas.ajustes = [...(entradas.ajustes ?? []).filter(a => a.codigo !== l.codigo), ajuste]
   }
 

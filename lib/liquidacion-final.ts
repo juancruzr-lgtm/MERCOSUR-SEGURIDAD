@@ -125,6 +125,16 @@ export interface EntradasFinal {
   evaluaciones?: EvaluacionConcepto[]
   /** Período / tipo con que se importa en Visual (ej. «Liq. Especial OCTUBRE 2026»). */
   visualPeriodo?: string | null
+  /**
+   * Correcciones de la fila del Excel de trabajo (formato mensual) de esta persona:
+   * mismas claves que liquidacion_ajuste (jornadas, horas_liquidables, feriados…,
+   * 'celda:H', 'celda:AL'). Se aplican a la planilla del mes recortada a la baja.
+   */
+  ordinarios?: Record<string, number | null>
+  /** Nota de esas correcciones. */
+  ordinariosMotivo?: string | null
+  /** Parámetros editados en el Excel de las finales (pisan los del mes sólo para esta final). */
+  parametros?: Partial<{ basico: number; presentismo: number; viatico: number; noRem: number; horaExtra: number; hora: number | null; dia: number | null }>
 }
 
 export interface DatosLiquidacionFinal {
@@ -290,6 +300,9 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
     if (fechaBaja) falta('ordinarios', 'No se pudieron leer los días, horas y novedades del mes de la baja.')
   } else {
     const o = d.ordinarios
+    if (d.entradas.ordinarios && Object.keys(d.entradas.ordinarios).length) {
+      advertencias.push(`Días/horas corregidos en el Excel de trabajo (${Object.entries(d.entradas.ordinarios).map(([k, v]) => `${k}: ${v ?? 'vacío'}`).join(', ')}): ${d.entradas.ordinariosMotivo ?? 'sin motivo'}`)
+    }
     if (o.novedadInformada) advertencias.push('Hay novedades mensuales informadas sin fechas: no se pueden cortar en la fecha de baja. Revisar licencias/vacaciones del mes.')
     if (o.jornadas === 0 && o.conceptos.every(c => !c.importe)) advertencias.push('Sin jornadas ni conceptos ordinarios en el mes de la baja: el borrador lleva sólo los conceptos finales.')
     if (o.jornadas > 0) {

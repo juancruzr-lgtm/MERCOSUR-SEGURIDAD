@@ -89,13 +89,13 @@ describe('Excel de trabajo de todas las finales', () => {
     expect(d.errores.join(' ')).toMatch(/no se asumen cero/)
   }, 60000)
 
-  it('cambio de importe: exige motivo en H; con motivo es un ajuste; una fila libre agrega un concepto', async () => {
+  it('cambio de importe: es un ajuste (la nota en H es opcional); una fila libre agrega un concepto', async () => {
     const wb = await libro()
     const ws = wb.getWorksheet('PANIAGUA EDGAR IVAN')!
     ws.getCell(`D${fila(ws, '203')}`).value = 100000
     let d = diferenciasDeHoja(leerHojasLiquidacionFinal(wb)[1], guardado(paniagua), paniagua.lineas)
-    expect(d.entradas).toBeNull()
-    expect(d.errores).toEqual(['203: falta el motivo del cambio en la columna H.'])
+    expect(d.errores).toEqual([])
+    expect(d.entradas!.ajustes).toEqual([{ codigo: '203', cantidad: null, importe: 100000, motivo: 'Editado en el Excel de trabajo' }])
 
     ws.getCell(`H${fila(ws, '203')}`).value = 'Viático acordado'
     const libre = fila(ws, 'TOTAL') - 1
