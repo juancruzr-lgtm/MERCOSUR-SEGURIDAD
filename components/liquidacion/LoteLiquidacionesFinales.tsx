@@ -34,7 +34,7 @@ function descargar(bytes: BlobPart, nombre: string, mime: string) {
 export default function LoteLiquidacionesFinales({ finales, onCambio }: { finales: FinalFila[]; onCambio: () => void }) {
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null)
   const [ocupado, setOcupado] = useState('')
-  const [difs, setDifs] = useState<{ finalId: string; version: number; persona?: string | null; hoja: string; cambios: string[]; errores: string[]; entradas: any; legajoVisual?: { usuarioId: string; valor: string } | null }[] | null>(null)
+  const [difs, setDifs] = useState<{ finalId: string; version: number; persona?: string | null; hoja: string; cambios: string[]; errores: string[]; entradas: any; noTomados?: string[]; legajoVisual?: { usuarioId: string; valor: string } | null }[] | null>(null)
   const [avisosExcel, setAvisosExcel] = useState<string[]>([])
   const [eligiendo, setEligiendo] = useState(false)
   const [elegidas, setElegidas] = useState<Set<string>>(new Set())
@@ -55,7 +55,7 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
     const r = await excelDeLoteMensual(supabase, editables)
     if (r.error || !r.buf) return r.error ?? 'sin archivo'
     descargar(r.buf, r.nombre, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    resumenExcel = `Excel de trabajo descargado: ${editables.length - r.omitidas.length} persona(s) con el formato del Excel mensual y, al final, las columnas de la liquidación. Corregí lo que haga falta, escribí el motivo y volvé a subirlo.`
+    resumenExcel = `Excel de trabajo descargado: ${editables.length - r.omitidas.length} persona(s) con el formato del Excel mensual y, al final, las columnas de la liquidación. Editá lo que quieras y volvé a subirlo: la app toma los cambios y los refleja en el archivo de Visual.`
       + (r.omitidas.length ? ` Sin calcular o sin fecha de baja (no van): ${r.omitidas.join(', ')}.` : '')
     return null
   }, () => resumenExcel)
@@ -124,7 +124,7 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
     <div style={S.card}>
       <strong>Todas las liquidaciones finales</strong>
       <div style={{ ...S.sub, marginTop: 4 }}>
-        Bajá el Excel de trabajo (mismo formato que el mensual: una fila por persona y, al final, las columnas de la liquidación), corregí lo que falte con su motivo, volvelo a subir y exportá un solo archivo de Visual con los empleados de baja.
+        Bajá el Excel de trabajo (mismo formato que el mensual: una fila por persona y, al final, las columnas de la liquidación), editá lo que quieras, volvelo a subir y exportá un solo archivo de Visual con los empleados de baja.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
         <button style={S.btn2} disabled={!!ocupado || !editables.length} onClick={() => void bajarExcel()}>{ocupado === 'excel' ? 'Armando…' : `Bajar Excel de trabajo (${editables.length})`}</button>
@@ -149,12 +149,15 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
           <strong>Cambios leídos del Excel</strong>
           {avisosExcel.map((a, i) => <div key={i} style={{ color: '#fbbf24', fontSize: 12.5, marginTop: 4 }}>{a}</div>)}
           <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 6 }}>
-            <thead><tr><th style={S.th}>Persona / hoja</th><th style={S.th}>Cambios</th><th style={S.th}>Problemas</th></tr></thead>
+            <thead><tr><th style={S.th}>Persona / hoja</th><th style={S.th}>Cambios</th><th style={S.th}>Avisos</th></tr></thead>
             <tbody>{difs.map(d => (
               <tr key={d.finalId}>
                 <td style={S.td}>{d.persona ?? d.hoja}</td>
                 <td style={S.td}>{d.cambios.length ? d.cambios.join(' · ') : <span style={S.sub}>sin cambios</span>}</td>
-                <td style={{ ...S.td, color: '#f87171' }}>{d.errores.join(' · ')}</td>
+                <td style={S.td}>
+                  {d.errores.length > 0 && <div style={{ color: '#f87171' }}>{d.errores.join(' · ')}</div>}
+                  {(d.noTomados ?? []).length > 0 && <div style={{ color: '#fbbf24' }}>No se toma: {d.noTomados!.join(' · ')}</div>}
+                </td>
               </tr>
             ))}</tbody>
           </table>
@@ -162,7 +165,7 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
             <button style={S.btn} disabled={!!ocupado || !cambiosAplicables} onClick={() => void aplicar()}>Aplicar cambios ({cambiosAplicables})</button>
             <button style={S.btn2} onClick={() => { setDifs(null); setAvisosExcel([]) }}>Descartar</button>
           </div>
-          <div style={{ ...S.sub, marginTop: 4 }}>Las filas con problemas no se aplican: corregilas en el Excel y volvé a subirlo.</div>
+          <div style={{ ...S.sub, marginTop: 4 }}>Sólo no se aplica una fila si el borrador cambió después de bajar el Excel (en rojo): bajalo de nuevo.</div>
         </div>
       )}
 

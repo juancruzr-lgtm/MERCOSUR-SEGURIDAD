@@ -131,8 +131,10 @@ export interface EntradasFinal {
    * 'celda:H', 'celda:AL'). Se aplican a la planilla del mes recortada a la baja.
    */
   ordinarios?: Record<string, number | null>
-  /** Motivo de esas correcciones (obligatorio al cargarlas). */
+  /** Nota de esas correcciones. */
   ordinariosMotivo?: string | null
+  /** Parámetros editados en el Excel de las finales (pisan los del mes sólo para esta final). */
+  parametros?: Partial<{ basico: number; presentismo: number; viatico: number; noRem: number; horaExtra: number; hora: number | null; dia: number | null }>
 }
 
 export interface DatosLiquidacionFinal {

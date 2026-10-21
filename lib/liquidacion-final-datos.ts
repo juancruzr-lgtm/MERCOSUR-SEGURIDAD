@@ -14,7 +14,18 @@ import {
 import { cargarParametrosDelMes, plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
 import { parsearPlanillaVisual, type CeldaVisual } from '@/lib/liquidacion-visual'
 import { diferenciasDeHoja, leerHojasLiquidacionFinal, type DiferenciasHoja } from '@/lib/liquidacion-final-lote'
-import { plantillaLiquidacionResumenGuardia, type FilaResumenGuardia, type PlantillaLiquidacion } from '@/lib/resumen-guardia'
+import { plantillaLiquidacionResumenGuardia, type FilaResumenGuardia, type ParametrosLiquidacion, type PlantillaLiquidacion } from '@/lib/resumen-guardia'
+
+/** Parámetros del mes con los editados en el Excel de las finales (hora/día null = vuelven a la fórmula). */
+export function conParametros(P: ParametrosLiquidacion, extra?: EntradasFinal['parametros'] | null): ParametrosLiquidacion {
+  if (!extra) return P
+  const out: ParametrosLiquidacion = { ...P }
+  for (const [k, v] of Object.entries(extra)) {
+    if (k === 'hora' || k === 'dia') (out as any)[k] = v ?? null
+    else if (v != null) (out as any)[k] = Number(v)
+  }
+  return out
+}
 import {
   COL_FINAL, SIN_USUARIO, anexarColumnasFinal, codigosDeColumnas, correccionesDeVista, diferenciasFinalMensual, leerHojaFinalMensual,
   type DiferenciaMensual, type FilaFinalMensual, type GuardadoFinal, type HojaFinalMensual,
@@ -129,10 +140,10 @@ export const finDelMes = (iso: string) => new Date(Date.UTC(Number(iso.slice(0, 
  * novedades (licencias, vacaciones, ART) se cortan en la fecha efectiva. SAC y
  * vacaciones siguen usando la fecha efectiva.
  */
-async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[], correcciones?: Record<string, number | null> | null): Promise<OrdinariosHastaBaja | null> {
+async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[], correcciones?: Record<string, number | null> | null, parametros?: ParametrosLiquidacion): Promise<OrdinariosHastaBaja | null> {
   const mes = fechaBaja.slice(0, 7)
   const ajustes = correcciones && Object.keys(correcciones).length ? new Map([[empleadoId, correcciones]]) : undefined
-  const r = await plantillaTrabajoDelMes(client, mes, ajustes, { recorte: { empleadoId, hasta: finDelMes(fechaBaja), hastaNovedades: fechaBaja } })
+  const r = await plantillaTrabajoDelMes(client, mes, ajustes, { parametros, recorte: { empleadoId, hasta: finDelMes(fechaBaja), hastaNovedades: fechaBaja } })
   if (r.error) { advertencias.push(`No se pudo armar la planilla del mes: ${r.error}`); return null }
   const fila = r.resumen?.filas.find(f => f.empleadoId === empleadoId)
   if (fila && fechaBaja < finDelMes(fechaBaja)) {
@@ -174,12 +185,13 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
     ingreso = l?.fecha_ingreso ?? null
   }
   const mes = b.fecha_baja ? b.fecha_baja.slice(0, 7) : null
-  const P = await cargarParametrosDelMes(client, mes ?? new Date().toISOString().slice(0, 7))
+  const P = conParametros(await cargarParametrosDelMes(client, mes ?? new Date().toISOString().slice(0, 7)), f.entradas?.parametros)
   const hora = P.hora != null ? Number(P.hora) : P.basico / 200
   const valorDia = P.dia != null ? Number(P.dia) : hora * 8
 
   let ord: OrdinariosHastaBaja | null = null
-  if (b.fecha_baja && b.empleado_id) ord = await ordinarios(client, b.empleado_id, b.fecha_baja, avisos, f.entradas?.ordinarios)
+  if (b.fecha_baja && b.empleado_id) ord = await ordinarios(client, b.empleado_id, b.fecha_baja, avisos, f.entradas?.ordinarios, f.entradas?.parametros ? P : undefined)
+  if (f.entradas?.parametros && Object.keys(f.entradas.parametros).length) avisos.push(`Parámetros editados en el Excel de las finales: ${Object.entries(f.entradas.parametros).map(([k, v]) => `${k} ${v ?? 'fórmula'}`).join(', ')}.`)
   else if (b.fecha_baja && !b.empleado_id) {
     ord = { jornadas: 0, conceptos: [], horasExtra: 0 }
     avisos.push('La persona no tiene usuario en la app: no hay días ni horas registrados para el mes de la baja.')
@@ -509,7 +521,7 @@ interface PlanillaFinales {
   /** La misma con las columnas de la liquidación final. */
   conFinal: PlantillaLiquidacion
   /** Rearma la planilla con correcciones adicionales por fila (para leer lo editado). */
-  armar: (extra: Map<string, Record<string, number | null>>) => PlantillaLiquidacion
+  armar: (extra: Map<string, Record<string, number | null>>, parametros?: Partial<ParametrosLiquidacion>) => PlantillaLiquidacion
   guardados: Map<string, GuardadoFinal>
 }
 
@@ -524,7 +536,8 @@ async function planillaFinalesDelMes(client: any, mes: string, finales: FinalFil
   const extra = new Map<string, number>()
   const ajustesBase = new Map<string, Record<string, number | null>>()
   const porFinal: { f: FinalFila; uid: string; conUsuario: boolean; p: Persona; lineas: any[] }[] = []
-  const P = await cargarParametrosDelMes(client, mes)
+  // Parámetros: los del mes con los editados en este Excel (iguales para todas las finales de la hoja).
+  const P = conParametros(await cargarParametrosDelMes(client, mes), finales.find(f => f.entradas?.parametros)?.entradas?.parametros)
   const plantillaVacia = plantillaLiquidacionResumenGuardia({ mes, filas: [], totales: { empleados: 0, jornadas: 0, horasReales: 0, horasLiquidables: 0, horasNocturnas: 0, feriadosTrabajados: 0 } }, undefined, undefined, undefined, P)
   const colsPorCodigo = codigosDeColumnas(plantillaVacia)
   for (const f of finales) {
@@ -551,10 +564,10 @@ async function planillaFinalesDelMes(client: any, mes: string, finales: FinalFil
     porFinal.push({ f, uid, conUsuario: Boolean(fila), p, lineas: lineas as any[] })
   }
   const resumen = { mes, filas, totales: { empleados: filas.length, jornadas: 0, horasReales: 0, horasLiquidables: 0, horasNocturnas: 0, feriadosTrabajados: 0 } }
-  const armar = (mas: Map<string, Record<string, number | null>>) => {
+  const armar = (mas: Map<string, Record<string, number | null>>, parametros?: Partial<ParametrosLiquidacion>) => {
     const unidos = new Map(ajustesBase)
     for (const [uid, m] of Array.from(mas.entries())) unidos.set(uid, { ...(unidos.get(uid) ?? {}), ...m })
-    return plantillaLiquidacionResumenGuardia(resumen, unidos, sueldo, extra, P)
+    return plantillaLiquidacionResumenGuardia(resumen, unidos, sueldo, extra, conParametros(P, parametros as any))
   }
   const base = armar(new Map())
   const filasFinal = new Map<string, FilaFinalMensual>()
@@ -640,7 +653,7 @@ export async function analizarExcelLoteMensual(client: any, buf: ArrayBuffer): P
     for (const l of h.filas) {
       const { data: f } = await leerFinal(client, l.finalId)
       if (f) finales.push(f)
-      else diferencias.push({ hoja: h.nombre, finalId: l.finalId, version: l.version, persona: l.usuarioId, cambios: [], errores: ['No se encontró esa liquidación final (¿anulada?).'], entradas: null, legajoVisual: null })
+      else diferencias.push({ hoja: h.nombre, finalId: l.finalId, version: l.version, persona: l.usuarioId, cambios: [], errores: ['No se encontró esa liquidación final (¿anulada?).'], noTomados: [], entradas: null, legajoVisual: null })
     }
     const meses = Array.from(new Set(finales.map(mesDeFinal).filter(Boolean))) as string[]
     for (const mes of meses) {

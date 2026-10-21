@@ -19,12 +19,14 @@
 //   · vacaciones (BK/BL) y período (BV) → como en la pantalla;
 //   · 120003/208/217/212 escritos a mano (en vez de la fórmula) → ajuste;
 //   · legajo de Visual (A) → se guarda en el usuario.
-// Todo cambio de importes o de la fila exige MOTIVO (BW). Nada se aplica sobre
-// una versión vieja del borrador.
+//   · parámetros (B1:B4, C2:C3, AP6) → parámetros de esas finales (no tocan el mensual).
+// Sin obligaciones (JC 21/10): el motivo (BW) es opcional; lo que no se puede
+// usar se informa pero no frena el resto. Sólo no se aplica sobre una versión
+// vieja del borrador (el Excel se bajó antes de otro cambio).
 
-import type { CeldaPlantilla, ColumnaPlantilla, PlantillaLiquidacion } from '@/lib/resumen-guardia'
+import { PARAMETROS_CELDAS, type CeldaPlantilla, type ColumnaPlantilla, type ParametrosLiquidacion, type PlantillaLiquidacion } from '@/lib/resumen-guardia'
 import { COLUMNAS_ORDINARIAS, redondear, type AjusteManual, type EntradasFinal } from '@/lib/liquidacion-final'
-import { compararCeldasEditadas, compararReimport, type CeldaVisual } from '@/lib/excel-trabajo-reimport'
+import { compararCeldasEditadas, compararParametros, compararReimport, type CeldaVisual } from '@/lib/excel-trabajo-reimport'
 
 /** Columnas de la liquidación final (a la derecha de la planilla mensual). */
 export const COL_FINAL = {
@@ -138,13 +140,13 @@ export function anexarColumnasFinal(plantilla: PlantillaLiquidacion, filas: Map<
   put(`${COL_FINAL.vacSaldo}${enc - 1}`, 'editable')
   put(`${COL_FINAL.vacTomadas}${enc - 1}`, 'editable')
   put(`${COL_FINAL.periodo}${enc - 1}`, 'editable')
-  put(`${COL_FINAL.motivo}${enc - 1}`, 'obligatorio si cambiás importes o la fila')
+  put(`${COL_FINAL.motivo}${enc - 1}`, 'opcional')
   const titulos: [string, string][] = [
     [COL_FINAL.fechaBaja, 'FECHA BAJA'], [COL_FINAL.causa, 'CAUSA'], [COL_FINAL.vacSaldo, 'VAC. SALDO'],
     [COL_FINAL.vacTomadas, 'VAC. TOMADAS'], [COL_FINAL.noGozadas, 'VAC. NO GOZADAS'], [COL_FINAL.diasSAC, 'DÍAS SAC'],
     [COL_FINAL.c120003, '120003 SAC PROP.'], [COL_FINAL.c208, '208 VAC. NO GOZ.'], [COL_FINAL.c217, '217 SAC VAC.'],
     [COL_FINAL.hsExtra, 'HS EXTRA'], [COL_FINAL.extrasPagadas, 'EXTRAS PAGADAS'], [COL_FINAL.c212, '212 EXTRAS'],
-    [COL_FINAL.total, 'TOTAL A VISUAL'], [COL_FINAL.periodo, 'PERÍODO VISUAL'], [COL_FINAL.motivo, 'MOTIVO DE LOS CAMBIOS'],
+    [COL_FINAL.total, 'TOTAL A VISUAL'], [COL_FINAL.periodo, 'PERÍODO VISUAL'], [COL_FINAL.motivo, 'NOTA (opcional)'],
     [COL_FINAL.avisos, 'PENDIENTES / AVISOS'], [COL_FINAL.finalId, MARCA_FINAL_ID], [COL_FINAL.version, 'version'],
   ]
   for (const [col, t] of titulos) put(`${col}${enc}`, t)
@@ -304,7 +306,10 @@ export interface DiferenciaMensual {
   version: number
   persona: string
   cambios: string[]
+  /** Lo que impide aplicar la fila (versión vieja, final inexistente o cerrada). */
   errores: string[]
+  /** Lo editado que no se puede usar en la final: se informa, no frena el resto. */
+  noTomados: string[]
   /** Entradas a guardar (null = nada que guardar en la final). */
   entradas: EntradasFinal | null
   /** Legajo de Visual escrito en la columna A (se guarda en el usuario). */
@@ -325,18 +330,19 @@ const ETIQUETA_CLAVE: Record<string, string> = {
 export function diferenciasFinalMensual(
   hoja: HojaFinalMensual,
   base: PlantillaLiquidacion,
-  armar: (extra: Map<string, Record<string, number | null>>) => PlantillaLiquidacion,
+  armar: (extra: Map<string, Record<string, number | null>>, parametros?: Partial<ParametrosLiquidacion>) => PlantillaLiquidacion,
   guardados: Map<string, GuardadoFinal>,
 ): { diferencias: DiferenciaMensual[]; avisos: string[] } {
   const avisos: string[] = []
-  // Parámetros del mes: se cambian en el Excel mensual, no acá.
-  const baseRef = new Map(base.celdas.map(c => [c.ref, c.v]))
-  for (const ref of ['B1', 'B2', 'B3', 'B4', 'C2', 'C3', 'AP6']) {
-    const m = ref.match(/^([A-Z]+)(\d+)$/)!
-    const arch = numero(hoja.grid[Number(m[2]) - 1]?.[NUMERO(m[1]) - 1])
-    const esp = numero(baseRef.get(ref) as any)
-    if (arch != null && esp != null && Math.abs(arch - esp) >= TOL) avisos.push(`${hoja.nombre}: el parámetro ${ref} cambió (${esp} → ${arch}) y no se usa acá: los parámetros del mes se cambian en el Excel de trabajo mensual.`)
+  // Parámetros (B1:B4, C2:C3, AP6): valen para las finales de esta hoja.
+  const cambiosParam = compararParametros(base, hoja.grid, PARAMETROS_CELDAS)
+  const parametros: Partial<ParametrosLiquidacion> = {}
+  for (const p of cambiosParam) {
+    const def = PARAMETROS_CELDAS.find(d => d.clave === p.clave)
+    if (def) (parametros as any)[def.campo] = p.excel
   }
+  const textoParam = cambiosParam.map(p => `${p.etiqueta}: ${p.mercosur ?? 'fórmula'} → ${p.excel ?? 'fórmula'}.`)
+  const armarConParam = (extra: Map<string, Record<string, number | null>>) => armar(extra, parametros)
 
   const comp = compararReimport(base, hoja.grid)
   const porUsuario = new Map<string, { variables: typeof comp.diffs; legajo: string | null; otrosId: string[] }>()
@@ -357,7 +363,7 @@ export function diferenciasFinalMensual(
   const celdas = compararCeldasEditadas(manuales => {
     const unidos = new Map(variablesArchivo)
     for (const [uid, m] of Array.from(manuales.entries())) unidos.set(uid, { ...(unidos.get(uid) ?? {}), ...m })
-    return armar(unidos)
+    return armarConParam(unidos)
   }, hoja.grid)
   const codigos = codigosDeColumnas(base)
 
@@ -366,12 +372,17 @@ export function diferenciasFinalMensual(
     const g = guardados.get(l.finalId)
     const cambios: string[] = []
     const errores: string[] = []
-    const baseDif = { hoja: hoja.nombre, finalId: l.finalId, version: l.version, persona: g?.persona ?? l.usuarioId }
+    const noTomados: string[] = []
+    const baseDif = { hoja: hoja.nombre, finalId: l.finalId, version: l.version, persona: g?.persona ?? l.usuarioId, noTomados }
     if (!g) { diferencias.push({ ...baseDif, cambios, errores: ['No se encontró esa liquidación final (¿anulada?).'], entradas: null, legajoVisual: null }); continue }
     if (!['pendiente_calculo', 'borrador', 'lista'].includes(g.estado)) {
       diferencias.push({ ...baseDif, cambios, errores: [`Ya está ${g.estado}: no se modifica.`], entradas: null, legajoVisual: null }); continue
     }
     const entradas: EntradasFinal = { ...g.entradas, ajustes: [...(g.entradas.ajustes ?? [])] }
+    if (cambiosParam.length) {
+      entradas.parametros = { ...(g.entradas.parametros ?? {}), ...parametros }
+      cambios.push(...textoParam)
+    }
     const ordinarios: Record<string, number | null> = { ...(g.entradas.ordinarios ?? {}) }
     let tocaFila = false
     const nuevosAjustes: AjusteManual[] = []
@@ -380,18 +391,18 @@ export function diferenciasFinalMensual(
 
     // Variables de la fila (días, horas, feriados, novedades).
     for (const v of x?.variables ?? []) {
-      if (!CLAVES_FILA.has(v.clave)) { errores.push(`${v.etiqueta}: no se usa en la liquidación final (se cambia en el Excel mensual). Dejalo como estaba.`); continue }
-      if (!g.conUsuario) { errores.push(`${v.etiqueta}: la persona no tiene usuario en la app; cargá el importe directamente en la columna del concepto.`); continue }
+      if (!CLAVES_FILA.has(v.clave)) { noTomados.push(`${v.etiqueta}: no forma parte de la liquidación final.`); continue }
+      if (!g.conUsuario) { noTomados.push(`${v.etiqueta}: la persona no tiene días registrados en la app; para que llegue a Visual escribí el importe en la columna del concepto.`); continue }
       ordinarios[v.clave] = v.excel; tocaFila = true
       cambios.push(`${ETIQUETA_CLAVE[v.clave] ?? v.etiqueta}: ${v.mercosur ?? '—'} → ${v.excel ?? 'vacío'}.`)
     }
-    for (const etq of x?.otrosId ?? []) errores.push(`${etq}: se corrige en el legajo de la persona, no en este Excel.`)
+    for (const etq of x?.otrosId ?? []) noTomados.push(`${etq}: se corrige en el legajo de la persona.`)
 
     // Importes escritos a mano en la fila.
     for (const c of celdas.filter(c => c.usuarioId === uid && c.tipo === 'numero')) {
       const col = c.clave.replace('celda:', '')
       if (CELDAS_FILA.has(c.clave)) {
-        if (!g.conUsuario) { errores.push(`${c.etiqueta}: la persona no tiene usuario en la app.`); continue }
+        if (!g.conUsuario) { noTomados.push(`${c.etiqueta}: la persona no tiene días registrados en la app.`); continue }
         ordinarios[c.clave] = c.excel as number; tocaFila = true
         cambios.push(`${ETIQUETA_CLAVE[c.clave] ?? c.etiqueta}: ${c.mercosur ?? '—'} → ${c.excel}.`)
       } else if (codigos.has(col)) {
@@ -399,14 +410,14 @@ export function diferenciasFinalMensual(
         nuevosAjustes.push({ codigo, cantidad: null, importe: Number(c.excel ?? 0), motivo: '' })
         cambios.push(`${codigo} (${col}): ${c.mercosur ?? '—'} → ${c.excel}.`)
       } else {
-        errores.push(`${c.etiqueta} (${col}): es una fórmula o una columna informativa; no se usa en la liquidación final. Dejala como estaba.`)
+        noTomados.push(`${c.etiqueta} (${col}): es informativa, no va a Visual.`)
       }
     }
 
     // Vacaciones y período de Visual.
     if (l.vacSaldo !== g.vacaciones.saldo || l.vacTomadas !== g.vacaciones.tomadas) {
       if (l.vacSaldo == null || l.vacTomadas == null) {
-        if (l.vacSaldo != null || l.vacTomadas != null) errores.push('Vacaciones: completá las dos columnas (saldo y tomadas); vacías no se asumen cero.')
+        if (l.vacSaldo != null || l.vacTomadas != null) noTomados.push('Vacaciones: falta el saldo o las tomadas (vacío no se toma como cero).')
       } else {
         entradas.vacaciones = { saldoDias: l.vacSaldo, tomadasDias: l.vacTomadas, nota: 'cargadas en el Excel de trabajo' }
         cambios.push(`Vacaciones: saldo ${l.vacSaldo}, tomadas ${l.vacTomadas}.`)
@@ -429,26 +440,26 @@ export function diferenciasFinalMensual(
       cambios.push(`${c.codigo}: ${antes ?? '—'} → ${valor} (importe escrito a mano).`)
     }
 
-    const motivo = l.motivo
-    if ((tocaFila || nuevosAjustes.length) && (!motivo || motivo.length < 3)) errores.push('Falta el MOTIVO DE LOS CAMBIOS (columna BW).')
+    // El motivo es opcional: si no se escribió, queda registrado de dónde vino.
+    const motivo = l.motivo && l.motivo.length >= 3 ? l.motivo : 'Editado en el Excel de trabajo'
     if (tocaFila) { entradas.ordinarios = ordinarios; entradas.ordinariosMotivo = motivo }
     for (const a of nuevosAjustes) {
-      a.motivo = motivo ?? ''
+      a.motivo = motivo
       entradas.ajustes = [...(entradas.ajustes ?? []).filter(y => y.codigo !== a.codigo), a]
     }
 
     let legajoVisual: DiferenciaMensual['legajoVisual'] = null
     if (x?.legajo) {
-      if (uid.startsWith(SIN_USUARIO)) errores.push('Legajo de Visual: la persona no tiene usuario en la app; cargalo en el padrón de Visual.')
+      if (uid.startsWith(SIN_USUARIO)) noTomados.push('Legajo de Visual: la persona no tiene usuario en la app; cargalo en el padrón de Visual.')
       else { legajoVisual = { usuarioId: uid, valor: x.legajo }; cambios.push(`Legajo de Visual: ${x.legajo}.`) }
     }
 
-    if (l.version !== g.version && (cambios.length || errores.length)) {
+    if (l.version !== g.version && cambios.length) {
       diferencias.push({ ...baseDif, cambios, errores: [`El borrador cambió después de bajar el Excel (v${l.version} → v${g.version}). Bajalo de nuevo.`, ...errores], entradas: null, legajoVisual: null })
       continue
     }
     const hayEntradas = cambios.some(t => !t.startsWith('Legajo de Visual'))
-    diferencias.push({ ...baseDif, cambios, errores, entradas: hayEntradas && !errores.length ? entradas : null, legajoVisual: errores.length ? null : legajoVisual })
+    diferencias.push({ ...baseDif, cambios, errores, entradas: hayEntradas ? entradas : null, legajoVisual })
   }
   return { diferencias, avisos }
 }

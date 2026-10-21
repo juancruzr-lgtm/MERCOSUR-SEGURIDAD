@@ -43,10 +43,10 @@ const ajustesBase = new Map<string, Record<string, number | null>>([
   [U1, correccionesDeVista(cols, [], { calculado: 43200, aplicado: 0 })],
   [U2, correccionesDeVista(cols, [{ codigo: '001', total: 50000 }], null)],
 ])
-const armar = (extra: Map<string, Record<string, number | null>>) => {
+const armar = (extra: Map<string, Record<string, number | null>>, parametros?: Record<string, any>) => {
   const unidos = new Map(ajustesBase)
   for (const [k, m] of Array.from(extra.entries())) unidos.set(k, { ...(unidos.get(k) ?? {}), ...m })
-  return plantillaLiquidacionResumenGuardia(resumen, unidos, undefined, undefined, P)
+  return plantillaLiquidacionResumenGuardia(resumen, unidos, undefined, undefined, { ...P, ...(parametros ?? {}) })
 }
 const base = armar(new Map())
 const celda = (pl: PlantillaLiquidacion, ref: string) => pl.celdas.find(c => c.ref === ref)
@@ -88,12 +88,12 @@ async function releer(wb: ExcelJS.Workbook) {
   const wb2 = new ExcelJS.Workbook(); await wb2.xlsx.load(await wb.xlsx.writeBuffer()); return leerHojaFinalMensual(wb2.worksheets[0])!
 }
 /** Simula el recálculo de Excel: copia a la fila los valores que dan las fórmulas con las variables nuevas. */
-function recalcularFila(ws: ExcelJS.Worksheet, uid: string, variables: Record<string, number>) {
-  const pl = armar(new Map([[uid, variables]]))
+function recalcularFila(ws: ExcelJS.Worksheet, uid: string, variables: Record<string, number>, parametros?: Record<string, any>) {
+  const pl = armar(new Map([[uid, variables]]), parametros)
   const r = filaDe(pl, uid)
   for (const c of pl.celdas) {
     const m = c.ref.match(/^([A-Z]+)(\d+)$/)
-    if (!m || Number(m[2]) !== r || c.f === undefined) continue
+    if (!m || (Number(m[2]) !== r && Number(m[2]) > 4) || c.f === undefined) continue
     ws.getCell(c.ref).value = { formula: c.f, result: c.v as number } as any
   }
 }
@@ -175,20 +175,35 @@ describe('Excel de finales con el formato del mensual', () => {
     expect(d1.entradas?.ordinarios).toBeUndefined()
   })
 
-  it('sin motivo, en una baja sin usuario o con un parámetro cambiado: no se aplica y se avisa', async () => {
+  it('sin obligaciones: sin nota también se aplica; lo que no se puede usar se informa sin frenar', async () => {
     const wb = await libro()
     const ws = wb.worksheets[0]
     ws.getCell(`${COL_FINAL.c208}${r1}`).value = 1000
     ws.getCell(`G${r2}`).value = 3
-    ws.getCell('B1').value = 999
-    const { diferencias, avisos } = diferenciasFinalMensual(await releer(wb), base, armar, guardados)
+    ws.getCell(`${COL_FINAL.periodo}${r2}`).value = 'Liq. Final OCTUBRE 2026'
+    const { diferencias } = diferenciasFinalMensual(await releer(wb), base, armar, guardados)
     const d1 = diferencias.find(d => d.finalId === F1)!
-    expect(d1.entradas).toBeNull()
-    expect(d1.errores.join(' ')).toMatch(/Falta el MOTIVO/)
+    expect(d1.errores).toEqual([])
+    expect(d1.entradas?.ajustes).toEqual([{ codigo: '208', cantidad: 3, importe: 333.33, motivo: 'Editado en el Excel de trabajo' }])
     const d2 = diferencias.find(d => d.finalId === F2)!
-    expect(d2.entradas).toBeNull()
-    expect(d2.errores.join(' ')).toMatch(/no tiene usuario/)
-    expect(avisos.join(' ')).toMatch(/B1 cambió/)
+    expect(d2.errores).toEqual([])
+    expect(d2.noTomados.join(' ')).toMatch(/no tiene días registrados/)
+    expect(d2.entradas?.visualPeriodo).toBe('Liq. Final OCTUBRE 2026')   // el resto de la fila se aplica igual
+  })
+
+  it('los parámetros editados (básico, hora extra…) se toman para las finales de la hoja', async () => {
+    const wb = await libro()
+    const ws = wb.worksheets[0]
+    ws.getCell('B1').value = 1100000
+    ws.getCell('AP6').value = 2700
+    for (const uid of [U1, U2]) recalcularFila(ws, uid, {}, { basico: 1100000, horaExtra: 2700 })
+    const { diferencias } = diferenciasFinalMensual(await releer(wb), base, armar, guardados)
+    for (const d of diferencias) {
+      expect(d.errores).toEqual([])
+      expect(d.noTomados).toEqual([])
+      expect(d.entradas?.parametros).toEqual({ basico: 1100000, horaExtra: 2700 })
+      expect(d.entradas?.ajustes ?? []).not.toContainEqual(expect.objectContaining({ codigo: '001', motivo: 'Editado en el Excel de trabajo' }))
+    }
   })
 
   it('un Excel bajado antes de un cambio en el borrador no se aplica', async () => {
