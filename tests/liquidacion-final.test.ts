@@ -204,13 +204,29 @@ describe('presentismo (Paniagua)', () => {
 
 
 describe('datos incompletos: marca pendiente, no asume cero', () => {
-  it('sin saldo o sin tomadas de vacaciones → faltante y sin 208/217', () => {
+  it('tomadas sin cargar = 0 (JC 21/10); sin saldo → faltante y sin 208/217', () => {
     const r = calcularLiquidacionFinal(datos({ entradas: { vacaciones: { saldoDias: 14, tomadasDias: null } } }))
-    expect(r.faltantes.map(f => f.clave)).toEqual(['vacaciones_tomadas'])
-    expect(linea(r, '208')).toBeUndefined()
-    expect(linea(r, '217')).toBeUndefined()
+    expect(r.faltantes).toEqual([])
+    expect(linea(r, '208')?.cantidad).toBe(14)
+    expect(r.advertencias.join(' ')).toMatch(/tomadas sin cargar: se toman como 0/)
     const r2 = calcularLiquidacionFinal(datos({ entradas: {} }))
     expect(r2.faltantes.map(f => f.clave)).toEqual(['vacaciones_saldo', 'vacaciones_tomadas'])
+    expect(linea(r2, '208')).toBeUndefined()
+    expect(linea(r2, '217')).toBeUndefined()
+  })
+  it('contrato eventual: sin vacaciones (208/217) ni faltantes de vacaciones (JC 21/10)', () => {
+    const r = calcularLiquidacionFinal({ ...datos({ entradas: {} }), eventual: true })
+    expect(r.faltantes.filter(f => f.clave.startsWith('vacaciones'))).toEqual([])
+    expect(linea(r, '208')).toBeUndefined()
+    expect(linea(r, '217')).toBeUndefined()
+    expect(r.advertencias.join(' ')).toMatch(/Contrato eventual/)
+    expect(linea(r, '120003')).toBeDefined()
+  })
+  it('período de Visual: si no se cargó, sale del mes de la baja', () => {
+    const d = datos()
+    const r = calcularLiquidacionFinal({ ...d, entradas: { ...d.entradas, visualPeriodo: null } })
+    expect(r.faltantes.map(f => f.clave)).not.toContain('visual_periodo')
+    expect(r.calculo.visualPeriodo).toBe('Liq. Final SEPTIEMBRE 2026')
   })
   it('saldo 0 y tomadas 0 cargados a mano → sin 208, sin faltante', () => {
     const r = calcularLiquidacionFinal(datos({ entradas: { vacaciones: { saldoDias: 0, tomadasDias: 0 } } }))
