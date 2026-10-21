@@ -305,12 +305,12 @@ export default function DiferenciasArca() {
     <div style={{ maxWidth: 980, margin: '0 auto' }}>
       <div style={{ fontSize: 20, fontWeight: 800, color: '#e2e8f0' }}>Diferencias con ARCA</div>
       <div style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 12px', lineHeight: 1.45 }}>
-        Compara la última consulta de relaciones laborales de ARCA con los usuarios activos y el legajo. No cambia ni da de baja a nadie: cada caso lo resuelve Administración y queda registrado.
+        Compara las consultas de relaciones laborales de ARCA (cada una trae los movimientos del período; se suman todas) con los usuarios activos y el legajo. No cambia ni da de baja a nadie: cada caso lo resuelve Administración y queda registrado.
       </div>
       <div style={card}>
         <div style={{ fontSize: 14, color: '#e2e8f0' }}>
           {resumen?.consulta
-            ? <>Última consulta cargada: <b>{fechaCorta(resumen.consulta)}</b> · {resumen.relaciones} relaciones laborales</>
+            ? <>Última consulta cargada: <b>{fechaCorta(resumen.consulta)}</b> · {resumen.relaciones} movimientos{resumen.vigentes != null ? <> · <b>{resumen.vigentes}</b> relaciones vigentes sumando todas las consultas</> : null}</>
             : 'Todavía no se cargó ninguna consulta de ARCA.'}
         </div>
         {resumen && resumen.consultas.length > 1 && (

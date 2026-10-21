@@ -34,13 +34,15 @@ export interface Diferencia {
 export interface ResumenDiferencias {
   consulta: string | null
   relaciones: number
+  /** Relaciones vigentes sumando todas las consultas (cada una trae movimientos). */
+  vigentes?: number
   consultas: { fecha: string; relaciones: number; cargada_at: string }[]
   correcciones: { persona: string; empleado_id: string; campo: string; anterior: string | null; nuevo: string | null; fuente: string; at: string }[]
 }
 
 export const TEXTO_TIPO: Record<TipoDiferencia, { titulo: string; ayuda: string }> = {
   contrato_con_fin: { titulo: 'Contrato con fecha de fin', ayuda: 'ARCA registra la relación con fecha de finalización (p. ej. trabajo eventual). Decidir si se renueva, se pasa a permanente o termina.' },
-  activo_sin_relacion: { titulo: 'Activo en la app, no figura en ARCA', ayuda: 'La persona está activa en la app pero no aparece en la última consulta de ARCA. Verificar el alta en ARCA o la baja en la app.' },
+  activo_sin_relacion: { titulo: 'Activo en la app, con baja en ARCA', ayuda: 'ARCA informó la baja de la relación laboral, pero en la app la persona sigue activa. Registrar la baja en la app o verificar en ARCA.' },
   relacion_sin_usuario: { titulo: 'Relación vigente en ARCA sin usuario activo', ayuda: 'ARCA sigue registrando la relación laboral, pero en la app la persona no está activa. Verificar si corresponde la baja en ARCA.' },
   sin_cuil: { titulo: 'Sin CUIL en la app', ayuda: 'Sin CUIL no se puede cruzar con ARCA ni con Visual. Si ARCA lo trae (por DNI), se puede cargar desde acá.' },
   identidad_difiere: { titulo: 'Nombre o DNI distinto de ARCA', ayuda: 'El nombre o el DNI registrado no coincide con ARCA para el mismo CUIL.' },
@@ -124,6 +126,8 @@ export function detalleTexto(d: Pick<Diferencia, 'tipo' | 'detalle'>): string {
     case 'contrato_con_fin':
       return `${x.modalidad ?? 'Relación'}: inicio ${fechaCorta(x.inicio)}, fin ${fechaCorta(x.fin)} (${diasTexto(x.dias_restantes)})`
     case 'activo_sin_relacion': {
+      // Desde 20261112120000: la baja informada por ARCA (consultas acumuladas).
+      if (x.baja) return `ARCA informó la baja en la consulta del ${fechaCorta(x.consulta)}: ${x.baja} (inicio ${fechaCorta(x.inicio)}${x.fin ? `, fin ${fechaCorta(x.fin)}` : ''}).`
       const ant = x.anterior as Record<string, any> | null
       const previo = ant ? ` Figuraba en la consulta del ${fechaCorta(ant.consulta)} (inicio ${fechaCorta(ant.inicio)}${ant.fin ? `, fin ${fechaCorta(ant.fin)}` : ''}${ant.baja ? `, baja: ${ant.baja}` : ''}).` : ''
       return `No figura en la consulta del ${fechaCorta(x.consulta)}${x.tiene_cuil ? '' : ' (no tiene CUIL en la app: se buscó por DNI)'}.${previo}`
