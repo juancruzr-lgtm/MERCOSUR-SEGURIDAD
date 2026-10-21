@@ -137,10 +137,13 @@ function clienteFalso(lineasPor: Record<string, any[]>, rechazar: Set<string>) {
   const llamadas: any[] = []
   const tablas: Record<string, any[]> = {
     usuarios: [], liquidacion_persona: [],
+    // Catálogo de Visual: haberes de la final ('valor') y una línea 0/0 que calcula Visual (descuentos como el mensual).
+    liquidacion_concepto_catalogo: [...['000', '001', '120003', '203', '208', '212', '214', '217'].map(c => ({ codigo_visual: c, politica: 'valor', entrada: c === '000' ? 'CAN' : 'CANIMP', categoria: 'otro' })),
+      { codigo_visual: '011', politica: 'linea_cero', entrada: 'CALCULADO', categoria: 'aporte' }],
   }
   const q = (rows: any[], filtro: Record<string, string> = {}) => {
     const b: any = {
-      select: () => b, order: () => b, limit: () => b,
+      select: () => b, order: () => b, limit: () => b, lte: () => b, gte: () => b, in: () => b,
       eq: (k: string, v: string) => { filtro[k] = v; return b },
       maybeSingle: () => Promise.resolve({ data: rows.find(r => Object.entries(filtro).every(([k, v]) => String(r[k]) === v)) ?? null, error: null }),
       then: (ok: any) => ok({ data: filtro.final_id ? (lineasPor[filtro.final_id] ?? []) : rows, error: null }),
@@ -182,7 +185,7 @@ describe('EXPORTAR LIQUIDACIONES FINALES', () => {
     const XLSX: any = await import('xlsx')
     const filas: any[][] = XLSX.utils.sheet_to_json(XLSX.read(r.bytes, { type: 'array' }).Sheets.Hoja1, { header: 1, raw: true, defval: null }).slice(2)
     expect(new Set(filas.map(f => f[1]))).toEqual(new Set(['20441767871']))
-    expect(filas.map(f => f[2])).toEqual(['000', '001', '120003', '203', '208', '212', '214', '217'])
+    expect(filas.map(f => f[2])).toEqual(['000', '001', '120003', '203', '208', '212', '214', '217', '011'])   // + descuentos 0/0 como el mensual
   }, 60000)
 
   it('importa el resultado de Visual para todas las exportadas que figuran en la planilla', async () => {
