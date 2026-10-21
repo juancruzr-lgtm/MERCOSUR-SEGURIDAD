@@ -14,6 +14,11 @@ import {
 import { cargarParametrosDelMes, plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
 import { parsearPlanillaVisual, type CeldaVisual } from '@/lib/liquidacion-visual'
 import { diferenciasDeHoja, leerHojasLiquidacionFinal, type DiferenciasHoja } from '@/lib/liquidacion-final-lote'
+import { plantillaLiquidacionResumenGuardia, type FilaResumenGuardia, type PlantillaLiquidacion } from '@/lib/resumen-guardia'
+import {
+  COL_FINAL, SIN_USUARIO, anexarColumnasFinal, codigosDeColumnas, correccionesDeVista, diferenciasFinalMensual, leerHojaFinalMensual,
+  type DiferenciaMensual, type FilaFinalMensual, type GuardadoFinal, type HojaFinalMensual,
+} from '@/lib/liquidacion-final-mensual'
 
 /** Fila de baja_laboral (el registro de baja único). */
 export interface BajaFila {
@@ -124,9 +129,10 @@ export const finDelMes = (iso: string) => new Date(Date.UTC(Number(iso.slice(0, 
  * novedades (licencias, vacaciones, ART) se cortan en la fecha efectiva. SAC y
  * vacaciones siguen usando la fecha efectiva.
  */
-async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[]): Promise<OrdinariosHastaBaja | null> {
+async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[], correcciones?: Record<string, number | null> | null): Promise<OrdinariosHastaBaja | null> {
   const mes = fechaBaja.slice(0, 7)
-  const r = await plantillaTrabajoDelMes(client, mes, undefined, { recorte: { empleadoId, hasta: finDelMes(fechaBaja), hastaNovedades: fechaBaja } })
+  const ajustes = correcciones && Object.keys(correcciones).length ? new Map([[empleadoId, correcciones]]) : undefined
+  const r = await plantillaTrabajoDelMes(client, mes, ajustes, { recorte: { empleadoId, hasta: finDelMes(fechaBaja), hastaNovedades: fechaBaja } })
   if (r.error) { advertencias.push(`No se pudo armar la planilla del mes: ${r.error}`); return null }
   const fila = r.resumen?.filas.find(f => f.empleadoId === empleadoId)
   if (fila && fechaBaja < finDelMes(fechaBaja)) {
@@ -148,7 +154,8 @@ async function ordinarios(client: any, empleadoId: string, fechaBaja: string, ad
     if (aj?.length) advertencias.push('El período mensual tiene correcciones manuales de esta persona: no se copian al recorte. Revisarlas y, si corresponden, cargarlas como ajuste.')
   }
   return {
-    jornadas: Number(fila?.jornadasReales ?? 0),
+    // Jornadas corregidas en el Excel de trabajo (columna G) mandan sobre el conteo.
+    jornadas: correcciones?.jornadas != null ? Number(correcciones.jornadas) : Number(fila?.jornadasReales ?? 0),
     conceptos: base.conceptos,
     horasExtra: base.horasExtra,
     extraFija: base.extraFija,
@@ -172,7 +179,7 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
   const valorDia = P.dia != null ? Number(P.dia) : hora * 8
 
   let ord: OrdinariosHastaBaja | null = null
-  if (b.fecha_baja && b.empleado_id) ord = await ordinarios(client, b.empleado_id, b.fecha_baja, avisos)
+  if (b.fecha_baja && b.empleado_id) ord = await ordinarios(client, b.empleado_id, b.fecha_baja, avisos, f.entradas?.ordinarios)
   else if (b.fecha_baja && !b.empleado_id) {
     ord = { jornadas: 0, conceptos: [], horasExtra: 0 }
     avisos.push('La persona no tiene usuario en la app: no hay días ni horas registrados para el mes de la baja.')
@@ -401,13 +408,22 @@ export async function analizarExcelLote(client: any, buf: ArrayBuffer): Promise<
   return { diferencias, error: null }
 }
 
-/** Aplica las diferencias sin errores: guarda entradas (con control de versión) y recalcula. */
-export async function aplicarDiferenciasLote(client: any, diferencias: { finalId: string; version: number; entradas: EntradasFinal | null }[]) {
+/**
+ * Aplica las diferencias sin errores: guarda el legajo de Visual escrito en el
+ * Excel (si vino), las entradas (con control de versión) y recalcula.
+ */
+export async function aplicarDiferenciasLote(client: any, diferencias: { finalId: string; version: number; entradas: EntradasFinal | null; legajoVisual?: { usuarioId: string; valor: string } | null }[]) {
   const resultado: { finalId: string; ok: boolean; error: string | null }[] = []
   for (const d of diferencias) {
-    if (!d.entradas) continue
-    const { error } = await client.rpc('liquidacion_final_guardar_entradas', { p_final_id: d.finalId, p_entradas: d.entradas, p_version: d.version })
-    if (error) { resultado.push({ finalId: d.finalId, ok: false, error: error.message }); continue }
+    if (!d.entradas && !d.legajoVisual) continue
+    if (d.legajoVisual) {
+      const { error } = await client.rpc('actualizar_identidad_usuario', { p_usuario_id: d.legajoVisual.usuarioId, p_cuil: null, p_legajo_visual: d.legajoVisual.valor, p_cuenta: null })
+      if (error) { resultado.push({ finalId: d.finalId, ok: false, error: 'Legajo de Visual: ' + error.message }); continue }
+    }
+    if (d.entradas) {
+      const { error } = await client.rpc('liquidacion_final_guardar_entradas', { p_final_id: d.finalId, p_entradas: d.entradas, p_version: d.version })
+      if (error) { resultado.push({ finalId: d.finalId, ok: false, error: error.message }); continue }
+    }
     const { data: f } = await leerFinal(client, d.finalId)
     const r = f ? await calcularYGuardar(client, f) : { error: 'No se pudo releer' }
     resultado.push({ finalId: d.finalId, ok: !r.error, error: r.error ?? null })
@@ -471,4 +487,171 @@ export async function importarResultadoLote(client: any, finales: FinalFila[], a
     out.push({ persona: p.nombre, ok: !error, detalle: error ? error.message : (data as any)?.repetido ? 'ya estaba importado' : `versión ${(data as any)?.version}` })
   }
   return out
+}
+
+// ── Lote en el FORMATO DEL EXCEL DE TRABAJO MENSUAL (JC 21/10) ──────────────────
+
+/** Fila vacía (sin actividad en el mes o sin usuario): mismas columnas, en cero. */
+function filaSinActividad(id: string, p: Persona): FilaResumenGuardia {
+  return {
+    empleadoId: id, grupo: 'vigiladores', nombre: p.nombre, cuil: p.cuil, legajo: null, legajoVisual: p.legajoVisual, cuenta: null,
+    objetivos: [], jornadas: 0, jornadasReales: 0, fechasConActividad: 0, horasReales: 0, horasLiquidables: 0,
+    feriadosTrabajados: 0, horasEnFeriado: 0, horasNocturnas: 0, horasNocturnasCalculadas: 0, nocturnidadOrigen: null,
+    licencias: null, art: null, vacaciones: null, parteMedico: null, ausenciasSuspensiones: null,
+    notas: ['sin actividad registrada en el mes'], supervisiones: 0, horasSupervision: 0, jornadasSupervision: 0, hsVigilanciaZona: 0,
+    observaciones: [], origen: { turnoIds: [], registroIds: [], novedadIds: [] },
+  } as FilaResumenGuardia
+}
+
+interface PlanillaFinales {
+  /** Planilla mensual con las filas de baja (sin las columnas de la final). */
+  base: PlantillaLiquidacion
+  /** La misma con las columnas de la liquidación final. */
+  conFinal: PlantillaLiquidacion
+  /** Rearma la planilla con correcciones adicionales por fila (para leer lo editado). */
+  armar: (extra: Map<string, Record<string, number | null>>) => PlantillaLiquidacion
+  guardados: Map<string, GuardadoFinal>
+}
+
+/**
+ * Planilla del mes con una fila por baja, cada una con el MISMO recorte que usa
+ * el cálculo de la final (jornadas efectivamente trabajadas del mes, novedades
+ * cortadas en la fecha efectiva) y sus correcciones guardadas.
+ */
+async function planillaFinalesDelMes(client: any, mes: string, finales: FinalFila[]): Promise<{ data: PlanillaFinales | null; error: string | null }> {
+  const filas: FilaResumenGuardia[] = []
+  const sueldo = new Map<string, number>()
+  const extra = new Map<string, number>()
+  const ajustesBase = new Map<string, Record<string, number | null>>()
+  const porFinal: { f: FinalFila; uid: string; conUsuario: boolean; p: Persona; lineas: any[] }[] = []
+  const P = await cargarParametrosDelMes(client, mes)
+  const plantillaVacia = plantillaLiquidacionResumenGuardia({ mes, filas: [], totales: { empleados: 0, jornadas: 0, horasReales: 0, horasLiquidables: 0, horasNocturnas: 0, feriadosTrabajados: 0 } }, undefined, undefined, undefined, P)
+  const colsPorCodigo = codigosDeColumnas(plantillaVacia)
+  for (const f of finales) {
+    const b = f.baja
+    const p = await persona(client, b)
+    const { data: lineas, error: le } = await lineasDeFinal(client, f.id)
+    if (le) return { data: null, error: le }
+    let fila: FilaResumenGuardia | null = null
+    if (b.empleado_id && b.fecha_baja) {
+      const r = await plantillaTrabajoDelMes(client, mes, undefined, { recorte: { empleadoId: b.empleado_id, hasta: finDelMes(b.fecha_baja), hastaNovedades: b.fecha_baja } })
+      if (r.error) return { data: null, error: `${p.nombre}: ${r.error}` }
+      fila = r.resumen?.filas.find(x => x.empleadoId === b.empleado_id) ?? null
+      if (r.sueldoMensual?.has(b.empleado_id)) sueldo.set(b.empleado_id, r.sueldoMensual.get(b.empleado_id)!)
+      if (r.extraMensual?.has(b.empleado_id)) extra.set(b.empleado_id, r.extraMensual.get(b.empleado_id)!)
+    }
+    const uid = fila ? fila.empleadoId : (b.empleado_id ?? `${SIN_USUARIO}${b.id}`)
+    // La columna A muestra el legajo con que se exporta (padrón de Visual o usuario).
+    filas.push(fila ? { ...fila, legajoVisual: p.legajoVisual } : filaSinActividad(uid, p))
+    const ajustes = (f.entradas?.ajustes ?? []).map(a => ({ codigo: String(a.codigo), total: Number((lineas as any[]).find(l => l.codigo === String(a.codigo))?.total ?? 0) }))
+    ajustesBase.set(uid, {
+      ...(fila ? (f.entradas?.ordinarios ?? {}) : {}),
+      ...correccionesDeVista(colsPorCodigo, ajustes, f.calculo?.presentismo ?? null),
+    })
+    porFinal.push({ f, uid, conUsuario: Boolean(fila), p, lineas: lineas as any[] })
+  }
+  const resumen = { mes, filas, totales: { empleados: filas.length, jornadas: 0, horasReales: 0, horasLiquidables: 0, horasNocturnas: 0, feriadosTrabajados: 0 } }
+  const armar = (mas: Map<string, Record<string, number | null>>) => {
+    const unidos = new Map(ajustesBase)
+    for (const [uid, m] of Array.from(mas.entries())) unidos.set(uid, { ...(unidos.get(uid) ?? {}), ...m })
+    return plantillaLiquidacionResumenGuardia(resumen, unidos, sueldo, extra, P)
+  }
+  const base = armar(new Map())
+  const filasFinal = new Map<string, FilaFinalMensual>()
+  for (const { f, uid, p } of porFinal) {
+    const c = f.calculo
+    const ajustados: FilaFinalMensual['ajustados'] = {}
+    for (const a of f.entradas?.ajustes ?? []) {
+      const cod = String(a.codigo)
+      if (cod === '120003' || cod === '208' || cod === '217' || cod === '212') ajustados[cod] = Number(porFinal.find(x => x.f.id === f.id)!.lineas.find(l => l.codigo === cod)?.total ?? 0)
+    }
+    const avisos = (f.faltantes ?? []).map(x => x.detalle)
+    if (!p.legajoVisual) avisos.unshift('Falta el legajo de Visual: escribilo en la columna A cuando Visual lo asigne.')
+    if (f.requiere_recalculo) avisos.push('Borrador con cambios sin recalcular: abrí Liquidaciones finales para recalcular y volvé a bajar el Excel.')
+    filasFinal.set(uid, {
+      finalId: f.id, version: f.version, usuarioId: uid, fechaBaja: f.baja.fecha_baja,
+      causa: c?.causal?.nombre ?? f.baja.causa ?? null,
+      vacSaldo: c?.vacaciones.saldo ?? null, vacTomadas: c?.vacaciones.tomadas ?? null, diasSAC: c?.fechas.diasSAC ?? null,
+      sueldoFijo: Boolean(ordinariosDePlantilla(base, uid)?.sueldoFijo), extrasPagadas: Number(c?.extras.pagado ?? 0),
+      ajustados, totalApp: Number(c?.total ?? 0), visualPeriodo: c?.visualPeriodo ?? f.entradas?.visualPeriodo ?? null, avisos,
+    })
+  }
+  const conFinal = { ...anexarColumnasFinal(base, filasFinal), nombreHoja: `Finales ${mes}` }
+  const valorEn = new Map(conFinal.celdas.map(x => [x.ref, x.v]))
+  const filaDe = new Map<string, number>()
+  for (const x of conFinal.celdas) { const m = x.ref.match(/^BD(\d+)$/); if (m) filaDe.set(String(x.v ?? ''), Number(m[1])) }
+  const guardados = new Map<string, GuardadoFinal>()
+  for (const { f, uid, conUsuario, p } of porFinal) {
+    const r = filaDe.get(uid)
+    const leer = (col: string) => { if (r == null) return null; const v = valorEn.get(`${col}${r}`); return v === undefined || v === '' ? null : Number(v) }
+    guardados.set(f.id, {
+      finalId: f.id, version: f.version, estado: f.estado, persona: p.nombre, conUsuario,
+      entradas: f.entradas ?? {},
+      vacaciones: { saldo: f.calculo?.vacaciones.saldo ?? null, tomadas: f.calculo?.vacaciones.tomadas ?? null },
+      visualPeriodo: f.calculo?.visualPeriodo ?? f.entradas?.visualPeriodo ?? null,
+      mostrado: { '120003': leer(COL_FINAL.c120003), '208': leer(COL_FINAL.c208), '217': leer(COL_FINAL.c217), '212': leer(COL_FINAL.c212) },
+    })
+  }
+  return { data: { base, conFinal, armar, guardados }, error: null }
+}
+
+/** Mes de la baja de cada final (las que no tienen fecha no van al Excel). */
+const mesDeFinal = (f: FinalFila) => (f.baja.fecha_baja ? f.baja.fecha_baja.slice(0, 7) : null)
+
+/**
+ * EXCEL DE TRABAJO de las finales con el formato del mensual: una solapa por mes
+ * de baja, una fila por persona y, al final, las columnas de la liquidación.
+ */
+export async function excelDeLoteMensual(client: any, finales: FinalFila[]): Promise<{ buf: ArrayBuffer | null; nombre: string; error: string | null; omitidas: string[] }> {
+  const omitidas: string[] = []
+  const porMes = new Map<string, FinalFila[]>()
+  for (const f of finales) {
+    const mes = mesDeFinal(f)
+    if (!f.calculo || !mes) { omitidas.push(f.baja.nombre ?? f.baja.cuil ?? f.id); continue }
+    porMes.set(mes, [...(porMes.get(mes) ?? []), f])
+  }
+  if (!porMes.size) return { buf: null, nombre: '', error: 'No hay liquidaciones finales calculadas para bajar.', omitidas }
+  const hojas: { nombre: string; plantilla: PlantillaLiquidacion }[] = []
+  for (const mes of Array.from(porMes.keys()).sort().reverse()) {
+    const r = await planillaFinalesDelMes(client, mes, porMes.get(mes)!)
+    if (r.error || !r.data) return { buf: null, nombre: '', error: r.error ?? 'No se pudo armar la planilla', omitidas }
+    hojas.push({ nombre: `Finales ${mes}`, plantilla: r.data.conFinal })
+  }
+  const { escribirLibroMultiMes } = await import('@/lib/liquidacion-xlsx')
+  const hoy = new Date().toISOString().slice(0, 10)
+  return { buf: await escribirLibroMultiMes(hojas), nombre: `liquidaciones_finales_${hoy}.xlsx`, error: null, omitidas }
+}
+
+/**
+ * Lee el Excel de finales en formato mensual. `formato: 'otro'` = el archivo no
+ * es de este formato (puede ser el de una hoja por persona).
+ */
+export async function analizarExcelLoteMensual(client: any, buf: ArrayBuffer): Promise<{ formato: 'mensual' | 'otro'; diferencias: DiferenciaMensual[]; avisos: string[]; error: string | null }> {
+  const ExcelJS = (await import('exceljs')).default
+  const wb = new ExcelJS.Workbook()
+  await wb.xlsx.load(buf)
+  const hojas: HojaFinalMensual[] = []
+  wb.eachSheet((ws: any) => { const h = leerHojaFinalMensual(ws); if (h) hojas.push(h) })
+  if (!hojas.length) return { formato: 'otro', diferencias: [], avisos: [], error: null }
+  const diferencias: DiferenciaMensual[] = []
+  const avisos: string[] = []
+  for (const h of hojas) {
+    const finales: FinalFila[] = []
+    for (const l of h.filas) {
+      const { data: f } = await leerFinal(client, l.finalId)
+      if (f) finales.push(f)
+      else diferencias.push({ hoja: h.nombre, finalId: l.finalId, version: l.version, persona: l.usuarioId, cambios: [], errores: ['No se encontró esa liquidación final (¿anulada?).'], entradas: null, legajoVisual: null })
+    }
+    const meses = Array.from(new Set(finales.map(mesDeFinal).filter(Boolean))) as string[]
+    for (const mes of meses) {
+      const delMes = finales.filter(f => mesDeFinal(f) === mes)
+      const r = await planillaFinalesDelMes(client, mes, delMes)
+      if (r.error || !r.data) return { formato: 'mensual', diferencias: [], avisos, error: r.error ?? 'No se pudo armar la planilla' }
+      const ids = new Set(delMes.map(f => f.id))
+      const res = diferenciasFinalMensual({ ...h, filas: h.filas.filter(l => ids.has(l.finalId)) }, r.data.base, r.data.armar, r.data.guardados)
+      diferencias.push(...res.diferencias)
+      avisos.push(...res.avisos)
+    }
+  }
+  return { formato: 'mensual', diferencias, avisos, error: null }
 }

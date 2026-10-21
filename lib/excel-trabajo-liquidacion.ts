@@ -49,6 +49,10 @@ export interface PlantillaTrabajoResultado {
   rearmar?: (extra: Map<string, Record<string, number | null>>) => PlantillaLiquidacion
   /** SUELDO MENSUAL vigente del mes por usuario_id (quien lo tiene cobra fijo). */
   sueldoMensual?: Map<string, number>
+  /** EXTRA fija vigente del mes por usuario_id. */
+  extraMensual?: Map<string, number>
+  /** Parámetros del mes con que se armó la planilla. */
+  parametros?: ParametrosLiquidacion
 }
 
 /** Límites [desde, hasta] (inclusive, formato YYYY-MM-DD) del mes 'YYYY-MM'. */
@@ -611,7 +615,7 @@ export async function plantillaTrabajoDelMes(
     for (const [emp, m] of Array.from(extra.entries())) unidos.set(emp, { ...(unidos.get(emp) ?? {}), ...m })
     return plantillaLiquidacionResumenGuardia(resumen, unidos, sueldoMensualPorEmpleado, extraPorEmpleado, parametros, textos)
   }
-  return { plantilla, filas: resumen.filas.length, error: null, resumen, rearmar, sueldoMensual: sueldoMensualPorEmpleado }
+  return { plantilla, filas: resumen.filas.length, error: null, resumen, rearmar, sueldoMensual: sueldoMensualPorEmpleado, extraMensual: extraPorEmpleado, parametros }
 }
 
 /**
