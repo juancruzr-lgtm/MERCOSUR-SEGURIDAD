@@ -207,14 +207,19 @@ export default function RegistrarBaja({ empleadoId, origen, puedeGerencia = fals
 
   return (
     <div style={{ color: C.texto }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+      {/* Encabezado fijo: «Volver» siempre a mano aunque se baje por el formulario (JC 26/10). */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10,
+        ...(onCerrar ? { position: 'sticky' as const, top: -14, zIndex: 5, background: '#0f1629', padding: '10px 0', borderBottom: '1px solid #1e293b' } : {}) }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 800 }}>Registrar baja</div>
+          <div style={{ fontSize: 18, fontWeight: 800 }}>{baja?.estado === 'confirmada' ? 'Baja' : 'Registrar baja'}</div>
           <div style={{ fontSize: 13, color: C.sub }}>
-            {baja ? (baja.estado === 'borrador' ? 'Borrador: el empleado sigue activo' : baja.estado === 'confirmada' ? `Baja confirmada el ${fecha(baja.confirmada_at)}` : 'Baja anulada') : 'Nueva baja'}
+            {baja ? (baja.estado === 'borrador' ? 'Borrador: el empleado sigue activo' : baja.estado === 'confirmada' ? `Baja confirmada el ${fecha(baja.confirmada_at)}` : 'Baja anulada')
+              : ident.estado && ident.estado !== 'activo'
+                ? 'Está inactivo en la app pero la baja NUNCA se registró: completá motivo y fecha y confirmala para que se arme la liquidación final.'
+                : 'Nueva baja'}
           </div>
         </div>
-        {onCerrar && <button type="button" style={boton()} onClick={onCerrar}>Cerrar</button>}
+        {onCerrar && <button type="button" style={boton()} onClick={onCerrar}>← Volver</button>}
       </div>
       {msg && <div role="status" style={{ ...card, borderColor: msg.ok ? '#166534' : '#7f1d1d', color: msg.ok ? C.verde : '#fca5a5' }}>{msg.t}</div>}
 
@@ -446,6 +451,11 @@ export default function RegistrarBaja({ empleadoId, origen, puedeGerencia = fals
             {historicas.map(b => <li key={b.id}>Baja {b.estado} · {fecha(b.fecha_baja)} · {b.causa ?? '—'}</li>)}
           </ul>
         </details>
+      )}
+      {onCerrar && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+          <button type="button" style={boton()} onClick={onCerrar}>← Volver</button>
+        </div>
       )}
     </div>
   )
