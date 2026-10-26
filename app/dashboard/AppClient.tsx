@@ -1669,6 +1669,25 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   const [modal, setModal] = useState(false)
   // Registrar baja: el mismo procedimiento que el Legajo (components/bajas/RegistrarBaja).
   const [bajaDe, setBajaDe] = useState<string | null>(null)
+  // Estado de la baja registrada de cada persona (para el texto del botón): un
+  // inactivo SIN baja registrada no tiene nada para «ver» (JC 26/10).
+  const [bajasPorEmpleado, setBajasPorEmpleado] = useState<Map<string, string>>(new Map())
+  useEffect(() => {
+    let vivo = true
+    void supabase.from('baja_laboral').select('empleado_id, estado').neq('estado', 'anulada').then(({ data }: any) => {
+      if (!vivo || !data) return
+      const m = new Map<string, string>()
+      for (const b of data as any[]) if (b.empleado_id && m.get(b.empleado_id) !== 'confirmada') m.set(b.empleado_id, b.estado)
+      setBajasPorEmpleado(m)
+    })
+    return () => { vivo = false }
+  }, [bajaDe])
+  useEffect(() => {
+    if (!bajaDe) return
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setBajaDe(null) }
+    window.addEventListener('keydown', esc)
+    return () => window.removeEventListener('keydown', esc)
+  }, [bajaDe])
   const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', puesto_organizacional:'', foto_url:'', es_prueba:false }
   // Fase 2D: quién puede asignar niveles privilegiados. Administración gestiona
   // rol/puesto NORMALES; 'admin'/'gerencia'/delegación quedan para Gerencia real.
@@ -2449,10 +2468,10 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                         El supervisor mantiene su pedido operativo, que abre un borrador. */}
                     {puedePleno && (
                     <button
-                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12, color: g.estado === 'activo' ? '#fca5a5' : undefined }}
+                      style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12, color: !bajasPorEmpleado.has(g.id) || g.estado === 'activo' ? '#fca5a5' : undefined }}
                       onClick={() => setBajaDe(g.id)}
                     >
-                      {g.estado === 'activo' ? 'Registrar baja' : 'Ver baja'}
+                      {bajasPorEmpleado.get(g.id) === 'confirmada' ? 'Ver baja' : bajasPorEmpleado.get(g.id) === 'borrador' ? 'Continuar baja' : 'Registrar baja'}
                     </button>
                     )}
                     {((puedePleno && g.estado !== 'activo') || (!puedePleno && puedeOperativo && ['guardia','vigilador'].includes(g.rol || 'guardia') && g.estado === 'activo')) && (
@@ -2491,7 +2510,8 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       </div>
 
       {bajaDe && (
-        <div role="dialog" aria-modal="true" style={{ position:'fixed', inset:0, background:'rgba(2,6,23,.75)', zIndex:60, overflowY:'auto', padding:'16px 12px' }}>
+        <div role="dialog" aria-modal="true" onClick={e => { if (e.target === e.currentTarget) setBajaDe(null) }}
+          style={{ position:'fixed', inset:0, background:'rgba(2,6,23,.75)', zIndex:60, overflowY:'auto', padding:'16px 12px' }}>
           <div style={{ maxWidth:860, margin:'0 auto', background:'#0f1629', border:'1px solid #1e293b', borderRadius:12, padding:14 }}>
             <RegistrarBaja
               empleadoId={bajaDe}
