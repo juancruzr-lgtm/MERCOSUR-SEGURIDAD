@@ -215,6 +215,16 @@ describe('Excel de finales con el formato del mensual', () => {
     expect(d1.errores[0]).toMatch(/cambió después de bajar el Excel/)
   })
 
+  it('una ya exportada viene para consulta: no es error y no se aplica nada', async () => {
+    const wb = await libro()
+    wb.worksheets[0].getCell(`${COL_FINAL.periodo}${r1}`).value = 'otro período'
+    const nuevos = new Map(guardados); nuevos.set(F1, { ...guardados.get(F1)!, estado: 'exportada' })
+    const d1 = diferenciasFinalMensual(await releer(wb), base, armar, nuevos).diferencias.find(d => d.finalId === F1)!
+    expect(d1.errores).toEqual([])
+    expect(d1.entradas).toBeNull()
+    expect(d1.noTomados.join(' ')).toMatch(/exportada a Visual: sólo consulta/)
+  })
+
   it('no confunde el formato de una hoja por persona', async () => {
     const wb = new ExcelJS.Workbook()
     const ws = wb.addWorksheet('PEREZ'); ws.getCell('J1').value = F1

@@ -492,7 +492,14 @@ export async function analizarExcelLote(client: any, buf: ArrayBuffer): Promise<
   const wb = new ExcelJS.Workbook()
   await wb.xlsx.load(buf)
   const hojas = leerHojasLiquidacionFinal(wb)
-  if (!hojas.length) return { diferencias: [], error: 'El archivo no tiene hojas de liquidación final (bajalo desde Liquidaciones finales).' }
+  if (!hojas.length) {
+    // ¿Es el Excel de trabajo del MES? (columna oculta usuario_id en BD6, sin la de las finales)
+    let mensual = false
+    wb.eachSheet((ws: any) => { if (String(ws.getCell('BD6').value ?? '').trim() === 'usuario_id') mensual = true })
+    return { diferencias: [], error: mensual
+      ? 'Este es el Excel de trabajo del MES: se sube en Períodos → el período del mes → Subir Excel de trabajo, no acá. Acá va el que se baja con «Bajar Excel de trabajo» de Liquidaciones finales.'
+      : 'El archivo no es un Excel de liquidaciones finales: bajalo con «Bajar Excel de trabajo» de esta pantalla, editalo y subí ese.' }
+  }
   const diferencias: DiferenciaLote[] = []
   for (const h of hojas) {
     const { data: f } = await leerFinal(client, h.finalId)
@@ -674,6 +681,7 @@ async function planillaFinalesDelMes(client: any, mes: string, finales: FinalFil
     }
     const avisos = (f.faltantes ?? []).map(x => x.detalle)
     if (!p.legajoVisual) avisos.unshift('Falta el legajo de Visual: escribilo en la columna A cuando Visual lo asigne.')
+    if (['exportada', 'conciliada'].includes(f.estado)) avisos.unshift(`YA EXPORTADA A VISUAL${f.exportada_at ? ` el ${f.exportada_at.slice(0, 10).split('-').reverse().join('/')}` : ''}: sólo consulta, los cambios en esta fila no se aplican.`)
     if (f.requiere_recalculo) avisos.push('Borrador con cambios sin recalcular: abrí Liquidaciones finales para recalcular y volvé a bajar el Excel.')
     filasFinal.set(uid, {
       finalId: f.id, version: f.version, usuarioId: uid, fechaBaja: f.baja.fecha_baja,
