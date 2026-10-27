@@ -40,6 +40,8 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
   const [elegidas, setElegidas] = useState<Set<string>>(new Set())
 
   const editables = useMemo(() => finales.filter(f => ['pendiente_calculo', 'borrador', 'lista'].includes(f.estado) && f.calculo), [finales])
+  // El Excel se puede bajar siempre (JC 27/10): las ya exportadas salen para consulta.
+  const paraExcel = useMemo(() => finales.filter(f => f.estado !== 'anulada' && f.calculo), [finales])
   const exportables = useMemo(() => finales.filter(f => ['lista', 'exportada'].includes(f.estado)), [finales])
   const aprobables = finales.filter(f => f.estado === 'borrador' && !f.requiere_recalculo && !(f.faltantes?.length))
 
@@ -52,10 +54,11 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
 
   let resumenExcel = ''
   const bajarExcel = () => correr('excel', async () => {
-    const r = await excelDeLoteMensual(supabase, editables)
+    const r = await excelDeLoteMensual(supabase, paraExcel)
     if (r.error || !r.buf) return r.error ?? 'sin archivo'
     descargar(r.buf, r.nombre, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    resumenExcel = `Excel de trabajo descargado: ${editables.length - r.omitidas.length} persona(s) con el formato del Excel mensual y, al final, las columnas de la liquidación. Editá lo que quieras y volvé a subirlo: la app toma los cambios y los refleja en el archivo de Visual.`
+    const consulta = paraExcel.length - editables.length
+    resumenExcel = `Excel de trabajo descargado: ${paraExcel.length - r.omitidas.length} persona(s)${consulta > 0 ? ` (${consulta} ya exportada(s) a Visual: van para consulta, sus cambios no se aplican)` : ''} con el formato del Excel mensual y, al final, las columnas de la liquidación. Editá lo que quieras y volvé a subirlo: la app toma los cambios y los refleja en el archivo de Visual.`
       + (r.omitidas.length ? ` Sin calcular o sin fecha de baja (no van): ${r.omitidas.join(', ')}.` : '')
     return null
   }, () => resumenExcel)
@@ -127,7 +130,7 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
         Bajá el Excel de trabajo (mismo formato que el mensual: una fila por persona y, al final, las columnas de la liquidación), editá lo que quieras, volvelo a subir y exportá un solo archivo de Visual con los empleados de baja.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
-        <button style={S.btn2} disabled={!!ocupado || !editables.length} onClick={() => void bajarExcel()}>{ocupado === 'excel' ? 'Armando…' : `Bajar Excel de trabajo (${editables.length})`}</button>
+        <button style={S.btn2} disabled={!!ocupado || !paraExcel.length} onClick={() => void bajarExcel()}>{ocupado === 'excel' ? 'Armando…' : `Bajar Excel de trabajo (${paraExcel.length})`}</button>
         <label style={{ ...S.btn2, display: 'inline-block' }}>
           {ocupado === 'leer' ? 'Leyendo…' : 'Subir Excel de trabajo'}
           <input type="file" accept=".xlsx" style={{ display: 'none' }} disabled={!!ocupado} onChange={subirExcel} />

@@ -376,7 +376,9 @@ export function diferenciasFinalMensual(
     const baseDif = { hoja: hoja.nombre, finalId: l.finalId, version: l.version, persona: g?.persona ?? l.usuarioId, noTomados }
     if (!g) { diferencias.push({ ...baseDif, cambios, errores: ['No se encontró esa liquidación final (¿anulada?).'], entradas: null, legajoVisual: null }); continue }
     if (!['pendiente_calculo', 'borrador', 'lista'].includes(g.estado)) {
-      diferencias.push({ ...baseDif, cambios, errores: [`Ya está ${g.estado}: no se modifica.`], entradas: null, legajoVisual: null }); continue
+      // Ya exportada: la fila viene para consulta; no se aplica nada y no es un error.
+      noTomados.push(`Ya ${g.estado === 'conciliada' ? 'conciliada' : 'exportada a Visual'}: sólo consulta, no se modifica.`)
+      diferencias.push({ ...baseDif, cambios, errores, entradas: null, legajoVisual: null }); continue
     }
     const entradas: EntradasFinal = { ...g.entradas, ajustes: [...(g.entradas.ajustes ?? [])] }
     if (cambiosParam.length) {
