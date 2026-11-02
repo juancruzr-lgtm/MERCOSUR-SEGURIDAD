@@ -44,7 +44,7 @@ Documentos de detalle en esta carpeta: `regla_validacion.md`, `alertas_intervenc
 ## C. Orden de despliegue y reversión
 
 1. Backup lógico de las funciones a reemplazar (`pg_get_functiondef`) — cada rollback deja el hash idéntico a producción (verificado en pruebas).
-2. Migraciones, en orden: `20261113120000`, `20261113130000` (opcional), `20261115120000`, `20261120120000`, `20261120130000`, `20261120140000` (tras cargar el secreto en Vault), `20261120150000`, `20261121120000`, `20261121130000`, `20261122120000`.
+2. Migraciones, en orden (integración #345+#346+#347): `20261113110000` (programación), `20261113120000`, `20261113130000` (opcional), `20261114120000` (hoja de ruta, queda desactivada), `20261115120000`, `20261120120000`, `20261120130000`, `20261120140000` (tras cargar el secreto en Vault), `20261120150000`, `20261121120000`, `20261121130000`, `20261122120000`.
 3. Registrar en `schema_migrations` la tabla aplicada a mano `ronda_horarios_sin_exigencia` (20261104120000); 20261122120000 incluye su reconciliación idempotente.
 4. Deploy de la rama en Vercel (preview primero, prueba manual en teléfono, luego producción).
 5. Verificaciones: `supabase/verificacion/rondas_regla_validacion_post_migracion.sql` y las consultas de cada documento; a las 24 h: 0 fotos sin análisis > 1 h, 0 supervisores con > 20 push/día, 0 alertas nuevas tras intervención cerrada.
