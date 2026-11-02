@@ -28,8 +28,8 @@ function cliente() {
     }) },
   }
 }
-vi.mock('@/app/api/_lib/employee-auth', () => ({ getBearerToken: () => 'tok', getSupabaseAdmin: () => ({ client: cliente(), error: null }) }))
-vi.mock('../app/api/_lib/employee-auth', () => ({ getBearerToken: () => 'tok', getSupabaseAdmin: () => ({ client: cliente(), error: null }) }))
+vi.mock('@/app/api/_lib/employee-auth', () => ({ fetchSinCache: fetch, getBearerToken: () => 'tok', getSupabaseAdmin: () => ({ client: cliente(), error: null }) }))
+vi.mock('../app/api/_lib/employee-auth', () => ({ fetchSinCache: fetch, getBearerToken: () => 'tok', getSupabaseAdmin: () => ({ client: cliente(), error: null }) }))
 
 const jpg = (n = 2000) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(n, 3)])
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')

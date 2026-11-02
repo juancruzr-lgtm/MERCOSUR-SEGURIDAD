@@ -10,6 +10,8 @@ export const runtime = 'nodejs'
 // Respuesta por sesión y por estado del primer control: jamás cachear.
 // Sin esto, Vercel sirve una copia estática y Mi Planilla no refleja
 // aceptaciones/solicitudes recién creadas hasta un redeploy.
+// Ojo: esto sólo cubre la respuesta. Las lecturas a Supabase las protege
+// fetchSinCache en getSupabaseAdmin; sin eso octubre quedó congelado al 30/10.
 export const dynamic = 'force-dynamic'
 
 const RE_MES = /^\d{4}-\d{2}$/
@@ -291,6 +293,7 @@ export async function GET(
   }
 
   const fechasConRegistro = new Set(filas.map(f => f.fecha))
+  const turnosConFila = new Set(filas.map(f => f.turno_id))
 
   // ── Turnos programados sin registro (incluye los futuros) ──────────────────
   // Son los turnos que el vigilador tiene por delante y todavía no fichó. Se
@@ -330,7 +333,10 @@ export async function GET(
   }
 
   for (const t of (turnosProgramados ?? [])) {
-    if (fechasConRegistro.has(t.fecha)) continue
+    // Por turno, no por fecha: con dos turnos el mismo día (uno fichado y otro
+    // no) el segundo desaparecía de la planilla.
+    if (turnosConFila.has(t.id)) continue
+    turnosConFila.add(t.id)
     fechasConRegistro.add(t.fecha)
     const ausencia = ausenciasPorTurno.get(t.id)
     const autor = ausencia ? autorAusencia.get(ausencia.id) : undefined

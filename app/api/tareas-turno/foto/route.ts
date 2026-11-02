@@ -14,7 +14,7 @@
  */
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
-import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
+import { fetchSinCache, getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { firmaImagenValida, validarFotoOperativa } from '../../_lib/validar-foto'
 
 export const runtime = 'nodejs'
@@ -30,7 +30,7 @@ function clienteDelUsuario(token: string) {
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   if (!url || !anon) return null
   return createClient(url, anon, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
+    global: { fetch: fetchSinCache, headers: { Authorization: `Bearer ${token}` } },
     auth: { autoRefreshToken: false, persistSession: false },
   })
 }
