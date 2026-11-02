@@ -113,7 +113,7 @@ describe('aviso de objetivo equivocado (<100 m con turno hoy)', () => {
   it('no avisa si el elegido tiene turno, si el cercano no lo tiene o si faltan coordenadas', () => {
     expect(sugerirObjetivoConTurno(rosario, [rosario2], new Set(['r', 'r2']))).toBeNull()
     expect(sugerirObjetivoConTurno(rosario, [rosario2, lejos], new Set(['x']))).toBeNull()
-    expect(sugerirObjetivoConTurno({ id: 'r', lat: null, lng: null }, [rosario2], new Set(['r2']))).toBeNull()
+    expect(sugerirObjetivoConTurno<any>({ id: 'r', lat: null, lng: null }, [rosario2], new Set(['r2']))).toBeNull()
   })
 
   it('objetivosConTurnoEn usa las fechas del contexto', () => {

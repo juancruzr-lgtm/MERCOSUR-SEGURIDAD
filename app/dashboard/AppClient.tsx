@@ -122,6 +122,7 @@ import { antiguedadSupervision, indexarUltimaSupervision, objetivoSupervisionVen
 import { objetivoExigeSupervision } from '@/lib/supervisiones'
 import { cargarUltimaSupervisionPorObjetivo, filasDesdeIndice } from '@/lib/supervision-universo'
 import { useContextoExigibilidad } from '@/components/supervisiones/useContextoExigibilidad'
+import ServicioObjetivoEditor from '@/components/objetivos/ServicioObjetivoEditor'
 import {
   alertaEstaIntervenida,
   calcularMinutosTardanzaRegistro,
@@ -4575,6 +4576,19 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
               </select>
             </div>
           </div>
+
+          {/* Fin de servicio y suspensiones: sólo Dir. Operativa,
+              Administración y Gerencia. Se guardan aparte del formulario. */}
+          {editId && tieneCapacidad(user, 'gestionar_objetivos') && (
+            <div style={{ marginBottom:16, paddingTop:10, borderTop:'1px solid rgba(255,255,255,.08)' }}>
+              <ServicioObjetivoEditor
+                key={editId}
+                objetivoId={editId}
+                fechaFinInicial={(objetivos as any[]).find(o => o.id === editId)?.fecha_fin_servicio ?? null}
+                onGuardado={cambios => setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? { ...o, ...cambios } : o))}
+              />
+            </div>
+          )}
 
           {/* Liquidación / Nocturnidad. Es una condición contractual del
               servicio: en algunos clientes las horas dentro de la franja
