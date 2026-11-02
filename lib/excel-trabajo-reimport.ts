@@ -466,6 +466,9 @@ export function advertenciasReimport(
     const esSub = a.startsWith('SUBTOTAL'), esTot = a.startsWith('TOTAL GENERAL')
     if (!esSub && !esTot) return
     const suma: Record<string, number> = {}
+    // Total también válido: el de los Excel bajados antes del 02/11/2026, cuyas
+    // horas de TOTAL GENERAL todavía sumaban a los supervisores.
+    const sumaAnterior: Record<string, number> = {}
     if (esSub) {
       for (let k = desde + 1; k < i; k++) {
         if (!norm(grid[k]?.[IDX_BD])) continue
@@ -476,11 +479,13 @@ export function advertenciasReimport(
       // Mismo criterio que la plantilla: las horas de supervisores no van al total.
       for (const col of COLS_TOTALES) {
         suma[col] = sumas.filter(x => !(x.supervisores && COLS_HORAS_SIN_SUPERVISORES.has(col))).reduce((s, x) => s + (x.suma[col] ?? 0), 0)
+        if (COLS_HORAS_SIN_SUPERVISORES.has(col)) sumaAnterior[col] = sumas.reduce((s, x) => s + (x.suma[col] ?? 0), 0)
       }
     }
     for (const col of COLS_TOTALES) {
       const v = num(enGrid(grid, col, i + 1))
       if (v == null) continue
+      if (sumaAnterior[col] != null && Math.abs(v - sumaAnterior[col]) <= 0.01) continue
       if (Math.abs(v - (suma[col] ?? 0)) > 0.01) out.push({ tipo: 'total_editado', detalle: `${col}${i + 1} (${norm(fila[0])}): ${v} no es la suma de sus filas (${Math.round((suma[col] ?? 0) * 100) / 100}). Los totales se recalculan: corregí el valor en las filas de cada persona.` })
     }
   })
