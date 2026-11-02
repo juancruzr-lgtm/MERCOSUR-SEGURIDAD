@@ -1,20 +1,18 @@
 // Hoja de ruta de cierre de turno de un supervisor — formato definitivo
-// (JC, 02/11/2026, versión 2):
+// (JC, 02/11/2026, versión 3: la que hoy mandan los supervisores, con hora):
 //
-//   HOJA DE RUTA
-//   Fecha: 29/10/2026
-//   Turno: 07:00 a 19:00
-//   Supervisor: Sabino Aranda
-//   07:04 — PLAZA DE LAS CIENCIAS
-//   Vig blanco sin novedad
-//   07:27 — SRT
-//   Sin novedades
+//   Hoja de ruta del sup. Sabino Aranda
+//   29/10 · Turno 07:00 a 19:00
+//   07:04 PLAZA DE LAS CIENCIAS
+//      Novedad: Vig blanco sin novedad
+//   07:27 SRT
 //
 //  · Cada visita en orden cronológico y, debajo, TODAS las novedades que el
 //    supervisor escribió en ese objetivo durante esa visita (observación
 //    general de la supervisión y de cada ítem del checklist), con el texto
-//    original completo, sin duplicar. Sin novedades: "Sin novedades". Sin
-//    visitas: "Sin objetivos recorridos durante el turno".
+//    original completo, sin duplicar. Una visita sin novedades va sola: la
+//    hoja dice sólo lo que se sabe (nada de "los demás servicios sin
+//    novedad"). Sin visitas: "Sin servicios visitados durante el turno".
 //  · Visitas: supervisiones del supervisor en su guardia y permanencias GPS
 //    confiables. Sin GPS, la supervisión alcanza. La hora es la llegada por GPS
 //    confiable o la hora registrada de la supervisión; nunca se inventa.
@@ -91,7 +89,7 @@ export interface ContenidoHojaRuta {
 }
 
 export const SIN_NOVEDADES = 'Sin novedades'
-export const SIN_OBJETIVOS = 'Sin objetivos recorridos durante el turno'
+export const SIN_OBJETIVOS = 'Sin servicios visitados durante el turno'
 export const PRECISION_MAX_M = 150
 export const RADIO_MIN_M = 150
 export const MAX_SEGUNDOS_TRAMO = 300
@@ -103,6 +101,7 @@ const ZONA = 'America/Argentina/Buenos_Aires'
 export const hhmm = (iso: string): string =>
   new Intl.DateTimeFormat('es-AR', { timeZone: ZONA, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso))
 const ddmmaaaa = (fecha: string): string => { const [a, m, d] = fecha.split('-'); return `${d}/${m}/${a}` }
+const ddmm = (fecha: string): string => ddmmaaaa(fecha).slice(0, 5)
 const ms = (iso: string) => new Date(iso).getTime()
 
 // ── GPS ──────────────────────────────────────────────────────────────────────
@@ -203,15 +202,12 @@ const turno = (g: GuardiaHR) => `${hhmm(g.inicio)} a ${hhmm(g.fin)}`
 
 /** Texto para la app, con el formato pedido y saltos de línea reales. */
 export function textoHojaRuta(c: ContenidoHojaRuta): string {
-  const l: string[] = ['HOJA DE RUTA']
-  l.push(`Fecha: ${ddmmaaaa(c.guardia.fecha)}`)
-  l.push(`Turno: ${turno(c.guardia)}`)
-  l.push(`Supervisor: ${c.guardia.supervisor}${c.guardia.reemplaza_a ? ` (en reemplazo de ${c.guardia.reemplaza_a})` : ''}`)
+  const l: string[] = [`Hoja de ruta del sup. ${c.guardia.supervisor}${c.guardia.reemplaza_a ? ` (en reemplazo de ${c.guardia.reemplaza_a})` : ''}`]
+  l.push(`${ddmm(c.guardia.fecha)} · Turno ${turno(c.guardia)}`)
   if (c.recorrido.length === 0) l.push(SIN_OBJETIVOS)
   for (const e of c.recorrido) {
-    l.push(`${hhmm(e.hora)} — ${e.objetivo}`)
-    if (e.novedades.length === 0) l.push(SIN_NOVEDADES)
-    for (const n of e.novedades) l.push(n.texto)
+    l.push(`${hhmm(e.hora)} ${e.objetivo}`)
+    for (const n of e.novedades) l.push(`   Novedad: ${n.texto}`)
   }
   return l.join('\n')
 }

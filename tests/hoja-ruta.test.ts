@@ -7,9 +7,9 @@ import {
 import { cargarDatosHojaRuta, guardiaCubre, ventanaGuardia, type GuardiaSupervisorFila } from '@/lib/hoja-ruta-datos'
 import { estadoDestinatario } from '@/lib/hoja-ruta-estado'
 
-// Formato definitivo v2 (JC 02/11/2026): HOJA DE RUTA / Fecha / Turno /
-// Supervisor y, por cada visita en orden, "hora — objetivo" con sus novedades
-// textuales debajo ("Sin novedades" si no hay). Un solo mensaje por
+// Formato definitivo v3 (JC 02/11/2026): "Hoja de ruta del sup. X" / "dd/mm ·
+// Turno" y, por cada visita en orden, "hora objetivo" con sus novedades
+// textuales debajo ("   Novedad: …"; sin novedades, nada). Un solo mensaje por
 // destinatario; si no entra en el límite de Meta, no se manda.
 // Los 18 casos + prueba controlada de turnos. Unicidad y concurrencia en la
 // base: tests/sql/hoja_ruta.sql.
@@ -43,13 +43,14 @@ const base = (): DatosHojaRuta => ({
 
 describe('1 · varias visitas y novedades: formato definitivo', () => {
   const c = armarHojaRuta(base())
-  it('texto de la app: cada novedad debajo de su objetivo; sin novedades → "Sin novedades"', () => {
+  it('texto de la app: cada novedad debajo de su objetivo; sin novedades, sólo el objetivo', () => {
     expect(textoHojaRuta(c)).toBe([
-      'HOJA DE RUTA', 'Fecha: 29/10/2026', 'Turno: 07:00 a 19:00', 'Supervisor: Sergio Martínez',
-      '07:15 — SRT', 'Vig Borgnis sin novedad',
-      '09:35 — Polideportivo Lotuf', 'Sin novedades',
-      '11:20 — CIRSE', 'Puerta principal con traba',
+      'Hoja de ruta del sup. Sergio Martínez', '29/10 · Turno 07:00 a 19:00',
+      '07:15 SRT', '   Novedad: Vig Borgnis sin novedad',
+      '09:35 Polideportivo Lotuf',
+      '11:20 CIRSE', '   Novedad: Puerta principal con traba',
     ].join('\n'))
+    expect(textoHojaRuta(c)).not.toMatch(/Sin novedades|demás servicios|Se controlaron/)
   })
   it('el WhatsApp es un único mensaje, sin "MERCOSUR SEGURIDAD", sin secciones, alertas ni estadísticas', () => {
     const m = mensajeWhatsApp(c)
@@ -67,10 +68,11 @@ describe('1 · varias visitas y novedades: formato definitivo', () => {
 })
 
 describe('2 · turno sin novedades', () => {
-  it('cada objetivo visitado lleva "Sin novedades"', () => {
+  it('sólo los objetivos visitados, sin agregar "Sin novedades" ni "los demás sin novedad"', () => {
     const d = base(); d.novedades = []
     const t = textoHojaRuta(armarHojaRuta(d))
-    expect(t.match(/Sin novedades/g)).toHaveLength(3)
+    expect(t.split('\n').slice(2)).toEqual(['07:15 SRT', '09:35 Polideportivo Lotuf', '11:20 CIRSE'])
+    expect(t).not.toMatch(/novedad/i)
   })
   it('sin visitas: "Sin objetivos recorridos durante el turno" (la hoja se genera igual)', () => {
     const d = base(); d.novedades = []; d.supervisiones = []; d.puntos = []
@@ -90,15 +92,15 @@ describe('3 · varias novedades en un mismo objetivo', () => {
       nov('b:Primera', '12:36', 'lotuf', 'Polideportivo Lotuf', 'Primera', 'Libro de guardia'),
     ]
     const c = armarHojaRuta(d)
-    expect(textoHojaRuta(c)).toContain('09:35 — Polideportivo Lotuf\nPrimera\nSegunda\n11:20 — CIRSE')
+    expect(textoHojaRuta(c)).toContain('09:35 Polideportivo Lotuf\n   Novedad: Primera\n   Novedad: Segunda\n11:20 CIRSE')
     expect(mensajeWhatsApp(c).variables[3]).toContain('09:35 — Polideportivo Lotuf: Primera · Segunda |')
   })
   it('dos visitas al mismo objetivo: cada novedad queda debajo de su visita', () => {
     const d = base()
     d.supervisiones.push({ id: 'd', created_at: Z('18:00'), objetivo_id: 'srt', objetivo: 'SRT' })
     d.novedades.push(nov('d:Segunda visita', '18:00', 'srt', 'SRT', 'Segunda visita'))
-    expect(textoHojaRuta(armarHojaRuta(d))).toContain('07:15 — SRT\nVig Borgnis sin novedad\n')
-    expect(textoHojaRuta(armarHojaRuta(d))).toContain('15:00 — SRT\nSegunda visita')
+    expect(textoHojaRuta(armarHojaRuta(d))).toContain('07:15 SRT\n   Novedad: Vig Borgnis sin novedad\n')
+    expect(textoHojaRuta(armarHojaRuta(d))).toContain('15:00 SRT\n   Novedad: Segunda visita')
   })
 })
 
@@ -108,7 +110,7 @@ describe('4 · novedad extensa: completa, nunca recortada', () => {
   it('en la app y en el mensaje, completa y textual', () => {
     const d = base(); d.novedades = [nov('x', '10:30', 'srt', 'SRT', EXTENSA)]
     const c = armarHojaRuta(d)
-    expect(textoHojaRuta(c)).toContain(`07:15 — SRT\n${EXTENSA}`)
+    expect(textoHojaRuta(c)).toContain(`07:15 SRT\n   Novedad: ${EXTENSA}`)
     expect(mensajeWhatsApp(c).mensaje).toContain(EXTENSA)
   })
 })
@@ -123,7 +125,7 @@ describe('5 · cierre del turno y novedad cerca del cierre', () => {
     const d = base()
     d.supervisiones.push({ id: 'z', created_at: Z('21:58'), objetivo_id: 'nsf', objetivo: 'NSF' })
     d.novedades.push(nov('z', '21:58', 'nsf', 'NSF', 'Entrego la guardia sin novedad'))
-    expect(textoHojaRuta(armarHojaRuta(d)).endsWith('18:58 — NSF\nEntrego la guardia sin novedad')).toBe(true)
+    expect(textoHojaRuta(armarHojaRuta(d)).endsWith('18:58 NSF\n   Novedad: Entrego la guardia sin novedad')).toBe(true)
   })
 })
 
@@ -133,7 +135,7 @@ describe('6 · turno nocturno', () => {
     expect(v).toEqual({ inicio: '2026-10-29T22:00:00.000Z', fin: '2026-10-30T10:00:00.000Z' })
     const d = base(); d.guardia = { ...d.guardia, ...v }
     const t = textoHojaRuta(armarHojaRuta(d))
-    expect(t).toContain('Fecha: 29/10/2026\nTurno: 19:00 a 07:00')
+    expect(t).toContain('29/10 · Turno 19:00 a 07:00')
   })
 })
 
@@ -141,18 +143,18 @@ describe('7 · cambio de supervisor en la guardia', () => {
   it('la hoja es de quien la cubrió; la app aclara el reemplazo, el WhatsApp solo el nombre', () => {
     const d = base(); d.guardia.reemplaza_a = 'Aldo Monzón'
     const c = armarHojaRuta(d)
-    expect(textoHojaRuta(c)).toContain('Supervisor: Sergio Martínez (en reemplazo de Aldo Monzón)')
+    expect(textoHojaRuta(c)).toContain('Hoja de ruta del sup. Sergio Martínez (en reemplazo de Aldo Monzón)')
     expect(mensajeWhatsApp(c).variables[2]).toBe('Sergio Martínez')
   })
 })
 
 describe('8 · visitas: solo las efectivas, también por GPS', () => {
-  it('permanencia GPS confiable sin supervisión cuenta como visita (con "Sin novedades")', () => {
+  it('permanencia GPS confiable sin supervisión cuenta como visita', () => {
     const d = base()
     d.puntos.push(...['16:00', '16:03', '16:06', '16:09'].map(h => p(h, 'nsf')))
     const c = armarHojaRuta(d)
     expect(c.recorrido.map(x => `${x.objetivo}:${x.fuente}`)).toEqual(['SRT:supervision_y_gps', 'Polideportivo Lotuf:supervision', 'CIRSE:supervision', 'NSF:gps'])
-    expect(textoHojaRuta(c).endsWith('13:00 — NSF\nSin novedades')).toBe(true)
+    expect(textoHojaRuta(c).endsWith('11:20 CIRSE\n   Novedad: Puerta principal con traba\n13:00 NSF')).toBe(true)
   })
   it('un paso breve o impreciso por GPS no es visita', () => {
     const d = base()
@@ -164,7 +166,7 @@ describe('8 · visitas: solo las efectivas, también por GPS', () => {
 describe('9 · novedad sin objetivo registrado no se pierde', () => {
   it('aparece en su hora con "Objetivo no registrado"', () => {
     const d = base(); d.novedades.push({ clave: 'q', created_at: Z('15:00'), objetivo_id: null as any, objetivo: null, origen: 'Supervisión', texto: 'Texto huérfano' })
-    expect(textoHojaRuta(armarHojaRuta(d))).toContain('12:00 — Objetivo no registrado\nTexto huérfano')
+    expect(textoHojaRuta(armarHojaRuta(d))).toContain('12:00 Objetivo no registrado\n   Novedad: Texto huérfano')
   })
 })
 
@@ -299,9 +301,9 @@ describe('17 · solo novedades de ESTE supervisor y de ESTE turno', () => {
   it('todas las del turno textuales (aunque tengan saltos de línea), sin duplicar; excluye otro día y otro supervisor', async () => {
     const c = armarHojaRuta(await cargarDatosHojaRuta(db, guardia))
     expect(textoHojaRuta(c)).toBe([
-      'HOJA DE RUTA', 'Fecha: 29/10/2026', 'Turno: 07:00 a 19:00', 'Supervisor: Sergio Martínez',
-      '08:58 — SRT', 'Vig Borgnis sin novedad.\nLibro firmado.', 'Matafuego vencido en garita',
-      '10:00 — Polideportivo Lotuf', 'Sin novedades',
+      'Hoja de ruta del sup. Sergio Martínez', '29/10 · Turno 07:00 a 19:00',
+      '08:58 SRT', '   Novedad: Vig Borgnis sin novedad.\nLibro firmado.', '   Novedad: Matafuego vencido en garita',
+      '10:00 Polideportivo Lotuf',
     ].join('\n'))
     // En el WhatsApp el salto de línea interno viaja como espacio (regla de Meta).
     expect(mensajeWhatsApp(c).variables[3]).toBe('08:58 — SRT: Vig Borgnis sin novedad. Libro firmado. · Matafuego vencido en garita | 10:00 — Polideportivo Lotuf: Sin novedades')
@@ -344,21 +346,21 @@ describe('turnos: dos el mismo día, nocturno y supervisores simultáneos', () =
 
   it('dos turnos del mismo supervisor el mismo día → dos hojas independientes, sin mezclar', async () => {
     expect(await texto(g('ser-m', 'ser', '2026-10-29', '06:00:00', '10:00:00'))).toBe(
-      'HOJA DE RUTA\nFecha: 29/10/2026\nTurno: 06:00 a 10:00\nSupervisor: Sergio Martínez\n07:30 — SRT\nMañana en SRT')
+      'Hoja de ruta del sup. Sergio Martínez\n29/10 · Turno 06:00 a 10:00\n07:30 SRT\n   Novedad: Mañana en SRT')
     expect(await texto(g('ser-t', 'ser', '2026-10-29', '18:00:00', '22:00:00'))).toBe(
-      'HOJA DE RUTA\nFecha: 29/10/2026\nTurno: 18:00 a 22:00\nSupervisor: Sergio Martínez\n19:15 — Polideportivo Lotuf\nTarde en Lotuf')
+      'Hoja de ruta del sup. Sergio Martínez\n29/10 · Turno 18:00 a 22:00\n19:15 Polideportivo Lotuf\n   Novedad: Tarde en Lotuf')
   })
   it('turno nocturno: lo anterior y lo posterior a medianoche, y nada del turno siguiente', async () => {
     expect(await texto(g('sab-n', 'sab', '2026-10-29', '22:00:00', '06:00:00'))).toBe(
-      'HOJA DE RUTA\nFecha: 29/10/2026\nTurno: 22:00 a 06:00\nSupervisor: Sabino Aranda\n23:00 — SRT\nAntes de medianoche\n02:30 — Polideportivo Lotuf\nDespués de medianoche')
+      'Hoja de ruta del sup. Sabino Aranda\n29/10 · Turno 22:00 a 06:00\n23:00 SRT\n   Novedad: Antes de medianoche\n02:30 Polideportivo Lotuf\n   Novedad: Después de medianoche')
   })
   it('supervisores simultáneos: cada hoja solo con lo suyo', async () => {
     expect(await texto(g('sab-m', 'sab', '2026-10-29', '06:00:00', '10:00:00'))).toBe(
-      'HOJA DE RUTA\nFecha: 29/10/2026\nTurno: 06:00 a 10:00\nSupervisor: Sabino Aranda\n07:40 — CIRSE\nSabino en CIRSE')
+      'Hoja de ruta del sup. Sabino Aranda\n29/10 · Turno 06:00 a 10:00\n07:40 CIRSE\n   Novedad: Sabino en CIRSE')
   })
   it('turno sin actividad: la hoja se genera igual', async () => {
     expect(await texto(g('vacio', 'ser', '2026-10-31', '06:00:00', '10:00:00'))).toBe(
-      'HOJA DE RUTA\nFecha: 31/10/2026\nTurno: 06:00 a 10:00\nSupervisor: Sergio Martínez\nSin objetivos recorridos durante el turno')
+      'Hoja de ruta del sup. Sergio Martínez\n31/10 · Turno 06:00 a 10:00\nSin servicios visitados durante el turno')
   })
   it('cada guardia sale 30 minutos después de SU fin', () => {
     const a = new Date('2026-10-29T13:31:00.000Z').getTime() // 10:31 hora argentina
