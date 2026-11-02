@@ -9,6 +9,7 @@ import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, objetivoEstaOperativo, registroTieneEntradaConfirmada, idsObjetivosPausados } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
+import { validarCargaTurno, textoConfirmacionAdvertencias, esErrorTurnoSuperpuesto } from '@/lib/validacion-turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir la ubicación de un objetivo: abre la vigencia en el
 // historial y deja el cambio auditado. El UPDATE directo ya no está permitido.
@@ -1329,15 +1330,18 @@ export default function SupervisorMobile({ user }: any) {
       .sort((a, b) => compararIntervencionesMasReciente(a.intervencion, b.intervencion))
   }, [intervenciones, turnosAlcanceAlertas, registros])
 
+  // true = superposición (bloquea); null = no se pudo leer o el supervisor no
+  // aceptó las advertencias (traslado entre objetivos, doble turno, horas del
+  // día, descanso). La superposición también la rechaza el trigger de base.
   const guardiaTieneTurnoSuperpuesto = async (
-    candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>,
+    candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'> & { objetivo_id?: string | null },
     excluirTurnoId?: string,
   ): Promise<boolean | null> => {
     if (!candidato.guardia_id) return false
 
     const { data, error: turnosError } = await supabase
       .from('turnos')
-      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
+      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id, estado')
       .eq('guardia_id', candidato.guardia_id)
       .in('fecha', fechasVecinasTurno(candidato.fecha))
 
@@ -1346,7 +1350,10 @@ export default function SupervisorMobile({ user }: any) {
       return null
     }
 
-    return tieneTurnoSuperpuesto(data || [], candidato, excluirTurnoId, objetivosPausados)
+    const validacion = validarCargaTurno(candidato, data || [], { excluirTurnoId, objetivosPausados })
+    if (validacion.errores.length > 0) return true
+    if (validacion.advertencias.length > 0 && !window.confirm(textoConfirmacionAdvertencias(validacion.advertencias))) return null
+    return false
   }
 
   const crearTurno = async () => {
@@ -1392,7 +1399,7 @@ export default function SupervisorMobile({ user }: any) {
     const { error: insertError } = await supabase.from('turnos').insert(payload)
 
     if (insertError) {
-      setError(insertError.message)
+      setError(esErrorTurnoSuperpuesto(insertError) ? MENSAJE_TURNO_SUPERPUESTO : insertError.message)
     } else {
       const filtroDestino = filtroFechaTurnosIncluye(filtroFecha, payload.fecha)
         ? filtroFecha
@@ -1926,6 +1933,7 @@ export default function SupervisorMobile({ user }: any) {
 
     const conflicto = nuevoGuardiaId ? await guardiaTieneTurnoSuperpuesto({
       guardia_id: nuevoGuardiaId,
+      objetivo_id: turno.objetivo_id,
       fecha: turno.fecha,
       hora_inicio: turno.hora_inicio,
       hora_fin: turno.hora_fin,
@@ -2978,7 +2986,7 @@ export default function SupervisorMobile({ user }: any) {
     if (estadoOpEdicionSup === 'FUTURO' && formEdicionSup.guardia_id) {
       const { data, error: turnosError } = await supabase
         .from('turnos')
-        .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
+        .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id, estado')
         .eq('guardia_id', formEdicionSup.guardia_id)
         .in('fecha', fechasVecinasTurno(turnoEditandoSup.fecha))
 
@@ -2986,12 +2994,17 @@ export default function SupervisorMobile({ user }: any) {
 
       const candidato = {
         guardia_id: formEdicionSup.guardia_id,
+        objetivo_id: (turnoEditandoSup as any).objetivo_id ?? null,
         fecha: turnoEditandoSup.fecha,
         hora_inicio: formEdicionSup.hora_inicio,
         hora_fin: formEdicionSup.hora_fin,
       }
-      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditandoSup.id, objetivosPausados)) {
+      const validacion = validarCargaTurno(candidato, data || [], { excluirTurnoId: turnoEditandoSup.id, objetivosPausados })
+      if (validacion.errores.length > 0) {
         setErrorEdicionSup(MENSAJE_TURNO_SUPERPUESTO)
+        return
+      }
+      if (validacion.advertencias.length > 0 && !window.confirm(textoConfirmacionAdvertencias(validacion.advertencias))) {
         return
       }
     }
