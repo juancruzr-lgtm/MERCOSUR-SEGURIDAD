@@ -29,6 +29,9 @@ import {
 import { INTERVALO_PLANILLA_MS, registrarActualizacion } from '@/lib/refresco-movil'
 import { useRefrescoAutomatico } from '@/components/movil/useRefrescoAutomatico'
 import DiagnosticoDispositivo from '@/components/movil/DiagnosticoDispositivo'
+import {
+  borrarFlujo, borrarFotosDe, guardarFlujo, guardarFotoPendiente, leerFlujo, leerFotoPendiente, purgarFotosPendientes,
+} from '@/lib/pendientes-camara'
 
 // ── CONSTANTES ────────────────────────────────────────────────
 const INGRESO_PENDIENTE_KEY = 'mercosur_ingreso_pendiente'
@@ -608,6 +611,14 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [ingresoGps, setIngresoGps] = useState<GpsData | null>(null)
   const [fotoLibro, setFotoLibro] = useState<{ file: File; url: string } | null>(null)
   const [fotoUniforme, setFotoUniforme] = useState<{ file: File; url: string } | null>(null)
+  // Versión ya preparada (comprimida) de cada foto, calculada apenas se saca y
+  // guardada como pendiente en IndexedDB: si el sistema mata la pestaña al abrir
+  // la otra cámara, la foto anterior no se pierde. `origen` es el File de la
+  // cámara al que corresponde (si se retoma, deja de coincidir y se recalcula).
+  const fotosPreparadasRef = useRef<{
+    libro?: { origen: File; lista: File; comprimida: boolean }
+    uniforme?: { origen: File; lista: File; comprimida: boolean }
+  }>({})
   const inputLibroRef = useRef<HTMLInputElement>(null)
   const inputUniformeRef = useRef<HTMLInputElement>(null)
   const [ingresoRestaurado, setIngresoRestaurado] = useState(false)
@@ -921,13 +932,30 @@ export default function GuardiaMobile({ user }: { user: any }) {
     if (!ingresoTurno || !ingresoGps) return
     if (ingresoFase === 'idle' || ingresoFase === 'gps' || ingresoFase === 'confirmando') return
 
-    sessionStorage.setItem(INGRESO_PENDIENTE_KEY, JSON.stringify({
+    // sessionStorage (como antes) + localStorage: si el sistema mata el proceso
+    // entero al abrir la cámara, sessionStorage puede no volver.
+    guardarFlujo(INGRESO_PENDIENTE_KEY, {
       turno_id: ingresoTurno.id,
+      guardia_id: user.id,
       gps: ingresoGps,
       timestamp: Date.now(),
       intento_id: ingresoIntentoId.current,
-    }))
-  }, [ingresoFase, ingresoTurno, ingresoGps])
+    })
+  }, [ingresoFase, ingresoTurno, ingresoGps, user.id])
+
+  // Fotos pendientes vencidas (>24 h) o de más: se purgan al abrir la app.
+  useEffect(() => { void purgarFotosPendientes() }, [])
+
+  // Prepara (comprime) la foto apenas se saca y la guarda como pendiente.
+  const prepararYGuardarFoto = useCallback((tipo: 'libro' | 'uniforme', file: File, turnoId: string | undefined) => {
+    const perfil = tipo === 'libro' ? 'libro_guardia' : 'operativa'
+    void prepararFotoOperativa(file, perfil)
+      .then(async r => {
+        fotosPreparadasRef.current[tipo] = { origen: file, lista: r.file, comprimida: r.comprimida }
+        if (turnoId) await guardarFotoPendiente({ flujo: 'ingreso', refId: turnoId, tipo, usuarioId: user.id, archivo: r.file, nombre: `${tipo}.jpg` })
+      })
+      .catch(() => { /* se reintenta al confirmar, con el mensaje de error de siempre */ })
+  }, [user.id])
 
   // Restaura un intento de ingreso pendiente después de que los datos carguen.
   // Solo corre una vez. Verifica que no exista ya un registro para evitar duplicados.
@@ -935,36 +963,37 @@ export default function GuardiaMobile({ user }: { user: any }) {
     if (loading || restorationAttempted.current) return
     restorationAttempted.current = true
 
-    const stored = sessionStorage.getItem(INGRESO_PENDIENTE_KEY)
+    const stored = leerFlujo(INGRESO_PENDIENTE_KEY)
     if (!stored) return
 
-    let parsed: { turno_id: string; gps: GpsData; timestamp: number; intento_id: string | null }
+    let parsed: { turno_id: string; guardia_id?: string; gps: GpsData; timestamp: number; intento_id: string | null }
     try {
       parsed = JSON.parse(stored)
     } catch {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
-    if (!parsed.turno_id || !parsed.gps || !parsed.timestamp) {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+    // Intento de otra persona que usó este teléfono: no se restaura.
+    if (!parsed.turno_id || !parsed.gps || !parsed.timestamp || (parsed.guardia_id && parsed.guardia_id !== user.id)) {
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
     if (Date.now() - parsed.timestamp > INGRESO_EXPIRACION_MS) {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
     const turno = turnos.find(t => t.id === parsed.turno_id)
     if (!turno) {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
     const registroExistente = registros.find(r => r.turno_id === parsed.turno_id && r.hora_entrada_real)
     if (registroExistente) {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
@@ -974,6 +1003,27 @@ export default function GuardiaMobile({ user }: { user: any }) {
     setIngresoFase('foto_libro')
     setIngresoRestaurado(true)
     ingresoStartTime.current = Date.now()
+
+    // Fotos ya sacadas antes de que se cerrara la pestaña (IndexedDB): se
+    // recuperan y el flujo sigue desde el paso que faltaba.
+    void Promise.all([
+      leerFotoPendiente('ingreso', turno.id, 'libro', user.id),
+      leerFotoPendiente('ingreso', turno.id, 'uniforme', user.id),
+    ]).then(([libro, uniforme]) => {
+      if (!libro) return
+      fotosPreparadasRef.current.libro = { origen: libro, lista: libro, comprimida: true }
+      setFotoLibro({ file: libro, url: URL.createObjectURL(libro) })
+      if (uniforme) {
+        fotosPreparadasRef.current.uniforme = { origen: uniforme, lista: uniforme, comprimida: true }
+        setFotoUniforme({ file: uniforme, url: URL.createObjectURL(uniforme) })
+      }
+      setIngresoFase(uniforme ? 'preview' : 'foto_uniforme')
+      track('fotos_pendientes_recuperadas', {
+        screen: 'ingreso_flow',
+        turno_id: turno.id,
+        value_json: { intento_id: parsed.intento_id, libro: true, uniforme: Boolean(uniforme) },
+      })
+    })
 
     const ctx = getDeviceContext()
     track('pagina_restaurada', {
@@ -1055,7 +1105,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
     setIngresoRestaurado(false)
     ingresoIntentoId.current = null
     ingresoStartTime.current = null
-    sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+    fotosPreparadasRef.current = {}
+    // Confirmado o cancelado: las fotos pendientes de este intento ya no sirven.
+    if (ingresoTurno) void borrarFotosDe('ingreso', ingresoTurno.id)
+    borrarFlujo(INGRESO_PENDIENTE_KEY)
   }
 
   const cancelarIngreso = () => {
@@ -1320,8 +1373,13 @@ export default function GuardiaMobile({ user }: { user: any }) {
       // Cada foto por separado, para decir cuál falló. Si el celular no puede
       // comprimir pero la original es una foto válida, se usa la original (el
       // servidor la controla): un problema de cámara no debe impedir fichar.
-      const libro = await prepararFotoOperativa(fotoLibro.file, 'libro_guardia').catch(e => { throw new Error('libro:' + (e instanceof Error ? e.message : '')) })
-      const uniforme = await prepararFotoOperativa(fotoUniforme.file, 'operativa').catch(e => { throw new Error('uniforme:' + (e instanceof Error ? e.message : '')) })
+      // Si ya se preparó al sacarla (y es la misma foto), no se comprime de nuevo.
+      const yaLista = (tipo: 'libro' | 'uniforme', origen: File) => {
+        const p = fotosPreparadasRef.current[tipo]
+        return p && p.origen === origen ? { file: p.lista, comprimida: p.comprimida } : null
+      }
+      const libro = yaLista('libro', fotoLibro.file) ?? await prepararFotoOperativa(fotoLibro.file, 'libro_guardia').catch(e => { throw new Error('libro:' + (e instanceof Error ? e.message : '')) })
+      const uniforme = yaLista('uniforme', fotoUniforme.file) ?? await prepararFotoOperativa(fotoUniforme.file, 'operativa').catch(e => { throw new Error('uniforme:' + (e instanceof Error ? e.message : '')) })
       libroComprimido = libro.file
       uniformeComprimido = uniforme.file
     } catch (err) {
@@ -1927,6 +1985,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
               if (fotoLibro) URL.revokeObjectURL(fotoLibro.url)
               setFotoLibro({ file, url: URL.createObjectURL(file) })
               setIngresoFase('foto_uniforme')
+              prepararYGuardarFoto('libro', file, ingresoTurno?.id)
               e.target.value = ''
             }}
           />
@@ -1948,6 +2007,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
               if (fotoUniforme) URL.revokeObjectURL(fotoUniforme.url)
               setFotoUniforme({ file, url: URL.createObjectURL(file) })
               setIngresoFase('preview')
+              prepararYGuardarFoto('uniforme', file, ingresoTurno?.id)
               e.target.value = ''
             }}
           />
