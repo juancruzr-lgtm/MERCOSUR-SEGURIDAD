@@ -4,9 +4,17 @@
 // algo que no se puede arreglar después: qué entra al aprendizaje de la IA.
 //
 //   PENDIENTE   nadie la miró todavía. Es trabajo abierto.
-//   CORRECTO    una persona dijo que la observación de la IA era cierta.
-//   INCORRECTO  una persona dijo que la IA se equivocó.
+//   CORRECTO    una persona dijo que la FOTO ESTÁ BIEN (es evidencia válida).
+//   INCORRECTO  una persona dijo que la FOTO NO SIRVE.
 //   SANEADO     cierre administrativo. NADIE la miró.
+//
+// La decisión es sobre la foto, no sobre la IA: así la leen la bandeja de IA
+// («la IA se equivocó» = observada + CORRECTO), las métricas, la memoria visual
+// (CORRECTO = ejemplo positivo del punto) y la regla de validación de rondas
+// (CORRECTO valida el punto, migración 20261120120000). Hasta nov. 2026 el
+// Cierre Operativo rotulaba los botones «Confirmar/Descartar» y avisaba
+// «Observación confirmada» al mandar CORRECTO: lectura invertida. Ahora usa
+// ETIQUETA_DECISION_FOTO.
 //
 // SANEADO existe porque el backlog anterior al criterio vigente no se podía
 // cerrar con ninguna de las otras dos sin mentir: CORRECTO habría inventado un
@@ -15,6 +23,18 @@
 // exactamente lo que se usa para mejorar la IA— con juicios que nadie emitió.
 
 export type EstadoRevisionIA = 'PENDIENTE' | 'CORRECTO' | 'INCORRECTO' | 'SANEADO'
+
+/** Texto de los botones de decisión humana. Único para todas las pantallas. */
+export const ETIQUETA_DECISION_FOTO: Record<'CORRECTO' | 'INCORRECTO', string> = {
+  CORRECTO: 'Foto válida',
+  INCORRECTO: 'Foto no válida',
+}
+
+/** Aviso luego de guardar la decisión. */
+export const AVISO_DECISION_FOTO: Record<'CORRECTO' | 'INCORRECTO', string> = {
+  CORRECTO: 'Foto marcada como válida.',
+  INCORRECTO: 'Foto marcada como no válida.',
+}
 
 export const MOTIVO_SANEAMIENTO_IA =
   'Saneamiento de observaciones IA anteriores al nuevo criterio de revisión. ' +

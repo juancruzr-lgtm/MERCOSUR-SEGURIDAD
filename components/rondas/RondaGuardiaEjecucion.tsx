@@ -311,19 +311,24 @@ export default function RondaGuardiaEjecucion({
 
   if (ejecucion.estado === 'finalizada') {
     const completa = ejecucion.resultado === 'completa'
+    // Regla aprobada (nov. 2026): si alguna foto espera la IA la ronda no es
+    // completa ni incompleta todavía. No se le muestra al vigilador como falta.
+    const porValidar = ejecucion.resultado === 'pendiente_validacion'
     return (
       <section style={S.finalCard} aria-live="polite">
-        <div style={{ ...S.finalIcono, background: completa ? '#14532d' : '#713f12' }}>
-          {completa ? '✓' : '!'}
+        <div style={{ ...S.finalIcono, background: completa || porValidar ? '#14532d' : '#713f12' }}>
+          {completa || porValidar ? '✓' : '!'}
         </div>
         <div style={S.finalTitulo}>Ronda finalizada</div>
         <div style={S.finalTexto}>
           {completa
             ? 'Todos los puntos fueron cumplidos.'
-            : 'La ronda terminó con uno o más puntos incumplidos.'}
+            : porValidar
+              ? 'Recorrido registrado. Una o más fotos están pendientes de validación.'
+              : 'La ronda terminó con uno o más puntos incumplidos.'}
         </div>
-        <div style={{ ...S.resultadoBadge, ...(completa ? S.resultadoOk : S.resultadoWarn) }}>
-          {completa ? 'Completa' : 'Incompleta'}
+        <div style={{ ...S.resultadoBadge, ...(completa || porValidar ? S.resultadoOk : S.resultadoWarn) }}>
+          {completa ? 'Completa' : porValidar ? 'Pendiente de validación' : 'Incompleta'}
         </div>
         <button type="button" style={S.primario} onClick={onVolver}>
           Volver a las rondas
@@ -386,12 +391,17 @@ export default function RondaGuardiaEjecucion({
         <div
           style={{
             ...S.resultadoAnterior,
-            ...(ultimoResultado.veredicto.estado === 'cumplido' ? S.resultadoAnteriorOk : S.resultadoAnteriorWarn),
+            ...(ultimoResultado.veredicto.estado === 'incumplido' ? S.resultadoAnteriorWarn : S.resultadoAnteriorOk),
           }}
           aria-live="polite"
         >
           <strong>{ultimoResultado.puntoNombre}:</strong>{' '}
-          {ultimoResultado.veredicto.estado === 'cumplido' ? 'cumplido' : 'incumplido'}
+          {/* Foto a la espera de la IA: no se le muestra al vigilador como falta. */}
+          {ultimoResultado.veredicto.estado === 'cumplido'
+            ? 'cumplido'
+            : ultimoResultado.veredicto.estado === 'pendiente_validacion'
+              ? 'registrado · foto pendiente de validación'
+              : 'incumplido'}
           {ultimoResultado.veredicto.distancia_metros != null
             ? ` · ${Math.round(ultimoResultado.veredicto.distancia_metros)} m`
             : ''}

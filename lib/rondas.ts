@@ -886,8 +886,12 @@ export interface RondaGuardiaPunto {
 }
 
 export type EstadoEjecucionRonda = 'en_curso' | 'finalizada' | 'cancelada'
-export type ResultadoEjecucionRonda = 'completa' | 'incompleta'
-export type EstadoEjecucionPunto = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido'
+// 'pendiente_validacion' (regla aprobada, migración 20261120120000): el punto
+// ya se registró y su única evidencia es una foto que la IA todavía no
+// analizó. No es cumplido ni incumplido. Una ronda recorrida entera cuyo único
+// pendiente es ése queda con resultado 'pendiente_validacion', no 'incompleta'.
+export type ResultadoEjecucionRonda = 'completa' | 'incompleta' | 'pendiente_validacion'
+export type EstadoEjecucionPunto = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido' | 'pendiente_validacion'
 
 // Estado de un punto dentro de una ejecución. `ronda_punto_id` referencia la
 // definición en ronda_puntos; el resto son valores del snapshot tomado al
@@ -1120,6 +1124,10 @@ export interface VeredictoPuntoRonda {
   qr_verificado?: boolean
   /** La exigencia QR aplicaba (modo obligatorio + credencial activa). */
   qr_exigible?: boolean
+  /** Qué evidencia validó el punto (regla aprobada): gps | qr | foto_ia | revision. */
+  validado_por?: 'gps' | 'qr' | 'foto_ia' | 'revision' | null
+  /** La foto espera la IA: el punto no es cumplido ni incumplido todavía. */
+  pendiente_validacion?: boolean
 }
 
 export interface RespuestaRegistrarPunto {
@@ -1471,7 +1479,7 @@ export function mensajeContextoCerrarRonda(contexto: ContextoCerrarRonda): strin
 // funciones solo tipan y normalizan la respuesta. No aceptan ni envían
 // storage_path, ni guardia/puesto/objetivo de alcance fabricados por el cliente.
 
-export type EstadoPuntoEjecucion = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido'
+export type EstadoPuntoEjecucion = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido' | 'pendiente_validacion'
 
 // ── B1: detalle de una ejecución para supervisión ─────────────────────────────
 
@@ -1610,6 +1618,8 @@ export interface EjecucionHistorialItem {
   puntos_cumplidos: number
   puntos_incumplidos: number
   puntos_omitidos: number
+  /** Puntos cuya foto espera la IA (migración 20261120120000). Ausente = 0. */
+  puntos_pendientes_validacion?: number
   cerrada_por: string | null
   cerrada_at: string | null
   cerrada_motivo: string | null
@@ -1677,9 +1687,10 @@ export type EstadoRondaProgramada =
   | 'completada'
   | 'incompleta'
   | 'pausada'      // sin ejecución, ventana cubierta por pausa de supervisor
+  | 'pendiente_validacion' // recorrida entera; algún punto espera la IA
 
 export const ESTADOS_RONDA_PROGRAMADA: readonly EstadoRondaProgramada[] =
-  ['pendiente', 'no_iniciada', 'en_curso', 'completada', 'incompleta', 'pausada'] as const
+  ['pendiente', 'no_iniciada', 'en_curso', 'completada', 'incompleta', 'pausada', 'pendiente_validacion'] as const
 
 export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): string {
   switch (estado) {
@@ -1689,6 +1700,7 @@ export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): st
     case 'completada':  return 'Completada'
     case 'incompleta':  return 'Incompleta'
     case 'pausada':     return 'Pausada'
+    case 'pendiente_validacion': return 'Pendiente de validación'
   }
 }
 
@@ -1719,6 +1731,10 @@ export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): st
 //                            incumplimientos GPS: la ronda SE HIZO
 //   'completada'           → cumplida_observada  si arrancó tarde
 //                          → cumplida            si está limpia
+//   'pendiente_validacion' → pendiente_validacion: se recorrió todo y algún
+//                            punto espera la IA (regla aprobada, nov. 2026).
+//                            No es incumplimiento: se resuelve sola cuando la
+//                            IA acepta (cumplida) o rechaza (observada).
 //
 // La foto de control por reincidencia GPS NO aparece acá a propósito: es una
 // exigencia de una visita puntual, no un estado de la ronda. La ronda se
@@ -1733,6 +1749,7 @@ export type EstadoTecnicoRonda =
   | 'incompleta'
   | 'no_iniciada'
   | 'pausada'
+  | 'pendiente_validacion'
 
 export type EstadoAlertaVisual = 'sin_alerta' | 'pendiente' | 'intervenida'
 
@@ -1745,6 +1762,7 @@ export const ETIQUETA_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   incompleta:         'Incompleta',
   no_iniciada:        'No iniciada',
   pausada:            'Pausada',
+  pendiente_validacion: 'Pendiente de validación',
 }
 
 /** Versión corta para superficies compactas (tarjeta de 200 px, chips). */
@@ -1757,6 +1775,7 @@ export const ETIQUETA_CORTA_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> =
   incompleta:         'Incompleta',
   no_iniciada:        'No iniciada',
   pausada:            'Pausada',
+  pendiente_validacion: 'Por validar',
 }
 
 export const ETIQUETA_ESTADO_ALERTA: Record<EstadoAlertaVisual, string> = {
@@ -1778,6 +1797,7 @@ export const COLOR_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   incompleta:         '#f97316',  // naranja
   no_iniciada:        '#ef4444',  // rojo — solo mientras la alerta esté sin intervenir
   pausada:            '#f59e0b',  // ámbar
+  pendiente_validacion: '#a78bfa', // violeta — espera la IA, no es falta
 }
 
 /** Verde lima: alerta intervenida. Distinto del verde y del verde claro. */
@@ -1792,6 +1812,7 @@ export const ICONO_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   incompleta:         '⚠️',
   no_iniciada:        '❌',
   pausada:            '⏸',
+  pendiente_validacion: '🔎',
 }
 
 function msRonda(iso: string): number {
@@ -1820,8 +1841,11 @@ export function estadoTecnicoRonda(r: RondaProgramada, ahora: number = Date.now(
   // Ejecución finalizada. Puntos sin recorrer o cierre forzado: abandono.
   if (r.puntos_omitidos > 0 || r.es_cierre_administrativo) return 'incompleta'
 
-  // Se recorrió todo. Lo que queda son observaciones, no abandono.
-  if (r.puntos_incumplidos > 0 || r.inicio_tardio) return 'cumplida_observada'
+  // Se recorrió todo. Un punto sin evidencia válida es observación, no abandono.
+  if (r.puntos_incumplidos > 0) return 'cumplida_observada'
+  // Algún punto espera la IA: no se adelanta ni el verde ni la observación.
+  if (r.estado === 'pendiente_validacion' || (r.puntos_pendientes_validacion ?? 0) > 0) return 'pendiente_validacion'
+  if (r.inicio_tardio) return 'cumplida_observada'
   if (r.estado === 'completada') return 'cumplida'
 
   // `incompleta` sin omitidos ni incumplidos no debería existir (el motor solo
@@ -1866,6 +1890,7 @@ export function ordenOperativoRonda(r: RondaProgramada): number {
     case 'en_curso':           return 2
     case 'incompleta':         return 4
     case 'cumplida_observada': return 5
+    case 'pendiente_validacion': return 5
     case 'pendiente':          return 6
     case 'proxima':            return 7
     case 'cumplida':           return 8
@@ -1883,15 +1908,17 @@ export function ordenRondaEsHaciaAdelante(orden: number): boolean {
  * breve. Derivan solo de los contadores que la fila ya trae; lo que el motor no
  * expone (foto faltante, precisión GPS) no se inventa acá.
  *
- * Nota sobre "fuera del radio": `puntos_incumplidos` agrupa fuera-de-radio y
- * GPS obligatorio sin lectura — el motor no los separa a nivel contador. El
- * caso dominante es el desvío de radio y así se rotula; el detalle por punto
- * muestra la distinción exacta.
+ * Con la regla aprobada (nov. 2026) un punto incumplido es uno SIN NINGUNA
+ * evidencia válida: ni GPS dentro del radio, ni QR verificado, ni foto
+ * aceptada. Ya no es sinónimo de "fuera del radio" y así se rotula.
  */
 export function observacionesRonda(r: RondaProgramada): string[] {
   const obs: string[] = []
   if (r.puntos_incumplidos > 0) {
-    obs.push(`${r.puntos_incumplidos} punto(s) fuera del radio`)
+    obs.push(`${r.puntos_incumplidos} punto(s) sin evidencia válida`)
+  }
+  if ((r.puntos_pendientes_validacion ?? 0) > 0) {
+    obs.push(`${r.puntos_pendientes_validacion} punto(s) pendientes de validación`)
   }
   if (r.puntos_omitidos > 0) {
     obs.push(`${r.puntos_omitidos} punto(s) sin recorrer`)
@@ -1934,8 +1961,10 @@ export function estadoTecnicoDetalleEjecucion(
   if (estado === 'en_curso') return 'en_curso'
   const omitidos = puntos.filter(p => p.estado === 'omitido').length
   const incumplidos = puntos.filter(p => p.estado === 'incumplido').length
+  const porValidar = puntos.filter(p => p.estado === 'pendiente_validacion').length
   if (omitidos > 0 || esCierreAdministrativo) return 'incompleta'
   if (incumplidos > 0) return 'cumplida_observada'
+  if (porValidar > 0) return 'pendiente_validacion'
   return 'cumplida'
 }
 
@@ -1947,7 +1976,9 @@ export function observacionesDetalleEjecucion(
   const obs: string[] = []
   const incumplidos = puntos.filter(p => p.estado === 'incumplido').length
   const omitidos = puntos.filter(p => p.estado === 'omitido').length
-  if (incumplidos > 0) obs.push(`${incumplidos} punto(s) fuera del radio`)
+  const porValidar = puntos.filter(p => p.estado === 'pendiente_validacion').length
+  if (incumplidos > 0) obs.push(`${incumplidos} punto(s) sin evidencia válida`)
+  if (porValidar > 0) obs.push(`${porValidar} punto(s) pendientes de validación`)
   if (omitidos > 0) obs.push(`${omitidos} punto(s) sin recorrer`)
   if (esCierreAdministrativo) obs.push('Cierre administrativo')
   return obs
@@ -1978,6 +2009,8 @@ export interface RondaProgramada {
   puntos_cumplidos: number
   puntos_incumplidos: number
   puntos_omitidos: number
+  /** Puntos cuya foto espera la IA (migración 20261120120000). Ausente = 0. */
+  puntos_pendientes_validacion?: number
   cerrada_por: string | null
   cerrada_at: string | null
   cerrada_motivo: string | null

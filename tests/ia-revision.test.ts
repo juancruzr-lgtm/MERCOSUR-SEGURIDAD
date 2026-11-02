@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   cuentaParaAprendizajeIA, esDecisionHumana, esSaneada, esperaRevision,
   salioDeLaBandeja,
-  MOTIVO_SANEAMIENTO_IA,
+  MOTIVO_SANEAMIENTO_IA, ETIQUETA_DECISION_FOTO, AVISO_DECISION_FOTO,
 } from '@/lib/ia/revision'
 import {
   mensajeContextoSaneamiento, resumenPrevioSaneamiento, validarMotivoSaneamiento,
@@ -132,5 +132,16 @@ describe('los contextos de la RPC se traducen a algo accionable', () => {
   it('vista previa y aplicado no son errores', () => {
     expect(mensajeContextoSaneamiento('vista_previa')).toBeNull()
     expect(mensajeContextoSaneamiento('aplicado')).toBeNull()
+  })
+})
+
+describe('la decisión humana es sobre la foto', () => {
+  // CORRECTO valida el punto de ronda (regla 20261120120000) y es ejemplo
+  // positivo de la memoria visual: el botón tiene que decir eso, no
+  // «confirmar observación», que es la lectura opuesta.
+  it('CORRECTO = foto válida; INCORRECTO = foto no válida', () => {
+    expect(ETIQUETA_DECISION_FOTO.CORRECTO).toBe('Foto válida')
+    expect(ETIQUETA_DECISION_FOTO.INCORRECTO).toBe('Foto no válida')
+    expect(AVISO_DECISION_FOTO.CORRECTO).not.toMatch(/observaci/i)
   })
 })

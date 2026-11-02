@@ -327,7 +327,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCam
     const c: Record<EstadoTecnicoRonda, number> = {
       proxima: 0, pendiente: 0, en_curso: 0,
       cumplida: 0, cumplida_observada: 0, incompleta: 0, no_iniciada: 0,
-      pausada: 0,
+      pausada: 0, pendiente_validacion: 0,
     }
     for (const f of filas) c[estadoTecnicoRonda(f.ronda)]++
     return c
@@ -342,7 +342,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCam
         </button>
         {filas.length > 0 && (
           <div style={S.resumen}>
-            {(['no_iniciada', 'en_curso', 'incompleta', 'cumplida_observada', 'cumplida'] as EstadoTecnicoRonda[])
+            {(['no_iniciada', 'en_curso', 'incompleta', 'cumplida_observada', 'pendiente_validacion', 'cumplida'] as EstadoTecnicoRonda[])
               .filter(e => conteos[e] > 0)
               .map(e => (
                 <span key={e} style={{ ...S.resumenItem, color: COLOR_ESTADO_TECNICO[e] }}>
@@ -476,7 +476,7 @@ function TarjetaObjetivo({
         : `${r.alerta_intervenciones} intervención(es)`)
     : alerta === 'pendiente'
       ? 'Sin intervención'
-      : (tecnico === 'cumplida_observada' || tecnico === 'incompleta')
+      : (tecnico === 'cumplida_observada' || tecnico === 'incompleta' || tecnico === 'pendiente_validacion')
         ? resumenObservacionesRonda(r)
         : null
 
