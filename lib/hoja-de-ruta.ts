@@ -1,276 +1,162 @@
-// Hoja de ruta del supervisor de guardia: lista de prioridades por riesgo.
+// Hoja de ruta del supervisor: un WhatsApp al terminar cada turno, con las
+// visitas en orden y la novedad de cada objetivo tal como se cargó.
 //
-// ── Qué es y qué NO ─────────────────────────────────────────────────────────
-// Función PURA que ordena lo que ya existe (puestos descubiertos, alertas
-// abiertas, supervisiones exigibles por vencer, relevos con hueco) para el
-// supervisor que está de guardia AHORA, dentro de sus zonas. No crea tareas
-// obligatorias, no escribe nada, no decide si un puesto está descubierto (eso
-// es lib/turnos y las alertas) ni si una supervisión es exigible (eso es
-// lib/supervisiones.exigibilidadSupervision). Nunca toca fichajes, horas ni
-// planillas.
+// Formato aprobado (exacto, sin agregados):
 //
-// ── Quién es responsable ────────────────────────────────────────────────────
-// La misma resolución que usan push y WhatsApp (lib/responsables-operativos):
-// guardia efectiva en el instante; sin guardia, responsable único de zona. En
-// el cambio de guardia la hoja pasa entera al entrante: el saliente ve su hoja
-// vacía con motivo `sin_guardia_vigente`.
+//   HOJA DE RUTA
+//   Fecha: [fecha]
+//   Turno: [hora inicio] a [hora fin]
+//   Supervisor: [nombre]
 //
-// ── Zonas ───────────────────────────────────────────────────────────────────
-// Un objetivo entra sólo si el supervisor es responsable de su zona en este
-// instante Y la zona está en su alcance (supervisor_zonas), salvo alcance
-// 'todas'. Lo que queda afuera se cuenta en `fueraDeZona` y no se muestra.
-// Esto es la vista: las mutaciones siguen validando alcance en el servidor
-// (save-supervision → alcanza_objetivo, turnos/editar, rondas/evidencia,
-// resolver_ronda_alerta → puede_administrar_rondas_objetivo).
+//   [hora de visita] — [objetivo]
+//   [novedad textual completa de ese objetivo]
+//
+// - Visitas = supervisiones cargadas por el supervisor dentro del turno, en orden
+//   cronológico. La novedad es `supervisiones.observaciones` sin resumir,
+//   interpretar ni modificar.
+// - Sin indicadores, alertas, estadísticas, pendientes ni PDF. No se mezcla con
+//   los avisos de puestos descubiertos ni de rondas.
+// - Un solo mensaje por destinatario y por turno. Si supera el límite de
+//   WhatsApp NO se recorta: queda registrado como excedido (pendiente de decidir
+//   cómo se entrega).
+//
+// Librería pura: el envío lo hace app/api/push/hoja-de-ruta (apagado por flag).
 
-import {
-  exigibilidadSupervision, frecuenciaSupervision, horasParaVencimiento, estadoSupervision,
-  supervisionProximaAVencer,
-} from '@/lib/supervisiones'
-import type { ContextoExigibilidad, ObjetivoServicio } from '@/lib/supervisiones'
-import { resolverResponsablesOperativos, instanteLocal } from '@/lib/responsables-operativos'
-import type { AsignacionZona, GuardiaOperativa, UsuarioBasico } from '@/lib/responsables-operativos'
-import type { AlcanceOperativo } from '@/lib/capacidades'
+const TZ = 'America/Argentina/Buenos_Aires'
 
-export type TipoPrioridad = 'servicio_sin_cobertura' | 'alerta_critica' | 'relevo_pendiente' | 'supervision_exigible'
+/** Límite de un mensaje de texto de WhatsApp (Cloud API). */
+export const LIMITE_TEXTO_WHATSAPP = 4096
 
-export interface ObjetivoRuta extends ObjetivoServicio {
-  zona_id?: string | null
+export interface GuardiaSupervisor {
+  id: string
+  supervisor_id: string
+  fecha: string // YYYY-MM-DD, día de inicio
+  hora_inicio: string
+  hora_fin: string
+  estado?: string | null
+  tipo_evento?: string | null
 }
 
-export interface PuestoDescubierto {
-  turno_id: string
-  objetivo_id: string
-  puesto?: string | null
-  /** Minutos desde el inicio del turno sin fichaje (lo decide lib/turnos). */
-  minutosDescubierto: number
-}
-
-export interface AlertaAbierta {
+export interface VisitaSupervision {
   id: string
   objetivo_id: string
-  tipo: string
-  severidad: 'critica' | 'alta' | 'media'
-  detectada_at: string
-  /** Ya intervenida por un supervisor (cualquier acción o resultado). */
-  intervenida?: boolean
-  /** Seguimiento vigente hasta (ISO). Vencido = vuelve a pedir atención. */
-  seguimiento_hasta?: string | null
+  supervisor_id: string
+  created_at: string
+  observaciones: string | null
 }
 
-export interface RelevoPendiente {
-  objetivo_id: string
-  turno_id: string
-  /** Hora (ISO) en que debería entrar el relevo. */
-  relevo_at: string
-  clase: 'hueco' | 'sin_relevo' | 'solapamiento'
-  minutos?: number
-}
-
-export interface EntradaHojaDeRuta {
+export interface TurnoSupervisor {
+  /** Clave estable del turno: un mensaje por (clave, destinatario). */
+  clave: string
   supervisorId: string
-  alcance: AlcanceOperativo
-  ahora: Date
-  objetivos: ObjetivoRuta[]
-  zonas: Array<{ id: string; nombre: string }>
-  guardias: GuardiaOperativa[]
-  supervisorZonas: AsignacionZona[]
-  usuarios?: UsuarioBasico[]
-  puestosDescubiertos?: PuestoDescubierto[]
-  alertas?: AlertaAbierta[]
-  relevos?: RelevoPendiente[]
-  /** objetivo_id → ISO de la última supervisión válida (no incompleta). */
-  ultimaSupervision?: Map<string, string>
-  contextoExigibilidad?: ContextoExigibilidad
-  /** Horizonte para relevos (min). Por defecto 90. */
-  horizonteRelevoMin?: number
+  fecha: string
+  horaInicio: string
+  horaFin: string
+  desde: Date
+  hasta: Date
+  guardiaIds: string[]
 }
 
-export interface ItemHojaDeRuta {
-  tipo: TipoPrioridad
-  objetivo_id: string
-  objetivo: string
-  puntaje: number
-  motivo: string
-  /** Referencia al hecho de origen (turno, alerta). */
-  ref?: string
-  /** Vencimiento o momento crítico (ISO), si aplica. */
-  limite?: string | null
+export type ModoHojaDeRuta = 'apagado' | 'dry-run' | 'activo'
+
+/** HOJA_DE_RUTA_WHATSAPP: 'activo' envía, 'dry-run' sólo arma; cualquier otro valor = apagado. */
+export function modoHojaDeRuta(valor: string | undefined = process.env.HOJA_DE_RUTA_WHATSAPP): ModoHojaDeRuta {
+  if (valor === 'activo') return 'activo'
+  if (valor === 'dry-run') return 'dry-run'
+  return 'apagado'
 }
 
-export interface ParadaHojaDeRuta {
-  objetivo_id: string
-  objetivo: string
-  puntaje: number
-  items: ItemHojaDeRuta[]
+const hhmm = (h: string) => h.slice(0, 5)
+
+/** Offset de Argentina para ese instante, derivado con Intl (no del reloj del proceso). */
+function offsetMin(d: Date): number {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: TZ, timeZoneName: 'longOffset' }).formatToParts(d)
+  const m = /GMT([+-])(\d{2}):?(\d{2})?/.exec(p.find(x => x.type === 'timeZoneName')?.value || '')
+  if (!m) return -180
+  const signo = m[1] === '-' ? -1 : 1
+  return signo * (Number(m[2]) * 60 + Number(m[3] || 0))
 }
 
-export interface HojaDeRuta {
-  supervisorId: string
-  responsableAhora: boolean
-  motivo: 'ok' | 'sin_guardia_vigente'
-  zonasResponsable: string[]
-  items: ItemHojaDeRuta[]
-  paradas: ParadaHojaDeRuta[]
-  fueraDeZona: number
+/** Fecha + hora local de Argentina → instante. */
+export function instanteLocal(fecha: string, hora: string): Date {
+  const base = Date.parse(`${fecha}T${hhmm(hora)}:00Z`)
+  return new Date(base - offsetMin(new Date(base)) * 60_000)
 }
 
-const MIN = 60000
-
-/** Pesos: un puesto sin nadie pesa más que cualquier trámite. */
-export const PESO: Record<TipoPrioridad, number> = {
-  servicio_sin_cobertura: 100,
-  alerta_critica: 70,
-  relevo_pendiente: 60,
-  supervision_exigible: 30,
+function partesLocales(d: Date) {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d)
+  const g = (t: string) => p.find(x => x.type === t)?.value ?? '00'
+  return { fecha: `${g('year')}-${g('month')}-${g('day')}`, hora: `${g('hour') === '24' ? '00' : g('hour')}:${g('minute')}` }
 }
+
+const guardiaCubre = (g: GuardiaSupervisor) =>
+  (g.estado ?? 'activo') === 'activo' && !['franco', 'ausencia'].includes(g.tipo_evento ?? 'normal')
 
 /**
- * Zonas de las que `supervisorId` es responsable en este instante, con la
- * misma resolución que push/WhatsApp.
+ * Turnos de supervisor a partir de las filas de guardia. Un supervisor con
+ * varias zonas en el mismo horario tiene varias filas pero UN turno: se agrupan
+ * por (supervisor, inicio, fin). Un turno nocturno termina al día siguiente y
+ * pertenece al día de inicio.
  */
-export function zonasResponsableAhora(
-  e: Pick<EntradaHojaDeRuta, 'supervisorId' | 'ahora' | 'zonas' | 'guardias' | 'supervisorZonas' | 'usuarios'>,
-): string[] {
-  const { fecha, hora } = instanteLocal(e.ahora)
-  return e.zonas
-    .filter(z => resolverResponsablesOperativos({
-      zonaId: z.id, fecha, hora, guardias: e.guardias, supervisorZonas: e.supervisorZonas,
-      zonas: e.zonas, usuarios: e.usuarios,
-    }).responsables.includes(e.supervisorId))
-    .map(z => z.id)
-}
-
-/**
- * ¿Puede este supervisor operar sobre el objetivo? Espejo de alcanza_objetivo
- * para la vista: 'todas' sí; 'zonas_asignadas' sólo con la zona asignada;
- * 'propio' nunca. NO reemplaza la validación del servidor.
- */
-export function puedeOperarObjetivo(
-  supervisorId: string,
-  alcance: AlcanceOperativo,
-  objetivo: { zona_id?: string | null } | null | undefined,
-  supervisorZonas: AsignacionZona[],
-): boolean {
-  if (!objetivo) return false
-  if (alcance === 'todas') return true
-  if (alcance !== 'zonas_asignadas' || !objetivo.zona_id) return false
-  return supervisorZonas.some(a => a.supervisor_id === supervisorId && a.zona_id === objetivo.zona_id)
-}
-
-function alertaPideAtencion(a: AlertaAbierta, ahoraMs: number): boolean {
-  if (a.seguimiento_hasta) {
-    const t = Date.parse(a.seguimiento_hasta)
-    if (Number.isFinite(t)) return t <= ahoraMs // seguimiento vencido
-  }
-  return !a.intervenida
-}
-
-/** La hoja de ruta, ordenada por puntaje (desc), límite (asc) y nombre. */
-export function construirHojaDeRuta(e: EntradaHojaDeRuta): HojaDeRuta {
-  const ahoraMs = e.ahora.getTime()
-  const zonasResp = zonasResponsableAhora(e)
-  const base: HojaDeRuta = {
-    supervisorId: e.supervisorId, responsableAhora: zonasResp.length > 0,
-    motivo: zonasResp.length > 0 ? 'ok' : 'sin_guardia_vigente',
-    zonasResponsable: zonasResp, items: [], paradas: [], fueraDeZona: 0,
-  }
-  if (zonasResp.length === 0) return base
-
-  const zonasSet = new Set(zonasResp)
-  const objetivos = new Map(e.objetivos.map(o => [o.id, o]))
-  const enRuta = (objetivoId: string): ObjetivoRuta | null => {
-    const o = objetivos.get(objetivoId)
-    if (!o || !o.zona_id || !zonasSet.has(o.zona_id)) return null
-    if (!puedeOperarObjetivo(e.supervisorId, e.alcance, o, e.supervisorZonas)) return null
-    return o
-  }
-  const items: ItemHojaDeRuta[] = []
-  const vistos = new Set<string>()
-  const contarFuera = (objetivoId: string) => { if (!vistos.has(objetivoId)) { vistos.add(objetivoId); base.fueraDeZona += 1 } }
-  const nombre = (o: ObjetivoRuta) => o.nombre ?? o.id
-
-  for (const p of e.puestosDescubiertos ?? []) {
-    const o = enRuta(p.objetivo_id)
-    if (!o) { contarFuera(p.objetivo_id); continue }
-    items.push({
-      tipo: 'servicio_sin_cobertura', objetivo_id: o.id, objetivo: nombre(o), ref: p.turno_id,
-      puntaje: PESO.servicio_sin_cobertura + Math.min(Math.max(p.minutosDescubierto, 0), 60),
-      motivo: `Puesto${p.puesto ? ` ${p.puesto}` : ''} sin fichaje hace ${Math.round(p.minutosDescubierto)} min`,
+export function turnosDeSupervisor(guardias: GuardiaSupervisor[]): TurnoSupervisor[] {
+  const porClave = new Map<string, TurnoSupervisor>()
+  for (const g of guardias) {
+    if (!guardiaCubre(g)) continue
+    const desde = instanteLocal(g.fecha, g.hora_inicio)
+    let hasta = instanteLocal(g.fecha, g.hora_fin)
+    if (hasta.getTime() <= desde.getTime()) hasta = new Date(hasta.getTime() + 86_400_000)
+    const clave = `sup:${g.supervisor_id}|${desde.toISOString()}|${hasta.toISOString()}`
+    const t = porClave.get(clave)
+    if (t) t.guardiaIds.push(g.id)
+    else porClave.set(clave, {
+      clave, supervisorId: g.supervisor_id, fecha: g.fecha, horaInicio: hhmm(g.hora_inicio), horaFin: hhmm(g.hora_fin),
+      desde, hasta, guardiaIds: [g.id],
     })
   }
-
-  for (const a of e.alertas ?? []) {
-    if (a.severidad === 'media') continue
-    if (!alertaPideAtencion(a, ahoraMs)) continue
-    const o = enRuta(a.objetivo_id)
-    if (!o) { contarFuera(a.objetivo_id); continue }
-    const edadMin = Math.max(0, (ahoraMs - Date.parse(a.detectada_at)) / MIN)
-    items.push({
-      tipo: 'alerta_critica', objetivo_id: o.id, objetivo: nombre(o), ref: a.id,
-      puntaje: PESO.alerta_critica + (a.severidad === 'critica' ? 15 : 0) + Math.min(Math.floor(edadMin / 10), 15),
-      motivo: a.seguimiento_hasta ? `Seguimiento vencido: ${a.tipo}` : `Alerta abierta sin intervención: ${a.tipo}`,
-      limite: a.seguimiento_hasta ?? null,
-    })
-  }
-
-  const horizonte = (e.horizonteRelevoMin ?? 90) * MIN
-  for (const r of e.relevos ?? []) {
-    if (r.clase === 'solapamiento') continue // doble cobertura: no es riesgo de puesto vacío
-    const t = Date.parse(r.relevo_at)
-    if (!Number.isFinite(t) || t - ahoraMs > horizonte || ahoraMs - t > 4 * 60 * MIN) continue
-    const o = enRuta(r.objetivo_id)
-    if (!o) { contarFuera(r.objetivo_id); continue }
-    const faltan = Math.round((t - ahoraMs) / MIN)
-    items.push({
-      tipo: 'relevo_pendiente', objetivo_id: o.id, objetivo: nombre(o), ref: r.turno_id, limite: r.relevo_at,
-      puntaje: PESO.relevo_pendiente + (r.clase === 'sin_relevo' ? 10 : 0) + (faltan <= 30 ? 10 : 0),
-      motivo: r.clase === 'sin_relevo'
-        ? `Sin relevo programado (${faltan >= 0 ? `en ${faltan} min` : `hace ${-faltan} min`})`
-        : `Hueco de ${r.minutos ?? '?'} min en el relevo (${faltan >= 0 ? `en ${faltan} min` : `hace ${-faltan} min`})`,
-    })
-  }
-
-  if (e.contextoExigibilidad && e.ultimaSupervision) {
-    for (const o of e.objetivos) {
-      if (!o.zona_id || !zonasSet.has(o.zona_id)) continue
-      if (!puedeOperarObjetivo(e.supervisorId, e.alcance, o, e.supervisorZonas)) { contarFuera(o.id); continue }
-      if (!exigibilidadSupervision(o, e.contextoExigibilidad, e.ahora).exige) continue
-      const ultima = e.ultimaSupervision.get(o.id) ?? null
-      const frec = frecuenciaSupervision(o)
-      const estado = estadoSupervision(ultima, frec, ahoraMs)
-      const proxima = supervisionProximaAVencer(ultima, frec, ahoraMs)
-      if (estado === 'vigente' && !proxima) continue
-      const horas = horasParaVencimiento(ultima, frec, ahoraMs)
-      const limite = ultima ? new Date(Date.parse(ultima) + frec * 3600000).toISOString() : null
-      const puntaje = estado === 'vencida'
-        ? PESO.supervision_exigible + 15 + Math.min(Math.floor(-(horas ?? 0) / 24) * 2, 10)
-        : estado === 'nunca' ? PESO.supervision_exigible + 12 : PESO.supervision_exigible
-      items.push({
-        tipo: 'supervision_exigible', objetivo_id: o.id, objetivo: nombre(o), puntaje, limite,
-        motivo: estado === 'vencida' ? `Supervisión vencida hace ${Math.round(-(horas ?? 0))} h`
-          : estado === 'nunca' ? 'Nunca supervisado'
-            : `Supervisión vence en ${Math.max(0, Math.round(horas ?? 0))} h`,
-      })
-    }
-  }
-
-  const porLimite = (x?: string | null) => (x ? Date.parse(x) : Number.POSITIVE_INFINITY)
-  items.sort((a, b) => b.puntaje - a.puntaje || porLimite(a.limite) - porLimite(b.limite) || a.objetivo.localeCompare(b.objetivo))
-
-  const paradas = new Map<string, ParadaHojaDeRuta>()
-  for (const it of items) {
-    const p = paradas.get(it.objetivo_id) ?? { objetivo_id: it.objetivo_id, objetivo: it.objetivo, puntaje: 0, items: [] }
-    p.items.push(it)
-    p.puntaje = Math.max(p.puntaje, it.puntaje)
-    paradas.set(it.objetivo_id, p)
-  }
-  base.items = items
-  base.paradas = Array.from(paradas.values())
-    .sort((a, b) => b.puntaje - a.puntaje || b.items.length - a.items.length || a.objetivo.localeCompare(b.objetivo))
-  return base
+  return Array.from(porClave.values()).sort((a, b) => a.desde.getTime() - b.desde.getTime())
 }
 
-/** Feature flag del panel (apagado por defecto). */
-export const hojaDeRutaHabilitada = (env: Record<string, string | undefined> = process.env): boolean =>
-  env.NEXT_PUBLIC_HOJA_DE_RUTA === '1'
+/** Turnos que ya terminaron, dentro de la ventana de recuperación (no se manda nada viejo). */
+export function turnosTerminados(turnos: TurnoSupervisor[], ahora: Date, ventanaHoras = 6): TurnoSupervisor[] {
+  const limite = ahora.getTime() - ventanaHoras * 3_600_000
+  return turnos.filter(t => t.hasta.getTime() <= ahora.getTime() && t.hasta.getTime() > limite)
+}
+
+/** Supervisiones del supervisor dentro del turno, en orden cronológico. */
+export function visitasDelTurno(turno: TurnoSupervisor, visitas: VisitaSupervision[]): VisitaSupervision[] {
+  return visitas
+    .filter(v => v.supervisor_id === turno.supervisorId)
+    .filter(v => {
+      const t = Date.parse(v.created_at)
+      return t >= turno.desde.getTime() && t <= turno.hasta.getTime()
+    })
+    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
+}
+
+const fechaDMY = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}`
+
+export function construirMensajeHojaDeRuta(p: {
+  turno: TurnoSupervisor
+  supervisorNombre: string
+  visitas: VisitaSupervision[]
+  nombreObjetivo: (id: string) => string
+}): string {
+  const lineas = [
+    'HOJA DE RUTA',
+    `Fecha: ${fechaDMY(p.turno.fecha)}`,
+    `Turno: ${p.turno.horaInicio} a ${p.turno.horaFin}`,
+    `Supervisor: ${p.supervisorNombre}`,
+  ]
+  for (const v of visitasDelTurno(p.turno, p.visitas)) {
+    lineas.push('', `${partesLocales(new Date(v.created_at)).hora} — ${p.nombreObjetivo(v.objetivo_id)}`)
+    // Textual: sin recortar ni normalizar. Sólo se omite si no se cargó nada.
+    if (v.observaciones != null && v.observaciones.trim() !== '') lineas.push(v.observaciones)
+  }
+  return lineas.join('\n')
+}
+
+export function excedeLimite(mensaje: string, limite = LIMITE_TEXTO_WHATSAPP): boolean {
+  return Array.from(mensaje).length > limite
+}
