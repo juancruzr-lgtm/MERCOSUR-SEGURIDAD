@@ -119,6 +119,10 @@ import RondasNativasPanel from '@/components/rondas/RondasNativasPanel'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { antiguedadSupervision, indexarUltimaSupervision, objetivoSupervisionVencida } from '@/lib/supervisiones'
+import { objetivoExigeSupervision } from '@/lib/supervisiones'
+import { cargarUltimaSupervisionPorObjetivo, filasDesdeIndice } from '@/lib/supervision-universo'
+import { useContextoExigibilidad } from '@/components/supervisiones/useContextoExigibilidad'
+import ServicioObjetivoEditor from '@/components/objetivos/ServicioObjetivoEditor'
 import {
   alertaEstaIntervenida,
   calcularMinutosTardanzaRegistro,
@@ -2686,6 +2690,9 @@ function SupervisionesAdmin({
   // "Hoy" y "este mes" en hora argentina, no la del navegador ni UTC.
   const hoy = fechaArgentina(new Date())
   const mesActual = hoy.slice(0, 7)
+  // Turnos de la ventana + suspensiones para el criterio único de
+  // exigibilidad. Se relee al cambiar de día.
+  const contextoExigibilidad = useContextoExigibilidad(hoy)
 
   // ── Período consultado ────────────────────────────────────────────────────
   // Ranking, carga por zona, "por supervisor/por objetivo" del mes y la tabla
@@ -2831,8 +2838,11 @@ function SupervisionesAdmin({
     (ultimasSupervisionesObjetivos || []).length > 0 ? ultimasSupervisionesObjetivos : supervisiones,
   )
 
+  // Criterio ÚNICO de exigibilidad (lib/supervisiones.ts): activo, dentro de
+  // su servicio, no suspendido y operando. Igual que el panel del Dashboard y
+  // la agenda del supervisor; los activos sin turnos recientes no son deuda.
   const objetivosSinSupervision = objetivos
-    .filter((objetivo: Objetivo) => objetivo.estado === 'activo')
+    .filter((objetivo: Objetivo) => objetivoExigeSupervision(objetivo as any, contextoExigibilidad, ahora))
     .filter((objetivo: Objetivo) =>
       objetivoSupervisionVencida(objetivo, ultimaIsoPorObjetivo.get(objetivo.id) ?? null, ahora.getTime()),
     )
@@ -2954,6 +2964,7 @@ function SupervisionesAdmin({
   // Mismo índice y mismo cálculo que `objetivosSinSupervision`: antes el ranking
   // leía otra fuente y podía contradecir al panel sobre el mismo objetivo.
   const objetivoVencidoRanking = (objetivo: Objetivo) =>
+    objetivoExigeSupervision(objetivo as any, contextoExigibilidad, ahora) &&
     objetivoSupervisionVencida(objetivo, ultimaIsoPorObjetivo.get(objetivo.id) ?? null, ahora.getTime())
 
   const usuarioActivoGuardia = (id?: string | null) => {
@@ -4565,6 +4576,19 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
               </select>
             </div>
           </div>
+
+          {/* Fin de servicio y suspensiones: sólo Dir. Operativa,
+              Administración y Gerencia. Se guardan aparte del formulario. */}
+          {editId && tieneCapacidad(user, 'gestionar_objetivos') && (
+            <div style={{ marginBottom:16, paddingTop:10, borderTop:'1px solid rgba(255,255,255,.08)' }}>
+              <ServicioObjetivoEditor
+                key={editId}
+                objetivoId={editId}
+                fechaFinInicial={(objetivos as any[]).find(o => o.id === editId)?.fecha_fin_servicio ?? null}
+                onGuardado={cambios => setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? { ...o, ...cambios } : o))}
+              />
+            </div>
+          )}
 
           {/* Liquidación / Nocturnidad. Es una condición contractual del
               servicio: en algunos clientes las horas dentro de la franja
@@ -14198,13 +14222,13 @@ export default function AppPage() {
       // de que PostgREST acepte ordenar por una columna no seleccionada evita
       // un modo de falla feo — si la consulta fallara, esto devuelve data: []
       // y todos los objetivos pasarían a decir "Nunca supervisado".
-      fetchPaginadoResult((desde, hasta) =>
-        supabase
-          .from('supervisiones')
-          .select('id, objetivo_id, created_at')
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false })
-          .range(desde, hasta)),
+      //
+      // Ahora vía lib/supervision-universo: RPC agregada si existe (una fila
+      // por objetivo), paginado si no. Sin `incompleta`, igual que E1.
+      cargarUltimaSupervisionPorObjetivo(supabase).then(r => ({
+        data: r.error ? null : filasDesdeIndice(r.indice),
+        error: r.error as any,
+      })),
       supabase.from('zonas_operativas').select('*').order('nombre'),
       supabase.from('supervisor_zonas').select('*'),
     ])

@@ -24,13 +24,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
-import { fechaArgentina, rangoInstantesMesArgentina, sumarDias } from '@/lib/periodo-argentina'
-import { DIAS_SIN_OPERACION, faseOperativa } from '@/lib/supervisiones'
+import { rangoInstantesMesArgentina } from '@/lib/periodo-argentina'
+import {
+  DIAS_SIN_OPERACION, ETIQUETA_MOTIVO_NO_EXIGIBLE, clasificarUniversoSupervision,
+} from '@/lib/supervisiones'
+import { cargarContextoExigibilidad, cargarUltimaSupervisionPorObjetivo } from '@/lib/supervision-universo'
 import { brandColors, semanticColors } from '@/lib/brand-theme'
 import TarjetaMetrica from '@/components/TarjetaMetrica'
 import {
   estadoSupervisionObjetivo, frecuenciaSupervision, horasParaVencimiento,
-  indexarUltimaSupervision, supervisionProximaAVencer,
+  supervisionProximaAVencer,
 } from '@/lib/supervisiones'
 import type { EstadoSupervision } from '@/lib/supervisiones'
 
@@ -68,16 +71,16 @@ type Datos = {
   sinOperacion: number
   /** Dados de alta con turnos por delante que todavía no empezaron. */
   proximos: number
+  /** Activos sin turnos recientes: se listan con nombre para confirmar estado. */
+  sinTurnosRecientes: Array<{ id: string; nombre: string; ultimaIso: string | null }>
+  /** Activos con servicio finalizado / no iniciado / suspendido hoy. */
+  fueraDeServicio: Array<{ id: string; nombre: string; motivo: string }>
 }
 
 const VACIO: Datos = {
   pendientes: [], porVencer: 0, vigentes: 0, totalObjetivos: 0,
   mesTotal: 0, mesIncompletas: 0, mesCriticas: 0, sinOperacion: 0, proximos: 0,
-}
-
-/** Desde qué fecha se piden turnos para saber quién está operando. */
-function fechaCorteOperacion(dias: number = DIAS_SIN_OPERACION): string {
-  return sumarDias(fechaArgentina(new Date()), -dias)
+  sinTurnosRecientes: [], fueraDeServicio: [],
 }
 
 /**
@@ -120,36 +123,15 @@ export default function ControlSupervisionesPanel({
     // última noche del mes (21:00-23:59) caían en el mes siguiente.
     const ventanaMes = rangoInstantesMesArgentina(mes)
 
-    const [objRes, ultRes, mesRes, turnosRes] = await Promise.all([
-      // Sólo lo que se supervisa de verdad: activos y fuera de prueba.
-      supabase.from('objetivos')
-        .select('id, nombre, estado, es_prueba, frecuencia_supervision_horas')
-        .eq('estado', 'activo'),
-      // TODO el historial, sin filtro de mes. Ver la nota de arriba.
-      //
-      // PAGINADO, y no una consulta suelta: PostgREST corta en 1000 filas sin
-      // avisar. Con 1.625 supervisiones se perdían 625 y el panel mostraba como
-      // "Nunca supervisado" a objetivos visitados el día anterior —LAROMET
-      // FUNES 2 figuraba sin ninguna visita habiendo sido supervisado esa misma
-      // mañana— y "Al día" daba 0 de 39. La consulta no fallaba: devolvía menos
-      // datos y una conclusión falsa.
-      //
-      // Es el mismo helper y el mismo orden que ya usa la pantalla de
-      // Supervisiones, que resolvió esto antes. El desempate por `id` hace
-      // estable la paginación: sin él, dos filas con el mismo created_at pueden
-      // repetirse o saltearse entre páginas.
-      // `p0`/`p1` y no `desde`/`hasta`: son índices de página, y llamarlos
-      // igual que las fechas del mes que están dos líneas más abajo es pedir
-      // que alguien lea mal el próximo cambio.
-      fetchPaginadoResult((p0, p1) =>
-        supabase.from('supervisiones')
-          .select('id, objetivo_id, created_at')
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false })
-          .range(p0, p1)),
-      // También paginada, por el mismo motivo: agosto tuvo 732 supervisiones y
-      // está por debajo del corte, pero el mes que lo pase contaría de menos
-      // sin que nadie se entere.
+    const [objRes, ult, mesRes, contexto] = await Promise.all([
+      // `*` y no columnas sueltas: las fechas de servicio
+      // (fecha_inicio_servicio / fecha_fin_servicio) llegan con la migración
+      // 20261113120000 y pedirlas antes de aplicarla rompería la consulta.
+      supabase.from('objetivos').select('*').eq('estado', 'activo'),
+      // Última supervisión válida (sin `incompleta`, como E1), agregada en la
+      // base si la RPC existe; si no, paginada. Ver lib/supervision-universo.
+      cargarUltimaSupervisionPorObjetivo(supabase),
+      // También paginada: el mes que pase de 1000 contaría de menos en silencio.
       fetchPaginadoResult((p0, p1) =>
         supabase.from('supervisiones')
           .select('id, estado, created_at')
@@ -158,76 +140,22 @@ export default function ControlSupervisionesPanel({
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(p0, p1)),
-      // Turnos recientes y futuros, para saber qué objetivos están operando.
-      // Sólo `objetivo_id` y `fecha`: es un filtro de universo, no un cálculo.
-      fetchPaginadoResult((p0, p1) =>
-        supabase.from('turnos')
-          .select('id, objetivo_id, fecha')
-          .neq('estado', 'anulado')
-          .gte('fecha', fechaCorteOperacion())
-          .order('fecha', { ascending: false })
-          .order('id', { ascending: false })
-          .range(p0, p1)),
+      // Turnos de la ventana + suspensiones: el criterio ÚNICO de exigibilidad
+      // (lib/supervisiones.ts → exigibilidadSupervision).
+      cargarContextoExigibilidad(supabase),
     ])
 
-    if (objRes.error || ultRes.error) {
+    if (objRes.error || ult.error) {
       setError('No se pudo leer el estado de supervisión de los objetivos.')
       setD(VACIO); setCargando(false)
       return
     }
 
-    // Sólo los que están OPERANDO. Un objetivo activo sin turnos hace semanas
-    // no reclama una visita: no hay a quién ni qué supervisar ahí, y contarlo
-    // llena la lista de trabajo que no existe. Ver DIAS_SIN_OPERACION.
-    const fechasPorObjetivo = new Map<string, string[]>()
-    for (const t of (turnosRes.data ?? []) as any[]) {
-      if (!t?.objetivo_id) continue
-      const arr = fechasPorObjetivo.get(t.objetivo_id) ?? []
-      arr.push(t.fecha)
-      fechasPorObjetivo.set(t.objetivo_id, arr)
-    }
-
-    const todos = (objRes.data ?? []).filter((o: any) => !o.es_prueba)
-
-    // ¿Cuáles ya prestaron servicio alguna vez? Sólo hace falta preguntarlo
-    // por los que en la ventana tienen ÚNICAMENTE turnos futuros: son los
-    // candidatos a "todavía no arrancó". Para el resto ya se sabe por sus
-    // turnos recientes, y preguntar de más sería traer el histórico entero.
-    const hoyISO = fechaCorteOperacion(0)
-    const soloFuturos = todos
-      .filter((o: any) => {
-        const f = fechasPorObjetivo.get(o.id) ?? []
-        return f.length > 0 && f.every(x => (x ?? '').slice(0, 10) > hoyISO)
-      })
-      .map((o: any) => o.id)
-
-    const yaOperaron = new Set<string>()
-    if (soloFuturos.length > 0) {
-      const previos = await supabase.from('turnos')
-        .select('objetivo_id')
-        .in('objetivo_id', soloFuturos)
-        .neq('estado', 'anulado')
-        .lt('fecha', hoyISO)
-      for (const t of (previos.data ?? []) as any[]) {
-        if (t?.objetivo_id) yaOperaron.add(t.objetivo_id)
-      }
-    }
-
-    // Si la consulta de turnos falla, NO se vacía la lista: sin ese dato se
-    // muestran todos, que es el comportamiento anterior. Un fallo de red no
-    // puede hacer desaparecer objetivos que sí hay que supervisar.
-    const fases = new Map<string, ReturnType<typeof faseOperativa>>()
-    for (const o of todos as any[]) {
-      fases.set(o.id, faseOperativa(fechasPorObjetivo.get(o.id) ?? [], yaOperaron.has(o.id)))
-    }
-
-    const objetivos = turnosRes.error
-      ? todos
-      : todos.filter((o: any) => fases.get(o.id) === 'operando')
-    const proximos = turnosRes.error ? 0 : todos.filter((o: any) => fases.get(o.id) === 'proximo').length
-    const sinOperacion = todos.length - objetivos.length - proximos
-
-    const ultima = indexarUltimaSupervision(ultRes.data ?? [])
+    // Si fallan los turnos, `fechasTurnos` es null y la regla no descarta a
+    // nadie por falta de servicio: un fallo de red no hace desaparecer deuda.
+    const universo = clasificarUniversoSupervision((objRes.data ?? []) as any[], contexto)
+    const objetivos = universo.exigibles
+    const ultima = ult.indice
     const ahora = Date.now()
 
     const pendientes: ObjetivoEstado[] = []
@@ -263,12 +191,20 @@ export default function ControlSupervisionesPanel({
     })
 
     const delMes = mesRes.data ?? []
+    const nombre = (o: any) => o?.nombre || 'Objetivo sin nombre'
     setD({
       pendientes, porVencer, vigentes, totalObjetivos: objetivos.length,
       mesTotal: delMes.length,
       mesIncompletas: delMes.filter((s: any) => s.estado === 'incompleta').length,
       mesCriticas: delMes.filter((s: any) => s.estado === 'critico').length,
-      sinOperacion, proximos,
+      sinOperacion: universo.sinTurnosRecientes.length,
+      proximos: universo.porComenzar.length,
+      sinTurnosRecientes: universo.sinTurnosRecientes
+        .map((o: any) => ({ id: o.id, nombre: nombre(o), ultimaIso: ultima.get(o.id) ?? null }))
+        .sort((a, b) => a.nombre.localeCompare(b.nombre)),
+      fueraDeServicio: universo.fueraDeServicio
+        .map(x => ({ id: (x.objetivo as any).id, nombre: nombre(x.objetivo), motivo: ETIQUETA_MOTIVO_NO_EXIGIBLE[x.motivo] }))
+        .sort((a, b) => a.nombre.localeCompare(b.nombre)),
     })
     setCargando(false)
   }, [mes])
@@ -307,7 +243,7 @@ export default function ControlSupervisionesPanel({
               <>
                 {' · '}
                 <span title={`Sin ningún turno en los últimos ${DIAS_SIN_OPERACION} días ni programado a futuro`}>
-                  {d.sinOperacion} activo{d.sinOperacion === 1 ? '' : 's'} sin operación,
+                  {d.sinOperacion} activo{d.sinOperacion === 1 ? '' : 's'} sin turnos recientes,
                   fuera de la cuenta
                 </span>
               </>
@@ -389,6 +325,34 @@ export default function ControlSupervisionesPanel({
           ) : (
             <div style={{ marginTop:14, fontSize:12, color:C.green }}>
               Todos los objetivos activos están dentro de su frecuencia de supervisión.
+            </div>
+          )}
+
+          {/* Activos sin turnos: NO son deuda y NO se cierran solos. Se listan
+              para que Operaciones confirme si el servicio terminó (y cargue
+              la fecha de fin) o si falta programar turnos. */}
+          {d.sinTurnosRecientes.length > 0 && (
+            <div style={{ marginTop:14, borderTop:'1px solid #1e2d4266', paddingTop:12 }}>
+              <div style={{ fontSize:11, color:C.yellow, marginBottom:6, letterSpacing:.4 }}>
+                SIN TURNOS RECIENTES — CONFIRMAR ESTADO
+              </div>
+              <div style={{ fontSize:10.5, color:C.faint, marginBottom:6 }}>
+                Activos sin turnos en los últimos {DIAS_SIN_OPERACION} días ni programados. No cuentan como
+                pendientes. Si el servicio terminó, cargá la fecha de fin en Objetivos.
+              </div>
+              {d.sinTurnosRecientes.map(o => (
+                <div key={o.id} style={{ display:'flex', gap:10, alignItems:'baseline', flexWrap:'wrap', padding:'4px 0' }}>
+                  <span style={{ fontSize:12.5, color:C.text, flex:'1 1 200px' }}>{o.nombre}</span>
+                  <span style={{ fontSize:10.5, color:C.faint }}>
+                    {o.ultimaIso ? `última supervisión ${fechaCortaSupervision(o.ultimaIso)}` : 'sin supervisiones'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {d.fueraDeServicio.length > 0 && (
+            <div style={{ marginTop:10, fontSize:10.5, color:C.faint }}>
+              Fuera de servicio hoy (no cuentan): {d.fueraDeServicio.map(o => `${o.nombre} (${o.motivo.toLowerCase()})`).join(' · ')}
             </div>
           )}
         </>

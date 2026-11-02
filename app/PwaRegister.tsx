@@ -2,6 +2,14 @@
 
 import { useEffect } from 'react'
 
+// Versión fijada en el build (next.config.js). Va en la URL del worker: cada
+// deploy es una URL nueva, se instala el worker nuevo y purga las cachés.
+const VERSION_APP = process.env.NEXT_PUBLIC_APP_VERSION || 'dev'
+const URL_WORKER = `/sw.js?v=${encodeURIComponent(VERSION_APP)}`
+// Al volver a primer plano se busca un deploy nuevo como mucho cada 30 min.
+// Antes era en CADA vuelta: una descarga de sw.js por desbloqueo de pantalla.
+const MIN_ENTRE_BUSQUEDAS_MS = 30 * 60 * 1000
+
 export default function PwaRegister() {
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
@@ -27,7 +35,7 @@ export default function PwaRegister() {
 
     const registrar = () => {
       navigator.serviceWorker
-        .register('/sw.js')
+        .register(URL_WORKER)
         .then(reg => {
           registro = reg
           // Ya hay una versión nueva esperando: activarla.
@@ -49,8 +57,12 @@ export default function PwaRegister() {
     }
 
     // Al volver a la app (foco/visibilidad) buscamos si hay un deploy nuevo.
+    let ultimaBusqueda = Date.now()
     const buscarActualizacion = () => {
-      if (document.visibilityState === 'visible') registro?.update().catch(() => {})
+      if (document.visibilityState !== 'visible' || !registro) return
+      if (Date.now() - ultimaBusqueda < MIN_ENTRE_BUSQUEDAS_MS) return
+      ultimaBusqueda = Date.now()
+      registro.update().catch(() => {})
     }
     document.addEventListener('visibilitychange', buscarActualizacion)
 

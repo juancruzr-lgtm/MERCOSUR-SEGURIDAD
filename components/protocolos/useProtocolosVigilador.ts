@@ -20,7 +20,10 @@ import {
 } from '@/lib/protocolos'
 import type { DocumentoVigilador } from '@/lib/protocolos'
 import { cargarMisDocumentos, confirmarLectura, registrarApertura } from '@/lib/protocolos-datos'
+import { useRefrescoAutomatico } from '@/components/movil/useRefrescoAutomatico'
 
+// Los protocolos cambian poco: 5 min, y sólo con la pantalla visible (antes el
+// intervalo corría también con la pantalla apagada).
 const RECARGA_MS = 5 * 60 * 1000
 
 function leer(clave: string): string | null {
@@ -140,18 +143,10 @@ export function useProtocolosVigilador(claveTurnos: string) {
 
   // Recarga al cambiar los turnos, al volver la conexión o la pantalla, y cada 5 min.
   useEffect(() => { if (authUserId) void recargar() }, [claveTurnos, authUserId, recargar])
-  useEffect(() => {
-    const alVolver = () => { if (document.visibilityState === 'visible') void recargar() }
-    const alConectar = () => { void recargar() }
-    window.addEventListener('online', alConectar)
-    document.addEventListener('visibilitychange', alVolver)
-    const t = setInterval(() => { void recargar() }, RECARGA_MS)
-    return () => {
-      window.removeEventListener('online', alConectar)
-      document.removeEventListener('visibilitychange', alVolver)
-      clearInterval(t)
-    }
-  }, [recargar])
+  // Volver a primer plano usa el disparo compartido (≥30 s desde la última
+  // carga); la reconexión dispara siempre, que es la que vacía la cola de
+  // aperturas sin señal.
+  useRefrescoAutomatico(recargar, { intervaloMs: RECARGA_MS, activo: Boolean(authUserId) })
 
   const actualizarDoc = useCallback((versionId: string, cambio: Partial<DocumentoVigilador>) => {
     setDocumentos(prev => {
