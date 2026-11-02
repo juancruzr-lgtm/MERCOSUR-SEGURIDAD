@@ -35,6 +35,8 @@ import {
   type ContextoExigibilidad,
 } from '@/lib/supervisiones'
 import { cargarContextoExigibilidad, cargarUltimaSupervisionPorObjetivo, objetivosConTurnoEn } from '@/lib/supervision-universo'
+import { registrarActualizacion } from '@/lib/refresco-movil'
+import DiagnosticoDispositivo from '@/components/movil/DiagnosticoDispositivo'
 // LA resolución de responsables operativos, compartida con AppClient y push.
 import { TEXTO_ORIGEN, guardiaCubreInstante, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import type { OrigenResolucion } from '@/lib/responsables-operativos'
@@ -793,6 +795,7 @@ export default function SupervisorMobile({ user }: any) {
       ultimasSupervisionesResult.indice.forEach((iso, objetivoId) => { ultimaPorObjetivo[objetivoId] = iso })
     }
     setContextoExigibilidad(contextoExigibilidadResult)
+    registrarActualizacion()
 
     setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
@@ -4434,6 +4437,7 @@ export default function SupervisorMobile({ user }: any) {
                   >
                     {guardandoPassword ? 'Guardando...' : 'Cambiar contraseña'}
                   </button>
+                  <DiagnosticoDispositivo />
                 </div>
               </section>
             )}
