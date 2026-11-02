@@ -1,4 +1,4 @@
--- Verificación post-migración 20261113120000 (solo lectura). Correr en la rama
+-- Verificación post-migración 20261113110000 (solo lectura). Correr en la rama
 -- de Supabase y, tras aprobación, en producción.
 select 'funciones' as chequeo, count(*) = 6 as ok
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace

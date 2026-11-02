@@ -1,4 +1,4 @@
--- Pruebas de 20261113120000_programacion_conflictos_correccion_turnos.
+-- Pruebas de 20261113110000_programacion_conflictos_correccion_turnos.
 --
 -- Corre todo dentro de una transacción y termina en ROLLBACK: no deja datos.
 -- Se puede ejecutar en un Postgres local (con tests/sql/esquema_minimo_programacion.sql,

@@ -78,9 +78,9 @@ Resultados en el entorno aislado: **vitest 199 archivos / 3.574 tests OK**; `tsc
 | 20 | Recuperación tras abrir la cámara | `pwa-estabilidad.test.ts` |
 | 21 | Visibilidad no duplica consultas | `pwa-estabilidad.test.ts`, `datos-moviles.test.ts` |
 | 22 | SW sin crecimiento ilimitado | `pwa-estabilidad.test.ts` (3 deploys simulados) |
-| 23 | Hoja de ruta con cambio de guardia | `hoja-de-ruta.test.ts` |
+| 23 | Hoja de ruta con cambio de guardia | `hoja-ruta.test.ts` (implementación de #347) |
 | 24 | WhatsApp duplicado o fuera de límites | `pruebas/whatsapp-envios`, `whatsapp-envio-seguro.test.ts` |
-| 25 | Supervisor fuera de su zona | `hoja-de-ruta.test.ts` (los controles de servidor ya existen) |
+| 25 | Supervisor fuera de su zona | `integracion-oct2026.test.ts` (los controles de servidor ya existen) |
 
 Falta: prueba manual en teléfono real (checklist en `pwa_estabilidad.md`).
 

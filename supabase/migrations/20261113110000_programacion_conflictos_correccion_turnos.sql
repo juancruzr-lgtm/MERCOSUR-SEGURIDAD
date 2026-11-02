@@ -50,7 +50,7 @@
 -- permisos de sueldos ni de liquidación. No corrige ningún dato existente.
 --
 -- Reglas SQL del proyecto: nada de `select col into variable` en código nuevo.
--- Rollback: supabase/rollback/20261113120000_programacion_conflictos_correccion_turnos_rollback.sql
+-- Rollback: supabase/rollback/20261113110000_programacion_conflictos_correccion_turnos_rollback.sql
 -- Verificación: supabase/verificacion/programacion_conflictos_post_migracion.sql
 
 begin;
@@ -377,6 +377,15 @@ begin
           end if;
         end if;
 
+        -- La constancia va ANTES del update: turnos_validar_superposicion
+        -- (20261121120000) sólo deja pasar una superposición ya confirmada.
+        for v_c in select e from jsonb_array_elements(v_conflictos) e loop
+          insert into public.turnos_conflictos_confirmados (operacion_id, turno_id, objetivo_id, guardia_id,
+            turno_conflicto_id, tipo, minutos_superpuestos, detalle, motivo, origen, confirmado_por)
+          values (p_operacion_id, v_turno.id, v_turno.objetivo_id, p_guardia_id,
+            (v_c ->> 'turno_id')::uuid, v_c ->> 'tipo', coalesce((v_c ->> 'minutos_superpuestos')::int, 0),
+            v_c, btrim(p_motivo_conflicto), 'asignacion', v_actor.id);
+        end loop;
         update public.turnos set guardia_id = p_guardia_id,
           guardia_original_id = coalesce(guardia_original_id, p_guardia_id) where id = v_turno.id;
         insert into public.turnos_auditoria (turno_id, modificado_por, campo, valor_anterior, valor_nuevo, comentario)
@@ -387,13 +396,6 @@ begin
           insert into public.turnos_auditoria (turno_id, modificado_por, campo, valor_anterior, valor_nuevo, comentario)
           values (v_turno.id, v_actor.id, 'guardia_original_id', null, p_guardia_id::text, v_comentario);
         end if;
-        for v_c in select e from jsonb_array_elements(v_conflictos) e loop
-          insert into public.turnos_conflictos_confirmados (operacion_id, turno_id, objetivo_id, guardia_id,
-            turno_conflicto_id, tipo, minutos_superpuestos, detalle, motivo, origen, confirmado_por)
-          values (p_operacion_id, v_turno.id, v_turno.objetivo_id, p_guardia_id,
-            (v_c ->> 'turno_id')::uuid, v_c ->> 'tipo', coalesce((v_c ->> 'minutos_superpuestos')::int, 0),
-            v_c, btrim(p_motivo_conflicto), 'asignacion', v_actor.id);
-        end loop;
         v_res := 'asignada';
       end if;
     exception when others then v_res := 'omitida'; v_motivo := sqlerrm;
@@ -678,13 +680,7 @@ begin
         end if;
       end if;
     end if;
-    update public.turnos set hora_inicio = p_hora_inicio, hora_fin = p_hora_fin, editado_por = v_actor_id
-     where id = p_turno_id;
-    v_coment := 'Cambio de horario de turno ' || case when (v_ev ->> 'iniciado')::boolean then 'iniciado' else 'futuro' end
-                || ': ' || v_motivo || ' (operacion ' || p_operacion_id::text || ')';
-    insert into public.turnos_auditoria (turno_id, modificado_por, campo, valor_anterior, valor_nuevo, comentario)
-    values (p_turno_id, v_actor_id, 'hora_inicio', to_char(v_t.hora_inicio, 'HH24:MI:SS'), to_char(p_hora_inicio, 'HH24:MI:SS'), v_coment),
-           (p_turno_id, v_actor_id, 'hora_fin', to_char(v_t.hora_fin, 'HH24:MI:SS'), to_char(p_hora_fin, 'HH24:MI:SS'), v_coment);
+    -- Constancia antes del update (ver turnos_validar_superposicion, 20261121120000).
     for v_c in select e from jsonb_array_elements(v_conflictos) e loop
       insert into public.turnos_conflictos_confirmados (operacion_id, turno_id, objetivo_id, guardia_id,
         turno_conflicto_id, tipo, minutos_superpuestos, detalle, motivo, origen, confirmado_por)
@@ -692,6 +688,13 @@ begin
         v_c ->> 'tipo', coalesce((v_c ->> 'minutos_superpuestos')::int, 0), v_c, v_motivo,
         'modificacion_horario', v_actor_id);
     end loop;
+    update public.turnos set hora_inicio = p_hora_inicio, hora_fin = p_hora_fin, editado_por = v_actor_id
+     where id = p_turno_id;
+    v_coment := 'Cambio de horario de turno ' || case when (v_ev ->> 'iniciado')::boolean then 'iniciado' else 'futuro' end
+                || ': ' || v_motivo || ' (operacion ' || p_operacion_id::text || ')';
+    insert into public.turnos_auditoria (turno_id, modificado_por, campo, valor_anterior, valor_nuevo, comentario)
+    values (p_turno_id, v_actor_id, 'hora_inicio', to_char(v_t.hora_inicio, 'HH24:MI:SS'), to_char(p_hora_inicio, 'HH24:MI:SS'), v_coment),
+           (p_turno_id, v_actor_id, 'hora_fin', to_char(v_t.hora_fin, 'HH24:MI:SS'), to_char(p_hora_fin, 'HH24:MI:SS'), v_coment);
     v_despues := v_antes || jsonb_build_object('hora_inicio', to_char(p_hora_inicio, 'HH24:MI'),
                                                'hora_fin', to_char(p_hora_fin, 'HH24:MI'));
     v_impacto := jsonb_build_object(

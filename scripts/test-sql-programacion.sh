@@ -13,7 +13,7 @@ P="psql -h $DIR -p $PORT -U postgres -d postgres -v ON_ERROR_STOP=1 -q"
 $P -f tests/sql/esquema_minimo_programacion.sql >/dev/null
 # Versión previa (producción) y después la migración, como se aplicaría.
 $P -c "$(sed -n '/^CREATE OR REPLACE FUNCTION public.asignar_vigilador_turnos/,/^\$function\$;/p' supabase/migrations/20260908130000_alcance_escritura_turnos.sql)" >/dev/null
-$P -f supabase/migrations/20261113120000_programacion_conflictos_correccion_turnos.sql >/dev/null
+$P -f supabase/migrations/20261113110000_programacion_conflictos_correccion_turnos.sql >/dev/null
 $P -f tests/sql/programacion_conflictos.sql 2>&1 | grep -E 'OK|ERROR|assert|failed' 
 # El rollback también tiene que aplicar limpio.
-$P -f supabase/rollback/20261113120000_programacion_conflictos_correccion_turnos_rollback.sql >/dev/null && echo "OK R - rollback aplica"
+$P -f supabase/rollback/20261113110000_programacion_conflictos_correccion_turnos_rollback.sql >/dev/null && echo "OK R - rollback aplica"

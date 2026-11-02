@@ -47,7 +47,7 @@ function sentencia(archivo, nombre) {
   const fin = resto.indexOf(d[1], d.index + d[0].length) + d[1].length
   return resto.slice(0, resto.indexOf(';', fin) + 1)
 }
-const prosrc = async n => (await sql(`select prosrc from pg_proc where proname = $1`, [n]))[0]?.prosrc
+const prosrc = async n => (await sql(`select prosrc from pg_proc where proname = $1`, [n]))[0]?.prosrc?.replace(/\r/g, '')
 
 // ── Esqueleto ───────────────────────────────────────────────────────────────
 await db.exec(`

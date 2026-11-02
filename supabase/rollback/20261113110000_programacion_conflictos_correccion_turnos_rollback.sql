@@ -1,8 +1,20 @@
--- ROLLBACK de 20261113120000_programacion_conflictos_correccion_turnos.sql
+-- ROLLBACK de 20261113110000_programacion_conflictos_correccion_turnos.sql
 -- Restaura asignar_vigilador_turnos y rondas_ventanas_programadas a la versión
 -- previa, quita las RPC nuevas y el trigger de alta. Las tablas de constancia
 -- NO se borran (conservan historial de auditoría); quedan sin escritura.
 begin;
+
+-- Orden inverso obligatorio: 20261122120000 reescribe rondas_ventanas_programadas
+-- y 20261121120000 usa turnos_conflictos_confirmados. Si siguen aplicadas, este
+-- rollback pisaría la versión vigente: se corta antes de tocar nada.
+do $guard$
+begin
+  if to_regprocedure('public.rondas_ventanas_candidatas(uuid,date,date)') is not null
+     or exists (select 1 from pg_trigger where tgname = 'turnos_validar_superposicion' and not tgisinternal) then
+    raise exception 'Revertir primero 20261122120000 y 20261121120000 (orden inverso de aplicación)';
+  end if;
+end
+$guard$;
 
 drop trigger if exists trg_turnos_auditar_alta on public.turnos;
 drop function if exists public.turnos_auditar_alta();

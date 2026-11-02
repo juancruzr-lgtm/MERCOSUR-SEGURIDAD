@@ -1,3 +1,9 @@
+> **Integración 02/11/2026:** esta versión (`lib/hoja-de-ruta.ts`, `/api/push/hoja-de-ruta`,
+> migración 20261123120000) quedó **reemplazada** por la de #347: `lib/hoja-ruta.ts`,
+> `/api/push/hoja-ruta-supervisores`, `/hoja-ruta/[id]` y la migración 20261114120000, que
+> cumple el formato definitivo (plantilla de Meta, visitas separadas por " | ", tope de 1024
+> caracteres sin recortar). Se conserva este documento como antecedente del diseño.
+
 # Hoja de ruta de supervisores por WhatsApp
 
 **Diseño aprobado (02/11/2026).** Reemplaza la versión anterior de esta rama (lista de
