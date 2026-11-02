@@ -16,6 +16,11 @@
 //  · Visitas: supervisiones del supervisor en su guardia y permanencias GPS
 //    confiables. Sin GPS, la supervisión alcanza. La hora es la llegada por GPS
 //    confiable o la hora registrada de la supervisión; nunca se inventa.
+//  · Fuera de horario (JC 02/11/2026): también entran las supervisiones que
+//    cargó desde el fin de su turno previo hasta el inicio de éste, marcadas
+//    "(fuera de horario)" (con la fecha si es otro día). Así cada supervisión
+//    sale en una sola hoja: la del primer turno suyo que termina después de
+//    cargarla. El GPS fuera de turno no cuenta (son traslados).
 //  · Nada de alertas, estadísticas, pendientes ni evaluaciones.
 //  · Un solo mensaje de WhatsApp. Si no entra en el límite de Meta, NO se
 //    recorta ni se divide: queda pendiente por longitud y completo en la app.
@@ -103,6 +108,9 @@ export const hhmm = (iso: string): string =>
 const ddmmaaaa = (fecha: string): string => { const [a, m, d] = fecha.split('-'); return `${d}/${m}/${a}` }
 const ddmm = (fecha: string): string => ddmmaaaa(fecha).slice(0, 5)
 const ms = (iso: string) => new Date(iso).getTime()
+/** YYYY-MM-DD en hora argentina. */
+const fechaAr = (iso: string): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: ZONA, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso))
 
 // ── GPS ──────────────────────────────────────────────────────────────────────
 
@@ -200,13 +208,22 @@ export function armarHojaRuta(d: DatosHojaRuta): ContenidoHojaRuta {
 
 const turno = (g: GuardiaHR) => `${hhmm(g.inicio)} a ${hhmm(g.fin)}`
 
+export const FUERA_DE_HORARIO = '(fuera de horario)'
+
+/** "hora objetivo"; si fue antes del inicio del turno, con la marca y la fecha si es otro día. */
+export function encabezadoVisita(e: VisitaHR, g: GuardiaHR): string {
+  if (ms(e.hora) >= ms(g.inicio)) return `${hhmm(e.hora)} ${e.objetivo}`
+  const dia = fechaAr(e.hora)
+  return `${dia !== g.fecha ? `${ddmm(dia)} ` : ''}${hhmm(e.hora)} ${e.objetivo} ${FUERA_DE_HORARIO}`
+}
+
 /** Texto para la app, con el formato pedido y saltos de línea reales. */
 export function textoHojaRuta(c: ContenidoHojaRuta): string {
   const l: string[] = [`Hoja de ruta del sup. ${c.guardia.supervisor}${c.guardia.reemplaza_a ? ` (en reemplazo de ${c.guardia.reemplaza_a})` : ''}`]
   l.push(`${ddmm(c.guardia.fecha)} · Turno ${turno(c.guardia)}`)
   if (c.recorrido.length === 0) l.push(SIN_OBJETIVOS)
   for (const e of c.recorrido) {
-    l.push(`${hhmm(e.hora)} ${e.objetivo}`)
+    l.push(encabezadoVisita(e, c.guardia))
     for (const n of e.novedades) l.push(`   Novedad: ${n.texto}`)
   }
   return l.join('\n')
@@ -250,7 +267,7 @@ export function variablesMensaje(c: ContenidoHojaRuta): string[] {
   const partes = [`Sup. ${g.supervisor}${g.reemplaza_a ? ` (en reemplazo de ${g.reemplaza_a})` : ''} · ${ddmm(g.fecha)} · Turno ${turno(g)}`]
   if (c.recorrido.length === 0) partes.push(SIN_OBJETIVOS)
   for (const e of c.recorrido) {
-    partes.push([`${hhmm(e.hora)} ${e.objetivo}`, ...e.novedades.map(n => `Novedad: ${n.texto}`)].map(enUnaLinea).join(' — '))
+    partes.push([encabezadoVisita(e, g), ...e.novedades.map(n => `Novedad: ${n.texto}`)].map(enUnaLinea).join(' — '))
   }
   return [partes.map(enUnaLinea).join(SEPARADOR_VISITAS)]
 }

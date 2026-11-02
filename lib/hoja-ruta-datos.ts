@@ -40,15 +40,39 @@ export const guardiaCubre = (g: GuardiaSupervisorFila): boolean =>
 
 const vacio = { data: [] as any[], error: null }
 
+/**
+ * Fin del turno anterior del mismo supervisor (el último que termina antes de
+ * que empiece éste), en ISO, o null si no hay ninguno en los 31 días previos.
+ * Se usa como piso para las supervisiones "fuera de horario".
+ */
+export async function finTurnoPrevio(db: any, g: GuardiaSupervisorFila, inicio: string): Promise<string | null> {
+  const desdeFecha = new Date(new Date(`${g.fecha}T12:00:00Z`).getTime() - 31 * 86_400_000).toISOString().slice(0, 10)
+  const r = await db.from('supervisores_guardia')
+    .select('id, supervisor_id, fecha, hora_inicio, hora_fin, estado, tipo_evento, rol_operativo')
+    .eq('supervisor_id', g.supervisor_id).gte('fecha', desdeFecha).lte('fecha', g.fecha)
+  if (r.error) throw new Error(`turno previo: ${r.error.message}`)
+  let previo: string | null = null
+  for (const p of (r.data ?? []) as GuardiaSupervisorFila[]) {
+    if (p.id === g.id || !guardiaCubre(p)) continue
+    const f = ventanaGuardia(p).fin
+    if (f <= inicio && (!previo || f > previo)) previo = f
+  }
+  return previo
+}
+
 export async function cargarDatosHojaRuta(db: any, g: GuardiaSupervisorFila): Promise<DatosHojaRuta> {
   const { inicio, fin } = ventanaGuardia(g)
   const chk = (r: { error: { message: string } | null }, que: string) => { if (r.error) throw new Error(`${que}: ${r.error.message}`) }
 
+  // Fuera de horario: lo cargado desde el fin de su turno previo (JC 02/11/2026).
+  const desde = await finTurnoPrevio(db, g, inicio)
+
   const personas = [g.supervisor_id, g.supervisor_original_id].filter(Boolean) as string[]
   const [usrRes, supsRes, puntosRes] = await Promise.all([
     db.from('usuarios').select('id, apellido, nombre').in('id', personas),
+    // El fin previo es exclusivo (+1 ms): lo cargado justo en ese instante ya salió en aquella hoja.
     db.from('supervisiones').select('id, created_at, objetivo_id, observaciones')
-      .eq('supervisor_id', g.supervisor_id).gte('created_at', inicio).lte('created_at', fin).order('created_at'),
+      .eq('supervisor_id', g.supervisor_id).gte('created_at', desde ? new Date(new Date(desde).getTime() + 1).toISOString() : inicio).lte('created_at', fin).order('created_at'),
     db.rpc('hoja_ruta_puntos_guardia', { p_guardia_id: g.id }),
   ])
   chk(usrRes, 'usuarios'); chk(supsRes, 'supervisiones'); chk(puntosRes, 'gps')

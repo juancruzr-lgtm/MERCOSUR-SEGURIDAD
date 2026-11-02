@@ -380,3 +380,54 @@ describe('turnos: dos el mismo día, nocturno y supervisores simultáneos', () =
     expect(listaParaGenerar(ventanaGuardia(g('y', 'ser', '2026-10-29', '18:00:00', '22:00:00')).fin, a, 30)).toBe(false)
   })
 })
+
+describe('20 · supervisiones fuera de horario (desde el fin de su turno previo)', () => {
+  const G = (id: string, fecha: string, hi: string, hf: string, estado = 'activo'): GuardiaSupervisorFila =>
+    ({ id, supervisor_id: 'jl', supervisor_original_id: null, fecha, hora_inicio: hi, hora_fin: hf, zona: 'Rosario', estado, tipo_evento: 'normal', rol_operativo: 'supervisor' })
+  // Turno previo: 27/10 19–07 (termina 28/10 07:00 = 10:00Z). Turno actual: 28/10 19–07 (22:00Z a 10:00Z).
+  const previo = G('p', '2026-10-27', '19:00:00', '07:00:00')
+  const inactivo = G('x', '2026-10-28', '07:00:00', '19:00:00', 'inactivo') // no cuenta como turno previo
+  const actual = G('a', '2026-10-28', '19:00:00', '07:00:00')
+  const sup = (id: string, iso: string, obj: string, obs: string) => ({ id, supervisor_id: 'jl', created_at: iso, objetivo_id: obj, observaciones: obs })
+  const db = fakeDb({
+    supervisores_guardia: [previo, inactivo, actual],
+    usuarios: [{ id: 'jl', nombre: 'Jose Luis', apellido: 'Martinez' }],
+    supervisiones: [
+      sup('s1', '2026-10-28T09:00:00.000Z', 'srt', 'DEL TURNO PREVIO: ya salió en aquella hoja'),
+      sup('s2', '2026-10-28T10:00:00.000Z', 'srt', 'JUSTO AL FIN DEL PREVIO: ya salió en aquella hoja'),
+      sup('s3', '2026-10-28T15:18:00.000Z', 'aca', 'Vig Bustamante S/N'),
+      sup('s4', '2026-10-29T01:00:00.000Z', 'cirse', 'Puerta con traba'),
+    ],
+    objetivos: [{ id: 'srt', nombre: 'SRT', radio_metros: 100 }, { id: 'aca', nombre: 'ACA', radio_metros: 100 }, { id: 'cirse', nombre: 'CIRSE', radio_metros: 100 }],
+  })
+  it('entran marcadas, en orden, sin repetir lo que ya salió en la hoja del turno previo', async () => {
+    const c = armarHojaRuta(await cargarDatosHojaRuta(db, actual))
+    expect(textoHojaRuta(c)).toBe([
+      'Hoja de ruta del sup. Jose Luis Martinez', '28/10 · Turno 19:00 a 07:00',
+      '12:18 ACA (fuera de horario)', '   Novedad: Vig Bustamante S/N',
+      '22:00 CIRSE', '   Novedad: Puerta con traba',
+    ].join('\n'))
+    expect(mensajeWhatsApp(c).variables[0]).toBe(
+      'Sup. Jose Luis Martinez · 28/10 · Turno 19:00 a 07:00   |||   12:18 ACA (fuera de horario) — Novedad: Vig Bustamante S/N   |||   22:00 CIRSE — Novedad: Puerta con traba')
+  })
+  it('si fue otro día, lleva la fecha', async () => {
+    const lejos = G('l', '2026-10-25', '07:00:00', '19:00:00')
+    const db2 = fakeDb({
+      supervisores_guardia: [lejos, actual],
+      usuarios: [{ id: 'jl', nombre: 'Jose Luis', apellido: 'Martinez' }],
+      supervisiones: [sup('s5', '2026-10-27T13:00:00.000Z', 'srt', 'Dos días antes')],
+      objetivos: [{ id: 'srt', nombre: 'SRT', radio_metros: 100 }],
+    })
+    const t = textoHojaRuta(armarHojaRuta(await cargarDatosHojaRuta(db2, actual)))
+    expect(t).toContain('27/10 10:00 SRT (fuera de horario)\n   Novedad: Dos días antes')
+  })
+  it('sin turno previo registrado: sólo lo del horario', async () => {
+    const db3 = fakeDb({
+      supervisores_guardia: [actual],
+      usuarios: [{ id: 'jl', nombre: 'Jose Luis', apellido: 'Martinez' }],
+      supervisiones: [sup('s3', '2026-10-28T15:18:00.000Z', 'aca', 'x'), sup('s4', '2026-10-29T01:00:00.000Z', 'cirse', 'y')],
+      objetivos: [{ id: 'aca', nombre: 'ACA', radio_metros: 100 }, { id: 'cirse', nombre: 'CIRSE', radio_metros: 100 }],
+    })
+    expect(textoHojaRuta(armarHojaRuta(await cargarDatosHojaRuta(db3, actual)))).not.toContain('fuera de horario')
+  })
+})
