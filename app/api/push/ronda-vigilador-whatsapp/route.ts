@@ -22,6 +22,8 @@ import { configuracionMeta, proveedorPorDefecto, proveedorSimulado } from '@/lib
 import {
   seleccionarCandidatosRondaVigilador, minutosAbs, type HorarioSinExigencia,
 } from '@/lib/ronda-vigilador-wa'
+import { clavesRondaTurnoSilenciadas, type AlertaRondaTurno } from '@/lib/alertas-ronda-intervencion'
+import { claveEnvioWhatsApp, completarEnvio, crearPresupuestoCorrida, reclamarEnvio } from '@/lib/whatsapp-envio-seguro'
 import type {
   TurnoVigente, RondaBaseVig, EjecucionMin, PausaMin, ObjetivoVig,
 } from '@/lib/ronda-vigilador-wa'
@@ -143,7 +145,7 @@ export async function GET(req: Request) {
   const rondaIdsArr = Array.from(new Set(((rondasRes.data ?? []) as any[]).map(r => r.id)))
 
   // 3) Resto acotado por ids.
-  const [puntosRes, ejecRes, pausasRes, objRes, usuariosRes, suspRes, horariosRes] = await Promise.all([
+  const [puntosRes, ejecRes, pausasRes, objRes, usuariosRes, suspRes, horariosRes, intervRes] = await Promise.all([
     rondaIdsArr.length
       ? client.from('ronda_puntos').select('ronda_base_id').eq('activo', true).in('ronda_base_id', rondaIdsArr)
       : Promise.resolve({ data: [] as any[], error: null }),
@@ -163,13 +165,18 @@ export async function GET(req: Request) {
     rondaIdsArr.length
       ? client.from('ronda_horarios_sin_exigencia').select('ronda_base_id, dia_semana, desde, hasta').eq('activo', true).in('ronda_base_id', rondaIdsArr)
       : Promise.resolve({ data: [] as any[], error: null }),
+    // Alertas intervenidas o cerradas que cubren el turno (auditoría oct-2026):
+    // si el supervisor ya está en el tema, no se le escribe al vigilador.
+    client.from('ronda_alertas')
+      .select('ronda_base_id, turno_id, tipo, estado, accion, resultado_intervencion, motivo_intervencion')
+      .in('turno_id', turnoIds).in('tipo', ['no_iniciada', 'no_finalizada']),
   ])
 
   const fuentesConError = [
     ['turnos', turnosRes], ['rondas_base', rondasRes], ['ronda_puntos', puntosRes],
     ['ronda_ejecuciones', ejecRes], ['ronda_pausas', pausasRes], ['objetivos', objRes],
     ['usuarios', usuariosRes], ['ronda_alertas_suspendida', suspRes],
-    ['ronda_horarios_sin_exigencia', horariosRes],
+    ['ronda_horarios_sin_exigencia', horariosRes], ['ronda_alertas_intervenidas', intervRes],
   ].filter(([, r]: any) => r?.error).map(([n, r]: any) => `${n}: ${r.error.message}`)
 
   // FAIL CLOSED: si una fuente crítica falló, la foto está incompleta y podría
@@ -222,6 +229,7 @@ export async function GET(req: Request) {
   const candidatos = seleccionarCandidatosRondaVigilador({
     ahoraMin, turnosVigentes: turnos, rondasBase, ejecuciones, pausas, objetivos,
     avisoMin: AVISO_MIN, rondaCreadaMin, suspendidasClaves,
+    silenciadasClaves: clavesRondaTurnoSilenciadas((intervRes.data ?? []) as AlertaRondaTurno[]),
     horariosSinExigencia: (horariosRes.data ?? []) as HorarioSinExigencia[],
   })
 
@@ -230,6 +238,7 @@ export async function GET(req: Request) {
   const filasAuditoria: any[] = []
 
   const proveedor = enviarDeVerdad ? proveedorPorDefecto() : proveedorSimulado()
+  const presupuesto = crearPresupuestoCorrida({ maxEnvios: 40, maxMs: 40000 })
 
   // En dry-run no se reclama nada: sólo se lee qué claves ya están avisadas para
   // reportarlas. En envío real la deduplicación es ATÓMICA (ver abajo).
@@ -270,19 +279,28 @@ export async function GET(req: Request) {
       continue
     }
 
-    // ── Deduplicación ATÓMICA (claim-first) ──────────────────────────────────
-    // Insertar la fila de dedup ANTES de enviar. La constraint única
-    // (usuario_id, turno_id, tipo) hace que dos corridas simultáneas del cron no
-    // puedan reclamar la misma ventana: la segunda choca (23505) y se saltea.
-    // Un select-then-insert no alcanzaría porque ambas leerían "no enviado".
-    const claim = await client.from('notificaciones_enviadas')
-      .insert({ usuario_id: c.guardia_id, turno_id: c.turno_id, tipo: c.clave_dedup })
-    if (claim.error) {
-      // 23505 = ya reclamada por otra corrida / ya enviada. Cualquier otro error
-      // de escritura: no arriesgamos un doble envío, se saltea.
-      descartes.ya_avisada = (descartes.ya_avisada ?? 0) + 1
+    // ── Reclamo ATÓMICO en la base (20261121130000) ──────────────────────────
+    // Clave estable por (canal, etapa, ventana, vigilador) con índice único y
+    // fila de auditoría 'reclamado' ANTES de enviar: dos corridas simultáneas
+    // no pueden reclamar la misma ventana. Un rechazo reintentable del
+    // proveedor se reintenta con backoff (5', máximo 2 intentos) mientras la
+    // ventana siga vigente; antes se liberaba la marca y se reintentaba cada 5'
+    // sin límite. Cualquier error de la RPC = NO enviar.
+    if (!presupuesto.disponible()) { descartes.presupuesto_corrida = (descartes.presupuesto_corrida ?? 0) + 1; continue }
+    const reclamo = await reclamarEnvio(client,
+      claveEnvioWhatsApp({ etapa: NIVEL_RONDA_VIG, evento: c.clave_dedup, destinatarioId: c.guardia_id }),
+      {
+        turno_id: c.turno_id, objetivo_id: c.objetivo_id, guardia_id: c.guardia_id,
+        nivel: NIVEL_RONDA_VIG, destinatario_id: c.guardia_id, telefono: tel.e164,
+        plantilla: PLANTILLA, proveedor: proveedor.nombre,
+      },
+      { maxIntentos: 2, backoffMin: 5, topeDestinatarioDia: 12 },
+    )
+    if (!reclamo.ok) {
+      descartes[`no_reclamado_${reclamo.motivo}`] = (descartes[`no_reclamado_${reclamo.motivo}`] ?? 0) + 1
       continue
     }
+    presupuesto.registrar()
 
     const r = await proveedor.enviar({
       telefono: tel.e164, plantilla: PLANTILLA,
@@ -295,20 +313,13 @@ export async function GET(req: Request) {
     acciones.push({
       ronda: c.ronda_nombre, objetivo: c.objetivo_nombre,
       vigilador: `${u.apellido}, ${u.nombre}`, telefono: tel.e164,
-      ok: r.ok, error: r.error, idProveedor: r.idProveedor,
+      ok: r.ok, error: r.error, idProveedor: r.idProveedor, intento: reclamo.intento,
     })
-    filasAuditoria.push({
-      turno_id: c.turno_id, objetivo_id: c.objetivo_id, guardia_id: c.guardia_id,
-      nivel: NIVEL_RONDA_VIG, destinatario_id: c.guardia_id, telefono: tel.e164,
-      plantilla: PLANTILLA, resultado: r.ok ? 'enviado' : 'fallido',
-      id_proveedor: r.idProveedor, proveedor: proveedor.nombre, error: r.error,
-    })
-
-    // Si el proveedor rechazó, se LIBERA la reserva para que la próxima corrida
-    // reintente (mismo criterio de reintento que el resto del canal).
-    if (!r.ok) {
+    await completarEnvio(client, reclamo.id as string, r)
+    // Marca de compatibilidad (la lee el dry-run). Sólo si salió.
+    if (r.ok) {
       await client.from('notificaciones_enviadas')
-        .delete().eq('usuario_id', c.guardia_id).eq('turno_id', c.turno_id).eq('tipo', c.clave_dedup)
+        .insert({ usuario_id: c.guardia_id, turno_id: c.turno_id, tipo: c.clave_dedup })
         .then(() => {}, () => {})
     }
   }

@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdminIA } from '../_lib/auth'
 import { procesarLote, LIMITE_DURO, type FiltrosLote } from '@/lib/ia/procesar'
+import { CLAVES_SECRETAS_APP_CONFIG } from '@/lib/ia/cron-auth'
 
 export const runtime = 'nodejs'
 // El plan Hobby de Vercel corta las funciones a 60 s.
@@ -20,7 +21,12 @@ export async function POST(req: NextRequest) {
   let body: any
   try { body = await req.json() } catch { return NextResponse.json({ error: 'Body inválido' }, { status: 400 }) }
 
-  const { data: filas } = await ctx.client.from('app_config').select('key, value').like('key', 'ia\\_%')
+  // El secreto del cron nunca se lee desde la app (ver lib/ia/cron-auth.ts).
+  const { data: filas } = await ctx.client
+    .from('app_config')
+    .select('key, value')
+    .like('key', 'ia\\_%')
+    .not('key', 'in', `(${CLAVES_SECRETAS_APP_CONFIG.join(',')})`)
   const cfg = new Map((filas ?? []).map(f => [f.key as string, f.value as string]))
 
   if (cfg.get('ia_analisis_enabled') !== 'true') {

@@ -36,6 +36,7 @@ import {
   ordenOperativoRonda,
   ordenRondaEsHaciaAdelante,
   resumenObservacionesRonda,
+  etiquetaOrigenVentana,
   ETIQUETA_CORTA_ESTADO_TECNICO,
   ETIQUETA_ESTADO_TECNICO,
   ETIQUETA_ESTADO_ALERTA,
@@ -327,7 +328,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCam
     const c: Record<EstadoTecnicoRonda, number> = {
       proxima: 0, pendiente: 0, en_curso: 0,
       cumplida: 0, cumplida_observada: 0, incompleta: 0, no_iniciada: 0,
-      pausada: 0,
+      pausada: 0, pendiente_validacion: 0,
     }
     for (const f of filas) c[estadoTecnicoRonda(f.ronda)]++
     return c
@@ -342,7 +343,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCam
         </button>
         {filas.length > 0 && (
           <div style={S.resumen}>
-            {(['no_iniciada', 'en_curso', 'incompleta', 'cumplida_observada', 'cumplida'] as EstadoTecnicoRonda[])
+            {(['no_iniciada', 'en_curso', 'incompleta', 'cumplida_observada', 'pendiente_validacion', 'cumplida'] as EstadoTecnicoRonda[])
               .filter(e => conteos[e] > 0)
               .map(e => (
                 <span key={e} style={{ ...S.resumenItem, color: COLOR_ESTADO_TECNICO[e] }}>
@@ -476,7 +477,7 @@ function TarjetaObjetivo({
         : `${r.alerta_intervenciones} intervención(es)`)
     : alerta === 'pendiente'
       ? 'Sin intervención'
-      : (tecnico === 'cumplida_observada' || tecnico === 'incompleta')
+      : (tecnico === 'cumplida_observada' || tecnico === 'incompleta' || tecnico === 'pendiente_validacion')
         ? resumenObservacionesRonda(r)
         : null
 
@@ -580,6 +581,10 @@ function DetalleSinEjecucion({
     ['Estado técnico', ETIQUETA_ESTADO_TECNICO[tecnico]],
     ['Alerta', ETIQUETA_ESTADO_ALERTA[alerta]],
   ]
+  // Historial: si la obligación es la foto tomada al vencer o un recálculo con
+  // la configuración de hoy (20261122120000).
+  const origen = etiquetaOrigenVentana(r)
+  if (origen) datos.push(['Obligación', origen])
 
   // Con `pausada` no se podía volver a pausar una ronda cuya pausa anterior ya
   // había sido reanudada: el historial bloqueaba la acción operativa.

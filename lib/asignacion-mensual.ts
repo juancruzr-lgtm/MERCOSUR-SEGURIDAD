@@ -12,6 +12,7 @@
  * Solo produce estructuras de datos y planes; la escritura vive en la RPC.
  */
 
+import { normalizarConflictos, type ConflictoTurno } from '@/lib/conflictos-turno'
 import { horariosSuperpuestos } from '@/lib/turnos'
 import { ESTADOS_SIN_OBLIGACION } from '@/lib/revision-operativa'
 
@@ -246,11 +247,17 @@ export interface AccionesCelda {
   cambiarHorario: boolean
   anular: boolean
   reactivar: boolean
+  /**
+   * Turno ya iniciado o pasado: se corrige por corregir_turno_programacion,
+   * que decide según la evidencia (sin fichaje → anular/cambiar horario; con
+   * fichaje/horas → solicitud; período cerrado → rectificación).
+   */
+  corregir: boolean
 }
 
 const SIN_ACCIONES: AccionesCelda = {
   asignar: false, cambiarVigilador: false, quitarVigilador: false,
-  cambiarHorario: false, anular: false, reactivar: false,
+  cambiarHorario: false, anular: false, reactivar: false, corregir: false,
 }
 
 /** Anular es reversible: estos estados vuelven a 'programado' con un clic. */
@@ -263,10 +270,15 @@ export function accionesCelda(
   puedeEscribir: boolean,
 ): AccionesCelda {
   if (!puedeEscribir) return SIN_ACCIONES
-  // Iniciado o pasado: se resuelve por asistencia/regularización, no acá.
-  if (!esTurnoFuturo(turno, fechaActual, horaActual)) return SIN_ACCIONES
-
   const estado = turno.estado || ''
+
+  // Iniciado o pasado: antes no se ofrecía nada y un turno cargado por error
+  // seguía alertando (caso 29/10/2026). Ahora se ofrece "Corregir", y el
+  // servidor decide con la evidencia real. Anulado/reemplazado/cancelado ya
+  // no tienen obligación: no hay nada que corregir ni se reactivan hacia atrás.
+  if (!esTurnoFuturo(turno, fechaActual, horaActual)) {
+    return ESTADOS_SIN_OBLIGACION.has(estado) ? SIN_ACCIONES : { ...SIN_ACCIONES, corregir: true }
+  }
 
   // Anulado o cancelado: la única salida es volver a activarlo. Anular no es
   // una puerta de una sola dirección — si fue un error, se deshace acá mismo
@@ -285,12 +297,13 @@ export function accionesCelda(
     cambiarHorario: true,
     anular: true,
     reactivar: false,
+    corregir: false,
   }
 }
 
 /** true si la celda ofrece al menos una acción (para saber si el clic hace algo). */
 export const celdaTieneAcciones = (a: AccionesCelda): boolean =>
-  a.asignar || a.cambiarVigilador || a.quitarVigilador || a.cambiarHorario || a.anular || a.reactivar
+  a.asignar || a.cambiarVigilador || a.quitarVigilador || a.cambiarHorario || a.anular || a.reactivar || a.corregir
 
 // ── Plan de asignación (individual, por rango, por fila completa) ────────────
 
@@ -462,6 +475,9 @@ export interface FilaResultadoAsignacion {
   resultado: ResultadoFilaAsignacion
   motivo?: string | null
   conflicto?: ConflictoAsignacion | null
+  /** La RPC no asignó porque hay conflicto sin confirmar (o no confirmable por este usuario). */
+  requiereConfirmacion?: boolean
+  conflictos?: ConflictoTurno[]
 }
 
 /** 'YYYY-MM-DD' → 'DD/MM'. Devuelve '' si no se puede interpretar. */
@@ -507,6 +523,9 @@ export function resultadoAsignacionCelda(
   if (fila.resultado === 'asignada' || fila.resultado === 'ya_asignada') {
     return { ok: true, error: null }
   }
+  // Con confirmación pendiente, el motivo del servidor ya describe el tipo de
+  // conflicto (superposición, continuidad inmediata, doble turno).
+  if (fila.requiereConfirmacion && fila.motivo?.trim()) return { ok: false, error: fila.motivo.trim() }
   if (fila.conflicto) return { ok: false, error: mensajeConflictoAsignacion(fila.conflicto) }
   return { ok: false, error: fila.motivo?.trim() || 'No se pudo asignar el turno.' }
 }
@@ -518,6 +537,8 @@ export function normalizarFilasAsignacion(filas: unknown): FilaResultadoAsignaci
     turnoId: f?.turno_id,
     resultado: f?.resultado,
     motivo: f?.motivo ?? null,
+    requiereConfirmacion: Boolean(f?.requiere_confirmacion),
+    conflictos: normalizarConflictos(f?.conflictos),
     conflicto: f?.conflicto
       ? {
           turnoId: f.conflicto.turno_id ?? null,

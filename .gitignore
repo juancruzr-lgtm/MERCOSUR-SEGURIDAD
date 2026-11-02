@@ -16,3 +16,6 @@ audit*_temp.js
 
 # Planillas privadas de clientes
 planiallas para comparar/
+
+# Generado en el build por next.config.js (versión del Service Worker)
+public/sw-version.js

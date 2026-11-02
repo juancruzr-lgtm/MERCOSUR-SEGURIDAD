@@ -14,6 +14,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import { procesarLote, LIMITE_DURO } from '@/lib/ia/procesar'
 import { LIMITES_MEMORIA_DEFECTO } from '@/lib/ia/memoria'
+import { autorizadoCronIA, CLAVES_SECRETAS_APP_CONFIG } from '@/lib/ia/cron-auth'
+import { esFuncionAusente } from '@/lib/ia/cola'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -21,17 +23,26 @@ export const maxDuration = 60
 // Secreto propio de la IA. Se prefiere IA_CRON_SECRET para no compartir el de
 // /api/push/cron: así rotar uno no afecta al otro, y Vercel oculta el valor de
 // las variables sensibles una vez guardadas. Cae a CRON_SECRET si no está.
+// Durante una rotación se acepta además IA_CRON_SECRET_ANTERIOR (ver
+// lib/ia/cron-auth.ts y docs/auditoria-2026-10/regla_validacion.md).
 function autorizado(req: NextRequest): boolean {
-  const esperado = process.env.IA_CRON_SECRET || process.env.CRON_SECRET
-  if (!esperado) return false
-  return req.headers.get('authorization') === `Bearer ${esperado}`
+  return autorizadoCronIA(req.headers.get('authorization'), process.env)
 }
+
+/** Ventana del barrido de re-evaluación de puntos (regla 20261120120000). */
+const BARRIDO_PUNTOS_DIAS = 3
 
 async function correr() {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const { data: filas } = await admin.client.from('app_config').select('key, value').like('key', 'ia\\_%')
+  // Nunca se lee el secreto del cron: no hace falta acá y no debe quedar en
+  // memoria ni en logs de esta función.
+  const { data: filas } = await admin.client
+    .from('app_config')
+    .select('key, value')
+    .like('key', 'ia\\_%')
+    .not('key', 'in', `(${CLAVES_SECRETAS_APP_CONFIG.join(',')})`)
   const cfg = new Map((filas ?? []).map(f => [f.key as string, f.value as string]))
 
   if (cfg.get('ia_analisis_enabled') !== 'true') {
@@ -65,6 +76,11 @@ async function correr() {
       // —GPS y foto son controles independientes—, sesgaba la memoria visual:
       // el historial confirmado se habría armado únicamente con casos anómalos.
       soloGpsFueraRadio: cfg.get('ia_ronda_solo_gps_fuera_radio') === 'true',
+      // Cola con prioridad: más viejas primero, nunca lo ya analizado; fotos de
+      // punto sin GPS/QR válido siempre; las de puntos ya validados, muestra.
+      usarCola: true,
+      colaMaxDias: Number(cfg.get('ia_cola_max_dias') ?? 7),
+      muestraValidadasDia: Number(cfg.get('ia_muestra_puntos_validados_por_dia') ?? 20),
       limitesMemoria: {
         maxPositivos: Number(cfg.get('ia_memoria_max_positivos') ?? LIMITES_MEMORIA_DEFECTO.maxPositivos),
         maxNegativos: Number(cfg.get('ia_memoria_max_negativos') ?? LIMITES_MEMORIA_DEFECTO.maxNegativos),
@@ -72,11 +88,24 @@ async function correr() {
       },
     })
 
+    // Barrido de respaldo: re-juzga puntos recientes que quedaron sin
+    // re-evaluar (respuesta perdida, saneamiento masivo, revisión vieja).
+    // Idempotente; si la migración no está aplicada, no hace nada.
+    let barrido: unknown = null
+    const { data: datosBarrido, error: errorBarrido } = await admin.client.rpc('reevaluar_puntos_ronda_pendientes', {
+      p_desde: new Date(Date.now() - BARRIDO_PUNTOS_DIAS * 86_400_000).toISOString(),
+      p_limite: 200,
+    })
+    if (!errorBarrido) barrido = datosBarrido
+    else if (!esFuncionAusente(errorBarrido)) barrido = { error: String(errorBarrido.message).slice(0, 200) }
+
     return NextResponse.json({
       ok: true,
       analizadas: resultados.filter(r => r.estado === 'completado').length,
       errores: resultados.filter(r => r.estado === 'error').length,
       omitidas: resultados.filter(r => r.estado === 'omitida').length,
+      puntos_reevaluados: resultados.filter(r => r.reevaluacion?.startsWith('actualizado')).length,
+      barrido,
     })
   } catch (e: any) {
     // Un fallo acá no puede escalar: el cron reintenta en 5 minutos y ninguna

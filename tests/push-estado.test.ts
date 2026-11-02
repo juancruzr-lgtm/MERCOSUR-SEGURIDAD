@@ -165,9 +165,14 @@ describe('circuito push — guardas', () => {
 
   it('ronda no iniciada está entre las familias enviadas y se avisa UNA sola vez por alerta', () => {
     const cron = src('app/api/_lib/push-notificaciones.ts')
-    expect(cron).toMatch(/supervisor_ronda_\$\{alerta\.tipo\}:\$\{alerta\.id\}/)
-    // La guarda contra el reenvío en cambio de guardia (verificado 18/08).
-    expect(cron).toMatch(/yaAvisadas\.has\(`supervisor_ronda_\$\{alerta\.tipo\}:\$\{alerta\.id\}`\)/)
+    const lib = src('lib/notificaciones-ronda.ts')
+    // La clave por alerta vive en lib/notificaciones-ronda (una fuente).
+    expect(lib).toMatch(/supervisor_ronda_\$\{a\.tipo\}:\$\{a\.id\}/)
+    // La guarda contra el reenvío en cambio de guardia (verificado 18/08): el
+    // planificador salta lo ya avisado, leído en lotes y fail-closed.
+    expect(lib).toMatch(/p\.yaAvisadas\.has\(clave\)/)
+    expect(cron).toMatch(/leerClavesEnLotes\(/)
+    expect(cron).toMatch(/planificarAvisosRonda\(/)
   })
 
   it('el cron de push corre DESPUÉS del evaluador de rondas y con timeout alineado a maxDuration', () => {

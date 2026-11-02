@@ -111,7 +111,7 @@ export default function RondaIAPuntos({ puntos }: { puntos: PuntoEntrada[] }) {
           // haya faltado. Sólo 'pendiente' y 'omitido' son ausencia real. Antes
           // se leían todos igual y la pantalla decía "Punto no registrado" sobre
           // un punto registrado a las 21:02, con foto subida.
-          registrado: p.estado === 'cumplido' || p.estado === 'incumplido',
+          registrado: p.estado === 'cumplido' || p.estado === 'incumplido' || p.estado === 'pendiente_validacion',
           fotoRequerida: p.requiere_foto,
           fotoRecibida: Boolean(evidenciaId),
           tieneReferencia: conReferencia.has(p.ronda_punto_id),

@@ -113,12 +113,26 @@ describe('accionesCelda — anular es reversible', () => {
 })
 
 describe('accionesCelda — turnos que no se tocan desde la grilla', () => {
-  it('turno pasado: ninguna acción', () => {
-    expect(celdaTieneAcciones(accionesCelda(turno({ fecha: '2026-08-01' }), HOY, AHORA, true))).toBe(false)
+  // Desde 20261125120000: un turno iniciado o pasado ya no queda sin salida. Solo
+  // ofrece "Corregir"; asignar/cambiar/anular directo siguen siendo de futuros.
+  it('turno pasado: solo corregir', () => {
+    const a = accionesCelda(turno({ fecha: '2026-08-01' }), HOY, AHORA, true)
+    expect(a).toEqual({ asignar: false, cambiarVigilador: false, quitarVigilador: false,
+      cambiarHorario: false, anular: false, reactivar: false, corregir: true })
   })
 
-  it('turno de hoy que ya empezó: ninguna acción', () => {
-    expect(celdaTieneAcciones(accionesCelda(turno({ fecha: HOY, hora_inicio: '08:00' }), HOY, AHORA, true))).toBe(false)
+  it('turno de hoy que ya empezó: solo corregir', () => {
+    const a = accionesCelda(turno({ fecha: HOY, hora_inicio: '08:00', guardia_id: 'g1' }), HOY, AHORA, true)
+    expect(a.corregir).toBe(true)
+    expect(a.anular || a.cambiarVigilador || a.cambiarHorario).toBe(false)
+  })
+
+  it('turno iniciado ya anulado: nada (no se reactiva hacia atrás)', () => {
+    expect(celdaTieneAcciones(accionesCelda(turno({ fecha: '2026-08-01', estado: 'anulado' }), HOY, AHORA, true))).toBe(false)
+  })
+
+  it('turno iniciado sin permiso de escritura: nada', () => {
+    expect(celdaTieneAcciones(accionesCelda(turno({ fecha: '2026-08-01' }), HOY, AHORA, false))).toBe(false)
   })
 
   it('turno de hoy que todavía no empezó: sí hay acciones', () => {

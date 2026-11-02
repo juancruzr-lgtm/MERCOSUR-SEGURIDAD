@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
-import { normalizarEjecucion } from '@/lib/rondas'
+import { normalizarEjecucion, rpcRondaConRed, MENSAJE_SIN_RED_RONDA } from '@/lib/rondas'
+import { esFallaDeRed } from '@/lib/red-resiliente'
 import type { ResultadoRondas, RondaEjecucionActual } from '@/lib/rondas'
 
 // ── Validación física por QR por punto de control ────────────────────────────
@@ -13,7 +14,9 @@ import type { ResultadoRondas, RondaEjecucionActual } from '@/lib/rondas'
 // Convive con GPS/foto/IA sin reemplazar nada:
 //   desactivado   flujo actual idéntico.
 //   opcional      escanear suma evidencia; no escanear no cambia el veredicto.
-//   obligatorio   sin QR verificado el punto se registra como incumplido
+//   obligatorio   se pide el escaneo; sin QR verificado el punto vale sólo si
+//                 el GPS dio dentro del radio o la foto es aceptada (regla
+//                 aprobada, migración 20261120120000: una evidencia alcanza)
 //                 (misma semántica que GPS requerido sin ubicación). Si el
 //                 punto no tiene credencial activa la exigencia no aplica:
 //                 no se puede exigir un cartel que no existe.
@@ -36,9 +39,9 @@ export function ayudaModoQr(modo: ModoQr): string {
     case 'desactivado':
       return 'El punto se registra como hasta ahora, sin QR.'
     case 'opcional':
-      return 'Escanear el QR suma evidencia de presencia; no escanearlo no cambia el resultado.'
+      return 'Escanear el QR valida el punto aunque el GPS falle; no escanearlo no perjudica.'
     case 'obligatorio':
-      return 'Sin QR verificado el punto queda incumplido. Los demás controles (foto, GPS) siguen igual.'
+      return 'Se pide escanear el QR. Un QR válido valida el punto aunque el GPS falle; sin QR, vale el GPS dentro del radio o la foto aceptada.'
   }
 }
 
@@ -69,7 +72,7 @@ export function extraerTokenQr(payload: string): string | null {
 // ── Semántica de la visita (espejo exacto de la regla del servidor) ──────────
 
 /**
- * ¿El registro del punto va a quedar incumplido si no se verifica el QR?
+ * ¿La visita exige QR? (sin él, el punto depende del GPS o de la foto)
  * Igual que en el servidor: sólo con modo obligatorio Y credencial activa.
  */
 export function qrExigibleEnVisita(modo: ModoQr, qrDisponible: boolean): boolean {
@@ -86,7 +89,7 @@ export function qrOfrecidoEnVisita(modo: ModoQr, qrDisponible: boolean): boolean
  *
  * Con QR obligatorio se pide el escaneo antes de registrar; "continuarSinQr"
  * es la salida explícita (cartel roto, cámara denegada): desbloquea el
- * registro sabiendo que el servidor lo marcará incumplido. Nunca se bloquea
+ * registro: el punto queda a juicio del GPS y de la foto. Nunca se bloquea
  * con modo opcional ni sin credencial activa.
  */
 export function registroBloqueadoPorQr(
@@ -101,7 +104,7 @@ export function registroBloqueadoPorQr(
 }
 
 export const MENSAJE_QR_INCUMPLIDO_SIN_SCAN =
-  'Este punto exige QR. Si registrás sin escanearlo, el servidor lo marcará como incumplido.'
+  'Este punto exige QR. Si registrás sin escanearlo, el punto sólo vale si el GPS da dentro del radio o la foto es aceptada.'
 
 export const MENSAJE_QR_NECESITA_CONEXION =
   'Se necesita conexión para validar el QR.'
@@ -163,16 +166,19 @@ export async function validarQrPuntoRonda(
   token: string,
   gps: GpsScanQr | null,
 ): Promise<ResultadoRondas<RespuestaValidarQr>> {
-  const { data, error } = await supabase.rpc('validar_qr_ronda_punto', {
+  // Idempotente (`qr_ya_verificado`): reintento acotado sólo ante falla de red.
+  const r = await rpcRondaConRed('validar_qr_punto_ronda', 'validar_qr_ronda_punto', {
     p_ejecucion_punto_id: ejecucionPuntoId,
     p_token: token,
     p_latitud: gps?.latitud ?? null,
     p_longitud: gps?.longitud ?? null,
     p_precision_metros: gps?.precision_metros ?? null,
-  })
+  }, { idempotente: true, ejecucionPuntoId })
+  const { data, error } = r
 
   if (error) {
     console.error('[rondas-qr] validar_qr_ronda_punto', error)
+    if (esFallaDeRed(error, r.status)) return { data: null, error: MENSAJE_SIN_RED_RONDA }
     return { data: null, error: 'No se pudo validar el QR. Verificá la conexión y reintentá.' }
   }
 

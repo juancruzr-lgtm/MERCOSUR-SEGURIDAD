@@ -1,9 +1,19 @@
-// v3: al desplegar una version nueva se cambia el nombre del cache para purgar
-// el app-shell (/, /dashboard) y las respuestas guardadas por la version previa.
-// El cliente (PwaRegister) detecta el worker nuevo y recarga para tomar el codigo
-// actualizado, evitando que queden chunks JS servidos indefinidamente.
-const CACHE_NAME = 'mercosur-seguridad-v3'
+// ── Versión y caché ─────────────────────────────────────────────────────────
+// La versión llega en la URL del registro (/sw.js?v=<version+commit>, ver
+// PwaRegister y next.config.js). Cada deploy cambia la URL, el navegador
+// instala este worker de nuevo y `activate` borra toda caché que no sea la de
+// esta versión. Antes el nombre era fijo ('mercosur-seguridad-v3'): nunca se
+// purgaba nada y la caché crecía con cada chunk, imagen y mosaico de mapa.
+// public/sw-version.js lo genera next.config.js en cada build: como el worker
+// lo importa, el navegador lo compara byte a byte en cada update() y detecta
+// el deploy nuevo aunque la página siga abierta con el código viejo.
+try { importScripts('/sw-version.js') } catch (e) { /* sin archivo: se usa ?v= */ }
+const VERSION = self.SW_VERSION || new URL(self.location.href).searchParams.get('v') || 'v4'
+const PREFIJO_CACHE = 'mercosur-seguridad-'
+const CACHE_NAME = PREFIJO_CACHE + VERSION
 const APP_SHELL = ['/', '/dashboard', '/manifest.webmanifest']
+// Tope de entradas: alcanza para el app-shell, íconos y fuentes propias.
+const MAX_ENTRADAS = 40
 
 // Rutas que NUNCA deben cachearse: datos operativos, sesion y archivos privados.
 // Servir una respuesta vieja de estas rutas muestra informacion incorrecta
@@ -15,9 +25,15 @@ const RUTAS_SIN_CACHE = [
   '/realtime/v1/',
   '/functions/v1/',
   '/api/',
+  // Archivos con hash: ya los guarda la caché HTTP del navegador (immutable).
+  // Duplicarlos acá sólo ocupaba espacio y no se borraba nunca.
+  '/_next/static/',
+  // Imágenes optimizadas: varían por tamaño/calidad; cada variante era una entrada más.
+  '/_next/image',
+  '/_next/data/',
 ]
 
-function esSolicitudDeDatos(request) {
+function esSolicitudSinCache(request) {
   let url
 
   try {
@@ -27,9 +43,28 @@ function esSolicitudDeDatos(request) {
   }
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return true
+  // Sólo el propio origen: Supabase, mosaicos de OpenStreetMap, CDNs y
+  // cualquier otro host van directo a la red, sin pasar por esta caché.
+  if (url.origin !== self.location.origin) return true
   if (url.hostname.endsWith('.supabase.co')) return true
 
   return RUTAS_SIN_CACHE.some(ruta => url.pathname.includes(ruta))
+}
+
+async function recortarCache(cache) {
+  const claves = await cache.keys()
+  // keys() devuelve en orden de inserción: se borran las más viejas, pero
+  // nunca el app-shell.
+  const sobrantes = claves.length - MAX_ENTRADAS
+  if (sobrantes <= 0) return
+  let borradas = 0
+  for (const req of claves) {
+    if (borradas >= sobrantes) break
+    const ruta = new URL(req.url).pathname
+    if (APP_SHELL.includes(ruta)) continue
+    await cache.delete(req)
+    borradas += 1
+  }
 }
 
 self.addEventListener('install', event => {
@@ -49,6 +84,8 @@ self.addEventListener('message', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
+      // Borra TODA caché distinta de la actual: versiones viejas de este worker
+      // ('mercosur-seguridad-v3', '-<commit>' anteriores) y cualquier otra.
       .then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
       .then(() => self.clients.claim())
   )
@@ -57,17 +94,22 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return
 
-  // Datos, sesion y storage van siempre a la red, sin cache ni fallback.
-  // Sin respondWith(), el navegador maneja la request de forma nativa.
-  if (esSolicitudDeDatos(event.request)) return
+  // Datos, sesion, storage, chunks con hash, imágenes optimizadas y todo lo
+  // de otro origen van siempre a la red. Sin respondWith(), el navegador
+  // maneja la request de forma nativa (incluida su caché HTTP).
+  if (esSolicitudSinCache(event.request)) return
 
   event.respondWith(
     fetch(event.request)
       .then(response => {
-        const copy = response.clone()
-        caches.open(CACHE_NAME)
-          .then(cache => cache.put(event.request, copy))
-          .catch(() => {})
+        // Sólo respuestas completas y propias: un 404/500 o una redirección
+        // guardada se serviría después como si fuera la página.
+        if (response.status === 200 && response.type === 'basic') {
+          const copy = response.clone()
+          caches.open(CACHE_NAME)
+            .then(cache => cache.put(event.request, copy).then(() => recortarCache(cache)))
+            .catch(() => {})
+        }
         return response
       })
       .catch(() => caches.match(event.request).then(cached => cached || caches.match('/dashboard')))

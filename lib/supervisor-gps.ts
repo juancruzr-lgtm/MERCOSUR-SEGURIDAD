@@ -7,10 +7,12 @@
 import { useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { track, getCurrentSession, getDeviceContext } from '@/lib/telemetry'
+import {
+  estadoInicial, haversineM, objetivoCercano as objetivoCercanoPuro, procesarLectura, trasRecuperacion,
+  type EstadoMaquina, type EstadoMovimiento,
+} from '@/lib/supervisor-gps-maquina'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-
-type EstadoMovimiento = 'UNKNOWN' | 'MOVING' | 'STOPPED' | 'IN_OBJETIVO'
 
 type TipoPunto =
   | 'session_start' | 'moving' | 'stopped'
@@ -35,23 +37,14 @@ export interface TurnoSupervisorRow {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-// Distance in meters to force a new point regardless of the timer
-const MIN_DISTANCIA_M = 100
-// Timer between MOVING points (ms)
-const INTERVALO_MOVING_MS = 60_000
-// Speed threshold (m/s) to consider the supervisor moving
-const UMBRAL_VELOCIDAD_MS = 0.5
+// Umbrales, intervalos e histéresis: lib/supervisor-gps-maquina.ts (pura y
+// probada). Antes una sola lectura ruidosa alcanzaba para cambiar de estado.
+
+// Opciones de watchPosition. maximumAge 60 s (antes 30 s): el navegador puede
+// devolver una posición reciente sin despertar el GPS en cada callback.
+export const OPCIONES_WATCH_GPS: PositionOptions = { enableHighAccuracy: true, maximumAge: 60_000, timeout: 20_000 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────
-
-function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000
-  const r = Math.PI / 180
-  const dLat = (lat2 - lat1) * r
-  const dLng = (lng2 - lng1) * r
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLng / 2) ** 2
-  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
 
 /**
  * session_id del punto: la sesión de telemetría si existe (SupervisorMobile la
@@ -109,6 +102,8 @@ export function useSupervisorGps(
   const watcherRef      = useRef<number | null>(null)
   const seqRef          = useRef(0)
   const estadoRef       = useRef<EstadoMovimiento>('UNKNOWN')
+  // Estado completo de la máquina (con candidatos de la histéresis).
+  const maquinaRef      = useRef<EstadoMaquina>(estadoInicial())
   const ultimoPuntoRef  = useRef<{ lat: number; lng: number; ts: number; id: string } | null>(null)
   const objetivoActRef  = useRef<string | null>(null)
   const turnoIdRef      = useRef<string | null>(null)
@@ -136,15 +131,7 @@ export function useSupervisorGps(
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   function objetivoCercano(lat: number, lng: number): { id: string; distancia: number } | null {
-    let mejor: { id: string; distancia: number } | null = null
-    for (const obj of objetivosRef.current) {
-      if (obj.lat == null || obj.lng == null || !obj.radio_metros) continue
-      const d = haversineM(lat, lng, obj.lat, obj.lng)
-      if (d <= obj.radio_metros && (!mejor || d < mejor.distancia)) {
-        mejor = { id: obj.id, distancia: Math.round(d) }
-      }
-    }
-    return mejor
+    return objetivoCercanoPuro(lat, lng, objetivosRef.current)
   }
 
   async function insertarPunto(
@@ -210,7 +197,10 @@ export function useSupervisorGps(
       // App returned to foreground after potential GPS suspension.
       if (wasHiddenRef.current) {
         wasHiddenRef.current = false
-        estadoRef.current    = 'UNKNOWN'
+        // Antes: estado UNKNOWN y objetivo olvidado → una entrada duplicada al
+        // mismo objetivo en cada vuelta a primer plano. Ahora se conserva.
+        maquinaRef.current = trasRecuperacion(maquinaRef.current)
+        estadoRef.current  = maquinaRef.current.estado
         await insertarPunto('gps_recovered', lat, lng, ts, coords)
         track('supervisor_route_recovered', {
           category: 'supervision',
@@ -220,83 +210,35 @@ export function useSupervisorGps(
         // Continue processing so this position also updates the state machine.
       }
 
-      const prevEstado   = estadoRef.current
-      const prevObjetivo = objetivoActRef.current
-      const anterior     = ultimoPuntoRef.current
-      const objCerca     = objetivoCercano(lat, lng)
+      // Intervalos y velocidad calculada contra el último punto insertado de
+      // cualquier tipo (session_start, gps_recovered, supervision), como antes.
+      const u = ultimoPuntoRef.current
+      const { estado, acciones } = procesarLectura(
+        { ...maquinaRef.current, ultimo: u ? { lat: u.lat, lng: u.lng, ts: u.ts } : null },
+        { lat, lng, ts, speed: coords.speed ?? null },
+        objetivosRef.current,
+      )
+      maquinaRef.current     = estado
+      objetivoActRef.current = estado.objetivoId
 
-      // Determine new movement state.
-      let nuevoEstado: EstadoMovimiento
-      if (objCerca) {
-        nuevoEstado = 'IN_OBJETIVO'
-      } else {
-        let speed = coords.speed ?? null
-        if (speed == null && anterior) {
-          const d = haversineM(lat, lng, anterior.lat, anterior.lng)
-          const t = (ts - anterior.ts) / 1000
-          speed = t > 0 ? d / t : 0
-        }
-        nuevoEstado = (speed ?? 0) >= UMBRAL_VELOCIDAD_MS ? 'MOVING' : 'STOPPED'
-      }
-
-      estadoRef.current = nuevoEstado
-
-      // Handle objective exit: leaving an objetivo or entering a different one.
-      if (
-        prevEstado === 'IN_OBJETIVO' && prevObjetivo &&
-        (nuevoEstado !== 'IN_OBJETIVO' || (objCerca && objCerca.id !== prevObjetivo))
-      ) {
-        objetivoActRef.current = null
-        await insertarPunto('objetivo_exit', lat, lng, ts, coords, {
-          objetivo_cercano_id: prevObjetivo,
-        })
-        track('supervisor_objetivo_exit', {
-          category:    'supervision',
-          objetivo_id: prevObjetivo,
-          gps_lat:     lat,
-          gps_lng:     lng,
-        })
-      }
-
-      // State-specific recording rules.
-      if (nuevoEstado === 'IN_OBJETIVO' && objCerca) {
-        if (prevEstado !== 'IN_OBJETIVO' || prevObjetivo !== objCerca.id) {
-          // Entering a new objetivo.
-          objetivoActRef.current = objCerca.id
-          await insertarPunto('objetivo_enter', lat, lng, ts, coords, {
-            objetivo_cercano_id:  objCerca.id,
-            objetivo_distancia_m: objCerca.distancia,
-          })
-          track('supervisor_objetivo_enter', {
-            category:    'supervision',
-            objetivo_id: objCerca.id,
-            gps_lat:     lat,
-            gps_lng:     lng,
-          })
+      for (const a of acciones) {
+        // estado_movimiento del punto: el de la máquina en ese momento.
+        estadoRef.current = a.tipo === 'objetivo_exit' ? 'UNKNOWN'
+          : a.tipo === 'objetivo_enter' || a.tipo === 'objetivo_inside' ? 'IN_OBJETIVO'
+          : estado.estado
+        if (a.tipo === 'objetivo_exit') {
+          await insertarPunto('objetivo_exit', lat, lng, ts, coords, { objetivo_cercano_id: a.objetivoId })
+          track('supervisor_objetivo_exit', { category: 'supervision', objetivo_id: a.objetivoId, gps_lat: lat, gps_lng: lng })
+        } else if (a.tipo === 'objetivo_enter') {
+          await insertarPunto('objetivo_enter', lat, lng, ts, coords, { objetivo_cercano_id: a.objetivoId, objetivo_distancia_m: a.distancia })
+          track('supervisor_objetivo_enter', { category: 'supervision', objetivo_id: a.objetivoId, gps_lat: lat, gps_lng: lng })
+        } else if (a.tipo === 'objetivo_inside') {
+          await insertarPunto('objetivo_inside', lat, lng, ts, coords, { objetivo_cercano_id: a.objetivoId, objetivo_distancia_m: a.distancia })
         } else {
-          // Periodic point inside objetivo: only when thresholds exceeded.
-          const tiempoDesde = anterior ? ts - anterior.ts : Infinity
-          const distDesde   = anterior ? haversineM(lat, lng, anterior.lat, anterior.lng) : Infinity
-          if (tiempoDesde >= INTERVALO_MOVING_MS || distDesde >= MIN_DISTANCIA_M) {
-            await insertarPunto('objetivo_inside', lat, lng, ts, coords, {
-              objetivo_cercano_id:  objCerca.id,
-              objetivo_distancia_m: objCerca.distancia,
-            })
-          }
-        }
-      } else if (nuevoEstado === 'MOVING') {
-        // Record on state change, or when time/distance threshold exceeded.
-        const tiempoDesde = anterior ? ts - anterior.ts : Infinity
-        const distDesde   = anterior ? haversineM(lat, lng, anterior.lat, anterior.lng) : Infinity
-        if (prevEstado !== 'MOVING' || tiempoDesde >= INTERVALO_MOVING_MS || distDesde >= MIN_DISTANCIA_M) {
-          await insertarPunto('moving', lat, lng, ts, coords)
-        }
-      } else if (nuevoEstado === 'STOPPED') {
-        // Only record on state change to STOPPED — no periodic points while stopped.
-        if (prevEstado !== 'STOPPED') {
-          await insertarPunto('stopped', lat, lng, ts, coords)
+          await insertarPunto(a.tipo, lat, lng, ts, coords)
         }
       }
+      estadoRef.current = estado.estado
     } catch {
       // Silent.
     }
@@ -332,6 +274,7 @@ export function useSupervisorGps(
     sesionRespaldoRef.current = null   // un id de respaldo por recorrido (sólo si no hay telemetría)
     seqRef.current         = 0
     estadoRef.current      = 'UNKNOWN'
+    maquinaRef.current     = estadoInicial()
     ultimoPuntoRef.current = null
     objetivoActRef.current = null
 
@@ -339,7 +282,7 @@ export function useSupervisorGps(
     watcherRef.current = navigator.geolocation.watchPosition(
       (pos) => void onPosition(pos),
       onGpsError,
-      { enableHighAccuracy: true, maximumAge: 30_000, timeout: 20_000 }
+      OPCIONES_WATCH_GPS
     )
 
     // First fix for session_start point.
@@ -388,6 +331,7 @@ export function useSupervisorGps(
     }
 
     estadoRef.current      = 'UNKNOWN'
+    maquinaRef.current     = estadoInicial()
     ultimoPuntoRef.current = null
     objetivoActRef.current = null
     turnoIdRef.current     = null
