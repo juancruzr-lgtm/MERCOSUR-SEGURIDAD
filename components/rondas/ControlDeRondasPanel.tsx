@@ -36,6 +36,7 @@ import {
   ordenOperativoRonda,
   ordenRondaEsHaciaAdelante,
   resumenObservacionesRonda,
+  etiquetaOrigenVentana,
   ETIQUETA_CORTA_ESTADO_TECNICO,
   ETIQUETA_ESTADO_TECNICO,
   ETIQUETA_ESTADO_ALERTA,
@@ -580,6 +581,10 @@ function DetalleSinEjecucion({
     ['Estado técnico', ETIQUETA_ESTADO_TECNICO[tecnico]],
     ['Alerta', ETIQUETA_ESTADO_ALERTA[alerta]],
   ]
+  // Historial: si la obligación es la foto tomada al vencer o un recálculo con
+  // la configuración de hoy (20261122120000).
+  const origen = etiquetaOrigenVentana(r)
+  if (origen) datos.push(['Obligación', origen])
 
   // Con `pausada` no se podía volver a pausar una ronda cuya pausa anterior ya
   // había sido reanudada: el historial bloqueaba la acción operativa.

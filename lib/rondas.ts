@@ -2132,6 +2132,20 @@ export function observacionesDetalleEjecucion(
   return obs
 }
 
+export type OrigenVentanaRonda = 'capturada' | 'recalculada' | 'programada'
+
+/** Texto para el detalle: de dónde sale la obligación y con qué frecuencia. */
+export function etiquetaOrigenVentana(r: Pick<RondaProgramada, 'origen_ventana' | 'intervalo_minutos'>): string | null {
+  if (!r.origen_ventana) return null
+  const cada = r.intervalo_minutos ? ` (cada ${r.intervalo_minutos} min)` : ''
+  switch (r.origen_ventana) {
+    case 'capturada': return `Registrada al vencer${cada}`
+    case 'recalculada': return `Recalculada con la configuración actual${cada}`
+    case 'programada': return `Programada${cada}`
+    default: return null
+  }
+}
+
 export interface RondaProgramada {
   // Identidad de la obligación: existe haya o no ejecución.
   ronda_base_id: string
@@ -2144,6 +2158,18 @@ export interface RondaProgramada {
   ventana_inicio: string
   ventana_fin: string
   vencimiento_at: string
+  /**
+   * De dónde sale la obligación (migración 20261122120000). Ausente = servidor
+   * anterior a esa migración (equivale a 'recalculada').
+   *  - capturada: foto tomada al vencer la ventana; no cambia aunque después se
+   *    edite la ronda, se cargue un horario sin exigencia o se anule el turno.
+   *  - recalculada: sin foto (historial anterior al despliegue): calculada con
+   *    la configuración ACTUAL de la ronda.
+   *  - programada: todavía no venció; configuración actual.
+   */
+  origen_ventana?: OrigenVentanaRonda
+  estado_exigencia?: string
+  intervalo_minutos?: number
 
   estado: EstadoRondaProgramada
   /** Se ejecutó, pero arrancó después del vencimiento de su ventana. */
