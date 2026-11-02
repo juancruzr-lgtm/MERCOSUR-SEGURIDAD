@@ -1,4 +1,15 @@
 import { supabase } from '@/lib/supabase'
+import {
+  REINTENTOS_IDEMPOTENTES,
+  TIMEOUT_RPC_MS,
+  TIMEOUT_SUBIDA_MS,
+  esFallaDeRed,
+  registrarErrorRed,
+  reintentar,
+  senalConTimeout,
+  sha256Hex,
+  type PasoRondaRed,
+} from '@/lib/red-resiliente'
 import type { CausaPausa } from '@/lib/rondas-causas'
 import type { ModoQr } from '@/lib/rondas-qr'
 import type { MotivoIntervencion, ResultadoIntervencion } from '@/lib/alertas-ronda-intervencion'
@@ -311,6 +322,61 @@ function registrarErrorSupabase(contexto: string, error: ErrorSupabase): void {
 function fallaRpc<T>(contexto: string, error: ErrorSupabase, fallback: string): ResultadoRondas<T> {
   registrarErrorSupabase(contexto, error)
   return { data: null, error: mensajeError(error, fallback) }
+}
+
+// ── Red del flujo del vigilador (auditoría PWA oct-2026) ─────────────────────
+// Timeout por llamada, reintento acotado SÓLO para RPC idempotentes y SÓLO ante
+// fallas de red, y telemetría `ronda_red_error` acotada. Antes: sin timeout
+// (pantalla colgada en "Subiendo y validando…") y sólo console.error.
+
+export const MENSAJE_SIN_RED_RONDA = 'Sin conexión o la señal está muy lenta. Revisá la red e intentá de nuevo: lo que ya registraste no se pierde.'
+
+export interface ResultadoRpcRed {
+  data: unknown
+  error: ErrorSupabase | null
+  status: number
+  vencida: boolean
+}
+
+export async function rpcRondaConRed(
+  paso: PasoRondaRed,
+  nombre: string,
+  args: Record<string, unknown> | undefined,
+  opciones: { idempotente: boolean; ejecucionPuntoId?: string | null; timeoutMs?: number },
+): Promise<ResultadoRpcRed> {
+  const inicio = Date.now()
+  const llamar = async (): Promise<ResultadoRpcRed> => {
+    const senal = senalConTimeout(opciones.timeoutMs ?? TIMEOUT_RPC_MS)
+    try {
+      const builder = supabase.rpc(nombre, args) as any
+      const r = await (typeof builder?.abortSignal === 'function' ? builder.abortSignal(senal.signal) : builder)
+      return { data: r.data, error: r.error, status: r.status ?? 200, vencida: senal.vencida() }
+    } catch (e) {
+      return { data: null, error: { message: String((e as Error)?.message ?? e) } as ErrorSupabase, status: 0, vencida: senal.vencida() }
+    } finally {
+      senal.liberar()
+    }
+  }
+  const codigo = (r: ResultadoRpcRed) => (r.vencida ? 'timeout' : 'red')
+  const resultado = await reintentar(llamar, {
+    intentos: opciones.idempotente ? REINTENTOS_IDEMPOTENTES : 1,
+    reintentarSi: r => !!r.error && esFallaDeRed(r.error, r.status),
+    alReintentar: (intento, r) => registrarErrorRed(paso, {
+      err_code: codigo(r), err_message: r.error?.message, intento: intento - 1,
+      duracion_ms: Date.now() - inicio, http_status: r.status, ejecucion_punto_id: opciones.ejecucionPuntoId,
+    }),
+  })
+  if (resultado.error && esFallaDeRed(resultado.error, resultado.status)) {
+    registrarErrorRed(paso, {
+      err_code: `${codigo(resultado)}_final`, err_message: resultado.error.message,
+      duracion_ms: Date.now() - inicio, http_status: resultado.status, ejecucion_punto_id: opciones.ejecucionPuntoId,
+    })
+  }
+  return resultado
+}
+
+function esResultadoSinRed(r: ResultadoRpcRed): boolean {
+  return !!r.error && esFallaDeRed(r.error, r.status)
 }
 
 export function validarRondaBase(
@@ -1174,11 +1240,14 @@ export function normalizarEjecucion(bruto: any): RondaEjecucionActual | null {
 export async function iniciarRonda(
   rondaBaseId: string,
 ): Promise<ResultadoRondas<RespuestaIniciarRonda>> {
-  const { data, error } = await supabase.rpc('iniciar_ronda', {
+  // Idempotente (devuelve la ejecución en curso si ya existe): se puede reintentar.
+  const r = await rpcRondaConRed('iniciar_ronda', 'iniciar_ronda', {
     p_ronda_base_id: rondaBaseId,
-  })
+  }, { idempotente: true })
+  const { data, error } = r
 
   if (error) {
+    if (esResultadoSinRed(r)) return { data: null, error: MENSAJE_SIN_RED_RONDA }
     return fallaRpc('iniciar_ronda', error, 'No se pudo iniciar la ronda.')
   }
 
@@ -1203,9 +1272,11 @@ export async function iniciarRonda(
  * guardia anterior sobre el mismo turno nunca se expone ni se continúa.
  */
 export async function obtenerEjecucionActual(): Promise<ResultadoRondas<RespuestaEjecucionActual>> {
-  const { data, error } = await supabase.rpc('obtener_ejecucion_actual')
+  const r = await rpcRondaConRed('obtener_ejecucion_actual', 'obtener_ejecucion_actual', undefined, { idempotente: true })
+  const { data, error } = r
 
   if (error) {
+    if (esResultadoSinRed(r)) return { data: null, error: MENSAJE_SIN_RED_RONDA }
     return fallaRpc('obtener_ejecucion_actual', error, 'No se pudo consultar la ronda en curso.')
   }
 
@@ -1236,19 +1307,40 @@ export async function subirFotoPuntoRonda(
     return { data: null, error: 'Tu sesión venció. Volvé a ingresar.' }
   }
 
+  // Si una subida anterior llegó al servidor pero se perdió la respuesta, la
+  // evidencia ya existe con la misma huella: se reutiliza en vez de volver a
+  // mandar la foto entera por una red que ya demostró ser mala.
+  const huella = await sha256Hex(foto)
+  if (huella) {
+    const existente = await evidenciaExistentePorHuella(ejecucionPuntoId, huella)
+    if (existente) return { data: existente, error: null }
+  }
+
   const form = new FormData()
   form.append('ejecucionPuntoId', ejecucionPuntoId)
   form.append('foto', foto, 'punto.jpg')
 
+  // La subida NO se reintenta sola: el body es grande y el reintento lo decide
+  // la persona (con el chequeo de huella de arriba, que evita mandarla dos veces).
+  const inicio = Date.now()
+  const senal = senalConTimeout(TIMEOUT_SUBIDA_MS)
   try {
     const response = await fetch('/api/rondas/evidencia', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: form,
+      signal: senal.signal,
     })
     const body = await response.json().catch(() => null)
 
     if (!response.ok) {
+      // 5xx/408/429: red o servidor, no la foto. Se registra para el diagnóstico.
+      if (response.status >= 500 || response.status === 408 || response.status === 429) {
+        registrarErrorRed('subir_foto_punto', {
+          err_code: `http_${response.status}`, err_message: body?.error,
+          duracion_ms: Date.now() - inicio, http_status: response.status, ejecucion_punto_id: ejecucionPuntoId,
+        })
+      }
       return {
         data: null,
         error: body?.error || 'No se pudo subir la foto del punto.',
@@ -1256,8 +1348,59 @@ export async function subirFotoPuntoRonda(
     }
 
     return { data: body?.evidencia as EvidenciaPuntoRonda, error: null }
+  } catch (e) {
+    registrarErrorRed('subir_foto_punto', {
+      err_code: senal.vencida() ? 'timeout' : 'red',
+      err_message: (e as Error)?.message,
+      duracion_ms: Date.now() - inicio, http_status: 0, ejecucion_punto_id: ejecucionPuntoId,
+    })
+    return {
+      data: null,
+      error: senal.vencida()
+        ? 'La subida de la foto tardó demasiado (señal débil). Intentá de nuevo: si ya había llegado, no se vuelve a subir.'
+        : 'No hay conexión para subir la foto.',
+    }
+  } finally {
+    senal.liberar()
+  }
+}
+
+/**
+ * Evidencia del punto ya registrada con esta huella (RLS: el guardia lee sus
+ * propias evidencias). null si no existe, si la huella difiere o si la consulta
+ * falla: en ese caso se sube normalmente.
+ */
+export async function evidenciaExistentePorHuella(
+  ejecucionPuntoId: string,
+  sha256: string,
+): Promise<EvidenciaPuntoRonda | null> {
+  const senal = senalConTimeout(TIMEOUT_RPC_MS)
+  try {
+    const { data, error, status } = await (supabase
+      .from('evidencias')
+      .select('id, proceso_id, bucket, storage_path, created_at, contenido_sha256')
+      .eq('proceso_tipo', 'ronda')
+      .eq('proceso_id', ejecucionPuntoId)
+      .eq('tipo_evidencia', 'punto_control')
+      .limit(1) as any)
+      .abortSignal(senal.signal)
+      .maybeSingle()
+    if (error) {
+      if (esFallaDeRed(error, status)) {
+        registrarErrorRed('verificar_evidencia', {
+          err_code: senal.vencida() ? 'timeout' : 'red', err_message: error.message,
+          http_status: status, ejecucion_punto_id: ejecucionPuntoId,
+        })
+      }
+      return null
+    }
+    if (!data || data.contenido_sha256 !== sha256) return null
+    const { contenido_sha256: _omitida, ...evidencia } = data
+    return evidencia as EvidenciaPuntoRonda
   } catch {
-    return { data: null, error: 'No hay conexión para subir la foto.' }
+    return null
+  } finally {
+    senal.liberar()
   }
 }
 
@@ -1270,15 +1413,19 @@ export async function registrarPuntoRonda(
   gps: GpsPuntoRonda | null,
   hayNovedad = false,
 ): Promise<ResultadoRondas<RespuestaRegistrarPunto>> {
-  const { data, error } = await supabase.rpc('registrar_punto_ronda', {
+  // Idempotente en el servidor: un reintento tras una respuesta perdida
+  // devuelve `ya_registrado` con la ejecución, sin volver a escribir.
+  const r = await rpcRondaConRed('registrar_punto_ronda', 'registrar_punto_ronda', {
     p_ejecucion_punto_id: ejecucionPuntoId,
     p_latitud: gps?.latitud ?? null,
     p_longitud: gps?.longitud ?? null,
     p_precision_metros: gps?.precision_metros ?? null,
     p_hay_novedad: hayNovedad,
-  })
+  }, { idempotente: true, ejecucionPuntoId })
+  const { data, error } = r
 
   if (error) {
+    if (esResultadoSinRed(r)) return { data: null, error: MENSAJE_SIN_RED_RONDA }
     return fallaRpc('registrar_punto_ronda', error, 'No se pudo registrar el punto.')
   }
 
