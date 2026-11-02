@@ -44,9 +44,11 @@ import {
   FRECUENCIA_SUPERVISION_DEFECTO_HORAS,
   estadoSupervision,
   horasParaVencimiento,
+  exigibilidadSupervision,
   indexarUltimaSupervision,
   supervisionProximaAVencer,
 } from '@/lib/supervisiones'
+import { cargarContextoExigibilidad } from '@/lib/supervision-universo'
 
 export const runtime = 'nodejs'
 
@@ -730,9 +732,14 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   // Independiente de si hay turnos hoy/manana: se evalua siempre.
   // Vigencia: unica definicion, en lib/supervisiones.ts. No interviene el mes.
   const ultimaPorObjetivo = indexarUltimaSupervision(ultimasSupervisiones)
+  // Mismo criterio de exigibilidad que el panel, el dashboard y la agenda
+  // (auditoría oct-2026: el push avisaba objetivos sin turnos recientes).
+  // Si fallan los turnos, el contexto no descarta a nadie (conservador).
+  const contextoExigibilidad = await cargarContextoExigibilidad(admin.client)
 
   for (const objetivo of objetivosSupervision) {
     if ((objetivo.estado || 'activo') !== 'activo') continue
+    if (!exigibilidadSupervision(objetivo, contextoExigibilidad).exige) continue
 
     const frecuenciaHoras = objetivo.frecuencia_supervision_horas || FRECUENCIA_SUPERVISION_DEFECTO_HORAS
     const ultimaIso = ultimaPorObjetivo.get(objetivo.id) || null

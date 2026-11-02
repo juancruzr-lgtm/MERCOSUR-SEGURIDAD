@@ -79,10 +79,16 @@ as $fn$
             and (i.accion = 'justificacion'
                  or (i.accion = 'cierre_administrativo'
                      and coalesce(i.comentario, '') ilike '%saneamiento%')))
-    or lower(coalesce(to_jsonb(p_alerta) ->> 'motivo_intervencion', ''))
-         in ('cumplida', 'realizada', 'error_tecnico', 'error_administrativo', 'administrativo')
-    or lower(coalesce((select ult.j ->> 'motivo' from ult), ''))
-         in ('cumplida', 'realizada', 'error_tecnico', 'error_administrativo', 'administrativo');
+    -- Motivos de 20261115120000 ('ronda_realizada', 'error_tecnico', 'administrativa').
+    -- El cierre automático del sistema (origen 'sistema': ronda retomada fuera
+    -- de su ventana) NO sanea: la ventana igual se incumplió.
+    or (coalesce((select ult.j ->> 'origen' from ult), 'supervisor') <> 'sistema'
+        and (lower(coalesce(to_jsonb(p_alerta) ->> 'motivo_intervencion', ''))
+               in ('ronda_realizada', 'error_tecnico', 'administrativa',
+                   'cumplida', 'realizada', 'error_administrativo', 'administrativo')
+             or lower(coalesce((select ult.j ->> 'motivo' from ult), ''))
+               in ('ronda_realizada', 'error_tecnico', 'administrativa',
+                   'cumplida', 'realizada', 'error_administrativo', 'administrativo')));
 $fn$;
 
 comment on function public.ronda_alerta_no_penaliza(public.ronda_alertas) is
