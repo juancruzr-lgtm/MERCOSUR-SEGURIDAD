@@ -34,6 +34,19 @@ export function nombreEmpleado(usuario: UsuarioEmpleado): string {
   return [usuario.apellido, usuario.nombre].filter(Boolean).join(', ') || usuario.id
 }
 
+/**
+ * fetch sin el caché de datos de Next 14. Todo cliente de Supabase que se cree
+ * en el servidor tiene que usarlo.
+ *
+ * En una ruta de API, Next 14.2 guarda en su Data Cache —sin vencimiento— cada
+ * GET hecho con fetch, y supabase-js lee con GET. `dynamic = 'force-dynamic'`
+ * NO lo evita: sólo marca la respuesta de la ruta como dinámica. La misma URL
+ * de PostgREST devolvía la misma foto vieja: en noviembre de 2026 Mi Planilla
+ * de octubre quedó congelada en lo que había el 30/10 (sin el 30 ni el 31) y la
+ * de noviembre en 0 h, para todos. También quedaba guardado auth.getUser(token).
+ */
+export const fetchSinCache: typeof fetch = (input, init) => fetch(input, { ...init, cache: 'no-store' })
+
 export function getSupabaseAdmin(): AdminClientResult {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -47,6 +60,7 @@ export function getSupabaseAdmin(): AdminClientResult {
         autoRefreshToken: false,
         persistSession: false,
       },
+      global: { fetch: fetchSinCache },
     }),
   }
 }

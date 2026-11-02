@@ -7,9 +7,9 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { NextRequest } from 'next/server'
-import { getBearerToken } from '@/app/api/_lib/employee-auth'
+import { fetchSinCache, getBearerToken } from '@/app/api/_lib/employee-auth'
 
-const sinCache: typeof fetch = (url, init) => fetch(url, { ...init, cache: 'no-store' })
+const sinCache = fetchSinCache
 
 export const SIN_CACHE = { 'Cache-Control': 'private, no-store, max-age=0' }
 

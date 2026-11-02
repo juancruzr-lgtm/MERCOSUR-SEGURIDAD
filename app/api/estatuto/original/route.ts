@@ -18,7 +18,7 @@ import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
-import { getBearerToken } from '@/app/api/_lib/employee-auth'
+import { fetchSinCache, getBearerToken } from '@/app/api/_lib/employee-auth'
 import { nombreDescarga, rutaOriginal } from '@/lib/estatuto-original'
 
 export const dynamic = 'force-dynamic'
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
   // Cliente con la identidad de quien llama: RLS y auth.uid() son los suyos.
   const db = createClient(url, anon, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${token}` } },
+    global: { fetch: fetchSinCache, headers: { Authorization: `Bearer ${token}` } },
   })
 
   const { data: usuario, error: errUsuario } = await db.auth.getUser(token)

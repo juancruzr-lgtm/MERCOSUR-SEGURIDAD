@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
-import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
+import { fetchSinCache, getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { alcanceDe } from '@/lib/capacidades'
 import { firmaImagenValida, validarFotoOperativa } from '../../_lib/validar-foto'
 
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
 
   // Ejecuta la misma definición autoritativa de turno vigente que usan las RPC.
   const usuarioClient = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
+    global: { fetch: fetchSinCache, headers: { Authorization: `Bearer ${token}` } },
     auth: { autoRefreshToken: false, persistSession: false },
   })
 
