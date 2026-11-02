@@ -758,7 +758,8 @@ describe('plantillaLiquidacionResumenGuardia', () => {
     // TOTAL GENERAL suma los subtotales, nunca el rango entero (los contaría
     // dos veces)
     expect(m.get('A18')?.v).toBe('TOTAL GENERAL')
-    expect(m.get('I18')?.f).toBe('I10+I13+I16')
+    expect(m.get('I18')?.f).toBe('I10+I16') // horas: sin supervisores (JC 02/11/2026)
+    expect(m.get('AO18')?.f).toBe('AO10+AO13+AO16') // plata: todos
     expect(m.get('I18')?.v).toBe(20)
     // Filas separadoras realmente vacías
     for (const r of [11, 14, 17]) {
@@ -1111,9 +1112,9 @@ describe('bloques y mensualizados', () => {
     // 13 subtotal B2 · 14 sep · 15 título B3 · 16 ROMERO · 17 subtotal · 18 sep · 19 TOTAL
     expect(m.get('D16')?.v).toBe('ROMERO, JUAN')
     expect(m.get('A19')?.v).toBe('TOTAL GENERAL')
-    expect(m.get('I19')?.f).toBe('I9+I13+I17')
-    // Admin (grupo A) NO tiene horas inventadas: 12 vigilador + 150 supervisor + 0 admin.
-    expect(m.get('I19')?.v).toBe(162)
+    expect(m.get('I19')?.f).toBe('I9+I17') // horas: sin supervisores (JC 02/11/2026)
+    // Total de horas = sólo vigilancia: 12 del vigilador (las 150 del supervisor no van; el admin no tiene).
+    expect(m.get('I19')?.v).toBe(12)
     expect(p.ref).toBe('A1:BE19')
   })
 })
