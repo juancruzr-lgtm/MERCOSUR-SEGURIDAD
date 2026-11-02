@@ -35,7 +35,8 @@
 --  5. registros_asistencia_validar_liquidable — BEFORE INSERT/UPDATE: toda
 --     asistencia con horas liquidables y SIN fichaje propio (confirmación de
 --     supervisor/admin, carga manual, cierre con tramos) exige evidencia del
---     turno (fotos de ingreso o rondas del vigilador) o una excepción
+--     turno (fotos de ingreso o rondas del vigilador, o una supervisión cargada
+--     en el objetivo durante el turno) o una excepción
 --     autorizada vigente; y NUNCA puede liquidar un intervalo que ya cubre un
 --     reemplazo con evidencia (doble liquidación). Además, las columnas que
 --     definen horas liquidables no se escriben por PostgREST directo: sólo por
@@ -297,6 +298,15 @@ $$;
 revoke all on function public.puede_autorizar_excepcion_asistencia(uuid) from public, anon;
 grant execute on function public.puede_autorizar_excepcion_asistencia(uuid) to authenticated, service_role;
 
+-- Para la pantalla: ¿el usuario de la sesión puede autorizar? (identidad desde auth.uid()).
+create or replace function public.puedo_autorizar_excepcion_asistencia()
+returns boolean language sql stable security definer set search_path = public, pg_catalog as $$
+  select coalesce((select public.puede_autorizar_excepcion_asistencia(u.id) from public.usuarios u
+                   where u.auth_user_id = auth.uid() and u.estado = 'activo' limit 1), false)
+$$;
+revoke all on function public.puedo_autorizar_excepcion_asistencia() from public, anon;
+grant execute on function public.puedo_autorizar_excepcion_asistencia() to authenticated;
+
 create or replace function public.autorizar_excepcion_asistencia(
   p_operacion_id uuid, p_turno_id uuid, p_motivo text)
 returns jsonb
@@ -364,6 +374,10 @@ grant execute on function public.autorizar_excepcion_asistencia(uuid, uuid, text
 -- Tipo de evidencia de presencia de un vigilador en un turno.
 --   fichaje              registro propio con hora_entrada_real (GPS/app)
 --   foto_o_ronda         fotos de ingreso (evidencias) o rondas del vigilador en el turno
+--   constatacion_supervisor  una supervisión cargada en el objetivo DURANTE el
+--                        turno: el supervisor constató la cobertura en el lugar.
+--                        El comentario de una confirmación (supervisor_intervenciones)
+--                        NO cuenta: no prueba presencia en el puesto.
 --   excepcion_autorizada asistencia con excepción autorizada consumida
 --   sin_evidencia        hay asistencia liquidable pero nada que la respalde
 --   sin_registro         no hay asistencia
@@ -377,6 +391,13 @@ returns text language sql stable security definer set search_path = public, pg_c
     when exists (select 1 from public.evidencias e where e.turno_id = p_turno_id and e.guardia_id = p_guardia_id)
       or exists (select 1 from public.ronda_ejecuciones x where x.turno_id = p_turno_id and x.guardia_id = p_guardia_id
                    and x.iniciada_at is not null) then 'foto_o_ronda'
+    when exists (select 1 from public.turnos t
+                 join public.supervisiones s on s.objetivo_id = t.objetivo_id
+                 where t.id = p_turno_id
+                   and s.created_at >= (t.fecha + t.hora_inicio) at time zone 'America/Argentina/Buenos_Aires'
+                   and s.created_at <= (t.fecha + t.hora_fin
+                                        + case when t.hora_fin <= t.hora_inicio then interval '1 day' else interval '0 day' end)
+                                       at time zone 'America/Argentina/Buenos_Aires') then 'constatacion_supervisor'
     when exists (select 1 from public.registros_asistencia r
                  where r.turno_id = p_turno_id and coalesce(r.guardia_final_id, r.guardia_id) = p_guardia_id
                    and r.excepcion_asistencia_id is not null
@@ -531,7 +552,7 @@ begin
   from unnest((
     select range_agg(tsrange(c.inicio, c.fin, '[)'))
     from public.turno_coberturas(p_turno_id) c
-    where c.evidencia in ('fichaje', 'foto_o_ronda', 'excepcion_autorizada') and c.fin > c.inicio
+    where c.evidencia in ('fichaje', 'foto_o_ronda', 'constatacion_supervisor', 'excepcion_autorizada') and c.fin > c.inicio
   )) r;
 
   v_doble := greatest(0, round(v_liq - v_prog, 2));
@@ -539,7 +560,7 @@ begin
     when coalesce(v_t.estado, '') in ('reemplazado', 'anulado', 'cancelado') then 'sin_obligacion'
     when v_doble > 0.01 then 'doble_liquidacion'
     when v_cubiertas >= v_prog and v_prog > 0 then
-      case when v_titular_ev in ('fichaje', 'foto_o_ronda', 'excepcion_autorizada') then 'cubierto_titular' else 'cubierto_reemplazo' end
+      case when v_titular_ev in ('fichaje', 'foto_o_ronda', 'constatacion_supervisor', 'excepcion_autorizada') then 'cubierto_titular' else 'cubierto_reemplazo' end
     when v_cubiertas > 0 then 'parcial'
     else 'descubierto' end;
 
@@ -692,7 +713,7 @@ begin
                                      - (v_t.fecha + v_t.hora_inicio)) / 3600.0, 2);
   select coalesce(sum(c.horas_atribuidas), 0) into v_cubierto
   from public.turno_coberturas(v_t.id) c
-  where c.rol = 'reemplazo' and c.evidencia in ('fichaje', 'foto_o_ronda', 'excepcion_autorizada');
+  where c.rol = 'reemplazo' and c.evidencia in ('fichaje', 'foto_o_ronda', 'constatacion_supervisor', 'excepcion_autorizada');
   if v_new_h + v_cubierto > v_prog + 0.01 then
     raise exception using
       errcode = 'P0001',
@@ -705,7 +726,7 @@ begin
     return v_exc_old;
   end if;
   v_ev := public.asistencia_evidencia_tipo(v_t.id, v_guardia);
-  if v_ev in ('fichaje', 'foto_o_ronda') then
+  if v_ev in ('fichaje', 'foto_o_ronda', 'constatacion_supervisor') then
     return null;
   end if;
   select e.id into v_exc
@@ -718,7 +739,7 @@ begin
   if v_exc is null then
     raise exception using
       errcode = 'P0001',
-      message = 'CONFIRMACION_SIN_EVIDENCIA: no hay fichaje, fotos ni rondas del vigilador en este turno. Para confirmar horas hace falta una excepción autorizada (autorizar_excepcion_asistencia) con motivo.';
+      message = 'CONFIRMACION_SIN_EVIDENCIA: no hay fichaje, fotos ni rondas del vigilador ni una supervisión en el objetivo durante el turno. Para confirmar horas hace falta una excepción autorizada (autorizar_excepcion_asistencia) con motivo.';
   end if;
   return v_exc;
 end $$;

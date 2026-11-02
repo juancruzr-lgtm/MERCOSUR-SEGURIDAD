@@ -87,12 +87,16 @@ create table public.evidencias (
 create table public.ronda_ejecuciones (
   id uuid primary key default gen_random_uuid(), ronda_base_id uuid, turno_id uuid, guardia_id uuid, objetivo_id uuid,
   puesto_id uuid, fecha_operativa date, iniciada_at timestamptz default now(), finalizada_at timestamptz, estado text default 'en_curso');
+-- Columnas de producción (information_schema, 02/11/2026).
+create table public.supervisiones (
+  id uuid primary key default gen_random_uuid(), objetivo_id uuid, supervisor_id uuid, plantilla_id uuid, lat numeric, lng numeric,
+  precision_gps numeric, estado text, observaciones text, created_at timestamptz default now());
 
 -- Permisos de tabla como en producción: authenticated tiene DML completo y la
 -- RLS decide.
 grant select, insert, update, delete on public.turnos, public.registros_asistencia, public.registros_asistencia_auditoria,
   public.turnos_auditoria to authenticated;
-grant select on public.usuarios, public.objetivos, public.puestos, public.supervisor_zonas, public.evidencias, public.ronda_ejecuciones to authenticated;
+grant select on public.usuarios, public.objetivos, public.puestos, public.supervisor_zonas, public.evidencias, public.ronda_ejecuciones, public.supervisiones to authenticated;
 grant all on all tables in schema public to service_role;
 
 -- ── Funciones de alcance (copia de producción) ──────────────────────────────

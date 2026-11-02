@@ -189,3 +189,40 @@ columnas nuevas (auditoría, nulables, nadie más las usa) y los deja inmutables
 definiciones previas que restaurar. Probado en PGlite (vuelve al comportamiento anterior sin
 perder registros). La corrección de Eduardo, si se aplicara, se revierte con los valores
 guardados (`horas_liquidables_antes_anulacion`, `turnos_auditoria`).
+
+## 7. Circuito de excepciones en pantalla y constatación del supervisor (02/11/2026)
+
+**Regla aplicada.** Las horas se reconocen para liquidación cuando tienen respaldo:
+fichaje, fotos o rondas del vigilador, **o una supervisión cargada en el objetivo
+durante el turno** (el supervisor constató la cobertura en el lugar). Una confirmación
+sin ese respaldo necesita una excepción autorizada. El comentario de la propia
+confirmación ("Si confirmado") no es respaldo.
+
+- Base (`20261121120000`): `asistencia_evidencia_tipo` devuelve `constatacion_supervisor`
+  si hay una fila en `supervisiones` del objetivo del turno con `created_at` entre el
+  inicio y el fin del turno (hora Argentina; nocturnos hasta el día siguiente). Cuenta
+  como respaldo en la validación, la cobertura real y la doble liquidación (que sigue
+  bloqueando aunque haya respaldo). Nueva `puedo_autorizar_excepcion_asistencia()`
+  (identidad por `auth.uid()`) para que la pantalla sepa si mostrar la autorización.
+- App: `components/asistencia/ExcepcionAsistenciaPaso.tsx` + `lib/excepcion-asistencia.ts`.
+  Se usa dentro de las tres confirmaciones existentes (Revisión Operativa de
+  administración, alertas de la Vista Supervisor y Bandeja de planillas); no hay
+  pantalla aparte. Si la base rechaza con `CONFIRMACION_SIN_EVIDENCIA`, el mismo panel
+  muestra el paso: quien puede autorizar escribe el motivo (≥ 20) y un botón
+  "Autorizar excepción y confirmar" crea la excepción y reintenta la confirmación
+  (2 clics); quien no puede (supervisor de zona) ve a quién pedírsela. El registro
+  (quién, rol, cuándo, motivo) lo deja la base al consumir la excepción.
+- Pruebas: PGlite `turnos-cobertura` 66/66 (+5: supervisión dentro/fuera del horario,
+  mensaje, permiso); `tests/excepcion-asistencia.test.ts` (6) y un caso nuevo en
+  `cobertura-turnos.test.ts`.
+
+**Impacto medido en producción (SELECT, 02/11/2026)** sobre las 218 confirmaciones de
+octubre sin fichaje: 20 con respaldo del vigilador, **160 sólo con una supervisión en el
+objetivo durante el turno**, 38 sin ningún respaldo (estas son las que necesitarían
+excepción con la regla nueva).
+
+**Limitación [E] a decidir por Gerencia:** `supervisiones` registra el objetivo, no el
+vigilador ni el puesto. En objetivos con varias posiciones simultáneas, una supervisión
+respalda a todos los turnos del objetivo en ese horario. Si Gerencia quiere que la
+constatación identifique al vigilador, hace falta que la supervisión lo registre
+(cambio de formulario) — no se inventó esa regla.

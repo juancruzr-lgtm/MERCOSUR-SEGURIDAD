@@ -153,6 +153,8 @@ import RegistrarBaja from '@/components/bajas/RegistrarBaja'
 import Login, { perfilDeSesionActual, resolverDelegacionGerencia } from './Login'
 import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
+import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
+import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -12060,6 +12062,8 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const operacionesEnCurso = useRef<Set<string>>(new Set())
   const operacionesIds = useRef<Map<string, string>>(new Map())
   const [confirmacionManualAceptada, setConfirmacionManualAceptada] = useState(false)
+  // La base rechazó la confirmación por falta de respaldo: se ofrece la excepción.
+  const [sinRespaldo, setSinRespaldo] = useState(false)
   const [historialesExpandidos, setHistorialesExpandidos] = useState<Set<string>>(new Set())
 
   const hoy = fechaHoyArgentina()
@@ -12520,6 +12524,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     setMensaje('')
     setAccionActiva({ alerta, accion, intervencionOrigen })
     setConfirmacionManualAceptada(false)
+    setSinRespaldo(false)
     setFormIntervencion({
       guardia_id: alerta.turno.guardia_id || '',
       comentario: '',
@@ -12532,6 +12537,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     setFormIntervencion({ guardia_id:'', comentario:'', motivo:'' })
     setError('')
     setConfirmacionManualAceptada(false)
+    setSinRespaldo(false)
   }
 
   const recargarEstadoServidor = async (turnoId: string) => {
@@ -12638,6 +12644,11 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       cerrarAccion()
       setTab(['comentario', 'reapertura', 'anulacion_cobertura'].includes(accion) ? 'pendientes' : 'intervenidas')
     } catch (actionError) {
+      if (esConfirmacionSinEvidencia(actionError)) {
+        // Rechazo limpio de la base (no aplicó nada): se ofrece la excepción en el mismo panel.
+        setSinRespaldo(true)
+        return
+      }
       try {
         await recargarEstadoServidor(turno.id)
       } catch {
@@ -12783,6 +12794,12 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
             placeholder={accionActiva.accion === 'confirmar_cubierto' ? 'Detalle de la verificación manual realizada' : 'Detalle de la intervención'}
           />
         </div>
+
+        {sinRespaldo && ['confirmar_cubierto', 'confirmar_asistencia'].includes(accionActiva.accion) && (
+          <div style={{ marginBottom:12 }}>
+            <ExcepcionAsistenciaPaso turnoId={alerta.turno.id} onAutorizada={ejecutarAccion} deshabilitado={Boolean(loadingAccion)} />
+          </div>
+        )}
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
           <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={cerrarAccion} disabled={Boolean(loadingAccion)}>Cancelar</button>

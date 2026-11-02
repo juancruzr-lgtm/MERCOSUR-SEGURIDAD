@@ -45,6 +45,8 @@ import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import { alertaEstaIntervenida, calcularMinutosTardanzaRegistro, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, evaluarSinFichar, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOperativaCompartida } from '@/lib/revision-operativa'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
+import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
+import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 // Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
@@ -531,6 +533,8 @@ export default function SupervisorMobile({ user }: any) {
   const [formNuevoGuardia, setFormNuevoGuardia] = useState({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', rol:'guardia', foto_url:'' })
   const [formNuevoObjetivo, setFormNuevoObjetivo] = useState({ nombre:'', cliente:'', direccion:'', lat:'', lng:'', radio_metros:'200', zona_id:'' })
   const [accionAlerta, setAccionAlerta] = useState<AccionAlertaActiva | null>(null)
+  // La base rechazó la confirmación por falta de respaldo: se ofrece la excepción.
+  const [sinRespaldo, setSinRespaldo] = useState(false)
   const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const operacionesAlertaEnCurso = useRef<Set<string>>(new Set())
   const operacionesAlertaIds = useRef<Map<string, string>>(new Map())
@@ -2007,6 +2011,7 @@ export default function SupervisorMobile({ user }: any) {
 
   const cerrarAccionAlerta = () => {
     setAccionAlerta(null)
+    setSinRespaldo(false)
     setFormIntervencion({ guardia_id:'', comentario:'', motivo:'' })
   }
 
@@ -2152,6 +2157,11 @@ export default function SupervisorMobile({ user }: any) {
       setMensaje(data?.estado === 'ya_aplicada' ? 'Operación ya aplicada. Se mostró el estado actual del servidor.' : '✓ Intervención registrada y verificada en el servidor.')
       cerrarAccionAlerta()
     } catch (actionError) {
+      if (esConfirmacionSinEvidencia(actionError)) {
+        // Rechazo limpio de la base (no aplicó nada): se ofrece la excepción en el mismo panel.
+        setSinRespaldo(true)
+        return
+      }
       const message = actionError instanceof Error
         ? actionError.message
         : typeof actionError === 'object' && actionError && 'message' in actionError
@@ -2750,6 +2760,10 @@ export default function SupervisorMobile({ user }: any) {
           onChange={e => setFormIntervencion(prev => ({ ...prev, comentario: e.target.value }))}
           placeholder={accionAlerta.accion === 'confirmar_asistencia' ? 'Ej.: Verificado en el puesto a las 08:30. El guardia no tenía celular.' : 'Ej.: Se llamó al guardia. Informa que llega en 10 minutos.'}
         />
+
+        {sinRespaldo && accionAlerta.accion === 'confirmar_asistencia' && (
+          <ExcepcionAsistenciaPaso turnoId={turno.id} onAutorizada={ejecutarAccionAlerta} deshabilitado={Boolean(asignando)} />
+        )}
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
           <button type="button" style={secondaryButton} onClick={cerrarAccionAlerta} disabled={Boolean(asignando)}>

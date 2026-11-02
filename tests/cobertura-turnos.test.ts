@@ -104,6 +104,13 @@ describe('no doble liquidación', () => {
     expect(c.coberturas[0].evidencia).toBe('excepcion_autorizada')
     expect(c.horasDobleLiquidacion).toBe(8)
   })
+
+  it('una supervisión en el objetivo durante el turno respalda la confirmación del titular', () => {
+    const c = coberturaRealTurno(tEdu, [tEdu], [rEduManual], { turnosConSupervision: new Set(['t-edu']) })
+    expect(c.coberturas[0].evidencia).toBe('constatacion_supervisor')
+    expect(c.estado).toBe('cubierto_titular')
+    expect(c.horasCubiertasConEvidencia).toBe(8)
+  })
 })
 
 describe('turno nocturno que cruza medianoche pertenece al día de inicio', () => {

@@ -150,6 +150,27 @@ await sql(`insert into evidencias (turno_id, guardia_id, objetivo_id, proceso_ti
 const regFoto = (await confirmar(SUP_A, T_FOTO, OTRO))[0].r
 ok('confirmación con fotos de ingreso del vigilador → aceptada sin excepción', !!regFoto && (await uno(`select excepcion_asistencia_id from registros_asistencia where id = $1`, [regFoto])).excepcion_asistencia_id === null)
 
+// ── 5b) Constatación del supervisor en el lugar (supervisión durante el turno) ─
+// Regla: las horas se reconocen con respaldo del vigilador o con una supervisión
+// cargada en el objetivo durante el turno. El comentario de la confirmación no alcanza.
+const T_SUPV = await nuevo(SUP_A, { guardia: PRI, objetivo: DEP, puesto: P_DEP, fecha: '2026-11-03', ini: '07:00', fin: '15:00', creado: '2026-10-01 00:00+00' })
+await sql(`insert into supervisiones (objetivo_id, supervisor_id, estado, created_at) values ($1, $2, 'ok', '2026-11-03 12:00+00')`, [DEP, SUP])
+const regSupv = (await confirmar(SUP_A, T_SUPV, PRI, 'confirmacion_supervisor', 'Lo vi en el puesto durante la supervisión'))[0].r
+ok('supervisión cargada en el objetivo durante el turno → confirmación aceptada sin excepción',
+  !!regSupv && (await uno(`select excepcion_asistencia_id from registros_asistencia where id = $1`, [regSupv])).excepcion_asistencia_id === null)
+c = await cobertura(ADM_A, T_SUPV)
+ok('la cobertura muestra la evidencia constatacion_supervisor', c.estado === 'cubierto_titular' && c.coberturas[0].evidencia === 'constatacion_supervisor', JSON.stringify(c))
+const T_SUPV_FUERA = await nuevo(SUP_A, { guardia: PRI, objetivo: DEP, puesto: P_DEP, fecha: '2026-11-04', ini: '07:00', fin: '15:00', creado: '2026-10-01 00:00+00' })
+// 06:00 AR (antes del turno) y 15:30 AR (después): no constatan este turno.
+await sql(`insert into supervisiones (objetivo_id, supervisor_id, estado, created_at) values ($1, $2, 'ok', '2026-11-04 09:00+00'), ($1, $2, 'ok', '2026-11-04 18:30+00')`, [DEP, SUP])
+ok('supervisión fuera del horario del turno no respalda → rechazada',
+  await falla(() => confirmar(SUP_A, T_SUPV_FUERA, PRI), /CONFIRMACION_SIN_EVIDENCIA/))
+ok('el mensaje de rechazo menciona la supervisión como respaldo posible',
+  /supervisión en el objetivo/.test(String(await falla(() => confirmar(SUP_A, T_SUPV_FUERA, PRI), /NADA/))))
+ok('puedo_autorizar_excepcion_asistencia: admin sí, supervisor de zona no',
+  (await como(ADM_A, () => uno(`select public.puedo_autorizar_excepcion_asistencia() v`))).v === true
+  && (await como(SUP_A, () => uno(`select public.puedo_autorizar_excepcion_asistencia() v`))).v === false)
+
 // ── 6) Superposición rechazada ──────────────────────────────────────────────
 ok('mismo vigilador en dos turnos simultáneos (alta directa del supervisor) → rechazada',
   await falla(() => insTurno(SUP_A, { guardia: EDU, objetivo: DEP, puesto: P_DEP, fecha: '2026-10-29', ini: '14:00', fin: '22:00' }), /TURNO_SUPERPUESTO/))

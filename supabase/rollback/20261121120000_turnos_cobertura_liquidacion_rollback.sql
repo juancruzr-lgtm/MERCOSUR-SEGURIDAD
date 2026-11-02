@@ -30,6 +30,7 @@ drop function if exists public.turno_coberturas(uuid);
 drop function if exists public.turno_horas_liquidadas(uuid, uuid);
 drop function if exists public.asistencia_evidencia_tipo(uuid, uuid);
 drop function if exists public.autorizar_excepcion_asistencia(uuid, uuid, text);
+drop function if exists public.puedo_autorizar_excepcion_asistencia();
 drop function if exists public.puede_autorizar_excepcion_asistencia(uuid);
 
 -- Las tablas de auditoría quedan, inmutables y sin escritor.

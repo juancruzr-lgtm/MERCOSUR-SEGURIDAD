@@ -49,7 +49,8 @@ export interface RegistroCobertura extends RegistroUniverso {
   registro_anulado_at?: string | null
 }
 
-export type TipoEvidencia = 'fichaje' | 'foto_o_ronda' | 'excepcion_autorizada' | 'sin_evidencia' | 'sin_registro'
+export type TipoEvidencia =
+  | 'fichaje' | 'foto_o_ronda' | 'constatacion_supervisor' | 'excepcion_autorizada' | 'sin_evidencia' | 'sin_registro'
 
 export interface CoberturaParcial {
   turnoId: string
@@ -76,6 +77,8 @@ export interface CoberturaRealTurno {
 export interface OpcionesCobertura {
   /** Claves `${turnoId}:${guardiaId}` con fotos de ingreso o rondas del turno. */
   evidenciaExterna?: Set<string>
+  /** Turnos con una supervisión cargada en su objetivo durante el turno (constatación en el lugar). */
+  turnosConSupervision?: Set<string>
   /** Registros con excepción autorizada (ids de registros_asistencia). */
   registrosConExcepcion?: Set<string>
 }
@@ -132,6 +135,7 @@ function evidenciaDe(
 ): TipoEvidencia {
   if (todos.some(r => r.hora_entrada_real != null && r.cobertura_anulada_at == null)) return 'fichaje'
   if (guardiaId && opciones.evidenciaExterna?.has(`${turno.id}:${guardiaId}`)) return 'foto_o_ronda'
+  if (opciones.turnosConSupervision?.has(turno.id)) return 'constatacion_supervisor'
   if (!principal) return 'sin_registro'
   if (principal.id && opciones.registrosConExcepcion?.has(principal.id)) return 'excepcion_autorizada'
   return 'sin_evidencia'
@@ -176,7 +180,8 @@ export function coberturaRealTurno(
   }
 
   const conEvidencia = (c: CoberturaParcial) =>
-    c.evidencia === 'fichaje' || c.evidencia === 'foto_o_ronda' || c.evidencia === 'excepcion_autorizada'
+    c.evidencia === 'fichaje' || c.evidencia === 'foto_o_ronda'
+    || c.evidencia === 'constatacion_supervisor' || c.evidencia === 'excepcion_autorizada'
 
   // Minutos cubiertos con evidencia: unión de intervalos dentro del turno.
   const tramos: [number, number][] = []

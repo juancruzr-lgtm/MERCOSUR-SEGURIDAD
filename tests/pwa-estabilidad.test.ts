@@ -383,7 +383,7 @@ describe('actualización de Service Worker sin crecimiento ilimitado', () => {
     expect(entradas.length).toBeLessThanOrEqual(40)
     expect(entradas).toContain('https://app.test/dashboard') // el app-shell no se recorta
     expect(entradas.some(u => u.includes('_next/static') || u.includes('openstreetmap'))).toBe(false)
-  })
+  }, 30_000) // 300 fetch simulados en serie: ~5 s, al borde del límite por defecto
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
