@@ -29,7 +29,12 @@ import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
-import { estadoSupervision, frecuenciaSupervision, supervisionProximaAVencer } from '@/lib/supervisiones'
+import {
+  CONTEXTO_EXIGIBILIDAD_VACIO, clasificarUniversoSupervision, estadoSupervision, fechaArgentinaDe,
+  frecuenciaSupervision, sugerirObjetivoConTurno, supervisionProximaAVencer,
+  type ContextoExigibilidad,
+} from '@/lib/supervisiones'
+import { cargarContextoExigibilidad, cargarUltimaSupervisionPorObjetivo, objetivosConTurnoEn } from '@/lib/supervision-universo'
 // LA resolución de responsables operativos, compartida con AppClient y push.
 import { TEXTO_ORIGEN, guardiaCubreInstante, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import type { OrigenResolucion } from '@/lib/responsables-operativos'
@@ -542,6 +547,7 @@ export default function SupervisorMobile({ user }: any) {
   const [formExc, setFormExc] = useState({ supervisor_id: '', fecha: '', hora_inicio: '', hora_fin: '', zona: '', motivo: '' })
   const [guardandoExc, setGuardandoExc] = useState(false)
   const [ultimaSupervisionPorObjetivo, setUltimaSupervisionPorObjetivo] = useState<Record<string, string>>({})
+  const [contextoExigibilidad, setContextoExigibilidad] = useState<ContextoExigibilidad>(CONTEXTO_EXIGIBILIDAD_VACIO)
   const [agendaZonaFiltro, setAgendaZonaFiltro] = useState('todas')
   const [agendaEstadoFiltro, setAgendaEstadoFiltro] = useState<'todos'|'vencido'|'proximo'>('todos')
   const [supervisionObjetivoId, setSupervisionObjetivoId] = useState('')
@@ -620,6 +626,7 @@ export default function SupervisorMobile({ user }: any) {
       zonasResult,
       supervisorZonasResult,
       ultimasSupervisionesResult,
+      contextoExigibilidadResult,
     ] = await Promise.all([
       supabase
         .from('turnos')
@@ -688,14 +695,12 @@ export default function SupervisorMobile({ user }: any) {
       supabase
         .from('supervisor_zonas')
         .select('id, supervisor_id, zona_id'),
-      // Vigencia de supervisiones: sin filtro de fecha y con límite explícito.
-      // Sin el límite, PostgREST corta en 1000 y los objetivos supervisados hace
-      // tiempo reaparecen como "nunca supervisado".
-      supabase
-        .from('supervisiones')
-        .select('objetivo_id, created_at')
-        .order('created_at', { ascending: false })
-        .limit(5000),
+      // Vigencia de supervisiones: última VÁLIDA por objetivo (sin
+      // `incompleta`, como E1). RPC agregada si existe; si no, paginado. El
+      // `.limit(5000)` de antes lo recortaba PostgREST a 1000 en silencio.
+      cargarUltimaSupervisionPorObjetivo(supabase),
+      // Criterio único de exigibilidad: turnos de la ventana + suspensiones.
+      cargarContextoExigibilidad(supabase),
     ])
 
     let guardiasData = guardiasResult.data
@@ -763,8 +768,9 @@ export default function SupervisorMobile({ user }: any) {
       setError(supervisorZonasError.message)
     }
 
-    if (ultimasSupervisionesError && !/supervisiones|schema cache|does not exist/i.test(ultimasSupervisionesError.message)) {
-      setError(ultimasSupervisionesError.message)
+    if (ultimasSupervisionesError) {
+      const mensaje = (ultimasSupervisionesError as any)?.message || String(ultimasSupervisionesError)
+      if (!/supervisiones|schema cache|does not exist/i.test(mensaje)) setError(mensaje)
     }
 
     const turnosRango = ((turnosData || []) as Turno[]).filter(t => {
@@ -784,10 +790,9 @@ export default function SupervisorMobile({ user }: any) {
 
     const ultimaPorObjetivo: Record<string, string> = {}
     if (!ultimasSupervisionesError) {
-      ;(ultimasSupervisionesResult.data || []).forEach((s: any) => {
-        if (!ultimaPorObjetivo[s.objetivo_id]) ultimaPorObjetivo[s.objetivo_id] = s.created_at
-      })
+      ultimasSupervisionesResult.indice.forEach((iso, objetivoId) => { ultimaPorObjetivo[objetivoId] = iso })
     }
+    setContextoExigibilidad(contextoExigibilidadResult)
 
     setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
@@ -1144,11 +1149,19 @@ export default function SupervisorMobile({ user }: any) {
     [turnos, objetivoIdsAlertas],
   )
 
-  const agendaSupervisiones = useMemo(() => {
-    const ahoraMs = Date.now()
+  // Criterio ÚNICO de exigibilidad (lib/supervisiones.ts), el mismo del
+  // Dashboard y del ranking: los activos sin turnos recientes no entran en la
+  // agenda como vencidos; se listan aparte para confirmar estado.
+  const universoAgenda = useMemo(() => {
     const base = agendaZonaFiltro === 'todas'
       ? objetivosDeMiZona
       : objetivosDeMiZona.filter(o => o.zona_id === agendaZonaFiltro)
+    return clasificarUniversoSupervision(base, contextoExigibilidad)
+  }, [objetivosDeMiZona, agendaZonaFiltro, contextoExigibilidad])
+
+  const agendaSupervisiones = useMemo(() => {
+    const ahoraMs = Date.now()
+    const base = universoAgenda.exigibles
 
     return base.map(objetivo => {
       // Vigencia: mismo cálculo que el Dashboard y el cron (lib/supervisiones.ts).
@@ -1177,7 +1190,16 @@ export default function SupervisorMobile({ user }: any) {
       const ordenB = b.horasDesdeUltima === null ? Infinity : b.horasDesdeUltima - b.frecuenciaHoras
       return ordenB - ordenA
     })
-  }, [objetivosDeMiZona, agendaZonaFiltro, ultimaSupervisionPorObjetivo])
+  }, [universoAgenda, ultimaSupervisionPorObjetivo])
+
+  // Aviso (no bloquea) de objetivo equivocado: el elegido no tiene turno hoy
+  // y otro a <100 m sí. Caso real: LAROMET ROSARIO 2 cargada en el duplicado
+  // "LAROMET ROSARIO".
+  const sugerenciaObjetivoSupervision = useMemo(() => {
+    if (!objetivoSupervision || contextoExigibilidad.fechasTurnos === null) return null
+    const conTurnoHoy = objetivosConTurnoEn(contextoExigibilidad, fechaArgentinaDe(new Date()))
+    return sugerirObjetivoConTurno(objetivoSupervision, objetivosActivos, conTurnoHoy)
+  }, [objetivoSupervision, objetivosActivos, contextoExigibilidad])
 
   const agendaResumen = useMemo(() => ({
     vencidas: agendaSupervisiones.filter(a => a.estadoAgenda === 'vencido').length,
@@ -3485,6 +3507,19 @@ export default function SupervisorMobile({ user }: any) {
                   )
                 })
                 })()}
+
+                {/* Activos sin turnos recientes: no son vencidos ni deuda. Se
+                    muestran para confirmar con Operaciones si el servicio
+                    terminó; nunca se cierran solos. */}
+                {universoAgenda.sinTurnosRecientes.length > 0 && (
+                  <div style={{ ...card, marginTop:12 }}>
+                    <div style={{ ...label, color:'#f59e0b' }}>Sin turnos recientes — confirmar estado</div>
+                    <div style={muted}>No cuentan como vencidos. Si el servicio terminó, avisá a Operaciones.</div>
+                    {universoAgenda.sinTurnosRecientes.map(o => (
+                      <div key={o.id} style={{ fontSize:13, padding:'4px 0' }}>{o.nombre || 'Objetivo sin nombre'}</div>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
 
@@ -4076,6 +4111,31 @@ export default function SupervisorMobile({ user }: any) {
                       <option key={objetivo.id} value={objetivo.id}>{objetivo.nombre}</option>
                     ))}
                   </select>
+
+                  {/* Aviso NO bloqueante: el objetivo elegido no tiene turno
+                      hoy y otro a menos de 100 m sí. Se puede seguir igual. */}
+                  {sugerenciaObjetivoSupervision && (
+                    <div role="status" style={{ margin:'10px 0', padding:'10px 12px', borderRadius:10, border:'1px solid #f59e0b66', background:'#f59e0b14', fontSize:13, color:'#fde68a' }}>
+                      <b>{objetivoSupervision?.nombre}</b> no tiene turno hoy. A {sugerenciaObjetivoSupervision.distanciaM} m está{' '}
+                      <b>{sugerenciaObjetivoSupervision.objetivo.nombre}</b>, que sí tiene. ¿Es ese el que estás supervisando?
+                      <div style={{ marginTop:8 }}>
+                        <button
+                          type="button"
+                          style={{ ...secondaryButton, padding:'6px 12px', fontSize:12 }}
+                          onClick={() => {
+                            setSupervisionObjetivoId(sugerenciaObjetivoSupervision.objetivo.id)
+                            setSupervisionGps(null)
+                            setConfirmarGpsImpreciso(false)
+                            setSupervisionRespuestas({})
+                            setSupervisionFotos([])
+                            setSupervisionObservaciones('')
+                          }}
+                        >
+                          Cambiar a {sugerenciaObjetivoSupervision.objetivo.nombre}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {objetivoSupervision && (
                     <div style={{ ...registroBox, marginBottom:12 }}>
