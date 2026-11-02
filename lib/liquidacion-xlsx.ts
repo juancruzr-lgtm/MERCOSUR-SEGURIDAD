@@ -183,7 +183,8 @@ function escribirHojaDePlantilla(ws: any, plantilla: PlantillaLiquidacion): Orig
     cl.border = { ...cl.border, left: medium }
   }
 
-  ws.views = [{ state: 'frozen', xSplit: 4, ySplit: 6 }] // fija nombre + encabezado
+  // Inmovilizado en I7 (JC 02/11/2026): quedan fijas las columnas A:H y las 6 filas del encabezado.
+  ws.views = [{ state: 'frozen', xSplit: 8, ySplit: 6, topLeftCell: 'I7' }]
 
   // 7) Indicadores + semáforos (auditados del Excel original de Juan) y la FUENTE
   //    del gráfico de torta:
