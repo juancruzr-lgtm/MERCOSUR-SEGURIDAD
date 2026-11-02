@@ -74,6 +74,15 @@ import {
 import type { PlanGeneracionGrilla, ResultadoGeneracionGrilla } from '@/lib/generacion-grilla'
 import { puedePublicarProgramacion } from '@/lib/publicacion-programacion'
 import {
+  ETIQUETA_TIPO_CONFLICTO, decisionConflictos, describirConflicto, normalizarConflictos,
+  normalizarConsultaConflictos,
+} from '@/lib/conflictos-turno'
+import type { ConflictoTurno, ConsultaConflictos } from '@/lib/conflictos-turno'
+import {
+  mensajeErrorCorreccion, normalizarEvidencia, opcionesCorreccion, resumenEvidencia,
+} from '@/lib/correccion-turno'
+import type { EvidenciaTurno } from '@/lib/correccion-turno'
+import {
   TOPE_LOTE, agregarASeleccion, alternarSeleccion,
   planificarLoteGrilla, resumenOmitidos,
 } from '@/lib/seleccion-grilla'
@@ -390,7 +399,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   // horario de ese día y anular. Las tres últimas van por /api/turnos/editar,
   // que ya audita el cambio y revalida en servidor qué se puede tocar según
   // el turno sea futuro, en curso o finalizado. No se creó ninguna RPC nueva.
-  type ModoCelda = 'menu' | 'vigilador' | 'horario' | 'quitar' | 'anular'
+  type ModoCelda = 'menu' | 'vigilador' | 'horario' | 'quitar' | 'anular' | 'corregir'
   const [celdaEditando, setCeldaEditando] = useState<TurnoGrilla | null>(null)
   const [modoCelda, setModoCelda] = useState<ModoCelda>('menu')
   const [guardiaCelda, setGuardiaCelda] = useState('')
@@ -399,6 +408,18 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const [motivoCelda, setMotivoCelda] = useState('')
   const [errorCelda, setErrorCelda] = useState('')
   const [asignandoCelda, setAsignandoCelda] = useState(false)
+  // Conflictos del vigilador elegido en TODOS los objetivos (no solo la zona
+  // visible). Se consultan al elegirlo y el servidor los revalida al guardar.
+  const [consultaConflictos, setConsultaConflictos] = useState<ConsultaConflictos | null>(null)
+  const [cargandoConflictos, setCargandoConflictos] = useState(false)
+  const [confirmaConflicto, setConfirmaConflicto] = useState(false)
+  const [motivoConflicto, setMotivoConflicto] = useState('')
+  // Corrección de un turno ya iniciado: evidencia real y versión leída.
+  type SubCorreccion = 'anular' | 'horario' | 'solicitar' | null
+  const [evidenciaCelda, setEvidenciaCelda] = useState<EvidenciaTurno | null>(null)
+  const [versionCelda, setVersionCelda] = useState<string | null>(null)
+  const [cargandoEvidencia, setCargandoEvidencia] = useState(false)
+  const [subCorreccion, setSubCorreccion] = useState<SubCorreccion>(null)
 
   // ── Modal: asignación por rango / por fila completa ──
   const [filaAsignando, setFilaAsignando] = useState<FilaGrillaPosicion | null>(null)
@@ -460,6 +481,89 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     setModoCelda('menu')
     setMotivoCelda('')
     setErrorCelda('')
+    setConsultaConflictos(null)
+    setConfirmaConflicto(false)
+    setMotivoConflicto('')
+    setEvidenciaCelda(null)
+    setVersionCelda(null)
+    setSubCorreccion(null)
+  }
+
+  // Al elegir vigilador (o cambiar el horario de un turno con vigilador) se
+  // consultan sus otros turnos en todos los objetivos.
+  const guardiaParaConflictos = modoCelda === 'vigilador'
+    ? (guardiaCelda && guardiaCelda !== celdaEditando?.guardia_id ? guardiaCelda : '')
+    : (modoCelda === 'horario' || (modoCelda === 'corregir' && subCorreccion === 'horario'))
+      ? (celdaEditando?.guardia_id ?? '')
+      : ''
+  const horarioParaConflictos = modoCelda === 'vigilador' ? null : { hi: horaInicioCelda, hf: horaFinCelda }
+  useEffect(() => {
+    setConfirmaConflicto(false)
+    setMotivoConflicto('')
+    if (!celdaEditando || !guardiaParaConflictos) { setConsultaConflictos(null); return }
+    if (horarioParaConflictos && (!horarioParaConflictos.hi || !horarioParaConflictos.hf)) { setConsultaConflictos(null); return }
+    let vigente = true
+    setCargandoConflictos(true)
+    void (async () => {
+      const { data, error } = await supabase.rpc('conflictos_turno_vigilador', {
+        p_turno_id: celdaEditando.id,
+        p_guardia_id: guardiaParaConflictos,
+        p_hora_inicio: horarioParaConflictos?.hi ?? null,
+        p_hora_fin: horarioParaConflictos?.hf ?? null,
+      })
+      if (!vigente) return
+      setCargandoConflictos(false)
+      // Si la consulta falla no se bloquea: el servidor revalida al guardar.
+      setConsultaConflictos(error ? null : normalizarConsultaConflictos(data))
+    })()
+    return () => { vigente = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [celdaEditando?.id, guardiaParaConflictos, horarioParaConflictos?.hi, horarioParaConflictos?.hf, modoCelda, subCorreccion])
+
+  const conflictosActuales: ConflictoTurno[] = consultaConflictos?.conflictos ?? []
+  const decisionConflicto = decisionConflictos(conflictosActuales, {
+    puedeConfirmarSuperposicion: consultaConflictos?.puede_confirmar_superposicion ?? false,
+    confirmado: confirmaConflicto,
+    motivo: motivoConflicto,
+  })
+
+  const abrirCorreccion = async () => {
+    if (!celdaEditando) return
+    setModoCelda('corregir')
+    setSubCorreccion(null)
+    setErrorCelda('')
+    setMotivoCelda('')
+    setCargandoEvidencia(true)
+    const { data, error } = await supabase.rpc('corregir_turno_programacion', {
+      p_operacion_id: crypto.randomUUID(),
+      p_turno_id: celdaEditando.id,
+      p_accion: 'evaluar',
+    })
+    setCargandoEvidencia(false)
+    if (error) { setErrorCelda(mensajeErrorCorreccion(error.message)); return }
+    const r = data as { evidencia?: unknown; version?: string } | null
+    setEvidenciaCelda(normalizarEvidencia(r?.evidencia))
+    setVersionCelda(r?.version ?? null)
+  }
+
+  const ejecutarCorreccion = async (accion: 'anular' | 'modificar_horario' | 'solicitar_correccion') => {
+    if (!celdaEditando || motivoCelda.trim().length < 5) return
+    setAsignandoCelda(true)
+    setErrorCelda('')
+    const { error } = await supabase.rpc('corregir_turno_programacion', {
+      p_operacion_id: crypto.randomUUID(),
+      p_turno_id: celdaEditando.id,
+      p_accion: accion,
+      p_motivo: motivoCelda.trim(),
+      p_hora_inicio: accion === 'modificar_horario' ? horaInicioCelda : null,
+      p_hora_fin: accion === 'modificar_horario' ? horaFinCelda : null,
+      p_version: versionCelda,
+      p_confirmar_conflictos: accion === 'modificar_horario' && conflictosActuales.length > 0 && decisionConflicto.puedeGuardar,
+    })
+    setAsignandoCelda(false)
+    if (error) { setErrorCelda(mensajeErrorCorreccion(error.message)); return }
+    await cargarMensual()
+    cerrarCelda()
   }
 
   /**
@@ -476,13 +580,24 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     setAsignandoCelda(true)
     setErrorCelda('')
     try {
+      const confirma = conflictosActuales.length > 0 && decisionConflicto.puedeGuardar
       const res = await fetch('/api/turnos/editar', {
         method: 'POST',
         headers: await headersSesion(),
-        body: JSON.stringify({ turno_id: celdaEditando.id, cambios, comentario, snapshot }),
+        body: JSON.stringify({
+          turno_id: celdaEditando.id, cambios, comentario, snapshot,
+          confirmar_conflictos: confirma,
+          motivo_conflicto: confirma ? motivoConflicto.trim() : undefined,
+        }),
       })
       const result = await res.json()
-      if (!res.ok) throw new Error(result.error || 'No se pudo guardar el cambio')
+      if (!res.ok) {
+        // Conflicto que apareció entre la consulta y el guardado: se muestra.
+        if (result.codigo === 'CONFLICTO_VIGILADOR') {
+          setConsultaConflictos(c => c ? { ...c, conflictos: normalizarConflictos(result.conflictos) } : c)
+        }
+        throw new Error(result.error || 'No se pudo guardar el cambio')
+      }
       await cargarMensual()
       cerrarCelda()
       return true
@@ -500,6 +615,9 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     if (horaInicioCelda === horaFinCelda) { setErrorCelda('El horario de fin no puede ser igual al de inicio.'); return }
     if (horaInicioCelda === celdaEditando.hora_inicio && horaFinCelda === celdaEditando.hora_fin) {
       setErrorCelda('El horario es el mismo que ya tenía.'); return
+    }
+    if (!decisionConflicto.puedeGuardar) {
+      setErrorCelda(decisionConflicto.bloqueo ?? 'Revisá el conflicto y confirmá con motivo.'); return
     }
     await editarTurnoCelda(
       { hora_inicio: horaInicioCelda, hora_fin: horaFinCelda },
@@ -537,13 +655,18 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     )
   }
 
-  const ejecutarAsignacion = async (turnoIds: string[], guardiaId: string, masiva: boolean): Promise<{ ok: boolean; error?: string; resumen?: string }> => {
+  const ejecutarAsignacion = async (
+    turnoIds: string[], guardiaId: string, masiva: boolean,
+    confirmacion?: { motivo: string },
+  ): Promise<{ ok: boolean; error?: string; resumen?: string }> => {
     if (turnoIds.length === 0) return { ok: false, error: 'No hay turnos válidos para asignar.' }
     const { data, error } = await supabase.rpc('asignar_vigilador_turnos', {
       p_operacion_id: crypto.randomUUID(),
       p_guardia_id: guardiaId,
       p_turno_ids: turnoIds,
       p_masiva: masiva,
+      p_confirmar_conflictos: !!confirmacion,
+      p_motivo_conflicto: confirmacion?.motivo ?? null,
     })
     if (error) return { ok: false, error: error.message }
     await cargarMensual()
@@ -576,6 +699,10 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
   const confirmarCelda = async () => {
     if (!celdaEditando || !guardiaCelda) return
     if (guardiaCelda === celdaEditando.guardia_id) { setErrorCelda('Ya está asignado a ese vigilador.'); return }
+    if (!decisionConflicto.puedeGuardar) {
+      setErrorCelda(decisionConflicto.bloqueo ?? 'Revisá el conflicto y confirmá con motivo.'); return
+    }
+    const confirmacion = conflictosActuales.length > 0 ? { motivo: motivoConflicto.trim() } : undefined
 
     // Turno vacío: la RPC de asignación, que además valida superposiciones del
     // vigilador. Turno que ya tiene a otro: reasignación por la vía auditada
@@ -583,7 +710,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     if (!celdaEditando.guardia_id) {
       setAsignandoCelda(true)
       setErrorCelda('')
-      const res = await ejecutarAsignacion([celdaEditando.id], guardiaCelda, false)
+      const res = await ejecutarAsignacion([celdaEditando.id], guardiaCelda, false, confirmacion)
       setAsignandoCelda(false)
       if (!res.ok) { setErrorCelda(res.error ?? 'No se pudo asignar.'); return }
       cerrarCelda()
@@ -2383,7 +2510,8 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
             <div style={{ fontFamily:'Syne,sans-serif', fontSize:15, fontWeight:700, marginBottom:4 }}>
               {modoCelda === 'menu' ? 'Turno' :
                modoCelda === 'vigilador' ? (celdaEditando.guardia_id ? 'Cambiar vigilador' : 'Asignar vigilador') :
-               modoCelda === 'horario' ? 'Cambiar horario de este día' : 'Anular turno'}
+               modoCelda === 'horario' ? 'Cambiar horario de este día' :
+               modoCelda === 'corregir' ? 'Corregir turno iniciado' : 'Anular turno'}
             </div>
             <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>{cabecera}</div>
             <div style={{ fontSize:12, marginBottom:12 }}>
@@ -2407,9 +2535,10 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                 })}
                 {acc.anular && opcion('Anular turno', 'Deja de contar, pero queda el registro. Se puede deshacer', true, () => { setModoCelda('anular'); setErrorCelda('') })}
                 {acc.reactivar && opcion('Reactivar turno', 'Vuelve a contar como programado', false, confirmarReactivarCelda)}
+                {acc.corregir && opcion('Corregir turno', 'Ya comenzó: anular un error de programación o pedir corrección, según la evidencia', true, () => { void abrirCorreccion() })}
                 {!celdaTieneAcciones(acc) && (
                   <div style={{ fontSize:12, color:'#64748b' }}>
-                    Este turno ya no se modifica desde la grilla: ya empezó o es pasado.
+                    Este turno ya no se modifica desde la grilla.
                   </div>
                 )}
               </>
@@ -2430,7 +2559,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
               </>
             )}
 
-            {modoCelda === 'horario' && (
+            {(modoCelda === 'horario' || (modoCelda === 'corregir' && subCorreccion === 'horario')) && (
               <div style={{ display:'flex', gap:8, marginBottom:8 }}>
                 <div style={{ flex:1 }}>
                   <label style={{ fontSize:11, color:'#64748b' }}>Hora inicio</label>
@@ -2442,6 +2571,45 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                 </div>
               </div>
             )}
+
+
+            {modoCelda === 'corregir' && (() => {
+              const op = opcionesCorreccion(evidenciaCelda)
+              return (
+                <>
+                  {cargandoEvidencia && <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>Revisando fichajes, horas y evidencias del turno…</div>}
+                  {evidenciaCelda && (
+                    <div style={{ background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 10px', marginBottom:8 }}>
+                      {resumenEvidencia(evidenciaCelda).map((l, i) => (
+                        <div key={i} style={{ fontSize:11, color: i === 0 ? '#e2e8f0' : '#94a3b8', fontWeight: i === 0 ? 700 : 400, marginBottom:2 }}>{l}</div>
+                      ))}
+                    </div>
+                  )}
+                  {!cargandoEvidencia && op.explicacion && <div style={{ fontSize:11, color:'#fbbf24', marginBottom:8 }}>{op.explicacion}</div>}
+                  {!cargandoEvidencia && subCorreccion === null && (
+                    <>
+                      {op.anular && opcion('Anular por error de programación', 'No cuenta como ausencia ni abandono; deja de alertar; queda el historial', true, () => { setSubCorreccion('anular'); setErrorCelda('') })}
+                      {op.cambiarHorario && opcion('Corregir horario', 'Solo si no hay fichaje ni evidencia', false, () => {
+                        setHoraInicioCelda(celdaEditando.hora_inicio); setHoraFinCelda(celdaEditando.hora_fin)
+                        setSubCorreccion('horario'); setErrorCelda('')
+                      })}
+                      {op.solicitar && opcion('Solicitar corrección', 'Se conservan los fichajes y horas originales', false, () => { setSubCorreccion('solicitar'); setErrorCelda('') })}
+                    </>
+                  )}
+                  {subCorreccion !== null && (
+                    <>
+                      <label style={{ fontSize:11, color:'#64748b' }}>Motivo * (queda registrado)</label>
+                      <input
+                        style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12, marginTop:4, marginBottom:8 }}
+                        value={motivoCelda}
+                        onChange={e => setMotivoCelda(e.target.value)}
+                        placeholder={subCorreccion === 'anular' ? 'Ej.: turno duplicado, el puesto lo cubría otro vigilador' : 'Ej.: el horario real fue 15 a 21'}
+                      />
+                    </>
+                  )}
+                </>
+              )
+            })()}
 
             {(modoCelda === 'anular' || modoCelda === 'quitar') && (
               <>
@@ -2460,20 +2628,65 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
               </>
             )}
 
+
+            {(modoCelda === 'vigilador' || modoCelda === 'horario' || (modoCelda === 'corregir' && subCorreccion === 'horario')) && (
+              <>
+                {cargandoConflictos && <div style={{ fontSize:11, color:'#64748b', marginBottom:8 }}>Revisando otros turnos del vigilador en todos los objetivos…</div>}
+                {!cargandoConflictos && conflictosActuales.length > 0 && consultaConflictos && (
+                  <div style={{ background:'rgba(245,158,11,.08)', border:`1px solid ${conflictosActuales.some(c => c.tipo === 'superposicion') ? '#b91c1c' : '#b45309'}`, borderRadius:8, padding:'8px 10px', marginBottom:8 }}>
+                    <div style={{ fontSize:12, fontWeight:700, color:'#fbbf24', marginBottom:4 }}>
+                      {consultaConflictos.vigilador} ya tiene otro turno · {consultaConflictos.fecha.split('-').reverse().join('/')}
+                    </div>
+                    {conflictosActuales.map(c => (
+                      <div key={c.turno_id + c.tipo} style={{ fontSize:11, color:'#e2e8f0', marginBottom:4, lineHeight:1.35 }}>
+                        <span style={{ color: c.tipo === 'superposicion' ? '#f87171' : '#fbbf24', fontWeight:700 }}>{ETIQUETA_TIPO_CONFLICTO[c.tipo]}</span>
+                        {' — '}{describirConflicto(c, {
+                          vigilador: consultaConflictos.vigilador,
+                          objetivo: consultaConflictos.objetivo,
+                          hora_inicio: consultaConflictos.hora_inicio,
+                          hora_fin: consultaConflictos.hora_fin,
+                        })}
+                      </div>
+                    ))}
+                    {decisionConflicto.bloqueo && !decisionConflicto.puedeGuardar && conflictosActuales.some(c => c.tipo === 'superposicion') && !consultaConflictos.puede_confirmar_superposicion ? (
+                      <div style={{ fontSize:11, color:'#f87171' }}>{decisionConflicto.bloqueo}</div>
+                    ) : (
+                      <>
+                        <label style={{ display:'flex', gap:6, alignItems:'center', fontSize:11, color:'#e2e8f0', marginTop:4 }}>
+                          <input type="checkbox" checked={confirmaConflicto} onChange={e => setConfirmaConflicto(e.target.checked)} />
+                          Revisé la situación y confirmo igual
+                        </label>
+                        {confirmaConflicto && (
+                          <input
+                            style={{ width:'100%', background:'#0f172a', border:'1px solid #1e2d42', borderRadius:8, color:'#e2e8f0', padding:'6px 8px', fontSize:12, marginTop:6 }}
+                            value={motivoConflicto}
+                            onChange={e => setMotivoConflicto(e.target.value)}
+                            placeholder="Motivo (queda registrado). Ej.: doble turno acordado con el cliente"
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
             {errorCelda && <div style={{ fontSize:12, color:'#ef4444', marginBottom:8 }}>{errorCelda}</div>}
 
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
               <button type="button" style={{ ...S.btn, ...S.btnSecondary, padding:'6px 14px', fontSize:12 }}
-                onClick={() => modoCelda === 'menu' ? cerrarCelda() : (setModoCelda('menu'), setErrorCelda(''))}>
+                onClick={() => modoCelda === 'menu' ? cerrarCelda()
+                  : modoCelda === 'corregir' && subCorreccion !== null ? (setSubCorreccion(null), setErrorCelda(''))
+                  : (setModoCelda('menu'), setErrorCelda(''))}>
                 {modoCelda === 'menu' ? 'Cerrar' : 'Volver'}
               </button>
               {modoCelda === 'vigilador' && (
-                <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !guardiaCelda || asignandoCelda ? 0.5 : 1 }} disabled={!guardiaCelda || asignandoCelda} onClick={confirmarCelda}>
+                <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: !guardiaCelda || asignandoCelda || cargandoConflictos || !decisionConflicto.puedeGuardar ? 0.5 : 1 }} disabled={!guardiaCelda || asignandoCelda || cargandoConflictos || !decisionConflicto.puedeGuardar} onClick={confirmarCelda}>
                   {asignandoCelda ? 'Guardando…' : 'Confirmar'}
                 </button>
               )}
               {modoCelda === 'horario' && (
-                <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: asignandoCelda ? 0.5 : 1 }} disabled={asignandoCelda} onClick={confirmarHorarioCelda}>
+                <button type="button" style={{ ...S.btn, ...S.btnPrimary, padding:'6px 14px', fontSize:12, opacity: asignandoCelda || cargandoConflictos || !decisionConflicto.puedeGuardar ? 0.5 : 1 }} disabled={asignandoCelda || cargandoConflictos || !decisionConflicto.puedeGuardar} onClick={confirmarHorarioCelda}>
                   {asignandoCelda ? 'Guardando…' : 'Guardar horario'}
                 </button>
               )}
@@ -2487,6 +2700,18 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                   {asignandoCelda ? 'Anulando…' : 'Anular turno'}
                 </button>
               )}
+              {modoCelda === 'corregir' && subCorreccion !== null && (() => {
+                const bloqueado = motivoCelda.trim().length < 5 || asignandoCelda
+                  || (subCorreccion === 'horario' && (cargandoConflictos || !decisionConflicto.puedeGuardar))
+                const accion = subCorreccion === 'anular' ? 'anular' : subCorreccion === 'horario' ? 'modificar_horario' : 'solicitar_correccion'
+                const texto = subCorreccion === 'anular' ? 'Anular por error' : subCorreccion === 'horario' ? 'Guardar horario' : 'Enviar solicitud'
+                return (
+                  <button type="button" style={{ ...S.btn, padding:'6px 14px', fontSize:12, background: subCorreccion === 'anular' ? '#7f1d1d' : '#1d4ed8', color:'#fff', border:'1px solid #334155', opacity: bloqueado ? 0.5 : 1 }}
+                    disabled={bloqueado} onClick={() => { void ejecutarCorreccion(accion) }}>
+                    {asignandoCelda ? 'Guardando…' : texto}
+                  </button>
+                )
+              })()}
             </div>
           </div>
         </div>
