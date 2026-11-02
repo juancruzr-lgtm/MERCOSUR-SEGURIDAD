@@ -279,7 +279,7 @@ export async function GET(req: Request) {
       continue
     }
 
-    // ── Reclamo ATÓMICO en la base (20261121120000) ──────────────────────────
+    // ── Reclamo ATÓMICO en la base (20261121130000) ──────────────────────────
     // Clave estable por (canal, etapa, ventana, vigilador) con índice único y
     // fila de auditoría 'reclamado' ANTES de enviar: dos corridas simultáneas
     // no pueden reclamar la misma ventana. Un rechazo reintentable del

@@ -42,7 +42,7 @@
 -- Orden de despliegue: MIGRACIÓN ANTES QUE EL CÓDIGO. Si el código llega
 -- primero, la RPC no existe → reclamarEnvio devuelve error_rpc → NO se envía
 -- ningún WhatsApp (fail-closed). Nunca hay envíos de más.
--- Rollback: supabase/rollback/20261121120000_whatsapp_envios_reclamo_reintentos_rollback.sql
+-- Rollback: supabase/rollback/20261121130000_whatsapp_envios_reclamo_reintentos_rollback.sql
 -- Pruebas:  supabase/pruebas/whatsapp-envios/run.mjs (PGlite)
 -- ============================================================================
 

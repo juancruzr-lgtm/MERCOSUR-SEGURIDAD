@@ -1,4 +1,4 @@
-// Pruebas de 20261121120000_whatsapp_envios_reclamo_reintentos.sql sobre PGlite.
+// Pruebas de 20261121130000_whatsapp_envios_reclamo_reintentos.sql sobre PGlite.
 // Esqueleto: escalamiento_whatsapp_envios con las columnas y el CHECK de nivel
 // de producción (leídos el 02/11/2026) y ronda_alertas mínima.
 // PGlite tiene una sola conexión: la "concurrencia" de dos crons se prueba como
@@ -35,7 +35,7 @@ const [ar] = await sql(`insert into usuarios(nombre) values ('AR') returning id`
 const [sm] = await sql(`insert into usuarios(nombre) values ('SM') returning id`)
 await sql(`insert into escalamiento_whatsapp_envios(nivel, resultado, destinatario_id) values ('escalamiento_wa_ronda_no_iniciada','enviado',$1)`, [jl.id])
 
-const mig = readFileSync(`${REPO}/supabase/migrations/20261121120000_whatsapp_envios_reclamo_reintentos.sql`, 'utf8')
+const mig = readFileSync(`${REPO}/supabase/migrations/20261121130000_whatsapp_envios_reclamo_reintentos.sql`, 'utf8')
 await db.exec(mig)
 await db.exec(mig) // idempotente
 ok('Migración idempotente (se aplica dos veces)', true)
@@ -174,7 +174,7 @@ const nuevaAlerta = async (campos = {}) => (await sql(
     has_function_privilege('service_role', 'public.reclamar_envio_whatsapp(text,jsonb,integer,integer,integer,integer,timestamptz)', 'execute') c`)
   ok('Permisos: authenticated/anon no ejecutan; service_role sí', !p[0].a && !p[0].b && p[0].c)
   const antes = (await sql(`select count(*)::int n from escalamiento_whatsapp_envios`))[0].n
-  await db.exec(readFileSync(`${REPO}/supabase/rollback/20261121120000_whatsapp_envios_reclamo_reintentos_rollback.sql`, 'utf8'))
+  await db.exec(readFileSync(`${REPO}/supabase/rollback/20261121130000_whatsapp_envios_reclamo_reintentos_rollback.sql`, 'utf8'))
   const despues = (await sql(`select count(*)::int n from escalamiento_whatsapp_envios`))[0].n
   const f = (await sql(`select count(*)::int n from pg_proc where proname in ('reclamar_envio_whatsapp','completar_envio_whatsapp')`))[0].n
   ok('Rollback: quita funciones, conserva la auditoría', f === 0 && antes === despues, `${antes}/${despues}`)

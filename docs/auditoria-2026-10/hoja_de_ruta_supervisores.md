@@ -78,7 +78,7 @@ Reglas:
 - Ventana de 24 h: fuera de ella sólo plantillas; el diseño usa **sólo**
   plantillas, nunca texto libre.
 - Envío real (futuro): cada payload por `reclamarEnvio` (clave estable, índice
-  único, topes y reintentos de la migración 20261121120000). Habría que
+  único, topes y reintentos de la migración 20261121130000). Habría que
   extender el CHECK de `escalamiento_whatsapp_envios.nivel` con los niveles
   `soporte_*` (migración nueva).
 - **WhatsApp nunca modifica fichajes, horas, turnos ni planillas**, ni toma

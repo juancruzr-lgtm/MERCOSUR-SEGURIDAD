@@ -1,4 +1,4 @@
--- Rollback de 20261121120000_whatsapp_envios_reclamo_reintentos.sql
+-- Rollback de 20261121130000_whatsapp_envios_reclamo_reintentos.sql
 -- ANTES: revertir el código (las rutas llaman a reclamar_envio_whatsapp; sin la
 -- función no envían nada — fail-closed — pero conviene volver al deploy previo).
 -- Las columnas nuevas quedan (sin uso): no se pierde la auditoría registrada.

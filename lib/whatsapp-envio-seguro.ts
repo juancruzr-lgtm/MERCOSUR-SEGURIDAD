@@ -1,7 +1,7 @@
 // Envío de WhatsApp a prueba de loops y de corridas simultáneas.
 //
 // Cada mensaje real pasa por `reclamar_envio_whatsapp` (migración
-// 20261121120000) ANTES de llamar a Meta. La base decide, bajo lock, con una
+// 20261121130000) ANTES de llamar a Meta. La base decide, bajo lock, con una
 // clave estable por (canal, etapa, evento, destinatario) e índice único
 // (clave, intento):
 //   · si ya salió, está en curso o quedó incierto (corrida cortada) → no;

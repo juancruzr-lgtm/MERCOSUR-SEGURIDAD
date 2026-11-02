@@ -461,7 +461,7 @@ export async function GET(req: Request) {
         continue
       }
 
-      // RECLAMO ATÓMICO en la base (20261121120000) ANTES de enviar: clave
+      // RECLAMO ATÓMICO en la base (20261121130000) ANTES de enviar: clave
       // estable (canal, etapa, evento, destinatario) con índice único, fila de
       // auditoría 'reclamado', topes y reintento con backoff. Cualquier
       // respuesta que no sea ok (o un error de la RPC) significa NO enviar.
@@ -689,7 +689,7 @@ export async function GET(req: Request) {
         continue
       }
 
-      // RECLAMO ATÓMICO (20261121120000): además de la clave única, la base
+      // RECLAMO ATÓMICO (20261121130000): además de la clave única, la base
       // vuelve a mirar la alerta AHORA — si el supervisor intervino entre la
       // lectura y el envío, no sale — y aplica el tope diario bajo lock (dos
       // corridas simultáneas no pueden pasarse del cupo).

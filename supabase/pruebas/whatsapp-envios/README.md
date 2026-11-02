@@ -1,4 +1,4 @@
-# Pruebas — reclamo atómico de WhatsApp (20261121120000)
+# Pruebas — reclamo atómico de WhatsApp (20261121130000)
 
 Corre la migración sobre PGlite con `escalamiento_whatsapp_envios` (columnas y
 CHECK de nivel de producción, 02/11/2026) y una `ronda_alertas` mínima.

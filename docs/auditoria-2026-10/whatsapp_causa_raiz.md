@@ -62,7 +62,7 @@ Ya estaba: tope de 48 h, dedup en lotes de 100 fail-closed, claim-first en
 la app, descarte de intervenidas/viejas.
 
 Huecos encontrados y cerrados (migración **SIN APLICAR**
-`20261121120000_whatsapp_envios_reclamo_reintentos.sql` + código):
+`20261121130000_whatsapp_envios_reclamo_reintentos.sql` + código):
 
 | Hueco | Arreglo |
 |---|---|
@@ -78,7 +78,7 @@ como marca de compatibilidad para la dedup previa y el dry-run.
 
 ### Despliegue (requiere aprobación expresa)
 
-1. Aplicar `20261121120000` (sólo agrega columnas nulas, índices y dos
+1. Aplicar `20261121130000` (sólo agrega columnas nulas, índices y dos
    funciones; no toca datos).
 2. Verificar con las consultas del final de la migración.
 3. Publicar el código. **Orden inverso** (código primero) = la RPC no existe →
@@ -87,7 +87,7 @@ como marca de compatibilidad para la dedup previa y el dry-run.
    `WHATSAPP_TURNOS_TOPE_DIARIO` (20), las de rondas ya existentes.
 
 Rollback: revertir el código y correr
-`supabase/rollback/20261121120000_whatsapp_envios_reclamo_reintentos_rollback.sql`.
+`supabase/rollback/20261121130000_whatsapp_envios_reclamo_reintentos_rollback.sql`.
 
 ### Pruebas
 
