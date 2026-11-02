@@ -1032,6 +1032,8 @@ export interface ParametrosLiquidacion {
 
 /** Prefijos de clave en liquidacion_ajuste para lo editado a mano en el Excel. */
 export const CLAVE_CELDA = 'celda:'   // celda calculada pisada a mano (numérica)
+/** Columnas de HORAS cuyo TOTAL GENERAL no suma el bloque de supervisores (no facturables). */
+export const COLS_HORAS_SIN_SUPERVISORES = new Set(['I', 'J', 'AG', 'AH', 'AL'])
 export const CLAVE_TEXTO = 'texto:'   // texto editado (NOMBRE, NOVEDADES, OBJETIVO/S, OBSERVACION)
 
 /** Clave guardada ↔ campo de ParametrosLiquidacion ↔ celda del Excel de trabajo. */
@@ -1445,7 +1447,7 @@ export function plantillaLiquidacionResumenGuardia(
   const subtotalesFilas: number[] = []
   const filasDatos: number[] = []
   let subtotalVigiladores = 0  // fila del SUBTOTAL VIGILADORES (para REC/Extras)
-  const subtotales: { fila: number; suma: Record<string, number> }[] = []
+  const subtotales: { fila: number; suma: Record<string, number>; supervisores?: boolean }[] = []
   for (const gp of grupos) {
     const filasGrupo = resumen.filas.filter(f => f.grupo === gp.clave && !f.bajaConFinal)
     put(`A${r}`, gp.titulo)
@@ -1470,7 +1472,7 @@ export function plantillaLiquidacionResumenGuardia(
       }
     }
     subtotalesFilas.push(filaSubtotal)
-    subtotales.push({ fila: filaSubtotal, suma })
+    subtotales.push({ fila: filaSubtotal, suma, supervisores: gp.clave === 'supervisores' })
     if (gp.clave === 'vigiladores') subtotalVigiladores = filaSubtotal
     r += 2 // subtotal + fila separadora vacía
   }
@@ -1500,11 +1502,15 @@ export function plantillaLiquidacionResumenGuardia(
   }
 
   // TOTAL GENERAL = suma de los subtotales (nunca SUM del rango entero).
+  // Horas (JC 02/11/2026): las de supervisores sirven para calcular su recibo
+  // pero NO son horas de vigilancia facturables → no entran al total de horas.
+  // Las de servicio eventual (vigiladores y bajas) sí. La plata suma todo.
   const filaTotales = r
   put(`A${filaTotales}`, 'TOTAL GENERAL')
   for (const col of colsTotales) {
-    const v = subtotales.reduce((s, b) => s + (b.suma[col] ?? 0), 0)
-    put(`${col}${filaTotales}`, v, subtotales.map(b => `${col}${b.fila}`).join('+'))
+    const bloques = COLS_HORAS_SIN_SUPERVISORES.has(col) ? subtotales.filter(b => !b.supervisores) : subtotales
+    const v = bloques.reduce((s, b) => s + (b.suma[col] ?? 0), 0)
+    put(`${col}${filaTotales}`, v, bloques.length ? bloques.map(b => `${col}${b.fila}`).join('+') : undefined)
   }
 
   return {

@@ -12,7 +12,7 @@
 // la fila es el usuario_id oculto (col BD), con CUIL (col B) como control —
 // jamás el nombre ni el número de fila.
 
-import type { PlantillaLiquidacion } from '@/lib/resumen-guardia'
+import { COLS_HORAS_SIN_SUPERVISORES, type PlantillaLiquidacion } from '@/lib/resumen-guardia'
 
 export type CeldaVisual = string | number | null | undefined
 
@@ -459,7 +459,7 @@ export function advertenciasReimport(
 
   // 3) Subtotales / total escritos a mano (no coinciden con la suma de sus filas).
   let desde = -1
-  const sumas: Record<string, number>[] = []
+  const sumas: { suma: Record<string, number>; supervisores: boolean }[] = []
   grid.forEach((fila, i) => {
     const a = norm(fila?.[0]).toUpperCase()
     if (a.startsWith('BLOQUE')) { desde = i; return }
@@ -471,9 +471,12 @@ export function advertenciasReimport(
         if (!norm(grid[k]?.[IDX_BD])) continue
         for (const col of COLS_TOTALES) suma[col] = (suma[col] ?? 0) + (num(enGrid(grid, col, k + 1)) ?? 0)
       }
-      sumas.push(suma)
+      sumas.push({ suma, supervisores: a.startsWith('SUBTOTAL SUPERVISORES') })
     } else {
-      for (const col of COLS_TOTALES) suma[col] = sumas.reduce((s, x) => s + (x[col] ?? 0), 0)
+      // Mismo criterio que la plantilla: las horas de supervisores no van al total.
+      for (const col of COLS_TOTALES) {
+        suma[col] = sumas.filter(x => !(x.supervisores && COLS_HORAS_SIN_SUPERVISORES.has(col))).reduce((s, x) => s + (x.suma[col] ?? 0), 0)
+      }
     }
     for (const col of COLS_TOTALES) {
       const v = num(enGrid(grid, col, i + 1))

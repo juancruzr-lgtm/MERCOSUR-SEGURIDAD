@@ -59,8 +59,8 @@ describe('ETAPA 2 — REC/Extras sólo vigiladores', () => {
     const extVig = cellV(pl, `AL${filaEmp(pl, 'v1')}`) + cellV(pl, `AL${filaEmp(pl, 'v2')}`)
     expect(ind.rec).toBe(recVig)
     expect(ind.ext).toBe(extVig)
-    // el total general es MAYOR (los mensualizados aportan horas artificiales)
-    expect(tot.rec).toBeGreaterThan(ind.rec)
+    // las horas de supervisores no van al total general (JC 02/11/2026): coincide
+    expect(tot.rec).toBe(ind.rec)
   })
 
   it('REC + Extras = horas de vigilancia; %REC + %Extras = 100%', () => {
