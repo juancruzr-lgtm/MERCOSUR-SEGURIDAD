@@ -23,6 +23,15 @@ import { progreso as progresoTareas } from '@/lib/tareas-turno'
 import type { TareaDelTurno } from '@/lib/tareas-turno'
 import { cargarMisTareas } from '@/lib/tareas-turno-datos'
 import { normalizarTelefonoAr, mostrarTelefono } from '@/lib/telefono-ar'
+import {
+  COLUMNAS_REGISTRO_VIGILADOR, catalogoDesactualizado, leerCatalogoTurnos, type CatalogoTurnos,
+} from '@/lib/catalogo-vigilador'
+import { INTERVALO_PLANILLA_MS, registrarActualizacion } from '@/lib/refresco-movil'
+import { useRefrescoAutomatico } from '@/components/movil/useRefrescoAutomatico'
+import DiagnosticoDispositivo from '@/components/movil/DiagnosticoDispositivo'
+import {
+  borrarFlujo, borrarFotosDe, guardarFlujo, guardarFotoPendiente, leerFlujo, leerFotoPendiente, purgarFotosPendientes,
+} from '@/lib/pendientes-camara'
 
 // ── CONSTANTES ────────────────────────────────────────────────
 const INGRESO_PENDIENTE_KEY = 'mercosur_ingreso_pendiente'
@@ -602,6 +611,14 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [ingresoGps, setIngresoGps] = useState<GpsData | null>(null)
   const [fotoLibro, setFotoLibro] = useState<{ file: File; url: string } | null>(null)
   const [fotoUniforme, setFotoUniforme] = useState<{ file: File; url: string } | null>(null)
+  // Versión ya preparada (comprimida) de cada foto, calculada apenas se saca y
+  // guardada como pendiente en IndexedDB: si el sistema mata la pestaña al abrir
+  // la otra cámara, la foto anterior no se pierde. `origen` es el File de la
+  // cámara al que corresponde (si se retoma, deja de coincidir y se recalcula).
+  const fotosPreparadasRef = useRef<{
+    libro?: { origen: File; lista: File; comprimida: boolean }
+    uniforme?: { origen: File; lista: File; comprimida: boolean }
+  }>({})
   const inputLibroRef = useRef<HTMLInputElement>(null)
   const inputUniformeRef = useRef<HTMLInputElement>(null)
   const [ingresoRestaurado, setIngresoRestaurado] = useState(false)
@@ -679,6 +696,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
   }
   // Impide recargas superpuestas: intervalo, focus y online pueden dispararse juntos.
   const cargaEnCursoRef = useRef(false)
+  // Objetivos/puestos de los turnos del vigilador, en memoria (ver catalogoDesactualizado).
+  const catalogoRef = useRef<CatalogoTurnos | null>(null)
+  const marcarCargaRef = useRef<(() => void) | null>(null)
   // Un refresco de fondo no debe pisar el estado optimista durante un fichaje.
   const operacionEnCursoRef = useRef(false)
   // initTelemetry abre sesión y emite session_start: sólo una vez por montaje.
@@ -744,40 +764,16 @@ export default function GuardiaMobile({ user }: { user: any }) {
     if (!silencioso) setRefrescando(true)
 
     try {
-      const [turnosRes, objetivosRes, registrosRes, puestosRes] = await Promise.all([
+      // 1) Turnos de ayer y hoy (como antes).
+      const turnosRes = await supabase
+        .from('turnos')
+        .select('*')
+        .or(`guardia_id.eq.${user.id},guardia_original_id.eq.${user.id}`)
+        .in('fecha', [ayer, hoy])
+        .order('hora_inicio')
 
-        supabase
-          .from('turnos')
-          .select('*')
-          .or(`guardia_id.eq.${user.id},guardia_original_id.eq.${user.id}`)
-          .in('fecha', [ayer, hoy])
-          .order('hora_inicio'),
-
-        supabase
-          .from('objetivos')
-          // `estado` es nuevo: sin él la pantalla no podía saber que el objetivo
-          // estaba pausado y ofrecía fichar igual.
-          .select('id, nombre, direccion, lat, lng, radio_metros, estado'),
-
-        supabase
-          .from('registros_asistencia')
-          .select('*')
-          .eq('guardia_id', user.id),
-
-        supabase
-          .from('puestos')
-          .select('id, nombre'),
-
-      ])
-
-      // Un error deja intactos los datos previos: la pantalla nunca se vacía.
-      if (turnosRes.error || objetivosRes.error || registrosRes.error || puestosRes.error) {
-        console.error('Error cargando datos del guardia', {
-          turnos: turnosRes.error,
-          objetivos: objetivosRes.error,
-          registros: registrosRes.error,
-          puestos: puestosRes.error,
-        })
+      if (turnosRes.error) {
+        console.error('Error cargando datos del guardia', { turnos: turnosRes.error })
         setErrorCarga('No se pudieron actualizar los turnos')
         return
       }
@@ -790,17 +786,67 @@ export default function GuardiaMobile({ user }: { user: any }) {
         return (hF * 60 + mF) <= (hI * 60 + mI)
       })
 
+      // 2) Registros SÓLO de los turnos cargados (antes: todo el historial del
+      //    vigilador con `select *`, ~100 KB promedio y hasta 260 KB por
+      //    refresco). Todas las lecturas de `registros` en esta pantalla son
+      //    por turno_id de estos turnos: tarjetas, ingreso/egreso, intento
+      //    persistido en sessionStorage (turno de ayer/hoy) y resumen
+      //    post-egreso. El historial vive en Mi Planilla (API del legajo).
+      //    Se piden de TODOS los turnos devueltos (también los de ayer
+      //    diurnos), así un ingreso restaurado nunca queda sin su registro.
+      const turnoIds = (turnosRes.data || []).map((t: Turno) => t.id)
+      const necesitaCatalogo = catalogoDesactualizado(
+        catalogoRef.current,
+        filtrados.map((t: Turno) => t.objetivo_id),
+        filtrados.map((t: Turno) => t.puesto_id),
+        Date.now(),
+      )
+      const [registrosRes, catalogo] = await Promise.all([
+        turnoIds.length === 0
+          ? Promise.resolve({ data: [] as Registro[], error: null })
+          : supabase
+            .from('registros_asistencia')
+            .select(COLUMNAS_REGISTRO_VIGILADOR)
+            .eq('guardia_id', user.id)
+            .in('turno_id', turnoIds),
+        // 3) Objetivos y puestos: sólo los de sus turnos, en memoria y
+        //    renovados cada 30 min o cuando aparece uno nuevo (antes: TODOS
+        //    los objetivos y TODOS los puestos cada 60 s).
+        necesitaCatalogo
+          ? leerCatalogoTurnos(
+            supabase,
+            filtrados.map((t: Turno) => t.objetivo_id),
+            filtrados.map((t: Turno) => t.puesto_id),
+          )
+          : Promise.resolve(null),
+      ])
+
+      // Un error deja intactos los datos previos: la pantalla nunca se vacía.
+      if (registrosRes.error || (catalogo && catalogo.error)) {
+        console.error('Error cargando datos del guardia', {
+          registros: registrosRes.error,
+          catalogo: catalogo?.error,
+        })
+        setErrorCarga('No se pudieron actualizar los turnos')
+        return
+      }
+
       setTurnos(filtrados)
-      setObjetivos(objetivosRes.data || [])
-      setRegistros(registrosRes.data || [])
-      setPuestos(puestosRes.data || [])
+      if (catalogo) {
+        catalogoRef.current = catalogo.cache
+        setObjetivos(catalogo.cache.objetivos)
+        setPuestos(catalogo.cache.puestos)
+      }
+      setRegistros(((registrosRes.data || []) as unknown) as Registro[])
       setErrorCarga(null)
       setUltimaActualizacion(new Date())
+      registrarActualizacion()
     } catch (error) {
       console.error('Error cargando datos del guardia', error)
       setErrorCarga('No se pudieron actualizar los turnos')
     } finally {
       cargaEnCursoRef.current = false
+      marcarCargaRef.current?.()
       setRefrescando(false)
       setLoading(false)
 
@@ -846,12 +892,17 @@ export default function GuardiaMobile({ user }: { user: any }) {
     }
   }, [user.id])
 
-  // Se recalcula con cada refresco de la pantalla —el ↻ y los automáticos ya
-  // mueven ultimaActualizacion—, así baja solo cuando el vigilador confirma.
+  // Antes se pedía con CADA refresco (cada 60 s se bajaba la planilla
+  // completa del mes para leer dos números). Ahora: al montar, cada 15 min con
+  // la pantalla visible, con el ↻ manual y al cerrar el resumen post-egreso,
+  // que es cuando el número cambia por acción del propio vigilador.
   useEffect(() => {
-    if (!ultimaActualizacion) return
     void cargarPendientesPlanilla()
-  }, [cargarPendientesPlanilla, ultimaActualizacion])
+    const t = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void cargarPendientesPlanilla()
+    }, INTERVALO_PLANILLA_MS)
+    return () => window.clearInterval(t)
+  }, [cargarPendientesPlanilla])
 
   // Mantiene la bandera de "operación en curso" sin recrear recargarDatos.
   useEffect(() => {
@@ -863,26 +914,12 @@ export default function GuardiaMobile({ user }: { user: any }) {
     void recargarDatos()
   }, [recargarDatos])
 
-  // Refrescos automáticos: intervalo con pantalla visible, vuelta de segundo plano, focus y reconexión.
-  useEffect(() => {
-    const refrescarSiVisible = () => {
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
-      void recargarDatos({ silencioso: true })
-    }
-
-    const intervalo = window.setInterval(refrescarSiVisible, 60000)
-
-    document.addEventListener('visibilitychange', refrescarSiVisible)
-    window.addEventListener('focus', refrescarSiVisible)
-    window.addEventListener('online', refrescarSiVisible)
-
-    return () => {
-      window.clearInterval(intervalo)
-      document.removeEventListener('visibilitychange', refrescarSiVisible)
-      window.removeEventListener('focus', refrescarSiVisible)
-      window.removeEventListener('online', refrescarSiVisible)
-    }
-  }, [recargarDatos])
+  // Refrescos automáticos: política única (lib/refresco-movil.ts). Intervalo
+  // de 3 min con pantalla visible y un disparo compartido al volver a primer
+  // plano (≥30 s desde la última carga; la reconexión dispara siempre).
+  const recargaSilenciosa = useCallback(() => recargarDatos({ silencioso: true }), [recargarDatos])
+  const { marcarCarga } = useRefrescoAutomatico(recargaSilenciosa)
+  marcarCargaRef.current = marcarCarga
 
   useEffect(() => {
     const timer = window.setInterval(() => setAhora(new Date()), 30000)
@@ -895,13 +932,30 @@ export default function GuardiaMobile({ user }: { user: any }) {
     if (!ingresoTurno || !ingresoGps) return
     if (ingresoFase === 'idle' || ingresoFase === 'gps' || ingresoFase === 'confirmando') return
 
-    sessionStorage.setItem(INGRESO_PENDIENTE_KEY, JSON.stringify({
+    // sessionStorage (como antes) + localStorage: si el sistema mata el proceso
+    // entero al abrir la cámara, sessionStorage puede no volver.
+    guardarFlujo(INGRESO_PENDIENTE_KEY, {
       turno_id: ingresoTurno.id,
+      guardia_id: user.id,
       gps: ingresoGps,
       timestamp: Date.now(),
       intento_id: ingresoIntentoId.current,
-    }))
-  }, [ingresoFase, ingresoTurno, ingresoGps])
+    })
+  }, [ingresoFase, ingresoTurno, ingresoGps, user.id])
+
+  // Fotos pendientes vencidas (>24 h) o de más: se purgan al abrir la app.
+  useEffect(() => { void purgarFotosPendientes() }, [])
+
+  // Prepara (comprime) la foto apenas se saca y la guarda como pendiente.
+  const prepararYGuardarFoto = useCallback((tipo: 'libro' | 'uniforme', file: File, turnoId: string | undefined) => {
+    const perfil = tipo === 'libro' ? 'libro_guardia' : 'operativa'
+    void prepararFotoOperativa(file, perfil)
+      .then(async r => {
+        fotosPreparadasRef.current[tipo] = { origen: file, lista: r.file, comprimida: r.comprimida }
+        if (turnoId) await guardarFotoPendiente({ flujo: 'ingreso', refId: turnoId, tipo, usuarioId: user.id, archivo: r.file, nombre: `${tipo}.jpg` })
+      })
+      .catch(() => { /* se reintenta al confirmar, con el mensaje de error de siempre */ })
+  }, [user.id])
 
   // Restaura un intento de ingreso pendiente después de que los datos carguen.
   // Solo corre una vez. Verifica que no exista ya un registro para evitar duplicados.
@@ -909,36 +963,37 @@ export default function GuardiaMobile({ user }: { user: any }) {
     if (loading || restorationAttempted.current) return
     restorationAttempted.current = true
 
-    const stored = sessionStorage.getItem(INGRESO_PENDIENTE_KEY)
+    const stored = leerFlujo(INGRESO_PENDIENTE_KEY)
     if (!stored) return
 
-    let parsed: { turno_id: string; gps: GpsData; timestamp: number; intento_id: string | null }
+    let parsed: { turno_id: string; guardia_id?: string; gps: GpsData; timestamp: number; intento_id: string | null }
     try {
       parsed = JSON.parse(stored)
     } catch {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
-    if (!parsed.turno_id || !parsed.gps || !parsed.timestamp) {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+    // Intento de otra persona que usó este teléfono: no se restaura.
+    if (!parsed.turno_id || !parsed.gps || !parsed.timestamp || (parsed.guardia_id && parsed.guardia_id !== user.id)) {
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
     if (Date.now() - parsed.timestamp > INGRESO_EXPIRACION_MS) {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
     const turno = turnos.find(t => t.id === parsed.turno_id)
     if (!turno) {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
     const registroExistente = registros.find(r => r.turno_id === parsed.turno_id && r.hora_entrada_real)
     if (registroExistente) {
-      sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+      borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
 
@@ -948,6 +1003,27 @@ export default function GuardiaMobile({ user }: { user: any }) {
     setIngresoFase('foto_libro')
     setIngresoRestaurado(true)
     ingresoStartTime.current = Date.now()
+
+    // Fotos ya sacadas antes de que se cerrara la pestaña (IndexedDB): se
+    // recuperan y el flujo sigue desde el paso que faltaba.
+    void Promise.all([
+      leerFotoPendiente('ingreso', turno.id, 'libro', user.id),
+      leerFotoPendiente('ingreso', turno.id, 'uniforme', user.id),
+    ]).then(([libro, uniforme]) => {
+      if (!libro) return
+      fotosPreparadasRef.current.libro = { origen: libro, lista: libro, comprimida: true }
+      setFotoLibro({ file: libro, url: URL.createObjectURL(libro) })
+      if (uniforme) {
+        fotosPreparadasRef.current.uniforme = { origen: uniforme, lista: uniforme, comprimida: true }
+        setFotoUniforme({ file: uniforme, url: URL.createObjectURL(uniforme) })
+      }
+      setIngresoFase(uniforme ? 'preview' : 'foto_uniforme')
+      track('fotos_pendientes_recuperadas', {
+        screen: 'ingreso_flow',
+        turno_id: turno.id,
+        value_json: { intento_id: parsed.intento_id, libro: true, uniforme: Boolean(uniforme) },
+      })
+    })
 
     const ctx = getDeviceContext()
     track('pagina_restaurada', {
@@ -1029,7 +1105,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
     setIngresoRestaurado(false)
     ingresoIntentoId.current = null
     ingresoStartTime.current = null
-    sessionStorage.removeItem(INGRESO_PENDIENTE_KEY)
+    fotosPreparadasRef.current = {}
+    // Confirmado o cancelado: las fotos pendientes de este intento ya no sirven.
+    if (ingresoTurno) void borrarFotosDe('ingreso', ingresoTurno.id)
+    borrarFlujo(INGRESO_PENDIENTE_KEY)
   }
 
   const cancelarIngreso = () => {
@@ -1294,8 +1373,13 @@ export default function GuardiaMobile({ user }: { user: any }) {
       // Cada foto por separado, para decir cuál falló. Si el celular no puede
       // comprimir pero la original es una foto válida, se usa la original (el
       // servidor la controla): un problema de cámara no debe impedir fichar.
-      const libro = await prepararFotoOperativa(fotoLibro.file, 'libro_guardia').catch(e => { throw new Error('libro:' + (e instanceof Error ? e.message : '')) })
-      const uniforme = await prepararFotoOperativa(fotoUniforme.file, 'operativa').catch(e => { throw new Error('uniforme:' + (e instanceof Error ? e.message : '')) })
+      // Si ya se preparó al sacarla (y es la misma foto), no se comprime de nuevo.
+      const yaLista = (tipo: 'libro' | 'uniforme', origen: File) => {
+        const p = fotosPreparadasRef.current[tipo]
+        return p && p.origen === origen ? { file: p.lista, comprimida: p.comprimida } : null
+      }
+      const libro = yaLista('libro', fotoLibro.file) ?? await prepararFotoOperativa(fotoLibro.file, 'libro_guardia').catch(e => { throw new Error('libro:' + (e instanceof Error ? e.message : '')) })
+      const uniforme = yaLista('uniforme', fotoUniforme.file) ?? await prepararFotoOperativa(fotoUniforme.file, 'operativa').catch(e => { throw new Error('uniforme:' + (e instanceof Error ? e.message : '')) })
       libroComprimido = libro.file
       uniformeComprimido = uniforme.file
     } catch (err) {
@@ -1448,12 +1532,12 @@ export default function GuardiaMobile({ user }: { user: any }) {
     // ── PASO 6: Refrescar state local ─────────────────────────────────────────
     const { data: registroCompleto } = await supabase
       .from('registros_asistencia')
-      .select('*')
+      .select(COLUMNAS_REGISTRO_VIGILADOR)
       .eq('id', registroId)
       .single()
 
     if (registroCompleto) {
-      setRegistros(prev => [...prev.filter(r => r.turno_id !== ingresoTurno!.id), registroCompleto])
+      setRegistros(prev => [...prev.filter(r => r.turno_id !== ingresoTurno!.id), registroCompleto as unknown as Registro])
     }
     setTurnos(prev => prev.map(t => t.id === ingresoTurno!.id ? { ...t, estado: 'cubierto' } : t))
 
@@ -1901,6 +1985,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
               if (fotoLibro) URL.revokeObjectURL(fotoLibro.url)
               setFotoLibro({ file, url: URL.createObjectURL(file) })
               setIngresoFase('foto_uniforme')
+              prepararYGuardarFoto('libro', file, ingresoTurno?.id)
               e.target.value = ''
             }}
           />
@@ -1922,6 +2007,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
               if (fotoUniforme) URL.revokeObjectURL(fotoUniforme.url)
               setFotoUniforme({ file, url: URL.createObjectURL(file) })
               setIngresoFase('preview')
+              prepararYGuardarFoto('uniforme', file, ingresoTurno?.id)
               e.target.value = ''
             }}
           />
@@ -1966,7 +2052,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
           </div>
           <button
             type="button"
-            onClick={() => { void recargarDatos() }}
+            onClick={() => { void recargarDatos(); void cargarPendientesPlanilla() }}
             disabled={refrescando}
             style={{
               background: 'transparent',
@@ -2083,6 +2169,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
             >
               {guardandoPassword ? 'Guardando...' : 'Cambiar contraseña'}
             </button>
+
+            {/* Diagnóstico del teléfono: conexión, espacio, versión, pendientes. */}
+            <DiagnosticoDispositivo ultimaActualizacion={ultimaActualizacion} />
           </div>
         )}
 
@@ -2109,7 +2198,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
             <div style={{ marginBottom: 10 }}>{errorCarga}</div>
             <button
               type="button"
-              onClick={() => { void recargarDatos() }}
+              onClick={() => { void recargarDatos(); void cargarPendientesPlanilla() }}
               disabled={refrescando}
               style={{
                 background: 'transparent',

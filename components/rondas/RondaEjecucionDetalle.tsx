@@ -191,7 +191,7 @@ function PuntoDetalle({ punto }: { punto: PuntoEjecucionDetalle }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={S.puntoNombre}>{punto.nombre}</div>
           <div style={S.puntoMeta}>
-            <span style={{ ...S.estadoChip, ...estadoPuntoStyle(punto.estado) }}>{punto.estado}</span>
+            <span style={{ ...S.estadoChip, ...estadoPuntoStyle(punto.estado) }}>{etiquetaEstadoPunto(punto.estado)}</span>
             <span style={S.puntoMetaTxt}>Registrado: {fechaHora(punto.registrado_at)}</span>
             {punto.hay_novedad && <span style={{ ...S.estadoChip, ...S.chipNovedad }}>Novedad</span>}
             {/* Distingue la foto automática de la configurada: esta visita nació
@@ -316,9 +316,16 @@ function EvidenciaFoto({ evidenciaId, indice }: { evidenciaId: string; indice: n
   )
 }
 
+// 'pendiente_validacion' (regla aprobada, nov. 2026): la foto espera la IA.
+// No es falta: se pinta violeta, distinto del rojo de incumplido.
+function etiquetaEstadoPunto(estado: string): string {
+  return estado === 'pendiente_validacion' ? 'pendiente de validación' : estado
+}
+
 function estadoPuntoStyle(estado: string): React.CSSProperties {
   switch (estado) {
     case 'cumplido':   return { background: '#052e16', color: '#4ade80', border: '1px solid #166534' }
+    case 'pendiente_validacion': return { background: '#2e1065', color: '#c4b5fd', border: '1px solid #6d28d9' }
     case 'incumplido': return { background: '#3b1116', color: '#fca5a5', border: '1px solid #991b1b' }
     case 'omitido':    return { background: '#0f172a', color: '#94a3b8', border: '1px solid #334155' }
     default:           return { background: '#1e293b', color: '#cbd5e1', border: '1px solid #334155' } // pendiente

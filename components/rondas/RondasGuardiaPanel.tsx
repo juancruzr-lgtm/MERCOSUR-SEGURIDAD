@@ -15,6 +15,7 @@ import {
   type RondasGuardiaActual,
 } from '@/lib/rondas'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
+import { useRefrescoAutomatico } from '@/components/movil/useRefrescoAutomatico'
 import RondaGuardiaDetalle from './RondaGuardiaDetalle'
 import RondaGuardiaEjecucion from './RondaGuardiaEjecucion'
 
@@ -45,9 +46,11 @@ interface Props {
   abrirRondaId?: string | null
 }
 
-// Refresco del turno vigente desde el servidor. El estado temporal por ronda se
+// Refresco del turno vigente desde el servidor: política única de
+// lib/refresco-movil.ts (3 min con pantalla visible + disparo compartido y
+// deduplicado al volver a primer plano). El estado temporal por ronda se
 // recalcula en cada render con `ahora` (barato); esto solo re-consulta la RPC.
-const REFRESCO_MS = 60_000
+// Iniciar una ronda o volver de un ingreso ya fuerzan su propia recarga.
 
 const ESTADO_META: Record<EstadoTemporalRonda, { texto: string; fondo: string; texto_color: string }> = {
   disponible:    { texto: 'Disponible',               fondo: '#16a34a', texto_color: '#f0fdf4' },
@@ -106,28 +109,13 @@ export default function RondasGuardiaPanel({ objetivos, ahora, recargaSolicitada
     setCargando(false)
   }, [iniciarCarga])
 
+  const recargaSilenciosa = useCallback(() => cargar(true), [cargar])
+  const { marcarCarga } = useRefrescoAutomatico(recargaSilenciosa)
+
   useEffect(() => {
-    let activo = true
+    marcarCarga()
     void cargar()
-
-    const refrescarSiVisible = () => {
-      if (!activo || document.visibilityState !== 'visible') return
-      void cargar(true)
-    }
-
-    const timer = window.setInterval(refrescarSiVisible, REFRESCO_MS)
-    document.addEventListener('visibilitychange', refrescarSiVisible)
-    window.addEventListener('focus', refrescarSiVisible)
-    window.addEventListener('online', refrescarSiVisible)
-
-    return () => {
-      activo = false
-      window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', refrescarSiVisible)
-      window.removeEventListener('focus', refrescarSiVisible)
-      window.removeEventListener('online', refrescarSiVisible)
-    }
-  }, [cargar])
+  }, [cargar, marcarCarga])
 
   // Deep link: abrir la ronda indicada una sola vez, cuando ya cargó la lista y
   // no hay una ejecución en curso (en ese caso el detalle de la ejecución manda).

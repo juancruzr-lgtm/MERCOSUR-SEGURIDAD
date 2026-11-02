@@ -20,8 +20,9 @@ import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/li
 import { evaluarCambioDeFin, mensajeImpacto } from '@/lib/relevo'
 import { repartirHorasDelDia } from '@/lib/horas-del-dia'
 import { ETIQUETA_TIPO_DEVOLUCION, generarBalance, resumenBalance } from '@/lib/balance-mensual'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada, sumarDiasFecha } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada, sumarDiasFecha } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
+import { validarCargaTurno, textoConfirmacionAdvertencias, esErrorTurnoSuperpuesto, type ResultadoValidacionTurno } from '@/lib/validacion-turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir lat/lng/radio de un objetivo. `authenticated` no
 // tiene privilegio de UPDATE sobre esas columnas: van sí o sí por acá.
@@ -119,6 +120,10 @@ import RondasNativasPanel from '@/components/rondas/RondasNativasPanel'
 import { Badge, alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { antiguedadSupervision, indexarUltimaSupervision, objetivoSupervisionVencida } from '@/lib/supervisiones'
+import { objetivoExigeSupervision } from '@/lib/supervisiones'
+import { cargarUltimaSupervisionPorObjetivo, filasDesdeIndice } from '@/lib/supervision-universo'
+import { useContextoExigibilidad } from '@/components/supervisiones/useContextoExigibilidad'
+import ServicioObjetivoEditor from '@/components/objetivos/ServicioObjetivoEditor'
 import {
   alertaEstaIntervenida,
   calcularMinutosTardanzaRegistro,
@@ -145,17 +150,11 @@ import ControlProtocolos from '@/components/protocolos/ControlProtocolos'
 import LegajoDigital from '@/components/legajo/LegajoDigital'
 import RegistrarBaja from '@/components/bajas/RegistrarBaja'
 
-// Baja laboral confirmada = acceso bloqueado (migración 20261110120000). La base
-// ya no le deja leer ni escribir nada; esto sólo muestra un mensaje claro y
-// cierra la sesión. Si la función todavía no existe (migración sin aplicar), no bloquea.
-async function accesoBloqueadoPorBaja(): Promise<boolean> {
-  const { data, error } = await supabase.rpc('mi_acceso_estado')
-  if (error) return false
-  return Boolean((data as { bloqueado?: boolean } | null)?.bloqueado)
-}
-const MENSAJE_ACCESO_BLOQUEADO = 'Tu acceso a la app está deshabilitado por una baja laboral. Si es un error, consultá con Administración.'
+import Login, { perfilDeSesionActual, resolverDelegacionGerencia } from './Login'
 import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
+import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
+import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -582,231 +581,6 @@ function Modal({ title, onClose, children, footer }: any) {
         </div>
         <div style={{ padding:24 }}>{children}</div>
         {footer && <div style={{ padding:'16px 24px', borderTop:'1px solid #1e2d42', display:'flex', justifyContent:'flex-end', gap:10 }}>{footer}</div>}
-      </div>
-    </div>
-  )
-}
-
-function Login({ onLogin }: { onLogin: (u: any) => void }) {
-  const [email, setEmail] = useState('')
-  const [pass, setPass] = useState('')
-  const [error, setError] = useState('')
-  const [resetMsg, setResetMsg] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [resetLoading, setResetLoading] = useState(false)
-  const [magicLoading, setMagicLoading] = useState(false)
-
-  const mensajeErrorAuth = (authError: unknown, accion: string) => {
-    const raw = authError instanceof Error
-      ? authError.message
-      : typeof authError === 'object' && authError && 'message' in authError
-        ? String((authError as { message: unknown }).message)
-        : String(authError || '')
-
-    if (/invalid login credentials/i.test(raw)) return 'Email o contraseña/DNI incorrectos.'
-    // Baja laboral confirmada: la cuenta queda con ban en Supabase Auth.
-    if (/banned/i.test(raw)) return MENSAJE_ACCESO_BLOQUEADO
-    if (/email not confirmed/i.test(raw)) return 'El email todavía no fue confirmado. Usá Magic Link o pedí un nuevo enlace.'
-    if (/rate limit|too many requests|too many/i.test(raw)) return `Supabase limitó temporalmente los envíos de email. Esperá unos minutos y volvé a intentar. Detalle: ${raw}`
-    if (/smtp|email|mail|send|provider/i.test(raw)) return `No se pudo enviar el email de ${accion}. Revisá la configuración SMTP en Supabase. Detalle: ${raw}`
-    if (/redirect/i.test(raw)) return `No se pudo generar el enlace de ${accion}. Revisá las URLs permitidas en Supabase Auth. Detalle: ${raw}`
-
-    return raw || `No se pudo completar ${accion}.`
-  }
-
-  const login = async () => {
-    const emailLogin = email.trim().toLowerCase()
-    const passwordLogin = pass.trim()
-
-    setLoading(true)
-    setError('')
-    setResetMsg('')
-
-    // Acá había tres console.log de depuración —el email, el error y `data`—.
-    // El último es el grave: `data` es la respuesta completa de
-    // `signInWithPassword`, o sea `session.access_token` y
-    // `session.refresh_token` impresos en la consola del navegador, en
-    // producción, en cada inicio de sesión de cada vigilador. El error ya se
-    // le muestra al usuario con `mensajeErrorAuth`; los tres no hacían falta.
-    const { data, error: err } = await supabase.auth.signInWithPassword({
-      email: emailLogin,
-      password: passwordLogin,
-    })
-
-    if (err) {
-      setError(mensajeErrorAuth(err, 'inicio de sesión'))
-      setLoading(false)
-      return
-    }
-
-    if (await accesoBloqueadoPorBaja()) {
-      await supabase.auth.signOut()
-      setError(MENSAJE_ACCESO_BLOQUEADO)
-      setLoading(false)
-      return
-    }
-
-    let { data: perfil, error: perfilError } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('auth_user_id', data.user.id)
-      .maybeSingle()
-
-    if ((!perfil || perfilError) && data.user.email) {
-      const fallback = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('email', data.user.email.trim().toLowerCase())
-        .maybeSingle()
-
-      if (fallback.data) {
-        perfil = fallback.data
-        perfilError = null
-        await supabase
-          .from('usuarios')
-          .update({ auth_user_id: data.user.id })
-          .eq('id', fallback.data.id)
-      }
-    }
-
-    if (perfilError || !perfil) {
-      setError(perfilError?.message || 'Usuario sin perfil asignado')
-      await supabase.auth.signOut()
-      setLoading(false)
-      return
-    }
-
-    onLogin(perfil)
-    setLoading(false)
-  }
-
-  const recuperarPassword = async () => {
-    setError('')
-    setResetMsg('')
-    const emailNormalizado = email.trim().toLowerCase()
-
-    if (!emailNormalizado) {
-      setError('Ingresá tu email para recuperar la contraseña')
-      return
-    }
-
-    setResetLoading(true)
-    const { error } = await supabase.auth.resetPasswordForEmail(emailNormalizado, {
-      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
-    })
-
-    if (error) {
-      setError(mensajeErrorAuth(error, 'recuperación de contraseña'))
-    } else {
-      setResetMsg('Si el email existe y SMTP está configurado en Supabase, se enviará un enlace de recuperación.')
-    }
-
-    setResetLoading(false)
-  }
-
-  const enviarMagicLink = async () => {
-    setError('')
-    setResetMsg('')
-    const emailNormalizado = email.trim().toLowerCase()
-
-    if (!emailNormalizado) {
-      setError('Ingresá tu email para enviar el enlace de ingreso')
-      return
-    }
-
-    setMagicLoading(true)
-    const { error } = await supabase.auth.signInWithOtp({
-      email: emailNormalizado,
-      options: {
-        emailRedirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
-      },
-    })
-
-    if (error) {
-      setError(mensajeErrorAuth(error, 'Magic Link'))
-    } else {
-      setResetMsg('Si el email existe y SMTP está configurado en Supabase, se enviará un enlace de ingreso.')
-    }
-
-    setMagicLoading(false)
-  }
-
-  return (
-    <div style={{
-      minHeight:'100vh',
-      display:'flex',
-      alignItems:'center',
-      justifyContent:'center',
-      padding:24,
-      background:`
-        radial-gradient(circle at 18% 18%, ${alpha(brandColors.yellow, 0.18)}, transparent 30%),
-        radial-gradient(circle at 82% 8%, ${alpha(brandColors.red, 0.16)}, transparent 26%),
-        linear-gradient(135deg, ${brandColors.black} 0%, ${brandColors.appBg} 54%, ${brandColors.carbon} 100%)
-      `,
-      fontFamily:FONT_BRAND,
-    }}>
-      <div style={{ width:'100%', maxWidth:420 }}>
-        <div style={{ textAlign:'center', marginBottom:30 }}>
-          <img
-            src={brandAssets.logoFondoOscuro}
-            alt="Mercosur Seguridad"
-            style={{ width:'min(280px, 78vw)', height:'auto', objectFit:'contain', filter:`drop-shadow(0 18px 34px ${alpha(brandColors.black, 0.5)})` }}
-          />
-          <div style={{ color:brandColors.text, fontSize:13, marginTop:12, letterSpacing:0.6 }}>Sistema de Control Operativo</div>
-        </div>
-        <div style={{
-          background:alpha(brandColors.surface, 0.94),
-          border:`1px solid ${alpha(brandColors.yellow, 0.26)}`,
-          borderRadius:16,
-          padding:32,
-          boxShadow:`0 24px 80px ${alpha(brandColors.black, 0.45)}`,
-          backdropFilter:'blur(12px)',
-        }}>
-          <div style={{ fontFamily:FONT_BRAND, fontSize:20, fontWeight:800, marginBottom:24, color:brandColors.textStrong }}>Iniciar sesión</div>
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Email</label>
-            <input
-              style={S.input}
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="usuario@mercosur.com"
-            />
-          </div>
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Contraseña</label>
-            <input
-              style={S.input}
-              type="password"
-              value={pass}
-              onChange={e => setPass(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && login()}
-            />
-          </div>
-          {error && <div style={{ color:semanticColors.error, fontSize:13, marginBottom:12 }}>{error}</div>}
-          {resetMsg && <div style={{ color:semanticColors.success, fontSize:13, marginBottom:12 }}>{resetMsg}</div>}
-          <button
-            style={{ ...S.btn, background:brandColors.yellow, color:brandColors.black, width:'100%', justifyContent:'center', fontFamily:FONT_BRAND, fontWeight:800 }}
-            onClick={login}
-            disabled={loading}
-          >
-            {loading ? 'Ingresando...' : 'Ingresar'}
-          </button>
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center', marginTop:10 }}
-            onClick={recuperarPassword}
-            disabled={resetLoading}
-          >
-            {resetLoading ? 'Enviando...' : 'Olvidé mi contraseña'}
-          </button>
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center', marginTop:10 }}
-            onClick={enviarMagicLink}
-            disabled={magicLoading}
-          >
-            {magicLoading ? 'Enviando...' : 'Magic Link'}
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -2686,6 +2460,9 @@ function SupervisionesAdmin({
   // "Hoy" y "este mes" en hora argentina, no la del navegador ni UTC.
   const hoy = fechaArgentina(new Date())
   const mesActual = hoy.slice(0, 7)
+  // Turnos de la ventana + suspensiones para el criterio único de
+  // exigibilidad. Se relee al cambiar de día.
+  const contextoExigibilidad = useContextoExigibilidad(hoy)
 
   // ── Período consultado ────────────────────────────────────────────────────
   // Ranking, carga por zona, "por supervisor/por objetivo" del mes y la tabla
@@ -2831,8 +2608,11 @@ function SupervisionesAdmin({
     (ultimasSupervisionesObjetivos || []).length > 0 ? ultimasSupervisionesObjetivos : supervisiones,
   )
 
+  // Criterio ÚNICO de exigibilidad (lib/supervisiones.ts): activo, dentro de
+  // su servicio, no suspendido y operando. Igual que el panel del Dashboard y
+  // la agenda del supervisor; los activos sin turnos recientes no son deuda.
   const objetivosSinSupervision = objetivos
-    .filter((objetivo: Objetivo) => objetivo.estado === 'activo')
+    .filter((objetivo: Objetivo) => objetivoExigeSupervision(objetivo as any, contextoExigibilidad, ahora))
     .filter((objetivo: Objetivo) =>
       objetivoSupervisionVencida(objetivo, ultimaIsoPorObjetivo.get(objetivo.id) ?? null, ahora.getTime()),
     )
@@ -2954,6 +2734,7 @@ function SupervisionesAdmin({
   // Mismo índice y mismo cálculo que `objetivosSinSupervision`: antes el ranking
   // leía otra fuente y podía contradecir al panel sobre el mismo objetivo.
   const objetivoVencidoRanking = (objetivo: Objetivo) =>
+    objetivoExigeSupervision(objetivo as any, contextoExigibilidad, ahora) &&
     objetivoSupervisionVencida(objetivo, ultimaIsoPorObjetivo.get(objetivo.id) ?? null, ahora.getTime())
 
   const usuarioActivoGuardia = (id?: string | null) => {
@@ -4566,6 +4347,19 @@ function Objetivos({ objetivos, setObjetivos, turnos, checklistPlantillas = [], 
             </div>
           </div>
 
+          {/* Fin de servicio y suspensiones: sólo Dir. Operativa,
+              Administración y Gerencia. Se guardan aparte del formulario. */}
+          {editId && tieneCapacidad(user, 'gestionar_objetivos') && (
+            <div style={{ marginBottom:16, paddingTop:10, borderTop:'1px solid rgba(255,255,255,.08)' }}>
+              <ServicioObjetivoEditor
+                key={editId}
+                objetivoId={editId}
+                fechaFinInicial={(objetivos as any[]).find(o => o.id === editId)?.fecha_fin_servicio ?? null}
+                onGuardado={cambios => setObjetivos((prev: any[]) => prev.map(o => o.id === editId ? { ...o, ...cambios } : o))}
+              />
+            </div>
+          )}
+
           {/* Liquidación / Nocturnidad. Es una condición contractual del
               servicio: en algunos clientes las horas dentro de la franja
               generan un adicional. Acá sólo se configura; el Resumen Guardia
@@ -4865,27 +4659,25 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
     const guardiaNuevoId = formEdicion.guardia_id || null
 
-    // Verificar solapamiento solo cuando el turno es FUTURO y se cambia el guardia o los horarios
+    // Verificar la carga del vigilador solo cuando el turno es FUTURO: la
+    // superposición bloquea (también la rechaza el trigger de base); traslado
+    // entre objetivos, doble turno, horas del día y descanso se advierten.
     if (estadoOperativoEdicion === 'FUTURO' && guardiaNuevoId) {
-      const { data, error: turnosError } = await supabase
-        .from('turnos')
-        .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
-        .eq('guardia_id', guardiaNuevoId)
-        .in('fecha', fechasVecinasTurno(turnoEditando.fecha))
-
-      if (turnosError) {
-        setErrorEdicion(turnosError.message)
-        return
-      }
-
-      const candidato = {
+      const validacion = await validarCargaGuardia({
+        id: turnoEditando.id,
         guardia_id: guardiaNuevoId,
+        objetivo_id: (turnoEditando as any).objetivo_id ?? null,
         fecha: turnoEditando.fecha,
         hora_inicio: formEdicion.hora_inicio,
         hora_fin: formEdicion.hora_fin,
-      }
-      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditando.id, objetivosPausados)) {
+        estado: formEdicion.estado,
+      }, turnoEditando.id)
+      if (validacion === null) return
+      if (validacion.errores.length > 0) {
         setErrorEdicion(MENSAJE_TURNO_SUPERPUESTO)
+        return
+      }
+      if (validacion.advertencias.length > 0 && !window.confirm(textoConfirmacionAdvertencias(validacion.advertencias))) {
         return
       }
     }
@@ -4972,21 +4764,27 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     cerrarEdicion()
   }
 
-  const guardiaTieneTurnoSuperpuesto = async (candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>): Promise<boolean | null> => {
-    if (!candidato.guardia_id) return false
+  // Carga del vigilador alrededor del candidato (día anterior, mismo día y
+  // siguiente). Devuelve null si no se pudo leer: el llamador no guarda.
+  const validarCargaGuardia = async (
+    candidato: { id?: string | null, guardia_id?: string | null, objetivo_id?: string | null, fecha: string, hora_inicio: string, hora_fin: string, estado?: string | null },
+    excluirTurnoId: string | null,
+  ): Promise<ResultadoValidacionTurno | null> => {
+    if (!candidato.guardia_id) return { errores: [], advertencias: [] }
 
     const { data, error: turnosError } = await supabase
       .from('turnos')
-      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
+      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id, estado')
       .eq('guardia_id', candidato.guardia_id)
       .in('fecha', fechasVecinasTurno(candidato.fecha))
 
     if (turnosError) {
       setError(turnosError.message)
+      setErrorEdicion(turnosError.message)
       return null
     }
 
-    return tieneTurnoSuperpuesto(data || [], candidato, null, objetivosPausados)
+    return validarCargaTurno(candidato, data || [], { excluirTurnoId, objetivosPausados })
   }
 
   // Asignar el guardia del formulario sobre una vacante ya programada, por el
@@ -5069,10 +4867,13 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       estado_revision: 'aprobado',
     }
 
-    const conflicto = payload.guardia_id ? await guardiaTieneTurnoSuperpuesto(payload) : false
-    if (conflicto === null) return
-    if (conflicto) {
+    const validacion = await validarCargaGuardia(payload, null)
+    if (validacion === null) return
+    if (validacion.errores.length > 0) {
       setError(MENSAJE_TURNO_SUPERPUESTO)
+      return
+    }
+    if (validacion.advertencias.length > 0 && !window.confirm(textoConfirmacionAdvertencias(validacion.advertencias))) {
       return
     }
 
@@ -5110,7 +4911,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
         tipo_evento: 'normal',
       })
     } else if (error) {
-      setError(error.message)
+      setError(esErrorTurnoSuperpuesto(error) ? MENSAJE_TURNO_SUPERPUESTO : error.message)
     }
 
     setLoading(false)
@@ -12261,6 +12062,8 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
   const operacionesEnCurso = useRef<Set<string>>(new Set())
   const operacionesIds = useRef<Map<string, string>>(new Map())
   const [confirmacionManualAceptada, setConfirmacionManualAceptada] = useState(false)
+  // La base rechazó la confirmación por falta de respaldo: se ofrece la excepción.
+  const [sinRespaldo, setSinRespaldo] = useState(false)
   const [historialesExpandidos, setHistorialesExpandidos] = useState<Set<string>>(new Set())
 
   const hoy = fechaHoyArgentina()
@@ -12721,6 +12524,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     setMensaje('')
     setAccionActiva({ alerta, accion, intervencionOrigen })
     setConfirmacionManualAceptada(false)
+    setSinRespaldo(false)
     setFormIntervencion({
       guardia_id: alerta.turno.guardia_id || '',
       comentario: '',
@@ -12733,6 +12537,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
     setFormIntervencion({ guardia_id:'', comentario:'', motivo:'' })
     setError('')
     setConfirmacionManualAceptada(false)
+    setSinRespaldo(false)
   }
 
   const recargarEstadoServidor = async (turnoId: string) => {
@@ -12839,6 +12644,11 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
       cerrarAccion()
       setTab(['comentario', 'reapertura', 'anulacion_cobertura'].includes(accion) ? 'pendientes' : 'intervenidas')
     } catch (actionError) {
+      if (esConfirmacionSinEvidencia(actionError)) {
+        // Rechazo limpio de la base (no aplicó nada): se ofrece la excepción en el mismo panel.
+        setSinRespaldo(true)
+        return
+      }
       try {
         await recargarEstadoServidor(turno.id)
       } catch {
@@ -12984,6 +12794,12 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
             placeholder={accionActiva.accion === 'confirmar_cubierto' ? 'Detalle de la verificación manual realizada' : 'Detalle de la intervención'}
           />
         </div>
+
+        {sinRespaldo && ['confirmar_cubierto', 'confirmar_asistencia'].includes(accionActiva.accion) && (
+          <div style={{ marginBottom:12 }}>
+            <ExcepcionAsistenciaPaso turnoId={alerta.turno.id} onAutorizada={ejecutarAccion} deshabilitado={Boolean(loadingAccion)} />
+          </div>
+        )}
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
           <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={cerrarAccion} disabled={Boolean(loadingAccion)}>Cancelar</button>
@@ -14060,7 +13876,7 @@ function TurnosBase() {
     </div>
   )
 }
-export default function AppPage() {
+export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | null } = {}) {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
   const [guardias, setGuardias] = useState<Usuario[]>([])
@@ -14198,13 +14014,13 @@ export default function AppPage() {
       // de que PostgREST acepte ordenar por una columna no seleccionada evita
       // un modo de falla feo — si la consulta fallara, esto devuelve data: []
       // y todos los objetivos pasarían a decir "Nunca supervisado".
-      fetchPaginadoResult((desde, hasta) =>
-        supabase
-          .from('supervisiones')
-          .select('id, objetivo_id, created_at')
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false })
-          .range(desde, hasta)),
+      //
+      // Ahora vía lib/supervision-universo: RPC agregada si existe (una fila
+      // por objetivo), paginado si no. Sin `incompleta`, igual que E1.
+      cargarUltimaSupervisionPorObjetivo(supabase).then(r => ({
+        data: r.error ? null : filasDesdeIndice(r.indice),
+        error: r.error as any,
+      })),
       supabase.from('zonas_operativas').select('*').order('nombre'),
       supabase.from('supervisor_zonas').select('*'),
     ])
@@ -14243,15 +14059,10 @@ export default function AppPage() {
     setLoading(false)
   }, [])
 
-  const cargarSesionPorRol = useCallback(async (perfilBase: Usuario) => {
-    // Delegación gerencial (Fase 2D): resuelve la vigencia (desde/hasta/revocada)
-    // en la base y la adjunta como booleano al perfil, para que capacidadesDe sume
-    // el acceso gerencial completo mientras esté activa. No cambia puesto/rol.
-    let perfil = perfilBase
-    try {
-      const { data: delegado } = await supabase.rpc('tiene_delegacion_gerencia_actual')
-      perfil = { ...perfilBase, acceso_gerencia_delegado: delegado === true } as Usuario
-    } catch { /* si falla, queda sin delegación (fail-closed) */ }
+  const cargarSesionPorRol = useCallback(async (perfilBase: Usuario, delegacionResuelta = false) => {
+    // Delegación gerencial (Fase 2D): ver resolverDelegacionGerencia (Login.tsx).
+    // AppShell ya la resolvió para decidir el shell: no se repite la RPC.
+    const perfil = (delegacionResuelta ? perfilBase : await resolverDelegacionGerencia(perfilBase)) as Usuario
     if (shellDeUsuario(perfil) === 'admin') {
       const pantallaChica = detectarPantallaChicaAdmin()
       const preferencia = leerPreferenciaVistaAdmin()
@@ -14304,35 +14115,20 @@ export default function AppPage() {
   }, [])
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!data.session) {
-        setLoading(false)
-        return
-      }
-
-      if (await accesoBloqueadoPorBaja()) {
-        await supabase.auth.signOut()
+    // Montado desde AppShell: la sesión y el perfil ya se resolvieron afuera.
+    if (perfilInicial) {
+      void cargarSesionPorRol(perfilInicial, true)
+      return
+    }
+    void perfilDeSesionActual().then(async perfil => {
+      if (!perfil) {
         setUser(null)
         setLoading(false)
         return
       }
-
-      const { data: perfil, error } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('auth_user_id', data.session.user.id)
-        .single()
-
-      if (error || !perfil) {
-        await supabase.auth.signOut()
-        setUser(null)
-        setLoading(false)
-        return
-      }
-
       await cargarSesionPorRol(perfil)
     })
-  }, [cargarSesionPorRol])
+  }, [cargarSesionPorRol]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const navegarConFiltro = (destino: string, filtro: any) => {
     setFiltros(prev => ({ ...prev, [destino]: filtro }))

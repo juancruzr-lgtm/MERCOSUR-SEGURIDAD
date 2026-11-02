@@ -35,6 +35,8 @@ import type { AccionSupervisor, EstadoPrimerControl, EstadoSolicitud } from '@/l
 import { limitesDelMes } from '@/lib/calendario-mes'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { formatFechaHora } from '@/lib/formato'
+import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
+import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
 import {
   ESTADOS_REVISION, ETIQUETA_ESTADO_REVISION, ETIQUETA_MOTIVO_NO_CUBRE,
   ETIQUETA_NO_REQUIERE_REVISION, REVISION_SIN_TOCAR, claveRevision,
@@ -149,6 +151,8 @@ export default function BandejaPlanillas({
   const [comentario, setComentario] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [errorAccion, setErrorAccion] = useState('')
+  // La base rechazó la confirmación por falta de respaldo: se ofrece la excepción.
+  const [sinRespaldo, setSinRespaldo] = useState(false)
 
   // ── Corregir horario reconocido ──
   // Reutiliza corregir_registro_asistencia: los mismos campos _final y la misma
@@ -318,8 +322,14 @@ export default function BandejaPlanillas({
       if (rpcError) throw new Error(rpcError.message)
       setResolucion(null)
       setComentario('')
+      setSinRespaldo(false)
       setRecargas(v => v + 1)
     } catch (e) {
+      if (esConfirmacionSinEvidencia(e)) {
+        setSinRespaldo(true)
+        setErrorAccion('')
+        return
+      }
       setErrorAccion(e instanceof Error ? e.message : 'No se pudo registrar la resolución')
     } finally {
       setEnviando(false)
@@ -513,7 +523,7 @@ export default function BandejaPlanillas({
               <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' as const }}>
                 <button
                   style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #16653488', background: '#14532d', color: '#4ade80', fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}
-                  onClick={() => { setResolucion({ fila: f, accion: 'confirmar_asistencia' }); setComentario(''); setErrorAccion('') }}
+                  onClick={() => { setResolucion({ fila: f, accion: 'confirmar_asistencia' }); setComentario(''); setErrorAccion(''); setSinRespaldo(false) }}
                 >
                   Confirmar asistencia
                 </button>
@@ -777,11 +787,14 @@ export default function BandejaPlanillas({
               style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: 10, fontSize: 13, resize: 'vertical' as const, boxSizing: 'border-box' as const }}
             />
             {errorAccion && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{errorAccion}</div>}
+            {sinRespaldo && resolucion.accion === 'confirmar_asistencia' && (
+              <ExcepcionAsistenciaPaso turnoId={resolucion.fila.turnoId} onAutorizada={ejecutarResolucion} deshabilitado={enviando} />
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
               <button
                 style={{ padding: '10px 0', borderRadius: 8, border: '1px solid #334155', background: 'transparent', color: '#94a3b8', fontSize: 13, cursor: 'pointer' }}
                 disabled={enviando}
-                onClick={() => { setResolucion(null); setErrorAccion('') }}
+                onClick={() => { setResolucion(null); setErrorAccion(''); setSinRespaldo(false) }}
               >
                 Cancelar
               </button>

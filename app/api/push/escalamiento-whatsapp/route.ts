@@ -32,6 +32,15 @@ import {
 } from '@/lib/whatsapp'
 import { instanteLocal, nombreResponsablesOperativos, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import { sumarDiasFecha } from '@/lib/turnos'
+import { fetchPaginadoResult } from '@/lib/fetch-paginado'
+import {
+  WA_RONDA_MAX_ANTIGUEDAD_MIN, WA_RONDA_TOPE_DIARIO,
+  contarEnviosPorDestinatario, descarteWaRonda, inicioDiaArgentina,
+} from '@/lib/whatsapp-auditoria'
+import {
+  claveEnvioWhatsApp, completarEnvio, crearPresupuestoCorrida, destinatariosConRespaldo,
+  eventoRonda, eventoTurno, reclamarEnvio,
+} from '@/lib/whatsapp-envio-seguro'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -178,7 +187,7 @@ export async function GET(req: Request) {
       // WhatsApp en un día). El tope es estructural: aunque nadie resuelva las
       // alertas, lo que se evalúa acá no crece.
       client.from('ronda_alertas')
-        .select('id, tipo, estado, objetivo_id, puesto_id, turno_id, guardia_id, ventana_inicio, ventana_fin, detectada_at, ronda:rondas_base(nombre)')
+        .select('id, tipo, estado, objetivo_id, puesto_id, turno_id, guardia_id, ventana_inicio, ventana_fin, detectada_at, accion, resultado_intervencion, ronda:rondas_base(nombre)')
         .eq('estado', 'pendiente')
         .eq('tipo', 'no_iniciada')
         .gte('detectada_at', new Date(ahora.getTime() - 48 * 3600 * 1000).toISOString()),
@@ -267,6 +276,10 @@ export async function GET(req: Request) {
     const evento = f.ronda_alerta_id ?? f.turno_id
     if (evento) fallidosRecientes.add(`${evento}|${f.nivel}|${f.resultado}`)
   }
+  // Si esta lectura falla no se sabe qué se auditó en la última hora: se toma
+  // como "ya auditado" y no se escriben filas de fallido en esta corrida (antes
+  // el error se ignoraba y volvía la fila repetida cada 10 minutos).
+  const auditoriaReciente = (clave: string) => Boolean(fallidosRecientesRes.error) || fallidosRecientes.has(clave)
 
   // Respaldo cuando NADIE está de guardia en la zona: la lista configurada de
   // escalamiento (el jefe de supervisores; si no hay jefe activo, dirección).
@@ -281,6 +294,14 @@ export async function GET(req: Request) {
     : listaEscalamiento.map((x: any) => x.usuario_id)
 
   const proveedor = enviarDeVerdad ? proveedorPorDefecto() : proveedorSimulado()
+  // Presupuesto de la corrida: cortar con margen antes de maxDuration (60 s).
+  // El 07/10 cada corrida murió a los ~60 s en medio de los envíos.
+  const presupuesto = crearPresupuestoCorrida({
+    maxEnvios: Number(process.env.WHATSAPP_MAX_ENVIOS_POR_CORRIDA || 40),
+    maxMs: 40000,
+  })
+  // Tope por destinatario y día para +15/+30 (las rondas tienen el suyo).
+  const topeDiarioTurnos = Number(process.env.WHATSAPP_TURNOS_TOPE_DIARIO || 20)
   const acciones: any[] = []
   const descartes: Record<string, number> = {}
   const filasAuditoria: any[] = []
@@ -375,7 +396,7 @@ export async function GET(req: Request) {
       // Se registra y se sigue. El caso sin supervisor llega igual al nivel 30.
       // Con una fila fresca (<1 h) del mismo evento no se vuelve a escribir:
       // el reintento queda, la auditoría no se infla.
-      if (fallidosRecientes.has(`${t.id}|${nivel}|${motivoSinDestinatario.toLowerCase()}`)) {
+      if (auditoriaReciente(`${t.id}|${nivel}|${motivoSinDestinatario.toLowerCase()}`)) {
         descartes.fallido_reciente_ya_auditado = (descartes.fallido_reciente_ya_auditado ?? 0) + 1
         continue
       }
@@ -435,32 +456,44 @@ export async function GET(req: Request) {
         continue
       }
 
-      // Dedup ATÓMICA (claim-first), como ronda-vigilador: la marca se reclama
-      // ANTES de enviar y un insert fallido (23505 = ya reclamada por otra
-      // corrida, o cualquier otro error de escritura) significa NO enviar.
-      // El orden viejo (enviar y marcar después) dejaba el loop abierto: si la
-      // marca no se podía escribir/leer, el mismo WhatsApp salía en cada
-      // corrida. Trade-off asumido: un rechazo del proveedor después del claim
-      // ya no se reintenta — preferimos perder un aviso a repetir mil.
-      const claim = await client.from('notificaciones_enviadas')
-        .insert({ usuario_id: usuarioId, turno_id: t.id, tipo: nivel })
-      if (claim.error) {
-        descartes.ya_reclamada = (descartes.ya_reclamada ?? 0) + 1
+      if (!presupuesto.disponible()) {
+        descartes.presupuesto_corrida = (descartes.presupuesto_corrida ?? 0) + 1
         continue
       }
+
+      // RECLAMO ATÓMICO en la base (20261121130000) ANTES de enviar: clave
+      // estable (canal, etapa, evento, destinatario) con índice único, fila de
+      // auditoría 'reclamado', topes y reintento con backoff. Cualquier
+      // respuesta que no sea ok (o un error de la RPC) significa NO enviar.
+      const reclamo = await reclamarEnvio(client,
+        claveEnvioWhatsApp({ etapa: nivel, evento: eventoTurno(t.id), destinatarioId: usuarioId }),
+        {
+          turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
+          guardia_id: t.guardia_id, nivel, destinatario_id: usuarioId,
+          telefono: tel.e164, plantilla: destino.plantilla, minutos_descubierto: min,
+          proveedor: proveedor.nombre,
+        },
+        { topeDestinatarioDia: topeDiarioTurnos, topeEvento: nivel === NIVEL.supervisor ? 3 : null },
+      )
+      if (!reclamo.ok) {
+        descartes[`no_reclamado_${reclamo.motivo}`] = (descartes[`no_reclamado_${reclamo.motivo}`] ?? 0) + 1
+        continue
+      }
+      presupuesto.registrar()
 
       const r = await proveedor.enviar(destino)
       acciones.push({
         turno: t.id, nivel, destinatario: nombreDe(usuarioId),
-        telefono: tel.e164, ok: r.ok, error: r.error,
+        telefono: tel.e164, ok: r.ok, error: r.error, intento: reclamo.intento,
       })
-      filasAuditoria.push({
-        turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
-        guardia_id: t.guardia_id, nivel, destinatario_id: usuarioId,
-        telefono: tel.e164, plantilla: destino.plantilla, minutos_descubierto: min,
-        resultado: r.ok ? 'enviado' : 'fallido', id_proveedor: r.idProveedor,
-        proveedor: proveedor.nombre, error: r.error,
-      })
+      await completarEnvio(client, reclamo.id as string, r)
+      // Marca de compatibilidad (la lee la dedup previa de arriba). Sólo si
+      // salió: un fallo reintentable lo decide la base en la próxima corrida.
+      if (r.ok) {
+        await client.from('notificaciones_enviadas')
+          .insert({ usuario_id: usuarioId, turno_id: t.id, tipo: nivel })
+          .then(() => {}, () => {})
+      }
     }
   }
 
@@ -506,11 +539,43 @@ export async function GET(req: Request) {
   const nombreEmbebido = (v?: { nombre: string } | { nombre: string }[] | null): string | null =>
     Array.isArray(v) ? (v[0]?.nombre ?? null) : (v?.nombre ?? null)
 
+  // Tope diario por supervisor (auditoría oct-2026: el 07/10 salieron 5.753
+  // WhatsApp a 3 personas). Se cuentan los envíos de ronda de HOY (hora
+  // argentina), reales o en curso. FAIL-CLOSED como la dedup: sin poder
+  // contar, no se escala ninguna ronda.
+  const enviosHoyRes = await fetchPaginadoResult<{ destinatario_id: string | null; resultado: string | null }>((desde, hasta) =>
+    client.from('escalamiento_whatsapp_envios')
+      .select('destinatario_id, resultado')
+      .eq('nivel', NIVEL_RONDA)
+      .gte('created_at', inicioDiaArgentina(ahoraLocal.fecha))
+      .order('id', { ascending: true })
+      .range(desde, hasta))
+  if (enviosHoyRes.error) {
+    if (enviarDeVerdad && filasAuditoria.length > 0) {
+      await client.from('escalamiento_whatsapp_envios').insert(filasAuditoria)
+        .then(() => {}, (e: any) => console.error('[escalamiento] auditoría', e?.message))
+    }
+    return NextResponse.json(
+      { error: `No se pudo leer el tope diario de rondas: ${(enviosHoyRes.error as any)?.message}. No se envió nada de rondas (fail-closed).`, parcial: { acciones } },
+      { status: 500 },
+    )
+  }
+  const enviosHoy = contarEnviosPorDestinatario(enviosHoyRes.data)
+  const maxAntiguedadRondaMin = Number(process.env.WHATSAPP_RONDA_MAX_ANTIGUEDAD_MIN || WA_RONDA_MAX_ANTIGUEDAD_MIN)
+  const topeDiarioRonda = Number(process.env.WHATSAPP_RONDA_TOPE_DIARIO || WA_RONDA_TOPE_DIARIO)
+
   for (const alerta of rondasNoIniciadas) {
     const objetivo = objetivos.find((o: any) => o.id === alerta.objetivo_id)
     const d = decidirRonda(alerta, { objetivo })
     if (!d.escala) {
       if (d.motivo) descartesRonda[d.motivo] = (descartesRonda[d.motivo] ?? 0) + 1
+      continue
+    }
+    // Ya intervenida por un supervisor, o vieja (> 2 h): no se escala. La
+    // bandeja la sigue mostrando; un WhatsApp de hace horas sólo es ruido.
+    const descarte = descarteWaRonda(alerta as any, ahora.getTime(), maxAntiguedadRondaMin)
+    if (descarte) {
+      descartesRonda[descarte] = (descartesRonda[descarte] ?? 0) + 1
       continue
     }
     // El evento es la DETECCIÓN de la alerta. Las 70 pendientes históricas
@@ -548,19 +613,14 @@ export async function GET(req: Request) {
     // alerta no se calla: sube a la lista de escalamiento (jefe de
     // supervisores; sin jefe activo, dirección). Mismo espíritu que el +30 de
     // puestos descubiertos — alguien con poder de actuar se tiene que enterar.
-    let responsables = Array.from(new Set(r.responsables ?? []))
-    let origenRonda: string = r.origen
-    if (responsables.length === 0 && fallbackJefes.length > 0) {
-      responsables = Array.from(new Set(fallbackJefes))
-      origenRonda = 'fallback_jefes'
-    }
+    const dest = destinatariosConRespaldo(r, fallbackJefes)
+    const responsables = dest.destinatarios
+    const origenRonda: string = dest.origen
 
-    if (responsables.length === 0) {
-      const motivo = r.origen === 'multiples_sin_guardia'
-        ? 'VARIOS_RESPONSABLES_SIN_GUARDIA_DEFINIDA'
-        : 'SIN_SUPERVISOR_RESPONSABLE'
+    if (dest.motivoSinDestinatario) {
+      const motivo = dest.motivoSinDestinatario
       // Misma fila fresca (<1 h) → no se re-audita el mismo fallido.
-      if (fallidosRecientes.has(`${alerta.id}|${NIVEL_RONDA}|${motivo.toLowerCase()}`)) {
+      if (auditoriaReciente(`${alerta.id}|${NIVEL_RONDA}|${motivo.toLowerCase()}`)) {
         descartesRonda.fallido_reciente_ya_auditado = (descartesRonda.fallido_reciente_ya_auditado ?? 0) + 1
         continue
       }
@@ -582,6 +642,13 @@ export async function GET(req: Request) {
     for (const usuarioId of responsables) {
       const u = usuarios.find((x: any) => x.id === usuarioId)
       const tel = normalizarTelefonoAr(u?.telefono)
+
+      // Tope diario: pasado el cupo, el supervisor ya no recibe WhatsApp de
+      // rondas hoy (la bandeja y el push con resumen siguen).
+      if ((enviosHoy.get(usuarioId) ?? 0) >= topeDiarioRonda) {
+        descartesRonda.tope_diario = (descartesRonda.tope_diario ?? 0) + 1
+        continue
+      }
 
       if (!tel.e164) {
         acciones.push({
@@ -617,32 +684,48 @@ export async function GET(req: Request) {
         continue
       }
 
-      // Dedup ATÓMICA (claim-first), igual que arriba y que ronda-vigilador:
-      // reclamar la marca ANTES de enviar; cualquier error del insert (23505
-      // incluido) significa NO enviar. Es la vacuna contra el loop del 07/10.
-      const claim = await client.from('notificaciones_enviadas')
-        .insert({
-          usuario_id: usuarioId, objetivo_id: alerta.objetivo_id,
-          turno_id: null, tipo: claveDedupRonda(alerta),
-        })
-      if (claim.error) {
-        descartesRonda.ya_reclamada = (descartesRonda.ya_reclamada ?? 0) + 1
+      if (!presupuesto.disponible()) {
+        descartesRonda.presupuesto_corrida = (descartesRonda.presupuesto_corrida ?? 0) + 1
         continue
       }
+
+      // RECLAMO ATÓMICO (20261121130000): además de la clave única, la base
+      // vuelve a mirar la alerta AHORA — si el supervisor intervino entre la
+      // lectura y el envío, no sale — y aplica el tope diario bajo lock (dos
+      // corridas simultáneas no pueden pasarse del cupo).
+      const reclamo = await reclamarEnvio(client,
+        claveEnvioWhatsApp({ etapa: NIVEL_RONDA, evento: eventoRonda(alerta.id), destinatarioId: usuarioId }),
+        {
+          turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
+          puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
+          ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA, destinatario_id: usuarioId,
+          telefono: tel.e164, plantilla: destino.plantilla, proveedor: proveedor.nombre,
+        },
+        { topeDestinatarioDia: topeDiarioRonda, topeEvento: 3 },
+      )
+      if (!reclamo.ok) {
+        descartesRonda[`no_reclamado_${reclamo.motivo}`] = (descartesRonda[`no_reclamado_${reclamo.motivo}`] ?? 0) + 1
+        continue
+      }
+      presupuesto.registrar()
+      enviosHoy.set(usuarioId, (enviosHoy.get(usuarioId) ?? 0) + 1)
 
       const envio = await proveedor.enviar(destino)
       acciones.push({
         alerta: alerta.id, nivel: NIVEL_RONDA, destinatario: nombreDe(usuarioId),
-        telefono: tel.e164, ok: envio.ok, error: envio.error,
+        telefono: tel.e164, ok: envio.ok, error: envio.error, intento: reclamo.intento,
       })
-      filasAuditoria.push({
-        turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
-        puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
-        ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA, destinatario_id: usuarioId,
-        telefono: tel.e164, plantilla: destino.plantilla,
-        resultado: envio.ok ? 'enviado' : 'fallido', id_proveedor: envio.idProveedor,
-        proveedor: proveedor.nombre, error: envio.error,
-      })
+      await completarEnvio(client, reclamo.id as string, envio)
+      // Marca de compatibilidad para la dedup previa ("una alerta se avisa una
+      // vez"). Sólo si salió.
+      if (envio.ok) {
+        await client.from('notificaciones_enviadas')
+          .insert({
+            usuario_id: usuarioId, objetivo_id: alerta.objetivo_id,
+            turno_id: null, tipo: claveDedupRonda(alerta),
+          })
+          .then(() => {}, () => {})
+      }
     }
   }
 

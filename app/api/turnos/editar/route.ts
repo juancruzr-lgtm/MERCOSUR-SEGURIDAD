@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { alcanceDe, tieneCapacidad } from '@/lib/capacidades'
+import { MENSAJE_TURNO_SUPERPUESTO } from '@/lib/turnos'
+import { esErrorTurnoSuperpuesto } from '@/lib/validacion-turnos'
 
 export const runtime = 'nodejs'
 
@@ -167,6 +169,11 @@ export async function POST(req: NextRequest) {
     .single()
 
   if (updateError) {
+    // El trigger turnos_validar_superposicion (migración 20261121120000) es la
+    // autoridad sobre la superposición: se devuelve como conflicto, no como 500.
+    if (esErrorTurnoSuperpuesto(updateError)) {
+      return NextResponse.json({ error: MENSAJE_TURNO_SUPERPUESTO, codigo: 'TURNO_SUPERPUESTO' }, { status: 409 })
+    }
     return NextResponse.json({ error: updateError.message }, { status: 500 })
   }
 

@@ -1,6 +1,18 @@
 import { supabase } from '@/lib/supabase'
+import {
+  REINTENTOS_IDEMPOTENTES,
+  TIMEOUT_RPC_MS,
+  TIMEOUT_SUBIDA_MS,
+  esFallaDeRed,
+  registrarErrorRed,
+  reintentar,
+  senalConTimeout,
+  sha256Hex,
+  type PasoRondaRed,
+} from '@/lib/red-resiliente'
 import type { CausaPausa } from '@/lib/rondas-causas'
 import type { ModoQr } from '@/lib/rondas-qr'
+import type { MotivoIntervencion, ResultadoIntervencion } from '@/lib/alertas-ronda-intervencion'
 
 export const RONDA_INTERVALO_MINIMO = 15
 export const RONDA_INTERVALO_MAXIMO = 10080
@@ -310,6 +322,61 @@ function registrarErrorSupabase(contexto: string, error: ErrorSupabase): void {
 function fallaRpc<T>(contexto: string, error: ErrorSupabase, fallback: string): ResultadoRondas<T> {
   registrarErrorSupabase(contexto, error)
   return { data: null, error: mensajeError(error, fallback) }
+}
+
+// ── Red del flujo del vigilador (auditoría PWA oct-2026) ─────────────────────
+// Timeout por llamada, reintento acotado SÓLO para RPC idempotentes y SÓLO ante
+// fallas de red, y telemetría `ronda_red_error` acotada. Antes: sin timeout
+// (pantalla colgada en "Subiendo y validando…") y sólo console.error.
+
+export const MENSAJE_SIN_RED_RONDA = 'Sin conexión o la señal está muy lenta. Revisá la red e intentá de nuevo: lo que ya registraste no se pierde.'
+
+export interface ResultadoRpcRed {
+  data: unknown
+  error: ErrorSupabase | null
+  status: number
+  vencida: boolean
+}
+
+export async function rpcRondaConRed(
+  paso: PasoRondaRed,
+  nombre: string,
+  args: Record<string, unknown> | undefined,
+  opciones: { idempotente: boolean; ejecucionPuntoId?: string | null; timeoutMs?: number },
+): Promise<ResultadoRpcRed> {
+  const inicio = Date.now()
+  const llamar = async (): Promise<ResultadoRpcRed> => {
+    const senal = senalConTimeout(opciones.timeoutMs ?? TIMEOUT_RPC_MS)
+    try {
+      const builder = supabase.rpc(nombre, args) as any
+      const r = await (typeof builder?.abortSignal === 'function' ? builder.abortSignal(senal.signal) : builder)
+      return { data: r.data, error: r.error, status: r.status ?? 200, vencida: senal.vencida() }
+    } catch (e) {
+      return { data: null, error: { message: String((e as Error)?.message ?? e) } as ErrorSupabase, status: 0, vencida: senal.vencida() }
+    } finally {
+      senal.liberar()
+    }
+  }
+  const codigo = (r: ResultadoRpcRed) => (r.vencida ? 'timeout' : 'red')
+  const resultado = await reintentar(llamar, {
+    intentos: opciones.idempotente ? REINTENTOS_IDEMPOTENTES : 1,
+    reintentarSi: r => !!r.error && esFallaDeRed(r.error, r.status),
+    alReintentar: (intento, r) => registrarErrorRed(paso, {
+      err_code: codigo(r), err_message: r.error?.message, intento: intento - 1,
+      duracion_ms: Date.now() - inicio, http_status: r.status, ejecucion_punto_id: opciones.ejecucionPuntoId,
+    }),
+  })
+  if (resultado.error && esFallaDeRed(resultado.error, resultado.status)) {
+    registrarErrorRed(paso, {
+      err_code: `${codigo(resultado)}_final`, err_message: resultado.error.message,
+      duracion_ms: Date.now() - inicio, http_status: resultado.status, ejecucion_punto_id: opciones.ejecucionPuntoId,
+    })
+  }
+  return resultado
+}
+
+function esResultadoSinRed(r: ResultadoRpcRed): boolean {
+  return !!r.error && esFallaDeRed(r.error, r.status)
 }
 
 export function validarRondaBase(
@@ -886,8 +953,12 @@ export interface RondaGuardiaPunto {
 }
 
 export type EstadoEjecucionRonda = 'en_curso' | 'finalizada' | 'cancelada'
-export type ResultadoEjecucionRonda = 'completa' | 'incompleta'
-export type EstadoEjecucionPunto = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido'
+// 'pendiente_validacion' (regla aprobada, migración 20261120120000): el punto
+// ya se registró y su única evidencia es una foto que la IA todavía no
+// analizó. No es cumplido ni incumplido. Una ronda recorrida entera cuyo único
+// pendiente es ése queda con resultado 'pendiente_validacion', no 'incompleta'.
+export type ResultadoEjecucionRonda = 'completa' | 'incompleta' | 'pendiente_validacion'
+export type EstadoEjecucionPunto = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido' | 'pendiente_validacion'
 
 // Estado de un punto dentro de una ejecución. `ronda_punto_id` referencia la
 // definición en ronda_puntos; el resto son valores del snapshot tomado al
@@ -1120,6 +1191,10 @@ export interface VeredictoPuntoRonda {
   qr_verificado?: boolean
   /** La exigencia QR aplicaba (modo obligatorio + credencial activa). */
   qr_exigible?: boolean
+  /** Qué evidencia validó el punto (regla aprobada): gps | qr | foto_ia | revision. */
+  validado_por?: 'gps' | 'qr' | 'foto_ia' | 'revision' | null
+  /** La foto espera la IA: el punto no es cumplido ni incumplido todavía. */
+  pendiente_validacion?: boolean
 }
 
 export interface RespuestaRegistrarPunto {
@@ -1165,11 +1240,14 @@ export function normalizarEjecucion(bruto: any): RondaEjecucionActual | null {
 export async function iniciarRonda(
   rondaBaseId: string,
 ): Promise<ResultadoRondas<RespuestaIniciarRonda>> {
-  const { data, error } = await supabase.rpc('iniciar_ronda', {
+  // Idempotente (devuelve la ejecución en curso si ya existe): se puede reintentar.
+  const r = await rpcRondaConRed('iniciar_ronda', 'iniciar_ronda', {
     p_ronda_base_id: rondaBaseId,
-  })
+  }, { idempotente: true })
+  const { data, error } = r
 
   if (error) {
+    if (esResultadoSinRed(r)) return { data: null, error: MENSAJE_SIN_RED_RONDA }
     return fallaRpc('iniciar_ronda', error, 'No se pudo iniciar la ronda.')
   }
 
@@ -1194,9 +1272,11 @@ export async function iniciarRonda(
  * guardia anterior sobre el mismo turno nunca se expone ni se continúa.
  */
 export async function obtenerEjecucionActual(): Promise<ResultadoRondas<RespuestaEjecucionActual>> {
-  const { data, error } = await supabase.rpc('obtener_ejecucion_actual')
+  const r = await rpcRondaConRed('obtener_ejecucion_actual', 'obtener_ejecucion_actual', undefined, { idempotente: true })
+  const { data, error } = r
 
   if (error) {
+    if (esResultadoSinRed(r)) return { data: null, error: MENSAJE_SIN_RED_RONDA }
     return fallaRpc('obtener_ejecucion_actual', error, 'No se pudo consultar la ronda en curso.')
   }
 
@@ -1227,19 +1307,40 @@ export async function subirFotoPuntoRonda(
     return { data: null, error: 'Tu sesión venció. Volvé a ingresar.' }
   }
 
+  // Si una subida anterior llegó al servidor pero se perdió la respuesta, la
+  // evidencia ya existe con la misma huella: se reutiliza en vez de volver a
+  // mandar la foto entera por una red que ya demostró ser mala.
+  const huella = await sha256Hex(foto)
+  if (huella) {
+    const existente = await evidenciaExistentePorHuella(ejecucionPuntoId, huella)
+    if (existente) return { data: existente, error: null }
+  }
+
   const form = new FormData()
   form.append('ejecucionPuntoId', ejecucionPuntoId)
   form.append('foto', foto, 'punto.jpg')
 
+  // La subida NO se reintenta sola: el body es grande y el reintento lo decide
+  // la persona (con el chequeo de huella de arriba, que evita mandarla dos veces).
+  const inicio = Date.now()
+  const senal = senalConTimeout(TIMEOUT_SUBIDA_MS)
   try {
     const response = await fetch('/api/rondas/evidencia', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: form,
+      signal: senal.signal,
     })
     const body = await response.json().catch(() => null)
 
     if (!response.ok) {
+      // 5xx/408/429: red o servidor, no la foto. Se registra para el diagnóstico.
+      if (response.status >= 500 || response.status === 408 || response.status === 429) {
+        registrarErrorRed('subir_foto_punto', {
+          err_code: `http_${response.status}`, err_message: body?.error,
+          duracion_ms: Date.now() - inicio, http_status: response.status, ejecucion_punto_id: ejecucionPuntoId,
+        })
+      }
       return {
         data: null,
         error: body?.error || 'No se pudo subir la foto del punto.',
@@ -1247,8 +1348,59 @@ export async function subirFotoPuntoRonda(
     }
 
     return { data: body?.evidencia as EvidenciaPuntoRonda, error: null }
+  } catch (e) {
+    registrarErrorRed('subir_foto_punto', {
+      err_code: senal.vencida() ? 'timeout' : 'red',
+      err_message: (e as Error)?.message,
+      duracion_ms: Date.now() - inicio, http_status: 0, ejecucion_punto_id: ejecucionPuntoId,
+    })
+    return {
+      data: null,
+      error: senal.vencida()
+        ? 'La subida de la foto tardó demasiado (señal débil). Intentá de nuevo: si ya había llegado, no se vuelve a subir.'
+        : 'No hay conexión para subir la foto.',
+    }
+  } finally {
+    senal.liberar()
+  }
+}
+
+/**
+ * Evidencia del punto ya registrada con esta huella (RLS: el guardia lee sus
+ * propias evidencias). null si no existe, si la huella difiere o si la consulta
+ * falla: en ese caso se sube normalmente.
+ */
+export async function evidenciaExistentePorHuella(
+  ejecucionPuntoId: string,
+  sha256: string,
+): Promise<EvidenciaPuntoRonda | null> {
+  const senal = senalConTimeout(TIMEOUT_RPC_MS)
+  try {
+    const { data, error, status } = await (supabase
+      .from('evidencias')
+      .select('id, proceso_id, bucket, storage_path, created_at, contenido_sha256')
+      .eq('proceso_tipo', 'ronda')
+      .eq('proceso_id', ejecucionPuntoId)
+      .eq('tipo_evidencia', 'punto_control')
+      .limit(1) as any)
+      .abortSignal(senal.signal)
+      .maybeSingle()
+    if (error) {
+      if (esFallaDeRed(error, status)) {
+        registrarErrorRed('verificar_evidencia', {
+          err_code: senal.vencida() ? 'timeout' : 'red', err_message: error.message,
+          http_status: status, ejecucion_punto_id: ejecucionPuntoId,
+        })
+      }
+      return null
+    }
+    if (!data || data.contenido_sha256 !== sha256) return null
+    const { contenido_sha256: _omitida, ...evidencia } = data
+    return evidencia as EvidenciaPuntoRonda
   } catch {
-    return { data: null, error: 'No hay conexión para subir la foto.' }
+    return null
+  } finally {
+    senal.liberar()
   }
 }
 
@@ -1261,15 +1413,19 @@ export async function registrarPuntoRonda(
   gps: GpsPuntoRonda | null,
   hayNovedad = false,
 ): Promise<ResultadoRondas<RespuestaRegistrarPunto>> {
-  const { data, error } = await supabase.rpc('registrar_punto_ronda', {
+  // Idempotente en el servidor: un reintento tras una respuesta perdida
+  // devuelve `ya_registrado` con la ejecución, sin volver a escribir.
+  const r = await rpcRondaConRed('registrar_punto_ronda', 'registrar_punto_ronda', {
     p_ejecucion_punto_id: ejecucionPuntoId,
     p_latitud: gps?.latitud ?? null,
     p_longitud: gps?.longitud ?? null,
     p_precision_metros: gps?.precision_metros ?? null,
     p_hay_novedad: hayNovedad,
-  })
+  }, { idempotente: true, ejecucionPuntoId })
+  const { data, error } = r
 
   if (error) {
+    if (esResultadoSinRed(r)) return { data: null, error: MENSAJE_SIN_RED_RONDA }
     return fallaRpc('registrar_punto_ronda', error, 'No se pudo registrar el punto.')
   }
 
@@ -1471,7 +1627,7 @@ export function mensajeContextoCerrarRonda(contexto: ContextoCerrarRonda): strin
 // funciones solo tipan y normalizan la respuesta. No aceptan ni envían
 // storage_path, ni guardia/puesto/objetivo de alcance fabricados por el cliente.
 
-export type EstadoPuntoEjecucion = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido'
+export type EstadoPuntoEjecucion = 'pendiente' | 'cumplido' | 'incumplido' | 'omitido' | 'pendiente_validacion'
 
 // ── B1: detalle de una ejecución para supervisión ─────────────────────────────
 
@@ -1610,6 +1766,8 @@ export interface EjecucionHistorialItem {
   puntos_cumplidos: number
   puntos_incumplidos: number
   puntos_omitidos: number
+  /** Puntos cuya foto espera la IA (migración 20261120120000). Ausente = 0. */
+  puntos_pendientes_validacion?: number
   cerrada_por: string | null
   cerrada_at: string | null
   cerrada_motivo: string | null
@@ -1677,9 +1835,10 @@ export type EstadoRondaProgramada =
   | 'completada'
   | 'incompleta'
   | 'pausada'      // sin ejecución, ventana cubierta por pausa de supervisor
+  | 'pendiente_validacion' // recorrida entera; algún punto espera la IA
 
 export const ESTADOS_RONDA_PROGRAMADA: readonly EstadoRondaProgramada[] =
-  ['pendiente', 'no_iniciada', 'en_curso', 'completada', 'incompleta', 'pausada'] as const
+  ['pendiente', 'no_iniciada', 'en_curso', 'completada', 'incompleta', 'pausada', 'pendiente_validacion'] as const
 
 export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): string {
   switch (estado) {
@@ -1689,6 +1848,7 @@ export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): st
     case 'completada':  return 'Completada'
     case 'incompleta':  return 'Incompleta'
     case 'pausada':     return 'Pausada'
+    case 'pendiente_validacion': return 'Pendiente de validación'
   }
 }
 
@@ -1719,6 +1879,10 @@ export function etiquetaEstadoRondaProgramada(estado: EstadoRondaProgramada): st
 //                            incumplimientos GPS: la ronda SE HIZO
 //   'completada'           → cumplida_observada  si arrancó tarde
 //                          → cumplida            si está limpia
+//   'pendiente_validacion' → pendiente_validacion: se recorrió todo y algún
+//                            punto espera la IA (regla aprobada, nov. 2026).
+//                            No es incumplimiento: se resuelve sola cuando la
+//                            IA acepta (cumplida) o rechaza (observada).
 //
 // La foto de control por reincidencia GPS NO aparece acá a propósito: es una
 // exigencia de una visita puntual, no un estado de la ronda. La ronda se
@@ -1733,6 +1897,7 @@ export type EstadoTecnicoRonda =
   | 'incompleta'
   | 'no_iniciada'
   | 'pausada'
+  | 'pendiente_validacion'
 
 export type EstadoAlertaVisual = 'sin_alerta' | 'pendiente' | 'intervenida'
 
@@ -1745,6 +1910,7 @@ export const ETIQUETA_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   incompleta:         'Incompleta',
   no_iniciada:        'No iniciada',
   pausada:            'Pausada',
+  pendiente_validacion: 'Pendiente de validación',
 }
 
 /** Versión corta para superficies compactas (tarjeta de 200 px, chips). */
@@ -1757,6 +1923,7 @@ export const ETIQUETA_CORTA_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> =
   incompleta:         'Incompleta',
   no_iniciada:        'No iniciada',
   pausada:            'Pausada',
+  pendiente_validacion: 'Por validar',
 }
 
 export const ETIQUETA_ESTADO_ALERTA: Record<EstadoAlertaVisual, string> = {
@@ -1778,6 +1945,7 @@ export const COLOR_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   incompleta:         '#f97316',  // naranja
   no_iniciada:        '#ef4444',  // rojo — solo mientras la alerta esté sin intervenir
   pausada:            '#f59e0b',  // ámbar
+  pendiente_validacion: '#a78bfa', // violeta — espera la IA, no es falta
 }
 
 /** Verde lima: alerta intervenida. Distinto del verde y del verde claro. */
@@ -1792,6 +1960,7 @@ export const ICONO_ESTADO_TECNICO: Record<EstadoTecnicoRonda, string> = {
   incompleta:         '⚠️',
   no_iniciada:        '❌',
   pausada:            '⏸',
+  pendiente_validacion: '🔎',
 }
 
 function msRonda(iso: string): number {
@@ -1820,8 +1989,11 @@ export function estadoTecnicoRonda(r: RondaProgramada, ahora: number = Date.now(
   // Ejecución finalizada. Puntos sin recorrer o cierre forzado: abandono.
   if (r.puntos_omitidos > 0 || r.es_cierre_administrativo) return 'incompleta'
 
-  // Se recorrió todo. Lo que queda son observaciones, no abandono.
-  if (r.puntos_incumplidos > 0 || r.inicio_tardio) return 'cumplida_observada'
+  // Se recorrió todo. Un punto sin evidencia válida es observación, no abandono.
+  if (r.puntos_incumplidos > 0) return 'cumplida_observada'
+  // Algún punto espera la IA: no se adelanta ni el verde ni la observación.
+  if (r.estado === 'pendiente_validacion' || (r.puntos_pendientes_validacion ?? 0) > 0) return 'pendiente_validacion'
+  if (r.inicio_tardio) return 'cumplida_observada'
   if (r.estado === 'completada') return 'cumplida'
 
   // `incompleta` sin omitidos ni incumplidos no debería existir (el motor solo
@@ -1866,6 +2038,7 @@ export function ordenOperativoRonda(r: RondaProgramada): number {
     case 'en_curso':           return 2
     case 'incompleta':         return 4
     case 'cumplida_observada': return 5
+    case 'pendiente_validacion': return 5
     case 'pendiente':          return 6
     case 'proxima':            return 7
     case 'cumplida':           return 8
@@ -1883,15 +2056,17 @@ export function ordenRondaEsHaciaAdelante(orden: number): boolean {
  * breve. Derivan solo de los contadores que la fila ya trae; lo que el motor no
  * expone (foto faltante, precisión GPS) no se inventa acá.
  *
- * Nota sobre "fuera del radio": `puntos_incumplidos` agrupa fuera-de-radio y
- * GPS obligatorio sin lectura — el motor no los separa a nivel contador. El
- * caso dominante es el desvío de radio y así se rotula; el detalle por punto
- * muestra la distinción exacta.
+ * Con la regla aprobada (nov. 2026) un punto incumplido es uno SIN NINGUNA
+ * evidencia válida: ni GPS dentro del radio, ni QR verificado, ni foto
+ * aceptada. Ya no es sinónimo de "fuera del radio" y así se rotula.
  */
 export function observacionesRonda(r: RondaProgramada): string[] {
   const obs: string[] = []
   if (r.puntos_incumplidos > 0) {
-    obs.push(`${r.puntos_incumplidos} punto(s) fuera del radio`)
+    obs.push(`${r.puntos_incumplidos} punto(s) sin evidencia válida`)
+  }
+  if ((r.puntos_pendientes_validacion ?? 0) > 0) {
+    obs.push(`${r.puntos_pendientes_validacion} punto(s) pendientes de validación`)
   }
   if (r.puntos_omitidos > 0) {
     obs.push(`${r.puntos_omitidos} punto(s) sin recorrer`)
@@ -1934,8 +2109,10 @@ export function estadoTecnicoDetalleEjecucion(
   if (estado === 'en_curso') return 'en_curso'
   const omitidos = puntos.filter(p => p.estado === 'omitido').length
   const incumplidos = puntos.filter(p => p.estado === 'incumplido').length
+  const porValidar = puntos.filter(p => p.estado === 'pendiente_validacion').length
   if (omitidos > 0 || esCierreAdministrativo) return 'incompleta'
   if (incumplidos > 0) return 'cumplida_observada'
+  if (porValidar > 0) return 'pendiente_validacion'
   return 'cumplida'
 }
 
@@ -1947,10 +2124,26 @@ export function observacionesDetalleEjecucion(
   const obs: string[] = []
   const incumplidos = puntos.filter(p => p.estado === 'incumplido').length
   const omitidos = puntos.filter(p => p.estado === 'omitido').length
-  if (incumplidos > 0) obs.push(`${incumplidos} punto(s) fuera del radio`)
+  const porValidar = puntos.filter(p => p.estado === 'pendiente_validacion').length
+  if (incumplidos > 0) obs.push(`${incumplidos} punto(s) sin evidencia válida`)
+  if (porValidar > 0) obs.push(`${porValidar} punto(s) pendientes de validación`)
   if (omitidos > 0) obs.push(`${omitidos} punto(s) sin recorrer`)
   if (esCierreAdministrativo) obs.push('Cierre administrativo')
   return obs
+}
+
+export type OrigenVentanaRonda = 'capturada' | 'recalculada' | 'programada'
+
+/** Texto para el detalle: de dónde sale la obligación y con qué frecuencia. */
+export function etiquetaOrigenVentana(r: Pick<RondaProgramada, 'origen_ventana' | 'intervalo_minutos'>): string | null {
+  if (!r.origen_ventana) return null
+  const cada = r.intervalo_minutos ? ` (cada ${r.intervalo_minutos} min)` : ''
+  switch (r.origen_ventana) {
+    case 'capturada': return `Registrada al vencer${cada}`
+    case 'recalculada': return `Recalculada con la configuración actual${cada}`
+    case 'programada': return `Programada${cada}`
+    default: return null
+  }
 }
 
 export interface RondaProgramada {
@@ -1965,6 +2158,18 @@ export interface RondaProgramada {
   ventana_inicio: string
   ventana_fin: string
   vencimiento_at: string
+  /**
+   * De dónde sale la obligación (migración 20261122120000). Ausente = servidor
+   * anterior a esa migración (equivale a 'recalculada').
+   *  - capturada: foto tomada al vencer la ventana; no cambia aunque después se
+   *    edite la ronda, se cargue un horario sin exigencia o se anule el turno.
+   *  - recalculada: sin foto (historial anterior al despliegue): calculada con
+   *    la configuración ACTUAL de la ronda.
+   *  - programada: todavía no venció; configuración actual.
+   */
+  origen_ventana?: OrigenVentanaRonda
+  estado_exigencia?: string
+  intervalo_minutos?: number
 
   estado: EstadoRondaProgramada
   /** Se ejecutó, pero arrancó después del vencimiento de su ventana. */
@@ -1978,6 +2183,8 @@ export interface RondaProgramada {
   puntos_cumplidos: number
   puntos_incumplidos: number
   puntos_omitidos: number
+  /** Puntos cuya foto espera la IA (migración 20261120120000). Ausente = 0. */
+  puntos_pendientes_validacion?: number
   cerrada_por: string | null
   cerrada_at: string | null
   cerrada_motivo: string | null
@@ -2344,6 +2551,25 @@ export interface RondaAlerta {
   /** Motivo declarado por el vigilador al suspender (solo tipo 'suspendida'). */
   motivo_vigilador: string | null
   intervenciones: number
+  // ── Resultado de la intervención (migración 20261115120000). Opcionales:
+  // antes de aplicarla la RPC no los devuelve y la pantalla tiene que andar.
+  resultado_intervencion?: ResultadoIntervencion | null
+  motivo_intervencion?: MotivoIntervencion | null
+  seguimiento_hasta?: string | null
+  seguimiento_vencido?: boolean | null
+  /** Ventanas posteriores de la misma ronda y turno agrupadas en esta alerta. */
+  ventanas_adicionales?: number | null
+  ultima_ventana_inicio?: string | null
+  ultima_intervencion?: UltimaIntervencionAlerta | null
+}
+
+export interface UltimaIntervencionAlerta {
+  accion: AccionRondaAlerta
+  resultado: ResultadoIntervencion | null
+  motivo: MotivoIntervencion | null
+  origen: 'supervisor' | 'sistema' | null
+  created_at: string
+  supervisor_nombre: string | null
 }
 
 export type ContextoRondaAlertas = 'ok' | 'sin_usuario' | 'sin_permiso' | 'parametro_invalido'
@@ -2433,22 +2659,60 @@ export type ContextoResolverAlerta =
   | 'motivo_invalido'
   | 'ejecucion_no_bloqueada'
   | 'ejecucion_no_encontrada'
+  // Resultado de la intervención (migración 20261115120000).
+  | 'seguimiento'
+  | 'duplicada'
+  | 'conflicto'
+  | 'requiere_resultado_definitivo'
+  | 'resultado_invalido'
+  | 'motivo_requerido'
+  | 'motivo_invalido_resultado'
+  | 'combinacion_invalida'
+  | 'seguimiento_invalido'
 
 export interface RespuestaResolverAlerta {
   contexto: ContextoResolverAlerta
   alerta_id: string | null
+  /** En 'conflicto' y 'ya_resuelta': quién intervino último y qué decidió. */
+  ultima_intervencion?: UltimaIntervencionAlerta | null
+  seguimiento_hasta?: string | null
 }
 
+export interface OpcionesResultadoIntervencion {
+  resultado: ResultadoIntervencion
+  motivo: MotivoIntervencion
+  /** Sólo con resultado 'seguimiento': 15 a 240 minutos (120 por defecto). */
+  seguimientoMin?: number | null
+  /**
+   * Cuántas intervenciones tenía la alerta cuando se abrió el formulario. Si
+   * cambió (otro supervisor intervino o la cerró), el servidor devuelve
+   * 'conflicto' y no pisa lo que hizo el otro.
+   */
+  intervencionesEsperadas?: number | null
+}
+
+/**
+ * Registra una intervención. Sin `opciones` es la llamada histórica (acción +
+ * comentario); con `opciones` exige resultado y motivo.
+ */
 export async function resolverRondaAlerta(
   alertaId: string,
   accion: AccionRondaAlerta,
   comentario?: string,
+  opciones?: OpcionesResultadoIntervencion,
 ): Promise<ResultadoRondas<RespuestaResolverAlerta>> {
-  const { data, error } = await supabase.rpc('resolver_ronda_alerta', {
+  const args: Record<string, unknown> = {
     p_alerta_id: alertaId,
     p_accion: accion,
     p_comentario: comentario ?? null,
-  })
+  }
+  if (opciones) {
+    args.p_resultado = opciones.resultado
+    args.p_motivo = opciones.motivo
+    args.p_seguimiento_minutos = opciones.resultado === 'seguimiento' ? (opciones.seguimientoMin ?? null) : null
+    args.p_intervenciones_esperadas = opciones.intervencionesEsperadas ?? null
+  }
+  const { data, error } = await supabase.rpc('resolver_ronda_alerta', args)
 
   if (error) {
     return fallaRpc('resolver_ronda_alerta', error, 'No se pudo registrar la intervención.')
@@ -2459,6 +2723,8 @@ export async function resolverRondaAlerta(
     data: {
       contexto: (bruto.contexto ?? 'no_encontrada') as ContextoResolverAlerta,
       alerta_id: bruto.alerta_id ?? null,
+      ultima_intervencion: bruto.ultima_intervencion ?? null,
+      seguimiento_hasta: bruto.seguimiento_hasta ?? null,
     },
     error: null,
   }
@@ -2469,6 +2735,9 @@ export function mensajeContextoResolverAlerta(contexto: ContextoResolverAlerta):
   switch (contexto) {
     case 'registrada':
     case 'resuelta':
+    case 'seguimiento':
+    // El mismo clic llegó dos veces: la primera ya quedó registrada.
+    case 'duplicada':
       return null
     case 'ya_resuelta':          return 'La alerta ya estaba resuelta.'
     case 'sin_usuario':          return 'No se pudo identificar tu usuario operativo.'
@@ -2480,7 +2749,28 @@ export function mensajeContextoResolverAlerta(contexto: ContextoResolverAlerta):
     case 'motivo_invalido':      return 'El motivo del cierre debe tener al menos 10 caracteres.'
     case 'ejecucion_no_bloqueada': return 'La ronda no está en curso: la terminó el vigilador.'
     case 'ejecucion_no_encontrada': return 'La ejecución asociada ya no existe.'
+    case 'conflicto':            return 'La alerta cambió mientras la mirabas: otra persona ya intervino. Revisá lo registrado antes de volver a intentar.'
+    case 'requiere_resultado_definitivo': return 'Esta alerta ya tuvo un seguimiento: ahora corresponde un resultado definitivo (Resuelto o No resuelto).'
+    case 'resultado_invalido':   return 'Elegí un resultado válido.'
+    case 'motivo_requerido':     return 'Elegí el motivo.'
+    case 'motivo_invalido_resultado': return 'El motivo no es válido.'
+    case 'combinacion_invalida': return 'Ese motivo no corresponde a ese resultado.'
+    case 'seguimiento_invalido': return 'El seguimiento puede durar entre 15 minutos y 4 horas.'
   }
+}
+
+/** "Ana Sup · Seguimiento · 14:05" — para el aviso de conflicto. */
+export function describirUltimaIntervencion(
+  u: UltimaIntervencionAlerta | null | undefined,
+  horaDe: (iso: string) => string,
+): string | null {
+  if (!u) return null
+  const quien = u.origen === 'sistema' ? 'Sistema' : (u.supervisor_nombre || 'Otro supervisor')
+  const que = u.resultado === 'resuelto' ? 'Resuelto'
+    : u.resultado === 'seguimiento' ? 'Seguimiento'
+      : u.resultado === 'no_resuelto' ? 'No resuelto'
+        : etiquetaAccionRondaAlerta(u.accion)
+  return `${quien} · ${que} · ${horaDe(u.created_at)}`
 }
 
 // ── Suspender ronda (acción del vigilador) ────────────────────────────────────

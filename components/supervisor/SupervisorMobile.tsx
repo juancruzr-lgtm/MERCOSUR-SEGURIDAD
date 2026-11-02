@@ -9,6 +9,7 @@ import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, sumarDiasFecha, tieneTurnoSuperpuesto, turnoSinCoberturaEnObjetivoOperativo, objetivoEstaOperativo, registroTieneEntradaConfirmada, idsObjetivosPausados } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
+import { validarCargaTurno, textoConfirmacionAdvertencias, esErrorTurnoSuperpuesto } from '@/lib/validacion-turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir la ubicación de un objetivo: abre la vigencia en el
 // historial y deja el cambio auditado. El UPDATE directo ya no está permitido.
@@ -29,13 +30,23 @@ import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
-import { estadoSupervision, frecuenciaSupervision, supervisionProximaAVencer } from '@/lib/supervisiones'
+import { alertaEsperaIntervencion } from '@/lib/alertas-ronda-intervencion'
+import {
+  CONTEXTO_EXIGIBILIDAD_VACIO, clasificarUniversoSupervision, estadoSupervision, fechaArgentinaDe,
+  frecuenciaSupervision, sugerirObjetivoConTurno, supervisionProximaAVencer,
+  type ContextoExigibilidad,
+} from '@/lib/supervisiones'
+import { cargarContextoExigibilidad, cargarUltimaSupervisionPorObjetivo, objetivosConTurnoEn } from '@/lib/supervision-universo'
+import { registrarActualizacion } from '@/lib/refresco-movil'
+import DiagnosticoDispositivo from '@/components/movil/DiagnosticoDispositivo'
 // LA resolución de responsables operativos, compartida con AppClient y push.
 import { TEXTO_ORIGEN, guardiaCubreInstante, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import { alertaEstaIntervenida, calcularMinutosTardanzaRegistro, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, evaluarSinFichar, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOperativaCompartida } from '@/lib/revision-operativa'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
+import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
+import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 // Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
@@ -522,6 +533,8 @@ export default function SupervisorMobile({ user }: any) {
   const [formNuevoGuardia, setFormNuevoGuardia] = useState({ nombre:'', apellido:'', dni:'', telefono:'', legajo:'', email:'', rol:'guardia', foto_url:'' })
   const [formNuevoObjetivo, setFormNuevoObjetivo] = useState({ nombre:'', cliente:'', direccion:'', lat:'', lng:'', radio_metros:'200', zona_id:'' })
   const [accionAlerta, setAccionAlerta] = useState<AccionAlertaActiva | null>(null)
+  // La base rechazó la confirmación por falta de respaldo: se ofrece la excepción.
+  const [sinRespaldo, setSinRespaldo] = useState(false)
   const [formIntervencion, setFormIntervencion] = useState({ guardia_id:'', comentario:'', motivo:'' })
   const operacionesAlertaEnCurso = useRef<Set<string>>(new Set())
   const operacionesAlertaIds = useRef<Map<string, string>>(new Map())
@@ -542,6 +555,7 @@ export default function SupervisorMobile({ user }: any) {
   const [formExc, setFormExc] = useState({ supervisor_id: '', fecha: '', hora_inicio: '', hora_fin: '', zona: '', motivo: '' })
   const [guardandoExc, setGuardandoExc] = useState(false)
   const [ultimaSupervisionPorObjetivo, setUltimaSupervisionPorObjetivo] = useState<Record<string, string>>({})
+  const [contextoExigibilidad, setContextoExigibilidad] = useState<ContextoExigibilidad>(CONTEXTO_EXIGIBILIDAD_VACIO)
   const [agendaZonaFiltro, setAgendaZonaFiltro] = useState('todas')
   const [agendaEstadoFiltro, setAgendaEstadoFiltro] = useState<'todos'|'vencido'|'proximo'>('todos')
   const [supervisionObjetivoId, setSupervisionObjetivoId] = useState('')
@@ -620,6 +634,7 @@ export default function SupervisorMobile({ user }: any) {
       zonasResult,
       supervisorZonasResult,
       ultimasSupervisionesResult,
+      contextoExigibilidadResult,
     ] = await Promise.all([
       supabase
         .from('turnos')
@@ -688,14 +703,12 @@ export default function SupervisorMobile({ user }: any) {
       supabase
         .from('supervisor_zonas')
         .select('id, supervisor_id, zona_id'),
-      // Vigencia de supervisiones: sin filtro de fecha y con límite explícito.
-      // Sin el límite, PostgREST corta en 1000 y los objetivos supervisados hace
-      // tiempo reaparecen como "nunca supervisado".
-      supabase
-        .from('supervisiones')
-        .select('objetivo_id, created_at')
-        .order('created_at', { ascending: false })
-        .limit(5000),
+      // Vigencia de supervisiones: última VÁLIDA por objetivo (sin
+      // `incompleta`, como E1). RPC agregada si existe; si no, paginado. El
+      // `.limit(5000)` de antes lo recortaba PostgREST a 1000 en silencio.
+      cargarUltimaSupervisionPorObjetivo(supabase),
+      // Criterio único de exigibilidad: turnos de la ventana + suspensiones.
+      cargarContextoExigibilidad(supabase),
     ])
 
     let guardiasData = guardiasResult.data
@@ -763,8 +776,9 @@ export default function SupervisorMobile({ user }: any) {
       setError(supervisorZonasError.message)
     }
 
-    if (ultimasSupervisionesError && !/supervisiones|schema cache|does not exist/i.test(ultimasSupervisionesError.message)) {
-      setError(ultimasSupervisionesError.message)
+    if (ultimasSupervisionesError) {
+      const mensaje = (ultimasSupervisionesError as any)?.message || String(ultimasSupervisionesError)
+      if (!/supervisiones|schema cache|does not exist/i.test(mensaje)) setError(mensaje)
     }
 
     const turnosRango = ((turnosData || []) as Turno[]).filter(t => {
@@ -784,10 +798,10 @@ export default function SupervisorMobile({ user }: any) {
 
     const ultimaPorObjetivo: Record<string, string> = {}
     if (!ultimasSupervisionesError) {
-      ;(ultimasSupervisionesResult.data || []).forEach((s: any) => {
-        if (!ultimaPorObjetivo[s.objetivo_id]) ultimaPorObjetivo[s.objetivo_id] = s.created_at
-      })
+      ultimasSupervisionesResult.indice.forEach((iso, objetivoId) => { ultimaPorObjetivo[objetivoId] = iso })
     }
+    setContextoExigibilidad(contextoExigibilidadResult)
+    registrarActualizacion()
 
     setTurnos(turnosRango)
     setObjetivos((objetivosData || []) as Objetivo[])
@@ -1144,11 +1158,19 @@ export default function SupervisorMobile({ user }: any) {
     [turnos, objetivoIdsAlertas],
   )
 
-  const agendaSupervisiones = useMemo(() => {
-    const ahoraMs = Date.now()
+  // Criterio ÚNICO de exigibilidad (lib/supervisiones.ts), el mismo del
+  // Dashboard y del ranking: los activos sin turnos recientes no entran en la
+  // agenda como vencidos; se listan aparte para confirmar estado.
+  const universoAgenda = useMemo(() => {
     const base = agendaZonaFiltro === 'todas'
       ? objetivosDeMiZona
       : objetivosDeMiZona.filter(o => o.zona_id === agendaZonaFiltro)
+    return clasificarUniversoSupervision(base, contextoExigibilidad)
+  }, [objetivosDeMiZona, agendaZonaFiltro, contextoExigibilidad])
+
+  const agendaSupervisiones = useMemo(() => {
+    const ahoraMs = Date.now()
+    const base = universoAgenda.exigibles
 
     return base.map(objetivo => {
       // Vigencia: mismo cálculo que el Dashboard y el cron (lib/supervisiones.ts).
@@ -1177,7 +1199,16 @@ export default function SupervisorMobile({ user }: any) {
       const ordenB = b.horasDesdeUltima === null ? Infinity : b.horasDesdeUltima - b.frecuenciaHoras
       return ordenB - ordenA
     })
-  }, [objetivosDeMiZona, agendaZonaFiltro, ultimaSupervisionPorObjetivo])
+  }, [universoAgenda, ultimaSupervisionPorObjetivo])
+
+  // Aviso (no bloquea) de objetivo equivocado: el elegido no tiene turno hoy
+  // y otro a <100 m sí. Caso real: LAROMET ROSARIO 2 cargada en el duplicado
+  // "LAROMET ROSARIO".
+  const sugerenciaObjetivoSupervision = useMemo(() => {
+    if (!objetivoSupervision || contextoExigibilidad.fechasTurnos === null) return null
+    const conTurnoHoy = objetivosConTurnoEn(contextoExigibilidad, fechaArgentinaDe(new Date()))
+    return sugerirObjetivoConTurno(objetivoSupervision, objetivosActivos, conTurnoHoy)
+  }, [objetivoSupervision, objetivosActivos, contextoExigibilidad])
 
   const agendaResumen = useMemo(() => ({
     vencidas: agendaSupervisiones.filter(a => a.estadoAgenda === 'vencido').length,
@@ -1303,15 +1334,18 @@ export default function SupervisorMobile({ user }: any) {
       .sort((a, b) => compararIntervencionesMasReciente(a.intervencion, b.intervencion))
   }, [intervenciones, turnosAlcanceAlertas, registros])
 
+  // true = superposición (bloquea); null = no se pudo leer o el supervisor no
+  // aceptó las advertencias (traslado entre objetivos, doble turno, horas del
+  // día, descanso). La superposición también la rechaza el trigger de base.
   const guardiaTieneTurnoSuperpuesto = async (
-    candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>,
+    candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'> & { objetivo_id?: string | null },
     excluirTurnoId?: string,
   ): Promise<boolean | null> => {
     if (!candidato.guardia_id) return false
 
     const { data, error: turnosError } = await supabase
       .from('turnos')
-      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
+      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id, estado')
       .eq('guardia_id', candidato.guardia_id)
       .in('fecha', fechasVecinasTurno(candidato.fecha))
 
@@ -1320,7 +1354,10 @@ export default function SupervisorMobile({ user }: any) {
       return null
     }
 
-    return tieneTurnoSuperpuesto(data || [], candidato, excluirTurnoId, objetivosPausados)
+    const validacion = validarCargaTurno(candidato, data || [], { excluirTurnoId, objetivosPausados })
+    if (validacion.errores.length > 0) return true
+    if (validacion.advertencias.length > 0 && !window.confirm(textoConfirmacionAdvertencias(validacion.advertencias))) return null
+    return false
   }
 
   const crearTurno = async () => {
@@ -1366,7 +1403,7 @@ export default function SupervisorMobile({ user }: any) {
     const { error: insertError } = await supabase.from('turnos').insert(payload)
 
     if (insertError) {
-      setError(insertError.message)
+      setError(esErrorTurnoSuperpuesto(insertError) ? MENSAJE_TURNO_SUPERPUESTO : insertError.message)
     } else {
       const filtroDestino = filtroFechaTurnosIncluye(filtroFecha, payload.fecha)
         ? filtroFecha
@@ -1900,6 +1937,7 @@ export default function SupervisorMobile({ user }: any) {
 
     const conflicto = nuevoGuardiaId ? await guardiaTieneTurnoSuperpuesto({
       guardia_id: nuevoGuardiaId,
+      objetivo_id: turno.objetivo_id,
       fecha: turno.fecha,
       hora_inicio: turno.hora_inicio,
       hora_fin: turno.hora_fin,
@@ -1973,6 +2011,7 @@ export default function SupervisorMobile({ user }: any) {
 
   const cerrarAccionAlerta = () => {
     setAccionAlerta(null)
+    setSinRespaldo(false)
     setFormIntervencion({ guardia_id:'', comentario:'', motivo:'' })
   }
 
@@ -2118,6 +2157,11 @@ export default function SupervisorMobile({ user }: any) {
       setMensaje(data?.estado === 'ya_aplicada' ? 'Operación ya aplicada. Se mostró el estado actual del servidor.' : '✓ Intervención registrada y verificada en el servidor.')
       cerrarAccionAlerta()
     } catch (actionError) {
+      if (esConfirmacionSinEvidencia(actionError)) {
+        // Rechazo limpio de la base (no aplicó nada): se ofrece la excepción en el mismo panel.
+        setSinRespaldo(true)
+        return
+      }
       const message = actionError instanceof Error
         ? actionError.message
         : typeof actionError === 'object' && actionError && 'message' in actionError
@@ -2717,6 +2761,10 @@ export default function SupervisorMobile({ user }: any) {
           placeholder={accionAlerta.accion === 'confirmar_asistencia' ? 'Ej.: Verificado en el puesto a las 08:30. El guardia no tenía celular.' : 'Ej.: Se llamó al guardia. Informa que llega en 10 minutos.'}
         />
 
+        {sinRespaldo && accionAlerta.accion === 'confirmar_asistencia' && (
+          <ExcepcionAsistenciaPaso turnoId={turno.id} onAutorizada={ejecutarAccionAlerta} deshabilitado={Boolean(asignando)} />
+        )}
+
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
           <button type="button" style={secondaryButton} onClick={cerrarAccionAlerta} disabled={Boolean(asignando)}>
             Cancelar
@@ -2952,7 +3000,7 @@ export default function SupervisorMobile({ user }: any) {
     if (estadoOpEdicionSup === 'FUTURO' && formEdicionSup.guardia_id) {
       const { data, error: turnosError } = await supabase
         .from('turnos')
-        .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
+        .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id, estado')
         .eq('guardia_id', formEdicionSup.guardia_id)
         .in('fecha', fechasVecinasTurno(turnoEditandoSup.fecha))
 
@@ -2960,12 +3008,17 @@ export default function SupervisorMobile({ user }: any) {
 
       const candidato = {
         guardia_id: formEdicionSup.guardia_id,
+        objetivo_id: (turnoEditandoSup as any).objetivo_id ?? null,
         fecha: turnoEditandoSup.fecha,
         hora_inicio: formEdicionSup.hora_inicio,
         hora_fin: formEdicionSup.hora_fin,
       }
-      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditandoSup.id, objetivosPausados)) {
+      const validacion = validarCargaTurno(candidato, data || [], { excluirTurnoId: turnoEditandoSup.id, objetivosPausados })
+      if (validacion.errores.length > 0) {
         setErrorEdicionSup(MENSAJE_TURNO_SUPERPUESTO)
+        return
+      }
+      if (validacion.advertencias.length > 0 && !window.confirm(textoConfirmacionAdvertencias(validacion.advertencias))) {
         return
       }
     }
@@ -3290,7 +3343,11 @@ export default function SupervisorMobile({ user }: any) {
             cientos". Las viejas siguen visibles en la pestaña Rondas. */}
         {(() => {
           const CORTE_CARTEL_INTERVENCION = Date.parse('2026-10-08T00:00:00Z')
-          const alertasNuevas = rondaAlertas.filter(a => Date.parse(a.detectada_at) >= CORTE_CARTEL_INTERVENCION)
+          // Sólo lo que ESPERA al supervisor (auditoría oct-2026): sin
+          // intervención, o en seguimiento con el plazo vencido. Antes contaba
+          // también las ya intervenidas y el cartel no bajaba nunca.
+          const alertasNuevas = rondaAlertas.filter(a => Date.parse(a.detectada_at) >= CORTE_CARTEL_INTERVENCION
+            && alertaEsperaIntervencion(a))
           if (loading || alertasNuevas.length === 0 || tab === 'rondas') return null
           return (
           <button
@@ -3312,7 +3369,7 @@ export default function SupervisorMobile({ user }: any) {
                   : `Hay ${alertasNuevas.length} alertas de ronda esperando tu intervención`}
               </span>
               <span style={{ display:'block', fontSize:12.5, marginTop:2 }}>
-                Tocá acá para verlas y registrar qué hiciste (llamada, justificación o resolución).
+                Tocá acá para verlas y registrar el resultado (resuelto, seguimiento o no resuelto).
               </span>
             </span>
           </button>
@@ -3485,6 +3542,19 @@ export default function SupervisorMobile({ user }: any) {
                   )
                 })
                 })()}
+
+                {/* Activos sin turnos recientes: no son vencidos ni deuda. Se
+                    muestran para confirmar con Operaciones si el servicio
+                    terminó; nunca se cierran solos. */}
+                {universoAgenda.sinTurnosRecientes.length > 0 && (
+                  <div style={{ ...card, marginTop:12 }}>
+                    <div style={{ ...label, color:'#f59e0b' }}>Sin turnos recientes — confirmar estado</div>
+                    <div style={muted}>No cuentan como vencidos. Si el servicio terminó, avisá a Operaciones.</div>
+                    {universoAgenda.sinTurnosRecientes.map(o => (
+                      <div key={o.id} style={{ fontSize:13, padding:'4px 0' }}>{o.nombre || 'Objetivo sin nombre'}</div>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
 
@@ -4077,6 +4147,31 @@ export default function SupervisorMobile({ user }: any) {
                     ))}
                   </select>
 
+                  {/* Aviso NO bloqueante: el objetivo elegido no tiene turno
+                      hoy y otro a menos de 100 m sí. Se puede seguir igual. */}
+                  {sugerenciaObjetivoSupervision && (
+                    <div role="status" style={{ margin:'10px 0', padding:'10px 12px', borderRadius:10, border:'1px solid #f59e0b66', background:'#f59e0b14', fontSize:13, color:'#fde68a' }}>
+                      <b>{objetivoSupervision?.nombre}</b> no tiene turno hoy. A {sugerenciaObjetivoSupervision.distanciaM} m está{' '}
+                      <b>{sugerenciaObjetivoSupervision.objetivo.nombre}</b>, que sí tiene. ¿Es ese el que estás supervisando?
+                      <div style={{ marginTop:8 }}>
+                        <button
+                          type="button"
+                          style={{ ...secondaryButton, padding:'6px 12px', fontSize:12 }}
+                          onClick={() => {
+                            setSupervisionObjetivoId(sugerenciaObjetivoSupervision.objetivo.id)
+                            setSupervisionGps(null)
+                            setConfirmarGpsImpreciso(false)
+                            setSupervisionRespuestas({})
+                            setSupervisionFotos([])
+                            setSupervisionObservaciones('')
+                          }}
+                        >
+                          Cambiar a {sugerenciaObjetivoSupervision.objetivo.nombre}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {objetivoSupervision && (
                     <div style={{ ...registroBox, marginBottom:12 }}>
                       <div>
@@ -4374,6 +4469,7 @@ export default function SupervisorMobile({ user }: any) {
                   >
                     {guardandoPassword ? 'Guardando...' : 'Cambiar contraseña'}
                   </button>
+                  <DiagnosticoDispositivo />
                 </div>
               </section>
             )}

@@ -29,6 +29,7 @@ import {
 } from '@/lib/rondas'
 import type { ResumenRegularizacion } from '@/lib/rondas'
 import { TEXTO_ORIGEN } from '@/lib/responsables-operativos'
+import { AVISO_DECISION_FOTO, ETIQUETA_DECISION_FOTO } from '@/lib/ia/revision'
 
 const COLOR_CATEGORIA: Record<CategoriaCierre, string> = {
   planillas: '#38bdf8',
@@ -209,7 +210,7 @@ export default function CierreOperativoPanel({ esAdmin, usuarioId, nombreUsuario
     await cargar()
   }
 
-  // ── Acción 2: confirmar o descartar lo que marcó la IA ────────────────────
+  // ── Acción 2: decidir si la foto que marcó la IA es válida o no ───────────
   //
   // Sólo dos salidas, y las dos cierran el pendiente. La observación de la IA
   // es una propuesta: sin una persona que decida, no es la falta de nadie.
@@ -227,7 +228,9 @@ export default function CierreOperativoPanel({ esAdmin, usuarioId, nombreUsuario
     // Sale del pendiente sin recargar todo: la decisión ya quedó guardada.
     setItems(prev => prev.map(i => (i.id === itemId ? { ...i, resueltoPorSupervisor: true } : i)))
     setComentarioIA(prev => ({ ...prev, [itemId]: '' }))
-    setAviso(decision === 'CORRECTO' ? 'Observación confirmada.' : 'Observación descartada.')
+    // CORRECTO = la foto está bien (lib/ia/revision.ts). Antes decía
+    // «Observación confirmada», que es la lectura opuesta.
+    setAviso(AVISO_DECISION_FOTO[decision])
   }
 
   const Lista = ({ titulo, resumen, esHoy }: {
@@ -277,14 +280,14 @@ export default function CierreOperativoPanel({ esAdmin, usuarioId, nombreUsuario
                       disabled={revisandoId === item.id}
                       onClick={() => void revisarFoto(item.id, 'CORRECTO')}
                     >
-                      Confirmar
+                      {ETIQUETA_DECISION_FOTO.CORRECTO}
                     </button>
                     <button
                       style={{ ...S.btn, borderColor:'#ef444488', color:'#fca5a5' }}
                       disabled={revisandoId === item.id}
                       onClick={() => void revisarFoto(item.id, 'INCORRECTO')}
                     >
-                      Descartar
+                      {ETIQUETA_DECISION_FOTO.INCORRECTO}
                     </button>
                   </span>
                 )}

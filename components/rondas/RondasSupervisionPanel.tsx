@@ -389,6 +389,8 @@ const FILTROS_HISTORIAL: { id: FiltroHistorial; label: string }[] = [
   { id: 'no_iniciada', label: 'No iniciadas' },
   { id: 'incompleta',  label: 'Incompletas' },
   { id: 'completada',  label: 'Completadas' },
+  // Regla aprobada (nov. 2026): recorrida entera, alguna foto espera la IA.
+  { id: 'pendiente_validacion', label: 'Por validar' },
   { id: 'en_curso',    label: 'En curso' },
   { id: 'pendiente',   label: 'Pendientes' },
 ]

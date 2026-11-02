@@ -27,6 +27,13 @@ import {
 } from '@/lib/notificaciones-push'
 import { calcularMinutosTardanzaRegistro } from '@/lib/revision-operativa'
 import { ventanaSinExigencia, type HorarioSinExigencia } from '@/lib/ronda-vigilador-wa'
+import { fetchPaginadoResult } from '@/lib/fetch-paginado'
+import {
+  PREFIJO_AVISO_RONDA, claveAvisoRonda, claveResumenRonda, claveSeguimientoVencido,
+  contarAvisosPorUsuario, destinatariosConFallback, leerClavesEnLotes, planificarAvisosRonda,
+  textoResumenRonda,
+} from '@/lib/notificaciones-ronda'
+import { clavesRondaTurnoSilenciadas, type AlertaRondaTurno } from '@/lib/alertas-ronda-intervencion'
 import { objetivoEstaOperativo, turnoSinCoberturaOperativa } from '@/lib/turnos'
 // LA resolución de responsables operativos: guardia efectiva → responsable
 // único de zona → nadie (sin elegir arbitrariamente). La misma que usan las
@@ -37,9 +44,11 @@ import {
   FRECUENCIA_SUPERVISION_DEFECTO_HORAS,
   estadoSupervision,
   horasParaVencimiento,
+  exigibilidadSupervision,
   indexarUltimaSupervision,
   supervisionProximaAVencer,
 } from '@/lib/supervisiones'
+import { cargarContextoExigibilidad } from '@/lib/supervision-universo'
 
 export const runtime = 'nodejs'
 
@@ -422,15 +431,69 @@ async function sendToUsersObjetivo(
   return { sent, skipped, fallos: fallosObj }
 }
 
+/**
+ * Aviso de ronda con dedup ATÓMICA (claim-first): la fila de
+ * notificaciones_enviadas se reclama ANTES de enviar y la constraint única hace
+ * que dos corridas no puedan mandar lo mismo. Si no se entregó a ningún
+ * dispositivo se libera la reserva (el próximo ciclo reintenta; el tope de
+ * antigüedad de 2 h acota esos reintentos). Sin dispositivo no se reclama nada:
+ * así la prueba controlada (soloUsuarioId) no escribe filas de terceros.
+ */
+export async function enviarAvisoClaimFirst(
+  client: any,
+  subscriptions: PushSubscriptionRow[],
+  usuarioId: string,
+  objetivoId: string | null,
+  tipo: string,
+  payload: PushPayload,
+  enviar: (s: PushSubscriptionRow, p: PushPayload) => Promise<{ status: number }> = sendWebPush,
+): Promise<'enviado' | 'sin_dispositivo' | 'ya_reclamada' | 'sin_entrega'> {
+  const subs = subscriptions.filter(s => s.usuario_id === usuarioId)
+  if (subs.length === 0) return 'sin_dispositivo'
+
+  const claim = await client.from('notificaciones_enviadas').insert({
+    usuario_id: usuarioId, objetivo_id: objetivoId, turno_id: null, tipo,
+    titulo: payload.title, mensaje: payload.body,
+  })
+  // 23505 = ya reclamada; cualquier otro error de escritura: no se arriesga.
+  if (claim.error) return 'ya_reclamada'
+
+  let entregado = false
+  for (const s of subs) {
+    try {
+      const r = await enviar(s, payload)
+      if (r.status === 404 || r.status === 410) {
+        await client.from('push_subscriptions').update({ activo: false }).eq('id', s.id)
+      } else {
+        entregado = true
+      }
+    } catch (e) {
+      console.error('[push] suscripción', s.id, e instanceof Error ? e.message : e)
+    }
+  }
+  if (!entregado) {
+    let q = client.from('notificaciones_enviadas').delete().eq('usuario_id', usuarioId).eq('tipo', tipo)
+    q = objetivoId ? q.eq('objetivo_id', objetivoId) : q.is('objetivo_id', null)
+    await Promise.resolve(q).then(() => {}, () => {})
+    return 'sin_entrega'
+  }
+  return 'enviado'
+}
+
 // Alertas de rondas: persistidas por evaluar_ronda_alertas(); acá solo se
 // enrutan por zona y se envían con dedup por (usuario, objetivo, tipo), donde el
 // tipo embebe el id de la alerta → una notificación por alerta y supervisor.
 type RondaAlertaPush = {
   id: string
   tipo: string
+  estado: string
   objetivo_id: string
   guardia_id: string
   motivo_vigilador: string | null
+  detectada_at: string
+  accion: string | null
+  resultado_intervencion: string | null
+  seguimiento_hasta: string | null
   ronda: { nombre: string } | { nombre: string }[] | null
   puesto: { nombre: string } | { nombre: string }[] | null
 }
@@ -522,10 +585,16 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     admin.client
       .from('supervisor_zonas')
       .select('supervisor_id, zona_id'),
-    admin.client
+    // PAGINADO (auditoría oct-2026): sin rango, PostgREST devolvía sólo las
+    // 1000 supervisiones más recientes y un objetivo cuya última visita
+    // quedaba fuera aparecía como "nunca supervisado". Se pagina con orden
+    // estable; la vigencia la sigue decidiendo lib/supervisiones.
+    fetchPaginadoResult<SupervisionUltimaPush>((desde, hasta) => admin.client
       .from('supervisiones')
       .select('objetivo_id, created_at')
-      .order('created_at', { ascending: false }),
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(desde, hasta)),
     // Guardias efectivas para resolver responsables. Desde anteayer porque una
     // nocturna arranca un día y cubre la madrugada del siguiente, y los turnos
     // procesados llegan hasta mañana.
@@ -542,7 +611,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
 
   const zonasErrorIgnorable = zonasResult.error && /zonas_operativas|schema cache|does not exist/i.test(zonasResult.error.message)
   const supervisorZonasErrorIgnorable = supervisorZonasResult.error && /supervisor_zonas|schema cache|does not exist/i.test(supervisorZonasResult.error.message)
-  const ultimasSupervisionesErrorIgnorable = ultimasSupervisionesResult.error && /supervisiones|schema cache|does not exist/i.test(ultimasSupervisionesResult.error.message)
+  const ultimasSupervisionesErrorIgnorable = ultimasSupervisionesResult.error && /supervisiones|schema cache|does not exist/i.test((ultimasSupervisionesResult.error as any)?.message || '')
   // Sin la tabla o sin las columnas de excepciones (migración no corrida), la
   // resolución degrada al fallback por zona en lugar de tirar la corrida.
   const supervisoresGuardiaErrorIgnorable = supervisoresGuardiaResult.error && /supervisores_guardia|tipo_evento|schema cache|does not exist|column/i.test(supervisoresGuardiaResult.error.message)
@@ -663,9 +732,14 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   // Independiente de si hay turnos hoy/manana: se evalua siempre.
   // Vigencia: unica definicion, en lib/supervisiones.ts. No interviene el mes.
   const ultimaPorObjetivo = indexarUltimaSupervision(ultimasSupervisiones)
+  // Mismo criterio de exigibilidad que el panel, el dashboard y la agenda
+  // (auditoría oct-2026: el push avisaba objetivos sin turnos recientes).
+  // Si fallan los turnos, el contexto no descarta a nadie (conservador).
+  const contextoExigibilidad = await cargarContextoExigibilidad(admin.client)
 
   for (const objetivo of objetivosSupervision) {
     if ((objetivo.estado || 'activo') !== 'activo') continue
+    if (!exigibilidadSupervision(objetivo, contextoExigibilidad).exige) continue
 
     const frecuenciaHoras = objetivo.frecuencia_supervision_horas || FRECUENCIA_SUPERVISION_DEFECTO_HORAS
     const ultimaIso = ultimaPorObjetivo.get(objetivo.id) || null
@@ -765,17 +839,32 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   let candidatosRondaNoFinalizada = 0
   let candidatosRondaSuspendida = 0
   let rondaAlertasSinSupervisores = 0
+  let rondaAlertasYaAvisadas = 0
+  let rondaDedupError: string | null = null
+  let rondaOmitidas: Record<string, number> = {}
+  let rondaResumenesEnviados = 0
+  let rondaFallbackJefes = 0
+  let rondaSeguimientosVencidos = 0
 
   // evaluar_ronda_alertas() NO se llama acá. La ejecuta pg_cron cada 10 minutos
   // (migración 20260810180000) y es la única fuente de ronda_alertas. Llamarla
   // también desde acá era duplicar la generación: se leen las alertas y nada más.
-
-  const { data: rondaAlertasData, error: rondaAlertasError } = await admin.client
+  //
+  // ACOTADO a 48 h (mismo criterio que el WhatsApp): lo más viejo no se avisa
+  // suelto de todos modos (va al resumen) y así la lectura no crece con el
+  // backlog. Paginado: nunca se trunca en silencio a 1000 filas.
+  const desdeRondaAlertas = new Date(Date.now() - 48 * 3600 * 1000).toISOString()
+  const rondaAlertasResult = await fetchPaginadoResult<RondaAlertaPush>((desde, hasta) => admin.client
     .from('ronda_alertas')
-    .select('id, tipo, objetivo_id, guardia_id, motivo_vigilador, ronda:rondas_base(nombre), puesto:puestos(nombre)')
+    .select('id, tipo, estado, objetivo_id, guardia_id, motivo_vigilador, detectada_at, accion, resultado_intervencion, seguimiento_hasta, ronda:rondas_base(nombre), puesto:puestos(nombre)')
     .eq('estado', 'pendiente')
+    .gte('detectada_at', desdeRondaAlertas)
+    .order('detectada_at', { ascending: true })
+    .order('id', { ascending: true })
+    .range(desde, hasta))
+  const rondaAlertasError = rondaAlertasResult.error as { message?: string } | null
 
-  const rondaAlertasErrorIgnorable = rondaAlertasError && /ronda_alertas|schema cache|does not exist/i.test(rondaAlertasError.message)
+  const rondaAlertasErrorIgnorable = rondaAlertasError && /ronda_alertas|schema cache|does not exist/i.test(rondaAlertasError.message || '')
   if (rondaAlertasError && !rondaAlertasErrorIgnorable) {
     console.error('[cron] lectura ronda_alertas error:', rondaAlertasError.message)
   }
@@ -783,75 +872,109 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   const nombrePorObjetivo = new Map<string, string>()
   objetivos.forEach(o => nombrePorObjetivo.set(o.id, o.nombre))
 
-  const rondaAlertas = (rondaAlertasErrorIgnorable ? [] : (rondaAlertasData || [])) as RondaAlertaPush[]
+  // Con error de lectura no se avisa nada (fail-closed): `data` viene vacío.
+  const rondaAlertas = (rondaAlertasError ? [] : (rondaAlertasResult.data || [])) as RondaAlertaPush[]
   rondaAlertasPendientes = rondaAlertas.length
 
   // Una alerta de ronda se avisa UNA sola vez: a los responsables del momento
-  // en que se detectó. La deduplicación de sendToUsersObjetivo es por
-  // (usuario, objetivo, tipo), correcta por persona — pero el conjunto de
-  // responsables cambia con la hora. Verificado en producción el 18/08/2026:
-  // cada alerta nocturna se le mandaba a Fulla al detectarse y, a las 07:00,
-  // se le volvía a mandar a Aranda y a Martínez cuando entraban de guardia:
-  // el turno diurno arrancaba con 10 push acumuladas de la noche. Si nadie la
-  // atendió, el que entra la ve en su bandeja de pendientes; no se le reenvía.
+  // en que se detectó (verificado en producción el 18/08/2026: reavisar en cada
+  // cambio de guardia acumulaba 10 push de la noche). Se consulta EN LOTES qué
+  // alertas ya tienen algún envío registrado, para cualquier destinatario.
   //
-  // Se consulta de una vez qué alertas ya tienen algún envío registrado, para
-  // cualquier destinatario, y esas se saltan antes de resolver responsables.
-  let rondaAlertasYaAvisadas = 0
-  const tiposRonda = rondaAlertas.map(a => `supervisor_ronda_${a.tipo}:${a.id}`)
-  const yaAvisadas = new Set<string>()
-  if (tiposRonda.length > 0) {
-    const { data: enviadasData } = await admin.client
-      .from('notificaciones_enviadas')
-      .select('tipo')
-      .in('tipo', tiposRonda)
-    for (const fila of (enviadasData || []) as Array<{ tipo: string }>) yaAvisadas.add(fila.tipo)
-  }
-
-  for (const alerta of rondaAlertas) {
-    if (yaAvisadas.has(`supervisor_ronda_${alerta.tipo}:${alerta.id}`)) {
-      rondaAlertasYaAvisadas += 1
-      continue
-    }
-
-    const zonaId = zonaPorObjetivo.get(alerta.objetivo_id) ?? null
-    const supervisorIds = destinatariosOperativos(zonaId, hoy, horaAhora, `ronda ${alerta.tipo} en "${nombrePorObjetivo.get(alerta.objetivo_id) || alerta.objetivo_id}"`)
-    if (supervisorIds.length === 0) {
-      rondaAlertasSinSupervisores += 1
-      continue
-    }
-
-    const guardia = usuarios.find(u => u.id === alerta.guardia_id)
-    const rondaNombre = nombreEmbebido(alerta.ronda) || 'Ronda'
-    const puestoNombre = nombreEmbebido(alerta.puesto) || 'Puesto'
-    const objetivoNombre = nombrePorObjetivo.get(alerta.objetivo_id) || 'Objetivo'
-
-    let title: string
-    let body: string
-    if (alerta.tipo === 'suspendida') {
-      candidatosRondaSuspendida += 1
-      title = 'Ronda suspendida'
-      body = `${nombreUsuario(guardia)} suspendió la ronda ${rondaNombre} (${puestoNombre} · ${objetivoNombre}). Motivo: ${alerta.motivo_vigilador || 'sin detalle'}`
-    } else if (alerta.tipo === 'no_iniciada') {
-      candidatosRondaNoIniciada += 1
-      title = 'Ronda no iniciada'
-      body = `Ronda: ${rondaNombre} · Puesto: ${puestoNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}`
-    } else {
-      candidatosRondaNoFinalizada += 1
-      title = 'Ronda sin finalizar'
-      body = `Ronda: ${rondaNombre} · Puesto: ${puestoNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}`
-    }
-
-    const resultado = await sendToUsersObjetivo(
-      admin.client,
-      subscriptions,
-      supervisorIds,
-      alerta.objetivo_id,
-      `supervisor_ronda_${alerta.tipo}:${alerta.id}`,
-      { title, body, url: '/dashboard', tag: `ronda-alerta-${alerta.id}` },
+  // FAIL-CLOSED (auditoría oct-2026): antes la lectura era un solo IN sin lotes
+  // y sin mirar el error. Con el backlog de octubre ese GET superaba el límite
+  // de URL, volvía 400, se tomaba como "no avisé ninguna" y se reenviaba todo.
+  // Ahora, si cualquier lectura de dedup o del tope diario falla, no sale
+  // ningún aviso de ronda en esta corrida.
+  if (rondaAlertas.length > 0) {
+    const clavesRonda = rondaAlertas.flatMap(a => [claveAvisoRonda(a), claveSeguimientoVencido(a)])
+    const lectura = await leerClavesEnLotes(
+      lote => admin.client.from('notificaciones_enviadas').select('tipo').in('tipo', lote),
+      clavesRonda,
     )
-    sumarResultado(resultado)
-    alertasEnviadas += resultado.sent
+    const inicioDiaIso = new Date(Date.parse(`${hoy}T00:00:00-03:00`)).toISOString()
+    const avisosHoyRes = await fetchPaginadoResult<{ usuario_id: string; tipo: string }>((desde, hasta) => admin.client
+      .from('notificaciones_enviadas')
+      .select('usuario_id, tipo')
+      .like('tipo', `${PREFIJO_AVISO_RONDA}%`)
+      .gte('created_at', inicioDiaIso)
+      .order('id', { ascending: true })
+      .range(desde, hasta))
+    const listaEscRes = await admin.client
+      .from('escalamiento_destinatarios')
+      .select('usuario_id, rol_en_escalamiento, activo')
+
+    if (!lectura.ok || avisosHoyRes.error || listaEscRes.error) {
+      rondaDedupError = !lectura.ok
+        ? lectura.error
+        : (avisosHoyRes.error as any)?.message || listaEscRes.error?.message || 'error de lectura'
+      console.error('[push] rondas: no se pudo leer la deduplicación; no se avisa ninguna ronda (fail-closed):', rondaDedupError)
+    } else {
+      const listaEscalamiento = (listaEscRes.data || []) as Array<{ usuario_id: string; rol_en_escalamiento: string | null; activo: boolean | null }>
+      const usaronFallback = new Set<string>()
+      const plan = planificarAvisosRonda({
+        alertas: rondaAlertas,
+        yaAvisadas: lectura.claves,
+        avisosHoyPorUsuario: contarAvisosPorUsuario(avisosHoyRes.data),
+        ahora: Date.now(),
+        destinatarios: alerta => {
+          const zonaId = zonaPorObjetivo.get(alerta.objetivo_id) ?? null
+          const responsables = destinatariosOperativos(zonaId, hoy, horaAhora, `ronda ${alerta.tipo} en "${nombrePorObjetivo.get(alerta.objetivo_id) || alerta.objetivo_id}"`)
+          // Sin responsable (o varios sin guardia definida): UNA vez a la lista
+          // de escalamiento, en lugar de reintentar cada 10 minutos hasta que
+          // alguien entre de guardia (01–03/10: hasta 50 h de demora).
+          const r = destinatariosConFallback(responsables, listaEscalamiento)
+          if (r.fallback) usaronFallback.add(alerta.id)
+          return r.usuarios
+        },
+      })
+      rondaOmitidas = plan.omitidas
+      rondaAlertasYaAvisadas = plan.omitidas.ya_avisada
+      rondaAlertasSinSupervisores = plan.omitidas.sin_destinatario
+
+      for (const aviso of plan.individuales) {
+        const alerta = aviso.alerta as RondaAlertaPush
+        if (usaronFallback.has(alerta.id)) rondaFallbackJefes += 1
+        const guardia = usuarios.find(u => u.id === alerta.guardia_id)
+        const rondaNombre = nombreEmbebido(alerta.ronda) || 'Ronda'
+        const puestoNombre = nombreEmbebido(alerta.puesto) || 'Puesto'
+        const objetivoNombre = nombrePorObjetivo.get(alerta.objetivo_id) || 'Objetivo'
+
+        let title: string
+        let body: string
+        if (aviso.seguimientoVencido) {
+          rondaSeguimientosVencidos += 1
+          title = 'Seguimiento de ronda vencido'
+          body = `Ronda: ${rondaNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}. Registrá el resultado definitivo.`
+        } else if (alerta.tipo === 'suspendida') {
+          candidatosRondaSuspendida += 1
+          title = 'Ronda suspendida'
+          body = `${nombreUsuario(guardia)} suspendió la ronda ${rondaNombre} (${puestoNombre} · ${objetivoNombre}). Motivo: ${alerta.motivo_vigilador || 'sin detalle'}`
+        } else if (alerta.tipo === 'no_iniciada') {
+          candidatosRondaNoIniciada += 1
+          title = 'Ronda no iniciada'
+          body = `Ronda: ${rondaNombre} · Puesto: ${puestoNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}`
+        } else {
+          candidatosRondaNoFinalizada += 1
+          title = 'Ronda sin finalizar'
+          body = `Ronda: ${rondaNombre} · Puesto: ${puestoNombre} · Objetivo: ${objetivoNombre} · Vigilador: ${nombreUsuario(guardia)}`
+        }
+
+        for (const usuarioId of aviso.usuarios) {
+          const r = await enviarAvisoClaimFirst(admin.client, subscriptions, usuarioId, alerta.objetivo_id, aviso.clave,
+            { title, body, url: '/dashboard', tag: `ronda-alerta-${alerta.id}` })
+          if (r === 'enviado') { sent += 1; alertasEnviadas += 1 } else skipped += 1
+        }
+      }
+
+      // El backlog viejo no sale suelto: UN resumen por supervisor y bloque.
+      const claveResumen = claveResumenRonda(hoy, horaAhora)
+      for (const [usuarioId, ids] of Array.from(plan.resumen.entries())) {
+        const r = await enviarAvisoClaimFirst(admin.client, subscriptions, usuarioId, null, claveResumen,
+          { ...textoResumenRonda(ids.length), url: '/dashboard', tag: 'ronda-alertas-resumen' })
+        if (r === 'enviado') { sent += 1; rondaResumenesEnviados += 1 } else skipped += 1
+      }
+    }
   }
 
   // ── Recordatorios de ronda al VIGILADOR (15' antes / pendiente) ──────────────
@@ -860,6 +983,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
   let avisos15m = 0
   let avisosPendiente = 0
   let avisosOmitidosPorPausa = 0
+  let avisosOmitidosPorIntervencion = 0
   {
     // Una ronda hecha unos minutos ANTES del inicio de la ventana cuenta como
     // realizada para esa ventana: evita seguir avisando algo ya cumplido.
@@ -876,7 +1000,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       const puestoIds = Array.from(new Set(turnosVigentes.map(t => t.puesto_id).filter(Boolean)))
       const turnoIdsVig = turnosVigentes.map(t => t.id)
 
-      const [rondasVigRes, ejecVigRes, pausasRes, horariosRes] = await Promise.all([
+      const [rondasVigRes, ejecVigRes, pausasRes, horariosRes, alertasVigRes] = await Promise.all([
         admin.client.from('rondas_base')
           .select('id, puesto_id, nombre, hora_inicio, intervalo_minutos')
           .in('puesto_id', puestoIds as string[]).eq('activo', true),
@@ -890,8 +1014,21 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
         admin.client.from('ronda_horarios_sin_exigencia')
           .select('ronda_base_id, dia_semana, desde, hasta')
           .eq('activo', true),
+        // Alertas de los turnos vigentes: si el supervisor ya intervino (o el
+        // episodio se cerró cubriendo el turno), el recordatorio automático al
+        // vigilador se calla — el seguimiento es del supervisor.
+        admin.client.from('ronda_alertas')
+          .select('ronda_base_id, turno_id, tipo, estado, accion, resultado_intervencion, motivo_intervencion')
+          .in('turno_id', turnoIdsVig)
+          .in('tipo', ['no_iniciada', 'no_finalizada']),
       ])
       const horariosSinExigencia = (horariosRes.data || []) as HorarioSinExigencia[]
+      // Fail-closed: sin poder leer las alertas no se sabe si el supervisor ya
+      // intervino, así que no se recuerda nada en esta corrida.
+      const silenciadas = alertasVigRes.error
+        ? null
+        : clavesRondaTurnoSilenciadas((alertasVigRes.data || []) as AlertaRondaTurno[])
+      if (!silenciadas) console.error('[push] recordatorios de ronda: no se pudieron leer las alertas; no se envían (fail-closed):', alertasVigRes.error?.message)
 
       const rondasVig = (rondasVigRes.data || []) as Array<{ id: string; puesto_id: string; nombre: string; hora_inicio: string | null; intervalo_minutos: number }>
       const ejecMin = ((ejecVigRes.data || []) as Array<{ ronda_base_id: string; turno_id: string; iniciada_at: string }>)
@@ -911,7 +1048,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
           && ventanaInicioMin >= p.desde_min
           && (p.hasta_min === null || ventanaInicioMin < p.hasta_min))
 
-      for (const t of turnosVigentes) {
+      for (const t of (silenciadas ? turnosVigentes : [])) {
         const tIni = fechaHoraMinutos(t.fecha, t.hora_inicio)
         const nocturno = (minutosHora(t.hora_fin) ?? 0) <= (minutosHora(t.hora_inicio) ?? 0)
         const tFin = fechaHoraMinutos(t.fecha, t.hora_fin) + (nocturno ? 1440 : 0)
@@ -919,6 +1056,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
         for (const rb of rondasVig.filter(r => r.puesto_id === t.puesto_id)) {
           const interv = rb.intervalo_minutos
           if (!interv || interv <= 0) continue
+          if (silenciadas?.has(`${rb.id}:${t.id}`)) { avisosOmitidosPorIntervencion += 1; continue }
 
           let base = rb.hora_inicio ? fechaHoraMinutos(t.fecha, rb.hora_inicio) : tIni
           while (base < tIni) base += 1440
@@ -976,8 +1114,8 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       candidatos15: 0,
       alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
       alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores },
-      alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, suspendida: candidatosRondaSuspendida, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores, yaAvisadas: rondaAlertasYaAvisadas },
-      recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa },
+      alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, suspendida: candidatosRondaSuspendida, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores, yaAvisadas: rondaAlertasYaAvisadas, dedupError: rondaDedupError, omitidas: rondaOmitidas, resumenes: rondaResumenesEnviados, fallbackJefes: rondaFallbackJefes, seguimientosVencidos: rondaSeguimientosVencidos },
+      recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa, omitidosPorIntervencion: avisosOmitidosPorIntervencion },
     egresoPendiente: candidatosEgreso,
       alertasEvaluadas,
       alertasOmitidasPorResueltas,
@@ -1204,8 +1342,13 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       pendientes: rondaAlertasPendientes,
       sinSupervisores: rondaAlertasSinSupervisores,
       yaAvisadas: rondaAlertasYaAvisadas,
+      dedupError: rondaDedupError,
+      omitidas: rondaOmitidas,
+      resumenes: rondaResumenesEnviados,
+      fallbackJefes: rondaFallbackJefes,
+      seguimientosVencidos: rondaSeguimientosVencidos,
     },
-    recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa },
+    recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa, omitidosPorIntervencion: avisosOmitidosPorIntervencion },
     alertasEvaluadas,
     alertasOmitidasPorResueltas,
     alertasEnviadas,

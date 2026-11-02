@@ -14,6 +14,7 @@ import { GeminiVision, MODELO_GEMINI_DEFECTO } from './gemini'
 import { cargarMemoriaPunto, LIMITES_MEMORIA_DEFECTO, type EjemploPedido, type LimitesMemoria } from './memoria'
 import { gpsExcedeMargenDeError } from './rondas'
 import { ErrorProveedor } from './proveedor'
+import { decidirReclamo, esFuncionAusente, ordenarSegunCola } from './cola'
 
 export const TIPOS_SOPORTADOS = ['uniforme', 'libro_guardia', 'punto_control'] as const
 export const LIMITE_DURO = 6
@@ -47,6 +48,17 @@ export type OpcionesProceso = {
    *  del radio. Por defecto false — toda foto de punto se analiza, porque GPS y
    *  foto controlan cosas distintas. */
   soloGpsFueraRadio?: boolean
+  /**
+   * Cola con prioridad (ia_evidencias_por_analizar, migración 20261120130000):
+   * más viejas primero, nunca lo ya analizado, fotos de punto sin GPS/QR válido
+   * antes que todo. Si la función todavía no existe en la base se usa la
+   * consulta anterior. Sólo la usa el cron (modo produccion).
+   */
+  usarCola?: boolean
+  /** Antigüedad máxima, en días, de lo que entra a la cola. */
+  colaMaxDias?: number
+  /** Fotos de puntos ya validados por GPS/QR que se analizan por día. */
+  muestraValidadasDia?: number
 }
 
 export type ResultadoItem = {
@@ -59,6 +71,21 @@ export type ResultadoItem = {
   resumen?: string
   motivo?: string
   error?: string
+  /** Resultado de reevaluar_punto_ronda tras analizar una foto de punto. */
+  reevaluacion?: string
+}
+
+/**
+ * Después de un veredicto sobre la foto de un punto, el punto se re-juzga con
+ * la regla aprobada (una evidencia válida alcanza). Idempotente del lado SQL:
+ * si nada cambió, no escribe. Un fallo acá no invalida el análisis: el barrido
+ * reevaluar_puntos_ronda_pendientes del cron lo recupera.
+ */
+export async function reevaluarPuntoRonda(client: SupabaseClient, ejecucionPuntoId: string): Promise<string> {
+  const { data, error } = await client.rpc('reevaluar_punto_ronda', { p_ejecucion_punto_id: ejecucionPuntoId })
+  if (error) return esFuncionAusente(error) ? 'sin_funcion' : `error: ${String(error.message).slice(0, 120)}`
+  const r = (data ?? {}) as { contexto?: string, estado?: string }
+  return r.contexto === 'actualizado' ? `actualizado: ${r.estado}` : (r.contexto ?? 'sin_respuesta')
 }
 
 export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: ResultadoItem[], encolados: number }> {
@@ -66,6 +93,7 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
     client, modo, limite, filtros, loteId, presupuestoMs, maxIntentos = 5,
     cuotaMuestra = 0, maxReferencias = 4, soloGpsFueraRadio = false,
     limitesMemoria = LIMITES_MEMORIA_DEFECTO,
+    usarCola = false, colaMaxDias = 7, muestraValidadasDia = 20,
   } = op
   const inicio = Date.now()
   const RESERVA_MS = 5_000
@@ -77,21 +105,54 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
     ? filtros.tipos.filter(t => (TIPOS_SOPORTADOS as readonly string[]).includes(t))
     : [...TIPOS_SOPORTADOS]
 
-  let q = client
-    .from('evidencias')
-    .select('id, tipo_evidencia, proceso_id, bucket, storage_path, content_type, contenido_sha256, objetivo_id, guardia_id, turno_id, created_at')
-    .in('tipo_evidencia', tipos)
-    .order('created_at', { ascending: false })
-    .limit(Math.min(limite, LIMITE_DURO))
+  const COLUMNAS_EVIDENCIA = 'id, tipo_evidencia, proceso_id, bucket, storage_path, content_type, contenido_sha256, objetivo_id, guardia_id, turno_id, created_at'
 
-  if (filtros?.evidencia_ids?.length) q = q.in('id', filtros.evidencia_ids.slice(0, LIMITE_DURO))
-  if (filtros?.desde) q = q.gte('created_at', filtros.desde)
-  if (filtros?.hasta) q = q.lte('created_at', filtros.hasta)
-  if (filtros?.objetivo_id) q = q.eq('objetivo_id', filtros.objetivo_id)
-  if (filtros?.guardia_id) q = q.eq('guardia_id', filtros.guardia_id)
+  // ── Cola con prioridad ──────────────────────────────────────────────────
+  // Antes se pedían las N evidencias MÁS NUEVAS, sin excluir las ya
+  // analizadas: con más de N fotos en 5 minutos, las de atrás no volvían a
+  // ser elegidas nunca (1.497 fotos de punto sin análisis en octubre 2026).
+  // La cola devuelve sólo lo pendiente, de la más vieja a la más nueva, y
+  // primero las fotos de las que depende si un punto se cumple.
+  let ordenCola: string[] | null = null
+  if (usarCola && modo === 'produccion' && !filtros?.evidencia_ids?.length) {
+    const { data: cola, error: errorCola } = await client.rpc('ia_evidencias_por_analizar', {
+      p_desde: filtros?.desde ?? new Date(0).toISOString(),
+      p_tipos: tipos,
+      p_limite: Math.min(limite, LIMITE_DURO),
+      p_antiguedad_max: `${Math.max(1, Math.floor(colaMaxDias))} days`,
+      p_muestra_validadas_dia: Math.max(0, Math.floor(muestraValidadasDia)),
+    })
+    if (errorCola && !esFuncionAusente(errorCola)) throw new Error(errorCola.message)
+    if (!errorCola) {
+      ordenCola = ((cola ?? []) as Array<{ evidencia_id: string }>).map(c => c.evidencia_id)
+      if (ordenCola.length === 0) return { resultados: [], encolados: 0 }
+    }
+  }
 
-  const { data: evidencias, error } = await q
-  if (error) throw new Error(error.message)
+  let evidencias: any[] | null
+  if (ordenCola) {
+    const { data, error } = await client.from('evidencias').select(COLUMNAS_EVIDENCIA).in('id', ordenCola)
+    if (error) throw new Error(error.message)
+    evidencias = ordenarSegunCola((data ?? []) as any[], ordenCola)
+  } else {
+    // Consulta anterior: manual (modo prueba) o base sin la migración de la cola.
+    let q = client
+      .from('evidencias')
+      .select(COLUMNAS_EVIDENCIA)
+      .in('tipo_evidencia', tipos)
+      .order('created_at', { ascending: false })
+      .limit(Math.min(limite, LIMITE_DURO))
+
+    if (filtros?.evidencia_ids?.length) q = q.in('id', filtros.evidencia_ids.slice(0, LIMITE_DURO))
+    if (filtros?.desde) q = q.gte('created_at', filtros.desde)
+    if (filtros?.hasta) q = q.lte('created_at', filtros.hasta)
+    if (filtros?.objetivo_id) q = q.eq('objetivo_id', filtros.objetivo_id)
+    if (filtros?.guardia_id) q = q.eq('guardia_id', filtros.guardia_id)
+
+    const { data, error } = await q
+    if (error) throw new Error(error.message)
+    evidencias = data
+  }
   if (!evidencias?.length) return { resultados: [], encolados: 0 }
 
   const { data: configs } = await client
@@ -298,20 +359,20 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
     if (errorClaim?.code === '23505') {
       const { data: previa } = await client
         .from('evidencia_analisis')
-        .select('id, estado, intentos, proximo_intento_at')
+        .select('id, estado, intentos, proximo_intento_at, updated_at')
         .eq('evidencia_id', ev.id)
         .eq('analisis_tipo', ev.tipo_evidencia)
         .eq('configuracion_version', conf.version)
         .eq('modo', modo)
         .maybeSingle()
 
-      const reintentable = previa
-        && previa.estado === 'error'
-        && (previa.intentos ?? 0) < maxIntentos
-        && (!previa.proximo_intento_at || new Date(previa.proximo_intento_at) <= new Date())
+      const decision = decidirReclamo(previa, maxIntentos)
 
-      if (reintentable) {
-        await client.from('evidencia_analisis')
+      if (decision.accion === 'reintentar' || decision.accion === 'recuperar') {
+        // Re-reclamo condicionado a lo que se leyó: si otra corrida la tomó en
+        // el medio, el UPDATE no encuentra la fila y ésta se omite. Así nunca
+        // hay dos análisis de la misma foto en paralelo.
+        const { data: reclamada } = await client.from('evidencia_analisis')
           .update({
             estado: 'procesando',
             intentos: (previa!.intentos ?? 0) + 1,
@@ -319,14 +380,35 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
             ronda_punto_id: rondaPuntoId,
           })
           .eq('id', previa!.id)
+          .eq('estado', previa!.estado)
+          .eq('intentos', previa!.intentos ?? 0)
+          .select('id')
+        if (!reclamada?.length) {
+          resultados.push({ evidencia_id: ev.id, estado: 'omitida', motivo: 'Otra corrida la reclamó' })
+          continue
+        }
         filaId = previa!.id
+      } else if (decision.accion === 'agotar') {
+        // Sin intentos: sale de la cola para no ocupar el lugar de otras fotos.
+        // La foto de un punto sin otra evidencia queda «pendiente de
+        // validación» hasta que una persona la mire (no se condena al
+        // vigilador por una falla técnica nuestra).
+        await client.from('evidencia_analisis')
+          .update({ estado: 'error_definitivo', error_clase: 'transitorio', proximo_intento_at: null })
+          .eq('id', previa!.id)
+          .eq('estado', previa!.estado)
+        resultados.push({
+          evidencia_id: ev.id,
+          analisis_id: previa!.id,
+          estado: 'omitida',
+          motivo: `Intentos agotados (${previa!.intentos ?? 0} de ${maxIntentos}): error definitivo`,
+        })
+        continue
       } else {
         resultados.push({
           evidencia_id: ev.id,
           estado: 'omitida',
-          motivo: previa?.estado === 'error'
-            ? `Reintento pendiente (intento ${previa.intentos} de ${maxIntentos})`
-            : `Ya analizada con ${conf.version}`,
+          motivo: decision.motivo === 'Ya analizada' ? `Ya analizada con ${conf.version}` : decision.motivo,
         })
         continue
       }
@@ -368,7 +450,10 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
           resumen: 'Los bytes almacenados no coinciden con el hash registrado al subir la evidencia.',
         }).eq('id', filaActual.id)
 
-        resultados.push({ evidencia_id: ev.id, analisis_id: filaActual.id, estado: 'completado', clasificacion_efectiva: 'REVISAR', motivos: ['EVIDENCIA_ALTERADA'] })
+        resultados.push({
+          evidencia_id: ev.id, analisis_id: filaActual.id, estado: 'completado', clasificacion_efectiva: 'REVISAR', motivos: ['EVIDENCIA_ALTERADA'],
+          reevaluacion: ev.tipo_evidencia === 'punto_control' ? await reevaluarPuntoRonda(client, ev.proceso_id) : undefined,
+        })
         continue
       }
 
@@ -526,6 +611,9 @@ export async function procesarLote(op: OpcionesProceso): Promise<{ resultados: R
         clasificacion_efectiva: efectiva,
         motivos: motivosFinales,
         resumen: normalizado.resumen,
+        // Regla aprobada: la foto aceptada valida el punto; la rechazada lo
+        // resuelve como incumplido si no hay GPS ni QR válidos.
+        reevaluacion: ev.tipo_evidencia === 'punto_control' ? await reevaluarPuntoRonda(client, ev.proceso_id) : undefined,
       })
     } catch (e: any) {
       const clase = e instanceof ErrorProveedor ? e.clase : 'transitorio'
