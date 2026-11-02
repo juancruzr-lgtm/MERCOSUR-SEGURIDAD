@@ -10,6 +10,7 @@
 
 import { CLAVE_PENDIENTES } from '@/lib/protocolos'
 import { appVersion, obtenerDeviceId } from '@/lib/telemetry'
+import { listarFotosPendientes, type MetaFotoPendiente } from '@/lib/pendientes-camara'
 
 export const INGRESO_PENDIENTE_KEY = 'mercosur_ingreso_pendiente'
 
@@ -24,6 +25,8 @@ export type Diagnostico = {
   cacheEntradas: number | null
   cachesSw: string[]
   pendientes: Array<{ etiqueta: string; cantidad: number }>
+  /** Fotos sacadas que esperan subirse (IndexedDB). Opcional: sin IndexedDB, vacío. */
+  fotosPendientes?: Array<Pick<MetaFotoPendiente, 'flujo' | 'tipo' | 'bytes' | 'creado_ms'>>
   ultimaActualizacion: string | null
   navegador: string | null
   generado: string
@@ -49,10 +52,21 @@ export function textoDiagnostico(d: Diagnostico): string {
     `Caché de la app: ${formatearBytes(d.cacheBytes)}${d.cacheEntradas !== null ? ` · ${d.cacheEntradas} archivos` : ''}`,
     `Cachés: ${d.cachesSw.length ? d.cachesSw.join(', ') : 'ninguna'}`,
     `Pendientes: ${d.pendientes.length ? d.pendientes.map(p => `${p.etiqueta} ${p.cantidad}`).join(' · ') : 'ninguno'}`,
+    `Fotos sin subir: ${resumenFotosPendientes(d.fotosPendientes)}`,
     `Última actualización: ${d.ultimaActualizacion ?? '—'}`,
     `Generado: ${d.generado}`,
   ]
   return lineas.join('\n')
+}
+
+/** "2 · 640.0 KB (ingreso libro 10:02, ronda punto 10:15)" o "ninguna". */
+export function resumenFotosPendientes(fotos: Diagnostico['fotosPendientes']): string {
+  if (!fotos || fotos.length === 0) return 'ninguna'
+  const total = fotos.reduce((s, f) => s + f.bytes, 0)
+  const detalle = fotos
+    .map(f => `${f.flujo} ${f.tipo} ${new Date(f.creado_ms).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`)
+    .join(', ')
+  return `${fotos.length} · ${formatearBytes(total)} (${detalle})`
 }
 
 function leerLocal(storage: 'localStorage' | 'sessionStorage', clave: string): string | null {
@@ -68,7 +82,9 @@ export function pendientesLocales(): Array<{ etiqueta: string; cantidad: number 
   } catch {
     out.push({ etiqueta: 'Lecturas de protocolo sin enviar', cantidad: 0 })
   }
-  out.push({ etiqueta: 'Ingreso guardado para reintentar', cantidad: leerLocal('sessionStorage', INGRESO_PENDIENTE_KEY) ? 1 : 0 })
+  // El intento se guarda en sessionStorage y en localStorage (lib/pendientes-camara).
+  const ingreso = leerLocal('sessionStorage', INGRESO_PENDIENTE_KEY) || leerLocal('localStorage', INGRESO_PENDIENTE_KEY)
+  out.push({ etiqueta: 'Ingreso guardado para reintentar', cantidad: ingreso ? 1 : 0 })
   return out
 }
 
@@ -122,6 +138,9 @@ export async function recolectarDiagnostico(
     dispositivo = [ua?.platform, alto?.model].filter(Boolean).join(' ') || null
   } catch { /* UA-CH no disponible */ }
 
+  let fotosPendientes: Diagnostico['fotosPendientes'] = []
+  try { fotosPendientes = await listarFotosPendientes() } catch { /* sin IndexedDB */ }
+
   const ult = extra.ultimaActualizacion
   const ultimaActualizacion = ult ? new Date(ult).toLocaleString('es-AR') : null
 
@@ -136,6 +155,7 @@ export async function recolectarDiagnostico(
     cacheEntradas: cache.entradas,
     cachesSw: cache.nombres,
     pendientes: [...(extra.pendientes ?? []), ...pendientesLocales()],
+    fotosPendientes,
     ultimaActualizacion,
     navegador: nav?.userAgent ? String(nav.userAgent).slice(0, 160) : null,
     generado: new Date().toLocaleString('es-AR'),

@@ -6,13 +6,13 @@
  * render del perfil.
  *
  * "Liberar espacio" borra SÓLO las cachés del Service Worker (app-shell,
- * íconos). No toca sesión, pendientes de protocolos, intentos de ingreso ni
- * la copia local de protocolos.
+ * íconos). No toca sesión, pendientes de protocolos, intentos de ingreso,
+ * fotos sin subir (IndexedDB) ni la copia local de protocolos.
  */
 
 import { useCallback, useState } from 'react'
 import {
-  formatearBytes, liberarCaches, recolectarDiagnostico, textoDiagnostico, type Diagnostico,
+  formatearBytes, liberarCaches, recolectarDiagnostico, resumenFotosPendientes, textoDiagnostico, type Diagnostico,
 } from '@/lib/diagnostico-dispositivo'
 import { ultimaActualizacion as ultimaActualizacionGlobal } from '@/lib/refresco-movil'
 
@@ -109,6 +109,14 @@ export default function DiagnosticoDispositivo({
                   <span style={{ color: p.cantidad > 0 ? '#fbbf24' : undefined }}>{p.cantidad}</span>
                 </div>
               ))}
+              {/* Fotos sacadas que todavía no se confirmaron en el servidor. Se
+                  borran solas al subirse, al cancelar o a las 24 h. */}
+              <div style={s.fila}>
+                <span style={s.etiqueta}>Fotos sin subir</span>
+                <span style={{ color: (d.fotosPendientes?.length ?? 0) > 0 ? '#fbbf24' : undefined, textAlign: 'right' }}>
+                  {resumenFotosPendientes(d.fotosPendientes)}
+                </span>
+              </div>
               <div style={s.fila}><span style={s.etiqueta}>Última actualización</span><span>{d.ultimaActualizacion ?? '—'}</span></div>
               <div style={s.fila}><span style={s.etiqueta}>Dispositivo</span><span>{d.dispositivo ?? '—'}</span></div>
             </>

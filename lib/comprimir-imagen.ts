@@ -139,25 +139,116 @@ export function mensajeErrorFoto(codigo: string, que = 'la foto'): string {
 }
 
 /**
- * Deja la foto lista para subir: la comprime con el perfil; si el celular no
- * puede comprimirla pero la original es JPG/PNG/WEBP y entra en el límite, usa
- * la original (el servidor la vuelve a controlar). Si tampoco, rechaza con un
- * Error cuyo message es un código de ErrorCompresion o 'demasiado_grande': la
- * pantalla muestra mensajeErrorFoto() y deja volver a sacarla.
- *
- * Así un problema de cámara no impide fichar ni registrar una ronda, y nunca se
- * sube un archivo que el servidor o la IA no puedan leer.
+ * Perfil de rescate (auditoría PWA oct-2026): cuando el canvas no puede con la
+ * foto (memoria, timeout, toBlob nulo), se reintenta más chica antes de subir
+ * el original. 1280 px de lado mayor es el piso de legibilidad acordado para
+ * la IA y el libro manuscrito: nunca se baja de ahí.
  */
-export async function prepararFotoOperativa(file: File, perfil: PerfilFoto): Promise<{ file: File; comprimida: boolean; error?: string }> {
+export const PERFIL_RESCATE: Required<Pick<OpcionesCompresion, 'ladoMayor' | 'quality' | 'timeoutMs'>> = {
+  ladoMayor: 1280, quality: 0.7, timeoutMs: 12_000,
+}
+export const LADO_MINIMO_LEGIBLE = 1280
+
+/**
+ * Compresión por createImageBitmap: decodifica fuera del <img> (en Chrome
+ * Android, en otro hilo y sin mantener la imagen en el DOM) y dibuja en un
+ * OffscreenCanvas si existe. Suele funcionar donde el camino con Image falla
+ * por memoria. Rechaza con 'bitmap_no_disponible' si el navegador no lo tiene.
+ */
+export async function comprimirConBitmap(file: Blob, opciones: OpcionesCompresion = PERFIL_RESCATE): Promise<File> {
+  const g = globalThis as any
+  if (typeof g.createImageBitmap !== 'function') throw new Error('bitmap_no_disponible')
+  const { quality = 0.7, timeoutMs = 12_000 } = opciones
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const vencer = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('compresion_timeout')), timeoutMs) })
+  const trabajo = (async () => {
+    let bitmap: ImageBitmap
+    try {
+      bitmap = await g.createImageBitmap(file, { imageOrientation: 'from-image' })
+    } catch {
+      throw new Error('imagen_carga_fallo')
+    }
+    try {
+      const { ancho, alto } = dimensionesDestino(bitmap.width, bitmap.height, opciones)
+      let blob: Blob | null = null
+      if (typeof g.OffscreenCanvas === 'function') {
+        const oc = new g.OffscreenCanvas(ancho, alto)
+        const ctx = oc.getContext('2d')
+        if (!ctx) throw new Error('canvas_no_disponible')
+        ctx.drawImage(bitmap, 0, 0, ancho, alto)
+        blob = await oc.convertToBlob({ type: 'image/jpeg', quality })
+      } else {
+        const canvas = document.createElement('canvas')
+        canvas.width = ancho
+        canvas.height = alto
+        const ctx = canvas.getContext('2d')
+        if (!ctx) throw new Error('canvas_no_disponible')
+        ctx.drawImage(bitmap, 0, 0, ancho, alto)
+        blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/jpeg', quality))
+        canvas.width = 0; canvas.height = 0 // libera la memoria del canvas ya
+      }
+      if (!blob) throw new Error('compresion_blob_fallo')
+      const nombre = ((file as File).name || 'foto.jpg').replace(/\.(heic|heif|png|webp)$/i, '.jpg')
+      return new File([blob], nombre, { type: 'image/jpeg' })
+    } finally {
+      try { bitmap.close() } catch { /* nada */ }
+    }
+  })()
   try {
-    return { file: await comprimirFotoOperativa(file, perfil), comprimida: true }
-  } catch (e) {
-    const codigo = e instanceof Error ? e.message : 'compresion_blob_fallo'
-    // La original sólo sirve si además sus primeros bytes son de verdad una
-    // foto JPG/PNG/WEBP (un archivo dañado puede declararse image/jpeg).
-    if (originalSubible(file) && await firmaDeFotoValida(file)) return { file, comprimida: false, error: codigo }
-    throw new Error(superaElLimite(file) ? 'demasiado_grande' : codigo)
+    return await Promise.race([trabajo, vencer])
+  } finally {
+    if (timer) clearTimeout(timer)
   }
+}
+
+export type ViaPreparacion = 'canvas' | 'bitmap_rescate' | 'canvas_rescate' | 'original'
+
+export interface DepsPreparacion {
+  comprimir: (file: File, opciones: OpcionesCompresion) => Promise<File>
+  comprimirBitmap: (file: File, opciones: OpcionesCompresion) => Promise<File>
+}
+
+const DEPS_REALES: DepsPreparacion = { comprimir: comprimirImagen, comprimirBitmap: comprimirConBitmap }
+
+/**
+ * Deja la foto lista para subir. Orden (auditoría PWA oct-2026; antes el
+ * primer fallo subía directamente el original, y las fotos > 1 MB venían
+ * subiendo: 144 en octubre):
+ *
+ *   1. canvas con el perfil del uso;
+ *   2. createImageBitmap con el perfil de rescate (1280 px, q 0,7);
+ *   3. canvas con el perfil de rescate, salvo que la imagen ni siquiera se
+ *      pueda decodificar (ahí un canvas más chico no cambia nada);
+ *   4. el original, sólo si es JPG/PNG/WEBP real y entra en el límite.
+ *
+ * Si nada sirve, rechaza con el código del PRIMER fallo (o
+ * 'demasiado_grande'): la pantalla muestra mensajeErrorFoto() y deja volver a
+ * sacarla. Así un problema de cámara no impide fichar ni registrar una ronda,
+ * y nunca se sube un archivo que el servidor o la IA no puedan leer.
+ */
+export async function prepararFotoOperativa(
+  file: File,
+  perfil: PerfilFoto,
+  deps: DepsPreparacion = DEPS_REALES,
+): Promise<{ file: File; comprimida: boolean; error?: string; via?: ViaPreparacion }> {
+  let codigo: string
+  try {
+    return { file: await deps.comprimir(file, PERFILES_FOTO[perfil]), comprimida: true, via: 'canvas' }
+  } catch (e) {
+    codigo = e instanceof Error ? e.message : 'compresion_blob_fallo'
+  }
+  try {
+    return { file: await deps.comprimirBitmap(file, PERFIL_RESCATE), comprimida: true, error: codigo, via: 'bitmap_rescate' }
+  } catch { /* sigue */ }
+  if (codigo !== 'imagen_carga_fallo') {
+    try {
+      return { file: await deps.comprimir(file, PERFIL_RESCATE), comprimida: true, error: codigo, via: 'canvas_rescate' }
+    } catch { /* sigue */ }
+  }
+  // La original sólo sirve si además sus primeros bytes son de verdad una
+  // foto JPG/PNG/WEBP (un archivo dañado puede declararse image/jpeg).
+  if (originalSubible(file) && await firmaDeFotoValida(file)) return { file, comprimida: false, error: codigo, via: 'original' }
+  throw new Error(superaElLimite(file) ? 'demasiado_grande' : codigo)
 }
 
 /** Primeros bytes de JPG, PNG o WEBP (mismo criterio que app/api/_lib/validar-foto). */

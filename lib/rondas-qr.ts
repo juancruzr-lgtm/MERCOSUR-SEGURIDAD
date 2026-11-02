@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
-import { normalizarEjecucion } from '@/lib/rondas'
+import { normalizarEjecucion, rpcRondaConRed, MENSAJE_SIN_RED_RONDA } from '@/lib/rondas'
+import { esFallaDeRed } from '@/lib/red-resiliente'
 import type { ResultadoRondas, RondaEjecucionActual } from '@/lib/rondas'
 
 // ── Validación física por QR por punto de control ────────────────────────────
@@ -165,16 +166,19 @@ export async function validarQrPuntoRonda(
   token: string,
   gps: GpsScanQr | null,
 ): Promise<ResultadoRondas<RespuestaValidarQr>> {
-  const { data, error } = await supabase.rpc('validar_qr_ronda_punto', {
+  // Idempotente (`qr_ya_verificado`): reintento acotado sólo ante falla de red.
+  const r = await rpcRondaConRed('validar_qr_punto_ronda', 'validar_qr_ronda_punto', {
     p_ejecucion_punto_id: ejecucionPuntoId,
     p_token: token,
     p_latitud: gps?.latitud ?? null,
     p_longitud: gps?.longitud ?? null,
     p_precision_metros: gps?.precision_metros ?? null,
-  })
+  }, { idempotente: true, ejecucionPuntoId })
+  const { data, error } = r
 
   if (error) {
     console.error('[rondas-qr] validar_qr_ronda_punto', error)
+    if (esFallaDeRed(error, r.status)) return { data: null, error: MENSAJE_SIN_RED_RONDA }
     return { data: null, error: 'No se pudo validar el QR. Verificá la conexión y reintentá.' }
   }
 

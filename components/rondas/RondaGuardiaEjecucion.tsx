@@ -30,6 +30,51 @@ import {
   MENSAJE_QR_INCUMPLIDO_SIN_SCAN,
 } from '@/lib/rondas-qr'
 import QrScanner from './QrScanner'
+import {
+  CLAVE_RONDA_EN_CURSO,
+  EDAD_MAXIMA_GPS_RONDA_MS,
+  borrarFlujo,
+  borrarFotosDe,
+  guardarFlujo,
+  guardarFotoPendiente,
+  leerFlujo,
+  leerFotoPendiente,
+} from '@/lib/pendientes-camara'
+
+/** Estado del punto guardado antes de abrir la cámara (lib/pendientes-camara). */
+interface PuntoEnCursoGuardado {
+  ejecucion_punto_id: string
+  gps: GpsPuntoRonda | null
+  gps_ms: number | null
+  hay_novedad: boolean
+  tiene_foto: boolean
+  ts: number
+}
+
+/**
+ * Qué se restaura de un punto guardado. Pura (la usa la prueba de
+ * "recuperación después de abrir la cámara"): sólo si es el MISMO punto
+ * pendiente, y el GPS sólo si es reciente (el servidor juzga la ubicación del
+ * momento; una lectura vieja se vuelve a pedir).
+ */
+export function restauracionPunto(
+  guardado: PuntoEnCursoGuardado | null,
+  puntoActualId: string | null,
+  ahora = Date.now(),
+): { gps: GpsPuntoRonda | null; hayNovedad: boolean; buscarFoto: boolean } | null {
+  if (!guardado || !puntoActualId || guardado.ejecucion_punto_id !== puntoActualId) return null
+  const gpsFresco = guardado.gps && guardado.gps_ms != null && ahora - guardado.gps_ms <= EDAD_MAXIMA_GPS_RONDA_MS
+  return { gps: gpsFresco ? guardado.gps : null, hayNovedad: Boolean(guardado.hay_novedad), buscarFoto: Boolean(guardado.tiene_foto) }
+}
+
+function leerPuntoGuardado(): PuntoEnCursoGuardado | null {
+  try {
+    const t = leerFlujo(CLAVE_RONDA_EN_CURSO)
+    return t ? JSON.parse(t) as PuntoEnCursoGuardado : null
+  } catch {
+    return null
+  }
+}
 
 type EstadoGps =
   | { tipo: 'sin_solicitar' }
@@ -131,6 +176,8 @@ export default function RondaGuardiaEjecucion({
 
   const puntoActual = obtenerPuntoPendiente(ejecucion)
   const puntoActualId = puntoActual?.ejecucion_punto_id ?? null
+  // Momento en que se obtuvo el GPS del punto (para decidir si se reusa tras una recarga).
+  const gpsObtenidoMsRef = useRef<number | null>(null)
 
   useEffect(() => {
     setEstadoGps({ tipo: 'sin_solicitar' })
@@ -145,7 +192,49 @@ export default function RondaGuardiaEjecucion({
     setValidandoQr(false)
     setAvisoQr(null)
     setContinuarSinQr(false)
+    gpsObtenidoMsRef.current = null
+
+    // Recuperación después de abrir la cámara: si la pestaña se cerró con este
+    // mismo punto a medio hacer, vuelven la novedad, el GPS (si es reciente) y
+    // la foto ya sacada. Si el punto guardado es otro, ya no sirve.
+    let vigente = true
+    const guardado = leerPuntoGuardado()
+    const plan = restauracionPunto(guardado, puntoActualId)
+    if (guardado && !plan) {
+      borrarFlujo(CLAVE_RONDA_EN_CURSO)
+      void borrarFotosDe('ronda', guardado.ejecucion_punto_id)
+    }
+    if (plan) {
+      setHayNovedad(plan.hayNovedad)
+      if (plan.gps) {
+        setEstadoGps({ tipo: 'disponible', gps: plan.gps })
+        gpsObtenidoMsRef.current = guardado!.gps_ms
+      }
+      if (plan.buscarFoto && puntoActualId) {
+        void leerFotoPendiente('ronda', puntoActualId, 'punto').then(archivo => {
+          if (!vigente || !archivo) return
+          setFoto({ file: archivo, url: URL.createObjectURL(archivo) })
+        })
+      }
+    }
+    return () => { vigente = false }
   }, [puntoActualId])
+
+  // Guarda el punto en curso antes de abrir la cámara y cada vez que cambia
+  // algo que costó obtener (GPS, foto, novedad).
+  const guardarPuntoEnCurso = (cambios: Partial<PuntoEnCursoGuardado> = {}) => {
+    if (!puntoActualId) return
+    const datos: PuntoEnCursoGuardado = {
+      ejecucion_punto_id: puntoActualId,
+      gps: estadoGps.tipo === 'disponible' ? estadoGps.gps : null,
+      gps_ms: estadoGps.tipo === 'disponible' ? gpsObtenidoMsRef.current : null,
+      hay_novedad: hayNovedad,
+      tiene_foto: foto !== null,
+      ts: Date.now(),
+      ...cambios,
+    }
+    guardarFlujo(CLAVE_RONDA_EN_CURSO, datos as unknown as Record<string, unknown>)
+  }
 
   // Misma regla que aplica el servidor. Se recalcula al marcar la novedad:
   // con política `solo_novedad` es esa marca la que vuelve obligatoria una foto
@@ -193,7 +282,9 @@ export default function RondaGuardiaEjecucion({
     // Otra captura la reemplazó, o el punto cambió mientras esperábamos.
     if (capturaGpsRef.current !== captura) return
     capturaGpsRef.current = null
-    setEstadoGps(estadoDesdeCaptura(resultado))
+    const nuevo = estadoDesdeCaptura(resultado)
+    if (nuevo.tipo === 'disponible') gpsObtenidoMsRef.current = Date.now()
+    setEstadoGps(nuevo)
   }
 
   // Lectura del QR: se extrae el token localmente (formato propio, nada ajeno
@@ -243,6 +334,11 @@ export default function RondaGuardiaEjecucion({
       })
       // Imagen nueva elegida a mano: hay que subir esta, no reutilizar la anterior.
       setEvidenciaSubidaId(null)
+      // Pendiente hasta que el punto quede registrado.
+      if (puntoActualId) {
+        void guardarFotoPendiente({ flujo: 'ronda', refId: puntoActualId, tipo: 'punto', archivo: comprimida, nombre: 'punto-ronda.jpg' })
+        guardarPuntoEnCurso({ tiene_foto: true })
+      }
     } catch (errorFoto) {
       setError(errorFoto instanceof Error ? errorFoto.message : 'No se pudo preparar la foto.')
     } finally {
@@ -297,6 +393,10 @@ export default function RondaGuardiaEjecucion({
         setError('El servidor no devolvió el estado actualizado de la ronda.')
         return
       }
+
+      // Punto registrado: la foto pendiente y el estado guardado ya no hacen falta.
+      borrarFlujo(CLAVE_RONDA_EN_CURSO)
+      void borrarFotosDe('ronda', puntoActual.ejecucion_punto_id)
 
       setUltimoResultado({
         puntoNombre: puntoActual.nombre,
@@ -563,7 +663,7 @@ export default function RondaGuardiaEjecucion({
               <input
                 type="checkbox"
                 checked={hayNovedad}
-                onChange={evento => { setHayNovedad(evento.target.checked); setError(null) }}
+                onChange={evento => { setHayNovedad(evento.target.checked); setError(null); guardarPuntoEnCurso({ hay_novedad: evento.target.checked }) }}
                 disabled={registrando}
               />
               <span>Hay una novedad para reportar</span>
@@ -601,7 +701,12 @@ export default function RondaGuardiaEjecucion({
           <button
             type="button"
             style={S.secundario}
-            onClick={() => fotoInputRef.current?.click()}
+            onClick={() => {
+              // Antes de abrir la cámara: si el sistema mata la pestaña, el
+              // punto se retoma con su GPS y su novedad.
+              guardarPuntoEnCurso()
+              fotoInputRef.current?.click()
+            }}
             disabled={procesandoFoto || registrando}
           >
             {foto ? 'Repetir foto' : 'Tomar foto'}
