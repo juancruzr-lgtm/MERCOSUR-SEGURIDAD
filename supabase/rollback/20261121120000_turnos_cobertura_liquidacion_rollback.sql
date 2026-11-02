@@ -17,7 +17,6 @@ drop trigger if exists registros_asistencia_validar_liquidable on public.registr
 drop trigger if exists registros_asistencia_consumir_excepcion on public.registros_asistencia;
 
 drop function if exists public.turnos_validar_superposicion();
-drop function if exists public._turnos_superposicion_confirmada(uuid, uuid, uuid);
 drop function if exists public.turnos_registrar_historial();
 drop function if exists public._turnos_historial_insertar(uuid, text, text[], jsonb, jsonb, text);
 drop function if exists public.registros_asistencia_validar_liquidable();

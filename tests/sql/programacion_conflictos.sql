@@ -1,4 +1,4 @@
--- Pruebas de 20261113110000_programacion_conflictos_correccion_turnos.
+-- Pruebas de 20261125120000_programacion_conflictos_correccion_turnos.
 --
 -- Corre todo dentro de una transacción y termina en ROLLBACK: no deja datos.
 -- Se puede ejecutar en un Postgres local (con tests/sql/esquema_minimo_programacion.sql,
@@ -143,16 +143,19 @@ do $$ declare r jsonb; tid uuid; begin
   assert r -> 'conflictos' -> 0 ->> 'objetivo' = 'TEST Objetivo Sur', r::text;
   assert r -> 'conflictos' -> 0 ->> 'tipo' = 'superposicion' and (r -> 'conflictos' -> 0 ->> 'minutos_superpuestos')::int = 120, r::text;
   assert not (r ->> 'puede_confirmar_superposicion')::boolean;
-  -- El supervisor no puede confirmar una superposición; Administración sí.
+  -- La superposición no la confirma nadie, ni con motivo (decisión de JC, 02/11/2026).
   r := public.asignar_vigilador_turnos(gen_random_uuid(), pg_temp.id('g2'), array[tid], false, true, 'Lo pide el cliente');
-  assert r -> 'filas' -> 0 ->> 'resultado' = 'omitida' and r -> 'filas' -> 0 ->> 'motivo' like 'Superposicion horaria: solo Administracion%', r::text;
+  assert r -> 'filas' -> 0 ->> 'resultado' = 'omitida' and r -> 'filas' -> 0 ->> 'motivo' like 'Superposicion horaria:%No puede tener dos turnos al mismo tiempo.', r::text;
   perform pg_temp.como('admin');
   r := public.asignar_vigilador_turnos(gen_random_uuid(), pg_temp.id('g2'), array[tid], false, true, 'Cubre 2 h hasta el relevo');
-  assert r -> 'filas' -> 0 ->> 'resultado' = 'asignada', r::text;
+  assert r -> 'filas' -> 0 ->> 'resultado' = 'omitida' and r -> 'filas' -> 0 ->> 'motivo' like 'Superposicion horaria:%', r::text;
+  assert not ((public.conflictos_turno_vigilador(tid, pg_temp.id('g2'))) ->> 'puede_confirmar_superposicion')::boolean;
+  assert (select guardia_id from public.turnos where id = tid) is null, 'no asigno';
+  assert (select count(*) from public.turnos_conflictos_confirmados where turno_id = tid) = 0, 'sin constancia: no hubo asignacion';
   -- El supervisor tampoco consulta turnos de objetivos fuera de su zona.
   perform pg_temp.como('sup1');
   assert pg_temp.error_de(format('select public.conflictos_turno_vigilador(%L, %L)', pg_temp.id('z_sur'), pg_temp.id('edu'))) = 'Objetivo fuera de tu alcance';
-  raise notice 'OK 9 - conflicto entre zonas detectado; superposicion solo la confirma Administracion';
+  raise notice 'OK 9 - conflicto entre zonas detectado; la superposicion no la confirma nadie';
 end $$;
 
 -- ── 1. Anular un turno futuro ───────────────────────────────────────────────
@@ -214,11 +217,15 @@ do $$ declare r jsonb; tid uuid; e text; v timestamptz; begin
   e := pg_temp.error_de(format('select public.corregir_turno_programacion(%L, %L, %L, %L, %L, %L, %L)',
     gen_random_uuid(), tid, 'modificar_horario', 'Se extendio el servicio', '08:00', '17:00', v));
   assert e like 'Requiere confirmacion%', e;
+  -- 08–18 se pisa con el de las 17: ni Administración lo confirma.
+  e := pg_temp.error_de(format('select public.corregir_turno_programacion(%L, %L, %L, %L, %L, %L, %L, true)',
+    gen_random_uuid(), tid, 'modificar_horario', 'Se extendio el servicio', '08:00', '18:00', v));
+  assert e like 'Superposicion horaria%', e;
   r := public.corregir_turno_programacion(gen_random_uuid(), tid, 'modificar_horario', 'Se extendio el servicio', '08:00', '17:00', v, true);
   assert (select hora_fin from public.turnos where id = tid) = '17:00';
   assert (select count(*) from public.turnos_conflictos_confirmados where turno_id = tid and origen = 'modificacion_horario') = 1;
   assert (select count(*) from public.turnos_auditoria where turno_id = tid and campo in ('hora_inicio','hora_fin')) = 2;
-  raise notice 'OK 4 - modificar turno iniciado sin evidencia, con conflicto confirmado';
+  raise notice 'OK 4 - modificar turno iniciado sin evidencia: continuidad confirmada, superposicion rechazada';
 end $$;
 
 -- ── 11. Horas liquidadas / revisadas / período cerrado ──────────────────────
@@ -257,18 +264,9 @@ do $$ declare r jsonb; tid uuid; e text; v timestamptz; op uuid := gen_random_uu
   raise notice 'OK 12 - concurrencia detectada por version; reintento idempotente';
 end $$;
 
--- ── 10. Después de anular no hay obligación de rondas ───────────────────────
-do $$ declare tid uuid; rb uuid; n int; begin
-  tid := pg_temp.turno('a10', 'lotuf', 'g2', date '2030-06-01', '08:00', '16:00');
-  insert into public.rondas_base (puesto_id, hora_inicio, intervalo_minutos) values (pg_temp.id('p_lotuf'), null, 120) returning id into rb;
-  insert into public.ronda_puntos (ronda_base_id) values (rb);
-  n := (select count(*) from public.rondas_ventanas_programadas(pg_temp.id('lotuf'), date '2030-06-01', date '2030-06-01') where turno_id = tid);
-  assert n = 4, 'antes: 4 ventanas, hay ' || n;
-  update public.turnos set estado = 'anulado' where id = tid;
-  n := (select count(*) from public.rondas_ventanas_programadas(pg_temp.id('lotuf'), date '2030-06-01', date '2030-06-01') where turno_id = tid);
-  assert n = 0, 'anulado: sin ventanas, hay ' || n;
-  raise notice 'OK 10 - turno anulado no exige rondas (no genera alertas ni cuenta en la evaluacion)';
-end $$;
+-- ── 10. Turno anulado sin rondas: lo prueba #345 ────────────────────────────
+-- rondas_ventanas_programadas ya no la redefine esta migración: la exclusión de
+-- anulados viene de 20261122120000 (supabase/pruebas/rondas-historial).
 
 -- ── Permisos: el vigilador no corrige ni consulta ───────────────────────────
 do $$ begin

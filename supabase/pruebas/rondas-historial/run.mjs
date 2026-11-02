@@ -28,6 +28,9 @@ const RB = 'supabase/rollback/20261122120000_rondas_historial_exigencias_rollbac
 const SUP_AUTH = '00000000-0000-0000-0000-00000000a001'
 
 // Cuerpo (prosrc) de la última definición de una función en un archivo.
+// En un checkout de Windows (core.autocrlf) los archivos traen \r\n y el cuerpo
+// guardado en la base no: se compara sin \r.
+const sinCR = s => String(s ?? '').replace(/\r/g, '')
 function cuerpo(archivo, nombre) {
   const txt = leer(archivo).replace(/\r/g, '')
   const re = new RegExp(`create or replace function public\\.${nombre}\\s*\\(`, 'gi')
@@ -47,7 +50,7 @@ function sentencia(archivo, nombre) {
   const fin = resto.indexOf(d[1], d.index + d[0].length) + d[1].length
   return resto.slice(0, resto.indexOf(';', fin) + 1)
 }
-const prosrc = async n => (await sql(`select prosrc from pg_proc where proname = $1`, [n]))[0]?.prosrc?.replace(/\r/g, '')
+const prosrc = async n => (await sql(`select prosrc from pg_proc where proname = $1`, [n]))[0]?.prosrc
 
 // ── Esqueleto ───────────────────────────────────────────────────────────────
 await db.exec(`
@@ -337,10 +340,10 @@ await db.exec(leer(RB))
 ok('Rollback: rondas_ventanas_programadas vuelve a la de producción',
   (await prosrc('rondas_ventanas_programadas')).replace(/\r/g, '') === cuerpo('supabase/migrations/20261104120000_rondas_horario_sin_exigencia.sql', 'rondas_ventanas_programadas'))
 ok('Rollback: evaluar_ronda_alertas vuelve a 20261115120000',
-  (await prosrc('evaluar_ronda_alertas')) === cuerpo('supabase/migrations/20261115120000_ronda_alertas_resultado_intervencion.sql', 'evaluar_ronda_alertas'))
+  sinCR(await prosrc('evaluar_ronda_alertas')) === sinCR(cuerpo('supabase/migrations/20261115120000_ronda_alertas_resultado_intervencion.sql', 'evaluar_ronda_alertas')))
 ok('Rollback: Cumplimiento y listado vuelven a la rama',
-  (await prosrc('cumplimiento_rondas_por_empleado_servicio')) === cuerpo('supabase/migrations/20261120150000_desempeno_saneamiento_fecha_ar.sql', 'cumplimiento_rondas_por_empleado_servicio')
-  && (await prosrc('listar_rondas_programadas_objetivo')) === cuerpo('supabase/migrations/20261120120000_rondas_regla_validacion_aprobada.sql', 'listar_rondas_programadas_objetivo'))
+  sinCR(await prosrc('cumplimiento_rondas_por_empleado_servicio')) === sinCR(cuerpo('supabase/migrations/20261120150000_desempeno_saneamiento_fecha_ar.sql', 'cumplimiento_rondas_por_empleado_servicio'))
+  && sinCR(await prosrc('listar_rondas_programadas_objetivo')) === sinCR(cuerpo('supabase/migrations/20261120120000_rondas_regla_validacion_aprobada.sql', 'listar_rondas_programadas_objetivo')))
 ok('Rollback: sin funciones nuevas', (await sql(`select count(*)::int n from pg_proc where proname in ('rondas_ventanas_candidatas','rondas_ventanas_historicas','capturar_ventanas_exigidas')`))[0].n === 0)
 ok('Rollback: las fotos se conservan', (await sql(`select count(*)::int n from ronda_ventanas_exigidas`))[0].n === nFotosRb)
 await evaluar()

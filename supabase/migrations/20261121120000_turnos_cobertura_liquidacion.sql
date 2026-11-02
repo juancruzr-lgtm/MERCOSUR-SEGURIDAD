@@ -29,8 +29,6 @@
 --     (lib/validacion-turnos.ts). Sólo se evalúa cuando cambia guardia, fecha,
 --     horario, objetivo o el turno vuelve a tener obligación: los pares
 --     superpuestos heredados no traban otras operaciones.
---     Excepción (integración #346): la superposición confirmada con motivo por
---     alcance 'todas' en turnos_conflictos_confirmados no se bloquea.
 --  4. asistencia_excepciones_autorizadas + autorizar_excepcion_asistencia —
 --     excepción explícita (rol, motivo, quién, cuándo), de un solo uso, para
 --     confirmar horas sin evidencia.
@@ -160,30 +158,6 @@ create trigger turnos_historial_registrar
   for each row execute function public.turnos_registrar_historial();
 
 -- ── 3. Superposición del mismo vigilador (autoridad en base) ───────────────
--- Superposición ya confirmada con motivo por alcance 'todas' (programación,
--- 20261113110000): constancia append-only en turnos_conflictos_confirmados,
--- escrita sólo por asignar_vigilador_turnos / corregir_turno_programacion /
--- el servidor, ANTES del update que la produce. Vale sólo para ese par de
--- turnos y ese vigilador. SQL dinámico: si la tabla no existe (programación
--- sin aplicar) no hay excepción y el trigger bloquea como siempre.
-create or replace function public._turnos_superposicion_confirmada(p_guardia_id uuid, p_turno_a uuid, p_turno_b uuid)
-returns boolean
-language plpgsql stable security definer set search_path = public, pg_catalog as $$
-declare
-  v_ok boolean := false;
-begin
-  if to_regclass('public.turnos_conflictos_confirmados') is null then
-    return false;
-  end if;
-  execute 'select exists (select 1 from public.turnos_conflictos_confirmados c
-             where c.tipo = ''superposicion'' and c.guardia_id = $1
-               and ((c.turno_id = $2 and c.turno_conflicto_id = $3)
-                 or (c.turno_id = $3 and c.turno_conflicto_id = $2)))'
-    into v_ok using p_guardia_id, p_turno_a, p_turno_b;
-  return coalesce(v_ok, false);
-end $$;
-revoke all on function public._turnos_superposicion_confirmada(uuid, uuid, uuid) from public, anon, authenticated;
-
 create or replace function public.turnos_validar_superposicion()
 returns trigger
 language plpgsql security definer set search_path = public, pg_catalog as $$
@@ -245,9 +219,6 @@ begin
     and t2.fecha between new.fecha - 1 and new.fecha + 1
     and (t2.fecha + t2.hora_inicio) < v_fin
     and v_ini < (t2.fecha + t2.hora_fin + case when t2.hora_fin <= t2.hora_inicio then interval '1 day' else interval '0 day' end)
-    -- Integración con programación (20261113110000): una superposición que
-    -- alcance 'todas' confirmó con motivo no se bloquea (ver la función de abajo).
-    and not public._turnos_superposicion_confirmada(new.guardia_id, new.id, t2.id)
   order by t2.fecha, t2.hora_inicio
   limit 1;
 

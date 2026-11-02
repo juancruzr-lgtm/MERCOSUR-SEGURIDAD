@@ -109,23 +109,23 @@ export const haySuperposicion = (c: ConflictoTurno[]): boolean => c.some(x => x.
 
 export const MOTIVO_CONFLICTO_MIN = 5
 
+export const MENSAJE_SUPERPOSICION =
+  'Superposición horaria: el vigilador no puede tener dos turnos al mismo tiempo. Cambiá el horario o elegí otro vigilador.'
+
 /**
  * Qué puede hacer quien está programando ante los conflictos. No prohíbe los
- * turnos dobles: los deja confirmar con motivo. La superposición real solo la
- * confirma Administración/Gerencia (alcance 'todas'); el servidor lo vuelve a
- * exigir.
+ * turnos dobles: la continuidad inmediata y el doble turno se confirman con
+ * motivo. La superposición real no la confirma nadie (decisión de JC,
+ * 02/11/2026); el servidor y el trigger turnos_validar_superposicion la
+ * rechazan igual.
  */
 export function decisionConflictos(
   conflictos: ConflictoTurno[],
-  opts: { puedeConfirmarSuperposicion: boolean; confirmado: boolean; motivo: string },
+  opts: { confirmado: boolean; motivo: string },
 ): { puedeGuardar: boolean; bloqueo: string | null; requiereConfirmacion: boolean } {
   if (!hayConflictos(conflictos)) return { puedeGuardar: true, bloqueo: null, requiereConfirmacion: false }
-  if (haySuperposicion(conflictos) && !opts.puedeConfirmarSuperposicion) {
-    return {
-      puedeGuardar: false,
-      requiereConfirmacion: true,
-      bloqueo: 'Hay una superposición horaria real: solo Administración o Gerencia pueden confirmarla.',
-    }
+  if (haySuperposicion(conflictos)) {
+    return { puedeGuardar: false, requiereConfirmacion: false, bloqueo: MENSAJE_SUPERPOSICION }
   }
   if (!opts.confirmado) return { puedeGuardar: false, bloqueo: null, requiereConfirmacion: true }
   if (opts.motivo.trim().length < MOTIVO_CONFLICTO_MIN) {

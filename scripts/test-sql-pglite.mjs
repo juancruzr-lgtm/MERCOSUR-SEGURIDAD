@@ -5,7 +5,8 @@
 //   node scripts/test-sql-pglite.mjs [ruta-al-repo]
 //
 // Equivale a scripts/test-sql-programacion.sh y scripts/test-sql-hoja-ruta.sh
-// (que piden psql/pg_ctl) más tests/sql/integracion_superposicion_confirmada.sql.
+// (que piden psql/pg_ctl) más tests/sql/integracion_superposicion_bloqueada.sql.
+// Las suites propias de #345 están en supabase/pruebas/*/run.mjs.
 import { PGlite } from '@electric-sql/pglite'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -17,8 +18,8 @@ const leer = (rel) => readFileSync(join(REPO, rel), 'utf8')
   .replace(/^\\set .*$/gm, '')
   .replace(/^create extension if not exists pgcrypto.*$/gim, '')
 
-// Un Postgres de Supabase trae estos roles y auth.uid(); el esquema mínimo no.
-const BASE = `
+// Un Postgres de Supabase trae estos roles; el esquema mínimo no.
+const ROLES = `
   do $$ begin
     if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
     if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
@@ -33,35 +34,18 @@ const ASIGNAR_PREVIA = () => {
   return src.slice(ini, fin)
 }
 
-// Sección 3 de 20261121120000: función + trigger de superposición, tal cual.
-const TRIGGER_SUPERPOSICION = () => {
-  const src = leer('supabase/migrations/20261121120000_turnos_cobertura_liquidacion.sql')
-  const ini = src.indexOf('create or replace function public._turnos_superposicion_confirmada(')
-  const fin = src.indexOf('for each row execute function public.turnos_validar_superposicion();') +
-    'for each row execute function public.turnos_validar_superposicion();'.length
-  if (ini < 0 || fin < ini) throw new Error('No se encontró turnos_validar_superposicion en 20261121120000')
-  return `alter table public.turnos add column if not exists reemplaza_turno_id uuid references public.turnos(id) on delete set null;\n`
-    + src.slice(ini, fin)
-}
-
 let fallos = 0
-async function suite(nombre, pasos) {
+async function suite(nombre, pasos, { roles = true } = {}) {
   const db = new PGlite()
   const ok = []
   try {
-    await db.exec(BASE)
-    for (const [etiqueta, sql, errorEsperado] of pasos) {
+    if (roles) await db.exec(ROLES)
+    for (const [etiqueta, sql] of pasos) {
       try {
         await db.exec(sql, { onNotice: (n) => { if (/^OK /.test(n.message)) ok.push(n.message) } })
       } catch (e) {
-        if (errorEsperado && errorEsperado.test(e.message)) {
-          await db.exec('rollback').catch(() => {})
-          ok.push(`OK ${etiqueta}: se niega (${e.message})`)
-          continue
-        }
         throw new Error(`${etiqueta}: ${e.message}`)
       }
-      if (errorEsperado) throw new Error(`${etiqueta}: debía fallar y aplicó`)
     }
     console.log(`✔ ${nombre}`)
     for (const m of ok) console.log(`    ${m}`)
@@ -74,12 +58,14 @@ async function suite(nombre, pasos) {
   }
 }
 
-const PROG_MIG = 'supabase/migrations/20261113110000_programacion_conflictos_correccion_turnos.sql'
-const PROG_RB = 'supabase/rollback/20261113110000_programacion_conflictos_correccion_turnos_rollback.sql'
+const PROG_MIG = 'supabase/migrations/20261125120000_programacion_conflictos_correccion_turnos.sql'
+const PROG_RB = 'supabase/rollback/20261125120000_programacion_conflictos_correccion_turnos_rollback.sql'
 const HR_MIG = 'supabase/migrations/20261114120000_hoja_ruta_supervisores.sql'
 const HR_RB = 'supabase/rollback/20261114120000_hoja_ruta_supervisores_rollback.sql'
+const TC_MIG = 'supabase/migrations/20261121120000_turnos_cobertura_liquidacion.sql'
+const TC_RB = 'supabase/rollback/20261121120000_turnos_cobertura_liquidacion_rollback.sql'
 
-await suite('Programación (20261113110000) + rollback', [
+await suite('Programación (20261125120000) + rollback', [
   ['esquema', leer('tests/sql/esquema_minimo_programacion.sql')],
   ['asignar previa', ASIGNAR_PREVIA()],
   ['migración', leer(PROG_MIG)],
@@ -96,22 +82,16 @@ await suite('Hoja de ruta (20261114120000) + rollback', [
   ['rollback', leer(HR_RB)],
 ])
 
-await suite('Integración: superposición (#345) + confirmación (#346) + hoja de ruta', [
-  ['esquema programación', leer('tests/sql/esquema_minimo_programacion.sql')],
-  ['esquema hoja de ruta', leer('tests/sql/esquema_minimo_hoja_ruta.sql')],
+// Sobre el esqueleto de producción de #345 (trae sus propios roles y auth.uid()).
+await suite('Integración: superposición bloqueada (#345 trigger + #346 RPC)', [
+  ['esqueleto de producción (#345)', leer('supabase/pruebas/turnos-cobertura/prelude.sql')],
   ['asignar previa', ASIGNAR_PREVIA()],
-  ['programación', leer(PROG_MIG)],
-  ['hoja de ruta', leer(HR_MIG)],
-  ['trigger de superposición', TRIGGER_SUPERPOSICION()],
-  ['pruebas de integración', leer('tests/sql/integracion_superposicion_confirmada.sql')],
-  ['pruebas hoja de ruta con todo aplicado', leer('tests/sql/hoja_ruta.sql')],
-  // Rollback de programación con el trigger de 20261121 todavía puesto: debe negarse.
-  // Rollback de programación con el trigger de 20261121 todavía puesto: debe negarse.
-  ['rollback programación fuera de orden', leer(PROG_RB), /Revertir primero 20261122120000/],
-  ['quitar trigger (simula rollback de 20261121)', 'drop trigger if exists turnos_validar_superposicion on public.turnos;'],
-  ['rollback hoja de ruta', leer(HR_RB)],
-  ['rollback programación', leer(PROG_RB)],
-])
+  ['20261121120000 (#345)', leer(TC_MIG)],
+  ['20261125120000 (#346)', leer(PROG_MIG)],
+  ['pruebas de integración', leer('tests/sql/integracion_superposicion_bloqueada.sql')],
+  ['rollback 20261125120000', leer(PROG_RB)],
+  ['rollback 20261121120000', leer(TC_RB)],
+], { roles: false })
 
 await suite('Exigibilidad de supervisiones (20261113120000, #345)', [
   ['esquema', leer('supabase/pruebas/supervision-exigibilidad/esquema_minimo.sql')],

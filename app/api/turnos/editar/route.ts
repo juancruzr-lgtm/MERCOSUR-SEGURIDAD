@@ -3,7 +3,7 @@ import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { alcanceDe, tieneCapacidad } from '@/lib/capacidades'
 import { MENSAJE_TURNO_SUPERPUESTO } from '@/lib/turnos'
 import { esErrorTurnoSuperpuesto } from '@/lib/validacion-turnos'
-import { normalizarConflictos, haySuperposicion, MOTIVO_CONFLICTO_MIN } from '@/lib/conflictos-turno'
+import { normalizarConflictos, haySuperposicion, MOTIVO_CONFLICTO_MIN, MENSAJE_SUPERPOSICION } from '@/lib/conflictos-turno'
 
 export const runtime = 'nodejs'
 
@@ -186,10 +186,12 @@ export async function POST(req: NextRequest) {
     if (confError) return NextResponse.json({ error: confError.message }, { status: 500 })
     const conflictos = normalizarConflictos(crudo)
     if (conflictos.length > 0) {
-      if (haySuperposicion(conflictos) && alcanceDe(perfil) !== 'todas') {
+      // La superposición no se confirma: la rechaza también el trigger
+      // turnos_validar_superposicion (decisión de JC, 02/11/2026).
+      if (haySuperposicion(conflictos)) {
         return NextResponse.json({
-          error: 'Superposición horaria: solo Administración o Gerencia pueden confirmarla.',
-          codigo: 'CONFLICTO_VIGILADOR', conflictos, requiere_confirmacion: true,
+          error: MENSAJE_SUPERPOSICION,
+          codigo: 'CONFLICTO_VIGILADOR', conflictos, requiere_confirmacion: false,
         }, { status: 409 })
       }
       if (!confirmarConflictos || motivoConflicto.length < MOTIVO_CONFLICTO_MIN) {
@@ -199,35 +201,6 @@ export async function POST(req: NextRequest) {
         }, { status: 409 })
       }
       conflictosConfirmados = conflictos
-    }
-  }
-
-  // ── Constancia del conflicto confirmado ─────────────────────────────────────
-  // Va ANTES del update: turnos_validar_superposicion (20261121120000) sólo deja
-  // pasar una superposición que ya tiene su constancia. Sin constancia de una
-  // superposición no se sigue (el trigger la rechazaría igual).
-  if (conflictosConfirmados.length > 0 && nuevoGuardia) {
-    const operacionId = crypto.randomUUID()
-    const { error: confInsError } = await admin.client.from('turnos_conflictos_confirmados').insert(
-      conflictosConfirmados.map(c => ({
-        operacion_id: operacionId,
-        turno_id,
-        objetivo_id: (updatePayload.objetivo_id ?? turno.objetivo_id) as string,
-        guardia_id: nuevoGuardia,
-        turno_conflicto_id: c.turno_id,
-        tipo: c.tipo,
-        minutos_superpuestos: c.minutos_superpuestos,
-        detalle: c,
-        motivo: motivoConflicto,
-        origen: 'guardia_id' in updatePayload ? 'cambio_vigilador' : 'modificacion_horario',
-        confirmado_por: usuarioId,
-      })),
-    )
-    if (confInsError) {
-      console.error('[turnos/editar] constancia de conflicto no guardada:', confInsError.message)
-      if (haySuperposicion(conflictosConfirmados)) {
-        return NextResponse.json({ error: 'No se pudo registrar la confirmación del conflicto.' }, { status: 500 })
-      }
     }
   }
 
@@ -251,6 +224,26 @@ export async function POST(req: NextRequest) {
   // ── Auditoría ───────────────────────────────────────────────────────────────
   const comentarioFinal = ((comentario ?? '').trim() || 'Modificación de turno programado')
     + (conflictosConfirmados.length > 0 ? ` · conflicto confirmado: ${motivoConflicto}` : '')
+
+  if (conflictosConfirmados.length > 0 && nuevoGuardia) {
+    const operacionId = crypto.randomUUID()
+    const { error: confInsError } = await admin.client.from('turnos_conflictos_confirmados').insert(
+      conflictosConfirmados.map(c => ({
+        operacion_id: operacionId,
+        turno_id,
+        objetivo_id: turnoActualizado.objetivo_id,
+        guardia_id: nuevoGuardia,
+        turno_conflicto_id: c.turno_id,
+        tipo: c.tipo,
+        minutos_superpuestos: c.minutos_superpuestos,
+        detalle: c,
+        motivo: motivoConflicto,
+        origen: 'guardia_id' in updatePayload ? 'cambio_vigilador' : 'modificacion_horario',
+        confirmado_por: usuarioId,
+      })),
+    )
+    if (confInsError) console.error('[turnos/editar] constancia de conflicto no guardada:', confInsError.message)
+  }
 
   const { error: auditoriaError } = await admin.client
     .from('turnos_auditoria')
