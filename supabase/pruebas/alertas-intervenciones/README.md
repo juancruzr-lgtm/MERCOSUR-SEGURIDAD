@@ -7,12 +7,12 @@ producción (columnas y constraints leídas el 02/11/2026) y las funciones vivas
 que son las del rollback). `rondas_ventanas_programadas` se reemplaza por una
 tabla de ventanas fijas: se prueba qué hace el evaluador con cada ventana.
 
-48 controles: comportamiento previo (una alerta por ventana, la llamada nunca
+49 controles: comportamiento previo (una alerta por ventana, la llamada nunca
 cierra), migración idempotente, permisos, episodio por ronda+turno con contador,
 compatibilidad de la firma vieja (por nombre y posicional), idempotencia de 60 s,
 bloqueo optimista (`conflicto`), seguimiento con plazo y vencido, no resuelto que
 cubre el turno, resuelto por ronda realizada que abre episodio nuevo, cierre
-automático por inicio tarde (origen `sistema`), cierre administrativo y rollback
+automático cuando la ronda se retoma en el turno (origen `sistema`), cierre administrativo y rollback
 sin pérdida de historial.
 
 ```

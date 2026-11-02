@@ -218,12 +218,12 @@ await evaluar()
 const A2 = (await alertasDe(T2))[0].id
 r = await resolver(SUP_AUTH, { p_alerta_id: A2, p_accion: 'llamada_vigilador', p_resultado: 'resuelto', p_motivo: 'ronda_realizada' })
 ok('Resuelto: cierra la alerta', r.contexto === 'resuelta')
-await sql(`update ronda_alertas set resuelta_at = now() - interval '200 min' where id = $1`, [A2])
-await ventana(T2, 240) // empieza antes del cierre → se agrupa
-await ventana(T2, 120) // empieza después del cierre → alerta nueva
+await ventana(T2, 240)
+await ventana(T2, 120)
 await evaluar()
 al = await alertasDe(T2)
-ok('Resuelto por ronda realizada: ventana posterior al cierre = alerta nueva', al.length === 2 && al[0].ventanas_adicionales === 1, `n=${al.length}`)
+ok('Resuelto por ronda realizada: lo que sigue es un episodio nuevo (1 alerta + 1 agrupada)',
+  al.length === 2 && al[0].ventanas_adicionales === 0 && al[1].ventanas_adicionales === 1, `n=${al.length}`)
 
 // Resuelto por error técnico: cubre el turno (el celular sigue roto).
 const T3 = await nuevoTurno()
@@ -261,6 +261,19 @@ await sql(`insert into ronda_ejecuciones (ronda_base_id, turno_id, estado, inici
 await evaluar()
 const A5 = await alertasDe(T5)
 ok('Inicio tarde con ventanas agrupadas: el episodio sigue pendiente', A5.length === 1 && A5[0].estado === 'pendiente' && A5[0].ventanas_adicionales === 1)
+
+// El caso real de octubre: no hace la ronda de una ventana y la retoma en la
+// siguiente (fuera del rango de la primera). La primera se cierra sola.
+const T8 = await nuevoTurno()
+await ventana(T8, 300)
+await evaluar()
+const A8 = (await alertasDe(T8))[0]
+await ventana(T8, 240)
+await sql(`insert into ronda_ejecuciones (ronda_base_id, turno_id, estado, iniciada_at, finalizada_at) values ($1, $2, 'finalizada', now() - interval '235 min', now() - interval '225 min')`, [RONDA.id, T8])
+await evaluar()
+const A8b = await alertasDe(T8)
+ok('Retoma en la ventana siguiente: la alerta anterior se cierra sola y no hay alerta nueva',
+  A8b.length === 1 && A8b[0].id === A8.id && A8b[0].estado === 'resuelta' && /dentro del turno/.test(A8b[0].comentario ?? ''))
 
 // Cierre administrativo con resultado.
 const T6 = await nuevoTurno()

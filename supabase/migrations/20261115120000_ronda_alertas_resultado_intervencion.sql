@@ -42,11 +42,11 @@
 --      posteriores, leída con pg_get_functiondef el 02/11/2026):
 --        · una alerta por EPISODIO de ronda+turno: si ya hay una alerta abierta
 --          (pendiente, en seguimiento) o cerrada como 'no_resuelto' / 'resuelto'
---          (salvo 'resuelto' por ronda realizada, que reabre el seguimiento para
---          ventanas posteriores al cierre), la ventana nueva se agrupa como
---          contador en esa alerta;
---        · la 'no_iniciada' cuya ronda se inició tarde (dentro del rango de la
---          ventana) se cierra sola: resultado 'resuelto', motivo
+--          (salvo 'resuelto' por ronda realizada: la ronda se retomó y la
+--          próxima ventana incumplida es un episodio nuevo), la ventana nueva
+--          se agrupa como contador en esa alerta;
+--        · la 'no_iniciada' cuya ronda se inició después, dentro del MISMO
+--          turno, se cierra sola: resultado 'resuelto', motivo
 --          'ronda_realizada', intervención de origen 'sistema'. Sólo si el
 --          episodio no acumuló otras ventanas: si las hubo, las decide el
 --          supervisor. NO toca métricas: la acción queda 'resuelta' (no
@@ -425,7 +425,6 @@ declare
   v_existente uuid;
   v_episodio  uuid;
   v_filas     int;
-  v_auto      uuid;
 begin
   -- Auto-reactivación de pausas con hasta_at vencido. Idempotente.
   update public.ronda_pausas
@@ -538,10 +537,11 @@ begin
       -- por episodio: la ventana nueva se agrupa como contador y no genera otra
       -- alerta ni otro aviso. Cubren: la alerta abierta (pendiente o en
       -- seguimiento), la cerrada como 'no_resuelto' (incumplimiento confirmado
-      -- del turno) y la cerrada como 'resuelto' — salvo que se haya resuelto
-      -- porque la ronda se hizo y esta ventana empiece después de ese cierre:
-      -- eso es un incumplimiento nuevo. Las cerradas sin resultado (historial
-      -- previo a este cambio) no cubren nada: se conserva el comportamiento.
+      -- del turno) y la cerrada como 'resuelto' por un motivo que vale para
+      -- todo el turno (error técnico, administrativa, otro). NO cubre la
+      -- cerrada como 'resuelto' por ronda realizada: la ronda se retomó, y una
+      -- ventana incumplida después es un incumplimiento nuevo. Las cerradas sin
+      -- resultado (historial previo a este cambio) no cubren nada.
       select a.id into v_episodio
         from public.ronda_alertas a
        where a.ronda_base_id  = r.ronda_base_id
@@ -552,8 +552,7 @@ begin
            a.estado = 'pendiente'
            or a.resultado_intervencion = 'no_resuelto'
            or (a.resultado_intervencion = 'resuelto'
-               and not (coalesce(a.motivo_intervencion, '') = 'ronda_realizada'
-                        and r.ventana_inicio >= a.resuelta_at))
+               and coalesce(a.motivo_intervencion, '') <> 'ronda_realizada')
          )
        order by a.ventana_inicio asc
        limit 1;
@@ -592,44 +591,58 @@ begin
       where ronda_alertas.estado = 'pendiente';
 
     v_afectadas := v_afectadas + 1;
-
-    -- Cierre automático: la ronda se inició tarde, dentro del rango de esta
-    -- ventana. La condición operativa se cumplió; la demora sigue a la vista
-    -- (Cumplimiento la mide por ejecución, no por la alerta). Sólo si el
-    -- episodio no acumuló otras ventanas: esas las decide el supervisor.
-    if v_tipo = 'no_iniciada' and v_ejec_id is not null then
-      update public.ronda_alertas a
-         set estado                 = 'resuelta',
-             resuelta_por           = null,
-             resuelta_at            = now(),
-             accion                 = 'resuelta',
-             comentario             = 'Cierre automático: la ronda se inició a las '
-                                      || to_char(v_ejec.iniciada_at at time zone v_tz, 'HH24:MI')
-                                      || ', fuera de término.',
-             resultado_intervencion = 'resuelto',
-             motivo_intervencion    = 'ronda_realizada',
-             seguimiento_hasta      = null,
-             updated_at             = now()
-       where a.ronda_base_id        = r.ronda_base_id
-         and a.turno_id             = r.turno_id
-         and a.ventana_inicio       = r.ventana_inicio
-         and a.tipo                 = 'no_iniciada'
-         and a.estado               = 'pendiente'
-         and a.ventanas_adicionales = 0
-      returning a.id into v_auto;
-
-      if v_auto is not null then
-        insert into public.ronda_alerta_intervenciones
-          (ronda_alerta_id, supervisor_id, origen, accion, comentario,
-           estado_anterior, estado_nuevo, resultado, motivo)
-        values
-          (v_auto, null, 'sistema', 'resuelta',
-           'Cierre automático: la ronda se inició fuera de término dentro del turno.',
-           'pendiente', 'resuelta', 'resuelto', 'ronda_realizada');
-        v_auto := null;
-      end if;
-    end if;
   end loop;
+
+  -- Cierre automático por inicio tarde. Medido en producción (octubre 2026):
+  -- de 353 'no_iniciada', ninguna tenía la ejecución dentro de su propia
+  -- ventana —el vencimiento ya incluye la tolerancia—; 178 sí tenían una
+  -- ejecución posterior en el MISMO turno (el vigilador retomó en la ventana
+  -- siguiente, o subió tarde una ronda hecha sin señal). Esas alertas
+  -- quedaban pendientes para siempre. Se cierran solas: resultado 'resuelto',
+  -- motivo 'ronda_realizada', intervención de origen 'sistema'. Cumplimiento
+  -- no cambia (mide por ejecución; la acción queda 'resuelta', no
+  -- 'justificacion'). Sólo episodios de UNA ventana: si se agruparon otras,
+  -- el supervisor decide. Acotado al mismo lookback del evaluador.
+  with cand as (
+    select a.id,
+           (select min(e.iniciada_at)
+              from public.ronda_ejecuciones e
+             where e.ronda_base_id = a.ronda_base_id
+               and e.turno_id      = a.turno_id
+               and e.estado in ('en_curso', 'finalizada')
+               and e.iniciada_at  >= a.ventana_inicio) as iniciada
+      from public.ronda_alertas a
+     where a.estado = 'pendiente'
+       and a.tipo   = 'no_iniciada'
+       and a.ventanas_adicionales = 0
+       and a.ventana_inicio >= ((v_hoy - v_lookback_dias)::timestamp at time zone v_tz)
+  ), cerradas as (
+    update public.ronda_alertas a
+       set estado                 = 'resuelta',
+           resuelta_por           = null,
+           resuelta_at            = now(),
+           accion                 = 'resuelta',
+           comentario             = 'Cierre automático: la ronda se inició a las '
+                                    || to_char(c.iniciada at time zone v_tz, 'HH24:MI')
+                                    || ' dentro del turno.',
+           resultado_intervencion = 'resuelto',
+           motivo_intervencion    = 'ronda_realizada',
+           seguimiento_hasta      = null,
+           updated_at             = now()
+      from cand c
+     where a.id = c.id
+       and c.iniciada is not null
+       and a.estado = 'pendiente'
+    returning a.id, c.iniciada
+  )
+  insert into public.ronda_alerta_intervenciones
+    (ronda_alerta_id, supervisor_id, origen, accion, comentario,
+     estado_anterior, estado_nuevo, resultado, motivo)
+  select x.id, null, 'sistema', 'resuelta',
+         'Cierre automático: la ronda se inició a las '
+           || to_char(x.iniciada at time zone v_tz, 'HH24:MI') || ' dentro del turno.',
+         'pendiente', 'resuelta', 'resuelto', 'ronda_realizada'
+    from cerradas x;
 
   return v_afectadas;
 end;
