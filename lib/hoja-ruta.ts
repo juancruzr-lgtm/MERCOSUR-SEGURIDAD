@@ -221,21 +221,42 @@ export function textoHojaRuta(c: ContenidoHojaRuta): string {
 //   Fin de hoja de ruta.
 //
 // ("Fin de hoja de ruta." existe porque Meta no aprueba un cuerpo que termine
-// en variable.) {{1}} es la hoja de la app tal cual, con sus saltos de línea,
-// sin el título (ya lo pone la plantilla): "Sup. X" / "dd/mm · Turno" / visitas.
-// Nada se recorta ni se aplana: si Meta rechaza el texto, el envío queda en
-// error con el mensaje de Meta y la hoja sigue completa en la app.
-// Largo: el cuerpo renderizado se compara con LIMITE_CUERPO_PLANTILLA; si lo
-// supera, la hoja queda "pendiente por longitud" (completa en la app).
+// en variable.)
+//
+// Meta rechaza una variable con saltos de línea, tabs o más de 4 espacios
+// seguidos (#132018, probado el 02/11/2026; U+2028 pasa pero WhatsApp lo
+// muestra como "�"). Por eso {{1}} va en UNA línea (formato JC 02/11/2026):
+//
+//   Sup. X · dd/mm · Turno 07:00 a 19:00   |||   08:49 OBJETIVO — Novedad: …   |||   10:41 OTRO
+//
+// Toda la información de la hoja de la app (hora, objetivo, cada novedad
+// completa), sin resumir ni recortar, sin el título (ya lo pone la plantilla).
+// Un salto de línea DENTRO de una novedad (10 de 1224 desde septiembre) viaja
+// como " / "; tabs y espacios de más se reducen a lo que Meta admite.
+// Largo: Meta aceptó y entregó 1537 caracteres (la hoja más larga de octubre);
+// el tope configurado es el de Meta para un cuerpo como único componente.
 
 export const PLANTILLA_HOJA_RUTA = 'hoja_ruta_supervisor'
-export const LIMITE_CUERPO_PLANTILLA = 1024
+export const LIMITE_CUERPO_PLANTILLA = 32768
 /** Cuerpo de la plantilla tal como está aprobado en Meta. */
 export const CUERPO_PLANTILLA = 'HOJA DE RUTA\n{{1}}\nFin de hoja de ruta.'
+export const SEPARADOR_VISITAS = '   |||   '
+
+/** Lo que Meta admite dentro de una variable: sin saltos, sin tabs, hasta 4 espacios seguidos. */
+const enUnaLinea = (s: string) => s.trim().replace(/[ \t]*(\r\n|\r|\n|\u2028|\u2029)+[ \t]*/g, ' / ').replace(/\t/g, ' ').replace(/ {5,}/g, '    ')
 
 export function variablesMensaje(c: ContenidoHojaRuta): string[] {
-  return [textoHojaRuta(c).replace(/^Hoja de ruta del sup\. /, 'Sup. ')]
+  const g = c.guardia
+  const partes = [`Sup. ${g.supervisor}${g.reemplaza_a ? ` (en reemplazo de ${g.reemplaza_a})` : ''} · ${ddmm(g.fecha)} · Turno ${turno(g)}`]
+  if (c.recorrido.length === 0) partes.push(SIN_OBJETIVOS)
+  for (const e of c.recorrido) {
+    partes.push([`${hhmm(e.hora)} ${e.objetivo}`, ...e.novedades.map(n => `Novedad: ${n.texto}`)].map(enUnaLinea).join(' — '))
+  }
+  return [partes.map(enUnaLinea).join(SEPARADOR_VISITAS)]
 }
+
+/** ¿Cumple las reglas de Meta para el texto de una variable? */
+export const variableValida = (v: string): boolean => v.length > 0 && !/[\r\n\t\u2028\u2029]| {5,}/.test(v)
 
 export const renderizarPlantilla = (vars: readonly string[]): string =>
   CUERPO_PLANTILLA.replace(/\{\{(\d)\}\}/g, (_, n) => vars[Number(n) - 1] ?? '')
