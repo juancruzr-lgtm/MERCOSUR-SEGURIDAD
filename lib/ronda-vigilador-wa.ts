@@ -137,6 +137,13 @@ export interface ParametrosSeleccion {
    * crea pausa, así que hay que pasarla explícitamente.
    */
   suspendidasClaves?: Set<string>
+  /**
+   * Claves `${ronda_base_id}:${turno_id}` con una alerta ya intervenida por el
+   * supervisor o un episodio cerrado que cubre el turno (ver
+   * clavesRondaTurnoSilenciadas). El seguimiento es del supervisor: el
+   * recordatorio automático al vigilador se calla.
+   */
+  silenciadasClaves?: Set<string>
   /** Horarios en que la ronda no se exige: esa ventana no existe como obligación. */
   horariosSinExigencia?: HorarioSinExigencia[]
 }
@@ -164,6 +171,8 @@ export function seleccionarCandidatosRondaVigilador(p: ParametrosSeleccion): Can
 
       // El vigilador ya declaró que no puede hacer esta ronda en este turno.
       if (p.suspendidasClaves?.has(`${rb.id}:${t.id}`)) continue
+      // El supervisor ya intervino (o el episodio se cerró cubriendo el turno).
+      if (p.silenciadasClaves?.has(`${rb.id}:${t.id}`)) continue
 
       let base = rb.hora_inicio ? minutosAbs(t.fecha, rb.hora_inicio) : tIni
       while (base < tIni) base += 1440

@@ -17,13 +17,13 @@ import {
   resolverRondaAlerta,
   etiquetaTipoRondaAlerta,
   etiquetaAccionRondaAlerta,
-  accionRondaAlertaCierra,
   demoraAlertaMinutos,
   etiquetaDemora,
   pausarRonda,
   mensajeContextoPausa,
   ACCIONES_RONDA_ALERTA,
   mensajeContextoResolverAlerta,
+  describirUltimaIntervencion,
   type RondaAlerta,
   type EstadoRondaAlerta,
   type AccionRondaAlerta,
@@ -35,6 +35,12 @@ import {
 import type { ResumenRegularizacion } from '@/lib/rondas'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
 import SelectorCausaPausa from './SelectorCausaPausa'
+import {
+  PLAZOS_SEGUIMIENTO_MIN, PLAZO_SEGUIMIENTO_DEFECTO_MIN, RESULTADOS_INTERVENCION,
+  alertaEsperaIntervencion, ayudaResultadoIntervencion, etiquetaMotivoIntervencion,
+  etiquetaResultadoIntervencion, etiquetaSeguimiento, faltaParaRegistrar, motivosParaResultado,
+  seguimientoVencido, type MotivoIntervencion, type ResultadoIntervencion,
+} from '@/lib/alertas-ronda-intervencion'
 import type { CausaPausa } from '@/lib/rondas-causas'
 
 interface Props {
@@ -71,6 +77,8 @@ interface GrupoAlerta {
   pendientes: number
   ultimaAlerta: RondaAlerta
   tieneIntervenciones: boolean
+  /** Pendientes que esperan una decisión (sin intervención o seguimiento vencido). */
+  esperan: number
 }
 
 function msAlerta(iso: string): number {
@@ -95,12 +103,16 @@ function agruparAlertas(alertas: RondaAlerta[]): GrupoAlerta[] {
         pendientes: 0,
         ultimaAlerta: a,
         tieneIntervenciones: false,
+        esperan: 0,
       }
       mapa.set(key, grupo)
     }
     grupo.alertas.push(a)
     if (a.estado === 'pendiente') grupo.pendientes++
-    if (a.intervenciones > 0 || a.estado === 'resuelta') grupo.tieneIntervenciones = true
+    // "Intervenida" = ya no espera al supervisor (resuelta o en seguimiento
+    // vigente). Una pendiente con llamadas viejas sin resultado sigue esperando.
+    if (!alertaEsperaIntervencion(a)) grupo.tieneIntervenciones = true
+    if (a.estado === 'pendiente' && alertaEsperaIntervencion(a)) grupo.esperan++
     if (msAlerta(a.detectada_at) > msAlerta(grupo.ultimaAlerta.detectada_at)) {
       grupo.ultimaAlerta = a
     }
@@ -225,8 +237,8 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
                     ? `${g.pendientes} pendiente(s)`
                     : `${g.alertas.length} resuelta(s)`}
                 </span>
-                <span style={{ ...S.estado, ...(g.tieneIntervenciones ? S.estadoIntervenida : (g.pendientes > 0 ? S.estadoPend : S.estadoResuelta)) }}>
-                  {g.tieneIntervenciones ? 'Intervenida' : (g.pendientes > 0 ? 'Sin intervención' : 'Resuelta')}
+                <span style={{ ...S.estado, ...(g.esperan > 0 ? S.estadoPend : (g.pendientes > 0 ? S.estadoIntervenida : S.estadoResuelta)) }}>
+                  {g.esperan > 0 ? 'Sin intervención' : (g.pendientes > 0 ? 'En seguimiento' : 'Resuelta')}
                 </span>
               </div>
 
@@ -256,7 +268,9 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
               <div style={S.acciones}>
                 {g.pendientes > 0 && (
                   <button type="button" style={S.intervenirBtn} onClick={() => {
-                    const pendiente = g.alertas.find(a => a.estado === 'pendiente')
+                    // Primero la que espera una decisión; si no, cualquier pendiente.
+                    const pendiente = g.alertas.find(a => a.estado === 'pendiente' && alertaEsperaIntervencion(a))
+                      ?? g.alertas.find(a => a.estado === 'pendiente')
                     if (pendiente) setIntervenir(pendiente)
                   }}>
                     Intervenir
@@ -292,10 +306,10 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
                         ) }}>
                           {etiquetaTipoRondaAlerta(a.tipo)}
                         </span>
-                        <span style={{ ...S.estado, ...(a.estado === 'pendiente' ? (a.intervenciones > 0 ? S.estadoIntervenida : S.estadoPend) : S.estadoResuelta) }}>
+                        <span style={{ ...S.estado, ...(a.estado === 'pendiente' ? (alertaEsperaIntervencion(a) ? S.estadoPend : S.estadoIntervenida) : S.estadoResuelta) }}>
                           {a.estado === 'pendiente'
-                            ? (a.intervenciones > 0 ? 'Intervenida' : 'Pendiente')
-                            : 'Resuelta'}
+                            ? (alertaEsperaIntervencion(a) ? (seguimientoVencido(a) ? 'Seguimiento vencido' : 'Pendiente') : 'En seguimiento')
+                            : (a.resultado_intervencion === 'no_resuelto' ? 'No resuelta' : 'Resuelta')}
                         </span>
                       </div>
                       <div style={S.datos}>{a.guardia_nombre}</div>
@@ -305,8 +319,22 @@ export default function RondaAlertasPanel({ objetivoId, onAlertas, soloPendiente
                       {a.tipo === 'suspendida' && a.motivo_vigilador && (
                         <div style={S.motivoVig}>Motivo: {a.motivo_vigilador}</div>
                       )}
+                      {(a.ventanas_adicionales ?? 0) > 0 && (
+                        <div style={S.datosTenue}>
+                          + {a.ventanas_adicionales} ventana(s) más sin ronda en este turno
+                          {a.ultima_ventana_inicio ? ` (última ${hora(a.ultima_ventana_inicio)})` : ''}
+                        </div>
+                      )}
+                      {etiquetaSeguimiento(a, hora) && (
+                        <div style={{ ...S.datosTenue, color: seguimientoVencido(a) ? '#fca5a5' : '#93c5fd' }}>
+                          {etiquetaSeguimiento(a, hora)}
+                        </div>
+                      )}
                       {a.estado === 'resuelta' ? (
                         <div style={S.resolucion}>
+                          {a.resultado_intervencion
+                            ? `${etiquetaResultadoIntervencion(a.resultado_intervencion)}${a.motivo_intervencion ? ` · ${etiquetaMotivoIntervencion(a.motivo_intervencion)}` : ''} · `
+                            : ''}
                           {a.accion ? etiquetaAccionRondaAlerta(a.accion) : 'Resuelta'}
                           {a.resuelta_por_nombre ? ` · ${a.resuelta_por_nombre}` : ''}
                           {a.resuelta_at ? ` · ${fechaHora(a.resuelta_at)}` : ''}
@@ -443,26 +471,54 @@ function ModalIntervencion({
   const acciones = ACCIONES_RONDA_ALERTA.filter(
     ac => ac !== 'cierre_administrativo' || alerta.ejecucion_id !== null,
   )
+  // Resultado + motivo + Registrar: tres toques. La acción (qué hizo) viene
+  // preseleccionada en "Llamada al vigilador", que es lo habitual.
   const [accion, setAccion] = useState<AccionRondaAlerta>(acciones[0])
+  const [resultado, setResultado] = useState<ResultadoIntervencion | null>(null)
+  const [motivo, setMotivo] = useState<MotivoIntervencion | null>(null)
+  const [plazoMin, setPlazoMin] = useState<number>(PLAZO_SEGUIMIENTO_DEFECTO_MIN)
   const [comentario, setComentario] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [mensaje, setMensaje] = useState<string | null>(null)
+  const [conflicto, setConflicto] = useState<string | null>(null)
+  // Doble clic: el estado de React tarda un render en deshabilitar el botón;
+  // la ref corta el segundo envío en el mismo tick. El servidor además
+  // descarta la misma intervención repetida dentro de 60 s ('duplicada').
+  const enVuelo = useRef(false)
 
-  const cierra = accionRondaAlertaCierra(accion)
-  const minComentario = accion === 'cierre_administrativo' ? 10 : cierra ? 1 : 0
-  const comentarioOk = comentario.trim().length >= minComentario
+  // Un seguimiento ya hecho: ahora corresponde un resultado definitivo.
+  const yaTuvoSeguimiento = alerta.resultado_intervencion === 'seguimiento'
+  const resultados = RESULTADOS_INTERVENCION.filter(r => !(yaTuvoSeguimiento && r === 'seguimiento'))
+  const motivos = resultado ? motivosParaResultado(resultado) : []
+  const falta = faltaParaRegistrar({ resultado, motivo, comentario, accion, seguimientoMin: plazoMin })
+
+  const elegirResultado = (r: ResultadoIntervencion) => {
+    setResultado(r)
+    // El motivo elegido se conserva si sigue valiendo para el nuevo resultado.
+    if (motivo && !motivosParaResultado(r).includes(motivo)) setMotivo(null)
+    setMensaje(null)
+  }
 
   const enviar = async () => {
-    if (enviando || !comentarioOk) return
+    if (enVuelo.current || enviando || falta || !resultado || !motivo) return
+    enVuelo.current = true
     setEnviando(true)
     setMensaje(null)
     try {
-      const { data, error } = await resolverRondaAlerta(alerta.id, accion, comentario.trim() || undefined)
+      const { data, error } = await resolverRondaAlerta(alerta.id, accion, comentario.trim() || undefined, {
+        resultado, motivo, seguimientoMin: plazoMin, intervencionesEsperadas: alerta.intervenciones,
+      })
       if (error) { setMensaje(error); return }
+      if (data?.contexto === 'conflicto' || (data?.contexto === 'ya_resuelta' && data.ultima_intervencion)) {
+        setConflicto(describirUltimaIntervencion(data.ultima_intervencion, fechaHora) ?? '')
+        setMensaje(mensajeContextoResolverAlerta('conflicto'))
+        return
+      }
       const msg = data ? mensajeContextoResolverAlerta(data.contexto) : 'No se pudo registrar.'
       if (msg) { setMensaje(msg); return }   // error de contexto: se queda abierto
-      onHecho()                              // registrada / resuelta
+      onHecho()                              // resuelta / seguimiento / duplicada
     } finally {
+      enVuelo.current = false
       setEnviando(false)
     }
   }
@@ -480,9 +536,74 @@ function ModalIntervencion({
         </div>
         <div style={S.modalSub}>
           Ventana {hora(alerta.ventana_inicio)}–{hora(alerta.ventana_fin)} · venció {fechaHora(alerta.vencimiento_at)}
+          {(alerta.ventanas_adicionales ?? 0) > 0 ? ` · + ${alerta.ventanas_adicionales} ventana(s) más en el turno` : ''}
         </div>
+        {yaTuvoSeguimiento && (
+          <div style={S.aviso}>Ya tuvo un seguimiento: elegí el resultado definitivo.</div>
+        )}
 
-        <label style={S.label} htmlFor="accion-alerta">Acción</label>
+        <div style={S.label} id="resultado-alerta">Resultado *</div>
+        <div style={S.chips} role="radiogroup" aria-labelledby="resultado-alerta">
+          {resultados.map(r => (
+            <button
+              key={r}
+              type="button"
+              role="radio"
+              aria-checked={resultado === r}
+              title={ayudaResultadoIntervencion(r)}
+              style={{ ...S.chip, ...(resultado === r ? (r === 'no_resuelto' ? S.chipNo : S.chipActivo) : null) }}
+              onClick={() => elegirResultado(r)}
+              disabled={enviando}
+            >
+              {etiquetaResultadoIntervencion(r)}
+            </button>
+          ))}
+        </div>
+        {resultado && <div style={S.aviso}>{ayudaResultadoIntervencion(resultado)}</div>}
+
+        {resultado && (
+          <>
+            <div style={S.label} id="motivo-alerta">Motivo *</div>
+            <div style={S.chips} role="radiogroup" aria-labelledby="motivo-alerta">
+              {motivos.map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={motivo === m}
+                  style={{ ...S.chip, ...(motivo === m ? S.chipActivo : null) }}
+                  onClick={() => { setMotivo(m); setMensaje(null) }}
+                  disabled={enviando}
+                >
+                  {etiquetaMotivoIntervencion(m)}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {resultado === 'seguimiento' && (
+          <>
+            <div style={S.label} id="plazo-alerta">Revisar de nuevo en</div>
+            <div style={S.chips} role="radiogroup" aria-labelledby="plazo-alerta">
+              {PLAZOS_SEGUIMIENTO_MIN.map(p => (
+                <button
+                  key={p}
+                  type="button"
+                  role="radio"
+                  aria-checked={plazoMin === p}
+                  style={{ ...S.chip, ...(plazoMin === p ? S.chipActivo : null) }}
+                  onClick={() => setPlazoMin(p)}
+                  disabled={enviando}
+                >
+                  {p < 60 ? `${p} min` : `${p / 60} h`}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        <label style={S.label} htmlFor="accion-alerta">Qué hiciste</label>
         <select
           id="accion-alerta"
           value={accion}
@@ -494,31 +615,38 @@ function ModalIntervencion({
         </select>
 
         <label style={S.label} htmlFor="comentario-alerta">
-          Comentario{cierra ? ' (obligatorio)' : ' (opcional)'}
+          Comentario{motivo === 'otro' || accion === 'cierre_administrativo' ? ' (obligatorio)' : ' (opcional)'}
           {accion === 'cierre_administrativo' ? ' — mínimo 10 caracteres' : ''}
         </label>
         <textarea
           id="comentario-alerta"
           value={comentario}
           onChange={e => { setComentario(e.target.value); setMensaje(null) }}
-          rows={3}
+          rows={2}
           style={S.textarea}
           disabled={enviando}
-          placeholder={cierra ? 'Detalle de la resolución…' : 'Detalle (opcional)…'}
+          placeholder="Detalle (opcional)…"
         />
 
-        {cierra && (
-          <div style={S.aviso}>Esta acción cierra la alerta. Se conserva la trazabilidad del incumplimiento.</div>
+        {resultado && resultado !== 'seguimiento' && (
+          <div style={S.aviso}>Esta decisión cierra la alerta. Se conserva la trazabilidad del incumplimiento.</div>
         )}
-        {mensaje && <div style={S.error} role="alert">{mensaje}</div>}
+        {conflicto !== null && (
+          <div style={S.error} role="alert">
+            {conflicto ? <>Último registro: {conflicto}<br /></> : null}
+            Cerrá y volvé a abrir la alerta para ver su estado actual.
+          </div>
+        )}
+        {mensaje && conflicto === null && <div style={S.error} role="alert">{mensaje}</div>}
+        {!mensaje && falta && resultado && <div style={S.aviso}>{falta}</div>}
 
         <div style={S.modalBotones}>
           <button type="button" style={S.btnSec} onClick={onCerrar} disabled={enviando}>Cancelar</button>
           <button
             type="button"
-            style={{ ...S.btnPri, ...(enviando || !comentarioOk ? S.btnOff : null) }}
+            style={{ ...S.btnPri, ...(enviando || falta || conflicto !== null ? S.btnOff : null) }}
             onClick={() => void enviar()}
-            disabled={enviando || !comentarioOk}
+            disabled={enviando || Boolean(falta) || conflicto !== null}
           >
             {enviando ? 'Registrando…' : 'Registrar'}
           </button>
@@ -614,6 +742,13 @@ const S: Record<string, React.CSSProperties> = {
     borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 800, cursor: 'pointer',
   },
   btnOff: { background: '#334155', color: '#64748b', cursor: 'not-allowed' },
+  chips: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  chip: {
+    border: '1px solid #1e2d42', background: '#0f172a', color: '#cbd5e1',
+    borderRadius: 999, padding: '7px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+  },
+  chipActivo: { background: '#f59e0b', color: '#111827', borderColor: '#f59e0b' },
+  chipNo: { background: '#ef4444', color: '#111827', borderColor: '#ef4444' },
 }
 
 // ── Regularizar alertas anteriores ───────────────────────────────────────────

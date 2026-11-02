@@ -29,6 +29,7 @@ import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlDeRondasPanel from '@/components/rondas/ControlDeRondasPanel'
 import { resumirRondasAlcance, type RondaAlerta } from '@/lib/rondas'
+import { alertaEsperaIntervencion } from '@/lib/alertas-ronda-intervencion'
 import { estadoSupervision, frecuenciaSupervision, supervisionProximaAVencer } from '@/lib/supervisiones'
 // LA resolución de responsables operativos, compartida con AppClient y push.
 import { TEXTO_ORIGEN, guardiaCubreInstante, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
@@ -3290,7 +3291,11 @@ export default function SupervisorMobile({ user }: any) {
             cientos". Las viejas siguen visibles en la pestaña Rondas. */}
         {(() => {
           const CORTE_CARTEL_INTERVENCION = Date.parse('2026-10-08T00:00:00Z')
-          const alertasNuevas = rondaAlertas.filter(a => Date.parse(a.detectada_at) >= CORTE_CARTEL_INTERVENCION)
+          // Sólo lo que ESPERA al supervisor (auditoría oct-2026): sin
+          // intervención, o en seguimiento con el plazo vencido. Antes contaba
+          // también las ya intervenidas y el cartel no bajaba nunca.
+          const alertasNuevas = rondaAlertas.filter(a => Date.parse(a.detectada_at) >= CORTE_CARTEL_INTERVENCION
+            && alertaEsperaIntervencion(a))
           if (loading || alertasNuevas.length === 0 || tab === 'rondas') return null
           return (
           <button
@@ -3312,7 +3317,7 @@ export default function SupervisorMobile({ user }: any) {
                   : `Hay ${alertasNuevas.length} alertas de ronda esperando tu intervención`}
               </span>
               <span style={{ display:'block', fontSize:12.5, marginTop:2 }}>
-                Tocá acá para verlas y registrar qué hiciste (llamada, justificación o resolución).
+                Tocá acá para verlas y registrar el resultado (resuelto, seguimiento o no resuelto).
               </span>
             </span>
           </button>
