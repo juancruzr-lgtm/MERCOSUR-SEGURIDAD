@@ -22,7 +22,7 @@ describe('división del bundle por rol', () => {
 
   it('AppShell sólo importa AppClient, GuardiaMobile y SupervisorMobile con next/dynamic', () => {
     const shell = sinComentarios(leer('app/dashboard/AppShell.tsx'))
-    const estaticos = [...shell.matchAll(/^import .* from ['"]([^'"]+)['"]/gm)].map(m => m[1])
+    const estaticos = Array.from(shell.matchAll(/^import .* from ['"]([^'"]+)['"]/gm), m => m[1])
     expect(estaticos).not.toContain('./AppClient')
     expect(estaticos).not.toContain('@/components/guardia/GuardiaMobile')
     expect(estaticos).not.toContain('@/components/supervisor/SupervisorMobile')
@@ -35,7 +35,7 @@ describe('división del bundle por rol', () => {
 
   it('Login no arrastra el bundle de administración', () => {
     const login = sinComentarios(leer('app/dashboard/Login.tsx'))
-    const estaticos = [...login.matchAll(/^import .* from ['"]([^'"]+)['"]/gm)].map(m => m[1])
+    const estaticos = Array.from(login.matchAll(/^import .* from ['"]([^'"]+)['"]/gm), m => m[1])
     expect(estaticos.every(m => !/AppClient|components\/(guardia|supervisor|rondas|liquidacion)/.test(m))).toBe(true)
   })
 
