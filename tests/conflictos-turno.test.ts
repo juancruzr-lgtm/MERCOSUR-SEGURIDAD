@@ -41,24 +41,25 @@ describe('decisionConflictos — advertir sin prohibir los turnos dobles', () =>
   const cont = normalizarConflictos([crudo()])
   const sup = normalizarConflictos([crudo({ tipo: 'superposicion', minutos_superpuestos: 60 })])
   it('sin conflictos guarda directo', () => {
-    expect(decisionConflictos([], { puedeConfirmarSuperposicion: false, confirmado: false, motivo: '' }).puedeGuardar).toBe(true)
+    expect(decisionConflictos([], { confirmado: false, motivo: '' }).puedeGuardar).toBe(true)
   })
   it('con conflicto exige confirmación expresa', () => {
-    const d = decisionConflictos(cont, { puedeConfirmarSuperposicion: false, confirmado: false, motivo: '' })
+    const d = decisionConflictos(cont, { confirmado: false, motivo: '' })
     expect(d).toMatchObject({ puedeGuardar: false, requiereConfirmacion: true })
   })
   it('confirmado sin motivo no alcanza', () => {
-    expect(decisionConflictos(cont, { puedeConfirmarSuperposicion: false, confirmado: true, motivo: 'ok' }).puedeGuardar).toBe(false)
+    expect(decisionConflictos(cont, { confirmado: true, motivo: 'ok' }).puedeGuardar).toBe(false)
   })
   it('supervisor confirma continuidad con motivo', () => {
-    expect(decisionConflictos(cont, { puedeConfirmarSuperposicion: false, confirmado: true, motivo: 'Pedido del cliente' }).puedeGuardar).toBe(true)
+    expect(decisionConflictos(cont, { confirmado: true, motivo: 'Pedido del cliente' }).puedeGuardar).toBe(true)
   })
-  it('superposición: solo Administración/Gerencia', () => {
+  it('superposición: no la confirma nadie, ni con motivo (decisión de JC, 02/11/2026)', () => {
     expect(haySuperposicion(sup)).toBe(true)
-    const sup1 = decisionConflictos(sup, { puedeConfirmarSuperposicion: false, confirmado: true, motivo: 'Pedido del cliente' })
+    const sup1 = decisionConflictos(sup, { confirmado: true, motivo: 'Cubre hasta el relevo' })
     expect(sup1.puedeGuardar).toBe(false)
-    expect(sup1.bloqueo).toMatch(/Administración o Gerencia/)
-    expect(decisionConflictos(sup, { puedeConfirmarSuperposicion: true, confirmado: true, motivo: 'Cubre hasta el relevo' }).puedeGuardar).toBe(true)
+    expect(sup1.bloqueo).toMatch(/no puede tener dos turnos al mismo tiempo/)
+    // Si además hay una continuidad, la superposición sigue mandando.
+    expect(decisionConflictos([...cont, ...sup], { confirmado: true, motivo: 'Cubre hasta el relevo' }).puedeGuardar).toBe(false)
   })
 })
 

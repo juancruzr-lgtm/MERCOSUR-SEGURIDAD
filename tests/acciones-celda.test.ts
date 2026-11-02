@@ -113,7 +113,7 @@ describe('accionesCelda — anular es reversible', () => {
 })
 
 describe('accionesCelda — turnos que no se tocan desde la grilla', () => {
-  // Desde 20261113: un turno iniciado o pasado ya no queda sin salida. Solo
+  // Desde 20261125120000: un turno iniciado o pasado ya no queda sin salida. Solo
   // ofrece "Corregir"; asignar/cambiar/anular directo siguen siendo de futuros.
   it('turno pasado: solo corregir', () => {
     const a = accionesCelda(turno({ fecha: '2026-08-01' }), HOY, AHORA, true)

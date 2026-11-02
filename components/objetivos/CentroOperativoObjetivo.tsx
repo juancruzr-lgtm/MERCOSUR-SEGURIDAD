@@ -522,7 +522,6 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
 
   const conflictosActuales: ConflictoTurno[] = consultaConflictos?.conflictos ?? []
   const decisionConflicto = decisionConflictos(conflictosActuales, {
-    puedeConfirmarSuperposicion: consultaConflictos?.puede_confirmar_superposicion ?? false,
     confirmado: confirmaConflicto,
     motivo: motivoConflicto,
   })
@@ -2648,7 +2647,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                         })}
                       </div>
                     ))}
-                    {decisionConflicto.bloqueo && !decisionConflicto.puedeGuardar && conflictosActuales.some(c => c.tipo === 'superposicion') && !consultaConflictos.puede_confirmar_superposicion ? (
+                    {conflictosActuales.some(c => c.tipo === 'superposicion') ? (
                       <div style={{ fontSize:11, color:'#f87171' }}>{decisionConflicto.bloqueo}</div>
                     ) : (
                       <>

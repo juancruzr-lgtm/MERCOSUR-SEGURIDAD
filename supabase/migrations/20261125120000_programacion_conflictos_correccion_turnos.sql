@@ -27,9 +27,10 @@
 --  5. asignar_vigilador_turnos: ya no rechaza a ciegas ni deja pasar en
 --     silencio. Con conflicto devuelve la fila omitida con `requiere_confirmacion`
 --     y la lista de conflictos; con p_confirmar_conflictos + motivo asigna y deja
---     constancia. La superposición real solo la confirma alcance 'todas'
---     (Administración, Gerencia, jefatura, dirección operativa). Lock por
---     vigilador: dos asignaciones simultáneas no se cruzan sin verse.
+--     constancia. La superposición real NO se confirma: se rechaza siempre
+--     (decisión de JC, 02/11/2026; misma regla que el trigger
+--     turnos_validar_superposicion de 20261121120000). Lock por vigilador: dos
+--     asignaciones simultáneas no se cruzan sin verse.
 --  6. evidencia_turno: clasifica el turno (futuro, iniciado sin fichaje, con
 --     entrada, con horas, finalizado, horas revisadas, período cerrado...).
 --  7. corregir_turno_programacion: evaluar / anular / modificar_horario /
@@ -39,9 +40,14 @@
 --     Período consolidado/exportado/liquidado: rechaza (rectificación).
 --  8. Alta de turno del mismo día o el siguiente: queda en turnos_auditoria
 --     (el turno de las 15:05 del 29/10 no dejó rastro).
---  9. rondas_ventanas_programadas: restaura la exclusión de turnos
---     reemplazado/anulado/cancelado y objetivos inactivos, perdida en
---     20260826210000. Sin esto, un turno anulado seguía exigiendo rondas.
+--
+-- ── Depende de (aplicar antes) ──────────────────────────────────────────────
+--  · 20261121120000_turnos_cobertura_liquidacion: trigger que bloquea la
+--    superposición también en escrituras directas.
+--  · 20261122120000_rondas_historial_exigencias: devuelve a
+--    rondas_ventanas_programadas la exclusión de turnos anulados/reemplazados/
+--    cancelados y objetivos no exigibles (perdida en 20260826210000). Esta
+--    migración ya no redefine esa función: la dejaría en una versión vieja.
 --
 -- ── Qué NO hace ─────────────────────────────────────────────────────────────
 -- No borra turnos, fichajes ni notificaciones. No toca registros_asistencia ni
@@ -50,7 +56,7 @@
 -- permisos de sueldos ni de liquidación. No corrige ningún dato existente.
 --
 -- Reglas SQL del proyecto: nada de `select col into variable` en código nuevo.
--- Rollback: supabase/rollback/20261113120000_programacion_conflictos_correccion_turnos_rollback.sql
+-- Rollback: supabase/rollback/20261125120000_programacion_conflictos_correccion_turnos_rollback.sql
 -- Verificación: supabase/verificacion/programacion_conflictos_post_migracion.sql
 
 begin;
@@ -246,7 +252,8 @@ begin
     'hora_inicio', to_char(coalesce(p_hora_inicio, v_turno.hora_inicio), 'HH24:MI'),
     'hora_fin', to_char(coalesce(p_hora_fin, v_turno.hora_fin), 'HH24:MI'),
     'conflictos', v_lista,
-    'puede_confirmar_superposicion', public.alcance_operativo_de(v_actor_id) = 'todas'
+    -- La superposición no la confirma nadie (decisión de JC, 02/11/2026).
+    'puede_confirmar_superposicion', false
   );
 end;
 $fn$;
@@ -363,6 +370,15 @@ begin
             when 'continuidad_inmediata' then 'empieza inmediatamente despues de'
             else 'ya tiene ese dia' end;
 
+          -- La superposición real no se confirma (la bloquea también el
+          -- trigger turnos_validar_superposicion): se informa y no se asigna.
+          if v_hay_superposicion then
+            raise exception '%', 'Superposicion horaria: ' || v_nombre || ' ya tiene el turno de '
+              || (v_primero ->> 'hora_inicio') || ' a ' || (v_primero ->> 'hora_fin')
+              || ' en ' || coalesce(v_primero ->> 'objetivo', 'otro objetivo')
+              || ' el ' || to_char((v_primero ->> 'fecha')::date, 'DD/MM/YYYY')
+              || '. No puede tener dos turnos al mismo tiempo.';
+          end if;
           if not coalesce(p_confirmar_conflictos, false) then
             v_requiere := true;
             raise exception '%', 'Requiere confirmacion: ' || v_nombre || ' ' || v_texto_tipo
@@ -370,10 +386,6 @@ begin
               || ' en ' || coalesce(v_primero ->> 'objetivo', 'otro objetivo')
               || case when v_primero ->> 'puesto' is null then '' else ' (' || (v_primero ->> 'puesto') || ')' end
               || ' el ' || to_char((v_primero ->> 'fecha')::date, 'DD/MM/YYYY') || '.';
-          end if;
-          if v_hay_superposicion and v_alcance <> 'todas' then
-            v_requiere := true;
-            raise exception 'Superposicion horaria: solo Administracion o Gerencia pueden confirmarla';
           end if;
         end if;
 
@@ -668,13 +680,13 @@ begin
       v_conflictos := public.conflictos_turno_vigilador_core(v_t.guardia_id, v_t.fecha,
         p_hora_inicio, p_hora_fin, v_t.objetivo_id, v_t.id);
       if jsonb_array_length(v_conflictos) > 0 then
+        -- La superposición real no se confirma: se rechaza siempre.
+        if exists (select 1 from jsonb_array_elements(v_conflictos) e where e ->> 'tipo' = 'superposicion') then
+          raise exception 'Superposicion horaria: con el nuevo horario el vigilador tendria dos turnos al mismo tiempo. No se puede guardar.';
+        end if;
         if not coalesce(p_confirmar_conflictos, false) then
           raise exception 'Requiere confirmacion: el nuevo horario genera % conflicto(s) para el vigilador',
             jsonb_array_length(v_conflictos);
-        end if;
-        if v_alcance <> 'todas' and exists (select 1 from jsonb_array_elements(v_conflictos) e
-                                             where e ->> 'tipo' = 'superposicion') then
-          raise exception 'Superposicion horaria: solo Administracion o Gerencia pueden confirmarla';
         end if;
       end if;
     end if;
@@ -753,177 +765,6 @@ $fn$;
 drop trigger if exists trg_turnos_auditar_alta on public.turnos;
 create trigger trg_turnos_auditar_alta after insert on public.turnos
   for each row execute function public.turnos_auditar_alta();
-
--- ============================================================================
--- 7. RONDAS: un turno sin obligación no exige rondas
--- ============================================================================
-create or replace function public.rondas_ventanas_programadas(
-  p_objetivo_id uuid,            -- NULL = todos los objetivos (excluye es_prueba)
-  p_desde       date,
-  p_hasta       date
-)
-returns table (
-  turno_id       uuid,
-  objetivo_id    uuid,
-  puesto_id      uuid,
-  guardia_id     uuid,
-  ronda_base_id  uuid,
-  indice         integer,
-  ventana_inicio timestamptz,
-  ventana_fin    timestamptz,
-  match_fin      timestamptz,
-  vencimiento_at timestamptz
-)
-language plpgsql
-stable
-security definer
-set search_path = public, pg_catalog
-as $fn$
-declare
-  v_tz      constant text := 'America/Argentina/Buenos_Aires';
-  v_tol_min int := coalesce((
-    select nullif(value, '')::int from public.app_config
-     where key = 'ronda_alerta_tolerancia_min'), 15);
-  v_tol     interval;
-
-  r_turno   record;
-  r_ronda   record;
-  v_t_ini   timestamp;   -- inicio del turno (local)
-  v_t_fin   timestamp;   -- fin del turno (local, +1 dia si nocturno)
-  v_interv  interval;
-  v_base    timestamp;
-  v_vi      timestamp;
-  v_vf      timestamp;
-  v_mf      timestamp;
-  v_n       int;
-begin
-  v_tol := make_interval(mins => v_tol_min);
-
-  if p_desde is null or p_hasta is null or p_desde > p_hasta then
-    return;
-  end if;
-
-  for r_turno in
-    select t.id, t.fecha, t.hora_inicio, t.hora_fin,
-           t.objetivo_id, t.puesto_id, t.guardia_id
-    from public.turnos t
-    join public.objetivos o on o.id = t.objetivo_id
-    where t.puesto_id  is not null
-      and t.guardia_id is not null
-      and t.fecha between p_desde and p_hasta
-      and (p_objetivo_id is null or t.objetivo_id = p_objetivo_id)
-      -- Alcance completo: nunca objetivos de prueba. Objetivo explicito: tal cual.
-      and (p_objetivo_id is not null or o.es_prueba = false)
-      -- ── Restaurado (20261113): turno u objetivo sin obligación ─────────────
-      -- 20260810200000 y 20260810260000 excluían estos turnos; la reescritura de
-      -- 20260826210000 perdió el filtro. Un turno anulado por error de
-      -- programación no puede exigir rondas, alertar ni contar en la evaluación.
-      and coalesce(t.estado, '') not in ('reemplazado', 'anulado', 'cancelado')
-      and o.estado = 'activo'
-      -- ── La jornada con ausencia no exige rondas ───────────────────────────
-      -- La falta primaria es la ausencia, y ya se cuenta en Asistencia. Cobrar
-      -- ademas las rondas de un turno que la persona no trabajo es castigar dos
-      -- veces el mismo hecho.
-      and not exists (
-        select 1
-          from public.registros_asistencia ra
-         where ra.turno_id = t.id
-           and ra.tipo_registro = 'ausencia'
-      )
-  loop
-    v_t_ini := r_turno.fecha + r_turno.hora_inicio;
-    v_t_fin := r_turno.fecha + r_turno.hora_fin
-             + case when r_turno.hora_fin <= r_turno.hora_inicio
-                    then interval '1 day' else interval '0' end;
-
-    for r_ronda in
-      select rb.id, rb.hora_inicio, rb.intervalo_minutos, rb.created_at
-      from public.rondas_base rb
-      where rb.puesto_id = r_turno.puesto_id
-        and rb.activo
-        -- Una ronda sin puntos no se puede cumplir. Aunque quedara activa por
-        -- error, aca no genera obligacion: es la ultima barrera y esta en la
-        -- autoridad, no en una pantalla que alguien puede saltear.
-        and exists (
-          select 1 from public.ronda_puntos rp
-           where rp.ronda_base_id = rb.id and rp.activo
-        )
-    loop
-      v_interv := r_ronda.intervalo_minutos * interval '1 minute';
-
-      if r_ronda.hora_inicio is null then
-        v_base := v_t_ini;
-      else
-        v_base := r_turno.fecha + r_ronda.hora_inicio;
-        -- Reposiciona la hora de inicio dentro de la ventana del turno (nocturno).
-        while v_base < v_t_ini loop
-          v_base := v_base + interval '1 day';
-        end loop;
-      end if;
-
-      v_n := 0;
-      loop
-        v_vi := v_base + (v_n * v_interv);
-        exit when v_vi >= v_t_fin;              -- fin de las obligaciones del turno
-
-        -- ── Nada anterior a la creacion de la ronda ────────────────────────
-        -- No es un filtro de presentacion: es que esa obligacion NO EXISTIO.
-        -- Nadie pudo haberla cumplido, asi que no puede contar como incumplida
-        -- ni generar una alerta.
-        if (v_vi at time zone v_tz) < r_ronda.created_at then
-          v_n := v_n + 1;
-          exit when v_n > 10000;
-          continue;
-        end if;
-
-        -- ── Horario en que la ronda no se exige ────────────────────────────
-        -- Operaciones puede declarar que una ronda no se exige un día y en un
-        -- horario (p. ej. Laromet: domingo desde las 06, el vigilador hace de
-        -- portero). La ventana cuyo INICIO cae en ese horario no existe como
-        -- obligación: no genera alerta ni cuenta en la evaluación. Mismo
-        -- criterio que las pausas (inicio de la ventana).
-        if exists (
-          select 1 from public.ronda_horarios_sin_exigencia h
-           where h.ronda_base_id = r_ronda.id
-             and h.activo
-             and h.dia_semana = extract(isodow from v_vi)::int
-             and v_vi::time >= h.desde
-             and v_vi::time <  h.hasta
-        ) then
-          v_n := v_n + 1;
-          exit when v_n > 10000;
-          continue;
-        end if;
-
-        v_vf := least(v_vi + v_interv, v_t_fin); -- deadline (acotado al turno)
-        v_mf := v_vi + v_interv;                 -- limite de matching (sin acotar)
-
-        turno_id       := r_turno.id;
-        objetivo_id    := r_turno.objetivo_id;
-        puesto_id      := r_turno.puesto_id;
-        guardia_id     := r_turno.guardia_id;
-        ronda_base_id  := r_ronda.id;
-        indice         := v_n;
-        ventana_inicio := v_vi           at time zone v_tz;
-        ventana_fin    := v_vf           at time zone v_tz;
-        match_fin      := v_mf           at time zone v_tz;
-        vencimiento_at := (v_vf + v_tol) at time zone v_tz;
-        return next;
-
-        v_n := v_n + 1;
-        exit when v_n > 10000;                  -- backstop defensivo
-      end loop;
-    end loop;
-  end loop;
-
-  return;
-end;
-$fn$;
-
--- Como hasta ahora: sólo la usan otras funciones SECURITY DEFINER y el servidor.
-revoke all on function public.rondas_ventanas_programadas(uuid, date, date) from public;
-revoke all on function public.rondas_ventanas_programadas(uuid, date, date) from anon;
-revoke all on function public.rondas_ventanas_programadas(uuid, date, date) from authenticated;
 
 notify pgrst, 'reload schema';
 

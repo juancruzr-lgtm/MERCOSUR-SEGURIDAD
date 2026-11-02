@@ -3,7 +3,7 @@ import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { alcanceDe, tieneCapacidad } from '@/lib/capacidades'
 import { MENSAJE_TURNO_SUPERPUESTO } from '@/lib/turnos'
 import { esErrorTurnoSuperpuesto } from '@/lib/validacion-turnos'
-import { normalizarConflictos, haySuperposicion, MOTIVO_CONFLICTO_MIN } from '@/lib/conflictos-turno'
+import { normalizarConflictos, haySuperposicion, MOTIVO_CONFLICTO_MIN, MENSAJE_SUPERPOSICION } from '@/lib/conflictos-turno'
 
 export const runtime = 'nodejs'
 
@@ -186,10 +186,12 @@ export async function POST(req: NextRequest) {
     if (confError) return NextResponse.json({ error: confError.message }, { status: 500 })
     const conflictos = normalizarConflictos(crudo)
     if (conflictos.length > 0) {
-      if (haySuperposicion(conflictos) && alcanceDe(perfil) !== 'todas') {
+      // La superposición no se confirma: la rechaza también el trigger
+      // turnos_validar_superposicion (decisión de JC, 02/11/2026).
+      if (haySuperposicion(conflictos)) {
         return NextResponse.json({
-          error: 'Superposición horaria: solo Administración o Gerencia pueden confirmarla.',
-          codigo: 'CONFLICTO_VIGILADOR', conflictos, requiere_confirmacion: true,
+          error: MENSAJE_SUPERPOSICION,
+          codigo: 'CONFLICTO_VIGILADOR', conflictos, requiere_confirmacion: false,
         }, { status: 409 })
       }
       if (!confirmarConflictos || motivoConflicto.length < MOTIVO_CONFLICTO_MIN) {

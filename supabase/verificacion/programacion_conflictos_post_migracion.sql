@@ -1,4 +1,4 @@
--- Verificación post-migración 20261113120000 (solo lectura). Correr en la rama
+-- Verificación post-migración 20261125120000 (solo lectura). Correr en la rama
 -- de Supabase y, tras aprobación, en producción.
 select 'funciones' as chequeo, count(*) = 6 as ok
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -13,8 +13,9 @@ select 'evidencia sin acceso authenticated' as chequeo,
 select 'tablas sin escritura directa' as chequeo,
        not has_table_privilege('authenticated', 'public.turnos_correcciones', 'insert')
    and not has_table_privilege('authenticated', 'public.turnos_conflictos_confirmados', 'insert') as ok;
-select 'rondas excluye anulados' as chequeo,
-       pg_get_functiondef('public.rondas_ventanas_programadas'::regproc) like '%''anulado''%' as ok;
+-- Viene de 20261122120000 (#345), que esta migración requiere aplicada antes.
+select 'rondas excluye anulados (20261122120000)' as chequeo,
+       pg_get_functiondef('public.rondas_ventanas_candidatas'::regproc) like '%''anulado''%' as ok;
 select 'trigger alta' as chequeo, exists (select 1 from pg_trigger where tgname = 'trg_turnos_auditar_alta') as ok;
 -- Caso real (solo lectura): el turno de Eduardo en Lotuf 29/10 se clasifica con_horas
 -- (carga manual de 8 h del 30/10) → la grilla ofrece solicitud, no anulación directa.
