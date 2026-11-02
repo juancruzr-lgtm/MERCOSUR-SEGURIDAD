@@ -1,20 +1,18 @@
 // Hoja de ruta de cierre de turno de un supervisor — formato definitivo
-// (JC, 02/11/2026, versión 2):
+// (JC, 02/11/2026, versión 3: la que hoy mandan los supervisores, con hora):
 //
-//   HOJA DE RUTA
-//   Fecha: 29/10/2026
-//   Turno: 07:00 a 19:00
-//   Supervisor: Sabino Aranda
-//   07:04 — PLAZA DE LAS CIENCIAS
-//   Vig blanco sin novedad
-//   07:27 — SRT
-//   Sin novedades
+//   Hoja de ruta del sup. Sabino Aranda
+//   29/10 · Turno 07:00 a 19:00
+//   07:04 PLAZA DE LAS CIENCIAS
+//      Novedad: Vig blanco sin novedad
+//   07:27 SRT
 //
 //  · Cada visita en orden cronológico y, debajo, TODAS las novedades que el
 //    supervisor escribió en ese objetivo durante esa visita (observación
 //    general de la supervisión y de cada ítem del checklist), con el texto
-//    original completo, sin duplicar. Sin novedades: "Sin novedades". Sin
-//    visitas: "Sin objetivos recorridos durante el turno".
+//    original completo, sin duplicar. Una visita sin novedades va sola: la
+//    hoja dice sólo lo que se sabe (nada de "los demás servicios sin
+//    novedad"). Sin visitas: "Sin servicios visitados durante el turno".
 //  · Visitas: supervisiones del supervisor en su guardia y permanencias GPS
 //    confiables. Sin GPS, la supervisión alcanza. La hora es la llegada por GPS
 //    confiable o la hora registrada de la supervisión; nunca se inventa.
@@ -91,7 +89,7 @@ export interface ContenidoHojaRuta {
 }
 
 export const SIN_NOVEDADES = 'Sin novedades'
-export const SIN_OBJETIVOS = 'Sin objetivos recorridos durante el turno'
+export const SIN_OBJETIVOS = 'Sin servicios visitados durante el turno'
 export const PRECISION_MAX_M = 150
 export const RADIO_MIN_M = 150
 export const MAX_SEGUNDOS_TRAMO = 300
@@ -103,6 +101,7 @@ const ZONA = 'America/Argentina/Buenos_Aires'
 export const hhmm = (iso: string): string =>
   new Intl.DateTimeFormat('es-AR', { timeZone: ZONA, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso))
 const ddmmaaaa = (fecha: string): string => { const [a, m, d] = fecha.split('-'); return `${d}/${m}/${a}` }
+const ddmm = (fecha: string): string => ddmmaaaa(fecha).slice(0, 5)
 const ms = (iso: string) => new Date(iso).getTime()
 
 // ── GPS ──────────────────────────────────────────────────────────────────────
@@ -203,44 +202,61 @@ const turno = (g: GuardiaHR) => `${hhmm(g.inicio)} a ${hhmm(g.fin)}`
 
 /** Texto para la app, con el formato pedido y saltos de línea reales. */
 export function textoHojaRuta(c: ContenidoHojaRuta): string {
-  const l: string[] = ['HOJA DE RUTA']
-  l.push(`Fecha: ${ddmmaaaa(c.guardia.fecha)}`)
-  l.push(`Turno: ${turno(c.guardia)}`)
-  l.push(`Supervisor: ${c.guardia.supervisor}${c.guardia.reemplaza_a ? ` (en reemplazo de ${c.guardia.reemplaza_a})` : ''}`)
+  const l: string[] = [`Hoja de ruta del sup. ${c.guardia.supervisor}${c.guardia.reemplaza_a ? ` (en reemplazo de ${c.guardia.reemplaza_a})` : ''}`]
+  l.push(`${ddmm(c.guardia.fecha)} · Turno ${turno(c.guardia)}`)
   if (c.recorrido.length === 0) l.push(SIN_OBJETIVOS)
   for (const e of c.recorrido) {
-    l.push(`${hhmm(e.hora)} — ${e.objetivo}`)
-    if (e.novedades.length === 0) l.push(SIN_NOVEDADES)
-    for (const n of e.novedades) l.push(n.texto)
+    l.push(`${hhmm(e.hora)} ${e.objetivo}`)
+    for (const n of e.novedades) l.push(`   Novedad: ${n.texto}`)
   }
   return l.join('\n')
 }
 
 // ── WhatsApp: UN mensaje ─────────────────────────────────────────────────────
-// Para escribir primero hace falta una plantilla aprobada. Reglas de Meta:
-//  · el cuerpo de la plantilla, YA con las variables reemplazadas, no puede
-//    superar 1024 caracteres (si no, Meta rechaza el envío);
-//  · una variable no puede tener saltos de línea, tabs ni más de 4 espacios
-//    seguidos.
-// Plantilla mínima: solo los rótulos pedidos y 4 variables. El recorrido va
-// en {{4}} en una sola línea: cada visita "hora — objetivo: novedad" separada
-// por " | ", y varias novedades del mismo objetivo separadas por " · ". Un
-// salto de línea DENTRO de una novedad viaja como espacio. El texto original
-// queda intacto en la app.
+// Para escribir primero hace falta una plantilla aprobada. La creada por JC
+// (02/11/2026) tiene una sola variable:
+//
+//   HOJA DE RUTA
+//   {{1}}
+//   Fin de hoja de ruta.
+//
+// ("Fin de hoja de ruta." existe porque Meta no aprueba un cuerpo que termine
+// en variable.)
+//
+// Meta rechaza una variable con saltos de línea, tabs o más de 4 espacios
+// seguidos (#132018, probado el 02/11/2026; U+2028 pasa pero WhatsApp lo
+// muestra como "�"). Por eso {{1}} va en UNA línea (formato JC 02/11/2026):
+//
+//   Sup. X · dd/mm · Turno 07:00 a 19:00   |||   08:49 OBJETIVO — Novedad: …   |||   10:41 OTRO
+//
+// Toda la información de la hoja de la app (hora, objetivo, cada novedad
+// completa), sin resumir ni recortar, sin el título (ya lo pone la plantilla).
+// Un salto de línea DENTRO de una novedad (10 de 1224 desde septiembre) viaja
+// como " / "; tabs y espacios de más se reducen a lo que Meta admite.
+// Largo: Meta aceptó y entregó 1537 caracteres (la hoja más larga de octubre);
+// el tope configurado es el de Meta para un cuerpo como único componente.
 
 export const PLANTILLA_HOJA_RUTA = 'hoja_ruta_supervisor'
-export const LIMITE_CUERPO_PLANTILLA = 1024
-/** Cuerpo de la plantilla tal como se aprueba en Meta (42 caracteres fijos). */
-export const CUERPO_PLANTILLA = 'HOJA DE RUTA\nFecha: {{1}}\nTurno: {{2}}\nSupervisor: {{3}}\n{{4}}'
+export const LIMITE_CUERPO_PLANTILLA = 32768
+/** Cuerpo de la plantilla tal como está aprobado en Meta. */
+export const CUERPO_PLANTILLA = 'HOJA DE RUTA\n{{1}}\nFin de hoja de ruta.'
+export const SEPARADOR_VISITAS = '   |||   '
 
-const enUnaLinea = (s: string) => s.replace(/[\r\n\t]+/g, ' ').replace(/ {4,}/g, '   ').trim()
+/** Lo que Meta admite dentro de una variable: sin saltos, sin tabs, hasta 4 espacios seguidos. */
+const enUnaLinea = (s: string) => s.trim().replace(/[ \t]*(\r\n|\r|\n|\u2028|\u2029)+[ \t]*/g, ' / ').replace(/\t/g, ' ').replace(/ {5,}/g, '    ')
 
 export function variablesMensaje(c: ContenidoHojaRuta): string[] {
-  const recorrido = c.recorrido.length === 0
-    ? SIN_OBJETIVOS
-    : c.recorrido.map(e => `${hhmm(e.hora)} — ${e.objetivo}: ${e.novedades.length === 0 ? SIN_NOVEDADES : e.novedades.map(n => enUnaLinea(n.texto)).join(' · ')}`).join(' | ')
-  return [ddmmaaaa(c.guardia.fecha), turno(c.guardia), c.guardia.supervisor, recorrido].map(enUnaLinea)
+  const g = c.guardia
+  const partes = [`Sup. ${g.supervisor}${g.reemplaza_a ? ` (en reemplazo de ${g.reemplaza_a})` : ''} · ${ddmm(g.fecha)} · Turno ${turno(g)}`]
+  if (c.recorrido.length === 0) partes.push(SIN_OBJETIVOS)
+  for (const e of c.recorrido) {
+    partes.push([`${hhmm(e.hora)} ${e.objetivo}`, ...e.novedades.map(n => `Novedad: ${n.texto}`)].map(enUnaLinea).join(' — '))
+  }
+  return [partes.map(enUnaLinea).join(SEPARADOR_VISITAS)]
 }
+
+/** ¿Cumple las reglas de Meta para el texto de una variable? */
+export const variableValida = (v: string): boolean => v.length > 0 && !/[\r\n\t\u2028\u2029]| {5,}/.test(v)
 
 export const renderizarPlantilla = (vars: readonly string[]): string =>
   CUERPO_PLANTILLA.replace(/\{\{(\d)\}\}/g, (_, n) => vars[Number(n) - 1] ?? '')
