@@ -225,3 +225,36 @@ export function proveedorSimulado(registro: DestinoWhatsApp[] = []): ProveedorWh
 export function proveedorPorDefecto(): ProveedorWhatsApp {
   return proveedorMeta()
 }
+
+/**
+ * Mensaje de TEXTO libre (no plantilla). Meta sólo lo entrega dentro de la
+ * ventana de 24 h desde el último mensaje del destinatario; fuera de ella
+ * responde 131047 y no se reintenta. Lo usa la hoja de ruta, cuyo formato
+ * multilínea no entra en una variable de plantilla (Meta rechaza saltos de línea).
+ */
+export async function enviarTextoMeta(telefono: string, texto: string): Promise<ResultadoEnvio> {
+  const token = process.env.WHATSAPP_TOKEN
+  const phoneId = process.env.WHATSAPP_PHONE_ID
+  const version = process.env.WHATSAPP_API_VERSION || 'v21.0'
+  if (!token || !phoneId) return { ok: false, error: 'WHATSAPP_TOKEN o WHATSAPP_PHONE_ID sin configurar' }
+  try {
+    const res = await fetch(`https://graph.facebook.com/${version}/${phoneId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', to: telefono, type: 'text', text: { body: texto, preview_url: false } }),
+    })
+    const json: any = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const codigo = json?.error?.code ? ` (${json.error.code})` : ''
+      return { ok: false, error: `${json?.error?.message || `HTTP ${res.status}`}${codigo}` }
+    }
+    return { ok: true, idProveedor: json?.messages?.[0]?.id }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'error de red' }
+  }
+}
+
+/** ¿Meta rechazó el texto por estar fuera de la ventana de 24 h? */
+export function esFueraDeVentana24h(error?: string | null): boolean {
+  return Boolean(error && /131047|re-engagement|24 hours|24-hour/i.test(error))
+}

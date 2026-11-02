@@ -1,10 +1,103 @@
-# Hoja de ruta de supervisores y WhatsApp como soporte
+# Hoja de ruta de supervisores por WhatsApp
 
-Rama `fix/whatsapp-hoja-de-ruta`. Nada se activa: la hoja es una librería pura
-(sin pantalla obligatoria) y el WhatsApp de soporte es un esqueleto en seco
-detrás de un flag apagado.
+**Diseño aprobado (02/11/2026).** Reemplaza la versión anterior de esta rama (lista de
+prioridades para el supervisor de guardia + 4 tipos de WhatsApp de soporte), que no era la
+aprobada: `lib/whatsapp-soporte-supervisor.ts` y su prueba se eliminaron y
+`lib/hoja-de-ruta.ts` se reescribió.
 
-## D.1 Auditoría de lo que ya existe (file:line, base 63add31)
+**Nada se envía.** El envío está detrás de `HOJA_DE_RUTA_WHATSAPP` (apagado) hasta que
+Gerencia lo autorice; la migración `20261123120000` está SIN APLICAR y no hay cron.
+
+## 1. Qué hace
+
+Al terminar cada turno de supervisor, un WhatsApp **por destinatario** con este formato exacto:
+
+```
+HOJA DE RUTA
+Fecha: [fecha]
+Turno: [hora inicio] a [hora fin]
+Supervisor: [nombre]
+
+[hora de visita] — [objetivo]
+[novedad textual completa de ese objetivo]
+```
+
+- **Turno**: filas de `supervisores_guardia` activas que cubren (no franco/ausencia). Varias
+  zonas en el mismo horario = un turno. Nocturno: termina al día siguiente, pertenece al de inicio.
+- **Visitas**: `supervisiones` cargadas por ese supervisor entre el inicio y el fin del turno,
+  en orden cronológico (hora Argentina). Incluye objetivos fuera de sus zonas: es su recorrido.
+- **Novedad**: `supervisiones.observaciones` tal cual (sin resumir, interpretar ni modificar;
+  saltos de línea incluidos). Si la visita no tiene texto, va sólo la línea de hora y objetivo.
+- Sin encabezados extra, indicadores, alertas, estadísticas, pendientes ni PDF. No usa
+  `ronda_alertas` ni el escalamiento.
+
+## 2. Destinatarios
+
+Aldo Monzón (Jefe de Supervisores) y Rodolfo Romero (Director Técnico), **por separado**.
+Configurables por Gerencia en `hoja_ruta_destinatarios` desde el Tablero de Gerencia
+(`components/gerencia/HojaDeRutaDestinatarios.tsx`; sólo visible para Gerencia) vía
+`hoja_ruta_guardar_destinatario` (verifica `puede_acceder_gerencia_actual()`). La carga
+inicial no se ejecuta en la migración: la hace Gerencia en la pantalla.
+
+## 3. Envío (`app/api/push/hoja-de-ruta/route.ts`)
+
+| Flag `HOJA_DE_RUTA_WHATSAPP` | Comportamiento |
+|---|---|
+| sin valor / otro | Apagado: no lee nada. |
+| `dry-run` | Arma los mensajes y los devuelve en JSON (admin o cron). No escribe ni envía. |
+| `activo` | Envía, **sólo** si lo dispara el cron con `push_cron_secret`. |
+
+- Ventana: turnos terminados en las últimas 6 h (`HOJA_DE_RUTA_VENTANA_HORAS`); nada viejo.
+- Reclamo atómico (mismo patrón que la migración 9): `reclamar_hoja_ruta_envio` inserta la
+  fila (turno, destinatario) con índice único **antes** de llamar a Meta; si ya existe, no se
+  envía. `completar_hoja_ruta_envio` cierra idempotente. Sin reintentos automáticos: un
+  fallo queda `fallido` a la vista (mandar dos veces es peor que no mandar).
+- **Por qué no la tabla del escalamiento**: `escalamiento_whatsapp_envios` exige `turno_id`
+  (FK a turnos de vigiladores) y un CHECK de nivel sólo de alertas, y sus topes por
+  destinatario se cuentan sobre todas sus filas: la hoja consumiría el tope de las alertas.
+- Lecturas acotadas; cualquier error corta sin enviar. Si las visitas llegan al tope de 1.000
+  filas de PostgREST, no se arma una hoja incompleta.
+- Sin teléfono: no se reclama (si se carga dentro de la ventana, todavía sale).
+
+## 4. Meta, ventana de 24 h y límite
+
+- Una variable de plantilla de Meta **no admite saltos de línea**: el formato aprobado no
+  entra en una plantilla. Se envía como **texto** (`enviarTextoMeta`), que Meta sólo entrega
+  dentro de la ventana de 24 h desde el último mensaje del destinatario. Fuera de ella Meta
+  responde 131047: queda `fuera_de_ventana`, sin reintento.
+- Límite de texto: 4.096 caracteres. **No se recorta**: queda `excede_limite`, con el
+  mensaje completo guardado, sin enviar.
+
+## 5. Ensayo con datos reales (SELECT, 02/11/2026, últimos 30 días)
+
+81 turnos de supervisor; 5,9 visitas promedio (máx. 16); el mensaje más largo ≈ 1.357
+caracteres (p90 ≈ 840): **ninguno supera 4.096**. 23 turnos no tuvieron visitas (saldría
+sólo el encabezado).
+
+## 6. Pendientes (decisión de Gerencia)
+
+1. **Plantilla de Meta / ventana de 24 h**: o Aldo y Rodolfo mantienen abierta la ventana
+   (escriben al número), o se aprueba una plantilla. Una plantilla con el formato exacto no
+   es posible (sin saltos de línea en variables); alternativa a decidir.
+2. **Mensajes que excedan 4.096** (hoy ninguno): cómo entregarlos sin recortar ni dividir.
+3. **Turnos sin visitas**: ¿se envía la hoja sólo con el encabezado o no se envía?
+4. Activación: aplicar `20261123120000`, cargar destinatarios, `HOJA_DE_RUTA_WHATSAPP=activo`
+   y un cron (cada 15 min, `push_cron_secret`). Nada de esto está hecho.
+
+## 7. Pruebas
+
+- `tests/hoja-de-ruta.test.ts` (15): formato exacto, novedad textual sin recorte, sin
+  indicadores, visita sin novedad, fuera de turno/otro supervisor, **cambio de guardia**,
+  **supervisor fuera de su zona**, nocturno, varias zonas = un mensaje, franco/ausencia,
+  ventana, límite sin recorte, flag y que la ruta reclame antes de enviar y no toque alertas.
+- `supabase/pruebas/hoja-de-ruta/run.mjs` (PGlite, 16/16): permisos de Gerencia, RLS,
+  reclamo único y carrera de dos corridas (intercalada: PGlite es una sola conexión; la
+  garantía es el índice único), cierre idempotente, fuera de ventana, excede límite,
+  rollback y reaplicación.
+
+## Anexo: relevamiento previo (base 63add31)
+
+### Auditoría de lo que ya existe (file:line, base 63add31)
 
 | Pieza | Dónde | Qué hace hoy |
 |---|---|---|
@@ -25,70 +118,3 @@ diseño), `app/api/turnos/editar/route.ts:76`, `app/api/rondas/evidencia/route.t
 `app/api/bajas/confirmar/route.ts:60`, `app/api/ia/_lib/auth.ts:93`, y en SQL
 `puede_administrar_rondas_objetivo` → `alcanza_objetivo`. La hoja de ruta no
 abre ninguna mutación nueva.
-
-## D.2 Diseño: `lib/hoja-de-ruta.ts`
-
-`construirHojaDeRuta(entrada)` → `{ responsableAhora, motivo, zonasResponsable, items, paradas, fueraDeZona }`.
-
-- **Quién**: zonas en las que el supervisor es responsable *ahora*
-  (`resolverResponsablesOperativos`, mismo criterio que push/WhatsApp). Sin
-  guardia vigente → hoja vacía con `sin_guardia_vigente`. En el cambio de
-  guardia la hoja pasa entera al entrante (o a los entrantes, si son varios).
-- **Dónde**: sólo objetivos de esas zonas **y** dentro del alcance
-  (`puedeOperarObjetivo`, espejo de `alcanza_objetivo`; `todas` ve todo).
-  Lo que queda afuera se cuenta en `fueraDeZona`.
-- **Qué y en qué orden** (puntaje):
-
-| Tipo | Base | Ajuste | Fuente (no se recalcula) |
-|---|---|---|---|
-| Servicio sin cobertura | 100 | + minutos descubierto (máx. 60) | `puestosDescubiertos` (lib/turnos / alertas) |
-| Alerta crítica/alta abierta | 70 | +15 si crítica, +1 cada 10' de antigüedad (máx. 15). Intervenidas no; seguimiento vencido sí | `ronda_alertas` y otras alertas |
-| Relevo pendiente | 60 | +10 sin relevo, +10 si faltan ≤ 30'. Solapamiento no cuenta. Horizonte 90' | `lib/relevo.ts` |
-| Supervisión exigible | 30 | vencida +15 (+2/día, máx. 10), nunca +12, próxima a vencer +0 | `exigibilidadSupervision` + `estadoSupervision` |
-
-  Desempate: límite más próximo, luego nombre. `paradas` agrupa por objetivo
-  (una visita resuelve varios ítems).
-- Panel: `hojaDeRutaHabilitada()` lee `NEXT_PUBLIC_HOJA_DE_RUTA=1`
-  (apagado). No se agregó pantalla: queda para cuando se apruebe el diseño.
-
-Pruebas: `tests/hoja-de-ruta.test.ts` (orden por riesgo, no exigible, intervenida
-vs. seguimiento vencido, **cambio de supervisor de guardia**, **supervisor fuera de
-su zona** — incluye guardia en zona no asignada y verificación de que las rutas
-de mutación validan alcance en el servidor).
-
-## E. WhatsApp como soporte (diseño, sin activar)
-
-Esqueleto: `lib/whatsapp-soporte-supervisor.ts`. Flag
-`WHATSAPP_SOPORTE_SUPERVISOR=dry-run` → sólo arma payloads; cualquier otro valor
-→ deshabilitado. No importa el proveedor, no hace `fetch`, no escribe en la base.
-
-| Mensaje | Plantilla (Utility, es_AR, a aprobar) | Variables | Cuándo / consolidación |
-|---|---|---|---|
-| Inicio de guardia y prioridades | `sup_inicio_guardia_v1` | supervisor, zona, horario, cantidad, 3 primeras prioridades | Uno por guardia (clave `guardia:<id>`). |
-| Incidente crítico | `sup_incidente_critico_v1` | objetivo, detalle, desde | Uno por hecho (clave por turno/alerta), sólo puesto sin cobertura o alerta crítica/alta. Máx. 4/h; el resto al resumen. |
-| Pendientes de relevo | `sup_pendientes_relevo_v1` | cantidad, detalle (3) | Un mensaje consolidado por hora. |
-| Resumen | `sup_resumen_guardia_v1` | cantidad, detalle (3), omitidos por tope | Cada bloque de 4 h si hay pendientes. |
-
-Reglas:
-- Destinatario: el supervisor de guardia ahora (misma resolución que push). Sin
-  guardia: no se manda soporte (el escalamiento a jefes sigue siendo el de
-  `escalamiento-whatsapp`).
-- Tope de 12 mensajes de soporte por guardia; variables sin saltos de línea,
-  ≤ 120 caracteres (Meta rechaza saltos y textos largos en variables).
-- Ventana de 24 h: fuera de ella sólo plantillas; el diseño usa **sólo**
-  plantillas, nunca texto libre.
-- Envío real (futuro): cada payload por `reclamarEnvio` (clave estable, índice
-  único, topes y reintentos de la migración 20261121130000). Habría que
-  extender el CHECK de `escalamiento_whatsapp_envios.nivel` con los niveles
-  `soporte_*` (migración nueva).
-- **WhatsApp nunca modifica fichajes, horas, turnos ni planillas**, ni toma
-  respuestas del supervisor como acciones. La acción se hace en la app.
-
-Pruebas: `tests/whatsapp-soporte-supervisor.test.ts` (flag apagado, nunca
-envía, consolidación, topes, variables aptas para Meta, sin acceso a datos).
-
-## Autorizaciones necesarias
-
-1. Aprobar el diseño de puntajes y topes (valores propuestos).
-2. Plantillas en Meta (4) y aprobación de Gerencia antes de cualquier envío.
-3. Pantalla/panel de la hoja de ruta (no hecha) y su flag.
