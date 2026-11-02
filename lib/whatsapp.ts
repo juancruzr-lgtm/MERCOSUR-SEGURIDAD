@@ -43,6 +43,11 @@ export interface ResultadoEnvio {
   /** El id que devuelve el proveedor, para poder rastrear el mensaje. */
   idProveedor?: string
   error?: string
+  /**
+   * La llamada se cortó sin respuesta de Meta (red, timeout): el mensaje
+   * pudo haber salido. Quien reintenta debe tratarlo como incierto.
+   */
+  sinRespuesta?: boolean
 }
 
 export interface ProveedorWhatsApp {
@@ -188,7 +193,7 @@ export function proveedorMeta(): ProveedorWhatsApp {
         }
         return { ok: true, idProveedor: json?.messages?.[0]?.id }
       } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : 'error de red' }
+        return { ok: false, error: e instanceof Error ? e.message : 'error de red', sinRespuesta: true }
       }
     },
   }
