@@ -221,8 +221,63 @@ export interface TrackPayload {
 // VERSIÓN DE APP
 // ══════════════════════════════════════════════════════════════════════
 
+// NEXT_PUBLIC_APP_VERSION lo fija next.config.js en el build:
+// `<version de package.json>+<commit corto>` (VERCEL_GIT_COMMIT_SHA en Vercel,
+// el repo local si no). Antes no se definía nunca y todas las sesiones decían 0.1.0.
 const APP_VERSION: string =
   (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_APP_VERSION) || '0.1.0'
+
+export function appVersion(): string {
+  return APP_VERSION
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// IDENTIFICADOR ANÓNIMO DEL DISPOSITIVO
+// Un UUID al azar guardado en localStorage. No deriva de nada del teléfono
+// ni del usuario: sólo permite saber que dos sesiones vienen del mismo
+// aparato (p. ej. un teléfono compartido entre vigiladores). Se pierde si se
+// borran los datos del navegador, y eso está bien.
+// ══════════════════════════════════════════════════════════════════════
+
+export const CLAVE_DEVICE_ID = 'mercosur.device_id.v1'
+
+export function obtenerDeviceId(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const previo = window.localStorage.getItem(CLAVE_DEVICE_ID)
+    if (previo && /^[0-9a-f-]{36}$/i.test(previo)) return previo
+    const nuevo = uuid()
+    window.localStorage.setItem(CLAVE_DEVICE_ID, nuevo)
+    return nuevo
+  } catch {
+    return null
+  }
+}
+
+// Modelo del equipo. Chrome/Android lo da por User-Agent Client Hints
+// (asíncrono); si no, se intenta leer del UA clásico de Android
+// ("…; SM-A125M Build/…"). Se cachea al iniciar la telemetría.
+let _cachedModel: string | null = null
+
+export function modeloDesdeUserAgent(ua: string): string | null {
+  const m = ua.match(/Android [\d.]+;\s*(?:[a-z]{2}[-_][a-z]{2};\s*)?([^;)]+?)(?:\s+Build\/|\))/i)
+  const modelo = m?.[1]?.trim()
+  // Chrome con UA reducido manda "K" en lugar del modelo real.
+  if (!modelo || modelo === 'K' || /^Linux/i.test(modelo)) return null
+  return modelo.slice(0, 60)
+}
+
+async function refreshModel(): Promise<void> {
+  if (typeof navigator === 'undefined') return
+  try {
+    const uad = (navigator as any).userAgentData
+    if (uad?.getHighEntropyValues) {
+      const v = await uad.getHighEntropyValues(['model'])
+      if (v?.model) { _cachedModel = String(v.model).slice(0, 60); return }
+    }
+  } catch { /* sin UA-CH */ }
+  _cachedModel = modeloDesdeUserAgent(navigator.userAgent || '')
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN — se lee de app_config al iniciar
@@ -309,7 +364,7 @@ async function startSession(userId: string, userRol: OsUserRol): Promise<void> {
   const ctx = getDeviceContext()
 
   try {
-    const { error } = await supabase.from('os_sessions').insert({
+    const fila: Record<string, unknown> = {
       id:               _session.session_id,
       user_id:          userId,
       user_rol:         userRol,
@@ -324,7 +379,15 @@ async function startSession(userId: string, userRol: OsUserRol): Promise<void> {
       app_version:      APP_VERSION,
       battery_start_pct: _cachedBattery?.pct  ?? null,
       network_start:    ctx.network_type   ?? null,
-    })
+      device_id:        obtenerDeviceId(),
+    }
+    let { error } = await supabase.from('os_sessions').insert(fila)
+    // La columna device_id llega con la migración 20261113130000 (SIN
+    // APLICAR). Hasta entonces se reintenta sin ella: la sesión no se pierde.
+    if (error && /device_id/i.test(String((error as any).message ?? ''))) {
+      delete fila.device_id
+      ;({ error } = await supabase.from('os_sessions').insert(fila))
+    }
     if (!error) _sessionSaved = true
   } catch {
     // Sesión vive en memoria aunque falle el INSERT.
@@ -388,6 +451,7 @@ export function getDeviceContext(): DeviceContext {
 
     // Tipo de dispositivo
     ctx.device_type = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'mobile' : 'desktop'
+    ctx.device_model = _cachedModel ?? modeloDesdeUserAgent(ua) ?? undefined
 
     // Sistema operativo
     if (/Android/i.test(ua)) {
@@ -655,6 +719,8 @@ export async function initTelemetry(userId: string, userRol: OsUserRol): Promise
     if (!_initialized) {
       setupBrowserListeners()
       void refreshBattery()  // no bloquea: se actualiza en segundo plano
+      // El modelo sí se espera (con tope): va en la fila de os_sessions.
+      await Promise.race([refreshModel(), new Promise(r => setTimeout(r, 800))])
       _initialized = true
     }
     await startSession(userId, userRol)
