@@ -3,7 +3,7 @@
 Rama: `fix/auditoria-rondas-oct2026` (base `main` 22e3d8e). **Nada aplicado ni desplegado.** Producción sólo se consultó con SELECT.
 Niveles de certeza: **[C]** comprobado con datos o código · **[E]** estimación/inferencia · **[NR]** el sistema no lo registra.
 
-Documentos de detalle en esta carpeta: `regla_validacion.md`, `alertas_intervenciones.md`, `whatsapp_causa_raiz.md`, `turnos_cobertura_liquidacion.md`, `supervisiones.md`, `rondas_historial_exigencias.md`, `datos_moviles.md`, `pwa_estabilidad.md`, `hoja_de_ruta_supervisores.md`, `skatepark_frecuencia.md`, simulaciones y propuestas `.sql`.
+Documentos de detalle en esta carpeta: `regla_validacion.md`, `alertas_intervenciones.md`, `whatsapp_causa_raiz.md`, `turnos_cobertura_liquidacion.md`, `supervisiones.md`, `rondas_historial_exigencias.md`, `datos_moviles.md`, `pwa_estabilidad.md`, `skatepark_frecuencia.md`, simulaciones y propuestas `.sql`.
 
 ## A. Diagnóstico técnico
 
@@ -39,7 +39,7 @@ Documentos de detalle en esta carpeta: `regla_validacion.md`, `alertas_intervenc
 | P1 | 4. Rondas, GPS y evaluación | #4, #5, #6, #7, #8, #9, #20 | Orden 20261120120000 → 130000 → 140000 → 150000 → 20261122120000; Vault configurado antes de 140000 | Recalcular historial con revisiones #20 sin depurar |
 | P1 | 3. Supervisiones | #11, #12 | 20261113120000; decisión LAROMET | Permiso de fechas de servicio |
 | P2 | 5. Datos móviles y PWA | #13–#18 | 20261113130000 (device_id) opcional | Regresión en teléfono real → checklist manual en `pwa_estabilidad.md` |
-| P3 | 6. Hoja de ruta de supervisores | Formato aprobado, un WhatsApp por destinatario al terminar el turno; flag apagado (`hoja_de_ruta_supervisores.md`) | 20261123120000; destinatarios cargados por Gerencia; ventana de 24 h / plantilla | Ninguno mientras el flag esté apagado |
+| P3 | 6. Hoja de ruta de supervisores | Fuera de este PR: queda la de #347 (decisión de JC, 02/11/2026) | — | — |
 | P1 | 7. Operación compartida de rondas | Todos los supervisores ven e intervienen rondas de cualquier objetivo (`rondas_operacion_compartida.md`) | 20261124120000 después de 3 y 10 | Más alertas visibles por supervisor (las notificaciones no cambian) |
 
 ## C. Procedimiento de producción (orden, verificación y reversión)
@@ -69,11 +69,13 @@ idéntica a la de producción del 02/11/2026.
 | 8 | `20261121120000_turnos_cobertura_liquidacion` | Con la app que ya trae el paso de excepción (4.1) publicada |
 | 9 | `20261121130000_whatsapp_envios_reclamo_reintentos` | |
 | 10 | `20261122120000_rondas_historial_exigencias` | Reconcilia `ronda_horarios_sin_exigencia` (aplicada a mano, 20261104120000) |
-| 11 | `20261123120000_hoja_de_ruta_supervisores` | Tablas nuevas; no envía nada (flag apagado, sin cron) |
-| 12 | `20261124120000_rondas_operacion_compartida` | Después de 3 y 10; aborta sola si alguna función cambió |
+| 11 | `20261124120000_rondas_operacion_compartida` | Después de 3 y 10; aborta sola si alguna función cambió |
 
-**3. Publicación del código.** Merge del PR y deploy de producción en Vercel. Variables:
-`HOJA_DE_RUTA_WHATSAPP` sin valor (apagado). La app nueva funciona con o sin migraciones
+Después de estas, las de los otros PR del lote: `20261114120000_hoja_ruta_supervisores` (#347, tablas
+nuevas, envíos desactivados) y `20261125120000_programacion_conflictos_correccion_turnos` (#346,
+después de 8 y 10).
+
+**3. Publicación del código.** Merge del PR y deploy de producción en Vercel. La app nueva funciona con o sin migraciones
 aplicadas en la parte de avisos (falla cerrado), pero la confirmación de horas necesita la 8
 para mostrar el paso de excepción (sin ella, la confirmación funciona como hoy).
 
@@ -93,7 +95,7 @@ archivo), `supabase/verificacion/rondas_regla_validacion_post_migracion.sql`, y:
 - Punto de partida (02/11/2026): 2 usuarios con más de 20 push en 24 h; 345 análisis de IA sin hacer con más de 1 h.
 - WhatsApp: `select resultado, count(*) from escalamiento_whatsapp_envios where created_at > now() - interval '24 hours' group by 1;`
 
-**6. Reversión.** `supabase/rollback/<migración>_rollback.sql` en orden inverso (12 → 1) +
+**6. Reversión.** `supabase/rollback/<migración>_rollback.sql` en orden inverso (11 → 1) +
 redeploy del commit anterior en Vercel. Ningún rollback borra historial, fotos de ventanas,
 excepciones autorizadas ni envíos registrados.
 
@@ -106,7 +108,7 @@ transición, `app_config`).
 
 ## D. Pruebas (casos pedidos)
 
-Resultados (02/11/2026, checkout Windows de esta PC): **vitest 201 archivos / 3.575 tests OK** (199 + `excepcion-asistencia` + `hoja-de-ruta` reescrita; se quitó `whatsapp-soporte-supervisor`); `tsc` 137 errores, los mismos preexistentes (`target es5`), ninguno nuevo; `next build` OK. PGlite: alertas-intervenciones 49/49, whatsapp-envios 27/27, turnos-cobertura 66/66, rondas-historial 59/59 (2 controles comparaban texto con `` del checkout de Windows: corregido en la prueba), rondas-horario 33/33, hoja-de-ruta 16/16, rondas-operacion-compartida 21/21, protocolos 108/108, protocolo-controles 91/91, liquidacion-final 81/81, tareas-turno 49/49, arca-txt-visual 20/20, arca-consultas-acumuladas 14/14. **No corrida acá**: `supervision-exigibilidad` (necesita psql/PostgreSQL local, no instalado; la otra sesión la informó OK).
+Resultados (02/11/2026, checkout Windows de esta PC): **vitest 201 archivos / 3.575 tests OK** (199 + `excepcion-asistencia` + `hoja-de-ruta` reescrita; se quitó `whatsapp-soporte-supervisor`). Al quitar la hoja de ruta (queda la de #347): 200 archivos / 3.560 OK; `tsc` 137 errores, los mismos preexistentes (`target es5`), ninguno nuevo; `next build` OK. PGlite: alertas-intervenciones 49/49, whatsapp-envios 27/27, turnos-cobertura 66/66, rondas-historial 59/59 (2 controles comparaban texto con `` del checkout de Windows: corregido en la prueba), rondas-horario 33/33, rondas-operacion-compartida 21/21, protocolos 108/108, protocolo-controles 91/91, liquidacion-final 81/81, tareas-turno 49/49, arca-txt-visual 20/20, arca-consultas-acumuladas 14/14. **No corrida acá**: `supervision-exigibilidad` (necesita psql/PostgreSQL local, no instalado; la otra sesión la informó OK).
 
 | # | Caso | Prueba |
 |---|---|---|
@@ -132,11 +134,11 @@ Resultados (02/11/2026, checkout Windows de esta PC): **vitest 201 archivos / 3.
 | 20 | Recuperación tras abrir la cámara | `pwa-estabilidad.test.ts` |
 | 21 | Visibilidad no duplica consultas | `pwa-estabilidad.test.ts`, `datos-moviles.test.ts` |
 | 22 | SW sin crecimiento ilimitado | `pwa-estabilidad.test.ts` (3 deploys simulados) |
-| 23 | Hoja de ruta con cambio de guardia | `hoja-de-ruta.test.ts` |
+| 23 | Hoja de ruta con cambio de guardia | en #347 (`tests/hoja-ruta.test.ts`) |
 | 24 | WhatsApp duplicado o fuera de límites | `pruebas/whatsapp-envios`, `whatsapp-envio-seguro.test.ts` |
-| 25 | Supervisor fuera de su zona | `hoja-de-ruta.test.ts` (los controles de servidor ya existen) |
+| 25 | Supervisor fuera de su zona | los controles de servidor ya existen |
 
-Faltan: prueba manual en teléfono real (checklist en `pwa_estabilidad.md`) y aplicar las 12 migraciones sobre una copia del esquema real (rama de Supabase: tiene costo, requiere autorización). El preview automático de Vercel del PR usa las variables de entorno de Preview del proyecto; no se verificó que apunten a una base de pruebas — tratarlo como producción.
+Faltan: prueba manual en teléfono real (checklist en `pwa_estabilidad.md`) y aplicar las 11 migraciones sobre una copia del esquema real (rama de Supabase: tiene costo, requiere autorización). El preview automático de Vercel del PR usa las variables de entorno de Preview del proyecto; no se verificó que apunten a una base de pruebas — tratarlo como producción.
 
 ## E. Datos históricos — propuestas SIN ejecutar (todas terminan en ROLLBACK)
 
@@ -154,8 +156,8 @@ Faltan: prueba manual en teléfono real (checklist en `pwa_estabilidad.md`) y ap
 1. Aplicar cada migración (orden de la sección C) y desplegar.
 2. Rotar `ia_cron_secret` y cargarlo en Vault.
 3. Ejecutar (COMMIT) cada propuesta histórica de la sección E. Vigentes al 02/11/2026: las 328 alertas pendientes hasta octubre no cambiaron (hay 17 más de noviembre, fuera de la propuesta); la confirmación de Eduardo en Lotuf sigue con 8 h sin anular y la liquidación de octubre sigue en borrador.
-4. Activar la hoja de ruta: cargar destinatarios, `HOJA_DE_RUTA_WHATSAPP=activo` y su cron.
-5. Una rama de Supabase (copia del esquema) para aplicar las 12 migraciones y sus rollbacks sobre las definiciones reales completas (tiene costo).
+4. Hoja de ruta: la activación va con #347 (`supabase/verificacion/hoja_ruta_activacion_NO_APLICAR_SIN_AUTORIZACION.sql`).
+5. Una rama de Supabase (copia del esquema) para aplicar las 11 migraciones y sus rollbacks sobre las definiciones reales completas (tiene costo).
 
 ## G. Decisiones de Gerencia pendientes (no se inventaron)
 
@@ -168,5 +170,5 @@ Faltan: prueba manual en teléfono real (checklist en `pwa_estabilidad.md`) y ap
 - Las 218 confirmaciones de octubre sin fichaje.
 - Las 177 revisiones de fotos del Cierre Operativo hechas con los botones invertidos.
 - Si una foto aceptada sin referencia (`SIN_BASE_DE_COMPARACION`) cuenta como evidencia.
-- Hoja de ruta: plantilla de Meta o ventana de 24 h abierta (el formato multilínea no entra en una variable de plantilla); qué hacer si un mensaje excede 4.096 caracteres (hoy ninguno); si se envía la hoja de un turno sin visitas.
+- Hoja de ruta: resuelto el 02/11/2026, queda la de #347 (plantilla de Meta).
 - Responsable de zona en las intervenciones: hoy se registran los supervisores asignados a la zona; ¿hace falta el de guardia en ese momento?

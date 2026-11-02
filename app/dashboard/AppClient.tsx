@@ -89,7 +89,6 @@ import LiquidacionPanel from '@/components/liquidacion/LiquidacionPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
-import HojaDeRutaDestinatarios from '@/components/gerencia/HojaDeRutaDestinatarios'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
 import { inasistenciasInjustificadas } from '@/lib/novedades-laborales'
@@ -2066,7 +2065,6 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           usuarioId={usuarioId ?? null}
           onAbrirEmpleado={id => { window.location.href = `/guardias/${id}?seccion=desempeno` }}
         />
-        <HojaDeRutaDestinatarios />
       </div>
     )
   }
