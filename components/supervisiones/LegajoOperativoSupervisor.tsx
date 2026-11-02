@@ -19,6 +19,7 @@
  * El permiso lo decide la base (puede_ver_legajo_supervisores_actual).
  */
 
+import HojasRutaSupervisor from './HojasRutaSupervisor'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { supabase } from '@/lib/supabase'
@@ -128,6 +129,8 @@ export default function LegajoOperativoSupervisor({ supervisorId }: { supervisor
       </div>
 
       {error && <div style={{ ...caja, color: '#fca5a5', fontSize: 13 }}>No se pudo cargar el legajo: {error}</div>}
+
+      <HojasRutaSupervisor supervisorId={supervisorId} desde={desde} hasta={hasta} />
 
       {!error && (
         <>
