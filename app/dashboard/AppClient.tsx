@@ -149,15 +149,7 @@ import ControlProtocolos from '@/components/protocolos/ControlProtocolos'
 import LegajoDigital from '@/components/legajo/LegajoDigital'
 import RegistrarBaja from '@/components/bajas/RegistrarBaja'
 
-// Baja laboral confirmada = acceso bloqueado (migración 20261110120000). La base
-// ya no le deja leer ni escribir nada; esto sólo muestra un mensaje claro y
-// cierra la sesión. Si la función todavía no existe (migración sin aplicar), no bloquea.
-async function accesoBloqueadoPorBaja(): Promise<boolean> {
-  const { data, error } = await supabase.rpc('mi_acceso_estado')
-  if (error) return false
-  return Boolean((data as { bloqueado?: boolean } | null)?.bloqueado)
-}
-const MENSAJE_ACCESO_BLOQUEADO = 'Tu acceso a la app está deshabilitado por una baja laboral. Si es un error, consultá con Administración.'
+import Login, { perfilDeSesionActual, resolverDelegacionGerencia } from './Login'
 import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 
@@ -586,231 +578,6 @@ function Modal({ title, onClose, children, footer }: any) {
         </div>
         <div style={{ padding:24 }}>{children}</div>
         {footer && <div style={{ padding:'16px 24px', borderTop:'1px solid #1e2d42', display:'flex', justifyContent:'flex-end', gap:10 }}>{footer}</div>}
-      </div>
-    </div>
-  )
-}
-
-function Login({ onLogin }: { onLogin: (u: any) => void }) {
-  const [email, setEmail] = useState('')
-  const [pass, setPass] = useState('')
-  const [error, setError] = useState('')
-  const [resetMsg, setResetMsg] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [resetLoading, setResetLoading] = useState(false)
-  const [magicLoading, setMagicLoading] = useState(false)
-
-  const mensajeErrorAuth = (authError: unknown, accion: string) => {
-    const raw = authError instanceof Error
-      ? authError.message
-      : typeof authError === 'object' && authError && 'message' in authError
-        ? String((authError as { message: unknown }).message)
-        : String(authError || '')
-
-    if (/invalid login credentials/i.test(raw)) return 'Email o contraseña/DNI incorrectos.'
-    // Baja laboral confirmada: la cuenta queda con ban en Supabase Auth.
-    if (/banned/i.test(raw)) return MENSAJE_ACCESO_BLOQUEADO
-    if (/email not confirmed/i.test(raw)) return 'El email todavía no fue confirmado. Usá Magic Link o pedí un nuevo enlace.'
-    if (/rate limit|too many requests|too many/i.test(raw)) return `Supabase limitó temporalmente los envíos de email. Esperá unos minutos y volvé a intentar. Detalle: ${raw}`
-    if (/smtp|email|mail|send|provider/i.test(raw)) return `No se pudo enviar el email de ${accion}. Revisá la configuración SMTP en Supabase. Detalle: ${raw}`
-    if (/redirect/i.test(raw)) return `No se pudo generar el enlace de ${accion}. Revisá las URLs permitidas en Supabase Auth. Detalle: ${raw}`
-
-    return raw || `No se pudo completar ${accion}.`
-  }
-
-  const login = async () => {
-    const emailLogin = email.trim().toLowerCase()
-    const passwordLogin = pass.trim()
-
-    setLoading(true)
-    setError('')
-    setResetMsg('')
-
-    // Acá había tres console.log de depuración —el email, el error y `data`—.
-    // El último es el grave: `data` es la respuesta completa de
-    // `signInWithPassword`, o sea `session.access_token` y
-    // `session.refresh_token` impresos en la consola del navegador, en
-    // producción, en cada inicio de sesión de cada vigilador. El error ya se
-    // le muestra al usuario con `mensajeErrorAuth`; los tres no hacían falta.
-    const { data, error: err } = await supabase.auth.signInWithPassword({
-      email: emailLogin,
-      password: passwordLogin,
-    })
-
-    if (err) {
-      setError(mensajeErrorAuth(err, 'inicio de sesión'))
-      setLoading(false)
-      return
-    }
-
-    if (await accesoBloqueadoPorBaja()) {
-      await supabase.auth.signOut()
-      setError(MENSAJE_ACCESO_BLOQUEADO)
-      setLoading(false)
-      return
-    }
-
-    let { data: perfil, error: perfilError } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('auth_user_id', data.user.id)
-      .maybeSingle()
-
-    if ((!perfil || perfilError) && data.user.email) {
-      const fallback = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('email', data.user.email.trim().toLowerCase())
-        .maybeSingle()
-
-      if (fallback.data) {
-        perfil = fallback.data
-        perfilError = null
-        await supabase
-          .from('usuarios')
-          .update({ auth_user_id: data.user.id })
-          .eq('id', fallback.data.id)
-      }
-    }
-
-    if (perfilError || !perfil) {
-      setError(perfilError?.message || 'Usuario sin perfil asignado')
-      await supabase.auth.signOut()
-      setLoading(false)
-      return
-    }
-
-    onLogin(perfil)
-    setLoading(false)
-  }
-
-  const recuperarPassword = async () => {
-    setError('')
-    setResetMsg('')
-    const emailNormalizado = email.trim().toLowerCase()
-
-    if (!emailNormalizado) {
-      setError('Ingresá tu email para recuperar la contraseña')
-      return
-    }
-
-    setResetLoading(true)
-    const { error } = await supabase.auth.resetPasswordForEmail(emailNormalizado, {
-      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
-    })
-
-    if (error) {
-      setError(mensajeErrorAuth(error, 'recuperación de contraseña'))
-    } else {
-      setResetMsg('Si el email existe y SMTP está configurado en Supabase, se enviará un enlace de recuperación.')
-    }
-
-    setResetLoading(false)
-  }
-
-  const enviarMagicLink = async () => {
-    setError('')
-    setResetMsg('')
-    const emailNormalizado = email.trim().toLowerCase()
-
-    if (!emailNormalizado) {
-      setError('Ingresá tu email para enviar el enlace de ingreso')
-      return
-    }
-
-    setMagicLoading(true)
-    const { error } = await supabase.auth.signInWithOtp({
-      email: emailNormalizado,
-      options: {
-        emailRedirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
-      },
-    })
-
-    if (error) {
-      setError(mensajeErrorAuth(error, 'Magic Link'))
-    } else {
-      setResetMsg('Si el email existe y SMTP está configurado en Supabase, se enviará un enlace de ingreso.')
-    }
-
-    setMagicLoading(false)
-  }
-
-  return (
-    <div style={{
-      minHeight:'100vh',
-      display:'flex',
-      alignItems:'center',
-      justifyContent:'center',
-      padding:24,
-      background:`
-        radial-gradient(circle at 18% 18%, ${alpha(brandColors.yellow, 0.18)}, transparent 30%),
-        radial-gradient(circle at 82% 8%, ${alpha(brandColors.red, 0.16)}, transparent 26%),
-        linear-gradient(135deg, ${brandColors.black} 0%, ${brandColors.appBg} 54%, ${brandColors.carbon} 100%)
-      `,
-      fontFamily:FONT_BRAND,
-    }}>
-      <div style={{ width:'100%', maxWidth:420 }}>
-        <div style={{ textAlign:'center', marginBottom:30 }}>
-          <img
-            src={brandAssets.logoFondoOscuro}
-            alt="Mercosur Seguridad"
-            style={{ width:'min(280px, 78vw)', height:'auto', objectFit:'contain', filter:`drop-shadow(0 18px 34px ${alpha(brandColors.black, 0.5)})` }}
-          />
-          <div style={{ color:brandColors.text, fontSize:13, marginTop:12, letterSpacing:0.6 }}>Sistema de Control Operativo</div>
-        </div>
-        <div style={{
-          background:alpha(brandColors.surface, 0.94),
-          border:`1px solid ${alpha(brandColors.yellow, 0.26)}`,
-          borderRadius:16,
-          padding:32,
-          boxShadow:`0 24px 80px ${alpha(brandColors.black, 0.45)}`,
-          backdropFilter:'blur(12px)',
-        }}>
-          <div style={{ fontFamily:FONT_BRAND, fontSize:20, fontWeight:800, marginBottom:24, color:brandColors.textStrong }}>Iniciar sesión</div>
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Email</label>
-            <input
-              style={S.input}
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="usuario@mercosur.com"
-            />
-          </div>
-          <div style={{ marginBottom:16 }}>
-            <label style={S.label}>Contraseña</label>
-            <input
-              style={S.input}
-              type="password"
-              value={pass}
-              onChange={e => setPass(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && login()}
-            />
-          </div>
-          {error && <div style={{ color:semanticColors.error, fontSize:13, marginBottom:12 }}>{error}</div>}
-          {resetMsg && <div style={{ color:semanticColors.success, fontSize:13, marginBottom:12 }}>{resetMsg}</div>}
-          <button
-            style={{ ...S.btn, background:brandColors.yellow, color:brandColors.black, width:'100%', justifyContent:'center', fontFamily:FONT_BRAND, fontWeight:800 }}
-            onClick={login}
-            disabled={loading}
-          >
-            {loading ? 'Ingresando...' : 'Ingresar'}
-          </button>
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center', marginTop:10 }}
-            onClick={recuperarPassword}
-            disabled={resetLoading}
-          >
-            {resetLoading ? 'Enviando...' : 'Olvidé mi contraseña'}
-          </button>
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center', marginTop:10 }}
-            onClick={enviarMagicLink}
-            disabled={magicLoading}
-          >
-            {magicLoading ? 'Enviando...' : 'Magic Link'}
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -14084,7 +13851,7 @@ function TurnosBase() {
     </div>
   )
 }
-export default function AppPage() {
+export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | null } = {}) {
   const [user, setUser] = useState<any>(null)
   const [page, setPage] = useState('dashboard')
   const [guardias, setGuardias] = useState<Usuario[]>([])
@@ -14267,15 +14034,10 @@ export default function AppPage() {
     setLoading(false)
   }, [])
 
-  const cargarSesionPorRol = useCallback(async (perfilBase: Usuario) => {
-    // Delegación gerencial (Fase 2D): resuelve la vigencia (desde/hasta/revocada)
-    // en la base y la adjunta como booleano al perfil, para que capacidadesDe sume
-    // el acceso gerencial completo mientras esté activa. No cambia puesto/rol.
-    let perfil = perfilBase
-    try {
-      const { data: delegado } = await supabase.rpc('tiene_delegacion_gerencia_actual')
-      perfil = { ...perfilBase, acceso_gerencia_delegado: delegado === true } as Usuario
-    } catch { /* si falla, queda sin delegación (fail-closed) */ }
+  const cargarSesionPorRol = useCallback(async (perfilBase: Usuario, delegacionResuelta = false) => {
+    // Delegación gerencial (Fase 2D): ver resolverDelegacionGerencia (Login.tsx).
+    // AppShell ya la resolvió para decidir el shell: no se repite la RPC.
+    const perfil = (delegacionResuelta ? perfilBase : await resolverDelegacionGerencia(perfilBase)) as Usuario
     if (shellDeUsuario(perfil) === 'admin') {
       const pantallaChica = detectarPantallaChicaAdmin()
       const preferencia = leerPreferenciaVistaAdmin()
@@ -14328,35 +14090,20 @@ export default function AppPage() {
   }, [])
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!data.session) {
-        setLoading(false)
-        return
-      }
-
-      if (await accesoBloqueadoPorBaja()) {
-        await supabase.auth.signOut()
+    // Montado desde AppShell: la sesión y el perfil ya se resolvieron afuera.
+    if (perfilInicial) {
+      void cargarSesionPorRol(perfilInicial, true)
+      return
+    }
+    void perfilDeSesionActual().then(async perfil => {
+      if (!perfil) {
         setUser(null)
         setLoading(false)
         return
       }
-
-      const { data: perfil, error } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('auth_user_id', data.session.user.id)
-        .single()
-
-      if (error || !perfil) {
-        await supabase.auth.signOut()
-        setUser(null)
-        setLoading(false)
-        return
-      }
-
       await cargarSesionPorRol(perfil)
     })
-  }, [cargarSesionPorRol])
+  }, [cargarSesionPorRol]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const navegarConFiltro = (destino: string, filtro: any) => {
     setFiltros(prev => ({ ...prev, [destino]: filtro }))
