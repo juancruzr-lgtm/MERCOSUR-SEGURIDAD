@@ -22,6 +22,8 @@ import { configuracionMeta, proveedorPorDefecto, proveedorSimulado } from '@/lib
 import {
   seleccionarCandidatosRondaVigilador, minutosAbs, type HorarioSinExigencia,
 } from '@/lib/ronda-vigilador-wa'
+import { clavesRondaTurnoSilenciadas, type AlertaRondaTurno } from '@/lib/alertas-ronda-intervencion'
+import { auditarAntesDeEnviar, completarAuditoria } from '@/lib/whatsapp-auditoria'
 import type {
   TurnoVigente, RondaBaseVig, EjecucionMin, PausaMin, ObjetivoVig,
 } from '@/lib/ronda-vigilador-wa'
@@ -143,7 +145,7 @@ export async function GET(req: Request) {
   const rondaIdsArr = Array.from(new Set(((rondasRes.data ?? []) as any[]).map(r => r.id)))
 
   // 3) Resto acotado por ids.
-  const [puntosRes, ejecRes, pausasRes, objRes, usuariosRes, suspRes, horariosRes] = await Promise.all([
+  const [puntosRes, ejecRes, pausasRes, objRes, usuariosRes, suspRes, horariosRes, intervRes] = await Promise.all([
     rondaIdsArr.length
       ? client.from('ronda_puntos').select('ronda_base_id').eq('activo', true).in('ronda_base_id', rondaIdsArr)
       : Promise.resolve({ data: [] as any[], error: null }),
@@ -163,13 +165,18 @@ export async function GET(req: Request) {
     rondaIdsArr.length
       ? client.from('ronda_horarios_sin_exigencia').select('ronda_base_id, dia_semana, desde, hasta').eq('activo', true).in('ronda_base_id', rondaIdsArr)
       : Promise.resolve({ data: [] as any[], error: null }),
+    // Alertas intervenidas o cerradas que cubren el turno (auditoría oct-2026):
+    // si el supervisor ya está en el tema, no se le escribe al vigilador.
+    client.from('ronda_alertas')
+      .select('ronda_base_id, turno_id, tipo, estado, accion, resultado_intervencion, motivo_intervencion')
+      .in('turno_id', turnoIds).in('tipo', ['no_iniciada', 'no_finalizada']),
   ])
 
   const fuentesConError = [
     ['turnos', turnosRes], ['rondas_base', rondasRes], ['ronda_puntos', puntosRes],
     ['ronda_ejecuciones', ejecRes], ['ronda_pausas', pausasRes], ['objetivos', objRes],
     ['usuarios', usuariosRes], ['ronda_alertas_suspendida', suspRes],
-    ['ronda_horarios_sin_exigencia', horariosRes],
+    ['ronda_horarios_sin_exigencia', horariosRes], ['ronda_alertas_intervenidas', intervRes],
   ].filter(([, r]: any) => r?.error).map(([n, r]: any) => `${n}: ${r.error.message}`)
 
   // FAIL CLOSED: si una fuente crítica falló, la foto está incompleta y podría
@@ -222,6 +229,7 @@ export async function GET(req: Request) {
   const candidatos = seleccionarCandidatosRondaVigilador({
     ahoraMin, turnosVigentes: turnos, rondasBase, ejecuciones, pausas, objetivos,
     avisoMin: AVISO_MIN, rondaCreadaMin, suspendidasClaves,
+    silenciadasClaves: clavesRondaTurnoSilenciadas((intervRes.data ?? []) as AlertaRondaTurno[]),
     horariosSinExigencia: (horariosRes.data ?? []) as HorarioSinExigencia[],
   })
 
@@ -284,6 +292,14 @@ export async function GET(req: Request) {
       continue
     }
 
+    // Auditoría ANTES de enviar: sin registro, no sale el mensaje.
+    const auditoriaId = await auditarAntesDeEnviar(client, {
+      turno_id: c.turno_id, objetivo_id: c.objetivo_id, guardia_id: c.guardia_id,
+      nivel: NIVEL_RONDA_VIG, destinatario_id: c.guardia_id, telefono: tel.e164,
+      plantilla: PLANTILLA, proveedor: proveedor.nombre,
+    })
+    if (!auditoriaId) { descartes.auditoria_fallida = (descartes.auditoria_fallida ?? 0) + 1; continue }
+
     const r = await proveedor.enviar({
       telefono: tel.e164, plantilla: PLANTILLA,
       variables: [c.objetivo_nombre, c.ronda_nombre, c.horario],
@@ -297,12 +313,7 @@ export async function GET(req: Request) {
       vigilador: `${u.apellido}, ${u.nombre}`, telefono: tel.e164,
       ok: r.ok, error: r.error, idProveedor: r.idProveedor,
     })
-    filasAuditoria.push({
-      turno_id: c.turno_id, objetivo_id: c.objetivo_id, guardia_id: c.guardia_id,
-      nivel: NIVEL_RONDA_VIG, destinatario_id: c.guardia_id, telefono: tel.e164,
-      plantilla: PLANTILLA, resultado: r.ok ? 'enviado' : 'fallido',
-      id_proveedor: r.idProveedor, proveedor: proveedor.nombre, error: r.error,
-    })
+    await completarAuditoria(client, auditoriaId, r)
 
     // Si el proveedor rechazó, se LIBERA la reserva para que la próxima corrida
     // reintente (mismo criterio de reintento que el resto del canal).

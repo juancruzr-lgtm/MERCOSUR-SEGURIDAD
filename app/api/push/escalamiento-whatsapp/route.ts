@@ -32,6 +32,11 @@ import {
 } from '@/lib/whatsapp'
 import { instanteLocal, nombreResponsablesOperativos, resolverResponsablesOperativos } from '@/lib/responsables-operativos'
 import { sumarDiasFecha } from '@/lib/turnos'
+import { fetchPaginadoResult } from '@/lib/fetch-paginado'
+import {
+  WA_RONDA_MAX_ANTIGUEDAD_MIN, WA_RONDA_TOPE_DIARIO, auditarAntesDeEnviar, completarAuditoria,
+  contarEnviosPorDestinatario, descarteWaRonda, inicioDiaArgentina,
+} from '@/lib/whatsapp-auditoria'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -178,7 +183,7 @@ export async function GET(req: Request) {
       // WhatsApp en un día). El tope es estructural: aunque nadie resuelva las
       // alertas, lo que se evalúa acá no crece.
       client.from('ronda_alertas')
-        .select('id, tipo, estado, objetivo_id, puesto_id, turno_id, guardia_id, ventana_inicio, ventana_fin, detectada_at, ronda:rondas_base(nombre)')
+        .select('id, tipo, estado, objetivo_id, puesto_id, turno_id, guardia_id, ventana_inicio, ventana_fin, detectada_at, accion, resultado_intervencion, ronda:rondas_base(nombre)')
         .eq('estado', 'pendiente')
         .eq('tipo', 'no_iniciada')
         .gte('detectada_at', new Date(ahora.getTime() - 48 * 3600 * 1000).toISOString()),
@@ -267,6 +272,10 @@ export async function GET(req: Request) {
     const evento = f.ronda_alerta_id ?? f.turno_id
     if (evento) fallidosRecientes.add(`${evento}|${f.nivel}|${f.resultado}`)
   }
+  // Si esta lectura falla no se sabe qué se auditó en la última hora: se toma
+  // como "ya auditado" y no se escriben filas de fallido en esta corrida (antes
+  // el error se ignoraba y volvía la fila repetida cada 10 minutos).
+  const auditoriaReciente = (clave: string) => Boolean(fallidosRecientesRes.error) || fallidosRecientes.has(clave)
 
   // Respaldo cuando NADIE está de guardia en la zona: la lista configurada de
   // escalamiento (el jefe de supervisores; si no hay jefe activo, dirección).
@@ -375,7 +384,7 @@ export async function GET(req: Request) {
       // Se registra y se sigue. El caso sin supervisor llega igual al nivel 30.
       // Con una fila fresca (<1 h) del mismo evento no se vuelve a escribir:
       // el reintento queda, la auditoría no se infla.
-      if (fallidosRecientes.has(`${t.id}|${nivel}|${motivoSinDestinatario.toLowerCase()}`)) {
+      if (auditoriaReciente(`${t.id}|${nivel}|${motivoSinDestinatario.toLowerCase()}`)) {
         descartes.fallido_reciente_ya_auditado = (descartes.fallido_reciente_ya_auditado ?? 0) + 1
         continue
       }
@@ -449,18 +458,24 @@ export async function GET(req: Request) {
         continue
       }
 
+      // Auditoría ANTES de enviar: si no queda registro, no sale el mensaje.
+      const auditoriaId = await auditarAntesDeEnviar(client, {
+        turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
+        guardia_id: t.guardia_id, nivel, destinatario_id: usuarioId,
+        telefono: tel.e164, plantilla: destino.plantilla, minutos_descubierto: min,
+        proveedor: proveedor.nombre,
+      })
+      if (!auditoriaId) {
+        descartes.auditoria_fallida = (descartes.auditoria_fallida ?? 0) + 1
+        continue
+      }
+
       const r = await proveedor.enviar(destino)
       acciones.push({
         turno: t.id, nivel, destinatario: nombreDe(usuarioId),
         telefono: tel.e164, ok: r.ok, error: r.error,
       })
-      filasAuditoria.push({
-        turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
-        guardia_id: t.guardia_id, nivel, destinatario_id: usuarioId,
-        telefono: tel.e164, plantilla: destino.plantilla, minutos_descubierto: min,
-        resultado: r.ok ? 'enviado' : 'fallido', id_proveedor: r.idProveedor,
-        proveedor: proveedor.nombre, error: r.error,
-      })
+      await completarAuditoria(client, auditoriaId, r)
     }
   }
 
@@ -506,11 +521,43 @@ export async function GET(req: Request) {
   const nombreEmbebido = (v?: { nombre: string } | { nombre: string }[] | null): string | null =>
     Array.isArray(v) ? (v[0]?.nombre ?? null) : (v?.nombre ?? null)
 
+  // Tope diario por supervisor (auditoría oct-2026: el 07/10 salieron 5.753
+  // WhatsApp a 3 personas). Se cuentan los envíos de ronda de HOY (hora
+  // argentina), reales o en curso. FAIL-CLOSED como la dedup: sin poder
+  // contar, no se escala ninguna ronda.
+  const enviosHoyRes = await fetchPaginadoResult<{ destinatario_id: string | null; resultado: string | null }>((desde, hasta) =>
+    client.from('escalamiento_whatsapp_envios')
+      .select('destinatario_id, resultado')
+      .eq('nivel', NIVEL_RONDA)
+      .gte('created_at', inicioDiaArgentina(ahoraLocal.fecha))
+      .order('id', { ascending: true })
+      .range(desde, hasta))
+  if (enviosHoyRes.error) {
+    if (enviarDeVerdad && filasAuditoria.length > 0) {
+      await client.from('escalamiento_whatsapp_envios').insert(filasAuditoria)
+        .then(() => {}, (e: any) => console.error('[escalamiento] auditoría', e?.message))
+    }
+    return NextResponse.json(
+      { error: `No se pudo leer el tope diario de rondas: ${(enviosHoyRes.error as any)?.message}. No se envió nada de rondas (fail-closed).`, parcial: { acciones } },
+      { status: 500 },
+    )
+  }
+  const enviosHoy = contarEnviosPorDestinatario(enviosHoyRes.data)
+  const maxAntiguedadRondaMin = Number(process.env.WHATSAPP_RONDA_MAX_ANTIGUEDAD_MIN || WA_RONDA_MAX_ANTIGUEDAD_MIN)
+  const topeDiarioRonda = Number(process.env.WHATSAPP_RONDA_TOPE_DIARIO || WA_RONDA_TOPE_DIARIO)
+
   for (const alerta of rondasNoIniciadas) {
     const objetivo = objetivos.find((o: any) => o.id === alerta.objetivo_id)
     const d = decidirRonda(alerta, { objetivo })
     if (!d.escala) {
       if (d.motivo) descartesRonda[d.motivo] = (descartesRonda[d.motivo] ?? 0) + 1
+      continue
+    }
+    // Ya intervenida por un supervisor, o vieja (> 2 h): no se escala. La
+    // bandeja la sigue mostrando; un WhatsApp de hace horas sólo es ruido.
+    const descarte = descarteWaRonda(alerta as any, ahora.getTime(), maxAntiguedadRondaMin)
+    if (descarte) {
+      descartesRonda[descarte] = (descartesRonda[descarte] ?? 0) + 1
       continue
     }
     // El evento es la DETECCIÓN de la alerta. Las 70 pendientes históricas
@@ -560,7 +607,7 @@ export async function GET(req: Request) {
         ? 'VARIOS_RESPONSABLES_SIN_GUARDIA_DEFINIDA'
         : 'SIN_SUPERVISOR_RESPONSABLE'
       // Misma fila fresca (<1 h) → no se re-audita el mismo fallido.
-      if (fallidosRecientes.has(`${alerta.id}|${NIVEL_RONDA}|${motivo.toLowerCase()}`)) {
+      if (auditoriaReciente(`${alerta.id}|${NIVEL_RONDA}|${motivo.toLowerCase()}`)) {
         descartesRonda.fallido_reciente_ya_auditado = (descartesRonda.fallido_reciente_ya_auditado ?? 0) + 1
         continue
       }
@@ -582,6 +629,13 @@ export async function GET(req: Request) {
     for (const usuarioId of responsables) {
       const u = usuarios.find((x: any) => x.id === usuarioId)
       const tel = normalizarTelefonoAr(u?.telefono)
+
+      // Tope diario: pasado el cupo, el supervisor ya no recibe WhatsApp de
+      // rondas hoy (la bandeja y el push con resumen siguen).
+      if ((enviosHoy.get(usuarioId) ?? 0) >= topeDiarioRonda) {
+        descartesRonda.tope_diario = (descartesRonda.tope_diario ?? 0) + 1
+        continue
+      }
 
       if (!tel.e164) {
         acciones.push({
@@ -630,19 +684,26 @@ export async function GET(req: Request) {
         continue
       }
 
+      // Auditoría ANTES de enviar (el 07/10 sólo quedaron 26 filas de 5.753
+      // mensajes): sin registro no sale el mensaje.
+      const auditoriaId = await auditarAntesDeEnviar(client, {
+        turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
+        puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
+        ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA, destinatario_id: usuarioId,
+        telefono: tel.e164, plantilla: destino.plantilla, proveedor: proveedor.nombre,
+      })
+      if (!auditoriaId) {
+        descartesRonda.auditoria_fallida = (descartesRonda.auditoria_fallida ?? 0) + 1
+        continue
+      }
+      enviosHoy.set(usuarioId, (enviosHoy.get(usuarioId) ?? 0) + 1)
+
       const envio = await proveedor.enviar(destino)
       acciones.push({
         alerta: alerta.id, nivel: NIVEL_RONDA, destinatario: nombreDe(usuarioId),
         telefono: tel.e164, ok: envio.ok, error: envio.error,
       })
-      filasAuditoria.push({
-        turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
-        puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
-        ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA, destinatario_id: usuarioId,
-        telefono: tel.e164, plantilla: destino.plantilla,
-        resultado: envio.ok ? 'enviado' : 'fallido', id_proveedor: envio.idProveedor,
-        proveedor: proveedor.nombre, error: envio.error,
-      })
+      await completarAuditoria(client, auditoriaId, envio)
     }
   }
 
