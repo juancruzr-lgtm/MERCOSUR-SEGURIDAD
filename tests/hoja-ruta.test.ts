@@ -56,14 +56,22 @@ describe('1 · varias visitas y novedades: formato definitivo', () => {
     const m = mensajeWhatsApp(c)
     expect(m.bloqueado).toBeNull()
     expect(m.mensaje).toBe([
-      'HOJA DE RUTA', 'Fecha: 29/10/2026', 'Turno: 07:00 a 19:00', 'Supervisor: Sergio Martínez',
-      '07:15 — SRT: Vig Borgnis sin novedad | 09:35 — Polideportivo Lotuf: Sin novedades | 11:20 — CIRSE: Puerta principal con traba',
+      'HOJA DE RUTA', 'Sup. Sergio Martínez', '29/10 · Turno 07:00 a 19:00',
+      '07:15 SRT', '   Novedad: Vig Borgnis sin novedad',
+      '09:35 Polideportivo Lotuf',
+      '11:20 CIRSE', '   Novedad: Puerta principal con traba',
+      'Fin de hoja de ruta.',
     ].join('\n'))
     expect(m.mensaje).not.toMatch(/MERCOSUR|OBJETIVOS RECORRIDOS|NOVEDADES REGISTRADAS|alerta|pendiente|resumen|GPS|intento|evaluaci/i)
-    for (const v of m.variables) expect(v).not.toMatch(/[\n\r\t]| {4,}/)
   })
-  it('la plantilla es mínima: solo los rótulos pedidos', () => {
-    expect(CUERPO_PLANTILLA.replace(/\{\{\d\}\}/g, '').length).toBe(42)
+  it('una sola variable: la hoja de la app tal cual, con renglones, sin repetir el título', () => {
+    const m = mensajeWhatsApp(c)
+    expect(m.variables).toHaveLength(1)
+    expect(m.variables[0]).toBe(textoHojaRuta(c).replace('Hoja de ruta del sup. ', 'Sup. '))
+    expect(m.mensaje.match(/hoja de ruta/gi)).toHaveLength(2) // título de la plantilla + "Fin de hoja de ruta."
+  })
+  it('el cuerpo es el aprobado en Meta', () => {
+    expect(CUERPO_PLANTILLA).toBe('HOJA DE RUTA\n{{1}}\nFin de hoja de ruta.')
   })
 })
 
@@ -74,11 +82,11 @@ describe('2 · turno sin novedades', () => {
     expect(t.split('\n').slice(2)).toEqual(['07:15 SRT', '09:35 Polideportivo Lotuf', '11:20 CIRSE'])
     expect(t).not.toMatch(/novedad/i)
   })
-  it('sin visitas: "Sin objetivos recorridos durante el turno" (la hoja se genera igual)', () => {
+  it('sin visitas: "Sin servicios visitados durante el turno" (la hoja se genera igual)', () => {
     const d = base(); d.novedades = []; d.supervisiones = []; d.puntos = []
     const c = armarHojaRuta(d)
     expect(textoHojaRuta(c).split('\n').pop()).toBe(SIN_OBJETIVOS)
-    expect(mensajeWhatsApp(c).variables[3]).toBe(SIN_OBJETIVOS)
+    expect(mensajeWhatsApp(c).variables[0].split('\n').pop()).toBe(SIN_OBJETIVOS)
     expect(SIN_NOVEDADES).toBe('Sin novedades')
   })
 })
@@ -93,7 +101,7 @@ describe('3 · varias novedades en un mismo objetivo', () => {
     ]
     const c = armarHojaRuta(d)
     expect(textoHojaRuta(c)).toContain('09:35 Polideportivo Lotuf\n   Novedad: Primera\n   Novedad: Segunda\n11:20 CIRSE')
-    expect(mensajeWhatsApp(c).variables[3]).toContain('09:35 — Polideportivo Lotuf: Primera · Segunda |')
+    expect(mensajeWhatsApp(c).variables[0]).toContain('09:35 Polideportivo Lotuf\n   Novedad: Primera\n   Novedad: Segunda\n11:20 CIRSE')
   })
   it('dos visitas al mismo objetivo: cada novedad queda debajo de su visita', () => {
     const d = base()
@@ -140,11 +148,11 @@ describe('6 · turno nocturno', () => {
 })
 
 describe('7 · cambio de supervisor en la guardia', () => {
-  it('la hoja es de quien la cubrió; la app aclara el reemplazo, el WhatsApp solo el nombre', () => {
+  it('la hoja es de quien la cubrió y aclara el reemplazo (app y WhatsApp)', () => {
     const d = base(); d.guardia.reemplaza_a = 'Aldo Monzón'
     const c = armarHojaRuta(d)
     expect(textoHojaRuta(c)).toContain('Hoja de ruta del sup. Sergio Martínez (en reemplazo de Aldo Monzón)')
-    expect(mensajeWhatsApp(c).variables[2]).toBe('Sergio Martínez')
+    expect(mensajeWhatsApp(c).variables[0].split('\n')[0]).toBe('Sup. Sergio Martínez (en reemplazo de Aldo Monzón)')
   })
 })
 
@@ -235,7 +243,7 @@ describe('15 · informe que supera el límite de un mensaje', () => {
   })
   it('el límite se mide sobre el cuerpo completo de la plantilla ya armada', () => {
     expect(renderizarPlantilla(m.variables)).toBe(m.mensaje)
-    expect(CUERPO_PLANTILLA.match(/\{\{\d\}\}/g)).toHaveLength(4)
+    expect(CUERPO_PLANTILLA.match(/\{\{\d\}\}/g)).toHaveLength(1)
   })
 })
 
@@ -305,8 +313,8 @@ describe('17 · solo novedades de ESTE supervisor y de ESTE turno', () => {
       '08:58 SRT', '   Novedad: Vig Borgnis sin novedad.\nLibro firmado.', '   Novedad: Matafuego vencido en garita',
       '10:00 Polideportivo Lotuf',
     ].join('\n'))
-    // En el WhatsApp el salto de línea interno viaja como espacio (regla de Meta).
-    expect(mensajeWhatsApp(c).variables[3]).toBe('08:58 — SRT: Vig Borgnis sin novedad. Libro firmado. · Matafuego vencido en garita | 10:00 — Polideportivo Lotuf: Sin novedades')
+    // En el WhatsApp va igual, con el salto de línea interno incluido: nada se aplana.
+    expect(mensajeWhatsApp(c).variables[0]).toContain('   Novedad: Vig Borgnis sin novedad.\nLibro firmado.\n')
   })
 })
 

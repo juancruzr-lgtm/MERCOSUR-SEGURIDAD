@@ -84,9 +84,9 @@ describe('hoja de ruta: una sola implementación (#347)', () => {
     expect(existsSync('lib/hoja-ruta.ts')).toBe(true)
   })
 
-  it('formato definitivo: encabezado de 4 líneas y el recorrido en una variable', () => {
+  it('formato definitivo: la plantilla aprobada en Meta, con la hoja entera en una variable', () => {
     const lib = leer('lib/hoja-ruta.ts')
-    expect(lib).toContain("export const CUERPO_PLANTILLA = 'HOJA DE RUTA\\nFecha: {{1}}\\nTurno: {{2}}\\nSupervisor: {{3}}\\n{{4}}'")
+    expect(lib).toContain("export const CUERPO_PLANTILLA = 'HOJA DE RUTA\\n{{1}}\\nFin de hoja de ruta.'")
     expect(lib).not.toMatch(/MERCOSUR SEGURIDAD/)
   })
 

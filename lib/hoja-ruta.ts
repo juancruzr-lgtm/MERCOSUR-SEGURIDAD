@@ -213,29 +213,28 @@ export function textoHojaRuta(c: ContenidoHojaRuta): string {
 }
 
 // ── WhatsApp: UN mensaje ─────────────────────────────────────────────────────
-// Para escribir primero hace falta una plantilla aprobada. Reglas de Meta:
-//  · el cuerpo de la plantilla, YA con las variables reemplazadas, no puede
-//    superar 1024 caracteres (si no, Meta rechaza el envío);
-//  · una variable no puede tener saltos de línea, tabs ni más de 4 espacios
-//    seguidos.
-// Plantilla mínima: solo los rótulos pedidos y 4 variables. El recorrido va
-// en {{4}} en una sola línea: cada visita "hora — objetivo: novedad" separada
-// por " | ", y varias novedades del mismo objetivo separadas por " · ". Un
-// salto de línea DENTRO de una novedad viaja como espacio. El texto original
-// queda intacto en la app.
+// Para escribir primero hace falta una plantilla aprobada. La creada por JC
+// (02/11/2026) tiene una sola variable:
+//
+//   HOJA DE RUTA
+//   {{1}}
+//   Fin de hoja de ruta.
+//
+// ("Fin de hoja de ruta." existe porque Meta no aprueba un cuerpo que termine
+// en variable.) {{1}} es la hoja de la app tal cual, con sus saltos de línea,
+// sin el título (ya lo pone la plantilla): "Sup. X" / "dd/mm · Turno" / visitas.
+// Nada se recorta ni se aplana: si Meta rechaza el texto, el envío queda en
+// error con el mensaje de Meta y la hoja sigue completa en la app.
+// Largo: el cuerpo renderizado se compara con LIMITE_CUERPO_PLANTILLA; si lo
+// supera, la hoja queda "pendiente por longitud" (completa en la app).
 
 export const PLANTILLA_HOJA_RUTA = 'hoja_ruta_supervisor'
 export const LIMITE_CUERPO_PLANTILLA = 1024
-/** Cuerpo de la plantilla tal como se aprueba en Meta (42 caracteres fijos). */
-export const CUERPO_PLANTILLA = 'HOJA DE RUTA\nFecha: {{1}}\nTurno: {{2}}\nSupervisor: {{3}}\n{{4}}'
-
-const enUnaLinea = (s: string) => s.replace(/[\r\n\t]+/g, ' ').replace(/ {4,}/g, '   ').trim()
+/** Cuerpo de la plantilla tal como está aprobado en Meta. */
+export const CUERPO_PLANTILLA = 'HOJA DE RUTA\n{{1}}\nFin de hoja de ruta.'
 
 export function variablesMensaje(c: ContenidoHojaRuta): string[] {
-  const recorrido = c.recorrido.length === 0
-    ? SIN_OBJETIVOS
-    : c.recorrido.map(e => `${hhmm(e.hora)} — ${e.objetivo}: ${e.novedades.length === 0 ? SIN_NOVEDADES : e.novedades.map(n => enUnaLinea(n.texto)).join(' · ')}`).join(' | ')
-  return [ddmmaaaa(c.guardia.fecha), turno(c.guardia), c.guardia.supervisor, recorrido].map(enUnaLinea)
+  return [textoHojaRuta(c).replace(/^Hoja de ruta del sup\. /, 'Sup. ')]
 }
 
 export const renderizarPlantilla = (vars: readonly string[]): string =>
