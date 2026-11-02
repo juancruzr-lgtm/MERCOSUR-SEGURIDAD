@@ -34,9 +34,13 @@ import { instanteLocal, nombreResponsablesOperativos, resolverResponsablesOperat
 import { sumarDiasFecha } from '@/lib/turnos'
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import {
-  WA_RONDA_MAX_ANTIGUEDAD_MIN, WA_RONDA_TOPE_DIARIO, auditarAntesDeEnviar, completarAuditoria,
+  WA_RONDA_MAX_ANTIGUEDAD_MIN, WA_RONDA_TOPE_DIARIO,
   contarEnviosPorDestinatario, descarteWaRonda, inicioDiaArgentina,
 } from '@/lib/whatsapp-auditoria'
+import {
+  claveEnvioWhatsApp, completarEnvio, crearPresupuestoCorrida, destinatariosConRespaldo,
+  eventoRonda, eventoTurno, reclamarEnvio,
+} from '@/lib/whatsapp-envio-seguro'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -290,6 +294,14 @@ export async function GET(req: Request) {
     : listaEscalamiento.map((x: any) => x.usuario_id)
 
   const proveedor = enviarDeVerdad ? proveedorPorDefecto() : proveedorSimulado()
+  // Presupuesto de la corrida: cortar con margen antes de maxDuration (60 s).
+  // El 07/10 cada corrida murió a los ~60 s en medio de los envíos.
+  const presupuesto = crearPresupuestoCorrida({
+    maxEnvios: Number(process.env.WHATSAPP_MAX_ENVIOS_POR_CORRIDA || 40),
+    maxMs: 40000,
+  })
+  // Tope por destinatario y día para +15/+30 (las rondas tienen el suyo).
+  const topeDiarioTurnos = Number(process.env.WHATSAPP_TURNOS_TOPE_DIARIO || 20)
   const acciones: any[] = []
   const descartes: Record<string, number> = {}
   const filasAuditoria: any[] = []
@@ -444,38 +456,44 @@ export async function GET(req: Request) {
         continue
       }
 
-      // Dedup ATÓMICA (claim-first), como ronda-vigilador: la marca se reclama
-      // ANTES de enviar y un insert fallido (23505 = ya reclamada por otra
-      // corrida, o cualquier otro error de escritura) significa NO enviar.
-      // El orden viejo (enviar y marcar después) dejaba el loop abierto: si la
-      // marca no se podía escribir/leer, el mismo WhatsApp salía en cada
-      // corrida. Trade-off asumido: un rechazo del proveedor después del claim
-      // ya no se reintenta — preferimos perder un aviso a repetir mil.
-      const claim = await client.from('notificaciones_enviadas')
-        .insert({ usuario_id: usuarioId, turno_id: t.id, tipo: nivel })
-      if (claim.error) {
-        descartes.ya_reclamada = (descartes.ya_reclamada ?? 0) + 1
+      if (!presupuesto.disponible()) {
+        descartes.presupuesto_corrida = (descartes.presupuesto_corrida ?? 0) + 1
         continue
       }
 
-      // Auditoría ANTES de enviar: si no queda registro, no sale el mensaje.
-      const auditoriaId = await auditarAntesDeEnviar(client, {
-        turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
-        guardia_id: t.guardia_id, nivel, destinatario_id: usuarioId,
-        telefono: tel.e164, plantilla: destino.plantilla, minutos_descubierto: min,
-        proveedor: proveedor.nombre,
-      })
-      if (!auditoriaId) {
-        descartes.auditoria_fallida = (descartes.auditoria_fallida ?? 0) + 1
+      // RECLAMO ATÓMICO en la base (20261121120000) ANTES de enviar: clave
+      // estable (canal, etapa, evento, destinatario) con índice único, fila de
+      // auditoría 'reclamado', topes y reintento con backoff. Cualquier
+      // respuesta que no sea ok (o un error de la RPC) significa NO enviar.
+      const reclamo = await reclamarEnvio(client,
+        claveEnvioWhatsApp({ etapa: nivel, evento: eventoTurno(t.id), destinatarioId: usuarioId }),
+        {
+          turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
+          guardia_id: t.guardia_id, nivel, destinatario_id: usuarioId,
+          telefono: tel.e164, plantilla: destino.plantilla, minutos_descubierto: min,
+          proveedor: proveedor.nombre,
+        },
+        { topeDestinatarioDia: topeDiarioTurnos, topeEvento: nivel === NIVEL.supervisor ? 3 : null },
+      )
+      if (!reclamo.ok) {
+        descartes[`no_reclamado_${reclamo.motivo}`] = (descartes[`no_reclamado_${reclamo.motivo}`] ?? 0) + 1
         continue
       }
+      presupuesto.registrar()
 
       const r = await proveedor.enviar(destino)
       acciones.push({
         turno: t.id, nivel, destinatario: nombreDe(usuarioId),
-        telefono: tel.e164, ok: r.ok, error: r.error,
+        telefono: tel.e164, ok: r.ok, error: r.error, intento: reclamo.intento,
       })
-      await completarAuditoria(client, auditoriaId, r)
+      await completarEnvio(client, reclamo.id as string, r)
+      // Marca de compatibilidad (la lee la dedup previa de arriba). Sólo si
+      // salió: un fallo reintentable lo decide la base en la próxima corrida.
+      if (r.ok) {
+        await client.from('notificaciones_enviadas')
+          .insert({ usuario_id: usuarioId, turno_id: t.id, tipo: nivel })
+          .then(() => {}, () => {})
+      }
     }
   }
 
@@ -595,17 +613,12 @@ export async function GET(req: Request) {
     // alerta no se calla: sube a la lista de escalamiento (jefe de
     // supervisores; sin jefe activo, dirección). Mismo espíritu que el +30 de
     // puestos descubiertos — alguien con poder de actuar se tiene que enterar.
-    let responsables = Array.from(new Set(r.responsables ?? []))
-    let origenRonda: string = r.origen
-    if (responsables.length === 0 && fallbackJefes.length > 0) {
-      responsables = Array.from(new Set(fallbackJefes))
-      origenRonda = 'fallback_jefes'
-    }
+    const dest = destinatariosConRespaldo(r, fallbackJefes)
+    const responsables = dest.destinatarios
+    const origenRonda: string = dest.origen
 
-    if (responsables.length === 0) {
-      const motivo = r.origen === 'multiples_sin_guardia'
-        ? 'VARIOS_RESPONSABLES_SIN_GUARDIA_DEFINIDA'
-        : 'SIN_SUPERVISOR_RESPONSABLE'
+    if (dest.motivoSinDestinatario) {
+      const motivo = dest.motivoSinDestinatario
       // Misma fila fresca (<1 h) → no se re-audita el mismo fallido.
       if (auditoriaReciente(`${alerta.id}|${NIVEL_RONDA}|${motivo.toLowerCase()}`)) {
         descartesRonda.fallido_reciente_ya_auditado = (descartesRonda.fallido_reciente_ya_auditado ?? 0) + 1
@@ -671,39 +684,48 @@ export async function GET(req: Request) {
         continue
       }
 
-      // Dedup ATÓMICA (claim-first), igual que arriba y que ronda-vigilador:
-      // reclamar la marca ANTES de enviar; cualquier error del insert (23505
-      // incluido) significa NO enviar. Es la vacuna contra el loop del 07/10.
-      const claim = await client.from('notificaciones_enviadas')
-        .insert({
-          usuario_id: usuarioId, objetivo_id: alerta.objetivo_id,
-          turno_id: null, tipo: claveDedupRonda(alerta),
-        })
-      if (claim.error) {
-        descartesRonda.ya_reclamada = (descartesRonda.ya_reclamada ?? 0) + 1
+      if (!presupuesto.disponible()) {
+        descartesRonda.presupuesto_corrida = (descartesRonda.presupuesto_corrida ?? 0) + 1
         continue
       }
 
-      // Auditoría ANTES de enviar (el 07/10 sólo quedaron 26 filas de 5.753
-      // mensajes): sin registro no sale el mensaje.
-      const auditoriaId = await auditarAntesDeEnviar(client, {
-        turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
-        puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
-        ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA, destinatario_id: usuarioId,
-        telefono: tel.e164, plantilla: destino.plantilla, proveedor: proveedor.nombre,
-      })
-      if (!auditoriaId) {
-        descartesRonda.auditoria_fallida = (descartesRonda.auditoria_fallida ?? 0) + 1
+      // RECLAMO ATÓMICO (20261121120000): además de la clave única, la base
+      // vuelve a mirar la alerta AHORA — si el supervisor intervino entre la
+      // lectura y el envío, no sale — y aplica el tope diario bajo lock (dos
+      // corridas simultáneas no pueden pasarse del cupo).
+      const reclamo = await reclamarEnvio(client,
+        claveEnvioWhatsApp({ etapa: NIVEL_RONDA, evento: eventoRonda(alerta.id), destinatarioId: usuarioId }),
+        {
+          turno_id: alerta.turno_id, objetivo_id: alerta.objetivo_id,
+          puesto_id: alerta.puesto_id, guardia_id: alerta.guardia_id,
+          ronda_alerta_id: alerta.id, nivel: NIVEL_RONDA, destinatario_id: usuarioId,
+          telefono: tel.e164, plantilla: destino.plantilla, proveedor: proveedor.nombre,
+        },
+        { topeDestinatarioDia: topeDiarioRonda, topeEvento: 3 },
+      )
+      if (!reclamo.ok) {
+        descartesRonda[`no_reclamado_${reclamo.motivo}`] = (descartesRonda[`no_reclamado_${reclamo.motivo}`] ?? 0) + 1
         continue
       }
+      presupuesto.registrar()
       enviosHoy.set(usuarioId, (enviosHoy.get(usuarioId) ?? 0) + 1)
 
       const envio = await proveedor.enviar(destino)
       acciones.push({
         alerta: alerta.id, nivel: NIVEL_RONDA, destinatario: nombreDe(usuarioId),
-        telefono: tel.e164, ok: envio.ok, error: envio.error,
+        telefono: tel.e164, ok: envio.ok, error: envio.error, intento: reclamo.intento,
       })
-      await completarAuditoria(client, auditoriaId, envio)
+      await completarEnvio(client, reclamo.id as string, envio)
+      // Marca de compatibilidad para la dedup previa ("una alerta se avisa una
+      // vez"). Sólo si salió.
+      if (envio.ok) {
+        await client.from('notificaciones_enviadas')
+          .insert({
+            usuario_id: usuarioId, objetivo_id: alerta.objetivo_id,
+            turno_id: null, tipo: claveDedupRonda(alerta),
+          })
+          .then(() => {}, () => {})
+      }
     }
   }
 
