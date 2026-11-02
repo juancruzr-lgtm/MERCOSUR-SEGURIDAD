@@ -11,11 +11,16 @@
  * 70–122 puntos por hora y batería. Además, al volver de segundo plano el
  * estado se reiniciaba y se registraba OTRA entrada al mismo objetivo.
  *
- * Histéresis:
- *   - Entrada a un objetivo: una lectura bien adentro (radio − 25 m) o dos
- *     lecturas seguidas dentro del radio. Una visita real siempre la cumple.
+ * Histéresis (la entrada NO se demora: no se pierde ninguna visita):
+ *   - Entrada a un objetivo: con la primera lectura dentro del radio, igual
+ *     que antes. La mediana de radio es 50 m y la precisión del GPS en la
+ *     calle es de 20–60 m: exigir 2 lecturas o un margen interior hacía
+ *     perder visitas reales en la simulación de octubre (159 de 449).
  *   - Salida: dos lecturas seguidas fuera de radio + 25 m, o una sola muy
- *     lejos (radio + 100 m). Nunca se pierde: se registra apenas se confirma.
+ *     lejos (radio + 100 m). El ruido en el borde ya no genera la cadena
+ *     entrada/salida/entrada. La salida real se registra al confirmarse.
+ *   - Cambio directo entre objetivos vecinos: igual que antes (gana el más
+ *     cercano cuyo radio contiene la lectura).
  *   - MOVING ⇄ STOPPED fuera de objetivos: dos lecturas seguidas que coincidan.
  *   - Volver de segundo plano NO borra el objetivo actual: si sigue adentro,
  *     no hay una entrada duplicada.
@@ -92,11 +97,6 @@ export function objetivoCercano(lat: number, lng: number, objetivos: readonly Ob
   return mejor
 }
 
-/** "Bien adentro": a más de 25 m del borde (o en la mitad interior si el radio es chico). */
-export function bienAdentro(distancia: number, radio: number): boolean {
-  return radio > 2 * MARGEN_OBJETIVO_M ? distancia <= radio - MARGEN_OBJETIVO_M : distancia <= radio / 2
-}
-
 /** Volver de segundo plano: la lectura puede ser vieja, pero el objetivo se conserva. */
 export function trasRecuperacion(est: EstadoMaquina): EstadoMaquina {
   if (est.objetivoId) return { ...est, candSalidaN: 0, candObj: null, candObjN: 0 }
@@ -129,8 +129,10 @@ export function procesarLectura(
       ? haversineM(l.lat, l.lng, Number(actual.lat), Number(actual.lng))
       : Infinity
     const radio = actual?.radio_metros ?? 0
-    // Cambio directo a otro objetivo (vecinos): sólo con la lectura bien adentro del otro.
-    const otro = cerca && cerca.id !== est.objetivoId && dActual > radio && bienAdentro(cerca.distancia, cerca.radio)
+    // Cambio directo a otro objetivo (vecinos): como antes, gana el más cercano
+    // si la lectura está dentro de su radio (no se pierde la visita al vecino).
+    const otro = cerca != null && cerca.id !== est.objetivoId
+      && (dActual > radio || cerca.distancia < dActual)
     const fuera = dActual > radio + MARGEN_OBJETIVO_M
     if (!fuera && !otro) {
       est.candSalidaN = 0
@@ -157,20 +159,11 @@ export function procesarLectura(
 
   // ── Fuera: ¿entra a un objetivo? ───────────────────────────────────────────
   if (cerca) {
-    const confirma = bienAdentro(cerca.distancia, cerca.radio)
-      || (est.candObj === cerca.id && est.candObjN + 1 >= LECTURAS_CONFIRMACION)
-    if (confirma) {
-      est.objetivoId = cerca.id
-      est.estado = 'IN_OBJETIVO'
-      est.candObj = null; est.candObjN = 0; est.candMov = null; est.candMovN = 0
-      insertar({ tipo: 'objetivo_enter', objetivoId: cerca.id, distancia: cerca.distancia })
-      return { estado: est, acciones }
-    }
-    est.candObjN = est.candObj === cerca.id ? est.candObjN + 1 : 1
-    est.candObj = cerca.id
-  } else {
-    est.candObj = null
-    est.candObjN = 0
+    est.objetivoId = cerca.id
+    est.estado = 'IN_OBJETIVO'
+    est.candObj = null; est.candObjN = 0; est.candMov = null; est.candMovN = 0
+    insertar({ tipo: 'objetivo_enter', objetivoId: cerca.id, distancia: cerca.distancia })
+    return { estado: est, acciones }
   }
 
   // ── Movimiento ─────────────────────────────────────────────────────────────
