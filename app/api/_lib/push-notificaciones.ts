@@ -27,7 +27,7 @@ import {
 } from '@/lib/notificaciones-push'
 import { calcularMinutosTardanzaRegistro } from '@/lib/revision-operativa'
 import { ventanaSinExigencia, type HorarioSinExigencia } from '@/lib/ronda-vigilador-wa'
-import { objetivoEstaOperativo, turnoSinCoberturaOperativa } from '@/lib/turnos'
+import { objetivoEstaOperativo, turnoSinCoberturaOperativa, turnoTieneObligacionDeCobertura } from '@/lib/turnos'
 // LA resolución de responsables operativos: guardia efectiva → responsable
 // único de zona → nadie (sin elegir arbitrariamente). La misma que usan las
 // pantallas; acá no se reimplementa nada.
@@ -866,6 +866,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     const RONDA_AVISO_GRACIA_MIN = 15
     const turnosVigentes = turnos.filter(t => {
       if (!t.guardia_id || !t.puesto_id) return false
+      if (!turnoTieneObligacionDeCobertura(t)) return false  // anulado: no exige rondas
       const ini = fechaHoraMinutos(t.fecha, t.hora_inicio)
       const nocturno = (minutosHora(t.hora_fin) ?? 0) <= (minutosHora(t.hora_inicio) ?? 0)
       const fin = fechaHoraMinutos(t.fecha, t.hora_fin) + (nocturno ? 1440 : 0)
@@ -1036,6 +1037,12 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     // operativo, así que ninguna corresponde. Mismo criterio que aplican
     // rondas_ventanas_programadas y asignar_vigilador_turnos en el servidor.
     if (!objetivoEstaOperativo(objetivo)) continue
+
+    // Turno anulado/cancelado/reemplazado: no tiene obligación. Antes este
+    // bucle no lo miraba y un turno anulado con vigilador seguía mandando los
+    // recordatorios de 30'/15' y "Guardia sin fichaje". El escalamiento por
+    // WhatsApp ya lo excluía (decidir → turno_anulado).
+    if (!turnoTieneObligacionDeCobertura(turno)) continue
 
     const guardia = usuarios.find(item => item.id === turno.guardia_id)
     const inicio = fechaHoraMinutos(turno.fecha, turno.hora_inicio)

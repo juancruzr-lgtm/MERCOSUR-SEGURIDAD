@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { alcanceDe, tieneCapacidad } from '@/lib/capacidades'
+import { normalizarConflictos, haySuperposicion, MOTIVO_CONFLICTO_MIN } from '@/lib/conflictos-turno'
 
 export const runtime = 'nodejs'
 
@@ -40,6 +41,8 @@ export async function POST(req: NextRequest) {
     cambios: Record<string, string | null>
     comentario?: string
     snapshot?: Record<string, string | null>
+    confirmar_conflictos?: boolean
+    motivo_conflicto?: string
   }
 
   try {
@@ -49,6 +52,8 @@ export async function POST(req: NextRequest) {
   }
 
   const { turno_id, cambios, comentario, snapshot } = body
+  const confirmarConflictos = body.confirmar_conflictos === true
+  const motivoConflicto = typeof body.motivo_conflicto === 'string' ? body.motivo_conflicto.trim() : ''
 
   if (!turno_id || typeof turno_id !== 'string') {
     return NextResponse.json({ error: 'turno_id requerido' }, { status: 400 })
@@ -158,6 +163,43 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, turno, sin_cambios: true })
   }
 
+  // ── Conflictos del vigilador (todos los objetivos) ──────────────────────────
+  // Cambiar el vigilador o el horario puede dejar a la persona con dos turnos
+  // que se pisan, consecutivos en otro objetivo o dos en el mismo día. Misma
+  // detección que asignar_vigilador_turnos (conflictos_turno_vigilador_core).
+  // Anular o quitar vigilador no generan conflictos.
+  const nuevoGuardia = (('guardia_id' in updatePayload) ? updatePayload.guardia_id : turno.guardia_id) as string | null
+  const cambiaVigiladorOHorario = ['guardia_id', 'hora_inicio', 'hora_fin', 'fecha', 'objetivo_id'].some(c => c in updatePayload)
+  const quedaVigente = !['anulado', 'cancelado', 'reemplazado'].includes(String(updatePayload.estado ?? turno.estado ?? ''))
+  let conflictosConfirmados: ReturnType<typeof normalizarConflictos> = []
+  if (nuevoGuardia && cambiaVigiladorOHorario && quedaVigente) {
+    const { data: crudo, error: confError } = await admin.client.rpc('conflictos_turno_vigilador_core', {
+      p_guardia_id: nuevoGuardia,
+      p_fecha: (updatePayload.fecha ?? turno.fecha) as string,
+      p_hora_inicio: (updatePayload.hora_inicio ?? turno.hora_inicio) as string,
+      p_hora_fin: (updatePayload.hora_fin ?? turno.hora_fin) as string,
+      p_objetivo_id: (updatePayload.objetivo_id ?? turno.objetivo_id) as string,
+      p_excluir_turno_id: turno_id,
+    })
+    if (confError) return NextResponse.json({ error: confError.message }, { status: 500 })
+    const conflictos = normalizarConflictos(crudo)
+    if (conflictos.length > 0) {
+      if (haySuperposicion(conflictos) && alcanceDe(perfil) !== 'todas') {
+        return NextResponse.json({
+          error: 'Superposición horaria: solo Administración o Gerencia pueden confirmarla.',
+          codigo: 'CONFLICTO_VIGILADOR', conflictos, requiere_confirmacion: true,
+        }, { status: 409 })
+      }
+      if (!confirmarConflictos || motivoConflicto.length < MOTIVO_CONFLICTO_MIN) {
+        return NextResponse.json({
+          error: 'El vigilador tiene otro turno en conflicto. Revisalo y confirmá con motivo.',
+          codigo: 'CONFLICTO_VIGILADOR', conflictos, requiere_confirmacion: true,
+        }, { status: 409 })
+      }
+      conflictosConfirmados = conflictos
+    }
+  }
+
   // ── Actualizar turno ────────────────────────────────────────────────────────
   const { data: turnoActualizado, error: updateError } = await admin.client
     .from('turnos')
@@ -171,7 +213,28 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Auditoría ───────────────────────────────────────────────────────────────
-  const comentarioFinal = (comentario ?? '').trim() || 'Modificación de turno programado'
+  const comentarioFinal = ((comentario ?? '').trim() || 'Modificación de turno programado')
+    + (conflictosConfirmados.length > 0 ? ` · conflicto confirmado: ${motivoConflicto}` : '')
+
+  if (conflictosConfirmados.length > 0 && nuevoGuardia) {
+    const operacionId = crypto.randomUUID()
+    const { error: confInsError } = await admin.client.from('turnos_conflictos_confirmados').insert(
+      conflictosConfirmados.map(c => ({
+        operacion_id: operacionId,
+        turno_id,
+        objetivo_id: turnoActualizado.objetivo_id,
+        guardia_id: nuevoGuardia,
+        turno_conflicto_id: c.turno_id,
+        tipo: c.tipo,
+        minutos_superpuestos: c.minutos_superpuestos,
+        detalle: c,
+        motivo: motivoConflicto,
+        origen: 'guardia_id' in updatePayload ? 'cambio_vigilador' : 'modificacion_horario',
+        confirmado_por: usuarioId,
+      })),
+    )
+    if (confInsError) console.error('[turnos/editar] constancia de conflicto no guardada:', confInsError.message)
+  }
 
   const { error: auditoriaError } = await admin.client
     .from('turnos_auditoria')
