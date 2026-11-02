@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import type { CausaPausa } from '@/lib/rondas-causas'
 import type { ModoQr } from '@/lib/rondas-qr'
+import type { MotivoIntervencion, ResultadoIntervencion } from '@/lib/alertas-ronda-intervencion'
 
 export const RONDA_INTERVALO_MINIMO = 15
 export const RONDA_INTERVALO_MAXIMO = 10080
@@ -2344,6 +2345,25 @@ export interface RondaAlerta {
   /** Motivo declarado por el vigilador al suspender (solo tipo 'suspendida'). */
   motivo_vigilador: string | null
   intervenciones: number
+  // ── Resultado de la intervención (migración 20261115120000). Opcionales:
+  // antes de aplicarla la RPC no los devuelve y la pantalla tiene que andar.
+  resultado_intervencion?: ResultadoIntervencion | null
+  motivo_intervencion?: MotivoIntervencion | null
+  seguimiento_hasta?: string | null
+  seguimiento_vencido?: boolean | null
+  /** Ventanas posteriores de la misma ronda y turno agrupadas en esta alerta. */
+  ventanas_adicionales?: number | null
+  ultima_ventana_inicio?: string | null
+  ultima_intervencion?: UltimaIntervencionAlerta | null
+}
+
+export interface UltimaIntervencionAlerta {
+  accion: AccionRondaAlerta
+  resultado: ResultadoIntervencion | null
+  motivo: MotivoIntervencion | null
+  origen: 'supervisor' | 'sistema' | null
+  created_at: string
+  supervisor_nombre: string | null
 }
 
 export type ContextoRondaAlertas = 'ok' | 'sin_usuario' | 'sin_permiso' | 'parametro_invalido'
@@ -2433,22 +2453,60 @@ export type ContextoResolverAlerta =
   | 'motivo_invalido'
   | 'ejecucion_no_bloqueada'
   | 'ejecucion_no_encontrada'
+  // Resultado de la intervención (migración 20261115120000).
+  | 'seguimiento'
+  | 'duplicada'
+  | 'conflicto'
+  | 'requiere_resultado_definitivo'
+  | 'resultado_invalido'
+  | 'motivo_requerido'
+  | 'motivo_invalido_resultado'
+  | 'combinacion_invalida'
+  | 'seguimiento_invalido'
 
 export interface RespuestaResolverAlerta {
   contexto: ContextoResolverAlerta
   alerta_id: string | null
+  /** En 'conflicto' y 'ya_resuelta': quién intervino último y qué decidió. */
+  ultima_intervencion?: UltimaIntervencionAlerta | null
+  seguimiento_hasta?: string | null
 }
 
+export interface OpcionesResultadoIntervencion {
+  resultado: ResultadoIntervencion
+  motivo: MotivoIntervencion
+  /** Sólo con resultado 'seguimiento': 15 a 240 minutos (120 por defecto). */
+  seguimientoMin?: number | null
+  /**
+   * Cuántas intervenciones tenía la alerta cuando se abrió el formulario. Si
+   * cambió (otro supervisor intervino o la cerró), el servidor devuelve
+   * 'conflicto' y no pisa lo que hizo el otro.
+   */
+  intervencionesEsperadas?: number | null
+}
+
+/**
+ * Registra una intervención. Sin `opciones` es la llamada histórica (acción +
+ * comentario); con `opciones` exige resultado y motivo.
+ */
 export async function resolverRondaAlerta(
   alertaId: string,
   accion: AccionRondaAlerta,
   comentario?: string,
+  opciones?: OpcionesResultadoIntervencion,
 ): Promise<ResultadoRondas<RespuestaResolverAlerta>> {
-  const { data, error } = await supabase.rpc('resolver_ronda_alerta', {
+  const args: Record<string, unknown> = {
     p_alerta_id: alertaId,
     p_accion: accion,
     p_comentario: comentario ?? null,
-  })
+  }
+  if (opciones) {
+    args.p_resultado = opciones.resultado
+    args.p_motivo = opciones.motivo
+    args.p_seguimiento_minutos = opciones.resultado === 'seguimiento' ? (opciones.seguimientoMin ?? null) : null
+    args.p_intervenciones_esperadas = opciones.intervencionesEsperadas ?? null
+  }
+  const { data, error } = await supabase.rpc('resolver_ronda_alerta', args)
 
   if (error) {
     return fallaRpc('resolver_ronda_alerta', error, 'No se pudo registrar la intervención.')
@@ -2459,6 +2517,8 @@ export async function resolverRondaAlerta(
     data: {
       contexto: (bruto.contexto ?? 'no_encontrada') as ContextoResolverAlerta,
       alerta_id: bruto.alerta_id ?? null,
+      ultima_intervencion: bruto.ultima_intervencion ?? null,
+      seguimiento_hasta: bruto.seguimiento_hasta ?? null,
     },
     error: null,
   }
@@ -2469,6 +2529,9 @@ export function mensajeContextoResolverAlerta(contexto: ContextoResolverAlerta):
   switch (contexto) {
     case 'registrada':
     case 'resuelta':
+    case 'seguimiento':
+    // El mismo clic llegó dos veces: la primera ya quedó registrada.
+    case 'duplicada':
       return null
     case 'ya_resuelta':          return 'La alerta ya estaba resuelta.'
     case 'sin_usuario':          return 'No se pudo identificar tu usuario operativo.'
@@ -2480,7 +2543,28 @@ export function mensajeContextoResolverAlerta(contexto: ContextoResolverAlerta):
     case 'motivo_invalido':      return 'El motivo del cierre debe tener al menos 10 caracteres.'
     case 'ejecucion_no_bloqueada': return 'La ronda no está en curso: la terminó el vigilador.'
     case 'ejecucion_no_encontrada': return 'La ejecución asociada ya no existe.'
+    case 'conflicto':            return 'La alerta cambió mientras la mirabas: otra persona ya intervino. Revisá lo registrado antes de volver a intentar.'
+    case 'requiere_resultado_definitivo': return 'Esta alerta ya tuvo un seguimiento: ahora corresponde un resultado definitivo (Resuelto o No resuelto).'
+    case 'resultado_invalido':   return 'Elegí un resultado válido.'
+    case 'motivo_requerido':     return 'Elegí el motivo.'
+    case 'motivo_invalido_resultado': return 'El motivo no es válido.'
+    case 'combinacion_invalida': return 'Ese motivo no corresponde a ese resultado.'
+    case 'seguimiento_invalido': return 'El seguimiento puede durar entre 15 minutos y 4 horas.'
   }
+}
+
+/** "Ana Sup · Seguimiento · 14:05" — para el aviso de conflicto. */
+export function describirUltimaIntervencion(
+  u: UltimaIntervencionAlerta | null | undefined,
+  horaDe: (iso: string) => string,
+): string | null {
+  if (!u) return null
+  const quien = u.origen === 'sistema' ? 'Sistema' : (u.supervisor_nombre || 'Otro supervisor')
+  const que = u.resultado === 'resuelto' ? 'Resuelto'
+    : u.resultado === 'seguimiento' ? 'Seguimiento'
+      : u.resultado === 'no_resuelto' ? 'No resuelto'
+        : etiquetaAccionRondaAlerta(u.accion)
+  return `${quien} · ${que} · ${horaDe(u.created_at)}`
 }
 
 // ── Suspender ronda (acción del vigilador) ────────────────────────────────────
