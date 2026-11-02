@@ -20,8 +20,9 @@ import type { Usuario, Objetivo, Turno, RegistroAsistencia, Novedad } from '@/li
 import { evaluarCambioDeFin, mensajeImpacto } from '@/lib/relevo'
 import { repartirHorasDelDia } from '@/lib/horas-del-dia'
 import { ETIQUETA_TIPO_DEVOLUCION, generarBalance, resumenBalance } from '@/lib/balance-mensual'
-import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, tieneTurnoSuperpuesto, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada, sumarDiasFecha } from '@/lib/turnos'
+import { FILTROS_FECHA_TURNOS, MENSAJE_TURNO_SUPERPUESTO, fechasVecinasTurno, fechaActualTurno, filtroFechaTurnosIncluye, filtroFechaTurnosParaFecha, rangoFiltroFechaTurnos, turnoSinCoberturaOperativa, objetivoEstaOperativo, idsObjetivosPausados, registroTieneEntradaConfirmada, sumarDiasFecha } from '@/lib/turnos'
 import type { FiltroFechaTurnos } from '@/lib/turnos'
+import { validarCargaTurno, textoConfirmacionAdvertencias, esErrorTurnoSuperpuesto, type ResultadoValidacionTurno } from '@/lib/validacion-turnos'
 import { formatFechaHora } from '@/lib/formato'
 // Única ruta para escribir lat/lng/radio de un objetivo. `authenticated` no
 // tiene privilegio de UPDATE sobre esas columnas: van sí o sí por acá.
@@ -4889,27 +4890,25 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
 
     const guardiaNuevoId = formEdicion.guardia_id || null
 
-    // Verificar solapamiento solo cuando el turno es FUTURO y se cambia el guardia o los horarios
+    // Verificar la carga del vigilador solo cuando el turno es FUTURO: la
+    // superposición bloquea (también la rechaza el trigger de base); traslado
+    // entre objetivos, doble turno, horas del día y descanso se advierten.
     if (estadoOperativoEdicion === 'FUTURO' && guardiaNuevoId) {
-      const { data, error: turnosError } = await supabase
-        .from('turnos')
-        .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
-        .eq('guardia_id', guardiaNuevoId)
-        .in('fecha', fechasVecinasTurno(turnoEditando.fecha))
-
-      if (turnosError) {
-        setErrorEdicion(turnosError.message)
-        return
-      }
-
-      const candidato = {
+      const validacion = await validarCargaGuardia({
+        id: turnoEditando.id,
         guardia_id: guardiaNuevoId,
+        objetivo_id: (turnoEditando as any).objetivo_id ?? null,
         fecha: turnoEditando.fecha,
         hora_inicio: formEdicion.hora_inicio,
         hora_fin: formEdicion.hora_fin,
-      }
-      if (tieneTurnoSuperpuesto(data || [], candidato, turnoEditando.id, objetivosPausados)) {
+        estado: formEdicion.estado,
+      }, turnoEditando.id)
+      if (validacion === null) return
+      if (validacion.errores.length > 0) {
         setErrorEdicion(MENSAJE_TURNO_SUPERPUESTO)
+        return
+      }
+      if (validacion.advertencias.length > 0 && !window.confirm(textoConfirmacionAdvertencias(validacion.advertencias))) {
         return
       }
     }
@@ -4996,21 +4995,27 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
     cerrarEdicion()
   }
 
-  const guardiaTieneTurnoSuperpuesto = async (candidato: Pick<Turno, 'guardia_id' | 'fecha' | 'hora_inicio' | 'hora_fin'>): Promise<boolean | null> => {
-    if (!candidato.guardia_id) return false
+  // Carga del vigilador alrededor del candidato (día anterior, mismo día y
+  // siguiente). Devuelve null si no se pudo leer: el llamador no guarda.
+  const validarCargaGuardia = async (
+    candidato: { id?: string | null, guardia_id?: string | null, objetivo_id?: string | null, fecha: string, hora_inicio: string, hora_fin: string, estado?: string | null },
+    excluirTurnoId: string | null,
+  ): Promise<ResultadoValidacionTurno | null> => {
+    if (!candidato.guardia_id) return { errores: [], advertencias: [] }
 
     const { data, error: turnosError } = await supabase
       .from('turnos')
-      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id')
+      .select('id, guardia_id, fecha, hora_inicio, hora_fin, objetivo_id, estado')
       .eq('guardia_id', candidato.guardia_id)
       .in('fecha', fechasVecinasTurno(candidato.fecha))
 
     if (turnosError) {
       setError(turnosError.message)
+      setErrorEdicion(turnosError.message)
       return null
     }
 
-    return tieneTurnoSuperpuesto(data || [], candidato, null, objetivosPausados)
+    return validarCargaTurno(candidato, data || [], { excluirTurnoId, objetivosPausados })
   }
 
   // Asignar el guardia del formulario sobre una vacante ya programada, por el
@@ -5093,10 +5098,13 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       estado_revision: 'aprobado',
     }
 
-    const conflicto = payload.guardia_id ? await guardiaTieneTurnoSuperpuesto(payload) : false
-    if (conflicto === null) return
-    if (conflicto) {
+    const validacion = await validarCargaGuardia(payload, null)
+    if (validacion === null) return
+    if (validacion.errores.length > 0) {
       setError(MENSAJE_TURNO_SUPERPUESTO)
+      return
+    }
+    if (validacion.advertencias.length > 0 && !window.confirm(textoConfirmacionAdvertencias(validacion.advertencias))) {
       return
     }
 
@@ -5134,7 +5142,7 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
         tipo_evento: 'normal',
       })
     } else if (error) {
-      setError(error.message)
+      setError(esErrorTurnoSuperpuesto(error) ? MENSAJE_TURNO_SUPERPUESTO : error.message)
     }
 
     setLoading(false)
