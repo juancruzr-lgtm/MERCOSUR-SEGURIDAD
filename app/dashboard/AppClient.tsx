@@ -2830,15 +2830,24 @@ function SupervisionesAdmin({
     if (filtroTabla.tipo === 'supervisor') return base.filter((s: SupervisionAdmin) => s.supervisor_id === filtroTabla.supervisor_id)
     if (filtroTabla.tipo === 'supervisor_hoy') return deHoy.filter((s: SupervisionAdmin) => s.supervisor_id === filtroTabla.supervisor_id)
     if (filtroTabla.tipo === 'objetivo') return base.filter((s: SupervisionAdmin) => s.objetivo_id === filtroTabla.objetivo_id)
+    // Vencidos: UNA fila por objetivo, su última supervisión (la que venció
+    // según la frecuencia del objetivo), sin importar el período elegido. Antes
+    // salían todas las del período y el mismo objetivo aparecía muchas veces.
+    const ultimaDeCadaObjetivo = (ids: Set<string>) => {
+      const vistos = new Set<string>()
+      return recientes(supervisionesConocidas).filter((s: SupervisionAdmin) => {
+        if (!ids.has(s.objetivo_id) || vistos.has(s.objetivo_id)) return false
+        vistos.add(s.objetivo_id)
+        return true
+      })
+    }
     if (filtroTabla.tipo === 'objetivos_vencidos') {
-      const idsVencidos = new Set(objetivosSinSupervision.map((o: Objetivo) => o.id))
-      return base.filter((s: SupervisionAdmin) => idsVencidos.has(s.objetivo_id))
+      return ultimaDeCadaObjetivo(new Set(objetivosSinSupervision.map((o: Objetivo) => o.id)))
     }
     if (filtroTabla.tipo === 'vencidas_supervisor') {
       const asignaciones = (supervisorZonas || []).filter((a: any) => a.supervisor_id === filtroTabla.supervisor_id)
       const zonaIds = new Set(asignaciones.map((a: any) => a.zona_id).filter(Boolean))
-      const idsVencidas = new Set(objetivosActivosRanking.filter((o: Objetivo) => o.zona_id && zonaIds.has(o.zona_id) && objetivoVencidoRanking(o)).map((o: Objetivo) => o.id))
-      return base.filter((s: SupervisionAdmin) => idsVencidas.has(s.objetivo_id))
+      return ultimaDeCadaObjetivo(new Set(objetivosActivosRanking.filter((o: Objetivo) => o.zona_id && zonaIds.has(o.zona_id) && objetivoVencidoRanking(o)).map((o: Objetivo) => o.id)))
     }
     return base.slice(0, 30)
   })()
