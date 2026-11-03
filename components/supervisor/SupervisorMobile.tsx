@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import NuevaPassword from '@/components/auth/NuevaPassword'
 import { alcanceDe, puedeAdministrarRondas } from '@/lib/capacidades'
 import { filtrarTurnosParaAlertas, objetivoIdsParaAlertas } from '@/lib/alertas-alcance'
 import { activarNotificacionesPush } from '@/lib/push-client'
@@ -515,10 +516,6 @@ export default function SupervisorMobile({ user }: any) {
   const [error, setError] = useState('')
   const [asignando, setAsignando] = useState<string | null>(null)
   const [turnoRegistrosAbierto, setTurnoRegistrosAbierto] = useState<string | null>(null)
-  const [nuevaPassword, setNuevaPassword] = useState('')
-  const [confirmarPassword, setConfirmarPassword] = useState('')
-  const [perfilMensaje, setPerfilMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null)
-  const [guardandoPassword, setGuardandoPassword] = useState(false)
   const [filtroTurnos, setFiltroTurnos] = useState<EstadoTurno | 'todos'>('todos')
   const [filtroFecha, setFiltroFecha] = useState<FiltroFechaTurnos>('hoy')
   const [modalTurno, setModalTurno] = useState(false)
@@ -857,33 +854,6 @@ export default function SupervisorMobile({ user }: any) {
     }
 
     setLoading(false)
-  }
-
-  const cambiarPassword = async () => {
-    setPerfilMensaje(null)
-
-    if (nuevaPassword.length < 6) {
-      setPerfilMensaje({ texto: 'La contraseña debe tener al menos 6 caracteres.', tipo: 'error' })
-      return
-    }
-
-    if (nuevaPassword !== confirmarPassword) {
-      setPerfilMensaje({ texto: 'Las contraseñas no coinciden.', tipo: 'error' })
-      return
-    }
-
-    setGuardandoPassword(true)
-    const { error } = await supabase.auth.updateUser({ password: nuevaPassword })
-
-    if (error) {
-      setPerfilMensaje({ texto: error.message, tipo: 'error' })
-    } else {
-      setNuevaPassword('')
-      setConfirmarPassword('')
-      setPerfilMensaje({ texto: 'Contraseña actualizada correctamente.', tipo: 'ok' })
-    }
-
-    setGuardandoPassword(false)
   }
 
   useEffect(() => {
@@ -4439,36 +4409,14 @@ export default function SupervisorMobile({ user }: any) {
                     Por seguridad, cambie su contraseña inicial si todavía usa su DNI.
                   </div>
 
-                  <label style={label}>Nueva contraseña</label>
-                  <input
-                    type="password"
-                    value={nuevaPassword}
-                    onChange={e => setNuevaPassword(e.target.value)}
-                    style={input}
+                  <NuevaPassword
+                    estilos={{
+                      label,
+                      input,
+                      boton: refreshButton,
+                      mensaje: tipo => ({ ...errorBox, color: tipo === 'ok' ? '#10b981' : '#fca5a5', borderColor: tipo === 'ok' ? 'rgba(16,185,129,.35)' : 'rgba(239,68,68,.35)', background: tipo === 'ok' ? 'rgba(16,185,129,.12)' : 'rgba(239,68,68,.12)' }),
+                    }}
                   />
-
-                  <label style={label}>Confirmar contraseña</label>
-                  <input
-                    type="password"
-                    value={confirmarPassword}
-                    onChange={e => setConfirmarPassword(e.target.value)}
-                    style={input}
-                  />
-
-                  {perfilMensaje && (
-                    <div style={{ ...errorBox, color: perfilMensaje.tipo === 'ok' ? '#10b981' : '#fca5a5', borderColor: perfilMensaje.tipo === 'ok' ? 'rgba(16,185,129,.35)' : 'rgba(239,68,68,.35)', background: perfilMensaje.tipo === 'ok' ? 'rgba(16,185,129,.12)' : 'rgba(239,68,68,.12)' }}>
-                      {perfilMensaje.texto}
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={cambiarPassword}
-                    disabled={guardandoPassword}
-                    style={{ ...refreshButton, opacity: guardandoPassword ? 0.65 : 1 }}
-                  >
-                    {guardandoPassword ? 'Guardando...' : 'Cambiar contraseña'}
-                  </button>
                   <DiagnosticoDispositivo />
                 </div>
               </section>
