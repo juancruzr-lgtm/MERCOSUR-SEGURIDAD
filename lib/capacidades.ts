@@ -152,7 +152,7 @@ const CAPACIDADES_POR_PUESTO: Record<PuestoOrganizacional, Capacidad[]> = {
   // operativa + supervisión. NO gestiona personal (administrativo) ni económico.
   // Suma gestionar_objetivos_operativos para poder crear objetivos por alcance.
   direccion_operativa: [...OPERACION_SUPERVISOR, 'gestionar_turnos', 'gestionar_objetivos', 'gestionar_objetivos_operativos', 'supervisar_todas_zonas', 'configurar_sistema'],
-  administracion: ['ver_operacion', 'revisar_operativa', 'revisar_planillas', 'gestionar_turnos', ...ADMINISTRATIVO, 'gestionar_objetivos_operativos', 'gestionar_personal_operativo', 'configurar_sistema', 'preparar_liquidacion'],
+  administracion: ['ver_operacion', 'revisar_operativa', 'revisar_planillas', 'gestionar_turnos', ...ADMINISTRATIVO, 'gestionar_objetivos_operativos', 'gestionar_personal_operativo', 'configurar_sistema', 'preparar_liquidacion', 'gestionar_facturacion'],
   gerencia: [
     'ver_operacion', ...OPERACION_SUPERVISOR, 'gestionar_turnos', ...ADMINISTRATIVO, ...OPERATIVO_ALCANCE, 'supervisar_todas_zonas',
     'configurar_sistema', 'preparar_liquidacion', ...GERENCIAL_ECONOMICO,
