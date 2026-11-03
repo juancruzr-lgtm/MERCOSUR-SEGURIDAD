@@ -56,8 +56,20 @@ export async function subirDocumento(archivo: File, tipo: string, extra: { clien
 }
 
 export const ESTADO_PREPARACION: Record<string, string> = {
-  en_preparacion: 'En preparación', esperando_requisitos: 'Esperando requisitos', lista_revision: 'Lista para revisión',
-  aprobada_emitir: 'Aprobada para emitir', emitida: 'Emitida', descartada: 'Descartada',
+  en_preparacion: 'Borrador', esperando_requisitos: 'Bloqueada por información faltante', lista_revision: 'En revisión',
+  aprobada_emitir: 'Aprobada · pendiente de emisión', emitida: 'Emitida', descartada: 'Descartada',
+}
+
+/**
+ * Estado que ve Administración. "En revisión" se divide según haya o no
+ * observaciones: con avisos → requiere revisión; sin avisos → lista para aprobar.
+ */
+export function estadoVisible(p: { estado: string; avisos?: unknown[] | null } | null): { clave: string; texto: string } {
+  if (!p) return { clave: 'pendiente_generar', texto: 'Pendiente de generar' }
+  if (p.estado === 'lista_revision') {
+    return (p.avisos ?? []).length ? { clave: 'requiere_revision', texto: 'Requiere revisión' } : { clave: 'lista_aprobar', texto: 'Lista para aprobar' }
+  }
+  return { clave: p.estado, texto: ESTADO_PREPARACION[p.estado] ?? p.estado }
 }
 export const ESTADO_ENTREGA: Record<string, string> = { pendiente: 'Entrega pendiente', enviada: 'Enviada', no_requiere: 'Sin entrega' }
 export const ESTADO_PORTAL: Record<string, string> = { no_requiere: '—', pendiente: 'Portal pendiente', presentada: 'Presentada', observada: 'Observada', aceptada: 'Aceptada' }

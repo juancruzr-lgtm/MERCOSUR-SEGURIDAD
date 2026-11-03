@@ -24,6 +24,7 @@ function variacion(actual: number, previo: number) {
 export default function Tablero({ mes }: { mes: string }) {
   const [t, setT] = useState<any>(null)
   const [serie, setSerie] = useState<any[]>([])
+  const [venc, setVenc] = useState<any>(null)
   const [cliente, setCliente] = useState('')
   const [objetivo, setObjetivo] = useState('')
   const [clientes, setClientes] = useState<any[]>([])
@@ -38,6 +39,8 @@ export default function Tablero({ mes }: { mes: string }) {
     const f = { p_cliente_id: cliente || null, p_objetivo_id: objetivo || null }
     setT(await rpc('fact_tablero', { p_mes: mes, p_hoy: null, ...f }))
     setSerie(await rpc('fact_tablero_serie', { p_desde: mesMas(mes, -12), p_hasta: mes, ...f }))
+    const hoy = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())
+    setVenc(await rpc('fact_tablero_vencimientos', { p_mes: mes, p_hoy: hoy, ...f }))
   }) }, [mes, cliente, objetivo]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const objsDelCliente = objetivos.filter(o => !cliente || o.contrato?.cliente_id === cliente)
@@ -61,6 +64,20 @@ export default function Tablero({ mes }: { mes: string }) {
   return (
     <div>
       {filtros}
+      {venc && <div style={S.card}>
+        <h3 style={S.h3}>Prefacturas de {mes} y vencimientos al día de hoy</h3>
+        <div style={S.fila}>
+          <Dato t="Prefacturas pendientes" v={String(Number(venc.prefacturas.en_preparacion) + Number(venc.prefacturas.en_revision))} sub={`${venc.prefacturas.bloqueadas} bloqueadas por información faltante`} />
+          <Dato t="Aprobadas pendientes de emisión" v={String(venc.prefacturas.aprobadas_sin_emitir)} sub={pesos(venc.prefacturas.total_aprobado_sin_emitir_c)} />
+          <Dato t="Emitidas" v={String(venc.prefacturas.emitidas)} />
+          <Dato t="Pendientes de presentación" v={String(venc.pendientes_presentacion)} sub="el plazo corre desde la presentación" />
+          <Dato t="Próximas a vencer (7 días)" v={String(venc.proximas.n)} sub={pesos(venc.proximas.saldo_c)} />
+          <Dato t="Vencidas" v={String(venc.vencidas.n)} sub={pesos(venc.vencidas.saldo_c)} />
+          <Dato t="Pendiente de cobro" v={pesos(venc.pendiente_cobro_c)} sub="sujeto a conciliación" />
+          <Dato t="Intereses potenciales" v={pesos(venc.intereses_potenciales_c)} sub={`aprobados ${pesos(venc.intereses_aprobados_c)} · nada se aplica solo`} />
+          <Dato t="Sin condición de pago" v={String(venc.sin_condicion)} sub="vencimiento pendiente de definir" />
+        </div>
+      </div>}
       <div style={S.card}>
         <h3 style={S.h3}>Prestación de {mes} — horas facturables</h3>
         <div style={S.fila}>

@@ -95,6 +95,18 @@ export async function aprobarHoras(db: SupabaseClient, p: {
  * Genera o recalcula las prefacturas del mes para los contratos vigentes.
  * No pisa texto editado, no toca emitidas ni descartadas.
  */
+/**
+ * Tipo de comprobante: el del contrato, el del cliente o el que surge sin duda de
+ * la condición frente al IVA. Monotributo o sin condición cargada → null (no se supone).
+ */
+export function tipoComprobanteDe(contrato?: number | null, cliente?: number | null, condicionIva?: string | null): number | null {
+  if (contrato) return contrato
+  if (cliente) return cliente
+  if (condicionIva === 'responsable_inscripto') return 1
+  if (condicionIva === 'exento' || condicionIva === 'consumidor_final' || condicionIva === 'sujeto_no_categorizado') return 6
+  return null
+}
+
 export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = fechaArgentina()) {
   const resumen = { creadas: 0, actualizadas: 0, sin_cambios: 0, errores: [] as string[] }
   const [{ data: contratos, error: e1 }, { data: cfg }] = await Promise.all([
@@ -192,7 +204,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         })
         if (faltanAprobar.length && modalidad !== 'abono') r.requisitos.push({ tipo: 'horas_aprobadas', detalle: `Faltan aprobar horas de: ${faltanAprobar.join(', ')}` })
         if (cambios?.length) r.avisos.push('Hay un cambio de tarifa dentro del período: revisar el precio aplicado.')
-        if (!puntoVenta) r.avisos.push('Falta configurar el punto de venta Web Service (no se puede aprobar sin él).')
+        if (!puntoVenta) r.avisos.push('Falta configurar el punto de venta Web Service: se puede aprobar, pero no emitir por ARCA.')
         // Ajustes comerciales aprobados de la prefactura existente.
         if (existente) {
           const { data: ajs } = await db.from('fact_ajustes').select('*').eq('prefactura_id', existente.id).is('anulado_at', null)
@@ -205,7 +217,8 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
             Object.assign(r, { lineas: r2.lineas, importes: r2.importes, avisos: [...r.avisos, ...r2.avisos.filter(x => !r.avisos.includes(x))] })
           }
         }
-        const tipoComp = k.tipo_comprobante ?? k.cliente?.tipo_comprobante ?? (k.cliente?.condicion_iva === 'responsable_inscripto' ? 1 : 6)
+        const tipoComp = tipoComprobanteDe(k.tipo_comprobante, k.cliente?.tipo_comprobante, k.cliente?.condicion_iva)
+        if (tipoComp == null) r.requisitos.push({ tipo: 'definicion_comercial', detalle: 'Definir la condición frente al IVA del cliente o el tipo de comprobante (A, B o FCE).' })
         const datos: Record<string, unknown> = {
           cliente_id: k.cliente_id, contrato_id: k.id, agrupacion_clave: g.clave, objetivo_id: g.objetivoId, periodo_mes: mes,
           periodo_desde: periodo.desde, periodo_hasta_excl: periodo.hastaExclusivo, estado: estadoSugerido(r),

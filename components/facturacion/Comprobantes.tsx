@@ -78,8 +78,8 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
         <h3 style={S.h3}>Notas de crédito / débito en curso</h3>
         {notas.map(n => <div key={n.id} style={{ ...S.fila, fontSize: 13 }}>
           Tipo {n.tipo} · {pesos(n.solicitud?.total_c)} · {n.alcance_nota ?? ''} · {n.motivo} · {n.estado}
-          {n.estado === 'pendiente_aprobacion' && n.creado_por !== usuarioId && <button style={S.btn2} onClick={() => correr(async () => { await rpc('fact_nota_aprobar', { p_emision_id: n.id }); await cargar() }, 'Nota aprobada')}>Aprobar</button>}
-          {n.estado === 'pendiente_aprobacion' && n.creado_por === usuarioId && <span style={S.sub}>la aprueba otra persona</span>}
+          {n.estado === 'pendiente_aprobacion' && <button style={S.btn2} onClick={() => correr(async () => { await rpc('fact_nota_aprobar', { p_emision_id: n.id }); await cargar() }, 'Nota aprobada')}>Aprobar</button>}
+          {n.estado === 'pendiente_aprobacion' && n.creado_por === usuarioId && <span style={S.sub}>(la pediste vos: queda registrado quién pidió y quién aprobó)</span>}
           {['preparada', 'incierta', 'rechazada'].includes(n.estado) && <button style={S.btn2} onClick={() => correr(async () => { const r = await api('emitir', { emision_id: n.id }); await cargar(); if (r.estado !== 'autorizada') throw new Error(r.motivo ?? r.error ?? r.estado) }, 'Nota autorizada')}>{n.estado === 'incierta' ? 'Consultar ARCA' : `Emitir (${n.ambiente})`}</button>}
         </div>)}
       </div>}
@@ -103,6 +103,7 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
                 <td style={S.td}>{c.cae ?? '—'}</td><td style={S.td}>{c.origen}</td>
                 <td style={S.td}>
                   {(!c.cliente_id || (esNota && !c.asociado_id)) && <button style={S.btn2} onClick={() => setAsoc({ id: c.id, cliente_id: c.cliente_id ?? '', asociado_id: '', motivo: '' })}>Asociar</button>}
+                  {c.cae && <button style={S.btn2} onClick={() => correr(async () => { const r = await api(`comprobante-pdf?id=${c.id}`, undefined, 'GET'); window.open(r.url, '_blank', 'noopener') })}>PDF</button>}
                   {!esNota && <button style={S.btn2} onClick={() => setNc({ id: c.id, tipo: String(c.tipo === 1 ? 3 : c.tipo === 6 ? 8 : 203), neto: '', iva: '', motivo: '' })}>NC/ND</button>}
                 </td>
               </tr>
@@ -141,7 +142,7 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
           <button style={S.btn} onClick={() => correr(async () => {
             await rpc('fact_nota_solicitar', { p_comprobante_id: nc.id, p_tipo: Number(nc.tipo), p_neto_c: centavosDe(nc.neto), p_iva_c: centavosDe(nc.iva) ?? 0, p_motivo: nc.motivo, p_ambiente: 'produccion' })
             setNc(null); await cargar()
-          }, 'Nota solicitada: la aprueba otra persona antes de emitir')}>Solicitar</button>
+          }, 'Nota solicitada: queda pendiente de aprobación antes de emitir')}>Solicitar</button>
           <button style={S.btn2} onClick={() => setNc(null)}>Cancelar</button>
         </div>
       </div>}

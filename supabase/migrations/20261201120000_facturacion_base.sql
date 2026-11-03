@@ -108,9 +108,12 @@ create table if not exists public.fact_clientes (
   id                     uuid primary key default gen_random_uuid(),
   cuit                   text check (cuit is null or (cuit ~ '^\d{11}$' and public.fact_cuit_valido(cuit))),
   razon_social           text not null check (length(trim(razon_social)) > 1),
-  condicion_iva          text not null default 'responsable_inscripto'
+  -- Sin valor por defecto: la condición del receptor es obligatoria en WSFEv1 (RG 5616) y no se supone.
+  condicion_iva          text
                            check (condicion_iva in ('responsable_inscripto', 'exento', 'consumidor_final', 'monotributo', 'sujeto_no_categorizado')),
   tipo_comprobante       integer check (tipo_comprobante in (1, 6, 201)),
+  -- Domicilio del receptor: va impreso en el comprobante.
+  domicilio              text,
   notas                  text,
   activo                 boolean not null default true,
   version                integer not null default 1,
@@ -233,7 +236,7 @@ create table if not exists public.fact_documentos (
   bytes               bigint check (bytes is null or bytes >= 0),
   sha256              text not null check (sha256 ~ '^[0-9a-f]{64}$'),
   -- Entrada: hoy 'carga_manual'; 'correo' queda listo para la casilla de facturación.
-  origen              text not null default 'carga_manual' check (origen in ('carga_manual', 'correo', 'importacion')),
+  origen              text not null default 'carga_manual' check (origen in ('carga_manual', 'correo', 'importacion', 'generado_app')),
   origen_ref          text,       -- p. ej. Message-ID del correo
   remitente           text,
   asunto              text,
@@ -390,7 +393,8 @@ create index if not exists ix_fact_prefacturas_periodo on public.fact_prefactura
 create or replace function public.fact_prefactura_huella(p public.fact_prefacturas)
 returns text language sql immutable set search_path = public, pg_catalog as $fn$
   select md5(jsonb_build_array(
-    coalesce(p.cuit_receptor, ''), coalesce(p.tipo_comprobante, 0), coalesce(p.punto_venta, 0),
+    -- El punto de venta es del canal de emisión (fact_config), no del contenido aprobado.
+    coalesce(p.cuit_receptor, ''), coalesce(p.tipo_comprobante, 0),
     p.periodo_desde, p.periodo_hasta_excl, p.lineas, p.neto_c, p.iva_c, p.total_c,
     regexp_replace(trim(coalesce(p.texto_factura, '')), '\s+', ' ', 'g'), p.fecha_vencimiento, p.oc_id
   )::text)
@@ -535,16 +539,17 @@ declare v_actor uuid := public.facturacion_gate(); v_id uuid; v_cuit text := nul
 begin
   if v_cuit is not null and not public.fact_cuit_valido(v_cuit) then raise exception 'CUIT inválido: %', p_datos->>'cuit'; end if;
   if p_id is null then
-    insert into public.fact_clientes (cuit, razon_social, condicion_iva, tipo_comprobante, notas, creado_por, actualizado_por)
-    values (v_cuit, trim(p_datos->>'razon_social'), coalesce(p_datos->>'condicion_iva', 'responsable_inscripto'),
-            nullif(p_datos->>'tipo_comprobante', '')::int, p_datos->>'notas', v_actor, v_actor)
+    insert into public.fact_clientes (cuit, razon_social, condicion_iva, tipo_comprobante, domicilio, notas, creado_por, actualizado_por)
+    values (v_cuit, trim(p_datos->>'razon_social'), nullif(p_datos->>'condicion_iva', ''),
+            nullif(p_datos->>'tipo_comprobante', '')::int, nullif(trim(p_datos->>'domicilio'), ''), p_datos->>'notas', v_actor, v_actor)
     returning id into v_id;
     perform public.fact_registrar('cliente', v_id, 'alta', p_datos, v_actor);
   else
     update public.fact_clientes set
       cuit = v_cuit, razon_social = trim(p_datos->>'razon_social'),
-      condicion_iva = coalesce(p_datos->>'condicion_iva', condicion_iva),
+      condicion_iva = coalesce(nullif(p_datos->>'condicion_iva', ''), condicion_iva),
       tipo_comprobante = nullif(p_datos->>'tipo_comprobante', '')::int,
+      domicilio = case when p_datos ? 'domicilio' then nullif(trim(p_datos->>'domicilio'), '') else domicilio end,
       notas = p_datos->>'notas', activo = coalesce((p_datos->>'activo')::boolean, activo),
       version = version + 1, actualizado_por = v_actor, updated_at = now()
     where id = p_id and version = coalesce(p_version, version)
@@ -904,8 +909,9 @@ begin
   if v.estado <> 'lista_revision' then raise exception 'Sólo se aprueba una prefactura lista para revisión (está %)', v.estado; end if;
   if jsonb_array_length(v.requisitos) > 0 then raise exception 'Hay requisitos pendientes'; end if;
   if v.total_c is null or v.total_c <= 0 then raise exception 'La prefactura no tiene importe calculado'; end if;
-  if v.cuit_receptor is null or v.tipo_comprobante is null or v.punto_venta is null then
-    raise exception 'Faltan CUIT del receptor, tipo de comprobante o punto de venta';
+  -- Aprobar es comercial: el punto de venta y las credenciales de ARCA se exigen al emitir.
+  if v.cuit_receptor is null or v.tipo_comprobante is null then
+    raise exception 'Faltan CUIT del receptor o tipo de comprobante';
   end if;
   if exists (select 1 from public.fact_ajustes a where a.prefactura_id = p_id and a.anulado_at is null and a.aprobado_at is null) then
     raise exception 'Hay ajustes comerciales sin aprobar o anular';

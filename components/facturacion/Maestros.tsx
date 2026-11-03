@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { leer, rpc, MODALIDADES, REQUISITOS } from '@/lib/facturacion/datos'
 import { cuitValido } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
+import { CONDICIONES_IVA, CondicionesContrato, DatosEmisor, DatosFiscalesCliente, resumenCondiciones } from './Condiciones'
 
 const CONTRATO_VACIO = {
   nombre: '', modalidad: 'por_hora', agrupacion: 'cliente', regla_periodo: 'mes_calendario', dia_corte: '', separar_diurna_nocturna: false, superposicion: 'unir',
@@ -16,7 +17,7 @@ export default function Maestros() {
   const [clientes, setClientes] = useState<any[]>([])
   const [objetivos, setObjetivos] = useState<any[]>([])
   const [sel, setSel] = useState<string | null>(null)
-  const [nuevo, setNuevo] = useState({ razon_social: '', cuit: '', condicion_iva: 'responsable_inscripto' })
+  const [nuevo, setNuevo] = useState({ razon_social: '', cuit: '', condicion_iva: '', domicilio: '' })
   const { ocupado, correr, Mensaje } = useAccion()
 
   async function cargar() {
@@ -27,6 +28,7 @@ export default function Maestros() {
 
   return (
     <div>
+      <DatosEmisor />
       <div style={S.card}>
         <h3 style={S.h3}>Clientes</h3>
         <div style={S.fila}>
@@ -34,10 +36,11 @@ export default function Maestros() {
           <input style={S.input} placeholder="CUIT" value={nuevo.cuit} onChange={e => setNuevo({ ...nuevo, cuit: e.target.value })} />
           {nuevo.cuit && !cuitValido(nuevo.cuit) && <span style={S.err}>CUIT inválido</span>}
           <select style={S.input} value={nuevo.condicion_iva} onChange={e => setNuevo({ ...nuevo, condicion_iva: e.target.value })}>
-            {['responsable_inscripto', 'exento', 'consumidor_final', 'monotributo', 'sujeto_no_categorizado'].map(x => <option key={x}>{x}</option>)}
+            <option value="">Condición frente al IVA…</option>{Object.entries(CONDICIONES_IVA).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
+          <input style={S.input} placeholder="Domicilio" value={nuevo.domicilio} onChange={e => setNuevo({ ...nuevo, domicilio: e.target.value })} />
           <button style={S.btn} disabled={ocupado || !nuevo.razon_social} onClick={() => correr(async () => {
-            await rpc('fact_cliente_guardar', { p_id: null, p_datos: nuevo }); setNuevo({ razon_social: '', cuit: '', condicion_iva: 'responsable_inscripto' }); await cargar()
+            await rpc('fact_cliente_guardar', { p_id: null, p_datos: nuevo }); setNuevo({ razon_social: '', cuit: '', condicion_iva: '', domicilio: '' }); await cargar()
           }, 'Cliente creado')}>Agregar cliente</button>
           <Mensaje />
         </div>
@@ -47,7 +50,7 @@ export default function Maestros() {
             <tr key={c.id} style={{ background: c.id === sel ? '#111c35' : undefined }}>
               <td style={S.td}>{c.razon_social}{!c.activo && <span style={S.sub}> (inactivo)</span>}</td>
               <td style={S.td}>{c.cuit ?? <span style={S.err}>sin CUIT</span>}</td>
-              <td style={S.td}>{c.condicion_iva}</td>
+              <td style={S.td}>{c.condicion_iva ? CONDICIONES_IVA[c.condicion_iva] : <span style={S.err}>sin cargar</span>}</td>
               <td style={S.td}><button style={S.btn2} onClick={() => setSel(c.id === sel ? null : c.id)}>{c.id === sel ? 'Cerrar' : 'Abrir'}</button></td>
             </tr>
           ))}</tbody>
@@ -64,6 +67,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
   const [contacto, setContacto] = useState({ nombre: '', email: '', rol: 'destinatario_factura', objetivo_id: '' })
   const [k, setK] = useState<any>(CONTRATO_VACIO)
   const [kId, setKId] = useState<string | null>(null)
+  const [condId, setCondId] = useState<string | null>(null)
   const [tar, setTar] = useState({ contrato_id: '', objetivo_id: '', concepto: 'hora', precio: '', iva: 'sin_definir', alicuota: '21', desde: '', motivo: '' })
   const [vinc, setVinc] = useState({ contrato_id: '', objetivo_id: '', desde: '', hasta: '' })
   const [oc, setOc] = useState({ tipo: 'orden_compra', numero: '', fecha: '', vigencia_desde: '', vigencia_hasta: '', monto: '', monto_con_iva: true, horas: '', aceptado_at: '', condiciones: '', objetivos: [] as string[] })
@@ -89,6 +93,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
     <div style={S.card}>
       <h3 style={S.h3}>{cliente.razon_social} · {cliente.cuit ?? 'sin CUIT'}</h3>
       <Mensaje />
+      <DatosFiscalesCliente key={cliente.version} cliente={cliente} alGuardar={alCambiar} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16 }}>
         <div>
           <h4 style={S.sub}>ALIAS (planillas, banco, documentos)</h4>
@@ -122,6 +127,9 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
               <b>{x.nombre}</b> · {MODALIDADES[x.modalidad]} · {x.agrupacion === 'objetivo' ? 'factura por objetivo' : 'factura por cliente'} · {x.regla_periodo === 'corte' ? `del ${x.dia_corte} al ${x.dia_corte - 1}` : 'mes calendario'} · {x.estado}
               {x.requisitos?.length > 0 && <span style={S.sub}> · requiere {x.requisitos.map((r: string) => REQUISITOS[r]).join(', ')}</span>}
               <button style={{ ...S.btn2, marginLeft: 6, padding: '2px 8px' }} onClick={() => { setKId(x.id); setK({ ...CONTRATO_VACIO, ...x, dia_corte: x.dia_corte ?? '', dias_vencimiento: x.dias_vencimiento ?? '', tipo_comprobante: x.tipo_comprobante ?? '', franja_nocturna_desde: x.franja_nocturna_desde ?? '', franja_nocturna_hasta: x.franja_nocturna_hasta ?? '', vigencia_desde: x.vigencia_desde ?? '', vigencia_hasta: x.vigencia_hasta ?? '', pendientes: (x.pendientes_comerciales ?? []).join('\n'), notas: x.notas ?? '' }) }}>Editar</button>
+              <button style={{ ...S.btn2, marginLeft: 6, padding: '2px 8px' }} onClick={() => setCondId(condId === x.id ? null : x.id)}>Pago y mora</button>
+              <div style={{ ...S.sub, color: x.pago_evento ? '#64748b' : '#fbbf24' }}>{resumenCondiciones(x)}</div>
+              {condId === x.id && <CondicionesContrato key={x.version} contrato={x} alGuardar={() => { setCondId(null); hecho() }} />}
             </div>
           ))}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 6 }}>
@@ -130,7 +138,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
             <select style={S.input} value={k.agrupacion} onChange={e => setK({ ...k, agrupacion: e.target.value })}><option value="cliente">Una factura por cliente</option><option value="objetivo">Una factura por objetivo</option></select>
             <select style={S.input} value={k.regla_periodo} onChange={e => setK({ ...k, regla_periodo: e.target.value })}><option value="mes_calendario">Mes calendario</option><option value="corte">Corte (día N al N-1)</option></select>
             {k.regla_periodo === 'corte' && <input style={S.input} placeholder="Día de inicio (p. ej. 26)" value={k.dia_corte} onChange={e => setK({ ...k, dia_corte: e.target.value })} />}
-            <input style={S.input} placeholder="Días de vencimiento" value={k.dias_vencimiento} onChange={e => setK({ ...k, dias_vencimiento: e.target.value })} />
+            <input style={S.input} placeholder="Plazo de pago (días)" value={k.dias_vencimiento} onChange={e => setK({ ...k, dias_vencimiento: e.target.value })} />
             <select style={S.input} value={k.tipo_comprobante} onChange={e => setK({ ...k, tipo_comprobante: e.target.value })}><option value="">Comprobante según IVA del cliente</option><option value="1">Factura A</option><option value="6">Factura B</option><option value="201">FCE A</option></select>
             <select style={S.input} value={k.canal_entrega} onChange={e => setK({ ...k, canal_entrega: e.target.value })}>{['email', 'portal', 'papel'].map(x => <option key={x}>{x}</option>)}</select>
             <label style={S.sub}><input type="checkbox" checked={k.separar_diurna_nocturna} onChange={e => setK({ ...k, separar_diurna_nocturna: e.target.checked })} /> Separar diurnas / nocturnas</label>

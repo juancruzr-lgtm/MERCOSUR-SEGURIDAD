@@ -1,4 +1,4 @@
-// Prueba de 20261201120000/130000/140000 (facturación, ARCA, cuentas corrientes) sobre PGlite.
+// Prueba de 20261201120000/130000/140000/150000 (facturación, ARCA, cuentas corrientes, vencimientos e intereses) sobre PGlite.
 //   npm i --no-save @electric-sql/pglite@0.2.17
 //   node supabase/pruebas/facturacion/run.mjs
 // (o PGLITE=<ruta a node_modules/@electric-sql/pglite/dist/index.js> si está instalado en otra carpeta)
@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -59,7 +59,7 @@ insert into public.objetivos (id, nombre, cliente) values
   ('00000000-0000-0000-0000-00000000b005', 'ACA ROSARIO DEPOSITO', 'ACA');
 `)
 for (const m of MIGS) await db.exec(readFileSync(`${REPO}/supabase/migrations/${m}.sql`, 'utf8'))
-ok('las tres migraciones aplican', true)
+ok('las cuatro migraciones aplican', true)
 
 // ── Permisos ───────────────────────────────────────────────────────────────
 const CAD = await como(ADM, async () => (await uno(`select public.fact_cliente_guardar(null, '{"razon_social":"CONEXION ALTO DELTA S.A.","cuit":"30-71234567-2"}'::jsonb) id`).catch(() => null)))
@@ -406,6 +406,99 @@ const oct26 = serie.find(x => x.mes === '2026-10'), oct25 = serie.find(x => x.me
 ok('serie de 13 meses con prestación, emisión y cobro separados', serie.length === 13 && Number(ago26.horas.facturadas) === 544
   && oct26.montos.cobrado_c > 0 && oct25.montos.cobrado_c === 0, JSON.stringify([ago26.horas, oct26.montos.cobrado_c, oct25.montos]))
 ok('la serie rechaza rangos excesivos', await falla(() => como(GER, () => sql(`select public.fact_tablero_serie('2020-01', '2026-10')`)), /Rango/))
+
+// ── Circuito 20261201150000: aprobación sin punto de venta, emisión manual, vencimientos, intereses ──
+const cliCond = await cliente(ADM, { razon_social: 'CLIENTE CONDICIONES SA', cuit: '30716728397', condicion_iva: 'responsable_inscripto' })
+ok('cliente sin condición frente al IVA no recibe una supuesta', (await uno(`select condicion_iva from public.fact_clientes where id = $1`, [altoDelta])).condicion_iva === null)
+const kCond = await contrato({ cliente_id: cliCond, nombre: 'Vigilancia', modalidad: 'por_hora', tipo_comprobante: 1, estado: 'vigente', dias_vencimiento: 30 })
+const prefManual = (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: cliCond, contrato_id: kCond,
+  agrupacion_clave: `contrato:${kCond}`, periodo_mes: '2026-09', periodo_desde: '2026-09-01', periodo_hasta_excl: '2026-10-01', lineas: [],
+  neto_c: 82644628, iva_c: 17355372, total_c: 100000000, cuit_receptor: '30716728397', tipo_comprobante: 1, estado: 'lista_revision', requisitos: [],
+  texto_factura: 'Servicio de vigilancia septiembre 2026' })]))).id
+const vM = async () => (await uno(`select version from public.fact_prefacturas where id = $1`, [prefManual])).version
+await como(ADM, async () => sql(`select public.fact_prefactura_aprobar($1, $2)`, [prefManual, await vM()]))
+ok('se aprueba sin punto de venta (aprobar es comercial)', (await uno(`select estado, aprobada_por from public.fact_prefacturas where id = $1`, [prefManual])).aprobada_por === ADM)
+ok('sin punto de venta configurado no se prepara la emisión', await falla(() => como(ADM, async () => sql(`select public.fact_emision_preparar($1, $2, 'produccion')`, [prefManual, await vM()])), /punto de venta/))
+await db.exec(`update public.fact_config set valor = valor || '{"punto_venta": 1}' where clave = 'emision'`)
+const eM = (await como(ADM, async () => uno(`select public.fact_emision_preparar($1, $2, 'produccion') r`, [prefManual, await vM()]))).r
+await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 4100, '{}'::jsonb)`, [eM.id]))
+const manual = (extra = {}) => como(ADM, async () => uno(`select public.fact_comprobante_manual_registrar($1, $2, $3::jsonb) id`, [prefManual, await vM(),
+  JSON.stringify({ tipo: 1, punto_venta: 1, numero: 4100, fecha: '2026-10-05', cuit_receptor: '30-71672839-7', neto_c: 82644628, iva_c: 17355372, total_c: 100000000,
+    cae: '86400000000001', cae_vto: '2026-10-15', ...extra })]))
+ok('emisión manual bloqueada mientras hay un envío por API en curso', await falla(() => manual(), /en curso o incierta/))
+await servidor(() => sql(`select public.fact_emision_resultado($1, 'R', '{"Resultado":"R"}'::jsonb, null, null, null, 'Error 10016')`, [eM.id]))
+ok('error de ARCA (R) deja la emisión rechazada, sin comprobante', (await uno(`select estado from public.fact_emisiones where id = $1`, [eM.id])).estado === 'rechazada')
+ok('emisión manual con otro total se rechaza', await falla(() => manual({ total_c: 100000001 }), /total/))
+ok('emisión manual con otro tipo se rechaza', await falla(() => manual({ tipo: 6 }), /tipo/))
+ok('emisión manual con CAE inválido se rechaza', await falla(() => manual({ cae: '123' }), /CAE/))
+const compManual = (await manual()).id
+const trasManual = await uno(`select (select estado from public.fact_prefacturas where id = $1) pe, (select estado from public.fact_emisiones where id = $2) ee,
+  (select origen from public.fact_comprobantes where id = $3) o`, [prefManual, eM.id, compManual])
+ok('factura manual registrada: prefactura emitida, emisión API abandonada', trasManual.pe === 'emitida' && trasManual.ee === 'abandonada' && trasManual.o === 'carga_manual', JSON.stringify(trasManual))
+ok('…y la API ya no puede emitir otra para esa prefactura', await falla(() => como(ADM, async () => sql(`select public.fact_emision_preparar($1, $2, 'produccion')`, [prefManual, await vM()])))
+  && await falla(() => servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 4101, '{}'::jsonb)`, [eM.id]))))
+ok('no se registra dos veces', await falla(() => manual()))
+
+// Vencimiento comercial según el contrato y las fechas reales.
+const venc = async (hoy = '2026-11-03') => (await como(ADM, () => uno(`select public.fact_vencimientos($1, $2) v`, [hoy, cliCond]))).v.find(x => x.comprobante_id === compManual)
+ok('sin evento de pago cargado: condición comercial pendiente de definir', (await venc()).estado_mora === 'sin_vencimiento' && (await venc()).vencimiento.motivo === 'Condición comercial pendiente de definir')
+await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"pago_evento":"presentacion","dias_vencimiento":30}'::jsonb)`, [kCond]))
+ok('plazo desde la presentación sin fecha de presentación: pendiente', (await venc()).vencimiento.estado === 'evento_pendiente')
+await como(ADM, () => sql(`select public.fact_seguimiento_registrar($1, '{"presentada_el":"2026-10-05"}'::jsonb)`, [compManual]))
+ok('30 días desde la presentación del 05/10 → vence 04/11 (no 30 días desde la emisión por defecto)', (await venc()).vencimiento.vencimiento === '2026-11-04'
+  && (await venc()).estado_mora === 'proxima')
+await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"pago_evento":"fecha_fija","dias_vencimiento":0,"pago_dia_mes":31}'::jsonb)`, [kCond]))
+ok('fecha fija día 31 cae el último día del mes (31/10)', (await venc()).vencimiento.vencimiento === '2026-10-31')
+await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"pago_evento":"presentacion","dias_vencimiento":30}'::jsonb)`, [kCond]))
+ok('el cambio de condiciones queda en el historial con los valores anteriores', (await sql(`select 1 from public.fact_historial where entidad_id = $1 and accion = 'condiciones_comerciales' and datos->'anteriores' ? 'pago_evento'`, [kCond])).length === 3)
+ok('vencida sin cláusula de interés: no se calcula nada', (await venc('2026-11-10')).estado_mora === 'vencida_sin_clausula'
+  && await falla(() => como(ADM, () => sql(`select public.fact_interes_proponer($1, '2026-11-10')`, [compManual])), /cláusula/))
+ok('una tasa sin período ni método se rechaza', await falla(() => como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa":36.5}'::jsonb)`, [kCond]))))
+await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa":36.5,"mora_tasa_periodo":"anual","mora_metodo":"simple","mora_condiciones":"Cláusula 8 del contrato (prueba)"}'::jsonb)`, [kCond]))
+// Pago parcial de $400.000 el 14/11: 9 días sobre $1.000.000 + 11 días sobre $600.000 al 36,5 % anual simple.
+const cobroParcial = (await como(ADM, () => uno(`select public.fact_cobro_registrar($1::jsonb) id`, [JSON.stringify({ cliente_id: cliCond, fecha: '2026-11-14', importe_c: 40000000, medio: 'transferencia' })]))).id
+await como(ADM, () => sql(`select public.fact_aplicar('cobro', $1, $2, null, 40000000)`, [cobroParcial, compManual]))
+const sim = (await como(ADM, () => uno(`select public.fact_interes_simular($1, '2026-11-24') s`, [compManual]))).s
+ok('interés con pago parcial: $9.000 + $6.600 = $15.600 en dos tramos', sim.estado === 'calculado' && sim.importe_c === 1560000 && sim.tramos.length === 2
+  && sim.tramos[0].dias === 9 && sim.tramos[1].saldo_c === 60000000, JSON.stringify(sim.tramos))
+const nInt0 = (await uno(`select count(*)::int n from public.fact_intereses`)).n
+await como(ADM, () => sql(`select public.fact_vencimientos('2026-11-24', $1)`, [cliCond]))
+ok('mirar vencimientos no registra intereses solos', (await uno(`select count(*)::int n from public.fact_intereses`)).n === nInt0 && (await venc('2026-11-24')).estado_mora === 'interes_potencial')
+ok('supervisor no simula intereses', await falla(() => como(SUP, () => sql(`select public.fact_interes_simular($1, '2026-11-24')`, [compManual]))))
+const int1 = (await como(ADM, () => uno(`select public.fact_interes_proponer($1, '2026-11-24') id`, [compManual]))).id
+ok('no se aprueba sin revisar', await falla(() => como(ADM, () => sql(`select public.fact_interes_aprobar($1)`, [int1]))))
+ok('revisar exige justificación', await falla(() => como(ADM, () => sql(`select public.fact_interes_revisar($1, '')`, [int1]))))
+await como(ADM, () => sql(`select public.fact_interes_revisar($1, 'Cláusula 8; intimación del 20/11')`, [int1]))
+const cobro2 = (await como(ADM, () => uno(`select public.fact_cobro_registrar($1::jsonb) id`, [JSON.stringify({ cliente_id: cliCond, fecha: '2026-11-20', importe_c: 10000000, medio: 'transferencia' })]))).id
+await como(ADM, () => sql(`select public.fact_aplicar('cobro', $1, $2, null, 10000000)`, [cobro2, compManual]))
+ok('un pago posterior a la propuesta impide aprobar el número viejo', await falla(() => como(ADM, () => sql(`select public.fact_interes_aprobar($1)`, [int1])), /cambió/))
+await como(ADM, () => sql(`select public.fact_interes_anular($1, 'Recalcular por pago del 20/11')`, [int1]))
+const int2 = (await como(ADM, () => uno(`select public.fact_interes_proponer($1, '2026-11-24') id`, [compManual]))).id
+await como(ADM, () => sql(`select public.fact_interes_revisar($1, 'Cláusula 8; intimación del 20/11')`, [int2]))
+await como(ADM, () => sql(`select public.fact_interes_aprobar($1)`, [int2]))
+const impInt = (await uno(`select importe_c::int i from public.fact_intereses where id = $1`, [int2])).i
+ok('recalculado: 9 d × $1 M + 6 d × $600.000 + 5 d × $500.000 = $15.100', impInt === 900000 + 360000 + 250000, String(impInt))
+ok('la nota de débito exige definir el IVA', await falla(() => como(ADM, () => sql(`select public.fact_interes_solicitar_nd($1, null, null)`, [int2]))))
+const nd = (await como(ADM, () => uno(`select public.fact_interes_solicitar_nd($1, 0, null) id`, [int2]))).id
+const ndRow = await uno(`select tipo, estado, (solicitud->>'total_c')::int t from public.fact_emisiones where id = $1`, [nd])
+ok('nota de débito A SOLICITADA (pendiente de aprobación), no emitida', ndRow.tipo === 2 && ndRow.estado === 'pendiente_aprobacion' && ndRow.t === impInt
+  && !(await uno(`select 1 x from public.fact_comprobantes where tipo = 2`)), JSON.stringify(ndRow))
+const tv = (await como(GER, () => uno(`select public.fact_tablero_vencimientos('2026-09', '2026-11-24', $1) t`, [cliCond]))).t
+ok('tablero: vencidas, intereses aprobados y saldos marcados como sujetos a conciliación', tv.vencidas.n === 1 && tv.vencidas.saldo_c === 50000000
+  && tv.intereses_aprobados_c === impInt && tv.saldos_sujetos_a_conciliacion === true && tv.prefacturas.emitidas === 1, JSON.stringify(tv))
+
+// Factura emitida a mano e importada antes desde el CSV de ARCA: se vincula, no se duplica.
+const prefImp = (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: cliCond, contrato_id: kCond,
+  agrupacion_clave: `contrato:${kCond}`, periodo_mes: '2026-10', periodo_desde: '2026-10-01', periodo_hasta_excl: '2026-11-01', lineas: [],
+  neto_c: 1000, iva_c: 210, total_c: 1210, cuit_receptor: '30716728397', tipo_comprobante: 1, estado: 'lista_revision', requisitos: [] })]))).id
+await como(ADM, async () => sql(`select public.fact_prefactura_aprobar($1, (select version from public.fact_prefacturas where id = $1))`, [prefImp]))
+await db.exec(`insert into public.fact_comprobantes (ambiente, cuit_emisor, tipo, punto_venta, numero, fecha_emision, doc_nro_receptor, total_c, neto_c, iva_c, cae, origen)
+  values ('produccion', '30710705417', 1, 1, 4200, '2026-10-30', '30716728397', 1210, 1001, 210, '86400000000002', 'importacion_arca')`)
+const idImp = (await uno(`select id from public.fact_comprobantes where numero = 4200`)).id
+const vinc = (await como(ADM, () => uno(`select public.fact_comprobante_manual_registrar($1, (select version from public.fact_prefacturas where id = $1), $2::jsonb) id`, [prefImp,
+  JSON.stringify({ tipo: 1, punto_venta: 1, numero: 4200, fecha: '2026-10-30', cuit_receptor: '30716728397', neto_c: 1001, iva_c: 210, total_c: 1210, cae: '86400000000002', cae_vto: '2026-11-09' })]))).id
+ok('comprobante ya importado de ARCA: se vincula a la prefactura (mismo id, 1 centavo de redondeo aceptado)', vinc === idImp
+  && (await uno(`select prefactura_id from public.fact_comprobantes where id = $1`, [idImp])).prefactura_id === prefImp)
 
 // ── Rollback ───────────────────────────────────────────────────────────────
 for (const m of [...MIGS].reverse()) await db.exec(readFileSync(`${REPO}/supabase/rollback/${m}_rollback.sql`, 'utf8'))

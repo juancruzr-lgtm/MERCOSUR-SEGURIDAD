@@ -6,10 +6,66 @@
 1. `20261201120000_facturacion_base.sql`: clientes, contratos, tarifas, OC, documentos, horas facturables aprobadas y prefacturas.
 2. `20261201130000_facturacion_comprobantes_arca.sql`: comprobantes, emisión ARCA idempotente, importación de ARCA y portal.
 3. `20261201140000_facturacion_cuentas_corrientes.sql`: cuentas bancarias, cobros, retenciones, aplicaciones, conciliación y tablero.
+4. `20261201150000_facturacion_vencimientos_intereses.sql`: condiciones de pago y mora, seguimiento (presentación, recepción, conformidad), vencimiento comercial, intereses, emisión manual y datos del emisor.
 
 Los rollbacks están en `supabase/rollback/` y se aplican en orden inverso. Como nunca se aplicaron, las migraciones se corrigieron en el mismo archivo.
 
-Prueba: `node supabase/pruebas/facturacion/run.mjs`. Usa PGlite y debe dar 104/104.
+Prueba: `node supabase/pruebas/facturacion/run.mjs`. Usa PGlite y debe dar 133/133.
+
+## Circuito
+Prefactura → revisión → aprobación → emisión en ARCA (por API, o manual como contingencia) → factura definitiva → vencimiento comercial → cobranza → intereses, sólo cuando correspondan.
+
+**Estados que ve Administración** (en Gestión Económica → Facturación → Prefacturas):
+
+| Estado visible | Estado en la base | Cuándo |
+|---|---|---|
+| Pendiente de generar | — | Contrato vigente sin prefactura en el mes. |
+| Borrador | `en_preparacion` | |
+| Bloqueada por información faltante | `esperando_requisitos` | Falta OC, conformidad, horas aprobadas, condición IVA o una definición comercial. |
+| Requiere revisión | `lista_revision` con avisos | |
+| Lista para aprobar | `lista_revision` sin avisos | |
+| Aprobada · pendiente de emisión | `aprobada_emitir` | |
+| Emitida | `emitida` | |
+
+- **Aprobar es comercial.** No exige punto de venta ni credenciales de ARCA: eso se exige al emitir.
+- **Registro de la aprobación:** quedan quién preparó, quién modificó, quién aprobó, cuándo, la versión, la huella y el importe aprobado.
+- **Cambios posteriores:** cualquier cambio material después de aprobar (texto, importes, CUIT, tipo, período, vencimiento u OC) deja la aprobación sin efecto y queda registrado como `aprobacion_caida`. No se puede emitir una prefactura desactualizada.
+- **Texto de la factura:**
+  - Se propone el de la última factura comparable.
+  - Es libre y cada versión queda en el historial.
+  - Desde el historial se puede volver a usar un texto anterior.
+
+**Emisión manual (contingencia).** ARCA no ofrece un importador de archivos para *emitir*, así que la carga en Comprobantes en línea es manual:
+1. La prefactura aprobada muestra los datos para cargarlos en Comprobantes en línea.
+2. Se registra el comprobante autorizado: tipo, punto de venta, número, fecha, importes, CAE y vencimiento del CAE.
+3. La base verifica todo contra lo aprobado: el total debe ser exacto y el neto y el IVA pueden diferir hasta 2 centavos, por el redondeo que hace ARCA.
+4. Si el comprobante ya había entrado con el CSV de ARCA, se vincula en lugar de duplicarlo.
+5. Con un envío por API en curso o una respuesta incierta, no se permite el registro manual.
+6. Una vez registrado, la API no puede emitir otro comprobante para esa prefactura.
+
+**PDF de la factura autorizada:**
+- Se genera sólo para lo emitido por la app y se guarda como documento vinculado al comprobante. No se regenera.
+- Lleva el QR según la especificación de ARCA (JSON v1; la prueba reproduce el ejemplo oficial byte a byte) y el CAE con su vencimiento.
+- Incluye el período facturado y el vencimiento de pago. Para consumidor final, la leyenda de Transparencia Fiscal (Ley 27.743) con el IVA contenido.
+- **No se genera si faltan** el domicilio comercial, Ingresos Brutos o el inicio de actividades del emisor, o la condición IVA o el domicilio del receptor.
+- Para lo emitido en Comprobantes en línea se adjunta el PDF de ARCA.
+
+**Condición frente al IVA del receptor.** Es obligatoria (RG 5616; ARCA rechaza desde el 01/12/2026 los pedidos que no la traen):
+- Ya no se completa sola con "Responsable Inscripto".
+- Sin el dato, la prefactura queda bloqueada.
+- WSFE tampoco arma A para un exento ni B para un Responsable Inscripto.
+
+**Vencimiento comercial.** No es el vencimiento del CAE ni la fecha de vencimiento de pago informada a ARCA:
+- Sale del contrato: el plazo en días, el evento que lo inicia (emisión, presentación, recepción, conformidad o día fijo del mes) y las fechas reales de cada factura.
+- Si falta la condición, muestra "Condición comercial pendiente de definir". Si falta la fecha del evento, muestra "Falta la fecha de …".
+- Admite un vencimiento acordado manualmente, con su motivo.
+
+**Intereses por mora:**
+- Se calculan sólo si el contrato tiene tasa, período de la tasa y método (hoy, interés simple sobre el saldo diario).
+- El cálculo va día a día: los pagos, NC, ND y retenciones cuentan a partir de su fecha.
+- Pasos: simular → proponer → revisar con justificación → aprobar. Al aprobar se recalcula: si hubo pagos nuevos, no se aprueba el número viejo.
+- Recién después se **solicita** la nota de débito, que sigue el circuito de notas (aprobación y emisión). El IVA de la ND lo define Administración.
+- Mirar los vencimientos no registra intereses: nada se aplica solo.
 
 ## Reglas que implementa
 - **Horas facturables ≠ horas liquidables.** Se factura el tiempo programado efectivamente cubierto en cada puesto:
@@ -118,11 +174,36 @@ Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS
 | Depósito Fiscal | ARCA, CUIT 33-69345023-9, `oc_vigente`. Abono mensual de 14.235.000, factura B, OC 4500025674 (Exp. 2601254739) con IVA. Indicar OC y posición en la factura y el remito, y adjuntar 4 remitos conformados. El CUIT de la planilla de octubre (30-69384468-8) está mal: ARCA confirma que el receptor es 33-69345023-9. |
 | CIRSE | Factura B. |
 
-## Para activar en producción
-1. Aplicar las 3 migraciones. Necesita autorización.
-2. Certificado de ARCA con el servicio `wsfe` delegado y un punto de venta Web Service. Después: `update fact_config set valor = valor || '{"punto_venta": N}' where clave='emision'`.
-3. Probar en homologación (`AFIP_HOMO=1` con el certificado de homologación).
-4. Para la emisión real hacen falta las dos llaves: `fact_config.emision.produccion_habilitada = true` y `FACTURACION_EMISION_REAL=1` en Vercel. Para FCE, además, `cbu_fce`.
+## Activación por etapas (cada una necesita autorización; no hace falta activarlas juntas)
+**A. Prefacturación interna**
+1. Merge del PR #358 y deploy.
+2. Aplicar las 4 migraciones en orden. Sin ellas, la pestaña no funciona.
+3. Cargar clientes con CUIT, condición IVA y domicilio; contratos vigentes con objetivos y tarifas (con tratamiento de IVA explícito); OC con su monto con IVA.
+4. En la pestaña Horas, aprobar las horas del mes.
+5. En Prefacturas, usar "Generar / recalcular todas".
+6. Revertir: aplicar los rollbacks en orden inverso. Se pierden los datos de facturación cargados.
+
+**B. Aprobación**
+- No hay que activar nada: Administración y Gerencia ya pueden aprobar.
+- Conviene arrancar con 1 o 2 clientes y controlar contra la factura que se emite hoy por fuera.
+
+**C. Homologación de ARCA**
+1. Certificado de homologación con `wsfe` y `AFIP_HOMO=1`.
+2. Cargar el punto de venta: `update fact_config set valor = valor || '{"punto_venta": N}' where clave='emision'`.
+3. Usar el botón "Probar en homologación". Crea comprobantes de prueba que no marcan la prefactura.
+4. Cargar en Clientes y contratos los datos del emisor: domicilio, Ingresos Brutos e inicio de actividades. Recién así se puede verificar el PDF.
+
+**D. Emisión fiscal real**
+1. Certificado de producción con `wsfe` delegado y un punto de venta Web Service.
+2. Activar las dos llaves: `fact_config.emision.produccion_habilitada = true` y `FACTURACION_EMISION_REAL=1` en Vercel. Para FCE, además, `cbu_fce`.
+3. Primera factura real controlada contra Comprobantes en línea.
+4. Revertir: apagar cualquiera de las dos llaves. Lo emitido no se toca.
+- Mientras tanto se puede emitir a mano en Comprobantes en línea y registrar el comprobante.
+
+**E. Cobranzas e intereses**
+1. Cargar cuentas bancarias, importar extractos (Galicia validado) y registrar cobros y retenciones.
+2. Aceptar las propuestas de conciliación de a una. Nada se imputa solo.
+3. Cargar las condiciones de pago y mora de cada contrato. Sin tasa no hay intereses.
 
 ## Pendientes
 **Archivos reales:** el CSV de ARCA y el extracto de Galicia ya se validaron con archivos reales. **Falta Banco Municipal de Rosario:** no hay ningún extracto suyo, así que su formato no está probado. Para el Excel histórico no hay importador; queda pendiente definir cómo cargar las facturas históricas pagadas.
@@ -138,6 +219,12 @@ Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS
 - Qué clientes facturan superposición (`sumar`).
 - Qué clientes reciben FCE (tope MiPyME).
 - Tratamiento de exentos.
+- Plazo de pago y evento de inicio de cada cliente. Hoy ninguno está cargado: todas las facturas se van a ver como "condición pendiente".
+- Tasa, período y método de interés por mora de cada contrato, si los hay. No se cargó ninguna.
+- IVA de las notas de débito por intereses.
+- Condición frente al IVA de cada cliente. Ya no se supone "Responsable Inscripto".
+- Datos del emisor que faltan para el PDF: domicilio comercial, Ingresos Brutos e inicio de actividades.
+- Tarifa que cambia dentro del período: la prefactura queda "Requiere revisión" con aviso, pero no prorratea (las horas aprobadas son mensuales). Se resuelve con un ajuste comercial aprobado o dividiendo el período.
 
 **Técnicos:**
 - Lector automático de certificados de retención. El formato de Alto Delta es texto simple (número, fecha, OP, régimen, importe), pero el repositorio no tiene un lector de PDF: hoy se cargan a mano.

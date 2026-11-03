@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
         p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_observaciones: x.observaciones ?? null }) },
       consulta: (id, x) => rpc('fact_emision_consulta', { p_emision_id: id, p_encontrado: x.encontrado, p_respuesta: x.respuesta ?? {},
         p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_total_c: x.totalC ?? null, p_numero: x.numero }),
-    }, { hoy: fechaArgentina(), condicionIva: cli?.condicion_iva ?? 'responsable_inscripto', cbuFce: conf?.valor?.cbu_fce ?? null })
+    }, { hoy: fechaArgentina(), condicionIva: cli?.condicion_iva ?? '', cbuFce: conf?.valor?.cbu_fce ?? null })
     return responder({ ...r, emision_id: e.id }, r.estado === 'invalida' ? 400 : r.estado === 'en_curso' ? 409 : 200)
   } catch (err: any) {
     // Falla al registrar el resultado: la solicitud quedó 'enviando' y la próxima vez se consulta.

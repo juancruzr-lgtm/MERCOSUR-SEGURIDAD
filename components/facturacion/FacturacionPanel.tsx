@@ -11,10 +11,11 @@ import Documentos from './Documentos'
 import Comprobantes from './Comprobantes'
 import Cobranzas from './Cobranzas'
 import Tablero from './Tablero'
+import Vencimientos from './Vencimientos'
 import { S, mesActual } from './comun'
 
 const PESTANAS = [
-  ['bandeja', 'Prefacturación'], ['horas', 'Horas'], ['comprobantes', 'Comprobantes'], ['cobranzas', 'Cuentas corrientes'],
+  ['bandeja', 'Prefacturas'], ['horas', 'Horas'], ['comprobantes', 'Comprobantes'], ['vencimientos', 'Vencimientos e intereses'], ['cobranzas', 'Cuentas corrientes'],
   ['documentos', 'Documentos'], ['maestros', 'Clientes y contratos'], ['tablero', 'Tablero'],
 ] as const
 
@@ -40,6 +41,7 @@ export default function FacturacionPanel({ user }: { user: any }) {
       {tab === 'bandeja' && <Bandeja mes={mes} usuarios={usuarios} />}
       {tab === 'horas' && <Horas mes={mes} />}
       {tab === 'comprobantes' && <Comprobantes usuarioId={user?.id ?? null} />}
+      {tab === 'vencimientos' && <Vencimientos />}
       {tab === 'cobranzas' && <Cobranzas />}
       {tab === 'documentos' && <Documentos />}
       {tab === 'maestros' && <Maestros />}

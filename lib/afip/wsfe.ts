@@ -84,6 +84,11 @@ export function validarComprobante(c: ComprobanteWsfe): string[] {
   // Exento, no gravado y 0 % no son lo mismo para ARCA: sin definición explícita no se emite.
   if (c.netoC > 0 && c.ivaC === 0) e.push('Comprobante sin IVA: definir si es exento, no gravado o 0 % antes de emitir.')
   if (!Number.isInteger(c.numero) || c.numero < 1) e.push('Número de comprobante inválido.')
+  // RG 5616: la condición frente al IVA del receptor es obligatoria (ARCA rechaza sin ella desde el 01/12/2026). No se supone.
+  const cond = c.condicionIvaReceptor
+  if (!Object.values(CONDICION_IVA_RECEPTOR).includes(cond)) e.push('Falta la condición frente al IVA del receptor (cargarla en la ficha del cliente).')
+  else if ([1, 2, 3, 201, 202, 203].includes(c.tipo) && cond !== 1 && cond !== 6) e.push('Factura A / FCE A sólo a Responsable Inscripto o Monotributo.')
+  else if ([6, 7, 8].includes(c.tipo) && cond === 1) e.push('A un Responsable Inscripto corresponde factura A, no B.')
   return e
 }
 

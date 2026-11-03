@@ -1,24 +1,44 @@
 'use client'
-// Bandeja de prefacturación: una fila por cliente + período + agrupación.
-// Preparación (en preparación → … → emitida) separada de entrega y portal.
+// Bandeja de prefacturas (Gestión Económica → Facturación → Prefacturas).
+// Una fila por cliente + período + agrupación, más los contratos vigentes que
+// todavía no tienen prefactura en el mes ("pendiente de generar").
+// Preparación (borrador → revisión → aprobada → emitida) separada de entrega y portal.
 import { useEffect, useState } from 'react'
-import { abrirDocumento, api, leer, rpc, subirDocumento, ESTADO_ENTREGA, ESTADO_PORTAL, ESTADO_PREPARACION, TIPOS_DOC } from '@/lib/facturacion/datos'
+import { abrirDocumento, api, estadoVisible, leer, rpc, subirDocumento, ESTADO_ENTREGA, ESTADO_PORTAL, ESTADO_PREPARACION, MODALIDADES, TIPOS_DOC } from '@/lib/facturacion/datos'
+import { datosComprobantesEnLinea, validarRegistroManual } from '@/lib/facturacion/emision-manual'
 import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
+
+const ESTADOS_FILTRO: Array<[string, string]> = [
+  ['pendiente_generar', 'Pendiente de generar'], ['en_preparacion', 'Borrador'], ['requiere_revision', 'Requiere revisión'],
+  ['lista_aprobar', 'Lista para aprobar'], ['aprobada_emitir', 'Aprobada · pendiente de emisión'], ['emitida', 'Emitida'],
+  ['esperando_requisitos', 'Bloqueada por información faltante'],
+]
+const COLOR_VISIBLE: Record<string, string> = { ...COLOR_ESTADO, pendiente_generar: '#334155', requiere_revision: '#b45309', lista_aprobar: '#2563eb' }
 
 export default function Bandeja({ mes, usuarios }: { mes: string; usuarios: Array<{ id: string; nombre: string }> }) {
   const [filas, setFilas] = useState<any[]>([])
+  const [sinGenerar, setSinGenerar] = useState<any[]>([])
   const [sel, setSel] = useState<string | null>(null)
   const [filtro, setFiltro] = useState('')
   const { ocupado, correr, Mensaje } = useAccion()
 
   async function cargar() {
-    setFilas(await leer('fact_prefacturas', q => q.eq('periodo_mes', mes).neq('estado', 'descartada').order('created_at'),
-      '*, cliente:fact_clientes(razon_social, cuit), objetivo:objetivos(nombre), contrato:fact_contratos(nombre, modalidad, requiere_portal, envio_conjunto_planilla)'))
+    const [pref, contratos] = await Promise.all([
+      leer('fact_prefacturas', q => q.eq('periodo_mes', mes).neq('estado', 'descartada').order('created_at'),
+        '*, cliente:fact_clientes(razon_social, cuit, condicion_iva), objetivo:objetivos(nombre), oc:fact_ordenes_compra(numero, tipo), contrato:fact_contratos(nombre, modalidad, requiere_portal, envio_conjunto_planilla, requisitos)'),
+      leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, cliente:fact_clientes(razon_social, cuit)'),
+    ])
+    setFilas(pref)
+    setSinGenerar(contratos.filter(k => !pref.some(p => p.contrato_id === k.id)))
   }
   useEffect(() => { correr(cargar) }, [mes]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visibles = filas.filter(f => !filtro || f.estado === filtro)
+  const visibles = filas.filter(f => !filtro || estadoVisible(f).clave === filtro || f.estado === filtro)
   const actual = filas.find(f => f.id === sel)
+  const tarifa = (f: any) => {
+    const ls = (f.lineas ?? []) as any[]
+    return ls.length ? ls.map(l => `${l.concepto}: ${l.precio}`).join(' · ') : '—'
+  }
 
   return (
     <div>
@@ -27,42 +47,129 @@ export default function Bandeja({ mes, usuarios }: { mes: string; usuarios: Arra
           const r = await api('prefacturas', { mes })
           await cargar()
           if (r.errores?.length) throw new Error(`Generadas ${r.creadas}, actualizadas ${r.actualizadas}. Problemas: ${r.errores.join(' · ')}`)
-        }, 'Prefacturas generadas / recalculadas desde las horas aprobadas')}>Generar / recalcular {mes}</button>
+        }, 'Prefacturas generadas / recalculadas desde las horas aprobadas')}>Generar / recalcular todas ({mes})</button>
         <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
           <option value="">Todos los estados</option>
-          {Object.entries(ESTADO_PREPARACION).filter(([k]) => k !== 'descartada').map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {ESTADOS_FILTRO.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <span style={S.sub}>Las horas salen de la app (aprobadas en la pestaña Horas). Las planillas externas son sólo referencia.</span>
+        <span style={S.sub}>Horas facturables = cobertura aprobada en la pestaña Horas (no son las horas liquidables). Regenerar no pisa el texto editado.</span>
         <Mensaje />
       </div>
 
       <div style={{ ...S.card, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
-            {['Cliente', 'Agrupación', 'Período', 'Horas aprob.', 'Neto', 'IVA', 'Total', 'Preparación', 'Entrega / portal', 'Pendiente', 'Responsable'].map(h => <th key={h} style={S.th}>{h}</th>)}
+            {['Cliente', 'Objetivo / agrupación', 'Período', 'Modalidad', 'Hs program.', 'Hs cubiertas', 'Hs facturables', 'Tarifa', 'Neto', 'IVA', 'Total', 'OC', 'Pendiente / documentación', 'Estado', 'Responsable'].map(h => <th key={h} style={S.th}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {visibles.map(f => (
-              <tr key={f.id} onClick={() => setSel(f.id === sel ? null : f.id)} style={{ cursor: 'pointer', background: f.id === sel ? '#111c35' : undefined }}>
-                <td style={S.td}>{f.cliente?.razon_social}<div style={S.sub}>{f.cliente?.cuit ?? 'sin CUIT'}</div></td>
-                <td style={S.td}>{f.objetivo?.nombre ?? f.contrato?.nombre ?? '—'}</td>
-                <td style={S.td}>{fecha(f.periodo_desde)} – {fecha(addDias(f.periodo_hasta_excl, -1))}</td>
-                <td style={S.num}>{horas(f.minutos_aprobados)}</td>
-                <td style={S.num}>{pesos(f.neto_c)}</td>
-                <td style={S.num}>{pesos(f.iva_c)}</td>
-                <td style={S.num}>{pesos(f.total_c)}</td>
-                <td style={S.td}><Etiqueta texto={ESTADO_PREPARACION[f.estado]} color={COLOR_ESTADO[f.estado]} /></td>
-                <td style={S.td}>{ESTADO_ENTREGA[f.estado_entrega]}<div style={S.sub}>{ESTADO_PORTAL[f.estado_portal]}</div></td>
-                <td style={S.td}>{(f.requisitos ?? []).map((r: any, i: number) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {r.detalle}</div>)}
-                  {!f.requisitos?.length && <span style={S.sub}>{f.proxima_accion ?? '—'}</span>}</td>
-                <td style={S.td}>{usuarios.find(u => u.id === f.responsable_id)?.nombre ?? '—'}</td>
+            {visibles.map(f => {
+              const ev = estadoVisible(f)
+              return (
+                <tr key={f.id} onClick={() => setSel(f.id === sel ? null : f.id)} style={{ cursor: 'pointer', background: f.id === sel ? '#111c35' : undefined }}>
+                  <td style={S.td}>{f.cliente?.razon_social}<div style={S.sub}>{f.cliente?.cuit ?? 'sin CUIT'}</div></td>
+                  <td style={S.td}>{f.objetivo?.nombre ?? f.contrato?.nombre ?? '—'}</td>
+                  <td style={S.td}>{fecha(f.periodo_desde)} – {fecha(addDias(f.periodo_hasta_excl, -1))}</td>
+                  <td style={S.td}>{MODALIDADES[f.contrato?.modalidad] ?? '—'}</td>
+                  <td style={S.num}>{horas(f.minutos_programados)}</td>
+                  <td style={S.num}>{horas(f.minutos_cubiertos)}</td>
+                  <td style={S.num}>{horas(f.minutos_aprobados)}{f.minutos_descubiertos ? <div style={S.sub}>descub. {horas(f.minutos_descubiertos)}</div> : null}</td>
+                  <td style={S.td}><span style={{ fontSize: 12 }}>{tarifa(f)}</span></td>
+                  <td style={S.num}>{pesos(f.neto_c)}</td>
+                  <td style={S.num}>{pesos(f.iva_c)}</td>
+                  <td style={S.num}>{pesos(f.total_c)}</td>
+                  <td style={S.td}>{f.oc?.numero ?? '—'}</td>
+                  <td style={S.td}>{(f.requisitos ?? []).map((r: any, i: number) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {r.detalle}</div>)}
+                    {!f.requisitos?.length && <span style={S.sub}>{f.proxima_accion ?? '—'}</span>}
+                    <div style={S.sub}>{ESTADO_ENTREGA[f.estado_entrega]}{f.estado_portal !== 'no_requiere' ? ` · ${ESTADO_PORTAL[f.estado_portal]}` : ''}</div></td>
+                  <td style={S.td}><Etiqueta texto={ev.texto} color={COLOR_VISIBLE[ev.clave]} /></td>
+                  <td style={S.td}>{usuarios.find(u => u.id === f.responsable_id)?.nombre ?? '—'}</td>
+                </tr>
+              )
+            })}
+            {(!filtro || filtro === 'pendiente_generar') && sinGenerar.map(k => (
+              <tr key={`k-${k.id}`}>
+                <td style={S.td}>{k.cliente?.razon_social}<div style={S.sub}>{k.cliente?.cuit ?? 'sin CUIT'}</div></td>
+                <td style={S.td}>{k.nombre}</td><td style={S.td}>{mes}</td><td style={S.td}>{MODALIDADES[k.modalidad]}</td>
+                <td style={S.td} colSpan={9}><span style={S.sub}>Sin prefactura en el mes: usar “Generar / recalcular”. Si no se genera, revisar objetivos vinculados y horas aprobadas.</span></td>
+                <td style={S.td}><Etiqueta texto="Pendiente de generar" color={COLOR_VISIBLE.pendiente_generar} /></td><td style={S.td}>—</td>
               </tr>
             ))}
-            {!visibles.length && <tr><td style={S.td} colSpan={11}><span style={S.sub}>Sin prefacturas para {mes}. Cargá contratos vigentes, aprobá horas y generá.</span></td></tr>}
+            {!visibles.length && !sinGenerar.length && <tr><td style={S.td} colSpan={15}><span style={S.sub}>Sin contratos vigentes ni prefacturas para {mes}.</span></td></tr>}
           </tbody>
         </table>
       </div>
       {actual && <Detalle p={actual} usuarios={usuarios} alCambiar={() => correr(cargar)} />}
+    </div>
+  )
+}
+
+/** Quién preparó, modificó y aprobó; versión e importe aprobados; si la aprobación cayó. */
+function Trazabilidad({ p, historial, usuarios }: { p: any; historial: any[]; usuarios: Array<{ id: string; nombre: string }> }) {
+  const n = (id?: string | null) => usuarios.find(u => u.id === id)?.nombre ?? (id ? 'otro usuario' : '—')
+  const aprob = historial.find(h => h.accion === 'aprobada')
+  const caidas = historial.filter(h => h.accion === 'aprobacion_caida').length
+  return (
+    <div style={{ ...S.sub, marginTop: 6, lineHeight: 1.6 }}>
+      Preparó {n(p.creado_por)} · última modificación {n(p.actualizado_por)} {fecha(p.updated_at)} · versión {p.version}
+      {p.aprobada_at && <div style={{ color: '#4ade80' }}>Aprobada por {n(p.aprobada_por)} el {new Date(p.aprobada_at).toLocaleString('es-AR')}{aprob?.datos?.total_c != null ? ` por ${pesos(aprob.datos.total_c)}` : ''}</div>}
+      {caidas > 0 && <div style={{ color: '#fbbf24' }}>La aprobación cayó {caidas} vez/veces por cambios posteriores (queda en el historial).</div>}
+    </div>
+  )
+}
+
+/**
+ * Contingencia: emitir en Comprobantes en línea con estos datos y registrar el
+ * comprobante autorizado. Desde el registro, la API no puede emitir otro.
+ */
+function EmisionManual({ p, alHecho }: { p: any; alHecho: () => Promise<void> }) {
+  const [abierto, setAbierto] = useState(false)
+  const [pv, setPv] = useState<number | null>(null)
+  const [d, setD] = useState({ punto_venta: '', numero: '', fecha: '', neto: '', iva: '', total: '', cae: '', cae_vto: '' })
+  const { ocupado, correr, Mensaje } = useAccion()
+  useEffect(() => {
+    if (!abierto) return
+    correr(async () => setPv((await leer('fact_config', q => q.eq('clave', 'emision')))[0]?.valor?.punto_venta ?? null))
+    setD(x => ({ ...x, neto: String(Number(p.neto_c) / 100), iva: String(Number(p.iva_c) / 100), total: String(Number(p.total_c) / 100) }))
+  }, [abierto]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!abierto) return <button style={{ ...S.btn2, marginTop: 8 }} onClick={() => setAbierto(true)}>Emitir manualmente en ARCA (contingencia)</button>
+
+  const datos = {
+    tipo: p.tipo_comprobante, punto_venta: Number(d.punto_venta), numero: Number(d.numero), fecha: d.fecha, cuit_receptor: p.cuit_receptor ?? '',
+    neto_c: centavosDe(d.neto) ?? 0, iva_c: centavosDe(d.iva) ?? 0, total_c: centavosDe(d.total) ?? 0, cae: d.cae.trim(), cae_vto: d.cae_vto,
+  }
+  const hoy = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())
+  const errores = d.numero ? validarRegistroManual(p, datos, hoy) : []
+  return (
+    <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 10, marginTop: 8 }}>
+      <h4 style={S.sub}>1. CARGAR EN “COMPROBANTES EN LÍNEA” DE ARCA CON ESTOS DATOS</h4>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>
+        {datosComprobantesEnLinea(p, { razon_social: p.cliente?.razon_social ?? '', condicion_iva: p.cliente?.condicion_iva ?? null }, pv).map((x, i) => (
+          <tr key={i}><td style={{ ...S.td, color: '#64748b' }}>{x.paso}</td><td style={S.td}>{x.campo}</td><td style={{ ...S.td, whiteSpace: 'pre-wrap' }}>{x.valor}</td></tr>
+        ))}
+      </tbody></table>
+      <h4 style={{ ...S.sub, marginTop: 10 }}>2. REGISTRAR EL COMPROBANTE QUE AUTORIZÓ ARCA</h4>
+      <div style={S.fila}>
+        <input style={{ ...S.input, width: 80 }} placeholder="PV" value={d.punto_venta} onChange={e => setD({ ...d, punto_venta: e.target.value })} />
+        <input style={{ ...S.input, width: 110 }} placeholder="Número" value={d.numero} onChange={e => setD({ ...d, numero: e.target.value })} />
+        <input style={S.input} type="date" title="Fecha de emisión" value={d.fecha} onChange={e => setD({ ...d, fecha: e.target.value })} />
+        <input style={{ ...S.input, width: 130 }} placeholder="Neto" value={d.neto} onChange={e => setD({ ...d, neto: e.target.value })} />
+        <input style={{ ...S.input, width: 120 }} placeholder="IVA" value={d.iva} onChange={e => setD({ ...d, iva: e.target.value })} />
+        <input style={{ ...S.input, width: 130 }} placeholder="Total" value={d.total} onChange={e => setD({ ...d, total: e.target.value })} />
+        <input style={{ ...S.input, width: 160 }} placeholder="CAE (14 dígitos)" value={d.cae} onChange={e => setD({ ...d, cae: e.target.value })} />
+        <input style={S.input} type="date" title="Vencimiento del CAE" value={d.cae_vto} onChange={e => setD({ ...d, cae_vto: e.target.value })} />
+      </div>
+      {errores.map((e, i) => <div key={i} style={S.err}>• {e}</div>)}
+      <div style={{ ...S.fila, marginTop: 6 }}>
+        <button style={S.btn} disabled={ocupado || !d.numero || errores.length > 0} onClick={() => {
+          if (!confirm(`Registrar ${datos.punto_venta}-${datos.numero} (CAE ${datos.cae}) como la factura de esta prefactura? Después no se podrá emitir otra por la API.`)) return
+          correr(async () => {
+            await rpc('fact_comprobante_manual_registrar', { p_prefactura_id: p.id, p_version: p.version, p_datos: datos }); await alHecho()
+          }, 'Comprobante registrado y vinculado: la prefactura quedó emitida')
+        }}>Registrar comprobante autorizado</button>
+        <button style={S.btn2} onClick={() => setAbierto(false)}>Cerrar</button>
+        <span style={S.sub}>Se verifica tipo, CUIT, importes y CAE contra lo aprobado. Adjuntá el PDF de ARCA en Documentos del comprobante.</span>
+        <Mensaje />
+      </div>
     </div>
   )
 }
@@ -89,7 +196,7 @@ function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: str
       leer('fact_contactos', q => q.eq('cliente_id', p.cliente_id).eq('activo', true)),
       leer('fact_documento_vinculos', q => q.eq('entidad', 'prefactura').eq('entidad_id', p.id).is('anulado_at', null), 'id, documento:fact_documentos(id, tipo, nombre_original, created_at)'),
       leer('fact_emisiones', q => q.eq('prefactura_id', p.id).order('created_at')),
-      leer('fact_historial', q => q.eq('entidad', 'prefactura').eq('entidad_id', p.id).order('at', { ascending: false }).limit(20)),
+      leer('fact_historial', q => q.eq('entidad', 'prefactura').eq('entidad_id', p.id).order('at', { ascending: false }).limit(100)),
     ])
     setExtra({ ajustes, envios, conformidades, contactos, docs: vinc, emisiones, historial })
   }
@@ -114,13 +221,21 @@ function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: str
             <tr><td style={S.td}><b>Neto / IVA / Total</b></td><td style={S.num}>{pesos(p.neto_c)} + {pesos(p.iva_c)}</td><td style={S.num}><b>{pesos(p.total_c)}</b></td></tr>
           </tbody></table>
           <div style={S.sub}>Horas programadas {horas(p.minutos_programados)} · cubiertas {horas(p.minutos_cubiertos)} · aprobadas para facturar {horas(p.minutos_aprobados)} · descubiertas no facturadas {horas(p.minutos_descubiertos)}</div>
-          <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? '—'} · vence {fecha(p.fecha_vencimiento)}</div>
+          <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? 'el de la configuración'} · vto. de pago informado a ARCA {fecha(p.fecha_vencimiento)} (el vencimiento comercial sale del contrato)</div>
+          <Trazabilidad p={p} historial={extra.historial} usuarios={usuarios} />
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>TEXTO DE LA FACTURA</h4>
           <textarea style={{ ...S.input, width: '100%', minHeight: 90 }} value={texto} disabled={emitida} onChange={e => setTexto(e.target.value)} />
           {!emitida && <button style={S.btn2} disabled={ocupado || texto === (p.texto_factura ?? '')} onClick={() => correr(async () => {
             await rpc('fact_prefactura_texto', { p_id: p.id, p_texto: texto, p_version: p.version }); await hecho()
           }, p.estado === 'aprobada_emitir' ? 'Texto guardado: el cambio hizo caer la aprobación (vuelve a revisión)' : 'Texto guardado')}>Guardar texto</button>}
+          {extra.historial.some(h => h.accion === 'texto') && <details style={{ marginTop: 6 }}><summary style={S.sub}>Versiones anteriores del texto</summary>
+            {extra.historial.filter(h => h.accion === 'texto').map(h => <div key={h.id} style={{ fontSize: 12, borderTop: '1px solid #1e293b', padding: '4px 0' }}>
+              <span style={S.sub}>{new Date(h.at).toLocaleString('es-AR')} · {usuarios.find(u => u.id === h.por)?.nombre ?? ''}</span>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{h.datos?.texto}</div>
+              {!emitida && <button style={{ ...S.btn2, padding: '2px 8px' }} onClick={() => setTexto(h.datos?.texto ?? '')}>Usar este texto</button>}
+            </div>)}
+          </details>}
         </div>
 
         <div>
@@ -131,7 +246,7 @@ function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: str
             </select>
             {p.estado === 'lista_revision' && <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
               await rpc('fact_prefactura_aprobar', { p_id: p.id, p_version: p.version }); await hecho()
-            }, 'Aprobada para emitir')}>Aprobar para emitir</button>}
+            }, 'Prefactura aprobada (queda registrada la versión y el importe)')}>Aprobar</button>}
             {p.estado === 'aprobada_emitir' && <>
               <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
                 const r = await api('emitir', { prefactura_id: p.id, version: p.version, ambiente: 'homologacion' }); await hecho()
@@ -164,6 +279,7 @@ function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: str
           {extra.emisiones.length > 0 && <div style={{ marginTop: 8 }}>
             {extra.emisiones.map(e => <div key={e.id} style={S.sub}>Emisión {e.ambiente} · {e.estado}{e.numero ? ` · N° ${e.numero}` : ''}{e.observaciones ? ` · ${e.observaciones}` : ''}</div>)}
           </div>}
+          {p.estado === 'aprobada_emitir' && <EmisionManual p={p} alHecho={hecho} />}
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>AJUSTES COMERCIALES (con motivo y responsable)</h4>
           {extra.ajustes.map(a => (

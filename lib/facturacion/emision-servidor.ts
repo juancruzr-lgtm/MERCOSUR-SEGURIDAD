@@ -73,7 +73,7 @@ export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; ho
     : undefined
   return {
     tipo: e.tipo, puntoVenta: e.punto_venta, numero: opts.numero, fecha: opts.hoy, concepto: 2, docTipo: 80,
-    docNro: String(s.cuit_receptor ?? ''), condicionIvaReceptor: CONDICION_IVA_RECEPTOR[opts.condicionIva] ?? 1,
+    docNro: String(s.cuit_receptor ?? ''), condicionIvaReceptor: CONDICION_IVA_RECEPTOR[opts.condicionIva] ?? 0, // 0 = sin dato: validarComprobante lo frena
     servicioDesde: s.periodo_desde ?? opts.hoy, servicioHasta: s.periodo_hasta ?? opts.hoy, vtoPago: vto,
     netoC: neto, ivaC: iva, totalC: total,
     alicuotas: pct && pct !== '0' ? [{ porcentaje: pct, baseC: neto, importeC: iva }] : pct === '0' ? [{ porcentaje: '0', baseC: neto, importeC: 0 }] : [{ porcentaje: '?', baseC: neto, importeC: iva }],
