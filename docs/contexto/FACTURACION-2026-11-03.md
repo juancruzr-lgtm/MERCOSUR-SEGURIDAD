@@ -10,7 +10,7 @@
 
 Los rollbacks están en `supabase/rollback/` y se aplican en orden inverso. Como nunca se aplicaron, las migraciones se corrigieron en el mismo archivo.
 
-Prueba: `node supabase/pruebas/facturacion/run.mjs`. Usa PGlite y debe dar 133/133.
+Prueba: `node supabase/pruebas/facturacion/run.mjs`. Usa PGlite con los privilegios por defecto de producción y debe dar 151/151. Corre también `preflight.sql` y `verificacion.sql`.
 
 ## Circuito
 Prefactura → revisión → aprobación → emisión en ARCA (por API, o manual como contingencia) → factura definitiva → vencimiento comercial → cobranza → intereses, sólo cuando correspondan.
@@ -175,6 +175,8 @@ Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS
 | CIRSE | Factura B. |
 
 ## Activación por etapas (cada una necesita autorización; no hace falta activarlas juntas)
+El procedimiento exacto de la primera etapa está en [FACTURACION-PUESTA-EN-MARCHA.md](FACTURACION-PUESTA-EN-MARCHA.md). Las etapas se encienden en `fact_config`: `emision` (`produccion_habilitada`, `homologacion_habilitada`) y `modulos` (`cobranzas`, `intereses`, `emision_manual`). Todo arranca en `false` y la base rechaza lo que está apagado.
+
 **A. Prefacturación interna**
 1. Merge del PR #358 y deploy.
 2. Aplicar las 4 migraciones en orden. Sin ellas, la pestaña no funciona.

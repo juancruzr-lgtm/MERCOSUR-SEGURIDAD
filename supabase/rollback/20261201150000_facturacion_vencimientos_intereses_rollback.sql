@@ -5,6 +5,7 @@
 begin;
 drop function if exists public.fact_comprobante_manual_registrar(uuid, integer, jsonb);
 drop function if exists public.fact_emisor_guardar(jsonb);
+drop function if exists public.fact_alcance_total_actual();
 delete from public.fact_config where clave = 'emisor';
 drop function if exists public.fact_tablero_vencimientos(text, date, uuid, uuid);
 drop function if exists public.fact_vencimientos(date, uuid, uuid);

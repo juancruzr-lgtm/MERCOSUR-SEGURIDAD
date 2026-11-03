@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import { abrirDocumento, api, estadoVisible, leer, rpc, subirDocumento, ESTADO_ENTREGA, ESTADO_PORTAL, ESTADO_PREPARACION, MODALIDADES, TIPOS_DOC } from '@/lib/facturacion/datos'
 import { datosComprobantesEnLinea, validarRegistroManual } from '@/lib/facturacion/emision-manual'
+import { compararConFacturaReal, etiquetaFactura } from '@/lib/facturacion/control'
 import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
 
 const ESTADOS_FILTRO: Array<[string, string]> = [
@@ -15,7 +16,9 @@ const ESTADOS_FILTRO: Array<[string, string]> = [
 ]
 const COLOR_VISIBLE: Record<string, string> = { ...COLOR_ESTADO, pendiente_generar: '#334155', requiere_revision: '#b45309', lista_aprobar: '#2563eb' }
 
-export default function Bandeja({ mes, usuarios }: { mes: string; usuarios: Array<{ id: string; nombre: string }> }) {
+type Config = { emision: any; modulos: any }
+
+export default function Bandeja({ mes, usuarios, config }: { mes: string; usuarios: Array<{ id: string; nombre: string }>; config: Config }) {
   const [filas, setFilas] = useState<any[]>([])
   const [sinGenerar, setSinGenerar] = useState<any[]>([])
   const [sel, setSel] = useState<string | null>(null)
@@ -98,7 +101,49 @@ export default function Bandeja({ mes, usuarios }: { mes: string; usuarios: Arra
           </tbody>
         </table>
       </div>
-      {actual && <Detalle p={actual} usuarios={usuarios} alCambiar={() => correr(cargar)} />}
+      {actual && <Detalle p={actual} usuarios={usuarios} config={config} alCambiar={() => correr(cargar)} />}
+    </div>
+  )
+}
+
+/**
+ * Control funcional contra la factura emitida por el circuito de siempre
+ * (importada del CSV de ARCA). Sólo compara; si coincide, se puede registrar
+ * esa factura contra la prefactura con "Emitir manualmente".
+ */
+function ControlFacturaReal({ p }: { p: any }) {
+  const [abierto, setAbierto] = useState(false)
+  const [reales, setReales] = useState<any[]>([])
+  const [sel, setSel] = useState('')
+  const { correr, Mensaje } = useAccion()
+  useEffect(() => {
+    if (!abierto || !p.cuit_receptor) return
+    correr(async () => setReales(await leer('fact_comprobantes', q => q.eq('ambiente', 'produccion').eq('doc_nro_receptor', p.cuit_receptor)
+      .in('tipo', [1, 6, 201]).gte('fecha_emision', p.periodo_desde).order('fecha_emision').limit(20))))
+  }, [abierto]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!abierto) return <button style={{ ...S.btn2, marginTop: 6 }} onClick={() => setAbierto(true)}>Comparar con la factura real</button>
+  const c = reales.find(x => x.id === sel)
+  const r = c ? compararConFacturaReal(p, { ...c, neto_c: Number(c.neto_c), iva_c: Number(c.iva_c), total_c: Number(c.total_c), numero: Number(c.numero) }) : null
+  return (
+    <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 10, marginTop: 6 }}>
+      <div style={S.fila}>
+        <select style={S.input} value={sel} onChange={e => setSel(e.target.value)}>
+          <option value="">{reales.length ? 'Factura real del cliente…' : 'No hay facturas importadas de este CUIT desde el inicio del período (importar el CSV de ARCA)'}</option>
+          {reales.map(x => <option key={x.id} value={x.id}>{etiquetaFactura({ ...x, numero: Number(x.numero) })} · {fecha(x.fecha_emision)} · {pesos(x.total_c)}{x.prefactura_id ? ' · ya vinculada' : ''}</option>)}
+        </select>
+        <button style={S.btn2} onClick={() => setAbierto(false)}>Cerrar</button>
+        <Mensaje />
+      </div>
+      {r && <>
+        <table style={{ borderCollapse: 'collapse', marginTop: 6 }}><tbody>
+          <tr><th style={S.th}></th><th style={S.th}>App</th><th style={S.th}>Factura real</th><th style={S.th}>Diferencia</th></tr>
+          {r.filas.map(f => <tr key={f.campo}><td style={S.td}>{f.campo}</td><td style={S.num}>{f.app}</td><td style={S.num}>{f.real}</td>
+            <td style={{ ...S.td, color: f.coincide ? '#4ade80' : '#f87171' }}>{f.coincide ? 'coincide' : f.diferencia ?? 'distinto'}</td></tr>)}
+        </tbody></table>
+        <div style={{ ...S.sub, marginTop: 4 }}>{r.registrable
+          ? 'Coincide. Si esa factura corresponde a esta prestación, registrala con “Emitir manualmente” (queda vinculada y no se factura dos veces).'
+          : 'No coincide: revisar horas, tarifa o IVA antes de aprobar. Para el control, anotar la diferencia y descartar la prefactura con el motivo.'}</div>
+      </>}
     </div>
   )
 }
@@ -178,7 +223,7 @@ function addDias(f: string, d: number) {
   const x = new Date(`${f}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10)
 }
 
-function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: string; nombre: string }>; alCambiar: () => void }) {
+function Detalle({ p, usuarios, config, alCambiar }: { p: any; usuarios: Array<{ id: string; nombre: string }>; config: Config; alCambiar: () => void }) {
   const [texto, setTexto] = useState(p.texto_factura ?? '')
   const [extra, setExtra] = useState<{ ajustes: any[]; envios: any[]; conformidades: any[]; contactos: any[]; docs: any[]; emisiones: any[]; historial: any[] }>({ ajustes: [], envios: [], conformidades: [], contactos: [], docs: [], emisiones: [], historial: [] })
   const [aj, setAj] = useState({ descripcion: '', importe: '', motivo: '' })
@@ -223,6 +268,7 @@ function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: str
           <div style={S.sub}>Horas programadas {horas(p.minutos_programados)} · cubiertas {horas(p.minutos_cubiertos)} · aprobadas para facturar {horas(p.minutos_aprobados)} · descubiertas no facturadas {horas(p.minutos_descubiertos)}</div>
           <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? 'el de la configuración'} · vto. de pago informado a ARCA {fecha(p.fecha_vencimiento)} (el vencimiento comercial sale del contrato)</div>
           <Trazabilidad p={p} historial={extra.historial} usuarios={usuarios} />
+          <ControlFacturaReal p={p} />
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>TEXTO DE LA FACTURA</h4>
           <textarea style={{ ...S.input, width: '100%', minHeight: 90 }} value={texto} disabled={emitida} onChange={e => setTexto(e.target.value)} />
@@ -247,11 +293,13 @@ function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: str
             {p.estado === 'lista_revision' && <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
               await rpc('fact_prefactura_aprobar', { p_id: p.id, p_version: p.version }); await hecho()
             }, 'Prefactura aprobada (queda registrada la versión y el importe)')}>Aprobar</button>}
-            {p.estado === 'aprobada_emitir' && <>
+            {p.estado === 'aprobada_emitir' && config.emision.homologacion_habilitada && <>
               <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
                 const r = await api('emitir', { prefactura_id: p.id, version: p.version, ambiente: 'homologacion' }); await hecho()
                 if (r.estado !== 'autorizada') throw new Error(r.motivo ?? r.error ?? r.estado)
               }, 'Emitida en HOMOLOGACIÓN (prueba, no fiscal)')}>Probar en homologación</button>
+            </>}
+            {p.estado === 'aprobada_emitir' && config.emision.produccion_habilitada && <>
               <button style={S.btn} disabled={ocupado} onClick={() => {
                 if (!confirm(`Emitir comprobante REAL en ARCA por ${pesos(p.total_c)} a ${p.cliente?.razon_social}?`)) return
                 correr(async () => {
@@ -279,7 +327,8 @@ function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: str
           {extra.emisiones.length > 0 && <div style={{ marginTop: 8 }}>
             {extra.emisiones.map(e => <div key={e.id} style={S.sub}>Emisión {e.ambiente} · {e.estado}{e.numero ? ` · N° ${e.numero}` : ''}{e.observaciones ? ` · ${e.observaciones}` : ''}</div>)}
           </div>}
-          {p.estado === 'aprobada_emitir' && <EmisionManual p={p} alHecho={hecho} />}
+          {p.estado === 'aprobada_emitir' && config.modulos.emision_manual && <EmisionManual p={p} alHecho={hecho} />}
+          {p.estado === 'aprobada_emitir' && !config.emision.produccion_habilitada && !config.modulos.emision_manual && <div style={{ ...S.sub, marginTop: 6 }}>Aprobada. La emisión (ARCA o manual) todavía no está habilitada: la factura se emite por el circuito actual.</div>}
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>AJUSTES COMERCIALES (con motivo y responsable)</h4>
           {extra.ajustes.map(a => (

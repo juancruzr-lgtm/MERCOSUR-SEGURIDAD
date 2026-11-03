@@ -26,8 +26,23 @@ create table if not exists public.fact_config (
   actualizado_at  timestamptz not null default now()
 );
 insert into public.fact_config (clave, valor) values
-  ('emision', jsonb_build_object('cuit_emisor', '30710705417', 'produccion_habilitada', false, 'homologacion_habilitada', true))
+  ('emision', jsonb_build_object('cuit_emisor', '30710705417', 'produccion_habilitada', false, 'homologacion_habilitada', false))
 on conflict (clave) do nothing;
+
+-- Puesta en marcha por etapas: lo que no está habilitado acá no se puede usar,
+-- aunque la pantalla esté visible. Prefacturación y aprobación no dependen de esto.
+insert into public.fact_config (clave, valor) values
+  ('modulos', jsonb_build_object('cobranzas', false, 'intereses', false, 'emision_manual', false))
+on conflict (clave) do nothing;
+
+create or replace function public.fact_modulo_exigir(p_modulo text)
+returns void language plpgsql stable security definer set search_path = public, pg_catalog as $fn$
+begin
+  if not coalesce((select (valor->>p_modulo)::boolean from public.fact_config where clave = 'modulos'), false) then
+    raise exception 'El módulo "%" todavía no está habilitado (fact_config.modulos)', p_modulo using errcode = '42501';
+  end if;
+end $fn$;
+revoke all on function public.fact_modulo_exigir(text) from public, anon, authenticated;
 
 create table if not exists public.fact_importaciones (
   id               uuid primary key default gen_random_uuid(),
@@ -217,6 +232,7 @@ create or replace function public.fact_letra(p_tipo integer)
 returns text language sql immutable as $fn$
   select case when p_tipo in (1, 2, 3) then 'A' when p_tipo in (6, 7, 8) then 'B' when p_tipo in (201, 202, 203) then 'FCE_A' end
 $fn$;
+revoke all on function public.fact_letra(integer) from public, anon;
 
 -- Prepara la emisión de una prefactura aprobada. Idempotente.
 create or replace function public.fact_emision_preparar(p_prefactura_id uuid, p_version integer, p_ambiente text)
@@ -227,6 +243,9 @@ begin
   select valor into v_cfg from public.fact_config where clave = 'emision';
   if p_ambiente = 'produccion' and not coalesce((v_cfg->>'produccion_habilitada')::boolean, false) then
     raise exception 'La emisión real en ARCA está deshabilitada (falta certificado / punto de venta habilitado)' using errcode = '42501';
+  end if;
+  if p_ambiente = 'homologacion' and not coalesce((v_cfg->>'homologacion_habilitada')::boolean, false) then
+    raise exception 'La homologación de ARCA no está habilitada (falta el certificado de prueba)' using errcode = '42501';
   end if;
   select * into v from public.fact_prefacturas where id = p_prefactura_id for update;
   if v.id is null then raise exception 'Prefactura inexistente'; end if;

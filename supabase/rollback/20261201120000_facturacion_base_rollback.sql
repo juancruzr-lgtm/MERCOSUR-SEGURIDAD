@@ -1,5 +1,5 @@
 -- Rollback de 20261201120000 (facturación base).
--- Requiere haber revertido antes 20261201140000 y 20261201130000.
+-- Requiere haber revertido antes 20261201150000, 20261201140000 y 20261201130000.
 -- SE PIERDE: clientes, alias, contactos, contratos, tarifas, OC, documentos
 -- (los archivos quedan en el bucket facturacion-documentos, que NO se borra),
 -- horas aprobadas, prefacturas, ajustes, envíos, conformidades e historial.

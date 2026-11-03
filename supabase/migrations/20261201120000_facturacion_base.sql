@@ -27,7 +27,8 @@
 --  · No toca turnos, registros_asistencia ni liquidación.
 --  · No emite comprobantes (eso es 20261201130000 y queda deshabilitado).
 --
--- Acceso: Gerencia (incluida la delegada) y Administración.
+-- Acceso: Gerencia (incluida la delegada) y Administración, con acceso habilitado
+-- (un usuario bloqueado por baja no entra ni por RPC, aunque siga 'activo').
 -- Toda escritura por RPC security definer; las tablas sólo admiten SELECT.
 -- Importes en centavos (bigint, sufijo _c).
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -36,10 +37,11 @@ begin;
 -- ── Acceso ─────────────────────────────────────────────────────────────────
 create or replace function public.facturacion_puede_actual()
 returns boolean language sql stable security definer set search_path = public, pg_catalog as $fn$
-  select public.puede_acceder_gerencia_actual()
-      or exists (select 1 from public.usuarios u
-                 where u.auth_user_id = auth.uid() and u.estado = 'activo'
-                   and u.puesto_organizacional = 'administracion')
+  select public.acceso_habilitado_actual()
+     and (public.puede_acceder_gerencia_actual()
+          or exists (select 1 from public.usuarios u
+                     where u.auth_user_id = auth.uid() and u.estado = 'activo'
+                       and u.puesto_organizacional = 'administracion'))
 $fn$;
 revoke all on function public.facturacion_puede_actual() from public, anon;
 grant execute on function public.facturacion_puede_actual() to authenticated;
@@ -74,6 +76,8 @@ begin
   if dv = 10 then return false; end if;
   return dv = substr(c, 11, 1)::int;
 end $fn$;
+-- Los privilegios por defecto de public dan EXECUTE a anon: se quitan también a las funciones puras.
+revoke all on function public.fact_cuit_valido(text) from public, anon;
 
 -- ── Historial único (append-only) ──────────────────────────────────────────
 create table if not exists public.fact_historial (
@@ -82,7 +86,8 @@ create table if not exists public.fact_historial (
   entidad_id uuid not null,
   accion     text not null,
   datos      jsonb not null default '{}'::jsonb,
-  por        uuid references public.usuarios(id) on delete set null,
+  -- Sin "on delete set null": el historial es inmutable, ponerlo en null fallaría igual.
+  por        uuid references public.usuarios(id),
   at         timestamptz not null default now()
 );
 create index if not exists ix_fact_historial_entidad on public.fact_historial (entidad, entidad_id, at desc);

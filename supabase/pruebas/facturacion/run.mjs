@@ -33,18 +33,40 @@ const falla = async (fn, re) => {
 
 await db.exec(`
 create role anon nologin; create role authenticated nologin; create role service_role nologin;
+-- Igual que producción (pg_default_acl de public, verificado el 03/11): todo objeto nuevo nace con permisos
+-- explícitos para anon y authenticated. Las migraciones tienen que revocarlos ellas mismas.
+alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
 create schema auth;
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 grant usage on schema auth, public to authenticated, anon, service_role; grant execute on function auth.uid() to authenticated, anon, service_role;
-create table public.usuarios (id uuid primary key default gen_random_uuid(), auth_user_id uuid, nombre text, rol text, estado text,
+create table public.usuarios (id uuid primary key default gen_random_uuid(), auth_user_id uuid, nombre text, apellido text, rol text, estado text,
   puesto_organizacional text, acceso_bloqueado boolean not null default false);
 create table public.objetivos (id uuid primary key default gen_random_uuid(), nombre text not null, cliente text not null, estado text default 'activo');
+-- Estructuras de Supabase y tablas operativas mínimas: permiten correr acá el chequeo
+-- previo y la verificación posterior (los mismos archivos que se usan en producción).
+create schema storage;
+create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
+create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
+alter table storage.objects enable row level security;
+create schema supabase_migrations;
+create table supabase_migrations.schema_migrations (version text primary key, name text);
+create table public.turnos (id uuid primary key default gen_random_uuid(), fecha date, hora_inicio time, hora_fin time, objetivo_id uuid, puesto_id uuid, estado text);
+create table public.registros_asistencia (id uuid primary key default gen_random_uuid(), turno_id uuid, guardia_id uuid, guardia_final_id uuid,
+  objetivo_final_id uuid, hora_entrada_real time, hora_salida_real time, hora_entrada_final time, hora_salida_final time, horas_trabajadas numeric,
+  horas_liquidables numeric, origen_cobertura text, cobertura_anulada_at timestamptz, cierre_automatico boolean, tipo_registro text);
 create function public.puede_acceder_gerencia_actual() returns boolean language sql stable security definer as $$
   select exists (select 1 from public.usuarios u where u.auth_user_id = auth.uid() and u.estado = 'activo' and u.puesto_organizacional = 'gerencia') $$;
 grant execute on function public.puede_acceder_gerencia_actual() to authenticated;
 create function public.acceso_habilitado_actual() returns boolean language sql stable security definer as $$
   select not exists (select 1 from public.usuarios u where u.auth_user_id = auth.uid() and u.acceso_bloqueado) $$;
 grant execute on function public.acceso_habilitado_actual() to authenticated, anon;
+-- Copia de producción (03/11/2026) de alcance_operativo_de, reducida a los puestos.
+create function public.alcance_operativo_de(p_usuario_id uuid) returns text language sql stable security definer as $$
+  select case when u.puesto_organizacional in ('jefe_supervisores', 'direccion_operativa', 'administracion', 'gerencia') then 'todas'
+              when u.puesto_organizacional = 'supervisor' then 'zonas_asignadas' else 'propio' end
+    from public.usuarios u where u.id = p_usuario_id $$;
 insert into public.usuarios (id, auth_user_id, nombre, rol, estado, puesto_organizacional, acceso_bloqueado) values
   ('${GER}', '${GER}', 'GERENCIA', 'admin', 'activo', 'gerencia', false),
   ('${ADM}', '${ADM}', 'ADMINISTRACION', 'admin', 'activo', 'administracion', false),
@@ -58,8 +80,51 @@ insert into public.objetivos (id, nombre, cliente) values
   ('00000000-0000-0000-0000-00000000b004', 'ACA ROSARIO SEDE', 'ACA'),
   ('00000000-0000-0000-0000-00000000b005', 'ACA ROSARIO DEPOSITO', 'ACA');
 `)
-for (const m of MIGS) await db.exec(readFileSync(`${REPO}/supabase/migrations/${m}.sql`, 'utf8'))
+const controles = async archivo => (await sql(readFileSync(`${REPO}/supabase/pruebas/facturacion/${archivo}`, 'utf8')))
+const pre = await controles('preflight.sql')
+ok('chequeo previo (preflight.sql): todo OK antes de migrar', pre.length === 10 && pre.every(r => r.ok === true), JSON.stringify(pre.filter(r => !r.ok)))
+for (const m of MIGS) {
+  await db.exec(readFileSync(`${REPO}/supabase/migrations/${m}.sql`, 'utf8'))
+  await db.query(`insert into supabase_migrations.schema_migrations (version, name) values ($1, $2)`, [m.slice(0, 14), m])
+}
 ok('las cuatro migraciones aplican', true)
+const post = await controles('verificacion.sql')
+ok('verificación posterior (verificacion.sql): todo OK recién aplicado', post.length === 11 && post.every(r => r.ok === true), JSON.stringify(post.filter(r => !r.ok)))
+ok('…y el chequeo previo ahora detecta las migraciones (no se aplican dos veces)', (await controles('preflight.sql')).filter(r => !r.ok).length >= 3)
+// Auditoría de permisos con los privilegios por defecto de producción.
+const FUNCS_FACT = `from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and (p.proname like 'fact%' or p.proname like 'facturacion%')`
+const anonEjecuta = await sql(`select p.oid::regprocedure::text f ${FUNCS_FACT} and has_function_privilege('anon', p.oid, 'execute')`)
+ok('anon no ejecuta ninguna función de facturación', anonEjecuta.length === 0, anonEjecuta.map(r => r.f).join(', '))
+const tablasMal = await sql(`select c.relname t, string_agg(distinct pr, ',') p from pg_class c join pg_namespace n on n.oid = c.relnamespace,
+  unnest(array['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) pr
+  where n.nspname = 'public' and c.relname like 'fact%' and c.relkind in ('r','v')
+    and (has_table_privilege('authenticated', c.oid, pr) or has_table_privilege('anon', c.oid, pr)) group by c.relname`)
+ok('ninguna tabla de facturación admite escritura directa de anon/authenticated', tablasMal.length === 0, JSON.stringify(tablasMal))
+const anonLee = await sql(`select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public' and c.relname like 'fact%' and c.relkind in ('r','v') and has_table_privilege('anon', c.oid, 'SELECT')`)
+ok('anon no lee ninguna tabla de facturación', anonLee.length === 0, anonLee.map(r => r.relname).join(', '))
+// Funciones SECURITY DEFINER que un usuario puede ejecutar: todas tienen que pasar por el gate.
+const defAuth = await sql(`select p.proname, pg_get_functiondef(p.oid) d ${FUNCS_FACT} and p.prosecdef and has_function_privilege('authenticated', p.oid, 'execute')`)
+const sinGate = defAuth.filter(r => !r.d.includes('public.facturacion_gate()')
+  && !r.d.includes('if not public.facturacion_puede_actual() then raise') && r.proname !== 'facturacion_puede_actual').map(r => r.proname)
+ok('toda función security definer que ejecuta un usuario pasa por el gate', sinGate.length === 0, sinGate.join(', '))
+ok('la auditoría de permisos inspeccionó funciones reales', defAuth.length > 40, String(defAuth.length))
+
+// Puesta en marcha por etapas: al aplicar, sólo prefacturación y aprobación quedan operativas.
+const cfg0 = Object.fromEntries((await sql(`select clave, valor from public.fact_config`)).map(r => [r.clave, r.valor]))
+ok('recién aplicadas: emisión real y homologación de ARCA apagadas; cobranzas, intereses y emisión manual apagados',
+  cfg0.emision.produccion_habilitada === false && cfg0.emision.homologacion_habilitada === false
+  && Object.values(cfg0.modulos).every(v => v === false) && Object.keys(cfg0.modulos).length === 3, JSON.stringify(cfg0))
+ok('con cobranzas apagado no se registra un cobro', await falla(() => como(ADM, () => sql(`select public.fact_cobro_registrar('{}'::jsonb)`)), /no está habilitado/))
+ok('…ni se importa un extracto', await falla(() => como(ADM, () => sql(`select public.fact_extracto_importar(gen_random_uuid(), 'x.csv', $1, null, '[]'::jsonb)`, ['a'.repeat(64)])), /no está habilitado/))
+ok('con intereses apagado no se propone un interés', await falla(() => como(ADM, () => sql(`select public.fact_interes_proponer(gen_random_uuid(), '2026-11-01')`)), /no está habilitado/))
+ok('con emisión manual apagada no se registra un comprobante', await falla(() => como(ADM, () => sql(`select public.fact_comprobante_manual_registrar(gen_random_uuid(), 1, '{}'::jsonb)`)), /no está habilitado/))
+ok('el interruptor de módulos no lo ejecuta un usuario', await falla(() => como(ADM, () => sql(`select public.fact_modulo_exigir('cobranzas')`)), /permission denied/))
+// El resto de la prueba ejercita todas las etapas en la base aislada.
+await db.exec(`update public.fact_config set valor = '{"cobranzas": true, "intereses": true, "emision_manual": true}' where clave = 'modulos';
+  update public.fact_config set valor = valor || '{"homologacion_habilitada": true}' where clave = 'emision'`)
+
 
 // ── Permisos ───────────────────────────────────────────────────────────────
 const CAD = await como(ADM, async () => (await uno(`select public.fact_cliente_guardar(null, '{"razon_social":"CONEXION ALTO DELTA S.A.","cuit":"30-71234567-2"}'::jsonb) id`).catch(() => null)))
@@ -78,6 +143,12 @@ ok('supervisor (Sergio) no ve clientes', (await como(SUP, () => sql(`select * fr
 ok('supervisor no ejecuta RPC de facturación', await falla(() => cliente(SUP, { razon_social: 'X SA' }), /Gerencia o Administración/))
 ok('nadie escribe directo en las tablas', await falla(() => como(ADM, () => sql(`insert into public.fact_clientes (razon_social) values ('X SA')`)), /permission denied/))
 ok('usuario con acceso bloqueado por baja no ve nada', (await como(BAJA, () => sql(`select * from public.fact_clientes`))).length === 0)
+ok('…ni escribe por RPC (las funciones security definer no pasan por la RLS)', await falla(() => cliente(BAJA, { razon_social: 'BAJA SA' }), /Gerencia o Administración/))
+ok('Administración tiene alcance total para calcular horas', (await como(ADM, () => uno(`select public.fact_alcance_total_actual() a`))).a === true)
+await db.exec(`create or replace function public.alcance_operativo_de(p_usuario_id uuid) returns text language sql stable as $$ select 'zonas_asignadas'::text $$`)
+ok('con alcance parcial no se calculan horas (la RLS las mostraría de menos)', (await como(ADM, () => uno(`select public.fact_alcance_total_actual() a`))).a === false)
+await db.exec(`create or replace function public.alcance_operativo_de(p_usuario_id uuid) returns text language sql stable as $$ select case when u.puesto_organizacional in ('administracion', 'gerencia') then 'todas' else 'propio' end from public.usuarios u where u.id = p_usuario_id $$`)
+ok('…ni ve el tablero',await falla(() => como(BAJA, () => sql(`select public.fact_tablero('2026-10')`)), /Gerencia o Administración/))
 
 // Alias: equivalencia sin confirmar; el mismo alias no va a dos clientes.
 await como(ADM, () => sql(`select public.fact_alias_guardar($1, 'Club Unidos', 'planilla', false, 'Vinculado en la planilla; confirmar')`, [univ]))

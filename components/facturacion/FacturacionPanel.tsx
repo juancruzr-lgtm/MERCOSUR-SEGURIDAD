@@ -23,6 +23,13 @@ export default function FacturacionPanel({ user }: { user: any }) {
   const [tab, setTab] = useState<(typeof PESTANAS)[number][0]>('bandeja')
   const [mes, setMes] = useState(mesActual())
   const [usuarios, setUsuarios] = useState<Array<{ id: string; nombre: string }>>([])
+  // Etapas habilitadas (fact_config): lo apagado no se muestra; la base igual lo bloquea.
+  const [config, setConfig] = useState<{ emision: any; modulos: any }>({ emision: {}, modulos: {} })
+  useEffect(() => {
+    supabase.from('fact_config').select('clave, valor').in('clave', ['emision', 'modulos'])
+      .then(({ data }) => setConfig({ emision: data?.find(x => x.clave === 'emision')?.valor ?? {}, modulos: data?.find(x => x.clave === 'modulos')?.valor ?? {} }))
+  }, [])
+  const visibles = PESTANAS.filter(([k]) => (k !== 'cobranzas' || config.modulos.cobranzas) && (k !== 'vencimientos' || config.modulos.cobranzas || config.modulos.intereses))
   useEffect(() => {
     supabase.from('usuarios').select('id, nombre, apellido, puesto_organizacional').in('puesto_organizacional', ['gerencia', 'administracion', 'jefe_supervisores', 'supervisor']).eq('estado', 'activo')
       .then(({ data }) => setUsuarios((data ?? []).map((u: any) => ({ id: u.id, nombre: [u.nombre, u.apellido].filter(Boolean).join(' ') }))))
@@ -36,9 +43,9 @@ export default function FacturacionPanel({ user }: { user: any }) {
         <span style={S.sub}>Mes de prestación. La emisión y el cobro se miden por su propia fecha.</span>
       </div>
       <div style={{ ...S.fila, marginBottom: 12 }}>
-        {PESTANAS.map(([k, t]) => <button key={k} style={tab === k ? S.btn : S.btn2} onClick={() => setTab(k)}>{t}</button>)}
+        {visibles.map(([k, t]) => <button key={k} style={tab === k ? S.btn : S.btn2} onClick={() => setTab(k)}>{t}</button>)}
       </div>
-      {tab === 'bandeja' && <Bandeja mes={mes} usuarios={usuarios} />}
+      {tab === 'bandeja' && <Bandeja mes={mes} usuarios={usuarios} config={config} />}
       {tab === 'horas' && <Horas mes={mes} />}
       {tab === 'comprobantes' && <Comprobantes usuarioId={user?.id ?? null} />}
       {tab === 'vencimientos' && <Vencimientos />}

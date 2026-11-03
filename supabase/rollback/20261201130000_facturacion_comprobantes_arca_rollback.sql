@@ -4,6 +4,7 @@
 -- siguen existiendo en ARCA, sólo se pierde su registro en la app),
 -- solicitudes de emisión, importaciones y presentaciones en portal.
 begin;
+drop function if exists public.fact_modulo_exigir(text);
 drop function if exists public.fact_portal_registrar(uuid, jsonb);
 drop function if exists public.fact_comprobante_asociar(uuid, uuid, uuid, uuid, text);
 drop function if exists public.fact_importacion_cerrar(uuid, text);

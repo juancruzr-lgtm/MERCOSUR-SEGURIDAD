@@ -186,7 +186,8 @@ left join lateral (select sum(n.total_c) t from public.fact_comprobantes n where
 left join lateral (select sum(n.total_c) t from public.fact_comprobantes n where n.asociado_id = c.id and n.tipo in (2, 7, 202) and n.ambiente = 'produccion') nd on true
 left join lateral (select sum(a.importe_c) t from public.fact_aplicaciones a where a.comprobante_id = c.id and a.revertida_at is null) ap on true
 where c.ambiente = 'produccion' and (c.tipo in (1, 6, 201) or (c.tipo in (2, 7, 202) and c.asociado_id is null));
-revoke all on public.fact_v_saldos from public, anon;
+-- Sólo lectura (los privilegios por defecto darían también escritura a authenticated).
+revoke all on public.fact_v_saldos from public, anon, authenticated;
 grant select on public.fact_v_saldos to authenticated;
 
 create or replace function public.fact_saldo_destino(p_comprobante_id uuid, p_saldo_inicial_id uuid)
@@ -255,6 +256,7 @@ create or replace function public.fact_aplicar(p_origen_tipo text, p_origen_id u
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate();
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   return public.fact_aplicar_interno(v_actor, p_origen_tipo, p_origen_id, p_comprobante_id, p_saldo_inicial_id, p_importe_c, 'manual', p_evidencia, null);
 end $fn$;
 
@@ -262,6 +264,7 @@ create or replace function public.fact_aplicacion_revertir(p_id uuid, p_motivo t
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate();
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   if coalesce(trim(p_motivo), '') = '' then raise exception 'Indicá el motivo de la reversión'; end if;
   update public.fact_aplicaciones set revertida_at = now(), revertida_por = v_actor, revertida_motivo = p_motivo where id = p_id and revertida_at is null;
   if not found then raise exception 'Aplicación inexistente o ya revertida'; end if;
@@ -273,6 +276,7 @@ create or replace function public.fact_saldo_inicial_registrar(p_cliente_id uuid
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); v_id uuid;
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   if p_documento_id is null then raise exception 'El saldo inicial necesita documento de respaldo'; end if;
   if exists (select 1 from public.fact_saldos_iniciales where cliente_id = p_cliente_id and estado = 'vigente') then
     raise exception 'El cliente ya tiene un saldo inicial vigente; anulalo antes de cargar otro';
@@ -289,6 +293,7 @@ create or replace function public.fact_cuenta_bancaria_guardar(p_datos jsonb)
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); v_id uuid;
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   insert into public.fact_cuentas_bancarias (banco, banco_nombre, numero, cbu, alias, moneda, creado_por)
   values (p_datos->>'banco', p_datos->>'banco_nombre', regexp_replace(trim(p_datos->>'numero'), '\s', '', 'g'),
     nullif(regexp_replace(coalesce(p_datos->>'cbu', ''), '\D', '', 'g'), ''), p_datos->>'alias', coalesce(p_datos->>'moneda', 'ARS'), v_actor)
@@ -302,6 +307,7 @@ create or replace function public.fact_extracto_importar(p_cuenta_id uuid, p_nom
 returns jsonb language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); v_id uuid; f jsonb; v_nuevos int := 0; v_rep int := 0; v_mov uuid;
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   if not exists (select 1 from public.fact_cuentas_bancarias where id = p_cuenta_id and activa) then raise exception 'Cuenta bancaria inexistente o inactiva'; end if;
   select id into v_id from public.fact_importaciones where tipo = 'extracto_banco' and sha256 = lower(p_sha256) and estado <> 'descartada';
   if v_id is not null then return jsonb_build_object('id', v_id, 'duplicado', true); end if;
@@ -326,6 +332,7 @@ create or replace function public.fact_movimiento_clasificar(p_id uuid, p_clasif
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate();
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   if exists (select 1 from public.fact_cobros where movimiento_id = p_id and anulado_at is null) and p_clasificacion <> 'cobranza_posible' then
     raise exception 'El movimiento ya tiene un cobro registrado: anulá el cobro primero';
   end if;
@@ -340,6 +347,7 @@ create or replace function public.fact_cobro_registrar(p_datos jsonb)
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); v_id uuid; v_mov public.fact_movimientos_bancarios; v_medio text := p_datos->>'medio';
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   if nullif(p_datos->>'movimiento_id', '') is not null then
     select * into v_mov from public.fact_movimientos_bancarios where id = (p_datos->>'movimiento_id')::uuid for update;
     if v_mov.id is null then raise exception 'Movimiento inexistente'; end if;
@@ -361,6 +369,7 @@ create or replace function public.fact_cobro_anular(p_id uuid, p_motivo text)
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate();
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   if coalesce(trim(p_motivo), '') = '' then raise exception 'Indicá el motivo'; end if;
   if exists (select 1 from public.fact_aplicaciones where cobro_id = p_id and revertida_at is null) then
     raise exception 'El cobro tiene aplicaciones vigentes: revertilas primero';
@@ -375,6 +384,7 @@ create or replace function public.fact_cheque_estado(p_cobro_id uuid, p_estado t
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); v_de text;
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   select cheque_estado into v_de from public.fact_cobros where id = p_cobro_id and anulado_at is null for update;
   if v_de is null then raise exception 'No es un cheque vigente'; end if;
   if not ((v_de = 'en_cartera' and p_estado in ('depositado', 'endosado', 'anulado'))
@@ -394,6 +404,7 @@ create or replace function public.fact_retencion_registrar(p_datos jsonb)
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); v_id uuid; v_estado text := coalesce(p_datos->>'estado', 'estimada');
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   if v_estado not in ('estimada', 'certificado_recibido') then raise exception 'Estado inválido'; end if;
   if v_estado = 'certificado_recibido' and exists (select 1 from public.fact_retenciones where cliente_id = (p_datos->>'cliente_id')::uuid
        and impuesto = p_datos->>'impuesto' and certificado = p_datos->>'certificado' and estado = 'certificado_recibido') then
@@ -412,6 +423,7 @@ create or replace function public.fact_retencion_certificar(p_id uuid, p_certifi
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate();
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   update public.fact_retenciones set estado = 'certificado_recibido', certificado = p_certificado, importe_c = p_importe_c,
     documento_id = coalesce(p_documento_id, documento_id)
   where id = p_id and estado = 'estimada';
@@ -424,6 +436,7 @@ create or replace function public.fact_propuestas_guardar(p_movimiento_id uuid, 
 returns integer language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); p jsonb; v_n int := 0;
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   perform 1 from public.fact_movimientos_bancarios where id = p_movimiento_id for update;
   update public.fact_propuestas set estado = 'obsoleta' where movimiento_id = p_movimiento_id and estado = 'propuesta';
   for p in select * from jsonb_array_elements(p_propuestas) loop
@@ -440,6 +453,7 @@ create or replace function public.fact_propuesta_aceptar(p_id uuid)
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); p public.fact_propuestas; m public.fact_movimientos_bancarios; v_cobro uuid; a jsonb;
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   select * into p from public.fact_propuestas where id = p_id for update;
   if p.id is null or p.estado <> 'propuesta' then raise exception 'La propuesta ya no está vigente'; end if;
   if p.cliente_id is null or jsonb_array_length(p.aplicaciones) = 0 then raise exception 'La propuesta no tiene aplicaciones para aceptar'; end if;
@@ -468,6 +482,7 @@ create or replace function public.fact_propuesta_rechazar(p_id uuid, p_motivo te
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate();
 begin
+  perform public.fact_modulo_exigir('cobranzas');
   update public.fact_propuestas set estado = 'rechazada', revisado_por = v_actor, revisado_at = now(), motivo_rechazo = p_motivo
   where id = p_id and estado = 'propuesta';
   if not found then raise exception 'La propuesta ya no está vigente'; end if;
@@ -483,6 +498,7 @@ end $fn$;
 
 create or replace function public.fact_mes_prestacion(p_hasta_excl date)
 returns text language sql immutable as $fn$ select to_char(p_hasta_excl - 1, 'YYYY-MM') $fn$;
+revoke all on function public.fact_mes_prestacion(date) from public, anon;
 
 -- Horas de un mes de prestación (programadas, cubiertas, aprobadas, facturadas).
 create or replace function public.fact_horas_mes(p_mes text, p_cliente_id uuid, p_objetivo_id uuid)

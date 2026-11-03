@@ -242,6 +242,7 @@ create or replace function public.fact_interes_proponer(p_comprobante_id uuid, p
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); v jsonb; v_id uuid;
 begin
+  perform public.fact_modulo_exigir('intereses');
   perform 1 from public.fact_comprobantes where id = p_comprobante_id for update;
   v := public.fact_interes_calcular(p_comprobante_id, p_hasta);
   if v->>'estado' <> 'calculado' then raise exception 'No corresponde calcular intereses: %', coalesce(v->>'motivo', v->>'estado'); end if;
@@ -260,6 +261,7 @@ create or replace function public.fact_interes_revisar(p_id uuid, p_justificacio
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate();
 begin
+  perform public.fact_modulo_exigir('intereses');
   if length(trim(coalesce(p_justificacion, ''))) <= 3 then raise exception 'Indicá la justificación (cláusula, notificación, acuerdo)'; end if;
   update public.fact_intereses set estado = 'revisado', justificacion = p_justificacion, revisado_por = v_actor, revisado_at = now()
   where id = p_id and estado = 'potencial';
@@ -272,6 +274,7 @@ create or replace function public.fact_interes_aprobar(p_id uuid)
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); i public.fact_intereses; v jsonb;
 begin
+  perform public.fact_modulo_exigir('intereses');
   select * into i from public.fact_intereses where id = p_id for update;
   if i.id is null or i.estado <> 'revisado' then raise exception 'Sólo se aprueba un interés revisado'; end if;
   v := public.fact_interes_calcular(i.comprobante_id, i.hasta);
@@ -286,6 +289,7 @@ create or replace function public.fact_interes_anular(p_id uuid, p_motivo text)
 returns void language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate();
 begin
+  perform public.fact_modulo_exigir('intereses');
   if length(trim(coalesce(p_motivo, ''))) <= 3 then raise exception 'Indicá el motivo'; end if;
   update public.fact_intereses set estado = 'anulado', anulado_por = v_actor, anulado_at = now(), anulado_motivo = p_motivo
   where id = p_id and estado in ('potencial', 'revisado', 'aprobado');
@@ -299,6 +303,7 @@ create or replace function public.fact_interes_solicitar_nd(p_id uuid, p_iva_c b
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); i public.fact_intereses; c public.fact_comprobantes; v_emision uuid; v_tipo int;
 begin
+  perform public.fact_modulo_exigir('intereses');
   select * into i from public.fact_intereses where id = p_id for update;
   if i.id is null or i.estado <> 'aprobado' then raise exception 'Sólo un interés aprobado genera la solicitud de nota de débito'; end if;
   if p_iva_c is null or p_iva_c < 0 then raise exception 'Indicá el IVA de la nota de débito (puede ser 0)'; end if;
@@ -441,6 +446,7 @@ declare v_actor uuid := public.facturacion_gate(); v public.fact_prefacturas; v_
   v_neto bigint := (p_datos->>'neto_c')::bigint; v_iva bigint := (p_datos->>'iva_c')::bigint; v_total bigint := (p_datos->>'total_c')::bigint;
   v_cae text := trim(coalesce(p_datos->>'cae', '')); v_cae_vto date := (p_datos->>'cae_vto')::date; v_req_portal boolean;
 begin
+  perform public.fact_modulo_exigir('emision_manual');
   select * into v from public.fact_prefacturas where id = p_prefactura_id for update;
   if v.id is null then raise exception 'Prefactura inexistente'; end if;
   if v.version <> p_version then raise exception 'La prefactura cambió; recargá' using errcode = '40001'; end if;
@@ -507,6 +513,19 @@ begin
   return v_comp;
 end $fn$;
 
+-- ── Alcance para calcular horas facturables ────────────────────────────────
+-- Las horas se leen de turnos y fichajes con la RLS de quien calcula. Con
+-- alcance parcial vería menos turnos y facturaría de menos SIN error: se exige
+-- alcance total (hoy lo tienen Gerencia y Administración).
+create or replace function public.fact_alcance_total_actual()
+returns boolean language plpgsql stable security definer set search_path = public, pg_catalog as $fn$
+declare v_actor uuid := public.facturacion_gate(); v text;
+begin
+  if to_regprocedure('public.alcance_operativo_de(uuid)') is null then return true; end if;
+  execute 'select public.alcance_operativo_de($1)' into v using v_actor;
+  return coalesce(v = 'todas', false);
+end $fn$;
+
 -- ── Datos del emisor impresos en el comprobante ────────────────────────────
 -- Sólo lo seguro (razón social, CUIT, condición: emite factura A). Domicilio
 -- comercial, Ingresos Brutos e inicio de actividades quedan vacíos hasta que
@@ -531,7 +550,7 @@ end $fn$;
 do $do$
 declare f text;
 begin
-  foreach f in array array['fact_emisor_guardar(jsonb)', 'fact_interes_simular(uuid, date)', 'fact_interes_proponer(uuid, date)', 'fact_interes_revisar(uuid, text)',
+  foreach f in array array['fact_alcance_total_actual()', 'fact_emisor_guardar(jsonb)', 'fact_interes_simular(uuid, date)', 'fact_interes_proponer(uuid, date)', 'fact_interes_revisar(uuid, text)',
     'fact_interes_aprobar(uuid)', 'fact_interes_anular(uuid, text)', 'fact_interes_solicitar_nd(uuid, bigint, text)',
     'fact_contrato_condiciones_guardar(uuid, jsonb)', 'fact_seguimiento_registrar(uuid, jsonb)', 'fact_vencimientos(date, uuid, uuid)',
     'fact_tablero_vencimientos(text, date, uuid, uuid)', 'fact_comprobante_manual_registrar(uuid, integer, jsonb)']

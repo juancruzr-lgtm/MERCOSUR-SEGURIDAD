@@ -14,6 +14,9 @@ export async function POST(req: NextRequest) {
   if ('error' in c) return responder({ error: c.error }, c.status)
   const { data: puede } = await c.usuario.rpc('facturacion_puede_actual')
   if (!puede) return responder({ error: 'Sólo Gerencia o Administración' }, 403)
+  // Con alcance parcial la RLS ocultaría turnos y las horas saldrían de menos, sin error.
+  const { data: total } = await c.usuario.rpc('fact_alcance_total_actual')
+  if (total !== true) return responder({ error: 'Para calcular horas facturables hace falta alcance sobre todos los objetivos' }, 403)
   const b = await req.json().catch(() => ({}))
   if (!esMesValido(b.mes) || !b.contrato_id || !b.objetivo_id) return responder({ error: 'Faltan contrato, objetivo o mes' }, 400)
   try {
