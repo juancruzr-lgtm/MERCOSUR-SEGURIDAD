@@ -25,7 +25,7 @@ import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { shellDeUsuario } from '@/lib/capacidades'
 import { supabase } from '@/lib/supabase'
-import { limpiarRecuperacionPendiente, recuperacionPendiente, tomarErrorEnlace } from '@/lib/auth-recuperacion'
+import { limpiarRecuperacionPendiente, recuperacionPendientePara, tomarErrorEnlace } from '@/lib/auth-recuperacion'
 import NuevaPassword from '@/components/auth/NuevaPassword'
 import Login, { perfilDeSesionActual, resolverDelegacionGerencia } from './Login'
 
@@ -43,6 +43,7 @@ type Estado =
   | { fase: 'cargando' }
   | { fase: 'login'; error?: string | null }
   | { fase: 'recuperacion' }
+  | { fase: 'avisoEnlace'; perfil: any; error: string }
   | { fase: 'listo'; perfil: any }
 
 export default function AppShell() {
@@ -54,17 +55,22 @@ export default function AppShell() {
   }, [])
 
   const arrancar = useCallback(async (vivo: () => boolean = () => true) => {
-    // Enlace de recuperación: con sesión abierta por el enlace, el panel queda
-    // bloqueado hasta fijar la contraseña nueva. Sin sesión, el enlace no sirvió.
-    if (recuperacionPendiente()) {
-      const { data } = await supabase.auth.getSession()
-      if (!vivo()) return
-      if (data.session) { setEstado({ fase: 'recuperacion' }); return }
-      limpiarRecuperacionPendiente()
+    // getSession espera a que supabase-js procese el enlace de la URL.
+    const { data } = await supabase.auth.getSession()
+    if (!vivo()) return
+    const errorEnlace = tomarErrorEnlace()
+    // Barrera de interfaz (no de servidor): la sesión abierta por un enlace de
+    // recuperación válido no entra al panel hasta fijar la contraseña nueva.
+    if (data.session && recuperacionPendientePara(data.session.access_token)) {
+      setEstado({ fase: 'recuperacion' })
+      return
     }
     const perfil = await perfilDeSesionActual()
     if (!vivo()) return
-    if (!perfil) { setEstado({ fase: 'login', error: tomarErrorEnlace() }); return }
+    if (!perfil) { setEstado({ fase: 'login', error: errorEnlace }); return }
+    // Enlace vencido/usado con una sesión previa abierta: Supabase conserva esa
+    // sesión. Se avisa en vez de entrar en silencio como si el enlace funcionara.
+    if (errorEnlace) { setEstado({ fase: 'avisoEnlace', perfil, error: errorEnlace }); return }
     await entrar(perfil)
   }, [entrar])
 
@@ -82,6 +88,20 @@ export default function AppShell() {
 
   if (estado.fase === 'cargando') return <Cargando />
   if (estado.fase === 'login') return <Login errorInicial={estado.error} onLogin={u => { void entrar(u) }} />
+  if (estado.fase === 'avisoEnlace') {
+    const { perfil, error } = estado
+    return (
+      <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#0a0e1a', padding:24, fontFamily:'sans-serif' }}>
+        <div role="alert" style={{ width:'100%', maxWidth:420, background:'#111827', border:'1px solid #334155', borderRadius:16, padding:28 }}>
+          <div style={{ fontSize:20, fontWeight:800, color:'#f8fafc', marginBottom:8 }}>El enlace no se pudo usar</div>
+          <div style={{ fontSize:13, color:'#fca5a5', marginBottom:12 }}>{error}</div>
+          <div style={{ fontSize:13, color:'#94a3b8', marginBottom:20 }}>Tu contraseña no cambió. Ya tenías una sesión abierta como {perfil?.nombre} {perfil?.apellido}.</div>
+          <button type="button" onClick={() => { void entrar(perfil) }} style={{ width:'100%', padding:'11px 16px', borderRadius:8, border:'none', background:'#eab308', color:'#0a0e1a', fontWeight:800, fontSize:14, cursor:'pointer' }}>Continuar con mi sesión</button>
+          <button type="button" onClick={() => { void cancelarRecuperacion() }} style={{ width:'100%', padding:'10px 16px', borderRadius:8, border:'1px solid #334155', background:'transparent', color:'#e2e8f0', fontWeight:700, fontSize:13, cursor:'pointer', marginTop:10 }}>Cerrar sesión</button>
+        </div>
+      </div>
+    )
+  }
   if (estado.fase === 'recuperacion') {
     return (
       <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#0a0e1a', padding:24, fontFamily:'sans-serif' }}>

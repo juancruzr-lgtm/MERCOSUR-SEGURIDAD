@@ -17,7 +17,8 @@ import {
   capturarEnlaceAuth,
   leerEnlaceAuth,
   limpiarRecuperacionPendiente,
-  recuperacionPendiente,
+  recuperacionPendientePara,
+  sessionIdDe,
   tomarErrorEnlace,
 } from '@/lib/auth-recuperacion'
 import { repairEmployeeAuthUser } from '@/app/api/_lib/auth-repair'
@@ -117,17 +118,51 @@ describe('recuperación: marca pendiente', () => {
     vi.unstubAllGlobals()
   })
 
-  it('el enlace de recuperación deja la marca persistida (sobrevive recargas)', () => {
-    ;(window as any).location.hash = '#access_token=x&type=recovery'
-    capturarEnlaceAuth()
-    expect(recuperacionPendiente()).toBe(true)
-    expect(datos.get(CLAVE_RECUPERACION)).toBe('1')
+  const jwt = (sid: string, n = 0) => `h.${btoa(JSON.stringify({ sub: 'a1', session_id: sid, n })).replace(/=+$/, '')}.f`
+  const RECU = jwt('sesion-recu')
+  const enlace = (token: string, tipo = 'recovery') => { (window as any).location.hash = `#access_token=${token}&refresh_token=r&type=${tipo}` }
+
+  it('sessionIdDe lee el claim session_id del JWT', () => {
+    expect(sessionIdDe(RECU)).toBe('sesion-recu')
+    expect(sessionIdDe('basura')).toBeNull()
   })
-  it('se limpia sólo explícitamente', () => {
-    ;(window as any).location.hash = '#type=recovery'
+  it('enlace válido: la sesión que abrió queda bloqueada y persiste (recargas y refrescos de token)', () => {
+    enlace(RECU)
     capturarEnlaceAuth()
+    expect(recuperacionPendientePara(RECU)).toBe(true)
+    expect(datos.get(CLAVE_RECUPERACION)).toBe('sesion-recu')
+    ;(window as any).location.hash = ''
+    capturarEnlaceAuth()
+    expect(recuperacionPendientePara(jwt('sesion-recu', 1))).toBe(true)
+  })
+  it('regresión: enlace inválido con sesión previa abierta NO convierte esa sesión en recuperación', () => {
+    enlace('token-falso-que-supabase-rechaza')
+    capturarEnlaceAuth()
+    expect(recuperacionPendientePara(jwt('sesion-normal'))).toBe(false)
+    expect(datos.has(CLAVE_RECUPERACION)).toBe(false)
+  })
+  it('regresión: marca vieja + login normal posterior (otra sesión) NO pide recuperación y se limpia', () => {
+    enlace(RECU)
+    capturarEnlaceAuth()
+    expect(recuperacionPendientePara(RECU)).toBe(true)
+    ;(window as any).location.hash = ''
+    capturarEnlaceAuth()
+    expect(recuperacionPendientePara(jwt('sesion-login-normal'))).toBe(false)
+    expect(datos.has(CLAVE_RECUPERACION)).toBe(false)
+  })
+  it('regresión: un Magic Link limpia la recuperación pendiente', () => {
+    datos.set(CLAVE_RECUPERACION, 'sesion-recu')
+    enlace(jwt('sesion-magic'), 'magiclink')
+    capturarEnlaceAuth()
+    expect(datos.has(CLAVE_RECUPERACION)).toBe(false)
+    expect(recuperacionPendientePara(jwt('sesion-magic'))).toBe(false)
+  })
+  it('se limpia explícitamente', () => {
+    enlace(RECU)
+    capturarEnlaceAuth()
+    recuperacionPendientePara(RECU)
     limpiarRecuperacionPendiente()
-    expect(recuperacionPendiente()).toBe(false)
+    expect(recuperacionPendientePara(RECU)).toBe(false)
   })
   it('el error del enlace se entrega una sola vez y limpia la URL', () => {
     ;(window as any).location.hash = '#error=access_denied&error_code=otp_expired'
@@ -142,8 +177,9 @@ describe('recuperación: el panel queda bloqueado hasta fijar la contraseña', (
   const shell = sinComentarios(leer('app/dashboard/AppShell.tsx'))
   it('AppShell revisa la recuperación pendiente antes de resolver el perfil', () => {
     const arranque = shell.slice(shell.indexOf('const arrancar'))
-    expect(arranque.indexOf('recuperacionPendiente()')).toBeGreaterThan(-1)
-    expect(arranque.indexOf('recuperacionPendiente()')).toBeLessThan(arranque.indexOf('perfilDeSesionActual()'))
+    expect(arranque.indexOf('recuperacionPendientePara(data.session.access_token)')).toBeGreaterThan(-1)
+    expect(arranque.indexOf('recuperacionPendientePara(')).toBeLessThan(arranque.indexOf('perfilDeSesionActual()'))
+    expect(arranque.indexOf('getSession()')).toBeLessThan(arranque.indexOf('tomarErrorEnlace()'))
     expect(shell).toMatch(/fase: 'recuperacion'/)
   })
   it('la marca sólo se limpia al guardar, al cancelar (cerrando sesión) o sin sesión', () => {
@@ -151,6 +187,10 @@ describe('recuperación: el panel queda bloqueado hasta fijar la contraseña', (
     const cancelar = shell.slice(shell.indexOf('const cancelarRecuperacion'), shell.indexOf('if (estado.fase'))
     expect(cancelar).toMatch(/limpiarRecuperacionPendiente\(\)/)
     expect(cancelar).toMatch(/signOut\(\)/)
+  })
+  it('regresión: enlace vencido con sesión abierta avisa en vez de entrar en silencio', () => {
+    expect(shell).toMatch(/if \(errorEnlace\) \{ setEstado\(\{ fase: 'avisoEnlace'/)
+    expect(shell).toMatch(/Tu contraseña no cambió/)
   })
   it('el enlace se lee antes de crear el cliente de Supabase', () => {
     const cliente = sinComentarios(leer('lib/supabase.ts'))

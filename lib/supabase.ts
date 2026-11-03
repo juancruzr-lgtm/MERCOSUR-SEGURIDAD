@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { capturarEnlaceAuth, marcarRecuperacionPendiente } from './auth-recuperacion'
+import { capturarEnlaceAuth, marcarRecuperacionPendiente, sessionIdDe } from './auth-recuperacion'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -22,8 +22,8 @@ export const supabase = createClient(
 
 // Respaldo: si el evento de recuperación llega por otra vía, también se marca.
 if (typeof window !== 'undefined') {
-  supabase.auth.onAuthStateChange(evento => {
-    if (evento === 'PASSWORD_RECOVERY') marcarRecuperacionPendiente()
+  supabase.auth.onAuthStateChange((evento, sesion) => {
+    if (evento === 'PASSWORD_RECOVERY') marcarRecuperacionPendiente(sessionIdDe(sesion?.access_token))
   })
 }
 
