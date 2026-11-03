@@ -64,9 +64,13 @@ export async function POST(req: NextRequest) {
     }
     const l = leerExtracto(texto, CUIT_EMPRESA)
     if (!l.filas.length) return responder({ error: 'No se leyó ningún movimiento', errores: l.errores }, 400)
+    // Si el saldo informado por el banco no cierra, algo se leyó mal: no se importa nada.
+    if (l.errores.some(e => e.motivo.startsWith('El saldo no cierra'))) {
+      return responder({ error: 'El saldo del extracto no cierra línea a línea; no se importó nada', errores: l.errores }, 400)
+    }
     const { data, error } = await c.usuario.rpc('fact_extracto_importar', { p_cuenta_id: cuentaId, p_nombre: nombre, p_sha256: sha, p_documento_id: null, p_filas: l.filas })
     if (error) return errorRpc(error)
-    return responder({ ...(data as object), errores: l.errores })
+    return responder({ ...(data as object), errores: l.errores, saldo_verificado: l.saldoVerificado })
   }
   return responder({ error: 'Tipo de importación inválido' }, 400)
 }

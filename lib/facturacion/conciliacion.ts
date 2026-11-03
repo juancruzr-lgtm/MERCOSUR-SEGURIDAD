@@ -57,18 +57,19 @@ export type Clasificacion =
 const PATRONES_NO_COBRANZA: Array<[RegExp, string]> = [
   [/rescate|fci|fondo com[uú]n|plazo fijo|inversi[oó]n|cauci[oó]n/i, 'Rescate o movimiento de inversión'],
   [/entre cuentas|cuenta propia|ctas? propias|transf\.? propia|misma titularidad/i, 'Transferencia entre cuentas propias'],
-  [/revers|contrasiento|anulaci[oó]n|devoluci[oó]n de d[eé]bito|contracargo/i, 'Reverso o anulación bancaria'],
+  [/revers|contrasiento|anulaci[oó]n|devoluci[oó]n de d[eé]bito|contracargo|rechazo de d[eé]bito|\bdev\.|\brev\b/i, 'Reverso, rechazo o devolución bancaria'],
   [/inter[eé]s(es)? (ganado|acreditado)|acreditaci[oó]n de intereses/i, 'Intereses bancarios'],
   [/impuesto|ley 25\.?413|imp\.? ?d[eé]b|imp\.? ?cr[eé]d|sircreb|percepci[oó]n|retenci[oó]n i\.?i\.?b|comisi[oó]n|gastos? (de )?mant/i, 'Impuestos, percepciones o comisiones bancarias'],
 ]
 
 export function clasificarMovimiento(mov: MovimientoBancario, cuitPropio: string): Clasificacion {
   if (mov.importe <= 0) return { tipo: 'debito' }
+  // Primero el texto: un rechazo de débito trae el CUIT propio y no es una transferencia entre cuentas.
+  const texto = `${mov.concepto ?? ''} ${mov.referencia ?? ''}`
+  for (const [re, motivo] of PATRONES_NO_COBRANZA) if (re.test(texto)) return { tipo: 'no_cobranza', motivo }
   if (mov.cuitContraparte && limpiarCuit(mov.cuitContraparte) === limpiarCuit(cuitPropio)) {
     return { tipo: 'no_cobranza', motivo: 'Transferencia entre cuentas propias' }
   }
-  const texto = `${mov.concepto ?? ''} ${mov.referencia ?? ''}`
-  for (const [re, motivo] of PATRONES_NO_COBRANZA) if (re.test(texto)) return { tipo: 'no_cobranza', motivo }
   return { tipo: 'cobranza_posible' }
 }
 

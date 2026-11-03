@@ -36,6 +36,26 @@ Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS
   - Tipos: FA 127, FB 97, FCE A 34, NC A 5, NC B 11, NC FCE A 1.
   - Se corrigió la moneda: el CSV trae "$" y ahora se guarda "PES".
   - En 164 de los 275 comprobantes, ARCA informa un neto más IVA que difiere del total en 1 centavo. Se respeta lo que dice ARCA: la importación lo acepta y compara contra la app por el total.
+- **Lector de extractos validado con el extracto real de Galicia** (cuenta 511522209, del 30/09 al 30/10/2026):
+  - 342 movimientos, sin errores. El número de cuenta se toma del nombre del archivo.
+  - El saldo cierra línea a línea en las 341 líneas consecutivas.
+  - Se corrigieron dos cosas:
+    - El texto se tomaba de "Grupo de Conceptos" (un código) y no de "Descripción".
+    - El CUIT y el nombre del ordenante vienen en "Leyenda Adicional1/2" y no se leían. Sin el CUIT no se identifica a ningún cliente.
+  - Créditos: 50 en total.
+    - 32 no son cobranza: 18 rescates de FIMA, 3 transferencias de cuenta propia, 6 rechazos de débito automático y 5 devoluciones o reversos.
+    - 18 quedan como cobranza posible.
+  - **Control nuevo:** si el saldo no cierra, la importación se rechaza entera.
+- **Cobros de octubre contra ARCA** (lectura, no conciliación aplicada):
+  - Alto Delta: 8.768.296,17 + certificados 160.259,42 + 848.414,78 = FA 2047, exacto.
+  - Universitario: 9.261.550,20 = FB 834, exacto.
+  - Quedan con diferencia hasta que lleguen los certificados de retención:
+    - ARCA (Depósito Fiscal) paga como "SNP PAGO A PROVEEDORES": 11.857.569,02 y 11.856.225,62 contra 14.235.000 (16,7 %).
+    - ACA: 8.546.472 contra FCE 638 de 10.541.520.
+    - CIRSE: 2.820.644,58 contra FB 835 de 3.249.477,60.
+    - Radio Nacional: 19.367.369,37, que parece pagar dos facturas juntas (FA 2046 y 2053).
+  - **INTA no paga con su CUIT:** el pago llega de la Tesorería General de la Nación (30-54667642-7), por 3.343.122,77 el 29/10. Hay que cargarlo como alias de INTA; si la Tesorería paga a otros clientes, la propuesta va a quedar como "probable".
+  - 9 depósitos de eCheq, por 12.670.142,23, llegan sin CUIT ni nombre: no se pueden identificar desde el extracto.
 - **ARCA confirma los 4 casos:**
   - NC 186 revierte completa la FA 2018 (1.859.019,01), las dos emitidas el 01/08.
   - NC 187 corrige 1.801.808 + IVA de la FA 2023, las dos del 04/08.
@@ -105,7 +125,7 @@ Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS
 4. Para la emisión real hacen falta las dos llaves: `fact_config.emision.produccion_habilitada = true` y `FACTURACION_EMISION_REAL=1` en Vercel. Para FCE, además, `cbu_fce`.
 
 ## Pendientes
-**Archivos reales:** el CSV de ARCA ya se validó con el archivo real. **Falta el extracto bancario** (`EXTRACTO_511522209-D2026-10-01_H2026-10-31.csv`): su lector sólo se probó con un formato armado. Para el Excel histórico no hay importador; queda pendiente definir cómo cargar las facturas históricas pagadas.
+**Archivos reales:** el CSV de ARCA y el extracto de Galicia ya se validaron con archivos reales. **Falta Banco Municipal de Rosario:** no hay ningún extracto suyo, así que su formato no está probado. Para el Excel histórico no hay importador; queda pendiente definir cómo cargar las facturas históricas pagadas.
 
 **Comerciales:**
 - Adicionales de PNC.

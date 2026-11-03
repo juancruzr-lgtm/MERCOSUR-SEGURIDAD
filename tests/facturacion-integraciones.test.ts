@@ -233,6 +233,57 @@ describe('importadores', () => {
     expect(new Set(r.filas.map(f => f.hash)).size).toBe(5)
     expect(leerExtracto(ext, '30710705417').filas.map(f => f.hash)).toEqual(r.filas.map(f => f.hash))
   })
+
+  it('extracto REAL de Galicia (cuenta 511522209, octubre 2026): leyendas, saldo y clasificación', () => {
+    // Líneas copiadas del archivo; sólo se reemplazaron nombres y CUIT de personas.
+    const alto = [
+      "Fecha;Descripción;Origen;Débitos;Créditos;Grupo de Conceptos;Concepto;Numero de Terminal;Observaciones Cliente;Numero de Comprobante;Leyenda Adicional1;Leyenda Adicional2;Leyenda Adicional3;Leyenda Adicional4;Tipo de Movimiento;Saldo",
+      "09/10/2026;PAGO DE SERVICIOS;BANE;69255,79;;000083 - Pagos;907104 - PAGO DE SERVICIOS;BEGL0001;;0;LITORAL GAS;998103219690;589244000755637129;;Imputado;+55985,90;",
+      "09/10/2026;COMPRA DEBITO;BANE;23300,00;;000905 - Extracciones;907103 - COMPRA CON TARJETA GALICIA 24;22069173;;0;FERRETERIA REMO FRANCO;4173090001004807;;;Imputado;+32685,90;",
+      "09/10/2026;TRF INMED PROVEED;GAOF;12000,00;;000907 - Transferencias;907232 - TRF INMED PROVEED;;;61964274;PERSONA 1;20000000001;VARIOS;BANCO DE GALICIA Y BUENOS AIRES SAU;Imputado;+20685,90;",
+      "09/10/2026;TRANSFERENCIA DE TERCEROS;BANE;;8768296,17;000907 - Transferencias;917151 - TRANSFERENCIA DE TERCEROS;LINK0009100D5;;0;CONEXION ALTO DELTA SA;30719244331;3300009910090198882053;VARIOS;Imputado;+8788982,07;",
+      "09/10/2026;TRANSF. A TERCEROS;GAOF;300000,00;;000907 - Transferencias;907179 - TRANSF. A TERCEROS;;;62019252;PERSONA 2;20000000002;VARIOS;BANCO MACRO S.A.;Imputado;+8488982,07;",
+      "09/10/2026;COMPRA DEBITO;BANE;216223,69;;000905 - Extracciones;907103 - COMPRA CON TARJETA GALICIA 24;12811295;;0;SUPERMERCADO LA GALLEGA;4173090001004807;;;Imputado;+8272758,38;",
+      "09/10/2026;TRF INMED PROVEED;GAOF;350000,00;;000907 - Transferencias;907269 - TRF INMED PROVEED;;;62039597;PERSONA 3;20000000003;FACTURAS;BANCO DE LA NACION ARGENTINA;Imputado;+7922758,38;",
+    ].join('\r\n')
+    const r = leerExtracto(alto, '30710705417')
+    expect(r.errores).toEqual([])
+    expect(r.saldoVerificado).toBe(6) // cada saldo = saldo anterior ± movimiento
+    const cobro = r.filas.find(f => f.importe_c > 0)!
+    // Alto Delta: 8.768.296,17 + Ganancias 160.259,42 + IVA 848.414,78 = FA 2047 (9.776.970,37).
+    expect(cobro).toMatchObject({ fecha: '2026-10-09', importe_c: 876829617, cuit_contraparte: '30719244331', nombre_contraparte: 'CONEXION ALTO DELTA SA', clasificacion: 'cobranza_posible', concepto: 'TRANSFERENCIA DE TERCEROS' })
+    expect(876829617 + 16025942 + 84841478).toBe(977697037)
+    expect(r.filas.filter(f => f.importe_c < 0).every(f => f.clasificacion === 'debito')).toBe(true)
+
+    // Rechazos de débito automático: traen el CUIT propio, pero no son cobranza ni transferencias propias.
+    const rech = leerExtracto([
+      "Fecha;Descripción;Origen;Débitos;Créditos;Grupo de Conceptos;Concepto;Numero de Terminal;Observaciones Cliente;Numero de Comprobante;Leyenda Adicional1;Leyenda Adicional2;Leyenda Adicional3;Leyenda Adicional4;Tipo de Movimiento;Saldo",
+      "16/10/2026;IVA;0001;840,00;;000901 - Impuestos;907171 - IVA;;;0;;;;;Imputado;-10363530,42;",
+      "16/10/2026;PERCEP. IVA;0001;120,00;;000901 - Impuestos;907172 - PERCEP. IVA;;;0;;;;;Imputado;-10363650,42;",
+      "16/10/2026;RECHAZO DE DEBITO AUTOMATICO;AUTO;;1256078,89;000903 - Créditos Varios;917323 - RECHAZO DE DEBITO AUTOMATICO;;;145901;AFIP;PLANRG5321;R5321V825049007;30710705417;Imputado;-9107571,53;",
+      "16/10/2026;RECHAZO DE DEBITO AUTOMATICO;AUTO;;476589,00;000903 - Créditos Varios;917323 - RECHAZO DE DEBITO AUTOMATICO;;;15093;ENTIDAD;CUOTAS;CUOTA;1;Imputado;-8630982,53;",
+      "16/10/2026;RECHAZO DE DEBITO AUTOMATICO;AUTO;;919085,91;000903 - Créditos Varios;917323 - RECHAZO DE DEBITO AUTOMATICO;;;145902;AFIP;PLANRG5321;R5321W321908003;30710705417;Imputado;-7711896,62;",
+    ].join('\r\n'), '30710705417')
+    expect(rech.errores).toEqual([])
+    expect(rech.filas.filter(f => f.importe_c > 0).map(f => f.clasificacion_motivo)).toEqual(Array(3).fill('Reverso, rechazo o devolución bancaria'))
+
+    const univ = leerExtracto([
+      "Fecha;Descripción;Origen;Débitos;Créditos;Grupo de Conceptos;Concepto;Numero de Terminal;Observaciones Cliente;Numero de Comprobante;Leyenda Adicional1;Leyenda Adicional2;Leyenda Adicional3;Leyenda Adicional4;Tipo de Movimiento;Saldo",
+      "26/10/2026;COMPRA DEBITO;BANE;4000,00;;000905 - Extracciones;907103 - COMPRA CON TARJETA GALICIA 24;22683643;;0;IAPOS;4173090001004807;;;Imputado;+4870854,71;",
+      "26/10/2026;COMPRA DEBITO;BANE;1519,05;;000905 - Extracciones;907103 - COMPRA CON TARJETA GALICIA 24;106497204351;;0;METAPAY*WQXCP9JNB4;4173090001004807;;;Imputado;+4869335,66;",
+      "26/10/2026;PERCEPCION RG 5617/24;0001;458,85;;000901 - Impuestos;907375 - PERCEPCION RG 5617/24;;;0;;;;;Imputado;+4868876,81;",
+      "26/10/2026;TRANSFERENCIA DE TERCEROS;BANE;;9261550,20;000907 - Transferencias;917151 - TRANSFERENCIA DE TERCEROS;TEBM0000;;0;CLUB UNIVERSITARIO DE ROS;30589038181;2850761530000008075029;FACTURA;Imputado;+14130427,01;",
+      "26/10/2026;TRF INMED PROVEED;GAOF;1000000,00;;000907 - Transferencias;907269 - TRF INMED PROVEED;;;63207548;PERSONA 4;20000000004;VARIOS;MERCADO LIBRE SRL;Imputado;+13130427,01;",
+      "26/10/2026;SUSCRIPCION FIMA;AUTO;10000000,00;;000916 - Inversiones;907237 - SUSCRIPCION FIMA;;;1;FIMA PREMIUM CLASE B;Nro Operacion: 254031115;;;Imputado;+3130427,01;",
+    ].join('\r\n'), '30710705417')
+    expect(univ.errores).toEqual([])
+    expect(univ.filas.find(f => f.importe_c === 926155020)).toMatchObject({ cuit_contraparte: '30589038181', clasificacion: 'cobranza_posible' }) // = FB 834
+    expect(univ.filas.find(f => /SUSCRIPCION FIMA/.test(f.concepto))?.clasificacion).toBe('debito')
+
+    // Un saldo alterado se detecta: no se importa un archivo mal leído.
+    const roto = alto.replace('+8488982,07', '+8488982,08')
+    expect(leerExtracto(roto, '30710705417').errores[0].motivo).toContain('El saldo no cierra')
+  })
 })
 
 import { alicuotaDe, ejecutarEmision, type Emision, type PuertoArca, type PuertoBase } from '@/lib/facturacion/emision-servidor'

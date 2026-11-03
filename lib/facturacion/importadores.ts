@@ -13,7 +13,7 @@
  */
 
 import { aCentavos } from './dinero'
-import { limpiarCuit, TIPOS_COMPROBANTE } from './comprobantes'
+import { cuitValido, limpiarCuit, TIPOS_COMPROBANTE } from './comprobantes'
 import { clasificarMovimiento } from './conciliacion'
 
 export function parseCsv(texto: string): string[][] {
@@ -181,27 +181,35 @@ export type FilaExtracto = {
  * mismo día se distinguen por su orden de aparición, así reimportar el mismo
  * archivo no duplica y dos pagos iguales reales no se pierden.
  */
-export function leerExtracto(texto: string, cuitPropio: string): { filas: FilaExtracto[]; errores: Array<{ fila: number; motivo: string }> } {
+export function leerExtracto(texto: string, cuitPropio: string): { filas: FilaExtracto[]; errores: Array<{ fila: number; motivo: string }>; saldoVerificado: number } {
   const filas = parseCsv(texto)
   const errores: Array<{ fila: number; motivo: string }> = []
   const iH = filas.findIndex(f => f.some(c => /fecha/i.test(c)))
-  if (iH < 0) return { filas: [], errores: [{ fila: 0, motivo: 'No se encontró la fila de encabezado (Fecha…)' }] }
+  if (iH < 0) return { filas: [], errores: [{ fila: 0, motivo: 'No se encontró la fila de encabezado (Fecha…)' }], saldoVerificado: 0 }
   const h = filas[iH]
   const col = {
     fecha: indice(h, /^fecha( operacion| movimiento)?$/, /fecha/),
-    concepto: indice(h, /concepto/, /descripcion/, /detalle/),
+    // Galicia trae "Descripción" (texto) además de "Grupo de Conceptos" y "Concepto" (códigos): manda la descripción.
+    concepto: indice(h, /^descripcion$/, /^concepto$/, /descripcion/, /detalle/, /concepto/),
+    grupo: indice(h, /^grupo de conceptos?$/),
     debito: indice(h, /debito/, /^debe$/),
     credito: indice(h, /credito/, /^haber$/),
     importe: indice(h, /^importe$/, /^monto$/),
+    saldo: indice(h, /^saldo$/),
     referencia: indice(h, /referencia/, /comprobante/, /nro operacion/),
     cuit: indice(h, /cuit/, /cuil/),
     nombre: indice(h, /ordenante/, /originante/, /contraparte/, /nombre/),
+    // Galicia: ordenante en "Leyenda Adicional1" y su CUIT en "Leyenda Adicional2".
+    leyendas: h.map((x, i) => (/leyenda adicional/.test(norm(x)) ? i : -1)).filter(i => i >= 0),
   }
   if (col.fecha < 0 || col.concepto < 0 || (col.importe < 0 && col.credito < 0)) {
-    return { filas: [], errores: [{ fila: iH + 1, motivo: 'Faltan columnas de fecha, concepto o importe/crédito' }] }
+    return { filas: [], errores: [{ fila: iH + 1, motivo: 'Faltan columnas de fecha, concepto o importe/crédito' }], saldoVerificado: 0 }
   }
   const ocurrencias = new Map<string, number>()
   const out: FilaExtracto[] = []
+  // Control de lectura: si el banco informa el saldo de cada línea, saldo anterior + movimiento = saldo.
+  let saldoPrevio: number | null = null
+  let saldoVerificado = 0
   for (let i = iH + 1; i < filas.length; i++) {
     const f = filas[i]
     const fecha = fechaIso(f[col.fecha] ?? '')
@@ -215,24 +223,40 @@ export function leerExtracto(texto: string, cuitPropio: string): { filas: FilaEx
         importe = Math.abs(cr) - Math.abs(db)
       }
     } catch { errores.push({ fila: i + 1, motivo: 'Importe ilegible' }); continue }
+    if (col.saldo >= 0 && (f[col.saldo] ?? '').trim()) {
+      let saldo: number | null = null
+      try { saldo = aCentavos(String(f[col.saldo]).trim().replace(/^\+/, '')) } catch { errores.push({ fila: i + 1, motivo: 'Saldo ilegible' }) }
+      if (saldo != null) {
+        if (saldoPrevio != null) {
+          if (saldoPrevio + importe === saldo) saldoVerificado++
+          else errores.push({ fila: i + 1, motivo: `El saldo no cierra: ${saldoPrevio} + ${importe} ≠ ${saldo}. Revisar el archivo antes de importar.` })
+        }
+        saldoPrevio = saldo
+      }
+    }
     if (importe === 0) continue
     const concepto = String(f[col.concepto] ?? '').trim()
+    const grupo = col.grupo >= 0 ? String(f[col.grupo] ?? '').trim() : ''
+    const leyendas = col.leyendas.map(j => String(f[j] ?? '').trim()).filter(Boolean)
     const referencia = col.referencia >= 0 ? String(f[col.referencia] ?? '').trim() || null : null
     const cuitCol = col.cuit >= 0 ? limpiarCuit(f[col.cuit]) : ''
     const cuitTexto = concepto.match(/\b(\d{2}-?\d{8}-?\d)\b/)?.[1]
-    const cuit = (cuitCol.length === 11 ? cuitCol : limpiarCuit(cuitTexto)) || null
+    const cuitLeyenda = leyendas.map(x => limpiarCuit(x)).find(x => x.length === 11 && cuitValido(x))
+    const cuit = (cuitCol.length === 11 ? cuitCol : limpiarCuit(cuitTexto) || cuitLeyenda) || null
     const base = `${fecha}|${importe}|${norm(concepto)}|${referencia ?? ''}`
     const n = (ocurrencias.get(base) ?? 0) + 1
     ocurrencias.set(base, n)
-    const mov = { id: '', fecha, importe, concepto, referencia, cuitContraparte: cuit }
+    // El grupo y las leyendas también clasifican (Inversiones, Impuestos, rechazos de débito).
+    const mov = { id: '', fecha, importe, concepto: [concepto, grupo, ...leyendas].filter(Boolean).join(' · '), referencia, cuitContraparte: cuit }
     const c = clasificarMovimiento(mov, cuitPropio)
+    const nombreLeyenda = cuitLeyenda && leyendas[0] && !/\d{6,}/.test(leyendas[0]) ? leyendas[0] : ''
     out.push({
       fecha, importe_c: importe, concepto, referencia, cuit_contraparte: cuit,
-      nombre_contraparte: col.nombre >= 0 ? String(f[col.nombre] ?? '').trim() || null : null,
+      nombre_contraparte: (col.nombre >= 0 ? String(f[col.nombre] ?? '').trim() : '') || nombreLeyenda || null,
       hash: `${base}|${n}`,
       clasificacion: c.tipo === 'no_cobranza' ? 'no_cobranza' : c.tipo === 'debito' ? 'debito' : 'cobranza_posible',
       clasificacion_motivo: c.tipo === 'no_cobranza' ? c.motivo : null,
     })
   }
-  return { filas: out, errores }
+  return { filas: out, errores, saldoVerificado }
 }
