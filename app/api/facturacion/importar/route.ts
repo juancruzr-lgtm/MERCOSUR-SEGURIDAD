@@ -4,7 +4,7 @@
 // El hash se calcula sobre el CSV: copias del mismo ZIP no se multiplican.
 import type { NextRequest } from 'next/server'
 import { clientesDelPedido } from '@/app/api/documentacion/_clientes'
-import { leerCsvArcaEmitidos, leerExtracto } from '@/lib/facturacion/importadores'
+import { cuentaEnExtracto, leerCsvArcaEmitidos, leerExtracto } from '@/lib/facturacion/importadores'
 import { CUIT_EMPRESA, errorRpc, responder, sha256Hex } from '../_comun'
 
 export const runtime = 'nodejs'
@@ -52,11 +52,19 @@ export async function POST(req: NextRequest) {
     return responder({ ...(data as object), leidas: l.filas.length, repetidas_en_archivo: l.repetidas, errores: l.errores })
   }
   if (tipo === 'extracto') {
-    const cuenta = String(form?.get('cuenta') ?? '').trim()
-    if (!cuenta) return responder({ error: 'Indicá la cuenta bancaria' }, 400)
+    const cuentaId = String(form?.get('cuenta_id') ?? '').trim()
+    if (!cuentaId) return responder({ error: 'Elegí la cuenta bancaria' }, 400)
+    const { data: cuenta } = await c.usuario.from('fact_cuentas_bancarias').select('id, banco, numero').eq('id', cuentaId).maybeSingle()
+    if (!cuenta) return responder({ error: 'Cuenta bancaria inexistente o sin acceso' }, 400)
+    // Un extracto de otra cuenta no se mezcla: si el nombre o el encabezado traen un número de cuenta, tiene que ser éste.
+    const numeroEnArchivo = cuentaEnExtracto(`${archivo.name}\n${texto.slice(0, 600)}`)
+    const propia = String(cuenta.numero).replace(/\D/g, '')
+    if (numeroEnArchivo && !numeroEnArchivo.includes(propia) && !propia.includes(numeroEnArchivo)) {
+      return responder({ error: `El archivo parece de la cuenta ${numeroEnArchivo}, no de ${cuenta.numero}` }, 400)
+    }
     const l = leerExtracto(texto, CUIT_EMPRESA)
     if (!l.filas.length) return responder({ error: 'No se leyó ningún movimiento', errores: l.errores }, 400)
-    const { data, error } = await c.usuario.rpc('fact_extracto_importar', { p_cuenta: cuenta, p_nombre: nombre, p_sha256: sha, p_documento_id: null, p_filas: l.filas })
+    const { data, error } = await c.usuario.rpc('fact_extracto_importar', { p_cuenta_id: cuentaId, p_nombre: nombre, p_sha256: sha, p_documento_id: null, p_filas: l.filas })
     if (error) return errorRpc(error)
     return responder({ ...(data as object), errores: l.errores })
   }

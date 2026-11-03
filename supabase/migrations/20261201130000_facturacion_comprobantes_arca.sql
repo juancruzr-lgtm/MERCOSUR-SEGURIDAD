@@ -95,7 +95,7 @@ create unique index if not exists ux_fact_comprobante_prefactura on public.fact_
 create or replace function public.fact_comprobante_inmutable()
 returns trigger language plpgsql as $fn$
 begin
-  if tg_op = 'DELETE' then raise exception 'Un comprobante fiscal no se borra' using errcode = '42501'; end if;
+  if tg_op in ('DELETE', 'TRUNCATE') then raise exception 'Un comprobante fiscal no se borra' using errcode = '42501'; end if;
   if (new.ambiente, new.cuit_emisor, new.tipo, new.punto_venta, new.numero, new.fecha_emision, new.neto_c, new.no_gravado_c,
       new.exento_c, new.iva_c, new.tributos_c, new.total_c, new.cae, new.cae_vto, new.doc_nro_receptor, new.servicio_desde,
       new.servicio_hasta, new.vto_pago, new.origen)
@@ -112,9 +112,12 @@ begin
   end if;
   return new;
 end $fn$;
+drop trigger if exists fact_comprobante_inmutable_trunc on public.fact_comprobantes;
 drop trigger if exists fact_comprobante_inmutable on public.fact_comprobantes;
 create trigger fact_comprobante_inmutable before update or delete on public.fact_comprobantes
   for each row execute function public.fact_comprobante_inmutable();
+create trigger fact_comprobante_inmutable_trunc before truncate on public.fact_comprobantes
+  for each statement execute function public.fact_comprobante_inmutable();
 
 create table if not exists public.fact_importacion_filas (
   id               uuid primary key default gen_random_uuid(),
@@ -147,6 +150,8 @@ create table if not exists public.fact_emisiones (
   respuesta                jsonb,
   observaciones            text,
   intentos                 integer not null default 0,
+  -- Todo número que se llegó a enviar: antes de pedir uno nuevo se consultan TODOS.
+  numeros_intentados       bigint[] not null default '{}',
   ultimo_intento_at        timestamptz,
   consultada_at            timestamptz,
   comprobante_id           uuid references public.fact_comprobantes(id),
@@ -204,8 +209,8 @@ returns bigint language sql stable security definer set search_path = public, pg
        - coalesce((select sum(n.total_c) from public.fact_comprobantes n where n.asociado_id = c.id and n.tipo in (3, 8, 203) and n.ambiente = c.ambiente), 0)
   from public.fact_comprobantes c where c.id = p_comprobante_id
 $fn$;
-revoke all on function public.fact_saldo_fiscal(uuid) from public, anon;
-grant execute on function public.fact_saldo_fiscal(uuid) to authenticated;
+-- Sin gate propio: sólo la usan otras funciones (security definer). No se expone.
+revoke all on function public.fact_saldo_fiscal(uuid) from public, anon, authenticated;
 
 create or replace function public.fact_letra(p_tipo integer)
 returns text language sql immutable as $fn$
@@ -287,7 +292,8 @@ declare v_actor uuid := public.facturacion_gate(); v_cfg jsonb; e public.fact_em
 begin
   select * into e from public.fact_emisiones where id = p_emision_id for update;
   if e.id is null or e.estado <> 'pendiente_aprobacion' then raise exception 'La nota no está pendiente de aprobación'; end if;
-  if e.creado_por = v_actor then raise exception 'La nota la aprueba una persona distinta de quien la pidió' using errcode = '42501'; end if;
+  -- La aprobación es un paso explícito y queda registrada (quién pidió / quién aprobó);
+  -- Administración puede aprobar su propia nota (regla comercial aprobada).
   select valor into v_cfg from public.fact_config where clave = 'emision';
   if e.ambiente = 'produccion' and not coalesce((v_cfg->>'produccion_habilitada')::boolean, false) then
     raise exception 'La emisión real en ARCA está deshabilitada' using errcode = '42501';
@@ -310,7 +316,10 @@ begin
          and o.estado in ('preparada', 'enviando', 'incierta', 'autorizada')) then
     raise exception 'Ya hay otra emisión viva para esta prefactura';
   end if;
+  -- Reusar un número confirmado como inexistente es correcto (ARCA no lo consumió);
+  -- el ciclo del servidor consulta TODOS los intentados antes de volver a enviar.
   update public.fact_emisiones set estado = 'enviando', numero = p_numero, intentos = intentos + 1, ultimo_intento_at = now(),
+    numeros_intentados = numeros_intentados || p_numero,
     respuesta = null, updated_at = now(), solicitud = solicitud || jsonb_build_object('arca', p_solicitud_arca)
   where id = e.id;
 end $fn$;
@@ -367,24 +376,41 @@ begin
   return null;
 end $fn$;
 
--- Resultado de FECompConsultar sobre una emisión incierta.
+-- Resultado de FECompConsultar. p_numero = número consultado (uno de numeros_intentados).
+--  · 'incierta' o 'enviando' colgada (> 2 min sin respuesta): se resuelve con la consulta.
+--  · 'enviando' reciente: NO, puede haber una respuesta en camino; consultar ahí y
+--    marcar "no existe" permitiría pedir otro número y emitir dos facturas.
+--  · 'rechazada': sólo para recuperar un número intentado antes que sí quedó autorizado.
+-- "No existe" nunca pasa una 'rechazada' a otro estado ni borra los números intentados.
 create or replace function public.fact_emision_consulta(p_emision_id uuid, p_encontrado boolean, p_respuesta jsonb,
-  p_cae text default null, p_cae_vto date default null, p_fecha date default null, p_total_c bigint default null)
+  p_cae text default null, p_cae_vto date default null, p_fecha date default null, p_total_c bigint default null, p_numero bigint default null)
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
-declare e public.fact_emisiones;
+declare e public.fact_emisiones; v_num bigint;
 begin
   select * into e from public.fact_emisiones where id = p_emision_id for update;
-  if e.id is null or e.estado not in ('incierta', 'enviando') then raise exception 'Sólo se consultan emisiones inciertas o en envío'; end if;
+  if e.id is null then raise exception 'Emisión inexistente'; end if;
+  v_num := coalesce(p_numero, e.numero);
+  if v_num is null or not (v_num = any(e.numeros_intentados)) then raise exception 'Sólo se consulta un número que se llegó a enviar'; end if;
+  if e.estado = 'enviando' and e.ultimo_intento_at > now() - interval '2 minutes' then
+    raise exception 'Hay un envío en curso: esperar su respuesta antes de consultar' using errcode = '55000';
+  end if;
+  if e.estado not in ('incierta', 'enviando', 'rechazada') then raise exception 'La emisión está % y no se consulta', e.estado; end if;
   update public.fact_emisiones set consultada_at = now() where id = e.id;
   if p_encontrado then
-    if p_total_c is distinct from (e.solicitud->>'total_c')::bigint then
-      update public.fact_emisiones set observaciones = 'ARCA tiene ese número con otro importe: revisar a mano', respuesta = p_respuesta where id = e.id;
-      raise exception 'El comprobante encontrado en ARCA no coincide con la solicitud';
+    if p_total_c is distinct from (e.solicitud->>'total_c')::bigint or p_cae is null or p_cae_vto is null or p_fecha is null then
+      -- Sin borrar nada: queda incierta y bloqueada hasta revisión manual.
+      update public.fact_emisiones set estado = 'incierta', numero = v_num, respuesta = p_respuesta,
+        observaciones = 'ARCA tiene el número ' || v_num || ' con otros datos: revisar a mano antes de seguir', updated_at = now() where id = e.id;
+      return null;
     end if;
+    e.numero := v_num;
+    update public.fact_emisiones set numero = v_num where id = e.id;
     return public.fact_emision_autorizar_interno(e, p_cae, p_cae_vto, p_fecha, p_respuesta);
   end if;
-  update public.fact_emisiones set estado = 'rechazada', numero = null, respuesta = p_respuesta,
-    observaciones = 'No existe en ARCA tras consulta: se puede reintentar', updated_at = now() where id = e.id;
+  if e.estado <> 'rechazada' then
+    update public.fact_emisiones set estado = 'rechazada', numero = null, respuesta = p_respuesta,
+      observaciones = 'No existe en ARCA tras consulta: se puede reintentar', updated_at = now() where id = e.id;
+  end if;
   return null;
 end $fn$;
 
@@ -523,7 +549,7 @@ begin
   end loop;
   -- Ciclo ARCA: sólo el servidor (service_role).
   foreach f in array array['fact_emision_iniciar_envio(uuid, bigint, jsonb)',
-    'fact_emision_resultado(uuid, text, jsonb, text, date, date, text)', 'fact_emision_consulta(uuid, boolean, jsonb, text, date, date, bigint)']
+    'fact_emision_resultado(uuid, text, jsonb, text, date, date, text)', 'fact_emision_consulta(uuid, boolean, jsonb, text, date, date, bigint, bigint)']
   loop
     execute format('revoke all on function public.%s from public, anon, authenticated', f);
     if exists (select 1 from pg_roles where rolname = 'service_role') then

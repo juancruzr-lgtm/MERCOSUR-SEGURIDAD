@@ -148,6 +148,15 @@ export function leerCsvArcaEmitidos(texto: string): LecturaArca {
   return { filas: Array.from(vistos.values()), errores, repetidas }
 }
 
+/**
+ * Número de cuenta que declara el archivo (nombre "EXTRACTO_511522209-D…" o
+ * una línea "Cuenta …"). null si no declara ninguno: no se inventa.
+ */
+export function cuentaEnExtracto(texto: string): string | null {
+  const m = /EXTRACTO_(\d{6,})/i.exec(texto) ?? /cuenta[^\d\n]{0,25}(\d[\d\-/ ]{5,})/i.exec(texto)
+  return m ? m[1].replace(/\D/g, '') : null
+}
+
 export type FilaExtracto = {
   fecha: string
   importe_c: number

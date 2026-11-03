@@ -34,9 +34,30 @@ create table if not exists public.fact_saldos_iniciales (
   anulado_motivo text
 );
 
+-- Cuentas bancarias propias (Galicia, Banco Municipal de Rosario, …). Cada
+-- movimiento pertenece a UNA cuenta: los bancos y cuentas no se mezclan.
+create table if not exists public.fact_cuentas_bancarias (
+  id           uuid primary key default gen_random_uuid(),
+  banco        text not null check (banco in ('galicia', 'municipal_rosario', 'otro')),
+  banco_nombre text,
+  numero       text not null check (length(trim(numero)) > 2),
+  cbu          text check (cbu is null or cbu ~ '^\d{22}$'),
+  alias        text,
+  moneda       text not null default 'ARS',
+  activa       boolean not null default true,
+  -- 'extracto_csv' hoy; 'api' cuando el banco habilite una API oficial (no confirmado).
+  origen       text not null default 'extracto_csv' check (origen in ('extracto_csv', 'api')),
+  creado_por   uuid references public.usuarios(id) on delete set null,
+  created_at   timestamptz not null default now(),
+  unique (banco, numero)
+);
+
 create table if not exists public.fact_movimientos_bancarios (
   id                    uuid primary key default gen_random_uuid(),
-  cuenta                text not null,
+  cuenta_id             uuid not null references public.fact_cuentas_bancarias(id),
+  -- Origen del dato: el circuito de conciliación es el mismo sea extracto o API.
+  origen                text not null default 'extracto_csv' check (origen in ('extracto_csv', 'api', 'manual')),
+  id_externo            text, -- identificador del movimiento en la API bancaria, cuando exista
   fecha                 date not null,
   importe_c             bigint not null check (importe_c <> 0),
   concepto              text not null default '',
@@ -49,9 +70,10 @@ create table if not exists public.fact_movimientos_bancarios (
   clasificacion_motivo  text,
   clasificado_por       uuid references public.usuarios(id) on delete set null, -- null = automática
   created_at            timestamptz not null default now(),
-  unique (cuenta, hash_linea)
+  unique (cuenta_id, hash_linea)
 );
-create index if not exists ix_fact_mov_fecha on public.fact_movimientos_bancarios (fecha);
+create index if not exists ix_fact_mov_fecha on public.fact_movimientos_bancarios (cuenta_id, fecha);
+create unique index if not exists ux_fact_mov_externo on public.fact_movimientos_bancarios (cuenta_id, id_externo) where id_externo is not null;
 
 create table if not exists public.fact_cobros (
   id                 uuid primary key default gen_random_uuid(),
@@ -139,7 +161,7 @@ create index if not exists ix_fact_aplic_comp on public.fact_aplicaciones (compr
 do $do$
 declare t text;
 begin
-  foreach t in array array['fact_saldos_iniciales', 'fact_movimientos_bancarios', 'fact_cobros', 'fact_retenciones', 'fact_propuestas', 'fact_aplicaciones']
+  foreach t in array array['fact_cuentas_bancarias', 'fact_saldos_iniciales', 'fact_movimientos_bancarios', 'fact_cobros', 'fact_retenciones', 'fact_propuestas', 'fact_aplicaciones']
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public, anon, authenticated', t);
@@ -263,26 +285,40 @@ end $fn$;
 
 -- ── Extracto bancario ──────────────────────────────────────────────────────
 -- p_filas: [{fecha, importe_c, concepto, referencia, cuit_contraparte, nombre_contraparte, hash, clasificacion, clasificacion_motivo}]
-create or replace function public.fact_extracto_importar(p_cuenta text, p_nombre text, p_sha256 text, p_documento_id uuid, p_filas jsonb)
+create or replace function public.fact_cuenta_bancaria_guardar(p_datos jsonb)
+returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
+declare v_actor uuid := public.facturacion_gate(); v_id uuid;
+begin
+  insert into public.fact_cuentas_bancarias (banco, banco_nombre, numero, cbu, alias, moneda, creado_por)
+  values (p_datos->>'banco', p_datos->>'banco_nombre', regexp_replace(trim(p_datos->>'numero'), '\s', '', 'g'),
+    nullif(regexp_replace(coalesce(p_datos->>'cbu', ''), '\D', '', 'g'), ''), p_datos->>'alias', coalesce(p_datos->>'moneda', 'ARS'), v_actor)
+  on conflict (banco, numero) do update set cbu = coalesce(excluded.cbu, fact_cuentas_bancarias.cbu), alias = coalesce(excluded.alias, fact_cuentas_bancarias.alias)
+  returning id into v_id;
+  perform public.fact_registrar('cuenta_bancaria', v_id, 'alta', p_datos, v_actor);
+  return v_id;
+end $fn$;
+
+create or replace function public.fact_extracto_importar(p_cuenta_id uuid, p_nombre text, p_sha256 text, p_documento_id uuid, p_filas jsonb)
 returns jsonb language plpgsql security definer set search_path = public, pg_catalog as $fn$
 declare v_actor uuid := public.facturacion_gate(); v_id uuid; f jsonb; v_nuevos int := 0; v_rep int := 0; v_mov uuid;
 begin
+  if not exists (select 1 from public.fact_cuentas_bancarias where id = p_cuenta_id and activa) then raise exception 'Cuenta bancaria inexistente o inactiva'; end if;
   select id into v_id from public.fact_importaciones where tipo = 'extracto_banco' and sha256 = lower(p_sha256) and estado <> 'descartada';
   if v_id is not null then return jsonb_build_object('id', v_id, 'duplicado', true); end if;
-  insert into public.fact_importaciones (tipo, nombre_archivo, sha256, documento_id, creado_por, estado)
-  values ('extracto_banco', p_nombre, lower(p_sha256), p_documento_id, v_actor, 'confirmada') returning id into v_id;
+  insert into public.fact_importaciones (tipo, nombre_archivo, sha256, documento_id, creado_por, estado, resumen)
+  values ('extracto_banco', p_nombre, lower(p_sha256), p_documento_id, v_actor, 'confirmada', jsonb_build_object('cuenta_id', p_cuenta_id)) returning id into v_id;
   for f in select * from jsonb_array_elements(p_filas) loop
-    insert into public.fact_movimientos_bancarios (cuenta, fecha, importe_c, concepto, referencia, cuit_contraparte, nombre_contraparte, hash_linea,
+    insert into public.fact_movimientos_bancarios (cuenta_id, fecha, importe_c, concepto, referencia, cuit_contraparte, nombre_contraparte, hash_linea,
       importacion_id, clasificacion, clasificacion_motivo)
-    values (p_cuenta, (f->>'fecha')::date, (f->>'importe_c')::bigint, coalesce(f->>'concepto', ''), f->>'referencia',
+    values (p_cuenta_id, (f->>'fecha')::date, (f->>'importe_c')::bigint, coalesce(f->>'concepto', ''), f->>'referencia',
       nullif(regexp_replace(coalesce(f->>'cuit_contraparte', ''), '\D', '', 'g'), ''), f->>'nombre_contraparte', f->>'hash', v_id,
       coalesce(f->>'clasificacion', 'sin_clasificar'), f->>'clasificacion_motivo')
-    on conflict (cuenta, hash_linea) do nothing returning id into v_mov;
+    on conflict (cuenta_id, hash_linea) do nothing returning id into v_mov;
     if v_mov is null then v_rep := v_rep + 1; else v_nuevos := v_nuevos + 1; end if;
     v_mov := null;
   end loop;
-  update public.fact_importaciones set resumen = jsonb_build_object('nuevos', v_nuevos, 'ya_importados', v_rep) where id = v_id;
-  perform public.fact_registrar('importacion', v_id, 'alta', jsonb_build_object('cuenta', p_cuenta, 'nuevos', v_nuevos, 'ya_importados', v_rep), v_actor);
+  update public.fact_importaciones set resumen = resumen || jsonb_build_object('nuevos', v_nuevos, 'ya_importados', v_rep) where id = v_id;
+  perform public.fact_registrar('importacion', v_id, 'alta', jsonb_build_object('cuenta_id', p_cuenta_id, 'nuevos', v_nuevos, 'ya_importados', v_rep), v_actor);
   return jsonb_build_object('id', v_id, 'duplicado', false, 'nuevos', v_nuevos, 'ya_importados', v_rep);
 end $fn$;
 
@@ -438,112 +474,224 @@ begin
 end $fn$;
 
 -- ── Tablero ────────────────────────────────────────────────────────────────
--- Tres ejes separados para el mismo mes: prestación (período de servicio),
--- emisión (fecha del comprobante) y cobro (fecha del cobro).
-create or replace function public.fact_tablero(p_mes text, p_hoy date default null)
+-- Tres ejes separados: PRESTACIÓN (mes del período de servicio), EMISIÓN
+-- (fecha del comprobante) y COBRO (fecha del cobro). Filtros opcionales por
+-- cliente y objetivo. Las horas salen de las fotos aprobadas (horas
+-- facturables), nunca de las liquidables. Sólo comprobantes de producción.
+-- El mes de prestación de una foto es el mes en que CIERRA su período
+-- (corte 26→25: '2026-10' = 26/09–25/10), igual que en periodoFacturacion.
+
+create or replace function public.fact_mes_prestacion(p_hasta_excl date)
+returns text language sql immutable as $fn$ select to_char(p_hasta_excl - 1, 'YYYY-MM') $fn$;
+
+-- Horas de un mes de prestación (programadas, cubiertas, aprobadas, facturadas).
+create or replace function public.fact_horas_mes(p_mes text, p_cliente_id uuid, p_objetivo_id uuid)
+returns jsonb language sql stable security definer set search_path = public, pg_catalog as $fn$
+  with h as (
+    select h.*, exists (select 1 from public.fact_prefacturas p where p.estado = 'emitida' and h.id = any(p.horas_aprobacion_ids)) as facturada,
+           exists (select 1 from public.fact_prefacturas p where p.estado <> 'descartada' and h.id = any(p.horas_aprobacion_ids)) as en_prefactura
+    from public.fact_horas_aprobaciones h
+    left join public.fact_contratos k on k.id = h.contrato_id
+    where h.estado = 'aprobada' and public.fact_mes_prestacion(h.periodo_hasta_excl) = p_mes
+      and (p_cliente_id is null or k.cliente_id = p_cliente_id)
+      and (p_objetivo_id is null or h.objetivo_id = p_objetivo_id))
+  select jsonb_build_object(
+    'programadas', coalesce(sum(minutos_programados), 0) / 60.0,
+    'cubiertas', coalesce(sum(minutos_cubiertos), 0) / 60.0,
+    'superpuestas', coalesce(sum(minutos_superpuestos), 0) / 60.0,
+    'descubiertas', coalesce(sum(minutos_descubiertos), 0) / 60.0,
+    'aprobadas', coalesce(sum(minutos_aprobados), 0) / 60.0,
+    'facturadas', coalesce(sum(minutos_aprobados) filter (where facturada), 0) / 60.0,
+    'pendientes_facturar', coalesce(sum(minutos_aprobados) filter (where not facturada), 0) / 60.0,
+    'aprobadas_sin_prefactura', coalesce(sum(minutos_aprobados) filter (where not en_prefactura), 0) / 60.0,
+    'objetivos', count(*))
+  from h
+$fn$;
+revoke all on function public.fact_horas_mes(text, uuid, uuid) from public, anon, authenticated;
+
+-- ¿El comprobante pertenece al cliente/objetivo filtrado? Por objetivo sólo es
+-- exacto cuando la factura es por objetivo; si agrupa varios, cuenta entera.
+create or replace function public.fact_comprobante_en_filtro(k public.fact_comprobantes, p_cliente_id uuid, p_objetivo_id uuid)
+returns boolean language sql stable security definer set search_path = public, pg_catalog as $fn$
+  select (p_cliente_id is null or k.cliente_id = p_cliente_id)
+     and (p_objetivo_id is null or exists (
+          select 1 from public.fact_prefacturas p
+          where p.id = coalesce(k.prefactura_id, (select a.prefactura_id from public.fact_comprobantes a where a.id = k.asociado_id))
+            and (p.objetivo_id = p_objetivo_id or exists (select 1 from public.fact_horas_aprobaciones h
+                 where h.id = any(p.horas_aprobacion_ids) and h.objetivo_id = p_objetivo_id))))
+$fn$;
+revoke all on function public.fact_comprobante_en_filtro(public.fact_comprobantes, uuid, uuid) from public, anon, authenticated;
+
+-- Emisión y cobro de un mes calendario (montos), con los mismos filtros.
+create or replace function public.fact_montos_mes(p_mes text, p_cliente_id uuid, p_objetivo_id uuid)
+returns jsonb language sql stable security definer set search_path = public, pg_catalog as $fn$
+  with k as (
+    select k.* from public.fact_comprobantes k
+    where k.ambiente = 'produccion' and to_char(k.fecha_emision, 'YYYY-MM') = p_mes
+      and public.fact_comprobante_en_filtro(k, p_cliente_id, p_objetivo_id)),
+  cob as (
+    select c.* from public.fact_cobros c
+    where c.anulado_at is null and to_char(c.fecha, 'YYYY-MM') = p_mes
+      and coalesce(c.cheque_estado, 'acreditado') not in ('rechazado', 'anulado')
+      and (p_cliente_id is null or c.cliente_id = p_cliente_id)
+      -- Por objetivo: sólo cobros aplicados a comprobantes de ese objetivo.
+      and (p_objetivo_id is null or exists (select 1 from public.fact_aplicaciones a join public.fact_comprobantes x on x.id = a.comprobante_id
+           where a.cobro_id = c.id and a.revertida_at is null and public.fact_comprobante_en_filtro(x, p_cliente_id, p_objetivo_id)))),
+  ret as (
+    select r.* from public.fact_retenciones r
+    where to_char(r.fecha, 'YYYY-MM') = p_mes and (p_cliente_id is null or r.cliente_id = p_cliente_id)
+      and (p_objetivo_id is null or exists (select 1 from public.fact_aplicaciones a join public.fact_comprobantes x on x.id = a.comprobante_id
+           where a.retencion_id = r.id and a.revertida_at is null and public.fact_comprobante_en_filtro(x, p_cliente_id, p_objetivo_id))))
+  select jsonb_build_object(
+    'facturas_neto_c', coalesce((select sum(neto_c) from k where tipo in (1, 6, 201)), 0),
+    'facturas_iva_c', coalesce((select sum(iva_c) from k where tipo in (1, 6, 201)), 0),
+    'facturas_total_c', coalesce((select sum(total_c) from k where tipo in (1, 6, 201)), 0),
+    'nc_neto_c', coalesce((select sum(neto_c) from k where tipo in (3, 8, 203)), 0),
+    'nc_total_c', coalesce((select sum(total_c) from k where tipo in (3, 8, 203)), 0),
+    'nd_neto_c', coalesce((select sum(neto_c) from k where tipo in (2, 7, 202)), 0),
+    'nd_total_c', coalesce((select sum(total_c) from k where tipo in (2, 7, 202)), 0),
+    'neto_facturado_c', coalesce((select sum(case when tipo in (3, 8, 203) then -neto_c else neto_c end) from k), 0),
+    'total_facturado_c', coalesce((select sum(case when tipo in (3, 8, 203) then -total_c else total_c end) from k), 0),
+    'comprobantes', (select count(*) from k),
+    -- Dinero que entró al banco (o cheque acreditable): NO incluye retenciones.
+    'cobrado_c', coalesce((select sum(importe_c) from cob), 0),
+    'retenciones_certificadas_c', coalesce((select sum(importe_c) from ret where estado = 'certificado_recibido'), 0),
+    'retenciones_estimadas_c', coalesce((select sum(importe_c) from ret where estado = 'estimada'), 0))
+$fn$;
+revoke all on function public.fact_montos_mes(text, uuid, uuid) from public, anon, authenticated;
+
+create or replace function public.fact_tablero(p_mes text, p_hoy date default null, p_cliente_id uuid default null, p_objetivo_id uuid default null)
 returns jsonb language plpgsql stable security definer set search_path = public, pg_catalog as $fn$
-declare v_desde date := (p_mes || '-01')::date; v_hasta date := ((p_mes || '-01')::date + interval '1 month')::date;
-  v_hoy date := coalesce(p_hoy, (now() at time zone 'America/Argentina/Buenos_Aires')::date); r jsonb := '{}'::jsonb;
+declare v_hoy date := coalesce(p_hoy, (now() at time zone 'America/Argentina/Buenos_Aires')::date); r jsonb := '{}'::jsonb; m jsonb;
 begin
   if not public.facturacion_puede_actual() then raise exception 'Sólo Gerencia o Administración' using errcode = '42501'; end if;
+  if p_mes !~ '^\d{4}-\d{2}$' then raise exception 'Mes inválido'; end if;
+
+  r := r || jsonb_build_object('filtro', jsonb_build_object('mes', p_mes, 'cliente_id', p_cliente_id, 'objetivo_id', p_objetivo_id));
+  r := r || jsonb_build_object('horas', public.fact_horas_mes(p_mes, p_cliente_id, p_objetivo_id));
 
   r := r || jsonb_build_object('prestacion', (
     select jsonb_build_object(
-      'horas_registradas', coalesce(sum(p.minutos_registrados), 0) / 60.0,
-      'horas_aprobadas', coalesce(sum(p.minutos_aprobados), 0) / 60.0,
-      'horas_pendientes_facturar', coalesce(sum(p.minutos_aprobados) filter (where p.estado <> 'emitida'), 0) / 60.0,
-      'horas_sin_aprobar', coalesce(sum(p.minutos_pendientes), 0) / 60.0,
       'prefacturas', count(*),
-      'pendientes', count(*) filter (where p.estado not in ('emitida')),
-      'por_estado', coalesce((select jsonb_object_agg(estado, n) from (select estado, count(*) n from public.fact_prefacturas
-                     where periodo_mes = p_mes and estado <> 'descartada' group by estado) s), '{}'::jsonb),
+      'pendientes', count(*) filter (where p.estado <> 'emitida'),
+      'neto_prefacturado_c', coalesce(sum(p.neto_c), 0),
+      'neto_emitido_c', coalesce(sum(p.neto_c) filter (where p.estado = 'emitida'), 0),
+      'por_estado', coalesce((select jsonb_object_agg(estado, n) from (select q.estado, count(*) n from public.fact_prefacturas q
+                     where q.periodo_mes = p_mes and q.estado <> 'descartada' and (p_cliente_id is null or q.cliente_id = p_cliente_id)
+                       and (p_objetivo_id is null or q.objetivo_id = p_objetivo_id or exists (select 1 from public.fact_horas_aprobaciones h where h.id = any(q.horas_aprobacion_ids) and h.objetivo_id = p_objetivo_id))
+                     group by q.estado) s), '{}'::jsonb),
       'ajustes_neto_c', coalesce((select sum(a.importe_neto_c) from public.fact_ajustes a join public.fact_prefacturas pp on pp.id = a.prefactura_id
-                     where pp.periodo_mes = p_mes and a.aprobado_at is not null and a.anulado_at is null), 0))
-    from public.fact_prefacturas p where p.periodo_mes = p_mes and p.estado <> 'descartada'));
+                     where pp.periodo_mes = p_mes and pp.estado <> 'descartada' and a.aprobado_at is not null and a.anulado_at is null
+                       and (p_cliente_id is null or pp.cliente_id = p_cliente_id)), 0))
+    from public.fact_prefacturas p
+    where p.periodo_mes = p_mes and p.estado <> 'descartada' and (p_cliente_id is null or p.cliente_id = p_cliente_id)
+      and (p_objetivo_id is null or p.objetivo_id = p_objetivo_id or exists (select 1 from public.fact_horas_aprobaciones h where h.id = any(p.horas_aprobacion_ids) and h.objetivo_id = p_objetivo_id))));
 
   r := r || jsonb_build_object('demoras', coalesce((
     select jsonb_agg(jsonb_build_object('prefactura_id', p.id, 'cliente', c.razon_social, 'objetivo', o.nombre, 'estado', p.estado,
       'motivos', p.requisitos, 'proxima_accion', p.proxima_accion, 'responsable_id', p.responsable_id) order by c.razon_social)
     from public.fact_prefacturas p join public.fact_clientes c on c.id = p.cliente_id left join public.objetivos o on o.id = p.objetivo_id
-    where p.periodo_mes = p_mes and p.estado in ('en_preparacion', 'esperando_requisitos', 'lista_revision', 'aprobada_emitir')), '[]'::jsonb));
+    where p.periodo_mes = p_mes and p.estado in ('en_preparacion', 'esperando_requisitos', 'lista_revision', 'aprobada_emitir')
+      and (p_cliente_id is null or p.cliente_id = p_cliente_id)), '[]'::jsonb));
 
-  r := r || jsonb_build_object('emision', (
-    select jsonb_build_object(
-      'facturas_neto_c', coalesce(sum(neto_c) filter (where tipo in (1, 6, 201)), 0),
-      'facturas_iva_c', coalesce(sum(iva_c) filter (where tipo in (1, 6, 201)), 0),
-      'facturas_total_c', coalesce(sum(total_c) filter (where tipo in (1, 6, 201)), 0),
-      'nc_neto_c', coalesce(sum(neto_c) filter (where tipo in (3, 8, 203)), 0),
-      'nc_total_c', coalesce(sum(total_c) filter (where tipo in (3, 8, 203)), 0),
-      'nd_neto_c', coalesce(sum(neto_c) filter (where tipo in (2, 7, 202)), 0),
-      'nd_total_c', coalesce(sum(total_c) filter (where tipo in (2, 7, 202)), 0),
-      'neto_facturado_c', coalesce(sum(case when tipo in (3, 8, 203) then -neto_c else neto_c end), 0),
-      'comprobantes', count(*))
-    from public.fact_comprobantes where ambiente = 'produccion' and fecha_emision >= v_desde and fecha_emision < v_hasta));
-
+  m := public.fact_montos_mes(p_mes, p_cliente_id, p_objetivo_id);
+  r := r || jsonb_build_object('emision', m - 'cobrado_c' - 'retenciones_certificadas_c' - 'retenciones_estimadas_c');
   r := r || jsonb_build_object('cobro', jsonb_build_object(
-    'cobrado_c', coalesce((select sum(importe_c) from public.fact_cobros where anulado_at is null and fecha >= v_desde and fecha < v_hasta
-                   and coalesce(cheque_estado, 'acreditado') not in ('rechazado', 'anulado')), 0),
-    'retenciones_certificadas_c', coalesce((select sum(importe_c) from public.fact_retenciones where estado = 'certificado_recibido' and fecha >= v_desde and fecha < v_hasta), 0),
-    'retenciones_estimadas_c', coalesce((select sum(importe_c) from public.fact_retenciones where estado = 'estimada' and fecha >= v_desde and fecha < v_hasta), 0),
-    'ingresos_no_cobranza_c', coalesce((select sum(importe_c) from public.fact_movimientos_bancarios where clasificacion = 'no_cobranza' and importe_c > 0 and fecha >= v_desde and fecha < v_hasta), 0)));
+    'cobrado_c', m->'cobrado_c', 'retenciones_certificadas_c', m->'retenciones_certificadas_c', 'retenciones_estimadas_c', m->'retenciones_estimadas_c',
+    'ingresos_no_cobranza_c', case when p_cliente_id is null and p_objetivo_id is null then coalesce((select sum(importe_c) from public.fact_movimientos_bancarios
+        where clasificacion = 'no_cobranza' and importe_c > 0 and to_char(fecha, 'YYYY-MM') = p_mes), 0) end));
 
   r := r || jsonb_build_object('deuda', (
     select jsonb_build_object(
       'total_c', coalesce(sum(saldo_c) filter (where saldo_c > 0), 0),
       'no_vencido_c', coalesce(sum(saldo_c) filter (where saldo_c > 0 and (vto_pago is null or vto_pago >= v_hoy)), 0),
+      'vencido_c', coalesce(sum(saldo_c) filter (where saldo_c > 0 and vto_pago < v_hoy), 0),
       'd1_30_c', coalesce(sum(saldo_c) filter (where saldo_c > 0 and v_hoy - vto_pago between 1 and 30), 0),
       'd31_60_c', coalesce(sum(saldo_c) filter (where saldo_c > 0 and v_hoy - vto_pago between 31 and 60), 0),
       'd61_90_c', coalesce(sum(saldo_c) filter (where saldo_c > 0 and v_hoy - vto_pago between 61 and 90), 0),
       'mas_90_c', coalesce(sum(saldo_c) filter (where saldo_c > 0 and v_hoy - vto_pago > 90), 0),
-      'sin_cliente_c', coalesce(sum(saldo_c) filter (where saldo_c > 0 and cliente_id is null), 0),
-      'saldos_iniciales_c', coalesce((select sum(public.fact_saldo_destino(null, s.id)) from public.fact_saldos_iniciales s where s.estado = 'vigente'), 0))
-    from public.fact_v_saldos));
+      'sin_cliente_c', coalesce(sum(saldo_c) filter (where saldo_c > 0 and s.cliente_id is null), 0),
+      'saldos_iniciales_c', coalesce((select sum(public.fact_saldo_destino(null, si.id)) from public.fact_saldos_iniciales si
+                              where si.estado = 'vigente' and (p_cliente_id is null or si.cliente_id = p_cliente_id)), 0),
+      -- NC importadas sin factura asociada: crédito que todavía no reduce ningún saldo.
+      'nc_sin_asociar_c', coalesce((select sum(total_c) from public.fact_comprobantes n where n.ambiente = 'produccion' and n.tipo in (3, 8, 203)
+                              and n.asociado_id is null and (p_cliente_id is null or n.cliente_id = p_cliente_id)), 0))
+    from public.fact_v_saldos s
+    where (p_cliente_id is null or s.cliente_id = p_cliente_id)
+      and (p_objetivo_id is null or exists (select 1 from public.fact_comprobantes k where k.id = s.comprobante_id and public.fact_comprobante_en_filtro(k, p_cliente_id, p_objetivo_id)))));
 
   r := r || jsonb_build_object('sin_aplicar', jsonb_build_object(
     'cobros_c', coalesce((select sum(c.importe_c - coalesce((select sum(a.importe_c) from public.fact_aplicaciones a where a.cobro_id = c.id and a.revertida_at is null), 0))
-                  from public.fact_cobros c where c.anulado_at is null and coalesce(c.cheque_estado, 'acreditado') not in ('rechazado', 'anulado', 'endosado')), 0),
-    'movimientos_sin_cobro', (select count(*) from public.fact_movimientos_bancarios m where m.clasificacion = 'cobranza_posible'
-                  and not exists (select 1 from public.fact_cobros c where c.movimiento_id = m.id and c.anulado_at is null)),
-    'movimientos_sin_clasificar', (select count(*) from public.fact_movimientos_bancarios m where m.clasificacion = 'sin_clasificar' and m.importe_c > 0)));
+                  from public.fact_cobros c where c.anulado_at is null and coalesce(c.cheque_estado, 'acreditado') not in ('rechazado', 'anulado', 'endosado')
+                    and (p_cliente_id is null or c.cliente_id = p_cliente_id)), 0),
+    'movimientos_sin_cobro', (select count(*) from public.fact_movimientos_bancarios mv where mv.clasificacion = 'cobranza_posible'
+                  and not exists (select 1 from public.fact_cobros c where c.movimiento_id = mv.id and c.anulado_at is null)),
+    'movimientos_sin_clasificar', (select count(*) from public.fact_movimientos_bancarios mv where mv.clasificacion = 'sin_clasificar' and mv.importe_c > 0)));
 
   r := r || jsonb_build_object('por_cliente', coalesce((
     select jsonb_agg(x order by x->>'cliente') from (
       select jsonb_build_object('cliente_id', c.id, 'cliente', c.razon_social,
-        'facturado_neto_c', coalesce((select sum(case when k.tipo in (3, 8, 203) then -k.neto_c else k.neto_c end) from public.fact_comprobantes k
-                              where k.cliente_id = c.id and k.ambiente = 'produccion' and k.fecha_emision >= v_desde and k.fecha_emision < v_hasta), 0),
-        'cobrado_c', coalesce((select sum(importe_c) from public.fact_cobros k where k.cliente_id = c.id and k.anulado_at is null and k.fecha >= v_desde and k.fecha < v_hasta
-                              and coalesce(k.cheque_estado, 'acreditado') not in ('rechazado', 'anulado')), 0),
+        'horas', public.fact_horas_mes(p_mes, c.id, p_objetivo_id),
+        'montos', public.fact_montos_mes(p_mes, c.id, p_objetivo_id),
         'saldo_c', coalesce((select sum(saldo_c) from public.fact_v_saldos s where s.cliente_id = c.id), 0),
-        'horas_aprobadas', coalesce((select sum(minutos_aprobados) from public.fact_prefacturas p where p.cliente_id = c.id and p.periodo_mes = p_mes and p.estado <> 'descartada'), 0) / 60.0) x
-      from public.fact_clientes c where c.activo) s), '[]'::jsonb));
+        'vencido_c', coalesce((select sum(saldo_c) from public.fact_v_saldos s where s.cliente_id = c.id and s.saldo_c > 0 and s.vto_pago < v_hoy), 0)) x
+      from public.fact_clientes c where c.activo and (p_cliente_id is null or c.id = p_cliente_id)) s), '[]'::jsonb));
 
   r := r || jsonb_build_object('por_objetivo', coalesce((
     select jsonb_agg(jsonb_build_object('objetivo_id', h.objetivo_id, 'objetivo', o.nombre,
-      'horas_registradas', h.minutos_registrados / 60.0, 'horas_aprobadas', h.minutos_aprobados / 60.0) order by o.nombre)
-    from public.fact_horas_aprobaciones h join public.objetivos o on o.id = h.objetivo_id
-    where h.estado = 'aprobada' and h.periodo_hasta_excl > v_desde and h.periodo_desde < v_hasta), '[]'::jsonb));
+      'horas_programadas', h.minutos_programados / 60.0, 'horas_cubiertas', h.minutos_cubiertos / 60.0,
+      'horas_descubiertas', h.minutos_descubiertos / 60.0, 'horas_aprobadas', h.minutos_aprobados / 60.0,
+      'facturada', exists (select 1 from public.fact_prefacturas p where p.estado = 'emitida' and h.id = any(p.horas_aprobacion_ids))) order by o.nombre)
+    from public.fact_horas_aprobaciones h join public.objetivos o on o.id = h.objetivo_id left join public.fact_contratos k on k.id = h.contrato_id
+    where h.estado = 'aprobada' and public.fact_mes_prestacion(h.periodo_hasta_excl) = p_mes
+      and (p_cliente_id is null or k.cliente_id = p_cliente_id) and (p_objetivo_id is null or h.objetivo_id = p_objetivo_id)), '[]'::jsonb));
 
-  -- Precio promedio por hora: SÓLO líneas de horas (sin abonos, ajustes ni anticipos).
+  -- Precio promedio por hora: sólo líneas de HORAS de prefacturas EMITIDAS (sin
+  -- abonos, ajustes ni anticipos). Diurnas y nocturnas también por separado.
   r := r || jsonb_build_object('precio_hora', (
-    select jsonb_build_object('neto_c', coalesce(sum((l->'importes'->>'neto')::bigint), 0),
+    select jsonb_build_object(
+      'neto_c', coalesce(sum((l->'importes'->>'neto')::bigint), 0),
       'horas', coalesce(sum((l->>'cantidad')::numeric), 0),
-      'promedio_c', case when coalesce(sum((l->>'cantidad')::numeric), 0) > 0
-                     then round(sum((l->'importes'->>'neto')::bigint) / sum((l->>'cantidad')::numeric)) end)
+      'promedio_c', case when coalesce(sum((l->>'cantidad')::numeric), 0) > 0 then round(sum((l->'importes'->>'neto')::bigint) / sum((l->>'cantidad')::numeric)) end,
+      'diurna_c', case when coalesce(sum((l->>'cantidad')::numeric) filter (where l->>'concepto' = 'Horas diurnas'), 0) > 0
+                  then round(sum((l->'importes'->>'neto')::bigint) filter (where l->>'concepto' = 'Horas diurnas') / sum((l->>'cantidad')::numeric) filter (where l->>'concepto' = 'Horas diurnas')) end,
+      'nocturna_c', case when coalesce(sum((l->>'cantidad')::numeric) filter (where l->>'concepto' = 'Horas nocturnas'), 0) > 0
+                  then round(sum((l->'importes'->>'neto')::bigint) filter (where l->>'concepto' = 'Horas nocturnas') / sum((l->>'cantidad')::numeric) filter (where l->>'concepto' = 'Horas nocturnas')) end,
+      'base', 'prefacturas emitidas del mes de prestación')
     from public.fact_prefacturas p cross join lateral jsonb_array_elements(p.lineas) l
-    where p.periodo_mes = p_mes and p.estado <> 'descartada' and l->>'concepto' like 'Horas%'));
+    where p.periodo_mes = p_mes and p.estado = 'emitida' and l->>'concepto' like 'Horas%'
+      and (p_cliente_id is null or p.cliente_id = p_cliente_id) and (p_objetivo_id is null or p.objetivo_id = p_objetivo_id)));
 
   r := r || jsonb_build_object('rentabilidad', jsonb_build_object('disponible', false, 'motivo', 'No hay costos completos por objetivo: no se calcula rentabilidad.'));
   return r;
+end $fn$;
+
+-- Serie mensual para evolución y comparaciones (mes contra mes, año contra año).
+create or replace function public.fact_tablero_serie(p_desde text, p_hasta text, p_cliente_id uuid default null, p_objetivo_id uuid default null)
+returns jsonb language plpgsql stable security definer set search_path = public, pg_catalog as $fn$
+declare v jsonb := '[]'::jsonb; d date; h date;
+begin
+  if not public.facturacion_puede_actual() then raise exception 'Sólo Gerencia o Administración' using errcode = '42501'; end if;
+  if p_desde !~ '^\d{4}-\d{2}$' or p_hasta !~ '^\d{4}-\d{2}$' then raise exception 'Mes inválido'; end if;
+  d := (p_desde || '-01')::date; h := (p_hasta || '-01')::date;
+  if h < d or h > d + interval '36 months' then raise exception 'Rango inválido (hasta 36 meses)'; end if;
+  while d <= h loop
+    v := v || jsonb_build_object('mes', to_char(d, 'YYYY-MM'),
+      'horas', public.fact_horas_mes(to_char(d, 'YYYY-MM'), p_cliente_id, p_objetivo_id),
+      'montos', public.fact_montos_mes(to_char(d, 'YYYY-MM'), p_cliente_id, p_objetivo_id));
+    d := (d + interval '1 month')::date;
+  end loop;
+  return v;
 end $fn$;
 
 do $do$
 declare f text;
 begin
   foreach f in array array['fact_aplicar(text, uuid, uuid, uuid, bigint, jsonb)', 'fact_aplicacion_revertir(uuid, text)',
-    'fact_saldo_inicial_registrar(uuid, date, bigint, text, uuid)', 'fact_extracto_importar(text, text, text, uuid, jsonb)',
+    'fact_saldo_inicial_registrar(uuid, date, bigint, text, uuid)', 'fact_extracto_importar(uuid, text, text, uuid, jsonb)', 'fact_cuenta_bancaria_guardar(jsonb)',
     'fact_movimiento_clasificar(uuid, text, text)', 'fact_cobro_registrar(jsonb)', 'fact_cobro_anular(uuid, text)',
     'fact_cheque_estado(uuid, text, text)', 'fact_retencion_registrar(jsonb)', 'fact_retencion_certificar(uuid, text, bigint, uuid)',
-    'fact_propuestas_guardar(uuid, jsonb)', 'fact_propuesta_aceptar(uuid)', 'fact_propuesta_rechazar(uuid, text)', 'fact_tablero(text, date)']
+    'fact_propuestas_guardar(uuid, jsonb)', 'fact_propuesta_aceptar(uuid)', 'fact_propuesta_rechazar(uuid, text)', 'fact_tablero(text, date, uuid, uuid)', 'fact_tablero_serie(text, text, uuid, uuid)']
   loop
     execute format('revoke all on function public.%s from public, anon', f);
     execute format('grant execute on function public.%s to authenticated', f);

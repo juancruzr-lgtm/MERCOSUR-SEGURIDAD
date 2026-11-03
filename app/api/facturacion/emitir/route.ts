@@ -66,8 +66,9 @@ export async function POST(req: NextRequest) {
   }
   const o = { cuit: e.cuit_emisor, homo }
   const rpc = async (fn: string, args: Record<string, unknown>) => {
-    const { error } = await c.admin.rpc(fn, args)
+    const { data, error } = await c.admin.rpc(fn, args)
     if (error) throw new Error(error.message)
+    return data as string | null
   }
   try {
     const r = await ejecutarEmision(e as Emision, {
@@ -75,13 +76,13 @@ export async function POST(req: NextRequest) {
       solicitar: comp => solicitarCae(ta, o, comp),
       consultar: x => consultarComprobante(ta, { ...o, ...x }),
     }, {
-      iniciarEnvio: (id, numero, sol) => rpc('fact_emision_iniciar_envio', { p_emision_id: id, p_numero: numero, p_solicitud_arca: sol }),
-      resultado: (id, x) => rpc('fact_emision_resultado', { p_emision_id: id, p_resultado: x.resultado, p_respuesta: x.respuesta ?? {},
-        p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_observaciones: x.observaciones ?? null }),
+      iniciarEnvio: async (id, numero, sol) => { await rpc('fact_emision_iniciar_envio', { p_emision_id: id, p_numero: numero, p_solicitud_arca: sol }) },
+      resultado: async (id, x) => { await rpc('fact_emision_resultado', { p_emision_id: id, p_resultado: x.resultado, p_respuesta: x.respuesta ?? {},
+        p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_observaciones: x.observaciones ?? null }) },
       consulta: (id, x) => rpc('fact_emision_consulta', { p_emision_id: id, p_encontrado: x.encontrado, p_respuesta: x.respuesta ?? {},
-        p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_total_c: x.totalC ?? null }),
+        p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_total_c: x.totalC ?? null, p_numero: x.numero }),
     }, { hoy: fechaArgentina(), condicionIva: cli?.condicion_iva ?? 'responsable_inscripto', cbuFce: conf?.valor?.cbu_fce ?? null })
-    return responder({ ...r, emision_id: e.id }, r.estado === 'invalida' ? 400 : 200)
+    return responder({ ...r, emision_id: e.id }, r.estado === 'invalida' ? 400 : r.estado === 'en_curso' ? 409 : 200)
   } catch (err: any) {
     // Falla al registrar el resultado: la solicitud quedó 'enviando' y la próxima vez se consulta.
     return responder({ estado: 'incierta', emision_id: e.id, error: err?.message ?? String(err) }, 502)

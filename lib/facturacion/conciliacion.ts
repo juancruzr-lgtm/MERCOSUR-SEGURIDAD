@@ -59,6 +59,7 @@ const PATRONES_NO_COBRANZA: Array<[RegExp, string]> = [
   [/entre cuentas|cuenta propia|ctas? propias|transf\.? propia|misma titularidad/i, 'Transferencia entre cuentas propias'],
   [/revers|contrasiento|anulaci[oó]n|devoluci[oó]n de d[eé]bito|contracargo/i, 'Reverso o anulación bancaria'],
   [/inter[eé]s(es)? (ganado|acreditado)|acreditaci[oó]n de intereses/i, 'Intereses bancarios'],
+  [/impuesto|ley 25\.?413|imp\.? ?d[eé]b|imp\.? ?cr[eé]d|sircreb|percepci[oó]n|retenci[oó]n i\.?i\.?b|comisi[oó]n|gastos? (de )?mant/i, 'Impuestos, percepciones o comisiones bancarias'],
 ]
 
 export function clasificarMovimiento(mov: MovimientoBancario, cuitPropio: string): Clasificacion {

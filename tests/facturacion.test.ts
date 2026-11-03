@@ -250,7 +250,7 @@ describe('prefacturación', () => {
   const base: EntradaPrefactura = {
     modalidad: 'por_hora', cuitReceptor: '30111111118',
     periodo: { desde: '2026-08-01', hastaExclusivo: '2026-09-01' },
-    horas: { minutosTotales: 544 * 60, minutosRegistrados: 544 * 60, minutosPendientesAprobacion: 0, fuentes: ['t1'] },
+    horas: { minutosTotales: 544 * 60, minutosProgramados: 544 * 60, minutosCubiertos: 544 * 60, minutosDescubiertosNoFacturados: 0, fuentes: ['t1'] },
     tarifas: [{ id: 'T1', concepto: 'hora', precio: '14853.20', tratamientoIva: 'adicional', alicuotaIva: '21' }],
     ajustes: [], separarDiurnaNocturna: false, requiere: ['oc_mensual'], cumplidos: ['oc_mensual'],
     oc: { id: 'OC238', numero: '238', vigenciaDesde: '2026-08-01', vigenciaHasta: '2026-08-31', montoNeto: null, horas: 544, consumidoNeto: 0, consumidoHoras: 0 },
@@ -296,7 +296,7 @@ describe('prefacturación', () => {
     expect(sin.requisitos.map(x => x.tipo)).toContain('franja_nocturna')
     const con = calcularPrefactura({
       ...base, separarDiurnaNocturna: true, tarifas, requiere: [], cumplidos: [], oc: null,
-      horas: { minutosTotales: 1536 * 60, minutosDiurnos: 1040 * 60, minutosNocturnos: 496 * 60, minutosRegistrados: 1536 * 60, minutosPendientesAprobacion: 0, fuentes: [] },
+      horas: { minutosTotales: 1536 * 60, minutosDiurnos: 1040 * 60, minutosNocturnos: 496 * 60, minutosProgramados: 1536 * 60, minutosCubiertos: 1536 * 60, minutosDescubiertosNoFacturados: 0, fuentes: [] },
     })
     expect(con.lineas.map(l => [l.concepto, l.cantidad])).toEqual([['Horas diurnas', '1040'], ['Horas nocturnas', '496']])
     expect(con.importes?.neto).toBe((1040 * 10000 + 496 * 12000) * 100)

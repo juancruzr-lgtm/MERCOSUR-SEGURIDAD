@@ -28,55 +28,81 @@ export default function Cobranzas() {
   )
 }
 
+const BANCOS: Record<string, string> = { galicia: 'Banco Galicia', municipal_rosario: 'Banco Municipal de Rosario', otro: 'Otro banco' }
+// Tres categorías, nunca imputación automática.
+const CATEGORIA: Record<string, [string, string]> = {
+  fuerte: ['Coincidencia inequívoca (revisar y aceptar)', '#16a34a'],
+  media: ['Probable: requiere revisión', '#ca8a04'],
+  debil: ['Sin identificar (sólo coincide el importe)', '#64748b'],
+}
+
 function Conciliacion({ clientes }: { clientes: any[] }) {
   const [movs, setMovs] = useState<any[]>([])
   const [props, setProps] = useState<any[]>([])
-  const [cuenta, setCuenta] = useState('511522209')
+  const [cuentas, setCuentas] = useState<any[]>([])
+  const [cuenta, setCuenta] = useState('')
+  const [verNoCobranza, setVerNoCobranza] = useState(false)
+  const [nueva, setNueva] = useState({ banco: 'galicia', numero: '', cbu: '' })
   const [rech, setRech] = useState<Record<string, string>>({})
   const { ocupado, correr, Mensaje } = useAccion()
 
   async function cargar() {
-    const [m, cobros, p] = await Promise.all([
-      leer('fact_movimientos_bancarios', q => q.gt('importe_c', 0).order('fecha', { ascending: false }).limit(500)),
+    const [m, cobros, p, cs] = await Promise.all([
+      leer('fact_movimientos_bancarios', q => (cuenta ? q.eq('cuenta_id', cuenta) : q).gt('importe_c', 0).order('fecha', { ascending: false }).limit(500)),
       leer('fact_cobros', q => q.not('movimiento_id', 'is', null).is('anulado_at', null), 'movimiento_id'),
       leer('fact_propuestas', q => q.eq('estado', 'propuesta')),
+      leer('fact_cuentas_bancarias', q => q.eq('activa', true).order('banco')),
     ])
+    setCuentas(cs)
     const con = new Set(cobros.map(c => c.movimiento_id))
     setMovs(m.map(x => ({ ...x, conCobro: con.has(x.id) }))); setProps(p)
   }
-  useEffect(() => { correr(cargar) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { correr(cargar) }, [cuenta]) // eslint-disable-line react-hooks/exhaustive-deps
   const nombre = (id: string | null) => clientes.find(c => c.id === id)?.razon_social ?? '—'
-  const pendientes = movs.filter(m => !m.conCobro && m.clasificacion !== 'no_cobranza')
+  const pendientes = movs.filter(m => !m.conCobro && (verNoCobranza ? m.clasificacion === 'no_cobranza' : m.clasificacion !== 'no_cobranza'))
+  const cuentaTxt = (id: string) => { const c = cuentas.find(x => x.id === id); return c ? `${BANCOS[c.banco] ?? c.banco} ${c.numero}` : '' }
 
   return (
     <div style={S.card}>
       <h3 style={S.h3}>Conciliación bancaria</h3>
       <div style={S.fila}>
-        <input style={{ ...S.input, width: 140 }} value={cuenta} onChange={e => setCuenta(e.target.value)} title="Cuenta" />
-        <input type="file" accept=".csv" disabled={ocupado} onChange={e => {
+        <select style={S.input} value={cuenta} onChange={e => setCuenta(e.target.value)} title="Cuenta">
+          <option value="">Todas las cuentas (para importar, elegí una)</option>
+          {cuentas.map(c => <option key={c.id} value={c.id}>{BANCOS[c.banco] ?? c.banco} · {c.numero}</option>)}
+        </select>
+        <input type="file" accept=".csv" disabled={ocupado || !cuenta} onChange={e => {
           const f = e.target.files?.[0]; if (!f) return
-          const form = new FormData(); form.append('archivo', f); form.append('tipo', 'extracto'); form.append('cuenta', cuenta)
+          const form = new FormData(); form.append('archivo', f); form.append('tipo', 'extracto'); form.append('cuenta_id', cuenta)
           correr(async () => { const r = await api('importar', form); await cargar(); if (r.duplicado) throw new Error('Ese extracto ya estaba importado') }, 'Extracto importado')
           e.target.value = ''
         }} />
         <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => { const r = await api('conciliacion', {}); await cargar(); return r }, 'Propuestas recalculadas')}>Proponer asociaciones</button>
+        <label style={S.sub}><input type="checkbox" checked={verNoCobranza} onChange={e => setVerNoCobranza(e.target.checked)} /> ver los que no son cobranza</label>
         <Mensaje />
+      </div>
+      <div style={{ ...S.fila, marginTop: 6 }}>
+        <span style={S.sub}>Nueva cuenta:</span>
+        <select style={S.input} value={nueva.banco} onChange={e => setNueva({ ...nueva, banco: e.target.value })}>{Object.entries(BANCOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        <input style={{ ...S.input, width: 140 }} placeholder="Número de cuenta" value={nueva.numero} onChange={e => setNueva({ ...nueva, numero: e.target.value })} />
+        <input style={{ ...S.input, width: 220 }} placeholder="CBU (opcional)" value={nueva.cbu} onChange={e => setNueva({ ...nueva, cbu: e.target.value })} />
+        <button style={S.btn2} disabled={ocupado || !nueva.numero.trim()} onClick={() => correr(async () => { await rpc('fact_cuenta_bancaria_guardar', { p_datos: nueva }); setNueva({ banco: 'galicia', numero: '', cbu: '' }); await cargar() }, 'Cuenta agregada')}>Agregar cuenta</button>
       </div>
       <div style={S.sub}>Un ingreso no es una cobranza hasta aceptarlo. Rescates, transferencias propias y reversos quedan fuera. La igualdad de importe sola no confirma un pago.</div>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
-        <thead><tr>{['Fecha', 'Importe', 'Concepto', 'Clasificación', 'Propuestas'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+        <thead><tr>{['Fecha', 'Cuenta', 'Importe', 'Concepto', 'Clasificación', 'Propuestas'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
         <tbody>{pendientes.map(m => (
           <tr key={m.id}>
-            <td style={S.td}>{fecha(m.fecha)}</td><td style={S.num}>{pesos(m.importe_c)}</td>
+            <td style={S.td}>{fecha(m.fecha)}</td><td style={S.td}>{cuentaTxt(m.cuenta_id)}</td><td style={S.num}>{pesos(m.importe_c)}</td>
             <td style={S.td}>{m.concepto}<div style={S.sub}>{m.cuit_contraparte ?? ''} {m.referencia ?? ''}</div></td>
-            <td style={S.td}>{m.clasificacion}
+            <td style={S.td}>{m.clasificacion}{m.clasificacion_motivo ? <div style={S.sub}>{m.clasificacion_motivo}</div> : null}
               <div><button style={{ ...S.btn2, padding: '2px 6px' }} onClick={() => {
-                const motivo = prompt('Motivo para marcar como NO cobranza (rescate, transferencia propia, reverso…)'); if (!motivo) return
-                correr(async () => { await rpc('fact_movimiento_clasificar', { p_id: m.id, p_clasificacion: 'no_cobranza', p_motivo: motivo }); await cargar() })
-              }}>No es cobranza</button></div></td>
+                const destino = m.clasificacion === 'no_cobranza' ? 'cobranza_posible' : 'no_cobranza'
+                const motivo = prompt(destino === 'no_cobranza' ? 'Motivo para marcar como NO cobranza (rescate, transferencia propia, reverso, impuesto…)' : 'Motivo para volver a tratarlo como posible cobranza'); if (!motivo) return
+                correr(async () => { await rpc('fact_movimiento_clasificar', { p_id: m.id, p_clasificacion: destino, p_motivo: motivo }); await cargar() })
+              }}>{m.clasificacion === 'no_cobranza' ? 'Sí es cobranza' : 'No es cobranza'}</button></div></td>
             <td style={S.td}>{props.filter(p => p.movimiento_id === m.id).map(p => (
-              <div key={p.id} style={{ borderLeft: `3px solid ${p.fuerza === 'fuerte' ? '#16a34a' : p.fuerza === 'media' ? '#ca8a04' : '#64748b'}`, paddingLeft: 8, marginBottom: 6 }}>
-                <b>{p.fuerza.toUpperCase()}</b> · {nombre(p.cliente_id)}
+              <div key={p.id} style={{ borderLeft: `3px solid ${CATEGORIA[p.fuerza]?.[1] ?? '#64748b'}`, paddingLeft: 8, marginBottom: 6 }}>
+                <b>{CATEGORIA[p.fuerza]?.[0] ?? p.fuerza}</b> · {nombre(p.cliente_id)}
                 {p.motivos.map((x: string, i: number) => <div key={i} style={S.sub}>✓ {x}</div>)}
                 {p.advertencias.map((x: string, i: number) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>⚠ {x}</div>)}
                 {p.aplicaciones.map((a: any, i: number) => <div key={i} style={S.sub}>{a.origen} {pesos(a.importe)} → comprobante {String(a.comprobanteId).slice(0, 8)} ({a.vinculo})</div>)}
@@ -86,7 +112,7 @@ function Conciliacion({ clientes }: { clientes: any[] }) {
                   <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => { await rpc('fact_propuesta_rechazar', { p_id: p.id, p_motivo: rech[p.id] ?? null }); await cargar() })}>Rechazar</button>
                 </div>
               </div>
-            ))}{!props.some(p => p.movimiento_id === m.id) && <span style={S.sub}>sin propuesta: registrar el cobro a mano en la cuenta corriente</span>}</td>
+            ))}{!props.some(p => p.movimiento_id === m.id) && <span style={S.sub}>Movimiento sin identificar: registrar el cobro a mano en la cuenta corriente si corresponde</span>}</td>
           </tr>
         ))}</tbody>
       </table>

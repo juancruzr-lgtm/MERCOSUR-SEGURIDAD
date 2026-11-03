@@ -7,7 +7,7 @@ import { cuitValido } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 
 const CONTRATO_VACIO = {
-  nombre: '', modalidad: 'por_hora', agrupacion: 'cliente', regla_periodo: 'mes_calendario', dia_corte: '', separar_diurna_nocturna: false,
+  nombre: '', modalidad: 'por_hora', agrupacion: 'cliente', regla_periodo: 'mes_calendario', dia_corte: '', separar_diurna_nocturna: false, superposicion: 'unir',
   franja_nocturna_desde: '', franja_nocturna_hasta: '', dias_vencimiento: '', requisitos: [] as string[], canal_entrega: 'email',
   envio_conjunto_planilla: false, requiere_portal: false, tipo_comprobante: '', pendientes: '', vigencia_desde: '', vigencia_hasta: '', estado: 'borrador', notas: '',
 }
@@ -135,6 +135,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
             <select style={S.input} value={k.canal_entrega} onChange={e => setK({ ...k, canal_entrega: e.target.value })}>{['email', 'portal', 'papel'].map(x => <option key={x}>{x}</option>)}</select>
             <label style={S.sub}><input type="checkbox" checked={k.separar_diurna_nocturna} onChange={e => setK({ ...k, separar_diurna_nocturna: e.target.checked })} /> Separar diurnas / nocturnas</label>
             {k.separar_diurna_nocturna && <div style={S.fila}><input style={{ ...S.input, width: 90 }} type="time" value={k.franja_nocturna_desde} onChange={e => setK({ ...k, franja_nocturna_desde: e.target.value })} /> a <input style={{ ...S.input, width: 90 }} type="time" value={k.franja_nocturna_hasta} onChange={e => setK({ ...k, franja_nocturna_hasta: e.target.value })} /><span style={S.sub}>franja CONTRACTUAL</span></div>}
+            <select style={S.input} value={k.superposicion} onChange={e => setK({ ...k, superposicion: e.target.value })} title="Turnos superpuestos del mismo puesto"><option value="unir">Relevos superpuestos: facturar una vez</option><option value="sumar">Superposición: sumar (sólo si el contrato lo prevé)</option></select>
             <label style={S.sub}><input type="checkbox" checked={k.envio_conjunto_planilla} onChange={e => setK({ ...k, envio_conjunto_planilla: e.target.checked })} /> Planilla + factura juntas</label>
             <label style={S.sub}><input type="checkbox" checked={k.requiere_portal} onChange={e => setK({ ...k, requiere_portal: e.target.checked })} /> Presentar en portal tras emitir</label>
             <div style={{ gridColumn: '1 / -1', ...S.fila }}>{Object.entries(REQUISITOS).map(([r, t]) => (

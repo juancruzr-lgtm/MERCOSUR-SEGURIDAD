@@ -68,9 +68,12 @@ export type HorasAprobadas = {
   minutosTotales: number
   minutosDiurnos?: number
   minutosNocturnos?: number
-  minutosRegistrados: number
-  minutosPendientesAprobacion: number
-  fuentes: string[] // ids de turnos / registros de asistencia
+  /** Programado y cubierto por puesto (horas FACTURABLES, no liquidables). */
+  minutosProgramados: number
+  minutosCubiertos: number
+  /** Descubierto que Administración decidió NO facturar (informativo). */
+  minutosDescubiertosNoFacturados: number
+  fuentes: string[] // ids de fact_horas_aprobaciones (fotos con detalle por turno)
 }
 
 export type AjusteComercial = {
@@ -155,8 +158,9 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
       calculable = false
       requisitos.push({ tipo: 'horas_aprobadas', detalle: 'No hay horas aprobadas para facturar en el período.' })
     } else {
-      if (h.minutosPendientesAprobacion > 0) {
-        requisitos.push({ tipo: 'horas_aprobadas', detalle: `${horasDeMinutos(h.minutosPendientesAprobacion)} h registradas siguen sin aprobar.` })
+      // Lo descubierto ya tuvo su decisión al aprobar las horas: se informa, no bloquea.
+      if (h.minutosDescubiertosNoFacturados > 0) {
+        avisos.push(`${horasDeMinutos(h.minutosDescubiertosNoFacturados)} h programadas quedaron descubiertas y no se facturan.`)
       }
       if (e.separarDiurnaNocturna) {
         if (h.minutosDiurnos == null || h.minutosNocturnos == null) {

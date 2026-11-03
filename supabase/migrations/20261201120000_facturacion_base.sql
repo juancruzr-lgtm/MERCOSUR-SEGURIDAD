@@ -162,6 +162,8 @@ create table if not exists public.fact_contratos (
   regla_periodo            text not null default 'mes_calendario' check (regla_periodo in ('mes_calendario', 'corte')),
   dia_corte                integer check (dia_corte between 2 and 28),
   separar_diurna_nocturna  boolean not null default false,
+  -- Superposición de turnos del mismo puesto (relevos): 'unir' = se factura una vez.
+  superposicion            text not null default 'unir' check (superposicion in ('unir', 'sumar')),
   -- Franja CONTRACTUAL (no la salarial). Null = sin definir → requisito pendiente.
   franja_nocturna_desde    time,
   franja_nocturna_hasta    time,
@@ -300,14 +302,23 @@ create table if not exists public.fact_horas_aprobaciones (
   contrato_id           uuid references public.fact_contratos(id),
   periodo_desde         date not null,
   periodo_hasta_excl    date not null check (periodo_hasta_excl > periodo_desde),
-  minutos_registrados   integer not null check (minutos_registrados >= 0),
+  -- Horas FACTURABLES (no las liquidables del vigilador): programado y cubierto
+  -- por puesto, con la superposición de relevos contada una sola vez.
+  minutos_programados   integer not null check (minutos_programados >= 0),
+  minutos_cubiertos     integer not null check (minutos_cubiertos >= 0),
+  minutos_superpuestos  integer not null default 0 check (minutos_superpuestos >= 0),
+  minutos_descubiertos  integer not null default 0 check (minutos_descubiertos >= 0),
   minutos_aprobados     integer not null check (minutos_aprobados >= 0),
   minutos_diurnos       integer check (minutos_diurnos >= 0),
   minutos_nocturnos     integer check (minutos_nocturnos >= 0),
-  minutos_pendientes    integer not null default 0 check (minutos_pendientes >= 0),
-  -- Detalle verificable: [{turno_id, registro_id, minutos, ...}]
+  regla_superposicion   text not null default 'unir' check (regla_superposicion in ('unir', 'sumar')),
+  -- Decisión comercial de Administración sobre lo descubierto (no toca registros).
+  tratamiento_descubiertos text not null default 'no_facturar' check (tratamiento_descubiertos in ('no_facturar', 'facturar')),
+  -- Detalle verificable: [{turno_id, registro_id, puesto_id, programados, cubiertos, estado}]
   detalle               jsonb not null default '[]'::jsonb,
   notas                 text,
+  check (minutos_aprobados = minutos_cubiertos + case when tratamiento_descubiertos = 'facturar' then minutos_descubiertos else 0 end),
+  check (tratamiento_descubiertos = 'no_facturar' or length(trim(coalesce(notas, ''))) > 3),
   estado                text not null default 'aprobada' check (estado in ('aprobada', 'anulada')),
   aprobado_por          uuid references public.usuarios(id) on delete set null,
   aprobado_at           timestamptz not null default now(),
@@ -337,10 +348,11 @@ create table if not exists public.fact_prefacturas (
   proxima_accion       text,
   proxima_accion_fecha date,
   horas_aprobacion_ids uuid[] not null default '{}',
-  minutos_registrados  integer,
+  minutos_programados  integer,
+  minutos_cubiertos    integer,
   minutos_aprobados    integer,
-  minutos_pendientes   integer,
-  lineas               jsonb not null default '[]'::jsonb,
+  minutos_descubiertos integer,
+  lineas              jsonb not null default '[]'::jsonb,
   neto_c               bigint,
   iva_c                bigint,
   total_c              bigint,
@@ -591,12 +603,12 @@ declare v_actor uuid := public.facturacion_gate(); v_id uuid;
   v_pend text[] := coalesce((select array_agg(x) from jsonb_array_elements_text(coalesce(p_datos->'pendientes_comerciales', '[]'::jsonb)) x), '{}');
 begin
   if p_id is null then
-    insert into public.fact_contratos (cliente_id, nombre, modalidad, agrupacion, regla_periodo, dia_corte, separar_diurna_nocturna,
+    insert into public.fact_contratos (cliente_id, nombre, modalidad, agrupacion, regla_periodo, dia_corte, separar_diurna_nocturna, superposicion,
       franja_nocturna_desde, franja_nocturna_hasta, dias_vencimiento, requisitos, canal_entrega, envio_conjunto_planilla, requiere_portal,
       tipo_comprobante, pendientes_comerciales, vigencia_desde, vigencia_hasta, estado, notas, creado_por, actualizado_por)
     values ((p_datos->>'cliente_id')::uuid, p_datos->>'nombre', p_datos->>'modalidad', coalesce(p_datos->>'agrupacion', 'cliente'),
       coalesce(p_datos->>'regla_periodo', 'mes_calendario'), nullif(p_datos->>'dia_corte', '')::int,
-      coalesce((p_datos->>'separar_diurna_nocturna')::boolean, false),
+      coalesce((p_datos->>'separar_diurna_nocturna')::boolean, false), coalesce(p_datos->>'superposicion', 'unir'),
       nullif(p_datos->>'franja_nocturna_desde', '')::time, nullif(p_datos->>'franja_nocturna_hasta', '')::time,
       nullif(p_datos->>'dias_vencimiento', '')::int, v_req, coalesce(p_datos->>'canal_entrega', 'email'),
       coalesce((p_datos->>'envio_conjunto_planilla')::boolean, false), coalesce((p_datos->>'requiere_portal')::boolean, false),
@@ -609,6 +621,7 @@ begin
       agrupacion = coalesce(p_datos->>'agrupacion', agrupacion), regla_periodo = coalesce(p_datos->>'regla_periodo', regla_periodo),
       dia_corte = nullif(p_datos->>'dia_corte', '')::int,
       separar_diurna_nocturna = coalesce((p_datos->>'separar_diurna_nocturna')::boolean, separar_diurna_nocturna),
+      superposicion = coalesce(p_datos->>'superposicion', superposicion),
       franja_nocturna_desde = nullif(p_datos->>'franja_nocturna_desde', '')::time, franja_nocturna_hasta = nullif(p_datos->>'franja_nocturna_hasta', '')::time,
       dias_vencimiento = nullif(p_datos->>'dias_vencimiento', '')::int, requisitos = v_req,
       canal_entrega = coalesce(p_datos->>'canal_entrega', canal_entrega),
@@ -642,24 +655,27 @@ create or replace function public.fact_tarifa_agregar(
   p_contrato_id uuid, p_objetivo_id uuid, p_concepto text, p_precio numeric, p_tratamiento_iva text,
   p_alicuota numeric, p_desde date, p_motivo text)
 returns uuid language plpgsql security definer set search_path = public, pg_catalog as $fn$
-declare v_actor uuid := public.facturacion_gate(); v_id uuid; v_prev record;
+declare v_actor uuid := public.facturacion_gate(); v_id uuid; v_prev record; v_anteriores jsonb := '[]'::jsonb;
 begin
+  if coalesce(trim(p_motivo), '') = '' then raise exception 'Indicá el motivo del cambio de tarifa'; end if;
   perform 1 from public.fact_contratos where id = p_contrato_id for update;
   if not found then raise exception 'Contrato inexistente'; end if;
   if exists (select 1 from public.fact_tarifas t where t.contrato_id = p_contrato_id and t.concepto = p_concepto
              and t.objetivo_id is not distinct from p_objetivo_id and t.vigencia_desde >= p_desde) then
     raise exception 'Ya hay una tarifa de % que rige desde % o después; no se pisan vigencias', p_concepto, p_desde;
   end if;
-  for v_prev in select id from public.fact_tarifas t where t.contrato_id = p_contrato_id and t.concepto = p_concepto
+  for v_prev in select id, precio, tratamiento_iva, alicuota_iva, vigencia_desde from public.fact_tarifas t where t.contrato_id = p_contrato_id and t.concepto = p_concepto
       and t.objetivo_id is not distinct from p_objetivo_id and (t.vigencia_hasta is null or t.vigencia_hasta >= p_desde)
   loop
     update public.fact_tarifas set vigencia_hasta = p_desde - 1, cerrada_por = v_actor, cerrada_at = now() where id = v_prev.id;
+    v_anteriores := v_anteriores || jsonb_build_object('tarifa_id', v_prev.id, 'precio', v_prev.precio, 'iva', v_prev.tratamiento_iva,
+      'alicuota', v_prev.alicuota_iva, 'desde', v_prev.vigencia_desde, 'hasta', p_desde - 1);
   end loop;
   insert into public.fact_tarifas (contrato_id, objetivo_id, concepto, precio, tratamiento_iva, alicuota_iva, vigencia_desde, motivo, creado_por)
   values (p_contrato_id, p_objetivo_id, p_concepto, p_precio, p_tratamiento_iva, coalesce(p_alicuota, 21), p_desde, p_motivo, v_actor)
   returning id into v_id;
   perform public.fact_registrar('contrato', p_contrato_id, 'tarifa', jsonb_build_object('tarifa_id', v_id, 'concepto', p_concepto, 'precio', p_precio,
-    'iva', p_tratamiento_iva, 'desde', p_desde, 'objetivo_id', p_objetivo_id, 'motivo', p_motivo), v_actor);
+    'iva', p_tratamiento_iva, 'desde', p_desde, 'objetivo_id', p_objetivo_id, 'motivo', p_motivo, 'anteriores', v_anteriores), v_actor);
   return v_id;
 end $fn$;
 
@@ -770,14 +786,20 @@ begin
       raise exception 'Esas horas ya se facturaron: la corrección va por nota de crédito/débito, no reemplazando la aprobación';
     end if;
     update public.fact_horas_aprobaciones set estado = 'anulada', anulado_por = v_actor, anulado_at = now(), anulado_motivo = 'reemplazada' where id = v_prev;
+    -- Las prefacturas que usaban la foto anterior vuelven a preparación, con rastro.
+    insert into public.fact_historial (entidad, entidad_id, accion, datos, por)
+    select 'prefactura', p.id, 'horas_reemplazadas', jsonb_build_object('aprobacion_anterior', v_prev, 'estado_anterior', p.estado), v_actor
+      from public.fact_prefacturas p where v_prev = any(p.horas_aprobacion_ids) and p.estado not in ('emitida', 'descartada');
     update public.fact_prefacturas set estado = 'en_preparacion', huella_aprobada = null, aprobada_por = null, aprobada_at = null, actualizado_por = v_actor
      where v_prev = any(horas_aprobacion_ids) and estado not in ('emitida', 'descartada');
   end if;
-  insert into public.fact_horas_aprobaciones (objetivo_id, contrato_id, periodo_desde, periodo_hasta_excl, minutos_registrados, minutos_aprobados,
-    minutos_diurnos, minutos_nocturnos, minutos_pendientes, detalle, notas, aprobado_por)
-  values (p_objetivo_id, p_contrato_id, p_desde, p_hasta_excl, (p_minutos->>'registrados')::int, (p_minutos->>'aprobados')::int,
-    nullif(p_minutos->>'diurnos', '')::int, nullif(p_minutos->>'nocturnos', '')::int, coalesce((p_minutos->>'pendientes')::int, 0),
-    coalesce(p_detalle, '[]'::jsonb), p_notas, v_actor)
+  insert into public.fact_horas_aprobaciones (objetivo_id, contrato_id, periodo_desde, periodo_hasta_excl, minutos_programados, minutos_cubiertos,
+    minutos_superpuestos, minutos_descubiertos, minutos_aprobados, minutos_diurnos, minutos_nocturnos, regla_superposicion,
+    tratamiento_descubiertos, detalle, notas, aprobado_por)
+  values (p_objetivo_id, p_contrato_id, p_desde, p_hasta_excl, (p_minutos->>'programados')::int, (p_minutos->>'cubiertos')::int,
+    coalesce((p_minutos->>'superpuestos')::int, 0), coalesce((p_minutos->>'descubiertos')::int, 0), (p_minutos->>'aprobados')::int,
+    nullif(p_minutos->>'diurnos', '')::int, nullif(p_minutos->>'nocturnos', '')::int, coalesce(p_minutos->>'superposicion', 'unir'),
+    coalesce(p_minutos->>'tratamiento', 'no_facturar'), coalesce(p_detalle, '[]'::jsonb), p_notas, v_actor)
   returning id into v_id;
   perform public.fact_registrar('horas', v_id, 'aprobacion', p_minutos || jsonb_build_object('objetivo_id', p_objetivo_id, 'desde', p_desde, 'hasta_excl', p_hasta_excl, 'reemplaza', v_prev), v_actor);
   return v_id;
@@ -795,14 +817,14 @@ begin
   if p_id is null then
     insert into public.fact_prefacturas (cliente_id, contrato_id, agrupacion_clave, objetivo_id, periodo_mes, periodo_desde, periodo_hasta_excl,
       estado, estado_entrega, estado_portal, responsable_id, proxima_accion, proxima_accion_fecha, horas_aprobacion_ids,
-      minutos_registrados, minutos_aprobados, minutos_pendientes, lineas, neto_c, iva_c, total_c, requisitos, avisos,
+      minutos_programados, minutos_cubiertos, minutos_aprobados, minutos_descubiertos, lineas, neto_c, iva_c, total_c, requisitos, avisos,
       texto_factura, cuit_receptor, tipo_comprobante, punto_venta, fecha_vencimiento, oc_id, anticipo_prefactura_id, creado_por, actualizado_por)
     values ((p_datos->>'cliente_id')::uuid, nullif(p_datos->>'contrato_id', '')::uuid, p_datos->>'agrupacion_clave',
       nullif(p_datos->>'objetivo_id', '')::uuid, p_datos->>'periodo_mes', (p_datos->>'periodo_desde')::date, (p_datos->>'periodo_hasta_excl')::date,
       v_estado, coalesce(p_datos->>'estado_entrega', 'pendiente'), coalesce(p_datos->>'estado_portal', 'no_requiere'),
       coalesce(nullif(p_datos->>'responsable_id', '')::uuid, v_actor), p_datos->>'proxima_accion', nullif(p_datos->>'proxima_accion_fecha', '')::date,
       coalesce((select array_agg(x::uuid) from jsonb_array_elements_text(p_datos->'horas_aprobacion_ids') x), '{}'),
-      nullif(p_datos->>'minutos_registrados', '')::int, nullif(p_datos->>'minutos_aprobados', '')::int, nullif(p_datos->>'minutos_pendientes', '')::int,
+      nullif(p_datos->>'minutos_programados', '')::int, nullif(p_datos->>'minutos_cubiertos', '')::int, nullif(p_datos->>'minutos_aprobados', '')::int, nullif(p_datos->>'minutos_descubiertos', '')::int,
       coalesce(p_datos->'lineas', '[]'::jsonb), nullif(p_datos->>'neto_c', '')::bigint, nullif(p_datos->>'iva_c', '')::bigint, nullif(p_datos->>'total_c', '')::bigint,
       coalesce(p_datos->'requisitos', '[]'::jsonb), coalesce(p_datos->'avisos', '[]'::jsonb),
       p_datos->>'texto_factura', p_datos->>'cuit_receptor', nullif(p_datos->>'tipo_comprobante', '')::int, nullif(p_datos->>'punto_venta', '')::int,
@@ -815,8 +837,8 @@ begin
       responsable_id = coalesce(nullif(p_datos->>'responsable_id', '')::uuid, responsable_id),
       proxima_accion = p_datos->>'proxima_accion', proxima_accion_fecha = nullif(p_datos->>'proxima_accion_fecha', '')::date,
       horas_aprobacion_ids = coalesce((select array_agg(x::uuid) from jsonb_array_elements_text(p_datos->'horas_aprobacion_ids') x), horas_aprobacion_ids),
-      minutos_registrados = nullif(p_datos->>'minutos_registrados', '')::int, minutos_aprobados = nullif(p_datos->>'minutos_aprobados', '')::int,
-      minutos_pendientes = nullif(p_datos->>'minutos_pendientes', '')::int,
+      minutos_programados = nullif(p_datos->>'minutos_programados', '')::int, minutos_cubiertos = nullif(p_datos->>'minutos_cubiertos', '')::int, minutos_aprobados = nullif(p_datos->>'minutos_aprobados', '')::int,
+      minutos_descubiertos = nullif(p_datos->>'minutos_descubiertos', '')::int,
       lineas = coalesce(p_datos->'lineas', lineas), neto_c = nullif(p_datos->>'neto_c', '')::bigint, iva_c = nullif(p_datos->>'iva_c', '')::bigint,
       total_c = nullif(p_datos->>'total_c', '')::bigint, requisitos = coalesce(p_datos->'requisitos', requisitos), avisos = coalesce(p_datos->'avisos', avisos),
       texto_factura = coalesce(p_datos->>'texto_factura', texto_factura), cuit_receptor = p_datos->>'cuit_receptor',

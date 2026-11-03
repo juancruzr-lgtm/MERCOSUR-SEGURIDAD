@@ -5,14 +5,21 @@
  * preparada y aprobada. Las llamadas a ARCA y a la base se inyectan para
  * poder probar el flujo sin red.
  *
- *   preparada/rechazada → último autorizado + 1 → iniciar_envio → FECAESolicitar
- *       A → autorizada (alta del comprobante) · R → rechazada · otra cosa → incierta
- *   incierta/enviando → FECompConsultar con el MISMO número
- *       existe → autorizada · 602 no existe → rechazada (se puede reintentar) · error → sigue incierta
+ *   enviando (< 2 min)   → en_curso: NO se consulta ni se reenvía (la respuesta puede estar en camino)
+ *   incierta / enviando colgada → FECompConsultar con el MISMO número
+ *       existe → autorizada · 602 no existe → rechazada · error → sigue incierta
+ *   preparada/rechazada  → primero se consultan TODOS los números ya intentados
+ *       (si alguno quedó autorizado, se registra ése y no se emite otro);
+ *       recién después: último autorizado + 1 → iniciar_envio → FECAESolicitar
+ *       A → autorizada · R → rechazada · otra cosa → incierta
+ *
+ * Garantía buscada: un error de comunicación nunca produce una segunda factura fiscal.
  */
 
 import type { ComprobanteWsfe, ResultadoCae, ResultadoConsulta } from '@/lib/afip/wsfe'
 import { validarComprobante, CONDICION_IVA_RECEPTOR } from '@/lib/afip/wsfe'
+
+export const ENVIO_COLGADO_MS = 2 * 60 * 1000
 
 export type Emision = {
   id: string
@@ -22,6 +29,8 @@ export type Emision = {
   tipo: number
   punto_venta: number
   numero: number | null
+  numeros_intentados?: number[] | null
+  ultimo_intento_at?: string | null
   solicitud: any
 }
 
@@ -34,13 +43,15 @@ export type PuertoArca = {
 export type PuertoBase = {
   iniciarEnvio(id: string, numero: number, solicitudArca: unknown): Promise<void>
   resultado(id: string, r: { resultado: 'A' | 'R' | 'incierta'; respuesta: unknown; cae?: string; caeVto?: string; fecha?: string; observaciones?: string }): Promise<void>
-  consulta(id: string, r: { encontrado: boolean; respuesta: unknown; cae?: string; caeVto?: string; fecha?: string; totalC?: number }): Promise<void>
+  /** Devuelve el id del comprobante registrado, o null si no se registró (no existe o no coincide). */
+  consulta(id: string, r: { encontrado: boolean; numero: number; respuesta: unknown; cae?: string; caeVto?: string; fecha?: string; totalC?: number }): Promise<string | null>
 }
 
 export type ResultadoEmision =
   | { estado: 'autorizada'; numero: number; cae: string }
   | { estado: 'rechazada'; motivo: string }
   | { estado: 'incierta'; motivo: string }
+  | { estado: 'en_curso'; motivo: string }
   | { estado: 'invalida'; errores: string[] }
 
 const PORCENTAJES = ['21', '10.5', '27']
@@ -71,31 +82,55 @@ export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; ho
   }
 }
 
-export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: PuertoBase, opts: { hoy: string; condicionIva: string; cbuFce?: string | null }): Promise<ResultadoEmision> {
+export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: PuertoBase, opts: { hoy: string; condicionIva: string; cbuFce?: string | null; ahoraMs?: number }): Promise<ResultadoEmision> {
   if (e.estado === 'autorizada') return { estado: 'autorizada', numero: e.numero!, cae: '' }
+
+  const ahora = opts.ahoraMs ?? Date.now()
+  if (e.estado === 'enviando' && e.ultimo_intento_at && ahora - Date.parse(e.ultimo_intento_at) < ENVIO_COLGADO_MS) {
+    return { estado: 'en_curso', motivo: 'Hay un envío a ARCA en curso: esperar su respuesta.' }
+  }
+
+  const total = Number(e.solicitud?.total_c)
+  /** Consulta un número ya enviado. 'autorizada' si quedó; 'no_existe'; o 'incierta' si no se puede saber. */
+  const verificar = async (numero: number): Promise<ResultadoEmision | 'no_existe'> => {
+    const c = await arca.consultar({ puntoVenta: e.punto_venta, tipo: e.tipo, numero })
+    if ('error' in c) return { estado: 'incierta', motivo: `No se pudo consultar ARCA (N° ${numero}): ${c.error}` }
+    if (!c.encontrado) return 'no_existe'
+    const id = await base.consulta(e.id, { encontrado: true, numero, respuesta: c.crudo, cae: c.cae, caeVto: c.caeVto, fecha: c.fecha, totalC: c.totalC })
+    if (!id || c.totalC !== total) return { estado: 'incierta', motivo: `ARCA tiene el N° ${numero} con otros datos: revisar a mano.` }
+    return { estado: 'autorizada', numero, cae: c.cae }
+  }
 
   if (e.estado === 'incierta' || e.estado === 'enviando') {
     if (e.numero == null) return { estado: 'incierta', motivo: 'Emisión sin número asignado: revisar a mano' }
-    const c = await arca.consultar({ puntoVenta: e.punto_venta, tipo: e.tipo, numero: e.numero })
-    if ('error' in c) return { estado: 'incierta', motivo: `No se pudo consultar ARCA: ${c.error}` }
-    if (c.encontrado) {
-      await base.consulta(e.id, { encontrado: true, respuesta: c.crudo, cae: c.cae, caeVto: c.caeVto, fecha: c.fecha, totalC: c.totalC })
-      return { estado: 'autorizada', numero: e.numero, cae: c.cae }
-    }
-    await base.consulta(e.id, { encontrado: false, respuesta: c.crudo })
+    const v = await verificar(e.numero)
+    if (v !== 'no_existe') return v
+    await base.consulta(e.id, { encontrado: false, numero: e.numero, respuesta: null })
     return { estado: 'rechazada', motivo: 'ARCA no tiene el comprobante: se puede volver a emitir.' }
   }
 
   if (e.estado !== 'preparada' && e.estado !== 'rechazada') return { estado: 'invalida', errores: [`La emisión está ${e.estado}`] }
 
+  // Antes de pedir un número nuevo, cualquier número intentado antes puede haber
+  // quedado autorizado (ARCA respondió tarde o el rechazo fue de otra cosa).
+  for (const n of Array.from(new Set((e.numeros_intentados ?? []).map(Number)))) {
+    const v = await verificar(Number(n))
+    if (v !== 'no_existe') return v
+  }
+
   const ult = await arca.ultimo({ puntoVenta: e.punto_venta, tipo: e.tipo })
   if ("error" in ult) return { estado: 'rechazada', motivo: `No se obtuvo el último número autorizado: ${ult.error}` }
   const numero = ult.numero + 1
-  const comp = comprobanteDesdeSolicitud(e, { numero, ...opts })
+  const comp = comprobanteDesdeSolicitud(e, { numero, hoy: opts.hoy, condicionIva: opts.condicionIva, cbuFce: opts.cbuFce })
   const errores = validarComprobante(comp)
   if (errores.length) return { estado: 'invalida', errores }
 
-  await base.iniciarEnvio(e.id, numero, comp)
+  try {
+    // Toma la solicitud con bloqueo de fila: un segundo pedido simultáneo falla acá, antes de llamar a ARCA.
+    await base.iniciarEnvio(e.id, numero, comp)
+  } catch (err: any) {
+    return { estado: 'en_curso', motivo: `Otro pedido tomó esta emisión: ${err?.message ?? err}` }
+  }
   let r: ResultadoCae
   try {
     r = await arca.solicitar(comp)

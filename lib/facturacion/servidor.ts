@@ -10,10 +10,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchPaginado } from '@/lib/fetch-paginado'
 import { fechaArgentina, sumarDias } from '@/lib/periodo-argentina'
 import { periodoFacturacion, servicioActivoEnPeriodo, type ReglaPeriodo } from './periodos'
-import { horasDelObjetivo, type RegistroFacturable, type TurnoFacturable } from './horas'
+import { horasDelObjetivo, minutosAprobables, type RegistroFacturable, type TurnoFacturable } from './horas'
 import {
   calcularPrefactura, clavePrestacion, estadoSugerido, textoPrecargado,
-  type Modalidad, type OrdenCompraEstado, type TarifaVigente, type TipoRequisito,
+  type HorasAprobadas, type Modalidad, type OrdenCompraEstado, type TarifaVigente, type TipoRequisito,
 } from './prefacturacion'
 import { proponerAsociaciones, type ClienteIdentidad, type ComprobanteAbierto, type RetencionDisponible } from './conciliacion'
 import { numeroVisible } from './comprobantes'
@@ -25,7 +25,9 @@ function reglaDe(k: any): ReglaPeriodo {
 }
 const hhmm = (t: string | null) => (t ? String(t).slice(0, 5) : null)
 
-/** Propuesta de horas de un objetivo para un contrato y mes. No escribe. */
+const CAMPOS_TURNO = 'id, fecha, hora_inicio, hora_fin, objetivo_id, puesto_id, estado'
+
+/** Propuesta de horas FACTURABLES de un objetivo para un contrato y mes. No escribe. */
 export async function proponerHoras(db: SupabaseClient, p: { contratoId: string; objetivoId: string; mes: string }) {
   const { data: k, error } = await db.from('fact_contratos').select('*').eq('id', p.contratoId).single()
   if (error || !k) throw new Error('Contrato inexistente o sin acceso')
@@ -33,14 +35,14 @@ export async function proponerHoras(db: SupabaseClient, p: { contratoId: string;
   // Un día antes por los turnos nocturnos que empiezan la víspera y cruzan el límite.
   const desde = sumarDias(periodo.desde, -1)
   const turnos = await fetchPaginado<TurnoFacturable>((a, b) => db.from('turnos')
-    .select('id, fecha, hora_inicio, hora_fin, objetivo_id, estado').eq('objetivo_id', p.objetivoId)
+    .select(CAMPOS_TURNO).eq('objetivo_id', p.objetivoId)
     .gte('fecha', desde).lt('fecha', periodo.hastaExclusivo).order('id').range(a, b))
   // Registros corregidos HACIA este objetivo desde turnos de otro.
   const movidos = await fetchPaginado<RegistroFacturable>((a, b) => db.from('registros_asistencia')
     .select(CAMPOS_REGISTRO).eq('objetivo_final_id', p.objetivoId).order('id').range(a, b))
   const idsMovidos = Array.from(new Set(movidos.map(r => r.turno_id))).filter(id => !turnos.some(t => t.id === id))
   for (let i = 0; i < idsMovidos.length; i += 200) {
-    const { data, error: e2 } = await db.from('turnos').select('id, fecha, hora_inicio, hora_fin, objetivo_id, estado')
+    const { data, error: e2 } = await db.from('turnos').select(CAMPOS_TURNO)
       .in('id', idsMovidos.slice(i, i + 200)).gte('fecha', desde).lt('fecha', periodo.hastaExclusivo)
     if (e2) throw e2
     turnos.push(...(data ?? []))
@@ -53,21 +55,40 @@ export async function proponerHoras(db: SupabaseClient, p: { contratoId: string;
     registros.push(...parte)
   }
   const franja = k.franja_nocturna_desde && k.franja_nocturna_hasta ? { desde: hhmm(k.franja_nocturna_desde)!, hasta: hhmm(k.franja_nocturna_hasta)! } : null
-  const horas = horasDelObjetivo({ objetivoId: p.objetivoId, periodo, turnos, registros, franjaNocturna: franja, separarDiurnaNocturna: !!k.separar_diurna_nocturna })
-  return { periodo, horas, franjaDefinida: !!franja }
+  const horas = horasDelObjetivo({ objetivoId: p.objetivoId, periodo, turnos, registros, franjaNocturna: franja,
+    separarDiurnaNocturna: !!k.separar_diurna_nocturna, superposicion: k.superposicion === 'sumar' ? 'sumar' : 'unir' })
+  // Desvío contra la foto aprobada: un cambio posterior de turnos NO altera la
+  // aprobación ni la prefactura; sólo se informa para que Administración decida.
+  const { data: ap } = await db.from('fact_horas_aprobaciones').select('id, minutos_cubiertos, minutos_descubiertos, minutos_aprobados, aprobado_at')
+    .eq('objetivo_id', p.objetivoId).eq('periodo_desde', periodo.desde).eq('periodo_hasta_excl', periodo.hastaExclusivo).eq('estado', 'aprobada').maybeSingle()
+  const desvio = ap ? {
+    aprobacionId: ap.id, aprobadoAt: ap.aprobado_at,
+    cubiertosAprobados: ap.minutos_cubiertos, cubiertosActuales: horas.minutosCubiertos,
+    descubiertosAprobados: ap.minutos_descubiertos, descubiertosActuales: horas.minutosDescubiertos,
+    hayDiferencia: ap.minutos_cubiertos !== horas.minutosCubiertos || ap.minutos_descubiertos !== horas.minutosDescubiertos,
+  } : null
+  return { periodo, horas, franjaDefinida: !!franja, superposicion: k.superposicion === 'sumar' ? 'sumar' : 'unir', desvio }
 }
 
-/** Recalcula la propuesta en el servidor y la aprueba: el cliente no manda minutos. */
-export async function aprobarHoras(db: SupabaseClient, p: { contratoId: string; objetivoId: string; mes: string; notas?: string; reemplazar?: boolean }) {
-  const { periodo, horas } = await proponerHoras(db, p)
+/**
+ * Recalcula la propuesta en el servidor y la aprueba: el cliente no manda
+ * minutos, sólo la decisión comercial sobre lo descubierto (con motivo).
+ */
+export async function aprobarHoras(db: SupabaseClient, p: {
+  contratoId: string; objetivoId: string; mes: string; notas?: string; reemplazar?: boolean; tratamientoDescubiertos?: 'no_facturar' | 'facturar'
+}) {
+  const { periodo, horas, superposicion } = await proponerHoras(db, p)
+  const tratamiento = p.tratamientoDescubiertos === 'facturar' ? 'facturar' : 'no_facturar'
+  if (tratamiento === 'facturar' && (p.notas ?? '').trim().length < 4) throw new Error('Para facturar horas descubiertas indicá el motivo comercial')
+  const m = minutosAprobables(horas, tratamiento)
   const { data, error } = await db.rpc('fact_horas_aprobar', {
     p_objetivo_id: p.objetivoId, p_contrato_id: p.contratoId, p_desde: periodo.desde, p_hasta_excl: periodo.hastaExclusivo,
-    p_minutos: { registrados: horas.minutosRegistrados, aprobados: horas.minutosRegistrados, diurnos: horas.minutosDiurnos,
-      nocturnos: horas.minutosNocturnos, pendientes: horas.minutosSinRegistro },
+    p_minutos: { programados: horas.minutosProgramados, cubiertos: horas.minutosCubiertos, superpuestos: horas.minutosSuperpuestos,
+      descubiertos: horas.minutosDescubiertos, aprobados: m.aprobados, diurnos: m.diurnos, nocturnos: m.nocturnos, superposicion, tratamiento },
     p_detalle: horas.detalle, p_notas: p.notas ?? null, p_reemplazar: !!p.reemplazar,
   })
   if (error) throw new Error(error.message)
-  return { id: data as string, horas }
+  return { id: data as string, horas, aprobados: m.aprobados }
 }
 
 /**
@@ -108,7 +129,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         })
 
         // Horas aprobadas (foto) de cada objetivo del grupo.
-        let horas = null as null | { minutosTotales: number; minutosDiurnos?: number; minutosNocturnos?: number; minutosRegistrados: number; minutosPendientesAprobacion: number; fuentes: string[] }
+        let horas = null as null | HorasAprobadas
         const faltanAprobar: string[] = []
         if (objIds.length) {
           const { data: aps } = await db.from('fact_horas_aprobaciones').select('*').in('objetivo_id', objIds)
@@ -118,7 +139,8 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
             const sum = (c: string) => aps.reduce((a: number, x: any) => a + (Number(x[c]) || 0), 0)
             const conClasif = aps.every((a: any) => a.minutos_diurnos != null && a.minutos_nocturnos != null)
             horas = {
-              minutosTotales: sum('minutos_aprobados'), minutosRegistrados: sum('minutos_registrados'), minutosPendientesAprobacion: sum('minutos_pendientes'),
+              minutosTotales: sum('minutos_aprobados'), minutosProgramados: sum('minutos_programados'), minutosCubiertos: sum('minutos_cubiertos'),
+              minutosDescubiertosNoFacturados: aps.filter((a: any) => a.tratamiento_descubiertos !== 'facturar').reduce((s: number, a: any) => s + Number(a.minutos_descubiertos || 0), 0),
               minutosDiurnos: conClasif ? sum('minutos_diurnos') : undefined, minutosNocturnos: conClasif ? sum('minutos_nocturnos') : undefined,
               fuentes: aps.map((a: any) => a.id),
             }
@@ -133,7 +155,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
           (!o.objetivos?.length || objIds.some((id: string) => o.objetivos.some((x: any) => x.objetivo_id === id))) &&
           (k.modalidad !== 'presupuesto_anticipado' || o.tipo === 'presupuesto'))
         const clave = clavePrestacion({ clienteId: k.cliente_id, agrupacion: g.clave, desde: periodo.desde, hastaExclusivo: periodo.hastaExclusivo })
-        const { data: existente } = await db.from('fact_prefacturas').select('id, version, estado, texto_factura')
+        const { data: existente } = await db.from('fact_prefacturas').select('id, version, estado, texto_factura, fecha_vencimiento')
           .eq('cliente_id', k.cliente_id).eq('agrupacion_clave', g.clave).eq('periodo_desde', periodo.desde)
           .eq('periodo_hasta_excl', periodo.hastaExclusivo).neq('estado', 'descartada').maybeSingle()
         if (existente && existente.estado === 'emitida') { resumen.sin_cambios++; continue }
@@ -185,14 +207,27 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         const datos: Record<string, unknown> = {
           cliente_id: k.cliente_id, contrato_id: k.id, agrupacion_clave: g.clave, objetivo_id: g.objetivoId, periodo_mes: mes,
           periodo_desde: periodo.desde, periodo_hasta_excl: periodo.hastaExclusivo, estado: estadoSugerido(r),
-          horas_aprobacion_ids: horas?.fuentes ?? [], minutos_registrados: horas?.minutosRegistrados ?? null,
-          minutos_aprobados: horas?.minutosTotales ?? null, minutos_pendientes: horas?.minutosPendientesAprobacion ?? null,
+          horas_aprobacion_ids: horas?.fuentes ?? [], minutos_programados: horas?.minutosProgramados ?? null,
+          minutos_cubiertos: horas?.minutosCubiertos ?? null, minutos_aprobados: horas?.minutosTotales ?? null,
+          minutos_descubiertos: horas?.minutosDescubiertosNoFacturados ?? null,
           lineas: r.lineas, neto_c: r.importes?.neto ?? null, iva_c: r.importes?.iva ?? null, total_c: r.importes?.total ?? null,
           requisitos: r.requisitos, avisos: r.avisos, cuit_receptor: k.cliente?.cuit ?? null, tipo_comprobante: tipoComp,
-          punto_venta: puntoVenta, fecha_vencimiento: sumarDias(hoy, Number(k.dias_vencimiento ?? 0)), oc_id: ocCubre?.id ?? null,
+          // El vencimiento no se recalcula al regenerar: si no, cada regeneración cambiaría la huella y haría caer la aprobación.
+          punto_venta: puntoVenta, fecha_vencimiento: existente?.fecha_vencimiento ?? sumarDias(hoy, Number(k.dias_vencimiento ?? 0)), oc_id: ocCubre?.id ?? null,
           proxima_accion: r.requisitos[0]?.detalle ?? (r.importes ? 'Revisar y aprobar' : null),
         }
-        if (!existente) datos.texto_factura = textoPrecargado({ objetivos: g.objs.map((v: any) => v.objetivo?.nombre).filter(Boolean), periodo, lineas: r.lineas, oc: ocCubre?.numero })
+        if (!existente) {
+          // Texto libre: se propone el de la última factura comparable (mismo cliente y
+          // agrupación; si no hay, la última del cliente). Sólo sin antecedente se arma uno.
+          const previo = await textoComparable(db, k.cliente_id, g.clave)
+          if (previo) {
+            datos.texto_factura = previo.texto
+            r.avisos.push(`Texto tomado de la factura del período ${previo.periodo}: revisá fechas y cantidades.`)
+            datos.avisos = r.avisos
+          } else {
+            datos.texto_factura = textoPrecargado({ objetivos: g.objs.map((v: any) => v.objetivo?.nombre).filter(Boolean), periodo, lineas: r.lineas, oc: ocCubre?.numero })
+          }
+        }
         const { error } = await db.rpc('fact_prefactura_guardar', { p_id: existente?.id ?? null, p_datos: datos, p_version: existente?.version ?? null })
         if (error) resumen.errores.push(`${k.cliente?.razon_social} (${clave}): ${error.message}`)
         else if (existente) resumen.actualizadas++
@@ -203,6 +238,18 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
     }
   }
   return resumen
+}
+
+/** Texto de la última factura EMITIDA comparable: misma agrupación primero, luego cualquiera del cliente. */
+export async function textoComparable(db: SupabaseClient, clienteId: string, agrupacion: string): Promise<{ texto: string; periodo: string } | null> {
+  for (const filtro of [agrupacion, null]) {
+    let q = db.from('fact_prefacturas').select('texto_factura, periodo_mes').eq('cliente_id', clienteId).eq('estado', 'emitida').not('texto_factura', 'is', null)
+    if (filtro) q = q.eq('agrupacion_clave', filtro)
+    const { data } = await q.order('periodo_desde', { ascending: false }).limit(1)
+    const t = data?.[0]
+    if (t?.texto_factura?.trim()) return { texto: t.texto_factura, periodo: t.periodo_mes }
+  }
+  return null
 }
 
 /** Recalcula las propuestas de conciliación de los ingresos sin cobro registrado. */

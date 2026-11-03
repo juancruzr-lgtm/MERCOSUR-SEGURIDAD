@@ -81,6 +81,8 @@ export function validarComprobante(c: ComprobanteWsfe): string[] {
     e.push('FCE: falta el CBU del emisor (opcional 2101) o la marca de anulación (22).')
   }
   if (c.docTipo === 80 && c.docNro.replace(/\D/g, '').length !== 11) e.push('CUIT del receptor inválido.')
+  // Exento, no gravado y 0 % no son lo mismo para ARCA: sin definición explícita no se emite.
+  if (c.netoC > 0 && c.ivaC === 0) e.push('Comprobante sin IVA: definir si es exento, no gravado o 0 % antes de emitir.')
   if (!Number.isInteger(c.numero) || c.numero < 1) e.push('Número de comprobante inválido.')
   return e
 }

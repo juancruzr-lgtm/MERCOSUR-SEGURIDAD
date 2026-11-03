@@ -9,7 +9,7 @@ drop function if exists public.fact_comprobante_asociar(uuid, uuid, uuid, uuid, 
 drop function if exists public.fact_importacion_cerrar(uuid, text);
 drop function if exists public.fact_importacion_arca_confirmar(uuid, text[]);
 drop function if exists public.fact_importacion_arca_crear(text, text, uuid, jsonb);
-drop function if exists public.fact_emision_consulta(uuid, boolean, jsonb, text, date, date, bigint);
+drop function if exists public.fact_emision_consulta(uuid, boolean, jsonb, text, date, date, bigint, bigint);
 drop function if exists public.fact_emision_resultado(uuid, text, jsonb, text, date, date, text);
 drop function if exists public.fact_emision_autorizar_interno(public.fact_emisiones, text, date, date, jsonb);
 drop function if exists public.fact_emision_iniciar_envio(uuid, bigint, jsonb);
@@ -22,6 +22,7 @@ drop table if exists public.fact_portal_presentaciones;
 drop table if exists public.fact_emisiones;
 drop table if exists public.fact_importacion_filas;
 drop trigger if exists fact_comprobante_inmutable on public.fact_comprobantes;
+drop trigger if exists fact_comprobante_inmutable_trunc on public.fact_comprobantes;
 drop table if exists public.fact_comprobantes;
 drop function if exists public.fact_comprobante_inmutable();
 drop table if exists public.fact_importaciones;

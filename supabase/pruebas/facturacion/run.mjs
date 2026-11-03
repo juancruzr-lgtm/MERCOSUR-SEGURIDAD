@@ -121,15 +121,15 @@ ok('lo propuesto por extracción no queda como confirmado', (await uno(`select d
 const OBJ_AD = '00000000-0000-0000-0000-00000000b001'
 const aprobar = (reemplazar = false, min = 544 * 60) => como(ADM, () => uno(
   `select public.fact_horas_aprobar($1, $2, '2026-08-01', '2026-09-01', $3::jsonb, '[{"turno_id":"t1","minutos":60}]'::jsonb, null, $4) id`,
-  [OBJ_AD, kAlto, JSON.stringify({ registrados: min, aprobados: min, pendientes: 0 }), reemplazar]))
+  [OBJ_AD, kAlto, JSON.stringify({ programados: min, cubiertos: min, superpuestos: 0, descubiertos: 0, aprobados: min }), reemplazar]))
 const h1 = (await aprobar()).id
 ok('no se aprueban dos veces las mismas horas', await falla(() => aprobar()))
 
 // ── Prefactura ─────────────────────────────────────────────────────────────
 const lineas = [{ concepto: 'Horas de vigilancia', cantidad: '544', precio: '14853.20', tarifaId: null, importes: { neto: 808014080, iva: 169682957, total: 977697037 } }]
 const datosPref = (extra = {}) => JSON.stringify({ cliente_id: altoDelta, contrato_id: kAlto, agrupacion_clave: 'cliente', periodo_mes: '2026-08',
-  periodo_desde: '2026-08-01', periodo_hasta_excl: '2026-09-01', horas_aprobacion_ids: [h1], minutos_registrados: 544 * 60, minutos_aprobados: 544 * 60,
-  minutos_pendientes: 0, lineas, neto_c: 808014080, iva_c: 169682957, total_c: 977697037, cuit_receptor: '30111111118', tipo_comprobante: 1,
+  periodo_desde: '2026-08-01', periodo_hasta_excl: '2026-09-01', horas_aprobacion_ids: [h1], minutos_programados: 544 * 60, minutos_cubiertos: 544 * 60, minutos_aprobados: 544 * 60,
+  minutos_descubiertos: 0, lineas, neto_c: 808014080, iva_c: 169682957, total_c: 977697037, cuit_receptor: '30111111118', tipo_comprobante: 1,
   punto_venta: 1, texto_factura: 'Servicio de vigilancia agosto 2026', estado: 'esperando_requisitos',
   requisitos: [{ tipo: 'oc_mensual', detalle: 'Falta la OC' }], ...extra })
 const pref = (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [datosPref()]))).id
@@ -213,8 +213,11 @@ ok('una asociación fijada no se cambia', await falla(() => como(ADM, () => sql(
 ok('NC que excede lo que queda por acreditar no se solicita', await falla(() => como(ADM, () => sql(`select public.fact_nota_solicitar($1, 3, 200000000, 42000000, 'excede')`, [fa2023.id])), /supera/))
 const nota = (await como(ADM, () => uno(`select public.fact_nota_solicitar($1, 3, 100000, 21000, 'Ajuste menor') id`, [fa2023.id]))).id
 ok('NC parcial solicitada queda pendiente y marcada como parcial', (await uno(`select estado, alcance_nota from public.fact_emisiones where id = $1`, [nota])).alcance_nota === 'parcial')
-ok('quien pide la NC no la aprueba', await falla(() => como(ADM, () => sql(`select public.fact_nota_aprobar($1)`, [nota])), /distinta/))
-await como(ADM2, () => sql(`select public.fact_nota_aprobar($1)`, [nota]))
+// Regla comercial: Administración puede aprobar su propia NC; queda registrado quién pidió y quién aprobó.
+await como(ADM, () => sql(`select public.fact_nota_aprobar($1)`, [nota]))
+const notaAp = await uno(`select estado, creado_por, aprobado_por from public.fact_emisiones where id = $1`, [nota])
+ok('Administración aprueba su propia NC y queda registrado', notaAp.estado === 'preparada' && notaAp.creado_por === ADM && notaAp.aprobado_por === ADM)
+ok('…la aprobación queda en el historial', !!(await uno(`select 1 x from public.fact_historial where accion = 'nota_aprobada' and por = $1`, [ADM])))
 
 // ── Extracto y conciliación ────────────────────────────────────────────────
 const movs = [
@@ -222,8 +225,10 @@ const movs = [
   { fecha: '2026-10-26', importe_c: 926155020, concepto: 'CR TRANSF', cuit_contraparte: '30444444440', hash: 'h2', clasificacion: 'cobranza_posible' },
   { fecha: '2026-10-15', importe_c: 50000000, concepto: 'RESCATE FCI', hash: 'h3', clasificacion: 'no_cobranza', clasificacion_motivo: 'Rescate o movimiento de inversión' },
 ]
-const ex1 = (await como(ADM, () => uno(`select public.fact_extracto_importar('511522209', 'EXTRACTO oct.csv', $1, null, $2::jsonb) r`, ['c'.repeat(64), JSON.stringify(movs)]))).r
-const ex2 = (await como(ADM, () => uno(`select public.fact_extracto_importar('511522209', 'EXTRACTO oct (2).csv', $1, null, $2::jsonb) r`, ['d'.repeat(64), JSON.stringify(movs.slice(0, 1))]))).r
+const CTA_GAL = (await como(ADM, () => uno(`select public.fact_cuenta_bancaria_guardar('{"banco":"galicia","numero":"511522209"}'::jsonb) id`))).id
+const CTA_MUN = (await como(ADM, () => uno(`select public.fact_cuenta_bancaria_guardar('{"banco":"municipal_rosario","numero":"12345678"}'::jsonb) id`))).id
+const ex1 = (await como(ADM, () => uno(`select public.fact_extracto_importar('${CTA_GAL}', 'EXTRACTO oct.csv', $1, null, $2::jsonb) r`, ['c'.repeat(64), JSON.stringify(movs)]))).r
+const ex2 = (await como(ADM, () => uno(`select public.fact_extracto_importar('${CTA_GAL}', 'EXTRACTO oct (2).csv', $1, null, $2::jsonb) r`, ['d'.repeat(64), JSON.stringify(movs.slice(0, 1))]))).r
 ok('extracto: líneas ya importadas no se duplican', ex1.nuevos === 3 && ex2.nuevos === 0 && ex2.ya_importados === 1, JSON.stringify([ex1, ex2]))
 const mov = async h => (await uno(`select id from public.fact_movimientos_bancarios where hash_linea = $1`, [h])).id
 ok('un rescate de inversión no se registra como cobro', await falla(() => como(ADM, async () => sql(`select public.fact_cobro_registrar($1::jsonb)`,
@@ -283,8 +288,118 @@ ok('tablero: cobrado y retenciones por separado; rescate fuera de cobranza', tab
 ok('tablero: cobro de Universitario revertido queda pendiente de aplicar', tab.sin_aplicar.cobros_c === 926155020, JSON.stringify(tab.sin_aplicar))
 ok('tablero: sin rentabilidad por falta de costos', tab.rentabilidad.disponible === false)
 const tabAgo = (await como(ADM, () => uno(`select public.fact_tablero('2026-08', '2026-11-03') t`))).t
-ok('tablero: prestación de agosto con horas aprobadas', Number(tabAgo.prestacion.horas_aprobadas) === 544 && Number(tabAgo.precio_hora.promedio_c) === 1485320, JSON.stringify([tabAgo.prestacion, tabAgo.precio_hora]))
+ok('tablero: horas de agosto programadas, cubiertas y facturadas (de la foto aprobada)', Number(tabAgo.horas.programadas) === 544 && Number(tabAgo.horas.facturadas) === 544
+  && Number(tabAgo.horas.pendientes_facturar) === 0 && Number(tabAgo.precio_hora.promedio_c) === 1485320, JSON.stringify([tabAgo.horas, tabAgo.precio_hora]))
 ok('supervisor no ve el tablero', await falla(() => como(SUP, () => sql(`select public.fact_tablero('2026-10')`))))
+
+// ══ Auditoría: escenarios agregados ══════════════════════════════════════════
+
+// Permisos: no alcanza con ocultar el menú.
+const INACT = '00000000-0000-0000-0000-0000000000a6'
+await db.exec(`insert into public.usuarios (id, auth_user_id, nombre, rol, estado, puesto_organizacional) values ('${INACT}', '${INACT}', 'ADMIN INACTIVO', 'admin', 'inactivo', 'administracion')`)
+ok('administración inactiva no ve ni ejecuta', (await como(INACT, () => sql(`select * from public.fact_comprobantes`))).length === 0
+  && await falla(() => como(INACT, () => sql(`select public.fact_tablero('2026-10')`)), /Gerencia o Administración/))
+ok('supervisor no puede leer el saldo fiscal por RPC directa', await falla(() => como(SUP, () => sql(`select public.fact_saldo_fiscal($1)`, [fa2047.id])), /permission denied/))
+ok('supervisor no ve saldos ni movimientos bancarios', (await como(SUP, () => sql(`select * from public.fact_v_saldos`))).length === 0
+  && (await como(SUP, () => sql(`select * from public.fact_movimientos_bancarios`))).length === 0)
+ok('supervisor no accede a la serie gerencial', await falla(() => como(SUP, () => sql(`select public.fact_tablero_serie('2026-01', '2026-10')`)), /Gerencia o Administración/))
+ok('supervisor no ejecuta funciones internas del tablero', await falla(() => como(SUP, () => sql(`select public.fact_montos_mes('2026-10', null, null)`)), /permission denied/))
+ok('Gerencia aplica y revierte como Administración', !!(await como(GER, () => uno(`select public.fact_tablero('2026-10') t`))).t)
+
+// Inmutabilidad fiscal.
+ok('los comprobantes no se pueden truncar', await falla(() => sql(`truncate public.fact_comprobantes cascade`), /no se borra/))
+
+// Tarifas: valor anterior, nuevo, fecha, usuario y motivo.
+const kTar = await contrato({ cliente_id: aca, nombre: 'ACA', modalidad: 'por_hora', requisitos: ['oc_vigente'] })
+await como(ADM, () => sql(`select public.fact_tarifa_agregar($1, null, 'hora', 10000, 'adicional', 21, '2026-01-01', 'Contrato inicial')`, [kTar]))
+await como(GER, () => sql(`select public.fact_tarifa_agregar($1, null, 'hora', 11500, 'adicional', 21, '2026-07-01', 'Aumento paritario julio')`, [kTar]))
+const hTar = (await uno(`select datos, por from public.fact_historial where entidad = 'contrato' and entidad_id = $1 and accion = 'tarifa' order by id desc limit 1`, [kTar]))
+ok('cambio de tarifa guarda anterior, nueva, vigencia, usuario y motivo', hTar.por === GER && Number(hTar.datos.precio) === 11500
+  && Number(hTar.datos.anteriores[0].precio) === 10000 && hTar.datos.anteriores[0].hasta === '2026-06-30' && hTar.datos.motivo === 'Aumento paritario julio', JSON.stringify(hTar))
+ok('una tarifa sin motivo se rechaza', await falla(() => como(ADM, () => sql(`select public.fact_tarifa_agregar($1, null, 'hora', 1, 'adicional', 21, '2026-09-01', '')`, [kTar])), /motivo/))
+ok('la factura emitida conserva su precio aunque luego cambie la tarifa',
+  (await uno(`select (lineas->0->>'precio') p from public.fact_prefacturas where id = $1`, [pref])).p === '14853.20')
+
+// Horas: decisión comercial sobre descubiertos, sin tocar lo cubierto.
+const OBJ2 = '00000000-0000-0000-0000-00000000b004'
+ok('facturar horas descubiertas exige motivo', await falla(() => como(ADM, () => sql(
+  `select public.fact_horas_aprobar($1, $2, '2026-10-01', '2026-11-01', '{"programados":720,"cubiertos":480,"descubiertos":240,"aprobados":720,"tratamiento":"facturar"}'::jsonb, '[]'::jsonb, null)`, [OBJ2, kTar]))))
+ok('lo aprobado debe ser exactamente lo cubierto (+ descubierto si se decidió facturarlo)', await falla(() => como(ADM, () => sql(
+  `select public.fact_horas_aprobar($1, $2, '2026-10-01', '2026-11-01', '{"programados":720,"cubiertos":480,"descubiertos":240,"aprobados":600}'::jsonb, '[]'::jsonb, null)`, [OBJ2, kTar]))))
+const hDesc = (await como(ADM, () => uno(
+  `select public.fact_horas_aprobar($1, $2, '2026-10-01', '2026-11-01', '{"programados":720,"cubiertos":480,"descubiertos":240,"aprobados":720,"tratamiento":"facturar"}'::jsonb, '[]'::jsonb, 'Cliente aceptó facturar el descubierto del 10/10 (acta)') id`, [OBJ2, kTar]))).id
+const hD = await uno(`select minutos_cubiertos, minutos_aprobados, tratamiento_descubiertos from public.fact_horas_aprobaciones where id = $1`, [hDesc])
+ok('la decisión queda en la foto: cubiertas 8 h, aprobadas 12 h', hD.minutos_cubiertos === 480 && hD.minutos_aprobados === 720 && hD.tratamiento_descubiertos === 'facturar')
+
+// Reemplazar horas de una prefactura NO emitida la reabre, con rastro.
+const prefAca = (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: aca, contrato_id: kTar,
+  agrupacion_clave: 'contrato:aca', periodo_mes: '2026-10', periodo_desde: '2026-10-01', periodo_hasta_excl: '2026-11-01', horas_aprobacion_ids: [hDesc],
+  minutos_aprobados: 720, lineas: [], neto_c: 13800000, iva_c: 2898000, total_c: 16698000, cuit_receptor: '30555555551', tipo_comprobante: 1, punto_venta: 1,
+  estado: 'lista_revision', requisitos: [] })]))).id
+await como(ADM, async () => sql(`select public.fact_prefactura_aprobar($1, (select version from public.fact_prefacturas where id = $1))`, [prefAca]))
+await como(ADM, () => sql(`select public.fact_horas_aprobar($1, $2, '2026-10-01', '2026-11-01', '{"programados":720,"cubiertos":720,"descubiertos":0,"aprobados":720}'::jsonb, '[]'::jsonb, null, true)`, [OBJ2, kTar]))
+ok('cambiar las horas de una prefactura aprobada la reabre y deja rastro', (await uno(`select estado from public.fact_prefacturas where id = $1`, [prefAca])).estado === 'en_preparacion'
+  && !!(await uno(`select 1 x from public.fact_historial where entidad_id = $1 and accion = 'horas_reemplazadas'`, [prefAca])))
+
+// ARCA: concurrencia e idempotencia (nunca una segunda factura por un error de red).
+await db.exec(`update public.fact_config set valor = valor || '{"produccion_habilitada": true}' where clave = 'emision'`)
+await como(ADM, () => sql(`select public.fact_prefactura_guardar($1, $2::jsonb, (select version from public.fact_prefacturas where id = $1))`, [prefAca, JSON.stringify({ cliente_id: aca, contrato_id: kTar,
+  agrupacion_clave: 'contrato:aca', periodo_mes: '2026-10', periodo_desde: '2026-10-01', periodo_hasta_excl: '2026-11-01', minutos_aprobados: 720, lineas: [],
+  neto_c: 13800000, iva_c: 2898000, total_c: 16698000, cuit_receptor: '30555555551', tipo_comprobante: 1, punto_venta: 1, estado: 'lista_revision', requisitos: [] })]))
+await como(ADM, async () => sql(`select public.fact_prefactura_aprobar($1, (select version from public.fact_prefacturas where id = $1))`, [prefAca]))
+const eA = (await como(ADM, async () => uno(`select public.fact_emision_preparar($1, (select version from public.fact_prefacturas where id = $1), 'produccion') r`, [prefAca]))).r
+await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 3000, '{}'::jsonb)`, [eA.id]))
+ok('un segundo envío simultáneo se rechaza (fila bloqueada / estado enviando)', await falla(() => servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 3001, '{}'::jsonb)`, [eA.id])), /enviando/))
+ok('mientras hay un envío en curso no se consulta ni se marca "no existe"', await falla(() => servidor(() => sql(`select public.fact_emision_consulta($1, false, '{}'::jsonb)`, [eA.id])), /en curso/))
+// ARCA rechaza (R): el número queda registrado como intentado.
+await servidor(() => sql(`select public.fact_emision_resultado($1, 'R', '{"Resultado":"R"}'::jsonb, null, null, null, 'Error 10016')`, [eA.id]))
+ok('el rechazo conserva el número intentado para verificarlo antes de reintentar', (await uno(`select numeros_intentados from public.fact_emisiones where id = $1`, [eA.id])).numeros_intentados.map(Number).includes(3000))
+// …pero si la consulta muestra que ese número SÍ quedó autorizado, se registra ése (no se emite otro).
+await servidor(() => sql(`select public.fact_emision_consulta($1, true, '{"ResultGet":{}}'::jsonb, '76999', '2026-11-13', '2026-11-03', 16698000, 3000)`, [eA.id]))
+const recup = await uno(`select (select count(*)::int from public.fact_comprobantes where prefactura_id = $1 and ambiente = 'produccion') n,
+  (select estado from public.fact_prefacturas where id = $1) pe, (select numero::int from public.fact_comprobantes where prefactura_id = $1) num`, [prefAca])
+ok('recuperación: el número intentado autorizado queda como la única factura', recup.n === 1 && recup.pe === 'emitida' && recup.num === 3000, JSON.stringify(recup))
+ok('ya autorizada, no se puede preparar otra emisión', await falla(() => como(ADM, async () => sql(`select public.fact_emision_preparar($1, (select version from public.fact_prefacturas where id = $1), 'produccion')`, [prefAca]))))
+ok('una consulta con otro importe no autoriza nada', await (async () => {
+  const p2 = (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: aca, contrato_id: kTar,
+    agrupacion_clave: 'contrato:aca2', periodo_mes: '2026-10', periodo_desde: '2026-10-01', periodo_hasta_excl: '2026-11-01', lineas: [], neto_c: 100, iva_c: 21, total_c: 121,
+    cuit_receptor: '30555555551', tipo_comprobante: 1, punto_venta: 1, estado: 'lista_revision', requisitos: [] })]))).id
+  await como(ADM, async () => sql(`select public.fact_prefactura_aprobar($1, (select version from public.fact_prefacturas where id = $1))`, [p2]))
+  const e = (await como(ADM, async () => uno(`select public.fact_emision_preparar($1, (select version from public.fact_prefacturas where id = $1), 'produccion') r`, [p2]))).r
+  await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 3001, '{}'::jsonb)`, [e.id]))
+  await servidor(() => sql(`select public.fact_emision_resultado($1, 'incierta', '{}'::jsonb)`, [e.id]))
+  await servidor(() => sql(`select public.fact_emision_consulta($1, true, '{}'::jsonb, '7', '2026-11-13', '2026-11-03', 999, 3001)`, [e.id]))
+  const x = await uno(`select estado, observaciones from public.fact_emisiones where id = $1`, [e.id])
+  return x.estado === 'incierta' && /otros datos/.test(x.observaciones) && !(await uno(`select 1 x from public.fact_comprobantes where prefactura_id = $1`, [p2]))
+})())
+
+// Cuentas corrientes: $9.500.000 de banco + $500.000 de retención cancelan $10.000.000; el banco sigue en $9.500.000.
+const cli10 = await cliente(ADM, { razon_social: 'CLIENTE DIEZ MILLONES', cuit: '30712345671' })
+await db.exec(`insert into public.fact_comprobantes (ambiente, cuit_emisor, tipo, punto_venta, numero, fecha_emision, cliente_id, total_c, neto_c, iva_c, origen)
+  values ('produccion', '30710705417', 1, 1, 5000, '2026-10-05', '${cli10}', 1000000000, 826446281, 173553719, 'carga_manual')`)
+const f10 = (await uno(`select id from public.fact_comprobantes where numero = 5000`)).id
+const c95 = (await como(ADM, () => uno(`select public.fact_cobro_registrar($1::jsonb) id`, [JSON.stringify({ cliente_id: cli10, fecha: '2026-10-20', importe_c: 950000000, medio: 'transferencia' })]))).id
+const r05 = (await como(ADM, () => uno(`select public.fact_retencion_registrar($1::jsonb) id`, [JSON.stringify({ cliente_id: cli10, fecha: '2026-10-20', importe_c: 50000000, impuesto: 'ganancias', certificado: 'G-1', estado: 'certificado_recibido' })]))).id
+await como(ADM, () => sql(`select public.fact_aplicar('cobro', $1, $2, null, 950000000)`, [c95, f10]))
+await como(ADM, () => sql(`select public.fact_aplicar('retencion', $1, $2, null, 50000000)`, [r05, f10]))
+const t10 = (await como(ADM, () => uno(`select public.fact_tablero('2026-10', '2026-11-03', $1) t`, [cli10]))).t
+ok('$9,5 M banco + $0,5 M retención cancelan $10 M; el cobrado bancario sigue siendo $9,5 M', await saldo(f10) === 0
+  && t10.cobro.cobrado_c === 950000000 && t10.cobro.retenciones_certificadas_c === 50000000, JSON.stringify(t10.cobro))
+
+// Bancos: Galicia y Municipal no se mezclan; la misma línea en dos cuentas son dos movimientos.
+const linea = [{ fecha: '2026-10-21', importe_c: 100000, concepto: 'DEPOSITO', hash: 'igual', clasificacion: 'cobranza_posible' }]
+await como(ADM, () => sql(`select public.fact_extracto_importar($1, 'mun.csv', $2, null, $3::jsonb)`, [CTA_MUN, 'e'.repeat(64), JSON.stringify(linea)]))
+await como(ADM, () => sql(`select public.fact_extracto_importar($1, 'gal.csv', $2, null, $3::jsonb)`, [CTA_GAL, 'f'.repeat(64), JSON.stringify(linea)]))
+const porCuenta = await sql(`select cuenta_id, count(*)::int n from public.fact_movimientos_bancarios where hash_linea = 'igual' group by cuenta_id`)
+ok('cada movimiento pertenece a una sola cuenta', porCuenta.length === 2 && porCuenta.every(x => x.n === 1))
+ok('no se importa a una cuenta inexistente', await falla(() => como(ADM, () => sql(`select public.fact_extracto_importar(gen_random_uuid(), 'x.csv', $1, null, '[]'::jsonb)`, ['9'.repeat(64)])), /inexistente/))
+
+// Serie gerencial: evolución mensual y comparación interanual.
+const serie = (await como(GER, () => uno(`select public.fact_tablero_serie('2025-10', '2026-10') s`))).s
+const oct26 = serie.find(x => x.mes === '2026-10'), oct25 = serie.find(x => x.mes === '2025-10'), ago26 = serie.find(x => x.mes === '2026-08')
+ok('serie de 13 meses con prestación, emisión y cobro separados', serie.length === 13 && Number(ago26.horas.facturadas) === 544
+  && oct26.montos.cobrado_c > 0 && oct25.montos.cobrado_c === 0, JSON.stringify([ago26.horas, oct26.montos.cobrado_c, oct25.montos]))
+ok('la serie rechaza rangos excesivos', await falla(() => como(GER, () => sql(`select public.fact_tablero_serie('2020-01', '2026-10')`)), /Rango/))
 
 // ── Rollback ───────────────────────────────────────────────────────────────
 for (const m of [...MIGS].reverse()) await db.exec(readFileSync(`${REPO}/supabase/rollback/${m}_rollback.sql`, 'utf8'))

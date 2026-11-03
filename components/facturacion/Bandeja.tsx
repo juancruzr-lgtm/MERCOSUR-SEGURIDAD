@@ -113,7 +113,7 @@ function Detalle({ p, usuarios, alCambiar }: { p: any; usuarios: Array<{ id: str
             ))}
             <tr><td style={S.td}><b>Neto / IVA / Total</b></td><td style={S.num}>{pesos(p.neto_c)} + {pesos(p.iva_c)}</td><td style={S.num}><b>{pesos(p.total_c)}</b></td></tr>
           </tbody></table>
-          <div style={S.sub}>Horas registradas {horas(p.minutos_registrados)} · aprobadas {horas(p.minutos_aprobados)} · sin registro {horas(p.minutos_pendientes)}</div>
+          <div style={S.sub}>Horas programadas {horas(p.minutos_programados)} · cubiertas {horas(p.minutos_cubiertos)} · aprobadas para facturar {horas(p.minutos_aprobados)} · descubiertas no facturadas {horas(p.minutos_descubiertos)}</div>
           <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? '—'} · vence {fecha(p.fecha_vencimiento)}</div>
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>TEXTO DE LA FACTURA</h4>
