@@ -66,7 +66,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
   const [kId, setKId] = useState<string | null>(null)
   const [tar, setTar] = useState({ contrato_id: '', objetivo_id: '', concepto: 'hora', precio: '', iva: 'sin_definir', alicuota: '21', desde: '', motivo: '' })
   const [vinc, setVinc] = useState({ contrato_id: '', objetivo_id: '', desde: '', hasta: '' })
-  const [oc, setOc] = useState({ tipo: 'orden_compra', numero: '', fecha: '', vigencia_desde: '', vigencia_hasta: '', monto: '', horas: '', aceptado_at: '', condiciones: '', objetivos: [] as string[] })
+  const [oc, setOc] = useState({ tipo: 'orden_compra', numero: '', fecha: '', vigencia_desde: '', vigencia_hasta: '', monto: '', monto_con_iva: true, horas: '', aceptado_at: '', condiciones: '', objetivos: [] as string[] })
   const { ocupado, correr, Mensaje } = useAccion()
 
   async function cargar() {
@@ -77,7 +77,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
       leer('fact_contactos', q => q.eq('cliente_id', cliente.id)),
       ids.length ? leer('fact_tarifas', q => q.in('contrato_id', ids).order('vigencia_desde')) : Promise.resolve([]),
       ids.length ? leer('fact_contrato_objetivos', q => q.in('contrato_id', ids).is('anulado_at', null), '*, objetivo:objetivos(nombre)') : Promise.resolve([]),
-      leer('fact_ordenes_compra', q => q.eq('cliente_id', cliente.id).order('created_at'), '*, objetivos:fact_oc_objetivos(objetivo_id), consumos:fact_oc_consumos(neto_c, anulado_at)'),
+      leer('fact_ordenes_compra', q => q.eq('cliente_id', cliente.id).order('created_at'), '*, objetivos:fact_oc_objetivos(objetivo_id), consumos:fact_oc_consumos(neto_c, total_c, anulado_at)'),
     ])
     setD({ alias: aliasL, contactos, contratos, tarifas, vinc: vincL, ocs })
   }
@@ -185,23 +185,29 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>ÓRDENES DE COMPRA / LICITACIONES / PRESUPUESTOS</h4>
           {d.ocs.map(o => {
-            const consumido = (o.consumos ?? []).filter((c: any) => !c.anulado_at).reduce((a: number, c: any) => a + Number(c.neto_c), 0)
-            return <div key={o.id} style={{ fontSize: 13 }}>{o.tipo} {o.numero} · {fecha(o.vigencia_desde)} a {fecha(o.vigencia_hasta)} · monto neto {pesos(o.monto_neto_c)} · consumido {pesos(consumido)}{o.monto_neto_c ? ` · saldo ${pesos(Number(o.monto_neto_c) - consumido)}` : ''}{o.horas ? ` · ${o.horas} h` : ''} · {o.objetivos?.length ? o.objetivos.map((x: any) => nombreObj(x.objetivo_id)).join(', ') : 'todos los objetivos'} · {o.estado}</div>
+            const conIva = o.monto_total_c != null
+            const monto = conIva ? o.monto_total_c : o.monto_neto_c
+            const consumido = (o.consumos ?? []).filter((c: any) => !c.anulado_at).reduce((a: number, c: any) => a + Number(conIva ? c.total_c : c.neto_c), 0)
+            return <div key={o.id} style={{ fontSize: 13 }}>{o.tipo} {o.numero} · {fecha(o.vigencia_desde)} a {fecha(o.vigencia_hasta)} · monto {conIva ? 'con IVA' : 'neto'} {pesos(monto)} · consumido {pesos(consumido)}{monto ? ` · saldo ${pesos(Number(monto) - consumido)}` : ''}{o.horas ? ` · ${o.horas} h` : ''} · {o.objetivos?.length ? o.objetivos.map((x: any) => nombreObj(x.objetivo_id)).join(', ') : 'todos los objetivos'} · {o.estado}</div>
           })}
           <div style={S.fila}>
             <select style={S.input} value={oc.tipo} onChange={e => setOc({ ...oc, tipo: e.target.value })}>{['orden_compra', 'licitacion', 'presupuesto'].map(x => <option key={x}>{x}</option>)}</select>
             <input style={{ ...S.input, width: 110 }} placeholder="Número" value={oc.numero} onChange={e => setOc({ ...oc, numero: e.target.value })} />
             <input style={S.input} type="date" title="Vigencia desde" value={oc.vigencia_desde} onChange={e => setOc({ ...oc, vigencia_desde: e.target.value })} />
             <input style={S.input} type="date" title="Vigencia hasta" value={oc.vigencia_hasta} onChange={e => setOc({ ...oc, vigencia_hasta: e.target.value })} />
-            <input style={{ ...S.input, width: 140 }} placeholder="Monto neto" value={oc.monto} onChange={e => setOc({ ...oc, monto: e.target.value })} />
+            <input style={{ ...S.input, width: 140 }} placeholder="Monto de la OC" value={oc.monto} onChange={e => setOc({ ...oc, monto: e.target.value })} />
+            {oc.tipo !== 'presupuesto' && <select style={S.input} value={oc.monto_con_iva ? 'si' : 'no'} onChange={e => setOc({ ...oc, monto_con_iva: e.target.value === 'si' })}>
+              <option value="si">monto con IVA</option><option value="no">monto sin IVA</option></select>}
             <input style={{ ...S.input, width: 80 }} placeholder="Horas" value={oc.horas} onChange={e => setOc({ ...oc, horas: e.target.value })} />
             {oc.tipo === 'presupuesto' && <input style={S.input} type="date" title="Aceptado el" value={oc.aceptado_at} onChange={e => setOc({ ...oc, aceptado_at: e.target.value })} />}
             <select multiple style={{ ...S.input, minWidth: 180 }} value={oc.objetivos} onChange={e => setOc({ ...oc, objetivos: Array.from(e.target.selectedOptions).map(o => o.value) })}>
               {d.vinc.map(v => <option key={v.objetivo_id} value={v.objetivo_id}>{v.objetivo?.nombre}</option>)}
             </select>
             <button style={S.btn2} onClick={() => correr(async () => {
-              await rpc('fact_oc_guardar', { p_id: null, p_datos: { ...oc, cliente_id: cliente.id, monto_neto_c: oc.monto ? centavosDe(oc.monto) : null, horas: oc.horas || null }, p_objetivos: oc.objetivos, p_version: null })
-              setOc({ tipo: 'orden_compra', numero: '', fecha: '', vigencia_desde: '', vigencia_hasta: '', monto: '', horas: '', aceptado_at: '', condiciones: '', objetivos: [] }); await hecho()
+              await rpc('fact_oc_guardar', { p_id: null, p_datos: { ...oc, cliente_id: cliente.id, ...(oc.monto_con_iva && oc.tipo !== 'presupuesto'
+                ? { monto_total_c: oc.monto ? centavosDe(oc.monto) : null, monto_neto_c: null }
+                : { monto_neto_c: oc.monto ? centavosDe(oc.monto) : null, monto_total_c: null }), horas: oc.horas || null }, p_objetivos: oc.objetivos, p_version: null })
+              setOc({ tipo: 'orden_compra', numero: '', fecha: '', vigencia_desde: '', vigencia_hasta: '', monto: '', monto_con_iva: true, horas: '', aceptado_at: '', condiciones: '', objetivos: [] }); await hecho()
             }, 'OC guardada (una sola, aunque cubra varios objetivos)')}>Agregar</button>
           </div>
         </div>

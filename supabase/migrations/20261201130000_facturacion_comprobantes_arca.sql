@@ -345,8 +345,8 @@ begin
       estado_portal = case when coalesce(v_req_portal, false) then 'pendiente' else estado_portal end
     where id = e.prefactura_id;
     if v_pref.oc_id is not null then
-      insert into public.fact_oc_consumos (oc_id, prefactura_id, neto_c, horas)
-      values (v_pref.oc_id, v_pref.id, v_pref.neto_c, coalesce(v_pref.minutos_aprobados, 0) / 60.0)
+      insert into public.fact_oc_consumos (oc_id, prefactura_id, neto_c, total_c, horas)
+      values (v_pref.oc_id, v_pref.id, v_pref.neto_c, v_pref.total_c, coalesce(v_pref.minutos_aprobados, 0) / 60.0)
       on conflict (oc_id, prefactura_id) where anulado_at is null do nothing;
     end if;
   end if;

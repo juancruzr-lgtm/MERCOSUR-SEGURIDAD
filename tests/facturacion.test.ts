@@ -326,9 +326,33 @@ describe('prefacturación', () => {
   it('OC compartida: el monto no se multiplica por objetivo; se consume una sola vez', () => {
     const oc = { id: 'OC', numero: '295', vigenciaDesde: '2026-01-01', vigenciaHasta: '2026-12-31', montoNeto: 1000000, horas: null, consumidoNeto: 700000, consumidoHoras: 0 }
     const p = { desde: '2026-10-01', hastaExclusivo: '2026-11-01' }
-    expect(validarConsumoOc(oc, p, 300000, 0)).toEqual({ ok: true, saldoNeto: 0 })
-    expect(validarConsumoOc(oc, p, 300001, 0).ok).toBe(false)
-    expect(validarConsumoOc({ ...oc, vigenciaHasta: '2026-09-30' }, p, 1, 0).ok).toBe(false)
+    expect(validarConsumoOc(oc, p, { neto: 300000, total: 363000 }, 0)).toEqual({ ok: true, saldo: 0, base: 'neto', agotandose: true })
+    expect(validarConsumoOc(oc, p, { neto: 300001, total: 363001 }, 0).ok).toBe(false)
+    expect(validarConsumoOc({ ...oc, vigenciaHasta: '2026-09-30' }, p, { neto: 1, total: 1 }, 0).ok).toBe(false)
+  })
+
+  it('OC con IVA (ACA 0006-26 real): el saldo baja por el TOTAL facturado, no por el neto', () => {
+    // OC $128.255.160 = 8.760 h × $14.641 (12.100 + IVA). Facturas reales jul-sep: 744 h × 12.100 = 10.892.904 con IVA.
+    const oc = { id: 'OC', numero: '0006-26', vigenciaDesde: '2026-06-01', vigenciaHasta: '2027-05-31', montoNeto: null, montoTotal: 12825516000,
+      horas: null, consumidoNeto: 0, consumidoTotal: 0, consumidoHoras: 0 }
+    const p = { desde: '2027-04-01', hastaExclusivo: '2027-05-01' }
+    const mes = { neto: 900240000, total: 1089290400 }
+    // Tras 11 meses de 744 h quedan $8.433.216: no alcanza para un mes completo (contando por neto parecería que sí).
+    const tras11 = { ...oc, consumidoTotal: 11 * mes.total, consumidoNeto: 11 * mes.neto }
+    expect(validarConsumoOc(tras11, p, mes, 744).ok).toBe(false)
+    expect(validarConsumoOc({ ...tras11, montoTotal: null, montoNeto: 12825516000 }, p, mes, 744).ok).toBe(true)
+    // En el undécimo mes avisa que el siguiente no alcanza.
+    const tras10 = { ...oc, consumidoTotal: 10 * mes.total }
+    expect(validarConsumoOc(tras10, p, mes, 744)).toMatchObject({ ok: true, base: 'total', agotandose: true })
+    expect(validarConsumoOc({ ...oc, consumidoTotal: 9 * mes.total }, p, mes, 744)).toMatchObject({ ok: true, agotandose: false })
+  })
+
+  it('Depósito Fiscal (OC 4500025674 real): 12 abonos de $14.235.000 consumen exacto los $170.820.000', () => {
+    const oc = { id: 'OC', numero: '4500025674', vigenciaDesde: null, vigenciaHasta: null, montoNeto: null, montoTotal: 17082000000,
+      horas: null, consumidoNeto: 0, consumidoTotal: 11 * 1423500000, consumidoHoras: 0 }
+    const p = { desde: '2026-10-01', hastaExclusivo: '2026-11-01' }
+    expect(validarConsumoOc(oc, p, { neto: 1176446281, total: 1423500000 }, 0)).toMatchObject({ ok: true, saldo: 0 })
+    expect(validarConsumoOc({ ...oc, consumidoTotal: 12 * 1423500000 }, p, { neto: 1176446281, total: 1423500000 }, 0).ok).toBe(false)
   })
 
   it('cambio material (texto, importe) cambia la huella → vuelve a revisión', () => {

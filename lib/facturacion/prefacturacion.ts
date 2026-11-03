@@ -91,8 +91,13 @@ export type OrdenCompraEstado = {
   vigenciaDesde: string | null
   vigenciaHasta: string | null
   montoNeto: number | null // centavos; null = sin tope informado
+  // Las OC de los clientes se expresan casi siempre CON IVA (ACA 0006-26 =
+  // 8.760 h × $14.641; Depósito Fiscal = 12 × $14.235.000 de factura B).
+  // Si se informa el monto total, el saldo se controla contra el total facturado.
+  montoTotal?: number | null
   horas: number | null
   consumidoNeto: number
+  consumidoTotal?: number
   consumidoHoras: number
 }
 
@@ -208,8 +213,9 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
   const importes = calculable ? sumarImportes(lineas.map(l => l.importes)) : null
 
   if (e.oc && importes) {
-    const v = validarConsumoOc(e.oc, e.periodo, importes.neto, e.horas ? e.horas.minutosTotales / 60 : 0)
+    const v = validarConsumoOc(e.oc, e.periodo, importes, e.horas ? e.horas.minutosTotales / 60 : 0)
     if ('motivo' in v) requisitos.push({ tipo: e.requiere.includes('oc_mensual') ? 'oc_mensual' : 'oc_vigente', detalle: v.motivo })
+    else if (v.agotandose) avisos.push(`La OC ${e.oc.numero} no alcanza para otro período igual a éste: pedir una nueva orden.`)
   }
 
   return { lineas, importes, requisitos, avisos }
@@ -222,19 +228,28 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
 export function validarConsumoOc(
   oc: OrdenCompraEstado,
   periodo: { desde: string; hastaExclusivo: string },
-  netoNuevo: number,
+  nuevo: { neto: number; total: number },
   horasNuevas: number,
-): { ok: true; saldoNeto: number | null } | { ok: false; motivo: string } {
+): { ok: true; saldo: number | null; base: 'neto' | 'total' | null; agotandose: boolean } | { ok: false; motivo: string } {
   if (oc.vigenciaHasta && oc.vigenciaHasta < periodo.desde) return { ok: false, motivo: `La OC ${oc.numero} venció el ${oc.vigenciaHasta}.` }
   if (oc.vigenciaDesde && oc.vigenciaDesde >= periodo.hastaExclusivo) return { ok: false, motivo: `La OC ${oc.numero} recién rige desde ${oc.vigenciaDesde}.` }
-  if (oc.montoNeto != null) {
-    const saldo = oc.montoNeto - oc.consumidoNeto
-    if (netoNuevo > saldo) return { ok: false, motivo: `La OC ${oc.numero} no tiene saldo suficiente (saldo neto ${saldo}, se necesitan ${netoNuevo}).` }
+  const base: 'neto' | 'total' | null = oc.montoTotal != null ? 'total' : oc.montoNeto != null ? 'neto' : null
+  let saldo: number | null = null
+  let agotandose = false
+  if (base) {
+    const monto = base === 'total' ? oc.montoTotal! : oc.montoNeto!
+    const consumido = base === 'total' ? (oc.consumidoTotal ?? 0) : oc.consumidoNeto
+    const importe = base === 'total' ? nuevo.total : nuevo.neto
+    const disponible = monto - consumido
+    if (importe > disponible) return { ok: false, motivo: `La OC ${oc.numero} no tiene saldo suficiente (saldo ${base === 'total' ? 'con IVA' : 'neto'} ${disponible}, se necesitan ${importe}).` }
+    saldo = disponible - importe
+    agotandose = importe > 0 && saldo < importe
   }
   if (oc.horas != null && oc.consumidoHoras + horasNuevas > oc.horas + 1e-9) {
     return { ok: false, motivo: `La OC ${oc.numero} cubre ${oc.horas} h y ya se consumieron ${oc.consumidoHoras} h.` }
   }
-  return { ok: true, saldoNeto: oc.montoNeto == null ? null : oc.montoNeto - oc.consumidoNeto - netoNuevo }
+  if (oc.horas != null && horasNuevas > 0 && oc.horas - oc.consumidoHoras - horasNuevas < horasNuevas - 1e-9) agotandose = true
+  return { ok: true, saldo, base, agotandose }
 }
 
 /** Estado sugerido según requisitos. Nunca sugiere 'aprobada_emitir' ni 'emitida'. */

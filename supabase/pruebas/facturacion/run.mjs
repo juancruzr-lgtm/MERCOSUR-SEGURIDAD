@@ -65,10 +65,12 @@ ok('las tres migraciones aplican', true)
 const CAD = await como(ADM, async () => (await uno(`select public.fact_cliente_guardar(null, '{"razon_social":"CONEXION ALTO DELTA S.A.","cuit":"30-71234567-2"}'::jsonb) id`).catch(() => null)))
 ok('CUIT con dígito verificador inválido se rechaza', CAD === null || CAD === undefined)
 const cliente = async (quien, datos) => (await como(quien, () => uno(`select public.fact_cliente_guardar(null, $1::jsonb) id`, [JSON.stringify(datos)]))).id
-const altoDelta = await cliente(ADM, { razon_social: 'CONEXION ALTO DELTA S.A.', cuit: '30-11111111-8' })
-const laromet = await cliente(ADM, { razon_social: 'LAROMET S.A.', cuit: '30222222229' })
-const hagana = await cliente(GER, { razon_social: 'HAGANA S.A. (LA CAJA)', cuit: '30666666662' })
-const univ = await cliente(ADM, { razon_social: 'CLUB UNIVERSITARIO', cuit: '30444444440' })
+// CUIT reales: Alto Delta según sus certificados de retención (OP 323); Laromet, La Caja y Club Uni(versitario)
+// según la planilla de horas de octubre. Importes de 2018/2023/834/2047 según FACTURAS CORRELATIVAS 2026.
+const altoDelta = await cliente(ADM, { razon_social: 'CONEXION ALTO DELTA S.A.', cuit: '30-71924433-1' })
+const laromet = await cliente(ADM, { razon_social: 'LAROMET S.A.', cuit: '30501125594' })
+const hagana = await cliente(GER, { razon_social: 'HAGANA S.A. (LA CAJA)', cuit: '30707891579' })
+const univ = await cliente(ADM, { razon_social: 'CLUB UNIVERSITARIO', cuit: '30589038181' })
 const arca = await cliente(ADM, { razon_social: 'AGENCIA DE RECAUDACION Y CONTROL ADUANERO', cuit: '33-69345023-9' })
 ok('Administración y Gerencia cargan clientes; CUIT de ARCA válido', [altoDelta, laromet, hagana, univ, arca].every(Boolean))
 ok('CUIT duplicado se rechaza', await falla(() => cliente(ADM, { razon_social: 'OTRA', cuit: '33693450239' })))
@@ -102,6 +104,10 @@ const oc = await como(ADM, () => uno(`select public.fact_oc_guardar(null, $1::js
    '{00000000-0000-0000-0000-00000000b004,00000000-0000-0000-0000-00000000b005}']))
 const ocRows = await sql(`select o.monto_neto_c::text m, (select count(*)::int from public.fact_oc_objetivos x where x.oc_id = o.id) n from public.fact_ordenes_compra o`)
 ok('OC compartida por dos objetivos: una sola fila con un solo monto', ocRows.length === 1 && ocRows[0].n === 2 && ocRows[0].m === '1000000000')
+const ocIva = (datos) => como(ADM, () => uno(`select public.fact_oc_guardar(null, $1::jsonb, null) id`, [JSON.stringify({ cliente_id: aca, ...datos })]))
+ok('OC con monto neto y total a la vez se rechaza', await falla(() => ocIva({ numero: 'X', monto_neto_c: 100, monto_total_c: 121 })))
+const ocAca = (await ocIva({ numero: '0006-26', vigencia_desde: '2026-06-01', vigencia_hasta: '2027-05-31', monto_total_c: 12825516000 })).id
+ok('OC real de ACA (0006-26) se guarda con su monto CON IVA', (await uno(`select monto_total_c::text t, monto_neto_c from public.fact_ordenes_compra where id = $1`, [ocAca])).t === '12825516000')
 
 // ── Documentos ─────────────────────────────────────────────────────────────
 const SHA1 = 'a'.repeat(64)
@@ -129,7 +135,7 @@ ok('no se aprueban dos veces las mismas horas', await falla(() => aprobar()))
 const lineas = [{ concepto: 'Horas de vigilancia', cantidad: '544', precio: '14853.20', tarifaId: null, importes: { neto: 808014080, iva: 169682957, total: 977697037 } }]
 const datosPref = (extra = {}) => JSON.stringify({ cliente_id: altoDelta, contrato_id: kAlto, agrupacion_clave: 'cliente', periodo_mes: '2026-08',
   periodo_desde: '2026-08-01', periodo_hasta_excl: '2026-09-01', horas_aprobacion_ids: [h1], minutos_programados: 544 * 60, minutos_cubiertos: 544 * 60, minutos_aprobados: 544 * 60,
-  minutos_descubiertos: 0, lineas, neto_c: 808014080, iva_c: 169682957, total_c: 977697037, cuit_receptor: '30111111118', tipo_comprobante: 1,
+  minutos_descubiertos: 0, lineas, neto_c: 808014080, iva_c: 169682957, total_c: 977697037, cuit_receptor: '30719244331', tipo_comprobante: 1,
   punto_venta: 1, texto_factura: 'Servicio de vigilancia agosto 2026', estado: 'esperando_requisitos',
   requisitos: [{ tipo: 'oc_mensual', detalle: 'Falta la OC' }], ...extra })
 const pref = (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [datosPref()]))).id
@@ -183,10 +189,10 @@ ok('no se reemplazan horas ya facturadas', await falla(() => aprobar(true, 500 *
 // ── Importación ARCA (Laromet, Hagana, Universitario) ──────────────────────
 const fila = (tipo, pv, numero, fecha, cuit, total_c, extra = {}) => ({ clave: `${tipo}-${pv}-${numero}`, tipo, punto_venta: pv, numero, fecha, doc_tipo_receptor: 80, doc_nro_receptor: cuit, total_c, neto_c: Math.round(total_c / 1.21), ...extra })
 const filas = [
-  fila(1, 1, 2018, '2026-08-05', '30222222229', 185901901), fila(3, 3, 186, '2026-08-20', '30222222229', 185901901),
-  fila(1, 1, 2023, '2026-08-27', '30666666662', 436037536), fila(3, 3, 187, '2026-09-10', '30666666662', 218018768),
-  fila(6, 1, 834, '2026-10-01', '30444444440', 926155020),
-  fila(1, 1, 2047, '2026-09-04', '30111111118', 977697037), // ya registrada por la app
+  fila(1, 1, 2018, '2026-08-05', '30501125594', 185901901), fila(3, 3, 186, '2026-08-20', '30501125594', 185901901),
+  fila(1, 1, 2023, '2026-08-27', '30707891579', 436037536), fila(3, 3, 187, '2026-09-10', '30707891579', 218018768),
+  fila(6, 1, 834, '2026-10-01', '30589038181', 926155020),
+  fila(1, 1, 2047, '2026-09-04', '30719244331', 977697037), // ya registrada por la app
 ]
 const SHA_CSV = 'b'.repeat(64)
 const imp = (await como(ADM, () => uno(`select public.fact_importacion_arca_crear('comprobantes_consulta_csv_emitidos.csv', $1, null, $2::jsonb) r`, [SHA_CSV, JSON.stringify([...filas, filas[0]])]))).r
@@ -221,8 +227,8 @@ ok('…la aprobación queda en el historial', !!(await uno(`select 1 x from publ
 
 // ── Extracto y conciliación ────────────────────────────────────────────────
 const movs = [
-  { fecha: '2026-10-09', importe_c: 876829617, concepto: 'TRANSFERENCIA RECIBIDA', cuit_contraparte: '30111111118', hash: 'h1', clasificacion: 'cobranza_posible' },
-  { fecha: '2026-10-26', importe_c: 926155020, concepto: 'CR TRANSF', cuit_contraparte: '30444444440', hash: 'h2', clasificacion: 'cobranza_posible' },
+  { fecha: '2026-10-09', importe_c: 876829617, concepto: 'TRANSFERENCIA RECIBIDA', cuit_contraparte: '30719244331', hash: 'h1', clasificacion: 'cobranza_posible' },
+  { fecha: '2026-10-26', importe_c: 926155020, concepto: 'CR TRANSF', cuit_contraparte: '30589038181', hash: 'h2', clasificacion: 'cobranza_posible' },
   { fecha: '2026-10-15', importe_c: 50000000, concepto: 'RESCATE FCI', hash: 'h3', clasificacion: 'no_cobranza', clasificacion_motivo: 'Rescate o movimiento de inversión' },
 ]
 const CTA_GAL = (await como(ADM, () => uno(`select public.fact_cuenta_bancaria_guardar('{"banco":"galicia","numero":"511522209"}'::jsonb) id`))).id

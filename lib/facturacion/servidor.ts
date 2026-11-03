@@ -148,7 +148,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         }
 
         // OC / presupuesto que cubre el período (compartida: una sola fila).
-        const { data: ocs } = await db.from('fact_ordenes_compra').select('*, objetivos:fact_oc_objetivos(objetivo_id), consumos:fact_oc_consumos(neto_c, horas, anulado_at, prefactura_id)')
+        const { data: ocs } = await db.from('fact_ordenes_compra').select('*, objetivos:fact_oc_objetivos(objetivo_id), consumos:fact_oc_consumos(neto_c, total_c, horas, anulado_at, prefactura_id)')
           .eq('cliente_id', k.cliente_id).eq('estado', 'vigente')
         const ocCubre = (ocs ?? []).find((o: any) =>
           (!o.vigencia_desde || o.vigencia_desde < periodo.hastaExclusivo) && (!o.vigencia_hasta || o.vigencia_hasta >= periodo.desde) &&
@@ -164,6 +164,8 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
           id: ocCubre.id, numero: ocCubre.numero, vigenciaDesde: ocCubre.vigencia_desde, vigenciaHasta: ocCubre.vigencia_hasta,
           montoNeto: ocCubre.monto_neto_c != null ? Number(ocCubre.monto_neto_c) : null, horas: ocCubre.horas != null ? Number(ocCubre.horas) : null,
           consumidoNeto: (ocCubre.consumos ?? []).filter((c: any) => !c.anulado_at && c.prefactura_id !== existente?.id).reduce((a: number, c: any) => a + Number(c.neto_c), 0),
+          montoTotal: ocCubre.monto_total_c != null ? Number(ocCubre.monto_total_c) : null,
+          consumidoTotal: (ocCubre.consumos ?? []).filter((c: any) => !c.anulado_at && c.prefactura_id !== existente?.id).reduce((a: number, c: any) => a + Number(c.total_c), 0),
           consumidoHoras: (ocCubre.consumos ?? []).filter((c: any) => !c.anulado_at && c.prefactura_id !== existente?.id).reduce((a: number, c: any) => a + Number(c.horas), 0),
         } : null
         const cumplidos: TipoRequisito[] = []

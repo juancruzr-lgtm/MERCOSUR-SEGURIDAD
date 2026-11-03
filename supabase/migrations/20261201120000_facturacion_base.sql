@@ -275,6 +275,9 @@ create table if not exists public.fact_ordenes_compra (
   vigencia_desde  date,
   vigencia_hasta  date,
   monto_neto_c    bigint check (monto_neto_c is null or monto_neto_c > 0),
+  -- Monto CON IVA, como lo expresan casi todas las OC reales (ACA 0006-26 = 8.760 h × $14.641;
+  -- Depósito Fiscal = 12 × $14.235.000). Si está, el saldo se mide contra el total facturado.
+  monto_total_c   bigint check (monto_total_c is null or monto_total_c > 0),
   horas           numeric(12, 2) check (horas is null or horas > 0),
   -- Presupuesto aceptado (INTA): fecha y documento de aceptación.
   aceptado_at     date,
@@ -286,6 +289,7 @@ create table if not exists public.fact_ordenes_compra (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
   unique (cliente_id, tipo, numero),
+  check (monto_neto_c is null or monto_total_c is null),
   check (vigencia_hasta is null or vigencia_desde is null or vigencia_hasta >= vigencia_desde)
 );
 
@@ -420,6 +424,7 @@ create table if not exists public.fact_oc_consumos (
   oc_id          uuid not null references public.fact_ordenes_compra(id),
   prefactura_id  uuid not null references public.fact_prefacturas(id),
   neto_c         bigint not null check (neto_c >= 0),
+  total_c        bigint not null default 0 check (total_c >= 0),
   horas          numeric(12, 2) not null default 0,
   created_at     timestamptz not null default now(),
   anulado_at     timestamptz
@@ -684,24 +689,27 @@ returns uuid language plpgsql security definer set search_path = public, pg_cata
 declare v_actor uuid := public.facturacion_gate(); v_id uuid;
 begin
   if p_id is null then
-    insert into public.fact_ordenes_compra (cliente_id, tipo, numero, fecha, vigencia_desde, vigencia_hasta, monto_neto_c, horas, aceptado_at, condiciones, documento_id, creado_por)
+    insert into public.fact_ordenes_compra (cliente_id, tipo, numero, fecha, vigencia_desde, vigencia_hasta, monto_neto_c, monto_total_c, horas, aceptado_at, condiciones, documento_id, creado_por)
     values ((p_datos->>'cliente_id')::uuid, coalesce(p_datos->>'tipo', 'orden_compra'), trim(p_datos->>'numero'),
       nullif(p_datos->>'fecha', '')::date, nullif(p_datos->>'vigencia_desde', '')::date, nullif(p_datos->>'vigencia_hasta', '')::date,
-      nullif(p_datos->>'monto_neto_c', '')::bigint, nullif(p_datos->>'horas', '')::numeric, nullif(p_datos->>'aceptado_at', '')::date,
+      nullif(p_datos->>'monto_neto_c', '')::bigint, nullif(p_datos->>'monto_total_c', '')::bigint,
+      nullif(p_datos->>'horas', '')::numeric, nullif(p_datos->>'aceptado_at', '')::date,
       p_datos->>'condiciones', nullif(p_datos->>'documento_id', '')::uuid, v_actor)
     returning id into v_id;
   else
     update public.fact_ordenes_compra set numero = trim(p_datos->>'numero'), fecha = nullif(p_datos->>'fecha', '')::date,
       vigencia_desde = nullif(p_datos->>'vigencia_desde', '')::date, vigencia_hasta = nullif(p_datos->>'vigencia_hasta', '')::date,
-      monto_neto_c = nullif(p_datos->>'monto_neto_c', '')::bigint, horas = nullif(p_datos->>'horas', '')::numeric,
+      monto_neto_c = nullif(p_datos->>'monto_neto_c', '')::bigint, monto_total_c = nullif(p_datos->>'monto_total_c', '')::bigint, horas = nullif(p_datos->>'horas', '')::numeric,
       aceptado_at = nullif(p_datos->>'aceptado_at', '')::date, condiciones = p_datos->>'condiciones',
       documento_id = coalesce(nullif(p_datos->>'documento_id', '')::uuid, documento_id),
       estado = coalesce(p_datos->>'estado', estado), version = version + 1, updated_at = now()
     where id = p_id and version = coalesce(p_version, version) returning id into v_id;
     if v_id is null then raise exception 'La OC cambió mientras la editabas; recargá' using errcode = '40001'; end if;
     -- Un monto menor a lo ya consumido no se acepta.
-    if exists (select 1 from public.fact_ordenes_compra o where o.id = v_id and o.monto_neto_c is not null
-               and o.monto_neto_c < (select coalesce(sum(neto_c), 0) from public.fact_oc_consumos c where c.oc_id = v_id and c.anulado_at is null)) then
+    if exists (select 1 from public.fact_ordenes_compra o
+               cross join lateral (select coalesce(sum(neto_c), 0) neto, coalesce(sum(total_c), 0) total
+                                   from public.fact_oc_consumos c where c.oc_id = v_id and c.anulado_at is null) k
+               where o.id = v_id and (o.monto_neto_c < k.neto or o.monto_total_c < k.total)) then
       raise exception 'El monto de la OC queda por debajo de lo ya facturado contra ella';
     end if;
     delete from public.fact_oc_objetivos where oc_id = v_id;
