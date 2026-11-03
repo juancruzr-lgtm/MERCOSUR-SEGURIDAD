@@ -87,6 +87,7 @@ import CentroDeRondas from '@/components/rondas/CentroDeRondas'
 import CierreOperativoPanel from '@/components/cierre/CierreOperativoPanel'
 import NovedadesPersonalPanel from '@/components/novedades/NovedadesPersonalPanel'
 import LiquidacionPanel from '@/components/liquidacion/LiquidacionPanel'
+import FacturacionPanel from '@/components/facturacion/FacturacionPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
@@ -14251,8 +14252,10 @@ const esGuardia = esRolGuardia(user.rol)
     // GESTIÓN ECONÓMICA → Liquidación: Gerencia + Administración (capacidad
     // preparar_liquidacion). NO Dirección Operativa/Jefe/supervisores/vigiladores.
     // El acceso a Liquidación NO abre banco/Finanzas (capacidad económica aparte).
-    ...(tieneCapacidad(user, 'preparar_liquidacion') ? [{ section:'GESTIÓN ECONÓMICA', items:[
-      { id:'liquidacion', icon:'💵', label:'Liquidación' },
+    // Facturación: capacidad gestionar_facturacion (Gerencia, delegada y Administración).
+    ...(tieneCapacidad(user, 'preparar_liquidacion') || tieneCapacidad(user, 'gestionar_facturacion') ? [{ section:'GESTIÓN ECONÓMICA', items:[
+      ...(tieneCapacidad(user, 'preparar_liquidacion') ? [{ id:'liquidacion', icon:'💵', label:'Liquidación' }] : []),
+      ...(tieneCapacidad(user, 'gestionar_facturacion') ? [{ id:'facturacion', icon:'🧾', label:'Facturación' }] : []),
     ]}] : []),
     // CONFIGURACIÓN y SISTEMA: sólo ADMIN PLENO (jefe/dir. operativa/administración/
     // gerencia + admin legado). Un supervisor con acceso a la interfaz admin
@@ -14393,6 +14396,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'documentacion_legajo' && gestionaDatosSensibles(user) && <LegajoDigital inicial="documentacion" user={user} />}
               {page === 'legajo_historico' && gestionaDatosSensibles(user) && <LegajoDigital inicial="historico" user={user} empleadoHistorico={filtros.legajo_historico?.empleado ?? undefined} verHistorico={filtros.legajo_historico?.ver ?? undefined} tipoHistorico={filtros.legajo_historico?.tipo ?? undefined} />}
               {page === 'liquidacion' && tieneCapacidad(user, 'preparar_liquidacion') && <LiquidacionPanel user={user} empleados={guardias} />}
+              {page === 'facturacion' && tieneCapacidad(user, 'gestionar_facturacion') && <FacturacionPanel user={user} />}
               {page === 'checklists' && esAdminPleno(user) && <ChecklistsAdmin plantillas={checklistPlantillas} setPlantillas={setChecklistPlantillas} items={checklistItems} setItems={setChecklistItems} />}
               {page === 'turnos_base' && esAdminPleno(user) && <TurnosBase />}
               {page === 'observacion' && esAdminPleno(user) && <ObservacionSistema onNavigate={navegarConFiltro} />}

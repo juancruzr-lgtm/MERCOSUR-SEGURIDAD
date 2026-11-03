@@ -212,8 +212,10 @@ describe('capacidades — puesto canónico manda sobre el rol viejo', () => {
     const admin = { rol: 'admin', puesto_organizacional: 'administracion' }
     expect(tieneCapacidad(admin, 'ver_operacion')).toBe(true)
     expect(tieneCapacidad(admin, 'gestionar_personal')).toBe(true)
+    // Facturación: Administración revisa precios, ajustes y texto de la factura.
+    expect(tieneCapacidad(admin, 'gestionar_facturacion')).toBe(true)
     for (const cap of ['ver_liquidacion', 'editar_liquidacion', 'ver_finanzas',
-      'gestionar_facturacion', 'configurar_economico', 'ver_dashboard_gerencial'] as const) {
+      'configurar_economico', 'ver_dashboard_gerencial'] as const) {
       expect(tieneCapacidad(admin, cap)).toBe(false)
     }
   })
