@@ -352,13 +352,17 @@ export interface PlantillaCompletaResultado {
 /**
  * Plantilla del Excel COMPLETO de un período = el Excel de trabajo (con los
  * ajustes guardados del período) + columnas finales:
- *   SUELDO DEL MES | EXTRAS DEL MES | EXTRAS PENDIENTES DE PAGO | OBSERVACIÓN BANCO
+ *   SUELDO DEL MES | [LIQUIDACIÓN FINAL] | EXTRAS DEL MES | EXTRAS PENDIENTES DE PAGO | OBSERVACIÓN BANCO
  * FUENTE ÚNICA de los botones de Pagos: el Excel completo individual y cada
  * solapa del libro general salen de acá, así no pueden diferir.
  *
  * - SUELDO DEL MES: SUELDO MENSUAL fijo si lo tiene, si no el neto de recibo de
  *   Visual; menos los adelantos (una sola vez). Es lo que corresponde al mes, NO
- *   un pago registrado. Sin resultado de Visual: vacío y total PENDIENTE.
+ *   un pago registrado. Sin resultado de Visual: vacío y total PENDIENTE. NO
+ *   incluye a las bajas con liquidación final (van en su propia columna).
+ * - LIQUIDACIÓN FINAL: sólo aparece si hay bajas con final en el mes; lleva el
+ *   neto del recibo final de esas personas, separado de los sueldos mensuales
+ *   (JC 03/11) para no mezclarlos en la misma columna.
  * - EXTRAS DEL MES: columna AP final (por horas, fija vía BG o a mano).
  * - EXTRAS PENDIENTES DE PAGO: extras del mes − extras registradas como pagadas.
  * - OBSERVACIÓN BANCO: por qué una persona no entra al archivo de Galicia.
@@ -383,29 +387,45 @@ export async function plantillaCompletaConNeto(
   const extras = conciliarExtras(plantilla, dest.porUsuario, reg)
   const extraDe = new Map(extras.map(e => [e.usuarioId, e]))
   const sueldoFijo = sueldoMensual ?? new Map<string, number>()
+  // Las bajas con liquidación final NO van en SUELDO DEL MES: su importe (el neto
+  // del recibo final de Visual) se muestra en su propia columna LIQUIDACIÓN FINAL,
+  // para no mezclarlo con los sueldos mensuales (JC 03/11). La columna sólo aparece
+  // cuando hay al menos una baja con final en el mes.
+  const bajasFinal = new Set<number>(plantilla.estilos.filasBajaFinal ?? [])
+  const hayFinal = bajasFinal.size > 0
   const base = COL_A_NUM(plantilla.columnas.reduce((m, c) => (COL_A_NUM(c.col) > COL_A_NUM(m) ? c.col : m), 'A'))
-  const cSueldo = NUM_A_COL(base + 1), cExtras = NUM_A_COL(base + 2), cPend = NUM_A_COL(base + 3), cObs = NUM_A_COL(base + 4)
+  let col = base
+  const cSueldo = NUM_A_COL(++col)
+  const cFinal = hayFinal ? NUM_A_COL(++col) : ''
+  const cExtras = NUM_A_COL(++col), cPend = NUM_A_COL(++col), cObs = NUM_A_COL(++col)
   const enc = plantilla.estilos.encabezado
   const filaTotal = plantilla.estilos.total
   const celdas: CeldaPlantilla[] = [...plantilla.celdas,
-    { ref: `${cSueldo}${enc}`, v: 'SUELDO DEL MES' }, { ref: `${cExtras}${enc}`, v: 'EXTRAS DEL MES' },
+    { ref: `${cSueldo}${enc}`, v: 'SUELDO DEL MES' },
+    ...(hayFinal ? [{ ref: `${cFinal}${enc}`, v: 'LIQUIDACIÓN FINAL' }] : []),
+    { ref: `${cExtras}${enc}`, v: 'EXTRAS DEL MES' },
     { ref: `${cPend}${enc}`, v: 'EXTRAS PENDIENTES DE PAGO' }, { ref: `${cObs}${enc}`, v: 'OBSERVACIÓN BANCO' },
   ]
   const bdRow = new Map<number, string>()
   for (const c of plantilla.celdas) { const m = c.ref.match(/^BD(\d+)$/); if (m) bdRow.set(Number(m[1]), String(c.v ?? '')) }
   const r2 = (n: number) => Math.round(n * 100) / 100
-  let totSueldo = 0, netos = 0, totExtras = 0, totPend = 0
+  let totSueldo = 0, netos = 0, totFinal = 0, finales = 0, totExtras = 0, totPend = 0
   const adelantoExcede: string[] = []
   for (const r of plantilla.estilos.filasDatos) {
     const uid = bdRow.get(r); if (!uid) continue
+    const esFinal = bajasFinal.has(r)
     // SUELDO DEL MES: quien tiene SUELDO MENSUAL cobra ese importe fijo (JC 07/10),
     // aunque Visual devuelva otro neto; el resto, el neto de recibo de Visual.
     const bruto = sueldoFijo.has(uid) ? sueldoFijo.get(uid)! : netoMap.get(uid)
-    // Adelantos: se descuentan UNA sola vez, del sueldo, nunca < 0.
+    // Adelantos: se descuentan UNA sola vez, del sueldo, nunca < 0. No se aplican
+    // a una baja con final (la final liquida todo aparte).
     const adel = Number(ajustes.get(uid)?.['adelantos'] ?? 0) || 0
-    if (bruto != null && adel > bruto) adelantoExcede.push(uid)
-    const sueldo = bruto == null ? null : Math.max(0, bruto - adel)
-    if (sueldo != null) { celdas.push({ ref: `${cSueldo}${r}`, v: r2(sueldo) }); totSueldo += sueldo; netos++ }
+    if (!esFinal && bruto != null && adel > bruto) adelantoExcede.push(uid)
+    const sueldo = bruto == null ? null : Math.max(0, esFinal ? bruto : bruto - adel)
+    if (sueldo != null) {
+      if (esFinal) { celdas.push({ ref: `${cFinal}${r}`, v: r2(sueldo) }); totFinal += sueldo; finales++ }
+      else { celdas.push({ ref: `${cSueldo}${r}`, v: r2(sueldo) }); totSueldo += sueldo; netos++ }
+    }
     const e = extraDe.get(uid)
     if (e) {
       celdas.push({ ref: `${cExtras}${r}`, v: e.extrasMes }); totExtras += e.extrasMes
@@ -414,6 +434,7 @@ export async function plantillaCompletaConNeto(
     }
   }
   celdas.push({ ref: `${cSueldo}${filaTotal}`, v: hayResultado ? r2(totSueldo) : 'PENDIENTE' })
+  if (hayFinal) celdas.push({ ref: `${cFinal}${filaTotal}`, v: r2(totFinal) })
   celdas.push({ ref: `${cExtras}${filaTotal}`, v: r2(totExtras) })
   celdas.push({ ref: `${cPend}${filaTotal}`, v: dest.error ? 'NO DISPONIBLE' : r2(totPend) })
 
@@ -421,6 +442,7 @@ export async function plantillaCompletaConNeto(
   const sum = (f: (e: ExtraPersona) => boolean) => r2(extras.filter(f).reduce((s, e) => s + e.pendiente, 0))
   const avisos: string[] = []
   if (!hayResultado) avisos.push('SUELDO DEL MES pendiente: el período todavía no tiene resultado de Visual importado (los sueldos fijos sí figuran).')
+  if (hayFinal) avisos.push(`${finales} con liquidación final: su importe va en la columna LIQUIDACIÓN FINAL, no en SUELDO DEL MES.`)
   if (difs) avisos.push(`ATENCIÓN: ${difs} importe(s) difieren de lo consolidado al exportar a Visual.`)
   if (adelantoExcede.length) avisos.push(`ATENCIÓN: ${adelantoExcede.length} adelanto(s) superan el sueldo: queda saldo a descontar.`)
   if (dest.error) avisos.push('Destino bancario de las extras no disponible: ' + dest.error)
@@ -428,7 +450,9 @@ export async function plantillaCompletaConNeto(
   celdas.push({ ref: 'C4', v: avisos.join(' ') })
 
   const columnas = [...plantilla.columnas,
-    { col: cSueldo, width: 16, numFmt: 'money' as const }, { col: cExtras, width: 16, numFmt: 'money' as const },
+    { col: cSueldo, width: 16, numFmt: 'money' as const },
+    ...(hayFinal ? [{ col: cFinal, width: 16, numFmt: 'money' as const }] : []),
+    { col: cExtras, width: 16, numFmt: 'money' as const },
     { col: cPend, width: 18, numFmt: 'money' as const }, { col: cObs, width: 40, numFmt: 'text' as const },
   ]
   return {

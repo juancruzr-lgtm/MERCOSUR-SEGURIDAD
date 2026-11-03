@@ -178,6 +178,24 @@ describe('Libro general = Excel completo de cada mes', () => {
     expect(r.visualPendiente).toEqual(['2026-09'])
   }, 120000)
 
+  it('LIQUIDACIÓN FINAL: las bajas con final NO van en SUELDO DEL MES; su importe va en columna aparte', async () => {
+    const t = tablasBase()
+    // v2 tiene una liquidación final generada para agosto (baja): no debe mezclarse
+    // con los sueldos mensuales, va en su propia columna.
+    t.liquidacion_final = [{ estado: 'exportada', mes: '2026-08', baja: { empleado_id: 'v2' } }]
+    const ws = (await cargar((await generarLibroGeneralTrabajo(fakeClient(t))).buf!)).getWorksheet('2026-08')!
+    const sueldo = columna(ws, 'SUELDO DEL MES')
+    const final = columna(ws, 'LIQUIDACIÓN FINAL')
+    // v2 (baja con final) sale de SUELDO DEL MES y aparece en LIQUIDACIÓN FINAL con su neto de Visual.
+    expect(Object.fromEntries(sueldo.porUid)).toEqual({ v1: 950000.5, s1: 1300000, a1: 1100000 })
+    expect(sueldo.total).toBe(950000.5 + 1300000 + 1100000)
+    expect(Object.fromEntries(final.porUid)).toEqual({ v2: 720000.25 })
+    expect(final.total).toBe(720000.25)
+    expect(String(ws.getCell('C4').value)).toMatch(/liquidación final/i)
+    // Sin bajas con final el mes no cambia: no aparece la columna.
+    expect(celdaPorTexto((await cargar((await generarLibroGeneralTrabajo(fakeClient(tablasBase()))).buf!)).getWorksheet('2026-08')!, 6, 'LIQUIDACIÓN FINAL')).toBe(-1)
+  }, 120000)
+
   it('EXTRAS DEL MES = columna AP (por horas de vigiladores + extra fija una sola vez); pendientes = todo si no hay pago registrado', async () => {
     const ws = (await cargar((await generarLibroGeneralTrabajo(fakeClient(tablasBase()))).buf!)).getWorksheet('2026-08')!
     // AP (su encabezado es el valor de la hora extra): valor final por usuario.
