@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
+import NuevaPassword from '@/components/auth/NuevaPassword'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { MINUTOS_AVISO_SALIDA_ANTICIPADA, minutosHastaFinDeTurno, textoAvisoSalidaAnticipada } from '@/lib/salida-anticipada'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
@@ -599,10 +600,6 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [fichando, setFichando]   = useState<string | null>(null)
   const [mensaje, setMensaje]     = useState<{ texto: string, tipo: 'ok' | 'warn' | 'error' } | null>(null)
   const [perfilAbierto, setPerfilAbierto] = useState(false)
-  const [nuevaPassword, setNuevaPassword] = useState('')
-  const [confirmarPassword, setConfirmarPassword] = useState('')
-  const [perfilMensaje, setPerfilMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null)
-  const [guardandoPassword, setGuardandoPassword] = useState(false)
   const [ahora, setAhora] = useState(() => new Date())
   const [permisoGps, setPermisoGps] = useState<GpsPermissionState>('checking')
   const [activandoPush, setActivandoPush] = useState(false)
@@ -721,33 +718,6 @@ export default function GuardiaMobile({ user }: { user: any }) {
     } finally {
       setActivandoPush(false)
     }
-  }
-
-  const cambiarPassword = async () => {
-    setPerfilMensaje(null)
-
-    if (nuevaPassword.length < 6) {
-      setPerfilMensaje({ texto: 'La contraseña debe tener al menos 6 caracteres.', tipo: 'error' })
-      return
-    }
-
-    if (nuevaPassword !== confirmarPassword) {
-      setPerfilMensaje({ texto: 'Las contraseñas no coinciden.', tipo: 'error' })
-      return
-    }
-
-    setGuardandoPassword(true)
-    const { error } = await supabase.auth.updateUser({ password: nuevaPassword })
-
-    if (error) {
-      setPerfilMensaje({ texto: error.message, tipo: 'error' })
-    } else {
-      setNuevaPassword('')
-      setConfirmarPassword('')
-      setPerfilMensaje({ texto: 'Contraseña actualizada correctamente.', tipo: 'ok' })
-    }
-
-    setGuardandoPassword(false)
   }
 
   // Cargar datos — reutilizable: montaje, intervalo, visibilidad, focus, online y botón manual.
@@ -2153,22 +2123,14 @@ export default function GuardiaMobile({ user }: { user: any }) {
               Por seguridad, cambie su contraseña inicial si todavía usa su DNI.
             </div>
 
-            <div style={{ marginBottom: 10 }}>
-              <div style={S.colLabel}>Nueva contraseña</div>
-              <input type="password" style={S.input} value={nuevaPassword} onChange={e => setNuevaPassword(e.target.value)} />
-            </div>
-            <div style={{ marginBottom: 12 }}>
-              <div style={S.colLabel}>Confirmar contraseña</div>
-              <input type="password" style={S.input} value={confirmarPassword} onChange={e => setConfirmarPassword(e.target.value)} />
-            </div>
-            {perfilMensaje && <div style={S.alert(perfilMensaje.tipo)}>{perfilMensaje.texto}</div>}
-            <button
-              style={{ ...S.btn, ...S.btnSalida, opacity: guardandoPassword ? 0.6 : 1 }}
-              onClick={cambiarPassword}
-              disabled={guardandoPassword}
-            >
-              {guardandoPassword ? 'Guardando...' : 'Cambiar contraseña'}
-            </button>
+            <NuevaPassword
+              estilos={{
+                label: S.colLabel,
+                input: { ...S.input, marginBottom: 12 },
+                boton: { ...S.btn, ...S.btnSalida },
+                mensaje: tipo => S.alert(tipo),
+              }}
+            />
 
             {/* Diagnóstico del teléfono: conexión, espacio, versión, pendientes. */}
             <DiagnosticoDispositivo ultimaActualizacion={ultimaActualizacion} />

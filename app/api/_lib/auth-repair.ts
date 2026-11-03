@@ -68,10 +68,13 @@ export function isProtectedEmail(email?: string | null) {
   return PROTECTED_AUTH_EMAILS.has(normalizeEmail(email))
 }
 
-function authPayload(usuario: UsuarioEmpleado, email: string, dni: string) {
+// conPassword=false: actualiza email/metadata sin tocar la contraseña. La
+// contraseña DNI sólo se fija al crear/recrear la cuenta o en el reset
+// individual explícito (resetearPassword).
+function authPayload(usuario: UsuarioEmpleado, email: string, dni: string, conPassword = true) {
   return {
     email,
-    password: dni,
+    ...(conPassword ? { password: dni } : {}),
     email_confirm: true,
     user_metadata: {
       usuario_id: usuario.id,
@@ -283,7 +286,7 @@ export async function repairEmployeeAuthUser(
   supabaseAdmin: SupabaseClient,
   usuario: UsuarioEmpleado,
   authIndex?: AuthIndex,
-  options: { invalidAuthUserIds?: string[] } = {},
+  options: { invalidAuthUserIds?: string[]; resetearPassword?: boolean } = {},
 ): Promise<RepairResult> {
   const email = normalizeEmail(usuario.email)
   const dni = normalizeDni(usuario.dni)
@@ -346,7 +349,7 @@ export async function repairEmployeeAuthUser(
   if (preferredValid) {
     const { error: updateAuthError } = await supabaseAdmin.auth.admin.updateUserById(
       preferredValid.id,
-      authPayload(usuario, email, dni),
+      authPayload(usuario, email, dni, options.resetearPassword === true),
     )
 
     if (updateAuthError) return { ...base, action: 'error', error: updateAuthError.message }

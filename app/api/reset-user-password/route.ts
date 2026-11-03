@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No se puede resetear: falta email real del empleado' }, { status: 400 })
     }
 
-    const resultado = await repairEmployeeAuthUser(admin.client, usuario)
+    const resultado = await repairEmployeeAuthUser(admin.client, usuario, undefined, { resetearPassword: true })
 
     if (resultado.action === 'omitido') return NextResponse.json({ error: resultado.motivo }, { status: 400 })
     if (resultado.action === 'error') {

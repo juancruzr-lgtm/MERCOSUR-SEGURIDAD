@@ -11,6 +11,8 @@
 
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mensajeErrorAuth, validarCredencialesLogin, validarEmail } from '@/lib/auth-mensajes'
+import { limpiarRecuperacionPendiente } from '@/lib/auth-recuperacion'
 import { alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 
@@ -72,40 +74,34 @@ export async function perfilDeSesionActual(): Promise<any | null> {
   return perfil
 }
 
-export default function Login({ onLogin }: { onLogin: (u: any) => void }) {
+export default function Login({ onLogin, errorInicial }: { onLogin: (u: any) => void; errorInicial?: string | null }) {
   const [email, setEmail] = useState('')
   const [pass, setPass] = useState('')
-  const [error, setError] = useState('')
+  const [error, setError] = useState(errorInicial || '')
   const [resetMsg, setResetMsg] = useState('')
   const [loading, setLoading] = useState(false)
   const [resetLoading, setResetLoading] = useState(false)
   const [magicLoading, setMagicLoading] = useState(false)
 
-  const mensajeErrorAuth = (authError: unknown, accion: string) => {
-    const raw = authError instanceof Error
-      ? authError.message
-      : typeof authError === 'object' && authError && 'message' in authError
-        ? String((authError as { message: unknown }).message)
-        : String(authError || '')
-
-    if (/invalid login credentials/i.test(raw)) return 'Email o contraseña/DNI incorrectos.'
-    // Baja laboral confirmada: la cuenta queda con ban en Supabase Auth.
-    if (/banned/i.test(raw)) return MENSAJE_ACCESO_BLOQUEADO
-    if (/email not confirmed/i.test(raw)) return 'El email todavía no fue confirmado. Usá Magic Link o pedí un nuevo enlace.'
-    if (/rate limit|too many requests|too many/i.test(raw)) return `Supabase limitó temporalmente los envíos de email. Esperá unos minutos y volvé a intentar. Detalle: ${raw}`
-    if (/smtp|email|mail|send|provider/i.test(raw)) return `No se pudo enviar el email de ${accion}. Revisá la configuración SMTP en Supabase. Detalle: ${raw}`
-    if (/redirect/i.test(raw)) return `No se pudo generar el enlace de ${accion}. Revisá las URLs permitidas en Supabase Auth. Detalle: ${raw}`
-
-    return raw || `No se pudo completar ${accion}.`
+  // Baja laboral: la cuenta queda con ban en Supabase Auth.
+  const mensajeError = (authError: unknown, accion: string) => {
+    const raw = typeof authError === 'object' && authError && 'message' in authError ? String((authError as { message: unknown }).message) : ''
+    return /banned/i.test(raw) ? MENSAJE_ACCESO_BLOQUEADO : mensajeErrorAuth(authError, accion)
   }
 
   const login = async () => {
     const emailLogin = email.trim().toLowerCase()
     const passwordLogin = pass.trim()
 
-    setLoading(true)
     setError('')
     setResetMsg('')
+    const invalido = validarCredencialesLogin(emailLogin, passwordLogin)
+    if (invalido) {
+      setError(invalido)
+      return
+    }
+
+    setLoading(true)
 
     // Acá había tres console.log de depuración —el email, el error y `data`—.
     // El último es el grave: `data` es la respuesta completa de
@@ -113,13 +109,20 @@ export default function Login({ onLogin }: { onLogin: (u: any) => void }) {
     // `session.refresh_token` impresos en la consola del navegador, en
     // producción, en cada inicio de sesión de cada vigilador. El error ya se
     // le muestra al usuario con `mensajeErrorAuth`; los tres no hacían falta.
-    const { data, error: err } = await supabase.auth.signInWithPassword({
-      email: emailLogin,
-      password: passwordLogin,
-    })
+    let data: Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>['data']
+    let err: unknown
+    try {
+      ({ data, error: err } = await supabase.auth.signInWithPassword({
+        email: emailLogin,
+        password: passwordLogin,
+      }))
+    } catch (e) {
+      err = e
+      data = { user: null, session: null }
+    }
 
-    if (err) {
-      setError(mensajeErrorAuth(err, 'inicio de sesión'))
+    if (err || !data.user) {
+      setError(mensajeError(err, 'inicio de sesión'))
       setLoading(false)
       return
     }
@@ -155,12 +158,15 @@ export default function Login({ onLogin }: { onLogin: (u: any) => void }) {
     }
 
     if (perfilError || !perfil) {
-      setError(perfilError?.message || 'Usuario sin perfil asignado')
+      if (perfilError) console.error('Login: error al leer el perfil', perfilError.message)
+      setError('Tu usuario no tiene un perfil asignado. Consultá con Administración.')
       await supabase.auth.signOut()
       setLoading(false)
       return
     }
 
+    // Ingresó con su contraseña: no queda ninguna recuperación pendiente en este equipo.
+    limpiarRecuperacionPendiente()
     onLogin(perfil)
     setLoading(false)
   }
@@ -170,23 +176,28 @@ export default function Login({ onLogin }: { onLogin: (u: any) => void }) {
     setResetMsg('')
     const emailNormalizado = email.trim().toLowerCase()
 
-    if (!emailNormalizado) {
-      setError('Ingresá tu email para recuperar la contraseña')
+    const invalido = validarEmail(emailNormalizado)
+    if (invalido) {
+      setError(`${invalido} Escribilo arriba y tocá de nuevo "Olvidé mi contraseña".`)
       return
     }
 
     setResetLoading(true)
-    const { error } = await supabase.auth.resetPasswordForEmail(emailNormalizado, {
-      redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
-    })
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(emailNormalizado, {
+        redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
+      })
 
-    if (error) {
-      setError(mensajeErrorAuth(error, 'recuperación de contraseña'))
-    } else {
-      setResetMsg('Si el email existe y SMTP está configurado en Supabase, se enviará un enlace de recuperación.')
+      if (error) {
+        setError(mensajeError(error, 'recuperación de contraseña'))
+      } else {
+        setResetMsg('Si el email está registrado, vas a recibir un enlace para crear una contraseña nueva. Revisá también la carpeta de spam.')
+      }
+    } catch (e) {
+      setError(mensajeError(e, 'recuperación de contraseña'))
+    } finally {
+      setResetLoading(false)
     }
-
-    setResetLoading(false)
   }
 
   const enviarMagicLink = async () => {
@@ -194,26 +205,31 @@ export default function Login({ onLogin }: { onLogin: (u: any) => void }) {
     setResetMsg('')
     const emailNormalizado = email.trim().toLowerCase()
 
-    if (!emailNormalizado) {
-      setError('Ingresá tu email para enviar el enlace de ingreso')
+    const invalido = validarEmail(emailNormalizado)
+    if (invalido) {
+      setError(invalido)
       return
     }
 
     setMagicLoading(true)
-    const { error } = await supabase.auth.signInWithOtp({
-      email: emailNormalizado,
-      options: {
-        emailRedirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
-      },
-    })
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: emailNormalizado,
+        options: {
+          emailRedirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
+        },
+      })
 
-    if (error) {
-      setError(mensajeErrorAuth(error, 'Magic Link'))
-    } else {
-      setResetMsg('Si el email existe y SMTP está configurado en Supabase, se enviará un enlace de ingreso.')
+      if (error) {
+        setError(mensajeError(error, 'Magic Link'))
+      } else {
+        setResetMsg('Si el email está registrado, vas a recibir un enlace de ingreso. Revisá también la carpeta de spam.')
+      }
+    } catch (e) {
+      setError(mensajeError(e, 'Magic Link'))
+    } finally {
+      setMagicLoading(false)
     }
-
-    setMagicLoading(false)
   }
 
   return (

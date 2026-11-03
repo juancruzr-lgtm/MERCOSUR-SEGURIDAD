@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback, useRef, Fragment, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
+import NuevaPassword from '@/components/auth/NuevaPassword'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
 import { alcanceDe, shellDeUsuario, tieneCapacidad, esAdminPleno, esGerenciaReal, puedeAdministrarRondas } from '@/lib/capacidades'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
@@ -1962,7 +1963,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
 
       const report = auditData.report || {}
       const confirmado = window.confirm(
-        `Auditoria Auth: ${report.auditados || 0} empleados activos. Sin Auth: ${report.usuarios_sin_auth_user_id?.length || 0}. Sin identity: ${report.auth_users_sin_identity?.length || 0}. Duplicados: ${report.emails_duplicados?.length || 0}. La reparacion puede eliminar Auth users invalidos y recrearlos con password DNI. Continuar?`
+        `Auditoria Auth: ${report.auditados || 0} empleados activos. Sin Auth: ${report.usuarios_sin_auth_user_id?.length || 0}. Sin identity: ${report.auth_users_sin_identity?.length || 0}. Duplicados: ${report.emails_duplicados?.length || 0}. Las cuentas validas conservan su contrasena actual. Solo las cuentas faltantes o invalidas se crean o recrean con contrasena inicial DNI. Continuar?`
       )
 
       if (!confirmado) {
@@ -13931,6 +13932,7 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
   // Menú lateral: contraído (escritorio, guardado) y cajón abierto (celular).
   const [menuColapsado, setMenuColapsado] = useState(false)
   const [menuAbierto, setMenuAbierto] = useState(false)
+  const [cambioPasswordAbierto, setCambioPasswordAbierto] = useState(false)
   useEffect(() => { setMenuColapsado(leerColapsadoGuardado()) }, [])
   const alternarMenuColapsado = useCallback(() => {
     setMenuColapsado(prev => { guardarColapsado(!prev); return !prev })
@@ -14293,6 +14295,7 @@ const esGuardia = esRolGuardia(user.rol)
         paddingTop={shellApp === 'admin' ? adminShellPaddingTop : 0}
         usuario={user}
         onCerrarSesion={async () => { await supabase.auth.signOut(); setUser(null) }}
+        onCambiarPassword={() => setCambioPasswordAbierto(true)}
       />
       <main style={{ ...S.main, marginLeft:ANCHO_MENU_ADMIN[modoMenu], ...(modoMenu === 'movil' ? { padding:'64px 14px 24px', minWidth:0 } : {}) }}>
         {loading ? <div style={{ color:'#64748b', padding:48, textAlign:'center' }}>Cargando datos...</div> : (
@@ -14399,6 +14402,14 @@ const esGuardia = esRolGuardia(user.rol)
           )
         )}
       </main>
+      {cambioPasswordAbierto && (
+        <div role="dialog" aria-modal="true" aria-label="Cambiar contraseña" onClick={() => setCambioPasswordAbierto(false)} style={{ position:'fixed', inset:0, zIndex:1000, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width:'100%', maxWidth:400, background:'#111827', border:'1px solid #334155', borderRadius:14, padding:24 }}>
+            <div style={{ fontSize:18, fontWeight:800, color:'#f8fafc', marginBottom:16 }}>Cambiar mi contraseña</div>
+            <NuevaPassword textoCancelar="Cerrar" onCancelar={() => setCambioPasswordAbierto(false)} />
+          </div>
+        </div>
+      )}
     </div>
     </>
   )

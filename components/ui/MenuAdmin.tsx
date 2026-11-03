@@ -46,7 +46,7 @@ export function NavItem({ id, icon, label, active, badge = 0, onClick, soloIcono
 }
 
 export default function MenuAdmin({
-  secciones, page, onNavegar, badgeDe, modo, abierto, onAbrir, onCerrar, onAlternarColapsado, paddingTop, usuario, onCerrarSesion,
+  secciones, page, onNavegar, badgeDe, modo, abierto, onAbrir, onCerrar, onAlternarColapsado, paddingTop, usuario, onCerrarSesion, onCambiarPassword,
 }: {
   secciones: SeccionMenuAdmin[]
   page: string
@@ -63,6 +63,7 @@ export default function MenuAdmin({
   paddingTop: number
   usuario: { nombre?: string | null, rol?: string | null }
   onCerrarSesion: () => void
+  onCambiarPassword?: () => void
 }) {
   const movil = modo === 'movil'
   const contraido = modo === 'contraido'
@@ -108,6 +109,9 @@ export default function MenuAdmin({
               <div style={{ fontSize:13, fontWeight:800, fontFamily:FONT_BRAND }}>{usuario.nombre}</div>
               <div style={{ fontSize:11, color:brandColors.muted }}>{usuario.rol}</div>
             </div>
+          )}
+          {onCambiarPassword && (
+            <button type="button" style={{ background:'none', border:'none', color:brandColors.muted, cursor:'pointer', fontSize:15 }} onClick={onCambiarPassword} title="Cambiar contraseña" aria-label="Cambiar contraseña">🔑</button>
           )}
           <button type="button" style={{ background:'none', border:'none', color:brandColors.muted, cursor:'pointer', fontSize:16 }} onClick={onCerrarSesion} title="Cerrar sesión" aria-label="Cerrar sesión">⏏</button>
         </div>
