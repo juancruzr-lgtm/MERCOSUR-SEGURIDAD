@@ -29,7 +29,32 @@ Prueba: `node supabase/pruebas/facturacion/run.mjs`. Usa PGlite y debe dar 104/1
 - **Órdenes de compra:** el monto se carga **con IVA** (opción por defecto) o sin IVA. Si es con IVA, el saldo baja por el total facturado. Hay aviso cuando el saldo no alcanza para otro período igual.
 
 ## Contraste con archivos reales (03/11)
-Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS_OBJETIVOS_OCTUBRE_2026_ACTUALIZADA_LAROMET.xlsx` y los certificados de retención de Conexión Alto Delta (OP 323 y OP 526). Los archivos **no** se subieron al repositorio.
+Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS_OBJETIVOS_OCTUBRE_2026_ACTUALIZADA_LAROMET.xlsx`, los certificados de retención de Conexión Alto Delta (OP 323 y OP 526) y el CSV de comprobantes emitidos de ARCA (01/01 a 26/10/2026). Los archivos **no** se subieron al repositorio. Sólo se copiaron 10 filas del CSV de ARCA a la prueba del lector.
+
+- **Lector del CSV de ARCA validado con el archivo real:**
+  - 275 comprobantes leídos, sin errores ni repetidos.
+  - Tipos: FA 127, FB 97, FCE A 34, NC A 5, NC B 11, NC FCE A 1.
+  - Se corrigió la moneda: el CSV trae "$" y ahora se guarda "PES".
+  - En 164 de los 275 comprobantes, ARCA informa un neto más IVA que difiere del total en 1 centavo. Se respeta lo que dice ARCA: la importación lo acepta y compara contra la app por el total.
+- **ARCA confirma los 4 casos:**
+  - NC 186 revierte completa la FA 2018 (1.859.019,01), las dos emitidas el 01/08.
+  - NC 187 corrige 1.801.808 + IVA de la FA 2023, las dos del 04/08.
+  - FB 834 del 01/10; FA 2047 del 04/09 con CAE 86362022922826.
+- **Depósito Fiscal:** el receptor es ARCA, CUIT 33-69345023-9. El CUIT de la planilla está mal.
+  - El 01/09 se emitió por horas la FB 825 (744 h × 14.235 = 10.590.840) y se anuló el mismo día con la NC 128.
+  - Después se facturó el abono de 14.235.000 (FB 826 y FB 837).
+- **Cruce del Excel de 2026 contra ARCA** (A por neto, B por total; heurístico, porque el Excel es libre):
+  - Coinciden 199 comprobantes y ninguno del Excel falta en ARCA.
+  - Hay diferencias de centavos porque el facturador actual saca el neto del total.
+  - Hay filas del Excel sin importe y sumas que no cierran. Para revisar:
+    - FA 614 Trading: diferencia de 101.000.
+    - FA 1984 Trading: diferencia de 103.200.
+    - FA 1983 La Caja: el Excel dice 1.955.388,60 y ARCA 1.738.123,19.
+    - FCE 628 Nación: diferencia de 259.200.
+  - Están en ARCA pero no en el Excel de 2026:
+    - FB 806, 818 y 839 de INTA; FB 805 de la Municipalidad; FA 2066 de Trading del 25/10.
+    - FB 825 de Depósito Fiscal y FCE 633 de Nación, las dos anuladas con NC.
+    - Las emitidas el 01/01, que el Excel registra en diciembre.
 
 - **Los 4 casos coinciden con el histórico:**
   - FA 2047 Alto Delta: 544 h × 14.853,20 = 9.776.970,37.
@@ -70,7 +95,7 @@ Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS
 | Rapsodia | `envio_conjunto_planilla`. |
 | La Caja / Hagana | Corte el día 26 y 45 días de vencimiento. |
 | C&E | `conformidad`. |
-| Depósito Fiscal | ARCA, CUIT 33-69345023-9, `oc_vigente`. Abono mensual de 14.235.000, factura B, OC 4500025674 (Exp. 2601254739) con IVA. Indicar OC y posición en la factura y el remito, y adjuntar 4 remitos conformados. **Ojo:** la planilla de octubre trae el CUIT 30-69384468-8; confirmar cuál es el receptor. |
+| Depósito Fiscal | ARCA, CUIT 33-69345023-9, `oc_vigente`. Abono mensual de 14.235.000, factura B, OC 4500025674 (Exp. 2601254739) con IVA. Indicar OC y posición en la factura y el remito, y adjuntar 4 remitos conformados. El CUIT de la planilla de octubre (30-69384468-8) está mal: ARCA confirma que el receptor es 33-69345023-9. |
 | CIRSE | Factura B. |
 
 ## Para activar en producción
@@ -80,7 +105,7 @@ Fuentes: `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx`, `PLANILLA_HORAS
 4. Para la emisión real hacen falta las dos llaves: `fact_config.emision.produccion_habilitada = true` y `FACTURACION_EMISION_REAL=1` en Vercel. Para FCE, además, `cbu_fce`.
 
 ## Pendientes
-**Archivos reales:** `FACTURAS CORRELATIVAS 2026_con_cortes_mensuales.xlsx` y `EXTRACTO_511522209-D2026-10-01_H2026-10-31.csv` **no están en esta PC** (se buscó en todo el disco C, la única unidad). Los lectores del CSV de ARCA y del extracto sólo se probaron con archivos armados según el formato conocido: **falta validarlos con archivos reales**. Para el Excel histórico no hay importador; queda pendiente definir cómo cargar las facturas históricas pagadas.
+**Archivos reales:** el CSV de ARCA ya se validó con el archivo real. **Falta el extracto bancario** (`EXTRACTO_511522209-D2026-10-01_H2026-10-31.csv`): su lector sólo se probó con un formato armado. Para el Excel histórico no hay importador; queda pendiente definir cómo cargar las facturas históricas pagadas.
 
 **Comerciales:**
 - Adicionales de PNC.

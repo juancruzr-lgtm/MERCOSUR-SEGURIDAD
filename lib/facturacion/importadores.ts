@@ -85,6 +85,12 @@ export type FilaArca = {
 
 export type LecturaArca = { filas: FilaArca[]; errores: Array<{ fila: number; motivo: string }>; repetidas: number }
 
+/** El CSV de "Mis Comprobantes" trae "$" para pesos; WSFE y la base usan el código "PES". */
+function monedaArca(v: string | undefined): string {
+  const m = String(v ?? '').trim().toUpperCase()
+  return !m || m === '$' || m === 'ARS' || m === 'PES' ? 'PES' : m === 'U$S' || m === 'USD' || m === 'US$' ? 'DOL' : m
+}
+
 export function leerCsvArcaEmitidos(texto: string): LecturaArca {
   const filas = parseCsv(texto)
   const errores: LecturaArca['errores'] = []
@@ -129,7 +135,7 @@ export function leerCsvArcaEmitidos(texto: string): LecturaArca {
         doc_tipo_receptor: col.docTipo >= 0 ? Number(String(f[col.docTipo]).match(/\d+/)?.[0]) || null : null,
         doc_nro_receptor: col.docNro >= 0 ? limpiarCuit(f[col.docNro]) : '',
         receptor_nombre: col.nombre >= 0 ? String(f[col.nombre] ?? '').trim() : '',
-        moneda: col.moneda >= 0 ? String(f[col.moneda] ?? 'PES').trim() || 'PES' : 'PES',
+        moneda: monedaArca(col.moneda >= 0 ? f[col.moneda] : ''),
         neto_c: Math.abs(num(f[col.neto])), no_gravado_c: Math.abs(num(f[col.noGrav])), exento_c: Math.abs(num(f[col.exento])),
         iva_c: Math.abs(num(f[col.iva])), total_c: Math.abs(num(f[col.total])),
         cae: col.cae >= 0 ? String(f[col.cae] ?? '').trim() || null : null,

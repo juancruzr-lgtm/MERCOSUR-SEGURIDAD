@@ -189,8 +189,8 @@ ok('no se reemplazan horas ya facturadas', await falla(() => aprobar(true, 500 *
 // ── Importación ARCA (Laromet, Hagana, Universitario) ──────────────────────
 const fila = (tipo, pv, numero, fecha, cuit, total_c, extra = {}) => ({ clave: `${tipo}-${pv}-${numero}`, tipo, punto_venta: pv, numero, fecha, doc_tipo_receptor: 80, doc_nro_receptor: cuit, total_c, neto_c: Math.round(total_c / 1.21), ...extra })
 const filas = [
-  fila(1, 1, 2018, '2026-08-05', '30501125594', 185901901), fila(3, 3, 186, '2026-08-20', '30501125594', 185901901),
-  fila(1, 1, 2023, '2026-08-27', '30707891579', 436037536), fila(3, 3, 187, '2026-09-10', '30707891579', 218018768),
+  fila(1, 1, 2018, '2026-08-01', '30501125594', 185901901), fila(3, 3, 186, '2026-08-01', '30501125594', 185901901),
+  fila(1, 1, 2023, '2026-08-04', '30707891579', 436037536), fila(3, 3, 187, '2026-08-04', '30707891579', 218018768),
   fila(6, 1, 834, '2026-10-01', '30589038181', 926155020),
   fila(1, 1, 2047, '2026-09-04', '30719244331', 977697037), // ya registrada por la app
 ]

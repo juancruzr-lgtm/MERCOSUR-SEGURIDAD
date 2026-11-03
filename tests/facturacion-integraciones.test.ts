@@ -186,6 +186,34 @@ describe('importadores', () => {
     expect(leerCsvArcaEmitidos('a;b;c\n1;2;3').errores[0].motivo).toContain('No se reconocen')
   })
 
+  it('CSV REAL de ARCA ("Mis Comprobantes", emitidos 03/11/2026): encabezado, NC, FCE y redondeo de centavos', () => {
+    // Filas copiadas tal cual del archivo descargado: casos de validación + FB 825/NC 128 de Depósito Fiscal.
+    const csv = [
+      "\"Fecha de Emisión\";\"Tipo de Comprobante\";\"Punto de Venta\";\"Número Desde\";\"Número Hasta\";\"Cód. Autorización\";\"Tipo Doc. Receptor\";\"Nro. Doc. Receptor\";\"Denominación Receptor\";\"Tipo Cambio\";\"Moneda\";\"Imp. Neto Gravado IVA 0%\";\"IVA 2,5%\";\"Imp. Neto Gravado IVA 2,5%\";\"IVA 5%\";\"Imp. Neto Gravado IVA 5%\";\"IVA 10,5%\";\"Imp. Neto Gravado IVA 10,5%\";\"IVA 21%\";\"Imp. Neto Gravado IVA 21%\";\"IVA 27%\";\"Imp. Neto Gravado IVA 27%\";\"Imp. Neto Gravado Total\";\"Imp. Neto No Gravado\";\"Imp. Op. Exentas\";\"Otros Tributos\";\"Total IVA\";\"Imp. Total\"",
+      "2026-01-01;1;1;1940;1940;76017212767787;80;30702637895;LAS BLONDAS SA;1,00;$;;;;;;;;398406,77;1897175,10;;;1897175,10;0,00;0,00;0,00;398406,77;2295581,88",
+      "2026-08-01;1;1;2018;2018;86327107927373;80;30501125594;LAROMET S A;1,00;$;;;;;;;;322639,66;1536379,33;;;1536379,33;0,00;0,00;0,00;322639,66;1859019,01",
+      "2026-08-01;3;1;186;186;86327711987230;80;30501125594;LAROMET S A;1,00;$;;;;;;;;322639,66;1536379,33;;;1536379,33;0,00;0,00;0,00;322639,66;1859019,01",
+      "2026-08-04;1;1;2023;2023;86327684635914;80;30707891579;HAGANA S.A.;1,00;$;;;;;;;;756759,36;3603616,00;;;3603616,00;0,00;0,00;0,00;756759,36;4360375,36",
+      "2026-08-04;3;1;187;187;86327858335656;80;30707891579;HAGANA S.A.;1,00;$;;;;;;;;378379,68;1801808,00;;;1801808,00;0,00;0,00;0,00;378379,68;2180187,68",
+      "2026-09-01;8;1;128;128;86372391559904;80;33693450239;AGENCIA DE RECAUDACION Y CONTROL ADUANERO;1,00;$;;;;;;;;1838079,67;8752760,33;;;8752760,33;0,00;0,00;0,00;1838079,67;10590840,00",
+      "2026-09-01;201;1;633;633;86361251610714;80;33621364559;NACION SERVICIOS S A;1,00;$;;;;;;;;5532233,13;26343967,29;;;26343967,29;0,00;0,00;0,00;5532233,13;31876200,33",
+      "2026-09-04;1;1;2047;2047;86362022922826;80;30719244331;CONEXION ALTO DELTA S. A.;1,00;$;;;;;;;;1696829,57;8080140,81;;;8080140,81;0,00;0,00;0,00;1696829,57;9776970,37",
+      "2026-09-05;203;1;99;99;86372389228838;80;33621364559;NACION SERVICIOS S A;1,00;$;;;;;;;;5532233,11;26343967,19;;;26343967,19;0,00;0,00;0,00;5532233,11;31876200,32",
+      "2026-10-01;6;1;834;834;86416948471669;80;30589038181;CLUB UNIVERSITARIO DE ROSARIO;1,00;$;;;;;;;;1607376,49;7654173,76;;;7654173,76;0,00;0,00;0,00;1607376,49;9261550,20",
+    ].join('\r\n')
+    const r = leerCsvArcaEmitidos(csv)
+    expect(r.errores).toEqual([])
+    const k = (c: string) => r.filas.find(x => x.clave === c)!
+    expect(k('1-1-2047')).toMatchObject({ fecha: '2026-09-04', doc_nro_receptor: '30719244331', neto_c: 808014081, iva_c: 169682957, total_c: 977697037, moneda: 'PES', cae: '86362022922826' })
+    expect(k('3-1-186').total_c).toBe(k('1-1-2018').total_c) // reversión total
+    expect(k('3-1-187').total_c).toBe(218018768) // corrección de 152 h × 11.854 + IVA
+    expect(k('6-1-834').total_c).toBe(926155020)
+    expect(k('8-1-128')).toMatchObject({ doc_nro_receptor: '33693450239', total_c: 1059084000 })
+    expect(k('203-1-99').tipo).toBe(203)
+    // ARCA informa neto + IVA que a veces no suman el total por 1 centavo: se respeta lo que dice ARCA.
+    expect(k('1-1-1940').neto_c + k('1-1-1940').iva_c).toBe(k('1-1-1940').total_c - 1)
+  })
+
   it('extracto: clasifica, toma CUIT del concepto y distingue líneas iguales', () => {
     const ext = [
       'Banco X - Cuenta 511522209', '',
