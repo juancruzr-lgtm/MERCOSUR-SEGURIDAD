@@ -45,7 +45,7 @@ export function validarNuevaPassword(nueva: string, confirmar: string): string |
 
 const ES_RED = /failed to fetch|network|load failed|timeout|fetch/i
 
-/** Errores de login, recuperación y Magic Link. */
+/** Errores de login y recuperación por email. */
 export function mensajeErrorAuth(error: unknown, accion: string): string {
   const { mensaje, codigo } = textoDeError(error)
 

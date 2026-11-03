@@ -42,6 +42,11 @@ describe('login: validación de campos', () => {
   it('acepta credenciales completas', () => {
     expect(validarCredencialesLogin(' Juan@Mail.com ', '30111222')).toBeNull()
   })
+  it('el login no ofrece Magic Link (la recuperación cubre ese caso)', () => {
+    const login = sinComentarios(leer('app/dashboard/Login.tsx'))
+    expect(login).not.toMatch(/signInWithOtp|Magic Link/)
+    expect(login).toMatch(/Olvidé mi contraseña/)
+  })
   it('el login valida antes de signInWithPassword', () => {
     const login = sinComentarios(leer('app/dashboard/Login.tsx'))
     const cuerpo = login.slice(login.indexOf('const login = async'), login.indexOf('const recuperarPassword'))

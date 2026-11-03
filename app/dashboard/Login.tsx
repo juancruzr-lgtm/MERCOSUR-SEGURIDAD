@@ -81,7 +81,6 @@ export default function Login({ onLogin, errorInicial }: { onLogin: (u: any) => 
   const [resetMsg, setResetMsg] = useState('')
   const [loading, setLoading] = useState(false)
   const [resetLoading, setResetLoading] = useState(false)
-  const [magicLoading, setMagicLoading] = useState(false)
 
   // Baja laboral: la cuenta queda con ban en Supabase Auth.
   const mensajeError = (authError: unknown, accion: string) => {
@@ -200,38 +199,6 @@ export default function Login({ onLogin, errorInicial }: { onLogin: (u: any) => 
     }
   }
 
-  const enviarMagicLink = async () => {
-    setError('')
-    setResetMsg('')
-    const emailNormalizado = email.trim().toLowerCase()
-
-    const invalido = validarEmail(emailNormalizado)
-    if (invalido) {
-      setError(invalido)
-      return
-    }
-
-    setMagicLoading(true)
-    try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: emailNormalizado,
-        options: {
-          emailRedirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
-        },
-      })
-
-      if (error) {
-        setError(mensajeError(error, 'Magic Link'))
-      } else {
-        setResetMsg('Si el email está registrado, vas a recibir un enlace de ingreso. Revisá también la carpeta de spam.')
-      }
-    } catch (e) {
-      setError(mensajeError(e, 'Magic Link'))
-    } finally {
-      setMagicLoading(false)
-    }
-  }
-
   return (
     <div style={{
       minHeight:'100vh',
@@ -299,13 +266,6 @@ export default function Login({ onLogin, errorInicial }: { onLogin: (u: any) => 
             disabled={resetLoading}
           >
             {resetLoading ? 'Enviando...' : 'Olvidé mi contraseña'}
-          </button>
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, width:'100%', justifyContent:'center', marginTop:10 }}
-            onClick={enviarMagicLink}
-            disabled={magicLoading}
-          >
-            {magicLoading ? 'Enviando...' : 'Magic Link'}
           </button>
         </div>
       </div>
