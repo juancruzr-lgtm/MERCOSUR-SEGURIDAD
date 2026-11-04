@@ -146,10 +146,29 @@ describe('horas facturables desde la app (no son horas liquidables)', () => {
     expect(r).toMatchObject({ minutosCubiertos: 1440, minutosSuperpuestos: 0 })
   })
 
-  it('cobertura parcial: llegó 4 h tarde → 8 h cubiertas y 4 h descubiertas; lo fuera de horario es excedente', () => {
+  it('cobertura parcial: llegó 4 h tarde → 8 h cubiertas y 4 h descubiertas; lo fuera de horario sin aceptar es excedente', () => {
     const r = horasDelObjetivo({ ...base, turnos: [turno('A', '2026-10-10', '06:00:00', '18:00:00')],
       registros: [reg('rA', 'A', { hora_entrada_final: '10:00:00', hora_salida_final: '19:00:00', horas_liquidables: 8 })] })
-    expect(r).toMatchObject({ minutosCubiertos: 480, minutosDescubiertos: 240, minutosExcedentes: 60 })
+    expect(r).toMatchObject({ minutosCubiertos: 480, minutosDescubiertos: 240, minutosExcedentes: 60, minutosAceptadosFuera: 0 })
+  })
+
+  it('llegó antes sin corrección (PSA): se factura y liquida el turno; lo de más queda informado', () => {
+    const r = horasDelObjetivo({ ...base, turnos: [turno('A', '2026-10-08', '09:30:00', '18:00:00')],
+      registros: [reg('rA', 'A', { hora_entrada_real: '09:01:00', hora_salida_real: '18:00:00' })] })
+    expect(r).toMatchObject({ minutosCubiertos: 510, minutosAceptadosFuera: 0, minutosExcedentes: 29 })
+  })
+
+  it('el supervisor reconoce 1 h fuera de turno: se liquida, así que se factura', () => {
+    const r = horasDelObjetivo({ ...base, turnos: [turno('A', '2026-10-10', '06:00:00', '18:00:00')],
+      registros: [reg('rA', 'A', { hora_entrada_real: '06:00:00', hora_salida_real: '19:10:00', hora_salida_final: '19:00:00', horas_liquidables: 13 })] })
+    expect(r).toMatchObject({ minutosProgramados: 720, minutosCubiertos: 780, minutosAceptadosFuera: 60, minutosExcedentes: 0, minutosDescubiertos: 0 })
+    expect(minutosAprobables(r, 'no_facturar').aprobados).toBe(780)
+  })
+
+  it('el supervisor reconoce menos horas que el fichaje: se factura lo reconocido', () => {
+    const r = horasDelObjetivo({ ...base, turnos: [turno('A', '2026-10-10', '06:00:00', '18:00:00')],
+      registros: [reg('rA', 'A', { hora_entrada_real: '06:00:00', hora_salida_real: '18:00:00', hora_entrada_final: '06:00:00', hora_salida_final: '18:00:00', horas_liquidables: 10 })] })
+    expect(r).toMatchObject({ minutosCubiertos: 600, minutosDescubiertos: 120 })
   })
 
   it('Administración decide sobre lo descubierto sin tocar lo cubierto', () => {

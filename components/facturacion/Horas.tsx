@@ -57,11 +57,12 @@ export default function Horas({ mes }: { mes: string }) {
         return (
           <div style={{ ...S.card, marginTop: 12 }}>
             <h3 style={S.h3}>{v.objetivo?.nombre} · {fecha(prop.r.periodo.desde)} al {fecha(prop.r.periodo.hastaExclusivo)} (excl.)</h3>
-            <div style={S.sub}>Horas FACTURABLES (no son las horas liquidables del vigilador).</div>
+            <div style={S.sub}>Horas FACTURABLES: lo programado cubierto más lo que el supervisor aceptó fuera de turno, lo mismo que se liquida.</div>
             <div>Programadas {horas(h.minutosProgramados)} · <b>cubiertas {horas(h.minutosCubiertos)}</b> · descubiertas {horas(h.minutosDescubiertos)}
               {h.minutosDiurnos != null && <> · diurnas {horas(h.minutosDiurnos)} · nocturnas {horas(h.minutosNocturnos)}</>}</div>
             {h.minutosSuperpuestos > 0 && <div style={S.sub}>{horas(h.minutosSuperpuestos)} h de superposición entre turnos del mismo puesto (relevos): {prop.r.superposicion === 'sumar' ? 'se SUMAN según el contrato' : 'se facturan una sola vez'}.</div>}
-            {h.minutosExcedentes > 0 && <div style={S.sub}>{horas(h.minutosExcedentes)} h trabajadas fuera del horario programado: no se facturan solas (cargar como ajuste o adicional si corresponde).</div>}
+            {h.minutosAceptadosFuera > 0 && <div style={S.sub}>Incluye {horas(h.minutosAceptadosFuera)} h fuera del horario programado aceptadas por el supervisor: se liquidan y se facturan.</div>}
+            {h.minutosExcedentes > 0 && <div style={S.sub}>{horas(h.minutosExcedentes)} h fichadas fuera del horario programado sin aceptar: no se liquidan ni se facturan.</div>}
             {h.turnosSinPuesto > 0 && <div style={S.aviso}>{h.turnosSinPuesto} turno(s) sin puesto: no se puede controlar la superposición entre ellos.</div>}
             {h.turnosFuturos > 0 && <div style={S.aviso}>{h.turnosFuturos} turno(s) todavía no ocurrieron: el período no está cerrado.</div>}
             {v.contrato?.separar_diurna_nocturna && !prop.r.franjaDefinida && <div style={S.aviso}>El contrato separa diurnas/nocturnas pero no tiene franja contractual: definirla en el contrato.</div>}
