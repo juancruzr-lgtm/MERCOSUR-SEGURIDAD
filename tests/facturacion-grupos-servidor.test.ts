@@ -33,7 +33,7 @@ function baseEnMemoria(tablas: Record<string, any[]>) {
     }
     return q
   }
-  const estados: any[] = []
+  const estados: any[] = [], reagrupes: any[] = []
   const db: any = {
     from: desde,
     rpc: async (fn: string, args: any) => {
@@ -45,10 +45,26 @@ function baseEnMemoria(tablas: Record<string, any[]>) {
         if (!p || ['aprobada_emitir', 'emitida'].includes(p.estado)) return { data: null, error: { message: 'Transición no permitida' } }
         p.estado = args.p_estado; p.version++
       }
+      if (fn === 'fact_prefacturas_reagrupar') {
+        reagrupes.push(args)
+        // Como la función de la base: todo o nada.
+        if ((tablas as any).__falla) return { data: null, error: { message: (tablas as any).__falla } }
+        for (const d of args.p_descartar) {
+          const p = (tablas.fact_prefacturas ?? []).find(x => x.id === d.id)
+          if (!p || ['aprobada_emitir', 'emitida'].includes(p.estado)) return { data: null, error: { message: 'Reagrupar: aprobada' } }
+        }
+        for (const d of args.p_descartar) {
+          const p = tablas.fact_prefacturas.find(x => x.id === d.id)!
+          p.estado = 'descartada'; p.version++
+          estados.push({ p_id: d.id, p_estado: 'descartada', p_version: d.version, p_motivo: d.motivo })
+        }
+        for (const g of args.p_guardar) guardadas.push({ p_id: g.id, p_datos: g.datos, p_version: g.version })
+        return { data: { descartadas: args.p_descartar.length }, error: null }
+      }
       return { data: 'p-nueva', error: null }
     },
   }
-  return { db, guardadas, estados }
+  return { db, guardadas, estados, reagrupes }
 }
 
 const tablasBase = (extra: Record<string, any[]> = {}) => ({
@@ -103,6 +119,50 @@ describe('generarPrefacturas con grupos de factura', () => {
     // Sin doble facturación: cada objetivo en una sola prefactura viva.
     const objs = guardadas.flatMap(g => g.p_datos.objetivos_incluidos)
     expect(objs.sort()).toEqual(['casona', 'cast', 'macro'])
+  })
+
+  it('reagrupado: descarte y altas van en UNA sola llamada atómica a la base', async () => {
+    const vieja = pref('p-vieja', 'objetivo:macro', 'lista_revision', 'macro')
+    const { db, reagrupes } = baseEnMemoria(tablasBase({ fact_prefacturas: [vieja] }))
+    await generarPrefacturas(db, '2026-10', '2026-11-04')
+    expect(reagrupes).toHaveLength(1)
+    expect(reagrupes[0].p_descartar.map((d: any) => d.id)).toEqual(['p-vieja'])
+    expect(reagrupes[0].p_guardar.map((g: any) => g.datos.agrupacion_clave).sort()).toEqual(['grupo:k-muni:museos', 'objetivo:casona'])
+  })
+
+  it('si falla el guardado de las nuevas, la anterior NO queda descartada (todo o nada)', async () => {
+    const vieja = pref('p-vieja', 'objetivo:macro', 'lista_revision', 'macro')
+    const tablas: any = tablasBase({ fact_prefacturas: [vieja] }); tablas.__falla = 'La prefactura cambió; recargá'
+    const { db, guardadas, estados } = baseEnMemoria(tablas)
+    const r = await generarPrefacturas(db, '2026-10', '2026-11-04')
+    expect(vieja.estado).toBe('lista_revision')
+    expect(estados).toEqual([])
+    expect(guardadas).toEqual([])
+    expect(r.reagrupadas).toBe(0)
+    expect(r.errores.join(' ')).toMatch(/no se reagrupó \(quedó todo como estaba\): La prefactura cambió/)
+  })
+
+  it('sin la migración aplicada no reagrupa y lo dice (no descarta ni crea)', async () => {
+    const vieja = pref('p-vieja', 'objetivo:macro', 'lista_revision', 'macro')
+    const tablas: any = tablasBase({ fact_prefacturas: [vieja] }); tablas.__falla = 'Could not find the function public.fact_prefacturas_reagrupar(p_descartar, p_guardar) in the schema cache'
+    const { db, guardadas } = baseEnMemoria(tablas)
+    const r = await generarPrefacturas(db, '2026-10', '2026-11-04')
+    expect(vieja.estado).toBe('lista_revision')
+    expect(guardadas).toEqual([])
+    expect(r.errores.join(' ')).toMatch(/falta aplicar la migración 20261203120000/)
+  })
+
+  it('si un objetivo de la anterior queda sin reemplazo (p. ej. ocupado por una aprobada), no descarta nada', async () => {
+    // La vieja cubría macro y casona; casona está en una aprobada → su grupo no se arma → macro+casona sin reemplazo completo.
+    const vieja = pref('p-vieja', 'contrato:k-muni', 'lista_revision', null, ['macro', 'casona'])
+    const apr = pref('p-apr', 'otro:casona', 'aprobada_emitir', 'casona', ['casona'])
+    const { db, guardadas, estados, reagrupes } = baseEnMemoria(tablasBase({ fact_prefacturas: [vieja, apr] }))
+    const r = await generarPrefacturas(db, '2026-10', '2026-11-04')
+    expect(reagrupes).toEqual([])
+    expect(estados).toEqual([])
+    expect(guardadas).toEqual([])
+    expect(vieja.estado).toBe('lista_revision')
+    expect(r.errores.join(' ')).toMatch(/no se reagrupó \(quedó todo como estaba\)/)
   })
 
   it('reagrupado con la prefactura anterior APROBADA: no se toca y el objetivo queda para revisión expresa', async () => {
