@@ -11,7 +11,7 @@ import { datosComprobantesEnLinea, validarRegistroManual } from '@/lib/facturaci
 import { compararConFacturaReal, etiquetaFactura } from '@/lib/facturacion/control'
 import { agruparObjetivos, tarifasParaObjetivo } from '@/lib/facturacion/prefacturacion'
 import {
-  elegibleParaAceptarTodos, filaPendiente, filasExcel, motivosRevision, nombreComprobante, objetivoAlDia, objetivosParaAceptar, propuestaDeFila, sinHoras,
+  aprobacionDelMes, elegibleParaAceptarTodos, filaPendiente, filasExcel, motivosRevision, nombreComprobante, objetivoAlDia, objetivosParaAceptar, propuestaDeFila, sinHoras,
   type FilaRevision, type TratamientoDescubiertos,
 } from '@/lib/facturacion/revision'
 import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
@@ -30,7 +30,7 @@ const CHICO: React.CSSProperties = { ...S.btn2, padding: '3px 9px', fontSize: 12
 type Config = { emision: any; modulos: any }
 type Base = Omit<FilaRevision, 'objetivos' | 'prefactura'> & {
   prefactura: any | null
-  clave: string; contratoId: string; cliente: any; nombre: string; incluye: string[]; huerfana: boolean
+  clave: string; contratoId: string; contrato: { id: string; regla_periodo?: string | null; dia_corte?: number | null }; cliente: any; nombre: string; incluye: string[]; huerfana: boolean
   objetivos: Array<{ objetivoId: string; nombre: string }>
 }
 const claveObj = (contratoId: string, objetivoId: string) => `${contratoId}:${objetivoId}`
@@ -53,7 +53,7 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
     const [pref, contratos, vincs, tarifas, aps] = await Promise.all([
       leer('fact_prefacturas', q => q.eq('periodo_mes', mes).neq('estado', 'descartada').order('created_at'),
         '*, cliente:fact_clientes(razon_social, cuit, condicion_iva), objetivo:objetivos(nombre), oc:fact_ordenes_compra(numero, tipo), contrato:fact_contratos(nombre, modalidad, agrupacion, requiere_portal, envio_conjunto_planilla, requisitos)'),
-      leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, agrupacion, separar_diurna_nocturna, cliente:fact_clientes(razon_social, cuit)'),
+      leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, agrupacion, separar_diurna_nocturna, regla_periodo, dia_corte, cliente:fact_clientes(razon_social, cuit)'),
       leer('fact_contrato_objetivos', q => q.is('anulado_at', null), '*, objetivo:objetivos(nombre)'),
       leer('fact_tarifas', q => q.lte('vigencia_desde', finMes).or(`vigencia_hasta.is.null,vigencia_hasta.gte.${inicioMes}`).order('vigencia_desde', { ascending: false })),
       leer('fact_horas_aprobaciones', q => q.eq('estado', 'aprobada').order('aprobado_at', { ascending: false }).limit(1000)),
@@ -64,7 +64,7 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
       for (const g of agruparObjetivos<any>(k, vs)) {
         const nombres = g.objs.map((v: any) => v.objetivo?.nombre ?? v.objetivo_id)
         rs.push({
-          clave: `${k.id}|${g.clave}`, contratoId: k.id, cliente: k.cliente, modalidad: k.modalidad, separarDiurnaNocturna: Boolean(k.separar_diurna_nocturna),
+          clave: `${k.id}|${g.clave}`, contratoId: k.id, contrato: k, cliente: k.cliente, modalidad: k.modalidad, separarDiurnaNocturna: Boolean(k.separar_diurna_nocturna),
           tarifas: tarifas.filter(t => t.contrato_id === k.id), prefactura: pref.find(p => p.contrato_id === k.id && p.agrupacion_clave === g.clave) ?? null,
           nombre: g.objs.length === 1 ? nombres[0] : g.grupo ?? k.nombre, incluye: g.objs.length > 1 ? nombres : [], huerfana: false,
           objetivos: g.objs.map((v: any) => ({ objetivoId: v.objetivo_id, nombre: v.objetivo?.nombre ?? v.objetivo_id })),
@@ -73,7 +73,7 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
     }
     // Prefacturas vivas que ya no corresponden a la agrupación actual (p. ej. tras reagrupar): se muestran para descartarlas.
     for (const p of pref) if (!rs.some(r => r.prefactura === p)) rs.push({
-      clave: `pref|${p.id}`, contratoId: p.contrato_id, cliente: p.cliente, modalidad: p.contrato?.modalidad ?? 'por_hora', separarDiurnaNocturna: false,
+      clave: `pref|${p.id}`, contratoId: p.contrato_id, contrato: { id: p.contrato_id }, cliente: p.cliente, modalidad: p.contrato?.modalidad ?? 'por_hora', separarDiurnaNocturna: false,
       tarifas: [], prefactura: p, nombre: nombreComprobante(p), incluye: [], huerfana: true, objetivos: [],
     })
     rs.sort((a, b) => `${a.cliente?.razon_social} ${a.nombre}`.localeCompare(`${b.cliente?.razon_social} ${b.nombre}`))
@@ -98,12 +98,11 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
   }
   useEffect(() => { correr(() => cargar()) }, [mes]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const aprobadaDe = (contratoId: string, objetivoId: string) => aprob.find(a => a.objetivo_id === objetivoId && a.contrato_id === contratoId
-    && a.periodo_desde.slice(0, 7) <= mes && a.periodo_hasta_excl.slice(0, 7) >= mes) ?? null
+  const aprobadaDe = (contrato: Base['contrato'], objetivoId: string) => aprobacionDelMes(aprob, contrato, objetivoId, mes)
   const filas = base.map(b => ({
     ...b, objetivos: b.objetivos.map(o => {
       const k = claveObj(b.contratoId, o.objetivoId)
-      return { ...o, propuesta: props[k]?.propuesta ?? null, error: props[k]?.error ?? null, aprobada: aprobadaDe(b.contratoId, o.objetivoId), tratamiento: trat[k] }
+      return { ...o, propuesta: props[k]?.propuesta ?? null, error: props[k]?.error ?? null, aprobada: aprobadaDe(b.contrato, o.objetivoId), tratamiento: trat[k] }
     }),
   }))
   type Fila = (typeof filas)[number]
