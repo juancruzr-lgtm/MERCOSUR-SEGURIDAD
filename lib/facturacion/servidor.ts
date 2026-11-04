@@ -25,7 +25,7 @@ function reglaDe(k: any): ReglaPeriodo {
 }
 const hhmm = (t: string | null) => (t ? String(t).slice(0, 5) : null)
 
-const CAMPOS_TURNO = 'id, fecha, hora_inicio, hora_fin, objetivo_id, puesto_id, estado'
+const CAMPOS_TURNO = 'id, fecha, hora_inicio, hora_fin, objetivo_id, puesto_id, estado, tipo_evento'
 
 /** Propuesta de horas FACTURABLES de un objetivo para un contrato y mes. No escribe. */
 export async function proponerHoras(db: SupabaseClient, p: { contratoId: string; objetivoId: string; mes: string }) {
@@ -84,7 +84,9 @@ export async function aprobarHoras(db: SupabaseClient, p: {
   const { data, error } = await db.rpc('fact_horas_aprobar', {
     p_objetivo_id: p.objetivoId, p_contrato_id: p.contratoId, p_desde: periodo.desde, p_hasta_excl: periodo.hastaExclusivo,
     p_minutos: { programados: horas.minutosProgramados, cubiertos: horas.minutosCubiertos, superpuestos: horas.minutosSuperpuestos,
-      descubiertos: horas.minutosDescubiertos, aprobados: m.aprobados, diurnos: m.diurnos, nocturnos: m.nocturnos, superposicion, tratamiento },
+      descubiertos: horas.minutosDescubiertos, aprobados: m.aprobados, diurnos: m.diurnos, nocturnos: m.nocturnos, superposicion, tratamiento,
+      // Queda en el historial de la aprobación: liquidadas y no facturadas.
+      capacitacion_excluida: horas.minutosCapacitacionLiquidables, capacitacion_turnos: horas.turnosCapacitacion },
     p_detalle: horas.detalle, p_notas: p.notas ?? null, p_reemplazar: !!p.reemplazar,
   })
   if (error) throw new Error(error.message)

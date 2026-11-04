@@ -22,6 +22,10 @@
  *    defecto) se factura una sola vez; sólo el contrato puede indicar 'sumar'.
  *  - descubiertas: programado ya ocurrido sin cobertura. No se factura salvo
  *    decisión de Administración al aprobar (queda registrada con motivo).
+ *  - Capacitación (turnos.tipo_evento = 'capacitacion', valor validado por
+ *    CHECK en la base): se paga al vigilador pero NO se factura. Queda fuera
+ *    de programadas, cubiertas y descubiertas, y se informa aparte con sus
+ *    horas liquidables. Sin búsquedas de texto: sólo la característica.
  *  - Los turnos sin puesto no se pueden unir: se suman y se avisa.
  *  - Diurnas/nocturnas con la franja del CONTRATO, sobre lo cubierto.
  *
@@ -33,6 +37,7 @@ import {
   effectiveEntrada, effectiveObjetivo, effectiveSalida, horasLiquidablesRegistro, selectRegistroPrincipal,
   type RegistroLiquidacion, type TurnoLiquidacion,
 } from '@/lib/liquidacion'
+import { esCapacitacion } from '@/lib/caracteristica-turno'
 import { inicioDiaArgentinaISO } from '@/lib/periodo-argentina'
 import { clasificarDiurnaNocturna, type FranjaNocturna, type RangoPeriodo } from './periodos'
 
@@ -40,7 +45,7 @@ const ESTADOS_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancelado'])
 const TOLERANCIA_MIN = 15
 const MIN = 60000
 
-export type TurnoFacturable = TurnoLiquidacion & { id: string; puesto_id?: string | null }
+export type TurnoFacturable = TurnoLiquidacion & { id: string; puesto_id?: string | null; tipo_evento?: string | null }
 export type RegistroFacturable = RegistroLiquidacion & { id: string; turno_id: string; tipo_registro?: string | null }
 export type ReglaSuperposicion = 'unir' | 'sumar'
 
@@ -53,7 +58,7 @@ export type DetalleTurno = {
   fecha: string
   programados: number
   cubiertos: number
-  estado: 'cubierto' | 'parcial' | 'sin_registro' | 'futuro'
+  estado: 'cubierto' | 'parcial' | 'sin_registro' | 'futuro' | 'capacitacion'
 }
 
 export type HorasObjetivo = {
@@ -66,6 +71,10 @@ export type HorasObjetivo = {
   minutosAceptadosFuera: number
   /** Fichados fuera del turno sin aceptar: no se liquidan ni se facturan. */
   minutosExcedentes: number
+  /** Capacitación: se liquida y NO se factura. Fuera de todos los demás totales. */
+  minutosCapacitacionProgramados: number
+  minutosCapacitacionLiquidables: number
+  turnosCapacitacion: number
   /** Diurnas/nocturnas de lo cubierto (null si el contrato no separa o no hay franja). */
   minutosDiurnos: number | null
   minutosNocturnos: number | null
@@ -178,6 +187,7 @@ export function horasDelObjetivo(input: {
   const cub = new Map<string, Tramo[]>()
   const detalle: DetalleTurno[] = []
   let sinRegistro = 0, futuros = 0, sinPuesto = 0, excedentes = 0, aceptadosFuera = 0, brutoCubierto = 0
+  let capProgramados = 0, capLiquidables = 0, capTurnos = 0
 
   // 1ª pasada: lo programado, por puesto.
   type Item = { t: TurnoFacturable; reg: RegistroFacturable | undefined; pi: number; pf: number; enPeriodo: Tramo; clave: string }
@@ -190,6 +200,13 @@ export function horasDelObjetivo(input: {
     const pi = Date.parse(p.inicio), pf = Date.parse(p.fin)
     const enPeriodo = recortar([pi, pf], pd, ph)
     if (!enPeriodo) continue
+    if (esCapacitacion(t.tipo_evento)) {
+      // Se liquida (lib/liquidacion no distingue) y no se factura: ni programa, ni cubre, ni queda descubierta.
+      const liqCap = Math.round(horasLiquidablesRegistro(t, reg) * 60)
+      capTurnos++; capProgramados += largo([enPeriodo]); capLiquidables += liqCap
+      detalle.push({ turno_id: t.id, registro_id: reg?.id ?? null, puesto_id: t.puesto_id ?? null, fecha: t.fecha, programados: largo([enPeriodo]), cubiertos: 0, estado: 'capacitacion' })
+      continue
+    }
     const clave = t.puesto_id ?? `turno:${t.id}`
     if (!t.puesto_id) sinPuesto++
     prog.set(clave, [...(prog.get(clave) ?? []), enPeriodo])
@@ -276,6 +293,7 @@ export function horasDelObjetivo(input: {
     minutosDescubiertos: Math.round(largo(descubiertosU)),
     minutosAceptadosFuera: aceptadosFuera,
     minutosExcedentes: excedentes,
+    minutosCapacitacionProgramados: Math.round(capProgramados), minutosCapacitacionLiquidables: capLiquidables, turnosCapacitacion: capTurnos,
     minutosDiurnos: d, minutosNocturnos: n, descubiertosDiurnos: dd, descubiertosNocturnos: dn,
     turnosSinRegistro: sinRegistro, turnosFuturos: futuros, turnosSinPuesto: sinPuesto,
     detalle,

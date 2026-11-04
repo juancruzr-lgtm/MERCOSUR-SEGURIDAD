@@ -58,8 +58,14 @@ export default function Horas({ mes }: { mes: string }) {
           <div style={{ ...S.card, marginTop: 12 }}>
             <h3 style={S.h3}>{v.objetivo?.nombre} · {fecha(prop.r.periodo.desde)} al {fecha(prop.r.periodo.hastaExclusivo)} (excl.)</h3>
             <div style={S.sub}>Horas FACTURABLES: lo programado cubierto más lo que el supervisor aceptó fuera de turno, lo mismo que se liquida.</div>
-            <div>Programadas {horas(h.minutosProgramados)} · <b>cubiertas {horas(h.minutosCubiertos)}</b> · descubiertas {horas(h.minutosDescubiertos)}
-              {h.minutosDiurnos != null && <> · diurnas {horas(h.minutosDiurnos)} · nocturnas {horas(h.minutosNocturnos)}</>}</div>
+            <table style={{ borderCollapse: 'collapse', margin: '6px 0' }}><tbody>
+              <tr><td style={S.td}>Horas programadas</td><td style={S.num}>{horas(h.minutosProgramados + h.minutosCapacitacionProgramados)}</td></tr>
+              <tr><td style={S.td}>Horas efectivamente cubiertas</td><td style={S.num}>{horas(h.minutosCubiertos + h.minutosCapacitacionLiquidables)}</td></tr>
+              <tr><td style={S.td}>Horas de capacitación excluidas{h.turnosCapacitacion ? ` (${h.turnosCapacitacion} turno/s: se liquidan, no se facturan)` : ''}</td><td style={S.num}>{horas(h.minutosCapacitacionLiquidables)}</td></tr>
+              <tr><td style={S.td}><b>Horas facturables</b></td><td style={S.num}><b>{horas(h.minutosCubiertos)}</b></td></tr>
+              {h.minutosDescubiertos > 0 && <tr><td style={S.td}>Descubiertas (no se facturan salvo decisión)</td><td style={S.num}>{horas(h.minutosDescubiertos)}</td></tr>}
+              {h.minutosDiurnos != null && <tr><td style={S.td}>Facturables diurnas / nocturnas</td><td style={S.num}>{horas(h.minutosDiurnos)} / {horas(h.minutosNocturnos)}</td></tr>}
+            </tbody></table>
             {h.minutosSuperpuestos > 0 && <div style={S.sub}>{horas(h.minutosSuperpuestos)} h de superposición entre turnos del mismo puesto (relevos): {prop.r.superposicion === 'sumar' ? 'se SUMAN según el contrato' : 'se facturan una sola vez'}.</div>}
             {h.minutosAceptadosFuera > 0 && <div style={S.sub}>Incluye {horas(h.minutosAceptadosFuera)} h fuera del horario programado aceptadas por el supervisor: se liquidan y se facturan.</div>}
             {h.minutosExcedentes > 0 && <div style={S.sub}>{horas(h.minutosExcedentes)} h fichadas fuera del horario programado sin aceptar: no se liquidan ni se facturan.</div>}

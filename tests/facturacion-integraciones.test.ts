@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { interpretarCae, interpretarConsulta, interpretarUltimo, validarComprobante, xmlSolicitarCae, type ComprobanteWsfe } from '@/lib/afip/wsfe'
 import { horasDelObjetivo, instantesTurno, minutosAprobables, ubicarHora } from '@/lib/facturacion/horas'
+import { horasLiquidablesRegistro } from '@/lib/liquidacion'
 import { periodoFacturacion } from '@/lib/facturacion/periodos'
 import { leerCsvArcaEmitidos, leerExtracto } from '@/lib/facturacion/importadores'
 
@@ -163,6 +164,32 @@ describe('horas facturables desde la app (no son horas liquidables)', () => {
       registros: [reg('rA', 'A', { hora_entrada_real: '06:00:00', hora_salida_real: '19:10:00', hora_salida_final: '19:00:00', horas_liquidables: 13 })] })
     expect(r).toMatchObject({ minutosProgramados: 720, minutosCubiertos: 780, minutosAceptadosFuera: 60, minutosExcedentes: 0, minutosDescubiertos: 0 })
     expect(minutosAprobables(r, 'no_facturar').aprobados).toBe(780)
+  })
+
+  it('capacitación liquidable NO genera facturación (sí se liquida)', () => {
+    const turnos = [turno('A', '2026-10-10', '07:00:00', '15:00:00'), turno('C', '2026-10-11', '07:00:00', '15:00:00', { tipo_evento: 'capacitacion' })]
+    const registros = [reg('rA', 'A', { hora_entrada_real: '07:00:00', hora_salida_real: '15:00:00' }), reg('rC', 'C', { hora_entrada_real: '07:00:00', hora_salida_real: '15:00:00' })]
+    // Liquidación: la capacitación se paga igual que un turno normal.
+    expect(horasLiquidablesRegistro(turnos[1], registros[1] as any)).toBe(8)
+    const r = horasDelObjetivo({ ...base, turnos, registros })
+    expect(r).toMatchObject({ minutosProgramados: 480, minutosCubiertos: 480, minutosDescubiertos: 0,
+      minutosCapacitacionProgramados: 480, minutosCapacitacionLiquidables: 480, turnosCapacitacion: 1 })
+    expect(minutosAprobables(r, 'no_facturar').aprobados).toBe(480)
+    // Ni decidiendo facturar lo descubierto entra: la capacitación no es descubierta.
+    expect(minutosAprobables(r, 'facturar').aprobados).toBe(480)
+    expect(r.detalle.find(d => d.turno_id === 'C')).toMatchObject({ estado: 'capacitacion', cubiertos: 0 })
+  })
+
+  it('capacitación en el mismo puesto y horario que el titular: no suma ni se superpone', () => {
+    const turnos = [turno('A', '2026-10-10', '07:00:00', '15:00:00'), turno('C', '2026-10-10', '07:00:00', '15:00:00', { tipo_evento: 'capacitacion' })]
+    const registros = [reg('rA', 'A', { hora_entrada_real: '07:00:00', hora_salida_real: '15:00:00' }), reg('rC', 'C', { hora_entrada_real: '07:00:00', hora_salida_real: '15:00:00' })]
+    for (const superposicion of ['unir', 'sumar'] as const)
+      expect(horasDelObjetivo({ ...base, turnos, registros, superposicion })).toMatchObject({ minutosCubiertos: 480, minutosSuperpuestos: 0, minutosCapacitacionLiquidables: 480 })
+  })
+
+  it('capacitación sin fichaje: no queda como descubierta', () => {
+    const r = horasDelObjetivo({ ...base, turnos: [turno('C', '2026-10-10', '07:00:00', '15:00:00', { tipo_evento: 'capacitacion' })], registros: [] })
+    expect(r).toMatchObject({ minutosProgramados: 0, minutosDescubiertos: 0, turnosSinRegistro: 0, minutosCapacitacionLiquidables: 0, turnosCapacitacion: 1 })
   })
 
   it('el supervisor reconoce menos horas que el fichaje: se factura lo reconocido', () => {
