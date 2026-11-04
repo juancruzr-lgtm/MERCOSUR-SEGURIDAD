@@ -26,13 +26,22 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
   const { ocupado, correr, Mensaje } = useAccion()
 
   async function cargar() {
-    const [pref, contratos] = await Promise.all([
+    const [pref, contratos, vincs] = await Promise.all([
       leer('fact_prefacturas', q => q.eq('periodo_mes', mes).neq('estado', 'descartada').order('created_at'),
-        '*, cliente:fact_clientes(razon_social, cuit, condicion_iva), objetivo:objetivos(nombre), oc:fact_ordenes_compra(numero, tipo), contrato:fact_contratos(nombre, modalidad, requiere_portal, envio_conjunto_planilla, requisitos)'),
-      leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, cliente:fact_clientes(razon_social, cuit)'),
+        '*, cliente:fact_clientes(razon_social, cuit, condicion_iva), objetivo:objetivos(nombre), oc:fact_ordenes_compra(numero, tipo), contrato:fact_contratos(nombre, modalidad, agrupacion, requiere_portal, envio_conjunto_planilla, requisitos)'),
+      leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, agrupacion, cliente:fact_clientes(razon_social, cuit)'),
+      leer('fact_contrato_objetivos', q => q.is('anulado_at', null), 'contrato_id, objetivo_id, objetivo:objetivos(nombre)'),
     ])
-    setFilas(pref)
-    setSinGenerar(contratos.filter(k => !pref.some(p => p.contrato_id === k.id)))
+    // Cliente y después objetivo: todos los objetivos de un cliente quedan juntos.
+    const nombre = (x: any) => `${x.cliente?.razon_social ?? ''} ${x.objetivo?.nombre ?? x.nombre ?? x.contrato?.nombre ?? ''}`
+    const objsDe = (contratoId: string) => vincs.filter(v => v.contrato_id === contratoId).map(v => v.objetivo?.nombre).filter(Boolean).sort()
+    setFilas(pref.map(p => ({ ...p, incluye: p.objetivo_id ? [] : objsDe(p.contrato_id) })).sort((a, b) => nombre(a).localeCompare(nombre(b))))
+    // Pendientes de generar: por objetivo cuando el contrato factura cada objetivo aparte.
+    setSinGenerar(contratos.flatMap(k => k.agrupacion === 'objetivo'
+      ? vincs.filter(v => v.contrato_id === k.id && !pref.some(p => p.contrato_id === k.id && p.objetivo_id === v.objetivo_id))
+        .map(v => ({ ...k, clave: `${k.id}:${v.objetivo_id}`, objetivo: v.objetivo }))
+      : pref.some(p => p.contrato_id === k.id) ? [] : [{ ...k, clave: k.id, incluye: objsDe(k.id) }])
+      .sort((a, b) => nombre(a).localeCompare(nombre(b))))
   }
   useEffect(() => { correr(cargar) }, [mes]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -88,7 +97,7 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
               return (
                 <tr key={f.id} onClick={() => setSel(f.id === sel ? null : f.id)} style={{ cursor: 'pointer', background: f.id === sel ? '#111c35' : undefined }}>
                   <td style={S.td}>{f.cliente?.razon_social}<div style={S.sub}>{f.cliente?.cuit ?? 'sin CUIT'}</div></td>
-                  <td style={S.td}>{f.objetivo?.nombre ?? f.contrato?.nombre ?? '—'}</td>
+                  <td style={S.td}>{f.objetivo?.nombre ?? f.contrato?.nombre ?? '—'}{f.incluye?.length > 1 && <div style={S.sub}>una factura por: {f.incluye.join(' + ')}</div>}</td>
                   <td style={S.td}>{fecha(f.periodo_desde)} – {fecha(addDias(f.periodo_hasta_excl, -1))}</td>
                   <td style={S.td}>{MODALIDADES[f.contrato?.modalidad] ?? '—'}</td>
                   <td style={S.num}>{horas(f.minutos_programados)}</td>
@@ -108,10 +117,10 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
               )
             })}
             {(!filtro || filtro === 'pendiente_generar') && sinGenerar.map(k => (
-              <tr key={`k-${k.id}`}>
+              <tr key={`k-${k.clave}`}>
                 <td style={S.td}>{k.cliente?.razon_social}<div style={S.sub}>{k.cliente?.cuit ?? 'sin CUIT'}</div></td>
-                <td style={S.td}>{k.nombre}</td><td style={S.td}>{mes}</td><td style={S.td}>{MODALIDADES[k.modalidad]}</td>
-                <td style={S.td} colSpan={9}><span style={S.sub}>Sin prefactura en el mes: usar “Generar / recalcular”. Si no se genera, revisar objetivos vinculados y horas aprobadas.</span></td>
+                <td style={S.td}>{k.objetivo?.nombre ?? k.nombre}{k.incluye?.length > 1 && <div style={S.sub}>una factura por: {k.incluye.join(' + ')}</div>}</td><td style={S.td}>{mes}</td><td style={S.td}>{MODALIDADES[k.modalidad]}</td>
+                <td style={S.td} colSpan={9}><span style={S.sub}>Sin prefactura en el mes: usar “Calcular”. Si no aparece, revisar horas aprobadas y tarifa.</span></td>
                 <td style={S.td}><Etiqueta texto="Pendiente de generar" color={COLOR_VISIBLE.pendiente_generar} /></td><td style={S.td}>—</td>
               </tr>
             ))}
