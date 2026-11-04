@@ -12,8 +12,8 @@ import { fechaArgentina, sumarDias } from '@/lib/periodo-argentina'
 import { periodoFacturacion, servicioActivoEnPeriodo, type ReglaPeriodo } from './periodos'
 import { horasDelObjetivo, minutosAprobables, type RegistroFacturable, type TurnoFacturable } from './horas'
 import {
-  calcularPrefactura, clavePrestacion, estadoSugerido, textoPrecargado,
-  type HorasAprobadas, type Modalidad, type OrdenCompraEstado, type TarifaVigente, type TipoRequisito,
+  agruparObjetivos, calcularPrefactura, clavePrestacion, estadoSugerido, objetivosEnOtraPrefactura, renglonesPorObjetivo, tarifasParaObjetivo, textoPrecargado,
+  type EntradaPrefactura, type HorasAprobadas, type Modalidad, type OrdenCompraEstado, type TarifaVigente, type TipoRequisito,
 } from './prefacturacion'
 import { proponerAsociaciones, type ClienteIdentidad, type ComprobanteAbierto, type RetencionDisponible } from './conciliacion'
 import { numeroVisible } from './comprobantes'
@@ -111,10 +111,24 @@ export function tipoComprobanteDe(contrato?: number | null, cliente?: number | n
   return null
 }
 
-export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = fechaArgentina()) {
+/** Suma de las fotos de horas aprobadas (una por objetivo). */
+function fotoHoras(aps: any[]): HorasAprobadas {
+  const sum = (c: string) => aps.reduce((a: number, x: any) => a + (Number(x[c]) || 0), 0)
+  const conClasif = aps.every((a: any) => a.minutos_diurnos != null && a.minutos_nocturnos != null)
+  return {
+    minutosTotales: sum('minutos_aprobados'), minutosProgramados: sum('minutos_programados'), minutosCubiertos: sum('minutos_cubiertos'),
+    minutosDescubiertosNoFacturados: aps.filter((a: any) => a.tratamiento_descubiertos !== 'facturar').reduce((s: number, a: any) => s + Number(a.minutos_descubiertos || 0), 0),
+    minutosDiurnos: conClasif ? sum('minutos_diurnos') : undefined, minutosNocturnos: conClasif ? sum('minutos_nocturnos') : undefined,
+    fuentes: aps.map((a: any) => a.id),
+  }
+}
+
+export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = fechaArgentina(), contratoId?: string) {
   const resumen = { creadas: 0, actualizadas: 0, sin_cambios: 0, errores: [] as string[] }
   const [{ data: contratos, error: e1 }, { data: cfg }] = await Promise.all([
-    db.from('fact_contratos').select('*, cliente:fact_clientes(id, cuit, razon_social, condicion_iva, tipo_comprobante)').eq('estado', 'vigente'),
+    // Con contratoId recalcula sólo ese contrato (Aceptar de una fila); sin él, el mes entero.
+    contratoId ? db.from('fact_contratos').select('*, cliente:fact_clientes(id, cuit, razon_social, condicion_iva, tipo_comprobante)').eq('estado', 'vigente').eq('id', contratoId)
+      : db.from('fact_contratos').select('*, cliente:fact_clientes(id, cuit, razon_social, condicion_iva, tipo_comprobante)').eq('estado', 'vigente'),
     db.from('fact_config').select('valor').eq('clave', 'emision').maybeSingle(),
   ])
   if (e1) throw new Error(e1.message)
@@ -124,43 +138,43 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
     try {
       const periodo = periodoFacturacion(reglaDe(k), mes)
       if (!servicioActivoEnPeriodo({ fechaInicio: k.vigencia_desde, fechaFin: k.vigencia_hasta }, periodo)) continue
-      const { data: vincs } = await db.from('fact_contrato_objetivos').select('objetivo_id, desde, hasta, objetivo:objetivos(id, nombre)').eq('contrato_id', k.id).is('anulado_at', null)
+      // '*': grupo_factura existe recién con 20261202120000; antes de aplicarla todo sigue igual.
+      const { data: vincs } = await db.from('fact_contrato_objetivos').select('*, objetivo:objetivos(id, nombre)').eq('contrato_id', k.id).is('anulado_at', null)
       // Fechas de inicio/fin del servicio: un objetivo terminado no se reactiva.
       const objetivos = (vincs ?? []).filter((v: any) => servicioActivoEnPeriodo({ fechaInicio: v.desde, fechaFin: v.hasta }, periodo))
-      const grupos: Array<{ clave: string; objetivoId: string | null; objs: any[] }> = k.agrupacion === 'objetivo'
-        ? objetivos.map((v: any) => ({ clave: `objetivo:${v.objetivo_id}`, objetivoId: v.objetivo_id, objs: [v] }))
-        : [{ clave: `contrato:${k.id}`, objetivoId: null, objs: objetivos }]
+      const grupos = agruparObjetivos<any>(k, objetivos)
       if (k.modalidad !== 'abono' && !objetivos.length) { resumen.errores.push(`${k.cliente?.razon_social}: contrato sin objetivos vinculados en el período`); continue }
 
       const { data: tarifasAll } = await db.from('fact_tarifas').select('*').eq('contrato_id', k.id)
         .lte('vigencia_desde', periodo.desde).or(`vigencia_hasta.is.null,vigencia_hasta.gte.${periodo.desde}`)
       const { data: cambios } = await db.from('fact_tarifas').select('id').eq('contrato_id', k.id).gt('vigencia_desde', periodo.desde).lt('vigencia_desde', periodo.hastaExclusivo)
+      const { data: delPeriodo } = await db.from('fact_prefacturas').select('*').eq('contrato_id', k.id)
+        .eq('periodo_desde', periodo.desde).eq('periodo_hasta_excl', periodo.hastaExclusivo).neq('estado', 'descartada')
 
       for (const g of grupos) {
         const objIds = g.objs.map((v: any) => v.objetivo_id)
-        const tarifas: TarifaVigente[] = (['hora', 'hora_diurna', 'hora_nocturna', 'abono'] as const).flatMap((concepto): TarifaVigente[] => {
-          const cands = (tarifasAll ?? []).filter((t: any) => t.concepto === concepto)
-          const t = cands.find((x: any) => g.objetivoId && x.objetivo_id === g.objetivoId) ?? cands.find((x: any) => !x.objetivo_id)
-          return t ? [{ id: t.id, concepto, precio: String(t.precio), tratamientoIva: t.tratamiento_iva, alicuotaIva: String(t.alicuota_iva) }] : []
-        })
+        const tarifas = tarifasParaObjetivo(tarifasAll ?? [], g.objetivoId)
+        const nombreDe = (v: any) => v.objetivo?.nombre ?? v.objetivo_id
+        // Reagrupado: un objetivo que ya está en otra prefactura viva del período no se factura dos veces.
+        const ocupados = objetivosEnOtraPrefactura(delPeriodo ?? [], g.clave, objIds, objetivos.map((v: any) => v.objetivo_id))
+        if (ocupados.length) {
+          resumen.errores.push(`${k.cliente?.razon_social}: ${ocupados.map(o => nombreDe(g.objs.find((v: any) => v.objetivo_id === o.objetivoId))).join(', ')} ya ${ocupados.length > 1 ? 'están' : 'está'} en otra prefactura del período (${ocupados[0].estado}). Descartala antes de reagrupar.`)
+          continue
+        }
 
         // Horas aprobadas (foto) de cada objetivo del grupo.
         let horas = null as null | HorasAprobadas
+        let porObjetivo: EntradaPrefactura['porObjetivo']
         const faltanAprobar: string[] = []
         if (objIds.length) {
           const { data: aps } = await db.from('fact_horas_aprobaciones').select('*').in('objetivo_id', objIds)
             .eq('periodo_desde', periodo.desde).eq('periodo_hasta_excl', periodo.hastaExclusivo).eq('estado', 'aprobada')
           for (const v of g.objs) if (!(aps ?? []).some((a: any) => a.objetivo_id === v.objetivo_id)) faltanAprobar.push(v.objetivo?.nombre ?? v.objetivo_id)
-          if (aps?.length) {
-            const sum = (c: string) => aps.reduce((a: number, x: any) => a + (Number(x[c]) || 0), 0)
-            const conClasif = aps.every((a: any) => a.minutos_diurnos != null && a.minutos_nocturnos != null)
-            horas = {
-              minutosTotales: sum('minutos_aprobados'), minutosProgramados: sum('minutos_programados'), minutosCubiertos: sum('minutos_cubiertos'),
-              minutosDescubiertosNoFacturados: aps.filter((a: any) => a.tratamiento_descubiertos !== 'facturar').reduce((s: number, a: any) => s + Number(a.minutos_descubiertos || 0), 0),
-              minutosDiurnos: conClasif ? sum('minutos_diurnos') : undefined, minutosNocturnos: conClasif ? sum('minutos_nocturnos') : undefined,
-              fuentes: aps.map((a: any) => a.id),
-            }
-          }
+          if (aps?.length) horas = fotoHoras(aps)
+          porObjetivo = renglonesPorObjetivo(g.objs.map((v: any) => ({ objetivo_id: v.objetivo_id, nombre: nombreDe(v) })), tarifasAll ?? [], k.modalidad, id => {
+            const propias = (aps ?? []).filter((a: any) => a.objetivo_id === id)
+            return propias.length ? fotoHoras(propias) : null
+          })
         }
 
         // OC / presupuesto que cubre el período (compartida: una sola fila).
@@ -204,7 +218,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         const r = calcularPrefactura({
           modalidad, cuitReceptor: k.cliente?.cuit ?? null, periodo, horas, tarifas: tarifasCalc,
           ajustes: [], separarDiurnaNocturna: !!k.separar_diurna_nocturna, requiere: k.requisitos ?? [], cumplidos, oc, anticipoNeto: 0,
-          pendientesComerciales: k.pendientes_comerciales ?? [],
+          pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo,
         })
         if (faltanAprobar.length && modalidad !== 'abono') r.requisitos.push({ tipo: 'horas_aprobadas', detalle: `Faltan aprobar horas de: ${faltanAprobar.join(', ')}` })
         if (cambios?.length) r.avisos.push('Hay un cambio de tarifa dentro del período: revisar el precio aplicado.')
@@ -215,7 +229,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
           if (ajs?.length) {
             const r2 = calcularPrefactura({
               modalidad, cuitReceptor: k.cliente?.cuit ?? null, periodo, horas, tarifas: tarifasCalc, separarDiurnaNocturna: !!k.separar_diurna_nocturna,
-              requiere: k.requisitos ?? [], cumplidos, oc, anticipoNeto: 0, pendientesComerciales: k.pendientes_comerciales ?? [],
+              requiere: k.requisitos ?? [], cumplidos, oc, anticipoNeto: 0, pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo,
               ajustes: ajs.map((a: any) => ({ id: a.id, descripcion: a.descripcion, importeNeto: Number(a.importe_neto_c), motivo: a.motivo, responsableId: a.creado_por, aprobado: !!a.aprobado_at })),
             })
             Object.assign(r, { lineas: r2.lineas, importes: r2.importes, avisos: [...r.avisos, ...r2.avisos.filter(x => !r.avisos.includes(x))] })
@@ -224,7 +238,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         const tipoComp = tipoComprobanteDe(k.tipo_comprobante, k.cliente?.tipo_comprobante, k.cliente?.condicion_iva)
         if (tipoComp == null) r.requisitos.push({ tipo: 'definicion_comercial', detalle: 'Definir la condición frente al IVA del cliente o el tipo de comprobante (A, B o FCE).' })
         const datos: Record<string, unknown> = {
-          cliente_id: k.cliente_id, contrato_id: k.id, agrupacion_clave: g.clave, objetivo_id: g.objetivoId, periodo_mes: mes,
+          cliente_id: k.cliente_id, contrato_id: k.id, agrupacion_clave: g.clave, objetivo_id: g.objetivoId, periodo_mes: mes, objetivos_incluidos: objIds,
           periodo_desde: periodo.desde, periodo_hasta_excl: periodo.hastaExclusivo, estado: estadoSugerido(r),
           horas_aprobacion_ids: horas?.fuentes ?? [], minutos_programados: horas?.minutosProgramados ?? null,
           minutos_cubiertos: horas?.minutosCubiertos ?? null, minutos_aprobados: horas?.minutosTotales ?? null,

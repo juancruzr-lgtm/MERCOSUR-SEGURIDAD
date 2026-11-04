@@ -115,6 +115,12 @@ export type EntradaPrefactura = {
   /** Neto ya facturado por anticipo para este período (INTA). */
   anticipoNeto: number
   pendientesComerciales: string[]
+  /**
+   * Factura que junta varios objetivos y alguno tiene precio propio: un renglón
+   * por objetivo, cada uno con sus horas y su tarifa (la propia o la del contrato).
+   * Sin esto, un solo renglón con el total y la tarifa del contrato.
+   */
+  porObjetivo?: Array<{ nombre: string; horas: HorasAprobadas | null; tarifas: TarifaVigente[] }>
 }
 
 export type LineaCalculada = {
@@ -155,8 +161,11 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
     lineas.push({ concepto, cantidad, precio: t.precio, tarifaId: t.id, importes: r.importes })
   }
 
+  const items = e.porObjetivo?.length ? e.porObjetivo : [{ nombre: '', horas: e.horas, tarifas: e.tarifas }]
+  const de = (concepto: string, nombre: string) => (nombre ? `${concepto} — ${nombre}` : concepto)
+
   if (e.modalidad === 'abono') {
-    agregarLinea('Abono mensual', null, tarifa(e.tarifas, 'abono'))
+    for (const it of items) agregarLinea(de('Abono mensual', it.nombre), null, tarifa(it.tarifas, 'abono'))
   } else {
     const h = e.horas
     if (!h || h.minutosTotales <= 0) {
@@ -167,16 +176,20 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
       if (h.minutosDescubiertosNoFacturados > 0) {
         avisos.push(`${horasDeMinutos(h.minutosDescubiertosNoFacturados)} h programadas quedaron descubiertas y no se facturan.`)
       }
-      if (e.separarDiurnaNocturna) {
-        if (h.minutosDiurnos == null || h.minutosNocturnos == null) {
-          calculable = false
-          requisitos.push({ tipo: 'franja_nocturna', detalle: 'El contrato separa horas diurnas y nocturnas, pero no tiene franja nocturna definida.' })
+      for (const it of items) {
+        const hi = it.horas
+        if (!hi || hi.minutosTotales <= 0) continue
+        if (e.separarDiurnaNocturna) {
+          if (hi.minutosDiurnos == null || hi.minutosNocturnos == null) {
+            calculable = false
+            if (!requisitos.some(r => r.tipo === 'franja_nocturna')) requisitos.push({ tipo: 'franja_nocturna', detalle: 'El contrato separa horas diurnas y nocturnas, pero no tiene franja nocturna definida.' })
+          } else {
+            if (hi.minutosDiurnos > 0) agregarLinea(de('Horas diurnas', it.nombre), hi.minutosDiurnos, tarifa(it.tarifas, 'hora_diurna'))
+            if (hi.minutosNocturnos > 0) agregarLinea(de('Horas nocturnas', it.nombre), hi.minutosNocturnos, tarifa(it.tarifas, 'hora_nocturna'))
+          }
         } else {
-          if (h.minutosDiurnos > 0) agregarLinea('Horas diurnas', h.minutosDiurnos, tarifa(e.tarifas, 'hora_diurna'))
-          if (h.minutosNocturnos > 0) agregarLinea('Horas nocturnas', h.minutosNocturnos, tarifa(e.tarifas, 'hora_nocturna'))
+          agregarLinea(de('Horas de vigilancia', it.nombre), hi.minutosTotales, tarifa(it.tarifas, 'hora'))
         }
-      } else {
-        agregarLinea('Horas de vigilancia', h.minutosTotales, tarifa(e.tarifas, 'hora'))
       }
     }
   }
@@ -184,7 +197,7 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
   // Ajustes comerciales: sólo los aprobados entran al importe; con el IVA de la primera línea.
   for (const a of e.ajustes) {
     if (!a.aprobado) { avisos.push(`Ajuste "${a.descripcion}" sin aprobar: no se incluye.`); continue }
-    const base = e.tarifas.find(t => t.tratamientoIva !== 'sin_definir')
+    const base = [...e.tarifas, ...items.flatMap(it => it.tarifas)].find(t => t.tratamientoIva !== 'sin_definir')
     const iva = base && base.tratamientoIva !== 'exento' ? porcentajeCentavos(a.importeNeto, base.alicuotaIva) : 0
     lineas.push({ concepto: `Ajuste: ${a.descripcion}`, cantidad: '1', precio: String(a.importeNeto / 100), tarifaId: null, importes: { neto: a.importeNeto, iva, total: a.importeNeto + iva } })
   }
@@ -304,6 +317,89 @@ export function textoPrecargado(p: {
     detalle,
     p.oc ? `OC N° ${p.oc}.` : '',
   ].filter(Boolean).join('\n')
+}
+
+// ── Grupos de factura y precio por renglón ─────────────────────────────────
+// La agrupación (qué objetivos van en un comprobante) es independiente de las
+// tarifas: cada objetivo usa su tarifa propia si la tiene, si no la general.
+
+export type VinculoFacturable = { objetivo_id: string; grupo_factura?: string | null; objetivo?: { nombre?: string | null } | null }
+export type GrupoFactura<V extends VinculoFacturable> = { clave: string; objetivoId: string | null; grupo: string | null; objs: V[] }
+
+/**
+ * Objetivos del contrato → comprobantes. Un objetivo con grupo_factura va con los
+ * demás del mismo grupo; sin grupo, manda la agrupación del contrato (todo junto
+ * o uno por objetivo). Con todo en NULL las claves son las de siempre.
+ */
+export function agruparObjetivos<V extends VinculoFacturable>(contrato: { id: string; agrupacion: string }, vincs: V[]): GrupoFactura<V>[] {
+  const grupos = new Map<string, GrupoFactura<V>>()
+  for (const v of vincs) {
+    const g = v.grupo_factura?.trim() || null
+    const clave = g ? `grupo:${contrato.id}:${g.toLowerCase()}` : contrato.agrupacion === 'objetivo' ? `objetivo:${v.objetivo_id}` : `contrato:${contrato.id}`
+    const x = grupos.get(clave) ?? { clave, objetivoId: null, grupo: g, objs: [] }
+    x.objs.push(v)
+    grupos.set(clave, x)
+  }
+  // Abono sin objetivos vinculados: una sola factura del contrato (como siempre).
+  if (!vincs.length && contrato.agrupacion !== 'objetivo') grupos.set(`contrato:${contrato.id}`, { clave: `contrato:${contrato.id}`, objetivoId: null, grupo: null, objs: [] })
+  Array.from(grupos.values()).forEach(x => { x.objetivoId = x.objs.length === 1 && !x.clave.startsWith('contrato:') ? x.objs[0].objetivo_id : null })
+  return Array.from(grupos.values())
+}
+
+export type TarifaGuardada = { id: string; concepto: string; precio: string | number; tratamiento_iva: TratamientoIva; alicuota_iva: string | number; objetivo_id: string | null }
+
+/** Tarifa de cada concepto para un objetivo: la propia reemplaza a la general del contrato. */
+export function tarifasParaObjetivo(todas: TarifaGuardada[], objetivoId: string | null): TarifaVigente[] {
+  return (['hora', 'hora_diurna', 'hora_nocturna', 'abono'] as const).flatMap((concepto): TarifaVigente[] => {
+    const cands = todas.filter(t => t.concepto === concepto)
+    const t = cands.find(x => objetivoId && x.objetivo_id === objetivoId) ?? cands.find(x => !x.objetivo_id)
+    return t ? [{ id: t.id, concepto, precio: String(t.precio), tratamientoIva: t.tratamiento_iva, alicuotaIva: String(t.alicuota_iva) }] : []
+  })
+}
+
+/**
+ * Factura con varios objetivos: un renglón por objetivo y concepto, cada uno con
+ * sus horas, su tarifa (propia o la general), su IVA y su importe. Nunca se suman
+ * horas de objetivos distintos en un mismo renglón.
+ * Abono: es un precio del contrato, no de cada objetivo; el general va una sola vez
+ * y sólo el objetivo con abono propio lleva su renglón.
+ */
+export function renglonesPorObjetivo(
+  objs: Array<{ objetivo_id: string; nombre: string }>, todas: TarifaGuardada[], modalidad: Modalidad,
+  horasDe: (objetivoId: string) => HorasAprobadas | null,
+): EntradaPrefactura['porObjetivo'] {
+  if (objs.length < 2 || modalidad === 'presupuesto_anticipado') return undefined
+  const conAbonoPropio = (o: { objetivo_id: string }) => todas.some(t => t.objetivo_id === o.objetivo_id && t.concepto === 'abono')
+  if (modalidad === 'abono') {
+    const con = objs.filter(conAbonoPropio)
+    if (!con.length) return undefined
+    const sin = objs.filter(o => !con.includes(o))
+    return [
+      ...con.map(o => ({ nombre: o.nombre, horas: null, tarifas: tarifasParaObjetivo(todas, o.objetivo_id) })),
+      ...(sin.length ? [{ nombre: sin.map(o => o.nombre).join(', '), horas: null, tarifas: tarifasParaObjetivo(todas, null) }] : []),
+    ]
+  }
+  return objs.map(o => ({ nombre: o.nombre, horas: horasDe(o.objetivo_id), tarifas: tarifasParaObjetivo(todas, o.objetivo_id) }))
+}
+
+/**
+ * Objetivos que ya están en OTRA prefactura viva del mismo período (p. ej. después
+ * de reagrupar): no se vuelven a facturar hasta descartar la anterior. Una
+ * prefactura vieja sin objetivos_incluidos cubre su objetivo o, si es del
+ * contrato entero, todos los del contrato (criterio conservador).
+ */
+export function objetivosEnOtraPrefactura(
+  otras: Array<{ agrupacion_clave: string; objetivo_id?: string | null; objetivos_incluidos?: string[] | null; estado: string }>,
+  clave: string, objIds: string[], objetivosDelContrato: string[],
+): Array<{ objetivoId: string; clave: string; estado: string }> {
+  const out: Array<{ objetivoId: string; clave: string; estado: string }> = []
+  for (const p of otras) {
+    if (p.agrupacion_clave === clave || p.estado === 'descartada') continue
+    const cubre = p.objetivos_incluidos?.length ? p.objetivos_incluidos
+      : p.objetivo_id ? [p.objetivo_id] : p.agrupacion_clave.startsWith('contrato:') ? objetivosDelContrato : []
+    for (const id of objIds) if (cubre.includes(id)) out.push({ objetivoId: id, clave: p.agrupacion_clave, estado: p.estado })
+  }
+  return out
 }
 
 /** Clave de unicidad de prestación: impide dos prefacturas vivas para lo mismo. */
