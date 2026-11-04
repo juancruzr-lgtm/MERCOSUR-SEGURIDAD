@@ -15,7 +15,7 @@ import {
   construirLineasVisual, escribirLibroVisualXls, clasificarBloqueados,
   CODIGOS_SOBRE_BASICO, CODIGOS_REMUNERATIVO_OS,
   type ConceptoCfg, type PersonaPadron, type HaberLinea, type PermanenteLinea, type ExpedienteLinea,
-  type ResultadoLineas, type Hallazgo,
+  type ResultadoLineas, type Hallazgo, type FilaVisual,
 } from '@/lib/visual-export'
 import { cargarParametrosDelMes, jornadasPorUsuarioDelMes, prepararLiquidacionDelMes, type FilaConsolidada } from '@/lib/excel-trabajo-liquidacion'
 import { PARAMETROS_PLANTILLA } from '@/lib/resumen-guardia'
@@ -199,6 +199,62 @@ export async function exportarVisualCompleto(
     cantidad: l.cantidad ?? null, importe: l.importe ?? null,
   }))
   return { bytes, resultado, consolidada: prep.snapshotFilas, enviado, bloqueado: false, error: null }
+}
+
+export interface ExportarEmpleadoResultado {
+  bytes: Uint8Array | null
+  lineas: FilaVisual[]      // líneas de ese empleado (preview + control)
+  nombre: string | null
+  bloqueado: boolean        // la persona quedó bloqueada (identidad / >2 expedientes)
+  error: string | null
+}
+
+/**
+ * Exporta el .xls de Visual de UN SOLO empleado (editor por empleado, JC 04/11).
+ * Corre la MISMA preparación y la MISMA regla que el archivo completo
+ * (prepararLiquidacionDelMes + construirLineasVisual), EN VIVO: toma los
+ * expedientes/conceptos/000 actuales, así refleja una corrección recién hecha
+ * (p.ej. dar de baja un embargo). Se queda sólo con las líneas de ese CUIL /
+ * COD_INTERNO. NO persiste nada (no toca consolidada ni enviado): es una
+ * re-descarga puntual para controlar y reimportar a Visual una corrección
+ * individual. Para el archivo del mes completo se sigue usando exportarVisualCompleto.
+ */
+export async function exportarVisualDeEmpleado(
+  client: any,
+  periodo: { id: string; mes: string },
+  filtro: { cuil?: string | null; codInterno?: string | null },
+): Promise<ExportarEmpleadoResultado> {
+  const vacio = { bytes: null as Uint8Array | null, lineas: [] as FilaVisual[], nombre: null as string | null, bloqueado: false }
+  const soloDig = (v: any) => String(v ?? '').replace(/\D/g, '')
+  const cuilF = soloDig(filtro.cuil)
+  const codF = String(filtro.codInterno ?? '').trim()
+  if (!cuilF && !codF) return { ...vacio, error: 'Falta identificar al empleado (CUIL o COD_INTERNO).' }
+
+  const prep = await prepararLiquidacionDelMes(client, periodo)
+  if (prep.error || !prep.plantilla) return { ...vacio, error: prep.error || 'sin preparación' }
+  const haberRows: HaberRow[] = prep.snapshotFilas.map(f => ({
+    empleado_id: f.empleado_id, codigo: String(f.codigo), cantidad: f.cantidad, importe: f.importe,
+  }))
+  const { resultado, error } = await cargarYConstruirVisual(client, periodo, haberRows, prep.jornadas)
+  if (error || !resultado) return { ...vacio, error: error || 'sin resultado' }
+  // Críticos = configuración del catálogo mal: el archivo saldría mal para
+  // CUALQUIERA, así que también se aborta la exportación individual.
+  if (resultado.criticos.length > 0) {
+    return { ...vacio, bloqueado: true, error: `Hay ${resultado.criticos.length} error(es) crítico(s) de configuración del catálogo; resolvelos antes de exportar.` }
+  }
+  const lineas = resultado.lineas.filter(l =>
+    (cuilF ? soloDig(l.cuil) === cuilF : true) &&
+    (codF ? String(l.legajo).trim() === codF : true),
+  )
+  if (lineas.length === 0) {
+    // ¿La persona quedó bloqueada por su cuenta (identidad faltante / >2 exp)?
+    // Devolver esa causa en lugar de un genérico.
+    const blo = resultado.bloqueados.find(b => cuilF && soloDig(b.cuil) === cuilF)
+    return { ...vacio, bloqueado: Boolean(blo), error: blo ? blo.detalle : 'Ese empleado no tiene líneas exportables en el período (revisá 000 / conceptos / expedientes / vigencia).' }
+  }
+  const nombre = lineas.find(l => l.nombre)?.nombre ?? null
+  const bytes = await escribirLibroVisualXls(lineas)
+  return { bytes, lineas, nombre, bloqueado: false, error: null }
 }
 
 /**
