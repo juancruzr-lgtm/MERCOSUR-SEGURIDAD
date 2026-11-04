@@ -1,4 +1,4 @@
-// Prueba de 20261201120000/130000/140000/150000 (facturación, ARCA, cuentas corrientes, vencimientos e intereses) sobre PGlite.
+// Prueba de 20261201120000/130000/140000/150000 + 20261202120000 (facturación, ARCA, cuentas corrientes, vencimientos e intereses, grupos de factura) sobre PGlite.
 //   npm i --no-save @electric-sql/pglite@0.2.17
 //   node supabase/pruebas/facturacion/run.mjs
 // (o PGLITE=<ruta a node_modules/@electric-sql/pglite/dist/index.js> si está instalado en otra carpeta)
@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -570,6 +570,37 @@ const vinc = (await como(ADM, () => uno(`select public.fact_comprobante_manual_r
   JSON.stringify({ tipo: 1, punto_venta: 1, numero: 4200, fecha: '2026-10-30', cuit_receptor: '30716728397', neto_c: 1001, iva_c: 210, total_c: 1210, cae: '86400000000002', cae_vto: '2026-11-09' })]))).id
 ok('comprobante ya importado de ARCA: se vincula a la prefactura (mismo id, 1 centavo de redondeo aceptado)', vinc === idImp
   && (await uno(`select prefactura_id from public.fact_comprobantes where id = $1`, [idImp])).prefactura_id === prefImp)
+
+// ── Grupos de factura (20261202120000) ────────────────────────────────────
+const kGr = await contrato({ cliente_id: laromet, nombre: 'Obradores', modalidad: 'por_hora', agrupacion: 'objetivo', tipo_comprobante: 1, estado: 'vigente' })
+const vG1 = (await como(ADM, () => uno(`select public.fact_contrato_objetivo_vincular($1, '00000000-0000-0000-0000-00000000b002') id`, [kGr]))).id
+const vG2 = (await como(ADM, () => uno(`select public.fact_contrato_objetivo_vincular($1, '00000000-0000-0000-0000-00000000b003') id`, [kGr]))).id
+ok('grupos: los vínculos arrancan sin grupo (no cambia ninguna agrupación existente)',
+  (await uno(`select count(*)::int n from public.fact_contrato_objetivos where grupo_factura is not null`)).n === 0)
+const prefsAntes = (await uno(`select count(*)::int n, md5(string_agg(huella || estado || version, ',' order by id)) h from public.fact_prefacturas`))
+await como(ADM, () => sql(`select public.fact_contrato_objetivo_grupo($1, '  Factura A ')`, [vG1]))
+await como(ADM, () => sql(`select public.fact_contrato_objetivo_grupo($1, 'Factura A')`, [vG2]))
+const gr = await sql(`select grupo_factura g from public.fact_contrato_objetivos where contrato_id = $1 order by id`, [kGr])
+ok('grupos: dos objetivos con el mismo grupo (se recorta el texto)', gr.length === 2 && gr.every(x => x.g === 'Factura A'), JSON.stringify(gr))
+ok('grupos: cambio auditado en el historial del contrato',
+  (await uno(`select count(*)::int n from public.fact_historial where entidad = 'contrato' and entidad_id = $1 and accion = 'grupo_factura'`, [kGr])).n === 2)
+await como(ADM, () => sql(`select public.fact_contrato_objetivo_grupo($1, 'Factura A')`, [vG2]))
+ok('grupos: guardar el mismo grupo no agrega historial',
+  (await uno(`select count(*)::int n from public.fact_historial where entidad = 'contrato' and entidad_id = $1 and accion = 'grupo_factura'`, [kGr])).n === 2)
+await como(ADM, () => sql(`select public.fact_contrato_objetivo_grupo($1, '')`, [vG2]))
+ok('grupos: vacío = vuelve a la agrupación del contrato', (await uno(`select grupo_factura g from public.fact_contrato_objetivos where id = $1`, [vG2])).g === null)
+ok('grupos: sin permiso de facturación no se cambia', await falla(() => como(SUP, () => sql(`select public.fact_contrato_objetivo_grupo($1, 'X')`, [vG1]))))
+ok('grupos: anon no ejecuta la función', await falla(async () => { await db.exec('set role anon'); try { await sql(`select public.fact_contrato_objetivo_grupo($1, 'X')`, [vG1]) } finally { await db.exec('reset role') } }))
+ok('grupos: más de 60 caracteres se rechaza', await falla(() => como(ADM, () => sql(`select public.fact_contrato_objetivo_grupo($1, $2)`, [vG1, 'x'.repeat(61)]))))
+const prefsDespues = (await uno(`select count(*)::int n, md5(string_agg(huella || estado || version, ',' order by id)) h from public.fact_prefacturas`))
+ok('grupos: cambiar la agrupación no toca ninguna prefactura (ni aprobadas ni emitidas)', prefsAntes.n === prefsDespues.n && prefsAntes.h === prefsDespues.h)
+const pGr = (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: laromet, contrato_id: kGr,
+  agrupacion_clave: `grupo:${kGr}:factura a`, periodo_mes: '2026-11', periodo_desde: '2026-11-01', periodo_hasta_excl: '2026-12-01', lineas: [], estado: 'en_preparacion',
+  objetivos_incluidos: ['00000000-0000-0000-0000-00000000b002', '00000000-0000-0000-0000-00000000b003'] })]))).id
+ok('grupos: la prefactura guarda qué objetivos incluye', (await uno(`select array_length(objetivos_incluidos, 1) n from public.fact_prefacturas where id = $1`, [pGr])).n === 2)
+await como(ADM, () => sql(`select public.fact_prefactura_guardar($1, $2::jsonb, (select version from public.fact_prefacturas where id = $1))`, [pGr, JSON.stringify({ lineas: [], estado: 'en_preparacion' })]))
+ok('grupos: recalcular sin informar objetivos conserva los anteriores', (await uno(`select array_length(objetivos_incluidos, 1) n from public.fact_prefacturas where id = $1`, [pGr])).n === 2)
+ok('grupos: una prefactura emitida sigue sin poder modificarse', await falla(() => como(ADM, () => sql(`select public.fact_prefactura_guardar($1, $2::jsonb)`, [pref, JSON.stringify({ lineas: [], estado: 'en_preparacion', objetivos_incluidos: [] })]))))
 
 // ── Rollback ───────────────────────────────────────────────────────────────
 for (const m of [...MIGS].reverse()) await db.exec(readFileSync(`${REPO}/supabase/rollback/${m}_rollback.sql`, 'utf8'))

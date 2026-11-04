@@ -91,6 +91,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
   const [vinc, setVinc] = useState(VINC_VACIO)
   const [oc, setOc] = useState(OC_VACIA)
   const [panel, setPanel] = useState<string | null>(null)
+  const [grupos, setGrupos] = useState<Record<string, string>>({})
   const { ocupado, correr, Mensaje } = useAccion()
   const alternar = (p: string) => setPanel(panel === p ? null : p)
 
@@ -239,10 +240,28 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
               <span style={{ fontSize: 12, color: '#94a3b8' }}>Objetivos ({objs.length})</span>
               <button style={CHICO} onClick={() => { setVinc({ ...VINC_VACIO, contrato_id: x.id }); alternar(`vinc:${x.id}`) }}>+ Objetivo</button>
             </div>
-            {objs.length ? <div style={{ ...S.fila, marginTop: 4, gap: 6 }}>{objs.map(v => (
-              <span key={v.id} style={{ fontSize: 12, border: '1px solid #334155', borderRadius: 12, padding: '3px 10px' }}>
-                {v.objetivo?.nombre} <span style={S.sub}>· {fecha(v.desde)} a {v.hasta ? fecha(v.hasta) : 'vigente'}</span></span>
-            ))}</div> : <div style={{ ...S.sub, color: '#fbbf24' }}>Sin objetivos vinculados.</div>}
+            {objs.length ? <>
+              <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 4 }}>
+                <thead><tr>{['Objetivo', 'Servicio', 'Precio', 'Factura'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                <tbody>{objs.map(v => {
+                  const propias = tarifas.filter(t => t.objetivo_id === v.objetivo_id && !t.vigencia_hasta)
+                  const valor = grupos[v.id] ?? v.grupo_factura ?? ''
+                  return (
+                    <tr key={v.id}>
+                      <td style={S.td}>{v.objetivo?.nombre}</td>
+                      <td style={S.td}>{fecha(v.desde)} a {v.hasta ? fecha(v.hasta) : 'vigente'}</td>
+                      <td style={S.td}>{propias.length ? propias.map(t => `${t.concepto} $ ${t.precio}`).join(' · ') : <span style={S.sub}>general del contrato</span>}</td>
+                      <td style={S.td}>
+                        <input style={{ ...S.input, width: 150, padding: '4px 8px' }} list={`grupos-${x.id}`} placeholder={x.agrupacion === 'objetivo' ? 'propia' : 'con el resto'} value={valor}
+                          onChange={e => setGrupos({ ...grupos, [v.id]: e.target.value })}
+                          onBlur={() => { if (valor.trim() !== (v.grupo_factura ?? '')) correr(async () => { await rpc('fact_contrato_objetivo_grupo', { p_id: v.id, p_grupo: valor }); const { [v.id]: _, ...resto } = grupos; setGrupos(resto); await hecho() }, 'Agrupación guardada: se aplica al recalcular') }} />
+                      </td>
+                    </tr>)
+                })}</tbody>
+              </table>
+              <datalist id={`grupos-${x.id}`}>{Array.from(new Set(objs.map(v => v.grupo_factura).filter(Boolean))).map(g => <option key={g} value={g} />)}</datalist>
+              <div style={S.sub}>Factura: los objetivos con el mismo nombre (p. ej. «A») van juntos en un comprobante. Vacío = {x.agrupacion === 'objetivo' ? 'factura propia' : 'junto con los demás sin nombre'}. El precio de cada objetivo es el propio o, si no tiene, el general.</div>
+            </> : <div style={{ ...S.sub, color: '#fbbf24' }}>Sin objetivos vinculados.</div>}
             {panel === `vinc:${x.id}` && (
               <div style={FORM}>
                 <div style={{ ...GRILLA, marginTop: 0 }}>

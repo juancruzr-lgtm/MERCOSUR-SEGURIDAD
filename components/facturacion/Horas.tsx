@@ -5,20 +5,14 @@
 // No modifica ningún registro operativo: cada aprobación es una foto auditada.
 import { Fragment, useEffect, useState } from 'react'
 import { api, leer } from '@/lib/facturacion/datos'
-import { S, fecha, horas, useAccion } from './comun'
+import { avisosHoras } from '@/lib/facturacion/revision'
+import { S, horas, useAccion } from './comun'
+import DetalleHoras from './DetalleHoras'
 
 type Fila = { v: any; prop: any | null; error: string | null }
 
 /** Advertencias que conviene mirar antes de aprobar (no bloquean). */
-function avisos(v: any, r: any): string[] {
-  const h = r.horas, out: string[] = []
-  if (h.turnosFuturos > 0) out.push(`${h.turnosFuturos} turno(s) todavía no ocurrieron`)
-  if (h.turnosSinRegistro > 0) out.push(`${h.turnosSinRegistro} turno(s) sin horas reconocidas`)
-  if (h.revisar?.length) out.push(`${h.revisar.length} superposición(es) para revisión comercial`)
-  if (v.contrato?.separar_diurna_nocturna && !r.franjaDefinida) out.push('falta la franja nocturna del contrato')
-  if (r.desvio?.hayDiferencia) out.push(`Reportes cambió después de aprobar: aprobado ${horas(r.desvio.cubiertosAprobados)} h, hoy ${horas(r.desvio.cubiertosActuales)} h`)
-  return out
-}
+const avisos = (v: any, r: any) => avisosHoras(Boolean(v.contrato?.separar_diurna_nocturna), r)
 
 export default function Horas({ mes }: { mes: string }) {
   const [filas, setFilas] = useState<Fila[]>([])
@@ -104,29 +98,7 @@ export default function Horas({ mes }: { mes: string }) {
                 </tr>
                 {abierta === k && h && (
                   <tr><td style={{ ...S.td, background: '#0b1428' }} colSpan={7}>
-                    <div style={{ ...S.fila, gap: 18, fontSize: 13 }}>
-                      <span>Programadas <b>{horas(h.minutosProgramados + h.minutosCapacitacionProgramados)}</b></span>
-                      <span>Reales GPS <b>{horas(h.minutosReales)}</b></span>
-                      <span>Liquidables (Reportes) <b>{horas(h.minutosLiquidables + h.minutosCapacitacionLiquidables)}</b></span>
-                      <span>− Capacitación <b>{horas(h.minutosCapacitacionLiquidables)}</b></span>
-                      <span>Facturables <b>{horas(h.minutosCubiertos)}</b></span>
-                      {h.minutosSimultaneos > 0 && <span>incl. simultáneos <b>{horas(h.minutosSimultaneos)}</b></span>}
-                      {h.minutosSuperpuestos > 0 && <span>incl. posible relevo <b>{horas(h.minutosSuperpuestos)}</b></span>}
-                      {h.minutosDiurnos != null && <span>Diurnas / nocturnas <b>{horas(h.minutosDiurnos)} / {horas(h.minutosNocturnos)}</b></span>}
-                      {h.minutosDescubiertos > 0 && <span>Descubiertas <b>{horas(h.minutosDescubiertos)}</b>{' '}
-                        <select style={S.input} value={t} onChange={e => setTrat({ ...trat, [k]: e.target.value as 'no_facturar' | 'facturar' })}>
-                          <option value="no_facturar">no facturar</option><option value="facturar">facturar igual (con motivo)</option>
-                        </select></span>}
-                    </div>
-                    {h.revisar?.length > 0 && <div style={S.aviso}>Revisión comercial (no se descuenta nada solo): {h.revisar.map((x: any) => `${fecha(x.fecha)}: ${x.detalle}`).join(' · ')}</div>}
-                    <table style={{ borderCollapse: 'collapse', marginTop: 6, fontSize: 12 }}>
-                      <thead><tr>{['Fecha', 'Estado', 'Programado', 'Liquidable'].map(x => <th key={x} style={S.th}>{x}</th>)}</tr></thead>
-                      <tbody>{[...h.detalle].sort((a: any, b: any) => a.fecha.localeCompare(b.fecha)).map((d: any) => (
-                        <tr key={`${d.turno_id}-${d.registro_id ?? ''}`}>
-                          <td style={S.td}>{fecha(d.fecha)}</td><td style={S.td}>{d.estado}</td>
-                          <td style={S.num}>{horas(d.programados)}</td><td style={S.num}>{horas(d.cubiertos)}</td>
-                        </tr>))}</tbody>
-                    </table>
+                    <DetalleHoras h={h} trat={t} alCambiarTrat={x => setTrat({ ...trat, [k]: x })} />
                   </td></tr>
                 )}
               </Fragment>

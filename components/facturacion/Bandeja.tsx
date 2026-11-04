@@ -1,157 +1,237 @@
 'use client'
-// Bandeja de prefacturas (Gestión Económica → Facturación → Prefacturas).
-// Una fila por cliente + período + agrupación, más los contratos vigentes que
-// todavía no tienen prefactura en el mes ("pendiente de generar").
-// Preparación (borrador → revisión → aprobada → emitida) separada de entrega y portal.
-import { useEffect, useState } from 'react'
+// Prefacturas (Gestión Económica → Facturación → Prefacturas).
+// Una fila por comprobante del mes (un objetivo o un grupo, según Clientes y
+// contratos) con las horas propuestas de Reportes al lado: Aceptar · Nota · Ver
+// turnos en la misma fila, y "Aceptar todos" para lo que no tiene nada que mirar.
+// Diferencias, falta de tarifa o inconsistencias quedan marcadas y no entran en
+// "Aceptar todos". Preparación (borrador → revisión → aprobada → emitida) separada de entrega y portal.
+import { Fragment, useEffect, useState } from 'react'
 import { abrirDocumento, api, estadoVisible, leer, rpc, subirDocumento, ESTADO_ENTREGA, ESTADO_PORTAL, ESTADO_PREPARACION, MODALIDADES, TIPOS_DOC } from '@/lib/facturacion/datos'
 import { datosComprobantesEnLinea, validarRegistroManual } from '@/lib/facturacion/emision-manual'
 import { compararConFacturaReal, etiquetaFactura } from '@/lib/facturacion/control'
+import { agruparObjetivos, tarifasParaObjetivo } from '@/lib/facturacion/prefacturacion'
+import {
+  elegibleParaAceptarTodos, filaPendiente, filasExcel, motivosRevision, nombreComprobante, objetivoAlDia, objetivosParaAceptar, propuestaDeFila, sinHoras,
+  type FilaRevision, type TratamientoDescubiertos,
+} from '@/lib/facturacion/revision'
 import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
+import DetalleHoras from './DetalleHoras'
+import { rangoFechasMes } from '@/lib/periodo-argentina'
 
 const ESTADOS_FILTRO: Array<[string, string]> = [
+  ['para_revisar', 'Para revisar'], ['sin_aceptar', 'Horas sin aceptar'],
   ['pendiente_generar', 'Pendiente de generar'], ['en_preparacion', 'Borrador'], ['requiere_revision', 'Requiere revisión'],
   ['lista_aprobar', 'Lista para aprobar'], ['aprobada_emitir', 'Aprobada · pendiente de emisión'], ['emitida', 'Emitida'],
   ['esperando_requisitos', 'Bloqueada por información faltante'],
 ]
 const COLOR_VISIBLE: Record<string, string> = { ...COLOR_ESTADO, pendiente_generar: '#334155', requiere_revision: '#b45309', lista_aprobar: '#2563eb' }
+const CHICO: React.CSSProperties = { ...S.btn2, padding: '3px 9px', fontSize: 12 }
 
 type Config = { emision: any; modulos: any }
+type Base = Omit<FilaRevision, 'objetivos' | 'prefactura'> & {
+  prefactura: any | null
+  clave: string; contratoId: string; cliente: any; nombre: string; incluye: string[]; huerfana: boolean
+  objetivos: Array<{ objetivoId: string; nombre: string }>
+}
+const claveObj = (contratoId: string, objetivoId: string) => `${contratoId}:${objetivoId}`
 
 export default function Bandeja({ mes, usuarios, config }: { mes: string; usuarios: Array<{ id: string; nombre: string }>; config: Config }) {
-  const [filas, setFilas] = useState<any[]>([])
-  const [sinGenerar, setSinGenerar] = useState<any[]>([])
+  const [base, setBase] = useState<Base[]>([])
+  const [props, setProps] = useState<Record<string, { propuesta: any; error: string | null }>>({})
+  const [aprob, setAprob] = useState<any[]>([])
+  const [trat, setTrat] = useState<Record<string, TratamientoDescubiertos>>({})
+  const [notas, setNotas] = useState<Record<string, string>>({})
+  const [verNota, setVerNota] = useState<string | null>(null)
+  const [verTurnos, setVerTurnos] = useState<string | null>(null)
   const [sel, setSel] = useState<string | null>(null)
   const [filtro, setFiltro] = useState('')
+  const [calculando, setCalculando] = useState(false)
   const { ocupado, correr, Mensaje } = useAccion()
 
-  async function cargar() {
-    const [pref, contratos, vincs] = await Promise.all([
+  async function cargar(conPropuestas = true) {
+    const { desde: inicioMes, ultimoDia: finMes } = rangoFechasMes(mes)
+    const [pref, contratos, vincs, tarifas, aps] = await Promise.all([
       leer('fact_prefacturas', q => q.eq('periodo_mes', mes).neq('estado', 'descartada').order('created_at'),
         '*, cliente:fact_clientes(razon_social, cuit, condicion_iva), objetivo:objetivos(nombre), oc:fact_ordenes_compra(numero, tipo), contrato:fact_contratos(nombre, modalidad, agrupacion, requiere_portal, envio_conjunto_planilla, requisitos)'),
-      leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, agrupacion, cliente:fact_clientes(razon_social, cuit)'),
-      leer('fact_contrato_objetivos', q => q.is('anulado_at', null), 'contrato_id, objetivo_id, objetivo:objetivos(nombre)'),
-    ])
-    // Cliente y después objetivo: todos los objetivos de un cliente quedan juntos.
-    const nombre = (x: any) => `${x.cliente?.razon_social ?? ''} ${x.objetivo?.nombre ?? x.nombre ?? x.contrato?.nombre ?? ''}`
-    const objsDe = (contratoId: string) => vincs.filter(v => v.contrato_id === contratoId).map(v => v.objetivo?.nombre).filter(Boolean).sort()
-    setFilas(pref.map(p => ({ ...p, incluye: p.objetivo_id ? [] : objsDe(p.contrato_id) })).sort((a, b) => nombre(a).localeCompare(nombre(b))))
-    // Pendientes de generar: por objetivo cuando el contrato factura cada objetivo aparte.
-    setSinGenerar(contratos.flatMap(k => k.agrupacion === 'objetivo'
-      ? vincs.filter(v => v.contrato_id === k.id && !pref.some(p => p.contrato_id === k.id && p.objetivo_id === v.objetivo_id))
-        .map(v => ({ ...k, clave: `${k.id}:${v.objetivo_id}`, objetivo: v.objetivo }))
-      : pref.some(p => p.contrato_id === k.id) ? [] : [{ ...k, clave: k.id, incluye: objsDe(k.id) }])
-      .sort((a, b) => nombre(a).localeCompare(nombre(b))))
-  }
-  useEffect(() => { correr(cargar) }, [mes]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const visibles = filas.filter(f => !filtro || estadoVisible(f).clave === filtro || f.estado === filtro)
-  const actual = filas.find(f => f.id === sel)
-  const tarifa = (f: any) => {
-    const ls = (f.lineas ?? []) as any[]
-    return ls.length ? ls.map(l => `${l.concepto}: ${l.precio}`).join(' · ') : '—'
-  }
-
-  // Un paso: toma las horas de la app (lo mismo que se liquida) para los objetivos
-  // que todavía no tienen horas aprobadas en el mes, y genera horas × precio.
-  async function calcularDesdeLaApp() {
-    const [vinc, aprob] = await Promise.all([
-      leer('fact_contrato_objetivos', q => q.is('anulado_at', null), 'contrato_id, objetivo_id, objetivo:objetivos(nombre), contrato:fact_contratos(estado)'),
+      leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, agrupacion, separar_diurna_nocturna, cliente:fact_clientes(razon_social, cuit)'),
+      leer('fact_contrato_objetivos', q => q.is('anulado_at', null), '*, objetivo:objetivos(nombre)'),
+      leer('fact_tarifas', q => q.lte('vigencia_desde', finMes).or(`vigencia_hasta.is.null,vigencia_hasta.gte.${inicioMes}`).order('vigencia_desde', { ascending: false })),
       leer('fact_horas_aprobaciones', q => q.eq('estado', 'aprobada').order('aprobado_at', { ascending: false }).limit(1000)),
     ])
-    const problemas: string[] = []
-    for (const v of vinc.filter(x => x.contrato?.estado === 'vigente')) {
-      // Mismo criterio que la pestaña Horas: lo ya aprobado (o revisado a mano) no se toca.
-      if (aprob.some(a => a.objetivo_id === v.objetivo_id && a.contrato_id === v.contrato_id
-        && a.periodo_desde.slice(0, 7) <= mes && a.periodo_hasta_excl.slice(0, 7) >= mes)) continue
-      try { await api('horas', { accion: 'aprobar', contrato_id: v.contrato_id, objetivo_id: v.objetivo_id, mes, tratamiento_descubiertos: 'no_facturar' }) }
-      catch (e: any) { problemas.push(`${v.objetivo?.nombre}: ${e?.message}`) }
+    const rs: Base[] = []
+    for (const k of contratos) {
+      const vs = vincs.filter(v => v.contrato_id === k.id && (!v.hasta || v.hasta >= inicioMes) && (!v.desde || v.desde <= finMes))
+      for (const g of agruparObjetivos<any>(k, vs)) {
+        const nombres = g.objs.map((v: any) => v.objetivo?.nombre ?? v.objetivo_id)
+        rs.push({
+          clave: `${k.id}|${g.clave}`, contratoId: k.id, cliente: k.cliente, modalidad: k.modalidad, separarDiurnaNocturna: Boolean(k.separar_diurna_nocturna),
+          tarifas: tarifas.filter(t => t.contrato_id === k.id), prefactura: pref.find(p => p.contrato_id === k.id && p.agrupacion_clave === g.clave) ?? null,
+          nombre: g.objs.length === 1 ? nombres[0] : g.grupo ?? k.nombre, incluye: g.objs.length > 1 ? nombres : [], huerfana: false,
+          objetivos: g.objs.map((v: any) => ({ objetivoId: v.objetivo_id, nombre: v.objetivo?.nombre ?? v.objetivo_id })),
+        })
+      }
     }
-    const r = await api('prefacturas', { mes })
-    await cargar()
-    const errores = [...problemas, ...(r.errores ?? [])]
-    if (errores.length) throw new Error(`Calculadas ${r.creadas + r.actualizadas}. Revisar: ${errores.join(' · ')}`)
+    // Prefacturas vivas que ya no corresponden a la agrupación actual (p. ej. tras reagrupar): se muestran para descartarlas.
+    for (const p of pref) if (!rs.some(r => r.prefactura === p)) rs.push({
+      clave: `pref|${p.id}`, contratoId: p.contrato_id, cliente: p.cliente, modalidad: p.contrato?.modalidad ?? 'por_hora', separarDiurnaNocturna: false,
+      tarifas: [], prefactura: p, nombre: nombreComprobante(p), incluye: [], huerfana: true, objetivos: [],
+    })
+    rs.sort((a, b) => `${a.cliente?.razon_social} ${a.nombre}`.localeCompare(`${b.cliente?.razon_social} ${b.nombre}`))
+    setBase(rs)
+    setAprob(aps)
+    if (!conPropuestas) return
+    // Propuestas de Reportes de cada objetivo con horas, de a 4 para no saturar el servidor.
+    const pendientes = rs.filter(r => !sinHoras(r)).flatMap(r => r.objetivos.map(o => ({ contratoId: r.contratoId, objetivoId: o.objetivoId })))
+    setProps({})
+    setCalculando(true)
+    const acum: Record<string, { propuesta: any; error: string | null }> = {}
+    let i = 0
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      while (i < pendientes.length) {
+        const x = pendientes[i++]
+        try { acum[claveObj(x.contratoId, x.objetivoId)] = { propuesta: await api('horas', { accion: 'proponer', contrato_id: x.contratoId, objetivo_id: x.objetivoId, mes }), error: null } }
+        catch (e: any) { acum[claveObj(x.contratoId, x.objetivoId)] = { propuesta: null, error: e?.message ?? 'No se pudo calcular' } }
+        setProps({ ...acum })
+      }
+    }))
+    setCalculando(false)
+  }
+  useEffect(() => { correr(() => cargar()) }, [mes]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const aprobadaDe = (contratoId: string, objetivoId: string) => aprob.find(a => a.objetivo_id === objetivoId && a.contrato_id === contratoId
+    && a.periodo_desde.slice(0, 7) <= mes && a.periodo_hasta_excl.slice(0, 7) >= mes) ?? null
+  const filas = base.map(b => ({
+    ...b, objetivos: b.objetivos.map(o => {
+      const k = claveObj(b.contratoId, o.objetivoId)
+      return { ...o, propuesta: props[k]?.propuesta ?? null, error: props[k]?.error ?? null, aprobada: aprobadaDe(b.contratoId, o.objetivoId), tratamiento: trat[k] }
+    }),
+  }))
+  type Fila = (typeof filas)[number]
+
+  async function aceptar(f: Fila) {
+    for (const o of objetivosParaAceptar(f)) {
+      await api('horas', { accion: 'aprobar', contrato_id: f.contratoId, objetivo_id: o.objetivoId, mes, reemplazar: Boolean(o.aprobada),
+        tratamiento_descubiertos: o.tratamiento ?? 'no_facturar', notas: notas[f.clave] ?? '' })
+    }
+  }
+
+  const motivos = new Map(filas.map(f => [f.clave, f.huerfana ? ['Ya no corresponde a la agrupación actual: abrila y descartala'] : motivosRevision(f)]))
+  const elegibles = filas.filter(f => !f.huerfana && elegibleParaAceptarTodos(f))
+  const visibles = filas.filter(f => {
+    if (!filtro) return true
+    if (filtro === 'para_revisar') return (motivos.get(f.clave) ?? []).length > 0
+    if (filtro === 'sin_aceptar') return filaPendiente(f)
+    return estadoVisible(f.prefactura).clave === filtro || f.prefactura?.estado === filtro
+  })
+  const actual = filas.find(f => f.prefactura?.id === sel)?.prefactura
+  const precio = (f: Fila) => {
+    const ls = (f.prefactura?.lineas ?? []) as any[]
+    if (ls.length) return ls.filter(l => l.tarifaId).map(l => `${l.concepto}: $ ${l.precio}`)
+    const ids = f.objetivos.length ? f.objetivos.map(o => o.objetivoId) : [null]
+    return Array.from(new Set(ids.flatMap(id => tarifasParaObjetivo(f.tarifas, id).map(t => `${t.concepto}: $ ${t.precio}`))))
   }
 
   return (
     <div>
       <div style={{ ...S.card, ...S.fila }}>
-        <button style={S.btn} disabled={ocupado} onClick={() => correr(calcularDesdeLaApp, 'Prefacturas calculadas: horas de la app × precio del contrato')}>Calcular {mes} con las horas de la app</button>
-        <button style={S.btn2} disabled={ocupado || !filas.length} onClick={() => correr(() => exportarExcel(mes, visibles), 'Excel descargado')}>Descargar Excel</button>
+        <button style={S.btn} disabled={ocupado || calculando || !elegibles.length} onClick={() => {
+          if (!confirm(`Aceptar las horas propuestas de ${elegibles.length} comprobante(s) sin nada para revisar? Lo ya aceptado y lo marcado para revisar no se toca.`)) return
+          correr(async () => {
+            const errores: string[] = []
+            for (const f of elegibles) { try { await aceptar(f) } catch (e: any) { errores.push(`${f.cliente?.razon_social} · ${f.nombre}: ${e?.message}`) } }
+            const r = await api('prefacturas', { mes })
+            await cargar(false)
+            const todos = [...errores, ...(r.errores ?? [])]
+            if (todos.length) throw new Error(`Revisar: ${todos.join(' · ')}`)
+          }, 'Horas aceptadas y prefacturas recalculadas')
+        }}>{calculando ? 'Calculando propuestas…' : `Aceptar todos (${elegibles.length})`}</button>
+        <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
+          const r = await api('prefacturas', { mes }); await cargar(false)
+          if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
+        }, 'Prefacturas recalculadas')}>Recalcular precios</button>
+        <button style={S.btn2} disabled={ocupado || !visibles.some(f => f.prefactura)} onClick={() => correr(() => exportarExcel(mes, visibles.filter(f => f.prefactura).map(f => ({ ...f.prefactura, grupo: f.incluye.length ? f.nombre : null }))), 'Excel descargado')}>Descargar Excel</button>
         <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
-          <option value="">Todos los estados</option>
+          <option value="">Todos</option>
           {ESTADOS_FILTRO.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <span style={S.sub}>Horas = las mismas que se liquidan (programado cubierto + lo aceptado por el supervisor). Recalcular no pisa el texto editado.</span>
+        <span style={S.sub}>Horas de Reportes (sin capacitación). Lo marcado en amarillo se revisa antes de aceptar.</span>
         <Mensaje />
       </div>
 
       <div style={{ ...S.card, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>
-            {['Cliente', 'Objetivo / agrupación', 'Período', 'Modalidad', 'Hs program.', 'Hs cubiertas', 'Hs facturables', 'Tarifa', 'Neto', 'IVA', 'Total', 'OC', 'Pendiente / documentación', 'Estado', 'Responsable'].map(h => <th key={h} style={S.th}>{h}</th>)}
-          </tr></thead>
+          <thead><tr>{['Cliente', 'Objetivo o grupo', 'Horas propuestas', '', 'Precio', 'Importe', 'Estado', 'Acción'].map((h, i) => <th key={i} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>
             {visibles.map(f => {
-              const ev = estadoVisible(f)
+              const prop = propuestaDeFila(f), mot = motivos.get(f.clave) ?? [], p = f.prefactura
+              const alDia = f.objetivos.length > 0 && f.objetivos.every(objetivoAlDia)
+              const reemplaza = f.objetivos.some(o => o.aprobada && !objetivoAlDia(o))
+              const bloqueada = p && ['aprobada_emitir', 'emitida'].includes(p.estado)
+              const aprobadas = f.objetivos.reduce((a, o) => a + (o.aprobada?.minutos_aprobados ?? 0), 0)
+              const ev = estadoVisible(p)
               return (
-                <tr key={f.id} onClick={() => setSel(f.id === sel ? null : f.id)} style={{ cursor: 'pointer', background: f.id === sel ? '#111c35' : undefined }}>
-                  <td style={S.td}>{f.cliente?.razon_social}<div style={S.sub}>{f.cliente?.cuit ?? 'sin CUIT'}</div></td>
-                  <td style={S.td}>{f.objetivo?.nombre ?? f.contrato?.nombre ?? '—'}{f.incluye?.length > 1 && <div style={S.sub}>una factura por: {f.incluye.join(' + ')}</div>}</td>
-                  <td style={S.td}>{fecha(f.periodo_desde)} – {fecha(addDias(f.periodo_hasta_excl, -1))}</td>
-                  <td style={S.td}>{MODALIDADES[f.contrato?.modalidad] ?? '—'}</td>
-                  <td style={S.num}>{horas(f.minutos_programados)}</td>
-                  <td style={S.num}>{horas(f.minutos_cubiertos)}</td>
-                  <td style={S.num}>{horas(f.minutos_aprobados)}{f.minutos_descubiertos ? <div style={S.sub}>descub. {horas(f.minutos_descubiertos)}</div> : null}</td>
-                  <td style={S.td}><span style={{ fontSize: 12 }}>{tarifa(f)}</span></td>
-                  <td style={S.num}>{pesos(f.neto_c)}</td>
-                  <td style={S.num}>{pesos(f.iva_c)}</td>
-                  <td style={S.num}>{pesos(f.total_c)}</td>
-                  <td style={S.td}>{f.oc?.numero ?? '—'}</td>
-                  <td style={S.td}>{(f.requisitos ?? []).map((r: any, i: number) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {r.detalle}</div>)}
-                    {!f.requisitos?.length && <span style={S.sub}>{f.proxima_accion ?? '—'}</span>}
-                    <div style={S.sub}>{ESTADO_ENTREGA[f.estado_entrega]}{f.estado_portal !== 'no_requiere' ? ` · ${ESTADO_PORTAL[f.estado_portal]}` : ''}</div></td>
-                  <td style={S.td}><Etiqueta texto={ev.texto} color={COLOR_VISIBLE[ev.clave]} /></td>
-                  <td style={S.td}>{usuarios.find(u => u.id === f.responsable_id)?.nombre ?? '—'}</td>
-                </tr>
+                <Fragment key={f.clave}>
+                  <tr style={{ background: verTurnos === f.clave || sel === p?.id ? '#111c35' : undefined }}>
+                    <td style={S.td}>{f.cliente?.razon_social}<div style={S.sub}>{f.cliente?.cuit ?? 'sin CUIT'}</div></td>
+                    <td style={S.td}>{f.nombre}{f.incluye.length > 0 && <div style={S.sub}>{f.incluye.join(' + ')}</div>}</td>
+                    <td style={S.num}>{sinHoras(f) ? <span style={S.sub}>abono</span> : f.huerfana ? '—' : prop == null ? <span style={S.sub}>{f.objetivos.some(o => o.error) ? 'error' : '…'}</span> : <b>{horas(prop)} h</b>}
+                      {aprobadas > 0 && <div style={{ fontSize: 12, color: alDia ? '#4ade80' : '#fbbf24' }}>aceptadas {horas(aprobadas)} h</div>}</td>
+                    <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
+                      {!sinHoras(f) && !f.huerfana && <>
+                        <button style={alDia ? CHICO : { ...S.btn, padding: '3px 10px', fontSize: 12 }} disabled={ocupado || prop == null || alDia || Boolean(bloqueada)} onClick={() => {
+                          if (mot.length && !confirm(`Antes de aceptar, revisá:\n• ${mot.join('\n• ')}\n\n¿Aceptar igual?`)) return
+                          if (reemplaza && !confirm('Ya hay horas aceptadas: ¿reemplazarlas por la propuesta actual?')) return
+                          correr(async () => {
+                            await aceptar(f)
+                            const r = await api('prefacturas', { mes, contrato_id: f.contratoId })
+                            await cargar(false)
+                            if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
+                          }, 'Horas aceptadas')
+                        }}>{alDia ? 'Aceptado ✓' : reemplaza ? 'Reemplazar' : 'Aceptar'}</button>{' '}
+                        <button style={CHICO} onClick={() => setVerNota(verNota === f.clave ? null : f.clave)}>{notas[f.clave] ? 'Nota ✎' : 'Nota'}</button>{' '}
+                        <button style={CHICO} onClick={() => setVerTurnos(verTurnos === f.clave ? null : f.clave)}>{verTurnos === f.clave ? 'Ocultar turnos' : 'Ver turnos'}</button>
+                        {verNota === f.clave && <div style={{ marginTop: 6 }}><input autoFocus style={{ ...S.input, width: '100%', boxSizing: 'border-box' }} placeholder="Motivo de la corrección u observación"
+                          value={notas[f.clave] ?? ''} onChange={e => setNotas({ ...notas, [f.clave]: e.target.value })} /></div>}
+                      </>}
+                    </td>
+                    <td style={S.td}>{precio(f).map((x, i) => <div key={i} style={{ fontSize: 12 }}>{x}</div>)}</td>
+                    <td style={S.num}>{pesos(p?.total_c)}</td>
+                    <td style={S.td}><Etiqueta texto={ev.texto} color={COLOR_VISIBLE[ev.clave]} />
+                      {mot.map((m, i) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {m}</div>)}
+                      {!mot.length && (p?.requisitos ?? []).map((r: any, i: number) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {r.detalle}</div>)}</td>
+                    <td style={S.td}>{p ? <button style={CHICO} onClick={() => setSel(sel === p.id ? null : p.id)}>{sel === p.id ? 'Cerrar' : 'Abrir'}</button> : <span style={S.sub}>sin generar</span>}</td>
+                  </tr>
+                  {verTurnos === f.clave && (
+                    <tr><td colSpan={8} style={{ ...S.td, background: '#0b1428' }}>
+                      {f.objetivos.map(o => {
+                        const k = claveObj(f.contratoId, o.objetivoId)
+                        return (
+                          <div key={o.objetivoId} style={{ marginBottom: 10 }}>
+                            {f.objetivos.length > 1 && <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{o.nombre}</div>}
+                            {o.error ? <span style={S.err}>{o.error}</span> : o.propuesta ? <DetalleHoras h={o.propuesta.horas} trat={o.tratamiento} alCambiarTrat={t => setTrat({ ...trat, [k]: t })} /> : <span style={S.sub}>Calculando…</span>}
+                          </div>
+                        )
+                      })}
+                    </td></tr>
+                  )}
+                </Fragment>
               )
             })}
-            {(!filtro || filtro === 'pendiente_generar') && sinGenerar.map(k => (
-              <tr key={`k-${k.clave}`}>
-                <td style={S.td}>{k.cliente?.razon_social}<div style={S.sub}>{k.cliente?.cuit ?? 'sin CUIT'}</div></td>
-                <td style={S.td}>{k.objetivo?.nombre ?? k.nombre}{k.incluye?.length > 1 && <div style={S.sub}>una factura por: {k.incluye.join(' + ')}</div>}</td><td style={S.td}>{mes}</td><td style={S.td}>{MODALIDADES[k.modalidad]}</td>
-                <td style={S.td} colSpan={9}><span style={S.sub}>Sin prefactura en el mes: usar “Calcular”. Si no aparece, revisar horas aprobadas y tarifa.</span></td>
-                <td style={S.td}><Etiqueta texto="Pendiente de generar" color={COLOR_VISIBLE.pendiente_generar} /></td><td style={S.td}>—</td>
-              </tr>
-            ))}
-            {!visibles.length && !sinGenerar.length && <tr><td style={S.td} colSpan={15}><span style={S.sub}>Sin contratos vigentes ni prefacturas para {mes}.</span></td></tr>}
+            {!visibles.length && <tr><td style={S.td} colSpan={8}><span style={S.sub}>Sin comprobantes para {mes}.</span></td></tr>}
           </tbody>
         </table>
       </div>
-      {actual && <Detalle p={actual} usuarios={usuarios} config={config} alCambiar={() => correr(cargar)} />}
+      {actual && <Detalle p={actual} usuarios={usuarios} config={config} alCambiar={() => correr(() => cargar(false))} />}
     </div>
   )
 }
 
-const LETRA: Record<number, string> = { 1: 'A', 6: 'B', 201: 'FCE A' }
-
-/** Prefacturas del mes en Excel: una fila por renglón (horas × precio), con totales por prefactura. */
+/** Prefacturas del mes en Excel: una fila por renglón con su precio unitario, y el total por prefactura. */
 async function exportarExcel(mes: string, filas: any[]) {
   const XLSX: any = await import('xlsx')
-  const $ = (c: unknown) => (c == null ? null : Number(c) / 100)
-  const rows: any[][] = [['Cliente', 'CUIT', 'Factura', 'Objetivo', 'Período', 'Concepto', 'Cantidad (h)', 'Precio', 'Neto', 'IVA', 'Total', 'Estado', 'Pendiente', 'Texto de la factura']]
-  for (const f of filas) {
-    const base = [f.cliente?.razon_social ?? '', f.cliente?.cuit ?? '', LETRA[f.tipo_comprobante] ?? '', f.objetivo?.nombre ?? f.contrato?.nombre ?? '',
-      `${fecha(f.periodo_desde)} – ${fecha(addDias(f.periodo_hasta_excl, -1))}`]
-    const pend = (f.requisitos ?? []).map((r: any) => r.detalle).join(' · ')
-    const lineas = (f.lineas ?? []) as any[]
-    if (!lineas.length) rows.push([...base, '', null, null, null, null, null, estadoVisible(f).texto, pend, f.texto_factura ?? ''])
-    lineas.forEach((l, i) => rows.push([...base, l.concepto, Number(l.cantidad), Number(l.precio), $(l.importes?.neto), $(l.importes?.iva), $(l.importes?.total),
-      i === 0 ? estadoVisible(f).texto : '', i === 0 ? pend : '', i === 0 ? f.texto_factura ?? '' : '']))
-    if (lineas.length > 1) rows.push([...base, 'TOTAL', null, null, $(f.neto_c), $(f.iva_c), $(f.total_c), '', '', ''])
-  }
+  const rows = filasExcel(filas, f => estadoVisible(f).texto)
   const ws = XLSX.utils.aoa_to_sheet(rows)
-  ws['!cols'] = [34, 13, 8, 24, 24, 16, 12, 12, 15, 14, 15, 26, 40, 50].map(w => ({ wch: w }))
+  ws['!cols'] = [34, 13, 8, 24, 24, 30, 12, 14, 15, 14, 15, 26, 40, 50].map(w => ({ wch: w }))
   for (let r = 1; r < rows.length; r++) for (const c of [7, 8, 9, 10]) {
     const ref = XLSX.utils.encode_cell({ r, c }); if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = '#,##0.00'
   }
