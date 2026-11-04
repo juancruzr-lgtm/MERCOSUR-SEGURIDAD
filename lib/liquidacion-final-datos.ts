@@ -624,6 +624,8 @@ interface PlanillaFinales {
   /** Rearma la planilla con correcciones adicionales por fila (para leer lo editado). */
   armar: (extra: Map<string, Record<string, number | null>>, parametros?: Partial<ParametrosLiquidacion>) => PlantillaLiquidacion
   guardados: Map<string, GuardadoFinal>
+  /** Filas de la final por identidad (BD): para pegarlas en otra planilla (libro general). */
+  filasFinal: Map<string, FilaFinalMensual>
 }
 
 /**
@@ -707,11 +709,32 @@ async function planillaFinalesDelMes(client: any, mes: string, finales: FinalFil
       mostrado: { '120003': leer(COL_FINAL.c120003), '208': leer(COL_FINAL.c208), '217': leer(COL_FINAL.c217), '212': leer(COL_FINAL.c212) },
     })
   }
-  return { data: { base, conFinal, armar, guardados }, error: null }
+  return { data: { base, conFinal, armar, guardados, filasFinal }, error: null }
 }
 
 /** Mes de la baja de cada final (las que no tienen fecha no van al Excel). */
 const mesDeFinal = (f: FinalFila) => (f.baja.fecha_baja ? f.baja.fecha_baja.slice(0, 7) : null)
+
+/**
+ * Filas de la liquidación final de un mes (por identidad BD: usuario_id, o
+ * «baja:id» si no tiene usuario), listas para pegar sus columnas en OTRA planilla
+ * con `anexarColumnasFinal` — lo usa el libro general para mostrar, en la misma
+ * solapa del mes, el desglose de conceptos de cada baja ya liquidada. Sólo lee.
+ * Devuelve el mapa vacío si el mes no tiene finales calculadas.
+ */
+export async function filasFinalMensualDelMes(
+  client: any,
+  mes: string,
+): Promise<{ filas: Map<string, FilaFinalMensual>; cantidad: number; error: string | null }> {
+  const vacio = { filas: new Map<string, FilaFinalMensual>(), cantidad: 0 }
+  const { data: finales, error } = await listarFinales(client)
+  if (error) return { ...vacio, error }
+  const delMes = (finales ?? []).filter(f => mesDeFinal(f) === mes && f.calculo && f.estado !== 'anulada')
+  if (!delMes.length) return { ...vacio, error: null }
+  const r = await planillaFinalesDelMes(client, mes, delMes)
+  if (r.error || !r.data) return { ...vacio, error: r.error ?? 'No se pudo armar la planilla de finales.' }
+  return { filas: r.data.filasFinal, cantidad: delMes.length, error: null }
+}
 
 /**
  * EXCEL DE TRABAJO de las finales con el formato del mensual: una solapa por mes

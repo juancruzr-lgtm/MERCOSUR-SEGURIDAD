@@ -128,7 +128,16 @@ const fechaTexto = (iso: string | null) => (iso ? iso.slice(0, 10).split('-').re
  * liquidación final. Las de 120003/208/217/212 llevan la fórmula (con su
  * resultado) salvo que tengan un ajuste manual: ahí va el importe del ajuste.
  */
-export function anexarColumnasFinal(plantilla: PlantillaLiquidacion, filas: Map<string, FilaFinalMensual>): PlantillaLiquidacion {
+export function anexarColumnasFinal(plantilla: PlantillaLiquidacion, filas: Map<string, FilaFinalMensual>, desde: string = COL_FINAL.fechaBaja): PlantillaLiquidacion {
+  // Las columnas de la final arrancan en `desde` (por defecto BI, el formato que
+  // lee el reimport del lote). El libro general las pega a la derecha de sus
+  // propias columnas pasando otro `desde`; ahí sólo se consultan, no se reimportan.
+  const off = NUMERO(desde) - NUMERO(COL_FINAL.fechaBaja)
+  const COL = (off === 0
+    ? COL_FINAL
+    : Object.fromEntries(Object.entries(COL_FINAL).map(([k, v]) => [k, LETRA(NUMERO(v as string) + off)]))) as typeof COL_FINAL
+  const conceptos = CONCEPTOS_FINAL.map(c => ({ codigo: c.codigo, col: COL[`c${c.codigo}` as keyof typeof COL] as string }))
+  const columnasFinal: ColumnaPlantilla[] = COLUMNAS_FINAL.map(c => ({ ...c, col: LETRA(NUMERO(c.col) + off) }))
   const porRef = new Map(plantilla.celdas.map(c => [c.ref, c.v]))
   const num = (ref: string) => { const v = Number(porRef.get(ref) ?? 0); return Number.isFinite(v) ? v : 0 }
   const B1 = num('B1'), C3 = num('C3'), AP6 = num('AP6')
@@ -136,18 +145,18 @@ export function anexarColumnasFinal(plantilla: PlantillaLiquidacion, filas: Map<
   const put = (ref: string, v?: string | number, f?: string) => celdas.push(f !== undefined ? { ref, v, f } : { ref, v })
   const enc = plantilla.estilos.encabezado
 
-  put(`${COL_FINAL.fechaBaja}${enc - 1}`, 'LIQUIDACIÓN FINAL →')
-  put(`${COL_FINAL.vacSaldo}${enc - 1}`, 'editable')
-  put(`${COL_FINAL.vacTomadas}${enc - 1}`, 'editable')
-  put(`${COL_FINAL.periodo}${enc - 1}`, 'editable')
-  put(`${COL_FINAL.motivo}${enc - 1}`, 'opcional')
+  put(`${COL.fechaBaja}${enc - 1}`, 'LIQUIDACIÓN FINAL →')
+  put(`${COL.vacSaldo}${enc - 1}`, 'editable')
+  put(`${COL.vacTomadas}${enc - 1}`, 'editable')
+  put(`${COL.periodo}${enc - 1}`, 'editable')
+  put(`${COL.motivo}${enc - 1}`, 'opcional')
   const titulos: [string, string][] = [
-    [COL_FINAL.fechaBaja, 'FECHA BAJA'], [COL_FINAL.causa, 'CAUSA'], [COL_FINAL.vacSaldo, 'VAC. SALDO'],
-    [COL_FINAL.vacTomadas, 'VAC. TOMADAS'], [COL_FINAL.noGozadas, 'VAC. NO GOZADAS'], [COL_FINAL.diasSAC, 'DÍAS SAC'],
-    [COL_FINAL.c120003, '120003 SAC PROP.'], [COL_FINAL.c208, '208 VAC. NO GOZ.'], [COL_FINAL.c217, '217 SAC VAC.'],
-    [COL_FINAL.hsExtra, 'HS EXTRA'], [COL_FINAL.extrasPagadas, 'EXTRAS PAGADAS'], [COL_FINAL.c212, '212 EXTRAS'],
-    [COL_FINAL.total, 'TOTAL A VISUAL'], [COL_FINAL.periodo, 'PERÍODO VISUAL'], [COL_FINAL.motivo, 'NOTA (opcional)'],
-    [COL_FINAL.avisos, 'PENDIENTES / AVISOS'], [COL_FINAL.finalId, MARCA_FINAL_ID], [COL_FINAL.version, 'version'],
+    [COL.fechaBaja, 'FECHA BAJA'], [COL.causa, 'CAUSA'], [COL.vacSaldo, 'VAC. SALDO'],
+    [COL.vacTomadas, 'VAC. TOMADAS'], [COL.noGozadas, 'VAC. NO GOZADAS'], [COL.diasSAC, 'DÍAS SAC'],
+    [COL.c120003, '120003 SAC PROP.'], [COL.c208, '208 VAC. NO GOZ.'], [COL.c217, '217 SAC VAC.'],
+    [COL.hsExtra, 'HS EXTRA'], [COL.extrasPagadas, 'EXTRAS PAGADAS'], [COL.c212, '212 EXTRAS'],
+    [COL.total, 'TOTAL A VISUAL'], [COL.periodo, 'PERÍODO VISUAL'], [COL.motivo, 'NOTA (opcional)'],
+    [COL.avisos, 'PENDIENTES / AVISOS'], [COL.finalId, MARCA_FINAL_ID], [COL.version, 'version'],
   ]
   for (const [col, t] of titulos) put(`${col}${enc}`, t)
 
@@ -156,27 +165,27 @@ export function anexarColumnasFinal(plantilla: PlantillaLiquidacion, filas: Map<
     const f = filas.get(uid)
     if (!f) continue
     const avisos = [...f.avisos]
-    put(`${COL_FINAL.fechaBaja}${r}`, fechaTexto(f.fechaBaja))
-    put(`${COL_FINAL.causa}${r}`, f.causa ?? '')
-    if (f.vacSaldo != null) put(`${COL_FINAL.vacSaldo}${r}`, f.vacSaldo)
-    if (f.vacTomadas != null) put(`${COL_FINAL.vacTomadas}${r}`, f.vacTomadas)
+    put(`${COL.fechaBaja}${r}`, fechaTexto(f.fechaBaja))
+    put(`${COL.causa}${r}`, f.causa ?? '')
+    if (f.vacSaldo != null) put(`${COL.vacSaldo}${r}`, f.vacSaldo)
+    if (f.vacTomadas != null) put(`${COL.vacTomadas}${r}`, f.vacTomadas)
     const noGoz = f.vacSaldo != null && f.vacTomadas != null ? redondear(f.vacSaldo - f.vacTomadas, 4) : null
-    put(`${COL_FINAL.noGozadas}${r}`, noGoz ?? '', `IF(OR(${COL_FINAL.vacSaldo}${r}="",${COL_FINAL.vacTomadas}${r}=""),"",${COL_FINAL.vacSaldo}${r}-${COL_FINAL.vacTomadas}${r})`)
-    if (f.diasSAC != null) put(`${COL_FINAL.diasSAC}${r}`, f.diasSAC)
+    put(`${COL.noGozadas}${r}`, noGoz ?? '', `IF(OR(${COL.vacSaldo}${r}="",${COL.vacTomadas}${r}=""),"",${COL.vacSaldo}${r}-${COL.vacTomadas}${r})`)
+    if (f.diasSAC != null) put(`${COL.diasSAC}${r}`, f.diasSAC)
 
     const valores: Record<CodigoFinal, number> = { '120003': 0, '208': 0, '217': 0, '212': 0 }
     const horas = f.sueldoFijo ? 0 : num(`AL${r}`)
     const formulas: Record<CodigoFinal, { f: string; v: number } | null> = f.sueldoFijo
       ? { '120003': null, '208': null, '217': null, '212': null }
       : {
-          '120003': { f: `IF(${COL_FINAL.diasSAC}${r}="",0,ROUND(($B$1/200*150)/365*${COL_FINAL.diasSAC}${r},2))`, v: f.diasSAC != null ? redondear((B1 / 200 * 150) / 365 * f.diasSAC) : 0 },
-          '208': { f: `IF(${COL_FINAL.noGozadas}${r}="",0,ROUND(${COL_FINAL.noGozadas}${r}*$C$3,2))`, v: noGoz != null && noGoz > 0 ? redondear(noGoz * C3) : 0 },
-          '217': { f: `IF(${COL_FINAL.noGozadas}${r}="",0,ROUND($B$1/365*${COL_FINAL.noGozadas}${r},2))`, v: noGoz != null && noGoz > 0 ? redondear(B1 / 365 * noGoz) : 0 },
-          '212': { f: `ROUND(MAX(0,${COL_FINAL.hsExtra}${r}*$AP$6-${COL_FINAL.extrasPagadas}${r}),2)`, v: redondear(Math.max(0, horas * AP6 - f.extrasPagadas)) },
+          '120003': { f: `IF(${COL.diasSAC}${r}="",0,ROUND(($B$1/200*150)/365*${COL.diasSAC}${r},2))`, v: f.diasSAC != null ? redondear((B1 / 200 * 150) / 365 * f.diasSAC) : 0 },
+          '208': { f: `IF(${COL.noGozadas}${r}="",0,ROUND(${COL.noGozadas}${r}*$C$3,2))`, v: noGoz != null && noGoz > 0 ? redondear(noGoz * C3) : 0 },
+          '217': { f: `IF(${COL.noGozadas}${r}="",0,ROUND($B$1/365*${COL.noGozadas}${r},2))`, v: noGoz != null && noGoz > 0 ? redondear(B1 / 365 * noGoz) : 0 },
+          '212': { f: `ROUND(MAX(0,${COL.hsExtra}${r}*$AP$6-${COL.extrasPagadas}${r}),2)`, v: redondear(Math.max(0, horas * AP6 - f.extrasPagadas)) },
         }
-    put(`${COL_FINAL.hsExtra}${r}`, horas, f.sueldoFijo ? undefined : `AL${r}`)
-    put(`${COL_FINAL.extrasPagadas}${r}`, f.extrasPagadas)
-    for (const c of CONCEPTOS_FINAL) {
+    put(`${COL.hsExtra}${r}`, horas, f.sueldoFijo ? undefined : `AL${r}`)
+    put(`${COL.extrasPagadas}${r}`, f.extrasPagadas)
+    for (const c of conceptos) {
       const aj = f.ajustados[c.codigo]
       const fx = formulas[c.codigo]
       if (aj != null) { valores[c.codigo] = aj; put(`${c.col}${r}`, aj); avisos.push(`${c.codigo} con ajuste manual: ${aj}.`) }
@@ -184,28 +193,28 @@ export function anexarColumnasFinal(plantilla: PlantillaLiquidacion, filas: Map<
     }
     const suma = redondear(COLUMNAS_TOTAL.reduce((s, col) => s + num(`${col}${r}`), 0) + Object.values(valores).reduce((s, v) => s + v, 0))
     if (Math.abs(suma - f.totalApp) < 0.01) {
-      put(`${COL_FINAL.total}${r}`, f.totalApp, [...COLUMNAS_TOTAL.map(c => `${c}${r}`), ...CONCEPTOS_FINAL.map(c => `${c.col}${r}`)].join('+'))
+      put(`${COL.total}${r}`, f.totalApp, [...COLUMNAS_TOTAL.map(c => `${c}${r}`), ...conceptos.map(c => `${c.col}${r}`)].join('+'))
     } else {
-      put(`${COL_FINAL.total}${r}`, f.totalApp)
+      put(`${COL.total}${r}`, f.totalApp)
       avisos.push(`El total a Visual (${f.totalApp}) no es la suma de la fila (${suma}): hay importes ya liquidados en el mes, ajustes o conceptos pendientes. Ver la liquidación en la app.`)
     }
-    if (f.visualPeriodo) put(`${COL_FINAL.periodo}${r}`, f.visualPeriodo)
-    if (avisos.length) put(`${COL_FINAL.avisos}${r}`, avisos.join(' · '))
-    put(`${COL_FINAL.finalId}${r}`, f.finalId)
-    put(`${COL_FINAL.version}${r}`, f.version)
+    if (f.visualPeriodo) put(`${COL.periodo}${r}`, f.visualPeriodo)
+    if (avisos.length) put(`${COL.avisos}${r}`, avisos.join(' · '))
+    put(`${COL.finalId}${r}`, f.finalId)
+    put(`${COL.version}${r}`, f.version)
   }
   // Totales de la liquidación final en la fila TOTAL GENERAL.
   const t = plantilla.estilos.total
-  for (const col of [COL_FINAL.c120003, COL_FINAL.c208, COL_FINAL.c217, COL_FINAL.c212, COL_FINAL.total]) {
+  for (const col of [COL.c120003, COL.c208, COL.c217, COL.c212, COL.total]) {
     const v = celdas.filter(c => plantilla.estilos.filasDatos.some(r => c.ref === `${col}${r}`)).reduce((s, c) => s + (Number(c.v) || 0), 0)
     put(`${col}${t}`, redondear(v), `SUM(${col}${enc + 1}:${col}${t - 1})`)
   }
   const ultima = plantilla.ref.split(':')[1].replace(/\d+$/, '')
   return {
     ...plantilla,
-    ref: `A1:${NUMERO(ultima) > NUMERO(COL_FINAL.version) ? ultima : COL_FINAL.version}${t}`,
+    ref: `A1:${NUMERO(ultima) > NUMERO(COL.version) ? ultima : COL.version}${t}`,
     celdas,
-    columnas: [...plantilla.columnas.filter(c => !COLUMNAS_FINAL.some(x => x.col === c.col)), ...COLUMNAS_FINAL],
+    columnas: [...plantilla.columnas.filter(c => !columnasFinal.some(x => x.col === c.col)), ...columnasFinal],
   }
 }
 

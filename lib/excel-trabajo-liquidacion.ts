@@ -18,6 +18,7 @@
 
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import { esCuentaGalicia } from '@/lib/cuenta-banco'
+import type { FilaFinalMensual } from '@/lib/liquidacion-final-mensual'
 import {
   construirResumenGuardia,
   plantillaLiquidacionResumenGuardia,
@@ -382,6 +383,16 @@ export async function plantillaCompletaConNeto(
   ])
   const extras = conciliarExtras(plantilla, dest.porUsuario, reg)
   const extraDe = new Map(extras.map(e => [e.usuarioId, e]))
+  // Detalle de las liquidaciones finales del mes (si hay): sus columnas se pegan a
+  // la derecha de las propias para que el libro general muestre, en la misma solapa
+  // del mes, los conceptos de cada baja ya liquidada. No rompe el Excel si fallan.
+  const finalesInfo: { filas: Map<string, FilaFinalMensual>; cantidad: number } = await (async () => {
+    try {
+      const { filasFinalMensualDelMes } = await import('@/lib/liquidacion-final-datos')
+      const rf = await filasFinalMensualDelMes(client, periodo.mes)
+      return { filas: rf.filas, cantidad: rf.cantidad }
+    } catch { return { filas: new Map<string, FilaFinalMensual>(), cantidad: 0 } }
+  })()
   const sueldoFijo = sueldoMensual ?? new Map<string, number>()
   const base = COL_A_NUM(plantilla.columnas.reduce((m, c) => (COL_A_NUM(c.col) > COL_A_NUM(m) ? c.col : m), 'A'))
   const cSueldo = NUM_A_COL(base + 1), cExtras = NUM_A_COL(base + 2), cPend = NUM_A_COL(base + 3), cObs = NUM_A_COL(base + 4)
@@ -425,14 +436,25 @@ export async function plantillaCompletaConNeto(
   if (adelantoExcede.length) avisos.push(`ATENCIÓN: ${adelantoExcede.length} adelanto(s) superan el sueldo: queda saldo a descontar.`)
   if (dest.error) avisos.push('Destino bancario de las extras no disponible: ' + dest.error)
   else avisos.push(`Extras: $${r2(totExtras)} del mes; $${r2(totPend)} pendientes de pago ($${sum(e => e.destino === 'galicia')} en el archivo Galicia, $${sum(e => e.destino === 'aparte')} a pagar aparte, $${sum(e => e.destino === 'excluido')} sin depósito; ver OBSERVACIÓN BANCO).`)
+  if (finalesInfo.cantidad > 0) avisos.push(`Incluye el detalle de ${finalesInfo.cantidad} liquidación(es) final(es) del mes (columnas «LIQUIDACIÓN FINAL →» a la derecha).`)
   celdas.push({ ref: 'C4', v: avisos.join(' ') })
 
   const columnas = [...plantilla.columnas,
     { col: cSueldo, width: 16, numFmt: 'money' as const }, { col: cExtras, width: 16, numFmt: 'money' as const },
     { col: cPend, width: 18, numFmt: 'money' as const }, { col: cObs, width: 40, numFmt: 'text' as const },
   ]
+  let plantillaResultado: PlantillaLiquidacion = { ...plantilla, celdas, columnas }
+  // Columnas de la final a la derecha de las propias (SUELDO/EXTRAS/PEND/OBS ocupan
+  // base+1..base+4; las finales arrancan en base+5). anexarColumnasFinal extiende el
+  // rango y las vuelve a dejar bien aunque el período no tenga resultado de Visual.
+  if (finalesInfo.filas.size > 0) {
+    try {
+      const { anexarColumnasFinal } = await import('@/lib/liquidacion-final-mensual')
+      plantillaResultado = anexarColumnasFinal(plantillaResultado, finalesInfo.filas, NUM_A_COL(base + 5))
+    } catch { /* si no se pueden anexar, el libro sale sin el detalle de finales */ }
+  }
   return {
-    plantilla: { ...plantilla, celdas, columnas },
+    plantilla: plantillaResultado,
     filas, netos, visualPendiente: !hayResultado, difiereDeConsolidada: difs, extras, error: null,
   }
 }
