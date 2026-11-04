@@ -5,7 +5,7 @@
 // No modifica ningún registro operativo: cada aprobación es una foto auditada.
 import { Fragment, useEffect, useState } from 'react'
 import { api, leer } from '@/lib/facturacion/datos'
-import { avisosHoras } from '@/lib/facturacion/revision'
+import { aprobacionDelMes, avisosHoras } from '@/lib/facturacion/revision'
 import { S, horas, useAccion } from './comun'
 import DetalleHoras from './DetalleHoras'
 
@@ -26,7 +26,7 @@ export default function Horas({ mes }: { mes: string }) {
 
   async function cargar() {
     const vs = (await leer('fact_contrato_objetivos', q => q.is('anulado_at', null),
-      'contrato_id, objetivo_id, desde, hasta, objetivo:objetivos(nombre), contrato:fact_contratos(nombre, estado, separar_diurna_nocturna, cliente:fact_clientes(razon_social))'))
+      'contrato_id, objetivo_id, desde, hasta, objetivo:objetivos(nombre), contrato:fact_contratos(nombre, estado, separar_diurna_nocturna, regla_periodo, dia_corte, cliente:fact_clientes(razon_social))'))
       .filter(x => x.contrato?.estado === 'vigente')
       .sort((a, b) => `${a.contrato?.cliente?.razon_social} ${a.objetivo?.nombre}`.localeCompare(`${b.contrato?.cliente?.razon_social} ${b.objetivo?.nombre}`))
     setAprobadas(await leer('fact_horas_aprobaciones', q => q.eq('estado', 'aprobada').order('aprobado_at', { ascending: false }).limit(1000)))
@@ -47,8 +47,7 @@ export default function Horas({ mes }: { mes: string }) {
   }
   useEffect(() => { correr(cargar) }, [mes]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const aprobadaDe = (v: any) => aprobadas.find(a => a.objetivo_id === v.objetivo_id && a.contrato_id === v.contrato_id
-    && a.periodo_desde.slice(0, 7) <= mes && a.periodo_hasta_excl.slice(0, 7) >= mes)
+  const aprobadaDe = (v: any) => aprobacionDelMes(aprobadas, { id: v.contrato_id, ...v.contrato }, v.objetivo_id, mes)
 
   async function aprobar(f: Fila) {
     const k = clave(f.v), t = trat[k] ?? 'no_facturar', ya = Boolean(aprobadaDe(f.v))

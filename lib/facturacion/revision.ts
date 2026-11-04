@@ -6,6 +6,7 @@
  * puede aceptar "Aceptar todos". Sin acceso a datos: sólo decide con lo que recibe.
  */
 
+import { periodoFacturacion } from './periodos'
 import { tarifasParaObjetivo, type TarifaGuardada } from './prefacturacion'
 
 const horasTexto = (m: number) => (m / 60).toFixed(2).replace(/\.?0+$/, '') || '0'
@@ -23,6 +24,22 @@ export function avisosHoras(separarDiurnaNocturna: boolean, r: any): string[] {
 }
 
 export type TratamientoDescubiertos = 'no_facturar' | 'facturar'
+
+/**
+ * Aprobación de horas de ESTE mes de facturación: el mismo período exacto que usa
+ * el servidor (mes calendario o corte del contrato). Comparar sólo "YYYY-MM"
+ * confundía la aprobación de octubre (hasta el 01/11 exclusivo) con noviembre.
+ */
+export function aprobacionDelMes<A extends { contrato_id: string; objetivo_id: string; periodo_desde: string; periodo_hasta_excl: string }>(
+  aprobaciones: A[], contrato: { id: string; regla_periodo?: string | null; dia_corte?: number | string | null }, objetivoId: string, mes: string,
+): A | null {
+  let p: { desde: string; hastaExclusivo: string }
+  try {
+    p = periodoFacturacion(contrato.regla_periodo === 'corte' ? { tipo: 'corte', diaInicio: Number(contrato.dia_corte) } : { tipo: 'mes_calendario' }, mes)
+  } catch { return null }
+  return aprobaciones.find(a => a.contrato_id === contrato.id && a.objetivo_id === objetivoId
+    && a.periodo_desde === p.desde && a.periodo_hasta_excl === p.hastaExclusivo) ?? null
+}
 
 /** Minutos que se proponen facturar: lo cubierto, más lo descubierto sólo si se decidió facturarlo. */
 export function minutosPropuestos(r: any, trat?: TratamientoDescubiertos): number | null {
