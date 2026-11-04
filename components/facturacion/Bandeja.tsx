@@ -43,19 +43,37 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
     return ls.length ? ls.map(l => `${l.concepto}: ${l.precio}`).join(' · ') : '—'
   }
 
+  // Un paso: toma las horas de la app (lo mismo que se liquida) para los objetivos
+  // que todavía no tienen horas aprobadas en el mes, y genera horas × precio.
+  async function calcularDesdeLaApp() {
+    const [vinc, aprob] = await Promise.all([
+      leer('fact_contrato_objetivos', q => q.is('anulado_at', null), 'contrato_id, objetivo_id, objetivo:objetivos(nombre), contrato:fact_contratos(estado)'),
+      leer('fact_horas_aprobaciones', q => q.eq('estado', 'aprobada').order('aprobado_at', { ascending: false }).limit(1000)),
+    ])
+    const problemas: string[] = []
+    for (const v of vinc.filter(x => x.contrato?.estado === 'vigente')) {
+      // Mismo criterio que la pestaña Horas: lo ya aprobado (o revisado a mano) no se toca.
+      if (aprob.some(a => a.objetivo_id === v.objetivo_id && a.contrato_id === v.contrato_id
+        && a.periodo_desde.slice(0, 7) <= mes && a.periodo_hasta_excl.slice(0, 7) >= mes)) continue
+      try { await api('horas', { accion: 'aprobar', contrato_id: v.contrato_id, objetivo_id: v.objetivo_id, mes, tratamiento_descubiertos: 'no_facturar' }) }
+      catch (e: any) { problemas.push(`${v.objetivo?.nombre}: ${e?.message}`) }
+    }
+    const r = await api('prefacturas', { mes })
+    await cargar()
+    const errores = [...problemas, ...(r.errores ?? [])]
+    if (errores.length) throw new Error(`Calculadas ${r.creadas + r.actualizadas}. Revisar: ${errores.join(' · ')}`)
+  }
+
   return (
     <div>
       <div style={{ ...S.card, ...S.fila }}>
-        <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
-          const r = await api('prefacturas', { mes })
-          await cargar()
-          if (r.errores?.length) throw new Error(`Generadas ${r.creadas}, actualizadas ${r.actualizadas}. Problemas: ${r.errores.join(' · ')}`)
-        }, 'Prefacturas generadas / recalculadas desde las horas aprobadas')}>Generar / recalcular todas ({mes})</button>
+        <button style={S.btn} disabled={ocupado} onClick={() => correr(calcularDesdeLaApp, 'Prefacturas calculadas: horas de la app × precio del contrato')}>Calcular {mes} con las horas de la app</button>
+        <button style={S.btn2} disabled={ocupado || !filas.length} onClick={() => correr(() => exportarExcel(mes, visibles), 'Excel descargado')}>Descargar Excel</button>
         <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
           <option value="">Todos los estados</option>
           {ESTADOS_FILTRO.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <span style={S.sub}>Horas facturables = cobertura aprobada en la pestaña Horas (no son las horas liquidables). Regenerar no pisa el texto editado.</span>
+        <span style={S.sub}>Horas = las mismas que se liquidan (programado cubierto + lo aceptado por el supervisor). Recalcular no pisa el texto editado.</span>
         <Mensaje />
       </div>
 
@@ -104,6 +122,33 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
       {actual && <Detalle p={actual} usuarios={usuarios} config={config} alCambiar={() => correr(cargar)} />}
     </div>
   )
+}
+
+const LETRA: Record<number, string> = { 1: 'A', 6: 'B', 201: 'FCE A' }
+
+/** Prefacturas del mes en Excel: una fila por renglón (horas × precio), con totales por prefactura. */
+async function exportarExcel(mes: string, filas: any[]) {
+  const XLSX: any = await import('xlsx')
+  const $ = (c: unknown) => (c == null ? null : Number(c) / 100)
+  const rows: any[][] = [['Cliente', 'CUIT', 'Factura', 'Objetivo', 'Período', 'Concepto', 'Cantidad (h)', 'Precio', 'Neto', 'IVA', 'Total', 'Estado', 'Pendiente', 'Texto de la factura']]
+  for (const f of filas) {
+    const base = [f.cliente?.razon_social ?? '', f.cliente?.cuit ?? '', LETRA[f.tipo_comprobante] ?? '', f.objetivo?.nombre ?? f.contrato?.nombre ?? '',
+      `${fecha(f.periodo_desde)} – ${fecha(addDias(f.periodo_hasta_excl, -1))}`]
+    const pend = (f.requisitos ?? []).map((r: any) => r.detalle).join(' · ')
+    const lineas = (f.lineas ?? []) as any[]
+    if (!lineas.length) rows.push([...base, '', null, null, null, null, null, estadoVisible(f).texto, pend, f.texto_factura ?? ''])
+    lineas.forEach((l, i) => rows.push([...base, l.concepto, Number(l.cantidad), Number(l.precio), $(l.importes?.neto), $(l.importes?.iva), $(l.importes?.total),
+      i === 0 ? estadoVisible(f).texto : '', i === 0 ? pend : '', i === 0 ? f.texto_factura ?? '' : '']))
+    if (lineas.length > 1) rows.push([...base, 'TOTAL', null, null, $(f.neto_c), $(f.iva_c), $(f.total_c), '', '', ''])
+  }
+  const ws = XLSX.utils.aoa_to_sheet(rows)
+  ws['!cols'] = [34, 13, 8, 24, 24, 16, 12, 12, 15, 14, 15, 26, 40, 50].map(w => ({ wch: w }))
+  for (let r = 1; r < rows.length; r++) for (const c of [7, 8, 9, 10]) {
+    const ref = XLSX.utils.encode_cell({ r, c }); if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = '#,##0.00'
+  }
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, `Prefacturas ${mes}`)
+  XLSX.writeFile(wb, `prefacturas_${mes}.xlsx`)
 }
 
 /**

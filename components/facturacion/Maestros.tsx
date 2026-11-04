@@ -169,7 +169,9 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
             <select style={S.input} value={vinc.objetivo_id} onChange={e => setVinc({ ...vinc, objetivo_id: e.target.value })}><option value="">Objetivo…</option>{objetivos.map(o => <option key={o.id} value={o.id}>{o.nombre} ({o.cliente})</option>)}</select>
             <input style={S.input} type="date" title="Inicio del servicio" value={vinc.desde} onChange={e => setVinc({ ...vinc, desde: e.target.value })} />
             <input style={S.input} type="date" title="Fin del servicio" value={vinc.hasta} onChange={e => setVinc({ ...vinc, hasta: e.target.value })} />
-            <button style={S.btn2} onClick={() => correr(async () => { await rpc('fact_contrato_objetivo_vincular', { p_contrato_id: vinc.contrato_id, p_objetivo_id: vinc.objetivo_id, p_desde: vinc.desde || null, p_hasta: vinc.hasta || null }); await hecho() })}>Vincular</button>
+            <button style={S.btn2} onClick={() => correr(async () => {
+              if (!vinc.contrato_id || !vinc.objetivo_id) throw new Error('Elegí el contrato y el objetivo')
+              await rpc('fact_contrato_objetivo_vincular', { p_contrato_id: vinc.contrato_id, p_objetivo_id: vinc.objetivo_id, p_desde: vinc.desde || null, p_hasta: vinc.hasta || null }); await hecho() })}>Vincular</button>
           </div>
         </div>
 
@@ -186,6 +188,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
             <input style={S.input} type="date" value={tar.desde} onChange={e => setTar({ ...tar, desde: e.target.value })} />
             <input style={S.input} placeholder="Motivo / respaldo" value={tar.motivo} onChange={e => setTar({ ...tar, motivo: e.target.value })} />
             <button style={S.btn2} onClick={() => correr(async () => {
+              if (!tar.contrato_id) throw new Error('Elegí el contrato de la tarifa')
               await rpc('fact_tarifa_agregar', { p_contrato_id: tar.contrato_id, p_objetivo_id: tar.objetivo_id || null, p_concepto: tar.concepto, p_precio: tar.precio.replace(',', '.'),
                 p_tratamiento_iva: tar.iva, p_alicuota: tar.alicuota, p_desde: tar.desde, p_motivo: tar.motivo }); await hecho()
             }, 'Tarifa cargada')}>Agregar tarifa</button>
