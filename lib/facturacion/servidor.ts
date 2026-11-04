@@ -123,8 +123,11 @@ function fotoHoras(aps: any[]): HorasAprobadas {
   }
 }
 
+/** Estados de una prefactura que todavía se puede reorganizar (no aprobada ni emitida). */
+const EN_PREPARACION = ['en_preparacion', 'esperando_requisitos', 'lista_revision']
+
 export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = fechaArgentina(), contratoId?: string) {
-  const resumen = { creadas: 0, actualizadas: 0, sin_cambios: 0, errores: [] as string[] }
+  const resumen = { creadas: 0, actualizadas: 0, sin_cambios: 0, reagrupadas: 0, errores: [] as string[] }
   const [{ data: contratos, error: e1 }, { data: cfg }] = await Promise.all([
     // Con contratoId recalcula sólo ese contrato (Aceptar de una fila); sin él, el mes entero.
     contratoId ? db.from('fact_contratos').select('*, cliente:fact_clientes(id, cuit, razon_social, condicion_iva, tipo_comprobante)').eq('estado', 'vigente').eq('id', contratoId)
@@ -148,8 +151,26 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
       const { data: tarifasAll } = await db.from('fact_tarifas').select('*').eq('contrato_id', k.id)
         .lte('vigencia_desde', periodo.desde).or(`vigencia_hasta.is.null,vigencia_hasta.gte.${periodo.desde}`)
       const { data: cambios } = await db.from('fact_tarifas').select('id').eq('contrato_id', k.id).gt('vigencia_desde', periodo.desde).lt('vigencia_desde', periodo.hastaExclusivo)
-      const { data: delPeriodo } = await db.from('fact_prefacturas').select('*').eq('contrato_id', k.id)
+      const { data: delPeriodoTodas } = await db.from('fact_prefacturas').select('*').eq('contrato_id', k.id)
         .eq('periodo_desde', periodo.desde).eq('periodo_hasta_excl', periodo.hastaExclusivo).neq('estado', 'descartada')
+      // Reagrupado: una prefactura EN PREPARACIÓN cuya agrupación ya no existe (sus objetivos pasaron a
+      // otro grupo o quedaron solos) se reemplaza por las de la agrupación vigente. El descarte y las
+      // altas van JUNTOS en una sola transacción (fact_prefacturas_reagrupar): si algo falla no se
+      // descarta nada. Las aprobadas o emitidas NO se tocan: sus objetivos quedan ocupados y el
+      // conflicto se informa para revisión expresa.
+      const claves = new Set(grupos.map(g => g.clave))
+      const todos = objetivos.map((v: any) => v.objetivo_id)
+      const delPeriodo: any[] = []
+      const aDescartar: Array<{ id: string; version: number; motivo: string; p: any }> = []
+      for (const p of delPeriodoTodas ?? []) {
+        if (claves.has(p.agrupacion_clave) || !EN_PREPARACION.includes(p.estado)) { delPeriodo.push(p); continue }
+        const destino = Array.from(new Set(grupos.filter(g => objetivosEnOtraPrefactura([p], g.clave, g.objs.map((v: any) => v.objetivo_id), todos).length)
+          .map(g => g.grupo ?? (g.objs.length === 1 ? g.objs[0].objetivo?.nombre : k.nombre) ?? g.clave)))
+        aDescartar.push({ id: p.id, version: p.version, p,
+          motivo: `Reagrupada: sus objetivos se facturan ahora en ${destino.length ? destino.map(d => `«${d}»`).join(', ') : 'la agrupación vigente'}` })
+      }
+      // Con reagrupado, las prefacturas del contrato se juntan y se guardan todas a la vez al final.
+      const lote: Array<{ id: string | null; version: number | null; datos: Record<string, unknown> }> = []
 
       for (const g of grupos) {
         const objIds = g.objs.map((v: any) => v.objetivo_id)
@@ -158,7 +179,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         // Reagrupado: un objetivo que ya está en otra prefactura viva del período no se factura dos veces.
         const ocupados = objetivosEnOtraPrefactura(delPeriodo ?? [], g.clave, objIds, objetivos.map((v: any) => v.objetivo_id))
         if (ocupados.length) {
-          resumen.errores.push(`${k.cliente?.razon_social}: ${ocupados.map(o => nombreDe(g.objs.find((v: any) => v.objetivo_id === o.objetivoId))).join(', ')} ya ${ocupados.length > 1 ? 'están' : 'está'} en otra prefactura del período (${ocupados[0].estado}). Descartala antes de reagrupar.`)
+          resumen.errores.push(`${k.cliente?.razon_social}: ${ocupados.map(o => nombreDe(g.objs.find((v: any) => v.objetivo_id === o.objetivoId))).join(', ')} ya ${ocupados.length > 1 ? 'están' : 'está'} en otra prefactura del período (${ocupados[0].estado}). Está aprobada o emitida: no se reagrupa sola; revisala y, si corresponde, volvela a revisión o anulala antes de reagrupar.`)
           continue
         }
 
@@ -188,7 +209,9 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         const { data: existente } = await db.from('fact_prefacturas').select('id, version, estado, texto_factura, fecha_vencimiento')
           .eq('cliente_id', k.cliente_id).eq('agrupacion_clave', g.clave).eq('periodo_desde', periodo.desde)
           .eq('periodo_hasta_excl', periodo.hastaExclusivo).neq('estado', 'descartada').maybeSingle()
-        if (existente && existente.estado === 'emitida') { resumen.sin_cambios++; continue }
+        // Aprobada o emitida: el recálculo no la toca (ni horas, ni precio, ni grupo). Para cambiarla hay
+        // que volverla a revisión a propósito; así una aprobación no cambia de contenido sin que nadie lo vea.
+        if (existente && ['emitida', 'aprobada_emitir'].includes(existente.estado)) { resumen.sin_cambios++; continue }
 
         const oc: OrdenCompraEstado | null = ocCubre ? {
           id: ocCubre.id, numero: ocCubre.numero, vigenciaDesde: ocCubre.vigencia_desde, vigenciaHasta: ocCubre.vigencia_hasta,
@@ -261,10 +284,39 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
             datos.texto_factura = textoPrecargado({ objetivos: g.objs.map((v: any) => v.objetivo?.nombre).filter(Boolean), periodo, lineas: r.lineas, oc: ocCubre?.numero })
           }
         }
+        if (aDescartar.length) { lote.push({ id: existente?.id ?? null, version: existente?.version ?? null, datos }); continue }
         const { error } = await db.rpc('fact_prefactura_guardar', { p_id: existente?.id ?? null, p_datos: datos, p_version: existente?.version ?? null })
         if (error) resumen.errores.push(`${k.cliente?.razon_social} (${clave}): ${error.message}`)
         else if (existente) resumen.actualizadas++
         else resumen.creadas++
+      }
+
+      if (aDescartar.length) {
+        const nombre = k.cliente?.razon_social ?? k.id
+        // Control previo (la base lo vuelve a verificar): cada objetivo de una prefactura que se
+        // descarta tiene que quedar cubierto por las nuevas; si no, no se reagrupa nada.
+        const cubiertos = new Set(lote.flatMap(x => (x.datos.objetivos_incluidos as string[] | undefined) ?? []))
+        const sinReemplazo = aDescartar.filter(d => {
+          const cubre = d.p.objetivos_incluidos?.length ? d.p.objetivos_incluidos : d.p.objetivo_id ? [d.p.objetivo_id] : String(d.p.agrupacion_clave).startsWith('contrato:') ? todos : []
+          return cubre.some((id: string) => !cubiertos.has(id))
+        })
+        if (sinReemplazo.length || !lote.length) {
+          resumen.errores.push(`${nombre}: no se reagrupó (quedó todo como estaba): ${sinReemplazo.length || aDescartar.length} prefactura(s) anterior(es) tienen objetivos sin reemplazo en la agrupación vigente. Revisar grupos, objetivos vinculados o prefacturas aprobadas.`)
+        } else {
+          const { error } = await db.rpc('fact_prefacturas_reagrupar', {
+            p_descartar: aDescartar.map(d => ({ id: d.id, version: d.version, motivo: d.motivo })),
+            p_guardar: lote,
+          })
+          if (error) {
+            const falta = /fact_prefacturas_reagrupar/.test(error.message) && /(could not find|does not exist|no existe)/i.test(error.message)
+            resumen.errores.push(falta
+              ? `${nombre}: no se reagrupó (quedó todo como estaba): falta aplicar la migración 20261203130000_facturacion_reagrupar_atomico.`
+              : `${nombre}: no se reagrupó (quedó todo como estaba): ${error.message}`)
+          } else {
+            resumen.reagrupadas += aDescartar.length
+            for (const x of lote) { if (x.id) resumen.actualizadas++; else resumen.creadas++ }
+          }
+        }
       }
     } catch (e: any) {
       resumen.errores.push(`${k.cliente?.razon_social ?? k.id}: ${e?.message ?? e}`)

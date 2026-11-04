@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -93,6 +93,8 @@ for (const m of MIGS) {
 }
 ok('las cuatro migraciones aplican', true)
 const postG = await controles('verificacion-grupos.sql')
+const postR = await controles('verificacion-reagrupar.sql')
+ok('verificación posterior del reagrupado (verificacion-reagrupar.sql): todo OK recién aplicada', postR.length === 6 && postR.every(r => r.ok === true), JSON.stringify(postR.filter(r => !r.ok)))
 ok('verificación posterior de grupos (verificacion-grupos.sql): todo OK recién aplicada', postG.length === 10 && postG.every(r => r.ok === true), JSON.stringify(postG.filter(r => !r.ok)))
 const post = await controles('verificacion.sql')
 ok('verificación posterior (verificacion.sql): todo OK recién aplicado', post.length === 11 && post.every(r => r.ok === true), JSON.stringify(post.filter(r => !r.ok)))
@@ -607,6 +609,53 @@ ok('grupos: la prefactura guarda qué objetivos incluye', (await uno(`select arr
 await como(ADM, () => sql(`select public.fact_prefactura_guardar($1, $2::jsonb, (select version from public.fact_prefacturas where id = $1))`, [pGr, JSON.stringify({ lineas: [], estado: 'en_preparacion' })]))
 ok('grupos: recalcular sin informar objetivos conserva los anteriores', (await uno(`select array_length(objetivos_incluidos, 1) n from public.fact_prefacturas where id = $1`, [pGr])).n === 2)
 ok('grupos: una prefactura emitida sigue sin poder modificarse', await falla(() => como(ADM, () => sql(`select public.fact_prefactura_guardar($1, $2::jsonb)`, [pref, JSON.stringify({ lineas: [], estado: 'en_preparacion', objetivos_incluidos: [] })]))))
+
+// ── Reagrupado atómico (20261203130000) ───────────────────────────────────
+const O2 = '00000000-0000-0000-0000-00000000b002', O3 = '00000000-0000-0000-0000-00000000b003'
+const DIC = { periodo_mes: '2026-12', periodo_desde: '2026-12-01', periodo_hasta_excl: '2027-01-01' }
+const prefSola = async (obj, estado = 'lista_revision') => (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: laromet, contrato_id: kGr,
+  agrupacion_clave: `objetivo:${obj}`, objetivo_id: obj, ...DIC, lineas: [], estado, objetivos_incluidos: [obj], total_c: 1000 })]))).id
+const p2 = await prefSola(O2), p3 = await prefSola(O3)
+const ver = async id => (await uno(`select version v from public.fact_prefacturas where id = $1`, [id])).v
+const nueva = (objs = [O2, O3], extra = {}) => ({ id: null, version: null, datos: { cliente_id: laromet, contrato_id: kGr, agrupacion_clave: `grupo:${kGr}:factura a`, ...DIC,
+  lineas: [], estado: 'lista_revision', objetivos_incluidos: objs, total_c: 2000, ...extra } })
+const reagrupar = async (desc, guardar, quien = ADM) => como(quien, () => uno(`select public.fact_prefacturas_reagrupar($1::jsonb, $2::jsonb) r`, [JSON.stringify(desc), JSON.stringify(guardar)]))
+const fotoDic = async () => (await uno(`select md5(string_agg(id || estado || version || coalesce(total_c::text, ''), ',' order by id)) h,
+  count(*) filter (where estado <> 'descartada')::int vivas from public.fact_prefacturas where contrato_id = $1 and periodo_desde = '2026-12-01'`, [kGr]))
+const desc = async () => [{ id: p2, version: await ver(p2), motivo: 'Reagrupada: «Factura A»' }, { id: p3, version: await ver(p3), motivo: 'Reagrupada: «Factura A»' }]
+const F0 = await fotoDic()
+ok('reagrupar: si falla el ALTA de la nueva, no se descarta ninguna anterior', await falla(async () => reagrupar(await desc(), [nueva(undefined, { estado: 'aprobada_emitir' })]), /Estado no permitido/) && (await fotoDic()).h === F0.h)
+ok('reagrupar: si la anterior cambió (versión), no hace nada', await falla(async () => reagrupar([{ id: p2, version: 99, motivo: 'x' }, (await desc())[1]], [nueva()]), /cambió/) && (await fotoDic()).h === F0.h)
+ok('reagrupar: si un objetivo de la anterior queda sin reemplazo, no descarta', await falla(async () => reagrupar(await desc(), [nueva([O2])]), /sin reemplazo/) && (await fotoDic()).h === F0.h)
+ok('reagrupar: sin prefacturas nuevas no descarta nada', await falla(async () => reagrupar(await desc(), []), /sin prefacturas de reemplazo/) && (await fotoDic()).h === F0.h)
+ok('reagrupar: sin permiso de facturación no se ejecuta', await falla(async () => reagrupar(await desc(), [nueva()], SUP)) && (await fotoDic()).h === F0.h)
+ok('reagrupar: anon no ejecuta la función', !(await uno(`select has_function_privilege('anon', 'public.fact_prefacturas_reagrupar(jsonb, jsonb)', 'execute') p`)).p)
+// Una tercera prefactura viva que también cubre O2 (no se pidió descartarla): el control final lo impide.
+const pDupRg = (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: laromet, contrato_id: kGr,
+  agrupacion_clave: 'extra:dup', ...DIC, lineas: [], estado: 'lista_revision', objetivos_incluidos: [O2] })]))).id
+const F1 = await fotoDic()
+ok('reagrupar: si un objetivo quedaría en dos prefacturas vivas, no guarda nada', await falla(async () => reagrupar(await desc(), [nueva()]), /dos prefacturas vivas/) && (await fotoDic()).h === F1.h)
+await como(ADM, async () => sql(`select public.fact_prefactura_estado($1, 'descartada', $2, 'prueba')`, [pDupRg, await ver(pDupRg)]))
+// Aprobada: no se reagrupa.
+const pApr = await prefSola('00000000-0000-0000-0000-00000000b004')
+await db.exec(`update public.fact_prefacturas set estado = 'aprobada_emitir', huella_aprobada = huella, aprobada_por = '${ADM}', aprobada_at = now() where id = '${pApr}'`)
+ok('reagrupar: una prefactura aprobada para emitir no se descarta', await falla(async () => reagrupar([{ id: pApr, version: await ver(pApr), motivo: 'x' }], [nueva(['00000000-0000-0000-0000-00000000b004'])]), /aprobadas o emitidas no se reagrupan/)
+  && (await uno(`select estado from public.fact_prefacturas where id = $1`, [pApr])).estado === 'aprobada_emitir')
+await db.exec(`delete from public.fact_prefacturas where id = '${pApr}'`)
+// Éxito.
+const hAntes = (await uno(`select count(*)::int n from public.fact_historial`)).n
+const rOk = (await reagrupar(await desc(), [nueva()])).r
+const filasDic = await sql(`select id, estado, agrupacion_clave, objetivos_incluidos from public.fact_prefacturas where contrato_id = $1 and periodo_desde = '2026-12-01' order by created_at`, [kGr])
+const viva = filasDic.filter(x => x.estado !== 'descartada')
+ok('reagrupar: las 2 anteriores descartadas y UNA nueva con los 2 objetivos, en una sola transacción', rOk.descartadas === 2 && rOk.guardadas.length === 1
+  && viva.length === 1 && viva[0].agrupacion_clave === `grupo:${kGr}:factura a` && viva[0].objetivos_incluidos.length === 2, JSON.stringify(filasDic))
+ok('reagrupar: las anteriores siguen consultables (descartadas, no borradas)', filasDic.filter(x => [p2, p3].includes(x.id)).every(x => x.estado === 'descartada'))
+const histRg = await sql(`select entidad_id, accion, datos from public.fact_historial order by at desc limit ${(await uno(`select count(*)::int n from public.fact_historial`)).n - hAntes}`)
+ok('reagrupar: historial con el motivo de cada descarte y el reemplazo en la nueva',
+  histRg.filter(h => h.accion === 'estado' && h.datos.a === 'descartada' && /Reagrupada/.test(h.datos.motivo)).length === 2
+  && histRg.some(h => h.accion === 'reagrupado' && h.datos.reemplaza.length === 2 && h.datos.reemplaza.some(r => r.id === p2) && h.datos.reemplaza[0].total_c === 1000), JSON.stringify(histRg.map(h => h.accion)))
+ok('reagrupar: repetir la misma operación no duplica (las anteriores ya están descartadas)', await falla(async () => reagrupar([{ id: p2, version: await ver(p2), motivo: 'x' }], [nueva()]), /descartada/)
+  && (await fotoDic()).vivas === 1)
 
 // ── Rollback ───────────────────────────────────────────────────────────────
 for (const m of [...MIGS].reverse()) await db.exec(readFileSync(`${REPO}/supabase/rollback/${m}_rollback.sql`, 'utf8'))
