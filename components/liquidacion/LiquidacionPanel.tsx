@@ -6,6 +6,7 @@ import ReimportarExcelTrabajo from '@/components/liquidacion/ReimportarExcelTrab
 import PadronLiquidacion from '@/components/liquidacion/PadronLiquidacion'
 import ImportarResultadoVisual from '@/components/liquidacion/ImportarResultadoVisual'
 import LiquidacionFinalPanel from '@/components/liquidacion/LiquidacionFinalPanel'
+import EditorEmpleadoLiquidacion from '@/components/liquidacion/EditorEmpleadoLiquidacion'
 import { clasificarBloqueados } from '@/lib/visual-export'
 
 // GERENCIA → GESTIÓN ECONÓMICA → LIQUIDACIÓN (LIQ1A).
@@ -72,7 +73,7 @@ function limitesDelMes(mes: string): { desde: string; hasta: string } {
 }
 
 export default function LiquidacionPanel({ user, empleados }: { user: any; empleados: Empleado[] }) {
-  const [tab, setTab] = useState<'periodos' | 'finales' | 'catalogo' | 'permanentes'>('periodos')
+  const [tab, setTab] = useState<'periodos' | 'empleado' | 'finales' | 'catalogo' | 'permanentes'>('periodos')
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null)
   const activos = useMemo(() => (empleados || []).filter(e => String(e.estado ?? 'activo').toLowerCase() !== 'inactivo')
     .sort((a, b) => `${a.apellido}`.localeCompare(`${b.apellido}`, 'es')), [empleados])
@@ -462,6 +463,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
         <button style={tabStyle(tab === 'periodos')} onClick={() => setTab('periodos')}>Períodos</button>
+        <button style={tabStyle(tab === 'empleado')} onClick={() => setTab('empleado')}>Editor por empleado</button>
         <button style={tabStyle(tab === 'finales')} onClick={() => setTab('finales')}>Liquidaciones finales</button>
         <button style={tabStyle(tab === 'catalogo')} onClick={() => setTab('catalogo')}>Catálogo de conceptos</button>
         <button style={tabStyle(tab === 'permanentes')} onClick={() => setTab('permanentes')}>Permanentes</button>
@@ -743,6 +745,8 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
           )}
         </>
       )}
+
+      {tab === 'empleado' && <EditorEmpleadoLiquidacion periodos={periodos} />}
 
       {tab === 'finales' && <LiquidacionFinalPanel />}
 
