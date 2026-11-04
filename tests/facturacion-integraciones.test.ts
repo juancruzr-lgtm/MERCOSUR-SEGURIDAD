@@ -73,12 +73,15 @@ describe('horas facturables desde la app (no son horas liquidables)', () => {
     ({ id, fecha, hora_inicio: ini, hora_fin: fin, objetivo_id: OBJ, estado: 'cubierto', puesto_id: 'P1', ...extra })
   const reg = (id: string, turno_id: string, extra: Record<string, unknown> = {}) => ({ id, turno_id, guardia_id: `g-${id}`, ...extra })
 
-  it('turno 20→08 del 25/10 cruza el corte 26→25: sólo 4 h van a octubre', () => {
+  it('turno 20→08 del 25/10 con corte 26→25: va entero al período de su fecha de inicio, como en Reportes', () => {
     const t = turno('t1', '2026-10-25', '20:00:00', '08:00:00')
     expect(instantesTurno(t)).toEqual({ inicio: '2026-10-25T23:00:00.000Z', fin: '2026-10-26T11:00:00.000Z' })
     const r = horasDelObjetivo({ ...base, periodo: periodoFacturacion({ tipo: 'corte', diaInicio: 26 }, '2026-10'),
       turnos: [t], registros: [reg('r1', 't1', { horas_liquidables: 12 })] })
-    expect([r.minutosProgramados, r.minutosCubiertos]).toEqual([240, 240])
+    expect([r.minutosProgramados, r.minutosCubiertos]).toEqual([720, 720])
+    const nov = horasDelObjetivo({ ...base, periodo: periodoFacturacion({ tipo: 'corte', diaInicio: 26 }, '2026-11'),
+      turnos: [t], registros: [reg('r1', 't1', { horas_liquidables: 12 })] })
+    expect(nov.minutosCubiertos).toBe(0)
   })
 
   it('turno pasado sin registro = descubierto (no cero facturable); anulados no cuentan', () => {
@@ -118,17 +121,45 @@ describe('horas facturables desde la app (no son horas liquidables)', () => {
     expect(r).toMatchObject({ minutosCubiertos: 240, minutosNocturnos: 240, minutosDiurnos: 0, minutosDescubiertos: 240 })
   })
 
-  it('relevo superpuesto en el mismo puesto NO se factura dos veces', () => {
-    // A 06–18 se queda hasta 18:30; B 18–06 llega 17:30. Una hora con dos vigiladores.
+  it('relevo superpuesto (turnos escalonados del mismo puesto) NO se factura dos veces; se liquida igual', () => {
+    // Programación: A 06–18 y B 17–05. Una hora con los dos.
+    const turnos = [turno('A', '2026-10-10', '06:00:00', '18:00:00'), turno('B', '2026-10-10', '17:00:00', '05:00:00')]
+    const registros = [reg('rA', 'A', { hora_entrada_real: '06:00:00', hora_salida_real: '18:00:00' }), reg('rB', 'B', { hora_entrada_real: '17:00:00', hora_salida_real: '05:00:00' })]
+    const r = horasDelObjetivo({ ...base, turnos, registros })
+    expect(r).toMatchObject({ minutosLiquidables: 1440, minutosCubiertos: 1380, minutosSuperpuestos: 60, minutosSimultaneos: 0, minutosDescubiertos: 0 })
+    // Sólo si el contrato lo prevé se suma la superposición.
+    expect(horasDelObjetivo({ ...base, turnos, registros, superposicion: 'sumar' }).minutosCubiertos).toBe(1440)
+  })
+
+  it('el vigilador que se queda de más sin que se lo reconozcan no suma: lo liquidable manda', () => {
+    // A 06–18 se queda hasta 18:30; B 18–06 llega 17:30. Liquidan 12 + 12.
     const turnos = [turno('A', '2026-10-10', '06:00:00', '18:00:00'), turno('B', '2026-10-10', '18:00:00', '06:00:00')]
     const registros = [
       reg('rA', 'A', { hora_entrada_real: '06:00:00', hora_salida_real: '18:30:00', hora_salida_final: '18:30:00', horas_liquidables: 12 }),
       reg('rB', 'B', { hora_entrada_real: '17:30:00', hora_entrada_final: '17:30:00', hora_salida_real: '06:00:00', horas_liquidables: 12 }),
     ]
+    expect(horasDelObjetivo({ ...base, turnos, registros })).toMatchObject({ minutosCubiertos: 1440, minutosSuperpuestos: 0, minutosDescubiertos: 0 })
+  })
+
+  it('vigiladores simultáneos en el mismo puesto (turnos idénticos o contenidos) se facturan todos', () => {
+    const turnos = [turno('A', '2026-10-12', '10:00:00', '20:00:00'), turno('B', '2026-10-12', '10:00:00', '20:00:00'), turno('C', '2026-10-12', '13:00:00', '18:00:00')]
+    const registros = turnos.map(t => reg(`r${t.id}`, t.id, { hora_entrada_real: t.hora_inicio, hora_salida_real: t.hora_fin }))
+    for (const superposicion of ['unir', 'sumar'] as const)
+      expect(horasDelObjetivo({ ...base, turnos, registros, superposicion })).toMatchObject({ minutosCubiertos: 1500, minutosSuperpuestos: 0, minutosSimultaneos: 900 })
+  })
+
+  it('turno sin fichaje reconocido por el supervisor (carga manual): se factura igual que en Reportes', () => {
+    const r = horasDelObjetivo({ ...base, turnos: [turno('A', '2026-10-20', '08:00:00', '20:00:00')],
+      registros: [reg('rA', 'A', { horas_liquidables: 12, tipo_registro: 'carga_manual', origen_cobertura: 'confirmacion_supervisor' })] })
+    expect(r).toMatchObject({ minutosLiquidables: 720, minutosReales: 0, minutosCubiertos: 720, minutosDescubiertos: 0 })
+  })
+
+  it('escalonados que se pisan más de 2 h: se facturan los dos y quedan para revisar', () => {
+    const turnos = [turno('A', '2026-10-10', '06:00:00', '18:00:00'), turno('B', '2026-10-10', '14:00:00', '02:00:00')]
+    const registros = [reg('rA', 'A', { horas_liquidables: 12 }), reg('rB', 'B', { horas_liquidables: 12 })]
     const r = horasDelObjetivo({ ...base, turnos, registros })
-    expect(r).toMatchObject({ minutosProgramados: 1440, minutosCubiertos: 1440, minutosSuperpuestos: 60, minutosDescubiertos: 0 })
-    // Sólo si el contrato lo prevé se suma la superposición.
-    expect(horasDelObjetivo({ ...base, turnos, registros, superposicion: 'sumar' }).minutosCubiertos).toBe(1500)
+    expect(r.minutosCubiertos).toBe(1440)
+    expect(r.revisar).toHaveLength(1)
   })
 
   it('relevo anticipado: el que llega antes tapa la salida anticipada del anterior', () => {
@@ -147,22 +178,22 @@ describe('horas facturables desde la app (no son horas liquidables)', () => {
     expect(r).toMatchObject({ minutosCubiertos: 1440, minutosSuperpuestos: 0 })
   })
 
-  it('cobertura parcial: llegó 4 h tarde → 8 h cubiertas y 4 h descubiertas; lo fuera de horario sin aceptar es excedente', () => {
+  it('cobertura parcial: llegó 4 h tarde → 8 h facturables y 4 h descubiertas', () => {
     const r = horasDelObjetivo({ ...base, turnos: [turno('A', '2026-10-10', '06:00:00', '18:00:00')],
       registros: [reg('rA', 'A', { hora_entrada_final: '10:00:00', hora_salida_final: '19:00:00', horas_liquidables: 8 })] })
-    expect(r).toMatchObject({ minutosCubiertos: 480, minutosDescubiertos: 240, minutosExcedentes: 60, minutosAceptadosFuera: 0 })
+    expect(r).toMatchObject({ minutosCubiertos: 480, minutosDescubiertos: 240, minutosAceptadosFuera: 0 })
   })
 
-  it('llegó antes sin corrección (PSA): se factura y liquida el turno; lo de más queda informado', () => {
+  it('llegó antes sin corrección (PSA): se factura y liquida el turno programado, no lo fichado', () => {
     const r = horasDelObjetivo({ ...base, turnos: [turno('A', '2026-10-08', '09:30:00', '18:00:00')],
-      registros: [reg('rA', 'A', { hora_entrada_real: '09:01:00', hora_salida_real: '18:00:00' })] })
-    expect(r).toMatchObject({ minutosCubiertos: 510, minutosAceptadosFuera: 0, minutosExcedentes: 29 })
+      registros: [reg('rA', 'A', { hora_entrada_real: '09:01:00', hora_salida_real: '18:00:00', horas_trabajadas: 8.98 })] })
+    expect(r).toMatchObject({ minutosCubiertos: 510, minutosAceptadosFuera: 0, minutosReales: 539 })
   })
 
   it('el supervisor reconoce 1 h fuera de turno: se liquida, así que se factura', () => {
     const r = horasDelObjetivo({ ...base, turnos: [turno('A', '2026-10-10', '06:00:00', '18:00:00')],
       registros: [reg('rA', 'A', { hora_entrada_real: '06:00:00', hora_salida_real: '19:10:00', hora_salida_final: '19:00:00', horas_liquidables: 13 })] })
-    expect(r).toMatchObject({ minutosProgramados: 720, minutosCubiertos: 780, minutosAceptadosFuera: 60, minutosExcedentes: 0, minutosDescubiertos: 0 })
+    expect(r).toMatchObject({ minutosProgramados: 720, minutosCubiertos: 780, minutosAceptadosFuera: 60, minutosDescubiertos: 0 })
     expect(minutosAprobables(r, 'no_facturar').aprobados).toBe(780)
   })
 

@@ -29,7 +29,7 @@ function dbFalso() {
         if (a > 0) return { data: [], error: null }
         if (nombre === 'turnos') {
           // Sólo lo que la consulta pide: si tipo_evento no está en el select, no llega.
-          const pide = columnas.split(',').map(s => s.trim())
+          const pide = columnas === '*' ? Object.keys(TURNOS[0]) : columnas.split(',').map(s => s.trim())
           return { data: TURNOS.map(t => Object.fromEntries(Object.entries(t).filter(([k]) => pide.includes(k)))), error: null }
         }
         if (nombre === 'registros_asistencia') return { data: REGISTROS, error: null }

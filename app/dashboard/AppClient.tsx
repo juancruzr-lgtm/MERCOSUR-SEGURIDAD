@@ -139,6 +139,7 @@ import {
 } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa } from '@/lib/revision-operativa'
 import { formatCuil } from '@/lib/revision-operativa'
+import { filasHorasObjetivo, totalesHorasObjetivo } from '@/lib/planilla-objetivo'
 import { CARACTERISTICAS_TURNO, ETIQUETA_CARACTERISTICA, MOTIVO_CAPACITACION, caracteristicaTurno, esCapacitacion, etiquetaCaracteristica, notaCapacitacionExcluida, notaCapacitacionIncluida } from '@/lib/caracteristica-turno'
 import { ETIQUETA_VINCULACION, sugerirVinculacion } from '@/lib/vinculacion-puestos'
 import { DETALLE_COBERTURA_EQUIVALENTE, ETIQUETA_PREVISION, MENSAJE_VACANTE_COMPATIBLE, clavePrevision, coberturaEquivalenteOtraPosicion, payloadCreacionParcial, previsualizarMes, resumenConfirmacion, vacantesCompatibles } from '@/lib/programacion'
@@ -7555,19 +7556,12 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   // Planilla por objetivo: una fila por registro (no por turno).
   // Si dos guardias cubrieron el mismo turno, aparecen dos filas.
   // Los turnos sin registro (descubiertos / sin fichar) agregan una fila vacía.
-  const registrosObjetivo = objetivoId
-    ? registrosMes.filter((r: RegistroAsistencia) =>
-        (r.objetivo_final_id ?? turnoPorId.get(r.turno_id)?.objetivo_id) === objetivoId)
-    : []
-  const turnosConRegistroObj = new Set(registrosObjetivo.map((r: RegistroAsistencia) => r.turno_id))
-  const turnosSinRegistroObj = objetivoId
-    ? turnosMes.filter((t: Turno) => t.objetivo_id === objetivoId && !turnosConRegistroObj.has(t.id))
-    : []
+  // Misma fuente que Facturación (lib/planilla-objetivo): no hay otro cálculo de horas por objetivo.
+  const filasHorasObj = objetivoId ? filasHorasObjetivo<Turno, RegistroAsistencia>(objetivoId, turnosMes, registrosMes, turnoPorId) : []
 
-  const filasConRegistro = registrosObjetivo.map((registro: RegistroAsistencia) => {
-    const turno = turnoPorId.get(registro.turno_id)
-    if (!turno) return null
-    const { horasReales, horasLiquidables, horaEntrada: horaEntradaMostrar, horaSalida: horaSalidaMostrar, origenEtiqueta: origenEtiquetaObj } = resolverLineaLiquidacion(turno, registro)
+  const filasConRegistro = filasHorasObj.filter(f => f.registro && f.linea).map(f => {
+    const turno = f.turno, registro = f.registro as RegistroAsistencia
+    const { horasReales, horasLiquidables, horaEntrada: horaEntradaMostrar, horaSalida: horaSalidaMostrar, origenEtiqueta: origenEtiquetaObj } = f.linea!
     const estado = estadoPlanilla(turno, registro)
     const guardiaQueFicho = effectiveGuardia(registro)
     return {
@@ -7597,17 +7591,18 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       _horaInicio: turno.hora_inicio,
       _horasReales: horasReales,
       _horasLiquidables: horasLiquidables,
-      _capacitacion: esCapacitacion(turno.tipo_evento),
+      _capacitacion: f.capacitacion,
       _cubierto: Boolean(registro.hora_entrada_real && (registro.hora_salida_final ?? registro.hora_salida_real)),
       _sinFichar: false,
       _descubierto: false,
       _enCurso: Boolean(registro.hora_entrada_real && !(registro.hora_salida_final ?? registro.hora_salida_real)),
     }
-  }).filter(Boolean) as any[]
+  }) as any[]
 
-  const filasVacias = turnosSinRegistroObj.map((turno: Turno) => {
-    const esTransicion = turno.estado === 'cubierto' && esPeriodoTransicion(turno.fecha)
-    const horasLiquidables = esTransicion ? horasProgramadasTurno(turno) : 0
+  const filasVacias = filasHorasObj.filter(f => !f.registro).map(f => {
+    const turno = f.turno
+    const esTransicion = f.transicion
+    const horasLiquidables = f.horasLiquidables
     // La ausencia del vigilador asignado también se lee acá: el objetivo tuvo
     // el puesto sin cubrir por una falta, no por un turno pendiente de resolver.
     const novedadTurno = turno.guardia_id
@@ -7660,45 +7655,10 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     .sort((a: any, b: any) =>
       a._fecha.localeCompare(b._fecha) || a._horaInicio.localeCompare(b._horaInicio))
 
-  // Para totales de horas: deduplicar por turno antes de sumar
-  const registrosObjetivoDedup = (() => {
-    const porTurno = new Map<string, RegistroAsistencia[]>()
-    for (const r of registrosObjetivo) {
-      const arr = porTurno.get(r.turno_id) ?? []
-      arr.push(r)
-      porTurno.set(r.turno_id, arr)
-    }
-    // Case 4: un turno puede tener varios guardias (A + B) → un principal por (turno, guardia)
-    const result: RegistroAsistencia[] = []
-    for (const rs of porTurno.values()) {
-      const porGuardia = new Map<string, RegistroAsistencia[]>()
-      for (const r of rs) {
-        const gId = effectiveGuardia(r) ?? '__'
-        const arr = porGuardia.get(gId) ?? []
-        arr.push(r)
-        porGuardia.set(gId, arr)
-      }
-      for (const gRegs of porGuardia.values()) {
-        const p = selectRegistroPrincipal(gRegs)
-        if (p) result.push(p)
-      }
-    }
-    return result
-  })()
-
-  // Lo que se descontó del total del objetivo. Se cuenta por turno —no por
-  // fila— porque un mismo turno puede aparecer dos veces si lo cubrieron dos
-  // vigiladores, y no son dos capacitaciones.
-  const capacitacionObjetivo = (() => {
-    const turnos = new Set<string>()
-    let horas = 0
-    for (const row of planillaObjetivo as any[]) {
-      if (!row._capacitacion) continue
-      turnos.add(row._turno_id)
-      horas += row._horasLiquidables || 0
-    }
-    return { horas, turnos: turnos.size }
-  })()
+  // Horas reales (un principal por turno y vigilador), liquidables sin
+  // capacitación y capacitación por turno: lib/planilla-objetivo, la misma
+  // cuenta que usa Facturación.
+  const horasObj = totalesHorasObjetivo(filasHorasObj)
 
   const totalesObjetivo = {
     total: new Set(planillaObjetivo.map((row: any) => row._turno_id)).size,
@@ -7706,11 +7666,11 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
     sinFichar: planillaObjetivo.filter((row: any) => row._sinFichar).length,
     descubiertos: planillaObjetivo.filter((row: any) => row._descubierto).length,
     enCurso: planillaObjetivo.filter((row: any) => row._enCurso).length,
-    horasReales: registrosObjetivoDedup.reduce((sum: number, r: RegistroAsistencia) => sum + Math.max(0, Number(r.horas_trabajadas) || 0), 0),
+    horasReales: horasObj.horasReales,
     // Capacitación: se paga al vigilador pero no se cobra al objetivo
-    horasLiquidables: planillaObjetivo.reduce((sum: number, row: any) => row._capacitacion ? sum : sum + (row._horasLiquidables || 0), 0),
-    horasCapacitacion: capacitacionObjetivo.horas,
-    turnosCapacitacion: capacitacionObjetivo.turnos,
+    horasLiquidables: horasObj.horasLiquidables,
+    horasCapacitacion: horasObj.horasCapacitacion,
+    turnosCapacitacion: horasObj.turnosCapacitacion,
     // Se marcan para poder auditar el objetivo y, si alguna vez hubiera
     // tratamiento diferencial, facturarlo. Hoy no cambia lo que se cobra.
     feriados: resumirFeriados(planillaObjetivo.map((row: any) => ({

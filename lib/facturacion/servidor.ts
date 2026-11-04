@@ -18,22 +18,23 @@ import {
 import { proponerAsociaciones, type ClienteIdentidad, type ComprobanteAbierto, type RetencionDisponible } from './conciliacion'
 import { numeroVisible } from './comprobantes'
 
-const CAMPOS_REGISTRO = 'id, turno_id, guardia_id, guardia_final_id, objetivo_final_id, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, origen_cobertura, cobertura_anulada_at, cierre_automatico, tipo_registro'
+// Mismas columnas que lee Reportes: las horas salen de lib/planilla-objetivo con los mismos datos.
+const CAMPOS_REGISTRO = '*'
 
 function reglaDe(k: any): ReglaPeriodo {
   return k.regla_periodo === 'corte' ? { tipo: 'corte', diaInicio: Number(k.dia_corte) } : { tipo: 'mes_calendario' }
 }
 const hhmm = (t: string | null) => (t ? String(t).slice(0, 5) : null)
 
-const CAMPOS_TURNO = 'id, fecha, hora_inicio, hora_fin, objetivo_id, puesto_id, estado, tipo_evento'
+const CAMPOS_TURNO = '*'
 
 /** Propuesta de horas FACTURABLES de un objetivo para un contrato y mes. No escribe. */
 export async function proponerHoras(db: SupabaseClient, p: { contratoId: string; objetivoId: string; mes: string }) {
   const { data: k, error } = await db.from('fact_contratos').select('*').eq('id', p.contratoId).single()
   if (error || !k) throw new Error('Contrato inexistente o sin acceso')
   const periodo = periodoFacturacion(reglaDe(k), p.mes)
-  // Un día antes por los turnos nocturnos que empiezan la víspera y cruzan el límite.
-  const desde = sumarDias(periodo.desde, -1)
+  // Como Reportes: los turnos van al período por su fecha de inicio.
+  const desde = periodo.desde
   const turnos = await fetchPaginado<TurnoFacturable>((a, b) => db.from('turnos')
     .select(CAMPOS_TURNO).eq('objetivo_id', p.objetivoId)
     .gte('fecha', desde).lt('fecha', periodo.hastaExclusivo).order('id').range(a, b))
@@ -86,7 +87,8 @@ export async function aprobarHoras(db: SupabaseClient, p: {
     p_minutos: { programados: horas.minutosProgramados, cubiertos: horas.minutosCubiertos, superpuestos: horas.minutosSuperpuestos,
       descubiertos: horas.minutosDescubiertos, aprobados: m.aprobados, diurnos: m.diurnos, nocturnos: m.nocturnos, superposicion, tratamiento,
       // Queda en el historial de la aprobación: liquidadas y no facturadas.
-      capacitacion_excluida: horas.minutosCapacitacionLiquidables, capacitacion_turnos: horas.turnosCapacitacion },
+      capacitacion_excluida: horas.minutosCapacitacionLiquidables, capacitacion_turnos: horas.turnosCapacitacion,
+      liquidables_reportes: horas.minutosLiquidables, simultaneos: horas.minutosSimultaneos, revisar: horas.revisar.length },
     p_detalle: horas.detalle, p_notas: p.notas ?? null, p_reemplazar: !!p.reemplazar,
   })
   if (error) throw new Error(error.message)
