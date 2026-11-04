@@ -42,10 +42,23 @@ describe('distintos precios dentro de una factura', () => {
     expect(r.importes?.neto).toBe(10 * 150000 + 20 * 100000)
   })
 
-  it('si todos usan la tarifa general, queda un solo renglón como hasta ahora (no cambia lo ya calculado)', () => {
-    expect(renglonesPorObjetivo(objs, [tar('g', 'hora', '1000')], 'por_hora', horasDe)).toBeUndefined()
-    const r = calcularPrefactura(entrada({ horas: foto(1800), tarifas: [tarifasParaObjetivo([tar('g', 'hora', '1000')], null)[0]] }))
-    expect(r.lineas.map(l => [l.concepto, l.cantidad])).toEqual([['Horas de vigilancia', '30']])
+  it('aunque todos usen la tarifa general, cada objetivo conserva su renglón (no se suman horas de objetivos distintos)', () => {
+    const todas = [tar('g', 'hora', '1000')]
+    const porObjetivo = renglonesPorObjetivo(objs, todas, 'por_hora', horasDe)
+    const r = calcularPrefactura(entrada({ horas: foto(1800), tarifas: tarifasParaObjetivo(todas, null), porObjetivo }))
+    expect(r.lineas.map(l => [l.concepto, l.cantidad, l.precio, l.tarifaId])).toEqual([
+      ['Horas de vigilancia — MUSEO MACRO', '10', '1000', 'g'], ['Horas de vigilancia — MUSEO CASTAGNINO', '20', '1000', 'g']])
+    expect(r.importes?.neto).toBe(30 * 100000)
+  })
+
+  it('cada renglón con su IVA: un objetivo exento y otro con IVA en la misma factura', () => {
+    const todas = [tar('g', 'hora', '1000'), { ...tar('m', 'hora', '1000', 'macro'), tratamiento_iva: 'exento' as const, alicuota_iva: '0' }]
+    const r = calcularPrefactura(entrada({ horas: foto(1800), porObjetivo: renglonesPorObjetivo(objs, todas, 'por_hora', horasDe) }))
+    expect(r.lineas.map(l => [l.cantidad, l.importes.iva])).toEqual([['10', 0], ['20', 420000]])
+  })
+
+  it('un objetivo de una sola factura queda igual que antes (un renglón, sin nombre)', () => {
+    expect(renglonesPorObjetivo([objs[0]], [tar('g', 'hora', '1000')], 'por_hora', horasDe)).toBeUndefined()
   })
 
   it('diurnas y nocturnas con precios distintos por objetivo', () => {

@@ -358,19 +358,20 @@ export function tarifasParaObjetivo(todas: TarifaGuardada[], objetivoId: string 
 }
 
 /**
- * Factura con varios objetivos y alguno con precio propio: un renglón por objetivo
- * (horas y tarifa de cada uno). Si todos usan la general, undefined = un renglón
- * por concepto con el total, igual que antes (no cambia lo ya calculado).
- * Abono: cada objetivo con abono propio en su renglón; el resto, un solo abono general.
+ * Factura con varios objetivos: un renglón por objetivo y concepto, cada uno con
+ * sus horas, su tarifa (propia o la general), su IVA y su importe. Nunca se suman
+ * horas de objetivos distintos en un mismo renglón.
+ * Abono: es un precio del contrato, no de cada objetivo; el general va una sola vez
+ * y sólo el objetivo con abono propio lleva su renglón.
  */
 export function renglonesPorObjetivo(
   objs: Array<{ objetivo_id: string; nombre: string }>, todas: TarifaGuardada[], modalidad: Modalidad,
   horasDe: (objetivoId: string) => HorasAprobadas | null,
 ): EntradaPrefactura['porObjetivo'] {
   if (objs.length < 2 || modalidad === 'presupuesto_anticipado') return undefined
-  const conPropia = (o: { objetivo_id: string }, abono: boolean) => todas.some(t => t.objetivo_id === o.objetivo_id && (abono ? t.concepto === 'abono' : t.concepto !== 'abono'))
+  const conAbonoPropio = (o: { objetivo_id: string }) => todas.some(t => t.objetivo_id === o.objetivo_id && t.concepto === 'abono')
   if (modalidad === 'abono') {
-    const con = objs.filter(o => conPropia(o, true))
+    const con = objs.filter(conAbonoPropio)
     if (!con.length) return undefined
     const sin = objs.filter(o => !con.includes(o))
     return [
@@ -378,7 +379,6 @@ export function renglonesPorObjetivo(
       ...(sin.length ? [{ nombre: sin.map(o => o.nombre).join(', '), horas: null, tarifas: tarifasParaObjetivo(todas, null) }] : []),
     ]
   }
-  if (!objs.some(o => conPropia(o, false))) return undefined
   return objs.map(o => ({ nombre: o.nombre, horas: horasDe(o.objetivo_id), tarifas: tarifasParaObjetivo(todas, o.objetivo_id) }))
 }
 

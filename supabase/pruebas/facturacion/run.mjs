@@ -84,10 +84,16 @@ const controles = async archivo => (await sql(readFileSync(`${REPO}/supabase/pru
 const pre = await controles('preflight.sql')
 ok('chequeo previo (preflight.sql): todo OK antes de migrar', pre.length === 10 && pre.every(r => r.ok === true), JSON.stringify(pre.filter(r => !r.ok)))
 for (const m of MIGS) {
+  if (m === '20261202120000_facturacion_grupos_factura') {
+    const preG = await controles('preflight-grupos.sql')
+    ok('chequeo previo de grupos (preflight-grupos.sql): todo OK antes de aplicarla', preG.length === 6 && preG.every(r => r.ok === true), JSON.stringify(preG.filter(r => !r.ok)))
+  }
   await db.exec(readFileSync(`${REPO}/supabase/migrations/${m}.sql`, 'utf8'))
   await db.query(`insert into supabase_migrations.schema_migrations (version, name) values ($1, $2)`, [m.slice(0, 14), m])
 }
 ok('las cuatro migraciones aplican', true)
+const postG = await controles('verificacion-grupos.sql')
+ok('verificación posterior de grupos (verificacion-grupos.sql): todo OK recién aplicada', postG.length === 10 && postG.every(r => r.ok === true), JSON.stringify(postG.filter(r => !r.ok)))
 const post = await controles('verificacion.sql')
 ok('verificación posterior (verificacion.sql): todo OK recién aplicado', post.length === 11 && post.every(r => r.ok === true), JSON.stringify(post.filter(r => !r.ok)))
 ok('…y el chequeo previo ahora detecta las migraciones (no se aplican dos veces)', (await controles('preflight.sql')).filter(r => !r.ok).length >= 3)
