@@ -25,7 +25,7 @@ export default function Horas({ mes }: { mes: string }) {
   return (
     <div style={S.card}>
       <h3 style={S.h3}>Horas de {mes} por objetivo</h3>
-      <div style={S.sub}>Fuente: turnos y registros de asistencia de la app. Se factura el tiempo programado efectivamente CUBIERTO por puesto; los relevos superpuestos cuentan una vez y lo descubierto lo decide Administración. No modifica fichajes ni liquidación.</div>
+      <div style={S.sub}>Fuente: las horas liquidables de Reportes → Planilla objetivo (mismos datos y misma función; incluye reconocimientos y correcciones posteriores). Facturación sólo aplica reglas comerciales: sin capacitación, simultáneos se facturan, superposiciones de posible relevo se facturan y quedan para revisar (el descuento va por ajuste comercial), descubierto lo decide Administración. No modifica fichajes ni liquidación.</div>
       <Mensaje />
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
         <thead><tr>{['Cliente', 'Objetivo', 'Servicio', 'Aprobadas', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
@@ -57,19 +57,26 @@ export default function Horas({ mes }: { mes: string }) {
         return (
           <div style={{ ...S.card, marginTop: 12 }}>
             <h3 style={S.h3}>{v.objetivo?.nombre} · {fecha(prop.r.periodo.desde)} al {fecha(prop.r.periodo.hastaExclusivo)} (excl.)</h3>
-            <div style={S.sub}>Horas FACTURABLES: lo programado cubierto más lo que el supervisor aceptó fuera de turno, lo mismo que se liquida.</div>
-            <div>Programadas {horas(h.minutosProgramados)} · <b>cubiertas {horas(h.minutosCubiertos)}</b> · descubiertas {horas(h.minutosDescubiertos)}
-              {h.minutosDiurnos != null && <> · diurnas {horas(h.minutosDiurnos)} · nocturnas {horas(h.minutosNocturnos)}</>}</div>
-            {h.minutosSuperpuestos > 0 && <div style={S.sub}>{horas(h.minutosSuperpuestos)} h de superposición entre turnos del mismo puesto (relevos): {prop.r.superposicion === 'sumar' ? 'se SUMAN según el contrato' : 'se facturan una sola vez'}.</div>}
+            <table style={{ borderCollapse: 'collapse', margin: '6px 0' }}><tbody>
+              <tr><td style={S.td}>Horas programadas</td><td style={S.num}>{horas(h.minutosProgramados + h.minutosCapacitacionProgramados)}</td></tr>
+              <tr><td style={S.td}>Horas reales (GPS, informativas)</td><td style={S.num}>{horas(h.minutosReales)}</td></tr>
+              <tr><td style={S.td}>Horas efectivamente cubiertas (liquidables de Reportes, con capacitación)</td><td style={S.num}>{horas(h.minutosLiquidables + h.minutosCapacitacionLiquidables)}</td></tr>
+              <tr><td style={S.td}>− Capacitación{h.turnosCapacitacion ? ` (${h.turnosCapacitacion} turno/s: se liquidan, no se facturan)` : ''}</td><td style={S.num}>{horas(h.minutosCapacitacionLiquidables)}</td></tr>
+              <tr><td style={S.td}><b>Horas facturables</b></td><td style={S.num}><b>{horas(h.minutosCubiertos)}</b></td></tr>
+              {h.minutosSuperpuestos > 0 && <tr><td style={S.td}>de las cuales, superposición de posible relevo (se facturan; revisar)</td><td style={S.num}>{horas(h.minutosSuperpuestos)}</td></tr>}
+              {h.minutosSimultaneos > 0 && <tr><td style={S.td}>de las cuales, vigiladores simultáneos (se facturan)</td><td style={S.num}>{horas(h.minutosSimultaneos)}</td></tr>}
+              {h.minutosDescubiertos > 0 && <tr><td style={S.td}>Descubiertas (no se facturan salvo decisión)</td><td style={S.num}>{horas(h.minutosDescubiertos)}</td></tr>}
+              {h.minutosDiurnos != null && <tr><td style={S.td}>Facturables diurnas / nocturnas</td><td style={S.num}>{horas(h.minutosDiurnos)} / {horas(h.minutosNocturnos)}</td></tr>}
+            </tbody></table>
+            {h.revisar?.length > 0 && <div style={S.aviso}>Revisión comercial (no se descuenta nada automáticamente): {h.revisar.map((x: any) => `${fecha(x.fecha)}: ${x.detalle}`).join(' · ')}</div>}
             {h.minutosAceptadosFuera > 0 && <div style={S.sub}>Incluye {horas(h.minutosAceptadosFuera)} h fuera del horario programado aceptadas por el supervisor: se liquidan y se facturan.</div>}
-            {h.minutosExcedentes > 0 && <div style={S.sub}>{horas(h.minutosExcedentes)} h fichadas fuera del horario programado sin aceptar: no se liquidan ni se facturan.</div>}
             {h.turnosSinPuesto > 0 && <div style={S.aviso}>{h.turnosSinPuesto} turno(s) sin puesto: no se puede controlar la superposición entre ellos.</div>}
             {h.turnosFuturos > 0 && <div style={S.aviso}>{h.turnosFuturos} turno(s) todavía no ocurrieron: el período no está cerrado.</div>}
             {v.contrato?.separar_diurna_nocturna && !prop.r.franjaDefinida && <div style={S.aviso}>El contrato separa diurnas/nocturnas pero no tiene franja contractual: definirla en el contrato.</div>}
-            {h.turnosSinRegistro > 0 && <div style={S.aviso}>{h.turnosSinRegistro} turno(s) ya ocurridos sin registro: revisar en Revisión Operativa antes de aprobar.</div>}
-            {prop.r.desvio?.hayDiferencia && <div style={S.aviso}>Los registros cambiaron después de la aprobación del {fecha(prop.r.desvio.aprobadoAt)}: aprobado {horas(prop.r.desvio.cubiertosAprobados)} h cubiertas, hoy {horas(prop.r.desvio.cubiertosActuales)} h. La prefactura sigue usando lo aprobado hasta que se reemplace.</div>}
+            {h.turnosSinRegistro > 0 && <div style={S.aviso}>{h.turnosSinRegistro} turno(s) ya ocurridos sin horas reconocidas: si corresponde, reconocerlos en Revisión Operativa (se refleja acá y en liquidación).</div>}
+            {prop.r.desvio?.hayDiferencia && <div style={S.aviso}>Reportes cambió después de la aprobación del {fecha(prop.r.desvio.aprobadoAt)}: aprobado {horas(prop.r.desvio.cubiertosAprobados)} h, hoy {horas(prop.r.desvio.cubiertosActuales)} h. La prefactura sigue usando lo aprobado hasta que se revise y se reemplace (si ya se emitió, la diferencia va por nota de crédito/débito).</div>}
             <details><summary style={S.sub}>Detalle por turno ({h.detalle.length})</summary>
-              {h.detalle.map((d: any) => <div key={d.turno_id} style={S.sub}>{fecha(d.fecha)} · {d.estado} · programado {horas(d.programados)} h · cubierto {horas(d.cubiertos)} h · turno {d.turno_id.slice(0, 8)}</div>)}
+              {h.detalle.map((d: any) => <div key={`${d.turno_id}-${d.registro_id ?? ''}`} style={S.sub}>{fecha(d.fecha)} · {d.estado} · programado {horas(d.programados)} h · liquidable {horas(d.cubiertos)} h · turno {d.turno_id.slice(0, 8)}</div>)}
             </details>
             <div style={{ ...S.fila, marginTop: 8 }}>
               {h.minutosDescubiertos > 0 && <select style={S.input} value={trat} onChange={e => setTrat(e.target.value as 'no_facturar' | 'facturar')}>

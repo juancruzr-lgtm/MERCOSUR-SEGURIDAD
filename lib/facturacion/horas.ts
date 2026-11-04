@@ -1,47 +1,41 @@
 /**
  * lib/facturacion/horas.ts
  *
- * Horas FACTURABLES de un objetivo en un período comercial: cuánto tiempo
- * estuvo CUBIERTO cada puesto programado, más lo que el supervisor aceptó fuera
- * de turno. Usa las horas liquidables de lib/liquidacion (que no se toca), así
- * que lo facturado coincide con lo que se liquida.
+ * Horas FACTURABLES de un objetivo en un período comercial. NO calcula horas:
+ * parte de las horas liquidables que muestra Reportes → Planilla objetivo
+ * (lib/planilla-objetivo, la misma función y los mismos datos), que ya
+ * incorporan fichajes, reconocimientos del supervisor y correcciones
+ * posteriores. Si Reportes cambia, la propuesta de Facturación cambia igual.
  *
- *  - programadas: tiempo programado de los turnos con obligación, por puesto
- *    (unión de intervalos), recortado al período comercial.
- *  - cubiertas: tiempo programado que tuvo un vigilador. Un registro completo
- *    (dentro de la tolerancia de 15 min que usa liquidación) cubre el turno
- *    programado entero; uno parcial cubre la intersección de su horario
- *    efectivo con el programado, sin pasar de sus horas liquidables.
- *  - aceptadas fuera de turno: lo que el supervisor reconoció por encima del
- *    turno (horas liquidables > programadas). Se liquida, así que se factura
- *    (regla de JC, 03/11/2026: programado + lo aceptado = lo que se liquida).
- *  - excedentes: lo fichado fuera del horario SIN aceptar. No se liquida ni se
- *    factura; queda sólo informado.
- *  - superpuestas: tiempo en que dos turnos del MISMO puesto se pisan
- *    (relevos anticipados, coberturas dobles). Con la regla 'unir' (por
- *    defecto) se factura una sola vez; sólo el contrato puede indicar 'sumar'.
- *  - descubiertas: programado ya ocurrido sin cobertura. No se factura salvo
- *    decisión de Administración al aprobar (queda registrada con motivo).
- *  - Los turnos sin puesto no se pueden unir: se suman y se avisa.
- *  - Diurnas/nocturnas con la franja del CONTRATO, sobre lo cubierto.
+ * Sobre esas horas aplica sólo reglas COMERCIALES, cada una informada aparte:
+ *  - Capacitación (turnos.tipo_evento = 'capacitacion'): se liquida, no se
+ *    factura. Reportes ya la deja fuera del total del objetivo.
+ *  - Simultáneos: un turno contenido en otro o idéntico es otro vigilador
+ *    prestando servicio a la vez (refuerzo, otro puesto, evento): se factura.
+ *  - Superposiciones escalonadas del mismo puesto (posible relevo): NO se
+ *    descuenta nada automáticamente (JC, 04/11/2026: una coincidencia de
+ *    horario no alcanza). Se facturan las horas reconocidas y el caso queda
+ *    para revisión comercial; si corresponde cobrar ese tramo una vez, se
+ *    carga un ajuste comercial (con motivo, aprobado y auditado).
+ *  - Descubiertas: lo programado que no tiene horas reconocidas. No se factura
+ *    salvo decisión de Administración al aprobar (con motivo).
+ *  - Las horas reales (GPS) se informan; nunca reemplazan a las liquidables.
  *
- * Los horarios efectivos (hora_*_final / hora_*_real) son `time` sin fecha:
- * se ubican en el día que queda más cerca del horario programado.
+ * Los turnos van al período por su fecha de inicio, igual que en Reportes.
  */
 
-import {
-  effectiveEntrada, effectiveObjetivo, effectiveSalida, horasLiquidablesRegistro, selectRegistroPrincipal,
-  type RegistroLiquidacion, type TurnoLiquidacion,
-} from '@/lib/liquidacion'
+import { esCapacitacion } from '@/lib/caracteristica-turno'
+import type { RegistroLiquidacion, TurnoLiquidacion } from '@/lib/liquidacion'
 import { inicioDiaArgentinaISO } from '@/lib/periodo-argentina'
+import { duracionProgramadaPlanilla, filasHorasObjetivo, totalesHorasObjetivo } from '@/lib/planilla-objetivo'
 import { clasificarDiurnaNocturna, type FranjaNocturna, type RangoPeriodo } from './periodos'
 
 const ESTADOS_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancelado'])
 const TOLERANCIA_MIN = 15
 const MIN = 60000
 
-export type TurnoFacturable = TurnoLiquidacion & { id: string; puesto_id?: string | null }
-export type RegistroFacturable = RegistroLiquidacion & { id: string; turno_id: string; tipo_registro?: string | null }
+export type TurnoFacturable = TurnoLiquidacion & { id: string; objetivo_id?: string | null; puesto_id?: string | null; tipo_evento?: string | null }
+export type RegistroFacturable = RegistroLiquidacion & { id: string; turno_id: string; objetivo_final_id?: string | null; tipo_registro?: string | null; horas_trabajadas?: number | string | null }
 export type ReglaSuperposicion = 'unir' | 'sumar'
 
 type Tramo = [number, number] // epoch ms
@@ -52,29 +46,41 @@ export type DetalleTurno = {
   puesto_id: string | null
   fecha: string
   programados: number
+  /** Minutos liquidables (Reportes) de la fila. */
   cubiertos: number
-  estado: 'cubierto' | 'parcial' | 'sin_registro' | 'futuro'
+  estado: 'cubierto' | 'parcial' | 'sin_registro' | 'futuro' | 'capacitacion'
 }
+
+export type ParaRevisar = { fecha: string; tipo: 'superposicion'; detalle: string; minutos: number }
 
 export type HorasObjetivo = {
   objetivoId: string
+  /** Reportes → Planilla objetivo: horas liquidables del objetivo (sin capacitación). */
+  minutosLiquidables: number
+  /** Duración fichada por GPS (informativa). */
+  minutosReales: number
   minutosProgramados: number
+  /** Facturables antes de decidir sobre lo descubierto = liquidables − relevos duplicados. */
   minutosCubiertos: number
+  /** Superposición escalonada del mismo puesto (posible relevo): se factura y queda para revisión comercial. */
   minutosSuperpuestos: number
+  /** Vigiladores simultáneos: se facturan (informativo). */
+  minutosSimultaneos: number
   minutosDescubiertos: number
-  /** Reconocidos por el supervisor fuera del turno: ya incluidos en minutosCubiertos. */
+  /** Reconocidos por encima del turno: ya incluidos en las liquidables. */
   minutosAceptadosFuera: number
-  /** Fichados fuera del turno sin aceptar: no se liquidan ni se facturan. */
-  minutosExcedentes: number
-  /** Diurnas/nocturnas de lo cubierto (null si el contrato no separa o no hay franja). */
+  minutosCapacitacionProgramados: number
+  minutosCapacitacionLiquidables: number
+  turnosCapacitacion: number
+  /** Diurnas/nocturnas de lo facturable (null si el contrato no separa o no hay franja). */
   minutosDiurnos: number | null
   minutosNocturnos: number | null
-  /** Ídem para lo descubierto, por si Administración decide facturarlo. */
   descubiertosDiurnos: number | null
   descubiertosNocturnos: number | null
   turnosSinRegistro: number
   turnosFuturos: number
   turnosSinPuesto: number
+  revisar: ParaRevisar[]
   detalle: DetalleTurno[]
 }
 
@@ -106,60 +112,14 @@ export function ubicarHora(fecha: string, valor: string | null | undefined, refe
   return mejor
 }
 
-export function unir(tramos: Tramo[]): Tramo[] {
-  const s = tramos.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])
-  const out: Tramo[] = []
-  for (const [a, b] of s) {
-    const u = out[out.length - 1]
-    if (u && a <= u[1]) u[1] = Math.max(u[1], b)
-    else out.push([a, b])
-  }
-  return out
-}
-const largo = (ts: Tramo[]) => ts.reduce((s, [a, b]) => s + Math.max(0, b - a), 0) / MIN
-function recortar(t: Tramo, d: number, h: number): Tramo | null {
-  const a = Math.max(t[0], d), b = Math.min(t[1], h)
-  return b > a ? [a, b] : null
-}
-/** Los primeros `minutos` de los tramos, en orden. */
-function hasta(ts: Tramo[], minutos: number): Tramo[] {
-  const out: Tramo[] = []
-  let resta = minutos * MIN
-  for (const [a, b] of unir(ts)) {
-    if (resta <= 0) break
-    const fin = Math.min(b, a + resta)
-    out.push([a, fin]); resta -= fin - a
-  }
-  return out
-}
-/** a − b, ambos ya unidos. */
-function restar(a: Tramo[], b: Tramo[]): Tramo[] {
-  const out: Tramo[] = []
-  for (const [x, y] of a) {
-    let ini = x
-    for (const [p, q] of b) {
-      if (q <= ini || p >= y) continue
-      if (p > ini) out.push([ini, Math.min(p, y)])
-      ini = Math.max(ini, q)
-      if (ini >= y) break
-    }
-    if (ini < y) out.push([ini, y])
-  }
-  return out
-}
-
-function clasificarTramos(ts: Tramo[], franja: FranjaNocturna) {
-  let d = 0, n = 0
-  for (const [a, b] of ts) {
-    const c = clasificarDiurnaNocturna(new Date(a).toISOString(), new Date(b).toISOString(), franja)
-    d += c.diurnos; n += c.nocturnos
-  }
-  return { d, n }
+function clasificar(t: Tramo, franja: FranjaNocturna) {
+  const c = clasificarDiurnaNocturna(new Date(t[0]).toISOString(), new Date(t[1]).toISOString(), franja)
+  return { d: c.diurnos, n: c.nocturnos }
 }
 
 export function horasDelObjetivo(input: {
   objetivoId: string
-  periodo: Pick<RangoPeriodo, 'instanteDesde' | 'instanteHasta'>
+  periodo: Pick<RangoPeriodo, 'desde' | 'hastaExclusivo'>
   turnos: TurnoFacturable[]
   registros: RegistroFacturable[]
   franjaNocturna: FranjaNocturna | null
@@ -168,116 +128,122 @@ export function horasDelObjetivo(input: {
   ahora?: Date
 }): HorasObjetivo {
   const ahora = (input.ahora ?? new Date()).getTime()
-  const pd = Date.parse(input.periodo.instanteDesde), ph = Date.parse(input.periodo.instanteHasta)
-  const porTurno = new Map<string, RegistroFacturable[]>()
-  for (const r of input.registros) {
-    if (r.tipo_registro === 'ausencia') continue
-    porTurno.set(r.turno_id, [...(porTurno.get(r.turno_id) ?? []), r])
-  }
-  const prog = new Map<string, Tramo[]>()
-  const cub = new Map<string, Tramo[]>()
+  const { desde, hastaExclusivo } = input.periodo
+  // Mismo universo que Reportes: turnos del período por fecha de inicio y sus registros.
+  const turnos = input.turnos.filter(t => t.fecha >= desde && t.fecha < hastaExclusivo)
+  const filas = filasHorasObjetivo(input.objetivoId, turnos, input.registros)
+  const tot = totalesHorasObjetivo(filas)
+
+  const franja = input.separarDiurnaNocturna ? input.franjaNocturna : null
   const detalle: DetalleTurno[] = []
-  let sinRegistro = 0, futuros = 0, sinPuesto = 0, excedentes = 0, aceptadosFuera = 0, brutoCubierto = 0
-
-  // 1ª pasada: lo programado, por puesto.
-  type Item = { t: TurnoFacturable; reg: RegistroFacturable | undefined; pi: number; pf: number; enPeriodo: Tramo; clave: string }
-  const items: Item[] = []
-  for (const t of input.turnos) {
-    if (ESTADOS_SIN_OBLIGACION.has(String(t.estado ?? ''))) continue
-    const reg = selectRegistroPrincipal(porTurno.get(t.id) ?? [])
-    if (effectiveObjetivo(reg, t) !== input.objetivoId) continue
-    const p = instantesTurno(t)
-    const pi = Date.parse(p.inicio), pf = Date.parse(p.fin)
-    const enPeriodo = recortar([pi, pf], pd, ph)
-    if (!enPeriodo) continue
-    const clave = t.puesto_id ?? `turno:${t.id}`
-    if (!t.puesto_id) sinPuesto++
-    prog.set(clave, [...(prog.get(clave) ?? []), enPeriodo])
-    items.push({ t, reg, pi, pf, enPeriodo, clave })
-  }
-  const progPuesto = new Map<string, Tramo[]>()
-  for (const [k, ts] of Array.from(prog.entries())) progPuesto.set(k, unir(ts))
-
-  // 2ª pasada: lo cubierto. El horario efectivo cubre cualquier tramo programado
-  // del MISMO puesto (un relevo que llega antes tapa la salida anticipada del
-  // anterior). Lo que cae fuera de lo programado se factura sólo si el
-  // supervisor lo reconoció (liquidables > turno); si no, es excedente.
-  for (const { t, reg, pi, pf, enPeriodo, clave } of items) {
-    const programados = largo([enPeriodo])
-    const liq = Math.round(horasLiquidablesRegistro(t, reg) * 60)
-    if (liq <= 0) {
-      const estado = pf > ahora ? 'futuro' : 'sin_registro'
-      if (estado === 'futuro') futuros++; else sinRegistro++
-      detalle.push({ turno_id: t.id, registro_id: reg?.id ?? null, puesto_id: t.puesto_id ?? null, fecha: t.fecha, programados, cubiertos: 0, estado })
+  let aceptadosFuera = 0, sinPuesto = 0, d = 0, n = 0
+  const conHoras: Array<{ clave: string; pi: number; pf: number; min: number; fecha: string }> = []
+  const liqPorTurno = new Map<string, number>()
+  for (const f of filas) {
+    const t = f.turno as TurnoFacturable
+    const programados = Math.round(duracionProgramadaPlanilla(t) * 60)
+    const min = Math.round((f.horasLiquidables || 0) * 60)
+    if (f.capacitacion) {
+      detalle.push({ turno_id: t.id, registro_id: f.registro?.id ?? null, puesto_id: t.puesto_id ?? null, fecha: t.fecha, programados, cubiertos: 0, estado: 'capacitacion' })
       continue
     }
-    const dur = (pf - pi) / MIN
-    const e = ubicarHora(t.fecha, effectiveEntrada(reg), pi)
-    const s = ubicarHora(t.fecha, effectiveSalida(reg), pf)
-    const efectivo: Tramo | null = e != null && s != null && s > e ? [e, s] : null
-    const delPuesto = progPuesto.get(clave) ?? []
-    const enPuesto = (x: Tramo) => delPuesto.map(q => recortar(x, q[0], q[1])).filter(Boolean) as Tramo[]
-    let tramos: Tramo[]
-    if (liq >= dur - TOLERANCIA_MIN) {
-      // Turno completo (misma tolerancia que liquidación): todo lo propio, más lo
-      // que el horario efectivo haya cubierto de turnos vecinos del puesto.
-      tramos = unir([[pi, pf], ...(efectivo ? enPuesto(efectivo) : [])])
-    } else if (efectivo) {
-      // Parcial: nunca más de lo que se liquida (el supervisor pudo reconocer menos).
-      tramos = hasta(enPuesto(efectivo), liq)
-    } else {
-      tramos = [[pi, Math.min(pf, pi + liq * MIN)]]
+    liqPorTurno.set(t.id, (liqPorTurno.get(t.id) ?? 0) + min)
+    const p = instantesTurno(t)
+    const pi = Date.parse(p.inicio), pf = Date.parse(p.fin)
+    if (min > 0) {
+      if (!t.puesto_id) sinPuesto++
+      conHoras.push({ clave: t.puesto_id ?? `obj:${input.objetivoId}`, pi, pf, min, fecha: t.fecha })
+      aceptadosFuera += Math.max(0, min - programados)
+      if (franja) {
+        // Lo reconocido se reparte como el horario programado del turno.
+        const c = clasificar([pi, pf], franja), tot2 = c.d + c.n || 1
+        d += min * c.d / tot2; n += min * c.n / tot2
+      }
     }
-    // Reconocido por encima del turno: se ubica en lo fichado fuera del puesto
-    // (o a continuación del turno si no hay horario) y se factura.
-    const fuera = efectivo ? restar([recortar(efectivo, pd, ph) ?? [0, 0]], delPuesto) : []
-    const extra = Math.max(0, liq - dur)
-    // Con horario, sólo lo que cae fuera del puesto: lo reconocido DENTRO de otro
-    // turno del puesto (relevo anticipado) ya está cubierto por la unión.
-    const aceptado = extra <= 0 ? [] : efectivo ? hasta(fuera, extra) : [recortar([pf, pf + extra * MIN], pd, ph)].filter(Boolean) as Tramo[]
-    aceptadosFuera += Math.round(largo(aceptado))
-    excedentes += Math.max(0, Math.round(largo(fuera) - largo(aceptado)))
-    const c = [...tramos.map(x => recortar(x, pd, ph)).filter(Boolean) as Tramo[], ...aceptado]
-    const cubiertos = largo(c)
-    const propios = largo(c.map(x => recortar(x, pi, pf)).filter(Boolean) as Tramo[])
-    if (c.length) { cub.set(clave, [...(cub.get(clave) ?? []), ...c]); brutoCubierto += cubiertos }
-    detalle.push({ turno_id: t.id, registro_id: reg?.id ?? null, puesto_id: t.puesto_id ?? null, fecha: t.fecha, programados, cubiertos: Math.round(cubiertos),
-      estado: propios >= programados - TOLERANCIA_MIN ? 'cubierto' : 'parcial' })
+    detalle.push({ turno_id: t.id, registro_id: f.registro?.id ?? null, puesto_id: t.puesto_id ?? null, fecha: t.fecha, programados, cubiertos: min,
+      estado: min <= 0 ? (pf > ahora ? 'futuro' : 'sin_registro') : min >= programados - TOLERANCIA_MIN ? 'cubierto' : 'parcial' })
   }
 
-  let programadosU: Tramo[] = [], cubiertosU: Tramo[] = [], descubiertosU: Tramo[] = []
-  for (const [k, ts] of Array.from(prog.entries())) {
-    const pu = unir(ts)
-    const cu = unir(cub.get(k) ?? [])
-    programadosU = programadosU.concat(pu)
-    cubiertosU = cubiertosU.concat(cu)
-    // Descubierto: programado ya ocurrido y sin cobertura.
-    const pasado = pu.map(x => recortar(x, -Infinity, ahora)).filter(Boolean) as Tramo[]
-    descubiertosU = descubiertosU.concat(restar(pasado, cu))
+  // Programado y descubierto: por turno con obligación, sin capacitación. Lo
+  // que falta se mide por puesto y día: un relevo que entra antes y reconoce
+  // esa hora tapa la salida anticipada del anterior (no es un hueco).
+  let programadosTot = 0, sinRegistro = 0, futuros = 0
+  const grupos = new Map<string, { prog: number; liq: number; d: number; n: number }>()
+  for (const t of turnos) {
+    if (t.objetivo_id !== input.objetivoId || ESTADOS_SIN_OBLIGACION.has(String(t.estado ?? '')) || esCapacitacion(t.tipo_evento)) continue
+    const prog = Math.round(duracionProgramadaPlanilla(t) * 60)
+    programadosTot += prog
+    const liq = liqPorTurno.get(t.id) ?? 0
+    const p = instantesTurno(t)
+    const pi = Date.parse(p.inicio), pf = Date.parse(p.fin)
+    if (pf > ahora) { if (liq <= 0) futuros++; continue }
+    if (liq <= 0) sinRegistro++
+    const k = `${t.puesto_id ?? `turno:${t.id}`}|${t.fecha}`
+    const g = grupos.get(k) ?? { prog: 0, liq: 0, d: 0, n: 0 }
+    g.prog += prog; g.liq += liq
+    if (franja) { const c = clasificar([pi, pf], franja), s = c.d + c.n || 1; g.d += prog * c.d / s; g.n += prog * c.n / s }
+    grupos.set(k, g)
   }
-  const cubiertosUnidos = Math.round(largo(cubiertosU))
-  const sumar = input.superposicion === 'sumar'
-  const clasificar = input.separarDiurnaNocturna && input.franjaNocturna != null
-  let d: number | null = null, n: number | null = null, dd: number | null = null, dn: number | null = null
-  if (clasificar) {
-    const c1 = clasificarTramos(cubiertosU, input.franjaNocturna!)
-    const c2 = clasificarTramos(descubiertosU, input.franjaNocturna!)
-    d = Math.round(c1.d); n = Math.round(c1.n); dd = Math.round(c2.d); dn = Math.round(c2.n)
-    if (sumar && brutoCubierto > cubiertosUnidos && c1.d + c1.n > 0) {
-      const f = Math.round(brutoCubierto) / (c1.d + c1.n)
-      n = Math.round(c1.n * f); d = Math.round(brutoCubierto) - n
+  let descubiertos = 0, dn = 0
+  for (const g of Array.from(grupos.values())) {
+    const falta = Math.max(0, g.prog - g.liq)
+    descubiertos += falta
+    if (franja && falta > 0) dn += falta * g.n / (g.d + g.n || 1)
+  }
+
+  // Superposiciones entre filas con horas del mismo puesto (sin puesto: del objetivo).
+  let relevos = 0, simultaneos = 0
+  const revisar: ParaRevisar[] = []
+  const porClave = new Map<string, typeof conHoras>()
+  for (const x of conHoras) porClave.set(x.clave, [...(porClave.get(x.clave) ?? []), x])
+  for (const xs of Array.from(porClave.values())) {
+    xs.sort((a, b) => a.pi - b.pi)
+    let relevosClave = 0
+    for (let i = 0; i < xs.length; i++) for (let j = i + 1; j < xs.length && xs[j].pi < xs[i].pf; j++) {
+      const a = xs[i], b = xs[j]
+      const juntos = Math.round((Math.min(a.pf, b.pf) - Math.max(a.pi, b.pi)) / MIN)
+      if (juntos <= 0) continue
+      const contenido = (a.pi <= b.pi && a.pf >= b.pf) || (b.pi <= a.pi && b.pf >= a.pf)
+      if (contenido) continue
+      relevosClave += Math.min(juntos, a.min, b.min)
+      revisar.push({ fecha: a.fecha, tipo: 'superposicion', minutos: juntos,
+        detalle: `dos turnos escalonados del mismo puesto se pisan ${Math.round(juntos / 6) / 10} h: se facturan las horas reconocidas; si fue un relevo y corresponde cobrarlo una vez, cargar un ajuste comercial` })
     }
+    relevos += relevosClave
+    // Simultáneos = horas de vigiladores adicionales: lo programado de las filas
+    // menos su unión y menos los relevos (informativo; se facturan).
+    const suma = xs.reduce((s, x) => s + (x.pf - x.pi) / MIN, 0)
+    let union = 0, fin = -Infinity
+    for (const x of xs) { if (x.pf <= fin) continue; union += (x.pf - Math.max(x.pi, fin)) / MIN; fin = x.pf }
+    simultaneos += Math.max(0, Math.round(suma - union) - relevosClave)
+  }
+  // Sin descuento automático: lo reconocido en Reportes se factura entero.
+  const liquidables = Math.round(tot.horasLiquidables * 60)
+  const facturables = liquidables
+  let minD: number | null = null, minN: number | null = null
+  if (franja) {
+    const s = d + n
+    const f = s > 0 ? facturables / s : 0
+    minN = Math.round(n * f); minD = facturables - minN
   }
   return {
     objetivoId: input.objetivoId,
-    minutosProgramados: Math.round(largo(programadosU)),
-    minutosCubiertos: sumar ? Math.round(brutoCubierto) : cubiertosUnidos,
-    minutosSuperpuestos: Math.max(0, Math.round(brutoCubierto) - cubiertosUnidos),
-    minutosDescubiertos: Math.round(largo(descubiertosU)),
+    minutosLiquidables: liquidables,
+    minutosReales: Math.round(tot.horasReales * 60),
+    minutosProgramados: programadosTot,
+    minutosCubiertos: facturables,
+    minutosSuperpuestos: relevos,
+    minutosSimultaneos: simultaneos,
+    minutosDescubiertos: descubiertos,
     minutosAceptadosFuera: aceptadosFuera,
-    minutosExcedentes: excedentes,
-    minutosDiurnos: d, minutosNocturnos: n, descubiertosDiurnos: dd, descubiertosNocturnos: dn,
+    minutosCapacitacionProgramados: detalle.filter(x => x.estado === 'capacitacion').reduce((s, x) => s + x.programados, 0),
+    minutosCapacitacionLiquidables: Math.round(tot.horasCapacitacion * 60),
+    turnosCapacitacion: tot.turnosCapacitacion,
+    minutosDiurnos: minD, minutosNocturnos: minN,
+    // Diurnas + nocturnas = total exacto (lo exige la base al aprobar).
+    descubiertosDiurnos: franja ? descubiertos - Math.round(dn) : null, descubiertosNocturnos: franja ? Math.round(dn) : null,
     turnosSinRegistro: sinRegistro, turnosFuturos: futuros, turnosSinPuesto: sinPuesto,
+    revisar,
     detalle,
   }
 }
