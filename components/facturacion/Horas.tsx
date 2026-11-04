@@ -8,13 +8,15 @@ import { api, leer } from '@/lib/facturacion/datos'
 import { aprobacionDelMes, avisosHoras } from '@/lib/facturacion/revision'
 import { S, horas, useAccion } from './comun'
 import DetalleHoras from './DetalleHoras'
+import type { Periodo } from './periodo'
+import { nombreDelMes } from '@/lib/facturacion/periodo-seguro'
 
 type Fila = { v: any; prop: any | null; error: string | null }
 
 /** Advertencias que conviene mirar antes de aprobar (no bloquean). */
 const avisos = (v: any, r: any) => avisosHoras(Boolean(v.contrato?.separar_diurna_nocturna), r)
 
-export default function Horas({ mes }: { mes: string }) {
+export default function Horas({ mes, periodo }: { mes: string; periodo: Periodo }) {
   const [filas, setFilas] = useState<Fila[]>([])
   const [aprobadas, setAprobadas] = useState<any[]>([])
   const [abierta, setAbierta] = useState<string | null>(null)
@@ -59,8 +61,8 @@ export default function Horas({ mes }: { mes: string }) {
     <div style={S.card}>
       <div style={{ ...S.fila, justifyContent: 'space-between' }}>
         <h3 style={S.h3}>Horas de {mes} por objetivo</h3>
-        <button style={S.btn} disabled={ocupado || calculando || !pendientes.length} onClick={() => {
-          if (!confirm(`Aprobar las horas propuestas de ${pendientes.length} objetivo(s) pendiente(s)? Lo ya aprobado no se toca.`)) return
+        <button style={S.btn} disabled={ocupado || calculando || !pendientes.length || !periodo.habilitado} title={periodo.motivo ?? undefined} onClick={() => {
+          if (!confirm(`APROBAR TODAS — ${nombreDelMes(mes)}\n\nSe aprueban las horas propuestas de ${pendientes.length} objetivo(s) pendiente(s). Lo ya aprobado no se toca.\n\n¿Continuar?`)) return
           correr(async () => {
             const errores: string[] = []
             for (const f of pendientes) { try { await aprobar(f) } catch (e: any) { errores.push(`${f.v.objetivo?.nombre}: ${e?.message}`) } }
@@ -71,6 +73,7 @@ export default function Horas({ mes }: { mes: string }) {
       </div>
       <div style={S.sub}>Horas de Reportes → Planilla objetivo con las reglas comerciales (sin capacitación; simultáneos se facturan; lo descubierto sólo por decisión). No modifica fichajes ni liquidación.</div>
       <Mensaje />
+      {!periodo.habilitado && <div style={{ ...S.err, marginTop: 6 }}>{periodo.motivo}</div>}
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
         <thead><tr>{['', 'Cliente', 'Objetivo', 'Propuestas', 'Aprobadas', 'Notas', ''].map((h, i) => <th key={i} style={S.th}>{h}</th>)}</tr></thead>
         <tbody>
@@ -89,7 +92,7 @@ export default function Horas({ mes }: { mes: string }) {
                   <td style={S.num}>{ap ? <span style={{ color: igual ? '#4ade80' : '#fbbf24' }}>{horas(ap.minutos_aprobados)} h</span> : <span style={S.sub}>—</span>}</td>
                   <td style={S.td}><input style={{ ...S.input, minWidth: 160 }} placeholder={t === 'facturar' ? 'Motivo (obligatorio)' : 'Notas'} value={notas[k] ?? ''} onChange={e => setNotas({ ...notas, [k]: e.target.value })} /></td>
                   <td style={S.td}>
-                    <button style={ap ? S.btn2 : S.btn} disabled={ocupado || !h || Boolean(igual)} onClick={() => {
+                    <button style={ap ? S.btn2 : S.btn} disabled={ocupado || !h || Boolean(igual) || !periodo.habilitado} title={periodo.motivo ?? undefined} onClick={() => {
                       if (ap && !confirm('Ya hay horas aprobadas: ¿reemplazarlas por la propuesta actual? (si ya se facturaron, la base lo impide)')) return
                       correr(async () => { await aprobar(f); await cargar() }, 'Horas aprobadas')
                     }}>{igual ? 'Aprobado' : ap ? 'Reemplazar' : 'Aprobar'}</button>

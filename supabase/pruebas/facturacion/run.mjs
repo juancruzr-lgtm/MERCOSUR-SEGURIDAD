@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -93,6 +93,8 @@ for (const m of MIGS) {
 }
 ok('las cuatro migraciones aplican', true)
 const postG = await controles('verificacion-grupos.sql')
+const postS = await controles('verificacion-seguro-periodo.sql')
+ok('verificación posterior del seguro de períodos (verificacion-seguro-periodo.sql): todo OK recién aplicada', postS.length === 10 && postS.every(r => r.ok === true), JSON.stringify(postS.filter(r => !r.ok)))
 const postR = await controles('verificacion-reagrupar.sql')
 ok('verificación posterior del reagrupado (verificacion-reagrupar.sql): todo OK recién aplicada', postR.length === 6 && postR.every(r => r.ok === true), JSON.stringify(postR.filter(r => !r.ok)))
 ok('verificación posterior de grupos (verificacion-grupos.sql): todo OK recién aplicada', postG.length === 10 && postG.every(r => r.ok === true), JSON.stringify(postG.filter(r => !r.ok)))
@@ -201,6 +203,69 @@ await como(ADM, () => sql(`select public.fact_documento_vincular($1, 'cliente', 
 const vincs = await sql(`select entidad_id, anulado_at is not null anulado from public.fact_documento_vinculos where documento_id = $1 order by created_at`, [d1.id])
 ok('corregir una asociación conserva la anterior anulada', vincs.length === 2 && vincs[0].anulado && !vincs[1].anulado)
 ok('lo propuesto por extracción no queda como confirmado', (await uno(`select datos_confirmados, estado from public.fact_documentos where id = $1`, [d1.id])).estado === 'pendiente_revision')
+
+// ── Seguro de períodos (20261204120000) ──────────────────────────────────
+// Los meses se calculan relativos a "hoy" en Argentina: la prueba sirve igual el mes que viene.
+const mesAR = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7)
+const sumarMes = (m, n) => { const d = new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)); return d.toISOString().slice(0, 7) }
+const MA = mesAR, MV = sumarMes(mesAR, -1), MF = sumarMes(mesAR, 1)
+const ini = m => `${m}-01`
+ok('seguro: el mes actual de la base es el de Argentina', (await uno(`select public.fact_mes_actual() m`)).m === MA)
+const kSeg = await contrato({ cliente_id: laromet, nombre: 'Seguro de períodos', modalidad: 'por_hora', tipo_comprobante: 1, estado: 'vigente' })
+const OBJ_SEG = '00000000-0000-0000-0000-00000000b003'
+const aprobarSeg = (desde, hasta) => como(ADM, () => uno(`select public.fact_horas_aprobar($1, $2, $3, $4, $5::jsonb, '[]'::jsonb) id`,
+  [OBJ_SEG, kSeg, desde, hasta, JSON.stringify({ programados: 60, cubiertos: 60, superpuestos: 0, descubiertos: 0, aprobados: 60 })]))
+const prefSeg = (mes, extra = {}) => como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: laromet, contrato_id: kSeg,
+  agrupacion_clave: `seguro:${mes}:${Math.random()}`, periodo_mes: mes, periodo_desde: ini(mes), periodo_hasta_excl: ini(sumarMes(mes, 1)), lineas: [], estado: 'en_preparacion', ...extra })]))
+const PROT = /Período protegido/
+ok('seguro: aceptar horas del MES ACTUAL se rechaza en la base', await falla(() => aprobarSeg(ini(MA), ini(MF)), PROT))
+ok('seguro: aceptar horas de un mes FUTURO se rechaza', await falla(() => aprobarSeg(ini(MF), ini(sumarMes(MF, 1))), PROT))
+ok('seguro: generar una prefactura del mes actual se rechaza', await falla(() => prefSeg(MA), PROT))
+const apV = (await aprobarSeg(ini(MV), ini(MA))).id
+const pfV = (await prefSeg(MV)).id
+ok('seguro: el mes VENCIDO funciona normal (horas y prefactura)', Boolean(apV && pfV))
+// Corte 26 → 25: el mes de facturación es el del último día del período.
+ok('seguro: corte que termina en el mes vencido se acepta', Boolean((await aprobarSeg(`${sumarMes(MV, -1)}-26`, `${MV}-26`)).id))
+ok('seguro: corte que termina en el mes actual se rechaza', await falla(() => aprobarSeg(`${MV}-26`, `${MA}-26`), PROT))
+// Excepción gerencial.
+ok('seguro: Administración no puede abrir una excepción', await falla(() => como(ADM, () => sql(`select public.fact_periodo_excepcion_otorgar($1, 'Prueba de Administración sin permiso')`, [MA])), /Sólo Gerencia/))
+ok('seguro: un supervisor tampoco', await falla(() => como(SUP, () => sql(`select public.fact_periodo_excepcion_otorgar($1, 'Prueba de supervisor sin permiso')`, [MA]))))
+ok('seguro: anon no ejecuta la excepción', !(await uno(`select has_function_privilege('anon', 'public.fact_periodo_excepcion_otorgar(text, text, integer)', 'execute') p`)).p)
+ok('seguro: excepción sin motivo suficiente se rechaza', await falla(() => como(GER, () => sql(`select public.fact_periodo_excepcion_otorgar($1, 'corto')`, [MA])), /motivo/))
+ok('seguro: excepción de más de 24 h se rechaza', await falla(() => como(GER, () => sql(`select public.fact_periodo_excepcion_otorgar($1, 'Cierre anticipado pedido por el cliente', 30)`, [MA])), /entre 1 y 24/))
+ok('seguro: un mes vencido no necesita excepción', await falla(() => como(GER, () => sql(`select public.fact_periodo_excepcion_otorgar($1, 'Cierre anticipado pedido por el cliente')`, [MV])), /ya está vencido/))
+ok('seguro: nadie escribe la tabla de excepciones directo', await falla(() => como(GER, () => sql(`insert into public.fact_periodo_excepciones (mes, motivo, otorgada_por, vence_at) values ($1, 'directo sin pasar por la función', $2, now() + interval '1 hour')`, [MA, GER])), /permission denied/))
+const exc = (await como(GER, () => uno(`select public.fact_periodo_excepcion_otorgar($1, 'Cierre anticipado pedido por el cliente', 2) id`, [MA]))).id
+const est = (await como(ADM, () => uno(`select public.fact_periodo_estado($1) e`, [MA]))).e
+ok('seguro: con excepción vigente el estado del mes lo informa (motivo, vencimiento, quién)', est.estado === 'en_curso' && est.habilitado === true && est.excepcion?.id === exc && est.excepcion?.otorgada_por_nombre === 'GERENCIA' && est.es_gerencia === false, JSON.stringify(est))
+const apA = (await aprobarSeg(ini(MA), ini(MF))).id
+ok('seguro: con la excepción, Administración puede aceptar horas del mes actual', Boolean(apA))
+ok('seguro: la excepción no habilita otros meses (el futuro sigue protegido)', await falla(() => aprobarSeg(ini(MF), ini(sumarMes(MF, 1))), PROT))
+ok('seguro: la excepción queda en el historial con su motivo', (await uno(`select datos->>'motivo' m from public.fact_historial where entidad = 'periodo' and entidad_id = $1 and accion = 'excepcion_otorgada'`, [exc])).m === 'Cierre anticipado pedido por el cliente')
+await como(GER, () => sql(`select public.fact_periodo_excepcion_revocar($1, 'Ya no hace falta')`, [exc]))
+ok('seguro: revocada la excepción, el mes vuelve a estar protegido', await falla(() => prefSeg(MA), PROT)
+  && (await uno(`select count(*)::int n from public.fact_historial where entidad_id = $1 and accion = 'excepcion_revocada'`, [exc])).n === 1)
+ok('seguro: anular una aprobación del mes protegido igual se puede', (await db.query(`update public.fact_horas_aprobaciones set estado = 'anulada', anulado_at = now(), anulado_motivo = 'prueba' where id = $1`, [apA])).affectedRows === 1)
+ok('seguro: modificar una aprobación vigente del mes protegido no', await falla(() => db.query(`update public.fact_horas_aprobaciones set estado = 'aprobada', notas = 'x' where id = $1`, [apA]), PROT))
+ok('seguro: descartar una prefactura siempre se puede', await (async () => { await como(ADM, async () => sql(`select public.fact_prefactura_estado($1, 'descartada', (select version from public.fact_prefacturas where id = $1), 'prueba')`, [pfV])); return (await uno(`select estado from public.fact_prefacturas where id = $1`, [pfV])).estado === 'descartada' })())
+// Operaciones en curso (recálculos).
+const opIni = (tipo, mes, k = null, quien = ADM) => como(quien, () => uno(`select public.fact_operacion_iniciar($1, $2, $3) id`, [tipo, mes, k]))
+const op1 = (await opIni('recalculo_mes', MV)).id
+ok('operaciones: un segundo recálculo del mismo mes se rechaza mientras el primero sigue', await falla(() => opIni('recalculo_mes', MV, null, GER), /en curso/))
+ok('operaciones: tampoco un recálculo de un contrato de ese mes', await falla(() => opIni('recalculo_contrato', MV, kSeg), /en curso/))
+ok('operaciones: no se inicia un recálculo de un mes protegido', await falla(() => opIni('recalculo_mes', MA), PROT))
+await como(ADM, () => sql(`select public.fact_operacion_terminar($1, 'terminada', '{"creadas":1}'::jsonb)`, [op1]))
+ok('operaciones: terminado el anterior, se puede volver a lanzar; queda el resultado consultable',
+  Boolean((await opIni('recalculo_contrato', MV, kSeg)).id) && (await uno(`select estado, resultado->>'creadas' c from public.fact_operaciones where id = $1`, [op1])).c === '1')
+await db.exec(`update public.fact_operaciones set iniciada_at = now() - interval '11 minutes' where estado = 'en_curso'`)
+const op3 = (await opIni('recalculo_mes', MV)).id
+ok('operaciones: una que no terminó en 10 minutos queda "sin confirmar" (resultado desconocido), no se borra',
+  Boolean(op3) && (await uno(`select count(*)::int n from public.fact_operaciones where estado = 'sin_confirmar'`)).n === 1)
+ok('operaciones: nadie escribe la tabla directo', await falla(() => como(ADM, () => sql(`update public.fact_operaciones set estado = 'terminada'`)), /permission denied/))
+await como(ADM, () => sql(`select public.fact_operacion_terminar($1, 'terminada', null)`, [op3]))
+// Las pruebas que siguen usan noviembre y diciembre de 2026 como datos de ejemplo: si todavía no están
+// vencidos, Gerencia los habilita con la misma excepción auditada (no se toca la regla).
+for (const m of ['2026-11', '2026-12']) if (m >= MA) await como(GER, () => sql(`select public.fact_periodo_excepcion_otorgar($1, 'Datos de ejemplo de la prueba automática', 24)`, [m]))
 
 // ── Horas aprobadas ────────────────────────────────────────────────────────
 const OBJ_AD = '00000000-0000-0000-0000-00000000b001'

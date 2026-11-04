@@ -12,7 +12,7 @@ import { taStoreSupabase } from '@/lib/afip/ta-store-supabase'
 import { SERVICIO_WSFE, consultarComprobante, solicitarCae, ultimoAutorizado } from '@/lib/afip/wsfe'
 import { ejecutarEmision, type Emision } from '@/lib/facturacion/emision-servidor'
 import { fechaArgentina } from '@/lib/periodo-argentina'
-import { errorRpc, responder } from '../_comun'
+import { errorRpc, rechazoPorPeriodo, responder } from '../_comun'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,6 +31,9 @@ export async function POST(req: NextRequest) {
   let emisionId: string | null = b.emision_id ?? null
   if (!emisionId) {
     if (!['produccion', 'homologacion'].includes(b.ambiente)) return responder({ error: 'Ambiente inválido' }, 400)
+    // Seguro de períodos: no se emite una prefactura del mes en curso o futuro.
+    const { data: pf } = await c.usuario.from('fact_prefacturas').select('periodo_mes').eq('id', b.prefactura_id).maybeSingle()
+    if (pf?.periodo_mes) { const rechazo = await rechazoPorPeriodo(c.usuario, pf.periodo_mes); if (rechazo) return rechazo }
     const { data, error } = await c.usuario.rpc('fact_emision_preparar', { p_prefactura_id: b.prefactura_id, p_version: b.version, p_ambiente: b.ambiente })
     if (error) return errorRpc(error)
     emisionId = (data as any).id

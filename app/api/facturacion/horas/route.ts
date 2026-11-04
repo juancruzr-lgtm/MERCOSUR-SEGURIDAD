@@ -4,7 +4,7 @@ import type { NextRequest } from 'next/server'
 import { clientesDelPedido } from '@/app/api/documentacion/_clientes'
 import { esMesValido } from '@/lib/periodo-argentina'
 import { aprobarHoras, proponerHoras } from '@/lib/facturacion/servidor'
-import { responder } from '../_comun'
+import { rechazoPorPeriodo, responder } from '../_comun'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -22,7 +22,12 @@ export async function POST(req: NextRequest) {
   try {
     const p = { contratoId: b.contrato_id, objetivoId: b.objetivo_id, mes: b.mes, notas: b.notas, reemplazar: !!b.reemplazar,
       tratamientoDescubiertos: b.tratamiento_descubiertos === 'facturar' ? 'facturar' as const : 'no_facturar' as const }
-    if (b.accion === 'aprobar') return responder(await aprobarHoras(c.usuario, p))
+    if (b.accion === 'aprobar') {
+      // Seguro de períodos: no se aceptan horas del mes en curso o futuro (salvo excepción gerencial).
+      const rechazo = await rechazoPorPeriodo(c.usuario, b.mes)
+      if (rechazo) return rechazo
+      return responder(await aprobarHoras(c.usuario, p))
+    }
     const r = await proponerHoras(c.usuario, p)
     return responder(r)
   } catch (e: any) {

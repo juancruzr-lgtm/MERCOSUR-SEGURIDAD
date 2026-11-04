@@ -16,6 +16,8 @@ import {
 } from '@/lib/facturacion/revision'
 import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
 import DetalleHoras from './DetalleHoras'
+import { recalcular, useOperacion, type Periodo } from './periodo'
+import { nombreDelMes } from '@/lib/facturacion/periodo-seguro'
 import { rangoFechasMes } from '@/lib/periodo-argentina'
 
 const ESTADOS_FILTRO: Array<[string, string]> = [
@@ -35,7 +37,13 @@ type Base = Omit<FilaRevision, 'objetivos' | 'prefactura'> & {
 }
 const claveObj = (contratoId: string, objetivoId: string) => `${contratoId}:${objetivoId}`
 
-export default function Bandeja({ mes, usuarios, config }: { mes: string; usuarios: Array<{ id: string; nombre: string }>; config: Config }) {
+export default function Bandeja({ mes, usuarios, config, periodo }: { mes: string; usuarios: Array<{ id: string; nombre: string }>; config: Config; periodo: Periodo }) {
+  // Seguro de períodos: en el mes en curso o futuro se consulta, pero no se acepta, recalcula ni aprueba.
+  const { operacion, recargarOperacion } = useOperacion(mes)
+  const [esperando, setEsperando] = useState<string | null>(null)
+  const enCurso = operacion?.estado === 'en_curso' || Boolean(esperando)
+  const escribir = periodo.habilitado && !enCurso
+  const porQue = !periodo.habilitado ? periodo.motivo ?? 'Período protegido' : enCurso ? 'Hay un recálculo en curso de este período' : undefined
   const [base, setBase] = useState<Base[]>([])
   const [props, setProps] = useState<Record<string, { propuesta: any; error: string | null }>>({})
   const [aprob, setAprob] = useState<any[]>([])
@@ -133,21 +141,26 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
   return (
     <div>
       <div style={{ ...S.card, ...S.fila }}>
-        <button style={S.btn} disabled={ocupado || calculando || !elegibles.length} onClick={() => {
-          if (!confirm(`Aceptar las horas propuestas de ${elegibles.length} comprobante(s) sin nada para revisar? Lo ya aceptado y lo marcado para revisar no se toca.`)) return
+        <button style={S.btn} disabled={ocupado || calculando || !elegibles.length || !escribir} title={porQue} onClick={() => {
+          if (!confirm(`ACEPTAR TODOS — ${nombreDelMes(mes)}\n\nSe aceptan las horas de ${elegibles.length} comprobante(s) sin nada para revisar y después se recalculan las prefacturas del período.\nLo ya aceptado y lo marcado para revisar no se toca.\n\n¿Continuar?`)) return
           correr(async () => {
             const errores: string[] = []
             for (const f of elegibles) { try { await aceptar(f) } catch (e: any) { errores.push(`${f.cliente?.razon_social} · ${f.nombre}: ${e?.message}`) } }
-            const r = await api('prefacturas', { mes })
-            await cargar(false)
+            const r = await recalcular(mes, undefined, setEsperando)
+            await cargar(false); await recargarOperacion()
             const todos = [...errores, ...(r.errores ?? [])]
             if (todos.length) throw new Error(`Revisar: ${todos.join(' · ')}`)
           }, 'Horas aceptadas y prefacturas recalculadas')
         }}>{calculando ? 'Calculando propuestas…' : `Aceptar todos (${elegibles.length})`}</button>
-        <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
-          const r = await api('prefacturas', { mes }); await cargar(false)
-          if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
-        }, 'Prefacturas recalculadas')}>Recalcular precios</button>
+        <button style={S.btn2} disabled={ocupado || !escribir} title={porQue} onClick={() => {
+          const n = base.filter(b => !b.huerfana).length
+          const aviso = operacion?.estado === 'sin_confirmar' ? `\n\nATENCIÓN: el recálculo anterior (${new Date(operacion.iniciada_at).toLocaleString('es-AR')}) quedó SIN CONFIRMAR. Revisá la lista antes de lanzarlo otra vez.` : ''
+          if (!confirm(`RECALCULAR PRECIOS — ${nombreDelMes(mes)}\n\nSe recalculan ${n} prefactura(s) del período con las horas aceptadas y las tarifas vigentes. Las aprobadas para emitir y las emitidas no se tocan.\nPuede tardar más de un minuto.${aviso}\n\n¿Continuar?`)) return
+          correr(async () => {
+            const r = await recalcular(mes, undefined, setEsperando); await cargar(false); await recargarOperacion()
+            if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
+          }, 'Prefacturas recalculadas')
+        }}>Recalcular precios</button>
         <button style={S.btn2} disabled={ocupado || !visibles.some(f => f.prefactura)} onClick={() => correr(() => exportarExcel(mes, visibles.filter(f => f.prefactura).map(f => ({ ...f.prefactura, grupo: f.incluye.length ? f.nombre : null }))), 'Excel descargado')}>Descargar Excel</button>
         <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
           <option value="">Todos</option>
@@ -156,6 +169,13 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
         <span style={S.sub}>Horas de Reportes (sin capacitación). Lo marcado en amarillo se revisa antes de aceptar.</span>
         <Mensaje />
       </div>
+      {!periodo.habilitado && <div style={{ ...S.card, borderColor: '#b91c1c', color: '#fecaca' }}>{periodo.motivo}</div>}
+      {(esperando || operacion?.estado === 'en_curso') && <div style={{ ...S.card, borderColor: '#2563eb', color: '#bfdbfe' }}>
+        ⏳ {esperando ?? `Recálculo de ${nombreDelMes(mes)} en curso desde ${new Date(operacion!.iniciada_at).toLocaleTimeString('es-AR')}: no se puede lanzar otro hasta que termine.`}
+      </div>}
+      {!esperando && operacion?.estado === 'sin_confirmar' && <div style={{ ...S.card, borderColor: '#b45309', color: '#fde68a' }}>
+        El último recálculo de {nombreDelMes(mes)} ({new Date(operacion.iniciada_at).toLocaleString('es-AR')}) quedó sin confirmar: no se sabe si terminó. Revisá la lista antes de volver a lanzarlo.
+      </div>}
 
       <div style={{ ...S.card, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -177,12 +197,12 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
                       {aprobadas > 0 && <div style={{ fontSize: 12, color: alDia ? '#4ade80' : '#fbbf24' }}>aceptadas {horas(aprobadas)} h</div>}</td>
                     <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
                       {!sinHoras(f) && !f.huerfana && <>
-                        <button style={alDia ? CHICO : { ...S.btn, padding: '3px 10px', fontSize: 12 }} disabled={ocupado || prop == null || alDia || Boolean(bloqueada)} onClick={() => {
+                        <button style={alDia ? CHICO : { ...S.btn, padding: '3px 10px', fontSize: 12 }} disabled={ocupado || prop == null || alDia || Boolean(bloqueada) || !escribir} title={porQue} onClick={() => {
                           if (mot.length && !confirm(`Antes de aceptar, revisá:\n• ${mot.join('\n• ')}\n\n¿Aceptar igual?`)) return
                           if (reemplaza && !confirm('Ya hay horas aceptadas: ¿reemplazarlas por la propuesta actual?')) return
                           correr(async () => {
                             await aceptar(f)
-                            const r = await api('prefacturas', { mes, contrato_id: f.contratoId })
+                            const r = await recalcular(mes, f.contratoId, setEsperando)
                             await cargar(false)
                             if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
                           }, 'Horas aceptadas')
@@ -230,7 +250,7 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
           </tbody>
         </table>
       </div>
-      {actual && <Detalle p={actual} usuarios={usuarios} config={config} alCambiar={() => correr(() => cargar(false))} />}
+      {actual && <Detalle p={actual} usuarios={usuarios} config={config} periodo={periodo} alCambiar={() => correr(() => cargar(false))} />}
     </div>
   )
 }
@@ -366,7 +386,7 @@ function addDias(f: string, d: number) {
   const x = new Date(`${f}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10)
 }
 
-function Detalle({ p, usuarios, config, alCambiar }: { p: any; usuarios: Array<{ id: string; nombre: string }>; config: Config; alCambiar: () => void }) {
+function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios: Array<{ id: string; nombre: string }>; config: Config; periodo: Periodo; alCambiar: () => void }) {
   const [texto, setTexto] = useState(p.texto_factura ?? '')
   const [extra, setExtra] = useState<{ ajustes: any[]; envios: any[]; conformidades: any[]; contactos: any[]; docs: any[]; emisiones: any[]; historial: any[] }>({ ajustes: [], envios: [], conformidades: [], contactos: [], docs: [], emisiones: [], historial: [] })
   const [aj, setAj] = useState({ descripcion: '', importe: '', motivo: '' })
@@ -433,16 +453,17 @@ function Detalle({ p, usuarios, config, alCambiar }: { p: any; usuarios: Array<{
             <select style={S.input} value={p.responsable_id ?? ''} disabled title="Responsable (se asigna al generar)">
               <option value="">{usuarios.find(u => u.id === p.responsable_id)?.nombre ?? 'Sin responsable'}</option>
             </select>
-            {p.estado === 'lista_revision' && <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
+            {!periodo.habilitado && <span style={{ ...S.sub, color: '#fca5a5' }}>Período protegido: no se aprueba ni se emite.</span>}
+            {p.estado === 'lista_revision' && <button style={S.btn} disabled={ocupado || !periodo.habilitado} title={periodo.motivo ?? undefined} onClick={() => correr(async () => {
               await rpc('fact_prefactura_aprobar', { p_id: p.id, p_version: p.version }); await hecho()
             }, 'Prefactura aprobada (queda registrada la versión y el importe)')}>Aprobar</button>}
-            {p.estado === 'aprobada_emitir' && config.emision.homologacion_habilitada && <>
+            {p.estado === 'aprobada_emitir' && periodo.habilitado && config.emision.homologacion_habilitada && <>
               <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
                 const r = await api('emitir', { prefactura_id: p.id, version: p.version, ambiente: 'homologacion' }); await hecho()
                 if (r.estado !== 'autorizada') throw new Error(r.motivo ?? r.error ?? r.estado)
               }, 'Emitida en HOMOLOGACIÓN (prueba, no fiscal)')}>Probar en homologación</button>
             </>}
-            {p.estado === 'aprobada_emitir' && config.emision.produccion_habilitada && <>
+            {p.estado === 'aprobada_emitir' && periodo.habilitado && config.emision.produccion_habilitada && <>
               <button style={S.btn} disabled={ocupado} onClick={() => {
                 if (!confirm(`Emitir comprobante REAL en ARCA por ${pesos(p.total_c)} a ${p.cliente?.razon_social}?`)) return
                 correr(async () => {
@@ -470,7 +491,7 @@ function Detalle({ p, usuarios, config, alCambiar }: { p: any; usuarios: Array<{
           {extra.emisiones.length > 0 && <div style={{ marginTop: 8 }}>
             {extra.emisiones.map(e => <div key={e.id} style={S.sub}>Emisión {e.ambiente} · {e.estado}{e.numero ? ` · N° ${e.numero}` : ''}{e.observaciones ? ` · ${e.observaciones}` : ''}</div>)}
           </div>}
-          {p.estado === 'aprobada_emitir' && config.modulos.emision_manual && <EmisionManual p={p} alHecho={hecho} />}
+          {p.estado === 'aprobada_emitir' && periodo.habilitado && config.modulos.emision_manual && <EmisionManual p={p} alHecho={hecho} />}
           {p.estado === 'aprobada_emitir' && !config.emision.produccion_habilitada && !config.modulos.emision_manual && <div style={{ ...S.sub, marginTop: 6 }}>Aprobada. La emisión (ARCA o manual) todavía no está habilitada: la factura se emite por el circuito actual.</div>}
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>AJUSTES COMERCIALES (con motivo y responsable)</h4>
