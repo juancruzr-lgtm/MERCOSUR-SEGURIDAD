@@ -11,7 +11,7 @@ import { datosComprobantesEnLinea, validarRegistroManual } from '@/lib/facturaci
 import { compararConFacturaReal, etiquetaFactura } from '@/lib/facturacion/control'
 import { agruparObjetivos, tarifasParaObjetivo } from '@/lib/facturacion/prefacturacion'
 import {
-  aprobacionDelMes, elegibleParaAceptarTodos, filaPendiente, filasExcel, motivosRevision, nombreComprobante, objetivoAlDia, objetivosParaAceptar, propuestaDeFila, sinHoras,
+  aprobacionDelMes, elegibleParaAceptarTodos, filaPendiente, filasExcel, minutosPropuestos, motivosRevision, nombreComprobante, objetivoAlDia, objetivosParaAceptar, propuestaDeFila, sinHoras,
   type FilaRevision, type TratamientoDescubiertos,
 } from '@/lib/facturacion/revision'
 import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
@@ -159,7 +159,7 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
 
       <div style={{ ...S.card, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>{['Cliente', 'Objetivo o grupo', 'Horas propuestas', '', 'Precio', 'Importe', 'Estado', 'Acción'].map((h, i) => <th key={i} style={S.th}>{h}</th>)}</tr></thead>
+          <thead><tr>{['Cliente', 'Factura o grupo', 'Horas propuestas', '', 'Precio', 'Importe', 'Estado', 'Acción'].map((h, i) => <th key={i} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>
             {visibles.map(f => {
               const prop = propuestaDeFila(f), mot = motivos.get(f.clave) ?? [], p = f.prefactura
@@ -206,7 +206,17 @@ export default function Bandeja({ mes, usuarios, config }: { mes: string; usuari
                         const k = claveObj(f.contratoId, o.objetivoId)
                         return (
                           <div key={o.objetivoId} style={{ marginBottom: 10 }}>
-                            {f.objetivos.length > 1 && <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{o.nombre}</div>}
+                            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+                              {o.nombre}
+                              {(() => {
+                                // Desglose del renglón de este objetivo: sus horas propuestas y SU tarifa vigente.
+                                const m = minutosPropuestos(o.propuesta, o.tratamiento)
+                                const ts = tarifasParaObjetivo(f.tarifas, o.objetivoId)
+                                return <span style={{ ...S.sub, fontWeight: 400 }}>
+                                  {m != null ? ` · ${horas(m)} h` : ''}{ts.length ? ` · ${ts.map(t => `${t.concepto}: $ ${t.precio}${t.tratamientoIva === 'incluido' ? ' IVA incl.' : ''}${f.tarifas.find(x => x.id === t.id)?.objetivo_id ? ' (propia del objetivo)' : ' (general)'}`).join(' · ')}` : ' · sin tarifa'}
+                                </span>
+                              })()}
+                            </div>
                             {o.error ? <span style={S.err}>{o.error}</span> : o.propuesta ? <DetalleHoras h={o.propuesta.horas} trat={o.tratamiento} alCambiarTrat={t => setTrat({ ...trat, [k]: t })} /> : <span style={S.sub}>Calculando…</span>}
                           </div>
                         )
