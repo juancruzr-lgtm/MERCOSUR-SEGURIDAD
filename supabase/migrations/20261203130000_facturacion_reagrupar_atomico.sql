@@ -6,7 +6,7 @@
 --   · sólo se descartan prefacturas en preparación (nunca aprobadas ni emitidas) y con su versión;
 --   · todo objetivo de una prefactura descartada tiene reemplazo en las nuevas;
 --   · al terminar, ningún objetivo queda en dos prefacturas vivas del mismo período.
--- Sólo agrega una función. No modifica tablas ni datos. Rollback: supabase/rollback/20261203120000_facturacion_reagrupar_atomico_rollback.sql
+-- Sólo agrega una función. No modifica tablas ni datos. Rollback: supabase/rollback/20261203130000_facturacion_reagrupar_atomico_rollback.sql
 
 create or replace function public.fact_prefacturas_reagrupar(p_descartar jsonb, p_guardar jsonb)
 returns jsonb language plpgsql security definer set search_path = public, pg_catalog as $fn$

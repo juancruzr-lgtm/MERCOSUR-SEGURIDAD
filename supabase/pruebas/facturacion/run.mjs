@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203120000_facturacion_reagrupar_atomico']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -610,7 +610,7 @@ await como(ADM, () => sql(`select public.fact_prefactura_guardar($1, $2::jsonb, 
 ok('grupos: recalcular sin informar objetivos conserva los anteriores', (await uno(`select array_length(objetivos_incluidos, 1) n from public.fact_prefacturas where id = $1`, [pGr])).n === 2)
 ok('grupos: una prefactura emitida sigue sin poder modificarse', await falla(() => como(ADM, () => sql(`select public.fact_prefactura_guardar($1, $2::jsonb)`, [pref, JSON.stringify({ lineas: [], estado: 'en_preparacion', objetivos_incluidos: [] })]))))
 
-// ── Reagrupado atómico (20261203120000) ───────────────────────────────────
+// ── Reagrupado atómico (20261203130000) ───────────────────────────────────
 const O2 = '00000000-0000-0000-0000-00000000b002', O3 = '00000000-0000-0000-0000-00000000b003'
 const DIC = { periodo_mes: '2026-12', periodo_desde: '2026-12-01', periodo_hasta_excl: '2027-01-01' }
 const prefSola = async (obj, estado = 'lista_revision') => (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({ cliente_id: laromet, contrato_id: kGr,

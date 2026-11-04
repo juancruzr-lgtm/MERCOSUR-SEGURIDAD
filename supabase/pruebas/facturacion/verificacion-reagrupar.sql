@@ -1,4 +1,4 @@
--- Verificación posterior de 20261203120000_facturacion_reagrupar_atomico (sólo lectura, una sentencia).
+-- Verificación posterior de 20261203130000_facturacion_reagrupar_atomico (sólo lectura, una sentencia).
 select 'funcion existe y es security definer' control, exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'public' and p.proname = 'fact_prefacturas_reagrupar' and p.prosecdef) ok
 union all select 'search_path fijo', exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace

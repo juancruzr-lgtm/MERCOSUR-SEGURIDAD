@@ -310,7 +310,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
           if (error) {
             const falta = /fact_prefacturas_reagrupar/.test(error.message) && /(could not find|does not exist|no existe)/i.test(error.message)
             resumen.errores.push(falta
-              ? `${nombre}: no se reagrupó (quedó todo como estaba): falta aplicar la migración 20261203120000_facturacion_reagrupar_atomico.`
+              ? `${nombre}: no se reagrupó (quedó todo como estaba): falta aplicar la migración 20261203130000_facturacion_reagrupar_atomico.`
               : `${nombre}: no se reagrupó (quedó todo como estaba): ${error.message}`)
           } else {
             resumen.reagrupadas += aDescartar.length

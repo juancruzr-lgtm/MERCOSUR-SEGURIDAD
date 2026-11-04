@@ -149,7 +149,7 @@ describe('generarPrefacturas con grupos de factura', () => {
     const r = await generarPrefacturas(db, '2026-10', '2026-11-04')
     expect(vieja.estado).toBe('lista_revision')
     expect(guardadas).toEqual([])
-    expect(r.errores.join(' ')).toMatch(/falta aplicar la migración 20261203120000/)
+    expect(r.errores.join(' ')).toMatch(/falta aplicar la migración 20261203130000/)
   })
 
   it('si un objetivo de la anterior queda sin reemplazo (p. ej. ocupado por una aprobada), no descarta nada', async () => {
