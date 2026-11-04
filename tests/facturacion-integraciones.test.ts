@@ -121,14 +121,15 @@ describe('horas facturables desde la app (no son horas liquidables)', () => {
     expect(r).toMatchObject({ minutosCubiertos: 240, minutosNocturnos: 240, minutosDiurnos: 0, minutosDescubiertos: 240 })
   })
 
-  it('relevo superpuesto (turnos escalonados del mismo puesto) NO se factura dos veces; se liquida igual', () => {
+  it('superposición escalonada (posible relevo): no se descuenta sola; se factura lo reconocido y queda para revisión', () => {
     // Programación: A 06–18 y B 17–05. Una hora con los dos.
     const turnos = [turno('A', '2026-10-10', '06:00:00', '18:00:00'), turno('B', '2026-10-10', '17:00:00', '05:00:00')]
     const registros = [reg('rA', 'A', { hora_entrada_real: '06:00:00', hora_salida_real: '18:00:00' }), reg('rB', 'B', { hora_entrada_real: '17:00:00', hora_salida_real: '05:00:00' })]
     const r = horasDelObjetivo({ ...base, turnos, registros })
-    expect(r).toMatchObject({ minutosLiquidables: 1440, minutosCubiertos: 1380, minutosSuperpuestos: 60, minutosSimultaneos: 0, minutosDescubiertos: 0 })
-    // Sólo si el contrato lo prevé se suma la superposición.
-    expect(horasDelObjetivo({ ...base, turnos, registros, superposicion: 'sumar' }).minutosCubiertos).toBe(1440)
+    expect(r).toMatchObject({ minutosLiquidables: 1440, minutosCubiertos: 1440, minutosSuperpuestos: 60, minutosSimultaneos: 0, minutosDescubiertos: 0 })
+    expect(r.revisar).toEqual([expect.objectContaining({ fecha: '2026-10-10', tipo: 'superposicion', minutos: 60 })])
+    // Ni el contrato por defecto ('unir') descuenta solo: el descuento va por ajuste comercial.
+    expect(horasDelObjetivo({ ...base, turnos, registros, superposicion: 'unir' }).minutosCubiertos).toBe(1440)
   })
 
   it('el vigilador que se queda de más sin que se lo reconozcan no suma: lo liquidable manda', () => {

@@ -93,18 +93,19 @@ describe('fuente única: Reportes → Planilla objetivo', () => {
     expect(h.minutosReales).toBe(Math.round(rep.horasReales * 60))
   })
 
-  it('reglas comerciales sobre esa base: − capacitación (ya fuera), − relevo, simultáneos se facturan', () => {
+  it('reglas comerciales sobre esa base: − capacitación (ya fuera); relevo y simultáneos se facturan (el relevo queda para revisión)', () => {
     const h = fact()
     // fichado 12 + supervisor 12 + corrección 11 + cierre auto 12 + simultáneos 20 + relevo 24 + movido 8 = 99 h
     expect(h.minutosLiquidables).toBe(99 * 60)
-    expect(h.minutosSuperpuestos).toBe(60)          // relevo rA/rB: 1 h una sola vez
-    expect(h.minutosCubiertos).toBe(98 * 60)
+    expect(h.minutosSuperpuestos).toBe(60)          // relevo rA/rB: 1 h, informada para revisión
+    expect(h.revisar).toHaveLength(1)
+    expect(h.minutosCubiertos).toBe(99 * 60)       // = liquidables de Reportes: no se descuenta nada solo
     expect(h.minutosSimultaneos).toBe(600)           // el segundo vigilador del 06/10
     expect(h.minutosCapacitacionLiquidables).toBe(480)
     expect(fact(TURNOS, REGISTROS, 'sumar').minutosCubiertos).toBe(99 * 60)
     // Descubierto: 1 h de la corrección + el turno anulado (cobertura anulada) + el turno sin registro.
     expect(h.minutosDescubiertos).toBe(60 + 480 + 480)
-    expect(minutosAprobables(h, 'no_facturar').aprobados).toBe(98 * 60)
+    expect(minutosAprobables(h, 'no_facturar').aprobados).toBe(99 * 60)
   })
 
   it('corrección posterior: el supervisor reconoce un turno sin fichaje → Reportes y Facturación cambian igual', () => {

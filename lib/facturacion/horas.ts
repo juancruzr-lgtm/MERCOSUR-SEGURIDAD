@@ -12,10 +12,11 @@
  *    factura. Reportes ya la deja fuera del total del objetivo.
  *  - Simultáneos: un turno contenido en otro o idéntico es otro vigilador
  *    prestando servicio a la vez (refuerzo, otro puesto, evento): se factura.
- *  - Relevos: dos turnos ESCALONADOS del mismo puesto que se pisan hasta 2 h.
- *    Con la regla 'unir' del contrato (por defecto) ese tramo se cobra una vez;
- *    con 'sumar', dos. Nunca se descarta otra cosa por coincidir en horario.
- *  - Escalonados que se pisan más de 2 h: se facturan y quedan para revisar.
+ *  - Superposiciones escalonadas del mismo puesto (posible relevo): NO se
+ *    descuenta nada automáticamente (JC, 04/11/2026: una coincidencia de
+ *    horario no alcanza). Se facturan las horas reconocidas y el caso queda
+ *    para revisión comercial; si corresponde cobrar ese tramo una vez, se
+ *    carga un ajuste comercial (con motivo, aprobado y auditado).
  *  - Descubiertas: lo programado que no tiene horas reconocidas. No se factura
  *    salvo decisión de Administración al aprobar (con motivo).
  *  - Las horas reales (GPS) se informan; nunca reemplazan a las liquidables.
@@ -31,7 +32,6 @@ import { clasificarDiurnaNocturna, type FranjaNocturna, type RangoPeriodo } from
 
 const ESTADOS_SIN_OBLIGACION = new Set(['reemplazado', 'anulado', 'cancelado'])
 const TOLERANCIA_MIN = 15
-const RELEVO_MAX_MIN = 120
 const MIN = 60000
 
 export type TurnoFacturable = TurnoLiquidacion & { id: string; objetivo_id?: string | null; puesto_id?: string | null; tipo_evento?: string | null }
@@ -51,7 +51,7 @@ export type DetalleTurno = {
   estado: 'cubierto' | 'parcial' | 'sin_registro' | 'futuro' | 'capacitacion'
 }
 
-export type ParaRevisar = { fecha: string; tipo: 'relevo_largo'; detalle: string; minutos: number }
+export type ParaRevisar = { fecha: string; tipo: 'superposicion'; detalle: string; minutos: number }
 
 export type HorasObjetivo = {
   objetivoId: string
@@ -62,7 +62,7 @@ export type HorasObjetivo = {
   minutosProgramados: number
   /** Facturables antes de decidir sobre lo descubierto = liquidables − relevos duplicados. */
   minutosCubiertos: number
-  /** Relevos: tramo que se descuenta por estar dos veces (0 con regla 'sumar'). */
+  /** Superposición escalonada del mismo puesto (posible relevo): se factura y queda para revisión comercial. */
   minutosSuperpuestos: number
   /** Vigiladores simultáneos: se facturan (informativo). */
   minutosSimultaneos: number
@@ -205,9 +205,9 @@ export function horasDelObjetivo(input: {
       if (juntos <= 0) continue
       const contenido = (a.pi <= b.pi && a.pf >= b.pf) || (b.pi <= a.pi && b.pf >= a.pf)
       if (contenido) continue
-      if (juntos <= RELEVO_MAX_MIN) relevosClave += Math.min(juntos, a.min, b.min)
-      else revisar.push({ fecha: a.fecha, tipo: 'relevo_largo', minutos: juntos,
-        detalle: `Dos turnos escalonados del mismo puesto se pisan ${Math.round(juntos / 6) / 10} h: se facturan los dos; confirmar si fue relevo o refuerzo` })
+      relevosClave += Math.min(juntos, a.min, b.min)
+      revisar.push({ fecha: a.fecha, tipo: 'superposicion', minutos: juntos,
+        detalle: `dos turnos escalonados del mismo puesto se pisan ${Math.round(juntos / 6) / 10} h: se facturan las horas reconocidas; si fue un relevo y corresponde cobrarlo una vez, cargar un ajuste comercial` })
     }
     relevos += relevosClave
     // Simultáneos = horas de vigiladores adicionales: lo programado de las filas
@@ -217,9 +217,9 @@ export function horasDelObjetivo(input: {
     for (const x of xs) { if (x.pf <= fin) continue; union += (x.pf - Math.max(x.pi, fin)) / MIN; fin = x.pf }
     simultaneos += Math.max(0, Math.round(suma - union) - relevosClave)
   }
-  const descontar = input.superposicion === 'sumar' ? 0 : relevos
+  // Sin descuento automático: lo reconocido en Reportes se factura entero.
   const liquidables = Math.round(tot.horasLiquidables * 60)
-  const facturables = Math.max(0, liquidables - descontar)
+  const facturables = liquidables
   let minD: number | null = null, minN: number | null = null
   if (franja) {
     const s = d + n
@@ -232,7 +232,7 @@ export function horasDelObjetivo(input: {
     minutosReales: Math.round(tot.horasReales * 60),
     minutosProgramados: programadosTot,
     minutosCubiertos: facturables,
-    minutosSuperpuestos: descontar,
+    minutosSuperpuestos: relevos,
     minutosSimultaneos: simultaneos,
     minutosDescubiertos: descubiertos,
     minutosAceptadosFuera: aceptadosFuera,

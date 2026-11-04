@@ -25,7 +25,7 @@ export default function Horas({ mes }: { mes: string }) {
   return (
     <div style={S.card}>
       <h3 style={S.h3}>Horas de {mes} por objetivo</h3>
-      <div style={S.sub}>Fuente: las horas liquidables de Reportes → Planilla objetivo (mismos datos y misma función; incluye reconocimientos y correcciones posteriores). Facturación sólo aplica reglas comerciales: sin capacitación, simultáneos se facturan, relevos una vez, descubierto lo decide Administración. No modifica fichajes ni liquidación.</div>
+      <div style={S.sub}>Fuente: las horas liquidables de Reportes → Planilla objetivo (mismos datos y misma función; incluye reconocimientos y correcciones posteriores). Facturación sólo aplica reglas comerciales: sin capacitación, simultáneos se facturan, superposiciones de posible relevo se facturan y quedan para revisar (el descuento va por ajuste comercial), descubierto lo decide Administración. No modifica fichajes ni liquidación.</div>
       <Mensaje />
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
         <thead><tr>{['Cliente', 'Objetivo', 'Servicio', 'Aprobadas', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
@@ -62,14 +62,13 @@ export default function Horas({ mes }: { mes: string }) {
               <tr><td style={S.td}>Horas reales (GPS, informativas)</td><td style={S.num}>{horas(h.minutosReales)}</td></tr>
               <tr><td style={S.td}>Horas efectivamente cubiertas (liquidables de Reportes, con capacitación)</td><td style={S.num}>{horas(h.minutosLiquidables + h.minutosCapacitacionLiquidables)}</td></tr>
               <tr><td style={S.td}>− Capacitación{h.turnosCapacitacion ? ` (${h.turnosCapacitacion} turno/s: se liquidan, no se facturan)` : ''}</td><td style={S.num}>{horas(h.minutosCapacitacionLiquidables)}</td></tr>
-              {h.minutosSuperpuestos > 0 && <tr><td style={S.td}>− Relevos superpuestos (se cobran una vez)</td><td style={S.num}>{horas(h.minutosSuperpuestos)}</td></tr>}
               <tr><td style={S.td}><b>Horas facturables</b></td><td style={S.num}><b>{horas(h.minutosCubiertos)}</b></td></tr>
+              {h.minutosSuperpuestos > 0 && <tr><td style={S.td}>de las cuales, superposición de posible relevo (se facturan; revisar)</td><td style={S.num}>{horas(h.minutosSuperpuestos)}</td></tr>}
               {h.minutosSimultaneos > 0 && <tr><td style={S.td}>de las cuales, vigiladores simultáneos (se facturan)</td><td style={S.num}>{horas(h.minutosSimultaneos)}</td></tr>}
               {h.minutosDescubiertos > 0 && <tr><td style={S.td}>Descubiertas (no se facturan salvo decisión)</td><td style={S.num}>{horas(h.minutosDescubiertos)}</td></tr>}
               {h.minutosDiurnos != null && <tr><td style={S.td}>Facturables diurnas / nocturnas</td><td style={S.num}>{horas(h.minutosDiurnos)} / {horas(h.minutosNocturnos)}</td></tr>}
             </tbody></table>
-            {prop.r.superposicion === 'sumar' && <div style={S.sub}>El contrato indica sumar los relevos superpuestos: no se descuentan.</div>}
-            {h.revisar?.length > 0 && <div style={S.aviso}>Para revisar (se facturan igual): {h.revisar.map((x: any) => `${fecha(x.fecha)}: ${x.detalle}`).join(' · ')}</div>}
+            {h.revisar?.length > 0 && <div style={S.aviso}>Revisión comercial (no se descuenta nada automáticamente): {h.revisar.map((x: any) => `${fecha(x.fecha)}: ${x.detalle}`).join(' · ')}</div>}
             {h.minutosAceptadosFuera > 0 && <div style={S.sub}>Incluye {horas(h.minutosAceptadosFuera)} h fuera del horario programado aceptadas por el supervisor: se liquidan y se facturan.</div>}
             {h.turnosSinPuesto > 0 && <div style={S.aviso}>{h.turnosSinPuesto} turno(s) sin puesto: no se puede controlar la superposición entre ellos.</div>}
             {h.turnosFuturos > 0 && <div style={S.aviso}>{h.turnosFuturos} turno(s) todavía no ocurrieron: el período no está cerrado.</div>}
