@@ -7,6 +7,17 @@
 - Puntos de venta: 0001 y 0002 Factura en Línea; 0003 Factuweb (Imprenta). No se tocan.
 - **0004 "RECE para aplicativo y web services"**, domicilio fiscal Mejico 1329. Alta el 05/11/2026, con autorización de Juan Cruz. Es el punto de venta para emitir por la app (WSFEv1).
 
+## Diagnóstico real de producción (05/11/2026, 12:37)
+Con #379 desplegado, la migración aplicada y `punto_venta_prod = 4`, el diagnóstico de producción dio:
+- **Certificado `mercosurseguridad`:** CUIT 20313933335, emisor Computadores, vence el 16/09/2028; la clave corresponde. OK.
+- **WSAA (wsfe): "Computador no autorizado a acceder al servicio".** El computador fiscal `mercosurseguridad` no tiene relación con wsfe.
+  - **Paso en ARCA:** ingresar con la clave fiscal de Juan Cruz, representando a MERCOSUR SEGURIDAD SRL (30-71070541-7). En el Administrador de Relaciones de Clave Fiscal:
+    1. "Nueva Relación" → Buscar → ARCA → WebServices → **Facturación Electrónica**.
+    2. Representante: Buscar → Computador Fiscal → **mercosurseguridad** → Confirmar.
+- **CUIT:** `AFIP_CUIT_REPRESENTADA` vale 20313933335, porque lo usa el Padrón A13 y no se toca. Para facturar por la SRL hay que cargar en Vercel (Production) **`AFIP_FACT_CUIT_REPRESENTADA=30710705417`**. Ese CUIT no es secreto.
+- **FEDummy: "Sin respuesta".** `servicios1.afip.gov.ar` negocia DHE con un primo corto y Node 18+ lo corta con `ERR_SSL_DH_KEY_TOO_SMALL`. Homologación no tiene el problema.
+  - Se corrigió en `lib/afip/wsfe.ts`: sólo para ese host se usa un agente HTTPS con `DEFAULT@SECLEVEL=1`, y el certificado del servidor se sigue validando.
+
 ## Qué cambia en la app
 - `afipConfigFacturacion(ambiente)`:
   - Producción usa `AFIP_CERT_PEM`, `AFIP_KEY_PEM` y `AFIP_CUIT_REPRESENTADA`, y se niega si `AFIP_HOMO` está encendido.
