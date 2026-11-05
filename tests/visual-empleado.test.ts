@@ -35,7 +35,7 @@ function base(over: Record<string, any[]> = {}) {
     usuarios, objetivos: [], supervisor_zonas: [], nocturnidad_empleado_objetivo: [],
     turnos: [], registros_asistencia: [], novedades_laborales: [], supervisores_guardia: [], supervisiones: [],
     liquidacion_concepto_catalogo: [], liquidacion_concepto_permanente: [], liquidacion_expediente: [],
-    liquidacion_dias: [], liquidacion_ajuste: [],
+    liquidacion_ajuste: [],
     liquidacion_persona: [
       { id: 'per1', usuario_id: 'u1', cuil: '20144945817', nombre: 'ALMADA', cod_interno: '123', estado_liquidable: 'activo' },
       { id: 'per2', usuario_id: 'u2', cuil: '27222222224', nombre: 'ROSALES', cod_interno: '456', estado_liquidable: 'activo' },

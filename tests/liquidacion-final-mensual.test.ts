@@ -126,6 +126,29 @@ describe('Excel de finales con el formato del mensual', () => {
     expect(oculta?.hidden).toBe(true)
   })
 
+  it('con un «desde» distinto, las columnas de la final se corren a la derecha (fórmulas incluidas) y el default sigue en BI', () => {
+    const NUM = (c: string) => { let n = 0; for (const ch of c) n = n * 26 + (ch.charCodeAt(0) - 64); return n }
+    const LET = (n: number) => { let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26) } return s }
+    const off = NUM('CA') - NUM(COL_FINAL.fechaBaja)
+    const C = (k: keyof typeof COL_FINAL) => LET(NUM(COL_FINAL[k]) + off)
+    const corr = anexarColumnasFinal(base, filasFinal, 'CA')
+    // Encabezados en las columnas corridas; nada quedó en las posiciones BI por defecto.
+    expect(celda(corr, `${C('finalId')}6`)?.v).toBe('final_id')
+    expect(celda(corr, `${C('diasSAC')}6`)?.v).toBe('DÍAS SAC')
+    expect(celda(corr, `${C('total')}6`)?.v).toBe('TOTAL A VISUAL')
+    expect(celda(corr, `${COL_FINAL.finalId}6`)).toBeUndefined()
+    // La fórmula del 120003 referencia la columna DÍAS SAC corrida (no BN).
+    expect(celda(corr, `${C('c120003')}${r1}`)?.f).toBe(`IF(${C('diasSAC')}${r1}="",0,ROUND(($B$1/200*150)/365*${C('diasSAC')}${r1},2))`)
+    // El TOTAL sigue sumando los conceptos de la fila + los de la final corridos, y da lo mismo.
+    expect(celda(corr, `${C('total')}${r1}`)?.f).toContain(`AC${r1}+AD${r1}`)
+    expect(celda(corr, `${C('total')}${r1}`)?.f).toContain(`${C('c120003')}${r1}`)
+    expect(num(corr, `${C('total')}${r1}`)).toBe(totalPerez)
+    // La columna oculta del id sigue oculta en su nueva posición.
+    expect(corr.columnas.find(c => c.col === C('finalId'))?.hidden).toBe(true)
+    // El default (sin «desde») no cambió: sigue en BI.
+    expect(celda(conFinal, `${COL_FINAL.finalId}6`)?.v).toBe('final_id')
+  })
+
   it('bajado y subido sin tocar: ningún cambio', async () => {
     const h = await releer(await libro())
     expect(h.filas.map(f => f.finalId).sort()).toEqual([F1, F2].sort())
