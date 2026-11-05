@@ -37,9 +37,10 @@ begin
   if to_regprocedure('public.usuarios_cuentas_bancarias()') is null then
     raise exception 'falta usuarios_cuentas_bancarias() (paso A, 20261207100000): no se aplica';
   end if;
-  select string_agg(c.column_name, ', ') into v_fuera
-    from information_schema.columns c
-   where c.table_schema = 'public' and c.table_name = 'usuarios' and c.column_name <> all (v_lista);
+  -- Asignación (no SELECT … INTO): el SQL Editor de Supabase lee "select … into" como SELECT INTO (42601).
+  v_fuera := (select string_agg(c.column_name, ', ')
+                from information_schema.columns c
+               where c.table_schema = 'public' and c.table_name = 'usuarios' and c.column_name <> all (v_lista));
   if v_fuera is not null then
     raise exception 'usuarios tiene columnas fuera de la lista (%): revisar COLUMNAS_USUARIO antes de aplicar', v_fuera;
   end if;

@@ -12,6 +12,12 @@ const A = readFileSync(`${REPO}/supabase/migrations/20261207100000_usuarios_cuen
 const B = readFileSync(`${REPO}/supabase/migrations/20261207100100_usuarios_revocar_cuenta_bancaria.sql`, 'utf8')
 const RB_A = readFileSync(`${REPO}/supabase/rollback/20261207100000_usuarios_cuentas_bancarias_rpc_rollback.sql`, 'utf8')
 const RB_B = readFileSync(`${REPO}/supabase/rollback/20261207100100_usuarios_revocar_cuenta_bancaria_rollback.sql`, 'utf8')
+const V = n => readFileSync(`${REPO}/supabase/pruebas/seguridad-cbu/${n}`, 'utf8')
+const [A01, A03, B01, B03] = ['A-01-previo.sql', 'A-03-verificacion.sql', 'B-01-previo.sql', 'B-03-verificacion.sql'].map(V)
+// Corre un control previo (una sentencia, filas con ok) y devuelve las filas que no dan ok.
+async function previo(sql) { const rows = (await db.query(sql)).rows; return rows.filter(x => x.ok !== true).map(x => x.control) }
+// Corre una verificación (DO + select final). Devuelve true o el mensaje de FALLA.
+async function verif(sql) { try { await db.exec(sql); return true } catch (e) { try { await db.exec('rollback') } catch {} ; await db.exec('reset role'); return e.message } }
 const COLS_TS = readFileSync(`${REPO}/lib/usuarios-columnas.ts`, 'utf8').match(/COLUMNAS_USUARIO =\s*'([^']+)'/)[1]
 
 const db = new PGlite()
@@ -37,6 +43,7 @@ async function intentar(q) { try { return { v: await uno(q) } } catch (e) { retu
 await db.exec(`
 create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
 create schema auth;
+create schema supabase_migrations; create table supabase_migrations.schema_migrations (version text primary key);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 grant usage on schema auth to anon, authenticated, service_role;
 grant execute on function auth.uid() to anon, authenticated, service_role;
@@ -103,6 +110,8 @@ for (const p of ['SUP', 'JEFE', 'DIR']) {
 }
 
 // ── PASO A ──────────────────────────────────────────────────────────────────
+let pv = await previo(A01); ok('A-01 previo: todo ok antes de A', pv.length === 0, JSON.stringify(pv))
+ok('A-03 antes de A: corta (RPC inexistente)', /FALLA: no existe/.test(String(await verif(A03))))
 try { await execTx(A); ok('paso A se aplica', true) } catch (e) { ok('paso A se aplica', false, e.message) }
 const esperado = JSON.stringify({ [UID(6)]: '0123456789012', [UID(10)]: '2850590940090418135201' })
 for (const p of NO_PUEDEN) {
@@ -118,6 +127,10 @@ ok('A: anon no ejecuta la RPC', /permission denied/.test((await como('anon', () 
 ok('A: el paso A sólo no cierra la lectura directa (por eso va el B)', (await como(P.SUP, () => intentar(CBU_DIRECTO))).v === 2)
 ok("A: select('*') sigue funcionando (el código viejo no se rompe con A)", (await como(P.SUP, () => intentar(`select count(*)::int from (select * from public.usuarios) x`))).v === 10)
 
+ok('A-03 verificación posterior a A: OK con los perfiles', await verif(A03))
+ok('A-01 previo después de A: avisa que ya está aplicada', (await previo(A01)).some(c => /todavía no existe/.test(c)))
+pv = await previo(B01); ok('B-01 previo: todo ok antes de B', pv.length === 0, JSON.stringify(pv))
+ok('B-03 antes de B: corta (authenticated todavía lee el CBU)', /FALLA: authenticated todavía/.test(String(await verif(B03))))
 // ── PASO B ──────────────────────────────────────────────────────────────────
 try { await execTx(B); ok('paso B se aplica', true) } catch (e) { ok('paso B se aplica', false, e.message) }
 for (const p of [...NO_PUEDEN, ...PUEDEN]) {
@@ -138,6 +151,8 @@ ok('B: el CBU cargado por Gerencia se ve por la RPC', JSON.parse((await como(P.G
 ok('B: lector SECURITY DEFINER existente sigue igual', (await como(P.SUP, () => intentar(`select public.lector_definer_cbu()`))).v === 3)
 ok('B: service_role conserva SELECT completo', (await como('service_role', () => intentar(CBU_DIRECTO))).v === 3)
 
+ok('B-03 verificación posterior a B: OK con los perfiles', await verif(B03))
+ok('B-01 previo después de B: avisa que B ya está aplicada', (await previo(B01)).some(c => /no aplicada todavía/.test(c)))
 // Re-aplicar B es idempotente.
 try { await execTx(B); ok('re-aplicar B no falla', true) } catch (e) { ok('re-aplicar B no falla', false, e.message) }
 
