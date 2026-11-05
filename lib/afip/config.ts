@@ -44,10 +44,13 @@ export function afipConfigFacturacion(ambiente: AmbienteArca, env: Record<string
     if (env.AFIP_HOMO === '1' || env.AFIP_HOMO === 'true') return { error: 'AFIP_HOMO está encendido: el certificado general no es de producción' }
     const certPem = normalizarPem(env.AFIP_CERT_PEM)
     const keyPem = normalizarPem(env.AFIP_KEY_PEM)
-    const cuitRepresentada = (env.AFIP_CUIT_REPRESENTADA || '').replace(/\D/g, '')
+    // El mismo certificado sirve al Padrón A13 (que representa a AFIP_CUIT_REPRESENTADA, hoy la
+    // persona titular del certificado) y a la factura, que se emite por la SRL. Para no tocar el
+    // A13, facturación puede representar a otro CUIT con AFIP_FACT_CUIT_REPRESENTADA.
+    const cuitRepresentada = (env.AFIP_FACT_CUIT_REPRESENTADA || env.AFIP_CUIT_REPRESENTADA || '').replace(/\D/g, '')
     if (!certPem) return { error: 'Falta AFIP_CERT_PEM' }
     if (!keyPem) return { error: 'Falta AFIP_KEY_PEM' }
-    if (!cuitRepresentada) return { error: 'Falta AFIP_CUIT_REPRESENTADA' }
+    if (!cuitRepresentada) return { error: 'Falta AFIP_FACT_CUIT_REPRESENTADA (o AFIP_CUIT_REPRESENTADA)' }
     return { config: { certPem, keyPem, homo: false, cuitRepresentada } }
   }
   if (ambiente === 'homologacion') {
