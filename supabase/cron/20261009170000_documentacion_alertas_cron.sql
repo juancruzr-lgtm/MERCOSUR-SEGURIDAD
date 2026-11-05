@@ -6,6 +6,10 @@
 --
 -- Misma llave que el resto de los crons: push_cron_secret (vault).
 -- Para quitarla: select cron.unschedule('documentacion-alertas');
+-- Pasos completos y comprobaciones: docs/ACTIVAR-ALERTAS-DOCUMENTACION.md.
+-- Requiere aplicada 20261205140000_documentacion_alertas_listas.sql (hora de
+-- Argentina, credenciales y resolución de alertas). Correrlo dos veces no
+-- duplica la tarea: pg_cron actualiza la que tiene el mismo nombre.
 
 select cron.schedule(
   'documentacion-alertas',

@@ -18,7 +18,11 @@ export interface ConfigAlertas {
 }
 
 export interface Vencimiento {
-  documento_id: string
+  /** 'doc:<id>' o 'cred:<id>' (desde 20261205140000; antes no venía). */
+  clave?: string
+  /** 'credencial' = sale de habilitacion_credenciales (puede no tener foto). */
+  origen?: 'documento' | 'credencial'
+  documento_id: string | null
   empleado_id: string
   nombre: string
   apellido: string
@@ -28,7 +32,19 @@ export interface Vencimiento {
   detalle: string | null
   vence_el: string
   dias: number
+  /** false = credencial informada por Administración, sin verificar. */
+  verificada?: boolean
   reemplazo_en_curso: boolean
+}
+
+/** Alertas registradas por el proceso diario que siguen vigentes. */
+export interface ResumenAlertas {
+  ultima: string | null
+  vigentes: number
+  vencido: number
+  por_vencer: number
+  solicitado: number
+  faltante: number
 }
 
 export interface ReporteVencimientos {
@@ -36,7 +52,26 @@ export interface ReporteVencimientos {
   dias: number
   config: ConfigAlertas
   puede_configurar: boolean
+  alertas?: ResumenAlertas
   documentos: Vencimiento[]
+}
+
+/** Clave estable de una fila del reporte (con o sin la migración nueva). */
+export function claveVencimiento(v: Vencimiento): string {
+  return v.clave ?? `doc:${v.documento_id}`
+}
+
+/** Línea de estado del proceso diario para el reporte. */
+export function textoResumenAlertas(r: ResumenAlertas | undefined, activo: boolean): string | null {
+  if (!r) return null
+  if (!r.ultima) return activo ? 'Todavía no corrió el proceso diario (08:00).' : null
+  const partes = [
+    r.vencido ? `${r.vencido} vencido${r.vencido === 1 ? '' : 's'}` : '',
+    r.por_vencer ? `${r.por_vencer} por vencer` : '',
+    r.solicitado ? `${r.solicitado} solicitado${r.solicitado === 1 ? '' : 's'}` : '',
+    r.faltante ? `${r.faltante} faltante${r.faltante === 1 ? '' : 's'}` : '',
+  ].filter(Boolean)
+  return `Alertas vigentes: ${r.vigentes}${partes.length ? ` (${partes.join(', ')})` : ''}.`
 }
 
 export interface AlertaPersona {
