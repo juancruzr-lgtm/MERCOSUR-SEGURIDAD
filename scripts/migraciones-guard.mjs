@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // ═══════════════════════════════════════════════════════════════════════════
 // GUARD DE MIGRACIONES — impide aplicar migraciones viejas sobre producción.
 //
