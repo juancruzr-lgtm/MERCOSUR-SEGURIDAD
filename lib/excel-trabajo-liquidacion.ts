@@ -18,6 +18,7 @@
 
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import { esCuentaGalicia } from '@/lib/cuenta-banco'
+import { cargarCuentasBancarias } from '@/lib/usuarios-columnas'
 import {
   construirResumenGuardia,
   plantillaLiquidacionResumenGuardia,
@@ -492,11 +493,11 @@ export async function plantillaTrabajoDelMes(
     usuariosR, objetivosR, zonasR, noctExcR,
     turnosR, registrosR, novedadesR, supGuardiasR, supervisionesR,
   ] = await Promise.all([
-    // Contexto Gerencia (ver_finanzas): el Excel de trabajo incluye la columna
-    // CUENTA, así que acá SÍ se pide cuenta_bancaria (a diferencia del load
-    // general saneado en FASE 0). legajo_visual = etiqueta de Visual.
+    // El Excel de trabajo incluye la columna CUENTA: la cuenta_bancaria se pide
+    // aparte, por RPC con gate (Administración/Gerencia), porque la columna no se
+    // lee directo desde el navegador (auditoría 05/11, V2). legajo_visual = etiqueta de Visual.
     fetchPaginadoResult((d, h) => client.from('usuarios')
-      .select('id, nombre, apellido, rol, puesto_organizacional, estado, es_prueba, cuil, legajo, legajo_visual, cuenta_bancaria')
+      .select('id, nombre, apellido, rol, puesto_organizacional, estado, es_prueba, cuil, legajo, legajo_visual')
       .order('apellido').order('id').range(d, h)),
     client.from('objetivos').select('id, nombre, es_prueba, zona_id, nocturnidad_activa, nocturnidad_desde, nocturnidad_hasta').order('nombre'),
     client.from('supervisor_zonas').select('supervisor_id, zona_id'),
@@ -517,6 +518,11 @@ export async function plantillaTrabajoDelMes(
 
   const err = usuariosR.error || turnosR.error || registrosR.error || novedadesR.error
   if (err) return { plantilla: null, filas: 0, error: err.message || String(err) }
+  // La columna CUENTA es informativa: el archivo del banco sale de
+  // pagos_banco_destinatarios. Si la RPC no responde, la columna queda vacía
+  // (igual que una persona sin cuenta) y no se frena el Excel.
+  const cuentas = typeof client.rpc === 'function' ? await cargarCuentasBancarias(client) : { porId: new Map<string, string>(), error: null }
+  if (cuentas.error) console.error('Excel de trabajo: cuentas bancarias:', cuentas.error)
 
   const rec = opts?.recorte
   const hastaRec = rec?.hasta ?? null
@@ -542,7 +548,7 @@ export async function plantillaTrabajoDelMes(
     id: g.id, nombre: g.nombre, apellido: g.apellido, rol: g.rol,
     puesto_organizacional: g.puesto_organizacional ?? null, estado: g.estado,
     esPrueba: Boolean(g.es_prueba), cuil: g.cuil, legajo: g.legajo,
-    legajoVisual: g.legajo_visual ?? null, cuenta: g.cuenta_bancaria ?? null,
+    legajoVisual: g.legajo_visual ?? null, cuenta: cuentas.porId.get(g.id) ?? null,
   }))
 
   // ── SUELDO MENSUAL (grupo A · mensualizados fijos) ────────────────────────

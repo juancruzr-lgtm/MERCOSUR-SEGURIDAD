@@ -15,6 +15,7 @@ import { mensajeErrorAuth, validarCredencialesLogin, validarEmail } from '@/lib/
 import { limpiarRecuperacionPendiente } from '@/lib/auth-recuperacion'
 import { alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
+import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
 
 const FONT_BODY = `${brandTypography.currentBody}, sans-serif`
 
@@ -63,7 +64,7 @@ export async function perfilDeSesionActual(): Promise<any | null> {
 
   const { data: perfil, error } = await supabase
     .from('usuarios')
-    .select('*')
+    .select(COLUMNAS_USUARIO)
     .eq('auth_user_id', data.session.user.id)
     .single()
 
@@ -135,14 +136,14 @@ export default function Login({ onLogin, errorInicial }: { onLogin: (u: any) => 
 
     let { data: perfil, error: perfilError } = await supabase
       .from('usuarios')
-      .select('*')
+      .select(COLUMNAS_USUARIO)
       .eq('auth_user_id', data.user.id)
       .maybeSingle()
 
     if ((!perfil || perfilError) && data.user.email) {
       const fallback = await supabase
         .from('usuarios')
-        .select('*')
+        .select(COLUMNAS_USUARIO)
         .eq('email', data.user.email.trim().toLowerCase())
         .maybeSingle()
 
