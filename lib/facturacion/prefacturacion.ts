@@ -10,7 +10,8 @@
  *   responsable) → importe contractual → comprobante fiscal → cobranza.
  */
 
-import { desglosarIva, importePorMinutos, porcentajeCentavos, sumarImportes, type Importes, type TratamientoIva } from './dinero'
+import { aCentavos, desglosarIva, importePorMinutos, porcentajeCentavos, sumarImportes, type Importes, type TratamientoIva } from './dinero'
+import type { ConceptoFijoVigente } from './conceptos-fijos'
 
 // ── Estados de preparación (separados de entrega/portal/cobranza) ──────────
 export type EstadoPreparacion =
@@ -121,6 +122,11 @@ export type EntradaPrefactura = {
    * Sin esto, un solo renglón con el total y la tarifa del contrato.
    */
   porObjetivo?: Array<{ nombre: string; horas: HorasAprobadas | null; tarifas: TarifaVigente[] }>
+  /**
+   * Contrato mixto: conceptos mensuales fijos que van en este comprobante
+   * (ya filtrados por período y asignados a este grupo; ver conceptos-fijos.ts).
+   */
+  conceptosFijos?: ConceptoFijoVigente[]
 }
 
 export type LineaCalculada = {
@@ -128,6 +134,8 @@ export type LineaCalculada = {
   cantidad: string
   precio: string
   tarifaId: string | null
+  /** Renglón de un concepto mensual fijo (fact_conceptos_fijos.id). */
+  conceptoFijoId?: string
   importes: Importes
 }
 
@@ -164,13 +172,29 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
   const items = e.porObjetivo?.length ? e.porObjetivo : [{ nombre: '', horas: e.horas, tarifas: e.tarifas }]
   const de = (concepto: string, nombre: string) => (nombre ? `${concepto} — ${nombre}` : concepto)
 
+  // Conceptos fijos (contrato mixto): uno por código + objetivo, nunca repetido.
+  const fijos: ConceptoFijoVigente[] = []
+  for (const c of e.conceptosFijos ?? []) {
+    if (!fijos.some(x => x.id === c.id || (x.codigo === c.codigo && x.objetivoId === c.objetivoId))) fijos.push(c)
+  }
+  const sinHorasAprobadas = e.modalidad !== 'abono' && (!e.horas || e.horas.minutosTotales <= 0)
+  const fijosAFacturar = sinHorasAprobadas ? fijos.filter(c => c.facturaSinHoras) : fijos
+  if (sinHorasAprobadas) {
+    for (const c of fijos.filter(c => !c.facturaSinHoras)) avisos.push(`"${c.descripcion}" no se incluye: no hay horas aprobadas en el período.`)
+  }
+
   if (e.modalidad === 'abono') {
     for (const it of items) agregarLinea(de('Abono mensual', it.nombre), null, tarifa(it.tarifas, 'abono'))
   } else {
     const h = e.horas
     if (!h || h.minutosTotales <= 0) {
-      calculable = false
-      requisitos.push({ tipo: 'horas_aprobadas', detalle: 'No hay horas aprobadas para facturar en el período.' })
+      if (fijosAFacturar.length) {
+        // Decisión contractual expresa (factura_sin_horas): se factura sólo el concepto fijo.
+        avisos.push('Sin horas aprobadas en el período: se facturan sólo los conceptos fijos marcados para facturarse sin horas.')
+      } else {
+        calculable = false
+        requisitos.push({ tipo: 'horas_aprobadas', detalle: 'No hay horas aprobadas para facturar en el período.' })
+      }
     } else {
       // Lo descubierto ya tuvo su decisión al aprobar las horas: se informa, no bloquea.
       if (h.minutosDescubiertosNoFacturados > 0) {
@@ -192,6 +216,13 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
         }
       }
     }
+  }
+
+  // Conceptos mensuales fijos: un renglón cada uno, con SU tratamiento de IVA.
+  for (const c of fijosAFacturar) {
+    const r = desglosarIva(aCentavos(c.importe), c.tratamientoIva, c.alicuotaIva)
+    if ('motivo' in r) { calculable = false; requisitos.push({ tipo: 'iva_definido', detalle: `${c.descripcion}: ${r.motivo}` }); continue }
+    lineas.push({ concepto: c.descripcion, cantidad: '1', precio: c.importe, tarifaId: null, conceptoFijoId: c.id, importes: r.importes })
   }
 
   // Ajustes comerciales: sólo los aprobados entran al importe; con el IVA de la primera línea.

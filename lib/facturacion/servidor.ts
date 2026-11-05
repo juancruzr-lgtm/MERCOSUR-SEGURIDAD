@@ -17,6 +17,7 @@ import {
 } from './prefacturacion'
 import { proponerAsociaciones, type ClienteIdentidad, type ComprobanteAbierto, type RetencionDisponible } from './conciliacion'
 import { numeroVisible } from './comprobantes'
+import { conceptosFijosDelPeriodo, conceptosParaGrupo, type ConceptoFijoGuardado } from './conceptos-fijos'
 
 // Mismas columnas que lee Reportes: las horas salen de lib/planilla-objetivo con los mismos datos.
 const CAMPOS_REGISTRO = '*'
@@ -151,6 +152,9 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
       const { data: tarifasAll } = await db.from('fact_tarifas').select('*').eq('contrato_id', k.id)
         .lte('vigencia_desde', periodo.desde).or(`vigencia_hasta.is.null,vigencia_hasta.gte.${periodo.desde}`)
       const { data: cambios } = await db.from('fact_tarifas').select('id').eq('contrato_id', k.id).gt('vigencia_desde', periodo.desde).lt('vigencia_desde', periodo.hastaExclusivo)
+      // Contrato mixto: conceptos mensuales fijos que tocan el período (ver conceptos-fijos.ts).
+      const fijosPeriodo = await conceptosFijosDeContrato(db, k.id, periodo)
+      const gruposFijos = grupos.map(g => ({ clave: g.clave, objIds: g.objs.map((v: any) => v.objetivo_id) }))
       const { data: delPeriodoTodas } = await db.from('fact_prefacturas').select('*').eq('contrato_id', k.id)
         .eq('periodo_desde', periodo.desde).eq('periodo_hasta_excl', periodo.hastaExclusivo).neq('estado', 'descartada')
       // Reagrupado: una prefactura EN PREPARACIÓN cuya agrupación ya no existe (sus objetivos pasaron a
@@ -238,11 +242,14 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
           tarifasCalc = ocCubre?.monto_neto_c ? [{ id: base?.id ?? `oc:${ocCubre.id}`, concepto: 'abono', precio: String(Number(ocCubre.monto_neto_c) / 100),
             tratamientoIva: base?.tratamientoIva ?? 'sin_definir', alicuotaIva: base?.alicuotaIva ?? '21' }] : []
         }
+        const { conceptos: conceptosFijos, huerfanos } = conceptosParaGrupo(fijosPeriodo.vigentes, { clave: g.clave, objIds }, gruposFijos)
         const r = calcularPrefactura({
           modalidad, cuitReceptor: k.cliente?.cuit ?? null, periodo, horas, tarifas: tarifasCalc,
           ajustes: [], separarDiurnaNocturna: !!k.separar_diurna_nocturna, requiere: k.requisitos ?? [], cumplidos, oc, anticipoNeto: 0,
-          pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo,
+          pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo, conceptosFijos,
         })
+        if (conceptosFijos.length) r.avisos.push(...fijosPeriodo.avisos.filter(a => conceptosFijos.some(c => a.includes(`"${c.descripcion}"`))))
+        if (huerfanos.length && g === grupos[0]) r.avisos.push(`Conceptos fijos sin comprobante en el período (su objetivo no se factura): ${huerfanos.map(c => c.descripcion).join(', ')}.`)
         if (faltanAprobar.length && modalidad !== 'abono') r.requisitos.push({ tipo: 'horas_aprobadas', detalle: `Faltan aprobar horas de: ${faltanAprobar.join(', ')}` })
         if (cambios?.length) r.avisos.push('Hay un cambio de tarifa dentro del período: revisar el precio aplicado.')
         if (!puntoVenta) r.avisos.push('Falta configurar el punto de venta Web Service: se puede aprobar, pero no emitir por ARCA.')
@@ -252,7 +259,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
           if (ajs?.length) {
             const r2 = calcularPrefactura({
               modalidad, cuitReceptor: k.cliente?.cuit ?? null, periodo, horas, tarifas: tarifasCalc, separarDiurnaNocturna: !!k.separar_diurna_nocturna,
-              requiere: k.requisitos ?? [], cumplidos, oc, anticipoNeto: 0, pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo,
+              requiere: k.requisitos ?? [], cumplidos, oc, anticipoNeto: 0, pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo, conceptosFijos,
               ajustes: ajs.map((a: any) => ({ id: a.id, descripcion: a.descripcion, importeNeto: Number(a.importe_neto_c), motivo: a.motivo, responsableId: a.creado_por, aprobado: !!a.aprobado_at })),
             })
             Object.assign(r, { lineas: r2.lineas, importes: r2.importes, avisos: [...r.avisos, ...r2.avisos.filter(x => !r.avisos.includes(x))] })
@@ -323,6 +330,21 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
     }
   }
   return resumen
+}
+
+/**
+ * Conceptos mensuales fijos del contrato que tocan el período. Sin la migración
+ * 20261208100000 aplicada la tabla no existe: el contrato se factura como siempre.
+ */
+export async function conceptosFijosDeContrato(db: SupabaseClient, contratoId: string, periodo: { desde: string; hastaExclusivo: string }) {
+  const { data, error } = await db.from('fact_conceptos_fijos').select('*').eq('contrato_id', contratoId)
+    .lt('vigencia_desde', periodo.hastaExclusivo).or(`vigencia_hasta.is.null,vigencia_hasta.gte.${periodo.desde}`)
+  if (error) {
+    const sinTabla = error.code === '42P01' || error.code === 'PGRST205' || /fact_conceptos_fijos/.test(error.message ?? '') && /(does not exist|could not find|no existe)/i.test(error.message ?? '')
+    if (sinTabla) return { vigentes: [], avisos: [] }
+    throw new Error(error.message)
+  }
+  return conceptosFijosDelPeriodo((data ?? []) as ConceptoFijoGuardado[], periodo)
 }
 
 /** Texto de la última factura EMITIDA comparable: misma agrupación primero, luego cualquiera del cliente. */
