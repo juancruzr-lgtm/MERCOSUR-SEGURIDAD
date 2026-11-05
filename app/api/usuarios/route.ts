@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
 import { tieneCapacidad, esGerenciaReal } from '@/lib/capacidades'
+import { normalizarCuentaGalicia } from '@/lib/cuenta-banco'
 import { afipConfigDesdeEnv } from '@/lib/afip/config'
 import { corroborarEmpleado, esperarConTope } from '@/lib/afip/corroborar'
 
@@ -68,7 +69,10 @@ function armarPayload(
     // gestiona el resto del personal, no lo bancario/salarial (ROLES 4).
     if (campo === 'cuenta_bancaria' && !puedeEconomico) continue
     if (body[campo] !== undefined) {
-      const valor = String(body[campo] ?? '').trim()
+      let valor = String(body[campo] ?? '').trim()
+      // Galicia muestra la cuenta sin los ceros a la izquierda; al guardarla la
+      // completamos a 14 dígitos (00…) para que el archivo del banco salga bien.
+      if (campo === 'cuenta_bancaria' && valor) valor = normalizarCuentaGalicia(valor)
       payload[campo] = valor || null
     }
   }
