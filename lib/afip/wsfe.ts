@@ -11,6 +11,7 @@
 //  - Sólo 'A' con CAE y vencimiento de CAE cuenta como autorizado.
 //  - Homologación y producción tienen endpoints y TA separados.
 
+import { Agent as AgenteHttps, request as pedidoHttps } from 'https'
 import { XMLParser } from 'fast-xml-parser'
 import type { AfipTA } from '@/lib/afip/wsaa'
 
@@ -212,15 +213,14 @@ export function interpretarConsulta(xml: string): ResultadoConsulta {
  * (rejectUnauthorized por defecto). Homologación no lo necesita y sigue por fetch.
  */
 export const OPCIONES_TLS_WSFE_PROD = { ciphers: 'DEFAULT@SECLEVEL=1', keepAlive: false } as const
-let agenteProd: import('node:https').Agent | null = null
+let agenteProd: AgenteHttps | null = null
 
 async function postProduccion(accion: string, cuerpo: string, timeoutMs: number): Promise<{ xml: string | null; status: number | null }> {
-  const https = await import('node:https')
-  agenteProd ??= new https.Agent(OPCIONES_TLS_WSFE_PROD)
+  agenteProd ??= new AgenteHttps(OPCIONES_TLS_WSFE_PROD)
   return new Promise(resolve => {
     let listo = false
     const fin = (r: { xml: string | null; status: number | null }) => { if (!listo) { listo = true; resolve(r) } }
-    const req = https.request(ENDPOINT.prod, {
+    const req = pedidoHttps(ENDPOINT.prod, {
       method: 'POST', agent: agenteProd!, timeout: timeoutMs,
       headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: `${NS}${accion}`, 'Content-Length': Buffer.byteLength(cuerpo) },
     }, res => {
