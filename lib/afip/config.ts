@@ -28,3 +28,37 @@ export function afipConfigDesdeEnv(): { config?: AfipConfig; error?: string } {
 
   return { config: { certPem, keyPem, homo, cuitRepresentada } }
 }
+
+export type AmbienteArca = 'produccion' | 'homologacion'
+
+/**
+ * Credenciales de FACTURACIÓN (WSFE), separadas por ambiente. No toca
+ * afipConfigDesdeEnv (Padrón A13 y legajo siguen igual).
+ *  - produccion:   AFIP_CERT_PEM / AFIP_KEY_PEM / AFIP_CUIT_REPRESENTADA (certificado productivo
+ *                  existente). Se rechaza si AFIP_HOMO está encendido: ese certificado no es de producción.
+ *  - homologacion: AFIP_HOMO_CERT_PEM / AFIP_HOMO_KEY_PEM / AFIP_HOMO_CUIT_REPRESENTADA. Nunca cae
+ *                  al certificado productivo.
+ */
+export function afipConfigFacturacion(ambiente: AmbienteArca, env: Record<string, string | undefined> = process.env): { config?: AfipConfig; error?: string } {
+  if (ambiente === 'produccion') {
+    if (env.AFIP_HOMO === '1' || env.AFIP_HOMO === 'true') return { error: 'AFIP_HOMO está encendido: el certificado general no es de producción' }
+    const certPem = normalizarPem(env.AFIP_CERT_PEM)
+    const keyPem = normalizarPem(env.AFIP_KEY_PEM)
+    const cuitRepresentada = (env.AFIP_CUIT_REPRESENTADA || '').replace(/\D/g, '')
+    if (!certPem) return { error: 'Falta AFIP_CERT_PEM' }
+    if (!keyPem) return { error: 'Falta AFIP_KEY_PEM' }
+    if (!cuitRepresentada) return { error: 'Falta AFIP_CUIT_REPRESENTADA' }
+    return { config: { certPem, keyPem, homo: false, cuitRepresentada } }
+  }
+  if (ambiente === 'homologacion') {
+    const certPem = normalizarPem(env.AFIP_HOMO_CERT_PEM)
+    const keyPem = normalizarPem(env.AFIP_HOMO_KEY_PEM)
+    const cuitRepresentada = (env.AFIP_HOMO_CUIT_REPRESENTADA || '').replace(/\D/g, '')
+    if (!certPem) return { error: 'Falta AFIP_HOMO_CERT_PEM' }
+    if (!keyPem) return { error: 'Falta AFIP_HOMO_KEY_PEM' }
+    if (!cuitRepresentada) return { error: 'Falta AFIP_HOMO_CUIT_REPRESENTADA' }
+    if (certPem === normalizarPem(env.AFIP_CERT_PEM)) return { error: 'El certificado de homologación es el mismo que el productivo' }
+    return { config: { certPem, keyPem, homo: true, cuitRepresentada } }
+  }
+  return { error: 'Ambiente inválido' }
+}

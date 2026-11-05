@@ -235,3 +235,58 @@ export async function consultarComprobante(ta: AfipTA, o: { cuit: string; homo: 
   const r = await post(o.homo, 'FECompConsultar', xmlConsultar(ta, o.cuit, o.puntoVenta, o.tipo, o.numero))
   return r.xml == null ? { error: 'Sin respuesta de ARCA' } : interpretarConsulta(r.xml)
 }
+
+// ── Diagnóstico (sólo lectura: no pide CAE ni reserva números) ─────────────
+
+export function xmlDummy(): string {
+  return sobre(`<ar:FEDummy/>`)
+}
+
+export function xmlPuntosVenta(ta: AfipTA, cuit: string): string {
+  return sobre(`<ar:FEParamGetPtosVenta>${auth(ta, cuit)}</ar:FEParamGetPtosVenta>`)
+}
+
+export type EstadoServidores = { ok: boolean; app: string; db: string; auth: string } | { error: string }
+
+export function interpretarDummy(xml: string | null): EstadoServidores {
+  if (xml == null) return { error: 'Sin respuesta de ARCA' }
+  try {
+    const r = buscar(parser.parse(xml), 'FEDummyResult')
+    if (!r) return { error: 'Respuesta sin resultado' }
+    const app = String(r.AppServer ?? ''), db = String(r.DbServer ?? ''), au = String(r.AuthServer ?? '')
+    return { ok: [app, db, au].every(s => s === 'OK'), app, db, auth: au }
+  } catch (e: any) {
+    return { error: `Respuesta ilegible: ${e?.message ?? e}` }
+  }
+}
+
+export type PuntoVentaArca = { numero: number; emisionTipo: string; bloqueado: boolean; baja: string | null }
+
+/** FEParamGetPtosVenta. 602 = sin puntos de venta Web Service (lista vacía, no error). */
+export function interpretarPuntosVenta(xml: string | null): { ok: true; puntos: PuntoVentaArca[] } | { ok: false; error: string } {
+  if (xml == null) return { ok: false, error: 'Sin respuesta de ARCA' }
+  try {
+    const r = buscar(parser.parse(xml), 'FEParamGetPtosVentaResult')
+    if (!r) return { ok: false, error: xml.match(/<faultstring>([^<]+)<\/faultstring>/)?.[1] ?? 'Respuesta sin resultado' }
+    const errs = asArray(buscar(r, 'Errors')?.Err)
+    if (errs.some((e: any) => String(e.Code) === '602')) return { ok: true, puntos: [] }
+    if (errs.length) return { ok: false, error: errs.map((e: any) => `${e.Code}: ${e.Msg}`).join('; ') }
+    const puntos = asArray(buscar(r, 'ResultGet')?.PtoVenta).map((p: any) => {
+      const baja = String(p.FchBaja ?? '').trim()
+      return { numero: Number(p.Nro), emisionTipo: String(p.EmisionTipo ?? ''), bloqueado: String(p.Bloqueado ?? '').toUpperCase() === 'S', baja: !baja || baja.toUpperCase() === 'NULL' ? null : baja }
+    })
+    return { ok: true, puntos }
+  } catch (e: any) {
+    return { ok: false, error: `Respuesta ilegible: ${e?.message ?? e}` }
+  }
+}
+
+export async function estadoServidores(homo: boolean): Promise<EstadoServidores> {
+  const r = await post(homo, 'FEDummy', xmlDummy(), 15000)
+  return interpretarDummy(r.xml)
+}
+
+export async function puntosDeVenta(ta: AfipTA, o: { cuit: string; homo: boolean }) {
+  const r = await post(o.homo, 'FEParamGetPtosVenta', xmlPuntosVenta(ta, o.cuit), 15000)
+  return interpretarPuntosVenta(r.xml)
+}

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -133,7 +133,7 @@ ok('con emisión manual apagada no se registra un comprobante', await falla(() =
 ok('el interruptor de módulos no lo ejecuta un usuario', await falla(() => como(ADM, () => sql(`select public.fact_modulo_exigir('cobranzas')`)), /permission denied/))
 // El resto de la prueba ejercita todas las etapas en la base aislada.
 await db.exec(`update public.fact_config set valor = '{"cobranzas": true, "intereses": true, "emision_manual": true}' where clave = 'modulos';
-  update public.fact_config set valor = valor || '{"homologacion_habilitada": true}' where clave = 'emision'`)
+  update public.fact_config set valor = valor || '{"homologacion_habilitada": true, "punto_venta_homo": 4000, "punto_venta_prod": 4, "cuit_emisor_homo": "20-31393333-5"}' where clave = 'emision'`)
 
 
 // ── Permisos ───────────────────────────────────────────────────────────────
@@ -308,6 +308,8 @@ ok('emisión real deshabilitada por defecto', await falla(() => como(ADM, () => 
 const e1 = (await como(ADM, () => uno(`select public.fact_emision_preparar($1, $2, 'homologacion') r`, [pref, vNow]))).r
 const e1b = (await como(ADM, () => uno(`select public.fact_emision_preparar($1, $2, 'homologacion') r`, [pref, vNow]))).r
 ok('preparar dos veces devuelve la misma solicitud (idempotente)', e1.id === e1b.id && e1b.existente === true)
+const e1f = await uno(`select punto_venta, cuit_emisor from public.fact_emisiones where id = $1`, [e1.id])
+ok('homologación usa su propio punto de venta y su CUIT de prueba', e1f.punto_venta === 4000 && e1f.cuit_emisor === '20313933335', JSON.stringify(e1f))
 ok('el ciclo ARCA no lo ejecuta un usuario', await falla(() => como(ADM, () => sql(`select public.fact_emision_iniciar_envio($1, 1, '{}'::jsonb)`, [e1.id]))))
 await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 1, '{}'::jsonb)`, [e1.id]))
 await servidor(() => sql(`select public.fact_emision_resultado($1, 'incierta', '{"error":"timeout"}'::jsonb)`, [e1.id]))
@@ -320,6 +322,8 @@ ok('homologación crea comprobante de prueba sin marcar la prefactura como emiti
 
 await db.exec(`update public.fact_config set valor = valor || '{"produccion_habilitada": true}' where clave = 'emision'`)
 const e2 = (await como(ADM, async () => uno(`select public.fact_emision_preparar($1, $2, 'produccion') r`, [pref, await version()]))).r
+const e2f = await uno(`select punto_venta, cuit_emisor from public.fact_emisiones where id = $1`, [e2.id])
+ok('producción usa punto_venta_prod y el CUIT de producción (nunca los de homologación)', e2f.punto_venta === 4 && e2f.cuit_emisor === cfg0.emision.cuit_emisor, JSON.stringify(e2f))
 await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 2047, '{}'::jsonb)`, [e2.id]))
 await servidor(() => sql(`select public.fact_emision_resultado($1, 'A', '{"Resultado":"A"}'::jsonb, '76111111111111', '2026-09-14', '2026-09-04')`, [e2.id]))
 const fa2047 = await uno(`select id, total_c::text t, tipo, numero::int n from public.fact_comprobantes where ambiente = 'produccion' and numero = 2047`)
@@ -336,7 +340,7 @@ const filas = [
   fila(1, 1, 2018, '2026-08-01', '30501125594', 185901901), fila(3, 3, 186, '2026-08-01', '30501125594', 185901901),
   fila(1, 1, 2023, '2026-08-04', '30707891579', 436037536), fila(3, 3, 187, '2026-08-04', '30707891579', 218018768),
   fila(6, 1, 834, '2026-10-01', '30589038181', 926155020),
-  fila(1, 1, 2047, '2026-09-04', '30719244331', 977697037), // ya registrada por la app
+  fila(1, 4, 2047, '2026-09-04', '30719244331', 977697037), // ya registrada por la app (punto Web Service 4)
 ]
 const SHA_CSV = 'b'.repeat(64)
 const imp = (await como(ADM, () => uno(`select public.fact_importacion_arca_crear('comprobantes_consulta_csv_emitidos.csv', $1, null, $2::jsonb) r`, [SHA_CSV, JSON.stringify([...filas, filas[0]])]))).r
@@ -562,8 +566,11 @@ const prefManual = (await como(ADM, () => uno(`select public.fact_prefactura_gua
 const vM = async () => (await uno(`select version from public.fact_prefacturas where id = $1`, [prefManual])).version
 await como(ADM, async () => sql(`select public.fact_prefactura_aprobar($1, $2)`, [prefManual, await vM()]))
 ok('se aprueba sin punto de venta (aprobar es comercial)', (await uno(`select estado, aprobada_por from public.fact_prefacturas where id = $1`, [prefManual])).aprobada_por === ADM)
-ok('sin punto de venta configurado no se prepara la emisión', await falla(() => como(ADM, async () => sql(`select public.fact_emision_preparar($1, $2, 'produccion')`, [prefManual, await vM()])), /punto de venta/))
-await db.exec(`update public.fact_config set valor = valor || '{"punto_venta": 1}' where clave = 'emision'`)
+await db.exec(`update public.fact_config set valor = (valor - 'punto_venta_prod') || '{"punto_venta": 1}' where clave = 'emision'`)
+ok('sin punto_venta_prod no se prepara la emisión (ni la clave vieja ni el de la prefactura sirven)', await falla(() => como(ADM, async () => sql(`select public.fact_emision_preparar($1, $2, 'produccion')`, [prefManual, await vM()])), /punto_venta_prod/))
+await db.exec(`update public.fact_config set valor = valor || '{"punto_venta_prod": 1}' where clave = 'emision'`)
+ok('producción rechaza un punto de venta usado por Comprobantes en línea / importado', await falla(() => como(ADM, async () => sql(`select public.fact_emision_preparar($1, $2, 'produccion')`, [prefManual, await vM()])), /fuera de la API/))
+await db.exec(`update public.fact_config set valor = (valor - 'punto_venta') || '{"punto_venta_prod": 4}' where clave = 'emision'`)
 const eM = (await como(ADM, async () => uno(`select public.fact_emision_preparar($1, $2, 'produccion') r`, [prefManual, await vM()]))).r
 await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 4100, '{}'::jsonb)`, [eM.id]))
 const manual = (extra = {}) => como(ADM, async () => uno(`select public.fact_comprobante_manual_registrar($1, $2, $3::jsonb) id`, [prefManual, await vM(),
@@ -721,6 +728,13 @@ ok('reagrupar: historial con el motivo de cada descarte y el reemplazo en la nue
   && histRg.some(h => h.accion === 'reagrupado' && h.datos.reemplaza.length === 2 && h.datos.reemplaza.some(r => r.id === p2) && h.datos.reemplaza[0].total_c === 1000), JSON.stringify(histRg.map(h => h.accion)))
 ok('reagrupar: repetir la misma operación no duplica (las anteriores ya están descartadas)', await falla(async () => reagrupar([{ id: p2, version: await ver(p2), motivo: 'x' }], [nueva()]), /descartada/)
   && (await fotoDic()).vivas === 1)
+
+// Verificación de 20261206120000 (mismo archivo que se corre en producción): la sintaxis y los controles de función.
+{
+  const v = await sql(readFileSync(`${REPO}/supabase/pruebas/facturacion/verificacion-arca-ambientes.sql`, 'utf8'))
+  const deFuncion = v.filter(r => /preparar|anon/.test(r.control))
+  ok('verificacion-arca-ambientes.sql: controles de la función OK', deFuncion.length === 4 && deFuncion.every(r => r.ok === true), JSON.stringify(v))
+}
 
 // ── Rollback ───────────────────────────────────────────────────────────────
 for (const m of [...MIGS].reverse()) await db.exec(readFileSync(`${REPO}/supabase/rollback/${m}_rollback.sql`, 'utf8'))
