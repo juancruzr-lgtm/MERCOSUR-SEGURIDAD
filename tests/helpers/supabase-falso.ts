@@ -42,6 +42,10 @@ export function rpcFalsa(t: Record<string, any[]>, fn: string, args: any) {
     return { usuario_id: u.id, cuenta, nombre: `${u.apellido}, ${u.nombre}`, orden: 0, habilitado: motivo == null, motivo }
   })
   if (fn === 'pagos_banco_destinatarios') return { data: destinatarios, error: null }
+  // Réplica de usuarios_cuentas_bancarias (20261207100000): objeto id → cuenta, sólo con cuenta cargada.
+  if (fn === 'usuarios_cuentas_bancarias') {
+    return { data: Object.fromEntries((t.usuarios ?? []).filter(u => String(u.cuenta_bancaria ?? '').trim() !== '').map(u => [u.id, String(u.cuenta_bancaria)])), error: null }
+  }
   if (fn === 'registrar_pago_banco') {
     t.liquidacion_pago_lote = t.liquidacion_pago_lote ?? []; t.liquidacion_pago_registrado = t.liquidacion_pago_registrado ?? []
     const ya = t.liquidacion_pago_lote.find(l => l.periodo_id === args.p_periodo_id && l.tipo === args.p_tipo && l.hash === args.p_hash)

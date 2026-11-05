@@ -48,6 +48,7 @@ import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOper
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
+import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 // Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
@@ -1571,7 +1572,7 @@ export default function SupervisorMobile({ user }: any) {
       if (error) throw error
       const nuevoId = (sol as any)?.entidad_id
       if (nuevoId) {
-        const { data: nuevo } = await supabase.from('usuarios').select('*').eq('id', nuevoId).single()
+        const { data: nuevo } = await supabase.from('usuarios').select(COLUMNAS_USUARIO).eq('id', nuevoId).single()
         if (nuevo) setGuardias(prev => [...prev, nuevo as Usuario])
       }
       setMensaje(`Vigilador dado de alta: ${formNuevoGuardia.apellido.trim()}, ${formNuevoGuardia.nombre.trim()}.`)

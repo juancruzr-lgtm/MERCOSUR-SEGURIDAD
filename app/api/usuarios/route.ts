@@ -3,6 +3,7 @@ import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
 import { tieneCapacidad, esGerenciaReal } from '@/lib/capacidades'
 import { afipConfigDesdeEnv } from '@/lib/afip/config'
 import { corroborarEmpleado, esperarConTope } from '@/lib/afip/corroborar'
+import { sinCuentaBancaria } from '@/lib/usuarios-columnas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -132,7 +133,8 @@ export async function POST(req: NextRequest) {
 
     if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
     if (data?.id && String(data.cuil ?? '').replace(/\D/g, '').length === 11) await corroborarAlAlta(admin.client, data.id, perfil.id)
-    return NextResponse.json({ ok: true, usuario: data })
+    // El CBU sólo vuelve a quien tiene capacidad económica (auditoría 05/11, V2).
+    return NextResponse.json({ ok: true, usuario: puedeEconomico ? data : sinCuentaBancaria(data) })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error interno del servidor'
     return NextResponse.json({ error: message }, { status: 500 })
@@ -172,7 +174,8 @@ export async function PATCH(req: NextRequest) {
       .single()
 
     if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
-    return NextResponse.json({ ok: true, usuario: data })
+    // El CBU sólo vuelve a quien tiene capacidad económica (auditoría 05/11, V2).
+    return NextResponse.json({ ok: true, usuario: puedeEconomico ? data : sinCuentaBancaria(data) })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error interno del servidor'
     return NextResponse.json({ error: message }, { status: 500 })

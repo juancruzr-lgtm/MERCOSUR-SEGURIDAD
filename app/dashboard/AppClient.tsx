@@ -158,6 +158,7 @@ import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
+import { COLUMNAS_USUARIO, cargarCuentasBancarias } from '@/lib/usuarios-columnas'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -1706,7 +1707,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         if (eRpc) { setMensaje({ tipo:'error', texto: eRpc.message }); setLoading(false); return }
         const entId = (res as any)?.entidad_id
         if (entId) {
-          const { data: nuevo } = await supabase.from('usuarios').select('*').eq('id', entId).single()
+          const { data: nuevo } = await supabase.from('usuarios').select(COLUMNAS_USUARIO).eq('id', entId).single()
           if (nuevo) setGuardias((prev: any[]) => [...prev, nuevo])
         }
         setModal(false)
@@ -1783,7 +1784,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         if (!res.ok) {
           setMensaje({ tipo:'error', texto:data.error || 'No se pudo guardar el empleado' })
         } else if (data.usuario) {
-          setGuardias((prev: any[]) => prev.map(g => g.id === editId ? data.usuario : g))
+          setGuardias((prev: any[]) => prev.map(g => g.id === editId ? { ...g, ...data.usuario } : g))
           setModal(false)
         }
       } catch (err: any) {
@@ -1850,13 +1851,13 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       .from('usuarios')
       .update({ estado: nuevoEstado })
       .eq('id', g.id)
-      .select()
+      .select(COLUMNAS_USUARIO)
       .single()
 
     if (error) {
       setMensaje({ tipo:'error', texto:error.message })
     } else if (data) {
-      setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? data : x))
+      setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? { ...x, ...data } : x))
       setMensaje({ tipo:'ok', texto:`Empleado ${nuevoEstado === 'activo' ? 'activado' : 'inactivado'} correctamente` })
     }
 
@@ -2297,8 +2298,8 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
               onCerrar={() => setBajaDe(null)}
               onCambio={async () => {
                 // Sólo la fila de la persona (estado/situación laboral); igual que Activar/Inactivar.
-                const { data } = await supabase.from('usuarios').select('*').eq('id', bajaDe).maybeSingle()
-                if (data) setGuardias((prev: any[]) => prev.map(x => x.id === bajaDe ? data : x))
+                const { data } = await supabase.from('usuarios').select(COLUMNAS_USUARIO).eq('id', bajaDe).maybeSingle()
+                if (data) setGuardias((prev: any[]) => prev.map(x => x.id === bajaDe ? { ...x, ...data } : x))
               }}
             />
           </div>
@@ -10210,7 +10211,7 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
       .update({ estado:'inactivo' })
       .eq('id', id)
       .in('rol', ['guardia', 'vigilador'])
-      .select()
+      .select(COLUMNAS_USUARIO)
       .single()
 
     if (error) throw error
@@ -10253,7 +10254,7 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
         const resuelta = data as SolicitudAdmin
         setSolicitudes(prev => prev.map(item => item.id === solicitud.id ? resuelta : item))
         if (solicitud.tipo === 'crear_vigilador' && resuelta?.entidad_id) {
-          const { data: nuevo } = await supabase.from('usuarios').select('*').eq('id', resuelta.entidad_id).single()
+          const { data: nuevo } = await supabase.from('usuarios').select(COLUMNAS_USUARIO).eq('id', resuelta.entidad_id).single()
           if (nuevo) setGuardias((prev: Usuario[]) => [...prev, nuevo as Usuario])
         } else if (solicitud.tipo === 'baja_vigilador' && resuelta?.entidad_id) {
           setGuardias((prev: Usuario[]) => prev.map(g => g.id === resuelta.entidad_id ? { ...g, estado: 'inactivo' } : g))
@@ -14000,11 +14001,11 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
       let filas = g.data as any[]
       // Merge de cuenta_bancaria SÓLO para capacidad económica (gerencia).
       if (puedeEconomico) {
-        const { data: cuentas } = await supabase.from('usuarios').select('id, cuenta_bancaria')
-        if (cuentas) {
-          const porId = new Map((cuentas as any[]).map(c => [c.id, c.cuenta_bancaria]))
-          filas = filas.map(u => ({ ...u, cuenta_bancaria: porId.get(u.id) ?? null }))
-        }
+        // Por RPC con gate en la base (Administración/Gerencia): la columna ya no
+        // se lee directo desde el navegador (auditoría 05/11, V2).
+        const { porId, error: eCuentas } = await cargarCuentasBancarias(supabase)
+        if (eCuentas) console.error('Cuentas bancarias:', eCuentas)
+        else filas = filas.map(u => ({ ...u, cuenta_bancaria: porId.get(u.id) ?? null }))
       }
       setGuardias(filas)
     }
