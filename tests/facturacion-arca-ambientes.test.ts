@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import forge from 'node-forge'
 import { afipConfigDesdeEnv, afipConfigFacturacion } from '@/lib/afip/config'
-import { interpretarDummy, interpretarPuntosVenta, xmlPuntosVenta, xmlDummy } from '@/lib/afip/wsfe'
+import { OPCIONES_TLS_WSFE_PROD, interpretarDummy, interpretarPuntosVenta, xmlPuntosVenta, xmlDummy } from '@/lib/afip/wsfe'
 import { cbuFceDe, storeAmbiente } from '@/lib/facturacion/ta-ambiente'
 import { datosAmbiente, diagnosticar, leerCertificado, type PuertoDiagnostico } from '@/lib/facturacion/diagnostico-arca'
 import type { AfipTA } from '@/lib/afip/wsaa'
@@ -48,6 +48,26 @@ describe('credenciales de facturación separadas por ambiente', () => {
   })
   it('producción se niega si AFIP_HOMO está encendido', () => {
     expect(afipConfigFacturacion('produccion', { ...ENV, AFIP_HOMO: '1' }).error).toMatch(/AFIP_HOMO/)
+  })
+  it('AFIP_FACT_CUIT_REPRESENTADA: facturación representa a la SRL y el Padrón A13 sigue con su CUIT', () => {
+    // Caso real: el certificado es del titular (persona) y el A13 lo usa con ese CUIT;
+    // la factura sale por la SRL.
+    const env = { ...ENV, AFIP_CUIT_REPRESENTADA: '20313933335', AFIP_FACT_CUIT_REPRESENTADA: '30-71070541-7' }
+    expect(afipConfigFacturacion('produccion', env).config!.cuitRepresentada).toBe('30710705417')
+    expect(afipConfigFacturacion('produccion', { ...env, AFIP_FACT_CUIT_REPRESENTADA: undefined }).config!.cuitRepresentada).toBe('20313933335')
+    expect(afipConfigFacturacion('produccion', { ...env, AFIP_FACT_CUIT_REPRESENTADA: '', AFIP_CUIT_REPRESENTADA: '' }).error).toMatch(/AFIP_FACT_CUIT_REPRESENTADA/)
+    // Homologación no la lee: tiene su propio AFIP_HOMO_CUIT_REPRESENTADA.
+    expect(afipConfigFacturacion('homologacion', { ...env, AFIP_HOMO_CUIT_REPRESENTADA: '20313933335' }).config!.cuitRepresentada).toBe('20313933335')
+    const viejo = { ...process.env }
+    try {
+      Object.assign(process.env, { AFIP_CERT_PEM: PROD.certPem, AFIP_KEY_PEM: PROD.keyPem, AFIP_CUIT_REPRESENTADA: '20313933335', AFIP_FACT_CUIT_REPRESENTADA: '30710705417' })
+      delete process.env.AFIP_HOMO
+      expect(afipConfigDesdeEnv().config!.cuitRepresentada).toBe('20313933335')
+    } finally { process.env = viejo }
+  })
+  it('WSFE de producción baja el nivel TLS sólo lo justo (DH corto de servicios1) y valida el certificado', () => {
+    expect(OPCIONES_TLS_WSFE_PROD.ciphers).toBe('DEFAULT@SECLEVEL=1')
+    expect('rejectUnauthorized' in OPCIONES_TLS_WSFE_PROD).toBe(false)
   })
   it('Padrón A13 y legajo siguen leyendo la configuración general sin cambios', () => {
     const viejo = { ...process.env }
