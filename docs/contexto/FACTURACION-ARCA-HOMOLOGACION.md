@@ -16,7 +16,11 @@ Con #379 desplegado, la migración aplicada y `punto_venta_prod = 4`, el diagnó
     2. Representante: Buscar → Computador Fiscal → **mercosurseguridad** → Confirmar.
 - **CUIT:** `AFIP_CUIT_REPRESENTADA` vale 20313933335, porque lo usa el Padrón A13 y no se toca. Para facturar por la SRL hay que cargar en Vercel (Production) **`AFIP_FACT_CUIT_REPRESENTADA=30710705417`**. Ese CUIT no es secreto.
 - **FEDummy: "Sin respuesta".** `servicios1.afip.gov.ar` negocia DHE con un primo corto y Node 18+ lo corta con `ERR_SSL_DH_KEY_TOO_SMALL`. Homologación no tiene el problema.
-  - Se corrigió en `lib/afip/wsfe.ts`: sólo para ese host se usa un agente HTTPS con `DEFAULT@SECLEVEL=1`, y el certificado del servidor se sigue validando.
+  - Se corrigió en `lib/afip/wsfe.ts`. Sólo para ese host, un agente HTTPS propio ofrece **únicamente ECDHE + AES-GCM sobre TLS 1.2+**. El servidor también las acepta: negocia `ECDHE-RSA-AES256-GCM-SHA384` con P-256.
+  - No se baja el nivel de seguridad de OpenSSL ni se ofrece DHE ni intercambio RSA.
+  - El certificado del servidor se valida igual: el 05/11 se probó que rechaza certificados autofirmados, vencidos, de otro host y con raíz no confiable.
+  - Ninguna otra conexión cambia (no se toca el agente global).
+  - Si ARCA algún día deja de ofrecer ECDHE, la conexión falla con un error visible ("Sin respuesta de ARCA"). No se degrada sola.
 
 ## Qué cambia en la app
 - `afipConfigFacturacion(ambiente)`:

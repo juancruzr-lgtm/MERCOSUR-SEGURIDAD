@@ -65,9 +65,16 @@ describe('credenciales de facturación separadas por ambiente', () => {
       expect(afipConfigDesdeEnv().config!.cuitRepresentada).toBe('20313933335')
     } finally { process.env = viejo }
   })
-  it('WSFE de producción baja el nivel TLS sólo lo justo (DH corto de servicios1) y valida el certificado', () => {
-    expect(OPCIONES_TLS_WSFE_PROD.ciphers).toBe('DEFAULT@SECLEVEL=1')
-    expect('rejectUnauthorized' in OPCIONES_TLS_WSFE_PROD).toBe(false)
+  it('WSFE de producción: sólo ECDHE + AES-GCM sobre TLS 1.2+, sin bajar SECLEVEL y validando el certificado', () => {
+    const o = OPCIONES_TLS_WSFE_PROD as Record<string, unknown>
+    expect(o.minVersion).toBe('TLSv1.2')
+    const suites = String(o.ciphers).split(':')
+    expect(suites.length).toBeGreaterThan(0)
+    expect(suites.every(s => /^ECDHE-(RSA|ECDSA)-AES(128|256)-GCM-SHA(256|384)$/.test(s))).toBe(true)
+    expect(String(o.ciphers)).not.toMatch(/SECLEVEL|NULL|RC4|3DES|DEFAULT|ALL/)
+    expect(suites.some(s => s.startsWith('DHE-') || s.startsWith('AES'))).toBe(false) // ni DHE ni intercambio RSA
+    expect('rejectUnauthorized' in o).toBe(false)
+    expect('checkServerIdentity' in o).toBe(false)
   })
   it('Padrón A13 y legajo siguen leyendo la configuración general sin cambios', () => {
     const viejo = { ...process.env }

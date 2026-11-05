@@ -206,30 +206,44 @@ export function interpretarConsulta(xml: string): ResultadoConsulta {
 }
 
 /**
- * servicios1.afip.gov.ar (WSFEv1 de PRODUCCIÓN) todavía negocia DHE con un primo
- * corto y OpenSSL 3 (Node 18+) lo corta con ERR_SSL_DH_KEY_TOO_SMALL: con fetch
- * la app nunca llega a ARCA. Sólo para ese host se baja el nivel de seguridad
- * de OpenSSL a 1; el certificado del servidor se sigue validando
- * (rejectUnauthorized por defecto). Homologación no lo necesita y sigue por fetch.
+ * servicios1.afip.gov.ar (WSFEv1 de PRODUCCIÓN) PREFIERE DHE con un primo corto y
+ * OpenSSL 3 (Node 18+) lo corta con ERR_SSL_DH_KEY_TOO_SMALL: con fetch la app
+ * nunca llega a ARCA. El servidor también acepta ECDHE con AES-GCM, así que a ese
+ * host se le ofrecen SÓLO esas suites (TLS 1.2+): no se baja el nivel de seguridad
+ * de OpenSSL, no se ofrece DHE ni intercambio RSA, y el certificado del servidor
+ * se valida (rejectUnauthorized por defecto, no se toca). Es un agente propio, no
+ * el global: ninguna otra conexión cambia. Homologación no lo necesita y sigue por fetch.
  */
-export const OPCIONES_TLS_WSFE_PROD = { ciphers: 'DEFAULT@SECLEVEL=1', keepAlive: false } as const
+export const OPCIONES_TLS_WSFE_PROD = {
+  minVersion: 'TLSv1.2',
+  ciphers: 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256',
+  keepAlive: false,
+} as const
 let agenteProd: AgenteHttps | null = null
 
 async function postProduccion(accion: string, cuerpo: string, timeoutMs: number): Promise<{ xml: string | null; status: number | null }> {
   agenteProd ??= new AgenteHttps(OPCIONES_TLS_WSFE_PROD)
   return new Promise(resolve => {
     let listo = false
-    const fin = (r: { xml: string | null; status: number | null }) => { if (!listo) { listo = true; resolve(r) } }
+    const fin = (r: { xml: string | null; status: number | null }) => {
+      if (listo) return
+      listo = true
+      clearTimeout(total)
+      resolve(r)
+    }
     const req = pedidoHttps(ENDPOINT.prod, {
       method: 'POST', agent: agenteProd!, timeout: timeoutMs,
       headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: `${NS}${accion}`, 'Content-Length': Buffer.byteLength(cuerpo) },
     }, res => {
       const partes: Buffer[] = []
       res.on('data', (d: Buffer) => partes.push(d))
-      res.on('end', () => fin({ xml: Buffer.concat(partes).toString('utf8'), status: res.statusCode ?? null }))
+      res.on('end', () => fin(res.complete ? { xml: Buffer.concat(partes).toString('utf8'), status: res.statusCode ?? null } : { xml: null, status: null }))
+      res.on('aborted', () => fin({ xml: null, status: null }))
       res.on('error', () => fin({ xml: null, status: null }))
     })
-    // Error de red o timeout = respuesta incierta (xml null), igual que con fetch.
+    // Error de red, corte o timeout = respuesta incierta (xml null), igual que con fetch.
+    // `timeout` de Node mide inactividad; `total` acota la duración completa como el AbortController.
+    const total = setTimeout(() => { req.destroy(); fin({ xml: null, status: null }) }, timeoutMs)
     req.on('timeout', () => { req.destroy(); fin({ xml: null, status: null }) })
     req.on('error', () => fin({ xml: null, status: null }))
     req.end(cuerpo)
