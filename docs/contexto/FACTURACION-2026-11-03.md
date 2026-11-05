@@ -190,8 +190,7 @@ El procedimiento exacto de la primera etapa está en [FACTURACION-PUESTA-EN-MARC
 - Conviene arrancar con 1 o 2 clientes y controlar contra la factura que se emite hoy por fuera.
 
 **C. Homologación de ARCA**
-1. Certificado de homologación con `wsfe` y `AFIP_HOMO=1`.
-2. Cargar el punto de venta: `update fact_config set valor = valor || '{"punto_venta": N}' where clave='emision'`.
+Ver [FACTURACION-ARCA-HOMOLOGACION.md](FACTURACION-ARCA-HOMOLOGACION.md). Desde 20261206120000 homologación y producción tienen certificado, CUIT y punto de venta propios (`AFIP_HOMO_*`, `punto_venta_homo` / `punto_venta_prod`); **no** se usa `AFIP_HOMO=1` (rompería Padrón A13 y legajo).
 3. Usar el botón "Probar en homologación". Crea comprobantes de prueba que no marcan la prefactura.
 4. Cargar en Clientes y contratos los datos del emisor: domicilio, Ingresos Brutos e inicio de actividades. Recién así se puede verificar el PDF.
 

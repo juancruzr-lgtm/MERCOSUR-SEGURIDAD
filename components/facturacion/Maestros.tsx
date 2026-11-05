@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { leer, rpc, MODALIDADES, REQUISITOS } from '@/lib/facturacion/datos'
 import { cuitValido } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
+import { DiagnosticoArca } from './DiagnosticoArca'
 import { CONDICIONES_IVA, CondicionesContrato, DatosEmisor, DatosFiscalesCliente, resumenCondiciones } from './Condiciones'
 
 const CONTRATO_VACIO = {
@@ -29,6 +30,7 @@ export default function Maestros() {
   return (
     <div>
       <DatosEmisor />
+      <DiagnosticoArca />
       <div style={S.card}>
         <h3 style={S.h3}>Clientes</h3>
         <div style={S.fila}>
