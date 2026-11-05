@@ -76,7 +76,12 @@ begin
     -- 2) Lectura con la lista de columnas de la app (login y pantallas): debe funcionar.
     begin
       execute 'set local role authenticated';
-      execute format('select count(*) from (select %s from public.usuarios where auth_user_id = %L::uuid) x', c_cols, r.auth_user_id) into v_filas;
+      -- Misma lista que c_cols / COLUMNAS_USUARIO (consulta estática: sin SELECT … INTO para el SQL Editor).
+      v_filas := (select count(*) from (
+        select id, nombre, apellido, dni, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at, email, cuil,
+               legajo_visual, es_prueba, puesto_organizacional, acceso_interfaz_admin, acceso_admin_pleno, excluir_pago_banco,
+               acceso_bloqueado, acceso_bloqueado_motivo, acceso_bloqueado_at, acceso_bloqueado_por, acceso_auth_bloqueado_at
+          from public.usuarios where auth_user_id = r.auth_user_id) x);
     exception when others then
       execute 'reset role';
       raise exception 'FALLA: perfil % no puede leer su propia fila con COLUMNAS_USUARIO (login): %', r.cat, sqlerrm;
