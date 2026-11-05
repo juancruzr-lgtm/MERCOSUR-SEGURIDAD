@@ -89,7 +89,8 @@ export type PuntoRondaCGO = {
   diagnostico: string | null
   /** true cuando el diagnóstico propone un cambio concreto. */
   conRecomendacion: boolean
-  incumplimientosConsecutivos: number
+  /** null = control por reincidencia no disponible. */
+  incumplimientosConsecutivos: number | null
 }
 
 /**

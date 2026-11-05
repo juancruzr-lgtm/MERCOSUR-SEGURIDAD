@@ -54,27 +54,25 @@ export function fotoEsObligatoria(politica: PoliticaFoto, hayNovedad: boolean): 
   return politica === 'obligatoria' || (politica === 'solo_novedad' && hayNovedad)
 }
 
-// ── Control de evidencias por reincidencia GPS ────────────────────────────────
-// Tras dos incumplimientos GPS consecutivos en el mismo punto, la siguiente
-// visita nace con `foto_control_gps = true` en su snapshot: una única foto de
-// control, y el ciclo vuelve a cero. El contador y la decisión viven por
-// completo en el servidor (registrar_punto_ronda); el cliente solo muestra la
-// exigencia que el snapshot ya trae. No es una política del punto ni la
-// modifica: se suma como OR a la política manual configurada.
+// ── Control por reincidencia GPS (20261205130000) ─────────────────────────────
+// Tras N registros GPS seguidos fuera del radio en el mismo punto (umbral del
+// servidor, 2 por defecto), la siguiente visita nace con `foto_control_gps =
+// true` en su snapshot. Es un PEDIDO, no un bloqueo: el GPS del celular falla
+// (JC, 20/10/2026) y la ronda nunca se traba por esto. Si el punto se registra
+// sin foto, el pedido sigue para la próxima visita. El contador y la decisión
+// viven en el servidor; el cliente sólo muestra el pedido que el snapshot trae.
+// No es una política del punto ni la modifica.
 
 export const MENSAJE_FOTO_CONTROL_GPS =
-  'Foto obligatoria de control por reiteración de registros fuera del radio.'
+  'Se pide una foto de control: este punto se registró fuera del radio en las últimas visitas. Si no podés sacarla, registrá el punto igual.'
 
 /**
- * Exigencia de foto de una visita: la política manual O la foto de control por
- * reincidencia GPS. Misma composición que aplica el servidor.
+ * ¿Se le pide al vigilador la foto de control en esta visita? Un QR ya
+ * verificado prueba la presencia y cierra el ciclo: ahí no se pide.
+ * Nunca bloquea: la exigencia que bloquea sigue siendo sólo `fotoEsObligatoria`.
  */
-export function fotoEsObligatoriaEnVisita(
-  politica: PoliticaFoto,
-  hayNovedad: boolean,
-  fotoControlGps: boolean,
-): boolean {
-  return fotoEsObligatoria(politica, hayNovedad) || fotoControlGps
+export function fotoControlPedidaEnVisita(fotoControlGps: boolean, qrVerificado: boolean): boolean {
+  return fotoControlGps && !qrVerificado
 }
 
 export interface RondaBase {
