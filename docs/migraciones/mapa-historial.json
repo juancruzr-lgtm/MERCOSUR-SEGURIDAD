@@ -1,0 +1,4235 @@
+{
+  "generado": "2026-11-04",
+  "base_main": "b79d32d",
+  "proyecto": "rngdjslzfcjtepgzmzrs",
+  "fuentes": [
+    "SELECT version, name, created_by FROM supabase_migrations.schema_migrations (81 filas, 04/11)",
+    "diff-objetos.json / diff-funciones.txt (auditoría main vs producción 04/11)",
+    "AUDITORIA-MAIN-VS-PRODUCCION-2026-11-04.md",
+    "SELECT puntuales al catálogo 04/11 (rollbacks, índices, políticas, cambios_guardia)"
+  ],
+  "piso_version": "20261204120000",
+  "total_archivos": 293,
+  "total_filas_remotas": 81,
+  "resumen": {
+    "APLICADA_A_MANO_SIN_REGISTRO": 206,
+    "OBSOLETA_BORRADOR": 5,
+    "FALTA_REALMENTE": 1,
+    "REGISTRADA_OTRA_VERSION": 78,
+    "REGISTRADA_MISMA_VERSION": 3
+  },
+  "archivos": [
+    {
+      "archivo": "20260605_employee_auth_columns.sql",
+      "version": "20260605",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260606_employee_auth_minimal_columns.sql",
+      "version": "20260606",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260616_gps_radius_audit_columns.sql",
+      "version": "20260616",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260617_supervisor_intervenciones.sql",
+      "version": "20260617",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260617_supervisores_guardia.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260617_supervisores_guardia.sql",
+      "version": "20260617",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260617_supervisor_intervenciones.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260619_push_notifications.sql",
+      "version": "20260619",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260619_solicitudes_admin.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260619_solicitudes_admin.sql",
+      "version": "20260619",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260619_push_notifications.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260622_safe_database_indexes.sql",
+      "version": "20260622",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260624_supervisiones_checklist.sql",
+      "version": "20260624",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260626_zonas_operativas.sql",
+      "version": "20260626",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260628_rls_finalize_zonas_y_storage.sql",
+      "version": "20260628",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260629_notificaciones_objetivo.sql",
+      "version": "20260629",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260630_cambios_guardia_y_auditoria_asistencia.sql",
+      "version": "20260630",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260630_tipo_carga_manual.sql"
+      ],
+      "es_rollback": false,
+      "nota": "registros_asistencia_auditoria.motivo no existe porque 20260704_motivo_a_comentario_auditoria la renombró: esperado."
+    },
+    {
+      "archivo": "20260630_tipo_carga_manual.sql",
+      "version": "20260630",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260630_cambios_guardia_y_auditoria_asistencia.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260701_jwm_integracion.sql",
+      "version": "20260701",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260701_reemplazos_guardia.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260701_reemplazos_guardia.sql",
+      "version": "20260701",
+      "estado": "OBSOLETA_BORRADOR",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260701_jwm_integracion.sql"
+      ],
+      "es_rollback": false,
+      "nota": "Obsoleta: modelo reemplazos_guardia eliminado (ver 20260702_revertir_reemplazos_guardia). No existen reemplazos_guardia ni las columnas cambios_guardia.turno_saliente_id/turno_entrante_id ni sus índices; la tabla está vacía y el código no las usa. Comparte versión 20260701 con jwm_integracion."
+    },
+    {
+      "archivo": "20260702_origen_registros_y_turnos.sql",
+      "version": "20260702",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260702_revertir_reemplazos_guardia.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260702_revertir_reemplazos_guardia.sql",
+      "version": "20260702",
+      "estado": "OBSOLETA_BORRADOR",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260702_origen_registros_y_turnos.sql"
+      ],
+      "es_rollback": false,
+      "nota": "Sólo comentario (decisión de arquitectura); no contiene SQL. Sin efecto. Comparte versión 20260702 con origen_registros_y_turnos."
+    },
+    {
+      "archivo": "20260703_turnos_auditoria.sql",
+      "version": "20260703",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "turnos_auditoria.motivo no existe porque 20260704_motivo_a_comentario_auditoria la renombró: esperado."
+    },
+    {
+      "archivo": "20260704_motivo_a_comentario_auditoria.sql",
+      "version": "20260704",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260705_datos_finales_asistencia.sql",
+      "version": "20260705",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260706_puestos.sql",
+      "version": "20260706",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260707_turnos_puesto_id.sql",
+      "version": "20260707",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260708_rls_puestos.sql",
+      "version": "20260708",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260709_rls_tablas_sin_proteger.sql",
+      "version": "20260709",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260710_evidencias.sql",
+      "version": "20260710",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260715_os_events.sql",
+      "version": "20260715",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260715_os_sessions_app_config.sql",
+        "20260715_supervisor_route_points.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260715_os_sessions_app_config.sql",
+      "version": "20260715",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260715_os_events.sql",
+        "20260715_supervisor_route_points.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260715_supervisor_route_points.sql",
+      "version": "20260715",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260715_os_events.sql",
+        "20260715_os_sessions_app_config.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260716_horas_liquidables_asistencia.sql",
+      "version": "20260716",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260716_novedades_laborales.sql",
+        "20260716_supervisiones_estado_incompleta.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260716_novedades_laborales.sql",
+      "version": "20260716",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260716_horas_liquidables_asistencia.sql",
+        "20260716_supervisiones_estado_incompleta.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260716_supervisiones_estado_incompleta.sql",
+      "version": "20260716",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260716_horas_liquidables_asistencia.sql",
+        "20260716_novedades_laborales.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260717_calcular_horas_liquidables_funcion.sql",
+      "version": "20260717",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260717_objetivos_es_prueba.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260717_objetivos_es_prueba.sql",
+      "version": "20260717",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260717_calcular_horas_liquidables_funcion.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260720_observacion_sistema.sql",
+      "version": "20260720",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260720_rls_guardia_acceso_propio.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260720_rls_guardia_acceso_propio.sql",
+      "version": "20260720",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260720_observacion_sistema.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260721_cierre_automatico_turnos.sql",
+      "version": "20260721",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260721_fix_auditoria_motivo.sql",
+        "20260721_origen_cobertura.sql",
+        "20260721_rpc_corregir_registro.sql",
+        "20260721_rpc_registrar_cobertura.sql",
+        "20260721_saneamiento_julio_2026.sql",
+        "20260721_unificacion_juan_roson.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260721_fix_auditoria_motivo.sql",
+      "version": "20260721",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260721_cierre_automatico_turnos.sql",
+        "20260721_origen_cobertura.sql",
+        "20260721_rpc_corregir_registro.sql",
+        "20260721_rpc_registrar_cobertura.sql",
+        "20260721_saneamiento_julio_2026.sql",
+        "20260721_unificacion_juan_roson.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260721_origen_cobertura.sql",
+      "version": "20260721",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260721_cierre_automatico_turnos.sql",
+        "20260721_fix_auditoria_motivo.sql",
+        "20260721_rpc_corregir_registro.sql",
+        "20260721_rpc_registrar_cobertura.sql",
+        "20260721_saneamiento_julio_2026.sql",
+        "20260721_unificacion_juan_roson.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260721_rpc_corregir_registro.sql",
+      "version": "20260721",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260721_cierre_automatico_turnos.sql",
+        "20260721_fix_auditoria_motivo.sql",
+        "20260721_origen_cobertura.sql",
+        "20260721_rpc_registrar_cobertura.sql",
+        "20260721_saneamiento_julio_2026.sql",
+        "20260721_unificacion_juan_roson.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260721_rpc_registrar_cobertura.sql",
+      "version": "20260721",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260721_cierre_automatico_turnos.sql",
+        "20260721_fix_auditoria_motivo.sql",
+        "20260721_origen_cobertura.sql",
+        "20260721_rpc_corregir_registro.sql",
+        "20260721_saneamiento_julio_2026.sql",
+        "20260721_unificacion_juan_roson.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260721_saneamiento_julio_2026.sql",
+      "version": "20260721",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260721_cierre_automatico_turnos.sql",
+        "20260721_fix_auditoria_motivo.sql",
+        "20260721_origen_cobertura.sql",
+        "20260721_rpc_corregir_registro.sql",
+        "20260721_rpc_registrar_cobertura.sql",
+        "20260721_unificacion_juan_roson.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260721_unificacion_juan_roson.sql",
+      "version": "20260721",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260721_cierre_automatico_turnos.sql",
+        "20260721_fix_auditoria_motivo.sql",
+        "20260721_origen_cobertura.sql",
+        "20260721_rpc_corregir_registro.sql",
+        "20260721_rpc_registrar_cobertura.sql",
+        "20260721_saneamiento_julio_2026.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260722_rpc_cerrar_turno.sql",
+      "version": "20260722",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260722_turnos_revisado.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260722_turnos_revisado.sql",
+      "version": "20260722",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260722_rpc_cerrar_turno.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260725230000_rondas_correctivo_arquitectura.sql",
+      "version": "20260725230000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260725_ronda_puntos_origen_posicion.sql",
+      "version": "20260725",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260725_rondas_nativas_base.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260725_rondas_nativas_base.sql",
+      "version": "20260725",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "SIN_HORA",
+      "version_compartida_con": [
+        "20260725_ronda_puntos_origen_posicion.sql"
+      ],
+      "es_rollback": false,
+      "nota": "El índice rondas_base_objetivo_nombre_activo_unique lo quita 20260725230000_rondas_correctivo_arquitectura: esperado. Función touch_ronda_base_desde_punto/0: producción tiene un cuerpo distinto del repo (VIEJA:20260725230000_rondas_correctivo_arquitectura.sql faltan 20260725_rondas_nativas_base.sql); el objeto existe. Función reordenar_ronda_puntos/2: producción tiene un cuerpo distinto del repo (VIEJA:20260725230000_rondas_correctivo_arquitectura.sql faltan 20260725_rondas_nativas_base.sql); el objeto existe."
+    },
+    {
+      "archivo": "20260726210000_rondas_acceso_sin_fuga.sql",
+      "version": "20260726210000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260726235500_ronda_puntos_origen_posicion_reparacion.sql",
+      "version": "20260726235500",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260727120000_rondas_lectura_guardia.sql",
+      "version": "20260727120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260728100000_turnos_completar_puesto.sql",
+      "version": "20260728100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "La tabla temporal turnos_puesto_backfill_20260728 ya no existe (limpieza posterior) y la función viva turnos_completar_puesto tiene un arreglo que no está en el repo (auditoría 2.1). Función turnos_completar_puesto/0: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260728200000_rondas_ejecucion_base.sql",
+      "version": "20260728200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260728223000_rondas_app_vigilador_backend.sql",
+      "version": "20260728223000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260728234500_rondas_correctivo_c1_c4.sql",
+      "version": "20260728234500",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260729000000_rondas_cierre_bloqueada.sql",
+      "version": "20260729000000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260729120000_ronda_puntos_politica_foto.sql",
+      "version": "20260729120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260729190000_unificar_turno_vigente.sql",
+      "version": "20260729190000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260729200000_rondas_lectura_politica_foto.sql",
+      "version": "20260729200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260730120000_rondas_ejecucion_detalle_supervisor.sql",
+      "version": "20260730120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260730130000_listar_ejecuciones_objetivo.sql",
+      "version": "20260730130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función listar_ejecuciones_objetivo/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260730150000_listar_en_curso_ronda_id.sql",
+      "version": "20260730150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función listar_ejecuciones_en_curso_objetivo/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260731100000_ronda_alertas_base.sql",
+      "version": "20260731100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260731110000_evaluar_ronda_alertas.sql",
+      "version": "20260731110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260731120000_ronda_alertas_rpc.sql",
+      "version": "20260731120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260731130000_cerrar_ronda_bloqueada_auto_resolucion.sql",
+      "version": "20260731130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260801100000_ronda_alertas_suspendida.sql",
+      "version": "20260801100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260801120000_ronda_puntos_integridad.sql",
+      "version": "20260801120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260801130000_rondas_ventanas_programadas.sql",
+      "version": "20260801130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260801140000_evaluar_ronda_alertas_correctivo.sql",
+      "version": "20260801140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260801150000_resolver_ronda_alerta_correctivo.sql",
+      "version": "20260801150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260801160000_listar_rondas_programadas_objetivo.sql",
+      "version": "20260801160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260801170000_listar_ronda_alertas_alcance.sql",
+      "version": "20260801170000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260801190000_ronda_alertas_reset_implementacion.sql",
+      "version": "20260801190000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260802100000_ronda_control_gps_reincidencia.sql",
+      "version": "20260802100000",
+      "estado": "FALTA_REALMENTE",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "No existen ronda_punto_control_gps, ronda_ejecucion_puntos.snap_foto_control_gps ni su política. La rehace la Fase 3 como 20261205130000 sobre el registrar_punto_ronda vivo (con QR). Aplicarla tal cual pisaría el QR."
+    },
+    {
+      "archivo": "20260802200000_ronda_pausas.sql",
+      "version": "20260802200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260802210000_revision_operativa_fase0.sql",
+      "version": "20260802210000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260802220000_anular_cobertura_manual_operativa.sql",
+      "version": "20260802220000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función anular_cobertura_manual_operativa/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260802230000_revision_operativa_orden_ciclo.sql",
+      "version": "20260802230000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260803100000_confirmar_asistencia_supervisor.sql",
+      "version": "20260803100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260803200000_cuil_usuarios.sql",
+      "version": "20260803200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260803210000_anular_registro_manual.sql",
+      "version": "20260803210000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función corregir_fecha_registro_manual/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260803220000_fix_calcular_horas_liquidables_tope.sql",
+      "version": "20260803220000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260803230000_columna_auditoria_backfill.sql",
+      "version": "20260803230000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260803240000_rpc_corregir_turno_manual_operativo.sql",
+      "version": "20260803240000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "HORA_FUERA_DE_RANGO",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función corregir_turno_manual_operativo/7: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260805100000_turnos_caracteristica.sql",
+      "version": "20260805100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260805120000_primer_control_vigilador.sql",
+      "version": "20260805120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función solicitar_modificacion_planilla/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260805140000_aceptar_requiere_fichaje.sql",
+      "version": "20260805140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función aceptar_turno_planilla/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260805150000_revision_supervisor_planilla.sql",
+      "version": "20260805150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función turno_en_alcance_supervisor/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260806100000_servicios_objetivo_puesto_id.sql",
+      "version": "20260806100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función validar_puesto_servicio/0: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260806110000_vincular_servicio_puesto.sql",
+      "version": "20260806110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función vincular_servicio_puesto/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260807100000_crear_turnos_programacion_parcial.sql",
+      "version": "20260807100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260807120000_generacion_sin_retroactivos.sql",
+      "version": "20260807120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260807130000_turnos_servicio_base_fk_servicios_objetivo.sql",
+      "version": "20260807130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260807140000_asignar_vigilador_turnos.sql",
+      "version": "20260807140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260808120000_posiciones_operativas_gestion.sql",
+      "version": "20260808120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260809100000_estado_publicado_programacion.sql",
+      "version": "20260809100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260810100000_crear_turnos_posicion_objetivo.sql",
+      "version": "20260810100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260810120000_turnos_estado_anulado_cancelado.sql",
+      "version": "20260810120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260810140000_crear_turnos_posicion_permitir_duplicado.sql",
+      "version": "20260810140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260810160000_horas_reconocidas_fuera_de_turno.sql",
+      "version": "20260810160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función corregir_registro_asistencia/4: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260810180000_cron_evaluar_ronda_alertas.sql",
+      "version": "20260810180000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260810200000_rondas_cierre_activacion_y_estados_sin_obligacion.sql",
+      "version": "20260810200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260810220000_asignar_vigilador_conflicto_detallado.sql",
+      "version": "20260810220000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260810240000_rondas_guardia_proxima_ventana.sql",
+      "version": "20260810240000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "HORA_FUERA_DE_RANGO",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función obtener_rondas_guardia_actual/0: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260810260000_objetivo_inactivo_sin_obligaciones.sql",
+      "version": "20260810260000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "HORA_FUERA_DE_RANGO",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260811160000_ia_configuraciones_borrador.sql",
+      "version": "20260811160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260811180000_ia_cron_analisis.sql",
+      "version": "20260811180000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260812100000_ia_memoria_visual_punto.sql",
+      "version": "20260812100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20260812100000_ia_memoria_visual_punto_rollback.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260812100000_ia_memoria_visual_punto_rollback.sql",
+      "version": "20260812100000",
+      "estado": "OBSOLETA_BORRADOR",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20260812100000_ia_memoria_visual_punto.sql"
+      ],
+      "es_rollback": true,
+      "nota": "ROLLBACK guardado en migrations/ por error: NO fue aplicado (verificado 04/11: evidencia_analisis.ronda_punto_id y la vista ia_metricas_punto existen). Comparte versión con su migración; un db reset lo correría después de ella y la desharía. Mover a supabase/rollback/ en un PR aparte."
+    },
+    {
+      "archivo": "20260812200000_ronda_punto_referencias_origen.sql",
+      "version": "20260812200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20260812200000_ronda_punto_referencias_origen_rollback.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260812200000_ronda_punto_referencias_origen_rollback.sql",
+      "version": "20260812200000",
+      "estado": "OBSOLETA_BORRADOR",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20260812200000_ronda_punto_referencias_origen.sql"
+      ],
+      "es_rollback": true,
+      "nota": "ROLLBACK guardado en migrations/ por error: NO fue aplicado (verificado 04/11: ronda_punto_referencias.origen existe). Mover a supabase/rollback/ en un PR aparte."
+    },
+    {
+      "archivo": "20260813100000_ronda_puntos_auditoria.sql",
+      "version": "20260813100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260813110000_ronda_punto_diagnostico_gps.sql",
+      "version": "20260813110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función diagnosticar_gps_ronda_punto/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260813120000_anular_turnos_lote.sql",
+      "version": "20260813120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260813180000_cron_push_notificaciones.sql",
+      "version": "20260813180000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260814100000_objetivos_auditoria_gps.sql",
+      "version": "20260814100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20260814100000_supervisor_guardia_reglas.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260814100000_supervisor_guardia_reglas.sql",
+      "version": "20260814100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20260814100000_objetivos_auditoria_gps.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260814200000_objetivo_diagnostico_gps.sql",
+      "version": "20260814200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "La política existe con el nombre truncado a 63 caracteres por Postgres."
+    },
+    {
+      "archivo": "20260815100000_objetivos_ubicacion_vigente.sql",
+      "version": "20260815100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260815110000_diagnostico_gps_objetivo_movil.sql",
+      "version": "20260815110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260815120000_diagnostico_movil_ignora_incorporacion_inicial.sql",
+      "version": "20260815120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260816100000_crear_turnos_posicion_caracteristica.sql",
+      "version": "20260816100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260816120000_cron_cerrar_turnos_abiertos.sql",
+      "version": "20260816120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260816130000_cerrar_turnos_abiertos_nocturnos.sql",
+      "version": "20260816130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260817100000_ronda_pausa_vigente.sql",
+      "version": "20260817100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260818100000_confirmar_asistencia_crea_cobertura.sql",
+      "version": "20260818100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260818130000_cron_push_desfasado.sql",
+      "version": "20260818130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260819120000_revisado_despues_de_derivar.sql",
+      "version": "20260819120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260819140000_regularizar_alertas_historicas.sql",
+      "version": "20260819140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260824170000_cerrar_ronda_alertas_pendientes.sql",
+      "version": "20260824170000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función cerrar_ronda_alertas_pendientes/6: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260825120000_dedup_resumen_cierre.sql",
+      "version": "20260825120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260825180000_ia_sanear_observaciones_previas.sql",
+      "version": "20260825180000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260825180100_ia_sanear_rpc.sql",
+      "version": "20260825180100",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función ia_sanear_observaciones_previas/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260825200000_cron_push_cierre_operativo.sql",
+      "version": "20260825200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260826140000_cumplimiento_rondas_por_empleado.sql",
+      "version": "20260826140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260826170000_ronda_pausas_causa.sql",
+      "version": "20260826170000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función listar_rondas_pausadas/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función pausar_ronda/4: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260826173000_cumplimiento_rondas_por_causa.sql",
+      "version": "20260826173000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260826180000_entrenamiento_operativo.sql",
+      "version": "20260826180000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260826190000_cumplimiento_rondas_servicio.sql",
+      "version": "20260826190000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260826200000_entrenamiento_grants_minimos.sql",
+      "version": "20260826200000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260826210000_rondas_no_exigen_antes_de_existir.sql",
+      "version": "20260826210000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260826213000_eliminar_ronda_base.sql",
+      "version": "20260826213000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función eliminar_ronda_base/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260826220000_entrenamiento_cooldown_global.sql",
+      "version": "20260826220000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260827120000_rondas_ausencia_no_exige.sql",
+      "version": "20260827120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260827160000_escalamiento_whatsapp.sql",
+      "version": "20260827160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260827180000_escalamiento_categoria_supervisor.sql",
+      "version": "20260827180000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260831120000_cumplimiento_rondas_por_turno.sql",
+      "version": "20260831120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260901120000_evaluaciones_mensuales.sql",
+      "version": "20260901120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260901130000_declarar_estructura_programacion.sql",
+      "version": "20260901130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20260901130000_rondas_justificadas_no_penalizan.sql"
+      ],
+      "es_rollback": false,
+      "nota": "Función declarar_estructura_programacion/13: producción tiene un cuerpo distinto del repo (firma); el objeto existe."
+    },
+    {
+      "archivo": "20260901130000_rondas_justificadas_no_penalizan.sql",
+      "version": "20260901130000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260901200636",
+      "nombre_remoto": "rondas_justificadas_no_penalizan",
+      "formato": "OK",
+      "version_compartida_con": [
+        "20260901130000_declarar_estructura_programacion.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260901150000_escalamiento_whatsapp_rondas.sql",
+      "version": "20260901150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260901160000_intervenciones_uso_app.sql",
+      "version": "20260901160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260901180000_entrega_evaluacion.sql",
+      "version": "20260901180000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función observar_evaluacion/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260902100000_completar_mes_supervisor.sql",
+      "version": "20260902100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260902160000_whatsapp_mensaje_estados.sql",
+      "version": "20260902160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260903170000_nocturnidad_objetivo.sql",
+      "version": "20260903170000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260903180000_nocturnidad_excepciones_y_ajuste.sql",
+      "version": "20260903180000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260904100000_novedad_mensual_informada.sql",
+      "version": "20260904100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260904110000_legajo_visual_usuarios.sql",
+      "version": "20260904110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260904120000_cuenta_bancaria_usuarios.sql",
+      "version": "20260904120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260905100000_rondas_qr_puntos.sql",
+      "version": "20260905100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función rondas_ejecucion_detalle_supervisor/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260907150000_usuarios_es_prueba.sql",
+      "version": "20260907150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908100000_usuarios_puesto_organizacional.sql",
+      "version": "20260908100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908110000_backfill_puesto_organizacional.sql",
+      "version": "20260908110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908120000_alcance_operativo_canonico.sql",
+      "version": "20260908120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908130000_alcance_escritura_turnos.sql",
+      "version": "20260908130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908140000_rls_usuarios_capacidades.sql",
+      "version": "20260908140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908150000_rls_novedades_laborales_capacidad.sql",
+      "version": "20260908150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908160000_liq1a_periodo_catalogo.sql",
+      "version": "20260908160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908170000_liq1b_importacion_auditoria.sql",
+      "version": "20260908170000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función importar_conceptos_liquidacion/15: producción tiene un cuerpo distinto del repo (firma); el objeto existe."
+    },
+    {
+      "archivo": "20260908180000_liq1c_comparacion.sql",
+      "version": "20260908180000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908160619",
+      "nombre_remoto": "liq1c_comparacion",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908190000_liq2b_ajustes.sql",
+      "version": "20260908190000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908173354",
+      "nombre_remoto": "liq2b_ajustes",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función aplicar_ajustes_liquidacion/12: producción tiene un cuerpo distinto del repo (firma); el objeto existe."
+    },
+    {
+      "archivo": "20260908200000_liq2c_consolidacion.sql",
+      "version": "20260908200000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908174932",
+      "nombre_remoto": "liq2c_consolidacion",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función consolidar_periodo/8: producción tiene un cuerpo distinto del repo (firma); el objeto existe."
+    },
+    {
+      "archivo": "20260908210000_liq2d_export_visual.sql",
+      "version": "20260908210000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908175902",
+      "nombre_remoto": "liq2d_export_visual",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908220000_liq2f_catalogo_visual.sql",
+      "version": "20260908220000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908221921",
+      "nombre_remoto": "liq2f_catalogo_visual",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908221000_liq2f_backfill_cod_interno.sql",
+      "version": "20260908221000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908222107",
+      "nombre_remoto": "liq2f_backfill_cod_interno",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908222000_liq2f_permanentes_padron.sql",
+      "version": "20260908222000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908222209",
+      "nombre_remoto": "liq2f_permanentes_padron",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908230000_liq2g_persona.sql",
+      "version": "20260908230000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908230856",
+      "nombre_remoto": "liq2g_persona",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908231000_liq2g_persona_id.sql",
+      "version": "20260908231000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908230948",
+      "nombre_remoto": "liq2g_persona_id",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908232000_liq2g_expediente.sql",
+      "version": "20260908232000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908231049",
+      "nombre_remoto": "liq2g_expediente",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908233000_liq2g_dias.sql",
+      "version": "20260908233000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908231055",
+      "nombre_remoto": "liq2g_dias",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908240000_acceso_interfaz_admin.sql",
+      "version": "20260908240000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260908235613",
+      "nombre_remoto": "acceso_interfaz_admin",
+      "formato": "HORA_FUERA_DE_RANGO",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260908250000_liq2g_padron_exclusiones.sql",
+      "version": "20260908250000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260909004043",
+      "nombre_remoto": "liq2g_padron_exclusiones",
+      "formato": "HORA_FUERA_DE_RANGO",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260909100000_liq3_permisos_administracion.sql",
+      "version": "20260909100000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260909131045",
+      "nombre_remoto": "liq3_permisos_administracion",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260909110000_liq3_dias_calculado.sql",
+      "version": "20260909110000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260909140103",
+      "nombre_remoto": "liq3_dias_calculado",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260909120000_liq3_resultado_visual.sql",
+      "version": "20260909120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260909141841",
+      "nombre_remoto": "liq3_resultado_visual",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260909121000_liq3_resultado_rpc.sql",
+      "version": "20260909121000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260909141942",
+      "nombre_remoto": "liq3_resultado_rpc",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260909130000_escalamiento_nivel_ronda_vigilador.sql",
+      "version": "20260909130000",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20260909130000",
+      "nombre_remoto": "escalamiento_nivel_ronda_vigilador",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260909200000_liq_periodo_anular.sql",
+      "version": "20260909200000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260909155528",
+      "nombre_remoto": "liq_periodo_anular",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función contenido_periodo_liquidacion/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función eliminar_periodo_liquidacion/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260909210000_liq_padron_rodolfo_pendiente.sql",
+      "version": "20260909210000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260909221212",
+      "nombre_remoto": "liq_padron_rodolfo_pendiente",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260910100000_rls_alcance_turnos_registros_objetivos.sql",
+      "version": "20260910100000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260909231954",
+      "nombre_remoto": "rls_alcance_turnos_registros_objetivos",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260910130000_liq_export_atomico.sql",
+      "version": "20260910130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función exportar_liquidacion_periodo/13: producción tiene un cuerpo distinto del repo (firma); el objeto existe."
+    },
+    {
+      "archivo": "20260910140000_liq_unicidad_periodo_activo.sql",
+      "version": "20260910140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función crear_periodo_liquidacion/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260910150000_liq_sueldo_mensual.sql",
+      "version": "20260910150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "ix_liq_sueldo_mensual_persona reemplazado por ix_liq_sueldo_mensual_usuario (20260910160000, fix #211): esperado."
+    },
+    {
+      "archivo": "20260910160000_liq_sueldo_mensual_por_usuario.sql",
+      "version": "20260910160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260910170000_liq_extra_mensual_e_identidad.sql",
+      "version": "20260910170000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260910200000_permisos_operativos_b1_d1_d2.sql",
+      "version": "20260910200000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260910010946",
+      "nombre_remoto": "permisos_operativos_b1_d1_d2",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función alcanza_baja_vigilador_actual/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función crear_objetivo_operativo/12: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función resolver_solicitud_personal_operativo/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260911100000_pagos_banco_galicia.sql",
+      "version": "20260911100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260917140000_afip_padron_corroboracion.sql",
+      "version": "20260917140000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260917163710",
+      "nombre_remoto": "afip_padron_corroboracion",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260917150000_afip_cron_corroboracion_diaria.sql",
+      "version": "20260917150000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260918115611",
+      "nombre_remoto": "afip_cron_corroboracion_diaria",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada; el cron se apagó después con 20261011120100_afip_sin_corrida_diaria."
+    },
+    {
+      "archivo": "20260918160000_supervisor_autogestion_operativa.sql",
+      "version": "20260918160000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260918151007",
+      "nombre_remoto": "supervisor_autogestion_operativa",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función dar_baja_objetivo_operativo/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función autoservicio_solicitud_personal_operativo/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260920130000_acceso_admin_pleno_override.sql",
+      "version": "20260920130000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260920163141",
+      "nombre_remoto": "acceso_admin_pleno_override",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260920140000_override_admin_pleno_sin_liquidacion.sql",
+      "version": "20260920140000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260920165053",
+      "nombre_remoto": "override_admin_pleno_sin_liquidacion",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260920150000_drop_bk_legajo_visual_liq2f.sql",
+      "version": "20260920150000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260920170603",
+      "nombre_remoto": "drop_bk_legajo_visual_liq2f",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260920160000_desacople_rol_admin_config_sistema.sql",
+      "version": "20260920160000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260920210426",
+      "nombre_remoto": "desacople_rol_admin_config_sistema",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260920170000_fase2a_turnos_supervisores_es_operador.sql",
+      "version": "20260920170000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260920233348",
+      "nombre_remoto": "fase2a_turnos_supervisores_es_operador",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260920180000_fase2b_puestos_es_operador_alcance.sql",
+      "version": "20260920180000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260921000505",
+      "nombre_remoto": "20260920180000_fase2b_puestos_es_operador_alcance",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función crear_posicion_operativa/4: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función editar_posicion_operativa/5: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función duplicar_posicion_operativa/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función eliminar_posicion_operativa/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260921120000_fase2c_supervisiones_alcance.sql",
+      "version": "20260921120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260921003807",
+      "nombre_remoto": "20260921120000_fase2c_supervisiones_alcance",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260921140000_fase2d_gerencia_delegada_roles.sql",
+      "version": "20260921140000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260921011556",
+      "nombre_remoto": "20260921140000_fase2d_gerencia_delegada_roles",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función usuarios_proteger_campos_criticos/0: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20260921160000_fase2e_rpcs_operativas_whatsapp.sql",
+      "version": "20260921160000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260921015842",
+      "nombre_remoto": "20260921160000_fase2e_rpcs_operativas_whatsapp",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20260921180000_supervisiones_registro_propio_fuera_de_zona.sql",
+      "version": "20260921180000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20260921124855",
+      "nombre_remoto": "20260921180000_supervisiones_registro_propio_fuera_de_zona",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función alcanza_supervision_actual/1: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20261005120000_objetivos_auditar_estado.sql",
+      "version": "20261005120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261005122756",
+      "nombre_remoto": "20261005120000_objetivos_auditar_estado",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función objetivos_auditar_cambio/0: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20261005140000_afiliar_sindicato_permanente.sql",
+      "version": "20261005140000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261005153509",
+      "nombre_remoto": "20261005140000_afiliar_sindicato_permanente",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función afiliar_sindicato_permanente/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20261005160000_padron_visual_completar_vinculo.sql",
+      "version": "20261005160000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261005185311",
+      "nombre_remoto": "20261005160000_padron_visual_completar_vinculo",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261005180000_cron_push_agenda_supervisores.sql",
+      "version": "20261005180000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261006124742",
+      "nombre_remoto": "cron_push_agenda_supervisores",
+      "formato": "OK",
+      "version_compartida_con": [
+        "20261005180000_extras_fijas_septiembre.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261005180000_extras_fijas_septiembre.sql",
+      "version": "20261005180000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261005214915",
+      "nombre_remoto": "20261005180000_extras_fijas_septiembre",
+      "formato": "OK",
+      "version_compartida_con": [
+        "20261005180000_cron_push_agenda_supervisores.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261005190000_facundo_real_cuil.sql",
+      "version": "20261005190000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261005215227",
+      "nombre_remoto": "20261005190000_facundo_real_cuil",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261005200000_banco_orden_por_grupo.sql",
+      "version": "20261005200000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261006013016",
+      "nombre_remoto": "20261005200000_banco_orden_por_grupo",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261006120000_nocturnidad_solo_nacion_servicios.sql",
+      "version": "20261006120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261006145318",
+      "nombre_remoto": "20261006120000_nocturnidad_solo_nacion_servicios",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261006140000_bajas_y_sueldos_excluir_inactivos.sql",
+      "version": "20261006140000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261006150349",
+      "nombre_remoto": "20261006140000_bajas_y_sueldos_excluir_inactivos",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261006150000_baja_cabrera_gonzalo.sql",
+      "version": "20261006150000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261006150900",
+      "nombre_remoto": "20261006150000_baja_cabrera_gonzalo",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261006160000_excluir_pago_banco_no_inactivo.sql",
+      "version": "20261006160000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261006151321",
+      "nombre_remoto": "20261006160000_excluir_pago_banco_no_inactivo",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261007120000_liq_excel_trabajo_guardar_todo.sql",
+      "version": "20261007120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261007130000_pagos_sueldo_fijo_y_detalle.sql",
+      "version": "20261007130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261008100000_extras_del_mes_y_pagos_registrados.sql",
+      "version": "20261008100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261008150000_estatuto_interno.sql",
+      "version": "20261008150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261008160000_salidas_anticipadas.sql",
+      "version": "20261008160000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261008160100_salidas_anticipadas_deteccion_desde_septiembre.sql",
+      "version": "20261008160100",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261008190000_guardias_permisos_auditoria.sql",
+      "version": "20261008190000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función guardia_excepcion_supervisor/15: producción tiene un cuerpo distinto del repo (firma); el objeto existe."
+    },
+    {
+      "archivo": "20261009120000_storage_recompresion.sql",
+      "version": "20261009120000",
+      "estado": "OBSOLETA_BORRADOR",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "BORRADOR por diseño (\"NO APLICADA\"): faltan 2 tablas, 4 funciones, triggers y políticas. Requiere decisión de Gerencia; si se aprueba, renumerar a una versión nueva."
+    },
+    {
+      "archivo": "20261009130000_legajo_datos_personales.sql",
+      "version": "20261009130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261009130100_legajo_cambios_bloquear_truncate.sql",
+      "version": "20261009130100",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261009140000_documentacion_legajo.sql",
+      "version": "20261009140000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261009150000_legajo_historico.sql",
+      "version": "20261009150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261009170000_documentacion_alertas.sql",
+      "version": "20261009170000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261010120000_legajo_historico_indice.sql",
+      "version": "20261010120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261010130000_legajo_historico_bandeja_v2.sql",
+      "version": "20261010130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261011120000_legajo_arca.sql",
+      "version": "20261011120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261011120100_afip_sin_corrida_diaria.sql",
+      "version": "20261011120100",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261011130000_legajo_historico_visor.sql",
+      "version": "20261011130000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261012120000_legajo_historico_por_empleado.sql",
+      "version": "20261012120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261013120000_documental_areas.sql",
+      "version": "20261013120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20261013120000_guardias_sync_automatica.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261013120000_guardias_sync_automatica.sql",
+      "version": "20261013120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [
+        "20261013120000_documental_areas.sql"
+      ],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261013150000_guardias_sync_colisiones.sql",
+      "version": "20261013150000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261013224957",
+      "nombre_remoto": "guardias_sync_colisiones",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261014120000_legajo_historico_revision.sql",
+      "version": "20261014120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261015120000_habilitaciones.sql",
+      "version": "20261015120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261016120000_habilitacion_confirmar_credencial.sql",
+      "version": "20261016120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261017120000_legajo_diferencias_arca.sql",
+      "version": "20261017120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261018120000_credencial_pedido.sql",
+      "version": "20261018120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261019120000_credencial_carpeta_policia.sql",
+      "version": "20261019120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261014155039",
+      "nombre_remoto": "credencial_carpeta_policia",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261020120000_tramite_empleado.sql",
+      "version": "20261020120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261021120000_credencial_aprobar_foto.sql",
+      "version": "20261021120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261022120000_protocolos_objetivo.sql",
+      "version": "20261022120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261014222428",
+      "nombre_remoto": "protocolos_objetivo_etapa1",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261022130000_protocolos_carga_inicial.sql",
+      "version": "20261022130000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261014222434",
+      "nombre_remoto": "protocolos_carga_inicial_aldo",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261023120000_protocolo_controles_propuestos.sql",
+      "version": "20261023120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261023130000_protocolo_controles_correcciones.sql",
+      "version": "20261023130000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261015133210",
+      "nombre_remoto": "20261023130000_protocolo_controles_correcciones",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261024120000_tareas_turno.sql",
+      "version": "20261024120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261025120000_protocolos_ultima_rige.sql",
+      "version": "20261025120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261026120000_checklist_solo_supervisor.sql",
+      "version": "20261026120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261027120000_estatuto_control_zonas.sql",
+      "version": "20261027120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261019214050",
+      "nombre_remoto": "estatuto_control_zonas",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261028120000_evaluacion_supervisores_e1.sql",
+      "version": "20261028120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261016152332",
+      "nombre_remoto": "evaluacion_supervisores_e1",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función responsables_supervision_en/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función evaluacion_rondas_atribuidas/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función evaluacion_supervisores_periodo/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20261029120000_credencial_carga_administracion.sql",
+      "version": "20261029120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261030120000_legajo_operativo_supervisores.sql",
+      "version": "20261030120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261019204930",
+      "nombre_remoto": "legajo_operativo_supervisores",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261101120000_legajo_evaluacion_lista_unica.sql",
+      "version": "20261101120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261019220053",
+      "nombre_remoto": "legajo_evaluacion_lista_unica",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261102120000_gps_sin_privilegios_peligrosos.sql",
+      "version": "20261102120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261019215514",
+      "nombre_remoto": "gps_sin_privilegios_peligrosos",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261103120000_gps_registro_por_puesto_supervisor.sql",
+      "version": "20261103120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261019215954",
+      "nombre_remoto": "gps_registro_por_puesto_supervisor",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261104120000_rondas_horario_sin_exigencia.sql",
+      "version": "20261104120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261105120000_legajo_clasificacion_por_franja.sql",
+      "version": "20261105120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261020132242",
+      "nombre_remoto": "legajo_clasificacion_por_franja",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función legajo_supervisores_guardias/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función legajo_supervisores_supervisiones_v2/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20261110120000_liquidacion_final_borrador.sql",
+      "version": "20261110120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261111120000_arca_txt_para_visual.sql",
+      "version": "20261111120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261020155821",
+      "nombre_remoto": "20261111120000_arca_txt_para_visual",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función arca_relaciones_para_visual/0: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20261112120000_arca_consultas_acumuladas.sql",
+      "version": "20261112120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261021145628",
+      "nombre_remoto": "20261112120000_arca_consultas_acumuladas",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261113120000_supervision_exigibilidad_servicio.sql",
+      "version": "20261113120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102180754",
+      "nombre_remoto": "20261113120000_supervision_exigibilidad_servicio",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261113130000_os_sessions_device_id.sql",
+      "version": "20261113130000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102180812",
+      "nombre_remoto": "20261113130000_os_sessions_device_id",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261114120000_hoja_ruta_supervisores.sql",
+      "version": "20261114120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102181912",
+      "nombre_remoto": "20261114120000_hoja_ruta_supervisores",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261115120000_ronda_alertas_resultado_intervencion.sql",
+      "version": "20261115120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102180954",
+      "nombre_remoto": "20261115120000_ronda_alertas_resultado_intervencion",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función listar_ronda_alertas_objetivo/2: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función resolver_ronda_alerta/7: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe."
+    },
+    {
+      "archivo": "20261120120000_rondas_regla_validacion_aprobada.sql",
+      "version": "20261120120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102181153",
+      "nombre_remoto": "20261120120000_rondas_regla_validacion_aprobada",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función rondas_veredicto_punto/20: producción tiene un cuerpo distinto del repo (firma); el objeto existe."
+    },
+    {
+      "archivo": "20261120130000_ia_cola_prioridad_puntos.sql",
+      "version": "20261120130000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102181222",
+      "nombre_remoto": "20261120130000_ia_cola_prioridad_puntos",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261120140000_ia_cron_secret_vault.sql",
+      "version": "20261120140000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102181249",
+      "nombre_remoto": "20261120140000_ia_cron_secret_vault",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261120150000_desempeno_saneamiento_fecha_ar.sql",
+      "version": "20261120150000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102181343",
+      "nombre_remoto": "20261120150000_desempeno_saneamiento_fecha_ar",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261121120000_turnos_cobertura_liquidacion.sql",
+      "version": "20261121120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102184838",
+      "nombre_remoto": "20261121120000_turnos_cobertura_liquidacion",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261121130000_whatsapp_envios_reclamo_reintentos.sql",
+      "version": "20261121130000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102181432",
+      "nombre_remoto": "20261121130000_whatsapp_envios_reclamo_reintentos",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261122120000_rondas_historial_exigencias.sql",
+      "version": "20261122120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102181727",
+      "nombre_remoto": "20261122120000_rondas_historial_exigencias",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Función listar_rondas_programadas_objetivo/3: producción tiene un cuerpo distinto del repo (NINGUNA); el objeto existe. Función ronda_horario_proteger/0: producción tiene un cuerpo distinto del repo (VIEJA:20261104120000_rondas_horario_sin_exigencia.sql faltan 20261122120000_rondas_historial_exigencias.sql); el objeto existe."
+    },
+    {
+      "archivo": "20261124120000_rondas_operacion_compartida.sql",
+      "version": "20261124120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102181810",
+      "nombre_remoto": "20261124120000_rondas_operacion_compartida",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261125120000_programacion_conflictos_correccion_turnos.sql",
+      "version": "20261125120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261102182135",
+      "nombre_remoto": "20261125120000_programacion_conflictos_correccion_turnos",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261201120000_facturacion_base.sql",
+      "version": "20261201120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261103232827",
+      "nombre_remoto": "20261201120000_facturacion_base",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261201130000_facturacion_comprobantes_arca.sql",
+      "version": "20261201130000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261103233525",
+      "nombre_remoto": "20261201130000_facturacion_comprobantes_arca",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261201140000_facturacion_cuentas_corrientes.sql",
+      "version": "20261201140000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261103233614",
+      "nombre_remoto": "20261201140000_facturacion_cuentas_corrientes",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261201150000_facturacion_vencimientos_intereses.sql",
+      "version": "20261201150000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261103233633",
+      "nombre_remoto": "20261201150000_facturacion_vencimientos_intereses",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261202120000_facturacion_grupos_factura.sql",
+      "version": "20261202120000",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261202120000",
+      "nombre_remoto": "20261202120000_facturacion_grupos_factura",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261203120000_baja_embargo_ovejero_993.sql",
+      "version": "20261203120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261104133105",
+      "nombre_remoto": "20261203120000_baja_embargo_ovejero_993",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261203130000_facturacion_reagrupar_atomico.sql",
+      "version": "20261203130000",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261203130000",
+      "nombre_remoto": "20261203130000_facturacion_reagrupar_atomico",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": null
+    },
+    {
+      "archivo": "20261204120000_facturacion_seguro_periodo.sql",
+      "version": "20261204120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada y verificada objeto por objeto el 04/11 (10/10 controles), pero NO registrada en el historial."
+    }
+  ],
+  "remoto": [
+    {
+      "version": "20260901200636",
+      "name": "rondas_justificadas_no_penalizan",
+      "archivo": "20260901130000_rondas_justificadas_no_penalizan.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908160619",
+      "name": "liq1c_comparacion",
+      "archivo": "20260908180000_liq1c_comparacion.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908173354",
+      "name": "liq2b_ajustes",
+      "archivo": "20260908190000_liq2b_ajustes.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908174932",
+      "name": "liq2c_consolidacion",
+      "archivo": "20260908200000_liq2c_consolidacion.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908175902",
+      "name": "liq2d_export_visual",
+      "archivo": "20260908210000_liq2d_export_visual.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908221921",
+      "name": "liq2f_catalogo_visual",
+      "archivo": "20260908220000_liq2f_catalogo_visual.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908222107",
+      "name": "liq2f_backfill_cod_interno",
+      "archivo": "20260908221000_liq2f_backfill_cod_interno.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908222209",
+      "name": "liq2f_permanentes_padron",
+      "archivo": "20260908222000_liq2f_permanentes_padron.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908230856",
+      "name": "liq2g_persona",
+      "archivo": "20260908230000_liq2g_persona.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908230948",
+      "name": "liq2g_persona_id",
+      "archivo": "20260908231000_liq2g_persona_id.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908231049",
+      "name": "liq2g_expediente",
+      "archivo": "20260908232000_liq2g_expediente.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908231055",
+      "name": "liq2g_dias",
+      "archivo": "20260908233000_liq2g_dias.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260908235613",
+      "name": "acceso_interfaz_admin",
+      "archivo": "20260908240000_acceso_interfaz_admin.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260909004043",
+      "name": "liq2g_padron_exclusiones",
+      "archivo": "20260908250000_liq2g_padron_exclusiones.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260909130000",
+      "name": "escalamiento_nivel_ronda_vigilador",
+      "archivo": "20260909130000_escalamiento_nivel_ronda_vigilador.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20260909131045",
+      "name": "liq3_permisos_administracion",
+      "archivo": "20260909100000_liq3_permisos_administracion.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260909140103",
+      "name": "liq3_dias_calculado",
+      "archivo": "20260909110000_liq3_dias_calculado.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260909141841",
+      "name": "liq3_resultado_visual",
+      "archivo": "20260909120000_liq3_resultado_visual.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260909141942",
+      "name": "liq3_resultado_rpc",
+      "archivo": "20260909121000_liq3_resultado_rpc.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260909155528",
+      "name": "liq_periodo_anular",
+      "archivo": "20260909200000_liq_periodo_anular.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260909221212",
+      "name": "liq_padron_rodolfo_pendiente",
+      "archivo": "20260909210000_liq_padron_rodolfo_pendiente.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260909231954",
+      "name": "rls_alcance_turnos_registros_objetivos",
+      "archivo": "20260910100000_rls_alcance_turnos_registros_objetivos.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260910010946",
+      "name": "permisos_operativos_b1_d1_d2",
+      "archivo": "20260910200000_permisos_operativos_b1_d1_d2.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260917163710",
+      "name": "afip_padron_corroboracion",
+      "archivo": "20260917140000_afip_padron_corroboracion.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260918115611",
+      "name": "afip_cron_corroboracion_diaria",
+      "archivo": "20260917150000_afip_cron_corroboracion_diaria.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260918151007",
+      "name": "supervisor_autogestion_operativa",
+      "archivo": "20260918160000_supervisor_autogestion_operativa.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260920163141",
+      "name": "acceso_admin_pleno_override",
+      "archivo": "20260920130000_acceso_admin_pleno_override.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260920165053",
+      "name": "override_admin_pleno_sin_liquidacion",
+      "archivo": "20260920140000_override_admin_pleno_sin_liquidacion.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260920170603",
+      "name": "drop_bk_legajo_visual_liq2f",
+      "archivo": "20260920150000_drop_bk_legajo_visual_liq2f.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260920210426",
+      "name": "desacople_rol_admin_config_sistema",
+      "archivo": "20260920160000_desacople_rol_admin_config_sistema.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260920233348",
+      "name": "fase2a_turnos_supervisores_es_operador",
+      "archivo": "20260920170000_fase2a_turnos_supervisores_es_operador.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260921000505",
+      "name": "20260920180000_fase2b_puestos_es_operador_alcance",
+      "archivo": "20260920180000_fase2b_puestos_es_operador_alcance.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260921003807",
+      "name": "20260921120000_fase2c_supervisiones_alcance",
+      "archivo": "20260921120000_fase2c_supervisiones_alcance.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260921011556",
+      "name": "20260921140000_fase2d_gerencia_delegada_roles",
+      "archivo": "20260921140000_fase2d_gerencia_delegada_roles.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260921015842",
+      "name": "20260921160000_fase2e_rpcs_operativas_whatsapp",
+      "archivo": "20260921160000_fase2e_rpcs_operativas_whatsapp.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20260921124855",
+      "name": "20260921180000_supervisiones_registro_propio_fuera_de_zona",
+      "archivo": "20260921180000_supervisiones_registro_propio_fuera_de_zona.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261005122756",
+      "name": "20261005120000_objetivos_auditar_estado",
+      "archivo": "20261005120000_objetivos_auditar_estado.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261005153509",
+      "name": "20261005140000_afiliar_sindicato_permanente",
+      "archivo": "20261005140000_afiliar_sindicato_permanente.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261005185311",
+      "name": "20261005160000_padron_visual_completar_vinculo",
+      "archivo": "20261005160000_padron_visual_completar_vinculo.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261005214915",
+      "name": "20261005180000_extras_fijas_septiembre",
+      "archivo": "20261005180000_extras_fijas_septiembre.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261005215227",
+      "name": "20261005190000_facundo_real_cuil",
+      "archivo": "20261005190000_facundo_real_cuil.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261006013016",
+      "name": "20261005200000_banco_orden_por_grupo",
+      "archivo": "20261005200000_banco_orden_por_grupo.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261006124742",
+      "name": "cron_push_agenda_supervisores",
+      "archivo": "20261005180000_cron_push_agenda_supervisores.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261006145318",
+      "name": "20261006120000_nocturnidad_solo_nacion_servicios",
+      "archivo": "20261006120000_nocturnidad_solo_nacion_servicios.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261006150349",
+      "name": "20261006140000_bajas_y_sueldos_excluir_inactivos",
+      "archivo": "20261006140000_bajas_y_sueldos_excluir_inactivos.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261006150900",
+      "name": "20261006150000_baja_cabrera_gonzalo",
+      "archivo": "20261006150000_baja_cabrera_gonzalo.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261006151321",
+      "name": "20261006160000_excluir_pago_banco_no_inactivo",
+      "archivo": "20261006160000_excluir_pago_banco_no_inactivo.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261013224957",
+      "name": "guardias_sync_colisiones",
+      "archivo": "20261013150000_guardias_sync_colisiones.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261014155039",
+      "name": "credencial_carpeta_policia",
+      "archivo": "20261019120000_credencial_carpeta_policia.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261014222428",
+      "name": "protocolos_objetivo_etapa1",
+      "archivo": "20261022120000_protocolos_objetivo.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261014222434",
+      "name": "protocolos_carga_inicial_aldo",
+      "archivo": "20261022130000_protocolos_carga_inicial.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261015133210",
+      "name": "20261023130000_protocolo_controles_correcciones",
+      "archivo": "20261023130000_protocolo_controles_correcciones.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261016152332",
+      "name": "evaluacion_supervisores_e1",
+      "archivo": "20261028120000_evaluacion_supervisores_e1.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261019204930",
+      "name": "legajo_operativo_supervisores",
+      "archivo": "20261030120000_legajo_operativo_supervisores.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261019214050",
+      "name": "estatuto_control_zonas",
+      "archivo": "20261027120000_estatuto_control_zonas.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261019215514",
+      "name": "gps_sin_privilegios_peligrosos",
+      "archivo": "20261102120000_gps_sin_privilegios_peligrosos.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261019215954",
+      "name": "gps_registro_por_puesto_supervisor",
+      "archivo": "20261103120000_gps_registro_por_puesto_supervisor.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261019220053",
+      "name": "legajo_evaluacion_lista_unica",
+      "archivo": "20261101120000_legajo_evaluacion_lista_unica.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261020132242",
+      "name": "legajo_clasificacion_por_franja",
+      "archivo": "20261105120000_legajo_clasificacion_por_franja.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261020155821",
+      "name": "20261111120000_arca_txt_para_visual",
+      "archivo": "20261111120000_arca_txt_para_visual.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261021145628",
+      "name": "20261112120000_arca_consultas_acumuladas",
+      "archivo": "20261112120000_arca_consultas_acumuladas.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102180754",
+      "name": "20261113120000_supervision_exigibilidad_servicio",
+      "archivo": "20261113120000_supervision_exigibilidad_servicio.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102180812",
+      "name": "20261113130000_os_sessions_device_id",
+      "archivo": "20261113130000_os_sessions_device_id.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102180954",
+      "name": "20261115120000_ronda_alertas_resultado_intervencion",
+      "archivo": "20261115120000_ronda_alertas_resultado_intervencion.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102181153",
+      "name": "20261120120000_rondas_regla_validacion_aprobada",
+      "archivo": "20261120120000_rondas_regla_validacion_aprobada.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102181222",
+      "name": "20261120130000_ia_cola_prioridad_puntos",
+      "archivo": "20261120130000_ia_cola_prioridad_puntos.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102181249",
+      "name": "20261120140000_ia_cron_secret_vault",
+      "archivo": "20261120140000_ia_cron_secret_vault.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102181343",
+      "name": "20261120150000_desempeno_saneamiento_fecha_ar",
+      "archivo": "20261120150000_desempeno_saneamiento_fecha_ar.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102181432",
+      "name": "20261121130000_whatsapp_envios_reclamo_reintentos",
+      "archivo": "20261121130000_whatsapp_envios_reclamo_reintentos.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102181727",
+      "name": "20261122120000_rondas_historial_exigencias",
+      "archivo": "20261122120000_rondas_historial_exigencias.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102181810",
+      "name": "20261124120000_rondas_operacion_compartida",
+      "archivo": "20261124120000_rondas_operacion_compartida.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102181912",
+      "name": "20261114120000_hoja_ruta_supervisores",
+      "archivo": "20261114120000_hoja_ruta_supervisores.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102182135",
+      "name": "20261125120000_programacion_conflictos_correccion_turnos",
+      "archivo": "20261125120000_programacion_conflictos_correccion_turnos.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261102184838",
+      "name": "20261121120000_turnos_cobertura_liquidacion",
+      "archivo": "20261121120000_turnos_cobertura_liquidacion.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261103232827",
+      "name": "20261201120000_facturacion_base",
+      "archivo": "20261201120000_facturacion_base.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261103233525",
+      "name": "20261201130000_facturacion_comprobantes_arca",
+      "archivo": "20261201130000_facturacion_comprobantes_arca.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261103233614",
+      "name": "20261201140000_facturacion_cuentas_corrientes",
+      "archivo": "20261201140000_facturacion_cuentas_corrientes.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261103233633",
+      "name": "20261201150000_facturacion_vencimientos_intereses",
+      "archivo": "20261201150000_facturacion_vencimientos_intereses.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261104133105",
+      "name": "20261203120000_baja_embargo_ovejero_993",
+      "archivo": "20261203120000_baja_embargo_ovejero_993.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261202120000",
+      "name": "20261202120000_facturacion_grupos_factura",
+      "archivo": "20261202120000_facturacion_grupos_factura.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261203130000",
+      "name": "20261203130000_facturacion_reagrupar_atomico",
+      "archivo": "20261203130000_facturacion_reagrupar_atomico.sql",
+      "tipo": "MISMA_VERSION"
+    }
+  ],
+  "remoto_sin_archivo": [],
+  "fuera_de_migrations": [
+    {
+      "archivo": "supabase/cron/20261009170000_documentacion_alertas_cron.sql",
+      "estado": "FALTA_REALMENTE",
+      "nota": "Cron de alertas de documentación: no está programado en producción. Vive fuera de supabase/migrations, así que la CLI no lo ve; lo retoma la Fase 4."
+    }
+  ],
+  "lotes_normalizacion": {
+    "L1": [
+      "20260605",
+      "20260606",
+      "20260616",
+      "20260617",
+      "20260619",
+      "20260622",
+      "20260624",
+      "20260626",
+      "20260628",
+      "20260629",
+      "20260630",
+      "20260701",
+      "20260702",
+      "20260703",
+      "20260704",
+      "20260705",
+      "20260706",
+      "20260707",
+      "20260708",
+      "20260709",
+      "20260710",
+      "20260715",
+      "20260716",
+      "20260717",
+      "20260720",
+      "20260721",
+      "20260722",
+      "20260725"
+    ],
+    "L2a": [
+      "20260725230000",
+      "20260726210000",
+      "20260726235500",
+      "20260727120000",
+      "20260728100000",
+      "20260728200000",
+      "20260728223000",
+      "20260728234500",
+      "20260729000000",
+      "20260729120000",
+      "20260729190000",
+      "20260729200000",
+      "20260730120000",
+      "20260730130000",
+      "20260730150000",
+      "20260731100000",
+      "20260731110000",
+      "20260731120000",
+      "20260731130000",
+      "20260801100000",
+      "20260801120000",
+      "20260801130000",
+      "20260801140000",
+      "20260801150000",
+      "20260801160000",
+      "20260801170000",
+      "20260801190000",
+      "20260802200000",
+      "20260802210000",
+      "20260802220000",
+      "20260802230000",
+      "20260803100000",
+      "20260803200000",
+      "20260803210000",
+      "20260803220000",
+      "20260803230000",
+      "20260803240000",
+      "20260805100000",
+      "20260805120000",
+      "20260805140000",
+      "20260805150000",
+      "20260806100000",
+      "20260806110000",
+      "20260807100000",
+      "20260807120000",
+      "20260807130000",
+      "20260807140000",
+      "20260808120000",
+      "20260809100000",
+      "20260810100000",
+      "20260810120000",
+      "20260810140000",
+      "20260810160000",
+      "20260810180000",
+      "20260810200000",
+      "20260810220000",
+      "20260810240000",
+      "20260810260000"
+    ],
+    "L2b": [
+      "20260811160000",
+      "20260811180000",
+      "20260812100000",
+      "20260812200000",
+      "20260813100000",
+      "20260813110000",
+      "20260813120000",
+      "20260813180000",
+      "20260814100000",
+      "20260814200000",
+      "20260815100000",
+      "20260815110000",
+      "20260815120000",
+      "20260816100000",
+      "20260816120000",
+      "20260816130000",
+      "20260817100000",
+      "20260818100000",
+      "20260818130000",
+      "20260819120000",
+      "20260819140000",
+      "20260824170000",
+      "20260825120000",
+      "20260825180000",
+      "20260825180100",
+      "20260825200000",
+      "20260826140000",
+      "20260826170000",
+      "20260826173000",
+      "20260826180000",
+      "20260826190000",
+      "20260826200000",
+      "20260826210000",
+      "20260826213000",
+      "20260826220000",
+      "20260827120000",
+      "20260827160000",
+      "20260827180000",
+      "20260831120000"
+    ],
+    "L3": [
+      "20260901120000",
+      "20260901130000",
+      "20260901150000",
+      "20260901160000",
+      "20260901180000",
+      "20260902100000",
+      "20260902160000",
+      "20260903170000",
+      "20260903180000",
+      "20260904100000",
+      "20260904110000",
+      "20260904120000",
+      "20260905100000",
+      "20260907150000",
+      "20260908100000",
+      "20260908110000",
+      "20260908120000",
+      "20260908130000",
+      "20260908140000",
+      "20260908150000",
+      "20260908160000",
+      "20260908170000",
+      "20260908180000",
+      "20260908190000",
+      "20260908200000",
+      "20260908210000",
+      "20260908220000",
+      "20260908221000",
+      "20260908222000",
+      "20260908230000",
+      "20260908231000",
+      "20260908232000",
+      "20260908233000",
+      "20260908240000",
+      "20260908250000",
+      "20260909100000",
+      "20260909110000",
+      "20260909120000",
+      "20260909121000",
+      "20260909200000",
+      "20260909210000",
+      "20260910100000",
+      "20260910130000",
+      "20260910140000",
+      "20260910150000",
+      "20260910160000",
+      "20260910170000",
+      "20260910200000",
+      "20260911100000",
+      "20260917140000",
+      "20260917150000",
+      "20260918160000",
+      "20260920130000",
+      "20260920140000",
+      "20260920150000",
+      "20260920160000",
+      "20260920170000",
+      "20260920180000",
+      "20260921120000",
+      "20260921140000",
+      "20260921160000",
+      "20260921180000"
+    ],
+    "L4": [
+      "20261005120000",
+      "20261005140000",
+      "20261005160000",
+      "20261005180000",
+      "20261005190000",
+      "20261005200000",
+      "20261006120000",
+      "20261006140000",
+      "20261006150000",
+      "20261006160000",
+      "20261007120000",
+      "20261007130000",
+      "20261008100000",
+      "20261008150000",
+      "20261008160000",
+      "20261008160100",
+      "20261008190000",
+      "20261009130000",
+      "20261009130100",
+      "20261009140000",
+      "20261009150000",
+      "20261009170000",
+      "20261010120000",
+      "20261010130000",
+      "20261011120000",
+      "20261011120100",
+      "20261011130000",
+      "20261012120000",
+      "20261013120000",
+      "20261013150000",
+      "20261014120000",
+      "20261015120000",
+      "20261016120000",
+      "20261017120000",
+      "20261018120000",
+      "20261019120000",
+      "20261020120000",
+      "20261021120000",
+      "20261022120000",
+      "20261022130000",
+      "20261023120000",
+      "20261023130000",
+      "20261024120000",
+      "20261025120000",
+      "20261026120000",
+      "20261027120000",
+      "20261028120000",
+      "20261029120000",
+      "20261030120000"
+    ],
+    "L5": [
+      "20261101120000",
+      "20261102120000",
+      "20261103120000",
+      "20261104120000",
+      "20261105120000",
+      "20261110120000",
+      "20261111120000",
+      "20261112120000",
+      "20261113120000",
+      "20261113130000",
+      "20261114120000",
+      "20261115120000",
+      "20261120120000",
+      "20261120130000",
+      "20261120140000",
+      "20261120150000",
+      "20261121120000",
+      "20261121130000",
+      "20261122120000",
+      "20261124120000",
+      "20261125120000",
+      "20261201120000",
+      "20261201130000",
+      "20261201140000",
+      "20261201150000",
+      "20261203120000",
+      "20261204120000"
+    ],
+    "L6_reverted_mcp": [
+      "20260901200636",
+      "20260908160619",
+      "20260908173354",
+      "20260908174932",
+      "20260908175902",
+      "20260908221921",
+      "20260908222107",
+      "20260908222209",
+      "20260908230856",
+      "20260908230948",
+      "20260908231049",
+      "20260908231055",
+      "20260908235613",
+      "20260909004043",
+      "20260909131045",
+      "20260909140103",
+      "20260909141841",
+      "20260909141942",
+      "20260909155528",
+      "20260909221212",
+      "20260909231954",
+      "20260910010946",
+      "20260917163710",
+      "20260918115611",
+      "20260918151007",
+      "20260920163141",
+      "20260920165053",
+      "20260920170603",
+      "20260920210426",
+      "20260920233348",
+      "20260921000505",
+      "20260921003807",
+      "20260921011556",
+      "20260921015842",
+      "20260921124855",
+      "20261005122756",
+      "20261005153509",
+      "20261005185311",
+      "20261005214915",
+      "20261005215227",
+      "20261006013016",
+      "20261006124742",
+      "20261006145318",
+      "20261006150349",
+      "20261006150900",
+      "20261006151321",
+      "20261013224957",
+      "20261014155039",
+      "20261014222428",
+      "20261014222434",
+      "20261015133210",
+      "20261016152332",
+      "20261019204930",
+      "20261019214050",
+      "20261019215514",
+      "20261019215954",
+      "20261019220053",
+      "20261020132242",
+      "20261020155821",
+      "20261021145628",
+      "20261102180754",
+      "20261102180812",
+      "20261102180954",
+      "20261102181153",
+      "20261102181222",
+      "20261102181249",
+      "20261102181343",
+      "20261102181432",
+      "20261102181727",
+      "20261102181810",
+      "20261102181912",
+      "20261102182135",
+      "20261102184838",
+      "20261103232827",
+      "20261103233525",
+      "20261103233614",
+      "20261103233633",
+      "20261104133105"
+    ],
+    "no_registrar": [
+      "20260802100000",
+      "20261009120000"
+    ],
+    "ya_registradas_misma_version": [
+      "20260909130000",
+      "20261202120000",
+      "20261203130000"
+    ]
+  }
+}
