@@ -4,6 +4,7 @@ import { tieneCapacidad, esGerenciaReal } from '@/lib/capacidades'
 import { afipConfigDesdeEnv } from '@/lib/afip/config'
 import { corroborarEmpleado, esperarConTope } from '@/lib/afip/corroborar'
 import { sinCuentaBancaria } from '@/lib/usuarios-columnas'
+import { protegerVaciadoReservado } from '@/lib/usuarios-edicion'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -160,22 +161,29 @@ export async function PATCH(req: NextRequest) {
     const usuarioId = body?.usuario_id
     if (!usuarioId) return NextResponse.json({ error: 'usuario_id es obligatorio' }, { status: 400 })
 
-    const { payload, error } = armarPayload(body, { esAlta: false, puedeRolPrivilegiado, puedeEconomico, esGerReal })
-    if (error || !payload) return NextResponse.json({ error: error ?? 'Datos inválidos' }, { status: 400 })
-    if (Object.keys(payload).length === 0) {
+    const armado = armarPayload(body, { esAlta: false, puedeRolPrivilegiado, puedeEconomico, esGerReal })
+    if (armado.error || !armado.payload) return NextResponse.json({ error: armado.error ?? 'Datos inválidos' }, { status: 400 })
+    if (Object.keys(armado.payload).length === 0) {
       return NextResponse.json({ error: 'Sin campos para actualizar' }, { status: 400 })
     }
 
-    const { data, error: dbError } = await admin.client
-      .from('usuarios')
-      .update(payload)
-      .eq('id', usuarioId)
-      .select()
-      .single()
+    // Defensa en el servidor (05/11/2026): un CBU, CUIL o legajo de Visual con
+    // valor NO se vacía salvo que el cliente lo confirme (confirmar_vaciar).
+    // Así un formulario armado con una fila incompleta no borra datos reales.
+    const { data: actual, error: actualError } = await admin.client
+      .from('usuarios').select('cuenta_bancaria, cuil, legajo_visual').eq('id', usuarioId).maybeSingle()
+    if (actualError) return NextResponse.json({ error: actualError.message }, { status: 500 })
+    if (!actual) return NextResponse.json({ error: 'Empleado inexistente' }, { status: 404 })
+    const { payload, protegidos } = protegerVaciadoReservado(armado.payload, actual as unknown as Record<string, unknown>, body?.confirmar_vaciar)
+
+    const consulta = Object.keys(payload).length === 0
+      ? admin.client.from('usuarios').select().eq('id', usuarioId).single()
+      : admin.client.from('usuarios').update(payload).eq('id', usuarioId).select().single()
+    const { data, error: dbError } = await consulta
 
     if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
     // El CBU sólo vuelve a quien tiene capacidad económica (auditoría 05/11, V2).
-    return NextResponse.json({ ok: true, usuario: puedeEconomico ? data : sinCuentaBancaria(data) })
+    return NextResponse.json({ ok: true, usuario: puedeEconomico ? data : sinCuentaBancaria(data), campos_protegidos: protegidos })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error interno del servidor'
     return NextResponse.json({ error: message }, { status: 500 })

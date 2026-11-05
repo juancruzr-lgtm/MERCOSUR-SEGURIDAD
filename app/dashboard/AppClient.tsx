@@ -159,6 +159,7 @@ import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 import { COLUMNAS_USUARIO, cargarCuentasBancarias } from '@/lib/usuarios-columnas'
+import { fusionarFila, fusionarLista, cambiosDeFormulario } from '@/lib/usuarios-edicion'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -1598,25 +1599,48 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     setModal(true)
   }
 
-  const abrirEdicion = (g: Usuario) => {
-    setForm({
-      nombre: g.nombre || '',
-      apellido: g.apellido || '',
-      dni: g.dni || '',
-      cuil: g.cuil || '',
-      legajo_visual: g.legajo_visual || '',
-      cuenta_bancaria: g.cuenta_bancaria || '',
-      telefono: g.telefono || '',
-      legajo: g.legajo || '',
-      email: g.email || '',
-      estado: g.estado || 'activo',
-      rol: g.rol || 'guardia',
-      puesto_organizacional: (g as any).puesto_organizacional || '',
-      foto_url: g.foto_url || '',
-      es_prueba: Boolean(g.es_prueba),
-    })
+  // Lo que el formulario mostró al abrirse: al guardar se envía SÓLO lo que el
+  // usuario cambió respecto de esto (lib/usuarios-edicion). Así un campo que no
+  // estaba cargado en pantalla nunca viaja como "vacío" y no borra nada.
+  const [formOriginal, setFormOriginal] = useState<typeof formVacio>(formVacio)
+  const puedeEconomicoForm = tieneCapacidad(user, 'ver_finanzas')
+
+  const formDesdeFila = (g: Usuario) => ({
+    nombre: g.nombre || '',
+    apellido: g.apellido || '',
+    dni: g.dni || '',
+    cuil: g.cuil || '',
+    legajo_visual: g.legajo_visual || '',
+    cuenta_bancaria: g.cuenta_bancaria || '',
+    telefono: g.telefono || '',
+    legajo: g.legajo || '',
+    email: g.email || '',
+    estado: g.estado || 'activo',
+    rol: g.rol || 'guardia',
+    puesto_organizacional: (g as any).puesto_organizacional || '',
+    foto_url: g.foto_url || '',
+    es_prueba: Boolean(g.es_prueba),
+  })
+
+  const abrirEdicion = async (g: Usuario) => {
     setEditId(g.id)
     setMensaje(null)
+    // La fila en pantalla puede estar incompleta (sincronizaciones que traen
+    // pocas columnas). Antes de editar se relee completa desde la base; el CBU,
+    // sólo para quien tiene capacidad económica y por la RPC con gate.
+    let fila: Usuario = g
+    try {
+      const { data } = await supabase.from('usuarios').select(COLUMNAS_USUARIO).eq('id', g.id).maybeSingle()
+      if (data) fila = fusionarFila(g as any, data as any) as Usuario
+      if (puedeEconomicoForm) {
+        const { porId, error } = await cargarCuentasBancarias(supabase)
+        if (!error) fila = { ...fila, cuenta_bancaria: porId.get(g.id) ?? null } as Usuario
+      }
+      if (data) setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? fusionarFila(x, fila as any) : x))
+    } catch { /* sin conexión: se edita con lo que hay; igual sólo viajan los cambios */ }
+    const inicial = formDesdeFila(fila)
+    setForm(inicial)
+    setFormOriginal(inicial)
     setModal(true)
   }
 
@@ -1644,8 +1668,9 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         const data = await res.json()
 
         if (res.ok && activo && Array.isArray(data.users)) {
-          const actualizados = new Map(data.users.map((u: Usuario) => [u.id, u]))
-          setGuardias((prev: Usuario[]) => prev.map(g => actualizados.get(g.id) || g))
+          // Respuesta con pocas columnas: se fusiona, nunca reemplaza la fila completa.
+          const actualizados = new Map<string, any>(data.users.map((u: Usuario) => [u.id, u]))
+          setGuardias((prev: Usuario[]) => prev.map(g => actualizados.has(g.id) ? fusionarFila(g as any, actualizados.get(g.id)) as Usuario : g))
         }
       } catch {
         // La grilla sigue operativa aunque la sincronización técnica no responda.
@@ -1751,18 +1776,31 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
 
     if (editId) {
       const original = guardias.find((g: Usuario) => g.id === editId)
+      const emailFinal = form.email.trim().toLowerCase() || null
 
-      if (original?.auth_user_id && !payload.email) {
+      if (original?.auth_user_id && !emailFinal) {
         setMensaje({ tipo:'error', texto:'Un empleado con acceso Auth requiere email.' })
         setLoading(false)
         return
       }
 
-      if (original?.auth_user_id && payload.email && payload.email !== (original.email || '').toLowerCase()) {
+      // Sólo lo que cambió respecto de lo que se mostró al abrir la ficha.
+      // Vaciar a propósito CBU/CUIL/legajo Visual viaja como confirmar_vaciar.
+      const { cambios, vaciados } = cambiosDeFormulario(formOriginal as any, form as any, { minusculas: ['email'] })
+      if (!puedeEconomicoForm) delete cambios.cuenta_bancaria
+      if (cambios.puesto_organizacional === null) delete cambios.puesto_organizacional
+      if (Object.keys(cambios).length === 0) {
+        setMensaje({ tipo:'ok', texto:'No hubo cambios para guardar.' })
+        setModal(false)
+        setLoading(false)
+        return
+      }
+
+      if (original?.auth_user_id && 'email' in cambios && emailFinal) {
         const res = await fetch('/api/update-user-email', {
           method: 'POST',
           headers: await headersAdmin(),
-          body: JSON.stringify({ usuario_id: editId, email: payload.email }),
+          body: JSON.stringify({ usuario_id: editId, email: emailFinal }),
         })
         const sync = await res.json()
         if (!res.ok) {
@@ -1778,13 +1816,16 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         const res = await fetch('/api/usuarios', {
           method: 'PATCH',
           headers: await headersAdmin(),
-          body: JSON.stringify({ usuario_id: editId, ...payload }),
+          body: JSON.stringify({ usuario_id: editId, ...cambios, ...(vaciados.length ? { confirmar_vaciar: vaciados } : {}) }),
         })
         const data = await res.json()
         if (!res.ok) {
           setMensaje({ tipo:'error', texto:data.error || 'No se pudo guardar el empleado' })
         } else if (data.usuario) {
-          setGuardias((prev: any[]) => prev.map(g => g.id === editId ? { ...g, ...data.usuario } : g))
+          setGuardias((prev: any[]) => prev.map(g => g.id === editId ? fusionarFila(g, data.usuario) : g))
+          if (Array.isArray(data.campos_protegidos) && data.campos_protegidos.length) {
+            setMensaje({ tipo:'ok', texto:`Guardado. No se vaciaron: ${data.campos_protegidos.join(', ')} (conservan su valor).` })
+          }
           setModal(false)
         }
       } catch (err: any) {
@@ -1879,7 +1920,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       if (!res.ok) {
         setMensaje({ tipo:'error', texto:data.error || 'No se pudo crear el usuario Auth' })
       } else {
-        setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? data.user : x))
+        if (data.user) setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? fusionarFila(x, data.user) : x))
         setMensaje({ tipo:'ok', texto:`✓ ${data.message || 'Usuario Auth creado correctamente'}` })
       }
     } catch (error) {
@@ -1904,7 +1945,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       if (!res.ok) {
         setMensaje({ tipo:'error', texto:data.error || 'No se pudo resetear la contraseña' })
       } else {
-        if (data.user) setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? data.user : x))
+        if (data.user) setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? fusionarFila(x, data.user) : x))
         setMensaje({ tipo:'ok', texto:`✓ ${data.message || 'Contraseña reseteada al DNI'}` })
       }
     } catch (error) {
@@ -1928,7 +1969,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       if (!res.ok) {
         setMensaje({ tipo:'error', texto:data.error || 'No se pudieron sincronizar los accesos empleados' })
       } else {
-        if (Array.isArray(data.users)) setGuardias(data.users)
+        if (Array.isArray(data.users)) setGuardias((prev: any[]) => fusionarLista(prev, data.users))
 
         const errores = data.errores?.length
           ? ` Errores: ${data.errores.map((e: any) => `${e.empleado}: ${e.error}`).slice(0, 3).join(' | ')}`
@@ -1985,7 +2026,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       if (!res.ok) {
         setMensaje({ tipo:'error', texto:data.error || 'No se pudieron reparar los accesos Auth' })
       } else {
-        if (Array.isArray(data.users)) setGuardias(data.users)
+        if (Array.isArray(data.users)) setGuardias((prev: any[]) => fusionarLista(prev, data.users))
         const s = data.summary || {}
         const errores = Array.isArray(data.results)
           ? data.results
@@ -10215,7 +10256,7 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
       .single()
 
     if (error) throw error
-    if (data) setGuardias((prev: Usuario[]) => prev.map(g => g.id === id ? data : g))
+    if (data) setGuardias((prev: Usuario[]) => prev.map(g => g.id === id ? fusionarFila(g as any, data as any) as Usuario : g))
   }
 
   const cerrarSolicitud = async (solicitud: SolicitudAdmin, estado: EstadoSolicitudAdmin, entidadId?: string | null) => {

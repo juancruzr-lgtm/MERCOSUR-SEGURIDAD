@@ -49,6 +49,7 @@ import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
+import { cambiosDeFormulario, fusionarFila } from '@/lib/usuarios-edicion'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 // Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
@@ -1798,11 +1799,18 @@ export default function SupervisorMobile({ user }: any) {
     setAsignando(`guardia-${guardiaEditando.id}`)
     setError('')
 
-    const payload = {
-      email: formGuardia.email.trim().toLowerCase() || null,
-      telefono: formGuardia.telefono.trim() || null,
-      estado: formGuardia.estado,
-      foto_url: formGuardia.foto_url.trim() || null,
+    // Sólo lo que el supervisor cambió respecto de lo que vio al abrir la ficha:
+    // un dato que no estaba cargado en pantalla no viaja como vacío (05/11/2026).
+    const { cambios: payload } = cambiosDeFormulario({
+      email: guardiaEditando.email || '',
+      telefono: guardiaEditando.telefono || '',
+      estado: guardiaEditando.estado || 'activo',
+      foto_url: guardiaEditando.foto_url || '',
+    }, formGuardia, { minusculas: ['email'] })
+    if (Object.keys(payload).length === 0) {
+      setGuardiaEditando(null)
+      setAsignando(null)
+      return
     }
 
     const { data, error: updateError } = await supabase
@@ -1816,7 +1824,7 @@ export default function SupervisorMobile({ user }: any) {
     if (updateError) {
       setError(updateError.message)
     } else if (data) {
-      setGuardias(prev => prev.map(g => g.id === guardiaEditando.id ? data as Usuario : g))
+      setGuardias(prev => prev.map(g => g.id === guardiaEditando.id ? fusionarFila(g as any, data as any) as Usuario : g))
       setGuardiaEditando(null)
     }
 
