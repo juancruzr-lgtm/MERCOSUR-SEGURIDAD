@@ -51,7 +51,7 @@ import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
 import { cambiosDeFormulario, fusionarFila } from '@/lib/usuarios-edicion'
 import PostulantesPanel from '@/components/postulantes/PostulantesPanel'
-import { apiPostulantesSupabase } from '@/lib/postulantes-supabase'
+import { apiPostulantesSupabase, leerSolicitudIA, lecturaIaVisible } from '@/lib/postulantes-supabase'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 // Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
@@ -4408,7 +4408,7 @@ export default function SupervisorMobile({ user }: any) {
                 entrevistas; aprobar y dar de alta es de Administración. */}
             {tab === 'postulantes' && cargaPostulantes && (
               <section>
-                <PostulantesPanel api={apiPostulantesSupabase} />
+                <PostulantesPanel api={apiPostulantesSupabase} lector={lecturaIaVisible ? leerSolicitudIA : undefined} />
               </section>
             )}
 
