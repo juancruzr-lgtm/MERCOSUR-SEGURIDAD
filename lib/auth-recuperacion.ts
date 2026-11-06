@@ -19,8 +19,9 @@ let sesionEnMemoria: string | null = null
 // access_token que trajo el enlace en esta carga de página (sólo en memoria).
 let tokenEnlace: string | null = null
 let errorEnlace: string | null = null
+let invitacionEnlace = false
 
-export type EnlaceAuth = { recuperacion: boolean; error: string | null }
+export type EnlaceAuth = { recuperacion: boolean; invitacion: boolean; error: string | null }
 
 export function leerEnlaceAuth(hash: string, search: string): EnlaceAuth {
   const p = new URLSearchParams((hash || '').replace(/^#/, ''))
@@ -35,7 +36,11 @@ export function leerEnlaceAuth(hash: string, search: string): EnlaceAuth {
       ? 'El enlace venció o ya fue usado. Pedí uno nuevo con "Olvidé mi contraseña".'
       : 'El enlace no es válido. Pedí uno nuevo con "Olvidé mi contraseña".'
   }
-  return { recuperacion: !hayError && dato('type') === 'recovery', error }
+  // Invitación de alta (type=invite): la persona todavía no tiene contraseña.
+  // Se trata igual que una recuperación: no entra al panel hasta crearla.
+  const tipo = dato('type')
+  const invitacion = !hayError && tipo === 'invite'
+  return { recuperacion: !hayError && (tipo === 'recovery' || invitacion), invitacion, error }
 }
 
 function storage(): Storage | null {
@@ -98,6 +103,12 @@ export function capturarEnlaceAuth(): void {
   // otra sesión: cualquier marca de recuperación anterior deja de aplicar.
   if (!enlace.recuperacion && !enlace.error && p.get('access_token')) limpiarRecuperacionPendiente()
   errorEnlace = enlace.error
+  invitacionEnlace = enlace.invitacion
+}
+
+/** ¿La página se abrió desde una invitación de alta? (texto de bienvenida) */
+export function enlaceFueInvitacion(): boolean {
+  return invitacionEnlace
 }
 
 /** Error del enlace de email (vencido/usado), una sola vez; limpia la URL. */

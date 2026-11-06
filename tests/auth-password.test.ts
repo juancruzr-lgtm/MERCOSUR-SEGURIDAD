@@ -89,7 +89,7 @@ describe('nueva contraseña: validación', () => {
 
 describe('recuperación: lectura del enlace', () => {
   it('detecta el enlace de recuperación (flujo implícito)', () => {
-    expect(leerEnlaceAuth('#access_token=x&refresh_token=y&type=recovery', '')).toEqual({ recuperacion: true, error: null })
+    expect(leerEnlaceAuth('#access_token=x&refresh_token=y&type=recovery', '')).toEqual({ recuperacion: true, invitacion: false, error: null })
   })
   it('un Magic Link no es recuperación', () => {
     expect(leerEnlaceAuth('#access_token=x&type=magiclink', '').recuperacion).toBe(false)

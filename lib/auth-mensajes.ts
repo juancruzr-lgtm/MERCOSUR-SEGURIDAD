@@ -35,10 +35,13 @@ export function validarCredencialesLogin(email: string, password: string): strin
   return null
 }
 
-export function validarNuevaPassword(nueva: string, confirmar: string): string | null {
+export function validarNuevaPassword(nueva: string, confirmar: string, dni?: string | null): string | null {
   if (!nueva) return 'Ingresá la nueva contraseña.'
   if (nueva !== nueva.trim()) return 'La contraseña no puede empezar ni terminar con espacios.'
   if (nueva.length < PASSWORD_MIN) return `La contraseña debe tener al menos ${PASSWORD_MIN} caracteres.`
+  // La contraseña inicial era el DNI: la nueva no puede volver a serlo.
+  const digitosDni = String(dni ?? '').replace(/\D/g, '')
+  if (digitosDni.length >= 6 && nueva.replace(/[\s.]/g, '') === digitosDni) return 'La contraseña no puede ser tu DNI.'
   if (nueva !== confirmar) return 'Las contraseñas no coinciden.'
   return null
 }
