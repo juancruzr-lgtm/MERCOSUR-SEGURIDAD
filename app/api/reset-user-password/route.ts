@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { repairEmployeeAuthUser } from '../_lib/auth-repair'
 import { getSupabaseAdmin, normalizeDni, normalizeEmail, requireCapacidad } from '../_lib/employee-auth'
+import { accesoPorInvitacion } from '../_lib/acceso-invitacion'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -8,6 +9,15 @@ export async function POST(req: NextRequest) {
 
   const adminError = await requireCapacidad(req, admin.client, 'gestionar_personal', 'Sesion de administrador requerida')
   if (adminError) return adminError
+
+  // Con el acceso por invitación habilitado, la contraseña ya no vuelve al DNI:
+  // se usa "Enviar enlace para crear contraseña" (/api/acceso/invitar).
+  if (accesoPorInvitacion()) {
+    return NextResponse.json(
+      { error: 'El reseteo al DNI está deshabilitado. Usá "Enviar enlace para crear contraseña".' },
+      { status: 409 },
+    )
+  }
 
   try {
     const body = await req.json()

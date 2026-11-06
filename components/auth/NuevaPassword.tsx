@@ -43,6 +43,7 @@ export default function NuevaPassword({
   onListo,
   onCancelar,
   textoCancelar = 'Cancelar',
+  dni,
 }: {
   estilos?: EstilosNuevaPassword
   aviso?: ReactNode
@@ -50,6 +51,8 @@ export default function NuevaPassword({
   onListo?: () => void
   onCancelar?: () => void
   textoCancelar?: string
+  /** DNI de la persona: la contraseña nueva no puede ser el DNI. */
+  dni?: string | null
 }) {
   const e = { ...BASE, ...estilos }
   const [nueva, setNueva] = useState('')
@@ -59,7 +62,7 @@ export default function NuevaPassword({
 
   const guardar = async () => {
     setMensaje(null)
-    const invalida = validarNuevaPassword(nueva, confirmar)
+    const invalida = validarNuevaPassword(nueva, confirmar, dni)
     if (invalida) { setMensaje({ texto: invalida, tipo: 'error' }); return }
 
     setGuardando(true)

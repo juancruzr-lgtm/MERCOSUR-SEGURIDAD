@@ -161,6 +161,10 @@ import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 import { COLUMNAS_USUARIO, cargarCuentasBancarias } from '@/lib/usuarios-columnas'
 import { fusionarFila, fusionarLista, cambiosDeFormulario } from '@/lib/usuarios-edicion'
 
+// Acceso por invitación (debe coincidir con ACCESO_POR_INVITACION del servidor):
+// "Crear acceso" pasa a "Enviar invitación" y "Reset DNI" a "Enviar enlace de contraseña".
+const ACCESO_POR_INVITACION = process.env.NEXT_PUBLIC_ACCESO_POR_INVITACION === '1'
+
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
   loading: () => <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', background:'#111827', border:'1px solid #1e2d42', borderRadius:8, color:'#94a3b8', marginBottom:20 }}>Cargando mapa...</div>,
@@ -1935,7 +1939,9 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     setMensaje(null)
 
     try {
-      const res = await fetch('/api/reset-user-password', {
+      // Con acceso por invitación ya no se vuelve al DNI: se manda el enlace
+      // para que la persona elija su contraseña (/api/acceso/invitar).
+      const res = await fetch(ACCESO_POR_INVITACION ? '/api/acceso/invitar' : '/api/reset-user-password', {
         method: 'POST',
         headers: await headersAdmin(),
         body: JSON.stringify({ usuario_id: g.id }),
@@ -1943,7 +1949,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       const data = await res.json()
 
       if (!res.ok) {
-        setMensaje({ tipo:'error', texto:data.error || 'No se pudo resetear la contraseña' })
+        setMensaje({ tipo:'error', texto:data.error || (ACCESO_POR_INVITACION ? 'No se pudo enviar el enlace' : 'No se pudo resetear la contraseña') })
       } else {
         if (data.user) setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? fusionarFila(x, data.user) : x))
         setMensaje({ tipo:'ok', texto:`✓ ${data.message || 'Contraseña reseteada al DNI'}` })
@@ -2302,13 +2308,15 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                       {g.estado === 'activo' ? 'Inactivar' : 'Activar'}
                     </button>
                     )}
-                    {(puedePleno || (puedeOperativo && ['guardia','vigilador'].includes(g.rol || 'guardia'))) && !g.auth_user_id && (
+                    {(puedePleno || (!ACCESO_POR_INVITACION && puedeOperativo && ['guardia','vigilador'].includes(g.rol || 'guardia'))) && !g.auth_user_id && (
                       <button
                         style={{ ...S.btn, ...S.btnPrimary, padding:'6px 10px', fontSize:12 }}
                         onClick={() => crearAuth(g)}
                         disabled={accionLoading === `auth-${g.id}`}
                       >
-                        {accionLoading === `auth-${g.id}` ? 'Creando acceso...' : 'Crear acceso'}
+                        {accionLoading === `auth-${g.id}`
+                          ? (ACCESO_POR_INVITACION ? 'Enviando invitación...' : 'Creando acceso...')
+                          : (ACCESO_POR_INVITACION ? 'Enviar invitación' : 'Crear acceso')}
                       </button>
                     )}
                     {puedePleno && g.auth_user_id && (
@@ -2317,7 +2325,9 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                         onClick={() => resetPassword(g)}
                         disabled={accionLoading === `reset-${g.id}`}
                       >
-                        {accionLoading === `reset-${g.id}` ? 'Reseteando...' : 'Reset DNI'}
+                        {accionLoading === `reset-${g.id}`
+                          ? (ACCESO_POR_INVITACION ? 'Enviando enlace...' : 'Reseteando...')
+                          : (ACCESO_POR_INVITACION ? 'Enviar enlace de contraseña' : 'Reset DNI')}
                       </button>
                     )}
                   </div>

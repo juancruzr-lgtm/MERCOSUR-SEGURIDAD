@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../_lib/employee-auth'
 import { validarFotoOperativa } from '../_lib/validar-foto'
+import { puedeFichar } from '@/lib/fichaje-habilitado'
 
 export const runtime = 'nodejs'
 
@@ -17,12 +18,17 @@ export async function POST(req: NextRequest) {
 
   const { data: usuario } = await admin.client
     .from('usuarios')
-    .select('id, rol')
+    .select('id, rol, estado, acceso_bloqueado')
     .eq('auth_user_id', authData.user.id)
     .in('rol', ['guardia', 'vigilador'])
     .maybeSingle()
 
   if (!usuario) return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+  // Mismo criterio que la base (actor_activo_actual, 20261208100000): un
+  // empleado inactivo o con el acceso bloqueado no registra evidencias de fichaje.
+  if (!puedeFichar(usuario)) {
+    return NextResponse.json({ error: 'Tu legajo no está activo: no podés registrar fichajes' }, { status: 403 })
+  }
 
   // ── Body ─────────────────────────────────────────────────────────────────────
   let form: FormData

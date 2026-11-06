@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { mensajeErrorAuth, validarCredencialesLogin, validarEmail } from '@/lib/auth-mensajes'
 import { limpiarRecuperacionPendiente } from '@/lib/auth-recuperacion'
+import { limpiarPasswordDni, marcarPasswordDni, passwordEsDni } from '@/lib/acceso-password-dni'
 import { alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
@@ -167,6 +168,10 @@ export default function Login({ onLogin, errorInicial }: { onLogin: (u: any) => 
 
     // Ingresó con su contraseña: no queda ninguna recuperación pendiente en este equipo.
     limpiarRecuperacionPendiente()
+    // ¿Entró con la contraseña inicial (DNI)? Se marca sólo esta sesión; la
+    // contraseña no se guarda ni se envía (lib/acceso-password-dni.ts).
+    if (passwordEsDni(passwordLogin, (perfil as { dni?: string | null }).dni)) marcarPasswordDni(data.session?.access_token)
+    else limpiarPasswordDni()
     onLogin(perfil)
     setLoading(false)
   }
