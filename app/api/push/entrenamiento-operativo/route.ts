@@ -54,9 +54,9 @@ import {
   CLAVE_COOLDOWN_GLOBAL, CLAVE_DIA_ENVIO, CLAVE_HORA_ENVIO,
   COOLDOWN_GLOBAL_DIAS, ENVIO_POR_DEFECTO,
   correspondeNotificar, diasParaProximoEnvio, ensenanzaPrioritaria,
-  esMomentoDeEnviar, puedeRecibirAhora,
+  esMomentoDeEnviar, fechaAnterior, personasEnTurno, puedeRecibirAhora,
 } from '@/lib/entrenador-operativo'
-import type { Ensenanza, EnvioPrevio } from '@/lib/entrenador-operativo'
+import type { Ensenanza, EnvioPrevio, TurnoEnCurso } from '@/lib/entrenador-operativo'
 import { partirInstante } from '@/lib/cierre-datos'
 
 export const runtime = 'nodejs'
@@ -252,8 +252,10 @@ export async function GET(req: NextRequest) {
 
   const [turnosHoyR, previosR, subsR] = await Promise.all([
     // Quién está trabajando ahora. No se le manda nada a quien está en turno.
+    // Hoy y ayer (el nocturno de ayer sigue en curso), en cualquier estado: el
+    // filtro de estados vive en personasEnTurno().
     client.from('turnos').select('guardia_id, fecha, hora_inicio, hora_fin, estado')
-      .eq('fecha', local.fecha).eq('estado', 'programado'),
+      .in('fecha', [fechaAnterior(local.fecha), local.fecha]),
     client.from('entrenamiento_operativo')
       .select('empleado_id, tipo, periodo, notificado_at')
       .not('notificado_at', 'is', null),
@@ -264,16 +266,7 @@ export async function GET(req: NextRequest) {
     if (r.error) return NextResponse.json({ error: r.error.message }, { status: 500 })
   }
 
-  const enTurnoAhora = new Set<string>()
-  for (const t of (turnosHoyR.data ?? []) as any[]) {
-    const ini = String(t.hora_inicio ?? '').slice(0, 5)
-    const fin = String(t.hora_fin ?? '').slice(0, 5)
-    if (!ini || !fin || !t.guardia_id) continue
-    const dentro = fin <= ini
-      ? local.hora >= ini || local.hora < fin   // nocturno
-      : local.hora >= ini && local.hora < fin
-    if (dentro) enTurnoAhora.add(String(t.guardia_id))
-  }
+  const enTurnoAhora = personasEnTurno((turnosHoyR.data ?? []) as TurnoEnCurso[], local.fecha, local.hora)
 
   const previosPorEmpleado = new Map<string, EnvioPrevio[]>()
   for (const p of (previosR.data ?? []) as any[]) {
