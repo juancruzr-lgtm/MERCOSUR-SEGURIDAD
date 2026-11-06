@@ -67,9 +67,11 @@ export interface PuntoRondaGps {
   longitudSugerida: number | null
   muestras: number | null
 
-  // Racha de incumplimientos GPS, calculada por el servidor.
-  incumplimientosConsecutivos: number
-  fotoControlProximaVisita: boolean
+  // Racha de registros GPS fuera del radio, calculada por el servidor
+  // (ronda_punto_control_gps). `null` = el dato NO está disponible (la consulta
+  // falló o la tabla no existe): no es lo mismo que "ninguno" y la UI lo dice.
+  incumplimientosConsecutivos: number | null
+  fotoControlProximaVisita: boolean | null
 
   // Existencia de foto de referencia. Barato: no resuelve ninguna URL.
   referenciaId: string | null
@@ -90,6 +92,39 @@ export interface ResultadoPuntos {
   puntos: PuntoRondaGps[]
   truncado: boolean
   error: string | null
+  /**
+   * Estado del control por reincidencia GPS. Si la consulta falla (por ejemplo,
+   * la migración todavía no está aplicada) los puntos se muestran igual, pero
+   * la racha queda en `null` y esto lo explica: nunca un vacío silencioso.
+   */
+  controlReincidencia: EstadoControlReincidencia
+}
+
+export interface EstadoControlReincidencia {
+  disponible: boolean
+  error: string | null
+}
+
+export const MENSAJE_CONTROL_NO_DISPONIBLE = 'Control por reincidencia no disponible'
+
+const CONTROL_OK: EstadoControlReincidencia = { disponible: true, error: null }
+
+/**
+ * Traduce el resultado de la consulta a `ronda_punto_control_gps`. Un error de
+ * PostgREST (tabla inexistente, permiso, red) → no disponible, con el motivo.
+ */
+export function estadoControlReincidencia(
+  resultado: { error?: { message?: string } | null } | null | undefined,
+): EstadoControlReincidencia {
+  const error = resultado?.error
+  if (!error) return CONTROL_OK
+  return { disponible: false, error: error.message || 'Error desconocido' }
+}
+
+/** Texto de la racha de un punto. `null` = no disponible (no "ninguno"). */
+export function textoIncumplimientos(n: number | null): string {
+  if (n === null) return MENSAJE_CONTROL_NO_DISPONIBLE
+  return n > 0 ? `${n}` : 'ninguno'
 }
 
 function numero(valor: unknown): number | null {
@@ -124,9 +159,9 @@ export async function cargarPuntosRondaGps(
       .from('rondas_base')
       .select('id')
       .eq('objetivo_id', objetivoId)
-    if (errorRondas) return { puntos: [], truncado: false, error: errorRondas.message }
+    if (errorRondas) return { puntos: [], truncado: false, error: errorRondas.message, controlReincidencia: CONTROL_OK }
     rondasDelObjetivo = ((rondasObjetivo ?? []) as any[]).map(r => r.id)
-    if (rondasDelObjetivo.length === 0) return { puntos: [], truncado: false, error: null }
+    if (rondasDelObjetivo.length === 0) return { puntos: [], truncado: false, error: null, controlReincidencia: CONTROL_OK }
   }
 
   let consulta = supabase
@@ -140,10 +175,10 @@ export async function cargarPuntosRondaGps(
   if (rondasDelObjetivo) consulta = consulta.in('ronda_base_id', rondasDelObjetivo)
 
   const { data: filas, error } = await consulta
-  if (error) return { puntos: [], truncado: false, error: error.message }
+  if (error) return { puntos: [], truncado: false, error: error.message, controlReincidencia: CONTROL_OK }
 
   let puntosCrudos = (filas ?? []) as any[]
-  if (puntosCrudos.length === 0) return { puntos: [], truncado: false, error: null }
+  if (puntosCrudos.length === 0) return { puntos: [], truncado: false, error: null, controlReincidencia: CONTROL_OK }
 
   // Rondas base: nombre, objetivo y puesto.
   // Array.from y no spread: el proyecto compila a es5 sin downlevelIteration.
@@ -157,7 +192,7 @@ export async function cargarPuntosRondaGps(
 
   const truncado = puntosCrudos.length > LIMITE_PUNTOS_RONDA
   if (truncado) puntosCrudos = puntosCrudos.slice(0, LIMITE_PUNTOS_RONDA)
-  if (puntosCrudos.length === 0) return { puntos: [], truncado, error: null }
+  if (puntosCrudos.length === 0) return { puntos: [], truncado, error: null, controlReincidencia: CONTROL_OK }
 
   const puntoIds = puntosCrudos.map(p => p.id)
 
@@ -197,8 +232,13 @@ export async function cargarPuntosRondaGps(
     if (!ultimoDiagnostico.has(d.ronda_punto_id)) ultimoDiagnostico.set(d.ronda_punto_id, d)
   }
 
+  // El error de esta consulta NO se ignora: si falla, la racha de todos los
+  // puntos queda "no disponible" en lugar de mostrarse como cero.
+  const controlReincidencia = estadoControlReincidencia(controlRes as any)
   const porControl = new Map<string, any>(
-    (((controlRes as any).data ?? []) as any[]).map(c => [c.ronda_punto_id, c]),
+    controlReincidencia.disponible
+      ? (((controlRes as any).data ?? []) as any[]).map(c => [c.ronda_punto_id, c])
+      : [],
   )
   const porReferencia = new Map<string, string>(
     (((referenciasRes as any).data ?? []) as any[]).map(r => [r.ronda_punto_id, r.id]),
@@ -234,14 +274,18 @@ export async function cargarPuntosRondaGps(
       longitudSugerida: numero(diagnostico?.longitud_sugerida),
       muestras: numero(diagnostico?.visitas_consideradas),
 
-      incumplimientosConsecutivos: numero(control?.incumplimientos_consecutivos) ?? 0,
-      fotoControlProximaVisita: Boolean(control?.foto_requerida_proxima_visita),
+      incumplimientosConsecutivos: controlReincidencia.disponible
+        ? numero(control?.incumplimientos_consecutivos) ?? 0
+        : null,
+      fotoControlProximaVisita: controlReincidencia.disponible
+        ? Boolean(control?.foto_requerida_proxima_visita)
+        : null,
 
       referenciaId: porReferencia.get(p.id) ?? null,
     }]
   })
 
-  return { puntos, truncado, error: null }
+  return { puntos, truncado, error: null, controlReincidencia }
 }
 
 // ── Evidencia histórica de un punto ──────────────────────────────────────────
