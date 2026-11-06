@@ -29,7 +29,7 @@ import DiferenciasArca from '@/components/legajo/DiferenciasArca'
 import TableroHabilitaciones from '@/components/habilitacion/TableroHabilitaciones'
 import PostulantesPanel from '@/components/postulantes/PostulantesPanel'
 import HabilitadosPostulantes from '@/components/postulantes/HabilitadosPostulantes'
-import { apiPostulantesSupabase } from '@/lib/postulantes-supabase'
+import { apiPostulantesSupabase, leerSolicitudIA, lecturaIaVisible } from '@/lib/postulantes-supabase'
 import { controlaHabilitacion } from '@/lib/legajo-habilitacion'
 import { esFiltroRevision } from '@/lib/legajo-historico'
 
@@ -71,7 +71,7 @@ export default function LegajoDigital({ inicial = 'credenciales', user, empleado
         ))}
       </div>
       {seccion === 'credenciales' && <TableroHabilitaciones />}
-      {seccion === 'postulantes' && <><PostulantesPanel api={apiPostulantesSupabase} /><HabilitadosPostulantes /></>}
+      {seccion === 'postulantes' && <><PostulantesPanel api={apiPostulantesSupabase} lector={lecturaIaVisible ? leerSolicitudIA : undefined} /><HabilitadosPostulantes /></>}
       {seccion === 'arca' && <DiferenciasArca />}
       {seccion === 'datos' && <ControlCambiosDatos />}
       {seccion === 'documentacion' && <ControlDocumentacion onVerHistorico={(texto, categoria) => { setFiltroHistorico({ texto, categoria }); setSeccion('historico') }} />}

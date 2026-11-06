@@ -101,6 +101,10 @@ export class GeminiVision implements ProveedorVision {
 
     partes.push({ text: 'EVIDENCIA A ANALIZAR:' })
     partes.push({ inline_data: { mime_type: pedido.imagen.mime, data: pedido.imagen.bytes.toString('base64') } })
+    ;(pedido.paginasAdicionales ?? []).forEach((p, i) => {
+      partes.push({ text: `PÁGINA ${i + 2} DEL MISMO DOCUMENTO:` })
+      partes.push({ inline_data: { mime_type: p.mime, data: p.bytes.toString('base64') } })
+    })
     partes.push({ text: pedido.prompt })
 
     return this.generar(partes, pedido)
