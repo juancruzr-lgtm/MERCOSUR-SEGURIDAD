@@ -5,6 +5,8 @@
  *
  * Entrada única de Administración y Gerencia para el Legajo Digital: reúne las
  * pantallas que ya existían, sin duplicarlas ni cambiar sus permisos:
+ *   - Postulantes: alta de vigiladores (entrevista → revisión → aprobación →
+ *     alta efectiva) y qué supervisores pueden cargar entrevistas.
  *   - Credenciales: tablero de credenciales y habilitaciones de los vigiladores
  *     (la prioridad del legajo: quién tiene credencial, qué falta y a quién le toca).
  *   - Diferencias con ARCA: la consulta de relaciones laborales de ARCA contra los
@@ -25,13 +27,16 @@ import BandejaHistorico from '@/components/legajo/BandejaHistorico'
 import HabilitacionLegajo from '@/components/legajo/HabilitacionLegajo'
 import DiferenciasArca from '@/components/legajo/DiferenciasArca'
 import TableroHabilitaciones from '@/components/habilitacion/TableroHabilitaciones'
+import PostulantesPanel from '@/components/postulantes/PostulantesPanel'
+import HabilitadosPostulantes from '@/components/postulantes/HabilitadosPostulantes'
+import { apiPostulantesSupabase } from '@/lib/postulantes-supabase'
 import { controlaHabilitacion } from '@/lib/legajo-habilitacion'
 import { esFiltroRevision } from '@/lib/legajo-historico'
 
-export type SeccionLegajo = 'credenciales' | 'arca' | 'datos' | 'documentacion' | 'historico' | 'habilitacion'
+export type SeccionLegajo = 'credenciales' | 'postulantes' | 'arca' | 'datos' | 'documentacion' | 'historico' | 'habilitacion'
 
 const SECCIONES: [SeccionLegajo, string][] = [
-  ['credenciales', 'Credenciales'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'], ['arca', 'Diferencias con ARCA'],
+  ['credenciales', 'Credenciales'], ['postulantes', 'Postulantes'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'], ['arca', 'Diferencias con ARCA'],
 ]
 
 const pestaña = (activa: boolean): React.CSSProperties => ({
@@ -66,6 +71,7 @@ export default function LegajoDigital({ inicial = 'credenciales', user, empleado
         ))}
       </div>
       {seccion === 'credenciales' && <TableroHabilitaciones />}
+      {seccion === 'postulantes' && <><PostulantesPanel api={apiPostulantesSupabase} /><HabilitadosPostulantes /></>}
       {seccion === 'arca' && <DiferenciasArca />}
       {seccion === 'datos' && <ControlCambiosDatos />}
       {seccion === 'documentacion' && <ControlDocumentacion onVerHistorico={(texto, categoria) => { setFiltroHistorico({ texto, categoria }); setSeccion('historico') }} />}
