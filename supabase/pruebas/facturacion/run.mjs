@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes', '20261208100000_facturacion_conceptos_fijos']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -734,6 +734,43 @@ ok('reagrupar: repetir la misma operación no duplica (las anteriores ya están 
   const v = await sql(readFileSync(`${REPO}/supabase/pruebas/facturacion/verificacion-arca-ambientes.sql`, 'utf8'))
   const deFuncion = v.filter(r => /preparar|anon/.test(r.control))
   ok('verificacion-arca-ambientes.sql: controles de la función OK', deFuncion.length === 4 && deFuncion.every(r => r.ok === true), JSON.stringify(v))
+}
+
+// ── Conceptos fijos / contratos mixtos (20261208100000) ───────────────────
+{
+  const vcf = await controles('verificacion-conceptos-fijos.sql')
+  ok('verificacion-conceptos-fijos.sql: todo OK recién aplicada', vcf.length === 7 && vcf.every(r => r.ok === true), JSON.stringify(vcf.filter(r => !r.ok)))
+  const trading = await cliente(ADM, { razon_social: 'TRADING INTERNACIONAL S.A.', cuit: '30685441175' })
+  const kTr = await contrato({ cliente_id: trading, nombre: 'Trading (ex Randstad)', modalidad: 'por_hora', tipo_comprobante: 1, estado: 'vigente' })
+  const OBJ_TR = '00000000-0000-0000-0000-00000000b005'
+  await como(ADM, () => sql(`select public.fact_contrato_objetivo_vincular($1, $2)`, [kTr, OBJ_TR]))
+  const agregar = (quien, desde, importe, extra = {}) => como(quien, () => uno(
+    `select public.fact_concepto_fijo_agregar($1, $2, $3, $4, $5, $6, 21, $7, $8, $9) id`,
+    [kTr, extra.objetivo ?? null, extra.codigo ?? 'guardia_alarmas', 'Servicio de guardia de alarmas', importe, extra.iva ?? 'adicional', desde, extra.sinHoras ?? false, extra.motivo ?? 'Planilla de precios oct-2026']))
+  const c1 = (await agregar(ADM, '2026-10-01', '132611.71')).id
+  await agregar(ADM, '2026-11-01', '135246.77')
+  const c3 = (await agregar(GER, '2026-12-01', '137970.65')).id
+  const vig = await sql(`select importe::text i, vigencia_desde::text d, vigencia_hasta::text h from public.fact_conceptos_fijos where contrato_id = $1 order by vigencia_desde`, [kTr])
+  ok('conceptos fijos: cada vigencia nueva cierra la anterior el día previo', vig.length === 3 && vig[0].h === '2026-10-31' && vig[1].h === '2026-11-30' && vig[2].h === null, JSON.stringify(vig))
+  ok('conceptos fijos: no se pisa una vigencia existente', await falla(() => agregar(ADM, '2026-11-15', '1'), /no se pisan vigencias/))
+  ok('conceptos fijos: el supervisor (alcance total) no puede cargar', await falla(() => agregar(SUP, '2027-01-01', '1'), /Sólo Gerencia o Administración|Gerencia/))
+  ok('conceptos fijos: el supervisor no ve ninguno', (await como(SUP, () => uno(`select count(*)::int n from public.fact_conceptos_fijos`))).n === 0)
+  ok('conceptos fijos: Administración los ve', (await como(ADM, () => uno(`select count(*)::int n from public.fact_conceptos_fijos`))).n === 3)
+  ok('conceptos fijos: un usuario no escribe la tabla directo', await falla(() => como(ADM, () => sql(`update public.fact_conceptos_fijos set importe = 1`)), /permission denied/))
+  ok('conceptos fijos: sin motivo se rechaza', await falla(() => agregar(ADM, '2027-02-01', '1', { motivo: '  ' }), /motivo/))
+  ok('conceptos fijos: código inválido se rechaza', await falla(() => agregar(ADM, '2027-02-01', '1', { codigo: 'Guardia Alarmas!' })))
+  ok('conceptos fijos: importe cero o negativo se rechaza', await falla(() => agregar(ADM, '2027-02-01', '0', { codigo: 'otro_fijo' })))
+  ok('conceptos fijos: objetivo no vinculado al contrato se rechaza', await falla(() => agregar(ADM, '2027-02-01', '1', { codigo: 'otro_fijo', objetivo: '00000000-0000-0000-0000-00000000b001' }), /no está vinculado/))
+  ok('conceptos fijos: un concepto por objetivo vinculado se acepta (con su propio IVA)', !!(await agregar(ADM, '2026-10-01', '50000', { codigo: 'monitoreo', objetivo: OBJ_TR, iva: 'exento' })).id)
+  ok('conceptos fijos: el trigger impide un solape aunque se inserte por fuera de la RPC', await falla(() => (sql(
+    `insert into public.fact_conceptos_fijos (contrato_id, codigo, descripcion, importe, tratamiento_iva, vigencia_desde, vigencia_hasta, motivo) values ($1, 'guardia_alarmas', 'dup', 1, 'adicional', '2026-10-15', '2026-10-20', 'x')`, [kTr])), /superpone/))
+  ok('conceptos fijos: cerrar antes del inicio se rechaza', await falla(() => como(ADM, () => sql(`select public.fact_concepto_fijo_cerrar($1, '2026-11-30', 'fin')`, [c3])), /anterior al inicio/))
+  await como(ADM, () => sql(`select public.fact_concepto_fijo_cerrar($1, '2027-03-31', 'Fin del servicio de alarmas')`, [c3]))
+  ok('conceptos fijos: cerrar fija la fecha de fin', (await uno(`select vigencia_hasta::text h from public.fact_conceptos_fijos where id = $1`, [c3])).h === '2027-03-31')
+  ok('conceptos fijos: el supervisor no cierra', await falla(() => como(SUP, () => sql(`select public.fact_concepto_fijo_cerrar($1, '2026-10-15', 'x')`, [c1]))))
+  const hist = await sql(`select accion from public.fact_historial where entidad = 'contrato' and entidad_id = $1 and accion like 'concepto_fijo%' order by id`, [kTr])
+  ok('conceptos fijos: cada alta y cierre queda en fact_historial', hist.filter(h => h.accion === 'concepto_fijo').length === 4 && hist.filter(h => h.accion === 'concepto_fijo_cierre').length === 1, JSON.stringify(hist))
+  ok('conceptos fijos: el historial guarda la vigencia anterior que se cerró', !!(await uno(`select 1 x from public.fact_historial where entidad_id = $1 and accion = 'concepto_fijo' and jsonb_array_length(datos->'anteriores') = 1`, [kTr])))
 }
 
 // ── Rollback ───────────────────────────────────────────────────────────────
