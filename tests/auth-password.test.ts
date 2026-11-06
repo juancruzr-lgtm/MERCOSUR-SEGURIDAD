@@ -183,7 +183,9 @@ describe('recuperación: el panel queda bloqueado hasta fijar la contraseña', (
   it('AppShell revisa la recuperación pendiente antes de resolver el perfil', () => {
     const arranque = shell.slice(shell.indexOf('const arrancar'))
     expect(arranque.indexOf('recuperacionPendientePara(data.session.access_token)')).toBeGreaterThan(-1)
-    expect(arranque.indexOf('recuperacionPendientePara(')).toBeLessThan(arranque.indexOf('perfilDeSesionActual()'))
+    // 06/11: el perfil se resuelve con verificarSesion (lib/sesion-perfil), que no cierra sesiones por errores.
+    expect(arranque.indexOf('verificarSesion(')).toBeGreaterThan(-1)
+    expect(arranque.indexOf('recuperacionPendientePara(')).toBeLessThan(arranque.indexOf('verificarSesion('))
     expect(arranque.indexOf('getSession()')).toBeLessThan(arranque.indexOf('tomarErrorEnlace()'))
     expect(shell).toMatch(/fase: 'recuperacion'/)
   })
@@ -191,7 +193,8 @@ describe('recuperación: el panel queda bloqueado hasta fijar la contraseña', (
     expect(shell).toMatch(/onListo=\{\(\) => \{\s*limpiarRecuperacionPendiente\(\)/)
     const cancelar = shell.slice(shell.indexOf('const cancelarRecuperacion'), shell.indexOf('if (estado.fase'))
     expect(cancelar).toMatch(/limpiarRecuperacionPendiente\(\)/)
-    expect(cancelar).toMatch(/signOut\(\)/)
+    // Cancelar sigue cerrando la sesión (con scope explícito desde el 06/11).
+    expect(cancelar).toMatch(/signOut\(\{ scope: 'global' \}\)/)
   })
   it('regresión: enlace vencido con sesión abierta avisa en vez de entrar en silencio', () => {
     expect(shell).toMatch(/if \(errorEnlace\) \{ setEstado\(\{ fase: 'avisoEnlace'/)
