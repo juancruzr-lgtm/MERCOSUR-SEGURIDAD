@@ -66,7 +66,21 @@ export const apiPostulantesSupabase: ApiPostulantes = {
     form.append('postulacion_id', id)
     form.append('orden', String(orden))
     form.append('archivo', archivo)
-    const res = await fetch('/api/postulaciones/archivo', { method: 'POST', headers: { Authorization: h.Authorization }, body: form })
+    // Con mala señal la subida puede quedar colgada sin error: se corta a los 90 s
+    // para que la pantalla no quede en "Subiendo…" para siempre.
+    const corte = new AbortController()
+    const timer = setTimeout(() => corte.abort(), 90_000)
+    let res: Response
+    try {
+      res = await fetch('/api/postulaciones/archivo', { method: 'POST', headers: { Authorization: h.Authorization }, body: form, signal: corte.signal })
+    } catch {
+      throw new Error(corte.signal.aborted
+        ? 'La foto tardó demasiado en subir. Revisá la señal (o conectate al wifi) y probá de nuevo.'
+        : 'No se pudo enviar la foto. Revisá la conexión y probá de nuevo.')
+    } finally {
+      clearTimeout(timer)
+    }
+    if (res.status === 413) throw new Error('La foto es demasiado pesada. Sacala de nuevo con la cámara.')
     await json(res)
   },
   async urlArchivo(archivoId) {

@@ -46,12 +46,14 @@ export type ErrorCompresion =
   | 'compresion_blob_fallo'
   | 'imagen_carga_fallo'
 
-export type PerfilFoto = 'operativa' | 'libro_guardia' | 'referencia_ia'
+export type PerfilFoto = 'operativa' | 'libro_guardia' | 'referencia_ia' | 'solicitud_empleo'
 
 export const PERFILES_FOTO: Record<PerfilFoto, Required<Pick<OpcionesCompresion, 'ladoMayor' | 'quality' | 'timeoutMs'>>> = {
   operativa: { ladoMayor: 1600, quality: 0.75, timeoutMs: 10_000 },
   libro_guardia: { ladoMayor: 1800, quality: 0.78, timeoutMs: 15_000 },
   referencia_ia: { ladoMayor: 1600, quality: 0.82, timeoutMs: 15_000 },
+  // Solicitud de empleo manuscrita (Postulantes): más resolución para que la IA lea la letra.
+  solicitud_empleo: { ladoMayor: 2000, quality: 0.85, timeoutMs: 15_000 },
 }
 
 /** Tipos que se pueden subir sin comprimir si la compresión falla (nunca HEIC). */

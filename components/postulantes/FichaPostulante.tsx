@@ -19,7 +19,7 @@ import {
   type ApiPostulantes, type ArchivoPostulacion, type CampoPostulacion, type CampoSeleccion,
   type Duplicado, type Postulacion, type ResultadoAlta,
 } from '@/lib/postulantes'
-import { comprimirImagen } from '@/lib/comprimir-imagen'
+import { LIMITE_SUBIDA_BYTES, mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 
 export type LecturaPropuesta = {
   valores: Partial<Record<CampoPostulacion, string | null>>
@@ -148,6 +148,7 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
   const [vista, setVista] = useState<{ id: string; url: string; pdf: boolean } | null>(null)
   const [duplicados, setDuplicados] = useState<Duplicado[] | null>(null)
   const [ocupado, setOcupado] = useState<string | null>(null)
+  const [progreso, setProgreso] = useState<string | null>(null)
   const [aviso, setAviso] = useState<{ tipo: 'ok' | 'error' | 'info'; texto: string } | null>(null)
   const [avisosLectura, setAvisosLectura] = useState<string[]>([])
   const [regiones, setRegiones] = useState<NonNullable<LecturaPropuesta['regiones']>>({})
@@ -211,20 +212,46 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
     setAviso({ tipo: 'ok', texto: 'Cambios guardados.' })
   })
 
+  /**
+   * Foto de la solicitud. Primero se prepara (achica) en el celular y recién
+   * después se crea la postulación y se sube: si la cámara o la compresión
+   * fallan, no queda una postulación vacía. Misma cadena de rescate que el
+   * fichaje (canvas → createImageBitmap → canvas chico → original ≤ 4 MB);
+   * antes, si la compresión fallaba se mandaba la foto original de 5-10 MB,
+   * que no entra en Vercel, y la pantalla quedaba en "Subiendo…".
+   */
   const subir = (lista: FileList | null) => correr('subir', async () => {
     if (!lista?.length) return
-    const pid = await asegurarId()
-    let orden = archivos.length
-    for (const f of Array.from(lista).slice(0, 4 - archivos.length)) {
-      orden += 1
-      // Manuscrito: más resolución que una foto operativa (2000 px, calidad 0,85) para que se lea bien.
-      const blob = f.type.startsWith('image/') && f.type !== 'image/heic'
-        ? await comprimirImagen(f, { ladoMayor: 2000, quality: 0.85, timeoutMs: 15_000 }).catch(() => f)
-        : f
-      await api.subirArchivo(pid, blob, orden)
+    const elegidos = Array.from(lista).slice(0, 4 - archivos.length)
+    const listos: File[] = []
+    try {
+      for (let i = 0; i < elegidos.length; i++) {
+        const f = elegidos[i]
+        setProgreso(elegidos.length > 1 ? `Preparando la página ${i + 1} de ${elegidos.length}…` : 'Preparando la foto…')
+        if (f.type === 'application/pdf') {
+          if (f.size > LIMITE_SUBIDA_BYTES) throw new Error('El PDF supera los 4 MB. Sacale una foto a cada página.')
+          listos.push(f)
+          continue
+        }
+        try {
+          listos.push((await prepararFotoOperativa(f, 'solicitud_empleo')).file)
+        } catch (e) {
+          throw new Error(mensajeErrorFoto(e instanceof Error ? e.message : '', 'la foto'))
+        }
+      }
+      const pid = await asegurarId()
+      let orden = archivos.length
+      for (let i = 0; i < listos.length; i++) {
+        const f = listos[i]
+        orden += 1
+        setProgreso(listos.length > 1 ? `Subiendo la página ${i + 1} de ${listos.length}…` : 'Subiendo la foto…')
+        await api.subirArchivo(pid, f, orden)
+      }
+      await cargarArchivos(pid)
+      setAviso({ tipo: 'ok', texto: lector ? 'Foto guardada. Ahora tocá "✨ Leer la solicitud con IA".' : 'Solicitud guardada en el archivo privado.' })
+    } finally {
+      setProgreso(null)
     }
-    await cargarArchivos(pid)
-    setAviso({ tipo: 'ok', texto: 'Solicitud guardada en el archivo privado.' })
   })
 
   const leer = () => correr('leer', async () => {
@@ -340,7 +367,7 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
               <input ref={archivo} type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden onChange={e => { void subir(e.target.files); e.target.value = '' }} />
             </div>
           )}
-          {ocupado === 'subir' && <div style={{ fontSize: 13, color: C.suave, marginTop: 8 }}>Subiendo…</div>}
+          {ocupado === 'subir' && <div role="status" style={{ fontSize: 13.5, color: '#bfdbfe', marginTop: 8 }}>{progreso ?? 'Subiendo…'}</div>}
           {lector && editable && archivos.length > 0 && (
             <button type="button" disabled={ocupado === 'leer'} onClick={() => void leer()} style={{ ...boton('secundario'), width: '100%', marginTop: 10, borderColor: C.azul, color: '#bfdbfe' }}>
               {ocupado === 'leer' ? 'Leyendo la solicitud…' : '✨ Leer la solicitud con IA'}
@@ -470,6 +497,8 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
               </div>
             </div>
           )}
+          {/* En el celular el aviso de arriba queda fuera de pantalla: se repite junto a los botones. */}
+          {!modo && aviso && <div style={{ marginBottom: -4 }}>{avisoCaja(aviso)}</div>}
           {!modo && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {editable && <button type="button" disabled={ocupado === 'guardar'} onClick={() => void guardar()} style={boton('primario')}>{ocupado === 'guardar' ? 'Guardando…' : 'Guardar'}</button>}
