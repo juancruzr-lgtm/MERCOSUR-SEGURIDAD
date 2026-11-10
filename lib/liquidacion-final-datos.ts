@@ -141,9 +141,36 @@ export const finDelMes = (iso: string) => new Date(Date.UTC(Number(iso.slice(0, 
  * novedades (licencias, vacaciones, ART) se cortan en la fecha efectiva. SAC y
  * vacaciones siguen usando la fecha efectiva.
  */
-async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[], correcciones?: Record<string, number | null> | null, parametros?: ParametrosLiquidacion): Promise<OrdinariosHastaBaja | null> {
+/**
+ * Correcciones manuales (liquidacion_ajuste) del período mensual YA EXPORTADO a
+ * Visual para esa persona. Lo enviado se calculó con ellas: si la final recalcula
+ * el mes sin ellas y le resta lo enviado, la diferencia es falsa (caso Ibarra
+ * 10/11: horas corregidas a 120 en el mensual, la final daba 150 y mandaba 30 h
+ * de más en el 001). Por eso el recorte parte de las mismas correcciones.
+ */
+export async function correccionesMesExportado(client: any, mes: string, empleadoId: string): Promise<{ correcciones: Record<string, number | null>; hayAjustes: boolean; exportado: boolean }> {
+  const { data: per } = await client.from('liquidacion_periodo').select('id, estado').eq('mes', mes).neq('estado', 'anulado').limit(1)
+  const p = per?.[0]
+  if (!p?.id) return { correcciones: {}, hayAjustes: false, exportado: false }
+  const { data: aj } = await client.from('liquidacion_ajuste').select('clave, valor_liquidacion').eq('periodo_id', p.id).eq('empleado_id', empleadoId)
+  const filas = ((aj ?? []) as any[])
+  const exportado = ['exportada', 'liquidada'].includes(String(p.estado))
+  const correcciones: Record<string, number | null> = {}
+  if (exportado) {
+    for (const a of filas) {
+      if (String(a.clave ?? '').startsWith('texto:')) continue
+      correcciones[a.clave] = a.valor_liquidacion == null ? null : Number(a.valor_liquidacion)
+    }
+  }
+  return { correcciones, hayAjustes: filas.length > 0, exportado }
+}
+
+async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[], correccionesFinal?: Record<string, number | null> | null, parametros?: ParametrosLiquidacion): Promise<OrdinariosHastaBaja | null> {
   const mes = fechaBaja.slice(0, 7)
-  const ajustes = correcciones && Object.keys(correcciones).length ? new Map([[empleadoId, correcciones]]) : undefined
+  // Correcciones del mensual ya exportado y, encima, las cargadas en la final.
+  const mensual = await correccionesMesExportado(client, mes, empleadoId)
+  const correcciones = { ...mensual.correcciones, ...(correccionesFinal ?? {}) }
+  const ajustes = Object.keys(correcciones).length ? new Map([[empleadoId, correcciones]]) : undefined
   const r = await plantillaTrabajoDelMes(client, mes, ajustes, { parametros, recorte: { empleadoId, hasta: finDelMes(fechaBaja), hastaNovedades: fechaBaja } })
   if (r.error) { advertencias.push(`No se pudo armar la planilla del mes: ${r.error}`); return null }
   const fila = r.resumen?.filas.find(f => f.empleadoId === empleadoId)
@@ -158,12 +185,10 @@ async function ordinarios(client: any, empleadoId: string, fechaBaja: string, ad
   const { data: inf } = await client.from('novedades_laborales').select('id')
     .eq('empleado_id', empleadoId).eq('estado', 'aprobada').not('dias_informados', 'is', null)
     .lte('fecha_desde', fechaBaja).gte('fecha_hasta', `${mes}-01`).limit(1)
-  // Correcciones manuales del período mensual (Excel de trabajo) valen para el mes
-  // completo: no se trasladan solas a un recorte. Se avisan.
-  const { data: per } = await client.from('liquidacion_periodo').select('id').eq('mes', mes).neq('estado', 'anulado').limit(1)
-  if (per?.[0]?.id) {
-    const { data: aj } = await client.from('liquidacion_ajuste').select('clave').eq('periodo_id', per[0].id).eq('empleado_id', empleadoId).limit(1)
-    if (aj?.length) advertencias.push('El período mensual tiene correcciones manuales de esta persona: no se copian al recorte. Revisarlas y, si corresponden, cargarlas como ajuste.')
+  if (mensual.hayAjustes && mensual.exportado) {
+    advertencias.push(`El mes ya se exportó a Visual con correcciones manuales de esta persona (${Object.keys(mensual.correcciones).join(', ')}): la final las usa, así sólo queda lo que falta pagar.`)
+  } else if (mensual.hayAjustes) {
+    advertencias.push('El período mensual (todavía sin exportar) tiene correcciones manuales de esta persona: no se copian al recorte. Revisarlas y, si corresponden, cargarlas como ajuste.')
   }
   return {
     // Jornadas corregidas en el Excel de trabajo (columna G) mandan sobre el conteo.
@@ -660,7 +685,10 @@ async function planillaFinalesDelMes(client: any, mes: string, finales: FinalFil
     // La columna A muestra el legajo con que se exporta (padrón de Visual o usuario).
     filas.push(fila ? { ...fila, legajoVisual: p.legajoVisual } : filaSinActividad(uid, p))
     const ajustes = (f.entradas?.ajustes ?? []).map(a => ({ codigo: String(a.codigo), total: Number((lineas as any[]).find(l => l.codigo === String(a.codigo))?.total ?? 0) }))
+    // Mismas correcciones que el cálculo: las del mensual ya exportado y las de la final.
+    const mensual = fila && b.empleado_id ? (await correccionesMesExportado(client, mes, b.empleado_id)).correcciones : {}
     ajustesBase.set(uid, {
+      ...mensual,
       ...(fila ? (f.entradas?.ordinarios ?? {}) : {}),
       ...correccionesDeVista(colsPorCodigo, ajustes, f.calculo?.presentismo ?? null),
     })

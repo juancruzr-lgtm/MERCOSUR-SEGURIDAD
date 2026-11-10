@@ -522,4 +522,41 @@ describe('jornadas efectivamente trabajadas (Paniagua: baja 03/10, trabajó hast
     })
     expect(r.lineas.find(l => l.codigo === '000')!.cantidad).toBe(6)
   })
+
+  it('mes ya exportado con horas corregidas a mano: la final usa la corrección y no manda horas de más (caso Ibarra 10/11)', async () => {
+    // El mensual se exportó con horas rec corregidas a 40 (40 × 5.101,50 = 204.060 en el 001).
+    const tablas: Record<string, any[]> = {
+      ...base, novedades_laborales: [], liquidacion_persona: [{ cod_interno: '010 Bis', nombre: 'PANIAGUA EDGAR IVAN' }],
+      liquidacion_periodo: [{ id: 'p10', estado: 'exportada' }],
+      liquidacion_ajuste: [{ clave: 'horas_rec', valor_liquidacion: 40 }],
+      baja_causa: [{ codigo: 'renuncia', nombre: 'Renuncia', presentismo: 'cero_si_no_completa_mes', evaluar: [] }],
+      liquidacion_concepto_catalogo: Array.from(CATALOGO.entries()).map(([codigo_visual, c]) => ({ codigo_visual, ...c })),
+      liquidacion_resultado_fila: [],
+    }
+    const q = (rows: any[]) => {
+      const o: any = {
+        select: () => o, order: () => o, eq: () => o, lte: () => o, gte: () => o, lt: () => o, gt: () => o, in: () => o, not: () => o, neq: () => o, limit: () => o,
+        range: (d: number, h: number) => Promise.resolve({ data: rows.slice(d, h + 1), error: null }),
+        maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+        then: (ok: any) => ok({ data: rows, error: null }),
+      }
+      return o
+    }
+    const client = {
+      from: (t: string) => q(tablas[t] ?? []),
+      rpc: (fn: string) => Promise.resolve({ data: fn === 'liquidacion_final_ya_liquidado' ? [{ codigo: '000', cantidad: 6, importe: 0 }, { codigo: '001', cantidad: 1, importe: 204060 }] : 0, error: null }),
+    }
+    const f: any = {
+      id: 'f1', baja_id: 'b1', mes: '2026-10', estado: 'pendiente_calculo', version: 0, requiere_recalculo: true,
+      entradas: {}, calculo: null, faltantes: [], advertencias: [],
+      baja: { id: 'b1', empleado_id: 'u-pan', nombre: 'PANIAGUA, EDGAR IVAN', cuil: '20441767871', fecha_ingreso: '2026-08-02', causa: 'renuncia',
+        fecha_baja: '2026-10-03', estado: 'confirmada', origen: 'legajo', vacaciones: null, turnos_futuros: [] },
+    }
+    const ctx = await contextoDeFinal(client, f)
+    expect(ctx.error).toBeNull()
+    expect(ctx.avisos.join(' ')).toMatch(/ya se exportó a Visual con correcciones manuales .*horas_rec/)
+    const r = calcularLiquidacionFinal(ctx.datos!)
+    // Sin la corrección daba 48 h (244.872) y mandaba 8 h de más; con ella, 001 ya está pago.
+    expect(r.lineas.find(l => l.codigo === '001')).toBeUndefined()
+  })
 })
