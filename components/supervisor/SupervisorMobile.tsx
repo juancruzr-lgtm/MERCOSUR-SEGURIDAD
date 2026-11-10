@@ -50,6 +50,8 @@ import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistencia
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
 import { cambiosDeFormulario, fusionarFila } from '@/lib/usuarios-edicion'
+import PostulantesPanel from '@/components/postulantes/PostulantesPanel'
+import { apiPostulantesSupabase } from '@/lib/postulantes-supabase'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 // Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
@@ -489,6 +491,14 @@ function resumenGps(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 
 
 export default function SupervisorMobile({ user }: any) {
   const [tab, setTab] = useState('inicio')
+  // Alta de vigiladores: sólo los supervisores que Administración habilitó
+  // cargan entrevistas (la base lo decide; si la función no existe, no se muestra).
+  const [cargaPostulantes, setCargaPostulantes] = useState(false)
+  useEffect(() => {
+    let vivo = true
+    void supabase.rpc('postulacion_carga_habilitada').then(({ data }) => { if (vivo) setCargaPostulantes(data === true) })
+    return () => { vivo = false }
+  }, [])
   const [objetivoLegajoId, setObjetivoLegajoId] = useState<string | null>(null)
   // Rondas pendientes de todo el alcance. Se cargan una vez, en el panel montado
   // en Inicio, y el mismo listado alimenta el contador y la pestaña Rondas.
@@ -2520,6 +2530,7 @@ export default function SupervisorMobile({ user }: any) {
     { id: 'objetivos', label: 'Objetivos', icon: '🏢' },
     { id: 'guardias', label: 'Guardias', icon: '👮' },
     { id: 'rondas', label: 'Rondas', icon: '🔁' },
+    ...(cargaPostulantes ? [{ id: 'postulantes', label: 'Postulantes', icon: '📝' }] : []),
     { id: 'perfil', label: 'Perfil', icon: '👤' },
   ]
 
@@ -4390,6 +4401,14 @@ export default function SupervisorMobile({ user }: any) {
             {tab === 'salidas' && (
               <section>
                 <SalidasAnticipadasPanel />
+              </section>
+            )}
+
+            {/* Alta de vigiladores: el supervisor habilitado carga y revisa SUS
+                entrevistas; aprobar y dar de alta es de Administración. */}
+            {tab === 'postulantes' && cargaPostulantes && (
+              <section>
+                <PostulantesPanel api={apiPostulantesSupabase} />
               </section>
             )}
 
