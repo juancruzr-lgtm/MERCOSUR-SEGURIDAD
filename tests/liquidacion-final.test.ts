@@ -558,5 +558,7 @@ describe('jornadas efectivamente trabajadas (Paniagua: baja 03/10, trabajó hast
     const r = calcularLiquidacionFinal(ctx.datos!)
     // Sin la corrección daba 48 h (244.872) y mandaba 8 h de más; con ella, 001 ya está pago.
     expect(r.lineas.find(l => l.codigo === '001')).toBeUndefined()
+    // Las horas que el mensual no pagó en el 001 van a extras (212): 62 − 40 = 22 h, no 62 − 48 = 14.
+    expect(ctx.datos!.ordinarios!.horasExtra).toBe(22)
   })
 })
