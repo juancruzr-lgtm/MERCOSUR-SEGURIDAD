@@ -14,7 +14,8 @@
 //  · 208 Vacaciones no gozadas: días pendientes que Administración confirma en el
 //    registro de baja (devengadas − tomadas; lib/baja-vacaciones.ts) × valor día
 //    del Excel de trabajo (C3 = básico/200×8). Recibos de Fulla y Paniagua: 40.812
-//    por día. Sin vacaciones confirmadas queda PENDIENTE (nunca se asume cero).
+//    por día. Sin saldo cargado se CALCULA (JC 10/11): días del año de la baja ×
+//    14/365 (escala por antigüedad) y tomadas 0; se corrige en el Excel de trabajo.
 //  · 120003 SAC proporcional: (básico/200×150)/365 × días computables, con la
 //    regla de conteo de la planilla de JC («calculo liq»: días = baja − 01/07).
 //    Se muestra al lado el control con la mejor remuneración del semestre según
@@ -261,6 +262,28 @@ export function diasComputablesSAC(fechaBaja: string, fechaIngreso: string | nul
 /** (básico/200×150)/365: valor diario del SAC proporcional (sin redondear). */
 export const unitarioSAC = (basico: number) => (basico / 200 * 150) / 365
 export const totalSAC = (basico: number, dias: number) => redondear(unitarioSAC(basico) * dias)
+/**
+ * Vacaciones devengadas del año de la baja (regla JC 10/11): días del año
+ * (baja − 01/01, o baja − ingreso si entró ese año; mismo conteo que el SAC)
+ * × días anuales / 365. Días anuales por antigüedad al 31/12 (LCT art. 150):
+ * menos de 5 años 14, hasta 10 años 21, hasta 20 años 28, más 35.
+ */
+export function vacacionesDevengadas(fechaBaja: string, ingreso: string | null): { dias: number; diasAnuales: number; diasTrabajados: number; inicio: string } {
+  const anio = Number(fechaBaja.slice(0, 4))
+  const inicioAnio = `${anio}-01-01`
+  const inicio = ingreso && ingreso > inicioAnio ? ingreso : inicioAnio
+  const diasTrabajados = Math.max(0, Math.round((Date.parse(fechaBaja) - Date.parse(inicio)) / 86400000))
+  let diasAnuales = 14
+  if (ingreso) {
+    // Antigüedad al 31/12 del año de la baja: años cumplidos = año baja − año ingreso.
+    const anios = anio - Number(ingreso.slice(0, 4))
+    if (anios >= 20) diasAnuales = 35
+    else if (anios >= 10) diasAnuales = 28
+    else if (anios >= 5) diasAnuales = 21
+  }
+  return { dias: redondear(diasTrabajados * diasAnuales / 365), diasAnuales, diasTrabajados, inicio }
+}
+
 /** básico/365 × días de vacaciones no gozadas. */
 export const totalSACVacaciones = (basico: number, diasVac: number) => redondear(basico / 365 * diasVac)
 
@@ -382,15 +405,19 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
 
   // ── Vacaciones no gozadas (208) y SAC sobre vacaciones (217) ──
   const vac = d.entradas.vacaciones ?? {}
-  const saldo = vac.saldoDias ?? null
-  // Sin tomadas cargadas, son cero (JC 21/10); el saldo sí hace falta.
+  // Sin saldo cargado se calcula por antigüedad (JC 10/11): 14 días cada 365 del año
+  // de la baja (escala LCT art. 150 según antigüedad). Se puede corregir en el Excel.
+  const auto = vac.saldoDias == null && fechaBaja && !sueldoFijo && !d.eventual ? vacacionesDevengadas(fechaBaja, ingreso) : null
+  const saldo = vac.saldoDias ?? auto?.dias ?? null
+  // Sin tomadas cargadas, son cero (JC 21/10).
   const tomadas = vac.tomadasDias ?? (saldo != null ? 0 : null)
+  if (auto) advertencias.push(`Vacaciones devengadas calculadas: ${auto.diasTrabajados} días del año (desde ${auto.inicio.split('-').reverse().join('/')}) × ${auto.diasAnuales}/365 = ${auto.dias}${ingreso ? '' : ' (sin fecha de ingreso: se toma 14 por año)'}. Si no es así, cargalas en el Excel.`)
   if (saldo != null && vac.tomadasDias == null) advertencias.push('Vacaciones tomadas sin cargar: se toman como 0.')
   let noGozadas: number | null = null
   if (d.eventual && !sueldoFijo) advertencias.push('Contrato eventual: no se liquidan vacaciones (208/217). Si correspondieran, agregalas con un ajuste.')
   if (!sueldoFijo && !d.eventual) {
-    if (saldo == null) falta('vacaciones_saldo', 'Faltan las vacaciones devengadas confirmadas en el registro de baja (no se asume cero).')
-    if (tomadas == null) falta('vacaciones_tomadas', 'Faltan las vacaciones tomadas confirmadas en el registro de baja (no se asume cero).')
+    if (saldo == null) falta('vacaciones_saldo', 'Faltan las vacaciones devengadas (sin fecha de baja no se pueden calcular).')
+    if (tomadas == null) falta('vacaciones_tomadas', 'Faltan las vacaciones tomadas.')
     if (saldo != null && tomadas != null) {
       noGozadas = redondear(saldo - tomadas, 4)
       if (noGozadas < 0) falta('vacaciones_negativas', `Las vacaciones tomadas (${tomadas}) superan el saldo (${saldo}).`)
@@ -533,6 +560,38 @@ export function filasVisualFinal(
     legajo: String(persona.legajoVisual ?? '').trim(), cuil, codigo: String(l.codigo),
     cantidad: l.cantidad == null ? null : Number(l.cantidad), importe: l.importe == null ? null : Number(l.importe), nombre: persona.nombre,
   }))
+}
+
+/**
+ * «MES COMPLETO» (JC 10/11): un solo recibo con lo que ya se mandó a Visual en
+ * la liquidación mensual (sin pagar todavía: la empresa elige cuándo paga, al
+ * devolver uniforme y firmar) MÁS lo pendiente de la final. Por código:
+ *  · 000 (días): se suman las cantidades.
+ *  · Si el código está en un solo lado, va tal cual.
+ *  · En los dos: Cantidad 1 · Importe = suma de los totales (como el 120003).
+ * Las líneas 0/0 enviadas (estructurales que Visual calcula) no se copian: las
+ * vuelven a armar los descuentos sobre el total.
+ */
+export function lineasMesCompleto(
+  final: { codigo: string; cantidad: number | null; importe: number | null; total?: number | null }[],
+  enviado: { codigo: string; cantidad: number | null; importe: number | null }[],
+  entradaDe: (codigo: string) => string | null | undefined,
+): { codigo: string; cantidad: number | null; importe: number | null }[] {
+  const totalDe = (l: { codigo: string; cantidad: number | null; importe: number | null; total?: number | null }) =>
+    l.total != null ? Number(l.total) : entradaDe(l.codigo) === 'CANIMP' ? Number(l.cantidad ?? 0) * Number(l.importe ?? 0) : Number(l.importe ?? 0)
+  const porCodigo = new Map<string, { codigo: string; cantidad: number | null; importe: number | null; total?: number | null }[]>()
+  for (const l of enviado) {
+    if (!Number(l.cantidad ?? 0) && !Number(l.importe ?? 0)) continue
+    porCodigo.set(String(l.codigo), [...(porCodigo.get(String(l.codigo)) ?? []), { ...l, codigo: String(l.codigo) }])
+  }
+  for (const l of final) porCodigo.set(String(l.codigo), [...(porCodigo.get(String(l.codigo)) ?? []), { ...l, codigo: String(l.codigo) }])
+  const out: { codigo: string; cantidad: number | null; importe: number | null }[] = []
+  for (const [codigo, ls] of Array.from(porCodigo.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+    if (ls.length === 1) { out.push({ codigo, cantidad: ls[0].cantidad, importe: ls[0].importe }); continue }
+    if (codigo === '000' || entradaDe(codigo) === 'CAN') { out.push({ codigo, cantidad: redondear(ls.reduce((s, l) => s + Number(l.cantidad ?? 0), 0), 4), importe: null }); continue }
+    out.push({ codigo, cantidad: 1, importe: redondear(ls.reduce((s, l) => s + totalDe(l), 0)) })
+  }
+  return out
 }
 
 /** JSON estable (claves ordenadas) para el hash del cálculo. */

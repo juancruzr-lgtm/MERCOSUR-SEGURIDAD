@@ -81,12 +81,14 @@ describe('Excel de trabajo de todas las finales', () => {
     expect(r.lineas.find(l => l.codigo === '208')).toMatchObject({ cantidad: 14, total: 571368 })
   }, 60000)
 
-  it('vacaciones a medias (sólo una celda) → no se asume cero', async () => {
+  it('vacaciones a medias (sólo el saldo) → tomadas vacías = 0 (JC 10/11)', async () => {
     const wb = await libro()
-    wb.getWorksheet('FULLA WALTER DARIO')!.getCell('B12').value = 51
+    const ws = wb.getWorksheet('FULLA WALTER DARIO')!
+    ws.getCell('B12').value = 51
+    ws.getCell('B13').value = null
     const d = diferenciasDeHoja(leerHojasLiquidacionFinal(wb)[0], guardado(fulla), fulla.lineas)
-    expect(d.entradas).toBeNull()
-    expect(d.errores.join(' ')).toMatch(/no se asumen cero/)
+    expect(d.errores).toEqual([])
+    expect(d.entradas!.vacaciones).toMatchObject({ saldoDias: 51, tomadasDias: 0 })
   }, 60000)
 
   it('cambio de importe: es un ajuste (la nota en H es opcional); una fila libre agrega un concepto', async () => {

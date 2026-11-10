@@ -7,7 +7,7 @@
 // ni cierra por su cuenta: cada paso lo dispara una persona desde la pantalla.
 
 import {
-  CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
+  CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, filasVisualFinal, jsonEstable, lineasMesCompleto, ordinariosDePlantilla,
   type CausaBaja, type ConceptoCatalogo, type DatosLiquidacionFinal, type EntradasFinal,
   type OrdinariosHastaBaja, type ReglaCausal, type ResultadoLiquidacionFinal,
 } from '@/lib/liquidacion-final'
@@ -141,9 +141,36 @@ export const finDelMes = (iso: string) => new Date(Date.UTC(Number(iso.slice(0, 
  * novedades (licencias, vacaciones, ART) se cortan en la fecha efectiva. SAC y
  * vacaciones siguen usando la fecha efectiva.
  */
-async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[], correcciones?: Record<string, number | null> | null, parametros?: ParametrosLiquidacion): Promise<OrdinariosHastaBaja | null> {
+/**
+ * Correcciones manuales (liquidacion_ajuste) del período mensual YA EXPORTADO a
+ * Visual para esa persona. Lo enviado se calculó con ellas: si la final recalcula
+ * el mes sin ellas y le resta lo enviado, la diferencia es falsa (caso Ibarra
+ * 10/11: horas corregidas a 120 en el mensual, la final daba 150 y mandaba 30 h
+ * de más en el 001). Por eso el recorte parte de las mismas correcciones.
+ */
+export async function correccionesMesExportado(client: any, mes: string, empleadoId: string): Promise<{ correcciones: Record<string, number | null>; hayAjustes: boolean; exportado: boolean }> {
+  const { data: per } = await client.from('liquidacion_periodo').select('id, estado').eq('mes', mes).neq('estado', 'anulado').limit(1)
+  const p = per?.[0]
+  if (!p?.id) return { correcciones: {}, hayAjustes: false, exportado: false }
+  const { data: aj } = await client.from('liquidacion_ajuste').select('clave, valor_liquidacion').eq('periodo_id', p.id).eq('empleado_id', empleadoId)
+  const filas = ((aj ?? []) as any[])
+  const exportado = ['exportada', 'liquidada'].includes(String(p.estado))
+  const correcciones: Record<string, number | null> = {}
+  if (exportado) {
+    for (const a of filas) {
+      if (String(a.clave ?? '').startsWith('texto:')) continue
+      correcciones[a.clave] = a.valor_liquidacion == null ? null : Number(a.valor_liquidacion)
+    }
+  }
+  return { correcciones, hayAjustes: filas.length > 0, exportado }
+}
+
+async function ordinarios(client: any, empleadoId: string, fechaBaja: string, advertencias: string[], correccionesFinal?: Record<string, number | null> | null, parametros?: ParametrosLiquidacion): Promise<OrdinariosHastaBaja | null> {
   const mes = fechaBaja.slice(0, 7)
-  const ajustes = correcciones && Object.keys(correcciones).length ? new Map([[empleadoId, correcciones]]) : undefined
+  // Correcciones del mensual ya exportado y, encima, las cargadas en la final.
+  const mensual = await correccionesMesExportado(client, mes, empleadoId)
+  const correcciones = { ...mensual.correcciones, ...(correccionesFinal ?? {}) }
+  const ajustes = Object.keys(correcciones).length ? new Map([[empleadoId, correcciones]]) : undefined
   const r = await plantillaTrabajoDelMes(client, mes, ajustes, { parametros, recorte: { empleadoId, hasta: finDelMes(fechaBaja), hastaNovedades: fechaBaja } })
   if (r.error) { advertencias.push(`No se pudo armar la planilla del mes: ${r.error}`); return null }
   const fila = r.resumen?.filas.find(f => f.empleadoId === empleadoId)
@@ -158,12 +185,10 @@ async function ordinarios(client: any, empleadoId: string, fechaBaja: string, ad
   const { data: inf } = await client.from('novedades_laborales').select('id')
     .eq('empleado_id', empleadoId).eq('estado', 'aprobada').not('dias_informados', 'is', null)
     .lte('fecha_desde', fechaBaja).gte('fecha_hasta', `${mes}-01`).limit(1)
-  // Correcciones manuales del período mensual (Excel de trabajo) valen para el mes
-  // completo: no se trasladan solas a un recorte. Se avisan.
-  const { data: per } = await client.from('liquidacion_periodo').select('id').eq('mes', mes).neq('estado', 'anulado').limit(1)
-  if (per?.[0]?.id) {
-    const { data: aj } = await client.from('liquidacion_ajuste').select('clave').eq('periodo_id', per[0].id).eq('empleado_id', empleadoId).limit(1)
-    if (aj?.length) advertencias.push('El período mensual tiene correcciones manuales de esta persona: no se copian al recorte. Revisarlas y, si corresponden, cargarlas como ajuste.')
+  if (mensual.hayAjustes && mensual.exportado) {
+    advertencias.push(`El mes ya se exportó a Visual con correcciones manuales de esta persona (${Object.keys(mensual.correcciones).join(', ')}): la final las usa, así sólo queda lo que falta pagar.`)
+  } else if (mensual.hayAjustes) {
+    advertencias.push('El período mensual (todavía sin exportar) tiene correcciones manuales de esta persona: no se copian al recorte. Revisarlas y, si corresponden, cargarlas como ajuste.')
   }
   return {
     // Jornadas corregidas en el Excel de trabajo (columna G) mandan sobre el conteo.
@@ -224,14 +249,16 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
   // Vacaciones: las confirmadas en el registro de baja (no se piden de nuevo acá).
   const v = b.vacaciones
   // Si se completaron después (Excel de trabajo o pantalla), mandan esas; si no, las
-  // confirmadas en la baja. Sin ninguna, 208 queda pendiente (nunca se asume cero).
+  // confirmadas en la baja. Sin ninguna, el cálculo las saca por antigüedad (14/365).
   const e = f.entradas?.vacaciones
-  const vacaciones = e && e.saldoDias != null && e.tomadasDias != null
-    ? { saldoDias: e.saldoDias, tomadasDias: e.tomadasDias, nota: e.nota ?? 'cargadas después de la baja' }
+  // Cargadas a medias (sólo tomadas, p. ej. desde la pantalla): el saldo sale de la
+  // baja si estaba confirmado o, si no, del cálculo por antigüedad.
+  const vacaciones = e && (e.saldoDias != null || e.tomadasDias != null)
+    ? { saldoDias: e.saldoDias ?? (v?.verificadas ? v.devengadas ?? null : null), tomadasDias: e.tomadasDias ?? null, nota: e.nota ?? 'cargadas después de la baja' }
     : v && v.verificadas
       ? { saldoDias: v.devengadas ?? null, tomadasDias: v.tomadas ?? null, nota: v.nota ?? `método ${v.metodo ?? 'empresa'}` }
       : undefined
-  if (!vacaciones) avisos.push('Faltan las vacaciones (no se confirmaron en la baja ni se cargaron después): 208 queda pendiente.')
+  if (!vacaciones) avisos.push('Faltan las vacaciones (no se confirmaron en la baja ni se cargaron después): se calculan por antigüedad (14/365) y tomadas 0. Corregilas en el Excel si no es así.')
 
   const controlSAC = b.fecha_baja && p.cuil ? await mejorRemuneracionSemestre(client, p.cuil, b.fecha_baja) : null
   const eventual = await esEventual(client, p.cuil, b, ingreso)
@@ -333,19 +360,32 @@ export async function excelDeFinal(client: any, f: FinalFila): Promise<{ buf: Ar
  * Genera el .xls de Visual con las líneas guardadas y registra la exportación.
  * El hash es del CONTENIDO (líneas), así un reintento genera el mismo hash.
  */
-export async function exportarFinal(client: any, f: FinalFila): Promise<{ bytes: Uint8Array | null; nombre: string; repetida: boolean; error: string | null }> {
+/** Qué lleva el archivo de Visual: sólo lo pendiente de la final, o el mes completo (lo ya enviado del mes + la final, un solo recibo). */
+export type ModoExportFinal = 'liquidacion' | 'mes_completo'
+
+/** Líneas a mandar a Visual según el modo (sin descuentos). */
+async function lineasParaVisual(client: any, f: FinalFila, lineas: { codigo: string; cantidad: number | null; importe: number | null; total?: number | null }[], modo: ModoExportFinal) {
+  if (modo !== 'mes_completo') return lineas
+  const { data: cat } = await client.from('liquidacion_concepto_catalogo').select('codigo_visual, entrada')
+  const entrada = new Map<string, string>(((cat ?? []) as any[]).map(c => [String(c.codigo_visual), String(c.entrada ?? '')]))
+  return lineasMesCompleto(lineas, f.calculo?.ya_liquidado ?? [], c => entrada.get(c))
+}
+
+export async function exportarFinal(client: any, f: FinalFila, modo: ModoExportFinal = 'liquidacion'): Promise<{ bytes: Uint8Array | null; nombre: string; repetida: boolean; error: string | null }> {
   const { data: lineas, error } = await lineasDeFinal(client, f.id)
   if (error) return { bytes: null, nombre: '', repetida: false, error }
   if (!lineas.length) return { bytes: null, nombre: '', repetida: false, error: 'El borrador no tiene conceptos.' }
   const p = await persona(client, f.baja)
   if (!p.cuil || !p.legajoVisual) return { bytes: null, nombre: '', repetida: false, error: 'Falta CUIL o legajo de Visual.' }
-  const propias = filasVisualFinal(lineas as any, p)
-  const hash = await sha256Hex(jsonEstable(propias))
-  const desc = await descuentosDeFinal(client, f, p, lineas as any)
+  // El hash es de las líneas de la final (igual en los dos modos: se puede volver a bajar).
+  const hash = await sha256Hex(jsonEstable(filasVisualFinal(lineas as any, p)))
+  const aVisual = await lineasParaVisual(client, f, lineas as any, modo)
+  const propias = filasVisualFinal(aVisual, p)
+  const desc = await descuentosDeFinal(client, f, p, aVisual)
   if (desc.error) return { bytes: null, nombre: '', repetida: false, error: 'Descuentos: ' + desc.error }
   const filas = [...propias, ...desc.filas]
   const periodo = (f.calculo?.visualPeriodo ?? f.mes ?? '').replace(/[^\w]+/g, '_')
-  const nombre = `visual_liquidacion_final_${p.legajoVisual.replace(/\W+/g, '_')}_${periodo}.xls`
+  const nombre = `visual_liquidacion_final_${modo === 'mes_completo' ? 'mes_completo_' : ''}${p.legajoVisual.replace(/\W+/g, '_')}_${periodo}.xls`
   const { escribirLibroVisualXls } = await import('@/lib/visual-export')
   const bytes = await escribirLibroVisualXls(filas)
   const { data, error: e2 } = await client.rpc('liquidacion_final_exportar', { p_final_id: f.id, p_version: f.version, p_archivo: nombre, p_hash: hash })
@@ -556,9 +596,9 @@ export async function aprobarSinPendientes(client: any, finales: FinalFila[]) {
  * registra con su hash de contenido (las mismas reglas de doble pago que el
  * individual); las rechazadas no entran al archivo y se informan.
  */
-export async function exportarLote(client: any, finales: FinalFila[]): Promise<{ bytes: Uint8Array | null; nombre: string; incluidas: string[]; rechazadas: { persona: string; error: string }[] }> {
+export async function exportarLote(client: any, finales: FinalFila[], modo: ModoExportFinal = 'liquidacion'): Promise<{ bytes: Uint8Array | null; nombre: string; incluidas: string[]; rechazadas: { persona: string; error: string }[] }> {
   const hoy = new Date().toISOString().slice(0, 10)
-  const nombre = `visual_liquidaciones_finales_${hoy}.xls`
+  const nombre = `visual_liquidaciones_finales_${modo === 'mes_completo' ? 'mes_completo_' : ''}${hoy}.xls`
   const incluidas: string[] = []
   const rechazadas: { persona: string; error: string }[] = []
   const filas: ReturnType<typeof filasVisualFinal> = []
@@ -568,11 +608,12 @@ export async function exportarLote(client: any, finales: FinalFila[]): Promise<{
     if (error || !lineas.length) { rechazadas.push({ persona: quien, error: error ?? 'sin conceptos' }); continue }
     const p = await persona(client, f.baja)
     if (!p.cuil || !p.legajoVisual) { rechazadas.push({ persona: quien, error: 'falta CUIL o legajo de Visual' }); continue }
-    const propias = filasVisualFinal(lineas as any, p)
-    // El hash es de las líneas de la final (así se puede volver a bajar el archivo);
-    // los descuentos se agregan igual que en la exportación mensual.
-    const hash = await sha256Hex(jsonEstable(propias))
-    const desc = await descuentosDeFinal(client, f, p, lineas as any)
+    // El hash es de las líneas de la final (así se puede volver a bajar el archivo, en
+    // cualquier modo); los descuentos se agregan igual que en la exportación mensual.
+    const hash = await sha256Hex(jsonEstable(filasVisualFinal(lineas as any, p)))
+    const aVisual = await lineasParaVisual(client, f, lineas as any, modo)
+    const propias = filasVisualFinal(aVisual, p)
+    const desc = await descuentosDeFinal(client, f, p, aVisual)
     if (desc.error) { rechazadas.push({ persona: quien, error: 'descuentos: ' + desc.error }); continue }
     const { error: e } = await client.rpc('liquidacion_final_exportar', { p_final_id: f.id, p_version: f.version, p_archivo: nombre, p_hash: hash })
     if (e) { rechazadas.push({ persona: quien, error: e.message }); continue }
@@ -658,7 +699,10 @@ async function planillaFinalesDelMes(client: any, mes: string, finales: FinalFil
     // La columna A muestra el legajo con que se exporta (padrón de Visual o usuario).
     filas.push(fila ? { ...fila, legajoVisual: p.legajoVisual } : filaSinActividad(uid, p))
     const ajustes = (f.entradas?.ajustes ?? []).map(a => ({ codigo: String(a.codigo), total: Number((lineas as any[]).find(l => l.codigo === String(a.codigo))?.total ?? 0) }))
+    // Mismas correcciones que el cálculo: las del mensual ya exportado y las de la final.
+    const mensual = fila && b.empleado_id ? (await correccionesMesExportado(client, mes, b.empleado_id)).correcciones : {}
     ajustesBase.set(uid, {
+      ...mensual,
       ...(fila ? (f.entradas?.ordinarios ?? {}) : {}),
       ...correccionesDeVista(colsPorCodigo, ajustes, f.calculo?.presentismo ?? null),
     })
