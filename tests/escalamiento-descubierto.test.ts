@@ -470,3 +470,104 @@ describe('las variables que viajan a Meta coinciden con cada plantilla', () => {
     expect(textoMensaje(NIVEL.operativo, datos)).toContain('GOMEZ, ANA')
   })
 })
+
+// ── El cierre: la alerta quedó resuelta (pedido JC 10/11/2026) ──────────────
+//
+// Quien recibió el +15/+30 recibe también cómo terminó. La clasificación es
+// pura: los hechos los lee la ruta, acá sólo se decide qué decir.
+
+import {
+  NIVEL_RESUELTO, PLANTILLA_RESUELTO, horaLocalDeIso, resolucionDeTurno,
+  textoMensajeResuelto, textoNovedad, variablesResueltoParaPlantilla,
+} from '@/lib/escalamiento-descubierto'
+
+describe('resolución de una alerta de descubierto', () => {
+  it('sin registro y con el turno abierto → sigue sin resolver, no se avisa', () => {
+    expect(resolucionDeTurno({ estado: 'programado' }, null)).toBeNull()
+    expect(resolucionDeTurno({ estado: 'programado' }, { tipo_registro: 'fichaje_gps' })).toBeNull()
+  })
+
+  it('fichaje tardío → lo dice con la hora real de entrada', () => {
+    const r = resolucionDeTurno({ estado: 'programado' }, { hora_entrada_real: '06:52:10' })
+    expect(r).not.toBeNull()
+    expect(r!.hora).toBe('06:52')
+    expect(r!.como).toContain('fichaje')
+  })
+
+  it('confirmación del supervisor (el caso ROVIAL 18/10) → la nombra con su detalle y la hora local', () => {
+    // created_at 09:37 UTC = 06:37 en la operación. La hora que se informa es
+    // SIEMPRE la de la operación, nunca la del proceso.
+    const r = resolucionDeTurno({ estado: 'cubierto' }, {
+      tipo_registro: 'carga_manual', origen_cobertura: 'confirmacion_supervisor',
+      observacion: 'Se confirma ingreso con foto de relevo',
+      created_at: '2026-10-18T09:37:53+00:00',
+    })
+    expect(r).not.toBeNull()
+    expect(r!.hora).toBe('06:37')
+    expect(r!.como).toBe('Cobertura confirmada por el supervisor (Se confirma ingreso con foto de relevo)')
+  })
+
+  it('el fichaje real le gana a la confirmación manual si están los dos', () => {
+    const r = resolucionDeTurno({ estado: 'cubierto' }, {
+      hora_entrada_real: '07:10:00', tipo_registro: 'carga_manual',
+      origen_cobertura: 'confirmacion_supervisor', created_at: '2026-10-18T09:37:53Z',
+    })
+    expect(r!.como).toContain('fichaje')
+    expect(r!.hora).toBe('07:10')
+  })
+
+  it('turno anulado → se informa como anulación, sin inventar una hora', () => {
+    const r = resolucionDeTurno({ estado: 'anulado' }, null)
+    expect(r!.como).toContain('anulado')
+    expect(r!.hora).toBe('sin hora registrada')
+  })
+
+  it('una confirmación sin created_at no fabrica hora', () => {
+    const r = resolucionDeTurno({ estado: 'programado' }, {
+      tipo_registro: 'carga_manual', created_at: null,
+    })
+    expect(r!.hora).toBe('sin hora registrada')
+  })
+
+  it('horaLocalDeIso convierte a hora de la operación y rechaza basura', () => {
+    expect(horaLocalDeIso('2026-10-18T09:15:04Z')).toBe('06:15')
+    expect(horaLocalDeIso(null)).toBeNull()
+    expect(horaLocalDeIso('no es una fecha')).toBeNull()
+  })
+
+  it('la novedad del día se nombra; sin novedad se dice explícitamente', () => {
+    expect(textoNovedad(null)).toBe('Sin novedades')
+    expect(textoNovedad({ tipo: 'ausencia', observacion: 'certificado médico' }))
+      .toBe('ausencia – certificado médico')
+    expect(textoNovedad({ tipo: 'ausencia' })).toBe('ausencia')
+  })
+})
+
+describe('la plantilla del cierre', () => {
+  const datos = variablesDeMensaje(turno(), {
+    objetivo: 'ROVIAL', puesto: 'OBRADOR AO12', vigilador: 'CACERES, DARIO', supervisor: null,
+  })
+  const res = { como: 'Cobertura confirmada por el supervisor', hora: '06:37' }
+
+  it('manda exactamente 7 variables, en el orden aprobado en Meta', () => {
+    expect(variablesResueltoParaPlantilla(datos, res, 'Sin novedades')).toEqual([
+      'ROVIAL', 'OBRADOR AO12', '19:00–07:00', 'CACERES, DARIO',
+      '06:37', 'Cobertura confirmada por el supervisor', 'Sin novedades',
+    ])
+  })
+
+  it('el texto del dry-run dice lo mismo que la plantilla aprobada', () => {
+    const texto = textoMensajeResuelto(datos, res, 'Sin novedades')
+    expect(texto).toContain('Alerta resuelta')
+    expect(texto).toContain('ROVIAL')
+    expect(texto).toContain('06:37')
+    expect(texto).toContain('Novedades registradas: Sin novedades')
+    // Y termina en texto fijo, como exige Meta.
+    expect(texto.endsWith('de su parte.')).toBe(true)
+  })
+
+  it('el nivel y la plantilla del cierre son los acordados', () => {
+    expect(NIVEL_RESUELTO).toBe('escalamiento_wa_resuelto')
+    expect(PLANTILLA_RESUELTO).toBe('puesto_descubierto_resuelto')
+  })
+})
