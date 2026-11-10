@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { CAUSAS_BAJA, type AjusteManual, type EntradasFinal, type EvaluacionConcepto } from '@/lib/liquidacion-final'
 import {
   calcularYGuardar, conciliacionFinal, excelDeFinal, exportarFinal, historialDeFinal, importarResultadoFinal,
-  leerFinal, lineasDeFinal, listarFinales, type FinalFila,
+  leerFinal, lineasDeFinal, listarFinales, type FinalFila, type ModoExportFinal,
 } from '@/lib/liquidacion-final-datos'
 import LoteLiquidacionesFinales from '@/components/liquidacion/LoteLiquidacionesFinales'
 
@@ -130,6 +130,7 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
   // Vacaciones editables en pantalla (JC 10/11). Saldo vacío = se calcula por antigüedad (14/365).
   const [vacSaldo, setVacSaldo] = useState('')
   const [vacTomadas, setVacTomadas] = useState('')
+  const [modoExport, setModoExport] = useState<ModoExportFinal>('liquidacion')
 
   async function cargar() {
     const r = await leerFinal(supabase, finalId)
@@ -188,7 +189,7 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
   const exportar = () => {
     if (!window.confirm('Exportar registra la liquidación final como enviada a Visual: después no se puede recalcular. ¿Seguir?')) return
     void correr(async () => {
-      const r = await exportarFinal(supabase, f)
+      const r = await exportarFinal(supabase, f, modoExport)
       if (r.error || !r.bytes) return r.error ?? 'sin archivo'
       descargar(r.bytes as BlobPart, r.nombre, 'application/vnd.ms-excel'); return null
     }, 'Archivo de Visual generado. Importalo en Visual y después reimportá la Planilla de Sueldos para conciliar.')
@@ -224,6 +225,13 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
           {editable && <button style={S.btn2} disabled={ocupado} onClick={() => void recalcular()}>Recalcular</button>}
           {c && <button style={S.btn2} disabled={ocupado} onClick={() => void bajarExcel()}>Excel de trabajo</button>}
           {f.estado === 'borrador' && <button style={S.btn} disabled={ocupado || f.faltantes.length > 0 || f.requiere_recalculo} onClick={() => void marcarLista()}>Aprobar para exportar</button>}
+          {f.estado === 'lista' && (
+            <select style={S.input} value={modoExport} disabled={ocupado} onChange={e => setModoExport(e.target.value as ModoExportFinal)}
+              title="Mes completo: lo ya enviado del mes + la liquidación final, en un solo recibo">
+              <option value="liquidacion">Sólo liquidación final</option>
+              <option value="mes_completo">Mes completo + liquidación</option>
+            </select>
+          )}
           {f.estado === 'lista' && <button style={{ ...S.btn, background: '#16a34a' }} disabled={ocupado} onClick={exportar}>Exportar a Visual (.xls)</button>}
         </div>
       </div>

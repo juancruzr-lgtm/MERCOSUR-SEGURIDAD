@@ -7,7 +7,7 @@
 // ni cierra por su cuenta: cada paso lo dispara una persona desde la pantalla.
 
 import {
-  CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
+  CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, filasVisualFinal, jsonEstable, lineasMesCompleto, ordinariosDePlantilla,
   type CausaBaja, type ConceptoCatalogo, type DatosLiquidacionFinal, type EntradasFinal,
   type OrdinariosHastaBaja, type ReglaCausal, type ResultadoLiquidacionFinal,
 } from '@/lib/liquidacion-final'
@@ -360,19 +360,32 @@ export async function excelDeFinal(client: any, f: FinalFila): Promise<{ buf: Ar
  * Genera el .xls de Visual con las líneas guardadas y registra la exportación.
  * El hash es del CONTENIDO (líneas), así un reintento genera el mismo hash.
  */
-export async function exportarFinal(client: any, f: FinalFila): Promise<{ bytes: Uint8Array | null; nombre: string; repetida: boolean; error: string | null }> {
+/** Qué lleva el archivo de Visual: sólo lo pendiente de la final, o el mes completo (lo ya enviado del mes + la final, un solo recibo). */
+export type ModoExportFinal = 'liquidacion' | 'mes_completo'
+
+/** Líneas a mandar a Visual según el modo (sin descuentos). */
+async function lineasParaVisual(client: any, f: FinalFila, lineas: { codigo: string; cantidad: number | null; importe: number | null; total?: number | null }[], modo: ModoExportFinal) {
+  if (modo !== 'mes_completo') return lineas
+  const { data: cat } = await client.from('liquidacion_concepto_catalogo').select('codigo_visual, entrada')
+  const entrada = new Map<string, string>(((cat ?? []) as any[]).map(c => [String(c.codigo_visual), String(c.entrada ?? '')]))
+  return lineasMesCompleto(lineas, f.calculo?.ya_liquidado ?? [], c => entrada.get(c))
+}
+
+export async function exportarFinal(client: any, f: FinalFila, modo: ModoExportFinal = 'liquidacion'): Promise<{ bytes: Uint8Array | null; nombre: string; repetida: boolean; error: string | null }> {
   const { data: lineas, error } = await lineasDeFinal(client, f.id)
   if (error) return { bytes: null, nombre: '', repetida: false, error }
   if (!lineas.length) return { bytes: null, nombre: '', repetida: false, error: 'El borrador no tiene conceptos.' }
   const p = await persona(client, f.baja)
   if (!p.cuil || !p.legajoVisual) return { bytes: null, nombre: '', repetida: false, error: 'Falta CUIL o legajo de Visual.' }
-  const propias = filasVisualFinal(lineas as any, p)
-  const hash = await sha256Hex(jsonEstable(propias))
-  const desc = await descuentosDeFinal(client, f, p, lineas as any)
+  // El hash es de las líneas de la final (igual en los dos modos: se puede volver a bajar).
+  const hash = await sha256Hex(jsonEstable(filasVisualFinal(lineas as any, p)))
+  const aVisual = await lineasParaVisual(client, f, lineas as any, modo)
+  const propias = filasVisualFinal(aVisual, p)
+  const desc = await descuentosDeFinal(client, f, p, aVisual)
   if (desc.error) return { bytes: null, nombre: '', repetida: false, error: 'Descuentos: ' + desc.error }
   const filas = [...propias, ...desc.filas]
   const periodo = (f.calculo?.visualPeriodo ?? f.mes ?? '').replace(/[^\w]+/g, '_')
-  const nombre = `visual_liquidacion_final_${p.legajoVisual.replace(/\W+/g, '_')}_${periodo}.xls`
+  const nombre = `visual_liquidacion_final_${modo === 'mes_completo' ? 'mes_completo_' : ''}${p.legajoVisual.replace(/\W+/g, '_')}_${periodo}.xls`
   const { escribirLibroVisualXls } = await import('@/lib/visual-export')
   const bytes = await escribirLibroVisualXls(filas)
   const { data, error: e2 } = await client.rpc('liquidacion_final_exportar', { p_final_id: f.id, p_version: f.version, p_archivo: nombre, p_hash: hash })
@@ -583,9 +596,9 @@ export async function aprobarSinPendientes(client: any, finales: FinalFila[]) {
  * registra con su hash de contenido (las mismas reglas de doble pago que el
  * individual); las rechazadas no entran al archivo y se informan.
  */
-export async function exportarLote(client: any, finales: FinalFila[]): Promise<{ bytes: Uint8Array | null; nombre: string; incluidas: string[]; rechazadas: { persona: string; error: string }[] }> {
+export async function exportarLote(client: any, finales: FinalFila[], modo: ModoExportFinal = 'liquidacion'): Promise<{ bytes: Uint8Array | null; nombre: string; incluidas: string[]; rechazadas: { persona: string; error: string }[] }> {
   const hoy = new Date().toISOString().slice(0, 10)
-  const nombre = `visual_liquidaciones_finales_${hoy}.xls`
+  const nombre = `visual_liquidaciones_finales_${modo === 'mes_completo' ? 'mes_completo_' : ''}${hoy}.xls`
   const incluidas: string[] = []
   const rechazadas: { persona: string; error: string }[] = []
   const filas: ReturnType<typeof filasVisualFinal> = []
@@ -595,11 +608,12 @@ export async function exportarLote(client: any, finales: FinalFila[]): Promise<{
     if (error || !lineas.length) { rechazadas.push({ persona: quien, error: error ?? 'sin conceptos' }); continue }
     const p = await persona(client, f.baja)
     if (!p.cuil || !p.legajoVisual) { rechazadas.push({ persona: quien, error: 'falta CUIL o legajo de Visual' }); continue }
-    const propias = filasVisualFinal(lineas as any, p)
-    // El hash es de las líneas de la final (así se puede volver a bajar el archivo);
-    // los descuentos se agregan igual que en la exportación mensual.
-    const hash = await sha256Hex(jsonEstable(propias))
-    const desc = await descuentosDeFinal(client, f, p, lineas as any)
+    // El hash es de las líneas de la final (así se puede volver a bajar el archivo, en
+    // cualquier modo); los descuentos se agregan igual que en la exportación mensual.
+    const hash = await sha256Hex(jsonEstable(filasVisualFinal(lineas as any, p)))
+    const aVisual = await lineasParaVisual(client, f, lineas as any, modo)
+    const propias = filasVisualFinal(aVisual, p)
+    const desc = await descuentosDeFinal(client, f, p, aVisual)
     if (desc.error) { rechazadas.push({ persona: quien, error: 'descuentos: ' + desc.error }); continue }
     const { error: e } = await client.rpc('liquidacion_final_exportar', { p_final_id: f.id, p_version: f.version, p_archivo: nombre, p_hash: hash })
     if (e) { rechazadas.push({ persona: quien, error: e.message }); continue }

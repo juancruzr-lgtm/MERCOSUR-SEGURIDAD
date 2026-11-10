@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import {
   analizarExcelLote, analizarExcelLoteMensual, aplicarDiferenciasLote, aprobarSinPendientes, excelDeLoteMensual, exportarLote, importarResultadoLote,
-  type FinalFila,
+  type FinalFila, type ModoExportFinal,
 } from '@/lib/liquidacion-final-datos'
 
 const S: Record<string, React.CSSProperties> = {
@@ -38,6 +38,7 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
   const [avisosExcel, setAvisosExcel] = useState<string[]>([])
   const [eligiendo, setEligiendo] = useState(false)
   const [elegidas, setElegidas] = useState<Set<string>>(new Set())
+  const [modoExport, setModoExport] = useState<ModoExportFinal>('liquidacion')
 
   // Período (mes de la baja) del Excel de trabajo: sólo el que se está trabajando (JC 10/11),
   // armar todos los meses juntos era lento. Por defecto, el más reciente.
@@ -106,7 +107,7 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
   const exportar = () => correr('exportar', async () => {
     const elegidasF = exportables.filter(f => elegidas.has(f.id))
     if (!elegidasF.length) return 'Elegí al menos una persona.'
-    const r = await exportarLote(supabase, elegidasF)
+    const r = await exportarLote(supabase, elegidasF, modoExport)
     setEligiendo(false); onCambio()
     if (r.bytes) descargar(r.bytes as BlobPart, r.nombre, 'application/vnd.ms-excel')
     resumenExport = `Archivo de Visual con ${r.incluidas.length} persona(s): ${r.incluidas.join(', ')}.`
@@ -191,6 +192,16 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
         <div style={{ marginTop: 12, padding: 10, border: '1px solid #166534', borderRadius: 8 }}>
           <strong>¿Quiénes van en el archivo de Visual?</strong>
           <div style={{ ...S.sub, marginTop: 2 }}>Sólo aprobadas, o ya exportadas para volver a bajar el archivo. Exportar las registra como enviadas: después no se recalculan.</div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 8, fontSize: 13 }}>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="radio" name="modoExport" checked={modoExport === 'liquidacion'} onChange={() => setModoExport('liquidacion')} />
+              Sólo liquidación final
+            </label>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="radio" name="modoExport" checked={modoExport === 'mes_completo'} onChange={() => setModoExport('mes_completo')} />
+              Mes completo + liquidación (lo ya enviado del mes + la final, un solo recibo)
+            </label>
+          </div>
           {exportables.map(f => (
             <label key={f.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 6 }}>
               <input type="checkbox" checked={elegidas.has(f.id)} onChange={e => {

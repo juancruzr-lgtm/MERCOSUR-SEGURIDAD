@@ -562,6 +562,38 @@ export function filasVisualFinal(
   }))
 }
 
+/**
+ * «MES COMPLETO» (JC 10/11): un solo recibo con lo que ya se mandó a Visual en
+ * la liquidación mensual (sin pagar todavía: la empresa elige cuándo paga, al
+ * devolver uniforme y firmar) MÁS lo pendiente de la final. Por código:
+ *  · 000 (días): se suman las cantidades.
+ *  · Si el código está en un solo lado, va tal cual.
+ *  · En los dos: Cantidad 1 · Importe = suma de los totales (como el 120003).
+ * Las líneas 0/0 enviadas (estructurales que Visual calcula) no se copian: las
+ * vuelven a armar los descuentos sobre el total.
+ */
+export function lineasMesCompleto(
+  final: { codigo: string; cantidad: number | null; importe: number | null; total?: number | null }[],
+  enviado: { codigo: string; cantidad: number | null; importe: number | null }[],
+  entradaDe: (codigo: string) => string | null | undefined,
+): { codigo: string; cantidad: number | null; importe: number | null }[] {
+  const totalDe = (l: { codigo: string; cantidad: number | null; importe: number | null; total?: number | null }) =>
+    l.total != null ? Number(l.total) : entradaDe(l.codigo) === 'CANIMP' ? Number(l.cantidad ?? 0) * Number(l.importe ?? 0) : Number(l.importe ?? 0)
+  const porCodigo = new Map<string, { codigo: string; cantidad: number | null; importe: number | null; total?: number | null }[]>()
+  for (const l of enviado) {
+    if (!Number(l.cantidad ?? 0) && !Number(l.importe ?? 0)) continue
+    porCodigo.set(String(l.codigo), [...(porCodigo.get(String(l.codigo)) ?? []), { ...l, codigo: String(l.codigo) }])
+  }
+  for (const l of final) porCodigo.set(String(l.codigo), [...(porCodigo.get(String(l.codigo)) ?? []), { ...l, codigo: String(l.codigo) }])
+  const out: { codigo: string; cantidad: number | null; importe: number | null }[] = []
+  for (const [codigo, ls] of Array.from(porCodigo.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+    if (ls.length === 1) { out.push({ codigo, cantidad: ls[0].cantidad, importe: ls[0].importe }); continue }
+    if (codigo === '000' || entradaDe(codigo) === 'CAN') { out.push({ codigo, cantidad: redondear(ls.reduce((s, l) => s + Number(l.cantidad ?? 0), 0), 4), importe: null }); continue }
+    out.push({ codigo, cantidad: 1, importe: redondear(ls.reduce((s, l) => s + totalDe(l), 0)) })
+  }
+  return out
+}
+
 /** JSON estable (claves ordenadas) para el hash del cálculo. */
 export function jsonEstable(v: unknown): string {
   if (v === null || typeof v !== 'object') return JSON.stringify(v ?? null)
