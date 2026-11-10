@@ -178,6 +178,110 @@ export function variablesParaPlantilla(nivel: ClaveNivel, d: DatosMensaje): stri
   return nivel === NIVEL.operativo ? [...comunes, d.supervisor] : comunes
 }
 
+// ── El cierre: la alerta quedó resuelta ─────────────────────────────────────
+//
+// Pedido de Gerencia (10/11/2026): quien recibió el aviso de descubierto tiene
+// que enterarse también de CÓMO terminó. Hoy el supervisor resuelve y la
+// dirección nunca ve el cierre — la auditoría del fin de semana del 07/11
+// mostró 4 episodios escalados a +30 y cero información de su resolución.
+//
+// Mismo principio que el resto del módulo: esto NO decide si el turno está
+// resuelto consultando la base — clasifica hechos que la ruta ya leyó.
+
+/** Nivel del aviso de cierre, con el mismo formato de clave que los demás. */
+export const NIVEL_RESUELTO = 'escalamiento_wa_resuelto' as const
+
+/** Plantilla Utility aprobada en Meta el 10/11/2026 (es_AR, 7 variables). */
+export const PLANTILLA_RESUELTO = 'puesto_descubierto_resuelto'
+
+/** Lo que la ruta sabe del registro de asistencia del turno alertado. */
+export interface RegistroDeTurno {
+  hora_entrada_real?: string | null
+  tipo_registro?: string | null
+  origen_cobertura?: string | null
+  observacion?: string | null
+  created_at?: string | null
+}
+
+export interface Resolucion {
+  /** Cómo se resolvió, en una frase para la variable {{6}}. */
+  como: string
+  /** HH:MM local de la resolución, para la variable {{5}}. */
+  hora: string
+}
+
+/** HH:MM de un instante ISO, en hora de la operación (nunca la del proceso). */
+export function horaLocalDeIso(iso?: string | null): string | null {
+  const t = Date.parse(iso ?? '')
+  if (!Number.isFinite(t)) return null
+  return new Intl.DateTimeFormat('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(t))
+}
+
+/**
+ * ¿Cómo quedó resuelto el turno alertado? `null` = sigue abierto, no se avisa.
+ *
+ * El orden importa y es el de mayor evidencia: un fichaje real le gana a una
+ * confirmación manual, y las dos le ganan al estado del turno. El texto nunca
+ * inventa: si no hay hora conocida se dice "sin hora registrada" en vez de
+ * fabricar una.
+ */
+export function resolucionDeTurno(
+  t: Pick<TurnoEscalable, 'estado'>,
+  reg: RegistroDeTurno | null | undefined,
+): Resolucion | null {
+  if (reg?.hora_entrada_real) {
+    return {
+      como: 'El vigilador registró su ingreso (fichaje)',
+      hora: reg.hora_entrada_real.slice(0, 5),
+    }
+  }
+  if (reg && (reg.origen_cobertura === 'confirmacion_supervisor' || reg.tipo_registro === 'carga_manual')) {
+    const detalle = (reg.observacion ?? '').trim()
+    return {
+      como: detalle
+        ? `Cobertura confirmada por el supervisor (${detalle})`
+        : 'Cobertura confirmada por el supervisor',
+      hora: horaLocalDeIso(reg.created_at) ?? 'sin hora registrada',
+    }
+  }
+  if (t.estado === 'anulado' || t.estado === 'cancelado') {
+    return { como: 'El turno fue anulado en el sistema', hora: 'sin hora registrada' }
+  }
+  if (t.estado === 'cubierto') {
+    return { como: 'El puesto fue dado por cubierto en el sistema', hora: 'sin hora registrada' }
+  }
+  return null
+}
+
+/** La novedad laboral del vigilador ese día, para la variable {{7}}. */
+export function textoNovedad(n?: { tipo?: string | null; observacion?: string | null } | null): string {
+  if (!n?.tipo) return 'Sin novedades'
+  const obs = (n.observacion ?? '').trim()
+  return obs ? `${n.tipo} – ${obs}` : n.tipo
+}
+
+/**
+ * Las 7 variables de `puesto_descubierto_resuelto`, en el orden en que la
+ * plantilla aprobada las numera. Meta rechaza el envío entero si la cantidad
+ * no coincide.
+ */
+export function variablesResueltoParaPlantilla(d: DatosMensaje, r: Resolucion, novedad: string): string[] {
+  return [d.objetivo, d.puesto, d.horario, d.vigilador, r.hora, r.como, novedad]
+}
+
+/** El texto de la plantilla aprobada, para el dry-run y la auditoría. */
+export function textoMensajeResuelto(d: DatosMensaje, r: Resolucion, novedad: string): string {
+  return '✅ Alerta resuelta – MERCOSUR SEGURIDAD\n'
+    + 'La alerta de puesto descubierto quedó resuelta y el servicio está cubierto.\n'
+    + `Objetivo: ${d.objetivo} – Puesto: ${d.puesto}\n`
+    + `Turno de ${d.horario}, a cargo del vigilador ${d.vigilador}.\n`
+    + `Se resolvió a las ${r.hora} de la siguiente manera: ${r.como}.\n`
+    + `Novedades registradas: ${novedad}. No hace falta ninguna otra acción de su parte.`
+}
+
 /**
  * El texto, para el dry-run y para el registro de auditoría.
  *

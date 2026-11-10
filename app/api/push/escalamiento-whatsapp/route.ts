@@ -17,7 +17,9 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
 import {
-  NIVEL, PLANTILLA, decidir, textoMensaje, variablesDeMensaje, variablesParaPlantilla,
+  NIVEL, NIVEL_RESUELTO, PLANTILLA, PLANTILLA_RESUELTO, decidir, resolucionDeTurno,
+  textoMensaje, textoMensajeResuelto, textoNovedad, variablesDeMensaje,
+  variablesParaPlantilla, variablesResueltoParaPlantilla,
 } from '@/lib/escalamiento-descubierto'
 import type { ClaveNivel, TurnoEscalable } from '@/lib/escalamiento-descubierto'
 import {
@@ -215,9 +217,13 @@ export async function GET(req: Request) {
   // 1000 filas de PostgREST: registros_asistencia crece sin límite (miles de
   // filas) y sin filtro la página devuelta no incluye los fichajes de hoy.
   const turnoIds = turnos.map(t => t.id)
+  // Las columnas extra son para el aviso de CIERRE: con qué se resolvió la
+  // alerta (fichaje / confirmación del supervisor) y su detalle. Misma consulta,
+  // mismo costo de red.
   const registrosRes = turnoIds.length
     ? await client.from('registros_asistencia')
-        .select('turno_id, hora_entrada_real').in('turno_id', turnoIds)
+        .select('turno_id, hora_entrada_real, tipo_registro, origen_cobertura, observacion, created_at')
+        .in('turno_id', turnoIds)
     : { data: [] as any[], error: null }
   const registros = registrosRes.data ?? []
 
@@ -248,7 +254,7 @@ export async function GET(req: Request) {
   const enviadosRes = turnoIds.length
     ? await client.from('notificaciones_enviadas')
         .select('usuario_id, turno_id, tipo')
-        .in('tipo', [NIVEL.supervisor, NIVEL.operativo])
+        .in('tipo', [NIVEL.supervisor, NIVEL.operativo, NIVEL_RESUELTO])
         .in('turno_id', turnoIds)
     : { data: [] as any[], error: null }
   if (enviadosRes.error) {
@@ -493,6 +499,181 @@ export async function GET(req: Request) {
         await client.from('notificaciones_enviadas')
           .insert({ usuario_id: usuarioId, turno_id: t.id, tipo: nivel })
           .then(() => {}, () => {})
+      }
+    }
+  }
+
+  // ── Cierre: alertas de descubierto que quedaron RESUELTAS ──────────────────
+  // Pedido de Gerencia (10/11/2026): quien recibió el +15/+30 recibe también
+  // CÓMO terminó — fichaje tardío, confirmación del supervisor, anulación — y
+  // si hubo novedad del vigilador ese día. Un solo aviso por (turno, persona).
+  //
+  // Los destinatarios salen de los envíos REALES de las últimas 48 h, por rango
+  // temporal y paginado — sin IN de turnos: un IN largo fue el 400 silencioso
+  // que rompió la deduplicación el 07/10/2026.
+  const descartesResuelto: Record<string, number> = {}
+  const alertadosPorTurno = new Map<string, Set<string>>()
+  let cierreOperativo = true
+  {
+    const enviosPreviosRes = await fetchPaginadoResult<{
+      turno_id: string | null; destinatario_id: string | null
+    }>((desde, hasta) =>
+      client.from('escalamiento_whatsapp_envios')
+        .select('turno_id, destinatario_id')
+        .in('nivel', [NIVEL.supervisor, NIVEL.operativo])
+        .eq('resultado', 'enviado')
+        .not('turno_id', 'is', null)
+        .gte('created_at', new Date(ahora.getTime() - 48 * 3600 * 1000).toISOString())
+        .order('id', { ascending: true })
+        .range(desde, hasta))
+    if (enviosPreviosRes.error) {
+      // FAIL-CLOSED sólo para esta sección: sin saber a quién se alertó no hay
+      // a quién cerrarle. Los +15/+30 ya salieron y las rondas no dependen de
+      // esto, así que la corrida sigue.
+      cierreOperativo = false
+      descartesResuelto.lectura_envios_fallo = 1
+    } else {
+      for (const e of enviosPreviosRes.data) {
+        if (!e.turno_id || !e.destinatario_id) continue
+        const set = alertadosPorTurno.get(e.turno_id) ?? new Set<string>()
+        set.add(e.destinatario_id)
+        alertadosPorTurno.set(e.turno_id, set)
+      }
+    }
+  }
+
+  // Sólo los turnos alertados que HOY tienen una resolución clasificable.
+  const candidatosResueltos = cierreOperativo
+    ? turnos
+        .filter(t => alertadosPorTurno.has(t.id))
+        .map(t => ({
+          t,
+          res: resolucionDeTurno(t, (registros as any[]).find(r => r.turno_id === t.id)),
+        }))
+        .filter((x): x is { t: TurnoEscalable; res: NonNullable<ReturnType<typeof resolucionDeTurno>> } => x.res !== null)
+    : []
+
+  // La novedad laboral del vigilador ese día, SOLO de los candidatos. Si no se
+  // puede leer, no se envía: afirmar "Sin novedades" sin haber mirado sería
+  // exactamente la información engañosa que este aviso viene a evitar.
+  const novedadesPorGuardia = new Map<string, Array<{ tipo: string | null; observacion: string | null; fecha_desde: string; fecha_hasta: string | null }>>()
+  {
+    const guardiaIds = Array.from(new Set(
+      candidatosResueltos.map(x => x.t.guardia_id).filter(Boolean),
+    )) as string[]
+    if (guardiaIds.length > 0) {
+      const novedadesRes = await client.from('novedades_laborales')
+        .select('empleado_id, tipo, observacion, fecha_desde, fecha_hasta')
+        .in('empleado_id', guardiaIds)
+        .lte('fecha_desde', hoy)
+        .or(`fecha_hasta.gte.${ayer},fecha_hasta.is.null`)
+      if (novedadesRes.error) {
+        cierreOperativo = false
+        descartesResuelto.lectura_novedades_fallo = 1
+      } else {
+        for (const n of (novedadesRes.data ?? []) as any[]) {
+          const lista = novedadesPorGuardia.get(n.empleado_id) ?? []
+          lista.push(n)
+          novedadesPorGuardia.set(n.empleado_id, lista)
+        }
+      }
+    }
+  }
+
+  if (cierreOperativo) {
+    const plantillaResuelto = process.env.WHATSAPP_PLANTILLA_RESUELTO || PLANTILLA_RESUELTO
+    for (const { t, res } of candidatosResueltos) {
+      const objetivo = objetivos.find((o: any) => o.id === t.objetivo_id)
+      if ((objetivo as any)?.es_prueba) {
+        descartesResuelto.objetivo_es_prueba = (descartesResuelto.objetivo_es_prueba ?? 0) + 1
+        continue
+      }
+      const novedadDelDia = (novedadesPorGuardia.get(t.guardia_id ?? '') ?? [])
+        .find(n => n.fecha_desde <= t.fecha && (n.fecha_hasta == null || n.fecha_hasta >= t.fecha))
+      const novedad = textoNovedad(novedadDelDia)
+      const vars = variablesDeMensaje(t, {
+        objetivo: (objetivo as any)?.nombre, puesto: puestos.get(t.puesto_id ?? '') ?? null,
+        vigilador: nombreDe(t.guardia_id), supervisor: null,
+      })
+      const texto = textoMensajeResuelto(vars, res, novedad)
+
+      for (const usuarioId of Array.from(alertadosPorTurno.get(t.id) ?? [])) {
+        const clave = `${usuarioId}|${t.id}|${NIVEL_RESUELTO}`
+        if (yaAvisados.has(clave)) {
+          descartesResuelto.ya_avisado = (descartesResuelto.ya_avisado ?? 0) + 1
+          continue
+        }
+
+        const u = usuarios.find((x: any) => x.id === usuarioId)
+        const tel = normalizarTelefonoAr(u?.telefono)
+        if (!tel.e164) {
+          acciones.push({
+            turno: t.id, nivel: NIVEL_RESUELTO, destinatario: nombreDe(usuarioId),
+            descartado: tel.motivo === 'vacio' ? 'SIN_TELEFONO' : 'TELEFONO_INVALIDO',
+            telefonoCargado: tel.original,
+          })
+          filasAuditoria.push({
+            turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
+            guardia_id: t.guardia_id, nivel: NIVEL_RESUELTO, destinatario_id: usuarioId,
+            proveedor: proveedor.nombre,
+            resultado: tel.motivo === 'vacio' ? 'sin_telefono' : 'telefono_invalido',
+            error: `teléfono cargado: ${tel.original || '(vacío)'}`,
+          })
+          continue
+        }
+
+        const destino = {
+          telefono: tel.e164,
+          plantilla: plantillaResuelto,
+          variables: variablesResueltoParaPlantilla(vars, res, novedad),
+        }
+
+        if (!enviarDeVerdad || !proveedor.configurado) {
+          acciones.push({
+            turno: t.id, nivel: NIVEL_RESUELTO, objetivo: vars.objetivo, puesto: vars.puesto,
+            horario: vars.horario, vigilador: vars.vigilador,
+            resolucion: res.como, hora: res.hora, novedad,
+            destinatario: nombreDe(usuarioId), telefono: tel.e164,
+            plantilla: destino.plantilla, enviaria: true, texto,
+          })
+          continue
+        }
+
+        if (!presupuesto.disponible()) {
+          descartesResuelto.presupuesto_corrida = (descartesResuelto.presupuesto_corrida ?? 0) + 1
+          continue
+        }
+
+        // Mismo RECLAMO ATÓMICO que los demás niveles: clave única por
+        // (etapa, turno, destinatario), tope diario bajo lock, y cualquier
+        // respuesta que no sea ok significa NO enviar.
+        const reclamo = await reclamarEnvio(client,
+          claveEnvioWhatsApp({ etapa: NIVEL_RESUELTO, evento: eventoTurno(t.id), destinatarioId: usuarioId }),
+          {
+            turno_id: t.id, objetivo_id: t.objetivo_id, puesto_id: t.puesto_id,
+            guardia_id: t.guardia_id, nivel: NIVEL_RESUELTO, destinatario_id: usuarioId,
+            telefono: tel.e164, plantilla: destino.plantilla,
+            proveedor: proveedor.nombre,
+          },
+          { topeDestinatarioDia: topeDiarioTurnos, topeEvento: null },
+        )
+        if (!reclamo.ok) {
+          descartesResuelto[`no_reclamado_${reclamo.motivo}`] = (descartesResuelto[`no_reclamado_${reclamo.motivo}`] ?? 0) + 1
+          continue
+        }
+        presupuesto.registrar()
+
+        const r = await proveedor.enviar(destino)
+        acciones.push({
+          turno: t.id, nivel: NIVEL_RESUELTO, destinatario: nombreDe(usuarioId),
+          telefono: tel.e164, ok: r.ok, error: r.error, intento: reclamo.intento,
+        })
+        await completarEnvio(client, reclamo.id as string, r)
+        if (r.ok) {
+          await client.from('notificaciones_enviadas')
+            .insert({ usuario_id: usuarioId, turno_id: t.id, tipo: NIVEL_RESUELTO })
+            .then(() => {}, () => {})
+        }
       }
     }
   }
@@ -749,6 +930,8 @@ export async function GET(req: Request) {
     turnosEvaluados: turnos.length,
     accionesNivel15: acciones.filter(a => a.nivel === NIVEL.supervisor).length,
     accionesNivel30: acciones.filter(a => a.nivel === NIVEL.operativo).length,
+    accionesResueltas: acciones.filter(a => a.nivel === NIVEL_RESUELTO).length,
+    descartesResuelto,
     rondasPendientesEvaluadas: rondasNoIniciadas.length,
     accionesRonda: acciones.filter(a => a.nivel === NIVEL_RONDA).length,
     descartes,
