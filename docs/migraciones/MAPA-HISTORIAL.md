@@ -4,27 +4,35 @@ Foto al **2026-11-04** · main `b79d32d` · proyecto `rngdjslzfcjtepgzmzrs` · v
 
 > **Sólo documentación.** Nada de esto se ejecutó. Para normalizar el historial ver [PROCEDIMIENTO-NORMALIZACION.md](./PROCEDIMIENTO-NORMALIZACION.md). **Nunca correr `supabase db push` contra producción** hasta terminar ese procedimiento.
 
+## Actualización 10/11/2026
+
+- Con la CLI oficial y el login de Juan Cruz se registraron con `migration repair --status applied` las **11 versiones** posteriores a esta foto: `20261204120000`, `20261205100000`, `20261205100100`, `20261205100200`, `20261205120000`, `20261205120100`, `20261205120200`, `20261206100000`, `20261206120000`, `20261207100000`, `20261207100100`. Las 10 primeras se registraron juntas y `20261207100100` aparte, después de aplicar y verificar la etapa B de #381.
+- `repair` sólo inserta filas en el historial: **no ejecutó** el SQL de esos archivos, que ya estaba aplicado.
+- El historial pasó de **82 a 93 filas**. Las 82 anteriores quedaron idénticas (huella de version, name, created_by, statements y rollback), incluida la fila MCP `20261105111031` del 05/11, gemela de `20261205100000`, que se conserva.
+- Los lotes de normalización L1–L6 **siguen sin ejecutar** (ver [PROCEDIMIENTO-NORMALIZACION.md](./PROCEDIMIENTO-NORMALIZACION.md)).
+- En `supabase/migrations` hay 4 archivos nuevos (`20261208*`, de #385–#387) que no están en el mapa. Son migraciones nuevas: se suman al mapa cuando se apliquen y registren.
+
 ## Resumen
 
-- **293 archivos** en `supabase/migrations` (268 versiones distintas).
-- **81 filas** en `supabase_migrations.schema_migrations` (el historial empieza el 01/09/2026). Las 81 corresponden a un archivo; **ninguna fila remota queda sin archivo**.
+- **303 archivos** en el mapa (268 + 10 = 278 versiones distintas): los 293 de la foto del 04/11 y 10 de noviembre/diciembre.
+- **93 filas** en `supabase_migrations.schema_migrations` al 10/11 (81 de la foto, la fila MCP `20261105111031` del 05/11 y 11 registradas el 10/11; el historial empieza el 01/09/2026). Todas corresponden a un archivo; **ninguna fila remota queda sin archivo**.
 
 | Estado | Archivos | Qué significa |
 |---|---:|---|
-| `REGISTRADA_MISMA_VERSION` | 3 | Registrada con la misma versión que el archivo. Nada que hacer. |
+| `REGISTRADA_MISMA_VERSION` | 14 | Registrada con la misma versión que el archivo. Nada que hacer. |
 | `REGISTRADA_OTRA_VERSION` | 78 | Registrada, pero con la fecha en que la aplicó el MCP (`apply_migration`) en vez de la del archivo. Hay que registrar la versión del archivo y, al final, retirar la fila "MCP". |
-| `APLICADA_A_MANO_SIN_REGISTRO` | 206 | Su contenido está en la base (auditoría 04/11) pero se aplicó desde el editor y no figura en el historial. Hay que registrarla. |
+| `APLICADA_A_MANO_SIN_REGISTRO` | 205 | Su contenido está en la base (auditoría 04/11) pero se aplicó desde el editor y no figura en el historial. Hay que registrarla. |
 | `FALTA_REALMENTE` | 1 | Su contenido NO está en la base. No registrar. |
 | `OBSOLETA_BORRADOR` | 5 | Borrador, obsoleta, sin efecto o rollback mal ubicado. Ver nota de cada una. |
 
-Piso actual (última versión de main): **`20261204120000`**. Toda migración nueva debe tener un número mayor (lo controla `npm run migraciones:guard`).
+Piso actual (última versión del mapa): **`20261207100100`**. Toda migración nueva debe tener un número mayor (lo controla `npm run migraciones:guard`).
 
 ## Criterio
 
 1. **Registradas:** se leyó `select version, name, created_by from supabase_migrations.schema_migrations` (sin `statements`). Si `name` empieza con 14 dígitos es el nombre del archivo; si no, se buscó el archivo con ese sufijo. Dos casos se resolvieron a mano: `protocolos_objetivo_etapa1` → `20261022120000_protocolos_objetivo.sql` y `protocolos_carga_inicial_aldo` → `20261022130000_protocolos_carga_inicial.sql`.
 2. **Aplicadas a mano:** no se repitió la comparación completa. Se usó el resultado de la auditoría del 04/11 (`diff-objetos.json`, `diff-funciones.txt`, `AUDITORIA-MAIN-VS-PRODUCCION-2026-11-04.md`): todo archivo cuyos objetos existen y no figura entre los faltantes se considera aplicado. Los "faltantes" de la comparación que resultaron esperados (columnas renombradas después, índices reemplazados, nombres truncados a 63 caracteres, artefactos del parser como `.and` o `:trg_`) quedan anotados en la nota del archivo.
 3. **Verificación puntual (SELECT al catálogo, 04/11):** los dos `_rollback.sql` que están dentro de `migrations/` **no** se aplicaron (`evidencia_analisis.ronda_punto_id`, la vista `ia_metricas_punto` y `ronda_punto_referencias.origen` existen); `cambios_guardia.turno_saliente_id/turno_entrante_id` y `reemplazos_guardia` no existen; `ix_liq_sueldo_mensual_persona` fue reemplazado por `ix_liq_sueldo_mensual_usuario`; la política de `objetivo_diagnosticos_gps` existe con el nombre truncado.
-4. `20261204120000_facturacion_seguro_periodo` está aplicada (verificada objeto por objeto el 04/11) y **no** registrada.
+4. `20261204120000_facturacion_seguro_periodo` estaba aplicada (verificada objeto por objeto el 04/11) y no registrada. **Se registró el 10/11/2026.**
 5. **Funciones con cuerpo distinto:** varias migraciones reescriben funciones en forma dinámica (`pg_get_functiondef` + `replace`) y hay arreglos hechos en vivo. Eso no cambia la categoría (el objeto existe), pero queda en la nota. Para tocar cualquiera de esas funciones, la referencia es la definición viva de producción.
 
 ## Excepciones: lo que NO se registra como aplicado
@@ -151,8 +159,20 @@ No se renombra nada en este PR: renombrar un archivo cambia su versión y, una v
 | `20261103233614` | 20261201140000_facturacion_cuentas_corrientes | `20261201140000_facturacion_cuentas_corrientes.sql` | versión MCP |
 | `20261103233633` | 20261201150000_facturacion_vencimientos_intereses | `20261201150000_facturacion_vencimientos_intereses.sql` | versión MCP |
 | `20261104133105` | 20261203120000_baja_embargo_ovejero_993 | `20261203120000_baja_embargo_ovejero_993.sql` | versión MCP |
+| `20261105111031` | reconciliar_funciones_solo_produccion | `20261205100000_reconciliar_funciones_solo_produccion.sql` | versión MCP |
 | `20261202120000` | 20261202120000_facturacion_grupos_factura | `20261202120000_facturacion_grupos_factura.sql` | misma versión |
 | `20261203130000` | 20261203130000_facturacion_reagrupar_atomico | `20261203130000_facturacion_reagrupar_atomico.sql` | misma versión |
+| `20261204120000` | facturacion_seguro_periodo | `20261204120000_facturacion_seguro_periodo.sql` | misma versión |
+| `20261205100000` | reconciliar_funciones_solo_produccion | `20261205100000_reconciliar_funciones_solo_produccion.sql` | misma versión |
+| `20261205100100` | quitar_pausar_ronda_sin_causa | `20261205100100_quitar_pausar_ronda_sin_causa.sql` | misma versión |
+| `20261205100200` | textos_acentos_mensajes | `20261205100200_textos_acentos_mensajes.sql` | misma versión |
+| `20261205120000` | seguridad_rls_politicas_abiertas | `20261205120000_seguridad_rls_politicas_abiertas.sql` | misma versión |
+| `20261205120100` | seguridad_funciones_anon | `20261205120100_seguridad_funciones_anon.sql` | misma versión |
+| `20261205120200` | seguridad_search_path | `20261205120200_seguridad_search_path.sql` | misma versión |
+| `20261206100000` | seguridad_montos_liquidacion_gate | `20261206100000_seguridad_montos_liquidacion_gate.sql` | misma versión |
+| `20261206120000` | facturacion_arca_ambientes | `20261206120000_facturacion_arca_ambientes.sql` | misma versión |
+| `20261207100000` | usuarios_cuentas_bancarias_rpc | `20261207100000_usuarios_cuentas_bancarias_rpc.sql` | misma versión |
+| `20261207100100` | usuarios_revocar_cuenta_bancaria | `20261207100100_usuarios_revocar_cuenta_bancaria.sql` | misma versión |
 
 ## Todos los archivos
 
@@ -450,7 +470,17 @@ No se renombra nada en este PR: renombrar un archivo cambia su versión y, una v
 | 290 | `20261202120000_facturacion_grupos_factura.sql` | REGISTRADA_MISMA_VERSION | `20261202120000` |  |
 | 291 | `20261203120000_baja_embargo_ovejero_993.sql` | REGISTRADA_OTRA_VERSION | `20261104133105` |  |
 | 292 | `20261203130000_facturacion_reagrupar_atomico.sql` | REGISTRADA_MISMA_VERSION | `20261203130000` |  |
-| 293 | `20261204120000_facturacion_seguro_periodo.sql` | APLICADA_A_MANO_SIN_REGISTRO |  | Aplicada y verificada objeto por objeto el 04/11 (10/10 controles), pero NO registrada en el historial. |
+| 293 | `20261204120000_facturacion_seguro_periodo.sql` | REGISTRADA_MISMA_VERSION | `20261204120000` | Aplicada y verificada objeto por objeto el 04/11 (10/10 controles); registrada el 10/11/2026 con migration repair (CLI oficial). |
+| 294 | `20261205100000_reconciliar_funciones_solo_produccion.sql` | REGISTRADA_MISMA_VERSION | `20261205100000` | Aplicada el 05/11 (#371) como la fila MCP 20261105111031, que se conserva; registrada con su versión el 10/11/2026 (migration repair). |
+| 295 | `20261205100100_quitar_pausar_ronda_sin_causa.sql` | REGISTRADA_MISMA_VERSION | `20261205100100` | Aplicada el 05/11 (#371); registrada el 10/11/2026 (migration repair). |
+| 296 | `20261205100200_textos_acentos_mensajes.sql` | REGISTRADA_MISMA_VERSION | `20261205100200` | Aplicada el 05/11 (#371); registrada el 10/11/2026 (migration repair). |
+| 297 | `20261205120000_seguridad_rls_politicas_abiertas.sql` | REGISTRADA_MISMA_VERSION | `20261205120000` | Aplicada el 05/11 (#370); registrada el 10/11/2026 (migration repair). |
+| 298 | `20261205120100_seguridad_funciones_anon.sql` | REGISTRADA_MISMA_VERSION | `20261205120100` | Aplicada el 05/11 (#370); registrada el 10/11/2026 (migration repair). |
+| 299 | `20261205120200_seguridad_search_path.sql` | REGISTRADA_MISMA_VERSION | `20261205120200` | Aplicada el 05/11 (#370); registrada el 10/11/2026 (migration repair). |
+| 300 | `20261206100000_seguridad_montos_liquidacion_gate.sql` | REGISTRADA_MISMA_VERSION | `20261206100000` | Aplicada por JC en el editor (#377, 05/11; md5 de las 5 funciones = archivo); registrada el 10/11/2026 (migration repair). |
+| 301 | `20261206120000_facturacion_arca_ambientes.sql` | REGISTRADA_MISMA_VERSION | `20261206120000` | Aplicada (#379; md5 de fact_emision_preparar = archivo); registrada el 10/11/2026 (migration repair). |
+| 302 | `20261207100000_usuarios_cuentas_bancarias_rpc.sql` | REGISTRADA_MISMA_VERSION | `20261207100000` | Etapa A de #381, aplicada por JC (05/11; md5 de usuarios_cuentas_bancarias = archivo); registrada el 10/11/2026 (migration repair). |
+| 303 | `20261207100100_usuarios_revocar_cuenta_bancaria.sql` | REGISTRADA_MISMA_VERSION | `20261207100100` | Etapa B de #381, aplicada el 10/11/2026 a las 11:34 AR desde el SQL Editor y verificada (B-03 OK); registrada el mismo día con un repair aparte. |
 
 ## Cómo regenerar
 

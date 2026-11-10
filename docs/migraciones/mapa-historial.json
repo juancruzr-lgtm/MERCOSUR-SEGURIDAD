@@ -1,22 +1,24 @@
 {
   "generado": "2026-11-04",
+  "actualizado": "2026-11-10 (main 8008a26): 11 versiones registradas con migration repair --status applied; las 82 filas anteriores sin cambios",
   "base_main": "b79d32d",
   "proyecto": "rngdjslzfcjtepgzmzrs",
   "fuentes": [
     "SELECT version, name, created_by FROM supabase_migrations.schema_migrations (81 filas, 04/11)",
     "diff-objetos.json / diff-funciones.txt (auditoría main vs producción 04/11)",
     "AUDITORIA-MAIN-VS-PRODUCCION-2026-11-04.md",
-    "SELECT puntuales al catálogo 04/11 (rollbacks, índices, políticas, cambios_guardia)"
+    "SELECT puntuales al catálogo 04/11 (rollbacks, índices, políticas, cambios_guardia)",
+    "SELECT version, name, created_by FROM supabase_migrations.schema_migrations (93 filas, 10/11, después de migration repair de 11 versiones)"
   ],
-  "piso_version": "20261204120000",
-  "total_archivos": 293,
-  "total_filas_remotas": 81,
+  "piso_version": "20261207100100",
+  "total_archivos": 303,
+  "total_filas_remotas": 93,
   "resumen": {
-    "APLICADA_A_MANO_SIN_REGISTRO": 206,
+    "APLICADA_A_MANO_SIN_REGISTRO": 205,
     "OBSOLETA_BORRADOR": 5,
     "FALTA_REALMENTE": 1,
     "REGISTRADA_OTRA_VERSION": 78,
-    "REGISTRADA_MISMA_VERSION": 3
+    "REGISTRADA_MISMA_VERSION": 14
   },
   "archivos": [
     {
@@ -3361,13 +3363,123 @@
     {
       "archivo": "20261204120000_facturacion_seguro_periodo.sql",
       "version": "20261204120000",
-      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
-      "version_remota": null,
-      "nombre_remoto": null,
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261204120000",
+      "nombre_remoto": "facturacion_seguro_periodo",
       "formato": "OK",
       "version_compartida_con": [],
       "es_rollback": false,
-      "nota": "Aplicada y verificada objeto por objeto el 04/11 (10/10 controles), pero NO registrada en el historial."
+      "nota": "Aplicada y verificada objeto por objeto el 04/11 (10/10 controles); registrada el 10/11/2026 con migration repair (CLI oficial)."
+    },
+    {
+      "archivo": "20261205100000_reconciliar_funciones_solo_produccion.sql",
+      "version": "20261205100000",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261205100000",
+      "nombre_remoto": "reconciliar_funciones_solo_produccion",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada el 05/11 (#371) como la fila MCP 20261105111031, que se conserva; registrada con su versión el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261205100100_quitar_pausar_ronda_sin_causa.sql",
+      "version": "20261205100100",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261205100100",
+      "nombre_remoto": "quitar_pausar_ronda_sin_causa",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada el 05/11 (#371); registrada el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261205100200_textos_acentos_mensajes.sql",
+      "version": "20261205100200",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261205100200",
+      "nombre_remoto": "textos_acentos_mensajes",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada el 05/11 (#371); registrada el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261205120000_seguridad_rls_politicas_abiertas.sql",
+      "version": "20261205120000",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261205120000",
+      "nombre_remoto": "seguridad_rls_politicas_abiertas",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada el 05/11 (#370); registrada el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261205120100_seguridad_funciones_anon.sql",
+      "version": "20261205120100",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261205120100",
+      "nombre_remoto": "seguridad_funciones_anon",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada el 05/11 (#370); registrada el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261205120200_seguridad_search_path.sql",
+      "version": "20261205120200",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261205120200",
+      "nombre_remoto": "seguridad_search_path",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada el 05/11 (#370); registrada el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261206100000_seguridad_montos_liquidacion_gate.sql",
+      "version": "20261206100000",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261206100000",
+      "nombre_remoto": "seguridad_montos_liquidacion_gate",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada por JC en el editor (#377, 05/11; md5 de las 5 funciones = archivo); registrada el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261206120000_facturacion_arca_ambientes.sql",
+      "version": "20261206120000",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261206120000",
+      "nombre_remoto": "facturacion_arca_ambientes",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Aplicada (#379; md5 de fact_emision_preparar = archivo); registrada el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261207100000_usuarios_cuentas_bancarias_rpc.sql",
+      "version": "20261207100000",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261207100000",
+      "nombre_remoto": "usuarios_cuentas_bancarias_rpc",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Etapa A de #381, aplicada por JC (05/11; md5 de usuarios_cuentas_bancarias = archivo); registrada el 10/11/2026 (migration repair)."
+    },
+    {
+      "archivo": "20261207100100_usuarios_revocar_cuenta_bancaria.sql",
+      "version": "20261207100100",
+      "estado": "REGISTRADA_MISMA_VERSION",
+      "version_remota": "20261207100100",
+      "nombre_remoto": "usuarios_revocar_cuenta_bancaria",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Etapa B de #381, aplicada el 10/11/2026 a las 11:34 AR desde el SQL Editor y verificada (B-03 OK); registrada el mismo día con un repair aparte."
     }
   ],
   "remoto": [
@@ -3846,6 +3958,12 @@
       "tipo": "VERSION_MCP"
     },
     {
+      "version": "20261105111031",
+      "name": "reconciliar_funciones_solo_produccion",
+      "archivo": "20261205100000_reconciliar_funciones_solo_produccion.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
       "version": "20261202120000",
       "name": "20261202120000_facturacion_grupos_factura",
       "archivo": "20261202120000_facturacion_grupos_factura.sql",
@@ -3855,6 +3973,72 @@
       "version": "20261203130000",
       "name": "20261203130000_facturacion_reagrupar_atomico",
       "archivo": "20261203130000_facturacion_reagrupar_atomico.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261204120000",
+      "name": "facturacion_seguro_periodo",
+      "archivo": "20261204120000_facturacion_seguro_periodo.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261205100000",
+      "name": "reconciliar_funciones_solo_produccion",
+      "archivo": "20261205100000_reconciliar_funciones_solo_produccion.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261205100100",
+      "name": "quitar_pausar_ronda_sin_causa",
+      "archivo": "20261205100100_quitar_pausar_ronda_sin_causa.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261205100200",
+      "name": "textos_acentos_mensajes",
+      "archivo": "20261205100200_textos_acentos_mensajes.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261205120000",
+      "name": "seguridad_rls_politicas_abiertas",
+      "archivo": "20261205120000_seguridad_rls_politicas_abiertas.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261205120100",
+      "name": "seguridad_funciones_anon",
+      "archivo": "20261205120100_seguridad_funciones_anon.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261205120200",
+      "name": "seguridad_search_path",
+      "archivo": "20261205120200_seguridad_search_path.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261206100000",
+      "name": "seguridad_montos_liquidacion_gate",
+      "archivo": "20261206100000_seguridad_montos_liquidacion_gate.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261206120000",
+      "name": "facturacion_arca_ambientes",
+      "archivo": "20261206120000_facturacion_arca_ambientes.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261207100000",
+      "name": "usuarios_cuentas_bancarias_rpc",
+      "archivo": "20261207100000_usuarios_cuentas_bancarias_rpc.sql",
+      "tipo": "MISMA_VERSION"
+    },
+    {
+      "version": "20261207100100",
+      "name": "usuarios_revocar_cuenta_bancaria",
+      "archivo": "20261207100100_usuarios_revocar_cuenta_bancaria.sql",
       "tipo": "MISMA_VERSION"
     }
   ],
@@ -4139,8 +4323,7 @@
       "20261201130000",
       "20261201140000",
       "20261201150000",
-      "20261203120000",
-      "20261204120000"
+      "20261203120000"
     ],
     "L6_reverted_mcp": [
       "20260901200636",
@@ -4229,7 +4412,18 @@
     "ya_registradas_misma_version": [
       "20260909130000",
       "20261202120000",
-      "20261203130000"
+      "20261203130000",
+      "20261204120000",
+      "20261205100000",
+      "20261205100100",
+      "20261205100200",
+      "20261205120000",
+      "20261205120100",
+      "20261205120200",
+      "20261206100000",
+      "20261206120000",
+      "20261207100000",
+      "20261207100100"
     ]
   }
 }
