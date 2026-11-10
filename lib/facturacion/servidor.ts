@@ -10,6 +10,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchPaginado } from '@/lib/fetch-paginado'
 import { fechaArgentina, sumarDias } from '@/lib/periodo-argentina'
 import { periodoFacturacion, servicioActivoEnPeriodo, type ReglaPeriodo } from './periodos'
+import { plazoPagoDias } from './vto-arca'
 import { horasDelObjetivo, minutosAprobables, type RegistroFacturable, type TurnoFacturable } from './horas'
 import {
   agruparObjetivos, calcularPrefactura, clavePrestacion, estadoSugerido, objetivosEnOtraPrefactura, renglonesPorObjetivo, tarifasParaObjetivo, textoPrecargado,
@@ -269,7 +270,8 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
           lineas: r.lineas, neto_c: r.importes?.neto ?? null, iva_c: r.importes?.iva ?? null, total_c: r.importes?.total ?? null,
           requisitos: r.requisitos, avisos: r.avisos, cuit_receptor: k.cliente?.cuit ?? null, tipo_comprobante: tipoComp,
           // El vencimiento no se recalcula al regenerar: si no, cada regeneración cambiaría la huella y haría caer la aprobación.
-          punto_venta: puntoVenta, fecha_vencimiento: existente?.fecha_vencimiento ?? sumarDias(hoy, Number(k.dias_vencimiento ?? 0)), oc_id: ocCubre?.id ?? null,
+          // Plazo: el del contrato o, si no tiene otro, 30 días.
+          punto_venta: puntoVenta, fecha_vencimiento: existente?.fecha_vencimiento ?? sumarDias(hoy, plazoPagoDias(k.dias_vencimiento)), oc_id: ocCubre?.id ?? null,
           proxima_accion: r.requisitos[0]?.detalle ?? (r.importes ? 'Revisar y aprobar' : null),
         }
         if (!existente) {

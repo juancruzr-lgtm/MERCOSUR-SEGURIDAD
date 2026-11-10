@@ -18,7 +18,8 @@ import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion }
 import DetalleHoras from './DetalleHoras'
 import { recalcular, useOperacion, type Periodo } from './periodo'
 import { nombreDelMes } from '@/lib/facturacion/periodo-seguro'
-import { rangoFechasMes } from '@/lib/periodo-argentina'
+import { fechaArgentina, rangoFechasMes } from '@/lib/periodo-argentina'
+import { plazoPagoDias, vtoPagoParaArca } from '@/lib/facturacion/vto-arca'
 
 const ESTADOS_FILTRO: Array<[string, string]> = [
   ['para_revisar', 'Para revisar'], ['sin_aceptar', 'Horas sin aceptar'],
@@ -60,7 +61,7 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
     const { desde: inicioMes, ultimoDia: finMes } = rangoFechasMes(mes)
     const [pref, contratos, vincs, tarifas, aps] = await Promise.all([
       leer('fact_prefacturas', q => q.eq('periodo_mes', mes).neq('estado', 'descartada').order('created_at'),
-        '*, cliente:fact_clientes(razon_social, cuit, condicion_iva), objetivo:objetivos(nombre), oc:fact_ordenes_compra(numero, tipo), contrato:fact_contratos(nombre, modalidad, agrupacion, requiere_portal, envio_conjunto_planilla, requisitos)'),
+        '*, cliente:fact_clientes(razon_social, cuit, condicion_iva), objetivo:objetivos(nombre), oc:fact_ordenes_compra(numero, tipo), contrato:fact_contratos(nombre, modalidad, agrupacion, requiere_portal, envio_conjunto_planilla, requisitos, dias_vencimiento)'),
       leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, agrupacion, separar_diurna_nocturna, regla_periodo, dia_corte, cliente:fact_clientes(razon_social, cuit)'),
       leer('fact_contrato_objetivos', q => q.is('anulado_at', null), '*, objetivo:objetivos(nombre)'),
       leer('fact_tarifas', q => q.lte('vigencia_desde', finMes).or(`vigencia_hasta.is.null,vigencia_hasta.gte.${inicioMes}`).order('vigencia_desde', { ascending: false })),
@@ -429,7 +430,9 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
             <tr><td style={S.td}><b>Neto / IVA / Total</b></td><td style={S.num}>{pesos(p.neto_c)} + {pesos(p.iva_c)}</td><td style={S.num}><b>{pesos(p.total_c)}</b></td></tr>
           </tbody></table>
           <div style={S.sub}>Horas programadas {horas(p.minutos_programados)} · cubiertas {horas(p.minutos_cubiertos)} · aprobadas para facturar {horas(p.minutos_aprobados)} · descubiertas no facturadas {horas(p.minutos_descubiertos)}</div>
-          <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? 'el de la configuración'} · vto. de pago informado a ARCA {fecha(p.fecha_vencimiento)} (el vencimiento comercial sale del contrato)</div>
+          <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? 'el de la configuración'} · vto. de pago informado a ARCA {fecha(p.fecha_vencimiento)}
+            {p.fecha_vencimiento && p.fecha_vencimiento < fechaArgentina() && <> (ya pasó: si se emite hoy, se informa {fecha(vtoPagoParaArca(p.fecha_vencimiento, fechaArgentina(), p.contrato?.dias_vencimiento))}, {plazoPagoDias(p.contrato?.dias_vencimiento)} días desde la emisión, y esa fecha sale en la factura)</>}
+            {' '}(el vencimiento comercial sale del contrato)</div>
           <Trazabilidad p={p} historial={extra.historial} usuarios={usuarios} />
           <ControlFacturaReal p={p} />
 

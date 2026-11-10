@@ -4,13 +4,15 @@
 import { useEffect, useState } from 'react'
 import { leer, rpc, MODALIDADES, REQUISITOS } from '@/lib/facturacion/datos'
 import { cuitValido } from '@/lib/facturacion/comprobantes'
+import { PLAZO_PAGO_POR_DEFECTO } from '@/lib/facturacion/vto-arca'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { DiagnosticoArca } from './DiagnosticoArca'
 import { CONDICIONES_IVA, CondicionesContrato, DatosEmisor, DatosFiscalesCliente, resumenCondiciones } from './Condiciones'
 
 const CONTRATO_VACIO = {
   nombre: '', modalidad: 'por_hora', agrupacion: 'cliente', regla_periodo: 'mes_calendario', dia_corte: '', separar_diurna_nocturna: false, superposicion: 'unir',
-  franja_nocturna_desde: '', franja_nocturna_hasta: '', dias_vencimiento: '', requisitos: [] as string[], canal_entrega: 'email',
+  // Plazo de pago: 30 días por defecto (Gerencia, 10/11/2026); se cambia si el contrato dice otro.
+  franja_nocturna_desde: '', franja_nocturna_hasta: '', dias_vencimiento: String(PLAZO_PAGO_POR_DEFECTO), requisitos: [] as string[], canal_entrega: 'email',
   envio_conjunto_planilla: false, requiere_portal: false, tipo_comprobante: '', pendientes: '', vigencia_desde: '', vigencia_hasta: '', estado: 'borrador', notas: '',
 }
 
@@ -129,7 +131,7 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
         <Campo t="Facturación"><select style={CAMPO} value={k.agrupacion} onChange={e => setK({ ...k, agrupacion: e.target.value })}><option value="cliente">Una factura por cliente</option><option value="objetivo">Una factura por objetivo</option></select></Campo>
         <Campo t="Período"><select style={CAMPO} value={k.regla_periodo} onChange={e => setK({ ...k, regla_periodo: e.target.value })}><option value="mes_calendario">Mes calendario</option><option value="corte">Corte (día N al N-1)</option></select></Campo>
         {k.regla_periodo === 'corte' && <Campo t="Día de inicio del corte"><input style={CAMPO} placeholder="p. ej. 26" value={k.dia_corte} onChange={e => setK({ ...k, dia_corte: e.target.value })} /></Campo>}
-        <Campo t="Plazo de pago (días)"><input style={CAMPO} value={k.dias_vencimiento} onChange={e => setK({ ...k, dias_vencimiento: e.target.value })} /></Campo>
+        <Campo t="Plazo de pago (días)"><input style={CAMPO} placeholder={`${PLAZO_PAGO_POR_DEFECTO} si no dice otro`} value={k.dias_vencimiento} onChange={e => setK({ ...k, dias_vencimiento: e.target.value })} /></Campo>
         <Campo t="Comprobante"><select style={CAMPO} value={k.tipo_comprobante} onChange={e => setK({ ...k, tipo_comprobante: e.target.value })}><option value="">Según IVA del cliente</option><option value="1">Factura A</option><option value="6">Factura B</option><option value="201">FCE A</option></select></Campo>
         <Campo t="Entrega"><select style={CAMPO} value={k.canal_entrega} onChange={e => setK({ ...k, canal_entrega: e.target.value })}>{['email', 'portal', 'papel'].map(x => <option key={x}>{x}</option>)}</select></Campo>
         <Campo t="Turnos superpuestos del mismo puesto"><select style={CAMPO} value={k.superposicion} onChange={e => setK({ ...k, superposicion: e.target.value })}><option value="unir">Facturar una vez</option><option value="sumar">Sumar (sólo si el contrato lo prevé)</option></select></Campo>
