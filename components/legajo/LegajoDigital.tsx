@@ -25,13 +25,14 @@ import BandejaHistorico from '@/components/legajo/BandejaHistorico'
 import HabilitacionLegajo from '@/components/legajo/HabilitacionLegajo'
 import DiferenciasArca from '@/components/legajo/DiferenciasArca'
 import TableroHabilitaciones from '@/components/habilitacion/TableroHabilitaciones'
+import ControlContrasenas from '@/components/legajo/ControlContrasenas'
 import { controlaHabilitacion } from '@/lib/legajo-habilitacion'
 import { esFiltroRevision } from '@/lib/legajo-historico'
 
-export type SeccionLegajo = 'credenciales' | 'arca' | 'datos' | 'documentacion' | 'historico' | 'habilitacion'
+export type SeccionLegajo = 'credenciales' | 'arca' | 'datos' | 'documentacion' | 'historico' | 'contrasenas' | 'habilitacion'
 
 const SECCIONES: [SeccionLegajo, string][] = [
-  ['credenciales', 'Credenciales'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'], ['arca', 'Diferencias con ARCA'],
+  ['credenciales', 'Credenciales'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'], ['arca', 'Diferencias con ARCA'], ['contrasenas', 'Contraseñas'],
 ]
 
 const pestaña = (activa: boolean): React.CSSProperties => ({
@@ -70,6 +71,7 @@ export default function LegajoDigital({ inicial = 'credenciales', user, empleado
       {seccion === 'datos' && <ControlCambiosDatos />}
       {seccion === 'documentacion' && <ControlDocumentacion onVerHistorico={(texto, categoria) => { setFiltroHistorico({ texto, categoria }); setSeccion('historico') }} />}
       {seccion === 'historico' && <BandejaHistorico key={filtroHistorico ? filtroHistorico.texto + filtroHistorico.categoria : 'todo'} busquedaInicial={filtroHistorico?.texto} categoriaInicial={filtroHistorico?.categoria} verInicial={filtroHistorico?.texto === empleadoHistorico ? verInicial : undefined} />}
+      {seccion === 'contrasenas' && <ControlContrasenas />}
       {seccion === 'habilitacion' && controlaHabilitacion(user) && <HabilitacionLegajo />}
     </div>
   )

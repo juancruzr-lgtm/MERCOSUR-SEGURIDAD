@@ -1931,6 +1931,9 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   }
 
   const resetPassword = async (g: Usuario) => {
+    // Recuperación de contraseña: vuelve al DNI y queda cambio obligatorio en su
+    // próximo ingreso (/api/reset-user-password registra quién lo hizo).
+    if (!window.confirm(`¿Restablecer la contraseña de ${g.apellido}, ${g.nombre}?\n\nVa a poder ingresar con su DNI y en ese momento la app le va a pedir una contraseña nueva.`)) return
     setAccionLoading(`reset-${g.id}`)
     setMensaje(null)
 
@@ -1946,7 +1949,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         setMensaje({ tipo:'error', texto:data.error || 'No se pudo resetear la contraseña' })
       } else {
         if (data.user) setGuardias((prev: any[]) => prev.map(x => x.id === g.id ? fusionarFila(x, data.user) : x))
-        setMensaje({ tipo:'ok', texto:`✓ ${data.message || 'Contraseña reseteada al DNI'}` })
+        setMensaje({ tipo:'ok', texto:`✓ ${data.message || 'Contraseña restablecida al DNI'}` })
       }
     } catch (error) {
       setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
@@ -2317,7 +2320,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                         onClick={() => resetPassword(g)}
                         disabled={accionLoading === `reset-${g.id}`}
                       >
-                        {accionLoading === `reset-${g.id}` ? 'Reseteando...' : 'Reset DNI'}
+                        {accionLoading === `reset-${g.id}` ? 'Restableciendo...' : 'Restablecer contraseña'}
                       </button>
                     )}
                   </div>

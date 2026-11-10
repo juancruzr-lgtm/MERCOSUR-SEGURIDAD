@@ -12,6 +12,7 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import { mensajeErrorCambioPassword, validarNuevaPassword } from '@/lib/auth-mensajes'
+import { registrarCambioPassword } from '@/lib/acceso-password-dni'
 
 type Tipo = 'ok' | 'error'
 
@@ -43,6 +44,7 @@ export default function NuevaPassword({
   onListo,
   onCancelar,
   textoCancelar = 'Cancelar',
+  dni,
 }: {
   estilos?: EstilosNuevaPassword
   aviso?: ReactNode
@@ -50,6 +52,8 @@ export default function NuevaPassword({
   onListo?: () => void
   onCancelar?: () => void
   textoCancelar?: string
+  /** DNI de la persona: la contraseña nueva no puede ser el DNI. */
+  dni?: string | null
 }) {
   const e = { ...BASE, ...estilos }
   const [nueva, setNueva] = useState('')
@@ -59,13 +63,16 @@ export default function NuevaPassword({
 
   const guardar = async () => {
     setMensaje(null)
-    const invalida = validarNuevaPassword(nueva, confirmar)
+    const invalida = validarNuevaPassword(nueva, confirmar, dni)
     if (invalida) { setMensaje({ texto: invalida, tipo: 'error' }); return }
 
     setGuardando(true)
     try {
       const { error } = await supabase.auth.updateUser({ password: nueva })
       if (error) { setMensaje({ texto: mensajeErrorCambioPassword(error), tipo: 'error' }); return }
+      // Registrar que se cambió (sin la contraseña): la base verifica que ya no
+      // es el DNI y quita el cambio obligatorio. Si falla, no se bloquea.
+      await registrarCambioPassword()
       setNueva('')
       setConfirmar('')
       setMensaje({ texto: 'Contraseña actualizada correctamente.', tipo: 'ok' })

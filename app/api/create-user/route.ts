@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { repairEmployeeAuthUser } from '../_lib/auth-repair'
 import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
 import { tieneCapacidad, alcanceDe } from '@/lib/capacidades'
+import { marcarCambioObligatorio } from '../_lib/acceso-password'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -61,6 +62,14 @@ export async function POST(req: NextRequest) {
     if (resultado.action === 'omitido') return NextResponse.json({ error: resultado.motivo }, { status: 400 })
     if (resultado.action === 'error') return NextResponse.json({ error: resultado.error }, { status: 400 })
 
+    // Cuenta nueva (o recreada) con contraseña inicial = DNI: en su primer
+    // ingreso la app le pide una contraseña personal (acceso-password.ts).
+    let avisoCambio: string | null = null
+    if (resultado.action === 'creado' || resultado.action === 'recreado') {
+      const m = await marcarCambioObligatorio(admin.client, usuario.id, 'alta', acceso.perfil.id)
+      if (!m.ok) avisoCambio = ' Atención: no se pudo marcar el cambio de contraseña obligatorio.'
+    }
+
     const message =
       resultado.action === 'creado'
         ? 'Usuario Auth creado correctamente'
@@ -74,7 +83,7 @@ export async function POST(req: NextRequest) {
       ok: true,
       action: resultado.action,
       user: resultado.user,
-      message,
+      message: message + (avisoCambio ?? ''),
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error interno del servidor'

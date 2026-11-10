@@ -26,6 +26,7 @@ import dynamic from 'next/dynamic'
 import { shellDeUsuario } from '@/lib/capacidades'
 import { supabase } from '@/lib/supabase'
 import { limpiarRecuperacionPendiente, recuperacionPendientePara, tomarErrorEnlace } from '@/lib/auth-recuperacion'
+import { consultarCambioPassword } from '@/lib/acceso-password-dni'
 import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
 import { MENSAJES_SESION, verificarSesion } from '@/lib/sesion-perfil'
 import { recargarSiHayVersionNueva } from '@/lib/version-app'
@@ -50,6 +51,7 @@ type Estado =
   | { fase: 'login'; error?: string | null }
   | { fase: 'recuperacion' }
   | { fase: 'avisoEnlace'; perfil: any; error: string }
+  | { fase: 'cambioDni'; perfil: any; obligatorio: boolean }
   | { fase: 'sinVerificar'; detalle: string; intento: number; errorEnlace: string | null }
   | { fase: 'listo'; perfil: any }
 
@@ -59,6 +61,14 @@ export default function AppShell() {
 
   const entrar = useCallback(async (perfilBase: any) => {
     const perfil = await resolverDelegacionGerencia(perfilBase)
+    // Cuenta marcada con cambio obligatorio y contraseña = DNI (lo decide la base,
+    // lib/acceso-password-dni.ts): la estructura la elige ANTES de entrar al panel.
+    // El vigilador, dentro de su app (GuardiaMobile), nunca durante un fichaje.
+    // Si la consulta falla, no se bloquea.
+    if (shellDeUsuario(perfil) !== 'guardia') {
+      const p = await consultarCambioPassword()
+      if (p?.obligatorio) { setEstado({ fase: 'cambioDni', perfil, obligatorio: true }); return }
+    }
     setEstado({ fase: 'listo', perfil })
   }, [])
 
@@ -181,6 +191,28 @@ export default function AppShell() {
               setEstado({ fase: 'cargando' })
               void arrancar()
             }}
+          />
+        </div>
+      </div>
+    )
+  }
+  if (estado.fase === 'cambioDni') {
+    const { perfil } = estado
+    return (
+      <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#0a0e1a', padding:24, fontFamily:'sans-serif' }}>
+        <div role="dialog" aria-labelledby="cambio-dni-titulo" style={{ width:'100%', maxWidth:420, background:'#111827', border:'1px solid #334155', borderRadius:16, padding:28 }}>
+          <div id="cambio-dni-titulo" style={{ fontSize:20, fontWeight:800, color:'#f8fafc', marginBottom:8 }}>Elegí tu contraseña personal</div>
+          <div style={{ fontSize:13, color:'#94a3b8', marginBottom:20 }}>
+            Tu contraseña actual es tu número de DNI, un dato que conocen muchas personas.
+            Para proteger tu cuenta, elegí una contraseña propia. Tu email para ingresar no cambia.
+          </div>
+          <NuevaPassword
+            dni={perfil?.dni}
+            textoBoton="Guardar y entrar"
+            textoCancelar="Cerrar sesión"
+            // Sólo este dispositivo (#384): no se cierran sus otras sesiones.
+            onCancelar={() => { void salirDeEsteDispositivo() }}
+            onListo={() => { setEstado({ fase: 'listo', perfil }) }}
           />
         </div>
       </div>
