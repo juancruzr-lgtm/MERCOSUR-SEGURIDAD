@@ -53,6 +53,17 @@ export function diasAnualesLCT(antiguedadAnios: number): number {
   return 35
 }
 
+/**
+ * Devengadas MÉTODO EMPRESA (lo que manda, JC): sobre el TOTAL de la antigüedad
+ * (ingreso→baja) × 14/365, redondeo hacia arriba. null si falta alguna fecha.
+ * Reproduce los recibos reales (Paniagua 62 días → 3; Fulla). Las tomadas se
+ * restan aparte (devengadas − tomadas). El 1-cada-20 / escala LCT es sólo control.
+ */
+export function devengadasMetodoEmpresa(ingreso: string | null, baja: string | null): number | null {
+  if (!ingreso || !baja) return null
+  return Math.ceil(Math.round(dias(ingreso, baja) / 365 * 14 * 1e9) / 1e9)
+}
+
 export function resumenVacaciones(p: { ingreso: string | null; baja: string | null; tomadas: VacacionTomada[] }): ResumenVacaciones {
   const avisos: string[] = []
   const tomadas = p.tomadas.reduce((s, t) => s + (Number(t.dias) || 0), 0)
@@ -63,7 +74,7 @@ export function resumenVacaciones(p: { ingreso: string | null; baja: string | nu
   }
   const antiguedadDias = dias(p.ingreso, p.baja)
   const anios = antiguedadDias / 365
-  const devengadas = Math.ceil(Math.round(anios * 14 * 1e9) / 1e9)
+  const devengadas = devengadasMetodoEmpresa(p.ingreso, p.baja)!
   // Control LCT: proporcional al tiempo trabajado con la escala por antigüedad
   // alcanzada al final. Menos de medio año en total → 1 día cada 20 corridos.
   const control = antiguedadDias < 183 ? Math.floor(antiguedadDias / 20) : Math.ceil(Math.round(anios * diasAnualesLCT(Math.floor(anios)) * 1e9) / 1e9)

@@ -6,7 +6,7 @@ import {
 import { plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
 import { escribirExcelLiquidacionFinal } from '@/lib/liquidacion-final-excel'
 import { escribirLibroVisualXls } from '@/lib/visual-export'
-import { conceptosDePersona, contextoDeFinal } from '@/lib/liquidacion-final-datos'
+import { conceptosDePersona, contextoDeFinal, resolverVacacionesFinal } from '@/lib/liquidacion-final-datos'
 
 // Referencias: recibos 15263 (Fulla) y 15264 (Paniagua) de la «Liq. Especial
 // SEPTIEMBRE 2026» y la Planilla de Sueldos de Visual que JC adjuntó (20/10).
@@ -204,29 +204,44 @@ describe('presentismo (Paniagua)', () => {
 
 
 describe('datos incompletos: marca pendiente, no asume cero', () => {
-  it('tomadas sin cargar = 0 (JC 21/10); sin saldo → se calcula 14/365 por días del año (JC 10/11)', () => {
+  it('tomadas sin cargar = 0 (JC 21/10); sin saldo → se calcula sobre el TOTAL de la antigüedad (JC 10/11)', () => {
     const r = calcularLiquidacionFinal(datos({ entradas: { vacaciones: { saldoDias: 14, tomadasDias: null } } }))
     expect(r.faltantes).toEqual([])
     expect(linea(r, '208')?.cantidad).toBe(14)
     expect(r.advertencias.join(' ')).toMatch(/tomadas sin cargar: se toman como 0/)
-    // Fulla: baja 30/09/2026, ingreso 2023 (3 años → 14 por año): 272 días × 14/365 = 10,43.
+    // Fulla: baja 30/09/2026, ingreso 01/03/2023 → 1309 días de antigüedad × 14/365 = 51.
     const r2 = calcularLiquidacionFinal(datos({ entradas: {} }))
     expect(r2.faltantes).toEqual([])
-    expect(r2.calculo.vacaciones.saldo).toBe(10.43)
+    expect(r2.calculo.vacaciones.saldo).toBe(51)
     expect(r2.calculo.vacaciones.tomadas).toBe(0)
-    expect(linea(r2, '208')?.cantidad).toBe(10.43)
+    expect(linea(r2, '208')?.cantidad).toBe(51)
     expect(linea(r2, '217')).toBeDefined()
-    expect(r2.advertencias.join(' ')).toMatch(/Vacaciones devengadas calculadas: 272 días/)
+    expect(r2.advertencias.join(' ')).toMatch(/total de la antigüedad: 1309 días/)
     // Sin fecha de baja no hay con qué calcular: sigue el faltante.
     const r3 = calcularLiquidacionFinal(datos({ baja: { fecha: null }, ordinarios: null, entradas: {} }))
     expect(r3.faltantes.map(f => f.clave)).toContain('vacaciones_saldo')
   })
-  it('vacaciones devengadas: desde el ingreso si entró ese año, y escala por antigüedad', () => {
-    expect(vacacionesDevengadas('2026-10-03', '2026-08-02')).toEqual({ dias: 2.38, diasAnuales: 14, diasTrabajados: 62, inicio: '2026-08-02' })
-    expect(vacacionesDevengadas('2026-12-31', '2021-05-10').diasAnuales).toBe(21)
-    expect(vacacionesDevengadas('2026-12-31', '2016-01-01').diasAnuales).toBe(28)
-    expect(vacacionesDevengadas('2026-12-31', '2000-01-01').diasAnuales).toBe(35)
-    expect(vacacionesDevengadas('2026-06-30', null)).toMatchObject({ diasAnuales: 14, diasTrabajados: 180 })
+  it('resolverVacacionesFinal: precedencia cargado a mano > baja confirmada > cálculo; completa cargas a medias', () => {
+    // auto = cálculo sobre la antigüedad (saldo) − tomadas reales (app + manuales).
+    const auto = { saldoDias: 51, tomadasDias: 28, nota: 'calc' }
+    // Nada cargado ni confirmado → manda el cálculo: devengadas 51 − 28 tomadas.
+    expect(resolverVacacionesFinal(undefined, null, auto)).toEqual({ saldoDias: 51, tomadasDias: 28, nota: 'calc' })
+    // Cargo a mano SÓLO las tomadas (5): el saldo sale del cálculo; mis tomadas mandan.
+    expect(resolverVacacionesFinal({ tomadasDias: 5 } as any, null, auto)).toMatchObject({ saldoDias: 51, tomadasDias: 5 })
+    // Baja con historial verificado manda sobre el cálculo automático.
+    expect(resolverVacacionesFinal(undefined, { verificadas: true, devengadas: 40, tomadas: 10 }, auto)).toMatchObject({ saldoDias: 40, tomadasDias: 10 })
+    // Un snapshot NO verificado no pisa el cálculo.
+    expect(resolverVacacionesFinal(undefined, { verificadas: false, devengadas: 99, tomadas: 0 }, auto)).toMatchObject({ saldoDias: 51, tomadasDias: 28 })
+    // Sin cálculo posible ni datos → queda pendiente.
+    expect(resolverVacacionesFinal(undefined, null, null)).toBeUndefined()
+  })
+  it('vacaciones devengadas MÉTODO EMPRESA: sobre el TOTAL de la antigüedad × 14/365 (hacia arriba); sin ingreso no calcula', () => {
+    // Paniagua: 62 días de antigüedad → ceil(62/365×14)=3 (como el recibo real).
+    expect(vacacionesDevengadas('2026-10-03', '2026-08-02')).toEqual({ dias: 3, antiguedadDias: 62 })
+    // Acumulado por TODA la antigüedad, no sólo el año de la baja: 2 años → 28.
+    expect(vacacionesDevengadas('2026-09-30', '2024-09-30')).toEqual({ dias: 28, antiguedadDias: 730 })
+    // Sin fecha de ingreso no se puede calcular sobre la antigüedad.
+    expect(vacacionesDevengadas('2026-06-30', null)).toEqual({ dias: null, antiguedadDias: null })
   })
   it('contrato eventual: sin vacaciones (208/217) ni faltantes de vacaciones (JC 21/10)', () => {
     const r = calcularLiquidacionFinal({ ...datos({ entradas: {} }), eventual: true })
