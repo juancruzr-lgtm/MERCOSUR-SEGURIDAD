@@ -166,6 +166,14 @@ describe('repositorio real', () => {
     // El mapa cubre cada archivo de main con una de las 5 categorías.
     const categorias = new Set(['REGISTRADA_MISMA_VERSION', 'REGISTRADA_OTRA_VERSION', 'APLICADA_A_MANO_SIN_REGISTRO', 'FALTA_REALMENTE', 'OBSOLETA_BORRADOR'])
     for (const fila of mapaReal.archivos) expect(categorias.has(fila.estado)).toBe(true)
-    expect(mapaReal.archivos.find((a: any) => a.archivo === '20261204120000_facturacion_seguro_periodo.sql').estado).toBe('APLICADA_A_MANO_SIN_REGISTRO')
+    // 20261204120000 estaba aplicada a mano sin registro (04/11); el 10/11 se registró con migration repair
+    // junto con las otras 10 versiones de noviembre/diciembre (#390).
+    const registradas1011 = ['20261204120000', '20261205100000', '20261205100100', '20261205100200', '20261205120000', '20261205120100',
+      '20261205120200', '20261206100000', '20261206120000', '20261207100000', '20261207100100']
+    for (const v of registradas1011) {
+      const fila = mapaReal.archivos.find((a: any) => a.version === v)
+      expect(fila?.estado, v).toBe('REGISTRADA_MISMA_VERSION')
+      expect(fila?.version_remota, v).toBe(v)
+    }
   })
 })

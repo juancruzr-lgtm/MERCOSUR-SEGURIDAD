@@ -18,7 +18,8 @@ import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion }
 import DetalleHoras from './DetalleHoras'
 import { recalcular, useOperacion, type Periodo } from './periodo'
 import { nombreDelMes } from '@/lib/facturacion/periodo-seguro'
-import { rangoFechasMes } from '@/lib/periodo-argentina'
+import { fechaArgentina, rangoFechasMes } from '@/lib/periodo-argentina'
+import { vtoPagoParaArca } from '@/lib/facturacion/vto-arca'
 
 const ESTADOS_FILTRO: Array<[string, string]> = [
   ['para_revisar', 'Para revisar'], ['sin_aceptar', 'Horas sin aceptar'],
@@ -429,7 +430,9 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
             <tr><td style={S.td}><b>Neto / IVA / Total</b></td><td style={S.num}>{pesos(p.neto_c)} + {pesos(p.iva_c)}</td><td style={S.num}><b>{pesos(p.total_c)}</b></td></tr>
           </tbody></table>
           <div style={S.sub}>Horas programadas {horas(p.minutos_programados)} · cubiertas {horas(p.minutos_cubiertos)} · aprobadas para facturar {horas(p.minutos_aprobados)} · descubiertas no facturadas {horas(p.minutos_descubiertos)}</div>
-          <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? 'el de la configuración'} · vto. de pago informado a ARCA {fecha(p.fecha_vencimiento)} (el vencimiento comercial sale del contrato)</div>
+          <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? 'el de la configuración'} · vto. de pago informado a ARCA {fecha(p.fecha_vencimiento)}
+            {p.fecha_vencimiento && p.fecha_vencimiento < fechaArgentina() && <> (ya pasó: si se emite hoy, se informa {fecha(vtoPagoParaArca(p.fecha_vencimiento, fechaArgentina()))} y esa fecha sale en la factura)</>}
+            {' '}(el vencimiento comercial sale del contrato)</div>
           <Trazabilidad p={p} historial={extra.historial} usuarios={usuarios} />
           <ControlFacturaReal p={p} />
 

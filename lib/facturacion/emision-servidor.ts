@@ -18,6 +18,7 @@
 
 import type { ComprobanteWsfe, ResultadoCae, ResultadoConsulta } from '@/lib/afip/wsfe'
 import { validarComprobante, CONDICION_IVA_RECEPTOR } from '@/lib/afip/wsfe'
+import { vtoPagoParaArca } from './vto-arca'
 
 export const ENVIO_COLGADO_MS = 2 * 60 * 1000
 
@@ -67,7 +68,9 @@ export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; ho
   const s = e.solicitud ?? {}
   const neto = Number(s.neto_c), iva = Number(s.iva_c), total = Number(s.total_c)
   const pct = alicuotaDe(neto, iva)
-  const vto = s.vto_pago && s.vto_pago >= opts.hoy ? s.vto_pago : opts.hoy
+  // Si la fecha aprobada ya pasó, se informa la de emisión. El comprobante guarda esta misma
+  // fecha (la toma de solicitud.arca: migración 20261210100000), así el PDF coincide con ARCA.
+  const vto = vtoPagoParaArca(s.vto_pago, opts.hoy)
   const opcionales = [201, 202, 203].includes(e.tipo)
     ? (e.tipo === 201 ? (opts.cbuFce ? [{ id: '2101', valor: opts.cbuFce }] : []) : [{ id: '22', valor: 'N' }])
     : undefined

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes', '20261210100000_facturacion_vto_enviado_a_arca']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -315,10 +315,16 @@ await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 1, '{}'::
 await servidor(() => sql(`select public.fact_emision_resultado($1, 'incierta', '{"error":"timeout"}'::jsonb)`, [e1.id]))
 ok('respuesta incierta: no se reintenta sin consultar', await falla(() => servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 1, '{}'::jsonb)`, [e1.id])), /consultar/))
 await servidor(() => sql(`select public.fact_emision_consulta($1, false, '{"ResultGet":null}'::jsonb)`, [e1.id]))
-await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 1, '{}'::jsonb)`, [e1.id]))
+// Pedido a ARCA con fechas distintas de las de la prefactura (como el 10/11: el vencimiento aprobado ya
+// había pasado y se informó la fecha de emisión). El comprobante tiene que guardar lo que recibió ARCA.
+await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 1, '{"fecha":"2026-09-04","vtoPago":"2026-09-20","servicioDesde":"2026-08-02","servicioHasta":"2026-08-30"}'::jsonb)`, [e1.id]))
 await servidor(() => sql(`select public.fact_emision_resultado($1, 'A', '{"Resultado":"A"}'::jsonb, '76000000000001', '2026-09-14', '2026-09-04')`, [e1.id]))
-const homo = await uno(`select ambiente, (select estado from public.fact_prefacturas where id = $1) pe from public.fact_comprobantes where cae = '76000000000001'`, [pref])
+const homo = await uno(`select ambiente, vto_pago::text vto, servicio_desde::text desde, servicio_hasta::text hasta,
+  (select estado from public.fact_prefacturas where id = $1) pe from public.fact_comprobantes where cae = '76000000000001'`, [pref])
 ok('homologación crea comprobante de prueba sin marcar la prefactura como emitida', homo?.ambiente === 'homologacion' && homo.pe === 'aprobada_emitir', JSON.stringify(homo))
+const vtoPref = (await uno(`select solicitud->>'vto_pago' v from public.fact_emisiones where id = $1`, [e1.id])).v
+ok('el comprobante guarda el vencimiento de pago que recibió ARCA, no el de la prefactura', homo?.vto === '2026-09-20' && vtoPref !== '2026-09-20', JSON.stringify({ comprobante: homo?.vto, prefactura: vtoPref }))
+ok('…y el período de servicio que recibió ARCA', homo?.desde === '2026-08-02' && homo?.hasta === '2026-08-30', JSON.stringify(homo))
 
 await db.exec(`update public.fact_config set valor = valor || '{"produccion_habilitada": true}' where clave = 'emision'`)
 const e2 = (await como(ADM, async () => uno(`select public.fact_emision_preparar($1, $2, 'produccion') r`, [pref, await version()]))).r
@@ -328,6 +334,9 @@ await servidor(() => sql(`select public.fact_emision_iniciar_envio($1, 2047, '{}
 await servidor(() => sql(`select public.fact_emision_resultado($1, 'A', '{"Resultado":"A"}'::jsonb, '76111111111111', '2026-09-14', '2026-09-04')`, [e2.id]))
 const fa2047 = await uno(`select id, total_c::text t, tipo, numero::int n from public.fact_comprobantes where ambiente = 'produccion' and numero = 2047`)
 ok('Alto Delta FA 0001-2047 autorizada por $9.776.970,37', fa2047?.t === '977697037' && fa2047.tipo === 1, JSON.stringify(fa2047))
+const fechas2047 = await uno(`select c.vto_pago::text vto, e.solicitud->>'vto_pago' vpref, c.servicio_desde::text desde, e.solicitud->>'periodo_desde' dpref
+  from public.fact_comprobantes c join public.fact_emisiones e on e.comprobante_id = c.id where c.id = $1`, [fa2047.id])
+ok('sin fechas en el pedido a ARCA, el comprobante usa las de la prefactura (como antes)', fechas2047?.vto === fechas2047?.vpref && fechas2047?.desde === fechas2047?.dpref, JSON.stringify(fechas2047))
 ok('la prefactura queda emitida', (await uno(`select estado from public.fact_prefacturas where id = $1`, [pref])).estado === 'emitida')
 ok('una prefactura emitida no se modifica', await falla(() => como(ADM, async () => sql(`select public.fact_prefactura_texto($1, 'otro', $2)`, [pref, await version()]))))
 ok('un comprobante autorizado no se modifica', await falla(() => sql(`update public.fact_comprobantes set total_c = 1 where id = $1`, [fa2047.id]), /no se modifica/))
