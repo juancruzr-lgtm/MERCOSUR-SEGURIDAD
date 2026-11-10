@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auditAuthUsers, repairEmployeeAuthUser, summarizeRepairs } from '../../_lib/auth-repair'
 import { getSupabaseAdmin, requireCapacidad } from '../../_lib/employee-auth'
+import { marcarCambioObligatorio } from '../../_lib/acceso-password'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -57,6 +58,11 @@ export async function POST(req: NextRequest) {
       results.push(await repairEmployeeAuthUser(admin.client, usuario, authIndex, {
         invalidAuthUserIds: repairAll ? [] : invalidAuthUserIds,
       }))
+    }
+
+    // Cuentas creadas o recreadas con contraseña inicial = DNI: cambio obligatorio.
+    for (const r of results) {
+      if (r.action === 'creado' || r.action === 'recreado') await marcarCambioObligatorio(admin.client, r.usuario_id, 'alta', null)
     }
 
     const summary = summarizeRepairs(results)

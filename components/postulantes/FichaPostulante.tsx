@@ -284,7 +284,7 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
     if (!id) return
     const r = await api.darAlta(id)
     setAlta(r); setModo(null); onCambio(id)
-    setAviso({ tipo: r.invitacion === 'error' ? 'error' : 'ok', texto: r.mensaje })
+    setAviso({ tipo: r.acceso === 'error' || r.acceso === 'omitido' ? 'error' : 'ok', texto: r.mensaje })
   })
 
   const grupos = Array.from(new Set(CAMPOS.map(c => c.grupo)))
@@ -462,7 +462,7 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
               <div style={titulo}>Confirmar alta efectiva</div>
               <div style={{ fontSize: 13.5, color: C.texto, lineHeight: 1.5 }}>
                 Se crea el empleado <b>{nombre}</b> (legajo {postulacion?.legajo_propuesto}), activo, con puesto vigilador, y su Legajo Digital con los datos revisados.
-                Desde ese momento puede recibir turnos. Si el acceso por invitación está habilitado, se le envía un email a <b>{valores.email}</b> para que elija su contraseña.
+                Desde ese momento puede recibir turnos. Se crea su acceso: ingresa con <b>{valores.email}</b> y su DNI, y en el primer ingreso la app le pide una contraseña personal.
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                 <button type="button" disabled={ocupado === 'alta'} onClick={() => void darAlta()} style={boton('exito')}>{ocupado === 'alta' ? 'Dando de alta…' : 'Sí, dar de alta'}</button>

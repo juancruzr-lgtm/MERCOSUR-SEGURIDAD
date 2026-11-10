@@ -9,9 +9,9 @@
 -- personal, no recibe turnos, no ficha y no tiene cuenta. El alta efectiva crea
 -- UNA sola fila en usuarios (activo, rol guardia, puesto vigilador) y su fila de
 -- legajo_datos_personales, en una transacción, y es idempotente: un reintento
--- devuelve el mismo empleado. La cuenta de acceso (invitación) la manda después
--- el servidor (app/api/postulaciones/[id]/alta), con el interruptor
--- ACCESO_POR_INVITACION.
+-- devuelve el mismo empleado. La cuenta de acceso la crea después el servidor
+-- (app/api/postulaciones/[id]/alta): contraseña inicial = DNI con cambio
+-- obligatorio en el primer ingreso (20261208100100_accesos_password).
 --
 -- QUIÉN
 --   * Administración y Gerencia (legajo_puede_gestionar): todo.

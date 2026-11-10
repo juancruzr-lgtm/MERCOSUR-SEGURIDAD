@@ -30,13 +30,14 @@ import TableroHabilitaciones from '@/components/habilitacion/TableroHabilitacion
 import PostulantesPanel from '@/components/postulantes/PostulantesPanel'
 import HabilitadosPostulantes from '@/components/postulantes/HabilitadosPostulantes'
 import { apiPostulantesSupabase, leerSolicitudIA, lecturaIaVisible } from '@/lib/postulantes-supabase'
+import ControlContrasenas from '@/components/legajo/ControlContrasenas'
 import { controlaHabilitacion } from '@/lib/legajo-habilitacion'
 import { esFiltroRevision } from '@/lib/legajo-historico'
 
-export type SeccionLegajo = 'credenciales' | 'postulantes' | 'arca' | 'datos' | 'documentacion' | 'historico' | 'habilitacion'
+export type SeccionLegajo = 'credenciales' | 'postulantes' | 'arca' | 'datos' | 'documentacion' | 'historico' | 'contrasenas' | 'habilitacion'
 
 const SECCIONES: [SeccionLegajo, string][] = [
-  ['credenciales', 'Credenciales'], ['postulantes', 'Postulantes'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'], ['arca', 'Diferencias con ARCA'],
+  ['credenciales', 'Credenciales'], ['postulantes', 'Postulantes'], ['datos', 'Datos personales'], ['documentacion', 'Documentación'], ['historico', 'Revisión de MEGA'], ['arca', 'Diferencias con ARCA'], ['contrasenas', 'Contraseñas'],
 ]
 
 const pestaña = (activa: boolean): React.CSSProperties => ({
@@ -76,6 +77,7 @@ export default function LegajoDigital({ inicial = 'credenciales', user, empleado
       {seccion === 'datos' && <ControlCambiosDatos />}
       {seccion === 'documentacion' && <ControlDocumentacion onVerHistorico={(texto, categoria) => { setFiltroHistorico({ texto, categoria }); setSeccion('historico') }} />}
       {seccion === 'historico' && <BandejaHistorico key={filtroHistorico ? filtroHistorico.texto + filtroHistorico.categoria : 'todo'} busquedaInicial={filtroHistorico?.texto} categoriaInicial={filtroHistorico?.categoria} verInicial={filtroHistorico?.texto === empleadoHistorico ? verInicial : undefined} />}
+      {seccion === 'contrasenas' && <ControlContrasenas />}
       {seccion === 'habilitacion' && controlaHabilitacion(user) && <HabilitacionLegajo />}
     </div>
   )

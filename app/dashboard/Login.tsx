@@ -13,10 +13,10 @@ import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { mensajeErrorAuth, validarCredencialesLogin, validarEmail } from '@/lib/auth-mensajes'
 import { limpiarRecuperacionPendiente } from '@/lib/auth-recuperacion'
-import { limpiarPasswordDni, marcarPasswordDni, passwordEsDni } from '@/lib/acceso-password-dni'
 import { alpha, FONT_BRAND } from '@/components/ui/base'
 import { brandAssets, brandColors, brandTypography, semanticColors } from '@/lib/brand-theme'
 import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
+import { bajaConfirmada, cierreDeSesionPara, MENSAJES_SESION, perfilTrasIngreso, verificarSesion, type ResultadoSesion } from '@/lib/sesion-perfil'
 
 const FONT_BODY = `${brandTypography.currentBody}, sans-serif`
 
@@ -30,13 +30,18 @@ const S: Record<string, React.CSSProperties> = {
 
 // Baja laboral confirmada = acceso bloqueado (migración 20261110120000). La base
 // ya no le deja leer ni escribir nada; esto sólo muestra un mensaje claro y
-// cierra la sesión. Si la función todavía no existe (migración sin aplicar), no bloquea.
+// cierra la sesión. Si la función no responde, no bloquea: la base igual lo hace.
 export async function accesoBloqueadoPorBaja(): Promise<boolean> {
-  const { data, error } = await supabase.rpc('mi_acceso_estado')
-  if (error) return false
-  return Boolean((data as { bloqueado?: boolean } | null)?.bloqueado)
+  return bajaConfirmada(supabase as any)
 }
-export const MENSAJE_ACCESO_BLOQUEADO = 'Tu acceso a la app está deshabilitado por una baja laboral. Si es un error, consultá con Administración.'
+export const MENSAJE_ACCESO_BLOQUEADO = MENSAJES_SESION.bloqueado
+
+/** Aplica el cierre de sesión que corresponde: sólo ante sesión inválida (local) o baja (global). */
+export async function aplicarCierreDeSesion(r: { estado: ResultadoSesion['estado'] }): Promise<void> {
+  const scope = cierreDeSesionPara(r)
+  if (!scope) return
+  try { await supabase.auth.signOut({ scope }) } catch { /* sin red: la sesión local se limpia en el próximo intento */ }
+}
 
 // Delegación gerencial (Fase 2D): resuelve la vigencia (desde/hasta/revocada)
 // en la base y la adjunta como booleano al perfil, para que capacidadesDe sume
@@ -51,29 +56,15 @@ export async function resolverDelegacionGerencia<T extends object>(perfilBase: T
   }
 }
 
-// Sesión guardada → perfil. Sin sesión: null. Con baja laboral o sin perfil:
-// cierra la sesión y devuelve null (el llamador muestra el login). Es el mismo
-// arranque que tenía AppClient; ahora lo comparten AppShell y AppClient.
+// Sesión guardada → perfil verificado (lib/sesion-perfil). AppShell usa
+// verificarSesion directo para poder mostrar "no se pudo verificar" con
+// reintento; esto queda para AppClient montado sin perfil inicial. Un error al
+// leer el perfil (red, servidor, permisos) ya NO cierra la sesión: devuelve null
+// sin tocarla. Sólo una sesión inválida o una baja la cierran.
 export async function perfilDeSesionActual(): Promise<any | null> {
-  const { data } = await supabase.auth.getSession()
-  if (!data.session) return null
-
-  if (await accesoBloqueadoPorBaja()) {
-    await supabase.auth.signOut()
-    return null
-  }
-
-  const { data: perfil, error } = await supabase
-    .from('usuarios')
-    .select(COLUMNAS_USUARIO)
-    .eq('auth_user_id', data.session.user.id)
-    .single()
-
-  if (error || !perfil) {
-    await supabase.auth.signOut()
-    return null
-  }
-  return perfil
+  const r = await verificarSesion(supabase as any, COLUMNAS_USUARIO)
+  await aplicarCierreDeSesion(r)
+  return r.estado === 'ok' ? r.perfil : null
 }
 
 export default function Login({ onLogin, errorInicial }: { onLogin: (u: any) => void; errorInicial?: string | null }) {
@@ -128,51 +119,23 @@ export default function Login({ onLogin, errorInicial }: { onLogin: (u: any) => 
       return
     }
 
-    if (await accesoBloqueadoPorBaja()) {
-      await supabase.auth.signOut()
-      setError(MENSAJE_ACCESO_BLOQUEADO)
-      setLoading(false)
-      return
-    }
-
-    let { data: perfil, error: perfilError } = await supabase
-      .from('usuarios')
-      .select(COLUMNAS_USUARIO)
-      .eq('auth_user_id', data.user.id)
-      .maybeSingle()
-
-    if ((!perfil || perfilError) && data.user.email) {
-      const fallback = await supabase
-        .from('usuarios')
-        .select(COLUMNAS_USUARIO)
-        .eq('email', data.user.email.trim().toLowerCase())
-        .maybeSingle()
-
-      if (fallback.data) {
-        perfil = fallback.data
-        perfilError = null
-        await supabase
-          .from('usuarios')
-          .update({ auth_user_id: data.user.id })
-          .eq('id', fallback.data.id)
-      }
-    }
-
-    if (perfilError || !perfil) {
-      if (perfilError) console.error('Login: error al leer el perfil', perfilError.message)
-      setError('Tu usuario no tiene un perfil asignado. Consultá con Administración.')
-      await supabase.auth.signOut()
+    // Perfil del que acaba de ingresar (lib/sesion-perfil): un error de conexión
+    // ya no se informa como "no tenés perfil" ni cierra sus otras sesiones.
+    const r = await perfilTrasIngreso(supabase as any, data.user, COLUMNAS_USUARIO)
+    if (r.estado !== 'ok') {
+      if (r.estado === 'sin_verificar') console.error('Login: no se pudo verificar el perfil', r.detalle)
+      setError(r.estado === 'bloqueado' ? MENSAJE_ACCESO_BLOQUEADO
+        : r.estado === 'sin_perfil' ? MENSAJES_SESION.sin_perfil
+        : MENSAJES_SESION.sin_verificar_ingreso)
+      // Baja: todas sus sesiones. Sin perfil o sin verificar: sólo la que se acaba de abrir acá.
+      try { await supabase.auth.signOut({ scope: r.estado === 'bloqueado' ? 'global' : 'local' }) } catch { /* sin red */ }
       setLoading(false)
       return
     }
 
     // Ingresó con su contraseña: no queda ninguna recuperación pendiente en este equipo.
     limpiarRecuperacionPendiente()
-    // ¿Entró con la contraseña inicial (DNI)? Se marca sólo esta sesión; la
-    // contraseña no se guarda ni se envía (lib/acceso-password-dni.ts).
-    if (passwordEsDni(passwordLogin, (perfil as { dni?: string | null }).dni)) marcarPasswordDni(data.session?.access_token)
-    else limpiarPasswordDni()
-    onLogin(perfil)
+    onLogin(r.perfil)
     setLoading(false)
   }
 

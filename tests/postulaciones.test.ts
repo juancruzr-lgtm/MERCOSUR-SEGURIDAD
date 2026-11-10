@@ -107,11 +107,14 @@ describe('rutas: la base autoriza antes de tocar Storage o Auth', () => {
     expect(r.indexOf("rpc('postulacion_abrir_archivo'")).toBeLessThan(r.indexOf('createSignedUrl'))
     expect(r).toMatch(/FIRMA_SEGUNDOS = 60/)
   })
-  it('alta: crea el empleado en la base y recién después invita, respetando el interruptor', () => {
+  it('alta: crea el empleado en la base y después su acceso con DNI y cambio obligatorio (sin emails)', () => {
     const r = leer('app/api/postulaciones/[id]/alta/route.ts')
-    expect(r.indexOf("rpc('postulacion_alta_efectiva'")).toBeLessThan(r.indexOf('invitarEmpleado('))
-    expect(r).toMatch(/if \(!accesoPorInvitacion\(\)\)[\s\S]*pendiente_habilitacion/)
-    expect(r).toMatch(/origen: 'alta_postulante'/)
+    expect(r.indexOf("rpc('postulacion_alta_efectiva'")).toBeLessThan(r.indexOf('ensureEmployeeAuth(admin.client'))
+    expect(r).toMatch(/ensureEmployeeAuth\(admin\.client, empleado, \{ conservarPassword: true \}\)/)
+    expect(r).toMatch(/if \(r\.action === 'creado'\) \{\s*const m = await marcarCambioObligatorio\(admin\.client, empleado\.id, 'alta', acceso\.perfil\.id\)/)
+    // Reintento con la cuenta ya creada: no la toca.
+    expect(r.indexOf("acceso: 'ya_tenia'")).toBeLessThan(r.indexOf('ensureEmployeeAuth(admin.client'))
+    expect(r).not.toMatch(/inviteUserByEmail|invitarEmpleado|resetPasswordForEmail/)
   })
   it('el bucket no tiene políticas de Storage (sólo el servidor lo usa)', () => {
     const sql = leer('supabase/migrations/20261208110000_postulaciones.sql')

@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { motivoSinAcceso, nombreEmpleado, normalizeDni, normalizeEmail, type UsuarioEmpleado } from './employee-auth'
-import { accesoPorInvitacion } from './acceso-modo'
 
 const AUTH_PAGE_SIZE = 100
 const MAX_AUTH_PAGES = 100
@@ -278,8 +277,7 @@ async function deleteInvalidAuthUsers(
 }
 
 async function createFreshAuthUser(supabaseAdmin: SupabaseClient, usuario: UsuarioEmpleado, email: string, dni: string) {
-  // Con acceso por invitación, la cuenta (re)creada no recibe el DNI como contraseña.
-  const { data, error } = await supabaseAdmin.auth.admin.createUser(authPayload(usuario, email, dni, !accesoPorInvitacion()))
+  const { data, error } = await supabaseAdmin.auth.admin.createUser(authPayload(usuario, email, dni))
   if (error || !data?.user) return { user: null as AuthUser | null, error: error?.message || 'No se pudo crear usuario Auth' }
   return { user: data.user as AuthUser, error: null }
 }
@@ -351,7 +349,7 @@ export async function repairEmployeeAuthUser(
   if (preferredValid) {
     const { error: updateAuthError } = await supabaseAdmin.auth.admin.updateUserById(
       preferredValid.id,
-      authPayload(usuario, email, dni, options.resetearPassword === true && !accesoPorInvitacion()),
+      authPayload(usuario, email, dni, options.resetearPassword === true),
     )
 
     if (updateAuthError) return { ...base, action: 'error', error: updateAuthError.message }

@@ -5,7 +5,7 @@
 -- contraseñas. Compara el DNI con el hash bcrypt de Supabase Auth
 -- (extensions.crypt); tarda unos segundos (un bcrypt por cuenta).
 -- Correr en el SQL Editor de Supabase antes y durante la migración a
--- contraseñas personales (docs/seguridad/ACCESOS-SIN-PASSWORD-DNI.md).
+-- contraseñas personales (docs/seguridad/CONTRASENA-INICIAL-DNI.md).
 --
 -- Foto 06/11/2026: 66 de 70 cuentas activas con contraseña = DNI
 -- (3/3 Administración, 1/2 Gerencia, 1/1 Dirección Operativa, 2/2 jefes,

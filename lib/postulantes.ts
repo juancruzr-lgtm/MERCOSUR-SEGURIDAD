@@ -101,7 +101,8 @@ export type Duplicado = { donde: 'personal' | 'postulacion'; coincide_por: strin
 export type ResultadoAlta = {
   usuario_id: string
   ya_existia: boolean
-  invitacion: 'enviada' | 'enlace_enviado' | 'pendiente_habilitacion' | 'error' | 'omitida'
+  /** Cuenta de acceso: se crea con contraseña inicial = DNI y cambio obligatorio en el primer ingreso. */
+  acceso: 'creado' | 'ya_tenia' | 'error' | 'omitido'
   mensaje: string
 }
 
