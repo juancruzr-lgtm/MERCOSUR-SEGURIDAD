@@ -39,9 +39,15 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
   const [eligiendo, setEligiendo] = useState(false)
   const [elegidas, setElegidas] = useState<Set<string>>(new Set())
 
-  const editables = useMemo(() => finales.filter(f => ['pendiente_calculo', 'borrador', 'lista'].includes(f.estado) && f.calculo), [finales])
+  // Período (mes de la baja) del Excel de trabajo: sólo el que se está trabajando (JC 10/11),
+  // armar todos los meses juntos era lento. Por defecto, el más reciente.
+  const meses = useMemo(() => Array.from(new Set(finales.filter(f => f.estado !== 'anulada' && f.calculo && f.baja.fecha_baja).map(f => f.baja.fecha_baja!.slice(0, 7)))).sort().reverse(), [finales])
+  const [mesElegido, setMesElegido] = useState<string>('')
+  const mes = meses.includes(mesElegido) ? mesElegido : (meses[0] ?? '')
+  const delMes = (f: FinalFila) => !mes || f.baja.fecha_baja?.slice(0, 7) === mes
+  const editables = useMemo(() => finales.filter(f => ['pendiente_calculo', 'borrador', 'lista'].includes(f.estado) && f.calculo && delMes(f)), [finales, mes])
   // El Excel se puede bajar siempre (JC 27/10): las ya exportadas salen para consulta.
-  const paraExcel = useMemo(() => finales.filter(f => f.estado !== 'anulada' && f.calculo), [finales])
+  const paraExcel = useMemo(() => finales.filter(f => f.estado !== 'anulada' && f.calculo && delMes(f)), [finales, mes])
   const exportables = useMemo(() => finales.filter(f => ['lista', 'exportada'].includes(f.estado)), [finales])
   const aprobables = finales.filter(f => f.estado === 'borrador' && !f.requiere_recalculo && !(f.faltantes?.length))
 
@@ -130,6 +136,15 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
         Bajá el Excel de trabajo (mismo formato que el mensual: una fila por persona y, al final, las columnas de la liquidación), editá lo que quieras, volvelo a subir y exportá un solo archivo de Visual con los empleados de baja.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+        {meses.length > 0 && (
+          <label style={{ ...S.sub, display: 'flex', gap: 6, alignItems: 'center' }}>
+            Período
+            <select value={mes} disabled={!!ocupado} onChange={e => setMesElegido(e.target.value)}
+              style={{ background: '#0b1220', color: '#cbd5e1', border: '1px solid #334155', borderRadius: 6, padding: '6px 8px', fontSize: 13 }}>
+              {meses.map(m => <option key={m} value={m}>{m.split('-').reverse().join('/')}</option>)}
+            </select>
+          </label>
+        )}
         <button style={S.btn2} disabled={!!ocupado || !paraExcel.length} onClick={() => void bajarExcel()}>{ocupado === 'excel' ? 'Armando…' : `Bajar Excel de trabajo (${paraExcel.length})`}</button>
         <label style={{ ...S.btn2, display: 'inline-block' }}>
           {ocupado === 'leer' ? 'Leyendo…' : 'Subir Excel de trabajo'}

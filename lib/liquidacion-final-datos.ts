@@ -224,14 +224,16 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
   // Vacaciones: las confirmadas en el registro de baja (no se piden de nuevo acá).
   const v = b.vacaciones
   // Si se completaron después (Excel de trabajo o pantalla), mandan esas; si no, las
-  // confirmadas en la baja. Sin ninguna, 208 queda pendiente (nunca se asume cero).
+  // confirmadas en la baja. Sin ninguna, el cálculo las saca por antigüedad (14/365).
   const e = f.entradas?.vacaciones
-  const vacaciones = e && e.saldoDias != null && e.tomadasDias != null
-    ? { saldoDias: e.saldoDias, tomadasDias: e.tomadasDias, nota: e.nota ?? 'cargadas después de la baja' }
+  // Cargadas a medias (sólo tomadas, p. ej. desde la pantalla): el saldo sale de la
+  // baja si estaba confirmado o, si no, del cálculo por antigüedad.
+  const vacaciones = e && (e.saldoDias != null || e.tomadasDias != null)
+    ? { saldoDias: e.saldoDias ?? (v?.verificadas ? v.devengadas ?? null : null), tomadasDias: e.tomadasDias ?? null, nota: e.nota ?? 'cargadas después de la baja' }
     : v && v.verificadas
       ? { saldoDias: v.devengadas ?? null, tomadasDias: v.tomadas ?? null, nota: v.nota ?? `método ${v.metodo ?? 'empresa'}` }
       : undefined
-  if (!vacaciones) avisos.push('Faltan las vacaciones (no se confirmaron en la baja ni se cargaron después): 208 queda pendiente.')
+  if (!vacaciones) avisos.push('Faltan las vacaciones (no se confirmaron en la baja ni se cargaron después): se calculan por antigüedad (14/365) y tomadas 0. Corregilas en el Excel si no es así.')
 
   const controlSAC = b.fecha_baja && p.cuil ? await mejorRemuneracionSemestre(client, p.cuil, b.fecha_baja) : null
   const eventual = await esEventual(client, p.cuil, b, ingreso)
