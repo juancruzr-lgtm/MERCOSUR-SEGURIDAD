@@ -6,6 +6,7 @@ import { leer, rpc, MODALIDADES, REQUISITOS } from '@/lib/facturacion/datos'
 import { cuitValido } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { DiagnosticoArca } from './DiagnosticoArca'
+import { ConceptosFijosContrato } from './ConceptosFijos'
 import { CONDICIONES_IVA, CondicionesContrato, DatosEmisor, DatosFiscalesCliente, resumenCondiciones } from './Condiciones'
 
 const CONTRATO_VACIO = {
@@ -237,6 +238,8 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
                 </div>
               </div>
             )}
+
+            <ConceptosFijosContrato contratoId={x.id} objetivos={objs} nombreObj={nombreObj} />
 
             <div style={{ ...S.fila, justifyContent: 'space-between', marginTop: 12 }}>
               <span style={{ fontSize: 12, color: '#94a3b8' }}>Objetivos ({objs.length})</span>
