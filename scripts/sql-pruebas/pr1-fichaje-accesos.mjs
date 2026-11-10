@@ -77,19 +77,63 @@ r = await como(db, P.guardiaInactivo, () => intenta(() => fichar(P.guardiaInacti
 t.check('rollback: vuelve la conducta anterior', r.ok)
 await db.exec(migracion('migrations/20261208100000_fichaje_solo_activos.sql'))
 
-// ── accesos_invitaciones ────────────────────────────────────────────────────
-await db.exec(migracion('migrations/20261208100100_accesos_invitaciones.sql'))
-await db.exec(`reset role`)
-await db.query(`insert into public.accesos_invitaciones (usuario_id, email, tipo, origen, resultado, enviado_por) values ($1, 'x@example.test', 'invitacion', 'administracion', 'enviado', $2)`, [P.guardiaActivo.id, P.administracion.id])
-r = await como(db, P.administracion, () => intenta(() => db.query(`select count(*)::int n from public.accesos_invitaciones`)))
-t.check('Administración lee el registro de invitaciones', r.ok && r.r.rows[0].n === 1)
-r = await como(db, P.supervisor, () => intenta(() => db.query(`select count(*)::int n from public.accesos_invitaciones`)))
-t.check('Supervisión NO ve el registro de invitaciones', r.ok && r.r.rows[0].n === 0)
-r = await como(db, P.administracion, () => intenta(() => db.query(`insert into public.accesos_invitaciones (usuario_id, origen, resultado) values ($1, 'administracion', 'enviado')`, [P.guardiaActivo.id])))
-t.check('nadie escribe el registro desde la app (sólo el servidor)', !r.ok)
-r = await intenta(() => db.query(`update public.accesos_invitaciones set resultado = 'error'`))
-t.check('el registro no se edita (ni con permisos de dueño)', !r.ok)
-r = await intenta(() => db.query(`delete from public.accesos_invitaciones`))
-t.check('el registro no se borra', !r.ok)
+// ── Contraseña inicial = DNI con cambio obligatorio ─────────────────────────
+// PGlite no trae pgcrypto: extensions.crypt se reemplaza por un stub
+// determinístico ("h:" || contraseña). Se prueba la LÓGICA (quién, cuándo, qué
+// se registra); el bcrypt real lo hace Supabase.
+await db.exec(`
+  alter table auth.users add column encrypted_password text, add column last_sign_in_at timestamptz;
+  create function extensions.crypt(p text, h text) returns text language sql immutable as $$ select 'h:' || p $$;
+  create function public.puede_gestionar_personal_actual() returns boolean language sql stable security definer set search_path = public, pg_catalog as $$
+    select exists (select 1 from public.usuarios u where u.auth_user_id = auth.uid() and u.estado = 'activo' and u.puesto_organizacional in ('administracion','gerencia')) $$;
+`)
+// Cuentas: todas con contraseña = DNI, salvo Gerencia (ya personal)
+await db.query(`insert into auth.users (id, email, encrypted_password, last_sign_in_at)
+  select u.auth_user_id, u.email, 'h:' || case when u.puesto_organizacional = 'gerencia' then 'Personal99' else u.dni end, now()
+    from public.usuarios u`)
+await db.exec(migracion('migrations/20261208100100_accesos_password.sql'))
+await db.exec(migracion('migrations/20261208100100_accesos_password.sql'))
+t.check('migración de contraseñas idempotente', true)
+
+const estado = (p) => como(db, p, () => intenta(() => db.query(`select public.mi_acceso_password() j`)))
+r = await estado(P.guardiaActivo)
+t.check('cuenta existente con DNI: se detecta, pero NO queda obligada sola (progresivo)', r.ok && r.r.rows[0].j.es_dni === true && r.r.rows[0].j.obligatorio === false)
+r = await estado(P.gerencia)
+t.check('quien ya tiene contraseña personal no es "DNI"', r.ok && r.r.rows[0].j.es_dni === false)
+
+r = await como(db, P.supervisor, () => intenta(() => db.query(`select public.accesos_marcar_cambio_obligatorio(array[$1]::uuid[], true)`, [P.guardiaActivo.id])))
+t.check('Supervisión no puede marcar cambios obligatorios', !r.ok)
+r = await como(db, P.administracion, () => intenta(() => db.query(`select public.accesos_marcar_cambio_obligatorio(array[$1, $2]::uuid[], true) n`, [P.guardiaActivo.id, P.guardiaInactivo.id])))
+t.check('Administración marca un lote (los inactivos se ignoran)', r.ok && r.r.rows[0].n === 1, r.error)
+r = await estado(P.guardiaActivo)
+t.check('marcado + contraseña DNI → cambio obligatorio', r.ok && r.r.rows[0].j.obligatorio === true)
+
+r = await como(db, P.guardiaActivo, () => intenta(() => db.query(`select public.mi_acceso_registrar_cambio()`)))
+t.check('no se puede "registrar el cambio" si la contraseña sigue siendo el DNI', !r.ok && /sigue siendo el DNI/.test(r.error), r.error)
+await db.query(`update auth.users set encrypted_password = 'h:MiClaveNueva1' where id = $1`, [P.guardiaActivo.auth]) // la persona la cambió en Auth
+r = await como(db, P.guardiaActivo, () => intenta(() => db.query(`select public.mi_acceso_registrar_cambio() ok`)))
+t.check('cambiada en Auth → se registra el cambio', r.ok && r.r.rows[0].ok === true)
+r = await estado(P.guardiaActivo)
+t.check('ya no se le pide más', r.ok && r.r.rows[0].j.obligatorio === false && r.r.rows[0].j.es_dni === false)
+const ev = (await db.query(`select string_agg(evento, ',' order by id) e from public.accesos_password_eventos where usuario_id = $1`, [P.guardiaActivo.id])).rows[0].e
+t.check('historial: marcado_obligatorio → cambio_realizado', ev === 'marcado_obligatorio,cambio_realizado', ev)
+
+r = await como(db, P.administracion, () => intenta(() => db.query(`select * from public.accesos_password_estado()`)))
+const cols = r.ok ? r.r.fields.map(f => f.name).join(',') : ''
+t.check('Administración ve el tablero de contraseñas (sólo activos)', r.ok && r.r.rows.length === 5)
+t.check('el tablero no expone hashes ni contraseñas', !/hash|encrypted|password\b/.test(cols), cols)
+r = await como(db, P.supervisor, () => intenta(() => db.query(`select * from public.accesos_password_estado()`)))
+t.check('Supervisión no ve el tablero', !r.ok)
+r = await como(db, P.guardiaActivo, () => intenta(() => db.query(`select public.acceso_password_es_dni($1)`, [P.supervisor.id])))
+t.check('nadie consulta desde la app si la contraseña de OTRO es el DNI', !r.ok)
+r = await como(db, P.administracion, () => intenta(() => db.query(`insert into public.accesos_password_eventos (usuario_id, evento) values ($1, 'cambio_realizado')`, [P.supervisor.id])))
+t.check('nadie escribe el historial directo desde la app', !r.ok)
+r = await intenta(() => db.query(`delete from public.accesos_password_eventos`))
+t.check('el historial de contraseñas no se borra', !r.ok)
+r = await como(db, P.guardiaInactivo, () => intenta(() => db.query(`select public.mi_acceso_password() j`)))
+t.check('un inactivo no queda obligado (no entra igual)', r.ok && r.r.rows[0].j.obligatorio === false)
+
+r = await intenta(() => db.exec(migracion('rollback/20261208100100_accesos_password_rollback.sql')))
+t.check('rollback de contraseñas se ejecuta', r.ok, r.error)
 
 t.fin()

@@ -4,6 +4,7 @@ import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import { useRouter } from 'next/navigation'
 import { calcAlertaEntrada, calcDistancia, supabase } from '@/lib/supabase'
 import NuevaPassword from '@/components/auth/NuevaPassword'
+import { consultarCambioPassword } from '@/lib/acceso-password-dni'
 import { activarNotificacionesPush } from '@/lib/push-client'
 import { MINUTOS_AVISO_SALIDA_ANTICIPADA, minutosHastaFinDeTurno, textoAvisoSalidaAnticipada } from '@/lib/salida-anticipada'
 import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
@@ -651,6 +652,30 @@ export default function GuardiaMobile({ user }: { user: any }) {
     try { return Boolean(normalizarTelefonoAr(user.telefono).e164) } catch { return true }
   })
   const [telModalAbierto, setTelModalAbierto] = useState(false)
+  // Cambio obligatorio de la contraseña inicial (DNI). Si la consulta falla, no se pide.
+  const [passModalAbierto, setPassModalAbierto] = useState(false)
+  useEffect(() => {
+    let vivo = true
+    void consultarCambioPassword().then(p => { if (vivo && p?.obligatorio) setPassModalAbierto(true) })
+    return () => { vivo = false }
+  }, [])
+  // "Primero tengo que fichar": el aviso se aparta para que pueda fichar y vuelve
+  // al terminar el fichaje (o a los 15 minutos si no fichó). Nunca bloquea un fichaje.
+  const [passPausado, setPassPausado] = useState(false)
+  const passTimerRef = useRef<number | null>(null)
+  const pausarPassParaFichar = useCallback(() => {
+    setPassPausado(true)
+    if (passTimerRef.current) window.clearTimeout(passTimerRef.current)
+    passTimerRef.current = window.setTimeout(() => setPassPausado(false), 15 * 60 * 1000)
+  }, [])
+  useEffect(() => () => { if (passTimerRef.current) window.clearTimeout(passTimerRef.current) }, [])
+  const fichajeEnCursoRef = useRef(false)
+  useEffect(() => {
+    const enCurso = ingresoFase !== 'idle' || fichando !== null
+    // Terminó el fichaje que estaba haciendo: el aviso vuelve.
+    if (fichajeEnCursoRef.current && !enCurso) setPassPausado(false)
+    fichajeEnCursoRef.current = enCurso
+  }, [ingresoFase, fichando])
   const [telInput, setTelInput] = useState('')
   const [telPreview, setTelPreview] = useState<string | null>(null)
   const [telError, setTelError] = useState<string | null>(null)
@@ -2439,7 +2464,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
           onConfirmar={() => protocolos.confirmar(protocolos.abierto!.doc, protocolos.abierto!.turnoId)}
         />
       )}
-      {protocolos.aviso && !protocolos.abierto && !telModalAbierto && ingresoFase === 'idle' && fichando === null && !resumenTurnoId && (
+      {protocolos.aviso && !protocolos.abierto && !telModalAbierto && !passModalAbierto && ingresoFase === 'idle' && fichando === null && !resumenTurnoId && (
         <AvisoProtocoloIngreso
           doc={protocolos.aviso.doc}
           onLeer={() => { void protocolos.abrir(protocolos.aviso!.doc, protocolos.aviso!.turnoId) }}
@@ -2450,7 +2475,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
       {/* Pedido único de la credencial (frente y dorso, «en trámite» o «no tengo»).
           Nunca durante un fichaje y siempre después del teléfono; si el pedido está
           cerrado o falla, no se muestra. */}
-      {!telModalAbierto && ingresoFase === 'idle' && fichando === null && user?.id && <PedidoCredencial empleadoId={user.id} />}
+      {!telModalAbierto && !passModalAbierto && ingresoFase === 'idle' && fichando === null && user?.id && <PedidoCredencial empleadoId={user.id} />}
 
       {/* Captura de teléfono del vigilador (avisos por WhatsApp). COMPUERTA dura
           y obligatoria: sin "Ahora no", sin snooze, sin cerrar ni saltear. La
@@ -2499,6 +2524,26 @@ export default function GuardiaMobile({ user }: { user: any }) {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Contraseña inicial = DNI: cambio OBLIGATORIO (lo decide la base:
+          mi_acceso_password). Igual que la captura de teléfono: no se puede
+          cerrar, pero NUNCA aparece durante un fichaje (ingresoFase/fichando),
+          así no frena entradas, salidas, alertas ni rondas. Va después del
+          teléfono. Al guardar, NuevaPassword registra el cambio y la base
+          verifica que ya no es el DNI. */}
+      {passModalAbierto && !passPausado && !telModalAbierto && ingresoFase === 'idle' && fichando === null && (
+        <div role="dialog" aria-labelledby="pass-obligatoria-titulo" style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001, padding: 20 }}>
+          <div style={{ background: '#0f172a', border: '1px solid #1e2d42', borderRadius: 14, padding: 22, maxWidth: 380, width: '100%', color: '#e2e8f0' }}>
+            <div id="pass-obligatoria-titulo" style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>Elegí tu contraseña personal</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 14 }}>
+              Tu contraseña actual es tu DNI, un dato que conocen muchas personas. Elegí una propia para proteger tu cuenta: la vas a usar con tu email para ingresar.
+              Si tenés que fichar, este aviso se oculta y vuelve al terminar.
+            </div>
+            <NuevaPassword dni={user?.dni} textoBoton="Guardar contraseña" onListo={() => { window.setTimeout(() => setPassModalAbierto(false), 1200) }}
+              textoCancelar="Primero tengo que fichar" onCancelar={pausarPassParaFichar} />
           </div>
         </div>
       )}

@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import {
   analizarExcelLote, analizarExcelLoteMensual, aplicarDiferenciasLote, aprobarSinPendientes, excelDeLoteMensual, exportarLote, importarResultadoLote,
-  type FinalFila,
+  type FinalFila, type ModoExportFinal,
 } from '@/lib/liquidacion-final-datos'
 
 const S: Record<string, React.CSSProperties> = {
@@ -38,10 +38,17 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
   const [avisosExcel, setAvisosExcel] = useState<string[]>([])
   const [eligiendo, setEligiendo] = useState(false)
   const [elegidas, setElegidas] = useState<Set<string>>(new Set())
+  const [modoExport, setModoExport] = useState<ModoExportFinal>('liquidacion')
 
-  const editables = useMemo(() => finales.filter(f => ['pendiente_calculo', 'borrador', 'lista'].includes(f.estado) && f.calculo), [finales])
+  // Período (mes de la baja) del Excel de trabajo: sólo el que se está trabajando (JC 10/11),
+  // armar todos los meses juntos era lento. Por defecto, el más reciente.
+  const meses = useMemo(() => Array.from(new Set(finales.filter(f => f.estado !== 'anulada' && f.calculo && f.baja.fecha_baja).map(f => f.baja.fecha_baja!.slice(0, 7)))).sort().reverse(), [finales])
+  const [mesElegido, setMesElegido] = useState<string>('')
+  const mes = meses.includes(mesElegido) ? mesElegido : (meses[0] ?? '')
+  const delMes = (f: FinalFila) => !mes || f.baja.fecha_baja?.slice(0, 7) === mes
+  const editables = useMemo(() => finales.filter(f => ['pendiente_calculo', 'borrador', 'lista'].includes(f.estado) && f.calculo && delMes(f)), [finales, mes])
   // El Excel se puede bajar siempre (JC 27/10): las ya exportadas salen para consulta.
-  const paraExcel = useMemo(() => finales.filter(f => f.estado !== 'anulada' && f.calculo), [finales])
+  const paraExcel = useMemo(() => finales.filter(f => f.estado !== 'anulada' && f.calculo && delMes(f)), [finales, mes])
   const exportables = useMemo(() => finales.filter(f => ['lista', 'exportada'].includes(f.estado)), [finales])
   const aprobables = finales.filter(f => f.estado === 'borrador' && !f.requiere_recalculo && !(f.faltantes?.length))
 
@@ -100,7 +107,7 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
   const exportar = () => correr('exportar', async () => {
     const elegidasF = exportables.filter(f => elegidas.has(f.id))
     if (!elegidasF.length) return 'Elegí al menos una persona.'
-    const r = await exportarLote(supabase, elegidasF)
+    const r = await exportarLote(supabase, elegidasF, modoExport)
     setEligiendo(false); onCambio()
     if (r.bytes) descargar(r.bytes as BlobPart, r.nombre, 'application/vnd.ms-excel')
     resumenExport = `Archivo de Visual con ${r.incluidas.length} persona(s): ${r.incluidas.join(', ')}.`
@@ -130,6 +137,15 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
         Bajá el Excel de trabajo (mismo formato que el mensual: una fila por persona y, al final, las columnas de la liquidación), editá lo que quieras, volvelo a subir y exportá un solo archivo de Visual con los empleados de baja.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+        {meses.length > 0 && (
+          <label style={{ ...S.sub, display: 'flex', gap: 6, alignItems: 'center' }}>
+            Período
+            <select value={mes} disabled={!!ocupado} onChange={e => setMesElegido(e.target.value)}
+              style={{ background: '#0b1220', color: '#cbd5e1', border: '1px solid #334155', borderRadius: 6, padding: '6px 8px', fontSize: 13 }}>
+              {meses.map(m => <option key={m} value={m}>{m.split('-').reverse().join('/')}</option>)}
+            </select>
+          </label>
+        )}
         <button style={S.btn2} disabled={!!ocupado || !paraExcel.length} onClick={() => void bajarExcel()}>{ocupado === 'excel' ? 'Armando…' : `Bajar Excel de trabajo (${paraExcel.length})`}</button>
         <label style={{ ...S.btn2, display: 'inline-block' }}>
           {ocupado === 'leer' ? 'Leyendo…' : 'Subir Excel de trabajo'}
@@ -176,6 +192,16 @@ export default function LoteLiquidacionesFinales({ finales, onCambio }: { finale
         <div style={{ marginTop: 12, padding: 10, border: '1px solid #166534', borderRadius: 8 }}>
           <strong>¿Quiénes van en el archivo de Visual?</strong>
           <div style={{ ...S.sub, marginTop: 2 }}>Sólo aprobadas, o ya exportadas para volver a bajar el archivo. Exportar las registra como enviadas: después no se recalculan.</div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 8, fontSize: 13 }}>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="radio" name="modoExport" checked={modoExport === 'liquidacion'} onChange={() => setModoExport('liquidacion')} />
+              Sólo liquidación final
+            </label>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="radio" name="modoExport" checked={modoExport === 'mes_completo'} onChange={() => setModoExport('mes_completo')} />
+              Mes completo + liquidación (lo ya enviado del mes + la final, un solo recibo)
+            </label>
+          </div>
           {exportables.map(f => (
             <label key={f.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 6 }}>
               <input type="checkbox" checked={elegidas.has(f.id)} onChange={e => {

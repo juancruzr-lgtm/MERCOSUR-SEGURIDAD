@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, diasComputablesSAC, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
+  vacacionesDevengadas, CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, diasComputablesSAC, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
   totalSAC, totalSACVacaciones, type DatosLiquidacionFinal, type ConceptoCatalogo, type ConteoSAC,
 } from '@/lib/liquidacion-final'
 import { plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
@@ -204,15 +204,29 @@ describe('presentismo (Paniagua)', () => {
 
 
 describe('datos incompletos: marca pendiente, no asume cero', () => {
-  it('tomadas sin cargar = 0 (JC 21/10); sin saldo → faltante y sin 208/217', () => {
+  it('tomadas sin cargar = 0 (JC 21/10); sin saldo → se calcula 14/365 por días del año (JC 10/11)', () => {
     const r = calcularLiquidacionFinal(datos({ entradas: { vacaciones: { saldoDias: 14, tomadasDias: null } } }))
     expect(r.faltantes).toEqual([])
     expect(linea(r, '208')?.cantidad).toBe(14)
     expect(r.advertencias.join(' ')).toMatch(/tomadas sin cargar: se toman como 0/)
+    // Fulla: baja 30/09/2026, ingreso 2023 (3 años → 14 por año): 272 días × 14/365 = 10,43.
     const r2 = calcularLiquidacionFinal(datos({ entradas: {} }))
-    expect(r2.faltantes.map(f => f.clave)).toEqual(['vacaciones_saldo', 'vacaciones_tomadas'])
-    expect(linea(r2, '208')).toBeUndefined()
-    expect(linea(r2, '217')).toBeUndefined()
+    expect(r2.faltantes).toEqual([])
+    expect(r2.calculo.vacaciones.saldo).toBe(10.43)
+    expect(r2.calculo.vacaciones.tomadas).toBe(0)
+    expect(linea(r2, '208')?.cantidad).toBe(10.43)
+    expect(linea(r2, '217')).toBeDefined()
+    expect(r2.advertencias.join(' ')).toMatch(/Vacaciones devengadas calculadas: 272 días/)
+    // Sin fecha de baja no hay con qué calcular: sigue el faltante.
+    const r3 = calcularLiquidacionFinal(datos({ baja: { fecha: null }, ordinarios: null, entradas: {} }))
+    expect(r3.faltantes.map(f => f.clave)).toContain('vacaciones_saldo')
+  })
+  it('vacaciones devengadas: desde el ingreso si entró ese año, y escala por antigüedad', () => {
+    expect(vacacionesDevengadas('2026-10-03', '2026-08-02')).toEqual({ dias: 2.38, diasAnuales: 14, diasTrabajados: 62, inicio: '2026-08-02' })
+    expect(vacacionesDevengadas('2026-12-31', '2021-05-10').diasAnuales).toBe(21)
+    expect(vacacionesDevengadas('2026-12-31', '2016-01-01').diasAnuales).toBe(28)
+    expect(vacacionesDevengadas('2026-12-31', '2000-01-01').diasAnuales).toBe(35)
+    expect(vacacionesDevengadas('2026-06-30', null)).toMatchObject({ diasAnuales: 14, diasTrabajados: 180 })
   })
   it('contrato eventual: sin vacaciones (208/217) ni faltantes de vacaciones (JC 21/10)', () => {
     const r = calcularLiquidacionFinal({ ...datos({ entradas: {} }), eventual: true })
@@ -507,5 +521,44 @@ describe('jornadas efectivamente trabajadas (Paniagua: baja 03/10, trabajó hast
       '000': 0, '001': 244872, '120003': 129983.42, '203': 123480, '208': 122436, '212': 35000, '214': 7200, '217': 8386.03,
     })
     expect(r.lineas.find(l => l.codigo === '000')!.cantidad).toBe(6)
+  })
+
+  it('mes ya exportado con horas corregidas a mano: la final usa la corrección y no manda horas de más (caso Ibarra 10/11)', async () => {
+    // El mensual se exportó con horas rec corregidas a 40 (40 × 5.101,50 = 204.060 en el 001).
+    const tablas: Record<string, any[]> = {
+      ...base, novedades_laborales: [], liquidacion_persona: [{ cod_interno: '010 Bis', nombre: 'PANIAGUA EDGAR IVAN' }],
+      liquidacion_periodo: [{ id: 'p10', estado: 'exportada' }],
+      liquidacion_ajuste: [{ clave: 'horas_rec', valor_liquidacion: 40 }],
+      baja_causa: [{ codigo: 'renuncia', nombre: 'Renuncia', presentismo: 'cero_si_no_completa_mes', evaluar: [] }],
+      liquidacion_concepto_catalogo: Array.from(CATALOGO.entries()).map(([codigo_visual, c]) => ({ codigo_visual, ...c })),
+      liquidacion_resultado_fila: [],
+    }
+    const q = (rows: any[]) => {
+      const o: any = {
+        select: () => o, order: () => o, eq: () => o, lte: () => o, gte: () => o, lt: () => o, gt: () => o, in: () => o, not: () => o, neq: () => o, limit: () => o,
+        range: (d: number, h: number) => Promise.resolve({ data: rows.slice(d, h + 1), error: null }),
+        maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+        then: (ok: any) => ok({ data: rows, error: null }),
+      }
+      return o
+    }
+    const client = {
+      from: (t: string) => q(tablas[t] ?? []),
+      rpc: (fn: string) => Promise.resolve({ data: fn === 'liquidacion_final_ya_liquidado' ? [{ codigo: '000', cantidad: 6, importe: 0 }, { codigo: '001', cantidad: 1, importe: 204060 }] : 0, error: null }),
+    }
+    const f: any = {
+      id: 'f1', baja_id: 'b1', mes: '2026-10', estado: 'pendiente_calculo', version: 0, requiere_recalculo: true,
+      entradas: {}, calculo: null, faltantes: [], advertencias: [],
+      baja: { id: 'b1', empleado_id: 'u-pan', nombre: 'PANIAGUA, EDGAR IVAN', cuil: '20441767871', fecha_ingreso: '2026-08-02', causa: 'renuncia',
+        fecha_baja: '2026-10-03', estado: 'confirmada', origen: 'legajo', vacaciones: null, turnos_futuros: [] },
+    }
+    const ctx = await contextoDeFinal(client, f)
+    expect(ctx.error).toBeNull()
+    expect(ctx.avisos.join(' ')).toMatch(/ya se exportó a Visual con correcciones manuales .*horas_rec/)
+    const r = calcularLiquidacionFinal(ctx.datos!)
+    // Sin la corrección daba 48 h (244.872) y mandaba 8 h de más; con ella, 001 ya está pago.
+    expect(r.lineas.find(l => l.codigo === '001')).toBeUndefined()
+    // Las horas que el mensual no pagó en el 001 van a extras (212): 62 − 40 = 22 h, no 62 − 48 = 14.
+    expect(ctx.datos!.ordinarios!.horasExtra).toBe(22)
   })
 })
