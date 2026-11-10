@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ensureEmployeeAuth, getSupabaseAdmin, nombreEmpleado, requireCapacidad, type UsuarioEmpleado } from '../_lib/employee-auth'
+import { marcarCambioObligatorio } from '../_lib/acceso-password'
 
 type Omitido = { usuario_id: string, empleado: string, motivo: string }
 type ErrorSync = { usuario_id: string, empleado: string, error: string }
@@ -34,7 +35,11 @@ export async function POST(req: NextRequest) {
     // ni toca a desvinculados o bloqueados por baja (ver motivoSinAcceso).
     const resultado = await ensureEmployeeAuth(admin.client, usuario, { conservarPassword: true })
 
-    if (resultado.action === 'creado') summary.creados += 1
+    if (resultado.action === 'creado') {
+      summary.creados += 1
+      // Cuenta nueva con contraseña inicial = DNI: cambio obligatorio en su primer ingreso.
+      await marcarCambioObligatorio(admin.client, usuario.id, 'alta', null)
+    }
     if (resultado.action === 'actualizado') summary.actualizados += 1
     if (resultado.action === 'vinculado') summary.vinculados += 1
 

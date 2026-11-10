@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { repairEmployeeAuthUser } from '../_lib/auth-repair'
 import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
 import { tieneCapacidad, alcanceDe } from '@/lib/capacidades'
-import { accesoPorInvitacion, invitarEmpleado, urlRetornoAcceso } from '../_lib/acceso-invitacion'
+import { marcarCambioObligatorio } from '../_lib/acceso-password'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -31,25 +31,6 @@ export async function POST(req: NextRequest) {
 
     if (usuarioError) return NextResponse.json({ error: usuarioError.message }, { status: 500 })
     if (!usuario) return NextResponse.json({ error: 'Empleado no encontrado' }, { status: 404 })
-
-    // Acceso por invitación (ACCESO_POR_INVITACION=1): la cuenta se crea sin
-    // contraseña DNI y la persona elige la suya desde el email. Sólo
-    // Administración/Gerencia; Supervisión deja de crear cuentas.
-    if (accesoPorInvitacion()) {
-      if (!pleno) return NextResponse.json({ error: 'Las cuentas de acceso las crea Administración' }, { status: 403 })
-      const r = await invitarEmpleado(admin.client, usuario, {
-        redirectTo: urlRetornoAcceso(req.nextUrl.origin),
-        actorId: acceso.perfil.id,
-        origen: 'administracion',
-      })
-      if (r.action === 'omitido') return NextResponse.json({ error: r.motivo }, { status: 400 })
-      if (r.action === 'error') return NextResponse.json({ error: r.error }, { status: 502 })
-      return NextResponse.json({
-        ok: true,
-        action: r.action,
-        message: r.action === 'invitado' ? `Invitación enviada a ${r.email}` : `Enlace para crear contraseña enviado a ${r.email}`,
-      })
-    }
 
     if (!pleno && !['guardia', 'vigilador'].includes(usuario.rol || 'guardia')) {
       return NextResponse.json({ error: 'Solo podes crear acceso a vigiladores' }, { status: 403 })
@@ -81,6 +62,14 @@ export async function POST(req: NextRequest) {
     if (resultado.action === 'omitido') return NextResponse.json({ error: resultado.motivo }, { status: 400 })
     if (resultado.action === 'error') return NextResponse.json({ error: resultado.error }, { status: 400 })
 
+    // Cuenta nueva (o recreada) con contraseña inicial = DNI: en su primer
+    // ingreso la app le pide una contraseña personal (acceso-password.ts).
+    let avisoCambio: string | null = null
+    if (resultado.action === 'creado' || resultado.action === 'recreado') {
+      const m = await marcarCambioObligatorio(admin.client, usuario.id, 'alta', acceso.perfil.id)
+      if (!m.ok) avisoCambio = ' Atención: no se pudo marcar el cambio de contraseña obligatorio.'
+    }
+
     const message =
       resultado.action === 'creado'
         ? 'Usuario Auth creado correctamente'
@@ -94,7 +83,7 @@ export async function POST(req: NextRequest) {
       ok: true,
       action: resultado.action,
       user: resultado.user,
-      message,
+      message: message + (avisoCambio ?? ''),
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error interno del servidor'

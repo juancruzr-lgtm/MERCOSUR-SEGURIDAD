@@ -89,7 +89,7 @@ describe('nueva contraseña: validación', () => {
 
 describe('recuperación: lectura del enlace', () => {
   it('detecta el enlace de recuperación (flujo implícito)', () => {
-    expect(leerEnlaceAuth('#access_token=x&refresh_token=y&type=recovery', '')).toEqual({ recuperacion: true, invitacion: false, error: null })
+    expect(leerEnlaceAuth('#access_token=x&refresh_token=y&type=recovery', '')).toEqual({ recuperacion: true, error: null })
   })
   it('un Magic Link no es recuperación', () => {
     expect(leerEnlaceAuth('#access_token=x&type=magiclink', '').recuperacion).toBe(false)
@@ -294,7 +294,7 @@ describe('reparación de accesos: nunca pisa la contraseña de una cuenta válid
     expect(sinComentarios(leer('app/api/create-user/route.ts'))).not.toMatch(/resetearPassword/)
   })
   it('las rutas administrativas exigen sesión con capacidad', () => {
-    expect(leer('app/api/reset-user-password/route.ts')).toMatch(/requireCapacidad\(req, admin\.client, 'gestionar_personal'/)
+    expect(leer('app/api/reset-user-password/route.ts')).toMatch(/tieneCapacidad\(acceso\.perfil, 'gestionar_personal'\)/)
     expect(leer('app/api/admin/repair-auth-users/route.ts')).toMatch(/requireCapacidad\(req, admin\.client, 'configurar_sistema'/)
   })
 })

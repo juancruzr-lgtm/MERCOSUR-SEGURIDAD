@@ -1,7 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { tieneCapacidad, type Capacidad } from '@/lib/capacidades'
-import { accesoPorInvitacion } from './acceso-modo'
 
 export type UsuarioEmpleado = {
   id: string
@@ -253,8 +252,7 @@ export async function ensureEmployeeAuth(
   if (sinAcceso) return { action: 'omitido', reason: sinAcceso }
   // conservarPassword: una cuenta que ya existe no vuelve a la contraseña DNI
   // (Sincronizar accesos ya no resetea contraseñas; SEG-01 de la auditoría).
-  // Con acceso por invitación (acceso-modo.ts) nunca se fija el DNI como contraseña.
-  const conPassword = !options.conservarPassword && !accesoPorInvitacion()
+  const conPassword = !options.conservarPassword
 
   const dni = normalizeDni(usuario.dni)
   const email = normalizeEmail(usuario.email)
@@ -320,7 +318,7 @@ export async function ensureEmployeeAuth(
     return { action: 'vinculado', user: actualizado }
   }
 
-  const { data, error } = await supabaseAdmin.auth.admin.createUser(authPayload(usuario, email, dni, conPassword))
+  const { data, error } = await supabaseAdmin.auth.admin.createUser(authPayload(usuario, email, dni))
 
   if (error || !data.user) {
     console.error('AUTH createUser error', { usuario_id: usuario.id, email, error: error?.message })
