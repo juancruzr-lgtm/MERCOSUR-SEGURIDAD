@@ -58,6 +58,9 @@ export async function POST(req: NextRequest) {
     c.usuario.from('fact_clientes').select('condicion_iva').eq('id', e.solicitud?.cliente_id ?? '').maybeSingle(),
     c.usuario.from('fact_config').select('clave, valor').in('clave', ['emision', 'emisor']),
   ])
+  // Plazo de pago del contrato: si la fecha aprobada ya pasó, se informa emisión + plazo (30 días si no tiene otro).
+  const prefK: any = e.prefactura_id ? (await c.usuario.from('fact_prefacturas').select('contrato_id').eq('id', e.prefactura_id).maybeSingle()).data : null
+  const kPlazo: any = prefK?.contrato_id ? (await c.usuario.from('fact_contratos').select('dias_vencimiento').eq('id', prefK.contrato_id).maybeSingle()).data : null
   let ta
   try {
     ta = await obtenerTA(SERVICIO_WSFE, cfg.config, storeAmbiente(taStoreSupabase(c.admin), homo))
@@ -81,7 +84,7 @@ export async function POST(req: NextRequest) {
         p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_observaciones: x.observaciones ?? null }) },
       consulta: (id, x) => rpc('fact_emision_consulta', { p_emision_id: id, p_encontrado: x.encontrado, p_respuesta: x.respuesta ?? {},
         p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_total_c: x.totalC ?? null, p_numero: x.numero }),
-    }, { hoy: fechaArgentina(), condicionIva: cli?.condicion_iva ?? '', cbuFce: cbuFceDe(conf) })
+    }, { hoy: fechaArgentina(), condicionIva: cli?.condicion_iva ?? '', cbuFce: cbuFceDe(conf), plazoDias: kPlazo?.dias_vencimiento ?? null })
     return responder({ ...r, emision_id: e.id }, r.estado === 'invalida' ? 400 : r.estado === 'en_curso' ? 409 : 200)
   } catch (err: any) {
     // Falla al registrar el resultado: la solicitud quedó 'enviando' y la próxima vez se consulta.

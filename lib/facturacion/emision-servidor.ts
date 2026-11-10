@@ -64,13 +64,14 @@ export function alicuotaDe(netoC: number, ivaC: number): string | null {
   return null
 }
 
-export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; hoy: string; condicionIva: string; cbuFce?: string | null }): ComprobanteWsfe {
+export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; hoy: string; condicionIva: string; cbuFce?: string | null; plazoDias?: number | string | null }): ComprobanteWsfe {
   const s = e.solicitud ?? {}
   const neto = Number(s.neto_c), iva = Number(s.iva_c), total = Number(s.total_c)
   const pct = alicuotaDe(neto, iva)
-  // Si la fecha aprobada ya pasó, se informa la de emisión. El comprobante guarda esta misma
-  // fecha (la toma de solicitud.arca: migración 20261210100000), así el PDF coincide con ARCA.
-  const vto = vtoPagoParaArca(s.vto_pago, opts.hoy)
+  // Si la fecha aprobada ya pasó, se informa la de emisión + el plazo del contrato (30 días si no tiene
+  // otro). El comprobante guarda esta misma fecha (la toma de solicitud.arca: migración 20261210100000),
+  // así el PDF coincide con ARCA.
+  const vto = vtoPagoParaArca(s.vto_pago, opts.hoy, opts.plazoDias)
   const opcionales = [201, 202, 203].includes(e.tipo)
     ? (e.tipo === 201 ? (opts.cbuFce ? [{ id: '2101', valor: opts.cbuFce }] : []) : [{ id: '22', valor: 'N' }])
     : undefined
@@ -85,7 +86,7 @@ export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; ho
   }
 }
 
-export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: PuertoBase, opts: { hoy: string; condicionIva: string; cbuFce?: string | null; ahoraMs?: number }): Promise<ResultadoEmision> {
+export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: PuertoBase, opts: { hoy: string; condicionIva: string; cbuFce?: string | null; plazoDias?: number | string | null; ahoraMs?: number }): Promise<ResultadoEmision> {
   if (e.estado === 'autorizada') return { estado: 'autorizada', numero: e.numero!, cae: '' }
 
   const ahora = opts.ahoraMs ?? Date.now()
@@ -124,7 +125,7 @@ export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: Puerto
   const ult = await arca.ultimo({ puntoVenta: e.punto_venta, tipo: e.tipo })
   if ("error" in ult) return { estado: 'rechazada', motivo: `No se obtuvo el último número autorizado: ${ult.error}` }
   const numero = ult.numero + 1
-  const comp = comprobanteDesdeSolicitud(e, { numero, hoy: opts.hoy, condicionIva: opts.condicionIva, cbuFce: opts.cbuFce })
+  const comp = comprobanteDesdeSolicitud(e, { numero, hoy: opts.hoy, condicionIva: opts.condicionIva, cbuFce: opts.cbuFce, plazoDias: opts.plazoDias })
   const errores = validarComprobante(comp)
   if (errores.length) return { estado: 'invalida', errores }
 

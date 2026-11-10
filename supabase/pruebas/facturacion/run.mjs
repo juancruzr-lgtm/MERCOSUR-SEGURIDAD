@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes', '20261210100000_facturacion_vto_enviado_a_arca']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes', '20261210100000_facturacion_vto_enviado_a_arca', '20261210110000_facturacion_plazo_pago_30_por_defecto']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -601,6 +601,10 @@ ok('no se registra dos veces', await falla(() => manual()))
 
 // Vencimiento comercial según el contrato y las fechas reales.
 const venc = async (hoy = '2026-11-03') => (await como(ADM, () => uno(`select public.fact_vencimientos($1, $2) v`, [hoy, cliCond]))).v.find(x => x.comprobante_id === compManual)
+// Desde 20261210110000 un contrato nuevo arranca con 30 días desde la emisión (Gerencia, 10/11/2026).
+const vDef = (await venc()).vencimiento
+ok('contrato nuevo sin condiciones: 30 días desde la emisión por defecto', vDef.estado === 'definido' && vDef.evento === 'emision' && Number(vDef.dias) === 30, JSON.stringify(vDef))
+await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"pago_evento":""}'::jsonb)`, [kCond]))
 ok('sin evento de pago cargado: condición comercial pendiente de definir', (await venc()).estado_mora === 'sin_vencimiento' && (await venc()).vencimiento.motivo === 'Condición comercial pendiente de definir')
 await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"pago_evento":"presentacion","dias_vencimiento":30}'::jsonb)`, [kCond]))
 ok('plazo desde la presentación sin fecha de presentación: pendiente', (await venc()).vencimiento.estado === 'evento_pendiente')
@@ -610,7 +614,8 @@ ok('30 días desde la presentación del 05/10 → vence 04/11 (no 30 días desde
 await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"pago_evento":"fecha_fija","dias_vencimiento":0,"pago_dia_mes":31}'::jsonb)`, [kCond]))
 ok('fecha fija día 31 cae el último día del mes (31/10)', (await venc()).vencimiento.vencimiento === '2026-10-31')
 await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"pago_evento":"presentacion","dias_vencimiento":30}'::jsonb)`, [kCond]))
-ok('el cambio de condiciones queda en el historial con los valores anteriores', (await sql(`select 1 from public.fact_historial where entidad_id = $1 and accion = 'condiciones_comerciales' and datos->'anteriores' ? 'pago_evento'`, [kCond])).length === 3)
+// 4 cambios: sacar el evento por defecto (20261210110000), presentación, fecha fija, presentación.
+ok('el cambio de condiciones queda en el historial con los valores anteriores', (await sql(`select 1 from public.fact_historial where entidad_id = $1 and accion = 'condiciones_comerciales' and datos->'anteriores' ? 'pago_evento'`, [kCond])).length === 4)
 ok('vencida sin cláusula de interés: no se calcula nada', (await venc('2026-11-10')).estado_mora === 'vencida_sin_clausula'
   && await falla(() => como(ADM, () => sql(`select public.fact_interes_proponer($1, '2026-11-10')`, [compManual])), /cláusula/))
 ok('una tasa sin período ni método se rechaza', await falla(() => como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa":36.5}'::jsonb)`, [kCond]))))
@@ -744,6 +749,27 @@ ok('reagrupar: repetir la misma operación no duplica (las anteriores ya están 
   const deFuncion = v.filter(r => /preparar|anon/.test(r.control))
   ok('verificacion-arca-ambientes.sql: controles de la función OK', deFuncion.length === 4 && deFuncion.every(r => r.ok === true), JSON.stringify(v))
 }
+
+// ── Plazo de pago por defecto (20261210110000) ─────────────────────────────
+// Como los 18 contratos de producción al 10/11: sin plazo ni evento. Se vuelve a correr la migración.
+const kSin = (await uno(`select id from public.fact_contratos where id <> $1 order by id limit 1`, [kHag])).id
+await db.exec(`update public.fact_contratos set dias_vencimiento = null, pago_evento = null where id = '${kSin}'`)
+await db.exec(`update public.fact_contratos set pago_evento = 'emision' where id = '${kHag}'`)
+const hagAntes = await uno(`select dias_vencimiento d, version v from public.fact_contratos where id = $1`, [kHag])
+await db.exec(readFileSync(`${REPO}/supabase/migrations/20261210110000_facturacion_plazo_pago_30_por_defecto.sql`, 'utf8'))
+const kS = await uno(`select dias_vencimiento d, pago_evento e from public.fact_contratos where id = $1`, [kSin])
+ok('plazo por defecto: un contrato sin plazo ni evento queda en 30 días desde la emisión', kS.d === 30 && kS.e === 'emision', JSON.stringify(kS))
+const hS = await uno(`select datos from public.fact_historial where entidad_id = $1 and datos->>'migracion' = '20261210110000' order by at desc limit 1`, [kSin])
+ok('…y queda en el historial con los valores anteriores', hS?.datos?.anteriores?.dias_vencimiento === null && hS?.datos?.nuevas?.dias_vencimiento === 30, JSON.stringify(hS))
+const hagDespues = await uno(`select dias_vencimiento d, version v from public.fact_contratos where id = $1`, [kHag])
+ok('plazo por defecto: un contrato con otro plazo no se toca (La Caja, 45 días)', hagDespues.d === 45 && hagDespues.v === hagAntes.v, JSON.stringify(hagDespues))
+const kNuevoDef = await uno(`select column_default d from information_schema.columns where table_schema = 'public' and table_name = 'fact_contratos' and column_name = 'dias_vencimiento'`)
+ok('plazo por defecto: los contratos nuevos nacen con 30 días', String(kNuevoDef.d) === '30', JSON.stringify(kNuevoDef))
+await db.exec(readFileSync(`${REPO}/supabase/rollback/20261210110000_facturacion_plazo_pago_30_por_defecto_rollback.sql`, 'utf8'))
+const kR = await uno(`select dias_vencimiento d, pago_evento e from public.fact_contratos where id = $1`, [kSin])
+ok('rollback del plazo por defecto: el contrato vuelve a quedar sin plazo y La Caja sigue en 45', kR.d === null && kR.e === null
+  && (await uno(`select dias_vencimiento d from public.fact_contratos where id = $1`, [kHag])).d === 45, JSON.stringify(kR))
+await db.exec(readFileSync(`${REPO}/supabase/migrations/20261210110000_facturacion_plazo_pago_30_por_defecto.sql`, 'utf8'))
 
 // ── Rollback ───────────────────────────────────────────────────────────────
 for (const m of [...MIGS].reverse()) await db.exec(readFileSync(`${REPO}/supabase/rollback/${m}_rollback.sql`, 'utf8'))
