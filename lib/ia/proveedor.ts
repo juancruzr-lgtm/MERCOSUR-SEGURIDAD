@@ -7,6 +7,8 @@
 export type PedidoVision = {
   /** Imagen a analizar. */
   imagen: { bytes: Buffer, mime: string }
+  /** Páginas siguientes del mismo documento (p. ej. solicitud de empleo de 2 hojas). */
+  paginasAdicionales?: Array<{ bytes: Buffer, mime: string }>
   /** Fotos de referencia (uniforme correcto, ejemplo de libro). Puede ir vacío. */
   referencias?: Array<{ bytes: Buffer, mime: string }>
   /**

@@ -26,6 +26,30 @@ export type LecturaPropuesta = {
   seleccion: Partial<Record<CampoSeleccion, string | null>>
   dudosos: CampoPostulacion[]
   avisos: string[]
+  /** Dónde está escrito cada dato: página y rectángulo [ymin, xmin, ymax, xmax] en milésimas. */
+  regiones?: Partial<Record<CampoPostulacion, { pagina: number; caja: [number, number, number, number] }>>
+}
+
+/** Recorte de la foto original donde está escrito el dato (para comparar al confirmar). */
+function RecorteFoto({ url, caja }: { url: string; caja: [number, number, number, number] }) {
+  const [tam, setTam] = useState<{ w: number; h: number } | null>(null)
+  useEffect(() => {
+    const img = new Image()
+    img.onload = () => setTam({ w: img.naturalWidth, h: img.naturalHeight })
+    img.src = url
+  }, [url])
+  if (!tam) return null
+  // Margen alrededor del dato para que se vea el renglón completo.
+  const [y0, x0, y1, x1] = [Math.max(0, caja[0] - 15), Math.max(0, caja[1] - 20), Math.min(1000, caja[2] + 15), Math.min(1000, caja[3] + 20)]
+  const rw = (x1 - x0) / 1000; const rh = (y1 - y0) / 1000
+  return (
+    <div role="img" aria-label="Recorte de la solicitud original" style={{
+      width: '100%', aspectRatio: `${rw * tam.w} / ${rh * tam.h}`, maxHeight: 90, marginTop: 6, borderRadius: 6,
+      border: '1px dashed #f59e0b', backgroundColor: '#fff', backgroundImage: `url("${url}")`, backgroundRepeat: 'no-repeat',
+      backgroundSize: `${100 / rw}% ${100 / rh}%`,
+      backgroundPosition: `${rw >= 1 ? 0 : (x0 / 1000 / (1 - rw)) * 100}% ${rh >= 1 ? 0 : (y0 / 1000 / (1 - rh)) * 100}%`,
+    }} />
+  )
 }
 
 const C = {
@@ -62,9 +86,10 @@ function Pasos({ estado }: { estado: Postulacion['estado'] }) {
   )
 }
 
-function Campo({ def, valor, error, dudoso, editable, onCambio, onConfirmar }: {
+function Campo({ def, valor, error, dudoso, editable, onCambio, onConfirmar, recorte }: {
   def: (typeof CAMPOS)[number]; valor: string; error: string | null; dudoso: boolean; editable: boolean
   onCambio: (v: string) => void; onConfirmar: () => void
+  recorte?: ReactNode
 }) {
   const id = `campo-${def.campo}`
   return (
@@ -82,6 +107,7 @@ function Campo({ def, valor, error, dudoso, editable, onCambio, onConfirmar }: {
         onChange={e => onCambio(e.target.value)}
         style={{ ...input, borderColor: error ? 'rgba(239,68,68,.7)' : dudoso ? C.ambar : '#334155', background: dudoso ? C.ambarFondo : C.fondo }}
       />
+      {dudoso && recorte}
       {dudoso && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
           <span style={{ fontSize: 12, color: C.ambar }}>Dudoso: compará con la foto y confirmá o corregí.</span>
@@ -124,6 +150,8 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
   const [ocupado, setOcupado] = useState<string | null>(null)
   const [aviso, setAviso] = useState<{ tipo: 'ok' | 'error' | 'info'; texto: string } | null>(null)
   const [avisosLectura, setAvisosLectura] = useState<string[]>([])
+  const [regiones, setRegiones] = useState<NonNullable<LecturaPropuesta['regiones']>>({})
+  const [fotoPagina, setFotoPagina] = useState<Record<number, string>>({})
   const [modo, setModo] = useState<null | 'aprobar' | 'descartar' | 'alta'>(null)
   const [fechaIngreso, setFechaIngreso] = useState(postulacion?.fecha_ingreso_prevista ?? new Date().toISOString().slice(0, 10))
   const [legajo, setLegajo] = useState(postulacion?.legajo_propuesto ?? '')
@@ -214,6 +242,15 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
     })
     setDudosos(d => Array.from(new Set([...d, ...p.dudosos])))
     setAvisosLectura(p.avisos)
+    setRegiones(p.regiones ?? {})
+    // Fotos de las páginas con datos dudosos, para mostrar el recorte al lado del campo.
+    const paginas = Array.from(new Set(p.dudosos.map(c => p.regiones?.[c]?.pagina).filter((n): n is number => typeof n === 'number')))
+    const urls: Record<number, string> = {}
+    for (const n of paginas) {
+      const a = archivos.find(x => x.orden === n && x.mime !== 'application/pdf')
+      if (a) urls[n] = await api.urlArchivo(a.id).catch(() => '')
+    }
+    setFotoPagina(urls)
     setAviso({ tipo: 'info', texto: `Lectura lista: revisá los ${p.dudosos.length} campo(s) en ámbar y tocá "Guardar". Nada se guardó todavía.` })
   })
 
@@ -335,7 +372,10 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
                   <Campo key={c.campo} def={c} valor={String(valores[c.campo] ?? '')} error={errores[c.campo] ?? null}
                     dudoso={dudosos.includes(c.campo)} editable={editable}
                     onCambio={v => setValores(x => ({ ...x, [c.campo]: v }))}
-                    onConfirmar={() => setDudosos(d => d.filter(x => x !== c.campo))} />
+                    onConfirmar={() => setDudosos(d => d.filter(x => x !== c.campo))}
+                    recorte={regiones[c.campo] && fotoPagina[regiones[c.campo]!.pagina]
+                      ? <RecorteFoto url={fotoPagina[regiones[c.campo]!.pagina]} caja={regiones[c.campo]!.caja} />
+                      : undefined} />
                 ))}
               </div>
             </fieldset>

@@ -6,6 +6,7 @@
  */
 import { supabase, headersSesion } from '@/lib/supabase'
 import type { ApiPostulantes, ArchivoPostulacion, Duplicado, Postulacion, ResultadoAlta } from '@/lib/postulantes'
+import type { LecturaPropuesta } from '@/components/postulantes/FichaPostulante'
 
 const lanzar = (error: { message?: string } | null) => { if (error) throw new Error(error.message || 'Error de base de datos') }
 
@@ -76,6 +77,19 @@ export const apiPostulantesSupabase: ApiPostulantes = {
     const [g, c] = await Promise.all([supabase.rpc('postulacion_gestiona'), supabase.rpc('postulacion_carga_habilitada')])
     return { gestiona: g.data === true, carga: c.data === true }
   },
+}
+
+/**
+ * Lectura de la solicitud con IA (/api/postulaciones/<id>/leer). Devuelve una
+ * PROPUESTA: la ficha la muestra y la persona confirma y guarda.
+ * Se ofrece sólo si NEXT_PUBLIC_IA_SOLICITUDES_HABILITADA=1 (y el servidor
+ * vuelve a controlar IA_SOLICITUDES_HABILITADA).
+ */
+export const lecturaIaVisible = process.env.NEXT_PUBLIC_IA_SOLICITUDES_HABILITADA === '1'
+
+export async function leerSolicitudIA(postulacionId: string): Promise<LecturaPropuesta> {
+  const res = await fetch(`/api/postulaciones/${postulacionId}/leer`, { method: 'POST', headers: await headersSesion() })
+  return json<LecturaPropuesta>(res)
 }
 
 export type { ArchivoPostulacion, Duplicado }
