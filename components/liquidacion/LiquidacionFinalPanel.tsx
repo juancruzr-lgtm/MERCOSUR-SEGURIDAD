@@ -127,6 +127,9 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
   const [evaluaciones, setEvaluaciones] = useState<EvaluacionConcepto[]>([])
   const [visualPeriodo, setVisualPeriodo] = useState('')
   const [nuevoAj, setNuevoAj] = useState({ codigo: '', cantidad: '', importe: '', motivo: '' })
+  // Vacaciones editables en pantalla (JC 10/11). Saldo vacío = se calcula por antigüedad (14/365).
+  const [vacSaldo, setVacSaldo] = useState('')
+  const [vacTomadas, setVacTomadas] = useState('')
 
   async function cargar() {
     const r = await leerFinal(supabase, finalId)
@@ -136,6 +139,9 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
     setAjustes(e.ajustes ?? [])
     setEvaluaciones(e.evaluaciones ?? [])
     setVisualPeriodo(e.visualPeriodo ?? periodoSugerido(r.data.mes))
+    // Se muestran las que usa el cálculo; el saldo sólo queda fijo si se cargó a mano.
+    setVacSaldo(e.vacaciones?.saldoDias != null ? String(e.vacaciones.saldoDias) : '')
+    setVacTomadas(String(e.vacaciones?.tomadasDias ?? r.data.calculo?.vacaciones.tomadas ?? 0))
     setLineas((await lineasDeFinal(supabase, finalId)).data)
     setHist((await historialDeFinal(supabase, finalId)).data)
     if (['exportada', 'conciliada'].includes(r.data.estado)) setConc((await conciliacionFinal(supabase, finalId)).data)
@@ -155,7 +161,16 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
   }
 
   const guardarEntradas = (cambios?: Partial<EntradasFinal>) => correr(async () => {
-    const entradas: EntradasFinal = { ajustes, evaluaciones, visualPeriodo: visualPeriodo.trim() || null, ...(cambios ?? {}) }
+    // Se parte de lo guardado: el RPC reemplaza las entradas y si no se perdían las
+    // vacaciones, días/horas y parámetros cargados desde el Excel de trabajo.
+    const saldo = numOrNull(vacSaldo), tomadas = numOrNull(vacTomadas) ?? 0
+    const prevVac = f.entradas?.vacaciones
+    const vacCambio = saldo !== (prevVac?.saldoDias ?? null) || tomadas !== (prevVac?.tomadasDias ?? f.calculo?.vacaciones.tomadas ?? 0)
+    const entradas: EntradasFinal = {
+      ...(f.entradas ?? {}), ajustes, evaluaciones, visualPeriodo: visualPeriodo.trim() || null,
+      ...(vacCambio ? { vacaciones: { saldoDias: saldo, tomadasDias: tomadas, nota: 'cargadas en la pantalla del borrador' } } : {}),
+      ...(cambios ?? {}),
+    }
     const { error } = await supabase.rpc('liquidacion_final_guardar_entradas', { p_final_id: f.id, p_entradas: entradas, p_version: f.version })
     if (error) return error.message
     const r = await leerFinal(supabase, f.id)
@@ -226,7 +241,7 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
           <div><div style={S.sub}>Bases</div>Básico {pesos(c.bases.basico)} · día {pesos(c.bases.valorDia)} · hora extra {pesos(c.bases.horaExtra)}</div>
           <div><div style={S.sub}>SAC proporcional</div>{c.fechas.diasSAC != null ? `${c.fechas.diasSAC} días desde ${fecha(c.fechas.inicioComputo)}` : '—'}<div style={S.sub}>{c.fechas.regla}</div></div>
           {c.controlSAC && <div><div style={S.sub}>Control SAC (base legal según Visual)</div>{pesos(c.controlSAC.totalLegal)} ({c.controlSAC.mes}) · diferencia {pesos(c.controlSAC.diferencia)}</div>}
-          <div><div style={S.sub}>Vacaciones (del registro de baja)</div>devengadas {c.vacaciones.saldo ?? '—'} − tomadas {c.vacaciones.tomadas ?? '—'} = {c.vacaciones.noGozadas ?? '—'}</div>
+          <div><div style={S.sub}>Vacaciones</div>devengadas {c.vacaciones.saldo ?? '—'} − tomadas {c.vacaciones.tomadas ?? '—'} = {c.vacaciones.noGozadas ?? '—'}</div>
           <div><div style={S.sub}>Extras</div>{c.extras.horas} h × {pesos(c.extras.valorHora)} − pagado {pesos(c.extras.pagado)} = {pesos(c.extras.pendiente)}</div>
           {c.presentismo.motivo && <div><div style={S.sub}>Presentismo</div>{pesos(c.presentismo.calculado)} → {pesos(c.presentismo.aplicado)}<div style={S.sub}>{c.presentismo.motivo}</div></div>}
           {c.ya_liquidado.length > 0 && <div><div style={S.sub}>Ya liquidado en el mes</div>{c.ya_liquidado.map(y => `${y.codigo}: ${pesos(y.importe)}`).join(' · ')}</div>}
@@ -271,6 +286,18 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
           <strong>Revisión</strong>
           <div style={{ marginTop: 8, fontSize: 13 }}>Período / tipo con que se importa en Visual</div>
           <input style={{ ...S.input, width: '100%', maxWidth: 360, marginTop: 4 }} value={visualPeriodo} onChange={e => setVisualPeriodo(e.target.value)} />
+
+          <div style={{ marginTop: 12, fontSize: 13 }}>Vacaciones (días)</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4, alignItems: 'center' }}>
+            <label style={{ fontSize: 13 }}>Devengadas{' '}
+              <input style={{ ...S.input, width: 100 }} inputMode="decimal" value={vacSaldo} onChange={e => setVacSaldo(e.target.value)}
+                placeholder={c?.vacaciones.saldo != null ? `${c.vacaciones.saldo} (calc.)` : 'calcular'} />
+            </label>
+            <label style={{ fontSize: 13 }}>Tomadas{' '}
+              <input style={{ ...S.input, width: 100 }} inputMode="decimal" value={vacTomadas} onChange={e => setVacTomadas(e.target.value)} placeholder="0" />
+            </label>
+          </div>
+          <div style={{ ...S.sub, marginTop: 2 }}>Devengadas vacío = se calculan solas: días del año de la baja × 14/365 (21, 28 o 35 por año según antigüedad). Tomadas vacío = 0. «Guardar y recalcular» aplica.</div>
 
           {(c?.causal?.evaluar ?? []).length > 0 && (
             <div style={{ marginTop: 12 }}>

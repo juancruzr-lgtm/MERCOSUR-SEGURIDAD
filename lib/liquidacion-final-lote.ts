@@ -101,12 +101,9 @@ export function diferenciasDeHoja(
   const entradas: EntradasFinal = { ...guardado.entradas, ajustes: [...(guardado.entradas.ajustes ?? [])] }
 
   if (h.vacaciones.saldo !== guardado.vacaciones.saldo || h.vacaciones.tomadas !== guardado.vacaciones.tomadas) {
-    if (h.vacaciones.saldo == null || h.vacaciones.tomadas == null) {
-      if (h.vacaciones.saldo != null || h.vacaciones.tomadas != null) errores.push('Vacaciones: completá las dos celdas (B12 saldo y B13 tomadas); vacías no se asumen cero.')
-    } else {
-      entradas.vacaciones = { saldoDias: h.vacaciones.saldo, tomadasDias: h.vacaciones.tomadas, nota: 'cargadas en el Excel de trabajo' }
-      cambios.push(`Vacaciones: devengadas ${h.vacaciones.saldo}, tomadas ${h.vacaciones.tomadas}.`)
-    }
+    // JC 10/11: saldo vacío = se calcula por antigüedad (14/365); tomadas vacías = 0.
+    entradas.vacaciones = { saldoDias: h.vacaciones.saldo, tomadasDias: h.vacaciones.tomadas ?? 0, nota: 'cargadas en el Excel de trabajo' }
+    cambios.push(`Vacaciones: devengadas ${h.vacaciones.saldo ?? 'calculadas (14/365)'}, tomadas ${h.vacaciones.tomadas ?? 0}.`)
   }
   if ((h.visualPeriodo ?? null) !== (guardado.visualPeriodo ?? null) && h.visualPeriodo) {
     entradas.visualPeriodo = h.visualPeriodo

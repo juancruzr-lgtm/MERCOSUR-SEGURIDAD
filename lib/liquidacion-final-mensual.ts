@@ -417,13 +417,12 @@ export function diferenciasFinalMensual(
     }
 
     // Vacaciones y período de Visual.
-    if (l.vacSaldo !== g.vacaciones.saldo || l.vacTomadas !== g.vacaciones.tomadas) {
-      if (l.vacSaldo == null || l.vacTomadas == null) {
-        if (l.vacSaldo != null || l.vacTomadas != null) noTomados.push('Vacaciones: falta el saldo o las tomadas (vacío no se toma como cero).')
-      } else {
-        entradas.vacaciones = { saldoDias: l.vacSaldo, tomadasDias: l.vacTomadas, nota: 'cargadas en el Excel de trabajo' }
-        cambios.push(`Vacaciones: saldo ${l.vacSaldo}, tomadas ${l.vacTomadas}.`)
-      }
+    // JC 10/11: saldo vacío = se calcula por antigüedad (14/365); tomadas vacías = 0.
+    const tomadasExcel = l.vacTomadas ?? 0
+    const sinCambioVac = (l.vacSaldo ?? g.vacaciones.saldo) === g.vacaciones.saldo && tomadasExcel === (g.vacaciones.tomadas ?? 0)
+    if (!sinCambioVac) {
+      entradas.vacaciones = { saldoDias: l.vacSaldo, tomadasDias: tomadasExcel, nota: 'cargadas en el Excel de trabajo' }
+      cambios.push(`Vacaciones: saldo ${l.vacSaldo ?? 'calculado (14/365)'}, tomadas ${tomadasExcel}.`)
     }
     if (l.periodo && l.periodo !== (g.visualPeriodo ?? null)) { entradas.visualPeriodo = l.periodo; cambios.push(`Período de Visual: «${l.periodo}».`) }
 

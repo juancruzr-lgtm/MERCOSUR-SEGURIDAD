@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, diasComputablesSAC, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
+  vacacionesDevengadas, CONTEO_SAC_CONFIRMADO, calcularLiquidacionFinal, diasComputablesSAC, filasVisualFinal, jsonEstable, ordinariosDePlantilla,
   totalSAC, totalSACVacaciones, type DatosLiquidacionFinal, type ConceptoCatalogo, type ConteoSAC,
 } from '@/lib/liquidacion-final'
 import { plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
@@ -204,15 +204,29 @@ describe('presentismo (Paniagua)', () => {
 
 
 describe('datos incompletos: marca pendiente, no asume cero', () => {
-  it('tomadas sin cargar = 0 (JC 21/10); sin saldo → faltante y sin 208/217', () => {
+  it('tomadas sin cargar = 0 (JC 21/10); sin saldo → se calcula 14/365 por días del año (JC 10/11)', () => {
     const r = calcularLiquidacionFinal(datos({ entradas: { vacaciones: { saldoDias: 14, tomadasDias: null } } }))
     expect(r.faltantes).toEqual([])
     expect(linea(r, '208')?.cantidad).toBe(14)
     expect(r.advertencias.join(' ')).toMatch(/tomadas sin cargar: se toman como 0/)
+    // Fulla: baja 30/09/2026, ingreso 2023 (3 años → 14 por año): 272 días × 14/365 = 10,43.
     const r2 = calcularLiquidacionFinal(datos({ entradas: {} }))
-    expect(r2.faltantes.map(f => f.clave)).toEqual(['vacaciones_saldo', 'vacaciones_tomadas'])
-    expect(linea(r2, '208')).toBeUndefined()
-    expect(linea(r2, '217')).toBeUndefined()
+    expect(r2.faltantes).toEqual([])
+    expect(r2.calculo.vacaciones.saldo).toBe(10.43)
+    expect(r2.calculo.vacaciones.tomadas).toBe(0)
+    expect(linea(r2, '208')?.cantidad).toBe(10.43)
+    expect(linea(r2, '217')).toBeDefined()
+    expect(r2.advertencias.join(' ')).toMatch(/Vacaciones devengadas calculadas: 272 días/)
+    // Sin fecha de baja no hay con qué calcular: sigue el faltante.
+    const r3 = calcularLiquidacionFinal(datos({ baja: { fecha: null }, ordinarios: null, entradas: {} }))
+    expect(r3.faltantes.map(f => f.clave)).toContain('vacaciones_saldo')
+  })
+  it('vacaciones devengadas: desde el ingreso si entró ese año, y escala por antigüedad', () => {
+    expect(vacacionesDevengadas('2026-10-03', '2026-08-02')).toEqual({ dias: 2.38, diasAnuales: 14, diasTrabajados: 62, inicio: '2026-08-02' })
+    expect(vacacionesDevengadas('2026-12-31', '2021-05-10').diasAnuales).toBe(21)
+    expect(vacacionesDevengadas('2026-12-31', '2016-01-01').diasAnuales).toBe(28)
+    expect(vacacionesDevengadas('2026-12-31', '2000-01-01').diasAnuales).toBe(35)
+    expect(vacacionesDevengadas('2026-06-30', null)).toMatchObject({ diasAnuales: 14, diasTrabajados: 180 })
   })
   it('contrato eventual: sin vacaciones (208/217) ni faltantes de vacaciones (JC 21/10)', () => {
     const r = calcularLiquidacionFinal({ ...datos({ entradas: {} }), eventual: true })
