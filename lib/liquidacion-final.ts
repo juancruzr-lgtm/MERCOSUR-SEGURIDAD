@@ -14,8 +14,9 @@
 //  · 208 Vacaciones no gozadas: días pendientes que Administración confirma en el
 //    registro de baja (devengadas − tomadas; lib/baja-vacaciones.ts) × valor día
 //    del Excel de trabajo (C3 = básico/200×8). Recibos de Fulla y Paniagua: 40.812
-//    por día. Sin saldo cargado se CALCULA (JC 10/11): días del año de la baja ×
-//    14/365 (escala por antigüedad) y tomadas 0; se corrige en el Excel de trabajo.
+//    por día. Sin saldo cargado se CALCULA (JC 10/11): sobre el TOTAL de la
+//    antigüedad (ingreso→baja) × 14/365, menos las tomadas reales (novedades de la
+//    app + cargas manuales de Administración); se corrige en el Excel de trabajo.
 //  · 120003 SAC proporcional: (básico/200×150)/365 × días computables, con la
 //    regla de conteo de la planilla de JC («calculo liq»: días = baja − 01/07).
 //    Se muestra al lado el control con la mejor remuneración del semestre según
@@ -41,6 +42,8 @@
 //    217    IMP     → Cantidad 1 · Importe = total
 //    ordinarios     → la práctica mensual vigente: Cantidad 1 · Importe = total
 //                     (000 DÍAS va como cantidad).
+
+import { devengadasMetodoEmpresa } from '@/lib/baja-vacaciones'
 
 /** Código de causal (catálogo baja_causa; ampliable sin tocar la arquitectura). */
 export type CausaBaja = string
@@ -263,25 +266,16 @@ export function diasComputablesSAC(fechaBaja: string, fechaIngreso: string | nul
 export const unitarioSAC = (basico: number) => (basico / 200 * 150) / 365
 export const totalSAC = (basico: number, dias: number) => redondear(unitarioSAC(basico) * dias)
 /**
- * Vacaciones devengadas del año de la baja (regla JC 10/11): días del año
- * (baja − 01/01, o baja − ingreso si entró ese año; mismo conteo que el SAC)
- * × días anuales / 365. Días anuales por antigüedad al 31/12 (LCT art. 150):
- * menos de 5 años 14, hasta 10 años 21, hasta 20 años 28, más 35.
+ * Vacaciones devengadas MÉTODO EMPRESA (lo que manda, JC 10/11): sobre el TOTAL
+ * de la antigüedad (ingreso→baja) × 14/365, redondeo hacia arriba. Reproduce los
+ * recibos reales (Paniagua 62 días → 3; Fulla). Las TOMADAS (novedades de la app
+ * + cargas manuales) se restan aparte, no acá. Sin fecha de ingreso no se puede
+ * calcular (devuelve null): la antigüedad total necesita el ingreso.
  */
-export function vacacionesDevengadas(fechaBaja: string, ingreso: string | null): { dias: number; diasAnuales: number; diasTrabajados: number; inicio: string } {
-  const anio = Number(fechaBaja.slice(0, 4))
-  const inicioAnio = `${anio}-01-01`
-  const inicio = ingreso && ingreso > inicioAnio ? ingreso : inicioAnio
-  const diasTrabajados = Math.max(0, Math.round((Date.parse(fechaBaja) - Date.parse(inicio)) / 86400000))
-  let diasAnuales = 14
-  if (ingreso) {
-    // Antigüedad al 31/12 del año de la baja: años cumplidos = año baja − año ingreso.
-    const anios = anio - Number(ingreso.slice(0, 4))
-    if (anios >= 20) diasAnuales = 35
-    else if (anios >= 10) diasAnuales = 28
-    else if (anios >= 5) diasAnuales = 21
-  }
-  return { dias: redondear(diasTrabajados * diasAnuales / 365), diasAnuales, diasTrabajados, inicio }
+export function vacacionesDevengadas(fechaBaja: string, ingreso: string | null): { dias: number | null; antiguedadDias: number | null } {
+  if (!ingreso) return { dias: null, antiguedadDias: null }
+  const antiguedadDias = Math.max(0, Math.round((Date.parse(fechaBaja) - Date.parse(ingreso)) / 86400000))
+  return { dias: devengadasMetodoEmpresa(ingreso, fechaBaja), antiguedadDias }
 }
 
 /** básico/365 × días de vacaciones no gozadas. */
@@ -405,18 +399,20 @@ export function calcularLiquidacionFinal(d: DatosLiquidacionFinal): ResultadoLiq
 
   // ── Vacaciones no gozadas (208) y SAC sobre vacaciones (217) ──
   const vac = d.entradas.vacaciones ?? {}
-  // Sin saldo cargado se calcula por antigüedad (JC 10/11): 14 días cada 365 del año
-  // de la baja (escala LCT art. 150 según antigüedad). Se puede corregir en el Excel.
+  // Sin saldo cargado se calcula por antigüedad (JC 10/11, revisado 10/11): sobre el
+  // TOTAL de la antigüedad (ingreso→baja) × 14/365. Las tomadas reales (app +
+  // cargadas) las inyecta el armado de datos; acá, de fallback puro, son 0. Todo se
+  // corrige en el Excel. Sin fecha de ingreso no se puede calcular.
   const auto = vac.saldoDias == null && fechaBaja && !sueldoFijo && !d.eventual ? vacacionesDevengadas(fechaBaja, ingreso) : null
   const saldo = vac.saldoDias ?? auto?.dias ?? null
   // Sin tomadas cargadas, son cero (JC 21/10).
   const tomadas = vac.tomadasDias ?? (saldo != null ? 0 : null)
-  if (auto) advertencias.push(`Vacaciones devengadas calculadas: ${auto.diasTrabajados} días del año (desde ${auto.inicio.split('-').reverse().join('/')}) × ${auto.diasAnuales}/365 = ${auto.dias}${ingreso ? '' : ' (sin fecha de ingreso: se toma 14 por año)'}. Si no es así, cargalas en el Excel.`)
+  if (auto?.dias != null) advertencias.push(`Vacaciones devengadas calculadas sobre el total de la antigüedad: ${auto.antiguedadDias} días (desde el ingreso) × 14/365 = ${auto.dias}. Las tomadas se restan aparte. Si no es así, cargalas en el Excel.`)
   if (saldo != null && vac.tomadasDias == null) advertencias.push('Vacaciones tomadas sin cargar: se toman como 0.')
   let noGozadas: number | null = null
   if (d.eventual && !sueldoFijo) advertencias.push('Contrato eventual: no se liquidan vacaciones (208/217). Si correspondieran, agregalas con un ajuste.')
   if (!sueldoFijo && !d.eventual) {
-    if (saldo == null) falta('vacaciones_saldo', 'Faltan las vacaciones devengadas (sin fecha de baja no se pueden calcular).')
+    if (saldo == null) falta('vacaciones_saldo', 'Faltan las vacaciones devengadas (sin fecha de ingreso y de baja no se pueden calcular sobre la antigüedad).')
     if (tomadas == null) falta('vacaciones_tomadas', 'Faltan las vacaciones tomadas.')
     if (saldo != null && tomadas != null) {
       noGozadas = redondear(saldo - tomadas, 4)

@@ -16,6 +16,7 @@ import { parsearPlanillaVisual, type CeldaVisual } from '@/lib/liquidacion-visua
 import { construirLineasVisual, type ConceptoCfg, type ExpedienteLinea, type FilaVisual, type PermanenteLinea } from '@/lib/visual-export'
 import { diferenciasDeHoja, leerHojasLiquidacionFinal, type DiferenciasHoja } from '@/lib/liquidacion-final-lote'
 import { plantillaLiquidacionResumenGuardia, type FilaResumenGuardia, type ParametrosLiquidacion, type PlantillaLiquidacion } from '@/lib/resumen-guardia'
+import { resumenVacaciones, type VacacionTomada } from '@/lib/baja-vacaciones'
 
 /** Parámetros del mes con los editados en el Excel de las finales (hora/día null = vuelven a la fórmula). */
 export function conParametros(P: ParametrosLiquidacion, extra?: EntradasFinal['parametros'] | null): ParametrosLiquidacion {
@@ -246,23 +247,28 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
     if (c) causal = { codigo: c.codigo, nombre: c.nombre, presentismo: c.presentismo, evaluar: c.evaluar ?? [] }
   }
 
-  // Vacaciones: las confirmadas en el registro de baja (no se piden de nuevo acá).
-  const v = b.vacaciones
-  // Si se completaron después (Excel de trabajo o pantalla), mandan esas; si no, las
-  // confirmadas en la baja. Sin ninguna, el cálculo las saca por antigüedad (14/365).
-  const e = f.entradas?.vacaciones
-  // Cargadas a medias (sólo tomadas, p. ej. desde la pantalla): el saldo sale de la
-  // baja si estaba confirmado o, si no, del cálculo por antigüedad.
-  const vacaciones = e && (e.saldoDias != null || e.tomadasDias != null)
-    ? { saldoDias: e.saldoDias ?? (v?.verificadas ? v.devengadas ?? null : null), tomadasDias: e.tomadasDias ?? null, nota: e.nota ?? 'cargadas después de la baja' }
-    : v && v.verificadas
-      ? { saldoDias: v.devengadas ?? null, tomadasDias: v.tomadas ?? null, nota: v.nota ?? `método ${v.metodo ?? 'empresa'}` }
-      : undefined
-  if (!vacaciones) avisos.push('Faltan las vacaciones (no se confirmaron en la baja ni se cargaron después): se calculan por antigüedad (14/365) y tomadas 0. Corregilas en el Excel si no es así.')
-
   const controlSAC = b.fecha_baja && p.cuil ? await mejorRemuneracionSemestre(client, p.cuil, b.fecha_baja) : null
   const eventual = await esEventual(client, p.cuil, b, ingreso)
-  if (eventual) { const i = avisos.findIndex(a => a.startsWith('Faltan las vacaciones')); if (i >= 0) avisos.splice(i, 1) }
+
+  // Vacaciones: mandan las cargadas a mano (Excel/pantalla); si no, las confirmadas en
+  // la baja; si no, se CALCULAN sobre el TOTAL de la antigüedad (método empresa ×
+  // 14/365) menos las TOMADAS reales — novedades de vacaciones aprobadas de la app +
+  // cargas manuales de Administración (JC 10/11). El contrato eventual no lleva.
+  const v = b.vacaciones
+  const e = f.entradas?.vacaciones
+  let auto: AutoVacaciones | null = null
+  if (!eventual && b.empleado_id && b.fecha_ingreso && b.fecha_baja) {
+    const rv = resumenVacaciones({ ingreso: b.fecha_ingreso, baja: b.fecha_baja, tomadas: await vacacionesTomadasCliente(client, b.empleado_id) })
+    if (rv.devengadasMetodoEmpresa != null) auto = {
+      saldoDias: rv.devengadasMetodoEmpresa, tomadasDias: rv.tomadas,
+      nota: `calculadas sobre el total de la antigüedad: ${rv.antiguedadDias} días × 14/365 = ${rv.devengadasMetodoEmpresa} devengadas − ${rv.tomadas} tomada(s)`,
+    }
+  }
+  const vacaciones = resolverVacacionesFinal(e, v, auto)
+  if (!eventual) {
+    if (!vacaciones || vacaciones.saldoDias == null) avisos.push('Faltan las vacaciones: no se pudieron calcular (falta fecha de ingreso o de baja) ni se cargaron. Cargalas en el Excel.')
+    else if (auto && vacaciones.nota === auto.nota) avisos.push(`Vacaciones ${auto.nota}. Si no es así, corregilas en el Excel.`)
+  }
 
   return {
     datos: {
@@ -280,6 +286,48 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
     avisos,
     error: null,
   }
+}
+
+interface AutoVacaciones { saldoDias: number | null; tomadasDias: number; nota: string }
+
+/**
+ * Tomadas reales con el client que se pasó (sirve en server y en tests): novedades
+ * de vacaciones APROBADAS de la app + cargas manuales de Administración. Mismo
+ * criterio que lib/baja-laboral.vacacionesTomadas, pero sin el singleton del browser.
+ */
+async function vacacionesTomadasCliente(client: any, empleadoId: string): Promise<VacacionTomada[]> {
+  const [{ data: nov }, { data: man }] = await Promise.all([
+    client.from('novedades_laborales').select('id, fecha_desde, fecha_hasta, cantidad_dias, dias_informados').eq('empleado_id', empleadoId).eq('tipo', 'vacaciones').eq('estado', 'aprobada'),
+    client.from('legajo_vacaciones_tomadas').select('id, periodo, dias, desde, hasta, observacion, anulado_at').eq('empleado_id', empleadoId),
+  ])
+  const out: VacacionTomada[] = []
+  for (const n of (nov ?? []) as any[]) out.push({ origen: 'novedad', id: n.id, dias: n.dias_informados != null ? Number(n.dias_informados) : Number(n.cantidad_dias ?? 0), desde: n.fecha_desde, hasta: n.fecha_hasta, periodo: n.fecha_desde ? Number(String(n.fecha_desde).slice(0, 4)) : null })
+  for (const m of (man ?? []) as any[]) { if (m.anulado_at) continue; out.push({ origen: 'manual', id: m.id, dias: Number(m.dias), desde: m.desde, hasta: m.hasta, periodo: m.periodo, observacion: m.observacion }) }
+  return out
+}
+
+/**
+ * Precedencia de las vacaciones de la final: (1) lo cargado a mano en el Excel o la
+ * pantalla; (2) lo confirmado en el registro de baja (historial verificado); (3) el
+ * cálculo por antigüedad. Un campo cargado a medias (p. ej. sólo las tomadas) se
+ * completa con el nivel siguiente, así nunca queda a medias.
+ */
+export function resolverVacacionesFinal(
+  e: EntradasFinal['vacaciones'] | undefined,
+  snap: BajaFila['vacaciones'],
+  auto: AutoVacaciones | null,
+): { saldoDias: number | null; tomadasDias: number | null; nota: string } | undefined {
+  const snapOk = Boolean(snap && snap.verificadas)
+  if (e && (e.saldoDias != null || e.tomadasDias != null)) {
+    return {
+      saldoDias: e.saldoDias ?? (snapOk ? snap!.devengadas ?? null : auto?.saldoDias ?? null),
+      tomadasDias: e.tomadasDias ?? (snapOk ? snap!.tomadas ?? null : auto?.tomadasDias ?? null),
+      nota: e.nota ?? 'cargadas después de la baja',
+    }
+  }
+  if (snapOk) return { saldoDias: snap!.devengadas ?? null, tomadasDias: snap!.tomadas ?? null, nota: snap!.nota ?? `método ${snap!.metodo ?? 'empresa'}` }
+  if (auto) return { saldoDias: auto.saldoDias, tomadasDias: auto.tomadasDias, nota: auto.nota }
+  return undefined
 }
 
 /**
