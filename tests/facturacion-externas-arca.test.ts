@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { clasificar, fechaCompatible, horasFacturadas, periodoDesdeTexto, periodoEfectivo, pesosTexto, superpone, type ComprobanteExterno, type PrefacturaAbierta } from '@/lib/facturacion/externas-arca'
-import { guardasEmisionReal } from '@/lib/facturacion/emision-guardas'
+import { guardasEmisionReal, numeroComprobante, pideCaeFacturaReal, solicitudCoincide } from '@/lib/facturacion/emision-guardas'
 
 const comp = (o: Partial<ComprobanteExterno>): ComprobanteExterno => ({
   id: 'c1', tipo: 1, puntoVenta: 1, numero: 2075, fecha: '2026-11-05', docNro: '30702637895', receptor: 'LAS BLONDAS SA',
@@ -132,8 +132,67 @@ describe('guardas de la emisión real', () => {
   })
 })
 
+describe('emisión real: el CAE sólo se pide desde la prefactura y con lo confirmado', () => {
+  const e = { ambiente: 'produccion', tipo: 6, estado: 'preparada', prefactura_id: 'p1', solicitud: { cuit_receptor: '30544099457', total_c: 342451544 } }
+  it('factura de servicio real preparada o rechazada: el próximo paso pide CAE', () => {
+    expect(pideCaeFacturaReal(e)).toBe(true)
+    expect(pideCaeFacturaReal({ ...e, estado: 'rechazada' })).toBe(true)
+    expect(pideCaeFacturaReal({ ...e, tipo: 201 })).toBe(true)
+  })
+  it('consultar (incierta/enviando), homologación y notas de crédito/débito no entran', () => {
+    expect(pideCaeFacturaReal({ ...e, estado: 'incierta' })).toBe(false)
+    expect(pideCaeFacturaReal({ ...e, estado: 'enviando' })).toBe(false)
+    expect(pideCaeFacturaReal({ ...e, estado: 'autorizada' })).toBe(false)
+    expect(pideCaeFacturaReal({ ...e, ambiente: 'homologacion' })).toBe(false)
+    expect(pideCaeFacturaReal({ ...e, tipo: 8, prefactura_id: null })).toBe(false)
+    expect(pideCaeFacturaReal({ ...e, tipo: 3 })).toBe(false)
+  })
+  it('lo preparado tiene que ser lo que confirmó Gerencia (tipo, CUIT y total)', () => {
+    const conf = { tipo: 6, cuit: '30-54409945-7', total_c: 342451544 }
+    expect(solicitudCoincide(e, conf)).toBe(true)
+    expect(solicitudCoincide(e, { ...conf, total_c: 342451545 })).toBe(false)
+    expect(solicitudCoincide(e, { ...conf, tipo: 1 })).toBe(false)
+    expect(solicitudCoincide(e, { ...conf, cuit: '30707891579' })).toBe(false)
+    expect(solicitudCoincide(e, null)).toBe(false)
+    expect(solicitudCoincide({ ...e, solicitud: { cuit_receptor: '30544099457' } }, conf)).toBe(false)
+  })
+  it('número como se lee en la factura', () => {
+    expect(numeroComprobante(4, 1)).toBe('0004-00000001')
+    expect(numeroComprobante(4, 12345)).toBe('0004-00012345')
+  })
+})
+
 describe('rutas', () => {
   const leer = (f: string) => readFileSync(join(__dirname, '..', f), 'utf8')
+  it('/api/facturacion/emitir: una factura real que pide CAE no sale por emision_id y tiene que coincidir con lo confirmado, ANTES de llamar a ARCA', () => {
+    const post = leer('app/api/facturacion/emitir/route.ts').slice(leer('app/api/facturacion/emitir/route.ts').indexOf('export async function POST'))
+    const bloque = post.indexOf('if (pideCaeFacturaReal(e))')
+    expect(bloque).toBeGreaterThan(0)
+    expect(post.indexOf('if (porEmisionId)', bloque)).toBeGreaterThan(bloque)
+    expect(post.indexOf('solicitudCoincide(e, b.confirmacion)', bloque)).toBeGreaterThan(bloque)
+    // Antes de la llave del servidor, del certificado, del ticket y de ejecutarEmision (que pide el CAE).
+    for (const despues of ["process.env.FACTURACION_EMISION_REAL", 'obtenerTA(', 'ejecutarEmision(']) expect(post.indexOf(despues)).toBeGreaterThan(bloque)
+  })
+  it('/api/facturacion/numero-previsto: sólo lectura (último autorizado + 1), nunca pide CAE ni prepara emisiones', () => {
+    const src = leer('app/api/facturacion/numero-previsto/route.ts')
+    expect(src).toMatch(/ultimoAutorizado\(/)
+    expect(src).not.toMatch(/solicitarCae|FECAESolicitar|fact_emision_preparar|fact_emision_iniciar_envio|ejecutarEmision|export async function POST/)
+    expect(src).toMatch(/facturacion_puede_actual/)
+    expect(src).toMatch(/homo: false/)
+  })
+  it('Bandeja: la confirmación de Gerencia muestra cliente, CUIT, período, tipo, total y número previsto', () => {
+    const src = leer('components/facturacion/Bandeja.tsx')
+    const i = src.indexOf('EMITIR FACTURA REAL EN ARCA')
+    const texto = src.slice(i, src.indexOf('`))', i))
+    for (const x of ['Cliente:', 'CUIT:', 'Período:', 'Tipo:', 'Importe total:', 'Número previsto:', 'sujeto a la autorización definitiva de ARCA', 'NO se facturó por fuera']) expect(texto).toContain(x)
+    // El número se consulta antes de preguntar; sin número no se emite.
+    const handler = src.lastIndexOf('Confirmación EXPRESA de Gerencia', i)
+    const consulta = src.indexOf('numero-previsto?prefactura_id=', handler)
+    expect(handler).toBeGreaterThan(0)
+    expect(consulta).toBeGreaterThan(handler)
+    expect(consulta).toBeLessThan(i)
+    expect(src.slice(consulta, i)).toMatch(/No se emitió nada/)
+  })
   it('/api/facturacion/conciliar no habla con ARCA y vincula con la RPC de conciliación', () => {
     const src = leer('app/api/facturacion/conciliar/route.ts')
     expect(src).not.toMatch(/solicitarCae|FECAESolicitar|consultarComprobante|ultimoAutorizado/)

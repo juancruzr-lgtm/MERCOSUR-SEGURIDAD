@@ -1,0 +1,51 @@
+// GET ?prefactura_id= — número PREVISTO para emitir en producción la factura de una prefactura. Lo muestra
+// la confirmación de Gerencia antes de emitir.
+//
+// Sólo lectura: ticket de WSAA y FECompUltimoAutorizado del punto de venta Web Service de producción para el
+// tipo de la prefactura. No pide CAE, no prepara ni crea emisiones y no cambia ninguna llave. El número
+// definitivo lo asigna ARCA al autorizar (último autorizado + 1 en ese momento).
+// Sólo Gerencia o Administración (facturacion_puede_actual).
+import type { NextRequest } from 'next/server'
+import { clientesDelPedido } from '@/app/api/documentacion/_clientes'
+import { afipConfigFacturacion } from '@/lib/afip/config'
+import { obtenerTA } from '@/lib/afip/wsaa'
+import { taStoreSupabase } from '@/lib/afip/ta-store-supabase'
+import { SERVICIO_WSFE, ultimoAutorizado } from '@/lib/afip/wsfe'
+import { numeroComprobante } from '@/lib/facturacion/emision-guardas'
+import { storeAmbiente } from '@/lib/facturacion/ta-ambiente'
+import { responder } from '../_comun'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+export async function GET(req: NextRequest) {
+  const c = await clientesDelPedido(req)
+  if ('error' in c) return responder({ error: c.error }, c.status)
+  const { data: puede, error: errPuede } = await c.usuario.rpc('facturacion_puede_actual')
+  if (errPuede || puede !== true) return responder({ error: 'Sólo Gerencia o Administración' }, 403)
+
+  const id = req.nextUrl.searchParams.get('prefactura_id') ?? ''
+  const [{ data: pf }, { data: conf }] = await Promise.all([
+    c.usuario.from('fact_prefacturas').select('tipo_comprobante').eq('id', id).maybeSingle(),
+    c.usuario.from('fact_config').select('valor').eq('clave', 'emision').maybeSingle(),
+  ])
+  if (!pf) return responder({ error: 'Prefactura inexistente o sin acceso' }, 404)
+  const tipo = Number(pf.tipo_comprobante)
+  if (![1, 6, 201].includes(tipo)) return responder({ error: `Tipo de comprobante no emitible por la app: ${pf.tipo_comprobante}` }, 400)
+  const puntoVenta = Number((conf?.valor as any)?.punto_venta_prod)
+  if (!Number.isInteger(puntoVenta) || puntoVenta <= 0) return responder({ error: 'Falta el punto de venta Web Service de producción (fact_config.emision.punto_venta_prod)' }, 503)
+
+  const cred = afipConfigFacturacion('produccion')
+  if (!cred.config) return responder({ error: `Sin credenciales de ARCA (${cred.error})` }, 503)
+  if (cred.config.homo) return responder({ error: 'El certificado de facturación no es el de producción' }, 409)
+  try {
+    const ta = await obtenerTA(SERVICIO_WSFE, cred.config, storeAmbiente(taStoreSupabase(c.admin), false))
+    const r = await ultimoAutorizado(ta, { cuit: cred.config.cuitRepresentada, homo: false, puntoVenta, tipo })
+    if ('error' in r) return responder({ error: `ARCA no informó el último número autorizado: ${r.error}` }, 502)
+    const numero = r.numero + 1
+    return responder({ tipo, punto_venta: puntoVenta, ultimo_autorizado: r.numero, numero_previsto: numero,
+      numero_visible: numeroComprobante(puntoVenta, numero), consultado_at: new Date().toISOString() })
+  } catch (err: any) {
+    return responder({ error: `No se pudo consultar a ARCA: ${err?.message ?? err}` }, 502)
+  }
+}

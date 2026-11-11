@@ -518,7 +518,12 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
                 const imp = (await leer('fact_importaciones', q => q.eq('tipo', 'arca_emitidos').order('created_at', { ascending: false }).limit(1), 'created_at'))[0]
                 const ultima = imp?.created_at ? new Date(imp.created_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }) : 'nunca'
                 const tipo = p.tipo_comprobante === 1 ? 'Factura A' : p.tipo_comprobante === 6 ? 'Factura B' : p.tipo_comprobante === 201 ? 'Factura de Crédito Electrónica A' : `Tipo ${p.tipo_comprobante}`
-                if (!confirm(`EMITIR FACTURA REAL EN ARCA (Gerencia)\n\n${tipo} a ${p.cliente?.razon_social} (CUIT ${p.cuit_receptor})\nPeríodo ${p.periodo_mes} · Total ${pesos(p.total_c)}\n\nÚltima importación de "Mis Comprobantes": ${ultima}\n\n¿Confirmás que este servicio y período NO se facturó por fuera de la app (Comprobantes en línea)?`)) return
+                // Número previsto: último autorizado en ARCA + 1 (consulta de sólo lectura, no pide CAE).
+                let previsto: any
+                try { previsto = await api(`numero-previsto?prefactura_id=${encodeURIComponent(p.id)}`, undefined, 'GET') }
+                catch (e: any) { throw new Error(`No se pudo consultar a ARCA el número previsto: ${e?.message ?? e}. No se emitió nada.`) }
+                const hasta = new Date(Date.parse(`${p.periodo_hasta_excl}T00:00:00Z`) - 86400000).toISOString().slice(0, 10)
+                if (!confirm(`EMITIR FACTURA REAL EN ARCA (Gerencia)\n\nCliente: ${p.cliente?.razon_social}\nCUIT: ${p.cuit_receptor}\nPeríodo: ${p.periodo_mes} (del ${fecha(p.periodo_desde)} al ${fecha(hasta)})\nTipo: ${tipo}\nImporte total: ${pesos(p.total_c)}\nNúmero previsto: ${previsto.numero_visible}, sujeto a la autorización definitiva de ARCA\n\nÚltima importación de "Mis Comprobantes": ${ultima}\n\n¿Confirmás que este servicio y período NO se facturó por fuera de la app (Comprobantes en línea)?`)) return
                 const cuerpo = { prefactura_id: p.id, version: p.version, ambiente: 'produccion', confirmacion: { tipo: p.tipo_comprobante, cuit: p.cuit_receptor, total_c: p.total_c }, confirmo_no_emitida_fuera: true }
                 let r: any
                 try { r = await api('emitir', cuerpo) } catch (e: any) {

@@ -4,9 +4,11 @@
 // en la base Y FACTURACION_EMISION_REAL=1 en el servidor. Sin las dos, sólo
 // homologación. Sin certificado (AFIP_CERT_PEM/AFIP_KEY_PEM) no se llama a ARCA:
 // la solicitud queda 'preparada' y se informa la dependencia.
+// Una factura de servicio REAL nueva sólo sale desde su prefactura, con la confirmación de Gerencia y los
+// controles de duplicado; por emision_id sólo se consulta lo ya enviado (o se emiten NC/ND aprobadas).
 import type { NextRequest } from 'next/server'
 import { clientesDelPedido, type Clientes } from '@/app/api/documentacion/_clientes'
-import { guardasEmisionReal } from '@/lib/facturacion/emision-guardas'
+import { guardasEmisionReal, pideCaeFacturaReal, solicitudCoincide } from '@/lib/facturacion/emision-guardas'
 import { afipConfigFacturacion } from '@/lib/afip/config'
 import { obtenerTA } from '@/lib/afip/wsaa'
 import { taStoreSupabase } from '@/lib/afip/ta-store-supabase'
@@ -67,6 +69,7 @@ export async function POST(req: NextRequest) {
   const b = await req.json().catch(() => ({}))
 
   let emisionId: string | null = b.emision_id ?? null
+  const porEmisionId = !!emisionId
   if (!emisionId) {
     if (!['produccion', 'homologacion'].includes(b.ambiente)) return responder({ error: 'Ambiente inválido' }, 400)
     // Seguro de períodos: no se emite una prefactura del mes en curso o futuro.
@@ -87,6 +90,18 @@ export async function POST(req: NextRequest) {
   if (!e) return responder({ error: 'Solicitud de emisión inexistente o sin acceso' }, 404)
   if (e.estado === 'pendiente_aprobacion') return responder({ error: 'La nota todavía no está aprobada' }, 409)
   if (e.estado === 'autorizada') return responder({ estado: 'autorizada', emision_id: e.id })
+  // Factura de servicio REAL cuyo próximo paso es pedir CAE (preparada o rechazada).
+  if (pideCaeFacturaReal(e)) {
+    // Por emision_id (p. ej. una emisión preparada con la RPC directa) se saltearían la confirmación de
+    // Gerencia y los controles de duplicado: no se pide CAE. Se emite desde la prefactura.
+    if (porEmisionId) {
+      return responder({ estado: e.estado, emision_id: e.id, codigo: 'confirmacion', error: 'Una factura real se emite desde su prefactura, con la confirmación de Gerencia. No se envió nada a ARCA.' }, 400)
+    }
+    // Lo que se manda a ARCA (la solicitud armada al preparar) tiene que ser lo que Gerencia confirmó.
+    if (!solicitudCoincide(e, b.confirmacion)) {
+      return responder({ estado: e.estado, emision_id: e.id, codigo: 'confirmacion', error: 'Lo preparado para ARCA no coincide con lo que confirmó Gerencia (tipo, CUIT o total). No se envió nada a ARCA.' }, 409)
+    }
+  }
 
   const homo = e.ambiente === 'homologacion'
   if (!homo && process.env.FACTURACION_EMISION_REAL !== '1') {
