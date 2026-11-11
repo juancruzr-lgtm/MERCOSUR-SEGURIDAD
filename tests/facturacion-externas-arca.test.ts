@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { clasificar, fechaCompatible, horasFacturadas, periodoEfectivo, superpone, type ComprobanteExterno, type PrefacturaAbierta } from '@/lib/facturacion/externas-arca'
+import { clasificar, fechaCompatible, horasFacturadas, periodoDesdeTexto, periodoEfectivo, pesosTexto, superpone, type ComprobanteExterno, type PrefacturaAbierta } from '@/lib/facturacion/externas-arca'
 import { guardasEmisionReal } from '@/lib/facturacion/emision-guardas'
 
 const comp = (o: Partial<ComprobanteExterno>): ComprobanteExterno => ({
@@ -38,11 +38,18 @@ describe('clasificar (conciliación automática)', () => {
     const r = clasificar([pref({})], [comp({})])
     expect(r.vincular).toEqual([expect.objectContaining({ exacta: true })])
   })
-  it('inequívoca con diferencia: una sola factura posible y sólo para esa prefactura (Hagana, Club, Nación)', () => {
+  it('una sola factura posible pero con otro total (Hagana, Club): NO se vincula sola; queda para revisión con la diferencia', () => {
     const r = clasificar([pref({})], [comp({ totalC: 504657907 })])
-    expect(r.vincular).toEqual([expect.objectContaining({ exacta: false })])
-    // Nación: la app todavía no tiene total → igual es inequívoca por CUIT, tipo y período.
-    expect(clasificar([pref({ total_c: null })], [comp({ totalC: 1 })]).vincular[0].exacta).toBe(false)
+    expect(r.vincular).toEqual([])
+    expect(r.ambiguas).toHaveLength(1)
+    expect(r.ambiguas[0].comprobantes.map(c => c.id)).toEqual(['c1'])
+    expect(r.ambiguas[0].motivo).toContain('diferencia de $ 88.893,62')
+    expect(r.sinPrefactura).toEqual([])
+  })
+  it('Nación: prefactura sin importe (horas sin aprobar) → revisión, nunca se vincula sola', () => {
+    const r = clasificar([pref({ total_c: null, estado: 'esperando_requisitos' })], [comp({ totalC: 2807948924 })])
+    expect(r.vincular).toEqual([])
+    expect(r.ambiguas[0].motivo).toMatch(/todavía no tiene importe/)
   })
   it('Trading: la de septiembre emitida el 25/10 no se confunde con la exacta de octubre', () => {
     const r = clasificar([pref({})], [comp({ id: 'sep', fecha: '2026-10-25', totalC: 492492467 }), comp({ id: 'oct', fecha: '2026-11-01' })])
@@ -59,7 +66,17 @@ describe('clasificar (conciliación automática)', () => {
   })
   it('lo exacto se resuelve primero aunque el cliente tenga varias facturas', () => {
     const r = clasificar([pref({ id: 'a', total_c: 100 }), pref({ id: 'b', total_c: 200 })], [comp({ id: 'x', totalC: 200 }), comp({ id: 'y', totalC: 333 })])
-    expect(r.vincular.map(v => [v.prefactura.id, v.comprobante.id, v.exacta])).toEqual([['b', 'x', true], ['a', 'y', false]])
+    expect(r.vincular.map(v => [v.prefactura.id, v.comprobante.id, v.exacta])).toEqual([['b', 'x', true]])
+    expect(r.ambiguas.map(a => [a.prefactura.id, a.comprobantes.map(c => c.id).join()])).toEqual([['a', 'y']])
+    expect(r.ambiguas[0].motivo).toContain('diferencia de $ 2,33')
+  })
+  it('pesos con signo y período escrito a mano', () => {
+    expect(pesosTexto(-2456822700)).toBe('$ -24.568.227,00')
+    expect(pesosTexto(5)).toBe('$ 0,05')
+    expect(periodoDesdeTexto('26/09/2026-25/10/2026')).toEqual({ desde: '2026-09-26', hasta: '2026-10-25' })
+    expect(periodoDesdeTexto(' 26/9/2026 al 25/10/2026 ')).toEqual({ desde: '2026-09-26', hasta: '2026-10-25' })
+    expect(periodoDesdeTexto('')).toBeNull()
+    expect(['31/02/2026-25/10/2026', '26/10/2026-25/09/2026', 'octubre'].map(periodoDesdeTexto)).toEqual(['invalido', 'invalido', 'invalido'])
   })
   it('otro tipo de comprobante: pendiente, no se vincula', () => {
     const r = clasificar([pref({ tipo_comprobante: 201 })], [comp({})])
@@ -123,6 +140,9 @@ describe('rutas', () => {
     expect(src).toMatch(/rpc\('fact_prefactura_conciliar'/)
     expect(src).toMatch(/facturacion_puede_actual/)
     expect(src).toMatch(/motivo\.length < 5/) // la manual exige motivo
+    // Antes de aplicar 20261212100000: un aviso claro (columna inexistente = 42703), no un error por prefactura.
+    expect(src).toMatch(/select\('conciliacion'\)/)
+    expect(src).toMatch(/42703/)
   })
   it('/api/facturacion/emitir: las guardas de producción corren ANTES de preparar la emisión (y del CAE)', () => {
     const src = leer('app/api/facturacion/emitir/route.ts')

@@ -59,10 +59,13 @@ export function horasFacturadas(p: PrefacturaAbierta, c: Pick<ComprobanteExterno
 
 /**
  * Conciliación AUTOMÁTICA (al importar el archivo de ARCA). Por cliente (CUIT) y tipo:
- *  1) exacta: mismo total, una sola candidata de cada lado → se vincula sin diferencia;
- *  2) inequívoca: después de lo exacto, la prefactura tiene UNA sola factura posible y esa factura es
- *     candidata sólo de ella → se vincula y la diferencia queda visible (pendiente);
- *  3) el resto es ambiguo (varias facturas o varias prefacturas) → queda para revisión, no se vincula.
+ *  1) exacta: mismo CUIT, tipo, período y total (y por lo tanto horas), una sola candidata de cada
+ *     lado → se vincula sola, sin diferencia. Es lo ÚNICO que se vincula solo.
+ *  2) una sola factura posible pero con otro total (Hagana, Club) → NO se vincula sola: queda para
+ *     revisión con la diferencia a la vista y se concilia a mano, con motivo;
+ *  3) prefactura todavía sin importe (horas sin aprobar, p. ej. Nación) → queda para revisión: no hay
+ *     con qué comparar y conciliarla la dejaría emitida sin importe;
+ *  4) varias facturas o varias prefacturas, u otro tipo de comprobante → ambiguo, queda para revisión.
  * Lo que no aparece en el archivo no se toca (el archivo puede estar incompleto).
  */
 export type Clasificacion = {
@@ -73,6 +76,29 @@ export type Clasificacion = {
 }
 
 const cuitDe = (p: PrefacturaAbierta) => String(p.cuit_receptor ?? '').replace(/\D/g, '')
+
+/** Centavos con signo → "$ -12.345,67" (sin depender del idioma del servidor). */
+export function pesosTexto(c: number): string {
+  const s = c < 0 ? '-' : ''
+  const [ent, dec] = (Math.abs(c) / 100).toFixed(2).split('.')
+  return `$ ${s}${ent.replace(/\B(?=(\d{3})+(?!\d))/g, '.')},${dec}`
+}
+
+/**
+ * Período realmente facturado escrito a mano ("26/09/2026-25/10/2026", ambos días incluidos) →
+ * { desde, hasta } en AAAA-MM-DD; vacío → null; mal escrito → 'invalido'.
+ */
+export function periodoDesdeTexto(texto: string | null | undefined): { desde: string; hasta: string } | null | 'invalido' {
+  const t = String(texto ?? '').trim()
+  if (!t) return null
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(?:-|–|al|a)\s*(\d{1,2})\/(\d{1,2})\/(\d{4})$/i.exec(t)
+  if (!m) return 'invalido'
+  const iso = (d: string, mm: string, a: string) => `${a}-${mm.padStart(2, '0')}-${d.padStart(2, '0')}`
+  const desde = iso(m[1], m[2], m[3]), hasta = iso(m[4], m[5], m[6])
+  const valida = (x: string) => !Number.isNaN(Date.parse(`${x}T00:00:00Z`)) && new Date(`${x}T00:00:00Z`).toISOString().slice(0, 10) === x
+  if (!valida(desde) || !valida(hasta) || hasta < desde) return 'invalido'
+  return { desde, hasta }
+}
 
 export function clasificar(prefacturas: PrefacturaAbierta[], comprobantes: ComprobanteExterno[]): Clasificacion {
   const cand = (p: PrefacturaAbierta, usados: Set<string>) =>
@@ -88,7 +114,8 @@ export function clasificar(prefacturas: PrefacturaAbierta[], comprobantes: Compr
     const cs = exactas.get(p.id) ?? []
     if (cs.length === 1 && usosEx.get(cs[0].id) === 1) { out.vincular.push({ prefactura: p, comprobante: cs[0], exacta: true }); usados.add(cs[0].id); resueltas.add(p.id) }
   }
-  // 2) Inequívocas (una sola candidata de cada lado), con diferencia.
+  // 2) El resto NO se vincula solo: una sola factura posible pero con otro total, o la prefactura sin
+  //    importe, o varias candidatas → revisión (se concilia a mano, con motivo y la diferencia a la vista).
   const resto = prefacturas.filter(p => !resueltas.has(p.id))
   const cands = new Map(resto.map(p => [p.id, cand(p, usados)]))
   const usos = new Map<string, number>()
@@ -96,7 +123,13 @@ export function clasificar(prefacturas: PrefacturaAbierta[], comprobantes: Compr
   const enAmbiguas = new Set<string>()
   for (const p of resto) {
     const cs = cands.get(p.id) ?? []
-    if (cs.length === 1 && usos.get(cs[0].id) === 1) { out.vincular.push({ prefactura: p, comprobante: cs[0], exacta: false }); continue }
+    if (cs.length === 1 && usos.get(cs[0].id) === 1) {
+      out.ambiguas.push({ prefactura: p, comprobantes: cs, motivo: p.total_c == null
+        ? 'la prefactura todavía no tiene importe (faltan horas aprobadas o requisitos): completala antes de conciliar'
+        : `una sola factura posible, pero con diferencia de ${pesosTexto(cs[0].totalC - p.total_c)} (factura − calculado): revisala y conciliala a mano` })
+      enAmbiguas.add(cs[0].id)
+      continue
+    }
     if (cs.length) {
       out.ambiguas.push({ prefactura: p, comprobantes: cs, motivo: cs.length > 1 ? `${cs.length} facturas posibles del cliente en el período` : 'la misma factura sirve para varias prefacturas del cliente' })
       cs.forEach(c => enAmbiguas.add(c.id))

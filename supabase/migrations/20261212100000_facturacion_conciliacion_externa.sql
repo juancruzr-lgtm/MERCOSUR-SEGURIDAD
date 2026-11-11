@@ -8,7 +8,9 @@
 --     con lo calculado (importe y horas) y su estado (sin_diferencia / pendiente / explicada / resuelta).
 --   · fact_prefactura_conciliar: vincula UN comprobante importado con UNA prefactura todavía no emitida
 --     (también si estaba bloqueada por requisitos, p. ej. la OC de ACA) y la deja EMITIDA, aunque el
---     importe difiera. NO cambia horas ni importes: ni de la prefactura (lo calculado queda como
+--     importe difiera; la prefactura tiene que tener importe calculado (si no, no hay con qué comparar).
+--     Automáticamente sólo se vinculan las exactas; con diferencia, a mano y con motivo.
+--     NO cambia horas ni importes: ni de la prefactura (lo calculado queda como
 --     referencia) ni del comprobante (lo facturado). Conserva CAE, número, fecha, punto de venta e historial.
 --   · fact_conciliacion_diferencia: deja una diferencia como pendiente, explicada o resuelta, con motivo.
 --   · fact_excepcion_duplicado: registro de la autorización EXPRESA de Gerencia para emitir pese a un
@@ -41,6 +43,11 @@ begin
   if exists (select 1 from public.fact_emisiones e where e.prefactura_id = v.id and e.ambiente = 'produccion'
              and e.estado in ('enviando', 'incierta', 'autorizada')) then
     raise exception 'Hay una emisión de la app en curso, incierta o autorizada para esta prefactura: no se concilia con otra factura';
+  end if;
+  -- Sin importe calculado (faltan horas aprobadas o requisitos) no hay con qué comparar la factura, y
+  -- conciliarla la dejaría emitida y congelada sin importe (p. ej. Nación con horas en revisión).
+  if v.total_c is null then
+    raise exception 'La prefactura todavía no tiene importe (faltan horas aprobadas o requisitos): completala antes de conciliar';
   end if;
 
   select * into k from public.fact_comprobantes where id = p_comprobante_id for update;

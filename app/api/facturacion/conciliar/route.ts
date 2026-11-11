@@ -1,9 +1,10 @@
 // Conciliación de facturas emitidas FUERA de la app (importadas de "Mis Comprobantes") con sus prefacturas.
 //
 // POST {}  → AUTOMÁTICA (se llama después de cada importación): clasifica (lib/facturacion/externas-arca)
-//            y vincula sólo lo exacto o inequívoco. Lo ambiguo queda pendiente; lo que no está en el
-//            archivo no se toca (el archivo puede estar incompleto).
-// POST { prefactura_id, version, comprobante_id, motivo } → MANUAL (para lo ambiguo), con motivo.
+//            y vincula SÓLO lo exacto (CUIT, tipo, período y total). Con diferencia, sin importe o
+//            ambiguo queda pendiente de revisión; lo que no está en el archivo no se toca (el archivo
+//            puede estar incompleto).
+// POST { prefactura_id, version, comprobante_id, motivo } → MANUAL (lo pendiente), con motivo.
 // Vincula con fact_prefactura_conciliar con la identidad de quien pide: no cambia horas ni importes,
 // conserva CAE, número, fecha y punto de venta, y deja la diferencia visible. ARCA no se consulta.
 // Sólo Gerencia o Administración (facturacion_puede_actual).
@@ -28,6 +29,7 @@ const externo = (c: any): ComprobanteExterno => ({
 })
 const abierta = (p: any): PrefacturaAbierta & { periodo_mes: string } => ({ ...p, cliente: p.cliente?.razon_social ?? null })
 const breve = (c: ComprobanteExterno) => `${c.tipo}/${c.puntoVenta}-${c.numero}`
+const AVISO_SIN_MIGRACION = 'La conciliación todavía no está habilitada en la base (falta aplicar la migración 20261212100000). Los comprobantes quedaron importados y no se vinculó nada.'
 
 export async function POST(req: NextRequest) {
   const c = await clientesDelPedido(req)
@@ -35,6 +37,10 @@ export async function POST(req: NextRequest) {
   const { data: puede, error: errPuede } = await c.usuario.rpc('facturacion_puede_actual')
   if (errPuede || puede !== true) return responder({ error: 'Sólo Gerencia o Administración' }, 403)
   const b = await req.json().catch(() => ({}))
+  // Sin la migración 20261212100000 (columna `conciliacion` y sus funciones) no se concilia: aviso claro
+  // en vez de un error por prefactura. Los comprobantes importados quedan registrados igual.
+  const { error: eMig } = await c.usuario.from('fact_prefacturas').select('conciliacion').limit(1)
+  if (eMig) return responder({ error: eMig.code === '42703' ? AVISO_SIN_MIGRACION : eMig.message }, 503)
 
   // ── Manual: una prefactura con el comprobante elegido (casos ambiguos), con motivo.
   if (b.prefactura_id || b.comprobante_id) {
