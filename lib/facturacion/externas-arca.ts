@@ -8,7 +8,6 @@
  * Sin acceso a datos: sólo arma con lo que recibe.
  */
 
-import { formatoPesos } from './dinero'
 
 /** Comprobante de producción ya importado del archivo de ARCA (fact_comprobantes). */
 export type ComprobanteExterno = {
@@ -58,50 +57,67 @@ export function horasFacturadas(p: PrefacturaAbierta, c: Pick<ComprobanteExterno
   return { reales: Math.round(reales * 100) / 100, prefactura: Number(l.cantidad) }
 }
 
-export type Emparejamiento = {
-  coincidencias: Array<{ prefactura: PrefacturaAbierta; comprobante: ComprobanteExterno }>
-  diferencias: Array<{ prefactura: PrefacturaAbierta; comprobante: ComprobanteExterno; motivo: string }>
-  ambiguas: Array<{ prefactura: PrefacturaAbierta; comprobantes: ComprobanteExterno[] }>
+/**
+ * Conciliación AUTOMÁTICA (al importar el archivo de ARCA). Por cliente (CUIT) y tipo:
+ *  1) exacta: mismo total, una sola candidata de cada lado → se vincula sin diferencia;
+ *  2) inequívoca: después de lo exacto, la prefactura tiene UNA sola factura posible y esa factura es
+ *     candidata sólo de ella → se vincula y la diferencia queda visible (pendiente);
+ *  3) el resto es ambiguo (varias facturas o varias prefacturas) → queda para revisión, no se vincula.
+ * Lo que no aparece en el archivo no se toca (el archivo puede estar incompleto).
+ */
+export type Clasificacion = {
+  vincular: Array<{ prefactura: PrefacturaAbierta; comprobante: ComprobanteExterno; exacta: boolean }>
+  ambiguas: Array<{ prefactura: PrefacturaAbierta; comprobantes: ComprobanteExterno[]; motivo: string }>
   sinFactura: PrefacturaAbierta[]
   sinPrefactura: ComprobanteExterno[]
 }
 
 const cuitDe = (p: PrefacturaAbierta) => String(p.cuit_receptor ?? '').replace(/\D/g, '')
 
-/** Cruce conservador: sólo lo exacto (CUIT, tipo, total y fecha compatible, una candidata por lado) se marca. */
-export function emparejar(prefacturas: PrefacturaAbierta[], comprobantes: ComprobanteExterno[]): Emparejamiento {
-  const candidatas = new Map<string, ComprobanteExterno[]>()
-  const usos = new Map<string, number>()
-  for (const p of prefacturas) {
-    const cs = comprobantes.filter(c => c.docNro === cuitDe(p) && c.tipo === p.tipo_comprobante && c.totalC === p.total_c && fechaCompatible(c.fecha, p))
-    candidatas.set(p.id, cs)
-    for (const c of cs) usos.set(c.id, (usos.get(c.id) ?? 0) + 1)
-  }
-  const out: Emparejamiento = { coincidencias: [], diferencias: [], ambiguas: [], sinFactura: [], sinPrefactura: [] }
+export function clasificar(prefacturas: PrefacturaAbierta[], comprobantes: ComprobanteExterno[]): Clasificacion {
+  const cand = (p: PrefacturaAbierta, usados: Set<string>) =>
+    comprobantes.filter(c => !usados.has(c.id) && c.docNro === cuitDe(p) && c.tipo === p.tipo_comprobante && fechaCompatible(c.fecha, p))
+  const out: Clasificacion = { vincular: [], ambiguas: [], sinFactura: [], sinPrefactura: [] }
   const usados = new Set<string>()
   const resueltas = new Set<string>()
-  // 1) Lo exacto primero, para todas: un cliente con varias facturas (Laromet) no se mezcla.
+  // 1) Exactas.
+  const exactas = new Map(prefacturas.map(p => [p.id, p.total_c == null ? [] : cand(p, usados).filter(c => c.totalC === p.total_c)]))
+  const usosEx = new Map<string, number>()
+  Array.from(exactas.values()).forEach(cs => cs.forEach(c => usosEx.set(c.id, (usosEx.get(c.id) ?? 0) + 1)))
   for (const p of prefacturas) {
-    const cs = candidatas.get(p.id) ?? []
-    if (cs.length === 1 && usos.get(cs[0].id) === 1) { out.coincidencias.push({ prefactura: p, comprobante: cs[0] }); usados.add(cs[0].id); resueltas.add(p.id) }
-    else if (cs.length) { out.ambiguas.push({ prefactura: p, comprobantes: cs }); cs.forEach(c => usados.add(c.id)); resueltas.add(p.id) }
+    const cs = exactas.get(p.id) ?? []
+    if (cs.length === 1 && usosEx.get(cs[0].id) === 1) { out.vincular.push({ prefactura: p, comprobante: cs[0], exacta: true }); usados.add(cs[0].id); resueltas.add(p.id) }
   }
-  // 2) Sin coincidencia exacta: la factura del mismo cliente y período con el total más parecido.
-  for (const p of prefacturas) {
-    if (resueltas.has(p.id)) continue
-    const parecidas = comprobantes.filter(c => c.docNro === cuitDe(p) && fechaCompatible(c.fecha, p) && !usados.has(c.id))
-      .sort((a, b) => Math.abs(a.totalC - (p.total_c ?? 0)) - Math.abs(b.totalC - (p.total_c ?? 0)))
-    if (!parecidas.length) { out.sinFactura.push(p); continue }
-    const c = parecidas[0]
-    const h = horasFacturadas(p, c)
-    const motivos = [
-      c.tipo !== p.tipo_comprobante && `tipo ${c.tipo} (la prefactura dice ${p.tipo_comprobante})`,
-      c.totalC !== p.total_c && `total ${formatoPesos(c.totalC)} (la prefactura dice ${formatoPesos(p.total_c ?? 0)})`,
-      h && c.totalC !== p.total_c && `≈ ${h.reales} h facturadas (la prefactura tiene ${h.prefactura} h)`,
-    ].filter(Boolean)
-    out.diferencias.push({ prefactura: p, comprobante: c, motivo: motivos.join('; ') || 'revisar' })
-    usados.add(c.id)
+  // 2) Inequívocas (una sola candidata de cada lado), con diferencia.
+  const resto = prefacturas.filter(p => !resueltas.has(p.id))
+  const cands = new Map(resto.map(p => [p.id, cand(p, usados)]))
+  const usos = new Map<string, number>()
+  Array.from(cands.values()).forEach(cs => cs.forEach(c => usos.set(c.id, (usos.get(c.id) ?? 0) + 1)))
+  const enAmbiguas = new Set<string>()
+  for (const p of resto) {
+    const cs = cands.get(p.id) ?? []
+    if (cs.length === 1 && usos.get(cs[0].id) === 1) { out.vincular.push({ prefactura: p, comprobante: cs[0], exacta: false }); continue }
+    if (cs.length) {
+      out.ambiguas.push({ prefactura: p, comprobantes: cs, motivo: cs.length > 1 ? `${cs.length} facturas posibles del cliente en el período` : 'la misma factura sirve para varias prefacturas del cliente' })
+      cs.forEach(c => enAmbiguas.add(c.id))
+      continue
+    }
+    // Factura del mismo cliente y período pero de OTRO tipo: no se vincula sola.
+    const otroTipo = comprobantes.filter(c => !usados.has(c.id) && c.docNro === cuitDe(p) && c.tipo !== p.tipo_comprobante && fechaCompatible(c.fecha, p))
+    if (otroTipo.length) { out.ambiguas.push({ prefactura: p, comprobantes: otroTipo, motivo: `tipo de comprobante distinto (la prefactura es ${p.tipo_comprobante})` }); otroTipo.forEach(c => enAmbiguas.add(c.id)); continue }
+    out.sinFactura.push(p)
   }
-  out.sinPrefactura = comprobantes.filter(c => !usados.has(c.id))
+  for (const v of out.vincular) usados.add(v.comprobante.id)
+  out.sinPrefactura = comprobantes.filter(c => !usados.has(c.id) && !enAmbiguas.has(c.id))
   return out
 }
+
+/** Período realmente facturado de una prefactura: el de la conciliación si lo informa, si no el propio. */
+export function periodoEfectivo(p: { periodo_desde: string; periodo_hasta_excl: string; conciliacion?: any }): { desde: string; hastaExcl: string } {
+  const pf = p.conciliacion?.periodo_facturado
+  if (pf?.desde && pf?.hasta) return { desde: String(pf.desde), hastaExcl: dia(String(pf.hasta), 1) }
+  return { desde: p.periodo_desde, hastaExcl: p.periodo_hasta_excl }
+}
+
+/** ¿Se superponen dos períodos [desde, hastaExcl)? */
+export const superpone = (a: { desde: string; hastaExcl: string }, b: { desde: string; hastaExcl: string }) => a.desde < b.hastaExcl && b.desde < a.hastaExcl

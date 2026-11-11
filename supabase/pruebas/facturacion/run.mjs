@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes', '20261210100000_facturacion_vto_enviado_a_arca', '20261210110000_facturacion_plazo_pago_30_por_defecto']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes', '20261210100000_facturacion_vto_enviado_a_arca', '20261210110000_facturacion_plazo_pago_30_por_defecto', '20261212100000_facturacion_conciliacion_externa']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -770,6 +770,65 @@ const kR = await uno(`select dias_vencimiento d, pago_evento e from public.fact_
 ok('rollback del plazo por defecto: el contrato vuelve a quedar sin plazo y La Caja sigue en 45', kR.d === null && kR.e === null
   && (await uno(`select dias_vencimiento d from public.fact_contratos where id = $1`, [kHag])).d === 45, JSON.stringify(kR))
 await db.exec(readFileSync(`${REPO}/supabase/migrations/20261210110000_facturacion_plazo_pago_30_por_defecto.sql`, 'utf8'))
+
+// ── Conciliación de facturas emitidas fuera de la app (20261212100000) ─────
+{
+  const cliC = await cliente(ADM, { razon_social: 'LAS BLONDAS SA', cuit: '30-70263789-5', condicion_iva: 'responsable_inscripto' })
+  const kC = await contrato({ cliente_id: cliC, nombre: 'Rapsodia', modalidad: 'por_hora', tipo_comprobante: 1, estado: 'vigente' })
+  const lin = [{ concepto: 'Horas de vigilancia', cantidad: '294.5', precio: '13912.6', tarifaId: null, importes: { neto: 409726070, iva: 86042475, total: 495768545 } }]
+  const prefC = async (mes, desde, hasta, extra = {}) => (await como(ADM, () => uno(`select public.fact_prefactura_guardar(null, $1::jsonb) id`, [JSON.stringify({
+    cliente_id: cliC, contrato_id: kC, agrupacion_clave: 'cliente', periodo_mes: mes, periodo_desde: desde, periodo_hasta_excl: hasta, horas_aprobacion_ids: [],
+    lineas: lin, neto_c: 409726070, iva_c: 86042475, total_c: 495768545, cuit_receptor: '30702637895', tipo_comprobante: 1, texto_factura: 'Vigilancia',
+    estado: 'esperando_requisitos', requisitos: [{ tipo: 'oc_vigente', detalle: 'Falta cargar la OC' }], ...extra })]))).id
+  const cuitE = (await uno(`select regexp_replace(valor->>'cuit_emisor', '\\D', '', 'g') c from public.fact_config where clave = 'emision'`)).c
+  const compC = async (numero, total, neto, iva, fecha = '2026-11-05', cuit = '30702637895') => (await uno(`insert into public.fact_comprobantes (ambiente, cuit_emisor, tipo, punto_venta, numero, fecha_emision,
+      doc_tipo_receptor, doc_nro_receptor, receptor_nombre, neto_c, iva_c, total_c, cae, origen)
+    values ('produccion', $1, 1, 1, $2, $3, 80, $4, 'LAS BLONDAS SA', $5, $6, $7, $8, 'importacion_arca') returning id`, [cuitE, numero, fecha, cuit, neto, iva, total, '7645106499' + String(numero).padStart(4, '0')])).id
+  const verC = async id => (await uno(`select version from public.fact_prefacturas where id = $1`, [id])).version
+  const conc = (quien, p, v, k, datos = {}) => como(quien, () => uno(`select public.fact_prefactura_conciliar($1, $2, $3, $4::jsonb) r`, [p, v, k, JSON.stringify(datos)]))
+
+  const pOct = await prefC('2026-10', '2026-10-01', '2026-11-01')
+  const kOct = await compC(9075, 495768545, 409726070, 86042475)
+  ok('conciliar: un supervisor no puede', await falla(async () => conc(SUP, pOct, await verC(pOct), kOct), /Gerencia o Administración/))
+  const antes = await uno(`select huella, total_c, neto_c, lineas::text l from public.fact_prefacturas where id = $1`, [pOct])
+  const r1 = (await conc(ADM, pOct, await verC(pOct), kOct, { origen: 'automatica', horas_facturadas: 294.5, horas_app: 294.5 })).r
+  const p1 = await uno(`select estado, conciliacion, huella, total_c, neto_c, lineas::text l from public.fact_prefacturas where id = $1`, [pOct])
+  const k1 = await uno(`select prefactura_id, cae, numero, total_c, cliente_id from public.fact_comprobantes where id = $1`, [kOct])
+  ok('conciliar: exacta → la prefactura queda EMITIDA aunque estuviera bloqueada por la OC, sin diferencia',
+    p1.estado === 'emitida' && r1.estado_diferencia === 'sin_diferencia' && p1.conciliacion.comprobante_id === kOct && p1.conciliacion.estado_previo === 'esperando_requisitos', JSON.stringify(r1))
+  ok('conciliar: no cambia importes ni líneas de la prefactura (huella igual) y conserva CAE, número y total del comprobante',
+    p1.huella === antes.huella && Number(p1.total_c) === Number(antes.total_c) && p1.l === antes.l && k1.prefactura_id === pOct && Number(k1.numero) === 9075 && /^\d{14}$/.test(k1.cae) && Number(k1.total_c) === 495768545 && k1.cliente_id === cliC)
+  ok('conciliar: queda en el historial de la prefactura y del comprobante',
+    !!(await uno(`select 1 x from public.fact_historial where entidad_id = $1 and accion = 'conciliada'`, [pOct])) && !!(await uno(`select 1 x from public.fact_historial where entidad_id = $1 and accion = 'conciliado'`, [kOct])))
+  const pSep = await prefC('2026-09', '2026-09-01', '2026-10-01', { estado: 'lista_revision', requisitos: [] })
+  ok('conciliar: el mismo comprobante no se usa para otra prefactura', await falla(async () => conc(ADM, pSep, await verC(pSep), kOct), /ya está conciliado/))
+  const kOtro = await compC(9076, 495768545, 409726070, 86042475, '2026-11-06')
+  ok('conciliar: una prefactura emitida no se concilia de nuevo (no hay dos facturas por el mismo servicio y período)', await falla(async () => conc(ADM, pOct, await verC(pOct), kOtro), /emitida/))
+  const kCuit = await compC(9077, 495768545, 409726070, 86042475, '2026-10-05', '30716728397')
+  ok('conciliar: un comprobante de otro CUIT receptor se rechaza', await falla(async () => conc(ADM, pSep, await verC(pSep), kCuit), /CUIT del receptor/))
+  const kDif = await compC(9078, 465476628, 384691428, 80785200, '2026-10-05')
+  const r2 = (await conc(ADM, pSep, await verC(pSep), kDif, { origen: 'automatica', horas_facturadas: 276.5, horas_app: 294.5 })).r
+  ok('conciliar: con otro total queda EMITIDA con la diferencia PENDIENTE y visible (factura - calculado)',
+    r2.estado_diferencia === 'pendiente' && Number(r2.diferencia_c) === 465476628 - 495768545 && Number(r2.total_app_c) === 495768545 && Number(r2.horas_facturadas) === 276.5
+    && (await uno(`select estado from public.fact_prefacturas where id = $1`, [pSep])).estado === 'emitida', JSON.stringify(r2))
+  const huellaSep = (await uno(`select huella from public.fact_prefacturas where id = $1`, [pSep])).huella
+  await como(ADM, () => sql(`select public.fact_conciliacion_diferencia($1, 'explicada', 'Período facturado del 26 al 25', '{"desde":"2026-08-26","hasta":"2026-09-25"}'::jsonb)`, [pSep]))
+  const pSep2 = await uno(`select estado, huella, conciliacion from public.fact_prefacturas where id = $1`, [pSep])
+  ok('diferencia: se marca explicada con motivo y período facturado, sin tocar la prefactura emitida',
+    pSep2.estado === 'emitida' && pSep2.huella === huellaSep && pSep2.conciliacion.estado_diferencia === 'explicada' && pSep2.conciliacion.periodo_facturado.desde === '2026-08-26', JSON.stringify(pSep2.conciliacion))
+  ok('diferencia: sin motivo no se acepta', await falla(() => como(ADM, () => sql(`select public.fact_conciliacion_diferencia($1, 'resuelta', '', null)`, [pSep])), /motivo/))
+  const pAgo = await prefC('2026-08', '2026-08-01', '2026-09-01', { estado: 'lista_revision', requisitos: [] })
+  const kAgo = await compC(9079, 495768545, 409726070, 86042475, '2026-09-03')
+  await db.exec(`update public.fact_config set valor = valor || '{"emision_manual": false}' where clave = 'modulos'`)
+  ok('conciliar: con el módulo de emisión manual apagado no se concilia', await falla(async () => conc(ADM, pAgo, await verC(pAgo), kAgo), /emision_manual|habilitado/))
+  await db.exec(`update public.fact_config set valor = valor || '{"emision_manual": true}' where clave = 'modulos'`)
+  ok('excepción de duplicado: Administración no la puede autorizar', await falla(() => como(ADM, () => sql(`select public.fact_excepcion_duplicado($1, 'Factura complementaria por horas extra')`, [pAgo])), /Sólo Gerencia/))
+  ok('excepción de duplicado: Gerencia sin motivo suficiente tampoco', await falla(() => como(GER, () => sql(`select public.fact_excepcion_duplicado($1, 'corto')`, [pAgo])), /motivo/))
+  await como(GER, () => sql(`select public.fact_excepcion_duplicado($1, 'Factura complementaria por horas extra de agosto')`, [pAgo]))
+  ok('excepción de duplicado: la de Gerencia queda en el historial', !!(await uno(`select 1 x from public.fact_historial where entidad_id = $1 and accion = 'excepcion_duplicado'`, [pAgo])))
+  ok('conciliar: anon no ejecuta las funciones nuevas', (await uno(`select bool_or(has_function_privilege('anon', p.oid, 'execute')) x from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname in ('fact_prefactura_conciliar', 'fact_conciliacion_diferencia', 'fact_excepcion_duplicado')`)).x === false)
+}
 
 // ── Rollback ───────────────────────────────────────────────────────────────
 for (const m of [...MIGS].reverse()) await db.exec(readFileSync(`${REPO}/supabase/rollback/${m}_rollback.sql`, 'utf8'))

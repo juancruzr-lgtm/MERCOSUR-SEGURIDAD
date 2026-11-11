@@ -18,6 +18,7 @@ import {
 } from './prefacturacion'
 import { proponerAsociaciones, type ClienteIdentidad, type ComprobanteAbierto, type RetencionDisponible } from './conciliacion'
 import { numeroVisible } from './comprobantes'
+import { periodoEfectivo, superpone } from './externas-arca'
 import { armarCambios, compararDetalle, type EntradaAuditoria, type RegistroInfo, type TurnoInfo } from './cambios-horas'
 
 // Mismas columnas que lee Reportes: las horas salen de lib/planilla-objetivo con los mismos datos.
@@ -203,7 +204,7 @@ function fotoHoras(aps: any[]): HorasAprobadas {
 const EN_PREPARACION = ['en_preparacion', 'esperando_requisitos', 'lista_revision']
 
 export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = fechaArgentina(), contratoId?: string) {
-  const resumen = { creadas: 0, actualizadas: 0, sin_cambios: 0, reagrupadas: 0, errores: [] as string[] }
+  const resumen = { creadas: 0, actualizadas: 0, sin_cambios: 0, reagrupadas: 0, excluidas: 0, errores: [] as string[] }
   const [{ data: contratos, error: e1 }, { data: cfg }] = await Promise.all([
     // Con contratoId recalcula sólo ese contrato (Aceptar de una fila); sin él, el mes entero.
     contratoId ? db.from('fact_contratos').select('*, cliente:fact_clientes(id, cuit, razon_social, condicion_iva, tipo_comprobante)').eq('estado', 'vigente').eq('id', contratoId)
@@ -291,6 +292,24 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         // Aprobada o emitida: el recálculo no la toca (ni horas, ni precio, ni grupo). Para cambiarla hay
         // que volverla a revisión a propósito; así una aprobación no cambia de contenido sin que nadie lo vea.
         if (existente && ['emitida', 'aprobada_emitir'].includes(existente.estado)) { resumen.sin_cambios++; continue }
+        if (!existente) {
+          // Descartada a propósito (p. ej. PNC de octubre: servicio no prestado): ese período no se vuelve a
+          // generar solo. Para facturarlo, "Volver a facturar" la pasa a borrador. El contrato sigue vigente.
+          const { data: desc } = await db.from('fact_prefacturas').select('id').eq('cliente_id', k.cliente_id).eq('agrupacion_clave', g.clave)
+            .eq('periodo_desde', periodo.desde).eq('periodo_hasta_excl', periodo.hastaExclusivo).eq('estado', 'descartada').limit(1)
+          if (desc?.length) { resumen.excluidas++; continue }
+          // Período superpuesto con otra prefactura viva del mismo servicio (p. ej. al pasar de mes calendario
+          // a corte 26–25): no se genera una segunda factura para los mismos días.
+          // '*': con 20261212100000 trae `conciliacion` (período realmente facturado); sin ella, igual funciona.
+          const { data: otras } = await db.from('fact_prefacturas').select('*')
+            .eq('cliente_id', k.cliente_id).eq('agrupacion_clave', g.clave).neq('estado', 'descartada').limit(100)
+          const sup = (otras ?? []).find((x: any) => superpone(periodoEfectivo(x), { desde: periodo.desde, hastaExcl: periodo.hastaExclusivo }))
+          if (sup) {
+            const e = periodoEfectivo(sup)
+            resumen.errores.push(`${k.cliente?.razon_social}: ya hay una prefactura (${sup.estado}) con días de este período (${e.desde} a ${e.hastaExcl}); no se genera otra para no facturar dos veces.`)
+            continue
+          }
+        }
 
         const oc: OrdenCompraEstado | null = ocCubre ? {
           id: ocCubre.id, numero: ocCubre.numero, vigenciaDesde: ocCubre.vigencia_desde, vigenciaHasta: ocCubre.vigencia_hasta,

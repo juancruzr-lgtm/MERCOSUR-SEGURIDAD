@@ -15,6 +15,7 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
   const [filasImp, setFilasImp] = useState<{ id: string; filas: any[] } | null>(null)
   const [notas, setNotas] = useState<any[]>([])
   const [pruebas, setPruebas] = useState<any[]>([])
+  const [conciliacion, setConciliacion] = useState<any>(null)
   const [buscar, setBuscar] = useState('')
   const [asoc, setAsoc] = useState<{ id: string; cliente_id: string; asociado_id: string; motivo: string } | null>(null)
   const [nc, setNc] = useState<{ id: string; tipo: string; neto: string; iva: string; motivo: string } | null>(null)
@@ -65,9 +66,13 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
           <div style={{ marginTop: 8, maxHeight: 360, overflowY: 'auto' }}>
             <div style={S.fila}>
               <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
-                const n = await rpc('fact_importacion_arca_confirmar', { p_importacion_id: filasImp.id, p_claves: filasImp.filas.filter(f => f.estado === 'nuevo').map(f => f.clave) })
-                setFilasImp(null); await cargar(); return n
-              }, 'Comprobantes nuevos confirmados')}>Confirmar todas las nuevas</button>
+                await rpc('fact_importacion_arca_confirmar', { p_importacion_id: filasImp.id, p_claves: filasImp.filas.filter(f => f.estado === 'nuevo').map(f => f.clave) })
+                setFilasImp(null)
+                // Conciliación automática: lo exacto o inequívoco queda vinculado; lo ambiguo, pendiente de revisión.
+                const r: any = await api('conciliar', {}).catch((e: any) => ({ error: e?.message ?? String(e) }))
+                setConciliacion(r)
+                await cargar()
+              }, 'Comprobantes confirmados y conciliados')}>Confirmar todas las nuevas</button>
               <button style={S.btn2} onClick={() => setFilasImp(null)}>Cerrar</button>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>
@@ -78,7 +83,7 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
         )}
       </div>
 
-      <FacturasExternas alCambiar={() => correr(cargar)} />
+      <FacturasExternas resultado={conciliacion} alCambiar={r => { if (r) setConciliacion(r); correr(cargar) }} />
 
       {notas.length > 0 && <div style={S.card}>
         <h3 style={S.h3}>Notas de crédito / débito en curso</h3>
@@ -106,7 +111,9 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
                 <td style={S.td}>{nombre(c.cliente_id) ?? <span style={S.err}>{c.receptor_nombre ?? 'sin cliente'}</span>}</td>
                 <td style={S.num}>{pesos(c.neto_c)}</td><td style={S.num}>{pesos(c.iva_c)}</td><td style={S.num}>{pesos(c.total_c)}</td>
                 <td style={S.num}>{esNota ? '—' : pesos(saldos[c.id])}</td>
-                <td style={S.td}>{c.cae ?? '—'}</td><td style={S.td}>{c.origen}</td>
+                <td style={S.td}>{c.cae ?? '—'}</td>
+                <td style={S.td}>{c.origen === 'importacion_arca' ? 'ARCA (importado)' : c.origen === 'carga_manual' ? 'Carga manual' : c.origen}
+                  {[1, 6, 201].includes(c.tipo) && <div style={{ fontSize: 12, color: c.prefactura_id ? '#4ade80' : '#94a3b8' }}>{c.prefactura_id ? 'Conciliado con su prefactura' : 'Registrado, sin conciliar'}</div>}</td>
                 <td style={S.td}>
                   {(!c.cliente_id || (esNota && !c.asociado_id)) && <button style={S.btn2} onClick={() => setAsoc({ id: c.id, cliente_id: c.cliente_id ?? '', asociado_id: '', motivo: '' })}>Asociar</button>}
                   {c.cae && <button style={S.btn2} onClick={() => correr(async () => { const r = await api(`comprobante-pdf?id=${c.id}`, undefined, 'GET'); window.open(r.url, '_blank', 'noopener') })}>PDF</button>}
