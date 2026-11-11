@@ -1,138 +1,107 @@
 /**
  * lib/facturacion/externas-arca.ts
  *
- * Facturas emitidas FUERA de la app (Comprobantes en línea, Factuweb: puntos de venta
- * distintos del Web Service de la app) leídas de ARCA con FECompUltimoAutorizado +
- * FECompConsultar (SÓLO LECTURA: no pide CAE), y su emparejamiento con las prefacturas
- * abiertas para marcarlas como emitidas. Sin acceso a datos: sólo arma con lo que recibe.
+ * Facturas emitidas FUERA de la app (Comprobantes en línea / Factuweb) y su cruce con las
+ * prefacturas, para marcarlas como emitidas. ARCA NO deja leerlas por el web service de
+ * facturación (error 11002 para los puntos de venta que no son Web Service), así que la
+ * fuente es el archivo de "Mis Comprobantes – Emitidos" importado en Comprobantes.
+ * Sin acceso a datos: sólo arma con lo que recibe.
  */
 
 import { formatoPesos } from './dinero'
 
-export type ComprobanteArca = {
+/** Comprobante de producción ya importado del archivo de ARCA (fact_comprobantes). */
+export type ComprobanteExterno = {
+  id: string
   tipo: number
   puntoVenta: number
   numero: number
   fecha: string // AAAA-MM-DD
-  docTipo: number | null
   docNro: string
+  receptor: string | null
   netoC: number
   ivaC: number
   totalC: number
-  cae: string
-  caeVto: string
-  servicioDesde: string | null
-  servicioHasta: string | null
-  vtoPago: string | null
+  cae: string | null
 }
 
-const iso = (v: unknown): string | null => {
-  const s = String(v ?? '').replace(/\D/g, '')
-  return s.length === 8 ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : null
-}
-const centavos = (v: unknown) => Math.round(Number(v ?? 0) * 100)
-
-/** Datos de un FECompConsultarResult (el `crudo` de interpretarConsulta). */
-export function comprobanteDeConsulta(crudo: any, base: { tipo: number; puntoVenta: number; numero: number }): ComprobanteArca | null {
-  const g = crudo?.ResultGet
-  if (!g?.CodAutorizacion) return null
-  return {
-    tipo: Number(g.CbteTipo ?? base.tipo), puntoVenta: Number(g.PtoVta ?? base.puntoVenta), numero: Number(g.CbteDesde ?? base.numero),
-    fecha: iso(g.CbteFch) ?? '', docTipo: g.DocTipo != null ? Number(g.DocTipo) : null, docNro: String(g.DocNro ?? '').replace(/\D/g, ''),
-    netoC: centavos(g.ImpNeto), ivaC: centavos(g.ImpIVA), totalC: centavos(g.ImpTotal),
-    cae: String(g.CodAutorizacion), caeVto: iso(g.FchVto) ?? '',
-    servicioDesde: iso(g.FchServDesde), servicioHasta: iso(g.FchServHasta), vtoPago: iso(g.FchVtoPago),
-  }
-}
-
-export type PuertoConsulta = {
-  ultimo(): Promise<{ ok: true; numero: number } | { ok: false; error: string }>
-  consultar(numero: number): Promise<{ encontrado: true; comprobante: ComprobanteArca } | { encontrado: false } | { error: string }>
-}
-
-/**
- * Recorre un punto de venta y tipo desde el último autorizado hacia atrás hasta encontrar
- * uno emitido antes de `desde` (o hasta `maximo` números). Los números no encontrados (602)
- * se saltean. Errores de ARCA: se corta y se informa (nunca se inventa nada).
- */
-export async function recorrerPuntoVenta(p: PuertoConsulta, o: { desde: string; maximo?: number; paralelo?: number }) {
-  const u = await p.ultimo()
-  if (u.ok === false) return { ultimo: null as number | null, comprobantes: [] as ComprobanteArca[], error: u.error as string | null, completo: false }
-  const maximo = o.maximo ?? 150
-  const paralelo = Math.max(1, o.paralelo ?? 4)
-  const comprobantes: ComprobanteArca[] = []
-  let n = u.numero
-  let tope = Math.max(1, u.numero - maximo + 1)
-  while (n >= tope) {
-    const lote = Array.from({ length: Math.min(paralelo, n - tope + 1) }, (_, i) => n - i)
-    const res = await Promise.all(lote.map(x => p.consultar(x)))
-    let cortar = false
-    for (const r of res) {
-      if ('error' in r) return { ultimo: u.numero, comprobantes, error: r.error, completo: false }
-      if (r.encontrado) {
-        if (r.comprobante.fecha && r.comprobante.fecha < o.desde) cortar = true
-        else comprobantes.push(r.comprobante)
-      }
-    }
-    if (cortar) return { ultimo: u.numero, comprobantes, error: null, completo: true }
-    n -= lote.length
-  }
-  return { ultimo: u.numero, comprobantes, error: null, completo: tope === 1 }
-}
+export type LineaPrefactura = { concepto?: string; cantidad?: string | number; precio?: string | number; importes?: { neto?: number; total?: number } }
 
 export type PrefacturaAbierta = {
   id: string; version: number; estado: string; cuit_receptor: string | null; tipo_comprobante: number | null
   total_c: number | null; neto_c: number | null; iva_c: number | null; periodo_desde: string; periodo_hasta_excl: string
-  cliente?: string | null; nombre?: string | null
+  cliente?: string | null; lineas?: LineaPrefactura[] | null
 }
 
-const solapa = (c: ComprobanteArca, p: PrefacturaAbierta) => {
-  if (c.servicioDesde && c.servicioHasta) return c.servicioDesde < p.periodo_hasta_excl && c.servicioHasta >= p.periodo_desde
-  return c.fecha >= p.periodo_desde // sin período de servicio: emitida desde el inicio del período
+const dia = (iso: string, mas: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + mas * 86400000).toISOString().slice(0, 10)
+
+/**
+ * ¿La factura puede ser la de ese período? El archivo de ARCA no trae el período de servicio:
+ * se usa la fecha de emisión, desde 7 días antes del fin del período hasta 45 días después.
+ * Así una factura de octubre emitida a principios de octubre (que es de septiembre) no cierra la
+ * prefactura de octubre, aunque el abono tenga el mismo total.
+ */
+export function fechaCompatible(fecha: string, p: Pick<PrefacturaAbierta, 'periodo_hasta_excl'>): boolean {
+  return fecha >= dia(p.periodo_hasta_excl, -7) && fecha <= dia(p.periodo_hasta_excl, 45)
+}
+
+/** Horas que representa un importe, con el precio por hora de la prefactura (una sola línea de horas). */
+export function horasFacturadas(p: PrefacturaAbierta, c: Pick<ComprobanteExterno, 'netoC' | 'totalC'>): { reales: number; prefactura: number } | null {
+  const ls = (p.lineas ?? []).filter(l => Number(l.precio) > 0 && Number(l.cantidad) > 0)
+  if (ls.length !== 1) return null
+  const l = ls[0]
+  const precioC = Number(l.precio) * 100
+  const bruto = precioC * Number(l.cantidad)
+  // Tarifa con IVA incluido (factura B): precio × horas da el total; si no, el neto.
+  const sobreTotal = l.importes?.total != null && l.importes?.neto != null && Math.abs(bruto - l.importes.total) < Math.abs(bruto - l.importes.neto)
+  const reales = (sobreTotal ? c.totalC : c.netoC) / precioC
+  return { reales: Math.round(reales * 100) / 100, prefactura: Number(l.cantidad) }
 }
 
 export type Emparejamiento = {
-  /** Mismo CUIT, tipo y total exacto, período compatible, y una sola candidata de cada lado. */
-  coincidencias: Array<{ prefactura: PrefacturaAbierta; comprobante: ComprobanteArca }>
-  /** Mismo CUIT y período pero distinto tipo o total: se revisan a mano (no se marcan solas). */
-  diferencias: Array<{ prefactura: PrefacturaAbierta; comprobante: ComprobanteArca; motivo: string }>
-  /** Varias candidatas para la misma prefactura o el mismo comprobante: no se elige solo. */
-  ambiguas: Array<{ prefactura: PrefacturaAbierta; comprobantes: ComprobanteArca[] }>
+  coincidencias: Array<{ prefactura: PrefacturaAbierta; comprobante: ComprobanteExterno }>
+  diferencias: Array<{ prefactura: PrefacturaAbierta; comprobante: ComprobanteExterno; motivo: string }>
+  ambiguas: Array<{ prefactura: PrefacturaAbierta; comprobantes: ComprobanteExterno[] }>
   sinFactura: PrefacturaAbierta[]
-  sinPrefactura: ComprobanteArca[]
+  sinPrefactura: ComprobanteExterno[]
 }
 
-const claveC = (c: ComprobanteArca) => `${c.tipo}-${c.puntoVenta}-${c.numero}`
+const cuitDe = (p: PrefacturaAbierta) => String(p.cuit_receptor ?? '').replace(/\D/g, '')
 
-/** Empareja conservador: sólo lo exacto se marca; el resto se informa. */
-export function emparejar(prefacturas: PrefacturaAbierta[], comprobantes: ComprobanteArca[]): Emparejamiento {
-  const candidatas = new Map<string, ComprobanteArca[]>()
-  const usosC = new Map<string, number>()
+/** Cruce conservador: sólo lo exacto (CUIT, tipo, total y fecha compatible, una candidata por lado) se marca. */
+export function emparejar(prefacturas: PrefacturaAbierta[], comprobantes: ComprobanteExterno[]): Emparejamiento {
+  const candidatas = new Map<string, ComprobanteExterno[]>()
+  const usos = new Map<string, number>()
   for (const p of prefacturas) {
-    const cs = comprobantes.filter(c => c.docNro === String(p.cuit_receptor ?? '').replace(/\D/g, '') && c.tipo === p.tipo_comprobante && c.totalC === p.total_c && solapa(c, p))
+    const cs = comprobantes.filter(c => c.docNro === cuitDe(p) && c.tipo === p.tipo_comprobante && c.totalC === p.total_c && fechaCompatible(c.fecha, p))
     candidatas.set(p.id, cs)
-    for (const c of cs) usosC.set(claveC(c), (usosC.get(claveC(c)) ?? 0) + 1)
+    for (const c of cs) usos.set(c.id, (usos.get(c.id) ?? 0) + 1)
   }
   const out: Emparejamiento = { coincidencias: [], diferencias: [], ambiguas: [], sinFactura: [], sinPrefactura: [] }
   const usados = new Set<string>()
+  const resueltas = new Set<string>()
+  // 1) Lo exacto primero, para todas: un cliente con varias facturas (Laromet) no se mezcla.
   for (const p of prefacturas) {
     const cs = candidatas.get(p.id) ?? []
-    if (cs.length === 1 && usosC.get(claveC(cs[0])) === 1) { out.coincidencias.push({ prefactura: p, comprobante: cs[0] }); usados.add(claveC(cs[0])); continue }
-    if (cs.length > 1 || (cs.length === 1 && (usosC.get(claveC(cs[0])) ?? 0) > 1)) { out.ambiguas.push({ prefactura: p, comprobantes: cs }); cs.forEach(c => usados.add(claveC(c))); continue }
-    // Sin coincidencia exacta: ¿hay una factura del mismo cliente y período con otro tipo o total?
-    const cuit = String(p.cuit_receptor ?? '').replace(/\D/g, '')
-    const parecida = comprobantes.find(c => c.docNro === cuit && solapa(c, p) && !usados.has(claveC(c)))
-    if (parecida) {
-      const motivos = [
-        parecida.tipo !== p.tipo_comprobante && `tipo ${parecida.tipo} (la prefactura dice ${p.tipo_comprobante})`,
-        parecida.totalC !== p.total_c && `total ${formatoPesos(parecida.totalC)} (la prefactura dice ${formatoPesos(p.total_c ?? 0)})`,
-      ].filter(Boolean)
-      out.diferencias.push({ prefactura: p, comprobante: parecida, motivo: motivos.join('; ') || 'período distinto' })
-      usados.add(claveC(parecida))
-      continue
-    }
-    out.sinFactura.push(p)
+    if (cs.length === 1 && usos.get(cs[0].id) === 1) { out.coincidencias.push({ prefactura: p, comprobante: cs[0] }); usados.add(cs[0].id); resueltas.add(p.id) }
+    else if (cs.length) { out.ambiguas.push({ prefactura: p, comprobantes: cs }); cs.forEach(c => usados.add(c.id)); resueltas.add(p.id) }
   }
-  out.sinPrefactura = comprobantes.filter(c => !usados.has(claveC(c)))
+  // 2) Sin coincidencia exacta: la factura del mismo cliente y período con el total más parecido.
+  for (const p of prefacturas) {
+    if (resueltas.has(p.id)) continue
+    const parecidas = comprobantes.filter(c => c.docNro === cuitDe(p) && fechaCompatible(c.fecha, p) && !usados.has(c.id))
+      .sort((a, b) => Math.abs(a.totalC - (p.total_c ?? 0)) - Math.abs(b.totalC - (p.total_c ?? 0)))
+    if (!parecidas.length) { out.sinFactura.push(p); continue }
+    const c = parecidas[0]
+    const h = horasFacturadas(p, c)
+    const motivos = [
+      c.tipo !== p.tipo_comprobante && `tipo ${c.tipo} (la prefactura dice ${p.tipo_comprobante})`,
+      c.totalC !== p.total_c && `total ${formatoPesos(c.totalC)} (la prefactura dice ${formatoPesos(p.total_c ?? 0)})`,
+      h && c.totalC !== p.total_c && `≈ ${h.reales} h facturadas (la prefactura tiene ${h.prefactura} h)`,
+    ].filter(Boolean)
+    out.diferencias.push({ prefactura: p, comprobante: c, motivo: motivos.join('; ') || 'revisar' })
+    usados.add(c.id)
+  }
+  out.sinPrefactura = comprobantes.filter(c => !usados.has(c.id))
   return out
 }
