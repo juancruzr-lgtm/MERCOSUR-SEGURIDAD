@@ -36,7 +36,8 @@ async function guardasProduccion(c: Clientes, b: any) {
     c.usuario.from('fact_comprobantes').select('tipo, punto_venta, numero, fecha_emision, doc_nro_receptor, total_c')
       .eq('ambiente', 'produccion').is('prefactura_id', null).in('tipo', [1, 6, 201]).eq('doc_nro_receptor', pf.cuit_receptor ?? '')
       .gte('fecha_emision', dia(pf.periodo_hasta_excl, -7)).lte('fecha_emision', dia(pf.periodo_hasta_excl, 45)).limit(20),
-    c.usuario.from('fact_prefacturas').select('id, estado, periodo_desde, periodo_hasta_excl, conciliacion')
+    // '*': con 20261212100000 trae `conciliacion` (período realmente facturado); sin ella, igual funciona.
+    c.usuario.from('fact_prefacturas').select('*')
       .eq('cliente_id', pf.cliente_id).eq('agrupacion_clave', pf.agrupacion_clave).neq('estado', 'descartada').limit(100),
     c.usuario.from('fact_importaciones').select('created_at').eq('tipo', 'arca_emitidos').order('created_at', { ascending: false }).limit(1),
   ])

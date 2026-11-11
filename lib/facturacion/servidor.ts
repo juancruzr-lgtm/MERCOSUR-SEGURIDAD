@@ -300,7 +300,8 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
           if (desc?.length) { resumen.excluidas++; continue }
           // Período superpuesto con otra prefactura viva del mismo servicio (p. ej. al pasar de mes calendario
           // a corte 26–25): no se genera una segunda factura para los mismos días.
-          const { data: otras } = await db.from('fact_prefacturas').select('id, estado, periodo_desde, periodo_hasta_excl, conciliacion')
+          // '*': con 20261212100000 trae `conciliacion` (período realmente facturado); sin ella, igual funciona.
+          const { data: otras } = await db.from('fact_prefacturas').select('*')
             .eq('cliente_id', k.cliente_id).eq('agrupacion_clave', g.clave).neq('estado', 'descartada').limit(100)
           const sup = (otras ?? []).find((x: any) => superpone(periodoEfectivo(x), { desde: periodo.desde, hastaExcl: periodo.hastaExclusivo }))
           if (sup) {
