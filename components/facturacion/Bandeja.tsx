@@ -10,6 +10,7 @@ import { abrirDocumento, api, avisosVigentes, estadoVisible, leer, rpc, subirDoc
 import { datosComprobantesEnLinea, validarRegistroManual } from '@/lib/facturacion/emision-manual'
 import { compararConFacturaReal, etiquetaFactura } from '@/lib/facturacion/control'
 import { agruparObjetivos, tarifasParaObjetivo } from '@/lib/facturacion/prefacturacion'
+import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import {
   aprobacionDelMes, elegibleParaAceptarTodos, filaPendiente, filasExcel, minutosPropuestos, motivosRevision, nombreComprobante, objetivoAlDia, objetivosParaAceptar, propuestaDeFila, sinHoras,
   type FilaRevision, type TratamientoDescubiertos,
@@ -34,10 +35,28 @@ const CHICO: React.CSSProperties = { ...S.btn2, padding: '3px 9px', fontSize: 12
 type Config = { emision: any; modulos: any }
 type Base = Omit<FilaRevision, 'objetivos' | 'prefactura'> & {
   prefactura: any | null
+  /** Sin prefactura viva pero con una descartada del período: ese período no se factura (p. ej. servicio no prestado). */
+  descartada?: { id: string; version: number } | null
   clave: string; contratoId: string; contrato: { id: string; regla_periodo?: string | null; dia_corte?: number | null }; cliente: any; nombre: string; incluye: string[]; huerfana: boolean
   objetivos: Array<{ objetivoId: string; nombre: string }>
 }
 const claveObj = (contratoId: string, objetivoId: string) => `${contratoId}:${objetivoId}`
+
+/** Factura real (emitida fuera de la app) con la que se concilió la prefactura y la diferencia con lo calculado. */
+function Conciliacion({ c }: { c: any }) {
+  const nro = numeroVisible({ tipo: Number(c.tipo), puntoVenta: Number(c.punto_venta), numero: Number(c.numero) })
+  const hs = c.horas_facturadas != null && c.horas_app != null && Number(c.horas_facturadas) !== Number(c.horas_app)
+    ? ` · ${c.horas_facturadas} h facturadas (la app calculó ${c.horas_app} h)` : ''
+  return (
+    <div style={{ fontSize: 12, marginTop: 2 }}>
+      <div style={{ color: '#4ade80' }}>Conciliada con {nro} del {fecha(c.fecha)} (ARCA)</div>
+      {c.estado_diferencia === 'pendiente' && <div style={{ color: '#fbbf24' }}>
+        Diferencia pendiente: facturado {pesos(c.total_c)}{c.total_app_c != null ? `, la app calculó ${pesos(c.total_app_c)}` : ' (la app no tiene total para comparar)'}{hs}</div>}
+      {c.estado_diferencia === 'explicada' && <div style={S.sub}>Diferencia explicada: {c.motivo}{hs}</div>}
+      {c.estado_diferencia === 'resuelta' && <div style={S.sub}>Diferencia resuelta: {c.motivo}</div>}
+    </div>
+  )
+}
 
 export default function Bandeja({ mes, usuarios, config, periodo }: { mes: string; usuarios: Array<{ id: string; nombre: string }>; config: Config; periodo: Periodo }) {
   // Seguro de períodos: en el mes en curso o futuro se consulta, pero no se acepta, recalcula ni aprueba.
@@ -60,22 +79,25 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
 
   async function cargar(conPropuestas = true) {
     const { desde: inicioMes, ultimoDia: finMes } = rangoFechasMes(mes)
-    const [pref, contratos, vincs, tarifas, aps] = await Promise.all([
+    const [pref, contratos, vincs, tarifas, aps, desc] = await Promise.all([
       leer('fact_prefacturas', q => q.eq('periodo_mes', mes).neq('estado', 'descartada').order('created_at'),
         '*, cliente:fact_clientes(razon_social, cuit, condicion_iva), objetivo:objetivos(nombre), oc:fact_ordenes_compra(numero, tipo), contrato:fact_contratos(nombre, modalidad, agrupacion, requiere_portal, envio_conjunto_planilla, requisitos, dias_vencimiento)'),
       leer('fact_contratos', q => q.eq('estado', 'vigente'), 'id, nombre, modalidad, agrupacion, separar_diurna_nocturna, regla_periodo, dia_corte, cliente:fact_clientes(razon_social, cuit)'),
       leer('fact_contrato_objetivos', q => q.is('anulado_at', null), '*, objetivo:objetivos(nombre)'),
       leer('fact_tarifas', q => q.lte('vigencia_desde', finMes).or(`vigencia_hasta.is.null,vigencia_hasta.gte.${inicioMes}`).order('vigencia_desde', { ascending: false })),
       leer('fact_horas_aprobaciones', q => q.eq('estado', 'aprobada').order('aprobado_at', { ascending: false }).limit(1000)),
+      leer('fact_prefacturas', q => q.eq('periodo_mes', mes).eq('estado', 'descartada').order('updated_at', { ascending: false }), 'id, version, contrato_id, agrupacion_clave'),
     ])
     const rs: Base[] = []
     for (const k of contratos) {
       const vs = vincs.filter(v => v.contrato_id === k.id && (!v.hasta || v.hasta >= inicioMes) && (!v.desde || v.desde <= finMes))
       for (const g of agruparObjetivos<any>(k, vs)) {
         const nombres = g.objs.map((v: any) => v.objetivo?.nombre ?? v.objetivo_id)
+        const viva = pref.find(p => p.contrato_id === k.id && p.agrupacion_clave === g.clave) ?? null
         rs.push({
           clave: `${k.id}|${g.clave}`, contratoId: k.id, contrato: k, cliente: k.cliente, modalidad: k.modalidad, separarDiurnaNocturna: Boolean(k.separar_diurna_nocturna),
-          tarifas: tarifas.filter(t => t.contrato_id === k.id), prefactura: pref.find(p => p.contrato_id === k.id && p.agrupacion_clave === g.clave) ?? null,
+          tarifas: tarifas.filter(t => t.contrato_id === k.id), prefactura: viva,
+          descartada: viva ? null : desc.find(d => d.contrato_id === k.id && d.agrupacion_clave === g.clave) ?? null,
           nombre: g.objs.length === 1 ? nombres[0] : g.grupo ?? k.nombre, incluye: g.objs.length > 1 ? nombres : [], huerfana: false,
           objetivos: g.objs.map((v: any) => ({ objetivoId: v.objetivo_id, nombre: v.objetivo?.nombre ?? v.objetivo_id })),
         })
@@ -217,10 +239,20 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                     </td>
                     <td style={S.td}>{precio(f).map((x, i) => <div key={i} style={{ fontSize: 12 }}>{x}</div>)}</td>
                     <td style={S.num}>{pesos(p?.total_c)}</td>
-                    <td style={S.td}><Etiqueta texto={ev.texto} color={COLOR_VISIBLE[ev.clave]} />
-                      {mot.map((m, i) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {m}</div>)}
-                      {!mot.length && (p?.requisitos ?? []).map((r: any, i: number) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {r.detalle}</div>)}</td>
-                    <td style={S.td}>{p ? <button style={CHICO} onClick={() => setSel(sel === p.id ? null : p.id)}>{sel === p.id ? 'Cerrar' : 'Abrir'}</button> : <span style={S.sub}>sin generar</span>}</td>
+                    <td style={S.td}>
+                      {!p && f.descartada ? <Etiqueta texto="No se factura este período (descartada)" color="#334155" /> : <Etiqueta texto={ev.texto} color={COLOR_VISIBLE[ev.clave]} />}
+                      {p?.conciliacion && <Conciliacion c={p.conciliacion} />}
+                      {!p?.conciliacion && mot.map((m, i) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {m}</div>)}
+                      {!p?.conciliacion && !mot.length && (p?.requisitos ?? []).map((r: any, i: number) => <div key={i} style={{ color: '#fbbf24', fontSize: 12 }}>• {r.detalle}</div>)}</td>
+                    <td style={S.td}>{p ? <button style={CHICO} onClick={() => setSel(sel === p.id ? null : p.id)}>{sel === p.id ? 'Cerrar' : 'Abrir'}</button>
+                      : f.descartada ? <button style={CHICO} disabled={ocupado || !escribir} title={porQue} onClick={() => {
+                        if (!confirm('VOLVER A FACTURAR este período\n\nLa prefactura descartada vuelve a borrador y se recalcula. ¿Continuar?')) return
+                        correr(async () => {
+                          await rpc('fact_prefactura_estado', { p_id: f.descartada!.id, p_estado: 'en_preparacion', p_version: f.descartada!.version, p_motivo: 'Se vuelve a facturar el período' })
+                          await recalcular(mes, f.contratoId, setEsperando); await cargar(false)
+                        }, 'El período vuelve a facturarse')
+                      }}>Volver a facturar</button>
+                      : <span style={S.sub}>sin generar</span>}</td>
                   </tr>
                   {verTurnos === f.clave && (
                     <tr><td colSpan={8} style={{ ...S.td, background: '#0b1428' }}>
@@ -481,13 +513,23 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
               {pruebaHomo.comprobante_id && <button style={S.btn2} disabled={ocupado} onClick={() => verPdf(pruebaHomo.comprobante_id)}>Ver PDF de la prueba</button>}
             </>}
             {p.estado === 'aprobada_emitir' && periodo.habilitado && config.emision.produccion_habilitada && <>
-              <button style={S.btn} disabled={ocupado} onClick={() => {
-                if (!confirm(`Emitir comprobante REAL en ARCA por ${pesos(p.total_c)} a ${p.cliente?.razon_social}?`)) return
-                correr(async () => {
-                  const r = await api('emitir', { prefactura_id: p.id, version: p.version, ambiente: 'produccion' }); await hecho()
-                  if (r.estado !== 'autorizada') throw new Error(r.motivo ?? r.error ?? r.estado)
-                }, 'Comprobante autorizado por ARCA')
-              }}>Emitir en ARCA</button>
+              <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
+                // Confirmación EXPRESA de Gerencia sobre este comprobante concreto (la ruta la vuelve a exigir).
+                const imp = (await leer('fact_importaciones', q => q.eq('tipo', 'arca_emitidos').order('created_at', { ascending: false }).limit(1), 'created_at'))[0]
+                const ultima = imp?.created_at ? new Date(imp.created_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }) : 'nunca'
+                const tipo = p.tipo_comprobante === 1 ? 'Factura A' : p.tipo_comprobante === 6 ? 'Factura B' : p.tipo_comprobante === 201 ? 'Factura de Crédito Electrónica A' : `Tipo ${p.tipo_comprobante}`
+                if (!confirm(`EMITIR FACTURA REAL EN ARCA (Gerencia)\n\n${tipo} a ${p.cliente?.razon_social} (CUIT ${p.cuit_receptor})\nPeríodo ${p.periodo_mes} · Total ${pesos(p.total_c)}\n\nÚltima importación de "Mis Comprobantes": ${ultima}\n\n¿Confirmás que este servicio y período NO se facturó por fuera de la app (Comprobantes en línea)?`)) return
+                const cuerpo = { prefactura_id: p.id, version: p.version, ambiente: 'produccion', confirmacion: { tipo: p.tipo_comprobante, cuit: p.cuit_receptor, total_c: p.total_c }, confirmo_no_emitida_fuera: true }
+                let r: any
+                try { r = await api('emitir', cuerpo) } catch (e: any) {
+                  if (!e?.detalle?.excepcionable) throw e
+                  const motivo = prompt(`${e.message}\n\nSólo si igual corresponde emitir, Gerencia puede autorizar una EXCEPCIÓN: escribí el motivo (queda en el historial).`)
+                  if (!motivo?.trim()) throw e
+                  r = await api('emitir', { ...cuerpo, excepcion: { motivo } })
+                }
+                await hecho()
+                if (r.estado !== 'autorizada') throw new Error(r.motivo ?? r.error ?? r.estado)
+              }, 'Comprobante autorizado por ARCA')}>Emitir en ARCA</button>
             </>}
             {extra.emisiones.filter(e => e.estado === 'incierta' || e.estado === 'enviando').map(e => (
               <button key={e.id} style={S.btn2} disabled={ocupado} onClick={() => correr(async () => { await api('emitir', { emision_id: e.id }); await hecho() }, 'Consulta realizada')}>

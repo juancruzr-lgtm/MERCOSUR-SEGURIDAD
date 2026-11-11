@@ -5,7 +5,8 @@
 // homologación. Sin certificado (AFIP_CERT_PEM/AFIP_KEY_PEM) no se llama a ARCA:
 // la solicitud queda 'preparada' y se informa la dependencia.
 import type { NextRequest } from 'next/server'
-import { clientesDelPedido } from '@/app/api/documentacion/_clientes'
+import { clientesDelPedido, type Clientes } from '@/app/api/documentacion/_clientes'
+import { guardasEmisionReal } from '@/lib/facturacion/emision-guardas'
 import { afipConfigFacturacion } from '@/lib/afip/config'
 import { obtenerTA } from '@/lib/afip/wsaa'
 import { taStoreSupabase } from '@/lib/afip/ta-store-supabase'
@@ -17,6 +18,44 @@ import { errorRpc, rechazoPorPeriodo, responder } from '../_comun'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const dia = (iso: string, mas: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + mas * 86400000).toISOString().slice(0, 10)
+
+/**
+ * Controles de una emisión real nueva (lib/facturacion/emision-guardas). Los que admiten excepción
+ * (posible duplicado, período superpuesto, importación vieja) sólo se pasan con una excepción EXPRESA de
+ * Gerencia con motivo, que queda en el historial (fact_excepcion_duplicado) antes de seguir.
+ */
+async function guardasProduccion(c: Clientes, b: any) {
+  const [{ data: ger }, { data: pf }] = await Promise.all([
+    c.usuario.rpc('puede_acceder_gerencia_actual'),
+    c.usuario.from('fact_prefacturas').select('id, cliente_id, agrupacion_clave, cuit_receptor, tipo_comprobante, total_c, periodo_desde, periodo_hasta_excl').eq('id', b.prefactura_id).maybeSingle(),
+  ])
+  if (!pf) return responder({ error: 'Prefactura inexistente o sin acceso' }, 404)
+  const [{ data: imp, error: e1 }, { data: otras, error: e2 }, { data: ult, error: e3 }] = await Promise.all([
+    c.usuario.from('fact_comprobantes').select('tipo, punto_venta, numero, fecha_emision, doc_nro_receptor, total_c')
+      .eq('ambiente', 'produccion').is('prefactura_id', null).in('tipo', [1, 6, 201]).eq('doc_nro_receptor', pf.cuit_receptor ?? '')
+      .gte('fecha_emision', dia(pf.periodo_hasta_excl, -7)).lte('fecha_emision', dia(pf.periodo_hasta_excl, 45)).limit(20),
+    c.usuario.from('fact_prefacturas').select('id, estado, periodo_desde, periodo_hasta_excl, conciliacion')
+      .eq('cliente_id', pf.cliente_id).eq('agrupacion_clave', pf.agrupacion_clave).neq('estado', 'descartada').limit(100),
+    c.usuario.from('fact_importaciones').select('created_at').eq('tipo', 'arca_emitidos').order('created_at', { ascending: false }).limit(1),
+  ])
+  // Si un control no se puede leer, no se emite (nunca se da por bueno lo que no se verificó).
+  if (e1 || e2 || e3) return responder({ error: `No se pudieron verificar los controles de duplicado: ${(e1 ?? e2 ?? e3)?.message}` }, 503)
+  const bloqueos = guardasEmisionReal({
+    esGerencia: ger === true, prefactura: pf as any, confirmacion: b.confirmacion, confirmoNoEmitidaFuera: b.confirmo_no_emitida_fuera === true,
+    importadasSinConciliar: (imp ?? []) as any[], otrasDelServicio: (otras ?? []) as any[], ultimaImportacionAt: (ult ?? [])[0]?.created_at ?? null, ahora: new Date(),
+  })
+  if (!bloqueos.length) return null
+  const duros = bloqueos.filter(x => !x.excepcionable)
+  const motivo = String(b.excepcion?.motivo ?? '').trim()
+  if (duros.length || !motivo) {
+    return responder({ error: bloqueos.map(x => x.error).join(' '), codigo: (duros[0] ?? bloqueos[0]).codigo, excepcionable: duros.length === 0 }, duros.length ? 400 : 409)
+  }
+  const { error } = await c.usuario.rpc('fact_excepcion_duplicado', { p_prefactura_id: pf.id, p_motivo: `${motivo} [${bloqueos.map(x => x.codigo).join(', ')}]` })
+  if (error) return responder({ error: error.message }, 403)
+  return null
+}
 
 export async function POST(req: NextRequest) {
   const c = await clientesDelPedido(req)
@@ -32,6 +71,12 @@ export async function POST(req: NextRequest) {
     // Seguro de períodos: no se emite una prefactura del mes en curso o futuro.
     const { data: pf } = await c.usuario.from('fact_prefacturas').select('periodo_mes').eq('id', b.prefactura_id).maybeSingle()
     if (pf?.periodo_mes) { const rechazo = await rechazoPorPeriodo(c.usuario, pf.periodo_mes); if (rechazo) return rechazo }
+    // Emisión REAL: confirmación de Gerencia sobre este comprobante y controles de duplicado ANTES de preparar
+    // nada (y por lo tanto antes de pedir CAE). Homologación no factura: no los necesita.
+    if (b.ambiente === 'produccion') {
+      const bloqueo = await guardasProduccion(c, b)
+      if (bloqueo) return bloqueo
+    }
     const { data, error } = await c.usuario.rpc('fact_emision_preparar', { p_prefactura_id: b.prefactura_id, p_version: b.version, p_ambiente: b.ambiente })
     if (error) return errorRpc(error)
     emisionId = (data as any).id
