@@ -37,7 +37,7 @@ describe('formato de respuesta y minimización', () => {
   it('el esquema no tiene lugar para datos sensibles', () => {
     const s = JSON.stringify(SCHEMA_SOLICITUD).toLowerCase()
     for (const p of ['sangu', 'enfermedad', 'medicac', 'causa', 'arma', 'padre', 'madre', 'fuma', 'firma', 'conflicto']) expect(s).not.toContain(p)
-    expect(CAMPOS_LEIBLES).not.toContain('email' as never) // el email no está en el papel: no se "lee"
+    expect(CAMPOS_LEIBLES).toContain('email') // figura en la solicitud (JC 11/11); siempre queda para confirmar
   })
   it('las instrucciones piden ignorar los renglones sensibles y no inventar', () => {
     expect(PROMPT_SOLICITUD).toMatch(/NO TRANSCRIBAS NI MENCIONES/)
@@ -129,5 +129,40 @@ describe('costo e interruptor', () => {
     expect(r.indexOf("rpc('postulacion_preparar_lectura'")).toBeLessThan(r.indexOf('.download('))
     expect(r).toMatch(/registrar\(\{ modelo: r\.modelo/)
     expect(r).not.toMatch(/postulacion_guardar/) // la lectura no escribe la postulación
+  })
+})
+
+describe('email de la solicitud (JC 11/11)', () => {
+  const conEmail = (valor: string, estado = 'claro') => {
+    const r = respuesta()
+    ;(r.campos as unknown[]).push({ campo: 'email', valor, texto_literal: valor, estado, alternativas: [], pagina: 1, region: null })
+    return controlarLectura(interpretarLecturaSolicitud(r)!, null, HOY)
+  }
+  it('se lee, se normaliza y SIEMPRE queda para confirmar (es el usuario de ingreso)', () => {
+    const c = conEmail(' Juan.Prueba @Ejemplo.com ')
+    expect(c.valores.email).toBe('juan.prueba@ejemplo.com')
+    expect(c.dudosos).toContain('email')
+  })
+  it('un email mal formado queda dudoso con su motivo', () => {
+    const c = conEmail('juanprueba.ejemplo.com')
+    expect(c.dudosos).toContain('email')
+    expect(c.controles.some(x => x.campo === 'email' && /formato/.test(x.motivo))).toBe(true)
+  })
+  it('las instrucciones piden el email tal como figura', () => {
+    expect(PROMPT_SOLICITUD).toMatch(/- email: el correo electrónico de la persona tal como figura/)
+  })
+})
+
+describe('autocompletar del navegador y datos de la solicitud en el legajo', () => {
+  const ficha = leer('components/postulantes/FichaPostulante.tsx')
+  it('los campos de la ficha no se autocompletan', () => {
+    expect(ficha).toMatch(/autoComplete="off"/)
+    expect(ficha).toMatch(/Es TU email \(lo completó el navegador\)/)
+  })
+  it('la función del legajo es sólo para Administración y no copia datos', () => {
+    const sql = leer('supabase/migrations/20261211100000_legajo_datos_solicitud.sql')
+    expect(sql).toMatch(/legajo_puede_gestionar\(\)/)
+    expect(sql).toMatch(/revoke all on function public\.legajo_datos_solicitud\(uuid\) from public, anon/)
+    expect(sql).not.toMatch(/\b(insert|update|delete)\b\s+(into\s+)?public\./i)
   })
 })

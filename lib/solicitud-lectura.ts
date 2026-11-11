@@ -14,12 +14,12 @@
  *     vive ni si fuma. Se le pide al modelo que ignore esas líneas.
  */
 import { normalizarTelefonoAr } from '@/lib/telefono-ar'
-import { cuilCoincideConDni, cuilValido, dniValido, edadEn, type CampoPostulacion, type CampoSeleccion } from '@/lib/postulantes'
+import { cuilCoincideConDni, cuilValido, dniValido, edadEn, emailValido, type CampoPostulacion, type CampoSeleccion } from '@/lib/postulantes'
 
 export const CAMPOS_LEIBLES: CampoPostulacion[] = [
   'apellido', 'nombre', 'dni', 'cuil', 'telefono', 'fecha_nacimiento', 'lugar_nacimiento', 'nacionalidad',
   'domicilio_calle', 'domicilio_numero', 'domicilio_piso_depto', 'domicilio_localidad', 'domicilio_provincia',
-  'domicilio_cp', 'fecha_entrevista',
+  'domicilio_cp', 'fecha_entrevista', 'email',
 ]
 export const SELECCION_LEIBLE: CampoSeleccion[] = [
   'estado_civil', 'hijos', 'edades_hijos', 'estudios', 'conduce', 'movilidad', 'horario_disponible',
@@ -51,6 +51,7 @@ REGLAS:
 - telefono: el número de CELULAR de la persona tal como figura, sólo dígitos. Si hay más de un número, elegí el del renglón "POSEE CELULAR … Nº" y, si no hay, el primero del renglón TELÉFONO que no diga que es de otra persona (por ejemplo "madre"). NO agregues característica ni prefijos que no estén escritos.
 - "DOMICILIO REAL": calle en domicilio_calle y altura en domicilio_numero; piso/depto si figura.
 - "CIUDAD": la localidad en domicilio_localidad; si entre paréntesis o abreviada figura la provincia (por ejemplo "Sta Fe"), escribila completa en domicilio_provincia ("Santa Fe"). Si no figura la provincia, null.
+- email: el correo electrónico de la persona tal como figura, en minúsculas y sin espacios. Si algún carácter admite otra lectura (o/0, l/1/i, punto, guión, guión bajo, el dominio), estado "dudoso" y poné las alternativas. Si no hay email escrito, null.
 - nacionalidad: sólo si está escrita (no la deduzcas del lugar de nacimiento).
 - Opciones "SI - NO": la persona TACHA la opción que NO corresponde. La respuesta es la opción que quedó SIN tachar. Si no se entiende cuál quedó, estado "dudoso".
 
@@ -205,6 +206,14 @@ export function controlarLectura(l: LecturaSolicitud, verificacion?: Partial<Rec
     const n = normalizarTelefonoAr(crudo)
     if (n.e164) valores.telefono = n.e164
     else marcar('telefono', 'falta la característica o el número está incompleto: confirmalo con la persona')
+  }
+
+  // El email es el usuario de ingreso: siempre lo confirma una persona.
+  if (valores.email != null) {
+    const e = String(valores.email).replace(/\s+/g, '').toLowerCase()
+    valores.email = e || null
+    if (!emailValido(e)) marcar('email', 'el email no tiene un formato válido: confirmalo con la persona')
+    else if (!dudosos.has('email')) marcar('email', 'es su usuario de ingreso: confirmá que esté bien escrito')
   }
 
   // Doble lectura de los datos críticos con un segundo modelo.
