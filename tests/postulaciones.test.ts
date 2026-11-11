@@ -122,3 +122,17 @@ describe('rutas: la base autoriza antes de tocar Storage o Auth', () => {
     expect(sql).toMatch(/values \('postulaciones', 'postulaciones', false/)
   })
 })
+
+describe('completar el legajo de alguien que ya es empleado (JC 11/11)', () => {
+  const fs = require('node:fs') as typeof import('node:fs')
+  const sql = fs.readFileSync(require('node:path').join(__dirname, '..', 'supabase/migrations/20261211110000_postulacion_completar_legajo.sql'), 'utf8')
+  it('sólo Administración/Gerencia, coincidencia por DNI o CUIL y sin pisar datos', () => {
+    expect(sql).toMatch(/postulacion_gestiona\(\)/)
+    expect(sql).toMatch(/no coincide por DNI ni CUIL/)
+    expect(sql).toMatch(/'solicitud_empleo', 'pendiente'/)
+    expect(sql).toMatch(/revoke all on function public\.postulacion_completar_legajo\(uuid, uuid\) from public, anon/)
+  })
+  it('el email del empleado sólo se carga si está vacío', () => {
+    expect(sql).toMatch(/v\.email is not null and nullif\(btrim\(coalesce\(u\.email, ''\)\), ''\) is null/)
+  })
+})
