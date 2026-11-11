@@ -18,6 +18,7 @@ import {
 } from './prefacturacion'
 import { proponerAsociaciones, type ClienteIdentidad, type ComprobanteAbierto, type RetencionDisponible } from './conciliacion'
 import { numeroVisible } from './comprobantes'
+import { armarCambios, compararDetalle, type EntradaAuditoria, type RegistroInfo, type TurnoInfo } from './cambios-horas'
 
 // Mismas columnas que lee Reportes: las horas salen de lib/planilla-objetivo con los mismos datos.
 const CAMPOS_REGISTRO = '*'
@@ -70,6 +71,76 @@ export async function proponerHoras(db: SupabaseClient, p: { contratoId: string;
     hayDiferencia: ap.minutos_cubiertos !== horas.minutosCubiertos || ap.minutos_descubiertos !== horas.minutosDescubiertos,
   } : null
   return { periodo, horas, franjaDefinida: !!franja, superposicion: k.superposicion === 'sumar' ? 'sumar' : 'unir', desvio }
+}
+
+/**
+ * Qué cambió en las horas de un objetivo desde que se aceptaron: turno por turno, con
+ * quién cambió qué y por qué. SÓLO LECTURA.
+ *
+ * Los turnos salen de la propuesta, leída con la RLS de quien pide (la ruta ya exige
+ * facturación y alcance total). Las tablas de auditoría no tienen lectura por RLS para
+ * Administración: turnos_auditoria no tiene política de SELECT y la de asistencia es del
+ * rol legacy 'admin'. Por eso se leen con service_role, pero sólo para esos turnos y
+ * desde la aceptación. Lo mismo con los nombres de quién cambió.
+ */
+export async function cambiosDeHoras(db: SupabaseClient, admin: SupabaseClient, p: { contratoId: string; objetivoId: string; mes: string }) {
+  const prop = await proponerHoras(db, p)
+  const actual = { minutosCubiertos: prop.horas.minutosCubiertos, minutosDescubiertos: prop.horas.minutosDescubiertos }
+  const { data: ap, error } = await db.from('fact_horas_aprobaciones')
+    .select('id, detalle, aprobado_at, aprobado_por, minutos_aprobados, minutos_cubiertos, minutos_descubiertos')
+    .eq('objetivo_id', p.objetivoId).eq('periodo_desde', prop.periodo.desde).eq('periodo_hasta_excl', prop.periodo.hastaExclusivo)
+    .eq('estado', 'aprobada').maybeSingle()
+  if (error) throw error
+  if (!ap) return { aceptada: null, actual, turnos: [] }
+
+  // Una aceptación sin detalle por turno (con minutos) no se puede comparar turno a turno:
+  // marcaría todo como "nuevo". En ese caso sólo se informa el total.
+  const foto = Array.isArray(ap.detalle) ? ap.detalle : []
+  const sinFoto = foto.length === 0 && Number(ap.minutos_cubiertos) > 0
+  const cambios = sinFoto ? [] : compararDetalle(foto, prop.horas.detalle)
+  const ids = cambios.map(c => c.turnoId).slice(0, 300)
+  const crudos: Array<{ origen: 'turno' | 'registro'; turno_id: string; modificado_por: string | null; campo: string; valor_anterior: string | null; valor_nuevo: string | null; motivo: string | null; created_at: string }> = []
+  const turnos: TurnoInfo[] = []
+  const registros: RegistroInfo[] = []
+  for (let i = 0; i < ids.length; i += 100) {
+    const parte = ids.slice(i, i + 100)
+    const COLS = 'turno_id, modificado_por, campo, valor_anterior, valor_nuevo, motivo, created_at'
+    const [ta, ra, t, r] = await Promise.all([
+      admin.from('turnos_auditoria').select(COLS).in('turno_id', parte).gte('created_at', ap.aprobado_at).order('created_at').limit(500),
+      admin.from('registros_asistencia_auditoria').select(COLS).in('turno_id', parte).gte('created_at', ap.aprobado_at).order('created_at').limit(500),
+      db.from('turnos').select('id, created_at, origen, motivo_reemplazo, hora_inicio, hora_fin').in('id', parte),
+      db.from('registros_asistencia').select('turno_id, created_at, origen, origen_cobertura, registro_anulado_motivo, cobertura_anulada_motivo').in('turno_id', parte).limit(1000),
+    ])
+    for (const x of [ta, ra, t, r]) if (x.error) throw x.error
+    crudos.push(...(ta.data ?? []).map((x: any) => ({ ...x, origen: 'turno' as const })), ...(ra.data ?? []).map((x: any) => ({ ...x, origen: 'registro' as const })))
+    turnos.push(...((t.data ?? []) as TurnoInfo[]))
+    registros.push(...((r.data ?? []) as RegistroInfo[]))
+  }
+
+  const quienes = Array.from(new Set(crudos.map(x => x.modificado_por).concat(ap.aprobado_por ? [ap.aprobado_por] : []).filter((x): x is string => Boolean(x))))
+  const nombres = new Map<string, string>()
+  if (quienes.length) {
+    const { data: us, error: e3 } = await admin.from('usuarios').select('id, nombre, apellido').in('id', quienes)
+    if (e3) throw e3
+    for (const u of us ?? []) nombres.set(u.id, [u.nombre, u.apellido].filter(Boolean).join(' ') || 'sin nombre')
+  }
+  const auditoria: EntradaAuditoria[] = crudos.map(x => ({
+    turnoId: x.turno_id, cuando: x.created_at, quien: x.modificado_por ? nombres.get(x.modificado_por) ?? null : null,
+    campo: x.campo, antes: x.valor_anterior, despues: x.valor_nuevo, motivo: x.motivo, origen: x.origen,
+  }))
+  return {
+    aceptada: {
+      aprobadoAt: ap.aprobado_at as string,
+      aprobadoPor: ap.aprobado_por ? nombres.get(ap.aprobado_por) ?? null : null,
+      minutosAprobados: ap.minutos_aprobados as number,
+      minutosCubiertos: ap.minutos_cubiertos as number,
+      minutosDescubiertos: ap.minutos_descubiertos as number,
+    },
+    actual,
+    turnos: armarCambios({ cambios, auditoria, turnos, registros, aceptadoAt: ap.aprobado_at }),
+    recortado: cambios.length > ids.length,
+    sinFoto,
+  }
 }
 
 /**
@@ -136,7 +207,10 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
     db.from('fact_config').select('valor').eq('clave', 'emision').maybeSingle(),
   ])
   if (e1) throw new Error(e1.message)
-  const puntoVenta = cfg?.valor?.punto_venta ?? null
+  // Desde 20261206120000 cada ambiente tiene su clave (punto_venta_prod / punto_venta_homo); la vieja
+  // `punto_venta` ya no existe. Leer sólo la vieja ponía en TODAS las prefacturas el aviso "Falta
+  // configurar el punto de venta Web Service" y las mostraba como "Requiere revisión".
+  const puntoVenta = cfg?.valor?.punto_venta_prod ?? cfg?.valor?.punto_venta ?? null
 
   for (const k of contratos ?? []) {
     try {

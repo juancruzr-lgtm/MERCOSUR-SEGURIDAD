@@ -60,14 +60,29 @@ export const ESTADO_PREPARACION: Record<string, string> = {
   aprobada_emitir: 'Aprobada · pendiente de emisión', emitida: 'Emitida', descartada: 'Descartada',
 }
 
+/** El aviso del punto de venta Web Service: informa que no se puede emitir por ARCA, pero sí aprobar. */
+export function esAvisoPuntoVenta(aviso: unknown): boolean {
+  return String(aviso ?? '').startsWith('Falta configurar el punto de venta Web Service')
+}
+
+/**
+ * Avisos que se muestran en la prefactura. El del punto de venta se oculta si el punto ya está
+ * configurado: las prefacturas generadas antes de configurarlo (o con la clave vieja) lo traen guardado.
+ */
+export function avisosVigentes(avisos: unknown[] | null | undefined, puntoVentaConfigurado: boolean): string[] {
+  return (avisos ?? []).map(String).filter(a => !(puntoVentaConfigurado && esAvisoPuntoVenta(a)))
+}
+
 /**
  * Estado que ve Administración. "En revisión" se divide según haya o no
  * observaciones: con avisos → requiere revisión; sin avisos → lista para aprobar.
+ * El aviso del punto de venta no cuenta: él mismo dice que se puede aprobar.
  */
 export function estadoVisible(p: { estado: string; avisos?: unknown[] | null } | null): { clave: string; texto: string } {
   if (!p) return { clave: 'pendiente_generar', texto: 'Pendiente de generar' }
   if (p.estado === 'lista_revision') {
-    return (p.avisos ?? []).length ? { clave: 'requiere_revision', texto: 'Requiere revisión' } : { clave: 'lista_aprobar', texto: 'Lista para aprobar' }
+    const revisar = (p.avisos ?? []).filter(a => !esAvisoPuntoVenta(a))
+    return revisar.length ? { clave: 'requiere_revision', texto: 'Requiere revisión' } : { clave: 'lista_aprobar', texto: 'Lista para aprobar' }
   }
   return { clave: p.estado, texto: ESTADO_PREPARACION[p.estado] ?? p.estado }
 }
