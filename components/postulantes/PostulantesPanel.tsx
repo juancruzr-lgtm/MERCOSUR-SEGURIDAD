@@ -21,7 +21,7 @@ type Filtro = 'abiertas' | EstadoPostulacion
 
 const FILTROS: [Filtro, string][] = [
   ['abiertas', 'Abiertas'], ['entrevistado', 'Entrevistado'], ['revisado', 'Revisado'],
-  ['aprobado_ingreso', 'Aprobado'], ['alta_efectiva', 'Alta efectiva'], ['descartado', 'Descartado'],
+  ['aprobado_ingreso', 'Aprobado'], ['alta_efectiva', 'Alta efectiva'], ['legajo_completado', 'Legajo completado'], ['descartado', 'Descartado'],
 ]
 const ABIERTAS: EstadoPostulacion[] = ['entrevistado', 'revisado', 'aprobado_ingreso']
 

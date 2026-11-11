@@ -11,7 +11,7 @@
  */
 import { normalizarTelefonoAr } from '@/lib/telefono-ar'
 
-export type EstadoPostulacion = 'entrevistado' | 'revisado' | 'aprobado_ingreso' | 'alta_efectiva' | 'descartado'
+export type EstadoPostulacion = 'entrevistado' | 'revisado' | 'aprobado_ingreso' | 'alta_efectiva' | 'descartado' | 'legajo_completado'
 
 export const ETIQUETA_ESTADO: Record<EstadoPostulacion, string> = {
   entrevistado: 'Entrevistado',
@@ -19,6 +19,7 @@ export const ETIQUETA_ESTADO: Record<EstadoPostulacion, string> = {
   aprobado_ingreso: 'Aprobado para ingreso',
   alta_efectiva: 'Alta efectiva',
   descartado: 'Descartado',
+  legajo_completado: 'Legajo completado',
 }
 
 export const COLOR_ESTADO: Record<EstadoPostulacion, string> = {
@@ -27,6 +28,7 @@ export const COLOR_ESTADO: Record<EstadoPostulacion, string> = {
   aprobado_ingreso: '#f59e0b',
   alta_efectiva: '#22c55e',
   descartado: '#94a3b8',
+  legajo_completado: '#22c55e',
 }
 
 /** Campos que pasan al legajo (identidad, nacimiento, domicilio, contacto). */
@@ -106,6 +108,8 @@ export type ResultadoAlta = {
   mensaje: string
 }
 
+export type ResultadoCompletarLegajo = { usuario_id: string; cargados: string[]; a_revisar: string[]; iguales: string[] }
+
 export interface ApiPostulantes {
   listar(): Promise<Postulacion[]>
   crear(datos: Record<string, unknown>): Promise<string>
@@ -120,6 +124,11 @@ export interface ApiPostulantes {
   urlArchivo(archivoId: string): Promise<string>
   /** Permisos de la sesión: gestiona = Administración/Gerencia; carga = puede cargar entrevistas. */
   permisos(): Promise<{ gestiona: boolean; carga: boolean }>
+  /**
+   * La solicitud es de alguien que YA es empleado: completa su legajo (lo vacío se
+   * carga; lo distinto queda pendiente en Control de cambios) y cierra la postulación.
+   */
+  completarLegajo?(id: string, empleadoId: string): Promise<ResultadoCompletarLegajo>
   /** Email y celular de quien está cargando: para avisar si el navegador los autocompletó en la ficha. */
   misDatos?(): Promise<{ email: string | null; telefono: string | null }>
 }

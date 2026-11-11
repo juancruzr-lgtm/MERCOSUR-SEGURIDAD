@@ -5,7 +5,7 @@
  * pero cada una primero pide la autorización a la base con la sesión del usuario).
  */
 import { supabase, headersSesion } from '@/lib/supabase'
-import type { ApiPostulantes, ArchivoPostulacion, Duplicado, Postulacion, ResultadoAlta } from '@/lib/postulantes'
+import type { ApiPostulantes, ArchivoPostulacion, Duplicado, Postulacion, ResultadoAlta, ResultadoCompletarLegajo } from '@/lib/postulantes'
 import type { LecturaPropuesta } from '@/components/postulantes/FichaPostulante'
 
 const lanzar = (error: { message?: string } | null) => { if (error) throw new Error(error.message || 'Error de base de datos') }
@@ -86,6 +86,11 @@ export const apiPostulantesSupabase: ApiPostulantes = {
   async urlArchivo(archivoId) {
     const res = await fetch(`/api/postulaciones/archivo?id=${encodeURIComponent(archivoId)}`, { headers: await headersSesion() })
     return (await json<{ url: string }>(res)).url
+  },
+  async completarLegajo(id, empleadoId) {
+    const { data, error } = await supabase.rpc('postulacion_completar_legajo', { p_id: id, p_empleado_id: empleadoId })
+    lanzar(error)
+    return data as ResultadoCompletarLegajo
   },
   async misDatos() {
     const { data } = await supabase.auth.getUser()

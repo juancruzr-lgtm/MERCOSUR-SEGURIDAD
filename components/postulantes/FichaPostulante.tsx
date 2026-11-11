@@ -17,7 +17,7 @@ import {
   CAMPOS, CAMPOS_SELECCION, COLOR_ESTADO, ETIQUETA_ESTADO,
   errorCampo, faltantes, mensajeError, normalizarParaGuardar,
   type ApiPostulantes, type ArchivoPostulacion, type CampoPostulacion, type CampoSeleccion,
-  type Duplicado, type Postulacion, type ResultadoAlta,
+  type Duplicado, type Postulacion, type ResultadoAlta, type ResultadoCompletarLegajo,
 } from '@/lib/postulantes'
 import { LIMITE_SUBIDA_BYTES, mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 
@@ -73,6 +73,7 @@ type Valores = Partial<Record<CampoPostulacion, string | null>>
 
 function Pasos({ estado }: { estado: Postulacion['estado'] }) {
   if (estado === 'descartado') return <div style={{ ...tarjeta, color: C.suave, fontSize: 13 }}>Postulación descartada.</div>
+  if (estado === 'legajo_completado') return <div style={{ ...tarjeta, color: '#86efac', fontSize: 13 }}>Ya era empleado: la solicitud se usó para completar su legajo.</div>
   const actual = PASOS.indexOf(estado)
   return (
     <ol aria-label="Etapas del alta" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 6, listStyle: 'none', padding: 0, margin: '0 0 12px' }}>
@@ -136,7 +137,7 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
 }) {
   const [id, setId] = useState<string | null>(postulacion?.id ?? null)
   const estado = postulacion?.estado ?? 'entrevistado'
-  const cerrada = estado === 'alta_efectiva' || estado === 'descartado'
+  const cerrada = estado === 'alta_efectiva' || estado === 'descartado' || estado === 'legajo_completado'
   const editable = !cerrada && (permisos.gestiona || (permisos.carga && (estado === 'entrevistado' || estado === 'revisado')))
 
   const inicial = useMemo<Valores>(() => {
@@ -165,6 +166,8 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
   const [legajo, setLegajo] = useState(postulacion?.legajo_propuesto ?? '')
   const [motivo, setMotivo] = useState('')
   const [alta, setAlta] = useState<ResultadoAlta | null>(null)
+  const [completar, setCompletar] = useState<Duplicado | null>(null)
+  const [completado, setCompletado] = useState<ResultadoCompletarLegajo | null>(null)
   const camara = useRef<HTMLInputElement>(null)
   const archivo = useRef<HTMLInputElement>(null)
 
@@ -327,6 +330,18 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
     setAviso({ tipo: r.acceso === 'error' || r.acceso === 'omitido' ? 'error' : 'ok', texto: r.mensaje })
   })
 
+  /** Ya es empleado: la solicitud completa SU legajo (no se crea otro). */
+  const completarLegajo = () => correr('completar', async () => {
+    if (!id || !completar?.referencia_id || !api.completarLegajo) return
+    if (dudosos.length) throw new Error('Confirmá los campos dudosos (en ámbar) antes de pasar los datos al legajo.')
+    if (hayErrores) throw new Error('Corregí los campos marcados en rojo.')
+    await api.guardar(id, payload())
+    const r = await api.completarLegajo(id, completar.referencia_id)
+    setCompletado(r); setCompletar(null); onCambio(id)
+    const n = r.cargados.length; const m = r.a_revisar.length
+    setAviso({ tipo: 'ok', texto: `Legajo completado: ${n} dato(s) cargado(s)${m ? `; ${m} quedaron para revisar en Control de cambios porque el legajo ya tenía otro valor` : ''}.` })
+  })
+
   const grupos = Array.from(new Set(CAMPOS.map(c => c.grupo)))
   const nombre = [valores.apellido, valores.nombre].filter(Boolean).join(', ')
   const enPersonal = (duplicados ?? []).filter(d => d.donde === 'personal')
@@ -453,11 +468,38 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
                   {d.donde === 'personal' ? 'Ya existe en el personal' : 'Hay otra postulación abierta'} (coincide por {d.coincide_por})
                   {d.nombre ? ` — ${d.nombre}` : ''}{d.legajo ? `, legajo ${d.legajo}` : ''}{d.estado ? `, ${d.estado}` : ''}
                   {d.donde === 'personal' && d.referencia_id && <> · <a href={`/guardias/${d.referencia_id}`} style={{ color: C.azul }}>ver legajo</a></>}
+                  {d.donde === 'personal' && d.referencia_id && (d.coincide_por === 'dni' || d.coincide_por === 'cuil') && permisos.gestiona && !cerrada && id && api.completarLegajo && (
+                    <div style={{ marginTop: 6 }}>
+                      <button type="button" onClick={() => setCompletar(d)} style={{ ...boton('exito'), minHeight: 38, padding: '6px 12px', fontSize: 13 }}>
+                        Cargar los datos que faltan en su legajo
+                      </button>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
           )}
-          {enPersonal.length > 0 && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 6 }}>Si es un reingreso, se gestiona desde su legajo: no se crea un empleado nuevo.</div>}
+          {enPersonal.length > 0 && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 6 }}>Ya es empleado: no se crea otro. Podés usar esta solicitud para completar su legajo.</div>}
+          {completar && (
+            <div style={{ marginTop: 10, border: '1px solid rgba(34,197,94,.45)', borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 14, color: C.texto, fontWeight: 800, marginBottom: 6 }}>Completar el legajo de {completar.nombre}{completar.legajo ? ` (legajo ${completar.legajo})` : ''}</div>
+              <ul style={{ margin: '0 0 8px', paddingLeft: 18, fontSize: 13, color: C.suave, lineHeight: 1.5 }}>
+                <li>Lo que su legajo tiene <b>vacío</b> (nacimiento, nacionalidad, domicilio) se carga.</li>
+                <li>Si el legajo ya tiene <b>otro dato</b>, no se pisa: queda en Control de cambios para que lo apruebes o rechaces.</li>
+                <li>Celular y email sólo se cargan si no tiene. Nunca se reemplaza su email de ingreso.</li>
+                <li>Los datos de la entrevista (estado civil, hijos, talles…) y la foto quedan en su legajo.</li>
+              </ul>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" disabled={ocupado === 'completar'} onClick={() => void completarLegajo()} style={boton('exito')}>{ocupado === 'completar' ? 'Cargando…' : 'Sí, cargar en su legajo'}</button>
+                <button type="button" onClick={() => setCompletar(null)} style={boton()}>Cancelar</button>
+              </div>
+            </div>
+          )}
+          {completado && (
+            <div style={{ marginTop: 10, fontSize: 13, color: '#86efac' }}>
+              ✓ Legajo completado. <a href={`/guardias/${completado.usuario_id}`} style={{ color: C.azul, fontWeight: 700 }}>Abrir su legajo →</a>
+            </div>
+          )}
         </section>
       </div>
 
