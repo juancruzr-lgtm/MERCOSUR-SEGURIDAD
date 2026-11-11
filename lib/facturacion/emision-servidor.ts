@@ -64,7 +64,7 @@ export function alicuotaDe(netoC: number, ivaC: number): string | null {
   return null
 }
 
-export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; hoy: string; condicionIva: string; cbuFce?: string | null; plazoDias?: number | string | null }): ComprobanteWsfe {
+export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; hoy: string; condicionIva: string; cbuFce?: string | null; plazoDias?: number | string | null; fceTransferencia?: 'SCA' | 'ADC' }): ComprobanteWsfe {
   const s = e.solicitud ?? {}
   const neto = Number(s.neto_c), iva = Number(s.iva_c), total = Number(s.total_c)
   const pct = alicuotaDe(neto, iva)
@@ -72,8 +72,13 @@ export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; ho
   // otro). El comprobante guarda esta misma fecha (la toma de solicitud.arca: migración 20261210100000),
   // así el PDF coincide con ARCA.
   const vto = vtoPagoParaArca(s.vto_pago, opts.hoy, opts.plazoDias)
+  // FCE A (201): CBU del emisor (2101) y forma de transferencia (27, RG 4919/2021): SCA = Sistema de
+  // Circulación Abierta, la opción por defecto de ARCA; ADC = Agente de Depósito Colectivo.
+  // NC/ND de FCE (202/203): marca de anulación (22).
   const opcionales = [201, 202, 203].includes(e.tipo)
-    ? (e.tipo === 201 ? (opts.cbuFce ? [{ id: '2101', valor: opts.cbuFce }] : []) : [{ id: '22', valor: 'N' }])
+    ? (e.tipo === 201
+      ? [...(opts.cbuFce ? [{ id: '2101', valor: opts.cbuFce }] : []), { id: '27', valor: opts.fceTransferencia ?? 'SCA' }]
+      : [{ id: '22', valor: 'N' }])
     : undefined
   return {
     tipo: e.tipo, puntoVenta: e.punto_venta, numero: opts.numero, fecha: opts.hoy, concepto: 2, docTipo: 80,
