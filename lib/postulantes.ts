@@ -120,6 +120,8 @@ export interface ApiPostulantes {
   urlArchivo(archivoId: string): Promise<string>
   /** Permisos de la sesión: gestiona = Administración/Gerencia; carga = puede cargar entrevistas. */
   permisos(): Promise<{ gestiona: boolean; carga: boolean }>
+  /** Email y celular de quien está cargando: para avisar si el navegador los autocompletó en la ficha. */
+  misDatos?(): Promise<{ email: string | null; telefono: string | null }>
 }
 
 // ── Validaciones (espejo de las de la base) ─────────────────────────────────

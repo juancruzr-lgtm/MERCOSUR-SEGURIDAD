@@ -23,6 +23,7 @@ import {
 import type { CampoLegajo, CambioDato, DatosLegajo } from '@/lib/datos-personales'
 import CorroboracionArca from '@/components/legajo/CorroboracionArca'
 import DiferenciasEmpleado from '@/components/legajo/DiferenciasEmpleado'
+import DatosSolicitud from '@/components/legajo/DatosSolicitud'
 
 const card: React.CSSProperties = { background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 14, marginBottom: 12, minWidth: 0, boxSizing: 'border-box' }
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0b1220', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0', padding: '10px 11px', fontSize: 15 }
@@ -206,6 +207,7 @@ export default function DatosPersonales({ empleadoId }: { empleadoId: string }) 
           {cs.map(c => <Campo key={c.campo} c={c} datos={datos} onCambio={() => void cargar()} />)}
         </div>
       ))}
+      {datos.puede_gestionar && !datos.es_propio && <DatosSolicitud empleadoId={empleadoId} />}
       {!datos.es_propio && <CorroboracionArca empleadoId={empleadoId} />}
       {!datos.es_propio && <DiferenciasEmpleado empleadoId={empleadoId} />}
       <div style={{ ...card, padding: '10px 14px' }}>

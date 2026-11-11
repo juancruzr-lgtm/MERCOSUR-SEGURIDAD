@@ -101,6 +101,11 @@ function Campo({ def, valor, error, dudoso, editable, onCambio, onConfirmar, rec
         id={id}
         type={def.tipo === 'fecha' ? 'date' : def.tipo === 'email' ? 'email' : def.tipo === 'tel' ? 'tel' : 'text'}
         inputMode={def.campo === 'dni' || def.campo === 'cuil' ? 'numeric' : undefined}
+        name={`postulante-${def.campo}`}
+        // El navegador de quien carga NO debe completar con SUS datos (pasó con el email).
+        autoComplete="off"
+        data-lpignore="true"
+        data-form-type="other"
         value={valor}
         disabled={!editable}
         aria-invalid={Boolean(error)}
@@ -149,6 +154,8 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
   const [duplicados, setDuplicados] = useState<Duplicado[] | null>(null)
   const [ocupado, setOcupado] = useState<string | null>(null)
   const [progreso, setProgreso] = useState<string | null>(null)
+  const [mios, setMios] = useState<{ email: string | null; telefono: string | null }>({ email: null, telefono: null })
+  useEffect(() => { api.misDatos?.().then(setMios).catch(() => {}) }, [api])
   const [aviso, setAviso] = useState<{ tipo: 'ok' | 'error' | 'info'; texto: string } | null>(null)
   const [avisosLectura, setAvisosLectura] = useState<string[]>([])
   const [regiones, setRegiones] = useState<NonNullable<LecturaPropuesta['regiones']>>({})
@@ -178,8 +185,14 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
   const errores = useMemo(() => {
     const e: Partial<Record<CampoPostulacion, string>> = {}
     for (const c of CAMPOS) { const err = errorCampo(c.campo, valores[c.campo], valores); if (err) e[c.campo] = err }
+    // Autocompletado del navegador: los datos de quien carga no son los del postulante.
+    const email = String(valores.email ?? '').trim().toLowerCase()
+    if (email && mios.email && email === mios.email) e.email = 'Es TU email (lo completó el navegador). Poné el del postulante, tal como figura en la solicitud.'
+    const tel = String(valores.telefono ?? '').replace(/\D/g, '')
+    const miTel = String(mios.telefono ?? '').replace(/\D/g, '')
+    if (tel.length >= 8 && miTel.length >= 8 && tel.slice(-8) === miTel.slice(-8)) e.telefono = 'Es TU celular (lo completó el navegador). Poné el del postulante.'
     return e
-  }, [valores])
+  }, [valores, mios])
   const hayErrores = Object.keys(errores).length > 0
 
   const payload = () => ({
@@ -412,12 +425,12 @@ export default function FichaPostulante({ api, postulacion, permisos, onVolver, 
         {/* Selección (no pasa al legajo) */}
         <section aria-labelledby="t-seleccion" style={tarjeta}>
           <details>
-            <summary id="t-seleccion" style={{ ...titulo, cursor: 'pointer', marginBottom: 0 }}>Datos de la entrevista <span style={{ fontWeight: 600, color: C.tenue, fontSize: 12.5 }}>(no pasan al legajo)</span></summary>
+            <summary id="t-seleccion" style={{ ...titulo, cursor: 'pointer', marginBottom: 0 }}>Datos de la entrevista <span style={{ fontWeight: 600, color: C.tenue, fontSize: 12.5 }}>(quedan en su legajo; los ve sólo Administración)</span></summary>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: 10, marginTop: 10 }}>
               {CAMPOS_SELECCION.map(c => (
                 <div key={c.campo}>
                   <label htmlFor={`sel-${c.campo}`} style={etiqueta}>{c.etiqueta}</label>
-                  <input id={`sel-${c.campo}`} value={seleccion[c.campo] ?? ''} disabled={!editable} maxLength={200}
+                  <input id={`sel-${c.campo}`} name={`postulante-sel-${c.campo}`} autoComplete="off" data-lpignore="true" value={seleccion[c.campo] ?? ''} disabled={!editable} maxLength={200}
                     onChange={e => setSeleccion(s => ({ ...s, [c.campo]: e.target.value }))} style={input} />
                 </div>
               ))}

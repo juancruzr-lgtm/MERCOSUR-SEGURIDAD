@@ -87,6 +87,13 @@ export const apiPostulantesSupabase: ApiPostulantes = {
     const res = await fetch(`/api/postulaciones/archivo?id=${encodeURIComponent(archivoId)}`, { headers: await headersSesion() })
     return (await json<{ url: string }>(res)).url
   },
+  async misDatos() {
+    const { data } = await supabase.auth.getUser()
+    const u = data.user
+    if (!u) return { email: null, telefono: null }
+    const { data: fila } = await supabase.from('usuarios').select('email, telefono').eq('auth_user_id', u.id).maybeSingle()
+    return { email: (fila?.email ?? u.email ?? null)?.toLowerCase() ?? null, telefono: fila?.telefono ?? null }
+  },
   async permisos() {
     const [g, c] = await Promise.all([supabase.rpc('postulacion_gestiona'), supabase.rpc('postulacion_carga_habilitada')])
     return { gestiona: g.data === true, carga: c.data === true }

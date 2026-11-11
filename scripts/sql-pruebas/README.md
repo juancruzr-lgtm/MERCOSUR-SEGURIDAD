@@ -11,6 +11,7 @@ node scripts/sql-pruebas/pr1-fichaje-accesos.mjs
 node scripts/sql-pruebas/pr2-postulaciones.mjs
 node scripts/sql-pruebas/pr3-lecturas-ia.mjs
 node scripts/sql-pruebas/conjunto-385-386-387.mjs
+node scripts/sql-pruebas/legajo-datos-solicitud.mjs
 ```
 
 Cada script imprime una línea por verificación (`OK` / `FALLA`) y termina con código 1 si alguna falla.
