@@ -1,9 +1,10 @@
-// POST { accion: 'proponer' | 'aprobar', contrato_id, objetivo_id, mes, notas?, reemplazar?, tratamiento_descubiertos? }
+// POST { accion: 'proponer' | 'aprobar' | 'cambios', contrato_id, objetivo_id, mes, notas?, reemplazar?, tratamiento_descubiertos? }
 // Las horas salen de turnos + registros de la app; el cliente nunca manda minutos.
+// 'cambios' (sólo lectura): qué cambió desde que se aceptaron, turno por turno, con quién y por qué.
 import type { NextRequest } from 'next/server'
 import { clientesDelPedido } from '@/app/api/documentacion/_clientes'
 import { esMesValido } from '@/lib/periodo-argentina'
-import { aprobarHoras, proponerHoras } from '@/lib/facturacion/servidor'
+import { aprobarHoras, cambiosDeHoras, proponerHoras } from '@/lib/facturacion/servidor'
 import { rechazoPorPeriodo, responder } from '../_comun'
 
 export const runtime = 'nodejs'
@@ -28,6 +29,7 @@ export async function POST(req: NextRequest) {
       if (rechazo) return rechazo
       return responder(await aprobarHoras(c.usuario, p))
     }
+    if (b.accion === 'cambios') return responder(await cambiosDeHoras(c.usuario, c.admin, p))
     const r = await proponerHoras(c.usuario, p)
     return responder(r)
   } catch (e: any) {

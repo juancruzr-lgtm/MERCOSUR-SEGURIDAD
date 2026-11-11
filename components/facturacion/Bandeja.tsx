@@ -6,7 +6,7 @@
 // Diferencias, falta de tarifa o inconsistencias quedan marcadas y no entran en
 // "Aceptar todos". Preparación (borrador → revisión → aprobada → emitida) separada de entrega y portal.
 import { Fragment, useEffect, useState } from 'react'
-import { abrirDocumento, api, estadoVisible, leer, rpc, subirDocumento, ESTADO_ENTREGA, ESTADO_PORTAL, ESTADO_PREPARACION, MODALIDADES, TIPOS_DOC } from '@/lib/facturacion/datos'
+import { abrirDocumento, api, avisosVigentes, estadoVisible, leer, rpc, subirDocumento, ESTADO_ENTREGA, ESTADO_PORTAL, ESTADO_PREPARACION, MODALIDADES, TIPOS_DOC } from '@/lib/facturacion/datos'
 import { datosComprobantesEnLinea, validarRegistroManual } from '@/lib/facturacion/emision-manual'
 import { compararConFacturaReal, etiquetaFactura } from '@/lib/facturacion/control'
 import { agruparObjetivos, tarifasParaObjetivo } from '@/lib/facturacion/prefacturacion'
@@ -16,6 +16,7 @@ import {
 } from '@/lib/facturacion/revision'
 import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
 import DetalleHoras from './DetalleHoras'
+import CambiosHoras from './CambiosHoras'
 import { recalcular, useOperacion, type Periodo } from './periodo'
 import { nombreDelMes } from '@/lib/facturacion/periodo-seguro'
 import { fechaArgentina, rangoFechasMes } from '@/lib/periodo-argentina'
@@ -223,6 +224,7 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                   </tr>
                   {verTurnos === f.clave && (
                     <tr><td colSpan={8} style={{ ...S.td, background: '#0b1428' }}>
+                      <div style={{ ...S.sub, marginBottom: 8 }}>¿Faltan o sobran horas? Se corrigen en la cobertura del mes (turno y registro, con motivo) y después, acá, se toca Reemplazar. Las horas aceptadas no cambian solas.</div>
                       {f.objetivos.map(o => {
                         const k = claveObj(f.contratoId, o.objetivoId)
                         return (
@@ -238,6 +240,7 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                                 </span>
                               })()}
                             </div>
+                            {o.propuesta?.desvio?.hayDiferencia && <CambiosHoras contratoId={f.contratoId} objetivoId={o.objetivoId} mes={mes} estadoPrefactura={p?.estado ?? null} />}
                             {o.error ? <span style={S.err}>{o.error}</span> : o.propuesta ? <DetalleHoras h={o.propuesta.horas} trat={o.tratamiento} alCambiarTrat={t => setTrat({ ...trat, [k]: t })} /> : <span style={S.sub}>Calculando…</span>}
                           </div>
                         )
@@ -337,7 +340,9 @@ function EmisionManual({ p, alHecho }: { p: any; alHecho: () => Promise<void> })
   const { ocupado, correr, Mensaje } = useAccion()
   useEffect(() => {
     if (!abierto) return
-    correr(async () => setPv((await leer('fact_config', q => q.eq('clave', 'emision')))[0]?.valor?.punto_venta ?? null))
+    // Ojo: NO usar punto_venta_prod (es el PV Web Service, 4). En Comprobantes en línea sólo sirven los
+    // de Factura en Línea; sin dato propio la guía dice "el habilitado para Comprobantes en línea".
+    correr(async () => setPv((await leer('fact_config', q => q.eq('clave', 'emision')))[0]?.valor?.punto_venta_en_linea ?? null))
     setD(x => ({ ...x, neto: String(Number(p.neto_c) / 100), iva: String(Number(p.iva_c) / 100), total: String(Number(p.total_c) / 100) }))
   }, [abierto]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!abierto) return <button style={{ ...S.btn2, marginTop: 8 }} onClick={() => setAbierto(true)}>Emitir manualmente en ARCA (contingencia)</button>
@@ -413,12 +418,17 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
 
   const hecho = async () => { await cargarExtra(); alCambiar() }
   const emitida = p.estado === 'emitida'
+  // Cada prefactura admite una sola prueba en homologación (fact_emision_preparar lo controla por ambiente).
+  const pruebaHomo = extra.emisiones.find((e: any) => e.ambiente === 'homologacion' && e.estado === 'autorizada')
+  const verPdf = (comprobanteId: string) => correr(async () => {
+    const r = await api(`comprobante-pdf?id=${comprobanteId}`, undefined, 'GET'); window.open(r.url, '_blank', 'noopener')
+  })
 
   return (
     <div style={S.card}>
       <h3 style={S.h3}>{p.cliente?.razon_social} · {p.objetivo?.nombre ?? p.contrato?.nombre} · {p.periodo_mes}</h3>
       <Mensaje />
-      {(p.avisos ?? []).map((a: string, i: number) => <div key={i} style={{ ...S.aviso, marginBottom: 6 }}>{a}</div>)}
+      {avisosVigentes(p.avisos, Boolean(config.emision?.punto_venta_prod)).map((a: string, i: number) => <div key={i} style={{ ...S.aviso, marginBottom: 6 }}>{a}</div>)}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
         <div>
@@ -460,11 +470,15 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
             {p.estado === 'lista_revision' && <button style={S.btn} disabled={ocupado || !periodo.habilitado} title={periodo.motivo ?? undefined} onClick={() => correr(async () => {
               await rpc('fact_prefactura_aprobar', { p_id: p.id, p_version: p.version }); await hecho()
             }, 'Prefactura aprobada (queda registrada la versión y el importe)')}>Aprobar</button>}
-            {p.estado === 'aprobada_emitir' && periodo.habilitado && config.emision.homologacion_habilitada && <>
+            {p.estado === 'aprobada_emitir' && periodo.habilitado && config.emision.homologacion_habilitada && !pruebaHomo && <>
               <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
                 const r = await api('emitir', { prefactura_id: p.id, version: p.version, ambiente: 'homologacion' }); await hecho()
                 if (r.estado !== 'autorizada') throw new Error(r.motivo ?? r.error ?? r.estado)
               }, 'Emitida en HOMOLOGACIÓN (prueba, no fiscal)')}>Probar en homologación</button>
+            </>}
+            {pruebaHomo && <>
+              <span style={S.sub}>Ya probada en homologación{pruebaHomo.numero ? ` (N° ${pruebaHomo.numero})` : ''}: una prueba por prefactura.</span>
+              {pruebaHomo.comprobante_id && <button style={S.btn2} disabled={ocupado} onClick={() => verPdf(pruebaHomo.comprobante_id)}>Ver PDF de la prueba</button>}
             </>}
             {p.estado === 'aprobada_emitir' && periodo.habilitado && config.emision.produccion_habilitada && <>
               <button style={S.btn} disabled={ocupado} onClick={() => {
@@ -492,7 +506,10 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
             })}>Descartar</button>}
           </div>}
           {extra.emisiones.length > 0 && <div style={{ marginTop: 8 }}>
-            {extra.emisiones.map(e => <div key={e.id} style={S.sub}>Emisión {e.ambiente} · {e.estado}{e.numero ? ` · N° ${e.numero}` : ''}{e.observaciones ? ` · ${e.observaciones}` : ''}</div>)}
+            {extra.emisiones.map(e => <div key={e.id} style={{ ...S.sub, ...S.fila }}>
+              <span>{e.ambiente === 'homologacion' ? 'Prueba en homologación (sin validez fiscal)' : 'Emisión real'} · {e.estado}{e.numero ? ` · N° ${e.numero}` : ''}{e.observaciones ? ` · ${e.observaciones}` : ''}</span>
+              {e.estado === 'autorizada' && e.comprobante_id && <button style={{ ...S.btn2, padding: '2px 8px' }} disabled={ocupado} onClick={() => verPdf(e.comprobante_id)}>Ver PDF</button>}
+            </div>)}
           </div>}
           {p.estado === 'aprobada_emitir' && periodo.habilitado && config.modulos.emision_manual && <EmisionManual p={p} alHecho={hecho} />}
           {p.estado === 'aprobada_emitir' && !config.emision.produccion_habilitada && !config.modulos.emision_manual && <div style={{ ...S.sub, marginTop: 6 }}>Aprobada. La emisión (ARCA o manual) todavía no está habilitada: la factura se emite por el circuito actual.</div>}

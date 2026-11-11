@@ -9,7 +9,7 @@
 import { periodoFacturacion } from './periodos'
 import { tarifasParaObjetivo, type TarifaGuardada } from './prefacturacion'
 
-const horasTexto = (m: number) => (m / 60).toFixed(2).replace(/\.?0+$/, '') || '0'
+export const horasTexto = (m: number) => (m / 60).toFixed(2).replace(/\.?0+$/, '') || '0'
 
 /** Advertencias de la propuesta de horas de un objetivo (no bloquean la aprobación individual). */
 export function avisosHoras(separarDiurnaNocturna: boolean, r: any): string[] {
@@ -19,7 +19,7 @@ export function avisosHoras(separarDiurnaNocturna: boolean, r: any): string[] {
   if (h.turnosSinRegistro > 0) out.push(`${h.turnosSinRegistro} turno(s) sin horas reconocidas`)
   if (h.revisar?.length) out.push(`${h.revisar.length} superposición(es) para revisión comercial`)
   if (separarDiurnaNocturna && !r.franjaDefinida) out.push('falta la franja nocturna del contrato')
-  if (r.desvio?.hayDiferencia) out.push(`Reportes cambió después de aprobar: aprobado ${horasTexto(r.desvio.cubiertosAprobados)} h, hoy ${horasTexto(r.desvio.cubiertosActuales)} h`)
+  if (r.desvio?.hayDiferencia) out.push(`Reportes cambió después de aprobar: aprobado ${horasTexto(r.desvio.cubiertosAprobados)} h, hoy ${horasTexto(r.desvio.cubiertosActuales)} h (en Ver turnos: quién lo cambió y qué hacer)`)
   return out
 }
 

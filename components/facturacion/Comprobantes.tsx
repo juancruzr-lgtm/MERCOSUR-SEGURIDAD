@@ -13,20 +13,23 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
   const [imps, setImps] = useState<any[]>([])
   const [filasImp, setFilasImp] = useState<{ id: string; filas: any[] } | null>(null)
   const [notas, setNotas] = useState<any[]>([])
+  const [pruebas, setPruebas] = useState<any[]>([])
   const [buscar, setBuscar] = useState('')
   const [asoc, setAsoc] = useState<{ id: string; cliente_id: string; asociado_id: string; motivo: string } | null>(null)
   const [nc, setNc] = useState<{ id: string; tipo: string; neto: string; iva: string; motivo: string } | null>(null)
   const { ocupado, correr, Mensaje } = useAccion()
 
   async function cargar() {
-    const [c, s, cl, i, n] = await Promise.all([
+    const [c, s, cl, i, n, h] = await Promise.all([
       leer('fact_comprobantes', q => q.eq('ambiente', 'produccion').order('fecha_emision', { ascending: false }).limit(1000)),
       leer('fact_v_saldos', q => q.limit(5000), 'comprobante_id, saldo_c'),
       leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'),
       leer('fact_importaciones', q => q.eq('tipo', 'arca_emitidos').order('created_at', { ascending: false }).limit(20)),
       leer('fact_emisiones', q => q.not('comprobante_asociado_id', 'is', null).in('estado', ['pendiente_aprobacion', 'preparada', 'incierta', 'rechazada'])),
+      // Facturas de prueba (homologación): aparte, sin saldo ni NC/ND, sólo para verlas y abrir su PDF.
+      leer('fact_comprobantes', q => q.eq('ambiente', 'homologacion').order('created_at', { ascending: false }).limit(100)),
     ])
-    setComps(c); setSaldos(Object.fromEntries(s.map(x => [x.comprobante_id, Number(x.saldo_c)]))); setClientes(cl); setImps(i); setNotas(n)
+    setComps(c); setSaldos(Object.fromEntries(s.map(x => [x.comprobante_id, Number(x.saldo_c)]))); setClientes(cl); setImps(i); setNotas(n); setPruebas(h)
   }
   useEffect(() => { correr(cargar) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -111,6 +114,24 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
           })}</tbody>
         </table>
       </div>
+
+      {pruebas.length > 0 && <div style={{ ...S.card, overflowX: 'auto' }}>
+        <h3 style={{ ...S.h3, margin: 0 }}>Facturas de prueba (homologación)</h3>
+        <div style={S.sub}>Sin validez fiscal: sirven para revisar los datos y el PDF. No suman saldo ni admiten NC/ND. Cada prefactura admite una sola prueba.</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
+          <thead><tr>{['Comprobante', 'Fecha', 'Cliente', 'Total', 'CAE de prueba', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>{pruebas.map(c => (
+            <tr key={c.id}>
+              <td style={S.td}>{numeroVisible({ tipo: c.tipo, puntoVenta: c.punto_venta, numero: c.numero })}</td>
+              <td style={S.td}>{fecha(c.fecha_emision)}</td>
+              <td style={S.td}>{nombre(c.cliente_id) ?? c.receptor_nombre ?? '—'}</td>
+              <td style={S.num}>{pesos(c.total_c)}</td>
+              <td style={S.td}>{c.cae ?? '—'}</td>
+              <td style={S.td}>{c.cae && <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => { const r = await api(`comprobante-pdf?id=${c.id}`, undefined, 'GET'); window.open(r.url, '_blank', 'noopener') })}>Ver PDF</button>}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>}
 
       {asoc && <div style={S.card}>
         <h3 style={S.h3}>Asociar comprobante</h3>
