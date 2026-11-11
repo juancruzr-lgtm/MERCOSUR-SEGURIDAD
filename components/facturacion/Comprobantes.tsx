@@ -68,7 +68,7 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
               <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
                 await rpc('fact_importacion_arca_confirmar', { p_importacion_id: filasImp.id, p_claves: filasImp.filas.filter(f => f.estado === 'nuevo').map(f => f.clave) })
                 setFilasImp(null)
-                // Conciliación automática: lo exacto o inequívoco queda vinculado; lo ambiguo, pendiente de revisión.
+                // Conciliación automática: sólo lo exacto queda vinculado; el resto, pendiente de revisión.
                 const r: any = await api('conciliar', {}).catch((e: any) => ({ error: e?.message ?? String(e) }))
                 setConciliacion(r)
                 await cargar()

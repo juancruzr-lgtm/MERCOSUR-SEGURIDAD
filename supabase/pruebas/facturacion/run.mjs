@@ -806,6 +806,13 @@ await db.exec(readFileSync(`${REPO}/supabase/migrations/20261210110000_facturaci
   ok('conciliar: una prefactura emitida no se concilia de nuevo (no hay dos facturas por el mismo servicio y período)', await falla(async () => conc(ADM, pOct, await verC(pOct), kOtro), /emitida/))
   const kCuit = await compC(9077, 495768545, 409726070, 86042475, '2026-10-05', '30716728397')
   ok('conciliar: un comprobante de otro CUIT receptor se rechaza', await falla(async () => conc(ADM, pSep, await verC(pSep), kCuit), /CUIT del receptor/))
+  // Nación de octubre: horas sin aprobar → la prefactura no tiene importe; conciliarla la congelaría vacía.
+  const pSinImp = await prefC('2026-07', '2026-07-01', '2026-08-01', { lineas: [], neto_c: null, iva_c: null, total_c: null })
+  const kSinImp = await compC(9080, 121000, 100000, 21000, '2026-08-05')
+  ok('conciliar: una prefactura sin importe (horas sin aprobar) no se concilia y el comprobante queda libre',
+    await falla(async () => conc(ADM, pSinImp, await verC(pSinImp), kSinImp), /todavía no tiene importe/)
+    && (await uno(`select prefactura_id from public.fact_comprobantes where id = $1`, [kSinImp])).prefactura_id === null
+    && (await uno(`select estado from public.fact_prefacturas where id = $1`, [pSinImp])).estado === 'esperando_requisitos')
   const kDif = await compC(9078, 465476628, 384691428, 80785200, '2026-10-05')
   const r2 = (await conc(ADM, pSep, await verC(pSep), kDif, { origen: 'automatica', horas_facturadas: 276.5, horas_app: 294.5 })).r
   ok('conciliar: con otro total queda EMITIDA con la diferencia PENDIENTE y visible (factura - calculado)',

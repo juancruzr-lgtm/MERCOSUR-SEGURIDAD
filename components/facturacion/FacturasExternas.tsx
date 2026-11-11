@@ -1,11 +1,13 @@
 'use client'
 // Conciliación con ARCA de las facturas emitidas FUERA de la app (Comprobantes en línea): corre sola
-// después de cada importación de "Mis Comprobantes" y se puede volver a correr acá. Lo exacto o
-// inequívoco se vincula solo (con la diferencia visible); lo ambiguo queda pendiente y se concilia a
-// mano eligiendo la factura, con motivo. Las diferencias pendientes se pueden dar por explicadas.
+// después de cada importación de "Mis Comprobantes" y se puede volver a correr acá. SÓLO lo exacto
+// (CUIT, tipo, período y total) se vincula solo; con diferencia, sin importe o ambiguo queda pendiente
+// y se concilia a mano eligiendo la factura, con motivo (la diferencia queda visible). Las diferencias
+// se pueden dar por explicadas, con el período realmente facturado si no es el de la prefactura.
 import { useEffect, useState } from 'react'
 import { api, leer, rpc } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
+import { periodoDesdeTexto } from '@/lib/facturacion/externas-arca'
 import { S, fecha, pesos } from './comun'
 
 const nro = (c: any) => numeroVisible({ tipo: Number(c.tipo), puntoVenta: Number(c.punto_venta), numero: Number(c.numero) })
@@ -39,8 +41,12 @@ export default function FacturasExternas({ resultado, alCambiar }: { resultado: 
   async function explicar(p: any) {
     const motivo = prompt('¿Por qué es correcta la diferencia? (queda en el historial)')
     if (!motivo?.trim()) return
+    // Opcional: el período que de verdad cubre la factura (p. ej. Hagana, del 26 al 25). Lo usan los
+    // controles de superposición para el período siguiente.
+    const periodo = periodoDesdeTexto(prompt('Período realmente facturado, si no es el de la prefactura (opcional; p. ej. 26/09/2026-25/10/2026):'))
+    if (periodo === 'invalido') { setMsg('Período inválido: escribilo como 26/09/2026-25/10/2026 (ambos días incluidos)'); return }
     setOcupado(true); setMsg(null)
-    try { await rpc('fact_conciliacion_diferencia', { p_prefactura_id: p.id, p_estado: 'explicada', p_motivo: motivo, p_periodo_facturado: null }); await cargarPendientes(); alCambiar() }
+    try { await rpc('fact_conciliacion_diferencia', { p_prefactura_id: p.id, p_estado: 'explicada', p_motivo: motivo, p_periodo_facturado: periodo }); await cargarPendientes(); alCambiar() }
     catch (e: any) { setMsg(e?.message ?? String(e)) } finally { setOcupado(false) }
   }
 
@@ -48,7 +54,7 @@ export default function FacturasExternas({ resultado, alCambiar }: { resultado: 
   return (
     <div style={S.card}>
       <h3 style={S.h3}>Conciliación con ARCA (facturas emitidas fuera de la app)</h3>
-      <div style={S.sub}>Corre sola al confirmar una importación de "Mis Comprobantes". Lo exacto o inequívoco (CUIT, tipo, período y total) se vincula solo, sin tocar horas ni importes; lo ambiguo queda pendiente. Lo que no está en el archivo no se marca.</div>
+      <div style={S.sub}>Corre sola al confirmar una importación de "Mis Comprobantes". Sólo lo exacto (CUIT, tipo, período y total) se vincula solo, sin tocar horas ni importes; si hay diferencia, la prefactura no tiene importe o hay varias facturas posibles, queda pendiente de revisión. Lo que no está en el archivo no se marca.</div>
       <div style={{ ...S.fila, marginTop: 8 }}>
         <button style={S.btn} disabled={ocupado} onClick={conciliar}>Conciliar ahora</button>
         {msg && <span style={S.err}>{msg}</span>}
@@ -79,7 +85,8 @@ export default function FacturasExternas({ resultado, alCambiar }: { resultado: 
             <td style={S.td}>{p.cliente?.razon_social} · {p.periodo_mes}</td><td style={S.td}>{nro(p.conciliacion)}</td>
             <td style={S.num}>{pesos(p.conciliacion.total_c)}</td>
             <td style={S.td}>{p.conciliacion.total_app_c != null ? `la app calculó ${pesos(p.conciliacion.total_app_c)}` : 'la app no tiene total'}
-              {p.conciliacion.horas_facturadas != null && p.conciliacion.horas_app != null ? ` · ${p.conciliacion.horas_facturadas} h facturadas / ${p.conciliacion.horas_app} h calculadas` : ''}</td>
+              {p.conciliacion.horas_facturadas != null && p.conciliacion.horas_app != null ? ` · ${p.conciliacion.horas_facturadas} h facturadas / ${p.conciliacion.horas_app} h calculadas` : ''}
+              {p.conciliacion.periodo_facturado?.desde ? ` · período facturado ${fecha(p.conciliacion.periodo_facturado.desde)} a ${fecha(p.conciliacion.periodo_facturado.hasta)}` : ''}</td>
             <td style={S.td}><button style={S.btn2} disabled={ocupado} onClick={() => explicar(p)}>Marcar explicada</button></td>
           </tr>)}
         </tbody></table>
