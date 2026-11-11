@@ -29,6 +29,25 @@ describe('WSFE', () => {
     expect(validarComprobante({ ...fa, tipo: 201 }).join(' ')).toContain('2101')
   })
 
+  it('FCE A: CBU (2101) y forma de transferencia (27: SCA por defecto, o ADC)', () => {
+    const conCbu = { ...fa, tipo: 201, opcionales: [{ id: '2101', valor: '0070220320000005115293' }] }
+    expect(validarComprobante(conCbu).join(' ')).toContain('opcional 27')
+    expect(validarComprobante({ ...conCbu, opcionales: [...conCbu.opcionales, { id: '27', valor: 'XYZ' }] }).join(' ')).toContain('opcional 27')
+    expect(validarComprobante({ ...conCbu, opcionales: [...conCbu.opcionales, { id: '27', valor: 'SCA' }] })).toEqual([])
+    expect(validarComprobante({ ...conCbu, opcionales: [...conCbu.opcionales, { id: '27', valor: 'ADC' }] })).toEqual([])
+    // Lo que arma la emisión: 2101 + 27=SCA, y viajan en el XML.
+    const e = { id: 'x', tipo: 201, punto_venta: 999, estado: 'preparada',
+      solicitud: { cuit_receptor: '30708288361', periodo_desde: '2026-10-01', periodo_hasta: '2026-10-31', vto_pago: '2026-11-03', neto_c: 540056270, iva_c: 113411817, total_c: 653468087 } } as unknown as Emision
+    const c = comprobanteDesdeSolicitud(e, { numero: 1, hoy: '2026-11-11', condicionIva: 'responsable_inscripto', cbuFce: '0070220320000005115293', plazoDias: 30 })
+    expect(c.opcionales).toEqual([{ id: '2101', valor: '0070220320000005115293' }, { id: '27', valor: 'SCA' }])
+    expect(validarComprobante(c)).toEqual([])
+    const x = xmlSolicitarCae({ token: 'T', sign: 'S' } as any, '30710705417', c)
+    expect(x).toContain('<ar:Opcional><ar:Id>27</ar:Id><ar:Valor>SCA</ar:Valor></ar:Opcional>')
+    expect(comprobanteDesdeSolicitud(e, { numero: 1, hoy: '2026-11-11', condicionIva: 'responsable_inscripto', cbuFce: '0070220320000005115293', fceTransferencia: 'ADC' }).opcionales?.[1]).toEqual({ id: '27', valor: 'ADC' })
+    // Las NC/ND de FCE siguen con la marca de anulación (22), sin 27.
+    expect(comprobanteDesdeSolicitud({ ...e, tipo: 203 } as Emision, { numero: 1, hoy: '2026-11-11', condicionIva: 'responsable_inscripto' }).opcionales).toEqual([{ id: '22', valor: 'N' }])
+  })
+
   it('NC parcial vinculada a la factura', () => {
     const nc = { ...fa, tipo: 3, numero: 187, netoC: 180180800, ivaC: 37837968, totalC: 218018768, alicuotas: [{ porcentaje: '21', baseC: 180180800, importeC: 37837968 }],
       asociado: { tipo: 1, puntoVenta: 1, numero: 2023, cuit: '30710705417', fecha: '2026-08-27' } }
@@ -364,7 +383,7 @@ describe('importadores', () => {
   })
 })
 
-import { alicuotaDe, ejecutarEmision, type Emision, type PuertoArca, type PuertoBase } from '@/lib/facturacion/emision-servidor'
+import { alicuotaDe, comprobanteDesdeSolicitud, ejecutarEmision, type Emision, type PuertoArca, type PuertoBase } from '@/lib/facturacion/emision-servidor'
 
 describe('ciclo de emisión: nunca dos facturas fiscales por un error de comunicación', () => {
   const AHORA = Date.parse('2026-09-04T15:00:00Z')

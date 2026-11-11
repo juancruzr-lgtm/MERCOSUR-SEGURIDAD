@@ -81,6 +81,9 @@ export function validarComprobante(c: ComprobanteWsfe): string[] {
   if ([201, 202, 203].includes(c.tipo) && !c.opcionales?.some(o => o.id === '2101' || o.id === '22')) {
     e.push('FCE: falta el CBU del emisor (opcional 2101) o la marca de anulación (22).')
   }
+  if (c.tipo === 201 && !c.opcionales?.some(o => o.id === '27' && (o.valor === 'SCA' || o.valor === 'ADC'))) {
+    e.push('FCE: falta la forma de transferencia (opcional 27: SCA o ADC).')
+  }
   if (c.docTipo === 80 && c.docNro.replace(/\D/g, '').length !== 11) e.push('CUIT del receptor inválido.')
   // Exento, no gravado y 0 % no son lo mismo para ARCA: sin definición explícita no se emite.
   if (c.netoC > 0 && c.ivaC === 0) e.push('Comprobante sin IVA: definir si es exento, no gravado o 0 % antes de emitir.')
