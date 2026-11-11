@@ -69,7 +69,7 @@ export default function CambiosHoras({ contratoId, objetivoId, mes, estadoPrefac
                 {t.motivos.length > 0
                   ? t.motivos.map((m, i) => <div key={i}>{lineaAuditoria(m)}</div>)
                   : t.eventos.length > 0
-                    ? t.eventos.map((e, i) => <div key={i}>{EVENTO[e.tipo] ?? e.tipo}{e.cuando ? ` el ${fechaHora(e.cuando)}` : ''}{e.detalle ? ` (${e.detalle})` : ''}</div>)
+                    ? t.eventos.map((e, i) => <div key={i}>{EVENTO[e.tipo] ?? e.tipo}{e.cuando ? ` el ${fechaHora(e.cuando)}` : ''}{e.detalle ? ` (${String(e.detalle).replace(/_/g, ' ')})` : ''}</div>)
                     : <span style={S.sub}>Sin cambio con motivo registrado (puede ser un fichaje o una corrección automática).</span>}
               </td>
             </tr>
