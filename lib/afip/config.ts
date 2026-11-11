@@ -36,19 +36,25 @@ export type AmbienteArca = 'produccion' | 'homologacion'
  * afipConfigDesdeEnv (Padrón A13 y legajo siguen igual).
  *  - produccion:   AFIP_CERT_PEM / AFIP_KEY_PEM / AFIP_CUIT_REPRESENTADA (certificado productivo
  *                  existente). Se rechaza si AFIP_HOMO está encendido: ese certificado no es de producción.
+ *                  AFIP_FACT_CERT_PEM (opcional) reemplaza SÓLO para facturación al certificado: es el
+ *                  computador fiscal propio de la SRL, emitido con el mismo pedido (CSR) que el general,
+ *                  así que usa la misma AFIP_KEY_PEM. El Padrón A13 sigue con AFIP_CERT_PEM.
  *  - homologacion: AFIP_HOMO_CERT_PEM / AFIP_HOMO_KEY_PEM / AFIP_HOMO_CUIT_REPRESENTADA. Nunca cae
  *                  al certificado productivo.
  */
 export function afipConfigFacturacion(ambiente: AmbienteArca, env: Record<string, string | undefined> = process.env): { config?: AfipConfig; error?: string } {
   if (ambiente === 'produccion') {
     if (env.AFIP_HOMO === '1' || env.AFIP_HOMO === 'true') return { error: 'AFIP_HOMO está encendido: el certificado general no es de producción' }
-    const certPem = normalizarPem(env.AFIP_CERT_PEM)
+    // ARCA autoriza al COMPUTADOR (alias + CUIT del certificado), no a la clave. El certificado general
+    // es el del titular (persona) y lo usa el Padrón A13; la relación wsfe de la SRL puede estar con el
+    // computador propio de la SRL. Ese certificado va en AFIP_FACT_CERT_PEM (público; la clave es la misma).
+    const certPem = normalizarPem(env.AFIP_FACT_CERT_PEM || env.AFIP_CERT_PEM)
     const keyPem = normalizarPem(env.AFIP_KEY_PEM)
     // El mismo certificado sirve al Padrón A13 (que representa a AFIP_CUIT_REPRESENTADA, hoy la
     // persona titular del certificado) y a la factura, que se emite por la SRL. Para no tocar el
     // A13, facturación puede representar a otro CUIT con AFIP_FACT_CUIT_REPRESENTADA.
     const cuitRepresentada = (env.AFIP_FACT_CUIT_REPRESENTADA || env.AFIP_CUIT_REPRESENTADA || '').replace(/\D/g, '')
-    if (!certPem) return { error: 'Falta AFIP_CERT_PEM' }
+    if (!certPem) return { error: 'Falta AFIP_FACT_CERT_PEM (o AFIP_CERT_PEM)' }
     if (!keyPem) return { error: 'Falta AFIP_KEY_PEM' }
     if (!cuitRepresentada) return { error: 'Falta AFIP_FACT_CUIT_REPRESENTADA (o AFIP_CUIT_REPRESENTADA)' }
     return { config: { certPem, keyPem, homo: false, cuitRepresentada } }
@@ -60,7 +66,7 @@ export function afipConfigFacturacion(ambiente: AmbienteArca, env: Record<string
     if (!certPem) return { error: 'Falta AFIP_HOMO_CERT_PEM' }
     if (!keyPem) return { error: 'Falta AFIP_HOMO_KEY_PEM' }
     if (!cuitRepresentada) return { error: 'Falta AFIP_HOMO_CUIT_REPRESENTADA' }
-    if (certPem === normalizarPem(env.AFIP_CERT_PEM)) return { error: 'El certificado de homologación es el mismo que el productivo' }
+    if (certPem === normalizarPem(env.AFIP_CERT_PEM) || certPem === normalizarPem(env.AFIP_FACT_CERT_PEM)) return { error: 'El certificado de homologación es el mismo que el productivo' }
     return { config: { certPem, keyPem, homo: true, cuitRepresentada } }
   }
   return { error: 'Ambiente inválido' }

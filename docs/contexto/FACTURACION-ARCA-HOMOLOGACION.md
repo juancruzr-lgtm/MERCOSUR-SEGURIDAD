@@ -52,5 +52,21 @@ Con #379 desplegado, la migración aplicada y `punto_venta_prod = 4`, el diagnó
 6. **Prueba:** en una prefactura aprobada, usar "Probar en homologación" con PSA (A) y CIRSE (B). El comprobante de prueba no marca la prefactura.
 
 ## Producción (más adelante, con autorización)
-- `punto_venta_prod: 4` y "Diagnosticar producción": confirma la autorización wsfe del certificado `mercosur-ws` y el punto de venta 0004 como CAE.
+- `punto_venta_prod: 4` y "Diagnosticar producción": confirma la autorización wsfe del certificado que usa facturación y el punto de venta 0004 como CAE.
 - Recién después: `produccion_habilitada = true` + `FACTURACION_EMISION_REAL=1`.
+
+## 11/11/2026: certificado propio de la SRL para facturación
+Corrección de lo de arriba: la app (Padrón A13 y facturación) firma con `AFIP_CERT_PEM` = `mercosurseguridad` **del titular** (CUIT 20313933335, serie `4015cbd069ee9324`, vence 16/09/2028). `mercosur-ws` es otro computador de la SRL y no está cargado en la app.
+
+- El diagnóstico de producción del 10/11 y del 11/11 siguió dando "Computador no autorizado": no hay relación wsfe con el computador del titular.
+- El 11/11 a las 10:41, Juan Cruz creó en "Administración de Certificados Digitales", representando a la SRL, el computador **`mercosurseguridad` de la SRL**:
+  - DN `SERIALNUMBER=CUIT 30710705417, CN=mercosurseguridad`, serie `38dd1baad33b8bc7`, vence el 10/11/2028.
+  - Lo hizo con el mismo pedido (CSR) del certificado del titular. La huella de la clave pública es la misma, así que la clave es la de `AFIP_KEY_PEM` (no hay clave nueva).
+- ARCA autoriza al **computador** (CUIT + alias del certificado), no a la clave. Si la relación wsfe de la SRL se hace con su `mercosurseguridad`, facturación tiene que firmar con **ese** certificado.
+- Por eso, `afipConfigFacturacion('produccion')` lee `AFIP_FACT_CERT_PEM` si existe (si no, `AFIP_CERT_PEM`). El Padrón A13 y el legajo no la leen. El diagnóstico muestra la serie del certificado para saber cuál está cargado.
+
+**Pasos (cada uno con autorización):**
+1. En ARCA, Administrador de Relaciones, representando a la SRL: Nueva Relación → ARCA → WebServices → Facturación Electrónica → Representante: Computador Fiscal `mercosurseguridad` (el de la SRL) → Confirmar.
+2. Vercel (Production): `AFIP_FACT_CERT_PEM` = contenido del archivo `mercosurseguridad_38dd1baad33b8bc7.crt`. Es un certificado (público), no una clave. Redeploy.
+3. "Diagnosticar producción": tiene que mostrar serie `38dd1baad33b8bc7`, la clave corresponde, ticket WSAA OK y el PV 4 habilitado como CAE.
+4. Recién ahí, y con OK de Gerencia, las dos llaves de la emisión real.

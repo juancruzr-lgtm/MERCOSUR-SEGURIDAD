@@ -65,6 +65,60 @@ describe('credenciales de facturación separadas por ambiente', () => {
       expect(afipConfigDesdeEnv().config!.cuitRepresentada).toBe('20313933335')
     } finally { process.env = viejo }
   })
+  it('AFIP_FACT_CERT_PEM: facturación usa el computador de la SRL con la MISMA clave; el Padrón A13 sigue con el general', () => {
+    // Caso real (11/11/2026): ARCA emitió para la SRL un certificado nuevo con el mismo pedido (CSR) que
+    // el del titular. Es otro computador (CUIT 30710705417) con la misma clave pública.
+    const keys = forge.pki.rsa.generateKeyPair(1024)
+    const emitir = (cuit: string, serie: string) => {
+      const c = forge.pki.createCertificate()
+      c.publicKey = keys.publicKey
+      c.serialNumber = serie
+      c.validity.notBefore = new Date('2026-11-11')
+      c.validity.notAfter = new Date('2028-11-10')
+      c.setSubject([{ name: 'commonName', value: 'mercosurseguridad' }, { type: '2.5.4.5', value: `CUIT ${cuit}` }])
+      c.setIssuer([{ name: 'commonName', value: 'Computadores' }])
+      c.sign(keys.privateKey, forge.md.sha256.create())
+      return forge.pki.certificateToPem(c)
+    }
+    const titular = emitir('20313933335', '4015cbd069ee9324')
+    const srl = emitir('30710705417', '38dd1baad33b8bc7')
+    const key = forge.pki.privateKeyToPem(keys.privateKey)
+    const env = { ...ENV, AFIP_CERT_PEM: titular, AFIP_KEY_PEM: key, AFIP_CUIT_REPRESENTADA: '20313933335', AFIP_FACT_CUIT_REPRESENTADA: '30710705417', AFIP_FACT_CERT_PEM: srl }
+
+    const p = afipConfigFacturacion('produccion', env).config!
+    expect(p.certPem).toBe(srl.trim())
+    expect(p.keyPem).toBe(key.trim())
+    expect(p.cuitRepresentada).toBe('30710705417')
+    expect(leerCertificado(p.certPem, p.keyPem, new Date('2026-11-12'))).toMatchObject({
+      cn: 'mercosurseguridad', cuit: '30710705417', serie: '38dd1baad33b8bc7', claveCorresponde: true, vigente: true,
+    })
+    // Sin la variable (o vacía), facturación sigue con el certificado general.
+    expect(afipConfigFacturacion('produccion', { ...env, AFIP_FACT_CERT_PEM: undefined }).config!.certPem).toBe(titular.trim())
+    expect(afipConfigFacturacion('produccion', { ...env, AFIP_FACT_CERT_PEM: '' }).config!.certPem).toBe(titular.trim())
+    // Homologación no puede cargar el certificado de facturación productivo.
+    expect(afipConfigFacturacion('homologacion', { ...env, AFIP_HOMO_CERT_PEM: srl, AFIP_HOMO_KEY_PEM: key }).error).toMatch(/mismo que el productivo/)
+    // Padrón A13 y legajo: no leen AFIP_FACT_CERT_PEM.
+    const viejo = { ...process.env }
+    try {
+      Object.assign(process.env, { AFIP_CERT_PEM: titular, AFIP_KEY_PEM: key, AFIP_CUIT_REPRESENTADA: '20313933335', AFIP_FACT_CERT_PEM: srl })
+      delete process.env.AFIP_HOMO
+      const a13 = afipConfigDesdeEnv().config!
+      expect(a13.certPem).toBe(titular.trim())
+      expect(a13.cuitRepresentada).toBe('20313933335')
+    } finally { process.env = viejo }
+  })
+  it('la serie del certificado sale como la muestra ARCA (sin el 00 de DER)', () => {
+    const keys = forge.pki.rsa.generateKeyPair(1024)
+    const c = forge.pki.createCertificate()
+    c.publicKey = keys.publicKey
+    c.serialNumber = '00B9AA'
+    c.validity.notBefore = new Date('2026-11-01')
+    c.validity.notAfter = new Date('2028-11-01')
+    c.setSubject([{ name: 'commonName', value: 'x' }])
+    c.setIssuer([{ name: 'commonName', value: 'Computadores' }])
+    c.sign(keys.privateKey, forge.md.sha256.create())
+    expect(leerCertificado(forge.pki.certificateToPem(c), forge.pki.privateKeyToPem(keys.privateKey)).serie).toBe('b9aa')
+  })
   it('WSFE de producción: sólo ECDHE + AES-GCM sobre TLS 1.2+, sin bajar SECLEVEL y validando el certificado', () => {
     const o = OPCIONES_TLS_WSFE_PROD as Record<string, unknown>
     expect(o.minVersion).toBe('TLSv1.2')

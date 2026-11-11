@@ -39,7 +39,7 @@ export function datosAmbiente(ambiente: AmbienteArca, cfg: ConfigEmision) {
   return { puntoVenta: Number.isInteger(pv) && pv > 0 ? pv : null, cuitEmisor: cuit || null }
 }
 
-export type DatosCertificado = { cn: string; cuit: string | null; emisor: string; desde: string; hasta: string; vigente: boolean; claveCorresponde: boolean }
+export type DatosCertificado = { cn: string; cuit: string | null; serie: string; emisor: string; desde: string; hasta: string; vigente: boolean; claveCorresponde: boolean }
 
 export function leerCertificado(certPem: string, keyPem: string, ahora = new Date()): DatosCertificado {
   const cert = forge.pki.certificateFromPem(certPem)
@@ -54,6 +54,9 @@ export function leerCertificado(certPem: string, keyPem: string, ahora = new Dat
   return {
     cn: attr('CN'),
     cuit: serie.replace(/\D/g, '') || null,
+    // Número de serie del certificado, el mismo que muestra ARCA ("Nro Serie"): dice cuál está cargado.
+    // (Sin el 00 que DER agrega adelante cuando el primer byte es ≥ 0x80.)
+    serie: String(cert.serialNumber ?? '').toLowerCase().replace(/^00(?=[89a-f])/, ''),
     emisor: String(cert.issuer.getField('CN')?.value ?? ''),
     desde: cert.validity.notBefore.toISOString(),
     hasta: cert.validity.notAfter.toISOString(),
@@ -104,7 +107,7 @@ export async function diagnosticar(o: {
       !delAmbiente && `lo emitió "${cert.emisor}", que no es la autoridad de ${homo ? 'homologación' : 'producción'}`,
     ].filter(Boolean)
     paso('certificado', TITULOS.certificado, problemas.length ? 'error' : 'ok',
-      `Alias ${cert.cn}${cert.cuit ? ` · CUIT ${cert.cuit}` : ''} · emisor ${cert.emisor} · vence ${cert.hasta.slice(0, 10)}` + (problemas.length ? ` · ${problemas.join('; ')}` : ''))
+      `Alias ${cert.cn}${cert.cuit ? ` · CUIT ${cert.cuit}` : ''}${cert.serie ? ` · serie ${cert.serie}` : ''} · emisor ${cert.emisor} · vence ${cert.hasta.slice(0, 10)}` + (problemas.length ? ` · ${problemas.join('; ')}` : ''))
   }
 
   if (!cuitEmisor) paso('cuit', TITULOS.cuit, 'error', 'Falta cuit_emisor en fact_config.emision')
