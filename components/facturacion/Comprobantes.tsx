@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { api, leer, rpc } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
+import FacturasExternas from './FacturasExternas'
 
 export default function Comprobantes({ usuarioId }: { usuarioId: string | null }) {
   const [comps, setComps] = useState<any[]>([])
@@ -76,6 +77,8 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
           </div>
         )}
       </div>
+
+      <FacturasExternas alCambiar={() => correr(cargar)} />
 
       {notas.length > 0 && <div style={S.card}>
         <h3 style={S.h3}>Notas de crédito / débito en curso</h3>
