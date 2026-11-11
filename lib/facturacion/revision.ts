@@ -9,7 +9,7 @@
 import { periodoFacturacion } from './periodos'
 import { tarifasParaObjetivo, type TarifaGuardada } from './prefacturacion'
 
-const horasTexto = (m: number) => (m / 60).toFixed(2).replace(/\.?0+$/, '') || '0'
+export const horasTexto = (m: number) => (m / 60).toFixed(2).replace(/\.?0+$/, '') || '0'
 
 /** Advertencias de la propuesta de horas de un objetivo (no bloquean la aprobación individual). */
 export function avisosHoras(separarDiurnaNocturna: boolean, r: any): string[] {

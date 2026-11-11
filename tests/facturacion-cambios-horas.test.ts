@@ -167,7 +167,7 @@ describe('cambiosDeHoras (servidor)', () => {
   it('diferencia por turno con quién/por qué, sólo de los turnos cambiados y desde la aceptación', async () => {
     const { db, admin } = arma()
     const r = await cambiosDeHoras(db as any, admin as any, { contratoId: 'k1', objetivoId: OBJ, mes: '2026-10' })
-    expect(r.aceptada).toMatchObject({ aprobadoAt: ACEPTADO, aprobadoPor: 'Admin Prueba', minutosCubiertos: 960 })
+    expect(r.aceptada).toMatchObject({ aprobadoAt: ACEPTADO, aprobadoPor: 'Admin Prueba', minutosCubiertos: 960, facturaDescubiertas: false })
     expect(r.actual.minutosCubiertos).toBe(480 + 360 + 180)
     expect(r.turnos.map(t => [t.turnoId, t.tipo, t.diferencia])).toEqual([['B', 'cambiado', -120], ['U', 'nuevo', 180]])
     const b = r.turnos.find(t => t.turnoId === 'B')!
@@ -228,5 +228,15 @@ describe('carteles de la pantalla de facturación', () => {
     expect(b).toMatch(/Ver PDF de la prueba/)
     expect(b).toMatch(/!pruebaHomo/)
     expect(b).toMatch(/<CambiosHoras /)
+  })
+  it('la emisión manual (Comprobantes en línea) no ofrece el punto Web Service', () => {
+    const b = src('components/facturacion/Bandeja.tsx')
+    const manual = b.slice(b.indexOf('function EmisionManual'), b.indexOf('function Detalle'))
+    expect(manual).not.toMatch(/\?\.punto_venta_prod/)
+    expect(manual).toMatch(/valor\?\.punto_venta_en_linea \?\? null/)
+  })
+  it('el aviso compara lo facturable: con descubiertas facturadas, las suma', () => {
+    const c = src('components/facturacion/CambiosHoras.tsx')
+    expect(c).toMatch(/minutosCubiertos \+ \(fd \? r\.aceptada\.minutosDescubiertos : 0\)/)
   })
 })

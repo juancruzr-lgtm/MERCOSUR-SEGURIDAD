@@ -340,8 +340,9 @@ function EmisionManual({ p, alHecho }: { p: any; alHecho: () => Promise<void> })
   const { ocupado, correr, Mensaje } = useAccion()
   useEffect(() => {
     if (!abierto) return
-    // El punto Web Service de producción (clave nueva desde 20261206120000; la vieja `punto_venta` ya no existe).
-    correr(async () => { const v = (await leer('fact_config', q => q.eq('clave', 'emision')))[0]?.valor; setPv(v?.punto_venta_prod ?? v?.punto_venta ?? null) })
+    // Ojo: NO usar punto_venta_prod (es el PV Web Service, 4). En Comprobantes en línea sólo sirven los
+    // de Factura en Línea; sin dato propio la guía dice "el habilitado para Comprobantes en línea".
+    correr(async () => setPv((await leer('fact_config', q => q.eq('clave', 'emision')))[0]?.valor?.punto_venta_en_linea ?? null))
     setD(x => ({ ...x, neto: String(Number(p.neto_c) / 100), iva: String(Number(p.iva_c) / 100), total: String(Number(p.total_c) / 100) }))
   }, [abierto]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!abierto) return <button style={{ ...S.btn2, marginTop: 8 }} onClick={() => setAbierto(true)}>Emitir manualmente en ARCA (contingencia)</button>

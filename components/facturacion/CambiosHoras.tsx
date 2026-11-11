@@ -14,7 +14,7 @@ const conSigno = (m: number) => `${m > 0 ? '+' : m < 0 ? '−' : ''}${horas(Math
 const EVENTO: Record<string, string> = { turno_cargado: 'Turno cargado', registro_cargado: 'Registro cargado', anulado: 'Anulado', reemplazo: 'Reemplazo' }
 
 type Respuesta = {
-  aceptada: { aprobadoAt: string; aprobadoPor: string | null; minutosAprobados: number; minutosCubiertos: number; minutosDescubiertos: number } | null
+  aceptada: { aprobadoAt: string; aprobadoPor: string | null; minutosAprobados: number; minutosCubiertos: number; minutosDescubiertos: number; facturaDescubiertas?: boolean } | null
   actual: { minutosCubiertos: number; minutosDescubiertos: number }
   turnos: TurnoConCambios[]
   recortado?: boolean
@@ -42,13 +42,17 @@ export default function CambiosHoras({ contratoId, objetivoId, mes, estadoPrefac
   if (error) return <div style={{ ...S.aviso, marginBottom: 8 }}>No se pudo ver qué cambió desde la aceptación: {error}</div>
   if (!r) return <div style={{ ...S.sub, marginBottom: 8 }}>Buscando qué cambió desde la aceptación…</div>
   if (!r.aceptada) return null
-  const dif = r.actual.minutosCubiertos - r.aceptada.minutosCubiertos
-  const difDesc = r.actual.minutosDescubiertos - r.aceptada.minutosDescubiertos
+  // Lo que se factura: cubiertas, más las descubiertas si la aceptación decidió facturarlas.
+  const fd = Boolean(r.aceptada.facturaDescubiertas)
+  const antes = r.aceptada.minutosCubiertos + (fd ? r.aceptada.minutosDescubiertos : 0)
+  const hoy = r.actual.minutosCubiertos + (fd ? r.actual.minutosDescubiertos : 0)
+  const dif = hoy - antes
+  const difDesc = fd ? 0 : r.actual.minutosDescubiertos - r.aceptada.minutosDescubiertos
   return (
     <div style={{ ...S.aviso, marginBottom: 8 }}>
       <div>
         <b>Cambiaron las horas desde que se aceptaron</b> ({fechaHora(r.aceptada.aprobadoAt)}{r.aceptada.aprobadoPor ? `, por ${r.aceptada.aprobadoPor}` : ''}):
-        {' '}cubiertas {horas(r.aceptada.minutosCubiertos)} h → hoy {horas(r.actual.minutosCubiertos)} h (<b>{conSigno(dif)}</b>).
+        {' '}facturables {horas(antes)} h → hoy {horas(hoy)} h (<b>{conSigno(dif)}</b>){fd ? ' (incluye las descubiertas, que se decidió facturar)' : ''}.
         {difDesc !== 0 && <> Descubiertas {horas(r.aceptada.minutosDescubiertos)} h → {horas(r.actual.minutosDescubiertos)} h.</>}
       </div>
       {r.turnos.length > 0 && (
@@ -73,7 +77,7 @@ export default function CambiosHoras({ contratoId, objetivoId, mes, estadoPrefac
         </table>
       )}
       {r.sinFoto && <div style={S.sub}>Esa aceptación no guardó el detalle por turno: sólo se puede comparar el total.</div>}
-      {r.recortado && <div style={S.sub}>Se muestran los primeros 300 turnos con cambios.</div>}
+      {r.recortado && <div style={S.sub}>Hay más cambios de los que se muestran (más de 300 turnos o de 500 registros de auditoría por tanda).</div>}
       <div style={{ marginTop: 6 }}><b>Qué hacer:</b> {guiaDiferencia(estadoPrefactura, dif, difDesc)}</div>
     </div>
   )

@@ -8,6 +8,8 @@
  * Sin acceso a datos: sólo arma con lo que recibe.
  */
 
+import { horasTexto } from './revision'
+
 /** Renglón del detalle de horas (mismo formato en la foto aceptada y en la propuesta). */
 export type FilaDetalle = {
   turno_id: string
@@ -139,7 +141,7 @@ export function textoCampo(campo: string): string {
 /** Los ids (vigilador, objetivo) no le dicen nada a Administración: sólo se muestran valores legibles. */
 export const valorLegible = (campo: string, v: string | null) => (/_id$/.test(campo) || v == null || v === '' ? null : v)
 
-const h = (m: number) => (Math.abs(m) / 60).toFixed(2).replace(/\.?0+$/, '') || '0'
+const h = (m: number) => horasTexto(Math.abs(m))
 
 /** Qué hacer con la diferencia según el estado de la prefactura. */
 export function guiaDiferencia(estado: string | null | undefined, diferenciaMin: number, diferenciaDescubiertosMin = 0): string {

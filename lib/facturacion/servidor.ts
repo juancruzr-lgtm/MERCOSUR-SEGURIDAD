@@ -87,7 +87,7 @@ export async function cambiosDeHoras(db: SupabaseClient, admin: SupabaseClient, 
   const prop = await proponerHoras(db, p)
   const actual = { minutosCubiertos: prop.horas.minutosCubiertos, minutosDescubiertos: prop.horas.minutosDescubiertos }
   const { data: ap, error } = await db.from('fact_horas_aprobaciones')
-    .select('id, detalle, aprobado_at, aprobado_por, minutos_aprobados, minutos_cubiertos, minutos_descubiertos')
+    .select('id, detalle, aprobado_at, aprobado_por, minutos_aprobados, minutos_cubiertos, minutos_descubiertos, tratamiento_descubiertos')
     .eq('objetivo_id', p.objetivoId).eq('periodo_desde', prop.periodo.desde).eq('periodo_hasta_excl', prop.periodo.hastaExclusivo)
     .eq('estado', 'aprobada').maybeSingle()
   if (error) throw error
@@ -102,6 +102,7 @@ export async function cambiosDeHoras(db: SupabaseClient, admin: SupabaseClient, 
   const crudos: Array<{ origen: 'turno' | 'registro'; turno_id: string; modificado_por: string | null; campo: string; valor_anterior: string | null; valor_nuevo: string | null; motivo: string | null; created_at: string }> = []
   const turnos: TurnoInfo[] = []
   const registros: RegistroInfo[] = []
+  let auditoriaRecortada = false
   for (let i = 0; i < ids.length; i += 100) {
     const parte = ids.slice(i, i + 100)
     const COLS = 'turno_id, modificado_por, campo, valor_anterior, valor_nuevo, motivo, created_at'
@@ -112,6 +113,7 @@ export async function cambiosDeHoras(db: SupabaseClient, admin: SupabaseClient, 
       db.from('registros_asistencia').select('turno_id, created_at, origen, origen_cobertura, registro_anulado_motivo, cobertura_anulada_motivo').in('turno_id', parte).limit(1000),
     ])
     for (const x of [ta, ra, t, r]) if (x.error) throw x.error
+    if ((ta.data ?? []).length >= 500 || (ra.data ?? []).length >= 500) auditoriaRecortada = true
     crudos.push(...(ta.data ?? []).map((x: any) => ({ ...x, origen: 'turno' as const })), ...(ra.data ?? []).map((x: any) => ({ ...x, origen: 'registro' as const })))
     turnos.push(...((t.data ?? []) as TurnoInfo[]))
     registros.push(...((r.data ?? []) as RegistroInfo[]))
@@ -135,10 +137,12 @@ export async function cambiosDeHoras(db: SupabaseClient, admin: SupabaseClient, 
       minutosAprobados: ap.minutos_aprobados as number,
       minutosCubiertos: ap.minutos_cubiertos as number,
       minutosDescubiertos: ap.minutos_descubiertos as number,
+      // Con 'facturar' lo facturado incluye las descubiertas: cubrir una descubierta no cambia el total.
+      facturaDescubiertas: ap.tratamiento_descubiertos === 'facturar',
     },
     actual,
     turnos: armarCambios({ cambios, auditoria, turnos, registros, aceptadoAt: ap.aprobado_at }),
-    recortado: cambios.length > ids.length,
+    recortado: cambios.length > ids.length || auditoriaRecortada,
     sinFoto,
   }
 }
