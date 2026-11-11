@@ -7,6 +7,8 @@
  * abiertas para marcarlas como emitidas. Sin acceso a datos: sólo arma con lo que recibe.
  */
 
+import { formatoPesos } from './dinero'
+
 export type ComprobanteArca = {
   tipo: number
   puntoVenta: number
@@ -123,7 +125,7 @@ export function emparejar(prefacturas: PrefacturaAbierta[], comprobantes: Compro
     if (parecida) {
       const motivos = [
         parecida.tipo !== p.tipo_comprobante && `tipo ${parecida.tipo} (la prefactura dice ${p.tipo_comprobante})`,
-        parecida.totalC !== p.total_c && `total ${(parecida.totalC / 100).toFixed(2)} (la prefactura dice ${((p.total_c ?? 0) / 100).toFixed(2)})`,
+        parecida.totalC !== p.total_c && `total ${formatoPesos(parecida.totalC)} (la prefactura dice ${formatoPesos(p.total_c ?? 0)})`,
       ].filter(Boolean)
       out.diferencias.push({ prefactura: p, comprobante: parecida, motivo: motivos.join('; ') || 'período distinto' })
       usados.add(claveC(parecida))

@@ -3,7 +3,7 @@
 // web service (sólo lectura) y emparejadas con las prefacturas del mes. Sólo lo exacto (CUIT,
 // tipo, total y período) se ofrece para marcar como emitido; el resto se informa.
 import { useState } from 'react'
-import { api, leer } from '@/lib/facturacion/datos'
+import { api, leer, ESTADO_PREPARACION } from '@/lib/facturacion/datos'
 import { emparejar, type ComprobanteArca, type Emparejamiento } from '@/lib/facturacion/externas-arca'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { mesVencido } from '@/lib/facturacion/periodo-seguro'
@@ -12,6 +12,7 @@ import { S, fecha, pesos } from './comun'
 const TIPOS = [1, 6, 201]
 const ABIERTAS = ['en_preparacion', 'esperando_requisitos', 'lista_revision', 'aprobada_emitir']
 const num = (c: ComprobanteArca) => numeroVisible({ tipo: c.tipo, puntoVenta: c.puntoVenta, numero: c.numero })
+const est = (e: string) => ESTADO_PREPARACION[e] ?? e
 
 export default function FacturasExternas({ alCambiar }: { alCambiar: () => void }) {
   const [mes, setMes] = useState(() => mesVencido())
@@ -66,7 +67,7 @@ export default function FacturasExternas({ alCambiar }: { alCambiar: () => void 
       <h3 style={S.h3}>Facturas emitidas fuera de la app (ARCA)</h3>
       <div style={S.sub}>Lee de ARCA las facturas de Comprobantes en línea / Factuweb (sólo consulta: no pide CAE) y las cruza con las prefacturas del mes. Sólo se marca lo que coincide exacto en CUIT, tipo, total y período.</div>
       <div style={{ ...S.fila, marginTop: 8 }}>
-        <label style={S.sub}>Mes de prestación <input style={{ ...S.input, width: 110 }} type="month" value={mes} onChange={e => setMes(e.target.value)} /></label>
+        <label style={S.sub}>Mes de prestación <input style={{ ...S.input, width: 160 }} type="month" value={mes} onChange={e => setMes(e.target.value)} /></label>
         <label style={S.sub}>Puntos de venta <input style={{ ...S.input, width: 90 }} value={pvs} onChange={e => setPvs(e.target.value)} /></label>
         <button style={S.btn} disabled={ocupado} onClick={consultar}>Consultar en ARCA</button>
         {estado && <span style={S.sub}>{estado}</span>}
@@ -83,16 +84,16 @@ export default function FacturasExternas({ alCambiar }: { alCambiar: () => void 
           <thead><tr>{['Cliente', 'Prefactura', 'Factura en ARCA', 'Fecha', 'Total', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>
             {r.coincidencias.map(({ prefactura: p, comprobante: c }) => <tr key={p.id}>
-              <td style={S.td}>{p.cliente}</td><td style={S.td}>{p.estado === 'aprobada_emitir' ? 'Aprobada' : 'Lista para revisión'}</td>
+              <td style={S.td}>{p.cliente}</td><td style={S.td}>{est(p.estado)}</td>
               <td style={S.td}>{num(c)}</td><td style={S.td}>{fecha(c.fecha)}</td><td style={S.num}>{pesos(c.totalC)}</td>
               <td style={S.td}>{hechas[p.id] ?? <button style={S.btn2} disabled={ocupado} onClick={() => marcar(p, c)}>Marcar emitida</button>}</td>
             </tr>)}
             {r.diferencias.map(({ prefactura: p, comprobante: c, motivo }) => <tr key={p.id}>
-              <td style={S.td}>{p.cliente}</td><td style={S.td}>{p.estado}</td><td style={S.td}>{num(c)}</td><td style={S.td}>{fecha(c.fecha)}</td>
+              <td style={S.td}>{p.cliente}</td><td style={S.td}>{est(p.estado)}</td><td style={S.td}>{num(c)}</td><td style={S.td}>{fecha(c.fecha)}</td>
               <td style={S.num}>{pesos(c.totalC)}</td><td style={{ ...S.td, color: '#fbbf24' }}>No coincide: {motivo}</td>
             </tr>)}
             {r.ambiguas.map(({ prefactura: p, comprobantes }) => <tr key={p.id}>
-              <td style={S.td}>{p.cliente}</td><td style={S.td}>{p.estado}</td><td style={S.td}>{comprobantes.map(num).join(', ')}</td><td style={S.td}>—</td><td style={S.num}>—</td>
+              <td style={S.td}>{p.cliente}</td><td style={S.td}>{est(p.estado)}</td><td style={S.td}>{comprobantes.map(num).join(', ')}</td><td style={S.td}>—</td><td style={S.num}>—</td>
               <td style={{ ...S.td, color: '#fbbf24' }}>Varias facturas posibles: revisar a mano</td>
             </tr>)}
           </tbody>
