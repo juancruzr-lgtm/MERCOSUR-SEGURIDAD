@@ -8,7 +8,9 @@
  *  · no puede haber otra prefactura del mismo servicio ya emitida en un período superpuesto;
  *  · el archivo de "Mis Comprobantes" tiene que estar importado después del fin del período y hace
  *    menos de 7 días (lo emitido por fuera de la app sólo se ve así).
- * Sin acceso a datos: decide con lo que recibe. La ruta de emisión lo llama antes de preparar la emisión.
+ * Sin acceso a datos: decide con lo que recibe. La ruta de emisión lo llama antes de preparar la emisión y,
+ * antes de pedir el CAE, exige que lo preparado sea lo confirmado (solicitudCoincide). Una factura real nueva
+ * sólo sale desde su prefactura: por emision_id sólo se consulta (pideCaeFacturaReal).
  */
 
 import { fechaCompatible, periodoEfectivo, superpone } from './externas-arca'
@@ -63,3 +65,23 @@ export function guardasEmisionReal(o: {
   }
   return out
 }
+
+/**
+ * ¿El próximo paso de esta emisión pide un CAE REAL para una factura de servicio (A, B o FCE A de una
+ * prefactura)? Preparada o rechazada → sí (ejecutarEmision pide número nuevo). Incierta/enviando sólo
+ * consultan; las notas de crédito/débito tienen su propia aprobación.
+ */
+export function pideCaeFacturaReal(e: { ambiente?: string | null; tipo?: unknown; estado?: string | null; prefactura_id?: string | null }): boolean {
+  return e.ambiente === 'produccion' && !!e.prefactura_id && [1, 6, 201].includes(Number(e.tipo)) && ['preparada', 'rechazada'].includes(String(e.estado))
+}
+
+/** ¿Lo que se va a mandar a ARCA (la solicitud armada al preparar) es lo que Gerencia confirmó (tipo, CUIT y total)? */
+export function solicitudCoincide(e: { tipo?: unknown; solicitud?: any }, c: Confirmacion): boolean {
+  const s = e.solicitud ?? {}
+  return !!c && Number(c.tipo) === Number(e.tipo)
+    && String(c.cuit ?? '').replace(/\D/g, '') === String(s.cuit_receptor ?? '').replace(/\D/g, '')
+    && s.total_c != null && Number(c.total_c) === Number(s.total_c)
+}
+
+/** Número de comprobante como se lee en la factura: 0004-00000001. */
+export const numeroComprobante = (puntoVenta: number, numero: number) => `${String(puntoVenta).padStart(4, '0')}-${String(numero).padStart(8, '0')}`
