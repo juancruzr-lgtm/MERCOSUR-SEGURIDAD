@@ -10,8 +10,9 @@ import { clientesDelPedido } from '@/app/api/documentacion/_clientes'
 import { afipConfigFacturacion } from '@/lib/afip/config'
 import { obtenerTA } from '@/lib/afip/wsaa'
 import { taStoreSupabase } from '@/lib/afip/ta-store-supabase'
-import { SERVICIO_WSFE, ultimoAutorizado } from '@/lib/afip/wsfe'
-import { numeroComprobante } from '@/lib/facturacion/emision-guardas'
+import { SERVICIO_WSFE, consultarComprobante, ultimoAutorizado } from '@/lib/afip/wsfe'
+import { numeroComprobante, rangoFechaEmision } from '@/lib/facturacion/emision-guardas'
+import { fechaArgentina } from '@/lib/periodo-argentina'
 import { storeAmbiente } from '@/lib/facturacion/ta-ambiente'
 import { responder } from '../_comun'
 
@@ -43,8 +44,16 @@ export async function GET(req: NextRequest) {
     const r = await ultimoAutorizado(ta, { cuit: cred.config.cuitRepresentada, homo: false, puntoVenta, tipo })
     if ('error' in r) return responder({ error: `ARCA no informó el último número autorizado: ${r.error}` }, 502)
     const numero = r.numero + 1
+    // Fecha del último autorizado: la fecha de emisión elegible no puede ser anterior (rango para el aviso).
+    let ultimaFecha: string | null = null
+    if (r.numero > 0) {
+      const u = await consultarComprobante(ta, { cuit: cred.config.cuitRepresentada, homo: false, puntoVenta, tipo, numero: r.numero })
+      if (!('error' in u) && u.encontrado) ultimaFecha = u.fecha || null
+    }
+    const rango = rangoFechaEmision(fechaArgentina(), ultimaFecha)
     return responder({ tipo, punto_venta: puntoVenta, ultimo_autorizado: r.numero, numero_previsto: numero,
-      numero_visible: numeroComprobante(puntoVenta, numero), consultado_at: new Date().toISOString() })
+      numero_visible: numeroComprobante(puntoVenta, numero), consultado_at: new Date().toISOString(),
+      ultima_fecha: ultimaFecha, fecha_desde: rango.desde, fecha_hasta: rango.hasta })
   } catch (err: any) {
     return responder({ error: `No se pudo consultar a ARCA: ${err?.message ?? err}` }, 502)
   }

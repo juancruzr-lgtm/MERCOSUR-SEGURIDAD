@@ -555,8 +555,18 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
                 try { previsto = await api(`numero-previsto?prefactura_id=${encodeURIComponent(p.id)}`, undefined, 'GET') }
                 catch (e: any) { throw new Error(`No se pudo consultar a ARCA el número previsto: ${e?.message ?? e}. No se emitió nada.`) }
                 const hasta = new Date(Date.parse(`${p.periodo_hasta_excl}T00:00:00Z`) - 86400000).toISOString().slice(0, 10)
-                if (!confirm(`EMITIR FACTURA REAL EN ARCA (Gerencia)\n\nCliente: ${p.cliente?.razon_social}\nCUIT: ${p.cuit_receptor}\nPeríodo: ${p.periodo_mes} (del ${fecha(p.periodo_desde)} al ${fecha(hasta)})\nTipo: ${tipo}\nImporte total: ${pesos(p.total_c)}\nNúmero previsto: ${previsto.numero_visible}, sujeto a la autorización definitiva de ARCA\n\nÚltima importación de "Mis Comprobantes": ${ultima}\n\n¿Confirmás que este servicio y período NO se facturó por fuera de la app (Comprobantes en línea)?`)) return
-                const cuerpo = { prefactura_id: p.id, version: p.version, ambiente: 'produccion', confirmacion: { tipo: p.tipo_comprobante, cuit: p.cuit_receptor, total_c: p.total_c }, confirmo_no_emitida_fuera: true }
+                // Fecha de emisión: hoy por defecto; Gerencia puede elegir una anterior dentro del rango de ARCA
+                // (hasta 10 días atrás y no antes del último comprobante autorizado). El servidor lo vuelve a controlar.
+                const hoy = fechaArgentina()
+                const desde = previsto.fecha_desde ?? hoy
+                const escrita = prompt(`Fecha de emisión (DD/MM/AAAA)\n\nPermitida: del ${fecha(desde)} al ${fecha(hoy)}${previsto.ultima_fecha ? ` (el último comprobante autorizado es del ${fecha(previsto.ultima_fecha)})` : ''}.\nDejala como está para emitir con fecha de hoy.`, fecha(hoy))
+                if (escrita == null) return
+                const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(escrita.trim())
+                const fechaEmision = m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : null
+                if (!fechaEmision || fechaEmision < desde || fechaEmision > hoy) throw new Error(`Fecha inválida: tiene que ser entre el ${fecha(desde)} y el ${fecha(hoy)}. No se emitió nada.`)
+                if (!confirm(`EMITIR FACTURA REAL EN ARCA (Gerencia)\n\nCliente: ${p.cliente?.razon_social}\nCUIT: ${p.cuit_receptor}\nPeríodo: ${p.periodo_mes} (del ${fecha(p.periodo_desde)} al ${fecha(hasta)})\nTipo: ${tipo}\nImporte total: ${pesos(p.total_c)}\nFecha de emisión: ${fecha(fechaEmision)}${fechaEmision !== hoy ? ' (anterior a hoy)' : ''}\nNúmero previsto: ${previsto.numero_visible}, sujeto a la autorización definitiva de ARCA\n\nÚltima importación de "Mis Comprobantes": ${ultima}\n\n¿Confirmás que este servicio y período NO se facturó por fuera de la app (Comprobantes en línea)?`)) return
+                const cuerpo = { prefactura_id: p.id, version: p.version, ambiente: 'produccion', confirmacion: { tipo: p.tipo_comprobante, cuit: p.cuit_receptor, total_c: p.total_c }, confirmo_no_emitida_fuera: true,
+                  fecha_emision: fechaEmision !== hoy ? fechaEmision : null }
                 let r: any
                 try { r = await api('emitir', cuerpo) } catch (e: any) {
                   if (!e?.detalle?.excepcionable) throw e

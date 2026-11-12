@@ -8,7 +8,7 @@
 // controles de duplicado; por emision_id sólo se consulta lo ya enviado (o se emiten NC/ND aprobadas).
 import type { NextRequest } from 'next/server'
 import { clientesDelPedido, type Clientes } from '@/app/api/documentacion/_clientes'
-import { guardasEmisionReal, pideCaeFacturaReal, solicitudCoincide } from '@/lib/facturacion/emision-guardas'
+import { guardasEmisionReal, pideCaeFacturaReal, solicitudCoincide, validarFechaEmision } from '@/lib/facturacion/emision-guardas'
 import { afipConfigFacturacion } from '@/lib/afip/config'
 import { obtenerTA } from '@/lib/afip/wsaa'
 import { taStoreSupabase } from '@/lib/afip/ta-store-supabase'
@@ -70,6 +70,14 @@ export async function POST(req: NextRequest) {
 
   let emisionId: string | null = b.emision_id ?? null
   const porEmisionId = !!emisionId
+  // Fecha de emisión elegida por Gerencia (opcional; vacía = hoy). Rango de ARCA para servicios: hasta 10
+  // días atrás, no futura. Que no sea anterior al último autorizado se verifica contra ARCA al emitir.
+  const hoy = fechaArgentina()
+  const fechaEmision: string | null = !porEmisionId && b.fecha_emision ? String(b.fecha_emision) : null
+  if (fechaEmision) {
+    const mal = validarFechaEmision(fechaEmision, hoy)
+    if (mal) return responder({ error: `${mal}. No se envió nada a ARCA.`, codigo: 'fecha_emision' }, 400)
+  }
   if (!emisionId) {
     if (!['produccion', 'homologacion'].includes(b.ambiente)) return responder({ error: 'Ambiente inválido' }, 400)
     // Seguro de períodos: no se emite una prefactura del mes en curso o futuro.
@@ -145,7 +153,7 @@ export async function POST(req: NextRequest) {
         p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_observaciones: x.observaciones ?? null }) },
       consulta: (id, x) => rpc('fact_emision_consulta', { p_emision_id: id, p_encontrado: x.encontrado, p_respuesta: x.respuesta ?? {},
         p_cae: x.cae ?? null, p_cae_vto: x.caeVto ?? null, p_fecha: x.fecha ?? null, p_total_c: x.totalC ?? null, p_numero: x.numero }),
-    }, { hoy: fechaArgentina(), condicionIva: cli?.condicion_iva ?? '', cbuFce: cbuFceDe(conf), plazoDias: kPlazo?.dias_vencimiento ?? null })
+    }, { hoy, fechaEmision, condicionIva: cli?.condicion_iva ?? '', cbuFce: cbuFceDe(conf), plazoDias: kPlazo?.dias_vencimiento ?? null })
     return responder({ ...r, emision_id: e.id }, r.estado === 'invalida' ? 400 : r.estado === 'en_curso' ? 409 : 200)
   } catch (err: any) {
     // Falla al registrar el resultado: la solicitud quedó 'enviando' y la próxima vez se consulta.

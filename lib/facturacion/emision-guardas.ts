@@ -85,3 +85,33 @@ export function solicitudCoincide(e: { tipo?: unknown; solicitud?: any }, c: Con
 
 /** Número de comprobante como se lee en la factura: 0004-00000001. */
 export const numeroComprobante = (puntoVenta: number, numero: number) => `${String(puntoVenta).padStart(4, '0')}-${String(numero).padStart(8, '0')}`
+
+/**
+ * Fecha de emisión elegida por Gerencia (p. ej. para que la factura quede en el período anterior).
+ * Reglas de ARCA para servicios (concepto 2), sólo hacia atrás:
+ *  · no futura (hasta hoy);
+ *  · hasta 10 días antes de hoy (más atrás, ARCA la rechaza);
+ *  · no anterior a la fecha del último comprobante autorizado del mismo tipo y punto de venta
+ *    (la numeración y las fechas tienen que ir en orden).
+ */
+export const DIAS_ATRAS_EMISION = 10
+
+const diaIso = (iso: string, mas: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + mas * 86400000).toISOString().slice(0, 10)
+
+export function rangoFechaEmision(hoy: string, ultimaFecha?: string | null): { desde: string; hasta: string } {
+  const minimo = diaIso(hoy, -DIAS_ATRAS_EMISION)
+  return { desde: ultimaFecha && ultimaFecha > minimo ? ultimaFecha : minimo, hasta: hoy }
+}
+
+/** null si la fecha sirve; si no, por qué no. ultimaFecha = la del último autorizado (si se conoce). */
+export function validarFechaEmision(fecha: unknown, hoy: string, ultimaFecha?: string | null): string | null {
+  const f = String(fecha ?? '')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f) || Number.isNaN(Date.parse(`${f}T00:00:00Z`)) || new Date(`${f}T00:00:00Z`).toISOString().slice(0, 10) !== f) {
+    return 'Fecha de emisión inválida (AAAA-MM-DD)'
+  }
+  const r = rangoFechaEmision(hoy, ultimaFecha)
+  if (f > r.hasta) return `La fecha de emisión no puede ser posterior a hoy (${r.hasta})`
+  if (ultimaFecha && f < ultimaFecha) return `La fecha de emisión no puede ser anterior a la del último comprobante autorizado de este tipo y punto de venta (${ultimaFecha})`
+  if (f < r.desde) return `ARCA admite hasta ${DIAS_ATRAS_EMISION} días antes de hoy: la fecha más vieja posible es ${r.desde}`
+  return null
+}

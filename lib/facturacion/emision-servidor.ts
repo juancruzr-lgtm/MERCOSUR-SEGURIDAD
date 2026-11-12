@@ -19,6 +19,7 @@
 import type { ComprobanteWsfe, ResultadoCae, ResultadoConsulta } from '@/lib/afip/wsfe'
 import { validarComprobante, CONDICION_IVA_RECEPTOR } from '@/lib/afip/wsfe'
 import { vtoPagoParaArca } from './vto-arca'
+import { validarFechaEmision } from './emision-guardas'
 
 export const ENVIO_COLGADO_MS = 2 * 60 * 1000
 
@@ -64,8 +65,11 @@ export function alicuotaDe(netoC: number, ivaC: number): string | null {
   return null
 }
 
-export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; hoy: string; condicionIva: string; cbuFce?: string | null; plazoDias?: number | string | null; fceTransferencia?: 'SCA' | 'ADC' }): ComprobanteWsfe {
+export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; hoy: string; condicionIva: string; cbuFce?: string | null; plazoDias?: number | string | null; fceTransferencia?: 'SCA' | 'ADC'; fechaEmision?: string | null }): ComprobanteWsfe {
   const s = e.solicitud ?? {}
+  // Fecha del comprobante: la que eligió Gerencia (ya validada) o la del día. El vencimiento se cuenta desde ella.
+  const hoy = opts.fechaEmision || opts.hoy
+  opts = { ...opts, hoy }
   const neto = Number(s.neto_c), iva = Number(s.iva_c), total = Number(s.total_c)
   const pct = alicuotaDe(neto, iva)
   // Si la fecha aprobada ya pasó, se informa la de emisión + el plazo del contrato (30 días si no tiene
@@ -91,7 +95,7 @@ export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; ho
   }
 }
 
-export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: PuertoBase, opts: { hoy: string; condicionIva: string; cbuFce?: string | null; plazoDias?: number | string | null; ahoraMs?: number }): Promise<ResultadoEmision> {
+export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: PuertoBase, opts: { hoy: string; condicionIva: string; cbuFce?: string | null; plazoDias?: number | string | null; ahoraMs?: number; fechaEmision?: string | null }): Promise<ResultadoEmision> {
   if (e.estado === 'autorizada') return { estado: 'autorizada', numero: e.numero!, cae: '' }
 
   const ahora = opts.ahoraMs ?? Date.now()
@@ -130,7 +134,20 @@ export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: Puerto
   const ult = await arca.ultimo({ puntoVenta: e.punto_venta, tipo: e.tipo })
   if ("error" in ult) return { estado: 'rechazada', motivo: `No se obtuvo el último número autorizado: ${ult.error}` }
   const numero = ult.numero + 1
-  const comp = comprobanteDesdeSolicitud(e, { numero, hoy: opts.hoy, condicionIva: opts.condicionIva, cbuFce: opts.cbuFce, plazoDias: opts.plazoDias })
+  // Fecha elegida (anterior a hoy): ARCA exige que no sea anterior a la del último autorizado del mismo
+  // tipo y punto de venta. Se verifica ANTES de tomar el número, con la fecha real de ese comprobante.
+  const fechaEmision = opts.fechaEmision && opts.fechaEmision !== opts.hoy ? opts.fechaEmision : null
+  if (fechaEmision) {
+    let ultimaFecha: string | null = null
+    if (ult.numero > 0) {
+      const c = await arca.consultar({ puntoVenta: e.punto_venta, tipo: e.tipo, numero: ult.numero })
+      if ('error' in c || !c.encontrado || !c.fecha) return { estado: 'invalida', errores: [`No se pudo verificar la fecha del último comprobante autorizado (N° ${ult.numero}): se emite con fecha de hoy o se reintenta`] }
+      ultimaFecha = c.fecha
+    }
+    const malFecha = validarFechaEmision(fechaEmision, opts.hoy, ultimaFecha)
+    if (malFecha) return { estado: 'invalida', errores: [malFecha] }
+  }
+  const comp = comprobanteDesdeSolicitud(e, { numero, hoy: opts.hoy, condicionIva: opts.condicionIva, cbuFce: opts.cbuFce, plazoDias: opts.plazoDias, fechaEmision })
   const errores = validarComprobante(comp)
   if (errores.length) return { estado: 'invalida', errores }
 
@@ -147,7 +164,7 @@ export async function ejecutarEmision(e: Emision, arca: PuertoArca, base: Puerto
     r = { resultado: 'incierta', motivo: String(err?.message ?? err), crudo: null }
   }
   if (r.resultado === 'A') {
-    await base.resultado(e.id, { resultado: 'A', respuesta: r.crudo, cae: r.cae, caeVto: r.caeVto, fecha: r.fecha || opts.hoy, observaciones: r.observaciones.join('; ') })
+    await base.resultado(e.id, { resultado: 'A', respuesta: r.crudo, cae: r.cae, caeVto: r.caeVto, fecha: r.fecha || comp.fecha, observaciones: r.observaciones.join('; ') })
     return { estado: 'autorizada', numero, cae: r.cae }
   }
   if (r.resultado === 'R') {
