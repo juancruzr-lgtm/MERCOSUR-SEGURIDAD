@@ -11,7 +11,7 @@ import { afipConfigFacturacion } from '@/lib/afip/config'
 import { obtenerTA } from '@/lib/afip/wsaa'
 import { taStoreSupabase } from '@/lib/afip/ta-store-supabase'
 import { SERVICIO_WSFE, consultarComprobante, ultimoAutorizado } from '@/lib/afip/wsfe'
-import { numeroComprobante, rangoFechaEmision } from '@/lib/facturacion/emision-guardas'
+import { fechaEmisionSugerida, numeroComprobante, rangoFechaEmision } from '@/lib/facturacion/emision-guardas'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import { storeAmbiente } from '@/lib/facturacion/ta-ambiente'
 import { responder } from '../_comun'
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
 
   const id = req.nextUrl.searchParams.get('prefactura_id') ?? ''
   const [{ data: pf }, { data: conf }] = await Promise.all([
-    c.usuario.from('fact_prefacturas').select('tipo_comprobante').eq('id', id).maybeSingle(),
+    c.usuario.from('fact_prefacturas').select('tipo_comprobante, periodo_hasta_excl').eq('id', id).maybeSingle(),
     c.usuario.from('fact_config').select('valor').eq('clave', 'emision').maybeSingle(),
   ])
   if (!pf) return responder({ error: 'Prefactura inexistente o sin acceso' }, 404)
@@ -50,10 +50,15 @@ export async function GET(req: NextRequest) {
       const u = await consultarComprobante(ta, { cuit: cred.config.cuitRepresentada, homo: false, puntoVenta, tipo, numero: r.numero })
       if (!('error' in u) && u.encontrado) ultimaFecha = u.fecha || null
     }
-    const rango = rangoFechaEmision(fechaArgentina(), ultimaFecha)
+    const hoy = fechaArgentina()
+    const rango = rangoFechaEmision(hoy, ultimaFecha)
+    // Fecha por defecto (prefactura sin fecha cargada): la más vieja que ARCA acepta, no antes del fin del período.
+    // Si no se pudo saber la fecha del último autorizado, hoy (nunca se sugiere una que ARCA podría rechazar).
+    const finPeriodo = (pf as any).periodo_hasta_excl ? new Date(Date.parse(`${(pf as any).periodo_hasta_excl}T00:00:00Z`) - 86400000).toISOString().slice(0, 10) : null
+    const sugerida = r.numero > 0 && !ultimaFecha ? hoy : fechaEmisionSugerida(hoy, ultimaFecha, finPeriodo)
     return responder({ tipo, punto_venta: puntoVenta, ultimo_autorizado: r.numero, numero_previsto: numero,
       numero_visible: numeroComprobante(puntoVenta, numero), consultado_at: new Date().toISOString(),
-      ultima_fecha: ultimaFecha, fecha_desde: rango.desde, fecha_hasta: rango.hasta })
+      ultima_fecha: ultimaFecha, fecha_desde: rango.desde, fecha_hasta: rango.hasta, fecha_sugerida: sugerida })
   } catch (err: any) {
     return responder({ error: `No se pudo consultar a ARCA: ${err?.message ?? err}` }, 502)
   }

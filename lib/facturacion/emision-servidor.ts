@@ -18,7 +18,8 @@
 
 import type { ComprobanteWsfe, ResultadoCae, ResultadoConsulta } from '@/lib/afip/wsfe'
 import { validarComprobante, CONDICION_IVA_RECEPTOR } from '@/lib/afip/wsfe'
-import { vtoPagoParaArca } from './vto-arca'
+import { plazoPagoDias, vtoPagoParaArca } from './vto-arca'
+import { sumarDias } from '@/lib/periodo-argentina'
 import { validarFechaEmision } from './emision-guardas'
 
 export const ENVIO_COLGADO_MS = 2 * 60 * 1000
@@ -75,7 +76,9 @@ export function comprobanteDesdeSolicitud(e: Emision, opts: { numero: number; ho
   // Si la fecha aprobada ya pasó, se informa la de emisión + el plazo del contrato (30 días si no tiene
   // otro). El comprobante guarda esta misma fecha (la toma de solicitud.arca: migración 20261210100000),
   // así el PDF coincide con ARCA.
-  const vto = vtoPagoParaArca(s.vto_pago, opts.hoy, opts.plazoDias)
+  // Con fecha de emisión elegida (anterior a hoy), el vencimiento es esa fecha + el plazo del contrato
+  // (p. ej. Hagana: 30 días desde la emisión); el de la prefactura se calculó con otra fecha.
+  const vto = opts.fechaEmision ? sumarDias(opts.fechaEmision, plazoPagoDias(opts.plazoDias)) : vtoPagoParaArca(s.vto_pago, opts.hoy, opts.plazoDias)
   // FCE A (201): CBU del emisor (2101) y forma de transferencia (27, RG 4919/2021): SCA = Sistema de
   // Circulación Abierta, la opción por defecto de ARCA; ADC = Agente de Depósito Colectivo.
   // NC/ND de FCE (202/203): marca de anulación (22).

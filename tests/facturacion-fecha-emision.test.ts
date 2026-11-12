@@ -94,3 +94,37 @@ describe('emisión con fecha anterior a hoy', () => {
     expect(log[0]).toBe('envio:2:2026-11-12:2026-12-12')
   })
 })
+
+describe('fecha de emisión sugerida: la más vieja posible, no antes del fin del período', () => {
+  it('octubre emitido al principio de noviembre → 31/10', async () => {
+    const { fechaEmisionSugerida } = await import('@/lib/facturacion/emision-guardas')
+    expect(fechaEmisionSugerida('2026-11-05', null, '2026-10-31')).toBe('2026-10-31')
+    expect(fechaEmisionSugerida('2026-11-10', '2026-10-15', '2026-10-31')).toBe('2026-10-31')
+  })
+  it('pasados 10 días: la más vieja que acepta ARCA', async () => {
+    const { fechaEmisionSugerida } = await import('@/lib/facturacion/emision-guardas')
+    expect(fechaEmisionSugerida('2026-11-12', null, '2026-10-31')).toBe('2026-11-02')
+  })
+  it('respeta el último autorizado del mismo tipo y punto de venta', async () => {
+    const { fechaEmisionSugerida } = await import('@/lib/facturacion/emision-guardas')
+    expect(fechaEmisionSugerida('2026-11-08', '2026-11-05', '2026-10-31')).toBe('2026-11-05')
+    expect(fechaEmisionSugerida('2026-11-12', '2026-11-12', '2026-10-31')).toBe('2026-11-12')
+  })
+  it('período que todavía no terminó → hoy', async () => {
+    const { fechaEmisionSugerida } = await import('@/lib/facturacion/emision-guardas')
+    expect(fechaEmisionSugerida('2026-11-20', null, '2026-11-30')).toBe('2026-11-20')
+  })
+})
+
+describe('Hagana: período 26 al 25 y vencimiento a 30 días desde la emisión', () => {
+  it('la sugerida no es anterior al 25 (fin del período) y el vencimiento cuenta desde la fecha elegida', async () => {
+    const { fechaEmisionSugerida } = await import('@/lib/facturacion/emision-guardas')
+    // Período 26/10 – 25/11, emitida el 01/12 sin comprobantes de diciembre → 25/11.
+    expect(fechaEmisionSugerida('2026-12-01', '2026-11-12', '2026-11-25')).toBe('2026-11-25')
+    const e: Emision = { id: 'H', estado: 'preparada', ambiente: 'produccion', cuit_emisor: '30710705417', tipo: 1, punto_venta: 4, numero: null,
+      solicitud: { cuit_receptor: '30707891579', neto_c: 100000, iva_c: 21000, total_c: 121000, periodo_desde: '2026-10-26', periodo_hasta: '2026-11-25', vto_pago: '2026-12-31' } }
+    const c = comprobanteDesdeSolicitud(e, { numero: 1, hoy: '2026-12-01', condicionIva: 'responsable_inscripto', plazoDias: 30, fechaEmision: '2026-11-25' })
+    expect(c.fecha).toBe('2026-11-25')
+    expect(c.vtoPago).toBe('2026-12-25')
+  })
+})

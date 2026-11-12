@@ -115,3 +115,16 @@ export function validarFechaEmision(fecha: unknown, hoy: string, ultimaFecha?: s
   if (f < r.desde) return `ARCA admite hasta ${DIAS_ATRAS_EMISION} días antes de hoy: la fecha más vieja posible es ${r.desde}`
   return null
 }
+
+/**
+ * Fecha de emisión por defecto (cuando la prefactura no tiene una cargada): la MÁS VIEJA que ARCA acepta hoy,
+ * sin ser anterior al último día del período facturado (no se factura antes de terminar el trabajo):
+ *   máx(hoy − 10 días, fecha del último autorizado del mismo tipo y punto de venta, fin del período), tope hoy.
+ * Ej.: octubre emitido el 05/11 sin comprobantes de noviembre → 31/10; emitido el 12/11 → 02/11; si ya hay uno
+ * del 05/11 → 05/11. Siempre se puede cambiar en la prefactura.
+ */
+export function fechaEmisionSugerida(hoy: string, ultimaFecha?: string | null, finPeriodo?: string | null): string {
+  const r = rangoFechaEmision(hoy, ultimaFecha)
+  const f = finPeriodo && finPeriodo > r.desde ? finPeriodo : r.desde
+  return f > hoy ? hoy : f
+}
