@@ -248,6 +248,12 @@ export interface AccionesCelda {
   anular: boolean
   reactivar: boolean
   /**
+   * Turno PASADO anulado o cancelado por error que se trabajó igual: se reactiva con
+   * reactivar_turno_anulado_trabajado (20261213140000/150000), que exige motivo y evidencia
+   * (fichaje de entrada y salida o carga manual con horas). Admin o supervisor de la zona.
+   */
+  reactivarTrabajado: boolean
+  /**
    * Turno ya iniciado o pasado: se corrige por corregir_turno_programacion,
    * que decide según la evidencia (sin fichaje → anular/cambiar horario; con
    * fichaje/horas → solicitud; período cerrado → rectificación).
@@ -257,7 +263,7 @@ export interface AccionesCelda {
 
 const SIN_ACCIONES: AccionesCelda = {
   asignar: false, cambiarVigilador: false, quitarVigilador: false,
-  cambiarHorario: false, anular: false, reactivar: false, corregir: false,
+  cambiarHorario: false, anular: false, reactivar: false, reactivarTrabajado: false, corregir: false,
 }
 
 /** Anular es reversible: estos estados vuelven a 'programado' con un clic. */
@@ -277,6 +283,9 @@ export function accionesCelda(
   // servidor decide con la evidencia real. Anulado/reemplazado/cancelado ya
   // no tienen obligación: no hay nada que corregir ni se reactivan hacia atrás.
   if (!esTurnoFuturo(turno, fechaActual, horaActual)) {
+    // Anulado o cancelado por error y trabajado igual: se ofrece reactivarlo; el servidor exige la
+    // evidencia de que se trabajó. Reemplazado no: hay otro turno que lo sustituye.
+    if (ESTADOS_REACTIVABLES.has(estado)) return { ...SIN_ACCIONES, reactivarTrabajado: true }
     return ESTADOS_SIN_OBLIGACION.has(estado) ? SIN_ACCIONES : { ...SIN_ACCIONES, corregir: true }
   }
 
@@ -297,13 +306,14 @@ export function accionesCelda(
     cambiarHorario: true,
     anular: true,
     reactivar: false,
+    reactivarTrabajado: false,
     corregir: false,
   }
 }
 
 /** true si la celda ofrece al menos una acción (para saber si el clic hace algo). */
 export const celdaTieneAcciones = (a: AccionesCelda): boolean =>
-  a.asignar || a.cambiarVigilador || a.quitarVigilador || a.cambiarHorario || a.anular || a.reactivar || a.corregir
+  a.asignar || a.cambiarVigilador || a.quitarVigilador || a.cambiarHorario || a.anular || a.reactivar || a.reactivarTrabajado || a.corregir
 
 // ── Plan de asignación (individual, por rango, por fila completa) ────────────
 

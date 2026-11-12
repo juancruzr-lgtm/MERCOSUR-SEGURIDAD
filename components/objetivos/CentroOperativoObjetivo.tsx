@@ -654,6 +654,24 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
     )
   }
 
+  // Turno PASADO anulado o cancelado por error que se trabajó igual (p. ej. el cliente suspendió y
+  // después confirmó). Vuelve a contar para liquidación y facturación. La RPC exige motivo y evidencia
+  // (fichaje de entrada y salida o carga manual con horas), rol admin o supervisor y la zona en alcance.
+  const reactivarTrabajadoCelda = async () => {
+    if (!celdaEditando) return
+    const motivo = window.prompt(
+      `REACTIVAR TURNO TRABAJADO\n\nEl turno del ${celdaEditando.fecha} está ${celdaEditando.estado}. Si se trabajó igual, vuelve a contar para sueldos y facturación.\n\nMotivo (mínimo 10 caracteres, queda en el historial):`,
+      'Anulado por error: el servicio se prestó igual',
+    )
+    if (motivo == null) return
+    if (motivo.trim().length < 10) { setErrorCelda('El motivo tiene que tener al menos 10 caracteres.'); return }
+    const { data, error } = await supabase.rpc('reactivar_turno_anulado_trabajado', { p_turno_id: celdaEditando.id, p_motivo: motivo.trim() })
+    if (error) { setErrorCelda(error.message); return }
+    if ((data as any)?.estado === 'sin_cambios') { setErrorCelda('El turno ya no estaba anulado.'); return }
+    await cargarMensual()
+    setCeldaEditando(null)
+  }
+
   const ejecutarAsignacion = async (
     turnoIds: string[], guardiaId: string, masiva: boolean,
     confirmacion?: { motivo: string },
@@ -2534,6 +2552,7 @@ function CentroOperativoObjetivo({ objetivoId, onVolver, onNavigate, esAdmin, ro
                 })}
                 {acc.anular && opcion('Anular turno', 'Deja de contar, pero queda el registro. Se puede deshacer', true, () => { setModoCelda('anular'); setErrorCelda('') })}
                 {acc.reactivar && opcion('Reactivar turno', 'Vuelve a contar como programado', false, confirmarReactivarCelda)}
+                {acc.reactivarTrabajado && opcion('Reactivar: se trabajó', 'Anulado por error y trabajado igual: vuelve a contar para sueldos y facturación (pide motivo y fichaje)', false, () => { void reactivarTrabajadoCelda() })}
                 {acc.corregir && opcion('Corregir turno', 'Ya comenzó: anular un error de programación o pedir corrección, según la evidencia', true, () => { void abrirCorreccion() })}
                 {!celdaTieneAcciones(acc) && (
                   <div style={{ fontSize:12, color:'#64748b' }}>

@@ -118,7 +118,7 @@ describe('accionesCelda — turnos que no se tocan desde la grilla', () => {
   it('turno pasado: solo corregir', () => {
     const a = accionesCelda(turno({ fecha: '2026-08-01' }), HOY, AHORA, true)
     expect(a).toEqual({ asignar: false, cambiarVigilador: false, quitarVigilador: false,
-      cambiarHorario: false, anular: false, reactivar: false, corregir: true })
+      cambiarHorario: false, anular: false, reactivar: false, reactivarTrabajado: false, corregir: true })
   })
 
   it('turno de hoy que ya empezó: solo corregir', () => {
@@ -127,8 +127,22 @@ describe('accionesCelda — turnos que no se tocan desde la grilla', () => {
     expect(a.anular || a.cambiarVigilador || a.cambiarHorario).toBe(false)
   })
 
-  it('turno iniciado ya anulado: nada (no se reactiva hacia atrás)', () => {
-    expect(celdaTieneAcciones(accionesCelda(turno({ fecha: '2026-08-01', estado: 'anulado' }), HOY, AHORA, true))).toBe(false)
+  // Desde 20261213140000: un turno pasado anulado por error y trabajado se reactiva (el servidor exige
+  // evidencia). No se ofrece la reactivación común ni ninguna otra acción.
+  it('turno pasado anulado o cancelado: sólo reactivar como trabajado', () => {
+    for (const estado of ['anulado', 'cancelado']) {
+      const a = accionesCelda(turno({ fecha: '2026-08-01', estado }), HOY, AHORA, true)
+      expect(a).toEqual({ asignar: false, cambiarVigilador: false, quitarVigilador: false,
+        cambiarHorario: false, anular: false, reactivar: false, reactivarTrabajado: true, corregir: false })
+    }
+  })
+
+  it('turno pasado reemplazado: nada (hay otro turno que lo sustituye)', () => {
+    expect(celdaTieneAcciones(accionesCelda(turno({ fecha: '2026-08-01', estado: 'reemplazado' }), HOY, AHORA, true))).toBe(false)
+  })
+
+  it('turno pasado anulado sin permiso de escritura: nada', () => {
+    expect(celdaTieneAcciones(accionesCelda(turno({ fecha: '2026-08-01', estado: 'anulado' }), HOY, AHORA, false))).toBe(false)
   })
 
   it('turno iniciado sin permiso de escritura: nada', () => {
