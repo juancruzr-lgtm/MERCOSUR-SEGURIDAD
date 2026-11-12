@@ -1,7 +1,7 @@
 'use client'
 // Clientes (CUIT + razón social), alias, contactos, contratos, tarifas con
 // vigencia y órdenes de compra. Todo cambio queda en el historial.
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { leer, rpc, MODALIDADES, REQUISITOS } from '@/lib/facturacion/datos'
 import { cuitValido } from '@/lib/facturacion/comprobantes'
 import { PLAZO_PAGO_POR_DEFECTO } from '@/lib/facturacion/vto-arca'
@@ -96,6 +96,8 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
   const [oc, setOc] = useState(OC_VACIA)
   const [panel, setPanel] = useState<string | null>(null)
   const [grupos, setGrupos] = useState<Record<string, string>>({})
+  // Texto del renglón de cada objetivo en la factura (borrador local hasta salir del campo).
+  const [textos, setTextos] = useState<Record<string, string>>({})
   const { ocupado, correr, Mensaje } = useAccion()
   const alternar = (p: string) => setPanel(panel === p ? null : p)
 
@@ -250,8 +252,10 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
                 <tbody>{objs.map(v => {
                   const propias = tarifas.filter(t => t.objetivo_id === v.objetivo_id && !t.vigencia_hasta)
                   const valor = grupos[v.id] ?? v.grupo_factura ?? ''
+                  const texto = textos[v.id] ?? v.texto_renglon ?? ''
                   return (
-                    <tr key={v.id}>
+                    <Fragment key={v.id}>
+                    <tr>
                       <td style={S.td}>{v.objetivo?.nombre}</td>
                       <td style={S.td}>{fecha(v.desde)} a {v.hasta ? fecha(v.hasta) : 'vigente'}</td>
                       <td style={S.td}>{propias.length ? propias.map(t => `${t.concepto} $ ${t.precio}`).join(' · ') : <span style={S.sub}>general del contrato</span>}</td>
@@ -260,7 +264,16 @@ function FichaCliente({ cliente, objetivos, alCambiar }: { cliente: any; objetiv
                           onChange={e => setGrupos({ ...grupos, [v.id]: e.target.value })}
                           onBlur={() => { if (valor.trim() !== (v.grupo_factura ?? '')) correr(async () => { await rpc('fact_contrato_objetivo_grupo', { p_id: v.id, p_grupo: valor }); const { [v.id]: _, ...resto } = grupos; setGrupos(resto); await hecho() }, 'Agrupación guardada: se aplica al recalcular') }} />
                       </td>
-                    </tr>)
+                    </tr>
+                    <tr>
+                      <td colSpan={4} style={{ ...S.td, paddingTop: 0 }}>
+                        <textarea style={{ ...S.input, width: '100%', minHeight: 44, boxSizing: 'border-box', fontSize: 12 }}
+                          placeholder={`Texto del renglón en la factura (vacío = «Horas de vigilancia — ${v.objetivo?.nombre ?? 'objetivo'}»). Podés usar {mes}, {año} y {periodo}.`}
+                          value={texto} onChange={e => setTextos({ ...textos, [v.id]: e.target.value })}
+                          onBlur={() => { if (texto.trim() !== (v.texto_renglon ?? '').trim()) correr(async () => { await rpc('fact_contrato_objetivo_texto', { p_id: v.id, p_texto: texto }); const { [v.id]: _, ...resto } = textos; setTextos(resto); await hecho() }, 'Texto del renglón guardado: se aplica al recalcular') }} />
+                      </td>
+                    </tr>
+                    </Fragment>)
                 })}</tbody>
               </table>
               <datalist id={`grupos-${x.id}`}>{Array.from(new Set(objs.map(v => v.grupo_factura).filter(Boolean))).map(g => <option key={g} value={g} />)}</datalist>

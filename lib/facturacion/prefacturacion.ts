@@ -120,7 +120,43 @@ export type EntradaPrefactura = {
    * por objetivo, cada uno con sus horas y su tarifa (la propia o la del contrato).
    * Sin esto, un solo renglón con el total y la tarifa del contrato.
    */
-  porObjetivo?: Array<{ nombre: string; horas: HorasAprobadas | null; tarifas: TarifaVigente[] }>
+  porObjetivo?: Array<{ nombre: string; horas: HorasAprobadas | null; tarifas: TarifaVigente[]; texto?: string | null }>
+  /**
+   * Texto del renglón cuando la factura es de un solo objetivo (en las de varios va en
+   * porObjetivo[].texto). Lo que se imprime en la factura; ver textoRenglon.
+   */
+  textoRenglon?: string | null
+  /** Mes de prestación AAAA-MM para {mes}/{año} del texto del renglón (por defecto, el de periodo.desde). */
+  mes?: string
+}
+
+/**
+ * Minutos que se FACTURAN de una aprobación de horas: los cargados según la planilla del cliente
+ * (minutos_facturar, con motivo; columna de 20261213110000) o, si no hay, los aprobados de Reportes.
+ */
+export function minutosAFacturar(a: { minutos_aprobados?: number | string | null; minutos_facturar?: number | string | null }): number {
+  return a.minutos_facturar != null ? Number(a.minutos_facturar) || 0 : Number(a.minutos_aprobados) || 0
+}
+
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+const ddmmaaaa = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`
+
+/**
+ * Texto de un renglón de factura cargado en el contrato (fact_contrato_objetivos.texto_renglon), con
+ * {mes} → "octubre", {año}/{anio} → "2026", {periodo} → "01/10/2026 al 31/10/2026" y {objetivo} → nombre.
+ * Sin texto cargado → null (se usa el concepto genérico de siempre).
+ */
+export function textoRenglon(plantilla: string | null | undefined, ctx: { mes: string; periodo: { desde: string; hastaExclusivo: string }; objetivo: string }): string | null {
+  const t = String(plantilla ?? '').trim()
+  if (!t) return null
+  const [anio, mm] = ctx.mes.split('-')
+  const hasta = new Date(Date.parse(`${ctx.periodo.hastaExclusivo}T00:00:00Z`) - 86400000).toISOString().slice(0, 10)
+  return t
+    .replace(/\{mes\}/gi, MESES[Number(mm) - 1] ?? mm)
+    .replace(/\{(año|anio)\}/gi, anio)
+    .replace(/\{periodo\}/gi, `${ddmmaaaa(ctx.periodo.desde)} al ${ddmmaaaa(hasta)}`)
+    .replace(/\{objetivo\}/gi, ctx.objetivo)
+    .replace(/\s+/g, ' ')
 }
 
 export type LineaCalculada = {
@@ -161,11 +197,18 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
     lineas.push({ concepto, cantidad, precio: t.precio, tarifaId: t.id, importes: r.importes })
   }
 
-  const items = e.porObjetivo?.length ? e.porObjetivo : [{ nombre: '', horas: e.horas, tarifas: e.tarifas }]
-  const de = (concepto: string, nombre: string) => (nombre ? `${concepto} — ${nombre}` : concepto)
+  const items = e.porObjetivo?.length ? e.porObjetivo : [{ nombre: '', horas: e.horas, tarifas: e.tarifas, texto: e.textoRenglon ?? null }]
+  const mes = e.mes ?? e.periodo.desde.slice(0, 7)
+  // Con texto de renglón cargado en el contrato, ése es el concepto que se imprime (con el mes y el
+  // período completos); si el contrato separa diurnas y nocturnas, se aclara cuál es. Sin texto, el genérico.
+  const de = (concepto: string, it: { nombre: string; texto?: string | null }, aclaracion?: string) => {
+    const propio = textoRenglon(it.texto, { mes, periodo: e.periodo, objetivo: it.nombre })
+    if (propio) return aclaracion ? `${propio} (${aclaracion})` : propio
+    return it.nombre ? `${concepto} — ${it.nombre}` : concepto
+  }
 
   if (e.modalidad === 'abono') {
-    for (const it of items) agregarLinea(de('Abono mensual', it.nombre), null, tarifa(it.tarifas, 'abono'))
+    for (const it of items) agregarLinea(de('Abono mensual', it), null, tarifa(it.tarifas, 'abono'))
   } else {
     const h = e.horas
     if (!h || h.minutosTotales <= 0) {
@@ -184,11 +227,11 @@ export function calcularPrefactura(e: EntradaPrefactura): ResultadoPrefactura {
             calculable = false
             if (!requisitos.some(r => r.tipo === 'franja_nocturna')) requisitos.push({ tipo: 'franja_nocturna', detalle: 'El contrato separa horas diurnas y nocturnas, pero no tiene franja nocturna definida.' })
           } else {
-            if (hi.minutosDiurnos > 0) agregarLinea(de('Horas diurnas', it.nombre), hi.minutosDiurnos, tarifa(it.tarifas, 'hora_diurna'))
-            if (hi.minutosNocturnos > 0) agregarLinea(de('Horas nocturnas', it.nombre), hi.minutosNocturnos, tarifa(it.tarifas, 'hora_nocturna'))
+            if (hi.minutosDiurnos > 0) agregarLinea(de('Horas diurnas', it, 'horas diurnas'), hi.minutosDiurnos, tarifa(it.tarifas, 'hora_diurna'))
+            if (hi.minutosNocturnos > 0) agregarLinea(de('Horas nocturnas', it, 'horas nocturnas'), hi.minutosNocturnos, tarifa(it.tarifas, 'hora_nocturna'))
           }
         } else {
-          agregarLinea(de('Horas de vigilancia', it.nombre), hi.minutosTotales, tarifa(it.tarifas, 'hora'))
+          agregarLinea(de('Horas de vigilancia', it), hi.minutosTotales, tarifa(it.tarifas, 'hora'))
         }
       }
     }
@@ -365,7 +408,7 @@ export function tarifasParaObjetivo(todas: TarifaGuardada[], objetivoId: string 
  * y sólo el objetivo con abono propio lleva su renglón.
  */
 export function renglonesPorObjetivo(
-  objs: Array<{ objetivo_id: string; nombre: string }>, todas: TarifaGuardada[], modalidad: Modalidad,
+  objs: Array<{ objetivo_id: string; nombre: string; texto?: string | null }>, todas: TarifaGuardada[], modalidad: Modalidad,
   horasDe: (objetivoId: string) => HorasAprobadas | null,
 ): EntradaPrefactura['porObjetivo'] {
   if (objs.length < 2 || modalidad === 'presupuesto_anticipado') return undefined
@@ -375,11 +418,12 @@ export function renglonesPorObjetivo(
     if (!con.length) return undefined
     const sin = objs.filter(o => !con.includes(o))
     return [
-      ...con.map(o => ({ nombre: o.nombre, horas: null, tarifas: tarifasParaObjetivo(todas, o.objetivo_id) })),
+      ...con.map(o => ({ nombre: o.nombre, horas: null, tarifas: tarifasParaObjetivo(todas, o.objetivo_id), texto: o.texto ?? null })),
       ...(sin.length ? [{ nombre: sin.map(o => o.nombre).join(', '), horas: null, tarifas: tarifasParaObjetivo(todas, null) }] : []),
     ]
   }
-  return objs.map(o => ({ nombre: o.nombre, horas: horasDe(o.objetivo_id), tarifas: tarifasParaObjetivo(todas, o.objetivo_id) }))
+  // Un objetivo sin horas aprobadas en el período no lleva renglón (calcularPrefactura lo saltea).
+  return objs.map(o => ({ nombre: o.nombre, horas: horasDe(o.objetivo_id), tarifas: tarifasParaObjetivo(todas, o.objetivo_id), texto: o.texto ?? null }))
 }
 
 /**

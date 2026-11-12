@@ -72,6 +72,8 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
   const [notas, setNotas] = useState<Record<string, string>>({})
   const [verNota, setVerNota] = useState<string | null>(null)
   const [verTurnos, setVerTurnos] = useState<string | null>(null)
+  // Horas a facturar según la planilla del cliente (por objetivo), mientras se editan.
+  const [facturar, setFacturar] = useState<Record<string, { h: string; motivo: string }>>({})
   const [sel, setSel] = useState<string | null>(null)
   const [filtro, setFiltro] = useState('')
   const [calculando, setCalculando] = useState(false)
@@ -211,6 +213,8 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
               const reemplaza = f.objetivos.some(o => o.aprobada && !objetivoAlDia(o))
               const bloqueada = p && ['aprobada_emitir', 'emitida'].includes(p.estado)
               const aprobadas = f.objetivos.reduce((a, o) => a + (o.aprobada?.minutos_aprobados ?? 0), 0)
+              // Lo que se factura: las horas cargadas según planilla, si las hay; si no, las aceptadas.
+              const aFacturar = f.objetivos.reduce((a, o) => a + (o.aprobada ? (o.aprobada.minutos_facturar ?? o.aprobada.minutos_aprobados ?? 0) : 0), 0)
               const ev = estadoVisible(p)
               return (
                 <Fragment key={f.clave}>
@@ -218,7 +222,8 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                     <td style={S.td}>{f.cliente?.razon_social}<div style={S.sub}>{f.cliente?.cuit ?? 'sin CUIT'}</div></td>
                     <td style={S.td}>{f.nombre}{f.incluye.length > 0 && <div style={S.sub}>{f.incluye.join(' + ')}</div>}</td>
                     <td style={S.num}>{sinHoras(f) ? <span style={S.sub}>abono</span> : f.huerfana ? '—' : prop == null ? <span style={S.sub}>{f.objetivos.some(o => o.error) ? 'error' : '…'}</span> : <b>{horas(prop)} h</b>}
-                      {aprobadas > 0 && <div style={{ fontSize: 12, color: alDia ? '#4ade80' : '#fbbf24' }}>aceptadas {horas(aprobadas)} h</div>}</td>
+                      {aprobadas > 0 && <div style={{ fontSize: 12, color: alDia ? '#4ade80' : '#fbbf24' }}>aceptadas {horas(aprobadas)} h</div>}
+                      {aFacturar !== aprobadas && <div style={{ fontSize: 12, color: '#93c5fd' }}>se facturan {horas(aFacturar)} h (planilla)</div>}</td>
                     <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
                       {!sinHoras(f) && !f.huerfana && <>
                         <button style={alDia ? CHICO : { ...S.btn, padding: '3px 10px', fontSize: 12 }} disabled={ocupado || prop == null || alDia || Boolean(bloqueada) || !escribir} title={porQue} onClick={() => {
@@ -272,6 +277,33 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                                 </span>
                               })()}
                             </div>
+                            {o.aprobada && (() => {
+                              // Horas a facturar según la planilla del cliente. No cambia lo aceptado de Reportes
+                              // (liquidación y control siguen igual): sólo la cantidad del renglón, con motivo.
+                              const ap = o.aprobada as any
+                              const ed = facturar[k] ?? { h: ap.minutos_facturar != null ? String(ap.minutos_facturar / 60) : '', motivo: ap.facturar_motivo ?? '' }
+                              const guardar = (min: number | null) => correr(async () => {
+                                await rpc('fact_horas_facturar', { p_aprobacion_id: ap.id, p_minutos: min, p_motivo: min == null ? null : ed.motivo })
+                                const { [k]: _, ...resto } = facturar; setFacturar(resto)
+                                const r = await recalcular(mes, f.contratoId, setEsperando); await cargar(false)
+                                if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
+                              }, min == null ? 'Vuelven a facturarse las horas de Reportes' : 'Horas a facturar guardadas')
+                              return (
+                                <div style={{ ...S.fila, gap: 6, margin: '4px 0 8px', fontSize: 12 }}>
+                                  <span style={S.sub}>Horas a facturar (planilla):</span>
+                                  <input style={{ ...S.input, width: 80, padding: '3px 6px' }} inputMode="decimal" placeholder={String((ap.minutos_aprobados ?? 0) / 60)}
+                                    value={ed.h} onChange={e => setFacturar({ ...facturar, [k]: { ...ed, h: e.target.value } })} />
+                                  <input style={{ ...S.input, flex: 1, minWidth: 180, padding: '3px 6px' }} placeholder="Motivo (p. ej. según planilla del cliente)"
+                                    value={ed.motivo} onChange={e => setFacturar({ ...facturar, [k]: { ...ed, motivo: e.target.value } })} />
+                                  <button style={CHICO} disabled={ocupado || !escribir || Boolean(bloqueada) || !ed.h.trim()} title={porQue} onClick={() => {
+                                    const n = Number(ed.h.replace(',', '.'))
+                                    if (!Number.isFinite(n) || n < 0) { alert('Horas inválidas'); return }
+                                    guardar(Math.round(n * 60))
+                                  }}>Guardar</button>
+                                  {ap.minutos_facturar != null && <button style={CHICO} disabled={ocupado || !escribir || Boolean(bloqueada)} onClick={() => guardar(null)}>Usar Reportes</button>}
+                                </div>
+                              )
+                            })()}
                             {o.propuesta?.desvio?.hayDiferencia && <CambiosHoras contratoId={f.contratoId} objetivoId={o.objetivoId} mes={mes} estadoPrefactura={p?.estado ?? null} />}
                             {o.error ? <span style={S.err}>{o.error}</span> : o.propuesta ? <DetalleHoras h={o.propuesta.horas} trat={o.tratamiento} alCambiarTrat={t => setTrat({ ...trat, [k]: t })} /> : <span style={S.sub}>Calculando…</span>}
                           </div>

@@ -13,7 +13,7 @@ import { periodoFacturacion, servicioActivoEnPeriodo, type ReglaPeriodo } from '
 import { plazoPagoDias } from './vto-arca'
 import { horasDelObjetivo, minutosAprobables, type RegistroFacturable, type TurnoFacturable } from './horas'
 import {
-  agruparObjetivos, calcularPrefactura, clavePrestacion, estadoSugerido, objetivosEnOtraPrefactura, renglonesPorObjetivo, tarifasParaObjetivo, textoPrecargado,
+  agruparObjetivos, calcularPrefactura, clavePrestacion, estadoSugerido, minutosAFacturar, objetivosEnOtraPrefactura, renglonesPorObjetivo, tarifasParaObjetivo, textoPrecargado,
   type EntradaPrefactura, type HorasAprobadas, type Modalidad, type OrdenCompraEstado, type TarifaVigente, type TipoRequisito,
 } from './prefacturacion'
 import { proponerAsociaciones, type ClienteIdentidad, type ComprobanteAbierto, type RetencionDisponible } from './conciliacion'
@@ -191,9 +191,11 @@ export function tipoComprobanteDe(contrato?: number | null, cliente?: number | n
 /** Suma de las fotos de horas aprobadas (una por objetivo). */
 function fotoHoras(aps: any[]): HorasAprobadas {
   const sum = (c: string) => aps.reduce((a: number, x: any) => a + (Number(x[c]) || 0), 0)
-  const conClasif = aps.every((a: any) => a.minutos_diurnos != null && a.minutos_nocturnos != null)
+  // Con horas a facturar cargadas a mano no hay desglose diurno/nocturno (la base sólo lo admite en
+  // contratos que no separan): no se informa una clasificación que no suma lo facturado.
+  const conClasif = aps.every((a: any) => a.minutos_diurnos != null && a.minutos_nocturnos != null && a.minutos_facturar == null)
   return {
-    minutosTotales: sum('minutos_aprobados'), minutosProgramados: sum('minutos_programados'), minutosCubiertos: sum('minutos_cubiertos'),
+    minutosTotales: aps.reduce((s: number, a: any) => s + minutosAFacturar(a), 0), minutosProgramados: sum('minutos_programados'), minutosCubiertos: sum('minutos_cubiertos'),
     minutosDescubiertosNoFacturados: aps.filter((a: any) => a.tratamiento_descubiertos !== 'facturar').reduce((s: number, a: any) => s + Number(a.minutos_descubiertos || 0), 0),
     minutosDiurnos: conClasif ? sum('minutos_diurnos') : undefined, minutosNocturnos: conClasif ? sum('minutos_nocturnos') : undefined,
     fuentes: aps.map((a: any) => a.id),
@@ -267,15 +269,24 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         let horas = null as null | HorasAprobadas
         let porObjetivo: EntradaPrefactura['porObjetivo']
         const faltanAprobar: string[] = []
+        const avisosHoras: string[] = []
+        // Texto del renglón cuando el comprobante es de un solo objetivo (en los de varios va por objetivo).
+        const textoUnico = g.objs.length === 1 ? (g.objs[0].texto_renglon ?? null) : null
         if (objIds.length) {
           const { data: aps } = await db.from('fact_horas_aprobaciones').select('*').in('objetivo_id', objIds)
             .eq('periodo_desde', periodo.desde).eq('periodo_hasta_excl', periodo.hastaExclusivo).eq('estado', 'aprobada')
           for (const v of g.objs) if (!(aps ?? []).some((a: any) => a.objetivo_id === v.objetivo_id)) faltanAprobar.push(v.objetivo?.nombre ?? v.objetivo_id)
           if (aps?.length) horas = fotoHoras(aps)
-          porObjetivo = renglonesPorObjetivo(g.objs.map((v: any) => ({ objetivo_id: v.objetivo_id, nombre: nombreDe(v) })), tarifasAll ?? [], k.modalidad, id => {
+          porObjetivo = renglonesPorObjetivo(g.objs.map((v: any) => ({ objetivo_id: v.objetivo_id, nombre: nombreDe(v), texto: v.texto_renglon ?? null })), tarifasAll ?? [], k.modalidad, id => {
             const propias = (aps ?? []).filter((a: any) => a.objetivo_id === id)
             return propias.length ? fotoHoras(propias) : null
           })
+          // Horas facturadas según planilla y no según Reportes: se informa en la prefactura (no en la factura).
+          for (const a of aps ?? []) {
+            if (a.minutos_facturar == null || Number(a.minutos_facturar) === Number(a.minutos_aprobados)) continue
+            const v = g.objs.find((x: any) => x.objetivo_id === a.objetivo_id)
+            avisosHoras.push(`${v ? nombreDe(v) : 'Objetivo'}: se facturan ${Number(a.minutos_facturar) / 60} h según planilla (Reportes: ${Number(a.minutos_aprobados) / 60} h). ${a.facturar_motivo ?? ''}`.trim())
+          }
         }
 
         // OC / presupuesto que cubre el período (compartida: una sola fila).
@@ -339,8 +350,9 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
         const r = calcularPrefactura({
           modalidad, cuitReceptor: k.cliente?.cuit ?? null, periodo, horas, tarifas: tarifasCalc,
           ajustes: [], separarDiurnaNocturna: !!k.separar_diurna_nocturna, requiere: k.requisitos ?? [], cumplidos, oc, anticipoNeto: 0,
-          pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo,
+          pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo, textoRenglon: textoUnico, mes,
         })
+        r.avisos.push(...avisosHoras)
         if (faltanAprobar.length && modalidad !== 'abono') r.requisitos.push({ tipo: 'horas_aprobadas', detalle: `Faltan aprobar horas de: ${faltanAprobar.join(', ')}` })
         if (cambios?.length) r.avisos.push('Hay un cambio de tarifa dentro del período: revisar el precio aplicado.')
         if (!puntoVenta) r.avisos.push('Falta configurar el punto de venta Web Service: se puede aprobar, pero no emitir por ARCA.')
@@ -351,6 +363,7 @@ export async function generarPrefacturas(db: SupabaseClient, mes: string, hoy = 
             const r2 = calcularPrefactura({
               modalidad, cuitReceptor: k.cliente?.cuit ?? null, periodo, horas, tarifas: tarifasCalc, separarDiurnaNocturna: !!k.separar_diurna_nocturna,
               requiere: k.requisitos ?? [], cumplidos, oc, anticipoNeto: 0, pendientesComerciales: k.pendientes_comerciales ?? [], porObjetivo,
+              textoRenglon: textoUnico, mes,
               ajustes: ajs.map((a: any) => ({ id: a.id, descripcion: a.descripcion, importeNeto: Number(a.importe_neto_c), motivo: a.motivo, responsableId: a.creado_por, aprobado: !!a.aprobado_at })),
             })
             Object.assign(r, { lineas: r2.lineas, importes: r2.importes, avisos: [...r.avisos, ...r2.avisos.filter(x => !r.avisos.includes(x))] })
