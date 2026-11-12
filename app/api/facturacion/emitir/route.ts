@@ -70,13 +70,20 @@ export async function POST(req: NextRequest) {
 
   let emisionId: string | null = b.emision_id ?? null
   const porEmisionId = !!emisionId
-  // Fecha de emisión elegida por Gerencia (opcional; vacía = hoy). Rango de ARCA para servicios: hasta 10
-  // días atrás, no futura. Que no sea anterior al último autorizado se verifica contra ARCA al emitir.
+  // Fecha de emisión: la cargada en la prefactura (fecha_emision_prevista, 20261213120000) o, si no hay, hoy.
+  // Rango de ARCA para servicios: hasta 10 días atrás, no futura. Que no sea anterior al último autorizado se
+  // verifica contra ARCA al emitir. ('*': sin la migración la columna no existe y se emite con fecha de hoy.)
   const hoy = fechaArgentina()
-  const fechaEmision: string | null = !porEmisionId && b.fecha_emision ? String(b.fecha_emision) : null
+  let fechaEmision: string | null = null
+  if (!porEmisionId) {
+    const { data: pfFecha } = await c.usuario.from('fact_prefacturas').select('*').eq('id', b.prefactura_id).maybeSingle()
+    const prevista = (pfFecha as any)?.fecha_emision_prevista ?? null
+    fechaEmision = b.fecha_emision ? String(b.fecha_emision) : prevista
+    if (fechaEmision === hoy) fechaEmision = null
+  }
   if (fechaEmision) {
     const mal = validarFechaEmision(fechaEmision, hoy)
-    if (mal) return responder({ error: `${mal}. No se envió nada a ARCA.`, codigo: 'fecha_emision' }, 400)
+    if (mal) return responder({ error: `${mal}. Corregí la fecha de emisión de la prefactura. No se envió nada a ARCA.`, codigo: 'fecha_emision' }, 400)
   }
   if (!emisionId) {
     if (!['produccion', 'homologacion'].includes(b.ambiente)) return responder({ error: 'Ambiente inválido' }, 400)
