@@ -58,6 +58,25 @@ const MIG = `${REPO}/supabase/migrations/20261024120000_tareas_turno.sql`
 await db.exec(readFileSync(MIG, 'utf8'))
 await db.exec(readFileSync(MIG, 'utf8'))
 ok('Migración idempotente (corre dos veces)', true)
+// Producción corre con TimeZone = UTC (verificado 04/11/2026): las horas de
+// los turnos son hora argentina y sólo se comparan bien si se convierten.
+await db.exec(`set timezone = 'UTC'`)
+// 20261205200000: el panel compara la hora del turno en hora argentina.
+// SIN_FIX_HORA=1 la saltea para ver fallar las pruebas de «Hora AR».
+const MIG_HORA = `${REPO}/supabase/migrations/20261205200000_tareas_turno_panel_hora_ar.sql`
+if (process.env.SIN_FIX_HORA !== '1') {
+  await db.exec(readFileSync(MIG_HORA, 'utf8'))
+  await db.exec(readFileSync(MIG_HORA, 'utf8'))
+}
+// El turno del vigilador de Randstad abarca «ahora» (de 2 h atrás a 4 h
+// adelante, hora argentina). El prelude lo deja de 07 a 19 AR de hoy y la
+// tarea se activa con now(): corrida después de las 19 AR, la tarea ya no
+// aplicaba a ese turno y la prueba de supervisión fallaba según la hora.
+await sql(`update turnos set
+    fecha       = ((now() - interval '2 hours') at time zone 'America/Argentina/Buenos_Aires')::date,
+    hora_inicio = ((now() - interval '2 hours') at time zone 'America/Argentina/Buenos_Aires')::time,
+    hora_fin    = ((now() + interval '4 hours') at time zone 'America/Argentina/Buenos_Aires')::time
+  where guardia_id = $1 and objetivo_id = $2`, [VIG_ID, RANDSTAD])
 const huellaRondas = async () => (await sql(`select md5(coalesce((select string_agg(r::text,'|' order by id) from rondas_base r),'') || coalesce((select string_agg(p::text,'|' order by id) from ronda_puntos p),'')) h`))[0].h
 const rondasAntes = await huellaRondas()
 
@@ -198,6 +217,47 @@ await como(VIG, async () => {
   const t = (await rpc('tareas_turno_mias')).turnos.find(x => x.turno_id === turnoVig)
   ok('Vigilador: la tarea desactivada sigue visible sólo porque ya la registró', t.tareas.length === 1 && t.tareas[0].registro.estado === 'hecha')
 })
+
+// ── Hora argentina en el panel (20261205200000) ───────────────────────────
+// Turnos y tareas cargados directo (como superusuario) con horas fijas, para
+// que el resultado no dependa de la hora en que se corre la prueba.
+const OBJ3 = '790807dd-8283-4e6e-90bc-832226d016df'
+const HOY = `((now() at time zone 'America/Argentina/Buenos_Aires')::date)`
+const turnoHora = async (guardia, obj, dias, ini, fin) => (await sql(
+  `insert into turnos (guardia_id, objetivo_id, fecha, hora_inicio, hora_fin, estado)
+   values ($1, $2, ${HOY} + $3::int, $4::time, $5::time, 'programado') returning id`, [guardia, obj, dias, ini, fin]))[0].id
+const defHora = (obj, texto, dias, hora, desactDias = null, desactHora = null) => sql(
+  `insert into tareas_turno_definiciones (objetivo_id, momento, texto, activado_at, activo, desactivado_at, desactivado_por, motivo_desactivacion)
+   values ($1, 'durante', $2, ((${HOY} + $3::int) + $4::time) at time zone 'America/Argentina/Buenos_Aires',
+           $5::int is null,
+           case when $5::int is null then null else ((${HOY} + $5::int) + $6::time) at time zone 'America/Argentina/Buenos_Aires' end,
+           case when $5::int is null then null else $7::uuid end,
+           case when $5::int is null then null else 'prueba hora' end)`, [obj, texto, dias, hora, desactDias, desactHora, VIG_ID])
+const turnoDia = await turnoHora('00000000-0000-0000-0000-000000002007', CASONA, -1, '07:00', '19:00')
+const turnoNoche = await turnoHora('00000000-0000-0000-0000-000000002007', CASONA, -1, '22:00', '06:00')
+const turnoDesact = await turnoHora('00000000-0000-0000-0000-000000002009', OBJ3, -1, '07:00', '19:00')
+await defHora(CASONA, 'Hora AR: activada ayer 17:30', -1, '17:30')                // aplica al de día y al de noche
+await defHora(CASONA, 'Hora AR: activada ayer 19:30', -1, '19:30')                // sólo al de noche
+await defHora(CASONA, 'Hora AR: activada hoy 05:00', 0, '05:00')                  // sólo al de noche (termina hoy 06:00)
+await defHora(OBJ3, 'Hora AR: desactivada ayer 05:00', -3, '10:00', -1, '05:00')  // antes del turno de las 07
+const panelHora = () => como(GER, async () => ({
+  casona: (await rpc('tareas_turno_panel', [CASONA, 7])).turnos,
+  obj3: (await rpc('tareas_turno_panel', [OBJ3, 7])).turnos,
+}))
+{
+  const p = await panelHora()
+  const dia = p.casona.find(x => x.turno_id === turnoDia), noche = p.casona.find(x => x.turno_id === turnoNoche)
+  const d3 = p.obj3.find(x => x.turno_id === turnoDesact)
+  ok('Hora AR: tarea activada 17:30 AR aplica al turno 07-19 AR (y no las de después)', dia?.aplicables === 1, JSON.stringify(dia?.aplicables ?? null))
+  ok('Hora AR: turno 22-06 AR cuenta la tarea activada a las 05 AR del día siguiente', noche?.aplicables === 3, JSON.stringify(noche?.aplicables ?? null))
+  ok('Hora AR: tarea desactivada 05 AR no cuenta para el turno de las 07 AR', d3 === undefined || d3.aplicables === 0, JSON.stringify(d3?.aplicables ?? null))
+}
+if (process.env.SIN_FIX_HORA !== '1') {
+  await db.exec(readFileSync(`${REPO}/supabase/rollback/20261205200000_tareas_turno_panel_hora_ar_rollback.sql`, 'utf8'))
+  const dia = (await panelHora()).casona.find(x => x.turno_id === turnoDia)
+  ok('Rollback 20261205200000: vuelve a la definición anterior (compara como UTC)', dia === undefined || dia.aplicables === 0, JSON.stringify(dia?.aplicables ?? null))
+  await db.exec(readFileSync(MIG_HORA, 'utf8'))
+}
 
 // ── Lo que no se toca ───────────────────────────────────────────────────────
 ok('Rondas y puntos intactos', (await huellaRondas()) === rondasAntes)
