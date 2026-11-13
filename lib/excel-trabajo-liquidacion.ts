@@ -613,10 +613,21 @@ export async function plantillaTrabajoDelMes(
   // horas y días), pero sus conceptos los paga la final (JC 21/10).
   if (!rec) {
     try {
-      const { data: finales } = await client.from('liquidacion_final').select('estado, mes, baja:baja_laboral(empleado_id)').eq('mes', mes).neq('estado', 'anulada')
+      // Bajas que salen del mensual (se pagan por la final): las que YA tienen
+      // final de este mes (conceptos cargados) y, además (JC 13/11), TODA baja
+      // confirmada que todavía no tiene final hecha → va al bloque marcada como
+      // pendiente, para que no se le pague el sueldo/extra mensual mientras tanto.
+      const [{ data: finales }, { data: bajasConf }] = await Promise.all([
+        client.from('liquidacion_final').select('estado, mes, baja:baja_laboral(empleado_id)').eq('mes', mes).neq('estado', 'anulada'),
+        client.from('baja_laboral').select('empleado_id').eq('estado', 'confirmada'),
+      ])
       const conFinal = new Set(((finales ?? []) as any[]).map(x => x?.baja?.empleado_id).filter(Boolean).map(String))
-      for (const f of resumen.filas) if (conFinal.has(f.empleadoId)) f.bajaConFinal = true
-    } catch { /* sin acceso a las finales: quedan en su bloque de siempre */ }
+      const bajaConfirmada = new Set(((bajasConf ?? []) as any[]).map(x => String(x.empleado_id)).filter(Boolean))
+      for (const f of resumen.filas) {
+        if (conFinal.has(f.empleadoId)) f.bajaConFinal = true
+        else if (bajaConfirmada.has(f.empleadoId)) { f.bajaConFinal = true; f.finalPendiente = true }
+      }
+    } catch { /* sin acceso a las bajas/finales: quedan en su bloque de siempre */ }
   }
 
   // Recorte de una baja sin actividad en el mes: no es un error (no hay ordinarios).

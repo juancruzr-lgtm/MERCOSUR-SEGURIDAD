@@ -404,6 +404,12 @@ export interface FilaResumenGuardia {
    * conceptos ya los paga la final: no entran al consolidado ni a las extras.
    */
   bajaConFinal?: boolean
+  /**
+   * Baja confirmada del mes a la que TODAVÍA no se le hizo la liquidación final
+   * (JC 13/11): también sale del mensual y va al bloque de bajas, pero marcada
+   * como pendiente para completarla cuando se cargue la final.
+   */
+  finalPendiente?: boolean
   /** Trazabilidad: qué datos de MERCOSUR originaron la fila. */
   origen: {
     turnoIds: string[]
@@ -1232,7 +1238,11 @@ export function plantillaLiquidacionResumenGuardia(
       const t = tx[`${CLAVE_TEXTO}${col}`]; return t === undefined ? base : (t ?? '')
     }
     put(`D${r}`, texto('D', fila.nombre))
-    put(`E${r}`, texto('E', fila.notas.join(' · ')))
+    // Baja aún sin liquidación final: se marca en la fila para que se vea que el
+    // detalle de la final todavía está pendiente de cargar.
+    const notasBase = fila.notas.join(' · ')
+    const notasFila = fila.finalPendiente ? [notasBase, 'BAJA — FINAL PENDIENTE'].filter(Boolean).join(' · ') : notasBase
+    put(`E${r}`, texto('E', notasFila))
     put(`F${r}`, texto('F', fila.objetivos.join('/')))
     // Ajustes de liquidación (LIQ2C): overrides por empleado sobre las columnas
     // de ENTRADA. Sin ajuste → valor base idéntico al de siempre (el archivo de
@@ -1477,12 +1487,14 @@ export function plantillaLiquidacionResumenGuardia(
     r += 2 // subtotal + fila separadora vacía
   }
 
-  // BLOQUE 4 — bajas con liquidación final del mes (JC 21/10): salen todos los que
-  // trabajaron, juntos, y suman horas y días al TOTAL GENERAL. Sólo si hay alguna.
+  // BLOQUE 4 — liquidaciones / bajas del mes (JC 21/10 y 13/11): salen todas las
+  // bajas del mes (tengan o no la final hecha), juntas, y suman horas y días al
+  // TOTAL GENERAL. Sus conceptos los paga la final: no entran al mensual. Las que
+  // aún no tienen final van marcadas "FINAL PENDIENTE". Sólo si hay alguna.
   const filasBajaFinal: number[] = []
   const bajas = resumen.filas.filter(f => f.bajaConFinal)
   if (bajas.length) {
-    put(`A${r}`, 'BLOQUE 4 - BAJAS CON LIQUIDACIÓN FINAL (ya liquidadas: no se exportan en el mensual)')
+    put(`A${r}`, 'BLOQUE 4 - LIQUIDACIONES / BAJAS DEL MES (se pagan por la liquidación final: no entran al mensual)')
     titulos.push(r)
     r += 1
     const primeraDato = r

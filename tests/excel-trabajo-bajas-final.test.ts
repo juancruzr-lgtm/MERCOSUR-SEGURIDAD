@@ -27,7 +27,7 @@ describe('Excel de trabajo del mes: bajas con liquidación final', () => {
 
   it('las bajas salen juntas en el BLOQUE 4 y el activo queda en su bloque', () => {
     const titulo = pl.estilos.titulos[pl.estilos.titulos.length - 1]
-    expect(String(v.get(`A${titulo}`)?.v)).toMatch(/^BLOQUE 4 - BAJAS CON LIQUIDACIÓN FINAL/)
+    expect(String(v.get(`A${titulo}`)?.v)).toMatch(/^BLOQUE 4 - LIQUIDACIONES \/ BAJAS DEL MES/)
     expect(filaDe('b1')).toBeGreaterThan(titulo)
     expect(filaDe('b2')).toBeGreaterThan(titulo)
     expect(filaDe('v1')).toBeLessThan(pl.estilos.titulos[1])
@@ -50,6 +50,21 @@ describe('Excel de trabajo del mes: bajas con liquidación final', () => {
     const extras = extrasDePlantilla(pl)
     expect(extras.has('v1')).toBe(true)
     expect(extras.has('b2')).toBe(false)
+  })
+
+  it('una baja confirmada SIN final todavía va al bloque, sale del mensual y queda marcada FINAL PENDIENTE', () => {
+    const plp = plantillaLiquidacionResumenGuardia(resumen([
+      fila('v1', 'ACTIVO, UNO'),
+      fila('p1', 'PENDIENTE, UNO', { bajaConFinal: true, finalPendiente: true, jornadas: 7, horasLiquidables: 100 }),
+    ]), undefined, undefined, undefined, PARAMETROS_PLANTILLA)
+    const vp = new Map(plp.celdas.map(c => [c.ref, c]))
+    const filaP = Number(plp.celdas.find(c => /^BD\d+$/.test(c.ref) && c.v === 'p1')!.ref.slice(2))
+    // va en el bloque de bajas (fuera del mensual)…
+    expect(plp.estilos.filasBajaFinal).toContain(filaP)
+    expect(extrasDePlantilla(plp).has('p1')).toBe(false)
+    expect(new Set(filasConsolidadasDePlantilla(plp).map(c => c.empleado_id))).toEqual(new Set(['v1']))
+    // …y su fila avisa que la final está pendiente de cargar.
+    expect(String(vp.get(`E${filaP}`)?.v)).toContain('FINAL PENDIENTE')
   })
 
   it('sin bajas el Excel no cambia (no aparece el bloque 4)', () => {
