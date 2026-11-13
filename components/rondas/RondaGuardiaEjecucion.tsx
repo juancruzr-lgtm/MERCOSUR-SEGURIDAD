@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { mensajeErrorFoto, prepararFotoOperativa } from '@/lib/comprimir-imagen'
 import {
   etiquetaPoliticaFoto,
-  fotoEsObligatoriaEnVisita,
+  fotoControlPedidaEnVisita,
+  fotoEsObligatoria,
   mensajeContextoRegistrarPunto,
   registrarPuntoRonda,
   subirFotoPuntoRonda,
@@ -238,12 +239,10 @@ export default function RondaGuardiaEjecucion({
 
   // Misma regla que aplica el servidor. Se recalcula al marcar la novedad:
   // con política `solo_novedad` es esa marca la que vuelve obligatoria una foto
-  // que hasta recién no se pedía. La foto de control por reincidencia GPS viene
-  // congelada en el snapshot y se suma como OR sin tocar la política.
+  // que hasta recién no se pedía.
   const politicaFoto = puntoActual?.politica_foto ?? 'obligatoria'
-  const fotoControlGps = puntoActual?.foto_control_gps ?? false
   const fotoObligatoria = puntoActual != null
-    && fotoEsObligatoriaEnVisita(politicaFoto, hayNovedad, fotoControlGps)
+    && fotoEsObligatoria(politicaFoto, hayNovedad)
 
   // QR del punto: el modo y la disponibilidad de credencial vienen congelados/
   // resueltos por el servidor. Sin credencial activa la exigencia no aplica
@@ -251,6 +250,12 @@ export default function RondaGuardiaEjecucion({
   const qrModo = puntoActual?.qr_modo ?? 'desactivado'
   const qrDisponible = puntoActual?.qr_disponible ?? false
   const qrVerificado = puntoActual?.qr_verificado ?? false
+
+  // Foto de control por reincidencia GPS: viene congelada en el snapshot. Se
+  // PIDE (aviso + etiqueta) pero NO bloquea el registro; con QR verificado ya
+  // no se pide. El servidor tampoco la exige.
+  const fotoControlGps = puntoActual != null
+    && fotoControlPedidaEnVisita(puntoActual.foto_control_gps ?? false, qrVerificado)
   const qrOfrecido = qrOfrecidoEnVisita(qrModo, qrDisponible)
   const qrExigible = qrExigibleEnVisita(qrModo, qrDisponible)
 
@@ -352,12 +357,11 @@ export default function RondaGuardiaEjecucion({
       setError('Primero intentá obtener la ubicación.')
       return
     }
+    // La foto de control por reincidencia GPS no entra acá: se pide, no traba.
     if (fotoObligatoria && !foto) {
-      setError(fotoControlGps && politicaFoto !== 'obligatoria'
-        ? MENSAJE_FOTO_CONTROL_GPS
-        : hayNovedad && politicaFoto === 'solo_novedad'
-          ? 'Marcaste que hay una novedad: la foto pasa a ser obligatoria.'
-          : 'Este punto requiere una foto antes de continuar.')
+      setError(hayNovedad && politicaFoto === 'solo_novedad'
+        ? 'Marcaste que hay una novedad: la foto pasa a ser obligatoria.'
+        : 'Este punto requiere una foto antes de continuar.')
       return
     }
 
@@ -534,7 +538,7 @@ export default function RondaGuardiaEjecucion({
             {etiquetaPoliticaFoto(politicaFoto)}
           </span>
           {fotoControlGps && (
-            <span style={{ ...S.regla, ...S.reglaControl }}>Foto de control</span>
+            <span style={{ ...S.regla, ...S.reglaControl }}>Foto de control pedida</span>
           )}
           {puntoActual.radio_metros != null && (
             <span style={{ ...S.regla, ...S.reglaOpcional }}>Radio {puntoActual.radio_metros} m</span>
