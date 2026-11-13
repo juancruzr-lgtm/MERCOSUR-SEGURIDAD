@@ -6043,84 +6043,6 @@ function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, obje
   }
 
   const [registroAnulando, setRegistroAnulando] = useState<RegistroAsistencia | null>(null)
-  const [motivoAnulacion, setMotivoAnulacion] = useState('')
-  const [anulando, setAnulando] = useState(false)
-
-  const anularRegistroManual = async () => {
-    if (!registroAnulando || !motivoAnulacion.trim()) return
-    setAnulando(true)
-    try {
-      const { error } = await supabase.rpc('anular_registro_manual', {
-        p_registro_id: registroAnulando.id,
-        p_motivo: motivoAnulacion.trim(),
-      })
-      if (error) throw error
-      setRegistros((prev: RegistroAsistencia[]) =>
-        prev.filter((r: RegistroAsistencia) => r.id !== registroAnulando.id)
-      )
-      setRegistroAnulando(null)
-      setMotivoAnulacion('')
-    } catch (e: any) {
-      alert(e.message || 'Error al anular')
-    } finally {
-      setAnulando(false)
-    }
-  }
-
-  const [registroEditandoManual, setRegistroEditandoManual] = useState<RegistroAsistencia | null>(null)
-  const [formEditManual, setFormEditManual] = useState({ fecha: '', objetivo_id: '', hora_inicio: '', hora_fin: '', motivo: '' })
-  const [editandoManual, setEditandoManual] = useState(false)
-
-  const abrirEdicionManual = (reg: RegistroAsistencia) => {
-    const turno = turnos.find((t: Turno) => t.id === reg.turno_id)
-    setRegistroEditandoManual(reg)
-    setFormEditManual({
-      fecha: turno?.fecha || '',
-      objetivo_id: (reg as any).objetivo_final_id ?? turno?.objetivo_id ?? '',
-      hora_inicio: turno?.hora_inicio?.slice(0, 5) || '',
-      hora_fin: turno?.hora_fin?.slice(0, 5) || '',
-      motivo: '',
-    })
-  }
-
-  const guardarEdicionManual = async () => {
-    if (!registroEditandoManual || !formEditManual.motivo.trim()) return
-    setEditandoManual(true)
-    const turno = turnos.find((t: Turno) => t.id === registroEditandoManual.turno_id)
-    if (!turno) { setEditandoManual(false); return }
-    try {
-      const cambioFecha = formEditManual.fecha !== turno.fecha
-      const cambioHorario = formEditManual.hora_inicio !== turno.hora_inicio?.slice(0, 5) || formEditManual.hora_fin !== turno.hora_fin?.slice(0, 5)
-      const cambioObjetivo = formEditManual.objetivo_id !== ((registroEditandoManual as any).objetivo_final_id ?? turno.objetivo_id)
-
-      if (!cambioFecha && !cambioHorario && !cambioObjetivo) {
-        setRegistroEditandoManual(null)
-        return
-      }
-
-      const { data, error } = await supabase.rpc('corregir_turno_manual_operativo', {
-        p_operacion_id: crypto.randomUUID(),
-        p_registro_id: registroEditandoManual.id,
-        p_fecha: cambioFecha ? formEditManual.fecha : null,
-        p_hora_inicio: cambioHorario ? formEditManual.hora_inicio + ':00' : null,
-        p_hora_fin: cambioHorario ? formEditManual.hora_fin + ':00' : null,
-        p_objetivo_id: cambioObjetivo ? formEditManual.objetivo_id : null,
-        p_motivo: formEditManual.motivo.trim(),
-      })
-      if (error) throw error
-
-      const resultado = data as { turno: { id: string; fecha: string; hora_inicio: string; hora_fin: string; objetivo_id: string }; registro: { id: string; horas_liquidables: number } }
-      setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, fecha: resultado.turno.fecha, hora_inicio: resultado.turno.hora_inicio, hora_fin: resultado.turno.hora_fin, objetivo_id: resultado.turno.objetivo_id } : t))
-      setRegistros((prev: RegistroAsistencia[]) =>
-        prev.map((r: RegistroAsistencia) => r.id === registroEditandoManual.id ? { ...r, horas_liquidables: resultado.registro.horas_liquidables, objetivo_final_id: cambioObjetivo ? formEditManual.objetivo_id : (r as any).objetivo_final_id } : r)
-      )
-      setRegistroEditandoManual(null)
-    } catch (e: any) {
-      alert(e.message || 'Error al guardar')
-    } finally {
-      setEditandoManual(false)
-    }
-  }
 
   const [verEvidencias, setVerEvidencias] = useState<string | null>(null)
   const [evidenciasPorRegistro, setEvidenciasPorRegistro] = useState<Record<string, EvidenciaAdmin[]>>({})
@@ -6609,10 +6531,10 @@ function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, obje
                           >
                             Corregir
                           </button>
-                          {r.tipo_registro === 'carga_manual' && !(r as any).registro_anulado_at && (
+                          {(r.tipo_registro === 'carga_manual' || r.tipo_registro === 'fichaje_gps') && !(r as any).registro_anulado_at && (
                             <button
                               style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#7f1d1d', color:'#fca5a5', border:'1px solid #991b1b' }}
-                              onClick={() => { setRegistroAnulando(r); setMotivoAnulacion('') }}
+                              onClick={() => setRegistroAnulando(r)}
                             >
                               Anular
                             </button>
@@ -6694,82 +6616,172 @@ function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, obje
       )}
 
       {registroAnulando && (
-        <Modal title="Anular registro manual" onClose={() => setRegistroAnulando(null)}>
-          <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
-            Esta acción anulará lógicamente el registro de carga manual. Las horas liquidables pasarán a 0. La operación queda registrada en auditoría.
-          </div>
-          <div style={{ marginBottom: 12 }}>
-            <label style={S.label}>Motivo de anulación *</label>
-            <textarea
-              style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
-              value={motivoAnulacion}
-              onChange={e => setMotivoAnulacion(e.target.value)}
-              placeholder="Ingrese el motivo de la anulación..."
-            />
-          </div>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setRegistroAnulando(null)}>Cancelar</button>
-            <button
-              style={{ ...S.btn, background: '#991b1b', color: '#fca5a5', border: '1px solid #7f1d1d', opacity: !motivoAnulacion.trim() || anulando ? 0.5 : 1 }}
-              disabled={!motivoAnulacion.trim() || anulando}
-              onClick={anularRegistroManual}
-            >
-              {anulando ? 'Anulando...' : 'Confirmar anulación'}
-            </button>
-          </div>
-        </Modal>
-      )}
-
-      {registroEditandoManual && (
-        <Modal title="Editar registro manual" onClose={() => setRegistroEditandoManual(null)}>
-          <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
-            Corrección de registro de carga manual. Los cambios quedan registrados en auditoría.
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-            <div>
-              <label style={S.label}>Fecha *</label>
-              <input type="date" style={S.input} value={formEditManual.fecha} onChange={e => setFormEditManual({ ...formEditManual, fecha: e.target.value })} />
-            </div>
-            <div>
-              <label style={S.label}>Objetivo</label>
-              <select style={S.select} value={formEditManual.objetivo_id} onChange={e => setFormEditManual({ ...formEditManual, objetivo_id: e.target.value })}>
-                <option value="">— Sin objetivo —</option>
-                {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
-              </select>
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-            <div>
-              <label style={S.label}>Hora inicio</label>
-              <input type="time" style={S.input} value={formEditManual.hora_inicio} onChange={e => setFormEditManual({ ...formEditManual, hora_inicio: e.target.value })} />
-            </div>
-            <div>
-              <label style={S.label}>Hora fin</label>
-              <input type="time" style={S.input} value={formEditManual.hora_fin} onChange={e => setFormEditManual({ ...formEditManual, hora_fin: e.target.value })} />
-            </div>
-          </div>
-          <div style={{ marginBottom: 12 }}>
-            <label style={S.label}>Motivo de corrección *</label>
-            <textarea
-              style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
-              value={formEditManual.motivo}
-              onChange={e => setFormEditManual({ ...formEditManual, motivo: e.target.value })}
-              placeholder="Ingrese el motivo de la corrección..."
-            />
-          </div>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setRegistroEditandoManual(null)}>Cancelar</button>
-            <button
-              style={{ ...S.btn, ...S.btnPrimary, opacity: !formEditManual.motivo.trim() || !formEditManual.fecha || editandoManual ? 0.5 : 1 }}
-              disabled={!formEditManual.motivo.trim() || !formEditManual.fecha || editandoManual}
-              onClick={guardarEdicionManual}
-            >
-              {editandoManual ? 'Guardando...' : 'Guardar cambios'}
-            </button>
-          </div>
-        </Modal>
+        <AnularRegistroModal registro={registroAnulando} onClose={() => setRegistroAnulando(null)} setRegistros={setRegistros} />
       )}
     </div>
+  )
+}
+
+// Anulación de un registro (carga manual o fichaje GPS). Compartido por Asistencia y Reportes.
+function AnularRegistroModal({ registro, onClose, setRegistros }: { registro: RegistroAsistencia; onClose: () => void; setRegistros: any }) {
+  const registroAnulando = registro
+  const setRegistroAnulando = (_: null) => onClose()
+  const [motivoAnulacion, setMotivoAnulacion] = useState('')
+  const [anulando, setAnulando] = useState(false)
+
+  const anularRegistroManual = async () => {
+    const esGps = registroAnulando?.tipo_registro === 'fichaje_gps'
+    if (!registroAnulando || motivoAnulacion.trim().length < (esGps ? 10 : 1)) return
+    setAnulando(true)
+    try {
+      const { error } = await supabase.rpc(esGps ? 'anular_fichaje_gps' : 'anular_registro_manual', {
+        p_registro_id: registroAnulando.id,
+        p_motivo: motivoAnulacion.trim(),
+      })
+      if (error) throw error
+      setRegistros((prev: RegistroAsistencia[]) =>
+        prev.filter((r: RegistroAsistencia) => r.id !== registroAnulando.id)
+      )
+      setRegistroAnulando(null)
+      setMotivoAnulacion('')
+    } catch (e: any) {
+      alert(e.message || 'Error al anular')
+    } finally {
+      setAnulando(false)
+    }
+  }
+
+  return (
+    <Modal title={registroAnulando.tipo_registro === 'fichaje_gps' ? 'Anular fichaje GPS' : 'Anular registro manual'} onClose={() => setRegistroAnulando(null)}>
+      <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+        {registroAnulando.tipo_registro === 'fichaje_gps'
+          ? 'Usalo sólo si el turno no se trabajó (por ejemplo, fichaje hecho fuera del objetivo en un turno cancelado). El vigilador deja de cobrar esas horas y el turno deja de facturarse. El fichaje, sus horarios y coordenadas se conservan como historial y la operación queda en auditoría.'
+          : 'Esta acción anulará lógicamente el registro de carga manual. Las horas liquidables pasarán a 0. La operación queda registrada en auditoría.'}
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>{registroAnulando.tipo_registro === 'fichaje_gps' ? 'Motivo de anulación * (mínimo 10 caracteres)' : 'Motivo de anulación *'}</label>
+        <textarea
+          style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
+          value={motivoAnulacion}
+          onChange={e => setMotivoAnulacion(e.target.value)}
+          placeholder="Ingrese el motivo de la anulación..."
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setRegistroAnulando(null)}>Cancelar</button>
+        <button
+          style={{ ...S.btn, background: '#991b1b', color: '#fca5a5', border: '1px solid #7f1d1d', opacity: motivoAnulacion.trim().length < (registroAnulando.tipo_registro === 'fichaje_gps' ? 10 : 1) || anulando ? 0.5 : 1 }}
+          disabled={motivoAnulacion.trim().length < (registroAnulando.tipo_registro === 'fichaje_gps' ? 10 : 1) || anulando}
+          onClick={anularRegistroManual}
+        >
+          {anulando ? 'Anulando...' : 'Confirmar anulación'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+// Edición de un registro de carga manual (fecha, horario, objetivo). Compartido por Asistencia y Reportes.
+function EditarRegistroManualModal({ registro, onClose, turnos, setTurnos, setRegistros, objetivos }: { registro: RegistroAsistencia; onClose: () => void; turnos: Turno[]; setTurnos: any; setRegistros: any; objetivos: Objetivo[] }) {
+  const registroEditandoManual = registro
+  const setRegistroEditandoManual = (_: null) => onClose()
+  const turnoInicial = turnos.find((t: Turno) => t.id === registro.turno_id)
+  const [formEditManual, setFormEditManual] = useState({
+    fecha: turnoInicial?.fecha || '',
+    objetivo_id: (registro as any).objetivo_final_id ?? turnoInicial?.objetivo_id ?? '',
+    hora_inicio: turnoInicial?.hora_inicio?.slice(0, 5) || '',
+    hora_fin: turnoInicial?.hora_fin?.slice(0, 5) || '',
+    motivo: '',
+  })
+  const [editandoManual, setEditandoManual] = useState(false)
+
+  const guardarEdicionManual = async () => {
+    if (!registroEditandoManual || !formEditManual.motivo.trim()) return
+    setEditandoManual(true)
+    const turno = turnos.find((t: Turno) => t.id === registroEditandoManual.turno_id)
+    if (!turno) { setEditandoManual(false); return }
+    try {
+      const cambioFecha = formEditManual.fecha !== turno.fecha
+      const cambioHorario = formEditManual.hora_inicio !== turno.hora_inicio?.slice(0, 5) || formEditManual.hora_fin !== turno.hora_fin?.slice(0, 5)
+      const cambioObjetivo = formEditManual.objetivo_id !== ((registroEditandoManual as any).objetivo_final_id ?? turno.objetivo_id)
+
+      if (!cambioFecha && !cambioHorario && !cambioObjetivo) {
+        setRegistroEditandoManual(null)
+        return
+      }
+
+      const { data, error } = await supabase.rpc('corregir_turno_manual_operativo', {
+        p_operacion_id: crypto.randomUUID(),
+        p_registro_id: registroEditandoManual.id,
+        p_fecha: cambioFecha ? formEditManual.fecha : null,
+        p_hora_inicio: cambioHorario ? formEditManual.hora_inicio + ':00' : null,
+        p_hora_fin: cambioHorario ? formEditManual.hora_fin + ':00' : null,
+        p_objetivo_id: cambioObjetivo ? formEditManual.objetivo_id : null,
+        p_motivo: formEditManual.motivo.trim(),
+      })
+      if (error) throw error
+
+      const resultado = data as { turno: { id: string; fecha: string; hora_inicio: string; hora_fin: string; objetivo_id: string }; registro: { id: string; horas_liquidables: number } }
+      setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, fecha: resultado.turno.fecha, hora_inicio: resultado.turno.hora_inicio, hora_fin: resultado.turno.hora_fin, objetivo_id: resultado.turno.objetivo_id } : t))
+      setRegistros((prev: RegistroAsistencia[]) =>
+        prev.map((r: RegistroAsistencia) => r.id === registroEditandoManual.id ? { ...r, horas_liquidables: resultado.registro.horas_liquidables, objetivo_final_id: cambioObjetivo ? formEditManual.objetivo_id : (r as any).objetivo_final_id } : r)
+      )
+      setRegistroEditandoManual(null)
+    } catch (e: any) {
+      alert(e.message || 'Error al guardar')
+    } finally {
+      setEditandoManual(false)
+    }
+  }
+
+  return (
+    <Modal title="Editar registro manual" onClose={() => setRegistroEditandoManual(null)}>
+      <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+        Corrección de registro de carga manual. Los cambios quedan registrados en auditoría.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Fecha *</label>
+          <input type="date" style={S.input} value={formEditManual.fecha} onChange={e => setFormEditManual({ ...formEditManual, fecha: e.target.value })} />
+        </div>
+        <div>
+          <label style={S.label}>Objetivo</label>
+          <select style={S.select} value={formEditManual.objetivo_id} onChange={e => setFormEditManual({ ...formEditManual, objetivo_id: e.target.value })}>
+            <option value="">— Sin objetivo —</option>
+            {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Hora inicio</label>
+          <input type="time" style={S.input} value={formEditManual.hora_inicio} onChange={e => setFormEditManual({ ...formEditManual, hora_inicio: e.target.value })} />
+        </div>
+        <div>
+          <label style={S.label}>Hora fin</label>
+          <input type="time" style={S.input} value={formEditManual.hora_fin} onChange={e => setFormEditManual({ ...formEditManual, hora_fin: e.target.value })} />
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Motivo de corrección *</label>
+        <textarea
+          style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
+          value={formEditManual.motivo}
+          onChange={e => setFormEditManual({ ...formEditManual, motivo: e.target.value })}
+          placeholder="Ingrese el motivo de la corrección..."
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button style={{ ...S.btn, ...S.btnSecondary }} onClick={() => setRegistroEditandoManual(null)}>Cancelar</button>
+        <button
+          style={{ ...S.btn, ...S.btnPrimary, opacity: !formEditManual.motivo.trim() || !formEditManual.fecha || editandoManual ? 0.5 : 1 }}
+          disabled={!formEditManual.motivo.trim() || !formEditManual.fecha || editandoManual}
+          onClick={guardarEdicionManual}
+        >
+          {editandoManual ? 'Guardando...' : 'Guardar cambios'}
+        </button>
+      </div>
+    </Modal>
   )
 }
 
@@ -6955,6 +6967,8 @@ function Novedades({ novedades, setNovedades, guardias, objetivos, filtroActivo,
 
 function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objetivos, novedades, supervisorZonas = [], filtroActivo, limpiarFiltro, user }: any) {
   const [registroCorrigiendo, setRegistroCorrigiendo] = useState<RegistroAsistencia | null>(null)
+  const [registroAnulando, setRegistroAnulando] = useState<RegistroAsistencia | null>(null)
+  const [registroEditandoManual, setRegistroEditandoManual] = useState<RegistroAsistencia | null>(null)
   const [turnoParaCargaManual, setTurnoParaCargaManual] = useState<Turno | null>(null)
   const [agregarRegistroContexto, setAgregarRegistroContexto] = useState<{ empleadoId?: string; objetivoId?: string } | null>(null)
   const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
@@ -8514,15 +8528,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
                           <button
                             style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#1e40af', color:'#93c5fd', border:'1px solid #1d4ed8' }}
-                            onClick={() => abrirEdicionManual(row._registro)}
+                            onClick={() => setRegistroEditandoManual(row._registro)}
                           >
                             Editar
                           </button>
                         )}
-                        {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
+                        {(row._registro.tipo_registro === 'carga_manual' || row._registro.tipo_registro === 'fichaje_gps') && !row._registro.registro_anulado_at && (
                           <button
                             style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#7f1d1d', color:'#fca5a5', border:'1px solid #991b1b' }}
-                            onClick={() => { setRegistroAnulando(row._registro); setMotivoAnulacion('') }}
+                            onClick={() => setRegistroAnulando(row._registro)}
                           >
                             Anular
                           </button>
@@ -9082,6 +9096,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             </div>
           </div>
         </div>
+      )}
+
+      {registroAnulando && (
+        <AnularRegistroModal registro={registroAnulando} onClose={() => setRegistroAnulando(null)} setRegistros={setRegistros} />
+      )}
+
+      {registroEditandoManual && (
+        <EditarRegistroManualModal registro={registroEditandoManual} onClose={() => setRegistroEditandoManual(null)}
+          turnos={turnos} setTurnos={setTurnos} setRegistros={setRegistros} objetivos={objetivos} />
       )}
     </div>
   )
