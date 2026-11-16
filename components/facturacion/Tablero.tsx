@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react'
 import { leer, rpc, ESTADO_PREPARACION } from '@/lib/facturacion/datos'
 import { S, pesos, useAccion } from './comun'
+import TableroFinanciero from './TableroFinanciero'
 
 function Dato({ t, v, sub }: { t: string; v: string; sub?: string }) {
   return <div style={{ background: '#0a0e1a', border: '1px solid #1e293b', borderRadius: 8, padding: 12, minWidth: 170 }}>
@@ -57,23 +58,22 @@ export default function Tablero({ mes }: { mes: string }) {
       <Mensaje />
     </div>
   )
-  if (!t) return <div>{filtros}</div>
+  if (!t) return <div>{filtros}<TableroFinanciero mes={mes} cliente={cliente} /></div>
   const hs = t.horas, p = t.prestacion, e = t.emision, c = t.cobro, d = t.deuda
   const previo = serie.find(x => x.mes === mesMas(mes, -1)), anioAnt = serie.find(x => x.mes === mesMas(mes, -12)), actual = serie.find(x => x.mes === mes)
 
   return (
     <div>
       {filtros}
+      {/* Situación financiera con los mismos criterios que Cobranzas (deuda real, sin mezclar retenciones). */}
+      <TableroFinanciero mes={mes} cliente={cliente} />
       {venc && <div style={S.card}>
-        <h3 style={S.h3}>Prefacturas de {mes} y vencimientos al día de hoy</h3>
+        <h3 style={S.h3}>Prefacturas de {mes}</h3>
         <div style={S.fila}>
           <Dato t="Prefacturas pendientes" v={String(Number(venc.prefacturas.en_preparacion) + Number(venc.prefacturas.en_revision))} sub={`${venc.prefacturas.bloqueadas} bloqueadas por información faltante`} />
           <Dato t="Aprobadas pendientes de emisión" v={String(venc.prefacturas.aprobadas_sin_emitir)} sub={pesos(venc.prefacturas.total_aprobado_sin_emitir_c)} />
           <Dato t="Emitidas" v={String(venc.prefacturas.emitidas)} />
           <Dato t="Pendientes de presentación" v={String(venc.pendientes_presentacion)} sub="el plazo corre desde la presentación" />
-          <Dato t="Próximas a vencer (7 días)" v={String(venc.proximas.n)} sub={pesos(venc.proximas.saldo_c)} />
-          <Dato t="Vencidas" v={String(venc.vencidas.n)} sub={pesos(venc.vencidas.saldo_c)} />
-          <Dato t="Pendiente de cobro" v={pesos(venc.pendiente_cobro_c)} sub="sujeto a conciliación" />
           <Dato t="Intereses potenciales" v={pesos(venc.intereses_potenciales_c)} sub={`aprobados ${pesos(venc.intereses_aprobados_c)} · nada se aplica solo`} />
           <Dato t="Sin condición de pago" v={String(venc.sin_condicion)} sub="vencimiento pendiente de definir" />
         </div>
@@ -120,21 +120,13 @@ export default function Tablero({ mes }: { mes: string }) {
           <Dato t="Cobros sin aplicar" v={pesos(t.sin_aplicar.cobros_c)} sub={`${t.sin_aplicar.movimientos_sin_cobro} ingresos sin cobro · ${t.sin_aplicar.movimientos_sin_clasificar} sin clasificar`} />
         </div>
       </div>
-      <div style={S.card}>
-        <h3 style={S.h3}>Deuda (al día de hoy)</h3>
+      {(Number(d.saldos_iniciales_c) > 0 || Number(d.nc_sin_asociar_c) > 0) && <div style={S.card}>
+        <h3 style={S.h3}>Pendientes de resolver</h3>
         <div style={S.fila}>
-          <Dato t="Saldo pendiente" v={pesos(d.total_c)} />
-          <Dato t="Vencida" v={pesos(d.vencido_c)} />
-          <Dato t="No vencida" v={pesos(d.no_vencido_c)} />
-          <Dato t="1–30 días" v={pesos(d.d1_30_c)} />
-          <Dato t="31–60 días" v={pesos(d.d31_60_c)} />
-          <Dato t="61–90 días" v={pesos(d.d61_90_c)} />
-          <Dato t="+90 días" v={pesos(d.mas_90_c)} />
-          <Dato t="Sin cliente asociado" v={pesos(d.sin_cliente_c)} />
           <Dato t="Saldos iniciales" v={pesos(d.saldos_iniciales_c)} />
           <Dato t="NC sin factura asociada" v={pesos(d.nc_sin_asociar_c)} sub="crédito a resolver" />
         </div>
-      </div>
+      </div>}
 
       <div style={{ ...S.card, overflowX: 'auto' }}>
         <h3 style={S.h3}>Comparaciones</h3>
