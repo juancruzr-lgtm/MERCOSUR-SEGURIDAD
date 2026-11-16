@@ -23,9 +23,18 @@ export default function Maestros() {
   const [nuevo, setNuevo] = useState({ razon_social: '', cuit: '', condicion_iva: '', domicilio: '' })
   const { ocupado, correr, Mensaje } = useAccion()
 
+  // Objetivos activos que Facturación no ve porque no están vinculados a ningún contrato.
+  const [sinContrato, setSinContrato] = useState<any[]>([])
+
   async function cargar() {
     setClientes(await leer('fact_clientes', q => q.order('razon_social')))
-    setObjetivos(await leer('objetivos', q => q.order('nombre'), 'id, nombre, cliente, estado'))
+    const [objs, vincs] = await Promise.all([
+      leer('objetivos', q => q.order('nombre'), 'id, nombre, cliente, estado, es_prueba'),
+      leer('fact_contrato_objetivos', q => q.is('anulado_at', null), 'objetivo_id'),
+    ])
+    setObjetivos(objs)
+    const vinculados = new Set(vincs.map((v: any) => v.objetivo_id))
+    setSinContrato(objs.filter((o: any) => o.estado === 'activo' && !o.es_prueba && !vinculados.has(o.id)))
   }
   useEffect(() => { correr(cargar) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -33,6 +42,11 @@ export default function Maestros() {
     <div>
       <DatosEmisor />
       <DiagnosticoArca />
+      {sinContrato.length > 0 && <div style={{ ...S.card, borderColor: '#78350f' }}>
+        <h3 style={{ ...S.h3, color: '#fbbf24' }}>Objetivos sin contrato ({sinContrato.length})</h3>
+        <div style={S.sub}>Están activos pero Facturación no los ve: no entran en ninguna prefactura. Los objetivos nuevos se vinculan solos cuando el cliente tiene un único contrato vigente; éstos no se pudieron decidir. Abrí el cliente y usá «Vincular objetivo» en su contrato.</div>
+        <div style={{ marginTop: 6, fontSize: 13 }}>{sinContrato.map(o => <div key={o.id}>{o.nombre} <span style={S.sub}>· cliente cargado como «{o.cliente ?? 'sin cliente'}»</span></div>)}</div>
+      </div>}
       <div style={S.card}>
         <h3 style={S.h3}>Clientes</h3>
         <div style={S.fila}>

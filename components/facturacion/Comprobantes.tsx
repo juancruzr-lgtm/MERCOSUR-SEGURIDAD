@@ -19,7 +19,21 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
   const [buscar, setBuscar] = useState('')
   const [asoc, setAsoc] = useState<{ id: string; cliente_id: string; asociado_id: string; motivo: string } | null>(null)
   const [nc, setNc] = useState<{ id: string; tipo: string; neto: string; iva: string; motivo: string } | null>(null)
+  // Corrección del texto del PDF (sin tocar importes ni cantidades): texto general + un texto por renglón.
+  const [txt, setTxt] = useState<{ id: string; numero: string; texto: string; renglones: Array<{ concepto: string; detalle: string }>; motivo: string } | null>(null)
   const { ocupado, correr, Mensaje } = useAccion()
+
+  async function abrirCorreccion(c: any) {
+    const pref = c.prefactura_id ? (await leer('fact_prefacturas', q => q.eq('id', c.prefactura_id), 'texto_factura, lineas'))[0] : null
+    const lineas: any[] = Array.isArray(pref?.lineas) && pref.lineas.length && [1, 6, 201].includes(c.tipo) ? pref.lineas : []
+    const corregido = Number(c.texto_pdf_version ?? 0) > 0
+    const base = lineas.length
+      ? lineas.map(l => ({ concepto: String(l.concepto ?? ''), detalle: `${l.cantidad} × ${pesos(Math.round(Number(l.precio) * 100))} = ${pesos(Number(l.importes?.neto ?? 0))}` }))
+      : [{ concepto: String(c.motivo ?? 'Según comprobante asociado'), detalle: `1 × ${pesos(c.neto_c)}` }]
+    const renglones = corregido && Array.isArray(c.conceptos_pdf) && c.conceptos_pdf.length === base.length
+      ? base.map((r, i) => ({ ...r, concepto: String(c.conceptos_pdf[i]) })) : base
+    setTxt({ id: c.id, numero: numeroVisible({ tipo: c.tipo, puntoVenta: c.punto_venta, numero: c.numero }), texto: corregido ? (c.texto_pdf ?? '') : (pref?.texto_factura ?? c.motivo ?? ''), renglones, motivo: '' })
+  }
 
   async function cargar() {
     const [c, s, cl, i, n, h] = await Promise.all([
@@ -117,6 +131,8 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
                 <td style={S.td}>
                   {(!c.cliente_id || (esNota && !c.asociado_id)) && <button style={S.btn2} onClick={() => setAsoc({ id: c.id, cliente_id: c.cliente_id ?? '', asociado_id: '', motivo: '' })}>Asociar</button>}
                   {c.cae && <button style={S.btn2} onClick={() => correr(async () => { const r = await api(`comprobante-pdf?id=${c.id}`, undefined, 'GET'); window.open(r.url, '_blank', 'noopener') })}>PDF</button>}
+                  {c.cae && c.origen === 'emision_app' && <button style={S.btn2} disabled={ocupado} onClick={() => correr(() => abrirCorreccion(c))}>Corregir texto</button>}
+                  {Number(c.texto_pdf_version ?? 0) > 0 && <div style={S.sub}>Texto corregido (v{c.texto_pdf_version})</div>}
                   {!esNota && <button style={S.btn2} onClick={() => setNc({ id: c.id, tipo: String(c.tipo === 1 ? 3 : c.tipo === 6 ? 8 : 203), neto: '', iva: '', motivo: '' })}>NC/ND</button>}
                 </td>
               </tr>
@@ -159,6 +175,31 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
           <button style={S.btn2} onClick={() => setAsoc(null)}>Cancelar</button>
         </div>
         <div style={S.sub}>Una vez fijada, la asociación no se cambia. El alcance (total/parcial) lo calcula la base.</div>
+      </div>}
+
+      {txt && <div style={S.card}>
+        <h3 style={S.h3}>Corregir el texto de {txt.numero}</h3>
+        <div style={S.sub}>Cambia sólo lo que se lee en el PDF. Importes, cantidades, fechas y CAE no cambian: a ARCA no se le informa el detalle. El PDF anterior queda guardado y se genera uno nuevo.</div>
+        <div style={{ marginTop: 8 }}>
+          <div style={S.sub}>Texto general (arriba de los renglones)</div>
+          <textarea style={{ ...S.input, width: '100%', minHeight: 70 }} value={txt.texto} onChange={e => setTxt({ ...txt, texto: e.target.value })} />
+        </div>
+        {txt.renglones.map((r, i) => (
+          <div key={i} style={{ marginTop: 8 }}>
+            <div style={S.sub}>Renglón {i + 1} · {r.detalle}</div>
+            <textarea style={{ ...S.input, width: '100%', minHeight: 50 }} value={r.concepto}
+              onChange={e => setTxt({ ...txt, renglones: txt.renglones.map((x, j) => j === i ? { ...x, concepto: e.target.value } : x) })} />
+          </div>
+        ))}
+        <div style={{ ...S.fila, marginTop: 8 }}>
+          <input style={{ ...S.input, flex: 1 }} placeholder="Motivo de la corrección (obligatorio)" value={txt.motivo} onChange={e => setTxt({ ...txt, motivo: e.target.value })} />
+          <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
+            await rpc('fact_comprobante_corregir_texto', { p_id: txt.id, p_texto: txt.texto, p_conceptos: txt.renglones.map(r => r.concepto), p_motivo: txt.motivo })
+            const id = txt.id; setTxt(null); await cargar()
+            const r = await api(`comprobante-pdf?id=${id}`, undefined, 'GET'); window.open(r.url, '_blank', 'noopener')
+          }, 'Texto corregido: se generó el PDF nuevo')}>Guardar y ver PDF</button>
+          <button style={S.btn2} onClick={() => setTxt(null)}>Cancelar</button>
+        </div>
       </div>}
 
       {nc && <div style={S.card}>

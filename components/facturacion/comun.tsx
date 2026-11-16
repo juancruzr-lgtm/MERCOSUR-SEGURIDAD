@@ -3,6 +3,7 @@
 // (mismo lenguaje visual que Liquidación).
 import { useState } from 'react'
 import { formatoPesos } from '@/lib/facturacion/dinero'
+import { fechaCompleta } from '@/lib/facturacion/fecha-campo'
 
 export const S: Record<string, React.CSSProperties> = {
   card: { background: '#0f1629', border: '1px solid #1e293b', borderRadius: 10, padding: 16, marginBottom: 16 },
@@ -17,6 +18,29 @@ export const S: Record<string, React.CSSProperties> = {
   h3: { margin: '0 0 10px', fontSize: 15, color: '#e2e8f0' },
   fila: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' },
   aviso: { background: '#1c1917', border: '1px solid #78350f', color: '#fbbf24', borderRadius: 6, padding: '8px 10px', fontSize: 13 },
+}
+
+/**
+ * Campo de fecha que guarda recién al salir del campo o con Enter, no en cada tecla: así se puede tipear
+ * la fecha completa (DD/MM/AAAA con el teclado numérico) sin que la pantalla se recargue a mitad de
+ * camino y se pierda el foco.
+ */
+export function FechaAlSalir({ valor, alGuardar, disabled, style, title }: {
+  valor: string | null; alGuardar: (v: string | null) => void; disabled?: boolean; style?: React.CSSProperties; title?: string
+}) {
+  const [v, setV] = useState(valor ?? '')
+  const [editando, setEditando] = useState(false)
+  const mostrado = editando ? v : (valor ?? '')
+  const guardar = () => {
+    setEditando(false)
+    if (!fechaCompleta(v)) { setV(valor ?? ''); return }
+    if (v !== (valor ?? '')) alGuardar(v || null)
+  }
+  return <input type="date" style={style} title={title} disabled={disabled} value={mostrado}
+    onFocus={() => { setV(valor ?? ''); setEditando(true) }}
+    onChange={e => { setEditando(true); setV(e.target.value) }}
+    onBlur={guardar}
+    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
 }
 
 export const pesos = (c: unknown) => (c == null || c === '' ? '—' : formatoPesos(Number(c)))

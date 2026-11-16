@@ -49,16 +49,21 @@ export async function GET(req: NextRequest) {
     comp.asociado_id ? c.usuario.from('fact_comprobantes').select('tipo, punto_venta, numero, fecha_emision').eq('id', comp.asociado_id).maybeSingle() : Promise.resolve({ data: null }),
   ])
   const emisor = (cfgEmisor?.valor ?? null) as Emisor | null
-  const lineas = ((pref as any)?.lineas ?? []).map((l: any) => ({ concepto: l.concepto, cantidad: String(l.cantidad), precio: String(l.precio), neto_c: Number(l.importes?.neto ?? 0) }))
+  // Texto corregido después de emitir (fact_comprobante_corregir_texto): reemplaza sólo los textos;
+  // cantidades, precios e importes siguen saliendo de la prefactura y del comprobante.
+  const corregido = Number(comp.texto_pdf_version ?? 0) > 0
+  const conceptos: string[] | null = corregido && Array.isArray(comp.conceptos_pdf) ? comp.conceptos_pdf : null
+  const lineasPref = ((pref as any)?.lineas ?? []).map((l: any) => ({ concepto: l.concepto, cantidad: String(l.cantidad), precio: String(l.precio), neto_c: Number(l.importes?.neto ?? 0) }))
+  const lineas = conceptos && conceptos.length === lineasPref.length ? lineasPref.map((l: any, i: number) => ({ ...l, concepto: conceptos[i] })) : lineasPref
   const datos = {
     ambiente: comp.ambiente, tipo: comp.tipo, punto_venta: comp.punto_venta, numero: Number(comp.numero), fecha_emision: comp.fecha_emision,
     servicio_desde: comp.servicio_desde, servicio_hasta: comp.servicio_hasta, vto_pago: comp.vto_pago,
     neto_c: Number(comp.neto_c), iva_c: Number(comp.iva_c), tributos_c: Number(comp.tributos_c ?? 0), total_c: Number(comp.total_c),
     cae: comp.cae ?? '', cae_vto: comp.cae_vto ?? '',
     receptor: { cuit: comp.doc_nro_receptor ?? '', razon_social: cli?.razon_social ?? comp.receptor_nombre ?? '', condicion_iva: cli?.condicion_iva ?? null, domicilio: cli?.domicilio ?? null },
-    texto: (pref as any)?.texto_factura ?? comp.motivo ?? null,
+    texto: corregido ? (comp.texto_pdf ?? null) : ((pref as any)?.texto_factura ?? comp.motivo ?? null),
     // NC/ND sin líneas propias: una línea con el motivo y el neto.
-    lineas: lineas.length && [1, 6, 201].includes(comp.tipo) ? lineas : [{ concepto: comp.motivo ?? 'Según comprobante asociado', cantidad: '1', precio: String(Number(comp.neto_c) / 100), neto_c: Number(comp.neto_c) }],
+    lineas: lineas.length && [1, 6, 201].includes(comp.tipo) ? lineas : [{ concepto: conceptos?.[0] ?? comp.motivo ?? 'Según comprobante asociado', cantidad: '1', precio: String(Number(comp.neto_c) / 100), neto_c: Number(comp.neto_c) }],
     alicuota: alicuotaDe(Number(comp.neto_c), Number(comp.iva_c)),
     asociado: asoc ? { tipo: (asoc as any).tipo, punto_venta: (asoc as any).punto_venta, numero: Number((asoc as any).numero), fecha: (asoc as any).fecha_emision } : null,
     condicion_venta: 'Cuenta corriente',
@@ -69,7 +74,8 @@ export async function GET(req: NextRequest) {
   let bytes: Uint8Array
   try { bytes = await generarPdfComprobante(datos as any, emisor!) } catch (e: any) { return responder({ error: e?.message ?? String(e) }, 409) }
   const sha = await sha256Hex(bytes)
-  const nombre = `${String(comp.tipo).padStart(3, '0')}-${String(comp.punto_venta).padStart(5, '0')}-${String(comp.numero).padStart(8, '0')}${comp.ambiente === 'homologacion' ? '-HOMOLOGACION' : ''}.pdf`
+  // Cada corrección de texto genera un archivo nuevo: el anterior se conserva con su nombre.
+  const nombre = `${String(comp.tipo).padStart(3, '0')}-${String(comp.punto_venta).padStart(5, '0')}-${String(comp.numero).padStart(8, '0')}${comp.ambiente === 'homologacion' ? '-HOMOLOGACION' : ''}${corregido ? `-texto-v${comp.texto_pdf_version}` : ''}.pdf`
   const ruta = `comprobantes/${comp.cuit_emisor}/${nombre}`
   const up = await c.admin.storage.from(BUCKET).upload(ruta, bytes, { contentType: 'application/pdf', upsert: false })
   if (up.error && !/exists|duplicate/i.test(up.error.message)) return responder({ error: `No se pudo guardar el PDF: ${up.error.message}` }, 500)

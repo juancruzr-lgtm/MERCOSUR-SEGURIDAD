@@ -15,7 +15,7 @@ import {
   aprobacionDelMes, elegibleParaAceptarTodos, filaPendiente, filasExcel, minutosPropuestos, motivosRevision, nombreComprobante, objetivoAlDia, objetivosParaAceptar, propuestaDeFila, sinHoras,
   type FilaRevision, type TratamientoDescubiertos,
 } from '@/lib/facturacion/revision'
-import { COLOR_ESTADO, Etiqueta, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
+import { COLOR_ESTADO, Etiqueta, FechaAlSalir, S, centavosDe, fecha, horas, pesos, useAccion } from './comun'
 import DetalleHoras from './DetalleHoras'
 import CambiosHoras from './CambiosHoras'
 import { recalcular, useOperacion, type Periodo } from './periodo'
@@ -511,8 +511,9 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
             <span style={S.sub}>Fecha de emisión:</span>
             {/* Vacía = el día en que se emite. ARCA acepta hasta 10 días antes del día de emisión y no antes del
                 último comprobante autorizado del mismo tipo; se controla al emitir. */}
-            <input type="date" style={{ ...S.input, padding: '3px 6px' }} disabled={emitida || ocupado} value={p.fecha_emision_prevista ?? ''}
-              onChange={e => { const v = e.target.value || null; correr(async () => { await rpc('fact_prefactura_fecha_emision', { p_id: p.id, p_fecha: v }); alCambiar() }, v ? `Se emitirá con fecha ${fecha(v)}` : 'Se emitirá con la fecha del día') }} />
+            {/* Guarda al salir del campo o con Enter: guardar en cada tecla recargaba la pantalla a mitad de la fecha. */}
+            <FechaAlSalir style={{ ...S.input, padding: '3px 6px' }} disabled={emitida} valor={p.fecha_emision_prevista ?? null}
+              alGuardar={v => correr(async () => { await rpc('fact_prefactura_fecha_emision', { p_id: p.id, p_fecha: v }); alCambiar() }, v ? `Se emitirá con fecha ${fecha(v)}` : 'Se emitirá con la fecha del día')} />
             <span style={S.sub}>{p.fecha_emision_prevista ? `(ARCA la acepta si se emite hasta el ${fecha(new Date(Date.parse(`${p.fecha_emision_prevista}T00:00:00Z`) + 10 * 86400000).toISOString().slice(0, 10))})` : 'vacía = automática: la más vieja que acepta ARCA sin ser anterior al fin del período (p. ej. el último día del mes anterior si se emite entre el 1 y el 10)'}</span>
           </div>
           <Trazabilidad p={p} historial={extra.historial} usuarios={usuarios} />
