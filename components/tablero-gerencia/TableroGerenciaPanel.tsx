@@ -14,7 +14,7 @@ import { alcanceDe, esGerenciaReal, tieneCapacidad, type SujetoAcceso } from '@/
 import { objetivoIdsParaAlertas } from '@/lib/alertas-alcance'
 import { mostrarTelefono } from '@/lib/telefono-ar'
 import { cargarTablero, mesAnterior, type DatosTablero } from '@/lib/tablero-gerencia/cargar'
-import { casosDesdeFuentes } from '@/lib/tablero-gerencia/fuentes'
+import { casosDesdeFuentes, finTurnoMs } from '@/lib/tablero-gerencia/fuentes'
 import { casoVencido, comunicacionesSinRespuesta, filtrarCasos, resumirCasos, type Caso, type EstadoCaso, type TipoCaso } from '@/lib/tablero-gerencia/casos'
 import { CATALOGO_REGLAS, reglasQueDetectan } from '@/lib/tablero-gerencia/reglas'
 import { compararMeses, lineaHoras, resumirHorasMes, type LineaHoras, type RegistroHoras, type TurnoHoras } from '@/lib/tablero-gerencia/horas'
@@ -176,20 +176,28 @@ export default function TableroGerenciaPanel({ user, objetivos, guardias, zonasO
     if (!datos) return null
     const enAlcance = (t: TurnoHoras) => objetivosFiltro.has(t.objetivo_id ?? '') &&
       (permisos.objetivosPermitidos === null || permisos.objetivosPermitidos.has(t.objetivo_id ?? ''))
-    const lineas = (d: { turnos: TurnoHoras[]; registros: RegistroHoras[] }, hastaDia?: number) => {
+    // corteMs: los turnos que terminan después de este instante todavía no
+    // ocurrieron → 'pendiente' (no suman programadas ni cuentan como incompletos).
+    const terminaDespues = (t: TurnoHoras, corteMs: number) => {
+      if (!t.hora_inicio || !t.hora_fin) return false
+      return finTurnoMs({ fecha: t.fecha, hora_inicio: t.hora_inicio, hora_fin: t.hora_fin }) > corteMs
+    }
+    const lineas = (d: { turnos: TurnoHoras[]; registros: RegistroHoras[] }, corteMs: number) => {
       const porTurno = new Map<string, RegistroHoras[]>()
       for (const r of d.registros) porTurno.set(r.turno_id, [...(porTurno.get(r.turno_id) ?? []), r])
       return d.turnos
         .filter(enAlcance)
-        .filter(t => hastaDia == null || Number(t.fecha.slice(8, 10)) <= hastaDia)
-        .map(t => lineaHoras(t, porTurno.get(t.id) ?? []))
+        .map(t => lineaHoras(t, porTurno.get(t.id) ?? [], { pendiente: terminaDespues(t, corteMs) }))
         .filter(l => !f.empleado || l.empleadoId === f.empleado)
     }
-    const actual = lineas(datos.horasMes)
-    // Mes en curso: se compara contra el anterior AL MISMO DÍA (avance), no contra el mes completo.
+    const ahora = new Date()
+    const actual = lineas(datos.horasMes, ahora.getTime())
+    // Mes en curso: se compara contra el anterior AL MISMO MOMENTO (mismo día y
+    // hora del mes pasado), con turnos ya terminados en los dos lados.
     const esMesEnCurso = mes === mesActualAr()
-    const hoyDia = Number(new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date()).slice(8, 10))
-    const previo = lineas(datos.horasMesAnterior, esMesEnCurso ? hoyDia : undefined)
+    const hoyDia = Number(new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).format(ahora).slice(8, 10))
+    const unMesAtras = new Date(ahora); unMesAtras.setMonth(unMesAtras.getMonth() - 1)
+    const previo = lineas(datos.horasMesAnterior, esMesEnCurso ? unMesAtras.getTime() : ahora.getTime())
     const ra = resumirHorasMes(actual)
     const rp = resumirHorasMes(previo)
     return { lineas: actual, resumen: ra, comparacion: compararMeses(ra.total.oficiales, rp.total.oficiales), esMesEnCurso, hoyDia }
@@ -280,10 +288,10 @@ export default function TableroGerenciaPanel({ user, objetivos, guardias, zonasO
             <div style={S.card}>
               <h3 style={S.h3}>Horas {permisos.verEconomico ? 'y facturación' : ''}</h3>
               <div style={S.fila}>
-                <Tile titulo="Horas oficiales del mes" valor={`${h1(horas.resumen.total.oficiales)} h`} onClick={() => setVerHoras(v => v ? null : 'objetivo')} activo={!!verHoras}
+                <Tile titulo="Horas trabajadas del mes (oficiales)" valor={`${h1(horas.resumen.total.oficiales)} h`} onClick={() => setVerHoras(v => v ? null : 'objetivo')} activo={!!verHoras}
                   sub={`${horas.comparacion.variacionPct == null ? 'sin dato previo' : `${horas.comparacion.variacionPct >= 0 ? '+' : ''}${horas.comparacion.variacionPct} %`} vs ${mesAnterior(mes)}${horas.esMesEnCurso ? ` al día ${horas.hoyDia}` : ''}`} />
-                <Tile titulo="De ellas, sin fichaje" valor={`${h1(horas.resumen.total.sinFichaje)} h`} sub="confirmadas sin evidencia de fichaje" color={horas.resumen.total.sinFichaje ? C.ambar : undefined} />
-                <Tile titulo="Turnos con fichaje incompleto" valor={horas.resumen.total.incompletos} sub="liquidan 0 h hasta corregir" />
+                <Tile titulo="De ellas, cargadas sin fichaje" valor={`${h1(horas.resumen.total.sinFichaje)} h`} sub="se pagan, pero el vigilador no fichó la entrada" color={horas.resumen.total.sinFichaje ? C.ambar : undefined} />
+                <Tile titulo="Turnos ya terminados sin horas" valor={horas.resumen.total.incompletos} sub="falta entrada o salida: 0 h hasta que se corrija" />
                 <div style={{ flex: '2 1 260px', background: C.fondo, border: `1px solid ${C.borde}`, borderRadius: 8, padding: '10px 12px' }}>
                   <div style={S.sub}>Avance semanal (acumulado, sin cierre semanal)</div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', height: 60, marginTop: 6 }}>
@@ -301,7 +309,7 @@ export default function TableroGerenciaPanel({ user, objetivos, guardias, zonasO
                 </div>
                 {permisos.verEconomico && (
                   <Tile titulo="Facturación del mes (prefacturas)" valor={datos.facturacion ? pesos(datos.facturacion.reduce((a, x) => a + x.total, 0)) : '—'}
-                    sub={datos.facturacion ? `${new Set(datos.facturacion.map(x => x.cliente)).size} clientes · detalle en Facturación` : 'no disponible'} />
+                    sub={!datos.facturacion ? 'no disponible' : datos.facturacion.length === 0 ? 'todavía no hay prefacturas de este mes' : `${new Set(datos.facturacion.map(x => x.cliente)).size} clientes · detalle en Facturación`} />
                 )}
                 {permisos.verEconomico && <Tile titulo="Rentabilidad" valor="—" sub="sin datos de costos confiables" />}
               </div>
@@ -353,7 +361,7 @@ export default function TableroGerenciaPanel({ user, objetivos, guardias, zonasO
                           {ev.gps ? <div style={S.sub}>GPS {String(ev.gps).replace('_', ' ')}{ev.distancia_m != null ? ` · ${Math.round(Number(ev.distancia_m))} m` : ''}</div> : null}</td>
                         <td style={S.td}>{ETIQUETA_CAUSA[c.causa]}</td>
                         <td style={S.td}><span style={{ color: COLOR_ESTADO[c.estado] }}>{ETIQUETA_ESTADO[c.estado]}</span>{venc && <div style={{ ...S.sub, color: C.rojo }}>vencido</div>}</td>
-                        <td style={S.td}>{resp || <span style={S.sub}>sin asignar</span>}{!c.responsableId && resp && <div style={S.sub}>sugerido (zona)</div>}</td>
+                        <td style={S.td}>{resp || <span style={S.sub}>sin asignar</span>}{!c.responsableId && resp && <div style={S.sub}>sin asignar · supervisores de la zona</div>}</td>
                         <td style={S.num}>{c.eventos.length}</td>
                       </FilaCaso>
                     )
@@ -437,11 +445,11 @@ function DetalleHoras({ lineas, por, setPor, nombreObjetivo, nombreEmpleado }: {
       <div style={{ ...S.fila, marginBottom: 6 }}>
         <span style={S.sub}>Detalle por</span>
         {(['cliente', 'objetivo', 'empleado'] as const).map(p => <button key={p} style={p === por ? S.btn : S.btn2} onClick={() => setPor(p)}>{p}</button>)}
-        <span style={S.sub}>La diferencia contra lo programado sólo se muestra acá.</span>
+        <span style={S.sub}>Sólo turnos que ya terminaron. Diferencia = trabajadas − programadas (negativo: se trabajó menos de lo programado).</span>
       </div>
       <div style={{ overflowX: 'auto', maxHeight: 360 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>{[por, 'Turnos', 'Programadas', 'Oficiales', 'Diferencia', 'Sin fichaje', 'Incompletos'].map(t => <th key={t} style={S.th}>{t}</th>)}</tr></thead>
+          <thead><tr>{[por, 'Turnos terminados', 'Horas programadas', 'Horas trabajadas', 'Diferencia', 'Cargadas sin fichaje (h)', 'Turnos sin horas'].map(t => <th key={t} style={S.th}>{t}</th>)}</tr></thead>
           <tbody>{filas.map(([k, t]) => (
             <tr key={k}>
               <td style={S.td}>{etiqueta(k)}</td><td style={S.num}>{t.turnos}</td><td style={S.num}>{h1(t.programadas)}</td>
