@@ -7,6 +7,7 @@ import { abrirDocumento, api, leer, rpc, subirDocumento } from '@/lib/facturacio
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { fechaArgentina } from '@/lib/periodo-argentina'
+import FacturasCobros from './FacturasCobros'
 
 /** Centavos → texto para los campos de importe (1234567 → "12345,67"), el formato que lee centavosDe. */
 const importeTexto = (c: number) => (c / 100).toFixed(2).replace('.', ',')
@@ -17,17 +18,25 @@ export default function Cobranzas() {
   const { ocupado, correr, Mensaje } = useAccion()
   useEffect(() => { correr(async () => setClientes(await leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'))) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Vistas de Cobranzas: la lista general de facturas es la principal; se irán sumando más.
+  const [vista, setVista] = useState<'facturas' | 'cuenta' | 'banco'>('facturas')
+
   return (
     <div>
-      <Conciliacion clientes={clientes} />
-      <div style={S.card}>
+      <div style={{ ...S.fila, marginBottom: 12 }}>
+        {([['facturas', 'Facturas y cobros'], ['cuenta', 'Cuenta por cliente'], ['banco', 'Conciliación bancaria']] as const).map(([k, t]) =>
+          <button key={k} style={vista === k ? S.btn : S.btn2} onClick={() => setVista(k)}>{t}</button>)}
+      </div>
+      {vista === 'facturas' && <FacturasCobros alVerCliente={id => { setCli(id); setVista('cuenta') }} />}
+      {vista === 'banco' && <Conciliacion clientes={clientes} />}
+      {vista === 'cuenta' && <div style={S.card}>
         <div style={S.fila}>
           <h3 style={{ ...S.h3, margin: 0 }}>Cuenta corriente</h3>
           <select style={S.input} value={cli} onChange={e => setCli(e.target.value)}><option value="">Elegí un cliente…</option>{clientes.map(c => <option key={c.id} value={c.id}>{c.razon_social}</option>)}</select>
           <Mensaje />
         </div>
         {cli && !ocupado && <CuentaCliente clienteId={cli} />}
-      </div>
+      </div>}
     </div>
   )
 }

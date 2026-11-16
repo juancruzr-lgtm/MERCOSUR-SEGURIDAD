@@ -17,7 +17,7 @@ import { BarraPeriodo, usePeriodo } from './periodo'
 import { mesVencido } from '@/lib/facturacion/periodo-seguro'
 
 const PESTANAS = [
-  ['bandeja', 'Prefacturas'], ['horas', 'Horas'], ['comprobantes', 'Comprobantes'], ['vencimientos', 'Vencimientos e intereses'], ['cobranzas', 'Cuentas corrientes'],
+  ['bandeja', 'Prefacturas'], ['horas', 'Horas'], ['comprobantes', 'Comprobantes'], ['vencimientos', 'Vencimientos e intereses'], ['cobranzas', 'Cobranzas'],
   ['documentos', 'Documentos'], ['maestros', 'Clientes y contratos'], ['tablero', 'Tablero'],
 ] as const
 
