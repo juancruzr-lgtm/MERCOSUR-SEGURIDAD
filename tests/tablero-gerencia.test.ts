@@ -268,8 +268,9 @@ describe('mensajes', () => {
 
 describe('acceso', () => {
   it('el tablero nace oculto', () => {
-    expect(tableroGerenciaVisible({})).toBe(false)
-    expect(tableroGerenciaVisible({ NEXT_PUBLIC_TABLERO_GERENCIA: '1' })).toBe(true)
+    expect(tableroGerenciaVisible(undefined)).toBe(false)
+    expect(tableroGerenciaVisible('0')).toBe(false)
+    expect(tableroGerenciaVisible('1')).toBe(true)
   })
 
   it('supervisor: sólo su alcance, sin económico ni envíos', () => {

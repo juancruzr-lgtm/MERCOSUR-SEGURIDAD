@@ -15,8 +15,10 @@
 
 import type { AlcanceOperativo } from '@/lib/capacidades'
 
-export function tableroGerenciaVisible(env: Record<string, string | undefined> = process.env): boolean {
-  return env.NEXT_PUBLIC_TABLERO_GERENCIA === '1'
+// Lectura LITERAL de process.env.NEXT_PUBLIC_…: Next sólo la reemplaza en el
+// bundle del navegador si aparece escrita así.
+export function tableroGerenciaVisible(valor: string | undefined = process.env.NEXT_PUBLIC_TABLERO_GERENCIA): boolean {
+  return valor === '1'
 }
 
 export const ENVIO_MENSAJES_GESTION_HABILITADO = false as const

@@ -90,6 +90,7 @@ import LiquidacionPanel from '@/components/liquidacion/LiquidacionPanel'
 import FacturacionPanel from '@/components/facturacion/FacturacionPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
+import { tableroGerenciaVisible } from '@/lib/tablero-gerencia/acceso'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
@@ -171,6 +172,8 @@ const AsistenciaMap = dynamic(() => import('@/components/asistencia/AsistenciaMa
   loading: () => <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', background:'#111827', border:'1px solid #1e2d42', borderRadius:8, color:'#94a3b8', marginBottom:20 }}>Cargando mapa...</div>,
 })
 
+// Tablero de Gerencia: oculto salvo NEXT_PUBLIC_TABLERO_GERENCIA=1 (vista previa, sin envíos).
+const TableroGerenciaPanel = dynamic(() => import('@/components/tablero-gerencia/TableroGerenciaPanel'), { ssr: false })
 const PaginaGps = dynamic(() => import('@/components/gps/PaginaGps'), {
   ssr: false,
   loading: () => <div style={{ color:'#64748b', padding:48, textAlign:'center' }}>Cargando mapa operativo…</div>,
@@ -14248,7 +14251,13 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'novedades', icon:'📋', label:'Mis Novedades' },
     ]}
   ] : [
-    { section:'GENERAL', items:[{ id:'dashboard', icon:'📊', label:'Panel Principal' }] },
+    { section:'GENERAL', items:[
+      { id:'dashboard', icon:'📊', label:'Panel Principal' },
+      // Tablero de Gerencia (vista previa): sólo con el interruptor encendido y
+      // alcance operativo (supervisor de zona o superior). Ver docs/tablero-gerencia.
+      ...(tableroGerenciaVisible() && (tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas') || tieneCapacidad(user, 'ver_dashboard_gerencial'))
+        ? [{ id:'tablero_gerencia', icon:'🧭', label:'Tablero de Gerencia' }] : []),
+    ] },
     { section:'OPERACIONES', items:[
       { id:'guardias', icon:'👮', label:'Guardias' },
       { id:'objetivos', icon:'🏢', label:'Objetivos' },
@@ -14363,6 +14372,9 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'turnos' && <Turnos turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} registros={registros} filtroActivo={filtros.turnos} limpiarFiltro={() => limpiarFiltro('turnos')} user={user} />}
               {page === 'asistencia' && <Asistencia registros={registros} setRegistros={setRegistros} turnos={turnos} setTurnos={setTurnos} guardias={guardias} objetivos={objetivos} supervisiones={supervisionesAdmin} filtroActivo={filtros.asistencia} limpiarFiltro={() => limpiarFiltro('asistencia')} user={user} esAdmin />}
               {page === 'rondas' && <RondasGlobal objetivos={objetivos} />}
+              {page === 'tablero_gerencia' && tableroGerenciaVisible() && (
+                <TableroGerenciaPanel user={user} objetivos={objetivos} guardias={guardias} zonasOperativas={zonasOperativas} supervisorZonas={supervisorZonas} />
+              )}
               {/* Vista transversal de GPS. Recibe los mismos datos ya cargados
                   que consume Asistencia: no repite ninguna consulta de evidencia. */}
               {page === 'pagina_gps' && (
