@@ -15,6 +15,7 @@ import Vencimientos from './Vencimientos'
 import { S } from './comun'
 import { BarraPeriodo, usePeriodo } from './periodo'
 import { mesVencido } from '@/lib/facturacion/periodo-seguro'
+import { tieneCapacidad } from '@/lib/capacidades'
 
 const PESTANAS = [
   ['bandeja', 'Prefacturas'], ['horas', 'Horas'], ['comprobantes', 'Comprobantes'], ['vencimientos', 'Vencimientos e intereses'], ['cobranzas', 'Cobranzas'],
@@ -22,6 +23,21 @@ const PESTANAS = [
 ] as const
 
 export default function FacturacionPanel({ user }: { user: any }) {
+  // Administración sin acceso_facturacion: sólo consulta de comprobantes (la base lo impone igual).
+  if (!tieneCapacidad(user, 'facturacion_completa')) return <ConsultaComprobantes />
+  return <PanelCompleto user={user} />
+}
+
+function ConsultaComprobantes() {
+  return (
+    <div style={{ padding: 16, color: '#e2e8f0' }}>
+      <h2 style={{ margin: '0 0 12px', fontSize: 20 }}>Facturación · Comprobantes</h2>
+      <Comprobantes usuarioId={null} soloLectura />
+    </div>
+  )
+}
+
+function PanelCompleto({ user }: { user: any }) {
   const [tab, setTab] = useState<(typeof PESTANAS)[number][0]>('bandeja')
   // Se abre SIEMPRE en el último mes vencido (hora de Argentina): en noviembre se factura octubre.
   // No se recuerda el mes de la sesión anterior, para no abrir otro período sin advertirlo.

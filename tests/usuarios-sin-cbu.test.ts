@@ -48,7 +48,12 @@ describe('usuarios sin CBU desde el navegador (V2)', () => {
     const sql = readFileSync(join(RAIZ, 'supabase/migrations/20261207100100_usuarios_revocar_cuenta_bancaria.sql'), 'utf8')
     const m = sql.match(/grant select \(([^)]+)\) on public\.usuarios to authenticated/i)
     expect(m).not.toBeNull()
-    const enMigracion = m![1].split(',').map(c => c.trim()).sort()
+    // Columnas nuevas se conceden en migraciones posteriores (la histórica no se toca).
+    const posteriores = ['20261213200000_facturacion_acceso_por_usuario.sql'].flatMap(n => {
+      const x = readFileSync(join(RAIZ, 'supabase/migrations', n), 'utf8').match(/grant select \(([^)]+)\) on public\.usuarios to authenticated/i)
+      return x ? x[1].split(',') : []
+    })
+    const enMigracion = [...m![1].split(','), ...posteriores].map(c => c.trim()).sort()
     expect(enMigracion).toEqual(COLUMNAS_USUARIO.split(',').map(c => c.trim()).sort())
     expect(enMigracion).not.toContain('cuenta_bancaria')
   })

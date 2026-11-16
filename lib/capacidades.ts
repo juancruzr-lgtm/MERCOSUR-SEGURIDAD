@@ -73,7 +73,8 @@ export type Capacidad =
   | 'exportar_visual'
   | 'exportar_banco'
   | 'ver_finanzas'
-  | 'gestionar_facturacion'
+  | 'gestionar_facturacion' // entra a Facturación (Administración sin la marca: sólo consulta de comprobantes)
+  | 'facturacion_completa' // todas las pestañas y acciones de Facturación
   | 'configurar_economico'
   | 'gestionar_usuarios_roles'
 
@@ -100,7 +101,7 @@ const OPERATIVO_ALCANCE: Capacidad[] = ['gestionar_objetivos_operativos', 'gesti
 // GERENCIAL/ECONÓMICO — sensible; SOLO gerencia (incl. gestión de usuarios/roles).
 const GERENCIAL_ECONOMICO: Capacidad[] = [
   'ver_dashboard_gerencial', 'ver_liquidacion', 'editar_liquidacion',
-  'exportar_visual', 'exportar_banco', 'ver_finanzas', 'gestionar_facturacion',
+  'exportar_visual', 'exportar_banco', 'ver_finanzas', 'gestionar_facturacion', 'facturacion_completa',
   'configurar_economico', 'gestionar_usuarios_roles',
 ]
 
@@ -124,7 +125,7 @@ const LIQUIDACION_CAPS: Capacidad[] = [
 // finanzas/dashboard económico/facturación/económico. El acceso económico pleno se
 // obtiene por clasificación Gerencia o por DELEGACIÓN gerencial (acceso_gerencia_delegado).
 const ECONOMICO_GERENCIAL_SENSIBLE: Capacidad[] = [
-  'ver_finanzas', 'ver_dashboard_gerencial', 'configurar_economico', 'gestionar_facturacion',
+  'ver_finanzas', 'ver_dashboard_gerencial', 'configurar_economico', 'gestionar_facturacion', 'facturacion_completa',
 ]
 // Set efectivo del override acceso_admin_pleno = ADMIN_PLENO menos liquidación y
 // menos económico/gerencial sensible.
@@ -220,6 +221,12 @@ export interface SujetoAcceso {
    * `puede_acceder_gerencia_actual()` (para RLS/RPC) y `tiene_delegacion_gerencia`.
    */
   acceso_gerencia_delegado?: boolean | null
+  /**
+   * Facturación completa para Administración (columna `acceso_facturacion`; sólo la
+   * cambia Gerencia). Sin la marca, Administración sólo consulta comprobantes. Espejo en
+   * la base: `facturacion_puede_actual()` / `facturacion_ver_comprobantes_actual()`.
+   */
+  acceso_facturacion?: boolean | null
 }
 
 /** Puesto canónico si está seteado y es válido; null durante la transición. */
@@ -242,6 +249,7 @@ export function capacidadesDe(u: SujetoAcceso | null | undefined): Set<Capacidad
   // (incluye Liquidaciones y económico) mientras la delegación esté vigente. SUMA
   // acceso; NO cambia puesto ni clasificación (alcanceDe/puestoDe siguen igual).
   if (u?.acceso_gerencia_delegado === true) for (const c of ADMIN_PLENO) set.add(c)
+  if (u?.acceso_facturacion === true && puesto === 'administracion') set.add('facturacion_completa')
   return set
 }
 

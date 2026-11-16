@@ -11,7 +11,7 @@
 // `.select()` sin columnas sobre `usuarios` desde el navegador FALLA (42501), por
 // eso todo lector usa esta lista. tests/usuarios-sin-cbu.test.ts lo controla.
 export const COLUMNAS_USUARIO =
-  'id, nombre, apellido, dni, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at, email, cuil, legajo_visual, es_prueba, puesto_organizacional, acceso_interfaz_admin, acceso_admin_pleno, excluir_pago_banco, acceso_bloqueado, acceso_bloqueado_motivo, acceso_bloqueado_at, acceso_bloqueado_por, acceso_auth_bloqueado_at'
+  'id, nombre, apellido, dni, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at, email, cuil, legajo_visual, es_prueba, puesto_organizacional, acceso_interfaz_admin, acceso_admin_pleno, acceso_facturacion, excluir_pago_banco, acceso_bloqueado, acceso_bloqueado_motivo, acceso_bloqueado_at, acceso_bloqueado_por, acceso_auth_bloqueado_at'
 
 /** Quita `cuenta_bancaria` de una fila (respuestas de API a quien no tiene capacidad económica). */
 export function sinCuentaBancaria<T extends Record<string, unknown> | null | undefined>(fila: T): T {

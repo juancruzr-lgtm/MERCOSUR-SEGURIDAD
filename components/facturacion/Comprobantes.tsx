@@ -7,7 +7,7 @@ import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import FacturasExternas from './FacturasExternas'
 
-export default function Comprobantes({ usuarioId }: { usuarioId: string | null }) {
+export default function Comprobantes({ usuarioId, soloLectura = false }: { usuarioId: string | null; soloLectura?: boolean }) {
   const [comps, setComps] = useState<any[]>([])
   const [saldos, setSaldos] = useState<Record<string, number>>({})
   const [clientes, setClientes] = useState<any[]>([])
@@ -36,6 +36,14 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
   }
 
   async function cargar() {
+    if (soloLectura) {
+      // Consulta: sólo comprobantes de producción y nombres de clientes (sin saldos ni gestión).
+      const [c, cl] = await Promise.all([
+        leer('fact_comprobantes', q => q.eq('ambiente', 'produccion').is('archivado_at', null).order('fecha_emision', { ascending: false }).limit(1000)),
+        leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'),
+      ])
+      setComps(c); setClientes(cl); return
+    }
     const [c, s, cl, i, n, h] = await Promise.all([
       leer('fact_comprobantes', q => q.eq('ambiente', 'produccion').order('fecha_emision', { ascending: false }).limit(1000)),
       leer('fact_v_saldos', q => q.limit(5000), 'comprobante_id, saldo_c'),
@@ -57,7 +65,8 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
 
   return (
     <div>
-      <div style={S.card}>
+      {soloLectura && <div style={S.fila}><Mensaje /></div>}
+      {!soloLectura && <><div style={S.card}>
         <h3 style={S.h3}>Importar "Mis Comprobantes – Emitidos" de ARCA</h3>
         <div style={S.fila}>
           <input type="file" accept=".csv,.zip" disabled={ocupado} onChange={e => {
@@ -100,9 +109,9 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
         )}
       </div>
 
-      <FacturasExternas resultado={conciliacion} alCambiar={r => { if (r) setConciliacion(r); correr(cargar) }} />
+      <FacturasExternas resultado={conciliacion} alCambiar={r => { if (r) setConciliacion(r); correr(cargar) }} /></>}
 
-      {notas.length > 0 && <div style={S.card}>
+      {!soloLectura && notas.length > 0 && <div style={S.card}>
         <h3 style={S.h3}>Notas de crédito / débito en curso</h3>
         {notas.map(n => <div key={n.id} style={{ ...S.fila, fontSize: 13 }}>
           Tipo {n.tipo} · {pesos(n.solicitud?.total_c)} · {n.alcance_nota ?? ''} · {n.motivo} · {n.estado}
@@ -115,9 +124,9 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
       <div style={{ ...S.card, overflowX: 'auto' }}>
         <div style={S.fila}><h3 style={{ ...S.h3, margin: 0 }}>Comprobantes registrados (producción)</h3>
           <input style={S.input} placeholder="Buscar" value={buscar} onChange={e => setBuscar(e.target.value)} />
-          {archivados > 0 && <label style={S.sub}><input type="checkbox" checked={verArchivados} onChange={e => setVerArchivados(e.target.checked)} /> Ver archivados ({archivados})</label>}</div>
+          {!soloLectura && archivados > 0 && <label style={S.sub}><input type="checkbox" checked={verArchivados} onChange={e => setVerArchivados(e.target.checked)} /> Ver archivados ({archivados})</label>}</div>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
-          <thead><tr>{['Comprobante', 'Fecha', 'Cliente', 'Neto', 'IVA', 'Total', 'Saldo', 'CAE', 'Origen', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <thead><tr>{['Comprobante', 'Fecha', 'Cliente', 'Neto', 'IVA', 'Total', ...(soloLectura ? [] : ['Saldo']), 'CAE', 'Origen', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>{visibles.map(c => {
             const esNota = [2, 3, 7, 8, 202, 203].includes(c.tipo)
             const asociado = comps.find(x => x.id === c.asociado_id)
@@ -128,11 +137,11 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
                 <td style={S.td}>{fecha(c.fecha_emision)}</td>
                 <td style={S.td}>{nombre(c.cliente_id) ?? <span style={S.err}>{c.receptor_nombre ?? 'sin cliente'}</span>}</td>
                 <td style={S.num}>{pesos(c.neto_c)}</td><td style={S.num}>{pesos(c.iva_c)}</td><td style={S.num}>{pesos(c.total_c)}</td>
-                <td style={S.num}>{esNota ? '—' : pesos(saldos[c.id])}</td>
+                {!soloLectura && <td style={S.num}>{esNota ? '—' : pesos(saldos[c.id])}</td>}
                 <td style={S.td}>{c.cae ?? '—'}</td>
                 <td style={S.td}>{c.origen === 'importacion_arca' ? 'ARCA (importado)' : c.origen === 'carga_manual' ? 'Carga manual' : c.origen}
                   {[1, 6, 201].includes(c.tipo) && <div style={{ fontSize: 12, color: c.prefactura_id ? '#4ade80' : '#94a3b8' }}>{c.prefactura_id ? 'Conciliado con su prefactura' : 'Registrado, sin conciliar'}</div>}</td>
-                <td style={S.td}>
+                {soloLectura ? <td style={S.td}>{c.cae && <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => { const r = await api(`comprobante-pdf?id=${c.id}`, undefined, 'GET'); window.open(r.url, '_blank', 'noopener') })}>PDF</button>}</td> : <td style={S.td}>
                   {c.archivado_at && <div style={S.sub}>Archivado: {c.archivado_motivo}</div>}
                   {!c.archivado_at && (!c.cliente_id || (esNota && !c.asociado_id)) && <button style={S.btn2} onClick={() => setAsoc({ id: c.id, cliente_id: c.cliente_id ?? '', asociado_id: '', motivo: '' })}>Asociar</button>}
                   {!c.archivado_at && !c.cliente_id && <button style={S.btn2} disabled={ocupado} onClick={() => {
@@ -147,14 +156,14 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
                   {c.cae && c.origen === 'emision_app' && <button style={S.btn2} disabled={ocupado} onClick={() => correr(() => abrirCorreccion(c))}>Corregir texto</button>}
                   {Number(c.texto_pdf_version ?? 0) > 0 && <div style={S.sub}>Texto corregido (v{c.texto_pdf_version})</div>}
                   {!esNota && <button style={S.btn2} onClick={() => setNc({ id: c.id, tipo: String(c.tipo === 1 ? 3 : c.tipo === 6 ? 8 : 203), neto: '', iva: '', motivo: '' })}>NC/ND</button>}
-                </td>
+                </td>}
               </tr>
             )
           })}</tbody>
         </table>
       </div>
 
-      {pruebas.length > 0 && <div style={{ ...S.card, overflowX: 'auto' }}>
+      {!soloLectura && pruebas.length > 0 && <div style={{ ...S.card, overflowX: 'auto' }}>
         <h3 style={{ ...S.h3, margin: 0 }}>Facturas de prueba (homologación)</h3>
         <div style={S.sub}>Sin validez fiscal: sirven para revisar los datos y el PDF. No suman saldo ni admiten NC/ND. Cada prefactura admite una sola prueba.</div>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
