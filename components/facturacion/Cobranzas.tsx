@@ -6,6 +6,10 @@ import { useEffect, useState } from 'react'
 import { abrirDocumento, api, leer, rpc, subirDocumento } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
+import { fechaArgentina } from '@/lib/periodo-argentina'
+
+/** Centavos → texto para los campos de importe (1234567 → "12345,67"), el formato que lee centavosDe. */
+const importeTexto = (c: number) => (c / 100).toFixed(2).replace('.', ',')
 
 export default function Cobranzas() {
   const [clientes, setClientes] = useState<any[]>([])
@@ -130,7 +134,8 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
 
   async function cargar() {
     const [saldos, cobros, rets, si2] = await Promise.all([
-      leer('fact_v_saldos', q => q.eq('cliente_id', clienteId).order('fecha_emision')),
+      // Todas las facturas del cliente (pagas e impagas), por fecha de emisión y número.
+      leer('fact_v_saldos', q => q.eq('cliente_id', clienteId).order('fecha_emision').order('punto_venta').order('numero')),
       leer('fact_cobros', q => q.eq('cliente_id', clienteId).order('fecha')),
       leer('fact_retenciones', q => q.eq('cliente_id', clienteId).order('fecha')),
       leer('fact_saldos_iniciales', q => q.eq('cliente_id', clienteId)),
@@ -145,6 +150,32 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
   const deuda = d.saldos.reduce((s, x) => s + Math.max(0, Number(x.saldo_c)), 0)
   const nv = (s: any) => numeroVisible({ tipo: s.tipo, puntoVenta: s.punto_venta, numero: Number(s.numero) })
 
+  // Factura tocada en la lista: precarga el cobro y el destino de la aplicación con su saldo.
+  const [selFac, setSelFac] = useState<string | null>(null)
+  const facSel = d.saldos.find(s => s.comprobante_id === selFac) ?? null
+  const disponibleCobro = (c: any) => Number(c.importe_c) - aplicado('cobro_id', c.id)
+  function elegirFactura(s: any) {
+    if (Number(s.saldo_c) <= 0) return
+    const saldo = importeTexto(Number(s.saldo_c))
+    setSelFac(s.comprobante_id)
+    setCobro(c => ({ ...c, fecha: c.fecha || fechaArgentina(), importe: saldo, referencia: `Pago ${nv(s)}` }))
+    setAp(a => {
+      const cob = d.cobros.find(c => `cobro:${c.id}` === a.origen)
+      const imp = cob ? Math.min(disponibleCobro(cob), Number(s.saldo_c)) : Number(s.saldo_c)
+      return { ...a, destino: `c:${s.comprobante_id}`, importe: importeTexto(imp) }
+    })
+  }
+  function elegirCobro(c: any) {
+    const disp = disponibleCobro(c)
+    if (c.anulado_at || disp <= 0) return
+    setAp(a => ({ ...a, origen: `cobro:${c.id}`, importe: importeTexto(facSel ? Math.min(disp, Number(facSel.saldo_c)) : disp) }))
+  }
+  async function aplicar(origen: string, destino: string, importe: number | null) {
+    if (!origen || !destino || !importe || importe <= 0) throw new Error('Elegí el cobro (o la retención), la factura y el importe a aplicar')
+    const [ot, oid] = origen.split(':'); const [dt, did] = destino.split(':')
+    await rpc('fact_aplicar', { p_origen_tipo: ot, p_origen_id: oid, p_comprobante_id: dt === 'c' ? did : null, p_saldo_inicial_id: dt === 's' ? did : null, p_importe_c: importe, p_evidencia: { manual: true } })
+  }
+
   return (
     <div style={{ marginTop: 10 }}>
       <Mensaje />
@@ -153,8 +184,10 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
         <div>
           <h4 style={S.sub}>COMPROBANTES</h4>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>
-            {d.saldos.map(s => <tr key={s.comprobante_id}><td style={S.td}>{nv(s)}</td><td style={S.td}>{fecha(s.fecha_emision)}<div style={S.sub}>vence {fecha(s.vto_pago)}</div></td>
-              <td style={S.num}>{pesos(s.total_c)}{Number(s.nc_c) > 0 && <div style={S.sub}>NC {pesos(s.nc_c)}</div>}</td><td style={S.num}><b>{pesos(s.saldo_c)}</b></td></tr>)}
+            {d.saldos.map(s => <tr key={s.comprobante_id} onClick={() => elegirFactura(s)} title={Number(s.saldo_c) > 0 ? 'Tocá para cargar un cobro de esta factura' : undefined}
+              style={{ cursor: Number(s.saldo_c) > 0 ? 'pointer' : undefined, background: s.comprobante_id === selFac ? '#1e3a5f' : undefined }}><td style={S.td}>{nv(s)}</td><td style={S.td}>{fecha(s.fecha_emision)}<div style={S.sub}>vence {fecha(s.vto_pago)}</div></td>
+              <td style={S.num}>{pesos(s.total_c)}{Number(s.nc_c) > 0 && <div style={S.sub}>NC {pesos(s.nc_c)}</div>}</td>
+              <td style={S.num}>{Number(s.saldo_c) <= 0 ? <span style={{ color: '#4ade80' }}>{Number(s.nc_c) >= Number(s.total_c) ? 'anulada' : 'pagada'}</span> : <b>{pesos(s.saldo_c)}</b>}</td></tr>)}
             {d.si.map(s => <tr key={s.id}><td style={S.td}>Saldo inicial</td><td style={S.td}>{fecha(s.fecha)}</td><td style={S.num}>{pesos(s.importe_c)}</td><td style={S.td}><a href="#" style={{ color: '#93c5fd' }} onClick={e => { e.preventDefault(); correr(() => abrirDocumento(s.documento_id)) }}>respaldo</a></td></tr>)}
           </tbody></table>
 
@@ -172,9 +205,8 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
             </select>
             <input style={{ ...S.input, width: 130 }} placeholder="Importe" value={ap.importe} onChange={e => setAp({ ...ap, importe: e.target.value })} />
             <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
-              const [ot, oid] = ap.origen.split(':'); const [dt, did] = ap.destino.split(':')
-              await rpc('fact_aplicar', { p_origen_tipo: ot, p_origen_id: oid, p_comprobante_id: dt === 'c' ? did : null, p_saldo_inicial_id: dt === 's' ? did : null, p_importe_c: centavosDe(ap.importe), p_evidencia: { manual: true } })
-              setAp({ origen: '', destino: '', importe: '' }); await cargar()
+              await aplicar(ap.origen, ap.destino, centavosDe(ap.importe))
+              setAp({ origen: '', destino: '', importe: '' }); setSelFac(null); await cargar()
             }, 'Aplicado')}>Aplicar</button>
           </div>
           <h4 style={{ ...S.sub, marginTop: 12 }}>APLICACIONES</h4>
@@ -186,7 +218,8 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
 
         <div>
           <h4 style={S.sub}>COBROS / ANTICIPOS / CHEQUES</h4>
-          {d.cobros.map(c => <div key={c.id} style={{ ...S.fila, fontSize: 13, opacity: c.anulado_at ? 0.5 : 1 }}>
+          {d.cobros.map(c => <div key={c.id} style={{ ...S.fila, fontSize: 13, opacity: c.anulado_at ? 0.5 : 1, cursor: disponibleCobro(c) > 0 && !c.anulado_at ? 'pointer' : undefined, background: ap.origen === `cobro:${c.id}` ? '#1e3a5f' : undefined }}
+            onClick={() => elegirCobro(c)} title={disponibleCobro(c) > 0 && !c.anulado_at ? 'Tocá para aplicarlo a la factura elegida' : undefined}>
             {fecha(c.fecha)} · {c.medio} · {pesos(c.importe_c)} · aplicado {pesos(aplicado('cobro_id', c.id))}{c.es_anticipo ? ' · anticipo' : ''}{c.cheque_estado ? ` · cheque ${c.cheque_numero} ${c.cheque_estado}` : ''}
             {c.cheque_estado && ({ en_cartera: ['depositado', 'endosado'], depositado: ['acreditado', 'rechazado'], rechazado: ['en_cartera', 'anulado'] } as Record<string, string[]>)[c.cheque_estado]?.map(x => (
               <button key={x} style={{ ...S.btn2, padding: '2px 6px' }} onClick={() => correr(async () => { await rpc('fact_cheque_estado', { p_cobro_id: c.id, p_estado: x, p_motivo: null }); await cargar() })}>{x}</button>
@@ -206,7 +239,17 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
             <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
               await rpc('fact_cobro_registrar', { p_datos: { ...cobro, cliente_id: clienteId, importe_c: centavosDe(cobro.importe) } }); await cargar()
             }, 'Cobro registrado (sin aplicar)')}>Registrar cobro</button>
+            {facSel && <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
+              const importe = centavosDe(cobro.importe)
+              if (!cobro.fecha || !importe || importe <= 0) throw new Error('Completá la fecha y el importe del cobro')
+              const id = await rpc('fact_cobro_registrar', { p_datos: { ...cobro, cliente_id: clienteId, importe_c: importe } })
+              // Se aplica hasta el saldo de la factura; si el cobro es mayor, el resto queda disponible.
+              await aplicar(`cobro:${id}`, `c:${facSel.comprobante_id}`, Math.min(importe, Number(facSel.saldo_c)))
+              setCobro(c => ({ ...c, importe: '', referencia: '', cheque_numero: '', cheque_banco: '', cheque_fecha_pago: '' })); setSelFac(null); setAp({ origen: '', destino: '', importe: '' }); await cargar()
+            }, 'Cobro registrado y aplicado a la factura')}>Registrar y aplicar a {nv(facSel)}</button>}
           </div>
+          {facSel ? <div style={S.sub}>Factura elegida: {nv(facSel)} · saldo {pesos(facSel.saldo_c)}. Si cobraste menos por retenciones, cargá el importe cobrado y después las retenciones.</div>
+            : <div style={S.sub}>Tocá una factura de la lista para precargar el cobro con su saldo.</div>}
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>RETENCIONES</h4>
           {d.rets.map(r => <div key={r.id} style={{ fontSize: 13 }}>{fecha(r.fecha)} · {r.impuesto} · cert. {r.certificado ?? '—'} · OP {r.orden_pago ?? '—'} · {pesos(r.importe_c)} · <b>{r.estado === 'estimada' ? 'ESTIMADA (no cancela)' : r.estado}</b></div>)}
