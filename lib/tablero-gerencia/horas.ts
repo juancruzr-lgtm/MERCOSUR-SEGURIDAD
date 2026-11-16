@@ -40,6 +40,7 @@ export type RespaldoHoras =
   | 'transicion'           // jun/jul 2026 cubierto sin registro (sólo TS)
   | 'incompleto'           // falta entrada o salida: 0 h
   | 'sin_obligacion'       // turno anulado/reemplazado/cancelado
+  | 'pendiente'            // turno que todavía no terminó: no cuenta (ni programadas ni incompleto)
 
 export interface TurnoHoras extends TurnoLiquidacion {
   id: string
@@ -77,7 +78,12 @@ function redondear(n: number): number {
   return Math.round(n * 100) / 100
 }
 
-export function lineaHoras(turno: TurnoHoras, registros: RegistroHoras[]): LineaHoras {
+/**
+ * `pendiente`: el turno todavía no terminó. Se excluye de todo el cálculo para
+ * que el mes en curso no compare horas trabajadas contra turnos futuros ni los
+ * cuente como "incompletos".
+ */
+export function lineaHoras(turno: TurnoHoras, registros: RegistroHoras[], opts: { pendiente?: boolean } = {}): LineaHoras {
   const vigentes = registros.filter(r => !r.registro_anulado_at && (r.tipo_registro ?? '') !== 'ausencia')
   const reg = selectRegistroPrincipal(vigentes) ?? null
   const programadas = horasProgramadasTurno(turno)
@@ -88,6 +94,10 @@ export function lineaHoras(turno: TurnoHoras, registros: RegistroHoras[]): Linea
     empleadoId: reg?.guardia_final_id ?? reg?.guardia_id ?? turno.guardia_id ?? null,
     objetivoId: reg?.objetivo_final_id ?? turno.objetivo_id ?? null,
     clienteId: turno.cliente_id ?? null,
+  }
+
+  if (opts.pendiente) {
+    return { ...base, programadas: 0, oficiales: 0, diferencia: 0, respaldo: 'pendiente', divergeSql: false }
   }
 
   if (ESTADOS_SIN_OBLIGACION.has(turno.estado ?? '')) {
@@ -133,7 +143,7 @@ function sumar(t: TotalesHoras, l: LineaHoras) {
   t.oficiales = redondear(t.oficiales + l.oficiales)
   if (l.respaldo === 'sin_fichaje') t.sinFichaje = redondear(t.sinFichaje + l.oficiales)
   if (l.respaldo === 'incompleto') t.incompletos++
-  if (l.respaldo !== 'sin_obligacion') t.turnos++
+  if (l.respaldo !== 'sin_obligacion' && l.respaldo !== 'pendiente') t.turnos++
 }
 
 export interface ResumenHorasMes {

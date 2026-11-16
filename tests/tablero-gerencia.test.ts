@@ -196,6 +196,14 @@ describe('horas', () => {
     expect(l.respaldo).toBe('incompleto')
   })
 
+  it('turno que todavía no terminó no suma programadas ni cuenta como incompleto', () => {
+    const futuro = lineaHoras({ ...turno, id: 't9', fecha: '2026-10-25' }, [], { pendiente: true })
+    const hecho = lineaHoras(turno, [{ id: 'r1', turno_id: 't1', hora_entrada_real: '06:00', hora_salida_real: '18:00' }])
+    expect(futuro.respaldo).toBe('pendiente')
+    const r = resumirHorasMes([hecho, futuro])
+    expect(r.total).toMatchObject({ programadas: 12, oficiales: 12, incompletos: 0, turnos: 1 })
+  })
+
   it('transición jun/jul se marca como divergente de SQL', () => {
     const l = lineaHoras({ ...turno, fecha: '2026-07-03', estado: 'cubierto' }, [])
     expect(l.respaldo).toBe('transicion')
