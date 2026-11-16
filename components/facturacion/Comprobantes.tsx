@@ -50,7 +50,10 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
   useEffect(() => { correr(cargar) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const nombre = (id: string | null) => clientes.find(c => c.id === id)?.razon_social ?? null
-  const visibles = comps.filter(c => !buscar || `${numeroVisible({ tipo: c.tipo, puntoVenta: c.punto_venta, numero: c.numero })} ${c.receptor_nombre ?? ''} ${nombre(c.cliente_id) ?? ''}`.toLowerCase().includes(buscar.toLowerCase()))
+  // Archivados = comprobantes viejos de ex clientes, fuera de seguimiento: ocultos salvo que se pidan.
+  const [verArchivados, setVerArchivados] = useState(false)
+  const archivados = comps.filter(c => c.archivado_at).length
+  const visibles = comps.filter(c => (verArchivados || !c.archivado_at)).filter(c => !buscar || `${numeroVisible({ tipo: c.tipo, puntoVenta: c.punto_venta, numero: c.numero })} ${c.receptor_nombre ?? ''} ${nombre(c.cliente_id) ?? ''}`.toLowerCase().includes(buscar.toLowerCase()))
 
   return (
     <div>
@@ -111,7 +114,8 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
 
       <div style={{ ...S.card, overflowX: 'auto' }}>
         <div style={S.fila}><h3 style={{ ...S.h3, margin: 0 }}>Comprobantes registrados (producción)</h3>
-          <input style={S.input} placeholder="Buscar" value={buscar} onChange={e => setBuscar(e.target.value)} /></div>
+          <input style={S.input} placeholder="Buscar" value={buscar} onChange={e => setBuscar(e.target.value)} />
+          {archivados > 0 && <label style={S.sub}><input type="checkbox" checked={verArchivados} onChange={e => setVerArchivados(e.target.checked)} /> Ver archivados ({archivados})</label>}</div>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
           <thead><tr>{['Comprobante', 'Fecha', 'Cliente', 'Neto', 'IVA', 'Total', 'Saldo', 'CAE', 'Origen', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>{visibles.map(c => {
@@ -129,7 +133,16 @@ export default function Comprobantes({ usuarioId }: { usuarioId: string | null }
                 <td style={S.td}>{c.origen === 'importacion_arca' ? 'ARCA (importado)' : c.origen === 'carga_manual' ? 'Carga manual' : c.origen}
                   {[1, 6, 201].includes(c.tipo) && <div style={{ fontSize: 12, color: c.prefactura_id ? '#4ade80' : '#94a3b8' }}>{c.prefactura_id ? 'Conciliado con su prefactura' : 'Registrado, sin conciliar'}</div>}</td>
                 <td style={S.td}>
-                  {(!c.cliente_id || (esNota && !c.asociado_id)) && <button style={S.btn2} onClick={() => setAsoc({ id: c.id, cliente_id: c.cliente_id ?? '', asociado_id: '', motivo: '' })}>Asociar</button>}
+                  {c.archivado_at && <div style={S.sub}>Archivado: {c.archivado_motivo}</div>}
+                  {!c.archivado_at && (!c.cliente_id || (esNota && !c.asociado_id)) && <button style={S.btn2} onClick={() => setAsoc({ id: c.id, cliente_id: c.cliente_id ?? '', asociado_id: '', motivo: '' })}>Asociar</button>}
+                  {!c.archivado_at && !c.cliente_id && <button style={S.btn2} disabled={ocupado} onClick={() => {
+                    const m = prompt('Motivo para archivarlo (p. ej. ex cliente sin deuda, comprobante viejo)'); if (!m) return
+                    correr(async () => { await rpc('fact_comprobante_archivar', { p_id: c.id, p_motivo: m }); await cargar() }, 'Archivado: ya no suma deuda')
+                  }}>Archivar</button>}
+                  {c.archivado_at && <button style={S.btn2} disabled={ocupado} onClick={() => {
+                    const m = prompt('Motivo para volver a seguirlo'); if (!m) return
+                    correr(async () => { await rpc('fact_comprobante_desarchivar', { p_id: c.id, p_motivo: m }); await cargar() }, 'Desarchivado')
+                  }}>Desarchivar</button>}
                   {c.cae && <button style={S.btn2} onClick={() => correr(async () => { const r = await api(`comprobante-pdf?id=${c.id}`, undefined, 'GET'); window.open(r.url, '_blank', 'noopener') })}>PDF</button>}
                   {c.cae && c.origen === 'emision_app' && <button style={S.btn2} disabled={ocupado} onClick={() => correr(() => abrirCorreccion(c))}>Corregir texto</button>}
                   {Number(c.texto_pdf_version ?? 0) > 0 && <div style={S.sub}>Texto corregido (v{c.texto_pdf_version})</div>}
