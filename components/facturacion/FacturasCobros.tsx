@@ -88,9 +88,11 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
           </div>))}
       </div>
 
-      <div style={{ overflowX: 'auto' }}>
+      {/* Lista con su propia barra de desplazamiento: el encabezado queda fijo arriba. */}
+      <div style={{ overflow: 'auto', maxHeight: '60vh', border: '1px solid #1e293b', borderRadius: 8 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>{['Fecha', 'Comprobante', 'Cliente', 'Total', 'Cobrado', 'Saldo', 'Vence', 'Estado', 'Pagada el'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <thead><tr>{['Fecha', 'Comprobante', 'Cliente', 'Total', 'Cobrado', 'Saldo', 'Vence', 'Estado', 'Pagada el'].map(h =>
+            <th key={h} style={{ ...S.th, position: 'sticky', top: 0, zIndex: 1, background: '#0f1629' }}>{h}</th>)}</tr></thead>
           <tbody>{visibles.map(f => {
             const et = ETIQUETA_ESTADO[f.estado as EstadoCobro], abiertaEsta = abierta === f.comprobante_id
             return (
